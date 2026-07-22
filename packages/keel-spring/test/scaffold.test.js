@@ -199,7 +199,7 @@ test('CLAUDE.md contextual: specs, solo capas declaradas y skill local con conve
   const workspace = makeWorkspace();
   scaffoldService({ ...loadFixture(), workspace });
 
-  const claude = read(workspace, 'CLAUDE.md');
+  const claude = read(workspace, '.claude/CLAUDE.md');
   assert.ok(claude.includes('specs/service.keel.yaml')); // snapshot local del diseño
   assert.ok(claude.includes('../../specs/product-catalog/')); // canónico del workspace
   assert.ok(claude.includes('persistence.keel.yaml'));
@@ -209,6 +209,17 @@ test('CLAUDE.md contextual: specs, solo capas declaradas y skill local con conve
   assert.ok(claude.includes('keel-stack.json'));
   assert.ok(claude.includes('infra/docker-compose.yaml')); // la infraestructura de prueba vive en infra/
   assert.ok(claude.includes('keel-spring-code')); // la skill orquesta los subagentes
+  assert.ok(claude.includes('.claude/architecture.md'));
+  assert.ok(claude.includes('.claude/constitution.md'));
+
+  // architecture.md y constitution.md: documentos de primer nivel en .claude/.
+  const architecture = read(workspace, '.claude/architecture.md');
+  assert.ok(architecture.includes('hexagonal'));
+  assert.ok(architecture.includes('domain'));
+  assert.ok(architecture.includes('application'));
+  const constitution = read(workspace, '.claude/constitution.md');
+  assert.ok(constitution.includes('UseCaseMediator'));
+  assert.ok(constitution.includes('XxxRepositoryImpl'));
 
   // Skill propia del proyecto que apunta al CLAUDE.md como proceso y orquesta
   // los subagentes de .claude/agents/.
@@ -266,7 +277,7 @@ test('skills por tecnología: solo las del stack elegido', () => {
   const rabbitSkill = read(workspace, '.claude/skills/keel-spring-rabbitmq/SKILL.md');
   assert.ok(rabbitSkill.includes('name: keel-spring-rabbitmq'));
 
-  const claude = read(workspace, 'CLAUDE.md');
+  const claude = read(workspace, '.claude/CLAUDE.md');
   assert.ok(claude.includes('messaging.keel.yaml'));
   assert.ok(claude.includes('.claude/skills/keel-spring-rabbitmq/SKILL.md'));
 });

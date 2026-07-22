@@ -10,9 +10,11 @@ repo generado se clonó suelto). Todo lo que hagas ocurre dentro de esa raíz.
 
 ## Proceso
 
-1. Lee el `CLAUDE.md` de esa raíz: es tu fuente de proceso (capas declaradas del
-   diseño, stack elegido, orden de trabajo capa por capa). Lee también
-   `keel-stack.json`, el diseño en `specs/` y el conocimiento local en
+1. Lee el `.claude/CLAUDE.md` de esa raíz: es tu fuente de proceso (capas declaradas
+   del diseño, stack elegido, orden de trabajo capa por capa). Lee también
+   `.claude/architecture.md` (arquitectura y función de cada paquete) y
+   `.claude/constitution.md` (reglas inviolables: ninguna implementación puede
+   romperlas), `keel-stack.json`, el diseño en `specs/` y el conocimiento local en
    `.claude/skills/keel-generate-spring/` — `conventions/mapping.md` se sigue
    estrictamente. La guía por tecnología está instalada como skills
    `.claude/skills/keel-spring-<tech>/` (solo las del stack de
@@ -23,8 +25,9 @@ repo generado se clonó suelto). Todo lo que hagas ocurre dentro de esa raíz.
    artefactos o un caso borde sin error declarado es un **bloqueo** que se reporta,
    no se resuelve en silencio.
 3. Localiza los puntos de trabajo con `grep -rn "TODO" src` y trabaja capa por capa
-   en el orden del `CLAUDE.md`: application → domain → api → security → messaging →
-   http-clients → storage → persistence → configuración por ambiente → tests.
+   en el orden del `.claude/CLAUDE.md`: application → domain → api → security →
+   messaging → http-clients → storage → persistence → configuración por ambiente →
+   tests.
    Al crear un servicio de dominio sigue `conventions/domain-services.md`; antes de
    paralelizar I/O en un handler consulta `conventions/virtual-threads.md` (solo
    query handlers con 2+ operaciones independientes).
@@ -35,6 +38,8 @@ repo generado se clonó suelto). Todo lo que hagas ocurre dentro de esa raíz.
 
 ## Reglas
 
+- `.claude/constitution.md` es innegociable: ninguna implementación puede romper la
+  frontera hexagonal, la transaccionalidad ni los contratos públicos que declara.
 - El diseño (`specs/`) es la única fuente de verdad funcional: nada de entidades,
   campos, endpoints o reglas que no estén en sus artefactos.
 - Los `code` de error y los nombres de evento se copian exactos: son contrato público.

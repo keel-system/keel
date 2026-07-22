@@ -1,9 +1,10 @@
-// .claude/ del proyecto generado: skill propia orquestadora + agentes de la
-// orquestación + conventions completas + solo las skills por tecnología del
-// stack elegido (keel-spring-<tech>, hermanas de la orquestadora en
-// .claude/skills/). Junto con el CLAUDE.md de la raíz y el snapshot de specs/,
-// hace el repo autosuficiente: quien lo clone puede finalizar la generación sin
-// el workspace Keel. Misma regeneración segura que el resto del scaffolding.
+// .claude/ del proyecto generado: CLAUDE.md + architecture.md + constitution.md
+// de primer nivel, skill propia orquestadora + agentes de la orquestación +
+// conventions completas + solo las skills por tecnología del stack elegido
+// (keel-spring-<tech>, hermanas de la orquestadora en .claude/skills/). Junto
+// con el snapshot de specs/, hace el repo autosuficiente: quien lo clone puede
+// finalizar la generación sin el workspace Keel. Misma regeneración segura que
+// el resto del scaffolding.
 
 import path from 'node:path';
 import { assetsDir, SKILL } from '../lib/assets.js';
@@ -37,7 +38,11 @@ export function stackSkills(model) {
 }
 
 export function generate(model) {
-  const files = [{ path: `${skillDir}/SKILL.md`, content: skillMd(model) }];
+  const files = [
+    { path: `${skillDir}/SKILL.md`, content: skillMd(model) },
+    { path: '.claude/architecture.md', sourceFile: path.join(generatorDir, 'architecture.md') },
+    { path: '.claude/constitution.md', sourceFile: path.join(generatorDir, 'constitution.md') }
+  ];
   for (const name of AGENTS) {
     files.push({
       path: `.claude/agents/${name}`,
@@ -60,7 +65,7 @@ export function generate(model) {
 }
 
 // Skill del proyecto: delgada a propósito. El proceso especializado (capas
-// declaradas, stack, verificación) vive en el CLAUDE.md de la raíz; aquí el
+// declaradas, stack, verificación) vive en .claude/CLAUDE.md; aquí el
 // arranque, las rutas locales y la orquestación de los subagentes.
 function skillMd(model) {
   const { service } = model;
@@ -90,11 +95,13 @@ Este proyecto fue generado por \`keel-spring build\` desde \`specs/${service.nam
 
 ## Conocimiento local
 
-El \`CLAUDE.md\` de la raíz contiene el contexto completo (fuente de verdad del diseño, stack elegido, orden capa por capa y verificación); los agentes lo consumen. Este directorio aporta el apoyo:
+\`.claude/CLAUDE.md\` contiene el contexto completo (fuente de verdad del diseño, stack elegido, orden capa por capa y verificación); los agentes lo consumen. Este directorio aporta el apoyo:
 
+- \`.claude/architecture.md\` — arquitectura hexagonal + CQRS y función de cada paquete. Léelo antes de tocar código si no conoces ya la estructura.
+- \`.claude/constitution.md\` — reglas inviolables (frontera hexagonal, transaccionalidad, contratos públicos). Ninguna implementación puede romperlas.
 - \`specs/\` (raíz del proyecto) — snapshot del diseño Keel (manifiesto + un artefacto por capa + \`validation-scenarios.md\`). Si trabajas dentro del workspace Keel, el canónico es \`../../specs/${service.name}/\`; el snapshot se refresca en cada \`keel-spring build\`.
 - \`conventions/\` — mapeo DSL → código (\`mapping.md\`, síguelo estrictamente), estructura del proyecto (\`project-layout.md\`), sondeo y reset de infraestructura (\`infra-validation.md\`), auditoría de fidelidad al flujo (\`flow-fidelity.md\`) y guías de handler (\`domain-services.md\`, \`virtual-threads.md\`).${techSkillsBullet}
 
-Reglas: el diseño es la única fuente de verdad funcional; los \`code\` de error y nombres de evento se copian exactos; ante ambigüedad, diseño > conventions > tu criterio (documentado en el README). No des la generación por terminada con tests o escenarios fallando.
+Reglas inviolables completas en \`.claude/constitution.md\`; en corto: el diseño es la única fuente de verdad funcional, los \`code\` de error y nombres de evento se copian exactos, y ante ambigüedad, diseño > conventions > tu criterio (documentado en el README). No des la generación por terminada con tests o escenarios fallando.
 `;
 }

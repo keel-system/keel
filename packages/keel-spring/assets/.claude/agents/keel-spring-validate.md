@@ -12,7 +12,7 @@ no continúes.
 
 ## Proceso
 
-1. Lee `specs/validation-scenarios.md` y la sección Verificación del `CLAUDE.md`
+1. Lee `specs/validation-scenarios.md` y la sección Verificación del `.claude/CLAUDE.md`
    de la raíz del proyecto.
 2. Arranca el servidor en background: `./gradlew bootRun` (perfil `local`; en
    Windows `gradlew.bat bootRun`). Espera a que responda (p. ej. `curl` al puerto

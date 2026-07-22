@@ -133,8 +133,10 @@ test('build con un diseño válido genera el scaffolding y sale con éxito', asy
   await runBuild(workspace, 'specs/product-catalog');
   assert.equal(fs.readFileSync(marker, 'utf8'), 'editado');
 
-  // Repo autosuficiente: CLAUDE.md + skill propia + snapshot del diseño.
-  assert.ok(fs.existsSync(path.join(outDir, 'CLAUDE.md')));
+  // Repo autosuficiente: CLAUDE.md + architecture.md + constitution.md + skill propia + snapshot del diseño.
+  assert.ok(fs.existsSync(path.join(outDir, '.claude', 'CLAUDE.md')));
+  assert.ok(fs.existsSync(path.join(outDir, '.claude', 'architecture.md')));
+  assert.ok(fs.existsSync(path.join(outDir, '.claude', 'constitution.md')));
   assert.ok(fs.existsSync(path.join(outDir, '.claude', 'skills', 'keel-generate-spring', 'SKILL.md')));
   assert.ok(fs.existsSync(path.join(outDir, '.claude', 'skills', 'keel-generate-spring', 'conventions', 'mapping.md')));
   assert.ok(fs.existsSync(path.join(outDir, 'specs', 'service.keel.yaml')));

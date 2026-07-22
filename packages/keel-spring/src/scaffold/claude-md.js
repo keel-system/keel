@@ -118,12 +118,15 @@ export function generate(model) {
     '|---|---|',
     ...artifacts.map(([file, hint]) => `| \`specs/${file}\` | ${hint} |`),
     '',
-    'Reglas innegociables:',
+    'Reglas inviolables completas en `.claude/constitution.md`. Si un escenario contradice el spec, el hueco es del',
+    'diseño: proponlo como cambio a los artefactos, no lo acomodes en el código.',
     '',
-    '- El diseño es la única fuente de verdad funcional: nada de entidades, campos, endpoints o reglas que no estén en sus artefactos.',
-    '- Los `code` de error y los nombres de evento se copian exactos: son contrato público.',
-    '- Ante ambigüedad: diseño > conventions > tu criterio (documentado en el README).',
-    '- Si un escenario contradice el spec, el hueco es del diseño: proponlo como cambio a los artefactos, no lo acomodes en el código.',
+    '## Arquitectura',
+    '',
+    '`.claude/architecture.md` describe la arquitectura hexagonal + CQRS del proyecto y la función de cada paquete',
+    '(`domain`, `application`, `infrastructure`). `.claude/constitution.md` recoge las reglas que esa arquitectura',
+    'nunca puede romper (frontera hexagonal, transaccionalidad, contratos públicos). Léelos antes de tocar código',
+    'si no conoces ya la estructura.',
     '',
     '## Stack elegido',
     '',
@@ -180,5 +183,5 @@ export function generate(model) {
     ''
   );
 
-  return [{ path: 'CLAUDE.md', content: lines.join('\n') }];
+  return [{ path: '.claude/CLAUDE.md', content: lines.join('\n') }];
 }
