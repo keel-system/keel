@@ -1,6 +1,11 @@
 # Cómo construir un generador
 
-Un generador es el paquete de conocimiento que convierte specs Keel en servicios de una tecnología concreta. No contiene código de aplicación: contiene una skill, convenciones y un ejemplo de referencia. Cada generador es un **paquete npm independiente con CLI propia** (`keel-<tech>`, ej. `keel-springboot`): se instala con `npm i -g keel-<tech>` y su comando `build` prepara el workspace. Los generadores conocidos se ven con `keel list`. Referencia viva: el paquete `keel-springboot`.
+Un generador convierte specs Keel en servicios de una tecnología concreta repartiendo el trabajo en dos mitades:
+
+1. **Scaffolding transversal al stack** (comando `build`): tras el cuestionario de stack (BD, broker, auth… — solo lo que el diseño necesita; persistido en `keel-stack.json`), genera de forma determinista todo lo necesario para **levantar el proyecto**: dependencias en función del stack elegido, configuración por perfiles, infraestructura de prueba, y toda la estructura cuyo código es idéntico sea cual sea la opción de infra puntual (dominio puro, puertos, contratos, controllers, mediator, manejo de errores, stubs).
+2. **Conocimiento para el agente**: una skill, convenciones y **referencias por tecnología** (`references/<tech>.md`) con las que el agente escribe el código cuya implementación depende de la infra elegida (adaptadores del broker/storage…), la lógica de negocio y los tests.
+
+Cada generador es un **paquete npm independiente con CLI propia** (`keel-<tech>`, ej. `keel-spring`): se instala con `npm i -g keel-<tech>` y su comando `build` prepara el workspace y genera el scaffolding. Los generadores conocidos se ven con `keel list`. Referencia viva: el paquete `keel-spring`.
 
 ## Qué instala `keel-<tech> build` en el workspace
 
@@ -9,12 +14,13 @@ Un generador es el paquete de conocimiento que convierte specs Keel en servicios
 generators/<tech>/
 ├── README.md            # contrato: entrada, compatibilidad DSL, salida, reglas
 ├── conventions/
-│   ├── project-layout.md    # stack por defecto + estructura del proyecto generado
+│   ├── project-layout.md    # stack por defecto + estructura + frontera scaffolding/agente
 │   └── mapping.md           # tabla normativa spec → código
+├── references/          # guía por tecnología del stack (kafka.md, s3.md…) para el código del agente
 └── golden/              # ejemplo de referencia generado desde un diseño fijo
 ```
 
-Además de copiar estos archivos (idempotente; `--force` sobrescribe), `build` comprueba la compatibilidad de versión DSL del manifiesto y ejecuta la validación mecánica (`keel validate`, sin `--wip`): si el diseño no es generable, lo reporta y se detiene.
+Además de copiar estos archivos (idempotente; `--force` sobrescribe), `build` comprueba la compatibilidad de versión DSL del manifiesto, ejecuta la validación mecánica (`keel validate`, sin `--wip`) — si el diseño no es generable, lo reporta y se detiene — y genera el scaffolding en `services/<servicio>-<tech>/`.
 
 ## Anatomía del paquete
 
@@ -24,10 +30,13 @@ keel-<tech>/
 ├── src/
 │   ├── cli.js           # commander: comando build
 │   ├── commands/build.js
-│   └── lib/assets.js    # rutas a assets/ + SUPPORTED_DSL (versiones del DSL que sabe mapear)
+│   ├── lib/             # assets.js (rutas + SUPPORTED_DSL), model.js (DSL → modelo), stack-catalog/config
+│   └── scaffold/        # un módulo por artefacto transversal al stack (patrón de keel-spring)
 ├── assets/              # exactamente lo que build copia al workspace (árbol de arriba)
 └── test/
 ```
+
+**Criterio de frontera del scaffolding**: build genera todo lo derivable mecánicamente del diseño + `keel-stack.json` cuyo código es idéntico sea cual sea la opción de infra elegida (más deps/config/compose, derivados del catálogo de stack). Lo que cambia según la opción concreta (publisher Kafka vs Rabbit, adaptador de storage…) se documenta en `references/<tech>.md` y lo escribe el agente. El proyecto recién generado debe compilar y arrancar sin el trabajo del agente (los huecos son stubs que fallan en ejecución, no en compilación).
 
 El paquete **no duplica la validación ni los schemas**: importa `validateService`, `loadService`, `copyTree`, etc. de `keel-core`, que es quien define el DSL. La versión soportada se declara en `src/lib/assets.js` (`SUPPORTED_DSL`), en `package.json` (`"keel": { "dsl": "2.0" }`) y en el README del generador.
 
@@ -57,12 +66,12 @@ Tras la primera generación real aprobada, congela en `golden/` el diseño usado
 
 Un generador nuevo es un paquete `packages/keel-<tech>/` en el monorepo de Keel (ej. el futuro `keel-nest`):
 
-1. Copia `packages/keel-springboot/` y adapta: `package.json` (name, bin, descripción), `src/lib/assets.js` (skill y tecnología), y el contenido de `assets/` — README, skill y conventions de la tecnología (verifica versiones actuales del stack con `find-docs`).
+1. Copia `packages/keel-spring/` y adapta: `package.json` (name, bin, descripción), `src/lib/assets.js` (skill y tecnología), y el contenido de `assets/` — README, skill y conventions de la tecnología (verifica versiones actuales del stack con `find-docs`).
 2. Escribe la tabla de mapeo completa recorriendo `docs/dsl-reference.md` construcción por construcción.
 3. Pruébalo en un workspace: `npm link` del paquete, `keel-<tech> build specs/<servicio>` y genera un servicio existente (idealmente el mismo diseño que otro generador ya generó); compara comportamiento observable: mismos endpoints, mismos códigos de error, mismos eventos.
 4. Refina la skill y las conventions con lo aprendido y puebla `golden/`. El generador mejora con cada uso.
 
-Para experimentar sin crear el paquete, también puedes crear `generators/<tech>/` + su skill directamente en el workspace (mismo layout de assets); si funciona bien, conviértelo en paquete siguiendo el patrón de `keel-springboot`.
+Para experimentar sin crear el paquete, también puedes crear `generators/<tech>/` + su skill directamente en el workspace (mismo layout de assets); si funciona bien, conviértelo en paquete siguiendo el patrón de `keel-spring`.
 
 ## Versionado
 

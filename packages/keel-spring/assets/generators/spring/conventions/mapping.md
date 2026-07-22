@@ -2,7 +2,7 @@
 
 Tabla normativa, organizada por capa del diseño (`specs/<servicio>/<capa>.keel.yaml`). Ante ambigüedad, el orden de autoridad es: diseño > esta tabla > golden > criterio del agente (documentando la decisión en el README generado). Las capas opcionales solo se generan si están declaradas en `layers` del manifiesto.
 
-Buena parte de esta tabla la materializa ya el **scaffolding determinista** de `keel-springboot build` (ver `project-layout.md`, sección "Qué genera el scaffolding"). Decisiones fijas del scaffolding que el agente debe conocer:
+Buena parte de esta tabla la materializa ya el **scaffolding determinista** de `keel-spring build` (ver `project-layout.md`, sección "Qué genera el scaffolding"). Decisiones fijas del scaffolding que el agente debe conocer:
 
 - Value types **escalares** (`base` + `constraints`) se aplanan a su tipo base Java; sus constraints van como Bean Validation al DTO y a la columna. El agente puede promoverlos a record/`@Embeddable` si el dominio lo justifica.
 - `lifecycle` se protege con un guard genérico `transitionTo(target)` (mapa de transiciones + `InvalidStateTransitionException`, code `INVALID_STATE_TRANSITION` → HTTP 409); los métodos semánticos por transición los añade el agente.
@@ -83,14 +83,14 @@ Sin esta capa, no se incluye Spring Security. **Esta capa la materializa entera 
 
 ## `messaging` — messaging.keel.yaml
 
-Los publishers y —por cada `subscriptions`— el record `<E>Message` + el `<E>Listener` (binding al canal + política `onFailure`: en Kafka `@RetryableTopic` con retry+DLT determinista; en Rabbit/SQS el listener con la política como `// TODO`) **los genera el scaffolding**. El agente completa el mapeo `<E>Message` → operación `triggers` (dispatch vía mediator) y la `reliability` de publicación (outbox/after-commit).
+El scaffolding genera lo transversal al broker: el contrato `EventEnvelope`/`EventMetadata`, por evento el record `EEvent` + el **puerto** `EPublisher` (interfaz en `domain/events`, inyectada por los handlers con `emits`) con su stub `EPublisherStub`, y por suscripción el record `<E>Message`. El agente escribe, siguiendo `references/<broker>.md`: la implementación de cada publisher (sustituye el stub) con la `reliability` declarada, la config del broker si aplica, y el `<E>Listener` (binding al canal + política `onFailure` + dispatch de `triggers` vía mediator).
 
 | Diseño | Código |
 |--------|--------|
-| `publishing.events.E` | Record `EEvent` en `domain/events` + `EPublisher` en `infrastructure/messaging` que publica `EventEnvelope.of("E", event, correlationId)` (metadata: eventId, timestamp UTC, source=servicio) al exchange/topic `<servicio>.events` con routing `<servicio>.<e-kebab>`; nombre del evento exacto (contrato público). El agente añade la `reliability` declarada |
+| `publishing.events.E` | Record `EEvent` + puerto `EPublisher` en `domain/events`; la implementación (agente, según broker) publica `EventEnvelope.of("E", event, correlationId)` (metadata: eventId, timestamp UTC, source=servicio) al exchange/topic `<servicio>.events` con routing `<servicio>.<e-kebab>`; nombre del evento exacto (contrato público) |
 | `publishing.reliability: outbox` | Patrón outbox: el evento se escribe en la misma transacción que el cambio (tabla outbox + relay); comparte la frontera de `persistence.consistency` |
 | `publishing.reliability: best-effort` | Publicación directa tras confirmar transacción (`@TransactionalEventListener(AFTER_COMMIT)`) |
-| `subscriptions.E` | `@KafkaListener` (o equivalente del broker elegido) que deserializa el payload y llama a la operación de `triggers` |
+| `subscriptions.E` | Record `<E>Message` (scaffolding) + listener del broker elegido (agente: `@KafkaListener`/`@RabbitListener`/`@SqsListener`) que deserializa el payload y despacha la operación de `triggers` vía mediator |
 | `subscriptions.E.onFailure.retry` | Reintentos con backoff según `maxAttempts`/`backoff`/`initialDelayMs` (ej. `DefaultErrorHandler` con `ExponentialBackOff`) |
 | `subscriptions.E.onFailure.deadLetter: true` | DLQ tras agotar reintentos (`DeadLetterPublishingRecoverer` o equivalente) |
 
@@ -121,11 +121,11 @@ Sin esta capa (servicio sin estado propio), no se incluye JPA ni base de datos.
 
 ## `storage` — storage.keel.yaml
 
-Sin esta capa (servicio que no maneja archivos), no se incluye SDK de object storage ni adaptador. El scaffolding determinista genera la dependencia Gradle (`software.amazon.awssdk:s3`), el servicio MinIO en el `docker-compose.yaml` (con MinIO), el fragmento de configuración `parameters/<perfil>/storage.yaml` (clave `storage`: `provider`, `bucket`, `endpoint`, `region`, `access-key`, `secret-key`, `path-style-access`) y el **puerto `FileStorage` + adaptador `S3FileStorage` + `S3Config`**. El agente completa solo la política de negocio: validación de content-type/tamaño según los `buckets` y la generación de `signedUrl`.
+Sin esta capa (servicio que no maneja archivos), no se incluye SDK de object storage ni adaptador. El scaffolding determinista genera la dependencia Gradle (`software.amazon.awssdk:s3`), el servicio MinIO en el `docker-compose.yaml` (con MinIO), el fragmento de configuración `parameters/<perfil>/storage.yaml` (clave `storage`: `provider`, `bucket`, `endpoint`, `region`, `access-key`, `secret-key`, `path-style-access`) y el **puerto `FileStorage`**. El agente escribe el adaptador completo siguiendo `references/s3.md` (bean `S3Client` + `S3FileStorage`, incluida `signedUrl`) más la política de negocio: validación de content-type/tamaño según los `buckets`.
 
 | Diseño | Código |
 |--------|--------|
-| capa `storage` presente | Puerto `domain/storage/FileStorage` (interface: `upload`, `download`, `delete`, `signedUrl`) + `infrastructure/configurations/storage/S3Config` (bean `S3Client`) + adaptador `infrastructure/storage/S3FileStorage` (AWS SDK v2, sirve para MinIO y S3), configurado desde la clave `storage` de los perfiles. `upload`/`download`/`delete` deterministas; `signedUrl` sale como `// TODO (agente)` |
+| capa `storage` presente | Puerto `domain/storage/FileStorage` (interface: `upload`, `download`, `delete`, `signedUrl`) — scaffolding. Adaptador `infrastructure/storage/S3FileStorage` + `infrastructure/configurations/storage/S3Config` (bean `S3Client`, AWS SDK v2, sirve para MinIO y S3, configurado desde la clave `storage` de los perfiles) — agente, según `references/s3.md` |
 | `buckets.B` | Un bucket físico por bucket lógico (nombre derivado de `B`, prefijado por servicio/entorno para evitar colisiones); el adaptador lo crea/valida al arrancar en local |
 | `buckets.B.allowedContentTypes` | Validación de content-type en la subida antes de tocar el storage → error `UNSUPPORTED_CONTENT_TYPE` (declararlo en use-cases) |
 | `buckets.B.maxSizeMb` | Límite de tamaño en la subida (multipart) → error `FILE_TOO_LARGE`; refuerza también `spring.servlet.multipart.max-file-size` |

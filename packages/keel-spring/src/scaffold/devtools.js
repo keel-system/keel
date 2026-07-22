@@ -21,7 +21,7 @@ export function dockerfileDevtools(selected) {
   for (const s of viaDevtools) for (const pkg of s.entry.alpinePackages ?? []) apk.add(pkg);
 
   const lines = [
-    '# Toolbox de validación de infraestructura generado por keel-springboot.',
+    '# Toolbox de validación de infraestructura generado por keel-spring.',
     '# Solo trae las CLIs del stack elegido (keel-stack.json). Sin puertos: es un',
     '# objetivo interno de `docker exec`, no un servicio expuesto.',
     'FROM alpine:3.20',

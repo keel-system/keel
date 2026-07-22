@@ -56,7 +56,7 @@ export function generate(model) {
     networks: { [network]: { driver: 'bridge' } }
   };
 
-  const header = '# Infraestructura de prueba generada por keel-springboot (según keel-stack.json).\n';
+  const header = '# Infraestructura de prueba generada por keel-spring (según keel-stack.json).\n';
   const files = [{ path: 'docker-compose.yaml', content: header + YAML.stringify(compose, { nullStr: '' }) }];
 
   if (needsDevtools(selected)) {

@@ -35,7 +35,7 @@ export async function build(inputPath, { force = false, defaults = false } = {})
   }
 
   if (!inputPath) {
-    console.error(pc.red('Falta el servicio a preparar: keel-springboot build specs/<servicio>'));
+    console.error(pc.red('Falta el servicio a preparar: keel-spring build specs/<servicio>'));
     const services = listSpecs(workspace);
     if (services.length > 0) {
       console.error('Servicios en specs/:');
@@ -61,14 +61,14 @@ export async function build(inputPath, { force = false, defaults = false } = {})
   }
   if (!SUPPORTED_DSL.includes(manifest.keel)) {
     console.error(
-      pc.red(`✘ DSL keel ${manifest.keel ?? '(sin declarar)'} no soportado por keel-springboot (soporta: ${SUPPORTED_DSL.join(', ')}).`)
+      pc.red(`✘ DSL keel ${manifest.keel ?? '(sin declarar)'} no soportado por keel-spring (soporta: ${SUPPORTED_DSL.join(', ')}).`)
     );
-    console.error(pc.dim('  Actualiza keel-springboot o ajusta el diseño a una versión soportada.'));
+    console.error(pc.dim('  Actualiza keel-spring o ajusta el diseño a una versión soportada.'));
     process.exitCode = 1;
     return;
   }
 
-  // Instala skill + conventions + golden en el workspace (idempotente; --force sobrescribe).
+  // Instala skill + conventions + references + golden en el workspace (idempotente; --force sobrescribe).
   const { copied, skipped } = copyTree(assetsDir, workspace, { force });
   for (const file of copied) console.log(`  ${pc.green('+')} ${file}`);
   for (const file of skipped) console.log(`  ${pc.yellow('=')} ${file} ${pc.dim('(ya existía, omitido)')}`);
@@ -110,8 +110,10 @@ export async function build(inputPath, { force = false, defaults = false } = {})
     stackIsNew = true;
   }
 
-  // Scaffolding determinista: todo lo derivable mecánicamente del diseño.
-  // Regeneración segura: sin --force solo se escriben archivos que no existen.
+  // Scaffolding transversal al stack: todo lo derivable mecánicamente del
+  // diseño cuyo código no depende de la infra puntual elegida (el resto lo
+  // escribe el agente con las references). Regeneración segura: sin --force
+  // solo se escriben archivos que no existen.
   const scaffold = scaffoldService({ manifest, layers, workspace, force, stack });
   if (stackIsNew) {
     writeStackConfig(projectDir, scaffold.stack);
@@ -133,5 +135,5 @@ export async function build(inputPath, { force = false, defaults = false } = {})
   const service = path.relative(workspace, dir).split(path.sep).join('/');
   console.log();
   console.log(pc.bold(pc.green('✔ Scaffolding generado.')) + pc.dim(` — ${manifest.service?.name} v${manifest.service?.version}`));
-  console.log(`Abre Claude Code y ejecuta ${pc.cyan(`/${SKILL} ${service}`)} para completar lógica de negocio y tests.`);
+  console.log(`Abre Claude Code y ejecuta ${pc.cyan(`/${SKILL} ${service}`)} para completar adaptadores de infraestructura, lógica de negocio y tests.`);
 }

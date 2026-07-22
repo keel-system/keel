@@ -2,7 +2,7 @@ import pc from 'picocolors';
 import { KNOWN_GENERATORS } from '../lib/assets.js';
 
 // Deprecado: los generadores dejaron de venir empaquetados en keel-core.
-// Cada uno es un paquete npm con CLI propia (ej. keel-springboot).
+// Cada uno es un paquete npm con CLI propia (ej. keel-spring).
 export function add(tech) {
   const pkg = KNOWN_GENERATORS[tech];
   console.error(pc.yellow('`keel add` está deprecado: los generadores ahora son paquetes independientes.'));

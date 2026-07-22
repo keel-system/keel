@@ -23,7 +23,7 @@ export function packageVersion() {
 // Generadores conocidos: cada uno es un paquete npm independiente con CLI propia.
 // Se instalan con `npm i -g <paquete>` y se preparan con `<paquete> build specs/<servicio>`.
 export const KNOWN_GENERATORS = {
-  spring: 'keel-springboot'
+  spring: 'keel-spring'
 };
 
 export function isKeelWorkspace(dir) {

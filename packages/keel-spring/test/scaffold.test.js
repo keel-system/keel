@@ -24,6 +24,10 @@ function read(workspace, relative) {
   return fs.readFileSync(path.join(workspace, 'services', 'product-catalog-spring', relative), 'utf8');
 }
 
+function exists(workspace, relative) {
+  return fs.existsSync(path.join(workspace, 'services', 'product-catalog-spring', relative));
+}
+
 test('scaffoldService genera el proyecto completo con contenido clave', () => {
   const workspace = makeWorkspace();
   const { outDir, copied, skipped, warnings } = scaffoldService({ ...loadFixture(), workspace });
@@ -222,18 +226,22 @@ test('stack elegido (mysql + rabbitmq) parametriza gradle, yaml y compose', () =
   const productionBroker = read(workspace, 'src/main/resources/parameters/production/rabbitmq.yaml');
   assert.ok(productionBroker.includes('username: ${RABBITMQ_USERNAME}'));
 
-  // Con capa messaging: evento de dominio + publisher real con envelope + config del broker.
+  // Con capa messaging: evento de dominio + puerto publisher transversal + stub
+  // sin broker. La implementación real (Rabbit) la escribe el agente.
   const event = read(workspace, 'src/main/java/com/commerce/productcatalog/domain/events/ProductCreatedEvent.java');
   assert.ok(event.includes('public record ProductCreatedEvent('));
-  const publisher = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/ProductCreatedPublisher.java');
-  assert.ok(publisher.includes('RabbitTemplate'));
-  assert.ok(publisher.includes('EventEnvelope.of("ProductCreated", event, correlationId)'));
-  assert.ok(publisher.includes('ROUTING_KEY = "product-catalog.product-created"'));
+  const port = read(workspace, 'src/main/java/com/commerce/productcatalog/domain/events/ProductCreatedPublisher.java');
+  assert.ok(port.includes('public interface ProductCreatedPublisher'));
+  assert.ok(!port.includes('RabbitTemplate'));
+  const stub = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/ProductCreatedPublisherStub.java');
+  assert.ok(stub.includes('implements ProductCreatedPublisher'));
+  assert.ok(stub.includes('TODO (agente)'));
+  assert.ok(!stub.includes('RabbitTemplate'));
   const envelope = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/EventMetadata.java');
   assert.ok(envelope.includes('"product-catalog"')); // source = nombre del servicio
-  const rabbitConfig = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/configurations/broker/RabbitMqConfig.java');
-  assert.ok(rabbitConfig.includes('EXCHANGE_NAME = "product-catalog.events"'));
-  assert.ok(rabbitConfig.includes('Jackson2JsonMessageConverter'));
+  // La config del broker ya no es determinista: la escribe el agente.
+  assert.ok(!exists(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/configurations/broker/RabbitMqConfig.java'));
+  assert.ok(!exists(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/ProductCreatedPublisher.java'));
 
   const compose = read(workspace, 'docker-compose.yaml');
   assert.ok(compose.includes('mysql:8.0'));
@@ -321,26 +329,18 @@ test('capa storage: gradle con SDK S3, compose con MinIO y fragmento de config p
   const productJpa = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/persistence/entities/ProductJpa.java');
   assert.ok(productJpa.includes('String photo'));
 
-  // Storage determinista: puerto de dominio + adaptador S3 + bean S3Client.
+  // Storage transversal: solo el puerto de dominio. El adaptador y el bean del
+  // cliente (S3/MinIO) los escribe el agente según el stack.
   const port = read(workspace, 'src/main/java/com/commerce/productcatalog/domain/storage/FileStorage.java');
   assert.ok(port.includes('public interface FileStorage'));
   assert.ok(port.includes('void upload(String key, byte[] content, String contentType);'));
   assert.ok(port.includes('String signedUrl(String key);'));
   assert.ok(!port.includes('org.springframework')); // puerto puro de dominio
 
-  const s3Config = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/configurations/storage/S3Config.java');
-  assert.ok(s3Config.includes('public S3Client s3Client('));
-  assert.ok(s3Config.includes('.endpointOverride(URI.create(endpoint))'));
+  assert.ok(!exists(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/configurations/storage/S3Config.java'));
+  assert.ok(!exists(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/storage/S3FileStorage.java'));
 
-  const s3Adapter = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/storage/S3FileStorage.java');
-  assert.ok(s3Adapter.includes('implements FileStorage'));
-  assert.ok(s3Adapter.includes('s3Client.putObject('));
-  assert.ok(s3Adapter.includes('s3Client.getObjectAsBytes('));
-  // signedUrl (URL prefirmada = negocio) es el único hueco explícito del agente.
-  assert.ok(s3Adapter.includes('public String signedUrl(String key)'));
-  assert.ok(s3Adapter.includes('throw new UnsupportedOperationException'));
-
-  // Perfil test: fragmento storage dummy para que el bean S3Client cargue en @SpringBootTest.
+  // Perfil test: fragmento storage dummy para el adaptador que escriba el agente.
   const testStorage = read(workspace, 'src/main/resources/parameters/test/storage.yaml');
   assert.ok(testStorage.includes('bucket: test-bucket'));
   assert.ok(read(workspace, 'src/main/resources/application-test.yaml').includes('classpath:parameters/test/storage.yaml'));
@@ -494,7 +494,7 @@ test('capa http-clients: RestClient configurado + resilience4j + fallback stub',
   assert.ok(hc.includes('failure-rate-threshold: 50'));
 });
 
-test('capa messaging (subscriptions): listener Kafka con @RetryableTopic + payload record + dispatch stub', () => {
+test('capa messaging (subscriptions): payload record transversal, sin listener del broker', () => {
   const workspace = makeWorkspace();
   const { manifest, layers } = loadFixture();
   const patchedManifest = structuredClone(manifest);
@@ -517,24 +517,22 @@ test('capa messaging (subscriptions): listener Kafka con @RetryableTopic + paylo
   const subsDir = 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/subscriptions';
   const message = read(workspace, `${subsDir}/StockDepletedMessage.java`);
   assert.ok(message.includes('public record StockDepletedMessage(UUID productId)'));
+  // El record documenta quién lo consumirá y qué operación despacha.
+  assert.ok(message.includes('StockDepletedListener'));
+  assert.ok(message.includes("'retireProduct'"));
 
-  const listener = read(workspace, `${subsDir}/StockDepletedListener.java`);
-  assert.ok(listener.includes('@RetryableTopic(attempts = "5", backoff = @Backoff(delay = 1000, multiplier = 2.0), dltStrategy = DltStrategy.FAIL_ON_ERROR)'));
-  assert.ok(listener.includes('@KafkaListener(topics = "${messaging.subscriptions.stock-depleted.topic:inventory-service.events}", groupId = "${spring.application.name}")'));
-  assert.ok(listener.includes('public void on(StockDepletedMessage message)'));
-  // El wiring es determinista; el mapeo payload→operación (negocio) es el stub.
-  assert.ok(listener.includes("operación 'retireProduct'"));
-  assert.ok(listener.includes('new RetireProductCommand(...)'));
-  assert.ok(listener.includes('throw new UnsupportedOperationException'));
-  // Broker por defecto (kafka): spring-kafka en gradle.
+  // El listener depende del broker: lo escribe el agente, no build.
+  assert.ok(!exists(workspace, `${subsDir}/StockDepletedListener.java`));
+  // Broker por defecto (kafka): spring-kafka en gradle para el código del agente.
   assert.ok(read(workspace, 'build.gradle').includes('spring-kafka'));
 });
 
-test('publisher snssqs: inyecta SnsTemplate y nunca KafkaTemplate (regresión)', () => {
+test('publisher: puerto + stub transversales sin código del broker elegido', () => {
   const workspace = makeWorkspace();
   const { manifest, layers } = loadFixture();
   const patched = structuredClone(layers);
   patched.messaging = { publishing: { reliability: 'best-effort', events: { ProductCreated: { payload: { entity: 'Product' } } } } };
+  patched['use-cases'].operations.createProduct.emits = ['ProductCreated'];
   const patchedManifest = structuredClone(manifest);
   patchedManifest.layers.messaging = 'messaging.keel.yaml';
 
@@ -546,13 +544,25 @@ test('publisher snssqs: inyecta SnsTemplate y nunca KafkaTemplate (regresión)',
   });
   assert.equal(stack.broker, 'snssqs');
 
-  const publisher = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/ProductCreatedPublisher.java');
-  // Con snssqs el publisher usa el template del broker elegido, no uno ajeno.
-  assert.ok(publisher.includes('io.awspring.cloud.sns.core.SnsTemplate'));
-  assert.ok(publisher.includes('private final SnsTemplate snsTemplate;'));
-  assert.ok(publisher.includes('snsTemplate.sendNotification('));
-  assert.ok(!publisher.includes('KafkaTemplate')); // el bug histórico: caía en la rama Kafka
-  assert.ok(!publisher.includes('org.springframework.kafka'));
+  // El handler que emite el evento inyecta el PUERTO, nunca el template.
+  const handler = read(workspace, 'src/main/java/com/commerce/productcatalog/application/usecases/CreateProductCommandHandler.java');
+  assert.ok(handler.includes('private final ProductCreatedPublisher productCreatedPublisher;'));
+  assert.ok(handler.includes('publicar vía el puerto inyectado'));
+
+  // Sea cual sea el broker, build solo genera puerto + stub sin templates.
+  const port = read(workspace, 'src/main/java/com/commerce/productcatalog/domain/events/ProductCreatedPublisher.java');
+  assert.ok(port.includes('public interface ProductCreatedPublisher'));
+  assert.ok(port.includes('void publish(ProductCreatedEvent event, String correlationId);'));
+
+  const stub = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/ProductCreatedPublisherStub.java');
+  assert.ok(stub.includes('implements ProductCreatedPublisher'));
+  assert.ok(stub.includes('throw new UnsupportedOperationException'));
+  for (const ajeno of ['SnsTemplate', 'KafkaTemplate', 'RabbitTemplate']) {
+    assert.ok(!stub.includes(ajeno));
+  }
+  assert.ok(!exists(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/ProductCreatedPublisher.java'));
+  // Las deps del broker elegido sí van en gradle (las usa el código del agente).
+  assert.ok(read(workspace, 'build.gradle').includes('spring-cloud-aws-starter-sns'));
 });
 
 test('grupo introducido parametriza build.gradle y el package de las clases Java', () => {

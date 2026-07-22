@@ -27,8 +27,8 @@ Próximos pasos:
   1. ${pc.cyan('keel new mi-servicio')}    crea specs/mi-servicio/ (manifiesto + capas obligatorias)
   2. Abre Claude Code aquí y ejecuta ${pc.cyan('/keel-design specs/mi-servicio')}
   3. ${pc.cyan('keel validate specs/mi-servicio')}
-  4. Instala el generador de tu tecnología: ${pc.cyan('npm i -g keel-springboot')} (${pc.cyan('keel list')} para ver los conocidos)
-  5. ${pc.cyan('keel-springboot build specs/mi-servicio')}  instala la skill del generador y valida el diseño
+  4. Instala el generador de tu tecnología: ${pc.cyan('npm i -g keel-spring')} (${pc.cyan('keel list')} para ver los conocidos)
+  5. ${pc.cyan('keel-spring build specs/mi-servicio')}  instala la skill del generador y valida el diseño
   6. En Claude Code: ${pc.cyan('/keel-generate-spring specs/mi-servicio')}
 
 La metodología completa está en ${pc.cyan('docs/methodology.md')}.`);

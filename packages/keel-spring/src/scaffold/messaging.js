@@ -1,17 +1,17 @@
-// Mensajería del servicio (portada del shared del prototipo, como
-// funcionalidad propia): EventEnvelope/EventMetadata (contrato estándar de
-// publicación con eventId, timestamp UTC, correlationId y source), un
-// publisher por evento que publica el evento ENVUELTO al exchange/topic
-// <servicio>.events, y la configuración del broker (RabbitMqConfig con
-// conversor JSON; en Kafka los serializadores van en parameters/<perfil>).
-// Reliability (outbox / after-commit) queda como TODO del agente.
+// Mensajería del servicio: solo los contratos transversales al broker.
+// Build genera EventEnvelope/EventMetadata (contrato estándar de publicación
+// con eventId, timestamp UTC, correlationId y source), el PUERTO
+// <Evento>Publisher (interfaz junto al record del evento en domain/events) con
+// un stub transversal que permite arrancar el contexto sin broker, y el record
+// del payload de cada suscripción (contrato de la fuente). La implementación
+// real de publishers y listeners depende del broker elegido (keel-stack.json)
+// y la escribe el agente siguiendo generators/spring/references/<broker>.md.
 
-import { kebabCase } from '../lib/naming.js';
 import { javaFile, javaPath, subPackage } from './render.js';
-import { MEDIATOR_PKG } from './mediator.js';
 
 const MESSAGING_PKG = 'infrastructure.messaging';
-const BROKER_CONFIG_PKG = 'infrastructure.configurations.broker';
+const EVENTS_PKG = 'domain.events';
+const SUBSCRIPTIONS_PKG = 'infrastructure.messaging.subscriptions';
 
 export function generate(model) {
   if (!model.layersPresent.messaging) return [];
@@ -21,12 +21,12 @@ export function generate(model) {
   // El envelope/metadata es el contrato de (de)serialización tanto al publicar
   // como al consumir; se genera si hay publicación o suscripción.
   const files = [renderEnvelope(model), renderMetadata(model)];
-  if (model.stack.broker === 'rabbitmq' && model.events.length > 0) files.push(renderRabbitConfig(model));
-  files.push(...model.events.map((event) => renderPublisher(model, event)));
-
+  for (const event of model.events) {
+    files.push(renderPublisherPort(model, event));
+    files.push(renderPublisherStub(model, event));
+  }
   for (const sub of subscriptions) {
     files.push(renderSubscriptionMessage(model, sub));
-    files.push(renderListener(model, sub));
   }
   return files;
 }
@@ -69,163 +69,62 @@ public record EventMetadata(String eventId, String eventType, String timestamp, 
   };
 }
 
-// Configuración RabbitMQ (patrón del prototipo): exchange de eventos del
-// servicio + conversor JSON para publicar/consumir records.
-function renderRabbitConfig(model) {
-  const body = `@Configuration
-public class RabbitMqConfig {
+// Puerto de publicación del evento: interfaz pura en domain/events. Los
+// handlers dependen de este puerto, nunca del template del broker.
+function renderPublisherPort(model, event) {
+  const body = `/**
+ * Puerto de publicación del evento ${event.name}. La implementación (broker
+ * del stack) vive en infrastructure/messaging.
+ */
+public interface ${event.publisherClass} {
 
-    public static final String EXCHANGE_NAME = "${model.service.name}.events";
+    void publish(${event.className} event);
 
-    @Bean
-    public TopicExchange domainEventsExchange() {
-        return new TopicExchange(EXCHANGE_NAME, true, false);
-    }
-
-    @Bean
-    public MessageConverter jsonMessageConverter(ObjectMapper objectMapper) {
-        return new Jackson2JsonMessageConverter(objectMapper);
-    }
-
-    @Bean
-    public RabbitTemplate rabbitTemplate(ConnectionFactory connectionFactory, MessageConverter messageConverter) {
-        RabbitTemplate template = new RabbitTemplate(connectionFactory);
-        template.setMessageConverter(messageConverter);
-        return template;
-    }
-
-    @Bean
-    public SimpleRabbitListenerContainerFactory rabbitListenerContainerFactory(
-            ConnectionFactory connectionFactory,
-            MessageConverter messageConverter) {
-        SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
-        factory.setConnectionFactory(connectionFactory);
-        factory.setMessageConverter(messageConverter);
-        return factory;
-    }
+    void publish(${event.className} event, String correlationId);
 }`;
-
   return {
-    path: javaPath(model, BROKER_CONFIG_PKG, 'RabbitMqConfig'),
-    content: javaFile(
-      subPackage(model, BROKER_CONFIG_PKG),
-      [
-        'com.fasterxml.jackson.databind.ObjectMapper',
-        'org.springframework.amqp.core.TopicExchange',
-        'org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory',
-        'org.springframework.amqp.rabbit.connection.ConnectionFactory',
-        'org.springframework.amqp.rabbit.core.RabbitTemplate',
-        'org.springframework.amqp.support.converter.Jackson2JsonMessageConverter',
-        'org.springframework.amqp.support.converter.MessageConverter',
-        'org.springframework.context.annotation.Bean',
-        'org.springframework.context.annotation.Configuration'
-      ],
-      body
-    )
+    path: javaPath(model, EVENTS_PKG, event.publisherClass),
+    content: javaFile(subPackage(model, EVENTS_PKG), [], body)
   };
 }
 
-// Publisher por evento: inyecta el template del broker ELEGIDO (kafka/rabbit/sns)
-// y publica el EventEnvelope. Simétrico a renderListener: cada broker tiene su
-// helper de partes (imports/campos/envío); nunca se inyecta un template ajeno al
-// broker del stack.
-function renderPublisher(model, event) {
-  const broker = model.stack.broker;
-  let parts;
-  if (broker === 'rabbitmq') parts = rabbitPublisherParts(model, event);
-  else if (broker === 'snssqs') parts = snsPublisherParts(model, event);
-  else parts = kafkaPublisherParts(model, event);
-
-  const imports = new Set([
-    'java.util.UUID',
-    'org.slf4j.Logger',
-    'org.slf4j.LoggerFactory',
-    'org.springframework.stereotype.Component',
-    `${subPackage(model, 'domain.events')}.${event.className}`,
-    ...parts.imports
-  ]);
-
+// Stub transversal del puerto: satisface la inyección para que el contexto
+// arranque sin broker; el agente lo sustituye por el publisher real.
+function renderPublisherStub(model, event) {
+  const stubClass = `${event.publisherClass}Stub`;
   const body = `@Component
-public class ${event.publisherClass} {
+public class ${stubClass} implements ${event.publisherClass} {
 
-    private static final Logger log = LoggerFactory.getLogger(${event.publisherClass}.class);
-
-${parts.fields}
-
+    @Override
     public void publish(${event.className} event) {
         publish(event, UUID.randomUUID().toString());
     }
 
+    @Override
     public void publish(${event.className} event, String correlationId) {
-        // TODO (agente): aplicar la reliability declarada en messaging.keel.yaml
-        // (outbox / after-commit) antes de dar esta publicación por definitiva.
-        EventEnvelope<${event.className}> envelope = EventEnvelope.of("${event.name}", event, correlationId);
-        log.info("Publicando {} (correlationId={})", "${event.name}", correlationId);
-        ${parts.send}
+        // TODO (agente): sustituir este stub por el publisher real del broker
+        //   elegido en keel-stack.json (ver generators/spring/references/):
+        //   envolver con EventEnvelope.of("${event.name}", event, correlationId),
+        //   publicar en el canal declarado y aplicar la reliability del diseño
+        //   (outbox / after-commit).
+        throw new UnsupportedOperationException("TODO (agente): publicar ${event.name} con el broker del stack");
     }
 }`;
-
   return {
-    path: javaPath(model, MESSAGING_PKG, event.publisherClass),
-    content: javaFile(subPackage(model, MESSAGING_PKG), [...imports], body)
+    path: javaPath(model, MESSAGING_PKG, stubClass),
+    content: javaFile(subPackage(model, MESSAGING_PKG), [
+      'java.util.UUID',
+      'org.springframework.stereotype.Component',
+      `${subPackage(model, EVENTS_PKG)}.${event.className}`,
+      `${subPackage(model, EVENTS_PKG)}.${event.publisherClass}`
+    ], body)
   };
 }
-
-function kafkaPublisherParts(model, event) {
-  return {
-    imports: ['org.springframework.kafka.core.KafkaTemplate'],
-    fields: `    private static final String TOPIC = "${model.service.name}.events";
-
-    private final KafkaTemplate<String, Object> kafkaTemplate;
-
-    public ${event.publisherClass}(KafkaTemplate<String, Object> kafkaTemplate) {
-        this.kafkaTemplate = kafkaTemplate;
-    }`,
-    send: `kafkaTemplate.send(TOPIC, "${event.name}", envelope);`
-  };
-}
-
-function rabbitPublisherParts(model, event) {
-  const eventKebab = kebabCase(event.name);
-  return {
-    imports: [
-      'org.springframework.amqp.rabbit.core.RabbitTemplate',
-      `${subPackage(model, BROKER_CONFIG_PKG)}.RabbitMqConfig`
-    ],
-    fields: `    private static final String ROUTING_KEY = "${model.service.name}.${eventKebab}";
-
-    private final RabbitTemplate rabbitTemplate;
-
-    public ${event.publisherClass}(RabbitTemplate rabbitTemplate) {
-        this.rabbitTemplate = rabbitTemplate;
-    }`,
-    send: `rabbitTemplate.convertAndSend(RabbitMqConfig.EXCHANGE_NAME, ROUTING_KEY, envelope);`
-  };
-}
-
-function snsPublisherParts(model, event) {
-  return {
-    imports: ['io.awspring.cloud.sns.core.SnsTemplate'],
-    // El destino real (ARN del topic SNS) es negocio/infra: queda como hueco
-    // explícito, pero el publisher inyecta el SnsTemplate correcto (no Kafka).
-    fields: `    // TODO (agente): resolver el ARN/nombre real del topic SNS de destino
-    //   (p. ej. desde parameters/<perfil>/snssqs.yaml vía @Value).
-    private static final String TOPIC_ARN = "${model.service.name}-events";
-
-    private final SnsTemplate snsTemplate;
-
-    public ${event.publisherClass}(SnsTemplate snsTemplate) {
-        this.snsTemplate = snsTemplate;
-    }`,
-    send: `snsTemplate.sendNotification(TOPIC_ARN, envelope, "${event.name}");`
-  };
-}
-
-// ─── Suscripciones (consumers) ───────────────────────────────────────────────
-
-const SUBSCRIPTIONS_PKG = 'infrastructure.messaging.subscriptions';
 
 // Record del payload esperado del evento suscrito (contrato de la fuente).
+// El listener que lo consume depende del broker: lo escribe el agente
+// (generators/spring/references/<broker>.md) despachando la operación
+// 'triggers' vía UseCaseMediator.
 function renderSubscriptionMessage(model, sub) {
   const imports = new Set();
   for (const field of sub.fields) for (const name of field.imports) imports.add(name);
@@ -233,132 +132,13 @@ function renderSubscriptionMessage(model, sub) {
 
   const body = `/**
  * Payload del evento ${sub.name}${sub.source ? ` (fuente: ${sub.source})` : ''}.
+ * Lo consume ${sub.listenerClass} (listener del broker del stack; lo escribe
+ * el agente${sub.trigger ? ` despachando la operación '${sub.trigger}'` : ''}).
  */
 public record ${sub.messageRecord}(${components}) {
 }`;
   return {
     path: javaPath(model, SUBSCRIPTIONS_PKG, sub.messageRecord),
-    content: javaFile(subPackage(model, SUBSCRIPTIONS_PKG), [...imports], body)
-  };
-}
-
-// Listener por suscripción: enlaza el canal del broker, aplica la política
-// onFailure (retry/DLQ) y deja el mapeo payload→operación (negocio) como stub.
-function renderListener(model, sub) {
-  const broker = model.stack.broker;
-  if (broker === 'rabbitmq') return renderRabbitListener(model, sub);
-  if (broker === 'snssqs') return renderSqsListener(model, sub);
-  return renderKafkaListener(model, sub);
-}
-
-// Cuerpo común del método consumidor: recibe el payload tipado y despacha la
-// operación 'triggers' vía mediator (mapeo payload→mensaje = // TODO agente).
-function dispatchStub(sub) {
-  const target = sub.triggerMessageClass
-    ? `        //   mediator.dispatch(new ${sub.triggerMessageClass}(...));`
-    : '        //   (declara triggers en la suscripción para saber qué operación despachar)';
-  return `        // TODO (agente): mapear ${sub.messageRecord} → operación '${sub.trigger ?? '?'}' y despachar.
-${target}
-        throw new UnsupportedOperationException("TODO: consumir ${sub.name}");`;
-}
-
-function renderKafkaListener(model, sub) {
-  const imports = new Set([
-    'org.springframework.kafka.annotation.KafkaListener',
-    'org.springframework.stereotype.Component',
-    `${subPackage(model, MEDIATOR_PKG)}.UseCaseMediator`
-  ]);
-
-  // Retry + DLT por listener con @RetryableTopic (mecanismo nativo de Spring
-  // Kafka): reintentos con backoff del diseño y topic .DLT tras agotarlos.
-  let retryable = '';
-  if (sub.retry || sub.deadLetter) {
-    imports.add('org.springframework.kafka.annotation.RetryableTopic');
-    imports.add('org.springframework.kafka.retrytopic.DltStrategy');
-    imports.add('org.springframework.retry.annotation.Backoff');
-    const attempts = sub.retry?.maxAttempts ?? 3;
-    const delay = sub.retry?.initialDelayMs ?? 1000;
-    const multiplier = (sub.retry?.backoff ?? 'exponential') === 'exponential' ? ', multiplier = 2.0' : '';
-    const dlt = sub.deadLetter ? 'DltStrategy.FAIL_ON_ERROR' : 'DltStrategy.NO_DLT';
-    retryable = `    @RetryableTopic(attempts = "${attempts}", backoff = @Backoff(delay = ${delay}${multiplier}), dltStrategy = ${dlt})\n`;
-  }
-
-  const body = `@Component
-public class ${sub.listenerClass} {
-
-    private final UseCaseMediator mediator;
-
-    public ${sub.listenerClass}(UseCaseMediator mediator) {
-        this.mediator = mediator;
-    }
-
-${retryable}    @KafkaListener(topics = "\${${sub.topicProperty}:${sub.topicDefault}}", groupId = "\${spring.application.name}")
-    public void on(${sub.messageRecord} message) {
-${dispatchStub(sub)}
-    }
-}`;
-  return {
-    path: javaPath(model, SUBSCRIPTIONS_PKG, sub.listenerClass),
-    content: javaFile(subPackage(model, SUBSCRIPTIONS_PKG), [...imports], body)
-  };
-}
-
-function renderRabbitListener(model, sub) {
-  const imports = new Set([
-    'org.springframework.amqp.rabbit.annotation.RabbitListener',
-    'org.springframework.stereotype.Component',
-    `${subPackage(model, MEDIATOR_PKG)}.UseCaseMediator`
-  ]);
-  const onFailure =
-    sub.retry || sub.deadLetter
-      ? '    // TODO (agente): política onFailure (retry/DLQ) vía DLX/DLQ del contenedor Rabbit.\n'
-      : '';
-  const body = `@Component
-public class ${sub.listenerClass} {
-
-    private final UseCaseMediator mediator;
-
-    public ${sub.listenerClass}(UseCaseMediator mediator) {
-        this.mediator = mediator;
-    }
-
-${onFailure}    @RabbitListener(queues = "\${${sub.topicProperty}:${sub.topicDefault}}")
-    public void on(${sub.messageRecord} message) {
-${dispatchStub(sub)}
-    }
-}`;
-  return {
-    path: javaPath(model, SUBSCRIPTIONS_PKG, sub.listenerClass),
-    content: javaFile(subPackage(model, SUBSCRIPTIONS_PKG), [...imports], body)
-  };
-}
-
-function renderSqsListener(model, sub) {
-  const imports = new Set([
-    'io.awspring.cloud.sqs.annotation.SqsListener',
-    'org.springframework.stereotype.Component',
-    `${subPackage(model, MEDIATOR_PKG)}.UseCaseMediator`
-  ]);
-  const onFailure =
-    sub.retry || sub.deadLetter
-      ? '    // TODO (agente): política onFailure (redrive/DLQ) en la cola SQS.\n'
-      : '';
-  const body = `@Component
-public class ${sub.listenerClass} {
-
-    private final UseCaseMediator mediator;
-
-    public ${sub.listenerClass}(UseCaseMediator mediator) {
-        this.mediator = mediator;
-    }
-
-${onFailure}    @SqsListener("\${${sub.topicProperty}:${sub.topicDefault}}")
-    public void on(${sub.messageRecord} message) {
-${dispatchStub(sub)}
-    }
-}`;
-  return {
-    path: javaPath(model, SUBSCRIPTIONS_PKG, sub.listenerClass),
     content: javaFile(subPackage(model, SUBSCRIPTIONS_PKG), [...imports], body)
   };
 }

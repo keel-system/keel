@@ -144,6 +144,17 @@ function renderHandler(model, service, operation) {
     imports.add(`${subPackage(model, 'application.mappers')}.${mapper}`);
     dependencies.push({ type: mapper, name: mapper[0].toLowerCase() + mapper.slice(1) });
   }
+  // Puerto de publicación por evento emitido: el handler depende de la interfaz
+  // (domain/events); la implementación del broker la escribe el agente.
+  for (const eventName of operation.emits) {
+    const event = (model.events ?? []).find((e) => e.name === eventName);
+    if (!event) continue;
+    imports.add(`${subPackage(model, 'domain.events')}.${event.publisherClass}`);
+    dependencies.push({
+      type: event.publisherClass,
+      name: event.publisherClass[0].toLowerCase() + event.publisherClass.slice(1)
+    });
+  }
 
   let fields = '';
   let constructor = '';
@@ -165,7 +176,7 @@ function renderHandler(model, service, operation) {
     const error = model.errors.find((e) => e.code === code);
     notes.push(`Error: lanzar ${error?.exceptionClass ?? code} (${code}, HTTP ${error?.http ?? 400})${error?.when ? ` cuando: ${error.when}` : ''}`);
   }
-  for (const event of operation.emits) notes.push(`Emite: ${event} (tras confirmar la transacción; publisher en infrastructure/messaging)`);
+  for (const event of operation.emits) notes.push(`Emite: ${event} (tras confirmar la transacción; publicar vía el puerto inyectado)`);
   if (operation.idempotency) {
     notes.push(`Idempotencia: keySource=${operation.idempotency.keySource}${operation.idempotency.ttlSeconds ? `, ttlSeconds=${operation.idempotency.ttlSeconds}` : ''}`);
   }

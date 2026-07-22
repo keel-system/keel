@@ -17,7 +17,7 @@ Este repo es un **monorepo npm workspaces** con dos tipos de paquete:
 | Paquete | CLI | Qué hace |
 |---------|-----|----------|
 | `packages/keel-core` | `keel` | El core: siembra workspaces, crea servicios y valida diseños. Define el DSL (schemas, docs, plantillas) y expone su validación como librería para los generadores. |
-| `packages/keel-springboot` | `keel-springboot` | Generador Spring Boot: `build` instala su skill + convenciones en el workspace y valida el diseño; el código lo genera el agente. Futuro: `keel-nest`, `keel-fastapi`, … |
+| `packages/keel-spring` | `keel-spring` | Generador Spring Boot: `build` instala su skill + convenciones + referencias, valida el diseño, pregunta el stack y genera el scaffolding transversal (el proyecto arranca); el código dependiente de la infra elegida y la lógica de negocio los genera el agente. Futuro: `keel-nest`, `keel-fastapi`, … |
 
 ## Instalación
 
@@ -25,7 +25,7 @@ Este repo es un **monorepo npm workspaces** con dos tipos de paquete:
 git clone <este-repo> && cd keel
 npm install
 npm link --workspace packages/keel-core          # comando `keel`
-npm link --workspace packages/keel-springboot   # comando `keel-springboot`
+npm link --workspace packages/keel-spring        # comando `keel-spring`
 ```
 
 (Publicación en npm pendiente; los `bin` ya están configurados.)
@@ -44,8 +44,8 @@ keel new mi-servicio # crea specs/mi-servicio/ (manifiesto + domain + use-cases)
 #                                            y actualiza el índice README.md del workspace
 keel validate specs/mi-servicio              # schemas por capa + referencias cruzadas
 
-keel-springboot build specs/mi-servicio      # instala la skill del generador y valida el diseño
-#   /keel-generate-spring specs/mi-servicio  → services/mi-servicio-spring/
+keel-spring build specs/mi-servicio      # instala la skill, valida, pregunta el stack y genera el scaffolding
+#   /keel-generate-spring specs/mi-servicio  → completa services/mi-servicio-spring/
 #   /keel-docs specs/mi-servicio             → docs de integración
 #   /keel-handoff specs/mi-servicio          → regenera DESIGN.md + índice si el spec cambió
 ```
@@ -58,7 +58,7 @@ keel-springboot build specs/mi-servicio      # instala la skill del generador y 
 | `keel new <servicio>` | Crea `specs/<servicio>/` con manifiesto + capas obligatorias desde plantillas. |
 | `keel list` | Lista los generadores conocidos y su paquete npm. |
 | `keel validate <ruta>` | Valida un servicio (directorio o manifiesto): schema de cada capa + referencias cruzadas entre artefactos (offline, con todos los errores). |
-| `keel-springboot build <ruta> [--force]` | Instala el generador Spring Boot en el workspace (skill + conventions + golden), comprueba la compatibilidad DSL y valida el diseño. |
+| `keel-spring build <ruta> [--force] [--defaults]` | Instala el generador Spring Boot en el workspace (skill + conventions + references + golden), comprueba la compatibilidad DSL, valida el diseño, pregunta el stack (persistido en `keel-stack.json`) y genera el scaffolding transversal en `services/<servicio>-spring/`. |
 
 ## El workspace sembrado
 
@@ -75,7 +75,7 @@ mi-proyecto/
 │   └── *.keel.yaml           #   api, security, messaging, http-clients, persistence (opcionales)
 ├── templates/service/        # una plantilla por capa
 ├── docs/                     # methodology, dsl-reference (índice), dsl/<capa>.md, building-a-generator
-├── generators/<tech>/        # generadores instalados con `keel-<tech> build` (conventions + golden)
+├── generators/<tech>/        # generadores instalados con `keel-<tech> build` (conventions + references + golden)
 └── services/                 # servicios generados (un repo git propio cada uno)
 ```
 
@@ -92,9 +92,9 @@ keel/
     │   │   ├── commands/
     │   │   └── lib/              # assets, copia, carga multi-artefacto, referencias cruzadas
     │   └── assets/core/          # lo que `keel init` siembra (skills, schemas, plantillas, docs)
-    └── keel-springboot/          # generador Spring Boot
-        ├── src/                  # CLI: comando build
-        └── assets/               # lo que `keel-springboot build` instala (skill + conventions + golden)
+    └── keel-spring/              # generador Spring Boot
+        ├── src/                  # CLI: comando build + scaffolding transversal (src/scaffold, src/lib)
+        └── assets/               # lo que `keel-spring build` instala (skill + conventions + references + golden)
 ```
 
 Los assets **son** la metodología: el DSL se documenta en `packages/keel-core/assets/core/docs/dsl-reference.md`, el schema vive en `packages/keel-core/assets/core/schema/`, y cada generador en su propio paquete `packages/keel-<tech>/`. Para crear un generador nuevo: `packages/keel-core/assets/core/docs/building-a-generator.md`.

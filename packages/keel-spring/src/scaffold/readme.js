@@ -16,7 +16,7 @@ export function generate(model) {
     '',
     service.description,
     '',
-    `Generado desde \`specs/${service.name}\` v${service.version} por keel-springboot ${packageVersion()} (scaffolding determinista).`,
+    `Generado desde \`specs/${service.name}\` v${service.version} por keel-spring ${packageVersion()} (scaffolding transversal al stack).`,
     '',
     '## Ejecutar',
     '',
@@ -29,7 +29,7 @@ export function generate(model) {
     lines.push(
       '## Infraestructura de prueba',
       '',
-      'Elegida en el cuestionario de `keel-springboot build` y persistida en `keel-stack.json`',
+      'Elegida en el cuestionario de `keel-spring build` y persistida en `keel-stack.json`',
       '(bórralo y re-ejecuta el build con `--force` para cambiarla).',
       '',
       '| Servicio | Imagen | Puerto |',
@@ -86,14 +86,16 @@ export function generate(model) {
     '',
     '## Qué genera el scaffolding y qué completa el agente',
     '',
-    'El scaffolding (determinista, re-ejecutable con `keel-springboot build`) produce la arquitectura hexagonal + CQRS',
+    'El scaffolding (transversal al stack, re-ejecutable con `keel-spring build`) produce la arquitectura hexagonal + CQRS',
     'del prototipo de referencia, en un único microservicio (sin paquete shared ni Spring Modulith): dominio puro',
     '(`domain/aggregate|entity|valueobject|enums|errors|events` + puertos en `domain/repository`), capa application',
     '(commands/queries con Bean Validation, handlers stub en `usecases/`, ResponseDtos y mappers), e infraestructura',
     '(entidades `Jpa` con auditoría automática, adaptadores `RepositoryImpl` con mapeo explícito, `UseCaseMediator`',
     'con la frontera transaccional (la capa application no importa Spring: `@ApplicationComponent` propia),',
-    '`@LogExceptions` con su aspecto, publishers con `EventEnvelope`, controllers `V1` con springdoc y',
-    '`ApiExceptionHandler`), más configuración por perfiles y docker-compose de prueba.',
+    '`@LogExceptions` con su aspecto, contratos `EventEnvelope`/`EventMetadata` con puertos `<Evento>Publisher` y stub,',
+    'controllers `V1` con springdoc y `ApiExceptionHandler`), más configuración por perfiles y docker-compose de prueba.',
+    'El código que depende de la infraestructura elegida (publishers/listeners del broker, adaptador de storage)',
+    'lo escribe el agente siguiendo `generators/spring/references/<tech>.md` según `keel-stack.json`.',
     '',
     'Swagger UI (local/develop): http://localhost:8080/swagger-ui.html — deshabilitado en production.',
     '',
@@ -101,7 +103,6 @@ export function generate(model) {
     '',
     '- Implementar los `handle(...)` con `// TODO (agente)` en `application/usecases/` (reglas, precondiciones, errores).',
     '- Proteger los invariantes marcados con `// TODO invariante` en `domain/aggregate/`.',
-    '- Publicación real de eventos en los `<Evento>Publisher` (si hay messaging).',
     '- Tests: camino feliz + un test por error, invariantes, lifecycle y escenarios FL-* del diseño.'
   );
 
@@ -110,7 +111,10 @@ export function generate(model) {
     pendingLayers.push('- `security`: el `SecurityFilterChain` ya está generado; crea el realm en el Keycloak de prueba (http://localhost:8180, admin/admin).');
   }
   if (layersPresent.messaging) {
-    pendingLayers.push('- `messaging`: los `<Evento>Listener` ya están generados; completa el dispatch a la operación `triggers` y la `reliability` de publicación.');
+    pendingLayers.push('- `messaging`: implementa los publishers reales del broker (sustituyendo cada `<Evento>PublisherStub`, con la `reliability` declarada) y los `<Evento>Listener` de las suscripciones, según `references/<broker>.md`.');
+  }
+  if (layersPresent.storage) {
+    pendingLayers.push('- `storage`: implementa el adaptador de `FileStorage` (bean del cliente + upload/download/delete/signedUrl) según `references/s3.md`.');
   }
   if (layersPresent.httpClients) {
     pendingLayers.push('- `http-clients`: los clientes RestClient resilientes ya están generados; tipa cada `<Llamada>Response` y completa los `*Fallback`.');

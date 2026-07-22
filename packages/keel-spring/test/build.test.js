@@ -8,7 +8,7 @@ import { build } from '../src/commands/build.js';
 import { assetsDir, SUPPORTED_DSL } from '../src/lib/assets.js';
 
 function makeWorkspace() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-springboot-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-spring-'));
   // Marcador de workspace Keel (isKeelWorkspace)
   fs.mkdirSync(path.join(dir, 'schema'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'schema', 'service.schema.json'), '{}');
@@ -57,6 +57,10 @@ async function runBuild(workspace, inputPath, options) {
 test('los assets del generador existen en el paquete', async () => {
   assert.ok(fs.existsSync(path.join(assetsDir, '.claude', 'skills', 'keel-generate-spring', 'SKILL.md')));
   assert.ok(fs.existsSync(path.join(assetsDir, 'generators', 'spring', 'README.md')));
+  // Referencias por tecnología del stack (las consume el agente según keel-stack.json).
+  for (const ref of ['README.md', 'kafka.md', 'rabbitmq.md', 'snssqs.md', 's3.md', 'redis.md', 'keycloak.md', 'cognito.md']) {
+    assert.ok(fs.existsSync(path.join(assetsDir, 'generators', 'spring', 'references', ref)), `falta references/${ref}`);
+  }
 });
 
 test('build rechaza una versión de DSL no soportada sin copiar assets', async () => {

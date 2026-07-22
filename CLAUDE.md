@@ -9,7 +9,7 @@ Monorepo npm workspaces (`packages/*`) con una CLI Node.js (ESM puro, Node >=18,
 ## Distinción crítica: código vs. assets sembrados
 
 - `packages/*/src/` — código de la CLI (lo que se ejecuta).
-- `packages/*/assets/` — **payload** que `keel init` / `keel-springboot build` copian al workspace del usuario final: schemas, templates, skills, docs y un `CLAUDE.md` plantilla.
+- `packages/*/assets/` — **payload** que `keel init` / `keel-spring build` copian al workspace del usuario final: schemas, templates, skills, docs y un `CLAUDE.md` plantilla.
 
 Los `.claude/skills/` y el `CLAUDE.md` bajo `assets/` **no son configuración de este repo**. Editar un schema, template o doc del DSL significa editar dentro de `assets/`.
 
@@ -29,9 +29,9 @@ Los `.claude/skills/` y el `CLAUDE.md` bajo `assets/` **no son configuración de
 - `assets/core/` — payload: `schema/*.schema.json`, `templates/service/*.keel.yaml`, `.claude/skills/`, `docs/`, `CLAUDE.md` plantilla.
 - `test/crossrefs.test.js` — tests con `node:test`.
 
-### `packages/keel-springboot` — generador Spring (CLI `keel-springboot`)
+### `packages/keel-spring` — generador Spring (CLI `keel-spring`)
 
-Depende de `keel-core` y **no duplica** validación ni schemas. `src/commands/build.js` instala la skill + convenciones en el workspace, valida y genera el **scaffolding determinista** en `services/<servicio>-spring/` con la arquitectura hexagonal + CQRS del prototipo de referencia, sin paquete `shared` ni Spring Modulith (Gradle + springdoc, config por perfiles `local`/`develop`/`production`/`test` con fragmentos `parameters/`, dominio puro + espejo `XxxJpa` con puerto/adaptador, commands/queries + handlers stub despachados vía `UseCaseMediator`, controllers `<Agregado>V1Controller`, jerarquía de errores `DomainException` + `ApiExceptionHandler`, eventos y publishers stub); la lógica de negocio y los tests los completa el agente con la skill `keel-generate-spring`. El scaffolding vive en `src/scaffold/` (un módulo por artefacto, patrón contexto precomputado + template literals) sobre `src/lib/` (`naming.js`, `type-mapper.js`, `model.js` — `buildModel()`, `writer.js` — regeneración segura estilo `copyTree`, `stack-catalog.js` + `stack-config.js` + `prompt.js` — cuestionario de stack persistido en `keel-stack.json` del servicio generado). El proyecto sale estilo Spring Initializr: wrapper de Gradle vendorizado en `vendor/gradle-wrapper/` (fuera de `assets/`) y `docker-compose.yaml` de infraestructura de prueba según el stack. Assets: `assets/.claude/skills/keel-generate-spring/` y `assets/generators/spring/` (contrato, `conventions/mapping.md`, `conventions/project-layout.md`, `golden/`).
+Depende de `keel-core` y **no duplica** validación ni schemas. `src/commands/build.js` instala la skill + convenciones + referencias en el workspace, valida y genera el **scaffolding transversal al stack** en `services/<servicio>-spring/`: todo lo necesario para levantar el proyecto (dependencias según el stack elegido, config por perfiles `local`/`develop`/`production`/`test` con fragmentos `parameters/`, docker-compose de prueba) más la estructura cuyo código no depende de la infra puntual, con la arquitectura hexagonal + CQRS del prototipo de referencia, sin paquete `shared` ni Spring Modulith (dominio puro + espejo `XxxJpa` con puerto/adaptador, commands/queries + handlers stub despachados vía `UseCaseMediator`, controllers `<Agregado>V1Controller`, jerarquía de errores `DomainException` + `ApiExceptionHandler`, seguridad, eventos con puerto `<Evento>Publisher` + stub). **Frontera**: el código cuya implementación cambia según la infra elegida (publishers/listeners del broker, adaptador de storage) no se genera — lo escribe el agente con la skill `keel-generate-spring` guiado por `assets/generators/spring/references/<tech>.md`, junto con la lógica de negocio y los tests. El scaffolding vive en `src/scaffold/` (un módulo por artefacto, patrón contexto precomputado + template literals) sobre `src/lib/` (`naming.js`, `type-mapper.js`, `model.js` — `buildModel()`, `writer.js` — regeneración segura estilo `copyTree`, `stack-catalog.js` + `stack-config.js` + `prompt.js` — cuestionario de stack persistido en `keel-stack.json` del servicio generado). El proyecto sale estilo Spring Initializr: wrapper de Gradle vendorizado en `vendor/gradle-wrapper/` (fuera de `assets/`) y `docker-compose.yaml` de infraestructura de prueba según el stack. Assets: `assets/.claude/skills/keel-generate-spring/` y `assets/generators/spring/` (contrato, `conventions/mapping.md`, `conventions/project-layout.md`, `references/`, `golden/`).
 
 ## Comandos de desarrollo
 
@@ -40,7 +40,7 @@ npm install                                      # raíz
 npm test                                         # todos los workspaces (node --test nativo)
 npm test --workspace packages/keel-core          # un paquete
 npm link --workspace packages/keel-core          # habilita `keel` local
-npm link --workspace packages/keel-springboot    # habilita `keel-springboot` local
+npm link --workspace packages/keel-spring        # habilita `keel-spring` local
 node packages/keel-core/src/cli.js <cmd>         # ejecutar sin link
 ```
 
@@ -59,7 +59,7 @@ La revisión **semántica** (calidad del diseño, invariantes, mínimo privilegi
 | Nuevo comando CLI | `keel-core/src/cli.js` + nuevo archivo en `src/commands/` |
 | Nueva regla de validación mecánica | `keel-core/src/lib/crossrefs.js` + test en `test/crossrefs.test.js` |
 | Nueva capa del DSL | `LAYERS` en `src/lib/assets.js` + `assets/core/schema/<capa>.schema.json` + `assets/core/templates/service/<capa>.keel.yaml` + `assets/core/docs/dsl/<capa>.md` + reglas en `crossrefs.js` |
-| Nuevo generador | Paquete `packages/keel-<tech>/` calcado de `keel-springboot`; guía en `keel-core/assets/core/docs/building-a-generator.md`; registrar en `KNOWN_GENERATORS` (`src/lib/assets.js`) |
+| Nuevo generador | Paquete `packages/keel-<tech>/` calcado de `keel-spring`; guía en `keel-core/assets/core/docs/building-a-generator.md`; registrar en `KNOWN_GENERATORS` (`src/lib/assets.js`) |
 | Cambio de versión del DSL en un generador | Sincronizar `SUPPORTED_DSL` (`src/lib/assets.js` del generador) + campo `keel.dsl` de su `package.json` + su README |
 
 ## Convenciones
