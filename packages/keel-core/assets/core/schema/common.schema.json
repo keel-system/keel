@@ -1,0 +1,283 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schema/2.0/common.schema.json",
+  "title": "Keel Common Definitions",
+  "description": "Definiciones compartidas por todos los artefactos de un servicio Keel.",
+  "$defs": {
+    "baseType": {
+      "type": "string",
+      "enum": ["string", "text", "int", "long", "decimal", "boolean", "uuid", "date", "timestamp", "json", "file"]
+    },
+    "typeName": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Za-z0-9]*$"
+    },
+    "operationName": {
+      "type": "string",
+      "pattern": "^[a-z][A-Za-z0-9]*$"
+    },
+    "kebabName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "roleName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "permissionName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*$",
+      "description": "Permiso en formato recurso:accion (ej. product:write)."
+    },
+    "constraints": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "min": { "type": "number" },
+        "max": { "type": "number" },
+        "minLength": { "type": "integer", "minimum": 0 },
+        "maxLength": { "type": "integer", "minimum": 1 },
+        "pattern": { "type": "string" },
+        "scale": { "type": "integer", "minimum": 0, "description": "Decimales para tipos decimal." }
+      }
+    },
+    "field": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "description": "Tipo base, value type declarado en types, o 'enum' (con values).",
+          "anyOf": [
+            { "$ref": "#/$defs/baseType" },
+            { "$ref": "#/$defs/typeName" },
+            { "const": "enum" }
+          ]
+        },
+        "values": {
+          "type": "array",
+          "description": "Valores permitidos. Solo válido cuando type es enum.",
+          "items": { "type": "string" },
+          "minItems": 1
+        },
+        "bucket": {
+          "description": "Bucket lógico (declarado en la capa storage) donde vive el archivo. Obligatorio y exclusivo del tipo file.",
+          "type": "string",
+          "pattern": "^[a-z][A-Za-z0-9]*$"
+        },
+        "description": { "type": "string" },
+        "required": { "type": "boolean", "default": false },
+        "unique": { "type": "boolean", "default": false },
+        "id": { "type": "boolean", "default": false, "description": "Marca el identificador de la entidad." },
+        "generated": {
+          "type": "boolean",
+          "default": false,
+          "description": "La infraestructura asigna el valor (ids, timestamps de auditoría); nunca viene del cliente."
+        },
+        "computed": {
+          "type": "string",
+          "minLength": 5,
+          "description": "Regla de dominio que deriva el valor a partir de otros campos; nunca viene del cliente. Excluyente con generated."
+        },
+        "sensitive": {
+          "type": "boolean",
+          "default": false,
+          "description": "Excluido por defecto de todo output y payload de evento; solo se expone si un payload lo pide explícitamente vía fields."
+        },
+        "default": {},
+        "constraints": { "$ref": "#/$defs/constraints" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "enum" } }, "required": ["type"] },
+          "then": { "required": ["values"] }
+        },
+        {
+          "if": { "properties": { "generated": { "const": true } }, "required": ["generated"] },
+          "then": { "not": { "required": ["computed"] } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "file" } }, "required": ["type"] },
+          "then": { "required": ["bucket"] },
+          "else": { "not": { "required": ["bucket"] } }
+        }
+      ]
+    },
+    "fieldMap": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "pattern": "^[a-z][A-Za-z0-9]*$" },
+      "additionalProperties": { "$ref": "#/$defs/field" }
+    },
+    "payload": {
+      "description": "Entrada o salida de una operación: campos explícitos, referencia a entidad, lista, o void.",
+      "oneOf": [
+        { "const": "void" },
+        {
+          "type": "object",
+          "required": ["entity"],
+          "additionalProperties": false,
+          "properties": {
+            "entity": { "$ref": "#/$defs/typeName" },
+            "list": { "type": "boolean", "default": false },
+            "paginated": { "type": "boolean", "default": false },
+            "exclude": {
+              "type": "array",
+              "description": "Campos de la entidad que no forman parte de este payload.",
+              "items": { "type": "string" }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["fields"],
+          "additionalProperties": false,
+          "properties": {
+            "fields": { "$ref": "#/$defs/fieldMap" }
+          }
+        }
+      ]
+    },
+    "authLevel": {
+      "type": "string",
+      "enum": ["public", "required", "admin"]
+    },
+    "accessRule": {
+      "type": "object",
+      "required": ["level"],
+      "additionalProperties": false,
+      "properties": {
+        "level": { "$ref": "#/$defs/authLevel" },
+        "roles": {
+          "type": "array",
+          "description": "Roles que pueden invocar la operación (deben existir en el catálogo roles).",
+          "items": { "$ref": "#/$defs/roleName" },
+          "minItems": 1
+        },
+        "permissions": {
+          "type": "array",
+          "description": "Permisos exigidos (deben existir en el catálogo permissions).",
+          "items": { "$ref": "#/$defs/permissionName" },
+          "minItems": 1
+        },
+        "description": { "type": "string" }
+      }
+    },
+    "retryPolicy": {
+      "type": "object",
+      "required": ["maxAttempts"],
+      "additionalProperties": false,
+      "properties": {
+        "maxAttempts": { "type": "integer", "minimum": 1 },
+        "backoff": { "type": "string", "enum": ["fixed", "exponential"], "default": "exponential" },
+        "initialDelayMs": { "type": "integer", "minimum": 0 },
+        "maxDelayMs": { "type": "integer", "minimum": 0 },
+        "retryOn": {
+          "type": "array",
+          "description": "Condiciones que disparan reintento.",
+          "items": { "type": "string", "enum": ["timeout", "5xx", "connection"] },
+          "minItems": 1
+        }
+      }
+    },
+    "circuitBreaker": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "failureRateThreshold": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Porcentaje de fallos que abre el circuito."
+        },
+        "slidingWindowSize": { "type": "integer", "minimum": 1 },
+        "waitDurationMs": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Tiempo con el circuito abierto antes de probar de nuevo."
+        }
+      }
+    },
+    "cachePolicy": {
+      "type": "object",
+      "required": ["ttlSeconds", "keyFields"],
+      "additionalProperties": false,
+      "properties": {
+        "ttlSeconds": { "type": "integer", "minimum": 1 },
+        "keyFields": {
+          "type": "array",
+          "description": "Campos del input que forman la clave de caché.",
+          "items": { "type": "string" },
+          "minItems": 1
+        },
+        "invalidatedBy": {
+          "type": "array",
+          "description": "Eventos (publicados o consumidos) cuya llegada invalida esta caché.",
+          "items": { "$ref": "#/$defs/typeName" },
+          "minItems": 1
+        }
+      }
+    },
+    "idempotency": {
+      "type": "object",
+      "required": ["keySource"],
+      "additionalProperties": false,
+      "properties": {
+        "keySource": {
+          "type": "string",
+          "enum": ["client-key", "payload-hash"],
+          "description": "De dónde sale la clave de idempotencia: la envía el cliente o se deriva del payload."
+        },
+        "ttlSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Ventana durante la que una repetición devuelve el resultado original."
+        }
+      }
+    },
+    "scheduleTrigger": {
+      "type": "object",
+      "required": ["cron"],
+      "additionalProperties": false,
+      "properties": {
+        "cron": { "type": "string", "minLength": 9, "description": "Expresión cron de 5 campos (agnóstica del scheduler)." },
+        "description": { "type": "string" }
+      }
+    },
+    "errorDef": {
+      "type": "object",
+      "required": ["code", "when"],
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$",
+          "description": "Código de error estable en SCREAMING_SNAKE_CASE."
+        },
+        "when": { "type": "string", "minLength": 5 },
+        "http": { "type": "integer", "minimum": 400, "maximum": 599 }
+      }
+    },
+    "httpCall": {
+      "type": "object",
+      "required": ["contract"],
+      "additionalProperties": false,
+      "properties": {
+        "contract": {
+          "type": "string",
+          "minLength": 5,
+          "description": "Contrato esperado de la llamada (método, ruta y forma de la respuesta)."
+        },
+        "description": { "type": "string" },
+        "timeoutMs": { "type": "integer", "minimum": 1 },
+        "retry": { "$ref": "#/$defs/retryPolicy" },
+        "circuitBreaker": { "$ref": "#/$defs/circuitBreaker" },
+        "fallback": {
+          "type": "string",
+          "minLength": 5,
+          "description": "Qué hace el servicio cuando la llamada falla definitivamente."
+        }
+      }
+    }
+  }
+}

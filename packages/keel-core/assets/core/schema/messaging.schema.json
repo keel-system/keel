@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schema/2.0/messaging.schema.json",
+  "title": "Keel Messaging Layer",
+  "description": "Integración con el broker de mensajería: eventos que el servicio publica y suscripciones que consume.",
+  "type": "object",
+  "additionalProperties": false,
+  "anyOf": [
+    { "required": ["publishing"] },
+    { "required": ["subscriptions"] }
+  ],
+  "properties": {
+    "channels": {
+      "type": "object",
+      "description": "Canales lógicos por los que fluyen los eventos. Agnósticos del broker: cada canal se materializa en un topic (Kafka), una cola/exchange (RabbitMQ)… al generar. Los eventos y suscripciones los referencian por nombre.",
+      "propertyNames": { "pattern": "^[a-z][A-Za-z0-9]*$" },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "description": { "type": "string" }
+        }
+      }
+    },
+    "publishing": {
+      "type": "object",
+      "required": ["events"],
+      "additionalProperties": false,
+      "properties": {
+        "reliability": {
+          "type": "string",
+          "enum": ["outbox", "best-effort"],
+          "default": "best-effort",
+          "description": "outbox: ningún evento se pierde si la transacción confirma. La implementación es cosa del generador."
+        },
+        "events": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": { "pattern": "^[A-Z][A-Za-z0-9]*$" },
+          "additionalProperties": {
+            "type": "object",
+            "required": ["payload"],
+            "additionalProperties": false,
+            "properties": {
+              "description": { "type": "string" },
+              "channel": {
+                "type": "string",
+                "pattern": "^[a-z][A-Za-z0-9]*$",
+                "description": "Canal lógico donde se publica (debe existir en channels)."
+              },
+              "payload": { "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/fieldMap" }
+            }
+          }
+        }
+      }
+    },
+    "subscriptions": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "pattern": "^[A-Z][A-Za-z0-9]*$" },
+      "additionalProperties": {
+        "type": "object",
+        "required": ["source", "payload", "triggers"],
+        "additionalProperties": false,
+        "properties": {
+          "description": { "type": "string" },
+          "source": {
+            "type": "string",
+            "description": "Servicio o sistema que origina el evento."
+          },
+          "channel": {
+            "type": "string",
+            "pattern": "^[a-z][A-Za-z0-9]*$",
+            "description": "Canal lógico del que se consume (debe existir en channels)."
+          },
+          "payload": { "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/fieldMap" },
+          "triggers": {
+            "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/operationName",
+            "description": "Operación de este servicio que se ejecuta al recibir el evento."
+          },
+          "onFailure": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "retry": { "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/retryPolicy" },
+              "deadLetter": {
+                "type": "boolean",
+                "default": false,
+                "description": "Tras agotar reintentos, el mensaje va a una cola de mensajes muertos."
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

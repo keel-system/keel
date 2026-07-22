@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schema/2.0/storage.schema.json",
+  "title": "Keel Storage Layer",
+  "description": "Almacenamiento de archivos (object storage): buckets lógicos con sus políticas. Agnóstico del proveedor; MinIO/S3/GCS se decide al generar.",
+  "type": "object",
+  "required": ["buckets"],
+  "additionalProperties": false,
+  "properties": {
+    "buckets": {
+      "type": "object",
+      "minProperties": 1,
+      "description": "Buckets lógicos donde se guardan los archivos. Los campos file del domain los referencian por nombre.",
+      "propertyNames": { "pattern": "^[a-z][A-Za-z0-9]*$" },
+      "additionalProperties": {
+        "type": "object",
+        "required": ["allowedContentTypes"],
+        "additionalProperties": false,
+        "properties": {
+          "visibility": {
+            "type": "string",
+            "enum": ["private", "public"],
+            "default": "private",
+            "description": "private exige URLs firmadas o acceso mediado; public permite lectura directa."
+          },
+          "allowedContentTypes": {
+            "type": "array",
+            "description": "Tipos MIME permitidos (ej. image/png, application/pdf).",
+            "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*$" },
+            "minItems": 1
+          },
+          "maxSizeMb": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Tamaño máximo por archivo en megabytes."
+          },
+          "description": { "type": "string" }
+        }
+      }
+    }
+  }
+}

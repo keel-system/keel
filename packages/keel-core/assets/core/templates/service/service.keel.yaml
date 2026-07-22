@@ -1,0 +1,22 @@
+# Manifiesto del servicio — punto de entrada del diseño.
+# Declara la identidad del servicio y qué capas de diseño existen.
+# Regla: una capa opcional existe si y solo si está declarada aquí (y su archivo existe).
+keel: "2.0"
+
+service:
+  name: {{name}}
+  version: 0.1.0
+  # keel validate trata cualquier description que empiece por "TODO" como placeholder pendiente.
+  description: "TODO: describe en una frase qué problema de negocio resuelve este servicio."
+  # domain: commerce
+
+layers:
+  domain: domain.keel.yaml         # obligatoria
+  use-cases: use-cases.keel.yaml   # obligatoria
+  # Descomenta las capas que apliquen y crea el archivo desde templates/service/:
+  # api: api.keel.yaml
+  # security: security.keel.yaml
+  # messaging: messaging.keel.yaml
+  # http-clients: http-clients.keel.yaml
+  # persistence: persistence.keel.yaml
+  # storage: storage.keel.yaml

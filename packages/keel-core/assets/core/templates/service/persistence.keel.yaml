@@ -1,0 +1,16 @@
+# Capa persistence — integración con la base de datos.
+# Agnóstico del motor: se declara el modelo de almacenamiento, no la tecnología.
+# Recuerda declarar la capa en service.keel.yaml → layers.persistence.
+
+default:
+  model: relational       # relational | document | key-value
+
+entities:
+  # Las entidades deben existir en domain.keel.yaml.
+  # Product:
+  #   persisted: true
+  #   naturalKey: [sku]
+  #   indexes: [[status], [sku]]
+
+# consistency:
+#   transactionalBoundary: per-operation   # per-operation | per-aggregate

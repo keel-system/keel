@@ -1,0 +1,38 @@
+# Capa use-cases — los casos de uso del servicio.
+# Aquí viven también las políticas propias del caso de uso: idempotencia, caché y schedule.
+# Quién los activa se declara en la capa que los expone (api: endpoints, messaging: subscriptions);
+# una operación sin trigger debe marcar internal: true o tener schedule.
+
+operations:
+  # createProduct:
+  #   description: Da de alta un producto en estado draft.
+  #   kind: command
+  #   input:
+  #     fields:
+  #       sku:  { type: SKU, required: true }
+  #       name: { type: string, required: true }
+  #   output: { entity: Product }
+  #   idempotency: { keySource: client-key, ttlSeconds: 86400 }
+  #   rules:
+  #     - El sku se normaliza a mayúsculas antes de validar unicidad.
+  #   errors:
+  #     - { code: SKU_ALREADY_EXISTS, when: Ya existe un producto con ese sku., http: 409 }
+  #   emits: [ProductCreated]        # requiere capa messaging con el evento definido
+  #
+  # getProduct:
+  #   description: Recupera un producto por su id.
+  #   kind: query
+  #   input:
+  #     fields:
+  #       id: { type: uuid, required: true }
+  #   output: { entity: Product }
+  #   cache: { ttlSeconds: 300, keyFields: [id], invalidatedBy: [ProductRetired] }
+  #   errors:
+  #     - { code: PRODUCT_NOT_FOUND, when: No existe un producto con ese id., http: 404 }
+  #
+  # reconcilePrices:
+  #   description: Reconcilia precios contra el servicio de pricing cada noche.
+  #   kind: command
+  #   input: "void"
+  #   output: "void"
+  #   schedule: { cron: "0 3 * * *" }

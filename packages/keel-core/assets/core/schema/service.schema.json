@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schema/2.0/service.schema.json",
+  "title": "Keel Service Manifest",
+  "description": "Manifiesto del servicio: identidad y declaración de las capas de diseño presentes.",
+  "type": "object",
+  "required": ["keel", "service", "layers"],
+  "additionalProperties": false,
+  "properties": {
+    "keel": {
+      "type": "string",
+      "description": "Versión del DSL Keel usada por este servicio.",
+      "enum": ["2.0"]
+    },
+    "service": {
+      "type": "object",
+      "required": ["name", "version", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/kebabName",
+          "description": "Nombre del servicio en kebab-case."
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "description": "Versión semántica del diseño (no del código generado)."
+        },
+        "description": { "type": "string", "minLength": 10 },
+        "domain": {
+          "type": "string",
+          "description": "Dominio de negocio al que pertenece (ej. commerce, billing)."
+        }
+      }
+    },
+    "layers": {
+      "type": "object",
+      "description": "Capas de diseño del servicio. Una capa opcional existe si y solo si está declarada aquí.",
+      "required": ["domain", "use-cases"],
+      "additionalProperties": false,
+      "properties": {
+        "domain": { "const": "domain.keel.yaml" },
+        "use-cases": { "const": "use-cases.keel.yaml" },
+        "api": { "const": "api.keel.yaml" },
+        "security": { "const": "security.keel.yaml" },
+        "messaging": { "const": "messaging.keel.yaml" },
+        "http-clients": { "const": "http-clients.keel.yaml" },
+        "persistence": { "const": "persistence.keel.yaml" },
+        "storage": { "const": "storage.keel.yaml" }
+      }
+    }
+  }
+}

@@ -1,0 +1,122 @@
+# Stack y estructura del proyecto generado
+
+## Stack por defecto
+
+El stack lo elige el diseñador en el **cuestionario de `keel-springboot build`** (solo pregunta por las categorías que el diseño necesita) y queda persistido en `services/<servicio>-spring/keel-stack.json`; las siguientes ejecuciones lo reutilizan sin repreguntar (bórralo para reelegir). Con `--defaults` o sin terminal interactiva se usan los defaults.
+
+- Java 21, Spring Boot 3.x, **Gradle** (Groovy DSL) **con wrapper incluido** (estilo Spring Initializr: `./gradlew` funciona de inmediato). Las versiones concretas las fijan las constantes del paquete.
+- Persistencia (solo con capa `persistence`): Spring Data JPA + **PostgreSQL (default) / MySQL / MariaDB / SQL Server / Oracle / H2**; H2 para tests.
+- Eventos (solo con capa `messaging`): **Kafka (default) / RabbitMQ / SNS+SQS** (SNS/SQS con LocalStack de prueba).
+- Auth (solo con capa `security` oidc/jwt): Spring Security resource server; opcionalmente **Keycloak (default) / Cognito** de prueba en el compose.
+- Caché (solo si alguna operación declara `cache`): **Redis (default) / Valkey** (cachés distribuidas).
+- Object storage (solo con capa `storage`): **MinIO (default, contenedor de prueba compatible S3) / Amazon S3**, ambos vía AWS SDK v2 (`software.amazon.awssdk:s3`); MinIO habla protocolo S3, así que el mismo adaptador sirve para dev y prod.
+- Mapeo DTO↔entidad: manual (sin MapStruct salvo petición).
+
+El catálogo único de tecnologías (dependencias Gradle, imagen, servicio de compose y receta de validación por CLI) vive en `src/lib/stack-catalog.js` del generador.
+
+El scaffolding genera además `docker-compose.yaml` con la infraestructura de prueba elegida (BD, broker, auth, cache, storage) — solo si hay al menos un contenedor — más un contenedor **`devtools`** (`docker/Dockerfile.devtools`) y un script `validate-infra.sh` para sondearla (ver "Validación de infraestructura").
+
+## Estructura (hexagonal + CQRS, arquitectura del prototipo de referencia)
+
+Un único microservicio independiente: sin paquete `shared/` (lo transversal se absorbe en el propio árbol) y sin Spring Modulith (los límites entre módulos no aplican a un servicio solo).
+
+```
+services/<servicio>-spring/
+├── README.md                    # cómo ejecutar + "Generado desde <spec> v<version>" + decisiones
+├── build.gradle                 # dependencias condicionales según capas declaradas y keel-stack.json
+├── settings.gradle
+├── gradlew / gradlew.bat        # wrapper de Gradle incluido
+├── gradle/wrapper/              # jar + properties del wrapper
+├── keel-stack.json              # stack elegido en el cuestionario (BD, broker, auth, cache)
+├── docker-compose.yaml          # infraestructura de prueba + contenedor devtools (si el stack la necesita)
+├── docker/Dockerfile.devtools   # toolbox Alpine con solo las CLIs del stack (psql, redis-cli, kcat, mc, aws…)
+├── validate-infra.sh            # un check por tecnología: docker exec <svc>-devtools <cli>
+└── src/
+    ├── main/java/<base>/
+    │   ├── application/         # SIN imports de Spring (desacoplada del framework)
+    │   │   ├── interfaces/      # contratos CQRS: Command, Query<R>, ReturningCommand<R>, *Handler
+    │   │   ├── annotations/     # @ApplicationComponent + @LogExceptions + LogLevel (anotaciones propias)
+    │   │   ├── commands/        # XxxCommand records (Bean Validation: son el body HTTP)
+    │   │   ├── queries/         # XxxQuery records
+    │   │   ├── usecases/        # XxxCommandHandler / XxxQueryHandler (@ApplicationComponent, stub TODO)
+    │   │   ├── dtos/            # XxxResponseDto + PagedResponse<T>
+    │   │   └── mappers/         # <Entidad>ApplicationMapper (dominio → ResponseDto)
+    │   ├── domain/
+    │   │   ├── aggregate/       # raíces de agregado PURAS (sin JPA): ctor completo + transitionTo
+    │   │   ├── entity/          # entidades internas de agregado (puras)
+    │   │   ├── annotations/     # @DomainComponent (para servicios de dominio del agente)
+    │   │   ├── enums/           # enums del diseño (@JsonValue)
+    │   │   ├── valueobject/     # records VO puros
+    │   │   ├── events/          # records de evento (messaging.publishing.events)
+    │   │   ├── errors/          # DomainException + subclases por status + <PascalCode>Error por code
+    │   │   ├── repository/      # PUERTOS: <Entidad>Repository (interfaces)
+    │   │   └── storage/         # (solo con capa storage) PUERTO FileStorage (interface: upload/download/delete/signedUrl)
+    │   └── infrastructure/
+    │       ├── configurations/usecase/  # UseCaseMediator (frontera transaccional) + Container + AutoRegister + UseCaseConfig
+    │       ├── scheduling/      # <X>Scheduler (@Scheduled, adaptador timer que despacha vía mediator)
+    │       ├── configurations/logging/  # LogExceptionsAspect (implementa @LogExceptions)
+    │       ├── configurations/broker/   # RabbitMqConfig (exchange <servicio>.events + conversor JSON), solo con rabbitmq
+    │       ├── messaging/       # EventEnvelope + EventMetadata + <Evento>Publisher (publica el evento envuelto)
+    │       ├── persistence/
+    │       │   ├── entities/    # AuditableEntity + XxxJpa (@Entity; VOs aplanados a columnas con prefijo)
+    │       │   └── repositories/ # XxxJpaRepository (Spring Data) + XxxRepositoryImpl (adaptador toDomain/toJpa)
+    │       ├── configurations/storage/ # (solo con capa storage) S3Config: bean S3Client (sirve MinIO y S3)
+    │       ├── storage/         # (solo con capa storage) adaptador S3FileStorage (AWS SDK v2, implementa FileStorage)
+    │       └── rest/
+    │           ├── controllers/<agregado>/v1/  # <Agregado>V1Controller (@RequestMapping("<basePath>/v1"))
+    │           ├── ApiExceptionHandler          # @RestControllerAdvice central
+    │           └── ErrorResponse                # contrato de error de la API
+    ├── main/resources/          # application.yaml + application-<perfil>.yaml + parameters/<perfil>/*.yaml
+    └── test/java/<base>/        # tests por operación (feliz + cada error) y por invariante
+```
+
+Paquete base: `<group>.<serviceNameSinGuiones>` (ej. `com.example.productcatalog`). El `group` (groupId) lo introduce el usuario en el cuestionario de `keel-springboot build` (default `com.<domain>`) y queda persistido en `keel-stack.json`; en regeneraciones se reutiliza sin repreguntar.
+
+## Qué genera el scaffolding y qué completa el agente
+
+`keel-springboot build` genera de forma determinista (re-ejecutable: solo añade archivos nuevos, `--force` sobrescribe):
+
+- `build.gradle` (incluye springdoc) / `settings.gradle` / wrapper de Gradle / `.gitignore` / `.gitattributes` / configuración multi-ambiente (ver abajo) / `docker-compose.yaml` de prueba / test de contexto `<Nombre>ApplicationTests`.
+- `application/`: contratos CQRS, por operación su record mensaje (`XxxCommand` con Bean Validation — es el body HTTP — o `XxxQuery`) y su handler stub `@ApplicationComponent` en `usecases/` con `// TODO (agente)` citando reglas, errores y políticas (inyecta el **puerto** de dominio y el mapper, nunca JPA); `XxxResponseDto` + `PagedResponse`; `<Entidad>ApplicationMapper` con mapeo campo a campo.
+- `domain/`: agregados y entidades internas PUROS (sin JPA; constructor completo para reconstrucción, guard `transitionTo`), enums con literal del diseño (`@JsonValue`), value objects record, eventos de dominio, catálogo de errores (`DomainException` con metadata `code/httpStatus/args/details`, subclases por status 400/401/403/404/409/422 y un `<PascalCode>Error` por `code` del diseño) y los puertos de repositorio.
+- `infrastructure/`: mediator (`UseCaseMediator` + `UseCaseContainer` + `UseCaseAutoRegister`, auto-registro por reflexión), `LogExceptionsAspect` (implementa `@LogExceptions`, que los handlers llevan sobre `handle(...)`), entidades `XxxJpa` (extienden `AuditableEntity` — `createdAt`/`updatedAt` automáticos vía `@EnableJpaAuditing` — salvo que el diseño declare sus propios timestamps; VOs aplanados a columnas con prefijo, `naturalKey`/`indexes` en `@Table`), `XxxJpaRepository` + adaptador `XxxRepositoryImpl` con `toDomain`/`toJpa` explícitos, mensajería con contrato estándar (`EventEnvelope`/`EventMetadata` + `<Evento>Publisher` que publica el evento envuelto al exchange/topic `<servicio>.events`; `RabbitMqConfig` con conversor JSON cuando el broker es RabbitMQ), controllers `<Agregado>V1Controller` (@Tag/@Operation de springdoc, despachan vía mediator, fusionan el id del path reconstruyendo el Command) y `ApiExceptionHandler` (validación, framework, jerarquía `DomainException` y catch-all 500).
+- `infrastructure/configurations/security/` (solo con capa `security`): `SecurityConfig` con su `SecurityFilterChain` (CSRF off, sesión stateless, `authorizeHttpRequests` con un matcher por operación derivado de `access.default`/`access.rules` reutilizando las rutas de los controllers), el resource server JWT para `oidc`/`jwt` (o `ApiKeyAuthFilter` para `api-key`; `permitAll` para `none`) y, cuando el diseño usa roles/permisos, un `JwtAuthConverter` que mapea los claims del proveedor del stack (Keycloak anidado / Cognito plano) a authorities (`ROLE_`/`SCOPE_`/permiso). Autorización enteramente derivada del diseño, sin stubs.
+- `infrastructure/http/` (solo con capa `http-clients`): por cliente, `<Cliente>ClientConfig` (`RestClient` con base-url de config + timeouts), interfaz `<Cliente>Client` + `Impl` con una llamada por `contract` (método/ruta parseados, path vars como parámetros) anotada con resilience4j (`@Retry`/`@CircuitBreaker` cableados al fragmento `parameters/<perfil>/http-clients.yaml`), y un record `<Llamada>Response`. La resiliencia (timeouts/retry/circuit breaker, con 4xx nunca reintentado) es determinista; el tipado fino de la respuesta y el cuerpo del `fallback` (negocio) quedan como `// TODO (agente)`.
+- `infrastructure/messaging/subscriptions/` (solo con capa `messaging` que declare `subscriptions`): por suscripción, el record `<Evento>Message` (payload) y el `<Evento>Listener` con su binding al canal (`@KafkaListener`/`@RabbitListener`/`@SqsListener` con topic configurable) y la política `onFailure` — en Kafka, `@RetryableTopic` (retry con backoff del diseño + DLT); en Rabbit/SQS el listener queda con la política de retry/DLQ como `// TODO`. El mapeo `<Evento>Message` → operación `triggers` (dispatch vía mediator) es el `// TODO (agente)`. Cada `<Evento>Publisher` inyecta el template del broker elegido (`KafkaTemplate`/`RabbitTemplate`/`SnsTemplate`), nunca uno ajeno al stack.
+- `infrastructure/storage/` + `domain/storage/` (solo con capa `storage`): puerto `FileStorage` (dominio) y adaptador `S3FileStorage` + `S3Config` (bean `S3Client` del AWS SDK v2, parametrizado por `parameters/<perfil>/storage.yaml`). Un único adaptador sirve MinIO y S3 (mismo protocolo). `upload`/`download`/`delete` son deterministas; `signedUrl` (URL prefirmada) es `// TODO (agente)`.
+
+### Desacople de la capa application (mejora sobre el prototipo)
+
+Los componentes de application NO importan Spring: se marcan con `@ApplicationComponent` (anotación propia, registrada por el `@ComponentScan` filtrado de `UseCaseConfig`) y **no llevan `@Transactional`** — la frontera transaccional la abre `UseCaseMediator` (`Query` → readOnly, `Command`/`ReturningCommand` → escritura, vía `TransactionTemplate`, solo con persistence). El prototipo dejó este desacople a medias (anotación propia pero `@Transactional` en los handlers). `@DomainComponent` queda disponible para servicios de dominio que cree el agente. Excepción pragmática documentada: `Pageable`/`Page` (Spring Data) en operaciones paginadas y puertos.
+
+### Qué se descartó del prototipo de referencia (y por qué)
+
+- **Paquete `shared/` y Spring Modulith**: keel genera un microservicio independiente; sus piezas transversales (mediator, errores, auditoría, envelope, logging) viven como funcionalidad del propio servicio y no hay módulos que aislar.
+- **Soft-delete (`FullAuditableEntity` + `@SQLRestriction`)**: el DSL Keel no lo declara; por defecto el borrado es físico y el soft-delete es decisión del agente si el diseño lo pide. La auditoría `createdAt`/`updatedAt` SÍ se genera (global, vía `AuditableEntity`).
+
+Nota: `@LogExceptions` en el prototipo era decorativa (sin `@Aspect`); aquí se porta **implementada** con `LogExceptionsAspect` + `spring-boot-starter-aop`.
+
+### Configuración multi-ambiente
+
+Cuatro perfiles Spring: `local` (default), `develop`, `production` y `test`. El perfil activo se elige con la env var `PROFILE` (`application.yaml` base declara `spring.profiles.active: ${PROFILE:local}`). Cada `application-<perfil>.yaml` solo importa fragmentos `parameters/<perfil>/*.yaml` (uno por preocupación: `logging`, `db`, broker, `redis`, `oauth2`, `storage` — solo los que el stack necesita), con gradiente de externalización:
+
+- **local**: valores literales que coinciden con el `docker-compose.yaml` de prueba; `ddl-auto: update`, `show-sql: true`.
+- **develop**: env vars con default (`${DB_USERNAME:...}`); `show-sql: false`.
+- **production**: env vars obligatorias sin default (`${DB_USERNAME}`); `ddl-auto: validate`, `logging root: WARN`.
+- **test**: H2 en memoria; `src/test/resources/application.yaml` lo activa para los tests.
+
+### Validación de infraestructura (contenedor `devtools`)
+
+Cuando el compose levanta contenedores sondeables, el scaffolding añade el servicio `devtools`: una caja de herramientas Alpine (`docker/Dockerfile.devtools`) que instala **solo** las CLIs del stack elegido (`psql`/`mysql`/`mariadb`/`sqlcmd`, `kcat`, `redis-cli`, `mc`, `aws`, más `curl`/`jq`). Queda viva con `sleep infinity` y sin puertos: es un objetivo interno de `docker exec`, alcanza a los servicios de respaldo por su nombre de red (`db`, `kafka`/`localstack`, `redis`/`valkey`, `minio`, `keycloak`/`cognito`).
+
+El script generado `validate-infra.sh` corre un check por tecnología (`docker exec <servicio>-devtools <cliValidateCmd>`, o dentro del propio contenedor para Oracle) y sale con código `!= 0` si alguno falla. El agente lo usa en la verificación funcional, tras `docker compose up -d` y antes de ejercitar los escenarios, para confirmar que la infraestructura responde. Detalle por tecnología en `conventions/infra-validation.md`.
+
+El agente (`/keel-generate-spring`) completa: lógica de negocio de los stubs, invariantes y campos `computed`, el dispatch de los listeners y la `reliability` de publicación (outbox/after-commit) de messaging, el tipado de respuesta y los `fallback` de http-clients, de la capa `storage` la validación de content-type/tamaño según los `buckets` y las URLs prefirmadas (`signedUrl`, buckets privados, único método que sale como `// TODO`), migraciones/esquema definitivo, y **todos los tests**. Las capas `security` (completa), `http-clients` (esqueleto resiliente), `storage` (puerto `FileStorage` + adaptador `S3FileStorage` upload/download/delete) y los consumidores de `messaging` (listener + retry/DLQ) ya salen generadas (ver arriba).
+
+## Reglas de la estructura
+
+- `domain` no depende de JPA ni de infraestructura: POJOs, records y errores puros (`Page`/`Pageable` en los puertos se acepta como pragmatismo, igual que el prototipo).
+- `application` orquesta: cada handler valida precondiciones, aplica rules en el orden del spec, persiste **a través del puerto**, publica eventos con el publisher tras confirmar transacción. Un handler no invoca a otro handler directamente; si necesita otro caso de uso, despacha su mensaje vía `UseCaseMediator`.
+- `infrastructure/rest` solo traduce: construye/fusiona el mensaje desde los parámetros HTTP, lo despacha vía `UseCaseMediator` y deja los errores al `ApiExceptionHandler`. Sin lógica de negocio.
+- El mapeo domain↔JPA vive únicamente en los `XxxRepositoryImpl`; ni los handlers ni los controllers ven una clase `Jpa`.
+- Lo operativo que el scaffolding no produce (Dockerfile de la app, CI) puede añadirse a mano al repo generado y sobrevive regeneraciones.

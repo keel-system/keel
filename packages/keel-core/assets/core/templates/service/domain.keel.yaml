@@ -1,0 +1,48 @@
+# Capa domain — modelado del dominio: value types, entidades, relaciones, ciclo de vida e invariantes.
+# Cero tecnología: nada de tablas, ORMs ni frameworks.
+
+# Value types reutilizables: escalares, enums nominales o value objects compuestos.
+# types:
+#   SKU:                                  # escalar: tipo base + restricciones
+#     base: string
+#     constraints: { pattern: "^[A-Z0-9]{4,20}$" }
+#   ProductStatus:                        # enum nominal, reutilizable en entidades y payloads
+#     values: [draft, active, retired]
+#   Money:                                # value object compuesto, sin identidad propia
+#     fields:
+#       amount:   { type: decimal, required: true, constraints: { min: 0, scale: 2 } }
+#       currency: { type: string, required: true, constraints: { pattern: "^[A-Z]{3}$" } }
+
+entities:
+  # Product:
+  #   description: Artículo publicable en el catálogo.
+  #   fields:
+  #     id:       { type: uuid, id: true, generated: true }
+  #     sku:      { type: SKU, required: true, unique: true }
+  #     name:     { type: string, required: true, constraints: { maxLength: 120 } }
+  #     price:    { type: Money, required: true }
+  #     slug:     { type: string, computed: Se deriva del name normalizado a kebab-case. }
+  #     apiToken: { type: string, sensitive: true }
+  #     photo:    { type: file, bucket: productImages }   # archivo en un bucket de la capa storage
+  #     status:   { type: ProductStatus, default: draft }
+  #   relations:
+  #     catalog: { entity: Catalog, cardinality: many-to-one }
+  #   lifecycle:                          # solo las transiciones listadas son válidas
+  #     field: status
+  #     transitions:
+  #       draft:   [active, retired]
+  #       active:  [retired]
+  #       retired: []                     # estado terminal explícito
+  #   invariants:
+  #     - Un producto active siempre tiene price mayor que cero.
+
+# Agregados (opcional): fronteras de consistencia — raíz + entidades internas que cambian juntas en la misma transacción.
+# Entre agregados se referencia solo la raíz, por id. Con per-aggregate en persistence, este bloque es obligatorio.
+# aggregates:
+#   Order:
+#     description: Un pedido y sus líneas cambian siempre juntos.
+#     root: Order
+#     entities: [OrderLine]               # la raíz es miembro implícito, no se repite
+#   Catalog:
+#     root: Catalog
+#     entities: [Product]

@@ -1,0 +1,9 @@
+default:
+  model: relational
+entities:
+  Product:
+    naturalKey: [sku]
+    indexes:
+      - [status]
+consistency:
+  transactionalBoundary: per-operation

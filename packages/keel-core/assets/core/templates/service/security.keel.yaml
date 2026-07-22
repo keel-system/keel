@@ -1,0 +1,27 @@
+# Capa security — autenticación y autorización.
+# Las reglas se declaran por operación (nombre estable), no por ruta.
+# Agnóstico de proveedor: oidc/jwt/api-key; el servidor concreto (Keycloak, Auth0...) se decide al generar.
+# Recuerda declarar la capa en service.keel.yaml → layers.security.
+
+authentication:
+  protocol: oidc          # oidc | jwt | api-key | none
+  tokenLocation: header
+
+# roles:
+#   catalog-admin:  { description: Gestiona el catálogo completo. }
+#   catalog-reader: { description: Solo consulta el catálogo. }
+
+# permissions:
+#   product:write: { description: Crear y mutar productos. }
+#   product:read:  { description: Leer productos. }
+
+# roleGrants:
+#   catalog-admin: [product:write, product:read]
+#   catalog-reader: [product:read]
+
+access:
+  # Regla por defecto para toda operación sin regla explícita.
+  default: { level: required }
+  # rules:
+  #   createProduct: { level: required, permissions: [product:write] }
+  #   getProduct:    { level: public }

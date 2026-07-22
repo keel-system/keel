@@ -1,0 +1,18 @@
+# Capa storage — almacenamiento de archivos (object storage).
+# Agnóstico del proveedor: se declaran buckets lógicos y sus políticas, no S3/MinIO/GCS.
+# El proveedor concreto se decide al generar. Recuerda declarar la capa en service.keel.yaml → layers.storage.
+#
+# Los campos de tipo file (en domain) referencian un bucket por nombre:
+#   photo: { type: file, bucket: productImages }
+
+buckets:
+  # productImages:
+  #   description: Fotos de producto mostradas en el catálogo.
+  #   visibility: public                    # private | public (default private)
+  #   allowedContentTypes: [image/png, image/jpeg, image/webp]
+  #   maxSizeMb: 5
+  # invoices:
+  #   description: Facturas en PDF asociadas a un pedido.
+  #   visibility: private                   # requiere URL firmada o acceso mediado
+  #   allowedContentTypes: [application/pdf]
+  #   maxSizeMb: 10

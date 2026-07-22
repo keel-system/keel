@@ -1,0 +1,38 @@
+{
+  "name": "keel-core",
+  "version": "0.2.0",
+  "description": "Diseña servidores como artefactos agnósticos de tecnología y genera implementaciones con agentes. `keel init` siembra un workspace completo.",
+  "type": "module",
+  "bin": {
+    "keel": "src/cli.js"
+  },
+  "exports": {
+    ".": "./src/index.js",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "files": [
+    "src",
+    "assets"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "keel",
+    "scaffolding",
+    "codegen",
+    "agents",
+    "dsl"
+  ],
+  "author": "asuridev",
+  "license": "MIT",
+  "dependencies": {
+    "ajv": "^8.17.1",
+    "commander": "^14.0.0",
+    "picocolors": "^1.1.1",
+    "yaml": "^2.8.0"
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schema/2.0/api.schema.json",
+  "title": "Keel API Layer",
+  "description": "Integración con el cliente: exposición REST de las operaciones y política de paginación.",
+  "type": "object",
+  "additionalProperties": false,
+  "anyOf": [
+    { "required": ["auto"] },
+    { "required": ["endpoints"] }
+  ],
+  "properties": {
+    "style": { "type": "string", "enum": ["rest"], "default": "rest" },
+    "basePath": { "type": "string", "pattern": "^/" },
+    "auto": {
+      "type": "boolean",
+      "description": "Si true, las rutas se derivan por convención CRUD desde las operaciones."
+    },
+    "endpoints": {
+      "type": "object",
+      "description": "Mapeo explícito operación → endpoint. Tiene prioridad sobre auto.",
+      "propertyNames": { "pattern": "^[a-z][A-Za-z0-9]*$" },
+      "additionalProperties": {
+        "type": "object",
+        "required": ["method", "path"],
+        "additionalProperties": false,
+        "properties": {
+          "method": {
+            "type": "string",
+            "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]
+          },
+          "path": { "type": "string", "pattern": "^/" },
+          "successStatus": { "type": "integer", "minimum": 200, "maximum": 299 }
+        }
+      }
+    },
+    "pagination": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "style": { "type": "string", "enum": ["offset", "cursor"] },
+        "defaultSize": { "type": "integer", "minimum": 1 },
+        "maxSize": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

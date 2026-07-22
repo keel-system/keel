@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schema/2.0/persistence.schema.json",
+  "title": "Keel Persistence Layer",
+  "description": "Integración con la base de datos: modelo de almacenamiento, entidades persistidas y consistencia. Agnóstico del motor.",
+  "type": "object",
+  "required": ["default", "entities"],
+  "additionalProperties": false,
+  "properties": {
+    "default": {
+      "type": "object",
+      "required": ["model"],
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "type": "string",
+          "enum": ["relational", "document", "key-value"],
+          "description": "Modelo de almacenamiento; el motor concreto se decide al generar."
+        }
+      }
+    },
+    "entities": {
+      "type": "object",
+      "minProperties": 1,
+      "description": "Entidades del domain que se persisten y sus claves/índices.",
+      "propertyNames": { "pattern": "^[A-Z][A-Za-z0-9]*$" },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "persisted": { "type": "boolean", "default": true },
+          "naturalKey": {
+            "type": "array",
+            "description": "Campos que identifican la entidad para el negocio (además del id técnico).",
+            "items": { "type": "string" },
+            "minItems": 1
+          },
+          "indexes": {
+            "type": "array",
+            "description": "Índices sugeridos: cada índice es la lista de campos que lo componen.",
+            "items": {
+              "type": "array",
+              "items": { "type": "string" },
+              "minItems": 1
+            }
+          }
+        }
+      }
+    },
+    "consistency": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "transactionalBoundary": {
+          "type": "string",
+          "enum": ["per-operation", "per-aggregate"],
+          "description": "Frontera transaccional que el generador debe respetar."
+        }
+      }
+    }
+  }
+}

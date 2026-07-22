@@ -1,0 +1,12 @@
+{
+  "name": "keel-monorepo",
+  "private": true,
+  "type": "module",
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "test": "npm test --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

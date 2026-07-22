@@ -1,0 +1,39 @@
+{
+  "name": "keel-springboot",
+  "version": "0.1.0",
+  "description": "Generador Spring Boot para diseños Keel: instala la skill del generador en el workspace y valida el diseño agnóstico; el código lo genera el agente.",
+  "type": "module",
+  "bin": {
+    "keel-springboot": "src/cli.js"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "files": [
+    "src",
+    "assets",
+    "vendor"
+  ],
+  "keel": {
+    "dsl": "2.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "keel",
+    "spring-boot",
+    "codegen",
+    "agents",
+    "dsl"
+  ],
+  "author": "asuridev",
+  "license": "MIT",
+  "dependencies": {
+    "@clack/prompts": "^1.7.0",
+    "commander": "^14.0.0",
+    "keel-core": "^0.2.0",
+    "picocolors": "^1.1.1",
+    "yaml": "^2.6.0"
+  }
+}

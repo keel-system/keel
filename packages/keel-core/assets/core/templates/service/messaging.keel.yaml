@@ -1,0 +1,34 @@
+# Capa messaging — integración con el broker de mensajería.
+# channels: canales lógicos por los que fluyen los eventos (→ topic Kafka / cola RabbitMQ al generar).
+# publishing: eventos que este servicio emite (referenciados desde use-cases → emits).
+# subscriptions: eventos externos que consume y qué operación disparan.
+# El broker concreto (Kafka, RabbitMQ...) se decide al generar.
+# Recuerda declarar la capa en service.keel.yaml → layers.messaging.
+
+# channels:
+#   productEvents:
+#     description: Canal propio con el ciclo de vida del producto.
+#   inventoryEvents:
+#     description: Canal de inventory-service que este servicio consume.
+
+publishing:
+  # outbox: ningún evento se pierde si la transacción confirma (el generador implementa el mecanismo).
+  reliability: outbox     # outbox | best-effort
+  events:
+    # ProductCreated:
+    #   description: Se publica al dar de alta un producto.
+    #   channel: productEvents          # canal lógico (debe existir en channels)
+    #   payload:
+    #     productId: { type: uuid, required: true }
+    #     sku:       { type: SKU, required: true }
+
+# subscriptions:
+#   StockDepleted:
+#     source: inventory-service
+#     channel: inventoryEvents          # canal lógico del que se consume
+#     payload:
+#       productId: { type: uuid, required: true }
+#     triggers: retireProduct
+#     onFailure:
+#       retry: { maxAttempts: 5, backoff: exponential, initialDelayMs: 1000 }
+#       deadLetter: true

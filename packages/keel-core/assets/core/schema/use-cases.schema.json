@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schema/2.0/use-cases.schema.json",
+  "title": "Keel Use Cases Layer",
+  "description": "Casos de uso del servicio: qué hacen, sus reglas, errores y políticas propias (idempotencia, caché, schedule).",
+  "type": "object",
+  "required": ["operations"],
+  "additionalProperties": false,
+  "properties": {
+    "operations": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "pattern": "^[a-z][A-Za-z0-9]*$" },
+      "additionalProperties": {
+        "type": "object",
+        "required": ["description", "input", "output"],
+        "additionalProperties": false,
+        "properties": {
+          "description": { "type": "string", "minLength": 10 },
+          "input": { "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/payload" },
+          "output": { "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/payload" },
+          "kind": {
+            "type": "string",
+            "enum": ["command", "query"],
+            "description": "command muta estado; query solo lee. Default: command."
+          },
+          "internal": {
+            "type": "boolean",
+            "default": false,
+            "description": "Operación sin trigger externo (solo invocada por otras operaciones o schedule)."
+          },
+          "preconditions": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 5 }
+          },
+          "rules": {
+            "type": "array",
+            "description": "Reglas de negocio que la operación aplica, en orden.",
+            "items": { "type": "string", "minLength": 5 }
+          },
+          "errors": {
+            "type": "array",
+            "items": { "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/errorDef" }
+          },
+          "emits": {
+            "type": "array",
+            "description": "Nombres de eventos publicados (deben existir en messaging: publishing.events).",
+            "items": { "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/typeName" }
+          },
+          "idempotency": {
+            "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/idempotency",
+            "description": "La operación debe poder repetirse sin efectos duplicados."
+          },
+          "cache": {
+            "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/cachePolicy",
+            "description": "Solo para queries: política de caché del resultado."
+          },
+          "schedule": {
+            "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/scheduleTrigger",
+            "description": "Trigger temporal; las demás activaciones se declaran en api (endpoints) o messaging (subscriptions)."
+          }
+        }
+      }
+    }
+  }
+}

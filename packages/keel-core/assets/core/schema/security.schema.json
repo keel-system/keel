@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schema/2.0/security.schema.json",
+  "title": "Keel Security Layer",
+  "description": "Autenticación y autorización: protocolo, catálogos de roles y permisos, y reglas de acceso por operación.",
+  "type": "object",
+  "required": ["authentication", "access"],
+  "additionalProperties": false,
+  "properties": {
+    "authentication": {
+      "type": "object",
+      "required": ["protocol"],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": {
+          "type": "string",
+          "enum": ["oidc", "jwt", "api-key", "none"],
+          "description": "Protocolo de autenticación, agnóstico de proveedor (Keycloak, Auth0... se decide al generar)."
+        },
+        "tokenLocation": { "type": "string", "enum": ["header", "cookie"], "default": "header" },
+        "description": { "type": "string" }
+      }
+    },
+    "roles": {
+      "type": "object",
+      "description": "Catálogo de roles que el servicio reconoce.",
+      "propertyNames": { "pattern": "^[a-z][a-z0-9-]*$" },
+      "additionalProperties": {
+        "type": "object",
+        "required": ["description"],
+        "additionalProperties": false,
+        "properties": {
+          "description": { "type": "string", "minLength": 5 }
+        }
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "description": "Catálogo de permisos en formato recurso:accion.",
+      "propertyNames": { "pattern": "^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*$" },
+      "additionalProperties": {
+        "type": "object",
+        "required": ["description"],
+        "additionalProperties": false,
+        "properties": {
+          "description": { "type": "string", "minLength": 5 }
+        }
+      }
+    },
+    "roleGrants": {
+      "type": "object",
+      "description": "Permisos que otorga cada rol.",
+      "propertyNames": { "pattern": "^[a-z][a-z0-9-]*$" },
+      "additionalProperties": {
+        "type": "array",
+        "items": { "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/permissionName" },
+        "minItems": 1
+      }
+    },
+    "access": {
+      "type": "object",
+      "required": ["default"],
+      "additionalProperties": false,
+      "properties": {
+        "default": { "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/accessRule" },
+        "rules": {
+          "type": "object",
+          "description": "Regla de acceso por operación, cuando difiere del default.",
+          "propertyNames": { "pattern": "^[a-z][A-Za-z0-9]*$" },
+          "additionalProperties": { "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/accessRule" }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,56 @@
+operations:
+  createProduct:
+    description: Da de alta un producto en estado draft.
+    kind: command
+    input:
+      entity: Product
+    output:
+      entity: Product
+    rules:
+      - Verificar que el sku no existe antes de crear.
+    errors:
+      - code: SKU_ALREADY_EXISTS
+        when: Ya existe un producto con ese sku.
+        http: 409
+    idempotency:
+      keySource: client-key
+      ttlSeconds: 86400
+  getProduct:
+    description: Recupera un producto por su identificador.
+    kind: query
+    input:
+      fields:
+        id:
+          type: uuid
+          required: true
+    output:
+      entity: Product
+    errors:
+      - code: PRODUCT_NOT_FOUND
+        when: No existe un producto con ese id.
+        http: 404
+  listProducts:
+    description: Lista los productos del catálogo paginados.
+    kind: query
+    input: "void"
+    output:
+      entity: Product
+      paginated: true
+  retireProduct:
+    description: Retira un producto del catálogo de forma definitiva.
+    kind: command
+    input:
+      fields:
+        id:
+          type: uuid
+          required: true
+    output: "void"
+    preconditions:
+      - El producto existe y no está ya retired.
+    errors:
+      - code: PRODUCT_NOT_FOUND
+        when: No existe un producto con ese id.
+        http: 404
+      - code: PRODUCT_ALREADY_RETIRED
+        when: El producto ya está retired.
+        http: 409

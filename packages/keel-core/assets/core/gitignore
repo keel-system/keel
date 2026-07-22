@@ -1,0 +1,4 @@
+# Servicios generados: cada uno es un repo git propio con su ciclo de vida.
+# El diseño (specs/) es la fuente de verdad; el código se regenera desde él.
+services/*
+!services/.gitkeep

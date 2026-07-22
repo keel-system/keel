@@ -1,0 +1,64 @@
+types:
+  SKU:
+    base: string
+    description: Identificador de producto para el negocio.
+    constraints:
+      pattern: "^[A-Z]{3}-[0-9]{4}$"
+      maxLength: 8
+  Money:
+    description: Importe monetario con su divisa.
+    fields:
+      amount:
+        type: decimal
+        required: true
+        constraints:
+          min: 0
+          scale: 2
+      currency:
+        type: string
+        required: true
+        constraints:
+          minLength: 3
+          maxLength: 3
+  ProductStatus:
+    description: Estados de publicación de un producto.
+    values: [draft, active, retired]
+
+entities:
+  Product:
+    description: Producto publicable del catálogo.
+    fields:
+      id:
+        type: uuid
+        id: true
+        generated: true
+      sku:
+        type: SKU
+        required: true
+        unique: true
+      name:
+        type: string
+        required: true
+        constraints:
+          maxLength: 120
+      notes:
+        type: text
+      price:
+        type: Money
+        required: true
+      apiToken:
+        type: string
+        sensitive: true
+        description: Token de sincronización con el proveedor; nunca se expone.
+      status:
+        type: ProductStatus
+        required: true
+        default: draft
+    lifecycle:
+      field: status
+      transitions:
+        draft: [active, retired]
+        active: [retired]
+        retired: []
+    invariants:
+      - Un producto active siempre tiene price.amount mayor que cero.

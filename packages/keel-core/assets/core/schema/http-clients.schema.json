@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schema/2.0/http-clients.schema.json",
+  "title": "Keel HTTP Clients Layer",
+  "description": "Integraciones HTTP salientes con terceros u otros servicios, con su política de resiliencia por llamada.",
+  "type": "object",
+  "required": ["clients"],
+  "additionalProperties": false,
+  "properties": {
+    "clients": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "pattern": "^[a-z][a-z0-9-]*$" },
+      "additionalProperties": {
+        "type": "object",
+        "required": ["purpose", "calls"],
+        "additionalProperties": false,
+        "properties": {
+          "purpose": { "type": "string", "minLength": 5 },
+          "calls": {
+            "type": "object",
+            "minProperties": 1,
+            "propertyNames": { "pattern": "^[a-z][A-Za-z0-9]*$" },
+            "additionalProperties": { "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/httpCall" }
+          }
+        }
+      }
+    }
+  }
+}
