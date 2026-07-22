@@ -38,6 +38,16 @@ diseño exija lógica que el mapeo de claims no cubre, y entonces documéntalo):
 3. **Verifica el mapeo**: un usuario sin el grupo requerido debe recibir 403 y uno
    con él 2xx, según `access.rules` del diseño.
 
+## Referencias
+
+Léelas bajo demanda, no todas de golpe:
+
+| Referencia | Cuándo leerla |
+|---|---|
+| `references/configuration.md` | Antes de tocar `parameters/<perfil>/oauth2.yaml` (issuer por perfil, access vs ID token, claims que mapea build) |
+| `references/environment.md` | Al crear el user pool/cliente/grupos por script y obtener tokens contra el emulador |
+| `references/troubleshooting.md` | Ante 401/403 inesperados, `NotAuthorizedException`, pools perdidos o diferencias emulador/real |
+
 ## Validación
 
 Sondeo desde devtools: `curl -sf http://cognito:9229/health`.

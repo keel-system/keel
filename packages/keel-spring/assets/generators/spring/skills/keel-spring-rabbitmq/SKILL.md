@@ -73,6 +73,16 @@ que mapea el `<Evento>Message` al mensaje de la operación `triggers` y despacha
 declara la cola con `x-dead-letter-exchange` y limita reintentos (contador en header
 `x-death` o `RetryOperationsInterceptor` en la container factory).
 
+## Referencias
+
+Léelas bajo demanda, no todas de golpe:
+
+| Referencia | Cuándo leerla |
+|---|---|
+| `references/configuration.md` | Antes de añadir propiedades a `parameters/<perfil>/rabbitmq.yaml` (confirms, prefetch, retry, ack-mode) |
+| `references/implementation.md` | Al escribir la topología (`Declarables`, quorum, DLX/DLQ), los publishers con confirms y los listeners con reintentos |
+| `references/troubleshooting.md` | Si el arranque, la publicación o el consumo fallan (PRECONDITION_FAILED, bucles de requeue, unacked…) |
+
 ## Validación
 
 Desde devtools: `curl -sf -u guest:guest http://rabbitmq:15672/api/healthchecks/node`;

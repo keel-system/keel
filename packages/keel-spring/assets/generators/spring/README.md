@@ -27,7 +27,7 @@ Generador **Java / Spring Boot** para diseños Keel, instalado en este workspace
 | `conventions/flow-fidelity.md` | Auditoría de fidelidad al flujo: checklist previa a implementar cada handler |
 | `conventions/domain-services.md` | Cuándo y cómo crear servicios de dominio (`@DomainComponent`) |
 | `conventions/virtual-threads.md` | I/O paralela con hilos virtuales en query handlers |
-| `skills/` | Skills por tecnología del stack (`keel-spring-<tech>/` — kafka, rabbitmq, snssqs, s3, redis, keycloak, cognito), instaladas condicionalmente en el `.claude/skills/` del proyecto generado según `keel-stack.json` |
+| `skills/` | Skills por tecnología del stack (`keel-spring-<tech>/` — database, kafka, rabbitmq, snssqs, s3, redis, keycloak, cognito; SKILL.md + `references/` bajo demanda), instaladas condicionalmente en el `.claude/skills/` del proyecto generado según `keel-stack.json` |
 | `golden/` | Ejemplo de referencia para estilo y detección de regresiones |
 
 ## Compatibilidad

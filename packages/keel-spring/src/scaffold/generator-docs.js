@@ -1,11 +1,14 @@
 // .claude/ del proyecto generado: CLAUDE.md + architecture.md + constitution.md
 // de primer nivel, skill propia orquestadora + agentes de la orquestación +
 // conventions completas + solo las skills por tecnología del stack elegido
-// (keel-spring-<tech>, hermanas de la orquestadora en .claude/skills/). Junto
-// con el snapshot de specs/, hace el repo autosuficiente: quien lo clone puede
-// finalizar la generación sin el workspace Keel. Misma regeneración segura que
-// el resto del scaffolding.
+// (keel-spring-<tech>, hermanas de la orquestadora en .claude/skills/). Cada
+// skill por tecnología se instala como directorio completo (SKILL.md +
+// references/ que el agente lee bajo demanda). Junto con el snapshot de
+// specs/, hace el repo autosuficiente: quien lo clone puede finalizar la
+// generación sin el workspace Keel. Misma regeneración segura que el resto
+// del scaffolding.
 
+import fs from 'node:fs';
 import path from 'node:path';
 import { assetsDir, SKILL } from '../lib/assets.js';
 
@@ -26,10 +29,12 @@ const AGENTS = ['keel-spring-code.md', 'keel-spring-infra.md', 'keel-spring-vali
 
 // Skills por tecnología aplicables al stack resuelto (mismo mapeo que
 // skills/README.md): una por categoría elegida; minio/s3 comparten
-// keel-spring-s3 y redis/valkey keel-spring-redis.
+// keel-spring-s3, redis/valkey keel-spring-redis y los seis dialectos de BD
+// keel-spring-database (tuning/validación: el código JPA lo genera build).
 export function stackSkills(model) {
   const { layersPresent, stack } = model;
   const skills = [];
+  if (layersPresent.persistence && stack.database) skills.push('keel-spring-database');
   if (layersPresent.messaging && stack.broker) skills.push(`keel-spring-${stack.broker}`);
   if (layersPresent.storage && stack.storage) skills.push('keel-spring-s3');
   if (stack.cache) skills.push('keel-spring-redis');
@@ -56,11 +61,29 @@ export function generate(model) {
     });
   }
   for (const name of stackSkills(model)) {
-    files.push({
-      path: `.claude/skills/${name}/SKILL.md`,
-      sourceFile: path.join(generatorDir, 'skills', name, 'SKILL.md')
-    });
+    files.push(...skillFiles(name));
   }
+  return files;
+}
+
+// Archivos de una skill por tecnología: directorio completo (SKILL.md +
+// references/), enumerado con recursión manual (engines declara Node >=18 y
+// readdirSync({ recursive }) exige 18.17+). Rutas destino en POSIX, como el
+// resto del scaffolding.
+function skillFiles(name) {
+  const skillRoot = path.join(generatorDir, 'skills', name);
+  const files = [];
+  const walk = (dir, prefix) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        walk(path.join(dir, entry.name), rel);
+      } else {
+        files.push({ path: `.claude/skills/${name}/${rel}`, sourceFile: path.join(dir, entry.name) });
+      }
+    }
+  };
+  walk(skillRoot, '');
   return files;
 }
 
@@ -71,7 +94,7 @@ function skillMd(model) {
   const { service } = model;
   const techSkills = stackSkills(model);
   const techSkillsBullet = techSkills.length
-    ? `\n- Skills por tecnología (\`.claude/skills/\`, hermanas de esta) — guía de implementación por tecnología, instaladas solo las del stack de \`keel-stack.json\`: ${techSkills.map((s) => `\`${s}\``).join(', ')}.`
+    ? `\n- Skills por tecnología (\`.claude/skills/\`, hermanas de esta) — guía de implementación por tecnología, instaladas solo las del stack de \`keel-stack.json\`: ${techSkills.map((s) => `\`${s}\``).join(', ')}. Cada una trae \`references/\` (configuración, implementación, troubleshooting) que se leen bajo demanda según la tabla de su SKILL.md.`
     : '';
   return `---
 name: ${SKILL}

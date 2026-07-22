@@ -40,6 +40,16 @@ que mapea el `<Evento>Message` al mensaje de la operación `triggers` y despacha
 cola (`maxReceiveCount` = reintentos del diseño + DLQ); suscribe la cola al topic SNS
 correspondiente de la fuente.
 
+## Referencias
+
+Léelas bajo demanda, no todas de golpe:
+
+| Referencia | Cuándo leerla |
+|---|---|
+| `references/configuration.md` | Antes de tocar `parameters/<perfil>/snssqs.yaml` (listener SQS, visibility timeout, acknowledgement, perfiles) |
+| `references/implementation.md` | Al crear la topología local (fan-out SNS→SQS, raw delivery, redrive/DLQ), publishers, listeners y FIFO |
+| `references/troubleshooting.md` | Si los mensajes no llegan, llegan envueltos, se duplican o la DLQ se comporta raro |
+
 ## Validación
 
 Desde devtools:

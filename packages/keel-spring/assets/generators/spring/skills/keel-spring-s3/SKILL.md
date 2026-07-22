@@ -64,6 +64,16 @@ public class S3Config {
 Valida content-type y tamaño según los `buckets` declarados en `storage.keel.yaml`
 antes de subir (error de negocio, no excepción genérica).
 
+## Referencias
+
+Léelas bajo demanda, no todas de golpe:
+
+| Referencia | Cuándo leerla |
+|---|---|
+| `references/configuration.md` | Antes de tocar `parameters/<perfil>/storage.yaml` o el tuning del SDK (endpoint/path-style, retries, límites de subida) |
+| `references/implementation.md` | Al escribir el adaptador (claves de objeto, validación de content-type, presigned URLs, streaming) |
+| `references/troubleshooting.md` | Si hay SignatureDoesNotMatch, 403 en presigned, NoSuchBucket o fallos solo contra S3 real |
+
 ## Validación
 
 Desde devtools: `mc alias set local http://minio:9000 minioadmin minioadmin && mc ready local`;

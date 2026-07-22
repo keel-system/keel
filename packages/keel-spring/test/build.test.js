@@ -60,9 +60,21 @@ test('los assets del generador existen en el paquete', async () => {
   // Skills por tecnología del stack (build las instala condicionalmente en el
   // proyecto generado según keel-stack.json).
   assert.ok(fs.existsSync(path.join(assetsDir, 'generators', 'spring', 'skills', 'README.md')), 'falta skills/README.md');
-  for (const tech of ['kafka', 'rabbitmq', 'snssqs', 's3', 'redis', 'keycloak', 'cognito']) {
-    const skillFile = path.join(assetsDir, 'generators', 'spring', 'skills', `keel-spring-${tech}`, 'SKILL.md');
-    assert.ok(fs.existsSync(skillFile), `falta skills/keel-spring-${tech}/SKILL.md`);
+  for (const tech of ['kafka', 'rabbitmq', 'snssqs', 's3', 'redis', 'keycloak', 'cognito', 'database']) {
+    const skillDir = path.join(assetsDir, 'generators', 'spring', 'skills', `keel-spring-${tech}`);
+    assert.ok(fs.existsSync(path.join(skillDir, 'SKILL.md')), `falta skills/keel-spring-${tech}/SKILL.md`);
+    // Progressive disclosure: cada skill trae al menos references/configuration.md.
+    assert.ok(
+      fs.existsSync(path.join(skillDir, 'references', 'configuration.md')),
+      `falta skills/keel-spring-${tech}/references/configuration.md`
+    );
+  }
+  // La skill de BD agrupa los seis dialectos del catálogo en references/dialects/.
+  for (const dialect of ['postgresql', 'mysql', 'mariadb', 'sqlserver', 'oracle', 'h2']) {
+    assert.ok(
+      fs.existsSync(path.join(assetsDir, 'generators', 'spring', 'skills', 'keel-spring-database', 'references', 'dialects', `${dialect}.md`)),
+      `falta dialects/${dialect}.md`
+    );
   }
   const kafkaSkill = fs.readFileSync(
     path.join(assetsDir, 'generators', 'spring', 'skills', 'keel-spring-kafka', 'SKILL.md'),

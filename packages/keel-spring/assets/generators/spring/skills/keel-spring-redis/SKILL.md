@@ -38,6 +38,16 @@ La caché se activa porque alguna operación del diseño declara `cache`
   si ya existe, devuelve el resultado previo o el conflicto que dicte el diseño,
   sin re-ejecutar la operación.
 
+## Referencias
+
+Léelas bajo demanda, no todas de golpe:
+
+| Referencia | Cuándo leerla |
+|---|---|
+| `references/configuration.md` | Antes de tocar `parameters/<perfil>/redis.yaml` (timeouts, pool Lettuce, serialización, perfiles) |
+| `references/implementation.md` | Al implementar la caché (`RedisCacheManager`, `sync`, evicción, `CacheErrorHandler`) o la idempotencia (`SET NX EX`) |
+| `references/troubleshooting.md` | Si la caché sirve datos obsoletos, hay errores de serialización, claves sin TTL o timeouts |
+
 ## Validación
 
 Desde devtools: `redis-cli -h redis PING` (o `-h valkey`); `redis-cli -h redis KEYS '*'`

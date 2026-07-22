@@ -10,6 +10,7 @@ import { needsDevtools } from './devtools.js';
 import { stackSkills } from './generator-docs.js';
 
 const SKILL_HINTS = {
+  'keel-spring-database': 'tuning de datasource/Hikari, particularidades del dialecto y validación de la BD (el código JPA ya lo genera build)',
   'keel-spring-kafka': 'broker Apache Kafka',
   'keel-spring-rabbitmq': 'broker RabbitMQ',
   'keel-spring-snssqs': 'broker Amazon SNS/SQS',
@@ -85,7 +86,8 @@ export function generate(model) {
   if (layersPresent.persistence) {
     steps.push(
       '**persistence** (`specs/persistence.keel.yaml`): entidades `Jpa`, puertos y adaptadores ya generados; respeta ' +
-        '`consistency.transactionalBoundary` en los handlers y decide el esquema definitivo (production usa `ddl-auto: validate`).'
+        '`consistency.transactionalBoundary` en los handlers y decide el esquema definitivo (production usa `ddl-auto: validate`). ' +
+        'Para tuning del datasource/Hikari y particularidades del dialecto, la skill `.claude/skills/keel-spring-database/SKILL.md`.'
     );
   }
   steps.push(
@@ -139,7 +141,7 @@ export function generate(model) {
     '- `.claude/conventions/mapping.md` — mapeo DSL Keel → código Spring, capa por capa. Síguelo estrictamente.',
     '- `.claude/conventions/project-layout.md` — estructura del proyecto y sus paquetes.',
     '- `.claude/conventions/infra-validation.md` — sondeo por tecnología de la infraestructura de prueba.',
-    ...techSkills.map((name) => `- \`.claude/skills/${name}/SKILL.md\` — ${SKILL_HINTS[name] ?? name}: qué dejó listo build y qué código escribes tú.`),
+    ...techSkills.map((name) => `- \`.claude/skills/${name}/SKILL.md\` — ${SKILL_HINTS[name] ?? name}: qué dejó listo build y qué te toca a ti; sus \`references/\` (configuración, implementación, troubleshooting) se leen bajo demanda.`),
     '',
     '## Proceso: completar el scaffolding, capa por capa',
     '',

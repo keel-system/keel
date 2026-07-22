@@ -70,6 +70,16 @@ public class StockDepletedListener {
 - `onFailure` del diseño → `@RetryableTopic` (attempts/backoff declarados; `deadLetter: true` → `DltStrategy.FAIL_ON_ERROR`, si no `NO_DLT`).
 - Mapea el `<Evento>Message` al mensaje de la operación `triggers` y despacha vía `UseCaseMediator`; añade idempotencia de consumo si la operación puede reintentarse.
 
+## Referencias
+
+Léelas bajo demanda, no todas de golpe:
+
+| Referencia | Cuándo leerla |
+|---|---|
+| `references/configuration.md` | Antes de tocar `parameters/<perfil>/kafka.yaml` — incluye resolver el `// TODO (agente)` de la deserialización del consumer (acks, idempotence, trusted packages, poll) |
+| `references/implementation.md` | Al escribir publishers (elección de key, reliability, outbox) y listeners (RetryableTopic vs DefaultErrorHandler, poison pills, idempotencia) |
+| `references/troubleshooting.md` | Si el consumo no llega, el poll entra en bucle o hay rebalanceos/duplicados |
+
 ## Validación
 
 Desde devtools: `kcat -b kafka:29092 -L` (metadata) y `kcat -b kafka:29092 -t <topic> -C -c 1` para inspeccionar eventos publicados. Recetas completas en `.claude/conventions/infra-validation.md`.

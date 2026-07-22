@@ -1,14 +1,16 @@
 # Skills por tecnología del stack
 
-Guías de implementación para el código que **no** genera `keel-spring build` porque
-depende de la infraestructura elegida. Cada tecnología es una skill independiente
-(`keel-spring-<tech>/SKILL.md`) que build instala **condicionalmente** en el
-`.claude/skills/` del proyecto generado según `keel-stack.json`: si el broker es
-kafka, solo se instala `keel-spring-kafka`, y así con cada categoría. El subagente
-`keel-spring-code` las descubre como skills del proyecto.
+Guías de trabajo por tecnología para lo que **no** genera `keel-spring build`
+porque depende de la infraestructura elegida (código de adaptadores, tuning de
+configuración, preparación de entorno y validación). Cada tecnología es una
+skill independiente que build instala **condicionalmente** en el
+`.claude/skills/` del proyecto generado según `keel-stack.json`: si el broker
+es kafka, solo se instala `keel-spring-kafka`, y así con cada categoría. El
+subagente `keel-spring-code` las descubre como skills del proyecto.
 
 | Clave en `keel-stack.json` | Valor | Skill |
 |---|---|---|
+| `database` | `postgresql` / `mysql` / `mariadb` / `sqlserver` / `oracle` / `h2` | `keel-spring-database/` (skill única, reference por dialecto) |
 | `broker` | `kafka` | `keel-spring-kafka/` |
 | `broker` | `rabbitmq` | `keel-spring-rabbitmq/` |
 | `broker` | `snssqs` | `keel-spring-snssqs/` |
@@ -17,11 +19,30 @@ kafka, solo se instala `keel-spring-kafka`, y así con cada categoría. El subag
 | `auth` | `keycloak` | `keel-spring-keycloak/` |
 | `auth` | `cognito` | `keel-spring-cognito/` |
 
-Las bases de datos del catálogo no tienen skill propia: todas son relacionales y
-el código JPA (espejo `XxxJpa`, `JpaRepository`, adaptador) ya lo genera build de
-forma transversal; el datasource va en `parameters/<perfil>/db.yaml`.
+`keel-spring-database` no enseña a escribir código JPA — el espejo `XxxJpa`,
+los `JpaRepository` y los adaptadores ya los genera build de forma transversal
+y el datasource va en `parameters/<perfil>/db.yaml` —: cubre tuning
+(Hikari, Hibernate), particularidades del dialecto elegido y validación.
+
+## Estructura (progressive disclosure)
+
+Cada skill es un directorio que build copia **completo** al proyecto:
+
+```
+keel-spring-<tech>/
+  SKILL.md            # punto de entrada conciso: frontera, qué dejó build,
+                      # lo mínimo para producir código correcto y la tabla
+                      # de referencias (qué reference leer y cuándo)
+  references/
+    configuration.md  # propiedades por perfil, tuning y qué NO tocar
+    implementation.md # patrones de código y buenas prácticas (skills de código)
+    environment.md    # preparación de entorno (skills de auth)
+    troubleshooting.md# síntoma → causa → arreglo
+```
+
+Los `references/` se leen **bajo demanda** según la tabla «Referencias» del
+SKILL.md, nunca todos de golpe: el SKILL.md basta para el caso simple.
 
 Cada skill indica: qué dejó listo build (dependencias, fragmentos de config,
-contenedor de prueba, contratos), qué código debe escribir el agente y cómo
-validar la tecnología (recetas completas en
-`.claude/conventions/infra-validation.md`).
+contenedor de prueba, contratos), qué le toca al agente y cómo validar la
+tecnología (recetas completas en `.claude/conventions/infra-validation.md`).

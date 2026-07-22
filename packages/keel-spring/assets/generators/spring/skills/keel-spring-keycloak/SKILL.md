@@ -38,6 +38,16 @@ diseño exija lógica que el mapeo de claims no cubre — p. ej. autorización p
 3. **Verifica el mapeo**: un usuario sin el rol requerido debe recibir 403 y uno con
    él 2xx, según `access.rules` del diseño.
 
+## Referencias
+
+Léelas bajo demanda, no todas de golpe:
+
+| Referencia | Cuándo leerla |
+|---|---|
+| `references/configuration.md` | Antes de tocar `parameters/<perfil>/oauth2.yaml` (issuer-uri vs jwk-set-uri, audiencia, claims que mapea build) |
+| `references/environment.md` | Al crear el realm/cliente/usuarios por script, exportar el realm y obtener tokens (usuario y M2M) |
+| `references/troubleshooting.md` | Ante 401/403 inesperados, arranque fallido por issuer o roles que no llegan al token |
+
 ## Validación
 
 Sondeo desde devtools: `curl -sf http://keycloak:8080/realms/master`.

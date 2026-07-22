@@ -234,8 +234,9 @@ test('CLAUDE.md contextual: specs, solo capas declaradas y skill local con conve
 
   // Conventions siempre, hermanas de agents/ y skills/ en .claude/ (las lee
   // cualquiera de los 4 subagentes, no solo la skill orquestadora); el fixture
-  // no elige broker/auth/cache/storage → sin skills por tecnología: en
-  // .claude/skills/ solo queda la orquestadora.
+  // no elige broker/auth/cache/storage → sin skills de esas categorías, pero
+  // declara persistence → keel-spring-database (default postgresql) acompaña
+  // a la orquestadora en .claude/skills/.
   assert.ok(exists(workspace, '.claude/conventions/mapping.md'));
   assert.ok(exists(workspace, '.claude/conventions/project-layout.md'));
   assert.ok(exists(workspace, '.claude/conventions/infra-validation.md'));
@@ -244,8 +245,33 @@ test('CLAUDE.md contextual: specs, solo capas declaradas y skill local con conve
   assert.ok(exists(workspace, '.claude/conventions/virtual-threads.md'));
   assert.ok(!exists(workspace, '.claude/skills/keel-generate-spring/conventions'));
   assert.ok(!exists(workspace, '.claude/skills/keel-generate-spring/references'));
-  const skillDirs = fs.readdirSync(path.join(workspace, 'services', 'product-catalog-spring', '.claude', 'skills'));
-  assert.deepEqual(skillDirs, ['keel-generate-spring']);
+  const skillDirs = fs.readdirSync(path.join(workspace, 'services', 'product-catalog-spring', '.claude', 'skills')).sort();
+  assert.deepEqual(skillDirs, ['keel-generate-spring', 'keel-spring-database']);
+});
+
+test('skill de base de datos: directorio completo con el dialecto del stack, solo con persistence', () => {
+  const workspace = makeWorkspace();
+  scaffoldService({ ...loadFixture(), workspace }); // persistence declarada, database default postgresql
+
+  assert.ok(exists(workspace, '.claude/skills/keel-spring-database/SKILL.md'));
+  assert.ok(exists(workspace, '.claude/skills/keel-spring-database/references/configuration.md'));
+  assert.ok(exists(workspace, '.claude/skills/keel-spring-database/references/troubleshooting.md'));
+  // Las references de dialecto viajan todas (el directorio se copia completo);
+  // el CLAUDE.md remite a la skill desde el paso de persistence.
+  assert.ok(exists(workspace, '.claude/skills/keel-spring-database/references/dialects/postgresql.md'));
+  assert.ok(exists(workspace, '.claude/skills/keel-spring-database/references/dialects/h2.md'));
+  const claude = read(workspace, '.claude/CLAUDE.md');
+  assert.ok(claude.includes('.claude/skills/keel-spring-database/SKILL.md'));
+
+  // Sin capa persistence no hay skill de BD.
+  const bare = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const stripped = structuredClone(layers);
+  delete stripped.persistence;
+  const strippedManifest = structuredClone(manifest);
+  delete strippedManifest.layers.persistence;
+  scaffoldService({ manifest: strippedManifest, layers: stripped, workspace: bare });
+  assert.ok(!fs.existsSync(path.join(bare, 'services', 'product-catalog-spring', '.claude', 'skills', 'keel-spring-database')));
 });
 
 test('agentes de la orquestación: copiados al .claude/agents/ del proyecto', () => {
@@ -279,6 +305,17 @@ test('skills por tecnología: solo las del stack elegido', () => {
   assert.ok(!exists(workspace, '.claude/skills/keel-spring-s3'));
   const rabbitSkill = read(workspace, '.claude/skills/keel-spring-rabbitmq/SKILL.md');
   assert.ok(rabbitSkill.includes('name: keel-spring-rabbitmq'));
+
+  // La skill se instala como directorio completo: SKILL.md + references/.
+  assert.ok(exists(workspace, '.claude/skills/keel-spring-rabbitmq/references/configuration.md'));
+  assert.ok(exists(workspace, '.claude/skills/keel-spring-rabbitmq/references/implementation.md'));
+  assert.ok(exists(workspace, '.claude/skills/keel-spring-rabbitmq/references/troubleshooting.md'));
+
+  // Regeneración segura: un reference editado a mano no se pisa sin force.
+  const refPath = path.join(workspace, 'services', 'product-catalog-spring', '.claude', 'skills', 'keel-spring-rabbitmq', 'references', 'configuration.md');
+  fs.writeFileSync(refPath, 'editado');
+  scaffoldService({ manifest: patchedManifest, layers: patched, workspace, stack: { broker: 'rabbitmq' } });
+  assert.equal(fs.readFileSync(refPath, 'utf8'), 'editado');
 
   const claude = read(workspace, '.claude/CLAUDE.md');
   assert.ok(claude.includes('messaging.keel.yaml'));
