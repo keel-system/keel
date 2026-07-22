@@ -72,7 +72,7 @@ test('los assets del generador existen en el paquete', async () => {
 
   // Subagentes de la orquestación (fuente única; build los instala vía copyTree
   // y generator-docs los copia al proyecto generado).
-  for (const agent of ['keel-spring-code.md', 'keel-spring-infra.md', 'keel-spring-validate.md']) {
+  for (const agent of ['keel-spring-code.md', 'keel-spring-infra.md', 'keel-spring-validate.md', 'keel-spring-quality.md']) {
     assert.ok(fs.existsSync(path.join(assetsDir, '.claude', 'agents', agent)), `falta .claude/agents/${agent}`);
   }
 });
@@ -96,7 +96,7 @@ test('build copia skill y conventions, y falla la validación de un diseño en p
   assert.ok(fs.existsSync(path.join(workspace, '.claude', 'skills', 'keel-generate-spring', 'SKILL.md')));
   assert.ok(fs.existsSync(path.join(workspace, 'generators', 'spring', 'conventions', 'mapping.md')));
   // Los subagentes de la orquestación se instalan junto a la skill.
-  for (const agent of ['keel-spring-code.md', 'keel-spring-infra.md', 'keel-spring-validate.md']) {
+  for (const agent of ['keel-spring-code.md', 'keel-spring-infra.md', 'keel-spring-validate.md', 'keel-spring-quality.md']) {
     assert.ok(fs.existsSync(path.join(workspace, '.claude', 'agents', agent)), `falta .claude/agents/${agent}`);
   }
 });

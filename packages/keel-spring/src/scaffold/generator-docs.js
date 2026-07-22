@@ -11,10 +11,17 @@ import { assetsDir, SKILL } from '../lib/assets.js';
 const generatorDir = path.join(assetsDir, 'generators', 'spring');
 const skillDir = `.claude/skills/${SKILL}`;
 
-const CONVENTIONS = ['mapping.md', 'project-layout.md', 'infra-validation.md'];
+const CONVENTIONS = [
+  'mapping.md',
+  'project-layout.md',
+  'infra-validation.md',
+  'flow-fidelity.md',
+  'domain-services.md',
+  'virtual-threads.md'
+];
 
 // Subagentes de la orquestación (misma fuente que instala build en el workspace).
-const AGENTS = ['keel-spring-code.md', 'keel-spring-infra.md', 'keel-spring-validate.md'];
+const AGENTS = ['keel-spring-code.md', 'keel-spring-infra.md', 'keel-spring-validate.md', 'keel-spring-quality.md'];
 
 // Skills por tecnología aplicables al stack resuelto (mismo mapeo que
 // skills/README.md): una por categoría elegida; minio/s3 comparten
@@ -63,7 +70,7 @@ function skillMd(model) {
     : '';
   return `---
 name: ${SKILL}
-description: Completa la generación de este microservicio Spring Boot a partir del diseño Keel incluido en specs/, orquestando los subagentes de código, infraestructura y validación funcional. Usar dentro de este proyecto.
+description: Completa la generación de este microservicio Spring Boot a partir del diseño Keel incluido en specs/, orquestando los subagentes de código, infraestructura, validación funcional y calidad. Usar dentro de este proyecto.
 ---
 
 # /${SKILL} — completar ${service.projectName}
@@ -76,16 +83,17 @@ Este proyecto fue generado por \`keel-spring build\` desde \`specs/${service.nam
    - \`keel-spring-code\`: «Completa el proyecto en \`.\` (esta raíz). Sigue su \`CLAUDE.md\`.» — TODOs, lógica de negocio, adaptadores del stack y tests hasta \`./gradlew test\` en verde.
    - \`keel-spring-infra\`: «Levanta y valida la infraestructura de \`.\` (\`infra/docker-compose.yaml\`). Déjala arriba y reporta.»
 
-   Espera a ambos. Sin docker/podman disponibles → continúa solo con código, omite la fase 2 y reporta la validación funcional como PENDIENTE. Infra KO corregible → relanza \`keel-spring-infra\` una vez con el diagnóstico. Tests en rojo → relanza \`keel-spring-code\` con el reporte (máx. 2 ciclos).
-2. **Fase 2 — validación funcional.** Solo con código OK e infra OK: lanza \`keel-spring-validate\` con la raíz \`.\` y el reporte de infraestructura; ejecuta los escenarios \`FL-*\` de \`specs/validation-scenarios.md\` contra el servidor real. Escenarios en FALLO → ciclo \`keel-spring-code\` → \`keel-spring-validate\` (máx. 2). Al terminar, baja la infraestructura (\`docker compose -f infra/docker-compose.yaml down\`, o \`podman compose\`).
-3. **Cerrar.** Commit (\`Generado desde specs/${service.name} v${service.version}\`) y resumen: decisiones, matriz escenario → resultado, estado de cada agente y huecos del diseño detectados.
+   Espera a ambos. Cada agente cierra su reporte con un bloque estructurado (\`status\`, \`blockers\`, \`failures\`…): el gating se decide sobre esos campos. Sin docker/podman (\`infra status: PENDIENTE\`) → continúa solo con código, omite la fase 2 y reporta la validación funcional como PENDIENTE. Infra KO corregible → relanza \`keel-spring-infra\` una vez con el diagnóstico. \`code\` con \`testsGreen: false\` → relanza \`keel-spring-code\` pasándole sus \`failures\` (máx. 2 ciclos). \`blockers\` no vacío en cualquiera → detente y repórtalo al usuario.
+2. **Fase 2 — validación funcional.** Solo con código OK e infra OK: lanza \`keel-spring-validate\` con la raíz \`.\` y el reporte de infraestructura; ejecuta los flujos \`FL-*\` de \`specs/validation-scenarios.md\` contra el servidor real, secuencialmente y reseteando datos antes de cada flujo (\`bash infra/reset-db.sh\`; los ciclos de fix re-resetean). Escenarios en FALLO → ciclo \`keel-spring-code\` → \`keel-spring-validate\` pasando exactamente sus \`failures\` como evidencia (máx. 2). \`blockers\` no vacío → detente y repórtalo.
+3. **Fase 3 — calidad.** Solo con **todos** los escenarios OK: lanza \`keel-spring-quality\` sobre la raíz \`.\`. Aplica solo cambios no-conductuales y cierra con \`./gradlew test\` en verde; si reporta \`status: KO\`, revierte/reporta — nunca hagas commit con tests en rojo. Consolida sus \`remaining\` en el resumen. Al terminar, baja la infraestructura (\`docker compose -f infra/docker-compose.yaml down\`, o \`podman compose\`).
+4. **Cerrar.** Commit (\`Generado desde specs/${service.name} v${service.version}\`) y resumen: decisiones, matriz escenario → resultado, estado de cada agente, ajustes de calidad aplicados/pendientes y huecos del diseño detectados (\`designGaps\` consolidados).
 
 ## Conocimiento local
 
 El \`CLAUDE.md\` de la raíz contiene el contexto completo (fuente de verdad del diseño, stack elegido, orden capa por capa y verificación); los agentes lo consumen. Este directorio aporta el apoyo:
 
 - \`specs/\` (raíz del proyecto) — snapshot del diseño Keel (manifiesto + un artefacto por capa + \`validation-scenarios.md\`). Si trabajas dentro del workspace Keel, el canónico es \`../../specs/${service.name}/\`; el snapshot se refresca en cada \`keel-spring build\`.
-- \`conventions/\` — mapeo DSL → código (\`mapping.md\`, síguelo estrictamente), estructura del proyecto (\`project-layout.md\`) y sondeo de infraestructura (\`infra-validation.md\`).${techSkillsBullet}
+- \`conventions/\` — mapeo DSL → código (\`mapping.md\`, síguelo estrictamente), estructura del proyecto (\`project-layout.md\`), sondeo y reset de infraestructura (\`infra-validation.md\`), auditoría de fidelidad al flujo (\`flow-fidelity.md\`) y guías de handler (\`domain-services.md\`, \`virtual-threads.md\`).${techSkillsBullet}
 
 Reglas: el diseño es la única fuente de verdad funcional; los \`code\` de error y nombres de evento se copian exactos; ante ambigüedad, diseño > conventions > tu criterio (documentado en el README). No des la generación por terminada con tests o escenarios fallando.
 `;

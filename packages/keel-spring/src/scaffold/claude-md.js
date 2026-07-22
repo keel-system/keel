@@ -168,8 +168,9 @@ export function generate(model) {
   lines.push(
     '',
     `La skill \`/${SKILL}\` de este proyecto orquesta este flujo con los subagentes de \`.claude/agents/\`:`,
-    '`keel-spring-code` (código y tests) en paralelo con `keel-spring-infra` (infraestructura arriba y sana), y después',
-    '`keel-spring-validate` (escenarios contra el servidor real).'
+    '`keel-spring-code` (código y tests) en paralelo con `keel-spring-infra` (infraestructura arriba y sana), después',
+    '`keel-spring-validate` (escenarios contra el servidor real, reseteando datos entre flujos) y al final',
+    '`keel-spring-quality` (pase de calidad no-conductual con tests en verde).'
   );
 
   lines.push(

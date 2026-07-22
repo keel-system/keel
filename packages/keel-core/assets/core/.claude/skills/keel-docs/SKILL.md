@@ -1,6 +1,6 @@
 ---
 name: keel-docs
-description: Genera la documentación de integración (INTEGRATION.md + openapi.yaml) de un servicio a partir de sus artefactos Keel validados. Usar cuando otro equipo o sistema necesite integrarse con el servicio.
+description: Genera la documentación de integración (INTEGRATION.md + openapi.yaml + colecciones Postman) de un servicio a partir de sus artefactos Keel validados. Usar cuando otro equipo o sistema necesite integrarse con el servicio.
 argument-hint: "<specs/servicio>"
 ---
 
@@ -21,6 +21,7 @@ Cada parte de la documentación se deriva de capas concretas:
 | Auth por endpoint, roles y permisos | `security` |
 | Eventos publicados y consumidos | `messaging` |
 | Paginación, idempotencia | `api`, `use-cases` |
+| Colecciones Postman | `use-cases`, `api`, `security`, `validation-scenarios.md` |
 
 Si una capa opcional no existe, su sección se omite (no se documenta lo que el servicio no tiene).
 
@@ -50,6 +51,13 @@ OpenAPI 3.1 derivado mecánicamente:
 
 Valida el resultado con `npx --yes @redocly/cli@latest lint docs/<service.name>/openapi.yaml` y corrige hasta que pase.
 
+### 3. `postman/` — colecciones listas para importar
+
+Formato exacto, plantillas y checklist en `references/postman-collection-guide.md` (léela antes de escribirlas). Dos archivos:
+
+- **`postman/<service.name>-collection.json`** — **se regenera siempre**. Una carpeta por flujo `FL-*` de `specs/<servicio>/validation-scenarios.md` con una request por escenario (felices y de error; nombre `FL-XXX · <letra> — <título> (<status>)`) cuyo script `test` asserta el status del Then; más una carpeta «Operaciones» con una request por endpoint de `api` no cubierto por los flujos (body de ejemplo desde el input de la operación, coherente con los ejemplos de INTEGRATION.md). `{{baseUrl}}` como variable de colección; con capa `security`, header `Authorization: Bearer {{token_<rol-kebab>}}` según `access`.
+- **`postman/auth-collection.json`** — **idempotente: si ya existe, no lo toques** (puede tener ajustes manuales del equipo); solo repórtalo. Una request de token por rol usado (`security.roles` / roles de los flujos), cada una con `pm.globals.set('token_<rol-kebab>', ...)`. El endpoint de token y las credenciales van como **variables de colección** (`{{tokenUrl}}`, `{{clientId}}`…): el diseño es agnóstico de proveedor; quien importa la colección las rellena según su stack (la guía documenta los valores típicos).
+
 ## Coherencia
 
-INTEGRATION.md y openapi.yaml deben contar exactamente la misma historia: mismos paths, mismos códigos de error, mismos campos, misma seguridad. Ante regeneración, sobrescribe ambos por completo (no edites incrementalmente).
+INTEGRATION.md, openapi.yaml y las colecciones Postman deben contar exactamente la misma historia: mismos paths, mismos códigos de error, mismos campos, misma seguridad. Ante regeneración, sobrescribe todo por completo (no edites incrementalmente) — con la única excepción de `postman/auth-collection.json`, que no se pisa si existe.

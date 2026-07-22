@@ -7,7 +7,7 @@
 
 import YAML from 'yaml';
 import { DATABASES, BROKERS, AUTH, CACHES, STORAGE, selectedInfra } from '../lib/stack-catalog.js';
-import { needsDevtools, devtoolsService, dockerfileDevtools, validateInfraScript } from './devtools.js';
+import { needsDevtools, devtoolsService, dockerfileDevtools, validateInfraScript, resetDbScript } from './devtools.js';
 
 export function generate(model) {
   const { service, layersPresent, stack } = model;
@@ -67,6 +67,11 @@ export function generate(model) {
   // caso 'dbcontainer', p. ej. Oracle, que no necesita devtools).
   if (selected.some((s) => s.entry.cliValidateCmd)) {
     files.push({ path: 'infra/validate-infra.sh', content: validateInfraScript(selected, service) });
+  }
+  // Reset de datos entre flujos: solo si la BD elegida declara cliResetCmd.
+  const reset = resetDbScript(selected, service);
+  if (reset) {
+    files.push({ path: 'infra/reset-db.sh', content: reset });
   }
 
   return files;

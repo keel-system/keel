@@ -18,9 +18,13 @@ Generador **Java / Spring Boot** para diseños Keel, instalado en este workspace
 | Ruta | Qué es |
 |------|--------|
 | `.claude/skills/keel-generate-spring/` (en la raíz del workspace) | La skill que orquesta la generación |
-| `.claude/agents/keel-spring-{code,infra,validate}.md` (en la raíz del workspace) | Los subagentes de la orquestación: código, infraestructura y validación funcional |
+| `.claude/agents/keel-spring-{code,infra,validate,quality}.md` (en la raíz del workspace) | Los subagentes de la orquestación: código, infraestructura, validación funcional y calidad no-conductual |
 | `conventions/project-layout.md` | Stack por defecto y estructura del proyecto generado |
 | `conventions/mapping.md` | Tabla normativa de mapeo diseño → código Spring, por capa |
+| `conventions/infra-validation.md` | Sondeo de la infraestructura de prueba vía `devtools` + reset de datos entre flujos |
+| `conventions/flow-fidelity.md` | Auditoría de fidelidad al flujo: checklist previa a implementar cada handler |
+| `conventions/domain-services.md` | Cuándo y cómo crear servicios de dominio (`@DomainComponent`) |
+| `conventions/virtual-threads.md` | I/O paralela con hilos virtuales en query handlers |
 | `skills/` | Skills por tecnología del stack (`keel-spring-<tech>/` — kafka, rabbitmq, snssqs, s3, redis, keycloak, cognito), instaladas condicionalmente en el `.claude/skills/` del proyecto generado según `keel-stack.json` |
 | `golden/` | Ejemplo de referencia para estilo y detección de regresiones |
 

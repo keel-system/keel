@@ -64,6 +64,32 @@ de la API:
   --queue-url <url> --visibility-timeout 0`.
 - **MinIO**: `mc ls local/<bucket>` para confirmar objetos subidos.
 
+## Reset de datos entre flujos (`infra/reset-db.sh`)
+
+Los `Given` de los flujos `FL-*` de `specs/validation-scenarios.md` asumen **BD
+limpia**: cada flujo es auto-contenido (su primer escenario crea los datos que los
+siguientes verifican). Sin reset, re-ejecutar un flujo de creación devuelve `409` en
+vez de `201`, las claves únicas colisionan y el ciclo de corrección
+código→validación no converge.
+
+Por eso el agente de validación funcional ejecuta los flujos **secuencialmente** y,
+**antes de cada flujo** (también al re-validar tras un fix):
+
+```bash
+bash infra/reset-db.sh    # respeta CONTAINER_RUNTIME; datos fuera, esquema intacto
+```
+
+El script vacía los datos vía el CLI de la BD del stack (mismo mecanismo devtools
+que `validate-infra.sh`) **preservando el esquema** (lo crea Hibernate); las tablas
+de outbox/idempotencia, si existen, son tablas del mismo esquema y quedan incluidas.
+El reset es **por flujo, no entre escenarios**: dentro de un flujo el escenario A
+crea el estado que el escenario B necesita (p. ej. el duplicado que B verifica).
+
+- Si el `Given` de un flujo depende de datos creados por **otro** flujo, tras el
+  reset no se sostiene: es un hueco del diseño → repórtalo, no siembres datos a mano.
+- Con **H2** (en memoria, sin contenedor) no hay script: reiniciar la aplicación
+  entre flujos recrea el esquema vacío.
+
 ## Obtener un token para llamadas autenticadas
 
 Con capa `security`, los escenarios necesitan un Bearer token:

@@ -114,11 +114,46 @@ echo "Infraestructura OK."
 `;
 }
 
-// Sustituye los placeholders del cliValidateCmd con los valores concretos del
-// catálogo (credenciales de prueba). Solo las BD usan user/pass/db/service.
-function concreteCmd(entry, dbName) {
+// reset-db.sh: vacía los DATOS de la BD de prueba preservando el esquema (lo
+// crea Hibernate). Lo ejecuta el agente de validación funcional antes de cada
+// flujo FL-*: sus Given asumen BD limpia y cada flujo es auto-contenido. Solo
+// se genera si la BD elegida declara cliResetCmd (h2 no: reiniciar la app basta).
+export function resetDbScript(selected, service) {
+  const db = selected.find((s) => s.category === 'database' && s.entry.cliResetCmd);
+  if (!db) return null;
+  const dbName = service.name.replace(/-/g, '_');
+  const container = db.cliVia === 'dbcontainer' ? `${service.name}-db` : `${service.name}-devtools`;
+  const cmd = concreteCmd(db.entry, dbName, db.entry.cliResetCmd);
+
+  return `#!/usr/bin/env bash
+# reset-db.sh — vacía los datos de la BD de prueba de ${service.name} (esquema intacto).
+# Ejecutar antes de cada flujo FL-* de specs/validation-scenarios.md: los Given
+# asumen BD limpia. Uso (desde la raíz; con podman, exporta CONTAINER_RUNTIME=podman):
+#   bash infra/reset-db.sh
+set -u
+
+RUNTIME="\${CONTAINER_RUNTIME:-}"
+if [ -z "$RUNTIME" ]; then
+  if command -v docker >/dev/null 2>&1; then RUNTIME=docker
+  elif command -v podman >/dev/null 2>&1; then RUNTIME=podman
+  else echo "No se encontró docker ni podman en el PATH." >&2; exit 2; fi
+fi
+
+if $RUNTIME exec ${sq(container)} sh -c ${sq(cmd)}; then
+  echo "Datos reseteados (${db.entry.label})."
+else
+  echo "FALLO al resetear los datos. ¿Está la infraestructura arriba ('$RUNTIME compose -f infra/docker-compose.yaml up -d')?" >&2
+  exit 1
+fi
+`;
+}
+
+// Sustituye los placeholders de un comando del catálogo (por defecto el
+// cliValidateCmd) con los valores concretos (credenciales de prueba). Solo las
+// BD usan user/pass/db/service.
+function concreteCmd(entry, dbName, cmd = entry.cliValidateCmd) {
   const user = entry.user ? entry.user(dbName) : '';
-  return entry.cliValidateCmd
+  return cmd
     .replaceAll('{user}', user)
     .replaceAll('{pass}', entry.password ?? '')
     .replaceAll('{db}', dbName)

@@ -26,10 +26,21 @@ raíz de un proyecto generado. Todo lo que hagas ocurre dentro de esa raíz.
    deja preparado lo mínimo para que la validación funcional pueda obtener un token
    (realm/cliente de prueba según la reference del stack) y documéntalo en el reporte.
 6. **No detengas la infraestructura al terminar**: la usará el agente de validación
-   funcional; bajarla es decisión del orquestador.
+   funcional; bajarla es decisión del orquestador. No preguntas al usuario: registra
+   cada bloqueo en `blockers` y termina; el orquestador decide.
 
 ## Reporte final
 
 Runtime usado, tabla contenedor → estado, resultado de `infra/validate-infra.sh`,
 cómo obtener credenciales/token si aplica, y acciones pendientes si algo quedó KO
-(con el diagnóstico de logs correspondiente).
+(con el diagnóstico de logs correspondiente). Cierra siempre con el bloque
+estructurado que consume el orquestador:
+
+```yaml
+status: OK | KO | PENDIENTE   # PENDIENTE = sin docker/podman disponibles
+runtime: docker | podman | ninguno
+services:                     # estado por contenedor
+  - { name: db, state: up | down | unhealthy }
+authHint: "..."               # cómo obtener el token, si el stack trae auth
+blockers: [...]               # causas KO no corregibles operativamente (con diagnóstico)
+```

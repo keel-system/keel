@@ -17,19 +17,40 @@ no continúes.
 2. Arranca el servidor en background: `./gradlew bootRun` (perfil `local`; en
    Windows `gradlew.bat bootRun`). Espera a que responda (p. ej. `curl` al puerto
    8080 con reintentos).
-3. Ejecuta cada escenario `FL-*` respetando su **Given** (crea el estado previo vía
+3. Ejecuta los flujos `FL-*` **secuencialmente** y, **antes de cada flujo**, resetea
+   los datos: `bash infra/reset-db.sh` (respeta `CONTAINER_RUNTIME`; ver
+   `conventions/infra-validation.md`, sección "Reset de datos entre flujos") y
+   comprueba que el servidor sigue sano (`/actuator/health` o el endpoint más
+   simple). Cada flujo es auto-contenido: su primer escenario crea los datos que los
+   siguientes verifican; el reset es por flujo, **no** entre escenarios. Si el Given
+   de un flujo depende de datos de **otro** flujo, tras el reset no se sostiene:
+   repórtalo como hueco del diseño, no siembres datos a mano. Con H2 (sin script)
+   reinicia el servidor entre flujos. Al re-validar tras un fix, resetea de nuevo.
+4. Ejecuta cada escenario del flujo respetando su **Given** (crea el estado previo vía
    la propia API o datos de arranque) y verifica el **Then** completo: status,
    headers y efectos observables — la BD/broker se inspeccionan vía el contenedor
    `devtools` según `conventions/infra-validation.md`; los eventos por su canal o
    por logs. Con capa security, obtén el token según la reference del stack (el
    reporte de infraestructura indica cómo).
-4. Al terminar, detén el servidor. **No bajes la infraestructura** (decide el
+5. Al terminar, detén el servidor. **No bajes la infraestructura** (decide el
    orquestador).
-5. **No corrijas código**: si un escenario falla, documenta request/response/esperado
+6. **No corrijas código**: si un escenario falla, documenta request/response/esperado
    para que el agente de código lo arregle. Si un escenario contradice el spec, el
    hueco es del diseño: proponlo como cambio a los artefactos, no lo acomodes.
+   No preguntas al usuario: registra cada bloqueo en `blockers` y termina; el
+   orquestador decide.
 
 ## Reporte final
 
 Matriz escenario → OK/FALLO, con evidencia por cada fallo (request, response
 obtenida, resultado esperado) y las propuestas de cambio de diseño si las hay.
+Cierra siempre con el bloque estructurado que consume el orquestador:
+
+```yaml
+status: OK | KO | PENDIENTE   # OK solo con todos los escenarios OK
+scenarios:                    # matriz completa
+  - { id: FL-001-A, result: OK | FALLO }
+failures: [...]               # por fallo: escenario, request, response, esperado
+designGaps: [...]             # escenarios que contradicen el spec, como propuesta de cambio
+blockers: [...]               # precondiciones rotas (tests rojos, infra caída, sin token…)
+```

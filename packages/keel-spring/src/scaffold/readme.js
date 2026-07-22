@@ -56,6 +56,9 @@ export function generate(model) {
       'docker compose -f infra/docker-compose.yaml up -d',
       'bash infra/validate-infra.sh   # un check por tecnología; sale != 0 si algo falla',
       '```',
+      '',
+      'Si la BD del stack lo permite, `infra/reset-db.sh` vacía los datos (esquema intacto):',
+      'se ejecuta antes de cada flujo `FL-*` de la validación funcional, cuyos Given asumen BD limpia.',
       ''
     );
     if (hasDevtools) {

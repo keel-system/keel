@@ -219,12 +219,16 @@ test('CLAUDE.md contextual: specs, solo capas declaradas y skill local con conve
   assert.ok(skill.includes('keel-spring-code'));
   assert.ok(skill.includes('keel-spring-infra'));
   assert.ok(skill.includes('keel-spring-validate'));
+  assert.ok(skill.includes('keel-spring-quality'));
 
   // Conventions siempre; el fixture no elige broker/auth/cache/storage → sin
   // skills por tecnología: en .claude/skills/ solo queda la orquestadora.
   assert.ok(exists(workspace, '.claude/skills/keel-generate-spring/conventions/mapping.md'));
   assert.ok(exists(workspace, '.claude/skills/keel-generate-spring/conventions/project-layout.md'));
   assert.ok(exists(workspace, '.claude/skills/keel-generate-spring/conventions/infra-validation.md'));
+  assert.ok(exists(workspace, '.claude/skills/keel-generate-spring/conventions/flow-fidelity.md'));
+  assert.ok(exists(workspace, '.claude/skills/keel-generate-spring/conventions/domain-services.md'));
+  assert.ok(exists(workspace, '.claude/skills/keel-generate-spring/conventions/virtual-threads.md'));
   assert.ok(!exists(workspace, '.claude/skills/keel-generate-spring/references'));
   const skillDirs = fs.readdirSync(path.join(workspace, 'services', 'product-catalog-spring', '.claude', 'skills'));
   assert.deepEqual(skillDirs, ['keel-generate-spring']);
@@ -237,7 +241,8 @@ test('agentes de la orquestación: copiados al .claude/agents/ del proyecto', ()
   for (const [name, marker] of [
     ['keel-spring-code', 'gradlew test'],
     ['keel-spring-infra', 'infra/docker-compose.yaml'],
-    ['keel-spring-validate', 'validation-scenarios.md']
+    ['keel-spring-validate', 'validation-scenarios.md'],
+    ['keel-spring-quality', 'no-conductual']
   ]) {
     const agent = read(workspace, `.claude/agents/${name}.md`);
     assert.ok(agent.includes(`name: ${name}`));
@@ -346,6 +351,13 @@ test('devtools: compose trae el toolbox + Dockerfile + validate-infra.sh con las
   assert.ok(script.includes('psql -h db')); // check de la BD
   assert.ok(script.includes('kcat -b kafka:29092')); // check del broker
   assert.ok(script.includes('product-catalog-devtools')); // ejecuta vía docker exec en devtools
+
+  // Reset de datos entre flujos: vacía las tablas preservando el esquema.
+  const reset = read(workspace, 'infra/reset-db.sh');
+  assert.ok(reset.startsWith('#!/usr/bin/env bash'));
+  assert.ok(reset.includes('TRUNCATE TABLE')); // reset de PostgreSQL (default)
+  assert.ok(reset.includes('CONTAINER_RUNTIME')); // respeta docker/podman
+  assert.ok(reset.includes('product-catalog-devtools')); // psql vive en devtools
 });
 
 test('h2 como BD elegida: sin contenedor de BD ni devtools, pero con dependencia Gradle', () => {
@@ -363,6 +375,7 @@ test('h2 como BD elegida: sin contenedor de BD ni devtools, pero con dependencia
   assert.ok(!copied.includes('infra/docker-compose.yaml'));
   assert.ok(!copied.some((f) => f.includes('Dockerfile.devtools')));
   assert.ok(!copied.includes('infra/validate-infra.sh'));
+  assert.ok(!copied.includes('infra/reset-db.sh')); // h2: reiniciar la app basta
 
   assert.ok(read(workspace, 'build.gradle').includes("runtimeOnly 'com.h2database:h2'"));
 });

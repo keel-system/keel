@@ -14,7 +14,7 @@ El stack lo elige el diseñador en el **cuestionario de `keel-spring build`** (s
 
 El catálogo único de tecnologías (dependencias Gradle, imagen, servicio de compose y receta de validación por CLI) vive en `src/lib/stack-catalog.js` del generador.
 
-El scaffolding genera además, agrupado en el directorio `infra/` del proyecto, `infra/docker-compose.yaml` con la infraestructura de prueba elegida (BD, broker, auth, cache, storage) — solo si hay al menos un contenedor — más un contenedor **`devtools`** (`infra/docker/Dockerfile.devtools`) y un script `infra/validate-infra.sh` para sondearla (ver "Validación de infraestructura").
+El scaffolding genera además, agrupado en el directorio `infra/` del proyecto, `infra/docker-compose.yaml` con la infraestructura de prueba elegida (BD, broker, auth, cache, storage) — solo si hay al menos un contenedor — más un contenedor **`devtools`** (`infra/docker/Dockerfile.devtools`), un script `infra/validate-infra.sh` para sondearla (ver "Validación de infraestructura") y, si la BD lo permite, `infra/reset-db.sh` para vaciar los datos entre flujos de validación (ver `infra-validation.md`).
 
 ## Estructura (hexagonal + CQRS, arquitectura del prototipo de referencia)
 
@@ -31,7 +31,8 @@ services/<servicio>-spring/
 ├── infra/                       # todo lo relativo a levantar la infraestructura de prueba
 │   ├── docker-compose.yaml      # infraestructura de prueba + contenedor devtools (si el stack la necesita)
 │   ├── docker/Dockerfile.devtools  # toolbox Alpine con solo las CLIs del stack (psql, redis-cli, kcat, mc, aws…)
-│   └── validate-infra.sh        # un check por tecnología: docker exec <svc>-devtools <cli>
+│   ├── validate-infra.sh        # un check por tecnología: docker exec <svc>-devtools <cli>
+│   └── reset-db.sh              # vacía los datos de la BD (esquema intacto); se ejecuta antes de cada flujo FL-* (si la BD lo permite; H2 no lo necesita)
 └── src/
     ├── main/java/<base>/
     │   ├── application/         # SIN imports de Spring (desacoplada del framework)

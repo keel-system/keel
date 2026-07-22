@@ -13,6 +13,10 @@
 //                    ejecuta dentro del propio contenedor) o null (sin sondeo).
 //   cliValidateCmd   comando de sondeo con placeholders {user} {pass} {db}
 //                    {service}; los hostnames apuntan al serviceKey (red interna).
+//   cliResetCmd      (solo BD) comando que VACÍA LOS DATOS preservando el esquema
+//                    (los Given de los flujos FL-* asumen BD limpia); mismos
+//                    placeholders y mismo cliVia que cliValidateCmd. Ausente ⇒
+//                    sin reset-db.sh (h2: reiniciar la app recrea el esquema).
 //   alpinePackages   paquetes apk a instalar en devtools para esa CLI ([] si se
 //                    instala por curl —sqlcmd, mc— o si basta la base).
 
@@ -30,6 +34,8 @@ export const DATABASES = {
     cliTool: 'psql',
     cliVia: 'devtools',
     cliValidateCmd: "PGPASSWORD='{pass}' psql -h db -U {user} -d {db} -c 'SELECT 1' -q -t",
+    cliResetCmd:
+      "PGPASSWORD='{pass}' psql -h db -U {user} -d {db} -v ON_ERROR_STOP=1 -q -c \"DO \\$\\$ DECLARE stmt text; BEGIN SELECT 'TRUNCATE TABLE ' || string_agg(quote_ident(tablename), ', ') || ' RESTART IDENTITY CASCADE' INTO stmt FROM pg_tables WHERE schemaname = 'public'; IF stmt IS NOT NULL THEN EXECUTE stmt; END IF; END \\$\\$;\"",
     alpinePackages: ['postgresql-client'],
     composeService: (db) => ({
       image: 'postgres:16-alpine',
@@ -51,6 +57,8 @@ export const DATABASES = {
     cliTool: 'mysql',
     cliVia: 'devtools',
     cliValidateCmd: "mysql -h db -u {user} -p'{pass}' -e 'SELECT 1' {db}",
+    cliResetCmd:
+      "mysql -h db -u {user} -p'{pass}' -N -B -e 'SELECT CONCAT(\"TRUNCATE TABLE \", table_name, \";\") FROM information_schema.tables WHERE table_schema = \"{db}\"' | mysql -h db -u {user} -p'{pass}' --init-command='SET FOREIGN_KEY_CHECKS=0' {db}",
     alpinePackages: ['mysql-client'],
     composeService: (db) => ({
       image: 'mysql:8.0',
@@ -77,6 +85,8 @@ export const DATABASES = {
     cliTool: 'mariadb',
     cliVia: 'devtools',
     cliValidateCmd: "mariadb -h db -u {user} -p'{pass}' -e 'SELECT 1' {db}",
+    cliResetCmd:
+      "mariadb -h db -u {user} -p'{pass}' -N -B -e 'SELECT CONCAT(\"TRUNCATE TABLE \", table_name, \";\") FROM information_schema.tables WHERE table_schema = \"{db}\"' | mariadb -h db -u {user} -p'{pass}' --init-command='SET FOREIGN_KEY_CHECKS=0' {db}",
     alpinePackages: ['mariadb-client'],
     composeService: (db) => ({
       image: 'mariadb:11',
@@ -104,6 +114,8 @@ export const DATABASES = {
     // sqlcmd (go-sqlcmd) se instala por curl en devtools; no hay paquete apk.
     cliVia: 'devtools',
     cliValidateCmd: "sqlcmd -S db -U {user} -P '{pass}' -C -Q 'SELECT 1'",
+    cliResetCmd:
+      "sqlcmd -S db -U {user} -P '{pass}' -C -d {db} -Q \"EXEC sp_MSforeachtable 'ALTER TABLE ? NOCHECK CONSTRAINT ALL'; EXEC sp_MSforeachtable 'DELETE FROM ?'; EXEC sp_MSforeachtable 'ALTER TABLE ? WITH CHECK CHECK CONSTRAINT ALL'\"",
     alpinePackages: [],
     composeService: () => ({
       image: 'mcr.microsoft.com/mssql/server:2022-latest',
@@ -137,6 +149,8 @@ export const DATABASES = {
     // dentro del propio contenedor de Oracle, así que se valida ejecutando ahí.
     cliVia: 'dbcontainer',
     cliValidateCmd: "echo 'SELECT 1 FROM dual;' | sqlplus -s {user}/{pass}@//localhost:1521/{service}",
+    cliResetCmd:
+      'printf "BEGIN FOR t IN (SELECT table_name FROM user_tables) LOOP EXECUTE IMMEDIATE \'TRUNCATE TABLE \' || t.table_name || \' CASCADE\'; END LOOP; END;\\n/\\n" | sqlplus -s {user}/{pass}@//localhost:1521/{service}',
     alpinePackages: [],
     composeService: (db) => ({
       image: 'gvenzl/oracle-free:23-slim',
