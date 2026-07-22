@@ -21,7 +21,7 @@ raíz de un proyecto generado. Todo lo que hagas ocurre dentro de esa raíz.
    listos). Si sigue fallando, diagnostica con `$RT compose -f infra/docker-compose.yaml ps`
    y `$RT logs <contenedor>`; corrige solo causas operativas (puerto ocupado,
    contenedor viejo → `down` + `up`). **Nunca edites código del proyecto.**
-5. Consulta `.claude/skills/keel-generate-spring/conventions/infra-validation.md`
+5. Consulta `.claude/conventions/infra-validation.md`
    para el sondeo por tecnología. Si el stack trae auth (Keycloak / cognito-local),
    deja preparado lo mínimo para que la validación funcional pueda obtener un token
    (realm/cliente de prueba según la reference del stack) y documéntalo en el reporte.

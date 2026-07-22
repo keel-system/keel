@@ -14,7 +14,7 @@ server JWT y `JwtAuthConverter` que mapea los claims planos de Cognito
 
 - Aplica solo si `keel-stack.json` declara `"auth": "cognito"`.
 - Lee `specs/security.keel.yaml`: roles/grupos y `access.rules` — el diseño es la única fuente de verdad funcional.
-- Sigue estrictamente `.claude/skills/keel-generate-spring/conventions/mapping.md`.
+- Sigue estrictamente `.claude/conventions/mapping.md`.
 - **Frontera**: build ya dejó el código de seguridad, la config por perfil y el compose; esta skill cubre solo preparación de entorno y validación.
 
 ## Qué dejó listo build
@@ -41,4 +41,4 @@ diseño exija lógica que el mapeo de claims no cubre, y entonces documéntalo):
 ## Validación
 
 Sondeo desde devtools: `curl -sf http://cognito:9229/health`.
-Recetas completas en `.claude/skills/keel-generate-spring/conventions/infra-validation.md`.
+Recetas completas en `.claude/conventions/infra-validation.md`.

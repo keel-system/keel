@@ -14,7 +14,7 @@ server JWT y `JwtAuthConverter` que mapea los claims anidados de Keycloak
 
 - Aplica solo si `keel-stack.json` declara `"auth": "keycloak"`.
 - Lee `specs/security.keel.yaml`: roles y `access.rules` — el diseño es la única fuente de verdad funcional.
-- Sigue estrictamente `.claude/skills/keel-generate-spring/conventions/mapping.md`.
+- Sigue estrictamente `.claude/conventions/mapping.md`.
 - **Frontera**: build ya dejó el código de seguridad, la config por perfil y el compose; esta skill cubre solo preparación de entorno y validación.
 
 ## Qué dejó listo build
@@ -42,4 +42,4 @@ diseño exija lógica que el mapeo de claims no cubre — p. ej. autorización p
 
 Sondeo desde devtools: `curl -sf http://keycloak:8080/realms/master`.
 Recetas completas (incluida la obtención de tokens) en
-`.claude/skills/keel-generate-spring/conventions/infra-validation.md`.
+`.claude/conventions/infra-validation.md`.

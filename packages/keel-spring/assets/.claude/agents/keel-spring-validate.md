@@ -19,7 +19,7 @@ no continúes.
    8080 con reintentos).
 3. Ejecuta los flujos `FL-*` **secuencialmente** y, **antes de cada flujo**, resetea
    los datos: `bash infra/reset-db.sh` (respeta `CONTAINER_RUNTIME`; ver
-   `conventions/infra-validation.md`, sección "Reset de datos entre flujos") y
+   `.claude/conventions/infra-validation.md`, sección "Reset de datos entre flujos") y
    comprueba que el servidor sigue sano (`/actuator/health` o el endpoint más
    simple). Cada flujo es auto-contenido: su primer escenario crea los datos que los
    siguientes verifican; el reset es por flujo, **no** entre escenarios. Si el Given
@@ -29,7 +29,7 @@ no continúes.
 4. Ejecuta cada escenario del flujo respetando su **Given** (crea el estado previo vía
    la propia API o datos de arranque) y verifica el **Then** completo: status,
    headers y efectos observables — la BD/broker se inspeccionan vía el contenedor
-   `devtools` según `conventions/infra-validation.md`; los eventos por su canal o
+   `devtools` según `.claude/conventions/infra-validation.md`; los eventos por su canal o
    por logs. Con capa security, obtén el token según la reference del stack (el
    reporte de infraestructura indica cómo).
 5. Al terminar, detén el servidor. **No bajes la infraestructura** (decide el

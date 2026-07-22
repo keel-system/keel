@@ -232,14 +232,17 @@ test('CLAUDE.md contextual: specs, solo capas declaradas y skill local con conve
   assert.ok(skill.includes('keel-spring-validate'));
   assert.ok(skill.includes('keel-spring-quality'));
 
-  // Conventions siempre; el fixture no elige broker/auth/cache/storage → sin
-  // skills por tecnología: en .claude/skills/ solo queda la orquestadora.
-  assert.ok(exists(workspace, '.claude/skills/keel-generate-spring/conventions/mapping.md'));
-  assert.ok(exists(workspace, '.claude/skills/keel-generate-spring/conventions/project-layout.md'));
-  assert.ok(exists(workspace, '.claude/skills/keel-generate-spring/conventions/infra-validation.md'));
-  assert.ok(exists(workspace, '.claude/skills/keel-generate-spring/conventions/flow-fidelity.md'));
-  assert.ok(exists(workspace, '.claude/skills/keel-generate-spring/conventions/domain-services.md'));
-  assert.ok(exists(workspace, '.claude/skills/keel-generate-spring/conventions/virtual-threads.md'));
+  // Conventions siempre, hermanas de agents/ y skills/ en .claude/ (las lee
+  // cualquiera de los 4 subagentes, no solo la skill orquestadora); el fixture
+  // no elige broker/auth/cache/storage → sin skills por tecnología: en
+  // .claude/skills/ solo queda la orquestadora.
+  assert.ok(exists(workspace, '.claude/conventions/mapping.md'));
+  assert.ok(exists(workspace, '.claude/conventions/project-layout.md'));
+  assert.ok(exists(workspace, '.claude/conventions/infra-validation.md'));
+  assert.ok(exists(workspace, '.claude/conventions/flow-fidelity.md'));
+  assert.ok(exists(workspace, '.claude/conventions/domain-services.md'));
+  assert.ok(exists(workspace, '.claude/conventions/virtual-threads.md'));
+  assert.ok(!exists(workspace, '.claude/skills/keel-generate-spring/conventions'));
   assert.ok(!exists(workspace, '.claude/skills/keel-generate-spring/references'));
   const skillDirs = fs.readdirSync(path.join(workspace, 'services', 'product-catalog-spring', '.claude', 'skills'));
   assert.deepEqual(skillDirs, ['keel-generate-spring']);

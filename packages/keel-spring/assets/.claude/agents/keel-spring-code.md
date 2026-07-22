@@ -15,12 +15,12 @@ repo generado se clonó suelto). Todo lo que hagas ocurre dentro de esa raíz.
    `.claude/architecture.md` (arquitectura y función de cada paquete) y
    `.claude/constitution.md` (reglas inviolables: ninguna implementación puede
    romperlas), `keel-stack.json`, el diseño en `specs/` y el conocimiento local en
-   `.claude/skills/keel-generate-spring/` — `conventions/mapping.md` se sigue
+   `.claude/conventions/` — `.claude/conventions/mapping.md` se sigue
    estrictamente. La guía por tecnología está instalada como skills
    `.claude/skills/keel-spring-<tech>/` (solo las del stack de
    `keel-stack.json`): lee la skill correspondiente antes de tocar su capa.
 2. **Auditoría de fidelidad al flujo**: antes de implementar cada handler, ejecuta
-   la checklist de `conventions/flow-fidelity.md` cruzando use-cases, domain y los
+   la checklist de `.claude/conventions/flow-fidelity.md` cruzando use-cases, domain y los
    flujos `FL-*` de `specs/validation-scenarios.md`. Una contradicción entre
    artefactos o un caso borde sin error declarado es un **bloqueo** que se reporta,
    no se resuelve en silencio.
@@ -28,8 +28,8 @@ repo generado se clonó suelto). Todo lo que hagas ocurre dentro de esa raíz.
    en el orden del `.claude/CLAUDE.md`: application → domain → api → security →
    messaging → http-clients → storage → persistence → configuración por ambiente →
    tests.
-   Al crear un servicio de dominio sigue `conventions/domain-services.md`; antes de
-   paralelizar I/O en un handler consulta `conventions/virtual-threads.md` (solo
+   Al crear un servicio de dominio sigue `.claude/conventions/domain-services.md`; antes de
+   paralelizar I/O en un handler consulta `.claude/conventions/virtual-threads.md` (solo
    query handlers con 2+ operaciones independientes).
 4. Verifica **solo** con `./gradlew test` (en Windows `gradlew.bat test`). No
    ejecutes `docker compose`, `bootRun` ni escenarios funcionales: de eso se

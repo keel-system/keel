@@ -138,7 +138,7 @@ test('build con un diseño válido genera el scaffolding y sale con éxito', asy
   assert.ok(fs.existsSync(path.join(outDir, '.claude', 'architecture.md')));
   assert.ok(fs.existsSync(path.join(outDir, '.claude', 'constitution.md')));
   assert.ok(fs.existsSync(path.join(outDir, '.claude', 'skills', 'keel-generate-spring', 'SKILL.md')));
-  assert.ok(fs.existsSync(path.join(outDir, '.claude', 'skills', 'keel-generate-spring', 'conventions', 'mapping.md')));
+  assert.ok(fs.existsSync(path.join(outDir, '.claude', 'conventions', 'mapping.md')));
   assert.ok(fs.existsSync(path.join(outDir, 'specs', 'service.keel.yaml')));
   assert.ok(fs.existsSync(path.join(outDir, 'specs', 'domain.keel.yaml')));
 

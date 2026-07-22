@@ -24,4 +24,4 @@ forma transversal; el datasource va en `parameters/<perfil>/db.yaml`.
 Cada skill indica: qué dejó listo build (dependencias, fragmentos de config,
 contenedor de prueba, contratos), qué código debe escribir el agente y cómo
 validar la tecnología (recetas completas en
-`.claude/skills/keel-generate-spring/conventions/infra-validation.md`).
+`.claude/conventions/infra-validation.md`).

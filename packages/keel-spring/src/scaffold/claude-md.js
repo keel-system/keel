@@ -9,8 +9,6 @@ import { describeStack } from '../lib/stack-config.js';
 import { needsDevtools } from './devtools.js';
 import { stackSkills } from './generator-docs.js';
 
-const SKILL_DIR = `.claude/skills/${SKILL}`;
-
 const SKILL_HINTS = {
   'keel-spring-kafka': 'broker Apache Kafka',
   'keel-spring-rabbitmq': 'broker RabbitMQ',
@@ -133,14 +131,14 @@ export function generate(model) {
     `\`keel-stack.json\`: ${describeStack(stack)}. Respétalo; para cambiarlo, borra ese archivo y re-ejecuta`,
     '`keel-spring build --force` desde la raíz del workspace.',
     '',
-    '## Conocimiento local (`.claude/skills/`)',
+    '## Conocimiento local',
     '',
-    `La skill \`/${SKILL}\` de este proyecto arranca el proceso; su directorio trae las convenciones, y las guías del stack`,
+    `La skill \`/${SKILL}\` de este proyecto arranca el proceso; \`.claude/conventions/\` trae las convenciones que consultan los subagentes, y las guías del stack`,
     'están instaladas como skills propias por tecnología (solo las del stack elegido):',
     '',
-    `- \`${SKILL_DIR}/conventions/mapping.md\` — mapeo DSL Keel → código Spring, capa por capa. Síguelo estrictamente.`,
-    `- \`${SKILL_DIR}/conventions/project-layout.md\` — estructura del proyecto y sus paquetes.`,
-    `- \`${SKILL_DIR}/conventions/infra-validation.md\` — sondeo por tecnología de la infraestructura de prueba.`,
+    '- `.claude/conventions/mapping.md` — mapeo DSL Keel → código Spring, capa por capa. Síguelo estrictamente.',
+    '- `.claude/conventions/project-layout.md` — estructura del proyecto y sus paquetes.',
+    '- `.claude/conventions/infra-validation.md` — sondeo por tecnología de la infraestructura de prueba.',
     ...techSkills.map((name) => `- \`.claude/skills/${name}/SKILL.md\` — ${SKILL_HINTS[name] ?? name}: qué dejó listo build y qué código escribes tú.`),
     '',
     '## Proceso: completar el scaffolding, capa por capa',

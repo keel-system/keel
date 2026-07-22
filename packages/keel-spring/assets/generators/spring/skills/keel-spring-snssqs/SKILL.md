@@ -9,7 +9,7 @@ description: Guía de implementación de mensajería con Amazon SNS/SQS (LocalSt
 
 - Aplica solo si `keel-stack.json` declara `"broker": "snssqs"`.
 - Lee `specs/messaging.keel.yaml`: eventos, suscripciones, `reliability` y `onFailure` — el diseño es la única fuente de verdad funcional.
-- Sigue estrictamente `.claude/skills/keel-generate-spring/conventions/mapping.md`; la estructura de paquetes está en `conventions/project-layout.md`.
+- Sigue estrictamente `.claude/conventions/mapping.md`; la estructura de paquetes está en `.claude/conventions/project-layout.md`.
 - **Frontera**: build ya dejó dependencias, config por perfil, compose y contratos (abajo); esta skill cubre solo el código que depende de SNS/SQS.
 
 ## Qué dejó listo build
@@ -45,4 +45,4 @@ correspondiente de la fuente.
 Desde devtools:
 `aws --endpoint-url http://localstack:4566 --region us-east-1 sns list-topics` y
 `... sqs receive-message --queue-url <url>` para inspeccionar mensajes.
-Recetas completas en `.claude/skills/keel-generate-spring/conventions/infra-validation.md`.
+Recetas completas en `.claude/conventions/infra-validation.md`.

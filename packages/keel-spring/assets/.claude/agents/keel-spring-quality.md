@@ -22,7 +22,7 @@ comportamiento se **reporta** en `remaining`, no se aplica.
    colaboradores que el handler/servicio no usa.
 3. **Inmutabilidad y estado**: `final` donde no hay reasignación; dominio **sin
    setters públicos** ni constructor vacío (mutación solo por métodos de negocio,
-   según `conventions/project-layout.md`); colecciones expuestas como vistas
+   según `.claude/conventions/project-layout.md`); colecciones expuestas como vistas
    inmutables (`List.copyOf`) cuando no cambie el contrato.
 4. **Excepciones**: las de dominio tipadas (`DomainException` y sus
    `<PascalCode>Error`) en vez de genéricas sin contexto; nada de `catch` vacíos ni
@@ -30,7 +30,7 @@ comportamiento se **reporta** en `remaining`, no se aplica.
 5. **Transaccionalidad (específica de Keel)**: la transacción la abre
    `UseCaseMediator` — los handlers **no** llevan `@Transactional`. No lo añadas ni
    lo quites: la única excepción documentada es `transactionalBoundary: per-aggregate`
-   con semántica especial (`conventions/mapping.md`). Cambiar transaccionalidad es
+   con semántica especial (`.claude/conventions/mapping.md`). Cambiar transaccionalidad es
    conductual → repórtalo.
 6. **Bloqueo optimista**: si alguna `XxxJpa` lleva `@Version`, el agregado de
    dominio debe declarar `version` con getter y el mapper propagarlo en

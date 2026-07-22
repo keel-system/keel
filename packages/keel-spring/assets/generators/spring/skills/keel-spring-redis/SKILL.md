@@ -12,7 +12,7 @@ recetas; solo cambia la imagen del compose.
 
 - Aplica solo si `keel-stack.json` declara `"cache": "redis"` o `"cache": "valkey"`.
 - Lee `specs/use-cases.keel.yaml`: las operaciones con `cache` y/o `idempotency` — el diseño es la única fuente de verdad funcional.
-- Sigue estrictamente `.claude/skills/keel-generate-spring/conventions/mapping.md`; la estructura de paquetes está en `conventions/project-layout.md`.
+- Sigue estrictamente `.claude/conventions/mapping.md`; la estructura de paquetes está en `.claude/conventions/project-layout.md`.
 - **Frontera**: build ya dejó dependencias, config por perfil y compose (abajo); esta skill cubre solo el código que depende de Redis.
 
 ## Qué dejó listo build
@@ -42,4 +42,4 @@ La caché se activa porque alguna operación del diseño declara `cache`
 
 Desde devtools: `redis-cli -h redis PING` (o `-h valkey`); `redis-cli -h redis KEYS '*'`
 y `TTL <clave>` para verificar entradas y expiraciones tras ejercitar los escenarios.
-Recetas completas en `.claude/skills/keel-generate-spring/conventions/infra-validation.md`.
+Recetas completas en `.claude/conventions/infra-validation.md`.

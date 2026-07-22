@@ -51,7 +51,7 @@ export function generate(model) {
   }
   for (const name of CONVENTIONS) {
     files.push({
-      path: `${skillDir}/conventions/${name}`,
+      path: `.claude/conventions/${name}`,
       sourceFile: path.join(generatorDir, 'conventions', name)
     });
   }
@@ -100,7 +100,7 @@ Este proyecto fue generado por \`keel-spring build\` desde \`specs/${service.nam
 - \`.claude/architecture.md\` — arquitectura hexagonal + CQRS y función de cada paquete. Léelo antes de tocar código si no conoces ya la estructura.
 - \`.claude/constitution.md\` — reglas inviolables (frontera hexagonal, transaccionalidad, contratos públicos). Ninguna implementación puede romperlas.
 - \`specs/\` (raíz del proyecto) — snapshot del diseño Keel (manifiesto + un artefacto por capa + \`validation-scenarios.md\`). Si trabajas dentro del workspace Keel, el canónico es \`../../specs/${service.name}/\`; el snapshot se refresca en cada \`keel-spring build\`.
-- \`conventions/\` — mapeo DSL → código (\`mapping.md\`, síguelo estrictamente), estructura del proyecto (\`project-layout.md\`), sondeo y reset de infraestructura (\`infra-validation.md\`), auditoría de fidelidad al flujo (\`flow-fidelity.md\`) y guías de handler (\`domain-services.md\`, \`virtual-threads.md\`).${techSkillsBullet}
+- \`.claude/conventions/\` — mapeo DSL → código (\`mapping.md\`, síguelo estrictamente), estructura del proyecto (\`project-layout.md\`), sondeo y reset de infraestructura (\`infra-validation.md\`), auditoría de fidelidad al flujo (\`flow-fidelity.md\`) y guías de handler (\`domain-services.md\`, \`virtual-threads.md\`).${techSkillsBullet}
 
 Reglas inviolables completas en \`.claude/constitution.md\`; en corto: el diseño es la única fuente de verdad funcional, los \`code\` de error y nombres de evento se copian exactos, y ante ambigüedad, diseño > conventions > tu criterio (documentado en el README). No des la generación por terminada con tests o escenarios fallando.
 `;
