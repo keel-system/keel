@@ -1,3 +1,8 @@
+---
+name: keel-spring-cognito
+description: Guía de autenticación OIDC con Amazon Cognito (cognito-local en dev) en un proyecto generado por keel-spring — user pool de prueba, obtención de tokens y verificación del mapeo de grupos; el código de seguridad ya lo genera build. Usar cuando keel-stack.json declara auth "cognito".
+---
+
 # Amazon Cognito (auth: `cognito`)
 
 La capa `security` sale **completa** de build (código transversal al proveedor):
@@ -5,11 +10,18 @@ La capa `security` sale **completa** de build (código transversal al proveedor)
 server JWT y `JwtAuthConverter` que mapea los claims planos de Cognito
 (`cognito:groups`, `scope`) a authorities. **No reescribas ese código.**
 
+## Antes de empezar
+
+- Aplica solo si `keel-stack.json` declara `"auth": "cognito"`.
+- Lee `specs/security.keel.yaml`: roles/grupos y `access.rules` — el diseño es la única fuente de verdad funcional.
+- Sigue estrictamente `.claude/skills/keel-generate-spring/conventions/mapping.md`.
+- **Frontera**: build ya dejó el código de seguridad, la config por perfil y el compose; esta skill cubre solo preparación de entorno y validación.
+
 ## Qué dejó listo build
 
 - `parameters/<perfil>/oauth2.yaml`: `issuer-uri` por perfil (local apunta a cognito-local;
   en develop/production, el user pool real: `https://cognito-idp.<región>.amazonaws.com/<poolId>`).
-- `docker-compose.yaml`: `cognito-local` (emulador, host `localhost:9229`).
+- `infra/docker-compose.yaml`: `cognito-local` (emulador, host `localhost:9229`).
 
 ## Qué hace el agente
 
@@ -29,4 +41,4 @@ diseño exija lógica que el mapeo de claims no cubre, y entonces documéntalo):
 ## Validación
 
 Sondeo desde devtools: `curl -sf http://cognito:9229/health`.
-Recetas completas en `conventions/infra-validation.md`.
+Recetas completas en `.claude/skills/keel-generate-spring/conventions/infra-validation.md`.

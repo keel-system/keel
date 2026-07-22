@@ -8,7 +8,7 @@ argument-hint: "<tecnología> <specs/servicio>"
 
 Convierte un diseño Keel validado (`specs/<servicio>/`, un artefacto por capa) en un proyecto ejecutable delegando en el **generador instalado** de la tecnología: `generators/<tecnología>/` en este workspace. El diseño es la única fuente de verdad funcional: si detectas un hueco, propón el cambio a los artefactos, no lo resuelvas solo en el código.
 
-Cada generador es un paquete npm independiente con CLI propia (ej. `keel-spring`); su comando `build` instala en el workspace la skill `keel-generate-<tech>` y los archivos de `generators/<tech>/`, valida el diseño, pregunta el stack (persistido en `keel-stack.json`) y genera el scaffolding transversal en `services/<servicio>-<tech>/`. El agente completa el código dependiente de la infraestructura elegida (guiado por `generators/<tech>/references/`), la lógica de negocio y los tests. Puedes invocar directamente `/keel-generate-<tech>` si ya sabes la tecnología; este orquestador solo resuelve y verifica antes de delegar.
+Cada generador es un paquete npm independiente con CLI propia (ej. `keel-spring`); su comando `build` instala en el workspace la skill `keel-generate-<tech>` y los archivos de `generators/<tech>/`, valida el diseño, pregunta el stack (persistido en `keel-stack.json`) y genera el scaffolding transversal en `services/<servicio>-<tech>/`. El agente completa el código dependiente de la infraestructura elegida (guiado por las skills por tecnología instaladas en el proyecto generado según `keel-stack.json`; fuente en `generators/<tech>/skills/`), la lógica de negocio y los tests. Puedes invocar directamente `/keel-generate-<tech>` si ya sabes la tecnología; este orquestador solo resuelve y verifica antes de delegar.
 
 ## Proceso
 
@@ -18,7 +18,7 @@ Cada generador es un paquete npm independiente con CLI propia (ej. `keel-spring`
    - `generators/<tech>/README.md` — contrato y compatibilidad de versión DSL.
    - `.claude/skills/keel-generate-<tech>/SKILL.md` — el proceso de generación (instalada por `keel-<tech> build`).
    - `generators/<tech>/conventions/` — convenciones normativas.
-   - `generators/<tech>/references/` — guías por tecnología del stack (solo las del stack de `keel-stack.json`).
+   - `generators/<tech>/skills/` — skills por tecnología del stack (fuente; en el proyecto generado solo se instalan las del stack de `keel-stack.json`).
    - `generators/<tech>/golden/` — referencia de estilo, si está poblado.
 
 3. **Compatibilidad y validación.** `keel-<tech> build` ya comprueba la versión DSL y ejecuta la validación mecánica; si el usuario acaba de pasar por `build` en verde, no las repitas. Si se invocó esta skill sin pasar por `build`, verifica que la versión `keel:` del manifiesto está soportada por el generador (README) y ejecuta `keel validate specs/<servicio>` (siempre sin `--wip`: un "Diseño en progreso" no es generable). En ambos casos aplica la checklist semántica de `/keel-validate`. Errores → detente; nunca se genera desde un diseño inválido o incompleto.

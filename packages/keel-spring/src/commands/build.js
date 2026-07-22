@@ -68,7 +68,7 @@ export async function build(inputPath, { force = false, defaults = false } = {})
     return;
   }
 
-  // Instala skill + conventions + references + golden en el workspace (idempotente; --force sobrescribe).
+  // Instala skill + conventions + skills por tecnología + golden en el workspace (idempotente; --force sobrescribe).
   const { copied, skipped } = copyTree(assetsDir, workspace, { force });
   for (const file of copied) console.log(`  ${pc.green('+')} ${file}`);
   for (const file of skipped) console.log(`  ${pc.yellow('=')} ${file} ${pc.dim('(ya existía, omitido)')}`);
@@ -112,7 +112,7 @@ export async function build(inputPath, { force = false, defaults = false } = {})
 
   // Scaffolding transversal al stack: todo lo derivable mecánicamente del
   // diseño cuyo código no depende de la infra puntual elegida (el resto lo
-  // escribe el agente con las references). Regeneración segura: sin --force
+  // escribe el agente con las skills por tecnología). Regeneración segura: sin --force
   // solo se escriben archivos que no existen.
   const scaffold = scaffoldService({ manifest, layers, workspace, force, stack });
   if (stackIsNew) {
@@ -132,8 +132,48 @@ export async function build(inputPath, { force = false, defaults = false } = {})
     )
   );
 
+  // La infraestructura de prueba vive en infra/ desde keel-spring 0.2; los
+  // archivos de la raíz de builds anteriores quedan huérfanos (writer.js nunca
+  // borra): se avisa para limpiarlos a mano.
+  const legacyInfra = ['docker-compose.yaml', 'validate-infra.sh', path.join('docker', 'Dockerfile.devtools')]
+    .filter((file) => fs.existsSync(path.join(projectDir, file)));
+  if (legacyInfra.length > 0) {
+    console.warn(
+      `${pc.yellow('⚠')} La infraestructura de prueba ahora vive en infra/; quedaron archivos de una versión ` +
+        `anterior en la raíz del proyecto (${legacyInfra.join(', ')}): bórralos manualmente.`
+    );
+  }
+
+  // Las guías por tecnología ahora son skills keel-spring-<tech>; los
+  // references/ de builds anteriores quedan huérfanos (writer.js/copyTree
+  // nunca borran): se avisa para limpiarlos a mano.
+  const legacyReferences = [
+    path.join(projectDir, '.claude', 'skills', SKILL, 'references'),
+    path.join(workspace, 'generators', 'spring', 'references')
+  ].filter((refDir) => fs.existsSync(refDir));
+  if (legacyReferences.length > 0) {
+    console.warn(
+      `${pc.yellow('⚠')} Las guías por tecnología ahora son skills (.claude/skills/keel-spring-<tech>/); quedaron ` +
+        `directorios references/ de una versión anterior (${legacyReferences
+          .map((refDir) => path.relative(workspace, refDir).split(path.sep).join('/'))
+          .join(', ')}): bórralos manualmente.`
+    );
+  }
+
+  // Snapshot del diseño dentro del proyecto: junto con .claude/ hace el repo
+  // autosuficiente (quien lo clone finaliza la generación sin el workspace).
+  // Siempre se refresca: el canónico es specs/<servicio> del workspace.
+  const snapshotDir = path.join(projectDir, 'specs');
+  const snapshot = copyTree(dir, snapshotDir, { force: true });
+  console.log(
+    pc.dim(
+      `Snapshot del diseño → ${path.relative(workspace, snapshotDir).split(path.sep).join('/')}/ ` +
+        `(${snapshot.copied.length} archivo(s), refrescado en cada build)`
+    )
+  );
+
   const service = path.relative(workspace, dir).split(path.sep).join('/');
   console.log();
   console.log(pc.bold(pc.green('✔ Scaffolding generado.')) + pc.dim(` — ${manifest.service?.name} v${manifest.service?.version}`));
-  console.log(`Abre Claude Code y ejecuta ${pc.cyan(`/${SKILL} ${service}`)} para completar adaptadores de infraestructura, lógica de negocio y tests.`);
+  console.log(`Abre Claude Code y ejecuta ${pc.cyan(`/${SKILL} ${service}`)} para orquestar el completado: código + infraestructura en paralelo y validación funcional al final.`);
 }

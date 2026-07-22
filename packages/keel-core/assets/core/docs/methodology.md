@@ -98,7 +98,7 @@ El flujo asume regeneración completa: el proyecto generado se puede borrar y vo
 
 ## Añadir una tecnología nueva
 
-Cada tecnología es un generador con paquete npm y CLI propios — `npm i -g keel-<tech>` y `keel-<tech> build specs/<servicio>` lo instalan en el workspace (los conocidos: `keel list`) —: su contrato (README), su skill de generación, sus conventions (tabla de mapeo spec → código), sus referencias por tecnología del stack (`references/`) y su golden example. La receta completa para crear uno está en [building-a-generator.md](building-a-generator.md). El generador es el "template": mejora con cada generación.
+Cada tecnología es un generador con paquete npm y CLI propios — `npm i -g keel-<tech>` y `keel-<tech> build specs/<servicio>` lo instalan en el workspace (los conocidos: `keel list`) —: su contrato (README), su skill de generación, sus conventions (tabla de mapeo spec → código), sus skills por tecnología del stack (`skills/`, instaladas condicionalmente en el proyecto generado) y su golden example. La receta completa para crear uno está en [building-a-generator.md](building-a-generator.md). El generador es el "template": mejora con cada generación.
 
 ## Estado actual y fases
 

@@ -1,8 +1,9 @@
-// docker-compose.yaml de infraestructura de prueba: solo los contenedores que
-// el diseño + stack elegido necesitan (BD, broker, Keycloak/Cognito, cache,
-// storage) más un contenedor `devtools` con las CLIs para validarlos. Se genera
-// únicamente si hay al menos un servicio; se ensambla como objeto JS y se
-// serializa con yaml (mismo patrón de merge del proyecto de referencia).
+// Infraestructura de prueba del proyecto generado, agrupada bajo `infra/`:
+// docker-compose.yaml con solo los contenedores que el diseño + stack elegido
+// necesitan (BD, broker, Keycloak/Cognito, cache, storage) más un contenedor
+// `devtools` con las CLIs para validarlos y el script `validate-infra.sh`.
+// Se genera únicamente si hay al menos un servicio; se ensambla como objeto JS
+// y se serializa con yaml (mismo patrón de merge del proyecto de referencia).
 
 import YAML from 'yaml';
 import { DATABASES, BROKERS, AUTH, CACHES, STORAGE, selectedInfra } from '../lib/stack-catalog.js';
@@ -57,15 +58,15 @@ export function generate(model) {
   };
 
   const header = '# Infraestructura de prueba generada por keel-spring (según keel-stack.json).\n';
-  const files = [{ path: 'docker-compose.yaml', content: header + YAML.stringify(compose, { nullStr: '' }) }];
+  const files = [{ path: 'infra/docker-compose.yaml', content: header + YAML.stringify(compose, { nullStr: '' }) }];
 
   if (needsDevtools(selected)) {
-    files.push({ path: 'docker/Dockerfile.devtools', content: dockerfileDevtools(selected) });
+    files.push({ path: 'infra/docker/Dockerfile.devtools', content: dockerfileDevtools(selected) });
   }
   // El script de validación existe siempre que haya algo que sondear (incluye el
   // caso 'dbcontainer', p. ej. Oracle, que no necesita devtools).
   if (selected.some((s) => s.entry.cliValidateCmd)) {
-    files.push({ path: 'validate-infra.sh', content: validateInfraScript(selected, service) });
+    files.push({ path: 'infra/validate-infra.sh', content: validateInfraScript(selected, service) });
   }
 
   return files;

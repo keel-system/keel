@@ -1,20 +1,23 @@
 # Validación de infraestructura vía `devtools`
 
 Guía para el agente: cómo comprobar mecánicamente que la infraestructura de prueba
-(la del `docker-compose.yaml` generado) responde, usando el contenedor `devtools`.
-Hazlo en la verificación funcional (`/keel-generate-spring`, paso 5), **después** de
-`docker compose up -d` y **antes** de ejercitar los escenarios: si la infra no está
-lista, un escenario que falle no distingue bug de dependencia caída.
+(la de `infra/docker-compose.yaml` generado) responde, usando el contenedor `devtools`.
+Es el trabajo del agente `keel-spring-infra` (fase de infraestructura de la
+orquestación de `/keel-generate-spring`), **después** de levantar el compose y
+**antes** de que se ejerciten los escenarios: si la infra no está lista, un
+escenario que falle no distingue bug de dependencia caída.
 
 ## Camino rápido
 
+Desde la raíz del proyecto (con podman, exporta `CONTAINER_RUNTIME=podman` y usa
+`podman compose`):
+
 ```bash
-docker compose up -d          # levanta BD/broker/cache/storage/auth + devtools
-chmod +x validate-infra.sh    # una vez (Windows: bash validate-infra.sh)
-./validate-infra.sh           # un check por tecnología del stack; sale != 0 si algo falla
+docker compose -f infra/docker-compose.yaml up -d   # levanta BD/broker/cache/storage/auth + devtools
+bash infra/validate-infra.sh                        # un check por tecnología del stack; sale != 0 si algo falla
 ```
 
-`validate-infra.sh` ejecuta, por cada tecnología elegida en `keel-stack.json`, su
+`infra/validate-infra.sh` ejecuta, por cada tecnología elegida en `keel-stack.json`, su
 comando de sondeo dentro del contenedor que corresponde. Si todo responde, imprime
 `Infraestructura OK.`; si no, lista los `FALLO` y sale con `1`.
 
@@ -43,7 +46,7 @@ docker exec <servicio>-devtools <cli> <args>
 | Keycloak | `keycloak` | `curl -sf http://keycloak:8080/realms/master` |
 | Cognito | `cognito` | `curl -sf http://cognito:9229/health` |
 
-Las credenciales concretas son las del `docker-compose.yaml` (usuario = nombre del
+Las credenciales concretas son las de `infra/docker-compose.yaml` (usuario = nombre del
 servicio con guiones bajos, password `changeme` para las BD abiertas; `sa` /
 `Str0ng_Passw0rd1` para SQL Server; `minioadmin`/`guest` en storage/broker).
 

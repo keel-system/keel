@@ -58,7 +58,7 @@ keel-spring build specs/mi-servicio      # instala la skill, valida, pregunta el
 | `keel new <servicio>` | Crea `specs/<servicio>/` con manifiesto + capas obligatorias desde plantillas. |
 | `keel list` | Lista los generadores conocidos y su paquete npm. |
 | `keel validate <ruta>` | Valida un servicio (directorio o manifiesto): schema de cada capa + referencias cruzadas entre artefactos (offline, con todos los errores). |
-| `keel-spring build <ruta> [--force] [--defaults]` | Instala el generador Spring Boot en el workspace (skill + conventions + references + golden), comprueba la compatibilidad DSL, valida el diseño, pregunta el stack (persistido en `keel-stack.json`) y genera el scaffolding transversal en `services/<servicio>-spring/`. |
+| `keel-spring build <ruta> [--force] [--defaults]` | Instala el generador Spring Boot en el workspace (skill + conventions + skills por tecnología + golden), comprueba la compatibilidad DSL, valida el diseño, pregunta el stack (persistido en `keel-stack.json`) y genera el scaffolding transversal en `services/<servicio>-spring/`. |
 
 ## El workspace sembrado
 
@@ -75,7 +75,7 @@ mi-proyecto/
 │   └── *.keel.yaml           #   api, security, messaging, http-clients, persistence (opcionales)
 ├── templates/service/        # una plantilla por capa
 ├── docs/                     # methodology, dsl-reference (índice), dsl/<capa>.md, building-a-generator
-├── generators/<tech>/        # generadores instalados con `keel-<tech> build` (conventions + references + golden)
+├── generators/<tech>/        # generadores instalados con `keel-<tech> build` (conventions + skills por tecnología + golden)
 └── services/                 # servicios generados (un repo git propio cada uno)
 ```
 
@@ -94,7 +94,7 @@ keel/
     │   └── assets/core/          # lo que `keel init` siembra (skills, schemas, plantillas, docs)
     └── keel-spring/              # generador Spring Boot
         ├── src/                  # CLI: comando build + scaffolding transversal (src/scaffold, src/lib)
-        └── assets/               # lo que `keel-spring build` instala (skill + conventions + references + golden)
+        └── assets/               # lo que `keel-spring build` instala (skill + conventions + skills por tecnología + golden)
 ```
 
 Los assets **son** la metodología: el DSL se documenta en `packages/keel-core/assets/core/docs/dsl-reference.md`, el schema vive en `packages/keel-core/assets/core/schema/`, y cada generador en su propio paquete `packages/keel-<tech>/`. Para crear un generador nuevo: `packages/keel-core/assets/core/docs/building-a-generator.md`.

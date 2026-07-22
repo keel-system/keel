@@ -1,13 +1,25 @@
+---
+name: keel-spring-s3
+description: Guía de implementación de object storage S3 (MinIO en dev, Amazon S3 en prod, mismo SDK) en un proyecto generado por keel-spring — bean del cliente, adaptador FileStorage y validación. Usar cuando keel-stack.json declara storage "minio" o "s3".
+---
+
 # Object storage S3 (storage: `minio` o `s3`)
 
 MinIO y S3 hablan el mismo protocolo: un único adaptador sirve para dev (MinIO)
 y prod (S3); la diferencia (endpoint / path-style) vive en `storage.yaml` por perfil.
 
+## Antes de empezar
+
+- Aplica solo si `keel-stack.json` declara `"storage": "minio"` o `"storage": "s3"`.
+- Lee `specs/storage.keel.yaml`: buckets, políticas de acceso y validaciones — el diseño es la única fuente de verdad funcional.
+- Sigue estrictamente `.claude/skills/keel-generate-spring/conventions/mapping.md`; la estructura de paquetes está en `conventions/project-layout.md`.
+- **Frontera**: build ya dejó dependencias, config por perfil, compose y el puerto (abajo); esta skill cubre solo el código que depende del SDK S3.
+
 ## Qué dejó listo build
 
 - `build.gradle`: `software.amazon.awssdk:s3` (AWS SDK v2).
 - `parameters/<perfil>/storage.yaml`: provider, endpoint, región, credenciales, bucket y `path-style-access` por perfil (local apunta al MinIO del compose; test trae valores dummy).
-- `docker-compose.yaml`: MinIO (9000 + consola 9001, minioadmin/minioadmin) — solo con `storage: minio`.
+- `infra/docker-compose.yaml`: MinIO (9000 + consola 9001, minioadmin/minioadmin) — solo con `storage: minio`.
 - Puerto `FileStorage` en `domain/storage` (upload/download/delete/signedUrl).
 
 ## Bean del cliente (`infrastructure/configurations/storage/S3Config`)
@@ -55,4 +67,5 @@ antes de subir (error de negocio, no excepción genérica).
 ## Validación
 
 Desde devtools: `mc alias set local http://minio:9000 minioadmin minioadmin && mc ready local`;
-`mc ls local/<bucket>` para inspeccionar objetos subidos. Ver `conventions/infra-validation.md`.
+`mc ls local/<bucket>` para inspeccionar objetos subidos.
+Recetas completas en `.claude/skills/keel-generate-spring/conventions/infra-validation.md`.

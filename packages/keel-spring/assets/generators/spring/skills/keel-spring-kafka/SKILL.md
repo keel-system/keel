@@ -1,10 +1,22 @@
+---
+name: keel-spring-kafka
+description: Guía de implementación de mensajería con Apache Kafka en un proyecto generado por keel-spring — publishers reales, listeners de suscripciones y validación del broker. Usar cuando keel-stack.json declara broker "kafka".
+---
+
 # Kafka (broker: `kafka`)
+
+## Antes de empezar
+
+- Aplica solo si `keel-stack.json` declara `"broker": "kafka"`.
+- Lee `specs/messaging.keel.yaml`: eventos, suscripciones, `reliability` y `onFailure` — el diseño es la única fuente de verdad funcional.
+- Sigue estrictamente `.claude/skills/keel-generate-spring/conventions/mapping.md`; la estructura de paquetes está en `conventions/project-layout.md`.
+- **Frontera**: build ya dejó dependencias, config por perfil, compose y contratos (abajo); esta skill cubre solo el código que depende de Kafka.
 
 ## Qué dejó listo build
 
 - `build.gradle`: `spring-kafka` + `spring-kafka-test`.
 - `parameters/<perfil>/kafka.yaml`: bootstrap-servers y serializadores JSON por perfil.
-- `docker-compose.yaml`: Kafka KRaft single-node con doble listener — `localhost:9092` para la app en el host, `kafka:29092` para clientes dentro de la red (devtools).
+- `infra/docker-compose.yaml`: Kafka KRaft single-node con doble listener — `localhost:9092` para la app en el host, `kafka:29092` para clientes dentro de la red (devtools).
 - Contratos: `EventEnvelope`/`EventMetadata`, puerto `<Evento>Publisher` (en `domain/events`) con stub `<Evento>PublisherStub`, record `<Evento>Message` por suscripción.
 
 ## Publisher (sustituye cada `<Evento>PublisherStub`)
@@ -60,4 +72,4 @@ public class StockDepletedListener {
 
 ## Validación
 
-Desde devtools: `kcat -b kafka:29092 -L` (metadata) y `kcat -b kafka:29092 -t <topic> -C -c 1` para inspeccionar eventos publicados. Ver `conventions/infra-validation.md`.
+Desde devtools: `kcat -b kafka:29092 -L` (metadata) y `kcat -b kafka:29092 -t <topic> -C -c 1` para inspeccionar eventos publicados. Recetas completas en `.claude/skills/keel-generate-spring/conventions/infra-validation.md`.

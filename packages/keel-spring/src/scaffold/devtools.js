@@ -50,8 +50,9 @@ export function dockerfileDevtools(selected) {
   return lines.join('\n');
 }
 
-// Servicio `devtools` del docker-compose: se construye desde ./docker, queda vivo
-// con `sleep infinity` y depende de los servicios que va a sondear.
+// Servicio `devtools` del docker-compose: se construye desde ./docker (relativo
+// al propio compose, dentro de infra/), queda vivo con `sleep infinity` y depende
+// de los servicios que va a sondear.
 export function devtoolsService(selected, service) {
   const dependsOn = [...new Set(selected.filter((s) => s.cliVia === 'devtools').map((s) => s.serviceKey))];
   return {
@@ -79,9 +80,9 @@ export function validateInfraScript(selected, service) {
   return `#!/usr/bin/env bash
 # validate-infra.sh — sondea la infraestructura de prueba de ${service.name}.
 # Un check por tecnología elegida en keel-stack.json; ejecuta cada CLI dentro
-# del contenedor devtools (o del propio contenedor de la BD). Uso:
-#   docker compose up -d && ./validate-infra.sh
-# En Windows: bash validate-infra.sh (marca el bit de ejecución con chmod +x).
+# del contenedor devtools (o del propio contenedor de la BD). Uso (desde la raíz
+# del proyecto; con podman, exporta CONTAINER_RUNTIME=podman):
+#   docker compose -f infra/docker-compose.yaml up -d && bash infra/validate-infra.sh
 set -u
 
 RUNTIME="\${CONTAINER_RUNTIME:-}"
@@ -106,7 +107,7 @@ echo "Validando infraestructura vía '$RUNTIME exec'…"
 ${checks.join('\n')}
 
 if [ "$fail" -ne 0 ]; then
-  echo "$fail comprobación(es) fallaron. ¿Está la infraestructura arriba ('$RUNTIME compose up -d') y lista?" >&2
+  echo "$fail comprobación(es) fallaron. ¿Está la infraestructura arriba ('$RUNTIME compose -f infra/docker-compose.yaml up -d') y lista?" >&2
   exit 1
 fi
 echo "Infraestructura OK."

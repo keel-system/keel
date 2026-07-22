@@ -1,10 +1,22 @@
+---
+name: keel-spring-rabbitmq
+description: Guía de implementación de mensajería con RabbitMQ en un proyecto generado por keel-spring — configuración del broker, publishers reales, listeners con DLX/DLQ y validación. Usar cuando keel-stack.json declara broker "rabbitmq".
+---
+
 # RabbitMQ (broker: `rabbitmq`)
+
+## Antes de empezar
+
+- Aplica solo si `keel-stack.json` declara `"broker": "rabbitmq"`.
+- Lee `specs/messaging.keel.yaml`: eventos, suscripciones, `reliability` y `onFailure` — el diseño es la única fuente de verdad funcional.
+- Sigue estrictamente `.claude/skills/keel-generate-spring/conventions/mapping.md`; la estructura de paquetes está en `conventions/project-layout.md`.
+- **Frontera**: build ya dejó dependencias, config por perfil, compose y contratos (abajo); esta skill cubre solo el código que depende de RabbitMQ.
 
 ## Qué dejó listo build
 
 - `build.gradle`: `spring-boot-starter-amqp`.
 - `parameters/<perfil>/rabbitmq.yaml`: host/credenciales por perfil.
-- `docker-compose.yaml`: `rabbitmq:4-management` (5672 + UI 15672, guest/guest).
+- `infra/docker-compose.yaml`: `rabbitmq:4-management` (5672 + UI 15672, guest/guest).
 - Contratos: `EventEnvelope`/`EventMetadata`, puerto `<Evento>Publisher` (en `domain/events`) con stub `<Evento>PublisherStub`, record `<Evento>Message` por suscripción.
 
 ## Configuración del broker (`infrastructure/configurations/broker/RabbitMqConfig`)
@@ -65,4 +77,4 @@ declara la cola con `x-dead-letter-exchange` y limita reintentos (contador en he
 
 Desde devtools: `curl -sf -u guest:guest http://rabbitmq:15672/api/healthchecks/node`;
 la UI de management (localhost:15672) permite inspeccionar exchanges, colas y mensajes.
-Ver `conventions/infra-validation.md`.
+Recetas completas en `.claude/skills/keel-generate-spring/conventions/infra-validation.md`.

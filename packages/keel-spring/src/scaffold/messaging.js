@@ -5,7 +5,7 @@
 // un stub transversal que permite arrancar el contexto sin broker, y el record
 // del payload de cada suscripción (contrato de la fuente). La implementación
 // real de publishers y listeners depende del broker elegido (keel-stack.json)
-// y la escribe el agente siguiendo generators/spring/references/<broker>.md.
+// y la escribe el agente siguiendo la skill .claude/skills/keel-spring-<broker>/.
 
 import { javaFile, javaPath, subPackage } from './render.js';
 
@@ -103,7 +103,7 @@ public class ${stubClass} implements ${event.publisherClass} {
     @Override
     public void publish(${event.className} event, String correlationId) {
         // TODO (agente): sustituir este stub por el publisher real del broker
-        //   elegido en keel-stack.json (ver generators/spring/references/):
+        //   elegido en keel-stack.json (skill .claude/skills/keel-spring-<broker>/):
         //   envolver con EventEnvelope.of("${event.name}", event, correlationId),
         //   publicar en el canal declarado y aplicar la reliability del diseño
         //   (outbox / after-commit).
@@ -123,7 +123,7 @@ public class ${stubClass} implements ${event.publisherClass} {
 
 // Record del payload esperado del evento suscrito (contrato de la fuente).
 // El listener que lo consume depende del broker: lo escribe el agente
-// (generators/spring/references/<broker>.md) despachando la operación
+// (skill .claude/skills/keel-spring-<broker>/) despachando la operación
 // 'triggers' vía UseCaseMediator.
 function renderSubscriptionMessage(model, sub) {
   const imports = new Set();

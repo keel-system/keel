@@ -83,7 +83,7 @@ Sin esta capa, no se incluye Spring Security. **Esta capa la materializa entera 
 
 ## `messaging` — messaging.keel.yaml
 
-El scaffolding genera lo transversal al broker: el contrato `EventEnvelope`/`EventMetadata`, por evento el record `EEvent` + el **puerto** `EPublisher` (interfaz en `domain/events`, inyectada por los handlers con `emits`) con su stub `EPublisherStub`, y por suscripción el record `<E>Message`. El agente escribe, siguiendo `references/<broker>.md`: la implementación de cada publisher (sustituye el stub) con la `reliability` declarada, la config del broker si aplica, y el `<E>Listener` (binding al canal + política `onFailure` + dispatch de `triggers` vía mediator).
+El scaffolding genera lo transversal al broker: el contrato `EventEnvelope`/`EventMetadata`, por evento el record `EEvent` + el **puerto** `EPublisher` (interfaz en `domain/events`, inyectada por los handlers con `emits`) con su stub `EPublisherStub`, y por suscripción el record `<E>Message`. El agente escribe, siguiendo la skill `keel-spring-<broker>` (`.claude/skills/keel-spring-<broker>/SKILL.md`): la implementación de cada publisher (sustituye el stub) con la `reliability` declarada, la config del broker si aplica, y el `<E>Listener` (binding al canal + política `onFailure` + dispatch de `triggers` vía mediator).
 
 | Diseño | Código |
 |--------|--------|
@@ -121,11 +121,11 @@ Sin esta capa (servicio sin estado propio), no se incluye JPA ni base de datos.
 
 ## `storage` — storage.keel.yaml
 
-Sin esta capa (servicio que no maneja archivos), no se incluye SDK de object storage ni adaptador. El scaffolding determinista genera la dependencia Gradle (`software.amazon.awssdk:s3`), el servicio MinIO en el `docker-compose.yaml` (con MinIO), el fragmento de configuración `parameters/<perfil>/storage.yaml` (clave `storage`: `provider`, `bucket`, `endpoint`, `region`, `access-key`, `secret-key`, `path-style-access`) y el **puerto `FileStorage`**. El agente escribe el adaptador completo siguiendo `references/s3.md` (bean `S3Client` + `S3FileStorage`, incluida `signedUrl`) más la política de negocio: validación de content-type/tamaño según los `buckets`.
+Sin esta capa (servicio que no maneja archivos), no se incluye SDK de object storage ni adaptador. El scaffolding determinista genera la dependencia Gradle (`software.amazon.awssdk:s3`), el servicio MinIO en el `infra/docker-compose.yaml` (con MinIO), el fragmento de configuración `parameters/<perfil>/storage.yaml` (clave `storage`: `provider`, `bucket`, `endpoint`, `region`, `access-key`, `secret-key`, `path-style-access`) y el **puerto `FileStorage`**. El agente escribe el adaptador completo siguiendo la skill `keel-spring-s3` (`.claude/skills/keel-spring-s3/SKILL.md`; bean `S3Client` + `S3FileStorage`, incluida `signedUrl`) más la política de negocio: validación de content-type/tamaño según los `buckets`.
 
 | Diseño | Código |
 |--------|--------|
-| capa `storage` presente | Puerto `domain/storage/FileStorage` (interface: `upload`, `download`, `delete`, `signedUrl`) — scaffolding. Adaptador `infrastructure/storage/S3FileStorage` + `infrastructure/configurations/storage/S3Config` (bean `S3Client`, AWS SDK v2, sirve para MinIO y S3, configurado desde la clave `storage` de los perfiles) — agente, según `references/s3.md` |
+| capa `storage` presente | Puerto `domain/storage/FileStorage` (interface: `upload`, `download`, `delete`, `signedUrl`) — scaffolding. Adaptador `infrastructure/storage/S3FileStorage` + `infrastructure/configurations/storage/S3Config` (bean `S3Client`, AWS SDK v2, sirve para MinIO y S3, configurado desde la clave `storage` de los perfiles) — agente, según la skill `keel-spring-s3` |
 | `buckets.B` | Un bucket físico por bucket lógico (nombre derivado de `B`, prefijado por servicio/entorno para evitar colisiones); el adaptador lo crea/valida al arrancar en local |
 | `buckets.B.allowedContentTypes` | Validación de content-type en la subida antes de tocar el storage → error `UNSUPPORTED_CONTENT_TYPE` (declararlo en use-cases) |
 | `buckets.B.maxSizeMb` | Límite de tamaño en la subida (multipart) → error `FILE_TOO_LARGE`; refuerza también `spring.servlet.multipart.max-file-size` |

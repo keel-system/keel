@@ -190,9 +190,80 @@ test('scaffoldService genera el proyecto completo con contenido clave', () => {
   assert.ok(appTests.includes('void contextLoads()'));
 
   // Infraestructura de prueba: compose con la BD por defecto.
-  const compose = read(workspace, 'docker-compose.yaml');
+  const compose = read(workspace, 'infra/docker-compose.yaml');
   assert.ok(compose.includes('postgres:16-alpine'));
   assert.ok(!compose.includes('kafka')); // sin capa messaging
+});
+
+test('CLAUDE.md contextual: specs, solo capas declaradas y skill local con conventions', () => {
+  const workspace = makeWorkspace();
+  scaffoldService({ ...loadFixture(), workspace });
+
+  const claude = read(workspace, 'CLAUDE.md');
+  assert.ok(claude.includes('specs/service.keel.yaml')); // snapshot local del diseño
+  assert.ok(claude.includes('../../specs/product-catalog/')); // canónico del workspace
+  assert.ok(claude.includes('persistence.keel.yaml'));
+  assert.ok(!claude.includes('messaging.keel.yaml')); // capa no declarada en el fixture
+  assert.ok(claude.includes('validation-scenarios.md'));
+  assert.ok(claude.includes('grep -rn "TODO" src'));
+  assert.ok(claude.includes('keel-stack.json'));
+  assert.ok(claude.includes('infra/docker-compose.yaml')); // la infraestructura de prueba vive en infra/
+  assert.ok(claude.includes('keel-spring-code')); // la skill orquesta los subagentes
+
+  // Skill propia del proyecto que apunta al CLAUDE.md como proceso y orquesta
+  // los subagentes de .claude/agents/.
+  const skill = read(workspace, '.claude/skills/keel-generate-spring/SKILL.md');
+  assert.ok(skill.includes('name: keel-generate-spring'));
+  assert.ok(skill.includes('CLAUDE.md'));
+  assert.ok(skill.includes('autosuficiente'));
+  assert.ok(skill.includes('keel-spring-code'));
+  assert.ok(skill.includes('keel-spring-infra'));
+  assert.ok(skill.includes('keel-spring-validate'));
+
+  // Conventions siempre; el fixture no elige broker/auth/cache/storage → sin
+  // skills por tecnología: en .claude/skills/ solo queda la orquestadora.
+  assert.ok(exists(workspace, '.claude/skills/keel-generate-spring/conventions/mapping.md'));
+  assert.ok(exists(workspace, '.claude/skills/keel-generate-spring/conventions/project-layout.md'));
+  assert.ok(exists(workspace, '.claude/skills/keel-generate-spring/conventions/infra-validation.md'));
+  assert.ok(!exists(workspace, '.claude/skills/keel-generate-spring/references'));
+  const skillDirs = fs.readdirSync(path.join(workspace, 'services', 'product-catalog-spring', '.claude', 'skills'));
+  assert.deepEqual(skillDirs, ['keel-generate-spring']);
+});
+
+test('agentes de la orquestación: copiados al .claude/agents/ del proyecto', () => {
+  const workspace = makeWorkspace();
+  scaffoldService({ ...loadFixture(), workspace });
+
+  for (const [name, marker] of [
+    ['keel-spring-code', 'gradlew test'],
+    ['keel-spring-infra', 'infra/docker-compose.yaml'],
+    ['keel-spring-validate', 'validation-scenarios.md']
+  ]) {
+    const agent = read(workspace, `.claude/agents/${name}.md`);
+    assert.ok(agent.includes(`name: ${name}`));
+    assert.ok(agent.includes(marker));
+  }
+});
+
+test('skills por tecnología: solo las del stack elegido', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const patched = structuredClone(layers);
+  patched.messaging = { publishing: { reliability: 'best-effort', events: { ProductCreated: { payload: { entity: 'Product' } } } } };
+  const patchedManifest = structuredClone(manifest);
+  patchedManifest.layers.messaging = 'messaging.keel.yaml';
+
+  scaffoldService({ manifest: patchedManifest, layers: patched, workspace, stack: { broker: 'rabbitmq' } });
+
+  assert.ok(exists(workspace, '.claude/skills/keel-spring-rabbitmq/SKILL.md'));
+  assert.ok(!exists(workspace, '.claude/skills/keel-spring-kafka'));
+  assert.ok(!exists(workspace, '.claude/skills/keel-spring-s3'));
+  const rabbitSkill = read(workspace, '.claude/skills/keel-spring-rabbitmq/SKILL.md');
+  assert.ok(rabbitSkill.includes('name: keel-spring-rabbitmq'));
+
+  const claude = read(workspace, 'CLAUDE.md');
+  assert.ok(claude.includes('messaging.keel.yaml'));
+  assert.ok(claude.includes('.claude/skills/keel-spring-rabbitmq/SKILL.md'));
 });
 
 test('stack elegido (mysql + rabbitmq) parametriza gradle, yaml y compose', () => {
@@ -243,7 +314,7 @@ test('stack elegido (mysql + rabbitmq) parametriza gradle, yaml y compose', () =
   assert.ok(!exists(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/configurations/broker/RabbitMqConfig.java'));
   assert.ok(!exists(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/ProductCreatedPublisher.java'));
 
-  const compose = read(workspace, 'docker-compose.yaml');
+  const compose = read(workspace, 'infra/docker-compose.yaml');
   assert.ok(compose.includes('mysql:8.0'));
   assert.ok(compose.includes('rabbitmq:4-management'));
 });
@@ -259,18 +330,18 @@ test('devtools: compose trae el toolbox + Dockerfile + validate-infra.sh con las
   // Stack por defecto: postgres + kafka → ambas CLIs viven en devtools.
   scaffoldService({ manifest: patchedManifest, layers: patched, workspace });
 
-  const compose = read(workspace, 'docker-compose.yaml');
+  const compose = read(workspace, 'infra/docker-compose.yaml');
   assert.ok(compose.includes('product-catalog-devtools')); // container_name determinista
   assert.ok(compose.includes('Dockerfile.devtools'));
   assert.ok(compose.includes('kafka:29092')); // listener interno para clientes en red
 
-  const dockerfile = read(workspace, 'docker/Dockerfile.devtools');
+  const dockerfile = read(workspace, 'infra/docker/Dockerfile.devtools');
   assert.ok(dockerfile.includes('FROM alpine:3.20'));
   assert.ok(dockerfile.includes('postgresql-client')); // BD por defecto
   assert.ok(dockerfile.includes('kcat')); // broker kafka
   assert.ok(!dockerfile.includes('mysql-client')); // solo las CLIs del stack elegido
 
-  const script = read(workspace, 'validate-infra.sh');
+  const script = read(workspace, 'infra/validate-infra.sh');
   assert.ok(script.startsWith('#!/usr/bin/env bash'));
   assert.ok(script.includes('psql -h db')); // check de la BD
   assert.ok(script.includes('kcat -b kafka:29092')); // check del broker
@@ -289,9 +360,9 @@ test('h2 como BD elegida: sin contenedor de BD ni devtools, pero con dependencia
   });
 
   // H2 es en memoria: el fixture no tiene más infra → no hay compose ni toolbox.
-  assert.ok(!copied.includes('docker-compose.yaml'));
+  assert.ok(!copied.includes('infra/docker-compose.yaml'));
   assert.ok(!copied.some((f) => f.includes('Dockerfile.devtools')));
-  assert.ok(!copied.includes('validate-infra.sh'));
+  assert.ok(!copied.includes('infra/validate-infra.sh'));
 
   assert.ok(read(workspace, 'build.gradle').includes("runtimeOnly 'com.h2database:h2'"));
 });
@@ -311,7 +382,7 @@ test('capa storage: gradle con SDK S3, compose con MinIO y fragmento de config p
   const buildGradle = read(workspace, 'build.gradle');
   assert.ok(buildGradle.includes('software.amazon.awssdk:s3'));
 
-  const compose = read(workspace, 'docker-compose.yaml');
+  const compose = read(workspace, 'infra/docker-compose.yaml');
   assert.ok(compose.includes('minio/minio'));
   assert.ok(compose.includes('minio-data')); // volumen persistente registrado
 
@@ -363,7 +434,7 @@ test('storage con s3 elegido: mismo SDK pero sin contenedor MinIO en el compose'
   assert.equal(stack.storage, 's3');
 
   assert.ok(read(workspace, 'build.gradle').includes('software.amazon.awssdk:s3'));
-  const compose = read(workspace, 'docker-compose.yaml'); // existe por la BD del fixture
+  const compose = read(workspace, 'infra/docker-compose.yaml'); // existe por la BD del fixture
   assert.ok(!compose.includes('minio'));
   const localStorage = read(workspace, 'src/main/resources/parameters/local/storage.yaml');
   assert.ok(localStorage.includes('provider: s3'));
@@ -414,6 +485,8 @@ test('capa security (oidc): SecurityFilterChain con matchers por ruta + JwtAuthC
   assert.ok(buildGradle.includes('spring-boot-starter-security'));
   assert.ok(buildGradle.includes('spring-boot-starter-oauth2-resource-server'));
   assert.ok(read(workspace, 'src/main/resources/parameters/local/oauth2.yaml').includes('issuer-uri'));
+  assert.ok(exists(workspace, '.claude/skills/keel-spring-keycloak/SKILL.md')); // skill del auth elegido
+
 });
 
 test('capa security (api-key): filtro propio sin resource server ni fragmento oauth2', () => {
@@ -630,7 +703,7 @@ test('sin capa persistence: POJOs sin JPA, sin repositorio ni datasource', () =>
   assert.ok(!buildGradle.includes('data-jpa'));
 
   // Sin persistence/messaging/cache no hay contenedores → sin compose.
-  assert.ok(!copied.includes('docker-compose.yaml'));
+  assert.ok(!copied.includes('infra/docker-compose.yaml'));
 
   const money = read(workspace, 'src/main/java/com/commerce/productcatalog/domain/valueobject/Money.java');
   assert.ok(money.includes('public record Money('));

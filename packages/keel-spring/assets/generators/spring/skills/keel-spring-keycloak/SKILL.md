@@ -1,3 +1,8 @@
+---
+name: keel-spring-keycloak
+description: Guía de autenticación OIDC con Keycloak en un proyecto generado por keel-spring — realm de prueba, obtención de tokens y verificación del mapeo de roles; el código de seguridad ya lo genera build. Usar cuando keel-stack.json declara auth "keycloak".
+---
+
 # Keycloak (auth: `keycloak`)
 
 La capa `security` sale **completa** de build (código transversal al proveedor):
@@ -5,10 +10,17 @@ La capa `security` sale **completa** de build (código transversal al proveedor)
 server JWT y `JwtAuthConverter` que mapea los claims anidados de Keycloak
 (`realm_access.roles` / `resource_access`) a authorities. **No reescribas ese código.**
 
+## Antes de empezar
+
+- Aplica solo si `keel-stack.json` declara `"auth": "keycloak"`.
+- Lee `specs/security.keel.yaml`: roles y `access.rules` — el diseño es la única fuente de verdad funcional.
+- Sigue estrictamente `.claude/skills/keel-generate-spring/conventions/mapping.md`.
+- **Frontera**: build ya dejó el código de seguridad, la config por perfil y el compose; esta skill cubre solo preparación de entorno y validación.
+
 ## Qué dejó listo build
 
 - `parameters/<perfil>/oauth2.yaml`: `issuer-uri` por perfil (local apunta al contenedor).
-- `docker-compose.yaml`: `keycloak` en `start-dev` (host `localhost:8180`, admin/admin).
+- `infra/docker-compose.yaml`: `keycloak` en `start-dev` (host `localhost:8180`, admin/admin).
 
 ## Qué hace el agente
 
@@ -29,4 +41,5 @@ diseño exija lógica que el mapeo de claims no cubre — p. ej. autorización p
 ## Validación
 
 Sondeo desde devtools: `curl -sf http://keycloak:8080/realms/master`.
-Recetas completas (incluida la obtención de tokens) en `conventions/infra-validation.md`.
+Recetas completas (incluida la obtención de tokens) en
+`.claude/skills/keel-generate-spring/conventions/infra-validation.md`.

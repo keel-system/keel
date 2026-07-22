@@ -1,10 +1,22 @@
+---
+name: keel-spring-snssqs
+description: Guía de implementación de mensajería con Amazon SNS/SQS (LocalStack en local) en un proyecto generado por keel-spring — publishers con SnsTemplate, listeners SQS con redrive policy y validación. Usar cuando keel-stack.json declara broker "snssqs".
+---
+
 # Amazon SNS/SQS (broker: `snssqs`)
+
+## Antes de empezar
+
+- Aplica solo si `keel-stack.json` declara `"broker": "snssqs"`.
+- Lee `specs/messaging.keel.yaml`: eventos, suscripciones, `reliability` y `onFailure` — el diseño es la única fuente de verdad funcional.
+- Sigue estrictamente `.claude/skills/keel-generate-spring/conventions/mapping.md`; la estructura de paquetes está en `conventions/project-layout.md`.
+- **Frontera**: build ya dejó dependencias, config por perfil, compose y contratos (abajo); esta skill cubre solo el código que depende de SNS/SQS.
 
 ## Qué dejó listo build
 
 - `build.gradle`: BOM `spring-cloud-aws-dependencies` + starters SNS y SQS (mismo SDK contra LocalStack y AWS real).
 - `parameters/<perfil>/snssqs.yaml`: endpoint/región/credenciales por perfil (LocalStack en local).
-- `docker-compose.yaml`: `localstack` (puerto 4566, servicios sns+sqs).
+- `infra/docker-compose.yaml`: `localstack` (puerto 4566, servicios sns+sqs).
 - Contratos: `EventEnvelope`/`EventMetadata`, puerto `<Evento>Publisher` (en `domain/events`) con stub `<Evento>PublisherStub`, record `<Evento>Message` por suscripción.
 
 ## Publisher (sustituye cada `<Evento>PublisherStub`)
@@ -33,4 +45,4 @@ correspondiente de la fuente.
 Desde devtools:
 `aws --endpoint-url http://localstack:4566 --region us-east-1 sns list-topics` y
 `... sqs receive-message --queue-url <url>` para inspeccionar mensajes.
-Ver `conventions/infra-validation.md`.
+Recetas completas en `.claude/skills/keel-generate-spring/conventions/infra-validation.md`.

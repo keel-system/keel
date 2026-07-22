@@ -32,6 +32,8 @@ import * as httpClients from './http-clients.js';
 import * as storage from './storage.js';
 import * as services from './services.js';
 import * as readme from './readme.js';
+import * as claudeMd from './claude-md.js';
+import * as generatorDocs from './generator-docs.js';
 
 const GENERATORS = [
   gradle,
@@ -57,7 +59,9 @@ const GENERATORS = [
   httpClients,
   storage,
   services,
-  readme
+  readme,
+  claudeMd,
+  generatorDocs
 ];
 
 // Normaliza el stack: defaults para lo que el diseño necesita y no fue elegido

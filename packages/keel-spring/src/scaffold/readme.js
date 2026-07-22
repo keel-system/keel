@@ -22,7 +22,7 @@ export function generate(model) {
     '',
     '```bash'
   ];
-  if (infra.length > 0) lines.push('docker compose up -d   # infraestructura de prueba');
+  if (infra.length > 0) lines.push('docker compose -f infra/docker-compose.yaml up -d   # infraestructura de prueba');
   lines.push('./gradlew bootRun', './gradlew test', '```', '', `Requiere Java ${JAVA_VERSION} (el wrapper de Gradle va incluido; en Windows usa \`gradlew.bat\`).`, '');
 
   if (infra.length > 0) {
@@ -49,20 +49,15 @@ export function generate(model) {
     lines.push(
       '## Validación de infraestructura',
       '',
-      'Antes de ejercitar los escenarios funcionales, levanta y sondea la infraestructura:',
+      'Todo lo relativo a la infraestructura de prueba vive en `infra/`. Antes de ejercitar',
+      'los escenarios funcionales, levántala y sondéala (con podman, exporta `CONTAINER_RUNTIME=podman`):',
       '',
       '```bash',
-      'docker compose up -d'
+      'docker compose -f infra/docker-compose.yaml up -d',
+      'bash infra/validate-infra.sh   # un check por tecnología; sale != 0 si algo falla',
+      '```',
+      ''
     );
-    if (hasDevtools) {
-      lines.push(
-        'chmod +x validate-infra.sh   # una vez (en Windows: bash validate-infra.sh)',
-        './validate-infra.sh          # un check por tecnología; sale != 0 si algo falla'
-      );
-    } else {
-      lines.push('bash validate-infra.sh       # un check por tecnología; sale != 0 si algo falla');
-    }
-    lines.push('```', '');
     if (hasDevtools) {
       lines.push(
         `El contenedor \`${service.name}-devtools\` trae solo las CLIs del stack elegido; sondéalas a mano con`,
@@ -93,9 +88,11 @@ export function generate(model) {
     '(entidades `Jpa` con auditoría automática, adaptadores `RepositoryImpl` con mapeo explícito, `UseCaseMediator`',
     'con la frontera transaccional (la capa application no importa Spring: `@ApplicationComponent` propia),',
     '`@LogExceptions` con su aspecto, contratos `EventEnvelope`/`EventMetadata` con puertos `<Evento>Publisher` y stub,',
-    'controllers `V1` con springdoc y `ApiExceptionHandler`), más configuración por perfiles y docker-compose de prueba.',
+    'controllers `V1` con springdoc y `ApiExceptionHandler`), más configuración por perfiles y la infraestructura de prueba en `infra/`.',
     'El código que depende de la infraestructura elegida (publishers/listeners del broker, adaptador de storage)',
-    'lo escribe el agente siguiendo `generators/spring/references/<tech>.md` según `keel-stack.json`.',
+    'lo escribe el agente siguiendo las skills por tecnología `.claude/skills/keel-spring-<tech>/` (instaladas solo las del stack de `keel-stack.json`).',
+    'El punto de entrada para el agente es el `CLAUDE.md` de este proyecto; el repo es autosuficiente: incluye el diseño',
+    '(snapshot en `specs/`), la skill y las guías del stack en `.claude/`.',
     '',
     'Swagger UI (local/develop): http://localhost:8080/swagger-ui.html — deshabilitado en production.',
     '',
@@ -111,10 +108,10 @@ export function generate(model) {
     pendingLayers.push('- `security`: el `SecurityFilterChain` ya está generado; crea el realm en el Keycloak de prueba (http://localhost:8180, admin/admin).');
   }
   if (layersPresent.messaging) {
-    pendingLayers.push('- `messaging`: implementa los publishers reales del broker (sustituyendo cada `<Evento>PublisherStub`, con la `reliability` declarada) y los `<Evento>Listener` de las suscripciones, según `references/<broker>.md`.');
+    pendingLayers.push('- `messaging`: implementa los publishers reales del broker (sustituyendo cada `<Evento>PublisherStub`, con la `reliability` declarada) y los `<Evento>Listener` de las suscripciones, según la skill `.claude/skills/keel-spring-<broker>/`.');
   }
   if (layersPresent.storage) {
-    pendingLayers.push('- `storage`: implementa el adaptador de `FileStorage` (bean del cliente + upload/download/delete/signedUrl) según `references/s3.md`.');
+    pendingLayers.push('- `storage`: implementa el adaptador de `FileStorage` (bean del cliente + upload/download/delete/signedUrl) según la skill `.claude/skills/keel-spring-s3/`.');
   }
   if (layersPresent.httpClients) {
     pendingLayers.push('- `http-clients`: los clientes RestClient resilientes ya están generados; tipa cada `<Llamada>Response` y completa los `*Fallback`.');
