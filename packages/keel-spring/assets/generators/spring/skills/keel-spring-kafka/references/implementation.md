@@ -66,14 +66,33 @@ infinito (el offset nunca avanza). Por eso configuration.md envuelve con
 `DeserializationException` (no reintentable por defecto) y acaba en el DLT con
 el payload crudo para inspección.
 
-## Idempotencia de consumo
+## Correlación e idempotencia en el listener
 
 Kafka es at-least-once: tras un rebalanceo o un crash post-proceso/pre-commit,
-el mensaje se reentrega. Si la operación `triggers` no es naturalmente
-idempotente, deduplica con el `eventId` del `EventEnvelope` (tabla de
-procesados dentro de la transacción del handler, o `SET NX` si hay cache en el
-stack). No dependas de «no suele pasar»: los escenarios de validación con
-reset lo provocan.
+el mensaje se reentrega. No dependas de «no suele pasar»: los escenarios de
+validación con reset lo provocan.
+
+Todo listener sigue el mismo esqueleto, y **ambas piezas ya están generadas**:
+no escribas un mecanismo propio.
+
+1. **Abre la correlación** con
+   `CorrelationContext.runWith(envelope.metadata().correlationId(), () -> { ... })`.
+   Así los eventos que provoque este consumo salen con la correlación del
+   mensaje de origen y el flujo completo se sigue en los logs. `runWith` cierra
+   el contexto pase lo que pase, que es lo que evita que el siguiente mensaje
+   atendido por ese hilo del pool herede una correlación ajena.
+2. **Descarta duplicados** con
+   `idempotencyGuard.tryRecord("<NombreDelListener>", id)`, donde `id` es el
+   `messageId` declarado en la suscripción o, si no lo hay,
+   `envelope.metadata().eventId()`. Si devuelve `false`, confirma el offset y
+   vuelve sin procesar. El guard y su tabla `processed_event` viven en
+   `infrastructure/messaging/idempotency/`.
+3. **Despacha** la operación `triggers` vía `UseCaseMediator`.
+
+Cuándo registrar: si la operación puede fallar de forma transitoria y debe
+reintentarse, llama a `tryRecord` **después** de despachar. Registrar antes
+convierte un fallo pasajero en un mensaje perdido, porque el guard escribe en su
+propia transacción.
 
 ## Observación
 
@@ -90,4 +109,4 @@ reset lo provocan.
 - [ ] Puerto de envío implementado según `reliability` (`OutboxDispatcher` u `<Evento>Publisher`), con su stub eliminado y el fallo propagado (outbox) o registrado (best-effort).
 - [ ] `onFailure` → reintentos acotados + DLT si `deadLetter: true`; errores de negocio excluidos.
 - [ ] `ErrorHandlingDeserializer` configurado (poison pills al DLT, no en bucle).
-- [ ] Consumo idempotente si la operación puede reintentarse.
+- [ ] Listener envuelto en `CorrelationContext.runWith(...)` y deduplicado con `IdempotencyGuard.tryRecord(...)` (sin mecanismo propio).

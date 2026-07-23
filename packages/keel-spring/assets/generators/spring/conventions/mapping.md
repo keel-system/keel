@@ -20,7 +20,7 @@ Buena parte de esta tabla la materializa ya el **scaffolding determinista** de `
 |--------|--------|
 | `entities.X` | Dominio puro `domain/aggregate/X.java` (o `domain/entity/` si es interna) + espejo JPA `infrastructure/persistence/entities/XJpa.java` + puerto `domain/repository/XRepository` con adaptador `XRepositoryImpl` (solo por raíz de agregado, ver abajo) |
 | campo `id: true` | `@Id`; con `generated: true` → generación en el servidor (`UUID.randomUUID()` o equivalente) |
-| campo `unique: true` | constraint única en JPA + verificación explícita en application (para producir el error del diseño, no una excepción de BD) |
+| campo `unique: true` | `@UniqueConstraint(name = "uk_<tabla>_<campo>")` en la entidad JPA (lo genera build) + verificación explícita en application. La verificación produce el error del diseño en el caso normal; la constraint es la garantía real cuando dos peticiones simultáneas compiten, y su violación la traduce al mismo error el mapa `CONSTRAINT_TO_ERROR` del `ApiExceptionHandler` — completa ahí el `// TODO (agente)` con el error declarado |
 | campo `required: true` | `nullable = false` + validación en el DTO de entrada |
 | campo `generated` / `computed` | Lo asigna el servidor (infraestructura / regla de dominio); nunca aparece en DTOs de entrada |
 | campo `sensitive` | Excluido de DTOs de salida y payloads de evento por defecto; solo se expone si un payload lo declara explícitamente |
@@ -90,7 +90,7 @@ Sin esta capa, no se incluye Spring Security. **Esta capa la materializa entera 
 
 ## `messaging` — messaging.keel.yaml
 
-La publicación va **entera generada** salvo el envío físico. La cadena es: el agregado hace `raise(...)` → `XxxRepositoryImpl.save()` drena `pullDomainEvents()` dentro de la transacción → `<Servicio>DomainEventBridge` traduce cada evento de dominio a su `<E>IntegrationEvent` y lo entrega según la `reliability`. El agente solo implementa el puerto de salida (`OutboxDispatcher` con outbox, `<E>Publisher` con best-effort), la config del broker si aplica y el `<E>Listener` de cada suscripción (binding al canal + política `onFailure` + dispatch de `triggers` vía mediator), siguiendo la skill `keel-spring-<broker>` (`.claude/skills/keel-spring-<broker>/SKILL.md`).
+La publicación va **entera generada** salvo el envío físico. La cadena es: el agregado hace `raise(...)` → `XxxRepositoryImpl.save()` drena `pullDomainEvents()` dentro de la transacción → `<Servicio>DomainEventBridge` traduce cada evento de dominio a su `<E>IntegrationEvent` y lo entrega según la `reliability`. El agente solo implementa el puerto de salida (`OutboxDispatcher` con outbox, `<E>Publisher` con best-effort), la config del broker si aplica y el `<E>Listener` de cada suscripción (binding al canal + política `onFailure` + apertura de la correlación + deduplicación con el `IdempotencyGuard` generado + dispatch de `triggers` vía mediator), siguiendo la skill `keel-spring-<broker>` (`.claude/skills/keel-spring-<broker>/SKILL.md`).
 
 | Diseño | Código |
 |--------|--------|
@@ -101,7 +101,9 @@ La publicación va **entera generada** salvo el envío físico. La cadena es: el
 | `subscriptions.E` | Record `<E>Message` (scaffolding) + listener del broker elegido (agente: `@KafkaListener`/`@RabbitListener`/`@SqsListener`) que deserializa el payload y despacha la operación de `triggers` vía mediator |
 | `subscriptions.E.contract.envelope` | `keel` → deserializa `EventEnvelope<EMessage>` y usa `data()`; `none` → el mensaje es el payload; `wrapped` → record `<E>Envelope` (scaffolding) con el payload colgando de `payloadPath` |
 | `subscriptions.E.contract.discriminator` | Filtro del listener: header (`@Header`) o campo del cuerpo; lo que no coincide con `value` se **descarta sin excepción** (una excepción dispararía reintentos y DLQ) |
-| `subscriptions.E.contract.messageId` | Clave de deduplicación leída antes de despachar (header o campo): la entrega es at-least-once |
+| `subscriptions.E.contract.messageId` | Clave de deduplicación leída antes de despachar (header o campo): la entrega es at-least-once. Se pasa a `IdempotencyGuard.tryRecord("<Listener>", <messageId>)`; sin `messageId` declarado, se usa `envelope.metadata().eventId()` |
+| Cualquier `subscriptions` (con capa `persistence`) | Generado: `ProcessedEventJpa` (tabla `processed_event`, PK compuesta handler+evento) + `ProcessedEventJpaRepository` + `IdempotencyGuard` (`tryRecord` en transacción propia, purga por cron) + `@EnableScheduling`, en `infrastructure/messaging/idempotency`. Es el mecanismo de deduplicación del servicio: el agente lo **usa** desde el listener, no escribe otro |
+| `EventEnvelope.metadata.correlationId` | Sale de `CorrelationContext` (`infrastructure/correlation`), que puebla `CorrelationFilter` en cada request HTTP (header `X-Correlation-Id`, generado si no viene, devuelto en la respuesta) y el listener en cada mensaje con `CorrelationContext.runWith(...)`. También llega al `ErrorResponse` y a cada línea de log (`logging.pattern.correlation`) |
 | `subscriptions.E.contract.format` / `schemaRef` | Deserializador del formato (JSON por defecto; avro/protobuf → schema registry de la fuente) |
 | `subscriptions.E.contract.unknownFields` | `ignore` → `@JsonIgnoreProperties(ignoreUnknown = true)` en el record; `fail` → sin la anotación (scaffolding) |
 | `payload.<campo>.wireName` | `@JsonProperty("<wireName>")` en el componente del record (scaffolding); el nombre del DSL se mantiene en Java |
@@ -145,7 +147,7 @@ Sin esta capa (servicio sin estado propio), no se incluye JPA ni base de datos.
 
 ## `storage` — storage.keel.yaml
 
-Sin esta capa (servicio que no maneja archivos), no se incluye SDK de object storage ni adaptador. El scaffolding determinista genera la dependencia Gradle (`software.amazon.awssdk:s3`), el servicio MinIO en el `infra/docker-compose.yaml` (con MinIO), el fragmento de configuración `parameters/<perfil>/storage.yaml` (clave `storage`: `provider`, `bucket`, `endpoint`, `region`, `access-key`, `secret-key`, `path-style-access`) y el **puerto `FileStorage`**. El agente escribe el adaptador completo siguiendo la skill `keel-spring-s3` (`.claude/skills/keel-spring-s3/SKILL.md`; bean `S3Client` + `S3FileStorage`, incluida `signedUrl`) más la política de negocio: validación de content-type/tamaño según los `buckets`.
+Sin esta capa (servicio que no maneja archivos), no se incluye SDK de object storage ni adaptador. El scaffolding determinista genera la dependencia Gradle (`software.amazon.awssdk:s3`), el servicio MinIO en el `infra/docker-compose.yaml` (con MinIO), el fragmento de configuración `parameters/<perfil>/storage.yaml` (clave `storage`: `provider`, `bucket`, `endpoint`, `region`, `access-key`, `secret-key`, `path-style-access`) , el **puerto `FileStorage`** y el value object `StoredObject(storageKey, url, contentType, sizeBytes)` que devuelve `upload` (lo que el agregado guarda; `url` llega null en buckets de URL firmada, que se pide al leer). El agente escribe el adaptador completo siguiendo la skill `keel-spring-s3` (`.claude/skills/keel-spring-s3/SKILL.md`; bean `S3Client` + `S3FileStorage`, incluida `signedUrl`) más la política de negocio: validación de content-type/tamaño según los `buckets`.
 
 | Diseño | Código |
 |--------|--------|

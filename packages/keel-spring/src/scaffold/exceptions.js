@@ -7,6 +7,7 @@
 
 import { javaFile, javaPath, subPackage } from './render.js';
 import { sharedExceptionFor } from '../lib/model.js';
+import { usesCorrelation, correlationImport } from './correlation.js';
 
 const ERRORS_PKG = 'domain.errors';
 
@@ -40,8 +41,13 @@ export function generate(model) {
     path: javaPath(model, 'infrastructure.rest', 'ErrorResponse'),
     content: javaFile(
       subPackage(model, 'infrastructure.rest'),
-      ['com.fasterxml.jackson.annotation.JsonInclude', 'java.time.Instant', 'java.util.List'],
-      errorResponseBody()
+      [
+        'com.fasterxml.jackson.annotation.JsonInclude',
+        'java.time.Instant',
+        'java.util.List',
+        usesCorrelation(model) ? correlationImport(model) : null
+      ],
+      errorResponseBody(model)
     )
   });
 
@@ -172,20 +178,27 @@ public class ${name} extends DomainException {
 }`;
 }
 
-function errorResponseBody() {
+function errorResponseBody(model) {
+  // Con correlación, el body la lleva: es lo que convierte un error que el
+  // usuario reporta en una traza localizable en los logs. Los constructores de
+  // conveniencia la resuelven solos para que ningún handler tenga que pasarla.
+  const correlated = usesCorrelation(model);
+  const component = correlated ? ', String correlationId' : '';
+  const arg = correlated ? ', CorrelationContext.get()' : '';
+
   return `/**
  * Contrato de error de la API: body uniforme para todos los fallos.
  * Los campos nulos no se serializan.
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
-public record ErrorResponse(Instant timestamp, int status, String error, String code, String message, List<String> details) {
+public record ErrorResponse(Instant timestamp, int status, String error, String code, String message, List<String> details${component}) {
 
     public ErrorResponse(int status, String error, String message) {
-        this(Instant.now(), status, error, null, message, null);
+        this(Instant.now(), status, error, null, message, null${arg});
     }
 
     public ErrorResponse(int status, String error, String code, String message, List<String> details) {
-        this(Instant.now(), status, error, code, message, details);
+        this(Instant.now(), status, error, code, message, details${arg});
     }
 }`;
 }

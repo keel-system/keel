@@ -10,6 +10,8 @@ import { javaFile, javaPath, subPackage, javadoc } from './render.js';
 import { messageComponents, returnTypeOf, returnTypeImports, messagePackage } from './services.js';
 import { MEDIATOR_PKG } from './mediator.js';
 import { domainTypeImport } from './entities.js';
+import { uniqueConstraints } from './persistence-entities.js';
+import { screamingSnake } from '../lib/naming.js';
 
 const MAPPING_BY_METHOD = {
   GET: 'GetMapping',
@@ -152,6 +154,89 @@ function renderMethod(model, operation, imports) {
     }`;
 }
 
+// Traducción de una violación de integridad al error de negocio que le
+// corresponde. Las constraints únicas las nombra el scaffolding
+// (persistence-entities.js), así que aquí se sabe qué campo violó cuál: sin
+// esto, dos peticiones simultáneas que compiten por el mismo valor único
+// reciben un 409 anónimo en vez del error declarado del diseño.
+function renderDataIntegrityHandler(model, imports, constantsOut) {
+  imports.add('org.springframework.dao.DataIntegrityViolationException');
+
+  const constraints = uniqueConstraints(model);
+  if (constraints.length === 0) {
+    return `
+    @ResponseStatus(HttpStatus.CONFLICT)
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ErrorResponse onDataIntegrityViolation(DataIntegrityViolationException exception) {
+        return new ErrorResponse(HttpStatus.CONFLICT.value(), "Conflict",
+                "Violación de integridad de datos: alguna restricción no se cumplió");
+    }
+`;
+  }
+
+  imports.add('java.util.Locale');
+  imports.add('java.util.Map');
+  imports.add('java.util.function.Supplier');
+  constantsOut.push(constraintMapConstant(constraints));
+
+  return `
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ErrorResponse> onDataIntegrityViolation(DataIntegrityViolationException exception) {
+        DomainException translated = translateConstraint(exception);
+        if (translated != null) {
+            return onDomainException(translated);
+        }
+        log.warn("Violación de integridad no asociada a ninguna constraint conocida", exception);
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(new ErrorResponse(HttpStatus.CONFLICT.value(),
+                "Conflict", "Violación de integridad de datos: alguna restricción no se cumplió"));
+    }
+
+    /**
+     * Busca el nombre de alguna constraint conocida en el mensaje del driver.
+     * Se mira la causa más específica porque es la que trae el texto del motor;
+     * el mensaje de Spring solo lo envuelve.
+     */
+    private static DomainException translateConstraint(DataIntegrityViolationException exception) {
+        String detail = String.valueOf(exception.getMostSpecificCause().getMessage())
+                .concat(" ")
+                .concat(String.valueOf(exception.getMessage()))
+                .toLowerCase(Locale.ROOT);
+        for (Map.Entry<String, Supplier<DomainException>> candidate : CONSTRAINT_TO_ERROR.entrySet()) {
+            if (detail.contains(candidate.getKey())) {
+                return candidate.getValue().get();
+            }
+        }
+        return null;
+    }
+`;
+}
+
+function constraintMapConstant(constraints) {
+  const entries = constraints
+    .map(({ constraint, entity, fields }) => {
+      const code = `${screamingSnake(entity)}_${screamingSnake(fields.join('_'))}_ALREADY_EXISTS`;
+      const label = fields.join(', ');
+      return `            // TODO (agente): si el diseño declara un error para la unicidad de ${entity}.${label},
+            // sustituye este ConflictException genérico por ese error (p. ej. ${entity}${fields.map(capitalizeFirst).join('')}AlreadyExistsError::new).
+            Map.entry("${constraint}", () -> new ConflictException(
+                    "Ya existe un ${entity} con ese ${label}", "${code}", 409, null))`;
+    })
+    .join(',\n');
+
+  return `
+    /**
+     * Nombre de constraint única → error de negocio que representa violarla.
+     * La clave está en minúsculas: el nombre llega con la caja que le dé el
+     * dialecto y se compara normalizado.
+     */
+    private static final Map<String, Supplier<DomainException>> CONSTRAINT_TO_ERROR = Map.ofEntries(
+${entries});`;
+}
+
+function capitalizeFirst(name) {
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
 // @RestControllerAdvice central: validación, errores de framework, jerarquía
 // DomainException (una respuesta por subclase + genérico con httpStatus de la
 // metadata) y catch-all 500. El body es siempre ErrorResponse (mismo paquete).
@@ -180,24 +265,18 @@ function renderExceptionHandler(model) {
     'org.springframework.web.method.annotation.MethodArgumentTypeMismatchException'
   ]);
 
+  // Las constantes van arriba, junto al logger; los @ExceptionHandler, en su
+  // sección temática más abajo.
+  const constants = [];
   const dataIntegrity = model.layersPresent.persistence
-    ? `
-    @ResponseStatus(HttpStatus.CONFLICT)
-    @ExceptionHandler(DataIntegrityViolationException.class)
-    public ErrorResponse onDataIntegrityViolation(DataIntegrityViolationException exception) {
-        return new ErrorResponse(HttpStatus.CONFLICT.value(), "Conflict",
-                "Violación de integridad de datos: alguna restricción no se cumplió");
-    }
-`
+    ? renderDataIntegrityHandler(model, imports, constants)
     : '';
-  if (model.layersPresent.persistence) {
-    imports.add('org.springframework.dao.DataIntegrityViolationException');
-  }
 
   const body = `@RestControllerAdvice
 public class ApiExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);
+${constants.join('')}
 
     // ── Validación ───────────────────────────────────────────────────────────
 

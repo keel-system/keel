@@ -6,6 +6,8 @@
 
 import { DATABASES } from '../lib/stack-catalog.js';
 import { usesOutbox } from './outbox.js';
+import { usesIdempotency } from './idempotency.js';
+import { usesCorrelation } from './correlation.js';
 
 const PROFILES = ['local', 'develop', 'production'];
 
@@ -58,7 +60,8 @@ export function generate(model) {
     }
     // Enrutado de publicación (destino + clave por evento) y, si el diseño
     // declara reliability: outbox, cadencia del relay y retención de la purga.
-    if (layersPresent.messaging && model.events.length > 0) {
+    // También la purga del registro de idempotencia del lado consumidor.
+    if (layersPresent.messaging && (model.events.length > 0 || usesIdempotency(model))) {
       fragments.push(fragment(profile, 'messaging', messagingYaml(model, profile)));
     }
     if (stack.cache === 'redis' || stack.cache === 'valkey') {
@@ -139,12 +142,19 @@ function profileYaml(profile, fragments) {
 function loggingYaml(model, profile) {
   const root = profile === 'production' ? 'WARN' : 'INFO';
   const app = profile === 'production' ? 'INFO' : 'DEBUG';
-  return [
+  const lines = [
     'logging:',
     '  level:',
     `    root: ${envWithDefault(profile, 'LOG_LEVEL_ROOT', root)}`,
     `    ${model.service.basePackage}: ${envWithDefault(profile, 'LOG_LEVEL_APP', app)}`
-  ].join('\n') + '\n';
+  ];
+  // Saca el correlationId que CorrelationContext deja en el MDC a cada línea de
+  // log: es lo que permite reconstruir una petición completa (y los eventos que
+  // provocó) a partir del identificador que el cliente recibió en la respuesta.
+  if (usesCorrelation(model)) {
+    lines.push('  pattern:', '    correlation: "[%X{correlationId:-}] "');
+  }
+  return lines.join('\n') + '\n';
 }
 
 function dbYaml(model, profile, dbName) {
@@ -222,16 +232,29 @@ function brokerYaml(model, profile) {
 // integración, así que se parametriza (el código solo lee @Value). El nombre
 // físico del exchange/topic puede diferir por ambiente.
 function messagingYaml(model, profile) {
-  const first = model.events[0];
-  const lines = [
-    'messaging:',
-    '  publishing:',
-    `    destination: ${envWithDefault(profile, 'MESSAGING_DESTINATION', first.destinationDefault)}`,
-    '    routing-keys:'
-  ];
-  for (const event of model.events) {
-    const key = event.routingKeyProperty.split('.').pop();
-    lines.push(`      ${key}: ${event.routingKeyDefault}`);
+  const lines = [];
+  if (model.events.length > 0) {
+    const first = model.events[0];
+    lines.push(
+      'messaging:',
+      '  publishing:',
+      `    destination: ${envWithDefault(profile, 'MESSAGING_DESTINATION', first.destinationDefault)}`,
+      '    routing-keys:'
+    );
+    for (const event of model.events) {
+      const key = event.routingKeyProperty.split('.').pop();
+      lines.push(`      ${key}: ${event.routingKeyDefault}`);
+    }
+  }
+  if (usesIdempotency(model)) {
+    lines.push(
+      'processed-event:',
+      '  purge:',
+      '    # Borrado del registro de idempotencia; la retención solo tiene que',
+      '    # cubrir la ventana en la que el broker puede reentregar un mensaje.',
+      `    cron: ${envWithDefault(profile, 'PROCESSED_EVENT_PURGE_CRON', '"0 0 4 * * *"')}`,
+      `    retention-days: ${envWithDefault(profile, 'PROCESSED_EVENT_PURGE_RETENTION_DAYS', 14)}`
+    );
   }
   if (usesOutbox(model)) {
     lines.push(

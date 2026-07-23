@@ -50,6 +50,40 @@ export function jpaMembers(model, entity) {
   return members;
 }
 
+// Campos que llevan constraint única propia: los unique del diseño, salvo el id
+// (ya es clave primaria), los value objects compuestos (no son una sola columna)
+// y los que la clave natural ya cubre por sí sola.
+export function uniqueFields(entity) {
+  const naturalKeyAlone = entity.naturalKey?.length === 1 ? entity.naturalKey[0] : null;
+  return entity.fields.filter(
+    (field) => field.unique && !field.isId && field.kind !== 'composite' && field.name !== naturalKeyAlone
+  );
+}
+
+// Nombre de constraint → entidad y campo que la originan. Lo consume el
+// ApiExceptionHandler para traducir una violación de integridad al error
+// declarado del diseño en vez de a un 409 genérico.
+export function uniqueConstraints(model) {
+  const entries = [];
+  for (const entity of model.entities.filter((e) => e.persisted)) {
+    if (entity.naturalKey?.length > 0) {
+      entries.push({
+        constraint: `uk_${entity.tableName}_natural`,
+        entity: entity.name,
+        fields: entity.naturalKey
+      });
+    }
+    for (const field of uniqueFields(entity)) {
+      entries.push({
+        constraint: `uk_${entity.tableName}_${snakeCase(field.name)}`,
+        entity: entity.name,
+        fields: [field.name]
+      });
+    }
+  }
+  return entries;
+}
+
 export function generate(model) {
   if (!model.layersPresent.persistence) return [];
   return [
@@ -248,11 +282,30 @@ ${accessors.join('\n\n')}
 
 function renderTableAnnotation(entity, imports) {
   const attrs = [`name = "${entity.tableName}"`];
+  const uniqueConstraints = [];
 
   if (entity.naturalKey && entity.naturalKey.length > 0) {
-    imports.add('jakarta.persistence.UniqueConstraint');
     const columns = entity.naturalKey.map((f) => `"${snakeCase(f)}"`).join(', ');
-    attrs.push(`uniqueConstraints = @UniqueConstraint(name = "uk_${entity.tableName}_natural", columnNames = { ${columns} })`);
+    uniqueConstraints.push(`@UniqueConstraint(name = "uk_${entity.tableName}_natural", columnNames = { ${columns} })`);
+  }
+
+  // Un campo unique del diseño es una garantía, no una expectativa: la
+  // comprobación previa en el handler produce el error de negocio en el caso
+  // normal, pero solo la constraint impide que dos peticiones simultáneas la
+  // sorteen. Su violación la traduce al mismo error el ApiExceptionHandler.
+  for (const field of uniqueFields(entity)) {
+    uniqueConstraints.push(
+      `@UniqueConstraint(name = "uk_${entity.tableName}_${snakeCase(field.name)}", columnNames = { "${snakeCase(field.name)}" })`
+    );
+  }
+
+  if (uniqueConstraints.length > 0) {
+    imports.add('jakarta.persistence.UniqueConstraint');
+    attrs.push(
+      uniqueConstraints.length === 1
+        ? `uniqueConstraints = ${uniqueConstraints[0]}`
+        : `uniqueConstraints = {\n        ${uniqueConstraints.join(',\n        ')}\n}`
+    );
   }
   if (entity.indexes.length > 0) {
     imports.add('jakarta.persistence.Index');

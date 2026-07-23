@@ -72,11 +72,25 @@ orden por entidad: topic y cola `.fifo`, publica con `MessageGroupId` = id del
 agregado y `MessageDeduplicationId` = `eventId` del envelope. FIFO limita
 throughput por group — no lo uses «por si acaso».
 
-## Idempotencia de consumo
+## Correlación e idempotencia en el listener
 
-At-least-once siempre (visibility timeout vencido, redrives): deduplica con el
-`eventId` del `EventEnvelope` si la operación no es naturalmente idempotente
-(tabla de procesados o `SET NX` si hay cache en el stack).
+At-least-once siempre (visibility timeout vencido, redrives). Ambas piezas ya
+están generadas; el listener solo las usa, en este orden:
+
+1. `CorrelationContext.runWith(envelope.metadata().correlationId(), () -> { ... })`,
+   para que los eventos que provoque el consumo hereden la correlación del
+   mensaje de origen y el contexto se cierre pase lo que pase: los hilos del
+   pool se reutilizan.
+2. `idempotencyGuard.tryRecord("<NombreDelListener>", id)`, donde `id` es el
+   `messageId` declarado en la suscripción o, si no lo hay,
+   `envelope.metadata().eventId()`. Si devuelve `false`, borra el mensaje de la
+   cola y vuelve sin procesar. El guard y su tabla `processed_event` viven en
+   `infrastructure/messaging/idempotency/`: no escribas otro mecanismo.
+3. Despacho de la operación `triggers` vía `UseCaseMediator`.
+
+Si la operación puede fallar de forma transitoria y debe reintentarse, llama a
+`tryRecord` **después** de despachar: el guard escribe en su propia transacción
+y registrar antes convertiría un fallo pasajero en un mensaje perdido.
 
 ## Checklist
 
@@ -85,4 +99,4 @@ At-least-once siempre (visibility timeout vencido, redrives): deduplica con el
 - [ ] Puerto de envío implementado según `reliability` (`OutboxDispatcher` u `<Evento>Publisher`), con su stub eliminado y el fallo propagado (outbox) o registrado (best-effort).
 - [ ] `onFailure` → `maxReceiveCount` + DLQ según el diseño.
 - [ ] Visibility timeout ≥ 6× el tiempo de proceso del handler.
-- [ ] Consumo idempotente si la operación puede reintentarse.
+- [ ] Listener envuelto en `CorrelationContext.runWith(...)` y deduplicado con `IdempotencyGuard.tryRecord(...)` (sin mecanismo propio).

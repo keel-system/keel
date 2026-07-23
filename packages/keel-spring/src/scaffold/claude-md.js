@@ -72,7 +72,8 @@ export function generate(model) {
         '`<Servicio>DomainEventBridge` los traduce a evento de integración y los entrega. Tú, siguiendo la skill ' +
         `\`${brokerRef}\`, implementas solo el envío al broker (\`OutboxDispatcher\` con \`reliability: outbox\`, ` +
         '`<Evento>Publisher` con `best-effort` — sustituye y elimina su stub), la configuración del broker si aplica y el ' +
-        '`<Evento>Listener` por suscripción (binding, política `onFailure`, despacho vía `UseCaseMediator`).'
+        '`<Evento>Listener` por suscripción (binding, política `onFailure`, apertura de la correlación con ' +
+        '`CorrelationContext.runWith(...)`, deduplicación con el `IdempotencyGuard` ya generado y despacho vía `UseCaseMediator`).'
     );
   }
   if (layersPresent.httpClients) {
@@ -86,8 +87,8 @@ export function generate(model) {
   if (layersPresent.storage) {
     steps.push(
       '**storage** (`specs/storage.keel.yaml`): siguiendo la skill `.claude/skills/keel-spring-s3/SKILL.md`, implementa el bean del cliente y el ' +
-        'adaptador del puerto `FileStorage` (upload/download/delete/signedUrl), con la validación de content-type/tamaño ' +
-        'de los `buckets` del diseño.'
+        'adaptador del puerto `FileStorage` (upload devuelve `StoredObject`; download/delete/signedUrl), con la validación ' +
+        'de content-type/tamaño de los `buckets` del diseño.'
     );
   }
   if (layersPresent.persistence) {

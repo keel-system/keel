@@ -60,6 +60,10 @@ repo generado se clonó suelto). Todo lo que hagas ocurre dentro de esa raíz.
   buffer y un TODO por evento). Un handler no publica eventos ni inyecta publishers, y el bridge,
   el relay y el mapeo domain→integración ya vienen generados: de `messaging` solo escribes el
   puerto de envío del broker (`OutboxDispatcher` o `<Evento>Publisher`) y los listeners.
+- Los listeners **usan** las piezas ya generadas, no las reinventan: abren la correlación con
+  `CorrelationContext.runWith(...)` y deduplican con `IdempotencyGuard.tryRecord(...)`
+  (`infrastructure/messaging/idempotency`). Escribir otra tabla de procesados o un `SET NX`
+  propio para esto es generación incorrecta.
 - Todo identificador que escribas (paquetes, directorios, archivos, clases, métodos,
   variables, tablas) va en inglés; comentarios y docs en español. Un identificador en
   español en el diseño no se traduce por tu cuenta: es un `blocker`.

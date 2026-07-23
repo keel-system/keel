@@ -1,7 +1,8 @@
 # S3/MinIO — patrones de implementación
 
 Complementa el bean y el adaptador del SKILL.md. El puerto `FileStorage`
-(upload/download/delete/signedUrl) ya existe en `domain/storage`.
+(upload/download/delete/signedUrl) y el value object `StoredObject` que devuelve
+`upload` ya existen en `domain/storage`.
 
 ## Claves de objeto
 

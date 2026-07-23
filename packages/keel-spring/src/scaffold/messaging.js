@@ -18,6 +18,7 @@
 import { javaFile, javaPath, subPackage } from './render.js';
 import { domainTypeImport } from './entities.js';
 import { usesOutbox } from './outbox.js';
+import { correlationImport } from './correlation.js';
 
 const MESSAGING_PKG = 'infrastructure.messaging';
 const INTEGRATION_PKG = 'infrastructure.messaging.events';
@@ -104,7 +105,7 @@ public record ${event.integrationClass}(EventMetadata metadata${payloadParams ? 
 //                 un evento de una transacción que revirtió.
 function renderBridge(model, outbox) {
   const imports = new Set([
-    'org.slf4j.MDC',
+    correlationImport(model),
     'org.springframework.beans.factory.annotation.Value',
     'org.springframework.stereotype.Component'
     // EventEnvelope vive en este mismo paquete: no se importa.
@@ -197,7 +198,7 @@ function renderBridgeMethod(event, outbox) {
   return `    /** ${event.name}: evento de dominio → evento de integración. */
     ${listener}
     public void on${event.className}(${event.className} event) {
-        String correlationId = MDC.get("correlationId");
+        String correlationId = CorrelationContext.get();
         ${event.integrationClass} integrationEvent = new ${event.integrationClass}(event.metadata()${args ? `, ${args}` : ''});
         EventEnvelope<${event.integrationClass}> envelope = EventEnvelope.of(event.metadata(), integrationEvent, correlationId);
 ${delivery}

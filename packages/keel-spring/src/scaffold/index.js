@@ -25,8 +25,10 @@ import * as repositories from './repositories.js';
 import * as dtos from './dtos.js';
 import * as mappers from './mappers.js';
 import * as events from './events.js';
+import * as correlation from './correlation.js';
 import * as messaging from './messaging.js';
 import * as outbox from './outbox.js';
+import * as idempotency from './idempotency.js';
 import * as controllers from './controllers.js';
 import * as security from './security.js';
 import * as httpClients from './http-clients.js';
@@ -54,8 +56,10 @@ const GENERATORS = [
   dtos,
   mappers,
   events,
+  correlation,
   messaging,
   outbox,
+  idempotency,
   controllers,
   security,
   httpClients,

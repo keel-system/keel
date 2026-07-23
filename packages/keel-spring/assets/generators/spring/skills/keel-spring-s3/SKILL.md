@@ -20,7 +20,7 @@ y prod (S3); la diferencia (endpoint / path-style) vive en `storage.yaml` por pe
 - `build.gradle`: `software.amazon.awssdk:s3` (AWS SDK v2).
 - `parameters/<perfil>/storage.yaml`: provider, endpoint, región, credenciales, bucket y `path-style-access` por perfil (local apunta al MinIO del compose; test trae valores dummy).
 - `infra/docker-compose.yaml`: MinIO (9000 + consola 9001, minioadmin/minioadmin) — solo con `storage: minio`.
-- Puerto `FileStorage` en `domain/storage` (upload/download/delete/signedUrl).
+- Puerto `FileStorage` en `domain/storage` (upload/download/delete/signedUrl) y el value object `StoredObject` que devuelve `upload`.
 
 ## Bean del cliente (`infrastructure/configurations/storage/S3Config`)
 
@@ -56,10 +56,16 @@ public class S3Config {
 
 `@Component` que implementa `FileStorage` inyectando `S3Client` y `@Value("${storage.bucket}")`:
 
-- `upload` → `s3Client.putObject(PutObjectRequest..., RequestBody.fromBytes(content))`
+- `upload` → `s3Client.putObject(PutObjectRequest..., RequestBody.fromBytes(content))` y devuelve un `StoredObject`
 - `download` → `s3Client.getObjectAsBytes(GetObjectRequest...).asByteArray()`
 - `delete` → `s3Client.deleteObject(DeleteObjectRequest...)`
 - `signedUrl` → `S3Presigner` con la política de expiración del diseño (buckets privados).
+
+`StoredObject(storageKey, url, contentType, sizeBytes)` es lo que el agregado
+guarda; siempre lleva `storageKey`, que es lo que identifica el objeto después.
+El campo `url` depende del bucket: con acceso público, la URL estable del
+objeto; con acceso firmado, **null** — la URL caduca, así que no se persiste y
+se pide al leer con `signedUrl(storageKey)`.
 
 Valida content-type y tamaño según los `buckets` declarados en `storage.keel.yaml`
 antes de subir (error de negocio, no excepción genérica).

@@ -113,7 +113,10 @@ test('scaffoldService genera el proyecto completo con contenido clave', () => {
   assert.ok(invalidTransition.includes('extends ConflictException'));
   assert.ok(invalidTransition.includes('"INVALID_STATE_TRANSITION"'));
   const errorResponse = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/rest/ErrorResponse.java');
-  assert.ok(errorResponse.includes('public record ErrorResponse(Instant timestamp, int status, String error, String code, String message, List<String> details)'));
+  // Con capa api el body de error lleva la correlación: es lo que hace
+  // rastreable en logs el error que un usuario reporta.
+  assert.ok(errorResponse.includes('public record ErrorResponse(Instant timestamp, int status, String error, String code, String message, List<String> details, String correlationId)'));
+  assert.ok(errorResponse.includes('CorrelationContext.get()'));
 
   // Infraestructura del mediator (sin paquete shared) con la frontera transaccional.
   const mediatorFile = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/configurations/usecase/UseCaseMediator.java');
@@ -517,9 +520,13 @@ test('capa storage: gradle con SDK S3, compose con MinIO y fragmento de config p
   // cliente (S3/MinIO) los escribe el agente según el stack.
   const port = read(workspace, 'src/main/java/com/commerce/productcatalog/domain/storage/FileStorage.java');
   assert.ok(port.includes('public interface FileStorage'));
-  assert.ok(port.includes('void upload(String key, byte[] content, String contentType);'));
+  // upload devuelve StoredObject: sin él el agregado no tiene qué persistir.
+  assert.ok(port.includes('StoredObject upload(String key, byte[] content, String contentType);'));
   assert.ok(port.includes('String signedUrl(String key);'));
   assert.ok(!port.includes('org.springframework')); // puerto puro de dominio
+
+  const storedObject = read(workspace, 'src/main/java/com/commerce/productcatalog/domain/storage/StoredObject.java');
+  assert.ok(storedObject.includes('public record StoredObject(String storageKey, URI url, String contentType, Long sizeBytes)'));
 
   assert.ok(!exists(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/configurations/storage/S3Config.java'));
   assert.ok(!exists(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/storage/S3FileStorage.java'));
@@ -1230,4 +1237,120 @@ test('operación sin patrón CRUD ni endpoint explícito cae a POST con aviso', 
   );
   assert.ok(controller.includes('@PostMapping("/reconcile-prices")'));
   assert.ok(controller.includes('// TODO: revisar ruta'));
+});
+
+test('correlación: contexto + filtro HTTP, y el bridge la lee de ahí (no de un MDC vacío)', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const { patched, patchedManifest } = withEvent(layers, manifest, 'best-effort');
+
+  scaffoldService({ manifest: patchedManifest, layers: patched, workspace });
+
+  const contextPath = 'src/main/java/com/commerce/productcatalog/infrastructure/correlation/CorrelationContext.java';
+  const context = read(workspace, contextPath);
+  assert.ok(context.includes('public static void runWith(String correlationId, Runnable action)'));
+  assert.ok(context.includes('MDC.put(MDC_KEY, correlationId);'));
+
+  const filter = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/web/CorrelationFilter.java');
+  assert.ok(filter.includes('extends OncePerRequestFilter'));
+  assert.ok(filter.includes('public static final String HEADER = "X-Correlation-Id";'));
+  assert.ok(filter.includes('CorrelationContext.clear();')); // siempre en finally
+
+  // El bridge toma la correlación del contexto: leer el MDC a pelo daba null
+  // porque nadie lo poblaba.
+  const bridge = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/ProductCatalogDomainEventBridge.java');
+  assert.ok(bridge.includes('String correlationId = CorrelationContext.get();'));
+  assert.ok(!bridge.includes('MDC.get('));
+
+  // Y sale a cada línea de log por el patrón de correlación de Spring Boot.
+  assert.ok(read(workspace, 'src/main/resources/parameters/local/logging.yaml').includes('correlation: "[%X{correlationId:-}] "'));
+});
+
+test('correlación sin capa api: contexto sí, filtro HTTP no', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const { patched, patchedManifest } = withEvent(layers, manifest, 'best-effort');
+  delete patched.api;
+  delete patchedManifest.layers.api;
+
+  scaffoldService({ manifest: patchedManifest, layers: patched, workspace });
+
+  assert.ok(exists(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/correlation/CorrelationContext.java'));
+  // Sin entrada HTTP el filtro no tiene qué interceptar.
+  assert.ok(!exists(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/web/CorrelationFilter.java'));
+});
+
+test('idempotencia de consumo: registro de procesados transversal al broker', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const patchedManifest = structuredClone(manifest);
+  patchedManifest.layers.messaging = 'messaging.keel.yaml';
+  const patched = structuredClone(layers);
+  patched.messaging = {
+    subscriptions: {
+      StockDepleted: {
+        source: 'inventory-service',
+        payload: { productId: { type: 'uuid', required: true } },
+        triggers: 'retireProduct'
+      }
+    }
+  };
+
+  scaffoldService({ manifest: patchedManifest, layers: patched, workspace });
+
+  const dir = 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/idempotency';
+  const entity = read(workspace, `${dir}/ProcessedEventJpa.java`);
+  assert.ok(entity.includes('@Table(name = "processed_event")'));
+  assert.ok(entity.includes('@EmbeddedId'));
+
+  const guard = read(workspace, `${dir}/IdempotencyGuard.java`);
+  assert.ok(guard.includes('@Transactional(propagation = Propagation.REQUIRES_NEW)'));
+  assert.ok(guard.includes('public boolean tryRecord(String handlerId, String eventId)'));
+  // La carrera la arbitra la clave primaria, no el existsById previo.
+  assert.ok(guard.includes('catch (DataIntegrityViolationException duplicate)'));
+  // Nada del broker concreto: quien llama al guard es el listener del agente.
+  for (const ajeno of ['SnsTemplate', 'KafkaTemplate', 'RabbitTemplate']) {
+    assert.ok(!guard.includes(ajeno));
+  }
+
+  assert.ok(read(workspace, `${dir}/ProcessedEventJpaRepository.java`).includes('deleteProcessedBefore'));
+  // La purga es @Scheduled y su retención sale de parameters/, no del código.
+  assert.ok(read(workspace, 'src/main/java/com/commerce/productcatalog/ProductCatalogApplication.java').includes('@EnableScheduling'));
+  assert.ok(read(workspace, 'src/main/resources/parameters/local/messaging.yaml').includes('retention-days: 14'));
+});
+
+test('sin suscripciones no se genera el registro de idempotencia', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const { patched, patchedManifest } = withEvent(layers, manifest, 'outbox');
+
+  scaffoldService({ manifest: patchedManifest, layers: patched, workspace });
+
+  assert.ok(
+    !exists(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/idempotency/IdempotencyGuard.java')
+  );
+});
+
+test('unique: constraint nombrada en la tabla y traducida al error de negocio', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const patched = structuredClone(layers);
+  patched.domain.entities.Product.fields.slug = { type: 'string', required: true, unique: true };
+
+  scaffoldService({ manifest, layers: patched, workspace });
+
+  // La unicidad la garantiza la BD; la comprobación previa del handler solo
+  // produce el error bonito en el caso sin carrera.
+  const productJpa = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/persistence/entities/ProductJpa.java');
+  assert.ok(productJpa.includes('@UniqueConstraint(name = "uk_products_slug", columnNames = { "slug" })'));
+  // sku es la clave natural: ya tiene su constraint, no se duplica.
+  assert.ok(productJpa.includes('uk_products_natural'));
+  assert.ok(!productJpa.includes('uk_products_sku'));
+
+  const handler = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/rest/ApiExceptionHandler.java');
+  assert.ok(handler.includes('CONSTRAINT_TO_ERROR'));
+  assert.ok(handler.includes('Map.entry("uk_products_slug"'));
+  assert.ok(handler.includes('"PRODUCT_SLUG_ALREADY_EXISTS"'));
+  // El diseño no liga campo → code: la asociación exacta la cierra el agente.
+  assert.ok(handler.includes('TODO (agente)'));
 });

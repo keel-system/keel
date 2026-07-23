@@ -53,6 +53,12 @@ public CacheErrorHandler cacheErrorHandler() {
 
 ## Idempotencia (`idempotency` en commands del diseño)
 
+Esta es la idempotencia **del cliente HTTP**: la que evita que reintentar una
+petición ejecute el comando dos veces. No la confundas con la idempotencia de
+**consumo de mensajes**, que ya resuelve `IdempotencyGuard`
+(`infrastructure/messaging/idempotency/`, tabla `processed_event`) y que los
+listeners usan tal cual — no la reimplementes con Redis.
+
 `SET NX EX` atómico sobre la clave derivada de `keySource`:
 
 ```java

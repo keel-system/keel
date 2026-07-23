@@ -84,9 +84,24 @@ entrada de tu cola, no el tamaño de la lista.
 - Errores de **conversión** (JSON malformado, tipo desconocido) son fatales por
   defecto (`ConditionalRejectingErrorHandler`): no se reintentan. No los
   captures para «reintentar»: un mensaje imparseable no mejora al repetirlo.
-- **Idempotencia de consumo**: RabbitMQ garantiza at-least-once; si la operación
-  destino no es naturalmente idempotente, deduplica con el `eventId` del
-  `EventEnvelope` (tabla de procesados o `SET NX` si hay cache en el stack).
+- **Correlación e idempotencia**: RabbitMQ garantiza at-least-once (un `nack`
+  con requeue o una reconexión reentregan). Ambas piezas ya están generadas; el
+  listener solo las usa, en este orden:
+  1. `CorrelationContext.runWith(envelope.metadata().correlationId(), () -> { ... })`,
+     para que los eventos que provoque el consumo hereden la correlación de
+     origen y el contexto se cierre pase lo que pase (los hilos del pool se
+     reutilizan).
+  2. `idempotencyGuard.tryRecord("<NombreDelListener>", id)` con el `messageId`
+     declarado en la suscripción o, si no lo hay,
+     `envelope.metadata().eventId()`; si devuelve `false`, ack y return sin
+     procesar. El guard vive en `infrastructure/messaging/idempotency/`: no
+     escribas otro mecanismo.
+  3. Despacho de la operación `triggers` vía `UseCaseMediator`.
+
+  Si la operación puede fallar de forma transitoria y debe reintentarse, llama a
+  `tryRecord` **después** de despachar: el guard escribe en su propia
+  transacción y registrar antes convertiría un fallo pasajero en un mensaje
+  perdido.
 
 ## Checklist
 
@@ -94,4 +109,4 @@ entrada de tu cola, no el tamaño de la lista.
 - [ ] Stub del publisher eliminado (dos beans del puerto rompen la inyección).
 - [ ] Puerto de envío implementado según `reliability` (`OutboxDispatcher` u `<Evento>Publisher`), con su stub eliminado y el fallo propagado (outbox) o registrado (best-effort).
 - [ ] `onFailure` implementado con reintentos acotados y DLQ si `deadLetter: true`.
-- [ ] Consumo idempotente si la operación puede reintentarse.
+- [ ] Listener envuelto en `CorrelationContext.runWith(...)` y deduplicado con `IdempotencyGuard.tryRecord(...)` (sin mecanismo propio).
