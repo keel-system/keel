@@ -5,6 +5,7 @@ import { init } from './commands/init.js';
 import { add } from './commands/add.js';
 import { list } from './commands/list.js';
 import { validate } from './commands/validate.js';
+import { describe } from './commands/describe.js';
 import { createService } from './commands/new.js';
 
 const program = new Command();
@@ -44,5 +45,11 @@ program
   .argument('<ruta>', 'directorio del servicio o su manifiesto (ej. specs/mi-servicio)')
   .option('--wip', 'diseño en progreso: capas en plantilla y referencias pendientes son avisos, no errores', false)
   .action((ruta, options) => validate(ruta, options));
+
+program
+  .command('describe')
+  .description('Resume un diseño para leerlo o reutilizarlo: identidad, estado, capas y contenido por capa')
+  .argument('<servicio>', 'nombre del servicio (busca specs/<servicio>) o ruta al directorio/manifiesto')
+  .action((servicio) => describe(servicio));
 
 program.parse();

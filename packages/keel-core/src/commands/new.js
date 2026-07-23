@@ -2,11 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import pc from 'picocolors';
 import { templatesDir, isKeelWorkspace } from '../lib/assets.js';
-import { MANIFEST_FILE, resolveServiceDir, loadService } from '../lib/loader.js';
+import { MANIFEST_FILE, KEBAB_NAME, resolveServiceRef, loadService } from '../lib/loader.js';
 import { rewriteManifestForDerivation } from '../lib/derive.js';
 
 const SEED_FILES = ['service.keel.yaml', 'domain.keel.yaml', 'use-cases.keel.yaml'];
-const KEBAB_NAME = /^[a-z][a-z0-9-]*$/;
 
 export function createService(name, options = {}) {
   if (!KEBAB_NAME.test(name)) {
@@ -53,23 +52,13 @@ export function createService(name, options = {}) {
 // (nombre, versión 0.1.0, linaje basedOn, description pendiente) y las capas
 // declaradas tal cual. validation-scenarios.md no se clona: se regenera al cerrar.
 function deriveService(name, from, { cwd, serviceDir }) {
-  let originDir;
-  if (KEBAB_NAME.test(from)) {
-    originDir = path.join(cwd, 'specs', from);
-    if (!fs.existsSync(path.join(originDir, MANIFEST_FILE))) {
-      console.error(pc.red(`No existe specs/${from} (o no contiene ${MANIFEST_FILE}).`));
-      process.exitCode = 1;
-      return;
-    }
-  } else {
-    const resolved = resolveServiceDir(from);
-    if (resolved.error) {
-      console.error(pc.red(resolved.error));
-      process.exitCode = 1;
-      return;
-    }
-    originDir = resolved.dir;
+  const resolved = resolveServiceRef(from, cwd);
+  if (resolved.error) {
+    console.error(pc.red(resolved.error));
+    process.exitCode = 1;
+    return;
   }
+  const originDir = resolved.dir;
 
   if (path.resolve(originDir) === path.resolve(serviceDir)) {
     console.error(pc.red('El servicio de origen y el nuevo son el mismo. Elige otro nombre.'));

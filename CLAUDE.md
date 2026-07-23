@@ -17,12 +17,13 @@ Los `.claude/skills/` y el `CLAUDE.md` bajo `assets/` **no son configuración de
 
 ### `packages/keel-core` — CLI `keel`
 
-- `src/cli.js` — entry point (commander). Comandos: `init`, `new`, `list`, `validate`, `add` (deprecado).
+- `src/cli.js` — entry point (commander). Comandos: `init`, `new`, `list`, `validate`, `describe`, `add` (deprecado).
 - `src/commands/` — un archivo por comando.
 - `src/lib/`:
   - `assets.js` — constantes `LAYERS`, `REQUIRED_LAYERS` (`domain`, `use-cases`), `KNOWN_GENERATORS`, `isKeelWorkspace()`.
-  - `loader.js` — `loadService()`, `resolveServiceDir()`, `MANIFEST_FILE = 'service.keel.yaml'`.
+  - `loader.js` — `loadService()`, `resolveServiceDir()`, `resolveServiceRef()` (nombre kebab → `specs/<n>` o ruta), `MANIFEST_FILE = 'service.keel.yaml'`.
   - `validate-service.js` — `validateService()`, orquesta la validación.
+  - `summarize-service.js` — `summarizeService()`, resumen puro del diseño para `keel describe`.
   - `crossrefs.js` — `checkCrossRefs()`, validación mecánica de referencias entre capas.
   - `copy.js` — `copyTree()`, copia idempotente de assets.
   - `derive.js` — `rewriteManifestForDerivation()`, reescritura del manifiesto para `keel new --from` (derivar un diseño existente).

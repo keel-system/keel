@@ -4,6 +4,23 @@ import YAML from 'yaml';
 import { LAYERS } from './assets.js';
 
 export const MANIFEST_FILE = 'service.keel.yaml';
+export const KEBAB_NAME = /^[a-z][a-z0-9-]*$/;
+
+/**
+ * Resuelve una referencia de servicio: un nombre kebab-case se busca como
+ * specs/<nombre> bajo cwd; cualquier otra cosa se trata como ruta
+ * (directorio del servicio o su manifiesto). Devuelve { dir } o { error }.
+ */
+export function resolveServiceRef(ref, cwd = process.cwd()) {
+  if (KEBAB_NAME.test(ref)) {
+    const dir = path.join(cwd, 'specs', ref);
+    if (fs.existsSync(path.join(dir, MANIFEST_FILE))) return { dir };
+    if (!fs.existsSync(path.resolve(cwd, ref))) {
+      return { error: `No existe specs/${ref} (o no contiene ${MANIFEST_FILE}).` };
+    }
+  }
+  return resolveServiceDir(ref);
+}
 
 /**
  * Resuelve la ruta dada (directorio del servicio o ruta al manifiesto)
