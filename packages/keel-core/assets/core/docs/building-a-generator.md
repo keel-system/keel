@@ -79,5 +79,6 @@ Para experimentar sin crear el paquete, también puedes crear `generators/<tech>
 
 ## Versionado
 
+- **Antes de proponer cualquier cambio al DSL, aplica la regla inviolable de evolución** ([dsl-reference.md § Evolución del DSL](dsl-reference.md#evolución-del-dsl-regla-inviolable)): se ajusta el generador, nunca el DSL. Una necesidad de tu generador casi siempre se resuelve en su `stack-catalog`/config/`mapping.md`, no en el lenguaje.
 - El README del generador (y `SUPPORTED_DSL` en su CLI) declara qué versión del DSL soporta.
 - Cuando el DSL suba de versión (ver [methodology.md](methodology.md)), cada generador se actualiza y publica a su ritmo; mientras tanto, su comprobación de compatibilidad en `build` protege contra usos incompatibles.

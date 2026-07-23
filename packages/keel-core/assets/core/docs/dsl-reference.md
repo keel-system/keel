@@ -22,6 +22,35 @@ Una capa opcional existe si y solo si está declarada en `layers` del manifiesto
 
 Todo **identificador** del DSL va en **inglés**: nombres de types, entidades, agregados, campos, operaciones, eventos, errores (`code`), roles, canales y buckets (`Product`, `retireProduct`, `PRODUCT_NOT_FOUND`, `productImages` — nunca `Producto`, `retirarProducto`). La **prosa** (`description`, invariantes, reglas, escenarios de validación) permanece en español. La regla aplica a todas las capas y fluye aguas abajo: los generadores derivan de estos nombres los paquetes, directorios, archivos, clases y tablas del código, que por tanto también salen en inglés.
 
+## Evolución del DSL (regla inviolable)
+
+El DSL es el activo durable de Keel: un mismo diseño se reutiliza a través de **stacks** (Postgres→MySQL, Kafka→Rabbit) y a través de **frameworks** (Spring→Nest). Esa reutilización solo sobrevive si nunca se invierte la dirección de dependencia entre el DSL y los generadores. Por eso esta regla es **inviolable**.
+
+**1. Dirección de dependencia.** El generador conoce y se adapta al DSL; el DSL **no conoce ni un solo generador**. Ante cualquier necesidad de un generador, la respuesta por defecto es **siempre** ajustar el generador (su `stack-catalog`/config/skills/`mapping.md`), **nunca** el DSL. *Se ajusta el generador, nunca el DSL.* Modificar el DSL para acomodar a un generador invierte la flecha y el diseño deja de ser reutilizable.
+
+**2. Test de admisión al DSL.** Un cambio solo puede entrar al DSL si pasa esta pregunta:
+
+> *¿Esto es verdad sobre el servicio aunque nadie lo construya jamás?*
+
+- **Sí** — es una propiedad del *dominio del problema* → puede ir al DSL.
+- **No** — es una decisión de la *solución técnica* → va al generador.
+
+**3. El alcance es síntoma, no justificación.** Que un cambio "sirva a todos los generadores" **no** lo autoriza: un concepto de solución (p. ej. `retryPolicy`/`backoffMs`) puede ser multi-framework y aun así estar acoplado a un modelo de implementación. Lo global es *consecuencia* de un buen cambio, no su causa.
+
+**4. Cuando el DSL sí cambia** (pasó el test): se versiona **una sola vez en el centro** (`keel-core`: `SUPPORTED_DSL` + schemas), y **todos** los generadores se actualizan para consumir la nueva versión a su ritmo, protegidos por su comprobación de compatibilidad de `build`. El DSL nunca se ramifica por framework.
+
+### Modificación del DSL equivocada
+
+Es incorrecto —y viola la regla— modificar el DSL cuando:
+
+- **Lo pide un framework o stack concreto.** "Spring/Nest/Kafka necesita X" nunca es razón para tocar el DSL; es razón para tocar ese generador.
+- **Se cuela un concepto de solución disfrazado de neutral** (`retryPolicy`, `backoffMs`, tamaño de pool, modelo de hilos, `connectionTimeout`…). Pertenece al catálogo/config del generador, aunque todos los generadores pudieran leerlo.
+- **Se nombra una tecnología** en un campo del DSL (`kafkaTopic`, `jpaEntity`, `redisTtl`). El DSL declara *capacidades* del dominio (`emits`, `cache`), no tecnologías.
+- **Se ramifica el DSL por generador** (una variante para Spring, otra para Nest). El DSL es único; las diferencias viven en los generadores.
+- **Se "arregla" en el DSL lo que es un hueco de mapeo del generador.** Si un generador no sabe traducir una construcción existente, se corrige su `mapping.md`, no el DSL.
+
+Regla mnemónica: **el DSL describe *qué es* el servicio; el generador decide *cómo se construye*. Si el cambio habla de cómo, no toca el DSL.**
+
 ## Dependencias entre capas
 
 ```
