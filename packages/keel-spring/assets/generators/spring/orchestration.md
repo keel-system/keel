@@ -1,0 +1,80 @@
+# Orquestación de agentes — cómo se genera el código
+
+Cómo la skill `/keel-generate-spring` completa un proyecto generado por `keel-spring build`
+hasta dejarlo funcional y validado. La skill **no escribe código**: es la **orquestadora**
+de cuatro subagentes instalados en `.claude/agents/` (del workspace y del proyecto
+generado), y toma sus decisiones de avance/relanzamiento (gating) sobre el bloque
+estructurado (`status`, `blockers`, `failures`…) con el que cada agente cierra su reporte.
+
+## Punto de partida: qué dejó hecho `build`
+
+`keel-spring build` ya generó de forma **determinista** todo lo transversal al stack
+(ver [README.md](README.md)): el proyecto compila y arranca, con dominio puro, puertos,
+contratos CQRS + `UseCaseMediator`, controllers, JPA, seguridad, stubs con `// TODO`,
+config por perfiles e infraestructura de prueba en `infra/`. Lo que queda para los
+agentes es la **frontera dependiente de la infraestructura elegida** (publishers/listeners
+del broker, adaptador de storage), la lógica de negocio con sus invariantes, los tests,
+y la validación funcional contra el servidor real.
+
+## El pipeline
+
+```mermaid
+flowchart TB
+    PRE["Precondiciones:<br/>diseño válido (keel 2.0) · validation-scenarios.md<br/>proyecto de build en services/&lt;servicio&gt;-spring/ · keel-stack.json"]
+
+    PRE --> F1
+    subgraph F1["Fase 1 — en paralelo"]
+        CODE["keel-spring-code<br/>TODOs, negocio, adaptadores, tests<br/>hasta ./gradlew test en verde"]
+        INFRA["keel-spring-infra<br/>compose up (docker/podman)<br/>+ sondeo validate-infra.sh"]
+    end
+
+    CODE --> GATE1{Gating fase 1}
+    INFRA --> GATE1
+    GATE1 -->|"testsGreen: false → relanzar code<br/>con sus failures (máx. 2 ciclos)"| CODE
+    GATE1 -->|"infra KO corregible → relanzar<br/>infra con el diagnóstico (1 vez)"| INFRA
+    GATE1 -->|"blockers en cualquiera"| STOP1[/"Detenerse y reportar:<br/>hueco o contradicción del diseño"/]
+    GATE1 -->|"infra PENDIENTE (sin docker/podman)<br/>→ saltar fase 2, validación PENDIENTE"| QUALITY
+    GATE1 -->|código OK e infra OK| VALIDATE
+
+    VALIDATE["Fase 2 — keel-spring-validate<br/>bootRun + flujos FL-* secuenciales<br/>reset-db.sh antes de cada flujo"]
+    VALIDATE --> GATE2{Gating fase 2}
+    GATE2 -->|"failures → relanzar code con ese bloque<br/>y revalidar (máx. 2 ciclos código→validación)"| CODE
+    GATE2 -->|"blockers o escenario que contradice el spec"| STOP2[/"Detenerse: proponer cambio a los<br/>artefactos, no acomodar el código"/]
+    GATE2 -->|todos los escenarios OK| QUALITY
+
+    QUALITY["Fase 3 — keel-spring-quality<br/>pase no-conductual + ./gradlew test en verde"]
+    QUALITY --> GATE3{Gating fase 3}
+    GATE3 -->|"status: KO → revertir/reportar<br/>(nunca commit con tests en rojo)"| STOP3[/"Detenerse y reportar"/]
+    GATE3 -->|OK| CLOSE["Cierre: compose down · commit<br/>«Generado desde specs/&lt;servicio&gt; v&lt;version&gt;»<br/>+ resumen (matriz, remaining, blockers, designGaps)"]
+```
+
+## Los cuatro agentes
+
+| Agente | Responsabilidad | Qué lee | Qué NO hace |
+|---|---|---|---|
+| `keel-spring-code` | Completa TODOs, lógica de negocio, invariantes, adaptadores del stack y tests hasta `./gradlew test` en verde. Antes de cada handler ejecuta la auditoría de [flow-fidelity](conventions/flow-fidelity.md). | `.claude/CLAUDE.md` del proyecto (orden de capas), `architecture.md`, `constitution.md`, `specs/`, conventions ([mapping](conventions/mapping.md) estricto) y las skills `keel-spring-<tech>` del stack (SKILL.md primero, `references/` bajo demanda). | No toca contenedores, no ejecuta `bootRun` ni escenarios funcionales. |
+| `keel-spring-infra` | Levanta `infra/docker-compose.yaml` con docker o podman (detección: `$CONTAINER_RUNTIME` → `docker` → `podman`), sondea con `infra/validate-infra.sh` (reintentos) y deja la infraestructura **arriba** para la validación. Con auth, prepara lo mínimo para obtener token. | [infra-validation](conventions/infra-validation.md) (sondeo por tecnología vía el contenedor `devtools`), la reference de auth del stack. | Nunca edita código del proyecto; solo corrige causas operativas (puerto ocupado, contenedor viejo). No baja la infraestructura al terminar. |
+| `keel-spring-validate` | Arranca el servidor real (`./gradlew bootRun`) y ejecuta los flujos `FL-*` de `specs/validation-scenarios.md` **secuencialmente**, con `bash infra/reset-db.sh` antes de cada flujo (con H2, reinicio del servidor). Verifica el **Then** completo: status, headers y efectos observables inspeccionando BD/broker/storage vía `devtools`. | `specs/validation-scenarios.md`, la sección Verificación del `.claude/CLAUDE.md`, [infra-validation](conventions/infra-validation.md) y el reporte del agente de infraestructura. | No corrige código (documenta request/response/esperado) ni siembra datos a mano; no baja la infraestructura. |
+| `keel-spring-quality` | Pase de higiene **no-conductual** (imports, constructor injection, `final`, excepciones tipadas, código muerto) con `./gradlew test` en verde como red de seguridad. | [project-layout](conventions/project-layout.md), [mapping](conventions/mapping.md) (transaccionalidad). | Nada conductual: validaciones, firmas, status HTTP, eventos, `@Transactional` — se reportan en `remaining`, no se aplican. |
+
+Regla común: ningún agente pregunta al usuario — registra sus bloqueos en `blockers`
+y termina; decide el orquestador. Y ningún hueco del diseño se resuelve en silencio
+en el código: se propone como cambio a los artefactos (`designGaps`).
+
+## Handoffs: qué campo consume quién
+
+| Campo | Lo emite | Lo consume | Para qué |
+|---|---|---|---|
+| `testsGreen` / `failures` | `keel-spring-code` | Orquestador | Relanzar code con sus propios fallos (máx. 2 ciclos en fase 1). |
+| `status: PENDIENTE`, `runtime` | `keel-spring-infra` | Orquestador | Saltar la fase 2 sin docker/podman; elegir el runtime del `compose down` final. |
+| `authHint` | `keel-spring-infra` | `keel-spring-validate` | Cómo obtener el Bearer token para los escenarios autenticados. |
+| `failures` (escenario, request, response, esperado) | `keel-spring-validate` | `keel-spring-code` (relanzado) | Evidencia **exacta** para el ciclo código→validación (máx. 2 ciclos). |
+| `remaining` | `keel-spring-quality` | Resumen final | Hallazgos conductuales pendientes de decisión humana. |
+| `blockers` / `designGaps` | Cualquiera | Usuario | Contradicciones o huecos del diseño: se detiene la orquestación o se consolidan en el resumen; nunca se resuelven relanzando. |
+
+## Autosuficiencia del proyecto generado
+
+`build` instala en el proyecto (`services/<servicio>-spring/.claude/`) la misma skill
+orquestadora, los cuatro agentes, las conventions, las skills por tecnología del stack
+elegido y un snapshot del diseño en `specs/`. El pipeline de arriba funciona **idéntico**
+desde un clon del repo generado, sin este workspace.
