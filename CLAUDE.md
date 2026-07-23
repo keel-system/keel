@@ -69,6 +69,7 @@ La revisión **semántica** (calidad del diseño, invariantes, mínimo privilegi
 - Skills: `keel-<verbo>`; generadores: skill `keel-generate-<tech>`, paquete `keel-<tech>` con bin homónimo.
 - Servicios generados: `services/<nombre>-<tech>/`.
 - Español en todo lo visible al usuario (mensajes, docs, commits).
+- **Identificadores en inglés (mandatorio)**: los nombres del DSL (types, entidades, operaciones, eventos…) y todo directorio, archivo y símbolo del código generado por los agentes van en inglés; solo la prosa (descriptions, comentarios, mensajes) va en español. Regla canónica en `assets/core/docs/dsl-reference.md` y en `keel-spring/assets/generators/spring/constitution.md`.
 
 ## Documentación canónica (es payload: se edita en `assets/`)
 

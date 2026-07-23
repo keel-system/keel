@@ -42,7 +42,7 @@ Completa el servicio indicado (`specs/<servicio>/`: manifiesto + un artefacto po
 
 ## Reglas
 
-- Las reglas inviolables completas viven en `.claude/constitution.md` del proyecto generado (frontera hexagonal, transaccionalidad, contratos públicos); en corto: el diseño es la única fuente de verdad funcional, y los `code` de error y nombres de evento se copian exactos.
+- Las reglas inviolables completas viven en `.claude/constitution.md` del proyecto generado (frontera hexagonal, transaccionalidad, contratos públicos, idioma); en corto: el diseño es la única fuente de verdad funcional, los `code` de error y nombres de evento se copian exactos, y todo identificador generado (paquetes, directorios, archivos, clases, tablas) va en inglés — un identificador en español en el diseño es un bloqueo, no se traduce en silencio.
 - Ante ambigüedad: diseño > conventions > golden > tu criterio (documentado).
 - El detalle capa por capa (qué completar en application/domain/api/security/messaging/http-clients/storage/persistence) vive en el `.claude/CLAUDE.md` del proyecto generado, que es lo que consume el agente de código: no lo dupliques aquí ni en los prompts.
 - Si esta skill, los agentes o las conventions se quedan cortas durante una generación real, propón la mejora (y considera contribuirla al paquete keel-spring) — el generador aprende de cada uso.

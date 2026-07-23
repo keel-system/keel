@@ -35,6 +35,7 @@ services/            # servicios generados (un repo git propio cada uno)
 
 - **El diseño es la fuente de verdad.** Todo cambio funcional se hace en `specs/<servicio>/` y se regenera; nunca directamente en `services/`.
 - **Cero tecnología en los specs.** Framework, BD, broker o proveedor de auth se deciden al generar, jamás al diseñar.
+- **Identificadores en inglés, prosa en español.** Todo nombre del DSL (types, entidades, campos, operaciones, eventos, errores, roles, canales, buckets) y todo lo que los generadores derivan de ellos (directorios, archivos, clases, tablas) va en inglés; las `description`, la documentación y la conversación con el usuario, en español.
 - **Una capa por vez.** Al diseñar o iterar, trabaja el artefacto de la capa activa y cierra sus referencias cruzadas antes de seguir.
 - **Una capa opcional existe ⇔ está declarada en `layers`** del manifiesto. No crees artefactos de capas que el servicio no necesita.
 - **Nunca generes desde un diseño inválido** ni con un generador cuya compatibilidad de versión DSL no cubra el manifiesto.

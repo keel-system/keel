@@ -6,7 +6,7 @@ Value types, entidades, agregados, relaciones, ciclo de vida e invariantes. Es l
 
 ## `types` — value types
 
-Tipos con semántica de negocio, definidos una vez y reutilizados en entidades, operaciones y eventos. Nombres en `PascalCase`. Admiten tres formas:
+Tipos con semántica de negocio, definidos una vez y reutilizados en entidades, operaciones y eventos. Nombres en `PascalCase` y **en inglés** — como todo identificador del DSL (regla transversal de `dsl-reference.md`); las `description` van en español. Admiten tres formas:
 
 ```yaml
 types:

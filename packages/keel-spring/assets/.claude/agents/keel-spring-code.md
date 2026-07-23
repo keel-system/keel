@@ -45,6 +45,9 @@ repo generado se clonó suelto). Todo lo que hagas ocurre dentro de esa raíz.
 - El diseño (`specs/`) es la única fuente de verdad funcional: nada de entidades,
   campos, endpoints o reglas que no estén en sus artefactos.
 - Los `code` de error y los nombres de evento se copian exactos: son contrato público.
+- Todo identificador que escribas (paquetes, directorios, archivos, clases, métodos,
+  variables, tablas) va en inglés; comentarios y docs en español. Un identificador en
+  español en el diseño no se traduce por tu cuenta: es un `blocker`.
 - Ante ambigüedad: diseño > conventions > golden > tu criterio (documentado).
 - No preguntas al usuario: registra cada bloqueo en `blockers` y termina; el
   orquestador decide.

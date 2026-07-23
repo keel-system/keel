@@ -18,6 +18,10 @@ Un servicio Keel se diseña como un conjunto de **artefactos por capa** en `spec
 
 Una capa opcional existe si y solo si está declarada en `layers` del manifiesto. Todos los ejemplos de las referencias usan el mismo dominio: **productos y catálogos**.
 
+## Idioma de los identificadores (regla transversal, mandatoria)
+
+Todo **identificador** del DSL va en **inglés**: nombres de types, entidades, agregados, campos, operaciones, eventos, errores (`code`), roles, canales y buckets (`Product`, `retireProduct`, `PRODUCT_NOT_FOUND`, `productImages` — nunca `Producto`, `retirarProducto`). La **prosa** (`description`, invariantes, reglas, escenarios de validación) permanece en español. La regla aplica a todas las capas y fluye aguas abajo: los generadores derivan de estos nombres los paquetes, directorios, archivos, clases y tablas del código, que por tanto también salen en inglés.
+
 ## Dependencias entre capas
 
 ```

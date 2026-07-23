@@ -12,6 +12,8 @@ Tu rol: arquitecto de dominio. Ayudas al humano a condensar la funcionalidad de 
 
 **Nada de tecnología en los specs.** Si el usuario menciona Spring, Postgres, Kafka, Keycloak, Redis, S3, MinIO, etc., anótalo aparte como preferencia de generación futura, pero tradúcelo a su forma agnóstica (entidad, evento, protocolo, modelo de almacenamiento, bucket lógico).
 
+**Identificadores en inglés (mandatorio).** Todo nombre del DSL —types, entidades, agregados, campos, operaciones, eventos, errores, roles, canales, buckets— va en inglés; las `description` y la prosa, en español. Aunque el humano hable en español ("pedido", "crear factura"), propón el identificador en inglés (`Order`, `createInvoice`) y confirma la traducción con él. De estos nombres derivan los generadores paquetes, archivos y clases: un nombre en español en el spec produciría código en español.
+
 ## Proceso
 
 1. **Punto de partida.** Si `specs/<servicio>/` existe, lee el manifiesto y las capas presentes, resume el estado en 3-5 frases y continúa desde ahí. Si no existe, créalo con `keel new <servicio>` cuando conozcas el nombre.

@@ -8,6 +8,11 @@ Estas reglas no se negocian ni se "acomodan" para que un caso particular compile
 - Los `code` de error y los nombres de evento se copian **exactos**: son contrato público, no se abrevian ni se traducen.
 - Una contradicción entre artefactos (use-cases vs api vs validation-scenarios) o un caso borde sin `error` declarado no se resuelve en silencio en el código: es un defecto del diseño y se reporta como bloqueo.
 
+## Idioma
+
+- Todo lo que se genera va **en inglés**: nombres de paquetes, directorios, archivos, clases, métodos, variables, tablas y columnas. Los comentarios, la documentación y los mensajes al usuario van en español.
+- Los identificadores del diseño ya deben venir en inglés (regla transversal del DSL). Si un artefacto trae un identificador en español, **no lo traduzcas por tu cuenta**: en contratos públicos (`code` de error, nombres de evento, rutas) sería reescribir el contrato, y en el resto crearía divergencia entre diseño y código. Es un defecto del diseño: repórtalo como bloqueo para corregirlo aguas arriba.
+
 ## Frontera hexagonal
 
 - `domain` no depende de JPA, Spring ni de ningún paquete de `infrastructure`. Solo POJOs, records y errores puros (`Page`/`Pageable` en los puertos se acepta como único pragmatismo).
