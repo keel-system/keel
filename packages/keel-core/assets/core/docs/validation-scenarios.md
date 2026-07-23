@@ -14,10 +14,15 @@ Lo produce `/keel-design` como paso final del cierre del diseño, y se regenera 
 
 ## Matriz de cobertura
 
-| Operación | Flujos |
-|-----------|--------|
-| createProduct | FL-PRD-001 |
-| ...          | ...   |
+| Operación | Flujos | Superficie |
+|-----------|--------|------------|
+| createProduct  | FL-PRD-001 | usuarios |
+| getProductPrice | FL-PRD-010 | **servidores (M2M)** |
+| ...          | ...   | ... |
+
+> La columna **Superficie** marca los endpoints expuestos a otros servidores
+> (`audience: services`/`both`) para que su cobertura como contrato servidor-a-servidor
+> sea visible de un vistazo. Omítela si el servicio no expone ninguno.
 
 ## <Agrupación natural (p.ej. por entidad o agregado)>
 
@@ -41,7 +46,11 @@ Lo produce `/keel-design` como paso final del cierre del diseño, y se regenera 
 - Las validaciones de input (constraints de value types, campos requeridos) se cubren como casos borde `400`.
 - **Si el diseño declara `storage`**, las operaciones que suben archivos a un bucket cubren el **camino feliz** (el archivo queda almacenado en su bucket y es referenciable desde la entidad) y, según la `visibility` del bucket, la forma de lectura resultante (acceso directo si `public`; URL firmada o lectura mediada si `private`). Cubren además como casos borde el rechazo por tamaño (`FILE_TOO_LARGE`) y por content-type no permitido (`UNSUPPORTED_CONTENT_TYPE`), según las políticas del bucket.
 - Operaciones `internal: true` (sin endpoint) se describen por su disparador real (subscription, schedule u operación interna consumida por otro servicio).
-- **Si el diseño declara endpoints M2M** (capa api con `audience: services`/`both` y security con `serviceAuth`), cada operación con `level: service` cubre: el camino feliz con credencial de máquina válida y los scopes exigidos (`2xx`), la llamada con credencial de máquina **sin** el scope exigido (`403`), y —si `validateAudience: true`— el token emitido para otra audiencia (`401`). Los endpoints `audience: both` cubren además el acceso con token de usuario. Los escenarios hablan de "credencial de máquina del cliente `<serviceClient>`", nunca del proveedor concreto.
+- **Si el diseño declara endpoints expuestos a otros servidores** (capa api con `audience: services`/`both` y security con `serviceAuth`), cada operación con `level: service` se valida como **superficie de integración servidor-a-servidor** —el mismo contrato que documenta `/keel-integrate` en `INTEGRATION.md`—, no solo por su auth:
+  - **Contrato funcional (camino feliz)**: la llamada con credencial de máquina válida y los scopes exigidos, con la **forma real del request** (los campos del payload que otro servidor envía) y la verificación en el **Then** del **response completo** que ese servidor consume (los campos del payload que viajan por M2M, coherentes con `INTEGRATION.md`), no solo el status `2xx`.
+  - **Errores declarados**: cada `error` de la operación se cubre **ejercido con credencial de máquina** (mismo criterio que la regla general de commands, pero desde el público servidor), con su `code` y status HTTP exactos.
+  - **Auth**: la llamada con credencial de máquina **sin** el scope exigido (`403`), y —si `validateAudience: true`— el token emitido para otra audiencia (`401`). Los endpoints `audience: both` cubren además el acceso con token de usuario.
+  - Los escenarios hablan de "credencial de máquina del cliente `<serviceClient>`", nunca del proveedor concreto.
 
 ## Secciones de cada escenario
 
