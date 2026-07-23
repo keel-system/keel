@@ -48,13 +48,28 @@ spring:
         spring.json.trusted.packages: <basePackage>
         # El publisher externo no manda type headers compatibles: fija el tipo
         # destino por defecto y apaga el uso de headers.
+        # Válido SOLO si el topic transporta un único tipo (ver abajo).
         spring.json.value.default.type: <basePackage>.infrastructure.messaging.subscriptions.<Evento>Message
         spring.json.use.type.headers: false
 ```
 
-Con varias suscripciones de tipos distintos, `default.type` no basta: usa un
-`JsonDeserializer` por container factory o mapea `spring.json.type.mapping`
-(`token:clase,token2:clase2`) acordado con la fuente.
+Un tipo por topic no es la regla, es un caso: comprueba el `contract` del
+diseño antes de fijarlo.
+
+- **Sin `discriminator`** — el canal transporta un solo tipo: `default.type` como
+  arriba (o el `<Evento>Envelope` cuando `envelope: wrapped`, y
+  `EventEnvelope<XxxMessage>` cuando `envelope: keel`).
+- **Con `discriminator`** — el canal multiplexa varios eventos y `default.type`
+  reventaría con los que no son tuyos. Deserializa a `JsonNode` (o `byte[]`) y
+  enruta en el listener por el header/campo declarado, descartando el resto sin
+  lanzar excepción (una excepción dispararía reintentos sobre un mensaje que
+  simplemente no te toca).
+- **Varias suscripciones de tipos distintos en topics distintos** — un
+  `JsonDeserializer` por container factory, o `spring.json.type.mapping`
+  (`token:clase,token2:clase2`) acordado con la fuente.
+- **`format: avro|protobuf`** — no aplica nada de esto: usa el deserializador del
+  formato y apunta `schema.registry.url` al registry de la fuente (`schemaRef`
+  del diseño identifica el schema).
 
 ## Consumer: poll y rebalanceo
 

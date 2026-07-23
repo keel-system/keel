@@ -10,6 +10,7 @@
 #     description: Canal propio con el ciclo de vida del producto.
 #   inventoryEvents:
 #     description: Canal de inventory-service que este servicio consume.
+#     external: true                      # el canal lo posee otro sistema
 
 publishing:
   # outbox: ningún evento se pierde si la transacción confirma (el generador implementa el mecanismo).
@@ -26,9 +27,23 @@ publishing:
 #   StockDepleted:
 #     source: inventory-service
 #     channel: inventoryEvents          # canal lógico del que se consume
+#     contract:                         # forma real del mensaje que emite la fuente
+#       envelope: wrapped               # keel | wrapped | none
+#       payloadPath: data               # dónde vive el payload (solo con wrapped)
+#       format: json                    # json | avro | protobuf | xml
+#       discriminator:                  # cómo se reconoce este evento en el canal
+#         location: header              # header | field
+#         name: eventType
+#         value: stock.depleted
+#       messageId:                      # clave de deduplicación ante reentregas
+#         location: header
+#         name: messageId
+#       unknownFields: ignore           # ignore | fail
 #     payload:
-#       productId: { type: uuid, required: true }
+#       productId: { type: uuid, required: true, wireName: product_id }
 #     triggers: retireProduct
+#     input:                            # campo del input de la operación → campo del payload
+#       productId: productId
 #     onFailure:
 #       retry: { maxAttempts: 5, backoff: exponential, initialDelayMs: 1000 }
 #       deadLetter: true

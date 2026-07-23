@@ -66,6 +66,11 @@
           "pattern": "^[a-z][A-Za-z0-9]*$"
         },
         "description": { "type": "string" },
+        "wireName": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Nombre real del campo en el mensaje o respuesta de un sistema externo, cuando no coincide con el nombre del DSL (ej. product_id). Solo válido en contratos de sistemas externos: messaging.subscriptions y http-clients."
+        },
         "required": { "type": "boolean", "default": false },
         "unique": { "type": "boolean", "default": false },
         "id": { "type": "boolean", "default": false, "description": "Marca el identificador de la entidad." },
@@ -170,6 +175,30 @@
           "description": "Scopes OAuth2 exigidos a clientes máquina (deben existir en el catálogo permissions). Solo válido con level service o en endpoints audience both.",
           "items": { "$ref": "#/$defs/permissionName" },
           "minItems": 1
+        },
+        "description": { "type": "string" }
+      }
+    },
+    "messageRef": {
+      "type": "object",
+      "required": ["location", "name"],
+      "additionalProperties": false,
+      "description": "Dato del mensaje recibido identificado por dónde viaja: en un header/atributo del mensaje o en un campo del cuerpo.",
+      "properties": {
+        "location": {
+          "type": "string",
+          "enum": ["header", "field"],
+          "description": "header: metadato del mensaje (header Kafka, atributo SQS, property AMQP). field: campo del cuerpo."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Nombre real tal cual lo emite la fuente (dot-path si está anidado)."
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Valor que identifica este evento. Solo aplica al discriminator."
         },
         "description": { "type": "string" }
       }

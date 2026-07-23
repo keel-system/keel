@@ -1,11 +1,14 @@
 // Mensajería del servicio: solo los contratos transversales al broker.
-// Build genera EventEnvelope/EventMetadata (contrato estándar de publicación
-// con eventId, timestamp UTC, correlationId y source), el PUERTO
-// <Evento>Publisher (interfaz junto al record del evento en domain/events) con
-// un stub transversal que permite arrancar el contexto sin broker, y el record
-// del payload de cada suscripción (contrato de la fuente). La implementación
-// real de publishers y listeners depende del broker elegido (keel-stack.json)
-// y la escribe el agente siguiendo la skill .claude/skills/keel-spring-<broker>/.
+// Build genera EventEnvelope/EventMetadata (contrato estándar de PUBLICACIÓN
+// con eventId, timestamp UTC, correlationId y source; al consumir solo aplica
+// cuando el diseño declara envelope: keel, es decir cuando la fuente es otro
+// servicio Keel), el PUERTO <Evento>Publisher (interfaz junto al record del
+// evento en domain/events) con un stub transversal que permite arrancar el
+// contexto sin broker, y el record del payload de cada suscripción (contrato de
+// la fuente, con su envoltura propia cuando envelope: wrapped). La
+// implementación real de publishers y listeners depende del broker elegido
+// (keel-stack.json) y la escribe el agente siguiendo la skill
+// .claude/skills/keel-spring-<broker>/.
 
 import { javaFile, javaPath, subPackage } from './render.js';
 
@@ -27,6 +30,7 @@ export function generate(model) {
   }
   for (const sub of subscriptions) {
     files.push(renderSubscriptionMessage(model, sub));
+    if (sub.envelopeRecord) files.push(renderSubscriptionEnvelope(model, sub));
   }
   return files;
 }
@@ -128,17 +132,96 @@ public class ${stubClass} implements ${event.publisherClass} {
 function renderSubscriptionMessage(model, sub) {
   const imports = new Set();
   for (const field of sub.fields) for (const name of field.imports) imports.add(name);
-  const components = sub.fields.map((f) => `${f.javaType} ${f.name}`).join(', ');
+  // wireName: la fuente externa nombra el campo distinto que el diseño.
+  const components = sub.fields
+    .map((f) => {
+      if (!f.wireName) return `${f.javaType} ${f.name}`;
+      imports.add('com.fasterxml.jackson.annotation.JsonProperty');
+      return `@JsonProperty("${f.wireName}") ${f.javaType} ${f.name}`;
+    })
+    .join(', ');
+
+  const annotations = [];
+  if (sub.unknownFields !== 'fail') {
+    imports.add('com.fasterxml.jackson.annotation.JsonIgnoreProperties');
+    annotations.push('@JsonIgnoreProperties(ignoreUnknown = true)');
+  }
 
   const body = `/**
  * Payload del evento ${sub.name}${sub.source ? ` (fuente: ${sub.source})` : ''}.
- * Lo consume ${sub.listenerClass} (listener del broker del stack; lo escribe
- * el agente${sub.trigger ? ` despachando la operación '${sub.trigger}'` : ''}).
- */
-public record ${sub.messageRecord}(${components}) {
+${contractJavadoc(sub)} */
+${annotations.map((a) => `${a}\n`).join('')}public record ${sub.messageRecord}(${components}) {
 }`;
   return {
     path: javaPath(model, SUBSCRIPTIONS_PKG, sub.messageRecord),
     content: javaFile(subPackage(model, SUBSCRIPTIONS_PKG), [...imports], body)
   };
+}
+
+// Envoltura propia de la fuente (envelope: wrapped): el payload cuelga de
+// payloadPath, no de la EventEnvelope de Keel.
+function renderSubscriptionEnvelope(model, sub) {
+  const imports = new Set(['com.fasterxml.jackson.annotation.JsonIgnoreProperties']);
+  const components = [];
+  const path = sub.payloadPath.split('.');
+  if (path.length > 1) {
+    // Payload anidado: el agente completa los niveles intermedios.
+    components.push(`Object ${path[0]}`);
+  } else {
+    components.push(`${sub.messageRecord} ${path[0]}`);
+  }
+  if (sub.discriminator?.location === 'field' && !sub.discriminator.name.includes('.')) {
+    components.push(`String ${sub.discriminator.name}`);
+  }
+  if (sub.messageId?.location === 'field' && !sub.messageId.name.includes('.')) {
+    components.push(`String ${sub.messageId.name}`);
+  }
+
+  const body = `/**
+ * Envoltura con la que ${sub.source ?? 'la fuente'} publica ${sub.name}: el
+ * payload cuelga de '${sub.payloadPath}'.
+${path.length > 1 ? ` * TODO (agente): tipar los niveles intermedios de '${sub.payloadPath}' hasta ${sub.messageRecord}.\n` : ''} */
+@JsonIgnoreProperties(ignoreUnknown = true)
+public record ${sub.envelopeRecord}(${components.join(', ')}) {
+}`;
+  return {
+    path: javaPath(model, SUBSCRIPTIONS_PKG, sub.envelopeRecord),
+    content: javaFile(subPackage(model, SUBSCRIPTIONS_PKG), [...imports], body)
+  };
+}
+
+// El contrato de recepción, escrito donde el agente lo va a leer al escribir el listener.
+function contractJavadoc(sub) {
+  const lines = [];
+  if (sub.envelope === 'wrapped') {
+    lines.push(`Llega envuelto en ${sub.envelopeRecord}; el payload cuelga de '${sub.payloadPath}'.`);
+  } else if (sub.envelope === 'keel') {
+    lines.push('Llega en la EventEnvelope estándar de Keel (metadata + data).');
+  } else {
+    lines.push('Llega plano: el mensaje es este payload.');
+  }
+  if (sub.format !== 'json') {
+    lines.push(`Formato: ${sub.format}${sub.schemaRef ? ` (schema '${sub.schemaRef}')` : ''}.`);
+  }
+  if (sub.discriminator) {
+    lines.push(
+      `Se reconoce por ${sub.discriminator.location} '${sub.discriminator.name}' == '${sub.discriminator.value}': el canal transporta más tipos, descarta el resto.`
+    );
+  }
+  if (sub.messageId) {
+    lines.push(
+      `Deduplica por ${sub.messageId.location} '${sub.messageId.name}' antes de despachar (la entrega es at-least-once).`
+    );
+  }
+  if (sub.trigger) {
+    const args = sub.triggerArguments
+      .map((a) => `${a.component} = ${a.source ? `payload.${a.source}()` : 'TODO (agente)'}`)
+      .join(', ');
+    lines.push(
+      `Lo consume ${sub.listenerClass} (listener del broker del stack; lo escribe el agente) despachando ${sub.triggerMessageClass ?? sub.trigger}${args ? `(${args})` : ''} vía UseCaseMediator.`
+    );
+  } else {
+    lines.push(`Lo consume ${sub.listenerClass} (listener del broker del stack; lo escribe el agente).`);
+  }
+  return lines.map((line) => ` * ${line}\n`).join('');
 }

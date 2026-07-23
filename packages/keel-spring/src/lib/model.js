@@ -170,6 +170,8 @@ function resolveField(ownerName, fieldName, field, domainTypes, inlineEnumName, 
     generated: Boolean(field.generated),
     computed: field.computed ?? null,
     sensitive: Boolean(field.sensitive),
+    // Nombre real en el cable cuando la fuente externa no usa el nombre del DSL.
+    wireName: field.wireName && field.wireName !== fieldName ? field.wireName : null,
     description: field.description ?? null,
     validation: beanValidationAnnotations(field, resolved),
     columns: persisted ? columnAnnotations(fieldName, field, resolved) : [],
@@ -581,31 +583,68 @@ function collectSubscriptions(layers, services, domainTypes, inlineEnumName, war
   const subs = layers.messaging?.subscriptions ?? {};
   const domainEntities = layers.domain?.entities ?? {};
 
-  // Lookup operación → clase de mensaje CQRS (para citar el destino del dispatch).
-  const messageByOp = new Map();
+  // Lookup operación → operación CQRS (para citar el destino del dispatch y sus componentes).
+  const opByName = new Map();
   for (const svc of services) {
-    for (const op of svc.operations) messageByOp.set(op.name, op.messageClass);
+    for (const op of svc.operations) opByName.set(op.name, op);
   }
 
   return Object.entries(subs).map(([name, def]) => {
     const trigger = def.triggers ?? null;
-    if (trigger && !messageByOp.has(trigger)) {
+    if (trigger && !opByName.has(trigger)) {
       warnings.push(`Suscripción '${name}': triggers '${trigger}' no corresponde a ninguna operación de use-cases.`);
     }
+    const triggerOp = trigger ? opByName.get(trigger) ?? null : null;
+    const contract = def.contract ?? {};
+    const external = def.channel ? layers.messaging?.channels?.[def.channel]?.external === true : false;
+    const fields = payloadFields(name, { fields: def.payload }, {
+      direction: 'output',
+      domainEntities,
+      domainTypes,
+      inlineEnumName
+    });
+
     return {
       name,
       source: def.source ?? null,
       channel: def.channel ?? null,
+      externalChannel: external,
       trigger,
-      triggerMessageClass: trigger ? messageByOp.get(trigger) ?? null : null,
+      triggerMessageClass: triggerOp?.messageClass ?? null,
+      // Cómo se construye el mensaje CQRS desde el payload: componente del
+      // command → campo del payload que lo alimenta (null = el agente decide).
+      triggerArguments: triggerArguments(def, triggerOp, fields),
       messageRecord: `${pascalCase(name)}Message`,
       listenerClass: `${pascalCase(name)}Listener`,
       topicProperty: `messaging.subscriptions.${kebabCase(name)}.topic`,
       topicDefault: `${def.source ? kebabCase(def.source) : kebabCase(name)}.events`,
-      fields: payloadFields(name, { fields: def.payload }, { direction: 'output', domainEntities, domainTypes, inlineEnumName }),
+      // Contrato de recepción: sin él se asume la envoltura de Keel salvo que el
+      // canal sea ajeno, donde el mensaje llega plano.
+      envelope: contract.envelope ?? (external ? 'none' : 'keel'),
+      payloadPath: contract.payloadPath ?? null,
+      format: contract.format ?? 'json',
+      schemaRef: contract.schemaRef ?? null,
+      discriminator: contract.discriminator ?? null,
+      messageId: contract.messageId ?? null,
+      unknownFields: contract.unknownFields ?? 'ignore',
+      envelopeRecord: contract.envelope === 'wrapped' ? `${pascalCase(name)}Envelope` : null,
+      fields,
       retry: def.onFailure?.retry ?? null,
       deadLetter: Boolean(def.onFailure?.deadLetter)
     };
+  });
+}
+
+// Mapeo declarado (input) o identidad por nombre, sobre los componentes del
+// command/query que dispara la suscripción.
+function triggerArguments(def, triggerOp, fields) {
+  if (!triggerOp) return [];
+  const mapping = def.input ?? {};
+  const payloadNames = new Set(fields.map((f) => f.name));
+  const components = triggerOp.hasIdParam ? ['id', ...triggerOp.bodyFields.map((f) => f.name)] : triggerOp.bodyFields.map((f) => f.name);
+  return components.map((component) => {
+    const source = mapping[component] ?? (payloadNames.has(component) ? component : null);
+    return { component, source };
   });
 }
 

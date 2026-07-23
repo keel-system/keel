@@ -66,9 +66,21 @@ public class StockDepletedListener {
 }
 ```
 
-- Topic configurable vía propiedad `messaging.subscriptions.<evento-kebab>.topic` (default `<fuente>.events`); groupId = `spring.application.name`.
+- Topic configurable vía propiedad `messaging.subscriptions.<evento-kebab>.topic` (default `<fuente>.events`); groupId = `spring.application.name`. Con un canal `external: true` el nombre real lo pone el dueño del canal: va en `parameters/<perfil>`, nunca hardcodeado.
 - `onFailure` del diseño → `@RetryableTopic` (attempts/backoff declarados; `deadLetter: true` → `DltStrategy.FAIL_ON_ERROR`, si no `NO_DLT`).
-- Mapea el `<Evento>Message` al mensaje de la operación `triggers` y despacha vía `UseCaseMediator`; añade idempotencia de consumo si la operación puede reintentarse.
+- Mapea el `<Evento>Message` al mensaje de la operación `triggers` y despacha vía `UseCaseMediator`; el javadoc del record generado ya trae el mapeo campo a campo.
+
+### El `contract` de la suscripción manda
+
+El bloque `contract` del diseño describe la forma real del mensaje que emite la fuente. Impleméntalo literalmente; no supongas:
+
+- **`envelope: keel`** — deserializa a `EventEnvelope<XxxMessage>` y trabaja con `envelope.data()`.
+- **`envelope: none`** — el mensaje **es** el payload: deserializa directo a `XxxMessage`.
+- **`envelope: wrapped`** — build generó `<Evento>Envelope` con el payload colgando de `payloadPath`: deserializa a la envoltura y saca el payload de ahí. Si `payloadPath` está anidado, completa los niveles intermedios (build dejó un TODO).
+- **`discriminator`** — el topic transporta varios tipos de evento. Con `location: header`, filtra por `@Header("<name>")` y **descarta** (return, sin excepción, para no disparar reintentos) lo que no coincida con `value`; con `location: field`, deserializa a `JsonNode` y enruta por ese campo. Sin discriminador, y solo entonces, vale fijar un tipo por topic.
+- **`messageId`** — es la clave de deduplicación: léela (header o campo) y descarta el mensaje si ya se procesó, **antes** de despachar. Es lo que hace segura la entrega at-least-once con `retry`/DLQ.
+- **`format: avro|protobuf`** — cambia el deserializador y, con `schemaRef`, exige schema registry: configúralo en `parameters/<perfil>/kafka.yaml`.
+- **`unknownFields`** y los `@JsonProperty` de alias ya vienen resueltos en el record generado: no los toques.
 
 ## Referencias
 

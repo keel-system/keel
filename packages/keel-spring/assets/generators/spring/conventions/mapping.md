@@ -97,6 +97,14 @@ El scaffolding genera lo transversal al broker: el contrato `EventEnvelope`/`Eve
 | `publishing.reliability: outbox` | Patrón outbox: el evento se escribe en la misma transacción que el cambio (tabla outbox + relay); comparte la frontera de `persistence.consistency` |
 | `publishing.reliability: best-effort` | Publicación directa tras confirmar transacción (`@TransactionalEventListener(AFTER_COMMIT)`) |
 | `subscriptions.E` | Record `<E>Message` (scaffolding) + listener del broker elegido (agente: `@KafkaListener`/`@RabbitListener`/`@SqsListener`) que deserializa el payload y despacha la operación de `triggers` vía mediator |
+| `subscriptions.E.contract.envelope` | `keel` → deserializa `EventEnvelope<EMessage>` y usa `data()`; `none` → el mensaje es el payload; `wrapped` → record `<E>Envelope` (scaffolding) con el payload colgando de `payloadPath` |
+| `subscriptions.E.contract.discriminator` | Filtro del listener: header (`@Header`) o campo del cuerpo; lo que no coincide con `value` se **descarta sin excepción** (una excepción dispararía reintentos y DLQ) |
+| `subscriptions.E.contract.messageId` | Clave de deduplicación leída antes de despachar (header o campo): la entrega es at-least-once |
+| `subscriptions.E.contract.format` / `schemaRef` | Deserializador del formato (JSON por defecto; avro/protobuf → schema registry de la fuente) |
+| `subscriptions.E.contract.unknownFields` | `ignore` → `@JsonIgnoreProperties(ignoreUnknown = true)` en el record; `fail` → sin la anotación (scaffolding) |
+| `payload.<campo>.wireName` | `@JsonProperty("<wireName>")` en el componente del record (scaffolding); el nombre del DSL se mantiene en Java |
+| `subscriptions.E.input` | Argumentos del command/query de `triggers` al despachar: componente ← campo del payload (identidad por nombre si no se declara); el javadoc del record generado lo lleva escrito |
+| `channels.<c>.external: true` | El nombre físico del topic/cola lo pone su dueño: propiedad en `parameters/<perfil>`, nunca hardcodeado ni declarado en la topología local |
 | `subscriptions.E.onFailure.retry` | Reintentos con backoff según `maxAttempts`/`backoff`/`initialDelayMs` (ej. `DefaultErrorHandler` con `ExponentialBackOff`) |
 | `subscriptions.E.onFailure.deadLetter: true` | DLQ tras agotar reintentos (`DeadLetterPublishingRecoverer` o equivalente) |
 

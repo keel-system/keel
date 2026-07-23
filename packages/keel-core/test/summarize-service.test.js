@@ -159,7 +159,22 @@ test('summarizeService resume las capas opcionales', (t) => {
     serviceClients: [],
     defaultAccess: 'required'
   });
-  assert.deepEqual(summary.messaging, { reliability: 'outbox', published: ['InvoiceCreated'], subscriptions: ['OrderPlaced'] });
+  assert.deepEqual(summary.messaging, {
+    reliability: 'outbox',
+    published: ['InvoiceCreated'],
+    subscriptions: [
+      {
+        name: 'OrderPlaced',
+        source: 'orders',
+        channel: null,
+        external: false,
+        triggers: 'createInvoice',
+        envelope: null,
+        format: null,
+        discriminator: null
+      }
+    ]
+  });
   assert.deepEqual(summary.httpClients, {
     clients: [
       {

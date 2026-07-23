@@ -73,9 +73,19 @@ function printSecurity(security) {
 function printMessaging(messaging) {
   const parts = [];
   parts.push(`${plural(messaging.published.length, 'evento publicado', 'eventos publicados')}${messaging.published.length > 0 ? ` (${messaging.published.join(', ')})` : ''}`);
-  parts.push(`${plural(messaging.subscriptions.length, 'suscripción', 'suscripciones')}${messaging.subscriptions.length > 0 ? ` (${messaging.subscriptions.join(', ')})` : ''}`);
+  parts.push(plural(messaging.subscriptions.length, 'suscripción', 'suscripciones'));
   if (messaging.reliability) parts.push(`reliability: ${messaging.reliability}`);
   console.log(pc.bold('messaging') + pc.dim(` — ${parts.join('; ')}`));
+  for (const sub of messaging.subscriptions) {
+    const notes = [];
+    if (sub.source) notes.push(`de ${sub.source}`);
+    if (sub.channel) notes.push(`canal ${sub.channel}${sub.external ? ' (externo)' : ''}`);
+    if (sub.envelope) notes.push(`envelope ${sub.envelope}`);
+    if (sub.format && sub.format !== 'json') notes.push(sub.format);
+    if (sub.discriminator) notes.push(`discrimina por ${sub.discriminator}`);
+    if (sub.triggers) notes.push(`dispara ${sub.triggers}`);
+    console.log(`  ${pc.dim('•')} ${sub.name}${notes.length > 0 ? pc.dim(` (${notes.join(', ')})`) : ''}`);
+  }
 }
 
 function printHttpClients(httpClients) {

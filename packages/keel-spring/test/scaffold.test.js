@@ -775,14 +775,62 @@ test('capa messaging (subscriptions): payload record transversal, sin listener d
   const subsDir = 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/subscriptions';
   const message = read(workspace, `${subsDir}/StockDepletedMessage.java`);
   assert.ok(message.includes('public record StockDepletedMessage(UUID productId)'));
-  // El record documenta quién lo consumirá y qué operación despacha.
+  // El record documenta quién lo consumirá y qué mensaje CQRS despacha.
   assert.ok(message.includes('StockDepletedListener'));
-  assert.ok(message.includes("'retireProduct'"));
+  assert.ok(message.includes('RetireProductCommand'));
+  // Sin contract y con canal propio, se asume la envoltura estándar de Keel.
+  assert.ok(message.includes('EventEnvelope estándar de Keel'));
+  assert.ok(message.includes('@JsonIgnoreProperties(ignoreUnknown = true)'));
 
   // El listener depende del broker: lo escribe el agente, no build.
   assert.ok(!exists(workspace, `${subsDir}/StockDepletedListener.java`));
   // Broker por defecto (kafka): spring-kafka en gradle para el código del agente.
   assert.ok(read(workspace, 'build.gradle').includes('spring-kafka'));
+});
+
+test('suscripción con contract: envoltura de la fuente, alias de campo y contrato en el javadoc', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const patchedManifest = structuredClone(manifest);
+  patchedManifest.layers.messaging = 'messaging.keel.yaml';
+  const patched = structuredClone(layers);
+  patched.messaging = {
+    channels: { inventoryEvents: { external: true } },
+    subscriptions: {
+      StockDepleted: {
+        source: 'inventory-service',
+        channel: 'inventoryEvents',
+        contract: {
+          envelope: 'wrapped',
+          payloadPath: 'data',
+          discriminator: { location: 'header', name: 'eventType', value: 'stock.depleted' },
+          messageId: { location: 'field', name: 'messageId' },
+          unknownFields: 'fail'
+        },
+        payload: { productId: { type: 'uuid', required: true, wireName: 'product_id' } },
+        triggers: 'retireProduct',
+        input: { id: 'productId' }
+      }
+    }
+  };
+
+  const { warnings } = scaffoldService({ manifest: patchedManifest, layers: patched, workspace });
+  assert.deepEqual(warnings, []);
+
+  const subsDir = 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/subscriptions';
+  const message = read(workspace, `${subsDir}/StockDepletedMessage.java`);
+  // El nombre real del cable viaja en @JsonProperty; el del DSL queda en el record.
+  assert.ok(message.includes('@JsonProperty("product_id") UUID productId'));
+  // unknownFields: fail → no se ignoran campos desconocidos.
+  assert.ok(!message.includes('ignoreUnknown'));
+  assert.ok(message.includes("payload cuelga de 'data'"));
+  assert.ok(message.includes("Se reconoce por header 'eventType' == 'stock.depleted'"));
+  assert.ok(message.includes("Deduplica por field 'messageId'"));
+  assert.ok(message.includes('RetireProductCommand(id = payload.productId())'));
+
+  // La envoltura es la de la fuente, no la EventEnvelope de Keel.
+  const envelope = read(workspace, `${subsDir}/StockDepletedEnvelope.java`);
+  assert.ok(envelope.includes('public record StockDepletedEnvelope(StockDepletedMessage data, String messageId)'));
 });
 
 test('publisher: puerto + stub transversales sin código del broker elegido', () => {

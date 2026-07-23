@@ -36,9 +36,37 @@ snsTemplate.sendNotification(topicArn, EventEnvelope.of("<Evento>", event, corre
 
 `@Component` con `@SqsListener("${messaging.subscriptions.<evento-kebab>.topic:<fuente>.events}")`
 que mapea el `<Evento>Message` al mensaje de la operación `triggers` y despacha vía
-`UseCaseMediator`. La política `onFailure` se implementa con la redrive policy de la
+`UseCaseMediator` (el javadoc del record generado ya trae el mapeo campo a campo).
+La política `onFailure` se implementa con la redrive policy de la
 cola (`maxReceiveCount` = reintentos del diseño + DLQ); suscribe la cola al topic SNS
 correspondiente de la fuente.
+
+### El `contract` de la suscripción manda
+
+El bloque `contract` del diseño describe la forma real del mensaje que emite la fuente.
+Impleméntalo literalmente; no supongas:
+
+- **`envelope: keel`** → deserializa a `EventEnvelope<XxxMessage>` y usa `envelope.data()`.
+  **`none`** → el mensaje es el payload. **`wrapped`** → build generó `<Evento>Envelope`
+  con el payload colgando de `payloadPath`; si está anidado, completa los niveles
+  intermedios (build dejó un TODO).
+- **Ojo con la doble envoltura de SNS→SQS**: sin *raw message delivery*, SNS mete el
+  mensaje real dentro de su propio sobre (`Message`, `MessageAttributes`). Eso es
+  **infraestructura, no diseño**: no lo confundas con `envelope: wrapped`. Activa raw
+  delivery o desenvuelve el sobre SNS antes de aplicar el `contract`.
+- **`discriminator`** — la cola recibe varios tipos. Con `location: header`, léelo del
+  message attribute correspondiente (`@Header("<name>")`) y **descarta** (return limpio,
+  sin excepción: una excepción cuenta como recepción fallida y acaba en la DLQ un mensaje
+  que no te toca) lo que no coincida con `value`; con `location: field`, deserializa a
+  `JsonNode` y enruta por ese campo.
+- **`messageId`** — clave de deduplicación: léela (message attribute o campo; **no** el
+  `MessageId` que asigna SQS, que cambia por reentrega) y descarta lo ya procesado antes
+  de despachar. SQS estándar es at-least-once por definición.
+- **`format: avro|protobuf`** — el cuerpo no es JSON: deserializa con el formato declarado;
+  `schemaRef` identifica el schema en el registry de la fuente.
+- **Canal `external: true`** — el ARN/nombre real del topic y de la cola los pone su dueño:
+  van en `parameters/<perfil>`, nunca hardcodeados.
+- Los `@JsonProperty` de alias y `unknownFields` ya vienen resueltos en el record: no los toques.
 
 ## Referencias
 

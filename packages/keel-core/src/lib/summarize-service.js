@@ -69,10 +69,26 @@ function summarizeSecurity(doc) {
 }
 
 function summarizeMessaging(doc) {
+  const subscriptions = keysOf(doc?.subscriptions).map((name) => {
+    const sub = doc.subscriptions[name] ?? {};
+    const contract = sub.contract ?? null;
+    return {
+      name,
+      source: sub.source ?? null,
+      channel: sub.channel ?? null,
+      external: sub.channel ? doc?.channels?.[sub.channel]?.external === true : false,
+      triggers: sub.triggers ?? null,
+      envelope: contract?.envelope ?? null,
+      format: contract?.format ?? null,
+      discriminator: contract?.discriminator
+        ? `${contract.discriminator.location}:${contract.discriminator.name}=${contract.discriminator.value}`
+        : null
+    };
+  });
   return {
     reliability: doc?.publishing?.reliability ?? null,
     published: keysOf(doc?.publishing?.events),
-    subscriptions: keysOf(doc?.subscriptions)
+    subscriptions
   };
 }
 

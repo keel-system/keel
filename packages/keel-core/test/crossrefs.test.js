@@ -236,6 +236,172 @@ test('canal declarado sin ningún evento o suscripción que lo referencie es war
   );
 });
 
+// --- messaging: contrato de recepción de las suscripciones ---
+
+const useCasesForContract = () => ({
+  operations: {
+    retireProduct: {
+      kind: 'command',
+      input: { fields: { productId: { type: 'uuid', required: true }, reason: { type: 'string' } } },
+    },
+  },
+});
+
+const contractLayers = (subOverrides = {}, channelOverrides = {}) => ({
+  domain: domainForMessaging(),
+  'use-cases': useCasesForContract(),
+  messaging: {
+    channels: { inventoryEvents: { external: true, ...channelOverrides } },
+    subscriptions: {
+      StockDepleted: {
+        source: 'inventory-service',
+        channel: 'inventoryEvents',
+        contract: {
+          envelope: 'wrapped',
+          payloadPath: 'data',
+          discriminator: { location: 'header', name: 'eventType', value: 'stock.depleted' },
+          messageId: { location: 'header', name: 'messageId' },
+        },
+        payload: { productId: { type: 'uuid', required: true, wireName: 'product_id' } },
+        triggers: 'retireProduct',
+        ...subOverrides,
+      },
+    },
+  },
+});
+
+test('suscripción con contrato de recepción completo no produce errores ni warnings', () => {
+  const { errors, warnings } = run(contractLayers());
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
+test('campo requerido del input de triggers que no llega en el payload es error', () => {
+  const layers = contractLayers({ payload: { sku: { type: 'string', required: true } } });
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) =>
+      e.includes(`el campo requerido 'productId' del input de 'retireProduct' no llega en el payload`)
+    )
+  );
+});
+
+test('input mapea el payload aunque los nombres difieran', () => {
+  const layers = contractLayers({
+    payload: { itemId: { type: 'uuid', required: true } },
+    input: { productId: 'itemId' },
+  });
+  const { errors, warnings } = run(layers);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
+test('input que mapea un campo inexistente en el payload es error', () => {
+  const layers = contractLayers({ input: { productId: 'itemId' } });
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) =>
+      e.includes(`subscriptions.StockDepleted.input.productId: el campo 'itemId' no existe en el payload`)
+    )
+  );
+});
+
+test('input que mapea un campo que la operación no declara es error', () => {
+  const layers = contractLayers({ input: { productCode: 'productId' } });
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) =>
+      e.includes(`subscriptions.StockDepleted.input.productCode: la operación 'retireProduct' no declara ese campo`)
+    )
+  );
+});
+
+test('campo del payload que no alimenta el input de la operación es warning', () => {
+  const layers = contractLayers({
+    payload: {
+      productId: { type: 'uuid', required: true },
+      warehouseId: { type: 'uuid' },
+    },
+  });
+  const { errors, warnings } = run(layers);
+  assert.deepEqual(errors, []);
+  assert.ok(
+    warnings.some((w) =>
+      w.includes(`subscriptions.StockDepleted.payload.warehouseId: no alimenta ningún campo del input`)
+    )
+  );
+});
+
+test('suscripción sobre canal external sin contract es warning', () => {
+  const layers = contractLayers({ contract: undefined });
+  delete layers.messaging.subscriptions.StockDepleted.contract;
+  const { errors, warnings } = run(layers);
+  assert.deepEqual(errors, []);
+  assert.ok(
+    warnings.some((w) =>
+      w.includes(`subscriptions.StockDepleted: consume del canal externo 'inventoryEvents' sin contract —`)
+    )
+  );
+});
+
+test('discriminator por campo inexistente en el payload es error sin envoltura', () => {
+  const layers = contractLayers({
+    contract: {
+      envelope: 'none',
+      discriminator: { location: 'field', name: 'eventType', value: 'stock.depleted' },
+    },
+  });
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) =>
+      e.includes(`subscriptions.StockDepleted.contract.discriminator: el campo 'eventType' no existe en el payload`)
+    )
+  );
+});
+
+test('discriminator por campo fuera del payload es warning con envelope wrapped', () => {
+  const layers = contractLayers({
+    contract: {
+      envelope: 'wrapped',
+      payloadPath: 'data',
+      discriminator: { location: 'field', name: 'eventType', value: 'stock.depleted' },
+    },
+  });
+  const { errors, warnings } = run(layers);
+  assert.deepEqual(errors, []);
+  assert.ok(
+    warnings.some((w) =>
+      w.includes(`contract.discriminator: el campo 'eventType' no está en payload — se asume que vive en la envoltura`)
+    )
+  );
+});
+
+test('publicar en un canal marcado external es warning', () => {
+  const layers = contractLayers();
+  layers.messaging.publishing = {
+    events: { ProductRetired: { channel: 'inventoryEvents', payload: { productId: { type: 'uuid' } } } },
+  };
+  const { warnings } = run(layers);
+  assert.ok(
+    warnings.some((w) =>
+      w.includes(`publishing.events.ProductRetired.channel: 'inventoryEvents' está marcado external`)
+    )
+  );
+});
+
+test('wireName en una capa interna es error', () => {
+  const layers = {
+    domain: { entities: { Product: entity({ sku: { type: 'string', wireName: 'product_sku' } }) } },
+    'use-cases': {},
+  };
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) =>
+      e.includes(`domain: Product.fields.sku: wireName solo es válido en contratos de sistemas externos`)
+    )
+  );
+});
+
 // --- M2M: audience ↔ reglas de acceso, serviceAuth y serviceClients ---
 
 const domainForM2m = () => ({ entities: { Product: entity() } });

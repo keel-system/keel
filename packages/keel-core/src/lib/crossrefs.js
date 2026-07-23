@@ -34,9 +34,16 @@ export function checkCrossRefs({ layers, wip = false }) {
   const channels = new Set(Object.keys(messaging?.channels ?? {}));
   const referencedChannels = new Set(); // canales citados por eventos/suscripciones (para detectar huérfanos)
 
-  const checkFieldMap = (fieldMap, where) => {
+  // allowWireName: solo los contratos de sistemas externos (messaging.subscriptions,
+  // http-clients) pueden renombrar campos al nombre real del cable.
+  const checkFieldMap = (fieldMap, where, { allowWireName = false } = {}) => {
     for (const [name, field] of Object.entries(fieldMap ?? {})) {
       const type = field?.type;
+      if (field?.wireName !== undefined && !allowWireName) {
+        errors.push(
+          `${where}.${name}: wireName solo es válido en contratos de sistemas externos (messaging: subscriptions, http-clients)`
+        );
+      }
       if (typeof type === 'string' && /^[A-Z]/.test(type) && !types.has(type)) {
         errors.push(`${where}.${name}: el tipo '${type}' no existe en domain: types`);
       }
@@ -366,12 +373,91 @@ export function checkCrossRefs({ layers, wip = false }) {
   for (const [eventName, event] of Object.entries(messaging?.publishing?.events ?? {})) {
     checkFieldMap(event.payload, `messaging: publishing.events.${eventName}.payload`);
     checkChannel(event.channel, `messaging: publishing.events.${eventName}.channel`);
+    if (event.channel && messaging?.channels?.[event.channel]?.external === true) {
+      warnings.push(
+        `messaging: publishing.events.${eventName}.channel: '${event.channel}' está marcado external (lo posee otro sistema) — publicar ahí exige acuerdo con su dueño`
+      );
+    }
   }
+  // Campos que el input de una operación espera recibir de fuera: los generated
+  // (id, timestamps de auditoría) y los computed nunca vienen en el mensaje.
+  const inputFieldsOf = (input) => {
+    if (!input || input === 'void') return null;
+    if (input.fields) return input.fields;
+    if (input.entity && entities.has(input.entity)) {
+      const excluded = new Set(input.exclude ?? []);
+      return Object.fromEntries(
+        Object.entries(domain.entities[input.entity].fields ?? {}).filter(([name]) => !excluded.has(name))
+      );
+    }
+    return null;
+  };
+
   for (const [eventName, sub] of Object.entries(messaging?.subscriptions ?? {})) {
-    checkFieldMap(sub.payload, `messaging: subscriptions.${eventName}.payload`);
-    checkChannel(sub.channel, `messaging: subscriptions.${eventName}.channel`);
+    const where = `messaging: subscriptions.${eventName}`;
+    checkFieldMap(sub.payload, `${where}.payload`, { allowWireName: true });
+    checkChannel(sub.channel, `${where}.channel`);
+    const externalChannel = sub.channel ? messaging?.channels?.[sub.channel]?.external === true : false;
+    const payloadFields = new Set(Object.keys(sub.payload ?? {}));
+
+    // Contrato de recepción: sin él, el generador tiene que suponer la forma del mensaje.
+    if (externalChannel && !sub.contract) {
+      warnings.push(
+        `${where}: consume del canal externo '${sub.channel}' sin contract — el generador tendría que suponer la forma del mensaje (envoltura, formato, discriminador, id de deduplicación)`
+      );
+    }
+    const wrapped = sub.contract?.envelope === 'wrapped';
+    for (const key of ['discriminator', 'messageId']) {
+      const ref = sub.contract?.[key];
+      if (ref?.location !== 'field') continue;
+      const root = ref.name.split('.')[0];
+      if (payloadFields.has(root)) continue;
+      if (wrapped) {
+        warnings.push(`${where}.contract.${key}: el campo '${ref.name}' no está en payload — se asume que vive en la envoltura de la fuente`);
+      } else {
+        errors.push(`${where}.contract.${key}: el campo '${ref.name}' no existe en el payload de la suscripción`);
+      }
+    }
+
+    // triggers + cobertura del input de la operación disparada
     if (!operationNames.has(sub.triggers)) {
-      errors.push(`messaging: subscriptions.${eventName}.triggers: la operación '${sub.triggers}' no existe en use-cases`);
+      errors.push(`${where}.triggers: la operación '${sub.triggers}' no existe en use-cases`);
+      continue;
+    }
+    const mapping = sub.input ?? {};
+    for (const [inputField, payloadField] of Object.entries(mapping)) {
+      if (!payloadFields.has(payloadField)) {
+        errors.push(`${where}.input.${inputField}: el campo '${payloadField}' no existe en el payload de la suscripción`);
+      }
+    }
+    const opInput = inputFieldsOf(operations[sub.triggers].input);
+    if (!opInput) continue;
+    for (const inputField of Object.keys(mapping)) {
+      if (!(inputField in opInput)) {
+        errors.push(
+          `${where}.input.${inputField}: la operación '${sub.triggers}' no declara ese campo en su input`
+        );
+      }
+    }
+    const covered = new Set(Object.keys(mapping));
+    const usedPayloadFields = new Set(Object.values(mapping));
+    for (const [inputField, def] of Object.entries(opInput)) {
+      if (covered.has(inputField)) continue;
+      if (def?.generated === true || def?.computed !== undefined) continue;
+      if (payloadFields.has(inputField)) {
+        usedPayloadFields.add(inputField); // identidad por nombre
+        continue;
+      }
+      if (def?.required === true) {
+        errors.push(
+          `${where}: el campo requerido '${inputField}' del input de '${sub.triggers}' no llega en el payload — declara el campo o mapéalo en input`
+        );
+      }
+    }
+    for (const field of payloadFields) {
+      if (!usedPayloadFields.has(field)) {
+        warnings.push(`${where}.payload.${field}: no alimenta ningún campo del input de '${sub.triggers}'`);
+      }
     }
   }
 
@@ -381,9 +467,9 @@ export function checkCrossRefs({ layers, wip = false }) {
     for (const [callName, call] of Object.entries(client.calls ?? {})) {
       const where = `http-clients: clients.${clientId}.calls.${callName}`;
       for (const section of ['pathParams', 'queryParams', 'headers', 'body']) {
-        checkFieldMap(call.request?.[section], `${where}.request.${section}`);
+        checkFieldMap(call.request?.[section], `${where}.request.${section}`, { allowWireName: true });
       }
-      checkFieldMap(call.response?.fields, `${where}.response.fields`);
+      checkFieldMap(call.response?.fields, `${where}.response.fields`, { allowWireName: true });
 
       if (call.path) {
         const pathVars = [...call.path.matchAll(/\{([A-Za-z][A-Za-z0-9]*)\}/g)].map((m) => m[1]);
