@@ -3,7 +3,7 @@
 // payloads derivan de esa entidad. Asignación campo a campo, sin reflexión.
 
 import { javaFile, javaPath, subPackage } from './render.js';
-import { domainSubPackage, capitalize } from './entities.js';
+import { domainMembers, domainSubPackage, capitalize } from './entities.js';
 import { ANNOTATIONS_PKG } from './mediator.js';
 
 const MAPPER_PKG = 'application.mappers';
@@ -35,9 +35,17 @@ function renderMapper(model, entity, dtos) {
     `${subPackage(model, domainSubPackage(entity))}.${entity.name}`
   ]);
 
+  // Getters directos disponibles en la entidad de dominio; un campo del DTO que
+  // no corresponda (p. ej. subcampo de value object o derivado) lo completa el agente.
+  const gettable = new Set(domainMembers(model, entity).map((m) => m.name));
+
   const methods = dtos.map((dto) => {
     imports.add(`${subPackage(model, 'application.dtos')}.${dto.name}`);
-    const args = dto.fields.map((field) => `entity.get${capitalize(field.name)}()`);
+    const args = dto.fields.map((field) =>
+      gettable.has(field.name)
+        ? `entity.get${capitalize(field.name)}()`
+        : `null /* TODO (agente): ${field.name} no es getter directo de ${entity.name}; mapéalo (¿subcampo de value object?) */`
+    );
     return `    public ${dto.name} to${dto.name}(${entity.name} entity) {
         return new ${dto.name}(
                 ${args.join(',\n                ')});

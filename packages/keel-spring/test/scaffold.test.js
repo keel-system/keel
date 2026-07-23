@@ -1021,6 +1021,83 @@ test('sin capa persistence: POJOs sin JPA, sin repositorio ni datasource', () =>
   assert.ok(!mediatorFile.includes('TransactionTemplate'));
 });
 
+test('persistencia: relación interna con @JoinColumn (FK en la hija, sin join table)', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const patched = structuredClone(layers);
+  patched.domain.entities.Order = {
+    description: 'Pedido del catálogo.',
+    fields: { id: { type: 'uuid', id: true, generated: true } },
+    relations: { lines: { entity: 'OrderLine', cardinality: 'one-to-many', required: true } }
+  };
+  patched.domain.entities.OrderLine = {
+    description: 'Línea de un pedido.',
+    fields: { id: { type: 'uuid', id: true, generated: true }, quantity: { type: 'int', required: true } }
+  };
+  patched.domain.aggregates = { Order: { root: 'Order', entities: ['OrderLine'] } };
+
+  const { warnings } = scaffoldService({ manifest, layers: patched, workspace });
+  assert.deepEqual(warnings, []);
+
+  const orderJpa = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/persistence/entities/OrderJpa.java');
+  assert.ok(orderJpa.includes('@OneToMany(cascade = CascadeType.ALL, orphanRemoval = true)'));
+  assert.ok(orderJpa.includes('@JoinColumn(name = "order_id")')); // FK en la tabla hija
+  assert.ok(orderJpa.includes('import jakarta.persistence.JoinColumn;'));
+  assert.ok(orderJpa.includes('private List<OrderLineJpa> lines = new ArrayList<>();'));
+
+  // El adaptador mapea la colección interna en ambos sentidos.
+  const adapter = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/persistence/repositories/OrderRepositoryImpl.java');
+  assert.ok(adapter.includes('jpa.getLines().stream().map(this::toDomain).toList()'));
+  assert.ok(adapter.includes('jpa.setLines(new ArrayList<>(domain.getLines().stream().map(this::toJpa).toList()));'));
+});
+
+test('persistencia: value object anidado deja TODO en vez de columna/mapa inválidos', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const patched = structuredClone(layers);
+  patched.domain.types.GeoPoint = {
+    description: 'Coordenada geográfica.',
+    fields: { lat: { type: 'decimal' }, lng: { type: 'decimal' } }
+  };
+  patched.domain.types.Address = {
+    description: 'Dirección postal con geolocalización.',
+    fields: { street: { type: 'string' }, geo: { type: 'GeoPoint' } }
+  };
+  patched.domain.entities.Product.fields.origin = { type: 'Address' };
+
+  scaffoldService({ manifest, layers: patched, workspace });
+
+  const productJpa = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/persistence/entities/ProductJpa.java');
+  assert.ok(productJpa.includes('@Column(name = "origin_street")')); // sub escalar sí se aplana
+  assert.ok(productJpa.includes('// TODO (agente): Address.geo es un value object anidado')); // sub compuesto no
+
+  const adapter = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/persistence/repositories/ProductRepositoryImpl.java');
+  assert.ok(adapter.includes('null /* TODO (agente): reconstruir Address')); // toDomain no inventa getters
+  assert.ok(adapter.includes('// TODO (agente): mapear Address.geo (value object anidado).')); // toJpa
+});
+
+test('persistencia: timestamps de auditoría declarados se auto-pueblan (no se pierden)', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const patched = structuredClone(layers);
+  patched.domain.entities.Ledger = {
+    description: 'Registro contable con auditoría propia.',
+    fields: {
+      id: { type: 'uuid', id: true, generated: true },
+      createdAt: { type: 'timestamp' },
+      updatedAt: { type: 'timestamp' }
+    }
+  };
+
+  scaffoldService({ manifest, layers: patched, workspace });
+
+  const ledgerJpa = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/persistence/entities/LedgerJpa.java');
+  assert.ok(!ledgerJpa.includes('extends AuditableEntity')); // no hereda (evita campos duplicados)
+  assert.ok(ledgerJpa.includes('@EntityListeners(AuditingEntityListener.class)'));
+  assert.ok(ledgerJpa.includes('@CreatedDate'));
+  assert.ok(ledgerJpa.includes('@LastModifiedDate'));
+});
+
 test('operación sin patrón CRUD ni endpoint explícito cae a POST con aviso', () => {
   const workspace = makeWorkspace();
   const { manifest, layers } = loadFixture();

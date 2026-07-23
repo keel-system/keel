@@ -111,6 +111,11 @@ function renderJpaEntity(model, entity) {
   const declarations = [];
   const accessors = [];
 
+  // Auditoría automática, salvo que el diseño ya declare sus propios timestamps:
+  // en ese caso no se hereda AuditableEntity (evita campos duplicados) pero los
+  // campos declarados se anotan igualmente como managed (ver bucle scalar).
+  const audited = !entity.fields.some((field) => field.name === 'createdAt' || field.name === 'updatedAt');
+
   for (const member of members) {
     if (member.kind === 'scalar') {
       const { field } = member;
@@ -120,6 +125,16 @@ function renderJpaEntity(model, entity) {
       if (field.isId) {
         imports.add('jakarta.persistence.Id');
         lines.push('    @Id');
+      }
+      // Timestamps de auditoría declarados por el diseño: se auto-pueblan vía el
+      // AuditingEntityListener del @EntityListeners de la clase (no se pierden).
+      if (!audited && field.name === 'createdAt') {
+        imports.add('org.springframework.data.annotation.CreatedDate');
+        lines.push('    @CreatedDate');
+      }
+      if (!audited && field.name === 'updatedAt') {
+        imports.add('org.springframework.data.annotation.LastModifiedDate');
+        lines.push('    @LastModifiedDate');
       }
       for (const annotation of field.columns) {
         if (annotation.startsWith('@Enumerated')) {
@@ -139,6 +154,14 @@ function renderJpaEntity(model, entity) {
         continue;
       }
       for (const sub of member.subs) {
+        // Value object anidado (sub compuesto): no se puede aplanar a una columna;
+        // lo completa el agente (@Embedded o columnas) — ver skill keel-spring-database.
+        if (sub.subKind === 'composite') {
+          declarations.push(
+            `    // TODO (agente): ${member.field.javaType}.${sub.voAccessor} es un value object anidado; mapéalo con @Embedded o columnas (ver skill keel-spring-database).`
+          );
+          continue;
+        }
         for (const name of sub.imports) imports.add(name);
         if (sub.subKind === 'enum') imports.add(`${subPackage(model, 'domain.enums')}.${sub.javaType}`);
         imports.add('jakarta.persistence.Column');
@@ -157,15 +180,16 @@ function renderJpaEntity(model, entity) {
       pushAccessor(member.name, 'UUID');
     } else if (member.kind === 'relationMany') {
       const childJpa = `${member.relation.entity}Jpa`;
-      const annotation =
-        member.relation.cardinality === 'many-to-many'
-          ? '@ManyToMany'
-          : '@OneToMany(cascade = CascadeType.ALL, orphanRemoval = true)';
+      let annotation;
       if (member.relation.cardinality === 'many-to-many') {
         imports.add('jakarta.persistence.ManyToMany');
+        annotation = '@ManyToMany';
       } else {
         imports.add('jakarta.persistence.OneToMany');
         imports.add('jakarta.persistence.CascadeType');
+        imports.add('jakarta.persistence.JoinColumn');
+        // FK en la tabla hija (unidireccional CON @JoinColumn: sin join table).
+        annotation = `@OneToMany(cascade = CascadeType.ALL, orphanRemoval = true)\n    @JoinColumn(name = "${snakeCase(entity.name)}_id")`;
       }
       imports.add('java.util.List');
       imports.add('java.util.ArrayList');
@@ -174,23 +198,33 @@ function renderJpaEntity(model, entity) {
     } else {
       const childJpa = `${member.relation.entity}Jpa`;
       const optional = member.relation.required ? 'false' : 'true';
+      // FK en esta tabla (lado dueño): columna <relación>_id.
+      imports.add('jakarta.persistence.JoinColumn');
+      const joinNullable = member.relation.required ? ', nullable = false' : '';
+      const joinColumn = `\n    @JoinColumn(name = "${snakeCase(member.relation.name)}_id"${joinNullable})`;
       let annotation;
       if (member.relation.cardinality === 'many-to-one') {
         imports.add('jakarta.persistence.ManyToOne');
-        annotation = `@ManyToOne(optional = ${optional})`;
+        annotation = `@ManyToOne(optional = ${optional})${joinColumn}`;
       } else {
         imports.add('jakarta.persistence.OneToOne');
         imports.add('jakarta.persistence.CascadeType');
-        annotation = `@OneToOne(cascade = CascadeType.ALL, orphanRemoval = true, optional = ${optional})`;
+        annotation = `@OneToOne(cascade = CascadeType.ALL, orphanRemoval = true, optional = ${optional})${joinColumn}`;
       }
       declarations.push(`    ${annotation}\n    private ${childJpa} ${member.name};`);
       pushAccessor(member.name, childJpa);
     }
   }
 
-  // Auditoría automática, salvo que el diseño ya declare sus propios timestamps.
-  const audited = !entity.fields.some((field) => field.name === 'createdAt' || field.name === 'updatedAt');
-  const header = ['@Entity', renderTableAnnotation(entity, imports)];
+  const header = ['@Entity'];
+  if (!audited) {
+    // Auditoría sobre timestamps declarados por el diseño: la entidad no hereda
+    // AuditableEntity pero sí escucha el listener que puebla @CreatedDate/@LastModifiedDate.
+    imports.add('jakarta.persistence.EntityListeners');
+    imports.add('org.springframework.data.jpa.domain.support.AuditingEntityListener');
+    header.push('@EntityListeners(AuditingEntityListener.class)');
+  }
+  header.push(renderTableAnnotation(entity, imports));
   const body = `${header.join('\n')}
 public class ${entity.name}Jpa${audited ? ' extends AuditableEntity' : ''} {
 

@@ -25,14 +25,14 @@ Buena parte de esta tabla la materializa ya el **scaffolding determinista** de `
 | campo `sensitive` | Excluido de DTOs de salida y payloads de evento por defecto; solo se expone si un payload lo declara explícitamente |
 | `types.T` escalar (`base` + `constraints`) | Value type (record o `@Embeddable`) con sus constraints como validación en el constructor |
 | `types.T` enum nominal (`values`) | Enum Java en domain, reutilizado por nombre |
-| `types.T` compuesto (`fields`) | Record/`@Embeddable` con los campos; cómo se persiste lo decide la capa persistence |
+| `types.T` compuesto (`fields`) | Record puro en `domain/valueobject`; en la Jpa se **aplana a columnas con prefijo** (`<campo>_<sub>`) si es de un nivel escalar. VO anidado o colección de VOs → build deja `// TODO (agente)`: se resuelve con `@Embeddable`/`@Embedded`/`@ElementCollection` vía skill `keel-spring-database` |
 | campo `enum` inline | Enum Java en domain; `default` aplicado al crear |
 | `constraints` | Bean Validation en DTOs (`@Pattern`, `@Size`, `@DecimalMin`…) y/o validación del value type |
-| `relations` | Asociación JPA según `cardinality`; `required: false` → `optional = true` |
+| `relations` | Asociación JPA según `cardinality`; `required: false` → `optional = true`. Casos que build no genera (bidireccionalidad/`mappedBy`, fetch, to-many entre agregados) los completa el agente vía skill `keel-spring-database` (`references/jpa-mapping.md`) |
 | `lifecycle` | Guardas mecánicas de transición en la entidad: un método de dominio por transición válida; cambio de estado no declarado → excepción de negocio; estado con `[]` es terminal |
 | `aggregates` | Repository de Spring Data **solo por raíz**; las entidades internas se acceden a través de su raíz, sin repository propio |
-| relación interna a un agregado | Asociación con `cascade = CascadeType.ALL, orphanRemoval = true` desde la raíz |
-| relación hacia otro agregado | Columna id/FK a la raíz ajena, sin asociación navegable profunda |
+| relación interna a un agregado | Asociación con `cascade = CascadeType.ALL, orphanRemoval = true` desde la raíz, con `@JoinColumn` (FK en la tabla hija para `@OneToMany`; columna `<relación>_id` para `@ManyToOne`/`@OneToOne`), sin join table |
+| relación hacia otro agregado (`many-to-one`/`one-to-one`) | Columna `UUID <relación>Id` a la raíz ajena, sin asociación navegable. La `to-many` entre agregados build no la genera (warning): la modela el agente sin cruzar la frontera de agregado |
 | `invariants` | Métodos de dominio que las protegen (ej. transición de estado que lanza excepción) + test que intenta violarlas |
 
 ### Tipos base
@@ -138,6 +138,8 @@ Sin esta capa (servicio sin estado propio), no se incluye JPA ni base de datos.
 | `entities.X.indexes` | `@Index` en la entidad (o migración) por cada lista de campos |
 | `consistency.transactionalBoundary: per-operation` | La transacción por mensaje que abre `UseCaseMediator` ya lo cumple: la operación completa es la transacción |
 | `consistency.transactionalBoundary: per-aggregate` | El command debe tocar una sola raíz de agregado dentro de la transacción del mediator; nunca dos agregados en la misma transacción (si necesitas semántica especial, anota el handler con `@Transactional` y documenta la excepción) |
+| auditoría `createdAt`/`updatedAt` | Automática: `AuditableEntity` (`@MappedSuperclass` + JPA auditing). Si la entidad declara sus propios timestamps, build no hereda pero anota esos campos con `@CreatedDate`/`@LastModifiedDate` + `@EntityListeners` (se auto-pueblan igual) |
+| autoría (`createdBy`/`updatedBy`), `@Version` (locking), soft-delete, `json`→jsonb, converters, ids numéricos generados | No los genera build (dependen del diseño avanzado): los añade el agente siguiendo `keel-spring-database`/`references/jpa-mapping.md`, cubiertos por escenarios `FL-*` |
 
 ## `storage` — storage.keel.yaml
 

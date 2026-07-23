@@ -202,6 +202,11 @@ function renderToDomain(model, entity, imports) {
     if (member.kind === 'field' && member.field.kind === 'composite') {
       const vo = model.valueObjects.find((v) => v.name === member.field.javaType);
       if (!vo) return `null /* TODO (agente): mapear ${member.field.javaType} */`;
+      // Con un value object anidado, la Jpa dejó un TODO en vez de columnas: no hay
+      // getters de subcampos que reconstruir aquí; lo completa el agente.
+      if (vo.fields.some((sub) => sub.kind === 'composite')) {
+        return `null /* TODO (agente): reconstruir ${member.field.javaType} (value object anidado, ver skill keel-spring-database) */`;
+      }
       imports.add(`${subPackage(model, 'domain.valueobject')}.${vo.name}`);
       const jpaSubs = vo.fields.map((sub) => `jpa.get${capitalize(member.name)}${capitalize(sub.name)}()`);
       return `new ${vo.name}(${jpaSubs.join(', ')})`;
@@ -227,6 +232,11 @@ function renderToJpa(model, entity, imports) {
     if (member.kind === 'vo') {
       const getter = `domain.get${capitalize(member.name)}()`;
       for (const sub of member.subs) {
+        // Sub compuesto (value object anidado): sin columna aplanada en la Jpa.
+        if (sub.subKind === 'composite') {
+          lines.push(`        // TODO (agente): mapear ${member.field.javaType}.${sub.voAccessor} (value object anidado).`);
+          continue;
+        }
         lines.push(`        jpa.set${capitalize(sub.name)}(${getter} != null ? ${getter}.${sub.voAccessor}() : null);`);
       }
       if (member.subs.length === 0) {

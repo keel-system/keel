@@ -5,11 +5,16 @@ description: Guía de base de datos relacional en un proyecto generado por keel-
 
 # Base de datos relacional (database: la de `keel-stack.json`)
 
-El código de persistencia sale **completo** de build (transversal a todos los
-dialectos): espejo `XxxJpa`, `JpaRepository`, puerto + adaptador
+El código de persistencia del **caso común** sale de build (transversal a todos
+los dialectos): espejo `XxxJpa`, `JpaRepository`, puerto + adaptador
 `XxxRepositoryImpl`, auditoría (`AuditableEntity`) y el datasource en
-`parameters/<perfil>/db.yaml`. **No reescribas ese código.** Esta skill cubre
-lo que sí varía: tuning de configuración, particularidades del dialecto y
+`parameters/<perfil>/db.yaml`. **No rehagas ese patrón**; extiéndelo/ajústalo
+siguiendo `references/jpa-mapping.md` cuando el diseño exija lo que build no
+resuelve: relaciones bidireccionales (`mappedBy`/fetch), to-many entre agregados,
+value objects anidados o `@Embeddable`, converters, `json`→jsonb, `@Version`
+(locking) o autoría (`createdBy`/`updatedBy`). Build nunca deja código que no
+compila: donde no puede decidir deja un `// TODO (agente): …` que debes resolver.
+Esta skill cubre además lo que solo varía en configuración: tuning, dialecto y
 validación/reset de datos.
 
 ## Antes de empezar
@@ -39,12 +44,19 @@ validación/reset de datos.
 
 ## Qué hace el agente
 
-1. **Esquema definitivo**: `ddl-auto: update` es solo para arrancar; decide el
+1. **Resolver los TODO de build**: busca `// TODO (agente)` en
+   `infrastructure/persistence/` (value objects anidados, mapeos que build no pudo
+   aplanar) y complétalos con `references/jpa-mapping.md`.
+2. **Extender el mapeo estructural**: aplica lo de `references/jpa-mapping.md`
+   cuando `persistence.keel.yaml`/`domain.keel.yaml` exijan relaciones
+   bidireccionales, to-many entre agregados, `@Embeddable`, converters, `json`→jsonb,
+   `@Version` o autoría.
+3. **Esquema definitivo**: `ddl-auto: update` es solo para arrancar; decide el
    esquema final (idealmente migraciones) respetando los índices y claves
    naturales de `persistence.keel.yaml`. En production Hibernate solo valida.
-2. **Tuning solo si un escenario lo pide**: pool Hikari, batching, fetch — con
+4. **Tuning solo si un escenario lo pide**: pool Hikari, batching, fetch — con
    `references/configuration.md`. No tunees por adelantado.
-3. **Dialecto**: revisa `references/dialects/<database>.md` antes de decidir
+5. **Dialecto**: revisa `references/dialects/<database>.md` antes de decidir
    tipos de columna no triviales (JSON, UUID, texto largo) o de depurar
    diferencias entre H2 (tests) y la BD real.
 
@@ -54,6 +66,7 @@ Léelas bajo demanda, no todas de golpe:
 
 | Referencia | Cuándo leerla |
 |---|---|
+| `references/jpa-mapping.md` | Al resolver un `// TODO (agente)` de persistencia o al mapear algo que build no cubre (relaciones bidireccionales/to-many entre agregados, VO anidados/`@Embeddable`, converters, `json`→jsonb, `@Version`, autoría) |
 | `references/configuration.md` | Antes de tocar `parameters/<perfil>/db.yaml` o propiedades `spring.jpa.*` (Hikari, batching, N+1, locking) |
 | `references/dialects/<database>.md` | Al decidir tipos de columna, depurar el dialecto o preparar su validación/reset (solo el del stack) |
 | `references/troubleshooting.md` | Si el arranque, el pool o las queries fallan (pool agotado, LazyInitializationException, drift H2/BD real) |
