@@ -34,6 +34,7 @@ Estas reglas no se negocian ni se "acomodan" para que un caso particular compile
 
 - Ninguna credencial real en `local`/`develop`: el gradiente de perfiles va de literal (local) a `${VAR:default}` (develop) a `${VAR}` sin default (production).
 - Configuración nueva va en el fragmento `parameters/<perfil>/*.yaml` correspondiente, nunca hardcodeada en un único yaml compartido.
+- En la medida de lo posible, ningún valor configurable va quemado en el código: timeouts, URLs base, tamaños de página por defecto, límites, reintentos, feature flags y cualquier constante operativa que pueda variar por entorno se parametriza en el fragmento `parameters/<perfil>/*.yaml` y se inyecta vía `@ConfigurationProperties`/`@Value`. Solo permanecen como literales las constantes verdaderamente invariantes del contrato (p. ej. `code` de error o nombres de evento, que son contrato público).
 
 ## Ante ambigüedad
 
