@@ -30,6 +30,11 @@
         "domain": {
           "type": "string",
           "description": "Dominio de negocio al que pertenece (ej. commerce, billing)."
+        },
+        "basedOn": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*@\\d+\\.\\d+\\.\\d+$",
+          "description": "Linaje: servicio y versión de diseño del que se derivó (ej. billing@1.2.0)."
         }
       }
     },

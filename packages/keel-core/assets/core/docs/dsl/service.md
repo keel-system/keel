@@ -12,6 +12,7 @@ service:
   version: 1.0.0               # semver del DISEÑO (no del código generado)
   description: Gestiona el ciclo de vida de productos y su organización en catálogos.
   domain: commerce
+  # basedOn: billing@1.2.0    # linaje: servicio@versión del que se derivó (opcional)
 
 layers:
   domain: domain.keel.yaml
@@ -30,3 +31,4 @@ Reglas:
 - Los nombres de archivo son fijos (`<capa>.keel.yaml`): la clave declara la capa, no elige el nombre.
 - La versión del diseño sube según semver del contrato: ver [methodology.md](../methodology.md).
 - La plantilla siembra `description` con el prefijo `TODO:`; `keel validate` lo trata como placeholder pendiente (error sin `--wip`, aviso con `--wip`) hasta que se redacte la frase real.
+- `basedOn` (opcional, formato `<servicio>@<versión>`) registra de qué diseño se derivó el servicio; lo escribe `keel new <nuevo> --from <origen>`. Es linaje histórico, no acoplamiento: el derivado evoluciona libre, y `/keel-design` lo usa para arrancar en modo derivación (entrevista solo sobre lo que cambia).

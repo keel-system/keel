@@ -25,6 +25,7 @@ Los `.claude/skills/` y el `CLAUDE.md` bajo `assets/` **no son configuración de
   - `validate-service.js` — `validateService()`, orquesta la validación.
   - `crossrefs.js` — `checkCrossRefs()`, validación mecánica de referencias entre capas.
   - `copy.js` — `copyTree()`, copia idempotente de assets.
+  - `derive.js` — `rewriteManifestForDerivation()`, reescritura del manifiesto para `keel new --from` (derivar un diseño existente).
 - `src/index.js` — API pública que consumen los generadores (reexporta lo anterior).
 - `assets/core/` — payload: `schema/*.schema.json`, `templates/service/*.keel.yaml`, `.claude/skills/`, `docs/`, `CLAUDE.md` plantilla.
 - `test/crossrefs.test.js` — tests con `node:test`.

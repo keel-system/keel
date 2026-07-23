@@ -16,7 +16,7 @@ Tu rol: arquitecto de dominio. Ayudas al humano a condensar la funcionalidad de 
 
 ## Proceso
 
-1. **Punto de partida.** Si `specs/<servicio>/` existe, lee el manifiesto y las capas presentes, resume el estado en 3-5 frases y continúa desde ahí. Si no existe, créalo con `keel new <servicio>` cuando conozcas el nombre.
+1. **Punto de partida.** Si `specs/<servicio>/` existe, lee el manifiesto y las capas presentes, resume el estado en 3-5 frases y continúa desde ahí; si el manifiesto declara `service.basedOn`, trabaja en **modo derivación** (ver sección más abajo). Si no existe, créalo con `keel new <servicio>` cuando conozcas el nombre; si el usuario quiere reutilizar un diseño existente ajustándolo, créalo con `keel new <nuevo> --from <origen>`.
 
 2. **Entrevista de dominio.** Antes de escribir YAML, entiende el dominio. Pregunta (con AskUserQuestion cuando haya opciones claras, en texto libre cuando no):
    - ¿Qué problema resuelve el servicio? ¿Quiénes lo consumen (clientes HTTP, otros servicios, eventos)?
@@ -44,6 +44,15 @@ Tu rol: arquitecto de dominio. Ayudas al humano a condensar la funcionalidad de 
 6. **Documento de diseño (paso final).** Cerrados los escenarios, **ejecuta el flujo de `/keel-handoff`** (skill `keel-handoff`) para producir `docs/<servicio>/DESIGN.md` y actualizar el índice de servicios del `README.md`. Este es el mejor momento para capturar el **"por qué"** de las decisiones no obvias (fronteras de agregado, lifecycle, campos sensibles, códigos de error, resiliencia…): el humano está presente y el diseño fresco, así que haz la **entrevista inline** de rationale que pide `keel-handoff` en lugar de dejarla para después. Termina indicando los siguientes pasos: `/keel-generate <tech>` para producir el código y `/keel-docs` para la documentación de integradores.
 
 Si el usuario quiere iterar una capa concreta de un servicio existente ("cambiemos la seguridad"), ve directo a esa capa; al cerrar, revisa qué referencias cruzadas de otras capas se ven afectadas.
+
+## Modo derivación
+
+Un servicio derivado nace con `keel new <nuevo> --from <origen>`: la CLI clona los artefactos del origen y deja en el manifiesto `service.basedOn: <origen>@<versión>` como linaje. Cuando detectes `basedOn`:
+
+1. Lee el diseño heredado completo y resume al usuario qué se hereda del origen (entidades, operaciones, capas declaradas) antes de tocar nada.
+2. **No repitas la entrevista completa** capa a capa: pregunta directamente qué cambia respecto al origen (qué se añade, qué se quita, qué se ajusta) y trabaja solo las capas afectadas, cerrando cada una con `keel validate --wip` como siempre.
+3. Antes del cierre: redacta la `description` real (la CLI la deja prefijada con `TODO: revisar descripción heredada…`) y revisa la prosa de las demás capas por menciones al servicio de origen que ya no apliquen.
+4. `basedOn` es linaje histórico, no una dependencia viva: se mantiene intacto y el derivado evoluciona libre. El cierre (validación completa, escenarios, handoff, README) es el mismo que el flujo normal.
 
 ## Cierre de sesión (definition of done)
 

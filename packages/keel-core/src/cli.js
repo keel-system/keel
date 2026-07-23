@@ -33,9 +33,10 @@ program
 
 program
   .command('new')
-  .description('Crea el directorio de un servicio nuevo con manifiesto, domain y use-cases desde plantillas')
+  .description('Crea el directorio de un servicio nuevo desde plantillas, o derivado de un diseño existente con --from')
   .argument('<servicio>', 'nombre del servicio en kebab-case (ej. product-catalog)')
-  .action((servicio) => createService(servicio));
+  .option('--from <origen>', 'servicio existente del que derivar (nombre o ruta: billing | specs/billing)')
+  .action((servicio, options) => createService(servicio, options));
 
 program
   .command('validate')
