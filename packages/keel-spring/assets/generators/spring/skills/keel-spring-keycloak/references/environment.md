@@ -64,14 +64,39 @@ curl -s -d 'grant_type=password&client_id=<cliente>&username=<user>&password=<pa
 Pide el token al **mismo host** que valida la app (`localhost:8180`): un token
 de `keycloak:8080` tiene otro `iss` y da 401.
 
-**Servicio (client credentials, escenarios M2M):** crea un segundo cliente
-confidencial (`-s publicClient=false -s serviceAccountsEnabled=true`), asigna
-roles a su service account (`add-roles --uusername service-account-<cliente>`) y:
+**Servicio (client credentials, escenarios M2M):** si el diseño declara
+`serviceClients` (security.keel.yaml), crea **un cliente confidencial por cada
+entrada**, con el `clientId` exacto del diseño:
 
 ```bash
-curl -s -d 'grant_type=client_credentials&client_id=<cliente-m2m>&client_secret=<secret>' \
+# Cliente confidencial con service accounts (flujo client_credentials)
+$KC create clients -r <realm> -s clientId=<service-client> -s enabled=true \
+    -s publicClient=false -s serviceAccountsEnabled=true -s secret=<secret>
+
+# Un client scope por cada scope del diseño (mismo nombre recurso:accion),
+# asignado como default al cliente para que entre en el claim scope del token
+$KC create client-scopes -r <realm> -s name=<scope> -s protocol=openid-connect \
+    -s 'attributes."include.in.token.scope"=true'
+# (asigna el scope al cliente: admin console → Clients → <service-client> → Client scopes,
+#  o via API: PUT /admin/realms/<realm>/clients/<id>/default-client-scopes/<scopeId>)
+```
+
+Con `serviceAuth.validateAudience: true`, añade al cliente un **mapper de
+audiencia** que meta la audiencia del servicio (`security.audience`, por defecto
+el nombre del servicio) en el claim `aud`: admin console → Clients →
+`<service-client>` → Client scopes → dedicated scope → Add mapper → Audience,
+con «Included Custom Audience» = la audiencia. Sin ese mapper el token no trae
+el `aud` esperado y el servicio responde 401.
+
+Token:
+
+```bash
+curl -s -d 'grant_type=client_credentials&client_id=<service-client>&client_secret=<secret>' \
     http://localhost:8180/realms/<realm>/protocol/openid-connect/token | jq -r .access_token
 ```
+
+Nunca uses tokens de usuario (password grant) para escenarios M2M: el diseño los
+distingue (`level: service` + scopes) y la validación debe ejercitar el flujo real.
 
 ## Verificación del mapeo
 
@@ -81,3 +106,7 @@ curl -s -d 'grant_type=client_credentials&client_id=<cliente-m2m>&client_secret=
    según `access.rules` del diseño. Ambos casos, no solo el feliz.
 3. Sin token → 401 (no 403): distingue autenticación de autorización en los
    escenarios.
+4. M2M: en el token `client_credentials` comprueba el claim `scope` (los scopes
+   del diseño, separados por espacio) y —si `validateAudience: true`— que `aud`
+   incluye la audiencia del servicio. Cliente sin el scope exigido → 403; token
+   con `aud` de otro servicio → 401.

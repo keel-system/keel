@@ -148,9 +148,16 @@ test('summarizeService resume las capas opcionales', (t) => {
     style: 'rest',
     basePath: '/api/v1',
     auto: true,
-    endpoints: [{ operation: 'reconcile', method: 'POST', path: '/invoices/reconcile' }]
+    defaultAudience: 'users',
+    endpoints: [{ operation: 'reconcile', method: 'POST', path: '/invoices/reconcile', audience: 'users' }]
   });
-  assert.deepEqual(summary.security, { authentication: 'oidc', roles: ['billing-admin'], defaultAccess: 'required' });
+  assert.deepEqual(summary.security, {
+    authentication: 'oidc',
+    serviceAuth: null,
+    roles: ['billing-admin'],
+    serviceClients: [],
+    defaultAccess: 'required'
+  });
   assert.deepEqual(summary.messaging, { reliability: 'outbox', published: ['InvoiceCreated'], subscriptions: ['OrderPlaced'] });
   assert.deepEqual(summary.httpClients, { clients: ['payment-gateway'] });
   assert.deepEqual(summary.persistence, { model: 'relational', entities: ['Invoice'] });

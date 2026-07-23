@@ -35,6 +35,7 @@ service (manifiesto)
 
 - **Obligatorias**: `domain` (entidades, invariantes) y `use-cases` (operaciones).
 - **Opcionales**: `api`, `security`, `messaging`, `http-clients`, `persistence`, `storage` — se declaran solo si aplican. Un worker sin API no tiene `api`; un servicio sin estado no tiene `persistence`; uno que no maneja archivos no tiene `storage`.
+- La capa `api` distingue el público de cada endpoint (`audience`: usuarios web/mobile, otros servicios M2M, o ambos) y `security` modela a los consumidores máquina (`serviceAuth`, `serviceClients`, `level: service` con scopes); ver `dsl/api.md` y `dsl/security.md`.
 - Orden de diseño: **domain → use-cases → api → security → messaging → http-clients → persistence → storage**. Hay dos referencias hacia delante: `emits` (use-cases nombra eventos que se definen al llegar a messaging) y los campos `file` del domain (que nombran buckets definidos al llegar a storage); mientras la capa destino no exista, `keel validate --wip` las reporta como pendientes en vez de error.
 - Cada capa se cierra con `keel validate --wip specs/<servicio>` (las capas aún en plantilla son avisos, no errores); el diseño completo se cierra con `keel validate` sin flag, en verde, más `validation-scenarios.md` con su matriz de cobertura completa.
 - `keel new <servicio>` crea el directorio con manifiesto + domain + use-cases; el resto se añade desde `templates/service/` cuando aplique.

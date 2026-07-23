@@ -49,10 +49,32 @@ TOKEN=$($AWS cognito-idp initiate-auth --auth-flow USER_PASSWORD_AUTH \
 ```
 
 Usa el **AccessToken** como Bearer (es el que trae `cognito:groups`); el
-IdToken no es el contrato del converter (ver configuration.md). Para
-escenarios M2M reales Cognito usa client credentials con un domain hosted —
-fuera del alcance del emulador: valida M2M con un usuario técnico en un grupo
-propio y documéntalo.
+IdToken no es el contrato del converter (ver configuration.md).
+
+## M2M (`serviceClients` + `serviceAuth: client-credentials`)
+
+En Cognito **real**: crea un resource server cuyo identifier sea el nombre del
+servicio y un custom scope por cada scope del diseño, y un app client con
+`generate-secret` + `--allowed-o-auth-flows client_credentials` por cada
+`serviceClient`. Dos divergencias de Cognito que debes documentar en el
+proyecto al cerrar:
+
+- **Formato de scopes**: Cognito emite los custom scopes como
+  `<resource-server-id>/<scope>` (p. ej. `product-service/product:read`), no
+  como el `recurso:accion` a secas que esperan los matchers `SCOPE_<scope>`
+  generados. Usa como identifier del resource server el nombre del servicio y
+  ajusta la extracción de scopes del `JwtAuthConverter` **solo si es
+  imprescindible** para casar los nombres, dejando constancia del ajuste (es la
+  frontera agente que mapping.md admite cuando el mapeo de claims no cubre el
+  diseño).
+- **Sin `aud`**: los access tokens `client_credentials` de Cognito no traen
+  claim `aud` (traen `client_id`). Si el diseño pide `validateAudience: true`,
+  el `AudienceValidator` generado rechazaría estos tokens: documenta la
+  divergencia y valida la audiencia por `client_id`/scope según el caso.
+
+El **emulador no soporta** client credentials (requiere hosted domain): valida
+los escenarios M2M con un usuario técnico en un grupo propio y documéntalo como
+divergencia local; los escenarios reales quedan para el entorno con Cognito real.
 
 ## Verificación del mapeo
 

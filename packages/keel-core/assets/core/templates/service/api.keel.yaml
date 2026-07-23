@@ -8,9 +8,14 @@ basePath: /api/v1
 # auto: true deriva rutas por convención CRUD desde las operaciones.
 auto: true
 
+# defaultAudience fija el público de los endpoints sin audience propia (incluidos los de auto):
+# defaultAudience: users    # users | services | both
+
 # endpoints declara el mapeo explícito (tiene prioridad sobre auto) para rutas no CRUD:
+# audience marca a quién sirve el endpoint: users (web/mobile), services (otros servidores, M2M) o both.
 # endpoints:
-#   retireProduct: { method: POST, path: "/products/{id}/retire", successStatus: 200 }
+#   retireProduct:   { method: POST, path: "/products/{id}/retire", successStatus: 200 }
+#   getProductPrice: { method: GET, path: "/products/{id}/price", audience: services }
 
 # pagination:
 #   style: offset

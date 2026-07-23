@@ -78,8 +78,14 @@ Sin esta capa, no se incluye Spring Security. **Esta capa la materializa entera 
 |--------|--------|
 | `authentication.protocol` | `oidc`/`jwt` → Spring Security resource server (JWT); `api-key` → filtro de API key; `none` → sin autenticación |
 | `access.default` | Regla base del `SecurityFilterChain` para toda operación sin regla explícita |
-| `access.rules.op` | Regla por operación (vía su ruta): `public` → permitAll, `required` → authenticated (+ `hasAuthority` por `permissions`), `admin` → rol elevado (+ `hasRole` por `roles`) |
+| `access.rules.op` | Regla por operación (vía su ruta): `public` → permitAll, `required` → authenticated (+ `hasAuthority` por `permissions`), `admin` → rol elevado (+ `hasRole` por `roles`), `service` → autenticación de cliente máquina |
 | `roles` / `permissions` / `roleGrants` | Catálogo de authorities; los grants se resuelven al validar el token o vía mapeo de claims |
+| `access.rules.op.scopes` (y `level: service`) | Matcher `hasAnyAuthority("SCOPE_<scope>", ...)` — el `JwtAuthConverter` ya emite los scopes del claim `scope` con prefijo `SCOPE_`; `service` sin scopes → `authenticated()` (cualquier token válido, incluidos de usuario: por eso el diseño lo marca con warning) |
+| `audience` de un endpoint (capa api) | Sin efecto directo en código; gobierna qué reglas son válidas (lo valida `keel validate`) y qué escenarios M2M se ejercitan en la validación funcional |
+| `authentication.serviceAuth.protocol: client-credentials` | Mismo resource server JWT: los tokens `client_credentials` entran por la misma cadena; los clientes se provisionan en el proveedor (skill `keel-spring-keycloak`/`-cognito`) |
+| `authentication.serviceAuth.protocol: api-key` (con protocolo principal `oidc`/`jwt`) | `ServiceApiKeyAuthFilter`: header `X-API-Key` contra `security.api-keys.<cliente>` (fragmento `parameters/<perfil>/security.yaml`); autentica como el `serviceClient` con sus scopes como authorities `SCOPE_*` |
+| `authentication.serviceAuth.validateAudience: true` | `AudienceValidator` (`OAuth2TokenValidator<Jwt>` sobre el claim `aud`) + bean `JwtDecoder` (`SupplierJwtDecoder` → Nimbus desde el issuer + validador delegante), audiencia en `security.audience` (default: nombre del servicio) |
+| `serviceClients` | Catálogo de clientes máquina: provisión en el proveedor de auth como clientes `client_credentials` con sus scopes (skill del proveedor), o fuente de las claves `security.api-keys.*` si `serviceAuth` es `api-key` |
 
 ## `messaging` — messaging.keel.yaml
 

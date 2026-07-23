@@ -31,7 +31,9 @@ no continúes.
    headers y efectos observables — la BD/broker se inspeccionan vía el contenedor
    `devtools` según `.claude/conventions/infra-validation.md`; los eventos por su canal o
    por logs. Con capa security, obtén el token según la reference del stack (el
-   reporte de infraestructura indica cómo).
+   reporte de infraestructura indica cómo). Los escenarios M2M (`level: service`)
+   usan credencial de máquina — `client_credentials` del `serviceClient` o
+   `X-API-Key` según `serviceAuth` — nunca un token de usuario.
 5. Al terminar, detén el servidor. **No bajes la infraestructura** (decide el
    orquestador).
 6. **No corrijas código**: si un escenario falla, documenta request/response/esperado

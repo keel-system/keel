@@ -32,11 +32,18 @@ diseño exija lógica que el mapeo de claims no cubre, y entonces documéntalo):
    `aws --endpoint-url http://localhost:9229 cognito-idp create-user-pool ...`,
    `create-user-pool-client`, `admin-create-user` — creando los grupos/roles que
    declara `security.keel.yaml`. Ajusta el `issuer-uri` local al pool creado.
-2. **Token para los escenarios**: `aws --endpoint-url http://localhost:9229
+2. **Clientes máquina (si el diseño declara `serviceClients` con `serviceAuth:
+   client-credentials`)**: en Cognito real, un resource server con los custom
+   scopes del diseño + un app client `client_credentials` por `serviceClient`.
+   El emulador no cubre ese flujo — sigue la estrategia de validación descrita
+   en `references/environment.md` (usuario técnico) y documenta las divergencias
+   de Cognito (formato de scopes, ausencia de `aud`).
+3. **Token para los escenarios**: `aws --endpoint-url http://localhost:9229
    cognito-idp initiate-auth --auth-flow USER_PASSWORD_AUTH ...` y usa el
    `IdToken`/`AccessToken` como Bearer en las llamadas de `validation-scenarios.md`.
-3. **Verifica el mapeo**: un usuario sin el grupo requerido debe recibir 403 y uno
-   con él 2xx, según `access.rules` del diseño.
+4. **Verifica el mapeo**: un usuario sin el grupo requerido debe recibir 403 y uno
+   con él 2xx, según `access.rules` del diseño; para las reglas `level: service`,
+   el equivalente con scopes según la estrategia M2M elegida.
 
 ## Referencias
 

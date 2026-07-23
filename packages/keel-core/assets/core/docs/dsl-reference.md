@@ -9,8 +9,8 @@ Un servicio Keel se diseña como un conjunto de **artefactos por capa** en `spec
 | service | `service.keel.yaml` | ✅ | Manifiesto: identidad + capas declaradas | [dsl/service.md](dsl/service.md) |
 | domain | `domain.keel.yaml` | ✅ | Value types (escalares, enums, VO compuestos), entidades, agregados, relaciones, ciclo de vida, invariantes | [dsl/domain.md](dsl/domain.md) |
 | use-cases | `use-cases.keel.yaml` | ✅ | Operaciones: reglas, errores, idempotencia, caché, schedule | [dsl/use-cases.md](dsl/use-cases.md) |
-| api | `api.keel.yaml` | opcional | Exposición REST al cliente, paginación | [dsl/api.md](dsl/api.md) |
-| security | `security.keel.yaml` | opcional | Autenticación, roles, permisos, acceso por operación | [dsl/security.md](dsl/security.md) |
+| api | `api.keel.yaml` | opcional | Exposición REST, audiencia de cada endpoint (users/services/both), paginación | [dsl/api.md](dsl/api.md) |
+| security | `security.keel.yaml` | opcional | Autenticación (usuarios y clientes máquina), roles, permisos, scopes, acceso por operación | [dsl/security.md](dsl/security.md) |
 | messaging | `messaging.keel.yaml` | opcional | Canales lógicos, eventos publicados (outbox), suscripciones (retry/DLQ) | [dsl/messaging.md](dsl/messaging.md) |
 | http-clients | `http-clients.keel.yaml` | opcional | Llamadas salientes: timeout, retry, circuit breaker, fallback | [dsl/http-clients.md](dsl/http-clients.md) |
 | persistence | `persistence.keel.yaml` | opcional | Modelo de almacenamiento, claves naturales, índices, consistencia | [dsl/persistence.md](dsl/persistence.md) |
@@ -42,6 +42,7 @@ Orden de diseño recomendado (el que sigue `/keel-design`): **domain → use-cas
 | Idempotencia de una operación | use-cases | Es semántica del caso de uso, lo invoque REST o un evento |
 | Caché de una query | use-cases | Qué se cachea y qué lo invalida es conocimiento de dominio |
 | Roles y permisos por endpoint | security | Por nombre de operación, estable aunque cambien rutas |
+| Quién consume un endpoint (usuarios vs otros servicios) | api (`audience`) + security (`serviceAuth`, `serviceClients`, `level: service`) | La audiencia es contrato de la API; las credenciales y scopes de máquina son seguridad |
 | Retry / circuit breaker salientes | http-clients | Política del canal, compartida por los casos de uso |
 | Retry / DLQ de consumo de eventos | messaging | Política de la suscripción |
 | Outbox | messaging | Es la garantía de publicación de eventos |

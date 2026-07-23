@@ -236,6 +236,257 @@ test('canal declarado sin ningún evento o suscripción que lo referencie es war
   );
 });
 
+// --- M2M: audience ↔ reglas de acceso, serviceAuth y serviceClients ---
+
+const domainForM2m = () => ({ entities: { Product: entity() } });
+const useCasesForM2m = () => ({
+  operations: {
+    getProduct: { kind: 'query' },
+    getProductPrice: { kind: 'query' },
+  },
+});
+
+const m2mLayers = (apiOverrides = {}, securityOverrides = {}) => ({
+  domain: domainForM2m(),
+  'use-cases': useCasesForM2m(),
+  api: {
+    endpoints: {
+      getProduct: { method: 'GET', path: '/products/{id}' },
+      getProductPrice: { method: 'GET', path: '/products/{id}/price', audience: 'services' },
+    },
+    ...apiOverrides,
+  },
+  security: {
+    authentication: {
+      protocol: 'oidc',
+      serviceAuth: { protocol: 'client-credentials', validateAudience: true },
+    },
+    permissions: { 'product:read': { description: 'Leer productos y precios' } },
+    serviceClients: {
+      'billing-service': { description: 'Consulta precios para facturar', scopes: ['product:read'] },
+    },
+    access: {
+      default: { level: 'public' },
+      rules: {
+        getProductPrice: { level: 'service', scopes: ['product:read'] },
+      },
+    },
+    ...securityOverrides,
+  },
+});
+
+test('diseño M2M bien formado no produce errores ni warnings', () => {
+  const { errors, warnings } = run(m2mLayers());
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
+test('api + security sin campos M2M sigue validando limpio (retrocompatibilidad)', () => {
+  const layers = {
+    domain: domainForM2m(),
+    'use-cases': useCasesForM2m(),
+    api: {
+      endpoints: {
+        getProduct: { method: 'GET', path: '/products/{id}' },
+        getProductPrice: { method: 'GET', path: '/products/{id}/price' },
+      },
+    },
+    security: {
+      authentication: { protocol: 'oidc' },
+      access: { default: { level: 'required' } },
+    },
+  };
+  const { errors, warnings } = run(layers);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
+test('level service sobre endpoint audience users es error', () => {
+  const layers = m2mLayers();
+  layers.api.endpoints.getProductPrice.audience = 'users';
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) =>
+      e.includes(`access.rules.getProductPrice: level 'service' pero el endpoint de la operación es audience 'users'`)
+    )
+  );
+});
+
+test('level service sobre endpoint audience both es error', () => {
+  const layers = m2mLayers();
+  layers.api.endpoints.getProductPrice.audience = 'both';
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) =>
+      e.includes(`access.rules.getProductPrice: level 'service' en un endpoint audience 'both' excluiría a los usuarios`)
+    )
+  );
+});
+
+test('endpoint audience services con regla level required es error', () => {
+  const layers = m2mLayers();
+  layers.security.access.rules.getProductPrice = { level: 'required' };
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) =>
+      e.includes(`api: endpoints.getProductPrice: audience 'services' pero su regla de acceso (access.rules.getProductPrice) es level 'required'`)
+    )
+  );
+});
+
+test('endpoint audience services cuya regla efectiva es un default humano es error', () => {
+  const layers = m2mLayers();
+  delete layers.security.access.rules;
+  layers.security.access.default = { level: 'required' };
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) =>
+      e.includes(`api: endpoints.getProductPrice: audience 'services' pero su regla de acceso (access.default) es level 'required'`)
+    )
+  );
+});
+
+test('scope inexistente en una regla de acceso es error', () => {
+  const layers = m2mLayers();
+  layers.security.access.rules.getProductPrice.scopes = ['price:read'];
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) =>
+      e.includes(`security: access.rules.getProductPrice: el scope 'price:read' no existe en security: permissions`)
+    )
+  );
+});
+
+test('scope inexistente en un serviceClient es error', () => {
+  const layers = m2mLayers();
+  layers.security.serviceClients['billing-service'].scopes = ['price:read'];
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) =>
+      e.includes(`security: serviceClients.billing-service: el scope 'price:read' no existe en security: permissions`)
+    )
+  );
+});
+
+test('level service con roles es error', () => {
+  const layers = m2mLayers();
+  layers.security.roles = { admin: { description: 'Administrador del sistema' } };
+  layers.security.access.rules.getProductPrice.roles = ['admin'];
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) =>
+      e.includes(`security: access.rules.getProductPrice: level 'service' no admite roles`)
+    )
+  );
+});
+
+test('scopes en una regla que ni es service ni cubre un endpoint both es error', () => {
+  const layers = m2mLayers();
+  layers.api.endpoints.getProduct.audience = 'users';
+  layers.security.access.rules.getProduct = { level: 'required', scopes: ['product:read'] };
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) =>
+      e.includes(`security: access.rules.getProduct: declara scopes pero ni es level 'service' ni su endpoint es audience 'both'`)
+    )
+  );
+});
+
+test('endpoint audience both con required + scopes es válido', () => {
+  const layers = m2mLayers();
+  layers.api.endpoints.getProductPrice.audience = 'both';
+  layers.security.access.rules.getProductPrice = { level: 'required', scopes: ['product:read'] };
+  const { errors } = run(layers);
+  assert.deepEqual(errors, []);
+});
+
+test('endpoints máquina sin serviceAuth es error', () => {
+  const layers = m2mLayers();
+  delete layers.security.authentication.serviceAuth;
+  delete layers.security.serviceClients;
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) =>
+      e.includes(`api: hay endpoints con audience 'services' o 'both' pero security: authentication no declara serviceAuth`)
+    )
+  );
+});
+
+test('serviceClients sin serviceAuth es error', () => {
+  const layers = m2mLayers();
+  delete layers.security.authentication.serviceAuth;
+  const { errors } = run(layers);
+  assert.ok(errors.some((e) => e.includes(`security: serviceClients declarado sin authentication.serviceAuth`)));
+});
+
+test('serviceClients sin ningún endpoint máquina es warning', () => {
+  const layers = m2mLayers();
+  layers.api.endpoints.getProductPrice.audience = 'users';
+  layers.security.access.rules.getProductPrice = { level: 'required' };
+  const { warnings } = run(layers);
+  assert.ok(
+    warnings.some((w) => w.includes(`security: serviceClients declarado pero ningún endpoint es audience 'services' ni 'both'`))
+  );
+});
+
+test('level service sin scopes es warning', () => {
+  const layers = m2mLayers();
+  delete layers.security.access.rules.getProductPrice.scopes;
+  delete layers.security.serviceClients;
+  const { warnings } = run(layers);
+  assert.ok(
+    warnings.some((w) =>
+      w.includes(`security: access.rules.getProductPrice: level 'service' sin scopes`)
+    )
+  );
+});
+
+test('endpoint audience services con level public es warning', () => {
+  const layers = m2mLayers();
+  layers.security.access.rules.getProductPrice = { level: 'public' };
+  delete layers.security.serviceClients;
+  const { warnings } = run(layers);
+  assert.ok(
+    warnings.some((w) =>
+      w.includes(`api: endpoints.getProductPrice: audience 'services' con level 'public'`)
+    )
+  );
+});
+
+test('scope concedido a un serviceClient que ninguna regla exige es warning', () => {
+  const layers = m2mLayers();
+  layers.security.permissions['product:write'] = { description: 'Modificar productos' };
+  layers.security.serviceClients['billing-service'].scopes.push('product:write');
+  const { warnings } = run(layers);
+  assert.ok(
+    warnings.some((w) =>
+      w.includes(`security: serviceClients.billing-service: el scope 'product:write' no lo exige ninguna regla de acceso`)
+    )
+  );
+});
+
+test('scope exigido por una regla sin ningún serviceClient que lo tenga es warning', () => {
+  const layers = m2mLayers();
+  layers.security.serviceClients['billing-service'].scopes = ['product:write'];
+  layers.security.permissions['product:write'] = { description: 'Modificar productos' };
+  const { warnings } = run(layers);
+  assert.ok(
+    warnings.some((w) =>
+      w.includes(`security: el scope 'product:read' exigido por las reglas de acceso no está concedido a ningún serviceClient`)
+    )
+  );
+});
+
+test('defaultAudience services aplica a los endpoints derivados por auto', () => {
+  const layers = m2mLayers({ auto: true, defaultAudience: 'services', endpoints: undefined });
+  delete layers.api.endpoints;
+  layers.security.access = {
+    default: { level: 'service', scopes: ['product:read'] },
+  };
+  const { errors } = run(layers);
+  assert.deepEqual(errors, []);
+});
+
 test('messaging sin channels ni channel sigue validando limpio (retrocompatibilidad)', () => {
   const layers = {
     domain: domainForMessaging(),

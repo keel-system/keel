@@ -16,6 +16,11 @@
       "type": "boolean",
       "description": "Si true, las rutas se derivan por convención CRUD desde las operaciones."
     },
+    "defaultAudience": {
+      "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/audience",
+      "default": "users",
+      "description": "Audiencia por defecto de todos los endpoints (incluidos los derivados por auto) sin audience propia."
+    },
     "endpoints": {
       "type": "object",
       "description": "Mapeo explícito operación → endpoint. Tiene prioridad sobre auto.",
@@ -30,7 +35,12 @@
             "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]
           },
           "path": { "type": "string", "pattern": "^/" },
-          "successStatus": { "type": "integer", "minimum": 200, "maximum": 299 }
+          "successStatus": { "type": "integer", "minimum": 200, "maximum": 299 },
+          "audience": {
+            "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/audience",
+            "default": "users",
+            "description": "Público del endpoint. Una operación cubierta por auto que necesite otra audiencia debe declararse aquí explícitamente."
+          }
         }
       }
     },

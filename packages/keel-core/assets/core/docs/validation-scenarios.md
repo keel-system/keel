@@ -41,6 +41,7 @@ Lo produce `/keel-design` como paso final del cierre del diseño, y se regenera 
 - Las validaciones de input (constraints de value types, campos requeridos) se cubren como casos borde `400`.
 - **Si el diseño declara `storage`**, las operaciones que suben archivos a un bucket cubren el **camino feliz** (el archivo queda almacenado en su bucket y es referenciable desde la entidad) y, según la `visibility` del bucket, la forma de lectura resultante (acceso directo si `public`; URL firmada o lectura mediada si `private`). Cubren además como casos borde el rechazo por tamaño (`FILE_TOO_LARGE`) y por content-type no permitido (`UNSUPPORTED_CONTENT_TYPE`), según las políticas del bucket.
 - Operaciones `internal: true` (sin endpoint) se describen por su disparador real (subscription, schedule u operación interna consumida por otro servicio).
+- **Si el diseño declara endpoints M2M** (capa api con `audience: services`/`both` y security con `serviceAuth`), cada operación con `level: service` cubre: el camino feliz con credencial de máquina válida y los scopes exigidos (`2xx`), la llamada con credencial de máquina **sin** el scope exigido (`403`), y —si `validateAudience: true`— el token emitido para otra audiencia (`401`). Los endpoints `audience: both` cubren además el acceso con token de usuario. Los escenarios hablan de "credencial de máquina del cliente `<serviceClient>`", nunca del proveedor concreto.
 
 ## Secciones de cada escenario
 

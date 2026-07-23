@@ -214,7 +214,7 @@ export function checkCrossRefs({ layers, wip = false }) {
     }
   }
 
-  // security: reglas → operaciones, roles y permisos → catálogos
+  // security: reglas → operaciones, roles, permisos y scopes → catálogos
   if (security) {
     const checkAccessRule = (rule, where) => {
       for (const role of rule?.roles ?? []) {
@@ -222,6 +222,15 @@ export function checkCrossRefs({ layers, wip = false }) {
       }
       for (const perm of rule?.permissions ?? []) {
         if (!permissions.has(perm)) errors.push(`${where}: el permiso '${perm}' no existe en security: permissions`);
+      }
+      for (const scope of rule?.scopes ?? []) {
+        if (!permissions.has(scope)) errors.push(`${where}: el scope '${scope}' no existe en security: permissions`);
+      }
+      if (rule?.level === 'service' && rule?.roles) {
+        errors.push(`${where}: level 'service' no admite roles (los roles son de usuarios humanos)`);
+      }
+      if (rule?.level === 'service' && !rule?.scopes) {
+        warnings.push(`${where}: level 'service' sin scopes — cualquier cliente autenticado podrá invocar la operación`);
       }
     };
     checkAccessRule(security.access?.default, 'security: access.default');
@@ -236,6 +245,110 @@ export function checkCrossRefs({ layers, wip = false }) {
       for (const perm of grants ?? []) {
         if (!permissions.has(perm)) {
           errors.push(`security: roleGrants.${role}: el permiso '${perm}' no existe en security: permissions`);
+        }
+      }
+    }
+    for (const [client, def] of Object.entries(security.serviceClients ?? {})) {
+      for (const scope of def?.scopes ?? []) {
+        if (!permissions.has(scope)) {
+          errors.push(`security: serviceClients.${client}: el scope '${scope}' no existe en security: permissions`);
+        }
+      }
+    }
+  }
+
+  // auto: true solo deriva rutas por convención para operaciones con nombre CRUD
+  const autoCoversOp = (name) => api?.auto === true && /^(create|get|list|update|delete)[A-Z]/.test(name);
+
+  // M2M: coherencia entre la audiencia de los endpoints y las reglas de acceso
+  if (api && security) {
+    const defaultAudience = api.defaultAudience ?? 'users';
+    const audienceOf = (opName) => api.endpoints?.[opName]?.audience ?? defaultAudience;
+    const exposedOps = new Set(
+      [...Object.keys(api.endpoints ?? {}), ...Object.keys(operations).filter(autoCoversOp)].filter((op) =>
+        operationNames.has(op)
+      )
+    );
+    const serviceAuth = security.authentication?.serviceAuth;
+    const serviceClients = security.serviceClients ?? {};
+
+    let hasMachineEndpoint = false;
+    for (const opName of exposedOps) {
+      const aud = audienceOf(opName);
+      if (aud !== 'users') hasMachineEndpoint = true;
+      const namedRule = security.access?.rules?.[opName];
+      const rule = namedRule ?? security.access?.default;
+      if (!rule) continue;
+      const where = namedRule
+        ? `security: access.rules.${opName}`
+        : `security: access.default (operación ${opName})`;
+      if (rule.level === 'service' && aud === 'users') {
+        errors.push(
+          `${where}: level 'service' pero el endpoint de la operación es audience 'users' — decláralo audience: services (o both con required + scopes)`
+        );
+      }
+      if (rule.level === 'service' && aud === 'both') {
+        errors.push(
+          `${where}: level 'service' en un endpoint audience 'both' excluiría a los usuarios — usa level required con scopes y roles/permissions`
+        );
+      }
+      if (aud === 'services' && (rule.level === 'required' || rule.level === 'admin')) {
+        errors.push(
+          `api: endpoints.${opName}: audience 'services' pero su regla de acceso (${namedRule ? `access.rules.${opName}` : 'access.default'}) es level '${rule.level}' (audiencia humana) — usa level service`
+        );
+      }
+      if (aud === 'services' && rule.level === 'public') {
+        warnings.push(
+          `api: endpoints.${opName}: audience 'services' con level 'public' — ¿de verdad no requiere credencial de máquina?`
+        );
+      }
+      if (rule.scopes && rule.level !== 'service' && aud !== 'both') {
+        errors.push(
+          `${where}: declara scopes pero ni es level 'service' ni su endpoint es audience 'both'`
+        );
+      }
+    }
+
+    if (hasMachineEndpoint && !serviceAuth) {
+      errors.push(
+        `api: hay endpoints con audience 'services' o 'both' pero security: authentication no declara serviceAuth`
+      );
+    }
+    if (Object.keys(serviceClients).length > 0 && !serviceAuth) {
+      errors.push('security: serviceClients declarado sin authentication.serviceAuth');
+    }
+    if (Object.keys(serviceClients).length > 0 && !hasMachineEndpoint) {
+      warnings.push(
+        `security: serviceClients declarado pero ningún endpoint es audience 'services' ni 'both'`
+      );
+    }
+
+    // mínimo privilegio: scopes concedidos vs scopes exigidos
+    if (Object.keys(serviceClients).length > 0) {
+      const requiredScopes = new Set();
+      const effectiveRules = [
+        security.access?.default,
+        ...Object.values(security.access?.rules ?? {}),
+      ];
+      for (const rule of effectiveRules) {
+        for (const scope of rule?.scopes ?? []) requiredScopes.add(scope);
+      }
+      const grantedScopes = new Set();
+      for (const [client, def] of Object.entries(serviceClients)) {
+        for (const scope of def?.scopes ?? []) {
+          grantedScopes.add(scope);
+          if (!requiredScopes.has(scope)) {
+            warnings.push(
+              `security: serviceClients.${client}: el scope '${scope}' no lo exige ninguna regla de acceso`
+            );
+          }
+        }
+      }
+      for (const scope of requiredScopes) {
+        if (!grantedScopes.has(scope)) {
+          warnings.push(
+            `security: el scope '${scope}' exigido por las reglas de acceso no está concedido a ningún serviceClient — ningún cliente podría invocar esas operaciones`
+          );
         }
       }
     }
@@ -303,8 +416,6 @@ export function checkCrossRefs({ layers, wip = false }) {
   const triggeredBySubscription = new Set(
     Object.values(messaging?.subscriptions ?? {}).map((sub) => sub.triggers)
   );
-  // auto: true solo deriva rutas por convención para operaciones con nombre CRUD
-  const autoCoversOp = (name) => api?.auto === true && /^(create|get|list|update|delete)[A-Z]/.test(name);
   const apiEndpoints = new Set(Object.keys(api?.endpoints ?? {}));
   for (const [opName, op] of Object.entries(operations)) {
     const exposed =

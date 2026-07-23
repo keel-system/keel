@@ -42,10 +42,13 @@ diseño distingue por cliente.
 
 ## Ajustes que sí puede necesitar el agente
 
-- **Audiencia**: por defecto no se valida `aud`. Si el diseño exige que el
-  token sea para este servicio, añade `audiences` al YAML
-  (`spring.security.oauth2.resourceserver.jwt.audiences: [<cliente>]`) y
-  configura en Keycloak un mapper de audience para el cliente.
+- **Audiencia**: si el diseño declara `serviceAuth.validateAudience: true`,
+  build ya generó el `AudienceValidator` + bean `JwtDecoder` y el fragmento
+  `parameters/<perfil>/security.yaml` con `security.audience` — no añadas
+  `audiences` al YAML de oauth2 (duplicaría la validación); tu trabajo es el
+  mapper de audience en Keycloak (ver `environment.md`). Si el diseño **no**
+  lo declara, `aud` no se valida — y añadirlo a mano sería código fuera del
+  diseño.
 - **Clock skew**: el validador tolera 60s por defecto — suficiente; si ves
   expiraciones raras el problema es el reloj del contenedor, no el skew.
 - **Vida del token**: para escenarios largos, sube el access token lifespan

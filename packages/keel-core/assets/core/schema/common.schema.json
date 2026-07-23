@@ -138,9 +138,14 @@
         }
       ]
     },
+    "audience": {
+      "type": "string",
+      "enum": ["users", "services", "both"],
+      "description": "Público de un endpoint: usuarios humanos (web/mobile), otros servicios (M2M) o ambos."
+    },
     "authLevel": {
       "type": "string",
-      "enum": ["public", "required", "admin"]
+      "enum": ["public", "required", "admin", "service"]
     },
     "accessRule": {
       "type": "object",
@@ -157,6 +162,12 @@
         "permissions": {
           "type": "array",
           "description": "Permisos exigidos (deben existir en el catálogo permissions).",
+          "items": { "$ref": "#/$defs/permissionName" },
+          "minItems": 1
+        },
+        "scopes": {
+          "type": "array",
+          "description": "Scopes OAuth2 exigidos a clientes máquina (deben existir en el catálogo permissions). Solo válido con level service o en endpoints audience both.",
           "items": { "$ref": "#/$defs/permissionName" },
           "minItems": 1
         },

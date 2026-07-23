@@ -6,6 +6,11 @@
 authentication:
   protocol: oidc          # oidc | jwt | api-key | none
   tokenLocation: header
+  # serviceAuth declara cómo se autentican los clientes máquina (endpoints audience services/both):
+  # serviceAuth:
+  #   protocol: client-credentials   # client-credentials | api-key
+  #   validateAudience: true         # exige que el claim aud del token incluya esta audiencia
+  #   audience: product-service      # opcional; por defecto, el nombre del servicio
 
 # roles:
 #   catalog-admin:  { description: Gestiona el catálogo completo. }
@@ -19,9 +24,16 @@ authentication:
 #   catalog-admin: [product:write, product:read]
 #   catalog-reader: [product:read]
 
+# serviceClients cataloga los servicios consumidores (clientes máquina) y sus scopes
+# (los scopes reutilizan el catálogo permissions; mínimo privilegio por cliente):
+# serviceClients:
+#   billing-service: { description: Consulta precios para facturar., scopes: [product:read] }
+
 access:
   # Regla por defecto para toda operación sin regla explícita.
   default: { level: required }
   # rules:
-  #   createProduct: { level: required, permissions: [product:write] }
-  #   getProduct:    { level: public }
+  #   createProduct:   { level: required, permissions: [product:write] }
+  #   getProduct:      { level: public }
+  #   # level service protege endpoints audience services; scopes exigidos a los clientes máquina:
+  #   getProductPrice: { level: service, scopes: [product:read] }

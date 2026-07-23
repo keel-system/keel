@@ -42,6 +42,11 @@ export function generate(model) {
     if (layersPresent.security && (model.security?.protocol === 'oidc' || model.security?.protocol === 'jwt')) {
       fragments.push(fragment(profile, 'oauth2', oauth2Yaml(model, profile)));
     }
+    // Fragmento security propio (clave 'security') para lo M2M: audiencia a
+    // validar y/o claves api-key por serviceClient.
+    if (layersPresent.security && securityM2mApplies(model)) {
+      fragments.push(fragment(profile, 'security', securityM2mYaml(model, profile)));
+    }
     if (layersPresent.storage && stack.storage) {
       fragments.push(fragment(profile, 'storage', storageYaml(model, profile)));
     }
@@ -205,6 +210,42 @@ function oauth2Yaml(model, profile) {
       lines.push('          # TODO (agente): issuer real del resource server según security.keel.yaml.');
     }
     lines.push(`          issuer-uri: ${envValue(profile, 'OAUTH2_ISSUER_URI', 'https://tu-issuer')}`);
+  }
+  return lines.join('\n') + '\n';
+}
+
+// M2M: hay algo que configurar si el diseño valida audiencia (security.audience)
+// o si los clientes máquina se autentican por api-key (security.api-keys.*).
+function securityM2mApplies(model) {
+  const sec = model.security;
+  if (!sec?.serviceAuth) return false;
+  const jwt = sec.protocol === 'oidc' || sec.protocol === 'jwt';
+  const audience = jwt && sec.serviceAuth.validateAudience === true;
+  const apiKeys = sec.serviceAuth.protocol === 'api-key' && (sec.serviceClients?.length ?? 0) > 0;
+  return audience || apiKeys;
+}
+
+function securityM2mYaml(model, profile) {
+  const sec = model.security;
+  const jwt = sec.protocol === 'oidc' || sec.protocol === 'jwt';
+  const lines = ['security:'];
+  if (jwt && sec.serviceAuth.validateAudience === true) {
+    const audience = sec.serviceAuth.audience ?? model.service.artifactId;
+    lines.push('  # Audiencia que debe traer el claim aud de los tokens de clientes máquina.');
+    lines.push(`  audience: ${envValue(profile, 'SECURITY_AUDIENCE', audience)}`);
+  }
+  if (sec.serviceAuth.protocol === 'api-key' && (sec.serviceClients?.length ?? 0) > 0) {
+    lines.push('  # Clave por cliente máquina del diseño (serviceClients); vacía = cliente deshabilitado.');
+    lines.push('  api-keys:');
+    for (const client of sec.serviceClients) {
+      const varName = `API_KEY_${client.name.replace(/-/g, '_').toUpperCase()}`;
+      if (profile === 'local') {
+        lines.push(`    # TODO (agente): clave local de prueba para ${client.name}.`);
+        lines.push(`    ${client.name}: ""`);
+      } else {
+        lines.push(`    ${client.name}: ${envValue(profile, varName, '""')}`);
+      }
+    }
   }
   return lines.join('\n') + '\n';
 }

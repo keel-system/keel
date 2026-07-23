@@ -49,15 +49,22 @@ function printApi(api) {
   if (api.basePath) parts.push(api.basePath);
   if (api.auto) parts.push('rutas CRUD automáticas');
   if (api.endpoints.length > 0) parts.push(plural(api.endpoints.length, 'endpoint explícito', 'endpoints explícitos'));
+  if (api.defaultAudience && api.defaultAudience !== 'users') parts.push(`audiencia por defecto: ${api.defaultAudience}`);
   console.log(pc.bold('api') + pc.dim(` — ${parts.join(', ')}`));
   for (const endpoint of api.endpoints) {
-    console.log(`  ${pc.dim('•')} ${endpoint.operation}  ${pc.cyan(`${endpoint.method ?? '?'} ${endpoint.path ?? '?'}`)}`);
+    const audience = endpoint.audience !== 'users' ? pc.dim(` → ${endpoint.audience}`) : '';
+    console.log(`  ${pc.dim('•')} ${endpoint.operation}  ${pc.cyan(`${endpoint.method ?? '?'} ${endpoint.path ?? '?'}`)}${audience}`);
   }
 }
 
 function printSecurity(security) {
   const parts = [];
   if (security.authentication) parts.push(security.authentication);
+  if (security.serviceAuth) {
+    parts.push(
+      `M2M: ${security.serviceAuth}${security.serviceClients.length > 0 ? ` (${plural(security.serviceClients.length, 'cliente', 'clientes')}: ${security.serviceClients.join(', ')})` : ''}`
+    );
+  }
   if (security.roles.length > 0) parts.push(`${plural(security.roles.length, 'rol', 'roles')} (${security.roles.join(', ')})`);
   if (security.defaultAccess) parts.push(`acceso por defecto: ${security.defaultAccess}`);
   console.log(pc.bold('security') + pc.dim(` — ${parts.join('; ')}`));

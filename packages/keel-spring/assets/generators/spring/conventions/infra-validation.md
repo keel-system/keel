@@ -100,6 +100,13 @@ Con capa `security`, los escenarios necesitan un Bearer token:
 - **Cognito** (cognito-local): crea el user pool + client con la AWS CLI apuntando a
   `http://localhost:9229` y obtén el token con `InitiateAuth`.
 
+Si el diseño declara endpoints M2M (`audience: services`/`both` + `serviceAuth`),
+los escenarios `level: service` usan **credencial de máquina**, no token de
+usuario: `grant_type=client_credentials` con el cliente del `serviceClient`
+(receta en la skill del proveedor), o el header `X-API-Key` con la clave de
+`security.api-keys.<cliente>` si `serviceAuth` es `api-key`. Ejercita también el
+403 (cliente sin el scope) y, con `validateAudience`, el 401 por audiencia ajena.
+
 La app corre en el **host** (`./gradlew bootRun`), así que las llamadas HTTP a los
 endpoints van a `http://localhost:8080/...` desde el host (no desde devtools);
 `devtools` es para la **infraestructura**, no para la app.

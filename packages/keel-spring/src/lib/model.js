@@ -372,11 +372,15 @@ export function accessAuthority(rule) {
   if (rule.level === 'public') return 'permitAll()';
   const roles = rule.roles ?? [];
   const perms = rule.permissions ?? [];
+  // Los scopes del diseño llegan como authorities SCOPE_<scope> (prefijo estándar
+  // del resource server de Spring para el claim scope).
+  const scopes = (rule.scopes ?? []).map((s) => `SCOPE_${s}`);
   const quote = (v) => JSON.stringify(v);
-  if (roles.length > 0 && perms.length > 0) {
-    const auths = [...roles.map((r) => `ROLE_${r}`), ...perms];
-    return `hasAnyAuthority(${auths.map(quote).join(', ')})`;
+  const mixed = [...roles.map((r) => `ROLE_${r}`), ...perms, ...scopes];
+  if ((roles.length > 0 ? 1 : 0) + (perms.length > 0 ? 1 : 0) + (scopes.length > 0 ? 1 : 0) > 1) {
+    return `hasAnyAuthority(${mixed.map(quote).join(', ')})`;
   }
+  if (scopes.length > 0) return `hasAnyAuthority(${scopes.map(quote).join(', ')})`;
   if (perms.length > 0) return `hasAnyAuthority(${perms.map(quote).join(', ')})`;
   if (roles.length > 0) return `hasAnyRole(${roles.map(quote).join(', ')})`;
   if (rule.level === 'admin') return 'hasRole("admin")';
@@ -414,10 +418,36 @@ function collectSecurity(layers, services, routeBase, warnings) {
 
   const allRules = [defaultRule, ...Object.values(rules)];
   const usesAuthorities = allRules.some(
-    (r) => (r.roles?.length ?? 0) > 0 || (r.permissions?.length ?? 0) > 0 || r.level === 'admin'
+    (r) =>
+      (r.roles?.length ?? 0) > 0 ||
+      (r.permissions?.length ?? 0) > 0 ||
+      (r.scopes?.length ?? 0) > 0 ||
+      r.level === 'admin'
   );
 
-  return { protocol, matchers, defaultAuthority: accessAuthority(defaultRule), usesAuthorities };
+  // Autenticación de clientes máquina (endpoints audience services/both).
+  const rawServiceAuth = sec.authentication?.serviceAuth ?? null;
+  const serviceAuth = rawServiceAuth
+    ? {
+        protocol: rawServiceAuth.protocol,
+        validateAudience: rawServiceAuth.validateAudience === true,
+        audience: rawServiceAuth.audience ?? null // null → el scaffolding usa el nombre del servicio
+      }
+    : null;
+  const serviceClients = Object.entries(sec.serviceClients ?? {}).map(([name, def]) => ({
+    name,
+    description: def?.description ?? null,
+    scopes: def?.scopes ?? []
+  }));
+
+  return {
+    protocol,
+    matchers,
+    defaultAuthority: accessAuthority(defaultRule),
+    usesAuthorities,
+    serviceAuth,
+    serviceClients
+  };
 }
 
 // ─── HTTP clients salientes (http-clients → clientes RestClient resilientes) ──

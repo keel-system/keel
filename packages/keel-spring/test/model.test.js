@@ -3,7 +3,19 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadService } from 'keel-core';
-import { buildModel, sharedExceptionFor } from '../src/lib/model.js';
+import { accessAuthority, buildModel, sharedExceptionFor } from '../src/lib/model.js';
+
+test('accessAuthority: scopes como authorities SCOPE_ y mezclas', () => {
+  assert.equal(accessAuthority({ level: 'service', scopes: ['product:read'] }), 'hasAnyAuthority("SCOPE_product:read")');
+  assert.equal(accessAuthority({ level: 'service' }), 'authenticated()');
+  assert.equal(
+    accessAuthority({ level: 'required', scopes: ['product:read'], roles: ['catalog-admin'] }),
+    'hasAnyAuthority("ROLE_catalog-admin", "SCOPE_product:read")'
+  );
+  // sin scopes, el mapeo previo se conserva (retrocompatibilidad)
+  assert.equal(accessAuthority({ level: 'required', permissions: ['product:write'] }), 'hasAnyAuthority("product:write")');
+  assert.equal(accessAuthority({ level: 'admin', roles: ['admin'] }), 'hasAnyRole("admin")');
+});
 
 const fixtureDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'product-catalog');
 

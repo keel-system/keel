@@ -32,11 +32,20 @@ diseño exija lógica que el mapeo de claims no cubre — p. ej. autorización p
    `security.keel.yaml` (admin console en `http://localhost:8180`, admin/admin, o
    `kcadm.sh` dentro del contenedor). El `issuer-uri` del perfil local debe quedar
    `http://localhost:8180/realms/<realm>`.
-2. **Token para los escenarios**:
+2. **Clientes máquina (si el diseño declara `serviceClients` con `serviceAuth:
+   client-credentials`)**: por cada entrada de `serviceClients`, crea un cliente
+   confidencial con service accounts, un client scope por cada scope del diseño y
+   —si `validateAudience: true`— el mapper de audiencia (receta en
+   `references/environment.md`). Los nombres de cliente y scopes salen **exactos**
+   del diseño; no inventes clientes ni scopes.
+3. **Token para los escenarios**:
    `curl -d 'grant_type=password&client_id=<cliente>&username=<user>&password=<pass>' http://localhost:8180/realms/<realm>/protocol/openid-connect/token`
    y usa el `access_token` como Bearer en las llamadas de `validation-scenarios.md`.
-3. **Verifica el mapeo**: un usuario sin el rol requerido debe recibir 403 y uno con
-   él 2xx, según `access.rules` del diseño.
+   Para los escenarios M2M, token por `client_credentials` del cliente máquina.
+4. **Verifica el mapeo**: un usuario sin el rol requerido debe recibir 403 y uno con
+   él 2xx, según `access.rules` del diseño. Para M2M: cliente sin el scope exigido →
+   403, con él → 2xx; y con `validateAudience: true`, token sin la audiencia del
+   servicio en `aud` → 401.
 
 ## Referencias
 

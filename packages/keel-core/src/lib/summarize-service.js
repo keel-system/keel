@@ -42,18 +42,28 @@ function summarizeUseCases(doc) {
 }
 
 function summarizeApi(doc) {
+  const defaultAudience = doc?.defaultAudience ?? 'users';
   const endpoints = keysOf(doc?.endpoints).map((operation) => ({
     operation,
     method: doc.endpoints[operation]?.method ?? null,
-    path: doc.endpoints[operation]?.path ?? null
+    path: doc.endpoints[operation]?.path ?? null,
+    audience: doc.endpoints[operation]?.audience ?? defaultAudience
   }));
-  return { style: doc?.style ?? null, basePath: doc?.basePath ?? null, auto: doc?.auto === true, endpoints };
+  return {
+    style: doc?.style ?? null,
+    basePath: doc?.basePath ?? null,
+    auto: doc?.auto === true,
+    defaultAudience,
+    endpoints
+  };
 }
 
 function summarizeSecurity(doc) {
   return {
     authentication: doc?.authentication?.protocol ?? null,
+    serviceAuth: doc?.authentication?.serviceAuth?.protocol ?? null,
     roles: keysOf(doc?.roles),
+    serviceClients: keysOf(doc?.serviceClients),
     defaultAccess: doc?.access?.default?.level ?? null
   };
 }

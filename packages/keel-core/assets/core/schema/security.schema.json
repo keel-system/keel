@@ -18,6 +18,30 @@
           "description": "Protocolo de autenticación, agnóstico de proveedor (Keycloak, Auth0... se decide al generar)."
         },
         "tokenLocation": { "type": "string", "enum": ["header", "cookie"], "default": "header" },
+        "serviceAuth": {
+          "type": "object",
+          "required": ["protocol"],
+          "additionalProperties": false,
+          "description": "Autenticación de clientes máquina (endpoints con audience services o both).",
+          "properties": {
+            "protocol": {
+              "type": "string",
+              "enum": ["client-credentials", "api-key"],
+              "description": "client-credentials (OAuth2) o api-key; el proveedor concreto se decide al generar."
+            },
+            "validateAudience": {
+              "type": "boolean",
+              "default": false,
+              "description": "Exigir que el claim aud del token incluya la audiencia de este servicio."
+            },
+            "audience": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Identificador lógico de audiencia; por defecto, el nombre del servicio."
+            },
+            "description": { "type": "string" }
+          }
+        },
         "description": { "type": "string" }
       }
     },
@@ -44,6 +68,25 @@
         "additionalProperties": false,
         "properties": {
           "description": { "type": "string", "minLength": 5 }
+        }
+      }
+    },
+    "serviceClients": {
+      "type": "object",
+      "description": "Catálogo de servicios consumidores (clientes máquina) que este servicio reconoce.",
+      "propertyNames": { "pattern": "^[a-z][a-z0-9-]*$" },
+      "additionalProperties": {
+        "type": "object",
+        "required": ["description"],
+        "additionalProperties": false,
+        "properties": {
+          "description": { "type": "string", "minLength": 5 },
+          "scopes": {
+            "type": "array",
+            "description": "Scopes que se conceden a este cliente (deben existir en el catálogo permissions).",
+            "items": { "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/permissionName" },
+            "minItems": 1
+          }
         }
       }
     },
