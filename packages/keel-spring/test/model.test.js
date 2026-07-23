@@ -148,3 +148,111 @@ test('ruta base versionada y controller V1 por grupo', () => {
   assert.equal(productService.controllerClass, 'ProductV1Controller');
   assert.equal(productService.controllerPackage, 'infrastructure.rest.controllers.product.v1');
 });
+
+// ─── http-clients: contrato estructurado, legacy en prosa y auth saliente ─────
+
+function loadModelWithHttpClients(httpClients) {
+  const { manifest, layers, errors } = loadService(fixtureDir);
+  assert.deepEqual(errors, []);
+  const patchedManifest = structuredClone(manifest);
+  patchedManifest.layers['http-clients'] = 'http-clients.keel.yaml';
+  const patched = structuredClone(layers);
+  patched['http-clients'] = httpClients;
+  return buildModel({ manifest: patchedManifest, layers: patched });
+}
+
+test('http-clients estructurado: method/path del diseño ganan a la prosa y los fields se tipan', () => {
+  const model = loadModelWithHttpClients({
+    clients: {
+      'pricing-service': {
+        purpose: 'Precios vigentes.',
+        auth: { type: 'api-key' },
+        calls: {
+          getPrice: {
+            contract: 'POST /otra-ruta (prosa contradictoria: ganan los campos estructurados)',
+            method: 'GET',
+            path: '/prices/{sku}',
+            request: {
+              pathParams: { sku: { type: 'uuid', required: true } },
+              queryParams: { currency: { type: 'string' } }
+            },
+            response: { fields: { amount: { type: 'decimal', required: true } } }
+          }
+        }
+      }
+    }
+  });
+
+  assert.deepEqual(model.warnings, []);
+  const [client] = model.httpClients;
+  assert.equal(client.adapterClass, 'PricingServiceHttpAdapter');
+  assert.equal(client.mapperClass, 'PricingServiceMapper');
+  const [call] = client.calls;
+  assert.equal(call.method, 'GET');
+  assert.equal(call.path, '/prices/{sku}');
+  assert.equal(call.typed, true);
+  assert.equal(call.resultType, 'GetPriceResult');
+  assert.equal(call.pathParams[0].javaType, 'UUID');
+  assert.equal(call.queryParams[0].javaType, 'String');
+  assert.equal(call.responseFields[0].javaType, 'BigDecimal');
+  assert.equal(call.requestType, null); // sin body no hay wire request
+  assert.deepEqual(client.auth, {
+    type: 'api-key',
+    headerName: 'X-Api-Key',
+    tokenUrl: null,
+    scopes: [],
+    propertyPrefix: 'http-clients.pricing-service.auth',
+    registrationId: 'pricing-service'
+  });
+});
+
+test('http-clients solo-prosa: salida legacy intacta (regresión)', () => {
+  const model = loadModelWithHttpClients({
+    clients: {
+      'pricing-service': {
+        purpose: 'Precios vigentes.',
+        calls: { getPrice: { contract: 'GET /prices/{sku} -> { amount: decimal }' } }
+      }
+    }
+  });
+  const [client] = model.httpClients;
+  assert.equal(client.auth, null);
+  const [call] = client.calls;
+  assert.equal(call.method, 'GET');
+  assert.equal(call.path, '/prices/{sku}');
+  assert.deepEqual(call.pathVars, ['sku']);
+  assert.equal(call.typed, false);
+  assert.equal(call.pathParams[0].javaType, 'String'); // legacy: sin tipado
+  assert.equal(call.hasBody, false);
+  assert.deepEqual(model.warnings, []);
+});
+
+test('http-clients oauth2: normalización de auth y enums inline registrados', () => {
+  const model = loadModelWithHttpClients({
+    clients: {
+      'payment-gateway': {
+        purpose: 'Cobros con tarjeta.',
+        auth: { type: 'oauth2-client-credentials', tokenUrl: 'https://auth.example.com/token', scopes: ['payments:write'] },
+        calls: {
+          charge: {
+            contract: 'Autoriza un cobro.',
+            method: 'POST',
+            path: '/charges',
+            request: { body: { amount: { type: 'decimal', required: true } } },
+            response: { fields: { status: { type: 'enum', values: ['approved', 'declined'] } } }
+          }
+        }
+      }
+    }
+  });
+  const [client] = model.httpClients;
+  assert.equal(client.auth.type, 'oauth2-client-credentials');
+  assert.equal(client.auth.tokenUrl, 'https://auth.example.com/token');
+  assert.deepEqual(client.auth.scopes, ['payments:write']);
+  const [call] = client.calls;
+  assert.equal(call.requestType, 'ChargeRequest');
+  assert.equal(call.hasBody, true);
+  // El enum inline de la respuesta existe como clase generable.
+  assert.ok(model.enums.some((e) => e.name === 'ChargeResponseStatus'));
+  assert.equal(call.responseFields[0].javaType, 'ChargeResponseStatus');
+});

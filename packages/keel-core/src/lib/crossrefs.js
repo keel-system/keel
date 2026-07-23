@@ -17,6 +17,7 @@ export function checkCrossRefs({ layers, wip = false }) {
   const api = layers['api'];
   const security = layers['security'];
   const messaging = layers['messaging'];
+  const httpClients = layers['http-clients'];
   const persistence = layers['persistence'];
   const storage = layers['storage'];
 
@@ -371,6 +372,47 @@ export function checkCrossRefs({ layers, wip = false }) {
     checkChannel(sub.channel, `messaging: subscriptions.${eventName}.channel`);
     if (!operationNames.has(sub.triggers)) {
       errors.push(`messaging: subscriptions.${eventName}.triggers: la operación '${sub.triggers}' no existe en use-cases`);
+    }
+  }
+
+  // http-clients: tipado de requests/responses y coherencia path ↔ pathParams.
+  // (method↔path juntos, request→method, GET/DELETE sin body y retryOn sin 4xx los cubre ya el schema.)
+  for (const [clientId, client] of Object.entries(httpClients?.clients ?? {})) {
+    for (const [callName, call] of Object.entries(client.calls ?? {})) {
+      const where = `http-clients: clients.${clientId}.calls.${callName}`;
+      for (const section of ['pathParams', 'queryParams', 'headers', 'body']) {
+        checkFieldMap(call.request?.[section], `${where}.request.${section}`);
+      }
+      checkFieldMap(call.response?.fields, `${where}.response.fields`);
+
+      if (call.path) {
+        const pathVars = [...call.path.matchAll(/\{([A-Za-z][A-Za-z0-9]*)\}/g)].map((m) => m[1]);
+        const declared = Object.keys(call.request?.pathParams ?? {});
+        if (call.request?.pathParams) {
+          for (const variable of pathVars) {
+            if (!declared.includes(variable)) {
+              errors.push(`${where}.request.pathParams: la variable '{${variable}}' de path no está declarada`);
+            }
+          }
+        } else if (pathVars.length > 0) {
+          warnings.push(
+            `${where}: path con variables {…} sin request.pathParams — el generador no podrá tipar los parámetros`
+          );
+        }
+        for (const param of declared) {
+          if (!pathVars.includes(param)) {
+            errors.push(`${where}.request.pathParams.${param}: no aparece como '{${param}}' en path`);
+          }
+        }
+      } else if (call.request || call.response) {
+        warnings.push(
+          `${where}: declara request/response tipados pero no method+path — el generador seguirá parseando la prosa del contract`
+        );
+      }
+
+      if (call.circuitBreaker && !call.fallback) {
+        warnings.push(`${where}: circuitBreaker sin fallback — define qué hace el servicio con el circuito abierto`);
+      }
     }
   }
 

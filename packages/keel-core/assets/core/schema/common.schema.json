@@ -269,6 +269,18 @@
         "http": { "type": "integer", "minimum": 400, "maximum": 599 }
       }
     },
+    "httpRequestShape": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "description": "Forma tipada de la petición saliente. Los tipos son los mismos del resto del DSL (base types, value types del domain, enum inline).",
+      "properties": {
+        "pathParams": { "$ref": "#/$defs/fieldMap" },
+        "queryParams": { "$ref": "#/$defs/fieldMap" },
+        "headers": { "$ref": "#/$defs/fieldMap" },
+        "body": { "$ref": "#/$defs/fieldMap" }
+      }
+    },
     "httpCall": {
       "type": "object",
       "required": ["contract"],
@@ -277,9 +289,29 @@
         "contract": {
           "type": "string",
           "minLength": 5,
-          "description": "Contrato esperado de la llamada (método, ruta y forma de la respuesta)."
+          "description": "Contrato esperado de la llamada en prosa (método, ruta y forma de la respuesta). Con method/path/request/response presentes, la prosa queda como resumen para humanos."
         },
         "description": { "type": "string" },
+        "method": {
+          "type": "string",
+          "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"],
+          "description": "Método HTTP de la llamada. Requiere path."
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^/",
+          "description": "Ruta relativa a la base del cliente, con variables entre llaves (ej. /prices/{sku}). Requiere method."
+        },
+        "request": { "$ref": "#/$defs/httpRequestShape" },
+        "response": {
+          "type": "object",
+          "required": ["fields"],
+          "additionalProperties": false,
+          "description": "Forma tipada de la respuesta esperada del sistema externo.",
+          "properties": {
+            "fields": { "$ref": "#/$defs/fieldMap" }
+          }
+        },
         "timeoutMs": { "type": "integer", "minimum": 1 },
         "retry": { "$ref": "#/$defs/retryPolicy" },
         "circuitBreaker": { "$ref": "#/$defs/circuitBreaker" },
@@ -288,7 +320,23 @@
           "minLength": 5,
           "description": "Qué hace el servicio cuando la llamada falla definitivamente."
         }
-      }
+      },
+      "dependentRequired": {
+        "method": ["path"],
+        "path": ["method"],
+        "request": ["method"]
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "method": { "enum": ["GET", "DELETE"] } },
+            "required": ["method", "request"]
+          },
+          "then": {
+            "properties": { "request": { "not": { "required": ["body"] } } }
+          }
+        }
+      ]
     }
   }
 }

@@ -118,7 +118,7 @@ export function generate(model) {
     pendingLayers.push('- `storage`: implementa el adaptador de `FileStorage` (bean del cliente + upload/download/delete/signedUrl) según la skill `.claude/skills/keel-spring-s3/`.');
   }
   if (layersPresent.httpClients) {
-    pendingLayers.push('- `http-clients`: los clientes RestClient resilientes ya están generados; tipa cada `<Llamada>Response` y completa los `*Fallback`.');
+    pendingLayers.push('- `http-clients`: puerto + adaptador RestClient + mapper ACL ya generados; completa los `*Fallback` (y el tipado records/mapper solo en llamadas declaradas en prosa).');
   }
   if (stack.cache) pendingLayers.push('- `cache`: configurar Spring Cache según las políticas `cache` de use-cases.');
   if (pendingLayers.length > 0) lines.push(...pendingLayers);

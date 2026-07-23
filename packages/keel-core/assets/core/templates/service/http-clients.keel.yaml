@@ -1,14 +1,30 @@
 # Capa http-clients — integraciones HTTP salientes con terceros u otros servicios.
 # La resiliencia (timeout, retry, circuit breaker, fallback) se declara aquí, por llamada:
 # es política del canal, reutilizada por todos los casos de uso que la usen.
+# La autenticación saliente se declara por cliente (auth); las credenciales JAMÁS van
+# en el diseño — llegan por configuración/variables de entorno del servicio generado.
 # Recuerda declarar la capa en service.keel.yaml → layers.http-clients.
 
 clients:
   # pricing-service:
   #   purpose: Obtener el precio vigente de un producto.
+  #   auth:
+  #     type: api-key              # none | api-key | bearer-static | basic | oauth2-client-credentials
+  #     headerName: X-Api-Key
   #   calls:
   #     getPrice:
-  #       contract: "GET /prices/{sku} -> { amount: decimal, currency: string }"
+  #       contract: Precio vigente de un SKU con su moneda.
+  #       method: GET              # opcional junto a path/request/response: con ellos el
+  #       path: /prices/{sku}      # generador produce tipos reales; sin ellos, el contract
+  #       request:                 # en prosa es lo único que guía al agente.
+  #         pathParams:
+  #           sku: { type: string, required: true }
+  #         queryParams:
+  #           currency: { type: string }
+  #       response:
+  #         fields:
+  #           amount: { type: decimal, required: true }
+  #           currency: { type: string, required: true }
   #       timeoutMs: 2000
   #       retry: { maxAttempts: 3, backoff: exponential, initialDelayMs: 200, retryOn: [timeout, 5xx] }
   #       circuitBreaker: { failureRateThreshold: 50, slidingWindowSize: 20, waitDurationMs: 30000 }

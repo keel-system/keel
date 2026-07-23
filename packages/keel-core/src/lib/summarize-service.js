@@ -77,7 +77,20 @@ function summarizeMessaging(doc) {
 }
 
 function summarizeHttpClients(doc) {
-  return { clients: keysOf(doc?.clients) };
+  const clients = keysOf(doc?.clients).map((name) => {
+    const client = doc.clients[name] ?? {};
+    return {
+      name,
+      auth: client.auth?.type ?? null,
+      calls: keysOf(client.calls).map((call) => ({
+        name: call,
+        method: client.calls[call]?.method ?? null,
+        path: client.calls[call]?.path ?? null,
+        typed: Boolean(client.calls[call]?.request || client.calls[call]?.response)
+      }))
+    };
+  });
+  return { clients };
 }
 
 function summarizePersistence(doc) {

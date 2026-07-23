@@ -102,15 +102,21 @@ El scaffolding genera lo transversal al broker: el contrato `EventEnvelope`/`Eve
 
 ## `http-clients` — http-clients.keel.yaml
 
-**El scaffolding determinista genera el esqueleto resiliente** en `infrastructure/http` (config `RestClient` con base-url + timeouts, interfaz + `Impl` con las llamadas parseadas del `contract` y sus anotaciones resilience4j cableadas al fragmento `parameters/<perfil>/http-clients.yaml`, y un record de respuesta por llamada). El agente solo tipa cada `<Llamada>Response` (record vacío) y completa el cuerpo del `*Fallback`.
+**El scaffolding determinista genera el patrón puerto + adaptador + anticorrupción completo**: el PUERTO `<Cliente>Client` y los records `<Llamada>Result` (resultado en términos del dominio) en `domain/clients`; y en `infrastructure/http` el adaptador `<Cliente>HttpAdapter` (RestClient + resilience4j cableado al fragmento `parameters/<perfil>/http-clients.yaml`), los DTOs wire `<Llamada>Request`/`<Llamada>Response` (contrato del tercero tal cual) y el mapper ACL `<Cliente>Mapper` que traduce wire ↔ dominio. Los use cases inyectan **solo el puerto**. Con `method`/`path`/`request`/`response` estructurados en el diseño todo sale tipado y el mapper completo: el agente solo implementa los `*Fallback`. Con `contract` solo-prosa, los records quedan vacíos y el mapper como stub: el agente además los tipa y mapea.
 
 | Diseño | Código |
 |--------|--------|
-| `clients.C` | Cliente (interface + implementación RestClient) en `infrastructure/http`, mockeable en tests |
-| `calls.x.contract` | Firma del método y DTO de respuesta derivados del contrato |
+| `clients.C` | Puerto `CClient` en `domain/clients` + adaptador `CHttpAdapter` + mapper `CMapper` en `infrastructure/http`, mockeable en tests por el puerto |
+| `clients.C.auth.type: api-key` | Header (`headerName`, default `X-Api-Key`) en el bean RestClient; credencial por property `http-clients.<c>.auth.api-key` (env var `<C>_API_KEY`), nunca del diseño |
+| `clients.C.auth.type: bearer-static` / `basic` | `Authorization: Bearer` / `setBasicAuth` en el bean; credenciales por properties `http-clients.<c>.auth.*` (`<C>_TOKEN` / `<C>_USERNAME`+`<C>_PASSWORD`) |
+| `clients.C.auth.type: oauth2-client-credentials` | `OAuth2ClientHttpRequestInterceptor` + `HttpClientsOAuth2Config` (manager client_credentials compartido); registration estándar `spring.security.oauth2.client.*` con `<C>_CLIENT_ID`/`<C>_CLIENT_SECRET`/`<C>_TOKEN_URL` |
+| `calls.x.contract` | Prosa: Javadoc del método del puerto; si no hay `method`/`path`, se parsea como legacy `"MÉTODO /ruta"` |
+| `calls.x.method` + `calls.x.path` | Verbo y URI de la llamada RestClient (las variables `{v}` de path → parámetros del método) |
+| `calls.x.request` | `pathParams`/`queryParams`/`headers` → parámetros tipados del puerto; `body` → record wire `<X>Request` + `to<X>Request(...)` en el mapper |
+| `calls.x.response.fields` | Record wire `<X>Response` + record de dominio `<X>Result` + `to<X>Result(...)` en el mapper (mapeo campo a campo generado) |
 | `calls.x.timeoutMs` | Timeout de la llamada en la configuración del cliente |
-| `calls.x.retry` | spring-retry (o retry del cliente) con `maxAttempts`/`backoff`/`initialDelayMs`, solo para `retryOn` (`timeout`, `5xx`, `connection`); nunca 4xx |
-| `calls.x.circuitBreaker` | resilience4j con `failureRateThreshold`/`slidingWindowSize`/`waitDurationMs` |
+| `calls.x.retry` | resilience4j `@Retry` con `maxAttempts`/`backoff`/`initialDelayMs`, solo para `retryOn` (`timeout`, `5xx`, `connection`); nunca 4xx |
+| `calls.x.circuitBreaker` | resilience4j `@CircuitBreaker` con `failureRateThreshold`/`slidingWindowSize`/`waitDurationMs` |
 | `calls.x.fallback` | Método de fallback que implementa la frase del diseño; si dispara un error de negocio, usa el `code` declarado en use-cases |
 
 ## `persistence` — persistence.keel.yaml

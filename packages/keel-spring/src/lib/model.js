@@ -42,7 +42,7 @@ export function buildModel({ manifest, layers, stack = null }) {
     storage: Boolean(layers.storage)
   };
 
-  const enums = collectEnums(domain, warnings);
+  const enums = collectEnums(domain, layers['http-clients'], warnings);
   const inlineEnumName = buildInlineEnumIndex(enums);
   const valueObjects = collectValueObjects(domainTypes, domainTypes, inlineEnumName, hasPersistence);
   const entities = collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPersistence, warnings);
@@ -57,7 +57,7 @@ export function buildModel({ manifest, layers, stack = null }) {
   const api = { routeBase: `${layers.api?.basePath ?? `/api/${kebabCase(service.name)}`}/v1` };
 
   const security = collectSecurity(layers, services, api.routeBase, warnings);
-  const httpClients = collectHttpClients(layers, warnings);
+  const httpClients = collectHttpClients(layers, domainTypes, inlineEnumName, warnings);
 
   return { service, layersPresent, enums, valueObjects, entities, services, errors, events, subscriptions, pagination, api, security, httpClients, warnings };
 }
@@ -80,7 +80,7 @@ function buildService(manifest, stack) {
 
 // ─── Enums ───────────────────────────────────────────────────────────────────
 
-function collectEnums(domain, warnings) {
+function collectEnums(domain, httpClients, warnings) {
   const enums = [];
   const byName = new Map();
 
@@ -120,6 +120,18 @@ function collectEnums(domain, warnings) {
   }
   for (const [name, def] of Object.entries(domain.entities ?? {})) {
     addInline(name, def.fields);
+  }
+
+  // Enums inline en requests/responses estructurados de http-clients: deben
+  // existir como clase para que los records generados compilen.
+  for (const client of Object.values(httpClients?.clients ?? {})) {
+    for (const [callName, call] of Object.entries(client.calls ?? {})) {
+      const requestOwner = `${pascalCase(callName)}Request`;
+      for (const section of ['pathParams', 'queryParams', 'headers', 'body']) {
+        addInline(requestOwner, call.request?.[section]);
+      }
+      addInline(`${pascalCase(callName)}Response`, call.response?.fields);
+    }
   }
 
   return enums;
@@ -450,12 +462,11 @@ function collectSecurity(layers, services, routeBase, warnings) {
   };
 }
 
-// ─── HTTP clients salientes (http-clients → clientes RestClient resilientes) ──
+// ─── HTTP clients salientes (http-clients → puerto + adaptador RestClient) ───
 
-// El contract es prosa ("GET /prices/{sku} -> {...}"): se parsea de forma
-// defensiva el método y la ruta (y sus path vars) para armar el esqueleto de la
-// llamada; el tipado de request/response y la lógica del fallback los completa
-// el agente (no son derivables del texto libre).
+// Fallback legacy para llamadas solo-prosa: si el contract empieza por
+// "MÉTODO /ruta" se parsean método, ruta y path vars para armar el esqueleto;
+// con method/path estructurados en el diseño este parseo no se usa.
 function parseContract(contract) {
   const match = /^\s*([A-Z]+)\s+(\S+)/.exec(contract ?? '');
   if (!match) return { method: null, path: null, pathVars: [] };
@@ -463,7 +474,7 @@ function parseContract(contract) {
   return { method: match[1], path: match[2], pathVars };
 }
 
-function collectHttpClients(layers, warnings) {
+function collectHttpClients(layers, domainTypes, inlineEnumName, warnings) {
   const clients = layers['http-clients']?.clients;
   if (!clients) return null;
 
@@ -471,20 +482,55 @@ function collectHttpClients(layers, warnings) {
   for (const [clientId, def] of Object.entries(clients)) {
     const base = pascalCase(clientId);
     const calls = Object.entries(def.calls ?? {}).map(([callName, call]) => {
-      const { method, path, pathVars } = parseContract(call.contract);
+      // Método/ruta: preferir los campos estructurados del diseño; la prosa del
+      // contract queda como fallback legacy.
+      const parsed = parseContract(call.contract);
+      const method = call.method ?? parsed.method;
+      const path = call.path ?? parsed.path;
+      const pathVars = call.path ? [...call.path.matchAll(/\{(\w+)\}/g)].map((m) => m[1]) : parsed.pathVars;
       if (!method) {
         warnings.push(
-          `Llamada '${clientId}.${callName}' (http-clients): contract '${call.contract}' no empieza por 'MÉTODO /ruta'; el agente debe completar el método/ruta.`
+          `Llamada '${clientId}.${callName}' (http-clients): sin method/path estructurados y el contract '${call.contract}' no empieza por 'MÉTODO /ruta'; el agente debe completar el método/ruta.`
         );
       }
-      const hasBody = method === 'POST' || method === 'PUT' || method === 'PATCH';
+
+      const callPascal = pascalCase(callName);
+      const requestOwner = `${callPascal}Request`;
+      const resolveMap = (owner, fieldMap) =>
+        Object.entries(fieldMap ?? {}).map(([fieldName, field]) =>
+          resolveField(owner, fieldName, field, domainTypes, inlineEnumName, { persisted: false })
+        );
+
+      // Path params en el orden de aparición en la ruta; tipados si el diseño
+      // los declara, String legacy si no.
+      const declaredPathParams = call.request?.pathParams ?? null;
+      const pathParams = pathVars.map((v) =>
+        declaredPathParams?.[v]
+          ? resolveField(requestOwner, v, declaredPathParams[v], domainTypes, inlineEnumName, { persisted: false })
+          : { name: v, javaType: 'String', imports: [], kind: 'base' }
+      );
+      const queryParams = resolveMap(requestOwner, call.request?.queryParams);
+      const headerParams = resolveMap(requestOwner, call.request?.headers);
+      const bodyFields = resolveMap(requestOwner, call.request?.body);
+      const responseFields = resolveMap(`${callPascal}Response`, call.response?.fields);
+
+      const typed = Boolean(call.request || call.response);
+      const hasBody = bodyFields.length > 0 || (!call.request && (method === 'POST' || method === 'PUT' || method === 'PATCH'));
       return {
         name: callName,
         method,
         path,
         pathVars,
         hasBody,
-        responseType: `${pascalCase(callName)}Response`,
+        typed,
+        requestType: bodyFields.length > 0 ? requestOwner : null,
+        responseType: `${callPascal}Response`,
+        resultType: `${callPascal}Result`,
+        pathParams,
+        queryParams,
+        headerParams,
+        bodyFields,
+        responseFields,
         contract: call.contract ?? '',
         timeoutMs: call.timeoutMs ?? null,
         retry: call.retry ?? null,
@@ -495,14 +541,33 @@ function collectHttpClients(layers, warnings) {
       };
     });
 
+    // Autenticación saliente declarada en el diseño (las credenciales llegan
+    // por configuración; aquí solo el mecanismo y los nombres de propiedad).
+    const rawAuth = def.auth ?? null;
+    const auth =
+      rawAuth && rawAuth.type !== 'none'
+        ? {
+            type: rawAuth.type,
+            headerName: rawAuth.headerName ?? 'X-Api-Key',
+            tokenUrl: rawAuth.tokenUrl ?? null,
+            scopes: rawAuth.scopes ?? [],
+            propertyPrefix: `http-clients.${clientId}.auth`,
+            registrationId: clientId
+          }
+        : null;
+
     const timeouts = calls.map((c) => c.timeoutMs).filter((t) => typeof t === 'number');
     result.push({
       id: clientId,
       purpose: def.purpose ?? '',
       clientClass: `${base}Client`,
+      adapterClass: `${base}HttpAdapter`,
+      mapperClass: `${base}Mapper`,
       configClass: `${base}ClientConfig`,
       beanName: `${camelCase(clientId)}RestClient`,
       baseUrlProperty: `http-clients.${clientId}.base-url`,
+      envPrefix: clientId.toUpperCase().replace(/-/g, '_'),
+      auth,
       readTimeoutMs: timeouts.length > 0 ? Math.max(...timeouts) : 5000,
       calls
     });

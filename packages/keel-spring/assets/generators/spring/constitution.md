@@ -21,6 +21,8 @@ Estas reglas no se negocian ni se "acomodan" para que un caso particular compile
 - `infrastructure/rest` (controllers) **solo traduce**: construye o fusiona el mensaje desde los parámetros HTTP y lo despacha vía `UseCaseMediator`. Cero lógica de negocio; los errores quedan para `ApiExceptionHandler`.
 - El mapeo domain↔JPA vive **únicamente** en `XxxRepositoryImpl` (`toDomain`/`toJpa` explícitos). Ni los handlers ni los controllers importan ni ven una clase `Jpa`.
 - Datos de **otro servicio** llegan por la capa `http-clients` o por eventos de `messaging`, nunca inyectando persistencia ajena.
+- Un cliente HTTP saliente se consume **solo por su puerto** `<Cliente>Client` de `domain/clients`; los DTOs wire del tercero y el mapper de anticorrupción (`<Cliente>Mapper`) viven únicamente en `infrastructure/http` — ni handlers ni dominio importan un `<Llamada>Request`/`<Llamada>Response` wire, y un cambio de contrato del tercero se absorbe en el adaptador/mapper, jamás en dominio o application.
+- Las credenciales de la auth saliente (`clients.C.auth`) llegan por configuración (`parameters/<perfil>/http-clients.yaml`, env vars), nunca del diseño ni hardcodeadas.
 
 ## Consistencia y transacciones
 

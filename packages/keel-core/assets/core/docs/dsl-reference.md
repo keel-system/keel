@@ -12,7 +12,7 @@ Un servicio Keel se diseña como un conjunto de **artefactos por capa** en `spec
 | api | `api.keel.yaml` | opcional | Exposición REST, audiencia de cada endpoint (users/services/both), paginación | [dsl/api.md](dsl/api.md) |
 | security | `security.keel.yaml` | opcional | Autenticación (usuarios y clientes máquina), roles, permisos, scopes, acceso por operación | [dsl/security.md](dsl/security.md) |
 | messaging | `messaging.keel.yaml` | opcional | Canales lógicos, eventos publicados (outbox), suscripciones (retry/DLQ) | [dsl/messaging.md](dsl/messaging.md) |
-| http-clients | `http-clients.keel.yaml` | opcional | Llamadas salientes: timeout, retry, circuit breaker, fallback | [dsl/http-clients.md](dsl/http-clients.md) |
+| http-clients | `http-clients.keel.yaml` | opcional | Llamadas salientes: contrato (prosa + method/path/request/response tipados opcionales), auth del cliente, timeout, retry, circuit breaker, fallback | [dsl/http-clients.md](dsl/http-clients.md) |
 | persistence | `persistence.keel.yaml` | opcional | Modelo de almacenamiento, claves naturales, índices, consistencia | [dsl/persistence.md](dsl/persistence.md) |
 | storage | `storage.keel.yaml` | opcional | Almacenamiento de archivos (object storage): buckets lógicos, content-types, tamaño, visibilidad | [dsl/storage.md](dsl/storage.md) |
 
@@ -44,6 +44,7 @@ Orden de diseño recomendado (el que sigue `/keel-design`): **domain → use-cas
 | Roles y permisos por endpoint | security | Por nombre de operación, estable aunque cambien rutas |
 | Quién consume un endpoint (usuarios vs otros servicios) | api (`audience`) + security (`serviceAuth`, `serviceClients`, `level: service`) | La audiencia es contrato de la API; las credenciales y scopes de máquina son seguridad |
 | Retry / circuit breaker salientes | http-clients | Política del canal, compartida por los casos de uso |
+| Autenticación saliente (api-key, OAuth2 M2M…) | http-clients | Mecanismo por cliente; las credenciales llegan por configuración, nunca en el diseño |
 | Retry / DLQ de consumo de eventos | messaging | Política de la suscripción |
 | Outbox | messaging | Es la garantía de publicación de eventos |
 | Paginación | api | Concern de la API |

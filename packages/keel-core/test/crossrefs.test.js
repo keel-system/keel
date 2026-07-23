@@ -487,6 +487,134 @@ test('defaultAudience services aplica a los endpoints derivados por auto', () =>
   assert.deepEqual(errors, []);
 });
 
+// --- http-clients: tipado de requests/responses y coherencia path ↔ pathParams ---
+
+const domainForHttp = () => ({
+  types: {
+    Sku: { type: 'string' },
+    Money: { type: 'decimal' },
+  },
+  entities: { Product: entity() },
+});
+
+const httpLayers = (call) => ({
+  domain: domainForHttp(),
+  'use-cases': {},
+  'http-clients': {
+    clients: {
+      'pricing-service': { purpose: 'Precios vigentes por SKU', calls: { getPrice: call } },
+    },
+  },
+});
+
+test('llamada solo-prosa sigue validando limpio (retrocompatibilidad)', () => {
+  const { errors, warnings } = run(httpLayers({ contract: 'GET /prices/{sku} -> { amount: decimal }' }));
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
+test('llamada estructurada bien formada no produce errores ni warnings', () => {
+  const { errors, warnings } = run(
+    httpLayers({
+      contract: 'Precio vigente de un SKU',
+      method: 'GET',
+      path: '/prices/{sku}',
+      request: { pathParams: { sku: { type: 'Sku' } }, queryParams: { currency: { type: 'string' } } },
+      response: { fields: { amount: { type: 'Money' } } },
+    })
+  );
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
+test('tipo inexistente en response.fields es error', () => {
+  const { errors } = run(
+    httpLayers({
+      contract: 'Precio vigente de un SKU',
+      method: 'GET',
+      path: '/prices',
+      response: { fields: { amount: { type: 'Price' } } },
+    })
+  );
+  assert.ok(
+    errors.some((e) =>
+      e.includes(`http-clients: clients.pricing-service.calls.getPrice.response.fields.amount: el tipo 'Price' no existe en domain: types`)
+    )
+  );
+});
+
+test('tipo inexistente en request.body es error', () => {
+  const { errors } = run(
+    httpLayers({
+      contract: 'Autoriza un cobro',
+      method: 'POST',
+      path: '/charges',
+      request: { body: { amount: { type: 'Importe' } } },
+    })
+  );
+  assert.ok(
+    errors.some((e) =>
+      e.includes(`http-clients: clients.pricing-service.calls.getPrice.request.body.amount: el tipo 'Importe' no existe en domain: types`)
+    )
+  );
+});
+
+test('variable de path no declarada en pathParams es error', () => {
+  const { errors } = run(
+    httpLayers({
+      contract: 'Precio vigente de un SKU',
+      method: 'GET',
+      path: '/prices/{sku}',
+      request: { pathParams: { other: { type: 'string' } } },
+    })
+  );
+  assert.ok(errors.some((e) => e.includes(`request.pathParams: la variable '{sku}' de path no está declarada`)));
+  assert.ok(errors.some((e) => e.includes(`request.pathParams.other: no aparece como '{other}' en path`)));
+});
+
+test('path con variables sin request.pathParams es warning', () => {
+  const { errors, warnings } = run(
+    httpLayers({ contract: 'Precio vigente de un SKU', method: 'GET', path: '/prices/{sku}' })
+  );
+  assert.deepEqual(errors, []);
+  assert.ok(warnings.some((w) => w.includes(`path con variables {…} sin request.pathParams`)));
+});
+
+test('response tipada sin method+path es warning', () => {
+  const { warnings } = run(
+    httpLayers({
+      contract: 'GET /prices/{sku} -> { amount: decimal }',
+      response: { fields: { amount: { type: 'Money' } } },
+    })
+  );
+  assert.ok(
+    warnings.some((w) => w.includes(`declara request/response tipados pero no method+path`))
+  );
+});
+
+test('circuitBreaker sin fallback es warning y con fallback no', () => {
+  const base = { contract: 'GET /prices -> lista de precios', method: 'GET', path: '/prices' };
+  const sin = run(httpLayers({ ...base, circuitBreaker: { failureRateThreshold: 50 } }));
+  assert.ok(sin.warnings.some((w) => w.includes(`circuitBreaker sin fallback`)));
+  const con = run(httpLayers({ ...base, circuitBreaker: { failureRateThreshold: 50 }, fallback: 'usa el último precio cacheado' }));
+  assert.ok(!con.warnings.some((w) => w.includes(`circuitBreaker sin fallback`)));
+});
+
+test('campo file en request con bucket inexistente es error', () => {
+  const layers = httpLayers({
+    contract: 'Sube el comprobante del cobro',
+    method: 'POST',
+    path: '/receipts',
+    request: { body: { receipt: { type: 'file', bucket: 'receipts' } } },
+  });
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) =>
+      e.includes(`request.body.receipt: el bucket 'receipts' no está en storage: buckets (no hay capa storage)`)
+    )
+  );
+});
+
 test('messaging sin channels ni channel sigue validando limpio (retrocompatibilidad)', () => {
   const layers = {
     domain: domainForMessaging(),

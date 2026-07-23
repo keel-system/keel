@@ -135,7 +135,8 @@ test('summarizeService resume las capas opcionales', (t) => {
       'authentication:\n  protocol: oidc\nroles:\n  billing-admin: { description: Gestiona facturas. }\naccess:\n  default: { level: required }\n',
     'messaging.keel.yaml':
       'publishing:\n  reliability: outbox\n  events:\n    InvoiceCreated:\n      payload:\n        invoiceId: { type: uuid, required: true }\nsubscriptions:\n  OrderPlaced:\n    source: orders\n    payload:\n      orderId: { type: uuid, required: true }\n    triggers: createInvoice\n',
-    'http-clients.keel.yaml': 'clients:\n  payment-gateway:\n    purpose: Cobrar facturas.\n    calls: {}\n',
+    'http-clients.keel.yaml':
+      'clients:\n  payment-gateway:\n    purpose: Cobrar facturas.\n    auth: { type: api-key }\n    calls:\n      charge:\n        contract: Autoriza el cobro de una factura.\n        method: POST\n        path: /charges\n        request:\n          body:\n            invoiceId: { type: uuid, required: true }\n      getStatus:\n        contract: "GET /charges/{id} -> { status: string }"\n',
     'persistence.keel.yaml': 'default:\n  model: relational\nentities:\n  Invoice: { persisted: true }\n',
     'storage.keel.yaml': 'buckets:\n  invoicePdfs:\n    visibility: private\n  logos: {}\n'
   });
@@ -159,7 +160,18 @@ test('summarizeService resume las capas opcionales', (t) => {
     defaultAccess: 'required'
   });
   assert.deepEqual(summary.messaging, { reliability: 'outbox', published: ['InvoiceCreated'], subscriptions: ['OrderPlaced'] });
-  assert.deepEqual(summary.httpClients, { clients: ['payment-gateway'] });
+  assert.deepEqual(summary.httpClients, {
+    clients: [
+      {
+        name: 'payment-gateway',
+        auth: 'api-key',
+        calls: [
+          { name: 'charge', method: 'POST', path: '/charges', typed: true },
+          { name: 'getStatus', method: null, path: null, typed: false }
+        ]
+      }
+    ]
+  });
   assert.deepEqual(summary.persistence, { model: 'relational', entities: ['Invoice'] });
   assert.deepEqual(summary.storage.buckets, [
     { name: 'invoicePdfs', visibility: 'private' },

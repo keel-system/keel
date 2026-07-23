@@ -72,8 +72,10 @@ export function generate(model) {
   }
   if (layersPresent.httpClients) {
     steps.push(
-      '**http-clients** (`specs/http-clients.keel.yaml`): el esqueleto RestClient + resilience4j ya está en `infrastructure/http`; ' +
-        'tipa cada `<Llamada>Response` con los campos reales del `contract` y completa los `*Fallback` marcados `// TODO (agente)`.'
+      '**http-clients** (`specs/http-clients.keel.yaml`): puerto `<Cliente>Client` en `domain/clients` y adaptador RestClient + ' +
+        'resilience4j + mapper ACL en `infrastructure/http`, ya generados (con auth saliente si el diseño la declara). Completa los ' +
+        '`*Fallback` marcados `// TODO (agente)`; solo si una llamada va en prosa (sin `request`/`response` estructurados), tipa además ' +
+        'sus records wire/`<Llamada>Result` y el mapeo del `<Cliente>Mapper`. Consume el cliente siempre por su puerto de `domain/clients`.'
     );
   }
   if (layersPresent.storage) {

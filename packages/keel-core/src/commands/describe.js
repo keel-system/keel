@@ -79,12 +79,17 @@ function printMessaging(messaging) {
 }
 
 function printHttpClients(httpClients) {
-  console.log(
-    pc.bold('http-clients') +
-      pc.dim(
-        ` — ${plural(httpClients.clients.length, 'cliente', 'clientes')}${httpClients.clients.length > 0 ? ` (${httpClients.clients.join(', ')})` : ''}`
-      )
-  );
+  console.log(pc.bold('http-clients') + pc.dim(` — ${plural(httpClients.clients.length, 'cliente', 'clientes')}`));
+  for (const client of httpClients.clients) {
+    const notes = [];
+    if (client.auth && client.auth !== 'none') notes.push(`auth: ${client.auth}`);
+    notes.push(plural(client.calls.length, 'llamada', 'llamadas'));
+    console.log(`  ${pc.dim('•')} ${client.name}${pc.dim(` (${notes.join(', ')})`)}`);
+    for (const call of client.calls) {
+      const route = call.method && call.path ? pc.cyan(`${call.method} ${call.path}`) : pc.dim('(contrato en prosa)');
+      console.log(`      ${pc.dim('-')} ${call.name}  ${route}`);
+    }
+  }
 }
 
 function printPersistence(persistence) {

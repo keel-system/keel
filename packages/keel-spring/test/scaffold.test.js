@@ -608,19 +608,34 @@ test('capa http-clients: RestClient configurado + resilience4j + fallback stub',
   assert.deepEqual(warnings, []);
 
   const httpDir = 'src/main/java/com/commerce/productcatalog/infrastructure/http';
+  const portDir = 'src/main/java/com/commerce/productcatalog/domain/clients';
   const config = read(workspace, `${httpDir}/PricingServiceClientConfig.java`);
   assert.ok(config.includes('public RestClient pricingServiceRestClient'));
   assert.ok(config.includes('.withReadTimeout(Duration.ofMillis(2000))'));
 
-  const iface = read(workspace, `${httpDir}/PricingServiceClient.java`);
-  assert.ok(iface.includes('GetPriceResponse getPrice(String sku);')); // path var parseada
+  // Puerto hexagonal en domain/clients con retorno en términos del dominio.
+  const port = read(workspace, `${portDir}/PricingServiceClient.java`);
+  assert.ok(port.includes('public interface PricingServiceClient'));
+  assert.ok(port.includes('GetPriceResult getPrice(String sku);')); // path var parseada de la prosa
+  const result = read(workspace, `${portDir}/GetPriceResult.java`);
+  assert.ok(result.includes('public record GetPriceResult()')); // solo-prosa: vacío + TODO
+  assert.ok(result.includes('TODO (agente)'));
 
-  const impl = read(workspace, `${httpDir}/PricingServiceClientImpl.java`);
-  assert.ok(impl.includes('@Retry(name = "pricing-service-get-price")'));
-  assert.ok(impl.includes('@CircuitBreaker(name = "pricing-service-get-price", fallbackMethod = "getPriceFallback")'));
-  assert.ok(impl.includes('.uri("/prices/{sku}", sku)')); // llamada funcional armada del contract
-  assert.ok(impl.includes('private GetPriceResponse getPriceFallback(String sku, Throwable throwable)'));
-  assert.ok(impl.includes('// TODO (agente): Devolver el último precio conocido en caché.')); // fallback = stub de negocio
+  const adapter = read(workspace, `${httpDir}/PricingServiceHttpAdapter.java`);
+  assert.ok(adapter.includes('implements PricingServiceClient'));
+  assert.ok(adapter.includes('@Retry(name = "pricing-service-get-price")'));
+  assert.ok(adapter.includes('@CircuitBreaker(name = "pricing-service-get-price", fallbackMethod = "getPriceFallback")'));
+  assert.ok(adapter.includes('.uri("/prices/{sku}", sku)')); // llamada funcional armada del contract
+  assert.ok(adapter.includes('return mapper.toGetPriceResult(response);'));
+  assert.ok(adapter.includes('private GetPriceResult getPriceFallback(String sku, Throwable throwable)'));
+  assert.ok(adapter.includes('// TODO (agente): Devolver el último precio conocido en caché.')); // fallback = stub de negocio
+
+  // ACL: mapper stub (solo-prosa) + wire DTO vacío en infrastructure/http.
+  const mapper = read(workspace, `${httpDir}/PricingServiceMapper.java`);
+  assert.ok(mapper.includes('public GetPriceResult toGetPriceResult(GetPriceResponse response)'));
+  assert.ok(mapper.includes('TODO (agente)'));
+  const wire = read(workspace, `${httpDir}/GetPriceResponse.java`);
+  assert.ok(wire.includes('public record GetPriceResponse()'));
 
   // resilience4j en gradle + fragmento de config con instancias derivadas del diseño.
   assert.ok(read(workspace, 'build.gradle').includes('resilience4j-spring-boot3'));
@@ -629,6 +644,112 @@ test('capa http-clients: RestClient configurado + resilience4j + fallback stub',
   assert.ok(hc.includes('max-attempts: 3'));
   assert.ok(hc.includes('- org.springframework.web.client.HttpClientErrorException')); // 4xx nunca se reintenta
   assert.ok(hc.includes('failure-rate-threshold: 50'));
+  // Sin auth declarada: ni credenciales ni starter oauth2-client.
+  assert.ok(!hc.includes('auth:'));
+  assert.ok(!read(workspace, 'build.gradle').includes('oauth2-client'));
+});
+
+test('capa http-clients estructurada: records tipados, mapper ACL completo y auth saliente', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const patchedManifest = structuredClone(manifest);
+  patchedManifest.layers['http-clients'] = 'http-clients.keel.yaml';
+  const patched = structuredClone(layers);
+  patched['http-clients'] = {
+    clients: {
+      'pricing-service': {
+        purpose: 'Obtener el precio vigente de un producto.',
+        auth: { type: 'api-key', headerName: 'X-Api-Key' },
+        calls: {
+          getPrice: {
+            contract: 'Precio vigente de un SKU con su moneda.',
+            method: 'GET',
+            path: '/prices/{sku}',
+            request: {
+              pathParams: { sku: { type: 'uuid', required: true } },
+              queryParams: { currency: { type: 'string' } }
+            },
+            response: { fields: { amount: { type: 'decimal', required: true }, currency: { type: 'string' } } },
+            timeoutMs: 2000
+          }
+        }
+      },
+      'payment-gateway': {
+        purpose: 'Cobros con tarjeta.',
+        auth: { type: 'oauth2-client-credentials', tokenUrl: 'https://auth.example.com/token', scopes: ['payments:write'] },
+        calls: {
+          charge: {
+            contract: 'Autoriza el cobro de un pedido.',
+            method: 'POST',
+            path: '/charges',
+            request: { body: { orderId: { type: 'uuid', required: true }, amount: { type: 'decimal', required: true } } },
+            response: { fields: { status: { type: 'string', required: true } } }
+          }
+        }
+      }
+    }
+  };
+
+  const { warnings } = scaffoldService({ manifest: patchedManifest, layers: patched, workspace });
+  assert.deepEqual(warnings, []);
+
+  const httpDir = 'src/main/java/com/commerce/productcatalog/infrastructure/http';
+  const portDir = 'src/main/java/com/commerce/productcatalog/domain/clients';
+
+  // Puerto y result tipados en el dominio.
+  const port = read(workspace, `${portDir}/PricingServiceClient.java`);
+  assert.ok(port.includes('GetPriceResult getPrice(UUID sku, String currency);'));
+  const result = read(workspace, `${portDir}/GetPriceResult.java`);
+  assert.ok(result.includes('public record GetPriceResult(BigDecimal amount, String currency)'));
+  assert.ok(!result.includes('TODO'));
+
+  // Wire DTOs con el contrato del tercero + mapper ACL completo (sin TODO).
+  const wire = read(workspace, `${httpDir}/GetPriceResponse.java`);
+  assert.ok(wire.includes('public record GetPriceResponse(BigDecimal amount, String currency)'));
+  const mapper = read(workspace, `${httpDir}/PricingServiceMapper.java`);
+  assert.ok(mapper.includes('return new GetPriceResult(response.amount(), response.currency());'));
+  assert.ok(!mapper.includes('TODO'));
+
+  // Adaptador con uriBuilder (query params tipados) y sin TODO de tipado.
+  const adapter = read(workspace, `${httpDir}/PricingServiceHttpAdapter.java`);
+  assert.ok(adapter.includes('.uri(uri -> uri.path("/prices/{sku}").queryParam("currency", currency).build(sku))'));
+  assert.ok(!adapter.includes('TODO'));
+
+  // Body tipado: wire request + toWire en el mapper + puerto con campos del body.
+  const chargePort = read(workspace, `${portDir}/PaymentGatewayClient.java`);
+  assert.ok(chargePort.includes('ChargeResult charge(UUID orderId, BigDecimal amount);'));
+  const chargeAdapter = read(workspace, `${httpDir}/PaymentGatewayHttpAdapter.java`);
+  assert.ok(chargeAdapter.includes('.body(mapper.toChargeRequest(orderId, amount))'));
+  assert.ok(read(workspace, `${httpDir}/ChargeRequest.java`).includes('public record ChargeRequest(UUID orderId, BigDecimal amount)'));
+
+  // Auth api-key: header en el bean + credencial por properties (default vacío).
+  const config = read(workspace, `${httpDir}/PricingServiceClientConfig.java`);
+  assert.ok(config.includes('@Value("${http-clients.pricing-service.auth.api-key:}") String apiKey'));
+  assert.ok(config.includes('.defaultHeader("X-Api-Key", apiKey)'));
+
+  // Auth oauth2-client-credentials: interceptor + manager compartido + starter.
+  const oauthConfig = read(workspace, `${httpDir}/PaymentGatewayClientConfig.java`);
+  assert.ok(oauthConfig.includes('OAuth2ClientHttpRequestInterceptor'));
+  assert.ok(oauthConfig.includes('oauth2.setClientRegistrationIdResolver(request -> "payment-gateway");'));
+  const shared = read(workspace, `${httpDir}/HttpClientsOAuth2Config.java`);
+  assert.ok(shared.includes('AuthorizedClientServiceOAuth2AuthorizedClientManager'));
+  assert.ok(shared.includes('.clientCredentials()'));
+  assert.ok(read(workspace, 'build.gradle').includes('spring-boot-starter-oauth2-client'));
+
+  // Properties: credenciales por env var + registration oauth2 estándar.
+  const hc = read(workspace, 'src/main/resources/parameters/local/http-clients.yaml');
+  assert.ok(hc.includes('api-key: changeme'));
+  assert.ok(hc.includes('authorization-grant-type: client_credentials'));
+  assert.ok(hc.includes('scope: payments:write'));
+  assert.ok(hc.includes('token-uri: https://auth.example.com/token'));
+  const hcDevelop = read(workspace, 'src/main/resources/parameters/develop/http-clients.yaml');
+  assert.ok(hcDevelop.includes('api-key: ${PRICING_SERVICE_API_KEY:changeme}'));
+  assert.ok(hcDevelop.includes('client-id: ${PAYMENT_GATEWAY_CLIENT_ID:changeme}'));
+
+  // Perfil test: registration dummy para levantar el contexto sin proveedor real.
+  const hcTest = read(workspace, 'src/main/resources/parameters/test/http-clients.yaml');
+  assert.ok(hcTest.includes('client-id: test'));
+  assert.ok(hcTest.includes('token-uri: http://localhost/token'));
 });
 
 test('capa messaging (subscriptions): payload record transversal, sin listener del broker', () => {

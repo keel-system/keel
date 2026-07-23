@@ -46,6 +46,9 @@ export function generate(model) {
     // RestClient (starter-web) + resilience4j sobre AOP (starter-aop ya presente)
     // para @Retry/@CircuitBreaker de los clientes salientes.
     dependencies.push(`implementation 'io.github.resilience4j:resilience4j-spring-boot3:${RESILIENCE4J_VERSION}'`);
+    if (model.httpClients?.some((client) => client.auth?.type === 'oauth2-client-credentials')) {
+      dependencies.push("implementation 'org.springframework.boot:spring-boot-starter-oauth2-client'");
+    }
   }
   dependencies.push(
     "testImplementation 'org.springframework.boot:spring-boot-starter-test'",

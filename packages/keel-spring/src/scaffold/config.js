@@ -283,8 +283,47 @@ function httpClientsYaml(model, profile) {
   const clients = model.httpClients;
   const lines = ['http-clients:'];
   for (const client of clients) {
-    const envVar = `${client.id.toUpperCase().replace(/-/g, '_')}_BASE_URL`;
+    const envVar = `${client.envPrefix}_BASE_URL`;
     lines.push(`  ${client.id}:`, `    base-url: ${envValue(profile, envVar, 'http://localhost:8080')}`);
+    // Credenciales de la auth saliente: nunca vienen del diseño; gradiente de
+    // env vars como el resto de secretos (oauth2 va aparte, en el bloque
+    // spring.security.oauth2.client de más abajo).
+    if (client.auth?.type === 'api-key') {
+      lines.push('    auth:', `      api-key: ${envValue(profile, `${client.envPrefix}_API_KEY`, 'changeme')}`);
+    } else if (client.auth?.type === 'bearer-static') {
+      lines.push('    auth:', `      token: ${envValue(profile, `${client.envPrefix}_TOKEN`, 'changeme')}`);
+    } else if (client.auth?.type === 'basic') {
+      lines.push(
+        '    auth:',
+        `      username: ${envValue(profile, `${client.envPrefix}_USERNAME`, 'changeme')}`,
+        `      password: ${envValue(profile, `${client.envPrefix}_PASSWORD`, 'changeme')}`
+      );
+    }
+  }
+
+  // Registrations OAuth2 client-credentials de los clientes que las declaran
+  // (las consume HttpClientsOAuth2Config vía ClientRegistrationRepository).
+  const oauthClients = clients.filter((c) => c.auth?.type === 'oauth2-client-credentials');
+  if (oauthClients.length > 0) {
+    lines.push('spring:', '  security:', '    oauth2:', '      client:', '        registration:');
+    for (const client of oauthClients) {
+      lines.push(
+        `          ${client.id}:`,
+        '            authorization-grant-type: client_credentials',
+        `            client-id: ${envValue(profile, `${client.envPrefix}_CLIENT_ID`, 'changeme')}`,
+        `            client-secret: ${envValue(profile, `${client.envPrefix}_CLIENT_SECRET`, 'changeme')}`
+      );
+      if (client.auth.scopes.length > 0) {
+        lines.push(`            scope: ${client.auth.scopes.join(', ')}`);
+      }
+    }
+    lines.push('        provider:');
+    for (const client of oauthClients) {
+      lines.push(
+        `          ${client.id}:`,
+        `            token-uri: ${envValue(profile, `${client.envPrefix}_TOKEN_URL`, client.auth.tokenUrl)}`
+      );
+    }
   }
 
   const retryCalls = clients.flatMap((c) => c.calls.filter((call) => call.retry));
@@ -369,6 +408,27 @@ function testProfileFiles(model) {
         '  path-style-access: true'
       ].join('\n') + '\n')
     );
+  }
+
+  // OAuth2 saliente: registration dummy para que el ClientRegistrationRepository
+  // (y con él HttpClientsOAuth2Config) se cree en @SpringBootTest sin proveedor
+  // real. Los demás tipos de auth usan @Value con default vacío y no lo necesitan.
+  const oauthClients = (model.httpClients ?? []).filter((c) => c.auth?.type === 'oauth2-client-credentials');
+  if (model.layersPresent.httpClients && oauthClients.length > 0) {
+    const lines = ['spring:', '  security:', '    oauth2:', '      client:', '        registration:'];
+    for (const client of oauthClients) {
+      lines.push(
+        `          ${client.id}:`,
+        '            authorization-grant-type: client_credentials',
+        '            client-id: test',
+        '            client-secret: test'
+      );
+    }
+    lines.push('        provider:');
+    for (const client of oauthClients) {
+      lines.push(`          ${client.id}:`, '            token-uri: http://localhost/token');
+    }
+    fragments.push(fragment('test', 'http-clients', lines.join('\n') + '\n'));
   }
 
   const header = ['# Perfil test: H2 en memoria, sin contenedores.'];

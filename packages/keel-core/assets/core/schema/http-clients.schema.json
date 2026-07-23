@@ -17,6 +17,7 @@
         "additionalProperties": false,
         "properties": {
           "purpose": { "type": "string", "minLength": 5 },
+          "auth": { "$ref": "#/$defs/clientAuth" },
           "calls": {
             "type": "object",
             "minProperties": 1,
@@ -25,6 +26,48 @@
           }
         }
       }
+    }
+  },
+  "$defs": {
+    "clientAuth": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "description": "Mecanismo de autenticación saliente del cliente. Las credenciales JAMÁS van en el diseño: aquí solo se declara el mecanismo; los valores llegan por configuración/variables de entorno del servicio generado.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["none", "api-key", "bearer-static", "basic", "oauth2-client-credentials"]
+        },
+        "headerName": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Header que transporta la api-key (por defecto X-Api-Key). Solo válido con type api-key."
+        },
+        "tokenUrl": {
+          "type": "string",
+          "minLength": 8,
+          "description": "Endpoint de emisión de tokens del proveedor (se externaliza por variable de entorno al generar). Solo válido con type oauth2-client-credentials."
+        },
+        "scopes": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1,
+          "description": "Scopes solicitados en el token. Solo válido con type oauth2-client-credentials."
+        },
+        "description": { "type": "string" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "oauth2-client-credentials" } }, "required": ["type"] },
+          "then": { "required": ["tokenUrl"] },
+          "else": { "not": { "anyOf": [{ "required": ["tokenUrl"] }, { "required": ["scopes"] }] } }
+        },
+        {
+          "if": { "not": { "properties": { "type": { "const": "api-key" } } } },
+          "then": { "not": { "required": ["headerName"] } }
+        }
+      ]
     }
   }
 }
