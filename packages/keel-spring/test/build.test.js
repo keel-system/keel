@@ -60,7 +60,7 @@ test('los assets del generador existen en el paquete', async () => {
   // Skills por tecnología del stack (build las instala condicionalmente en el
   // proyecto generado según keel-stack.json).
   assert.ok(fs.existsSync(path.join(assetsDir, 'generators', 'spring', 'skills', 'README.md')), 'falta skills/README.md');
-  for (const tech of ['kafka', 'rabbitmq', 'snssqs', 's3', 'redis', 'keycloak', 'cognito', 'database']) {
+  for (const tech of ['kafka', 'rabbitmq', 'snssqs', 's3', 'redis', 'keycloak', 'cognito', 'database', 'httpclient']) {
     const skillDir = path.join(assetsDir, 'generators', 'spring', 'skills', `keel-spring-${tech}`);
     assert.ok(fs.existsSync(path.join(skillDir, 'SKILL.md')), `falta skills/keel-spring-${tech}/SKILL.md`);
     // Progressive disclosure: cada skill trae al menos references/configuration.md.

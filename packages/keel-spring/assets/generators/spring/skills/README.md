@@ -4,9 +4,13 @@ Guías de trabajo por tecnología para lo que **no** genera `keel-spring build`
 porque depende de la infraestructura elegida (código de adaptadores, tuning de
 configuración, preparación de entorno y validación). Cada tecnología es una
 skill independiente que build instala **condicionalmente** en el
-`.claude/skills/` del proyecto generado según `keel-stack.json`: si el broker
-es kafka, solo se instala `keel-spring-kafka`, y así con cada categoría. El
-subagente `keel-spring-code` las descubre como skills del proyecto.
+`.claude/skills/` del proyecto generado: si el broker es kafka, solo se instala
+`keel-spring-kafka`, y así con cada categoría. El subagente `keel-spring-code`
+las descubre como skills del proyecto.
+
+La mayoría se gatean por **stack** (`keel-stack.json`); una excepción,
+`keel-spring-httpclient`, se gatea por **presencia de capa de diseño** (la capa
+`http-clients` no es una elección de stack, sino parte del diseño del servicio).
 
 | Clave en `keel-stack.json` | Valor | Skill |
 |---|---|---|
@@ -18,6 +22,10 @@ subagente `keel-spring-code` las descubre como skills del proyecto.
 | `cache` | `redis` / `valkey` | `keel-spring-redis/` (protocolo Redis en ambos) |
 | `auth` | `keycloak` | `keel-spring-keycloak/` |
 | `auth` | `cognito` | `keel-spring-cognito/` |
+
+| Capa de diseño | Skill |
+|---|---|
+| `http-clients` (integraciones HTTP salientes con RestClient + resilience4j) | `keel-spring-httpclient/` |
 
 `keel-spring-database` no enseña a escribir código JPA — el espejo `XxxJpa`,
 los `JpaRepository` y los adaptadores ya los genera build de forma transversal

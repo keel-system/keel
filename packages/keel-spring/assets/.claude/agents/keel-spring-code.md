@@ -17,8 +17,10 @@ repo generado se clonó suelto). Todo lo que hagas ocurre dentro de esa raíz.
    romperlas), `keel-stack.json`, el diseño en `specs/` y el conocimiento local en
    `.claude/conventions/` — `.claude/conventions/mapping.md` se sigue
    estrictamente. La guía por tecnología está instalada como skills
-   `.claude/skills/keel-spring-<tech>/` (solo las del stack de
-   `keel-stack.json`): lee su SKILL.md antes de tocar su capa. Cada skill trae
+   `.claude/skills/keel-spring-<tech>/` (solo las aplicables a este servicio: las
+   del stack de `keel-stack.json` y las de capas de diseño presentes —p. ej.
+   `keel-spring-httpclient` si el diseño declara la capa `http-clients`): lee su
+   SKILL.md antes de tocar su capa. Cada skill trae
    `references/` (configuración, implementación, troubleshooting); léelos **bajo
    demanda** según la tabla «Referencias» del SKILL.md, no todos de golpe.
 2. **Auditoría de fidelidad al flujo**: antes de implementar cada handler, ejecuta

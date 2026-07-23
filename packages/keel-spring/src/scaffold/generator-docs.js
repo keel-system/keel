@@ -27,16 +27,19 @@ const CONVENTIONS = [
 // Subagentes de la orquestación (misma fuente que instala build en el workspace).
 const AGENTS = ['keel-spring-code.md', 'keel-spring-infra.md', 'keel-spring-validate.md', 'keel-spring-quality.md'];
 
-// Skills por tecnología aplicables al stack resuelto (mismo mapeo que
-// skills/README.md): una por categoría elegida; minio/s3 comparten
-// keel-spring-s3, redis/valkey keel-spring-redis y los seis dialectos de BD
-// keel-spring-database (tuning/validación: el código JPA lo genera build).
+// Skills por tecnología aplicables al servicio (mismo mapeo que skills/README.md):
+// una por categoría de stack elegida (minio/s3 comparten keel-spring-s3,
+// redis/valkey keel-spring-redis, los seis dialectos de BD keel-spring-database
+// —tuning/validación: el código JPA lo genera build—) más las gateadas por
+// presencia de capa, no por stack: keel-spring-httpclient acompaña a la capa
+// http-clients (integraciones HTTP salientes, no es una elección de stack).
 export function stackSkills(model) {
   const { layersPresent, stack } = model;
   const skills = [];
   if (layersPresent.persistence && stack.database) skills.push('keel-spring-database');
   if (layersPresent.messaging && stack.broker) skills.push(`keel-spring-${stack.broker}`);
   if (layersPresent.storage && stack.storage) skills.push('keel-spring-s3');
+  if (layersPresent.httpClients) skills.push('keel-spring-httpclient');
   if (stack.cache) skills.push('keel-spring-redis');
   if (stack.auth && stack.auth !== 'none') skills.push(`keel-spring-${stack.auth}`);
   return skills;
@@ -94,7 +97,7 @@ function skillMd(model) {
   const { service } = model;
   const techSkills = stackSkills(model);
   const techSkillsBullet = techSkills.length
-    ? `\n- Skills por tecnología (\`.claude/skills/\`, hermanas de esta) — guía de implementación por tecnología, instaladas solo las del stack de \`keel-stack.json\`: ${techSkills.map((s) => `\`${s}\``).join(', ')}. Cada una trae \`references/\` (configuración, implementación, troubleshooting) que se leen bajo demanda según la tabla de su SKILL.md.`
+    ? `\n- Skills por tecnología (\`.claude/skills/\`, hermanas de esta) — guía de implementación, instaladas solo las aplicables a este servicio (del stack de \`keel-stack.json\` y de las capas de diseño presentes): ${techSkills.map((s) => `\`${s}\``).join(', ')}. Cada una trae \`references/\` (configuración, implementación, troubleshooting) que se leen bajo demanda según la tabla de su SKILL.md.`
     : '';
   return `---
 name: ${SKILL}

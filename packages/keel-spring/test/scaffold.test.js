@@ -329,6 +329,40 @@ test('skills por tecnología: solo las del stack elegido', () => {
   assert.ok(claude.includes('.claude/skills/keel-spring-rabbitmq/SKILL.md'));
 });
 
+test('skill http-clients: gateada por presencia de capa, no por stack', () => {
+  // Sin capa http-clients (fixture base) → la skill NO se instala.
+  const bare = makeWorkspace();
+  scaffoldService({ ...loadFixture(), workspace: bare });
+  assert.ok(!exists(bare, '.claude/skills/keel-spring-httpclient'));
+
+  // Con la capa declarada → build instala la skill completa (SKILL.md + references/).
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const patched = structuredClone(layers);
+  patched['http-clients'] = {
+    clients: {
+      'pricing-service': {
+        purpose: 'Precios vigentes de un tercero.',
+        calls: { getPrice: { contract: 'GET /prices/{sku} → { amount }' } }
+      }
+    }
+  };
+  const patchedManifest = structuredClone(manifest);
+  patchedManifest.layers['http-clients'] = 'http-clients.keel.yaml';
+
+  scaffoldService({ manifest: patchedManifest, layers: patched, workspace });
+
+  assert.ok(exists(workspace, '.claude/skills/keel-spring-httpclient/SKILL.md'));
+  assert.ok(exists(workspace, '.claude/skills/keel-spring-httpclient/references/configuration.md'));
+  assert.ok(exists(workspace, '.claude/skills/keel-spring-httpclient/references/implementation.md'));
+  assert.ok(exists(workspace, '.claude/skills/keel-spring-httpclient/references/troubleshooting.md'));
+  const skill = read(workspace, '.claude/skills/keel-spring-httpclient/SKILL.md');
+  assert.ok(skill.includes('name: keel-spring-httpclient'));
+  // El SKILL.md del proyecto la lista como skill aplicable al servicio.
+  const projectSkill = read(workspace, '.claude/skills/keel-generate-spring/SKILL.md');
+  assert.ok(projectSkill.includes('keel-spring-httpclient'));
+});
+
 test('stack elegido (mysql + rabbitmq) parametriza gradle, yaml y compose', () => {
   const workspace = makeWorkspace();
   const { manifest, layers } = loadFixture();
