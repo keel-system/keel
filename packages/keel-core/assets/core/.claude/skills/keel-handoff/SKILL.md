@@ -9,7 +9,7 @@ argument-hint: "<specs/servicio>"
 Produce `DESIGN.md`: la explicación del diseño **para personas**, de modo que otro equipo entienda el servicio y construya sobre él **sin leer su código ni hablar con quien lo diseñó**. Es complementario, no equivalente, a los otros derivados del spec:
 
 - `validation-scenarios.md` es el **contrato para el generador** (Given/When/Then).
-- `/keel-docs` (`INTEGRATION.md` + `openapi.yaml`) documenta el servicio **para integradores externos** que lo consumen en ejecución.
+- `/keel-integrate` (`INTEGRATION.md`) documenta el **contrato servidor-a-servidor** (endpoints M2M + eventos) para que otro servidor lo consuma; `/keel-docs` (`openapi.yaml` + Postman) documenta la **API de usuarios** para clientes web/mobile.
 - `/keel-handoff` (`DESIGN.md`) documenta **el diseño mismo** —sus características y decisiones— para reutilizarlo.
 
 Todo lo mecánico (el "qué") se deriva de los artefactos de `specs/<servicio>/`; **si algo no se puede derivar, es un hueco del diseño: repórtalo, no lo inventes.**
@@ -85,4 +85,4 @@ Reglas:
 
 ## Coherencia
 
-`DESIGN.md` debe contar la misma historia que el resto de derivados del spec: mismas entidades, operaciones, errores y eventos que `INTEGRATION.md`/`openapi.yaml` y `validation-scenarios.md`. Si el spec cambió, regenera y revisa que las decisiones registradas sigan vigentes. `keel describe <servicio>` es el resumen mecánico rápido del mismo diseño; `DESIGN.md` es la ficha completa — dos profundidades de la misma historia, nunca contradictorias.
+`DESIGN.md` debe contar la misma historia que el resto de derivados del spec: mismas entidades, operaciones, errores y eventos que `INTEGRATION.md` (de `/keel-integrate`), `openapi.yaml` (de `/keel-docs`) y `validation-scenarios.md`. Si el spec cambió, regenera y revisa que las decisiones registradas sigan vigentes. `keel describe <servicio>` es el resumen mecánico rápido del mismo diseño; `DESIGN.md` es la ficha completa — dos profundidades de la misma historia, nunca contradictorias.

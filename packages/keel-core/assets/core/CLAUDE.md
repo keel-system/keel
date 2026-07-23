@@ -5,14 +5,14 @@ Este directorio es un **workspace Keel**, sembrado con `keel init`: aquí se dis
 ## El flujo
 
 ```
-keel new → /keel-design (cierra con DESIGN.md + README) → /keel-validate → /keel-generate <tech> → /keel-docs
+keel new → /keel-design (cierra con DESIGN.md + README) → /keel-validate → /keel-generate <tech> → /keel-docs + /keel-integrate
 ```
 
 1. **Crear** — `keel new <servicio>`: crea `specs/<servicio>/` con manifiesto (`service.keel.yaml`) + capas obligatorias (`domain`, `use-cases`). Para reutilizar un diseño existente ajustándolo: `keel new <nuevo> --from <origen>` clona sus artefactos y registra el linaje en `service.basedOn`; `/keel-design` lo detecta y entrevista solo sobre lo que cambia. Para decidir de qué diseño derivar: `keel describe <servicio>` resume identidad, estado, capas y contenido; `docs/<servicio>/DESIGN.md` explica las decisiones y su porqué.
 2. **Diseñar** — `/keel-design specs/<servicio>`: entrevista al humano y construye el diseño **capa a capa** (domain → use-cases → api → security → messaging → http-clients → persistence → storage), aprobando cada artefacto antes del siguiente. Las capas opcionales se declaran en el manifiesto solo si aplican. Referencia: `docs/dsl-reference.md` (índice) y `docs/dsl/<capa>.md`. El cierre produce `specs/<servicio>/validation-scenarios.md` (escenarios Given/When/Then; formato en `docs/validation-scenarios.md`) con el que el generador validará el servidor y, como paso final automático, ejecuta `/keel-handoff` para derivar `docs/<servicio>/DESIGN.md` (características + decisiones de diseño con su porqué) y actualizar el índice de servicios del `README.md`.
 3. **Validar** — `/keel-validate` (usa `keel validate specs/<servicio>` para schemas por capa + referencias cruzadas, y añade la checklist semántica).
 4. **Generar** — `/keel-generate <tech> specs/<servicio>`: delega en el generador instalado en `generators/<tech>/`. Cada generador es un paquete npm con CLI propia: se instala con `npm i -g keel-<tech>` (ej. `keel-spring`; ver conocidos: `keel list`) y se prepara con `keel-<tech> build specs/<servicio>` (copia su skill, convenciones y skills por tecnología al workspace, valida el diseño, pregunta el stack y genera el scaffolding transversal del servicio; el agente completa el código dependiente de la infra elegida, la lógica de negocio y los tests). Salida: `services/<servicio>-<tech>/` como repo git propio.
-5. **Documentar** — `/keel-docs specs/<servicio>` deriva `INTEGRATION.md` + `openapi.yaml` + colecciones Postman (`postman/`) para integradores externos. (El documento de diseño `DESIGN.md` ya se produjo al cerrar el diseño; `/keel-handoff specs/<servicio>` lo **regenera** cuando el spec cambia.)
+5. **Documentar** — dos superficies según quién consuma el servicio: `/keel-docs specs/<servicio>` deriva la documentación de la **API de usuarios** (`openapi.yaml` + colecciones Postman en `postman/`) para clientes web/mobile; `/keel-integrate specs/<servicio>` deriva `INTEGRATION.md`, el **contrato servidor-a-servidor** (endpoints expuestos a otros servidores + eventos publicados/consumidos) para que otro servidor lo consuma. (El documento de diseño `DESIGN.md` ya se produjo al cerrar el diseño; `/keel-handoff specs/<servicio>` lo **regenera** cuando el spec cambia.)
 
 ## Estructura
 
@@ -26,7 +26,7 @@ specs/<servicio>/    # el diseño de cada servicio, un artefacto por capa — la
                      # (+ validation-scenarios.md: escenarios de validación derivados, al cerrar el diseño)
 templates/service/   # plantillas por capa para arrancar artefactos nuevos
 docs/                # methodology, dsl-reference (índice), dsl/<capa>.md, building-a-generator
-                     # (+ <servicio>/: INTEGRATION.md + openapi.yaml de /keel-docs y DESIGN.md de /keel-handoff)
+                     # (+ <servicio>/: openapi.yaml + postman/ de /keel-docs, INTEGRATION.md de /keel-integrate, DESIGN.md de /keel-handoff)
 generators/<tech>/   # generadores instalados con `keel-<tech> build` (conventions + golden)
 services/            # servicios generados (un repo git propio cada uno)
 ```

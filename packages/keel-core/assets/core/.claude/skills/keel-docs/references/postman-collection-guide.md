@@ -142,7 +142,7 @@ Una request por endpoint de `api` (explícito o derivado de `auto`) que ningún
 escenario cubre:
 
 - `method` y ruta desde `api`; body de ejemplo desde el input de la operación
-  (campos requeridos con valores realistas, coherentes con INTEGRATION.md).
+  (campos requeridos con valores realistas, coherentes con el `openapi.yaml`).
 - `Authorization` según la regla de `security.access` de la operación.
 - Test mínimo: el `successStatus` del contrato.
 

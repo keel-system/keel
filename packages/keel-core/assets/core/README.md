@@ -11,7 +11,8 @@ partir de los cuales se genera la implementación en la tecnología que se quier
 ## Servicios diseñados
 
 Cada servicio enlaza su **documento de diseño** (`DESIGN.md`: modelo de dominio, invariantes, decisiones y
-cómo reutilizarlo) y, si existe, su **guía de integración** (`INTEGRATION.md` + `openapi.yaml`).
+cómo reutilizarlo), y, si existen, su **contrato servidor-a-servidor** (`INTEGRATION.md`, de `/keel-integrate`)
+y la documentación de su **API de usuarios** (`openapi.yaml` + Postman, de `/keel-docs`).
 
 <!-- keel:servicios:start -->
 _Aún no hay servicios diseñados. Cierra un diseño con `/keel-design specs/<servicio>` para poblar esta tabla._
