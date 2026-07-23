@@ -47,7 +47,12 @@ export function buildModel({ manifest, layers, stack = null }) {
   const valueObjects = collectValueObjects(domainTypes, domainTypes, inlineEnumName, hasPersistence);
   const entities = collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPersistence, warnings);
   const { services, errors } = collectOperations(layers, domainTypes, inlineEnumName, service, warnings);
-  const events = collectEvents(layers, domainTypes, inlineEnumName, warnings);
+  const events = collectEvents(layers, services, service, domainTypes, inlineEnumName, warnings);
+  // Garantía de entrega declarada en el diseño: decide cómo se materializa la
+  // publicación (outbox transaccional vs. envío directo tras commit).
+  const messaging = layers.messaging
+    ? { reliability: layers.messaging.publishing?.reliability ?? 'best-effort' }
+    : null;
   const subscriptions = collectSubscriptions(layers, services, domainTypes, inlineEnumName, warnings);
   const pagination = layers.api?.pagination ?? null;
 
@@ -59,7 +64,7 @@ export function buildModel({ manifest, layers, stack = null }) {
   const security = collectSecurity(layers, services, api.routeBase, warnings);
   const httpClients = collectHttpClients(layers, domainTypes, inlineEnumName, warnings);
 
-  return { service, layersPresent, enums, valueObjects, entities, services, errors, events, subscriptions, pagination, api, security, httpClients, warnings };
+  return { service, layersPresent, enums, valueObjects, entities, services, errors, events, messaging, subscriptions, pagination, api, security, httpClients, warnings };
 }
 
 function buildService(manifest, stack) {
@@ -73,6 +78,7 @@ function buildService(manifest, stack) {
     basePackage: basePackage(manifest, stack?.group),
     artifactId: kebabCase(name),
     projectName: `${kebabCase(name)}-spring`,
+    className: pascalCase(name),
     applicationClass: `${pascalCase(name)}Application`,
     basePath: null // se rellena desde la capa api
   };
@@ -362,16 +368,48 @@ function collectOperations(layers, domainTypes, inlineEnumName, service, warning
 
 // ─── Eventos de dominio (messaging.publishing.events) ────────────────────────
 
-function collectEvents(layers, domainTypes, inlineEnumName, warnings) {
+function collectEvents(layers, services, service, domainTypes, inlineEnumName, warnings) {
   const events = layers.messaging?.publishing?.events ?? {};
   const domainEntities = layers.domain?.entities ?? {};
-  return Object.entries(events).map(([name, def]) => ({
-    name,
-    className: `${pascalCase(name)}Event`,
-    publisherClass: `${pascalCase(name)}Publisher`,
-    description: def?.description ?? null,
-    fields: payloadFields(name, def?.payload, { direction: 'output', domainEntities, domainTypes, inlineEnumName, warnings })
-  }));
+  const emitters = emittersByEvent(services);
+  const serviceSlug = kebabCase(service.name);
+
+  return Object.entries(events).map(([name, def]) => {
+    const emitted = emitters.get(name) ?? [];
+    return {
+      name,
+      className: `${pascalCase(name)}Event`,
+      integrationClass: `${pascalCase(name)}IntegrationEvent`,
+      publisherClass: `${pascalCase(name)}Publisher`,
+      description: def?.description ?? null,
+      channel: def?.channel ?? null,
+      // Enrutado por convención: exchange/topic del servicio + clave por evento.
+      // Ambos salen a parameters/ y llegan al código por @Value (nunca literales).
+      destinationProperty: 'messaging.publishing.destination',
+      destinationDefault: `${serviceSlug}.events`,
+      routingKeyProperty: `messaging.publishing.routing-keys.${kebabCase(name)}`,
+      routingKeyDefault: `${serviceSlug}.${kebabCase(name)}`,
+      // Quién lo emite: la raíz de agregado del grupo cuya operación lo declara
+      // en `emits`. Es lo que permite sembrar el raise(...) donde corresponde.
+      aggregate: emitted[0]?.aggregate ?? null,
+      emittedBy: emitted,
+      fields: payloadFields(name, def?.payload, { direction: 'output', domainEntities, domainTypes, inlineEnumName, warnings })
+    };
+  });
+}
+
+// Índice evento → operaciones que lo declaran en `emits` (con su agregado).
+function emittersByEvent(services) {
+  const index = new Map();
+  for (const group of services) {
+    for (const operation of group.operations) {
+      for (const eventName of operation.emits) {
+        if (!index.has(eventName)) index.set(eventName, []);
+        index.get(eventName).push({ aggregate: group.entity, operation: operation.name });
+      }
+    }
+  }
+  return index;
 }
 
 // ─── Seguridad (security.access → matchers del SecurityFilterChain) ──────────

@@ -144,17 +144,8 @@ function renderHandler(model, service, operation) {
     imports.add(`${subPackage(model, 'application.mappers')}.${mapper}`);
     dependencies.push({ type: mapper, name: mapper[0].toLowerCase() + mapper.slice(1) });
   }
-  // Puerto de publicación por evento emitido: el handler depende de la interfaz
-  // (domain/events); la implementación del broker la escribe el agente.
-  for (const eventName of operation.emits) {
-    const event = (model.events ?? []).find((e) => e.name === eventName);
-    if (!event) continue;
-    imports.add(`${subPackage(model, 'domain.events')}.${event.publisherClass}`);
-    dependencies.push({
-      type: event.publisherClass,
-      name: event.publisherClass[0].toLowerCase() + event.publisherClass.slice(1)
-    });
-  }
+  // El handler NO publica eventos: los emite el agregado con raise(...) y el
+  // adaptador de repositorio los drena al persistir (conventions/domain-modeling.md).
 
   let fields = '';
   let constructor = '';
@@ -176,7 +167,12 @@ function renderHandler(model, service, operation) {
     const error = model.errors.find((e) => e.code === code);
     notes.push(`Error: lanzar ${error?.exceptionClass ?? code} (${code}, HTTP ${error?.http ?? 400})${error?.when ? ` cuando: ${error.when}` : ''}`);
   }
-  for (const event of operation.emits) notes.push(`Emite: ${event} (tras confirmar la transacción; publicar vía el puerto inyectado)`);
+  for (const eventName of operation.emits) {
+    const event = (model.events ?? []).find((e) => e.name === eventName);
+    notes.push(
+      `Emite: ${eventName} — lo hace ${event?.aggregate ?? 'el agregado'} con raise(${event?.className ?? `${eventName}Event`}.of(...)) dentro del método de negocio; el handler no publica nada`
+    );
+  }
   if (operation.idempotency) {
     notes.push(`Idempotencia: keySource=${operation.idempotency.keySource}${operation.idempotency.ttlSeconds ? `, ttlSeconds=${operation.idempotency.ttlSeconds}` : ''}`);
   }

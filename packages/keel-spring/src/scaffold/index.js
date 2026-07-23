@@ -26,6 +26,7 @@ import * as dtos from './dtos.js';
 import * as mappers from './mappers.js';
 import * as events from './events.js';
 import * as messaging from './messaging.js';
+import * as outbox from './outbox.js';
 import * as controllers from './controllers.js';
 import * as security from './security.js';
 import * as httpClients from './http-clients.js';
@@ -54,6 +55,7 @@ const GENERATORS = [
   mappers,
   events,
   messaging,
+  outbox,
   controllers,
   security,
   httpClients,

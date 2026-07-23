@@ -28,14 +28,16 @@ aws ... sns subscribe --topic-arn <arn-topic> --protocol sqs \
   validación sea reproducible; en AWS real esta topología la crea la
   plataforma (IaC), no la app.
 
-## Publisher
+## Envío
 
-Como en el SKILL.md (`SnsTemplate.sendNotification`). Fiabilidad:
+Como en el SKILL.md. La fase de publicación (dentro o fuera de la transacción)
+ya la resuelve el `<Servicio>DomainEventBridge` generado; lo tuyo es el envío:
 
-- `after-commit`: publica en `TransactionSynchronization.afterCommit`, nunca
-  dentro de la transacción JPA.
-- `outbox`: tabla outbox + relay `@Scheduled` que publica y marca; única
-  garantía real contra pérdida.
+- `outbox`: implementas `OutboxDispatcher` y **dejas propagar** la excepción si
+  la entrega no se confirma — es lo que hace que el relay reintente. Tragarla
+  convierte el outbox en decorado.
+- `best-effort`: implementas `<Evento>Publisher`; un fallo se loguea y no
+  interrumpe la operación (no hay reintento).
 - El ARN va por `@Value` desde el YAML; el nombre lógico del evento viaja como
   subject/atributo para filtrado.
 
@@ -80,7 +82,7 @@ At-least-once siempre (visibility timeout vencido, redrives): deduplica con el
 
 - [ ] Topología creada por script reproducible en `infra/` (raw delivery, redrive, DLQ).
 - [ ] Stub del publisher eliminado; ARN por configuración, no literal.
-- [ ] `reliability` aplicada (after-commit / outbox / best-effort).
+- [ ] Puerto de envío implementado según `reliability` (`OutboxDispatcher` u `<Evento>Publisher`), con su stub eliminado y el fallo propagado (outbox) o registrado (best-effort).
 - [ ] `onFailure` → `maxReceiveCount` + DLQ según el diseño.
 - [ ] Visibility timeout ≥ 6× el tiempo de proceso del handler.
 - [ ] Consumo idempotente si la operación puede reintentarse.

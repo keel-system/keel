@@ -5,6 +5,7 @@
 // El perfil activo se elige con la variable de entorno PROFILE (default local).
 
 import { DATABASES } from '../lib/stack-catalog.js';
+import { usesOutbox } from './outbox.js';
 
 const PROFILES = ['local', 'develop', 'production'];
 
@@ -54,6 +55,11 @@ export function generate(model) {
     }
     if (layersPresent.messaging && stack.broker) {
       fragments.push(fragment(profile, stack.broker, brokerYaml(model, profile)));
+    }
+    // Enrutado de publicación (destino + clave por evento) y, si el diseño
+    // declara reliability: outbox, cadencia del relay y retención de la purga.
+    if (layersPresent.messaging && model.events.length > 0) {
+      fragments.push(fragment(profile, 'messaging', messagingYaml(model, profile)));
     }
     if (stack.cache === 'redis' || stack.cache === 'valkey') {
       // Valkey habla protocolo Redis: misma configuración spring.data.redis.
@@ -210,6 +216,37 @@ function brokerYaml(model, profile) {
     '      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer',
     '    # TODO (agente): topics y deserialización de consumo según messaging.keel.yaml'
   ].join('\n') + '\n';
+}
+
+// Destino y claves de enrutado de los eventos publicados: contrato de
+// integración, así que se parametriza (el código solo lee @Value). El nombre
+// físico del exchange/topic puede diferir por ambiente.
+function messagingYaml(model, profile) {
+  const first = model.events[0];
+  const lines = [
+    'messaging:',
+    '  publishing:',
+    `    destination: ${envWithDefault(profile, 'MESSAGING_DESTINATION', first.destinationDefault)}`,
+    '    routing-keys:'
+  ];
+  for (const event of model.events) {
+    const key = event.routingKeyProperty.split('.').pop();
+    lines.push(`      ${key}: ${event.routingKeyDefault}`);
+  }
+  if (usesOutbox(model)) {
+    lines.push(
+      'outbox:',
+      '  relay:',
+      '    # Cada cuánto el relay busca filas pendientes y las entrega al broker.',
+      `    fixed-delay-ms: ${envWithDefault(profile, 'OUTBOX_RELAY_DELAY_MS', 1000)}`,
+      `    batch-size: ${envWithDefault(profile, 'OUTBOX_RELAY_BATCH_SIZE', 100)}`,
+      '  purge:',
+      '    # Borrado diario de lo ya publicado; la tabla no es un histórico.',
+      `    cron: ${envWithDefault(profile, 'OUTBOX_PURGE_CRON', '"0 0 3 * * *"')}`,
+      `    retention-days: ${envWithDefault(profile, 'OUTBOX_PURGE_RETENTION_DAYS', 7)}`
+    );
+  }
+  return lines.join('\n') + '\n';
 }
 
 function redisYaml(profile) {

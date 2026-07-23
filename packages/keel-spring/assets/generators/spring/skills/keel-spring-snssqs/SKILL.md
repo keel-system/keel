@@ -17,20 +17,44 @@ description: Guía de implementación de mensajería con Amazon SNS/SQS (LocalSt
 - `build.gradle`: BOM `spring-cloud-aws-dependencies` + starters SNS y SQS (mismo SDK contra LocalStack y AWS real).
 - `parameters/<perfil>/snssqs.yaml`: endpoint/región/credenciales por perfil (LocalStack en local).
 - `infra/docker-compose.yaml`: `localstack` (puerto 4566, servicios sns+sqs).
-- Contratos: `EventEnvelope`/`EventMetadata`, puerto `<Evento>Publisher` (en `domain/events`) con stub `<Evento>PublisherStub`, record `<Evento>Message` por suscripción.
+- Contratos y cadena de publicación **ya generados**: `EventEnvelope` + `EventMetadata`, el record `<Evento>Event` que el agregado emite, su gemelo `<Evento>IntegrationEvent`, el `<Servicio>DomainEventBridge` que traduce uno en otro, y el record `<Evento>Message` por suscripción. Con `reliability: outbox`, además la tabla `outbox_event`, su repositorio y el `OutboxRelay`.
+- **Lo único tuyo al publicar es el envío**: implementar `OutboxDispatcher` (si `reliability: outbox`) o `<Evento>Publisher` (si `best-effort`), sustituyendo su stub. No reescribas el bridge, el relay ni el mapeo domain→integración.
 
-## Publisher (sustituye cada `<Evento>PublisherStub`)
+## Envío al broker
 
-`@Component` en `infrastructure/messaging` que implementa el puerto e inyecta `SnsTemplate`:
+Qué implementas depende de la `reliability` declarada en `messaging.keel.yaml`:
+
+**`outbox`** — implementa `OutboxDispatcher` (`infrastructure/messaging/outbox`) y elimina
+`OutboxDispatcherStub`. El payload que recibes **ya es la `EventEnvelope` serializada**: publícalo
+como cuerpo del mensaje, sin volver a serializar ni envolver.
 
 ```java
-snsTemplate.sendNotification(topicArn, EventEnvelope.of("<Evento>", event, correlationId), "<Evento>");
+@Component
+public class SnsOutboxDispatcher implements OutboxDispatcher {
+
+    private final SnsTemplate snsTemplate;
+
+    // ... constructor ...
+
+    @Override
+    public void dispatch(String destination, String routingKey, String eventType, String payload) {
+        snsTemplate.send(destination, MessageBuilder.withPayload(payload)
+                .setHeader("eventType", eventType)
+                .setHeader("routingKey", routingKey)
+                .build());
+    }
+}
 ```
 
-- El ARN/nombre del topic de destino se resuelve desde `parameters/<perfil>/snssqs.yaml`
-  vía `@Value` (no lo escribas literal); crea el topic en LocalStack para local.
-- Elimina el stub al añadir la implementación. Aplica la `reliability` del diseño
-  (`after-commit` → publicar tras confirmar la transacción; `outbox` → tabla outbox + relay).
+Debe **lanzar** si la entrega no se confirma: el relay cuenta el intento y reintenta.
+
+**`best-effort`** — implementa cada `<Evento>Publisher` en `infrastructure/messaging` (elimina su
+stub) con
+`snsTemplate.sendNotification(topic, EventEnvelope.of(event.metadata(), event, correlationId), "<Evento>")`.
+
+En ambos casos el ARN/nombre del topic sale de `parameters/<perfil>/messaging.yaml`
+(`messaging.publishing.destination`) leído con `@Value`, nunca literal; crea el topic en LocalStack
+para local.
 
 ## Listener (uno por suscripción)
 

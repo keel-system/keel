@@ -20,6 +20,7 @@ const CONVENTIONS = [
   'project-layout.md',
   'infra-validation.md',
   'flow-fidelity.md',
+  'domain-modeling.md',
   'domain-services.md',
   'virtual-threads.md'
 ];
@@ -126,7 +127,7 @@ Este proyecto fue generado por \`keel-spring build\` desde \`specs/${service.nam
 - \`.claude/architecture.md\` — arquitectura hexagonal + CQRS y función de cada paquete. Léelo antes de tocar código si no conoces ya la estructura.
 - \`.claude/constitution.md\` — reglas inviolables (frontera hexagonal, transaccionalidad, contratos públicos). Ninguna implementación puede romperlas.
 - \`specs/\` (raíz del proyecto) — snapshot del diseño Keel (manifiesto + un artefacto por capa + \`validation-scenarios.md\`). Si trabajas dentro del workspace Keel, el canónico es \`../../specs/${service.name}/\`; el snapshot se refresca en cada \`keel-spring build\`.
-- \`.claude/conventions/\` — mapeo DSL → código (\`mapping.md\`, síguelo estrictamente), estructura del proyecto (\`project-layout.md\`), sondeo y reset de infraestructura (\`infra-validation.md\`), auditoría de fidelidad al flujo (\`flow-fidelity.md\`) y guías de handler (\`domain-services.md\`, \`virtual-threads.md\`).${techSkillsBullet}
+- \`.claude/conventions/\` — mapeo DSL → código (\`mapping.md\`, síguelo estrictamente), estructura del proyecto (\`project-layout.md\`), sondeo y reset de infraestructura (\`infra-validation.md\`), auditoría de fidelidad al flujo (\`flow-fidelity.md\`), modelado del dominio (\`domain-modeling.md\`: agregados ricos, invariantes y reparto de la validación) y guías de handler (\`domain-services.md\`, \`virtual-threads.md\`).${techSkillsBullet}
 
 Reglas inviolables completas en \`.claude/constitution.md\`; en corto: el diseño es la única fuente de verdad funcional, los \`code\` de error y nombres de evento se copian exactos, y ante ambigüedad, diseño > conventions > tu criterio (documentado en el README). No des la generación por terminada con la compilación en rojo o algún escenario fallando. Las pruebas unitarias no forman parte de este flujo: son un proceso independiente y posterior a la validación del diseñador.
 `;

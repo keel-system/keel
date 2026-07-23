@@ -48,8 +48,10 @@ export function generate(model) {
       '`UseCaseMediator`). Implementa `preconditions` y `rules` en el orden del artefacto lanzando los errores de `domain/errors`' +
       (stack.cache ? '; las políticas `cache` según la skill `.claude/skills/keel-spring-redis/SKILL.md`' : '') +
       '.',
-    '**domain** (`specs/domain.keel.yaml`): protege cada `// TODO invariante` con métodos de dominio en `domain/aggregate`; ' +
-      'deriva los campos `computed` marcados `// TODO computed`. El dominio es puro: nada de JPA aquí.'
+    '**domain** (`specs/domain.keel.yaml`): siguiendo `.claude/conventions/domain-modeling.md`, escribe el factory de creación, ' +
+      'los métodos semánticos de cada transición del `lifecycle` y la guarda de cada `// TODO invariante` en `domain/aggregate`; ' +
+      'deriva los campos `computed` marcados `// TODO computed`. El agregado sale sin setters: la mutación va por métodos de ' +
+      'negocio. El dominio es puro: nada de JPA aquí.'
   ];
   if (layersPresent.api) {
     steps.push(
@@ -65,8 +67,11 @@ export function generate(model) {
   }
   if (layersPresent.messaging) {
     steps.push(
-      `**messaging** (\`specs/messaging.keel.yaml\`): siguiendo la skill \`${brokerRef}\`, implementa cada publisher real (sustituye y ` +
-        'elimina su `<Evento>PublisherStub`, con la `reliability` declarada), la configuración del broker si aplica y el ' +
+      '**messaging** (`specs/messaging.keel.yaml`): los eventos los emite el **agregado** con `raise(<Evento>Event.of(...))` en su ' +
+        'método de negocio (build dejó el buffer y un TODO por evento); el adaptador de repositorio los drena al persistir y el ' +
+        '`<Servicio>DomainEventBridge` los traduce a evento de integración y los entrega. Tú, siguiendo la skill ' +
+        `\`${brokerRef}\`, implementas solo el envío al broker (\`OutboxDispatcher\` con \`reliability: outbox\`, ` +
+        '`<Evento>Publisher` con `best-effort` — sustituye y elimina su stub), la configuración del broker si aplica y el ' +
         '`<Evento>Listener` por suscripción (binding, política `onFailure`, despacho vía `UseCaseMediator`).'
     );
   }
@@ -145,6 +150,8 @@ export function generate(model) {
     '',
     '- `.claude/conventions/mapping.md` — mapeo DSL Keel → código Spring, capa por capa. Síguelo estrictamente.',
     '- `.claude/conventions/project-layout.md` — estructura del proyecto y sus paquetes.',
+    '- `.claude/conventions/domain-modeling.md` — cómo se modela el dominio: agregados ricos, invariantes, value objects y',
+    '  reparto de la validación entre capas.',
     '- `.claude/conventions/infra-validation.md` — sondeo por tecnología de la infraestructura de prueba.',
     ...techSkills.map((name) => `- \`.claude/skills/${name}/SKILL.md\` — ${SKILL_HINTS[name] ?? name}: qué dejó listo build y qué te toca a ti; sus \`references/\` (configuración, implementación, troubleshooting) se leen bajo demanda.`),
     '',

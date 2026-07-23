@@ -26,6 +26,7 @@ Generador **Java / Spring Boot** para diseños Keel, instalado en este workspace
 | `conventions/mapping.md` | Tabla normativa de mapeo diseño → código Spring, por capa |
 | `conventions/infra-validation.md` | Sondeo de la infraestructura de prueba vía `devtools` + reset de datos entre flujos |
 | `conventions/flow-fidelity.md` | Auditoría de fidelidad al flujo: checklist previa a implementar cada handler |
+| `conventions/domain-modeling.md` | Modelado del dominio: agregados ricos, invariantes, value objects y reparto de la validación entre capas |
 | `conventions/domain-services.md` | Cuándo y cómo crear servicios de dominio (`@DomainComponent`) |
 | `conventions/virtual-threads.md` | I/O paralela con hilos virtuales en query handlers |
 | `skills/` | Skills por tecnología del stack (`keel-spring-<tech>/` — database, kafka, rabbitmq, snssqs, s3, redis, keycloak, cognito; SKILL.md + `references/` bajo demanda), instaladas condicionalmente en el `.claude/skills/` del proyecto generado según `keel-stack.json` |

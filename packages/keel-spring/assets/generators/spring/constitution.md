@@ -24,10 +24,19 @@ Estas reglas no se negocian ni se "acomodan" para que un caso particular compile
 - Un cliente HTTP saliente se consume **solo por su puerto** `<Cliente>Client` de `domain/clients`; los DTOs wire del tercero y el mapper de anticorrupción (`<Cliente>Mapper`) viven únicamente en `infrastructure/http` — ni handlers ni dominio importan un `<Llamada>Request`/`<Llamada>Response` wire, y un cambio de contrato del tercero se absorbe en el adaptador/mapper, jamás en dominio o application.
 - Las credenciales de la auth saliente (`clients.C.auth`) llegan por configuración (`parameters/<perfil>/http-clients.yaml`, env vars), nunca del diseño ni hardcodeadas.
 
+## Modelo de dominio
+
+- El estado de un agregado se muta **únicamente** por sus métodos de negocio: sin setters públicos. El constructor completo es rehidratación desde persistencia (`XxxRepositoryImpl.toDomain`); la creación de negocio pasa por un factory que aplica los invariantes.
+- Todo `invariants` declarado en `domain.keel.yaml` tiene una guarda en dominio que lanza el error del diseño. Un invariante sin guarda es generación incompleta, no criterio del agente.
+
+Cómo se escriben esas guardas, el factory, los métodos semánticos del `lifecycle` y los value objects: `conventions/domain-modeling.md`.
+
 ## Consistencia y transacciones
 
 - `consistency.transactionalBoundary: per-aggregate` (cuando el diseño lo declara): un command muta una sola raíz de agregado dentro de la transacción del mediator; nunca dos agregados en la misma transacción.
 - Un evento se publica exactamente lo que `emits` declara; los caminos de error o idempotentes no publican.
+- **Los eventos los emite el agregado**: cada evento de `emits` se hace `raise(<E>Event.of(...))` dentro del método de negocio que provoca el cambio, después de las guardas. Un handler que construya o publique un evento —o un adaptador que lo haga fuera del drenaje de `pullDomainEvents()`— es una fuga del dominio y se corrige, no se justifica. La traducción a evento de integración y la entrega ya vienen generadas (`<Servicio>DomainEventBridge`): el agente solo implementa el puerto de salida del broker.
+- La `EventMetadata` se estampa **una vez**, en el `raise`, y viaja intacta hasta el wire: su `eventId` es la clave de idempotencia del consumidor. Regenerarla aguas abajo rompe la deduplicación.
 - Un `@Version` (bloqueo optimista) sin round-trip completo (`toDomain`/`toJpa` propagándolo) no protege nada: no se introduce a medias.
 
 ## Configuración y secretos

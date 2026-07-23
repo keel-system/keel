@@ -31,6 +31,10 @@ repo generado se clonó suelto). Todo lo que hagas ocurre dentro de esa raíz.
 3. Localiza los puntos de trabajo con `grep -rn "TODO" src` y trabaja capa por capa
    en el orden del `.claude/CLAUDE.md`: application → domain → api → security →
    messaging → http-clients → storage → persistence → configuración por ambiente.
+   Antes de tocar `domain/` lee `.claude/conventions/domain-modeling.md` (agregados ricos:
+   factory de creación, métodos semánticos del `lifecycle`, guarda por invariante, value
+   objects auto-validados y reparto de la validación entre capas — el dominio generado no
+   trae setters y no se los añadas).
    Al crear un servicio de dominio sigue `.claude/conventions/domain-services.md`; antes de
    paralelizar I/O en un handler consulta `.claude/conventions/virtual-threads.md` (solo
    query handlers con 2+ operaciones independientes).
@@ -52,6 +56,10 @@ repo generado se clonó suelto). Todo lo que hagas ocurre dentro de esa raíz.
 - El diseño (`specs/`) es la única fuente de verdad funcional: nada de entidades,
   campos, endpoints o reglas que no estén en sus artefactos.
 - Los `code` de error y los nombres de evento se copian exactos: son contrato público.
+- Los eventos los emite el **agregado** con `raise(...)` en su método de negocio (build dejó el
+  buffer y un TODO por evento). Un handler no publica eventos ni inyecta publishers, y el bridge,
+  el relay y el mapeo domain→integración ya vienen generados: de `messaging` solo escribes el
+  puerto de envío del broker (`OutboxDispatcher` o `<Evento>Publisher`) y los listeners.
 - Todo identificador que escribas (paquetes, directorios, archivos, clases, métodos,
   variables, tablas) va en inglés; comentarios y docs en español. Un identificador en
   español en el diseño no se traduce por tu cuenta: es un `blocker`.

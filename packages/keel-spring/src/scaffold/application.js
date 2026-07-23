@@ -3,6 +3,7 @@
 // AuditableEntity).
 
 import { javaFile, javaPath } from './render.js';
+import { usesOutbox } from './outbox.js';
 
 export function generate(model) {
   const { service } = model;
@@ -11,6 +12,11 @@ export function generate(model) {
   if (model.layersPresent.persistence) {
     imports.push('org.springframework.data.jpa.repository.config.EnableJpaAuditing');
     annotations.push('@EnableJpaAuditing');
+  }
+  // El relay del outbox es un @Scheduled: sin esto las filas no saldrían nunca.
+  if (usesOutbox(model)) {
+    imports.push('org.springframework.scheduling.annotation.EnableScheduling');
+    annotations.push('@EnableScheduling');
   }
 
   const body = `${annotations.join('\n')}

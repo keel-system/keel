@@ -112,7 +112,7 @@ export function generate(model) {
     pendingLayers.push('- `security`: el `SecurityFilterChain` ya está generado; crea el realm en el Keycloak de prueba (http://localhost:8180, admin/admin).');
   }
   if (layersPresent.messaging) {
-    pendingLayers.push('- `messaging`: implementa los publishers reales del broker (sustituyendo cada `<Evento>PublisherStub`, con la `reliability` declarada) y los `<Evento>Listener` de las suscripciones, según la skill `.claude/skills/keel-spring-<broker>/`.');
+    pendingLayers.push('- `messaging`: haz `raise(...)` de cada evento en el método de negocio del agregado (la traducción a evento de integración y la entrega ya están generadas) e implementa el envío al broker — `OutboxDispatcher` o `<Evento>Publisher` según la `reliability` — y los `<Evento>Listener` de las suscripciones, según la skill `.claude/skills/keel-spring-<broker>/`.');
   }
   if (layersPresent.storage) {
     pendingLayers.push('- `storage`: implementa el adaptador de `FileStorage` (bean del cliente + upload/download/delete/signedUrl) según la skill `.claude/skills/keel-spring-s3/`.');

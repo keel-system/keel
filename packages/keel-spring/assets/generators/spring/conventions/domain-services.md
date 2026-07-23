@@ -19,7 +19,8 @@ que crea el agente: el scaffolding no lo genera), sin dependencias de infraestru
 
 ## Cuándo NO
 
-- La lógica solo opera sobre el estado interno de un agregado → método del agregado.
+- La lógica solo opera sobre el estado interno de un agregado → método del agregado
+  (`domain-modeling.md`).
 - La lógica es trivial (una línea) → directamente en el handler.
 - La lógica involucra infraestructura concreta (JPA, HTTP, mensajería) → handler con
   los **puertos** correspondientes; el servicio de dominio solo ve interfaces de dominio.

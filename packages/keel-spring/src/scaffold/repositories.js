@@ -146,10 +146,25 @@ function renderAdapter(model, entity, paginated) {
         return ${jpaField}.findAll(pageable).map(this::toDomain);
     }`);
   }
+  // Drenaje de eventos de dominio: save() es el único punto por el que pasa
+  // todo cambio persistido del agregado, así que aquí se publican los eventos
+  // que la raíz acumuló. Va dentro de la transacción: el bridge decide después
+  // si se escriben al outbox (misma transacción) o se envían tras el commit.
+  const emitsEvents = model.events.some((event) => event.aggregate === entity.name);
+  if (emitsEvents) {
+    imports.add('org.springframework.context.ApplicationEventPublisher');
+    imports.add('org.springframework.transaction.annotation.Transactional');
+  }
+  const saveBody = emitsEvents
+    ? `        ${entity.name} saved = toDomain(${jpaField}.save(toJpa(entity)));
+        entity.pullDomainEvents().forEach(eventPublisher::publishEvent);
+        return saved;`
+    : `        return toDomain(${jpaField}.save(toJpa(entity)));`;
+
   methods.push(
-    `    @Override
+    `    @Override${emitsEvents ? '\n    @Transactional' : ''}
     public ${entity.name} save(${entity.name} entity) {
-        return toDomain(${jpaField}.save(toJpa(entity)));
+${saveBody}
     }`,
     `    @Override
     public void deleteById(UUID id) {
@@ -162,13 +177,22 @@ function renderAdapter(model, entity, paginated) {
     renderToJpa(model, involvedEntity, imports)
   ]);
 
+  const fields = [`    private final ${entity.name}JpaRepository ${jpaField};`];
+  const ctorParams = [`${entity.name}JpaRepository ${jpaField}`];
+  const ctorAssigns = [`        this.${jpaField} = ${jpaField};`];
+  if (emitsEvents) {
+    fields.push('    private final ApplicationEventPublisher eventPublisher;');
+    ctorParams.push('ApplicationEventPublisher eventPublisher');
+    ctorAssigns.push('        this.eventPublisher = eventPublisher;');
+  }
+
   const body = `@Component
 public class ${entity.name}RepositoryImpl implements ${entity.name}Repository {
 
-    private final ${entity.name}JpaRepository ${jpaField};
+${fields.join('\n')}
 
-    public ${entity.name}RepositoryImpl(${entity.name}JpaRepository ${jpaField}) {
-        this.${jpaField} = ${jpaField};
+    public ${entity.name}RepositoryImpl(${ctorParams.join(', ')}) {
+${ctorAssigns.join('\n')}
     }
 
 ${methods.join('\n\n')}

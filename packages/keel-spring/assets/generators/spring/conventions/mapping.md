@@ -5,7 +5,8 @@ Tabla normativa, organizada por capa del diseño (`specs/<servicio>/<capa>.keel.
 Buena parte de esta tabla la materializa ya el **scaffolding determinista** de `keel-spring build` (ver `project-layout.md`, sección "Qué genera el scaffolding"). Decisiones fijas del scaffolding que el agente debe conocer:
 
 - Value types **escalares** (`base` + `constraints`) se aplanan a su tipo base Java; sus constraints van como Bean Validation al DTO y a la columna. El agente puede promoverlos a record/`@Embeddable` si el dominio lo justifica.
-- `lifecycle` se protege con un guard genérico `transitionTo(target)` (mapa de transiciones + `InvalidStateTransitionException`, code `INVALID_STATE_TRANSITION` → HTTP 409); los métodos semánticos por transición los añade el agente.
+- Las entidades de dominio salen **encapsuladas**: getters (colecciones como vista inmutable), constructor completo solo para rehidratar desde persistencia y **sin setters ni constructor vacío**. El factory de creación, los métodos semánticos y las guardas de invariante los escribe el agente siguiendo `domain-modeling.md`, que además fija el reparto de la validación entre capas.
+- `lifecycle` se protege con un guard **privado** `transitionTo(target)` (mapa de transiciones + `InvalidStateTransitionException`, code `INVALID_STATE_TRANSITION` → HTTP 409); los métodos semánticos por transición los añade el agente (build deja un TODO por transición declarada) y son la única vía para llamar al guard.
 - Sin `XxxRequest`: el body HTTP es el propio `XxxCommand` (Bean Validation en sus componentes); las respuestas son `<PascalOperación>ResponseDto` en `application/dtos/`; outputs `paginated` usan `PagedResponse<T>`.
 - Operación expuesta sin endpoint explícito ni patrón CRUD → fallback `POST /<operación-en-kebab>` marcado con `// TODO: revisar ruta`.
 - `basePath` de api (o `/api/<servicio>` si falta) + `/v1` → `@RequestMapping` del `<Agregado>V1Controller`; las rutas del diseño son relativas a esa base. No se usa `server.servlet.context-path`.
@@ -23,17 +24,17 @@ Buena parte de esta tabla la materializa ya el **scaffolding determinista** de `
 | campo `required: true` | `nullable = false` + validación en el DTO de entrada |
 | campo `generated` / `computed` | Lo asigna el servidor (infraestructura / regla de dominio); nunca aparece en DTOs de entrada |
 | campo `sensitive` | Excluido de DTOs de salida y payloads de evento por defecto; solo se expone si un payload lo declara explícitamente |
-| `types.T` escalar (`base` + `constraints`) | Value type (record o `@Embeddable`) con sus constraints como validación en el constructor |
+| `types.T` escalar (`base` + `constraints`) | Value type (record o `@Embeddable`) con sus constraints validadas en el compact constructor (`domain-modeling.md`) |
 | `types.T` enum nominal (`values`) | Enum Java en domain, reutilizado por nombre |
 | `types.T` compuesto (`fields`) | Record puro en `domain/valueobject`; en la Jpa se **aplana a columnas con prefijo** (`<campo>_<sub>`) si es de un nivel escalar. VO anidado o colección de VOs → build deja `// TODO (agente)`: se resuelve con `@Embeddable`/`@Embedded`/`@ElementCollection` vía skill `keel-spring-database` |
 | campo `enum` inline | Enum Java en domain; `default` aplicado al crear |
 | `constraints` | Bean Validation en DTOs (`@Pattern`, `@Size`, `@DecimalMin`…) y/o validación del value type |
 | `relations` | Asociación JPA según `cardinality`; `required: false` → `optional = true`. Casos que build no genera (bidireccionalidad/`mappedBy`, fetch, to-many entre agregados) los completa el agente vía skill `keel-spring-database` (`references/jpa-mapping.md`) |
-| `lifecycle` | Guardas mecánicas de transición en la entidad: un método de dominio por transición válida; cambio de estado no declarado → excepción de negocio; estado con `[]` es terminal |
+| `lifecycle` | Guardas mecánicas de transición en la entidad: un método de dominio por transición válida sobre el guard privado `transitionTo`; cambio de estado no declarado → excepción de negocio; estado con `[]` es terminal (`domain-modeling.md`) |
 | `aggregates` | Repository de Spring Data **solo por raíz**; las entidades internas se acceden a través de su raíz, sin repository propio |
 | relación interna a un agregado | Asociación con `cascade = CascadeType.ALL, orphanRemoval = true` desde la raíz, con `@JoinColumn` (FK en la tabla hija para `@OneToMany`; columna `<relación>_id` para `@ManyToOne`/`@OneToOne`), sin join table |
 | relación hacia otro agregado (`many-to-one`/`one-to-one`) | Columna `UUID <relación>Id` a la raíz ajena, sin asociación navegable. La `to-many` entre agregados build no la genera (warning): la modela el agente sin cruzar la frontera de agregado |
-| `invariants` | Métodos de dominio que las protegen (ej. transición de estado que lanza excepción) + test que intenta violarlas |
+| `invariants` | Guarda en el dominio que las protege — en el factory de creación y en cada método mutador afectado —, lanzando el error declarado del diseño (`domain-modeling.md`). Un invariante sin guarda es generación incompleta |
 
 ### Tipos base
 
@@ -54,7 +55,7 @@ Buena parte de esta tabla la materializa ya el **scaffolding determinista** de `
 | `input`/`output` `{ entity: X }` | DTOs derivados de la entidad; en input quedan fuera `generated`/`computed`; en output quedan fuera `sensitive` y los campos de `exclude`. Un `exclude` con **dot-path** (`lines.costPrice`, `address.zip`) omite el campo del DTO **anidado** de la hija/value object, no solo del DTO raíz: build **no** lo aplica (su DTO es plano) y lo señala con un warning por cada ruta — ese warning es la señal de trabajo del agente. Sin dot-path, la hija sale íntegra salvo sus propios `sensitive`. El diseño manda qué campos anidados salen: no es criterio del agente |
 | `preconditions` / `rules` | Lógica del `handle(...)` del handler, en el mismo orden del diseño, comentadas con la frase del diseño cuando no sea obvia |
 | `errors[].code` | `<PascalCode>Error` en `domain/errors` con el `code` exacto, extendiendo la subclase base de su `http` (404→`NotFoundException`, 409→`ConflictException`…; status sin subclase → `DomainException` con el `httpStatus` en la metadata); `ApiExceptionHandler` la traduce a `ErrorResponse` (`timestamp`, `status`, `error`, `code`, `message`, `details`) |
-| `emits` | Publicación del evento (declarado en messaging) tras confirmar la transacción (`@TransactionalEventListener` u outbox según `messaging.publishing.reliability`) |
+| `emits` | `raise(<E>Event.of(...))` **dentro del método de negocio del agregado** que provoca el cambio (`domain-modeling.md`); el handler no publica ni inyecta publishers. El adaptador de repositorio drena el buffer al persistir y el bridge lo entrega según `messaging.publishing.reliability` |
 | `idempotency: { keySource: client-key }` | Header `Idempotency-Key` requerido en esas operaciones; registro de claves procesadas con el `ttlSeconds` del diseño |
 | `idempotency: { keySource: payload-hash }` | Hash del payload como clave de deduplicación; mismo registro con TTL |
 | `cache` (solo queries) | Spring Cache (`@Cacheable` con clave de `keyFields`, TTL del diseño); `invalidatedBy` → evicción al recibir/emitir esos eventos |
@@ -89,13 +90,14 @@ Sin esta capa, no se incluye Spring Security. **Esta capa la materializa entera 
 
 ## `messaging` — messaging.keel.yaml
 
-El scaffolding genera lo transversal al broker: el contrato `EventEnvelope`/`EventMetadata`, por evento el record `EEvent` + el **puerto** `EPublisher` (interfaz en `domain/events`, inyectada por los handlers con `emits`) con su stub `EPublisherStub`, y por suscripción el record `<E>Message`. El agente escribe, siguiendo la skill `keel-spring-<broker>` (`.claude/skills/keel-spring-<broker>/SKILL.md`): la implementación de cada publisher (sustituye el stub) con la `reliability` declarada, la config del broker si aplica, y el `<E>Listener` (binding al canal + política `onFailure` + dispatch de `triggers` vía mediator).
+La publicación va **entera generada** salvo el envío físico. La cadena es: el agregado hace `raise(...)` → `XxxRepositoryImpl.save()` drena `pullDomainEvents()` dentro de la transacción → `<Servicio>DomainEventBridge` traduce cada evento de dominio a su `<E>IntegrationEvent` y lo entrega según la `reliability`. El agente solo implementa el puerto de salida (`OutboxDispatcher` con outbox, `<E>Publisher` con best-effort), la config del broker si aplica y el `<E>Listener` de cada suscripción (binding al canal + política `onFailure` + dispatch de `triggers` vía mediator), siguiendo la skill `keel-spring-<broker>` (`.claude/skills/keel-spring-<broker>/SKILL.md`).
 
 | Diseño | Código |
 |--------|--------|
-| `publishing.events.E` | Record `EEvent` + puerto `EPublisher` en `domain/events`; la implementación (agente, según broker) publica `EventEnvelope.of("E", event, correlationId)` (metadata: eventId, timestamp UTC, source=servicio) al exchange/topic `<servicio>.events` con routing `<servicio>.<e-kebab>`; nombre del evento exacto (contrato público) |
-| `publishing.reliability: outbox` | Patrón outbox: el evento se escribe en la misma transacción que el cambio (tabla outbox + relay); comparte la frontera de `persistence.consistency` |
-| `publishing.reliability: best-effort` | Publicación directa tras confirmar transacción (`@TransactionalEventListener(AFTER_COMMIT)`) |
+| `publishing.events.E` | Record `EEvent implements DomainEvent` en `domain/events` (primer componente `EventMetadata`, fábrica `of(...)` que la estampa) + gemelo de wire `EIntegrationEvent` en `infrastructure/messaging/events` + método del bridge que traduce uno en otro. Nombre del evento exacto (contrato público); destino `<servicio>.events` y routing `<servicio>.<e-kebab>`, ambos parametrizados en `parameters/<perfil>/messaging.yaml` (el código solo lee `@Value`) |
+| `publishing.reliability: outbox` | Generado: `OutboxEventJpa` + `OutboxEventJpaRepository` + `OutboxRelay` (`@Scheduled`, lote, reintentos con `attempts`/`lastError`, purga por cron) + `@EnableScheduling`. El bridge escribe la fila con `@EventListener` **síncrono**, en la misma transacción que el cambio (comparte la frontera de `persistence.consistency`); el relay entrega después vía el puerto `OutboxDispatcher`. Sin capa `persistence` no aplica: no hay transacción que compartir |
+| `publishing.reliability: best-effort` | El bridge publica con `@TransactionalEventListener(AFTER_COMMIT)` vía el puerto `EPublisher` (`domain/events`), que build genera con un stub que solo traza (el contexto arranca sin broker) |
+| `EventEnvelope` | Envoltura de wire: reutiliza la `EventMetadata` que estampó el agregado y solo le añade el `correlationId` del request. **Nunca** se regenera la metadata: el `eventId` es la clave de idempotencia del consumidor |
 | `subscriptions.E` | Record `<E>Message` (scaffolding) + listener del broker elegido (agente: `@KafkaListener`/`@RabbitListener`/`@SqsListener`) que deserializa el payload y despacha la operación de `triggers` vía mediator |
 | `subscriptions.E.contract.envelope` | `keel` → deserializa `EventEnvelope<EMessage>` y usa `data()`; `none` → el mensaje es el payload; `wrapped` → record `<E>Envelope` (scaffolding) con el payload colgando de `payloadPath` |
 | `subscriptions.E.contract.discriminator` | Filtro del listener: header (`@Header`) o campo del cuerpo; lo que no coincide con `value` se **descarta sin excepción** (una excepción dispararía reintentos y DLQ) |

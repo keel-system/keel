@@ -50,9 +50,10 @@ rabbitTemplate.setReturnsCallback(returned ->
         returned.getExchange(), returned.getRoutingKey()));
 ```
 
-Un NACK o un returned con `after-commit` es pérdida de evento: al menos déjalo
-en el log como error; si el diseño exige garantía real, el patrón correcto es
-`outbox` (tabla + relay que publica y marca), no más reintentos en memoria.
+Un NACK o un returned en modo `best-effort` es pérdida de evento: al menos
+déjalo en el log como error. En modo `outbox` no lo tragues: deja propagar la
+excepción desde `OutboxDispatcher` para que el relay cuente el intento y
+reintente — esa es la garantía real, no más reintentos en memoria.
 
 ## Retry escalonado con DLX + TTL (backoffs largos)
 
@@ -91,6 +92,6 @@ entrada de tu cola, no el tamaño de la lista.
 
 - [ ] Topología completa en `Declarables` (nada declarado a mano).
 - [ ] Stub del publisher eliminado (dos beans del puerto rompen la inyección).
-- [ ] `reliability` del diseño aplicada (after-commit / outbox / best-effort).
+- [ ] Puerto de envío implementado según `reliability` (`OutboxDispatcher` u `<Evento>Publisher`), con su stub eliminado y el fallo propagado (outbox) o registrado (best-effort).
 - [ ] `onFailure` implementado con reintentos acotados y DLQ si `deadLetter: true`.
 - [ ] Consumo idempotente si la operación puede reintentarse.

@@ -17,22 +17,24 @@ kafkaTemplate.send(TOPIC, event.productId().toString(), envelope);
 Decide una vez por evento y documenta la decisión: cambiar la key en caliente
 rompe el orden durante la transición.
 
-## Fiabilidad del publisher
+## Fiabilidad del envío
 
-- `after-commit`: publica en `TransactionSynchronization.afterCommit` (o
-  `@TransactionalEventListener(phase = AFTER_COMMIT)`). El `send()` es
-  asíncrono: registra el fallo del future, no lo ignores:
+La fase de publicación (dentro o fuera de la transacción) ya la resuelve el
+`<Servicio>DomainEventBridge` generado. Lo que cambia según la `reliability` es
+qué implementas y cómo tratas el fallo:
+
+- `outbox`: implementas `OutboxDispatcher`. El `send()` es asíncrono, así que
+  **espera el ack** (`.join()`) y deja propagar la excepción: es lo que hace que
+  el relay cuente el intento y reintente. Un dispatcher que traga la excepción
+  marca como publicado algo que nunca salió y convierte el outbox en decorado.
+- `best-effort`: implementas `<Evento>Publisher`. No hay reintento posible, así
+  que al menos registra el fallo del future, no lo ignores:
 
   ```java
-  kafkaTemplate.send(TOPIC, key, envelope).whenComplete((result, ex) -> {
+  kafkaTemplate.send(topic, key, envelope).whenComplete((result, ex) -> {
       if (ex != null) log.error("Evento {} no publicado", key, ex);
   });
   ```
-
-- `outbox`: el handler escribe el evento en la tabla outbox **dentro** de la
-  transacción; un relay (`@Scheduled`) lee pendientes, publica y marca. Es la
-  única garantía real de no perder eventos; no lo «simules» con reintentos.
-- `best-effort`: send directo; un fallo se loguea y no interrumpe la operación.
 
 ## Reintentos del listener: `@RetryableTopic` vs `DefaultErrorHandler`
 
@@ -85,7 +87,7 @@ reset lo provocan.
 
 - [ ] Stub del publisher eliminado (dos beans del puerto rompen la inyección).
 - [ ] Key elegida según la garantía de orden que exige el diseño.
-- [ ] `reliability` aplicada (after-commit / outbox / best-effort) con fallo de publicación registrado.
+- [ ] Puerto de envío implementado según `reliability` (`OutboxDispatcher` u `<Evento>Publisher`), con su stub eliminado y el fallo propagado (outbox) o registrado (best-effort).
 - [ ] `onFailure` → reintentos acotados + DLT si `deadLetter: true`; errores de negocio excluidos.
 - [ ] `ErrorHandlingDeserializer` configurado (poison pills al DLT, no en bucle).
 - [ ] Consumo idempotente si la operación puede reintentarse.

@@ -17,7 +17,8 @@ description: Guía de implementación de mensajería con RabbitMQ en un proyecto
 - `build.gradle`: `spring-boot-starter-amqp`.
 - `parameters/<perfil>/rabbitmq.yaml`: host/credenciales por perfil.
 - `infra/docker-compose.yaml`: `rabbitmq:4-management` (5672 + UI 15672, guest/guest).
-- Contratos: `EventEnvelope`/`EventMetadata`, puerto `<Evento>Publisher` (en `domain/events`) con stub `<Evento>PublisherStub`, record `<Evento>Message` por suscripción.
+- Contratos y cadena de publicación **ya generados**: `EventEnvelope` + `EventMetadata`, el record `<Evento>Event` que el agregado emite, su gemelo `<Evento>IntegrationEvent`, el `<Servicio>DomainEventBridge` que traduce uno en otro, y el record `<Evento>Message` por suscripción. Con `reliability: outbox`, además la tabla `outbox_event`, su repositorio y el `OutboxRelay`.
+- **Lo único tuyo al publicar es el envío**: implementar `OutboxDispatcher` (si `reliability: outbox`) o `<Evento>Publisher` (si `best-effort`), sustituyendo su stub. No reescribas el bridge, el relay ni el mapeo domain→integración.
 
 ## Configuración del broker (`infrastructure/configurations/broker/RabbitMqConfig`)
 
@@ -57,13 +58,44 @@ public class RabbitMqConfig {
 }
 ```
 
-## Publisher (sustituye cada `<Evento>PublisherStub`)
+## Envío al broker
 
-`@Component` en `infrastructure/messaging` que implementa el puerto: envuelve con
-`EventEnvelope.of(...)` y publica con `rabbitTemplate.convertAndSend(RabbitMqConfig.EXCHANGE_NAME,
-"<servicio>.<evento-kebab>", envelope)` (routing key = servicio + evento en kebab-case).
-Elimina el stub al añadir la implementación. Aplica la `reliability` del diseño
-(`after-commit` → publicar tras confirmar la transacción; `outbox` → tabla outbox + relay).
+Qué implementas depende de la `reliability` declarada en `messaging.keel.yaml`:
+
+**`outbox`** — implementa `OutboxDispatcher` (`infrastructure/messaging/outbox`) y elimina
+`OutboxDispatcherStub`. El payload que recibes **ya es la `EventEnvelope` serializada**: mándalo
+tal cual, sin volver a serializar ni envolver.
+
+```java
+@Component
+public class RabbitOutboxDispatcher implements OutboxDispatcher {
+
+    private final RabbitTemplate rabbitTemplate;
+
+    // ... constructor ...
+
+    @Override
+    public void dispatch(String destination, String routingKey, String eventType, String payload) {
+        MessageProperties props = new MessageProperties();
+        props.setContentType(MessageProperties.CONTENT_TYPE_JSON);
+        props.setType(eventType);
+        rabbitTemplate.send(destination, routingKey,
+                MessageBuilder.withBody(payload.getBytes(StandardCharsets.UTF_8)).andProperties(props).build());
+    }
+}
+```
+
+Debe **lanzar** si la entrega no se confirma: el relay cuenta el intento y reintenta en la pasada
+siguiente. Tragarse la excepción marcaría como publicado algo que nunca salió.
+
+**`best-effort`** — implementa cada `<Evento>Publisher` en `infrastructure/messaging` (elimina su
+stub: dos beans del puerto rompen la inyección) envolviendo con
+`EventEnvelope.of(event.metadata(), event, correlationId)` y publicando con
+`rabbitTemplate.convertAndSend(exchange, routingKey, envelope)`.
+
+En ambos casos el exchange y la routing key salen de `parameters/<perfil>/messaging.yaml`
+(`messaging.publishing.destination` y `messaging.publishing.routing-keys.<evento-kebab>`), leídos
+con `@Value`: no los escribas literales. Declara ese exchange en la topología.
 
 ## Listener (uno por suscripción)
 

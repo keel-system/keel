@@ -48,9 +48,14 @@ test('scaffoldService genera el proyecto completo con contenido clave', () => {
   const product = read(workspace, 'src/main/java/com/commerce/productcatalog/domain/aggregate/Product.java');
   assert.ok(!product.includes('@Entity'));
   assert.ok(!product.includes('@Column'));
-  assert.ok(product.includes('public void transitionTo(ProductStatus target)'));
+  assert.ok(product.includes('private void transitionTo(ProductStatus target)')); // guard interno, no API
   assert.ok(product.includes('// TODO invariante'));
-  assert.ok(product.includes('// Constructor completo: reconstrucción desde persistencia.'));
+  assert.ok(product.includes('// Rehidratación desde persistencia'));
+  // Modelo encapsulado (conventions/domain-modeling.md): ni setters ni constructor vacío.
+  assert.ok(!product.includes('public void set'));
+  assert.ok(!product.includes('public Product() {'));
+  assert.ok(product.includes('// TODO (agente): factory de creación create(...)'));
+  assert.ok(product.includes('// TODO (agente): método semántico'));
 
   const productJpa = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/persistence/entities/ProductJpa.java');
   assert.ok(productJpa.includes('@Entity'));
@@ -248,6 +253,7 @@ test('CLAUDE.md contextual: specs, solo capas declaradas y skill local con conve
   assert.ok(exists(workspace, '.claude/conventions/project-layout.md'));
   assert.ok(exists(workspace, '.claude/conventions/infra-validation.md'));
   assert.ok(exists(workspace, '.claude/conventions/flow-fidelity.md'));
+  assert.ok(exists(workspace, '.claude/conventions/domain-modeling.md'));
   assert.ok(exists(workspace, '.claude/conventions/domain-services.md'));
   assert.ok(exists(workspace, '.claude/conventions/virtual-threads.md'));
   assert.ok(!exists(workspace, '.claude/skills/keel-generate-spring/conventions'));
@@ -405,8 +411,10 @@ test('stack elegido (mysql + rabbitmq) parametriza gradle, yaml y compose', () =
   assert.ok(stub.includes('implements ProductCreatedPublisher'));
   assert.ok(stub.includes('TODO (agente)'));
   assert.ok(!stub.includes('RabbitTemplate'));
-  const envelope = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/EventMetadata.java');
-  assert.ok(envelope.includes('"product-catalog"')); // source = nombre del servicio
+  // La metadata la estampa el agregado al emitir: vive en dominio, no en infra.
+  const metadata = read(workspace, 'src/main/java/com/commerce/productcatalog/domain/events/EventMetadata.java');
+  assert.ok(metadata.includes('"product-catalog"')); // source = nombre del servicio
+  assert.ok(!exists(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/EventMetadata.java'));
   // La config del broker ya no es determinista: la escribe el agente.
   assert.ok(!exists(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/configurations/broker/RabbitMqConfig.java'));
   assert.ok(!exists(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/ProductCreatedPublisher.java'));
@@ -904,42 +912,139 @@ test('suscripción con contract: envoltura de la fuente, alias de campo y contra
   assert.ok(envelope.includes('public record StockDepletedEnvelope(StockDepletedMessage data, String messageId)'));
 });
 
-test('publisher: puerto + stub transversales sin código del broker elegido', () => {
-  const workspace = makeWorkspace();
-  const { manifest, layers } = loadFixture();
+// Diseño con un evento emitido por una operación, para los tests del patrón
+// de eventos: el agregado lo acumula y el bridge lo traduce a integración.
+function withEvent(layers, manifest, reliability) {
   const patched = structuredClone(layers);
-  patched.messaging = { publishing: { reliability: 'best-effort', events: { ProductCreated: { payload: { entity: 'Product' } } } } };
+  patched.messaging = {
+    publishing: { reliability, events: { ProductCreated: { payload: { entity: 'Product' } } } }
+  };
   patched['use-cases'].operations.createProduct.emits = ['ProductCreated'];
   const patchedManifest = structuredClone(manifest);
   patchedManifest.layers.messaging = 'messaging.keel.yaml';
+  return { patched, patchedManifest };
+}
+
+test('best-effort: agregado acumula, adaptador drena y el bridge publica tras commit', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const { patched, patchedManifest } = withEvent(layers, manifest, 'best-effort');
 
   const { stack } = scaffoldService({
     manifest: patchedManifest,
     layers: patched,
     workspace,
-    stack: { database: null, broker: 'snssqs', auth: null, cache: null, storage: null }
+    stack: { database: 'postgres', broker: 'snssqs', auth: null, cache: null, storage: null }
   });
   assert.equal(stack.broker, 'snssqs');
 
-  // El handler que emite el evento inyecta el PUERTO, nunca el template.
+  // El evento nace en el agregado: buffer + raise + pull, sin nada de Spring.
+  const aggregate = read(workspace, 'src/main/java/com/commerce/productcatalog/domain/aggregate/Product.java');
+  assert.ok(aggregate.includes('private final List<DomainEvent> domainEvents'));
+  assert.ok(aggregate.includes('public List<DomainEvent> pullDomainEvents()'));
+  assert.ok(aggregate.includes('raise(ProductCreatedEvent.of('));
+  assert.ok(!aggregate.includes('org.springframework'));
+
+  // El adaptador drena dentro de la transacción del cambio.
+  const adapter = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/persistence/repositories/ProductRepositoryImpl.java');
+  assert.ok(adapter.includes('private final ApplicationEventPublisher eventPublisher;'));
+  assert.ok(adapter.includes('@Transactional\n    public Product save(Product entity)'));
+  assert.ok(adapter.includes('entity.pullDomainEvents().forEach(eventPublisher::publishEvent);'));
+
+  // El handler ya NO publica: no inyecta ningún publisher.
   const handler = read(workspace, 'src/main/java/com/commerce/productcatalog/application/usecases/CreateProductCommandHandler.java');
-  assert.ok(handler.includes('private final ProductCreatedPublisher productCreatedPublisher;'));
-  assert.ok(handler.includes('publicar vía el puerto inyectado'));
+  assert.ok(!handler.includes('Publisher'));
+  assert.ok(handler.includes('raise(ProductCreatedEvent.of(...))'));
 
-  // Sea cual sea el broker, build solo genera puerto + stub sin templates.
+  // El bridge traduce a integración y entrega tras confirmar la transacción.
+  const bridge = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/ProductCatalogDomainEventBridge.java');
+  assert.ok(bridge.includes('@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)'));
+  assert.ok(bridge.includes('new ProductCreatedIntegrationEvent(event.metadata()'));
+  assert.ok(bridge.includes('productCreatedPublisher.publish(integrationEvent, correlationId);'));
+  for (const ajeno of ['SnsTemplate', 'KafkaTemplate', 'RabbitTemplate']) {
+    assert.ok(!bridge.includes(ajeno));
+  }
+
+  // El evento de integración es el gemelo de wire, no el de dominio.
+  const integration = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/events/ProductCreatedIntegrationEvent.java');
+  assert.ok(integration.includes('public record ProductCreatedIntegrationEvent(EventMetadata metadata'));
+
+  // El puerto de publicación recibe el evento de INTEGRACIÓN; su stub no rompe el arranque.
   const port = read(workspace, 'src/main/java/com/commerce/productcatalog/domain/events/ProductCreatedPublisher.java');
-  assert.ok(port.includes('public interface ProductCreatedPublisher'));
-  assert.ok(port.includes('void publish(ProductCreatedEvent event, String correlationId);'));
-
+  assert.ok(port.includes('void publish(ProductCreatedIntegrationEvent event, String correlationId);'));
   const stub = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/ProductCreatedPublisherStub.java');
   assert.ok(stub.includes('implements ProductCreatedPublisher'));
-  assert.ok(stub.includes('throw new UnsupportedOperationException'));
-  for (const ajeno of ['SnsTemplate', 'KafkaTemplate', 'RabbitTemplate']) {
-    assert.ok(!stub.includes(ajeno));
-  }
-  assert.ok(!exists(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/ProductCreatedPublisher.java'));
+  assert.ok(!stub.includes('throw new'));
+
+  // Sin outbox no hay tabla ni relay, y el enrutado sale a parameters/.
+  assert.ok(!exists(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/outbox/OutboxRelay.java'));
+  assert.ok(read(workspace, 'src/main/resources/parameters/local/messaging.yaml').includes('product-created: product-catalog.product-created'));
   // Las deps del broker elegido sí van en gradle (las usa el código del agente).
   assert.ok(read(workspace, 'build.gradle').includes('spring-cloud-aws-starter-sns'));
+});
+
+test('outbox: fila en la misma transacción, relay determinista y envío tras el puerto', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const { patched, patchedManifest } = withEvent(layers, manifest, 'outbox');
+
+  scaffoldService({
+    manifest: patchedManifest,
+    layers: patched,
+    workspace,
+    stack: { database: 'postgres', broker: 'rabbitmq', auth: null, cache: null, storage: null }
+  });
+
+  const outboxDir = 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/outbox';
+  // El bridge escribe la fila DENTRO de la transacción (listener síncrono).
+  const bridge = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/ProductCatalogDomainEventBridge.java');
+  assert.ok(bridge.includes('@EventListener'));
+  assert.ok(!bridge.includes('@TransactionalEventListener'));
+  assert.ok(bridge.includes('append(productCreatedRoutingKey, "ProductCreatedIntegrationEvent", envelope);'));
+
+  const entity = read(workspace, `${outboxDir}/OutboxEventJpa.java`);
+  assert.ok(entity.includes('@Table(name = "outbox_event"'));
+
+  // El relay es determinista; lo acoplado al broker sale por el puerto.
+  const relay = read(workspace, `${outboxDir}/OutboxRelay.java`);
+  assert.ok(relay.includes('@Scheduled(fixedDelayString = "${outbox.relay.fixed-delay-ms:1000}")'));
+  assert.ok(relay.includes('dispatcher.dispatch(row.getDestination()'));
+  for (const ajeno of ['SnsTemplate', 'KafkaTemplate', 'RabbitTemplate']) {
+    assert.ok(!relay.includes(ajeno));
+  }
+  assert.ok(read(workspace, `${outboxDir}/OutboxDispatcher.java`).includes('void dispatch(String destination'));
+  assert.ok(read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/OutboxDispatcherStub.java').includes('implements OutboxDispatcher'));
+
+  // Con outbox la entrega NO pasa por publishers: no se generan puerto ni stub.
+  assert.ok(!exists(workspace, 'src/main/java/com/commerce/productcatalog/domain/events/ProductCreatedPublisher.java'));
+  assert.ok(!exists(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/ProductCreatedPublisherStub.java'));
+
+  // El relay es @Scheduled: sin @EnableScheduling no saldría nada.
+  assert.ok(read(workspace, 'src/main/java/com/commerce/productcatalog/ProductCatalogApplication.java').includes('@EnableScheduling'));
+  assert.ok(read(workspace, 'src/main/resources/parameters/local/messaging.yaml').includes('retention-days: 7'));
+});
+
+test('frontera hexagonal: application no importa los eventos de Spring', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const { patched, patchedManifest } = withEvent(layers, manifest, 'outbox');
+
+  scaffoldService({
+    manifest: patchedManifest,
+    layers: patched,
+    workspace,
+    stack: { database: 'postgres', broker: 'rabbitmq', auth: null, cache: null, storage: null }
+  });
+
+  const appDir = path.join(workspace, 'services', 'product-catalog-spring', 'src/main/java/com/commerce/productcatalog/application');
+  const walk = (dir) =>
+    fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const full = path.join(dir, entry.name);
+      return entry.isDirectory() ? walk(full) : [full];
+    });
+  for (const file of walk(appDir)) {
+    assert.ok(!fs.readFileSync(file, 'utf8').includes('org.springframework.context.event'), file);
+  }
 });
 
 test('grupo introducido parametriza build.gradle y el package de las clases Java', () => {
@@ -995,7 +1100,7 @@ test('sin capa persistence: POJOs sin JPA, sin repositorio ni datasource', () =>
   const product = read(workspace, 'src/main/java/com/commerce/productcatalog/domain/aggregate/Product.java');
   assert.ok(!product.includes('@Entity'));
   assert.ok(!product.includes('@Column'));
-  assert.ok(product.includes('public void transitionTo(ProductStatus target)')); // el guard se mantiene
+  assert.ok(product.includes('private void transitionTo(ProductStatus target)')); // el guard se mantiene
   assert.ok(!copied.some((file) => file.includes('ProductJpa'))); // sin persistence no hay lado JPA
 
   assert.ok(!copied.some((file) => file.includes('ProductRepository')));
@@ -1044,6 +1149,12 @@ test('persistencia: relación interna con @JoinColumn (FK en la hija, sin join t
   assert.ok(orderJpa.includes('@JoinColumn(name = "order_id")')); // FK en la tabla hija
   assert.ok(orderJpa.includes('import jakarta.persistence.JoinColumn;'));
   assert.ok(orderJpa.includes('private List<OrderLineJpa> lines = new ArrayList<>();'));
+
+  // La raíz de dominio expone la colección como vista inmutable, pero la guarda mutable
+  // (copia defensiva) para que sus métodos de negocio puedan dar de alta/baja hijas.
+  const order = read(workspace, 'src/main/java/com/commerce/productcatalog/domain/aggregate/Order.java');
+  assert.ok(order.includes('return List.copyOf(lines);'));
+  assert.ok(order.includes('this.lines = new ArrayList<>(lines);'));
 
   // El adaptador mapea la colección interna en ambos sentidos.
   const adapter = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/persistence/repositories/OrderRepositoryImpl.java');

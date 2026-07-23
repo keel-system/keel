@@ -25,7 +25,7 @@ conservador — ante la duda, reporta en vez de aplicar.
    colaboradores que el handler/servicio no usa.
 3. **Inmutabilidad y estado**: `final` donde no hay reasignación; dominio **sin
    setters públicos** ni constructor vacío (mutación solo por métodos de negocio,
-   según `.claude/conventions/project-layout.md`); colecciones expuestas como vistas
+   según `.claude/conventions/domain-modeling.md`); colecciones expuestas como vistas
    inmutables (`List.copyOf`) cuando no cambie el contrato.
 4. **Excepciones**: las de dominio tipadas (`DomainException` y sus
    `<PascalCode>Error`) en vez de genéricas sin contexto; nada de `catch` vacíos ni

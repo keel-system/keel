@@ -17,34 +17,44 @@ description: Guía de implementación de mensajería con Apache Kafka en un proy
 - `build.gradle`: `spring-kafka` + `spring-kafka-test`.
 - `parameters/<perfil>/kafka.yaml`: bootstrap-servers y serializadores JSON por perfil.
 - `infra/docker-compose.yaml`: Kafka KRaft single-node con doble listener — `localhost:9092` para la app en el host, `kafka:29092` para clientes dentro de la red (devtools).
-- Contratos: `EventEnvelope`/`EventMetadata`, puerto `<Evento>Publisher` (en `domain/events`) con stub `<Evento>PublisherStub`, record `<Evento>Message` por suscripción.
+- Contratos y cadena de publicación **ya generados**: `EventEnvelope` + `EventMetadata`, el record `<Evento>Event` que el agregado emite, su gemelo `<Evento>IntegrationEvent`, el `<Servicio>DomainEventBridge` que traduce uno en otro, y el record `<Evento>Message` por suscripción. Con `reliability: outbox`, además la tabla `outbox_event`, su repositorio y el `OutboxRelay`.
+- **Lo único tuyo al publicar es el envío**: implementar `OutboxDispatcher` (si `reliability: outbox`) o `<Evento>Publisher` (si `best-effort`), sustituyendo su stub. No reescribas el bridge, el relay ni el mapeo domain→integración.
 
-## Publisher (sustituye cada `<Evento>PublisherStub`)
+## Envío al broker
 
-Un `@Component` por evento en `infrastructure/messaging` que implementa el puerto:
+Qué implementas depende de la `reliability` declarada en `messaging.keel.yaml`:
+
+**`outbox`** — implementa `OutboxDispatcher` (`infrastructure/messaging/outbox`) y elimina
+`OutboxDispatcherStub`. El payload que recibes **ya es la `EventEnvelope` serializada**: mándalo
+como `String` (`KafkaTemplate<String, String>` con `StringSerializer`), sin volver a serializar ni
+envolver.
 
 ```java
 @Component
-public class ProductCreatedKafkaPublisher implements ProductCreatedPublisher {
+public class KafkaOutboxDispatcher implements OutboxDispatcher {
 
-    private static final String TOPIC = "<servicio>.events";
-
-    private final KafkaTemplate<String, Object> kafkaTemplate;
+    private final KafkaTemplate<String, String> kafkaTemplate;
 
     // ... constructor ...
 
     @Override
-    public void publish(ProductCreatedEvent event, String correlationId) {
-        EventEnvelope<ProductCreatedEvent> envelope =
-                EventEnvelope.of("ProductCreated", event, correlationId);
-        kafkaTemplate.send(TOPIC, "ProductCreated", envelope);
+    public void dispatch(String destination, String routingKey, String eventType, String payload) {
+        // join() espera el ack del broker: si falla, el relay reintenta la fila.
+        kafkaTemplate.send(destination, routingKey, payload).join();
     }
 }
 ```
 
-- Topic: el canal declarado en `messaging.keel.yaml` (default `<servicio>.events`); key = nombre del evento.
-- Elimina el stub al añadir la implementación (dos beans del puerto rompen la inyección).
-- Aplica la `reliability` del diseño: `after-commit` → publicar con `TransactionSynchronization.afterCommit` (o `@TransactionalEventListener`); `outbox` → tabla outbox + relay. `best-effort` → envío directo como arriba.
+Debe **lanzar** si la entrega no se confirma (de ahí el `join()`): tragarse la excepción marcaría
+como publicado algo que nunca salió.
+
+**`best-effort`** — implementa cada `<Evento>Publisher` en `infrastructure/messaging` (elimina su
+stub: dos beans del puerto rompen la inyección) envolviendo con
+`EventEnvelope.of(event.metadata(), event, correlationId)` y enviando con `kafkaTemplate.send(...)`.
+
+En ambos casos el topic y la key salen de `parameters/<perfil>/messaging.yaml`
+(`messaging.publishing.destination` y `messaging.publishing.routing-keys.<evento-kebab>`), leídos
+con `@Value`: no los escribas literales.
 
 ## Listener (uno por suscripción, en `infrastructure/messaging/subscriptions`)
 
