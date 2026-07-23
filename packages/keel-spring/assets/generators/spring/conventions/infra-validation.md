@@ -107,6 +107,11 @@ usuario: `grant_type=client_credentials` con el cliente del `serviceClient`
 `security.api-keys.<cliente>` si `serviceAuth` es `api-key`. Ejercita también el
 403 (cliente sin el scope) y, con `validateAudience`, el 401 por audiencia ajena.
 
+Las claves de API **ya vienen configuradas** en `src/main/resources/parameters/local/security.yaml`
+(`security.api-key: local-dev-api-key` y `security.api-keys.<cliente>: local-<cliente>-key`): úsalas
+tal cual en los escenarios, no las inventes ni edites el YAML. Cambiarlas solo tiene sentido para
+ejercitar el 401 con clave inválida.
+
 La app corre en el **host** (`./gradlew bootRun`), así que las llamadas HTTP a los
 endpoints van a `http://localhost:8080/...` desde el host (no desde devtools);
 `devtools` es para la **infraestructura**, no para la app.

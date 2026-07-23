@@ -8,11 +8,33 @@ import { DATABASES } from '../lib/stack-catalog.js';
 
 const PROFILES = ['local', 'develop', 'production'];
 
+// Credenciales de juguete del perfil local (mismo criterio que minioadmin en el
+// compose de prueba): existen para que los escenarios de validación autentiquen
+// sin editar YAML a mano, y nunca salen de local.
+const LOCAL_API_KEY = 'local-dev-api-key';
+const localClientApiKey = (clientName) => `local-${clientName}-key`;
+
 // Gradiente de externalización: literal en local, env var con default en
 // develop y env var obligatoria (sin default) en production.
 function envValue(profile, varName, localValue) {
   if (profile === 'local') return String(localValue);
   if (profile === 'develop') return `\${${varName}:${localValue}}`;
+  return `\${${varName}}`;
+}
+
+// Variante para valores operativos que no son secretos ni endpoints (niveles de
+// log, group-id): parametrizados en todos los ambientes, pero siempre con
+// default, porque su ausencia no debe impedir el arranque.
+function envWithDefault(profile, varName, localValue) {
+  if (profile === 'local') return String(localValue);
+  return `\${${varName}:${localValue}}`;
+}
+
+// Variante para valores que NO tienen un default razonable fuera de local (el
+// diseño no los declara): literal en local y env var obligatoria en el resto,
+// para fallar al arrancar en vez de apuntar en silencio a un destino erróneo.
+function envRequired(profile, varName, localValue) {
+  if (profile === 'local') return String(localValue);
   return `\${${varName}}`;
 }
 
@@ -42,10 +64,10 @@ export function generate(model) {
     if (layersPresent.security && (model.security?.protocol === 'oidc' || model.security?.protocol === 'jwt')) {
       fragments.push(fragment(profile, 'oauth2', oauth2Yaml(model, profile)));
     }
-    // Fragmento security propio (clave 'security') para lo M2M: audiencia a
-    // validar y/o claves api-key por serviceClient.
-    if (layersPresent.security && securityM2mApplies(model)) {
-      fragments.push(fragment(profile, 'security', securityM2mYaml(model, profile)));
+    // Fragmento security propio (clave 'security'): clave api-key del servicio,
+    // audiencia a validar y/o claves api-key por serviceClient.
+    if (layersPresent.security && securityApplies(model)) {
+      fragments.push(fragment(profile, 'security', securityYaml(model, profile)));
     }
     if (layersPresent.storage && stack.storage) {
       fragments.push(fragment(profile, 'storage', storageYaml(model, profile)));
@@ -73,6 +95,9 @@ function fragment(profile, name, content) {
 function baseYaml(model) {
   const { service, layersPresent } = model;
   const lines = [
+    'server:',
+    '  # Puerto por variable de entorno; 8080 es el que asumen los escenarios de validación.',
+    '  port: ${SERVER_PORT:8080}',
     'spring:',
     '  application:',
     `    name: ${service.name}`,
@@ -108,7 +133,12 @@ function profileYaml(profile, fragments) {
 function loggingYaml(model, profile) {
   const root = profile === 'production' ? 'WARN' : 'INFO';
   const app = profile === 'production' ? 'INFO' : 'DEBUG';
-  return ['logging:', '  level:', `    root: ${root}`, `    ${model.service.basePackage}: ${app}`].join('\n') + '\n';
+  return [
+    'logging:',
+    '  level:',
+    `    root: ${envWithDefault(profile, 'LOG_LEVEL_ROOT', root)}`,
+    `    ${model.service.basePackage}: ${envWithDefault(profile, 'LOG_LEVEL_APP', app)}`
+  ].join('\n') + '\n';
 }
 
 function dbYaml(model, profile, dbName) {
@@ -175,7 +205,7 @@ function brokerYaml(model, profile) {
     '      # Publica el EventEnvelope como JSON.',
     '      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer',
     '    consumer:',
-    `      group-id: ${service.artifactId}-group`,
+    `      group-id: ${envWithDefault(profile, 'KAFKA_GROUP_ID', `${service.artifactId}-group`)}`,
     '      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer',
     '      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer',
     '    # TODO (agente): topics y deserialización de consumo según messaging.keel.yaml'
@@ -214,37 +244,50 @@ function oauth2Yaml(model, profile) {
   return lines.join('\n') + '\n';
 }
 
-// M2M: hay algo que configurar si el diseño valida audiencia (security.audience)
-// o si los clientes máquina se autentican por api-key (security.api-keys.*).
-function securityM2mApplies(model) {
+// Hay fragmento 'security' si el servicio se protege con api-key (security.api-key),
+// si el diseño valida audiencia (security.audience) o si los clientes máquina se
+// autentican por api-key (security.api-keys.*).
+function securityApplies(model) {
   const sec = model.security;
-  if (!sec?.serviceAuth) return false;
+  if (!sec) return false;
+  if (sec.protocol === 'api-key') return true;
+  if (!sec.serviceAuth) return false;
   const jwt = sec.protocol === 'oidc' || sec.protocol === 'jwt';
   const audience = jwt && sec.serviceAuth.validateAudience === true;
   const apiKeys = sec.serviceAuth.protocol === 'api-key' && (sec.serviceClients?.length ?? 0) > 0;
   return audience || apiKeys;
 }
 
-function securityM2mYaml(model, profile) {
+function securityYaml(model, profile) {
   const sec = model.security;
   const jwt = sec.protocol === 'oidc' || sec.protocol === 'jwt';
   const lines = ['security:'];
-  if (jwt && sec.serviceAuth.validateAudience === true) {
+  // Clave única del servicio (protocolo api-key). En local sale con valor real
+  // para que los escenarios de validación autentiquen sin editar el YAML:
+  // ApiKeyAuthFilter rechaza toda petición si la clave está vacía.
+  if (sec.protocol === 'api-key') {
+    lines.push(
+      profile === 'local'
+        ? '  # Clave que deben enviar los clientes; esta es la de los escenarios de validación.'
+        : '  # Clave que deben enviar los clientes; obligatoria (sin ella la app no arranca).'
+    );
+    lines.push(`  api-key: ${envRequired(profile, 'SECURITY_API_KEY', LOCAL_API_KEY)}`);
+  }
+  if (jwt && sec.serviceAuth?.validateAudience === true) {
     const audience = sec.serviceAuth.audience ?? model.service.artifactId;
     lines.push('  # Audiencia que debe traer el claim aud de los tokens de clientes máquina.');
     lines.push(`  audience: ${envValue(profile, 'SECURITY_AUDIENCE', audience)}`);
   }
-  if (sec.serviceAuth.protocol === 'api-key' && (sec.serviceClients?.length ?? 0) > 0) {
-    lines.push('  # Clave por cliente máquina del diseño (serviceClients); vacía = cliente deshabilitado.');
+  if (sec.serviceAuth?.protocol === 'api-key' && (sec.serviceClients?.length ?? 0) > 0) {
+    lines.push(
+      profile === 'local'
+        ? '  # Clave por cliente máquina del diseño (serviceClients); vacía = cliente deshabilitado.'
+        : '  # Clave por cliente máquina del diseño (serviceClients); obligatorias por ambiente.'
+    );
     lines.push('  api-keys:');
     for (const client of sec.serviceClients) {
       const varName = `API_KEY_${client.name.replace(/-/g, '_').toUpperCase()}`;
-      if (profile === 'local') {
-        lines.push(`    # TODO (agente): clave local de prueba para ${client.name}.`);
-        lines.push(`    ${client.name}: ""`);
-      } else {
-        lines.push(`    ${client.name}: ${envValue(profile, varName, '""')}`);
-      }
+      lines.push(`    ${client.name}: ${envRequired(profile, varName, localClientApiKey(client.name))}`);
     }
   }
   return lines.join('\n') + '\n';
@@ -283,8 +326,15 @@ function httpClientsYaml(model, profile) {
   const clients = model.httpClients;
   const lines = ['http-clients:'];
   for (const client of clients) {
+    // El DSL no declara URLs (son infraestructura), así que fuera de local la env
+    // var es obligatoria: sin default, un despliegue sin configurar falla al
+    // arrancar en vez de llamarse a sí mismo en silencio.
     const envVar = `${client.envPrefix}_BASE_URL`;
-    lines.push(`  ${client.id}:`, `    base-url: ${envValue(profile, envVar, 'http://localhost:8080')}`);
+    lines.push(`  ${client.id}:`);
+    if (profile === 'local') {
+      lines.push(`    # TODO (agente): URL del servicio de prueba/mock para ${client.id}.`);
+    }
+    lines.push(`    base-url: ${envRequired(profile, envVar, 'http://localhost:8081')}`);
     // Credenciales de la auth saliente: nunca vienen del diseño; gradiente de
     // env vars como el resto de secretos (oauth2 va aparte, en el bloque
     // spring.security.oauth2.client de más abajo).

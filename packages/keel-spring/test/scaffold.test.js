@@ -169,8 +169,11 @@ test('scaffoldService genera el proyecto completo con contenido clave', () => {
   const productionDb = read(workspace, 'src/main/resources/parameters/production/db.yaml');
   assert.ok(productionDb.includes('username: ${DB_USERNAME}')); // sin default: obligatoria
   assert.ok(productionDb.includes('ddl-auto: validate'));
+  assert.ok(appYaml.includes('port: ${SERVER_PORT:8080}')); // puerto parametrizable, 8080 por defecto
+  // Niveles de log: literales en local, env var con default fuera (nunca impiden arrancar).
+  assert.ok(read(workspace, 'src/main/resources/parameters/local/logging.yaml').includes('root: INFO'));
   const productionLogging = read(workspace, 'src/main/resources/parameters/production/logging.yaml');
-  assert.ok(productionLogging.includes('root: WARN'));
+  assert.ok(productionLogging.includes('root: ${LOG_LEVEL_ROOT:WARN}'));
   const testProfile = read(workspace, 'src/main/resources/application-test.yaml');
   assert.ok(testProfile.includes('classpath:parameters/test/db.yaml'));
   assert.ok(read(workspace, 'src/main/resources/parameters/test/db.yaml').includes('jdbc:h2:mem:testdb'));
@@ -577,12 +580,39 @@ test('capa security (api-key): filtro propio sin resource server ni fragmento oa
   assert.ok(!config.includes('oauth2ResourceServer'));
   assert.ok(read(workspace, `${securityDir}/ApiKeyAuthFilter.java`).includes('extends OncePerRequestFilter'));
 
+  // La clave sale configurada: en local con valor real (si va vacía, el filtro
+  // rechaza todo y los escenarios de validación no pueden pasar).
+  assert.ok(read(workspace, 'src/main/resources/parameters/local/security.yaml').includes('api-key: local-dev-api-key'));
+  assert.ok(read(workspace, 'src/main/resources/parameters/production/security.yaml').includes('api-key: ${SECURITY_API_KEY}'));
+  assert.ok(read(workspace, 'src/main/resources/application-local.yaml').includes('classpath:parameters/local/security.yaml'));
+
   // api-key no usa resource server JWT ni el fragmento oauth2.
   const buildGradle = read(workspace, 'build.gradle');
   assert.ok(buildGradle.includes('spring-boot-starter-security'));
   assert.ok(!buildGradle.includes('oauth2-resource-server'));
   assert.ok(!copied.some((f) => f.includes('oauth2.yaml')));
   assert.ok(!copied.some((f) => f.includes('JwtAuthConverter')));
+});
+
+test('capa security (clientes máquina por api-key): clave local usable y env var obligatoria fuera', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const patchedManifest = structuredClone(manifest);
+  patchedManifest.layers.security = 'security.keel.yaml';
+  const patched = structuredClone(layers);
+  patched.security = {
+    authentication: { protocol: 'oidc', serviceAuth: { protocol: 'api-key' } },
+    serviceClients: { 'billing-worker': { description: 'Concilia precios', scopes: ['product:read'] } },
+    access: { default: { level: 'required' } }
+  };
+
+  scaffoldService({ manifest: patchedManifest, layers: patched, workspace, stack: { auth: 'keycloak' } });
+
+  // En local, clave real (vacía = cliente deshabilitado en ServiceApiKeyAuthFilter).
+  const localSecurity = read(workspace, 'src/main/resources/parameters/local/security.yaml');
+  assert.ok(localSecurity.includes('billing-worker: local-billing-worker-key'));
+  const developSecurity = read(workspace, 'src/main/resources/parameters/develop/security.yaml');
+  assert.ok(developSecurity.includes('billing-worker: ${API_KEY_BILLING_WORKER}')); // sin default: fail-closed
 });
 
 test('capa http-clients: RestClient configurado + resilience4j + fallback stub', () => {
@@ -644,7 +674,7 @@ test('capa http-clients: RestClient configurado + resilience4j + fallback stub',
   // resilience4j en gradle + fragmento de config con instancias derivadas del diseño.
   assert.ok(read(workspace, 'build.gradle').includes('resilience4j-spring-boot3'));
   const hc = read(workspace, 'src/main/resources/parameters/local/http-clients.yaml');
-  assert.ok(hc.includes('base-url: http://localhost:8080'));
+  assert.ok(hc.includes('base-url: http://localhost:8081')); // literal solo en local
   assert.ok(hc.includes('max-attempts: 3'));
   assert.ok(hc.includes('- org.springframework.web.client.HttpClientErrorException')); // 4xx nunca se reintenta
   assert.ok(hc.includes('failure-rate-threshold: 50'));
@@ -749,6 +779,9 @@ test('capa http-clients estructurada: records tipados, mapper ACL completo y aut
   const hcDevelop = read(workspace, 'src/main/resources/parameters/develop/http-clients.yaml');
   assert.ok(hcDevelop.includes('api-key: ${PRICING_SERVICE_API_KEY:changeme}'));
   assert.ok(hcDevelop.includes('client-id: ${PAYMENT_GATEWAY_CLIENT_ID:changeme}'));
+  // base-url no la declara el diseño: obligatoria fuera de local, sin default que
+  // haga que el servicio se llame a sí mismo.
+  assert.ok(hcDevelop.includes('base-url: ${PRICING_SERVICE_BASE_URL}'));
 
   // Perfil test: registration dummy para levantar el contexto sin proveedor real.
   const hcTest = read(workspace, 'src/main/resources/parameters/test/http-clients.yaml');

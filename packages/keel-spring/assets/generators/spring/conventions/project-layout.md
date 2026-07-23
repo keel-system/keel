@@ -108,6 +108,14 @@ Cuatro perfiles Spring: `local` (default), `develop`, `production` y `test`. El 
 - **production**: env vars obligatorias sin default (`${DB_USERNAME}`); `ddl-auto: validate`, `logging root: WARN`.
 - **test**: H2 en memoria; `src/test/resources/application.yaml` lo activa para los tests.
 
+Regla general: **nada de valores quemados** salvo lo que es decisión de arquitectura y no de ambiente (`ddl-auto`, `show-sql`, `open-in-view`, serializers del broker, instancias `resilience4j` derivadas del diseño). El resto sale por env var, incluidos `server.port` (`${SERVER_PORT:8080}` en el `application.yaml` base) y los niveles de log (`LOG_LEVEL_ROOT` / `LOG_LEVEL_APP`). Tres excepciones al gradiente:
+
+- **Valores operativos no sensibles** (niveles de log, `KAFKA_GROUP_ID`): env var **con default en todos los perfiles**, porque su ausencia no debe impedir el arranque.
+- **Claves de API** (`security.api-key`, `security.api-keys.<cliente>`): literal solo en local; en develop y production son env vars **obligatorias** (fail-closed: sin la variable la app no arranca, en vez de quedar con la clave de desarrollo).
+- **`base-url` de http-clients**: el DSL no declara URLs (son infraestructura), así que en local va un literal con TODO y fuera de local la env var es obligatoria — un default tipo `localhost:8080` haría que el servicio se llamase a sí mismo en silencio.
+
+Las credenciales del perfil `local` son deliberadamente de juguete y coinciden con la infra de prueba (`local-dev-api-key`, `local-<cliente>-key`, `minioadmin`…): existen para que los escenarios de validación autentiquen sin editar YAML a mano y nunca salen de local.
+
 ### Validación de infraestructura (contenedor `devtools`)
 
 Cuando el compose levanta contenedores sondeables, el scaffolding añade el servicio `devtools`: una caja de herramientas Alpine (`infra/docker/Dockerfile.devtools`) que instala **solo** las CLIs del stack elegido (`psql`/`mysql`/`mariadb`/`sqlcmd`, `kcat`, `redis-cli`, `mc`, `aws`, más `curl`/`jq`). Queda viva con `sleep infinity` y sin puertos: es un objetivo interno de `docker exec`, alcanza a los servicios de respaldo por su nombre de red (`db`, `kafka`/`localstack`, `redis`/`valkey`, `minio`, `keycloak`/`cognito`).
