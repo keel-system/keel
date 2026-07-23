@@ -42,6 +42,11 @@ artefactos, nunca se resuelve en silencio en el código.
   a una `XxxJpa`, el agregado de dominio debe declarar `version` con getter y el
   mapper propagarlo en `toDomain()`/`toJpa()`. Un `@Version` sin round-trip completo
   no protege nada: complétalo o no lo introduzcas.
+- **Proyección de la respuesta**: el DTO debe exponer **exactamente** los campos que declara
+  el `output` de la operación. Los `exclude` con **dot-path** (`lines.costPrice`,
+  `address.zip`) recortan el DTO **anidado** — la entidad hija o el value object —, y eso
+  build **no** lo genera: lo avisa con un warning y lo escribes tú. Un campo que el diseño
+  excluye y acaba en la respuesta es una fuga del contrato, no un detalle de mapeo.
 - **Wiring HTTP**: si el binding, el `successStatus`, el `Location` o los query params
   generados no coinciden con `api.keel.yaml`, repórtalo como defecto del scaffolding —
   no cambies firmas ni contratos generados para compensarlo.

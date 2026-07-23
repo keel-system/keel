@@ -26,6 +26,8 @@ operations:
   #     fields:
   #       id: { type: uuid, required: true }
   #   output: { entity: Product }
+  #   # exclude admite dot-path para no exponer campos de una entidad hija o value object:
+  #   # output: { entity: Product, exclude: [internalNote, variants.costPrice] }
   #   cache: { ttlSeconds: 300, keyFields: [id], invalidatedBy: [ProductRetired] }
   #   errors:
   #     - { code: PRODUCT_NOT_FOUND, when: No existe un producto con ese id., http: 404 }

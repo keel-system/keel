@@ -72,17 +72,63 @@ export function checkCrossRefs({ layers, wip = false }) {
     return Array.isArray(named?.values) ? named.values : null;
   };
 
+  // Un item de exclude puede ser un dot-path que entra en entidades hijas (relaciones) o en
+  // value objects compuestos: cada segmento no terminal debe permitir descender y el terminal
+  // debe existir. Cruzar a otro agregado (relación serializada por id, no anidada) es warning:
+  // no hay campos anidados que excluir. Ruta plana (un solo segmento) = comportamiento previo.
+  const checkExcludePath = (rootEntity, rawPath, where) => {
+    const segments = rawPath.split('.');
+    let ctx = { kind: 'entity', name: rootEntity };
+    let crossedAggregate = false;
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      const label = ctx.kind === 'entity' ? `la entidad '${ctx.name}'` : `el value object '${ctx.name}'`;
+      const container = ctx.kind === 'entity' ? domain.entities[ctx.name] : domain.types[ctx.name];
+      const field = container?.fields?.[seg];
+      const relation = ctx.kind === 'entity' ? container?.relations?.[seg] : undefined;
+
+      if (i === segments.length - 1) {
+        if (!field && !relation) {
+          errors.push(`${where}.exclude '${rawPath}': el campo '${seg}' no existe en ${label}`);
+        }
+        return;
+      }
+
+      // Segmento no terminal: tiene que permitir descender.
+      if (relation) {
+        if (!entities.has(relation.entity)) return; // relación rota: ya la reporta la validación de domain
+        if (!crossedAggregate && ctx.kind === 'entity') {
+          const from = aggregateOf.get(ctx.name);
+          const to = aggregateOf.get(relation.entity);
+          if (from !== undefined && to !== undefined && from !== to) {
+            warnings.push(
+              `${where}.exclude '${rawPath}': la relación '${seg}' apunta al agregado '${to}', que se serializa por id — no hay campos anidados que excluir`
+            );
+            crossedAggregate = true;
+          }
+        }
+        ctx = { kind: 'entity', name: relation.entity };
+      } else if (field && typeof field.type === 'string' && domain.types?.[field.type]?.fields) {
+        ctx = { kind: 'type', name: field.type };
+      } else {
+        errors.push(
+          field
+            ? `${where}.exclude '${rawPath}': el campo '${seg}' de ${label} no es una relación ni un value object anidable`
+            : `${where}.exclude '${rawPath}': el campo '${seg}' no existe en ${label}`
+        );
+        return;
+      }
+    }
+  };
+
   const checkPayload = (payload, where) => {
     if (!payload || payload === 'void') return;
     if (payload.entity && !entities.has(payload.entity)) {
       errors.push(`${where}: la entidad '${payload.entity}' no existe en domain: entities`);
     }
     if (payload.entity && entities.has(payload.entity)) {
-      const entity = domain.entities[payload.entity];
-      for (const name of payload.exclude ?? []) {
-        if (!(name in (entity.fields ?? {})) && !(name in (entity.relations ?? {}))) {
-          errors.push(`${where}.exclude: el campo '${name}' no existe en la entidad '${payload.entity}'`);
-        }
+      for (const path of payload.exclude ?? []) {
+        checkExcludePath(payload.entity, path, where);
       }
     }
     if (payload.fields) checkFieldMap(payload.fields, where);

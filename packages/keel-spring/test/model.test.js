@@ -256,3 +256,97 @@ test('http-clients oauth2: normalización de auth y enums inline registrados', (
   assert.ok(model.enums.some((e) => e.name === 'ChargeResponseStatus'));
   assert.equal(call.responseFields[0].javaType, 'ChargeResponseStatus');
 });
+
+// ─── exclude con dot-path: lo plano lo aplica build, lo anidado se avisa ──────
+
+// Dominio con una relación a hija (lines → OrderLine) y un value object compuesto
+// (address → Address): los dos casos que el DTO plano del scaffolding no puede recortar.
+function loadModelWithExclude(exclude) {
+  const { manifest, layers, errors } = loadService(fixtureDir);
+  assert.deepEqual(errors, []);
+  const patchedManifest = structuredClone(manifest);
+  delete patchedManifest.layers.api;
+  delete patchedManifest.layers.persistence;
+  const patched = structuredClone(layers);
+  delete patched.api;
+  delete patched.persistence;
+  patched.domain = {
+    types: { Address: { fields: { zip: { type: 'string' }, city: { type: 'string' } } } },
+    entities: {
+      Order: {
+        fields: {
+          id: { type: 'uuid', id: true, generated: true },
+          reference: { type: 'string', required: true },
+          internalNote: { type: 'string' },
+          address: { type: 'Address' }
+        },
+        relations: { lines: { entity: 'OrderLine', cardinality: 'one-to-many' } }
+      },
+      OrderLine: {
+        fields: { id: { type: 'uuid', id: true, generated: true }, costPrice: { type: 'decimal' } }
+      }
+    }
+  };
+  patched['use-cases'] = {
+    operations: {
+      getOrder: {
+        description: 'Recupera un pedido con sus lineas de detalle.',
+        kind: 'query',
+        input: { fields: { id: { type: 'uuid', required: true } } },
+        output: { entity: 'Order', ...(exclude ? { exclude } : {}) }
+      }
+    }
+  };
+  const model = buildModel({ manifest: patchedManifest, layers: patched });
+  const operation = model.services.flatMap((s) => s.operations).find((o) => o.name === 'getOrder');
+  return { model, operation, dtoFields: (operation.responseDto?.fields ?? []).map((f) => f.name) };
+}
+
+test('exclude plano: build lo aplica al DTO y no avisa', () => {
+  const { model, dtoFields } = loadModelWithExclude(['internalNote']);
+  assert.ok(!dtoFields.includes('internalNote'));
+  assert.deepEqual(dtoFields, ['id', 'reference', 'address']);
+  assert.deepEqual(model.warnings.filter((w) => w.includes('exclude')), []);
+});
+
+test('exclude sin dot-path no añade warnings (retrocompatibilidad)', () => {
+  const { model, dtoFields } = loadModelWithExclude(null);
+  assert.deepEqual(dtoFields, ['id', 'reference', 'internalNote', 'address']);
+  assert.deepEqual(model.warnings.filter((w) => w.includes('exclude')), []);
+});
+
+test('exclude con dot-path hacia una relación: avisa y deja el DTO raíz intacto', () => {
+  const { model, dtoFields } = loadModelWithExclude(['lines.costPrice']);
+  // El DTO plano no contiene la relación, así que no hay nada que recortar aquí.
+  assert.deepEqual(dtoFields, ['id', 'reference', 'internalNote', 'address']);
+  assert.ok(
+    model.warnings.some(
+      (w) =>
+        w.includes(`exclude 'lines.costPrice' de Order`) &&
+        w.includes(`no genera el DTO anidado de la relación 'lines'`) &&
+        w.includes(`sin 'costPrice'`)
+    ),
+    `warnings: ${JSON.stringify(model.warnings)}`
+  );
+});
+
+test('exclude con dot-path hacia un value object: avisa de que el VO sale entero', () => {
+  const { model, dtoFields } = loadModelWithExclude(['address.zip']);
+  // El value object entra al DTO como su record completo: build no puede quitarle un subcampo.
+  assert.ok(dtoFields.includes('address'));
+  assert.ok(
+    model.warnings.some(
+      (w) =>
+        w.includes(`exclude 'address.zip' de Order`) &&
+        w.includes(`el value object 'Address' sale entero`) &&
+        w.includes(`recortar 'zip'`)
+    ),
+    `warnings: ${JSON.stringify(model.warnings)}`
+  );
+});
+
+test('exclude combina plano y dot-paths: aplica el plano y avisa de cada anidado', () => {
+  const { model, dtoFields } = loadModelWithExclude(['internalNote', 'lines.costPrice', 'address.zip']);
+  assert.deepEqual(dtoFields, ['id', 'reference', 'address']);
+  assert.equal(model.warnings.filter((w) => w.includes('exclude')).length, 2);
+});

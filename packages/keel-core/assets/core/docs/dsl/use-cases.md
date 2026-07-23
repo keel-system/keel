@@ -50,6 +50,7 @@ operations:
 - `input`/`output` admiten tres formas: `"void"`, `{ fields: {...} }`, o `{ entity: Product }` con opcionales `list`, `paginated`, `exclude: [...]`.
 - En un `input` con forma `{ entity: X }`, los campos `generated` y `computed` de la entidad quedan implícitamente fuera: nunca los envía el cliente.
 - En los outputs y eventos, los campos `sensitive` de la entidad quedan excluidos por defecto; `exclude` recorta además campos concretos de esa operación (`keel validate` comprueba que existen en la entidad). Para exponer un campo sensible hay que declararlo explícitamente con la forma `{ fields: {...} }`.
+- `exclude` admite **dot-paths** para no exponer un campo de una **entidad hija** o de un **value object** anidado (`output: { entity: Order, exclude: [internalNote, lines.costPrice, address.zip] }`). Cada segmento intermedio debe ser una relación (entidad hija) o un value object compuesto; el último, un campo o relación de la entidad/tipo alcanzado. Un dot-path que cruza a otro agregado (relación serializada por id, sin anidamiento) es un warning: no hay nada anidado que excluir.
 - `preconditions` son sobre el estado del mundo; `rules` describen el comportamiento en orden.
 - Cada `error` tiene un `code` estable (contrato con integradores), su condición `when` y opcionalmente el status `http`.
 - `emits`: eventos publicados — deben existir en `messaging: publishing.events`. Es la única referencia hacia delante permitida: mientras la capa messaging no esté diseñada, `keel validate --wip` la reporta como pendiente (aviso); sin `--wip` es error.

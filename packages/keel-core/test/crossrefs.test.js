@@ -116,6 +116,106 @@ test('per-aggregate con aggregates declarados es válido', () => {
   assert.deepEqual(errors, []);
 });
 
+// --- use-cases: exclude con dot-path (proyección de entidades hijas) ---
+
+// Dominio con relación a hija en el mismo agregado (Order → lines → OrderLine), un campo
+// escalar en la hija (costPrice) y un value object compuesto embebido (address → Address).
+const domainForExclude = () => ({
+  types: {
+    Address: { fields: { zip: { type: 'string' }, city: { type: 'string' } } },
+  },
+  entities: {
+    Order: entity(
+      { internalNote: { type: 'string' }, address: { type: 'Address' } },
+      { relations: { lines: { entity: 'OrderLine', cardinality: 'one-to-many' } } }
+    ),
+    OrderLine: entity({ costPrice: { type: 'decimal' }, quantity: { type: 'int' } }),
+  },
+  aggregates: { Order: { root: 'Order', entities: ['OrderLine'] } },
+});
+
+const excludeLayers = (exclude) => ({
+  domain: domainForExclude(),
+  'use-cases': {
+    operations: {
+      getOrder: {
+        description: 'Recupera un pedido por su id.',
+        kind: 'query',
+        internal: true,
+        input: { entity: 'Order' },
+        output: { entity: 'Order', exclude },
+      },
+    },
+  },
+});
+
+test('exclude plano de un campo existente es válido (retrocompatibilidad)', () => {
+  const { errors, warnings } = run(excludeLayers(['internalNote']));
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
+test('exclude con dot-path hacia un campo de la entidad hija es válido', () => {
+  const { errors, warnings } = run(excludeLayers(['lines.costPrice']));
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
+test('exclude con dot-path hacia un campo de un value object es válido', () => {
+  const { errors, warnings } = run(excludeLayers(['address.zip']));
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
+test('exclude de un campo terminal inexistente en la hija es error', () => {
+  const { errors } = run(excludeLayers(['lines.nope']));
+  assert.ok(
+    errors.some((e) =>
+      e.includes(`use-cases: getOrder.output.exclude 'lines.nope': el campo 'nope' no existe en la entidad 'OrderLine'`)
+    )
+  );
+});
+
+test('exclude cuyo segmento intermedio no es relación ni value object es error', () => {
+  const { errors } = run(excludeLayers(['internalNote.foo']));
+  assert.ok(
+    errors.some((e) =>
+      e.includes(
+        `use-cases: getOrder.output.exclude 'internalNote.foo': el campo 'internalNote' de la entidad 'Order' no es una relación ni un value object anidable`
+      )
+    )
+  );
+});
+
+test('exclude con dot-path que cruza a otro agregado es warning', () => {
+  const domain = domainForExclude();
+  // Segundo agregado con su raíz, alcanzable desde OrderLine por relación.
+  domain.entities.Product = entity({ costPrice: { type: 'decimal' } });
+  domain.entities.OrderLine.relations = { product: { entity: 'Product', cardinality: 'many-to-one' } };
+  domain.aggregates.Catalog = { root: 'Product' };
+  const layers = {
+    domain,
+    'use-cases': {
+      operations: {
+        getOrder: {
+          description: 'Recupera un pedido por su id.',
+          kind: 'query',
+          internal: true,
+          input: { entity: 'Order' },
+          output: { entity: 'Order', exclude: ['lines.product.costPrice'] },
+        },
+      },
+    },
+  };
+  const { errors, warnings } = run(layers);
+  assert.deepEqual(errors, []);
+  assert.ok(
+    warnings.some((w) =>
+      w.includes(`la relación 'product' apunta al agregado 'Catalog', que se serializa por id`)
+    )
+  );
+});
+
 // --- storage: campos file ↔ buckets ---
 
 const domainWithFile = (bucket = 'productImages') => ({

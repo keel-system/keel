@@ -128,8 +128,8 @@
             "paginated": { "type": "boolean", "default": false },
             "exclude": {
               "type": "array",
-              "description": "Campos de la entidad que no forman parte de este payload.",
-              "items": { "type": "string" }
+              "description": "Campos que no forman parte de este payload. Un item puede ser un campo/relación de la entidad o un dot-path que entra en una entidad hija (relación) o en un value object compuesto: ej. 'variants.costPrice'.",
+              "items": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*(\\.[a-z][A-Za-z0-9]*)*$" }
             }
           }
         },

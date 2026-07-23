@@ -290,10 +290,10 @@ function collectOperations(layers, domainTypes, inlineEnumName, service, warning
     const groupName = targetEntity ?? pascalCase(service.name);
     const route = resolveRoute(opName, op, api, targetEntity, warnings);
 
-    const inputFields = payloadFields(opName, op.input, { direction: 'input', domainEntities, domainTypes, inlineEnumName });
+    const inputFields = payloadFields(opName, op.input, { direction: 'input', domainEntities, domainTypes, inlineEnumName, warnings });
     const hasIdParam = Boolean(route && route.path.includes('{id}'));
     const bodyFields = hasIdParam ? inputFields.filter((f) => f.name !== 'id') : inputFields;
-    const outputFields = payloadFields(opName, op.output, { direction: 'output', domainEntities, domainTypes, inlineEnumName });
+    const outputFields = payloadFields(opName, op.output, { direction: 'output', domainEntities, domainTypes, inlineEnumName, warnings });
 
     for (const error of op.errors ?? []) {
       if (!errorsByCode.has(error.code)) {
@@ -370,7 +370,7 @@ function collectEvents(layers, domainTypes, inlineEnumName, warnings) {
     className: `${pascalCase(name)}Event`,
     publisherClass: `${pascalCase(name)}Publisher`,
     description: def?.description ?? null,
-    fields: payloadFields(name, def?.payload, { direction: 'output', domainEntities, domainTypes, inlineEnumName })
+    fields: payloadFields(name, def?.payload, { direction: 'output', domainEntities, domainTypes, inlineEnumName, warnings })
   }));
 }
 
@@ -601,7 +601,8 @@ function collectSubscriptions(layers, services, domainTypes, inlineEnumName, war
       direction: 'output',
       domainEntities,
       domainTypes,
-      inlineEnumName
+      inlineEnumName,
+      warnings
     });
 
     return {
@@ -664,7 +665,7 @@ function entityFromOperationName(opName, domainEntities) {
 
 // Deriva los campos de un payload: explícitos (fields) o desde la entidad,
 // aplicando las exclusiones de mapping.md según la dirección.
-function payloadFields(opName, payload, { direction, domainEntities, domainTypes, inlineEnumName }) {
+function payloadFields(opName, payload, { direction, domainEntities, domainTypes, inlineEnumName, warnings = [] }) {
   if (!payload || payload === 'void') return [];
 
   if (payload.fields) {
@@ -675,7 +676,18 @@ function payloadFields(opName, payload, { direction, domainEntities, domainTypes
 
   const entity = domainEntities[payload.entity];
   if (!entity) return [];
-  const exclude = new Set(payload.exclude ?? []);
+
+  // exclude admite dot-paths hacia una entidad hija o un value object. El scaffolding solo
+  // puede aplicar los planos: su DTO es un record plano de los campos de la entidad (las
+  // relaciones no entran, y un value object entra como su record completo). Los anidados se
+  // avisan para que el agente los recorte al escribir el DTO — nunca se ignoran en silencio.
+  // La ruta ya viene validada por `keel validate` (crossrefs), aquí no se revalida.
+  const excludePaths = payload.exclude ?? [];
+  const exclude = new Set(excludePaths.filter((path) => !path.includes('.')));
+  for (const path of excludePaths) {
+    if (path.includes('.')) warnings.push(nestedExcludeWarning(opName, payload.entity, path, entity, domainTypes));
+  }
+
   const fields = [];
   for (const [fieldName, field] of Object.entries(entity.fields ?? {})) {
     if (exclude.has(fieldName)) continue;
@@ -684,6 +696,23 @@ function payloadFields(opName, payload, { direction, domainEntities, domainTypes
     fields.push(resolveField(payload.entity, fieldName, field, domainTypes, inlineEnumName, { persisted: false }));
   }
   return fields;
+}
+
+// Mensaje del dot-path de exclude que el scaffolding no puede aplicar sobre su DTO plano:
+// dice qué falta y quién lo completa, para que el hueco sea visible en la salida de build.
+function nestedExcludeWarning(opName, entityName, path, entity, domainTypes) {
+  const [head, ...rest] = path.split('.');
+  const nested = rest.join('.');
+  const prefix = `Operación '${opName}': exclude '${path}' de ${entityName}`;
+
+  if (entity.relations?.[head]) {
+    return `${prefix}: build no genera el DTO anidado de la relación '${head}' — el agente debe escribirlo sin '${nested}' (conventions/mapping.md).`;
+  }
+  const type = entity.fields?.[head]?.type;
+  if (type && domainTypes?.[type]?.fields) {
+    return `${prefix}: el value object '${type}' sale entero en el DTO — el agente debe recortar '${nested}' al escribir el DTO de respuesta (conventions/mapping.md).`;
+  }
+  return `${prefix}: build no puede aplicarlo a su DTO plano — revísalo al escribir el DTO de respuesta (conventions/mapping.md).`;
 }
 
 // Ruta de una operación: endpoint explícito > convención CRUD (auto) > fallback POST.
