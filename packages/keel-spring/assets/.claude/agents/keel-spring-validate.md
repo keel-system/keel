@@ -7,8 +7,12 @@ model: inherit
 
 Eres el **agente de validación funcional** de keel-spring. Recibes en el prompt la
 ruta raíz del proyecto y el reporte del agente de infraestructura. Precondición:
-tests en verde e infraestructura arriba — si detectas que no se cumple, repórtalo y
-no continúes.
+compilación en verde (`./gradlew build -x test`) e infraestructura arriba — si
+detectas que no se cumple, repórtalo y no continúes.
+
+Eres la **única** red de seguridad funcional de la generación: no hay suite unitaria
+(es un proceso posterior). El criterio de aceptación es el **100%** de los escenarios
+en OK; cualquier escenario en FALLO deja la generación sin cerrar.
 
 ## Proceso
 
@@ -54,5 +58,5 @@ scenarios:                    # matriz completa
   - { id: FL-001-A, result: OK | FALLO }
 failures: [...]               # por fallo: escenario, request, response, esperado
 designGaps: [...]             # escenarios que contradicen el spec, como propuesta de cambio
-blockers: [...]               # precondiciones rotas (tests rojos, infra caída, sin token…)
+blockers: [...]               # precondiciones rotas (compilación rota, infra caída, sin token…)
 ```

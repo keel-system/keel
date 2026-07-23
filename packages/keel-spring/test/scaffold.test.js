@@ -211,6 +211,10 @@ test('CLAUDE.md contextual: specs, solo capas declaradas y skill local con conve
   assert.ok(claude.includes('keel-spring-code')); // la skill orquesta los subagentes
   assert.ok(claude.includes('.claude/architecture.md'));
   assert.ok(claude.includes('.claude/constitution.md'));
+  // Sin pruebas unitarias en el flujo: el gate es compilar + los escenarios end-to-end.
+  assert.ok(claude.includes('./gradlew build -x test'));
+  assert.ok(claude.includes('Sin pruebas unitarias'));
+  assert.ok(!claude.includes('**Tests**')); // ya no hay paso de escribir tests
 
   // architecture.md y constitution.md: documentos de primer nivel en .claude/.
   const architecture = read(workspace, '.claude/architecture.md');
@@ -279,7 +283,7 @@ test('agentes de la orquestación: copiados al .claude/agents/ del proyecto', ()
   scaffoldService({ ...loadFixture(), workspace });
 
   for (const [name, marker] of [
-    ['keel-spring-code', 'gradlew test'],
+    ['keel-spring-code', 'build -x test'],
     ['keel-spring-infra', 'infra/docker-compose.yaml'],
     ['keel-spring-validate', 'validation-scenarios.md'],
     ['keel-spring-quality', 'no-conductual']

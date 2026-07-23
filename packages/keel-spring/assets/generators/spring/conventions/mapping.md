@@ -153,11 +153,13 @@ Sin esta capa (servicio que no maneja archivos), no se incluye SDK de object sto
 | `buckets.B.visibility: public` | Lectura directa permitida; la URL pública puede exponerse en el ResponseDto |
 | campo `file` de una entidad | La entidad persiste la **key** del objeto (String); el controller recibe el binario como `multipart/form-data` (`MultipartFile`), el handler valida contra el bucket y delega en `FileStorage`, y guarda la key devuelta |
 
-## Tests (obligatorios en cada generación)
+## Cobertura funcional (criterio de "generación terminada")
 
-- Por operación: test del camino feliz + un test por cada `error` declarado, verificando el `code`.
-- Tests de API (MockMvc) que verifican status HTTP del contrato (`successStatus`, `errors[].http`).
-- Por invariante de entidad: al menos un test que intenta violarla y espera fallo.
-- Por `lifecycle`: tests de transiciones válidas y al menos una transición no declarada que debe fallar.
-- Por cada flujo `FL-*` de `specs/<servicio>/validation-scenarios.md`: un test de integración que reproduce su Given/When/Then (incluidos orden de evaluación y casos borde).
-- La generación no está terminada si `./gradlew test` no pasa, ni sin la validación funcional final: los escenarios de `validation-scenarios.md` ejecutados en vivo contra el servidor arrancado (ver paso "Verificar" de la skill).
+La generación **no** está terminada si falta alguna de estas dos condiciones:
+
+- `./gradlew build -x test` en verde (compila y empaqueta).
+- El **100%** de los flujos `FL-*` de `specs/<servicio>/validation-scenarios.md` ejecutados en vivo contra el servidor arrancado, verificando el Then completo (status, headers y efectos observables). Ver el paso "Verificar" de la skill y `orchestration.md`.
+
+Cada operación, error declarado, invariante y transición de `lifecycle` debe quedar ejercitado por algún escenario: si un caso relevante no está cubierto por ningún `FL-*`, es un hueco del **diseño** (proponer el escenario en `validation-scenarios.md`), no algo que se tape con código.
+
+**Pruebas unitarias**: fuera de este flujo. La suite (camino feliz y cada error por operación, tests de API con MockMvc, invariantes, `lifecycle`, integración por flujo) es un proceso independiente y posterior, que arranca cuando el diseñador ha validado el funcionamiento del servidor. Durante la generación ningún agente escribe tests ni ejecuta `./gradlew test`; el andamiaje que deja `build` (deps de test, perfil `test` con H2, `<Nombre>ApplicationTests`) queda intacto para esa fase.

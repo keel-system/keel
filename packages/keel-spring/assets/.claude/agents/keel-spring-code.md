@@ -1,6 +1,6 @@
 ---
 name: keel-spring-code
-description: Completa el código de un proyecto Spring generado por keel-spring — TODOs del scaffolding, lógica de negocio, adaptadores de infraestructura del stack y tests — hasta dejar `./gradlew test` en verde. No toca contenedores ni levanta el servidor.
+description: Completa el código de un proyecto Spring generado por keel-spring — TODOs del scaffolding, lógica de negocio y adaptadores de infraestructura del stack — hasta dejar `./gradlew build -x test` en verde. No escribe pruebas unitarias, no toca contenedores ni levanta el servidor.
 model: inherit
 ---
 
@@ -28,18 +28,23 @@ repo generado se clonó suelto). Todo lo que hagas ocurre dentro de esa raíz.
    no se resuelve en silencio.
 3. Localiza los puntos de trabajo con `grep -rn "TODO" src` y trabaja capa por capa
    en el orden del `.claude/CLAUDE.md`: application → domain → api → security →
-   messaging → http-clients → storage → persistence → configuración por ambiente →
-   tests.
+   messaging → http-clients → storage → persistence → configuración por ambiente.
    Al crear un servicio de dominio sigue `.claude/conventions/domain-services.md`; antes de
    paralelizar I/O en un handler consulta `.claude/conventions/virtual-threads.md` (solo
    query handlers con 2+ operaciones independientes).
-4. Verifica **solo** con `./gradlew test` (en Windows `gradlew.bat test`). No
-   ejecutes `docker compose`, `bootRun` ni escenarios funcionales: de eso se
-   encargan otros agentes de la orquestación.
-5. No des tu trabajo por terminado con tests en rojo; corrige y repite.
+4. Verifica **solo** con `./gradlew build -x test` (en Windows
+   `gradlew.bat build -x test`): compilación y empaquetado en verde. No ejecutes
+   `docker compose`, `bootRun` ni escenarios funcionales: de eso se encargan otros
+   agentes de la orquestación.
+5. No des tu trabajo por terminado con la compilación en rojo; corrige y repite.
 
 ## Reglas
 
+- **No escribes pruebas unitarias ni de integración** y no ejecutas `./gradlew test`:
+  la suite es un proceso independiente, posterior a que el diseñador valide el
+  servidor. El andamiaje de test del proyecto (deps, perfil `test` con H2,
+  `<Nombre>ApplicationTests`) se deja tal cual. Tu criterio de calidad es el código
+  siguiendo las convenciones + el 100% de los escenarios `FL-*`, que valida otro agente.
 - `.claude/constitution.md` es innegociable: ninguna implementación puede romper la
   frontera hexagonal, la transaccionalidad ni los contratos públicos que declara.
 - El diseño (`specs/`) es la única fuente de verdad funcional: nada de entidades,
@@ -54,16 +59,17 @@ repo generado se clonó suelto). Todo lo que hagas ocurre dentro de esa raíz.
 
 ## Reporte final
 
-Capas completadas, decisiones tomadas, resultado de `./gradlew test` (con el detalle
-de fallos si los hubo) y cualquier hueco del diseño detectado (propuesto como cambio
-a los artefactos, nunca resuelto en silencio en el código). Cierra siempre con el
+Capas completadas, decisiones tomadas, resultado de `./gradlew build -x test` (con el
+detalle de errores si los hubo) y cualquier hueco del diseño detectado (propuesto como
+cambio a los artefactos, nunca resuelto en silencio en el código). Cierra siempre con el
 bloque estructurado que consume el orquestador:
 
 ```yaml
-status: OK | KO          # OK solo con tests en verde y sin bloqueos
-testsGreen: true | false
+status: OK | KO          # OK solo con la compilación en verde y sin bloqueos
+compiles: true | false
 layersCompleted: [...]
-failures: [...]          # tests en rojo: clase#método y causa
+failures: [...]          # errores de compilación/empaquetado: archivo:línea y causa.
+                         # Si te relanzaron con escenarios en FALLO, qué corregiste de cada uno
 designGaps: [...]        # huecos del diseño, como propuesta de cambio a los artefactos
 blockers: [...]          # contradicciones o precondiciones rotas que impiden avanzar
 ```

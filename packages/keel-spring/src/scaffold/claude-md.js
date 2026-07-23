@@ -94,9 +94,7 @@ export function generate(model) {
   }
   steps.push(
     '**Configuración por ambiente**: cualquier configuración nueva va en `src/main/resources/parameters/<perfil>/` respetando ' +
-      'el gradiente (local literal, develop `${VAR:default}`, production `${VAR}` sin default); nunca credenciales reales.',
-    '**Tests**: camino feliz + cada error por operación, invariantes y lifecycle, y un test de integración por cada flujo ' +
-      '`FL-*` de `specs/validation-scenarios.md`.'
+      'el gradiente (local literal, develop `${VAR:default}`, production `${VAR}` sin default); nunca credenciales reales.'
   );
 
   const lines = [
@@ -106,7 +104,11 @@ export function generate(model) {
     '',
     `Proyecto generado desde el diseño Keel \`${service.name}\` v${service.version} por keel-spring ${packageVersion()} ` +
       '(scaffolding transversal al stack: el proyecto compila y arranca). Tu trabajo es lo que depende de la infraestructura ' +
-      'elegida o del negocio: implementaciones de puertos de infraestructura, lógica de negocio, invariantes y todos los tests. ' +
+      'elegida o del negocio: implementaciones de puertos de infraestructura, lógica de negocio e invariantes. ' +
+      '**Sin pruebas unitarias**: no las escribas ni ejecutes `./gradlew test` — la suite es un proceso independiente y ' +
+      'posterior a que el diseñador valide el servidor; el andamiaje de test que ya está (deps, perfil `test` con H2, ' +
+      `\`${service.applicationClass}Tests\`) se deja intacto para esa fase. El criterio de terminado es la compilación en ` +
+      'verde más el **100%** de los escenarios de `specs/validation-scenarios.md`. ' +
       'Este repo es **autosuficiente**: diseño, skill, convenciones y guías del stack van incluidos. ' +
       'Localiza los puntos de trabajo con `grep -rn "TODO" src`.',
     '',
@@ -152,7 +154,7 @@ export function generate(model) {
     '',
     '## Verificación (obligatoria antes de dar por terminado)',
     '',
-    '1. `./gradlew test` en verde (en Windows `gradlew.bat`).'
+    '1. `./gradlew build -x test` en verde: compilación y empaquetado (en Windows `gradlew.bat build -x test`).'
   ];
 
   if (selected.length > 0) {
@@ -162,21 +164,24 @@ export function generate(model) {
         (hasDevtools ? ' y `bash infra/validate-infra.sh` antes de ejercitar escenarios' : '') +
         ' — un fallo de dependencia no debe confundirse con un bug.',
       '3. Servidor real: `./gradlew bootRun` y ejecuta cada escenario de `specs/validation-scenarios.md` con llamadas',
-      '   HTTP reales verificando el Then completo (status, headers y efectos observables). Reporta la matriz escenario → resultado.'
+      '   HTTP reales verificando el Then completo (status, headers y efectos observables). Reporta la matriz escenario → resultado:',
+      '   la generación solo se da por terminada con el **100%** de los escenarios en OK.'
     );
   } else {
     lines.push(
       '2. Servidor real: `./gradlew bootRun` y ejecuta cada escenario de `specs/validation-scenarios.md` con llamadas',
-      '   HTTP reales verificando el Then completo (status, headers y efectos observables). Reporta la matriz escenario → resultado.'
+      '   HTTP reales verificando el Then completo (status, headers y efectos observables). Reporta la matriz escenario → resultado:',
+      '   la generación solo se da por terminada con el **100%** de los escenarios en OK.'
     );
   }
 
   lines.push(
     '',
     `La skill \`/${SKILL}\` de este proyecto orquesta este flujo con los subagentes de \`.claude/agents/\`:`,
-    '`keel-spring-code` (código y tests) en paralelo con `keel-spring-infra` (infraestructura arriba y sana), después',
+    '`keel-spring-code` (código, sin tests) en paralelo con `keel-spring-infra` (infraestructura arriba y sana), después',
     '`keel-spring-validate` (escenarios contra el servidor real, reseteando datos entre flujos) y al final',
-    '`keel-spring-quality` (pase de calidad no-conductual con tests en verde).'
+    '`keel-spring-quality` (pase de calidad no-conductual con la compilación en verde), seguido de una re-validación',
+    'de los escenarios antes del commit.'
   );
 
   lines.push(

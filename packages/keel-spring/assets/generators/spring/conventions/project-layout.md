@@ -67,14 +67,15 @@ services/<servicio>-spring/
     │           ├── ApiExceptionHandler          # @RestControllerAdvice central
     │           └── ErrorResponse                # contrato de error de la API
     ├── main/resources/          # application.yaml + application-<perfil>.yaml + parameters/<perfil>/*.yaml
-    └── test/java/<base>/        # tests por operación (feliz + cada error) y por invariante
+    └── test/java/<base>/        # solo <Nombre>ApplicationTests (contextLoads) que deja build;
+                                 # reservado para la suite unitaria del proceso posterior
 ```
 
 Paquete base: `<group>.<serviceNameSinGuiones>` (ej. `com.example.productcatalog`). El `group` (groupId) lo introduce el usuario en el cuestionario de `keel-spring build` (default `com.<domain>`) y queda persistido en `keel-stack.json`; en regeneraciones se reutiliza sin repreguntar.
 
 ## Qué genera el scaffolding y qué completa el agente
 
-**Criterio de frontera**: build genera todo lo derivable mecánicamente del diseño + `keel-stack.json` cuyo código es idéntico sea cual sea la opción de infraestructura elegida (más las dependencias, la config y el compose, que sí se derivan del catálogo). El agente escribe el código cuya implementación cambia según la infraestructura (publishers/listeners del broker, adaptador de storage), guiado por las skills por tecnología `keel-spring-<tech>` (instaladas en `.claude/skills/` del proyecto según el stack), además de la lógica de negocio y los tests.
+**Criterio de frontera**: build genera todo lo derivable mecánicamente del diseño + `keel-stack.json` cuyo código es idéntico sea cual sea la opción de infraestructura elegida (más las dependencias, la config y el compose, que sí se derivan del catálogo). El agente escribe el código cuya implementación cambia según la infraestructura (publishers/listeners del broker, adaptador de storage), guiado por las skills por tecnología `keel-spring-<tech>` (instaladas en `.claude/skills/` del proyecto según el stack), además de la lógica de negocio. Las pruebas unitarias **no** forman parte de la generación: son un proceso independiente posterior a la validación funcional (ver `mapping.md`, «Cobertura funcional»).
 
 `keel-spring build` genera de forma determinista (re-ejecutable: solo añade archivos nuevos, `--force` sobrescribe):
 
@@ -113,7 +114,7 @@ Cuando el compose levanta contenedores sondeables, el scaffolding añade el serv
 
 El script generado `infra/validate-infra.sh` corre un check por tecnología (`docker exec <servicio>-devtools <cliValidateCmd>`, o dentro del propio contenedor para Oracle) y sale con código `!= 0` si alguno falla. Lo usa el agente `keel-spring-infra` de la orquestación, tras `docker compose -f infra/docker-compose.yaml up -d` (o `podman compose`, respetando `CONTAINER_RUNTIME`) y antes de que se ejerciten los escenarios, para confirmar que la infraestructura responde. Detalle por tecnología en `conventions/infra-validation.md`.
 
-El agente de código de la orquestación (`keel-spring-code`, lanzado por `/keel-generate-spring`) completa, guiado por las skills `keel-spring-<tech>` instaladas según `keel-stack.json`: lógica de negocio de los stubs, invariantes y campos `computed`; de `messaging`, la implementación de cada `<Evento>Publisher` (sustituyendo su stub, con la `reliability` outbox/after-commit), la config del broker si aplica y los `<Evento>Listener` (binding, retry/DLQ, dispatch de `triggers`); de `storage`, el bean del cliente y el adaptador completo de `FileStorage` (incluida la validación de content-type/tamaño según los `buckets` y las URLs prefirmadas); los `fallback` de http-clients (y el tipado de records/mapper solo si el diseño va en prosa sin `request`/`response` estructurados); las políticas `cache`/`idempotency` sobre Redis/Valkey; migraciones/esquema definitivo, y **todos los tests**. Las capas `security` y `http-clients` (puerto + adaptador + ACL + auth saliente) ya salen generadas (ver arriba).
+El agente de código de la orquestación (`keel-spring-code`, lanzado por `/keel-generate-spring`) completa, guiado por las skills `keel-spring-<tech>` instaladas según `keel-stack.json`: lógica de negocio de los stubs, invariantes y campos `computed`; de `messaging`, la implementación de cada `<Evento>Publisher` (sustituyendo su stub, con la `reliability` outbox/after-commit), la config del broker si aplica y los `<Evento>Listener` (binding, retry/DLQ, dispatch de `triggers`); de `storage`, el bean del cliente y el adaptador completo de `FileStorage` (incluida la validación de content-type/tamaño según los `buckets` y las URLs prefirmadas); los `fallback` de http-clients (y el tipado de records/mapper solo si el diseño va en prosa sin `request`/`response` estructurados); las políticas `cache`/`idempotency` sobre Redis/Valkey, y migraciones/esquema definitivo (sin pruebas unitarias: su gate es `./gradlew build -x test` y el 100% de los escenarios `FL-*`). Las capas `security` y `http-clients` (puerto + adaptador + ACL + auth saliente) ya salen generadas (ver arriba).
 
 ## Reglas de la estructura
 

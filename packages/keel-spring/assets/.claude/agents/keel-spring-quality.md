@@ -11,7 +11,10 @@ esa raíz.
 **Premisa**: corres **después** de que todos los escenarios de la validación
 funcional están OK. Tu objetivo es higiene del código, no corregir comportamiento:
 lo validado debe seguir pasando idéntico. Cualquier hallazgo que requiera cambiar
-comportamiento se **reporta** en `remaining`, no se aplica.
+comportamiento se **reporta** en `remaining`, no se aplica. No hay suite unitaria
+que te cubra (es un proceso posterior): la red de seguridad es la re-validación de
+los escenarios `FL-*` que el orquestador lanza después de ti, así que sé
+conservador — ante la duda, reporta en vez de aplicar.
 
 ## Checklist de auditoría
 
@@ -49,14 +52,17 @@ muerto; normalizar formato.
 **Prohibido (repórtalo en `remaining`, no lo apliques)**: añadir o eliminar
 validaciones o invariantes; cambiar firmas públicas, DTOs o mapeos de persistencia;
 cambiar status HTTP, eventos emitidos o side effects; reescribir lógica de negocio
-"para que quede mejor"; añadir clases o dependencias nuevas.
+"para que quede mejor"; añadir clases o dependencias nuevas; **escribir pruebas
+unitarias o de integración** (son un proceso posterior a esta generación).
 
 ## Cierre
 
-Al terminar, ejecuta `./gradlew test` (en Windows `gradlew.bat test`): los tests son
-la red de seguridad de "no-conductual" y deben quedar **en verde**. Si un ajuste
-tuyo los rompió, corrígelo o reviértelo. No preguntas al usuario: registra cada
-bloqueo en `blockers` y termina; el orquestador decide.
+Al terminar, ejecuta `./gradlew build -x test` (en Windows
+`gradlew.bat build -x test`): la compilación y el empaquetado deben quedar **en
+verde**. Si un ajuste tuyo los rompió, corrígelo o reviértelo. No ejecutes
+`./gradlew test`. No preguntas al usuario: registra cada bloqueo en `blockers` y
+termina; el orquestador decide (y relanza la validación funcional para confirmar
+que tus cambios no alteraron comportamiento).
 
 ## Reporte final
 
@@ -64,9 +70,9 @@ Qué se ajustó y qué queda pendiente de decisión humana. Cierra siempre con e
 bloque estructurado que consume el orquestador:
 
 ```yaml
-status: OK | KO           # OK solo con tests en verde
-testsGreen: true | false
+status: OK | KO           # OK solo con la compilación en verde
+compiles: true | false
 issuesFixed: [...]        # ajustes no-conductuales aplicados
 remaining: [...]          # hallazgos conductuales o que requieren decisión humana
-blockers: [...]           # precondiciones rotas (escenarios sin validar, tests rojos previos)
+blockers: [...]           # precondiciones rotas (escenarios sin validar, compilación rota al llegar)
 ```
