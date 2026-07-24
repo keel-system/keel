@@ -1021,9 +1021,12 @@ test('best-effort: agregado acumula, adaptador drena y el bridge publica tras co
     assert.ok(!bridge.includes(ajeno));
   }
 
-  // El evento de integración es el gemelo de wire, no el de dominio.
+  // El evento de integración es el gemelo de wire, no el de dominio. La metadata
+  // sigue siendo componente (la usa el bridge) pero no viaja dentro de 'data':
+  // la autoritativa es la de la EventEnvelope y duplicarla confundiría al consumidor.
   const integration = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/events/ProductCreatedIntegrationEvent.java');
-  assert.ok(integration.includes('public record ProductCreatedIntegrationEvent(EventMetadata metadata'));
+  assert.ok(integration.includes('public record ProductCreatedIntegrationEvent(@JsonIgnore EventMetadata metadata'));
+  assert.ok(integration.includes('import com.fasterxml.jackson.annotation.JsonIgnore;'));
 
   // El puerto de publicación recibe el evento de INTEGRACIÓN; su stub no rompe el arranque.
   const port = read(workspace, 'src/main/java/com/commerce/productcatalog/domain/events/ProductCreatedPublisher.java');

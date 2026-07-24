@@ -63,7 +63,8 @@ El documento tiene, en orden:
 0. **Front-matter YAML** (entre `---`, al inicio) — índice machine-readable **derivado, nunca
    inventado**: `service`, `version`, `domain`, `basePath`, `m2mAuth` (`protocol`, `audience`,
    `validateAudience`), `endpoints[]` (solo `services`/`both`: `name`, `method`, `path`, `access` con
-   scopes), `events` (`published[]`/`consumed[]` con canal y `source`) y `errors[]` (catálogo
+   scopes), `events` (`envelope: keel` + `published[]`/`consumed[]` con canal, `source` y el
+   `envelope` de cada suscripción) y `errors[]` (catálogo
    deduplicado de las operaciones M2M `{ code, http }`). Coincide 1:1 con el cuerpo.
 1. **`## Resumen`** — qué ofrece este servicio a otros servidores, en un párrafo (desde
    `service.description` + su `domain`).
@@ -78,8 +79,12 @@ El documento tiene, en orden:
    realista, y la **tabla de errores** (`code | HTTP | cuándo | acción recomendada`). La *acción
    recomendada* clasifica cada error: `5xx`/timeout → reintentable; `4xx` de validación → corregir
    input; `409`/`403`/`404` → no reintentar. Ejemplos coherentes a lo largo del documento.
-3. **`## Eventos`** — de `messaging`: `### Publicados` (canal lógico, garantía de entrega si
-   `reliability: outbox`, qué operaciones los emiten, payload de ejemplo) y `### Suscripciones` (lo que
+3. **`## Eventos`** — de `messaging`. `### Publicados` abre con la **forma del mensaje** (la envoltura
+   estándar de Keel: `metadata` + `data`, con la tabla de los seis campos de metadata — `eventId` como
+   clave de deduplicación, `eventType`, `eventVersion`, `occurredAt`, `source`, `correlationId`),
+   documentada **una sola vez** y copiada de `docs/dsl/messaging.md § La envoltura Keel`; luego, por
+   evento: canal lógico, garantía de entrega si `reliability: outbox`, qué operaciones los emiten y el
+   payload de ejemplo, que es el contenido de `data` y no el mensaje completo. `### Suscripciones` (lo que
    **debe publicar** quien quiera activar una operación: origen `source`, canal, **contrato de
    recepción** — envelope, discriminador, `messageId`/clave de dedupe —, payload esperado y política
    `onFailure`).

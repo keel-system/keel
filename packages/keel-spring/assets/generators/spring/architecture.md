@@ -55,4 +55,41 @@ src/main/java/<base>/
   - `rest`: controllers que **solo traducen** (construyen/fusionan el mensaje desde los parámetros HTTP, despachan vía mediator) y `ApiExceptionHandler` que traduce la jerarquía de dominio a `ErrorResponse`. Cero lógica de negocio.
   - `configurations/security`: `SecurityFilterChain` y conversión de claims a authorities, derivado enteramente de `security.keel.yaml`.
 
+## Forma del mensaje publicado
+
+Lo que sale al broker no es el evento de dominio ni el payload a secas: es la **envoltura estándar de Keel**, `EventEnvelope<T>` (`infrastructure/messaging`), con dos claves de primer nivel. La `metadata` es transversal —idéntica para todos los eventos, no se declara en el diseño— y el payload del evento va en `data`:
+
+```json
+{
+  "metadata": {
+    "eventId": "9f1c3b6e-2d4a-4a91-b0f2-5c7d8e0a1b23",
+    "eventType": "ProductCreated",
+    "eventVersion": 1,
+    "occurredAt": "2026-03-14T09:21:07.482Z",
+    "source": "product-service",
+    "correlationId": "1f7b0a52-33c9-4a1e-9a44-6c0f2b8d55e1"
+  },
+  "data": {
+    "productId": "3d2e1f00-8a44-4c9b-9f01-77b6c2d4e5a9",
+    "sku": "SKU-10493"
+  }
+}
+```
+
+| Campo | Tipo Java | Origen | Descripción |
+|---|---|---|---|
+| `metadata.eventId` | `String` (UUID) | `EventMetadata.now(...)`, en el `raise` del agregado | Id único de esta ocurrencia. Es la **clave de idempotencia** del consumidor: se estampa una vez y no se regenera aguas abajo, así que una reentrega repite el mismo valor. |
+| `metadata.eventType` | `String` | `EventMetadata.now("<Evento>")` — nombre del evento en el diseño | Tipo lógico del evento. Discriminador cuando un canal transporta varios tipos. |
+| `metadata.eventVersion` | `int` | `EventMetadata.now(...)`, fijo a `1` | Versión del contrato de `data`. Se sube a mano al romper compatibilidad del payload. |
+| `metadata.occurredAt` | `Instant` | `Instant.now()` en el `raise` | Instante en que **ocurrió el hecho** en el dominio, no el del envío: con `reliability: outbox` el relay entrega después y los dos instantes difieren. |
+| `metadata.source` | `String` | `service.name` del diseño, horneado en `EventMetadata.now(...)` | Servicio emisor. |
+| `metadata.correlationId` | `String` (nullable) | `CorrelationContext.get()` en el `<Servicio>DomainEventBridge`, vía `EventEnvelope.of(...)` | Correlación del request que originó el hecho — la misma que estampa `CorrelationFilter` (`X-Correlation-Id`), el `ErrorResponse` y cada línea de log. `null` si el hecho no nació de una petición (un `@Scheduled`, por ejemplo). |
+| `data` | `<Evento>IntegrationEvent` | El bridge, desde el evento de dominio | Gemelo de wire del evento: los campos del `payload` declarado en `messaging.keel.yaml`. Su componente `metadata` es `@JsonIgnore` — la metadata autoritativa es la del envelope y no se duplica en el cable. |
+
+La metadata **no se regenera** en ningún punto de la cadena: nace en el `raise` dentro del agregado y el bridge solo le añade el `correlationId`, que el dominio no puede conocer (regla en `constitution.md`). Por eso el `eventId` sirve de clave de deduplicación extremo a extremo, y por eso el `IdempotencyGuard` del lado consumidor cae por defecto en `envelope.metadata().eventId()`.
+
+Fuera del cuerpo del mensaje viajan los **atributos de transporte**, que no forman parte del contrato de datos: el destino y la routing key (`@Value` sobre `parameters/<perfil>/messaging.yaml`, nunca hardcodeados) y el header de tipo que cada broker añade al publicar. Cómo se materializan depende del stack: `.claude/skills/keel-spring-<broker>/`.
+
+Esta envoltura es **contrato del DSL, no del generador**: la definición canónica está en `docs/dsl/messaging.md § La envoltura Keel` del workspace, y es lo que asume `contract.envelope: keel` de una suscripción. Aquí solo se documenta su realización en Java; un generador de otra tecnología debe emitir exactamente la misma forma.
+
 Detalle completo de stack, dependencias y configuración por perfiles: `conventions/project-layout.md`. Mapeo diseño → código capa por capa: `conventions/mapping.md`. Cómo se modela el interior del dominio (agregados ricos, invariantes, value objects y reparto de la validación): `conventions/domain-modeling.md`. Reglas que esta arquitectura nunca puede romper: `constitution.md`.

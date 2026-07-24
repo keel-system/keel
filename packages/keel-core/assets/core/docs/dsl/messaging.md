@@ -61,6 +61,39 @@ subscriptions:
 - Eventos en pasado y `PascalCase`: `ProductCreated`, no `CreateProduct`.
 - Un campo del `payload` (publicado o consumido) puede ser una colección con `list: true`, acotable con `constraints: { minItems, maxItems }`.
 
+### La envoltura Keel
+
+Ningún evento viaja desnudo: todo mensaje que publica un servicio Keel sale envuelto en la **envoltura estándar**, con dos claves de primer nivel. El `payload` declarado en el diseño ocupa `data`; `metadata` es **transversal** —la misma para todos los eventos, no se declara en el spec— y la estampa el servicio al emitir.
+
+```json
+{
+  "metadata": {
+    "eventId": "9f1c3b6e-2d4a-4a91-b0f2-5c7d8e0a1b23",
+    "eventType": "ProductCreated",
+    "eventVersion": 1,
+    "occurredAt": "2026-03-14T09:21:07.482Z",
+    "source": "product-service",
+    "correlationId": "1f7b0a52-33c9-4a1e-9a44-6c0f2b8d55e1"
+  },
+  "data": {
+    "productId": "3d2e1f00-8a44-4c9b-9f01-77b6c2d4e5a9",
+    "sku": "SKU-10493"
+  }
+}
+```
+
+| Campo | Tipo | Descripción |
+|---|---|---|
+| `eventId` | `uuid` | Id único de **esta ocurrencia**. Es la clave de deduplicación del consumidor: se estampa al emitir y nunca se regenera aguas abajo (una reentrega repite el mismo `eventId`). |
+| `eventType` | `string` | Nombre del evento en el diseño (`ProductCreated`). Sirve de discriminador cuando un canal transporta varios tipos. |
+| `eventVersion` | `int` | Versión del contrato del `payload`. Arranca en `1` y solo sube al romper compatibilidad. |
+| `occurredAt` | `timestamp` | Instante ISO-8601 en UTC en que **ocurrió el hecho** en el dominio, no el del envío (con `reliability: outbox` pueden distar). |
+| `source` | `string` | Nombre del servicio emisor (`service.name` del manifiesto). |
+| `correlationId` | `string` \| `null` | Correlación de la petición que originó el hecho; es lo que hila la traza end-to-end entre servicios. `null` si no hubo contexto de petición (p. ej. un job programado). |
+| `data` | objeto | El `payload` declarado en `publishing.events.<Evento>.payload`, con sus campos tal cual. |
+
+Esta es la forma que asume `envelope: keel` al describir el [contrato de recepción](#contrato-de-recepción-contract) de una suscripción, y la que **todo generador debe emitir**: es lo que permite que dos servicios Keel escritos en tecnologías distintas se consuman entre sí sin traductor. Cómo se materializa en cada stack (nombres de clase, serializador) es decisión del generador; la forma del cable, no.
+
 ## Suscripciones
 
 - Cada suscripción indica su `source`, el `payload` esperado y la operación local que dispara (`triggers`, referencia por nombre a `use-cases`).
@@ -80,7 +113,7 @@ subscriptions:
 | ¿Los campos llegan con otro nombre? | `wireName` en cada campo del `payload` |
 | ¿Qué hacemos con campos que envía y no declaramos? | `unknownFields` (`ignore` \| `fail`) |
 
-- `envelope: keel` — la fuente es otro servicio Keel y usa la envoltura estándar (metadata + data). `wrapped` — envoltura propia de la fuente, el payload cuelga de `payloadPath` (obligatorio). `none` — el mensaje **es** el payload. Por defecto se asume `keel` si el canal no es `external`, y `none` si lo es.
+- `envelope: keel` — la fuente es otro servicio Keel y usa la [envoltura estándar](#la-envoltura-keel) (`metadata` + `data`): el payload llega en `data` y la deduplicación sale de `metadata.eventId`. `wrapped` — envoltura propia de la fuente, el payload cuelga de `payloadPath` (obligatorio). `none` — el mensaje **es** el payload. Por defecto se asume `keel` si el canal no es `external`, y `none` si lo es.
 - `messageId` es la **clave de deduplicación**: con reentregas (`retry`, DLQ, at-least-once) es lo que evita procesar dos veces el mismo evento. Es la contraparte de la `idempotency` de la operación.
 - `wireName` solo es válido en contratos de sistemas externos (aquí y en `http-clients`): los identificadores del DSL van en inglés y `camelCase`, y `wireName` guarda el nombre real del cable (`product_id`, `numero_documento`). `keel validate` da error si aparece en una capa interna.
 

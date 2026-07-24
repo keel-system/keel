@@ -73,7 +73,10 @@ public record EventEnvelope<T>(EventMetadata metadata, T data) {
 // Gemelo de wire del evento de dominio: lo que sale del servicio. Existe para
 // que un cambio de serialización o de broker nunca obligue a tocar el dominio.
 function renderIntegrationEvent(model, event) {
-  const imports = new Set([`${subPackage(model, EVENTS_PKG)}.EventMetadata`]);
+  const imports = new Set([
+    `${subPackage(model, EVENTS_PKG)}.EventMetadata`,
+    'com.fasterxml.jackson.annotation.JsonIgnore'
+  ]);
   const components = event.fields.map((field) => {
     for (const name of field.imports) imports.add(name);
     const typeImport = domainTypeImport(model, field);
@@ -88,8 +91,12 @@ function renderIntegrationEvent(model, event) {
  *
  * Deliberadamente desacoplado del dominio: cambiar el broker o el formato de
  * serialización no debe alcanzar a domain/events.
+ *
+ * La metadata se conserva como componente (el bridge la necesita para construir
+ * la EventEnvelope) pero NO se serializa: la metadata autoritativa del mensaje
+ * es la del envelope, y duplicarla en 'data' confundiría al consumidor.
  */
-public record ${event.integrationClass}(EventMetadata metadata${payloadParams ? `, ${payloadParams}` : ''}) {
+public record ${event.integrationClass}(@JsonIgnore EventMetadata metadata${payloadParams ? `, ${payloadParams}` : ''}) {
 }`;
   return {
     path: javaPath(model, INTEGRATION_PKG, event.integrationClass),

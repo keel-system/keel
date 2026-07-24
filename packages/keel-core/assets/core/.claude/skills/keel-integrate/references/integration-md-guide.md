@@ -55,6 +55,8 @@ sale del diseño, es un **hueco**: repórtalo, no lo inventes.
 
 ## Eventos                                       ← solo si hay messaging
 ### Publicados
+<forma del mensaje: envoltura keel (metadata + data) — intro, una sola vez>
+### <EventName>                                  ← canal, garantía, emisores, ejemplo de `data`
 ### Suscripciones
 ```
 
@@ -79,6 +81,7 @@ endpoints:                        # solo audience: services | both
     path: /products/{productId}/price
     access: service product:read  # level: service + scopes exigidos
 events:
+  envelope: keel                  # envoltura de lo publicado: siempre keel (metadata + data)
   published:
     - name: ProductCreated
       channel: productEvents
@@ -86,6 +89,7 @@ events:
     - name: StockDepleted
       channel: inventoryEvents
       source: inventory-service
+      envelope: wrapped           # contract.envelope de esa suscripción
 errors:                           # catálogo deduplicado de las operaciones M2M
   - code: PRODUCT_NOT_FOUND
     http: 404
@@ -176,13 +180,51 @@ reintentar*. Usa siempre el status declarado en el diseño, nunca uno supuesto.
 
 ### Publicados
 
-Por evento de `messaging.publishing.events`:
+Ningún evento viaja desnudo: sale en la envoltura estándar de Keel (`metadata` + `data`), donde `data`
+es el payload del evento y `metadata` es transversal, igual para todos. Documéntala **una sola vez**,
+como intro en prosa de `### Publicados` y **sin encabezado propio** (los únicos encabezados bajo
+§Eventos son `### Publicados`, `### Suscripciones` y el nombre de cada evento, para no romper la regla
+de anchors). La definición canónica está en `docs/dsl/messaging.md § La envoltura Keel`: cópiala tal
+cual, no la reinventes.
+
+```markdown
+**Forma del mensaje.** Todo evento de esta sección viaja en la envoltura estándar de Keel. El payload
+del evento es el contenido de `data`; `metadata` es la misma para todos.
+
+​```json
+{
+  "metadata": {
+    "eventId": "9f1c3b6e-2d4a-4a91-b0f2-5c7d8e0a1b23",
+    "eventType": "ProductCreated",
+    "eventVersion": 1,
+    "occurredAt": "2026-03-14T09:21:07.482Z",
+    "source": "product-service",
+    "correlationId": "1f7b0a52-33c9-4a1e-9a44-6c0f2b8d55e1"
+  },
+  "data": { "productId": "3d2e1f00-8a44-4c9b-9f01-77b6c2d4e5a9", "sku": "SKU-10493" }
+}
+​```
+
+| Campo | Tipo | Descripción |
+|---|---|---|
+| metadata.eventId | uuid | Id único de esta ocurrencia. **Úsalo como clave de deduplicación**: la entrega es at-least-once y una reentrega repite el mismo `eventId`. |
+| metadata.eventType | string | Nombre del evento (`ProductCreated`). Discriminador si el canal transporta varios tipos. |
+| metadata.eventVersion | int | Versión del contrato de `data`. Sube solo al romper compatibilidad. |
+| metadata.occurredAt | timestamp | ISO-8601 UTC del instante en que ocurrió el hecho, no el del envío. |
+| metadata.source | string | Servicio emisor: `product-service`. |
+| metadata.correlationId | string \| null | Correlación de la petición que originó el hecho; propágala para conservar la traza end-to-end. `null` si no hubo contexto de petición. |
+| data | objeto | Payload del evento; su forma depende del `eventType` (ver cada evento abajo). |
+```
+
+Sustituye `source`, el `eventType` y el ejemplo de `data` por los del servicio real. Después, por
+evento de `messaging.publishing.events`:
 
 - **Canal lógico** y su propósito (el broker/topic real es decisión de despliegue, no se documenta).
 - **Garantía de entrega**: si `reliability: outbox`, "ningún evento se pierde si la transacción
   confirma"; si `best-effort`, dilo.
 - **Emitido por**: qué operaciones lo declaran en `emits`.
-- **Payload de ejemplo** en bloque ```json (con la forma de sus campos).
+- **Payload de ejemplo** en bloque ```json (con la forma de sus campos): es el contenido de `data`,
+  **no** el mensaje completo — la envoltura ya está documentada arriba y no se repite por evento.
 
 ### Suscripciones
 
@@ -191,7 +233,10 @@ operación de este servicio:
 
 - **Origen** (`source`) y **canal**.
 - **Contrato de recepción**: `envelope` (+ `payloadPath` si `wrapped`), `discriminator` (cómo se
-  reconoce este tipo en el canal), `messageId` (**clave de deduplicación**), `format`.
+  reconoce este tipo en el canal), `messageId` (**clave de deduplicación**), `format`. Con
+  `envelope: keel` no repitas la forma: remite a §Publicados → *Forma del mensaje* (es la misma
+  envoltura, ahora del lado de quien publica hacia este servicio). Con `wrapped`/`none`, descríbela
+  aquí, que es propia de la fuente.
 - **Payload esperado** (con `wireName` si el campo llega con otro nombre en el cable).
 - **Operación disparada** (`triggers`) y política `onFailure` (retry/backoff, deadLetter).
 
@@ -203,5 +248,8 @@ operación de este servicio:
 - [ ] §Endpoints abre con la obtención del token M2M; cada endpoint con tabla de metadatos (scopes),
       request/response con forma de payload y tabla de errores con acción recomendada.
 - [ ] §Eventos con publicados y suscripciones (contrato de recepción + onFailure) si hay `messaging`.
+- [ ] §Publicados abre con *Forma del mensaje* (envoltura `metadata` + `data` y tabla de metadata,
+      copiada de `docs/dsl/messaging.md`); los ejemplos por evento son el contenido de `data`, no el
+      mensaje completo, y la envoltura no se repite por evento.
 - [ ] Nada de operaciones `audience: users`, OpenAPI ni Postman en el documento.
 - [ ] Ningún dato inventado: los huecos del diseño se reportan, no se rellenan.
