@@ -13,6 +13,7 @@ import * as wrapper from './wrapper.js';
 import * as application from './application.js';
 import * as appTests from './app-tests.js';
 import * as config from './config.js';
+import * as migrations from './migrations.js';
 import * as docker from './docker.js';
 import * as mediator from './mediator.js';
 import * as logging from './logging.js';
@@ -45,6 +46,7 @@ const GENERATORS = [
   application,
   appTests,
   config,
+  migrations,
   docker,
   mediator,
   logging,

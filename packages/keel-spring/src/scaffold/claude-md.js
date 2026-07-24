@@ -94,8 +94,10 @@ export function generate(model) {
   if (layersPresent.persistence) {
     steps.push(
       '**persistence** (`specs/persistence.keel.yaml`): entidades `Jpa`, puertos y adaptadores ya generados; respeta ' +
-        '`consistency.transactionalBoundary` en los handlers y decide el esquema definitivo (production usa `ddl-auto: validate`). ' +
-        'Para tuning del datasource/Hikari y particularidades del dialecto, la skill `.claude/skills/keel-spring-database/SKILL.md`.'
+        '`consistency.transactionalBoundary` en los handlers. El esquema de los ambientes desplegados lo gobiernan las ' +
+        'migraciones de `src/main/resources/db/migration/` (production usa `ddl-auto: validate`): el baseline se exporta de ' +
+        'las entidades **ya finales** con `bash infra/export-schema.sh` en el cierre, no al empezar. ' +
+        'Para migraciones, tuning del datasource/Hikari y particularidades del dialecto, la skill `.claude/skills/keel-spring-database/SKILL.md`.'
     );
   }
   steps.push(
@@ -183,12 +185,25 @@ export function generate(model) {
     );
   }
 
+  // Gate de migraciones: se comprueba al final, cuando las entidades ya no cambian.
+  if (layersPresent.persistence) {
+    const step = selected.length > 0 ? 4 : 3;
+    lines.push(
+      `${step}. Migraciones: con las entidades ya finales, \`bash infra/export-schema.sh\`, revisa el DDL y cópialo como`,
+      '   `src/main/resources/db/migration/V1__baseline_schema.sql`; luego arranca con `PROFILE=local,migrations` sobre una',
+      '   BD **sin esquema** (recrea el contenedor de BD) y confirma que el arranque pasa el `validate`. Sin baseline el',
+      '   servicio no puede desplegarse: en `production` Hibernate no crea nada.'
+    );
+  }
+
   lines.push(
     '',
     `La skill \`/${SKILL}\` de este proyecto orquesta este flujo con los subagentes de \`.claude/agents/\`:`,
     '`keel-spring-code` (código, sin tests) en paralelo con `keel-spring-infra` (infraestructura arriba y sana), después',
     '`keel-spring-validate` (escenarios contra el servidor real, reseteando datos entre flujos) y al final',
-    '`keel-spring-quality` (pase de calidad no-conductual con la compilación en verde), seguido de una re-validación',
+    '`keel-spring-quality` (pase de calidad no-conductual con la compilación en verde' +
+      (layersPresent.persistence ? ', más el baseline de migraciones del punto 4' : '') +
+      '), seguido de una re-validación',
     'de los escenarios antes del commit.'
   );
 

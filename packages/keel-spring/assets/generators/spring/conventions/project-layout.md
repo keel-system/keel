@@ -32,7 +32,8 @@ services/<servicio>-spring/
 │   ├── docker-compose.yaml      # infraestructura de prueba + contenedor devtools (si el stack la necesita)
 │   ├── docker/Dockerfile.devtools  # toolbox Alpine con solo las CLIs del stack (psql, redis-cli, kcat, mc, aws…)
 │   ├── validate-infra.sh        # un check por tecnología: docker exec <svc>-devtools <cli>
-│   └── reset-db.sh              # vacía los datos de la BD (esquema intacto); se ejecuta antes de cada flujo FL-* (si la BD lo permite; H2 no lo necesita)
+│   ├── reset-db.sh              # vacía los datos de la BD (esquema y flyway_schema_history intactos); se ejecuta antes de cada flujo FL-* (si la BD lo permite; H2 no lo necesita)
+│   └── export-schema.sh         # exporta el DDL de las entidades a build/schema/baseline.sql (perfil schema-export); origen del baseline de migraciones
 └── src/
     ├── main/java/<base>/
     │   ├── application/         # SIN imports de Spring (desacoplada del framework)
@@ -72,6 +73,7 @@ services/<servicio>-spring/
     │           ├── ApiExceptionHandler          # @RestControllerAdvice central
     │           └── ErrorResponse                # contrato de error de la API
     ├── main/resources/          # application.yaml + application-<perfil>.yaml + parameters/<perfil>/*.yaml
+    │   └── db/migration/        # migraciones Flyway (V<n>__<snake>.sql); gobiernan el esquema en develop/production. Build deja el directorio vacío: el baseline lo produce el agente
     └── test/java/<base>/        # solo <Nombre>ApplicationTests (contextLoads) que deja build;
                                  # reservado para la suite unitaria del proceso posterior
 ```
@@ -110,10 +112,12 @@ Nota: `@LogExceptions` en el prototipo era decorativa (sin `@Aspect`); aquí se 
 
 Cuatro perfiles Spring: `local` (default), `develop`, `production` y `test`. El perfil activo se elige con la env var `PROFILE` (`application.yaml` base declara `spring.profiles.active: ${PROFILE:local}`). Cada `application-<perfil>.yaml` solo importa fragmentos `parameters/<perfil>/*.yaml` (uno por preocupación: `logging`, `db`, broker, `redis`, `oauth2`, `storage` — solo los que el stack necesita), con gradiente de externalización:
 
-- **local**: valores literales que coinciden con el `infra/docker-compose.yaml` de prueba; `ddl-auto: update`, `show-sql: true`.
-- **develop**: env vars con default (`${DB_USERNAME:...}`); `show-sql: false`.
-- **production**: env vars obligatorias sin default (`${DB_USERNAME}`); `ddl-auto: validate`, `logging root: WARN`.
-- **test**: H2 en memoria; `src/test/resources/application.yaml` lo activa para los tests.
+- **local**: valores literales que coinciden con el `infra/docker-compose.yaml` de prueba; `ddl-auto: update` y Flyway apagado (único perfil donde Hibernate gobierna el esquema, para poder iterar), `show-sql: true`.
+- **develop**: env vars con default (`${DB_USERNAME:...}`); `ddl-auto: validate` y Flyway encendido (`${FLYWAY_ENABLED:true}`); `show-sql: false`.
+- **production**: env vars obligatorias sin default (`${DB_USERNAME}`); `ddl-auto: validate`, Flyway encendido con `clean-disabled: true`, `logging root: WARN`.
+- **test**: H2 en memoria con `create-drop` y Flyway apagado (el DDL de las migraciones es del dialecto real); `src/test/resources/application.yaml` lo activa para los tests.
+
+Además hay dos perfiles **auxiliares y aditivos**, que se activan sobre otro (`PROFILE=local,<perfil>`) y no tienen fragmentos `parameters/`: `schema-export` (Hibernate escribe el DDL de las entidades en `build/schema/baseline.sql` y no toca la BD; lo usa `infra/export-schema.sh`) y `migrations` (Flyway aplica `db/migration/` y Hibernate solo valida — reproduce en local el gobierno por migraciones para probar el baseline). Existen para que nadie tenga que editar YAML a mano en el paso de migraciones.
 
 Regla general: **nada de valores quemados** salvo lo que es decisión de arquitectura y no de ambiente (`ddl-auto`, `show-sql`, `open-in-view`, serializers del broker, instancias `resilience4j` derivadas del diseño). El resto sale por env var, incluidos `server.port` (`${SERVER_PORT:8080}` en el `application.yaml` base) y los niveles de log (`LOG_LEVEL_ROOT` / `LOG_LEVEL_APP`). Tres excepciones al gradiente:
 
@@ -129,7 +133,7 @@ Cuando el compose levanta contenedores sondeables, el scaffolding añade el serv
 
 El script generado `infra/validate-infra.sh` corre un check por tecnología (`docker exec <servicio>-devtools <cliValidateCmd>`, o dentro del propio contenedor para Oracle) y sale con código `!= 0` si alguno falla. Lo usa el agente `keel-spring-infra` de la orquestación, tras `docker compose -f infra/docker-compose.yaml up -d` (o `podman compose`, respetando `CONTAINER_RUNTIME`) y antes de que se ejerciten los escenarios, para confirmar que la infraestructura responde. Detalle por tecnología en `conventions/infra-validation.md`.
 
-El agente de código de la orquestación (`keel-spring-code`, lanzado por `/keel-generate-spring`) completa, guiado por las skills `keel-spring-<tech>` instaladas según `keel-stack.json`: lógica de negocio de los stubs, invariantes y campos `computed`; de `messaging`, el `raise(...)` de cada evento en el método de negocio del agregado, la implementación del puerto de salida (`OutboxDispatcher` con outbox, `<Evento>Publisher` con best-effort — sustituyendo su stub), la config del broker si aplica y los `<Evento>Listener` (binding, retry/DLQ, dispatch de `triggers`); de `storage`, el bean del cliente y el adaptador completo de `FileStorage` (incluida la validación de content-type/tamaño según los `buckets` y las URLs prefirmadas); los `fallback` de http-clients (y el tipado de records/mapper solo si el diseño va en prosa sin `request`/`response` estructurados); las políticas `cache`/`idempotency` sobre Redis/Valkey, y migraciones/esquema definitivo (sin pruebas unitarias: su gate es `./gradlew build -x test` y el 100% de los escenarios `FL-*`). Las capas `security` y `http-clients` (puerto + adaptador + ACL + auth saliente) ya salen generadas (ver arriba).
+El agente de código de la orquestación (`keel-spring-code`, lanzado por `/keel-generate-spring`) completa, guiado por las skills `keel-spring-<tech>` instaladas según `keel-stack.json`: lógica de negocio de los stubs, invariantes y campos `computed`; de `messaging`, el `raise(...)` de cada evento en el método de negocio del agregado, la implementación del puerto de salida (`OutboxDispatcher` con outbox, `<Evento>Publisher` con best-effort — sustituyendo su stub), la config del broker si aplica y los `<Evento>Listener` (binding, retry/DLQ, dispatch de `triggers`); de `storage`, el bean del cliente y el adaptador completo de `FileStorage` (incluida la validación de content-type/tamaño según los `buckets` y las URLs prefirmadas); los `fallback` de http-clients (y el tipado de records/mapper solo si el diseño va en prosa sin `request`/`response` estructurados); y las políticas `cache`/`idempotency` sobre Redis/Valkey (sin pruebas unitarias: su gate es `./gradlew build -x test` y el 100% de los escenarios `FL-*`). El **baseline de migraciones** de `db/migration/` no es de esta fase: describe las entidades ya finales, así que lo produce el pase de calidad al cierre (`infra/export-schema.sh` → revisar → probar con `PROFILE=local,migrations`), guiado por `keel-spring-database/references/migrations.md`. Las capas `security` y `http-clients` (puerto + adaptador + ACL + auth saliente) ya salen generadas (ver arriba).
 
 ## Reglas de la estructura
 

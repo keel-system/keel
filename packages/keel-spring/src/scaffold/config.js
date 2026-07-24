@@ -179,13 +179,41 @@ function dbYaml(model, profile, dbName) {
     '  jpa:',
     '    hibernate:'
   ];
-  if (profile === 'production') {
-    lines.push('      # En producción el esquema lo gobiernan las migraciones, nunca Hibernate.', '      ddl-auto: validate');
+  if (profile === 'local') {
+    // Único perfil donde Hibernate gobierna el esquema: el ciclo de generación
+    // itera sobre las entidades y no puede pararse a escribir una migración por
+    // cambio. El baseline de db/migration/ se prueba aquí con PROFILE=local,migrations.
+    lines.push('      # Solo para iterar: en local Hibernate crea/altera el esquema.', '      ddl-auto: update');
   } else {
-    lines.push('      # El agente decide el esquema definitivo (migraciones); update solo para arrancar.', '      ddl-auto: update');
+    lines.push('      # El esquema lo gobiernan las migraciones de db/migration/, nunca Hibernate.', '      ddl-auto: validate');
   }
   lines.push(`    show-sql: ${profile === 'local'}`);
+  lines.push(...flywayLines(profile));
   return lines.join('\n') + '\n';
+}
+
+// Bloque spring.flyway del fragmento db. Las migraciones viven en
+// src/main/resources/db/migration (el default de Flyway: no hace falta declarar
+// locations) y se aplican al arrancar. Gradiente: apagadas en local (ahí manda
+// ddl-auto: update mientras se itera) y encendidas en los ambientes desplegados.
+function flywayLines(profile) {
+  if (profile === 'local') {
+    return [
+      '  flyway:',
+      '    # Apagadas mientras se itera; para probar el baseline: PROFILE=local,migrations.',
+      '    enabled: false'
+    ];
+  }
+  const lines = [
+    '  flyway:',
+    '    # Aplica db/migration/ al arrancar y lo registra en flyway_schema_history.',
+    '    # FLYWAY_ENABLED=false para delegar la migración a un paso previo al despliegue.',
+    `    enabled: ${envWithDefault(profile, 'FLYWAY_ENABLED', true)}`
+  ];
+  if (profile === 'production') {
+    lines.push('    # El borrado del esquema nunca es una opción en producción.', '    clean-disabled: true');
+  }
+  return lines;
 }
 
 function brokerYaml(model, profile) {
@@ -524,7 +552,11 @@ function testProfileFiles(model) {
         '    password: ""',
         '  jpa:',
         '    hibernate:',
-        '      ddl-auto: create-drop'
+        '      ddl-auto: create-drop',
+        '  flyway:',
+        '    # El esquema del perfil test lo crea Hibernate en H2: las migraciones de',
+        '    # db/migration/ están escritas para el dialecto real y no aplican aquí.',
+        '    enabled: false'
       ].join('\n') + '\n')
     );
   }

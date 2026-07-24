@@ -76,9 +76,14 @@ logging:
 
 ## Esquema por perfil
 
-- `local`/`develop`: `ddl-auto: update` — solo para arrancar; el esquema
-  definitivo lo decides tú (migraciones versionadas si el proyecto las adopta).
-- `production`: `ddl-auto: validate` — Hibernate nunca gobierna el esquema real.
+- `local`: `ddl-auto: update` y Flyway apagado — el único perfil donde Hibernate
+  gobierna el esquema, para poder iterar sobre las entidades.
+- `develop`/`production`: `ddl-auto: validate` y Flyway encendido
+  (`${FLYWAY_ENABLED:true}`) — el esquema lo ponen las migraciones de
+  `db/migration/`, Hibernate solo comprueba que cuadra. Ver `migrations.md`.
+- Auxiliares aditivos (`PROFILE=local,<perfil>`): `schema-export` (exporta el DDL
+  de las entidades a un archivo, sin tocar la BD) y `migrations` (reproduce en
+  local el gobierno por migraciones, para probar el baseline).
 - `test`: `create-drop` sobre H2 (ya generado). Verde en H2 ≠ verde en la BD
   real: los escenarios `FL-*` contra el servidor con la BD del compose son la
   validación que cuenta.

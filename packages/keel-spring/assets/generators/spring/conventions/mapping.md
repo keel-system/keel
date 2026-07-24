@@ -192,7 +192,7 @@ Sin esta capa (servicio sin estado propio), no se incluye JPA ni base de datos.
 |--------|--------|
 | `default.model: relational` | Spring Data JPA (stack por defecto: ver project-layout.md); `document`/`key-value` → Spring Data del almacén elegido con el usuario |
 | `entities.X.naturalKey` | Constraint única compuesta + método de búsqueda por clave natural en el repository |
-| `entities.X.indexes` | `@Index` en la entidad (o migración) por cada lista de campos |
+| `entities.X.indexes` | `@Index` en la entidad por cada lista de campos (`idx_<tabla>_<campos>`); de ahí pasa al baseline de migraciones al exportarlo |
 | `consistency.transactionalBoundary: per-operation` | La transacción por mensaje que abre `UseCaseMediator` ya lo cumple: la operación completa es la transacción |
 | `consistency.transactionalBoundary: per-aggregate` | El command debe tocar una sola raíz de agregado dentro de la transacción del mediator; nunca dos agregados en la misma transacción (si necesitas semántica especial, anota el handler con `@Transactional` y documenta la excepción) |
 | auditoría `createdAt`/`updatedAt` | Automática: `AuditableEntity` (`@MappedSuperclass` + JPA auditing). Si la entidad declara sus propios timestamps, build no hereda pero anota esos campos con `@CreatedDate`/`@LastModifiedDate` + `@EntityListeners` (se auto-pueblan igual) |

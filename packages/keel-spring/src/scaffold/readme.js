@@ -84,6 +84,16 @@ export function generate(model) {
     'PROFILE=production DB_URL=... DB_USERNAME=... DB_PASSWORD=... java -jar build/libs/*.jar',
     '```',
     '',
+    ...(layersPresent.persistence
+      ? [
+          'Hay además dos perfiles auxiliares, finos y aditivos, que se activan **sobre** otro',
+          '(`PROFILE=local,<perfil>`) y sirven para trabajar el esquema: `schema-export` (Hibernate',
+          'escribe el DDL de las entidades a `build/schema/baseline.sql` sin tocar la BD; lo usa',
+          '`infra/export-schema.sh`) y `migrations` (Flyway aplica `db/migration/` y Hibernate solo',
+          'valida, como en los ambientes desplegados).',
+          ''
+        ]
+      : []),
     ...productionSection(model),
     '## Qué genera el scaffolding y qué completa el agente',
     '',
@@ -111,6 +121,13 @@ export function generate(model) {
   );
 
   const pendingLayers = [];
+  if (layersPresent.persistence) {
+    pendingLayers.push(
+      '- `persistence`: producir el baseline de migraciones (`bash infra/export-schema.sh` con las entidades ya finales), ' +
+        'revisarlo y commitearlo como `src/main/resources/db/migration/V1__baseline_schema.sql`; probarlo sobre una BD sin ' +
+        'esquema con `PROFILE=local,migrations` (sin él, `production` no arranca: Hibernate solo valida).'
+    );
+  }
   if (layersPresent.security && stack.auth === 'keycloak') {
     pendingLayers.push('- `security`: el `SecurityFilterChain` ya está generado; crea el realm en el Keycloak de prueba (http://localhost:8180, admin/admin).');
   }
@@ -154,14 +171,19 @@ function productionSection(model) {
     '## Despliegue en producción',
     '',
     'Pasos para levantar el servicio con el perfil `production` (esquema gobernado por',
-    'migraciones — `ddl-auto: validate`, no crea ni altera tablas —, Swagger UI',
-    'deshabilitado y logs `root` en `WARN`):',
+    'las migraciones Flyway de `src/main/resources/db/migration/` — `ddl-auto: validate`,',
+    'Hibernate no crea ni altera tablas —, Swagger UI deshabilitado y logs `root` en `WARN`):',
     ''
   ];
 
   const steps = ['1. Construye el artefacto: `./gradlew build -x test` (produce `build/libs/*.jar`).'];
   if (layersPresent.persistence) {
-    steps.push('2. Aplica las migraciones de esquema contra la base de datos destino (en production Hibernate solo valida el esquema, no lo crea ni lo altera).');
+    steps.push(
+      '2. Comprueba que `src/main/resources/db/migration/` contiene el baseline (`V1__baseline_schema.sql`) ' +
+        'y las migraciones posteriores: Flyway las aplica al arrancar y registra cada una en `flyway_schema_history`. ' +
+        'Si tu ambiente exige aplicarlas en un paso previo al despliegue, arranca una única instancia con ' +
+        '`FLYWAY_ENABLED=true` y el resto con `FLYWAY_ENABLED=false`, o ejecuta Flyway por CLI contra la misma carpeta.'
+    );
   }
   const n = layersPresent.persistence ? 3 : 2;
   steps.push(
@@ -299,6 +321,7 @@ function productionParameters(model) {
 function optionalParameters(model) {
   const { layersPresent, stack, events } = model;
   const vars = ['SERVER_PORT', 'LOG_LEVEL_ROOT', 'LOG_LEVEL_APP'];
+  if (layersPresent.persistence) vars.push('FLYWAY_ENABLED');
   if (layersPresent.messaging && events.length > 0) vars.push('MESSAGING_DESTINATION');
   if (layersPresent.messaging && stack.broker === 'kafka') vars.push('KAFKA_GROUP_ID');
   if (usesOutbox(model)) vars.push('OUTBOX_RELAY_DELAY_MS', 'OUTBOX_RELAY_BATCH_SIZE', 'OUTBOX_PURGE_CRON', 'OUTBOX_PURGE_RETENTION_DAYS');

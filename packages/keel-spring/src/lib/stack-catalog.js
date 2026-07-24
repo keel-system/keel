@@ -17,14 +17,25 @@
 //                    (los Given de los flujos FL-* asumen BD limpia); mismos
 //                    placeholders y mismo cliVia que cliValidateCmd. Ausente ⇒
 //                    sin reset-db.sh (h2: reiniciar la app recrea el esquema).
+//                    SIEMPRE excluye flyway_schema_history: es el historial de
+//                    migraciones, no datos del servicio; truncarlo haría que el
+//                    siguiente arranque reaplicase el baseline sobre tablas ya
+//                    existentes y fallara.
+//   flywayDependencies  módulo Flyway del motor (Flyway 10+ saca cada dialecto de
+//                    flyway-core a su propio artefacto). Sin versión: la gestiona
+//                    el dependency management de Spring Boot.
 //   alpinePackages   paquetes apk a instalar en devtools para esa CLI ([] si se
 //                    instala por curl —sqlcmd, mc— o si basta la base).
+
+// Motor de migraciones (común a los seis dialectos) + su módulo por motor.
+const FLYWAY_CORE = "implementation 'org.flywaydb:flyway-core'";
 
 export const DATABASES = {
   postgresql: {
     id: 'postgresql',
     label: 'PostgreSQL',
     gradleDependencies: ["runtimeOnly 'org.postgresql:postgresql'"],
+    flywayDependencies: [FLYWAY_CORE, "runtimeOnly 'org.flywaydb:flyway-database-postgresql'"],
     image: 'postgres:16-alpine',
     port: 5432,
     user: (db) => db,
@@ -35,7 +46,7 @@ export const DATABASES = {
     cliVia: 'devtools',
     cliValidateCmd: "PGPASSWORD='{pass}' psql -h db -U {user} -d {db} -c 'SELECT 1' -q -t",
     cliResetCmd:
-      "PGPASSWORD='{pass}' psql -h db -U {user} -d {db} -v ON_ERROR_STOP=1 -q -c \"DO \\$\\$ DECLARE stmt text; BEGIN SELECT 'TRUNCATE TABLE ' || string_agg(quote_ident(tablename), ', ') || ' RESTART IDENTITY CASCADE' INTO stmt FROM pg_tables WHERE schemaname = 'public'; IF stmt IS NOT NULL THEN EXECUTE stmt; END IF; END \\$\\$;\"",
+      "PGPASSWORD='{pass}' psql -h db -U {user} -d {db} -v ON_ERROR_STOP=1 -q -c \"DO \\$\\$ DECLARE stmt text; BEGIN SELECT 'TRUNCATE TABLE ' || string_agg(quote_ident(tablename), ', ') || ' RESTART IDENTITY CASCADE' INTO stmt FROM pg_tables WHERE schemaname = 'public' AND tablename <> 'flyway_schema_history'; IF stmt IS NOT NULL THEN EXECUTE stmt; END IF; END \\$\\$;\"",
     alpinePackages: ['postgresql-client'],
     composeService: (db) => ({
       image: 'postgres:16-alpine',
@@ -48,6 +59,8 @@ export const DATABASES = {
     id: 'mysql',
     label: 'MySQL',
     gradleDependencies: ["runtimeOnly 'com.mysql:mysql-connector-j'"],
+    // MySQL y MariaDB comparten módulo Flyway (flyway-mysql).
+    flywayDependencies: [FLYWAY_CORE, "runtimeOnly 'org.flywaydb:flyway-mysql'"],
     image: 'mysql:8.0',
     port: 3306,
     user: (db) => db,
@@ -58,7 +71,7 @@ export const DATABASES = {
     cliVia: 'devtools',
     cliValidateCmd: "mysql -h db -u {user} -p'{pass}' -e 'SELECT 1' {db}",
     cliResetCmd:
-      "mysql -h db -u {user} -p'{pass}' -N -B -e 'SELECT CONCAT(\"TRUNCATE TABLE \", table_name, \";\") FROM information_schema.tables WHERE table_schema = \"{db}\"' | mysql -h db -u {user} -p'{pass}' --init-command='SET FOREIGN_KEY_CHECKS=0' {db}",
+      "mysql -h db -u {user} -p'{pass}' -N -B -e 'SELECT CONCAT(\"TRUNCATE TABLE \", table_name, \";\") FROM information_schema.tables WHERE table_schema = \"{db}\" AND table_name <> \"flyway_schema_history\"' | mysql -h db -u {user} -p'{pass}' --init-command='SET FOREIGN_KEY_CHECKS=0' {db}",
     alpinePackages: ['mysql-client'],
     composeService: (db) => ({
       image: 'mysql:8.0',
@@ -76,6 +89,7 @@ export const DATABASES = {
     id: 'mariadb',
     label: 'MariaDB',
     gradleDependencies: ["runtimeOnly 'org.mariadb.jdbc:mariadb-java-client'"],
+    flywayDependencies: [FLYWAY_CORE, "runtimeOnly 'org.flywaydb:flyway-mysql'"],
     image: 'mariadb:11',
     port: 3306,
     user: (db) => db,
@@ -86,7 +100,7 @@ export const DATABASES = {
     cliVia: 'devtools',
     cliValidateCmd: "mariadb -h db -u {user} -p'{pass}' -e 'SELECT 1' {db}",
     cliResetCmd:
-      "mariadb -h db -u {user} -p'{pass}' -N -B -e 'SELECT CONCAT(\"TRUNCATE TABLE \", table_name, \";\") FROM information_schema.tables WHERE table_schema = \"{db}\"' | mariadb -h db -u {user} -p'{pass}' --init-command='SET FOREIGN_KEY_CHECKS=0' {db}",
+      "mariadb -h db -u {user} -p'{pass}' -N -B -e 'SELECT CONCAT(\"TRUNCATE TABLE \", table_name, \";\") FROM information_schema.tables WHERE table_schema = \"{db}\" AND table_name <> \"flyway_schema_history\"' | mariadb -h db -u {user} -p'{pass}' --init-command='SET FOREIGN_KEY_CHECKS=0' {db}",
     alpinePackages: ['mariadb-client'],
     composeService: (db) => ({
       image: 'mariadb:11',
@@ -104,6 +118,7 @@ export const DATABASES = {
     id: 'sqlserver',
     label: 'SQL Server',
     gradleDependencies: ["runtimeOnly 'com.microsoft.sqlserver:mssql-jdbc'"],
+    flywayDependencies: [FLYWAY_CORE, "runtimeOnly 'org.flywaydb:flyway-sqlserver'"],
     image: 'mcr.microsoft.com/mssql/server:2022-latest',
     port: 1433,
     user: () => 'sa',
@@ -115,7 +130,7 @@ export const DATABASES = {
     cliVia: 'devtools',
     cliValidateCmd: "sqlcmd -S db -U {user} -P '{pass}' -C -Q 'SELECT 1'",
     cliResetCmd:
-      "sqlcmd -S db -U {user} -P '{pass}' -C -d {db} -Q \"EXEC sp_MSforeachtable 'ALTER TABLE ? NOCHECK CONSTRAINT ALL'; EXEC sp_MSforeachtable 'DELETE FROM ?'; EXEC sp_MSforeachtable 'ALTER TABLE ? WITH CHECK CHECK CONSTRAINT ALL'\"",
+      "sqlcmd -S db -U {user} -P '{pass}' -C -d {db} -Q \"EXEC sp_MSforeachtable 'ALTER TABLE ? NOCHECK CONSTRAINT ALL'; EXEC sp_MSforeachtable @command1 = 'DELETE FROM ?', @whereand = 'AND o.name <> ''flyway_schema_history'''; EXEC sp_MSforeachtable 'ALTER TABLE ? WITH CHECK CHECK CONSTRAINT ALL'\"",
     alpinePackages: [],
     composeService: () => ({
       image: 'mcr.microsoft.com/mssql/server:2022-latest',
@@ -137,6 +152,7 @@ export const DATABASES = {
     id: 'oracle',
     label: 'Oracle Database Free',
     gradleDependencies: ["runtimeOnly 'com.oracle.database.jdbc:ojdbc11'"],
+    flywayDependencies: [FLYWAY_CORE, "runtimeOnly 'org.flywaydb:flyway-database-oracle'"],
     image: 'gvenzl/oracle-free:23-slim',
     port: 1521,
     user: (db) => db,
@@ -150,7 +166,9 @@ export const DATABASES = {
     cliVia: 'dbcontainer',
     cliValidateCmd: "echo 'SELECT 1 FROM dual;' | sqlplus -s {user}/{pass}@//localhost:1521/{service}",
     cliResetCmd:
-      'printf "BEGIN FOR t IN (SELECT table_name FROM user_tables) LOOP EXECUTE IMMEDIATE \'TRUNCATE TABLE \' || t.table_name || \' CASCADE\'; END LOOP; END;\\n/\\n" | sqlplus -s {user}/{pass}@//localhost:1521/{service}',
+      // UPPER(): en Oracle el historial puede quedar como identificador citado en
+      // minúsculas ("flyway_schema_history") o en mayúsculas según la versión.
+      'printf "BEGIN FOR t IN (SELECT table_name FROM user_tables WHERE UPPER(table_name) <> \'FLYWAY_SCHEMA_HISTORY\') LOOP EXECUTE IMMEDIATE \'TRUNCATE TABLE \' || t.table_name || \' CASCADE\'; END LOOP; END;\\n/\\n" | sqlplus -s {user}/{pass}@//localhost:1521/{service}',
     alpinePackages: [],
     composeService: (db) => ({
       image: 'gvenzl/oracle-free:23-slim',
@@ -163,6 +181,8 @@ export const DATABASES = {
     id: 'h2',
     label: 'H2 (en memoria, sin contenedor)',
     gradleDependencies: ["runtimeOnly 'com.h2database:h2'"],
+    // H2 sigue soportado dentro de flyway-core: no tiene módulo propio.
+    flywayDependencies: [FLYWAY_CORE],
     image: null,
     port: null,
     user: () => 'sa',

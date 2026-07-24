@@ -55,6 +55,31 @@ error **bueno**: la fuente de verdad del esquema son las migraciones, no
 Hibernate. Corrige el esquema (o la entidad si el diseño cambió), nunca relajes
 a `update` en production.
 
+Causa habitual: el baseline de `db/migration/` se exportó antes de terminar de
+mapear las entidades. Vuelve a exportarlo (`bash infra/export-schema.sh`) y, si
+`V1` ya se aplicó en algún ambiente, el cambio va en una `V2` — nunca editando
+`V1`. Procedimiento en `migrations.md`.
+
+## `Schema-validation: missing table` con `db/migration/` vacío
+
+No hay baseline: Flyway no aplicó nada y Hibernate no crea nada fuera de `local`.
+No es un bug de configuración — es el paso pendiente de `migrations.md`.
+
+## `Migration checksum mismatch` al arrancar
+
+Se editó una migración ya aplicada. Flyway compara checksums a propósito.
+Revierte el archivo a su contenido original y mete el cambio en una migración
+nueva. No uses `repair` para tapar un cambio de contenido deliberado: solo
+aplica cuando la corrección del propio archivo es la reparación buscada y nadie
+más ha aplicado esa versión.
+
+## Tras `reset-db.sh` el arranque intenta reaplicar `V1`
+
+El historial de Flyway se perdió. El script excluye `flyway_schema_history` a
+propósito: si alguien quitó esa exclusión (o se truncó la tabla a mano), Flyway
+cree que la BD está virgen y choca con las tablas existentes. Restaura la
+exclusión y recrea la BD (`docker compose ... down -v`) para partir limpio.
+
 ## La app arranca pero `reset-db.sh` no limpia
 
 - El script vacía **datos** preservando esquema; si añadiste tablas después

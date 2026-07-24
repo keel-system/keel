@@ -73,6 +73,29 @@ test('el catálogo declara metadata de validación coherente por opción con con
   }
 });
 
+test('cada dialecto declara su módulo Flyway y protege el historial en el reset', () => {
+  for (const [id, entry] of Object.entries(DATABASES)) {
+    // Motor + módulo del dialecto: sin él Flyway no reconoce la BD en runtime.
+    assert.ok(Array.isArray(entry.flywayDependencies), `${id}: falta flywayDependencies`);
+    assert.ok(
+      entry.flywayDependencies.some((dep) => dep.includes('org.flywaydb:flyway-core')),
+      `${id}: flywayDependencies debe incluir flyway-core`
+    );
+    // El reset entre flujos vacía datos, no el historial de migraciones: si lo
+    // truncara, el arranque siguiente reaplicaría el baseline y fallaría.
+    if (entry.cliResetCmd) {
+      assert.ok(
+        /flyway_schema_history/i.test(entry.cliResetCmd),
+        `${id}: cliResetCmd debe excluir flyway_schema_history`
+      );
+    }
+  }
+  // H2 es el único sin módulo propio: su soporte vive dentro de flyway-core.
+  assert.equal(DATABASES.h2.flywayDependencies.length, 1);
+  // MySQL y MariaDB comparten módulo.
+  assert.deepEqual(DATABASES.mysql.flywayDependencies, DATABASES.mariadb.flywayDependencies);
+});
+
 test('el catálogo incorpora las técnicas de la referencia', () => {
   assert.ok(DATABASES.oracle && DATABASES.h2, 'faltan oracle/h2');
   assert.ok(BROKERS.snssqs, 'falta snssqs');

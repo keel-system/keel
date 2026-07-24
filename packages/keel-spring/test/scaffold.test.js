@@ -177,6 +177,12 @@ test('scaffoldService genera el proyecto completo con contenido clave', () => {
   const productionDb = read(workspace, 'src/main/resources/parameters/production/db.yaml');
   assert.ok(productionDb.includes('username: ${DB_USERNAME}')); // sin default: obligatoria
   assert.ok(productionDb.includes('ddl-auto: validate'));
+  // Migraciones: Hibernate solo gobierna el esquema en local; fuera manda Flyway.
+  assert.ok(localDb.includes('flyway:') && localDb.includes('enabled: false'));
+  assert.ok(developDb.includes('ddl-auto: validate'));
+  assert.ok(developDb.includes('enabled: ${FLYWAY_ENABLED:true}'));
+  assert.ok(productionDb.includes('enabled: ${FLYWAY_ENABLED:true}'));
+  assert.ok(productionDb.includes('clean-disabled: true'));
   assert.ok(appYaml.includes('port: ${SERVER_PORT:8080}')); // puerto parametrizable, 8080 por defecto
   // Niveles de log: literales en local, env var con default fuera (nunca impiden arrancar).
   assert.ok(read(workspace, 'src/main/resources/parameters/local/logging.yaml').includes('root: INFO'));
@@ -184,7 +190,10 @@ test('scaffoldService genera el proyecto completo con contenido clave', () => {
   assert.ok(productionLogging.includes('root: ${LOG_LEVEL_ROOT:WARN}'));
   const testProfile = read(workspace, 'src/main/resources/application-test.yaml');
   assert.ok(testProfile.includes('classpath:parameters/test/db.yaml'));
-  assert.ok(read(workspace, 'src/main/resources/parameters/test/db.yaml').includes('jdbc:h2:mem:testdb'));
+  const testDb = read(workspace, 'src/main/resources/parameters/test/db.yaml');
+  assert.ok(testDb.includes('jdbc:h2:mem:testdb'));
+  // El DDL de las migraciones es del dialecto real: no aplica al H2 del perfil test.
+  assert.ok(testDb.includes('flyway:') && testDb.includes('enabled: false'));
   assert.ok(read(workspace, 'src/test/resources/application.yaml').includes('active: test'));
 
   // Estilo Spring Initializr: wrapper incluido, .gitattributes y test de contexto.
@@ -1169,6 +1178,11 @@ test('sin capa persistence: POJOs sin JPA, sin repositorio ni datasource', () =>
 
   const buildGradle = read(workspace, 'build.gradle');
   assert.ok(!buildGradle.includes('data-jpa'));
+  // Sin esquema que migrar no hay mecanismo de migraciones.
+  assert.ok(!buildGradle.includes('flyway'));
+  assert.ok(!copied.some((file) => file.includes('db/migration')));
+  assert.ok(!copied.some((file) => file.includes('export-schema.sh')));
+  assert.ok(!copied.some((file) => file.includes('application-migrations.yaml')));
 
   // Sin persistence/messaging/cache no hay contenedores → sin compose.
   assert.ok(!copied.includes('infra/docker-compose.yaml'));
@@ -1593,4 +1607,40 @@ test('sin capa storage: ni límite multipart ni handlers de subida', () => {
   assert.ok(!read(workspace, 'src/main/resources/application.yaml').includes('multipart'));
   const handler = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/rest/ApiExceptionHandler.java');
   assert.ok(!handler.includes('MaxUploadSizeExceededException'));
+});
+
+test('migraciones: mecanismo Flyway completo y baseline a cargo del agente', () => {
+  const workspace = makeWorkspace();
+  scaffoldService({ ...loadFixture(), workspace });
+
+  // Motor + módulo del dialecto elegido (Flyway 10+ saca cada dialecto de core).
+  const buildGradle = read(workspace, 'build.gradle');
+  assert.ok(buildGradle.includes("implementation 'org.flywaydb:flyway-core'"));
+  assert.ok(buildGradle.includes("runtimeOnly 'org.flywaydb:flyway-database-postgresql'"));
+
+  // El directorio existe (con su README, que Flyway ignora por no ser .sql) pero
+  // sin baseline: el SQL lo produce el agente desde las entidades ya finales.
+  const migrationsReadme = read(workspace, 'src/main/resources/db/migration/README.md');
+  assert.ok(migrationsReadme.includes('V1__baseline_schema.sql'));
+  assert.ok(migrationsReadme.includes('infra/export-schema.sh'));
+  assert.ok(!exists(workspace, 'src/main/resources/db/migration/V1__baseline_schema.sql'));
+
+  // Perfiles auxiliares aditivos, sin fragmentos parameters/.
+  const schemaExport = read(workspace, 'src/main/resources/application-schema-export.yaml');
+  assert.ok(schemaExport.includes('jakarta.persistence.schema-generation.scripts.action: create'));
+  assert.ok(schemaExport.includes('create-target: build/schema/baseline.sql'));
+  assert.ok(schemaExport.includes('ddl-auto: none'));
+  const migrationsProfile = read(workspace, 'src/main/resources/application-migrations.yaml');
+  assert.ok(migrationsProfile.includes('ddl-auto: validate'));
+  assert.ok(migrationsProfile.includes('enabled: true'));
+
+  // Script de exportación: usa el perfil aditivo y deja el archivo esperado.
+  const exportScript = read(workspace, 'infra/export-schema.sh');
+  assert.ok(exportScript.includes('PROFILE=local,schema-export ./gradlew bootRun'));
+  assert.ok(exportScript.includes('build/schema/baseline.sql'));
+
+  // El reset entre flujos preserva el historial: truncarlo haría que el siguiente
+  // arranque reaplicase el baseline sobre tablas ya existentes.
+  // (el comando va entre comillas simples de bash: sq() reescribe las internas)
+  assert.ok(read(workspace, 'infra/reset-db.sh').includes('flyway_schema_history'));
 });

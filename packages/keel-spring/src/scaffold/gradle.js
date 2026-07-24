@@ -18,6 +18,10 @@ export function generate(model) {
     dependencies.push(
       "implementation 'org.springframework.boot:spring-boot-starter-data-jpa'",
       ...(DATABASES[stack.database]?.gradleDependencies ?? []),
+      // Migraciones de esquema: motor + módulo del dialecto elegido. Gobiernan el
+      // esquema en develop/production (ahí Hibernate solo valida); en local están
+      // apagadas mientras se itera con ddl-auto: update.
+      ...(DATABASES[stack.database]?.flywayDependencies ?? []),
       "testRuntimeOnly 'com.h2database:h2'"
     );
   }

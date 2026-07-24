@@ -49,10 +49,10 @@ flowchart TB
     GATE2 -->|"blockers o escenario que contradice el spec"| STOP2[/"Detenerse: proponer cambio a los<br/>artefactos, no acomodar el código"/]
     GATE2 -->|"todos los escenarios OK (100%)"| QUALITY
 
-    QUALITY["Fase 3 — keel-spring-quality<br/>pase no-conductual + ./gradlew build -x test en verde"]
+    QUALITY["Fase 3 — keel-spring-quality<br/>pase no-conductual + ./gradlew build -x test en verde<br/>+ baseline de migraciones (con persistence)"]
     QUALITY --> REVAL["Re-validación: keel-spring-validate (1 vez)<br/>confirma que la matriz sigue 100% OK"]
     REVAL --> GATE3{Gating fase 3}
-    GATE3 -->|"quality KO o re-validación en FALLO<br/>→ revertir el pase de calidad"| STOP3[/"Detenerse y reportar"/]
+    GATE3 -->|"quality KO, baseline KO<br/>o re-validación en FALLO<br/>→ revertir el pase de calidad"| STOP3[/"Detenerse y reportar"/]
     GATE3 -->|OK| README["Actualizar README<br/>guía de despliegue productivo<br/>(pasos + parámetros de parameters/production/*)"]
     README --> CLOSE["Cierre: compose down · commit<br/>«Generado desde specs/&lt;servicio&gt; v&lt;version&gt;»<br/>+ resumen (matriz, remaining, blockers, designGaps)"]
 ```
@@ -71,7 +71,7 @@ determinista de esa sección; el orquestador la reconcilia con el código final.
 | `keel-spring-code` | Completa TODOs, lógica de negocio, invariantes y adaptadores del stack hasta `./gradlew build -x test` en verde. Antes de cada handler ejecuta la auditoría de [flow-fidelity](conventions/flow-fidelity.md). | `.claude/CLAUDE.md` del proyecto (orden de capas), `architecture.md`, `constitution.md`, `specs/`, conventions ([mapping](conventions/mapping.md) estricto) y las skills `keel-spring-<tech>` del stack (SKILL.md primero, `references/` bajo demanda). | No escribe pruebas unitarias ni ejecuta `./gradlew test`; no toca contenedores, no ejecuta `bootRun` ni escenarios funcionales. |
 | `keel-spring-infra` | Levanta `infra/docker-compose.yaml` con docker o podman (detección: `$CONTAINER_RUNTIME` → `docker` → `podman`), sondea con `infra/validate-infra.sh` (reintentos) y deja la infraestructura **arriba** para la validación. Con auth, prepara lo mínimo para obtener token. | [infra-validation](conventions/infra-validation.md) (sondeo por tecnología vía el contenedor `devtools`), la reference de auth del stack. | Nunca edita código del proyecto; solo corrige causas operativas (puerto ocupado, contenedor viejo). No baja la infraestructura al terminar. |
 | `keel-spring-validate` | **Gate de la generación** (única red de seguridad funcional: exige 100% de escenarios OK). Arranca el servidor real (`./gradlew bootRun`) y ejecuta los flujos `FL-*` de `specs/validation-scenarios.md` **secuencialmente**, con `bash infra/reset-db.sh` antes de cada flujo (con H2, reinicio del servidor). Verifica el **Then** completo: status, headers y efectos observables inspeccionando BD/broker/storage vía `devtools`. | `specs/validation-scenarios.md`, la sección Verificación del `.claude/CLAUDE.md`, [infra-validation](conventions/infra-validation.md) y el reporte del agente de infraestructura. | No corrige código (documenta request/response/esperado) ni siembra datos a mano; no baja la infraestructura. |
-| `keel-spring-quality` | Pase de higiene **no-conductual** (imports, constructor injection, `final`, excepciones tipadas, código muerto) con `./gradlew build -x test` en verde; la red de seguridad conductual es la re-validación de escenarios que lanza el orquestador después. | [project-layout](conventions/project-layout.md), [mapping](conventions/mapping.md) (transaccionalidad). | Nada conductual: validaciones, firmas, status HTTP, eventos, `@Transactional` — se reportan en `remaining`, no se aplican. |
+| `keel-spring-quality` | Pase de higiene **no-conductual** (imports, constructor injection, `final`, excepciones tipadas, código muerto) con `./gradlew build -x test` en verde; la red de seguridad conductual es la re-validación de escenarios que lanza el orquestador después. Con capa `persistence`, además el **baseline de migraciones**: exporta el DDL de las entidades ya finales (`infra/export-schema.sh`), lo revisa, lo commitea como `db/migration/V1__baseline_schema.sql` y lo prueba con `PROFILE=local,migrations` sobre una BD sin esquema. | [project-layout](conventions/project-layout.md), [mapping](conventions/mapping.md) (transaccionalidad), `keel-spring-database/references/migrations.md`. | Nada conductual: validaciones, firmas, status HTTP, eventos, `@Transactional` — se reportan en `remaining`, no se aplican. No relaja `ddl-auto` fuera de `local` ni usa `baseline-on-migrate` para forzar el arranque. |
 
 Regla común: ningún agente pregunta al usuario — registra sus bloqueos en `blockers`
 y termina; decide el orquestador. Y ningún hueco del diseño se resuelve en silencio
@@ -87,6 +87,7 @@ en el código: se propone como cambio a los artefactos (`designGaps`).
 | `failures` (escenario, request, response, esperado) | `keel-spring-validate` | `keel-spring-code` (relanzado) | Evidencia **exacta** para el ciclo código→validación. |
 | `blocking: systemic \| scoped` | `keel-spring-validate` | Orquestador | Contar los ciclos de fix: ver «Ciclos de fix» abajo. |
 | `remaining` | `keel-spring-quality` | Resumen final | Hallazgos conductuales pendientes de decisión humana. |
+| `baseline` | `keel-spring-quality` | Orquestador | Gate de desplegabilidad: `KO` → relanzar una vez con el error; sin `OK` el commit lo dice explícitamente (production no arrancaría). |
 | `scenarios` (2ª pasada) | `keel-spring-validate` (re-validación) | Orquestador | Confirmar que el pase de calidad no cambió comportamiento antes del commit. |
 | `blockers` / `designGaps` | Cualquiera | Usuario | Contradicciones o huecos del diseño: se detiene la orquestación o se consolidan en el resumen; nunca se resuelven relanzando. |
 

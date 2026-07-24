@@ -80,8 +80,12 @@ bash infra/reset-db.sh    # respeta CONTAINER_RUNTIME; datos fuera, esquema inta
 ```
 
 El script vacía los datos vía el CLI de la BD del stack (mismo mecanismo devtools
-que `validate-infra.sh`) **preservando el esquema** (lo crea Hibernate); las tablas
-de outbox/idempotencia, si existen, son tablas del mismo esquema y quedan incluidas.
+que `validate-infra.sh`) **preservando el esquema**; las tablas de
+outbox/idempotencia, si existen, son tablas del mismo esquema y quedan incluidas.
+Una tabla queda fuera a propósito: `flyway_schema_history`, el historial de
+migraciones. No son datos del servicio, y truncarlo haría que el siguiente arranque
+con migraciones activas intentase reaplicar el baseline sobre tablas existentes y
+fallara. No quites esa exclusión del script.
 El reset es **por flujo, no entre escenarios**: dentro de un flujo el escenario A
 crea el estado que el escenario B necesita (p. ej. el duplicado que B verifica).
 
