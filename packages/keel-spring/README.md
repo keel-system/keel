@@ -28,6 +28,6 @@ cd services/<servicio>-spring && docker compose -f infra/docker-compose.yaml up 
 
 | Paquete | DSL Keel |
 |---------|----------|
-| keel-spring 0.1.x | `keel: "2.0"` |
+| keel-spring 0.1.x | `keel: "2.0"`, `keel: "2.1"` |
 
 El contrato completo del generador está en [`assets/generators/spring/README.md`](assets/generators/spring/README.md). Para crear un generador de otra tecnología con este mismo patrón: `docs/building-a-generator.md` del workspace (o `packages/keel-core/assets/core/docs/building-a-generator.md` en el monorepo).

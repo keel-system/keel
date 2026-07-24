@@ -3,8 +3,9 @@
 Build deja un baseline **correcto para el caso común** (escalares, enums, `@Id`,
 `@Column` con nullable/unique/length/precision, `@Table` con índices y clave
 natural, auditoría createdAt/updatedAt, value object de un nivel aplanado a
-columnas con prefijo, composición interna de agregado con `@JoinColumn`,
-referencia por id entre agregados). Esta referencia cubre lo que build **no**
+columnas con prefijo, colecciones de valores sin identidad —`list`— como tablas
+de elementos con su `@Embeddable`, composición interna de agregado con
+`@JoinColumn`, referencia por id entre agregados). Esta referencia cubre lo que build **no**
 resuelve y que el diseño puede exigir: aquí **ajustas/extiendes** el código
 generado, sin reescribir el patrón puerto + adaptador ni el mapeo `toDomain`/`toJpa`.
 
@@ -47,16 +48,21 @@ Antes de tocar tipos de columna del dialecto, lee `references/dialects/<database
 ## 2. Value objects
 
 ### Qué dejó build
-- VO compuesto de **un nivel escalar** → columnas aplanadas con prefijo
-  (`<field>_<sub>`), reconstruido en `toDomain`/`toJpa`. El VO de dominio es un
-  `record` puro en `domain/valueobject`.
+- VO compuesto de **un nivel escalar** (campo suelto) → columnas aplanadas con
+  prefijo (`<field>_<sub>`), reconstruido en `toDomain`/`toJpa`. El VO de dominio
+  es un `record` puro en `domain/valueobject`.
+- **Colección de VOs de un nivel** (`type: <VO>, list: true`) → completa:
+  `@ElementCollection List<<VO>Jpa>` con `@CollectionTable(name = "<entidad>_<campo>")`,
+  el `@Embeddable <VO>Jpa` (espejo de columnas) y el mapeo bidireccional en el
+  adaptador. **No intervienes** salvo que el VO tenga un VO anidado dentro.
+- **Colección de escalares/enums** (`type: string|uuid|<Enum>, list: true`) →
+  completa: tabla de elementos con `@Column` (o `@Enumerated` para enum). No intervienes.
 
 ### Cuándo intervienes
-- **VO anidado** (VO dentro de VO) y **colección de VOs**: build deja un
-  `// TODO (agente)` en la entidad `XxxJpa` y en el adaptador. Resuélvelo con:
-  - `@Embeddable` en el VO + `@Embedded` (o `@Embedded @AttributeOverrides` para
-    renombrar columnas) en la entidad — la vía natural para VO anidados.
-  - `@ElementCollection` + `@CollectionTable` para colección de VOs escalares.
+- **VO anidado** (VO dentro de VO), suelto o dentro de una colección: build deja
+  un `// TODO (agente)` en la `XxxJpa` (y en el `<VO>Jpa` embeddable) y en el
+  adaptador. Resuélvelo con `@Embeddable` en el VO interno + `@Embedded`
+  (o `@Embedded @AttributeOverrides` para renombrar columnas).
 - **Promover el aplanado a `@Embeddable`**: puedes convertir el aplanado de build
   en un `@Embeddable` reutilizable si varias entidades comparten el mismo VO. Es
   opcional; el aplanado por columnas ya es válido para el caso de un nivel.

@@ -60,8 +60,25 @@ export function resolveType(typeRef, domainTypes = {}) {
  * Combina las constraints del campo con las del value type escalar (aplanado).
  */
 export function beanValidationAnnotations(field, resolved) {
-  const annotations = [];
   const constraints = { ...resolved.constraints, ...(field.constraints ?? {}) };
+
+  // Campo colección: las anotaciones son del contenedor, no del elemento.
+  // minItems/maxItems acotan la cardinalidad; required significa "presente y no vacío".
+  // Las constraints del elemento (pattern, maxLength…) las aplica el agente al
+  // implementar, inline en el genérico (ver conventions/mapping.md).
+  if (field.list) {
+    const annotations = [];
+    if (field.required) annotations.push('@NotEmpty');
+    if (constraints.minItems != null || constraints.maxItems != null) {
+      const parts = [];
+      if (constraints.minItems != null) parts.push(`min = ${constraints.minItems}`);
+      if (constraints.maxItems != null) parts.push(`max = ${constraints.maxItems}`);
+      annotations.push(`@Size(${parts.join(', ')})`);
+    }
+    return annotations;
+  }
+
+  const annotations = [];
   const isString = resolved.javaType === 'String';
 
   if (field.required) {

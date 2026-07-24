@@ -223,6 +223,18 @@ function collectInternalEntities(model, root) {
 
 function renderToDomain(model, entity, imports) {
   const args = domainMembers(model, entity).map((member) => {
+    if (member.kind === 'field' && member.field.list) {
+      // Colección (list): escalar/enum copia directa; VO reconstruido desde su XxxJpa.
+      const getter = `jpa.get${capitalize(member.name)}()`;
+      if (member.field.kind !== 'composite') return getter;
+      const vo = model.valueObjects.find((v) => v.name === member.field.elementJavaType);
+      if (!vo || vo.fields.some((sub) => sub.kind === 'composite')) {
+        return `${getter}.stream().map(e -> null /* TODO (agente): reconstruir ${member.field.elementJavaType} (value object anidado) */).toList()`;
+      }
+      imports.add(`${subPackage(model, 'domain.valueobject')}.${vo.name}`);
+      const subs = vo.fields.map((sub) => `e.get${capitalize(sub.name)}()`);
+      return `${getter}.stream().map(e -> new ${vo.name}(${subs.join(', ')})).toList()`;
+    }
     if (member.kind === 'field' && member.field.kind === 'composite') {
       const vo = model.valueObjects.find((v) => v.name === member.field.javaType);
       if (!vo) return `null /* TODO (agente): mapear ${member.field.javaType} */`;
@@ -265,6 +277,32 @@ function renderToJpa(model, entity, imports) {
       }
       if (member.subs.length === 0) {
         lines.push(`        // TODO (agente): mapear el value object ${member.field.javaType}.`);
+      }
+    } else if (member.kind === 'elementCollection') {
+      imports.add('java.util.ArrayList');
+      const getter = `domain.get${capitalize(member.name)}()`;
+      if (member.element.kind === 'vo') {
+        // VO → su espejo XxxJpa (setters); un VO anidado deja el elemento a medias para el agente.
+        imports.add(`${subPackage(model, JPA_PKG)}.${member.element.javaType}`);
+        const vo = model.valueObjects.find((v) => v.name === member.field.elementJavaType);
+        const nested = !vo || vo.fields.some((sub) => sub.kind === 'composite');
+        const jpaType = member.element.javaType;
+        const mapping = nested
+          ? `${jpaType} e = new ${jpaType}(); /* TODO (agente): copiar campos de ${member.field.elementJavaType} (value object anidado) */ return e;`
+          : vo.fields
+              .map((sub) => `                    e.set${capitalize(sub.name)}(v.${sub.name}());`)
+              .join('\n');
+        const lambda = nested
+          ? `v -> { ${mapping} }`
+          : `v -> {\n                    ${jpaType} e = new ${jpaType}();\n${mapping}\n                    return e;\n                }`;
+        // Tipo explícito en ArrayList: el diamante no infiere a través del
+        // stream().map(lambda de bloque).toList() encadenado.
+        lines.push(
+          `        jpa.set${capitalize(member.name)}(new ArrayList<${jpaType}>(${getter}.stream().map(${lambda}).toList()));`
+        );
+      } else {
+        // Escalar/enum: copia directa de la lista.
+        lines.push(`        jpa.set${capitalize(member.name)}(new ArrayList<>(${getter}));`);
       }
     } else if (member.kind === 'relationMany') {
       // Lista mutable: Hibernate gestiona la colección.

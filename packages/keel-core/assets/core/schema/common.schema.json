@@ -38,7 +38,17 @@
         "minLength": { "type": "integer", "minimum": 0 },
         "maxLength": { "type": "integer", "minimum": 1 },
         "pattern": { "type": "string" },
-        "scale": { "type": "integer", "minimum": 0, "description": "Decimales para tipos decimal." }
+        "scale": { "type": "integer", "minimum": 0, "description": "Decimales para tipos decimal." },
+        "minItems": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Mínimo de elementos de la colección. Solo válido en campos con list: true."
+        },
+        "maxItems": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Máximo de elementos de la colección. Solo válido en campos con list: true."
+        }
       }
     },
     "field": {
@@ -70,6 +80,11 @@
           "type": "string",
           "minLength": 1,
           "description": "Nombre real del campo en el mensaje o respuesta de un sistema externo, cuando no coincide con el nombre del DSL (ej. product_id). Solo válido en contratos de sistemas externos: messaging.subscriptions y http-clients."
+        },
+        "list": {
+          "type": "boolean",
+          "default": false,
+          "description": "El campo es una colección de valores del tipo declarado. Solo válido en payloads y contratos (use-cases, messaging, http-clients); las colecciones del dominio se modelan con relations."
         },
         "required": { "type": "boolean", "default": false },
         "unique": { "type": "boolean", "default": false },
@@ -105,6 +120,24 @@
           "if": { "properties": { "type": { "const": "file" } }, "required": ["type"] },
           "then": { "required": ["bucket"] },
           "else": { "not": { "required": ["bucket"] } }
+        },
+        {
+          "if": { "properties": { "list": { "const": true } }, "required": ["list"] },
+          "then": {
+            "properties": {
+              "id": { "const": false },
+              "unique": { "const": false },
+              "generated": { "const": false },
+              "type": { "not": { "const": "file" } }
+            }
+          },
+          "else": {
+            "properties": {
+              "constraints": {
+                "allOf": [{ "not": { "required": ["minItems"] } }, { "not": { "required": ["maxItems"] } }]
+              }
+            }
+          }
         }
       ]
     },

@@ -36,6 +36,16 @@ operations:
     errors:
       - { code: PRODUCT_NOT_FOUND, when: No existe producto con ese id., http: 404 }
 
+  getProductsByIds:
+    description: Resuelve varios productos por sus identificadores en una sola llamada.
+    kind: query
+    input:
+      fields:
+        ids: { type: uuid, list: true, required: true, constraints: { minItems: 1, maxItems: 100 } }
+    output: { entity: Product, list: true }
+    rules:
+      - Los identificadores inexistentes se omiten del resultado, en el mismo orden que la petición.
+
   reconcilePrices:
     description: Reconcilia precios contra el servicio de pricing cada noche.
     kind: command
@@ -48,6 +58,7 @@ operations:
 
 - `kind`: `command` (muta estado) o `query` (solo lee). Default `command`.
 - `input`/`output` admiten tres formas: `"void"`, `{ fields: {...} }`, o `{ entity: Product }` con opcionales `list`, `paginated`, `exclude: [...]`.
+- Un campo de un payload `{ fields: {...} }` puede ser una **colección** con `list: true`, y acotarla con `constraints: { minItems, maxItems }` (la cardinalidad de la colección, no del elemento). Es la forma correcta de declarar una entrada por lotes — nunca `type: json` con la cota escrita en prosa. `required: true` sobre un campo `list` significa "presente y no vacío".
 - En un `input` con forma `{ entity: X }`, los campos `generated` y `computed` de la entidad quedan implícitamente fuera: nunca los envía el cliente.
 - En los outputs y eventos, los campos `sensitive` de la entidad quedan excluidos por defecto; `exclude` recorta además campos concretos de esa operación (`keel validate` comprueba que existen en la entidad). Para exponer un campo sensible hay que declararlo explícitamente con la forma `{ fields: {...} }`.
 - `exclude` admite **dot-paths** para no exponer un campo de una **entidad hija** o de un **value object** anidado (`output: { entity: Order, exclude: [internalNote, lines.costPrice, address.zip] }`). Cada segmento intermedio debe ser una relación (entidad hija) o un value object compuesto; el último, un campo o relación de la entidad/tipo alcanzado. Un dot-path que cruza a otro agregado (relación serializada por id, sin anidamiento) es un warning: no hay nada anidado que excluir.

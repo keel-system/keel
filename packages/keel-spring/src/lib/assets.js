@@ -14,7 +14,7 @@ export const TECH = 'spring';
 export const SKILL = 'keel-generate-spring';
 
 // Versiones del DSL keel que este generador sabe mapear (manifest.keel del servicio).
-export const SUPPORTED_DSL = ['2.0'];
+export const SUPPORTED_DSL = ['2.0', '2.1'];
 
 // Stack del scaffolding generado (un solo sitio para actualizarlo).
 export const SPRING_BOOT_VERSION = '3.5.3';

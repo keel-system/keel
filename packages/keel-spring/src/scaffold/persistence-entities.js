@@ -19,7 +19,17 @@ export const JPA_PKG = 'infrastructure.persistence.entities';
 export function jpaMembers(model, entity) {
   const members = [];
   for (const field of entity.fields) {
-    if (field.kind === 'composite') {
+    if (field.list) {
+      // Colección de valores sin identidad (DSL 2.1 list): tabla de elementos
+      // (@ElementCollection). El elemento es escalar/enum (columna directa) o un
+      // value object (su espejo @Embeddable XxxJpa, generado por embeddables.js).
+      members.push({
+        kind: 'elementCollection',
+        field,
+        name: field.name,
+        element: field.kind === 'composite' ? { kind: 'vo', javaType: `${field.elementJavaType}Jpa` } : { kind: field.kind, javaType: field.elementJavaType }
+      });
+    } else if (field.kind === 'composite') {
       const vo = model.valueObjects.find((v) => v.name === field.javaType);
       members.push({
         kind: 'vo',
@@ -212,6 +222,39 @@ function renderJpaEntity(model, entity) {
         `    @Column(name = "${snakeCase(member.relation.name)}_id"${nullable})\n    private UUID ${member.name};`
       );
       pushAccessor(member.name, 'UUID');
+    } else if (member.kind === 'elementCollection') {
+      // Tabla de elementos: <entidad>_<campo>, FK <entidad>_id a la raíz.
+      imports.add('jakarta.persistence.ElementCollection');
+      imports.add('jakarta.persistence.CollectionTable');
+      imports.add('jakarta.persistence.JoinColumn');
+      imports.add('java.util.List');
+      imports.add('java.util.ArrayList');
+      const table = `${snakeCase(entity.name)}_${snakeCase(member.name)}`;
+      const collAnnotations = [
+        '@ElementCollection',
+        `@CollectionTable(name = "${table}", joinColumns = @JoinColumn(name = "${snakeCase(entity.name)}_id"))`
+      ];
+      const { element } = member;
+      if (element.kind === 'vo') {
+        // Elemento value object: su espejo @Embeddable XxxJpa (embeddables.js),
+        // en este mismo paquete (JPA_PKG): sin import.
+      } else if (element.kind === 'enum') {
+        imports.add('jakarta.persistence.Enumerated');
+        imports.add('jakarta.persistence.EnumType');
+        imports.add('jakarta.persistence.Column');
+        imports.add(`${subPackage(model, 'domain.enums')}.${element.javaType}`);
+        collAnnotations.push('@Enumerated(EnumType.STRING)');
+        collAnnotations.push(`@Column(name = "${snakeCase(member.name)}")`);
+      } else {
+        // Escalar: columna directa en la tabla de elementos.
+        for (const name of member.field.imports) imports.add(name);
+        imports.add('jakarta.persistence.Column');
+        collAnnotations.push(`@Column(name = "${snakeCase(member.name)}")`);
+      }
+      declarations.push(
+        `    ${collAnnotations.join('\n    ')}\n    private List<${element.javaType}> ${member.name} = new ArrayList<>();`
+      );
+      pushAccessor(member.name, `List<${element.javaType}>`);
     } else if (member.kind === 'relationMany') {
       const childJpa = `${member.relation.entity}Jpa`;
       let annotation;

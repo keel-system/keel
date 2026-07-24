@@ -87,6 +87,11 @@ por métodos que aplican las reglas del agregado. El campo interno sí es mutabl
 de rehidratación hace copia defensiva (`new ArrayList<>(...)`) precisamente para que esos métodos
 puedan operar sobre una lista que salió inmutable del adaptador.
 
+Aplica igual a las **colecciones de valores sin identidad** (campos `list` del diseño: `tags`,
+`discounts`): build ya las genera con el mismo patrón (lista interna mutable, getter `List.copyOf`,
+copia defensiva). Añade tú los métodos de negocio que las alteran aplicando las reglas —no expongas
+un setter ni dejes que se muten por el getter.
+
 ```java
 public List<OrderLine> getLines() {
     return List.copyOf(lines);

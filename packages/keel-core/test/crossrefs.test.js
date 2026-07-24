@@ -896,3 +896,92 @@ test('messaging sin channels ni channel sigue validando limpio (retrocompatibili
   assert.deepEqual(errors, []);
   assert.deepEqual(warnings, []);
 });
+
+// --- Cardinalidad en campos (DSL 2.1: list) ---
+
+const domainForList = () => ({
+  entities: { Product: entity({ name: { type: 'string' } }) },
+  aggregates: { Catalog: { root: 'Product' } },
+});
+
+const batchLayers = (idsField) => ({
+  domain: domainForList(),
+  'use-cases': {
+    operations: {
+      getProductsByIds: {
+        description: 'Resuelve varios productos por sus identificadores en una sola llamada.',
+        kind: 'query',
+        internal: true,
+        input: { fields: { ids: idsField } },
+        output: { entity: 'Product', list: true },
+      },
+    },
+  },
+});
+
+test('campo list en el input de una operación es válido', () => {
+  const { errors, warnings } = run(
+    batchLayers({ type: 'uuid', list: true, required: true, constraints: { minItems: 1, maxItems: 100 } })
+  );
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
+test('campo list de escalar y de value object en una entidad es válido', () => {
+  const domain = domainForList();
+  domain.types = { Discount: { fields: { code: { type: 'string' }, percentage: { type: 'decimal' } } } };
+  domain.entities.Product.fields.tags = { type: 'string', list: true };
+  domain.entities.Product.fields.discounts = { type: 'Discount', list: true, constraints: { maxItems: 10 } };
+  const { errors, warnings } = run({ domain, 'use-cases': {} });
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
+test('campo list de un tipo inexistente sigue siendo error de tipo', () => {
+  const domain = domainForList();
+  domain.entities.Product.fields.discounts = { type: 'Discount', list: true };
+  const { errors } = run({ domain, 'use-cases': {} });
+  assert.ok(errors.some((e) => e.includes(`domain: Product.fields.discounts: el tipo 'Discount' no existe`)));
+});
+
+test('campo list dentro de un value object es error', () => {
+  const domain = domainForList();
+  domain.types = { Address: { fields: { zip: { type: 'string' }, lines: { type: 'string', list: true } } } };
+  const { errors } = run({ domain, 'use-cases': {} });
+  assert.ok(
+    errors.some((e) =>
+      e.includes(`domain: types.Address.fields.lines: list no es válido dentro de un value object`)
+    )
+  );
+});
+
+test('campo list en pathParams de un http-client es error', () => {
+  const layers = {
+    domain: domainForList(),
+    'use-cases': {},
+    'http-clients': {
+      clients: {
+        pricing: {
+          baseUrl: 'https://pricing.example.com',
+          calls: {
+            getPrices: {
+              contract: 'GET /prices/{sku} -> precio del producto',
+              method: 'GET',
+              path: '/prices/{sku}',
+              request: { pathParams: { sku: { type: 'string', list: true } } },
+            },
+          },
+        },
+      },
+    },
+  };
+  const { errors } = run(layers);
+  assert.ok(errors.some((e) => e.includes(`request.pathParams.sku: list no es válido en pathParams`)));
+});
+
+test('minItems mayor que maxItems es error', () => {
+  const { errors } = run(batchLayers({ type: 'uuid', list: true, constraints: { minItems: 10, maxItems: 5 } }));
+  assert.ok(
+    errors.some((e) => e.includes(`getProductsByIds.input.ids: minItems (10) no puede ser mayor que maxItems (5)`))
+  );
+});

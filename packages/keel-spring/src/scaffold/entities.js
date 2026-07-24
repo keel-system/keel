@@ -16,8 +16,10 @@ export function domainSubPackage(entity) {
 
 // Import del tipo de dominio de un campo resuelto (enum/VO), si aplica.
 export function domainTypeImport(model, field) {
-  if (field.kind === 'enum') return `${subPackage(model, 'domain.enums')}.${field.javaType}`;
-  if (field.kind === 'composite') return `${subPackage(model, 'domain.valueobject')}.${field.javaType}`;
+  // En un campo colección el tipo importable es el del elemento, no el List<>.
+  const typeName = field.elementJavaType ?? field.javaType;
+  if (field.kind === 'enum') return `${subPackage(model, 'domain.enums')}.${typeName}`;
+  if (field.kind === 'composite') return `${subPackage(model, 'domain.valueobject')}.${typeName}`;
   return null;
 }
 
@@ -65,8 +67,16 @@ function renderEntity(model, entity) {
       if (typeImport) imports.add(typeImport);
       if (field.description) lines.push(`    // ${field.description}`);
       if (field.computed) lines.push(`    // TODO computed: ${field.computed}`);
-      const init = field.initializer ? ` = ${field.initializer}` : '';
-      lines.push(`    private ${field.javaType} ${field.name}${init};`);
+      if (field.list) {
+        // Colección de valores sin identidad (list): lista mutable internamente,
+        // expuesta como vista inmutable; la altera solo la raíz por métodos de negocio.
+        imports.add('java.util.List');
+        imports.add('java.util.ArrayList');
+        lines.push(`    private ${field.javaType} ${field.name} = new ArrayList<>();`);
+      } else {
+        const init = field.initializer ? ` = ${field.initializer}` : '';
+        lines.push(`    private ${field.javaType} ${field.name}${init};`);
+      }
     } else if (member.kind === 'externalRef') {
       imports.add('java.util.UUID');
       lines.push(`    // Referencia a la raíz del agregado ${member.relation.entity} (otro agregado: solo el id).`);
@@ -114,7 +124,10 @@ function renderEntity(model, entity) {
     // Copia defensiva de las colecciones: el toDomain del adaptador entrega una
     // lista inmutable y la raíz debe poder mutarla desde sus métodos de negocio.
     const ctorAssigns = members
-      .map((m) => `        this.${m.name} = ${m.kind === 'relationMany' ? `new ArrayList<>(${m.name})` : m.name};`)
+      .map((m) => {
+        const isCollection = m.kind === 'relationMany' || m.field?.list;
+        return `        this.${m.name} = ${isCollection ? `new ArrayList<>(${m.name})` : m.name};`;
+      })
       .join('\n');
     bodyParts.push(`    // Rehidratación desde persistencia (lo usa el toDomain del adaptador de repositorio):
     // el estado ya es válido y no se revalida. La creación de negocio va por el factory.
@@ -217,8 +230,9 @@ ${semanticTodos}
 // métodos de negocio de la raíz que escribe el agente.
 function renderAccessors(members) {
   const accessors = [];
-  for (const { kind, name, javaType } of members) {
-    const value = kind === 'relationMany' ? `List.copyOf(${name})` : name;
+  for (const { kind, name, javaType, field } of members) {
+    const isCollection = kind === 'relationMany' || field?.list;
+    const value = isCollection ? `List.copyOf(${name})` : name;
     accessors.push(`    public ${javaType} get${capitalize(name)}() {\n        return ${value};\n    }`);
   }
   return accessors.join('\n\n');

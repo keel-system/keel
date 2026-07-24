@@ -1354,3 +1354,45 @@ test('unique: constraint nombrada en la tabla y traducida al error de negocio', 
   // El diseño no liga campo → code: la asociación exacta la cierra el agente.
   assert.ok(handler.includes('TODO (agente)'));
 });
+
+test('colecciones del dominio (DSL 2.1 list): @ElementCollection, @Embeddable y mapeo bidireccional', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const patched = structuredClone(layers);
+  // Escalar, enum nominal y value object compuesto, todos como colección.
+  patched.domain.types.Discount = {
+    fields: { code: { type: 'string', required: true }, percentage: { type: 'decimal' } }
+  };
+  patched.domain.entities.Product.fields.tags = { type: 'string', list: true, constraints: { maxItems: 20 } };
+  patched.domain.entities.Product.fields.channels = { type: 'ProductStatus', list: true };
+  patched.domain.entities.Product.fields.discounts = { type: 'Discount', list: true };
+
+  scaffoldService({ manifest, layers: patched, workspace });
+
+  const base = 'src/main/java/com/commerce/productcatalog';
+
+  // Dominio: colección mutable interna, getter inmutable, copia defensiva en la rehidratación.
+  const product = read(workspace, `${base}/domain/aggregate/Product.java`);
+  assert.ok(product.includes('private List<Discount> discounts = new ArrayList<>();'));
+  assert.ok(product.includes('this.discounts = new ArrayList<>(discounts);'));
+  assert.ok(product.includes('return List.copyOf(discounts);'));
+
+  // Jpa: @ElementCollection + @CollectionTable por campo; enum con @Enumerated; VO como XxxJpa.
+  const productJpa = read(workspace, `${base}/infrastructure/persistence/entities/ProductJpa.java`);
+  assert.ok(productJpa.includes('@CollectionTable(name = "product_tags", joinColumns = @JoinColumn(name = "product_id"))'));
+  assert.ok(productJpa.includes('@CollectionTable(name = "product_channels"'));
+  assert.ok(productJpa.includes('@Enumerated(EnumType.STRING)'));
+  assert.ok(productJpa.includes('private List<DiscountJpa> discounts = new ArrayList<>();'));
+
+  // Embeddable del VO en el mismo paquete que las entidades Jpa.
+  const discountJpa = read(workspace, `${base}/infrastructure/persistence/entities/DiscountJpa.java`);
+  assert.ok(discountJpa.includes('@Embeddable'));
+  assert.ok(discountJpa.includes('public class DiscountJpa'));
+  assert.ok(discountJpa.includes('@Column(name = "code")'));
+
+  // Adaptador: reconstrucción del VO en ambos sentidos, con import del embeddable.
+  const repo = read(workspace, `${base}/infrastructure/persistence/repositories/ProductRepositoryImpl.java`);
+  assert.ok(repo.includes('.entities.DiscountJpa;'));
+  assert.ok(repo.includes('.map(e -> new Discount(e.getCode(), e.getPercentage())).toList()'));
+  assert.ok(repo.includes('new ArrayList<DiscountJpa>('));
+});

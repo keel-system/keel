@@ -37,6 +37,7 @@ clients:
 - `method` + `path` + `request` + `response` (opcionales) estructuran la llamada. Con ellos, el generador produce los tipos reales del cliente (parámetros y records de request/response) y `keel validate` cruza los tipos contra el dominio; sin ellos, la prosa del `contract` es lo único que guía al agente al generar. **Prefiere la forma estructurada** en cuanto el contrato del tercero sea conocido.
 - `method` y `path` van siempre juntos; `request` exige `method`. Con `GET`/`DELETE` no hay `request.body`.
 - Los tipos de `request.{pathParams,queryParams,headers,body}` y `response.fields` son los mismos del resto del DSL: base types, value types de `domain: types` o `enum` inline. En esta capa, prefiere enums nominales del dominio a enums inline.
+- Un campo puede ser una colección con `list: true` (acotable con `constraints: { minItems, maxItems }`) — típico en query params repetidos y en respuestas que devuelven varios elementos. No es válido en `pathParams`.
 - Toda variable `{var}` de `path` debe declararse en `request.pathParams` y viceversa (`keel validate` lo comprueba).
 - `response.fields` describe la forma que **devuelve el sistema externo** (contrato wire). Los generadores la aíslan del dominio con una capa de anticorrupción: si el tercero cambia su respuesta, solo cambia esta capa y su adaptador.
 

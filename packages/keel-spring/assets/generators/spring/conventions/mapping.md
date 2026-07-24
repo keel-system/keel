@@ -46,6 +46,35 @@ Buena parte de esta tabla la materializa ya el **scaffolding determinista** de `
 | `json` | `String` o `JsonNode` mapeado a jsonb, según prefiera el usuario |
 | `file` (con `bucket`) | `String` con la clave/referencia del objeto en su bucket; el binario vive en el object storage (capa `storage`), no en la BD. El campo persiste solo la key; subida/descarga vía el puerto `FileStorage` |
 
+### Cardinalidad (`list`, DSL 2.1)
+
+Un campo con `list: true` mapea a `List<T>` del tipo del elemento. Vale en payloads y contratos (`use-cases`, `messaging`, `http-clients`) y en campos de entidad para colecciones de valores sin identidad (`tags`, `discounts`); dentro de un value object y en `pathParams` no es válido.
+
+| Diseño | Código |
+|--------|--------|
+| `{ type: uuid, list: true }` | `List<UUID>` |
+| `list: true` + `required: true` | `@NotEmpty` sobre el parámetro (contenedor), no `@NotNull` |
+| `constraints: { minItems, maxItems }` | `@Size(min = …, max = …)` sobre el contenedor |
+| Constraints del **elemento** (`pattern`, `maxLength`, `min`/`max`) | **Las aplica el agente**, inline en el genérico (`List<@Pattern(regexp = "…") String>`), añadiendo el import de `jakarta.validation.constraints`. Build solo genera las del contenedor |
+| Campo `list` en un endpoint `GET` | `@RequestParam List<T> <nombre>` (parámetro repetido o separado por comas); nunca `@PathVariable` |
+
+Las anotaciones solo se emiten en **commands**: los records de query no llevan Bean Validation. Si una query recibe un lote acotado y el diseño declara un error para la cota (`BATCH_SIZE_EXCEEDED`), hacerla cumplir es trabajo del handler, lanzando el error declarado — así el cliente recibe el `code` del contrato y no un `ConstraintViolation` genérico.
+
+Una lista sin `maxItems` en una entrada por lotes es un hueco de diseño, no una licencia: si el diseño no la acota, repórtalo en lugar de aceptar lotes ilimitados.
+
+#### Colección en un campo de entidad → tabla de elementos
+
+Un `list` sobre un campo de entidad (colección de valores sin identidad) es una **tabla de elementos**, no una entidad hija. Build ya la genera; el agente solo la respeta:
+
+| Elemento | Jpa generada |
+|----------|--------------|
+| Escalar / value type | `@ElementCollection` + `@CollectionTable(name = "<entidad>_<campo>", joinColumns = @JoinColumn(name = "<entidad>_id"))` + `@Column(name = "<campo>")` |
+| Enum | igual, más `@Enumerated(EnumType.STRING)` |
+| Value object compuesto | `List<<VO>Jpa>` sobre un `@Embeddable <VO>Jpa` (espejo del VO, mismo paquete que las entidades Jpa) |
+| Value object con VO anidado | El `<VO>Jpa` deja un `TODO (agente)` en el subcampo anidado; complétalo con `@Embedded` o columnas |
+
+En el **dominio** la colección es una lista mutable interna con getter inmutable (`List.copyOf`): el alta/baja de elementos va por métodos de negocio de la raíz, nunca por el getter. El adaptador de repositorio reconstruye el VO en ambos sentidos (`toDomain`/`toJpa`); no toques ese mapeo salvo para cerrar los TODO de VO anidado.
+
 ## `use-cases` — use-cases.keel.yaml
 
 | Diseño | Código |

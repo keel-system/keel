@@ -10,7 +10,7 @@
     "keel": {
       "type": "string",
       "description": "Versión del DSL Keel usada por este servicio.",
-      "enum": ["2.0"]
+      "enum": ["2.0", "2.1"]
     },
     "service": {
       "type": "object",

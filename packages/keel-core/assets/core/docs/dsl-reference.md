@@ -1,4 +1,4 @@
-# Referencia del DSL Keel (v2.0)
+# Referencia del DSL Keel (v2.1)
 
 Un servicio Keel se diseña como un conjunto de **artefactos por capa** en `specs/<servicio>/`, todos YAML, todos agnósticos de tecnología. Cada capa se valida contra su propio schema (`schema/<capa>.schema.json`) y se itera con el humano por separado; las capas se relacionan **por nombre** (una operación referencia entidades, un endpoint referencia una operación, un `emits` referencia un evento) y `keel validate` comprueba esas referencias cruzadas.
 
@@ -38,6 +38,13 @@ El DSL es el activo durable de Keel: un mismo diseño se reutiliza a través de 
 **3. El alcance es síntoma, no justificación.** Que un cambio "sirva a todos los generadores" **no** lo autoriza: un concepto de solución (p. ej. `retryPolicy`/`backoffMs`) puede ser multi-framework y aun así estar acoplado a un modelo de implementación. Lo global es *consecuencia* de un buen cambio, no su causa.
 
 **4. Cuando el DSL sí cambia** (pasó el test): se versiona **una sola vez en el centro** (`keel-core`: `SUPPORTED_DSL` + schemas), y **todos** los generadores se actualizan para consumir la nueva versión a su ritmo, protegidos por su comprobación de compatibilidad de `build`. El DSL nunca se ramifica por framework.
+
+### Historial de versiones
+
+| Versión | Cambio | Por qué pasó el test de admisión |
+|---------|--------|----------------------------------|
+| 2.1 | `list: true` en campos, con `constraints.minItems` / `maxItems`. En payloads y contratos (entradas por lotes, salidas múltiples) y en campos de entidad para colecciones de valores sin identidad (`tags`, `discounts`). Vetado dentro de un value object y en `pathParams` | "Esta operación recibe entre 1 y N identificadores" y "un pedido lleva varios descuentos sin identidad propia" son verdad sobre el servicio aunque nadie lo construya. Sin el primitivo, una entrada por lotes degradaba a `type: json` con la cota en prosa, y una colección de value objects obligaba a inventar una entidad hija con id ficticio. Aditivo: todo spec 2.0 sigue siendo válido |
+| 2.0 | Línea base multi-artefacto (un archivo por capa) | — |
 
 ### Modificación del DSL equivocada
 

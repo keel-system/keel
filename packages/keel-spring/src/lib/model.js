@@ -46,6 +46,20 @@ export function buildModel({ manifest, layers, stack = null }) {
   const inlineEnumName = buildInlineEnumIndex(enums);
   const valueObjects = collectValueObjects(domainTypes, domainTypes, inlineEnumName, hasPersistence);
   const entities = collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPersistence, warnings);
+
+  // Un VO usado en un campo colección (list) de una entidad persistida necesita
+  // su espejo @Embeddable (XxxJpa): @ElementCollection<List<XxxJpa>>. Se marca
+  // aquí, cuando ya conocemos entidades y VOs, y lo consumen embeddables.js y la Jpa.
+  if (hasPersistence) {
+    const collectionVoNames = new Set();
+    for (const entity of entities) {
+      if (!entity.persisted) continue;
+      for (const field of entity.fields) {
+        if (field.list && field.kind === 'composite') collectionVoNames.add(field.elementJavaType);
+      }
+    }
+    for (const vo of valueObjects) vo.usedInCollection = collectionVoNames.has(vo.name);
+  }
   const { services, errors } = collectOperations(layers, domainTypes, inlineEnumName, service, warnings);
   const events = collectEvents(layers, services, service, domainTypes, inlineEnumName, warnings);
   // Garantía de entrega declarada en el diseño: decide cómo se materializa la
@@ -164,10 +178,19 @@ function resolveField(ownerName, fieldName, field, domainTypes, inlineEnumName, 
     resolved = resolveType(field.type, domainTypes);
   }
 
+  // Campo colección (DSL 2.1 list): el tipo del elemento se envuelve en List<>.
+  // Todo render interpola javaType, así que basta con envolverlo aquí.
+  const isList = Boolean(field.list);
+  const javaType = isList ? `List<${resolved.javaType}>` : resolved.javaType;
+  const imports = [...resolved.imports];
+  if (isList) imports.push('java.util.List');
+
   return {
     name: fieldName,
-    javaType: resolved.javaType,
-    imports: [...resolved.imports],
+    javaType,
+    imports,
+    list: isList,
+    elementJavaType: resolved.javaType,
     kind: resolved.kind,
     base: resolved.base ?? null,
     isId: Boolean(field.id),
@@ -180,7 +203,9 @@ function resolveField(ownerName, fieldName, field, domainTypes, inlineEnumName, 
     wireName: field.wireName && field.wireName !== fieldName ? field.wireName : null,
     description: field.description ?? null,
     validation: beanValidationAnnotations(field, resolved),
-    columns: persisted ? columnAnnotations(fieldName, field, resolved) : [],
+    // Una colección no es una columna: su mapeo (@ElementCollection) lo pone la Jpa,
+    // no columnAnnotations. Sin persistence o sin list, comportamiento previo.
+    columns: persisted && !isList ? columnAnnotations(fieldName, field, resolved) : [],
     initializer: fieldInitializer(field, resolved)
   };
 }

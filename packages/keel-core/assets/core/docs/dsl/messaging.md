@@ -59,6 +59,7 @@ subscriptions:
 - Todo evento en `emits` de una operación de `use-cases` **debe** estar declarado en `publishing.events`.
 - `reliability: outbox` es el contrato "ningún evento se pierde si la transacción confirma"; el mecanismo (tabla + relay, CDC…) lo decide el generador. `best-effort` admite pérdida ante fallos. Si `domain` declara `aggregates`, el evento se escribe en la misma transacción que el agregado que cambió.
 - Eventos en pasado y `PascalCase`: `ProductCreated`, no `CreateProduct`.
+- Un campo del `payload` (publicado o consumido) puede ser una colección con `list: true`, acotable con `constraints: { minItems, maxItems }`.
 
 ## Suscripciones
 

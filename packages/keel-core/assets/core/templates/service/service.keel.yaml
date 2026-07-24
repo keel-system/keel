@@ -1,7 +1,7 @@
 # Manifiesto del servicio — punto de entrada del diseño.
 # Declara la identidad del servicio y qué capas de diseño existen.
 # Regla: una capa opcional existe si y solo si está declarada aquí (y su archivo existe).
-keel: "2.0"
+keel: "2.1"
 
 service:
   name: {{name}}

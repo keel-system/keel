@@ -36,13 +36,22 @@ export function checkCrossRefs({ layers, wip = false }) {
 
   // allowWireName: solo los contratos de sistemas externos (messaging.subscriptions,
   // http-clients) pueden renombrar campos al nombre real del cable.
-  const checkFieldMap = (fieldMap, where, { allowWireName = false } = {}) => {
+  // listRejection: un campo colección (list) se admite en casi todas partes; los dos
+  // sitios donde no tiene mapeo posible pasan aquí el motivo concreto.
+  const checkFieldMap = (fieldMap, where, { allowWireName = false, listRejection = null } = {}) => {
     for (const [name, field] of Object.entries(fieldMap ?? {})) {
       const type = field?.type;
       if (field?.wireName !== undefined && !allowWireName) {
         errors.push(
           `${where}.${name}: wireName solo es válido en contratos de sistemas externos (messaging: subscriptions, http-clients)`
         );
+      }
+      if (field?.list === true && listRejection) {
+        errors.push(`${where}.${name}: ${listRejection}`);
+      }
+      const { minItems, maxItems } = field?.constraints ?? {};
+      if (minItems !== undefined && maxItems !== undefined && minItems > maxItems) {
+        errors.push(`${where}.${name}: minItems (${minItems}) no puede ser mayor que maxItems (${maxItems})`);
       }
       if (typeof type === 'string' && /^[A-Z]/.test(type) && !types.has(type)) {
         errors.push(`${where}.${name}: el tipo '${type}' no existe en domain: types`);
@@ -136,7 +145,13 @@ export function checkCrossRefs({ layers, wip = false }) {
 
   // domain: campos internos de value objects compuestos
   for (const [typeName, typeDef] of Object.entries(domain.types ?? {})) {
-    if (typeDef?.fields) checkFieldMap(typeDef.fields, `domain: types.${typeName}.fields`);
+    if (typeDef?.fields) {
+      checkFieldMap(typeDef.fields, `domain: types.${typeName}.fields`, {
+        // Colección dentro de un value object = colección anidada, sin mapeo relacional limpio.
+        listRejection:
+          'list no es válido dentro de un value object (sería una colección anidada); declara la colección como campo de la entidad'
+      });
+    }
   }
 
   // domain: tipos en fields, entidades en relations y lifecycle
@@ -513,7 +528,12 @@ export function checkCrossRefs({ layers, wip = false }) {
     for (const [callName, call] of Object.entries(client.calls ?? {})) {
       const where = `http-clients: clients.${clientId}.calls.${callName}`;
       for (const section of ['pathParams', 'queryParams', 'headers', 'body']) {
-        checkFieldMap(call.request?.[section], `${where}.request.${section}`, { allowWireName: true });
+        checkFieldMap(call.request?.[section], `${where}.request.${section}`, {
+          allowWireName: true,
+          // Una variable de ruta es un solo valor: no hay forma de interpolar una colección.
+          listRejection:
+            section === 'pathParams' ? 'list no es válido en pathParams: una variable de ruta es un solo valor' : null
+        });
       }
       checkFieldMap(call.response?.fields, `${where}.response.fields`, { allowWireName: true });
 

@@ -124,7 +124,7 @@ function renderMethod(model, operation, imports) {
       for (const name of component.imports) imports.add(name);
       const typeImport = domainTypeImport(model, component);
       if (typeImport) imports.add(typeImport);
-      if (component.name === 'id') {
+      if (component.name === 'id' && !component.list) {
         imports.add('org.springframework.web.bind.annotation.PathVariable');
         params.push(`@PathVariable ${component.javaType} id`);
       } else if (component.name === 'pageable') {

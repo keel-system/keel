@@ -19,6 +19,7 @@ import * as logging from './logging.js';
 import * as enums from './enums.js';
 import * as valueTypes from './value-types.js';
 import * as entities from './entities.js';
+import * as embeddables from './embeddables.js';
 import * as persistenceEntities from './persistence-entities.js';
 import * as exceptions from './exceptions.js';
 import * as repositories from './repositories.js';
@@ -50,6 +51,7 @@ const GENERATORS = [
   enums,
   valueTypes,
   entities,
+  embeddables,
   persistenceEntities,
   exceptions,
   repositories,

@@ -80,7 +80,21 @@ Atributos de campo:
 | `computed` | Lo deriva una regla de dominio a partir de otros campos (la regla es el valor del atributo); nunca lo envía el cliente. Excluyente con `generated` |
 | `sensitive` | Nunca sale en outputs ni eventos por defecto; solo si un payload lo pide explícitamente vía `fields` |
 | `default` | Valor si el cliente no lo provee |
-| `constraints` | `min`, `max`, `minLength`, `maxLength`, `pattern`, `scale` |
+| `list` | El campo es una **colección** de valores del tipo declarado (`{ type: Discount, list: true }`). Excluyente con `id`, `unique`, `generated` y `type: file` |
+| `constraints` | `min`, `max`, `minLength`, `maxLength`, `pattern`, `scale`; con `list`, además `minItems` y `maxItems` |
+
+### Colección: ¿`list` o entidad hija?
+
+Las dos formas de tener "varios" en el dominio no son intercambiables — la pregunta que las separa es **si cada elemento tiene identidad propia**:
+
+| El elemento… | Se modela | Ejemplo |
+|---|---|---|
+| No tiene identidad ni ciclo de vida propios; es un **valor** intercambiable, se reemplaza entero | Campo `list: true` sobre un value type o value object | `tags: { type: string, list: true }`, `discounts: { type: Discount, list: true }` |
+| Tiene identidad propia, se referencia, cambia de estado o se consulta por separado | Entidad + `relations` con `cardinality: one-to-many` | `Order` → `OrderLine` |
+
+Si dudas: ¿tiene sentido preguntar *"¿cuál de ellos?"* y responder con un id? Entonces es una entidad hija. Si dos elementos con los mismos valores son indistinguibles, es un `list` de value objects. **No conviertas un value object en entidad solo para poder tener varios** — es la degradación que este atributo evita.
+
+`list` no es válido **dentro** de un value object (sería una colección anidada): saca la colección al campo de la entidad. Tampoco puede apuntar a una entidad — para eso están las `relations`.
 
 ## `aggregates` — fronteras de consistencia
 
