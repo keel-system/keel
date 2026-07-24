@@ -42,7 +42,15 @@ test('scaffoldService genera el proyecto completo con contenido clave', () => {
   assert.ok(buildGradle.includes("runtimeOnly 'org.postgresql:postgresql'"));
   assert.ok(buildGradle.includes('JavaLanguageVersion.of(21)'));
   assert.ok(buildGradle.includes('springdoc-openapi-starter-webmvc-ui'));
+  assert.ok(buildGradle.includes('spring-boot-starter-actuator'));
   assert.ok(!buildGradle.includes('spring-kafka')); // sin capa messaging
+
+  // Actuator: fragmento management con probes de liveness/readiness (Kubernetes).
+  const management = read(workspace, 'src/main/resources/parameters/local/management.yaml');
+  assert.ok(management.includes('include: health,info,metrics'));
+  assert.ok(management.includes('probes:'));
+  assert.ok(management.includes('enabled: true'));
+  assert.ok(read(workspace, 'src/main/resources/application-local.yaml').includes('parameters/local/management.yaml'));
 
   // Dominio puro (sin JPA) en domain/aggregate; la Jpa vive aparte.
   const product = read(workspace, 'src/main/java/com/commerce/productcatalog/domain/aggregate/Product.java');
@@ -56,11 +64,21 @@ test('scaffoldService genera el proyecto completo con contenido clave', () => {
   assert.ok(!product.includes('public Product() {'));
   assert.ok(product.includes('// TODO (agente): factory de creación create(...)'));
   assert.ok(product.includes('// TODO (agente): método semántico'));
+  // Concurrencia optimista (Opción A): la raíz porta version, que viaja por el
+  // constructor de rehidratación (último parámetro) y expone getter.
+  assert.ok(product.includes('private Long version;'));
+  assert.ok(product.includes(', Long version) {'));
+  assert.ok(product.includes('this.version = version;'));
+  assert.ok(product.includes('public Long getVersion() {'));
 
   const productJpa = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/persistence/entities/ProductJpa.java');
   assert.ok(productJpa.includes('@Entity'));
   assert.ok(productJpa.includes('@Table(name = "products"'));
   assert.ok(productJpa.includes('public class ProductJpa extends AuditableEntity'));
+  // Bloqueo optimista a nivel de raíz de agregado.
+  assert.ok(productJpa.includes('@Version'));
+  assert.ok(productJpa.includes('@Column(name = "version")'));
+  assert.ok(productJpa.includes('private Long version;'));
 
   // Auditoría automática (portada del shared del prototipo).
   const auditable = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/persistence/entities/AuditableEntity.java');
@@ -101,6 +119,9 @@ test('scaffoldService genera el proyecto completo con contenido clave', () => {
   assert.ok(advice.includes('@ExceptionHandler(DomainException.class)'));
   assert.ok(advice.includes('@ExceptionHandler(Exception.class)'));
   assert.ok(advice.includes('"VALIDATION_ERROR"'));
+  // Conflicto de concurrencia optimista → 409 (no cae en el catch-all 500).
+  assert.ok(advice.includes('@ExceptionHandler(ObjectOptimisticLockingFailureException.class)'));
+  assert.ok(advice.includes('"OPTIMISTIC_LOCK_CONFLICT"'));
 
   const baseNotFound = read(workspace, 'src/main/java/com/commerce/productcatalog/domain/errors/NotFoundException.java');
   assert.ok(baseNotFound.includes('extends DomainException'));
@@ -155,6 +176,9 @@ test('scaffoldService genera el proyecto completo con contenido clave', () => {
   assert.ok(adapter.includes('implements ProductRepository'));
   assert.ok(adapter.includes('private Product toDomain(ProductJpa jpa)'));
   assert.ok(adapter.includes('private ProductJpa toJpa(Product domain)'));
+  // La versión de concurrencia viaja en ambos sentidos del mapeo.
+  assert.ok(adapter.includes('jpa.getVersion()'));
+  assert.ok(adapter.includes('jpa.setVersion(domain.getVersion());'));
 
   // Mapper de aplicación dominio → ResponseDto (también sin Spring).
   const mapper = read(workspace, 'src/main/java/com/commerce/productcatalog/application/mappers/ProductApplicationMapper.java');
@@ -177,6 +201,11 @@ test('scaffoldService genera el proyecto completo con contenido clave', () => {
   const productionDb = read(workspace, 'src/main/resources/parameters/production/db.yaml');
   assert.ok(productionDb.includes('username: ${DB_USERNAME}')); // sin default: obligatoria
   assert.ok(productionDb.includes('ddl-auto: validate'));
+  // Tuning del pool Hikari expuesto por ambiente (punto 7): literal en local, env var con default fuera.
+  assert.ok(localDb.includes('maximum-pool-size: 10'));
+  assert.ok(localDb.includes('connection-timeout: 30000'));
+  assert.ok(developDb.includes('maximum-pool-size: ${DB_POOL_MAX_SIZE:10}'));
+  assert.ok(productionDb.includes('connection-timeout: ${DB_POOL_CONNECTION_TIMEOUT_MS:30000}'));
   // Migraciones: Hibernate solo gobierna el esquema en local; fuera manda Flyway.
   assert.ok(localDb.includes('flyway:') && localDb.includes('enabled: false'));
   assert.ok(developDb.includes('ddl-auto: validate'));
@@ -184,6 +213,9 @@ test('scaffoldService genera el proyecto completo con contenido clave', () => {
   assert.ok(productionDb.includes('enabled: ${FLYWAY_ENABLED:true}'));
   assert.ok(productionDb.includes('clean-disabled: true'));
   assert.ok(appYaml.includes('port: ${SERVER_PORT:8080}')); // puerto parametrizable, 8080 por defecto
+  // Apagado ordenado: drena peticiones en vuelo al recibir SIGTERM (timeout parametrizable).
+  assert.ok(appYaml.includes('shutdown: graceful'));
+  assert.ok(appYaml.includes('timeout-per-shutdown-phase: ${SHUTDOWN_TIMEOUT:30s}'));
   // Niveles de log: literales en local, env var con default fuera (nunca impiden arrancar).
   assert.ok(read(workspace, 'src/main/resources/parameters/local/logging.yaml').includes('root: INFO'));
   const productionLogging = read(workspace, 'src/main/resources/parameters/production/logging.yaml');
@@ -1072,11 +1104,31 @@ test('outbox: fila en la misma transacción, relay determinista y envío tras el
 
   const entity = read(workspace, `${outboxDir}/OutboxEventJpa.java`);
   assert.ok(entity.includes('@Table(name = "outbox_event"'));
+  // Backoff: columna del próximo intento elegible (punto 6).
+  assert.ok(entity.includes('name = "next_attempt_at"'));
+  assert.ok(entity.includes('scheduleNextAttempt(Instant nextAttemptAt)'));
+
+  // Multi-instancia: el findPending toma lock pesimista con SKIP LOCKED y excluye
+  // las filas que agotaron los reintentos o cuyo backoff aún no venció.
+  const repository = read(workspace, `${outboxDir}/OutboxEventJpaRepository.java`);
+  assert.ok(repository.includes('@Lock(LockModeType.PESSIMISTIC_WRITE)'));
+  assert.ok(repository.includes('@QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "-2"))'));
+  assert.ok(repository.includes('o.attempts < :maxAttempts'));
+  assert.ok(repository.includes('o.nextAttemptAt is null or o.nextAttemptAt <= :now'));
+  assert.ok(repository.includes('findPending(@Param("maxAttempts") int maxAttempts, @Param("now") Instant now, Pageable pageable)'));
 
   // El relay es determinista; lo acoplado al broker sale por el puerto.
   const relay = read(workspace, `${outboxDir}/OutboxRelay.java`);
   assert.ok(relay.includes('@Scheduled(fixedDelayString = "${outbox.relay.fixed-delay-ms:1000}")'));
   assert.ok(relay.includes('dispatcher.dispatch(row.getDestination()'));
+  // Tope de intentos + dead-letter reportado a ERROR.
+  assert.ok(relay.includes('@Value("${outbox.relay.max-attempts:10}")'));
+  assert.ok(relay.includes('row.getAttempts() >= maxAttempts'));
+  assert.ok(relay.includes('log.error('));
+  // Backoff exponencial entre reintentos de una misma fila.
+  assert.ok(relay.includes('@Value("${outbox.relay.backoff.initial-ms:1000}")'));
+  assert.ok(relay.includes('@Value("${outbox.relay.backoff.max-ms:60000}")'));
+  assert.ok(relay.includes('row.scheduleNextAttempt('));
   for (const ajeno of ['SnsTemplate', 'KafkaTemplate', 'RabbitTemplate']) {
     assert.ok(!relay.includes(ajeno));
   }
@@ -1089,7 +1141,11 @@ test('outbox: fila en la misma transacción, relay determinista y envío tras el
 
   // El relay es @Scheduled: sin @EnableScheduling no saldría nada.
   assert.ok(read(workspace, 'src/main/java/com/commerce/productcatalog/ProductCatalogApplication.java').includes('@EnableScheduling'));
-  assert.ok(read(workspace, 'src/main/resources/parameters/local/messaging.yaml').includes('retention-days: 7'));
+  const messagingYaml = read(workspace, 'src/main/resources/parameters/local/messaging.yaml');
+  assert.ok(messagingYaml.includes('retention-days: 7'));
+  assert.ok(messagingYaml.includes('max-attempts: 10'));
+  assert.ok(messagingYaml.includes('initial-ms: 1000'));
+  assert.ok(messagingYaml.includes('max-ms: 60000'));
 });
 
 test('frontera hexagonal: application no importa los eventos de Spring', () => {

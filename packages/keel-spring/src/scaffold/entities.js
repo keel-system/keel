@@ -94,6 +94,15 @@ function renderEntity(model, entity) {
     declarations.push(lines.join('\n'));
   }
 
+  // Concurrencia optimista: la raíz de agregado porta la versión que gestiona el
+  // @Version de su XxxJpa. Viaja por el constructor de rehidratación para que el
+  // ida-y-vuelta domain↔JPA no la pierda. Es un valor opaco: nadie la muta a mano.
+  if (entity.isAggregateRoot) {
+    declarations.push(
+      '    // Versión de concurrencia optimista del agregado; la gestiona el @Version\n    // de la XxxJpa. Null hasta la primera persistencia.\n    private Long version;'
+    );
+  }
+
   const header = [];
   if (entity.description) header.push(javadoc(entity.description).trimEnd());
   for (const invariant of entity.invariants) {
@@ -119,20 +128,23 @@ function renderEntity(model, entity) {
     // derive los campos generated/computed y fije el estado inicial del lifecycle
     // (conventions/domain-modeling.md). La mutación va por métodos de negocio, no por setters.`);
 
-  if (members.length > 0) {
-    const ctorParams = members.map((m) => `${m.javaType} ${m.name}`).join(', ');
+  if (members.length > 0 || entity.isAggregateRoot) {
+    const paramParts = members.map((m) => `${m.javaType} ${m.name}`);
     // Copia defensiva de las colecciones: el toDomain del adaptador entrega una
     // lista inmutable y la raíz debe poder mutarla desde sus métodos de negocio.
-    const ctorAssigns = members
-      .map((m) => {
-        const isCollection = m.kind === 'relationMany' || m.field?.list;
-        return `        this.${m.name} = ${isCollection ? `new ArrayList<>(${m.name})` : m.name};`;
-      })
-      .join('\n');
+    const assignParts = members.map((m) => {
+      const isCollection = m.kind === 'relationMany' || m.field?.list;
+      return `        this.${m.name} = ${isCollection ? `new ArrayList<>(${m.name})` : m.name};`;
+    });
+    // La versión de concurrencia entra como último parámetro (solo en raíces).
+    if (entity.isAggregateRoot) {
+      paramParts.push('Long version');
+      assignParts.push('        this.version = version;');
+    }
     bodyParts.push(`    // Rehidratación desde persistencia (lo usa el toDomain del adaptador de repositorio):
     // el estado ya es válido y no se revalida. La creación de negocio va por el factory.
-    public ${entity.name}(${ctorParams}) {
-${ctorAssigns}
+    public ${entity.name}(${paramParts.join(', ')}) {
+${assignParts.join('\n')}
     }`);
   }
 
@@ -140,7 +152,13 @@ ${ctorAssigns}
     imports.add(`${subPackage(model, 'domain.errors')}.InvalidStateTransitionException`);
     bodyParts.push(renderLifecycle(entity, imports));
   }
-  bodyParts.push(renderAccessors(members));
+  const accessors = renderAccessors(members);
+  // Getter de la versión (solo raíz): lo usa el toJpa del adaptador para
+  // devolver la versión a la XxxJpa antes de persistir.
+  const versionAccessor = entity.isAggregateRoot
+    ? '    public Long getVersion() {\n        return version;\n    }'
+    : '';
+  bodyParts.push([accessors, versionAccessor].filter(Boolean).join('\n\n'));
 
   const body = `${header.join('\n')}
 public class ${entity.name} {

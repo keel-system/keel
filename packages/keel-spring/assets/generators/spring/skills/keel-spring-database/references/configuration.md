@@ -56,11 +56,19 @@ spring:
 
 ## Locking optimista
 
-Si el diseño declara concurrencia sobre un agregado (o `flow-fidelity` detecta
-updates concurrentes), añade `@Version` en la entidad `XxxJpa` (campo
-`private Long version`): Hibernate lanza `OptimisticLockException` → mapéala al
-error de conflicto (409) que declare el diseño. No uses locking pesimista salvo
-que el diseño lo pida explícitamente.
+**El caso común ya está resuelto por build**: toda raíz de agregado (`isAggregateRoot`)
+lleva `@Version private Long version` en su `XxxJpa`, la versión viaja por el dominio
+(constructor de rehidratación + `getVersion()`, propagada en el mapeo) y el
+`ApiExceptionHandler` traduce `ObjectOptimisticLockingFailureException` a **409
+`OPTIMISTIC_LOCK_CONFLICT`**. No reañadas el campo ni el handler.
+
+Tu único trabajo es el **caso borde**: cuando dos peticiones concurrentes modifican
+**solo entidades hijas** distintas del agregado sin tocar la raíz, JPA no incrementa la
+versión de la raíz por sí solo y el conflicto no se detecta. Si el diseño (o
+`flow-fidelity`) lo exige, fuerza el incremento tomando la raíz con
+`LockModeType.OPTIMISTIC_FORCE_INCREMENT` en la lectura del handler (o
+`@Lock(OPTIMISTIC_FORCE_INCREMENT)` en el finder del repositorio). No uses locking
+pesimista salvo que el diseño lo pida explícitamente.
 
 ## Logging SQL
 

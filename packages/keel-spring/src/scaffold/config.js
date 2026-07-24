@@ -52,6 +52,10 @@ export function generate(model) {
     const fragments = [];
 
     fragments.push(fragment(profile, 'logging', loggingYaml(model, profile)));
+    // Actuator: transversal al stack, siempre presente. Health con probes de
+    // liveness/readiness para Kubernetes; el detalle del health solo se muestra
+    // fuera de production.
+    fragments.push(fragment(profile, 'management', managementYaml(profile)));
     if (layersPresent.persistence) {
       fragments.push(fragment(profile, 'db', dbYaml(model, profile, dbName)));
     }
@@ -107,9 +111,16 @@ function baseYaml(model) {
     'server:',
     '  # Puerto por variable de entorno; 8080 es el que asumen los escenarios de validación.',
     '  port: ${SERVER_PORT:8080}',
+    '  # Apagado ordenado: al recibir SIGTERM deja de aceptar conexiones nuevas y espera',
+    '  # (hasta spring.lifecycle.timeout-per-shutdown-phase) a que terminen las peticiones en vuelo.',
+    '  # Con los probes de Actuator activos, el readiness pasa a OUT_OF_SERVICE mientras drena.',
+    '  shutdown: graceful',
     'spring:',
     '  application:',
     `    name: ${service.name}`,
+    '  lifecycle:',
+    '    # Margen máximo para que terminen las peticiones en curso antes de matar el proceso.',
+    '    timeout-per-shutdown-phase: ${SHUTDOWN_TIMEOUT:30s}',
     '  threads:',
     '    virtual:',
     '      enabled: true',
@@ -168,6 +179,27 @@ function loggingYaml(model, profile) {
   return lines.join('\n') + '\n';
 }
 
+// Actuator: expone health/info/metrics y activa los grupos de probes
+// (liveness/readiness) que consume Kubernetes. El health detalla componentes
+// (BD, broker, disco…) salvo en production, donde solo publica el status.
+function managementYaml(profile) {
+  const showDetails = profile === 'production' ? 'never' : 'always';
+  const lines = [
+    'management:',
+    '  endpoints:',
+    '    web:',
+    '      exposure:',
+    `        include: ${envWithDefault(profile, 'MANAGEMENT_ENDPOINTS', 'health,info,metrics')}`,
+    '  endpoint:',
+    '    health:',
+    '      probes:',
+    '        # Habilita /actuator/health/liveness y /actuator/health/readiness.',
+    '        enabled: true',
+    `      show-details: ${envWithDefault(profile, 'MANAGEMENT_HEALTH_SHOW_DETAILS', showDetails)}`
+  ];
+  return lines.join('\n') + '\n';
+}
+
 function dbYaml(model, profile, dbName) {
   const db = DATABASES[model.stack.database] ?? DATABASES.postgresql;
   const lines = [
@@ -176,6 +208,10 @@ function dbYaml(model, profile, dbName) {
     `    url: ${envValue(profile, 'DB_URL', db.jdbcUrl(dbName))}`,
     `    username: ${envValue(profile, 'DB_USERNAME', db.user(dbName))}`,
     `    password: ${envValue(profile, 'DB_PASSWORD', db.password)}`,
+    '    hikari:',
+    '      # Tuning del pool expuesto por ambiente (defaults de Hikari; ajustar en production).',
+    `      maximum-pool-size: ${envWithDefault(profile, 'DB_POOL_MAX_SIZE', 10)}`,
+    `      connection-timeout: ${envWithDefault(profile, 'DB_POOL_CONNECTION_TIMEOUT_MS', 30000)}`,
     '  jpa:',
     '    hibernate:'
   ];
@@ -302,6 +338,14 @@ function messagingYaml(model, profile) {
       '    # Cada cuánto el relay busca filas pendientes y las entrega al broker.',
       `    fixed-delay-ms: ${envWithDefault(profile, 'OUTBOX_RELAY_DELAY_MS', 1000)}`,
       `    batch-size: ${envWithDefault(profile, 'OUTBOX_RELAY_BATCH_SIZE', 100)}`,
+      '    # Tras agotar los reintentos, la fila queda como dead-letter (no se',
+      '    # reintenta más ni se borra); se reporta a ERROR para inspección.',
+      `    max-attempts: ${envWithDefault(profile, 'OUTBOX_RELAY_MAX_ATTEMPTS', 10)}`,
+      '    # Backoff exponencial entre reintentos de una misma fila (initial·2^(n-1),',
+      '    # con tope max-ms): evita el hot-looping si el broker está caído.',
+      '    backoff:',
+      `      initial-ms: ${envWithDefault(profile, 'OUTBOX_RELAY_BACKOFF_INITIAL_MS', 1000)}`,
+      `      max-ms: ${envWithDefault(profile, 'OUTBOX_RELAY_BACKOFF_MAX_MS', 60000)}`,
       '  purge:',
       '    # Borrado diario de lo ya publicado; la tabla no es un histórico.',
       `    cron: ${envWithDefault(profile, 'OUTBOX_PURGE_CRON', '"0 0 3 * * *"')}`,

@@ -97,11 +97,15 @@ Antes de tocar tipos de columna del dialecto, lee `references/dialects/<database
   regístralo con `@EnableJpaAuditing(auditorAwareRef = "…")` en la clase Application.
   Sin ese bean las anotaciones no pueblan nada y las columnas quedan a `null` en
   silencio: no es opcional.
-- **Locking optimista (`@Version`)**: si el diseño declara concurrencia sobre un
-  agregado (o `flow-fidelity` detecta updates concurrentes), añade `@Version private
-  Long version` en la entidad `XxxJpa` y mapea la `OptimisticLockException` al error
-  409 del diseño. Detalle en `references/configuration.md`. No uses locking pesimista
-  salvo que el diseño lo exija.
+- **Locking optimista (`@Version`)**: **ya lo genera build** en la raíz de agregado
+  (`isAggregateRoot`) — campo `@Version private Long version` en la `XxxJpa`, `version`
+  en el constructor de rehidratación del dominio + `getVersion()`, propagación en el
+  mapeo, y el handler que traduce `ObjectOptimisticLockingFailureException` a 409
+  `OPTIMISTIC_LOCK_CONFLICT`. **No lo reañadas.** Tu único trabajo aquí es el caso borde:
+  si el diseño exige detectar updates concurrentes que tocan **solo entidades hijas**
+  distintas sin modificar la raíz (JPA no incrementa la versión de la raíz solo), fuerza
+  el incremento con `LockModeType.OPTIMISTIC_FORCE_INCREMENT` (`references/configuration.md`).
+  No uses locking pesimista salvo que el diseño lo exija.
 - **Soft-delete**: el DSL no lo declara; impleméntalo solo si el diseño lo pide
   (columna `deleted_at` + filtro, `@SQLDelete`/`@SQLRestriction` de Hibernate).
 

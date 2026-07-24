@@ -256,6 +256,9 @@ function renderToDomain(model, entity, imports) {
     return `jpa.get${capitalize(member.name)}()`;
   });
 
+  // Versión de concurrencia optimista: último arg del constructor (solo raíz).
+  if (entity.isAggregateRoot) args.push('jpa.getVersion()');
+
   return `    private ${entity.name} toDomain(${entity.name}Jpa jpa) {
         return new ${entity.name}(
                 ${args.join(',\n                ')});
@@ -317,6 +320,9 @@ function renderToJpa(model, entity, imports) {
       lines.push(`        jpa.set${capitalize(member.name)}(domain.get${capitalize(member.name)}());`);
     }
   }
+  // Devuelve la versión al espejo JPA para que Hibernate compruebe la concurrencia
+  // optimista al persistir (solo raíz de agregado).
+  if (entity.isAggregateRoot) lines.push('        jpa.setVersion(domain.getVersion());');
   lines.push('        return jpa;');
 
   return `    private ${entity.name}Jpa toJpa(${entity.name} domain) {

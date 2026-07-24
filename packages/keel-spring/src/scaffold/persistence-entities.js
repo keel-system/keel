@@ -314,6 +314,17 @@ function renderJpaEntity(model, entity) {
     }
   }
 
+  // Concurrencia optimista: solo la raíz de agregado porta la versión (es la
+  // frontera de consistencia). La gestiona Hibernate, que la comprueba e
+  // incrementa en cada flush; una escritura sobre una versión obsoleta lanza
+  // OptimisticLockException (la traduce el ApiExceptionHandler).
+  if (entity.isAggregateRoot) {
+    imports.add('jakarta.persistence.Column');
+    imports.add('jakarta.persistence.Version');
+    declarations.push('    @Version\n    @Column(name = "version")\n    private Long version;');
+    pushAccessor('version', 'Long');
+  }
+
   const header = ['@Entity'];
   if (!audited) {
     // Auditoría sobre timestamps declarados por el diseño: la entidad no hereda

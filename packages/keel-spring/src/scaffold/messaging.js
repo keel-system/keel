@@ -225,6 +225,7 @@ function renderOutboxAppend(model) {
                     Instant.now(),
                     null,
                     0,
+                    null,
                     null));
         } catch (JsonProcessingException ex) {
             // Serializar un evento propio no puede fallar: si falla, el diseño

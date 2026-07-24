@@ -266,6 +266,23 @@ function renderMultipartHandlers(imports) {
 `;
 }
 
+// Conflicto de concurrencia optimista (@Version de la raíz de agregado): dos
+// operaciones simultáneas escribieron sobre la misma versión. Spring traduce el
+// OptimisticLockException de JPA a ObjectOptimisticLockingFailureException al
+// hacer commit; sin este handler caería en el catch-all como 500. Es un 409:
+// el cliente debe releer y reintentar con el estado actual.
+function renderOptimisticLockHandler(imports) {
+  imports.add('org.springframework.orm.ObjectOptimisticLockingFailureException');
+  return `
+    @ResponseStatus(HttpStatus.CONFLICT)
+    @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
+    public ErrorResponse onOptimisticLockingFailure(ObjectOptimisticLockingFailureException exception) {
+        return new ErrorResponse(HttpStatus.CONFLICT.value(), "Conflict", "OPTIMISTIC_LOCK_CONFLICT",
+                "El recurso fue modificado por otra operación concurrente; reintenta con el estado actual", List.of());
+    }
+`;
+}
+
 function renderExceptionHandler(model) {
   const errorsPkg = subPackage(model, 'domain.errors');
   const imports = new Set([
@@ -298,6 +315,7 @@ function renderExceptionHandler(model) {
   const dataIntegrity = model.layersPresent.persistence
     ? renderDataIntegrityHandler(model, imports, constants)
     : '';
+  const optimisticLock = model.layersPresent.persistence ? renderOptimisticLockHandler(imports) : '';
   const multipart = model.layersPresent.storage ? renderMultipartHandlers(imports) : '';
 
   const body = `@RestControllerAdvice
@@ -341,7 +359,7 @@ ${constants.join('')}
     public ErrorResponse onMethodNotAllowed(HttpRequestMethodNotSupportedException exception) {
         return new ErrorResponse(HttpStatus.METHOD_NOT_ALLOWED.value(), "Method Not Allowed", "Método HTTP no soportado");
     }
-${multipart}${dataIntegrity}
+${multipart}${dataIntegrity}${optimisticLock}
     // ── Errores de dominio (jerarquía DomainException) ───────────────────────
 
     @ResponseStatus(HttpStatus.BAD_REQUEST)

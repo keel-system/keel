@@ -12,6 +12,9 @@ export function generate(model) {
     "implementation 'org.springframework.boot:spring-boot-starter-web'",
     "implementation 'org.springframework.boot:spring-boot-starter-validation'",
     "implementation 'org.springframework.boot:spring-boot-starter-aop'",
+    // Actuator: health con probes liveness/readiness (Kubernetes) + info/metrics.
+    // Los health indicators de BD/broker/redis los aportan sus starters.
+    "implementation 'org.springframework.boot:spring-boot-starter-actuator'",
     `implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:${SPRINGDOC_VERSION}'`
   ];
   if (layersPresent.persistence) {
