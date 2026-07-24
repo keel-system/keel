@@ -84,7 +84,7 @@
         "list": {
           "type": "boolean",
           "default": false,
-          "description": "El campo es una colección de valores del tipo declarado. Solo válido en payloads y contratos (use-cases, messaging, http-clients); las colecciones del dominio se modelan con relations."
+          "description": "El campo es una colección de valores del tipo declarado (escalar o value object). Válido en dominio, payloads y contratos. Las colecciones de entidades se modelan con relations; no es válido dentro de un value object (colección anidada)."
         },
         "required": { "type": "boolean", "default": false },
         "unique": { "type": "boolean", "default": false },
