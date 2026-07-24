@@ -1282,6 +1282,33 @@ test('persistencia: timestamps de auditoría declarados se auto-pueblan (no se p
   assert.ok(ledgerJpa.includes('@LastModifiedDate'));
 });
 
+test('persistencia: autoría declarada se anota y deja el TODO del AuditorAware', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const patched = structuredClone(layers);
+  patched.domain.entities.Ledger = {
+    description: 'Registro contable con autoría.',
+    fields: {
+      id: { type: 'uuid', id: true, generated: true },
+      createdBy: { type: 'string' },
+      updatedBy: { type: 'string' }
+    }
+  };
+
+  const { warnings } = scaffoldService({ manifest, layers: patched, workspace });
+
+  const ledgerJpa = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/persistence/entities/LedgerJpa.java');
+  assert.ok(ledgerJpa.includes('extends AuditableEntity')); // autoría sin timestamps propios no rompe la herencia
+  assert.ok(ledgerJpa.includes('@CreatedBy'));
+  assert.ok(ledgerJpa.includes('@LastModifiedBy'));
+  assert.ok(ledgerJpa.includes('org.springframework.data.annotation.CreatedBy'));
+  assert.ok(ledgerJpa.includes('org.springframework.data.annotation.LastModifiedBy'));
+  // El TODO del AuditorAware se emite una sola vez por entidad, no uno por campo.
+  assert.equal(ledgerJpa.split('TODO (agente): provee un AuditorAware').length - 1, 1);
+  // Segunda señal: warning de build, visible sin abrir el código generado.
+  assert.ok(warnings.some((w) => w.includes('Ledger') && w.includes('autoría declarada')));
+});
+
 test('operación sin patrón CRUD ni endpoint explícito cae a POST con aviso', () => {
   const workspace = makeWorkspace();
   const { manifest, layers } = loadFixture();

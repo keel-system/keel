@@ -160,6 +160,11 @@ function renderJpaEntity(model, entity) {
   // campos declarados se anotan igualmente como managed (ver bucle scalar).
   const audited = !entity.fields.some((field) => field.name === 'createdAt' || field.name === 'updatedAt');
 
+  // Autoría declarada por el diseño (createdBy/updatedBy): build anota los campos,
+  // pero quien los puebla es un AuditorAware que solo el agente puede escribir (de
+  // dónde sale el actor depende del diseño). El TODO se emite una vez por entidad.
+  let pendingAuditorTodo = entity.fields.some((field) => field.name === 'createdBy' || field.name === 'updatedBy');
+
   for (const member of members) {
     if (member.kind === 'scalar') {
       const { field } = member;
@@ -179,6 +184,22 @@ function renderJpaEntity(model, entity) {
       if (!audited && field.name === 'updatedAt') {
         imports.add('org.springframework.data.annotation.LastModifiedDate');
         lines.push('    @LastModifiedDate');
+      }
+      // Autoría: la puebla el mismo AuditingEntityListener (heredado de
+      // AuditableEntity o puesto en la clase), pero solo si hay un AuditorAware
+      // registrado; sin él estas columnas quedarían a null en silencio.
+      if (field.name === 'createdBy' || field.name === 'updatedBy') {
+        if (pendingAuditorTodo) {
+          lines.push(
+            '    // TODO (agente): provee un AuditorAware<String> (el actor del SecurityContext, o el',
+            '    // correlation id si no hay usuario) y regístralo con @EnableJpaAuditing(auditorAwareRef = "...")',
+            '    // en la clase Application — ver la skill keel-spring-database.'
+          );
+          pendingAuditorTodo = false;
+        }
+        const annotation = field.name === 'createdBy' ? 'CreatedBy' : 'LastModifiedBy';
+        imports.add(`org.springframework.data.annotation.${annotation}`);
+        lines.push(`    @${annotation}`);
       }
       for (const annotation of field.columns) {
         if (annotation.startsWith('@Enumerated')) {

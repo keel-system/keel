@@ -287,6 +287,15 @@ function collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPe
       }
     }
 
+    // Autoría: build anota los campos, pero el AuditorAware que los puebla depende
+    // del diseño (actor del SecurityContext vs. correlation id) y lo escribe el
+    // agente. Sin él las columnas quedarían a null sin que nada falle.
+    if (persisted && fields.some((f) => f.name === 'createdBy' || f.name === 'updatedBy')) {
+      warnings.push(
+        `Entidad ${name}: autoría declarada (createdBy/updatedBy). Build anota @CreatedBy/@LastModifiedBy; el AuditorAware<String> y el auditorAwareRef los completa el agente (skill keel-spring-database).`
+      );
+    }
+
     const lifecycle = def.lifecycle
       ? {
           field: def.lifecycle.field,

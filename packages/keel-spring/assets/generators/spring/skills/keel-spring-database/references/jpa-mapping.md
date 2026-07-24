@@ -90,10 +90,13 @@ Antes de tocar tipos de columna del dialecto, lee `references/dialects/<database
 - **createdAt/updatedAt**: ya los puebla build (`AuditableEntity` o, si el diseño
   declara sus propios timestamps, `@EntityListeners` + `@CreatedDate`/`@LastModifiedDate`
   sobre esos campos). No los reimplementes.
-- **Autoría (`createdBy`/`updatedBy`)**: si el diseño la pide, añade los campos con
-  `@CreatedBy`/`@LastModifiedBy` y provee un `AuditorAware<String>` que lea el actor
-  del `SecurityContext` (o del correlation id si no hay usuario). Regístralo con
-  `@EnableJpaAuditing(auditorAwareRef = "…")`.
+- **Autoría (`createdBy`/`updatedBy`)**: si la entidad los declara, build ya anotó los
+  campos con `@CreatedBy`/`@LastModifiedBy` y dejó un `// TODO (agente)` en la `XxxJpa`
+  (build también lo avisa por consola). Resuélvelo: provee un `AuditorAware<String>` que
+  lea el actor del `SecurityContext` (o del correlation id si no hay usuario) y
+  regístralo con `@EnableJpaAuditing(auditorAwareRef = "…")` en la clase Application.
+  Sin ese bean las anotaciones no pueblan nada y las columnas quedan a `null` en
+  silencio: no es opcional.
 - **Locking optimista (`@Version`)**: si el diseño declara concurrencia sobre un
   agregado (o `flow-fidelity` detecta updates concurrentes), añade `@Version private
   Long version` en la entidad `XxxJpa` y mapea la `OptimisticLockException` al error

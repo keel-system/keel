@@ -11,9 +11,10 @@ los dialectos): espejo `XxxJpa`, `JpaRepository`, puerto + adaptador
 `parameters/<perfil>/db.yaml`. **No rehagas ese patrón**; extiéndelo/ajústalo
 siguiendo `references/jpa-mapping.md` cuando el diseño exija lo que build no
 resuelve: relaciones bidireccionales (`mappedBy`/fetch), to-many entre agregados,
-value objects anidados o `@Embeddable`, converters, `json`→jsonb, `@Version`
-(locking) o autoría (`createdBy`/`updatedBy`). Build nunca deja código que no
-compila: donde no puede decidir deja un `// TODO (agente): …` que debes resolver.
+value objects anidados o `@Embeddable`, converters, `json`→jsonb o `@Version`
+(locking). Build nunca deja código que no compila: donde no puede decidir deja un
+`// TODO (agente): …` que debes resolver — la autoría (`createdBy`/`updatedBy`) es
+uno de esos casos: build anota los campos, tú provees el `AuditorAware`.
 Esta skill cubre además lo que solo varía en configuración: tuning, dialecto y
 validación/reset de datos.
 
@@ -49,11 +50,12 @@ validación/reset de datos.
 
 1. **Resolver los TODO de build**: busca `// TODO (agente)` en
    `infrastructure/persistence/` (value objects anidados, mapeos que build no pudo
-   aplanar) y complétalos con `references/jpa-mapping.md`.
+   aplanar, el `AuditorAware` de la autoría si la entidad declara
+   `createdBy`/`updatedBy`) y complétalos con `references/jpa-mapping.md`.
 2. **Extender el mapeo estructural**: aplica lo de `references/jpa-mapping.md`
    cuando `persistence.keel.yaml`/`domain.keel.yaml` exijan relaciones
-   bidireccionales, to-many entre agregados, `@Embeddable`, converters, `json`→jsonb,
-   `@Version` o autoría.
+   bidireccionales, to-many entre agregados, `@Embeddable`, converters, `json`→jsonb
+   o `@Version`.
 3. **Migraciones (el esquema definitivo)**: `ddl-auto: update` es solo del perfil
    `local` mientras iteras. En `develop`/`production` el esquema lo gobiernan las
    migraciones Flyway de `src/main/resources/db/migration/`, que **están vacías
@@ -74,7 +76,7 @@ Léelas bajo demanda, no todas de golpe:
 
 | Referencia | Cuándo leerla |
 |---|---|
-| `references/jpa-mapping.md` | Al resolver un `// TODO (agente)` de persistencia o al mapear algo que build no cubre (relaciones bidireccionales/to-many entre agregados, VO anidados/`@Embeddable`, converters, `json`→jsonb, `@Version`, autoría) |
+| `references/jpa-mapping.md` | Al resolver un `// TODO (agente)` de persistencia (incluido el `AuditorAware` de la autoría) o al mapear algo que build no cubre (relaciones bidireccionales/to-many entre agregados, VO anidados/`@Embeddable`, converters, `json`→jsonb, `@Version`) |
 | `references/migrations.md` | Al producir el baseline de `db/migration/` (exportar, revisar, probar) y al añadir migraciones posteriores |
 | `references/configuration.md` | Antes de tocar `parameters/<perfil>/db.yaml` o propiedades `spring.jpa.*` (Hikari, batching, N+1, locking) |
 | `references/dialects/<database>.md` | Al decidir tipos de columna, depurar el dialecto o preparar su validación/reset (solo el del stack) |
