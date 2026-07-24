@@ -206,6 +206,53 @@ test('scaffoldService genera el proyecto completo con contenido clave', () => {
   assert.ok(!compose.includes('kafka')); // sin capa messaging
 });
 
+test('README.md: guía de despliegue productivo con pasos y parámetros obligatorios', () => {
+  // Fixture base (persistence postgresql, sin broker/security/storage/http-clients).
+  const workspace = makeWorkspace();
+  scaffoldService({ ...loadFixture(), workspace });
+
+  const readme = read(workspace, 'README.md');
+  assert.ok(readme.includes('## Despliegue en producción'));
+  assert.ok(readme.includes('PROFILE=production java -jar build/libs/*.jar')); // paso de arranque
+  assert.ok(readme.includes('### Parámetros obligatorios'));
+  // DB deriva del perfil production (envValue → ${VAR} sin default).
+  assert.ok(readme.includes('| `DB_URL` |'));
+  assert.ok(readme.includes('| `DB_USERNAME` |'));
+  assert.ok(readme.includes('| `DB_PASSWORD` |'));
+  // Sin broker/security/storage/http-clients: no aparecen sus parámetros.
+  assert.ok(!readme.includes('KAFKA_BOOTSTRAP_SERVERS'));
+  assert.ok(!readme.includes('STORAGE_BUCKET'));
+  assert.ok(!readme.includes('OAUTH2_ISSUER_URI'));
+  // Operativos con default: mencionados aparte, no como obligatorios.
+  assert.ok(readme.includes('`SERVER_PORT`'));
+  // El flujo de agentes completa la sección antes del commit.
+  assert.ok(readme.includes('parameters/production/*.yaml'));
+
+  // Con broker kafka + storage minio + security oidc: sus parámetros obligatorios aparecen.
+  const rich = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const patchedManifest = structuredClone(manifest);
+  patchedManifest.layers.messaging = 'messaging.keel.yaml';
+  patchedManifest.layers.storage = 'storage.keel.yaml';
+  patchedManifest.layers.security = 'security.keel.yaml';
+  const patched = structuredClone(layers);
+  patched.messaging = { publishing: { reliability: 'best-effort', events: { ProductCreated: { payload: { entity: 'Product' } } } } };
+  patched.storage = { buckets: { productImages: { allowedContentTypes: ['image/png'] } } };
+  patched.security = {
+    authentication: { protocol: 'oidc' },
+    access: { default: { level: 'required' }, rules: { listProducts: { level: 'public' } } }
+  };
+
+  scaffoldService({ manifest: patchedManifest, layers: patched, workspace: rich, stack: { broker: 'kafka', auth: 'keycloak', storage: 'minio' } });
+  const richReadme = read(rich, 'README.md');
+  assert.ok(richReadme.includes('| `KAFKA_BOOTSTRAP_SERVERS` |'));
+  assert.ok(richReadme.includes('| `STORAGE_BUCKET` |'));
+  assert.ok(richReadme.includes('| `STORAGE_ENDPOINT` |')); // solo con minio
+  assert.ok(richReadme.includes('| `OAUTH2_ISSUER_URI` |'));
+  // KAFKA_GROUP_ID tiene default: operativo, no obligatorio.
+  assert.ok(!richReadme.includes('| `KAFKA_GROUP_ID` |'));
+});
+
 test('CLAUDE.md contextual: specs, solo capas declaradas y skill local con conventions', () => {
   const workspace = makeWorkspace();
   scaffoldService({ ...loadFixture(), workspace });

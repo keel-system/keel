@@ -53,8 +53,16 @@ flowchart TB
     QUALITY --> REVAL["Re-validación: keel-spring-validate (1 vez)<br/>confirma que la matriz sigue 100% OK"]
     REVAL --> GATE3{Gating fase 3}
     GATE3 -->|"quality KO o re-validación en FALLO<br/>→ revertir el pase de calidad"| STOP3[/"Detenerse y reportar"/]
-    GATE3 -->|OK| CLOSE["Cierre: compose down · commit<br/>«Generado desde specs/&lt;servicio&gt; v&lt;version&gt;»<br/>+ resumen (matriz, remaining, blockers, designGaps)"]
+    GATE3 -->|OK| README["Actualizar README<br/>guía de despliegue productivo<br/>(pasos + parámetros de parameters/production/*)"]
+    README --> CLOSE["Cierre: compose down · commit<br/>«Generado desde specs/&lt;servicio&gt; v&lt;version&gt;»<br/>+ resumen (matriz, remaining, blockers, designGaps)"]
 ```
+
+Antes del commit de cierre, con la re-validación en 100% OK, el orquestador actualiza la
+sección `## Despliegue en producción` del `README.md` del proyecto: pasos para levantar el
+servidor en production y la tabla de parámetros obligatorios, derivados de
+`src/main/resources/parameters/production/*.yaml` (todo `${VAR}` sin default) y del stack, más
+lo que los agentes cablearon al completar los adaptadores. El scaffolding deja un baseline
+determinista de esa sección; el orquestador la reconcilia con el código final.
 
 ## Los cuatro agentes
 
