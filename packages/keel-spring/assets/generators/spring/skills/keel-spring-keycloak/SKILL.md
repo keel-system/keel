@@ -38,6 +38,11 @@ diseño exija lógica que el mapeo de claims no cubre — p. ej. autorización p
    —si `validateAudience: true`— el mapper de audiencia (receta en
    `references/environment.md`). Los nombres de cliente y scopes salen **exactos**
    del diseño; no inventes clientes ni scopes.
+   Si los escenarios además distinguen "sin scope" (403) de "audiencia inválida"
+   (401), monta los clientes de prueba con la plantilla de
+   `references/test-clients.md`: el mapper de audiencia y los scopes de permisos
+   deben vivir en client scopes **separados**, o cada variante negativa mezclará
+   las dos condiciones y no se podrá afirmar cuál causó la respuesta.
 3. **Token para los escenarios**:
    `curl -d 'grant_type=password&client_id=<cliente>&username=<user>&password=<pass>' http://localhost:8180/realms/<realm>/protocol/openid-connect/token`
    y usa el `access_token` como Bearer en las llamadas de `validation-scenarios.md`.
@@ -55,6 +60,7 @@ Léelas bajo demanda, no todas de golpe:
 |---|---|
 | `references/configuration.md` | Antes de tocar `parameters/<perfil>/oauth2.yaml` (issuer-uri vs jwk-set-uri, audiencia, claims que mapea build) |
 | `references/environment.md` | Al crear el realm/cliente/usuarios por script, exportar el realm y obtener tokens (usuario y M2M) |
+| `references/test-clients.md` | **Antes** de montar los clientes M2M de prueba si los escenarios distinguen "sin scope" de "audiencia inválida": plantilla de los 4 clientes de la matriz 2×2 con las variables desacopladas |
 | `references/troubleshooting.md` | Ante 401/403 inesperados, arranque fallido por issuer o roles que no llegan al token |
 
 ## Validación

@@ -80,7 +80,7 @@ test('operaciones: DTOs derivados, rutas CRUD y endpoint explícito', () => {
   assert.equal(productService.className, 'ProductService');
 
   const create = productService.operations.find((o) => o.name === 'createProduct');
-  assert.deepEqual(create.route, { method: 'POST', path: '/products', status: 201 });
+  assert.deepEqual(create.route, { method: 'POST', path: '/products', status: 201, audience: 'users' });
   const bodyFieldNames = create.bodyFields.map((f) => f.name);
   assert.ok(!bodyFieldNames.includes('id')); // id generado fuera del input
   assert.ok(bodyFieldNames.includes('apiToken')); // sensitive sí entra en input
@@ -90,16 +90,16 @@ test('operaciones: DTOs derivados, rutas CRUD y endpoint explícito', () => {
   assert.ok(!responseFieldNames.includes('apiToken')); // sensitive fuera del output
 
   const get = productService.operations.find((o) => o.name === 'getProduct');
-  assert.deepEqual(get.route, { method: 'GET', path: '/products/{id}', status: 200 });
+  assert.deepEqual(get.route, { method: 'GET', path: '/products/{id}', status: 200, audience: 'users' });
   assert.equal(get.hasIdParam, true);
   assert.deepEqual(get.bodyFields, []); // el único campo del input era id → va por path
 
   const list = productService.operations.find((o) => o.name === 'listProducts');
   assert.equal(list.paginated, true);
-  assert.deepEqual(list.route, { method: 'GET', path: '/products', status: 200 });
+  assert.deepEqual(list.route, { method: 'GET', path: '/products', status: 200, audience: 'users' });
 
   const retire = productService.operations.find((o) => o.name === 'retireProduct');
-  assert.deepEqual(retire.route, { method: 'POST', path: '/products/{id}/retire', status: 204 });
+  assert.deepEqual(retire.route, { method: 'POST', path: '/products/{id}/retire', status: 204, audience: 'users' });
 });
 
 test('errores deduplicados con clase de excepción, http y subclase shared', () => {
@@ -147,6 +147,146 @@ test('ruta base versionada y controller V1 por grupo', () => {
   const productService = model.services.find((s) => s.entity === 'Product');
   assert.equal(productService.controllerClass, 'ProductV1Controller');
   assert.equal(productService.controllerPackage, 'infrastructure.rest.controllers.product.v1');
+});
+
+// Carga el fixture y le aplica un parche de capas (+ las declara en el manifiesto),
+// para probar capas que el fixture compartido no trae.
+function loadModelWithLayers(patch) {
+  const { manifest, layers, errors } = loadService(fixtureDir);
+  assert.deepEqual(errors, []);
+  const patchedManifest = structuredClone(manifest);
+  const patched = structuredClone(layers);
+  for (const [name, value] of Object.entries(patch)) {
+    patchedManifest.layers[name] = `${name}.keel.yaml`;
+    patched[name] = value === null ? patched[name] : { ...(patched[name] ?? {}), ...value };
+  }
+  return buildModel({ manifest: patchedManifest, layers: patched });
+}
+
+test('routeBase: se versiona una sola vez aunque el basePath ya traiga versión', () => {
+  // El diseño no versiona: build añade /v1 (comportamiento histórico).
+  assert.equal(loadModelWithLayers({ api: { basePath: '/api' } }).api.routeBase, '/api/v1');
+  // El diseño ya versiona: se respeta tal cual (antes salía /api/v1/v1).
+  assert.equal(loadModelWithLayers({ api: { basePath: '/api/v1' } }).api.routeBase, '/api/v1');
+  assert.equal(loadModelWithLayers({ api: { basePath: '/api/v2' } }).api.routeBase, '/api/v2');
+  // Una versión en medio de la ruta no es la versión del recurso: se versiona igual.
+  assert.equal(loadModelWithLayers({ api: { basePath: '/v1/api' } }).api.routeBase, '/v1/api/v1');
+});
+
+// ─── security: audiencia por ruta y roleGrants ────────────────────────────────
+
+const SECURITY_LAYER = {
+  authentication: {
+    protocol: 'oidc',
+    serviceAuth: { protocol: 'client-credentials', validateAudience: true, audience: 'catalog-api' }
+  },
+  roleGrants: { 'catalog-admin': ['product:write'] },
+  access: {
+    default: { level: 'required' },
+    rules: {
+      listProducts: { level: 'public' },
+      createProduct: { level: 'required', permissions: ['product:write'] },
+      retireProduct: { level: 'service', scopes: ['product:write'] }
+    }
+  }
+};
+
+test('security: cada matcher lleva la audiencia de su endpoint', () => {
+  const model = loadModelWithLayers({
+    api: { defaultAudience: 'users', endpoints: { retireProduct: { method: 'POST', path: '/products/{id}/retire', successStatus: 204, audience: 'services' } } },
+    security: SECURITY_LAYER
+  });
+
+  const byPath = Object.fromEntries(model.security.matchers.map((m) => [m.path, m.audience]));
+  assert.equal(byPath['/api/v1/products'], 'users'); // default de la capa api
+  assert.equal(byPath['/api/v1/products/{id}/retire'], 'services'); // audience propia
+});
+
+test('security: defaultAudience gobierna también las rutas derivadas por auto', () => {
+  const model = loadModelWithLayers({ api: { defaultAudience: 'services' }, security: SECURITY_LAYER });
+  assert.ok(model.security.matchers.every((m) => m.audience === 'services'));
+});
+
+test('security: roleGrants del diseño llega al modelo, sin roles vacíos', () => {
+  const model = loadModelWithLayers({
+    security: { ...SECURITY_LAYER, roleGrants: { 'catalog-admin': ['product:write', 'category:write'], viewer: [] } }
+  });
+  assert.deepEqual(model.security.roleGrants, [
+    { role: 'catalog-admin', permissions: ['product:write', 'category:write'] }
+  ]);
+});
+
+// ─── storage: política por bucket ─────────────────────────────────────────────
+
+test('storage: buckets con visibility, tamaño y content-types; maxSizeMb es el mayor', () => {
+  const model = loadModelWithLayers({
+    storage: {
+      buckets: {
+        productImages: { visibility: 'public', allowedContentTypes: ['image/png'], maxSizeMb: 5 },
+        invoices: { allowedContentTypes: ['application/pdf'], maxSizeMb: 20 }
+      }
+    }
+  });
+
+  assert.equal(model.storage.maxSizeMb, 20);
+  assert.equal(model.storage.hasPublicBucket, true);
+  const invoices = model.storage.buckets.find((b) => b.name === 'invoices');
+  assert.equal(invoices.visibility, 'private'); // default del schema
+  assert.deepEqual(invoices.allowedContentTypes, ['application/pdf']);
+});
+
+test('storage: sin la capa, el modelo no la inventa', () => {
+  assert.equal(loadModel().storage, null);
+});
+
+// ─── aggregates.entities: relación raíz → entidad interna ─────────────────────
+
+// Diseño mínimo con un agregado que declara una entidad interna; `relations`
+// se inyecta desde el test para cubrir el caso explícito.
+function modelWithInternalEntity(productRelations) {
+  const manifest = { keel: '2.0', service: { name: 'catalog', version: '0.1.0' }, layers: {} };
+  const layers = {
+    domain: {
+      entities: {
+        Product: {
+          description: 'Producto.',
+          fields: { id: { type: 'uuid', id: true }, name: { type: 'string' } },
+          ...(productRelations ? { relations: productRelations } : {})
+        },
+        ProductImage: {
+          description: 'Imagen del producto.',
+          fields: { id: { type: 'uuid', id: true }, storageKey: { type: 'string' } }
+        }
+      },
+      aggregates: { Product: { root: 'Product', entities: ['ProductImage'] } }
+    },
+    'use-cases': { operations: {} },
+    persistence: { entities: { Product: {}, ProductImage: {} } }
+  };
+  return buildModel({ manifest, layers });
+}
+
+test('aggregates.entities: sin relations explícita, la relación raíz → interna se deriva', () => {
+  const model = modelWithInternalEntity(null);
+  const product = model.entities.find((e) => e.name === 'Product');
+
+  assert.deepEqual(product.relations, [
+    { name: 'productImages', entity: 'ProductImage', cardinality: 'one-to-many', required: false, internal: true, implicit: true }
+  ]);
+  // La entidad interna sigue sin ser raíz de agregado (no lleva repository propio).
+  assert.equal(model.entities.find((e) => e.name === 'ProductImage').isAggregateRoot, false);
+  // Y se avisa, para que el diseñador pueda declararla si quiere otro nombre.
+  assert.ok(model.warnings.some((w) => w.includes('ProductImage') && w.includes('Product.productImages')));
+});
+
+test('aggregates.entities: con relations explícita no se duplica la relación', () => {
+  const model = modelWithInternalEntity({ images: { entity: 'ProductImage', cardinality: 'one-to-many' } });
+  const product = model.entities.find((e) => e.name === 'Product');
+
+  assert.equal(product.relations.length, 1);
+  assert.equal(product.relations[0].name, 'images'); // el nombre del diseño, no el derivado
+  assert.equal(product.relations[0].implicit, undefined);
+  assert.deepEqual(model.warnings, []);
 });
 
 // ─── http-clients: contrato estructurado, legacy en prosa y auth saliente ─────

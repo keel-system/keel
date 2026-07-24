@@ -80,6 +80,13 @@ agregado — un handler nunca lo llama; llama al método semántico. Una transic
 (el flujo exige éxito cuando el estado ya es el destino) se resuelve en el método semántico
 retornando antes de llamar al guard (ver `flow-fidelity.md`).
 
+**`updatedAt` en la respuesta de la mutación**: si el `output` de la operación expone un campo de
+auditoría que gestiona el ORM (`updatedAt`, `version`), el adaptador del repositorio debe guardar
+con `saveAndFlush(...)`, no `save(...)`. `@LastModifiedDate` corre en el flush y, con la
+transacción del `UseCaseMediator`, ese flush llega **después** de que el handler ya mapeó la
+respuesta: sale el valor viejo. Engaña porque un `GET` posterior sí muestra el correcto — el fallo
+está solo en la respuesta de la escritura. Detalle en `mapping.md § persistence`.
+
 ## Colecciones y entidades hijas
 
 La raíz es la única puerta a sus hijas: el getter devuelve una vista inmutable y el alta/baja pasa

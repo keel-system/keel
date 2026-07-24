@@ -45,7 +45,7 @@ flowchart TB
 
     VALIDATE["Fase 2 — keel-spring-validate<br/>bootRun + flujos FL-* secuenciales<br/>reset-db.sh antes de cada flujo"]
     VALIDATE --> GATE2{Gating fase 2}
-    GATE2 -->|"failures → relanzar code con ese bloque<br/>y revalidar (máx. 2 ciclos código→validación)"| CODE
+    GATE2 -->|"failures → relanzar code con ese bloque y revalidar<br/>blocking: scoped → consume cupo (máx. 2)<br/>blocking: systemic → no consume (tope duro 4)"| CODE
     GATE2 -->|"blockers o escenario que contradice el spec"| STOP2[/"Detenerse: proponer cambio a los<br/>artefactos, no acomodar el código"/]
     GATE2 -->|"todos los escenarios OK (100%)"| QUALITY
 
@@ -84,10 +84,28 @@ en el código: se propone como cambio a los artefactos (`designGaps`).
 | `compiles` / `failures` | `keel-spring-code` | Orquestador | Relanzar code con sus propios errores de compilación (máx. 2 ciclos en fase 1). |
 | `status: PENDIENTE`, `runtime` | `keel-spring-infra` | Orquestador | Detener la orquestación sin docker/podman (no hay validación posible); elegir el runtime del `compose down` final. |
 | `authHint` | `keel-spring-infra` | `keel-spring-validate` | Cómo obtener el Bearer token para los escenarios autenticados. |
-| `failures` (escenario, request, response, esperado) | `keel-spring-validate` | `keel-spring-code` (relanzado) | Evidencia **exacta** para el ciclo código→validación (máx. 2 ciclos). |
+| `failures` (escenario, request, response, esperado) | `keel-spring-validate` | `keel-spring-code` (relanzado) | Evidencia **exacta** para el ciclo código→validación. |
+| `blocking: systemic \| scoped` | `keel-spring-validate` | Orquestador | Contar los ciclos de fix: ver «Ciclos de fix» abajo. |
 | `remaining` | `keel-spring-quality` | Resumen final | Hallazgos conductuales pendientes de decisión humana. |
 | `scenarios` (2ª pasada) | `keel-spring-validate` (re-validación) | Orquestador | Confirmar que el pase de calidad no cambió comportamiento antes del commit. |
 | `blockers` / `designGaps` | Cualquiera | Usuario | Contradicciones o huecos del diseño: se detiene la orquestación o se consolidan en el resumen; nunca se resuelven relanzando. |
+
+## Ciclos de fix: bloqueo sistémico ≠ fallos puntuales
+
+El cupo de la fase 2 es de **2 ciclos código→validación para fallos puntuales**
+(`blocking: scoped`). Un ciclo que cerró un **bloqueo sistémico** (`blocking:
+systemic` — una causa transversal única que impedía ejercitar casi cualquier
+escenario: seguridad, arranque, infraestructura) **no consume cupo**.
+
+La razón es que un bloqueo sistémico *oculta* los fallos finos: mientras toda la
+API responde 401, no se puede saber nada sobre las reglas de negocio. Al
+destrabarlo aparece, por primera vez, una tanda de fallos específicos —
+exactamente aquello para lo que existe el cupo. Cobrárselo al presupuesto de los
+fallos puntuales lo agota antes de empezar a usarlo.
+
+Tope duro global: **4 ciclos** de fase 2, para que ninguna calificación deje la
+orquestación en bucle. Alcanzado el límite que aplique, el orquestador reporta la
+matriz y se detiene.
 
 ## Autosuficiencia del proyecto generado
 

@@ -54,18 +54,33 @@ function audienceOf(model, sec) {
   return sec.serviceAuth?.audience ?? model.service.artifactId;
 }
 
-// Bloque authorizeHttpRequests: endpoints técnicos permitidos, un matcher por
-// regla de operación (antes del anyRequest) y el default como anyRequest.
-function authorizeBlock(sec) {
-  const lines = [
-    '            .authorizeHttpRequests(auth -> auth',
-    '                    .requestMatchers("/actuator/health/**", "/swagger-ui/**", "/swagger-ui.html", "/v3/api-docs/**").permitAll()'
-  ];
-  for (const m of sec.matchers) {
+// Bloque authorizeHttpRequests: endpoints técnicos permitidos (solo en la cadena
+// que cubre todo), un matcher por regla de operación (antes del anyRequest) y la
+// autoridad de cierre como anyRequest.
+function authorizeBlock(matchers, { defaultAuthority, permitTechnical = true }) {
+  const lines = ['            .authorizeHttpRequests(auth -> auth'];
+  if (permitTechnical) {
+    lines.push(
+      '                    .requestMatchers("/actuator/health/**", "/swagger-ui/**", "/swagger-ui.html", "/v3/api-docs/**").permitAll()'
+    );
+  }
+  for (const m of matchers) {
     lines.push(`                    .requestMatchers(HttpMethod.${m.method}, "${m.path}").${m.authority}`);
   }
-  lines.push(`                    .anyRequest().${sec.defaultAuthority})`);
+  lines.push(`                    .anyRequest().${defaultAuthority})`);
   return lines.join('\n');
+}
+
+// Rutas de audiencia 'services' (clientes máquina). Las 'both' quedan fuera a
+// propósito: las sirve también un usuario, cuyo token no lleva la audiencia del
+// servicio, así que no pueden caer en la cadena que la valida.
+function serviceMatchersOf(sec) {
+  return sec.matchers.filter((m) => m.audience === 'services');
+}
+
+// Patrones (sin método) para el securityMatcher de la cadena M2M, deduplicados.
+function securityMatcherPatterns(matchers) {
+  return [...new Set(matchers.map((m) => m.path))];
 }
 
 function renderSecurityConfig(model, sec) {
@@ -99,27 +114,41 @@ public class SecurityConfig {
 
   if (sec.matchers.length > 0) imports.add('org.springframework.http.HttpMethod');
 
-  const chain = [
-    '            .csrf(AbstractHttpConfigurer::disable)',
-    '            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))',
-    authorizeBlock(sec)
-  ];
-
   const jwt = sec.protocol === 'oidc' || sec.protocol === 'jwt';
   const validateAudience = jwt && sec.serviceAuth?.validateAudience === true;
   const serviceApiKey = needsServiceApiKeyFilter(sec);
 
+  // Con validación de audiencia y rutas de ambos públicos, una sola cadena no
+  // sirve: el AudienceValidator rechazaría los tokens de usuario (cuya audiencia
+  // es la del IdP, no la del servicio). Se separan por securityMatcher.
+  const serviceMatchers = validateAudience && !serviceApiKey ? serviceMatchersOf(sec) : [];
+  const splitChains = serviceMatchers.length > 0 && serviceMatchers.length < sec.matchers.length;
+  const mainMatchers = splitChains ? sec.matchers.filter((m) => !serviceMatchers.includes(m)) : sec.matchers;
+
+  const chain = [
+    '            .csrf(AbstractHttpConfigurer::disable)',
+    '            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))',
+    authorizeBlock(mainMatchers, { defaultAuthority: sec.defaultAuthority })
+  ];
+
   let converterBean = '';
   if (jwt) {
     imports.add('org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter');
+    // Con cadenas separadas cada una fija su decoder: si se declara un bean
+    // JwtDecoder, Boot ya no autoconfigura el suyo.
+    const decoderCall = splitChains ? 'jwt.decoder(jwtDecoder())' : 'jwt';
     if (sec.usesAuthorities) {
-      chain.push('            .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthConverter())))');
+      chain.push(
+        `            .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> ${decoderCall}.jwtAuthenticationConverter(jwtAuthConverter())))`
+      );
       converterBean = `
 
     @Bean
     public JwtAuthenticationConverter jwtAuthConverter() {
         return new JwtAuthConverter().converter();
     }`;
+    } else if (splitChains) {
+      chain.push('            .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> jwt.decoder(jwtDecoder())))');
     } else {
       imports.add('org.springframework.security.config.Customizer');
       chain.push('            .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()))');
@@ -161,7 +190,37 @@ public class SecurityConfig {
 `);
     // SupplierJwtDecoder pospone el discovery OIDC hasta el primer token, como
     // hace el decoder autoconfigurado de Boot (los tests arrancan sin issuer real).
-    decoderBean = `
+    if (splitChains) {
+      imports.add('org.springframework.context.annotation.Primary');
+      decoderBean = `
+
+    /**
+     * Decoder de los endpoints de usuario: validadores por defecto del issuer,
+     * sin audiencia (el token de un usuario lleva la audiencia que emite el IdP,
+     * no la de este servicio).
+     */
+    @Bean
+    @Primary
+    public JwtDecoder jwtDecoder() {
+        return new SupplierJwtDecoder(() -> JwtDecoders.fromIssuerLocation(issuerUri));
+    }
+
+    /**
+     * Decoder de los endpoints de audiencia services: añade el AudienceValidator
+     * a los validadores del issuer, de modo que un token client_credentials
+     * emitido para otro servicio no sirva aquí.
+     */
+    @Bean
+    public JwtDecoder serviceJwtDecoder() {
+        return new SupplierJwtDecoder(() -> {
+            NimbusJwtDecoder decoder = JwtDecoders.fromIssuerLocation(issuerUri);
+            OAuth2TokenValidator<Jwt> withIssuer = JwtValidators.createDefaultWithIssuer(issuerUri);
+            decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(withIssuer, new AudienceValidator(audience)));
+            return decoder;
+        });
+    }`;
+    } else {
+      decoderBean = `
 
     @Bean
     public JwtDecoder jwtDecoder() {
@@ -171,6 +230,34 @@ public class SecurityConfig {
             decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(withIssuer, new AudienceValidator(audience)));
             return decoder;
         });
+    }`;
+    }
+  }
+
+  // Cadena de los endpoints M2M: se declara primero (@Order(1)) y solo cubre sus
+  // rutas; el resto de la API cae en la cadena de orden 2.
+  let serviceChainBean = '';
+  if (splitChains) {
+    imports.add('org.springframework.core.annotation.Order');
+    const patterns = securityMatcherPatterns(serviceMatchers)
+      .map((p) => JSON.stringify(p))
+      .join(', ');
+    const converterCall = sec.usesAuthorities ? '.jwtAuthenticationConverter(jwtAuthConverter())' : '';
+    serviceChainBean = `
+    /**
+     * Endpoints de audiencia services (clientes máquina): mismo resource server,
+     * pero con validación de audiencia sobre el token.
+     */
+    @Bean
+    @Order(1)
+    public SecurityFilterChain serviceFilterChain(HttpSecurity http) throws Exception {
+        http
+            .securityMatcher(${patterns})
+            .csrf(AbstractHttpConfigurer::disable)
+            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+${authorizeBlock(serviceMatchers, { defaultAuthority: 'authenticated()', permitTechnical: false })}
+            .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> jwt.decoder(serviceJwtDecoder())${converterCall}));
+        return http.build();
     }`;
   }
 
@@ -202,11 +289,14 @@ ${entries});
     }`;
   }
 
+  const mainChainOrder = splitChains ? '\n    @Order(2)' : '';
+  // serviceChainBean ya abre con línea en blanco; el \n extra separa del @Bean.
+  const beforeMainChain = serviceChainBean ? `${serviceChainBean}\n` : '';
   const body = `@Configuration
 @EnableWebSecurity
 public class SecurityConfig {
-${fields.join('')}
-    @Bean
+${fields.join('')}${beforeMainChain}
+    @Bean${mainChainOrder}
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http
 ${chain.join('\n')};
@@ -249,6 +339,43 @@ function renderJwtAuthConverter(model) {
                 .toList();
     }`;
 
+  // security.roleGrants: qué permisos otorga cada rol. Es información del diseño,
+  // no del token: ningún IdP la emite por defecto (Keycloak solo manda roles), así
+  // que se materializa aquí para que los matchers hasAnyAuthority("<r>:<a>") se
+  // satisfagan con el rol correspondiente.
+  const grants = model.security?.roleGrants ?? [];
+  const roleGrantsConstant = grants.length
+    ? `
+    /** Permisos que otorga cada rol (security.roleGrants del diseño). */
+    private static final java.util.Map<String, java.util.List<String>> ROLE_GRANTS = java.util.Map.ofEntries(
+${grants
+  .map(
+    (g) =>
+      `            java.util.Map.entry("${g.role}", java.util.List.of(${g.permissions.map((p) => JSON.stringify(p)).join(', ')}))`
+  )
+  .join(',\n')});
+`
+    : '';
+
+  const grantsExtractor = grants.length
+    ? `
+
+    /**
+     * Expande los roles del token a las authorities de permiso que otorgan, según
+     * el catálogo roleGrants del diseño.
+     */
+    private java.util.Collection<GrantedAuthority> extractGrantedPermissions(java.util.Collection<GrantedAuthority> roles) {
+        return roles.stream()
+                .map(GrantedAuthority::getAuthority)
+                .map(authority -> authority.startsWith("ROLE_") ? authority.substring(5) : authority)
+                .flatMap(role -> ROLE_GRANTS.getOrDefault(role, java.util.List.of()).stream())
+                .distinct()
+                .map(SimpleGrantedAuthority::new)
+                .map(GrantedAuthority.class::cast)
+                .toList();
+    }`
+    : '';
+
   let rolesExtractor;
   if (meta.type === 'nested') {
     rolesExtractor = `
@@ -282,6 +409,7 @@ function renderJwtAuthConverter(model) {
     }`;
   }
 
+  const grantsLine = grants.length ? '\n        authorities.addAll(extractGrantedPermissions(roles));' : '';
   const body = `/**
  * Mapea el JWT del proveedor (${model.stack.auth ?? 'genérico'}) a authorities de Spring:
  * roles (ROLE_), scopes OAuth2 (SCOPE_) y permisos granulares (sin prefijo).
@@ -289,7 +417,7 @@ function renderJwtAuthConverter(model) {
  * Principal: ${meta.principalClaim}.
  */
 public class JwtAuthConverter {
-
+${roleGrantsConstant}
     public JwtAuthenticationConverter converter() {
         JwtAuthenticationConverter converter = new JwtAuthenticationConverter();
         converter.setJwtGrantedAuthoritiesConverter(this::extractAuthorities);
@@ -298,13 +426,14 @@ public class JwtAuthConverter {
     }
 
     private java.util.Collection<GrantedAuthority> extractAuthorities(Jwt jwt) {
-        java.util.List<GrantedAuthority> authorities = new java.util.ArrayList<>(extractRoles(jwt));
+        java.util.Collection<GrantedAuthority> roles = extractRoles(jwt);
+        java.util.List<GrantedAuthority> authorities = new java.util.ArrayList<>(roles);
         authorities.addAll(extractScopes(jwt));
-        authorities.addAll(extractPermissions(jwt));
+        authorities.addAll(extractPermissions(jwt));${grantsLine}
         return authorities;
     }
 ${rolesExtractor}
-${scopesAndPermissions}
+${scopesAndPermissions}${grantsExtractor}
 }`;
 
   return {

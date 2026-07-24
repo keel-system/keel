@@ -86,6 +86,42 @@ mc alias set local http://minio:9000 minioadmin minioadmin && mc mb -p local/<bu
 
 Déjalo en un script de `infra/` si los escenarios lo necesitan reproducible.
 
+## `visibility: public` — crear el bucket **no** lo hace público
+
+S3 y MinIO crean los buckets **privados**. Un bucket declarado
+`visibility: public` en `storage.keel.yaml` (lo verás en la config generada, en
+`storage.buckets.<bucket>.visibility`) necesita además una **bucket policy de
+lectura anónima**; sin ella el síntoma es engañoso: la subida responde `201`, el
+evento se publica y todo parece bien, pero el `GET` directo a la URL devuelve
+`403` y el Then del escenario falla.
+
+En local, junto a la creación del bucket:
+
+```bash
+mc anonymous set download local/<bucket>
+```
+
+Y en el adaptador, de forma **idempotente y en cada arranque** (no solo cuando
+el bucket se acaba de crear: los buckets preexistentes también deben quedar
+bien), para cada bucket con `visibility: public`:
+
+```java
+private void ensurePublicRead(String bucket) {
+    String policy = """
+            {"Version":"2012-10-17","Statement":[{
+              "Effect":"Allow","Principal":"*","Action":["s3:GetObject"],
+              "Resource":["arn:aws:s3:::%s/*"]}]}
+            """.formatted(bucket);
+    s3Client.putBucketPolicy(PutBucketPolicyRequest.builder()
+            .bucket(bucket).policy(policy).build());
+}
+```
+
+`putBucketPolicy` sobrescribe la policy completa, así que es idempotente por
+naturaleza: llamarlo en cada arranque deja siempre el mismo estado. Los buckets
+`visibility: private` **no** la llevan — su lectura va por `signedUrl` o mediada
+por el servicio.
+
 ## Checklist
 
 - [ ] Validación de content-type (real, no declarado) y tamaño → errores del diseño.
@@ -93,3 +129,4 @@ Déjalo en un script de `infra/` si los escenarios lo necesitan reproducible.
 - [ ] `NoSuchKeyException` → error de dominio; ninguna clase del SDK fuera de infrastructure.
 - [ ] Presigned con expiración del diseño y host alcanzable por el consumidor.
 - [ ] Bucket creado por script de infra en local; nunca por la app en production.
+- [ ] Cada bucket `visibility: public` con su bucket policy de lectura anónima aplicada (idempotente, también sobre buckets ya existentes).

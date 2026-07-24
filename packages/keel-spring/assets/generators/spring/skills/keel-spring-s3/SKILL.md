@@ -18,7 +18,9 @@ y prod (S3); la diferencia (endpoint / path-style) vive en `storage.yaml` por pe
 ## Qué dejó listo build
 
 - `build.gradle`: `software.amazon.awssdk:s3` (AWS SDK v2).
-- `parameters/<perfil>/storage.yaml`: provider, endpoint, región, credenciales, bucket y `path-style-access` por perfil (local apunta al MinIO del compose; test trae valores dummy).
+- `parameters/<perfil>/storage.yaml`: provider, endpoint, región, credenciales, bucket y `path-style-access` por perfil (local apunta al MinIO del compose; test trae valores dummy), más la **política de cada bucket del diseño** bajo `storage.buckets.<bucket>`: `visibility`, `max-size-mb` y `allowed-content-types`. Aplícala desde ahí; no la re-derives ni la hardcodees.
+- `spring.servlet.multipart.max-file-size` / `max-request-size` en `application.yaml`, con el mayor `maxSizeMb` declarado (sin esto Spring corta en 1MB).
+- `ApiExceptionHandler` con los handlers de `MaxUploadSizeExceededException` (413 `FILE_TOO_LARGE`) y `MissingServletRequestPartException` (400): no los redeclares.
 - `infra/docker-compose.yaml`: MinIO (9000 + consola 9001, minioadmin/minioadmin) — solo con `storage: minio`.
 - Puerto `FileStorage` en `domain/storage` (upload/download/delete/signedUrl) y el value object `StoredObject` que devuelve `upload`.
 
@@ -69,6 +71,11 @@ se pide al leer con `signedUrl(storageKey)`.
 
 Valida content-type y tamaño según los `buckets` declarados en `storage.keel.yaml`
 antes de subir (error de negocio, no excepción genérica).
+
+**Bucket `visibility: public`**: crearlo no lo hace público — S3 y MinIO los
+crean privados. Aplica su bucket policy de lectura anónima de forma idempotente
+en cada arranque (receta en `references/implementation.md`), o la subida
+responderá `201` y la lectura directa `403`.
 
 ## Referencias
 

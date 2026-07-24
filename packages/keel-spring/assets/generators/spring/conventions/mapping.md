@@ -32,6 +32,7 @@ Buena parte de esta tabla la materializa ya el **scaffolding determinista** de `
 | `relations` | Asociación JPA según `cardinality`; `required: false` → `optional = true`. Casos que build no genera (bidireccionalidad/`mappedBy`, fetch, to-many entre agregados) los completa el agente vía skill `keel-spring-database` (`references/jpa-mapping.md`) |
 | `lifecycle` | Guardas mecánicas de transición en la entidad: un método de dominio por transición válida sobre el guard privado `transitionTo`; cambio de estado no declarado → excepción de negocio; estado con `[]` es terminal (`domain-modeling.md`) |
 | `aggregates` | Repository de Spring Data **solo por raíz**; las entidades internas se acceden a través de su raíz, sin repository propio |
+| `aggregates.A.entities` | Si ninguna `relations` del agregado ata la entidad interna a su raíz, build **deriva** la relación `one-to-many` (colección en el agregado + `@OneToMany` en la Jpa) y lo avisa con un warning. Lo que **no** deriva es su exposición en la API: el DTO anidado de la hija y su mapeo salen del `output` de la operación, y los escribe el agente |
 | relación interna a un agregado | Asociación con `cascade = CascadeType.ALL, orphanRemoval = true` desde la raíz, con `@JoinColumn` (FK en la tabla hija para `@OneToMany`; columna `<relación>_id` para `@ManyToOne`/`@OneToOne`), sin join table |
 | relación hacia otro agregado (`many-to-one`/`one-to-one`) | Columna `UUID <relación>Id` a la raíz ajena, sin asociación navegable. La `to-many` entre agregados build no la genera (warning): la modela el agente sin cruzar la frontera de agregado |
 | `invariants` | Guarda en el dominio que las protege — en el factory de creación y en cada método mutador afectado —, lanzando el error declarado del diseño (`domain-modeling.md`). Un invariante sin guarda es generación incompleta |
@@ -83,6 +84,7 @@ En el **dominio** la colección es una lista mutable interna con getter inmutabl
 | `kind: query` | Sin efectos; el `UseCaseMediator` la despacha en transacción `readOnly` (el handler no lleva `@Transactional`) |
 | `input`/`output` `{ entity: X }` | DTOs derivados de la entidad; en input quedan fuera `generated`/`computed`; en output quedan fuera `sensitive` y los campos de `exclude`. Un `exclude` con **dot-path** (`lines.costPrice`, `address.zip`) omite el campo del DTO **anidado** de la hija/value object, no solo del DTO raíz: build **no** lo aplica (su DTO es plano) y lo señala con un warning por cada ruta — ese warning es la señal de trabajo del agente. Sin dot-path, la hija sale íntegra salvo sus propios `sensitive`. El diseño manda qué campos anidados salen: no es criterio del agente |
 | `preconditions` / `rules` | Lógica del `handle(...)` del handler, en el mismo orden del diseño, comentadas con la frase del diseño cuando no sea obvia |
+| `rules` con **normalización previa** (upper/lower/trim antes de validar formato o unicidad) | El campo **no** lleva `@Pattern`/`@Size` de Bean Validation en el DTO de entrada — ver el aviso de abajo |
 | `errors[].code` | `<PascalCode>Error` en `domain/errors` con el `code` exacto, extendiendo la subclase base de su `http` (404→`NotFoundException`, 409→`ConflictException`…; status sin subclase → `DomainException` con el `httpStatus` en la metadata); `ApiExceptionHandler` la traduce a `ErrorResponse` (`timestamp`, `status`, `error`, `code`, `message`, `details`) |
 | `emits` | `raise(<E>Event.of(...))` **dentro del método de negocio del agregado** que provoca el cambio (`domain-modeling.md`); el handler no publica ni inyecta publishers. El adaptador de repositorio drena el buffer al persistir y el bridge lo entrega según `messaging.publishing.reliability` |
 | `idempotency: { keySource: client-key }` | Header `Idempotency-Key` requerido en esas operaciones; registro de claves procesadas con el `ttlSeconds` del diseño |
@@ -91,30 +93,52 @@ En el **dominio** la colección es una lista mutable interna con getter inmutabl
 | `schedule: { cron }` | `@Scheduled(cron = ...)` que despacha el mensaje de la operación vía `UseCaseMediator`; sin endpoint |
 | `internal: true` | Solo mensaje + handler en application; sin endpoint ni listener |
 
+### Normalización antes que validación de formato
+
+Replicar el tipo del dominio como `@Pattern` en el DTO de entrada es el reflejo
+natural, y es **incorrecto** cuando el diseño declara una regla de normalización
+antes de la validación de ese campo: Bean Validation corre sobre el DTO **antes**
+de que el handler llegue a normalizar nada.
+
+> `sku` es de tipo `SKU` (`^[A-Z0-9][A-Z0-9-]{2,31}$`) y `use-cases` declara
+> "normalizar el sku a mayúsculas" antes de "validar que no exista otro producto
+> con ese sku". Con `@Pattern` en el DTO, un `sku` en minúsculas se rechaza con
+> `422 VALIDATION_ERROR` y nunca llega a la regla de negocio, que debía devolver
+> `409 SKU_ALREADY_EXISTS`. El escenario falla por el error equivocado.
+
+Regla: si el orden de `rules` pone una normalización por delante de la validación
+de formato o de unicidad de un campo, ese campo va **sin** `@Pattern`/`@Size` en
+el DTO de entrada. La validación de formato vive después de normalizar, en el
+handler o en el constructor del value object del dominio (que es donde el modelo
+rico la quiere de todos modos, ver `domain-modeling.md`). `@NotNull`/`@NotBlank`
+sí pueden quedarse: no compiten con ninguna normalización.
+
 ## `api` — api.keel.yaml
 
 | Diseño | Código |
 |--------|--------|
-| `basePath` | Prefijo común de rutas (`server.servlet.context-path` o `@RequestMapping` base) |
+| `basePath` | Prefijo común de rutas en el `@RequestMapping` base de cada controller (no `server.servlet.context-path`). Si el diseño **no** versiona el basePath (`/api`), build añade `/v1`; si ya lo versiona (`/api/v1`), lo respeta tal cual. Ese mismo valor alimenta los matchers de `SecurityConfig`: no reescribas la ruta en un sitio sin el otro |
+| `defaultAudience` / `endpoints.op.audience` | Público del endpoint. Con `serviceAuth.validateAudience`, decide en qué `SecurityFilterChain` cae la ruta (ver `security`) |
 | `endpoints.op` | `@GetMapping`/`@PostMapping`… con `method`, `path` y `successStatus` del diseño |
 | `auto: true` | Rutas por convención CRUD (`createX → POST /xs`, `getX → GET /xs/{id}`, `listXs → GET /xs`, `updateX → PUT /xs/{id}`, `deleteX → DELETE /xs/{id}`); los `endpoints` explícitos tienen prioridad |
 | `pagination` | `Pageable` con `defaultSize`/`maxSize` del diseño; respuesta con `content` + metadatos, aplicada a outputs `paginated: true` |
 
 ## `security` — security.keel.yaml
 
-Sin esta capa, no se incluye Spring Security. **Esta capa la materializa entera el scaffolding determinista**: `SecurityConfig` + `SecurityFilterChain` (matchers por ruta reutilizando los endpoints de los controllers), resource server JWT (`oidc`/`jwt`) o `ApiKeyAuthFilter` (`api-key`), y `JwtAuthConverter` del proveedor del stack cuando se usan roles/permisos. El agente solo interviene si el diseño exige autorización que el mapeo de claims no cubre (`roleGrants` resueltos en el servicio, *ownership*). La tabla siguiente documenta el mapeo aplicado.
+Sin esta capa, no se incluye Spring Security. **Esta capa la materializa entera el scaffolding determinista**: `SecurityConfig` + `SecurityFilterChain` (matchers por ruta reutilizando los endpoints de los controllers), resource server JWT (`oidc`/`jwt`) o `ApiKeyAuthFilter` (`api-key`), y `JwtAuthConverter` del proveedor del stack cuando se usan roles/permisos, incluida la expansión de `roleGrants`. El agente solo interviene si el diseño exige autorización que no es derivable de los claims (p. ej. *ownership*: "solo el autor puede editarlo", que se resuelve en el handler con el principal). La tabla siguiente documenta el mapeo aplicado.
 
 | Diseño | Código |
 |--------|--------|
 | `authentication.protocol` | `oidc`/`jwt` → Spring Security resource server (JWT); `api-key` → filtro de API key; `none` → sin autenticación |
 | `access.default` | Regla base del `SecurityFilterChain` para toda operación sin regla explícita |
 | `access.rules.op` | Regla por operación (vía su ruta): `public` → permitAll, `required` → authenticated (+ `hasAuthority` por `permissions`), `admin` → rol elevado (+ `hasRole` por `roles`), `service` → autenticación de cliente máquina |
-| `roles` / `permissions` / `roleGrants` | Catálogo de authorities; los grants se resuelven al validar el token o vía mapeo de claims |
+| `roles` / `permissions` | Catálogo de authorities: roles como `ROLE_<rol>`, permisos como authority sin prefijo |
+| `roleGrants` | Mapa estático `ROLE_GRANTS` en el `JwtAuthConverter`: cada rol del token se expande a las authorities de permiso que otorga. Es información **del diseño**, no del token — ningún IdP la emite por defecto (Keycloak solo manda `realm_access.roles`), así que sin esta expansión los matchers `hasAnyAuthority("<recurso>:<accion>")` no se satisfarían ni con el rol correcto. El claim `permissions`, si el IdP lo emite, se suma a lo anterior |
 | `access.rules.op.scopes` (y `level: service`) | Matcher `hasAnyAuthority("SCOPE_<scope>", ...)` — el `JwtAuthConverter` ya emite los scopes del claim `scope` con prefijo `SCOPE_`; `service` sin scopes → `authenticated()` (cualquier token válido, incluidos de usuario: por eso el diseño lo marca con warning) |
 | `audience` de un endpoint (capa api) | Sin efecto directo en código; gobierna qué reglas son válidas (lo valida `keel validate`) y qué escenarios M2M se ejercitan en la validación funcional |
 | `authentication.serviceAuth.protocol: client-credentials` | Mismo resource server JWT: los tokens `client_credentials` entran por la misma cadena; los clientes se provisionan en el proveedor (skill `keel-spring-keycloak`/`-cognito`) |
 | `authentication.serviceAuth.protocol: api-key` (con protocolo principal `oidc`/`jwt`) | `ServiceApiKeyAuthFilter`: header `X-API-Key` contra `security.api-keys.<cliente>` (fragmento `parameters/<perfil>/security.yaml`); autentica como el `serviceClient` con sus scopes como authorities `SCOPE_*` |
-| `authentication.serviceAuth.validateAudience: true` | `AudienceValidator` (`OAuth2TokenValidator<Jwt>` sobre el claim `aud`) + bean `JwtDecoder` (`SupplierJwtDecoder` → Nimbus desde el issuer + validador delegante), audiencia en `security.audience` (default: nombre del servicio) |
+| `authentication.serviceAuth.validateAudience: true` | `AudienceValidator` (`OAuth2TokenValidator<Jwt>` sobre el claim `aud`) + bean `JwtDecoder` (`SupplierJwtDecoder` → Nimbus desde el issuer + validador delegante), audiencia en `security.audience` (default: nombre del servicio). **Solo se aplica a las rutas M2M**: si el servicio expone además endpoints de usuario, build emite **dos** `SecurityFilterChain` — `@Order(1)` con `securityMatcher` sobre las rutas `audience: services` y el `serviceJwtDecoder` (con audiencia), `@Order(2)` para el resto con el `jwtDecoder` normal. Un token de usuario lleva la audiencia que emite el IdP (`aud: "account"` en Keycloak), nunca la del servicio: validársela daría 401 a usuarios con el rol correcto. Las rutas `audience: both` van a la cadena 2, sin validación de audiencia |
 | `serviceClients` | Catálogo de clientes máquina: provisión en el proveedor de auth como clientes `client_credentials` con sus scopes (skill del proveedor), o fuente de las claves `security.api-keys.*` si `serviceAuth` es `api-key` |
 
 ## `messaging` — messaging.keel.yaml
@@ -173,19 +197,33 @@ Sin esta capa (servicio sin estado propio), no se incluye JPA ni base de datos.
 | `consistency.transactionalBoundary: per-aggregate` | El command debe tocar una sola raíz de agregado dentro de la transacción del mediator; nunca dos agregados en la misma transacción (si necesitas semántica especial, anota el handler con `@Transactional` y documenta la excepción) |
 | auditoría `createdAt`/`updatedAt` | Automática: `AuditableEntity` (`@MappedSuperclass` + JPA auditing). Si la entidad declara sus propios timestamps, build no hereda pero anota esos campos con `@CreatedDate`/`@LastModifiedDate` + `@EntityListeners` (se auto-pueblan igual) |
 | autoría (`createdBy`/`updatedBy`), `@Version` (locking), soft-delete, `json`→jsonb, converters, ids numéricos generados | No los genera build (dependen del diseño avanzado): los añade el agente siguiendo `keel-spring-database`/`references/jpa-mapping.md`, cubiertos por escenarios `FL-*` |
+| operación de escritura cuya **respuesta** expone un campo de auditoría del ORM (`updatedAt`, `version`) | El adaptador guarda con **`saveAndFlush(...)`**, no `save(...)` — ver el aviso de abajo |
+
+### `saveAndFlush` cuando la respuesta lleva campos de auditoría
+
+`@LastModifiedDate`/`@PreUpdate` corren en el **flush** de Hibernate. Con el
+`UseCaseMediator` abriendo la transacción y haciendo commit al final, ese flush
+ocurre *después* de que el handler ya mapeó el objeto devuelto por `save(...)` a
+DTO: la respuesta sale con el `updatedAt` viejo.
+
+Es un fallo fácil de pasar por alto porque **un `GET` posterior muestra el valor
+correcto** y enmascara el síntoma: lo único que está mal es la respuesta de la
+propia operación de escritura. Si el `output` de la operación incluye un campo
+gestionado por el ORM, el adaptador usa `saveAndFlush(...)` para que el callback
+de auditoría corra dentro de la misma unidad de trabajo antes del mapeo.
 
 ## `storage` — storage.keel.yaml
 
-Sin esta capa (servicio que no maneja archivos), no se incluye SDK de object storage ni adaptador. El scaffolding determinista genera la dependencia Gradle (`software.amazon.awssdk:s3`), el servicio MinIO en el `infra/docker-compose.yaml` (con MinIO), el fragmento de configuración `parameters/<perfil>/storage.yaml` (clave `storage`: `provider`, `bucket`, `endpoint`, `region`, `access-key`, `secret-key`, `path-style-access`) , el **puerto `FileStorage`** y el value object `StoredObject(storageKey, url, contentType, sizeBytes)` que devuelve `upload` (lo que el agregado guarda; `url` llega null en buckets de URL firmada, que se pide al leer). El agente escribe el adaptador completo siguiendo la skill `keel-spring-s3` (`.claude/skills/keel-spring-s3/SKILL.md`; bean `S3Client` + `S3FileStorage`, incluida `signedUrl`) más la política de negocio: validación de content-type/tamaño según los `buckets`.
+Sin esta capa (servicio que no maneja archivos), no se incluye SDK de object storage ni adaptador. El scaffolding determinista genera la dependencia Gradle (`software.amazon.awssdk:s3`), el servicio MinIO en el `infra/docker-compose.yaml` (con MinIO), el fragmento de configuración `parameters/<perfil>/storage.yaml` (clave `storage`: `provider`, `bucket`, `endpoint`, `region`, `access-key`, `secret-key`, `path-style-access` y la política de cada bucket del diseño bajo `storage.buckets.<b>`: `visibility`, `max-size-mb`, `allowed-content-types`), el límite `spring.servlet.multipart.max-file-size`/`max-request-size` con el mayor `maxSizeMb` declarado, los `@ExceptionHandler` de multipart en el `ApiExceptionHandler`, el **puerto `FileStorage`** y el value object `StoredObject(storageKey, url, contentType, sizeBytes)` que devuelve `upload` (lo que el agregado guarda; `url` llega null en buckets de URL firmada, que se pide al leer). El agente escribe el adaptador completo siguiendo la skill `keel-spring-s3` (`.claude/skills/keel-spring-s3/SKILL.md`; bean `S3Client` + `S3FileStorage`, incluida `signedUrl`) más la política de negocio: validación de content-type/tamaño según los `buckets`.
 
 | Diseño | Código |
 |--------|--------|
 | capa `storage` presente | Puerto `domain/storage/FileStorage` (interface: `upload`, `download`, `delete`, `signedUrl`) — scaffolding. Adaptador `infrastructure/storage/S3FileStorage` + `infrastructure/configurations/storage/S3Config` (bean `S3Client`, AWS SDK v2, sirve para MinIO y S3, configurado desde la clave `storage` de los perfiles) — agente, según la skill `keel-spring-s3` |
 | `buckets.B` | Un bucket físico por bucket lógico (nombre derivado de `B`, prefijado por servicio/entorno para evitar colisiones); el adaptador lo crea/valida al arrancar en local |
 | `buckets.B.allowedContentTypes` | Validación de content-type en la subida antes de tocar el storage → error `UNSUPPORTED_CONTENT_TYPE` (declararlo en use-cases) |
-| `buckets.B.maxSizeMb` | Límite de tamaño en la subida (multipart) → error `FILE_TOO_LARGE`; refuerza también `spring.servlet.multipart.max-file-size` |
+| `buckets.B.maxSizeMb` | Validación de tamaño en la subida → error `FILE_TOO_LARGE` (agente). El límite del servlet (`spring.servlet.multipart.max-file-size`, el mayor de los declarados) y el handler de `MaxUploadSizeExceededException` → `413 FILE_TOO_LARGE` los genera build |
 | `buckets.B.visibility: private` | El objeto no es de lectura pública; la descarga se sirve mediada por el servicio o vía **URL firmada** temporal (`signedUrl`) |
-| `buckets.B.visibility: public` | Lectura directa permitida; la URL pública puede exponerse en el ResponseDto |
+| `buckets.B.visibility: public` | Lectura directa permitida: el adaptador **debe aplicar la bucket policy de lectura anónima** (idempotente, en cada arranque; S3 y MinIO crean los buckets privados). Sin ella la subida responde `201` y el `GET` directo `403`. La URL pública puede exponerse en el ResponseDto |
 | campo `file` de una entidad | La entidad persiste la **key** del objeto (String); el controller recibe el binario como `multipart/form-data` (`MultipartFile`), el handler valida contra el bucket y delega en `FileStorage`, y guarda la key devuelta |
 
 ## Cobertura funcional (criterio de "generación terminada")

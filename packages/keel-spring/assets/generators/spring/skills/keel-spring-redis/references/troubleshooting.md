@@ -26,6 +26,14 @@ Alguien escribió con `opsForValue().set(k, v)` sin duración, o el
 servicio debe tener TTL: una clave sin TTL es una fuga de memoria. Encuéntralas:
 `redis-cli -h redis --scan --pattern '<servicio>:*' | while read k; do [ "$(redis-cli -h redis ttl "$k")" = "-1" ] && echo "$k"; done`.
 
+## `500` en toda lectura cacheada: `A sync=true operation does not support the unless attribute`
+
+`IllegalStateException` lanzada por Spring Cache al invocar el método: el
+`@Cacheable` combina `sync = true` con `unless`, y son incompatibles. No hay
+error de compilación — solo se ve al llamar al endpoint. Quita el `unless`: los
+vacíos ya los descarta `disableCachingNullValues()` en la
+`RedisCacheConfiguration` base. Ver `references/implementation.md`.
+
 ## El primer acceso tras expirar dispara N queries a la BD
 
 Estampida: falta `sync = true` en el `@Cacheable` (o el equivalente con lock

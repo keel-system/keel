@@ -15,6 +15,7 @@ endpoints:                       # mapeo explícito; prioridad sobre auto
 pagination: { style: offset, defaultSize: 20, maxSize: 100 }
 ```
 
+- `basePath` es el prefijo de todas las rutas. Si **no** incluye la versión (`/api`), el generador añade `/v1`; si ya la incluye (`/api/v1`, `/api/v2`), se respeta tal cual. Las dos formas son válidas: elige una y no mezcles.
 - `auto: true` deriva rutas CRUD: `createX → POST /xs`, `getX → GET /xs/{id}`, `listXs → GET /xs`, `updateX → PUT /xs/{id}`, `deleteX → DELETE /xs/{id}`. Los `endpoints` explícitos cubren operaciones no-CRUD.
 - Cada clave de `endpoints` debe ser una operación de `use-cases` (referencia por nombre, validada por `keel validate`).
 - `audience` declara el público del endpoint: `users` (clientes web/mobile con usuario humano, el default), `services` (otros servidores, M2M) o `both`. Reutilizar un endpoint para ambos públicos es posible pero **explícito** (`both`); lo habitual es que los consumidores servidor tengan endpoints propios con contrato pensado para máquina.

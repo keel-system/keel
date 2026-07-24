@@ -18,6 +18,7 @@ const BASE_SUBCLASSES = [
   { name: 'ForbiddenException', http: 403 },
   { name: 'NotFoundException', http: 404 },
   { name: 'ConflictException', http: 409 },
+  { name: 'PayloadTooLargeException', http: 413 },
   { name: 'BusinessException', http: 422 }
 ];
 

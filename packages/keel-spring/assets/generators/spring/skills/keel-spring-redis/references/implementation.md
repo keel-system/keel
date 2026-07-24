@@ -31,6 +31,16 @@ public class CacheConfig {
   (`key = "#id"` o SpEL compuesto `"#a + ':' + #b"`).
 - **`sync = true`** en `@Cacheable`: ante expiración con concurrencia, un solo
   hilo repuebla y el resto espera (evita la estampida contra la BD).
+- **Nunca `unless` junto a `sync = true`**: Spring rechaza la combinación en
+  tiempo de ejecución con
+  `IllegalStateException: A sync=true operation does not support the unless attribute`,
+  así que la primera lectura cacheada devuelve `500`. No compila-y-falla: falla
+  en runtime, contra el servidor real.
+- Para no cachear vacíos, **`disableCachingNullValues()`** en la
+  `RedisCacheConfiguration` base (ya está en el `CacheConfig` que genera build):
+  es compatible con `sync = true` y cubre el caso sin `unless`. Si lo que quieres
+  descartar es un `Optional.empty()` o una lista vacía, devuelve `null` desde el
+  adaptador y deja que esa opción decida.
 - Invalidación: `@CacheEvict` en los adaptadores de los commands que mutan la
   misma entidad — repasa el diseño: cada command que toca la entidad cacheada
   debe evictar, o servirás datos obsoletos más allá del TTL.
@@ -94,6 +104,8 @@ inspecciona lo tuyo y solo lo tuyo).
 
 - [ ] Un `RedisCacheConfiguration` por caché, TTL = `cache.ttlSeconds` del diseño.
 - [ ] `@Cacheable(sync = true)` en adaptador/decorator, nunca en el handler.
+- [ ] Ningún `@Cacheable` combina `unless` con `sync = true` (los vacíos los
+      descarta `disableCachingNullValues()`).
 - [ ] `@CacheEvict` en todos los commands que mutan la entidad cacheada.
 - [ ] `CacheErrorHandler` registrado: Redis caído degrada a miss.
 - [ ] Claves de idempotencia con `SET NX EX` y TTL del diseño.

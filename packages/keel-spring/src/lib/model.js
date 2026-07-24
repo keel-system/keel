@@ -17,11 +17,21 @@ const SHARED_EXCEPTION_BY_HTTP = {
   403: 'ForbiddenException',
   404: 'NotFoundException',
   409: 'ConflictException',
+  413: 'PayloadTooLargeException',
   422: 'BusinessException'
 };
 
 export function sharedExceptionFor(http) {
   return SHARED_EXCEPTION_BY_HTTP[http] ?? 'DomainException';
+}
+
+// Base de rutas del servicio: el basePath del diseño (o /api/<servicio>) más la
+// versión. Si el diseño ya versiona el basePath (/api/v1, /api/v2) se respeta
+// tal cual: volver a añadir /v1 produciría /api/v1/v1 en los @RequestMapping y
+// en los matchers de seguridad a la vez.
+export function versionedRouteBase(basePath, serviceName) {
+  const base = basePath ?? `/api/${kebabCase(serviceName)}`;
+  return /\/v\d+$/.test(base) ? base : `${base}/v1`;
 }
 
 export function buildModel({ manifest, layers, stack = null }) {
@@ -73,12 +83,13 @@ export function buildModel({ manifest, layers, stack = null }) {
   // Base de rutas versionada (estilo del prototipo de referencia): el basePath
   // del diseño (o /api/<servicio>) + /v1, puesta en el @RequestMapping de cada
   // controller (no en server.servlet.context-path).
-  const api = { routeBase: `${layers.api?.basePath ?? `/api/${kebabCase(service.name)}`}/v1` };
+  const api = { routeBase: versionedRouteBase(layers.api?.basePath, service.name) };
 
   const security = collectSecurity(layers, services, api.routeBase, warnings);
   const httpClients = collectHttpClients(layers, domainTypes, inlineEnumName, warnings);
+  const storage = collectStorage(layers);
 
-  return { service, layersPresent, enums, valueObjects, entities, services, errors, events, messaging, subscriptions, pagination, api, security, httpClients, warnings };
+  return { service, layersPresent, enums, valueObjects, entities, services, errors, events, messaging, subscriptions, pagination, api, security, httpClients, storage, warnings };
 }
 
 function buildService(manifest, stack) {
@@ -303,7 +314,47 @@ function collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPe
       indexes: persistenceMeta.indexes ?? []
     });
   }
+
+  addImplicitAggregateRelations(entities, aggregates, warnings);
   return entities;
+}
+
+// Una entidad interna de un agregado pertenece a su raíz por definición: es lo
+// que declara `aggregates.<A>.entities`. Si el diseño no la ata además con una
+// `relations` explícita, la relación se deriva aquí (raíz → colección de hijas),
+// para que el agregado tenga su campo de colección y la Jpa su @OneToMany en vez
+// de que el agente tenga que modelarlo de cero.
+function addImplicitAggregateRelations(entities, aggregates, warnings) {
+  const byName = new Map(entities.map((entity) => [entity.name, entity]));
+
+  for (const [aggName, agg] of Object.entries(aggregates)) {
+    const root = byName.get(agg.root);
+    if (!root) continue;
+    const members = [agg.root, ...(agg.entities ?? [])];
+
+    for (const inner of agg.entities ?? []) {
+      if (!byName.has(inner)) continue;
+      // Ya alcanzada: cualquier miembro del agregado la referencia (colección
+      // desde la raíz, o back-reference desde la propia hija hacia la raíz).
+      const reachable = members.some((member) =>
+        (byName.get(member)?.relations ?? []).some((rel) => rel.entity === inner || (member === inner && rel.entity === agg.root))
+      );
+      if (reachable) continue;
+
+      const relName = camelCase(pluralize(inner));
+      root.relations.push({
+        name: relName,
+        entity: inner,
+        cardinality: 'one-to-many',
+        required: false,
+        internal: true,
+        implicit: true
+      });
+      warnings.push(
+        `Agregado ${aggName}: la entidad interna ${inner} no tiene relación declarada con ${agg.root}; se deriva ${agg.root}.${relName} (one-to-many). Decláralas en domain.entities.${agg.root}.relations si el nombre o la cardinalidad deben ser otros.`
+      );
+    }
+  }
 }
 
 // ─── Operaciones, servicios, controllers y errores ───────────────────────────
@@ -490,7 +541,12 @@ function collectSecurity(layers, services, routeBase, warnings) {
       );
       continue;
     }
-    matchers.push({ method: route.method, path: `${routeBase}${route.path}`, authority: accessAuthority(rule) });
+    matchers.push({
+      method: route.method,
+      path: `${routeBase}${route.path}`,
+      authority: accessAuthority(rule),
+      audience: route.audience ?? 'users'
+    });
   }
 
   const allRules = [defaultRule, ...Object.values(rules)];
@@ -517,13 +573,47 @@ function collectSecurity(layers, services, routeBase, warnings) {
     scopes: def?.scopes ?? []
   }));
 
+  // Permisos que otorga cada rol (security.roleGrants): derivable al 100% del
+  // diseño, se materializa como mapa estático en el JwtAuthConverter para que
+  // hasAnyAuthority("<recurso>:<accion>") funcione con IdPs que solo emiten roles.
+  const roleGrants = Object.entries(sec.roleGrants ?? {})
+    .map(([role, permissions]) => ({ role, permissions: permissions ?? [] }))
+    .filter((grant) => grant.permissions.length > 0);
+
   return {
     protocol,
     matchers,
     defaultAuthority: accessAuthority(defaultRule),
     usesAuthorities,
     serviceAuth,
-    serviceClients
+    serviceClients,
+    roleGrants
+  };
+}
+
+// ─── Object storage (storage.buckets → política por bucket) ──────────────────
+
+// La política de cada bucket (visibilidad, tamaño máximo, tipos permitidos) es
+// del diseño, no del proveedor: viaja al fragmento de configuración para que el
+// adaptador que escribe el agente la aplique sin reinventarla, y fija el límite
+// de multipart de Spring.
+function collectStorage(layers) {
+  const storage = layers.storage;
+  if (!storage) return null;
+  const buckets = Object.entries(storage.buckets ?? {}).map(([name, def]) => ({
+    name,
+    visibility: def?.visibility ?? 'private',
+    maxSizeMb: def?.maxSizeMb ?? null,
+    allowedContentTypes: def?.allowedContentTypes ?? [],
+    description: def?.description ?? null
+  }));
+  const sizes = buckets.map((b) => b.maxSizeMb).filter((mb) => typeof mb === 'number');
+  return {
+    buckets,
+    // Límite de subida del servlet: el mayor de los declarados (cada bucket
+    // aplica además el suyo). Sin ninguno, se deja el default de Spring.
+    maxSizeMb: sizes.length > 0 ? Math.max(...sizes) : null,
+    hasPublicBucket: buckets.some((b) => b.visibility === 'public')
   };
 }
 
@@ -782,9 +872,19 @@ function nestedExcludeWarning(opName, entityName, path, entity, domainTypes) {
 function resolveRoute(opName, op, api, targetEntity, warnings) {
   if (op.internal || op.schedule || !api) return null;
 
+  // Público del endpoint (users | services | both): el propio, el default de la
+  // capa api o users. Decide en qué SecurityFilterChain cae la ruta cuando el
+  // diseño valida la audiencia de los tokens M2M (ver collectSecurity).
+  const defaultAudience = api.defaultAudience ?? 'users';
+
   const explicit = api.endpoints?.[opName];
   if (explicit) {
-    return { method: explicit.method, path: explicit.path, status: explicit.successStatus ?? defaultStatus(explicit.method) };
+    return {
+      method: explicit.method,
+      path: explicit.path,
+      status: explicit.successStatus ?? defaultStatus(explicit.method),
+      audience: explicit.audience ?? defaultAudience
+    };
   }
   if (!api.auto) return null;
 
@@ -794,20 +894,20 @@ function resolveRoute(opName, op, api, targetEntity, warnings) {
     const collection = `/${kebabCase(prefix === 'list' ? rest : pluralize(rest))}`;
     switch (prefix) {
       case 'create':
-        return { method: 'POST', path: collection, status: 201 };
+        return { method: 'POST', path: collection, status: 201, audience: defaultAudience };
       case 'list':
-        return { method: 'GET', path: collection, status: 200 };
+        return { method: 'GET', path: collection, status: 200, audience: defaultAudience };
       case 'get':
-        return { method: 'GET', path: `${collection}/{id}`, status: 200 };
+        return { method: 'GET', path: `${collection}/{id}`, status: 200, audience: defaultAudience };
       case 'update':
-        return { method: 'PUT', path: `${collection}/{id}`, status: 200 };
+        return { method: 'PUT', path: `${collection}/{id}`, status: 200, audience: defaultAudience };
       case 'delete':
-        return { method: 'DELETE', path: `${collection}/{id}`, status: 204 };
+        return { method: 'DELETE', path: `${collection}/{id}`, status: 204, audience: defaultAudience };
     }
   }
 
   warnings.push(`Operación '${opName}' sin endpoint explícito ni patrón CRUD: se expone como POST /${kebabCase(opName)} (revísala).`);
-  return { method: 'POST', path: `/${kebabCase(opName)}`, status: 200, fallback: true };
+  return { method: 'POST', path: `/${kebabCase(opName)}`, status: 200, fallback: true, audience: defaultAudience };
 }
 
 function defaultStatus(method) {

@@ -54,9 +54,25 @@ Cierra siempre con el bloque estructurado que consume el orquestador:
 
 ```yaml
 status: OK | KO | PENDIENTE   # OK solo con todos los escenarios OK
+blocking: systemic | scoped   # solo si status: KO — ver abajo
 scenarios:                    # matriz completa
   - { id: FL-001-A, result: OK | FALLO }
 failures: [...]               # por fallo: escenario, request, response, esperado
 designGaps: [...]             # escenarios que contradicen el spec, como propuesta de cambio
 blockers: [...]               # precondiciones rotas (compilación rota, infra caída, sin token…)
 ```
+
+`blocking` califica la **naturaleza** de los fallos, y el orquestador cuenta los
+ciclos de fix con él:
+
+- **`systemic`** — una causa transversal única impidió ejercitar prácticamente
+  cualquier escenario: toda la API responde 401/403, el servidor no arranca, la
+  conexión a la BD o al broker falla. Los pocos escenarios que pasaron no dicen
+  nada del resto. Un ciclo que cierra un bloqueo sistémico **no consume** el cupo
+  de ciclos, porque lo normal es que destaparlo revele una tanda nueva de fallos
+  de negocio que hasta ahora quedaban ocultos.
+- **`scoped`** — un subconjunto acotado de escenarios falla por causas propias
+  (una regla de negocio, un mapeo, un caso límite), con el resto en OK.
+
+Elige `systemic` solo si puedes nombrar **la** causa común; varios fallos
+independientes que coinciden en número no son un bloqueo sistémico.

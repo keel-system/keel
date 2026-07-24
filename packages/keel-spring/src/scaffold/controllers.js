@@ -240,6 +240,32 @@ function capitalizeFirst(name) {
 // @RestControllerAdvice central: validación, errores de framework, jerarquía
 // DomainException (una respuesta por subclase + genérico con httpStatus de la
 // metadata) y catch-all 500. El body es siempre ErrorResponse (mismo paquete).
+// Excepciones que lanza el propio Spring en una subida multipart, antes de que
+// la petición llegue al controller: sin estos handlers caen en el catch-all y
+// devuelven 500 donde el diseño (storage.maxSizeMb, error FILE_TOO_LARGE) espera
+// 413/400. Son mecánicas: no dependen de la lógica del servicio.
+function renderMultipartHandlers(imports) {
+  imports.add('org.springframework.web.multipart.MaxUploadSizeExceededException');
+  imports.add('org.springframework.web.multipart.support.MissingServletRequestPartException');
+  return `
+    // ── Subida de archivos (capa storage) ────────────────────────────────────
+
+    @ResponseStatus(HttpStatus.PAYLOAD_TOO_LARGE)
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ErrorResponse onMaxUploadSizeExceeded(MaxUploadSizeExceededException exception) {
+        return new ErrorResponse(HttpStatus.PAYLOAD_TOO_LARGE.value(), "Payload Too Large",
+                "FILE_TOO_LARGE", "El archivo supera el tamaño máximo permitido", List.of());
+    }
+
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    @ExceptionHandler(MissingServletRequestPartException.class)
+    public ErrorResponse onMissingRequestPart(MissingServletRequestPartException exception) {
+        return new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "Bad Request",
+                "Falta la parte '" + exception.getRequestPartName() + "' en la petición multipart");
+    }
+`;
+}
+
 function renderExceptionHandler(model) {
   const errorsPkg = subPackage(model, 'domain.errors');
   const imports = new Set([
@@ -249,6 +275,7 @@ function renderExceptionHandler(model) {
     `${errorsPkg}.DomainException`,
     `${errorsPkg}.ForbiddenException`,
     `${errorsPkg}.NotFoundException`,
+    `${errorsPkg}.PayloadTooLargeException`,
     `${errorsPkg}.UnauthorizedException`,
     'jakarta.validation.ConstraintViolationException',
     'java.util.List',
@@ -271,6 +298,7 @@ function renderExceptionHandler(model) {
   const dataIntegrity = model.layersPresent.persistence
     ? renderDataIntegrityHandler(model, imports, constants)
     : '';
+  const multipart = model.layersPresent.storage ? renderMultipartHandlers(imports) : '';
 
   const body = `@RestControllerAdvice
 public class ApiExceptionHandler {
@@ -313,7 +341,7 @@ ${constants.join('')}
     public ErrorResponse onMethodNotAllowed(HttpRequestMethodNotSupportedException exception) {
         return new ErrorResponse(HttpStatus.METHOD_NOT_ALLOWED.value(), "Method Not Allowed", "Método HTTP no soportado");
     }
-${dataIntegrity}
+${multipart}${dataIntegrity}
     // ── Errores de dominio (jerarquía DomainException) ───────────────────────
 
     @ResponseStatus(HttpStatus.BAD_REQUEST)
@@ -344,6 +372,13 @@ ${dataIntegrity}
     @ExceptionHandler(ConflictException.class)
     public ErrorResponse onConflict(ConflictException exception) {
         return buildResponse(HttpStatus.CONFLICT, "Conflict", exception, "Conflicto con el estado actual del recurso");
+    }
+
+    @ResponseStatus(HttpStatus.PAYLOAD_TOO_LARGE)
+    @ExceptionHandler(PayloadTooLargeException.class)
+    public ErrorResponse onPayloadTooLarge(PayloadTooLargeException exception) {
+        return buildResponse(HttpStatus.PAYLOAD_TOO_LARGE, "Payload Too Large", exception,
+                "El contenido enviado supera el tamaño permitido");
     }
 
     @ResponseStatus(HttpStatus.UNPROCESSABLE_ENTITY)

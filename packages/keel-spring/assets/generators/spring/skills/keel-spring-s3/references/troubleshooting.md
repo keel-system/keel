@@ -18,6 +18,14 @@ El bucket no existe en el MinIO local: créalo
 volúmenes del compose persisten entre reinicios, pero un
 `docker compose down -v` los borra — recrea el bucket tras limpiar volúmenes.
 
+## La subida responde `201` pero el `GET` directo a la URL da `403`
+
+Bucket declarado `visibility: public` sin bucket policy de lectura anónima:
+crearlo no lo hace público. Aplica la policy (idempotente, en cada arranque —
+receta en `references/implementation.md`) o, en local,
+`mc anonymous set download local/<bucket>`. El síntoma engaña porque la escritura
+y el evento van bien: solo falla el Then que lee la imagen.
+
 ## La presigned URL devuelve 403 (o «expired»)
 
 - **Firma con host interno**: firmada con `http://minio:9000` y consumida

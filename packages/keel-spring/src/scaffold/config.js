@@ -120,6 +120,17 @@ function baseYaml(model) {
   if (layersPresent.persistence) {
     lines.push('  jpa:', '    open-in-view: false');
   }
+  // Límite de subida del servlet a partir del mayor maxSizeMb declarado en el
+  // diseño: sin esto Spring corta en 1MB y el 413 del diseño nunca se alcanza.
+  const maxSizeMb = model.storage?.maxSizeMb;
+  if (maxSizeMb != null) {
+    lines.push(
+      '  servlet:',
+      '    multipart:',
+      `      max-file-size: ${maxSizeMb}MB`,
+      `      max-request-size: ${maxSizeMb}MB`
+    );
+  }
   return lines.join('\n') + '\n';
 }
 
@@ -375,6 +386,21 @@ function storageYaml(model, profile) {
     `  secret-key: ${envValue(profile, 'STORAGE_SECRET_KEY', isMinio ? 'minioadmin' : 'changeme')}`,
     isMinio ? '  path-style-access: true' : '  path-style-access: false'
   );
+
+  // Política declarada por bucket en el diseño: la aplica el adaptador (crear el
+  // bucket, política de lectura pública, validación de tipo y tamaño). Va en la
+  // config y no hardcodeada para que el adaptador no la reinvente.
+  const buckets = model.storage?.buckets ?? [];
+  if (buckets.length > 0) {
+    lines.push('  buckets:');
+    for (const bucket of buckets) {
+      lines.push(`    ${bucket.name}:`, `      visibility: ${bucket.visibility}`);
+      if (bucket.maxSizeMb != null) lines.push(`      max-size-mb: ${bucket.maxSizeMb}`);
+      if (bucket.allowedContentTypes.length > 0) {
+        lines.push(`      allowed-content-types: ${bucket.allowedContentTypes.join(',')}`);
+      }
+    }
+  }
   return lines.join('\n') + '\n';
 }
 

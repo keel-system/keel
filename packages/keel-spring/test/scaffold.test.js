@@ -653,6 +653,8 @@ test('capa security (oidc): SecurityFilterChain con matchers por ruta + JwtAuthC
   assert.ok(buildGradle.includes('spring-boot-starter-oauth2-resource-server'));
   assert.ok(read(workspace, 'src/main/resources/parameters/local/oauth2.yaml').includes('issuer-uri'));
   assert.ok(exists(workspace, '.claude/skills/keel-spring-keycloak/SKILL.md')); // skill del auth elegido
+  // La skill se instala como directorio completo: sus references viajan con ella.
+  assert.ok(exists(workspace, '.claude/skills/keel-spring-keycloak/references/test-clients.md'));
 
 });
 
@@ -1442,4 +1444,150 @@ test('colecciones del dominio (DSL 2.1 list): @ElementCollection, @Embeddable y 
   assert.ok(repo.includes('.entities.DiscountJpa;'));
   assert.ok(repo.includes('.map(e -> new Discount(e.getCode(), e.getPercentage())).toList()'));
   assert.ok(repo.includes('new ArrayList<DiscountJpa>('));
+});
+
+// ─── Seguridad derivada del diseño (matchers, audiencia, roleGrants) ──────────
+
+const SEC_BASE = 'src/main/java/com/commerce/productcatalog/infrastructure/configurations/security';
+
+// Fixture + capa security (y lo que el test necesite), con stack keycloak.
+function scaffoldWithSecurity(securityLayer, apiPatch = {}, extra = {}) {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const patchedManifest = structuredClone(manifest);
+  patchedManifest.layers.security = 'security.keel.yaml';
+  const patched = structuredClone(layers);
+  patched.security = securityLayer;
+  patched.api = { ...patched.api, ...apiPatch };
+  for (const [name, value] of Object.entries(extra)) {
+    patchedManifest.layers[name] = `${name}.keel.yaml`;
+    patched[name] = value;
+  }
+  scaffoldService({ manifest: patchedManifest, layers: patched, workspace, stack: { auth: 'keycloak', ...(extra.storage ? { storage: 'minio' } : {}) } });
+  return workspace;
+}
+
+test('SecurityConfig: matchers sin duplicar la versión del basePath', () => {
+  const workspace = scaffoldWithSecurity(
+    {
+      authentication: { protocol: 'oidc' },
+      access: { default: { level: 'required' }, rules: { listProducts: { level: 'public' } } }
+    },
+    { basePath: '/api/v1' }
+  );
+
+  const config = read(workspace, `${SEC_BASE}/SecurityConfig.java`);
+  assert.ok(config.includes('.requestMatchers(HttpMethod.GET, "/api/v1/products").permitAll()'));
+  assert.ok(!config.includes('/api/v1/v1/'));
+  // Y el controller expone exactamente ese mismo prefijo.
+  const controller = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/rest/controllers/product/v1/ProductV1Controller.java');
+  assert.ok(controller.includes('@RequestMapping("/api/v1")'));
+});
+
+test('SecurityConfig: dos filter chains cuando conviven endpoints de usuario y M2M', () => {
+  const workspace = scaffoldWithSecurity(
+    {
+      authentication: {
+        protocol: 'oidc',
+        serviceAuth: { protocol: 'client-credentials', validateAudience: true, audience: 'catalog-api' }
+      },
+      access: {
+        default: { level: 'required' },
+        rules: {
+          listProducts: { level: 'public' },
+          retireProduct: { level: 'service', scopes: ['product:write'] }
+        }
+      }
+    },
+    { endpoints: { retireProduct: { method: 'POST', path: '/products/{id}/retire', successStatus: 204, audience: 'services' } } }
+  );
+
+  const config = read(workspace, `${SEC_BASE}/SecurityConfig.java`);
+  // Cadena M2M: acotada por securityMatcher y con el decoder que valida audiencia.
+  assert.ok(config.includes('@Order(1)'));
+  assert.ok(config.includes('.securityMatcher("/api/v1/products/{id}/retire")'));
+  assert.ok(config.includes('jwt.decoder(serviceJwtDecoder())'));
+  assert.ok(config.includes('new AudienceValidator(audience)'));
+  // Cadena de usuario: decoder sin AudienceValidator (un token de usuario nunca
+  // trae la audiencia del servicio).
+  assert.ok(config.includes('@Order(2)'));
+  assert.ok(config.includes('public JwtDecoder jwtDecoder() {\n        return new SupplierJwtDecoder(() -> JwtDecoders.fromIssuerLocation(issuerUri));'));
+});
+
+test('SecurityConfig: sin rutas de usuario, se conserva la cadena única con audiencia', () => {
+  const workspace = scaffoldWithSecurity(
+    {
+      authentication: {
+        protocol: 'oidc',
+        serviceAuth: { protocol: 'client-credentials', validateAudience: true }
+      },
+      access: { default: { level: 'service' }, rules: { listProducts: { level: 'service', scopes: ['product:read'] } } }
+    },
+    { defaultAudience: 'services' }
+  );
+
+  const config = read(workspace, `${SEC_BASE}/SecurityConfig.java`);
+  assert.ok(!config.includes('@Order(1)'));
+  assert.ok(!config.includes('securityMatcher'));
+  assert.ok(config.includes('new AudienceValidator(audience)'));
+});
+
+test('JwtAuthConverter: roleGrants materializado como mapa estático', () => {
+  const workspace = scaffoldWithSecurity({
+    authentication: { protocol: 'oidc' },
+    roleGrants: { 'catalog-admin': ['product:write', 'category:write'] },
+    access: {
+      default: { level: 'required' },
+      rules: { createProduct: { level: 'required', permissions: ['product:write'] } }
+    }
+  });
+
+  const converter = read(workspace, `${SEC_BASE}/JwtAuthConverter.java`);
+  assert.ok(converter.includes('ROLE_GRANTS'));
+  assert.ok(converter.includes('java.util.Map.entry("catalog-admin", java.util.List.of("product:write", "category:write"))'));
+  assert.ok(converter.includes('authorities.addAll(extractGrantedPermissions(roles));'));
+});
+
+// ─── Storage: política de buckets, multipart y sus handlers ──────────────────
+
+test('storage: política por bucket en la config, límite multipart y handlers de Spring', () => {
+  const workspace = scaffoldWithSecurity(
+    { authentication: { protocol: 'none' }, access: { default: { level: 'public' } } },
+    {},
+    {
+      storage: {
+        buckets: {
+          productImages: { visibility: 'public', allowedContentTypes: ['image/png', 'image/jpeg'], maxSizeMb: 5 }
+        }
+      }
+    }
+  );
+
+  // La política del diseño viaja a la config: el adaptador la lee, no la reinventa.
+  const storageYaml = read(workspace, 'src/main/resources/parameters/local/storage.yaml');
+  assert.ok(storageYaml.includes('  buckets:'));
+  assert.ok(storageYaml.includes('      visibility: public'));
+  assert.ok(storageYaml.includes('      max-size-mb: 5'));
+  assert.ok(storageYaml.includes('      allowed-content-types: image/png,image/jpeg'));
+
+  // Sin este límite Spring corta en 1MB y el 413 del diseño nunca se alcanza.
+  const appYaml = read(workspace, 'src/main/resources/application.yaml');
+  assert.ok(appYaml.includes('      max-file-size: 5MB'));
+  assert.ok(appYaml.includes('      max-request-size: 5MB'));
+
+  // Excepciones que lanza el framework antes del controller: 413/400, no 500.
+  const handler = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/rest/ApiExceptionHandler.java');
+  assert.ok(handler.includes('@ExceptionHandler(MaxUploadSizeExceededException.class)'));
+  assert.ok(handler.includes('"FILE_TOO_LARGE"'));
+  assert.ok(handler.includes('@ExceptionHandler(MissingServletRequestPartException.class)'));
+  assert.ok(handler.includes('@ExceptionHandler(PayloadTooLargeException.class)'));
+});
+
+test('sin capa storage: ni límite multipart ni handlers de subida', () => {
+  const workspace = makeWorkspace();
+  scaffoldService({ ...loadFixture(), workspace });
+
+  assert.ok(!read(workspace, 'src/main/resources/application.yaml').includes('multipart'));
+  const handler = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/rest/ApiExceptionHandler.java');
+  assert.ok(!handler.includes('MaxUploadSizeExceededException'));
 });
