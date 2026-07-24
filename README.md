@@ -46,7 +46,7 @@ keel validate specs/mi-servicio              # schemas por capa + referencias cr
 
 keel-spring build specs/mi-servicio      # instala la skill, valida, pregunta el stack y genera el scaffolding
 #   /keel-generate-spring specs/mi-servicio  → completa services/mi-servicio-spring/
-#   /keel-docs specs/mi-servicio             → docs de integración
+#   /keel-docs specs/mi-servicio             → openapi.yaml, asyncapi.yaml, Postman y overview.html
 #   /keel-handoff specs/mi-servicio          → regenera DESIGN.md + índice si el spec cambió
 ```
 

@@ -1,0 +1,534 @@
+<!doctype html>
+<!--
+  Panel de servicio Keel — plantilla de forma fija.
+  NO edites el markup, el CSS ni el JS al generar: copia este archivo tal cual y sustituye
+  únicamente el marcador de datos de la constante KEEL (más abajo) por el objeto JSON derivado
+  del diseño. Contrato del objeto y token exacto a sustituir: ../overview-html-guide.md
+-->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Panel del servicio</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --panel-2: #fbfcfd;
+    --border: #dfe3e8;
+    --text: #1b1f24;
+    --muted: #5c6773;
+    --accent: #2f6feb;
+    --ok-bg: #e7f5ed; --ok-fg: #17663a;
+    --off-bg: #f0f1f3; --off-fg: #6b7280;
+    --warn-bg: #fdf3e0; --warn-fg: #8a5a00;
+    --tag-bg: #eef2ff; --tag-fg: #33409e;
+    --code-bg: #f2f4f7;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151a; --panel: #191d24; --panel-2: #1e232b; --border: #2c333d;
+      --text: #e6e9ee; --muted: #9aa5b1; --accent: #6ea0ff;
+      --ok-bg: #17311f; --ok-fg: #7fd6a0;
+      --off-bg: #23272e; --off-fg: #8b95a1;
+      --warn-bg: #362a11; --warn-fg: #e5bf74;
+      --tag-bg: #222a44; --tag-fg: #9fb2ff;
+      --code-bg: #12161c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 28px 20px 80px; }
+  a { color: var(--accent); }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .92em; }
+
+  header.top { margin-bottom: 22px; }
+  .eyebrow { color: var(--muted); font-size: 13px; letter-spacing: .04em; text-transform: uppercase; }
+  h1 { margin: 6px 0 8px; font-size: 30px; }
+  .lead { color: var(--muted); max-width: 72ch; margin: 0 0 12px; }
+  .meta { display: flex; flex-wrap: wrap; gap: 8px; }
+
+  h2 { font-size: 20px; margin: 34px 0 12px; }
+  h3 { font-size: 16px; margin: 22px 0 8px; }
+
+  .chip, .badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 2px 9px; border-radius: 999px; font-size: 12px; white-space: nowrap;
+    background: var(--off-bg); color: var(--off-fg); border: 1px solid transparent;
+  }
+  .chip.on, .badge.on { background: var(--ok-bg); color: var(--ok-fg); }
+  .chip.tag, .badge.tag { background: var(--tag-bg); color: var(--tag-fg); }
+  .chip.warn, .badge.warn { background: var(--warn-bg); color: var(--warn-fg); }
+
+  .links { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 0; }
+  .links a {
+    display: inline-block; padding: 7px 13px; border: 1px solid var(--border);
+    border-radius: 8px; background: var(--panel); text-decoration: none; font-size: 14px;
+  }
+  .links a:hover { border-color: var(--accent); }
+
+  .cards { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px 15px; }
+  .card.off { opacity: .62; }
+  .card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+  .card-label { font-weight: 600; }
+  .card-headline { color: var(--text); margin: 0 0 8px; font-size: 14px; }
+  .facts { margin: 0; font-size: 13px; color: var(--muted); }
+  .facts div { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; }
+  .facts .k { color: var(--muted); }
+  .facts .v { color: var(--text); text-align: right; }
+  .card .note { margin: 8px 0 0; font-size: 12.5px; color: var(--muted); }
+
+  .toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 8px 0 14px; }
+  .toolbar input[type=search] {
+    flex: 1 1 240px; min-width: 200px; padding: 8px 11px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--panel); color: var(--text); font: inherit;
+  }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+  .tabs button {
+    padding: 7px 12px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--panel); color: var(--text); font: inherit; cursor: pointer;
+  }
+  .tabs button[aria-selected=true] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+
+  details.item {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    margin-bottom: 8px; overflow: hidden;
+  }
+  details.item > summary {
+    list-style: none; cursor: pointer; padding: 11px 14px;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  }
+  details.item > summary::-webkit-details-marker { display: none; }
+  details.item > summary::before { content: "▸"; color: var(--muted); }
+  details.item[open] > summary::before { content: "▾"; }
+  details.item[open] > summary { border-bottom: 1px solid var(--border); background: var(--panel-2); }
+  .item-name { font-weight: 600; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .item-desc { color: var(--muted); font-size: 13px; flex: 1 1 200px; }
+  .body { padding: 12px 14px 16px; }
+  .body > section { margin-bottom: 14px; }
+  .body > section:last-child { margin-bottom: 0; }
+  .body h4 { margin: 0 0 6px; font-size: 12.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+  .body ul { margin: 0; padding-left: 20px; }
+  .body p { margin: 0 0 6px; }
+
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+  td.mono, th.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; font-size: 13.5px; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; }
+
+  .empty { color: var(--muted); font-style: italic; }
+  .gaps { background: var(--warn-bg); color: var(--warn-fg); border-radius: 10px; padding: 12px 16px; }
+  .gaps ul { margin: 6px 0 0; }
+  footer { margin-top: 44px; color: var(--muted); font-size: 12.5px; border-top: 1px solid var(--border); padding-top: 12px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="eyebrow">Servicio Keel</div>
+    <h1 id="svc-name">—</h1>
+    <p class="lead" id="svc-desc"></p>
+    <div class="meta" id="svc-meta"></div>
+    <nav class="links" id="links"></nav>
+  </header>
+
+  <section id="gaps-wrap" hidden>
+    <h2>Huecos del diseño</h2>
+    <div class="gaps">
+      <strong>Estos datos no se pudieron derivar del diseño:</strong>
+      <ul id="gaps"></ul>
+    </div>
+  </section>
+
+  <h2>Capacidades</h2>
+  <div class="cards" id="capabilities"></div>
+
+  <h2>Casos de uso</h2>
+  <div class="toolbar">
+    <input type="search" id="q" placeholder="Filtrar por nombre, descripción, campo, error…" aria-label="Filtrar">
+    <div class="tabs" id="tabs" role="tablist"></div>
+  </div>
+  <div id="use-cases"></div>
+
+  <section id="events-wrap" hidden>
+    <h2>Eventos</h2>
+    <div id="events"></div>
+  </section>
+
+  <section id="clients-wrap" hidden>
+    <h2>Clientes HTTP salientes</h2>
+    <div id="clients"></div>
+  </section>
+
+  <section id="domain-wrap" hidden>
+    <h2>Modelo de dominio</h2>
+    <div id="domain"></div>
+  </section>
+
+  <footer id="footer"></footer>
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// Datos del servicio. `/keel-docs` sustituye el marcador de la línea siguiente por el
+// objeto derivado del diseño (contrato y token exacto: ../overview-html-guide.md).
+// ---------------------------------------------------------------------------
+const KEEL = /*__KEEL_DATA__*/ null;
+
+(function () {
+  'use strict';
+
+  if (!KEEL) {
+    document.getElementById('svc-name').textContent = 'Plantilla sin datos';
+    document.getElementById('svc-desc').textContent =
+      'Este archivo es la plantilla de /keel-docs: el placeholder KEEL_DATA no fue sustituido.';
+    return;
+  }
+
+  var AUDIENCES = [
+    { id: 'users',    label: 'Usuarios' },
+    { id: 'services', label: 'Servidores (M2M)' },
+    { id: 'both',     label: 'Ambos' },
+    { id: 'internal', label: 'Internos' }
+  ];
+  var LEVEL_LABEL = { public: 'pública', required: 'protegida', admin: 'admin', service: 'M2M' };
+
+  // -- helpers --------------------------------------------------------------
+  function el(tag, attrs, children) {
+    var n = document.createElement(tag);
+    if (attrs) Object.keys(attrs).forEach(function (k) {
+      if (k === 'class') n.className = attrs[k];
+      else if (k === 'text') n.textContent = attrs[k];
+      else if (attrs[k] !== null && attrs[k] !== undefined) n.setAttribute(k, attrs[k]);
+    });
+    (children || []).forEach(function (c) { if (c) n.appendChild(c); });
+    return n;
+  }
+  function txt(tag, s, cls) { return el(tag, cls ? { class: cls, text: s } : { text: s }); }
+  function badge(label, kind) { return el('span', { class: 'badge' + (kind ? ' ' + kind : ''), text: label }); }
+  function list(arr) { return (arr && arr.length) ? arr.join(', ') : null; }
+  function has(x) { return x !== null && x !== undefined && x !== '' && !(Array.isArray(x) && !x.length); }
+  function section(title, node) { return el('section', {}, [txt('h4', title), node]); }
+  function ul(items) { return el('ul', {}, (items || []).map(function (i) { return txt('li', i); })); }
+  function kv(pairs) {
+    var d = el('dl', { class: 'kv' });
+    pairs.forEach(function (p) {
+      if (!has(p[1])) return;
+      d.appendChild(txt('dt', p[0]));
+      d.appendChild(txt('dd', String(p[1])));
+    });
+    return d.children.length ? d : null;
+  }
+  function table(headers, rows, monoCols) {
+    if (!rows || !rows.length) return null;
+    var thead = el('tr', {}, headers.map(function (h) { return txt('th', h); }));
+    var tb = el('tbody', {}, rows.map(function (r) {
+      return el('tr', {}, r.map(function (c, i) {
+        return el('td', { class: (monoCols || []).indexOf(i) >= 0 ? 'mono' : null, text: c === null || c === undefined ? '—' : String(c) });
+      }));
+    }));
+    return el('div', { class: 'scroll' }, [el('table', {}, [el('thead', {}, [thead]), tb])]);
+  }
+  function fieldsTable(fields) {
+    return table(['Campo', 'Tipo', 'Requerido', 'Descripción'], (fields || []).map(function (f) {
+      return [f.name, f.type + (f.list ? '[]' : ''), f.required ? 'sí' : 'no', f.description || '—'];
+    }), [0, 1]);
+  }
+  function payloadNode(p) {
+    if (!p) return txt('p', 'void', 'empty');
+    if (p.kind === 'void') return txt('p', 'void', 'empty');
+    if (p.kind === 'entity') {
+      var s = p.entity + (p.list ? '[] (lista)' : '') + (p.paginated ? ' — paginado' : '');
+      if (has(p.exclude)) s += ' · excluye: ' + p.exclude.join(', ');
+      return txt('p', s, 'mono');
+    }
+    return fieldsTable(p.fields) || txt('p', 'sin campos declarados', 'empty');
+  }
+
+  // -- cabecera -------------------------------------------------------------
+  var svc = KEEL.service || {};
+  document.title = svc.name ? 'Panel · ' + svc.name : 'Panel del servicio';
+  document.getElementById('svc-name').textContent = svc.name || '—';
+  document.getElementById('svc-desc').textContent = svc.description || '';
+  var meta = document.getElementById('svc-meta');
+  [['versión ' + (svc.version || '—'), 'tag'], svc.domain ? ['dominio: ' + svc.domain, null] : null,
+   svc.basedOn ? ['derivado de ' + svc.basedOn, null] : null]
+    .forEach(function (m) { if (m) meta.appendChild(badge(m[0], m[1])); });
+
+  var links = document.getElementById('links');
+  (KEEL.links || []).forEach(function (l) {
+    links.appendChild(el('a', { href: l.href, title: l.description || '', text: l.label }));
+  });
+
+  // -- huecos ---------------------------------------------------------------
+  if (has(KEEL.gaps)) {
+    document.getElementById('gaps-wrap').hidden = false;
+    var g = document.getElementById('gaps');
+    KEEL.gaps.forEach(function (s) { g.appendChild(txt('li', s)); });
+  }
+
+  // -- capacidades ----------------------------------------------------------
+  var caps = document.getElementById('capabilities');
+  (KEEL.capabilities || []).forEach(function (c) {
+    var card = el('div', { class: 'card' + (c.active ? '' : ' off') }, [
+      el('div', { class: 'card-head' }, [
+        txt('span', c.label, 'card-label'),
+        badge(c.active ? (c.state || 'sí') : 'no aplica', c.active ? 'on' : null)
+      ]),
+      c.headline ? txt('p', c.headline, 'card-headline') : null
+    ]);
+    if (has(c.facts)) {
+      var f = el('div', { class: 'facts' });
+      c.facts.forEach(function (p) {
+        f.appendChild(el('div', {}, [txt('span', p[0], 'k'), txt('span', String(p[1]), 'v')]));
+      });
+      card.appendChild(f);
+    }
+    if (c.note) card.appendChild(txt('p', c.note, 'note'));
+    caps.appendChild(card);
+  });
+
+  // -- casos de uso ---------------------------------------------------------
+  var ucs = KEEL.useCases || [];
+  var host = document.getElementById('use-cases');
+  var present = AUDIENCES.filter(function (a) {
+    return ucs.some(function (u) { return (u.audience || 'internal') === a.id; });
+  });
+  var tabs = document.getElementById('tabs');
+  var current = 'all';
+  [{ id: 'all', label: 'Todos (' + ucs.length + ')' }].concat(present.map(function (a) {
+    var n = ucs.filter(function (u) { return (u.audience || 'internal') === a.id; }).length;
+    return { id: a.id, label: a.label + ' (' + n + ')' };
+  })).forEach(function (t) {
+    var b = el('button', { type: 'button', role: 'tab', 'data-aud': t.id, text: t.label });
+    b.setAttribute('aria-selected', t.id === 'all' ? 'true' : 'false');
+    b.addEventListener('click', function () {
+      current = t.id;
+      Array.prototype.forEach.call(tabs.children, function (o) {
+        o.setAttribute('aria-selected', String(o.getAttribute('data-aud') === current));
+      });
+      applyFilter();
+    });
+    tabs.appendChild(b);
+  });
+
+  function triggerText(t) {
+    if (!t) return '—';
+    if (t.type === 'http') return (t.method || '') + ' ' + (t.path || '');
+    if (t.type === 'event') return 'evento ' + (t.event || '');
+    if (t.type === 'schedule') return 'programado · ' + (t.cron || '');
+    return 'interna';
+  }
+
+  ucs.forEach(function (u) {
+    var d = el('details', { class: 'item', 'data-aud': u.audience || 'internal' });
+    var sum = el('summary', {}, [
+      txt('span', u.name, 'item-name'),
+      badge(u.kind || 'command', 'tag'),
+      u.trigger && u.trigger.type === 'http' ? badge(triggerText(u.trigger)) : null,
+      u.trigger && u.trigger.type === 'event' ? badge('por evento') : null,
+      u.trigger && u.trigger.type === 'schedule' ? badge('programado') : null,
+      u.idempotency ? badge('idempotente', 'on') : null,
+      u.cache ? badge('cacheada', 'on') : null,
+      u.security ? badge(LEVEL_LABEL[u.security.level] || u.security.level,
+        u.security.level === 'public' ? 'warn' : 'tag') : null,
+      txt('span', u.description || '', 'item-desc')
+    ]);
+    var body = el('div', { class: 'body' });
+    if (u.description) body.appendChild(section('Qué hace', txt('p', u.description)));
+    body.appendChild(section('Disparador', txt('p', triggerText(u.trigger), 'mono')));
+    body.appendChild(section('Entrada', payloadNode(u.input)));
+    body.appendChild(section('Salida', payloadNode(u.output)));
+    if (has(u.preconditions)) body.appendChild(section('Precondiciones', ul(u.preconditions)));
+    if (has(u.rules)) body.appendChild(section('Reglas', ul(u.rules)));
+    if (has(u.errors)) {
+      body.appendChild(section('Errores', table(['Código', 'HTTP', 'Cuándo'], u.errors.map(function (e) {
+        return [e.code, e.http || '—', e.when || '—'];
+      }), [0])));
+    }
+    var pol = [];
+    if (u.idempotency) pol.push(['Idempotencia', 'keySource: ' + u.idempotency.keySource +
+      (has(u.idempotency.ttlSeconds) ? ' · TTL ' + u.idempotency.ttlSeconds + 's' : '')]);
+    if (u.cache) pol.push(['Caché', 'TTL ' + u.cache.ttlSeconds + 's' +
+      (has(u.cache.keyFields) ? ' · clave: ' + u.cache.keyFields.join(', ') : '') +
+      (has(u.cache.invalidatedBy) ? ' · invalida: ' + u.cache.invalidatedBy.join(', ') : '')]);
+    if (u.schedule) pol.push(['Programación', u.schedule.cron]);
+    if (pol.length) body.appendChild(section('Políticas', kv(pol)));
+    if (u.security) {
+      body.appendChild(section('Seguridad', kv([
+        ['Nivel', (LEVEL_LABEL[u.security.level] || u.security.level) + ' (' + u.security.level + ')'],
+        ['Roles', list(u.security.roles)],
+        ['Permisos', list(u.security.permissions)],
+        ['Scopes', list(u.security.scopes)]
+      ])));
+    }
+    if (has(u.emits)) body.appendChild(section('Eventos que emite', txt('p', u.emits.join(', '), 'mono')));
+    d.appendChild(sum);
+    d.appendChild(body);
+    d.setAttribute('data-text', (u.name + ' ' + (u.description || '') + ' ' + JSON.stringify(u)).toLowerCase());
+    host.appendChild(d);
+  });
+  if (!ucs.length) host.appendChild(txt('p', 'El diseño no declara operaciones.', 'empty'));
+
+  var q = document.getElementById('q');
+  function applyFilter() {
+    var needle = q.value.trim().toLowerCase();
+    Array.prototype.forEach.call(host.children, function (n) {
+      if (!n.getAttribute) return;
+      var okAud = current === 'all' || n.getAttribute('data-aud') === current;
+      var okTxt = !needle || (n.getAttribute('data-text') || '').indexOf(needle) >= 0;
+      n.hidden = !(okAud && okTxt);
+    });
+  }
+  q.addEventListener('input', applyFilter);
+
+  // -- eventos --------------------------------------------------------------
+  var ev = KEEL.events;
+  if (ev && (has(ev.published) || has(ev.subscriptions))) {
+    document.getElementById('events-wrap').hidden = false;
+    var eh = document.getElementById('events');
+    eh.appendChild(txt('p', 'Envoltura: ' + (ev.envelope || 'keel') +
+      ' (metadata + data)' + (ev.reliability ? ' · fiabilidad de publicación: ' + ev.reliability : ''),
+      'item-desc'));
+    if (has(ev.published)) {
+      eh.appendChild(txt('h3', 'Publicados'));
+      ev.published.forEach(function (e) {
+        var b = el('div', { class: 'body' }, [
+          e.description ? section('Descripción', txt('p', e.description)) : null,
+          section('Payload (data)', fieldsTable(e.payload) || txt('p', 'sin campos', 'empty')),
+          section('Detalles', kv([
+            ['Canal', e.channel || 'por convención del generador'],
+            ['Emitido por', list(e.emittedBy)],
+            ['Entrega', e.reliability || ev.reliability]
+          ]))
+        ]);
+        eh.appendChild(el('details', { class: 'item' }, [
+          el('summary', {}, [txt('span', e.name, 'item-name'), badge('publicado', 'on'),
+            e.channel ? badge(e.channel) : null, txt('span', e.description || '', 'item-desc')]),
+          b
+        ]));
+      });
+    }
+    if (has(ev.subscriptions)) {
+      eh.appendChild(txt('h3', 'Suscripciones'));
+      ev.subscriptions.forEach(function (s) {
+        var c = s.contract || {};
+        var b = el('div', { class: 'body' }, [
+          s.description ? section('Descripción', txt('p', s.description)) : null,
+          section('Payload esperado', fieldsTable(s.payload) || txt('p', 'sin campos', 'empty')),
+          section('Contrato de recepción', kv([
+            ['Origen', s.source],
+            ['Canal', s.channel],
+            ['Envoltura', c.envelope],
+            ['Ruta del payload', c.payloadPath],
+            ['Formato', c.format],
+            ['Discriminador', c.discriminator],
+            ['Clave de dedupe', c.messageId],
+            ['Campos desconocidos', c.unknownFields]
+          ])),
+          section('Al fallar', kv([
+            ['Reintentos', s.onFailure && s.onFailure.retry],
+            ['Dead letter', s.onFailure && (s.onFailure.deadLetter ? 'sí' : 'no')]
+          ]) || txt('p', 'sin política declarada', 'empty'))
+        ]);
+        eh.appendChild(el('details', { class: 'item' }, [
+          el('summary', {}, [txt('span', s.name, 'item-name'), badge('consumido', 'tag'),
+            s.source ? badge('de ' + s.source) : null,
+            s.triggers ? badge('→ ' + s.triggers) : null,
+            txt('span', s.description || '', 'item-desc')]),
+          b
+        ]));
+      });
+    }
+  }
+
+  // -- clientes HTTP --------------------------------------------------------
+  if (has(KEEL.httpClients)) {
+    document.getElementById('clients-wrap').hidden = false;
+    var ch = document.getElementById('clients');
+    KEEL.httpClients.forEach(function (c) {
+      var b = el('div', { class: 'body' }, [
+        c.purpose ? section('Propósito', txt('p', c.purpose)) : null,
+        section('Autenticación saliente', txt('p', c.auth || 'none', 'mono')),
+        section('Llamadas', table(
+          ['Llamada', 'Método y ruta', 'Timeout', 'Retry', 'Circuit breaker', 'Fallback'],
+          (c.calls || []).map(function (k) {
+            return [k.name, has(k.method) ? k.method + ' ' + (k.path || '') : (k.contract || '—'),
+              has(k.timeoutMs) ? k.timeoutMs + ' ms' : '—', k.retry || '—',
+              k.circuitBreaker || '—', k.fallback || '—'];
+          }), [0, 1]) || txt('p', 'sin llamadas declaradas', 'empty'))
+      ]);
+      ch.appendChild(el('details', { class: 'item' }, [
+        el('summary', {}, [txt('span', c.name, 'item-name'),
+          badge((c.calls || []).length + ' llamada(s)', 'tag'),
+          txt('span', c.purpose || '', 'item-desc')]),
+        b
+      ]));
+    });
+  }
+
+  // -- dominio --------------------------------------------------------------
+  var dom = KEEL.domain;
+  if (dom && (has(dom.entities) || has(dom.aggregates) || has(dom.types))) {
+    document.getElementById('domain-wrap').hidden = false;
+    var dh = document.getElementById('domain');
+    if (has(dom.aggregates)) {
+      dh.appendChild(txt('h3', 'Agregados'));
+      dh.appendChild(table(['Agregado', 'Raíz', 'Entidades internas', 'Descripción'],
+        dom.aggregates.map(function (a) {
+          return [a.name, a.root, list(a.entities) || '—', a.description || '—'];
+        }), [0, 1, 2]));
+    }
+    if (has(dom.entities)) {
+      dh.appendChild(txt('h3', 'Entidades'));
+      dom.entities.forEach(function (e) {
+        var b = el('div', { class: 'body' }, [
+          e.description ? section('Descripción', txt('p', e.description)) : null,
+          section('Campos', table(['Campo', 'Tipo', 'Atributos', 'Descripción'],
+            (e.fields || []).map(function (f) {
+              return [f.name, f.type + (f.list ? '[]' : ''), list(f.flags) || '—', f.description || '—'];
+            }), [0, 1]) || txt('p', 'sin campos', 'empty')),
+          has(e.relations) ? section('Relaciones', table(['Relación', 'Entidad', 'Cardinalidad'],
+            e.relations.map(function (r) { return [r.name, r.entity, r.cardinality]; }), [0, 1])) : null,
+          e.lifecycle ? section('Ciclo de vida (' + e.lifecycle.field + ')',
+            table(['Estado', 'Transiciona a'], Object.keys(e.lifecycle.transitions || {}).map(function (k) {
+              return [k, list(e.lifecycle.transitions[k]) || 'terminal'];
+            }), [0, 1])) : null,
+          has(e.invariants) ? section('Invariantes', ul(e.invariants)) : null
+        ]);
+        dh.appendChild(el('details', { class: 'item' }, [
+          el('summary', {}, [txt('span', e.name, 'item-name'),
+            badge((e.fields || []).length + ' campo(s)', 'tag'),
+            e.persisted ? badge('persistida', 'on') : null,
+            txt('span', e.description || '', 'item-desc')]),
+          b
+        ]));
+      });
+    }
+    if (has(dom.types)) {
+      dh.appendChild(txt('h3', 'Value types'));
+      dh.appendChild(table(['Tipo', 'Forma', 'Detalle', 'Descripción'], dom.types.map(function (t) {
+        return [t.name, t.kind, t.detail || '—', t.description || '—'];
+      }), [0, 1, 2]));
+    }
+  }
+
+  document.getElementById('footer').textContent =
+    'Derivado del diseño Keel de ' + (svc.name || '—') + ' v' + (svc.version || '—') +
+    (svc.generatedAt ? ' · generado el ' + svc.generatedAt : '') +
+    ' · La fuente de verdad son los artefactos de specs/. No edites este archivo a mano: regenéralo con /keel-docs.';
+})();
+</script>
+</body>
+</html>

@@ -10,7 +10,9 @@ sale del diseño, es un **hueco**: repórtalo, no lo inventes.
 
 - **Solo servidor-a-servidor.** El documento cubre dos superficies y solo esas: endpoints expuestos a
   otros servidores (`api.audience: services`/`both`) y eventos (publicación + suscripción). **Nada** de
-  operaciones `audience: users`, flujos de usuario, OpenAPI ni Postman: eso es de `/keel-docs`.
+  operaciones `audience: users`, flujos de usuario, OpenAPI, AsyncAPI ni Postman: eso es de
+  `/keel-docs`. Este documento es **prosa de integración**; los contratos formales
+  (`openapi.yaml`, `asyncapi.yaml`) se enlazan, no se duplican.
 - **Determinismo.** Emite exactamente las secciones de este documento, en este orden, con estos
   encabezados literales. Omite §Endpoints si el servicio no tiene M2M; omite §Eventos si no hay
   `messaging`. Si no hay ninguna de las dos superficies, no se escribe el archivo.
@@ -19,7 +21,8 @@ sale del diseño, es un **hueco**: repórtalo, no lo inventes.
 - **Un hecho por fila.** En las tablas de metadatos, cada atributo es su propia fila.
 - **Payloads inline.** Solo las formas que viajan por M2M o por eventos, documentadas donde se usan.
 - **Coherencia interna.** El front-matter es un índice derivado 1:1 del cuerpo. Y no puede
-  contradecir el `openapi.yaml`/Postman de `/keel-docs`: misma fuente de verdad (el diseño).
+  contradecir el `openapi.yaml`, el `asyncapi.yaml` ni las colecciones Postman de `/keel-docs`: misma
+  fuente de verdad (el diseño).
 - **Ejemplos coherentes.** Los valores de ejemplo (ids, skus, nombres) son los mismos a lo largo del documento.
 
 ## Mapeo capa fuente → sección

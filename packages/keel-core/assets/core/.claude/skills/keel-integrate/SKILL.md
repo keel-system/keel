@@ -17,6 +17,12 @@ solo esas:
 La API de cara al usuario (endpoints `audience: users`, sus flujos, su `openapi.yaml` y Postman) **no**
 es cómo un servidor se integra: es responsabilidad de `/keel-docs`, no de esta skill. No la documentes aquí.
 
+La frontera con `/keel-docs` no es la superficie, es la **forma**: los artefactos formales y
+machine-readable de ambas superficies (`openapi.yaml` y `asyncapi.yaml`, el contrato AsyncAPI de los
+eventos) los genera `/keel-docs`; aquí se escribe la **prosa de integración** que un humano o un agente
+necesita para consumir el servicio (cómo obtener el token M2M, qué errores reintentar, qué publicar
+para activar una operación). Enlaza el `asyncapi.yaml` desde §Eventos en vez de duplicar su detalle.
+
 Todo se deriva de los artefactos de `specs/<servicio>/`; si algo no se puede derivar, es un hueco del
 diseño: repórtalo, no lo inventes. Antes de generar, ejecuta las comprobaciones de `/keel-validate`;
 no documentes un diseño inválido.
@@ -91,6 +97,6 @@ El documento tiene, en orden:
 
 ## Coherencia
 
-Este `INTEGRATION.md` y los derivados de `/keel-docs` (`openapi.yaml`, Postman) salen del mismo
-diseño y no pueden contradecirse: mismos endpoints M2M, mismos códigos de error, mismos campos, misma
-seguridad. Ante regeneración, sobrescribe el archivo por completo (no edites incrementalmente).
+Este `INTEGRATION.md` y los derivados de `/keel-docs` (`openapi.yaml`, `asyncapi.yaml`, Postman,
+`overview.html`) salen del mismo diseño y no pueden contradecirse: mismos endpoints M2M, mismos
+eventos y payloads que el `asyncapi.yaml`, mismos códigos de error, mismos campos, misma seguridad. Ante regeneración, sobrescribe el archivo por completo (no edites incrementalmente).

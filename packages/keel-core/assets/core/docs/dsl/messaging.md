@@ -92,7 +92,10 @@ Ningún evento viaja desnudo: todo mensaje que publica un servicio Keel sale env
 | `correlationId` | `string` \| `null` | Correlación de la petición que originó el hecho; es lo que hila la traza end-to-end entre servicios. `null` si no hubo contexto de petición (p. ej. un job programado). |
 | `data` | objeto | El `payload` declarado en `publishing.events.<Evento>.payload`, con sus campos tal cual. |
 
-Esta es la forma que asume `envelope: keel` al describir el [contrato de recepción](#contrato-de-recepción-contract) de una suscripción, y la que **todo generador debe emitir**: es lo que permite que dos servicios Keel escritos en tecnologías distintas se consuman entre sí sin traductor. Cómo se materializa en cada stack (nombres de clase, serializador) es decisión del generador; la forma del cable, no.
+Esta forma es **parte del contrato público**: `/keel-docs` la publica en el `asyncapi.yaml` del servicio
+(el payload de cada mensaje publicado es `{ metadata, data }`), no solo en la documentación en prosa.
+
+Es también la forma que asume `envelope: keel` al describir el [contrato de recepción](#contrato-de-recepción-contract) de una suscripción, y la que **todo generador debe emitir**: es lo que permite que dos servicios Keel escritos en tecnologías distintas se consuman entre sí sin traductor. Cómo se materializa en cada stack (nombres de clase, serializador) es decisión del generador; la forma del cable, no.
 
 ## Suscripciones
 

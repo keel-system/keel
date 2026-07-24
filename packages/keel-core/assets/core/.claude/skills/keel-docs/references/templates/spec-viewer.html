@@ -1,0 +1,147 @@
+<!doctype html>
+<!--
+  Visor de contratos Keel — plantilla de forma fija, común a OpenAPI y AsyncAPI.
+  NO edites el markup, el CSS ni el JS al generar. Copia este archivo tal cual y sustituye
+  únicamente los tres marcadores que aparecen más abajo (el título de la pestaña, el nombre del
+  renderer y el marcador de la constante del spec). Los tokens exactos y el procedimiento están
+  en ../overview-html-guide.md.
+
+  El spec va embebido, nunca por fetch: así el archivo abre con doble clic desde file://.
+  El renderer se carga de CDN; sin conexión, la página muestra el fallback con enlaces al
+  archivo crudo y al editor online.
+-->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__KEEL_TITLE__</title>
+<style>
+  :root { color-scheme: light dark; --bg:#ffffff; --text:#1b1f24; --muted:#5c6773; --border:#dfe3e8; --accent:#2f6feb; --panel:#f6f7f9; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#12151a; --text:#e6e9ee; --muted:#9aa5b1; --border:#2c333d; --accent:#6ea0ff; --panel:#191d24; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  .bar { display:flex; flex-wrap:wrap; gap:10px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--border); background:var(--panel); }
+  .bar strong { font-size:14px; }
+  .bar a, .bar button {
+    font:inherit; font-size:13px; padding:5px 11px; border:1px solid var(--border); border-radius:8px;
+    background:var(--bg); color:var(--text); text-decoration:none; cursor:pointer;
+  }
+  .bar a:hover, .bar button:hover { border-color:var(--accent); color:var(--accent); }
+  .spacer { flex:1 1 auto; }
+  #fallback { max-width:780px; margin:48px auto; padding:0 20px; }
+  #fallback h1 { font-size:22px; }
+  #fallback p { color:var(--muted); }
+  #fallback ul { padding-left:20px; }
+  #fallback pre {
+    background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:12px;
+    max-height:50vh; overflow:auto; font-size:12.5px;
+  }
+  #render { min-height:60vh; }
+  [hidden] { display:none !important; }
+</style>
+<link id="viewer-css" rel="stylesheet" href="">
+</head>
+<body>
+<div class="bar">
+  <strong id="doc-title">__KEEL_TITLE__</strong>
+  <span class="spacer"></span>
+  <a href="overview.html">← Panel del servicio</a>
+  <a id="raw-link" href="#" download>Descargar spec</a>
+  <a id="editor-link" href="#" target="_blank" rel="noopener">Abrir editor online</a>
+  <button id="copy" type="button">Copiar spec</button>
+</div>
+
+<div id="render"></div>
+
+<div id="fallback" hidden>
+  <h1>No se pudo cargar el visor</h1>
+  <p>
+    El renderizado usa una librería servida desde un CDN y esta página no ha podido descargarla
+    (normalmente, por falta de conexión). El contrato en sí está completo y embebido aquí abajo.
+  </p>
+  <ul>
+    <li>Descarga el archivo con el botón <em>Descargar spec</em> y ábrelo con tu herramienta habitual.</li>
+    <li>O pulsa <em>Copiar spec</em> y pégalo en el <span id="editor-name">editor online</span>.</li>
+    <li>O vuelve a abrir esta página con conexión a internet.</li>
+  </ul>
+  <pre id="raw"></pre>
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// Contrato embebido. `/keel-docs` sustituye el placeholder por el spec completo.
+// ---------------------------------------------------------------------------
+var KEEL_SPEC = /*__KEEL_SPEC__*/ null;
+var KEEL_RENDERER = "__KEEL_RENDERER__";
+
+(function () {
+  'use strict';
+
+  var VIEWERS = {
+    redoc: {
+      js: 'https://cdn.redocly.com/redoc/latest/bundles/redoc.standalone.js',
+      css: '',
+      global: 'Redoc',
+      rawFile: 'openapi.yaml',
+      editor: 'https://editor.swagger.io/',
+      editorName: 'Swagger Editor',
+      mount: function (spec, node) { window.Redoc.init(spec, { hideDownloadButton: true }, node); }
+    },
+    asyncapi: {
+      js: 'https://unpkg.com/@asyncapi/react-component@latest/browser/standalone/index.js',
+      css: 'https://unpkg.com/@asyncapi/react-component@latest/styles/default.min.css',
+      global: 'AsyncApiStandalone',
+      rawFile: 'asyncapi.yaml',
+      editor: 'https://studio.asyncapi.com/',
+      editorName: 'AsyncAPI Studio',
+      mount: function (spec, node) {
+        window.AsyncApiStandalone.render({
+          schema: JSON.stringify(spec),
+          config: { show: { sidebar: true, errors: true } }
+        }, node);
+      }
+    }
+  };
+
+  var v = VIEWERS[KEEL_RENDERER];
+  var fallback = document.getElementById('fallback');
+  var render = document.getElementById('render');
+  var json = KEEL_SPEC ? JSON.stringify(KEEL_SPEC, null, 2) : '';
+
+  document.getElementById('raw').textContent = json;
+  document.getElementById('editor-name').textContent = v ? v.editorName : 'editor online';
+  if (v) {
+    document.getElementById('editor-link').href = v.editor;
+    document.getElementById('editor-link').textContent = 'Abrir ' + v.editorName;
+    var raw = document.getElementById('raw-link');
+    raw.href = v.rawFile;
+    raw.setAttribute('download', v.rawFile);
+  }
+  document.getElementById('copy').addEventListener('click', function () {
+    var btn = this;
+    var done = function () { btn.textContent = 'Copiado ✓'; setTimeout(function () { btn.textContent = 'Copiar spec'; }, 1800); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(json).then(done, showRaw);
+    else showRaw();
+  });
+
+  function showRaw() { render.hidden = true; fallback.hidden = false; }
+
+  if (!v || !KEEL_SPEC) { showRaw(); return; }
+
+  if (v.css) document.getElementById('viewer-css').href = v.css;
+
+  var timer = setTimeout(showRaw, 12000);
+  var s = document.createElement('script');
+  s.src = v.js;
+  s.onload = function () {
+    clearTimeout(timer);
+    try { v.mount(KEEL_SPEC, render); } catch (e) { showRaw(); }
+  };
+  s.onerror = function () { clearTimeout(timer); showRaw(); };
+  document.body.appendChild(s);
+})();
+</script>
+</body>
+</html>
