@@ -50,6 +50,7 @@ Lee los artefactos y verifica esta checklist. Reporta cada hallazgo con severida
 - Existe `specs/<servicio>/validation-scenarios.md` (formato: `docs/validation-scenarios.md`); si falta, **error**: el diseño no está cerrado y el generador no puede validar el servidor.
 - Su matriz de cobertura incluye toda operación de use-cases, y cada `error` declarado aparece en algún flujo o caso borde con su `code` exacto (huecos: **error**).
 - Rutas, payloads, estados y eventos de los escenarios coinciden con los artefactos; si el spec cambió después del archivo (discrepancias o versión distinta en su cabecera), márcalo como desactualizado (**error**) y propón regenerarlo con `/keel-design`.
+- El archivo es el **contrato de equivalencia** entre implementaciones: lo que no fija, cada generador lo decide por su cuenta. Comprueba contra `docs/validation-scenarios.md § Determinación observable` (el criterio vive allí, no lo dupliques aquí) y marca como **error** los tres fallos que lo vacían de contenido: `Then` que solo verifica el status en vez del cuerpo completo de la respuesta; error cubierto sin su status HTTP; flujo cuyo `Given` depende de la ejecución de otro flujo (tras el reset previo a cada flujo, ese estado no existe). Como **aviso**: colección devuelta sin orden declarado, estado del `lifecycle` que ningún flujo alcanza, y `cache.invalidatedBy` con vías no ejercitadas.
 
 ## Salida
 

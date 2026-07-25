@@ -1,0 +1,122 @@
+# Cómo producir validation-scenarios.md
+
+Procedimiento del paso **5** de `/keel-design`. `docs/validation-scenarios.md` define **qué debe cumplir** el archivo (es el formato canónico, y el mismo que aplica `/keel-validate` como gate); este documento define **cómo producirlo** para que lo cumpla.
+
+Lee ambos antes de escribir la primera línea del artefacto.
+
+## 1. Inventario de obligaciones (antes de escribir nada)
+
+El error más común es escribir los flujos que se te ocurren y después rellenar la matriz con lo que salió. Eso produce cobertura del camino feliz y huecos sistemáticos en todo lo demás. **Se hace al revés**: primero el inventario mecánico de lo que hay que cubrir, y los flujos se escriben **para cubrirlo**.
+
+Recorre los artefactos y construye la lista de obligaciones. Es un borrador de trabajo, no va al archivo:
+
+| Fuente | Obligación |
+|---|---|
+| `use-cases.operations` | una fila de matriz por operación |
+| `operations[].errors[]` | una aserción por `code`, con su status |
+| `operations[].preconditions/rules` | un orden de evaluación por command, más un escenario de precedencia si hay ≥2 errores |
+| `operations[].emits[]` | una aserción de evento (nombre + payload + canal) |
+| `operations[].idempotency` | reintento con misma clave |
+| `operations[].cache.invalidatedBy` | un ciclo leer → mutar → releer **por cada vía** listada |
+| `operations[].schedule` | disparo y efecto observable |
+| `domain.entities[].lifecycle` | un escenario por transición + una transición inválida + **todo estado alcanzado** |
+| `domain` campos `unique` | una colisión |
+| `domain` constraints y requeridos | casos borde `400` |
+| `api.endpoints` con `paginated` | primera página, siguiente, vacía, tope `maxSize` |
+| `api.endpoints[].audience: services/both` | contrato M2M completo (request + response + errores + auth) |
+| `security.access` | `401` sin credencial y `403` sin permiso, por operación protegida |
+| `messaging.subscriptions` | consumo + `onFailure` (retry/DLQ) + reentrega si hay `messageId` |
+| `storage.buckets` | subida feliz, lectura según `visibility`, `FILE_TOO_LARGE`, `UNSUPPORTED_CONTENT_TYPE` |
+
+Cuando el inventario esté completo, la **matriz de cobertura** sale de él, no de los flujos.
+
+## 2. Convenciones de determinación
+
+Antes de los flujos, fija las convenciones transversales del servicio en la sección `## Convenciones de determinación` del archivo: formato temporal y zona, escala decimal y redondeo, ausencia vs nulo, sensibilidad a mayúsculas/acentos, forma del cuerpo de error, cabecera de idempotencia. Se declaran **una vez** y ningún escenario las repite.
+
+Estas convenciones son la salida natural de la clase 12 del análisis de huecos (`gap-analysis.md`). Si llegaste aquí sin haberlas decidido, decídelas ahora con el usuario: son contrato, y sin ellas dos generadores divergen.
+
+## 3. Agrupación en flujos
+
+Un **flujo** (`FL-*`) es una historia coherente de negocio sobre una agrupación (entidad o agregado), auto-contenida y reseteada antes de ejecutarse. Dentro de él, los escenarios van en orden y encadenan estado.
+
+Reglas prácticas:
+
+- El **primer escenario del flujo crea** lo que los demás necesitan. Si el `Given` de un flujo necesita algo que solo produce otro flujo, o lo creas dentro, o lo replanteas: tras el reset ese estado no existe.
+- Un caso borde es **escenario propio** cuando necesita su propio `Given` o cuando ejercita un error que nadie más cubre; es una entrada del campo **Casos borde** cuando es una variación del input del escenario que lo precede.
+- No metas todo el ciclo de vida de una entidad en un solo flujo gigante: un flujo por historia (alta y consulta; transición de estado; borrado y sus efectos).
+- Los flujos de consumo de eventos y los de schedule son flujos aparte, con su propio prefijo si conviene.
+- El prefijo `FL-<PREFIJO>-NNN` es 3-4 letras de la agrupación, `NNN` secuencial dentro de ella. Deja huecos entre números si prevés insertar (`001`, `010`, `020`).
+
+## 4. Ejemplo trabajado
+
+Un flujo completo en el formato final, para calibrar el nivel de detalle:
+
+```markdown
+### FL-ORD-001: alta de pedido y publicación del evento
+
+**Given**: existe el cliente `c1` (`status: active`) y el producto `p1`
+(`sku: "SKU-001"`, `price: 12.50`, `stock: 10`). No existe ningún pedido de `c1`.
+
+**When**: `createOrder` — `POST /v1/orders`
+```json
+{ "customerId": "c1", "lines": [ { "productId": "p1", "quantity": 2 } ] }
+```
+
+**Then**:
+1. Status `201`.
+2. Cabecera `Location` con la ruta del pedido creado.
+3. El cuerpo trae `id` (forma de identificador), `customerId: "c1"`, `status: "pending"`,
+   `total: 25.00` (escala 2) y `lines` con un elemento (`productId: "p1"`, `quantity: 2`).
+4. El cuerpo **no** trae `internalNotes` (campo `sensitive`).
+5. `getOrder` sobre el `id` devuelto responde `200` con el mismo cuerpo.
+6. Se publica `OrderCreated` en el canal `orders` con `orderId` (el devuelto),
+   `customerId: "c1"` y `total: 25.00`.
+
+**Orden de evaluación**:
+1. El cliente existe → `CUSTOMER_NOT_FOUND` (`404`).
+2. El cliente está activo → `CUSTOMER_INACTIVE` (`409`).
+3. Cada producto existe → `PRODUCT_NOT_FOUND` (`404`).
+4. Hay stock suficiente → `INSUFFICIENT_STOCK` (`409`).
+
+**Casos borde**:
+- `lines` vacío → `400` (`minItems: 1`).
+- `quantity: 0` → `400`.
+- Cliente inexistente **y** producto inexistente en la misma llamada →
+  `CUSTOMER_NOT_FOUND` (`404`): la guarda 1 precede a la 3.
+
+**Notas de determinación**: `total` se verifica con escala 2 y redondeo al alza en el
+último decimal; `id` y `createdAt` se verifican por forma, no por valor.
+```
+
+Fíjate en lo que hace que sea contrato y no descripción: la aserción 3 fija el cuerpo **completo**, la 4 fija una **ausencia**, la 5 comprueba el efecto **por la API pública** en vez de por la base de datos, la 6 nombra canal y payload, y el último caso borde es lo único que fija la **precedencia** entre guardas.
+
+## 5. Auto-revisión antes de mostrarlo
+
+Dos pasadas, en este orden. No enseñes el archivo al usuario sin haberlas hecho.
+
+**Pasada de cobertura (recorrido inverso).** Para **cada fila del inventario** del paso 1, localiza la aserción concreta que la cubre —el flujo, el escenario y el número de aserción—. Si no la encuentras, falta escenario. Recorrer los flujos y ver si "parece completo" no es esta pasada: la dirección importa, porque el sesgo está en no echar de menos lo que nunca escribiste.
+
+**Pasada de equivalencia.** Por cada punto de `docs/validation-scenarios.md § Determinación observable`, comprueba que está fijado o declarado indiferente. Y a cada escenario, hazle la pregunta de calidad: *¿podría una implementación plausible pero distinta pasar este escenario comportándose de otra manera?* Si la respuesta es sí, el escenario es decorativo — concrétalo.
+
+Errores frecuentes que estas pasadas deben cazar:
+
+- `Then` que solo comprueba el status.
+- Lista devuelta sin orden declarado.
+- Error sin status, o con status distinto al del artefacto.
+- Escenario cuyo `Given` depende de otro flujo.
+- `invalidatedBy` con tres vías y un solo ciclo de invalidación probado.
+- Estado del `lifecycle` que ningún flujo alcanza.
+- Evento en `emits` que no aparece en ningún `Then`.
+
+## 6. Regenerar sin romper
+
+El archivo se reemite cada vez que el spec cambia, y **los ids `FL-*` son estables**: otros artefactos se apoyan en ellos (las colecciones Postman de `/keel-docs` crean una carpeta por flujo, y el agente del generador los reporta uno a uno).
+
+- Actualiza la **versión del spec** de la cabecera: es lo que permite a `/keel-validate` detectar que el archivo quedó desactualizado.
+- Los flujos que siguen siendo válidos **conservan su id**, aunque cambie su contenido.
+- Los flujos nuevos toman números nuevos. **Nunca recicles** un id liberado.
+- Un flujo que ya no aplica se elimina; su número no se reutiliza.
+- Si una operación se renombra, el flujo mantiene el id y actualiza el `When`.
+
+Cierra mostrando el archivo al usuario y pidiendo su aprobación: es el contrato con el que se va a aceptar o rechazar cada servidor generado a partir de este diseño.

@@ -48,6 +48,13 @@ artefactos, nunca se resuelve en silencio en el código.
   (`lines.costPrice`, `address.zip`) recortan el DTO **anidado**, que build genera
   completo: lo avisa con un warning y el recorte lo haces tú. Un campo que el diseño
   excluye y acaba en la respuesta es una fuga del contrato, no un detalle de mapeo.
+- **Convenciones de determinación**: las que `validation-scenarios.md` fija —en su
+  sección de convenciones o en las **Notas de determinación** del escenario— son
+  contrato observable, no preferencia de estilo: orden de las colecciones devueltas
+  (con su desempate), formato y zona de fechas, escala y redondeo de los importes,
+  campo ausente vs nulo en la respuesta, sensibilidad a mayúsculas de la unicidad.
+  Implementarlas de otro modo compila, pasa la revisión y hace que este servidor deje
+  de ser equivalente al que generaría otro stack del mismo diseño.
 - **Wiring HTTP**: si el binding, el `successStatus`, el `Location` o los query params
   generados no coinciden con `api.keel.yaml`, repórtalo como defecto del scaffolding —
   no cambies firmas ni contratos generados para compensarlo.

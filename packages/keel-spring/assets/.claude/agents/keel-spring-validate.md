@@ -32,10 +32,14 @@ en OK; cualquier escenario en FALLO deja la generación sin cerrar.
    repórtalo como hueco del diseño, no siembres datos a mano. Con H2 (sin script)
    reinicia el servidor entre flujos. Al re-validar tras un fix, resetea de nuevo.
 4. Ejecuta cada escenario del flujo respetando su **Given** (crea el estado previo vía
-   la propia API o datos de arranque) y verifica el **Then** completo: status,
-   headers y efectos observables — la BD/broker se inspeccionan vía el contenedor
-   `devtools` según `.claude/conventions/infra-validation.md`; los eventos por su canal o
-   por logs. Con capa security, obtén el token según la reference del stack (el
+   la propia API o datos de arranque) y verifica el **Then** completo, **aserción por
+   aserción**: status, headers, **cuerpo completo de la respuesta** (campos presentes,
+   campos ausentes, orden de las colecciones y demás convenciones de determinación que
+   el escenario fije) y efectos observables. Un escenario dado por bueno solo porque el
+   status coincide no valida nada. Prioriza comprobar los efectos **por la propia API**;
+   la BD/broker se inspeccionan vía el contenedor `devtools` según
+   `.claude/conventions/infra-validation.md` para lo que no es observable de otro modo
+   (eventos, por su canal o por logs) y para diagnosticar un fallo. Con capa security, obtén el token según la reference del stack (el
    reporte de infraestructura indica cómo). Los escenarios M2M (`level: service`)
    usan credencial de máquina — `client_credentials` del `serviceClient` o
    `X-API-Key` según `serviceAuth` — nunca un token de usuario. En las operaciones
