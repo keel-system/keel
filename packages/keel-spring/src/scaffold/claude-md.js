@@ -46,7 +46,10 @@ export function generate(model) {
       '`application/usecases/`. Usa el **puerto** de `domain/repository` y el `ApplicationMapper`, nunca las clases `Jpa`. ' +
       'Los handlers llevan `@ApplicationComponent` (no añadas `@Component` ni `@Transactional`: la transacción la abre el ' +
       '`UseCaseMediator`). Implementa `preconditions` y `rules` en el orden del artefacto lanzando los errores de `domain/errors`' +
-      (stack.cache ? '; las políticas `cache` según la skill `.claude/skills/keel-spring-redis/SKILL.md`' : '') +
+      (stack.cache
+        ? '; las políticas `cache` se anotan sobre los adaptadores con las constantes de `CacheConfig` (ya generado), ' +
+          'según la skill `.claude/skills/keel-spring-redis/SKILL.md`'
+        : '') +
       '.',
     '**domain** (`specs/domain.keel.yaml`): siguiendo `.claude/conventions/domain-modeling.md`, escribe el factory de creación, ' +
       'los métodos semánticos de cada transición del `lifecycle` y la guarda de cada `// TODO invariante` en `domain/aggregate`; ' +
@@ -55,8 +58,10 @@ export function generate(model) {
   ];
   if (layersPresent.api) {
     steps.push(
-      '**api** (`specs/api.keel.yaml`): controllers, DTOs y `ApiExceptionHandler` ya generados; revisa solo las rutas marcadas ' +
-        '`// TODO: revisar ruta`.'
+      '**api** (`specs/api.keel.yaml`): controllers, DTOs y `ApiExceptionHandler` ya generados. Atiende las rutas marcadas ' +
+        '`// TODO: revisar ruta` y, al cerrar el código, cruza cada endpoint con su firma: un `@PathVariable` por cada ' +
+        '`{segmento}`, cuerpo solo en POST/PUT/PATCH y el `successStatus` declarado. Un desajuste es defecto del scaffolding: ' +
+        'repórtalo, no lo compenses cambiando el contrato.'
     );
   }
   if (layersPresent.security) {

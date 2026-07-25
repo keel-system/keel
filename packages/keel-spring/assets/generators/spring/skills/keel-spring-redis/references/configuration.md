@@ -40,15 +40,20 @@ El pool exige `org.apache.commons:commons-pool2` en `build.gradle`
 
 ## TTLs y serialización (van en código, no en YAML)
 
-- Los TTL por caché salen del **diseño** (`cache.ttlSeconds` de cada
-  operación) y se fijan en el `RedisCacheConfiguration` de cada caché — no
-  inventes TTLs ni los pongas en YAML desconectados del diseño.
-- Serialización de valores: `GenericJackson2JsonRedisSerializer` (legible,
-  tolera evolución de clases). El default JDK acopla los bytes a la clase
-  Java: un refactor invalida la caché entera o revienta al leer.
+Todo esto lo resuelve el `CacheConfig` generado por build; queda documentado
+para que sepas por qué es así y no lo «mejores» a mano:
+
+- Los TTL por caché salen del **diseño** (`cache.ttlSeconds` de cada operación)
+  y se fijan en el `RedisCacheConfiguration` de cada caché — no inventes TTLs ni
+  los pongas en YAML desconectados del diseño.
+- Serialización de valores: `GenericJackson2JsonRedisSerializer` con un
+  `ObjectMapper` que registra `JavaTimeModule` y desactiva
+  `WRITE_DATES_AS_TIMESTAMPS`. Sin ese módulo, cachear cualquier DTO con
+  `Instant`/`LocalDate` falla en runtime. El default JDK, además, acopla los
+  bytes a la clase Java: un refactor invalida la caché entera o revienta al leer.
 - Claves siempre `StringRedisSerializer` con prefijo del servicio
-  (`<servicio>:...`): inspeccionables con `redis-cli` y sin colisiones si el
-  Redis se comparte.
+  (`<servicio>:...`): inspeccionables con `redis-cli`, borrables de una pasada
+  por `infra/reset-db.sh` y sin colisiones si el Redis se comparte.
 
 ## Por perfil
 

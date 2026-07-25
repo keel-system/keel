@@ -1,0 +1,24 @@
+publishing:
+  reliability: outbox
+  events:
+    ProductCreated:
+      description: Se publicó un producto nuevo en el catálogo.
+      payload:
+        productId:
+          type: uuid
+          required: true
+        sku:
+          type: string
+          required: true
+        occurredAt:
+          type: timestamp
+          required: true
+    ProductUpdated:
+      description: Cambió el estado o los datos de un producto.
+      payload:
+        productId:
+          type: uuid
+          required: true
+        status:
+          type: ProductStatus
+          required: true

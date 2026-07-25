@@ -1,9 +1,11 @@
 // Controllers REST versionados (patrón del prototipo): <Grupo>V1Controller en
 // infrastructure/rest/controllers/<grupo>/v1 con @RequestMapping("<base>/v1").
-// Los commands con body llegan como @Valid @RequestBody del propio Command (el
-// controller fusiona el id del path reconstruyendo el record); las queries se
-// construyen inline desde @PathVariable/@RequestParam/@PageableDefault. Todo
-// se despacha vía UseCaseMediator. Incluye @Tag/@Operation (springdoc) y el
+// El binding sale del endpoint declarado, no del nombre de los campos: cada
+// {segmento} de la ruta es un @PathVariable, y el resto del input viaja en el
+// body (@Valid @RequestBody del propio Command) cuando el método lo admite
+// (POST/PUT/PATCH) o como @RequestParam/@PageableDefault en GET/DELETE. El
+// controller fusiona los path params reconstruyendo el record. Todo se despacha
+// vía UseCaseMediator. Incluye @Tag/@Operation (springdoc) y el
 // @RestControllerAdvice central en infrastructure/rest.
 
 import { javaFile, javaPath, subPackage, javadoc } from './render.js';
@@ -25,9 +27,18 @@ const HTTP_STATUS_CONSTANTS = {
   200: 'OK',
   201: 'CREATED',
   202: 'ACCEPTED',
+  203: 'NON_AUTHORITATIVE_INFORMATION',
   204: 'NO_CONTENT',
-  206: 'PARTIAL_CONTENT'
+  205: 'RESET_CONTENT',
+  206: 'PARTIAL_CONTENT',
+  207: 'MULTI_STATUS',
+  208: 'ALREADY_REPORTED',
+  226: 'IM_USED'
 };
+
+// Métodos HTTP que admiten cuerpo: es la señal que decide @RequestBody frente a
+// @RequestParam (el DSL no declara requestBody, lo declara el verbo del endpoint).
+const BODY_METHODS = new Set(['POST', 'PUT', 'PATCH']);
 
 export function generate(model) {
   const files = model.services
@@ -50,6 +61,7 @@ function renderController(model, service) {
   ]);
 
   const methods = routed.map((operation) => renderMethod(model, operation, imports));
+  if (routed.some((operation) => operation.multipart)) methods.push(fileUploadHelper(model, imports));
 
   const tagDescription = model.service.description
     ? `, description = ${JSON.stringify(model.service.description)}`
@@ -74,6 +86,25 @@ ${methods.join('\n\n')}
   };
 }
 
+// Adaptación MultipartFile → FileUpload: la única traducción que el controller
+// hace sobre un binario. Un archivo ilegible es un 400 del cliente, no un 500.
+function fileUploadHelper(model, imports) {
+  imports.add(`${subPackage(model, 'application.dtos')}.FileUpload`);
+  imports.add(`${subPackage(model, 'domain.errors')}.BadRequestException`);
+  imports.add('java.io.IOException');
+
+  return `    private static FileUpload toFileUpload(MultipartFile file) {
+        if (file == null || file.isEmpty()) {
+            return null;
+        }
+        try {
+            return new FileUpload(file.getBytes(), file.getOriginalFilename(), file.getContentType(), file.getSize());
+        } catch (IOException exception) {
+            throw new BadRequestException("No se pudo leer el archivo enviado", "FILE_UNREADABLE", 400, null);
+        }
+    }`;
+}
+
 function renderMethod(model, operation, imports) {
   const route = operation.route;
   const returnType = returnTypeOf(operation);
@@ -89,45 +120,79 @@ function renderMethod(model, operation, imports) {
     imports.add('io.swagger.v3.oas.annotations.Operation');
     annotations.push(`    @Operation(summary = ${JSON.stringify(operation.description)})`);
   }
-  annotations.push(`    @${mapping}("${route.path}")`);
+  if (operation.multipart) {
+    // Subida binaria: el endpoint es multipart/form-data, no JSON.
+    imports.add('org.springframework.http.MediaType');
+    annotations.push(`    @${mapping}(value = "${route.path}", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)`);
+  } else {
+    annotations.push(`    @${mapping}("${route.path}")`);
+  }
   if (route.status !== 200) {
     imports.add('org.springframework.web.bind.annotation.ResponseStatus');
     imports.add('org.springframework.http.HttpStatus');
-    annotations.push(`    @ResponseStatus(HttpStatus.${HTTP_STATUS_CONSTANTS[route.status] ?? 'OK'})`);
+    const constant = HTTP_STATUS_CONSTANTS[route.status];
+    annotations.push(
+      `    @ResponseStatus(${constant ? `HttpStatus.${constant}` : `HttpStatus.valueOf(${route.status})`})`
+    );
   }
 
-  // Commands con body: el propio Command es el @RequestBody (estilo prototipo).
-  const asBody = operation.messageKind !== 'query' && operation.bodyFields.length > 0;
   const components = messageComponents(model, operation);
+  const pathParams = operation.pathParams ?? [];
+  const fromPath = new Set(pathParams.map((param) => param.name));
+  // El cuerpo solo existe si el verbo lo admite: un POST de consulta en lote
+  // lleva su lote en el body, no en query params.
+  const asBody = BODY_METHODS.has(route.method) && operation.bodyFields.length > 0;
   const params = [];
   let dispatchArg;
 
-  if (asBody) {
-    if (operation.hasIdParam) {
-      imports.add('java.util.UUID');
-      imports.add('org.springframework.web.bind.annotation.PathVariable');
-      params.push('@PathVariable UUID id');
-    }
+  // Un @PathVariable por cada {segmento} de la ruta, con el tipo del diseño.
+  for (const param of pathParams) {
+    for (const name of param.imports) imports.add(name);
+    const typeImport = domainTypeImport(model, param);
+    if (typeImport) imports.add(typeImport);
+    imports.add('org.springframework.web.bind.annotation.PathVariable');
+    params.push(`@PathVariable ${param.javaType} ${param.name}`);
+  }
+
+  if (operation.multipart) {
+    // Partes del formulario: el binario como @RequestPart, el resto como campos.
+    const args = components.map((component) => {
+      if (fromPath.has(component.name)) return component.name;
+      if (component.file) {
+        imports.add('org.springframework.web.bind.annotation.RequestPart');
+        imports.add('org.springframework.web.multipart.MultipartFile');
+        const required = component.required ? '' : ', required = false';
+        params.push(`@RequestPart(value = "${component.name}"${required}) MultipartFile ${component.name}`);
+        return `toFileUpload(${component.name})`;
+      }
+      for (const name of component.imports) imports.add(name);
+      const typeImport = domainTypeImport(model, component);
+      if (typeImport) imports.add(typeImport);
+      imports.add('org.springframework.web.bind.annotation.RequestParam');
+      const required = component.required ? '' : '(required = false)';
+      params.push(`@RequestParam${required} ${component.javaType} ${component.name}`);
+      return component.name;
+    });
+    dispatchArg = `new ${operation.messageClass}(${args.join(', ')})`;
+  } else if (asBody) {
     imports.add('jakarta.validation.Valid');
     imports.add('org.springframework.web.bind.annotation.RequestBody');
     params.push(`@Valid @RequestBody ${operation.messageClass} command`);
 
-    if (operation.hasIdParam) {
-      // Fusiona el id del path reconstruyendo el record.
-      const args = ['id', ...components.filter((c) => c.name !== 'id').map((c) => `command.${c.name}()`)];
+    if (pathParams.length > 0) {
+      // Fusiona los parámetros de ruta reconstruyendo el record.
+      const args = components.map((c) => (fromPath.has(c.name) ? c.name : `command.${c.name}()`));
       dispatchArg = `new ${operation.messageClass}(${args.join(', ')})`;
     } else {
       dispatchArg = 'command';
     }
   } else {
     for (const component of components) {
+      if (fromPath.has(component.name)) continue;
       for (const name of component.imports) imports.add(name);
       const typeImport = domainTypeImport(model, component);
       if (typeImport) imports.add(typeImport);
-      if (component.name === 'id' && !component.list) {
-        imports.add('org.springframework.web.bind.annotation.PathVariable');
-        params.push(`@PathVariable ${component.javaType} id`);
-      } else if (component.name === 'pageable') {
+      if (component.name === 'pageable') {
         imports.add('org.springframework.data.web.PageableDefault');
         const size = model.pagination?.defaultSize ? `(size = ${model.pagination.defaultSize})` : '';
         params.push(`@PageableDefault${size} Pageable pageable`);

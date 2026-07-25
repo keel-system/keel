@@ -9,13 +9,12 @@ import { javaFile, javaPath, subPackage, javadoc } from './render.js';
 import { INTERFACES_PKG, ANNOTATIONS_PKG, MEDIATOR_PKG } from './mediator.js';
 import { domainTypeImport } from './entities.js';
 
-// Componentes del record mensaje: [id si la ruta lo lleva] + campos del body +
-// paginación (queries). Compartidos con el controller para construir/fusionar.
+// Componentes del record mensaje: parámetros de ruta (en el orden del path) +
+// campos del body + paginación (queries). Compartidos con el controller para
+// construir/fusionar el mensaje.
 export function messageComponents(model, operation) {
   const components = [];
-  if (operation.hasIdParam) {
-    components.push({ javaType: 'UUID', name: 'id', imports: ['java.util.UUID'], validation: [], kind: 'base' });
-  }
+  for (const param of operation.pathParams ?? []) components.push(param);
   for (const field of operation.bodyFields) components.push(field);
   if (operation.paginated) {
     if (model.layersPresent.persistence) {
@@ -37,18 +36,19 @@ export function messageComponents(model, operation) {
 // Tipo de retorno de la operación (compartido con controller y handler).
 export function returnTypeOf(operation) {
   if (!operation.responseDto) return 'void';
-  let returnType = operation.responseDto.name;
-  if (operation.returnsList) returnType = `List<${returnType}>`;
-  if (operation.paginated) returnType = `PagedResponse<${returnType}>`;
-  return returnType;
+  // PagedResponse<T> ya es la envoltura de la lista: envolver además en List<>
+  // produciría PagedResponse<List<Dto>> y rompería a cualquier cliente.
+  if (operation.paginated) return `PagedResponse<${operation.responseDto.name}>`;
+  if (operation.returnsList) return `List<${operation.responseDto.name}>`;
+  return operation.responseDto.name;
 }
 
 // Imports que exige el tipo de retorno.
 export function returnTypeImports(model, operation, imports) {
   const dtoPkg = subPackage(model, 'application.dtos');
   if (operation.responseDto) imports.add(`${dtoPkg}.${operation.responseDto.name}`);
-  if (operation.returnsList) imports.add('java.util.List');
   if (operation.paginated) imports.add(`${dtoPkg}.PagedResponse`);
+  else if (operation.returnsList) imports.add('java.util.List');
 }
 
 export function generate(model) {

@@ -31,6 +31,7 @@ import * as correlation from './correlation.js';
 import * as messaging from './messaging.js';
 import * as outbox from './outbox.js';
 import * as idempotency from './idempotency.js';
+import * as cache from './cache.js';
 import * as controllers from './controllers.js';
 import * as security from './security.js';
 import * as httpClients from './http-clients.js';
@@ -64,6 +65,7 @@ const GENERATORS = [
   messaging,
   outbox,
   idempotency,
+  cache,
   controllers,
   security,
   httpClients,

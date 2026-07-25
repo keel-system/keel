@@ -464,26 +464,35 @@ function loadModelWithExclude(exclude) {
 test('exclude plano: build lo aplica al DTO y no avisa', () => {
   const { model, dtoFields } = loadModelWithExclude(['internalNote']);
   assert.ok(!dtoFields.includes('internalNote'));
-  assert.deepEqual(dtoFields, ['id', 'reference', 'address']);
+  // La relación se proyecta como DTO anidado: forma parte del recurso.
+  assert.deepEqual(dtoFields, ['id', 'reference', 'address', 'lines']);
   assert.deepEqual(model.warnings.filter((w) => w.includes('exclude')), []);
+});
+
+test('exclude plano sobre una relación: la quita del DTO', () => {
+  const { model, dtoFields } = loadModelWithExclude(['lines']);
+  assert.deepEqual(dtoFields, ['id', 'reference', 'internalNote', 'address']);
+  assert.deepEqual(model.warnings.filter((w) => w.includes('exclude')), []);
+  assert.deepEqual(model.childDtos, []);
 });
 
 test('exclude sin dot-path no añade warnings (retrocompatibilidad)', () => {
   const { model, dtoFields } = loadModelWithExclude(null);
-  assert.deepEqual(dtoFields, ['id', 'reference', 'internalNote', 'address']);
+  assert.deepEqual(dtoFields, ['id', 'reference', 'internalNote', 'address', 'lines']);
   assert.deepEqual(model.warnings.filter((w) => w.includes('exclude')), []);
 });
 
 test('exclude con dot-path hacia una relación: avisa y deja el DTO raíz intacto', () => {
   const { model, dtoFields } = loadModelWithExclude(['lines.costPrice']);
-  // El DTO plano no contiene la relación, así que no hay nada que recortar aquí.
-  assert.deepEqual(dtoFields, ['id', 'reference', 'internalNote', 'address']);
+  // El recorte vive en el DTO de la hija, que sí se genera: el raíz queda igual.
+  assert.deepEqual(dtoFields, ['id', 'reference', 'internalNote', 'address', 'lines']);
+  assert.ok(model.childDtos.some((child) => child.name === 'OrderLineDto'));
   assert.ok(
     model.warnings.some(
       (w) =>
         w.includes(`exclude 'lines.costPrice' de Order`) &&
-        w.includes(`no genera el DTO anidado de la relación 'lines'`) &&
-        w.includes(`sin 'costPrice'`)
+        w.includes(`DTO anidado de la relación 'lines' se genera completo`) &&
+        w.includes(`quitarle 'costPrice'`)
     ),
     `warnings: ${JSON.stringify(model.warnings)}`
   );
@@ -506,6 +515,6 @@ test('exclude con dot-path hacia un value object: avisa de que el VO sale entero
 
 test('exclude combina plano y dot-paths: aplica el plano y avisa de cada anidado', () => {
   const { model, dtoFields } = loadModelWithExclude(['internalNote', 'lines.costPrice', 'address.zip']);
-  assert.deepEqual(dtoFields, ['id', 'reference', 'address']);
+  assert.deepEqual(dtoFields, ['id', 'reference', 'address', 'lines']);
   assert.equal(model.warnings.filter((w) => w.includes('exclude')).length, 2);
 });

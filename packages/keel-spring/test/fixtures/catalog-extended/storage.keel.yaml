@@ -1,0 +1,6 @@
+buckets:
+  productImages:
+    visibility: public
+    allowedContentTypes: [image/png, image/jpeg]
+    maxSizeMb: 5
+    description: Imágenes de producto servidas al catálogo público.

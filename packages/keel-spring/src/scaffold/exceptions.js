@@ -53,20 +53,9 @@ export function generate(model) {
   });
 
   for (const error of model.errors) {
-    const parent = error.sharedException ?? sharedExceptionFor(error.http);
-    const when = error.when ? `/**\n * ${error.when}\n */\n` : '';
     files.push({
       path: javaPath(model, ERRORS_PKG, error.exceptionClass),
-      content: javaFile(
-        errorsPkg,
-        [],
-        `${when}public class ${error.exceptionClass} extends ${parent} {
-
-    public ${error.exceptionClass}(String message) {
-        super(message, "${error.code}", ${error.http}, null);
-    }
-}`
-      )
+      content: javaFile(errorsPkg, [], errorClassBody(error))
     });
   }
 
@@ -90,6 +79,42 @@ public class InvalidStateTransitionException extends ConflictException {
   }
 
   return files;
+}
+
+// Error declarado del diseño. Con un único `http` el status va quemado en el
+// constructor y la clase cuelga de la subclase compartida de ese status; si el
+// diseño usa el mismo code con status distintos según la operación, el status
+// pasa a ser un parámetro y la clase extiende DomainException para que lo
+// resuelva ApiExceptionHandler desde la metadata.
+function errorClassBody(error) {
+  const parent = error.sharedException ?? sharedExceptionFor(error.http);
+  const doc = [];
+  if (error.when) doc.push(error.when);
+
+  if (error.dynamicStatus) {
+    for (const usage of error.usages ?? []) {
+      doc.push(`${usage.http} en ${usage.operations.join(', ')}.`);
+    }
+    doc.push('El status depende de la operación: pásalo al construir el error.');
+    return `${javadocBlock(doc)}public class ${error.exceptionClass} extends ${parent} {
+
+    public ${error.exceptionClass}(String message, int httpStatus) {
+        super(message, "${error.code}", httpStatus, null);
+    }
+}`;
+  }
+
+  return `${javadocBlock(doc)}public class ${error.exceptionClass} extends ${parent} {
+
+    public ${error.exceptionClass}(String message) {
+        super(message, "${error.code}", ${error.http}, null);
+    }
+}`;
+}
+
+function javadocBlock(lines) {
+  if (lines.length === 0) return '';
+  return `/**\n${lines.map((line) => ` * ${line}`).join('\n')}\n */\n`;
 }
 
 function domainExceptionBody() {

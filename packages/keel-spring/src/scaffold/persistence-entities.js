@@ -60,6 +60,14 @@ export function jpaMembers(model, entity) {
   return members;
 }
 
+// Nombre de la relación con la que `childName` apunta de vuelta a `parentName`
+// (back-reference declarada en el diseño), o null si la relación es unidireccional.
+// Es el mappedBy del @OneToMany del padre y el setter que el mapeo debe rellenar.
+export function backReferenceTo(model, childName, parentName) {
+  const child = model.entities.find((e) => e.name === childName);
+  return child?.relations.find((rel) => rel.backReference && rel.entity === parentName)?.name ?? null;
+}
+
 // Campos que llevan constraint única propia: los unique del diseño, salvo el id
 // (ya es clave primaria), los value objects compuestos (no son una sola columna)
 // y los que la clave natural ya cubre por sí sola.
@@ -285,9 +293,16 @@ function renderJpaEntity(model, entity) {
       } else {
         imports.add('jakarta.persistence.OneToMany');
         imports.add('jakarta.persistence.CascadeType');
-        imports.add('jakarta.persistence.JoinColumn');
-        // FK en la tabla hija (unidireccional CON @JoinColumn: sin join table).
-        annotation = `@OneToMany(cascade = CascadeType.ALL, orphanRemoval = true)\n    @JoinColumn(name = "${snakeCase(entity.name)}_id")`;
+        const inverse = backReferenceTo(model, member.relation.entity, entity.name);
+        if (inverse) {
+          // Bidireccional: la hija es dueña de la FK (@ManyToOne). Con mappedBy la
+          // columna se mapea una sola vez; con @JoinColumn quedaría mapeada dos veces.
+          annotation = `@OneToMany(mappedBy = "${inverse}", cascade = CascadeType.ALL, orphanRemoval = true)`;
+        } else {
+          imports.add('jakarta.persistence.JoinColumn');
+          // FK en la tabla hija (unidireccional CON @JoinColumn: sin join table).
+          annotation = `@OneToMany(cascade = CascadeType.ALL, orphanRemoval = true)\n    @JoinColumn(name = "${snakeCase(entity.name)}_id")`;
+        }
       }
       imports.add('java.util.List');
       imports.add('java.util.ArrayList');

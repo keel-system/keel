@@ -20,6 +20,8 @@ export function domainTypeImport(model, field) {
   const typeName = field.elementJavaType ?? field.javaType;
   if (field.kind === 'enum') return `${subPackage(model, 'domain.enums')}.${typeName}`;
   if (field.kind === 'composite') return `${subPackage(model, 'domain.valueobject')}.${typeName}`;
+  // Una subida binaria viaja como FileUpload (application.dtos), no como tipo de dominio.
+  if (field.kind === 'fileUpload') return `${subPackage(model, 'application.dtos')}.FileUpload`;
   return null;
 }
 
@@ -38,6 +40,10 @@ export function domainMembers(model, entity) {
   }));
 
   for (const relation of entity.relations) {
+    // La back-reference hacia la raíz del agregado no es un miembro del dominio:
+    // dentro del agregado el contexto ya es la raíz, y modelarla obligaría al
+    // mapeo a recorrer el ciclo hija→padre→hija. Solo existe en la Jpa (FK).
+    if (relation.backReference) continue;
     const toMany = relation.cardinality === 'one-to-many' || relation.cardinality === 'many-to-many';
     if (!relation.internal && model.layersPresent.persistence) {
       members.push({ kind: 'externalRef', relation, name: `${relation.name}Id`, javaType: 'UUID' });

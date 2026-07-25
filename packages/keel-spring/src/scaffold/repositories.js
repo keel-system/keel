@@ -6,7 +6,7 @@
 
 import { javaFile, javaPath, subPackage } from './render.js';
 import { domainMembers, domainSubPackage, capitalize } from './entities.js';
-import { jpaMembers, JPA_PKG } from './persistence-entities.js';
+import { jpaMembers, backReferenceTo, JPA_PKG } from './persistence-entities.js';
 
 const PORT_PKG = 'domain.repository';
 const REPO_PKG = 'infrastructure.persistence.repositories';
@@ -310,9 +310,26 @@ function renderToJpa(model, entity, imports) {
     } else if (member.kind === 'relationMany') {
       // Lista mutable: Hibernate gestiona la colección.
       imports.add('java.util.ArrayList');
-      lines.push(
-        `        jpa.set${capitalize(member.name)}(new ArrayList<>(domain.get${capitalize(member.name)}().stream().map(this::toJpa).toList()));`
-      );
+      const inverse = backReferenceTo(model, member.relation.entity, entity.name);
+      if (inverse) {
+        // Bidireccional: la hija es dueña de la FK, así que hay que estampar el
+        // padre en cada hija. El mapeo de la hija nunca vuelve al padre (sería
+        // recursión infinita): el vínculo se cierra aquí, en un solo sentido.
+        imports.add('java.util.List');
+        const local = `${member.name}Jpa`;
+        lines.push(
+          `        List<${member.relation.entity}Jpa> ${local} = domain.get${capitalize(member.name)}().stream().map(this::toJpa).toList();`,
+          `        ${local}.forEach(child -> child.set${capitalize(inverse)}(jpa));`,
+          `        jpa.set${capitalize(member.name)}(new ArrayList<>(${local}));`
+        );
+      } else {
+        lines.push(
+          `        jpa.set${capitalize(member.name)}(new ArrayList<>(domain.get${capitalize(member.name)}().stream().map(this::toJpa).toList()));`
+        );
+      }
+    } else if (member.kind === 'relationOne' && member.relation?.backReference) {
+      // La back-reference la estampa el padre al mapear su colección.
+      lines.push(`        // ${member.name}: lo estampa ${member.relation.entity}RepositoryImpl al mapear su colección.`);
     } else if (member.kind === 'relationOne') {
       const getter = `domain.get${capitalize(member.name)}()`;
       lines.push(`        jpa.set${capitalize(member.name)}(${getter} != null ? toJpa(${getter}) : null);`);

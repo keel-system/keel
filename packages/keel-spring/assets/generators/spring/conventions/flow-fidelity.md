@@ -43,15 +43,36 @@ artefactos, nunca se resuelve en silencio en el código.
   mapper propagarlo en `toDomain()`/`toJpa()`. Un `@Version` sin round-trip completo
   no protege nada: complétalo o no lo introduzcas.
 - **Proyección de la respuesta**: el DTO debe exponer **exactamente** los campos que declara
-  el `output` de la operación. Los `exclude` con **dot-path** (`lines.costPrice`,
-  `address.zip`) recortan el DTO **anidado** — la entidad hija o el value object —, y eso
-  build **no** lo genera: lo avisa con un warning y lo escribes tú. Un campo que el diseño
+  el `output` de la operación —campos, referencias (`<relación>Id`) y entidades hijas
+  (`List<XxxDto>`), que build ya proyecta. Los `exclude` con **dot-path**
+  (`lines.costPrice`, `address.zip`) recortan el DTO **anidado**, que build genera
+  completo: lo avisa con un warning y el recorte lo haces tú. Un campo que el diseño
   excluye y acaba en la respuesta es una fuga del contrato, no un detalle de mapeo.
 - **Wiring HTTP**: si el binding, el `successStatus`, el `Location` o los query params
   generados no coinciden con `api.keel.yaml`, repórtalo como defecto del scaffolding —
   no cambies firmas ni contratos generados para compensarlo.
 - **Imports y compilación**: tras tocar agregados/handlers/mappers/servicios, verifica
   que errores, value objects y DTOs usados están importados y el proyecto compila.
+
+## Revisión mecánica final (una sola pasada, al terminar el código)
+
+Tres defectos reales de generaciones anteriores no rompían la compilación y solo
+salieron a la luz ejercitando el servidor. Son verificables **leyendo el código**,
+así que recórrelos antes de reportar `status`, aunque nada esté marcado con un TODO:
+
+- **Binding contra la ruta declarada**: por cada endpoint de `api.keel.yaml`, cada
+  `{segmento}` de la ruta tiene su `@PathVariable` homónimo en la firma; el cuerpo
+  solo aparece en `POST`/`PUT`/`PATCH`; los filtros de un `GET` son `@RequestParam`.
+  Un desajuste es defecto del scaffolding: repórtalo, no lo compenses.
+- **Ciclos en los mappers**: ningún `toDomain`/`toJpa` de una entidad **hija** invoca
+  el mapper completo de su padre. Esa llamada es recursión infinita por construcción
+  (`StackOverflowError` al guardar), aunque el flujo que la dispara no esté escrito
+  todavía. La back-reference la estampa el padre al mapear su colección.
+- **Un solo `ObjectMapper` por comportamiento**: toda configuración que serialice
+  objetos del servicio (caché, cliente HTTP, mensajería) usa el `ObjectMapper` de la
+  aplicación o replica su configuración, `JavaTimeModule` incluido. Un componente
+  serializador escrito «aislado» rompe en el primer campo `Instant`/`LocalDate`, en
+  runtime.
 
 ## Cierre del paso
 

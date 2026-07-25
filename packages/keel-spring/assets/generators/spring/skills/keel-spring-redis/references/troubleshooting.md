@@ -3,14 +3,22 @@
 Síntoma → causa → arreglo. Sondeo básico en
 `.claude/conventions/infra-validation.md`.
 
+## `SerializationException` al cachear algo con fecha/hora
+
+`Java 8 date/time type ... not supported by default` al escribir en la caché un
+DTO con `Instant`, `LocalDate` u `OffsetDateTime`: el `ObjectMapper` que
+serializa los valores no registra `JavaTimeModule`. El `CacheConfig` generado
+por build sí lo registra — el fallo aparece cuando alguien añade **otro**
+`CacheManager`, `RedisTemplate` o serializador con un `ObjectMapper` propio.
+Reutiliza el de `CacheConfig` en vez de construir uno nuevo.
+
 ## `ClassCastException` / `SerializationException` al leer de la caché
 
 Quedaron entradas escritas con otro serializador (p. ej. el default JDK antes
 de configurar el JSON) o con una versión anterior de la clase. Limpia las
-claves del servicio en local
-(`redis-cli -h redis --scan --pattern '<servicio>:*' | xargs redis-cli -h redis del`)
-y verifica que el `RedisCacheManager` fija el serializador JSON para **todas**
-las cachés (la configuración base, no caché a caché).
+claves del servicio en local (`bash infra/reset-db.sh`, que ya borra
+`<servicio>:*`) y verifica que no hay un segundo `CacheManager` compitiendo con
+el generado.
 
 ## La caché sirve datos obsoletos
 
@@ -51,6 +59,18 @@ Contenedor caído o host equivocado: desde la app en el host es
 `localhost:6379`; desde devtools es `redis` (o `valkey` — el hostname es el
 serviceKey del compose, revisa cuál declara tu `keel-stack.json`).
 `redis-cli -h redis PING` / `redis-cli -h valkey PING`.
+
+## Un escenario recibe la respuesta de otro flujo anterior
+
+Estado sobreviviente en Redis, no un bug del código:
+
+- **Clave de idempotencia reutilizada**: el mismo `Idempotency-Key` en dos
+  flujos distintos devuelve la respuesta cacheada del primero mientras dure el
+  TTL declarado (con `ttlSeconds: 86400`, un día entero). Usa un uuid nuevo por
+  request salvo en el escenario que prueba la deduplicación.
+- **Entrada de caché anterior al reset**: `bash infra/reset-db.sh` borra las
+  claves `<servicio>:*` además de vaciar la BD; si se reseteó la BD por otra vía,
+  la caché conserva el recurso que la BD ya no tiene.
 
 ## La idempotencia «no funciona» en los escenarios
 

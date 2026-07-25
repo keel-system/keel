@@ -1,4 +1,5 @@
-// DTOs de respuesta de la capa de aplicación (XxxResponseDto, records) +
+// DTOs de respuesta de la capa de aplicación (XxxResponseDto, records), el
+// record <Hija>Dto de cada entidad hija proyectada en una respuesta, y el
 // PagedResponse genérico para outputs paginados. Sin XxxRequest: el body HTTP
 // es el propio Command (estilo prototipo).
 
@@ -18,8 +19,27 @@ export function generate(model) {
     }
   }
 
+  for (const childDto of model.childDtos ?? []) files.push(renderRecord(model, childDto));
+
+  if (model.hasFileUploads) files.push(renderFileUpload(model));
   if (anyPaginated) files.push(renderPagedResponse(model));
   return files;
+}
+
+// Archivo subido tal y como llega al mensaje: el controller lo construye desde
+// el MultipartFile y el handler lo entrega al puerto FileStorage, que persiste
+// el binario y devuelve la clave que guarda el dominio.
+function renderFileUpload(model) {
+  const body = `/**
+ * Contenido de una subida binaria (multipart) en tránsito hacia el caso de uso.
+ */
+public record FileUpload(byte[] content, String filename, String contentType, long size) {
+}`;
+
+  return {
+    path: javaPath(model, DTO_PKG, 'FileUpload'),
+    content: javaFile(subPackage(model, DTO_PKG), [], body)
+  };
 }
 
 function renderRecord(model, dto) {

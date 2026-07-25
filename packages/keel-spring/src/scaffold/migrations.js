@@ -14,6 +14,8 @@
 //   migrations     Flyway aplica db/migration/ y Hibernate solo valida.
 // Existen para que ni el agente ni el operador tengan que editar YAML a mano.
 
+import { uniqueConstraints } from './persistence-entities.js';
+
 const MIGRATIONS_DIR = 'src/main/resources/db/migration';
 const BASELINE_SQL = 'build/schema/baseline.sql';
 const BASELINE_MIGRATION = 'V1__baseline_schema.sql';
@@ -170,8 +172,33 @@ kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null
 
 echo "Esquema exportado en $TARGET."
+${constraintCheck(model)}
 echo "Revísalo (constraints, índices, tipos del dialecto) y cópialo como:"
 echo "  src/main/resources/db/migration/${BASELINE_MIGRATION}"
 echo "Después pruébalo sobre una BD sin esquema: PROFILE=local,migrations ./gradlew bootRun"
 `;
+}
+
+// El exporter de Hibernate vuelca algunas constraints únicas como \`unique (…)\`
+// inline, sin su nombre. ApiExceptionHandler traduce la violación POR NOMBRE de
+// constraint, así que un baseline sin ellos degrada el error declarado del
+// diseño a un 409 genérico. Se comprueba aquí, que es cuando aún se puede
+// renombrar a mano antes de copiar el archivo.
+function constraintCheck(model) {
+  const constraints = uniqueConstraints(model).map((entry) => entry.constraint);
+  if (constraints.length === 0) return '';
+
+  return `
+missing=""
+for constraint in ${constraints.join(' ')}; do
+  grep -qi "$constraint" "$TARGET" || missing="$missing $constraint"
+done
+if [ -n "$missing" ]; then
+  echo ""
+  echo "AVISO: el DDL exportado no nombra estas constraints:$missing"
+  echo "  Hibernate las vuelca como 'unique (...)' inline. Renómbralas en $TARGET"
+  echo "  antes de copiarlo: ApiExceptionHandler traduce la violación por nombre y,"
+  echo "  sin él, el error declarado del diseño se degrada a un 409 genérico."
+  echo ""
+fi`;
 }

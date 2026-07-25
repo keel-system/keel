@@ -38,7 +38,12 @@ esta checklist antes de aceptarlo.
   natural), `uk_<tabla>_<campo>` (campos `unique`) e `idx_<tabla>_<campos>`
   (`indexes` de `persistence.keel.yaml`). El `ApiExceptionHandler` traduce la
   violación **por nombre de constraint**: si el nombre cambia, el error declarado
-  del diseño se degrada a un 409 genérico.
+  del diseño se degrada a un 409 genérico. El propio `export-schema.sh` comprueba
+  cuáles faltan y los lista al terminar (`AVISO: el DDL exportado no nombra estas
+  constraints…`): Hibernate suele colapsar las multi-columna en un `unique (...)`
+  inline sin nombre, y hay que reescribirlas a
+  `constraint uk_<tabla>_natural unique (...)` antes de copiar el archivo. Ese
+  aviso no es informativo: es trabajo pendiente.
 - **Nullabilidad**: `not null` en los campos `required` y en las FK de relaciones
   requeridas. Es la última línea de defensa de un invariante.
 - **Tipos del dialecto**: revisa `dialects/<database>.md` antes de aceptar los

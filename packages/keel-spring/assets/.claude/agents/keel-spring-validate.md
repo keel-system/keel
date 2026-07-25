@@ -22,8 +22,9 @@ en OK; cualquier escenario en FALLO deja la generación sin cerrar.
    Windows `gradlew.bat bootRun`). Espera a que responda (p. ej. `curl` al puerto
    8080 con reintentos).
 3. Ejecuta los flujos `FL-*` **secuencialmente** y, **antes de cada flujo**, resetea
-   los datos: `bash infra/reset-db.sh` (respeta `CONTAINER_RUNTIME`; ver
-   `.claude/conventions/infra-validation.md`, sección "Reset de datos entre flujos") y
+   el estado: `bash infra/reset-db.sh` (respeta `CONTAINER_RUNTIME`; vacía la BD y,
+   si el stack tiene caché, borra las claves `<servicio>:*` — ver
+   `.claude/conventions/infra-validation.md`, sección "Reset de estado entre flujos") y
    comprueba que el servidor sigue sano (`/actuator/health` o el endpoint más
    simple). Cada flujo es auto-contenido: su primer escenario crea los datos que los
    siguientes verifican; el reset es por flujo, **no** entre escenarios. Si el Given
@@ -37,10 +38,23 @@ en OK; cualquier escenario en FALLO deja la generación sin cerrar.
    por logs. Con capa security, obtén el token según la reference del stack (el
    reporte de infraestructura indica cómo). Los escenarios M2M (`level: service`)
    usan credencial de máquina — `client_credentials` del `serviceClient` o
-   `X-API-Key` según `serviceAuth` — nunca un token de usuario.
-5. Al terminar, detén el servidor. **No bajes la infraestructura** (decide el
+   `X-API-Key` según `serviceAuth` — nunca un token de usuario. En las operaciones
+   con `idempotency`, envía un `Idempotency-Key` **único (uuid) por request**;
+   repítelo solo en el escenario que prueba la deduplicación. Reutilizar la clave
+   entre flujos devuelve la respuesta del anterior durante todo su TTL y parece un
+   bug del código.
+5. Presta atención especial a tres categorías que `./gradlew build -x test` no ve
+   y que solo aparecen ejercitando el servidor real. Si el diseño las contiene y
+   los escenarios no las cubren, ejercítalas igualmente y repórtalo:
+   - un mismo `code` de error declarado con **status distinto** según el endpoint
+     (comprueba cada endpoint por separado, no solo el primero);
+   - cualquier respuesta con **fecha/hora que pase por caché** (léela dos veces:
+     la segunda viene del store serializada);
+   - **guardar o borrar una entidad hija** de una relación bidireccional (es donde
+     un mapeo cíclico se manifiesta, y siempre en runtime).
+6. Al terminar, detén el servidor. **No bajes la infraestructura** (decide el
    orquestador).
-6. **No corrijas código**: si un escenario falla, documenta request/response/esperado
+7. **No corrijas código**: si un escenario falla, documenta request/response/esperado
    para que el agente de código lo arregle. Si un escenario contradice el spec, el
    hueco es del diseño: proponlo como cambio a los artefactos, no lo acomodes.
    No preguntas al usuario: registra cada bloqueo en `blockers` y termina; el

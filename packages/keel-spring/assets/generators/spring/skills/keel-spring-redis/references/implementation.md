@@ -5,25 +5,24 @@ Complementa «Qué implementa el agente» del SKILL.md. Todo vive en
 
 ## Caché de lectura (`cache` en queries del diseño)
 
-```java
-@Configuration
-@EnableCaching
-public class CacheConfig {
+**`CacheConfig` ya existe**: build lo genera en
+`infrastructure/configurations/cache/` con `@EnableCaching`, el `RedisCacheManager`,
+una constante `public static final String <OPERACION>_CACHE` por operación con
+`cache` en el diseño, su TTL (`cache.ttlSeconds`), `disableCachingNullValues()`,
+el `CacheErrorHandler` que degrada a miss y el `ObjectMapper` de la caché con
+`JavaTimeModule` registrado. **No lo reescribas ni añadas otro `CacheManager`**:
+tu trabajo es anotar los adaptadores usando esas constantes.
 
-    @Bean
-    public RedisCacheManager cacheManager(RedisConnectionFactory factory) {
-        RedisCacheConfiguration base = RedisCacheConfiguration.defaultCacheConfig()
-                .prefixCacheNameWith("<servicio>:")
-                .serializeValuesWith(RedisSerializationContext.SerializationPair
-                        .fromSerializer(new GenericJackson2JsonRedisSerializer()))
-                .disableCachingNullValues();
-        return RedisCacheManager.builder(factory)
-                // Una configuración por caché con el TTL del diseño (cache.ttlSeconds).
-                .withCacheConfiguration("product-by-id", base.entryTtl(Duration.ofSeconds(300)))
-                .build();
-    }
-}
+```java
+@Cacheable(cacheNames = CacheConfig.GET_PRODUCT_BY_SLUG_CACHE, key = "#slug", sync = true)
+public Optional<Product> findBySlug(String slug) { … }
 ```
+
+El serializador es JSON con soporte `java.time`: **cualquier configuración
+adicional que serialice valores debe registrar `JavaTimeModule` igual**. Un
+`ObjectMapper` por defecto revienta con `Instant`/`LocalDate` — y casi todo
+agregado del DSL trae timestamps de auditoría, así que el fallo aparece en la
+primera lectura cacheada, en runtime, contra el servidor real.
 
 - `@Cacheable` va en el **adaptador** del puerto (o un decorator del puerto),
   nunca en el handler: la caché es infraestructura.
@@ -48,18 +47,10 @@ public class CacheConfig {
 
 ## Tolerancia a caída de Redis
 
-La caché nunca puede tumbar la funcionalidad: si Redis cae, se degrada a miss
-y se va a la BD. Registra un `CacheErrorHandler` que loguee y siga:
-
-```java
-@Bean
-public CacheErrorHandler cacheErrorHandler() {
-    return new LoggingCacheErrorHandler(); // get/put fallidos → log WARN, no excepción
-}
-```
-
-(Si necesitas comportamiento distinto por operación, extiende
-`CacheErrorHandler`; la regla es: error de caché ≠ error de negocio.)
+La caché nunca puede tumbar la funcionalidad: si Redis cae, se degrada a miss y
+se va a la BD. El `CacheErrorHandler` que lo garantiza **ya viene en el
+`CacheConfig` generado** (loguea WARN y sigue). Si necesitas comportamiento
+distinto por operación, ajústalo ahí; la regla es: error de caché ≠ error de negocio.
 
 ## Idempotencia (`idempotency` en commands del diseño)
 
@@ -100,13 +91,22 @@ inspecciona lo tuyo y solo lo tuyo).
 - Si muchas claves se crean a la vez (p. ej. tras un reset de datos), añade
   jitter al TTL (±10%) al poblarlas por código para que no expiren en masa.
 
+## Estado entre flujos de validación
+
+`infra/reset-db.sh` borra las claves `<servicio>:*` además de vaciar la BD, así
+que cachés y claves de idempotencia no sobreviven al reset. Aun así, en los
+escenarios usa un `Idempotency-Key` **único por request** (un uuid) salvo cuando
+el escenario prueba justamente la deduplicación: reutilizar la misma clave entre
+flujos devuelve la respuesta del flujo anterior mientras dure el TTL declarado
+(a menudo horas) y parece un bug del código que no existe.
+
 ## Checklist
 
-- [ ] Un `RedisCacheConfiguration` por caché, TTL = `cache.ttlSeconds` del diseño.
+- [ ] `CacheConfig` generado por build usado tal cual (no hay un segundo `CacheManager`).
+- [ ] Toda config que serialice valores registra `JavaTimeModule`.
 - [ ] `@Cacheable(sync = true)` en adaptador/decorator, nunca en el handler.
 - [ ] Ningún `@Cacheable` combina `unless` con `sync = true` (los vacíos los
       descarta `disableCachingNullValues()`).
 - [ ] `@CacheEvict` en todos los commands que mutan la entidad cacheada.
-- [ ] `CacheErrorHandler` registrado: Redis caído degrada a miss.
 - [ ] Claves de idempotencia con `SET NX EX` y TTL del diseño.
 - [ ] Toda clave con TTL; prefijo `<servicio>:` en todas.

@@ -114,21 +114,51 @@ echo "Infraestructura OK."
 `;
 }
 
-// reset-db.sh: vacía los DATOS de la BD de prueba preservando el esquema (lo
-// crea Hibernate). Lo ejecuta el agente de validación funcional antes de cada
-// flujo FL-*: sus Given asumen BD limpia y cada flujo es auto-contenido. Solo
-// se genera si la BD elegida declara cliResetCmd (h2 no: reiniciar la app basta).
+// reset-db.sh: deja el estado de prueba como recién arrancado — vacía los DATOS
+// de la BD preservando el esquema (lo crea Hibernate) y, si el stack tiene
+// caché, borra las claves del servicio. Lo ejecuta el agente de validación
+// funcional antes de cada flujo FL-*: sus Given asumen estado limpio y cada
+// flujo es auto-contenido. Sin el borrado de la caché, una entrada cacheada o
+// una clave de idempotencia (TTL de horas) sobrevive al reset y el flujo
+// siguiente recibe la respuesta del anterior. Solo se genera si la BD declara
+// cliResetCmd (h2 no: reiniciar la app basta) o si hay caché.
 export function resetDbScript(selected, service) {
   const db = selected.find((s) => s.category === 'database' && s.entry.cliResetCmd);
-  if (!db) return null;
+  const cache = selected.find((s) => s.category === 'cache');
+  if (!db && !cache) return null;
+
   const dbName = service.name.replace(/-/g, '_');
-  const container = db.cliVia === 'dbcontainer' ? `${service.name}-db` : `${service.name}-devtools`;
-  const cmd = concreteCmd(db.entry, dbName, db.entry.cliResetCmd);
+  const steps = [];
+
+  if (db) {
+    const container = db.cliVia === 'dbcontainer' ? `${service.name}-db` : `${service.name}-devtools`;
+    const cmd = concreteCmd(db.entry, dbName, db.entry.cliResetCmd);
+    steps.push(`if $RUNTIME exec ${sq(container)} sh -c ${sq(cmd)}; then
+  echo "Datos reseteados (${db.entry.label})."
+else
+  echo "FALLO al resetear los datos. ¿Está la infraestructura arriba ('$RUNTIME compose -f infra/docker-compose.yaml up -d')?" >&2
+  exit 1
+fi`);
+  }
+
+  if (cache) {
+    // Todas las claves del servicio: cachés (<servicio>:<uso>) y claves de
+    // idempotencia (<servicio>:idem:<clave>) comparten prefijo por convención.
+    const host = cache.entry.serviceKey;
+    const flush = `redis-cli -h ${host} --scan --pattern '${service.artifactId}:*' | xargs -r redis-cli -h ${host} DEL >/dev/null`;
+    steps.push(`if $RUNTIME exec ${sq(`${service.name}-devtools`)} sh -c ${sq(flush)}; then
+  echo "Caché vaciada (${cache.entry.label}: claves ${service.artifactId}:*)."
+else
+  echo "FALLO al vaciar la caché. ¿Está '${host}' arriba?" >&2
+  exit 1
+fi`);
+  }
 
   return `#!/usr/bin/env bash
-# reset-db.sh — vacía los datos de la BD de prueba de ${service.name} (esquema intacto).
+# reset-db.sh — deja el estado de prueba de ${service.name} como recién arrancado:
+# vacía los datos de la BD (esquema intacto)${cache ? ' y borra las claves de la caché' : ''}.
 # Ejecutar antes de cada flujo FL-* de specs/validation-scenarios.md: los Given
-# asumen BD limpia. Uso (desde la raíz; con podman, exporta CONTAINER_RUNTIME=podman):
+# asumen estado limpio. Uso (desde la raíz; con podman, exporta CONTAINER_RUNTIME=podman):
 #   bash infra/reset-db.sh
 set -u
 
@@ -139,12 +169,7 @@ if [ -z "$RUNTIME" ]; then
   else echo "No se encontró docker ni podman en el PATH." >&2; exit 2; fi
 fi
 
-if $RUNTIME exec ${sq(container)} sh -c ${sq(cmd)}; then
-  echo "Datos reseteados (${db.entry.label})."
-else
-  echo "FALLO al resetear los datos. ¿Está la infraestructura arriba ('$RUNTIME compose -f infra/docker-compose.yaml up -d')?" >&2
-  exit 1
-fi
+${steps.join('\n\n')}
 `;
 }
 

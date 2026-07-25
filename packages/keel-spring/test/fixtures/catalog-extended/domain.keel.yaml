@@ -1,0 +1,92 @@
+types:
+  ProductStatus:
+    description: Estados de publicación de un producto.
+    values: [draft, active, retired]
+
+entities:
+  Category:
+    description: Categoría del catálogo, raíz de su propio agregado.
+    fields:
+      id:
+        type: uuid
+        id: true
+        generated: true
+      slug:
+        type: string
+        required: true
+        unique: true
+      name:
+        type: string
+        required: true
+      createdAt:
+        type: timestamp
+        generated: true
+    relations:
+      parent:
+        entity: Category
+        cardinality: many-to-one
+        description: Categoría padre, si la hay.
+
+  Product:
+    description: Producto publicable del catálogo.
+    fields:
+      id:
+        type: uuid
+        id: true
+        generated: true
+      sku:
+        type: string
+        required: true
+        unique: true
+      name:
+        type: string
+        required: true
+      status:
+        type: ProductStatus
+        required: true
+        default: draft
+      createdAt:
+        type: timestamp
+        generated: true
+    relations:
+      category:
+        entity: Category
+        cardinality: many-to-one
+        required: true
+        description: Categoría a la que pertenece el producto.
+      images:
+        entity: ProductImage
+        cardinality: one-to-many
+        description: Imágenes del producto.
+    lifecycle:
+      field: status
+      transitions:
+        draft: [active, retired]
+        active: [retired]
+        retired: []
+
+  ProductImage:
+    description: Imagen de un producto, entidad interna de su agregado.
+    fields:
+      id:
+        type: uuid
+        id: true
+        generated: true
+      storageKey:
+        type: file
+        required: true
+        bucket: productImages
+      position:
+        type: int
+        required: true
+    relations:
+      product:
+        entity: Product
+        cardinality: many-to-one
+        required: true
+        description: Producto al que pertenece la imagen.
+
+aggregates:
+  Catalog:
+    root: Product
+    entities: [ProductImage]

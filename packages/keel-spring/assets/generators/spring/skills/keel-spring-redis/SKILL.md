@@ -20,19 +20,22 @@ recetas; solo cambia la imagen del compose.
 - `build.gradle`: `spring-boot-starter-data-redis`.
 - `parameters/<perfil>/redis.yaml`: host/puerto por perfil (local apunta al contenedor del compose).
 - `infra/docker-compose.yaml`: `redis:7-alpine` o `valkey:8-alpine` (puerto 6379).
+- `infrastructure/configurations/cache/CacheConfig.java`: `@EnableCaching`, el
+  `RedisCacheManager`, una constante por caché del diseño con su TTL, el
+  serializador JSON con `JavaTimeModule` (obligatorio: los agregados traen
+  timestamps) y el `CacheErrorHandler` que degrada a miss. **Úsalo tal cual.**
+- `infra/reset-db.sh`: además de vaciar la BD, borra las claves `<servicio>:*`.
 
 ## Qué implementa el agente
 
 La caché se activa porque alguna operación del diseño declara `cache`
 (`ttlSeconds`, `keyFields`) y/o `idempotency` (`keySource`, `ttlSeconds`).
 
-- **Caché de lectura** (`cache` en queries): impleméntala en infraestructura —
-  la capa application no importa Spring. Opciones: `@EnableCaching` +
-  `RedisCacheManager` con un `RedisCacheConfiguration` por caché fijando el TTL
-  del diseño, aplicando `@Cacheable` en el adaptador o en un decorator del
-  puerto (clave = `keyFields` en el orden declarado); o `RedisTemplate` directo
-  si necesitas control fino. Invalida (`@CacheEvict` o `delete`) en los commands
-  que mutan la misma entidad.
+- **Caché de lectura** (`cache` en queries): anota el adaptador (o un decorator
+  del puerto) con `@Cacheable(cacheNames = CacheConfig.<OPERACION>_CACHE, …)` —
+  la capa application no importa Spring, y el `CacheManager` ya está generado.
+  Clave = `keyFields` en el orden declarado. Invalida (`@CacheEvict`) en los
+  commands que mutan la misma entidad.
 - **Idempotencia** (`idempotency` en commands): guarda la clave
   (`keySource`, p. ej. el header del cliente) con `SET NX EX <ttlSeconds>`;
   si ya existe, devuelve el resultado previo o el conflicto que dicte el diseño,

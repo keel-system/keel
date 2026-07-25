@@ -140,7 +140,11 @@ export function generate(model) {
   if (layersPresent.httpClients) {
     pendingLayers.push('- `http-clients`: puerto + adaptador RestClient + mapper ACL ya generados; completa los `*Fallback` (y el tipado records/mapper solo en llamadas declaradas en prosa).');
   }
-  if (stack.cache) pendingLayers.push('- `cache`: configurar Spring Cache según las políticas `cache` de use-cases.');
+  if (stack.cache) {
+    pendingLayers.push(
+      '- `cache`: anotar los adaptadores con `@Cacheable`/`@CacheEvict` usando las constantes de `CacheConfig` (el `CacheManager`, los TTL y el serializador ya están generados).'
+    );
+  }
   if (pendingLayers.length > 0) lines.push(...pendingLayers);
 
   if (model.warnings.length > 0) {

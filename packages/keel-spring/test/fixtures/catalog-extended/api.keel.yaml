@@ -1,0 +1,31 @@
+style: rest
+basePath: /api
+endpoints:
+  createProduct:
+    method: POST
+    path: /products
+    successStatus: 201
+  getProductBySlug:
+    method: GET
+    path: /public/products/{slug}
+  listProducts:
+    method: GET
+    path: /products
+  getProductsByIds:
+    method: POST
+    path: /products/batch
+  retireProduct:
+    method: POST
+    path: /products/{id}/retire
+  addProductImage:
+    method: POST
+    path: /products/{productId}/images
+    successStatus: 201
+  removeProductImage:
+    method: DELETE
+    path: /products/{productId}/images/{imageId}
+    successStatus: 204
+pagination:
+  style: offset
+  defaultSize: 20
+  maxSize: 100

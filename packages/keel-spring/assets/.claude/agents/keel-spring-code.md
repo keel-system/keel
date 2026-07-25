@@ -42,7 +42,13 @@ repo generado se clonó suelto). Todo lo que hagas ocurre dentro de esa raíz.
    `gradlew.bat build -x test`): compilación y empaquetado en verde. No ejecutes
    `docker compose`, `bootRun` ni escenarios funcionales: de eso se encargan otros
    agentes de la orquestación.
-5. No des tu trabajo por terminado con la compilación en rojo; corrige y repite.
+5. Con la compilación en verde, haz la **revisión mecánica final** de
+   `.claude/conventions/flow-fidelity.md` (binding contra la ruta declarada, ciclos
+   en los mappers, un solo `ObjectMapper` por comportamiento). Son defectos que
+   `./gradlew build -x test` no ve y que, sin esta pasada, cuestan un ciclo entero de
+   validación funcional. Recórrela aunque el scaffolding no haya marcado ningún TODO
+   en esos puntos.
+6. No des tu trabajo por terminado con la compilación en rojo; corrige y repite.
 
 ## Reglas
 

@@ -1,0 +1,116 @@
+operations:
+  createProduct:
+    description: Da de alta un producto en estado draft dentro de una categoría.
+    kind: command
+    input:
+      entity: Product
+    output:
+      entity: Product
+    errors:
+      - code: SKU_ALREADY_EXISTS
+        when: Ya existe un producto con ese sku.
+        http: 409
+      - code: CATEGORY_NOT_FOUND
+        when: La categoría referenciada no existe.
+        http: 422
+    emits: [ProductCreated]
+    idempotency:
+      keySource: client-key
+      ttlSeconds: 86400
+
+  getProductBySlug:
+    description: Recupera un producto público por el slug de su categoría.
+    kind: query
+    input:
+      fields:
+        slug:
+          type: string
+          required: true
+    output:
+      entity: Product
+    errors:
+      - code: PRODUCT_NOT_FOUND
+        when: No existe un producto con ese slug.
+        http: 404
+    cache:
+      ttlSeconds: 300
+      keyFields: [slug]
+      invalidatedBy: [ProductUpdated]
+
+  listProducts:
+    description: Lista los productos del catálogo de forma paginada.
+    kind: query
+    input: "void"
+    output:
+      entity: Product
+      paginated: true
+
+  getProductsByIds:
+    description: Recupera en lote los productos indicados por sus identificadores.
+    kind: query
+    input:
+      fields:
+        ids:
+          type: uuid
+          list: true
+          required: true
+    output:
+      entity: Product
+      list: true
+
+  retireProduct:
+    description: Retira un producto del catálogo de forma definitiva.
+    kind: command
+    input:
+      fields:
+        id:
+          type: uuid
+          required: true
+    output:
+      entity: Product
+    errors:
+      - code: PRODUCT_NOT_FOUND
+        when: No existe un producto con ese id.
+        http: 404
+    emits: [ProductUpdated]
+
+  addProductImage:
+    description: Añade una imagen al producto subiendo el archivo binario.
+    kind: command
+    input:
+      fields:
+        productId:
+          type: uuid
+          required: true
+        image:
+          type: file
+          required: true
+          bucket: productImages
+        position:
+          type: int
+          required: true
+    output: "void"
+    errors:
+      - code: PRODUCT_NOT_FOUND
+        when: No existe un producto con ese id.
+        http: 404
+
+  removeProductImage:
+    description: Elimina una imagen concreta de un producto del catálogo.
+    kind: command
+    input:
+      fields:
+        productId:
+          type: uuid
+          required: true
+        imageId:
+          type: uuid
+          required: true
+    output: "void"
+    errors:
+      - code: PRODUCT_NOT_FOUND
+        when: No existe un producto con ese id.
+        http: 404
+      - code: CATEGORY_NOT_FOUND
+        when: La categoría del producto ya no existe.
+        http: 404

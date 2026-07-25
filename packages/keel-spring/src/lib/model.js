@@ -71,6 +71,8 @@ export function buildModel({ manifest, layers, stack = null }) {
     for (const vo of valueObjects) vo.usedInCollection = collectionVoNames.has(vo.name);
   }
   const { services, errors } = collectOperations(layers, domainTypes, inlineEnumName, service, warnings);
+  // DTOs de las entidades hijas proyectadas en algún payload de salida.
+  const childDtos = collectChildDtos(layers, services, domainTypes, inlineEnumName, warnings);
   const events = collectEvents(layers, services, service, domainTypes, inlineEnumName, warnings);
   // Garantía de entrega declarada en el diseño: decide cómo se materializa la
   // publicación (outbox transaccional vs. envío directo tras commit).
@@ -89,7 +91,9 @@ export function buildModel({ manifest, layers, stack = null }) {
   const httpClients = collectHttpClients(layers, domainTypes, inlineEnumName, warnings);
   const storage = collectStorage(layers);
 
-  return { service, layersPresent, enums, valueObjects, entities, services, errors, events, messaging, subscriptions, pagination, api, security, httpClients, storage, warnings };
+  const hasFileUploads = services.some((group) => group.operations.some((operation) => operation.multipart));
+
+  return { service, layersPresent, enums, valueObjects, entities, services, errors, childDtos, hasFileUploads, events, messaging, subscriptions, pagination, api, security, httpClients, storage, warnings };
 }
 
 function buildService(manifest, stack) {
@@ -255,12 +259,40 @@ function collectValueObjects(types, domainTypes, inlineEnumName, hasPersistence)
 
 // ─── Entidades ───────────────────────────────────────────────────────────────
 
-function collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPersistence, warnings) {
-  const aggregates = domain.aggregates ?? {};
+// Índice entidad interna → su agregado y su raíz, derivado de domain.aggregates.
+// Es lo que permite distinguir una entidad hija (parte del agregado, se mapea y
+// se proyecta anidada) de una referencia a otro agregado (solo su id).
+function aggregateIndex(domain) {
   const internalOf = new Map();
-  for (const [aggName, agg] of Object.entries(aggregates)) {
+  for (const [aggName, agg] of Object.entries(domain.aggregates ?? {})) {
     for (const inner of agg.entities ?? []) internalOf.set(inner, { aggregate: aggName, root: agg.root });
   }
+  return internalOf;
+}
+
+// Clasifica una relación del diseño desde la entidad que la declara:
+// - internal: entidad hija del mismo agregado (con backReference si apunta a la raíz)
+// - external: otro agregado, representado por su id
+// - unsupported: colección hacia otro agregado, que el scaffolding no modela
+function classifyRelation(entityName, rel, internalOf, hasPersistence) {
+  const targetInternal = internalOf.get(rel.entity);
+  const sameAggregate =
+    (targetInternal && (targetInternal.root === entityName || internalOf.get(entityName)?.aggregate === targetInternal.aggregate)) ||
+    internalOf.get(entityName)?.root === rel.entity;
+
+  if (sameAggregate || !hasPersistence) {
+    const backReference =
+      internalOf.get(entityName)?.root === rel.entity &&
+      (rel.cardinality === 'many-to-one' || rel.cardinality === 'one-to-one');
+    return { kind: 'internal', backReference };
+  }
+  if (rel.cardinality === 'many-to-one' || rel.cardinality === 'one-to-one') return { kind: 'external', backReference: false };
+  return { kind: 'unsupported', backReference: false };
+}
+
+function collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPersistence, warnings) {
+  const aggregates = domain.aggregates ?? {};
+  const internalOf = aggregateIndex(domain);
 
   const entities = [];
   for (const [name, def] of Object.entries(domain.entities ?? {})) {
@@ -272,19 +304,25 @@ function collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPe
 
     const relations = [];
     for (const [relName, rel] of Object.entries(def.relations ?? {})) {
-      const targetInternal = internalOf.get(rel.entity);
-      const sameAggregate =
-        (targetInternal && (targetInternal.root === name || internalOf.get(name)?.aggregate === targetInternal.aggregate)) ||
-        internalOf.get(name)?.root === rel.entity;
-      if (sameAggregate || !hasPersistence) {
-        relations.push({ name: relName, entity: rel.entity, cardinality: rel.cardinality, required: Boolean(rel.required), internal: true });
-      } else if (rel.cardinality === 'many-to-one' || rel.cardinality === 'one-to-one') {
-        relations.push({ name: relName, entity: rel.entity, cardinality: rel.cardinality, required: Boolean(rel.required), internal: false });
-      } else {
+      // La back-reference (hija → raíz de su agregado) es la FK del lado dueño en
+      // JPA, pero no un miembro del modelo de dominio (el agregado ya es el
+      // contexto) y sobre todo no puede entrar en el mapeo: toJpa(hija) →
+      // toJpa(raíz) → toJpa(hija) es recursión infinita.
+      const { kind, backReference } = classifyRelation(name, rel, internalOf, hasPersistence);
+      if (kind === 'unsupported') {
         warnings.push(
           `Relación ${name}.${relName} (${rel.cardinality} hacia ${rel.entity}, otro agregado): no se genera campo; el agente debe modelarla.`
         );
+        continue;
       }
+      relations.push({
+        name: relName,
+        entity: rel.entity,
+        cardinality: rel.cardinality,
+        required: Boolean(rel.required),
+        internal: kind === 'internal',
+        backReference
+      });
     }
 
     // Autoría: build anota los campos, pero el AuditorAware que los puebla depende
@@ -326,7 +364,40 @@ function collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPe
   }
 
   addImplicitAggregateRelations(entities, aggregates, warnings);
+  warnMappingCycles(entities, warnings);
   return entities;
+}
+
+// Salvaguarda del mapeo domain↔JPA: el adaptador mapea cada relación interna
+// invocando el mapper de la entidad destino, así que un ciclo que la
+// back-reference no rompa (A → B → A entre hijas, p. ej.) se traduce en un
+// StackOverflowError al guardar. Se avisa en build, que es cuando se puede
+// corregir el diseño; el síntoma en runtime no señala a nada.
+function warnMappingCycles(entities, warnings) {
+  const byName = new Map(entities.map((entity) => [entity.name, entity]));
+  const done = new Set();
+  const reported = new Set();
+
+  const visit = (name, stack) => {
+    if (stack.includes(name)) {
+      const cycle = [...stack.slice(stack.indexOf(name)), name].join(' → ');
+      if (!reported.has(cycle)) {
+        reported.add(cycle);
+        warnings.push(
+          `Ciclo de mapeo entre entidades internas (${cycle}): toDomain/toJpa se llamarían a sí mismos. Declara la relación de vuelta hacia la raíz del agregado (back-reference) o rompe el ciclo en el diseño.`
+        );
+      }
+      return;
+    }
+    if (done.has(name)) return;
+    for (const relation of byName.get(name)?.relations ?? []) {
+      if (!relation.internal || relation.backReference) continue;
+      if (byName.has(relation.entity)) visit(relation.entity, [...stack, name]);
+    }
+    done.add(name);
+  };
+
+  for (const entity of entities) visit(entity.name, []);
 }
 
 // Una entidad interna de un agregado pertenece a su raíz por definición: es lo
@@ -344,10 +415,12 @@ function addImplicitAggregateRelations(entities, aggregates, warnings) {
 
     for (const inner of agg.entities ?? []) {
       if (!byName.has(inner)) continue;
-      // Ya alcanzada: cualquier miembro del agregado la referencia (colección
-      // desde la raíz, o back-reference desde la propia hija hacia la raíz).
-      const reachable = members.some((member) =>
-        (byName.get(member)?.relations ?? []).some((rel) => rel.entity === inner || (member === inner && rel.entity === agg.root))
+      // Ya alcanzada: algún otro miembro del agregado declara una relación hacia
+      // ella. La back-reference de la propia hija hacia la raíz no cuenta: es el
+      // lado dueño de la FK, no la colección que el agregado necesita para
+      // gobernar sus hijas.
+      const reachable = members.some(
+        (member) => member !== inner && (byName.get(member)?.relations ?? []).some((rel) => rel.entity === inner)
       );
       if (reachable) continue;
 
@@ -373,6 +446,10 @@ function collectOperations(layers, domainTypes, inlineEnumName, service, warning
   const operations = layers['use-cases']?.operations ?? {};
   const api = layers.api ?? null;
   const domainEntities = layers.domain?.entities ?? {};
+  const relations = {
+    internalOf: aggregateIndex(layers.domain ?? {}),
+    hasPersistence: Boolean(layers.persistence)
+  };
   const errorsByCode = new Map();
   const groups = new Map();
 
@@ -382,22 +459,33 @@ function collectOperations(layers, domainTypes, inlineEnumName, service, warning
     const groupName = targetEntity ?? pascalCase(service.name);
     const route = resolveRoute(opName, op, api, targetEntity, warnings);
 
-    const inputFields = payloadFields(opName, op.input, { direction: 'input', domainEntities, domainTypes, inlineEnumName, warnings });
-    const hasIdParam = Boolean(route && route.path.includes('{id}'));
-    const bodyFields = hasIdParam ? inputFields.filter((f) => f.name !== 'id') : inputFields;
-    const outputFields = payloadFields(opName, op.output, { direction: 'output', domainEntities, domainTypes, inlineEnumName, warnings });
+    const inputFields = payloadFields(opName, op.input, { direction: 'input', domainEntities, domainTypes, inlineEnumName, relations, warnings });
+    // Los parámetros de ruta salen de la propia ruta ({id}, {productId}, {slug}…),
+    // no del nombre del campo: es lo único que garantiza un @PathVariable por
+    // segmento y con el tipo declarado en el diseño.
+    const pathParams = resolvePathParams(opName, route, inputFields, warnings);
+    const pathParamNames = new Set(pathParams.map((p) => p.name));
+    const bodyFields = inputFields.filter((f) => !pathParamNames.has(f.name));
+    const outputFields = payloadFields(opName, op.output, { direction: 'output', domainEntities, domainTypes, inlineEnumName, relations, warnings });
 
     for (const error of op.errors ?? []) {
-      if (!errorsByCode.has(error.code)) {
-        const http = error.http ?? 400;
+      const http = error.http ?? 400;
+      const existing = errorsByCode.get(error.code);
+      if (!existing) {
         errorsByCode.set(error.code, {
           code: error.code,
           // Naming del prototipo de referencia: <PascalCode>Error.
           exceptionClass: `${pascalCase(error.code.toLowerCase())}Error`,
           http,
           sharedException: sharedExceptionFor(http),
-          when: error.when ?? null
+          when: error.when ?? null,
+          // Rastro de dónde se declara: si el mismo code aparece con http
+          // distinto en dos operaciones, el status no puede quemarse en la clase.
+          statuses: new Map([[http, [opName]]])
         });
+      } else {
+        if (!existing.statuses.has(http)) existing.statuses.set(http, []);
+        existing.statuses.get(http).push(opName);
       }
     }
 
@@ -417,10 +505,14 @@ function collectOperations(layers, domainTypes, inlineEnumName, service, warning
       handlerClass: `${messageClass}Handler`,
       internal: Boolean(op.internal),
       route,
-      hasIdParam,
+      pathParams,
+      hasIdParam: pathParams.length > 0,
       // Sin XxxRequest (estilo prototipo): el Command es el body HTTP y sus
       // componentes llevan la Bean Validation del diseño.
       bodyFields,
+      // Con un campo binario en la entrada el endpoint deja de ser JSON (solo
+      // tiene sentido en los verbos que llevan cuerpo).
+      multipart: bodyFields.some((field) => field.file) && ['POST', 'PUT', 'PATCH'].includes(route?.method),
       responseDto:
         outputFields.length > 0
           ? { name: `${pascalCase(opName)}ResponseDto`, fields: outputFields, entity: payloadEntity(op.output) }
@@ -449,7 +541,68 @@ function collectOperations(layers, domainTypes, inlineEnumName, service, warning
     groups.get(groupName).operations.push(operation);
   }
 
-  return { services: [...groups.values()], errors: [...errorsByCode.values()] };
+  return { services: [...groups.values()], errors: resolveErrorStatuses([...errorsByCode.values()], warnings) };
+}
+
+// Un mismo `code` declarado con `http` distinto en dos operaciones no puede
+// generar una clase con el status quemado: la primera operación se llevaría el
+// status de la otra. En ese caso la excepción extiende DomainException directamente
+// y recibe el status por constructor, que es lo que ApiExceptionHandler lee de la
+// metadata (onDomainException).
+function resolveErrorStatuses(errors, warnings) {
+  return errors.map((error) => {
+    const statuses = [...error.statuses.keys()];
+    if (statuses.length < 2) return { ...error, dynamicStatus: false, usages: [] };
+
+    const usages = [...error.statuses.entries()].map(([http, operations]) => ({ http, operations }));
+    warnings.push(
+      `Error '${error.code}': declarado con status distintos (${usages
+        .map((u) => `${u.http} en ${u.operations.join(', ')}`)
+        .join('; ')}). ${error.exceptionClass} recibe el status por constructor; pásalo en cada handler.`
+    );
+    return { ...error, sharedException: 'DomainException', dynamicStatus: true, usages };
+  });
+}
+
+// ─── DTOs de entidades hijas ─────────────────────────────────────────────────
+
+// Una entidad hija proyectada en un payload de salida necesita su propio record
+// (<Hija>Dto) para que la respuesta lleve la colección completa y no una lista de
+// nulls. Se resuelven en cascada: una hija puede proyectar a su vez sus hijas.
+function collectChildDtos(layers, services, domainTypes, inlineEnumName, warnings) {
+  const domainEntities = layers.domain?.entities ?? {};
+  const relations = {
+    internalOf: aggregateIndex(layers.domain ?? {}),
+    hasPersistence: Boolean(layers.persistence)
+  };
+
+  const pending = [];
+  for (const group of services) {
+    for (const operation of group.operations) {
+      for (const field of operation.responseDto?.fields ?? []) {
+        if (field.kind === 'childDto') pending.push(field.childEntity);
+      }
+    }
+  }
+
+  const built = new Map();
+  while (pending.length > 0) {
+    const entityName = pending.shift();
+    if (built.has(entityName) || !domainEntities[entityName]) continue;
+    const fields = payloadFields(entityName, { entity: entityName }, {
+      direction: 'output',
+      domainEntities,
+      domainTypes,
+      inlineEnumName,
+      relations,
+      warnings
+    });
+    built.set(entityName, { name: `${entityName}Dto`, entity: entityName, fields });
+    for (const field of fields) {
+      if (field.kind === 'childDto') pending.push(field.childEntity);
+    }
+  }
+  return [...built.values()];
 }
 
 // ─── Eventos de dominio (messaging.publishing.events) ────────────────────────
@@ -479,7 +632,16 @@ function collectEvents(layers, services, service, domainTypes, inlineEnumName, w
       // en `emits`. Es lo que permite sembrar el raise(...) donde corresponde.
       aggregate: emitted[0]?.aggregate ?? null,
       emittedBy: emitted,
-      fields: payloadFields(name, def?.payload, { direction: 'output', domainEntities, domainTypes, inlineEnumName, warnings })
+      // messaging declara el payload como fieldMap directo (campo → field), no
+      // como el payload de use-cases: se envuelve para reutilizar la resolución
+      // de tipos. Sin esto el evento saldría solo con metadata, sin datos.
+      fields: payloadFields(name, def?.payload ? { fields: def.payload } : null, {
+        direction: 'output',
+        domainEntities,
+        domainTypes,
+        inlineEnumName,
+        warnings
+      })
     };
   });
 }
@@ -828,12 +990,15 @@ function entityFromOperationName(opName, domainEntities) {
 
 // Deriva los campos de un payload: explícitos (fields) o desde la entidad,
 // aplicando las exclusiones de mapping.md según la dirección.
-function payloadFields(opName, payload, { direction, domainEntities, domainTypes, inlineEnumName, warnings = [] }) {
+function payloadFields(opName, payload, { direction, domainEntities, domainTypes, inlineEnumName, relations: relationCtx = null, warnings = [] }) {
   if (!payload || payload === 'void') return [];
 
   if (payload.fields) {
     return Object.entries(payload.fields).map(([fieldName, field]) =>
-      resolveField(pascalCase(opName), fieldName, field, domainTypes, inlineEnumName, { persisted: false })
+      asPayloadField(
+        resolveField(pascalCase(opName), fieldName, field, domainTypes, inlineEnumName, { persisted: false }),
+        direction
+      )
     );
   }
 
@@ -856,9 +1021,105 @@ function payloadFields(opName, payload, { direction, domainEntities, domainTypes
     if (exclude.has(fieldName)) continue;
     if (direction === 'input' && (field.id || field.generated || field.computed)) continue;
     if (direction === 'output' && field.sensitive) continue;
-    fields.push(resolveField(payload.entity, fieldName, field, domainTypes, inlineEnumName, { persisted: false }));
+    fields.push(asPayloadField(resolveField(payload.entity, fieldName, field, domainTypes, inlineEnumName, { persisted: false }), direction));
   }
+
+  // Las relaciones son parte del recurso, no un detalle de persistencia: una
+  // referencia a otro agregado se proyecta como su id y una entidad hija como su
+  // propio DTO. Omitirlas por defecto dejaba payloads incompletos (sin categoryId,
+  // sin images) sin que el diseño hubiera declarado ningún exclude.
+  fields.push(
+    ...relationPayloadFields(opName, payload, entity, { direction, relations: relationCtx, exclude, warnings })
+  );
   return fields;
+}
+
+// Proyección de las relaciones de la entidad sobre el payload.
+function relationPayloadFields(opName, payload, entity, { direction, relations: relationCtx, exclude, warnings }) {
+  if (!relationCtx) return [];
+  const { internalOf, hasPersistence } = relationCtx;
+  const projected = [];
+
+  for (const [relName, rel] of Object.entries(entity.relations ?? {})) {
+    if (exclude.has(relName)) continue;
+    const { kind, backReference } = classifyRelation(payload.entity, rel, internalOf, hasPersistence);
+    if (kind === 'unsupported' || backReference) continue;
+
+    if (kind === 'external') {
+      const name = `${relName}Id`;
+      if (exclude.has(name)) continue;
+      projected.push(relationField({ name, javaType: 'UUID', imports: ['java.util.UUID'], kind: 'base', base: 'uuid', required: Boolean(rel.required), description: rel.description }));
+      continue;
+    }
+
+    // Entidad hija del agregado.
+    const toMany = rel.cardinality === 'one-to-many' || rel.cardinality === 'many-to-many';
+    if (direction === 'input') {
+      warnings.push(
+        `Operación '${opName}': la entidad hija ${rel.entity} (${relName}) no entra en el input; si el flujo la recibe anidada, el agente debe modelarla (conventions/mapping.md).`
+      );
+      continue;
+    }
+    const dtoName = `${rel.entity}Dto`;
+    projected.push(
+      relationField({
+        name: relName,
+        javaType: toMany ? `List<${dtoName}>` : dtoName,
+        elementJavaType: dtoName,
+        imports: toMany ? ['java.util.List'] : [],
+        kind: 'childDto',
+        childEntity: rel.entity,
+        list: toMany,
+        required: Boolean(rel.required),
+        description: rel.description
+      })
+    );
+  }
+  return projected;
+}
+
+// Campo de payload derivado de una relación, con la misma forma que los campos
+// resueltos por resolveField (todo render interpola estas propiedades).
+function relationField({ name, javaType, elementJavaType = null, imports = [], kind, base = null, childEntity = null, list = false, required = false, description = null }) {
+  return {
+    name,
+    javaType,
+    imports,
+    list,
+    elementJavaType: elementJavaType ?? javaType,
+    kind,
+    base,
+    childEntity,
+    isId: false,
+    required,
+    unique: false,
+    generated: false,
+    computed: null,
+    sensitive: false,
+    wireName: null,
+    description: description ?? null,
+    validation: [],
+    columns: [],
+    initializer: null
+  };
+}
+
+// Ajuste de un campo resuelto al entrar en un payload. Un campo `file` en la
+// entrada es una subida binaria, no una cadena: el mensaje lo transporta como
+// FileUpload y el endpoint se expone multipart. En la salida sigue siendo la
+// clave del objeto en su bucket (String), que es lo que guarda el dominio.
+function asPayloadField(field, direction) {
+  if (direction !== 'input' || field.base !== 'file' || field.list) return field;
+  return {
+    ...field,
+    javaType: 'FileUpload',
+    elementJavaType: 'FileUpload',
+    imports: [],
+    kind: 'fileUpload',
+    file: true,
+    // @NotBlank es de String: sobre un record component FileUpload reventaría en runtime.
+    validation: field.required ? ['@NotNull'] : []
+  };
 }
 
 // Mensaje del dot-path de exclude que el scaffolding no puede aplicar sobre su DTO plano:
@@ -869,13 +1130,47 @@ function nestedExcludeWarning(opName, entityName, path, entity, domainTypes) {
   const prefix = `Operación '${opName}': exclude '${path}' de ${entityName}`;
 
   if (entity.relations?.[head]) {
-    return `${prefix}: build no genera el DTO anidado de la relación '${head}' — el agente debe escribirlo sin '${nested}' (conventions/mapping.md).`;
+    return `${prefix}: el DTO anidado de la relación '${head}' se genera completo — el agente debe quitarle '${nested}' (conventions/mapping.md).`;
   }
   const type = entity.fields?.[head]?.type;
   if (type && domainTypes?.[type]?.fields) {
     return `${prefix}: el value object '${type}' sale entero en el DTO — el agente debe recortar '${nested}' al escribir el DTO de respuesta (conventions/mapping.md).`;
   }
   return `${prefix}: build no puede aplicarlo a su DTO plano — revísalo al escribir el DTO de respuesta (conventions/mapping.md).`;
+}
+
+// Parámetros de ruta de una operación, en orden de aparición en el path. Cada
+// {segmento} se resuelve contra el input del diseño para heredar su tipo; si no
+// hay campo homónimo se asume el id del agregado (UUID) y se avisa, porque el
+// contrato HTTP queda a medias sin él.
+function resolvePathParams(opName, route, inputFields, warnings) {
+  if (!route) return [];
+  const names = [...String(route.path).matchAll(/\{(\w+)\}/g)].map((match) => match[1]);
+
+  return names.map((name) => {
+    const field = inputFields.find((f) => f.name === name);
+    if (field) return { ...field, fromPath: true };
+    if (name !== 'id') {
+      warnings.push(
+        `Operación '${opName}': la ruta ${route.path} declara {${name}} pero el input no tiene ese campo; se expone como @PathVariable UUID ${name}. Declara el campo en use-cases.keel.yaml o renombra el segmento.`
+      );
+    }
+    return {
+      name,
+      javaType: 'UUID',
+      imports: ['java.util.UUID'],
+      list: false,
+      elementJavaType: 'UUID',
+      kind: 'base',
+      base: 'uuid',
+      isId: name === 'id',
+      required: true,
+      validation: [],
+      columns: [],
+      initializer: null,
+      fromPath: true
+    };
+  });
 }
 
 // Ruta de una operación: endpoint explícito > convención CRUD (auto) > fallback POST.
@@ -889,10 +1184,15 @@ function resolveRoute(opName, op, api, targetEntity, warnings) {
 
   const explicit = api.endpoints?.[opName];
   if (explicit) {
+    if (explicit.method === 'POST' && explicit.successStatus == null) {
+      warnings.push(
+        `Operación '${opName}': endpoint POST sin successStatus; se asume ${defaultStatus('POST', opName)}. Decláralo en api.keel.yaml si el contrato es otro.`
+      );
+    }
     return {
       method: explicit.method,
       path: explicit.path,
-      status: explicit.successStatus ?? defaultStatus(explicit.method),
+      status: explicit.successStatus ?? defaultStatus(explicit.method, opName),
       audience: explicit.audience ?? defaultAudience
     };
   }
@@ -920,8 +1220,11 @@ function resolveRoute(opName, op, api, targetEntity, warnings) {
   return { method: 'POST', path: `/${kebabCase(opName)}`, status: 200, fallback: true, audience: defaultAudience };
 }
 
-function defaultStatus(method) {
-  if (method === 'POST') return 201;
+// 201 solo cuando la operación crea un recurso nuevo. Un POST de transición de
+// estado (/products/{id}/retire) o de consulta en lote responde 200: asumir 201
+// por el verbo rompe el contrato declarado en los escenarios de validación.
+function defaultStatus(method, opName = '') {
+  if (method === 'POST') return opName.startsWith('create') ? 201 : 200;
   if (method === 'DELETE') return 204;
   return 200;
 }

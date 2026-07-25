@@ -64,10 +64,10 @@ de la API:
   --queue-url <url> --visibility-timeout 0`.
 - **MinIO**: `mc ls local/<bucket>` para confirmar objetos subidos.
 
-## Reset de datos entre flujos (`infra/reset-db.sh`)
+## Reset de estado entre flujos (`infra/reset-db.sh`)
 
-Los `Given` de los flujos `FL-*` de `specs/validation-scenarios.md` asumen **BD
-limpia**: cada flujo es auto-contenido (su primer escenario crea los datos que los
+Los `Given` de los flujos `FL-*` de `specs/validation-scenarios.md` asumen **estado
+limpio**: cada flujo es auto-contenido (su primer escenario crea los datos que los
 siguientes verifican). Sin reset, re-ejecutar un flujo de creación devuelve `409` en
 vez de `201`, las claves únicas colisionan y el ciclo de corrección
 código→validación no converge.
@@ -76,7 +76,7 @@ Por eso el agente de validación funcional ejecuta los flujos **secuencialmente*
 **antes de cada flujo** (también al re-validar tras un fix):
 
 ```bash
-bash infra/reset-db.sh    # respeta CONTAINER_RUNTIME; datos fuera, esquema intacto
+bash infra/reset-db.sh    # respeta CONTAINER_RUNTIME; datos y caché fuera, esquema intacto
 ```
 
 El script vacía los datos vía el CLI de la BD del stack (mismo mecanismo devtools
@@ -91,8 +91,23 @@ crea el estado que el escenario B necesita (p. ej. el duplicado que B verifica).
 
 - Si el `Given` de un flujo depende de datos creados por **otro** flujo, tras el
   reset no se sostiene: es un hueco del diseño → repórtalo, no siembres datos a mano.
-- Con **H2** (en memoria, sin contenedor) no hay script: reiniciar la aplicación
-  entre flujos recrea el esquema vacío.
+- Con **H2** (en memoria, sin contenedor) no hay script de BD: reiniciar la
+  aplicación entre flujos recrea el esquema vacío.
+
+Con caché en el stack, el script borra además las claves `<servicio>:*` (cachés y
+claves de idempotencia comparten ese prefijo por convención). Es imprescindible:
+una entrada cacheada o una clave de idempotencia sobrevive al vaciado de la BD
+durante todo su TTL —a menudo horas— y el flujo siguiente recibe la respuesta del
+anterior, con toda la pinta de un bug del código que no existe.
+
+### `Idempotency-Key` en los escenarios
+
+En las operaciones con `idempotency` el header es obligatorio. Usa un valor
+**único por request** (un uuid nuevo cada vez). Repítelo solo dentro del escenario
+que prueba explícitamente la deduplicación, que es donde la respuesta repetida es
+el `Then` esperado. Reutilizar la misma clave entre flujos o entre la validación
+y la re-validación tras un fix devuelve la respuesta antigua mientras dure el
+`ttlSeconds` del diseño.
 
 ## Obtener un token para llamadas autenticadas
 
