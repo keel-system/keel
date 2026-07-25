@@ -131,8 +131,10 @@ function renderHandler(model, service, operation) {
   imports.add(`${subPackage(model, messagePackage(operation))}.${operation.messageClass}`);
 
   const dependencies = [];
+  const targetEntity = model.entities.find((entity) => entity.name === service.entity);
   const repositoryEntity = model.entities.find(
-    (entity) => entity.name === service.entity && entity.persisted && entity.isAggregateRoot
+    (entity) =>
+      entity.name === (targetEntity?.rootEntity ?? service.entity) && entity.persisted && entity.isAggregateRoot
   );
   if (repositoryEntity) {
     const port = `${repositoryEntity.name}Repository`;

@@ -38,7 +38,36 @@
     background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:12px;
     max-height:50vh; overflow:auto; font-size:12.5px;
   }
-  #render { min-height:60vh; }
+  /*
+    Isla clara para el render. Ni Redoc ni el componente de AsyncAPI traen tema oscuro: pintan sus
+    propios fondos claros y dejan que el texto herede del documento. Si el visor hereda el esquema
+    oscuro de la barra, el resultado es texto claro sobre panel claro (ilegible: ~1.2:1). Fijamos
+    aquí fondo, color y color-scheme para que el contenido del contrato se renderice siempre sobre
+    claro, con el contraste que el propio renderer diseñó. La barra y el fallback siguen siendo
+    sensibles al tema: son nuestros y sí tienen ambas variantes.
+  */
+  #render { min-height:60vh; background:#ffffff; color:#1b1f24; color-scheme: light; }
+  /*
+    El `code` inline de Redoc por defecto es #e53935 sobre #263238: 3.11:1, por debajo de AA.
+    Solo el inline de markdown (hijo de p, li, td…): quedan fuera los bloques con resaltado de
+    sintaxis (`.redoc-json` en Redoc, `pre` en el visor de AsyncAPI), que traen su propia paleta
+    sobre fondo oscuro y se romperían al forzarles un fondo claro.
+  */
+  #render :not(pre):not(.redoc-json) > code { background:#eceff3; color:#8a1c17; }
+  /*
+    Redoc rotula «Authorizations:», «path Parameters», «Request Body schema:»… con su color de
+    texto al 50% de opacidad (2.9:1 sobre blanco). Mismo gris «muted» de esta plantilla: sigue
+    siendo secundario, pero legible (5.76:1).
+  */
+  #render h5 { color:#5c6773; }
+  /*
+    Pestañas de respuesta de Redoc: la seleccionada se pinta sobre blanco (pasa AA), pero las no
+    seleccionadas caen sobre el panel oscuro de ejemplos manteniendo el rojo/verde pensados para
+    fondo claro (3.45:1 el rojo; el verde queda igual de bajo en cuanto se selecciona una de error).
+    Tonos claros de la misma familia para el estado no seleccionado.
+  */
+  #render li.tab-error:not(.react-tabs__tab--selected) { color:#ff8a80; }
+  #render li.tab-success:not(.react-tabs__tab--selected) { color:#7ddc8a; }
   [hidden] { display:none !important; }
 </style>
 <link id="viewer-css" rel="stylesheet" href="">

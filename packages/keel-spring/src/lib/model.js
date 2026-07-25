@@ -319,6 +319,7 @@ function collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPe
       invariants: def.invariants ?? [],
       isAggregateRoot: !internalOf.has(name),
       internalOf: internalOf.get(name)?.aggregate ?? null,
+      rootEntity: internalOf.get(name)?.root ?? name,
       naturalKey: persistenceMeta.naturalKey ?? null,
       indexes: persistenceMeta.indexes ?? []
     });

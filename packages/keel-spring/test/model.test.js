@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadService } from 'keel-core';
 import { accessAuthority, buildModel, sharedExceptionFor } from '../src/lib/model.js';
+import { generate as generateServices } from '../src/scaffold/services.js';
 
 test('accessAuthority: scopes como authorities SCOPE_ y mezclas', () => {
   assert.equal(accessAuthority({ level: 'service', scopes: ['product:read'] }), 'hasAnyAuthority("SCOPE_product:read")');
@@ -243,7 +244,7 @@ test('storage: sin la capa, el modelo no la inventa', () => {
 
 // Diseño mínimo con un agregado que declara una entidad interna; `relations`
 // se inyecta desde el test para cubrir el caso explícito.
-function modelWithInternalEntity(productRelations) {
+function modelWithInternalEntity(productRelations, operations) {
   const manifest = { keel: '2.0', service: { name: 'catalog', version: '0.1.0' }, layers: {} };
   const layers = {
     domain: {
@@ -260,7 +261,7 @@ function modelWithInternalEntity(productRelations) {
       },
       aggregates: { Product: { root: 'Product', entities: ['ProductImage'] } }
     },
-    'use-cases': { operations: {} },
+    'use-cases': { operations: operations ?? {} },
     persistence: { entities: { Product: {}, ProductImage: {} } }
   };
   return buildModel({ manifest, layers });
@@ -287,6 +288,24 @@ test('aggregates.entities: con relations explícita no se duplica la relación',
   assert.equal(product.relations[0].name, 'images'); // el nombre del diseño, no el derivado
   assert.equal(product.relations[0].implicit, undefined);
   assert.deepEqual(model.warnings, []);
+});
+
+test('aggregates.entities: rootEntity resuelve la raíz para raíz y para interna', () => {
+  const model = modelWithInternalEntity(null);
+  assert.equal(model.entities.find((e) => e.name === 'Product').rootEntity, 'Product');
+  assert.equal(model.entities.find((e) => e.name === 'ProductImage').rootEntity, 'Product');
+});
+
+test('un handler sobre una entidad interna inyecta el repositorio de la raíz, no se queda sin dependencias', () => {
+  const model = modelWithInternalEntity(null, {
+    addProductImage: { output: { entity: 'ProductImage' } }
+  });
+  const files = generateServices(model);
+  const handler = files.find((f) => f.path.endsWith('AddProductImageCommandHandler.java'));
+
+  assert.ok(handler, 'debe generarse el handler de la operación');
+  assert.ok(handler.content.includes('import') && handler.content.includes('domain.repository.ProductRepository'));
+  assert.ok(handler.content.includes('private final ProductRepository productRepository;'));
 });
 
 // ─── http-clients: contrato estructurado, legacy en prosa y auth saliente ─────

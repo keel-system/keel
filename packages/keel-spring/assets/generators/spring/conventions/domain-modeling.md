@@ -119,6 +119,13 @@ public void removeLine(UUID lineId) {
 }
 ```
 
+Cuando una operación de `use-cases` tiene como `input`/`output.entity` una entidad interna (p. ej.
+`AddOrderLine` sobre `OrderLine`), build igual inyecta el repositorio de la **raíz** del agregado
+(`OrderRepository`), nunca uno de la hija — no existe. El handler carga la raíz por id, invoca el
+método de negocio correspondiente (`order.addLine(...)`) y persiste la raíz
+(`orderRepository.save(order)`, o `saveAndFlush` si la respuesta expone auditoría); la hija nunca se
+guarda ni consulta por su cuenta.
+
 ## Eventos de dominio: los emite el agregado
 
 Todo evento de `messaging.publishing.events` que una operación declare en `emits` se emite **dentro
