@@ -4,6 +4,7 @@ import pc from 'picocolors';
 import { isKeelWorkspace, resolveServiceDir, loadService, validateService, copyTree } from 'keel-core';
 import { assetsDir, SKILL, SUPPORTED_DSL } from '../lib/assets.js';
 import { scaffoldService } from '../scaffold/index.js';
+import { writeFiles } from '../lib/writer.js';
 import { STACK_FILE, readStackConfig, writeStackConfig, askStackConfig, describeStack } from '../lib/stack-config.js';
 
 function listSpecs(workspace) {
@@ -171,6 +172,28 @@ export async function build(inputPath, { force = false, defaults = false } = {})
         `(${snapshot.copied.length} archivo(s), refrescado en cada build)`
     )
   );
+
+  // Snapshot de los contratos formales (/keel-docs) junto al del diseño: quien
+  // clone el proyecto tiene openapi/asyncapi, las colecciones Postman y el panel
+  // sin el workspace. Solo lo que produce /keel-docs — DESIGN.md e INTEGRATION.md
+  // viven en el mismo directorio pero son de otras skills. También se refresca
+  // siempre: el canónico es docs/<servicio>/ del workspace.
+  const docsDir = path.join(projectDir, 'docs');
+  if (scaffold.docs.files.length > 0) {
+    const docsSnapshot = writeFiles(scaffold.docs.files, docsDir, { force: true });
+    console.log(
+      pc.dim(
+        `Snapshot de los contratos → ${path.relative(workspace, docsDir).split(path.sep).join('/')}/ ` +
+          `(${docsSnapshot.copied.length} archivo(s), refrescado en cada build)`
+      )
+    );
+  } else {
+    console.warn(
+      `${pc.yellow('⚠')} El servicio aún no tiene contratos generados (docs/${manifest.service?.name}/). ` +
+        `Ejecuta ${pc.cyan(`/keel-docs ${path.relative(workspace, dir).split(path.sep).join('/')}`)} y vuelve a ` +
+        'lanzar el build para incluirlos en el proyecto.'
+    );
+  }
 
   const service = path.relative(workspace, dir).split(path.sep).join('/');
   console.log();

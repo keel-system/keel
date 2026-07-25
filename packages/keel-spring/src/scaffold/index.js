@@ -5,6 +5,7 @@
 import path from 'node:path';
 import { buildModel } from '../lib/model.js';
 import { writeFiles } from '../lib/writer.js';
+import { listKeelDocs } from '../lib/keel-docs.js';
 import { STACK_DEFAULTS } from '../lib/stack-catalog.js';
 import { designUsesCache } from '../lib/stack-config.js';
 import { defaultGroup } from '../lib/naming.js';
@@ -94,6 +95,10 @@ export function scaffoldService({ manifest, layers, workspace, force = false, st
   const resolved = resolveStack(stack, layers, manifest);
   const model = buildModel({ manifest, layers, stack: resolved });
   model.stack = resolved;
+  // Contratos de /keel-docs presentes en el workspace: el README los enlaza y
+  // build.js los copia a docs/ del proyecto (la copia no pasa por writeFiles
+  // aquí porque se refresca siempre, al margen de --force).
+  model.docs = listKeelDocs(workspace, model.service.name);
   const outDir = path.join('services', model.service.projectName);
 
   const files = GENERATORS.flatMap((generator) => generator.generate(model));
@@ -104,6 +109,7 @@ export function scaffoldService({ manifest, layers, workspace, force = false, st
     copied,
     skipped,
     warnings: model.warnings,
-    stack: model.stack
+    stack: model.stack,
+    docs: model.docs
   };
 }

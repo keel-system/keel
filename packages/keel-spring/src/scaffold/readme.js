@@ -95,6 +95,7 @@ export function generate(model) {
         ]
       : []),
     ...productionSection(model),
+    ...docsSection(model),
     '## Qué genera el scaffolding y qué completa el agente',
     '',
     'El scaffolding (transversal al stack, re-ejecutable con `keel-spring build`) produce la arquitectura hexagonal + CQRS',
@@ -108,8 +109,8 @@ export function generate(model) {
     'El código que depende de la infraestructura elegida (publishers/listeners del broker, adaptador de storage)',
     'lo escribe el agente siguiendo las skills por tecnología `.claude/skills/keel-spring-<tech>/` (instaladas solo las del stack de `keel-stack.json`).',
     'El punto de entrada para el agente es `.claude/CLAUDE.md` (junto con `.claude/architecture.md` y',
-    '`.claude/constitution.md`); el repo es autosuficiente: incluye el diseño (snapshot en `specs/`), la skill y las',
-    'guías del stack en `.claude/`.',
+    '`.claude/constitution.md`); el repo es autosuficiente: incluye el diseño (snapshot en `specs/`), los contratos',
+    'formales (snapshot en `docs/`), la skill y las guías del stack en `.claude/`.',
     '',
     'Swagger UI (local/develop): http://localhost:8080/swagger-ui.html — deshabilitado en production.',
     '',
@@ -154,6 +155,56 @@ export function generate(model) {
 
   lines.push('');
   return [{ path: 'README.md', content: lines.join('\n') }];
+}
+
+// Qué contiene cada archivo que produce /keel-docs. La clave del mapa es la
+// ruta relativa dentro de docs/; la colección de flujos Postman lleva el nombre
+// del servicio, así que se resuelve por sufijo (ver docFile).
+const DOC_DESCRIPTIONS = {
+  'overview.html': 'Panel visual del servicio: capas del diseño, operaciones, eventos y enlaces a los demás documentos. Punto de entrada para revisarlo de un vistazo.',
+  'openapi.yaml': 'Contrato HTTP en OpenAPI 3.1: endpoints, parámetros, cuerpos, respuestas y errores. Es la fuente para generar clientes.',
+  'openapi.html': 'Visor del contrato HTTP (Redoc) con el spec embebido: se abre con doble clic, sin servidor.',
+  'asyncapi.yaml': 'Contrato de eventos en AsyncAPI 3.0: canales, mensajes publicados y suscripciones, con la envoltura `EventEnvelope`.',
+  'asyncapi.html': 'Visor del contrato de eventos con el spec embebido: se abre con doble clic, sin servidor.',
+  'postman/auth-collection.json': 'Colección Postman para obtener token: un request por rol y por cliente máquina (`client_credentials`). Impórtala primero.',
+  'postman/*-collection.json': 'Colección Postman del servicio: una carpeta por flujo `FL-*` de la validación funcional, más una carpeta con todas las operaciones.'
+};
+
+// Descripción de un archivo copiado; la colección de flujos se identifica por
+// sufijo porque su nombre incluye el del servicio.
+function docFile(relative) {
+  if (DOC_DESCRIPTIONS[relative]) return DOC_DESCRIPTIONS[relative];
+  if (relative.startsWith('postman/') && relative.endsWith('-collection.json')) {
+    return DOC_DESCRIPTIONS['postman/*-collection.json'];
+  }
+  return 'Documento derivado del diseño por `/keel-docs`.';
+}
+
+// Sección «Contratos y documentación»: snapshot de lo que /keel-docs derivó del
+// diseño en docs/<servicio>/ del workspace y build copió a docs/. Se omite
+// entera si el servicio aún no tiene contratos generados.
+function docsSection(model) {
+  const files = model.docs?.files ?? [];
+  if (files.length === 0) return [];
+
+  const { service } = model;
+  return [
+    '## Contratos y documentación',
+    '',
+    'En `docs/` va el snapshot de los contratos formales que la skill `/keel-docs` deriva del diseño.',
+    `El canónico es \`docs/${service.name}/\` del workspace Keel y este snapshot **se refresca en cada`,
+    '`keel-spring build`**: no los edites a mano aquí; si el diseño cambia, regenera con `/keel-docs` y',
+    'vuelve a lanzar el build.',
+    '',
+    '| Archivo | Qué encontrarás |',
+    '|---|---|',
+    ...files.map(({ path: relative }) => `| [\`docs/${relative}\`](docs/${relative}) | ${docFile(relative)} |`),
+    '',
+    'Los `.html` son autocontenidos (llevan el spec embebido): se abren con doble clic, sin servidor ni red.',
+    'Los enlaces del panel `overview.html` a `DESIGN.md` e `INTEGRATION.md` solo resuelven en el workspace:',
+    'esos dos documentos los producen `/keel-handoff` y `/keel-integrate`, no `/keel-docs`, y no viajan en el snapshot.',
+    ''
+  ];
 }
 
 // Filas de la tabla de infraestructura, derivadas del catálogo (misma fuente que

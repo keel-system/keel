@@ -161,6 +161,65 @@ test('build con un diseño válido genera el scaffolding y sale con éxito', asy
   assert.notEqual(fs.readFileSync(snapshotFile, 'utf8'), 'desincronizado');
 });
 
+// Prepara un workspace con la fixture product-catalog lista para generar.
+function withFixture(name = 'product-catalog') {
+  const workspace = makeWorkspace();
+  const fixture = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', name);
+  const specDir = path.join(workspace, 'specs', name);
+  fs.mkdirSync(specDir, { recursive: true });
+  fs.cpSync(fixture, specDir, { recursive: true });
+  return workspace;
+}
+
+test('build copia a docs/ solo la documentación de /keel-docs y la enlaza en el README', async () => {
+  const workspace = withFixture();
+  const docsDir = path.join(workspace, 'docs', 'product-catalog');
+  fs.mkdirSync(path.join(docsDir, 'postman'), { recursive: true });
+  fs.writeFileSync(path.join(docsDir, 'openapi.yaml'), 'openapi: 3.1.0\n');
+  fs.writeFileSync(path.join(docsDir, 'openapi.html'), '<html>redoc</html>');
+  fs.writeFileSync(path.join(docsDir, 'overview.html'), '<html>panel</html>');
+  fs.writeFileSync(path.join(docsDir, 'postman', 'product-catalog-collection.json'), '{}');
+  fs.writeFileSync(path.join(docsDir, 'postman', 'auth-collection.json'), '{}');
+  // Del mismo directorio, pero de otras skills: no viajan al proyecto.
+  fs.writeFileSync(path.join(docsDir, 'DESIGN.md'), '# diseño');
+  fs.writeFileSync(path.join(docsDir, 'INTEGRATION.md'), '# integración');
+
+  const exitCode = await runBuild(workspace, 'specs/product-catalog');
+  assert.equal(exitCode, undefined);
+
+  const outDocs = path.join(workspace, 'services', 'product-catalog-spring', 'docs');
+  for (const file of ['openapi.yaml', 'openapi.html', 'overview.html', 'postman/product-catalog-collection.json', 'postman/auth-collection.json']) {
+    assert.ok(fs.existsSync(path.join(outDocs, ...file.split('/'))), `falta docs/${file}`);
+  }
+  assert.ok(!fs.existsSync(path.join(outDocs, 'DESIGN.md')), 'DESIGN.md no es salida de /keel-docs');
+  assert.ok(!fs.existsSync(path.join(outDocs, 'INTEGRATION.md')), 'INTEGRATION.md no es salida de /keel-docs');
+  // La fixture no declara messaging: /keel-docs no generó asyncapi y no se inventa.
+  assert.ok(!fs.existsSync(path.join(outDocs, 'asyncapi.yaml')));
+
+  const readme = fs.readFileSync(path.join(workspace, 'services', 'product-catalog-spring', 'README.md'), 'utf8');
+  assert.match(readme, /## Contratos y documentación/);
+  assert.match(readme, /\(docs\/openapi\.yaml\)/);
+  assert.match(readme, /\(docs\/postman\/auth-collection\.json\)/);
+  assert.ok(!readme.includes('docs/asyncapi.yaml'), 'no debe enlazar contratos inexistentes');
+
+  // El snapshot de docs/ SIEMPRE se refresca (el canónico es el del workspace).
+  const copied = path.join(outDocs, 'openapi.yaml');
+  fs.writeFileSync(copied, 'desincronizado');
+  await runBuild(workspace, 'specs/product-catalog');
+  assert.equal(fs.readFileSync(copied, 'utf8'), 'openapi: 3.1.0\n');
+});
+
+test('build sin docs/<servicio> avisa pero termina en verde y el README omite la sección', async () => {
+  const workspace = withFixture();
+
+  const exitCode = await runBuild(workspace, 'specs/product-catalog');
+  assert.equal(exitCode, undefined);
+
+  const outDir = path.join(workspace, 'services', 'product-catalog-spring');
+  assert.ok(!fs.existsSync(path.join(outDir, 'docs')));
+  assert.ok(!fs.readFileSync(path.join(outDir, 'README.md'), 'utf8').includes('## Contratos y documentación'));
+});
+
 test('build es idempotente: la segunda pasada no reescribe los assets', async () => {
   const workspace = makeWorkspace();
   writeService(workspace);
