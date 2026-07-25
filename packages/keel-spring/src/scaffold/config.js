@@ -17,6 +17,10 @@ const PROFILES = ['local', 'develop', 'production'];
 const LOCAL_API_KEY = 'local-dev-api-key';
 const localClientApiKey = (clientName) => `local-${clientName}-key`;
 
+// Orígenes CORS del perfil local: los puertos de dev habituales de una SPA
+// (Create React App / Next.js y Vite), para probar un front sin editar YAML.
+const LOCAL_CORS_ORIGINS = 'http://localhost:3000,http://localhost:5173';
+
 // Gradiente de externalización: literal en local, env var con default en
 // develop y env var obligatoria (sin default) en production.
 function envValue(profile, varName, localValue) {
@@ -393,6 +397,7 @@ function oauth2Yaml(model, profile) {
 function securityApplies(model) {
   const sec = model.security;
   if (!sec) return false;
+  if (sec.cors) return true;
   if (sec.protocol === 'api-key') return true;
   if (!sec.serviceAuth) return false;
   const jwt = sec.protocol === 'oidc' || sec.protocol === 'jwt';
@@ -432,6 +437,20 @@ function securityYaml(model, profile) {
       const varName = `API_KEY_${client.name.replace(/-/g, '_').toUpperCase()}`;
       lines.push(`    ${client.name}: ${envRequired(profile, varName, localClientApiKey(client.name))}`);
     }
+  }
+  // Orígenes permitidos por CORS: el único dato de la política que no viene del
+  // diseño. Obligatorio fuera de local para que un despliegue mal configurado
+  // falle al arrancar en vez de servir en silencio a orígenes equivocados.
+  if (sec.cors) {
+    lines.push('  cors:');
+    lines.push(
+      profile === 'local'
+        ? '    # Orígenes del navegador (CSV); estos son los puertos de dev habituales de una SPA.'
+        : '    # Orígenes del navegador (CSV); obligatorio (sin él la app no arranca).'
+    );
+    lines.push(
+      `    allowed-origins: ${envRequired(profile, 'SECURITY_CORS_ALLOWED_ORIGINS', LOCAL_CORS_ORIGINS)}`
+    );
   }
   return lines.join('\n') + '\n';
 }

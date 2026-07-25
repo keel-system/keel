@@ -100,6 +100,42 @@
         "minItems": 1
       }
     },
+    "cors": {
+      "type": "object",
+      "description": "Política de acceso desde navegador (CORS). Su presencia declara que el servicio se consume desde un origen web; los orígenes concretos son dato de despliegue y se configuran por ambiente al generar, no aquí.",
+      "required": ["description"],
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string",
+          "minLength": 10,
+          "description": "Quién consume el servicio desde el navegador y por qué."
+        },
+        "allowCredentials": {
+          "type": "boolean",
+          "default": false,
+          "description": "Permitir cookies y cabeceras de autorización en peticiones cross-origin."
+        },
+        "allowedHeaders": {
+          "type": "array",
+          "description": "Cabeceras que el cliente puede enviar; por defecto, todas.",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1
+        },
+        "exposedHeaders": {
+          "type": "array",
+          "description": "Cabeceras de la respuesta que el navegador deja leer al cliente.",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1
+        },
+        "maxAgeSeconds": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 3600,
+          "description": "Tiempo que el navegador cachea la respuesta al preflight."
+        }
+      }
+    },
     "access": {
       "type": "object",
       "required": ["default"],

@@ -985,3 +985,49 @@ test('minItems mayor que maxItems es error', () => {
     errors.some((e) => e.includes(`getProductsByIds.input.ids: minItems (10) no puede ser mayor que maxItems (5)`))
   );
 });
+
+// --- CORS: coherencia con la capa api y con tokenLocation ---
+
+const corsLayers = (cors, securityOverrides = {}) => ({
+  domain: domainForM2m(),
+  'use-cases': useCasesForM2m(),
+  api: {
+    endpoints: {
+      getProduct: { method: 'GET', path: '/products/{id}' },
+      getProductPrice: { method: 'GET', path: '/products/{id}/price' },
+    },
+  },
+  security: {
+    authentication: { protocol: 'oidc' },
+    access: { default: { level: 'required' } },
+    cors,
+    ...securityOverrides,
+  },
+});
+
+test('cors bien formado con capa api no produce errores ni warnings', () => {
+  const { errors, warnings } = run(corsLayers({ description: 'Consumido por la SPA de back-office.' }));
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
+test('cors sin capa api es error', () => {
+  const layers = corsLayers({ description: 'Consumido por la SPA de back-office.' });
+  delete layers.api;
+  const { errors } = run(layers);
+  assert.ok(errors.some((e) => e.includes('cors declarado sin capa api')));
+});
+
+test('cors con tokenLocation cookie y allowCredentials false es error', () => {
+  const layers = corsLayers({ description: 'Consumido por la SPA de back-office.' });
+  layers.security.authentication.tokenLocation = 'cookie';
+  const { errors } = run(layers);
+  assert.ok(errors.some((e) => e.includes('cors.allowCredentials debe ser true con tokenLocation cookie')));
+});
+
+test('cors con tokenLocation cookie y allowCredentials true es válido', () => {
+  const layers = corsLayers({ description: 'Consumido por la SPA de back-office.', allowCredentials: true });
+  layers.security.authentication.tokenLocation = 'cookie';
+  const { errors } = run(layers);
+  assert.deepEqual(errors, []);
+});

@@ -759,7 +759,23 @@ function collectSecurity(layers, services, routeBase, warnings) {
     usesAuthorities,
     serviceAuth,
     serviceClients,
-    roleGrants
+    roleGrants,
+    cors: collectCors(sec.cors, routeByOp)
+  };
+}
+
+// Política CORS (security.cors). El diseño declara la política; los orígenes son
+// dato de despliegue y salen por configuración. Los métodos se derivan de los
+// endpoints reales (mismo routeByOp que los matchers) más OPTIONS del preflight.
+function collectCors(cors, routeByOp) {
+  if (!cors) return null;
+  const methods = [...new Set([...[...routeByOp.values()].map((route) => route.method), 'OPTIONS'])].sort();
+  return {
+    allowCredentials: cors.allowCredentials === true,
+    allowedHeaders: cors.allowedHeaders ?? ['*'],
+    exposedHeaders: cors.exposedHeaders ?? [],
+    maxAgeSeconds: cors.maxAgeSeconds ?? 3600,
+    methods
   };
 }
 

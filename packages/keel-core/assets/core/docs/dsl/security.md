@@ -62,6 +62,26 @@ access:
 - `serviceClients` declara cada consumidor y los scopes que se le conceden (mínimo privilegio por cliente). El proveedor concreto (Keycloak, Cognito…) materializa cada entrada como cliente `client_credentials` al generar.
 - `level: service` sin `scopes` acepta cualquier cliente autenticado (warning de `keel validate`); combínalo con `validateAudience: true` para que solo valgan tokens emitidos para este servicio.
 
+## CORS (consumo desde el navegador)
+
+El bloque `cors` declara que el servicio se consume desde un origen web. Solo hace falta si un navegador llama a la API directamente: sin él, el servidor generado rechaza toda petición cross-origin (el preflight muere en la cadena de seguridad).
+
+```yaml
+cors:
+  description: Consumido desde el navegador por la SPA de back-office.
+  allowCredentials: false
+  allowedHeaders: [Authorization, Content-Type, Idempotency-Key]
+  exposedHeaders: [X-Correlation-Id]
+  maxAgeSeconds: 3600
+```
+
+- **Los orígenes permitidos no se declaran aquí.** Son URLs de despliegue, no diseño: cambian por ambiente y no deben obligar a regenerar. El generador los expone como configuración del servicio (en Spring, la variable `SECURITY_CORS_ALLOWED_ORIGINS`, obligatoria fuera de local).
+- **Los métodos tampoco**: se derivan de los endpoints declarados en la capa `api`, más `OPTIONS` para el preflight.
+- `allowCredentials: true` es obligatorio si `authentication.tokenLocation` es `cookie` (lo valida `keel validate`); con token en `Authorization` déjalo en `false`.
+- `exposedHeaders` es lo que el navegador deja **leer** de la respuesta: normalmente solo cabeceras propias (correlación, paginación).
+
+Requiere capa `api`: CORS sin HTTP entrante no significa nada (error de `keel validate`).
+
 Combinaciones válidas de `audience` (capa `api`) × `level`:
 
 | `audience` | Niveles válidos | Notas |

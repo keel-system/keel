@@ -217,6 +217,24 @@ test('security: roleGrants del diseño llega al modelo, sin roles vacíos', () =
   ]);
 });
 
+test('security: sin bloque cors el modelo no lleva política CORS', () => {
+  assert.equal(loadModelWithLayers({ security: SECURITY_LAYER }).security.cors, null);
+});
+
+test('security: cors deriva los métodos de los endpoints y aplica los defaults del DSL', () => {
+  const model = loadModelWithLayers({
+    security: { ...SECURITY_LAYER, cors: { description: 'Consumido por la SPA de back-office.' } }
+  });
+
+  // Defaults del DSL: todas las cabeceras, ninguna expuesta, sin credenciales.
+  assert.deepEqual(model.security.cors.allowedHeaders, ['*']);
+  assert.deepEqual(model.security.cors.exposedHeaders, []);
+  assert.equal(model.security.cors.allowCredentials, false);
+  assert.equal(model.security.cors.maxAgeSeconds, 3600);
+  // Métodos: los de los endpoints reales (sin duplicados) más el preflight.
+  assert.deepEqual(model.security.cors.methods, ['GET', 'OPTIONS', 'POST']);
+});
+
 // ─── storage: política por bucket ─────────────────────────────────────────────
 
 test('storage: buckets con visibility, tamaño y content-types; maxSizeMb es el mayor', () => {

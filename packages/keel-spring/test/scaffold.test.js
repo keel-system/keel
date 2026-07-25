@@ -731,6 +731,57 @@ test('capa security (api-key): filtro propio sin resource server ni fragmento oa
   assert.ok(!buildGradle.includes('oauth2-resource-server'));
   assert.ok(!copied.some((f) => f.includes('oauth2.yaml')));
   assert.ok(!copied.some((f) => f.includes('JwtAuthConverter')));
+
+  // Sin bloque cors en el diseño no hay política CORS: ni bean ni llamada.
+  assert.ok(!config.includes('.cors('));
+  assert.ok(!exists(workspace, `${securityDir}/CorsConfig.java`));
+  assert.ok(!read(workspace, 'src/main/resources/parameters/local/security.yaml').includes('allowed-origins'));
+});
+
+test('capa security con cors: CorsConfig derivado del diseño + orígenes por ambiente', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const patchedManifest = structuredClone(manifest);
+  patchedManifest.layers.security = 'security.keel.yaml';
+  const patched = structuredClone(layers);
+  patched.security = {
+    authentication: { protocol: 'oidc' },
+    cors: {
+      description: 'Consumido desde el navegador por la SPA de back-office.',
+      allowedHeaders: ['Authorization', 'Content-Type'],
+      exposedHeaders: ['X-Correlation-Id'],
+      maxAgeSeconds: 600
+    },
+    access: { default: { level: 'required' }, rules: { listProducts: { level: 'public' } } }
+  };
+
+  scaffoldService({ manifest: patchedManifest, layers: patched, workspace, stack: { auth: 'keycloak' } });
+
+  const securityDir = 'src/main/java/com/commerce/productcatalog/infrastructure/configurations/security';
+  // La cadena activa CORS: sin esto el preflight muere antes del controller.
+  assert.ok(read(workspace, `${securityDir}/SecurityConfig.java`).includes('.cors(Customizer.withDefaults())'));
+
+  const cors = read(workspace, `${securityDir}/CorsConfig.java`);
+  assert.ok(cors.includes('@Value("${security.cors.allowed-origins:}")'));
+  assert.ok(cors.includes('setAllowedOriginPatterns')); // exigido si se permiten credenciales
+  assert.ok(cors.includes('ALLOWED_HEADERS = List.of("Authorization", "Content-Type")'));
+  assert.ok(cors.includes('EXPOSED_HEADERS = List.of("X-Correlation-Id")'));
+  assert.ok(cors.includes('Duration.ofSeconds(600)'));
+  assert.ok(cors.includes('setAllowCredentials(false)'));
+  // Métodos derivados de los endpoints reales del diseño, más el preflight.
+  assert.ok(cors.includes('ALLOWED_METHODS = List.of("GET", "OPTIONS", "POST")'));
+
+  // Orígenes: literal en local, variable obligatoria en production.
+  assert.ok(
+    read(workspace, 'src/main/resources/parameters/local/security.yaml').includes(
+      'allowed-origins: http://localhost:3000,http://localhost:5173'
+    )
+  );
+  assert.ok(
+    read(workspace, 'src/main/resources/parameters/production/security.yaml').includes(
+      'allowed-origins: ${SECURITY_CORS_ALLOWED_ORIGINS}'
+    )
+  );
 });
 
 test('capa security (clientes máquina por api-key): clave local usable y env var obligatoria fuera', () => {
@@ -1612,6 +1663,37 @@ test('SecurityConfig: dos filter chains cuando conviven endpoints de usuario y M
   // trae la audiencia del servicio).
   assert.ok(config.includes('@Order(2)'));
   assert.ok(config.includes('public JwtDecoder jwtDecoder() {\n        return new SupplierJwtDecoder(() -> JwtDecoders.fromIssuerLocation(issuerUri));'));
+});
+
+test('SecurityConfig: con cors, todas las cadenas la activan (también la M2M y la de protocolo none)', () => {
+  const cors = { description: 'Consumido desde el navegador por la SPA de back-office.' };
+
+  const split = read(
+    scaffoldWithSecurity(
+      {
+        authentication: {
+          protocol: 'oidc',
+          serviceAuth: { protocol: 'client-credentials', validateAudience: true, audience: 'catalog-api' }
+        },
+        cors,
+        access: {
+          default: { level: 'required' },
+          rules: { listProducts: { level: 'public' }, retireProduct: { level: 'service', scopes: ['product:write'] } }
+        }
+      },
+      { endpoints: { retireProduct: { method: 'POST', path: '/products/{id}/retire', successStatus: 204, audience: 'services' } } }
+    ),
+    `${SEC_BASE}/SecurityConfig.java`
+  );
+  // Una llamada por cadena: si a la M2M le falta, su preflight muere.
+  assert.equal(split.split('.cors(Customizer.withDefaults())').length - 1, 2);
+
+  const none = read(
+    scaffoldWithSecurity({ authentication: { protocol: 'none' }, cors, access: { default: { level: 'public' } } }),
+    `${SEC_BASE}/SecurityConfig.java`
+  );
+  assert.ok(none.includes('.cors(Customizer.withDefaults())'));
+  assert.ok(none.includes('import org.springframework.security.config.Customizer;'));
 });
 
 test('SecurityConfig: sin rutas de usuario, se conserva la cadena única con audiencia', () => {

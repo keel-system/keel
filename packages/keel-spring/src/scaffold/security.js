@@ -30,6 +30,7 @@ export function generate(model) {
   if (!model.layersPresent.security || !sec) return [];
 
   const files = [renderSecurityConfig(model, sec)];
+  if (sec.cors) files.push(renderCorsConfig(model, sec.cors));
   const jwt = sec.protocol === 'oidc' || sec.protocol === 'jwt';
   if (jwt && sec.usesAuthorities) files.push(renderJwtAuthConverter(model));
   if (sec.protocol === 'api-key') files.push(renderApiKeyFilter(model));
@@ -94,6 +95,14 @@ function renderSecurityConfig(model, sec) {
     'org.springframework.security.web.SecurityFilterChain'
   ]);
 
+  // La política CORS del diseño se activa aquí: sin esta llamada el preflight
+  // OPTIONS muere en la cadena de seguridad antes de llegar al controller. El
+  // CorsFilter corre antes de la autorización, así que no hace falta permitir
+  // OPTIONS en los matchers. La configuración vive en CorsConfig.
+  const corsCall = '            .cors(Customizer.withDefaults())';
+  const corsLine = sec.cors ? `${corsCall}\n` : '';
+  if (sec.cors) imports.add('org.springframework.security.config.Customizer');
+
   // Protocolo 'none': capa security declarada sin autenticación → todo abierto
   // (evita que el starter de Spring Security bloquee el servicio por defecto).
   if (sec.protocol === 'none') {
@@ -105,7 +114,7 @@ public class SecurityConfig {
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http
             .csrf(AbstractHttpConfigurer::disable)
-            .authorizeHttpRequests(auth -> auth.anyRequest().permitAll());
+${corsLine}            .authorizeHttpRequests(auth -> auth.anyRequest().permitAll());
         return http.build();
     }
 }`;
@@ -127,6 +136,7 @@ public class SecurityConfig {
 
   const chain = [
     '            .csrf(AbstractHttpConfigurer::disable)',
+    ...(sec.cors ? [corsCall] : []),
     '            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))',
     authorizeBlock(mainMatchers, { defaultAuthority: sec.defaultAuthority })
   ];
@@ -254,7 +264,7 @@ public class SecurityConfig {
         http
             .securityMatcher(${patterns})
             .csrf(AbstractHttpConfigurer::disable)
-            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+${corsLine}            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
 ${authorizeBlock(serviceMatchers, { defaultAuthority: 'authenticated()', permitTechnical: false })}
             .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> jwt.decoder(serviceJwtDecoder())${converterCall}));
         return http.build();
@@ -305,6 +315,65 @@ ${chain.join('\n')};
 }`;
 
   return { path: javaPath(model, SECURITY_PKG, 'SecurityConfig'), content: javaFile(subPackage(model, SECURITY_PKG), [...imports], body) };
+}
+
+// Política CORS del diseño (security.cors). Todo sale del diseño salvo los
+// orígenes permitidos, que son dato de despliegue y llegan por configuración
+// (security.cors.allowed-origins, una variable de entorno por ambiente).
+function renderCorsConfig(model, cors) {
+  const list = (values) => values.map((v) => JSON.stringify(v)).join(', ');
+  // setAllowedOriginPatterns y no setAllowedOrigins: admite comodines de
+  // subdominio y es lo único válido cuando se permiten credenciales.
+  const body = `/**
+ * Política CORS del servicio. Métodos derivados de los endpoints declarados en
+ * el diseño (más OPTIONS, el preflight). Los orígenes permitidos se configuran
+ * por ambiente en security.cors.allowed-origins: sin ninguno, el servicio no
+ * acepta peticiones cross-origin.
+ */
+@Configuration
+public class CorsConfig {
+
+    private static final List<String> ALLOWED_METHODS = List.of(${list(cors.methods)});
+    private static final List<String> ALLOWED_HEADERS = List.of(${list(cors.allowedHeaders)});
+    private static final List<String> EXPOSED_HEADERS = List.of(${list(cors.exposedHeaders)});
+    private static final Duration MAX_AGE = Duration.ofSeconds(${cors.maxAgeSeconds});
+
+    @Value("\${security.cors.allowed-origins:}")
+    private List<String> allowedOrigins;
+
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource() {
+        CorsConfiguration configuration = new CorsConfiguration();
+        configuration.setAllowedOriginPatterns(allowedOrigins.stream().filter(origin -> !origin.isBlank()).toList());
+        configuration.setAllowedMethods(ALLOWED_METHODS);
+        configuration.setAllowedHeaders(ALLOWED_HEADERS);
+        configuration.setExposedHeaders(EXPOSED_HEADERS);
+        configuration.setAllowCredentials(${cors.allowCredentials});
+        configuration.setMaxAge(MAX_AGE);
+
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", configuration);
+        return source;
+    }
+}`;
+
+  return {
+    path: javaPath(model, SECURITY_PKG, 'CorsConfig'),
+    content: javaFile(
+      subPackage(model, SECURITY_PKG),
+      [
+        'java.time.Duration',
+        'java.util.List',
+        'org.springframework.beans.factory.annotation.Value',
+        'org.springframework.context.annotation.Bean',
+        'org.springframework.context.annotation.Configuration',
+        'org.springframework.web.cors.CorsConfiguration',
+        'org.springframework.web.cors.CorsConfigurationSource',
+        'org.springframework.web.cors.UrlBasedCorsConfigurationSource'
+      ],
+      body
+    )
+  };
 }
 
 // Convierte el JWT entrante en authorities de Spring combinando tres fuentes:

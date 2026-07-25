@@ -324,6 +324,18 @@ export function checkCrossRefs({ layers, wip = false }) {
         }
       }
     }
+    // cors: política del canal HTTP entrante, sin sentido sin capa api. Y con el
+    // token en cookie, el navegador no la enviaría cross-origin sin credenciales.
+    if (security.cors) {
+      if (!api) {
+        errors.push('security: cors declarado sin capa api — no hay endpoints HTTP a los que aplicar la política');
+      }
+      if (security.authentication?.tokenLocation === 'cookie' && security.cors.allowCredentials !== true) {
+        errors.push(
+          'security: cors.allowCredentials debe ser true con tokenLocation cookie — el navegador no enviaría la cookie cross-origin'
+        );
+      }
+    }
   }
 
   // auto: true solo deriva rutas por convención para operaciones con nombre CRUD
