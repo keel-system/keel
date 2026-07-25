@@ -31,6 +31,15 @@ Estas reglas no se negocian ni se "acomodan" para que un caso particular compile
 
 Cómo se escriben esas guardas, el factory, los métodos semánticos del `lifecycle` y los value objects: `conventions/domain-modeling.md`.
 
+## Aritmética y precisión
+
+- Todo valor **monetario, contable, de tasas o porcentajes, y todo cálculo científico** se representa y se opera con `BigDecimal`. `double`, `float` y sus wrappers están **prohibidos** en dominio, en DTOs, en entidades JPA y en cualquier cálculo intermedio de esos valores: son binarios, no representan exactamente los decimales y acumulan error al sumar. El DSL no tiene tipo `double` ni `float` (`decimal` mapea a `BigDecimal`): que aparezca uno en el código generado es un defecto, no una optimización.
+- Toda operación que pueda producir más decimales que la escala declarada (`divide`, `multiply` por tasas, prorrateos) lleva **escala y `RoundingMode` explícitos**. La escala sale del diseño (`constraints.scale`); el modo de redondeo, de las Convenciones de determinación de `specs/validation-scenarios.md` y, si el diseño no lo declara, es **`RoundingMode.HALF_UP`** — nunca una elección implícita ni una variante distinta por operación. Un `divide` sin escala ni `MathContext` es una `ArithmeticException` esperando su turno.
+- Los importes se comparan con **`compareTo(...)`**, nunca con `equals`: `BigDecimal` considera distintos `2.50` y `2.5` porque compara también la escala. Aplica igual a las guardas de invariantes (`amount.compareTo(BigDecimal.ZERO) < 0`) y a las aserciones de cualquier comparación de negocio.
+- La escala del diseño es **contrato observable**: se conserva idéntica en dominio, en la columna (`precision`/`scale`) y en la respuesta HTTP. No se normaliza "por limpieza" con `stripTrailingZeros()` ni se deja que la serialización la altere. Un redondeo implícito no es un detalle de implementación: hace que este servidor deje de ser equivalente al que generaría otro stack del mismo diseño.
+
+Cómo se escriben los value objects monetarios y sus operaciones: `conventions/domain-modeling.md`.
+
 ## Consistencia y transacciones
 
 - `consistency.transactionalBoundary: per-aggregate` (cuando el diseño lo declara): un command muta una sola raíz de agregado dentro de la transacción del mediator; nunca dos agregados en la misma transacción.

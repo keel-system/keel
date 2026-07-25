@@ -54,7 +54,10 @@ artefactos, nunca se resuelve en silencio en el código.
   (con su desempate), formato y zona de fechas, escala y redondeo de los importes,
   campo ausente vs nulo en la respuesta, sensibilidad a mayúsculas de la unicidad.
   Implementarlas de otro modo compila, pasa la revisión y hace que este servidor deje
-  de ser equivalente al que generaría otro stack del mismo diseño.
+  de ser equivalente al que generaría otro stack del mismo diseño. La escala y el
+  redondeo tienen además regla dura —`BigDecimal` con escala y `RoundingMode`
+  explícitos, `compareTo` en las comparaciones— en `constitution.md` ("Aritmética y
+  precisión") y su forma canónica en `conventions/domain-modeling.md`.
 - **Wiring HTTP**: si el binding, el `successStatus`, el `Location` o los query params
   generados no coinciden con `api.keel.yaml`, repórtalo como defecto del scaffolding —
   no cambies firmas ni contratos generados para compensarlo.

@@ -63,7 +63,13 @@ repo generado se clonó suelto). Todo lo que hagas ocurre dentro de esa raíz.
   `<Nombre>ApplicationTests`) se deja tal cual. Tu criterio de calidad es el código
   siguiendo las convenciones + el 100% de los escenarios `FL-*`, que valida otro agente.
 - `.claude/constitution.md` es innegociable: ninguna implementación puede romper la
-  frontera hexagonal, la transaccionalidad ni los contratos públicos que declara.
+  frontera hexagonal, la transaccionalidad, los contratos públicos ni la precisión
+  numérica que declara.
+- **Importes, tasas y magnitudes científicas van en `BigDecimal`**, nunca en
+  `double`/`float` (ni de paso, vía `doubleValue()`): escala del diseño
+  (`constraints.scale`) y `RoundingMode` explícito —`HALF_UP` si el diseño no declara
+  otro— en todo `divide`/`multiply`, y comparaciones con `compareTo`, nunca `equals`.
+  La forma canónica, en `.claude/conventions/domain-modeling.md`.
 - El diseño (`specs/`) es la única fuente de verdad funcional: nada de entidades,
   campos, endpoints o reglas que no estén en sus artefactos.
 - Los `code` de error y los nombres de evento se copian exactos: son contrato público.

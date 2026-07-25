@@ -155,7 +155,7 @@ export function generate(model) {
     '',
     '`.claude/architecture.md` describe la arquitectura hexagonal + CQRS del proyecto y la función de cada paquete',
     '(`domain`, `application`, `infrastructure`). `.claude/constitution.md` recoge las reglas que esa arquitectura',
-    'nunca puede romper (frontera hexagonal, transaccionalidad, contratos públicos). Léelos antes de tocar código',
+    'nunca puede romper (frontera hexagonal, transaccionalidad, contratos públicos, precisión numérica). Léelos antes de tocar código',
     'si no conoces ya la estructura.',
     '',
     '## Stack elegido',

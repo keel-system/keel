@@ -41,7 +41,15 @@ conservador — ante la duda, reporta en vez de aplicar.
    dominio debe declarar `version` con getter y el mapper propagarlo en
    `toDomain()`/`toJpa()`. Si falta el round-trip, es un defecto conductual →
    repórtalo en `remaining`, no lo "arregles" aquí.
-7. **Higiene general**: sin código muerto, variables sin usar ni warnings triviales;
+7. **Precisión numérica (regla dura de `.claude/constitution.md`)**: chequeo mecánico
+   sobre importes, tasas y magnitudes científicas — cero `double`/`float`/`Double`/
+   `Float` y cero `doubleValue()` en su camino; cero `equals` entre `BigDecimal`
+   (debe ser `compareTo`); cero `divide` sin escala ni `MathContext`. Los tres son
+   conductuales (cambian el valor devuelto o pueden lanzar `ArithmeticException`):
+   **repórtalos en `remaining`** con archivo y línea, no los apliques. La forma
+   canónica está en `.claude/conventions/domain-modeling.md` ("Aritmética con
+   BigDecimal").
+8. **Higiene general**: sin código muerto, variables sin usar ni warnings triviales;
    nombres y formato coherentes con el código vecino.
 
 ## Frontera: no-conductual vs conductual

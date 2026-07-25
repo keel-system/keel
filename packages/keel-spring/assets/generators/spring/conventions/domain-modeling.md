@@ -186,6 +186,91 @@ public record Money(BigDecimal amount, Currency currency) {
 Son inmutables por ser records e iguales por valor; un "cambio" devuelve una instancia nueva
 (`withAmount(...)`), nunca muta.
 
+## Aritmética con BigDecimal
+
+Los importes, tasas y magnitudes científicas se operan **siempre** con `BigDecimal`, con escala y
+redondeo explícitos (regla dura de `constitution.md`). Y se operan **dentro del value object**, no
+dispersos en handlers: sumar dos `Money` de monedas distintas es un error de negocio, y el único
+sitio que puede detectarlo es el propio `Money`.
+
+Un value object con aritmética **normaliza** la escala en el compact constructor en vez de rechazar
+la entrada: un `2.5` que llega de un cliente es el mismo importe que `2.50`, y rechazarlo sería
+inventar una validación que el diseño no declara. El `scale() > 2` del ejemplo anterior vale para un
+value object sin operaciones; en cuanto hay `add`/`multiply`, la versión que manda es esta.
+
+```java
+public record Money(BigDecimal amount, Currency currency) {
+
+    /** Escala de `Money.amount` en domain.keel.yaml; redondeo HALF_UP por defecto del generador. */
+    private static final int SCALE = 2;
+    private static final RoundingMode ROUNDING = RoundingMode.HALF_UP;
+
+    public Money {
+        if (amount == null || currency == null) {
+            throw new InvalidMoneyError();
+        }
+        // normaliza a la escala del diseño: 2.5 y 2.50 son el mismo importe
+        amount = amount.setScale(SCALE, ROUNDING);
+    }
+
+    public static Money of(BigDecimal amount, Currency currency) {
+        return new Money(amount, currency);
+    }
+
+    public Money add(Money other) {
+        requireSameCurrency(other);
+        return new Money(amount.add(other.amount), currency);
+    }
+
+    public Money subtract(Money other) {
+        requireSameCurrency(other);
+        return new Money(amount.subtract(other.amount), currency);
+    }
+
+    /** Aplica una tasa (IVA, descuento) redondeando al último decimal del diseño. */
+    public Money multiply(BigDecimal rate) {
+        return new Money(amount.multiply(rate).setScale(SCALE, ROUNDING), currency);
+    }
+
+    /** FL-07: reparte el importe entre `parts`; el resto va a la primera parte. */
+    public Money divide(int parts) {
+        return new Money(amount.divide(BigDecimal.valueOf(parts), SCALE, ROUNDING), currency);
+    }
+
+    public boolean isNegative() {
+        return amount.compareTo(BigDecimal.ZERO) < 0;
+    }
+
+    public boolean isGreaterThan(Money other) {
+        requireSameCurrency(other);
+        return amount.compareTo(other.amount) > 0;
+    }
+
+    private void requireSameCurrency(Money other) {
+        if (other == null || !currency.equals(other.currency)) {
+            throw new CurrencyMismatchError();
+        }
+    }
+}
+```
+
+Puntos que no son negociables en ese código:
+
+- **`divide` nunca sin escala ni `MathContext`**: `1 / 3` en `BigDecimal` sin escala lanza
+  `ArithmeticException` en tiempo de ejecución, no en compilación.
+- **Comparar con `compareTo`, nunca con `equals`**. El `equals` del record compara la escala, así
+  que sirve para "¿son el mismo valor con la misma representación?" pero no para "¿es mayor que
+  cero?". Toda guarda de invariante y toda comparación de negocio usa `compareTo`.
+- **Ni un `double` en el camino**: nada de `amount.doubleValue()` para "calcular rápido" y volver a
+  `BigDecimal`; el redondeo binario se cuela justo ahí.
+
+La escala y el redondeo **no se eligen aquí**: la escala sale de `constraints.scale` del artefacto
+`domain`, y el redondeo de las Convenciones de determinación de `validation-scenarios.md`. Si el
+diseño no declara el redondeo, se aplica `HALF_UP` y se **deja constancia** del default —en el
+Javadoc de la constante, como arriba, y en el reporte del agente— para que el diseñador lo confirme
+o lo corrija aguas arriba. Un redondeo elegido en silencio rompe la equivalencia entre stacks del
+mismo diseño (`conventions/flow-fidelity.md`).
+
 ## Qué NO entra en el dominio
 
 - JPA, Spring o cualquier clase de `infrastructure` (regla dura de `constitution.md`).

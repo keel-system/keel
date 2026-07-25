@@ -21,7 +21,7 @@ Generador **Java / Spring Boot** para diseños Keel, instalado en este workspace
 | `.claude/agents/keel-spring-{code,infra,validate,quality}.md` (en la raíz del workspace) | Los subagentes de la orquestación: código, infraestructura, validación funcional y calidad no-conductual |
 | `orchestration.md` | Flujo de la orquestación de agentes: fases, gating, ciclos de reintento y handoffs |
 | `architecture.md` | Arquitectura hexagonal + CQRS y función de cada paquete (copiado a `.claude/architecture.md` del proyecto generado) |
-| `constitution.md` | Reglas inviolables: frontera hexagonal, transaccionalidad, contratos públicos (copiado a `.claude/constitution.md`) |
+| `constitution.md` | Reglas inviolables: frontera hexagonal, transaccionalidad, contratos públicos, precisión numérica (copiado a `.claude/constitution.md`) |
 | `conventions/project-layout.md` | Stack por defecto y estructura del proyecto generado |
 | `conventions/mapping.md` | Tabla normativa de mapeo diseño → código Spring, por capa |
 | `conventions/infra-validation.md` | Sondeo de la infraestructura de prueba vía `devtools` + reset de datos entre flujos |
