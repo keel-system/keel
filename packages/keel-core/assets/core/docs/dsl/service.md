@@ -5,7 +5,7 @@ Archivo: `specs/<servicio>/service.keel.yaml` · Schema: [`schema/service.schema
 El manifiesto es el punto de entrada del diseño: identidad del servicio y declaración de las capas presentes. La CLI y las skills siempre parten de aquí.
 
 ```yaml
-keel: "2.0"
+keel: "2.2"
 
 service:
   name: product-catalog        # kebab-case
@@ -21,6 +21,7 @@ layers:
   security: security.keel.yaml
   messaging: messaging.keel.yaml
   http-clients: http-clients.keel.yaml
+  dependencies: dependencies.keel.yaml
   persistence: persistence.keel.yaml
 ```
 

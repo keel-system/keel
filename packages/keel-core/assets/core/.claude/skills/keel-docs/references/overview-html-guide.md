@@ -80,6 +80,11 @@ aplica» (atenuada) — ese es el valor informativo: se ve de un vistazo lo que 
 | `security` | Seguridad | hay capa `security` | Protocolo, M2M (`serviceAuth.protocol` o `no`), Roles (nº), Permisos (nº), Clientes máquina (nº) |
 | `schedule` | Trabajos programados | alguna operación declara `schedule` | una fila por operación: `[<operación>, <cron>]` |
 
+> **Seguimiento (pendiente).** La capa `dependencies` (DSL 2.2) aún no tiene tarjeta propia. Cuando se
+> añada, sería `dependencies` — «Depende de» — activa si hay capa `dependencies`, con una fila por
+> servidor: `[<proveedor>, "contrato <version> · <n> necesidades · <estrategias>"]`. Hasta entonces, el
+> panel no refleja de qué otros servidores depende el servicio; está en `DESIGN.md` §Fronteras.
+
 `headline` resume la tarjeta en una frase; con `active: false`, di por qué no aplica («El servicio no
 declara capa de persistencia: no guarda estado propio.»). Cuando el broker está activo, la `note` debe
 recordar que el broker concreto se decide al generar.

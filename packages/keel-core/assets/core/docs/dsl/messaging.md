@@ -131,6 +131,7 @@ Es también la forma que asume `envelope: keel` al describir el [contrato de rec
 ## Qué NO va aquí
 
 - Qué operación emite cada evento → `use-cases` (`emits`).
+- **Por qué existe una suscripción**: de qué dependencia forma parte, qué copia local alimenta y qué compensa → capa `dependencies`. Aquí se declara el canal de entrada; allí, la razón de negocio que lo justifica.
 - La frontera transaccional que sostiene el outbox → `persistence` (`consistency`).
 - El broker concreto y el nombre físico del topic/cola que respalda cada canal → se deciden al **generar**, nunca en el spec. También el de un canal `external`, cuyo nombre real ya existe fuera: entra como parámetro de despliegue, no como dato de diseño.
 - El consumer group / la durabilidad de la suscripción y el número de consumidores → decisión de generación y despliegue.

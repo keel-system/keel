@@ -18,6 +18,7 @@ export function checkCrossRefs({ layers, wip = false }) {
   const security = layers['security'];
   const messaging = layers['messaging'];
   const httpClients = layers['http-clients'];
+  const dependencies = layers['dependencies'];
   const persistence = layers['persistence'];
   const storage = layers['storage'];
 
@@ -33,6 +34,18 @@ export function checkCrossRefs({ layers, wip = false }) {
   const referencedBuckets = new Set(); // buckets citados por algún campo file (para detectar huérfanos)
   const channels = new Set(Object.keys(messaging?.channels ?? {}));
   const referencedChannels = new Set(); // canales citados por eventos/suscripciones (para detectar huérfanos)
+  const httpCallKeys = new Set(); // `${clientId}|${callName}` — lo llena el bloque http-clients
+  const usedHttpCalls = new Set(); // clientes citados por algún need (para detectar clientes sin dependencia)
+
+  // Códigos de error declarados: el catálogo completo y el subconjunto por operación.
+  // Los consume dependencies (onMiss.action: fail exige un error que alguien declare).
+  const declaredErrorCodes = new Set();
+  const errorCodesByOp = new Map();
+  for (const [opName, op] of Object.entries(useCases.operations ?? {})) {
+    const codes = new Set((op.errors ?? []).map((error) => error?.code).filter(Boolean));
+    errorCodesByOp.set(opName, codes);
+    for (const code of codes) declaredErrorCodes.add(code);
+  }
 
   // allowWireName: solo los contratos de sistemas externos (messaging.subscriptions,
   // http-clients) pueden renombrar campos al nombre real del cable.
@@ -539,6 +552,7 @@ export function checkCrossRefs({ layers, wip = false }) {
   for (const [clientId, client] of Object.entries(httpClients?.clients ?? {})) {
     for (const [callName, call] of Object.entries(client.calls ?? {})) {
       const where = `http-clients: clients.${clientId}.calls.${callName}`;
+      httpCallKeys.add(`${clientId}|${callName}`);
       for (const section of ['pathParams', 'queryParams', 'headers', 'body']) {
         checkFieldMap(call.request?.[section], `${where}.request.${section}`, {
           allowWireName: true,
@@ -576,6 +590,151 @@ export function checkCrossRefs({ layers, wip = false }) {
 
       if (call.circuitBreaker && !call.fallback) {
         warnings.push(`${where}: circuitBreaker sin fallback — define qué hace el servicio con el circuito abierto`);
+      }
+    }
+  }
+
+  // dependencies: la capa de síntesis — solo referencia a las demás, nunca las redeclara.
+  // Todo el bloque (incluidas las reglas inversas del final) va dentro de este if: un diseño
+  // que no declara la capa no puede ganar avisos nuevos.
+  if (dependencies) {
+    const subscriptions = messaging?.subscriptions ?? {};
+    const replicaEntities = new Map(); // entidad → primer need que la replica
+
+    // Una réplica es una entidad de dominio que hay que guardar: sin persistence no hay dónde.
+    // Como el per-aggregate de persistence, es error también con --wip.
+    const checkReplica = (replica, need, where) => {
+      const entityName = replica.entity;
+      const entity = domain.entities?.[entityName];
+      if (!entity) {
+        errors.push(`${where}.replica.entity: la entidad '${entityName}' no existe en domain: entities`);
+      } else if (!(replica.keyField in (entity.fields ?? {}))) {
+        errors.push(
+          `${where}.replica.keyField: el campo '${replica.keyField}' no existe en la entidad '${entityName}'`
+        );
+      } else if (entity.fields[replica.keyField]?.unique !== true) {
+        warnings.push(
+          `${where}.replica.keyField: '${replica.keyField}' no es unique en '${entityName}' — la copia podría duplicarse ante reentregas`
+        );
+      }
+
+      if (!persistence) {
+        errors.push(`${where}.replica: una copia local exige capa persistence (no hay dónde guardarla)`);
+      } else if (entity && !(entityName in (persistence.entities ?? {}))) {
+        warnings.push(
+          `${where}.replica.entity: '${entityName}' no aparece en persistence: entities — la copia local no se persistiría`
+        );
+      }
+
+      if (entityName) {
+        if (replicaEntities.has(entityName)) {
+          warnings.push(
+            `${where}.replica.entity: '${entityName}' ya la replica el need '${replicaEntities.get(entityName)}'`
+          );
+        } else {
+          replicaEntities.set(entityName, need);
+        }
+      }
+    };
+
+    // Un evento consumido del proveedor: existe como suscripción y su source concuerda.
+    const checkConsumedEvent = (event, where, depName, label) => {
+      if (!consumedEvents.has(event)) {
+        if (!messaging && wip) {
+          pending.push(`${where}: el evento '${event}' está pendiente de definir en messaging: subscriptions`);
+        } else {
+          errors.push(
+            `${where}: el evento '${event}' no está en messaging: subscriptions` +
+              (messaging ? '' : ' (no hay capa messaging)')
+          );
+        }
+        return;
+      }
+      const source = subscriptions[event]?.source;
+      if (source && source !== depName) {
+        warnings.push(
+          `${where}: la ${label} '${event}' declara source '${source}', distinto de la dependencia '${depName}'`
+        );
+      }
+    };
+
+    for (const [depName, dep] of Object.entries(dependencies.dependencies ?? {})) {
+      for (const [need, spec] of Object.entries(dep.needs ?? {})) {
+        const where = `dependencies: ${depName}.needs.${need}`;
+
+        for (const opName of spec.usedBy ?? []) {
+          if (!operationNames.has(opName)) {
+            errors.push(`${where}.usedBy: la operación '${opName}' no existe en use-cases`);
+          }
+        }
+
+        if (spec.fetchedFrom) {
+          const { client, call } = spec.fetchedFrom;
+          usedHttpCalls.add(client);
+          if (!httpClients) {
+            if (wip) {
+              pending.push(`${where}.fetchedFrom: el cliente '${client}' está pendiente de definir en http-clients`);
+            } else {
+              errors.push(
+                `${where}.fetchedFrom: el cliente '${client}' no está en http-clients: clients (no hay capa http-clients)`
+              );
+            }
+          } else if (!(client in (httpClients.clients ?? {}))) {
+            errors.push(`${where}.fetchedFrom: el cliente '${client}' no está en http-clients: clients`);
+          } else if (!httpCallKeys.has(`${client}|${call}`)) {
+            errors.push(
+              `${where}.fetchedFrom: la llamada '${call}' no existe en http-clients: clients.${client}.calls`
+            );
+          }
+        }
+
+        if (spec.replica) {
+          checkReplica(spec.replica, need, where);
+          for (const event of spec.replica.fedBy ?? []) {
+            checkConsumedEvent(event, `${where}.replica.fedBy`, depName, 'suscripción');
+          }
+
+          // Que el error exista es error duro: el generador lanza esa excepción y solo
+          // la genera si alguna operación la declaró en su catálogo.
+          const code = spec.replica.onMiss?.error;
+          if (code) {
+            if (!declaredErrorCodes.has(code)) {
+              errors.push(
+                `${where}.replica.onMiss.error: el código '${code}' no lo declara ninguna operación de use-cases`
+              );
+            } else if (!(spec.usedBy ?? []).some((opName) => errorCodesByOp.get(opName)?.has(code))) {
+              warnings.push(
+                `${where}.replica.onMiss.error: '${code}' no lo declara ninguna de las operaciones de usedBy`
+              );
+            }
+          }
+        }
+      }
+
+      for (const [index, compensation] of (dep.compensations ?? []).entries()) {
+        checkConsumedEvent(
+          compensation.onEvent,
+          `dependencies: ${depName}.compensations[${index}]`,
+          depName,
+          'suscripción'
+        );
+      }
+    }
+
+    // Inversas: todo canal de integración existe porque alguna dependencia lo justifica.
+    const declaredDependencies = new Set(Object.keys(dependencies.dependencies ?? {}));
+    for (const clientId of Object.keys(httpClients?.clients ?? {})) {
+      if (!usedHttpCalls.has(clientId)) {
+        warnings.push(
+          `http-clients: clients.${clientId}: ningún need de dependencies lo usa — ¿de qué dependencia forma parte?`
+        );
+      }
+    }
+    for (const [event, sub] of Object.entries(subscriptions)) {
+      if (sub.source && !declaredDependencies.has(sub.source)) {
+        warnings.push(
+          `messaging: subscriptions.${event}: su source '${sub.source}' no está declarado en dependencies`
+        );
       }
     }
   }

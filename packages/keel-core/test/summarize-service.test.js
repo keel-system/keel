@@ -105,7 +105,15 @@ test('summarizeService resume un servicio completo domain + use-cases', (t) => {
   assert.deepEqual(result.status.pending, []);
   assert.equal(result.status.ok, true);
   assert.deepEqual(result.layers.present, ['domain', 'use-cases']);
-  assert.deepEqual(result.layers.absent, ['api', 'security', 'messaging', 'http-clients', 'persistence', 'storage']);
+  assert.deepEqual(result.layers.absent, [
+    'api',
+    'security',
+    'messaging',
+    'http-clients',
+    'dependencies',
+    'persistence',
+    'storage'
+  ]);
 
   const { domain, useCases } = result.summary;
   assert.equal(domain.typeCount, 2);
@@ -144,7 +152,7 @@ test('summarizeService resume las capas opcionales', (t) => {
   const { layers, summary } = summarizeService(dir);
 
   assert.equal(layers.present.length, 8);
-  assert.deepEqual(layers.absent, []);
+  assert.deepEqual(layers.absent, ['dependencies']);
   assert.deepEqual(summary.api, {
     style: 'rest',
     basePath: '/api/v1',

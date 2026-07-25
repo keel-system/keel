@@ -1031,3 +1031,266 @@ test('cors con tokenLocation cookie y allowCredentials true es válido', () => {
   const { errors } = run(layers);
   assert.deepEqual(errors, []);
 });
+
+// --- dependencies: qué otros servidores necesita este y cómo lee su dato ---
+
+const depsLayers = () => ({
+  domain: {
+    entities: {
+      Order: entity({ total: { type: 'decimal', required: true } }),
+      ProductSnapshot: entity({
+        productId: { type: 'uuid', required: true, unique: true },
+        price: { type: 'decimal', required: true },
+      }),
+    },
+  },
+  'use-cases': {
+    operations: {
+      createOrder: {
+        description: 'Crea un pedido a partir de los productos elegidos.',
+        kind: 'command',
+        input: { fields: { productId: { type: 'uuid', required: true } } },
+        output: { entity: 'Order' },
+        errors: [{ code: 'PRICE_UNAVAILABLE', when: 'No se conoce el precio vigente del producto.' }],
+      },
+      applyProductSnapshot: {
+        description: 'Actualiza la copia local del producto con lo que informa catalog.',
+        kind: 'command',
+        internal: true,
+        input: { fields: { productId: { type: 'uuid', required: true }, price: { type: 'decimal', required: true } } },
+        output: 'void',
+      },
+    },
+  },
+  api: { endpoints: { createOrder: { method: 'POST', path: '/orders' } } },
+  security: { authentication: { protocol: 'oidc' }, access: { default: { level: 'required' } } },
+  messaging: {
+    subscriptions: {
+      ProductUpdated: {
+        source: 'catalog',
+        payload: { productId: { type: 'uuid', required: true }, price: { type: 'decimal', required: true } },
+        triggers: 'applyProductSnapshot',
+      },
+    },
+  },
+  'http-clients': {
+    clients: {
+      catalog: {
+        purpose: 'Resolver la información de productos al construir pedidos.',
+        calls: { getProductsByIds: { contract: 'POST /internal/products/batch-get -> lista de productos.' } },
+      },
+    },
+  },
+  dependencies: {
+    dependencies: {
+      catalog: {
+        description: 'Fuente de verdad de productos y precios.',
+        contract: { version: '0.2.0' },
+        needs: {
+          productPricing: {
+            description: 'Precio y estado del producto al construir un pedido.',
+            usedBy: ['createOrder'],
+            strategy: 'replicated',
+            fetchedFrom: { client: 'catalog', call: 'getProductsByIds' },
+            replica: {
+              entity: 'ProductSnapshot',
+              keyField: 'productId',
+              fedBy: ['ProductUpdated'],
+              onMiss: { action: 'fetch' },
+            },
+          },
+        },
+      },
+    },
+  },
+  persistence: { default: { model: 'relational' }, entities: { Order: {}, ProductSnapshot: {} } },
+});
+
+const need = (layers) => layers.dependencies.dependencies.catalog.needs.productPricing;
+
+test('dependencies coherente no produce errores ni warnings', () => {
+  const { errors, warnings } = run(depsLayers());
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
+test('spec sin capa dependencies sigue validando limpio (retrocompatibilidad)', () => {
+  const layers = depsLayers();
+  delete layers.dependencies;
+  const { errors, warnings } = run(layers);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
+test('usedBy hacia una operación inexistente es error', () => {
+  const layers = depsLayers();
+  need(layers).usedBy = ['repriceOrder'];
+  const { errors } = run(layers);
+  assert.ok(errors.some((e) => e.includes(`usedBy: la operación 'repriceOrder' no existe en use-cases`)));
+});
+
+test('fetchedFrom con cliente inexistente es error', () => {
+  const layers = depsLayers();
+  need(layers).fetchedFrom.client = 'pricing';
+  const { errors } = run(layers);
+  assert.ok(errors.some((e) => e.includes(`fetchedFrom: el cliente 'pricing' no está en http-clients: clients`)));
+});
+
+test('fetchedFrom sin capa http-clients queda pendiente con --wip', () => {
+  const layers = depsLayers();
+  delete layers['http-clients'];
+  const { errors, pending } = run(layers, true);
+  assert.deepEqual(errors, []);
+  assert.ok(pending.some((p) => p.includes(`fetchedFrom: el cliente 'catalog' está pendiente de definir`)));
+});
+
+test('fetchedFrom sin capa http-clients es error sin --wip', () => {
+  const layers = depsLayers();
+  delete layers['http-clients'];
+  const { errors } = run(layers);
+  assert.ok(errors.some((e) => e.includes('(no hay capa http-clients)')));
+});
+
+test('fetchedFrom con llamada inexistente es error', () => {
+  const layers = depsLayers();
+  need(layers).fetchedFrom.call = 'getProduct';
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) => e.includes(`fetchedFrom: la llamada 'getProduct' no existe en http-clients: clients.catalog.calls`))
+  );
+});
+
+test('replica hacia una entidad inexistente es error', () => {
+  const layers = depsLayers();
+  need(layers).replica.entity = 'ProductCopy';
+  const { errors } = run(layers);
+  assert.ok(errors.some((e) => e.includes(`replica.entity: la entidad 'ProductCopy' no existe en domain: entities`)));
+});
+
+test('replica.keyField que no es campo de la entidad es error', () => {
+  const layers = depsLayers();
+  need(layers).replica.keyField = 'sku';
+  const { errors } = run(layers);
+  assert.ok(errors.some((e) => e.includes(`replica.keyField: el campo 'sku' no existe en la entidad 'ProductSnapshot'`)));
+});
+
+test('replica sin capa persistence es error incluso con --wip', () => {
+  const layers = depsLayers();
+  delete layers.persistence;
+  const { errors } = run(layers, true);
+  assert.ok(errors.some((e) => e.includes('replica: una copia local exige capa persistence')));
+});
+
+test('replica cuya entidad no está en persistence.entities es warning', () => {
+  const layers = depsLayers();
+  delete layers.persistence.entities.ProductSnapshot;
+  const { warnings } = run(layers);
+  assert.ok(warnings.some((w) => w.includes(`'ProductSnapshot' no aparece en persistence: entities`)));
+});
+
+test('replica.keyField sin unique es warning', () => {
+  const layers = depsLayers();
+  delete layers.domain.entities.ProductSnapshot.fields.productId.unique;
+  const { warnings } = run(layers);
+  assert.ok(warnings.some((w) => w.includes(`replica.keyField: 'productId' no es unique`)));
+});
+
+test('fedBy hacia un evento no suscrito es error', () => {
+  const layers = depsLayers();
+  need(layers).replica.fedBy = ['ProductRetired'];
+  const { errors } = run(layers);
+  assert.ok(errors.some((e) => e.includes(`fedBy: el evento 'ProductRetired' no está en messaging: subscriptions`)));
+});
+
+test('fedBy sin capa messaging queda pendiente con --wip', () => {
+  const layers = depsLayers();
+  delete layers.messaging;
+  delete layers['use-cases'].operations.applyProductSnapshot;
+  const { pending } = run(layers, true);
+  assert.ok(pending.some((p) => p.includes(`fedBy: el evento 'ProductUpdated' está pendiente de definir`)));
+});
+
+test('fedBy cuyo source no coincide con la dependencia es warning', () => {
+  const layers = depsLayers();
+  layers.messaging.subscriptions.ProductUpdated.source = 'inventory';
+  const { warnings } = run(layers);
+  assert.ok(warnings.some((w) => w.includes(`declara source 'inventory', distinto de la dependencia 'catalog'`)));
+});
+
+test('onMiss.error que no declara ninguna operación es error', () => {
+  const layers = depsLayers();
+  need(layers).replica.onMiss = { action: 'fail', error: 'PRODUCT_UNKNOWN' };
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) => e.includes(`onMiss.error: el código 'PRODUCT_UNKNOWN' no lo declara ninguna operación`))
+  );
+});
+
+test('onMiss.error declarado fuera de las operaciones de usedBy es warning', () => {
+  const layers = depsLayers();
+  need(layers).replica.onMiss = { action: 'fail', error: 'PRICE_UNAVAILABLE' };
+  need(layers).usedBy = ['applyProductSnapshot'];
+  const { errors, warnings } = run(layers);
+  assert.deepEqual(errors, []);
+  assert.ok(warnings.some((w) => w.includes(`'PRICE_UNAVAILABLE' no lo declara ninguna de las operaciones de usedBy`)));
+});
+
+test('dos needs replicando la misma entidad es warning', () => {
+  const layers = depsLayers();
+  layers.dependencies.dependencies.catalog.needs.productAvailability = {
+    usedBy: ['createOrder'],
+    strategy: 'replicated',
+    replica: {
+      entity: 'ProductSnapshot',
+      keyField: 'productId',
+      fedBy: ['ProductUpdated'],
+      onMiss: { action: 'degrade', degradedTo: 'Se asume disponible y se revisa al confirmar.' },
+    },
+  };
+  const { warnings } = run(layers);
+  assert.ok(warnings.some((w) => w.includes(`'ProductSnapshot' ya la replica el need 'productPricing'`)));
+});
+
+test('compensations hacia un evento no suscrito es error', () => {
+  const layers = depsLayers();
+  layers.dependencies.dependencies.catalog.compensations = [
+    { onEvent: 'OrderPaymentFailed', description: 'Revierte la reserva contra catalog.' },
+  ];
+  const { errors } = run(layers);
+  assert.ok(errors.some((e) => e.includes(`el evento 'OrderPaymentFailed' no está en messaging: subscriptions`)));
+});
+
+test('cliente http que ningún need usa es warning', () => {
+  const layers = depsLayers();
+  layers['http-clients'].clients.shipping = {
+    purpose: 'Calcular los gastos de envío del pedido.',
+    calls: { quote: { contract: 'POST /quotes -> coste de envío.' } },
+  };
+  const { warnings } = run(layers);
+  assert.ok(warnings.some((w) => w.includes('clients.shipping: ningún need de dependencies lo usa')));
+});
+
+test('suscripción cuyo source no está en dependencies es warning', () => {
+  const layers = depsLayers();
+  layers.messaging.subscriptions.StockDepleted = {
+    source: 'inventory',
+    payload: { productId: { type: 'uuid', required: true }, price: { type: 'decimal', required: true } },
+    triggers: 'applyProductSnapshot',
+  };
+  const { warnings } = run(layers);
+  assert.ok(warnings.some((w) => w.includes(`subscriptions.StockDepleted: su source 'inventory' no está declarado`)));
+});
+
+test('strategy on-demand no arrastra persistence ni messaging', () => {
+  const layers = depsLayers();
+  delete layers.messaging;
+  delete layers.persistence;
+  delete layers.domain.entities.ProductSnapshot;
+  delete layers['use-cases'].operations.applyProductSnapshot;
+  const spec = need(layers);
+  spec.strategy = 'on-demand';
+  delete spec.replica;
+  const { errors, warnings } = run(layers);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});

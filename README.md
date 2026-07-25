@@ -66,14 +66,15 @@ keel-spring build specs/mi-servicio      # instala la skill, valida, pregunta el
 mi-proyecto/
 ├── CLAUDE.md                 # el flujo, para el agente
 ├── README.md                 # índice de servicios diseñados (enlaza cada DESIGN.md) — página de entrada del repo
-├── .claude/skills/           # keel-design, keel-validate, keel-generate, keel-docs, keel-handoff (+ generadores)
+├── .claude/skills/           # keel-design, keel-consume, keel-validate, keel-generate, keel-docs, keel-handoff (+ generadores)
 ├── schema/                   # un JSON Schema por capa + common.schema.json
 ├── specs/<servicio>/         # el diseño de cada servicio, un artefacto por capa — la fuente de verdad
 │   ├── service.keel.yaml     #   manifiesto: identidad + capas declaradas
 │   ├── domain.keel.yaml      #   entidades, types, invariantes (obligatoria)
 │   ├── use-cases.keel.yaml   #   operaciones, idempotencia, caché (obligatoria)
-│   └── *.keel.yaml           #   api, security, messaging, http-clients, persistence (opcionales)
+│   └── *.keel.yaml           #   api, security, messaging, http-clients, dependencies, persistence (opcionales)
 ├── templates/service/        # una plantilla por capa
+├── contracts/<proveedor>/    # INTEGRATION.md de servidores externos de los que dependemos (entrada de /keel-consume)
 ├── docs/                     # methodology, dsl-reference (índice), dsl/<capa>.md, building-a-generator
 ├── generators/<tech>/        # generadores instalados con `keel-<tech> build` (conventions + skills por tecnología + golden)
 └── services/                 # servicios generados (un repo git propio cada uno)

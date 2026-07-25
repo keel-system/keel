@@ -11,7 +11,9 @@ src/main/java/<base>/
 │   ├── queries/         # XxxQuery records
 │   ├── usecases/        # XxxCommandHandler / XxxQueryHandler (@ApplicationComponent)
 │   ├── dtos/            # XxxResponseDto + PagedResponse<T>
-│   └── mappers/         # <Entidad>ApplicationMapper (dominio → ResponseDto)
+│   ├── mappers/         # <Entidad>ApplicationMapper (dominio → ResponseDto)
+│   └── projection/      # solo con capa dependencies: <E>Projector (mantiene la copia
+│                        #   local de un dato ajeno) + <E>Reader (la lee con la política onMiss)
 ├── domain/              # el negocio — puro, sin JPA ni ningún framework
 │   ├── aggregate/       # raíces de agregado: ctor completo + transitionTo + invariantes
 │   ├── entity/          # entidades internas de agregado (puras)

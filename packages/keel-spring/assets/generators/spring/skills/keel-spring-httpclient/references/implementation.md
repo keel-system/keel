@@ -113,3 +113,21 @@ build deja `throw new UnsupportedOperationException("TODO: ...")` con el `contra
 en un comentario. Deriva de la frase el verbo, la ruta (relativa a `base-url`), los
 params y el body, y arma la llamada como arriba. Si la prosa es ambigua, es un
 **hueco del diseño**: repórtalo, no inventes la ruta.
+
+## Hidratación de una proyección (capa `dependencies`)
+
+Con `strategy: replicated` y `onMiss: fetch`, el `<Entidad>Reader` generado tiene un `hydrate(...)` con
+un TODO: pedir el dato al proveedor cuando la copia local aún no lo tiene. Cómo completarlo:
+
+1. **Invoca el puerto**, no el adaptador: `<Cliente>Client.<call>(...)`, el mismo que ya generó `build`
+   desde `http-clients`. El Reader lo recibe por constructor.
+2. **Mapea con el ACL** — el `<Llamada>Result` que devuelve el puerto se traduce a la entidad de la
+   réplica. El record wire nunca cruza a `domain` ni a `application`.
+3. **Persiste y devuelve**: `repository.save(...)` y `Optional.of(...)`.
+4. **No repitas la resiliencia.** El `@Retry` y el `@CircuitBreaker` ya están en el adaptador. Si el
+   circuito está abierto, el `fallback` de la llamada decide; el Reader no lo duplica ni lo sortea.
+5. **Un `404` del proveedor no es un fallo a reintentar**: significa que el recurso no existe. Devuelve
+   `Optional.empty()` y deja que decida quien llama.
+6. **Cuidado con la transacción**: el mediator ya abrió una al despachar el caso de uso, así que la
+   llamada de red ocurre dentro. Desde una query es aceptable; desde un command que escribe, resuelve
+   el dato antes de despachar. Ver `.claude/conventions/dependencies.md`.

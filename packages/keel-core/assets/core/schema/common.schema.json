@@ -29,6 +29,33 @@
       "pattern": "^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*$",
       "description": "Permiso en formato recurso:accion (ej. product:write)."
     },
+    "semver": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Versión semántica (mayor.menor.parche)."
+    },
+    "errorCode": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]*$",
+      "description": "Código de error estable en SCREAMING_SNAKE_CASE."
+    },
+    "httpCallRef": {
+      "type": "object",
+      "required": ["client", "call"],
+      "additionalProperties": false,
+      "description": "Referencia a una llamada declarada en la capa http-clients. Referencia, nunca redeclaración: el método, la ruta y la resiliencia viven allí.",
+      "properties": {
+        "client": {
+          "$ref": "#/$defs/kebabName",
+          "description": "Cliente declarado en http-clients: clients."
+        },
+        "call": {
+          "$ref": "#/$defs/operationName",
+          "description": "Llamada declarada en clients.<client>.calls."
+        },
+        "description": { "type": "string" }
+      }
+    },
     "constraints": {
       "type": "object",
       "additionalProperties": false,
@@ -322,11 +349,7 @@
       "required": ["code", "when"],
       "additionalProperties": false,
       "properties": {
-        "code": {
-          "type": "string",
-          "pattern": "^[A-Z][A-Z0-9_]*$",
-          "description": "Código de error estable en SCREAMING_SNAKE_CASE."
-        },
+        "code": { "$ref": "#/$defs/errorCode" },
         "when": { "type": "string", "minLength": 5 },
         "http": { "type": "integer", "minimum": 400, "maximum": 599 }
       }

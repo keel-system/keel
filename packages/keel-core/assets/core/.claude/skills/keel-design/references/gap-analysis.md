@@ -115,16 +115,26 @@ Por cada suscripción:
 - ¿Tiene `messageId` para deduplicar? Con `retry` y sin `messageId`, los duplicados son seguros, no probables.
 - ¿La operación disparada es idempotente?
 - ¿Qué se hace con un mensaje que **nunca** va a poder procesarse (payload inválido, referencia inexistente)? ¿DLQ, o reintento infinito?
-- ¿El evento llega **antes** que la entidad que referencia? Es el fallo de orden más común entre servicios.
+- ¿El evento llega **antes** que la entidad que referencia? Es el fallo de orden más común entre servicios. Si el servicio mantiene una réplica de esa entidad, la respuesta se declara: es su `dependencies.*.replica.onMiss` (ver clase 8).
 
 ### 8. Fallo de dependencias externas
 
-Por cada cliente de `http-clients` y cada suscripción:
+Si el servicio declara la capa `dependencies`, este barrido se hace **por `need`**, no por cliente: la unidad de análisis es el dato que necesitamos, no el canal por el que llega.
+
+Por cada cliente de `http-clients`, cada suscripción y cada `need`:
 
 - Cuando la dependencia **cae o tarda**, ¿qué ve el llamante de nuestra API? ¿Un error declarado con `code` propio, o un fallo genérico? Un timeout sin traducción a error de negocio es un hueco de contrato.
-- El `fallback` del circuit breaker: ¿produce un resultado **correcto** (valor por defecto aceptable para el negocio) o solo evita el error? Un fallback que devuelve datos falsos silenciosamente es peor que fallar.
-- ¿La llamada externa ocurre **dentro** de una transacción de escritura? Si sí, un timeout deja la transacción abierta: hay que separar.
-- Si la llamada externa es una **escritura** que no podemos deshacer y luego fallamos, ¿queda inconsistencia? ¿Hay compensación, o se acepta?
+- El `fallback` del circuit breaker: ¿produce un resultado **correcto** (valor por defecto aceptable para el negocio) o solo evita el error? Un fallback que devuelve datos falsos silenciosamente es peor que fallar. **Mismo criterio para `onMiss.action: degrade`**: si el cliente no puede distinguir la respuesta degradada de la normal, no es degradación, es un bug declarado.
+- ¿La llamada externa ocurre **dentro** de una transacción de escritura? Si sí, un timeout deja la transacción abierta: hay que separar. Ojo con los `need` de `strategy: on-demand` usados por un `command`.
+- Si la llamada externa es una **escritura** que no podemos deshacer y luego fallamos, ¿queda inconsistencia? ¿Hay compensación? Si la hay, ¿está declarada en `dependencies.<dep>.compensations` y respaldada por una suscripción real, o solo vive en la conversación?
+
+Por cada `need` con `strategy: replicated`:
+
+- ¿`fedBy` cubre **todas** las vías de cambio del dato en el proveedor, incluidas **bajas y retiradas**? Si falta la baja, la copia conserva para siempre algo que ya no existe y nadie se entera. Es el hueco más frecuente de esta clase.
+- ¿El `onMiss` declarado produce un resultado de negocio **aceptable**, o solo evita el error?
+- ¿La copia se lee en algún sitio **como si fuera fuente de verdad** (se expone tal cual en una respuesta, se le aplican invariantes, se escribe desde una operación de negocio)? Es el error de diseño más caro de esta capa.
+- ¿Se copian campos que **ninguna** operación de `usedBy` lee? Cada campo copiado es acoplamiento a una decisión ajena.
+- ¿Qué pasa si dos eventos del proveedor llegan **desordenados**? La respuesta correcta suele ser del generador (comparar el instante del hecho), pero si el diseño no da ningún instante en el payload, el generador no puede resolverlo: eso sí es un hueco del diseño.
 
 ### 9. Autorización a nivel de dato
 
@@ -149,6 +159,8 @@ Si hay capa `storage`:
 ### 11. Superficie servidor-a-servidor
 
 Si `api` declara `audience: services`/`both`:
+
+Esta clase y la 8 son **simétricas**: aquí se examina la superficie que **ofrecemos** a otros servidores; la clase 8 examina la que **consumimos** (capa `dependencies`). Recórrelas juntas — un mismo servicio suele estar a los dos lados, y los criterios de calidad se reflejan (un endpoint de lote que le falta a nuestro proveedor es el mismo hueco que un `need` nuestro que obligaría a N llamadas).
 
 - ¿Cada endpoint de máquina tiene un `serviceClient` que lo consuma? Y al revés: ¿cada scope concedido lo exige alguien?
 - ¿El contrato está pensado **para servidores**, o es el de usuarios reutilizado? Señales de hueco: el consumidor tendría que llamar N veces (falta un endpoint de lote), o recibe un DTO de pantalla en vez de datos.

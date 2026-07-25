@@ -55,9 +55,10 @@ Debe declarar explícitamente:
 
 ## La tabla de mapeo (conventions/mapping.md)
 
-Es el corazón del generador: cada construcción del DSL (entidad, campo `unique`, `rules`, `errors[].code`, `emits`, `idempotency`, `cache`, `access`, `retry`/`circuitBreaker`, `outbox`…) tiene su traducción concreta a la tecnología. Organiza la tabla **por capa** (domain, use-cases, api, security, messaging, http-clients, persistence). Criterios:
+Es el corazón del generador: cada construcción del DSL (entidad, campo `unique`, `rules`, `errors[].code`, `emits`, `idempotency`, `cache`, `access`, `retry`/`circuitBreaker`, `outbox`…) tiene su traducción concreta a la tecnología. Organiza la tabla **por capa** (domain, use-cases, api, security, messaging, http-clients, dependencies, persistence). Criterios:
 
 - Cubre **todas** las construcciones de `docs/dsl-reference.md` y `docs/dsl/<capa>.md`; si una capa o construcción no aplica, se dice explícitamente.
+- La capa `dependencies` es de **síntesis**: sus referencias (`fetchedFrom`, `replica.fedBy`) apuntan a construcciones que el generador ya traduce desde `http-clients` y `messaging`, así que no debe producir un segundo cliente ni un segundo listener. Lo que sí exige código propio es `replica` (materializar la copia y mantenerla al día de forma idempotente) y `onMiss` (la política de lectura cuando el dato falta: pedirlo, fallar con el error declarado, o degradar). Un generador puede ignorar la capa entera y seguir siendo correcto para `strategy: on-demand`; con `replicated` no, porque la copia no se mantendría sola.
 - Los `code` de error y nombres de evento se trasladan exactos: son contrato público.
 - Define el orden de autoridad: spec > mapping > golden > criterio del agente (documentado).
 - Incluye la política de tests: por operación (feliz + cada error), por invariante, y el comando de verificación que debe pasar antes de dar la generación por terminada.

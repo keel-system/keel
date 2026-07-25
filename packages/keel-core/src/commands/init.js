@@ -13,14 +13,24 @@ export function init({ force = false } = {}) {
   for (const file of skipped) console.log(`  ${pc.yellow('=')} ${file} ${pc.dim('(ya existía, omitido)')}`);
 
   console.log();
+  // Los archivos existentes nunca se pisan sin --force. Al actualizar keel-core eso deja el
+  // workspace con schemas y docs de la versión anterior (un manifiesto con una versión del DSL
+  // más nueva sería rechazado por su propio schema), así que aquí se dice explícitamente.
+  const updateHint = pc.dim(
+    '  Tras actualizar keel-core, ejecuta `keel init --force` para poner al día schemas, plantillas, docs y skills\n' +
+      '  del workspace (tus specs/ y docs/<servicio>/ no se tocan: no forman parte del payload).'
+  );
+
   if (copied.length === 0 && skipped.length > 0) {
     console.log(pc.yellow('El workspace ya estaba inicializado; no se sobrescribió nada (usa --force para sobrescribir).'));
+    console.log(updateHint);
     return;
   }
 
   console.log(pc.bold(pc.green('✔ Workspace Keel inicializado.')));
   if (skipped.length > 0) {
     console.log(pc.yellow(`  ${skipped.length} archivo(s) existente(s) se dejaron intactos (usa --force para sobrescribir).`));
+    console.log(updateHint);
   }
   console.log(`
 Próximos pasos:

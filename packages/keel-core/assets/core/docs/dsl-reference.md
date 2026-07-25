@@ -1,4 +1,4 @@
-# Referencia del DSL Keel (v2.1)
+# Referencia del DSL Keel (v2.2)
 
 Un servicio Keel se diseña como un conjunto de **artefactos por capa** en `specs/<servicio>/`, todos YAML, todos agnósticos de tecnología. Cada capa se valida contra su propio schema (`schema/<capa>.schema.json`) y se itera con el humano por separado; las capas se relacionan **por nombre** (una operación referencia entidades, un endpoint referencia una operación, un `emits` referencia un evento) y `keel validate` comprueba esas referencias cruzadas.
 
@@ -13,6 +13,7 @@ Un servicio Keel se diseña como un conjunto de **artefactos por capa** en `spec
 | security | `security.keel.yaml` | opcional | Autenticación (usuarios y clientes máquina), roles, permisos, scopes, acceso por operación, CORS | [dsl/security.md](dsl/security.md) |
 | messaging | `messaging.keel.yaml` | opcional | Canales lógicos, eventos publicados (outbox), suscripciones (retry/DLQ) | [dsl/messaging.md](dsl/messaging.md) |
 | http-clients | `http-clients.keel.yaml` | opcional | Llamadas salientes: contrato (prosa + method/path/request/response tipados opcionales), auth del cliente, timeout, retry, circuit breaker, fallback | [dsl/http-clients.md](dsl/http-clients.md) |
+| dependencies | `dependencies.keel.yaml` | opcional | De qué otros servidores depende: qué dato necesita de cada uno (`needs`) y quién lo usa, si lo lee bajo demanda o replicado (`strategy`), la copia local (`replica`), qué hace cuando falta (`onMiss`) y las compensaciones | [dsl/dependencies.md](dsl/dependencies.md) |
 | persistence | `persistence.keel.yaml` | opcional | Modelo de almacenamiento, claves naturales, índices, consistencia | [dsl/persistence.md](dsl/persistence.md) |
 | storage | `storage.keel.yaml` | opcional | Almacenamiento de archivos (object storage): buckets lógicos, content-types, tamaño, visibilidad | [dsl/storage.md](dsl/storage.md) |
 
@@ -43,6 +44,7 @@ El DSL es el activo durable de Keel: un mismo diseño se reutiliza a través de 
 
 | Versión | Cambio | Por qué pasó el test de admisión |
 |---------|--------|----------------------------------|
+| 2.2 | Capa nueva `dependencies`: los servidores de los que este depende, el dato que necesita de cada uno (`needs`) y qué operación lo usa (`usedBy`), si lo lee bajo demanda o replicado (`strategy` + `replica`), qué hace cuando le falta (`onMiss`) y qué compensa | "Este servicio no puede construir un pedido sin conocer el precio del producto, que es de catalog", "acepta un precio de hasta cinco minutos de antigüedad" y "si no lo tiene, falla con `PRICE_UNAVAILABLE`" son verdad sobre el servicio aunque nadie lo construya: son su frontera de consistencia y de disponibilidad. Sin la capa, esos hechos quedaban repartidos entre un cliente HTTP, una suscripción y una entidad, sin nada que dijera que los tres son la misma decisión — y cada generador reconstruía la relación a su manera; una réplica local era indistinguible de una entidad propia. Lo que **no** entró: `staleness`/`maxStalenessSeconds` (redundante con `strategy`, o un SLA de solución de la familia de `backoffMs` — el problema real, que un evento viejo no pise a uno nuevo, lo resuelve el generador), `criticality` (derivable de los needs) y los nombres `http`/`local-read-model` del borrador (el primero nombra un transporte, el segundo un patrón de implementación). Aditivo: todo spec 2.0/2.1 sigue siendo válido |
 | 2.1 | `list: true` en campos, con `constraints.minItems` / `maxItems`. En payloads y contratos (entradas por lotes, salidas múltiples) y en campos de entidad para colecciones de valores sin identidad (`tags`, `discounts`). Vetado dentro de un value object y en `pathParams` | "Esta operación recibe entre 1 y N identificadores" y "un pedido lleva varios descuentos sin identidad propia" son verdad sobre el servicio aunque nadie lo construya. Sin el primitivo, una entrada por lotes degradaba a `type: json` con la cota en prosa, y una colección de value objects obligaba a inventar una entidad hija con id ficticio. Aditivo: todo spec 2.0 sigue siendo válido |
 | 2.0 | Línea base multi-artefacto (un archivo por capa) | — |
 
@@ -65,11 +67,16 @@ domain ──> use-cases ──> api ──────────┐
               │            └──> security
               ├──> messaging (emits / subscriptions.triggers)
               ├──> http-clients (llamadas que hacen las operaciones)
+              ├──> dependencies ──> (domain, use-cases, messaging, http-clients, persistence)
               ├──> persistence (entidades de domain que se guardan)
               └──> storage (buckets que referencian los campos file de domain)
 ```
 
-Orden de diseño recomendado (el que sigue `/keel-design`): **domain → use-cases → api → security → messaging → http-clients → persistence → storage**.
+`dependencies` es una **capa de síntesis**: no crea llamadas ni suscripciones, declara por qué existen las que ya hay. Todas sus referencias van hacia atrás, así que se valida la última.
+
+Orden de diseño recomendado (el que sigue `/keel-design`): **domain → use-cases → dependencies → api → security → messaging → http-clients → persistence → storage**.
+
+El orden de **validación** y el momento de **diseño** de `dependencies` no coinciden, y es deliberado: la capa se valida al final porque solo referencia hacia atrás, pero se diseña en cuanto se cierran los casos de uso, que es cuando se sabe qué dato ajeno hace falta y quién lo necesita. La skill `/keel-consume` la escribe junto con `http-clients`, `messaging` y las adiciones a `domain`/`use-cases`/`persistence` **en una sola pasada coherente**, respetando internamente el orden de capas.
 
 ## Dónde vive cada decisión transversal
 
@@ -83,6 +90,9 @@ Orden de diseño recomendado (el que sigue `/keel-design`): **domain → use-cas
 | Retry / circuit breaker salientes | http-clients | Política del canal, compartida por los casos de uso |
 | Autenticación saliente (api-key, OAuth2 M2M…) | http-clients | Mecanismo por cliente; las credenciales llegan por configuración, nunca en el diseño |
 | Retry / DLQ de consumo de eventos | messaging | Política de la suscripción |
+| De qué otro servidor depende el servicio, y con qué versión de su contrato | dependencies | Es un hecho de arquitectura del servicio; `http-clients` y `messaging` declaran los canales, no el porqué |
+| Si un dato ajeno se pide al decidir o se mantiene replicado | dependencies (`strategy`) | Es la decisión de negocio disponibilidad-vs-frescura, observable en lo que la API puede prometer |
+| Qué hace el servicio cuando le falta un dato ajeno | dependencies (`onMiss`) | Comportamiento observable; obliga a declarar el error o el resultado degradado |
 | Outbox | messaging | Es la garantía de publicación de eventos |
 | Paginación | api | Concern de la API |
 | Frontera transaccional | persistence | El generador la respeta al implementar outbox y commands |

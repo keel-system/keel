@@ -110,3 +110,15 @@ propia transacción.
 - [ ] `onFailure` → reintentos acotados + DLT si `deadLetter: true`; errores de negocio excluidos.
 - [ ] `ErrorHandlingDeserializer` configurado (poison pills al DLT, no en bucle).
 - [ ] Listener envuelto en `CorrelationContext.runWith(...)` y deduplicado con `IdempotencyGuard.tryRecord(...)` (sin mecanismo propio).
+
+## Si la suscripción alimenta una proyección
+
+Cuando el diseño declara `dependencies` y el evento aparece en el `fedBy` de una réplica, **el listener
+no cambia**: sigue siendo `listener → IdempotencyGuard → UseCaseMediator → handler`. El
+`<Entidad>Projector` lo invoca ese handler, no tú.
+
+**Nunca llames al Projector desde el listener.** Sería una segunda puerta de entrada al dominio
+saltándose el mediator (lo prohíbe `constitution.md`) y duplicaría la deduplicación que ya hace el
+guard. La suscripción tiene `triggers` obligatorio precisamente para que esa operación exista.
+
+Detalle completo en `.claude/conventions/dependencies.md`.

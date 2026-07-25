@@ -38,6 +38,11 @@ repo generado se clonó suelto). Todo lo que hagas ocurre dentro de esa raíz.
    Al crear un servicio de dominio sigue `.claude/conventions/domain-services.md`; antes de
    paralelizar I/O en un handler consulta `.claude/conventions/virtual-threads.md` (solo
    query handlers con 2+ operaciones independientes).
+   Si el diseño declara la capa `dependencies`, lee `.claude/conventions/dependencies.md`
+   antes de tocar `application/projection/`: el `<Entidad>Projector` y el `<Entidad>Reader`
+   ya están generados y el cableado es listener → guard → mediator → handler → Projector.
+   **Nunca llames al Projector desde un listener** ni escribas una proyección desde un handler
+   de negocio; una réplica no es fuente de verdad y no se expone tal cual en un DTO público.
 4. Verifica **solo** con `./gradlew build -x test` (en Windows
    `gradlew.bat build -x test`): compilación y empaquetado en verde. No ejecutes
    `docker compose`, `bootRun` ni escenarios funcionales: de eso se encargan otros

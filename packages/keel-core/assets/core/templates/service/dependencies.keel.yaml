@@ -1,0 +1,38 @@
+# Capa dependencies — de qué otros servidores depende este servicio.
+# Declara, por proveedor, qué dato ajeno se necesita (needs), quién lo necesita (usedBy),
+# dónde vive la verdad que se lee (strategy) y qué pasa cuando falta (onMiss).
+#
+# Regla de la capa: REFERENCIA, nunca redeclara.
+#   - el método, la ruta, el timeout y la resiliencia de la llamada → http-clients
+#   - el payload, el contrato de recepción y el retry/DLQ del evento → messaging
+#   - los campos de la copia local → domain;  dónde se guarda → persistence
+#   - el error de negocio en sí → use-cases (errors de la operación)
+#
+# Recuerda declarar la capa en service.keel.yaml → layers.dependencies.
+
+dependencies:
+  # catalog:
+  #   description: Fuente de verdad de productos y precios.
+  #   contract:
+  #     version: "0.2.0"                     # versión del contrato del proveedor a la que nos acoplamos
+  #     source: contracts/catalog/INTEGRATION.md
+  #   needs:
+  #     productPricing:
+  #       description: Precio y estado del producto al construir un pedido.
+  #       usedBy: [createOrder, repriceOrder]      # operaciones de use-cases que lo necesitan
+  #       strategy: replicated                     # on-demand | replicated
+  #       fetchedFrom:                             # llamada de http-clients que resuelve el dato
+  #         client: catalog                        # obligatorio con on-demand y con onMiss: fetch
+  #         call: getProductsByIds
+  #       replica:                                 # obligatorio y exclusivo de replicated
+  #         entity: ProductSnapshot                # entidad de domain que materializa la copia
+  #         keyField: productId                    # correlaciona la copia con el id del proveedor
+  #         fedBy: [ProductCreated, ProductUpdated]  # suscripciones que la mantienen al día
+  #         freshness: Un precio de hasta cinco minutos vale para cotizar; para cobrar, no.
+  #         onMiss:
+  #           action: fetch                        # fetch | fail | degrade
+  #           # error: PRICE_UNAVAILABLE           # obligatorio y exclusivo de action: fail
+  #           # degradedTo: Se cotiza sin descuento y se marca el pedido para revisión.
+  #   compensations:
+  #     - onEvent: OrderPaymentFailed              # suscripción existente en messaging
+  #       description: Al fallar el cobro se revierte la reserva hecha contra catalog.

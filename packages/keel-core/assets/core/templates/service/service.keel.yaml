@@ -1,7 +1,7 @@
 # Manifiesto del servicio — punto de entrada del diseño.
 # Declara la identidad del servicio y qué capas de diseño existen.
 # Regla: una capa opcional existe si y solo si está declarada aquí (y su archivo existe).
-keel: "2.1"
+keel: "2.2"
 
 service:
   name: {{name}}
@@ -18,5 +18,6 @@ layers:
   # security: security.keel.yaml
   # messaging: messaging.keel.yaml
   # http-clients: http-clients.keel.yaml
+  # dependencies: dependencies.keel.yaml
   # persistence: persistence.keel.yaml
   # storage: storage.keel.yaml

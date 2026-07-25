@@ -31,6 +31,10 @@ const TEMPLATE_CHECKS = {
     isTemplate: (doc) => isEmptyCollection(doc?.publishing?.events) && isEmptyCollection(doc?.subscriptions)
   },
   'http-clients': { hint: 'no define ningún cliente', isTemplate: (doc) => isEmptyCollection(doc?.clients) },
+  dependencies: {
+    hint: 'no declara ninguna dependencia',
+    isTemplate: (doc) => isEmptyCollection(doc?.dependencies)
+  },
   persistence: { hint: 'no menciona ninguna entidad', isTemplate: (doc) => isEmptyCollection(doc?.entities) }
 };
 

@@ -55,5 +55,6 @@ clients:
 ## Qué NO va aquí
 
 - Eventos asíncronos → capa `messaging`.
+- **Por qué existe una llamada**: de qué servidor dependemos, qué dato le pedimos y qué caso de uso lo necesita → capa `dependencies`. Aquí se declara el canal saliente; allí, la razón de negocio que lo justifica.
 - El error de negocio que el fallback dispara (`PRICE_UNAVAILABLE`) se declara en la operación de `use-cases` que hace la llamada.
 - Credenciales o secretos de ningún tipo.

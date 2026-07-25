@@ -193,6 +193,27 @@ La publicación va **entera generada** salvo el envío físico. La cadena es: el
 | `calls.x.circuitBreaker` | resilience4j `@CircuitBreaker` con `failureRateThreshold`/`slidingWindowSize`/`waitDurationMs` |
 | `calls.x.fallback` | Método de fallback que implementa la frase del diseño; si dispara un error de negocio, usa el `code` declarado en use-cases |
 
+## `dependencies` — dependencies.keel.yaml
+
+Capa de **síntesis**: casi todo lo que referencia ya está generado por otras capas (el puerto del cliente por `http-clients`, el listener y el guard por `messaging`, la entidad y su repositorio por `domain`/`persistence`). **No generes un segundo cliente ni un segundo listener.** Lo único que exige código propio es una réplica (`strategy: replicated`): la copia local y su política de lectura. Reglas completas y antipatrones en [`dependencies.md`](dependencies.md); el cableado es **listener → IdempotencyGuard → UseCaseMediator → handler de la operación de proyección → Projector → puerto**, y el listener nunca llama al Projector.
+
+| Diseño | Código |
+|--------|--------|
+| `dependencies.D` | Nada propio: documenta en el README y el `CLAUDE.md` del proyecto de quién depende el servicio y a qué versión de contrato |
+| `needs.n.strategy: on-demand` | **Nada nuevo**: el handler de cada operación de `usedBy` invoca el puerto `<C>Client` ya generado |
+| `needs.n.usedBy` | Javadoc del Reader y de los handlers implicados; es la trazabilidad caso de uso ↔ integración |
+| `needs.n.fetchedFrom` | Referencia al método `<call>` del puerto `<C>Client`; la resiliencia ya está en su adaptador, no la repitas |
+| `needs.n.replica.entity` | Entidad de dominio + `<E>Jpa` + `<E>Repository` (ya salen de domain/persistence), con javadoc que la marca como proyección de `D` |
+| `needs.n.replica.keyField` | Clave natural de la copia → finder `findBy<KeyField>` del repositorio; es la clave del upsert |
+| `needs.n.replica` | `application/projection/<E>Projector` (`@ApplicationComponent`, sin Spring; `apply(...)` hace el upsert por `keyField` dentro de la transacción del mediator). El dominio no tiene setters: el agente añade `<E>.projectionOf(...)` y `<E>.applySnapshot(...)` con la firma que indica el TODO del Projector |
+| `needs.n.replica.fedBy` | Las suscripciones ya generadas; su handler de proyección invoca al `<E>Projector` |
+| `needs.n.replica.freshness` | Javadoc del `<E>Reader`. **No** se traduce a TTL, cron ni umbral: es prosa de negocio |
+| instante del hecho en el payload | Comparación en el Projector que impide que un evento viejo pise a uno nuevo. Si el payload no lo trae, `// TODO` explícito |
+| `onMiss.action: fetch` | `<E>Reader.byKey()` = repositorio `.or(() -> hydrate(...))`; `hydrate` invoca el puerto (ojo: el mediator ya abrió transacción — ver `dependencies.md` regla 6) |
+| `onMiss.action: fail` | `.orElseThrow(new <Code>Error(...))` — la excepción ya existe del catálogo de `use-cases` (con status por constructor si el `code` es de status dinámico) |
+| `onMiss.action: degrade` | `byKey()` devuelve `Optional<E>`; el resultado degradado lo escribe el agente siguiendo la prosa de `degradedTo`, y debe ser distinguible de una respuesta normal |
+| `compensations[].onEvent` | Nada nuevo: es una suscripción normal, solo etiquetada como compensación en la documentación del proyecto |
+
 ## `persistence` — persistence.keel.yaml
 
 Sin esta capa (servicio sin estado propio), no se incluye JPA ni base de datos.

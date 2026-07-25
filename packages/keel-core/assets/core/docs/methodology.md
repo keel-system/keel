@@ -28,6 +28,7 @@ El corazón del método es una **fase de diseño iterativa** que se cierra una s
 4. **Documentar** — conviene distinguir **dos clases** de documentación, que se producen en momentos distintos:
    - **Documentación de diseño** — `docs/<servicio>/DESIGN.md` (características del dominio + decisiones de diseño con su porqué, para que **otro equipo reutilice el diseño** sin leer el código) y el índice del `README.md`. Se generan **al cerrar el diseño** (paso 1), antes de generar código; `/keel-handoff` los **regenera** cuando el spec cambia (re-deriva lo mecánico y preserva el porqué ya capturado).
    - **Documentación de integradores** — se deriva del mismo spec cuando alguien va a consumir el servicio, tras el cierre e **independiente de que se haya generado código**: `/keel-docs` produce los **contratos formales** de las dos superficies (`openapi.yaml` para HTTP y `asyncapi.yaml` —AsyncAPI 3.0.0— para los eventos, si hay capa `messaging`), las colecciones Postman (`postman/`) para ejercitar la API y `overview.html`, el **panel visual del servicio** con el que el diseñador revisa de un vistazo qué infraestructura exige (persistencia, broker, outbox, caché) y qué hace cada caso de uso, con visores para renderizar ambos contratos; `/keel-integrate` produce `INTEGRATION.md`, el **contrato servidor-a-servidor en prosa** (cómo obtener el token M2M, qué reintentar, qué publicar para activar una operación) para que **otro servidor** lo consuma.
+   - El ciclo se cierra en el otro extremo: el diseñador del servicio consumidor le pasa ese `INTEGRATION.md` a **`/keel-consume`**, que entrevista la estrategia de cada dato que necesita y escribe sus capas `dependencies` + `http-clients` + `messaging` coherentes entre sí. `/keel-integrate` publica el contrato; `/keel-consume` lo ingiere. Por eso el front-matter YAML de `INTEGRATION.md` no es decorativo: es la entrada machine-readable del consumidor.
 
 La regla que sostiene todo: **si un cambio es funcional, se hace en el spec y se regenera; nunca directamente en el código generado.** El código y la documentación son derivados; el spec es la fuente de verdad.
 
@@ -43,14 +44,16 @@ service (manifiesto)
                      │            └──> security
                      ├──> messaging
                      ├──> http-clients
+                     ├──> dependencies
                      ├──> persistence
                      └──> storage
 ```
 
 - **Obligatorias**: `domain` (entidades, invariantes) y `use-cases` (operaciones).
-- **Opcionales**: `api`, `security`, `messaging`, `http-clients`, `persistence`, `storage` — se declaran solo si aplican. Un worker sin API no tiene `api`; un servicio sin estado no tiene `persistence`; uno que no maneja archivos no tiene `storage`.
+- **Opcionales**: `api`, `security`, `messaging`, `http-clients`, `dependencies`, `persistence`, `storage` — se declaran solo si aplican. Un worker sin API no tiene `api`; un servicio sin estado no tiene `persistence`; uno que no maneja archivos no tiene `storage`; uno que se basta a sí mismo no tiene `dependencies`.
 - La capa `api` distingue el público de cada endpoint (`audience`: usuarios web/mobile, otros servicios M2M, o ambos) y `security` modela a los consumidores máquina (`serviceAuth`, `serviceClients`, `level: service` con scopes); ver `dsl/api.md` y `dsl/security.md`.
-- Orden de diseño: **domain → use-cases → api → security → messaging → http-clients → persistence → storage**. Hay dos referencias hacia delante: `emits` (use-cases nombra eventos que se definen al llegar a messaging) y los campos `file` del domain (que nombran buckets definidos al llegar a storage); mientras la capa destino no exista, `keel validate --wip` las reporta como pendientes en vez de error.
+- La capa `dependencies` declara de qué **otros servidores** depende este: qué dato necesita de cada uno, qué caso de uso lo usa, si lo lee bajo demanda o mantiene una copia local, y qué hace cuando le falta. Es una capa de síntesis — solo referencia a `http-clients`, `messaging`, `domain` y `use-cases`, nunca las redeclara. La escribe `/keel-consume` a partir del `INTEGRATION.md` del proveedor; ver `dsl/dependencies.md`.
+- Orden de diseño: **domain → use-cases → dependencies → api → security → messaging → http-clients → persistence → storage**. `dependencies` se diseña pronto (en cuanto se sabe qué dato ajeno hace falta) aunque se valide la última, y `/keel-consume` escribe de una pasada todas las capas que toca. Hay dos referencias hacia delante: `emits` (use-cases nombra eventos que se definen al llegar a messaging) y los campos `file` del domain (que nombran buckets definidos al llegar a storage); mientras la capa destino no exista, `keel validate --wip` las reporta como pendientes en vez de error.
 - Cada capa se cierra con `keel validate --wip specs/<servicio>` (las capas aún en plantilla son avisos, no errores); el diseño completo se cierra con `keel validate` sin flag, en verde, más el análisis de huecos cerrado y `validation-scenarios.md` con su matriz de cobertura completa.
 - `keel new <servicio>` crea el directorio con manifiesto + domain + use-cases; el resto se añade desde `templates/service/` cuando aplique.
 - `keel new <nuevo> --from <origen>` deriva un servicio de un diseño existente: clona sus artefactos (sin `validation-scenarios.md`, que se regenera al cerrar), arranca en versión `0.1.0` con `service.basedOn: <origen>@<versión>` como linaje y deja la `description` marcada como pendiente de revisar; el diseño continúa con `/keel-design` en modo derivación (entrevista solo sobre lo que cambia respecto al origen). Antes de derivar, `keel describe <origen>` resume el diseño (identidad, estado, capas y contenido por capa) para decidir si sirve tal cual o qué hay que adaptar; el análisis completo, con las decisiones y su porqué, está en `docs/<origen>/DESIGN.md`.
@@ -70,6 +73,7 @@ service (manifiesto)
 | `events.published` | `messaging.keel.yaml` (`publishing.events`, + `reliability`) |
 | `events.consumed` | `messaging.keel.yaml` (`subscriptions`, + `onFailure`) |
 | `integrations` kind `http` | `http-clients.keel.yaml` (+ resiliencia por llamada) |
+| `integrations` que expresan **dependencia de otro servidor** | `dependencies.keel.yaml` (el porqué y la estrategia) + `http-clients`/`messaging` como canales |
 | `integrations` kind `storage` (BD) | `persistence.keel.yaml` |
 | `integrations` kind `storage` (archivos/blobs) | `storage.keel.yaml` (buckets) + campos `file` en `domain.keel.yaml` |
 

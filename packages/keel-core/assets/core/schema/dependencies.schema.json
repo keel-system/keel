@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schema/2.0/dependencies.schema.json",
+  "title": "Keel Dependencies Layer",
+  "description": "Servidores de los que este servicio depende: qué dato ajeno necesita de cada uno, dónde vive la verdad que lee y qué hace cuando le falta. Esta capa REFERENCIA a las demás (http-clients, messaging, domain, use-cases); nunca las redeclara.",
+  "type": "object",
+  "required": ["dependencies"],
+  "additionalProperties": false,
+  "properties": {
+    "dependencies": {
+      "type": "object",
+      "minProperties": 1,
+      "description": "Un bloque por servidor proveedor, nombrado como el servicio del que se depende.",
+      "propertyNames": { "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/kebabName" },
+      "additionalProperties": { "$ref": "#/$defs/dependency" }
+    }
+  },
+  "$defs": {
+    "dependency": {
+      "type": "object",
+      "required": ["needs"],
+      "additionalProperties": false,
+      "properties": {
+        "description": { "type": "string" },
+        "contract": {
+          "type": "object",
+          "required": ["version"],
+          "additionalProperties": false,
+          "description": "Contrato publicado del proveedor al que este diseño se acopla. Opcional: hay proveedores que aún no publican INTEGRATION.md.",
+          "properties": {
+            "version": {
+              "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/semver",
+              "description": "Versión del contrato del proveedor a la que este diseño se acopla. Romperla rompe este servicio."
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Procedencia del contrato (ruta relativa al workspace o URL). Informativo: ni la validación ni los generadores lo resuelven."
+            }
+          }
+        },
+        "needs": {
+          "type": "object",
+          "minProperties": 1,
+          "description": "Cada dato ajeno que este servicio necesita de este proveedor.",
+          "propertyNames": { "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/operationName" },
+          "additionalProperties": { "$ref": "#/$defs/need" }
+        },
+        "compensations": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Eventos ante los que este servicio deshace lo que hizo contra el proveedor. La operación que se dispara vive en messaging.subscriptions.<evento>.triggers; aquí solo se referencia el evento.",
+          "items": {
+            "type": "object",
+            "required": ["onEvent"],
+            "additionalProperties": false,
+            "properties": {
+              "onEvent": {
+                "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/typeName",
+                "description": "Evento consumido (debe existir en messaging: subscriptions)."
+              },
+              "description": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "need": {
+      "type": "object",
+      "required": ["usedBy", "strategy"],
+      "additionalProperties": false,
+      "properties": {
+        "description": { "type": "string" },
+        "usedBy": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Operaciones de este servicio que necesitan el dato para decidir (deben existir en use-cases: operations).",
+          "items": { "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/operationName" }
+        },
+        "strategy": {
+          "type": "string",
+          "enum": ["on-demand", "replicated"],
+          "description": "Dónde vive la verdad que se lee al decidir. on-demand: se pide al proveedor en el momento (siempre vigente, pero sin proveedor no se opera). replicated: se mantiene una copia local alimentada por sus eventos (se opera con el proveedor caído, a cambio de consistencia eventual)."
+        },
+        "fetchedFrom": {
+          "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/httpCallRef",
+          "description": "Llamada de http-clients que resuelve el dato. Es la vía única con on-demand, y la vía de rescate con replicated + onMiss.action fetch."
+        },
+        "replica": { "$ref": "#/$defs/replica" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "strategy": { "const": "on-demand" } }, "required": ["strategy"] },
+          "then": {
+            "required": ["fetchedFrom"],
+            "not": { "required": ["replica"] }
+          }
+        },
+        {
+          "if": { "properties": { "strategy": { "const": "replicated" } }, "required": ["strategy"] },
+          "then": { "required": ["replica"] }
+        },
+        {
+          "if": {
+            "type": "object",
+            "required": ["replica"],
+            "properties": {
+              "replica": {
+                "type": "object",
+                "required": ["onMiss"],
+                "properties": {
+                  "onMiss": {
+                    "type": "object",
+                    "required": ["action"],
+                    "properties": { "action": { "const": "fetch" } }
+                  }
+                }
+              }
+            }
+          },
+          "then": { "required": ["fetchedFrom"] }
+        }
+      ]
+    },
+    "replica": {
+      "type": "object",
+      "required": ["entity", "keyField", "fedBy", "onMiss"],
+      "additionalProperties": false,
+      "description": "Copia local del dato ajeno. La entidad y sus campos se declaran en domain, y su almacenamiento en persistence: aquí solo se declara que esa entidad es una réplica, de quién y cómo se mantiene.",
+      "properties": {
+        "entity": {
+          "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/typeName",
+          "description": "Entidad de domain que materializa la copia. No es fuente de verdad."
+        },
+        "keyField": {
+          "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/operationName",
+          "description": "Campo de esa entidad que correlaciona la copia con el identificador del proveedor."
+        },
+        "fedBy": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Eventos del proveedor que mantienen la copia al día (deben existir en messaging: subscriptions). Deben cubrir TODAS las vías de cambio del dato, incluidas bajas y retiradas.",
+          "items": { "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/typeName" }
+        },
+        "freshness": {
+          "type": "string",
+          "minLength": 5,
+          "description": "Tolerancia de negocio a leer un dato viejo, en prosa (ej. 'un precio de hasta cinco minutos vale para cotizar; para cobrar, no'). Nunca un número: un umbral cuantificado es una decisión de implementación."
+        },
+        "onMiss": { "$ref": "#/$defs/onMiss" }
+      }
+    },
+    "onMiss": {
+      "type": "object",
+      "required": ["action"],
+      "additionalProperties": false,
+      "description": "Qué hace el servicio cuando la copia todavía no tiene el dato. Es comportamiento observable en su API, por eso cada acción obliga a declarar su consecuencia de negocio.",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": ["fetch", "fail", "degrade"],
+          "description": "fetch: se pide al proveedor por fetchedFrom. fail: la operación falla con el error declarado. degrade: la operación continúa con un resultado degradado."
+        },
+        "error": {
+          "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/errorCode",
+          "description": "Error con el que falla la operación (alguna operación de use-cases debe declararlo). Obligatorio y exclusivo de action fail."
+        },
+        "degradedTo": {
+          "type": "string",
+          "minLength": 5,
+          "description": "Qué resultado obtiene el cliente cuando el dato falta, en prosa. Obligatorio y exclusivo de action degrade."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "action": { "const": "fail" } }, "required": ["action"] },
+          "then": {
+            "required": ["error"],
+            "not": { "required": ["degradedTo"] }
+          }
+        },
+        {
+          "if": { "properties": { "action": { "const": "degrade" } }, "required": ["action"] },
+          "then": {
+            "required": ["degradedTo"],
+            "not": { "required": ["error"] }
+          }
+        },
+        {
+          "if": { "properties": { "action": { "const": "fetch" } }, "required": ["action"] },
+          "then": {
+            "not": { "anyOf": [{ "required": ["error"] }, { "required": ["degradedTo"] }] }
+          }
+        }
+      ]
+    }
+  }
+}

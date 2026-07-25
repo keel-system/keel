@@ -67,7 +67,10 @@ escribir el documento.** Reglas transversales que la guía detalla:
 El documento tiene, en orden:
 
 0. **Front-matter YAML** (entre `---`, al inicio) — índice machine-readable **derivado, nunca
-   inventado**: `service`, `version`, `domain`, `basePath`, `m2mAuth` (`protocol`, `audience`,
+   inventado**. No es decorativo ni opcional: es la **entrada de `/keel-consume`** en el otro extremo,
+   la skill con la que el diseñador del servicio consumidor deriva sus capas `dependencies`,
+   `http-clients` y `messaging`. Un front-matter incompleto obliga al consumidor a diseñar en modo
+   degradado; cambiarlo es un cambio del contrato y sube la versión. Contenido: `service`, `version`, `domain`, `basePath`, `m2mAuth` (`protocol`, `audience`,
    `validateAudience`), `endpoints[]` (solo `services`/`both`: `name`, `method`, `path`, `access` con
    scopes), `events` (`envelope: keel` + `published[]`/`consumed[]` con canal, `source` y el
    `envelope` de cada suscripción) y `errors[]` (catálogo
@@ -100,3 +103,5 @@ El documento tiene, en orden:
 Este `INTEGRATION.md` y los derivados de `/keel-docs` (`openapi.yaml`, `asyncapi.yaml`, Postman,
 `overview.html`) salen del mismo diseño y no pueden contradecirse: mismos endpoints M2M, mismos
 eventos y payloads que el `asyncapi.yaml`, mismos códigos de error, mismos campos, misma seguridad. Ante regeneración, sobrescribe el archivo por completo (no edites incrementalmente).
+
+Antes de dar el documento por bueno, comprueba además que **el front-matter es completo y está versionado**: alguien lo va a consumir con `/keel-consume` sin leer la prosa, y comparará su `version` con la que tenga declarada para detectar qué cambió.

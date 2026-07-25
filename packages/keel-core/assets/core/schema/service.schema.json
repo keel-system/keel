@@ -10,7 +10,7 @@
     "keel": {
       "type": "string",
       "description": "Versión del DSL Keel usada por este servicio.",
-      "enum": ["2.0", "2.1"]
+      "enum": ["2.0", "2.1", "2.2"]
     },
     "service": {
       "type": "object",
@@ -22,8 +22,7 @@
           "description": "Nombre del servicio en kebab-case."
         },
         "version": {
-          "type": "string",
-          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/semver",
           "description": "Versión semántica del diseño (no del código generado)."
         },
         "description": { "type": "string", "minLength": 10 },
@@ -50,6 +49,7 @@
         "security": { "const": "security.keel.yaml" },
         "messaging": { "const": "messaging.keel.yaml" },
         "http-clients": { "const": "http-clients.keel.yaml" },
+        "dependencies": { "const": "dependencies.keel.yaml" },
         "persistence": { "const": "persistence.keel.yaml" },
         "storage": { "const": "storage.keel.yaml" }
       }

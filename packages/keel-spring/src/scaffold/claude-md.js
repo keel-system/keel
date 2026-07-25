@@ -36,6 +36,7 @@ export function generate(model) {
   if (layersPresent.security) artifacts.push(['security.keel.yaml', 'autenticación, roles, permisos y reglas de acceso']);
   if (layersPresent.messaging) artifacts.push(['messaging.keel.yaml', 'eventos publicados y suscripciones']);
   if (layersPresent.httpClients) artifacts.push(['http-clients.keel.yaml', 'clientes HTTP salientes y su resiliencia']);
+  if (layersPresent.dependencies) artifacts.push(['dependencies.keel.yaml', 'servidores de los que depende y cómo lee su dato']);
   if (layersPresent.storage) artifacts.push(['storage.keel.yaml', 'buckets de archivos y sus restricciones']);
   if (layersPresent.persistence) artifacts.push(['persistence.keel.yaml', 'mapeo a persistencia, claves naturales e índices']);
   artifacts.push(['validation-scenarios.md', 'escenarios FL-* Given/When/Then que cierran el diseño']);
@@ -87,6 +88,17 @@ export function generate(model) {
         'resilience4j + mapper ACL en `infrastructure/http`, ya generados (con auth saliente si el diseño la declara). Completa los ' +
         '`*Fallback` marcados `// TODO (agente)`; solo si una llamada va en prosa (sin `request`/`response` estructurados), tipa además ' +
         'sus records wire/`<Llamada>Result` y el mapeo del `<Cliente>Mapper`. Consume el cliente siempre por su puerto de `domain/clients`.'
+    );
+  }
+  if (layersPresent.dependencies) {
+    steps.push(
+      '**dependencies** (`specs/dependencies.keel.yaml`): por cada necesidad `replicated` ya están generados `<Entidad>Projector` ' +
+        '(upsert idempotente de la copia local) y `<Entidad>Reader` (lectura con la política `onMiss`). El cableado es ' +
+        '`listener → IdempotencyGuard → UseCaseMediator → handler de la operación de proyección → Projector`: **nunca** llames al ' +
+        'Projector desde el listener. Completa los `// TODO (agente)`: en el dominio, `<Entidad>.projectionOf(...)` y ' +
+        '`<Entidad>.applySnapshot(...)` (el dominio no tiene setters), y en el Reader la hidratación por el puerto del cliente. ' +
+        'Las necesidades `on-demand` no generan nada nuevo: se resuelven por el puerto de ' +
+        '`domain/clients` que ya existe. Reglas completas en `.claude/conventions/dependencies.md`.'
     );
   }
   if (layersPresent.storage) {

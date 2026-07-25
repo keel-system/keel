@@ -9,7 +9,8 @@ export const schemaDir = path.join(coreDir, 'schema');
 export const templatesDir = path.join(coreDir, 'templates', 'service');
 
 // Capas del diseño 2.0. Cada capa vive en <capa>.keel.yaml y se valida con <capa>.schema.json.
-export const LAYERS = ['domain', 'use-cases', 'api', 'security', 'messaging', 'http-clients', 'persistence', 'storage'];
+// dependencies va tras messaging y http-clients: es una capa de síntesis y solo referencia hacia atrás.
+export const LAYERS = ['domain', 'use-cases', 'api', 'security', 'messaging', 'http-clients', 'dependencies', 'persistence', 'storage'];
 export const REQUIRED_LAYERS = ['domain', 'use-cases'];
 
 export function schemaPathFor(name) {

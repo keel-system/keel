@@ -102,6 +102,32 @@ function printHttpClients(httpClients) {
   }
 }
 
+function printDependencies(dependencies) {
+  console.log(
+    pc.bold('dependencies') + pc.dim(` — ${plural(dependencies.dependencies.length, 'servidor', 'servidores')}`)
+  );
+  for (const dep of dependencies.dependencies) {
+    const notes = [];
+    if (dep.contractVersion) notes.push(`contrato ${dep.contractVersion}`);
+    notes.push(plural(dep.needs.length, 'necesidad', 'necesidades'));
+    if (dep.compensations.length > 0) notes.push(`compensa ante ${dep.compensations.join(', ')}`);
+    console.log(`  ${pc.dim('•')} ${dep.name}${pc.dim(` (${notes.join(', ')})`)}`);
+    for (const need of dep.needs) {
+      const detail = [];
+      if (need.strategy === 'replicated') {
+        detail.push(`réplica ${need.entity ?? '?'}`);
+        if (need.onMiss) detail.push(`onMiss: ${need.onMiss}`);
+      } else if (need.client) {
+        detail.push(`${need.client}.${need.call}`);
+      }
+      if (need.usedBy.length > 0) detail.push(`usada por ${need.usedBy.join(', ')}`);
+      console.log(
+        `      ${pc.dim('-')} ${need.name}  ${pc.cyan(need.strategy ?? '?')}${detail.length > 0 ? pc.dim(` (${detail.join('; ')})`) : ''}`
+      );
+    }
+  }
+}
+
 function printPersistence(persistence) {
   const parts = [plural(persistence.entities.length, 'entidad persistida', 'entidades persistidas')];
   if (persistence.model) parts.push(`modelo ${persistence.model}`);
@@ -122,6 +148,7 @@ const LAYER_PRINTERS = {
   security: ['security', printSecurity],
   messaging: ['messaging', printMessaging],
   'http-clients': ['httpClients', printHttpClients],
+  dependencies: ['dependencies', printDependencies],
   persistence: ['persistence', printPersistence],
   storage: ['storage', printStorage]
 };

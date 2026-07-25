@@ -141,6 +141,11 @@ export function generate(model) {
   if (layersPresent.httpClients) {
     pendingLayers.push('- `http-clients`: puerto + adaptador RestClient + mapper ACL ya generados; completa los `*Fallback` (y el tipado records/mapper solo en llamadas declaradas en prosa).');
   }
+  if (layersPresent.dependencies) {
+    pendingLayers.push(
+      '- `dependencies`: `<Entidad>Projector` y `<Entidad>Reader` ya generados por cada réplica; completa la hidratación del Reader (`onMiss: fetch`) o el resultado degradado (`onMiss: degrade`). Nunca llames al Projector desde el listener: el camino es listener → guard → mediator → handler → Projector.'
+    );
+  }
   if (stack.cache) {
     pendingLayers.push(
       '- `cache`: anotar los adaptadores con `@Cacheable`/`@CacheEvict` usando las constantes de `CacheConfig` (el `CacheManager`, los TTL y el serializador ya están generados).'

@@ -36,6 +36,7 @@ import * as cache from './cache.js';
 import * as controllers from './controllers.js';
 import * as security from './security.js';
 import * as httpClients from './http-clients.js';
+import * as dependencies from './dependencies.js';
 import * as storage from './storage.js';
 import * as services from './services.js';
 import * as readme from './readme.js';
@@ -70,6 +71,7 @@ const GENERATORS = [
   controllers,
   security,
   httpClients,
+  dependencies,
   storage,
   services,
   readme,

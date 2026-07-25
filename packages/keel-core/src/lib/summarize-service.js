@@ -109,6 +109,30 @@ function summarizeHttpClients(doc) {
   return { clients };
 }
 
+function summarizeDependencies(doc) {
+  const dependencies = keysOf(doc?.dependencies).map((name) => {
+    const dep = doc.dependencies[name] ?? {};
+    return {
+      name,
+      contractVersion: dep.contract?.version ?? null,
+      needs: keysOf(dep.needs).map((need) => {
+        const spec = dep.needs[need] ?? {};
+        return {
+          name: need,
+          strategy: spec.strategy ?? null,
+          usedBy: Array.isArray(spec.usedBy) ? spec.usedBy : [],
+          entity: spec.replica?.entity ?? null,
+          onMiss: spec.replica?.onMiss?.action ?? null,
+          client: spec.fetchedFrom?.client ?? null,
+          call: spec.fetchedFrom?.call ?? null
+        };
+      }),
+      compensations: Array.isArray(dep.compensations) ? dep.compensations.map((item) => item?.onEvent ?? null) : []
+    };
+  });
+  return { dependencies };
+}
+
 function summarizePersistence(doc) {
   return { model: doc?.default?.model ?? null, entities: keysOf(doc?.entities) };
 }
@@ -128,6 +152,7 @@ const LAYER_SUMMARIZERS = {
   security: ['security', summarizeSecurity],
   messaging: ['messaging', summarizeMessaging],
   'http-clients': ['httpClients', summarizeHttpClients],
+  dependencies: ['dependencies', summarizeDependencies],
   persistence: ['persistence', summarizePersistence],
   storage: ['storage', summarizeStorage]
 };

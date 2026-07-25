@@ -49,6 +49,7 @@ export function buildModel({ manifest, layers, stack = null }) {
     messaging: Boolean(layers.messaging),
     security: Boolean(layers.security),
     httpClients: Boolean(layers['http-clients']),
+    dependencies: Boolean(layers.dependencies),
     storage: Boolean(layers.storage)
   };
 
@@ -93,7 +94,11 @@ export function buildModel({ manifest, layers, stack = null }) {
 
   const hasFileUploads = services.some((group) => group.operations.some((operation) => operation.multipart));
 
-  return { service, layersPresent, enums, valueObjects, entities, services, errors, childDtos, hasFileUploads, events, messaging, subscriptions, pagination, api, security, httpClients, storage, warnings };
+  // Dependencias con otros servidores. Va al final: sintetiza entidades, clientes
+  // y suscripciones ya resueltos, y les cuelga los retro-enlaces que consumen los scaffolds.
+  const dependencies = collectDependencies(layers, entities, httpClients, subscriptions, errors, warnings);
+
+  return { service, layersPresent, enums, valueObjects, entities, services, errors, childDtos, hasFileUploads, events, messaging, subscriptions, pagination, api, security, httpClients, dependencies, storage, warnings };
 }
 
 function buildService(manifest, stack) {
@@ -916,6 +921,136 @@ function collectHttpClients(layers, domainTypes, inlineEnumName, warnings) {
     });
   }
   return result;
+}
+
+// ─── Dependencias con otros servidores (dependencies) ────────────────────────
+//
+// Capa de síntesis: no crea clientes ni listeners (ya salen de http-clients y
+// messaging), solo declara por qué existen y qué hay que materializar además.
+// Lo único que exige código propio es `replica`: la copia local y su política
+// de lectura cuando el dato falta (onMiss).
+
+function collectDependencies(layers, entities, httpClients, subscriptions, errors, warnings) {
+  const declared = layers.dependencies?.dependencies;
+  if (!declared) return null;
+
+  const entityByName = new Map(entities.map((entity) => [entity.name, entity]));
+  const clientById = new Map((httpClients ?? []).map((client) => [client.id, client]));
+  const subscriptionByEvent = new Map((subscriptions ?? []).map((sub) => [sub.name, sub]));
+  const errorByCode = new Map((errors ?? []).map((error) => [error.code, error]));
+
+  const result = [];
+  for (const [depId, dep] of Object.entries(declared)) {
+    const needs = [];
+    for (const [needName, spec] of Object.entries(dep.needs ?? {})) {
+      const fetch = resolveFetch(depId, needName, spec.fetchedFrom, clientById, warnings);
+      const replica = spec.replica
+        ? resolveReplica(depId, needName, spec.replica, entityByName, subscriptionByEvent, errorByCode, warnings)
+        : null;
+      needs.push({
+        name: needName,
+        description: spec.description ?? '',
+        strategy: spec.strategy,
+        usedBy: spec.usedBy ?? [],
+        fetch,
+        replica
+      });
+    }
+
+    const compensations = (dep.compensations ?? []).map((item) => {
+      const sub = subscriptionByEvent.get(item.onEvent);
+      if (sub) sub.compensates = { dependency: depId, description: item.description ?? '' };
+      return { event: item.onEvent, description: item.description ?? '', subscription: sub ?? null };
+    });
+
+    result.push({
+      id: depId,
+      className: pascalCase(depId),
+      description: dep.description ?? '',
+      contractVersion: dep.contract?.version ?? null,
+      contractSource: dep.contract?.source ?? null,
+      needs,
+      compensations
+    });
+  }
+  return result;
+}
+
+function resolveFetch(depId, needName, fetchedFrom, clientById, warnings) {
+  if (!fetchedFrom) return null;
+  const client = clientById.get(fetchedFrom.client);
+  const call = client?.calls.find((c) => c.name === fetchedFrom.call) ?? null;
+  if (!call) return null;
+  if (!call.method) {
+    warnings.push(
+      `Necesidad '${depId}.${needName}' (dependencies): la llamada '${fetchedFrom.client}.${fetchedFrom.call}' no tiene method/path estructurados; el agente debe completar la hidratación a mano.`
+    );
+  }
+  return {
+    clientId: client.id,
+    clientClass: client.clientClass,
+    mapperClass: client.mapperClass,
+    call: call.name,
+    resultType: call.resultType
+  };
+}
+
+function resolveReplica(depId, needName, replica, entityByName, subscriptionByEvent, errorByCode, warnings) {
+  const entity = entityByName.get(replica.entity);
+  if (!entity) return null;
+  if (!entity.persisted) {
+    warnings.push(
+      `Réplica '${replica.entity}' (dependencies: ${depId}.${needName}): la entidad no está persistida; sin repositorio no hay dónde materializar la copia.`
+    );
+    return null;
+  }
+
+  // La clave con la que el proveedor identifica el recurso es, por definición, la
+  // clave natural de la copia: garantiza el finder findBy<KeyField> del repositorio.
+  if (!(entity.naturalKey ?? []).includes(replica.keyField)) {
+    entity.naturalKey = [replica.keyField, ...(entity.naturalKey ?? [])];
+  }
+
+  const keyField = entity.fields.find((field) => field.name === replica.keyField) ?? null;
+  const fedBy = (replica.fedBy ?? []).map((event) => {
+    const sub = subscriptionByEvent.get(event);
+    if (sub) sub.feedsReplica = { dependency: depId, entity: entity.name, projectorClass: `${entity.name}Projector` };
+    return { event, subscription: sub ?? null };
+  });
+
+  const onMissError = replica.onMiss?.error ? errorByCode.get(replica.onMiss.error) : null;
+  if (replica.onMiss?.error && !onMissError) {
+    warnings.push(
+      `Réplica '${replica.entity}' (dependencies: ${depId}.${needName}): el error '${replica.onMiss.error}' de onMiss no está en el catálogo de use-cases; el Reader no compilará hasta declararlo.`
+    );
+  }
+
+  entity.replicaOf = { dependency: depId, need: needName };
+
+  return {
+    entityName: entity.name,
+    keyField: replica.keyField,
+    keyGetter: `get${capitalizeName(replica.keyField)}`,
+    keyFieldJavaType: keyField?.javaType ?? 'UUID',
+    keyFieldImports: keyField?.imports ?? [],
+    fedBy,
+    freshness: replica.freshness ?? null,
+    projectorClass: `${entity.name}Projector`,
+    readerClass: `${entity.name}Reader`,
+    repositoryPort: `${entity.name}Repository`,
+    onMiss: {
+      action: replica.onMiss?.action ?? 'fail',
+      error: replica.onMiss?.error ?? null,
+      exceptionClass: onMissError?.exceptionClass ?? null,
+      dynamicStatus: onMissError?.dynamicStatus ?? false,
+      httpStatus: onMissError?.http ?? 409,
+      degradedTo: replica.onMiss?.degradedTo ?? null
+    }
+  };
+}
+
+function capitalizeName(name) {
+  return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
 // ─── Suscripciones de mensajería (messaging.subscriptions → consumers) ───────
