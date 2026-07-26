@@ -74,6 +74,8 @@ operations:
 - `cache: { ttlSeconds, keyFields, invalidatedBy: [Evento, ...] }` — solo para queries; `invalidatedBy` referencia eventos de messaging.
 - `schedule: { cron }` — trigger temporal, único trigger que se declara aquí.
 
+`idempotency` y `cache` son **decisiones estructurales**: fijan lo que el servicio garantiza (qué se puede repetir sin daño, qué puede llegar rancio), así que las decide el diseñador y no el agente. El agente recomienda con su porqué y pregunta; nunca las escribe en silencio. Ejes de decisión, consecuencias observables y trampas: `.claude/skills/keel-design/references/structural-decisions.md` §3.2 y §3.3.
+
 ## Triggers: quién activa cada operación
 
 La capa que expone la operación la referencia por nombre:

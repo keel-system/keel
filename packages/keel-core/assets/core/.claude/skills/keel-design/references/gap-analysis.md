@@ -20,7 +20,7 @@ Distinción operativa:
 
 ## Procedimiento
 
-1. **Barrido.** Recorre las 12 clases de abajo contra los artefactos del servicio. Salta las que no apliquen (sin capa `storage`, no hay clase 10). Trabaja con los artefactos delante: cada hallazgo debe poder señalarse con nombre de operación, entidad o campo.
+1. **Barrido.** Recorre las 13 clases de abajo contra los artefactos del servicio. Salta las que no apliquen (sin capa `storage`, no hay clase 10). Trabaja con los artefactos delante: cada hallazgo debe poder señalarse con nombre de operación, entidad o campo.
 
 2. **Tabla de hallazgos.** Presenta al usuario **una sola tabla** con todo lo encontrado, ordenada por severidad:
 
@@ -39,7 +39,7 @@ Distinción operativa:
    - "Sin huecos abiertos: N hallazgos, todos cerrados en los artefactos."
    - "N huecos aceptados conscientemente: …" — con la lista y el motivo. Un hueco aceptado es una **decisión de diseño**, así que anótalo para la entrevista de rationale de `/keel-handoff`.
 
-Un análisis que no encuentra nada en un servicio de tamaño real es sospechoso: casi siempre significa que no se hicieron las preguntas de las clases 4, 6, 8 y 9, que son las que exigen pensar en fallos y no en caminos felices.
+Un análisis que no encuentra nada en un servicio de tamaño real es sospechoso: casi siempre significa que no se hicieron las preguntas de las clases 4, 6, 8 y 9, que son las que exigen pensar en fallos y no en caminos felices — o las de la clase 13, que pregunta **quién** decidió cada cosa.
 
 ## Taxonomía
 
@@ -165,7 +165,7 @@ Esta clase y la 8 son **simétricas**: aquí se examina la superficie que **ofre
 - ¿Cada endpoint de máquina tiene un `serviceClient` que lo consuma? Y al revés: ¿cada scope concedido lo exige alguien?
 - ¿El contrato está pensado **para servidores**, o es el de usuarios reutilizado? Señales de hueco: el consumidor tendría que llamar N veces (falta un endpoint de lote), o recibe un DTO de pantalla en vez de datos.
 - ¿Qué garantías de **estabilidad** tiene ese contrato? Es el que otro equipo va a acoplarse.
-- Con `audience: both`: ¿la respuesta es la misma para token de usuario y de máquina? Si difiere, es contrato distinto y debería ser endpoint distinto.
+- **Todo `audience: both` es un hallazgo de severidad riesgo**, se mire como se mire: la preferencia por defecto de Keel es operación propia para cada consumo M2M (`structural-decisions.md § 3.4`), porque compartir endpoint es compartir output, errores, paginación y scopes entre dos contratos que evolucionan a ritmos distintos. Se cierra con la decisión razonada del diseñador —mantenerlo compartido con su porqué, o separarlo—, nunca dándolo por bueno. Señal de que hay que separarlo ya: la respuesta difiere según el token sea de usuario o de máquina.
 
 ### 12. Zonas grises de la equivalencia
 
@@ -179,3 +179,30 @@ Lo que dos stacks resolverían distinto y el diseño rara vez fija. La mayoría 
 - **Idioma y formato de los mensajes de error**: el `code` es contrato; el texto, ¿también?
 
 Al terminar esta clase, deberías poder responder, para el servicio entero: *si dos equipos implementaran este diseño con stacks distintos, ¿en qué podría diferir lo observable?* Todo lo que quede en esa lista debe quedar fijado en los escenarios.
+
+### 13. Decisiones estructurales sin dueño
+
+Las doce clases anteriores preguntan **qué** dice o no dice el diseño. Esta pregunta **quién lo decidió**.
+
+Recorre el catálogo de `structural-decisions.md § 3` entrada por entrada y, por cada una que **aplique** a este servicio, comprueba que la eligió el diseñador y no tú. Es el barrido más incómodo del análisis porque se hace contra tu propia memoria de la sesión, no contra los artefactos: lo que buscas no deja rastro en el YAML — un `reliability: best-effort` decidido y uno asumido se escriben igual.
+
+| Aplica si… | Entrada del catálogo | Qué comprobar |
+|---|---|---|
+| hay `publishing.events` | 3.1 fiabilidad | el valor de `reliability` se eligió; si es `outbox`, existe `persistence` y su frontera se decidió a la vez |
+| hay commands expuestos o disparados por eventos | 3.2 idempotencia | se preguntó por cada uno, incluidos los que **no** la llevan |
+| hay queries | 3.3 caché | tanto las que la llevan como las que no; en las que la llevan, `invalidatedBy` lo enumeró el diseñador |
+| hay `audience: services`/`both` | 3.4 M2M | operación propia, o `both` con rationale escrito |
+| hay `subscriptions` | 3.5 política de fallo | `retry`/`deadLetter` elegidos, no heredados de un ejemplo |
+| hay `http-clients` | 3.6 resiliencia | timeout, breaker y `fallback` salieron del negocio, no de un valor redondo |
+| hay `persistence` | 3.7 frontera transaccional | `per-operation`/`per-aggregate` es elección, no default del template |
+| hay queries de colección | 3.8 paginación | paginar o no paginar se decidió con la cota esperada delante |
+| hay commands que escriben la misma entidad | 3.9 concurrencia | "último gana" está dicho en voz alta, o hay conflicto declarado |
+| hay `storage` | 3.10 visibilidad | cada bucket, con su vía de acceso si es `private` |
+
+Severidades de esta clase:
+
+- **hueco** — la decisión está escrita en los artefactos y **nunca se preguntó**. Es lo peor de los dos mundos: tiene la apariencia de una decisión de negocio y el origen de un default tuyo.
+- **riesgo** — se preguntó, el diseñador dijo "lo que recomiendes" y se aceptó tu propuesta. Legítimo, pero conviene que quede como rationale explícito en `/keel-handoff`: dentro de seis meses nadie distinguirá eso de una decisión meditada.
+- **ok** — decisión del diseñador, con su alternativa descartada anotada.
+
+Los huecos de esta clase **no se cierran corrigiendo el artefacto**: se cierran haciendo ahora la pregunta que no se hizo entonces, con su consecuencia observable, y aceptando la respuesta que venga — incluida la de dejarlo como está.

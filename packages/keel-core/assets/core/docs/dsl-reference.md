@@ -100,6 +100,8 @@ El orden de **validación** y el momento de **diseño** de `dependencies` no coi
 | Fronteras de consistencia (agregados) | domain | Qué entidades cambian juntas es conocimiento del dominio; persistence solo la respeta (`per-aggregate`) |
 | Dónde y cómo se guardan los archivos | storage | Buckets lógicos + políticas; el domain solo declara qué campo es un `file` y a qué bucket va |
 
+La tabla dice **dónde** se declara cada decisión. **Quién la toma** es otra pregunta, y para buena parte de estas filas la respuesta es la misma: las decisiones que fijan el comportamiento estructural del servidor —outbox, idempotencia, caché, superficie M2M, política de fallo, resiliencia, frontera transaccional, paginación, concurrencia, visibilidad de buckets— las **recomienda** el agente y las **decide** el diseñador, porque cambian lo que el servicio puede prometer a sus clientes. El catálogo con sus ejes de decisión y consecuencias observables está en `.claude/skills/keel-design/references/structural-decisions.md`.
+
 ## Validaciones fuera de los schemas
 
 Los JSON Schemas validan estructura y formato de cada artefacto. `keel validate specs/<servicio>` añade las referencias cruzadas mecánicas (tipos, entidades, operaciones, eventos, roles y permisos referenciados existen; agregados bien formados y sin solapes; operaciones huérfanas). La skill `/keel-validate` añade la revisión semántica que ninguna de las dos capas puede expresar: invariantes ambiguas, errores faltantes, mínimo privilegio, fallbacks sin definir.

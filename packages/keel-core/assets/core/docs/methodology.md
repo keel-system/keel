@@ -36,6 +36,8 @@ El corazón del método es una **fase de diseño iterativa** que se cierra una s
 
 La regla que sostiene todo: **si un cambio es funcional, se hace en el spec y se regenera; nunca directamente en el código generado.** El código y la documentación son derivados; el spec es la fuente de verdad.
 
+Y la regla que gobierna el reparto de la palabra dentro del diseño: **el agente recomienda, el diseñador decide el comportamiento estructural.** Hay una clase de decisiones —qué se pierde ante un fallo (outbox), qué se puede repetir sin daño (idempotencia), qué puede llegar rancio (caché), quién consume el contrato (superficie M2M), qué transacción envuelve qué, cómo se degrada una dependencia caída— que no son preguntas técnicas: cambian lo que el servicio puede **prometer** a sus clientes y el coste de operarlo. El agente conoce el mecanismo y propone siempre una opción concreta con su porqué; el humano conoce el negocio que lo paga y tiene la última palabra, en el momento de diseñar la capa. Ninguna se escribe en silencio, ni siquiera cuando la respuesta parece obvia: un default tácito es una decisión que tomó el agente sin decirlo, y el análisis de huecos la caza precisamente por eso. El catálogo con los ejes de decisión de cada una vive en `.claude/skills/keel-design/references/structural-decisions.md`.
+
 El versionado sigue la misma separación: el repo del workspace versiona solo el diseño (`specs/`, schemas, docs) — el `.gitignore` sembrado por `keel init` excluye `services/` — y cada servicio generado vive en su propio repo git dentro de `services/<servicio>-<tech>/`, con su ciclo de vida independiente.
 
 ## Diseño por capas
@@ -86,6 +88,7 @@ service (manifiesto)
 | | Humano | Agente |
 |---|---|---|
 | Diseño | Conoce el dominio, decide qué hace el servicio, aprueba secciones | Pregunta, propone el spec, fuerza los casos incómodos (errores, estados) |
+| Comportamiento estructural | **Última palabra**: outbox, idempotencia, caché, superficie M2M, política de fallo, resiliencia, frontera transaccional, concurrencia | Recomienda una opción concreta con su porqué y su consecuencia observable; nunca la escribe sin respuesta |
 | Validación | Resuelve ambigüedades señaladas | Ejecuta schema + checklist semántica, propone correcciones |
 | Generación | Elige tecnología y decisiones de despliegue (BD, broker, object storage) | Produce el código completo con tests y lo verifica |
 | Documentación | Revisa que los escenarios reflejen el uso real | Deriva docs coherentes con el spec |

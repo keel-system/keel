@@ -25,6 +25,7 @@ consistency:
 - `indexes`: índices sugeridos por los patrones de consulta de `use-cases`; cada índice es la lista de campos que lo componen.
 - `consistency.transactionalBoundary` es la frontera que el generador debe respetar; si `messaging` declara `reliability: outbox`, la escritura del evento comparte esta frontera.
 - `per-aggregate`: cada transacción abarca como máximo un agregado declarado en `domain: aggregates` (raíz + entidades internas). Exige que `domain` los declare — `keel validate` lo comprueba. `per-operation`: la transacción es la operación completa, sin frontera de agregado.
+- **La frontera la decide el diseñador**, no el agente: con `per-aggregate` un cambio puede confirmar y el otro no, y eso es consistencia eventual aceptada — una decisión de negocio, no un ajuste de rendimiento. Ejes de decisión: `.claude/skills/keel-design/references/structural-decisions.md` §3.7.
 
 ## Qué NO va aquí
 
