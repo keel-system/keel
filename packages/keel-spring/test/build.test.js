@@ -59,8 +59,17 @@ async function runBuild(workspace, inputPath, options) {
 }
 
 test('los assets del generador existen en el paquete', async () => {
-  assert.ok(fs.existsSync(path.join(assetsDir, '.claude', 'skills', 'keel-generate-spring', 'SKILL.md')));
   assert.ok(fs.existsSync(path.join(assetsDir, 'generators', 'spring', 'README.md')));
+  // La skill del generador NO es un asset estático: la sintetiza generator-docs.js
+  // en el proyecto generado, para que exista una sola definición del pipeline.
+  assert.ok(
+    !fs.existsSync(path.join(assetsDir, '.claude', 'skills')),
+    'los assets no deben traer skills de generación estáticas'
+  );
+  // Documentos de primer nivel que build copia al .claude/ del proyecto.
+  for (const doc of ['architecture.md', 'constitution.md', 'orchestration.md']) {
+    assert.ok(fs.existsSync(path.join(assetsDir, 'generators', 'spring', doc)), `falta generators/spring/${doc}`);
+  }
   // Skills por tecnología del stack (build las instala condicionalmente en el
   // proyecto generado según keel-stack.json).
   assert.ok(fs.existsSync(path.join(assetsDir, 'generators', 'spring', 'skills', 'README.md')), 'falta skills/README.md');
@@ -86,47 +95,41 @@ test('los assets del generador existen en el paquete', async () => {
   );
   assert.ok(kafkaSkill.includes('name: keel-spring-kafka'));
 
-  // Subagentes de la orquestación (fuente única; build los instala vía copyTree
-  // y generator-docs los copia al proyecto generado).
+  // Subagentes de la orquestación (fuente única; generator-docs los copia al
+  // .claude/agents/ del proyecto generado).
   for (const agent of ['keel-spring-code.md', 'keel-spring-infra.md', 'keel-spring-validate.md', 'keel-spring-quality.md']) {
     assert.ok(fs.existsSync(path.join(assetsDir, '.claude', 'agents', agent)), `falta .claude/agents/${agent}`);
   }
 });
 
-test('build rechaza una versión de DSL no soportada sin copiar assets', async () => {
+test('build rechaza una versión de DSL no soportada', async () => {
   const workspace = makeWorkspace();
   writeService(workspace, { keel: '9.0' });
   assert.ok(!SUPPORTED_DSL.includes('9.0'));
 
   const exitCode = await runBuild(workspace, 'specs/demo');
   assert.equal(exitCode, 1);
-  assert.ok(!fs.existsSync(path.join(workspace, '.claude', 'skills', 'keel-generate-spring')));
+  assert.ok(!fs.existsSync(path.join(workspace, 'services')));
 });
 
-test('build rechaza un modelo de almacenamiento que no genera, sin copiar assets', async () => {
-  // La frontera del generador se comprueba antes de sembrar nada y antes de
+test('build rechaza un modelo de almacenamiento que no genera', async () => {
+  // La frontera del generador se comprueba antes de generar nada y antes de
   // preguntar el stack: keel-spring solo genera el modelo relacional.
   const workspace = makeWorkspace();
   writeService(workspace, { persistenceModel: 'document' });
 
   const exitCode = await runBuild(workspace, 'specs/demo');
   assert.equal(exitCode, 1);
-  assert.ok(!fs.existsSync(path.join(workspace, '.claude', 'skills', 'keel-generate-spring')));
   assert.ok(!fs.existsSync(path.join(workspace, 'services')));
 });
 
-test('build copia skill y conventions, y falla la validación de un diseño en plantilla', async () => {
+test('build falla la validación de un diseño en plantilla', async () => {
   const workspace = makeWorkspace();
   writeService(workspace);
 
   const exitCode = await runBuild(workspace, 'specs/demo');
   assert.equal(exitCode, 1); // diseño incompleto: no generable todavía
-  assert.ok(fs.existsSync(path.join(workspace, '.claude', 'skills', 'keel-generate-spring', 'SKILL.md')));
-  assert.ok(fs.existsSync(path.join(workspace, 'generators', 'spring', 'conventions', 'mapping.md')));
-  // Los subagentes de la orquestación se instalan junto a la skill.
-  for (const agent of ['keel-spring-code.md', 'keel-spring-infra.md', 'keel-spring-validate.md', 'keel-spring-quality.md']) {
-    assert.ok(fs.existsSync(path.join(workspace, '.claude', 'agents', agent)), `falta .claude/agents/${agent}`);
-  }
+  assert.ok(!fs.existsSync(path.join(workspace, 'services')));
 });
 
 test('build con un diseño válido genera el scaffolding y sale con éxito', async () => {
@@ -161,14 +164,22 @@ test('build con un diseño válido genera el scaffolding y sale con éxito', asy
   await runBuild(workspace, 'specs/product-catalog');
   assert.equal(fs.readFileSync(marker, 'utf8'), 'editado');
 
-  // Repo autosuficiente: CLAUDE.md + architecture.md + constitution.md + skill propia + snapshot del diseño.
+  // Repo autosuficiente: CLAUDE.md + architecture/constitution/orchestration +
+  // skill propia + agentes + conventions + snapshot del diseño.
   assert.ok(fs.existsSync(path.join(outDir, '.claude', 'CLAUDE.md')));
   assert.ok(fs.existsSync(path.join(outDir, '.claude', 'architecture.md')));
   assert.ok(fs.existsSync(path.join(outDir, '.claude', 'constitution.md')));
+  assert.ok(fs.existsSync(path.join(outDir, '.claude', 'orchestration.md')));
   assert.ok(fs.existsSync(path.join(outDir, '.claude', 'skills', 'keel-generate-spring', 'SKILL.md')));
   assert.ok(fs.existsSync(path.join(outDir, '.claude', 'conventions', 'mapping.md')));
+  assert.ok(fs.existsSync(path.join(outDir, '.claude', 'agents', 'keel-spring-code.md')));
   assert.ok(fs.existsSync(path.join(outDir, 'specs', 'service.keel.yaml')));
   assert.ok(fs.existsSync(path.join(outDir, 'specs', 'domain.keel.yaml')));
+
+  // Flujo normalizado: la generación se ejecuta DENTRO del proyecto, así que el
+  // workspace de diseño no recibe ningún archivo del generador.
+  assert.ok(!fs.existsSync(path.join(workspace, '.claude')), 'build no debe sembrar .claude/ en el workspace');
+  assert.ok(!fs.existsSync(path.join(workspace, 'generators')), 'build no debe sembrar generators/ en el workspace');
 
   // El snapshot de specs/ SIEMPRE se refresca (el canónico es el del workspace).
   const snapshotFile = path.join(outDir, 'specs', 'domain.keel.yaml');
@@ -236,16 +247,17 @@ test('build sin docs/<servicio> avisa pero termina en verde y el README omite la
   assert.ok(!fs.readFileSync(path.join(outDir, 'README.md'), 'utf8').includes('## Contratos y documentación'));
 });
 
-test('build es idempotente: la segunda pasada no reescribe los assets', async () => {
-  const workspace = makeWorkspace();
-  writeService(workspace);
-  await runBuild(workspace, 'specs/demo');
+test('build es idempotente: la segunda pasada no reescribe el .claude/ del proyecto', async () => {
+  const workspace = withFixture();
+  await runBuild(workspace, 'specs/product-catalog');
 
-  const skillPath = path.join(workspace, '.claude', 'skills', 'keel-generate-spring', 'SKILL.md');
+  const skillPath = path.join(
+    workspace, 'services', 'product-catalog-spring', '.claude', 'skills', 'keel-generate-spring', 'SKILL.md'
+  );
   fs.writeFileSync(skillPath, 'modificado localmente');
-  await runBuild(workspace, 'specs/demo');
+  await runBuild(workspace, 'specs/product-catalog');
   assert.equal(fs.readFileSync(skillPath, 'utf8'), 'modificado localmente');
 
-  await runBuild(workspace, 'specs/demo', { force: true });
+  await runBuild(workspace, 'specs/product-catalog', { force: true });
   assert.notEqual(fs.readFileSync(skillPath, 'utf8'), 'modificado localmente');
 });

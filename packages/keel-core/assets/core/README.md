@@ -26,6 +26,7 @@ Este directorio es un **workspace Keel** (ver `CLAUDE.md` para el flujo completo
 1. `keel new <servicio>` — crea `specs/<servicio>/` (manifiesto + capas obligatorias).
 2. `/keel-design specs/<servicio>` — diseña capa a capa con el agente; al cerrar, genera
    `validation-scenarios.md`, el documento de diseño `docs/<servicio>/DESIGN.md` y actualiza este índice.
-3. `/keel-generate <tech> specs/<servicio>` — genera la implementación en `services/<servicio>-<tech>/`.
-4. `/keel-docs specs/<servicio>` — contratos formales (`openapi.yaml`, `asyncapi.yaml`), colecciones
+3. `keel-<tech> build specs/<servicio>` — elige el stack y genera el proyecto en `services/<servicio>-<tech>/`.
+4. `cd services/<servicio>-<tech>` y, dentro del proyecto, `/keel-generate-<tech>` — completa la implementación.
+5. `/keel-docs specs/<servicio>` — contratos formales (`openapi.yaml`, `asyncapi.yaml`), colecciones
    Postman y el panel visual del servicio (`overview.html`).

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import pc from 'picocolors';
 import { isKeelWorkspace, resolveServiceDir, loadService, validateService, copyTree } from 'keel-core';
-import { assetsDir, SKILL, SUPPORTED_DSL } from '../lib/assets.js';
+import { SKILL, SUPPORTED_DSL } from '../lib/assets.js';
 import { checkSupportedFeatures } from '../lib/supported-features.js';
 import { scaffoldService } from '../scaffold/index.js';
 import { writeFiles } from '../lib/writer.js';
@@ -81,10 +81,10 @@ export async function build(inputPath, { force = false, defaults = false } = {})
     return;
   }
 
-  // Instala skill + conventions + skills por tecnología + golden en el workspace (idempotente; --force sobrescribe).
-  const { copied, skipped } = copyTree(assetsDir, workspace, { force });
-  for (const file of copied) console.log(`  ${pc.green('+')} ${file}`);
-  for (const file of skipped) console.log(`  ${pc.yellow('=')} ${file} ${pc.dim('(ya existía, omitido)')}`);
+  // El workspace de diseño no recibe nada del generador: la skill, los agentes,
+  // las conventions y las skills por tecnología se instalan solo en el proyecto
+  // generado (el asset del paquete npm es su fuente, leída directamente). La
+  // generación se ejecuta siempre con el cwd en services/<servicio>-spring/.
 
   // Un diseño en progreso no es generable: validación estricta, sin --wip.
   const { loadErrors: fullLoadErrors, schemaErrors, crossRefErrors, warnings, pending, ok } = validateService(dir, {
@@ -145,34 +145,6 @@ export async function build(inputPath, { force = false, defaults = false } = {})
     )
   );
 
-  // La infraestructura de prueba vive en infra/ desde keel-spring 0.2; los
-  // archivos de la raíz de builds anteriores quedan huérfanos (writer.js nunca
-  // borra): se avisa para limpiarlos a mano.
-  const legacyInfra = ['docker-compose.yaml', 'validate-infra.sh', path.join('docker', 'Dockerfile.devtools')]
-    .filter((file) => fs.existsSync(path.join(projectDir, file)));
-  if (legacyInfra.length > 0) {
-    console.warn(
-      `${pc.yellow('⚠')} La infraestructura de prueba ahora vive en infra/; quedaron archivos de una versión ` +
-        `anterior en la raíz del proyecto (${legacyInfra.join(', ')}): bórralos manualmente.`
-    );
-  }
-
-  // Las guías por tecnología ahora son skills keel-spring-<tech>; los
-  // references/ de builds anteriores quedan huérfanos (writer.js/copyTree
-  // nunca borran): se avisa para limpiarlos a mano.
-  const legacyReferences = [
-    path.join(projectDir, '.claude', 'skills', SKILL, 'references'),
-    path.join(workspace, 'generators', 'spring', 'references')
-  ].filter((refDir) => fs.existsSync(refDir));
-  if (legacyReferences.length > 0) {
-    console.warn(
-      `${pc.yellow('⚠')} Las guías por tecnología ahora son skills (.claude/skills/keel-spring-<tech>/); quedaron ` +
-        `directorios references/ de una versión anterior (${legacyReferences
-          .map((refDir) => path.relative(workspace, refDir).split(path.sep).join('/'))
-          .join(', ')}): bórralos manualmente.`
-    );
-  }
-
   // Snapshot del diseño dentro del proyecto: junto con .claude/ hace el repo
   // autosuficiente (quien lo clone finaliza la generación sin el workspace).
   // Siempre se refresca: el canónico es specs/<servicio> del workspace.
@@ -207,8 +179,13 @@ export async function build(inputPath, { force = false, defaults = false } = {})
     );
   }
 
-  const service = path.relative(workspace, dir).split(path.sep).join('/');
   console.log();
   console.log(pc.bold(pc.green('✔ Scaffolding generado.')) + pc.dim(` — ${manifest.service?.name} v${manifest.service?.version}`));
-  console.log(`Abre Claude Code y ejecuta ${pc.cyan(`/${SKILL} ${service}`)} para orquestar el completado: código + infraestructura en paralelo y validación funcional al final.`);
+  console.log(`
+Siguiente paso — la generación se completa dentro del proyecto:
+  1. ${pc.cyan(`cd ${scaffold.outDir}`)}
+  2. abre Claude Code ahí y ejecuta ${pc.cyan(`/${SKILL}`)} ${pc.dim('(sin argumentos)')}
+
+Orquesta el completado: código + infraestructura en paralelo, validación funcional de los
+escenarios contra el servidor real y pase de calidad al final.`);
 }

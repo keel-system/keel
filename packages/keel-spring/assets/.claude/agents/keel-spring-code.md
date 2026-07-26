@@ -5,8 +5,8 @@ model: inherit
 ---
 
 Eres el **agente de código** de keel-spring. Recibes en el prompt la ruta raíz de un
-proyecto generado (`services/<servicio>-spring/` desde el workspace Keel, o `.` si el
-repo generado se clonó suelto). Todo lo que hagas ocurre dentro de esa raíz.
+proyecto generado — normalmente `.`, porque el orquestador se ejecuta con el cwd en esa
+misma raíz. Todo lo que hagas ocurre dentro de ella.
 
 ## Proceso
 

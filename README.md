@@ -44,10 +44,14 @@ keel new mi-servicio # crea specs/mi-servicio/ (manifiesto + domain + use-cases)
 #                                            y actualiza el índice README.md del workspace
 keel validate specs/mi-servicio              # schemas por capa + referencias cruzadas
 
-keel-spring build specs/mi-servicio      # instala la skill, valida, pregunta el stack y genera el scaffolding
-#   /keel-generate-spring specs/mi-servicio  → completa services/mi-servicio-spring/
 #   /keel-docs specs/mi-servicio             → openapi.yaml, asyncapi.yaml, Postman y overview.html
 #   /keel-handoff specs/mi-servicio          → regenera DESIGN.md + índice si el spec cambió
+
+# Generar: dos pasos, con un cd en medio.
+keel-spring build specs/mi-servicio   # valida, pregunta el stack y genera services/mi-servicio-spring/
+cd services/mi-servicio-spring
+# En Claude Code, abierto en esa raíz:
+#   /keel-generate-spring                    → sin argumentos; completa el proyecto y valida los escenarios
 ```
 
 ## Comandos
@@ -58,7 +62,7 @@ keel-spring build specs/mi-servicio      # instala la skill, valida, pregunta el
 | `keel new <servicio>` | Crea `specs/<servicio>/` con manifiesto + capas obligatorias desde plantillas. |
 | `keel list` | Lista los generadores conocidos y su paquete npm. |
 | `keel validate <ruta>` | Valida un servicio (directorio o manifiesto): schema de cada capa + referencias cruzadas entre artefactos (offline, con todos los errores). |
-| `keel-spring build <ruta> [--force] [--defaults]` | Instala el generador Spring Boot en el workspace (skill + conventions + skills por tecnología + golden), comprueba la compatibilidad DSL, valida el diseño, pregunta el stack (persistido en `keel-stack.json`) y genera el scaffolding transversal en `services/<servicio>-spring/`. |
+| `keel-spring build <ruta> [--force] [--defaults]` | Comprueba la compatibilidad DSL, valida el diseño, pregunta el stack (persistido en `keel-stack.json`) y genera en `services/<servicio>-spring/` el scaffolding transversal al stack más el `.claude/` del agente (skill, agentes, conventions, skills del stack) y los snapshots de `specs/` y `docs/`. No escribe nada en el workspace de diseño. |
 
 ## El workspace sembrado
 
@@ -66,7 +70,7 @@ keel-spring build specs/mi-servicio      # instala la skill, valida, pregunta el
 mi-proyecto/
 ├── CLAUDE.md                 # el flujo, para el agente
 ├── README.md                 # índice de servicios diseñados (enlaza cada DESIGN.md) — página de entrada del repo
-├── .claude/skills/           # keel-design, keel-consume, keel-validate, keel-generate, keel-docs, keel-handoff (+ generadores)
+├── .claude/skills/           # keel-design, keel-consume, keel-validate, keel-docs, keel-integrate, keel-handoff
 ├── schema/                   # un JSON Schema por capa + common.schema.json
 ├── specs/<servicio>/         # el diseño de cada servicio, un artefacto por capa — la fuente de verdad
 │   ├── service.keel.yaml     #   manifiesto: identidad + capas declaradas
@@ -76,9 +80,12 @@ mi-proyecto/
 ├── templates/service/        # una plantilla por capa
 ├── contracts/<proveedor>/    # INTEGRATION.md de servidores externos de los que dependemos (entrada de /keel-consume)
 ├── docs/                     # methodology, dsl-reference (índice), dsl/<capa>.md, building-a-generator
-├── generators/<tech>/        # generadores instalados con `keel-<tech> build` (conventions + skills por tecnología + golden)
-└── services/                 # servicios generados (un repo git propio cada uno)
+└── services/<servicio>-<tech>/  # servicios generados por `keel-<tech> build` (un repo git propio cada uno)
+    ├── .claude/              #   la skill del generador, sus agentes y conventions — el flujo de generación
+    └── specs/                #   snapshot del diseño: el proyecto se completa sin el workspace
 ```
+
+El workspace es **solo diseño**: no aloja skills ni convenciones de generadores. Todo el conocimiento de generación vive dentro de cada proyecto generado.
 
 ## Estructura de este repo
 

@@ -1,15 +1,16 @@
 # Orquestación de agentes — cómo se genera el código
 
-Cómo la skill `/keel-generate-spring` completa un proyecto generado por `keel-spring build`
-hasta dejarlo funcional y validado. La skill **no escribe código**: es la **orquestadora**
-de cuatro subagentes instalados en `.claude/agents/` (del workspace y del proyecto
-generado), y toma sus decisiones de avance/relanzamiento (gating) sobre el bloque
-estructurado (`status`, `blockers`, `failures`…) con el que cada agente cierra su reporte.
+Cómo la skill `/keel-generate-spring` — ejecutada **dentro de este proyecto** (`cd` a la
+raíz y `/keel-generate-spring`, sin argumentos) — lo completa hasta dejarlo funcional y
+validado. La skill **no escribe código**: es la **orquestadora** de cuatro subagentes
+instalados en `.claude/agents/`, y toma sus decisiones de avance/relanzamiento (gating)
+sobre el bloque estructurado (`status`, `blockers`, `failures`…) con el que cada agente
+cierra su reporte.
 
 ## Punto de partida: qué dejó hecho `build`
 
-`keel-spring build` ya generó de forma **determinista** todo lo transversal al stack
-(ver [README.md](README.md)): el proyecto compila y arranca, con dominio puro, puertos,
+`keel-spring build`, ejecutado en el workspace de diseño, ya generó de forma
+**determinista** todo lo transversal al stack: el proyecto compila y arranca, con dominio puro, puertos,
 contratos CQRS + `UseCaseMediator`, controllers, JPA, seguridad, stubs con `// TODO`,
 config por perfiles e infraestructura de prueba en `infra/`. Lo que queda para los
 agentes es la **frontera dependiente de la infraestructura elegida** (publishers/listeners
@@ -27,7 +28,7 @@ validación funcional contra el servidor real.
 
 ```mermaid
 flowchart TB
-    PRE["Precondiciones:<br/>diseño válido (keel 2.0) · validation-scenarios.md<br/>proyecto de build en services/&lt;servicio&gt;-spring/ · keel-stack.json"]
+    PRE["Precondiciones (cwd = raíz del proyecto):<br/>snapshot del diseño en specs/ · specs/validation-scenarios.md<br/>keel-stack.json · .claude/ completo"]
 
     PRE --> F1
     subgraph F1["Fase 1 — en paralelo"]
@@ -121,7 +122,14 @@ matriz y se detiene.
 
 ## Autosuficiencia del proyecto generado
 
-`build` instala en el proyecto (`services/<servicio>-spring/.claude/`) la misma skill
-orquestadora, los cuatro agentes, las conventions, las skills por tecnología del stack
-elegido y un snapshot del diseño en `specs/`. El pipeline de arriba funciona **idéntico**
-desde un clon del repo generado, sin este workspace.
+`build` deja en este proyecto todo lo que el pipeline necesita: la skill orquestadora
+(`.claude/skills/keel-generate-spring/`), los cuatro agentes (`.claude/agents/`), las
+conventions (`.claude/conventions/`), `architecture.md` y `constitution.md`, las skills por
+tecnología del stack elegido y un snapshot del diseño en `specs/`. **No hay nada del
+generador en el workspace de diseño**: el pipeline se ejecuta siempre con el cwd en esta
+raíz, y funciona idéntico desde un clon del repo, sin el workspace.
+
+El canónico del diseño sigue siendo `specs/<servicio>/` del workspace: el snapshot de
+`specs/` se refresca en cada `keel-spring build`. Si el diseño cambió, se re-ejecuta
+`keel-spring build specs/<servicio>` allí (solo añade archivos nuevos; con `--force`
+sobrescribe) y se vuelve a entrar aquí.

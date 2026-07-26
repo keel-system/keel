@@ -2,7 +2,6 @@
 import { Command } from 'commander';
 import { packageVersion } from './lib/assets.js';
 import { init } from './commands/init.js';
-import { add } from './commands/add.js';
 import { list } from './commands/list.js';
 import { validate } from './commands/validate.js';
 import { describe } from './commands/describe.js';
@@ -20,12 +19,6 @@ program
   .description('Siembra un workspace Keel en el directorio actual (skills, schema, plantillas, docs)')
   .option('-f, --force', 'sobrescribe archivos existentes', false)
   .action((options) => init(options));
-
-program
-  .command('add')
-  .description('[deprecado] Los generadores son paquetes independientes: npm i -g keel-<tech> && keel-<tech> build')
-  .argument('<tech>', 'tecnología del generador (ver: keel list)')
-  .action((tech) => add(tech));
 
 program
   .command('list')

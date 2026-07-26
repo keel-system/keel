@@ -5,26 +5,52 @@ Un generador convierte specs Keel en servicios de una tecnología concreta repar
 1. **Scaffolding transversal al stack** (comando `build`): tras el cuestionario de stack (BD, broker, auth… — solo lo que el diseño necesita; persistido en `keel-stack.json`), genera de forma determinista todo lo necesario para **levantar el proyecto**: dependencias en función del stack elegido, configuración por perfiles, infraestructura de prueba, y toda la estructura cuyo código es idéntico sea cual sea la opción de infra puntual (dominio puro, puertos, contratos, controllers, mediator, manejo de errores, stubs).
 2. **Conocimiento para el agente**: una skill orquestadora, convenciones y **skills por tecnología** (`skills/keel-<tech>-<infra>/SKILL.md`, instaladas condicionalmente en el proyecto generado según el stack elegido) con las que el agente escribe el código cuya implementación depende de la infra elegida (adaptadores del broker/storage…), la lógica de negocio y los tests.
 
-Cada generador es un **paquete npm independiente con CLI propia** (`keel-<tech>`, ej. `keel-spring`): se instala con `npm i -g keel-<tech>` y su comando `build` prepara el workspace y genera el scaffolding. Los generadores conocidos se ven con `keel list`. Referencia viva: el paquete `keel-spring`.
+Cada generador es un **paquete npm independiente con CLI propia** (`keel-<tech>`, ej. `keel-spring`): se instala con `npm i -g keel-<tech>` y su comando `build` genera el proyecto. Los generadores conocidos se ven con `keel list`. Referencia viva: el paquete `keel-spring`.
 
-## Qué instala `keel-<tech> build` en el workspace
+## El flujo de generación: dos pasos, con cambio de directorio en medio
 
-```
-.claude/skills/keel-generate-<tech>/SKILL.md   # el proceso de generación paso a paso
-generators/<tech>/
-├── README.md            # contrato: entrada, compatibilidad DSL, salida, reglas
-├── architecture.md      # arquitectura del proyecto generado y función de cada paquete (→ .claude/architecture.md)
-├── constitution.md      # reglas inviolables del proyecto generado (→ .claude/constitution.md)
-├── conventions/
-│   ├── project-layout.md    # stack por defecto + estructura + frontera scaffolding/agente
-│   └── mapping.md           # tabla normativa spec → código
-├── skills/              # skills por tecnología del stack (keel-<tech>-kafka/, keel-<tech>-s3/…) para el código del agente
-└── golden/              # ejemplo de referencia generado desde un diseño fijo
+Todos los generadores exponen **el mismo** flujo de dos pasos, y es normativo:
+
+```bash
+# 1) desde el workspace de diseño, con el diseño cerrado y en verde:
+keel-<tech> build specs/<servicio>     # cuestionario de stack → services/<servicio>-<tech>/
+
+# 2) dentro del proyecto generado:
+cd services/<servicio>-<tech>
+/keel-generate-<tech>                  # sin argumentos
 ```
 
-Además de copiar estos archivos (idempotente; `--force` sobrescribe), `build` comprueba la compatibilidad de versión DSL del manifiesto, ejecuta la validación mecánica (`keel validate`, sin `--wip`) — si el diseño no es generable, lo reporta y se detiene — y genera el scaffolding en `services/<servicio>-<tech>/`.
+El paso 1 existe porque **el stack lo elige el diseñador a mano** (BD, broker, auth, caché, storage — solo lo que el diseño necesita): es una decisión humana que no se deriva del spec, y queda persistida en `keel-stack.json` del proyecto. El paso 2 se ejecuta **con el cwd en la raíz del proyecto**, no en el workspace: el proyecto es autosuficiente y la skill no toma argumentos.
 
-El scaffolding debe dejar el proyecto generado como **repo autosuficiente**: quien lo clone (sin el workspace Keel) puede finalizar la generación. Eso significa, en `.claude/` del proyecto: un `CLAUDE.md` contextual especializado por servicio (orden de procesamiento de capas — solo las declaradas —, stack elegido, proceso y verificación), un `architecture.md` (arquitectura del proyecto generado y función de cada paquete) y un `constitution.md` (reglas inviolables: qué rompería la arquitectura o serían malas prácticas, para que el agente las audite sin tener que releer todas las conventions); un snapshot del diseño en `specs/` del proyecto (que `build` **siempre refresca** — el canónico es el del workspace); y `.claude/skills/` con una skill propia del proyecto (`keel-generate-<tech>/`, con copia local de las conventions) más **solo** las skills por tecnología del stack elegido (instalación condicional según `keel-stack.json`). Si el generador orquesta el completado con subagentes (patrón de `keel-spring`: agente de código en paralelo con agente de infraestructura, agente de validación funcional después y, opcionalmente, un pase de calidad no-conductual al final), sus definiciones viven en `assets/.claude/agents/` y se instalan tanto en el workspace como en `.claude/agents/` del proyecto generado. Patrón recomendado de **handoff estructurado**: cada subagente cierra su reporte con un bloque parseable (`status`, `blockers[]`, `failures[]`…) y la skill orquestadora decide avances y relanzamientos sobre esos campos, nunca sobre prosa. La skill del workspace queda como copia canónica; las locales se refrescan con `--force`.
+**El workspace de diseño no recibe nada del generador.** No hay skill de generación, ni agentes, ni conventions, ni `generators/<tech>/` en él: el workspace es solo diseño. Todo el conocimiento de generación se instala en el `.claude/` del proyecto que el generador produce, leyéndolo directamente de los `assets/` del paquete npm. Un generador nuevo **no debe** sembrar nada en el workspace: duplicaría el conocimiento y abriría un segundo camino de generación (el problema exacto que este flujo normaliza).
+
+## Qué genera `keel-<tech> build`
+
+`build` se ejecuta desde el workspace (verifica que lo es), comprueba la compatibilidad de versión DSL del manifiesto, aplica su chequeo de frontera (ver `supported-features.js` más abajo), ejecuta la validación mecánica (`keel validate`, sin `--wip`) — si el diseño no es generable, lo reporta y se detiene —, pregunta el stack y escribe **todo** en `services/<servicio>-<tech>/`:
+
+```
+services/<servicio>-<tech>/
+├── <el proyecto>        # scaffolding transversal al stack: deps, config, infra de prueba, estructura
+├── keel-stack.json      # el stack elegido por el diseñador (se reutiliza sin repreguntar)
+├── specs/               # snapshot del diseño (build lo REFRESCA siempre; el canónico es el del workspace)
+├── docs/                # snapshot de los contratos formales de /keel-docs (si ya se generaron)
+└── .claude/
+    ├── CLAUDE.md        # contextual y especializado por servicio: orden de capas declaradas, stack, verificación
+    ├── architecture.md  # arquitectura del proyecto generado y función de cada paquete
+    ├── constitution.md  # reglas inviolables: qué rompería la arquitectura o serían malas prácticas
+    ├── orchestration.md # el pipeline: fases, gating, handoffs (si el completado se orquesta con subagentes)
+    ├── conventions/     # copia local de las conventions (mapping, project-layout…)
+    ├── agents/          # los subagentes del completado
+    └── skills/
+        ├── keel-generate-<tech>/   # la ÚNICA skill de generación; se invoca sin argumentos
+        └── keel-<tech>-<infra>/    # solo las del stack elegido (condicional según keel-stack.json)
+```
+
+Con eso el proyecto es un **repo autosuficiente**: quien lo clone, sin el workspace Keel, puede finalizar la generación. La skill del proyecto conviene **sintetizarla** (parametrizada por servicio, stack y capas presentes) en vez de copiar un asset estático: así solo existe una definición del pipeline y no puede divergir.
+
+Si el generador orquesta el completado con subagentes (patrón de `keel-spring`: agente de código en paralelo con agente de infraestructura, agente de validación funcional después y un pase de calidad no-conductual al final), sus definiciones viven en `assets/.claude/agents/` y se instalan en `.claude/agents/` del proyecto. Patrón recomendado de **handoff estructurado**: cada subagente cierra su reporte con un bloque parseable (`status`, `blockers[]`, `failures[]`…) y la skill orquestadora decide avances y relanzamientos sobre esos campos, nunca sobre prosa.
+
+**Regeneración segura**: re-ejecutar `build` solo añade archivos nuevos y nunca pisa lo que el agente implementó; `--force` sobrescribe todo lo generado (avisando de qué se perdería). Los snapshots de `specs/` y `docs/` son la excepción: se refrescan siempre.
 
 ## Anatomía del paquete
 
@@ -36,7 +62,7 @@ keel-<tech>/
 │   ├── commands/build.js
 │   ├── lib/             # assets.js (rutas + SUPPORTED_DSL), model.js (DSL → modelo), stack-catalog/config
 │   └── scaffold/        # un módulo por artefacto transversal al stack (patrón de keel-spring)
-├── assets/              # exactamente lo que build copia al workspace (árbol de arriba)
+├── assets/              # fuente del .claude/ del proyecto generado: skill, agents, conventions, skills/<infra>, golden
 └── test/
 ```
 
@@ -74,10 +100,8 @@ Un generador nuevo es un paquete `packages/keel-<tech>/` en el monorepo de Keel 
 
 1. Copia `packages/keel-spring/` y adapta: `package.json` (name, bin, descripción), `src/lib/assets.js` (skill y tecnología), y el contenido de `assets/` — README, skill y conventions de la tecnología (verifica versiones actuales del stack con `find-docs`).
 2. Escribe la tabla de mapeo completa recorriendo `docs/dsl-reference.md` construcción por construcción.
-3. Pruébalo en un workspace: `npm link` del paquete, `keel-<tech> build specs/<servicio>` y genera un servicio existente (idealmente el mismo diseño que otro generador ya generó); compara comportamiento observable: mismos endpoints, mismos códigos de error, mismos eventos.
+3. Pruébalo en un workspace: `npm link` del paquete, `keel-<tech> build specs/<servicio>` y genera un servicio existente (idealmente el mismo diseño que otro generador ya generó); después `cd` al proyecto y completa con `/keel-generate-<tech>`. Compara comportamiento observable con el otro generador: mismos endpoints, mismos códigos de error, mismos eventos.
 4. Refina la skill y las conventions con lo aprendido y puebla `golden/`. El generador mejora con cada uso.
-
-Para experimentar sin crear el paquete, también puedes crear `generators/<tech>/` + su skill directamente en el workspace (mismo layout de assets); si funciona bien, conviértelo en paquete siguiendo el patrón de `keel-spring`.
 
 ## Versionado
 

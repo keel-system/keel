@@ -334,6 +334,23 @@ test('CLAUDE.md contextual: specs, solo capas declaradas y skill local con conve
   assert.ok(skill.includes('keel-spring-infra'));
   assert.ok(skill.includes('keel-spring-validate'));
   assert.ok(skill.includes('keel-spring-quality'));
+  // Flujo normalizado: se invoca sin argumentos, con el cwd en la raíz del proyecto.
+  assert.ok(skill.includes('sin argumentos'));
+  assert.ok(!skill.includes('argument-hint'));
+  // Consolidado desde el asset estático que se eliminó: precondiciones,
+  // ciclos de fase 2 escalados por número de flujos y guía de despliegue.
+  assert.ok(skill.includes('validation-scenarios.md'));
+  assert.ok(skill.includes('keel-stack.json'));
+  assert.ok(skill.includes('blocking: systemic'));
+  assert.ok(skill.includes('Despliegue en producción'));
+  assert.ok(skill.includes('parameters/production'));
+  // El detalle del gating no se duplica: remite a orchestration.md.
+  assert.ok(skill.includes('.claude/orchestration.md'));
+
+  // orchestration.md: el pipeline canónico, instalado junto a architecture/constitution.
+  const orchestration = read(workspace, '.claude/orchestration.md');
+  assert.ok(orchestration.includes('Ciclos de fix'));
+  assert.ok(!orchestration.includes('del workspace y del proyecto'));
 
   // Conventions siempre, hermanas de agents/ y skills/ en .claude/ (las lee
   // cualquiera de los 4 subagentes, no solo la skill orquestadora); el fixture

@@ -56,5 +56,5 @@ Lee los artefactos y verifica esta checklist. Reporta cada hallazgo con severida
 ## Salida
 
 Termina con un veredicto claro:
-- ✅ **Válido** — listo para `/keel-generate` y `/keel-docs`.
+- ✅ **Válido** — listo para `keel-<tech> build specs/<servicio>` (que genera el proyecto; el código se completa después con `/keel-generate-<tech>` dentro de él) y para `/keel-docs`.
 - ❌ **Inválido** — lista numerada de errores (y avisos aparte), cada uno con el artefacto afectado y su corrección propuesta. Ofrece aplicarlas.
