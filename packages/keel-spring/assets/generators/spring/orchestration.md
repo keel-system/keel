@@ -93,10 +93,20 @@ en el código: se propone como cambio a los artefactos (`designGaps`).
 
 ## Ciclos de fix: bloqueo sistémico ≠ fallos puntuales
 
-El cupo de la fase 2 es de **2 ciclos código→validación para fallos puntuales**
-(`blocking: scoped`). Un ciclo que cerró un **bloqueo sistémico** (`blocking:
-systemic` — una causa transversal única que impedía ejercitar casi cualquier
-escenario: seguridad, arranque, infraestructura) **no consume cupo**.
+El cupo de la fase 2 son los ciclos código→validación para **fallos puntuales**
+(`blocking: scoped`), y **escala con el tamaño del diseño**: un servicio de 22
+flujos y cinco piezas de infraestructura no cabe en el mismo presupuesto que uno
+de cinco flujos. Se cuenta sobre los flujos `FL-*` de `specs/validation-scenarios.md`:
+
+| Flujos `FL-*` | Ciclos `scoped` | Tope duro |
+|---|---|---|
+| hasta 10 | 2 | 4 |
+| 11–20 | 3 | 5 |
+| más de 20 | 4 | 6 |
+
+Un ciclo que cerró un **bloqueo sistémico** (`blocking: systemic` — una causa
+transversal única que impedía ejercitar casi cualquier escenario: seguridad,
+arranque, infraestructura) **no consume cupo**.
 
 La razón es que un bloqueo sistémico *oculta* los fallos finos: mientras toda la
 API responde 401, no se puede saber nada sobre las reglas de negocio. Al
@@ -104,7 +114,8 @@ destrabarlo aparece, por primera vez, una tanda de fallos específicos —
 exactamente aquello para lo que existe el cupo. Cobrárselo al presupuesto de los
 fallos puntuales lo agota antes de empezar a usarlo.
 
-Tope duro global: **4 ciclos** de fase 2, para que ninguna calificación deje la
+El tope duro de la tabla acota el total de ciclos de fase 2 (los `scoped` más los
+que cerraron bloqueos sistémicos), para que ninguna calificación deje la
 orquestación en bucle. Alcanzado el límite que aplique, el orquestador reporta la
 matriz y se detiene.
 

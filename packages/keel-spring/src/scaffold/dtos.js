@@ -20,6 +20,8 @@ export function generate(model) {
   }
 
   for (const childDto of model.childDtos ?? []) files.push(renderRecord(model, childDto));
+  // Referencias embebidas (embed): el agregado ajeno proyectado en este payload.
+  for (const refDto of model.refDtos ?? []) files.push(renderRecord(model, refDto));
 
   if (model.hasFileUploads) files.push(renderFileUpload(model));
   if (anyPaginated) files.push(renderPagedResponse(model));
@@ -70,14 +72,18 @@ function renderPagedResponse(model) {
     fromHelper = `
 
     public static <T> PagedResponse<T> from(Page<T> page) {
-        return new PagedResponse<>(page.getContent(), page.getNumber(), page.getSize(), page.getTotalElements());
+        return new PagedResponse<>(page.getContent(), page.getNumber(), page.getSize(),
+                page.getTotalElements(), page.getTotalPages());
     }`;
   }
 
+  // Forma canónica del sobre de paginación (docs/dsl/api.md § Paginación): los
+  // escenarios de validación se escriben contra estos nombres exactos, así que
+  // no puede ser el sobre de Spring Data (content/…) ni omitir totalPages.
   const body = `/**
- * Respuesta paginada del contrato: content + metadatos de página.
+ * Respuesta paginada del contrato: items + metadatos de página.
  */
-public record PagedResponse<T>(List<T> content, int page, int size, long totalElements) {${fromHelper}
+public record PagedResponse<T>(List<T> items, int page, int size, long totalElements, int totalPages) {${fromHelper}
 }`;
 
   return {

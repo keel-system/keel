@@ -86,23 +86,28 @@ Convierte una corrupción silenciosa en un conflicto visible y recuperable.
 
 El reto técnico: el adaptador de repositorio **construye una `XxxJpa` nueva en cada `save()`**, así
 que `@Version` solo en la entidad JPA no bastaría — Hibernate perdería la versión en el ida-y-vuelta.
-Por eso la versión **viaja por el dominio**:
+Por eso la versión **viaja por el dominio**. El campo se llama `lockVersion` para no colisionar con
+un `version` que el diseño declare: ese es un contador de **dominio** (viaja en la API y en los
+eventos, lo incrementa el agregado) y son dos conceptos distintos que no se fusionan.
 
-- **`persistence-entities.js`**: `@Version @Column(name = "version") private Long version;` en la
-  raíz de agregado (JPA).
-- **`entities.js`**: la raíz de dominio porta `version`, que entra como **último parámetro del
-  constructor de rehidratación** y expone `getVersion()`.
-- **`repositories.js`**: el mapeo la propaga en ambos sentidos (`toDomain` → `new Product(..., jpa.getVersion())`;
-  `toJpa` → `jpa.setVersion(domain.getVersion())`).
+- **`persistence-entities.js`**: `@Version @Column(name = "lock_version") private Long lockVersion;`
+  en la raíz de agregado (JPA).
+- **`entities.js`**: la raíz de dominio porta `lockVersion`, que entra como **último parámetro del
+  constructor de rehidratación** y expone `getLockVersion()`.
+- **`repositories.js`**: el mapeo la propaga en ambos sentidos (`toDomain` → `new Product(..., jpa.getLockVersion())`;
+  `toJpa` → `jpa.setLockVersion(domain.getLockVersion())`).
 - **`controllers.js`**: nuevo handler que traduce `ObjectOptimisticLockingFailureException` a
   **409 `OPTIMISTIC_LOCK_CONFLICT`**, para que un conflicto no caiga en el catch-all como 500.
 
 Todo gateado por `isAggregateRoot`: la **raíz es la frontera de consistencia** (DDD), las entidades
 hijas no llevan versión propia.
 
-> **Limitación conocida.** El `@Version` de la raíz protege el caso común. Si dos peticiones modifican
-> **solo hijas distintas** del agregado sin tocar la raíz, JPA no incrementa la versión de la raíz
-> automáticamente. Cubrirlo requiere `LockModeType.OPTIMISTIC_FORCE_INCREMENT` — refinamiento futuro.
+> **Limitación conocida.** El `lockVersion` de la raíz protege el caso común. Si dos peticiones
+> modifican **solo hijas distintas** del agregado sin tocar la raíz, JPA no incrementa la versión de
+> la raíz automáticamente. En la práctica el hueco casi siempre se cierra solo: cuando el diseño
+> declara un `version` de dominio, el agregado lo incrementa también en las operaciones sobre hijas,
+> lo que ensucia la fila de la raíz y hace que Hibernate incremente el `lockVersion`. Para el caso sin
+> `version` declarada queda `LockModeType.OPTIMISTIC_FORCE_INCREMENT` — refinamiento futuro.
 
 ---
 

@@ -53,7 +53,15 @@ repo generado se clonó suelto). Todo lo que hagas ocurre dentro de esa raíz.
    `./gradlew build -x test` no ve y que, sin esta pasada, cuestan un ciclo entero de
    validación funcional. Recórrela aunque el scaffolding no haya marcado ningún TODO
    en esos puntos.
-6. No des tu trabajo por terminado con la compilación en rojo; corrige y repite.
+6. Cierra con la **auditoría de consistencia del contrato**
+   (`.claude/conventions/mapping.md`, § Auditoría de consistencia del contrato):
+   cada nombre de campo que `specs/validation-scenarios.md` menciona en una
+   respuesta, contrastado contra el DTO real; "ausencia vs. nulo" propagada a los
+   value objects compuestos; ningún value object proyectado exponiendo métodos
+   derivados (`isXxx()`) que Jackson convierta en propiedades. Una decisión bien
+   tomada en un agregado se olvida en el siguiente: esta pasada es la que lo
+   detecta sin gastar un ciclo de validación funcional.
+7. No des tu trabajo por terminado con la compilación en rojo; corrige y repite.
 
 ## Reglas
 
@@ -85,6 +93,15 @@ repo generado se clonó suelto). Todo lo que hagas ocurre dentro de esa raíz.
   variables, tablas) va en inglés; comentarios y docs en español. Un identificador en
   español en el diseño no se traduce por tu cuenta: es un `blocker`.
 - Ante ambigüedad: diseño > conventions > golden > tu criterio (documentado).
+- **Un hueco de infraestructura no es un `designGap`.** Si una regla del diseño no
+  tiene la vía nativa disponible (una extensión SQL que no está, una capacidad del
+  dialecto que falta), busca la implementación equivalente en la capa de aplicación
+  —aunque sea menos eficiente— e **impleméntala**. "No hay una extensión SQL para
+  esto" no es "no se puede hacer". `designGaps` queda para lo que de verdad no
+  tiene solución sin cambiar el diseño o la infraestructura elegida: una
+  contradicción entre artefactos, un caso borde sin error declarado, un contrato
+  que el DSL no puede expresar. Una regla del diseño sin implementar es un
+  escenario en FALLO garantizado, y se paga un ciclo entero de validación.
 - No preguntas al usuario: registra cada bloqueo en `blockers` y termina; el
   orquestador decide.
 
@@ -101,6 +118,8 @@ compiles: true | false
 layersCompleted: [...]
 failures: [...]          # errores de compilación/empaquetado: archivo:línea y causa.
                          # Si te relanzaron con escenarios en FALLO, qué corregiste de cada uno
-designGaps: [...]        # huecos del diseño, como propuesta de cambio a los artefactos
+designGaps: [...]        # huecos del diseño, como propuesta de cambio a los artefactos.
+                         # Solo lo irresoluble sin cambiar diseño o infraestructura:
+                         # un hueco con fallback disponible se implementa, no se reporta
 blockers: [...]          # contradicciones o precondiciones rotas que impiden avanzar
 ```

@@ -102,10 +102,12 @@ function renderEntity(model, entity) {
 
   // Concurrencia optimista: la raíz de agregado porta la versión que gestiona el
   // @Version de su XxxJpa. Viaja por el constructor de rehidratación para que el
-  // ida-y-vuelta domain↔JPA no la pierda. Es un valor opaco: nadie la muta a mano.
-  if (entity.isAggregateRoot) {
+  // ida-y-vuelta domain↔JPA no la pierda. Es un valor opaco de infraestructura:
+  // nadie la muta a mano y no sale al contrato. Un `version` declarado por el
+  // diseño es otra cosa (contador de dominio) y ya está entre los members.
+  if (entity.isAggregateRoot && !entity.declaresLockVersion) {
     declarations.push(
-      '    // Versión de concurrencia optimista del agregado; la gestiona el @Version\n    // de la XxxJpa. Null hasta la primera persistencia.\n    private Long version;'
+      '    // Versión de concurrencia optimista del agregado; la gestiona el @Version\n    // de la XxxJpa. Null hasta la primera persistencia.\n    private Long lockVersion;'
     );
   }
 
@@ -143,9 +145,9 @@ function renderEntity(model, entity) {
       return `        this.${m.name} = ${isCollection ? `new ArrayList<>(${m.name})` : m.name};`;
     });
     // La versión de concurrencia entra como último parámetro (solo en raíces).
-    if (entity.isAggregateRoot) {
-      paramParts.push('Long version');
-      assignParts.push('        this.version = version;');
+    if (entity.isAggregateRoot && !entity.declaresLockVersion) {
+      paramParts.push('Long lockVersion');
+      assignParts.push('        this.lockVersion = lockVersion;');
     }
     bodyParts.push(`    // Rehidratación desde persistencia (lo usa el toDomain del adaptador de repositorio):
     // el estado ya es válido y no se revalida. La creación de negocio va por el factory.
@@ -161,9 +163,10 @@ ${assignParts.join('\n')}
   const accessors = renderAccessors(members);
   // Getter de la versión (solo raíz): lo usa el toJpa del adaptador para
   // devolver la versión a la XxxJpa antes de persistir.
-  const versionAccessor = entity.isAggregateRoot
-    ? '    public Long getVersion() {\n        return version;\n    }'
-    : '';
+  const versionAccessor =
+    entity.isAggregateRoot && !entity.declaresLockVersion
+      ? '    public Long getLockVersion() {\n        return lockVersion;\n    }'
+      : '';
   bodyParts.push([accessors, versionAccessor].filter(Boolean).join('\n\n'));
 
   const body = `${header.join('\n')}

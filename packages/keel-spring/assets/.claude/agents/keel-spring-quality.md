@@ -37,10 +37,13 @@ conservador — ante la duda, reporta en vez de aplicar.
    lo quites: la única excepción documentada es `transactionalBoundary: per-aggregate`
    con semántica especial (`.claude/conventions/mapping.md`). Cambiar transaccionalidad es
    conductual → repórtalo.
-6. **Bloqueo optimista**: si alguna `XxxJpa` lleva `@Version`, el agregado de
-   dominio debe declarar `version` con getter y el mapper propagarlo en
+6. **Bloqueo optimista**: si alguna `XxxJpa` lleva `@Version` (campo `lockVersion`), el
+   agregado de dominio debe declarar `lockVersion` con getter y el mapper propagarlo en
    `toDomain()`/`toJpa()`. Si falta el round-trip, es un defecto conductual →
-   repórtalo en `remaining`, no lo "arregles" aquí.
+   repórtalo en `remaining`, no lo "arregles" aquí. Chequeo hermano: si el diseño
+   declara un campo `version` (contador de dominio, distinto del `lockVersion`), algún
+   método mutador del agregado debe incrementarlo; que solo lo lea es también un
+   defecto conductual → `remaining`.
 7. **Precisión numérica (regla dura de `.claude/constitution.md`)**: chequeo mecánico
    sobre importes, tasas y magnitudes científicas — cero `double`/`float`/`Double`/
    `Float` y cero `doubleValue()` en su camino; cero `equals` entre `BigDecimal`

@@ -47,8 +47,8 @@ igualmente rechazarás:
 spring:
   servlet:
     multipart:
-      max-file-size: 10MB      # = límite del diseño
-      max-request-size: 12MB
+      max-file-size: 10MB      # holgura sobre el límite del diseño (5MB): el
+      max-request-size: 10MB   # de negocio lo comprueba el caso de uso
 ```
 
 ## Por perfil

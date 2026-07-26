@@ -19,7 +19,7 @@ y prod (S3); la diferencia (endpoint / path-style) vive en `storage.yaml` por pe
 
 - `build.gradle`: `software.amazon.awssdk:s3` (AWS SDK v2).
 - `parameters/<perfil>/storage.yaml`: provider, endpoint, región, credenciales, bucket y `path-style-access` por perfil (local apunta al MinIO del compose; test trae valores dummy), más la **política de cada bucket del diseño** bajo `storage.buckets.<bucket>`: `visibility`, `max-size-mb` y `allowed-content-types`. Aplícala desde ahí; no la re-derives ni la hardcodees.
-- `spring.servlet.multipart.max-file-size` / `max-request-size` en `application.yaml`, con el mayor `maxSizeMb` declarado (sin esto Spring corta en 1MB).
+- `spring.servlet.multipart.max-file-size` / `max-request-size` en `application.yaml`, con **holgura** sobre el mayor `maxSizeMb` declarado (sin ningún límite Spring corta en 1MB; con el límite exacto, Tomcat emitiría el 413 antes del caso de uso y ninguna guarda anterior del diseño podría precederlo). El límite de negocio lo comprueba el caso de uso, en el orden que fija el diseño.
 - `ApiExceptionHandler` con los handlers de `MaxUploadSizeExceededException` (413 `FILE_TOO_LARGE`) y `MissingServletRequestPartException` (400): no los redeclares.
 - `infra/docker-compose.yaml`: MinIO (9000 + consola 9001, minioadmin/minioadmin) — solo con `storage: minio`.
 - Puerto `FileStorage` en `domain/storage` (upload/download/delete/signedUrl) y el value object `StoredObject` que devuelve `upload`.

@@ -5,7 +5,10 @@ por operación, los escenarios `FL-*` distinguen dos fallos que devuelven códig
 distintos por causas distintas:
 
 - **sin el scope exigido** → `403` (autenticado, pero sin la authority `SCOPE_*`)
-- **audiencia inválida** → `401` (el token ni siquiera pasa el `AudienceValidator`)
+- **audiencia inválida** → `403` (el token es válido y está autenticado; lo que
+  falla es la autorización: el `AudienceAuthorizationFilter` no encuentra la
+  audiencia del servicio en el claim `aud`). Un `401` aquí significa que el token
+  no se autenticó siquiera — otra causa distinta
 
 Para poder afirmar cuál de las dos condiciones produjo la respuesta, los clientes
 de prueba tienen que variar **una sola** de ellas cada vez. El error típico es

@@ -85,6 +85,41 @@ Antes de tocar tipos de columna del dialecto, lee `references/dialects/<database
 - **Texto/binario grande**: `@Lob` (o el `columnDefinition` del dialecto) más allá
   del `text` que build ya cubre con `columnDefinition = "text"`.
 
+### Búsqueda que ignora mayúsculas y acentos
+
+Cuando el diseño declara que una búsqueda "ignora mayúsculas y acentos", **es
+implementable siempre**, con o sin extensiones de la BD. Que la vía nativa del
+dialecto no esté disponible no convierte la regla en un hueco del diseño: hay
+un fallback portable y hay que aplicarlo.
+
+Por orden de preferencia:
+
+1. **Colación insensible del dialecto**, si existe: `CITEXT`/collation
+   `und-x-icu` (PostgreSQL), `utf8mb4_0900_ai_ci` (MySQL 8), `..._CI_AI`
+   (SQL Server). Sin código: la comparación ya ignora caso y acento.
+2. **Extensión de normalización**: `unaccent` en PostgreSQL. La extensión se crea
+   desde **una migración de Flyway** (`CREATE EXTENSION IF NOT EXISTS unaccent;`),
+   que es parte del esquema del servicio — no un requisito manual del entorno —,
+   con un índice funcional sobre `lower(unaccent(<columna>))`. Requiere permisos
+   de creación de extensión: compruébalo contra la infra de prueba antes de
+   comprometerte con esta vía.
+3. **Fallback portable, sin depender del dialecto** (el que aplica cuando 1 y 2
+   no están disponibles): una **columna normalizada** que se puebla en el mapeo
+   `toJpa` (`<campo>Normalized`), con el mismo plegado aplicado al término de
+   búsqueda antes de la query. El plegado en Java es estándar:
+
+   ```java
+   public static String fold(String value) {
+       if (value == null) return null;
+       return Normalizer.normalize(value, Normalizer.Form.NFD)
+               .replaceAll("\\p{InCombiningDiacriticalMarks}+", "")
+               .toLowerCase(Locale.ROOT);
+   }
+   ```
+
+   La columna se indexa como cualquier otra y la query es un `LIKE` normal. Es
+   menos elegante que la vía nativa y funciona en los seis dialectos.
+
 ## 4. Auditoría y locking
 
 - **createdAt/updatedAt**: ya los puebla build (`AuditableEntity` o, si el diseño
@@ -97,15 +132,26 @@ Antes de tocar tipos de columna del dialecto, lee `references/dialects/<database
   regístralo con `@EnableJpaAuditing(auditorAwareRef = "…")` en la clase Application.
   Sin ese bean las anotaciones no pueblan nada y las columnas quedan a `null` en
   silencio: no es opcional.
-- **Locking optimista (`@Version`)**: **ya lo genera build** en la raíz de agregado
-  (`isAggregateRoot`) — campo `@Version private Long version` en la `XxxJpa`, `version`
-  en el constructor de rehidratación del dominio + `getVersion()`, propagación en el
-  mapeo, y el handler que traduce `ObjectOptimisticLockingFailureException` a 409
-  `OPTIMISTIC_LOCK_CONFLICT`. **No lo reañadas.** Tu único trabajo aquí es el caso borde:
-  si el diseño exige detectar updates concurrentes que tocan **solo entidades hijas**
-  distintas sin modificar la raíz (JPA no incrementa la versión de la raíz solo), fuerza
-  el incremento con `LockModeType.OPTIMISTIC_FORCE_INCREMENT` (`references/configuration.md`).
+- **Locking optimista (`lockVersion`)**: **ya lo genera build** en la raíz de agregado
+  (`isAggregateRoot`): campo `@Version @Column(name = "lock_version") private Long lockVersion`
+  en la `XxxJpa`, `lockVersion` en el constructor de rehidratación del dominio +
+  `getLockVersion()`, propagación en el mapeo, y el handler que traduce
+  `ObjectOptimisticLockingFailureException` a 409 `OPTIMISTIC_LOCK_CONFLICT`.
+  **No lo reañadas.** Es infraestructura pura: lo incrementa Hibernate en cada flush,
+  no aparece en ningún DTO ni payload de evento, y nadie lo asigna a mano.
+  Tu único trabajo aquí es el caso borde: si el diseño exige detectar updates
+  concurrentes que tocan **solo entidades hijas** distintas sin modificar la raíz (JPA
+  no incrementa la versión de la raíz solo), fuerza el incremento con
+  `LockModeType.OPTIMISTIC_FORCE_INCREMENT` (`references/configuration.md`).
   No uses locking pesimista salvo que el diseño lo exija.
+- **Un `version` declarado por el diseño no es el `@Version`**: es un contador de
+  **dominio** (viaja en la API y en los payloads de eventos, y sirve a los consumidores
+  para descartar eventos desordenados). Build lo mapea como campo escalar corriente,
+  en su propia columna `version`, junto al `lock_version` de JPA. Lo **incrementa el
+  agregado** en cada método mutador que el diseño describe como cambio observable
+  — incluidos los que solo tocan entidades hijas, donde Hibernate no incrementaría
+  nada. `expectedVersion` de la entrada se compara contra ese contador, y su mismatch
+  es el 409 propio del diseño, distinto del `OPTIMISTIC_LOCK_CONFLICT`.
 - **Soft-delete**: el DSL no lo declara; impleméntalo solo si el diseño lo pide
   (columna `deleted_at` + filtro, `@SQLDelete`/`@SQLRestriction` de Hibernate).
 
@@ -115,6 +161,6 @@ El puerto `<E>Repository`, la interfaz `<E>JpaRepository`, el adaptador
 `<E>RepositoryImpl` y sus métodos (`findById`, finder por clave natural, `save`,
 `deleteById`, `list` paginado) ya existen. Ajusta anotaciones y completa los
 `toDomain`/`toJpa` donde build dejó TODO; no rehagas el patrón. Cada decisión no
-trivial (bidireccionalidad, `@Embeddable`, converter, `@Version`, autoría) va
+trivial (bidireccionalidad, `@Embeddable`, converter, `OPTIMISTIC_FORCE_INCREMENT`, autoría) va
 documentada en el README del proyecto generado, y debe quedar cubierta por algún
 escenario `FL-*` de `validation-scenarios.md` ejecutado en vivo.

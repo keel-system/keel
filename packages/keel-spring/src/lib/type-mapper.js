@@ -3,6 +3,7 @@
 // a Bean Validation y a la columna.
 
 import { snakeCase } from './naming.js';
+import { quoteIdentifier } from './sql-reserved.js';
 
 const BASE_TYPES = {
   string: { javaType: 'String', imports: [] },
@@ -108,7 +109,7 @@ export function beanValidationAnnotations(field, resolved) {
  */
 export function columnAnnotations(fieldName, field, resolved) {
   const annotations = [];
-  const attrs = [`name = "${snakeCase(fieldName)}"`];
+  const attrs = [`name = "${quoteIdentifier(snakeCase(fieldName))}"`];
   const constraints = { ...resolved.constraints, ...(field.constraints ?? {}) };
 
   if (field.required || field.id) attrs.push('nullable = false');

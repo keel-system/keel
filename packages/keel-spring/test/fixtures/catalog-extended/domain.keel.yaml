@@ -45,6 +45,10 @@ entities:
         type: ProductStatus
         required: true
         default: draft
+      version:
+        type: long
+        generated: true
+        description: Contador de cambios del producto declarado por el diseño; lo incrementa el dominio y viaja en la API y en los eventos.
       createdAt:
         type: timestamp
         generated: true
@@ -79,6 +83,10 @@ entities:
       position:
         type: int
         required: true
+      primary:
+        type: boolean
+        default: false
+        description: Nombre de campo que es palabra reservada SQL; sin quoting el DDL no compila.
     relations:
       product:
         entity: Product

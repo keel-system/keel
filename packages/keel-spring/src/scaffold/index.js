@@ -34,6 +34,7 @@ import * as outbox from './outbox.js';
 import * as idempotency from './idempotency.js';
 import * as cache from './cache.js';
 import * as controllers from './controllers.js';
+import * as web from './web.js';
 import * as security from './security.js';
 import * as httpClients from './http-clients.js';
 import * as dependencies from './dependencies.js';
@@ -69,6 +70,7 @@ const GENERATORS = [
   idempotency,
   cache,
   controllers,
+  web,
   security,
   httpClients,
   dependencies,

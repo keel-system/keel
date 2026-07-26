@@ -37,6 +37,32 @@ operations:
       keyFields: [slug]
       invalidatedBy: [ProductUpdated]
 
+  updateProduct:
+    description: Actualiza parcialmente los datos comerciales de un producto.
+    kind: command
+    input:
+      fields:
+        id:
+          type: uuid
+          required: true
+        name:
+          type: string
+          constraints: { maxLength: 200 }
+        categoryId:
+          type: uuid
+        expectedVersion:
+          type: long
+    output:
+      entity: Product
+      embed: [category]
+    rules:
+      - Un campo ausente de la entrada conserva su valor; un campo presente con valor nulo vacía el campo.
+    errors:
+      - code: PRODUCT_NOT_FOUND
+        when: No existe un producto con ese id.
+        http: 404
+    emits: [ProductUpdated]
+
   listProducts:
     description: Lista los productos del catálogo de forma paginada.
     kind: query

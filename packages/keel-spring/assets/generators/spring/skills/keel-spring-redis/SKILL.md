@@ -36,6 +36,13 @@ La caché se activa porque alguna operación del diseño declara `cache`
   la capa application no importa Spring, y el `CacheManager` ya está generado.
   Clave = `keyFields` en el orden declarado. Invalida (`@CacheEvict`) en los
   commands que mutan la misma entidad.
+
+  > Dos restricciones de `sync = true` que Spring solo revela **en runtime**, con
+  > un `500` en cada lectura cacheada (no al compilar ni al arrancar):
+  > un `@Cacheable(sync = true)` **no admite `unless`**, y **no admite más de un
+  > caché** — ni varios `cacheNames`, ni dos entradas `sync = true` dentro de un
+  > `@Caching`. Si dos operaciones del diseño cachean por la misma clave, van en
+  > métodos distintos. Detalle y alternativas en `references/implementation.md`.
 - **Idempotencia** (`idempotency` en commands): guarda la clave
   (`keySource`, p. ej. el header del cliente) con `SET NX EX <ttlSeconds>`;
   si ya existe, devuelve el resultado previo o el conflicto que dicte el diseño,

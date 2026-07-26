@@ -38,12 +38,27 @@ artefactos, nunca se resuelve en silencio en el código.
   respetando `consistency.transactionalBoundary` (con `per-aggregate`, el command solo
   muta una raíz; la otra solo se lee). Datos de **otro servicio** llegan por la capa
   `http-clients` o por eventos de `messaging`, nunca inyectando persistencia ajena.
-- **Bloqueo optimista (si se usa)**: el scaffolding no genera `@Version`; si lo añades
-  a una `XxxJpa`, el agregado de dominio debe declarar `version` con getter y el
-  mapper propagarlo en `toDomain()`/`toJpa()`. Un `@Version` sin round-trip completo
-  no protege nada: complétalo o no lo introduzcas.
+- **Bloqueo optimista**: el `lockVersion` (`@Version`) de la raíz de agregado, su
+  round-trip por el constructor de rehidratación y el 409 `OPTIMISTIC_LOCK_CONFLICT`
+  **ya los genera build**. Es infraestructura: lo incrementa Hibernate en cada flush,
+  no sale al contrato y nadie lo toca a mano.
+- **`version` declarado por el diseño ≠ `lockVersion`**: son dos contadores distintos.
+  Si el diseño declara un campo `version` en la raíz, es un **contador de dominio**
+  (viaja en la API y en los payloads de eventos, y los consumidores descartan por él
+  los eventos desordenados): lo incrementa **el agregado**, en cada método mutador que
+  el diseño describe como cambio observable — incluidos los que solo tocan entidades
+  hijas, donde Hibernate no incrementaría nada. Si una regla dice «la version se
+  incrementa en uno», la implementas tú. `expectedVersion` de la entrada se compara
+  contra **ese** contador antes de mutar, y su mismatch es el error 409 propio del
+  diseño (no el `OPTIMISTIC_LOCK_CONFLICT` de Hibernate).
+- **Orden de las guardas**: `preconditions`/`rules` se evalúan en el orden del diseño,
+  también cuando otra ubicación sería técnicamente más cómoda (validar el tamaño de un
+  archivo al recibir el multipart, en vez de después de la guarda de negocio que el
+  diseño pone antes). Si dos guardas pueden fallar a la vez, la que responde es la que
+  el diseño pone primero — y eso es lo que comprueba el escenario.
 - **Proyección de la respuesta**: el DTO debe exponer **exactamente** los campos que declara
-  el `output` de la operación —campos, referencias (`<relación>Id`) y entidades hijas
+  el `output` de la operación —campos, referencias (`<relación>Id`, o el objeto anidado
+  si el output las marca con `embed`) y entidades hijas
   (`List<XxxDto>`), que build ya proyecta. Los `exclude` con **dot-path**
   (`lines.costPrice`, `address.zip`) recortan el DTO **anidado**, que build genera
   completo: lo avisa con un warning y el recorte lo haces tú. Un campo que el diseño
@@ -83,6 +98,11 @@ así que recórrelos antes de reportar `status`, aunque nada esté marcado con u
   aplicación o replica su configuración, `JavaTimeModule` incluido. Un componente
   serializador escrito «aislado» rompe en el primer campo `Instant`/`LocalDate`, en
   runtime.
+- **Vocabulario del contrato**: cada nombre de campo que `validation-scenarios.md`
+  menciona en una respuesta existe con ese nombre exacto en el DTO. Es la pasada que
+  detecta que un agregado expone `category` y otro `categoryId` para la misma clase de
+  relación. Procedimiento completo en `mapping.md`, § Auditoría de consistencia del
+  contrato.
 
 ## Cierre del paso
 

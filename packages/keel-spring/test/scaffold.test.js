@@ -64,12 +64,12 @@ test('scaffoldService genera el proyecto completo con contenido clave', () => {
   assert.ok(!product.includes('public Product() {'));
   assert.ok(product.includes('// TODO (agente): factory de creación create(...)'));
   assert.ok(product.includes('// TODO (agente): método semántico'));
-  // Concurrencia optimista (Opción A): la raíz porta version, que viaja por el
+  // Concurrencia optimista (Opción A): la raíz porta lockVersion, que viaja por el
   // constructor de rehidratación (último parámetro) y expone getter.
-  assert.ok(product.includes('private Long version;'));
-  assert.ok(product.includes(', Long version) {'));
-  assert.ok(product.includes('this.version = version;'));
-  assert.ok(product.includes('public Long getVersion() {'));
+  assert.ok(product.includes('private Long lockVersion;'));
+  assert.ok(product.includes(', Long lockVersion) {'));
+  assert.ok(product.includes('this.lockVersion = lockVersion;'));
+  assert.ok(product.includes('public Long getLockVersion() {'));
 
   const productJpa = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/persistence/entities/ProductJpa.java');
   assert.ok(productJpa.includes('@Entity'));
@@ -77,8 +77,8 @@ test('scaffoldService genera el proyecto completo con contenido clave', () => {
   assert.ok(productJpa.includes('public class ProductJpa extends AuditableEntity'));
   // Bloqueo optimista a nivel de raíz de agregado.
   assert.ok(productJpa.includes('@Version'));
-  assert.ok(productJpa.includes('@Column(name = "version")'));
-  assert.ok(productJpa.includes('private Long version;'));
+  assert.ok(productJpa.includes('@Column(name = "lock_version")'));
+  assert.ok(productJpa.includes('private Long lockVersion;'));
 
   // Auditoría automática (portada del shared del prototipo).
   const auditable = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/persistence/entities/AuditableEntity.java');
@@ -177,8 +177,8 @@ test('scaffoldService genera el proyecto completo con contenido clave', () => {
   assert.ok(adapter.includes('private Product toDomain(ProductJpa jpa)'));
   assert.ok(adapter.includes('private ProductJpa toJpa(Product domain)'));
   // La versión de concurrencia viaja en ambos sentidos del mapeo.
-  assert.ok(adapter.includes('jpa.getVersion()'));
-  assert.ok(adapter.includes('jpa.setVersion(domain.getVersion());'));
+  assert.ok(adapter.includes('jpa.getLockVersion()'));
+  assert.ok(adapter.includes('jpa.setLockVersion(domain.getLockVersion());'));
 
   // Mapper de aplicación dominio → ResponseDto (también sin Spring).
   const mapper = read(workspace, 'src/main/java/com/commerce/productcatalog/application/mappers/ProductApplicationMapper.java');
@@ -1654,15 +1654,29 @@ test('SecurityConfig: dos filter chains cuando conviven endpoints de usuario y M
   );
 
   const config = read(workspace, `${SEC_BASE}/SecurityConfig.java`);
-  // Cadena M2M: acotada por securityMatcher y con el decoder que valida audiencia.
+  // Cadena M2M: acotada por securityMatcher y con la audiencia comprobada como
+  // AUTORIZACIÓN (403), no dentro del decoder (que daría 401).
   assert.ok(config.includes('@Order(1)'));
   assert.ok(config.includes('.securityMatcher("/api/v1/products/{id}/retire")'));
-  assert.ok(config.includes('jwt.decoder(serviceJwtDecoder())'));
-  assert.ok(config.includes('new AudienceValidator(audience)'));
-  // Cadena de usuario: decoder sin AudienceValidator (un token de usuario nunca
-  // trae la audiencia del servicio).
+  assert.ok(config.includes('.addFilterBefore(new AudienceAuthorizationFilter(audience), AuthorizationFilter.class)'));
+  assert.ok(!config.includes('serviceJwtDecoder'));
+  // Ningún decoder propio: la audiencia dejó de ser asunto de la autenticación,
+  // así que basta el que autoconfigura Boot desde el issuer-uri.
+  assert.ok(!config.includes('JwtDecoder'));
   assert.ok(config.includes('@Order(2)'));
-  assert.ok(config.includes('public JwtDecoder jwtDecoder() {\n        return new SupplierJwtDecoder(() -> JwtDecoders.fromIssuerLocation(issuerUri));'));
+
+  // El filtro lanza AccessDeniedException: token legítimo de otro público → 403.
+  const filter = read(workspace, `${SEC_BASE}/AudienceAuthorizationFilter.java`);
+  assert.ok(filter.includes('extends OncePerRequestFilter'));
+  assert.ok(filter.includes('throw new AccessDeniedException('));
+  assert.ok(filter.includes('instanceof JwtAuthenticationToken token'));
+
+  // 401/403 con el ErrorResponse del contrato, no con el body de Spring Security.
+  assert.ok(config.includes('.exceptionHandling(ex -> ex.authenticationEntryPoint(securityErrorHandlers)'));
+  const handlers = read(workspace, `${SEC_BASE}/SecurityErrorHandlers.java`);
+  assert.ok(handlers.includes('implements AuthenticationEntryPoint, AccessDeniedHandler'));
+  assert.ok(handlers.includes('HttpStatus.UNAUTHORIZED'));
+  assert.ok(handlers.includes('HttpStatus.FORBIDDEN'));
 });
 
 test('SecurityConfig: con cors, todas las cadenas la activan (también la M2M y la de protocolo none)', () => {
@@ -1711,7 +1725,7 @@ test('SecurityConfig: sin rutas de usuario, se conserva la cadena única con aud
   const config = read(workspace, `${SEC_BASE}/SecurityConfig.java`);
   assert.ok(!config.includes('@Order(1)'));
   assert.ok(!config.includes('securityMatcher'));
-  assert.ok(config.includes('new AudienceValidator(audience)'));
+  assert.ok(config.includes('.addFilterBefore(new AudienceAuthorizationFilter(audience), AuthorizationFilter.class)'));
 });
 
 test('JwtAuthConverter: roleGrants materializado como mapa estático', () => {
@@ -1753,9 +1767,12 @@ test('storage: política por bucket en la config, límite multipart y handlers d
   assert.ok(storageYaml.includes('      allowed-content-types: image/png,image/jpeg'));
 
   // Sin este límite Spring corta en 1MB y el 413 del diseño nunca se alcanza.
+  // Va con holgura sobre el maxSizeMb del diseño: si el servlet cortase justo en
+  // el límite de negocio, Tomcat emitiría el 413 antes del caso de uso y ninguna
+  // guarda declarada antes que la del tamaño podría precederla.
   const appYaml = read(workspace, 'src/main/resources/application.yaml');
-  assert.ok(appYaml.includes('      max-file-size: 5MB'));
-  assert.ok(appYaml.includes('      max-request-size: 5MB'));
+  assert.ok(appYaml.includes('      max-file-size: 10MB'));
+  assert.ok(appYaml.includes('      max-request-size: 10MB'));
 
   // Excepciones que lanza el framework antes del controller: 413/400, no 500.
   const handler = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/rest/ApiExceptionHandler.java');

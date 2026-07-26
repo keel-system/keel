@@ -43,7 +43,7 @@ diseño distingue por cliente.
 ## Ajustes que sí puede necesitar el agente
 
 - **Audiencia**: si el diseño declara `serviceAuth.validateAudience: true`,
-  build ya generó el `AudienceValidator` + bean `JwtDecoder` y el fragmento
+  build ya generó el `AudienceAuthorizationFilter` y el fragmento
   `parameters/<perfil>/security.yaml` con `security.audience` — no añadas
   `audiences` al YAML de oauth2 (duplicaría la validación); tu trabajo es el
   mapper de audience en Keycloak (ver `environment.md`). Si el diseño **no**

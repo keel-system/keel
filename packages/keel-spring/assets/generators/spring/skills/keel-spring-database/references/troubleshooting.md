@@ -35,10 +35,12 @@ repositorio que alimenta ese flujo. Mitigación global:
 
 ## `OptimisticLockException` en escenarios concurrentes
 
-Es el comportamiento **deseado** del `@Version`: dos updates sobre la misma
-versión. Mapéala en el handler al error de conflicto (409) declarado en el
+Es el comportamiento **deseado** del `lockVersion` (`@Version`): dos updates sobre
+la misma versión. Mapéala en el handler al error de conflicto (409) declarado en el
 diseño; si el diseño no declara ese conflicto, es un hueco → repórtalo como
-`designGap`, no lo silencies reintentando.
+`designGap`, no lo silencies reintentando. Ojo: esto **no** es un mismatch de
+`expectedVersion` contra un `version` de dominio — ese lo detecta el handler del
+caso de uso antes de mutar, y suele tener su propio `code`.
 
 ## Verde en tests, rojo contra la BD real (drift H2)
 

@@ -34,7 +34,8 @@ export function generate(model) {
   const jwt = sec.protocol === 'oidc' || sec.protocol === 'jwt';
   if (jwt && sec.usesAuthorities) files.push(renderJwtAuthConverter(model));
   if (sec.protocol === 'api-key') files.push(renderApiKeyFilter(model));
-  if (jwt && sec.serviceAuth?.validateAudience) files.push(renderAudienceValidator(model));
+  if (jwt && sec.serviceAuth?.validateAudience) files.push(renderAudienceFilter(model));
+  if (sec.protocol !== 'none') files.push(renderSecurityErrorHandlers(model));
   if (needsServiceApiKeyFilter(sec)) files.push(renderServiceApiKeyFilter(model));
   return files;
 }
@@ -128,28 +129,33 @@ ${corsLine}            .authorizeHttpRequests(auth -> auth.anyRequest().permitAl
   const serviceApiKey = needsServiceApiKeyFilter(sec);
 
   // Con validación de audiencia y rutas de ambos públicos, una sola cadena no
-  // sirve: el AudienceValidator rechazaría los tokens de usuario (cuya audiencia
+  // sirve: la comprobación de audiencia rechazaría los tokens de usuario (cuya audiencia
   // es la del IdP, no la del servicio). Se separan por securityMatcher.
   const serviceMatchers = validateAudience && !serviceApiKey ? serviceMatchersOf(sec) : [];
   const splitChains = serviceMatchers.length > 0 && serviceMatchers.length < sec.matchers.length;
   const mainMatchers = splitChains ? sec.matchers.filter((m) => !serviceMatchers.includes(m)) : sec.matchers;
 
+  // 401 y 403 con el ErrorResponse del contrato (SecurityErrorHandlers), no con
+  // el body por defecto de Spring Security.
+  const exceptionHandling =
+    '            .exceptionHandling(ex -> ex.authenticationEntryPoint(securityErrorHandlers).accessDeniedHandler(securityErrorHandlers))';
+
   const chain = [
     '            .csrf(AbstractHttpConfigurer::disable)',
     ...(sec.cors ? [corsCall] : []),
     '            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))',
+    exceptionHandling,
     authorizeBlock(mainMatchers, { defaultAuthority: sec.defaultAuthority })
   ];
 
   let converterBean = '';
   if (jwt) {
     imports.add('org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter');
-    // Con cadenas separadas cada una fija su decoder: si se declara un bean
-    // JwtDecoder, Boot ya no autoconfigura el suyo.
-    const decoderCall = splitChains ? 'jwt.decoder(jwtDecoder())' : 'jwt';
+    // Todas las cadenas comparten el decoder que autoconfigura Boot desde el
+    // issuer-uri: la audiencia ya no es asunto de la autenticación.
     if (sec.usesAuthorities) {
       chain.push(
-        `            .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> ${decoderCall}.jwtAuthenticationConverter(jwtAuthConverter())))`
+        '            .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthConverter())))'
       );
       converterBean = `
 
@@ -157,11 +163,17 @@ ${corsLine}            .authorizeHttpRequests(auth -> auth.anyRequest().permitAl
     public JwtAuthenticationConverter jwtAuthConverter() {
         return new JwtAuthConverter().converter();
     }`;
-    } else if (splitChains) {
-      chain.push('            .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> jwt.decoder(jwtDecoder())))');
     } else {
       imports.add('org.springframework.security.config.Customizer');
       chain.push('            .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()))');
+    }
+    // Sin cadenas separadas (todas las rutas son de audiencia services), la
+    // comprobación de audiencia va en la única cadena que hay.
+    if (validateAudience && !splitChains) {
+      imports.add('org.springframework.security.web.access.intercept.AuthorizationFilter');
+      chain.push(
+        '            .addFilterBefore(new AudienceAuthorizationFilter(audience), AuthorizationFilter.class)'
+      );
     }
   } else if (sec.protocol === 'api-key') {
     imports.add('org.springframework.beans.factory.annotation.Value');
@@ -178,70 +190,20 @@ ${corsLine}            .authorizeHttpRequests(auth -> auth.anyRequest().permitAl
 `);
   }
 
-  // Validación del claim aud (serviceAuth.validateAudience): decoder propio con
-  // el AudienceValidator encadenado a los validadores por defecto del issuer.
+  // Validación del claim aud (serviceAuth.validateAudience). NO va en el
+  // JwtDecoder: un decoder que rechaza por audiencia convierte un token válido
+  // de otro público en "token inválido" (401), cuando lo que ocurre es que está
+  // autenticado y no autorizado (403) — la distinción que exige el diseño. Por
+  // eso se comprueba como autorización, en un filtro posterior a la
+  // autenticación y anterior al AuthorizationFilter, cuya AccessDeniedException
+  // traduce a 403 el ExceptionTranslationFilter.
   let decoderBean = '';
   if (validateAudience) {
     imports.add('org.springframework.beans.factory.annotation.Value');
-    imports.add('org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator');
-    imports.add('org.springframework.security.oauth2.core.OAuth2TokenValidator');
-    imports.add('org.springframework.security.oauth2.jwt.Jwt');
-    imports.add('org.springframework.security.oauth2.jwt.JwtDecoder');
-    imports.add('org.springframework.security.oauth2.jwt.JwtDecoders');
-    imports.add('org.springframework.security.oauth2.jwt.JwtValidators');
-    imports.add('org.springframework.security.oauth2.jwt.NimbusJwtDecoder');
-    imports.add('org.springframework.security.oauth2.jwt.SupplierJwtDecoder');
     fields.push(`
-    @Value("\${spring.security.oauth2.resourceserver.jwt.issuer-uri:}")
-    private String issuerUri;
-
     @Value("\${security.audience:${audienceOf(model, sec)}}")
     private String audience;
 `);
-    // SupplierJwtDecoder pospone el discovery OIDC hasta el primer token, como
-    // hace el decoder autoconfigurado de Boot (los tests arrancan sin issuer real).
-    if (splitChains) {
-      imports.add('org.springframework.context.annotation.Primary');
-      decoderBean = `
-
-    /**
-     * Decoder de los endpoints de usuario: validadores por defecto del issuer,
-     * sin audiencia (el token de un usuario lleva la audiencia que emite el IdP,
-     * no la de este servicio).
-     */
-    @Bean
-    @Primary
-    public JwtDecoder jwtDecoder() {
-        return new SupplierJwtDecoder(() -> JwtDecoders.fromIssuerLocation(issuerUri));
-    }
-
-    /**
-     * Decoder de los endpoints de audiencia services: añade el AudienceValidator
-     * a los validadores del issuer, de modo que un token client_credentials
-     * emitido para otro servicio no sirva aquí.
-     */
-    @Bean
-    public JwtDecoder serviceJwtDecoder() {
-        return new SupplierJwtDecoder(() -> {
-            NimbusJwtDecoder decoder = JwtDecoders.fromIssuerLocation(issuerUri);
-            OAuth2TokenValidator<Jwt> withIssuer = JwtValidators.createDefaultWithIssuer(issuerUri);
-            decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(withIssuer, new AudienceValidator(audience)));
-            return decoder;
-        });
-    }`;
-    } else {
-      decoderBean = `
-
-    @Bean
-    public JwtDecoder jwtDecoder() {
-        return new SupplierJwtDecoder(() -> {
-            NimbusJwtDecoder decoder = JwtDecoders.fromIssuerLocation(issuerUri);
-            OAuth2TokenValidator<Jwt> withIssuer = JwtValidators.createDefaultWithIssuer(issuerUri);
-            decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(withIssuer, new AudienceValidator(audience)));
-            return decoder;
-        });
-    }`;
-    }
   }
 
   // Cadena de los endpoints M2M: se declara primero (@Order(1)) y solo cubre sus
@@ -252,11 +214,16 @@ ${corsLine}            .authorizeHttpRequests(auth -> auth.anyRequest().permitAl
     const patterns = securityMatcherPatterns(serviceMatchers)
       .map((p) => JSON.stringify(p))
       .join(', ');
-    const converterCall = sec.usesAuthorities ? '.jwtAuthenticationConverter(jwtAuthConverter())' : '';
+    const resourceServer = sec.usesAuthorities
+      ? '.oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthConverter())))'
+      : '.oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()))';
+    if (!sec.usesAuthorities) imports.add('org.springframework.security.config.Customizer');
+    imports.add('org.springframework.security.web.access.intercept.AuthorizationFilter');
     serviceChainBean = `
     /**
      * Endpoints de audiencia services (clientes máquina): mismo resource server,
-     * pero con validación de audiencia sobre el token.
+     * más la comprobación de audiencia como paso de AUTORIZACIÓN — un token de
+     * usuario válido aquí da 403 (autenticado, sin permiso), no 401.
      */
     @Bean
     @Order(1)
@@ -265,8 +232,10 @@ ${corsLine}            .authorizeHttpRequests(auth -> auth.anyRequest().permitAl
             .securityMatcher(${patterns})
             .csrf(AbstractHttpConfigurer::disable)
 ${corsLine}            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+${exceptionHandling}
 ${authorizeBlock(serviceMatchers, { defaultAuthority: 'authenticated()', permitTechnical: false })}
-            .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> jwt.decoder(serviceJwtDecoder())${converterCall}));
+            ${resourceServer}
+            .addFilterBefore(new AudienceAuthorizationFilter(audience), AuthorizationFilter.class);
         return http.build();
     }`;
   }
@@ -302,10 +271,17 @@ ${entries});
   const mainChainOrder = splitChains ? '\n    @Order(2)' : '';
   // serviceChainBean ya abre con línea en blanco; el \n extra separa del @Bean.
   const beforeMainChain = serviceChainBean ? `${serviceChainBean}\n` : '';
+  const errorHandlers = `
+    private final SecurityErrorHandlers securityErrorHandlers;
+
+    public SecurityConfig(SecurityErrorHandlers securityErrorHandlers) {
+        this.securityErrorHandlers = securityErrorHandlers;
+    }
+`;
   const body = `@Configuration
 @EnableWebSecurity
 public class SecurityConfig {
-${fields.join('')}${beforeMainChain}
+${fields.join('')}${errorHandlers}${beforeMainChain}
     @Bean${mainChainOrder}
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http
@@ -520,42 +496,117 @@ ${scopesAndPermissions}${grantsExtractor}
   };
 }
 
-// Validador del claim aud para serviceAuth.validateAudience: solo acepta tokens
-// emitidos para la audiencia de este servicio (security.audience).
-function renderAudienceValidator(model) {
-  const audience = audienceOf(model, model.security);
+// 401/403 con el mismo contrato de error que el resto de la API. Sin esto los
+// rechazos de la cadena de seguridad salen con el body por defecto de Spring
+// Security (o vacío): el @RestControllerAdvice no los ve, porque ocurren en los
+// filtros, antes de llegar a ningún controller.
+function renderSecurityErrorHandlers(model) {
+  const errorResponse = `${subPackage(model, 'infrastructure.rest')}.ErrorResponse`;
   const body = `/**
- * Valida que el claim aud del JWT incluya la audiencia de este servicio
- * (security.audience, por defecto "${audience}"). Rechaza tokens emitidos
- * para otros servicios aunque vengan del mismo servidor de autenticación.
+ * Traduce los rechazos de la cadena de seguridad al ErrorResponse del contrato:
+ * 401 cuando falta o no vale la credencial, 403 cuando la credencial es válida
+ * pero no basta para la operación.
  */
-public class AudienceValidator implements OAuth2TokenValidator<Jwt> {
+@Component
+public class SecurityErrorHandlers implements AuthenticationEntryPoint, AccessDeniedHandler {
 
-    private final String audience;
+    private final ObjectMapper objectMapper;
 
-    public AudienceValidator(String audience) {
-        this.audience = audience;
+    public SecurityErrorHandlers(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
     }
 
     @Override
-    public OAuth2TokenValidatorResult validate(Jwt jwt) {
-        if (jwt.getAudience() != null && jwt.getAudience().contains(audience)) {
-            return OAuth2TokenValidatorResult.success();
-        }
-        return OAuth2TokenValidatorResult.failure(
-                new OAuth2Error("invalid_token", "El token no está emitido para la audiencia " + audience, null));
+    public void commence(HttpServletRequest request, HttpServletResponse response,
+            AuthenticationException exception) throws IOException {
+        write(response, HttpStatus.UNAUTHORIZED, "Unauthorized", "Credenciales ausentes o no válidas");
+    }
+
+    @Override
+    public void handle(HttpServletRequest request, HttpServletResponse response,
+            AccessDeniedException exception) throws IOException {
+        write(response, HttpStatus.FORBIDDEN, "Forbidden", "La credencial no autoriza esta operación");
+    }
+
+    private void write(HttpServletResponse response, HttpStatus status, String error, String message)
+            throws IOException {
+        response.setStatus(status.value());
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        objectMapper.writeValue(response.getOutputStream(), new ErrorResponse(status.value(), error, message));
     }
 }`;
 
   return {
-    path: javaPath(model, SECURITY_PKG, 'AudienceValidator'),
+    path: javaPath(model, SECURITY_PKG, 'SecurityErrorHandlers'),
     content: javaFile(
       subPackage(model, SECURITY_PKG),
       [
-        'org.springframework.security.oauth2.core.OAuth2Error',
-        'org.springframework.security.oauth2.core.OAuth2TokenValidator',
-        'org.springframework.security.oauth2.core.OAuth2TokenValidatorResult',
-        'org.springframework.security.oauth2.jwt.Jwt'
+        'com.fasterxml.jackson.databind.ObjectMapper',
+        'jakarta.servlet.http.HttpServletRequest',
+        'jakarta.servlet.http.HttpServletResponse',
+        'java.io.IOException',
+        'org.springframework.http.HttpStatus',
+        'org.springframework.http.MediaType',
+        'org.springframework.security.access.AccessDeniedException',
+        'org.springframework.security.core.AuthenticationException',
+        'org.springframework.security.web.AuthenticationEntryPoint',
+        'org.springframework.security.web.access.AccessDeniedHandler',
+        'org.springframework.stereotype.Component',
+        errorResponse
+      ],
+      body
+    )
+  };
+}
+
+// Comprobación del claim aud para serviceAuth.validateAudience. Es una regla de
+// AUTORIZACIÓN, no de autenticación: el token es legítimo (firma e issuer
+// válidos), lo que falta es que esté emitido para este servicio. Por eso va en
+// un filtro posterior a la autenticación —y anterior al AuthorizationFilter—
+// que lanza AccessDeniedException: el ExceptionTranslationFilter la traduce a
+// 403. Validarlo en el JwtDecoder daría 401 y borraría esa distinción.
+function renderAudienceFilter(model) {
+  const audience = audienceOf(model, model.security);
+  const body = `/**
+ * Exige que el claim aud del JWT incluya la audiencia de este servicio
+ * (security.audience, por defecto "${audience}"). Un token válido emitido para
+ * otro servicio queda autenticado pero no autorizado: 403, no 401.
+ */
+public class AudienceAuthorizationFilter extends OncePerRequestFilter {
+
+    private final String audience;
+
+    public AudienceAuthorizationFilter(String audience) {
+        this.audience = audience;
+    }
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
+            throws ServletException, IOException {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication instanceof JwtAuthenticationToken token
+                && (token.getToken().getAudience() == null || !token.getToken().getAudience().contains(audience))) {
+            throw new AccessDeniedException("El token no está emitido para la audiencia " + audience);
+        }
+        chain.doFilter(request, response);
+    }
+}`;
+
+  return {
+    path: javaPath(model, SECURITY_PKG, 'AudienceAuthorizationFilter'),
+    content: javaFile(
+      subPackage(model, SECURITY_PKG),
+      [
+        'jakarta.servlet.FilterChain',
+        'jakarta.servlet.ServletException',
+        'jakarta.servlet.http.HttpServletRequest',
+        'jakarta.servlet.http.HttpServletResponse',
+        'java.io.IOException',
+        'org.springframework.security.access.AccessDeniedException',
+        'org.springframework.security.core.Authentication',
+        'org.springframework.security.core.context.SecurityContextHolder',
+        'org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken',
+        'org.springframework.web.filter.OncePerRequestFilter'
       ],
       body
     )

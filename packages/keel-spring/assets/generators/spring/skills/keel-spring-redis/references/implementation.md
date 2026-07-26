@@ -35,6 +35,15 @@ primera lectura cacheada, en runtime, contra el servidor real.
   `IllegalStateException: A sync=true operation does not support the unless attribute`,
   así que la primera lectura cacheada devuelve `500`. No compila-y-falla: falla
   en runtime, contra el servidor real.
+- **Un solo caché por método con `sync = true`**: la restricción no es evidente
+  por el nombre de la anotación, pero Spring solo admite un `cacheNames` cuando
+  `sync = true`, y tampoco admite dos `@Cacheable(sync = true)` combinados en un
+  `@Caching`. Falla con
+  `IllegalStateException: @Cacheable(sync=true) only allows a single cache on ...`
+  en **cada** invocación, no al arrancar. Si dos operaciones del diseño declaran
+  `cache` con la misma clave (p. ej. `getProduct` y `lookupProduct`, ambas por
+  `productId`), **no** las cachees en un método con dos `cacheNames`: usa un
+  método por caché, o comparte una sola entrada si el valor devuelto es idéntico.
 - Para no cachear vacíos, **`disableCachingNullValues()`** en la
   `RedisCacheConfiguration` base (ya está en el `CacheConfig` que genera build):
   es compatible con `sync = true` y cubre el caso sin `unless`. Si lo que quieres
@@ -107,6 +116,8 @@ flujos devuelve la respuesta del flujo anterior mientras dure el TTL declarado
 - [ ] `@Cacheable(sync = true)` en adaptador/decorator, nunca en el handler.
 - [ ] Ningún `@Cacheable` combina `unless` con `sync = true` (los vacíos los
       descarta `disableCachingNullValues()`).
+- [ ] Ningún `@Cacheable(sync = true)` declara más de un `cacheNames`, y ningún
+      `@Caching` combina dos entradas con `sync = true`.
 - [ ] `@CacheEvict` en todos los commands que mutan la entidad cacheada.
 - [ ] Claves de idempotencia con `SET NX EX` y TTL del diseño.
 - [ ] Toda clave con TTL; prefijo `<servicio>:` en todas.

@@ -143,7 +143,43 @@ export function checkCrossRefs({ layers, wip = false }) {
     }
   };
 
-  const checkPayload = (payload, where) => {
+  // embed proyecta una relación hacia OTRO agregado como objeto anidado en vez de
+  // como '<relación>Id'. Solo tiene sentido ahí: una entidad hija del propio
+  // agregado ya entra anidada por defecto, y un campo no es una relación.
+  const checkEmbed = (rootEntity, relName, where) => {
+    const relation = domain.entities[rootEntity]?.relations?.[relName];
+    if (!relation) {
+      errors.push(`${where}.embed '${relName}': la entidad '${rootEntity}' no declara esa relación`);
+      return;
+    }
+    if (!entities.has(relation.entity)) return; // relación rota: la reporta domain
+    // El destino tiene que ser la RAÍZ de un agregado: es lo que se referencia
+    // por id y, por tanto, lo único que embed puede sustituir por el objeto. Una
+    // entidad interna del mismo agregado ya se proyecta anidada por defecto.
+    // La auto-referencia (Category.parent → Category) sí es válida: apunta a
+    // otra instancia, que es su propio agregado.
+    const aggregateRoots = new Set(Object.values(domain.aggregates ?? {}).map((agg) => agg.root));
+    const targetIsRoot = aggregateRoots.size === 0 || aggregateRoots.has(relation.entity);
+    if (!targetIsRoot) {
+      errors.push(
+        `${where}.embed '${relName}': '${relation.entity}' es una entidad interna del agregado '${aggregateOf.get(relation.entity)}' y ya se proyecta anidada; embed es para referencias a la raíz de otro agregado`
+      );
+      return;
+    }
+    if (relation.entity !== rootEntity && aggregateOf.get(rootEntity) === aggregateOf.get(relation.entity)) {
+      errors.push(
+        `${where}.embed '${relName}': '${relation.entity}' pertenece al mismo agregado que '${rootEntity}'; embed es para referencias a otro agregado`
+      );
+      return;
+    }
+    if (relation.cardinality !== 'many-to-one' && relation.cardinality !== 'one-to-one') {
+      errors.push(
+        `${where}.embed '${relName}': solo se pueden embeber relaciones many-to-one/one-to-one hacia otro agregado (declarada '${relation.cardinality}')`
+      );
+    }
+  };
+
+  const checkPayload = (payload, where, { direction = 'output' } = {}) => {
     if (!payload || payload === 'void') return;
     if (payload.entity && !entities.has(payload.entity)) {
       errors.push(`${where}: la entidad '${payload.entity}' no existe en domain: entities`);
@@ -151,6 +187,13 @@ export function checkCrossRefs({ layers, wip = false }) {
     if (payload.entity && entities.has(payload.entity)) {
       for (const path of payload.exclude ?? []) {
         checkExcludePath(payload.entity, path, where);
+      }
+      for (const relName of payload.embed ?? []) {
+        if (direction === 'input') {
+          errors.push(`${where}.embed '${relName}': embed solo aplica al output; en la entrada la referencia viaja por id`);
+          continue;
+        }
+        checkEmbed(payload.entity, relName, where);
       }
     }
     if (payload.fields) checkFieldMap(payload.fields, where);
@@ -259,7 +302,7 @@ export function checkCrossRefs({ layers, wip = false }) {
 
   // use-cases: payloads, emits, cache
   for (const [opName, op] of Object.entries(operations)) {
-    checkPayload(op.input, `use-cases: ${opName}.input`);
+    checkPayload(op.input, `use-cases: ${opName}.input`, { direction: 'input' });
     checkPayload(op.output, `use-cases: ${opName}.output`);
     for (const event of op.emits ?? []) {
       if (!publishedEvents.has(event)) {

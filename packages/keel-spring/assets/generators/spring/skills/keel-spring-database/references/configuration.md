@@ -57,10 +57,12 @@ spring:
 ## Locking optimista
 
 **El caso común ya está resuelto por build**: toda raíz de agregado (`isAggregateRoot`)
-lleva `@Version private Long version` en su `XxxJpa`, la versión viaja por el dominio
-(constructor de rehidratación + `getVersion()`, propagada en el mapeo) y el
-`ApiExceptionHandler` traduce `ObjectOptimisticLockingFailureException` a **409
-`OPTIMISTIC_LOCK_CONFLICT`**. No reañadas el campo ni el handler.
+lleva `@Version @Column(name = "lock_version") private Long lockVersion` en su `XxxJpa`,
+la versión viaja por el dominio (constructor de rehidratación + `getLockVersion()`,
+propagada en el mapeo) y el `ApiExceptionHandler` traduce
+`ObjectOptimisticLockingFailureException` a **409 `OPTIMISTIC_LOCK_CONFLICT`**. No
+reañadas el campo ni el handler. Un `version` que declare el diseño es un contador de
+dominio distinto (`references/jpa-mapping.md`), no este.
 
 Tu único trabajo es el **caso borde**: cuando dos peticiones concurrentes modifican
 **solo entidades hijas** distintas del agregado sin tocar la raíz, JPA no incrementa la

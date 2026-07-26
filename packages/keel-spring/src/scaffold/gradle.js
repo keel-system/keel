@@ -2,8 +2,15 @@
 // generado. Dependencias condicionales según las capas declaradas y el stack
 // elegido en el cuestionario (keel-stack.json).
 
-import { SPRING_BOOT_VERSION, JAVA_VERSION, SPRINGDOC_VERSION, RESILIENCE4J_VERSION } from '../lib/assets.js';
+import {
+  SPRING_BOOT_VERSION,
+  JAVA_VERSION,
+  SPRINGDOC_VERSION,
+  RESILIENCE4J_VERSION,
+  JACKSON_NULLABLE_VERSION
+} from '../lib/assets.js';
 import { DATABASES, BROKERS, CACHES, STORAGE } from '../lib/stack-catalog.js';
+import { usesPartialUpdate } from './services.js';
 
 export function generate(model) {
   const { service, layersPresent, stack } = model;
@@ -56,6 +63,10 @@ export function generate(model) {
     if (model.httpClients?.some((client) => client.auth?.type === 'oauth2-client-credentials')) {
       dependencies.push("implementation 'org.springframework.boot:spring-boot-starter-oauth2-client'");
     }
+  }
+  if (usesPartialUpdate(model)) {
+    // Tri-estado de las actualizaciones parciales (PATCH): ausente / null / valor.
+    dependencies.push(`implementation 'org.openapitools:jackson-databind-nullable:${JACKSON_NULLABLE_VERSION}'`);
   }
   dependencies.push(
     "testImplementation 'org.springframework.boot:spring-boot-starter-test'",

@@ -78,6 +78,41 @@ export function messagePackage(operation) {
   return operation.messageKind === 'query' ? 'application.queries' : 'application.commands';
 }
 
+/**
+ * ¿La operación es una actualización parcial (PATCH)? En ese caso un campo
+ * opcional del cuerpo tiene TRES estados que el contrato distingue: ausente
+ * (conserva el valor actual), presente con null (vacía el campo) y presente con
+ * valor. Un tipo plano colapsa los dos primeros, así que los campos opcionales
+ * se declaran JsonNullable<T>.
+ */
+export function isPartialUpdate(operation) {
+  return operation.route?.method === 'PATCH';
+}
+
+// Campos del cuerpo de un PATCH que van envueltos en JsonNullable<T>.
+export function partialUpdateFields(operation) {
+  if (!isPartialUpdate(operation)) return [];
+  return operation.bodyFields.filter((field) => !field.required && !field.file);
+}
+
+// ¿Algún mensaje del servicio usa JsonNullable? Decide la dependencia gradle y
+// el módulo Jackson + value extractor que la hacen funcionar.
+export function usesPartialUpdate(model) {
+  return model.services.some((service) =>
+    service.operations.some((operation) => partialUpdateFields(operation).length > 0)
+  );
+}
+
+export const JSON_NULLABLE_IMPORT = 'org.openapitools.jackson.nullable.JsonNullable';
+
+function partialUpdateType(operation, component, fromPath, imports) {
+  if (!isPartialUpdate(operation) || fromPath.has(component.name)) return component.javaType;
+  if (component.required || component.file) return component.javaType;
+  if (!operation.bodyFields.some((field) => field.name === component.name)) return component.javaType;
+  imports.add(JSON_NULLABLE_IMPORT);
+  return `JsonNullable<${component.javaType}>`;
+}
+
 // Record del mensaje. Los commands llevan Bean Validation (son el body HTTP).
 function renderMessage(model, operation) {
   const imports = new Set();
@@ -87,6 +122,11 @@ function renderMessage(model, operation) {
   const contracts = mediatorContracts(operation, returnType);
   imports.add(`${subPackage(model, INTERFACES_PKG)}.${contracts.messageBase}`);
   const validated = operation.messageKind !== 'query';
+  // Los componentes que vienen de la ruta NUNCA se validan aquí: el cliente no
+  // los manda en el cuerpo (van en el path) y el controller los sobrescribe al
+  // reconstruir el record. Un @NotNull sobre ellos rechaza con 422 toda petición
+  // correcta, sin importar el contenido enviado.
+  const fromPath = new Set((operation.pathParams ?? []).map((param) => param.name));
 
   const rendered = components.map((component) => {
     for (const name of component.imports) imports.add(name);
@@ -94,7 +134,7 @@ function renderMessage(model, operation) {
     if (typeImport) imports.add(typeImport);
 
     const annotations = [];
-    if (validated) {
+    if (validated && !fromPath.has(component.name)) {
       for (const annotation of component.validation ?? []) {
         imports.add(`jakarta.validation.constraints.${annotation.slice(1).split('(')[0]}`);
         annotations.push(annotation);
@@ -105,7 +145,8 @@ function renderMessage(model, operation) {
       }
     }
     const prefix = annotations.length > 0 ? annotations.join(' ') + ' ' : '';
-    return `        ${prefix}${component.javaType} ${component.name}`;
+    const javaType = partialUpdateType(operation, component, fromPath, imports);
+    return `        ${prefix}${javaType} ${component.name}`;
   });
 
   const componentBlock = rendered.length > 0 ? `\n${rendered.join(',\n')}\n` : '';

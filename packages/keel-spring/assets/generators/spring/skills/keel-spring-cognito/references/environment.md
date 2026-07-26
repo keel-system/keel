@@ -69,8 +69,8 @@ proyecto al cerrar:
   diseño).
 - **Sin `aud`**: los access tokens `client_credentials` de Cognito no traen
   claim `aud` (traen `client_id`). Si el diseño pide `validateAudience: true`,
-  el `AudienceValidator` generado rechazaría estos tokens: documenta la
-  divergencia y valida la audiencia por `client_id`/scope según el caso.
+  el `AudienceAuthorizationFilter` generado rechazaría estos tokens (con 403):
+  documenta la divergencia y comprueba la audiencia por `client_id`/scope.
 
 El **emulador no soporta** client credentials (requiere hosted domain): valida
 los escenarios M2M con un usuario técnico en un grupo propio y documéntalo como

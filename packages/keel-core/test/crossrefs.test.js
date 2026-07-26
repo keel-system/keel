@@ -216,6 +216,86 @@ test('exclude con dot-path que cruza a otro agregado es warning', () => {
   );
 });
 
+// --- use-cases: embed (referencia a otro agregado proyectada como objeto) ---
+
+// Order (agregado propio) → customer, la raíz de otro agregado; y lines, hija
+// del propio agregado.
+const domainForEmbed = () => ({
+  entities: {
+    Order: entity(
+      {},
+      {
+        relations: {
+          lines: { entity: 'OrderLine', cardinality: 'one-to-many' },
+          customer: { entity: 'Customer', cardinality: 'many-to-one' },
+        },
+      }
+    ),
+    OrderLine: entity(),
+    Customer: entity({ name: { type: 'string' } }, { relations: { referrer: { entity: 'Customer', cardinality: 'many-to-one' } } }),
+  },
+  aggregates: {
+    Order: { root: 'Order', entities: ['OrderLine'] },
+    Customer: { root: 'Customer' },
+  },
+});
+
+const embedLayers = (embed, { direction = 'output' } = {}) => ({
+  domain: domainForEmbed(),
+  'use-cases': {
+    operations: {
+      getOrder: {
+        description: 'Recupera un pedido por su id.',
+        kind: 'query',
+        internal: true,
+        input: direction === 'input' ? { entity: 'Order', embed } : { entity: 'Order' },
+        output: direction === 'output' ? { entity: 'Order', embed } : { entity: 'Order' },
+      },
+    },
+  },
+});
+
+test('embed de una relación hacia la raíz de otro agregado es válido', () => {
+  const { errors, warnings } = run(embedLayers(['customer']));
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
+test('embed de una auto-referencia es válido: apunta a otra instancia, su propio agregado', () => {
+  const layers = embedLayers([]);
+  layers['use-cases'].operations.getCustomer = {
+    description: 'Recupera un cliente por su id.',
+    kind: 'query',
+    internal: true,
+    input: { entity: 'Customer' },
+    output: { entity: 'Customer', embed: ['referrer'] },
+  };
+  const { errors } = run(layers);
+  assert.deepEqual(errors, []);
+});
+
+test('embed de una relación inexistente es error', () => {
+  const { errors } = run(embedLayers(['nope']));
+  assert.ok(errors.some((e) => e.includes(`getOrder.output.embed 'nope': la entidad 'Order' no declara esa relación`)));
+});
+
+test('embed de una entidad hija del propio agregado es error: ya se proyecta anidada', () => {
+  const { errors } = run(embedLayers(['lines']));
+  assert.ok(errors.some((e) => e.includes(`getOrder.output.embed 'lines': 'OrderLine' es una entidad interna del agregado 'Order'`)));
+});
+
+test('embed de una relación to-many hacia otro agregado es error', () => {
+  const layers = embedLayers(['customer']);
+  layers.domain.entities.Order.relations.customer.cardinality = 'one-to-many';
+  const { errors } = run(layers);
+  assert.ok(errors.some((e) => e.includes(`solo se pueden embeber relaciones many-to-one/one-to-one`)));
+});
+
+test('embed en el input es error: en la entrada la referencia viaja por id', () => {
+  const { errors } = run(embedLayers(['customer'], { direction: 'input' }));
+  assert.ok(errors.some((e) => e.includes(`getOrder.input.embed 'customer': embed solo aplica al output`)));
+});
+
 // --- storage: campos file ↔ buckets ---
 
 const domainWithFile = (bucket = 'productImages') => ({

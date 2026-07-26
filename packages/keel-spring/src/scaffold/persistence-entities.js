@@ -6,6 +6,7 @@
 // miembros (jpaMembers) para mantener ambos lados en sincronía.
 
 import { snakeCase } from '../lib/naming.js';
+import { quoteIdentifier } from '../lib/sql-reserved.js';
 import { javaFile, javaPath, subPackage } from './render.js';
 import { capitalize } from './entities.js';
 
@@ -42,7 +43,7 @@ export function jpaMembers(model, entity) {
           javaType: sub.javaType,
           imports: sub.imports,
           subKind: sub.kind,
-          column: `${snakeCase(field.name)}_${snakeCase(sub.name)}`
+          column: quoteIdentifier(`${snakeCase(field.name)}_${snakeCase(sub.name)}`)
         }))
       });
     } else {
@@ -193,6 +194,13 @@ function renderJpaEntity(model, entity) {
         imports.add('org.springframework.data.annotation.LastModifiedDate');
         lines.push('    @LastModifiedDate');
       }
+      // Caso borde: el diseño declara un campo llamado lockVersion, el nombre que
+      // build reserva para el @Version. Se anota el declarado en vez de generar un
+      // segundo campo (ver el aviso de model.js).
+      if (entity.declaresLockVersion && entity.isAggregateRoot && field.name === 'lockVersion') {
+        imports.add('jakarta.persistence.Version');
+        lines.push('    @Version');
+      }
       // Autoría: la puebla el mismo AuditingEntityListener (heredado de
       // AuditableEntity o puesto en la clase), pero solo si hay un AuditorAware
       // registrado; sin él estas columnas quedarían a null en silencio.
@@ -248,7 +256,7 @@ function renderJpaEntity(model, entity) {
       imports.add('java.util.UUID');
       const nullable = member.relation.required ? ', nullable = false' : '';
       declarations.push(
-        `    @Column(name = "${snakeCase(member.relation.name)}_id"${nullable})\n    private UUID ${member.name};`
+        `    @Column(name = "${quoteIdentifier(`${snakeCase(member.relation.name)}_id`)}"${nullable})\n    private UUID ${member.name};`
       );
       pushAccessor(member.name, 'UUID');
     } else if (member.kind === 'elementCollection') {
@@ -314,7 +322,7 @@ function renderJpaEntity(model, entity) {
       // FK en esta tabla (lado dueño): columna <relación>_id.
       imports.add('jakarta.persistence.JoinColumn');
       const joinNullable = member.relation.required ? ', nullable = false' : '';
-      const joinColumn = `\n    @JoinColumn(name = "${snakeCase(member.relation.name)}_id"${joinNullable})`;
+      const joinColumn = `\n    @JoinColumn(name = "${quoteIdentifier(`${snakeCase(member.relation.name)}_id`)}"${joinNullable})`;
       let annotation;
       if (member.relation.cardinality === 'many-to-one') {
         imports.add('jakarta.persistence.ManyToOne');
@@ -329,15 +337,18 @@ function renderJpaEntity(model, entity) {
     }
   }
 
-  // Concurrencia optimista: solo la raíz de agregado porta la versión (es la
+  // Concurrencia optimista: solo la raíz de agregado porta lockVersion (es la
   // frontera de consistencia). La gestiona Hibernate, que la comprueba e
   // incrementa en cada flush; una escritura sobre una versión obsoleta lanza
   // OptimisticLockException (la traduce el ApiExceptionHandler).
-  if (entity.isAggregateRoot) {
+  // Es infraestructura pura y nunca sale al contrato: un `version` que el diseño
+  // declare es otra cosa (contador de dominio, campo escalar corriente) y convive
+  // con este en la misma tabla.
+  if (entity.isAggregateRoot && !entity.declaresLockVersion) {
     imports.add('jakarta.persistence.Column');
     imports.add('jakarta.persistence.Version');
-    declarations.push('    @Version\n    @Column(name = "version")\n    private Long version;');
-    pushAccessor('version', 'Long');
+    declarations.push('    @Version\n    @Column(name = "lock_version")\n    private Long lockVersion;');
+    pushAccessor('lockVersion', 'Long');
   }
 
   const header = ['@Entity'];
@@ -348,7 +359,7 @@ function renderJpaEntity(model, entity) {
     imports.add('org.springframework.data.jpa.domain.support.AuditingEntityListener');
     header.push('@EntityListeners(AuditingEntityListener.class)');
   }
-  header.push(renderTableAnnotation(entity, imports));
+  header.push(renderTableAnnotation(model, entity, members, imports));
   const body = `${header.join('\n')}
 public class ${entity.name}Jpa${audited ? ' extends AuditableEntity' : ''} {
 
@@ -370,12 +381,47 @@ ${accessors.join('\n\n')}
   }
 }
 
-function renderTableAnnotation(entity, imports) {
-  const attrs = [`name = "${entity.tableName}"`];
+/**
+ * Nombre real de columna de un nombre lógico del diseño (campo, relación o
+ * value object). Sin esto, un índice declarado sobre la relación `parent`
+ * generaría columnList="parent" cuando la columna es `parent_id`: Hibernate no
+ * puede crear el índice y el arranque lo reporta sin romper nada — un fallo de
+ * rendimiento silencioso.
+ */
+function columnsFor(model, entity, members, logicalName, warnings) {
+  const [head, ...rest] = String(logicalName).split('.');
+  const member = members.find((m) => m.name === head || m.relation?.name === head);
+
+  if (member?.kind === 'scalar') return [snakeCase(member.name)];
+  if (member?.kind === 'externalRef' || member?.kind === 'relationOne') {
+    return [`${snakeCase(member.relation.name)}_id`];
+  }
+  if (member?.kind === 'vo') {
+    // vo.sub → una columna; el vo entero → todas sus columnas aplanadas.
+    if (rest.length > 0) {
+      const sub = member.subs.find((s) => s.voAccessor === rest[0]);
+      if (sub) return [sub.column.replace(/`/g, '')];
+    } else if (member.subs.length > 0) {
+      return member.subs.map((sub) => sub.column.replace(/`/g, ''));
+    }
+  }
+
+  warnings?.push(
+    `persistence.entities.${entity.name}: el índice declara "${logicalName}", que no es un campo ni una relación de la entidad; se usa "${snakeCase(head)}" tal cual y el índice puede no crearse.`
+  );
+  return [snakeCase(head)];
+}
+
+function renderTableAnnotation(model, entity, members, imports) {
+  const attrs = [`name = "${quoteIdentifier(entity.tableName)}"`];
   const uniqueConstraints = [];
+  const column = (name) => quoteIdentifier(name);
 
   if (entity.naturalKey && entity.naturalKey.length > 0) {
-    const columns = entity.naturalKey.map((f) => `"${snakeCase(f)}"`).join(', ');
+    const columns = entity.naturalKey
+      .flatMap((f) => columnsFor(model, entity, members, f, model.warnings))
+      .map((c) => `"${column(c)}"`)
+      .join(', ');
     uniqueConstraints.push(`@UniqueConstraint(name = "uk_${entity.tableName}_natural", columnNames = { ${columns} })`);
   }
 
@@ -385,7 +431,7 @@ function renderTableAnnotation(entity, imports) {
   // sorteen. Su violación la traduce al mismo error el ApiExceptionHandler.
   for (const field of uniqueFields(entity)) {
     uniqueConstraints.push(
-      `@UniqueConstraint(name = "uk_${entity.tableName}_${snakeCase(field.name)}", columnNames = { "${snakeCase(field.name)}" })`
+      `@UniqueConstraint(name = "uk_${entity.tableName}_${snakeCase(field.name)}", columnNames = { "${column(snakeCase(field.name))}" })`
     );
   }
 
@@ -401,8 +447,14 @@ function renderTableAnnotation(entity, imports) {
     imports.add('jakarta.persistence.Index');
     const indexes = entity.indexes
       .map((fields) => {
-        const suffix = fields.map((f) => snakeCase(f)).join('_');
-        return `@Index(name = "idx_${entity.tableName}_${suffix}", columnList = "${fields.map((f) => snakeCase(f)).join(', ')}")`;
+        // El nombre del índice conserva el nombre lógico del diseño (es su
+        // identidad en persistence.keel.yaml); la columnList usa la columna real.
+        const suffix = fields.map((f) => snakeCase(f.replace('.', '_'))).join('_');
+        const columns = fields
+          .flatMap((f) => columnsFor(model, entity, members, f, model.warnings))
+          .map((c) => column(c))
+          .join(', ');
+        return `@Index(name = "idx_${entity.tableName}_${suffix}", columnList = "${columns}")`;
       })
       .join(', ');
     attrs.push(`indexes = { ${indexes} }`);

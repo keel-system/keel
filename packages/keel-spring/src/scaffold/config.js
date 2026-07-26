@@ -132,18 +132,40 @@ function baseYaml(model) {
     '    # Perfil activo por variable de entorno; local para desarrollo en la máquina.',
     '    active: ${PROFILE:local}'
   ];
+  // Serialización: un campo sin valor se omite del JSON, no viaja como null
+  // (convención "ausencia vs. nulo" del contrato), y las fechas salen en ISO-8601.
+  lines.push(
+    '  jackson:',
+    '    default-property-inclusion: non_null',
+    '    serialization:',
+    '      write-dates-as-timestamps: false'
+  );
   if (layersPresent.persistence) {
     lines.push('  jpa:', '    open-in-view: false');
   }
+  // Tope de página del diseño (api.pagination): sin max-page-size Spring admite
+  // hasta 2000 elementos por página y el maxSize declarado no se aplica nunca.
+  if (model.pagination) {
+    const pageable = ['  data:', '    web:', '      pageable:'];
+    if (model.pagination.defaultSize != null) pageable.push(`        default-page-size: ${model.pagination.defaultSize}`);
+    if (model.pagination.maxSize != null) pageable.push(`        max-page-size: ${model.pagination.maxSize}`);
+    if (pageable.length > 3) lines.push(...pageable);
+  }
   // Límite de subida del servlet a partir del mayor maxSizeMb declarado en el
   // diseño: sin esto Spring corta en 1MB y el 413 del diseño nunca se alcanza.
+  // Va con holgura DELIBERADA sobre el límite de negocio: si el servlet cortase
+  // justo en maxSizeMb, el 413 lo emitiría Tomcat antes de ejecutar el caso de
+  // uso y ninguna guarda declarada antes que la del tamaño (p. ej. "demasiadas
+  // imágenes") podría precederla. El límite de negocio se comprueba en el orden
+  // que fija el diseño; esto es solo la red de seguridad para subidas absurdas.
   const maxSizeMb = model.storage?.maxSizeMb;
   if (maxSizeMb != null) {
+    const servletLimit = maxSizeMb * 2;
     lines.push(
       '  servlet:',
       '    multipart:',
-      `      max-file-size: ${maxSizeMb}MB`,
-      `      max-request-size: ${maxSizeMb}MB`
+      `      max-file-size: ${servletLimit}MB`,
+      `      max-request-size: ${servletLimit}MB`
     );
   }
   return lines.join('\n') + '\n';
@@ -228,6 +250,11 @@ function dbYaml(model, profile, dbName) {
     lines.push('      # El esquema lo gobiernan las migraciones de db/migration/, nunca Hibernate.', '      ddl-auto: validate');
   }
   lines.push(`    show-sql: ${profile === 'local'}`);
+  // Red de seguridad sobre el quoting explícito de las entidades: Hibernate
+  // entrecomilla cualquier identificador que sea palabra clave del dialecto
+  // elegido. Sin esto, un campo del diseño llamado como una palabra reservada
+  // (primary, order, user…) genera un DDL que no compila y su tabla no se crea.
+  lines.push('    properties:', '      hibernate:', '        auto_quote_keyword: true');
   lines.push(...flywayLines(profile));
   return lines.join('\n') + '\n';
 }
@@ -616,6 +643,9 @@ function testProfileFiles(model) {
         '  jpa:',
         '    hibernate:',
         '      ddl-auto: create-drop',
+        '    properties:',
+        '      hibernate:',
+        '        auto_quote_keyword: true',
         '  flyway:',
         '    # El esquema del perfil test lo crea Hibernate en H2: las migraciones de',
         '    # db/migration/ están escritas para el dialecto real y no aplican aquí.',

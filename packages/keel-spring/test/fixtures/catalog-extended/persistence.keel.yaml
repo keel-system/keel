@@ -5,7 +5,13 @@ entities:
     naturalKey: [sku]
     indexes:
       - [status]
+      # Índice sobre una relación: la columna real es category_id, no category.
+      - [category, status]
   Category:
     naturalKey: [slug]
+  ProductImage:
+    indexes:
+      # Índice sobre una relación y sobre un campo que es palabra reservada.
+      - [product, position, primary]
 consistency:
   transactionalBoundary: per-operation

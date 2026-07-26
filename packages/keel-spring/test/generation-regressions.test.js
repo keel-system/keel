@@ -164,3 +164,140 @@ test('infra: export-schema.sh verifica los nombres de constraint del diseño', (
   assert.ok(script.includes('uk_products_natural'));
   assert.ok(script.includes('AVISO: el DDL exportado no nombra estas constraints'));
 });
+
+// ─── Segundo informe de inconsistencias (R1–R6, R9, C3, C4, C6) ──────────────
+
+test('R2: los parámetros de ruta no llevan Bean Validation en el Command', () => {
+  const { read } = scaffoldExtended();
+  const command = read(`${JAVA}/application/commands/UpdateProductCommand.java`);
+  const controller = read(controllerPath('product'));
+
+  // El id va en la ruta y nunca en el cuerpo: un @NotNull sobre él rechaza con
+  // 422 toda petición correcta, hiciera lo que hiciera el cliente.
+  assert.ok(command.includes('UUID id,'));
+  assert.ok(!command.includes('@NotNull UUID id'));
+  assert.ok(controller.includes('updateProduct(@PathVariable UUID id'));
+});
+
+test('C6: cuerpo enteramente opcional → @RequestBody(required = false) y fusión null-safe', () => {
+  const { read } = scaffoldExtended();
+  const controller = read(controllerPath('product'));
+
+  assert.ok(controller.includes('@Valid @RequestBody(required = false) UpdateProductCommand command'));
+  assert.ok(controller.includes('command == null ? JsonNullable.<String>undefined() : command.name()'));
+  // El testigo de tipo nombra el tipo: el controller tiene que importarlo aunque
+  // no aparezca en ninguna firma (si no, no compila).
+  assert.ok(controller.includes("import org.openapitools.jackson.nullable.JsonNullable;"));
+  assert.ok(controller.includes("import java.util.UUID;"));
+});
+
+test('C3: PATCH parcial con tri-estado JsonNullable (ausente ≠ null explícito)', () => {
+  const { read } = scaffoldExtended();
+  const command = read(`${JAVA}/application/commands/UpdateProductCommand.java`);
+  const buildGradle = read('build.gradle');
+  const webConfig = read(`${JAVA}/infrastructure/configurations/WebConfig.java`);
+
+  assert.ok(command.includes('@Size(max = 200) JsonNullable<String> name'));
+  assert.ok(command.includes('JsonNullable<UUID> categoryId'));
+  assert.ok(buildGradle.includes('org.openapitools:jackson-databind-nullable'));
+  assert.ok(webConfig.includes('public JsonNullableModule jsonNullableModule()'));
+  // Sin el value extractor, un @Size sobre JsonNullable no se evalúa nunca.
+  const extractor = read('src/main/resources/META-INF/services/jakarta.validation.valueextraction.ValueExtractor');
+  assert.ok(extractor.includes('JsonNullableValueExtractor'));
+});
+
+test('R1: un nombre de columna que es palabra reservada SQL va entrecomillado', () => {
+  const { read } = scaffoldExtended();
+  const jpa = read(`${JAVA}/infrastructure/persistence/entities/ProductImageJpa.java`);
+  const dbYaml = read('src/main/resources/parameters/local/db.yaml');
+
+  assert.ok(jpa.includes('@Column(name = "`primary`")'));
+  assert.ok(jpa.includes('@Column(name = "`position`", nullable = false)'));
+  // Red de seguridad dialecto a dialecto para lo que la lista no cubra.
+  assert.ok(dbYaml.includes('auto_quote_keyword: true'));
+});
+
+test('índices: columnList usa la columna real de la relación, no su nombre lógico', () => {
+  const { read } = scaffoldExtended();
+  const product = read(`${JAVA}/infrastructure/persistence/entities/ProductJpa.java`);
+  const image = read(`${JAVA}/infrastructure/persistence/entities/ProductImageJpa.java`);
+
+  assert.ok(product.includes('columnList = "category_id, status"'));
+  assert.ok(!product.includes('columnList = "category, status"'));
+  assert.ok(image.includes('columnList = "product_id, `position`, `primary`"'));
+});
+
+test('version: el contador declarado por el diseño es de dominio y no es el @Version de JPA', () => {
+  const { read, result } = scaffoldExtended();
+  const jpa = read(`${JAVA}/infrastructure/persistence/entities/ProductJpa.java`);
+  const domain = read(`${JAVA}/domain/aggregate/Product.java`);
+
+  // Dos campos distintos: el contador del diseño (columna version, sin @Version) y
+  // el de bloqueo optimista que pone build (lock_version, con @Version).
+  assert.ok(jpa.includes('private Long version;'));
+  assert.ok(jpa.includes('@Version\n    @Column(name = "lock_version")\n    private Long lockVersion;'));
+  assert.equal(jpa.split('@Version').length - 1, 1);
+  assert.ok(domain.includes('public Long getVersion() {'));
+  assert.ok(domain.includes('public Long getLockVersion() {'));
+  assert.ok(!result.warnings.some((w) => w.includes('lockVersion')));
+});
+
+test('R3: los enums del contrato se bindean también como query param', () => {
+  const { read } = scaffoldExtended();
+  const factory = read(`${JAVA}/infrastructure/web/JsonValueEnumConverterFactory.java`);
+  const webConfig = read(`${JAVA}/infrastructure/configurations/WebConfig.java`);
+
+  assert.ok(factory.includes('implements ConverterFactory<String, Enum>'));
+  assert.ok(factory.includes('JsonValue.class'));
+  assert.ok(webConfig.includes('registry.addConverterFactory(new JsonValueEnumConverterFactory())'));
+});
+
+test('R4: el sobre de paginación es el canónico y el maxSize del diseño se aplica', () => {
+  const { read } = scaffoldExtended();
+  const paged = read(`${JAVA}/application/dtos/PagedResponse.java`);
+  const appYaml = read('src/main/resources/application.yaml');
+
+  assert.ok(paged.includes('List<T> items, int page, int size, long totalElements, int totalPages'));
+  assert.ok(!paged.includes('List<T> content'));
+  assert.ok(appYaml.includes('max-page-size: 100'));
+  assert.ok(appYaml.includes('default-page-size: 20'));
+});
+
+test('R5: los campos sin valor se omiten del JSON, no viajan como null', () => {
+  const { read } = scaffoldExtended();
+  assert.ok(read('src/main/resources/application.yaml').includes('default-property-inclusion: non_null'));
+});
+
+test('R6: los errores de forma son 400; el 422 queda para las reglas de negocio', () => {
+  const { read } = scaffoldExtended();
+  const handler = read(`${JAVA}/infrastructure/rest/ApiExceptionHandler.java`);
+  const validation = handler.slice(handler.indexOf('onMethodArgumentNotValid') - 200, handler.indexOf('onConstraintViolation'));
+
+  assert.ok(validation.includes('@ResponseStatus(HttpStatus.BAD_REQUEST)'));
+  assert.ok(!validation.includes('@ResponseStatus(HttpStatus.UNPROCESSABLE_ENTITY)'));
+  assert.ok(handler.includes('@ExceptionHandler(BusinessException.class)'));
+});
+
+test('C4: el límite multipart del servlet deja holgura sobre el límite de negocio', () => {
+  const { read } = scaffoldExtended();
+  // maxSizeMb del diseño = 5: si el servlet cortase ahí, Tomcat emitiría el 413
+  // antes del caso de uso y ninguna guarda anterior podría precederlo.
+  assert.ok(read('src/main/resources/application.yaml').includes('max-file-size: 10MB'));
+});
+
+test('C2/embed: una referencia a otro agregado se proyecta como objeto, no como id', () => {
+  const { read } = scaffoldExtended();
+  const dto = read(`${JAVA}/application/dtos/UpdateProductResponseDto.java`);
+  const ref = read(`${JAVA}/application/dtos/CategoryRefDto.java`);
+  const productMapper = read(`${JAVA}/application/mappers/ProductApplicationMapper.java`);
+  const categoryMapper = read(`${JAVA}/application/mappers/CategoryApplicationMapper.java`);
+
+  assert.ok(dto.includes('CategoryRefDto category'));
+  assert.ok(!dto.includes('UUID categoryId'));
+  // La proyección se corta a profundidad 1: el ref no arrastra las relaciones
+  // del agregado referenciado (aquí, el parent de Category).
+  assert.ok(!ref.includes('parent'));
+  // El objeto lo resuelve el handler: entra como parámetro, no como null pendiente.
+  assert.ok(productMapper.includes('toUpdateProductResponseDto(Product entity, CategoryRefDto category)'));
+  assert.ok(categoryMapper.includes('public CategoryRefDto toCategoryRefDto(Category entity)'));
+});

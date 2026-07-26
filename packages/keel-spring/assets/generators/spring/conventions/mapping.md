@@ -81,10 +81,10 @@ En el **dominio** la colección es una lista mutable interna con getter inmutabl
 
 | Diseño | Código |
 |--------|--------|
-| `operations.op` | Record mensaje (`application/commands` o `application/queries`) + handler (`application/usecases`): `kind: query` con output → `XxxQuery implements Query<R>` + `XxxQueryHandler`; command con output → `XxxCommand implements ReturningCommand<R>`; command sin output → `XxxCommand implements Command`. El controller despacha vía mediator; commands con body llegan como `@Valid @RequestBody XxxCommand` y el id del path se fusiona reconstruyendo el record |
+| `operations.op` | Record mensaje (`application/commands` o `application/queries`) + handler (`application/usecases`): `kind: query` con output → `XxxQuery implements Query<R>` + `XxxQueryHandler`; command con output → `XxxCommand implements ReturningCommand<R>`; command sin output → `XxxCommand implements Command`. El controller despacha vía mediator; commands con body llegan como `@Valid @RequestBody XxxCommand` y el id del path se fusiona reconstruyendo el record. Los componentes que vienen de la ruta van **sin** Bean Validation (el cliente no los manda en el cuerpo) y, si ningún campo del cuerpo es obligatorio, el `@RequestBody` es `required = false`: una petición sin cuerpo es válida |
 | `operations.op` con `input`/`output.entity` **interna** a un agregado (p. ej. `AddOrderLine` sobre `OrderLine`) | El handler igual inyecta el repositorio de la **raíz** (`OrderRepository`) — nunca uno de la hija, que no existe. El agente carga la raíz por id, invoca su método de negocio (`order.addLine(...)`, ver `domain-modeling.md § Colecciones y entidades hijas`) y persiste la raíz |
 | `kind: query` | Sin efectos; el `UseCaseMediator` la despacha en transacción `readOnly` (el handler no lleva `@Transactional`) |
-| `input`/`output` `{ entity: X }` | DTOs derivados de la entidad; en input quedan fuera `generated`/`computed`; en output quedan fuera `sensitive` y los campos de `exclude`. Las **relaciones entran por defecto**: una referencia a otro agregado como `<relación>Id` (UUID) y una entidad hija como su propio `<Hija>Dto` (`List<…>` si es `one-to-many`), que build genera. Un `exclude` con **dot-path** (`lines.costPrice`, `address.zip`) recorta el DTO **anidado**: build genera la hija completa y señala cada ruta con un warning — ese warning es la señal de trabajo del agente. En el **input** las hijas no entran (se gestionan por sus propias operaciones); si un flujo las recibe anidadas, build lo avisa y lo modela el agente |
+| `input`/`output` `{ entity: X }` | DTOs derivados de la entidad; en input quedan fuera `generated`/`computed`; en output quedan fuera `sensitive` y los campos de `exclude`. Las **relaciones entran por defecto**: una referencia a otro agregado como `<relación>Id` (UUID) —salvo que el output la marque con `embed`— y una entidad hija como su propio `<Hija>Dto` (`List<…>` si es `one-to-many`), que build genera. Un `exclude` con **dot-path** (`lines.costPrice`, `address.zip`) recorta el DTO **anidado**: build genera la hija completa y señala cada ruta con un warning — ese warning es la señal de trabajo del agente. En el **input** las hijas no entran (se gestionan por sus propias operaciones); si un flujo las recibe anidadas, build lo avisa y lo modela el agente |
 | `input` con un campo `type: file` | Endpoint `multipart/form-data`: el binario llega como `@RequestPart MultipartFile` y viaja al mensaje como `FileUpload(content, filename, contentType, size)`; el resto de campos, como `@RequestParam`. El handler sube el contenido por el puerto `FileStorage` y guarda en el dominio la **clave** del objeto (String), que es lo que el `output` expone |
 | `preconditions` / `rules` | Lógica del `handle(...)` del handler, en el mismo orden del diseño, comentadas con la frase del diseño cuando no sea obvia |
 | `rules` con **normalización previa** (upper/lower/trim antes de validar formato o unicidad) | El campo **no** lleva `@Pattern`/`@Size` de Bean Validation en el DTO de entrada — ver el aviso de abajo |
@@ -117,6 +117,57 @@ handler o en el constructor del value object del dominio (que es donde el modelo
 rico la quiere de todos modos, ver `domain-modeling.md`). `@NotNull`/`@NotBlank`
 sí pueden quedarse: no compiten con ninguna normalización.
 
+### Actualización parcial (`PATCH`): ausente ≠ nulo explícito
+
+Cuando el diseño declara la regla *"un campo ausente de la entrada conserva su
+valor; un campo presente con valor nulo vacía el campo"*, un tipo plano no vale:
+Jackson deja `null` en los dos casos y el handler no puede distinguirlos.
+
+Build ya resuelve el mecanismo: en toda operación cuyo endpoint es `PATCH`, los
+campos **no requeridos** del cuerpo se generan como `JsonNullable<T>` (con su
+dependencia, su `JsonNullableModule` y el value extractor que mantiene vivas las
+constraints). Lo que le toca al agente es **consumirlo bien** en el handler:
+
+```java
+// Ausente → no se toca. Presente (con valor o con null) → se aplica.
+if (command.name().isPresent()) product.rename(command.name().get());
+if (command.categoryId().isPresent()) product.moveTo(command.categoryId().get());
+```
+
+Nunca `command.name().orElse(null)` sobre el estado actual: eso vuelve a
+colapsar los dos casos y borra el campo en cada petición que no lo mande.
+
+### El orden declarado manda sobre la conveniencia técnica
+
+`preconditions`/`rules` se traducen **en el orden del diseño**, incluidas las
+guardas que técnicamente sería más cómodo evaluar antes. El caso típico es el
+tamaño de un archivo: comprobarlo al recibir el multipart es lo natural, pero si
+el diseño pone antes otra guarda (p. ej. "la galería no llega a 10 imágenes"),
+esa es la que debe responder primero.
+
+> Por eso build fija el límite multipart del servlet **con holgura** sobre el
+> `maxSizeMb` del diseño: si cortase justo en el límite de negocio, el 413 lo
+> emitiría Tomcat antes de ejecutar el caso de uso y ninguna guarda anterior
+> podría precederlo. El límite de negocio se comprueba en el handler, en su
+> sitio; `MaxUploadSizeExceededException` queda solo como red de seguridad.
+
+### Auditoría de consistencia del contrato (antes de cerrar la capa `api`)
+
+Los DTOs se escriben operación a operación, y una decisión tomada bien en un
+agregado se olvida en el siguiente. Antes de dar la capa por cerrada:
+
+1. Contrastar **cada nombre de campo** que aparece en `validation-scenarios.md`
+   contra los DTOs de respuesta reales. Si el escenario pide `category` y el DTO
+   expone `categoryId`, uno de los dos está mal — y si el diseño quiere el objeto,
+   lo que falta es `embed` en el `output` (es un `designGap`, no un parche en el DTO).
+2. Verificar que "ausencia vs. nulo" llega también a los **value objects
+   compuestos**: un VO sin ningún valor se mapea a `null`, no a un objeto con
+   todos los campos nulos (`"dimensions": {}` es un fallo de contrato).
+3. Verificar que ningún value object proyectado expone métodos derivados
+   (`isZero()`, `isPositive()`): Jackson los serializa como propiedades extra
+   (`"zero": true`) y filtran detalle de implementación al contrato público
+   (ver `domain-modeling.md`).
+
 ## `api` — api.keel.yaml
 
 | Diseño | Código |
@@ -125,10 +176,10 @@ sí pueden quedarse: no compiten con ninguna normalización.
 | `defaultAudience` / `endpoints.op.audience` | Público del endpoint. Con `serviceAuth.validateAudience`, decide en qué `SecurityFilterChain` cae la ruta (ver `security`) |
 | `endpoints.op` | `@GetMapping`/`@PostMapping`… con `method`, `path` y `successStatus` del diseño |
 | `path` con `{segmento}` | Un `@PathVariable` por segmento, con **su nombre exacto** y el tipo del campo homónimo del `input` (si el input no lo declara, `UUID` y warning de build). El binding sale de la ruta, no del nombre del campo: `{slug}` es `@PathVariable String slug`, nunca un query param |
-| Campos del `input` que **no** están en la ruta | En `POST`/`PUT`/`PATCH`, cuerpo (`@Valid @RequestBody XxxCommand`, o partes del formulario si hay un campo `file`); en `GET`/`DELETE`, `@RequestParam`. Lo decide el verbo del endpoint, no el `kind` de la operación: un `POST` de consulta en lote lleva su lote en el body |
+| Campos del `input` que **no** están en la ruta | En `POST`/`PUT`/`PATCH`, cuerpo (`@Valid @RequestBody XxxCommand`, o partes del formulario si hay un campo `file`); en `GET`/`DELETE`, `@RequestParam`. Lo decide el verbo del endpoint, no el `kind` de la operación: un `POST` de consulta en lote lleva su lote en el body . En `PATCH`, los no requeridos van envueltos en `JsonNullable<T>` (ver § Actualización parcial) |
 | `successStatus` ausente | 200, salvo `DELETE` (204) y las operaciones `create*` (201). Un `POST` que no crea un recurso —transición de estado, consulta en lote— responde 200; build avisa del status asumido para que el diseño lo fije |
 | `auto: true` | Rutas por convención CRUD (`createX → POST /xs`, `getX → GET /xs/{id}`, `listXs → GET /xs`, `updateX → PUT /xs/{id}`, `deleteX → DELETE /xs/{id}`); los `endpoints` explícitos tienen prioridad |
-| `pagination` | `Pageable` con `defaultSize`/`maxSize` del diseño; la respuesta de un output `paginated: true` es `PagedResponse<XxxResponseDto>` (`content` + metadatos) — **nunca** `PagedResponse<List<…>>`: la envoltura ya es la lista |
+| `pagination` | Build escribe `spring.data.web.pageable.default-page-size`/`max-page-size` desde el diseño (el tope se aplica solo, no lo comprueba el handler). La respuesta de un output `paginated: true` es `PagedResponse<XxxResponseDto>` con la forma canónica de `docs/dsl/api.md § Paginación` — `items`, `page`, `size`, `totalElements`, `totalPages` — y **nunca** `PagedResponse<List<…>>`: la envoltura ya es la lista |
 
 ## `security` — security.keel.yaml
 
@@ -145,7 +196,7 @@ Sin esta capa, no se incluye Spring Security. **Esta capa la materializa entera 
 | `audience` de un endpoint (capa api) | Sin efecto directo en código; gobierna qué reglas son válidas (lo valida `keel validate`) y qué escenarios M2M se ejercitan en la validación funcional |
 | `authentication.serviceAuth.protocol: client-credentials` | Mismo resource server JWT: los tokens `client_credentials` entran por la misma cadena; los clientes se provisionan en el proveedor (skill `keel-spring-keycloak`/`-cognito`) |
 | `authentication.serviceAuth.protocol: api-key` (con protocolo principal `oidc`/`jwt`) | `ServiceApiKeyAuthFilter`: header `X-API-Key` contra `security.api-keys.<cliente>` (fragmento `parameters/<perfil>/security.yaml`); autentica como el `serviceClient` con sus scopes como authorities `SCOPE_*` |
-| `authentication.serviceAuth.validateAudience: true` | `AudienceValidator` (`OAuth2TokenValidator<Jwt>` sobre el claim `aud`) + bean `JwtDecoder` (`SupplierJwtDecoder` → Nimbus desde el issuer + validador delegante), audiencia en `security.audience` (default: nombre del servicio). **Solo se aplica a las rutas M2M**: si el servicio expone además endpoints de usuario, build emite **dos** `SecurityFilterChain` — `@Order(1)` con `securityMatcher` sobre las rutas `audience: services` y el `serviceJwtDecoder` (con audiencia), `@Order(2)` para el resto con el `jwtDecoder` normal. Un token de usuario lleva la audiencia que emite el IdP (`aud: "account"` en Keycloak), nunca la del servicio: validársela daría 401 a usuarios con el rol correcto. Las rutas `audience: both` van a la cadena 2, sin validación de audiencia |
+| `authentication.serviceAuth.validateAudience: true` | `AudienceAuthorizationFilter` (comprueba el claim `aud` del `JwtAuthenticationToken` ya autenticado y lanza `AccessDeniedException`), registrado antes del `AuthorizationFilter`; audiencia en `security.audience` (default: nombre del servicio). Es una regla de **autorización**, no de autenticación: validarla en el `JwtDecoder` convertiría un token legítimo de otro público en `401` (token inválido) cuando lo correcto es `403` (autenticado, sin permiso) — la distinción que exige el diseño. Por eso tampoco hay bean `JwtDecoder` propio: basta el que autoconfigura Boot desde el `issuer-uri`. **Solo se aplica a las rutas M2M**: si el servicio expone además endpoints de usuario, build emite **dos** `SecurityFilterChain` — `@Order(1)` con `securityMatcher` sobre las rutas `audience: services` y el filtro de audiencia, `@Order(2)` para el resto sin él. Un token de usuario lleva la audiencia que emite el IdP (`aud: "account"` en Keycloak), nunca la del servicio. Las rutas `audience: both` van a la cadena 2, sin comprobación de audiencia. Los 401/403 de la cadena salen con el `ErrorResponse` del contrato vía `SecurityErrorHandlers` (`AuthenticationEntryPoint` + `AccessDeniedHandler`) |
 | `cors` | `CorsConfig` (bean `CorsConfigurationSource` sobre `/**`) + `.cors(Customizer.withDefaults())` en **todas** las cadenas. Métodos derivados de los endpoints declarados más `OPTIONS`; `allowedHeaders`/`exposedHeaders`/`maxAgeSeconds`/`allowCredentials` del diseño como constantes. Los **orígenes no salen del diseño** (son dato de despliegue): `security.cors.allowed-origins` en `parameters/<perfil>/security.yaml`, literal en local y `${SECURITY_CORS_ALLOWED_ORIGINS}` obligatoria fuera. Se usa `setAllowedOriginPatterns` (admite comodines y es lo único válido con credenciales). Sin bloque `cors`, no se genera nada: el servicio rechaza toda petición cross-origin |
 | `serviceClients` | Catálogo de clientes máquina: provisión en el proveedor de auth como clientes `client_credentials` con sus scopes (skill del proveedor), o fuente de las claves `security.api-keys.*` si `serviceAuth` es `api-key` |
 
@@ -227,9 +278,10 @@ Sin esta capa (servicio sin estado propio), no se incluye JPA ni base de datos.
 | `consistency.transactionalBoundary: per-aggregate` | El command debe tocar una sola raíz de agregado dentro de la transacción del mediator; nunca dos agregados en la misma transacción (si necesitas semántica especial, anota el handler con `@Transactional` y documenta la excepción) |
 | auditoría `createdAt`/`updatedAt` | Automática: `AuditableEntity` (`@MappedSuperclass` + JPA auditing). Si la entidad declara sus propios timestamps, build no hereda pero anota esos campos con `@CreatedDate`/`@LastModifiedDate` + `@EntityListeners` (se auto-pueblan igual) |
 | autoría `createdBy`/`updatedBy` declarada en la entidad | Build anota los campos con `@CreatedBy`/`@LastModifiedBy` y deja un `// TODO (agente)`: falta el `AuditorAware<String>` (actor del `SecurityContext`, o el correlation id si no hay usuario) y su `@EnableJpaAuditing(auditorAwareRef = "...")`. Sin él las columnas quedan a `null` — resolverlo es obligatorio |
-| `@Version` (bloqueo optimista) en la raíz de agregado | **Ya lo genera build** (`isAggregateRoot`): campo `@Version private Long version` en la `XxxJpa`, `version` en el constructor de rehidratación del dominio (último parámetro) + `getVersion()`, propagación en `toDomain`/`toJpa`, y el handler que traduce `ObjectOptimisticLockingFailureException` a **409 `OPTIMISTIC_LOCK_CONFLICT`**. No lo reañadas ni dupliques el handler. Solo si el diseño exige detectar updates concurrentes que tocan **solo entidades hijas** distintas sin modificar la raíz, refuérzalo con `LockModeType.OPTIMISTIC_FORCE_INCREMENT` (`references/configuration.md`) |
+| bloqueo optimista en la raíz de agregado | **Ya lo genera build** (`isAggregateRoot`): campo `@Version @Column(name = "lock_version") private Long lockVersion` en la `XxxJpa`, `lockVersion` en el constructor de rehidratación del dominio (último parámetro) + `getLockVersion()`, propagación en `toDomain`/`toJpa`, y el handler que traduce `ObjectOptimisticLockingFailureException` a **409 `OPTIMISTIC_LOCK_CONFLICT`**. No lo reañadas ni dupliques el handler. Solo si el diseño exige detectar updates concurrentes que tocan **solo entidades hijas** distintas sin modificar la raíz, refuérzalo con `LockModeType.OPTIMISTIC_FORCE_INCREMENT` (`references/configuration.md`) |
+| campo `version` declarado en una entidad del DSL | Campo escalar corriente, **no** el `@Version` de JPA (que es `lockVersion`, aparte): es un contador de **dominio** que viaja en la API y en los payloads de eventos. Lo incrementa el agregado en cada método mutador que el diseño describe como cambio observable, y es el contador contra el que se compara un `expectedVersion` de la entrada — ver `conventions/flow-fidelity.md` |
 | soft-delete, `json`→jsonb, converters, ids numéricos generados | No los genera build (dependen del diseño avanzado): los añade el agente siguiendo `keel-spring-database`/`references/jpa-mapping.md`, cubiertos por escenarios `FL-*` |
-| operación de escritura cuya **respuesta** expone un campo de auditoría del ORM (`updatedAt`, `version`) | El adaptador guarda con **`saveAndFlush(...)`**, no `save(...)` — ver el aviso de abajo |
+| operación de escritura cuya **respuesta** expone un campo de auditoría del ORM (`updatedAt`) | El adaptador guarda con **`saveAndFlush(...)`**, no `save(...)` — ver el aviso de abajo |
 
 ### `saveAndFlush` cuando la respuesta lleva campos de auditoría
 
@@ -246,14 +298,14 @@ de auditoría corra dentro de la misma unidad de trabajo antes del mapeo.
 
 ## `storage` — storage.keel.yaml
 
-Sin esta capa (servicio que no maneja archivos), no se incluye SDK de object storage ni adaptador. El scaffolding determinista genera la dependencia Gradle (`software.amazon.awssdk:s3`), el servicio MinIO en el `infra/docker-compose.yaml` (con MinIO), el fragmento de configuración `parameters/<perfil>/storage.yaml` (clave `storage`: `provider`, `bucket`, `endpoint`, `region`, `access-key`, `secret-key`, `path-style-access` y la política de cada bucket del diseño bajo `storage.buckets.<b>`: `visibility`, `max-size-mb`, `allowed-content-types`), el límite `spring.servlet.multipart.max-file-size`/`max-request-size` con el mayor `maxSizeMb` declarado, los `@ExceptionHandler` de multipart en el `ApiExceptionHandler`, el **puerto `FileStorage`** y el value object `StoredObject(storageKey, url, contentType, sizeBytes)` que devuelve `upload` (lo que el agregado guarda; `url` llega null en buckets de URL firmada, que se pide al leer). El agente escribe el adaptador completo siguiendo la skill `keel-spring-s3` (`.claude/skills/keel-spring-s3/SKILL.md`; bean `S3Client` + `S3FileStorage`, incluida `signedUrl`) más la política de negocio: validación de content-type/tamaño según los `buckets`.
+Sin esta capa (servicio que no maneja archivos), no se incluye SDK de object storage ni adaptador. El scaffolding determinista genera la dependencia Gradle (`software.amazon.awssdk:s3`), el servicio MinIO en el `infra/docker-compose.yaml` (con MinIO), el fragmento de configuración `parameters/<perfil>/storage.yaml` (clave `storage`: `provider`, `bucket`, `endpoint`, `region`, `access-key`, `secret-key`, `path-style-access` y la política de cada bucket del diseño bajo `storage.buckets.<b>`: `visibility`, `max-size-mb`, `allowed-content-types`), el límite `spring.servlet.multipart.max-file-size`/`max-request-size` con holgura sobre el mayor `maxSizeMb` declarado (el límite de negocio lo comprueba el caso de uso, en el orden del diseño), los `@ExceptionHandler` de multipart en el `ApiExceptionHandler`, el **puerto `FileStorage`** y el value object `StoredObject(storageKey, url, contentType, sizeBytes)` que devuelve `upload` (lo que el agregado guarda; `url` llega null en buckets de URL firmada, que se pide al leer). El agente escribe el adaptador completo siguiendo la skill `keel-spring-s3` (`.claude/skills/keel-spring-s3/SKILL.md`; bean `S3Client` + `S3FileStorage`, incluida `signedUrl`) más la política de negocio: validación de content-type/tamaño según los `buckets`.
 
 | Diseño | Código |
 |--------|--------|
 | capa `storage` presente | Puerto `domain/storage/FileStorage` (interface: `upload`, `download`, `delete`, `signedUrl`) — scaffolding. Adaptador `infrastructure/storage/S3FileStorage` + `infrastructure/configurations/storage/S3Config` (bean `S3Client`, AWS SDK v2, sirve para MinIO y S3, configurado desde la clave `storage` de los perfiles) — agente, según la skill `keel-spring-s3` |
 | `buckets.B` | Un bucket físico por bucket lógico (nombre derivado de `B`, prefijado por servicio/entorno para evitar colisiones); el adaptador lo crea/valida al arrancar en local |
 | `buckets.B.allowedContentTypes` | Validación de content-type en la subida antes de tocar el storage → error `UNSUPPORTED_CONTENT_TYPE` (declararlo en use-cases) |
-| `buckets.B.maxSizeMb` | Validación de tamaño en la subida → error `FILE_TOO_LARGE` (agente). El límite del servlet (`spring.servlet.multipart.max-file-size`, el mayor de los declarados) y el handler de `MaxUploadSizeExceededException` → `413 FILE_TOO_LARGE` los genera build |
+| `buckets.B.maxSizeMb` | Validación de tamaño **en el caso de uso**, en el orden que fija el diseño → error `FILE_TOO_LARGE` (agente). Build fija el límite del servlet (`spring.servlet.multipart.max-file-size`) al **doble** del mayor `maxSizeMb` declarado, deliberadamente: si cortase justo en el límite de negocio, Tomcat emitiría el 413 antes del handler y ninguna guarda que el diseño ponga antes podría precederlo. El handler de `MaxUploadSizeExceededException` → `413 FILE_TOO_LARGE` queda como red de seguridad |
 | `buckets.B.visibility: private` | El objeto no es de lectura pública; la descarga se sirve mediada por el servicio o vía **URL firmada** temporal (`signedUrl`) |
 | `buckets.B.visibility: public` | Lectura directa permitida: el adaptador **debe aplicar la bucket policy de lectura anónima** (idempotente, en cada arranque; S3 y MinIO crean los buckets privados). Sin ella la subida responde `201` y el `GET` directo `403`. La URL pública puede exponerse en el ResponseDto |
 | campo `file` de una entidad | La entidad persiste la **key** del objeto (String); el controller recibe el binario como `multipart/form-data` (`MultipartFile`), el handler valida contra el bucket y delega en `FileStorage`, y guarda la key devuelta |

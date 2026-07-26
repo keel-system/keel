@@ -28,8 +28,8 @@ planos de Cognito) **lo genera build y no se toca**; aquí solo configuración.
   `token_use: id`: no es un token de autorización.
 - Consecuencia: no configures `audiences` en el resource server esperando
   validar el access token (fallaría por `aud` ausente). Si el diseño declara
-  `serviceAuth.validateAudience: true`, el `AudienceValidator` que generó build
-  choca con esta divergencia de Cognito: ajusta la validación al claim
+  `serviceAuth.validateAudience: true`, el `AudienceAuthorizationFilter` que generó build
+  choca con esta divergencia de Cognito: ajusta la comprobación al claim
   `client_id` (o al scope) y documenta la decisión en el proyecto (frontera
   agente admitida por mapping.md).
 

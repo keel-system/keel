@@ -186,6 +186,23 @@ public record Money(BigDecimal amount, Currency currency) {
 Son inmutables por ser records e iguales por valor; un "cambio" devuelve una instancia nueva
 (`withAmount(...)`), nunca muta.
 
+### Un value object proyectado es contrato público
+
+Cuando el value object aparece en un DTO de respuesta o en el payload de un evento, deja de ser
+solo un detalle del dominio: su forma serializada **es** el contrato. Dos fugas habituales:
+
+- **Métodos derivados que Jackson toma por propiedades.** Un `isZero()` o un `isPositive()` en el
+  record se serializa como `"zero": true`, `"positive": true` en cada `price` de la API y de los
+  eventos. Si el predicado es útil en el dominio, márcalo con `@JsonIgnore` — o dale un nombre que
+  no sea de accesor (`hasNoValue()`). Vale para cualquier `isXxx()`/`getXxx()` que no sea un
+  componente del record.
+- **Value object vacío serializado como objeto.** Un `Dimensions` con todos sus campos a `null`
+  viaja como `"dimensions": {}` en vez de estar ausente. La configuración global
+  (`default-property-inclusion: non_null`, que ya escribe build) quita los campos nulos de dentro,
+  pero no el objeto: el que decide es el **mapeo**, devolviendo `null` cuando el VO no tiene ningún
+  valor. La convención "ausencia vs. nulo" aplica igual a los value objects compuestos que a los
+  campos simples.
+
 ## Aritmética con BigDecimal
 
 Los importes, tasas y magnitudes científicas se operan **siempre** con `BigDecimal`, con escala y

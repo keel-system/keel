@@ -11,9 +11,11 @@ los dialectos): espejo `XxxJpa`, `JpaRepository`, puerto + adaptador
 `parameters/<perfil>/db.yaml`. **No rehagas ese patrón**; extiéndelo/ajústalo
 siguiendo `references/jpa-mapping.md` cuando el diseño exija lo que build no
 resuelve: relaciones bidireccionales (`mappedBy`/fetch), to-many entre agregados,
-value objects anidados o `@Embeddable`, converters o `json`→jsonb. (El `@Version`
-de bloqueo optimista en la raíz de agregado **ya lo genera build**; solo el caso
-borde hija-a-hija con `OPTIMISTIC_FORCE_INCREMENT` es tuyo — ver `jpa-mapping.md`.)
+value objects anidados o `@Embeddable`, converters o `json`→jsonb. (El bloqueo
+optimista de la raíz de agregado — `lockVersion` con `@Version` — **ya lo genera
+build**; solo el caso borde hija-a-hija con `OPTIMISTIC_FORCE_INCREMENT` es tuyo
+— ver `jpa-mapping.md`. Un `version` que declare el diseño es otra cosa: contador
+de dominio, campo corriente, y lo incrementa el agregado.)
 Build nunca deja código que no compila: donde no puede decidir deja un
 `// TODO (agente): …` que debes resolver — la autoría (`createdBy`/`updatedBy`) es
 uno de esos casos: build anota los campos, tú provees el `AuditorAware`.
@@ -77,7 +79,7 @@ Léelas bajo demanda, no todas de golpe:
 
 | Referencia | Cuándo leerla |
 |---|---|
-| `references/jpa-mapping.md` | Al resolver un `// TODO (agente)` de persistencia (incluido el `AuditorAware` de la autoría) o al mapear algo que build no cubre (relaciones bidireccionales/to-many entre agregados, VO anidados/`@Embeddable`, converters, `json`→jsonb; el `@Version` base ya lo genera build, aquí solo el caso borde `OPTIMISTIC_FORCE_INCREMENT`) |
+| `references/jpa-mapping.md` | Al resolver un `// TODO (agente)` de persistencia (incluido el `AuditorAware` de la autoría) o al mapear algo que build no cubre (relaciones bidireccionales/to-many entre agregados, VO anidados/`@Embeddable`, converters, `json`→jsonb; el `lockVersion`/`@Version` base ya lo genera build, aquí solo el caso borde `OPTIMISTIC_FORCE_INCREMENT`) |
 | `references/migrations.md` | Al producir el baseline de `db/migration/` (exportar, revisar, probar) y al añadir migraciones posteriores |
 | `references/configuration.md` | Antes de tocar `parameters/<perfil>/db.yaml` o propiedades `spring.jpa.*` (Hikari, batching, N+1, locking) |
 | `references/dialects/<database>.md` | Al decidir tipos de columna, depurar el dialecto o preparar su validación/reset (solo el del stack) |

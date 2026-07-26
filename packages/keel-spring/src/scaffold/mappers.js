@@ -21,6 +21,13 @@ export function generate(model) {
     }
   }
 
+  // El DTO de referencia de un embed lo produce el mapper del agregado
+  // referenciado (es su proyección), no el del que lo embebe.
+  for (const ref of model.refDtos ?? []) {
+    if (!byEntity.has(ref.entity)) byEntity.set(ref.entity, new Map());
+    byEntity.get(ref.entity).set(ref.name, ref);
+  }
+
   const files = [];
   for (const [entityName, dtos] of byEntity) {
     const entity = model.entities.find((e) => e.name === entityName);
@@ -81,10 +88,21 @@ ${methods.join('\n\n')}
 function renderMethod(model, entity, dto, imports) {
   imports.add(`${subPackage(model, 'application.dtos')}.${dto.name}`);
 
+  // Referencias embebidas (embed): el agregado solo guarda el id del ajeno, así
+  // que el objeto no se puede derivar aquí. Entra como parámetro del mapper: es
+  // el handler quien lo resuelve, y así el compilador no deja olvidarlo.
+  const refFields = dto.fields.filter((field) => field.kind === 'refDto');
+  for (const ref of refFields) imports.add(`${subPackage(model, 'application.dtos')}.${ref.javaType}`);
+  const params = [
+    `${entity.name} entity`,
+    ...refFields.map((ref) => `${ref.javaType} ${ref.name}`)
+  ].join(', ');
+
   // Getters directos disponibles en la entidad de dominio; un campo del DTO que
   // no corresponda (p. ej. subcampo de value object o derivado) lo completa el agente.
   const gettable = new Set(domainMembers(model, entity).map((m) => m.name));
   const args = dto.fields.map((field) => {
+    if (field.kind === 'refDto') return field.name;
     if (!gettable.has(field.name)) {
       return `null /* TODO (agente): ${field.name} no es getter directo de ${entity.name}; mapéalo (¿subcampo de value object?) */`;
     }
@@ -98,7 +116,7 @@ function renderMethod(model, entity, dto, imports) {
     return getter;
   });
 
-  return `    public ${dto.name} to${dto.name}(${entity.name} entity) {
+  return `    public ${dto.name} to${dto.name}(${params}) {
         return new ${dto.name}(
                 ${args.join(',\n                ')});
     }`;

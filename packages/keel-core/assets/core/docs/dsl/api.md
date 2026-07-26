@@ -22,6 +22,16 @@ pagination: { style: offset, defaultSize: 20, maxSize: 100 }
 - `defaultAudience` fija la audiencia de los endpoints sin `audience` propia, incluidos los derivados por `auto`. Una operación CRUD cubierta por `auto` que necesite otra audiencia debe declararse como endpoint explícito.
 - La coherencia audiencia ↔ regla de acceso (nivel `service`, scopes) la valida `keel validate` contra la capa `security`.
 - `pagination` aplica a los outputs con `paginated: true`.
+- **Forma del sobre de paginación (contrato canónico)**: una respuesta `paginated: true` es siempre
+
+  ```json
+  { "items": [ … ], "page": 0, "size": 20, "totalElements": 42, "totalPages": 3 }
+  ```
+
+  La página se pide con los query params `page` (base 0) y `size`. `defaultSize` es el `size` cuando
+  el cliente no lo manda y `maxSize` el tope: un `size` mayor se recorta a `maxSize`, no da error.
+  Los nombres no se declaran en el DSL porque son los mismos para todo servicio y todo generador —
+  **los escenarios de validación deben escribirse contra estos**.
 - Paths con `{param}` van entre comillas en YAML.
 
 ## Qué NO va aquí

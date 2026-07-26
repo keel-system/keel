@@ -14,7 +14,7 @@ export const TECH = 'spring';
 export const SKILL = 'keel-generate-spring';
 
 // Versiones del DSL keel que este generador sabe mapear (manifest.keel del servicio).
-export const SUPPORTED_DSL = ['2.0', '2.1', '2.2'];
+export const SUPPORTED_DSL = ['2.0', '2.1', '2.2', '2.3'];
 
 // Stack del scaffolding generado (un solo sitio para actualizarlo).
 export const SPRING_BOOT_VERSION = '3.5.3';
@@ -22,6 +22,9 @@ export const JAVA_VERSION = 21;
 export const GRADLE_VERSION = '8.14';
 export const SPRINGDOC_VERSION = '2.8.9';
 export const RESILIENCE4J_VERSION = '2.3.0';
+// Wrapper JsonNullable: solo se añade si el diseño declara alguna actualización
+// parcial (PATCH), donde el contrato distingue campo ausente de campo nulo.
+export const JACKSON_NULLABLE_VERSION = '0.2.6';
 
 export function packageVersion() {
   return JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8')).version;

@@ -9,7 +9,14 @@
 // @RestControllerAdvice central en infrastructure/rest.
 
 import { javaFile, javaPath, subPackage, javadoc } from './render.js';
-import { messageComponents, returnTypeOf, returnTypeImports, messagePackage } from './services.js';
+import {
+  messageComponents,
+  returnTypeOf,
+  returnTypeImports,
+  messagePackage,
+  isPartialUpdate,
+  JSON_NULLABLE_IMPORT
+} from './services.js';
 import { MEDIATOR_PKG } from './mediator.js';
 import { domainTypeImport } from './entities.js';
 import { uniqueConstraints } from './persistence-entities.js';
@@ -177,12 +184,45 @@ function renderMethod(model, operation, imports) {
   } else if (asBody) {
     imports.add('jakarta.validation.Valid');
     imports.add('org.springframework.web.bind.annotation.RequestBody');
-    params.push(`@Valid @RequestBody ${operation.messageClass} command`);
+    // Si ningún campo del cuerpo es obligatorio, el cuerpo entero lo es: una
+    // petición sin body es válida según el contrato y no puede dar 400.
+    const bodyRequired = operation.bodyFields.some((field) => field.required);
+    const requiredAttr = bodyRequired ? '' : '(required = false)';
+    params.push(`@Valid @RequestBody${requiredAttr} ${operation.messageClass} command`);
 
     if (pathParams.length > 0) {
-      // Fusiona los parámetros de ruta reconstruyendo el record.
-      const args = components.map((c) => (fromPath.has(c.name) ? c.name : `command.${c.name}()`));
-      dispatchArg = `new ${operation.messageClass}(${args.join(', ')})`;
+      // Fusiona los parámetros de ruta reconstruyendo el record. Con cuerpo
+      // opcional, command puede ser null: cada campo se lee protegido, y los
+      // envueltos en JsonNullable caen a undefined (ausente), no a null (vaciar).
+      const wrapped = new Set(
+        isPartialUpdate(operation)
+          ? operation.bodyFields.filter((field) => !field.required && !field.file).map((field) => field.name)
+          : []
+      );
+      const read = (component) => {
+        if (bodyRequired) return `command.${component.name}()`;
+        let absent = 'null';
+        if (wrapped.has(component.name)) {
+          imports.add(JSON_NULLABLE_IMPORT);
+          // Testigo de tipo explícito: sin él, el ternario infiere
+          // JsonNullable<? extends Object> y no compila contra el componente.
+          // El testigo nombra el tipo, así que el controller necesita importarlo
+          // aunque no aparezca en su firma.
+          for (const name of component.imports) imports.add(name);
+          const typeImport = domainTypeImport(model, component);
+          if (typeImport) imports.add(typeImport);
+          absent = `JsonNullable.<${component.javaType}>undefined()`;
+        }
+        return `(command == null ? ${absent} : command.${component.name}())`;
+      };
+      const args = components.map((c) => (fromPath.has(c.name) ? c.name : read(c)));
+      // Un argumento por línea cuando la fusión es larga (cuerpo opcional con
+      // muchos campos): en una sola línea el método es ilegible.
+      const inline = `new ${operation.messageClass}(${args.join(', ')})`;
+      dispatchArg =
+        inline.length > 110
+          ? `new ${operation.messageClass}(\n                ${args.join(',\n                ')})`
+          : inline;
     } else {
       dispatchArg = 'command';
     }
@@ -331,11 +371,13 @@ function renderMultipartHandlers(imports) {
 `;
 }
 
-// Conflicto de concurrencia optimista (@Version de la raíz de agregado): dos
-// operaciones simultáneas escribieron sobre la misma versión. Spring traduce el
-// OptimisticLockException de JPA a ObjectOptimisticLockingFailureException al
-// hacer commit; sin este handler caería en el catch-all como 500. Es un 409:
-// el cliente debe releer y reintentar con el estado actual.
+// Conflicto de concurrencia optimista (lockVersion, el @Version de la raíz de
+// agregado): dos operaciones simultáneas escribieron sobre la misma versión.
+// Spring traduce el OptimisticLockException de JPA a
+// ObjectOptimisticLockingFailureException al hacer commit; sin este handler caería
+// en el catch-all como 500. Es un 409: el cliente debe releer y reintentar con el
+// estado actual. No lo confundas con un conflicto de `expectedVersion` que declare
+// el diseño: ese lo comprueba el dominio contra su propio contador.
 function renderOptimisticLockHandler(imports) {
   imports.add('org.springframework.orm.ObjectOptimisticLockingFailureException');
   return `
@@ -390,24 +432,27 @@ public class ApiExceptionHandler {
 ${constants.join('')}
 
     // ── Validación ───────────────────────────────────────────────────────────
+    // Errores de FORMA de la petición: 400. El 422 queda para las reglas de
+    // negocio tipadas que declara use-cases.keel.yaml (BusinessException), que
+    // es la distinción que esperan los escenarios de validación.
 
-    @ResponseStatus(HttpStatus.UNPROCESSABLE_ENTITY)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ErrorResponse onMethodArgumentNotValid(MethodArgumentNotValidException exception) {
         List<String> details = exception.getBindingResult().getFieldErrors().stream()
                 .map(error -> error.getField() + " " + error.getDefaultMessage())
                 .toList();
-        return new ErrorResponse(HttpStatus.UNPROCESSABLE_ENTITY.value(), "Validation Error",
+        return new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "Validation Error",
                 "VALIDATION_ERROR", "La petición no supera las validaciones", details);
     }
 
-    @ResponseStatus(HttpStatus.UNPROCESSABLE_ENTITY)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
     @ExceptionHandler(ConstraintViolationException.class)
     public ErrorResponse onConstraintViolation(ConstraintViolationException exception) {
         List<String> details = exception.getConstraintViolations().stream()
                 .map(violation -> violation.getPropertyPath() + " " + violation.getMessage())
                 .toList();
-        return new ErrorResponse(HttpStatus.UNPROCESSABLE_ENTITY.value(), "Validation Error",
+        return new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "Validation Error",
                 "VALIDATION_ERROR", "La petición viola restricciones declaradas", details);
     }
 

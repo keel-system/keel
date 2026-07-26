@@ -60,6 +60,6 @@ MinIO caído o endpoint equivocado: desde la app en el host es
 ## El upload de archivos grandes falla o agota memoria
 
 `byte[]` en memoria + `MaxUploadSizeExceededException` de Spring antes de
-llegar al adaptador. Alinea `spring.servlet.multipart.max-file-size` con el
-límite del diseño (configuration.md) y pasa a streaming/multipart
+llegar al adaptador. Deja `spring.servlet.multipart.max-file-size` por encima
+del límite del diseño (configuration.md) y pasa a streaming/multipart
 (implementation.md) si el diseño admite archivos realmente grandes.

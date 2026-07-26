@@ -74,6 +74,8 @@ export function buildModel({ manifest, layers, stack = null }) {
   const { services, errors } = collectOperations(layers, domainTypes, inlineEnumName, service, warnings);
   // DTOs de las entidades hijas proyectadas en algún payload de salida.
   const childDtos = collectChildDtos(layers, services, domainTypes, inlineEnumName, warnings);
+  // DTOs de referencia de las relaciones que el diseño marca con embed.
+  const refDtos = collectRefDtos(layers, services, domainTypes, inlineEnumName, childDtos, warnings);
   const events = collectEvents(layers, services, service, domainTypes, inlineEnumName, warnings);
   // Garantía de entrega declarada en el diseño: decide cómo se materializa la
   // publicación (outbox transaccional vs. envío directo tras commit).
@@ -98,7 +100,7 @@ export function buildModel({ manifest, layers, stack = null }) {
   // y suscripciones ya resueltos, y les cuelga los retro-enlaces que consumen los scaffolds.
   const dependencies = collectDependencies(layers, entities, httpClients, subscriptions, errors, warnings);
 
-  return { service, layersPresent, enums, valueObjects, entities, services, errors, childDtos, hasFileUploads, events, messaging, subscriptions, pagination, api, security, httpClients, dependencies, storage, warnings };
+  return { service, layersPresent, enums, valueObjects, entities, services, errors, childDtos, refDtos, hasFileUploads, events, messaging, subscriptions, pagination, api, security, httpClients, dependencies, storage, warnings };
 }
 
 function buildService(manifest, stack) {
@@ -339,6 +341,19 @@ function collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPe
       );
     }
 
+    // `lockVersion` es el campo que build reserva para el @Version de JPA en toda
+    // raíz de agregado: es un valor opaco de infraestructura, distinto de un
+    // `version` que el diseño declare (contador de dominio que viaja en la API y en
+    // los eventos, y que incrementa el agregado). Si el diseño usa ese nombre,
+    // generar el propio duplicaría campo y accesores — no compila: se avisa y se
+    // deja el declarado, que pasa a portar el bloqueo optimista.
+    const declaresLockVersion = fields.some((f) => f.name === 'lockVersion');
+    if (declaresLockVersion && !internalOf.has(name)) {
+      warnings.push(
+        `Entidad ${name}: el diseño declara el campo lockVersion, nombre que build reserva para el @Version de JPA (concurrencia optimista). Se anota el declarado en vez de generar uno propio; renombra el campo del diseño si su semántica es de negocio.`
+      );
+    }
+
     const lifecycle = def.lifecycle
       ? {
           field: def.lifecycle.field,
@@ -363,6 +378,7 @@ function collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPe
       isAggregateRoot: !internalOf.has(name),
       internalOf: internalOf.get(name)?.aggregate ?? null,
       rootEntity: internalOf.get(name)?.root ?? name,
+      declaresLockVersion,
       naturalKey: persistenceMeta.naturalKey ?? null,
       indexes: persistenceMeta.indexes ?? []
     });
@@ -608,6 +624,39 @@ function collectChildDtos(layers, services, domainTypes, inlineEnumName, warning
     }
   }
   return [...built.values()];
+}
+
+// DTOs de referencia de los payloads con embed: los campos propios del agregado
+// referenciado, SIN sus relaciones (relations: null) — la proyección se corta a
+// profundidad 1 para que embebir una categoría no arrastre su árbol entero.
+function collectRefDtos(layers, services, domainTypes, inlineEnumName, childDtos, warnings) {
+  const domainEntities = layers.domain?.entities ?? {};
+  const referenced = new Set();
+
+  const scan = (fields) => {
+    for (const field of fields ?? []) {
+      if (field.kind === 'refDto') referenced.add(field.refEntity);
+    }
+  };
+  for (const group of services) {
+    for (const operation of group.operations) scan(operation.responseDto?.fields);
+  }
+  for (const child of childDtos) scan(child.fields);
+
+  const built = [];
+  for (const entityName of referenced) {
+    if (!domainEntities[entityName]) continue;
+    const fields = payloadFields(entityName, { entity: entityName }, {
+      direction: 'output',
+      domainEntities,
+      domainTypes,
+      inlineEnumName,
+      relations: null,
+      warnings
+    });
+    built.push({ name: `${entityName}RefDto`, entity: entityName, fields });
+  }
+  return built;
 }
 
 // ─── Eventos de dominio (messaging.publishing.events) ────────────────────────
@@ -1189,6 +1238,7 @@ function payloadFields(opName, payload, { direction, domainEntities, domainTypes
 function relationPayloadFields(opName, payload, entity, { direction, relations: relationCtx, exclude, warnings }) {
   if (!relationCtx) return [];
   const { internalOf, hasPersistence } = relationCtx;
+  const embed = new Set(payload.embed ?? []);
   const projected = [];
 
   for (const [relName, rel] of Object.entries(entity.relations ?? {})) {
@@ -1197,6 +1247,25 @@ function relationPayloadFields(opName, payload, entity, { direction, relations: 
     if (kind === 'unsupported' || backReference) continue;
 
     if (kind === 'external') {
+      // embed: el diseño pide el objeto anidado en vez del id (p. ej. 'category'
+      // en vez de 'categoryId'). Es su propio DTO de referencia, sin relaciones,
+      // para que la proyección no encadene agregado tras agregado.
+      if (embed.has(relName) && direction === 'output') {
+        const dtoName = `${rel.entity}RefDto`;
+        projected.push(
+          relationField({
+            name: relName,
+            javaType: dtoName,
+            elementJavaType: dtoName,
+            imports: [],
+            kind: 'refDto',
+            refEntity: rel.entity,
+            required: Boolean(rel.required),
+            description: rel.description
+          })
+        );
+        continue;
+      }
       const name = `${relName}Id`;
       if (exclude.has(name)) continue;
       projected.push(relationField({ name, javaType: 'UUID', imports: ['java.util.UUID'], kind: 'base', base: 'uuid', required: Boolean(rel.required), description: rel.description }));
@@ -1231,7 +1300,7 @@ function relationPayloadFields(opName, payload, entity, { direction, relations: 
 
 // Campo de payload derivado de una relación, con la misma forma que los campos
 // resueltos por resolveField (todo render interpola estas propiedades).
-function relationField({ name, javaType, elementJavaType = null, imports = [], kind, base = null, childEntity = null, list = false, required = false, description = null }) {
+function relationField({ name, javaType, elementJavaType = null, imports = [], kind, base = null, childEntity = null, refEntity = null, list = false, required = false, description = null }) {
   return {
     name,
     javaType,
@@ -1241,6 +1310,7 @@ function relationField({ name, javaType, elementJavaType = null, imports = [], k
     kind,
     base,
     childEntity,
+    refEntity,
     isId: false,
     required,
     unique: false,

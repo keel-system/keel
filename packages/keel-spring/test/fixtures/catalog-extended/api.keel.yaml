@@ -8,6 +8,9 @@ endpoints:
   getProductBySlug:
     method: GET
     path: /public/products/{slug}
+  updateProduct:
+    method: PATCH
+    path: /products/{id}
   listProducts:
     method: GET
     path: /products

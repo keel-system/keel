@@ -190,6 +190,11 @@
               "type": "array",
               "description": "Campos que no forman parte de este payload. Un item puede ser un campo/relación de la entidad o un dot-path que entra en una entidad hija (relación) o en un value object compuesto: ej. 'variants.costPrice'.",
               "items": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*(\\.[a-z][A-Za-z0-9]*)*$" }
+            },
+            "embed": {
+              "type": "array",
+              "description": "Relaciones hacia OTRO agregado que este payload proyecta como objeto anidado en vez de como '<relación>Id'. Solo en output: el consumidor recibe 'category': { … } en lugar de 'categoryId'. El objeto lleva los campos propios del agregado referenciado, sin sus relaciones (la proyección no encadena).",
+              "items": { "$ref": "#/$defs/operationName" }
             }
           }
         },
