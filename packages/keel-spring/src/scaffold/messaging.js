@@ -298,7 +298,13 @@ public class ${stubClass} implements ${event.publisherClass} {
 // 'triggers' vía UseCaseMediator.
 function renderSubscriptionMessage(model, sub) {
   const imports = new Set();
-  for (const field of sub.fields) for (const name of field.imports) imports.add(name);
+  for (const field of sub.fields) {
+    for (const name of field.imports) imports.add(name);
+    // Un enum o value object del diseño vive en otro paquete: sin este import el
+    // record no compila (los campos de tipo de dominio no traen su propio import).
+    const typeImport = domainTypeImport(model, field);
+    if (typeImport) imports.add(typeImport);
+  }
   // wireName: la fuente externa nombra el campo distinto que el diseño.
   const components = sub.fields
     .map((f) => {
@@ -379,6 +385,16 @@ function contractJavadoc(sub) {
     lines.push(
       `Deduplica por ${sub.messageId.location} '${sub.messageId.name}' antes de despachar (la entrega es at-least-once).`
     );
+  }
+  // La capa dependencies puede etiquetar esta suscripción como compensación de una
+  // dependencia: no cambia el código, pero sí por qué existe.
+  if (sub.compensates) {
+    lines.push(
+      `Compensa la dependencia de ${sub.compensates.dependency}${sub.compensates.description ? `: ${sub.compensates.description}` : '.'}`
+    );
+  }
+  if (sub.deadLetter) {
+    lines.push('Con onFailure.deadLetter: tras agotar los reintentos el mensaje va a la DLQ del broker (lo configura el agente).');
   }
   if (sub.trigger) {
     const args = sub.triggerArguments

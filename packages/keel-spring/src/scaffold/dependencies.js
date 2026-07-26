@@ -15,7 +15,7 @@
 // mediator (prohibido por constitution.md) y duplicaría la idempotencia.
 
 import { javaFile, javaPath, subPackage } from './render.js';
-import { domainSubPackage } from './entities.js';
+import { domainSubPackage, domainTypeImport } from './entities.js';
 
 const PROJECTION_PKG = 'application.projection';
 const ANNOTATIONS_PKG = 'application.annotations';
@@ -67,7 +67,12 @@ function renderProjector(model, dependency, need, entity) {
     `${subPackage(model, ANNOTATIONS_PKG)}.ApplicationComponent`,
     ...replica.keyFieldImports
   ]);
-  for (const field of fields) for (const name of field.imports ?? []) imports.add(name);
+  for (const field of fields) {
+    for (const name of field.imports ?? []) imports.add(name);
+    // Enum o value object del diseño: vive en otro paquete y no viaja en field.imports.
+    const typeImport = domainTypeImport(model, field);
+    if (typeImport) imports.add(typeImport);
+  }
 
   const params = [
     `${replica.keyFieldJavaType} ${replica.keyField}`,

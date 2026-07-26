@@ -38,19 +38,23 @@ export function generate(model) {
     });
   }
 
-  files.push({
-    path: javaPath(model, 'infrastructure.rest', 'ErrorResponse'),
-    content: javaFile(
-      subPackage(model, 'infrastructure.rest'),
-      [
-        'com.fasterxml.jackson.annotation.JsonInclude',
-        'java.time.Instant',
-        'java.util.List',
-        usesCorrelation(model) ? correlationImport(model) : null
-      ],
-      errorResponseBody(model)
-    )
-  });
+  // Contrato HTTP del error: acompaña al ApiExceptionHandler y a la cadena de
+  // seguridad, así que existe solo si el servicio expone API.
+  if (model.layersPresent.api) {
+    files.push({
+      path: javaPath(model, 'infrastructure.rest', 'ErrorResponse'),
+      content: javaFile(
+        subPackage(model, 'infrastructure.rest'),
+        [
+          'com.fasterxml.jackson.annotation.JsonInclude',
+          'java.time.Instant',
+          'java.util.List',
+          usesCorrelation(model) ? correlationImport(model) : null
+        ],
+        errorResponseBody(model)
+      )
+    });
+  }
 
   for (const error of model.errors) {
     files.push({

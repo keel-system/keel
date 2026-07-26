@@ -819,7 +819,7 @@ test('capa http-clients: RestClient configurado + resilience4j + fallback stub',
           getPrice: {
             contract: 'GET /prices/{sku} -> { amount: decimal }',
             timeoutMs: 2000,
-            retry: { maxAttempts: 3, backoff: 'exponential', initialDelayMs: 200, retryOn: ['timeout', '5xx'] },
+            retry: { maxAttempts: 3, backoff: 'exponential', initialDelayMs: 200, maxDelayMs: 4000, retryOn: ['timeout', '5xx'] },
             circuitBreaker: { failureRateThreshold: 50, slidingWindowSize: 20, waitDurationMs: 30000 },
             fallback: 'Devolver el último precio conocido en caché.'
           }
@@ -866,6 +866,9 @@ test('capa http-clients: RestClient configurado + resilience4j + fallback stub',
   const hc = read(workspace, 'src/main/resources/parameters/local/http-clients.yaml');
   assert.ok(hc.includes('base-url: http://localhost:8081')); // literal solo en local
   assert.ok(hc.includes('max-attempts: 3'));
+  assert.ok(hc.includes('wait-duration: 200ms'));
+  // El techo declarado por el diseño acota el backoff exponencial.
+  assert.ok(hc.includes('exponential-max-wait-duration: 4000ms'));
   assert.ok(hc.includes('- org.springframework.web.client.HttpClientErrorException')); // 4xx nunca se reintenta
   assert.ok(hc.includes('failure-rate-threshold: 50'));
   // Sin auth declarada: ni credenciales ni starter oauth2-client.

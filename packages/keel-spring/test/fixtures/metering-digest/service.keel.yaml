@@ -1,0 +1,11 @@
+keel: "2.3"
+service:
+  name: metering-digest
+  version: 1.0.0
+  description: Consume lecturas de contadores de un sistema ajeno y cierra el resumen diario por schedule.
+  domain: utilities
+layers:
+  domain: domain.keel.yaml
+  use-cases: use-cases.keel.yaml
+  persistence: persistence.keel.yaml
+  messaging: messaging.keel.yaml

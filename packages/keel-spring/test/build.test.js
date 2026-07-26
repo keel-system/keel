@@ -15,7 +15,7 @@ function makeWorkspace() {
   return dir;
 }
 
-function writeService(workspace, { keel = '2.0' } = {}) {
+function writeService(workspace, { keel = '2.0', persistenceModel = null } = {}) {
   const dir = path.join(workspace, 'specs', 'demo');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
@@ -29,11 +29,15 @@ function writeService(workspace, { keel = '2.0' } = {}) {
       'layers:',
       '  domain: domain.keel.yaml',
       '  use-cases: use-cases.keel.yaml',
+      ...(persistenceModel ? ['  persistence: persistence.keel.yaml'] : []),
       ''
     ].join('\n')
   );
   fs.writeFileSync(path.join(dir, 'domain.keel.yaml'), 'entities: {}\n');
   fs.writeFileSync(path.join(dir, 'use-cases.keel.yaml'), 'operations: {}\n');
+  if (persistenceModel) {
+    fs.writeFileSync(path.join(dir, 'persistence.keel.yaml'), `default:\n  model: ${persistenceModel}\n`);
+  }
   return dir;
 }
 
@@ -97,6 +101,18 @@ test('build rechaza una versión de DSL no soportada sin copiar assets', async (
   const exitCode = await runBuild(workspace, 'specs/demo');
   assert.equal(exitCode, 1);
   assert.ok(!fs.existsSync(path.join(workspace, '.claude', 'skills', 'keel-generate-spring')));
+});
+
+test('build rechaza un modelo de almacenamiento que no genera, sin copiar assets', async () => {
+  // La frontera del generador se comprueba antes de sembrar nada y antes de
+  // preguntar el stack: keel-spring solo genera el modelo relacional.
+  const workspace = makeWorkspace();
+  writeService(workspace, { persistenceModel: 'document' });
+
+  const exitCode = await runBuild(workspace, 'specs/demo');
+  assert.equal(exitCode, 1);
+  assert.ok(!fs.existsSync(path.join(workspace, '.claude', 'skills', 'keel-generate-spring')));
+  assert.ok(!fs.existsSync(path.join(workspace, 'services')));
 });
 
 test('build copia skill y conventions, y falla la validación de un diseño en plantilla', async () => {

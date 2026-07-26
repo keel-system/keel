@@ -1,0 +1,40 @@
+# Ninguna operación se expone por HTTP: una la dispara una suscripción y la otra
+# un schedule. No hay capa api, así que no hay controllers que generar.
+
+operations:
+
+  recordReading:
+    description: Registra una lectura recibida del sistema de medición.
+    kind: command
+    internal: true
+    input:
+      fields:
+        meterId:        { type: uuid, required: true }
+        readAt:         { type: timestamp, required: true }
+        consumptionKwh: { type: decimal, required: true, constraints: { min: 0, scale: 3 } }
+        source:         { type: ReadingSource, required: true }
+    output: { entity: MeterReading }
+    idempotency: { keySource: payload-hash, ttlSeconds: 604800 }
+    preconditions:
+      - La lectura no está ya registrada para ese contador y ese instante.
+    rules:
+      - Una lectura repetida del mismo contador y el mismo instante no crea una segunda fila.
+      - El consumo se guarda con la escala declarada, sin redondear a menos decimales.
+    errors:
+      - { code: READING_OUT_OF_RANGE, when: El consumo recibido es negativo., http: 422 }
+
+  closeDailyDigest:
+    description: Cierra el resumen diario de cada contador con las lecturas del día anterior.
+    kind: command
+    internal: true
+    input: "void"
+    output: "void"
+    schedule:
+      cron: "0 2 * * *"
+      description: Cada noche a las 02:00, sobre el día natural anterior.
+    rules:
+      - Se cierra un digest por contador con al menos una lectura en el día procesado.
+      - Un digest ya cerrado para ese contador y ese día no se vuelve a cerrar ni se duplica.
+    errors:
+      - { code: DIGEST_ALREADY_CLOSED, when: El digest de ese contador y ese día ya estaba cerrado., http: 409 }
+    emits: [DailyDigestClosed]

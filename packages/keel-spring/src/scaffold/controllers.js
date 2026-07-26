@@ -51,7 +51,10 @@ export function generate(model) {
   const files = model.services
     .map((service) => renderController(model, service))
     .filter(Boolean);
-  files.push(renderExceptionHandler(model));
+  // El @RestControllerAdvice solo intercepta invocaciones de controller: sin capa
+  // api no hay nada que traducir a respuesta HTTP (los fallos de un listener o de
+  // un schedule los gestiona su propio manejador de errores).
+  if (model.layersPresent.api) files.push(renderExceptionHandler(model));
   return files;
 }
 

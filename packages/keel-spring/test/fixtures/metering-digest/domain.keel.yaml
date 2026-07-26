@@ -1,0 +1,59 @@
+# Silueta deliberadamente opuesta a la del catálogo: dos raíces independientes
+# (sin bloque aggregates), sin lifecycle, sin entidades hijas y sin campos file.
+
+types:
+  ReadingSource:
+    description: Cómo llegó la lectura al sistema de origen.
+    values: [smart-meter, manual-entry]
+
+entities:
+  MeterReading:
+    description: Lectura puntual de un contador, tal como la publicó el sistema de medición.
+    fields:
+      id:
+        type: uuid
+        id: true
+        generated: true
+      meterId:
+        type: uuid
+        required: true
+      readAt:
+        type: timestamp
+        required: true
+      consumptionKwh:
+        type: decimal
+        required: true
+        constraints: { min: 0, scale: 3 }
+        description: Consumo acumulado en kilovatios hora, con la precisión que publica el contador.
+      source:
+        type: ReadingSource
+        required: true
+      createdAt:
+        type: timestamp
+        generated: true
+
+  DailyDigest:
+    description: Resumen de consumo de un contador para un día, cerrado por el barrido nocturno.
+    fields:
+      id:
+        type: uuid
+        id: true
+        generated: true
+      meterId:
+        type: uuid
+        required: true
+      day:
+        type: date
+        required: true
+      totalKwh:
+        type: decimal
+        required: true
+        constraints: { min: 0, scale: 3 }
+      readingCount:
+        type: int
+        required: true
+      closedAt:
+        type: timestamp
+        generated: true
+    invariants:
+      - El totalKwh de un digest cerrado es la suma de las lecturas de ese contador y ese día.

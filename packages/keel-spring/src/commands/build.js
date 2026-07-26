@@ -3,6 +3,7 @@ import path from 'node:path';
 import pc from 'picocolors';
 import { isKeelWorkspace, resolveServiceDir, loadService, validateService, copyTree } from 'keel-core';
 import { assetsDir, SKILL, SUPPORTED_DSL } from '../lib/assets.js';
+import { checkSupportedFeatures } from '../lib/supported-features.js';
 import { scaffoldService } from '../scaffold/index.js';
 import { writeFiles } from '../lib/writer.js';
 import { STACK_FILE, readStackConfig, writeStackConfig, askStackConfig, describeStack } from '../lib/stack-config.js';
@@ -65,6 +66,17 @@ export async function build(inputPath, { force = false, defaults = false } = {})
       pc.red(`✘ DSL keel ${manifest.keel ?? '(sin declarar)'} no soportado por keel-spring (soporta: ${SUPPORTED_DSL.join(', ')}).`)
     );
     console.error(pc.dim('  Actualiza keel-spring o ajusta el diseño a una versión soportada.'));
+    process.exitCode = 1;
+    return;
+  }
+
+  // Frontera del generador: lo que el DSL declara y keel-spring no sabe mapear se
+  // rechaza o se avisa aquí, antes de sembrar nada y antes de preguntar el stack.
+  const features = checkSupportedFeatures(manifest, layers);
+  for (const message of features.warnings) console.warn(`${pc.yellow('⚠')} ${message}`);
+  if (features.errors.length > 0) {
+    console.error(pc.bold(pc.red(`✘ El diseño usa capacidades que keel-spring no genera — ${features.errors.length}:`)));
+    for (const message of features.errors) console.error(`  ${pc.red('•')} ${message}`);
     process.exitCode = 1;
     return;
   }

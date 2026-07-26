@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildModel } from '../src/lib/model.js';
 import { generate as generateDependencies } from '../src/scaffold/dependencies.js';
+import { generate as generateMessaging } from '../src/scaffold/messaging.js';
 
 const manifest = {
   keel: '2.2',
@@ -145,6 +146,15 @@ test('modelo: la capa dependencies se resuelve con sus retro-enlaces', () => {
 
   // La clave del proveedor se vuelve clave natural: garantiza el finder del repositorio.
   assert.ok(entity.naturalKey.includes('productId'));
+});
+
+test('scaffold: la compensación declarada se lee en el contrato de la suscripción', () => {
+  // compensations no cambia el código (es una suscripción normal), pero sí explica
+  // por qué existe: si no llega al proyecto generado, es dato muerto del modelo.
+  const message = fileNamed(generateMessaging(modelFrom(baseLayers())), 'ProductUpdatedMessage').content;
+
+  assert.ok(message.includes('Compensa la dependencia de catalog'));
+  assert.ok(message.includes('Revierte la reserva contra catalog.'));
 });
 
 test('scaffold: una réplica genera Projector y Reader, y nada más', () => {

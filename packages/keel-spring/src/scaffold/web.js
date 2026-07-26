@@ -17,6 +17,10 @@ const CONFIG_PKG = 'infrastructure.configurations';
 
 export function generate(model) {
   const files = [];
+  // Todo lo de aquí es binding de entrada HTTP: sin capa api (un servicio que solo
+  // consume eventos o corre por schedule) no habría query params que convertir ni
+  // cuerpos PATCH que deserializar, y estas clases quedarían sin usar.
+  if (!model.layersPresent.api) return files;
   const hasEnums = model.enums.length > 0;
   const partial = usesPartialUpdate(model);
   if (!hasEnums && !partial) return files;

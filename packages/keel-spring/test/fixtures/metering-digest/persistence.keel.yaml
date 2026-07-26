@@ -1,0 +1,22 @@
+default:
+  model: relational
+
+entities:
+
+  MeterReading:
+    persisted: true
+    naturalKey: [meterId, readAt]
+    indexes:
+      # El barrido nocturno recorre las lecturas de un contador en una ventana de tiempo.
+      - [meterId, readAt]
+
+  DailyDigest:
+    persisted: true
+    naturalKey: [meterId, day]
+    indexes:
+      - [day]
+
+consistency:
+  # Cada operación toca una sola raíz y no hay agregados compuestos: la frontera es
+  # la operación, no el agregado.
+  transactionalBoundary: per-operation

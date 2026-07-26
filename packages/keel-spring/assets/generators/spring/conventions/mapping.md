@@ -188,6 +188,7 @@ Sin esta capa, no se incluye Spring Security. **Esta capa la materializa entera 
 | Diseño | Código |
 |--------|--------|
 | `authentication.protocol` | `oidc`/`jwt` → Spring Security resource server (JWT); `api-key` → filtro de API key; `none` → sin autenticación |
+| `authentication.tokenLocation` | Solo `header`: el token se lee de `Authorization`. `cookie` **no se genera** — `keel-spring build` lo avisa y sigue; completarlo a mano exige otro converter y protección CSRF |
 | `access.default` | Regla base del `SecurityFilterChain` para toda operación sin regla explícita |
 | `access.rules.op` | Regla por operación (vía su ruta): `public` → permitAll, `required` → authenticated (+ `hasAuthority` por `permissions`), `admin` → rol elevado (+ `hasRole` por `roles`), `service` → autenticación de cliente máquina |
 | `roles` / `permissions` | Catálogo de authorities: roles como `ROLE_<rol>`, permisos como authority sin prefijo |
@@ -222,7 +223,7 @@ La publicación va **entera generada** salvo el envío físico. La cadena es: el
 | `payload.<campo>.wireName` | `@JsonProperty("<wireName>")` en el componente del record (scaffolding); el nombre del DSL se mantiene en Java |
 | `subscriptions.E.input` | Argumentos del command/query de `triggers` al despachar: componente ← campo del payload (identidad por nombre si no se declara); el javadoc del record generado lo lleva escrito |
 | `channels.<c>.external: true` | El nombre físico del topic/cola lo pone su dueño: propiedad en `parameters/<perfil>`, nunca hardcodeado ni declarado en la topología local |
-| `subscriptions.E.onFailure.retry` | Reintentos con backoff según `maxAttempts`/`backoff`/`initialDelayMs` (ej. `DefaultErrorHandler` con `ExponentialBackOff`) |
+| `subscriptions.E.onFailure.retry` | Reintentos con backoff según `maxAttempts`/`backoff`/`initialDelayMs` y el techo `maxDelayMs` si está declarado (ej. `DefaultErrorHandler` con `ExponentialBackOff` y su `maxInterval`) |
 | `subscriptions.E.onFailure.deadLetter: true` | DLQ tras agotar reintentos (`DeadLetterPublishingRecoverer` o equivalente) |
 
 ## `http-clients` — http-clients.keel.yaml
@@ -240,7 +241,7 @@ La publicación va **entera generada** salvo el envío físico. La cadena es: el
 | `calls.x.request` | `pathParams`/`queryParams`/`headers` → parámetros tipados del puerto; `body` → record wire `<X>Request` + `to<X>Request(...)` en el mapper |
 | `calls.x.response.fields` | Record wire `<X>Response` + record de dominio `<X>Result` + `to<X>Result(...)` en el mapper (mapeo campo a campo generado) |
 | `calls.x.timeoutMs` | Timeout de la llamada en la configuración del cliente |
-| `calls.x.retry` | resilience4j `@Retry` con `maxAttempts`/`backoff`/`initialDelayMs`, solo para `retryOn` (`timeout`, `5xx`, `connection`); nunca 4xx |
+| `calls.x.retry` | resilience4j `@Retry` con `maxAttempts`/`backoff`/`initialDelayMs` y, si el diseño declara el techo, `maxDelayMs` → `exponential-max-wait-duration`; solo para `retryOn` (`timeout`, `5xx`, `connection`); nunca 4xx |
 | `calls.x.circuitBreaker` | resilience4j `@CircuitBreaker` con `failureRateThreshold`/`slidingWindowSize`/`waitDurationMs` |
 | `calls.x.fallback` | Método de fallback que implementa la frase del diseño; si dispara un error de negocio, usa el `code` declarado en use-cases |
 
@@ -271,7 +272,7 @@ Sin esta capa (servicio sin estado propio), no se incluye JPA ni base de datos.
 
 | Diseño | Código |
 |--------|--------|
-| `default.model: relational` | Spring Data JPA (stack por defecto: ver project-layout.md); `document`/`key-value` → Spring Data del almacén elegido con el usuario |
+| `default.model: relational` | Spring Data JPA (stack por defecto: ver project-layout.md). Es el **único** modelo que keel-spring genera: con `document` o `key-value`, `keel-spring build` falla con un error explícito en vez de emitir JPA por defecto — ese diseño necesita otro generador |
 | `entities.X.naturalKey` | Constraint única compuesta + método de búsqueda por clave natural en el repository |
 | `entities.X.indexes` | `@Index` en la entidad por cada lista de campos (`idx_<tabla>_<campos>`); de ahí pasa al baseline de migraciones al exportarlo |
 | `consistency.transactionalBoundary: per-operation` | La transacción por mensaje que abre `UseCaseMediator` ya lo cumple: la operación completa es la transacción |

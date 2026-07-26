@@ -1,0 +1,42 @@
+# Complementa a catalog-extended: aquí sí hay channels (uno external), suscripción
+# con contract completo, y la publicación es best-effort en vez de outbox.
+
+channels:
+  meterTelemetry:
+    description: Canal del sistema de medición, que no es nuestro.
+    external: true
+  digests:
+    description: Canal propio por el que se anuncian los resúmenes cerrados.
+
+publishing:
+  reliability: best-effort
+  events:
+    DailyDigestClosed:
+      description: Se cerró el resumen diario de un contador.
+      channel: digests
+      payload:
+        meterId:  { type: uuid, required: true }
+        day:      { type: date, required: true }
+        totalKwh: { type: decimal, required: true, constraints: { scale: 3 } }
+
+subscriptions:
+  MeterReadingCaptured:
+    description: El sistema de medición publicó una lectura nueva.
+    source: metering-gateway
+    channel: meterTelemetry
+    contract:
+      envelope: wrapped
+      payloadPath: data
+      format: json
+      discriminator: { location: header, name: eventType, value: MeterReadingCaptured }
+      messageId: { location: header, name: messageId }
+      unknownFields: ignore
+    payload:
+      meterId:        { type: uuid, required: true, wireName: meter_id }
+      readAt:         { type: timestamp, required: true, wireName: read_at }
+      consumptionKwh: { type: decimal, required: true, wireName: consumption_kwh }
+      source:         { type: ReadingSource, required: true }
+    triggers: recordReading
+    onFailure:
+      retry: { maxAttempts: 5, backoff: exponential, initialDelayMs: 200, maxDelayMs: 10000 }
+      deadLetter: true

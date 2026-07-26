@@ -596,6 +596,11 @@ function httpClientsYaml(model, profile) {
       );
       if ((retry.backoff ?? 'exponential') === 'exponential') {
         lines.push('        enable-exponential-backoff: true', '        exponential-backoff-multiplier: 2');
+        // Techo de la espera declarado por el diseño: sin él el backoff exponencial
+        // crece sin cota y el último reintento puede caer muy lejos del timeout.
+        if (retry.maxDelayMs != null) {
+          lines.push(`        exponential-max-wait-duration: ${retry.maxDelayMs}ms`);
+        }
       }
       const retryOn = retry.retryOn ?? ['timeout', '5xx', 'connection'];
       const exceptions = new Set();
