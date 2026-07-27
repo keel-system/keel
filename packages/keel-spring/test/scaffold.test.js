@@ -438,6 +438,10 @@ test('scaffolding de integración: AbstractFlowIT y FailureCapture, sin clases d
   // Transversales que las clases de flujo consumen.
   assert.ok(abstractFlow.includes('protected static void resetState()'));
   assert.ok(abstractFlow.includes('infra/reset-db.sh'));
+  // El ejecutable de bash se resuelve por ruta: dejar que "bash" resuelva por PATH
+  // en Windows lanza el bash de WSL, un entorno aislado donde los scripts fallan.
+  assert.ok(!abstractFlow.includes('new ProcessBuilder("bash"'));
+  assert.ok(abstractFlow.includes('BASH_EXECUTABLE'));
   assert.ok(abstractFlow.includes('JSONCompareMode.STRICT'));
   assert.ok(abstractFlow.includes('protected void await(Duration timeout, BooleanSupplier condition)'));
   assert.ok(abstractFlow.includes('JdkClientHttpRequestFactory')); // PATCH sin dependencias nuevas
@@ -454,6 +458,38 @@ test('scaffolding de integración: AbstractFlowIT y FailureCapture, sin clases d
   // Las clases de flujo son derivadas del diseño: las escribe el agente.
   const flows = fs.readdirSync(path.join(workspace, 'services', 'product-catalog-spring', base));
   assert.deepEqual(flows.sort(), ['AbstractFlowIT.java', 'FailureCapture.java']);
+});
+
+test('constraints del diseño en una query: Bean Validation en el @RequestParam y en el record', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const patched = structuredClone(layers);
+  // Una query con filtros acotados: el caso que devolvía 200 donde el contrato
+  // exige 400 porque las constraints no llegaban ni al parámetro ni al record.
+  patched['use-cases'].operations.listProducts.input = {
+    fields: {
+      priceMin: { type: 'decimal', constraints: { min: 0 } },
+      tags: { type: 'string', list: true, required: true, constraints: { minItems: 1, maxItems: 10 } }
+    }
+  };
+
+  scaffoldService({ manifest, layers: patched, workspace });
+
+  const controller = read(
+    workspace,
+    'src/main/java/com/commerce/productcatalog/infrastructure/rest/controllers/product/v1/ProductV1Controller.java'
+  );
+  // Sin @Validated en la clase, Spring no evalúa constraints sobre parámetros sueltos.
+  assert.ok(controller.includes('@Validated'));
+  assert.ok(controller.includes('org.springframework.validation.annotation.Validated'));
+  assert.ok(controller.includes('@DecimalMin("0") BigDecimal priceMin'));
+  assert.ok(controller.includes('@Size(min = 1, max = 10) List<String> tags'));
+
+  // El record de la query también las lleva: una query puede viajar en el cuerpo
+  // (consulta en lote por POST), y ahí es la única validación que actúa.
+  const query = read(workspace, 'src/main/java/com/commerce/productcatalog/application/queries/ListProductsQuery.java');
+  assert.ok(query.includes('@NotEmpty @Size(min = 1, max = 10) List<String> tags'));
+  assert.ok(query.includes('jakarta.validation.constraints.Size'));
 });
 
 test('AbstractFlowIT con capa security: credenciales por rol contra el proveedor del stack', () => {
@@ -475,10 +511,42 @@ test('AbstractFlowIT con capa security: credenciales por rol contra el proveedor
   assert.ok(abstractFlow.includes('protected String serviceCredential(String client)'));
   // Convención documentada en conventions/infra-validation.md, aquí ejecutable.
   assert.ok(abstractFlow.includes('http://localhost:8180/realms/product-catalog/protocol/openid-connect/token'));
-  assert.ok(abstractFlow.includes('product-catalog-test'));
+  // El cliente de prueba es <artifactId del proyecto Gradle>-test, que es el nombre
+  // que la convention documenta y el que el aprovisionamiento crea: derivarlo del
+  // nombre del servicio dejaba a las pruebas pidiendo un cliente inexistente.
+  assert.ok(abstractFlow.includes('product-catalog-spring-test'));
   assert.ok(abstractFlow.includes('AUTH_TOKEN_URL'));
+  // Ningún secreto inventado: sale de infra/test-credentials.env o de la convención.
+  assert.ok(!abstractFlow.includes('env("AUTH_CLIENT_SECRET", "secret")'));
+  assert.ok(abstractFlow.includes('infra", "test-credentials.env'));
   // Sobrecargas con token para los escenarios autenticados.
   assert.ok(abstractFlow.includes('protected Response get(String path, String token)'));
+
+  // El contrato de credenciales tiene un único productor: build. El agente de
+  // infraestructura lo ejecuta y lo verifica; las pruebas lo leen. Que cada lado
+  // adivinase por su cuenta el cliente y el secreto bloqueaba la suite entera.
+  const credentials = read(workspace, 'infra/test-credentials.env');
+  assert.ok(credentials.includes('AUTH_TEST_CLIENT=product-catalog-spring-test'));
+  assert.ok(credentials.includes('AUTH_TOKEN_URL=http://localhost:8180/realms/product-catalog/'));
+  assert.ok(credentials.includes('AUTH_CLIENT_SECRET_BILLING=billing-secret'));
+
+  const initKeycloak = read(workspace, 'infra/init-keycloak.sh');
+  assert.ok(initKeycloak.startsWith('#!/usr/bin/env bash'));
+  assert.ok(initKeycloak.includes('REALM=product-catalog'));
+  assert.ok(initKeycloak.includes('USER_CLIENT=product-catalog-spring-test'));
+  assert.ok(initKeycloak.includes('clientId=billing'));
+  // Matriz scope × audiencia de references/test-clients.md: el agente de pruebas
+  // puede escribir los escenarios negativos de M2M contando con que existirán.
+  assert.ok(initKeycloak.includes('clientId=test-m2m-no-scope'));
+  assert.ok(initKeycloak.includes('catalog:read'));
+});
+
+test('sin capa security no hay aprovisionamiento de identidad que generar', () => {
+  const workspace = makeWorkspace();
+  scaffoldService({ ...loadFixture(), workspace });
+
+  assert.ok(!exists(workspace, 'infra/init-keycloak.sh'));
+  assert.ok(!exists(workspace, 'infra/test-credentials.env'));
 });
 
 test('agentes de la orquestación: copiados al .claude/agents/ del proyecto', () => {
@@ -657,6 +725,10 @@ test('devtools: compose trae el toolbox + Dockerfile + validate-infra.sh con las
   assert.ok(reset.includes('TRUNCATE TABLE')); // reset de PostgreSQL (default)
   assert.ok(reset.includes('CONTAINER_RUNTIME')); // respeta docker/podman
   assert.ok(reset.includes('product-catalog-devtools')); // psql vive en devtools
+  // --schema: recrea el esquema. Hace falta porque `ddl-auto: update` nunca elimina
+  // una columna obsoleta, y una huérfana NOT NULL rompe todo INSERT con un 409 opaco.
+  assert.ok(reset.includes('--schema'));
+  assert.ok(reset.includes('DROP SCHEMA public CASCADE'));
 });
 
 test('h2 como BD elegida: sin contenedor de BD ni devtools, pero con dependencia Gradle', () => {

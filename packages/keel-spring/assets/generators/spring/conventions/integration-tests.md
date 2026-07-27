@@ -84,6 +84,16 @@ y ahorra un ciclo entero de validación funcional.
 4. Ningún valor no determinista (id generado, marca de tiempo) se compara por literal.
 5. Una clase por flujo, con el id `FL-*` exacto delante de los dos puntos en cada
    `@DisplayName`.
+6. Toda restricción que el diseño declara sobre una entrada (`min`, `max`, `minLength`,
+   `maxLength`, `minItems`, `maxItems`, `pattern`) tiene su escenario de rechazo con
+   **400**, aunque el flujo `FL-*` no la mencione palabra por palabra. Son los casos borde
+   que más fácilmente se caen del código generado y los que una prueba de caja negra atrapa
+   sin leer una línea de `src/main/java`. Van al final de la clase del flujo que ejercita
+   esa operación.
+7. Ningún archivo que genera `keel-spring build` se edita para hacer pasar un test:
+   `AbstractFlowIT` y `FailureCapture` son andamiaje del generador, no del flujo. Si uno de
+   ellos está mal, es un `blocker` del reporte — parchearlo en local esconde el defecto y lo
+   reintroduce la siguiente regeneración.
 
 ## Una clase por flujo
 
@@ -155,9 +165,19 @@ Reglas de forma:
   prueba la deduplicación repite clave, con `exchangeWithKey(...)`.
 - Con capa `security`, `tokenFor("<rol>")` devuelve un Bearer token cacheado por rol y
   `serviceCredential("<cliente>")` la credencial de máquina de los escenarios `level: service`
-  (nunca un token de usuario). La convención del proveedor —realm, cliente de prueba,
-  usuario por rol— está en [infra-validation](infra-validation.md) § Obtener un token; el
-  agente de infraestructura la deja preparada y la base la consume.
+  (nunca un token de usuario). Los nombres de cliente y los secretos **no se escriben en el
+  test**: salen de `infra/test-credentials.env`, que genera `keel-spring build` junto al
+  script de aprovisionamiento y que `AbstractFlowIT` lee. Un literal inventado a este lado es
+  una apuesta contra la infraestructura, y cuando falla bloquea la suite entera en
+  `@BeforeAll` sin decir por qué. La convención completa —realm, cliente de prueba, usuario
+  por rol— está en [infra-validation](infra-validation.md) § Obtener un token.
+- Los **fixtures de identidad que ya documenta una skill del stack** (los clientes
+  `test-m2m-*` de Keycloak, el usuario `no-role`, el cliente `<artifactId>-test`) se asumen
+  existentes al escribir el test: los crea el aprovisionamiento generado. Nunca se declara
+  `uncovered` un escenario de seguridad "porque el diseño no define un segundo cliente sin
+  scope" — está definido, en `skills/keel-spring-keycloak/references/test-clients.md`. Si el
+  fixture resultara faltar, eso es un fallo que la validación detecta y corrige; dejar la
+  cobertura sin escribir, no.
 - Con protocolo `api-key`, las claves ya vienen sembradas en
   `src/main/resources/parameters/local/security.yaml`: se usan tal cual (`apiKey()`,
   `serviceCredential(...)`), no se inventan ni se edita el YAML.
@@ -171,6 +191,18 @@ Toda afirmación del `Then` se comprueba, por orden de preferencia:
    del compose vía el contenedor `devtools`, igual que `infra/validate-infra.sh`.
    **Nunca `@EmbeddedKafka`, `@MockBean` ni dobles**: lo que se valida es la infraestructura
    levantada, no una simulación de ella.
+
+   El `<destino>` es el **nombre del canal** de `messaging.keel.yaml` § `channels`, y cada
+   broker lo materializa a su manera: en Kafka es el topic; en RabbitMQ, la **cola** que la
+   topología declara con ese nombre y bindea al exchange del servicio; en SNS/SQS, la cola.
+
+   **Una aserción negativa de mensajería no vale sola.** `publishedMessages(canal, n)` vacío
+   no distingue "correctamente no publicado" de "el canal está roto": si falta el binding, o
+   el broker no arrancó, o el nombre no coincide, el test pasa igual y da falsa seguridad.
+   Toda clase que afirme "no se publica evento" en un canal tiene que contener también, en
+   algún test de la misma clase, la evidencia **afirmativa** de que ese canal entrega —
+   normalmente el escenario positivo que abre el flujo. Si el flujo no tiene ninguno, se
+   añade una comprobación explícita de que el canal existe antes de la aserción negativa.
 3. Por `devtools(...)` en crudo, solo para lo que ninguna de las dos vías alcanza.
 
 Los efectos asíncronos (publicación, consumo de una suscripción) se esperan con

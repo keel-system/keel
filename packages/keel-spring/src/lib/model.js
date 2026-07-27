@@ -825,6 +825,16 @@ function collectSecurity(layers, services, routeBase, warnings) {
     .map(([role, permissions]) => ({ role, permissions: permissions ?? [] }))
     .filter((grant) => grant.permissions.length > 0);
 
+  // Roles y scopes que el diseño nombra en alguna parte: es lo que el proveedor
+  // de identidad de prueba tiene que existir para poder ejercitar los escenarios
+  // (un usuario por rol, un client scope por scope). Ver scaffold/auth-provisioning.js.
+  const roles = [
+    ...new Set([...allRules.flatMap((r) => r.roles ?? []), ...Object.keys(sec.roleGrants ?? {})])
+  ].sort();
+  const scopes = [
+    ...new Set([...allRules.flatMap((r) => r.scopes ?? []), ...serviceClients.flatMap((c) => c.scopes)])
+  ].sort();
+
   return {
     protocol,
     matchers,
@@ -833,6 +843,8 @@ function collectSecurity(layers, services, routeBase, warnings) {
     serviceAuth,
     serviceClients,
     roleGrants,
+    roles,
+    scopes,
     cors: collectCors(sec.cors, routeByOp)
   };
 }

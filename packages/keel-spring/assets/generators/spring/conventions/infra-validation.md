@@ -99,6 +99,26 @@ crea el estado que el escenario B necesita (p. ej. el duplicado que B verifica).
   `@DirtiesContext(BEFORE_CLASS)` y recrear el contexto antes de cada clase de flujo
   recrea el esquema vacío.
 
+### Cuando el esquema queda a medio camino: `reset-db.sh --schema`
+
+En `local` el esquema lo pone Hibernate con `ddl-auto: update`, y `update` **solo añade**:
+nunca elimina una columna que ya no mapea ninguna entidad ni afloja un `NOT NULL`
+preexistente. Regenerar el proyecto después de cambiar el diseño (quitar un campo, dejar de
+usar bloqueo optimista, renombrar) deja por tanto columnas huérfanas en las tablas — y una
+columna huérfana `NOT NULL` hace fallar **todo** `INSERT` sobre esa tabla con un 409 de
+violación de integridad que no menciona la causa. El síntoma es inconfundible: la suite
+entera cae de golpe en las operaciones de escritura de un agregado, con el mismo error.
+
+La salida es recrear el esquema, sin tocar el volumen ni los contenedores:
+
+```bash
+bash infra/reset-db.sh --schema   # borra las tablas; Hibernate las recrea al arrancar
+```
+
+Ejecútalo tras cualquier `keel-spring build --force` que haya cambiado entidades, y ante ese
+409 sin explicación antes de buscar el bug en el código. Sin argumento, el script sigue
+haciendo lo de siempre (vaciar datos, esquema intacto), que es lo que cada flujo necesita.
+
 Con caché en el stack, el script borra además las claves `<servicio>:*` (cachés y
 claves de idempotencia comparten ese prefijo por convención). Es imprescindible:
 una entrada cacheada o una clave de idempotencia sobrevive al vaciado de la BD
@@ -122,12 +142,27 @@ agente con `curl`: es `AbstractFlowIT.tokenFor("<rol>")`, que lo cachea por rol.
 convierte lo que antes era prosa en un **contrato entre el agente de infraestructura y las
 pruebas**, y el agente de infraestructura debe dejar el proveedor así:
 
+Ese contrato **no vive en prosa**: `keel-spring build` lo materializa en dos archivos que se
+regeneran con el proyecto, y los dos lados leen los mismos valores.
+
+| Archivo | Quién lo usa |
+|---|---|
+| `infra/init-keycloak.sh` | el agente de infraestructura lo **ejecuta y verifica** (no lo escribe): realm, roles, un usuario por rol, los clientes máquina del diseño y la matriz `test-m2m-*` |
+| `infra/test-credentials.env` | `AbstractFlowIT` lo lee para resolver cliente, contraseña, URL de token y secretos M2M |
+
 | Pieza | Convención | Sobreescribible con |
 |---|---|---|
 | Realm / user pool | el **nombre del servicio** (`issuer-uri` que ya generó build) | `AUTH_TOKEN_URL` |
-| Cliente de prueba | `<artifactId>-test`, público, con *direct access grants* | `AUTH_TEST_CLIENT` |
-| Usuarios | **uno por rol** del diseño, con el nombre del rol como username | — |
+| Cliente de prueba | `<artifactId>-test` (el artifact del proyecto Gradle: `<servicio>-spring`), público, con *direct access grants* | `AUTH_TEST_CLIENT` |
+| Usuarios | **uno por rol** del diseño, con el nombre del rol como username, más `no-role` | — |
 | Contraseña | `password` para todos | `AUTH_TEST_PASSWORD` |
+| Secreto de un cliente máquina del diseño | `<cliente>-secret` | `AUTH_CLIENT_SECRET_<CLIENTE>` |
+| Secreto de los clientes `test-m2m-*` | `test-secret` | `AUTH_CLIENT_SECRET` |
+
+Ningún literal de esta tabla se reescribe en el código de las pruebas: si hace falta cambiar
+uno, cambia en `infra/test-credentials.env` y se reejecuta el aprovisionamiento. Dos
+escritores independientes adivinando el mismo secreto es exactamente el fallo que este
+contrato elimina.
 
 - **Keycloak**: el endpoint es
   `http://localhost:8180/realms/<servicio>/protocol/openid-connect/token`

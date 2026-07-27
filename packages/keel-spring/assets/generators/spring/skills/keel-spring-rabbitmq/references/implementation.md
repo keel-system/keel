@@ -11,6 +11,18 @@ el admin de Spring los declara al conectar y la operación es idempotente **si
 los argumentos no cambian** (cambiar args de una cola existente rompe con
 `PRECONDITION_FAILED`; ver troubleshooting).
 
+Hay **dos** topologías que declarar, y olvidar la primera es el fallo silencioso
+más caro de este stack:
+
+1. **Publicación** — una cola durable por canal de `messaging.keel.yaml` §
+   `channels` en el que publique algún evento, **nombrada como el canal**, con un
+   binding por cada routing key de sus eventos (ver SKILL.md § Configuración del
+   broker). Sin ella el exchange descarta los mensajes sin error visible y las
+   pruebas de integración, que leen con `publishedMessages("<canal>", n)`, no
+   tienen de dónde leer.
+2. **Suscripción** — una cola por suscripción del diseño, con el nombre y la DLQ
+   de abajo.
+
 ```java
 @Bean
 public Declarables subscriptionTopology() {
@@ -54,6 +66,13 @@ Un NACK o un returned en modo `best-effort` es pérdida de evento: al menos
 déjalo en el log como error. En modo `outbox` no lo tragues: deja propagar la
 excepción desde `OutboxDispatcher` para que el relay cuente el intento y
 reintente — esa es la garantía real, no más reintentos en memoria.
+
+Los *returns* **solo llegan si el mensaje se publica como obligatorio**, así que
+enciéndelo: `template.setMandatory(true)` (o
+`spring.rabbitmq.template.mandatory: true`). Sin él, un mensaje que ningún binding
+recoge se descarta sin `ReturnsCallback`, sin log y sin error — el publisher
+reporta éxito y el evento no existió nunca. Es el modo de fallo que hace pasar en
+falso las aserciones de "no se publica evento".
 
 ## Retry escalonado con DLX + TTL (backoffs largos)
 

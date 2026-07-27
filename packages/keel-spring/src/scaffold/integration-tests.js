@@ -13,6 +13,7 @@
 
 import { javaFile, javaPath } from './render.js';
 import { DATABASES, BROKERS } from '../lib/stack-catalog.js';
+import { tokenUrl, userTestClient } from './auth-provisioning.js';
 
 // Lectura de los últimos mensajes de un destino, ejecutada dentro del contenedor
 // devtools (mismo mecanismo que infra/validate-infra.sh). Formato de String.format:
@@ -100,6 +101,8 @@ function abstractImports(model) {
     'org.skyscreamer.jsonassert.JSONCompareMode'
   ];
   if (reset || devtools || oidc) imports.push('java.io.IOException');
+  // Resolución explícita del bash con el que se invocan los scripts de infra/.
+  if (reset) imports.push('java.io.File', 'java.util.Locale');
   if (devtools) imports.push('java.nio.charset.StandardCharsets');
   if (hasMultipart(model)) {
     imports.push(
@@ -115,6 +118,10 @@ function abstractImports(model) {
       'java.net.http.HttpClient',
       'java.net.http.HttpRequest',
       'java.net.http.HttpResponse',
+      'java.nio.file.Files',
+      'java.nio.file.Path',
+      'java.util.LinkedHashMap',
+      'java.util.Locale',
       'java.util.Map',
       'java.util.concurrent.ConcurrentHashMap'
     );
@@ -356,7 +363,7 @@ function resetSection(model) {
      */
     protected static void resetState() {
         try {
-            Process process = new ProcessBuilder("bash", "infra/reset-db.sh").inheritIO().start();
+            Process process = new ProcessBuilder(bashExecutable(), "infra/reset-db.sh").inheritIO().start();
             int exit = process.waitFor();
             if (exit != 0) {
                 throw new IllegalStateException("infra/reset-db.sh falló (código " + exit + "). ¿Está la infraestructura arriba?");
@@ -367,6 +374,37 @@ function resetSection(model) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Interrumpido reseteando el estado", e);
         }
+    }
+
+    /**
+     * Ejecutable de bash con el que se invocan los scripts de \`infra/\`.
+     *
+     * <p>Dejar que {@code CreateProcess} resuelva {@code "bash"} por {@code PATH} es
+     * ambiguo en Windows: {@code %SystemRoot%\\System32} se consulta antes que el resto
+     * del {@code PATH} y ahí vive el lanzador de WSL, un entorno Linux aislado que no ve
+     * el {@code PATH} ni las variables de Windows — los scripts fallan aunque funcionen
+     * desde Git Bash. Se resuelve explícitamente el bash de Git for Windows, con override
+     * por {@code BASH_EXECUTABLE}, y se cae a {@code "bash"} literal fuera de Windows.
+     */
+    private static String bashExecutable() {
+        String configured = System.getenv("BASH_EXECUTABLE");
+        if (configured != null && !configured.isBlank()) {
+            return configured;
+        }
+        if (System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win")) {
+            String[] candidates = {
+                System.getenv("ProgramFiles") + "\\\\Git\\\\bin\\\\bash.exe",
+                System.getenv("ProgramFiles(x86)") + "\\\\Git\\\\bin\\\\bash.exe",
+                System.getenv("LOCALAPPDATA") + "\\\\Programs\\\\Git\\\\bin\\\\bash.exe",
+                "C:\\\\Program Files\\\\Git\\\\bin\\\\bash.exe"
+            };
+            for (String candidate : candidates) {
+                if (candidate != null && new File(candidate).isFile()) {
+                    return candidate;
+                }
+            }
+        }
+        return "bash";
     }
 `;
 }
@@ -456,22 +494,32 @@ ${clientKeys}        throw new IllegalArgumentException("Cliente de servicio no 
 `;
   }
 
-  const tokenUrl =
-    model.stack.auth === 'cognito'
-      ? 'http://localhost:9229/local_userpool/protocol/openid-connect/token'
-      : `http://localhost:8180/realms/${model.service.name}/protocol/openid-connect/token`;
   const serviceCred = model.security?.serviceAuth
     ? `
     /**
      * Credencial de máquina (client_credentials) del cliente declarado en
      * security.serviceClients: los escenarios \`level: service\` no usan token de
      * usuario.
+     *
+     * <p>El secreto sale de \`infra/test-credentials.env\`, que es donde lo dejó el
+     * aprovisionamiento: primero la entrada del cliente
+     * (\`AUTH_CLIENT_SECRET_&lt;CLIENTE&gt;\`), luego el default \`AUTH_CLIENT_SECRET\`.
+     * Aquí no se inventa ningún literal — que las pruebas y la infraestructura
+     * adivinasen cada una su secreto es exactamente lo que bloqueaba la suite entera.
      */
     protected String serviceCredential(String client) {
         return credentials.computeIfAbsent("client:" + client, key ->
             requestToken("grant_type=client_credentials"
                 + "&client_id=" + client
-                + "&client_secret=" + env("AUTH_CLIENT_SECRET", "secret")));
+                + "&client_secret=" + clientSecret(client)));
+    }
+
+    private static String clientSecret(String client) {
+        String key = "AUTH_CLIENT_SECRET_" + client.toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9]", "_");
+        String specific = env(key, null);
+        // Sin archivo de credenciales, la convención del secreto de un cliente del
+        // diseño sigue siendo derivable: '<cliente>-secret' (auth-provisioning.js).
+        return specific != null ? specific : env("AUTH_CLIENT_SECRET", client + "-secret");
     }
 `
     : '';
@@ -480,23 +528,24 @@ ${clientKeys}        throw new IllegalArgumentException("Cliente de servicio no 
     /**
      * Bearer token de un usuario con el rol pedido, cacheado por rol.
      *
-     * <p>Asume la convención que deja preparada el agente de infraestructura (ver
-     * .claude/conventions/infra-validation.md): un realm por servicio, un cliente
-     * público \`&lt;servicio&gt;-test\` con direct access grants y un usuario por rol
-     * cuyo nombre <b>es</b> el rol. Todo sobreescribible por entorno
+     * <p>Los valores salen de \`infra/test-credentials.env\`, que genera
+     * \`keel-spring build\` junto al script de aprovisionamiento: un realm por
+     * servicio, el cliente público \`${userTestClient(model)}\` con direct access
+     * grants y un usuario por rol cuyo nombre <b>es</b> el rol
+     * (.claude/conventions/infra-validation.md). Sobreescribible por entorno
      * (AUTH_TOKEN_URL, AUTH_TEST_CLIENT, AUTH_TEST_PASSWORD).
      */
     protected String tokenFor(String role) {
         return credentials.computeIfAbsent(role, key ->
             requestToken("grant_type=password"
-                + "&client_id=" + env("AUTH_TEST_CLIENT", "${model.service.artifactId}-test")
+                + "&client_id=" + env("AUTH_TEST_CLIENT", "${userTestClient(model)}")
                 + "&username=" + key
                 + "&password=" + env("AUTH_TEST_PASSWORD", "password")));
     }
 ${serviceCred}
     private String requestToken(String form) {
         try {
-            HttpRequest request = HttpRequest.newBuilder(URI.create(env("AUTH_TOKEN_URL", "${tokenUrl}")))
+            HttpRequest request = HttpRequest.newBuilder(URI.create(env("AUTH_TOKEN_URL", "${tokenUrl(model)}")))
                 .header("Content-Type", "application/x-www-form-urlencoded")
                 .timeout(Duration.ofSeconds(10))
                 .POST(HttpRequest.BodyPublishers.ofString(form))
@@ -514,8 +563,45 @@ ${serviceCred}
         }
     }
 
+    /**
+     * Credenciales del proveedor de identidad, por orden: variable de entorno →
+     * \`infra/test-credentials.env\` → valor convencional.
+     *
+     * <p>El archivo lo escribe \`keel-spring build\` junto al script de
+     * aprovisionamiento, así que los nombres de cliente y los secretos tienen un
+     * <b>único productor</b>. Antes cada lado los hardcodeaba por su cuenta y el
+     * desajuste no se veía hasta ejecutar la suite completa.
+     */
+    private static final Map<String, String> PROVISIONED = loadProvisionedCredentials();
+
+    private static Map<String, String> loadProvisionedCredentials() {
+        Path path = Path.of("infra", "test-credentials.env");
+        if (!Files.isReadable(path)) {
+            return Map.of();
+        }
+        try {
+            Map<String, String> values = new LinkedHashMap<>();
+            for (String line : Files.readAllLines(path)) {
+                String trimmed = line.trim();
+                if (trimmed.isEmpty() || trimmed.startsWith("#")) {
+                    continue;
+                }
+                int separator = trimmed.indexOf('=');
+                if (separator > 0) {
+                    values.put(trimmed.substring(0, separator).trim(), trimmed.substring(separator + 1).trim());
+                }
+            }
+            return values;
+        } catch (IOException e) {
+            throw new IllegalStateException("No se pudo leer infra/test-credentials.env", e);
+        }
+    }
+
     private static String env(String name, String fallback) {
         String value = System.getenv(name);
+        if (value == null || value.isBlank()) {
+            value = PROVISIONED.get(name);
+        }
         return value == null || value.isBlank() ? fallback : value;
     }
 `;

@@ -24,16 +24,23 @@ arranques el servidor — lo arranca JUnit.
 1. Lee `specs/validation-scenarios.md` (es el original contra el que se arbitra) y
    `.claude/conventions/integration-tests.md` (cómo está escrito el código de las
    pruebas).
-2. Ejecuta `./gradlew integrationTest` (en Windows `gradlew.bat integrationTest`).
+2. **Antes de la primera ejecución, confirma las `assumptions`** que reportó
+   `keel-spring-tests`: son las apuestas que tuvo que hacer sin ver la infraestructura
+   (nombres de cola, clientes M2M, secretos, buckets). Compruébalas directamente contra la
+   infraestructura levantada — que la cola existe y está bindeada, que el cliente devuelve
+   token — antes de gastar una ejecución completa de la suite. Cada una que falle es un
+   bloqueo `systemic` que se corrige de una vez; descubrirlas por el `initializationError` de
+   las 26 clases cuesta un ciclo entero y no dice cuál de ellas falló.
+3. Ejecuta `./gradlew integrationTest` (en Windows `gradlew.bat integrationTest`).
    La tarea levanta la aplicación con `@SpringBootTest` contra los contenedores de
    `infra/docker-compose.yaml` y resetea el estado por flujo; no hay `bootRun` que
    arrancar ni servidor que detener.
-3. Compón la matriz desde `build/test-results/integrationTest/*.xml`: cada `<testcase>`
+4. Compón la matriz desde `build/test-results/integrationTest/*.xml`: cada `<testcase>`
    aporta su `@DisplayName`, y el id `FL-*` es lo que va delante de los dos puntos.
    Todo escenario del documento debe aparecer; los que no, se cruzan con el
    `uncovered` que reportó `keel-spring-tests` y se listan como **no ejercitados**
    (no como OK).
-4. Por cada fallo, lee su evidencia en `build/keel-failures/<FL-id>.json` (request
+5. Por cada fallo, lee su evidencia en `build/keel-failures/<FL-id>.json` (request
    completo, response completa y la aserción que falló) y **arbitra** contra el `Then`
    original del documento. Tres veredictos posibles:
    - **`culprit: code`** — el test refleja fielmente el `Then` y el servidor no lo
@@ -49,7 +56,7 @@ arranques el servidor — lo arranca JUnit.
    salió la forma esperada: un cuerpo derivado de `docs/openapi.yaml` apunta al código
    con más fuerza que uno derivado a mano de `mapping.md`, aunque ninguno de los dos
    decide por sí solo el veredicto.
-5. Comprueba que las pruebas **cubren** tres categorías que `./gradlew build -x test`
+6. Comprueba que las pruebas **cubren** tres categorías que `./gradlew build -x test`
    no ve y que solo aparecen contra el servidor real. Si el diseño las contiene y
    ninguna clase de flujo las ejercita, repórtalo (es cobertura que falta, no un
    fallo del código):
@@ -59,11 +66,11 @@ arranques el servidor — lo arranca JUnit.
      segunda viene del store serializada);
    - **guardar o borrar una entidad hija** de una relación bidireccional (es donde un
      mapeo cíclico se manifiesta, y siempre en runtime).
-6. **No corriges código ni escribes tests.** Tu salida es evidencia y veredicto.
+7. **No corriges código ni escribes tests.** Tu salida es evidencia y veredicto.
    Para diagnosticar sí puedes inspeccionar BD/broker/storage vía el contenedor
    `devtools` (`.claude/conventions/infra-validation.md`); inspeccionar por dentro
    sirve para *explicar* un fallo, jamás para *definir* el criterio de aceptación.
-7. **No bajes la infraestructura** (lo decide el orquestador). No preguntas al
+8. **No bajes la infraestructura** (lo decide el orquestador). No preguntas al
    usuario: registra cada bloqueo en `blockers` y termina.
 
 ## Reporte final
@@ -84,7 +91,9 @@ failures:
     response: {...}
     expected: "409 con code SKU_ALREADY_EXISTS"
     hint: "unicidad de sku case-sensitive; el escenario declara colación insensible"
-coverageGaps: [...]           # categorías del punto 5 que ninguna clase de flujo ejercita
+assumptions:                  # verificación de las apuestas de infraestructura de keel-spring-tests
+  - { assumption: "cola 'productEvents' bindeada", result: OK | KO }
+coverageGaps: [...]           # categorías del punto 6 que ninguna clase de flujo ejercita
 designGaps: [...]             # escenarios que contradicen el spec, como propuesta de cambio
 blockers: [...]               # precondiciones rotas (compilación rota, infra caída, sin clases de flujo…)
 ```

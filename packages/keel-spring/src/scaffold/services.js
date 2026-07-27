@@ -113,7 +113,11 @@ function partialUpdateType(operation, component, fromPath, imports) {
   return `JsonNullable<${component.javaType}>`;
 }
 
-// Record del mensaje. Los commands llevan Bean Validation (son el body HTTP).
+// Record del mensaje. Lleva la Bean Validation de las constraints del diseño, sea
+// command o query: una query también puede ser el body HTTP (una consulta en lote
+// viaja en POST y se bindea con @Valid @RequestBody), y cuando se bindea por
+// @RequestParam las anotaciones no llegan a evaluarse pero documentan el contrato
+// —la validación efectiva de ese caso la ponen los @RequestParam del controller.
 function renderMessage(model, operation) {
   const imports = new Set();
   const components = messageComponents(model, operation);
@@ -121,7 +125,6 @@ function renderMessage(model, operation) {
   returnTypeImports(model, operation, imports);
   const contracts = mediatorContracts(operation, returnType);
   imports.add(`${subPackage(model, INTERFACES_PKG)}.${contracts.messageBase}`);
-  const validated = operation.messageKind !== 'query';
   // Los componentes que vienen de la ruta NUNCA se validan aquí: el cliente no
   // los manda en el cuerpo (van en el path) y el controller los sobrescribe al
   // reconstruir el record. Un @NotNull sobre ellos rechaza con 422 toda petición
@@ -134,7 +137,7 @@ function renderMessage(model, operation) {
     if (typeImport) imports.add(typeImport);
 
     const annotations = [];
-    if (validated && !fromPath.has(component.name)) {
+    if (!fromPath.has(component.name)) {
       for (const annotation of component.validation ?? []) {
         imports.add(`jakarta.validation.constraints.${annotation.slice(1).split('(')[0]}`);
         annotations.push(annotation);

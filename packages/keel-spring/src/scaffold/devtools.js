@@ -162,12 +162,34 @@ export function resetDbScript(selected, service) {
   if (db) {
     const container = db.cliVia === 'dbcontainer' ? `${service.name}-db` : `${service.name}-devtools`;
     const cmd = concreteCmd(db.entry, dbName, db.entry.cliResetCmd);
-    steps.push(`if $RUNTIME exec ${sq(container)} sh -c ${sq(cmd)}; then
+    // --schema: además de los datos, se lleva por delante las TABLAS. Hace falta
+    // porque `ddl-auto: update` nunca elimina una columna obsoleta ni afloja un
+    // NOT NULL preexistente: tras regenerar entidades, una columna que ya no
+    // mapea nadie sigue en la tabla y rompe todo INSERT con un 409 opaco que no
+    // apunta a su causa. Vaciar los datos no lo arregla; recrear el esquema sí.
+    const drop = db.entry.cliDropSchemaCmd
+      ? concreteCmd(db.entry, dbName, db.entry.cliDropSchemaCmd)
+      : null;
+    const dataStep = `if $RUNTIME exec ${sq(container)} sh -c ${sq(cmd)}; then
   echo "Datos reseteados (${db.entry.label})."
 else
   echo "FALLO al resetear los datos. ¿Está la infraestructura arriba ('$RUNTIME compose -f infra/docker-compose.yaml up -d')?" >&2
   exit 1
+fi`;
+    if (!drop) {
+      steps.push(dataStep);
+    } else {
+      steps.push(`if [ "$MODE" = schema ]; then
+  if $RUNTIME exec ${sq(container)} sh -c ${sq(drop)}; then
+    echo "Esquema recreado (${db.entry.label}): lo vuelve a crear Hibernate al arrancar la app."
+  else
+    echo "FALLO al recrear el esquema. ¿Está la infraestructura arriba ('$RUNTIME compose -f infra/docker-compose.yaml up -d')?" >&2
+    exit 1
+  fi
+else
+  ${dataStep.split('\n').join('\n  ')}
 fi`);
+    }
   }
 
   if (cache) {
@@ -183,14 +205,36 @@ else
 fi`);
   }
 
+  const supportsSchema = Boolean(db?.entry.cliDropSchemaCmd);
   return `#!/usr/bin/env bash
 # reset-db.sh — deja el estado de prueba de ${service.name} como recién arrancado:
 # vacía los datos de la BD (esquema intacto)${cache ? ' y borra las claves de la caché' : ''}.
 # Ejecutar antes de cada flujo FL-* de specs/validation-scenarios.md: los Given
 # asumen estado limpio. Uso (desde la raíz; con podman, exporta CONTAINER_RUNTIME=podman):
-#   bash infra/reset-db.sh
+#   bash infra/reset-db.sh${
+    supportsSchema
+      ? `
+#   bash infra/reset-db.sh --schema   # además, RECREA el esquema
+#
+# --schema es para después de regenerar entidades: 'ddl-auto: update' no elimina
+# columnas obsoletas ni afloja un NOT NULL preexistente, así que el esquema queda
+# con restos que ninguna entidad mapea y todo INSERT falla con un 409 sin relación
+# aparente con la causa. Recrear el esquema es la salida; el volumen no se toca.`
+      : ''
+  }
 set -u
-
+${
+  supportsSchema
+    ? `
+MODE=data
+case "\${1:-}" in
+  --schema) MODE=schema ;;
+  "") ;;
+  *) echo "Uso: bash infra/reset-db.sh [--schema]" >&2; exit 2 ;;
+esac
+`
+    : ''
+}
 RUNTIME="\${CONTAINER_RUNTIME:-}"
 if [ -z "$RUNTIME" ]; then
   if command -v docker >/dev/null 2>&1; then RUNTIME=docker

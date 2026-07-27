@@ -17,6 +17,7 @@ import * as integrationTests from './integration-tests.js';
 import * as config from './config.js';
 import * as migrations from './migrations.js';
 import * as docker from './docker.js';
+import * as authProvisioning from './auth-provisioning.js';
 import * as mediator from './mediator.js';
 import * as logging from './logging.js';
 import * as enums from './enums.js';
@@ -55,6 +56,7 @@ const GENERATORS = [
   config,
   migrations,
   docker,
+  authProvisioning,
   mediator,
   logging,
   enums,

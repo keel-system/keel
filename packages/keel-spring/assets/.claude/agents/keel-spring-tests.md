@@ -124,6 +124,18 @@ source set `integrationTest`, así que un test que importe un DTO o una entidad 
 - Un escenario que el diseño no permite ejercitar de forma determinista **no se inventa**:
   va a `uncovered` con su motivo. Declararlo vale más que un test decorativo que siempre
   pasa.
+- **Un fixture de infraestructura documentado no es un `uncovered`.** Si el escenario
+  necesita un cliente M2M sin scope, uno con audiencia ajena, un usuario sin roles o un
+  bucket, y la skill del stack o `infra-validation.md` ya los define como parte de su matriz
+  estándar (`skills/keel-spring-keycloak/references/test-clients.md`), **asume que
+  existirán** y escribe el test contra el nombre convencional. Que en la fase 1 no puedas
+  confirmarlo es el diseño del pipeline, no un motivo para no cubrirlo: si el fixture
+  faltase, eso lo detecta y corrige `keel-spring-validate`.
+- **Toda apuesta que dependa de infraestructura se reporta, no se comenta en el código.** Un
+  nombre de cola, de cliente, de bucket o un secreto que no puedas verificar en la fase 1 va
+  a `assumptions` del reporte de cierre. Un `// TODO: no verificable` dentro del `.java` no
+  lo lee nadie: se queda ahí, el escenario nunca se ejercita y el desajuste aparece como un
+  `initializationError` en todas las clases a la vez.
 - Identificadores en inglés (clases, métodos, campos); prosa —`@DisplayName`, comentarios—
   en español, igual que el resto del proyecto.
 - No preguntas al usuario: registra cada bloqueo en `blockers` y termina; el orquestador
@@ -143,6 +155,11 @@ classes:                      # una entrada por flujo traducido
   - { flow: FL-PRD-001, file: src/integrationTest/java/…/ProductCreationFlowIT.java, scenarios: 4 }
 uncovered:                    # escenarios NO traducidos, con el porqué
   - { scenario: FL-SUB-003-C, reason: "onFailure/DLQ exige provocar el fallo del handler desde fuera" }
+assumptions:                  # lo que diste por cierto sobre la infraestructura sin poder
+                              # verlo en fase 1: nombres de cola, clientes, buckets, secretos.
+                              # El primer ciclo de validación las confirma explícitamente.
+  - { assumption: "cola 'productEvents' declarada y bindeada al exchange", source: "conventions/integration-tests.md" }
+  - { assumption: "clientes test-m2m-no-scope / test-m2m-bad-aud aprovisionados", source: "skills/keel-spring-keycloak/references/test-clients.md" }
 designGaps: [...]             # lo que el diseño no fija y el escenario necesitaría
 blockers: [...]               # errores ajenos (src/main/java roto, locks de Gradle) o precondiciones rotas
 ```

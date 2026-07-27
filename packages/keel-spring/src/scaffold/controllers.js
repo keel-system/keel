@@ -47,6 +47,28 @@ const HTTP_STATUS_CONSTANTS = {
 // @RequestParam (el DSL no declara requestBody, lo declara el verbo del endpoint).
 const BODY_METHODS = new Set(['POST', 'PUT', 'PATCH']);
 
+// Anotaciones de presencia: en un @PathVariable no dicen nada (el segmento existe
+// o la ruta no casa), así que solo se emiten sobre parámetros de query.
+const PRESENCE_ANNOTATIONS = new Set(['@NotNull', '@NotBlank', '@NotEmpty']);
+
+/**
+ * Bean Validation de un parámetro suelto (query o ruta). Sin esto, una constraint
+ * que el diseño declara sobre un filtro (`min`, `maxLength`, `pattern`, `minItems`)
+ * no existiría en el servidor: el record del mensaje se construye a mano en el
+ * controller, así que sus anotaciones nunca se evalúan por esta vía. Exige
+ * `@Validated` en la clase, que renderController añade al detectarlas.
+ */
+function paramValidation(component, imports, { presence = true } = {}) {
+  const annotations = (component.validation ?? []).filter(
+    (annotation) => presence || !PRESENCE_ANNOTATIONS.has(annotation)
+  );
+  if (annotations.length === 0) return '';
+  for (const annotation of annotations) {
+    imports.add(`jakarta.validation.constraints.${annotation.slice(1).split('(')[0]}`);
+  }
+  return `${annotations.join(' ')} `;
+}
+
 export function generate(model) {
   const files = model.services
     .map((service) => renderController(model, service))
@@ -76,8 +98,15 @@ function renderController(model, service) {
   const tagDescription = model.service.description
     ? `, description = ${JSON.stringify(model.service.description)}`
     : '';
+  // Spring solo evalúa Bean Validation sobre parámetros sueltos (@RequestParam,
+  // @PathVariable) si la clase está anotada con @Validated; sin él, las
+  // constraints que acaban de emitirse serían decorativas. Las violaciones salen
+  // como ConstraintViolationException, que ApiExceptionHandler ya traduce a 400.
+  const validatesParams = [...imports].some((name) => name.startsWith('jakarta.validation.constraints.'));
+  if (validatesParams) imports.add('org.springframework.validation.annotation.Validated');
+
   const body = `@RestController
-@RequestMapping("${model.api.routeBase}")
+${validatesParams ? '@Validated\n' : ''}@RequestMapping("${model.api.routeBase}")
 @Tag(name = "${groupName}"${tagDescription})
 public class ${service.controllerClass} {
 
@@ -161,7 +190,8 @@ function renderMethod(model, operation, imports) {
     const typeImport = domainTypeImport(model, param);
     if (typeImport) imports.add(typeImport);
     imports.add('org.springframework.web.bind.annotation.PathVariable');
-    params.push(`@PathVariable ${param.javaType} ${param.name}`);
+    const validation = paramValidation(param, imports, { presence: false });
+    params.push(`@PathVariable ${validation}${param.javaType} ${param.name}`);
   }
 
   if (operation.multipart) {
@@ -180,7 +210,8 @@ function renderMethod(model, operation, imports) {
       if (typeImport) imports.add(typeImport);
       imports.add('org.springframework.web.bind.annotation.RequestParam');
       const required = component.required ? '' : '(required = false)';
-      params.push(`@RequestParam${required} ${component.javaType} ${component.name}`);
+      const validation = paramValidation(component, imports);
+      params.push(`@RequestParam${required} ${validation}${component.javaType} ${component.name}`);
       return component.name;
     });
     dispatchArg = `new ${operation.messageClass}(${args.join(', ')})`;
@@ -247,7 +278,8 @@ function renderMethod(model, operation, imports) {
         // Filtros de query como request params.
         imports.add('org.springframework.web.bind.annotation.RequestParam');
         const required = component.required ? '' : '(required = false)';
-        params.push(`@RequestParam${required} ${component.javaType} ${component.name}`);
+        const validation = paramValidation(component, imports);
+        params.push(`@RequestParam${required} ${validation}${component.javaType} ${component.name}`);
       }
     }
     dispatchArg = `new ${operation.messageClass}(${components.map((c) => c.name).join(', ')})`;

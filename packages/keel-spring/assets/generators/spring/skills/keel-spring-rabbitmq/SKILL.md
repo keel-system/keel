@@ -22,7 +22,20 @@ description: Guía de implementación de mensajería con RabbitMQ en un proyecto
 
 ## Configuración del broker (`infrastructure/configurations/broker/RabbitMqConfig`)
 
-Exchange de eventos del servicio + conversor JSON para publicar/consumir records:
+Exchange de eventos del servicio + **una cola por canal publicado** + conversor JSON
+para publicar/consumir records.
+
+> **La cola no es opcional.** Un exchange topic sin bindings **descarta en silencio**
+> todo lo que se publica (`drop_unroutable`): el publisher reporta éxito porque el
+> exchange aceptó el mensaje, y el evento no llega a ninguna parte. Además, las
+> pruebas de integración leen los eventos con `publishedMessages("<canal>", n)`, que
+> en RabbitMQ consulta **la cola cuyo nombre es el del canal** — sin ella toda
+> aserción de mensajería falla por timeout, y las aserciones *negativas* ("no se
+> publica evento") pasan en falso porque el canal está vacío por el bug, no por el
+> escenario. Declara **una cola durable por cada canal de
+> `specs/messaging.keel.yaml` § `channels` en el que publique algún evento**,
+> nombrada exactamente como el canal, con un binding por cada routing key de los
+> eventos de ese canal.
 
 ```java
 @Configuration
@@ -33,6 +46,20 @@ public class RabbitMqConfig {
     @Bean
     public TopicExchange domainEventsExchange() {
         return new TopicExchange(EXCHANGE_NAME, true, false);
+    }
+
+    /**
+     * Una cola por canal lógico del diseño, con binding a las routing keys de los
+     * eventos que publica ese canal. Sin ellas los mensajes se descartan.
+     */
+    @Bean
+    public Declarables publishedChannels(
+            TopicExchange domainEventsExchange,
+            @Value("${messaging.publishing.routing-keys.<evento-kebab>:<servicio>.<evento-kebab>}") String <evento>Key) {
+        Queue <canal> = QueueBuilder.durable("<canal>").build();
+        return new Declarables(
+                <canal>,
+                BindingBuilder.bind(<canal>).to(domainEventsExchange).with(<evento>Key));
     }
 
     @Bean

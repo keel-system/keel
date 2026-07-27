@@ -21,11 +21,23 @@ raíz de un proyecto generado. Todo lo que hagas ocurre dentro de esa raíz.
    listos). Si sigue fallando, diagnostica con `$RT compose -f infra/docker-compose.yaml ps`
    y `$RT logs <contenedor>`; corrige solo causas operativas (puerto ocupado,
    contenedor viejo → `down` + `up`). **Nunca edites código del proyecto.**
-5. Consulta `.claude/conventions/infra-validation.md`
-   para el sondeo por tecnología. Si el stack trae auth (Keycloak / cognito-local),
-   deja preparado lo mínimo para que la validación funcional pueda obtener un token
-   (realm/cliente de prueba según la reference del stack) y documéntalo en el reporte.
-6. **No detengas la infraestructura al terminar**: la usará el agente de validación
+5. Consulta `.claude/conventions/infra-validation.md` para el sondeo por tecnología.
+6. **Identidad**: si el stack trae auth, el aprovisionamiento **ya está escrito**, no lo
+   redactes tú. Con Keycloak, `keel-spring build` genera `infra/init-keycloak.sh` (realm,
+   roles, usuarios por rol, clientes máquina del diseño y la matriz `test-m2m-*`) y
+   `infra/test-credentials.env`, que es de donde `AbstractFlowIT` saca clientes y secretos.
+   Tu trabajo es **ejecutarlo y verificarlo**, no reinventarlo:
+   - `bash infra/init-keycloak.sh` (idempotente: reejecútalo tras cada `up`).
+   - Comprueba en vivo que se puede pedir un token de usuario con el `AUTH_TEST_CLIENT` y
+     un `client_credentials` con cada cliente máquina, usando **exactamente** los valores de
+     `infra/test-credentials.env`. Un token que no sale es KO aquí, no un misterio que
+     descubra la suite tres ciclos más tarde.
+   - Si tuvieras que desviarte de esos valores por una limitación del entorno, actualiza
+     `infra/test-credentials.env` —que es el contrato— y dilo en `authHint`. Lo que no vale
+     es dejar el proveedor con nombres o secretos distintos de los que el archivo declara.
+   - Con otro proveedor (cognito-local), el script no se genera: créalo siguiendo la skill
+     del proveedor y **respetando** los valores de `infra/test-credentials.env`.
+7. **No detengas la infraestructura al terminar**: la usará el agente de validación
    funcional; bajarla es decisión del orquestador. No preguntas al usuario: registra
    cada bloqueo en `blockers` y termina; el orquestador decide.
 
@@ -42,5 +54,9 @@ runtime: docker | podman | ninguno
 services:                     # estado por contenedor
   - { name: db, state: up | down | unhealthy }
 authHint: "..."               # cómo obtener el token, si el stack trae auth
+identity:                     # solo con auth: qué se aprovisionó y qué se verificó en vivo
+  provisioned: OK | KO | N/A  # init-keycloak.sh ejecutado sin error
+  tokenChecked: OK | KO | N/A # token de usuario y client_credentials pedidos de verdad
+  clients: [...]              # clientIds existentes en el proveedor
 blockers: [...]               # causas KO no corregibles operativamente (con diagnóstico)
 ```
