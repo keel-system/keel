@@ -79,8 +79,14 @@ export function buildModel({ manifest, layers, stack = null }) {
   const events = collectEvents(layers, services, service, domainTypes, inlineEnumName, warnings);
   // Garantía de entrega declarada en el diseño: decide cómo se materializa la
   // publicación (outbox transaccional vs. envío directo tras commit).
+  const channels = layers.messaging ? collectChannels(layers, service) : null;
   const messaging = layers.messaging
-    ? { reliability: layers.messaging.publishing?.reliability ?? 'best-effort' }
+    ? {
+        reliability: layers.messaging.publishing?.reliability ?? 'best-effort',
+        // Destinos a purgar entre flujos, y el subconjunto que publica el servicio.
+        channels: channels.all,
+        publishChannels: channels.publish
+      }
     : null;
   const subscriptions = collectSubscriptions(layers, services, domainTypes, inlineEnumName, warnings);
   const pagination = layers.api?.pagination ?? null;
@@ -679,6 +685,34 @@ function collectRefDtos(layers, services, domainTypes, inlineEnumName, childDtos
 }
 
 // ─── Eventos de dominio (messaging.publishing.events) ────────────────────────
+
+// Destinos de mensajería que la validación funcional debe dejar limpios entre
+// flujos: los canales declarados (`messaging.channels`) más los destinos por
+// convención de lo que no declara canal — el exchange/topic del servicio para la
+// publicación, y `<origen>.events` por suscripción. Sin esta lista el reset deja
+// en la cola los mensajes de la corrida anterior y un escenario acaba leyendo un
+// evento que no publicó (rompe por igual las aserciones de "último evento" y las
+// de "ningún evento").
+// `all` es lo que hay que dejar limpio; `publish` son los canales **declarados**
+// a los que publica este servicio. Solo esos tienen nombre fijado por el diseño en
+// todos los brokers, así que solo esos puede exigir la prueba de humo del arnés:
+// sin `channels`, el destino por convención es el exchange/topic del servicio, que
+// en un broker direccionado por cola (RabbitMQ) no es un destino legible.
+function collectChannels(layers, service) {
+  const serviceSlug = kebabCase(service.name);
+  const declared = Object.keys(layers.messaging?.channels ?? {});
+  const events = Object.values(layers.messaging?.publishing?.events ?? {});
+  const publish = new Set();
+  const all = new Set(declared);
+  for (const def of events) {
+    if (def?.channel) publish.add(def.channel);
+    else all.add(`${serviceSlug}.events`);
+  }
+  for (const [name, def] of Object.entries(layers.messaging?.subscriptions ?? {})) {
+    if (!def?.channel) all.add(`${def?.source ? kebabCase(def.source) : kebabCase(name)}.events`);
+  }
+  return { all: [...all], publish: [...publish] };
+}
 
 function collectEvents(layers, services, service, domainTypes, inlineEnumName, warnings) {
   const events = layers.messaging?.publishing?.events ?? {};

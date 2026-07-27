@@ -54,11 +54,20 @@ source set `integrationTest`, así que un test que importe un DTO o una entidad 
      persistencia y de frontera hexagonal no es tuya.
    - `.claude/conventions/infra-validation.md` § Obtener un token, si el diseño declara
      capa `security`.
-2. Lee `src/integrationTest/java/**/flows/AbstractFlowIT.java`: es la base que ya generó
-   `build` y trae todo lo transversal (cliente HTTP sin excepciones en 4xx, `Idempotency-Key`,
-   `resetState()`, `assertBody`, `jsonPath`, `await`, credenciales y sondeo del broker).
-   **Úsala, no la reimplementes.** Si le falta una pieza transversal, añádela ahí en vez de
-   duplicarla en cada clase de flujo.
+2. Lee `src/integrationTest/java/**/flows/AbstractFlowIT.java` y su
+   `HarnessSmokeIT.java`: son la base que ya generó `build` y traen todo lo transversal
+   (cliente HTTP sin excepciones en 4xx, `Idempotency-Key`, `resetState()`, `assertBody`,
+   `jsonPath`, `await`, credenciales, lectura y purga del canal de eventos).
+   **Úsalas, no las reimplementes.**
+   - **Son de solo lectura para ti en esta fase.** Sin infraestructura levantada no puedes
+     saber si están rotas, así que no se parchean a ciegas: si falta una pieza transversal,
+     va a `blockers` con la firma que propones. `HarnessSmokeIT` la ejercitará en vivo al
+     abrir la fase 2, antes de que se ejecute ninguna clase de flujo. Qué hacer si el arnés
+     resulta estar roto está en `.claude/conventions/integration-tests.md` § El arnés es del
+     generador.
+   - Fíjate en **qué deja limpio `resetState()`** (BD, caché y los canales declarados) antes
+     de escribir cualquier aserción que dependa de un estado inicial vacío. Lo que no esté
+     en esa lista no se asume limpio: se purga en el test o se declara en `assumptions`.
 3. Escribe **una clase por flujo** en `src/integrationTest/java/<basePackage>/flows/`,
    llamada `<Flow>FlowIT` (p. ej. `ProductLifecycleFlowIT`), que hereda de `AbstractFlowIT`:
    - `@BeforeAll` que llama a `resetState()` — el reset es **por flujo**, jamás entre
@@ -81,7 +90,9 @@ source set `integrationTest`, así que un test que importe un DTO o una entidad 
    `.claude/conventions/integration-tests.md` § Del DSL al cable: cada ruta contrastada
    contra `api`, cada `code` de error copiado literal, cada campo del `assertBody` presente
    en el `output` de su operación, ningún valor no determinista comparado por literal, los
-   ids `FL-*` exactos en los `@DisplayName`. Es la simétrica de la auditoría de consistencia
+   ids `FL-*` exactos en los `@DisplayName`, un `purgeMessages(<canal>)` inmediatamente antes
+   de cada aserción "no se publica ningún evento", y `createdAt`/`updatedAt` comparados en
+   toda vía que sirva una entidad desde caché. Es la simétrica de la auditoría de consistencia
    del contrato que hace el agente de código: cada punto que falla aquí es un `culprit: test`
    que se descubriría un ciclo entero de validación más tarde.
 7. Cierra con **una** invocación de `./gradlew compileIntegrationTestJava` (en Windows
@@ -95,12 +106,20 @@ source set `integrationTest`, así que un test que importe un DTO o una entidad 
      pruebas.
    - **No ejecutes las pruebas** en esta fase: ni la infraestructura ni el código están
      listos, y un rojo aquí no significaría nada.
-8. **Si te relanzan desde la fase 2** (un fallo clasificado como `culprit: test`): entonces
-   la infraestructura está arriba y el código compila, así que además de corregir el test
-   **verifica tu corrección** con `./gradlew integrationTest --tests '<ClaseAfectada>'`. Es
-   el primer momento del pipeline en que la fontanería de `AbstractFlowIT` (credenciales,
-   `resetState()`) es verificable en vivo. Corrige **solo** lo que el arbitraje señaló: un
-   test que falla porque el código está mal no se relaja para que pase.
+8. **Si te relanzan desde la fase 2** (un fallo clasificado como `culprit: test` o
+   `culprit: harness`): entonces la infraestructura está arriba y el código compila, así que
+   además de corregir **verifica tu corrección** con
+   `./gradlew integrationTest --tests '<ClaseAfectada>'`. Corrige **solo** lo que el
+   arbitraje señaló: un test que falla porque el código está mal no se relaja para que pase.
+   - Con `culprit: harness`, el defecto está en el andamiaje compartido. Dos obligaciones
+     extra: (a) la verificación no son dos clases de muestra — haz `grep` del método que
+     tocaste y ejecuta **todas** las clases que lo usan, porque un mismo archivo puede
+     esconder dos causas distintas y arreglar una deja la otra para la pasada siguiente; y
+     (b) registra el parche en `harnessPatches:` del reporte, que es lo que lo devuelve al
+     generador en vez de dejarlo enterrado en este proyecto.
+   - Cierra con `./gradlew integrationTest --tests '*HarnessSmokeIT'` en verde antes de
+     devolver el control: si el humo del arnés sigue rojo, la suite completa no dirá nada
+     útil.
 
 ## Reglas
 
@@ -109,9 +128,12 @@ source set `integrationTest`, así que un test que importe un DTO o una entidad 
 - **No escribes pruebas unitarias.** Este flujo no las produce; la suite unitaria es un
   proceso independiente y posterior a que el diseñador valide el servidor. Lo tuyo son
   escenarios end-to-end contra la infraestructura real.
-- **La fontanería se arregla en la base, no en la clase de flujo.** Si a `AbstractFlowIT` le
-  falta una pieza transversal (una cabecera, un helper de espera, un acceso a devtools), va
-  ahí; duplicarla en cada clase es la deuda que más rápido se acumula en este source set.
+- **La fontanería no se duplica en la clase de flujo, pero tampoco se parchea en fase 1.**
+  Si a `AbstractFlowIT` le falta una pieza transversal (una cabecera, un helper de espera, un
+  acceso a devtools), va a `blockers` con la firma propuesta; en fase 2, con el arbitraje
+  delante, se parchea al mínimo y se registra en `harnessPatches:`. Copiarla en cada clase es
+  la deuda que más rápido se acumula en este source set; parchearla a ciegas esconde un
+  defecto del generador que el siguiente proyecto volverá a pagar.
 - **Un fallo de entorno no se arregla relajando la aserción.** Si en la fase 2 el token no
   llega, `publishedMessages` vuelve vacío o el reset no limpia, lee primero
   `references/troubleshooting.md` de la skill por tecnología instalada
@@ -160,6 +182,11 @@ assumptions:                  # lo que diste por cierto sobre la infraestructura
                               # El primer ciclo de validación las confirma explícitamente.
   - { assumption: "cola 'productEvents' declarada y bindeada al exchange", source: "conventions/integration-tests.md" }
   - { assumption: "clientes test-m2m-no-scope / test-m2m-bad-aud aprovisionados", source: "skills/keel-spring-keycloak/references/test-clients.md" }
+harnessPatches:               # SOLO fase 2 y solo con culprit: harness. Cada parche al
+                              # andamiaje generado (AbstractFlowIT/FailureCapture/HarnessSmokeIT).
+                              # Es la vía por la que el defecto vuelve al generador: sin esta
+                              # entrada se queda en este proyecto y el siguiente lo redescubre.
+  - { file: AbstractFlowIT.java, method: publishedMessages, cause: "…", fix: "…" }
 designGaps: [...]             # lo que el diseño no fija y el escenario necesitaría
 blockers: [...]               # errores ajenos (src/main/java roto, locks de Gradle) o precondiciones rotas
 ```

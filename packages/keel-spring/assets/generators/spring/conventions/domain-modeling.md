@@ -26,6 +26,19 @@ siguientes **de negocio** (¿la operación es legítima ahora?). Duplicar la sin
 no es un error, pero la de negocio **nunca** se implementa solo en el DTO: un mensaje que llegue
 por otro camino (listener del broker, scheduler) se saltaría la regla.
 
+### Normalizar no amplía lo aceptado
+
+El `@Pattern` del DTO viene del `constraints.pattern` del **diseño** y es contrato de entrada:
+fija lo que un cliente puede mandar. La normalización del dominio (pasar un código a mayúsculas,
+derivar un slug — ver [domain-services](domain-services.md)) ocurre **después** de que Bean
+Validation ya aceptó o rechazó, así que transforma lo admitido, nunca amplía lo admisible.
+
+Consecuencia práctica: si el escenario manda `acme-1` y el diseño declara
+`pattern: ^[A-Z0-9-]+$`, la petición se rechaza con 400 antes de llegar al dominio, por muy
+`toUpperCase()` que haga la factory. Eso **no** se arregla borrando la anotación ni relajando el
+test: o el `pattern` del diseño admite ambas formas, o el escenario está mandando algo que el
+contrato no acepta. Es un `designGap` y se reporta como tal.
+
 ## Creación: factory, no constructor público
 
 El scaffolding genera un **constructor completo** cuyo único uso es la **rehidratación** desde

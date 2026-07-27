@@ -111,7 +111,9 @@ test('scaffoldService genera el proyecto completo con contenido clave', () => {
   assert.ok(controller.includes('return mediator.dispatch(new GetProductQuery(id));'));
   assert.ok(controller.includes('mediator.dispatch(new RetireProductCommand(id));'));
   assert.ok(controller.includes('@Valid @RequestBody CreateProductCommand command'));
-  assert.ok(controller.includes('return mediator.dispatch(command);'));
+  // Creación con id en la salida: 201 + Location, derivados del diseño.
+  assert.ok(controller.includes('CreateProductResponseDto response = mediator.dispatch(command);'));
+  assert.ok(controller.includes('ResponseEntity.created('));
 
   // Manejo centralizado de errores: jerarquía DomainException + validación + catch-all.
   const advice = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/rest/ApiExceptionHandler.java');
@@ -455,9 +457,23 @@ test('scaffolding de integración: AbstractFlowIT y FailureCapture, sin clases d
   assert.ok(capture.includes('build'));
   assert.ok(capture.includes('keel-failures'));
 
-  // Las clases de flujo son derivadas del diseño: las escribe el agente.
+  // Las clases de flujo son derivadas del diseño: las escribe el agente. Lo único
+  // que build añade encima de la base es el humo del propio arnés.
   const flows = fs.readdirSync(path.join(workspace, 'services', 'product-catalog-spring', base));
-  assert.deepEqual(flows.sort(), ['AbstractFlowIT.java', 'FailureCapture.java']);
+  assert.deepEqual(flows.sort(), ['AbstractFlowIT.java', 'FailureCapture.java', 'HarnessSmokeIT.java']);
+});
+
+test('humo del arnés: build genera HarnessSmokeIT y ejercita solo la fontanería', () => {
+  const workspace = makeWorkspace();
+  scaffoldService({ ...loadFixture(), workspace });
+
+  const smoke = read(workspace, 'src/integrationTest/java/com/commerce/productcatalog/flows/HarnessSmokeIT.java');
+  assert.ok(smoke.includes('class HarnessSmokeIT extends AbstractFlowIT'));
+  // El reset y el servidor vivo son la base común a cualquier silueta.
+  assert.ok(smoke.includes('AbstractFlowIT::resetState'));
+  assert.ok(smoke.includes('get("/actuator/health")'));
+  // Nada de negocio: el humo no toca ninguna ruta del diseño.
+  assert.ok(!smoke.includes('/products'));
 });
 
 test('constraints del diseño en una query: Bean Validation en el @RequestParam y en el record', () => {

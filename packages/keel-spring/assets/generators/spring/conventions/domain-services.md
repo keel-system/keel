@@ -44,6 +44,11 @@ es un hueco del diseño → bloqueo, no lo improvises.
 - Documenta en el Javadoc qué regla del diseño implementa (el `id` de la rule o el
   flujo `FL-*` que lo motiva).
 
+Una advertencia antes de los patrones: un servicio que **normaliza** una entrada (minúsculas,
+mayúsculas, slug) opera sobre un valor que Bean Validation ya aceptó. Si el diseño declara un
+`pattern` sobre ese campo, normalizar no ensancha lo que el endpoint admite — ver
+[domain-modeling](domain-modeling.md) § Normalizar no amplía lo aceptado.
+
 ## Patrón 1 — servicio puro (sin dependencias)
 
 ```java

@@ -53,7 +53,16 @@ reporta en vez de aplicar.
    **repórtalos en `remaining`** con archivo y línea, no los apliques. La forma
    canónica está en `.claude/conventions/domain-modeling.md` ("Aritmética con
    BigDecimal").
-8. **Higiene general**: sin código muerto, variables sin usar ni warnings triviales;
+8. **Adaptadores de infraestructura, excepciones del SDK**: ningún método de
+   `infrastructure/storage` (ni de otro adaptador de proveedor) propaga una excepción del
+   SDK ni una `IllegalStateException` genérica donde el proveedor tiene un fallo con
+   significado de negocio — `NoSuchKeyException` de S3 y sus equivalentes mapean al error de
+   dominio que corresponde (la skill del proveedor lo prescribe, p. ej.
+   `skills/keel-spring-s3/references/implementation.md`). **Revisa también los métodos que
+   hoy no invoca ningún caso de uso** (`download`, `signedUrl`): son los que se cuelan, y el
+   día que se usen cambian el status HTTP de la respuesta. Cambiar el tipo de excepción es
+   conductual → va a `remaining` con archivo y línea, no se aplica aquí.
+9. **Higiene general**: sin código muerto, variables sin usar ni warnings triviales;
    nombres y formato coherentes con el código vecino.
 
 ## Frontera: no-conductual vs conductual

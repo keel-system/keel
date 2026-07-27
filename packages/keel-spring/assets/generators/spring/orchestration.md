@@ -50,10 +50,11 @@ flowchart TB
     GATE1 -->|"infra PENDIENTE (sin docker/podman)"| STOP0[/"Detenerse: sin infra no hay validación<br/>end-to-end → compilado pero NO validado"/]
     GATE1 -->|los tres OK| VALIDATE
 
-    VALIDATE["Fase 2 — keel-spring-validate<br/>./gradlew integrationTest + arbitraje<br/>matriz desde el XML, evidencia de keel-failures/"]
+    VALIDATE["Fase 2 — keel-spring-validate<br/>humo del arnés (--tests '*HarnessSmokeIT') y, en verde,<br/>./gradlew integrationTest + arbitraje<br/>matriz desde el XML, evidencia de keel-failures/"]
     VALIDATE --> GATE2{Gating fase 2}
     GATE2 -->|"culprit: code → relanzar code con ese bloque: corrige,<br/>verifica su clase con --tests y se revalida la suite entera<br/>blocking: scoped → consume cupo · systemic → no consume<br/>(cupo y tope duro escalan con nº de flujos: ver «Ciclos de fix»)"| CODE
     GATE2 -->|"culprit: test → relanzar tests<br/>(no consume cupo)"| TESTS
+    GATE2 -->|"humo KO o culprit: harness → relanzar tests con<br/>verificación amplia + harnessPatches (no consume cupo)"| TESTS
     GATE2 -->|"blockers o culprit: design"| STOP2[/"Detenerse: proponer cambio a los<br/>artefactos, no acomodar el código"/]
     GATE2 -->|"todos los escenarios OK (100%)"| QUALITY
 
@@ -120,7 +121,9 @@ en el código: se propone como cambio a los artefactos (`designGaps`).
 | `identity` | `keel-spring-infra` | Orquestador, `keel-spring-validate` | Que el aprovisionamiento corrió y que el token se pidió **de verdad**. Sin `tokenChecked: OK`, todo escenario autenticado va a fallar en bloque y no por su contrato. |
 | `classes` / `uncovered` | `keel-spring-tests` | Orquestador, resumen final | Qué flujos quedaron traducidos y qué escenarios **no** se ejercitan (y por qué): dejan de darse por probados en silencio. |
 | `assumptions` | `keel-spring-tests` | `keel-spring-validate` | Apuestas sobre infraestructura que la fase 1 no puede verificar (nombre de cola, cliente M2M, secreto, bucket). La validación las confirma **antes** de la primera ejecución de la suite: cada una fallida es un bloqueo sistémico que, descubierto por fuerza bruta, cuesta un ciclo completo. |
-| `failures[].culprit` | `keel-spring-validate` | Orquestador | A quién relanzar: `code` → `keel-spring-code`; `test` → `keel-spring-tests`; `design` → detenerse. |
+| `failures[].culprit` | `keel-spring-validate` | Orquestador | A quién relanzar: `code` → `keel-spring-code`; `test` y `harness` → `keel-spring-tests`; `design` → detenerse. |
+| `harnessSmoke` | `keel-spring-validate` | Orquestador | Si el humo del arnés (`HarnessSmokeIT`) falló, la suite **no** se ejecutó: no hay matriz que interpretar y el ciclo es de arnés, no de negocio. |
+| `harnessPatches` | `keel-spring-tests` (relanzado) | Orquestador, resumen final | Parches al andamiaje generado (`AbstractFlowIT` y compañía). Van al resumen para portarlos al generador: un defecto del arnés que se queda en el proyecto lo vuelve a pagar entero la siguiente generación. |
 | `failures` (escenario, `evidence`, `class`, request, response, esperado) | `keel-spring-validate` | `keel-spring-code` / `keel-spring-tests` (relanzado) | Evidencia **exacta** para el ciclo de fix. `evidence` es la ruta del volcado de `build/keel-failures/`: el relanzado abre el JSON crudo —antes de ejecutar nada, porque una pasada nueva lo sobrescribe—, no el extracto. `class` le dice qué clase re-ejecutar para verificarse. |
 | `verifiedClasses` | `keel-spring-code` (relanzado) | Orquestador, resumen | Qué clases quedaron verificadas en vivo antes de revalidar. Es señal de que el fix está listo para arbitrarse, **no** un escenario aprobado: la matriz la sigue componiendo `keel-spring-validate` con la suite completa. |
 | `blocking: systemic \| scoped` | `keel-spring-validate` | Orquestador | Contar los ciclos de fix: ver «Ciclos de fix» abajo. |
@@ -144,7 +147,7 @@ relanzado en la fase 2 cierra ejecutando **las clases que le señaló el arbitra
   suite entera; nunca se salta a la fase 3 por el verde del propio agente que corrigió.
 - **Serialización obligatoria.** Es el único punto del pipeline donde dos agentes podrían
   invocar Gradle a la vez sobre el mismo directorio: si una tanda mezcla `culprit: code` y
-  `culprit: test`, se relanzan **en serie** (primero `code`, luego `tests`). No es solo
+  `culprit: test`/`harness`, se relanzan **en serie** (primero `code`, luego `tests`). No es solo
   contención de locks: `resetState()` vacía la base de datos en cada `@BeforeAll`, así que dos
   suites concurrentes se borran los datos entre sí y producen fallos que no son de nadie.
 
@@ -169,6 +172,17 @@ Tampoco lo consume un ciclo con `culprit: test`: relanza a `keel-spring-tests`, 
 `keel-spring-code`, y corrige la **prueba**, no el servicio. Mismo argumento que exime a
 los bloqueos sistémicos: el cupo mide cuántas veces se le da otra oportunidad al código, y
 un test mal derivado no dice nada sobre el código.
+
+Ni un ciclo con `culprit: harness` (o el humo del arnés en rojo): el defecto está en el
+andamiaje que generó `build`, no en el servicio ni en la derivación de los escenarios. Dos
+reglas propias, porque este es el ciclo que más caro sale cuando se gestiona mal:
+
+- El relanzamiento **no se cierra con dos clases de muestra**. El agente hace `grep` del
+  método corregido y ejecuta todas las clases que lo usan: un mismo archivo del arnés puede
+  esconder dos causas distintas, y arreglar la primera sin barrer el resto significa pagar
+  otra pasada completa para descubrir la segunda.
+- Si el `culprit: harness` de una tanda apunta al mismo archivo que el de la tanda anterior,
+  no se re-valida sin más: se exige esa verificación amplia **antes** de volver a la suite.
 
 La razón es que un bloqueo sistémico *oculta* los fallos finos: mientras toda la
 API responde 401, no se puede saber nada sobre las reglas de negocio. Al

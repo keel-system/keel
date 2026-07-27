@@ -54,9 +54,32 @@ test('status de éxito: 201 solo al crear; un POST de transición responde 200',
   const createBlock = product.slice(product.indexOf('@PostMapping("/products")'), product.indexOf('getProductBySlug'));
   const retireBlock = product.slice(product.indexOf('@PostMapping("/products/{id}/retire")'));
 
-  assert.ok(createBlock.includes('@ResponseStatus(HttpStatus.CREATED)'));
+  // El 201 lo pone ResponseEntity.created(...), que además emite Location: con
+  // @ResponseStatus encima se declararía dos veces el mismo status.
+  assert.ok(createBlock.includes('ResponseEntity.created('));
+  assert.ok(!createBlock.includes('@ResponseStatus'));
   assert.ok(!retireBlock.includes('@ResponseStatus'));
   assert.ok(result.warnings.some((w) => w.includes("'retireProduct'") && w.includes('sin successStatus')));
+});
+
+test('§1.3: toda creación con id en la salida devuelve la cabecera Location', () => {
+  const { read } = scaffoldExtended();
+  const product = read(controllerPath('product'));
+  const image = read(controllerPath('productimage'));
+
+  assert.ok(product.includes('public ResponseEntity<CreateProductResponseDto> createProduct('));
+  assert.ok(
+    product.includes(
+      'ServletUriComponentsBuilder.fromCurrentRequest().path("/{id}").buildAndExpand(response.id()).toUri()'
+    )
+  );
+  assert.ok(product.includes('import org.springframework.web.servlet.support.ServletUriComponentsBuilder;'));
+  // addProductImage declara `output: void`: sin id que referenciar no hay URI que
+  // construir, así que se queda con @ResponseStatus(CREATED) y sin Location.
+  assert.ok(image.includes('@ResponseStatus(HttpStatus.CREATED)'));
+  assert.ok(!image.includes('ResponseEntity.created('));
+  // Nunca se envuelve un retorno vacío solo por el status.
+  assert.ok(!product.includes('ResponseEntity<Void>'));
 });
 
 test('paginación: PagedResponse<Dto> sin lista anidada', () => {
@@ -156,6 +179,124 @@ test('infra: reset-db.sh borra también las claves de la caché del servicio', (
   assert.ok(reset.includes('redis-cli -h redis --scan --pattern '));
   assert.ok(reset.includes('catalog:*'));
   assert.ok(reset.includes('flyway_schema_history'));
+});
+
+// ─── Tercer informe: el arnés de pruebas (§1.1 y §1.2) ───────────────────────
+
+test('§1.1: el sondeo del broker va por argv, nunca por una cadena con comillas para sh -c', () => {
+  const { workspace } = scaffoldExtended();
+  const harness = (broker) => {
+    const { manifest, layers } = loadService(fixtureDir);
+    const out = fs.mkdtempSync(path.join(os.tmpdir(), `keel-probe-${broker}-`));
+    scaffoldService({ manifest, layers, workspace: out, force: true, stack: { broker } });
+    return fs.readFileSync(
+      path.join(out, 'services/catalog-spring/src/integrationTest/java/com/commerce/catalog/flows/AbstractFlowIT.java'),
+      'utf8'
+    );
+  };
+  assert.ok(workspace); // el scaffolding por defecto sigue generándose
+
+  const rabbit = harness('rabbitmq');
+  // El cuerpo JSON viaja por archivo copiado al contenedor: pasarlo en la línea de
+  // comandos es lo que docker.exe/podman.exe corrompen en Windows (400 not_json).
+  assert.ok(rabbit.includes('private static void copyToDevtools(String content, String target)'));
+  assert.ok(rabbit.includes('"-d", "@" + PROBE_BODY'));
+  assert.ok(!rabbit.includes('String.format('));
+  // Un curl fallido ya no se traga: exit code != 0 lanza con la evidencia.
+  assert.ok(rabbit.includes('Falló el sondeo de infraestructura (código'));
+  assert.ok(rabbit.includes('FailureCapture.recordProbe(command, exit, output)'));
+  // El runtime se detecta como en los scripts: nada de caer a "docker" a secas.
+  assert.ok(rabbit.includes('List.of("docker", "podman")'));
+
+  const sqs = harness('snssqs');
+  assert.ok(sqs.includes('"sqs", "purge-queue", "--queue-url"'));
+});
+
+test('§1.2: el reset purga los destinos de mensajería declarados', () => {
+  const { manifest, layers } = loadService(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'metering-digest')
+  );
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-purge-'));
+  scaffoldService({ manifest, layers, workspace: out, force: true, stack: { broker: 'rabbitmq' } });
+  const reset = fs.readFileSync(path.join(out, 'services/metering-digest-spring/infra/reset-db.sh'), 'utf8');
+
+  // Los dos canales del diseño (el propio y el externo del que se consume).
+  assert.ok(reset.includes('/api/queues/%2F/digests/contents'));
+  assert.ok(reset.includes('/api/queues/%2F/meterTelemetry/contents'));
+  // Que la cola aún no exista no es estado sucio: el reset avisa y sigue.
+  assert.ok(reset.includes('AVISO: no se pudo purgar'));
+});
+
+test('§1.2: con Kafka no hay purga posible, el aislamiento es la marca de offset', () => {
+  const { manifest, layers } = loadService(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'metering-digest')
+  );
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-mark-'));
+  scaffoldService({ manifest, layers, workspace: out, force: true, stack: { broker: 'kafka' } });
+  const root = path.join(out, 'services/metering-digest-spring');
+  const reset = fs.readFileSync(path.join(root, 'infra/reset-db.sh'), 'utf8');
+  const harness = fs.readFileSync(
+    path.join(root, 'src/integrationTest/java/com/utilities/meteringdigest/flows/AbstractFlowIT.java'),
+    'utf8'
+  );
+
+  assert.ok(!reset.includes('Canal purgado'));
+  // La marca la refresca el reset del propio arnés, no el script.
+  assert.ok(harness.includes('markChannels();'));
+  assert.ok(harness.includes('CHANNELS = List.of("meterTelemetry", "digests")'));
+  assert.ok(harness.includes('String offset = mark != null ? String.valueOf(mark) : "-" + count;'));
+});
+
+test('humo del arnés: solo exige los canales que el diseño declara', () => {
+  const { read } = scaffoldExtended();
+  // catalog-extended no declara `channels`: el destino por convención es el
+  // exchange del servicio, que en RabbitMQ no es un destino legible. Sin nombre
+  // fijado por el diseño, el humo no inventa una aserción de mensajería.
+  const smoke = read('src/integrationTest/java/com/commerce/catalog/flows/HarnessSmokeIT.java');
+  assert.ok(!smoke.includes('eventChannelsAreReadableAndPurgeable'));
+  assert.ok(smoke.includes('resetClearsCache'));
+
+  const { manifest, layers } = loadService(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'metering-digest')
+  );
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-smoke-'));
+  scaffoldService({ manifest, layers, workspace: out, force: true, stack: { broker: 'rabbitmq' } });
+  const declared = fs.readFileSync(
+    path.join(out, 'services/metering-digest-spring/src/integrationTest/java/com/utilities/meteringdigest/flows/HarnessSmokeIT.java'),
+    'utf8'
+  );
+  assert.ok(declared.includes('for (String channel : List.of("digests"))'));
+});
+
+test('§1.6: la tabla de parámetros de production sale de los YAML generados, no de una lista a mano', () => {
+  const { read } = scaffoldExtended();
+  const readme = read('README.md');
+  const production = read('src/main/resources/parameters/production/storage.yaml');
+
+  // Un bucket declarado emite su propia variable: era justo lo que la tabla
+  // escrita a mano no listaba (y nadie cruzaba contra el YAML).
+  assert.ok(production.includes('${STORAGE_BUCKET_PRODUCT_IMAGES}'));
+  assert.ok(readme.includes('| `STORAGE_BUCKET_PRODUCT_IMAGES` |'));
+
+  // Toda variable sin default de un fragmento de production está en la tabla.
+  const required = [
+    ...new Set(
+      ['db', 'storage', 'kafka', 'redis']
+        .map((name) => {
+          try {
+            return read(`src/main/resources/parameters/production/${name}.yaml`);
+          } catch {
+            return '';
+          }
+        })
+        .join('\n')
+        .matchAll(/\$\{([A-Z][A-Z0-9_]*)\}/g)
+    )
+  ].map(([, name]) => name);
+  assert.ok(required.length > 0);
+  for (const name of required) {
+    assert.ok(readme.includes(`| \`${name}\` |`), `falta ${name} en la tabla del README`);
+  }
 });
 
 test('infra: export-schema.sh verifica los nombres de constraint del diseño', () => {

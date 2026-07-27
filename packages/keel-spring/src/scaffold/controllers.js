@@ -144,9 +144,23 @@ function fileUploadHelper(model, imports) {
     }`;
 }
 
+// Un 201 con id en la salida devuelve `Location`: es contrato HTTP y los
+// escenarios de validación lo assertan. Se deriva del diseño (successStatus + el
+// `id` del output), no de que alguien se acuerde de añadirlo a mano.
+function returnsLocation(operation) {
+  return (
+    operation.route?.status === 201 &&
+    !operation.returnsList &&
+    !operation.paginated &&
+    Boolean(operation.responseDto?.fields.some((field) => field.name === 'id'))
+  );
+}
+
 function renderMethod(model, operation, imports) {
   const route = operation.route;
-  const returnType = returnTypeOf(operation);
+  const location = returnsLocation(operation);
+  const dtoType = returnTypeOf(operation);
+  const returnType = location ? `ResponseEntity<${dtoType}>` : dtoType;
   returnTypeImports(model, operation, imports);
   imports.add(`${subPackage(model, messagePackage(operation))}.${operation.messageClass}`);
 
@@ -166,7 +180,12 @@ function renderMethod(model, operation, imports) {
   } else {
     annotations.push(`    @${mapping}("${route.path}")`);
   }
-  if (route.status !== 200) {
+  if (location) {
+    // El status lo pone ResponseEntity.created(...): con @ResponseStatus además,
+    // se declararía dos veces la misma cosa.
+    imports.add('org.springframework.http.ResponseEntity');
+    imports.add('org.springframework.web.servlet.support.ServletUriComponentsBuilder');
+  } else if (route.status !== 200) {
     imports.add('org.springframework.web.bind.annotation.ResponseStatus');
     imports.add('org.springframework.http.HttpStatus');
     const constant = HTTP_STATUS_CONSTANTS[route.status];
@@ -286,7 +305,16 @@ function renderMethod(model, operation, imports) {
   }
 
   const dispatch = `mediator.dispatch(${dispatchArg});`;
-  const call = returnType === 'void' ? dispatch : `return ${dispatch}`;
+  let call;
+  if (location) {
+    // Location del recurso recién creado: la ruta de la petición + su id.
+    call = `${dtoType} response = ${dispatch}
+        return ResponseEntity.created(
+                ServletUriComponentsBuilder.fromCurrentRequest().path("/{id}").buildAndExpand(response.id()).toUri())
+            .body(response);`;
+  } else {
+    call = returnType === 'void' ? dispatch : `return ${dispatch}`;
+  }
 
   return `${javadoc(operation.description, '    ')}${annotations.join('\n')}
     public ${returnType} ${operation.name}(${params.join(', ')}) {

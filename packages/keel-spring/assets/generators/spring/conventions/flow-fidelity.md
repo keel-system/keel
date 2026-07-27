@@ -75,7 +75,10 @@ artefactos, nunca se resuelve en silencio en el código.
   precisión") y su forma canónica en `conventions/domain-modeling.md`.
 - **Wiring HTTP**: si el binding, el `successStatus`, el `Location` o los query params
   generados no coinciden con `api.keel.yaml`, repórtalo como defecto del scaffolding —
-  no cambies firmas ni contratos generados para compensarlo.
+  no cambies firmas ni contratos generados para compensarlo. El `Location` lo emite el
+  scaffolding en toda operación con `successStatus: 201` cuyo `output` declara `id`
+  (`ResponseEntity.created(...)`, la ruta de la petición + el id): si un escenario espera
+  una URI distinta de esa, es discrepancia con el diseño, no algo que se parchee aquí.
 - **Imports y compilación**: tras tocar agregados/handlers/mappers/servicios, verifica
   que errores, value objects y DTOs usados están importados y el proyecto compila.
 

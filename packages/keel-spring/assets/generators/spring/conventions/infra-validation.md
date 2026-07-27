@@ -76,8 +76,28 @@ Por eso cada clase de flujo (`<Flow>FlowIT`, ver [integration-tests](integration
 llama a `resetState()` desde su `@BeforeAll`, y ese método ejecuta:
 
 ```bash
-bash infra/reset-db.sh    # respeta CONTAINER_RUNTIME; datos y caché fuera, esquema intacto
+bash infra/reset-db.sh    # respeta CONTAINER_RUNTIME; datos, caché y canales fuera, esquema intacto
 ```
+
+### Qué recursos cubre el reset — y qué no
+
+El script enumera en su cabecera exactamente lo que deja limpio, según el stack elegido:
+
+| Recurso | Qué hace |
+|---|---|
+| Base de datos | vacía los datos preservando el esquema (y `flyway_schema_history`, ver abajo) |
+| Caché | borra las claves `<servicio>:*` (cachés e idempotencia comparten prefijo) |
+| Destinos de mensajería | purga cada canal declarado en `messaging.keel.yaml § channels` |
+
+En Kafka no hay purga posible (kcat no borra registros), así que su equivalente lo aplica
+`AbstractFlowIT.resetState()`: una **marca de offset** por destino, tras la cual
+`publishedMessages(...)` solo ve lo publicado después. El efecto observable es el mismo.
+
+**Un recurso que no esté en esa tabla no se da por limpio.** Suponerlo por analogía con la
+base de datos es un error caro: no falla en la primera corrida —todo está vacío— sino
+varias sesiones de trabajo después, cuando el recurso lleva cientos de mensajes acumulados
+y media suite empieza a leer lo que publicó otra corrida. Si un escenario depende de un
+recurso que el reset no cubre, o lo limpia el propio test o va a `assumptions` del reporte.
 
 El script y su exclusión de `flyway_schema_history` no cambian: lo que cambia es quién lo
 invoca — antes el agente entre tanda y tanda de `curl`, ahora el hook `@BeforeAll` de la

@@ -90,10 +90,20 @@ y ahorra un ciclo entero de validación funcional.
    que más fácilmente se caen del código generado y los que una prueba de caja negra atrapa
    sin leer una línea de `src/main/java`. Van al final de la clase del flujo que ejercita
    esa operación.
-7. Ningún archivo que genera `keel-spring build` se edita para hacer pasar un test:
-   `AbstractFlowIT` y `FailureCapture` son andamiaje del generador, no del flujo. Si uno de
-   ellos está mal, es un `blocker` del reporte — parchearlo en local esconde el defecto y lo
-   reintroduce la siguiente regeneración.
+7. Ningún archivo que genera `keel-spring build` se edita en la fase 1:
+   `AbstractFlowIT`, `FailureCapture` y `HarnessSmokeIT` son andamiaje del generador, no del
+   flujo. Sin infraestructura levantada no hay forma de saber si están rotos, así que lo que
+   falte se reporta como `blocker` con la firma propuesta. Qué hacer cuando **sí** están
+   rotos —eso solo se ve en la fase 2— está en § El arnés es del generador.
+8. Toda aserción de tipo "no se publica ningún evento" lleva `purgeMessages(<canal>)`
+   **inmediatamente antes** de la acción bajo prueba. Es auditable con un `grep` del
+   `purgeMessages` de cada aserción negativa: si el único reset del canal está en el
+   `@BeforeAll`, el test está mal.
+9. Toda vía que sirve una entidad desde **caché** compara `createdAt`/`updatedAt` entre la
+   lectura que puebla la caché y la que la sirve, no solo los campos de negocio. El
+   `Instant` es el campo que primero se rompe en el roundtrip de (de)serialización y el que
+   ningún escenario nombra explícitamente: comprobar solo los campos de negocio deja pasar
+   exactamente el defecto que la caché introduce.
 
 ## Una clase por flujo
 
@@ -203,7 +213,48 @@ Toda afirmación del `Then` se comprueba, por orden de preferencia:
    algún test de la misma clase, la evidencia **afirmativa** de que ese canal entrega —
    normalmente el escenario positivo que abre el flujo. Si el flujo no tiene ninguno, se
    añade una comprobación explícita de que el canal existe antes de la aserción negativa.
-3. Por `devtools(...)` en crudo, solo para lo que ninguna de las dos vías alcanza.
+
+   **Y va precedida de `purgeMessages(canal)`, justo antes de la acción bajo prueba.** El
+   reset del `@BeforeAll` no basta: si el `Given` del propio escenario ejecuta una operación
+   que publica —crear el recurso que después se borra, por ejemplo—, ese evento de
+   preparación sigue en el canal y la aserción "no se publica nada" falla por algo que no
+   tiene que ver con la acción. La ventana de observación se abre **donde empieza lo que se
+   está probando**, no donde empieza el flujo.
+3. Por `devtools("cli", "arg", …)` en crudo, solo para lo que ninguna de las dos vías
+   alcanza. Los argumentos van como **lista**, nunca como una cadena concatenada: es un
+   `<runtime> exec` directo, sin shell. Si hace falta un pipe o una redirección, la variante
+   explícita es `devtoolsShell("…")`.
+
+### Qué deja limpio el reset, exactamente
+
+`resetState()` cubre lo que enumera `infra/reset-db.sh`: **datos de la BD** (esquema
+intacto, `flyway_schema_history` aparte), **claves `<servicio>:*` de la caché** y los
+**destinos de mensajería declarados** en `messaging.keel.yaml § channels` (en Kafka, que no
+tiene purga, la ventana la abre una marca de offset con el mismo efecto observable).
+
+Un recurso que **no** esté en esa lista no se da por limpio por analogía con la BD: o se
+purga en el propio test, o se declara en `assumptions` del reporte. Sin declararlo, el
+supuesto solo se rompe cuando alguien lleva varias sesiones de trabajo acumuladas — y
+entonces falla media suite a la vez por una razón que ningún `Then` menciona.
+
+## El arnés es del generador
+
+`AbstractFlowIT`, `FailureCapture` y `HarnessSmokeIT` los escribe `keel-spring build`. No
+son del flujo y no se tocan para hacer pasar un test.
+
+- **Fase 1** (sin infraestructura): solo lectura. Lo que falte va a `blockers`.
+- **Fase 2**, con un fallo que el arbitraje clasifica como `culprit: harness`: se permite el
+  parche local **mínimo**, y es **obligatorio** registrarlo en `harnessPatches:` del reporte
+  (archivo, método, causa raíz, fix). Ese bloque es la única vía por la que un defecto del
+  arnés vuelve al generador: sin él, cada proyecto que se genere lo redescubre desde cero y
+  paga otra vez el mismo diagnóstico.
+
+`HarnessSmokeIT` es lo primero que ejecuta la fase 2
+(`./gradlew integrationTest --tests '*HarnessSmokeIT'`): comprueba el reset, el servidor,
+las credenciales, la lectura/purga de los canales declarados y el vaciado de la caché. En
+rojo, el problema es del arnés o de la infraestructura y **no se ejecuta la suite**: correr
+26 clases sobre una fontanería rota produce una matriz de fallos que parecen de negocio y
+no lo son.
 
 Los efectos asíncronos (publicación, consumo de una suscripción) se esperan con
 `await(Duration.ofSeconds(n), () -> …)`, nunca con `Thread.sleep` a ojo.
@@ -224,14 +275,22 @@ información; un test decorativo es ruido que además da falsa seguridad.
 | Comando | Cuándo | Quién |
 |---|---|---|
 | `./gradlew compileIntegrationTestJava` | fase 1, al terminar de escribir | `keel-spring-tests` |
-| `./gradlew integrationTest` | fase 2, con infra arriba y código compilando | `keel-spring-validate` |
+| `./gradlew integrationTest --tests '*HarnessSmokeIT'` | fase 2, **antes** de la suite | `keel-spring-validate` |
+| `./gradlew integrationTest` | fase 2, con el humo en verde | `keel-spring-validate` |
 | `./gradlew integrationTest --tests '<Clase>'` | tras corregir un `culprit: test` | `keel-spring-tests` |
 | `./gradlew integrationTest --tests '<Clase>'` | tras corregir un `culprit: code` (fase 2) | `keel-spring-code` |
 | `./gradlew integrationTest` | fase 3, no-regresión tras el pase de calidad | `keel-spring-quality` |
 
-Los dos usos de `--tests` son **verificación local del propio fix**, no un veredicto: la
-matriz de aceptación sale siempre de la ejecución completa de `keel-spring-validate`, que es
-la única que puede ver una regresión en un flujo distinto del corregido. Y como ambos agentes
+Los dos usos de `--tests` sobre una clase de flujo son **verificación local del propio fix**,
+no un veredicto: la matriz de aceptación sale siempre de la ejecución completa de
+`keel-spring-validate`, que es la única que puede ver una regresión en un flujo distinto del
+corregido.
+
+Cuando lo corregido es un componente **compartido** (un método de `AbstractFlowIT`, un helper
+que usan varias clases), la verificación local no son dos o tres clases de muestra: se hace
+`grep` del método corregido y se ejecutan **todas** las clases que lo usan. Un arreglo en el
+arnés puede tapar un síntoma y dejar debajo una segunda causa distinta en el mismo archivo —
+que es como un solo defecto acaba costando tres pasadas completas de validación. Y como ambos agentes
 ejecutan la suite sobre la misma base de datos —`resetState()` la vacía en cada `@BeforeAll`—,
 el orquestador los relanza en serie, nunca a la vez.
 

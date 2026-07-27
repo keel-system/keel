@@ -68,8 +68,9 @@ export function generate(model) {
   if (selected.some((s) => s.entry.cliValidateCmd)) {
     files.push({ path: 'infra/validate-infra.sh', content: validateInfraScript(selected, service, model) });
   }
-  // Reset de datos entre flujos: solo si la BD elegida declara cliResetCmd.
-  const reset = resetDbScript(selected, service);
+  // Reset de estado entre flujos: datos de la BD, claves de la caché y destinos
+  // de mensajería declarados (el modelo aporta los canales a purgar).
+  const reset = resetDbScript(selected, service, model);
   if (reset) {
     files.push({ path: 'infra/reset-db.sh', content: reset });
   }

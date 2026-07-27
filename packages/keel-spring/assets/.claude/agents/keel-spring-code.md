@@ -43,6 +43,14 @@ misma raíz. Todo lo que hagas ocurre dentro de ella.
    ya están generados y el cableado es listener → guard → mediator → handler → Projector.
    **Nunca llames al Projector desde un listener** ni escribas una proyección desde un handler
    de negocio; una réplica no es fuente de verdad y no se expone tal cual en un DTO público.
+
+   **Ampliar un puerto de repositorio es trabajo esperado, no un defecto del scaffolding.**
+   `build` genera la firma mínima que puede derivar mecánicamente (`findById`, el finder de
+   `naturalKey`, `list(Pageable)` si alguna operación pagina, `save`, `deleteById`). Todo lo
+   que exigen las `preconditions` y `rules` —que son prosa del diseño, no una firma— lo
+   añades tú: `existsBy…` para una unicidad, un `findAll()` para un listado sin paginar, un
+   contador para una regla de cardinalidad. Añádelo al puerto de dominio **y** a su adaptador
+   JPA, nunca inyectando el `JpaRepository` en un handler.
 4. Verifica **solo** con `./gradlew build -x test` (en Windows
    `gradlew.bat build -x test`): compilación y empaquetado en verde. No ejecutes
    `docker compose`, `bootRun` ni escenarios funcionales: de eso se encargan otros

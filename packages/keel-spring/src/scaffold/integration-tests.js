@@ -12,27 +12,50 @@
 // puede importar una clase del servicio.
 
 import { javaFile, javaPath } from './render.js';
-import { DATABASES, BROKERS } from '../lib/stack-catalog.js';
+import { DATABASES, BROKERS, CACHES, selectedInfra } from '../lib/stack-catalog.js';
+import { needsDevtools } from './devtools.js';
 import { tokenUrl, userTestClient } from './auth-provisioning.js';
 
-// Lectura de los últimos mensajes de un destino, ejecutada dentro del contenedor
-// devtools (mismo mecanismo que infra/validate-infra.sh). Formato de String.format:
-// %s/%1$s = destino, %d/%2$d = nº de mensajes. Sin entrada para un broker ⇒ no se
-// genera el helper. Los valores son literales Java ya escapados.
-const EVENT_READ_CMD = {
-  kafka: 'kcat -b kafka:29092 -t %s -o -%d -e -q',
-  rabbitmq:
-    'curl -sf -u guest:guest -H \'content-type: application/json\' -XPOST -d \'{\\"count\\":%2$d,\\"ackmode\\":\\"ack_requeue_true\\",\\"encoding\\":\\"auto\\"}\' http://rabbitmq:15672/api/queues/%%2F/%1$s/get',
-  snssqs:
-    'aws --endpoint-url http://localstack:4566 --region us-east-1 sqs receive-message --queue-url http://localstack:4566/000000000000/%s --max-number-of-messages %d --visibility-timeout 0'
-};
-
 // El reset por script existe con las mismas condiciones con las que docker.js lo
-// genera: una BD con cliResetCmd, o una caché que vaciar. Sin script (H2 en
-// memoria) el aislamiento entre clases de flujo lo da @DirtiesContext.
-function hasResetScript({ layersPresent, stack }) {
+// genera: una BD con cliResetCmd, una caché que vaciar, o destinos de mensajería
+// que purgar. Sin script (H2 en memoria y nada más) el aislamiento entre clases de
+// flujo lo da @DirtiesContext.
+function hasResetScript(model) {
+  const { layersPresent, stack } = model;
   const db = layersPresent.persistence && stack.database ? DATABASES[stack.database] : null;
-  return Boolean(db?.cliResetCmd || stack.cache);
+  return Boolean(db?.cliResetCmd || stack.cache || purgeableChannels(model).length > 0);
+}
+
+// El aislamiento de la BD entre clases de flujo lo da @DirtiesContext cuando la BD
+// no se puede vaciar por CLI (H2 en memoria). Es independiente de que exista el
+// script: con H2 + un broker purgable, el script existe pero no toca la BD.
+function needsDirtiesContext({ layersPresent, stack }) {
+  if (!layersPresent.persistence) return false;
+  const db = stack.database ? DATABASES[stack.database] : null;
+  return !db?.cliResetCmd;
+}
+
+// Destinos que el script puede purgar: los canales del diseño, si el broker
+// elegido tiene primitiva de purga (Kafka no: se aísla por marca de offset).
+function purgeableChannels(model) {
+  const broker = brokerEntry(model);
+  if (!broker?.cliPurgeCmd) return [];
+  return channels(model);
+}
+
+function channels(model) {
+  return model.messaging?.channels ?? [];
+}
+
+function brokerEntry(model) {
+  if (!model.layersPresent.messaging || !model.stack.broker) return null;
+  return BROKERS[model.stack.broker] ?? null;
+}
+
+// ¿Hay contenedor devtools al que hablar? Misma condición que usa docker.js para
+// añadirlo al compose: sin él no se genera nada de sondeo.
+function usesDevtools(model) {
+  return needsDevtools(selectedInfra(model));
 }
 
 function hasIdempotency(model) {
@@ -48,11 +71,6 @@ function tokenProtocol(model) {
   return protocol === 'oidc' || protocol === 'jwt';
 }
 
-function eventReadCmd(model) {
-  if (!model.layersPresent.messaging || !model.stack.broker) return null;
-  return EVENT_READ_CMD[model.stack.broker] ?? null;
-}
-
 export function generate(model) {
   const pkg = `${model.service.basePackage}.flows`;
   return [
@@ -63,6 +81,10 @@ export function generate(model) {
     {
       path: javaPath(model, 'flows', 'FailureCapture', 'integrationTest'),
       content: javaFile(pkg, failureCaptureImports(), failureCaptureBody())
+    },
+    {
+      path: javaPath(model, 'flows', 'HarnessSmokeIT', 'integrationTest'),
+      content: javaFile(pkg, smokeImports(model), smokeBody(model))
     }
   ];
 }
@@ -72,7 +94,8 @@ export function generate(model) {
 function abstractImports(model) {
   const security = model.layersPresent.security;
   const oidc = security && tokenProtocol(model);
-  const devtools = Boolean(eventReadCmd(model));
+  const devtools = usesDevtools(model);
+  const broker = brokerEntry(model);
   const reset = hasResetScript(model);
 
   const imports = [
@@ -103,7 +126,11 @@ function abstractImports(model) {
   if (reset || devtools || oidc) imports.push('java.io.IOException');
   // Resolución explícita del bash con el que se invocan los scripts de infra/.
   if (reset) imports.push('java.io.File', 'java.util.Locale');
-  if (devtools) imports.push('java.nio.charset.StandardCharsets');
+  if (devtools) imports.push('java.nio.charset.StandardCharsets', 'java.util.ArrayList');
+  // El cuerpo del sondeo de RabbitMQ viaja por archivo, no por línea de comandos.
+  if (broker?.id === 'rabbitmq') imports.push('java.nio.file.Files', 'java.nio.file.Path');
+  // Marcas de offset por destino (aislamiento de Kafka, que no tiene purga).
+  if (broker?.id === 'kafka') imports.push('java.util.Map', 'java.util.concurrent.ConcurrentHashMap');
   if (hasMultipart(model)) {
     imports.push(
       'java.util.Map',
@@ -126,18 +153,18 @@ function abstractImports(model) {
       'java.util.concurrent.ConcurrentHashMap'
     );
   }
-  if (!reset) imports.push('org.springframework.test.annotation.DirtiesContext');
+  if (needsDirtiesContext(model)) imports.push('org.springframework.test.annotation.DirtiesContext');
   return imports;
 }
 
 function abstractBody(model) {
   const { layersPresent } = model;
   const security = layersPresent.security;
-  const dirties = hasResetScript(model)
-    ? ''
-    : '// Sin script de reset (BD en memoria): el aislamiento entre clases de flujo lo da\n' +
-      '// recrear el contexto —y con él el esquema— antes de cada clase.\n' +
-      '@DirtiesContext(classMode = DirtiesContext.ClassMode.BEFORE_CLASS)\n';
+  const dirties = needsDirtiesContext(model)
+    ? '// BD en memoria (no se puede vaciar por CLI): el aislamiento entre clases de flujo\n' +
+      '// lo da recrear el contexto —y con él el esquema— antes de cada clase.\n' +
+      '@DirtiesContext(classMode = DirtiesContext.ClassMode.BEFORE_CLASS)\n'
+    : '';
 
   return `/**
  * Base de las clases de flujo (\`<Flow>FlowIT\`) que ejecutan los escenarios FL-*
@@ -343,15 +370,26 @@ ${resetSection(model)}${devtoolsSection(model)}${securitySection(model)}}`;
 }
 
 function resetSection(model) {
-  if (!hasResetScript(model)) {
+  const script = hasResetScript(model);
+  // Kafka no tiene purga: su parte del reset es marcar el offset actual de cada
+  // destino, y eso vive en el proceso de test, no en el script.
+  const kafka = brokerEntry(model)?.id === 'kafka';
+  const marks = kafka ? '\n            markChannels();' : '';
+
+  if (!script) {
     return `
     /**
      * Sin script de reset: la BD es en memoria y el aislamiento lo da
      * \`@DirtiesContext\` a nivel de clase. Se conserva el método para que toda clase
      * de flujo llame a lo mismo desde su \`@BeforeAll\`.
      */
-    protected static void resetState() {
-        // No-op: el contexto se recrea antes de cada clase de flujo.
+    protected static void resetState() {${
+      kafka
+        ? `
+        markChannels();`
+        : `
+        // No-op: el contexto se recrea antes de cada clase de flujo.`
+    }
     }
 `;
   }
@@ -360,6 +398,10 @@ function resetSection(model) {
      * Deja el estado como recién arrancado. Se invoca desde el \`@BeforeAll\` de cada
      * clase de flujo: el reset es <b>por flujo</b>, nunca entre escenarios — dentro
      * de un flujo, un escenario usa lo que dejó el anterior.
+     *
+     * <p>Cubre exactamente lo que enumera \`infra/reset-db.sh\`: datos de la BD, claves
+     * de la caché y destinos de mensajería declarados. Un recurso que no esté en esa
+     * lista <b>no</b> se puede dar por limpio.
      */
     protected static void resetState() {
         try {
@@ -367,7 +409,7 @@ function resetSection(model) {
             int exit = process.waitFor();
             if (exit != 0) {
                 throw new IllegalStateException("infra/reset-db.sh falló (código " + exit + "). ¿Está la infraestructura arriba?");
-            }
+            }${marks}
         } catch (IOException e) {
             throw new IllegalStateException("No se pudo ejecutar infra/reset-db.sh", e);
         } catch (InterruptedException e) {
@@ -414,39 +456,232 @@ function resetSection(model) {
 // infra/validate-infra.sh. Nunca con brokers embebidos: la infraestructura de
 // validación es la que está levantada.
 function devtoolsSection(model) {
-  const template = eventReadCmd(model);
-  if (!template) return '';
-  const broker = BROKERS[model.stack.broker];
+  if (!usesDevtools(model)) return '';
   return `
+    private static final String DEVTOOLS_CONTAINER = "${model.service.name}-devtools";
+
+    private static String containerRuntime;
+${brokerSection(model)}
     /**
-     * Últimos mensajes publicados en un destino, leídos del broker <b>real</b> del
-     * compose (${broker.label}) vía el contenedor devtools. Nunca un broker embebido:
-     * lo que se valida es la infraestructura levantada.
+     * Ejecuta un comando dentro del contenedor devtools y devuelve su salida.
+     *
+     * <p>Los argumentos van siempre como <b>lista</b>, nunca concatenados en una
+     * cadena para \`sh -c\`: en Windows, invocar \`docker.exe\`/\`podman.exe\` con una
+     * cadena que lleva comillas escapadas hace que el cliente las reinterprete y
+     * corrompa el comando antes de reenviarlo al contenedor (un cuerpo JSON llega
+     * roto y el servidor responde 400 sin que se vea por qué). Para un pipeline de
+     * verdad está {@link #devtoolsShell}, que lo hace explícito.
      */
-    protected static String publishedMessages(String destination, int count) {
-        return devtools(String.format("${template}", destination, count));
+    protected static String devtools(String... argv) {
+        List<String> command = new ArrayList<>(List.of(containerRuntime(), "exec", DEVTOOLS_CONTAINER));
+        command.addAll(List.of(argv));
+        return runProcess(command);
     }
 
-    /** Ejecuta un comando dentro del contenedor devtools y devuelve su salida. */
-    protected static String devtools(String command) {
+    /** Igual que {@link #devtools}, pero a través de un shell: pipes y redirecciones. */
+    protected static String devtoolsShell(String command) {
+        return devtools("sh", "-c", command);
+    }
+
+    /**
+     * Ejecuta el proceso, <b>exige código de salida 0</b> y deja la evidencia en
+     * {@link FailureCapture}. Ignorar el código es lo que convierte un \`curl -sf\`
+     * fallido en una cadena vacía y hace que el error aparezca mucho más tarde y muy
+     * lejos de su causa.
+     */
+    private static String runProcess(List<String> command) {
         try {
-            ProcessBuilder builder = new ProcessBuilder(containerRuntime(), "exec", "${model.service.name}-devtools", "sh", "-c", command);
+            ProcessBuilder builder = new ProcessBuilder(command);
             builder.redirectErrorStream(true);
             Process process = builder.start();
             String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-            process.waitFor();
+            int exit = process.waitFor();
+            FailureCapture.recordProbe(command, exit, output);
+            if (exit != 0) {
+                throw new IllegalStateException("Falló el sondeo de infraestructura (código " + exit + "): "
+                    + String.join(" ", command) + System.lineSeparator() + output);
+            }
             return output;
         } catch (IOException e) {
-            throw new IllegalStateException("No se pudo hablar con devtools: " + command, e);
+            throw new IllegalStateException("No se pudo hablar con devtools: " + String.join(" ", command), e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Interrumpido hablando con devtools", e);
         }
     }
 
-    private static String containerRuntime() {
+    /**
+     * Runtime de contenedores, con la misma resolución que los scripts de \`infra/\`:
+     * \`CONTAINER_RUNTIME\` y, si no está, el primero disponible entre docker y podman.
+     * Caer a "docker" a secas dejaba la suite muerta en una máquina solo con podman.
+     */
+    private static synchronized String containerRuntime() {
+        if (containerRuntime == null) {
+            containerRuntime = detectContainerRuntime();
+        }
+        return containerRuntime;
+    }
+
+    private static String detectContainerRuntime() {
         String configured = System.getenv("CONTAINER_RUNTIME");
-        return configured == null || configured.isBlank() ? "docker" : configured;
+        if (configured != null && !configured.isBlank()) {
+            return configured;
+        }
+        for (String candidate : List.of("docker", "podman")) {
+            try {
+                Process process = new ProcessBuilder(candidate, "--version").redirectErrorStream(true).start();
+                process.getInputStream().readAllBytes();
+                if (process.waitFor() == 0) {
+                    return candidate;
+                }
+            } catch (IOException e) {
+                // Ese runtime no está en el PATH: se prueba el siguiente.
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrumpido detectando el runtime de contenedores", e);
+            }
+        }
+        throw new IllegalStateException("No se encontró docker ni podman en el PATH. Exporta CONTAINER_RUNTIME con el que uses.");
+    }
+`;
+}
+
+// Lectura y aislamiento del canal de eventos, por broker. La API es la misma en
+// los tres: publishedMessages(destino, n) devuelve lo publicado desde la última
+// purga/marca, y purgeMessages(destino) reabre esa ventana.
+function brokerSection(model) {
+  const broker = brokerEntry(model);
+  if (!broker) return '';
+  const doc = `
+    /**
+     * Últimos mensajes publicados en un destino, leídos del broker <b>real</b> del
+     * compose (${broker.label}) vía el contenedor devtools. Nunca un broker embebido:
+     * lo que se valida es la infraestructura levantada.
+     */`;
+  const purgeDoc = `
+    /**
+     * Vacía el destino. El reset de estado lo hace por cada canal declarado al abrir
+     * el flujo; el test lo repite <b>inmediatamente antes</b> de la acción cuyo Then
+     * afirma que no se publica nada — si no, lo que se lee es el evento que publicó
+     * la preparación del propio escenario.
+     */`;
+
+  if (broker.id === 'rabbitmq') {
+    return `
+    private static final String RABBIT_API = "http://rabbitmq:15672/api/queues/%2F/";
+
+    private static final String PROBE_BODY = "/tmp/keel-probe.json";
+${doc}
+    protected static String publishedMessages(String destination, int count) {
+        // Peek (ack_requeue_true): leer no consume, así que un escenario puede
+        // assertar dos veces sobre el mismo mensaje.
+        copyToDevtools("{\\"count\\":" + count + ",\\"ackmode\\":\\"ack_requeue_true\\",\\"encoding\\":\\"auto\\"}", PROBE_BODY);
+        return devtools("curl", "-sf", "-u", "guest:guest", "-H", "content-type: application/json",
+            "-XPOST", "-d", "@" + PROBE_BODY, RABBIT_API + destination + "/get");
+    }
+${purgeDoc}
+    protected static void purgeMessages(String destination) {
+        devtools("curl", "-sf", "-u", "guest:guest", "-XDELETE", RABBIT_API + destination + "/contents");
+    }
+
+    /**
+     * Copia el cuerpo del sondeo al contenedor en vez de pasarlo como argumento: un
+     * JSON con comillas dentro de la línea de comandos es exactamente lo que el
+     * cliente de contenedores corrompe en Windows.
+     */
+    private static void copyToDevtools(String content, String target) {
+        try {
+            Path temp = Files.createTempFile("keel-probe", ".json");
+            Files.writeString(temp, content, StandardCharsets.UTF_8);
+            runProcess(List.of(containerRuntime(), "cp", temp.toString(), DEVTOOLS_CONTAINER + ":" + target));
+            Files.deleteIfExists(temp);
+        } catch (IOException e) {
+            throw new IllegalStateException("No se pudo preparar el cuerpo del sondeo de mensajería", e);
+        }
+    }
+`;
+  }
+
+  if (broker.id === 'snssqs') {
+    return `
+    private static final String QUEUE_URL = "http://localstack:4566/000000000000/";
+
+    private static final List<String> AWS = List.of("aws", "--endpoint-url", "http://localstack:4566", "--region", "us-east-1");
+${doc}
+    protected static String publishedMessages(String destination, int count) {
+        return aws("sqs", "receive-message", "--queue-url", QUEUE_URL + destination,
+            "--max-number-of-messages", String.valueOf(count), "--visibility-timeout", "0");
+    }
+${purgeDoc}
+    protected static void purgeMessages(String destination) {
+        // PurgeQueue está limitada a una vez cada 60 s por cola en AWS real;
+        // LocalStack no aplica esa cuota.
+        aws("sqs", "purge-queue", "--queue-url", QUEUE_URL + destination);
+    }
+
+    private static String aws(String... arguments) {
+        List<String> argv = new ArrayList<>(AWS);
+        argv.addAll(List.of(arguments));
+        return devtools(argv.toArray(String[]::new));
+    }
+`;
+  }
+
+  // Kafka: sin purga posible (kcat no borra registros y devtools no trae las CLIs
+  // de Kafka). El aislamiento equivalente es una marca de offset por destino.
+  return `
+    private static final List<String> CHANNELS = List.of(${channels(model)
+      .map((name) => `"${name}"`)
+      .join(', ')});
+
+    private static final Map<String, Long> MARKS = new ConcurrentHashMap<>();
+${doc}
+    protected static String publishedMessages(String destination, int count) {
+        Long mark = MARKS.get(destination);
+        // Con marca se lee todo lo publicado después de ella; sin marca, los últimos
+        // \`count\` (lo que hacía este helper antes de existir el aislamiento).
+        String offset = mark != null ? String.valueOf(mark) : "-" + count;
+        return devtools("kcat", "-b", "kafka:29092", "-t", destination, "-o", offset, "-e", "-q");
+    }
+${purgeDoc}
+    protected static void purgeMessages(String destination) {
+        MARKS.put(destination, nextOffset(destination));
+    }
+
+    /** Marca todos los destinos declarados: es la parte del reset que el script no puede hacer. */
+    private static void markChannels() {
+        for (String destination : CHANNELS) {
+            try {
+                purgeMessages(destination);
+            } catch (RuntimeException e) {
+                // El topic aún no existe porque nadie ha publicado: la marca es 0.
+                MARKS.put(destination, 0L);
+            }
+        }
+    }
+
+    /**
+     * Offset en el que arrancará lo siguiente que se publique. Se obtiene leyendo los
+     * offsets existentes (\`-f %o\`), no por marca de tiempo: \`offsetsForTimes\` devuelve
+     * -1 en un topic sin tráfico reciente, que es justo el caso del reset.
+     *
+     * <p>Asume <b>una partición</b> por destino, que es lo que crea el Kafka
+     * single-node de \`infra/docker-compose.yaml\`.
+     */
+    private static long nextOffset(String destination) {
+        String output = devtools("kcat", "-b", "kafka:29092", "-t", destination, "-o", "beginning", "-e", "-q", "-f", "%o\\\\n");
+        long last = -1L;
+        for (String line : output.split("\\\\R")) {
+            String trimmed = line.trim();
+            if (!trimmed.isEmpty()) {
+                try {
+                    last = Long.parseLong(trimmed);
+                } catch (NumberFormatException ignored) {
+                    // Línea que no es un offset (aviso de kcat): se ignora.
+                }
+            }
+        }
+        return last + 1;
     }
 `;
 }
@@ -607,6 +842,139 @@ ${serviceCred}
 `;
 }
 
+// ─── HarnessSmokeIT ──────────────────────────────────────────────────────────
+//
+// Prueba de humo del propio arnés, no del servicio: reset, servidor vivo,
+// credenciales, canal de eventos y caché. Existe porque el agente de pruebas
+// trabaja en la fase 1 sin infraestructura levantada y no puede ejercitar la
+// fontanería que hereda: un defecto en AbstractFlowIT solo se veía en la fase 2,
+// con las clases de flujo ya escritas encima, y aparecía como decenas de fallos
+// de negocio que no lo eran. Ejecutar esta clase primero convierte eso en un
+// diagnóstico de 30 segundos.
+
+function smokeImports(model) {
+  const imports = [
+    'org.junit.jupiter.api.DisplayName',
+    'org.junit.jupiter.api.Order',
+    'org.junit.jupiter.api.Test',
+    'org.junit.jupiter.api.Assertions'
+  ];
+  if (brokerEntry(model)) imports.push('java.util.List');
+  return imports;
+}
+
+function smokeBody(model) {
+  const tests = [];
+  const reset = hasResetScript(model);
+
+  tests.push(`
+    @Test
+    @Order(1)
+    @DisplayName("SMOKE-1: el reset de estado se ejecuta sin error")
+    void resetsState() {
+        Assertions.assertDoesNotThrow(AbstractFlowIT::resetState,
+            "El reset de estado falló: sin él ningún flujo arranca con el Given que declara.");
+    }
+`);
+
+  tests.push(`
+    @Test
+    @Order(2)
+    @DisplayName("SMOKE-2: el servidor responde")
+    void serverResponds() {
+        Response response = get("/actuator/health");
+        Assertions.assertEquals(200, response.status(),
+            "El servidor no responde en /actuator/health: " + response.body());
+    }
+`);
+
+  const security = model.layersPresent.security;
+  if (security && tokenProtocol(model)) {
+    const role = model.security?.roles?.[0];
+    const client = model.security?.serviceClients?.[0]?.name;
+    const checks = [];
+    if (role) {
+      checks.push(`        Assertions.assertFalse(tokenFor("${role}").isBlank(),
+            "El proveedor de identidad no devolvió token para el rol '${role}'.");`);
+    }
+    if (client && model.security?.serviceAuth) {
+      checks.push(`        Assertions.assertFalse(serviceCredential("${client}").isBlank(),
+            "No hay credencial de máquina para el cliente '${client}': revisa infra/test-credentials.env.");`);
+    }
+    if (checks.length > 0) {
+      tests.push(`
+    @Test
+    @Order(3)
+    @DisplayName("SMOKE-3: el proveedor de identidad emite credenciales")
+    void issuesCredentials() {
+${checks.join('\n\n')}
+    }
+`);
+    }
+  }
+
+  const broker = brokerEntry(model);
+  const publishChannels = model.messaging?.publishChannels ?? [];
+  if (broker && publishChannels.length > 0) {
+    tests.push(`
+    @Test
+    @Order(4)
+    @DisplayName("SMOKE-4: cada canal de publicación se lee y se purga")
+    void eventChannelsAreReadableAndPurgeable() {
+        for (String channel : List.of(${publishChannels.map((name) => `"${name}"`).join(', ')})) {
+            Assertions.assertDoesNotThrow(() -> publishedMessages(channel, 1),
+                "No se pudo leer el canal '" + channel + "': la topología no está declarada o el sondeo está roto.");
+            Assertions.assertDoesNotThrow(() -> purgeMessages(channel),
+                "No se pudo purgar el canal '" + channel + "': las aserciones de mensajería leerían mensajes de la corrida anterior.");
+            Assertions.assertTrue(${emptyReadExpression(broker)},
+                "El canal '" + channel + "' sigue entregando mensajes después de purgarlo.");
+        }
+    }
+`);
+  }
+
+  const cache = model.stack.cache ? CACHES[model.stack.cache] : null;
+  if (cache && reset) {
+    const key = `${model.service.artifactId}:keel-smoke`;
+    tests.push(`
+    @Test
+    @Order(5)
+    @DisplayName("SMOKE-5: el reset vacía la caché del servicio")
+    void resetClearsCache() {
+        devtoolsShell("redis-cli -h ${cache.serviceKey} SET ${key} 1");
+        resetState();
+        Assertions.assertEquals("0", devtoolsShell("redis-cli -h ${cache.serviceKey} EXISTS ${key}").trim(),
+            "El reset no borra las claves '${model.service.artifactId}:*': una entrada cacheada o una clave de idempotencia sobrevive al flujo.");
+    }
+`);
+  }
+
+  return `/**
+ * Humo del <b>arnés</b>, no del servicio: comprueba que la fontanería de
+ * {@link AbstractFlowIT} funciona contra la infraestructura levantada antes de
+ * que nadie interprete un fallo de flujo como un fallo de negocio.
+ *
+ * <p>Es lo primero que ejecuta la fase de validación
+ * (\`./gradlew integrationTest --tests '*HarnessSmokeIT'\`). En rojo, el problema
+ * está en el arnés o en la infraestructura: no tiene sentido correr la suite ni
+ * relanzar al agente de pruebas.
+ *
+ * <p>La genera \`keel-spring build\` y <b>no se edita</b> para hacerla pasar: si
+ * falla, o falta infraestructura o el defecto es del generador.
+ */
+@DisplayName("Humo del arnés de pruebas")
+class HarnessSmokeIT extends AbstractFlowIT {
+${tests.join('')}}`;
+}
+
+// "Nada publicado" no se expresa igual en cada broker: RabbitMQ devuelve una
+// lista JSON vacía, kcat no imprime nada y la CLI de SQS omite `Messages`.
+function emptyReadExpression(broker) {
+  if (broker.id === 'rabbitmq') return 'publishedMessages(channel, 1).trim().equals("[]")';
+  if (broker.id === 'snssqs') return '!publishedMessages(channel, 1).contains("\\"Messages\\"")';
+  return 'publishedMessages(channel, 1).isBlank()';
+}
+
 // ─── FailureCapture ──────────────────────────────────────────────────────────
 
 function failureCaptureImports() {
@@ -616,6 +984,7 @@ function failureCaptureImports() {
     'java.nio.file.Files',
     'java.nio.file.Path',
     'java.util.LinkedHashMap',
+    'java.util.List',
     'java.util.Map',
     'java.util.Optional',
     'org.junit.jupiter.api.extension.ExtensionContext',
@@ -637,6 +1006,7 @@ public class FailureCapture implements TestWatcher {
     private static final Path OUTPUT = Path.of("build", "keel-failures");
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final ThreadLocal<Map<String, Object>> LAST = new ThreadLocal<>();
+    private static final ThreadLocal<Map<String, Object>> LAST_PROBE = new ThreadLocal<>();
 
     /** Registra el intercambio en curso; solo se persiste si el test falla. */
     static void record(String method, String path, HttpHeaders requestHeaders, String requestBody, AbstractFlowIT.Response response) {
@@ -657,6 +1027,20 @@ public class FailureCapture implements TestWatcher {
         LAST.set(exchange);
     }
 
+    /**
+     * Registra el último sondeo de infraestructura (broker, caché) con su código de
+     * salida y su salida cruda. Sin esto, un fallo de aserción sobre un evento deja
+     * un volcado que solo habla de HTTP y no dice nada de por qué el canal devolvió
+     * lo que devolvió — que es justo lo que hay que arbitrar.
+     */
+    static void recordProbe(List<String> command, int exitCode, String output) {
+        Map<String, Object> probe = new LinkedHashMap<>();
+        probe.put("command", String.join(" ", command));
+        probe.put("exitCode", exitCode);
+        probe.put("output", output);
+        LAST_PROBE.set(probe);
+    }
+
     @Override
     public void testFailed(ExtensionContext context, Throwable cause) {
         String displayName = context.getDisplayName();
@@ -671,13 +1055,19 @@ public class FailureCapture implements TestWatcher {
         if (exchange != null) {
             report.putAll(exchange);
         }
+        Map<String, Object> probe = LAST_PROBE.get();
+        if (probe != null) {
+            report.put("probe", probe);
+        }
         write(scenario, report);
         LAST.remove();
+        LAST_PROBE.remove();
     }
 
     @Override
     public void testSuccessful(ExtensionContext context) {
         LAST.remove();
+        LAST_PROBE.remove();
     }
 
     private static void write(String scenario, Map<String, Object> report) {

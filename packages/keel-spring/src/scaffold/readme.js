@@ -4,8 +4,7 @@
 import { JAVA_VERSION, packageVersion } from '../lib/assets.js';
 import { selectedInfra } from '../lib/stack-catalog.js';
 import { needsDevtools } from './devtools.js';
-import { usesOutbox } from './outbox.js';
-import { usesIdempotency } from './idempotency.js';
+import { generate as generateConfig } from './config.js';
 
 export function generate(model) {
   const { service, layersPresent, stack } = model;
@@ -232,8 +231,7 @@ function infraRows(selected) {
 // agente cableó al implementar los adaptadores del stack.
 function productionSection(model) {
   const { layersPresent } = model;
-  const params = productionParameters(model);
-  const optional = optionalParameters(model);
+  const { required: params, optional } = productionParameters(model);
 
   const lines = [
     '## Despliegue en producción',
@@ -287,112 +285,82 @@ function productionSection(model) {
   return lines;
 }
 
-// Parámetros obligatorios en production: los `${VAR}` sin default que emite
-// config.js (envValue/envRequired en el perfil production). Debe seguir el
-// gradiente de config.js; si allí cambia qué es obligatorio en production,
-// actualízalo aquí. Los envWithDefault (con default) se listan como operativos.
+// Parámetros de production, derivados del artefacto real: se recorren los
+// fragmentos `parameters/production/*.yaml` (y el application.yaml base) que
+// acaba de generar config.js y se separan los `${VAR}` sin default —obligatorios,
+// el arranque falla sin ellos— de los `${VAR:default}`.
+//
+// Antes esta tabla era una segunda lista escrita a mano que replicaba el
+// gradiente de config.js, y se desincronizaba en cuanto una variable pasaba a
+// depender del diseño (un `STORAGE_BUCKET_<NOMBRE>` por bucket declarado no
+// aparecía nunca). Derivarla del YAML hace imposible esa divergencia.
 function productionParameters(model) {
-  const { layersPresent, stack, security, httpClients } = model;
-  const params = [];
+  const required = new Map();
+  const optional = new Map();
 
-  if (layersPresent.persistence) {
-    params.push(
-      { name: 'DB_URL', purpose: 'URL JDBC de la base de datos.' },
-      { name: 'DB_USERNAME', purpose: 'Usuario de la base de datos.' },
-      { name: 'DB_PASSWORD', purpose: 'Contraseña de la base de datos.' }
-    );
-  }
-
-  if (layersPresent.messaging && stack.broker === 'kafka') {
-    params.push({ name: 'KAFKA_BOOTSTRAP_SERVERS', purpose: 'Brokers Kafka (host:port, separados por coma).' });
-  } else if (layersPresent.messaging && stack.broker === 'rabbitmq') {
-    params.push(
-      { name: 'RABBITMQ_HOST', purpose: 'Host de RabbitMQ.' },
-      { name: 'RABBITMQ_PORT', purpose: 'Puerto de RabbitMQ.' },
-      { name: 'RABBITMQ_USERNAME', purpose: 'Usuario de RabbitMQ.' },
-      { name: 'RABBITMQ_PASSWORD', purpose: 'Contraseña de RabbitMQ.' }
-    );
-  } else if (layersPresent.messaging && stack.broker === 'snssqs') {
-    params.push(
-      { name: 'AWS_REGION', purpose: 'Región AWS de SNS/SQS.' },
-      { name: 'AWS_ACCESS_KEY_ID', purpose: 'Access key de las credenciales AWS.' },
-      { name: 'AWS_SECRET_ACCESS_KEY', purpose: 'Secret key de las credenciales AWS.' }
-    );
-  }
-
-  if (stack.cache === 'redis' || stack.cache === 'valkey') {
-    params.push(
-      { name: 'REDIS_HOST', purpose: `Host de ${stack.cache} (protocolo Redis).` },
-      { name: 'REDIS_PORT', purpose: `Puerto de ${stack.cache}.` }
-    );
-  }
-
-  if (layersPresent.security && (security?.protocol === 'oidc' || security?.protocol === 'jwt')) {
-    params.push({ name: 'OAUTH2_ISSUER_URI', purpose: 'Issuer del resource server OAuth2/OIDC que valida los tokens.' });
-  }
-  if (layersPresent.security && security) {
-    const jwt = security.protocol === 'oidc' || security.protocol === 'jwt';
-    if (security.protocol === 'api-key') {
-      params.push({ name: 'SECURITY_API_KEY', purpose: 'Clave API que deben enviar los clientes del servicio.' });
-    }
-    if (jwt && security.serviceAuth?.validateAudience === true) {
-      params.push({ name: 'SECURITY_AUDIENCE', purpose: 'Audiencia (claim `aud`) exigida a los tokens de clientes máquina.' });
-    }
-    if (security.serviceAuth?.protocol === 'api-key' && (security.serviceClients?.length ?? 0) > 0) {
-      for (const client of security.serviceClients) {
-        const varName = `API_KEY_${client.name.replace(/-/g, '_').toUpperCase()}`;
-        params.push({ name: varName, purpose: `Clave API del cliente máquina \`${client.name}\`.` });
-      }
+  for (const file of generateConfig(model)) {
+    const production = file.path.includes('/parameters/production/');
+    const base = file.path.endsWith('src/main/resources/application.yaml');
+    if (!production && !base) continue;
+    const fragment = file.path.replace(/^.*\//, '').replace(/\.yaml$/, '');
+    for (const [, name, defaultValue] of file.content.matchAll(/\$\{([A-Z][A-Z0-9_]*)(:[^}]*)?\}/g)) {
+      const target = defaultValue === undefined ? required : optional;
+      if (!required.has(name) && !optional.has(name)) target.set(name, fragment);
     }
   }
 
-  if (layersPresent.storage && stack.storage) {
-    params.push(
-      { name: 'STORAGE_BUCKET', purpose: 'Bucket de object storage.' },
-      { name: 'STORAGE_REGION', purpose: 'Región del object storage.' },
-      { name: 'STORAGE_ACCESS_KEY', purpose: 'Access key del object storage.' },
-      { name: 'STORAGE_SECRET_KEY', purpose: 'Secret key del object storage.' }
-    );
-    if (stack.storage === 'minio') {
-      params.push({ name: 'STORAGE_ENDPOINT', purpose: 'Endpoint del object storage compatible S3 (MinIO).' });
-    }
-  }
-
-  if (layersPresent.httpClients && httpClients) {
-    for (const client of httpClients) {
-      params.push({ name: `${client.envPrefix}_BASE_URL`, purpose: `URL base del cliente HTTP \`${client.id}\`.` });
-      const auth = client.auth?.type;
-      if (auth === 'api-key') {
-        params.push({ name: `${client.envPrefix}_API_KEY`, purpose: `Clave API saliente para \`${client.id}\`.` });
-      } else if (auth === 'bearer-static') {
-        params.push({ name: `${client.envPrefix}_TOKEN`, purpose: `Token bearer estático para \`${client.id}\`.` });
-      } else if (auth === 'basic') {
-        params.push(
-          { name: `${client.envPrefix}_USERNAME`, purpose: `Usuario básico para \`${client.id}\`.` },
-          { name: `${client.envPrefix}_PASSWORD`, purpose: `Contraseña básica para \`${client.id}\`.` }
-        );
-      } else if (auth === 'oauth2-client-credentials') {
-        params.push(
-          { name: `${client.envPrefix}_CLIENT_ID`, purpose: `client-id OAuth2 (client_credentials) para \`${client.id}\`.` },
-          { name: `${client.envPrefix}_CLIENT_SECRET`, purpose: `client-secret OAuth2 para \`${client.id}\`.` },
-          { name: `${client.envPrefix}_TOKEN_URL`, purpose: `token-uri del proveedor OAuth2 de \`${client.id}\`.` }
-        );
-      }
-    }
-  }
-
-  return params;
+  return {
+    required: [...required].map(([name, fragment]) => ({ name, purpose: purposeOf(name, fragment, model) })),
+    optional: [...optional.keys()]
+  };
 }
 
-// Parámetros operativos con default (envWithDefault): existen pero no bloquean
-// el arranque en production; se listan como mención aparte.
-function optionalParameters(model) {
-  const { layersPresent, stack, events } = model;
-  const vars = ['SERVER_PORT', 'LOG_LEVEL_ROOT', 'LOG_LEVEL_APP'];
-  if (layersPresent.persistence) vars.push('FLYWAY_ENABLED');
-  if (layersPresent.messaging && events.length > 0) vars.push('MESSAGING_DESTINATION');
-  if (layersPresent.messaging && stack.broker === 'kafka') vars.push('KAFKA_GROUP_ID');
-  if (usesOutbox(model)) vars.push('OUTBOX_RELAY_DELAY_MS', 'OUTBOX_RELAY_BATCH_SIZE', 'OUTBOX_PURGE_CRON', 'OUTBOX_PURGE_RETENTION_DAYS');
-  if (usesIdempotency(model)) vars.push('PROCESSED_EVENT_PURGE_CRON', 'PROCESSED_EVENT_PURGE_RETENTION_DAYS');
-  return vars;
+// Prosa de la tabla. Los nombres salen del YAML (fuente de verdad); esto solo
+// explica para qué sirve cada uno, con el fragmento que lo declara como respaldo
+// para cualquier variable que el diseño introduzca y aquí no esté nombrada.
+const PARAMETER_PURPOSES = {
+  DB_URL: 'URL JDBC de la base de datos.',
+  DB_USERNAME: 'Usuario de la base de datos.',
+  DB_PASSWORD: 'Contraseña de la base de datos.',
+  KAFKA_BOOTSTRAP_SERVERS: 'Brokers Kafka (host:port, separados por coma).',
+  RABBITMQ_HOST: 'Host de RabbitMQ.',
+  RABBITMQ_PORT: 'Puerto de RabbitMQ.',
+  RABBITMQ_USERNAME: 'Usuario de RabbitMQ.',
+  RABBITMQ_PASSWORD: 'Contraseña de RabbitMQ.',
+  AWS_REGION: 'Región AWS de SNS/SQS.',
+  AWS_ACCESS_KEY_ID: 'Access key de las credenciales AWS.',
+  AWS_SECRET_ACCESS_KEY: 'Secret key de las credenciales AWS.',
+  REDIS_HOST: 'Host de la caché (protocolo Redis).',
+  REDIS_PORT: 'Puerto de la caché.',
+  OAUTH2_ISSUER_URI: 'Issuer del resource server OAuth2/OIDC que valida los tokens.',
+  SECURITY_API_KEY: 'Clave API que deben enviar los clientes del servicio.',
+  SECURITY_AUDIENCE: 'Audiencia (claim `aud`) exigida a los tokens de clientes máquina.',
+  SECURITY_CORS_ALLOWED_ORIGINS: 'Orígenes permitidos por CORS (separados por coma).',
+  STORAGE_BUCKET: 'Bucket por defecto del object storage.',
+  STORAGE_ENDPOINT: 'Endpoint del object storage compatible S3.',
+  STORAGE_REGION: 'Región del object storage.',
+  STORAGE_ACCESS_KEY: 'Access key del object storage.',
+  STORAGE_SECRET_KEY: 'Secret key del object storage.'
+};
+
+const PARAMETER_PATTERNS = [
+  [/^STORAGE_BUCKET_(.+)$/, (match) => `Nombre físico del bucket \`${match[1].toLowerCase()}\` declarado en el diseño.`],
+  [/^API_KEY_(.+)$/, (match) => `Clave API del cliente máquina \`${match[1].toLowerCase().replace(/_/g, '-')}\`.`],
+  [/_BASE_URL$/, () => 'URL base de un cliente HTTP declarado en el diseño.'],
+  [/_CLIENT_ID$/, () => 'client-id OAuth2 (client_credentials) de un cliente HTTP saliente.'],
+  [/_CLIENT_SECRET$/, () => 'client-secret OAuth2 de un cliente HTTP saliente.'],
+  [/_TOKEN_URL$/, () => 'token-uri del proveedor OAuth2 de un cliente HTTP saliente.'],
+  [/_API_KEY$/, () => 'Clave API saliente de un cliente HTTP declarado en el diseño.'],
+  [/_TOKEN$/, () => 'Token bearer estático de un cliente HTTP saliente.'],
+  [/_USERNAME$/, () => 'Usuario de autenticación básica de un cliente HTTP saliente.'],
+  [/_PASSWORD$/, () => 'Contraseña de autenticación básica de un cliente HTTP saliente.']
+];
+
+function purposeOf(name, fragment) {
+  if (PARAMETER_PURPOSES[name]) return PARAMETER_PURPOSES[name];
+  for (const [pattern, describe] of PARAMETER_PATTERNS) {
+    const match = name.match(pattern);
+    if (match) return describe(match);
+  }
+  return `Parámetro declarado en \`parameters/production/${fragment}.yaml\`.`;
 }

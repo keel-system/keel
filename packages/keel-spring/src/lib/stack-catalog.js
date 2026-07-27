@@ -210,6 +210,14 @@ export const DATABASES = {
   }
 };
 
+// Aislamiento de la mensajería entre flujos de validación. `cliPurgeCmd` es la
+// primitiva que vacía un destino ({destination}) desde el contenedor devtools:
+// la ejecuta infra/reset-db.sh por cada canal declarado, igual que ya hace con la
+// BD y la caché. Sin ella, publishedMessages(...) devuelve mensajes de corridas
+// anteriores (RabbitMQ sirve desde la CABEZA de la cola, así que basta con unas
+// pocas sesiones acumuladas para que nada de lo que se lee sea del escenario en
+// curso). Kafka no tiene purga con kcat: su aislamiento es una marca de offset
+// que vive en el proceso de test (ver AbstractFlowIT), no en el script.
 export const BROKERS = {
   kafka: {
     id: 'kafka',
@@ -225,6 +233,9 @@ export const BROKERS = {
     cliVia: 'devtools',
     // El listener interno kafka:29092 es el alcanzable desde la red de compose.
     cliValidateCmd: 'kcat -b kafka:29092 -L',
+    // Sin purga: kcat no borra registros y devtools no trae las CLIs de Kafka. El
+    // aislamiento lo da la marca de offset de AbstractFlowIT.
+    cliPurgeCmd: null,
     alpinePackages: ['kcat'],
     // KRaft single-node con doble listener: EXTERNAL (localhost:9092) para la app
     // en el host e INTERNAL (kafka:29092) para clientes dentro de la red (devtools).
@@ -256,6 +267,10 @@ export const BROKERS = {
     cliTool: 'curl (management API)',
     cliVia: 'devtools',
     cliValidateCmd: 'curl -sf -u guest:guest http://rabbitmq:15672/api/healthchecks/node',
+    // Vacía la cola por la management API. Un 404 (la cola aún no existe porque la
+    // app no ha arrancado nunca) no es un fallo del reset: el script lo tolera.
+    cliPurgeCmd:
+      'curl -sf -u guest:guest -XDELETE http://rabbitmq:15672/api/queues/%2F/{destination}/contents',
     alpinePackages: [],
     composeServices: () => ({
       rabbitmq: {
@@ -280,6 +295,10 @@ export const BROKERS = {
     cliTool: 'aws',
     cliVia: 'devtools',
     cliValidateCmd: 'aws --endpoint-url http://localstack:4566 --region us-east-1 sns list-topics',
+    // PurgeQueue de SQS. En AWS real está limitada a una vez cada 60 s por cola;
+    // LocalStack no aplica esa cuota, pero el script tolera el fallo por si acaso.
+    cliPurgeCmd:
+      'aws --endpoint-url http://localstack:4566 --region us-east-1 sqs purge-queue --queue-url http://localstack:4566/000000000000/{destination}',
     alpinePackages: ['aws-cli'],
     composeServices: () => ({
       localstack: {

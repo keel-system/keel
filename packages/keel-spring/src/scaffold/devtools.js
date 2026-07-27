@@ -71,6 +71,8 @@ export function devtoolsService(selected, service) {
 // con código != 0 si alguno falla.
 export function validateInfraScript(selected, service, model = null) {
   const dbName = service.name.replace(/-/g, '_');
+  // Puerto por defecto del servicio (config.js: `${SERVER_PORT:8080}`).
+  const appPort = 8080;
   const checks = selected
     .filter((s) => s.entry.cliValidateCmd)
     .map((s) => {
@@ -108,6 +110,22 @@ check() {
 
 echo "Validando infraestructura vía '$RUNTIME exec'…"
 ${checks.join('\n')}
+
+# Procesos ajenos a la validación que comparten esta infraestructura. Un
+# 'gradlew bootRun' olvidado escribe en la misma BD que la suite y contamina la
+# matriz con datos que ningún escenario creó — un fallo que parece de negocio y
+# no lo es. Es aviso, no error: el puerto ocupado no impide correr las pruebas
+# (la suite arranca en un puerto aleatorio), solo explica resultados imposibles.
+listeners=""
+if command -v netstat >/dev/null 2>&1; then
+  listeners=$(netstat -ano 2>/dev/null | grep -E "[:.]${appPort} " | grep -Ei "listen" || true)
+elif command -v ss >/dev/null 2>&1; then
+  listeners=$(ss -ltn 2>/dev/null | grep -E "[:.]${appPort} " || true)
+fi
+if [ -n "$listeners" ]; then
+  echo "  AVISO  algo escucha en el puerto ${appPort}: ¿un 'gradlew bootRun' de otra sesión?"
+  echo "         Comparte BD y broker con la suite: ciérralo antes de ejecutar integrationTest."
+fi
 
 if [ "$fail" -ne 0 ]; then
   echo "$fail comprobación(es) fallaron. ¿Está la infraestructura arriba ('$RUNTIME compose -f infra/docker-compose.yaml up -d') y lista?" >&2
@@ -150,11 +168,15 @@ function bucketChecks(selected, service, model) {
 // flujo es auto-contenido. Sin el borrado de la caché, una entrada cacheada o
 // una clave de idempotencia (TTL de horas) sobrevive al reset y el flujo
 // siguiente recibe la respuesta del anterior. Solo se genera si la BD declara
-// cliResetCmd (h2 no: reiniciar la app basta) o si hay caché.
-export function resetDbScript(selected, service) {
+// cliResetCmd (h2 no: reiniciar la app basta), si hay caché o si hay broker con
+// primitiva de purga.
+export function resetDbScript(selected, service, model = null) {
   const db = selected.find((s) => s.category === 'database' && s.entry.cliResetCmd);
   const cache = selected.find((s) => s.category === 'cache');
-  if (!db && !cache) return null;
+  const broker = selected.find((s) => s.category === 'broker' && s.entry.cliPurgeCmd);
+  const destinations = model?.messaging?.channels ?? [];
+  const purges = broker && destinations.length > 0 ? destinations : [];
+  if (!db && !cache && purges.length === 0) return null;
 
   const dbName = service.name.replace(/-/g, '_');
   const steps = [];
@@ -205,10 +227,28 @@ else
 fi`);
   }
 
+  // Purga de los destinos de mensajería. Es tolerante a fallo a propósito: que la
+  // cola aún no exista (la app no ha arrancado nunca contra este broker) no es un
+  // estado sucio, y abortar el reset por eso bloquearía la suite entera.
+  for (const destination of purges) {
+    const cmd = broker.entry.cliPurgeCmd.replaceAll('{destination}', destination);
+    steps.push(`if $RUNTIME exec ${sq(`${service.name}-devtools`)} sh -c ${sq(cmd)}; then
+  echo "Canal purgado (${broker.entry.label}: ${destination})."
+else
+  echo "AVISO: no se pudo purgar '${destination}' (¿la cola/topic aún no existe?). Continúo." >&2
+fi`);
+  }
+
   const supportsSchema = Boolean(db?.entry.cliDropSchemaCmd);
   return `#!/usr/bin/env bash
 # reset-db.sh — deja el estado de prueba de ${service.name} como recién arrancado:
-# vacía los datos de la BD (esquema intacto)${cache ? ' y borra las claves de la caché' : ''}.
+# ${[
+    db ? 'vacía los datos de la BD (esquema intacto)' : null,
+    cache ? 'borra las claves de la caché' : null,
+    purges.length > 0 ? `purga los destinos de mensajería (${purges.join(', ')})` : null
+  ]
+    .filter(Boolean)
+    .join(', ')}.
 # Ejecutar antes de cada flujo FL-* de specs/validation-scenarios.md: los Given
 # asumen estado limpio. Uso (desde la raíz; con podman, exporta CONTAINER_RUNTIME=podman):
 #   bash infra/reset-db.sh${

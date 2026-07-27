@@ -488,8 +488,9 @@ function securityYaml(model, profile) {
 }
 
 // Config del object storage (clave propia 'storage', consumida por el adaptador
-// S3FileStorage/S3Config que genera el scaffolding). MinIO local coincide con el
-// docker-compose; S3 usa los endpoints por defecto del SDK (sin endpoint explícito).
+// S3FileStorage/S3Config que escribe el AGENTE siguiendo la skill del proveedor:
+// el scaffolding solo genera el puerto FileStorage, ver storage.js). MinIO local
+// coincide con el docker-compose; S3 usa los endpoints por defecto del SDK.
 function storageYaml(model, profile) {
   const { stack } = model;
   const isMinio = stack.storage === 'minio';
