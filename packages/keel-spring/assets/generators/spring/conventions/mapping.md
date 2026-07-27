@@ -117,6 +117,59 @@ handler o en el constructor del value object del dominio (que es donde el modelo
 rico la quiere de todos modos, ver `domain-modeling.md`). `@NotNull`/`@NotBlank`
 sí pueden quedarse: no compiten con ninguna normalización.
 
+### El sobre de error es contrato del generador
+
+A diferencia de "ausencia vs. nulo", la **forma** del cuerpo de error no es negociable por el
+diseño: keel-spring emite un único `ErrorResponse` y no tiene punto de extensión.
+
+```json
+{ "timestamp": "…", "status": 404, "error": "Not Found", "code": "PRODUCT_NOT_FOUND",
+  "message": "…", "details": null, "correlationId": "…" }
+```
+
+`correlationId` solo existe como campo si el servicio tiene capa `api` o `messaging` (es entonces
+cuando build genera `CorrelationContext`). `details` lleva la lista de campos que fallaron en las
+validaciones `400` y viaja como `null` en el resto — presente siempre, para que un consumidor no
+tenga que distinguir ausente de nulo en el contrato de error.
+
+Si las convenciones del diseño describen otro sobre (RFC 7807, o solo `{code, message, details}`),
+**no se acomoda el código**: es una divergencia entre el diseño y lo que este generador sabe
+producir, y se reporta como tal. Los escenarios normalmente solo verifican `code` y status, así que
+los campos extra no los rompen; lo que no vale es cambiar `ErrorResponse` a mano para que
+coincidan.
+
+### Ausencia vs. nulo: la fija el diseño, no la plantilla
+
+Un campo sin valor, ¿se omite del JSON o viaja como `null`? Es una **convención de determinación**
+del servicio: la declara `specs/validation-scenarios.md` en su sección de convenciones, vale por
+igual para respuestas HTTP y para payloads de evento, y es contrato observable.
+
+Build **no la decide**. El `application.yaml` generado no fija `default-property-inclusion`, así
+que rige el default de Jackson: los nulos viajan. Es deliberado — el default global es único para
+todo el proceso (respuestas REST y `MessageConverter` del broker comparten el `ObjectMapper`
+autoconfigurado), y prejuzgarlo en la plantilla decidía el contrato de todos los servicios en
+sentido único.
+
+Lo que le toca al agente:
+
+- Si el diseño dice **"un campo sin valor aparece como `null`"**: no hacer nada. Es lo que sale.
+- Si el diseño dice **"un campo sin valor se omite"**: `@JsonInclude(JsonInclude.Include.NON_NULL)`
+  en las clases del contrato afectadas (DTOs de respuesta y payloads de evento), a nivel de clase.
+  Nunca reintroduciéndolo como default global en `application.yaml`: eso arrastra al broker y a
+  cualquier otro serializador que use el mapper de la aplicación.
+
+En ambos casos, un value object compuesto sin ningún valor se mapea a `null` — eso lo decide el
+mapeo, no Jackson (ver `domain-modeling.md`).
+
+### Formato de los instantes
+
+Build genera `infrastructure/serialization/TimestampModule` (registrado en el `ObjectMapper` de la
+aplicación por `JacksonConfig`, y en el de la caché por `CacheConfig`): todo `Instant` sale en
+ISO-8601 UTC con **exactamente tres dígitos** de fracción y sufijo `Z`. Sin él la precisión la
+decidía el origen del valor —`Instant.now()` da microsegundos en JDK 9+, una columna `TIMESTAMP`
+otra cosa— y el formato temporal dejaba de ser contrato. Si el diseño declara otra precisión, se
+cambia el `appendInstant(3)` de esa clase y de ningún otro sitio.
+
 ### Actualización parcial (`PATCH`): ausente ≠ nulo explícito
 
 Cuando el diseño declara la regla *"un campo ausente de la entrada conserva su
@@ -197,7 +250,7 @@ Sin esta capa, no se incluye Spring Security. **Esta capa la materializa entera 
 | `audience` de un endpoint (capa api) | Sin efecto directo en código; gobierna qué reglas son válidas (lo valida `keel validate`) y qué escenarios M2M se ejercitan en la validación funcional |
 | `authentication.serviceAuth.protocol: client-credentials` | Mismo resource server JWT: los tokens `client_credentials` entran por la misma cadena; los clientes se provisionan en el proveedor (skill `keel-spring-keycloak`/`-cognito`) |
 | `authentication.serviceAuth.protocol: api-key` (con protocolo principal `oidc`/`jwt`) | `ServiceApiKeyAuthFilter`: header `X-API-Key` contra `security.api-keys.<cliente>` (fragmento `parameters/<perfil>/security.yaml`); autentica como el `serviceClient` con sus scopes como authorities `SCOPE_*` |
-| `authentication.serviceAuth.validateAudience: true` | `AudienceAuthorizationFilter` (comprueba el claim `aud` del `JwtAuthenticationToken` ya autenticado y lanza `AccessDeniedException`), registrado antes del `AuthorizationFilter`; audiencia en `security.audience` (default: nombre del servicio). Es una regla de **autorización**, no de autenticación: validarla en el `JwtDecoder` convertiría un token legítimo de otro público en `401` (token inválido) cuando lo correcto es `403` (autenticado, sin permiso) — la distinción que exige el diseño. Por eso tampoco hay bean `JwtDecoder` propio: basta el que autoconfigura Boot desde el `issuer-uri`. **Solo se aplica a las rutas M2M**: si el servicio expone además endpoints de usuario, build emite **dos** `SecurityFilterChain` — `@Order(1)` con `securityMatcher` sobre las rutas `audience: services` y el filtro de audiencia, `@Order(2)` para el resto sin él. Un token de usuario lleva la audiencia que emite el IdP (`aud: "account"` en Keycloak), nunca la del servicio. Las rutas `audience: both` van a la cadena 2, sin comprobación de audiencia. Los 401/403 de la cadena salen con el `ErrorResponse` del contrato vía `SecurityErrorHandlers` (`AuthenticationEntryPoint` + `AccessDeniedHandler`) |
+| `authentication.serviceAuth.validateAudience: true` | `AudienceAuthorizationFilter` (comprueba el claim `aud` del `JwtAuthenticationToken` ya autenticado y lanza `AccessDeniedException`), registrado antes del `AuthorizationFilter`; audiencia en `security.audience` (default: nombre del servicio). Es una regla de **autorización**, no de autenticación: validarla en el `JwtDecoder` convertiría un token legítimo de otro público en `401` (token inválido) cuando lo correcto es `403` (autenticado, sin permiso) — la distinción que exige el diseño. Por eso tampoco hay bean `JwtDecoder` propio: basta el que autoconfigura Boot desde el `issuer-uri`. **Solo se aplica a las rutas M2M**: si el servicio expone además endpoints de usuario, build emite **dos** `SecurityFilterChain` — `@Order(1)` con `securityMatcher` sobre las rutas `audience: services` y el filtro de audiencia, `@Order(2)` para el resto sin él. Un token de usuario lleva la audiencia que emite el IdP (`aud: "account"` en Keycloak), nunca la del servicio. Las rutas `audience: both` van a la cadena 2, sin comprobación de audiencia. Los 401/403 de la cadena salen con el `ErrorResponse` del contrato vía `SecurityErrorHandlers` (`AuthenticationEntryPoint` + `AccessDeniedHandler`).<br><br>**Dos límites declarados de este generador** (build los avisa al generar; si un escenario espera otra cosa, es un hueco del **diseño**, no algo que se parchee aquí): (1) el fallo de audiencia es **403**, nunca 401; (2) no hay distinción entre credencial humana y credencial de máquina más allá de las authorities de scope — un token de usuario que llevase el scope requerido pasaría el filtro de una operación `level: service`. Si hace falta cerrar el segundo, se hace con una regla explícita sobre un claim **verificado contra un token real** (ver `flow-fidelity.md § Claims y credenciales externas`), no de memoria |
 | `cors` | `CorsConfig` (bean `CorsConfigurationSource` sobre `/**`) + `.cors(Customizer.withDefaults())` en **todas** las cadenas. Métodos derivados de los endpoints declarados más `OPTIONS`; `allowedHeaders`/`exposedHeaders`/`maxAgeSeconds`/`allowCredentials` del diseño como constantes. Los **orígenes no salen del diseño** (son dato de despliegue): `security.cors.allowed-origins` en `parameters/<perfil>/security.yaml`, literal en local y `${SECURITY_CORS_ALLOWED_ORIGINS}` obligatoria fuera. Se usa `setAllowedOriginPatterns` (admite comodines y es lo único válido con credenciales). Sin bloque `cors`, no se genera nada: el servicio rechaza toda petición cross-origin |
 | `serviceClients` | Catálogo de clientes máquina: provisión en el proveedor de auth como clientes `client_credentials` con sus scopes (skill del proveedor), o fuente de las claves `security.api-keys.*` si `serviceAuth` es `api-key` |
 
@@ -279,7 +332,7 @@ Sin esta capa (servicio sin estado propio), no se incluye JPA ni base de datos.
 | `consistency.transactionalBoundary: per-aggregate` | El command debe tocar una sola raíz de agregado dentro de la transacción del mediator; nunca dos agregados en la misma transacción (si necesitas semántica especial, anota el handler con `@Transactional` y documenta la excepción) |
 | auditoría `createdAt`/`updatedAt` | Automática: `AuditableEntity` (`@MappedSuperclass` + JPA auditing). Si la entidad declara sus propios timestamps, build no hereda pero anota esos campos con `@CreatedDate`/`@LastModifiedDate` + `@EntityListeners` (se auto-pueblan igual) |
 | autoría `createdBy`/`updatedBy` declarada en la entidad | Build anota los campos con `@CreatedBy`/`@LastModifiedBy` y deja un `// TODO (agente)`: falta el `AuditorAware<String>` (actor del `SecurityContext`, o el correlation id si no hay usuario) y su `@EnableJpaAuditing(auditorAwareRef = "...")`. Sin él las columnas quedan a `null` — resolverlo es obligatorio |
-| bloqueo optimista en la raíz de agregado | **Ya lo genera build** (`isAggregateRoot`): campo `@Version @Column(name = "lock_version") private Long lockVersion` en la `XxxJpa`, `lockVersion` en el constructor de rehidratación del dominio (último parámetro) + `getLockVersion()`, propagación en `toDomain`/`toJpa`, y el handler que traduce `ObjectOptimisticLockingFailureException` a **409 `OPTIMISTIC_LOCK_CONFLICT`**. No lo reañadas ni dupliques el handler. Solo si el diseño exige detectar updates concurrentes que tocan **solo entidades hijas** distintas sin modificar la raíz, refuérzalo con `LockModeType.OPTIMISTIC_FORCE_INCREMENT` (`references/configuration.md`) |
+| bloqueo optimista en la raíz de agregado | **Lo gobierna el diseño**, en `persistence.consistency.optimisticLocking` (`all` por defecto \| `declared` \| `none`), y build lo aplica: con `all`/`declared` genera el campo `@Version @Column(name = "lock_version") private Long lockVersion` en la `XxxJpa`, `lockVersion` en el constructor de rehidratación del dominio (último parámetro) + `getLockVersion()`, propagación en `toDomain`/`toJpa`, y el handler que traduce `ObjectOptimisticLockingFailureException` a **409 `OPTIMISTIC_LOCK_CONFLICT`**. No lo reañadas ni dupliques el handler. Con `none` **no se genera nada de esto**: el diseño ha declarado "último escritor gana" y una escritura concurrente no debe fallar — no lo reintroduzcas por criterio propio, ni siquiera "por seguridad": convertiría en `409` un escenario que espera dos `200`. Solo si el diseño exige detectar updates concurrentes que tocan **solo entidades hijas** distintas sin modificar la raíz, refuérzalo con `LockModeType.OPTIMISTIC_FORCE_INCREMENT` (`references/configuration.md`) |
 | campo `version` declarado en una entidad del DSL | Campo escalar corriente, **no** el `@Version` de JPA (que es `lockVersion`, aparte): es un contador de **dominio** que viaja en la API y en los payloads de eventos. Lo incrementa el agregado en cada método mutador que el diseño describe como cambio observable, y es el contador contra el que se compara un `expectedVersion` de la entrada — ver `conventions/flow-fidelity.md` |
 | soft-delete, `json`→jsonb, converters, ids numéricos generados | No los genera build (dependen del diseño avanzado): los añade el agente siguiendo `keel-spring-database`/`references/jpa-mapping.md`, cubiertos por escenarios `FL-*` |
 | operación de escritura cuya **respuesta** expone un campo de auditoría del ORM (`updatedAt`) | El adaptador guarda con **`saveAndFlush(...)`**, no `save(...)` — ver el aviso de abajo |

@@ -425,7 +425,13 @@ function renderExceptionHandler(model) {
   const dataIntegrity = model.layersPresent.persistence
     ? renderDataIntegrityHandler(model, imports, constants)
     : '';
-  const optimisticLock = model.layersPresent.persistence ? renderOptimisticLockHandler(imports) : '';
+  // Solo si alguna raíz porta control de versión. Con
+  // consistency.optimisticLocking: none no hay de dónde salga la excepción, y
+  // generar el handler documentaría un 409 que el contrato niega.
+  const optimisticLock =
+    model.layersPresent.persistence && model.entities.some((entity) => entity.usesOptimisticLocking)
+      ? renderOptimisticLockHandler(imports)
+      : '';
   const multipart = model.layersPresent.storage ? renderMultipartHandlers(imports) : '';
 
   const body = `@RestControllerAdvice

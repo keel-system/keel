@@ -835,6 +835,22 @@ export function checkCrossRefs({ layers, wip = false }) {
       `persistence: consistency.transactionalBoundary: 'per-aggregate' exige que domain declare aggregates`
     );
   }
+  // 'declared' delega el bloqueo optimista a las raíces que declaran el campo
+  // reservado `lockVersion`. Si ninguna lo hace, la política es indistinguible de
+  // 'none' y lo más probable es que el diseñador esperase lo contrario.
+  if (persistence?.consistency?.optimisticLocking === 'declared') {
+    const roots = Object.values(aggregates)
+      .map((aggregate) => aggregate?.root)
+      .filter(Boolean);
+    const withVersion = roots.filter((root) =>
+      Object.hasOwn(domain.entities?.[root]?.fields ?? {}, 'lockVersion')
+    );
+    if (withVersion.length === 0) {
+      warnings.push(
+        `persistence: consistency.optimisticLocking: 'declared' pero ninguna raíz de agregado declara el campo 'lockVersion' en domain — equivale a 'none' (último escritor gana). Declara el campo donde el conflicto deba observarse, o usa 'all'/'none' explícitamente`
+      );
+    }
+  }
 
   // storage: buckets declarados pero sin ningún campo file que los referencie
   for (const bucketName of buckets) {

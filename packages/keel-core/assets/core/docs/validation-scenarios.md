@@ -69,6 +69,8 @@ Escribir los escenarios asumiendo aislamiento por escenario los vuelve repetitiv
 
 Lo que cada escenario debe fijar porque dos stacks lo resolverían distinto. Las convenciones que valen para **todo el servicio** se declaran una vez en `## Convenciones de determinación` y no se repiten; las que son propias de un escenario van en su campo **Notas de determinación**.
 
+> Estas convenciones son **vinculantes para el generador**: no son preferencias de estilo que el código pueda resolver de otro modo. Un generador que no sepa honrar alguna tiene una sola salida legítima —declararlo (rechazar el diseño o avisar en el build de qué produce en su lugar, como hace `supported-features.js` en keel-spring)— y nunca ignorarla en silencio. Al revés también vale: hay decisiones que un generador concreto fija y el diseño no puede cambiar (en keel-spring, la **forma** del sobre de error). Antes de escribir las convenciones, comprobar contra la documentación del generador elegido cuáles son suyas, y escribirlas acordes; una convención que contradice al generador es un ciclo de corrección garantizado.
+
 - **Respuesta completa, siempre.** El `Then` verifica el **cuerpo completo** de la respuesta —qué campos vienen, qué campos no vienen, de qué tipo—, no solo el status. Vale para toda superficie, no solo la M2M.
 - **Ausencia vs nulo.** Un campo sin valor, ¿no aparece en la respuesta o aparece como nulo? Convención única de servicio; el `Then` dice cuál de las dos y la respeta.
 - **Orden de las colecciones.** Toda respuesta con lista declara el orden esperado, o dice explícitamente que el orden es indiferente. Sin esto, dos motores devuelven órdenes distintos y ambos "pasan". Si el campo de orden puede empatar, el orden se declara **total** (criterio de desempate).
@@ -76,7 +78,7 @@ Lo que cada escenario debe fijar porque dos stacks lo resolverían distinto. Las
 - **Identificadores generados.** Se verifican por su forma y por reutilización simbólica —el id devuelto en un escenario es el que usa el siguiente del flujo—, jamás por valor literal.
 - **Números y dinero.** Escala decimal y regla de redondeo del resultado esperado. `10 / 3` no da lo mismo en todos los motores.
 - **Mayúsculas y acentos.** El escenario que prueba una colisión de unicidad o una búsqueda dice si `ACME` colisiona con `acme`.
-- **Forma del cuerpo de error.** El servicio tiene **una** forma de error: se fija una vez en las convenciones (qué campos lleva) y los escenarios solo especifican el `code` y el status.
+- **Forma del cuerpo de error.** El servicio tiene **una** forma de error: se fija una vez en las convenciones (qué campos lleva) y los escenarios solo especifican el `code` y el status. Suele venir impuesta por el generador —keel-spring emite siempre `{timestamp, status, error, code, message, details}` más `correlationId`—, así que se **describe** la del generador elegido en vez de inventar otra.
 - **Status HTTP de todo error.** Todo error del escenario lleva su status. Si `errors[].http` no está en el diseño, es un **hueco: se cierra en el YAML antes de escribir el escenario**, no se decide aquí. Un mismo `code` con status distinto según la operación debe estar declarado en ambas.
 - **Cabeceras del contrato.** `Location` en las creaciones, cabeceras de paginación, y las de concurrencia si el diseño las contempla.
 - **Idempotencia.** Qué clave se envía, qué devuelve el reintento con la **misma** clave (mismo status y mismo cuerpo, sin segundo efecto) y qué ocurre con clave distinta y mismo contenido.

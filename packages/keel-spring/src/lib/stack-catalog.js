@@ -13,6 +13,12 @@
 //                    ejecuta dentro del propio contenedor) o null (sin sondeo).
 //   cliValidateCmd   comando de sondeo con placeholders {user} {pass} {db}
 //                    {service}; los hostnames apuntan al serviceKey (red interna).
+//
+// composeServices(model) recibe el modelo para las opciones cuyo contenedor
+// depende del diseño y no solo del stack (hoy, el sidecar de buckets de MinIO);
+// el resto lo ignora.
+
+import { declaredBuckets } from './buckets.js';
 //   cliResetCmd      (solo BD) comando que VACÍA LOS DATOS preservando el esquema
 //                    (los Given de los flujos FL-* asumen BD limpia); mismos
 //                    placeholders y mismo cliVia que cliValidateCmd. Ausente ⇒
@@ -366,6 +372,45 @@ export const CACHES = {
   }
 };
 
+// Sidecar que deja el MinIO de prueba con los buckets del diseño ya creados y
+// con su policy aplicada, antes de que arranque el servicio.
+//
+// Por qué aquí y no en un @PostConstruct del adaptador: crear el bucket del
+// ENTORNO DE PRUEBA es infraestructura, y la infraestructura la genera build.
+// Dejarlo en el código de aplicación lo convertía en algo que el agente tenía
+// que acordarse de escribir, y su ausencia solo se descubría en la validación
+// funcional —bloqueando en cascada toda la superficie que sube o lee ficheros—
+// después de haber gastado un ciclo entero. El adaptador sigue necesitando su
+// propio ensureBucket/ensurePublicRead idempotente para los entornos reales,
+// donde no hay compose que valga (ver la skill keel-spring-s3).
+//
+// Todo el script es idempotente: `mb --ignore-existing` no falla si el bucket
+// ya está, y `anonymous set download` reescribe la policy completa.
+function minioInitService(buckets) {
+  const steps = buckets.flatMap((bucket) => {
+    const lines = [`mc mb --ignore-existing local/${bucket.physicalName};`];
+    if (bucket.visibility === 'public') {
+      // Crear el bucket no lo hace público: MinIO y S3 los crean privados, y sin
+      // esto la subida responde 201 y la lectura directa de la URL, 403.
+      lines.push(`mc anonymous set download local/${bucket.physicalName};`);
+    }
+    return lines;
+  });
+  const script = [
+    'until mc alias set local http://minio:9000 minioadmin minioadmin >/dev/null 2>&1; do sleep 1; done;',
+    ...steps,
+    'mc ls local;'
+  ].join('\n');
+
+  return {
+    image: 'minio/mc:RELEASE.2024-10-08T09-37-26Z',
+    depends_on: ['minio'],
+    entrypoint: ['sh', '-c', script + '\n'],
+    // Corre una vez y termina: no es un servicio de larga vida.
+    restart: 'no'
+  };
+}
+
 export const STORAGE = {
   minio: {
     id: 'minio',
@@ -380,15 +425,20 @@ export const STORAGE = {
     cliVia: 'devtools',
     cliValidateCmd: 'mc alias set local http://minio:9000 minioadmin minioadmin >/dev/null && mc ready local',
     alpinePackages: [],
-    composeServices: () => ({
-      minio: {
-        image: 'minio/minio:RELEASE.2024-10-13T13-34-11Z',
-        command: 'server /data --console-address ":9001"',
-        environment: { MINIO_ROOT_USER: 'minioadmin', MINIO_ROOT_PASSWORD: 'minioadmin' },
-        ports: ['9000:9000', '9001:9001'],
-        volumes: ['minio-data:/data']
-      }
-    })
+    composeServices: (model) => {
+      const services = {
+        minio: {
+          image: 'minio/minio:RELEASE.2024-10-13T13-34-11Z',
+          command: 'server /data --console-address ":9001"',
+          environment: { MINIO_ROOT_USER: 'minioadmin', MINIO_ROOT_PASSWORD: 'minioadmin' },
+          ports: ['9000:9000', '9001:9001'],
+          volumes: ['minio-data:/data']
+        }
+      };
+      const buckets = model ? declaredBuckets(model) : [];
+      if (buckets.length > 0) services['minio-init'] = minioInitService(buckets);
+      return services;
+    }
   },
   s3: {
     id: 's3',

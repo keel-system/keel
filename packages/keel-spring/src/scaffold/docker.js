@@ -33,7 +33,7 @@ export function generate(model) {
     Object.assign(services, CACHES[stack.cache].composeServices());
   }
   if (layersPresent.storage && stack.storage) {
-    const storageServices = STORAGE[stack.storage].composeServices();
+    const storageServices = STORAGE[stack.storage].composeServices(model);
     Object.assign(services, storageServices);
     if ('minio' in storageServices) volumes['minio-data'] = null;
   }
@@ -66,7 +66,7 @@ export function generate(model) {
   // El script de validación existe siempre que haya algo que sondear (incluye el
   // caso 'dbcontainer', p. ej. Oracle, que no necesita devtools).
   if (selected.some((s) => s.entry.cliValidateCmd)) {
-    files.push({ path: 'infra/validate-infra.sh', content: validateInfraScript(selected, service) });
+    files.push({ path: 'infra/validate-infra.sh', content: validateInfraScript(selected, service, model) });
   }
   // Reset de datos entre flujos: solo si la BD elegida declara cliResetCmd.
   const reset = resetDbScript(selected, service);

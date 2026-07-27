@@ -33,6 +33,7 @@ import * as messaging from './messaging.js';
 import * as outbox from './outbox.js';
 import * as idempotency from './idempotency.js';
 import * as cache from './cache.js';
+import * as jackson from './jackson.js';
 import * as controllers from './controllers.js';
 import * as web from './web.js';
 import * as security from './security.js';
@@ -69,6 +70,7 @@ const GENERATORS = [
   outbox,
   idempotency,
   cache,
+  jackson,
   controllers,
   web,
   security,

@@ -105,7 +105,7 @@ function renderEntity(model, entity) {
   // ida-y-vuelta domain↔JPA no la pierda. Es un valor opaco de infraestructura:
   // nadie la muta a mano y no sale al contrato. Un `version` declarado por el
   // diseño es otra cosa (contador de dominio) y ya está entre los members.
-  if (entity.isAggregateRoot && !entity.declaresLockVersion) {
+  if (entity.usesOptimisticLocking && !entity.declaresLockVersion) {
     declarations.push(
       '    // Versión de concurrencia optimista del agregado; la gestiona el @Version\n    // de la XxxJpa. Null hasta la primera persistencia.\n    private Long lockVersion;'
     );
@@ -145,7 +145,7 @@ function renderEntity(model, entity) {
       return `        this.${m.name} = ${isCollection ? `new ArrayList<>(${m.name})` : m.name};`;
     });
     // La versión de concurrencia entra como último parámetro (solo en raíces).
-    if (entity.isAggregateRoot && !entity.declaresLockVersion) {
+    if (entity.usesOptimisticLocking && !entity.declaresLockVersion) {
       paramParts.push('Long lockVersion');
       assignParts.push('        this.lockVersion = lockVersion;');
     }
@@ -164,7 +164,7 @@ ${assignParts.join('\n')}
   // Getter de la versión (solo raíz): lo usa el toJpa del adaptador para
   // devolver la versión a la XxxJpa antes de persistir.
   const versionAccessor =
-    entity.isAggregateRoot && !entity.declaresLockVersion
+    entity.usesOptimisticLocking && !entity.declaresLockVersion
       ? '    public Long getLockVersion() {\n        return lockVersion;\n    }'
       : '';
   bodyParts.push([accessors, versionAccessor].filter(Boolean).join('\n\n'));

@@ -197,7 +197,7 @@ function renderJpaEntity(model, entity) {
       // Caso borde: el diseño declara un campo llamado lockVersion, el nombre que
       // build reserva para el @Version. Se anota el declarado en vez de generar un
       // segundo campo (ver el aviso de model.js).
-      if (entity.declaresLockVersion && entity.isAggregateRoot && field.name === 'lockVersion') {
+      if (entity.declaresLockVersion && entity.usesOptimisticLocking && field.name === 'lockVersion') {
         imports.add('jakarta.persistence.Version');
         lines.push('    @Version');
       }
@@ -338,13 +338,17 @@ function renderJpaEntity(model, entity) {
   }
 
   // Concurrencia optimista: solo la raíz de agregado porta lockVersion (es la
-  // frontera de consistencia). La gestiona Hibernate, que la comprueba e
-  // incrementa en cada flush; una escritura sobre una versión obsoleta lanza
-  // OptimisticLockException (la traduce el ApiExceptionHandler).
+  // frontera de consistencia), y solo si la política del diseño lo pide
+  // (persistence.consistency.optimisticLocking; ver locksEntity en model.js).
+  // Con 'none' no se genera: el diseño ha declarado "último escritor gana" y una
+  // escritura concurrente no debe producir conflicto.
+  // La gestiona Hibernate, que la comprueba e incrementa en cada flush; una
+  // escritura sobre una versión obsoleta lanza OptimisticLockException (la
+  // traduce el ApiExceptionHandler).
   // Es infraestructura pura y nunca sale al contrato: un `version` que el diseño
   // declare es otra cosa (contador de dominio, campo escalar corriente) y convive
   // con este en la misma tabla.
-  if (entity.isAggregateRoot && !entity.declaresLockVersion) {
+  if (entity.usesOptimisticLocking && !entity.declaresLockVersion) {
     imports.add('jakarta.persistence.Column');
     imports.add('jakarta.persistence.Version');
     declarations.push('    @Version\n    @Column(name = "lock_version")\n    private Long lockVersion;');

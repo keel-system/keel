@@ -95,13 +95,20 @@ lectura anónima**; sin ella el síntoma es engañoso: la subida responde `201`,
 evento se publica y todo parece bien, pero el `GET` directo a la URL devuelve
 `403` y el Then del escenario falla.
 
-En local, junto a la creación del bucket:
+En el entorno de prueba **ya está hecho**: `keel-spring build` genera el sidecar
+`minio-init` en `infra/docker-compose.yaml`, que al levantar la infraestructura
+ejecuta, por cada bucket declarado,
 
 ```bash
-mc anonymous set download local/<bucket>
+mc mb --ignore-existing local/<bucket>
+mc anonymous set download local/<bucket>   # solo los visibility: public
 ```
 
-Y en el adaptador, de forma **idempotente y en cada arranque** (no solo cuando
+y `infra/validate-infra.sh` comprueba que quedaron así. No lo repliques a mano
+ni edites el compose para ello.
+
+Lo que sigue siendo tuyo es el adaptador, de forma **idempotente y en cada
+arranque** — en un entorno real no hay compose que prepare nada (no solo cuando
 el bucket se acaba de crear: los buckets preexistentes también deben quedar
 bien), para cada bucket con `visibility: public`:
 
@@ -128,5 +135,6 @@ por el servicio.
 - [ ] Claves con UUID, sin nombre del cliente ni PII.
 - [ ] `NoSuchKeyException` → error de dominio; ninguna clase del SDK fuera de infrastructure.
 - [ ] Presigned con expiración del diseño y host alcanzable por el consumidor.
-- [ ] Bucket creado por script de infra en local; nunca por la app en production.
+- [ ] Nombre de bucket leído de `storage.buckets.<nombre>.bucket`, nunca literal en el código.
+- [ ] En local, el bucket lo prepara `minio-init` (compose); la app lo asegura igualmente para entornos reales.
 - [ ] Cada bucket `visibility: public` con su bucket policy de lectura anónima aplicada (idempotente, también sobre buckets ya existentes).

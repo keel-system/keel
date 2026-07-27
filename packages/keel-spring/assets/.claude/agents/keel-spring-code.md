@@ -49,7 +49,8 @@ misma raíz. Todo lo que hagas ocurre dentro de ella.
    agentes de la orquestación.
 5. Con la compilación en verde, haz la **revisión mecánica final** de
    `.claude/conventions/flow-fidelity.md` (binding contra la ruta declarada, ciclos
-   en los mappers, un solo `ObjectMapper` por comportamiento). Son defectos que
+   en los mappers, un solo `ObjectMapper` por comportamiento, claims y credenciales
+   externas verificados contra un token real). Son defectos que
    `./gradlew build -x test` no ve y que, sin esta pasada, cuestan un ciclo entero de
    validación funcional. Recórrela aunque el scaffolding no haya marcado ningún TODO
    en esos puntos.
@@ -81,6 +82,14 @@ misma raíz. Todo lo que hagas ocurre dentro de ella.
 - El diseño (`specs/`) es la única fuente de verdad funcional: nada de entidades,
   campos, endpoints o reglas que no estén en sus artefactos.
 - Los `code` de error y los nombres de evento se copian exactos: son contrato público.
+- **Nada sobre un claim externo se escribe de memoria.** Antes de dar por bueno
+  cualquier cambio que dependa del nombre o la forma de un claim de JWT, de una
+  cabecera o del payload de una credencial, decodifica un token real ya emitido en el
+  entorno de prueba (`echo "$TOKEN" | cut -d. -f2 | base64 -d`). Keycloak emite
+  `client_id`, no `clientId`; Cognito no emite `aud` en el access token. Una condición
+  sobre un claim inexistente compila, arranca y es siempre `false`: tumba entera la
+  superficie que protege y solo se ve en la validación funcional, un ciclo después.
+  Regla completa en `.claude/conventions/flow-fidelity.md`.
 - Los eventos los emite el **agregado** con `raise(...)` en su método de negocio (build dejó el
   buffer y un TODO por evento). Un handler no publica eventos ni inyecta publishers, y el bridge,
   el relay y el mapeo domain→integración ya vienen generados: de `messaging` solo escribes el

@@ -258,7 +258,7 @@ function renderToDomain(model, entity, imports) {
 
   // Versión de concurrencia optimista: último arg del constructor (solo raíz; si el
   // diseño declara el nombre lockVersion, ya viene entre los args).
-  if (entity.isAggregateRoot && !entity.declaresLockVersion) args.push('jpa.getLockVersion()');
+  if (entity.usesOptimisticLocking && !entity.declaresLockVersion) args.push('jpa.getLockVersion()');
 
   return `    private ${entity.name} toDomain(${entity.name}Jpa jpa) {
         return new ${entity.name}(
@@ -341,7 +341,7 @@ function renderToJpa(model, entity, imports) {
   // Devuelve la versión al espejo JPA para que Hibernate compruebe la concurrencia
   // optimista al persistir (solo raíz de agregado).
   // (si el diseño declara el nombre lockVersion, el bucle de members ya la copió).
-  if (entity.isAggregateRoot && !entity.declaresLockVersion) {
+  if (entity.usesOptimisticLocking && !entity.declaresLockVersion) {
     lines.push('        jpa.setLockVersion(domain.getLockVersion());');
   }
   lines.push('        return jpa;');

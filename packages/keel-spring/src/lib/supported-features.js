@@ -37,5 +37,18 @@ export function checkSupportedFeatures(manifest, layers) {
     );
   }
 
+  // Semántica del fallo de audiencia. keel-spring la resuelve como AUTORIZACIÓN
+  // (403: el token es legítimo, no está emitido para este servicio), y no genera
+  // ninguna distinción entre credencial humana y de máquina más allá de las
+  // authorities de scope. Ambas cosas son decisiones del generador que el diseño
+  // no puede cambiar hoy, y un escenario escrito esperando 401 falla contra un
+  // servidor correcto: se declara aquí para que el hueco se cierre en el diseño
+  // antes de generar, no a mitad de la validación funcional.
+  if (layers?.security?.authentication?.serviceAuth?.validateAudience) {
+    warnings.push(
+      'security.authentication.serviceAuth.validateAudience: keel-spring traduce el fallo de audiencia a 403 (autenticado, sin permiso), no a 401, y no distingue credencial humana de credencial de máquina más allá de los scopes: un token de usuario con el scope requerido pasa el filtro de una operación level: service. Revisa que los escenarios de la superficie M2M esperen esos status.'
+    );
+  }
+
   return { errors, warnings };
 }

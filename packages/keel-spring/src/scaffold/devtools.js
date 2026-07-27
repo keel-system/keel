@@ -5,6 +5,8 @@
 // verificación funcional. Se acompaña de `validate-infra.sh`, que ejecuta un
 // check por tecnología. Consume `selectedInfra(model)` de stack-catalog.js.
 
+import { declaredBuckets } from '../lib/buckets.js';
+
 // Paquetes base del toolbox: shell + utilidades de red/JSON comunes a todos los checks.
 const BASE_PACKAGES = ['bash', 'curl', 'jq', 'netcat-openbsd'];
 
@@ -67,7 +69,7 @@ export function devtoolsService(selected, service) {
 // credenciales del catálogo ya sustituidas) dentro del contenedor que corresponda
 // —devtools, o el propio contenedor de la BD para cliVia 'dbcontainer'— y sale
 // con código != 0 si alguno falla.
-export function validateInfraScript(selected, service) {
+export function validateInfraScript(selected, service, model = null) {
   const dbName = service.name.replace(/-/g, '_');
   const checks = selected
     .filter((s) => s.entry.cliValidateCmd)
@@ -76,6 +78,7 @@ export function validateInfraScript(selected, service) {
       const label = `${s.entry.label} (${s.serviceKey})`;
       return `check ${sq(label)} ${sq(container)} ${sq(concreteCmd(s.entry, dbName))}`;
     });
+  checks.push(...bucketChecks(selected, service, model));
 
   return `#!/usr/bin/env bash
 # validate-infra.sh — sondea la infraestructura de prueba de ${service.name}.
@@ -112,6 +115,32 @@ if [ "$fail" -ne 0 ]; then
 fi
 echo "Infraestructura OK."
 `;
+}
+
+// Comprobación de que el sidecar minio-init hizo su trabajo: cada bucket
+// declarado en storage.keel.yaml existe, y los `visibility: public` tienen la
+// policy de lectura anónima aplicada.
+//
+// Es lo que convierte un hueco de storage en un fallo de INFRAESTRUCTURA, visto
+// antes de arrancar el servidor, en vez de un bloqueo en cascada descubierto a
+// mitad de la validación funcional (toda la superficie que sube o lee ficheros
+// depende de esto).
+function bucketChecks(selected, service, model) {
+  if (!selected.some((s) => s.id === 'minio')) return [];
+  const buckets = declaredBuckets(model ?? {});
+  const container = `${service.name}-devtools`;
+  const alias = 'mc alias set local http://minio:9000 minioadmin minioadmin >/dev/null';
+  return buckets.map((bucket) => {
+    const probe =
+      bucket.visibility === 'public'
+        ? `${alias} && mc anonymous get local/${bucket.physicalName} | grep -q download`
+        : `${alias} && mc ls local/${bucket.physicalName}`;
+    const label =
+      bucket.visibility === 'public'
+        ? `bucket ${bucket.physicalName} (público: lectura anónima)`
+        : `bucket ${bucket.physicalName}`;
+    return `check ${sq(label)} ${sq(container)} ${sq(probe)}`;
+  });
 }
 
 // reset-db.sh: deja el estado de prueba como recién arrancado — vacía los DATOS

@@ -36,6 +36,13 @@ Antes de los flujos, fija las convenciones transversales del servicio en la secc
 
 Estas convenciones son la salida natural de la clase 12 del análisis de huecos (`gap-analysis.md`). Si llegaste aquí sin haberlas decidido, decídelas ahora con el usuario: son contrato, y sin ellas dos generadores divergen.
 
+**Lo que no decide el diseñador.** Algunas afirmaciones del `Then` no dependen del diseño sino del generador, y escribirlas "como deberían ser" produce un escenario que ningún servidor correcto pasa. Antes de fijarlas, contrástalas con la documentación del generador previsto; si el diseño necesita otra cosa, es un cambio en el generador, no una convención que se declara y ya. En keel-spring, hoy:
+
+- La **forma del cuerpo de error** es fija: `{timestamp, status, error, code, message, details}` (+ `correlationId`). La convención del servicio la **describe**, no la sustituye. Lo que sí decides es el `code` y el status de cada error, en el YAML.
+- El fallo de **audiencia** (`serviceAuth.validateAudience`) responde **403**, no 401.
+- Una operación `level: service` **no rechaza por sí sola un token de usuario**: la separación es por scopes, no por tipo de credencial.
+- Si un escenario ejercita **dos escrituras concurrentes**, el resultado lo fija `persistence.consistency.optimisticLocking` (`all`/`declared` → conflicto `409`; `none` → ambas con éxito, último escritor gana). Declararlo solo en prosa dentro de `rules` no vale: ningún generador lee prosa.
+
 ## 3. Agrupación en flujos
 
 Un **flujo** (`FL-*`) es una historia coherente de negocio sobre una agrupación (entidad o agregado), auto-contenida y reseteada antes de ejecutarse. Dentro de él, los escenarios van en orden y encadenan estado.

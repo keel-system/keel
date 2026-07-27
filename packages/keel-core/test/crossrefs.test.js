@@ -116,6 +116,36 @@ test('per-aggregate con aggregates declarados es válido', () => {
   assert.deepEqual(errors, []);
 });
 
+// --- persistence: consistency.optimisticLocking ---
+
+const withLocking = (policy, domain = baseDomain()) => ({
+  domain,
+  'use-cases': {},
+  persistence: { default: { model: 'relational' }, entities: { Order: {} }, consistency: { optimisticLocking: policy } },
+});
+
+test("optimisticLocking 'declared' sin ninguna raíz que declare lockVersion avisa: equivale a none", () => {
+  const { errors, warnings } = run(withLocking('declared'));
+  assert.deepEqual(errors, []);
+  assert.ok(warnings.some((w) => w.includes("optimisticLocking: 'declared'") && w.includes('lockVersion')));
+});
+
+test("optimisticLocking 'declared' con una raíz que declara lockVersion valida limpio", () => {
+  const domain = baseDomain();
+  domain.entities.Order.fields.lockVersion = { type: 'integer' };
+  const { errors, warnings } = run(withLocking('declared', domain));
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
+test("optimisticLocking 'all' y 'none' no exigen nada del dominio", () => {
+  for (const policy of ['all', 'none']) {
+    const { errors, warnings } = run(withLocking(policy));
+    assert.deepEqual(errors, [], policy);
+    assert.deepEqual(warnings, [], policy);
+  }
+});
+
 // --- persistence: miembros de naturalKey e indexes → domain ---
 
 // Order tiene un campo escalar, un value object compuesto (total → Money) y una hija;

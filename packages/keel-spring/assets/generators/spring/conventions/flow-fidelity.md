@@ -98,6 +98,22 @@ así que recórrelos antes de reportar `status`, aunque nada esté marcado con u
   aplicación o replica su configuración, `JavaTimeModule` incluido. Un componente
   serializador escrito «aislado» rompe en el primer campo `Instant`/`LocalDate`, en
   runtime.
+- **Claims y credenciales externas**: ningún cambio que dependa del **nombre o la
+  forma** de un claim de un JWT, de una cabecera o del payload de una credencial
+  externa se da por cerrado sin haberlo comprobado contra un token real ya emitido
+  en el entorno de prueba:
+
+  ```bash
+  echo "$TOKEN" | cut -d. -f2 | base64 -d 2>/dev/null | jq .
+  ```
+
+  El nombre de un claim no se deduce de la memoria ni de la spec OIDC: Keycloak
+  emite `client_id` (snake_case) donde la intuición dice `clientId`, Cognito no
+  emite `aud` en sus access tokens, y cada IdP anida los roles a su manera. Una
+  condición escrita sobre un claim que no existe es siempre `false` — compila,
+  arranca, y tumba en silencio toda la superficie que protege. Diez segundos de
+  `base64 -d` valen un ciclo entero de validación.
+
 - **Vocabulario del contrato**: cada nombre de campo que `validation-scenarios.md`
   menciona en una respuesta existe con ese nombre exacto en el DTO. Es la pasada que
   detecta que un agregado expone `category` y otro `categoryId` para la misma clase de

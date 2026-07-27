@@ -47,6 +47,20 @@ pierdes la validación de `iss`).
   sin temporal).
 - El cliente no tiene `directAccessGrantsEnabled=true` (password grant
   apagado).
+- **`"Account is not fully set up"` con un usuario recién creado por Admin REST**
+  (visto en Keycloak 26.3.1). Ocurre aunque `requiredActions` esté vacío, el
+  usuario esté `enabled` y la contraseña no sea temporal: al usuario le faltan
+  `email`, `firstName` o `lastName`, y el perfil de usuario del realm los exige.
+  El mensaje no lo dice, así que es fácil perder un rato culpando a la
+  contraseña o al `directAccessGrants`. Crea siempre los usuarios de prueba
+  completos:
+
+  ```bash
+  kcadm.sh create users -r <realm> \
+    -s username=tester -s enabled=true \
+    -s email=tester@example.test -s emailVerified=true \
+    -s firstName=Test -s lastName=User
+  ```
 
 ## Todo funciona a mano pero los escenarios fallan de forma intermitente
 

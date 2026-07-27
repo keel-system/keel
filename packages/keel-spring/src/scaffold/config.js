@@ -5,6 +5,8 @@
 // El perfil activo se elige con la variable de entorno PROFILE (default local).
 
 import { DATABASES } from '../lib/stack-catalog.js';
+import { physicalBucketName } from '../lib/buckets.js';
+import { screamingSnake } from '../lib/naming.js';
 import { usesOutbox } from './outbox.js';
 import { usesIdempotency } from './idempotency.js';
 import { usesCorrelation } from './correlation.js';
@@ -132,14 +134,17 @@ function baseYaml(model) {
     '    # Perfil activo por variable de entorno; local para desarrollo en la máquina.',
     '    active: ${PROFILE:local}'
   ];
-  // Serialización: un campo sin valor se omite del JSON, no viaja como null
-  // (convención "ausencia vs. nulo" del contrato), y las fechas salen en ISO-8601.
-  lines.push(
-    '  jackson:',
-    '    default-property-inclusion: non_null',
-    '    serialization:',
-    '      write-dates-as-timestamps: false'
-  );
+  // Serialización de fechas: ISO-8601, nunca epoch numérico.
+  //
+  // Deliberadamente NO se fija default-property-inclusion. "Ausencia vs. nulo"
+  // es una convención de determinación del DISEÑO (la declara
+  // specs/validation-scenarios.md, distinta en cada servicio), no un default de
+  // plantilla: fijarla aquí decide el contrato observable —respuestas REST y
+  // payloads de evento, que comparten este ObjectMapper— por el diseñador, y en
+  // sentido único. El default de Jackson (los nulos viajan) es el que no
+  // prejuzga; el servicio que deba omitirlos lo hace con @JsonInclude por clase,
+  // que es la regla de conventions/mapping.md.
+  lines.push('  jackson:', '    serialization:', '      write-dates-as-timestamps: false');
   if (layersPresent.persistence) {
     lines.push('  jpa:', '    open-in-view: false');
   }
@@ -505,14 +510,24 @@ function storageYaml(model, profile) {
     isMinio ? '  path-style-access: true' : '  path-style-access: false'
   );
 
-  // Política declarada por bucket en el diseño: la aplica el adaptador (crear el
-  // bucket, política de lectura pública, validación de tipo y tamaño). Va en la
-  // config y no hardcodeada para que el adaptador no la reinvente.
+  // Política declarada por bucket en el diseño: la aplica el adaptador
+  // (validación de tipo y tamaño, política de lectura pública). Va en la config
+  // y no hardcodeada para que el adaptador no la reinvente.
+  //
+  // `bucket` es el nombre FÍSICO del bucket declarado, derivado del nombre del
+  // diseño. No es cosmético: es el contrato entre el adaptador y el sidecar
+  // minio-init de infra/docker-compose.yaml, que crea exactamente estos buckets
+  // y les aplica la policy. Si el adaptador inventa otro nombre, sube a un
+  // bucket que nadie ha hecho público.
   const buckets = model.storage?.buckets ?? [];
   if (buckets.length > 0) {
     lines.push('  buckets:');
     for (const bucket of buckets) {
-      lines.push(`    ${bucket.name}:`, `      visibility: ${bucket.visibility}`);
+      lines.push(
+        `    ${bucket.name}:`,
+        `      bucket: ${envValue(profile, `STORAGE_BUCKET_${screamingSnake(bucket.name)}`, physicalBucketName(model, bucket))}`,
+        `      visibility: ${bucket.visibility}`
+      );
       if (bucket.maxSizeMb != null) lines.push(`      max-size-mb: ${bucket.maxSizeMb}`);
       if (bucket.allowedContentTypes.length > 0) {
         lines.push(`      allowed-content-types: ${bucket.allowedContentTypes.join(',')}`);

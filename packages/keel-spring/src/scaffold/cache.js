@@ -8,6 +8,7 @@
 
 import { kebabCase, screamingSnake } from '../lib/naming.js';
 import { javaFile, javaPath, subPackage } from './render.js';
+import { timestampModuleImport } from './jackson.js';
 
 const CACHE_PKG = 'infrastructure.configurations.cache';
 
@@ -39,13 +40,14 @@ export function generate(model) {
   return [
     {
       path: javaPath(model, CACHE_PKG, 'CacheConfig'),
-      content: javaFile(subPackage(model, CACHE_PKG), imports(), body(model, caches))
+      content: javaFile(subPackage(model, CACHE_PKG), imports(model), body(model, caches))
     }
   ];
 }
 
-function imports() {
+function imports(model) {
   return [
+    timestampModuleImport(model),
     'com.fasterxml.jackson.databind.ObjectMapper',
     'com.fasterxml.jackson.databind.SerializationFeature',
     'com.fasterxml.jackson.datatype.jsr310.JavaTimeModule',
@@ -135,10 +137,16 @@ ${constants}
      * ObjectMapper propio de la caché: JSR-310 registrado (Instant, LocalDate…)
      * y fechas en ISO-8601. Sin este módulo, cachear cualquier respuesta con un
      * timestamp de auditoría falla al serializar.
+     *
+     * TimestampModule es el mismo que instala JacksonConfig en el mapper de la
+     * aplicación: un valor servido desde la caché tiene que ser byte a byte el
+     * que habría servido la base de datos, y eso incluye la precisión de los
+     * instantes.
      */
     private static ObjectMapper cacheObjectMapper() {
         ObjectMapper mapper = new ObjectMapper();
         mapper.registerModule(new JavaTimeModule());
+        mapper.registerModule(new TimestampModule());
         mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
         return mapper;
     }

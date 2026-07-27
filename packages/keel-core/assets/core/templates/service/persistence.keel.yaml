@@ -14,3 +14,4 @@ entities:
 
 # consistency:
 #   transactionalBoundary: per-operation   # per-operation | per-aggregate
+#   optimisticLocking: all                 # all | declared | none

@@ -242,6 +242,55 @@ test('version: el contador declarado por el diseño es de dominio y no es el @Ve
   assert.ok(!result.warnings.some((w) => w.includes('lockVersion')));
 });
 
+// La política de concurrencia es del diseño, no del generador: un servicio que
+// declara "último escritor gana" y un escenario que espera dos 200 no puede
+// recibir un 409 de Hibernate por un @Version que nadie pidió.
+function scaffoldWithLocking(policy) {
+  const { manifest, layers, errors } = loadService(fixtureDir);
+  assert.deepEqual(errors, []);
+  const patched = structuredClone(layers);
+  patched.persistence.consistency = { ...(patched.persistence.consistency ?? {}), optimisticLocking: policy };
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-locking-'));
+  const result = scaffoldService({ manifest, layers: patched, workspace, force: true });
+  const read = (relative) =>
+    fs.readFileSync(path.join(workspace, 'services', 'catalog-spring', relative), 'utf8');
+  return { result, read };
+}
+
+test('concurrencia: optimisticLocking none no genera @Version ni el 409 de conflicto', () => {
+  const { read } = scaffoldWithLocking('none');
+  const jpa = read(`${JAVA}/infrastructure/persistence/entities/ProductJpa.java`);
+  const domain = read(`${JAVA}/domain/aggregate/Product.java`);
+  const advice = read(`${JAVA}/infrastructure/rest/ApiExceptionHandler.java`);
+
+  assert.ok(!jpa.includes('@Version'));
+  assert.ok(!jpa.includes('lock_version'));
+  assert.ok(!domain.includes('getLockVersion()'));
+  // El contador de dominio que sí declara el diseño no se ve afectado.
+  assert.ok(jpa.includes('private Long version;'));
+  // Sin @Version no hay ObjectOptimisticLockingFailureException que traducir.
+  assert.ok(!advice.includes('OPTIMISTIC_LOCK_CONFLICT'));
+  assert.ok(!advice.includes('ObjectOptimisticLockingFailureException'));
+});
+
+test('concurrencia: optimisticLocking all (default) sigue protegiendo toda raíz', () => {
+  const { read } = scaffoldWithLocking('all');
+  const jpa = read(`${JAVA}/infrastructure/persistence/entities/ProductJpa.java`);
+
+  assert.ok(jpa.includes('@Version\n    @Column(name = "lock_version")'));
+  assert.ok(read(`${JAVA}/infrastructure/rest/ApiExceptionHandler.java`).includes('OPTIMISTIC_LOCK_CONFLICT'));
+});
+
+test('concurrencia: optimisticLocking declared solo protege las raíces con lockVersion', () => {
+  // El fixture no declara el campo reservado en ninguna raíz: la política es
+  // entonces indistinguible de none, y así debe generarse.
+  const { read } = scaffoldWithLocking('declared');
+  const jpa = read(`${JAVA}/infrastructure/persistence/entities/ProductJpa.java`);
+
+  assert.ok(!jpa.includes('@Version'));
+  assert.ok(!read(`${JAVA}/infrastructure/rest/ApiExceptionHandler.java`).includes('OPTIMISTIC_LOCK_CONFLICT'));
+});
+
 test('R3: los enums del contrato se bindean también como query param', () => {
   const { read } = scaffoldExtended();
   const factory = read(`${JAVA}/infrastructure/web/JsonValueEnumConverterFactory.java`);
@@ -263,9 +312,56 @@ test('R4: el sobre de paginación es el canónico y el maxSize del diseño se ap
   assert.ok(appYaml.includes('default-page-size: 20'));
 });
 
-test('R5: los campos sin valor se omiten del JSON, no viajan como null', () => {
+test('R5: build no prejuzga "ausencia vs. nulo": es convención del diseño', () => {
   const { read } = scaffoldExtended();
-  assert.ok(read('src/main/resources/application.yaml').includes('default-property-inclusion: non_null'));
+  const appYaml = read('src/main/resources/application.yaml');
+
+  // Un default global arrastra al MessageConverter del broker (comparte el
+  // ObjectMapper autoconfigurado) y decide el contrato observable de todo
+  // servicio generado. La convención la implementa el agente con @JsonInclude
+  // por clase, según lo que declare specs/validation-scenarios.md.
+  assert.ok(!appYaml.includes('default-property-inclusion'));
+  assert.ok(appYaml.includes('write-dates-as-timestamps: false'));
+  assert.ok(!read(`${JAVA}/infrastructure/rest/ErrorResponse.java`).includes('@JsonInclude'));
+});
+
+test('R5b: los instantes salen con precisión de milisegundos, no de plataforma', () => {
+  const { read } = scaffoldExtended();
+  const module = read(`${JAVA}/infrastructure/serialization/TimestampModule.java`);
+
+  assert.ok(module.includes('appendInstant(3)'));
+  assert.ok(module.includes('addSerializer(Instant.class'));
+  assert.ok(
+    read(`${JAVA}/infrastructure/serialization/JacksonConfig.java`).includes(
+      'modulesToInstall(TimestampModule.class)'
+    )
+  );
+  // La caché sirve el mismo byte que serviría la base de datos.
+  assert.ok(
+    read(`${JAVA}/infrastructure/configurations/cache/CacheConfig.java`).includes(
+      'registerModule(new TimestampModule())'
+    )
+  );
+});
+
+test('storage: los buckets del diseño los prepara infra/, no el arranque de la app', () => {
+  const { read } = scaffoldExtended();
+  const compose = read('infra/docker-compose.yaml');
+  const script = read('infra/validate-infra.sh');
+  const storageYaml = read('src/main/resources/parameters/local/storage.yaml');
+
+  // El sidecar crea el bucket y le aplica la policy: sin esto el hueco solo
+  // aparecía como blocker a mitad de la validación funcional.
+  assert.ok(compose.includes('minio-init'));
+  assert.ok(compose.includes('mc mb --ignore-existing local/catalog-product-images'));
+  assert.ok(compose.includes('mc anonymous set download local/catalog-product-images'));
+
+  // Y la infraestructura se declara mal desde el sondeo, antes de arrancar nada.
+  assert.ok(script.includes('mc anonymous get local/catalog-product-images'));
+
+  // Nombre físico en la config: el adaptador lo lee, no lo inventa.
+  assert.ok(storageYaml.includes('bucket: catalog-product-images'));
+  assert.ok(storageYaml.includes('visibility: public'));
 });
 
 test('R6: los errores de forma son 400; el 422 queda para las reglas de negocio', () => {

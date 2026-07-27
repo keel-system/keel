@@ -55,6 +55,12 @@
           "type": "string",
           "enum": ["per-operation", "per-aggregate"],
           "description": "Frontera transaccional que el generador debe respetar."
+        },
+        "optimisticLocking": {
+          "type": "string",
+          "enum": ["all", "declared", "none"],
+          "default": "all",
+          "description": "Control de concurrencia en las raíces de agregado. 'all': todas lo llevan y una escritura sobre una versión obsoleta es un conflicto observable. 'declared': solo las raíces con un campo de versión en domain. 'none': última escritura gana, sin conflicto."
         }
       }
     }

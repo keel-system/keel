@@ -197,11 +197,12 @@ solo un detalle del dominio: su forma serializada **es** el contrato. Dos fugas 
   no sea de accesor (`hasNoValue()`). Vale para cualquier `isXxx()`/`getXxx()` que no sea un
   componente del record.
 - **Value object vacío serializado como objeto.** Un `Dimensions` con todos sus campos a `null`
-  viaja como `"dimensions": {}` en vez de estar ausente. La configuración global
-  (`default-property-inclusion: non_null`, que ya escribe build) quita los campos nulos de dentro,
-  pero no el objeto: el que decide es el **mapeo**, devolviendo `null` cuando el VO no tiene ningún
-  valor. La convención "ausencia vs. nulo" aplica igual a los value objects compuestos que a los
-  campos simples.
+  viaja como `"dimensions": {}` en vez de estar ausente. Ninguna configuración de Jackson arregla
+  esto: `@JsonInclude(NON_NULL)` quita los campos nulos de dentro, pero no el objeto. El que decide
+  es el **mapeo**, devolviendo `null` cuando el VO no tiene ningún valor. La convención "ausencia
+  vs. nulo" aplica igual a los value objects compuestos que a los campos simples, y —como toda
+  convención de determinación— la fija el diseño, no una plantilla: ver `mapping.md § Ausencia vs.
+  nulo`.
 
 ## Aritmética con BigDecimal
 

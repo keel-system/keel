@@ -72,10 +72,20 @@ se pide al leer con `signedUrl(storageKey)`.
 Valida content-type y tamaño según los `buckets` declarados en `storage.keel.yaml`
 antes de subir (error de negocio, no excepción genérica).
 
+**Nombre físico del bucket**: sale de la config, nunca lo inventes. Cada bucket
+declarado en `storage.keel.yaml` tiene su nombre real en
+`storage.buckets.<nombreDelDiseño>.bucket` del fragmento
+`parameters/<perfil>/storage.yaml`. Es el contrato con el sidecar `minio-init`
+de `infra/docker-compose.yaml`, que ya ha creado exactamente esos buckets: si el
+adaptador usa otro nombre, sube a un bucket que nadie preparó.
+
 **Bucket `visibility: public`**: crearlo no lo hace público — S3 y MinIO los
-crean privados. Aplica su bucket policy de lectura anónima de forma idempotente
-en cada arranque (receta en `references/implementation.md`), o la subida
-responderá `201` y la lectura directa `403`.
+crean privados. En el entorno de prueba la policy de lectura anónima ya la
+aplica `minio-init`, y `infra/validate-infra.sh` lo comprueba. Aun así el
+adaptador **mantiene** su `ensureBucket`/`ensurePublicRead` idempotente en el
+arranque (receta en `references/implementation.md`): en un entorno real no hay
+compose que lo haga, y sin ello la subida responde `201` y la lectura directa
+`403`.
 
 ## Referencias
 

@@ -297,9 +297,22 @@ function classifyRelation(entityName, rel, internalOf, hasPersistence) {
   return { kind: 'unsupported', backReference: false };
 }
 
+// Política de concurrencia optimista (persistence.consistency.optimisticLocking).
+// El default es 'all' — toda raíz de agregado protegida — porque perder una
+// escritura en silencio es el fallo caro; 'none' es una decisión explícita del
+// diseño ("último escritor gana") y 'declared' delega en el campo reservado
+// lockVersion, entidad a entidad.
+function locksEntity(policy, isAggregateRoot, declaresLockVersion) {
+  if (!isAggregateRoot) return false;
+  if (policy === 'none') return false;
+  if (policy === 'declared') return declaresLockVersion;
+  return true;
+}
+
 function collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPersistence, warnings) {
   const aggregates = domain.aggregates ?? {};
   const internalOf = aggregateIndex(domain);
+  const lockingPolicy = persistence?.consistency?.optimisticLocking ?? 'all';
 
   const entities = [];
   for (const [name, def] of Object.entries(domain.entities ?? {})) {
@@ -348,7 +361,9 @@ function collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPe
     // generar el propio duplicaría campo y accesores — no compila: se avisa y se
     // deja el declarado, que pasa a portar el bloqueo optimista.
     const declaresLockVersion = fields.some((f) => f.name === 'lockVersion');
-    if (declaresLockVersion && !internalOf.has(name)) {
+    // Con la política 'declared' el diseño usa ese campo a propósito: es la forma
+    // de decir "esta raíz sí protege la concurrencia", y avisar sobraría.
+    if (declaresLockVersion && !internalOf.has(name) && lockingPolicy !== 'declared') {
       warnings.push(
         `Entidad ${name}: el diseño declara el campo lockVersion, nombre que build reserva para el @Version de JPA (concurrencia optimista). Se anota el declarado en vez de generar uno propio; renombra el campo del diseño si su semántica es de negocio.`
       );
@@ -379,6 +394,10 @@ function collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPe
       internalOf: internalOf.get(name)?.aggregate ?? null,
       rootEntity: internalOf.get(name)?.root ?? name,
       declaresLockVersion,
+      // Política de concurrencia declarada en persistence.consistency: decide si
+      // esta raíz porta control de versión y, con ello, si dos escrituras
+      // concurrentes producen un conflicto observable o gana la última.
+      usesOptimisticLocking: locksEntity(lockingPolicy, !internalOf.has(name), declaresLockVersion),
       naturalKey: persistenceMeta.naturalKey ?? null,
       indexes: persistenceMeta.indexes ?? []
     });
