@@ -23,16 +23,18 @@ cd services/<servicio>-spring
 
 | Ruta | Qué es |
 |------|--------|
-| `.claude/agents/keel-spring-{code,infra,validate,quality}.md` (fuera de este directorio, en `assets/.claude/`) | Los subagentes de la orquestación — código, infraestructura, validación funcional y calidad no-conductual — copiados a `.claude/agents/` del proyecto generado |
+| `keel-spring-code.md`, `keel-spring-infra.md`, `keel-spring-tests.md`, `keel-spring-validate.md`, `keel-spring-quality.md` (fuera de este directorio, en `assets/.claude/agents/`) | Los cinco subagentes de la orquestación — código, infraestructura, pruebas de integración, validación funcional y calidad no-conductual — copiados a `.claude/agents/` del proyecto generado |
 | `orchestration.md` | Flujo de la orquestación: fases, gating, ciclos de reintento y handoffs (copiado a `.claude/orchestration.md`) |
 | `architecture.md` | Arquitectura hexagonal + CQRS y función de cada paquete (copiado a `.claude/architecture.md` del proyecto generado) |
 | `constitution.md` | Reglas inviolables: frontera hexagonal, transaccionalidad, contratos públicos, precisión numérica (copiado a `.claude/constitution.md`) |
 | `conventions/project-layout.md` | Stack por defecto y estructura del proyecto generado |
 | `conventions/mapping.md` | Tabla normativa de mapeo diseño → código Spring, por capa |
 | `conventions/infra-validation.md` | Sondeo de la infraestructura de prueba vía `devtools` + reset de datos entre flujos |
+| `conventions/integration-tests.md` | Traducción de los escenarios `FL-*` a pruebas de integración JUnit (`src/integrationTest/`): forma de las clases, § Del DSL al cable y tabla de ejecución |
 | `conventions/flow-fidelity.md` | Auditoría de fidelidad al flujo: checklist previa a implementar cada handler |
 | `conventions/domain-modeling.md` | Modelado del dominio: agregados ricos, invariantes, value objects y reparto de la validación entre capas |
 | `conventions/domain-services.md` | Cuándo y cómo crear servicios de dominio (`@DomainComponent`) |
+| `conventions/dependencies.md` | Capa `dependencies`: proyecciones de réplica (`<Entidad>Projector` / `<Entidad>Reader`) y su cableado listener → guard → mediator → handler |
 | `conventions/virtual-threads.md` | I/O paralela con hilos virtuales en query handlers |
 | `skills/` | Skills por tecnología del stack (`keel-spring-<tech>/` — database, kafka, rabbitmq, snssqs, s3, redis, keycloak, cognito; SKILL.md + `references/` bajo demanda), instaladas condicionalmente en el `.claude/skills/` del proyecto generado según `keel-stack.json` |
 | `golden/` | Ejemplo de referencia para estilo y detección de regresiones |

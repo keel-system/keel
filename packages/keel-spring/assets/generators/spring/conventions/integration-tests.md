@@ -226,7 +226,14 @@ información; un test decorativo es ruido que además da falsa seguridad.
 | `./gradlew compileIntegrationTestJava` | fase 1, al terminar de escribir | `keel-spring-tests` |
 | `./gradlew integrationTest` | fase 2, con infra arriba y código compilando | `keel-spring-validate` |
 | `./gradlew integrationTest --tests '<Clase>'` | tras corregir un `culprit: test` | `keel-spring-tests` |
+| `./gradlew integrationTest --tests '<Clase>'` | tras corregir un `culprit: code` (fase 2) | `keel-spring-code` |
 | `./gradlew integrationTest` | fase 3, no-regresión tras el pase de calidad | `keel-spring-quality` |
+
+Los dos usos de `--tests` son **verificación local del propio fix**, no un veredicto: la
+matriz de aceptación sale siempre de la ejecución completa de `keel-spring-validate`, que es
+la única que puede ver una regresión en un flujo distinto del corregido. Y como ambos agentes
+ejecutan la suite sobre la misma base de datos —`resetState()` la vacía en cada `@BeforeAll`—,
+el orquestador los relanza en serie, nunca a la vez.
 
 `./gradlew build -x test` **no** las ejecuta, a propósito: sigue siendo el gate de
 compilación y debe poder correrse sin infraestructura.

@@ -108,6 +108,27 @@ test('los assets del generador existen en el paquete', async () => {
   }
 });
 
+// El README del generador es su índice de contenido: si una pieza se añade a AGENTS o a
+// CONVENTIONS (generator-docs.js) y nadie lo refleja ahí, queda instalada pero invisible.
+// La comprobación se deriva del disco a propósito: mantener aquí otra lista sería repetir
+// la omisión que este test existe para cazar.
+test('el README del generador enumera todos los agentes y conventions instalados', () => {
+  const generatorDir = path.join(assetsDir, 'generators', 'spring');
+  const readme = fs.readFileSync(path.join(generatorDir, 'README.md'), 'utf8');
+
+  const agents = fs.readdirSync(path.join(assetsDir, '.claude', 'agents')).filter((f) => f.endsWith('.md'));
+  assert.ok(agents.length >= 5);
+  for (const agent of agents) {
+    assert.ok(readme.includes(agent), `el README del generador no menciona .claude/agents/${agent}`);
+  }
+
+  const conventions = fs.readdirSync(path.join(generatorDir, 'conventions')).filter((f) => f.endsWith('.md'));
+  assert.ok(conventions.length >= 9);
+  for (const convention of conventions) {
+    assert.ok(readme.includes(`conventions/${convention}`), `el README del generador no menciona conventions/${convention}`);
+  }
+});
+
 test('build rechaza una versión de DSL no soportada', async () => {
   const workspace = makeWorkspace();
   writeService(workspace, { keel: '9.0' });

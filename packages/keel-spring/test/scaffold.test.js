@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
-import { wrapperDir, GRADLE_VERSION } from '../src/lib/assets.js';
+import { assetsDir, wrapperDir, GRADLE_VERSION } from '../src/lib/assets.js';
 
 const fixtureDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'product-catalog');
 
@@ -358,17 +358,17 @@ test('CLAUDE.md contextual: specs, solo capas declaradas y skill local con conve
   // no elige broker/auth/cache/storage → sin skills de esas categorías, pero
   // declara persistence → keel-spring-database (default postgresql) acompaña
   // a la orquestadora en .claude/skills/.
-  assert.ok(exists(workspace, '.claude/conventions/mapping.md'));
-  assert.ok(exists(workspace, '.claude/conventions/project-layout.md'));
-  assert.ok(exists(workspace, '.claude/conventions/infra-validation.md'));
-  assert.ok(exists(workspace, '.claude/conventions/integration-tests.md'));
+  // Derivado del disco, no de una lista aquí: una convention nueva que nadie añada a
+  // CONVENTIONS (generator-docs.js) rompe este test en vez de quedarse sin instalar.
+  const conventionsDir = path.join(assetsDir, 'generators', 'spring', 'conventions');
+  const conventions = fs.readdirSync(conventionsDir).filter((f) => f.endsWith('.md'));
+  assert.ok(conventions.length >= 9);
+  for (const convention of conventions) {
+    assert.ok(exists(workspace, `.claude/conventions/${convention}`), `falta .claude/conventions/${convention}`);
+  }
   // La derivación del contrato de cable: lo único que permite escribir las pruebas
   // en caja negra sin adivinar la forma de la respuesta.
   assert.ok(read(workspace, '.claude/conventions/integration-tests.md').includes('Del DSL al cable'));
-  assert.ok(exists(workspace, '.claude/conventions/flow-fidelity.md'));
-  assert.ok(exists(workspace, '.claude/conventions/domain-modeling.md'));
-  assert.ok(exists(workspace, '.claude/conventions/domain-services.md'));
-  assert.ok(exists(workspace, '.claude/conventions/virtual-threads.md'));
   assert.ok(!exists(workspace, '.claude/skills/keel-generate-spring/conventions'));
   assert.ok(!exists(workspace, '.claude/skills/keel-generate-spring/references'));
   const skillDirs = fs.readdirSync(path.join(workspace, 'services', 'product-catalog-spring', '.claude', 'skills')).sort();
@@ -554,12 +554,14 @@ test('agentes de la orquestación: copiados al .claude/agents/ del proyecto', ()
   scaffoldService({ ...loadFixture(), workspace });
 
   for (const [name, markers] of [
-    ['keel-spring-code', ['build -x test']],
+    // El ciclo de fix de la fase 2 es parte del contrato del agente de código: verifica su
+    // corrección ejecutando la clase señalada, y lee la evidencia cruda del arbitraje.
+    ['keel-spring-code', ['build -x test', "integrationTest --tests '<ClaseAfectada>'", 'build/keel-failures/']],
     ['keel-spring-infra', ['infra/docker-compose.yaml']],
     // El agente de pruebas trabaja sin ver src/main/java: las fuentes con las que
     // deriva la forma del cable son parte de su contrato, no un detalle de redacción.
     ['keel-spring-tests', ['compileIntegrationTestJava', 'mapping.md', 'docs/openapi.yaml', 'infra-validation.md']],
-    ['keel-spring-validate', ['integrationTest']],
+    ['keel-spring-validate', ['integrationTest', 'evidence:']],
     ['keel-spring-quality', ['no-conductual']]
   ]) {
     const agent = read(workspace, `.claude/agents/${name}.md`);

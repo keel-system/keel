@@ -51,6 +51,11 @@ arranques el servidor — lo arranca JUnit.
    - **`culprit: design`** — el escenario contradice el diseño o exige algo que los
      artefactos no fijan. El hueco es del diseño: se propone como cambio a los
      artefactos, no se acomoda el código ni se relaja el test.
+   Emite además la **ruta** de ese JSON en el campo `evidence` del fallo, y la `class` que
+   lo ejercita (el `classname` de su `<testcase>`): el agente que recibe el relanzamiento
+   abre la evidencia de primera mano en vez de fiarse del extracto —antes de ejecutar nada,
+   porque una ejecución nueva sobrescribe el volcado— y sabe qué clase re-ejecutar para
+   verificar su corrección.
    Arbitrar exige leer el `Then` original: un fallo no se clasifica por la pinta del
    stack trace. El `contractSources` que reportó `keel-spring-tests` te dice de dónde
    salió la forma esperada: un cuerpo derivado de `docs/openapi.yaml` apunta al código
@@ -87,7 +92,9 @@ failures:
   - scenario: FL-PRD-001-B
     culprit: code             # code | test | design
     then: "3. cuerpo con code=SKU_ALREADY_EXISTS y status 409"
-    request: {...}            # de build/keel-failures/<FL-id>.json
+    evidence: build/keel-failures/FL-PRD-001-B.json   # el volcado íntegro, para el ciclo de fix
+    class: ProductCreationFlowIT                      # clase que lo ejercita, del XML de JUnit
+    request: {...}            # extracto de ese mismo volcado
     response: {...}
     expected: "409 con code SKU_ALREADY_EXISTS"
     hint: "unicidad de sku case-sensitive; el escenario declara colación insensible"

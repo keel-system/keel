@@ -1,6 +1,6 @@
 ---
 name: keel-spring-code
-description: Completa el código de un proyecto Spring generado por keel-spring — TODOs del scaffolding, lógica de negocio y adaptadores de infraestructura del stack — hasta dejar `./gradlew build -x test` en verde. No escribe pruebas unitarias, no toca contenedores ni levanta el servidor.
+description: Completa el código de un proyecto Spring generado por keel-spring — TODOs del scaffolding, lógica de negocio y adaptadores de infraestructura del stack — hasta dejar `./gradlew build -x test` en verde. No escribe pruebas unitarias ni toca contenedores; relanzado desde la fase 2, verifica su corrección ejecutando la clase de integración afectada.
 model: inherit
 ---
 
@@ -46,7 +46,10 @@ misma raíz. Todo lo que hagas ocurre dentro de ella.
 4. Verifica **solo** con `./gradlew build -x test` (en Windows
    `gradlew.bat build -x test`): compilación y empaquetado en verde. No ejecutes
    `docker compose`, `bootRun` ni escenarios funcionales: de eso se encargan otros
-   agentes de la orquestación.
+   agentes de la orquestación. Esto vale íntegro en la **primera pasada** (fase 1), que
+   corre en paralelo con la infraestructura y con las pruebas: ni los contenedores están
+   arriba ni tendría sentido ejecutar un escenario. Si te relanzan desde la fase 2, la
+   situación es otra: ver el paso 8.
 5. Con la compilación en verde, haz la **revisión mecánica final** de
    `.claude/conventions/flow-fidelity.md` (binding contra la ruta declarada, ciclos
    en los mappers, un solo `ObjectMapper` por comportamiento, claims y credenciales
@@ -63,6 +66,30 @@ misma raíz. Todo lo que hagas ocurre dentro de ella.
    tomada en un agregado se olvida en el siguiente: esta pasada es la que lo
    detecta sin gastar un ciclo de validación funcional.
 7. No des tu trabajo por terminado con la compilación en rojo; corrige y repite.
+8. **Si te relanzan desde la fase 2** (fallos clasificados como `culprit: code` por
+   `keel-spring-validate`): al llegar aquí la infraestructura está arriba y el código
+   compila, así que además de corregir **verificas tu corrección en vivo**.
+   - **Primero lee la evidencia**: cada fallo del bloque que recibes trae su `evidence`
+     con la ruta `build/keel-failures/<FL-id>.json` (request completo, response completa y
+     la aserción que falló). Ábrelos **antes** de ejecutar nada: `integrationTest`
+     sobrescribe esos volcados, y leerlos después pierde el original. El extracto del
+     reporte orienta; el JSON es la evidencia.
+   - Corrige, deja `./gradlew build -x test` en verde, y solo entonces ejecuta
+     `./gradlew integrationTest --tests '<ClaseAfectada>'` (en Windows `gradlew.bat`).
+     **Solo las clases nombradas en los `failures` que recibiste**: la suite completa es de
+     `keel-spring-validate`, y correrla entera duplica el coste del ciclo sin darte el gate.
+   - **El verde por clase no es un veredicto.** No compones matriz, no das escenarios por
+     aprobados y no reclasificas un `culprit`. Significa «mi corrección está lista para
+     arbitrarse»; el siguiente paso es siempre `keel-spring-validate` con la suite completa,
+     que es quien decide.
+   - **Ejecutar `src/integrationTest/` sí; editarlo no.** La regla de abajo no cambia ni un
+     ápice: si tras corregir el escenario sigue en rojo y crees que el test está mal, se
+     reporta, no se toca. Es lo que mantiene separados al que escribe el código y al que
+     juzga si cumple.
+   - `keel-spring-tests` puede estar corrigiendo un `culprit: test` sobre este mismo
+     directorio. Si Gradle reporta contención de locks (`Waiting to acquire…`, `Timeout
+     waiting to lock…`), espera y reintenta **una** vez; si persiste, regístralo en
+     `blockers` como bloqueo operativo, nunca como fallo del escenario.
 
 ## Reglas
 
@@ -77,6 +104,8 @@ misma raíz. Todo lo que hagas ocurre dentro de ella.
   que un test está mal, no es tu decisión: se clasifica como `culprit: test` y lo dirime
   `keel-spring-validate` con la evidencia de la ejecución. Ten en cuenta además que ese
   agente invoca Gradle sobre este mismo directorio: no encadenes builds innecesarios.
+  Relanzado desde la fase 2 **ejecutas** la clase afectada (paso 8) — pero solo eso:
+  ejecutar no es editar, y el archivo de test sigue sin ser tuyo.
 - `.claude/constitution.md` es innegociable: ninguna implementación puede romper la
   frontera hexagonal, la transaccionalidad, los contratos públicos ni la precisión
   numérica que declara.
@@ -133,6 +162,10 @@ compiles: true | false
 layersCompleted: [...]
 failures: [...]          # errores de compilación/empaquetado: archivo:línea y causa.
                          # Si te relanzaron con escenarios en FALLO, qué corregiste de cada uno
+verifiedClasses:         # solo en un relanzamiento desde la fase 2: qué clases de integración
+                         # ejecutaste con --tests y cómo quedaron. Verde aquí NO aprueba el
+                         # escenario: lo arbitra keel-spring-validate con la suite completa
+  - { class: ProductCreationFlowIT, result: OK | KO }
 designGaps: [...]        # huecos del diseño, como propuesta de cambio a los artefactos.
                          # Solo lo irresoluble sin cambiar diseño o infraestructura:
                          # un hueco con fallback disponible se implementa, no se reporta

@@ -52,7 +52,7 @@ flowchart TB
 
     VALIDATE["Fase 2 — keel-spring-validate<br/>./gradlew integrationTest + arbitraje<br/>matriz desde el XML, evidencia de keel-failures/"]
     VALIDATE --> GATE2{Gating fase 2}
-    GATE2 -->|"culprit: code → relanzar code con ese bloque y revalidar<br/>blocking: scoped → consume cupo (máx. 2)<br/>blocking: systemic → no consume (tope duro 4)"| CODE
+    GATE2 -->|"culprit: code → relanzar code con ese bloque: corrige,<br/>verifica su clase con --tests y se revalida la suite entera<br/>blocking: scoped → consume cupo · systemic → no consume<br/>(cupo y tope duro escalan con nº de flujos: ver «Ciclos de fix»)"| CODE
     GATE2 -->|"culprit: test → relanzar tests<br/>(no consume cupo)"| TESTS
     GATE2 -->|"blockers o culprit: design"| STOP2[/"Detenerse: proponer cambio a los<br/>artefactos, no acomodar el código"/]
     GATE2 -->|"todos los escenarios OK (100%)"| QUALITY
@@ -100,7 +100,7 @@ recursos:
 
 | Agente | Responsabilidad | Qué lee | Qué NO hace |
 |---|---|---|---|
-| `keel-spring-code` | Completa TODOs, lógica de negocio, invariantes y adaptadores del stack hasta `./gradlew build -x test` en verde. Antes de cada handler ejecuta la auditoría de [flow-fidelity](conventions/flow-fidelity.md). | `.claude/CLAUDE.md` del proyecto (orden de capas), `architecture.md`, `constitution.md`, `specs/`, conventions ([mapping](conventions/mapping.md) estricto) y las skills `keel-spring-<tech>` del stack (SKILL.md primero, `references/` bajo demanda). | No escribe pruebas unitarias ni ejecuta `./gradlew test`; no toca contenedores, no ejecuta `bootRun` ni escenarios funcionales. |
+| `keel-spring-code` | Completa TODOs, lógica de negocio, invariantes y adaptadores del stack hasta `./gradlew build -x test` en verde. Antes de cada handler ejecuta la auditoría de [flow-fidelity](conventions/flow-fidelity.md). Relanzado desde la fase 2, lee la evidencia cruda de `build/keel-failures/` y cierra verificando su fix con `./gradlew integrationTest --tests '<ClaseAfectada>'`. | `.claude/CLAUDE.md` del proyecto (orden de capas), `architecture.md`, `constitution.md`, `specs/`, conventions ([mapping](conventions/mapping.md) estricto) y las skills `keel-spring-<tech>` del stack (SKILL.md primero, `references/` bajo demanda). | No escribe pruebas unitarias ni ejecuta `./gradlew test`; no toca contenedores ni ejecuta `bootRun`. En la fase 1 tampoco ejecuta escenarios; en el ciclo de fix ejecuta **solo** las clases que le señaló el arbitraje — y ejecutar `src/integrationTest/` nunca es editarlo. Su verde por clase no aprueba escenarios. |
 | `keel-spring-infra` | Levanta `infra/docker-compose.yaml` con docker o podman (detección: `$CONTAINER_RUNTIME` → `docker` → `podman`), sondea con `infra/validate-infra.sh` (reintentos) y deja la infraestructura **arriba** para la validación. Con auth, **ejecuta y verifica** `infra/init-keycloak.sh` (que genera build) contra los valores de `infra/test-credentials.env`: no lo redacta. | [infra-validation](conventions/infra-validation.md) (sondeo por tecnología vía el contenedor `devtools`), la reference de auth del stack. | Nunca edita código del proyecto; solo corrige causas operativas (puerto ocupado, contenedor viejo). No baja la infraestructura al terminar. |
 | `keel-spring-tests` | Traduce **una vez** los escenarios `FL-*` a pruebas de integración JUnit en `src/integrationTest/java/**/flows/` (una clase por flujo, `@DisplayName` con el id, `@BeforeAll` con `resetState()`), en caja negra: HTTP y JSON, jamás DTOs ni entidades. Cierra con `./gradlew compileIntegrationTestJava` en verde. | `specs/` (todas las capas + `validation-scenarios.md`), `docs/openapi.yaml`, [integration-tests](conventions/integration-tests.md) y la `AbstractFlowIT` que generó build. | **No lee `src/main/java`** (es la garantía de independencia), no implementa negocio, no escribe pruebas unitarias y no ejecuta las IT en la fase 1. |
 | `keel-spring-validate` | **Gate de la generación** (única red de seguridad funcional: exige 100% de escenarios OK). Ejecuta `./gradlew integrationTest` —la app la arranca JUnit contra la infra real—, compone la matriz desde `build/test-results/integrationTest/*.xml` y **arbitra** cada fallo contra el `Then` original con la evidencia de `build/keel-failures/`, clasificándolo en `culprit: code \| test \| design`. | `specs/validation-scenarios.md`, [integration-tests](conventions/integration-tests.md), [infra-validation](conventions/infra-validation.md) y el reporte del agente de infraestructura. | No corrige código ni escribe/edita tests; no siembra datos a mano; no baja la infraestructura. |
@@ -121,13 +121,32 @@ en el código: se propone como cambio a los artefactos (`designGaps`).
 | `classes` / `uncovered` | `keel-spring-tests` | Orquestador, resumen final | Qué flujos quedaron traducidos y qué escenarios **no** se ejercitan (y por qué): dejan de darse por probados en silencio. |
 | `assumptions` | `keel-spring-tests` | `keel-spring-validate` | Apuestas sobre infraestructura que la fase 1 no puede verificar (nombre de cola, cliente M2M, secreto, bucket). La validación las confirma **antes** de la primera ejecución de la suite: cada una fallida es un bloqueo sistémico que, descubierto por fuerza bruta, cuesta un ciclo completo. |
 | `failures[].culprit` | `keel-spring-validate` | Orquestador | A quién relanzar: `code` → `keel-spring-code`; `test` → `keel-spring-tests`; `design` → detenerse. |
-| `failures` (escenario, request, response, esperado) | `keel-spring-validate` | `keel-spring-code` / `keel-spring-tests` (relanzado) | Evidencia **exacta** para el ciclo de fix, tomada de `build/keel-failures/`. |
+| `failures` (escenario, `evidence`, `class`, request, response, esperado) | `keel-spring-validate` | `keel-spring-code` / `keel-spring-tests` (relanzado) | Evidencia **exacta** para el ciclo de fix. `evidence` es la ruta del volcado de `build/keel-failures/`: el relanzado abre el JSON crudo —antes de ejecutar nada, porque una pasada nueva lo sobrescribe—, no el extracto. `class` le dice qué clase re-ejecutar para verificarse. |
+| `verifiedClasses` | `keel-spring-code` (relanzado) | Orquestador, resumen | Qué clases quedaron verificadas en vivo antes de revalidar. Es señal de que el fix está listo para arbitrarse, **no** un escenario aprobado: la matriz la sigue componiendo `keel-spring-validate` con la suite completa. |
 | `blocking: systemic \| scoped` | `keel-spring-validate` | Orquestador | Contar los ciclos de fix: ver «Ciclos de fix» abajo. |
 | `coverageGaps` | `keel-spring-validate` | `keel-spring-tests` (relanzado), resumen | Categorías que ninguna clase de flujo ejercita: es cobertura que falta, no un fallo del código. |
 | `remaining` | `keel-spring-quality` | Resumen final | Hallazgos conductuales pendientes de decisión humana. |
 | `baseline` | `keel-spring-quality` | Orquestador | Gate de desplegabilidad: `KO` → relanzar una vez con el error; sin `OK` el commit lo dice explícitamente (production no arrancaría). |
 | `scenarios: OK \| KO` | `keel-spring-quality` | Orquestador | No-regresión: el pase de calidad no cambió comportamiento. `KO` → revertir el pase, no tocar las pruebas. |
 | `blockers` / `designGaps` | Cualquiera | Usuario | Contradicciones o huecos del diseño: se detiene la orquestación o se consolidan en el resumen; nunca se resuelven relanzando. |
+
+## El ciclo de fix se verifica a sí mismo, pero no se aprueba a sí mismo
+
+Un fix devuelto solo con `./gradlew build -x test` en verde no ha tocado un escenario: si
+quedó a medias, descubrirlo cuesta una ejecución completa de la suite. Por eso el agente
+relanzado en la fase 2 cierra ejecutando **las clases que le señaló el arbitraje**
+(`--tests '<ClaseAfectada>'`), simétrico a lo que ya hacía `keel-spring-tests` tras un
+`culprit: test`. Dos límites que hacen que esto no desdibuje el gate:
+
+- **Verde por clase ≠ escenario aprobado.** Un fix puede regresionar un flujo que ese
+  `--tests` no ejecuta, y la matriz `scenarios:` se compone del XML de **una** ejecución
+  completa. Tras cualquier ciclo de fix se vuelve **siempre** a `keel-spring-validate` con la
+  suite entera; nunca se salta a la fase 3 por el verde del propio agente que corrigió.
+- **Serialización obligatoria.** Es el único punto del pipeline donde dos agentes podrían
+  invocar Gradle a la vez sobre el mismo directorio: si una tanda mezcla `culprit: code` y
+  `culprit: test`, se relanzan **en serie** (primero `code`, luego `tests`). No es solo
+  contención de locks: `resetState()` vacía la base de datos en cada `@BeforeAll`, así que dos
+  suites concurrentes se borran los datos entre sí y producen fallos que no son de nadie.
 
 ## Ciclos de fix: bloqueo sistémico ≠ fallos puntuales
 
@@ -156,6 +175,9 @@ API responde 401, no se puede saber nada sobre las reglas de negocio. Al
 destrabarlo aparece, por primera vez, una tanda de fallos específicos —
 exactamente aquello para lo que existe el cupo. Cobrárselo al presupuesto de los
 fallos puntuales lo agota antes de empezar a usarlo.
+
+La verificación por clase del agente relanzado ocurre **dentro** del ciclo y no altera el
+conteo: el cupo mide relanzamientos de `keel-spring-code`, no ejecuciones de Gradle.
 
 El tope duro de la tabla acota el total de ciclos de fase 2 (los `scoped` más los
 que cerraron bloqueos sistémicos), para que ninguna calificación deje la
