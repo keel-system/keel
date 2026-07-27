@@ -132,8 +132,9 @@ export function generate(model) {
       'elegida o del negocio: implementaciones de puertos de infraestructura, lógica de negocio e invariantes. ' +
       '**Sin pruebas unitarias**: no las escribas ni ejecutes `./gradlew test` — la suite es un proceso independiente y ' +
       'posterior a que el diseñador valide el servidor; el andamiaje de test que ya está (deps, perfil `test` con H2, ' +
-      `\`${service.applicationClass}Tests\`) se deja intacto para esa fase. El criterio de terminado es la compilación en ` +
-      'verde más el **100%** de los escenarios de `specs/validation-scenarios.md`. ' +
+      `\`${service.applicationClass}Tests\`) se deja intacto para esa fase. Los escenarios \`FL-*\` sí se traducen a pruebas de ` +
+      'integración en `src/integrationTest/` (caja negra contra el contrato, source set aparte). El criterio de terminado es la compilación en ' +
+      'verde más `./gradlew integrationTest` con el **100%** de los escenarios de `specs/validation-scenarios.md` en OK. ' +
       'Este repo es **autosuficiente**: diseño, skill, convenciones y guías del stack van incluidos. ' +
       'Localiza los puntos de trabajo con `grep -rn "TODO" src`.',
     '',
@@ -173,6 +174,7 @@ export function generate(model) {
     '- `.claude/conventions/domain-modeling.md` — cómo se modela el dominio: agregados ricos, invariantes, value objects y',
     '  reparto de la validación entre capas.',
     '- `.claude/conventions/infra-validation.md` — sondeo por tecnología de la infraestructura de prueba.',
+    '- `.claude/conventions/integration-tests.md` — cómo se traducen los escenarios `FL-*` a pruebas de integración.',
     ...techSkills.map((name) => `- \`.claude/skills/${name}/SKILL.md\` — ${SKILL_HINTS[name] ?? name}: qué dejó listo build y qué te toca a ti; sus \`references/\` (configuración, implementación, troubleshooting) se leen bajo demanda.`),
     '',
     '## Proceso: completar el scaffolding, capa por capa',
@@ -190,15 +192,15 @@ export function generate(model) {
       '   `CONTAINER_RUNTIME=podman podman compose -f infra/docker-compose.yaml up -d`)' +
         (hasDevtools ? ' y `bash infra/validate-infra.sh` antes de ejercitar escenarios' : '') +
         ' — un fallo de dependencia no debe confundirse con un bug.',
-      '3. Servidor real: `./gradlew bootRun` y ejecuta cada escenario de `specs/validation-scenarios.md` con llamadas',
-      '   HTTP reales verificando el Then completo (status, headers y efectos observables). Reporta la matriz escenario → resultado:',
-      '   la generación solo se da por terminada con el **100%** de los escenarios en OK.'
+      '3. Escenarios: `./gradlew integrationTest` — los flujos `FL-*` de `specs/validation-scenarios.md`, ya traducidos a',
+      '   pruebas de integración en `src/integrationTest/`, contra el servidor real (lo arranca JUnit) y esta infraestructura.',
+      '   Reporta la matriz escenario → resultado: la generación solo se da por terminada con el **100%** en OK.'
     );
   } else {
     lines.push(
-      '2. Servidor real: `./gradlew bootRun` y ejecuta cada escenario de `specs/validation-scenarios.md` con llamadas',
-      '   HTTP reales verificando el Then completo (status, headers y efectos observables). Reporta la matriz escenario → resultado:',
-      '   la generación solo se da por terminada con el **100%** de los escenarios en OK.'
+      '2. Escenarios: `./gradlew integrationTest` — los flujos `FL-*` de `specs/validation-scenarios.md`, ya traducidos a',
+      '   pruebas de integración en `src/integrationTest/`, contra el servidor real (lo arranca JUnit).',
+      '   Reporta la matriz escenario → resultado: la generación solo se da por terminada con el **100%** en OK.'
     );
   }
 

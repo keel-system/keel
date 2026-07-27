@@ -25,7 +25,15 @@ export function generate(model) {
     '```bash'
   ];
   if (infra.length > 0) lines.push('docker compose -f infra/docker-compose.yaml up -d   # infraestructura de prueba');
-  lines.push('./gradlew bootRun', './gradlew build -x test', '```', '', `Requiere Java ${JAVA_VERSION} (el wrapper de Gradle va incluido; en Windows usa \`gradlew.bat\`).`, '');
+  lines.push(
+    './gradlew bootRun',
+    './gradlew build -x test        # compilación y empaquetado (no ejecuta pruebas)',
+    './gradlew integrationTest      # escenarios FL-* contra la infraestructura de arriba',
+    '```',
+    '',
+    `Requiere Java ${JAVA_VERSION} (el wrapper de Gradle va incluido; en Windows usa \`gradlew.bat\`).`,
+    ''
+  );
 
   if (infra.length > 0) {
     lines.push(
@@ -118,7 +126,7 @@ export function generate(model) {
     '',
     '- Implementar los `handle(...)` con `// TODO (agente)` en `application/usecases/` (reglas, precondiciones, errores).',
     '- Proteger los invariantes marcados con `// TODO invariante` en `domain/aggregate/`.',
-    '- Validación funcional: ejecutar los escenarios `FL-*` de `specs/validation-scenarios.md` contra el servidor real hasta el 100% en OK (las pruebas unitarias son un proceso posterior, fuera de la generación).'
+    '- Traducir los escenarios `FL-*` de `specs/validation-scenarios.md` a pruebas de integración en `src/integrationTest/` (la base `AbstractFlowIT` ya está generada) y dejar `./gradlew integrationTest` al 100% en OK. Las pruebas unitarias son un proceso posterior, fuera de la generación.'
   );
 
   const pendingLayers = [];

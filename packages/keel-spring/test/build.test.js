@@ -97,7 +97,13 @@ test('los assets del generador existen en el paquete', async () => {
 
   // Subagentes de la orquestación (fuente única; generator-docs los copia al
   // .claude/agents/ del proyecto generado).
-  for (const agent of ['keel-spring-code.md', 'keel-spring-infra.md', 'keel-spring-validate.md', 'keel-spring-quality.md']) {
+  for (const agent of [
+    'keel-spring-code.md',
+    'keel-spring-infra.md',
+    'keel-spring-tests.md',
+    'keel-spring-validate.md',
+    'keel-spring-quality.md'
+  ]) {
     assert.ok(fs.existsSync(path.join(assetsDir, '.claude', 'agents', agent)), `falta .claude/agents/${agent}`);
   }
 });

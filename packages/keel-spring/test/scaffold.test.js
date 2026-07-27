@@ -332,6 +332,7 @@ test('CLAUDE.md contextual: specs, solo capas declaradas y skill local con conve
   assert.ok(skill.includes('autosuficiente'));
   assert.ok(skill.includes('keel-spring-code'));
   assert.ok(skill.includes('keel-spring-infra'));
+  assert.ok(skill.includes('keel-spring-tests'));
   assert.ok(skill.includes('keel-spring-validate'));
   assert.ok(skill.includes('keel-spring-quality'));
   // Flujo normalizado: se invoca sin argumentos, con el cwd en la raíz del proyecto.
@@ -360,6 +361,10 @@ test('CLAUDE.md contextual: specs, solo capas declaradas y skill local con conve
   assert.ok(exists(workspace, '.claude/conventions/mapping.md'));
   assert.ok(exists(workspace, '.claude/conventions/project-layout.md'));
   assert.ok(exists(workspace, '.claude/conventions/infra-validation.md'));
+  assert.ok(exists(workspace, '.claude/conventions/integration-tests.md'));
+  // La derivación del contrato de cable: lo único que permite escribir las pruebas
+  // en caja negra sin adivinar la forma de la respuesta.
+  assert.ok(read(workspace, '.claude/conventions/integration-tests.md').includes('Del DSL al cable'));
   assert.ok(exists(workspace, '.claude/conventions/flow-fidelity.md'));
   assert.ok(exists(workspace, '.claude/conventions/domain-modeling.md'));
   assert.ok(exists(workspace, '.claude/conventions/domain-services.md'));
@@ -395,19 +400,105 @@ test('skill de base de datos: directorio completo con el dialecto del stack, sol
   assert.ok(!fs.existsSync(path.join(bare, 'services', 'product-catalog-spring', '.claude', 'skills', 'keel-spring-database')));
 });
 
+test('source set integrationTest: compila sin src/main/java (paralelismo real)', () => {
+  const workspace = makeWorkspace();
+  scaffoldService({ ...loadFixture(), workspace });
+
+  const buildGradle = read(workspace, 'build.gradle');
+  assert.ok(buildGradle.includes('integrationTest {'));
+  assert.ok(buildGradle.includes('runtimeClasspath += sourceSets.main.output'));
+  // La aserción que protege el paralelismo de la fase 1: con main en el
+  // compileClasspath, compileIntegrationTestJava arrastraría la compilación de
+  // src/main/java y el agente de pruebas quedaría preso del de código.
+  assert.ok(!buildGradle.includes('compileClasspath += sourceSets.main.output'));
+  assert.ok(buildGradle.includes('integrationTestImplementation.extendsFrom testImplementation'));
+  assert.ok(buildGradle.includes("tasks.register('integrationTest', Test)"));
+  // Fuera de `check`: ./gradlew build -x test debe seguir corriendo sin infra.
+  assert.ok(!buildGradle.includes('check.dependsOn'));
+});
+
+test('scaffolding de integración: AbstractFlowIT y FailureCapture, sin clases de flujo', () => {
+  const workspace = makeWorkspace();
+  scaffoldService({ ...loadFixture(), workspace });
+
+  const base = 'src/integrationTest/java/com/commerce/productcatalog/flows';
+  const abstractFlow = read(workspace, `${base}/AbstractFlowIT.java`);
+  assert.ok(abstractFlow.includes('public abstract class AbstractFlowIT'));
+  assert.ok(abstractFlow.includes('@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)'));
+  assert.ok(abstractFlow.includes('@ActiveProfiles("local")'));
+  assert.ok(abstractFlow.includes('@ExtendWith(FailureCapture.class)'));
+  // Sin atributo `classes`: la clase de la aplicación vive en src/main/java, que
+  // no está en el compileClasspath. Spring la resuelve subiendo por el paquete
+  // en ejecución.
+  assert.ok(!abstractFlow.includes('ProductCatalogApplication'));
+  assert.ok(!abstractFlow.includes('classes ='));
+  // Caja negra: nada del código generado se importa.
+  assert.ok(!abstractFlow.includes('import com.commerce.productcatalog.domain'));
+  assert.ok(!abstractFlow.includes('import com.commerce.productcatalog.infrastructure'));
+  // Transversales que las clases de flujo consumen.
+  assert.ok(abstractFlow.includes('protected static void resetState()'));
+  assert.ok(abstractFlow.includes('infra/reset-db.sh'));
+  assert.ok(abstractFlow.includes('JSONCompareMode.STRICT'));
+  assert.ok(abstractFlow.includes('protected void await(Duration timeout, BooleanSupplier condition)'));
+  assert.ok(abstractFlow.includes('JdkClientHttpRequestFactory')); // PATCH sin dependencias nuevas
+  assert.ok(abstractFlow.includes('ROUTE_BASE = "/api/v1"'));
+  // El fixture no declara security: ni tokens ni api keys.
+  assert.ok(!abstractFlow.includes('tokenFor'));
+  assert.ok(!abstractFlow.includes('local-dev-api-key'));
+
+  const capture = read(workspace, `${base}/FailureCapture.java`);
+  assert.ok(capture.includes('implements TestWatcher'));
+  assert.ok(capture.includes('build'));
+  assert.ok(capture.includes('keel-failures'));
+
+  // Las clases de flujo son derivadas del diseño: las escribe el agente.
+  const flows = fs.readdirSync(path.join(workspace, 'services', 'product-catalog-spring', base));
+  assert.deepEqual(flows.sort(), ['AbstractFlowIT.java', 'FailureCapture.java']);
+});
+
+test('AbstractFlowIT con capa security: credenciales por rol contra el proveedor del stack', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const patched = structuredClone(layers);
+  patched.security = {
+    authentication: { protocol: 'oidc', serviceAuth: { protocol: 'oauth2' } },
+    access: { default: { level: 'required' }, rules: { listProducts: { level: 'public' } } },
+    serviceClients: { billing: { scopes: ['catalog:read'] } }
+  };
+  const patchedManifest = structuredClone(manifest);
+  patchedManifest.layers.security = 'security.keel.yaml';
+
+  scaffoldService({ manifest: patchedManifest, layers: patched, workspace });
+
+  const abstractFlow = read(workspace, 'src/integrationTest/java/com/commerce/productcatalog/flows/AbstractFlowIT.java');
+  assert.ok(abstractFlow.includes('protected String tokenFor(String role)'));
+  assert.ok(abstractFlow.includes('protected String serviceCredential(String client)'));
+  // Convención documentada en conventions/infra-validation.md, aquí ejecutable.
+  assert.ok(abstractFlow.includes('http://localhost:8180/realms/product-catalog/protocol/openid-connect/token'));
+  assert.ok(abstractFlow.includes('product-catalog-test'));
+  assert.ok(abstractFlow.includes('AUTH_TOKEN_URL'));
+  // Sobrecargas con token para los escenarios autenticados.
+  assert.ok(abstractFlow.includes('protected Response get(String path, String token)'));
+});
+
 test('agentes de la orquestación: copiados al .claude/agents/ del proyecto', () => {
   const workspace = makeWorkspace();
   scaffoldService({ ...loadFixture(), workspace });
 
-  for (const [name, marker] of [
-    ['keel-spring-code', 'build -x test'],
-    ['keel-spring-infra', 'infra/docker-compose.yaml'],
-    ['keel-spring-validate', 'validation-scenarios.md'],
-    ['keel-spring-quality', 'no-conductual']
+  for (const [name, markers] of [
+    ['keel-spring-code', ['build -x test']],
+    ['keel-spring-infra', ['infra/docker-compose.yaml']],
+    // El agente de pruebas trabaja sin ver src/main/java: las fuentes con las que
+    // deriva la forma del cable son parte de su contrato, no un detalle de redacción.
+    ['keel-spring-tests', ['compileIntegrationTestJava', 'mapping.md', 'docs/openapi.yaml', 'infra-validation.md']],
+    ['keel-spring-validate', ['integrationTest']],
+    ['keel-spring-quality', ['no-conductual']]
   ]) {
     const agent = read(workspace, `.claude/agents/${name}.md`);
     assert.ok(agent.includes(`name: ${name}`));
-    assert.ok(agent.includes(marker));
+    for (const marker of markers) {
+      assert.ok(agent.includes(marker), `${name}.md debería mencionar ${marker}`);
+    }
   }
 });
 

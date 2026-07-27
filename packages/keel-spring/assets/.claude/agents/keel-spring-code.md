@@ -67,10 +67,16 @@ misma raíz. Todo lo que hagas ocurre dentro de ella.
 ## Reglas
 
 - **No escribes pruebas unitarias ni de integración** y no ejecutas `./gradlew test`:
-  la suite es un proceso independiente, posterior a que el diseñador valide el
+  la suite unitaria es un proceso independiente, posterior a que el diseñador valide el
   servidor. El andamiaje de test del proyecto (deps, perfil `test` con H2,
   `<Nombre>ApplicationTests`) se deja tal cual. Tu criterio de calidad es el código
   siguiendo las convenciones + el 100% de los escenarios `FL-*`, que valida otro agente.
+- **`src/integrationTest/` no es tuyo.** Las pruebas de los escenarios `FL-*` las escribe
+  `keel-spring-tests` **en paralelo contigo**, a partir del diseño y sin mirar tu código:
+  ahí está su valor. No las leas, no las toques y no las ajustes para que pasen. Si crees
+  que un test está mal, no es tu decisión: se clasifica como `culprit: test` y lo dirime
+  `keel-spring-validate` con la evidencia de la ejecución. Ten en cuenta además que ese
+  agente invoca Gradle sobre este mismo directorio: no encadenes builds innecesarios.
 - `.claude/constitution.md` es innegociable: ninguna implementación puede romper la
   frontera hexagonal, la transaccionalidad, los contratos públicos ni la precisión
   numérica que declara.

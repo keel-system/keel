@@ -96,8 +96,34 @@ dependencies {
 ${dependencies.map((dep) => `    ${dep}`).join('\n')}
 }
 
+sourceSets {
+    integrationTest {
+        // Solo runtimeClasspath: las IT son caja negra (hablan HTTP, no importan
+        // DTOs ni entidades), así que compilan sin src/main/java. Es lo que permite
+        // que el agente de pruebas trabaje en paralelo con el de código y cierre su
+        // gate de compilación sin depender de un main a medio escribir. main hace
+        // falta al ejecutar, no al compilar.
+        runtimeClasspath += sourceSets.main.output
+    }
+}
+
+configurations {
+    integrationTestImplementation.extendsFrom testImplementation
+    integrationTestRuntimeOnly.extendsFrom testRuntimeOnly
+}
+
 tasks.named('test') {
     useJUnitPlatform()
+}
+
+// Escenarios FL-* de specs/validation-scenarios.md contra la infra real de infra/.
+// Fuera de \`check\` a propósito: sin infraestructura levantada no tiene sentido,
+// y \`./gradlew build -x test\` debe seguir siendo el gate de compilación.
+tasks.register('integrationTest', Test) {
+    testClassesDirs = sourceSets.integrationTest.output.classesDirs
+    classpath = sourceSets.integrationTest.runtimeClasspath
+    useJUnitPlatform()
+    shouldRunAfter tasks.named('test')
 }
 `;
 

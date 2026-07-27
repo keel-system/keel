@@ -56,6 +56,43 @@ test('sin capa api no se genera superficie HTTP, ni suelta ni referenciada', () 
   assert.ok(!files.some((f) => f.name.endsWith('V1Controller.java')));
 });
 
+test('AbstractFlowIT se adapta a la silueta: sin api no hay ROUTE_BASE, con messaging sí hay sondeo del broker', () => {
+  const { read } = scaffoldMetering();
+  const abstractFlow = read(`src/integrationTest/java/com/utilities/meteringdigest/flows/AbstractFlowIT.java`);
+
+  // Sin capa api no hay prefijo de rutas que ofrecer (los escenarios se disparan
+  // por suscripción y por schedule), pero la base sigue existiendo: el servidor
+  // se levanta igual y los efectos se verifican por el broker.
+  assert.ok(!abstractFlow.includes('ROUTE_BASE'));
+  assert.ok(abstractFlow.includes('protected static String publishedMessages(String destination, int count)'));
+  assert.ok(abstractFlow.includes('kcat -b kafka:29092'));
+  // Sin storage ni file uploads no se genera el helper multipart.
+  assert.ok(!abstractFlow.includes('MULTIPART_FORM_DATA'));
+  // Con PostgreSQL (default) el aislamiento por flujo es el script, no @DirtiesContext.
+  assert.ok(abstractFlow.includes('infra/reset-db.sh'));
+  assert.ok(!abstractFlow.includes('@DirtiesContext'));
+});
+
+test('AbstractFlowIT con BD en memoria: sin script de reset, aislamiento por @DirtiesContext', () => {
+  // H2 no levanta contenedor y no declara cliResetCmd, así que docker.js no
+  // genera infra/reset-db.sh: la base no puede invocar un script inexistente.
+  const { manifest, layers, errors } = loadService(fixtureDir);
+  assert.deepEqual(errors, []);
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-shape-h2-'));
+  scaffoldService({ manifest, layers, workspace, force: true, stack: { database: 'h2' } });
+
+  const root = path.join(workspace, PROJECT);
+  const abstractFlow = fs.readFileSync(
+    path.join(root, 'src/integrationTest/java/com/utilities/meteringdigest/flows/AbstractFlowIT.java'),
+    'utf8'
+  );
+  assert.ok(!fs.existsSync(path.join(root, 'infra/reset-db.sh')));
+  assert.ok(abstractFlow.includes('@DirtiesContext(classMode = DirtiesContext.ClassMode.BEFORE_CLASS)'));
+  assert.ok(!abstractFlow.includes('infra/reset-db.sh'));
+  // El método sigue existiendo: toda clase de flujo llama a lo mismo.
+  assert.ok(abstractFlow.includes('protected static void resetState()'));
+});
+
 test('ningún archivo importa una clase propia que no se generó', () => {
   // Guarda estructural, no de silueta: un import al propio paquete base que apunta
   // a una clase inexistente no compila, y es el fallo típico al gatear piezas por

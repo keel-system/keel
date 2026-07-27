@@ -14,9 +14,10 @@ la **higiene** (checklist de abajo) y el **baseline de migraciones**, que solo p
 escribirse cuando las entidades son definitivas. Ninguno cambia comportamiento:
 lo validado debe seguir pasando idéntico. Cualquier hallazgo que requiera cambiar
 comportamiento se **reporta** en `remaining`, no se aplica. No hay suite unitaria
-que te cubra (es un proceso posterior): la red de seguridad es la re-validación de
-los escenarios `FL-*` que el orquestador lanza después de ti, así que sé
-conservador — ante la duda, reporta en vez de aplicar.
+que te cubra (es un proceso posterior): tu red de seguridad son los escenarios `FL-*`
+ya traducidos a pruebas de integración, que **ejecutas tú mismo** con
+`./gradlew integrationTest` antes de reportar. Aun así, sé conservador — ante la duda,
+reporta en vez de aplicar.
 
 ## Checklist de auditoría
 
@@ -66,8 +67,11 @@ siguiente: describe el esquema que ya existe, no lo cambia).
 **Prohibido (repórtalo en `remaining`, no lo apliques)**: añadir o eliminar
 validaciones o invariantes; cambiar firmas públicas, DTOs o mapeos de persistencia;
 cambiar status HTTP, eventos emitidos o side effects; reescribir lógica de negocio
-"para que quede mejor"; añadir clases o dependencias nuevas; **escribir pruebas
-unitarias o de integración** (son un proceso posterior a esta generación).
+"para que quede mejor"; añadir clases o dependencias nuevas; **escribir o tocar
+pruebas** — ni unitarias (son un proceso posterior a esta generación) ni las de
+`src/integrationTest/`, que son de `keel-spring-tests`. Las ejecutas; no las editas. Un
+escenario que falla tras tu pase significa que tu pase cambió comportamiento: se
+revierte el ajuste, no se ajusta el test.
 
 ## Baseline de migraciones (solo si el proyecto tiene persistencia)
 
@@ -88,8 +92,9 @@ Sigue `.claude/skills/keel-spring-database/references/migrations.md`; en corto:
    `PROFILE=local,migrations ./gradlew bootRun`: el arranque debe pasar el
    `validate` con el esquema puesto **solo** por Flyway. Contra una BD que
    Hibernate ya pobló no habrías probado nada.
-4. Deja la infraestructura arriba y la BD lista para la re-validación que el
-   orquestador lanza después (los flujos `FL-*` reparten de BD limpia).
+4. Deja la infraestructura arriba y la BD lista para tu propia re-ejecución de
+   `./gradlew integrationTest` (los flujos `FL-*` parten de BD limpia: cada clase
+   resetea en su `@BeforeAll`).
 
 Si el arranque con `migrations` falla, el mensaje de `validate` dice qué columna o
 tipo no cuadra: corrige el SQL exportado y repite. Si no converge, no maquilles —
@@ -98,12 +103,18 @@ regístralo en `blockers` con el error exacto. **Nunca** relajes `ddl-auto` fuer
 
 ## Cierre
 
-Al terminar, ejecuta `./gradlew build -x test` (en Windows
-`gradlew.bat build -x test`): la compilación y el empaquetado deben quedar **en
-verde**. Si un ajuste tuyo los rompió, corrígelo o reviértelo. No ejecutes
-`./gradlew test`. No preguntas al usuario: registra cada bloqueo en `blockers` y
-termina; el orquestador decide (y relanza la validación funcional para confirmar
-que tus cambios no alteraron comportamiento).
+Al terminar, en este orden:
+
+1. `./gradlew build -x test` (en Windows `gradlew.bat build -x test`): compilación y
+   empaquetado **en verde**. Si un ajuste tuyo los rompió, corrígelo o reviértelo.
+2. `./gradlew integrationTest` con la infraestructura arriba: **la no-regresión es tuya**.
+   Los escenarios `FL-*` deben seguir al 100% en OK. Si alguno falla, tu pase cambió
+   comportamiento: revierte el ajuste responsable y repite; si no identificas cuál,
+   revierte el pase entero y repórtalo. No edites las pruebas para que pasen.
+
+No ejecutes `./gradlew test` (la suite unitaria no forma parte de este flujo). No
+preguntas al usuario: registra cada bloqueo en `blockers` y termina; el orquestador
+decide.
 
 ## Reporte final
 
@@ -111,8 +122,9 @@ Qué se ajustó y qué queda pendiente de decisión humana. Cierra siempre con e
 bloque estructurado que consume el orquestador:
 
 ```yaml
-status: OK | KO           # OK solo con la compilación en verde y el baseline probado
+status: OK | KO           # OK solo con compilación verde, baseline probado y escenarios al 100%
 compiles: true | false
+scenarios: OK | KO        # ./gradlew integrationTest tras el pase: la no-regresión conductual
 baseline: OK | KO | N/A   # migraciones: N/A sin persistencia; OK si arrancó con PROFILE=local,migrations
 issuesFixed: [...]        # ajustes no-conductuales aplicados
 remaining: [...]          # hallazgos conductuales o que requieren decisión humana

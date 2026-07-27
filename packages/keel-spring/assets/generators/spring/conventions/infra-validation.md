@@ -72,12 +72,16 @@ siguientes verifican). Sin reset, re-ejecutar un flujo de creación devuelve `40
 vez de `201`, las claves únicas colisionan y el ciclo de corrección
 código→validación no converge.
 
-Por eso el agente de validación funcional ejecuta los flujos **secuencialmente** y,
-**antes de cada flujo** (también al re-validar tras un fix):
+Por eso cada clase de flujo (`<Flow>FlowIT`, ver [integration-tests](integration-tests.md))
+llama a `resetState()` desde su `@BeforeAll`, y ese método ejecuta:
 
 ```bash
 bash infra/reset-db.sh    # respeta CONTAINER_RUNTIME; datos y caché fuera, esquema intacto
 ```
+
+El script y su exclusión de `flyway_schema_history` no cambian: lo que cambia es quién lo
+invoca — antes el agente entre tanda y tanda de `curl`, ahora el hook `@BeforeAll` de la
+clase. También se puede ejecutar a mano para diagnosticar.
 
 El script vacía los datos vía el CLI de la BD del stack (mismo mecanismo devtools
 que `validate-infra.sh`) **preservando el esquema**; las tablas de
@@ -91,8 +95,9 @@ crea el estado que el escenario B necesita (p. ej. el duplicado que B verifica).
 
 - Si el `Given` de un flujo depende de datos creados por **otro** flujo, tras el
   reset no se sostiene: es un hueco del diseño → repórtalo, no siembres datos a mano.
-- Con **H2** (en memoria, sin contenedor) no hay script de BD: reiniciar la
-  aplicación entre flujos recrea el esquema vacío.
+- Con **H2** (en memoria, sin contenedor) no hay script de BD: `AbstractFlowIT` lleva
+  `@DirtiesContext(BEFORE_CLASS)` y recrear el contexto antes de cada clase de flujo
+  recrea el esquema vacío.
 
 Con caché en el stack, el script borra además las claves `<servicio>:*` (cachés y
 claves de idempotencia comparten ese prefijo por convención). Es imprescindible:
@@ -102,8 +107,9 @@ anterior, con toda la pinta de un bug del código que no existe.
 
 ### `Idempotency-Key` en los escenarios
 
-En las operaciones con `idempotency` el header es obligatorio. Usa un valor
-**único por request** (un uuid nuevo cada vez). Repítelo solo dentro del escenario
+En las operaciones con `idempotency` el header es obligatorio. Va un valor
+**único por request** (un uuid nuevo cada vez); lo pone `AbstractFlowIT` en toda
+mutación. Se repite solo dentro del escenario
 que prueba explícitamente la deduplicación, que es donde la respuesta repetida es
 el `Then` esperado. Reutilizar la misma clave entre flujos o entre la validación
 y la re-validación tras un fix devuelve la respuesta antigua mientras dure el
@@ -111,13 +117,27 @@ y la re-validación tras un fix devuelve la respuesta antigua mientras dure el
 
 ## Obtener un token para llamadas autenticadas
 
-Con capa `security`, los escenarios necesitan un Bearer token:
+Con capa `security`, los escenarios necesitan un Bearer token. Quien lo pide ya no es el
+agente con `curl`: es `AbstractFlowIT.tokenFor("<rol>")`, que lo cachea por rol. Eso
+convierte lo que antes era prosa en un **contrato entre el agente de infraestructura y las
+pruebas**, y el agente de infraestructura debe dejar el proveedor así:
 
-- **Keycloak**: tras crear el realm/cliente, `curl` al endpoint
-  `http://localhost:8180/realms/<realm>/protocol/openid-connect/token`
-  (`grant_type=password` o `client_credentials`) y usa el `access_token`.
+| Pieza | Convención | Sobreescribible con |
+|---|---|---|
+| Realm / user pool | el **nombre del servicio** (`issuer-uri` que ya generó build) | `AUTH_TOKEN_URL` |
+| Cliente de prueba | `<artifactId>-test`, público, con *direct access grants* | `AUTH_TEST_CLIENT` |
+| Usuarios | **uno por rol** del diseño, con el nombre del rol como username | — |
+| Contraseña | `password` para todos | `AUTH_TEST_PASSWORD` |
+
+- **Keycloak**: el endpoint es
+  `http://localhost:8180/realms/<servicio>/protocol/openid-connect/token`
+  (`grant_type=password` o `client_credentials`).
 - **Cognito** (cognito-local): crea el user pool + client con la AWS CLI apuntando a
-  `http://localhost:9229` y obtén el token con `InitiateAuth`.
+  `http://localhost:9229`.
+
+Si el proveedor no puede quedar con esa forma, hay que decirlo en `authHint` con la URL y
+las credenciales reales para que se pasen por entorno; lo que no vale es dejar la clase base
+apuntando a algo que no existe.
 
 Si el diseño declara endpoints M2M (`audience: services`/`both` + `serviceAuth`),
 los escenarios `level: service` usan **credencial de máquina**, no token de
@@ -127,10 +147,11 @@ usuario: `grant_type=client_credentials` con el cliente del `serviceClient`
 403 (cliente sin el scope) y, con `validateAudience`, el 401 por audiencia ajena.
 
 Las claves de API **ya vienen configuradas** en `src/main/resources/parameters/local/security.yaml`
-(`security.api-key: local-dev-api-key` y `security.api-keys.<cliente>: local-<cliente>-key`): úsalas
-tal cual en los escenarios, no las inventes ni edites el YAML. Cambiarlas solo tiene sentido para
-ejercitar el 401 con clave inválida.
+(`security.api-key: local-dev-api-key` y `security.api-keys.<cliente>: local-<cliente>-key`): las
+expone `AbstractFlowIT` (`apiKey()`, `serviceCredential(...)`) tal cual, no se inventan ni se edita
+el YAML. Cambiarlas solo tiene sentido para ejercitar el 401 con clave inválida.
 
-La app corre en el **host** (`./gradlew bootRun`), así que las llamadas HTTP a los
-endpoints van a `http://localhost:8080/...` desde el host (no desde devtools);
-`devtools` es para la **infraestructura**, no para la app.
+La app la arranca **JUnit** (`@SpringBootTest(webEnvironment = RANDOM_PORT)`) en el mismo
+proceso de las pruebas, contra los contenedores de este compose: no hay `bootRun` en
+background ni puerto fijo que sondear. `devtools` es para la **infraestructura**, no para la
+app: las llamadas HTTP a los endpoints las hace el `TestRestTemplate` de la clase base.
