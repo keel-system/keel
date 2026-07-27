@@ -131,7 +131,7 @@ test('errores: un code con http distinto por operación recibe el status por con
 
   assert.ok(shared.includes('extends DomainException'));
   assert.ok(shared.includes('CategoryNotFoundError(String message, int httpStatus)'));
-  assert.ok(result.warnings.some((w) => w.includes("Error 'CATEGORY_NOT_FOUND'") && w.includes('status distintos')));
+  assert.ok(result.warnings.some((w) => w.includes("Nota: 'CATEGORY_NOT_FOUND'") && w.includes('status distintos')));
   // El caso normal (un solo http) no cambia.
   assert.ok(single.includes('extends NotFoundException'));
   assert.ok(single.includes('"PRODUCT_NOT_FOUND", 404'));

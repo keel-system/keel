@@ -782,10 +782,48 @@ export function checkCrossRefs({ layers, wip = false }) {
     }
   }
 
+  // Un miembro de naturalKey/indexes nombra un campo, una relación o el subcampo de un
+  // value object. Una relación se admite por su nombre ('category') o con el sufijo del
+  // id ('categoryId'): cuál de los dos usa el código generado depende de si la relación
+  // cruza frontera de agregado, un detalle del generador ajeno al diseño.
+  const checkPersistenceMember = (entityName, entity, member, key) => {
+    const where = `persistence: entities.${entityName}.${key}`;
+    const [head, ...rest] = String(member).split('.');
+    const fields = entity.fields ?? {};
+    const relations = entity.relations ?? {};
+    const isRelation = head in relations || (head.endsWith('Id') && head.slice(0, -2) in relations);
+
+    if (!(head in fields) && !isRelation) {
+      errors.push(`${where}: '${member}' no es un campo ni una relación de la entidad '${entityName}'`);
+      return;
+    }
+    if (rest.length === 0) return;
+
+    // 'price.amount': el campo debe ser de un value type compuesto que declare ese subcampo.
+    const subFields = domain.types?.[fields[head]?.type]?.fields;
+    if (!subFields) {
+      errors.push(`${where}: '${member}': '${head}' no es un value type compuesto de la entidad '${entityName}'`);
+    } else if (!(rest[0] in subFields)) {
+      errors.push(`${where}: '${member}': el tipo '${fields[head].type}' no declara el campo '${rest[0]}'`);
+    }
+  };
+
   // persistence: entidades → domain
-  for (const entityName of Object.keys(persistence?.entities ?? {})) {
+  for (const [entityName, spec] of Object.entries(persistence?.entities ?? {})) {
     if (!entities.has(entityName)) {
       errors.push(`persistence: entities.${entityName}: la entidad no existe en domain: entities`);
+      continue;
+    }
+    // naturalKey e indexes se declaran sobre miembros del dominio: un nombre que no
+    // resuelve es un typo, y el generador solo puede avisarlo cuando ya está generando.
+    const entity = domain.entities?.[entityName] ?? {};
+    for (const member of spec?.naturalKey ?? []) {
+      checkPersistenceMember(entityName, entity, member, 'naturalKey');
+    }
+    for (const index of spec?.indexes ?? []) {
+      for (const member of index ?? []) {
+        checkPersistenceMember(entityName, entity, member, 'indexes');
+      }
     }
   }
   if (

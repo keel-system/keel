@@ -116,6 +116,80 @@ test('per-aggregate con aggregates declarados es válido', () => {
   assert.deepEqual(errors, []);
 });
 
+// --- persistence: miembros de naturalKey e indexes → domain ---
+
+// Order tiene un campo escalar, un value object compuesto (total → Money) y una hija;
+// OrderLine apunta de vuelta a Order, que es la relación que se indexa.
+const domainForPersistenceMembers = () => ({
+  types: { Money: { fields: { amount: { type: 'decimal' }, currency: { type: 'string' } } } },
+  entities: {
+    Order: entity(
+      { code: { type: 'string' }, total: { type: 'Money' } },
+      { relations: { lines: { entity: 'OrderLine', cardinality: 'one-to-many' } } }
+    ),
+    OrderLine: entity(
+      { position: { type: 'int' } },
+      { relations: { order: { entity: 'Order', cardinality: 'many-to-one' } } }
+    ),
+  },
+  aggregates: { Order: { root: 'Order', entities: ['OrderLine'] } },
+});
+
+const persistenceMembers = (entities) => ({
+  domain: domainForPersistenceMembers(),
+  'use-cases': {},
+  persistence: { default: { model: 'relational' }, entities },
+});
+
+test('naturalKey e indexes sobre campos y value objects válidos no producen errores', () => {
+  const { errors } = run(
+    persistenceMembers({
+      Order: { naturalKey: ['code'], indexes: [['code'], ['total.amount']] },
+      OrderLine: { indexes: [['position']] },
+    })
+  );
+  assert.deepEqual(errors, []);
+});
+
+test('una relación se admite por su nombre y con el sufijo Id indistintamente', () => {
+  for (const member of ['order', 'orderId']) {
+    const { errors } = run(persistenceMembers({ OrderLine: { indexes: [[member, 'position']] } }));
+    assert.deepEqual(errors, [], `miembro '${member}'`);
+  }
+});
+
+test('un miembro de indexes que no existe en la entidad es error', () => {
+  const { errors } = run(persistenceMembers({ OrderLine: { indexes: [['postion']] } }));
+  assert.ok(
+    errors.some((e) => e.includes(`entities.OrderLine.indexes: 'postion' no es un campo ni una relación`)),
+    errors.join('\n')
+  );
+});
+
+test('un miembro de naturalKey que no existe en la entidad es error', () => {
+  const { errors } = run(persistenceMembers({ Order: { naturalKey: ['slug'] } }));
+  assert.ok(
+    errors.some((e) => e.includes(`entities.Order.naturalKey: 'slug' no es un campo ni una relación`)),
+    errors.join('\n')
+  );
+});
+
+test('un dot-path sobre un campo que no es value type compuesto es error', () => {
+  const { errors } = run(persistenceMembers({ Order: { indexes: [['code.amount']] } }));
+  assert.ok(
+    errors.some((e) => e.includes(`'code.amount': 'code' no es un value type compuesto`)),
+    errors.join('\n')
+  );
+});
+
+test('un subcampo inexistente del value object es error', () => {
+  const { errors } = run(persistenceMembers({ Order: { indexes: [['total.importe']] } }));
+  assert.ok(
+    errors.some((e) => e.includes(`el tipo 'Money' no declara el campo 'importe'`)),
+    errors.join('\n')
+  );
+});
+
 // --- use-cases: exclude con dot-path (proyección de entidades hijas) ---
 
 // Dominio con relación a hija en el mismo agregado (Order → lines → OrderLine), un campo

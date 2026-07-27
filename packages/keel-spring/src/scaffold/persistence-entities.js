@@ -387,10 +387,17 @@ ${accessors.join('\n\n')}
  * generaría columnList="parent" cuando la columna es `parent_id`: Hibernate no
  * puede crear el índice y el arranque lo reporta sin romper nada — un fallo de
  * rendimiento silencioso.
+ *
+ * Una relación se admite por su nombre (`product`) o con el sufijo del id
+ * (`productId`), indistintamente: cuál de los dos nombra al miembro Java depende
+ * de si la relación cruza frontera de agregado (externalRef vs. relationOne), y
+ * esa es una decisión del generador que el diseño no tiene por qué conocer.
  */
 function columnsFor(model, entity, members, logicalName, warnings) {
   const [head, ...rest] = String(logicalName).split('.');
-  const member = members.find((m) => m.name === head || m.relation?.name === head);
+  const member = members.find(
+    (m) => m.name === head || m.relation?.name === head || (m.relation && `${m.relation.name}Id` === head)
+  );
 
   if (member?.kind === 'scalar') return [snakeCase(member.name)];
   if (member?.kind === 'externalRef' || member?.kind === 'relationOne') {

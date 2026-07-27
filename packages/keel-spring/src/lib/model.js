@@ -577,9 +577,9 @@ function resolveErrorStatuses(errors, warnings) {
 
     const usages = [...error.statuses.entries()].map(([http, operations]) => ({ http, operations }));
     warnings.push(
-      `Error '${error.code}': declarado con status distintos (${usages
+      `Nota: '${error.code}' se declara con status distintos según la operación (${usages
         .map((u) => `${u.http} en ${u.operations.join(', ')}`)
-        .join('; ')}). ${error.exceptionClass} recibe el status por constructor; pásalo en cada handler.`
+        .join('; ')}) — diseño válido y soportado. ${error.exceptionClass} recibe el status por constructor; pásalo en cada handler.`
     );
     return { ...error, sharedException: 'DomainException', dynamicStatus: true, usages };
   });
