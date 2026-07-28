@@ -218,12 +218,14 @@ export function generate(model) {
   lines.push(
     '',
     `La skill \`/${SKILL}\` de este proyecto orquesta este flujo con los subagentes de \`.claude/agents/\`:`,
-    '`keel-spring-code` (código, sin tests) en paralelo con `keel-spring-infra` (infraestructura arriba y sana), después',
-    '`keel-spring-validate` (escenarios contra el servidor real, reseteando datos entre flujos) y al final',
-    '`keel-spring-quality` (pase de calidad no-conductual con la compilación en verde' +
+    '`keel-spring-code` (código, sin tests) en paralelo con `keel-spring-infra` (infraestructura arriba y sana) y con',
+    '`keel-spring-tests` (escenarios `FL-*` → `src/integrationTest/`, en caja negra). Con los tres en OK, el orquestador',
+    'ejecuta `bash infra/score-scenarios.sh`, que corre la suite y compone la matriz desde el XML de JUnit: eso es',
+    'determinista y no gasta un agente. Solo si la matriz trae algo en rojo se invoca `keel-spring-validate`, que **solo',
+    'arbitra** de quién es la culpa de cada fallo. Al final, `keel-spring-quality` (pase de calidad no-conductual con la',
+    'compilación en verde' +
       (layersPresent.persistence ? ', más el baseline de migraciones del punto 4' : '') +
-      '), seguido de una re-validación',
-    'de los escenarios antes del commit.'
+      ', y los escenarios al 100% como no-regresión propia).'
   );
 
   lines.push(

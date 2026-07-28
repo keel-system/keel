@@ -84,12 +84,13 @@ misma raíz. Todo lo que hagas ocurre dentro de ella.
      reporte orienta; el JSON es la evidencia.
    - Corrige, deja `./gradlew build -x test` en verde, y solo entonces ejecuta
      `./gradlew integrationTest --tests '<ClaseAfectada>'` (en Windows `gradlew.bat`).
-     **Solo las clases nombradas en los `failures` que recibiste**: la suite completa es de
-     `keel-spring-validate`, y correrla entera duplica el coste del ciclo sin darte el gate.
+     **Solo las clases nombradas en los `failures` que recibiste**: la suite completa la
+     ejecuta el orquestador con `infra/score-scenarios.sh`, y correrla entera duplica el
+     coste del ciclo sin darte el gate.
    - **El verde por clase no es un veredicto.** No compones matriz, no das escenarios por
      aprobados y no reclasificas un `culprit`. Significa «mi corrección está lista para
-     arbitrarse»; el siguiente paso es siempre `keel-spring-validate` con la suite completa,
-     que es quien decide.
+     arbitrarse»; el siguiente paso es siempre la re-puntuación con la suite completa, y el
+     arbitraje de lo que siga en rojo es de `keel-spring-validate`.
    - **Ejecutar `src/integrationTest/` sí; editarlo no.** La regla de abajo no cambia ni un
      ápice: si tras corregir el escenario sigue en rojo y crees que el test está mal, se
      reporta, no se toca. Es lo que mantiene separados al que escribe el código y al que
@@ -172,7 +173,8 @@ failures: [...]          # errores de compilación/empaquetado: archivo:línea y
                          # Si te relanzaron con escenarios en FALLO, qué corregiste de cada uno
 verifiedClasses:         # solo en un relanzamiento desde la fase 2: qué clases de integración
                          # ejecutaste con --tests y cómo quedaron. Verde aquí NO aprueba el
-                         # escenario: lo arbitra keel-spring-validate con la suite completa
+                         # escenario: la matriz sale de infra/score-scenarios.sh y lo que
+                         # siga en rojo lo arbitra keel-spring-validate
   - { class: ProductCreationFlowIT, result: OK | KO }
 designGaps: [...]        # huecos del diseño, como propuesta de cambio a los artefactos.
                          # Solo lo irresoluble sin cambiar diseño o infraestructura:

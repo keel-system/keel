@@ -275,16 +275,18 @@ información; un test decorativo es ruido que además da falsa seguridad.
 | Comando | Cuándo | Quién |
 |---|---|---|
 | `./gradlew compileIntegrationTestJava` | fase 1, al terminar de escribir | `keel-spring-tests` |
-| `./gradlew integrationTest --tests '*HarnessSmokeIT'` | fase 2, **antes** de la suite | `keel-spring-validate` |
-| `./gradlew integrationTest` | fase 2, con el humo en verde | `keel-spring-validate` |
+| `bash infra/score-scenarios.sh` | fase 2, y tras **cada** ciclo de fix | Orquestador (script, sin agente) |
 | `./gradlew integrationTest --tests '<Clase>'` | tras corregir un `culprit: test` | `keel-spring-tests` |
 | `./gradlew integrationTest --tests '<Clase>'` | tras corregir un `culprit: code` (fase 2) | `keel-spring-code` |
 | `./gradlew integrationTest` | fase 3, no-regresión tras el pase de calidad | `keel-spring-quality` |
 
+El script encadena el humo del arnés (`--tests '*HarnessSmokeIT'`) y, solo con él en verde, la
+suite completa; después compone la matriz desde el XML de JUnit. `keel-spring-validate` **no
+ejecuta nada**: recibe los fallos ya puntuados y solo los arbitra.
+
 Los dos usos de `--tests` sobre una clase de flujo son **verificación local del propio fix**,
-no un veredicto: la matriz de aceptación sale siempre de la ejecución completa de
-`keel-spring-validate`, que es la única que puede ver una regresión en un flujo distinto del
-corregido.
+no un veredicto: la matriz de aceptación sale siempre de la ejecución completa del script,
+que es la única que puede ver una regresión en un flujo distinto del corregido.
 
 Cuando lo corregido es un componente **compartido** (un método de `AbstractFlowIT`, un helper
 que usan varias clases), la verificación local no son dos o tres clases de muestra: se hace

@@ -85,8 +85,166 @@ export function generate(model) {
     {
       path: javaPath(model, 'flows', 'HarnessSmokeIT', 'integrationTest'),
       content: javaFile(pkg, smokeImports(model), smokeBody(model))
-    }
+    },
+    { path: 'infra/score-scenarios.sh', content: scoreScenariosScript(model) }
   ];
+}
+
+// ─── score-scenarios.sh ──────────────────────────────────────────────────────
+//
+// Puntuación MECÁNICA de la matriz de escenarios: ejecutar la suite y derivar
+// «FL-x → OK | FALLO | NO_EJERCITADO» del XML de JUnit no requiere criterio, es
+// parsear. Sacarlo del agente de validación deja a este con lo único
+// irreducible —arbitrar de quién es la culpa de cada fallo— y hace que una
+// generación en verde no cueste ninguna sesión de agente.
+//
+// Vive en infra/ como los demás scripts que necesitan la infraestructura arriba
+// (validate-infra.sh, reset-db.sh, export-schema.sh) y comparte su estilo.
+//
+// Requisito de diseño: lo invoca el ORQUESTADOR, que es la sesión más larga del
+// pipeline. Por eso la salida de Gradle va entera a un log y por stdout solo
+// sale la matriz: volcarle miles de líneas en cada vuelta del bucle de fix lo
+// dejaría compactado antes de llegar a la fase de calidad. Hoy ese ruido lo
+// absorbe una sesión desechable; el script tiene que conservar esa propiedad.
+function scoreScenariosScript(model) {
+  return `#!/usr/bin/env bash
+# score-scenarios.sh — ejecuta las pruebas de integración de ${model.service.name} y
+# puntúa los escenarios FL-* contra specs/validation-scenarios.md.
+#
+# La matriz sale del XML de JUnit, sin criterio de por medio: el @DisplayName de
+# cada prueba lleva el id delante de los dos puntos (FL-PRD-001-A: …). Arbitrar
+# de quién es la culpa de un fallo NO es trabajo de este script — para eso está
+# el agente keel-spring-validate, que se invoca solo si aquí sale algo en rojo.
+#
+# Uso (desde la raíz del proyecto, con la infraestructura arriba):
+#   bash infra/score-scenarios.sh           # humo del arnés + suite + matriz
+#   bash infra/score-scenarios.sh --score   # solo re-puntúa el XML ya existente
+#
+# Salida: la matriz por stdout (la de Gradle va al log). Código de salida:
+#   0  todos los escenarios en OK
+#   1  hay FALLO o NO_EJERCITADO → hay algo que arbitrar
+#   2  precondición o arnés roto: la suite no se ejecutó, no hay matriz que leer
+set -u
+
+RESULTS="build/test-results/integrationTest"
+LOG_DIR="build/keel-scenarios"
+LOG="$LOG_DIR/run.log"
+EVIDENCE="build/keel-failures"
+SCENARIOS="specs/validation-scenarios.md"
+
+if [ ! -f ./gradlew ]; then
+  echo "Ejecuta el script desde la raíz del proyecto (no se encontró ./gradlew)." >&2
+  exit 2
+fi
+
+mkdir -p "$LOG_DIR"
+
+score_only=0
+[ "\${1:-}" = "--score" ] && score_only=1
+
+if [ "$score_only" -eq 0 ]; then
+  rm -rf "$RESULTS"
+  # Humo del arnés primero: son segundos y comprueba la fontanería de la que
+  # dependen TODAS las clases de flujo (reset, servidor vivo, credenciales,
+  # canales, caché). En rojo no se ejecuta la suite: correrla sobre una
+  # fontanería rota produce decenas de fallos que parecen de negocio y no lo
+  # son, y cuesta una pasada entera descubrirlo.
+  echo "Humo del arnés (HarnessSmokeIT)…"
+  if ! ./gradlew integrationTest --tests '*HarnessSmokeIT' --console=plain >"$LOG" 2>&1; then
+    echo ""
+    echo "HARNESS: KO — la suite NO se ejecutó."
+    echo "  El defecto está en el andamiaje que generó build (AbstractFlowIT,"
+    echo "  FailureCapture, HarnessSmokeIT) o falta infraestructura."
+    echo "  log: $LOG"
+    exit 2
+  fi
+  echo "Humo del arnés: OK."
+  echo "Ejecutando la suite completa…"
+  ./gradlew integrationTest --console=plain >>"$LOG" 2>&1
+fi
+
+if [ ! -d "$RESULTS" ]; then
+  echo ""
+  echo "No hay resultados en $RESULTS: la suite no llegó a ejecutarse."
+  echo "  log: $LOG"
+  exit 2
+fi
+
+# Matriz desde el XML de JUnit. Un <testcase> cuenta como FALLO si lleva dentro
+# un <failure> o un <error>; el id es lo que va delante de los dos puntos del
+# @DisplayName y la clase sale del atributo classname (sin el paquete).
+matrix="$(awk '
+  BEGIN { RS = "<testcase " }
+  NR == 1 { next }
+  {
+    rec = $0
+    close_tag = index(rec, "</testcase>")
+    self_tag = index(rec, "/>")
+    if (close_tag > 0 && (self_tag == 0 || close_tag < self_tag)) seg = substr(rec, 1, close_tag)
+    else if (self_tag > 0) seg = substr(rec, 1, self_tag)
+    else seg = rec
+
+    name = ""; cls = ""
+    if (match(seg, /name="[^"]*"/)) name = substr(seg, RSTART + 6, RLENGTH - 7)
+    if (match(seg, /classname="[^"]*"/)) cls = substr(seg, RSTART + 11, RLENGTH - 12)
+    if (name == "") next
+
+    id = name
+    if (index(id, ":") > 0) id = substr(id, 1, index(id, ":") - 1)
+    gsub(/^[ \\t]+|[ \\t]+$/, "", id)
+    if (id !~ /^FL-/) next
+
+    sub(/^.*\\./, "", cls)
+    if (seg ~ /<(failure|error)[ >]/) print "FALLO\\t" id "\\t" cls
+    else if (seg ~ /<skipped[ \\/>]/) print "OMITIDO\\t" id "\\t" cls
+    else print "OK\\t" id "\\t" cls
+  }
+' "$RESULTS"/*.xml 2>/dev/null | sort -k2,2)"
+
+# Escenarios que el documento declara y ninguna clase ejercita. No son OK: son
+# cobertura que falta. El cruce es por prefijo porque el documento numera el
+# flujo (FL-PRD-001) y las pruebas numeran cada escenario dentro de él
+# (FL-PRD-001-A).
+uncovered=""
+if [ -f "$SCENARIOS" ]; then
+  covered="$(printf '%s\\n' "$matrix" | cut -f2)"
+  for id in $(grep -oE '^#{1,6}[[:space:]]*FL-[A-Za-z0-9-]+' "$SCENARIOS" \\
+              | grep -oE 'FL-[A-Za-z0-9-]+' | sort -u); do
+    printf '%s\\n' "$covered" | grep -qE "^\${id}(-|$)" || uncovered="$uncovered $id"
+  done
+fi
+
+echo ""
+echo "MATRIZ"
+printf '%s\\n' "$matrix" | while IFS="$(printf '\\t')" read -r result id cls; do
+  [ -n "\${id:-}" ] || continue
+  if [ "$result" = "FALLO" ]; then
+    printf '  %-8s %-20s %-28s %s\\n' "$result" "$id" "$cls" "$EVIDENCE/$id.json"
+  else
+    printf '  %-8s %-20s %s\\n' "$result" "$id" "$cls"
+  fi
+done
+for id in $uncovered; do
+  printf '  %-8s %s\\n' "NO_EJERC" "$id"
+done
+
+ok=$(printf '%s\\n' "$matrix" | grep -c '^OK')
+ko=$(printf '%s\\n' "$matrix" | grep -c '^FALLO')
+sk=$(printf '%s\\n' "$matrix" | grep -c '^OMITIDO')
+nc=0
+for id in $uncovered; do nc=$((nc + 1)); done
+
+echo ""
+if [ "$ko" -eq 0 ] && [ "$sk" -eq 0 ] && [ "$nc" -eq 0 ] && [ "$ok" -gt 0 ]; then
+  echo "RESULTADO: OK — $ok escenario(s) al 100%."
+  exit 0
+fi
+
+echo "RESULTADO: KO — $ok OK · $ko FALLO · $sk omitido(s) · $nc no ejercitado(s)."
+echo "  evidencia por fallo: $EVIDENCE/<FL-id>.json (request, response y aserción)"
+echo "  log completo de Gradle: $LOG"
+exit 1
+`;
 }
 
 // ─── AbstractFlowIT ──────────────────────────────────────────────────────────

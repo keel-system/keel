@@ -476,6 +476,32 @@ test('humo del arnés: build genera HarnessSmokeIT y ejercita solo la fontanerí
   assert.ok(!smoke.includes('/products'));
 });
 
+test('puntuación de escenarios: script mecánico, no agente, y con salida compacta', () => {
+  const workspace = makeWorkspace();
+  scaffoldService({ ...loadFixture(), workspace });
+
+  const script = read(workspace, 'infra/score-scenarios.sh');
+
+  // El humo del arnés va primero y corta: correr la suite sobre una fontanería
+  // rota produce fallos que parecen de negocio y cuesta una pasada descubrirlo.
+  assert.ok(script.includes("--tests '*HarnessSmokeIT'"));
+  assert.ok(script.includes('exit 2'));
+
+  // La matriz sale del XML de JUnit: es parseo, no criterio.
+  assert.ok(script.includes('build/test-results/integrationTest'));
+  assert.ok(script.includes('classname='));
+
+  // El requisito que hace que el cambio no salga net-negativo: lo invoca el
+  // orquestador, así que el volcado de Gradle va al log y por stdout solo la
+  // matriz. Si esto se pierde, la sesión más larga del pipeline se compacta.
+  assert.ok(script.includes('LOG_DIR="build/keel-scenarios"'));
+  assert.ok(script.includes('LOG="$LOG_DIR/run.log"'));
+  assert.ok(script.includes('>"$LOG" 2>&1'));
+
+  // Arbitrar no es suyo: el veredicto lo sigue dando keel-spring-validate.
+  assert.ok(!script.includes('culprit'));
+});
+
 test('constraints del diseño en una query: Bean Validation en el @RequestParam y en el record', () => {
   const workspace = makeWorkspace();
   const { manifest, layers } = loadFixture();
@@ -577,7 +603,9 @@ test('agentes de la orquestación: copiados al .claude/agents/ del proyecto', ()
     // El agente de pruebas trabaja sin ver src/main/java: las fuentes con las que
     // deriva la forma del cable son parte de su contrato, no un detalle de redacción.
     ['keel-spring-tests', ['compileIntegrationTestJava', 'mapping.md', 'docs/openapi.yaml', 'infra-validation.md']],
-    ['keel-spring-validate', ['integrationTest', 'evidence:']],
+    // El árbitro ya no ejecuta la suite ni compone la matriz (eso es del script):
+    // recibe los fallos puntuados y solo emite veredicto.
+    ['keel-spring-validate', ['culprit: code', 'evidence:', 'score-scenarios.sh']],
     ['keel-spring-quality', ['no-conductual']]
   ]) {
     const agent = read(workspace, `.claude/agents/${name}.md`);
@@ -586,6 +614,12 @@ test('agentes de la orquestación: copiados al .claude/agents/ del proyecto', ()
       assert.ok(agent.includes(marker), `${name}.md debería mencionar ${marker}`);
     }
   }
+
+  // El arbitraje es lo único irreducible del nodo: si el agente vuelve a ejecutar
+  // la suite, sobrescribe los volcados que vino a leer y el camino verde vuelve a
+  // costar una sesión.
+  const validate = read(workspace, '.claude/agents/keel-spring-validate.md');
+  assert.ok(!validate.includes('./gradlew integrationTest'));
 });
 
 test('skills por tecnología: solo las del stack elegido', () => {
