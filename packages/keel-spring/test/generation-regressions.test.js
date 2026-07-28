@@ -247,13 +247,17 @@ test('§1.2: con Kafka no hay purga posible, el aislamiento es la marca de offse
   assert.ok(harness.includes('String offset = mark != null ? String.valueOf(mark) : "-" + count;'));
 });
 
-test('humo del arnés: solo exige los canales que el diseño declara', () => {
+test('humo del arnés: con Kafka publica tráfico real; con RabbitMQ, los canales declarados', () => {
   const { read } = scaffoldExtended();
-  // catalog-extended no declara `channels`: el destino por convención es el
-  // exchange del servicio, que en RabbitMQ no es un destino legible. Sin nombre
-  // fijado por el diseño, el humo no inventa una aserción de mensajería.
+  // Con Kafka el destino por convención (`<servicio>.events`) ES el topic, así que
+  // el humo sí puede sondearlo — pero no basta con leer sin excepción: Kafka
+  // autocrea el topic vacío al primer sondeo, de modo que un topic equivocado pasa
+  // igual que un canal sano. Por eso publica un mensaje sintético y lo espera de
+  // vuelta: es lo que distingue las dos situaciones.
   const smoke = read('src/integrationTest/java/com/commerce/catalog/flows/HarnessSmokeIT.java');
-  assert.ok(!smoke.includes('eventChannelsAreReadableAndPurgeable'));
+  assert.ok(smoke.includes('probeChannel("catalog.events"'));
+  assert.ok(smoke.includes('publishRaw(eventType,'));
+  assert.ok(smoke.includes('await(Duration.ofSeconds(15)'));
   assert.ok(smoke.includes('resetClearsCache'));
 
   const { manifest, layers } = loadService(
@@ -266,6 +270,77 @@ test('humo del arnés: solo exige los canales que el diseño declara', () => {
     'utf8'
   );
   assert.ok(declared.includes('for (String channel : List.of("digests"))'));
+});
+
+// ─── Fricciones de la generación de catalog-spring (informe de fricciones) ────
+
+test('el arnés sondea el topic físico del servicio, no el canal lógico', () => {
+  const { read } = scaffoldExtended();
+  const harness = read('src/integrationTest/java/com/commerce/catalog/flows/AbstractFlowIT.java');
+
+  // El código publica todos los eventos en `messaging.publishing.destination`
+  // con una routing key por evento (mapping.md § messaging). Un arnés que asuma
+  // un topic por canal lee un topic que nadie escribe: Kafka lo autocrea vacío y
+  // el timeout resultante es indistinguible de "el código no publica".
+  assert.ok(harness.includes('EVENT_TOPIC ='));
+  assert.ok(harness.includes('System.getenv().getOrDefault("MESSAGING_DESTINATION", "catalog.events")'));
+  assert.ok(harness.includes('"-t", EVENT_TOPIC'));
+  assert.ok(!harness.includes('"-t", destination'));
+  // La discriminación por canal es por eventType del envelope, no por la key del
+  // mensaje: la key difiere entre la ruta outbox y la best-effort.
+  assert.ok(harness.includes('CHANNEL_EVENT_TYPES'));
+  assert.ok(harness.includes('"\\"eventType\\":\\"" + type + "\\""'));
+});
+
+test('kcat se invoca siempre en modo consumidor (-C)', () => {
+  const { read } = scaffoldExtended();
+  const harness = read('src/integrationTest/java/com/commerce/catalog/flows/AbstractFlowIT.java');
+
+  // Sin `-C` y sin TTY en stdin, kcat elige modo productor: recibe EOF y sale
+  // con éxito y salida vacía, un falso negativo silencioso.
+  const invocations = harness.match(/devtools\("kcat"[^)]*\)/g) ?? [];
+  assert.ok(invocations.length >= 2);
+  for (const invocation of invocations) {
+    assert.ok(invocation.includes('"-C"'), `kcat sin -C: ${invocation}`);
+  }
+});
+
+test('el producer de Kafka serializa String: un único punto de serialización', () => {
+  const { read } = scaffoldExtended();
+  const kafka = read('src/main/resources/parameters/local/kafka.yaml');
+
+  // Con JsonSerializer, el String que ya produjo el ObjectMapper de la app se
+  // serializaba otra vez (JSON escapado dos veces) y, cuando el valor era un
+  // POJO, lo hacía un ObjectMapper por defecto sin los módulos de la app.
+  assert.ok(kafka.includes('value-serializer: org.apache.kafka.common.serialization.StringSerializer'));
+  assert.ok(!kafka.includes('value-serializer: org.springframework.kafka.support.serializer.JsonSerializer'));
+});
+
+test('el ObjectMapper de la caché sabe reconstruir agregados sin setters', () => {
+  const { read } = scaffoldExtended();
+  const cache = read(`${JAVA}/infrastructure/configurations/cache/CacheConfig.java`);
+
+  // Las tres piezas son necesarias y ninguna se deduce de la anterior. Sin
+  // ellas la caché no falla: el CacheErrorHandler degrada a miss silencioso y
+  // nunca retiene nada.
+  assert.ok(cache.includes('mapper.setVisibility(PropertyAccessor.FIELD, JsonAutoDetect.Visibility.ANY)'));
+  assert.ok(cache.includes('mapper.setVisibility(PropertyAccessor.CREATOR, JsonAutoDetect.Visibility.ANY)'));
+  assert.ok(cache.includes('new ParameterNamesModule(JsonCreator.Mode.PROPERTIES)'));
+  assert.ok(cache.includes('import com.fasterxml.jackson.module.paramnames.ParameterNamesModule;'));
+});
+
+test('la violación de unicidad usa el error declarado del diseño cuando lo hay', () => {
+  const { read } = scaffoldExtended();
+  const handler = read(`${JAVA}/infrastructure/rest/ApiExceptionHandler.java`);
+
+  // El diseño declara SKU_ALREADY_EXISTS: el code sintetizado por convención
+  // (PRODUCT_SKU_ALREADY_EXISTS) viajaría en un 409 público sin ser contrato.
+  assert.ok(handler.includes('new SkuAlreadyExistsError('));
+  assert.ok(!handler.includes('PRODUCT_SKU_ALREADY_EXISTS'));
+  assert.ok(handler.includes('import com.commerce.catalog.domain.errors.SkuAlreadyExistsError;'));
+  // Sin error declarado (unicidad de Category.slug) sigue el fallback con TODO.
+  assert.ok(handler.includes('"CATEGORY_SLUG_ALREADY_EXISTS"'));
+  assert.ok(handler.includes('TODO (agente)'));
 });
 
 test('§1.6: la tabla de parámetros de production sale de los YAML generados, no de una lista a mano', () => {

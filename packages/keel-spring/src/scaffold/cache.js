@@ -48,9 +48,13 @@ export function generate(model) {
 function imports(model) {
   return [
     timestampModuleImport(model),
+    'com.fasterxml.jackson.annotation.JsonAutoDetect',
+    'com.fasterxml.jackson.annotation.JsonCreator',
+    'com.fasterxml.jackson.annotation.PropertyAccessor',
     'com.fasterxml.jackson.databind.ObjectMapper',
     'com.fasterxml.jackson.databind.SerializationFeature',
     'com.fasterxml.jackson.datatype.jsr310.JavaTimeModule',
+    'com.fasterxml.jackson.module.paramnames.ParameterNamesModule',
     'java.time.Duration',
     'java.util.LinkedHashMap',
     'java.util.Map',
@@ -117,8 +121,8 @@ ${constants}
                         GenericJackson2JsonRedisSerializer.builder()
                                 .objectMapper(cacheObjectMapper())
                                 // Deja que el serializador instale su propia información
-                                // de tipo: los DTO son records (clases final) y sin ella
-                                // la lectura devolvería mapas en vez del DTO.
+                                // de tipo: sin ella la lectura devolvería un LinkedHashMap
+                                // en vez del agregado (o del record) que se cacheó.
                                 .defaultTyping(true)
                                 .build()));
 
@@ -138,16 +142,40 @@ ${constants}
      * y fechas en ISO-8601. Sin este módulo, cachear cualquier respuesta con un
      * timestamp de auditoría falla al serializar.
      *
-     * TimestampModule es el mismo que instala JacksonConfig en el mapper de la
+     * <p>TimestampModule es el mismo que instala JacksonConfig en el mapper de la
      * aplicación: un valor servido desde la caché tiene que ser byte a byte el
      * que habría servido la base de datos, y eso incluye la precisión de los
      * instantes.
+     *
+     * <p><b>Las tres líneas de visibilidad no son opcionales</b>: lo que se cachea
+     * son agregados de dominio, que por convención no tienen setters ni
+     * constructor sin argumentos (conventions/domain-modeling.md).
+     * <ol>
+     *   <li>ALL/NONE apaga la detección por getters y setters, que expondría
+     *       propiedades derivadas que no forman parte del estado.</li>
+     *   <li>FIELD/ANY es lo que permite leer y reconstruir el estado real.</li>
+     *   <li>CREATOR/ANY hay que restaurarla <b>explícitamente</b>: el ALL/NONE
+     *       anterior también apaga la detección del constructor, y sin ella
+     *       Jackson no encuentra por dónde reconstruir el agregado.</li>
+     * </ol>
+     * ParameterNamesModule cierra el círculo: reconoce el constructor de
+     * reconstrucción como creator usando los nombres reales de los parámetros
+     * (el plugin de Spring Boot ya compila con <code>-parameters</code>).
+     *
+     * <p>Sin esto la caché <b>no falla</b>: el CacheErrorHandler de abajo degrada
+     * el error de (de)serialización a un miss y el servicio sirve siempre desde la
+     * base de datos. Es decir, una caché que no cachea nada, indistinguible de una
+     * sana en cualquier escenario que solo compruebe que los cambios se reflejan.
      */
     private static ObjectMapper cacheObjectMapper() {
         ObjectMapper mapper = new ObjectMapper();
         mapper.registerModule(new JavaTimeModule());
         mapper.registerModule(new TimestampModule());
+        mapper.registerModule(new ParameterNamesModule(JsonCreator.Mode.PROPERTIES));
         mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+        mapper.setVisibility(PropertyAccessor.ALL, JsonAutoDetect.Visibility.NONE);
+        mapper.setVisibility(PropertyAccessor.FIELD, JsonAutoDetect.Visibility.ANY);
+        mapper.setVisibility(PropertyAccessor.CREATOR, JsonAutoDetect.Visibility.ANY);
         return mapper;
     }
 
@@ -160,6 +188,12 @@ ${ttlEntries}
     /**
      * El store caído degrada a miss: la petición va a la base de datos en vez de
      * fallar. Una caché no disponible no puede tumbar el servicio.
+     *
+     * <p>Ojo al diagnosticar: por aquí pasa <b>también</b> el fallo de
+     * (de)serialización del valor, que no es indisponibilidad. Si un escenario de
+     * retención falla —el valor viejo no sobrevive dentro del TTL— y no hay ningún
+     * error en la respuesta, el WARN de estos métodos es la única evidencia: revisa
+     * {@link #cacheObjectMapper()} antes que la infraestructura.
      */
     @Override
     @Bean

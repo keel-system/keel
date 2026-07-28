@@ -99,7 +99,13 @@ y ahorra un ciclo entero de validación funcional.
    **inmediatamente antes** de la acción bajo prueba. Es auditable con un `grep` del
    `purgeMessages` de cada aserción negativa: si el único reset del canal está en el
    `@BeforeAll`, el test está mal.
-9. Toda vía que sirve una entidad desde **caché** compara `createdAt`/`updatedAt` entre la
+9. Cada cláusula del `Given` de cada escenario tiene su llamada de siembra y esa llamada
+   comprueba su propio status — § Traducir el `Given`. Es auditable leyendo el escenario y el
+   test en paralelo: un `Given` que nombra un estado del lifecycle y un test que solo crea la
+   entidad es un fallo garantizado, atribuido además al agente equivocado.
+10. Todo `jsonPath(...)` se captura en una variable tipada antes de interpolarlo —
+    § `jsonPath(...)` va siempre a una variable tipada.
+11. Toda vía que sirve una entidad desde **caché** compara `createdAt`/`updatedAt` entre la
    lectura que puebla la caché y la que la sirve, no solo los campos de negocio. El
    `Instant` es el campo que primero se rompe en el roundtrip de (de)serialización y el que
    ningún escenario nombra explícitamente: comprobar solo los campos de negocio deja pasar
@@ -126,13 +132,15 @@ class ProductCreationFlowIT extends AbstractFlowIT {
             {"sku": "ACME-1", "name": "Martillo", "categoryId": "%s"}""".formatted(categoryId));
 
         assertThat(response.status()).isEqualTo(201);
-        assertThat(response.header("Location")).endsWith("/products/" + productId);
         productId = jsonPath(response, "$.id");
+        String createdAt = jsonPath(response, "$.createdAt");   // variable tipada, ver abajo
         assertIsUuid(productId);
+        assertIsInstant(createdAt);
+        assertThat(response.header("Location")).endsWith("/products/" + productId);
         assertBody(response, """
             {"id": "%s", "sku": "ACME-1", "name": "Martillo", "status": "draft",
              "version": 0, "createdAt": "%s", "categoryId": "%s", "images": []}"""
-            .formatted(productId, jsonPath(response, "$.createdAt"), categoryId));
+            .formatted(productId, createdAt, categoryId));
     }
 }
 ```
@@ -152,6 +160,32 @@ Reglas de forma:
 - Si el `Given` de un flujo depende de datos creados por **otro** flujo, tras el reset no se
   sostiene: es un hueco del diseño (`designGaps`), no se siembra a mano.
 
+### Traducir el `Given`
+
+El `Then` se traduce aserción por aserción; el `Given` se traduce **cláusula por cláusula**, y
+es donde se pierden los tests silenciosamente: crear la entidad no es dejarla en el estado que
+el escenario declara. Por cada cláusula del `Given`, escribe la llamada que la satisface y
+comprueba que **efectivamente** deja ese estado observable por la API:
+
+| Cláusula del `Given` | No basta con | Hace falta |
+|---|---|---|
+| `p1 (active)` | crear `p1` (nace en el estado inicial del lifecycle) | la operación que lo transiciona a `active`, y assertar el status de esa llamada |
+| `c1 con 3 productos` | crear `c1` | crear los tres y comprobar que quedan asociados |
+| `p1 sin imágenes` | crear `p1` | nada más, pero **decláralo**: es la precondición que hace determinista el `Then` |
+| `la caché de X poblada` | mutar `X` | una lectura previa que la puebla |
+
+Reglas:
+
+1. **El estado del lifecycle es explícito.** Un agregado con `lifecycle` nace en su estado
+   inicial; cualquier otro estado del `Given` exige la operación de transición declarada en el
+   diseño, no un atajo.
+2. **La preparación se asserta.** Una llamada de siembra cuyo status no se comprueba convierte
+   un fallo de preparación en un fallo del escenario, atribuido al código que no lo causó.
+3. **Si el `Given` no se puede materializar por la API**, es `designGap`: no se siembra por BD ni
+   se relaja el escenario.
+4. Recuerda que la preparación **también publica eventos**: si el `Then` afirma "no se publica
+   nada", va `purgeMessages(<canal>)` entre el `Given` y el `When` (§ checklist, punto 8).
+
 ## Aserciones: el cuerpo completo o nada
 
 - `assertBody(response, expectedJson)` compara con **JSONAssert en modo STRICT**: verifica
@@ -166,6 +200,41 @@ Reglas de forma:
   `response.header("Location")`.
 - Un test que solo comprueba el status **no vale**. Es el modo de fallo que esta convention
   existe para eliminar.
+
+### `jsonPath(...)` va siempre a una variable tipada
+
+`jsonPath` es genérico (`protected <T> T jsonPath(Response, String)`) y no valida nada: el tipo
+sale del sitio de la llamada. Interpolarlo directamente revienta en runtime:
+
+```java
+// MAL: único argumento de un varargs Object..., javac infiere T = Object[]
+//      y el cast interno lanza ClassCastException con el String real que devuelve.
+"…%s…".formatted(jsonPath(response, "$.category.id"));
+
+// BIEN: el tipo queda anclado en la declaración.
+String categoryId = jsonPath(response, "$.category.id");
+"…%s…".formatted(categoryId);
+```
+
+La regla es la misma aunque haya varios argumentos: **captura primero, interpola después**.
+Además de evitar el fallo, deja la aserción de forma (`assertIsUuid`, `assertIsInstant`) junto a
+la extracción, que es donde se lee.
+
+### Ausencia de campo: STRICT, no `isNull()`
+
+La vía normal es `assertBody(...)`: JSONAssert en modo STRICT ya falla si aparece una clave que
+el JSON esperado no declara. Si hace falta comprobarlo puntualmente, **no** se usa
+`assertThat((Object) jsonPath(response, "$.campo")).isNull()`: `JsonPath.read` sobre una clave
+**ausente** lanza `PathNotFoundException`, no devuelve `null`, así que esa aserción falla por su
+propia técnica aunque el servidor cumpla el contrato. El patrón correcto:
+
+```java
+assertThatThrownBy(() -> jsonPath(response, "$.categoryId"))
+        .isInstanceOf(PathNotFoundException.class);
+```
+
+(`null` explícito **sí** devuelve `null`: si el diseño distingue ausente de nulo —`mapping.md §
+Ausencia vs. nulo`— son dos aserciones distintas.)
 
 ## Idempotencia, credenciales y estado
 

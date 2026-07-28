@@ -64,14 +64,15 @@ test('AbstractFlowIT se adapta a la silueta: sin api no hay ROUTE_BASE, con mess
   // por suscripción y por schedule), pero la base sigue existiendo: el servidor
   // se levanta igual y los efectos se verifican por el broker.
   assert.ok(!abstractFlow.includes('ROUTE_BASE'));
-  assert.ok(abstractFlow.includes('protected static String publishedMessages(String destination, int count)'));
+  assert.ok(abstractFlow.includes('protected static String publishedMessages(String channel, int count)'));
   // El comando va como lista de argumentos, nunca como cadena para `sh -c`: con
   // comillas dentro, el cliente docker/podman de Windows la reinterpreta y la rompe.
-  assert.ok(abstractFlow.includes('"kcat", "-b", "kafka:29092"'));
+  // `-C` es obligatorio: sin TTY en stdin, kcat elegiría modo productor.
+  assert.ok(abstractFlow.includes('"kcat", "-C", "-b", "kafka:29092"'));
   assert.ok(!abstractFlow.includes('String.format('));
   // Kafka no tiene purga: el aislamiento entre flujos es la marca de offset.
-  assert.ok(abstractFlow.includes('protected static void purgeMessages(String destination)'));
-  assert.ok(abstractFlow.includes('MARKS.put(destination, nextOffset(destination))'));
+  assert.ok(abstractFlow.includes('protected static void purgeMessages(String channel)'));
+  assert.ok(abstractFlow.includes('MARKS.put(channel, nextOffset())'));
   // Sin storage ni file uploads no se genera el helper multipart.
   assert.ok(!abstractFlow.includes('MULTIPART_FORM_DATA'));
   // Con PostgreSQL (default) el aislamiento por flujo es el script, no @DirtiesContext.

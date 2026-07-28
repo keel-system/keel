@@ -77,25 +77,38 @@ source set `integrationTest`, así que un test que importe un DTO o una entidad 
      la matriz `scenarios:` y los volcados de `build/keel-failures/` se derivan de ahí.
    - Estado encadenado dentro del flujo en campos de instancia (`@TestInstance(PER_CLASS)`
      ya está puesto en la base): el id que devuelve un escenario es el que usa el siguiente.
-4. **Asserta el `Then` completo**, aserción por aserción: status, cabeceras del contrato
+4. **Materializa el `Given` cláusula por cláusula** antes de escribir el `When`. Por cada
+   cláusula, una llamada de siembra cuyo status se comprueba: crear la entidad **no** es
+   dejarla en el estado que el escenario declara (un `p1 (active)` exige la operación de
+   transición del lifecycle, no solo el alta). Un `Given` mal materializado produce un fallo
+   que el arbitraje atribuye al agente de código y cuesta un ciclo entero. El método y la
+   tabla de casos están en `.claude/conventions/integration-tests.md` § Traducir el `Given`.
+5. **Asserta el `Then` completo**, aserción por aserción: status, cabeceras del contrato
    (`Location`, paginación), **cuerpo entero** con `assertBody(...)` (JSONAssert STRICT:
    campos presentes *y* ausentes), estado resultante consultado por la propia API y eventos
    publicados. Aplica las convenciones de determinación del documento: orden de las
    colecciones, escala decimal, ausencia vs nulo, colación. **Un test que solo comprueba el
    status no vale**: es exactamente el modo de fallo silencioso que este trabajo elimina.
-5. Ids y marcas de tiempo: por **forma** (`assertIsUuid`, `assertIsInstant`) y por
+6. Ids y marcas de tiempo: por **forma** (`assertIsUuid`, `assertIsInstant`) y por
    reutilización simbólica dentro del flujo, jamás por valor literal. Se extraen con
-   `jsonPath(...)` y se excluyen del `assertBody` estricto.
-6. Con las clases escritas y **antes** de compilar, recorre la **checklist** de
+   `jsonPath(...)` —**siempre a una variable tipada**, nunca interpolado directamente en un
+   `.formatted(...)`: como único argumento de un varargs `Object...`, `javac` infiere
+   `T = Object[]` y el test revienta en runtime con `ClassCastException`— y se excluyen del
+   `assertBody` estricto. Para verificar que un campo **no** viene, `assertBody` STRICT; y si
+   hace falta puntualmente, `assertThatThrownBy(...).isInstanceOf(PathNotFoundException.class)`,
+   nunca `.isNull()` (`JsonPath.read` lanza sobre clave ausente). Ambos patrones, con ejemplo,
+   en `.claude/conventions/integration-tests.md`.
+7. Con las clases escritas y **antes** de compilar, recorre la **checklist** de
    `.claude/conventions/integration-tests.md` § Del DSL al cable: cada ruta contrastada
    contra `api`, cada `code` de error copiado literal, cada campo del `assertBody` presente
    en el `output` de su operación, ningún valor no determinista comparado por literal, los
    ids `FL-*` exactos en los `@DisplayName`, un `purgeMessages(<canal>)` inmediatamente antes
-   de cada aserción "no se publica ningún evento", y `createdAt`/`updatedAt` comparados en
-   toda vía que sirva una entidad desde caché. Es la simétrica de la auditoría de consistencia
-   del contrato que hace el agente de código: cada punto que falla aquí es un `culprit: test`
-   que se descubriría un ciclo entero de validación más tarde.
-7. Cierra con **una** invocación de `./gradlew compileIntegrationTestJava` (en Windows
+   de cada aserción "no se publica ningún evento", cada cláusula del `Given` con su llamada de
+   siembra, cada `jsonPath(...)` capturado en variable tipada, y `createdAt`/`updatedAt`
+   comparados en toda vía que sirva una entidad desde caché. Es la simétrica de la auditoría de
+   consistencia del contrato que hace el agente de código: cada punto que falla aquí es un
+   `culprit: test` que se descubriría un ciclo entero de validación más tarde.
+8. Cierra con **una** invocación de `./gradlew compileIntegrationTestJava` (en Windows
    `gradlew.bat compileIntegrationTestJava`) en verde.
    - Esa tarea **no** compila `src/main/java`. Si aun así el error procede de
      `src/main/java`, **no lo toques**: es del agente de código. Regístralo en `blockers` y
@@ -106,7 +119,7 @@ source set `integrationTest`, así que un test que importe un DTO o una entidad 
      pruebas.
    - **No ejecutes las pruebas** en esta fase: ni la infraestructura ni el código están
      listos, y un rojo aquí no significaría nada.
-8. **Si te relanzan desde la fase 2** (un fallo clasificado como `culprit: test` o
+9. **Si te relanzan desde la fase 2** (un fallo clasificado como `culprit: test` o
    `culprit: harness`): entonces la infraestructura está arriba y el código compila, así que
    además de corregir **verifica tu corrección** con
    `./gradlew integrationTest --tests '<ClaseAfectada>'`. Corrige **solo** lo que el

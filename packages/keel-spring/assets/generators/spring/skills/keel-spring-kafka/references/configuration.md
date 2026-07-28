@@ -6,6 +6,11 @@ por perfil), serializadores del producer y un consumer con
 `StringDeserializer` + `// TODO (agente)`: **ese TODO es tuyo** — la
 deserialización de consumo se completa aquí.
 
+El producer sale con `StringSerializer` en clave y valor, y **eso no se cambia**:
+el JSON lo produce el `ObjectMapper` de la aplicación y viaja ya serializado
+(SKILL.md § Envío al broker). Sustituirlo por `JsonSerializer` reintroduce el
+doble escapado y el desajuste de módulos de serialización.
+
 ## Producer: fiabilidad primero
 
 ```yaml

@@ -22,12 +22,18 @@ description: Guía de implementación de mensajería con Apache Kafka en un proy
 
 ## Envío al broker
 
+**El valor que viaja al topic es siempre un `String` de JSON producido por el `ObjectMapper` de la
+aplicación** (el bean de `JacksonConfig`, con `TimestampModule`). `parameters/<perfil>/kafka.yaml` deja
+el producer con `StringSerializer` en clave y valor precisamente para eso: hay **un único punto de
+serialización**. No declares un `JsonSerializer` ni un `KafkaTemplate<String, Object>` — el template lo
+volvería a serializar (JSON escapado dos veces, contrato de `docs/asyncapi.yaml` roto) y lo haría con un
+`ObjectMapper` por defecto que kafka-clients instancia por reflexión, sin los módulos de la app.
+
 Qué implementas depende de la `reliability` declarada en `messaging.keel.yaml`:
 
 **`outbox`** — implementa `OutboxDispatcher` (`infrastructure/messaging/outbox`) y elimina
-`OutboxDispatcherStub`. El payload que recibes **ya es la `EventEnvelope` serializada**: mándalo
-como `String` (`KafkaTemplate<String, String>` con `StringSerializer`), sin volver a serializar ni
-envolver.
+`OutboxDispatcherStub`. El payload que recibes **ya es la `EventEnvelope` serializada** por el bridge:
+mándalo tal cual (`KafkaTemplate<String, String>`), sin volver a serializar ni envolver.
 
 ```java
 @Component
@@ -50,11 +56,35 @@ como publicado algo que nunca salió.
 
 **`best-effort`** — implementa cada `<Evento>Publisher` en `infrastructure/messaging` (elimina su
 stub: dos beans del puerto rompen la inyección) envolviendo con
-`EventEnvelope.of(event.metadata(), event, correlationId)` y enviando con `kafkaTemplate.send(...)`.
+`EventEnvelope.of(event.metadata(), event, correlationId)`, serializando con el `ObjectMapper`
+**inyectado** y enviando el `String` resultante, igual que hace el bridge en modo outbox:
+
+```java
+@Component
+public class KafkaProductCreatedPublisher implements ProductCreatedPublisher {
+
+    private final KafkaTemplate<String, String> kafkaTemplate;
+    private final ObjectMapper objectMapper;   // el de JacksonConfig, no uno nuevo
+
+    // ... constructor, @Value del destino y de la routing key ...
+
+    @Override
+    public void publish(ProductCreatedEvent event, String correlationId) {
+        var envelope = EventEnvelope.of(event.metadata(), toIntegration(event), correlationId);
+        try {
+            kafkaTemplate.send(destination, routingKey, objectMapper.writeValueAsString(envelope));
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("No se pudo serializar " + event.metadata().eventType(), e);
+        }
+    }
+}
+```
 
 En ambos casos el topic y la key salen de `parameters/<perfil>/messaging.yaml`
 (`messaging.publishing.destination` y `messaging.publishing.routing-keys.<evento-kebab>`), leídos
-con `@Value`: no los escribas literales.
+con `@Value`: no los escribas literales. **La key del mensaje es la routing key**, no el id del
+agregado: es lo que hace que el particionado agrupe por tipo de evento y lo que asume el resto de la
+cadena (outbox y arnés incluidos).
 
 ## Listener (uno por suscripción, en `infrastructure/messaging/subscriptions`)
 

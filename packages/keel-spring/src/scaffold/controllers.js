@@ -345,7 +345,15 @@ function renderDataIntegrityHandler(model, imports, constantsOut) {
   imports.add('java.util.Locale');
   imports.add('java.util.Map');
   imports.add('java.util.function.Supplier');
-  constantsOut.push(constraintMapConstant(constraints));
+  const errorsPkg = subPackage(model, 'domain.errors');
+  const resolved = constraints.map((constraint) => ({
+    ...constraint,
+    declared: declaredUniquenessError(model, constraint.fields)
+  }));
+  for (const { declared } of resolved) {
+    if (declared) imports.add(`${errorsPkg}.${declared.exceptionClass}`);
+  }
+  constantsOut.push(constraintMapConstant(resolved));
 
   return `
     @ExceptionHandler(DataIntegrityViolationException.class)
@@ -379,15 +387,37 @@ function renderDataIntegrityHandler(model, imports, constantsOut) {
 `;
 }
 
+// El error declarado del diseño que representa violar la unicidad de estos
+// campos, si lo hay: un 409 de status fijo cuyo code termina en
+// <CAMPOS>_ALREADY_EXISTS. Con cero o varios candidatos no se adivina — el code
+// viaja en la respuesta pública, así que ambiguo se queda como TODO del agente.
+function declaredUniquenessError(model, fields) {
+  const suffix = `${screamingSnake(fields.join('_'))}_ALREADY_EXISTS`;
+  const candidates = (model.errors ?? []).filter(
+    (error) =>
+      error.http === 409 &&
+      !error.dynamicStatus &&
+      screamingSnake(error.code).endsWith(suffix)
+  );
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
 function constraintMapConstant(constraints) {
   const entries = constraints
-    .map(({ constraint, entity, fields }) => {
-      const code = `${screamingSnake(entity)}_${screamingSnake(fields.join('_'))}_ALREADY_EXISTS`;
+    .map(({ constraint, entity, fields, declared }) => {
       const label = fields.join(', ');
-      return `            // TODO (agente): si el diseño declara un error para la unicidad de ${entity}.${label},
-            // sustituye este ConflictException genérico por ese error (p. ej. ${entity}${fields.map(capitalizeFirst).join('')}AlreadyExistsError::new).
+      const message = `Ya existe un ${entity} con ese ${label}`;
+      if (declared) {
+        return `            // Unicidad de ${entity}.${label} → el error que el diseño declara para ella.
+            Map.entry("${constraint}", () -> new ${declared.exceptionClass}(
+                    "${message}"))`;
+      }
+      const code = `${screamingSnake(entity)}_${screamingSnake(fields.join('_'))}_ALREADY_EXISTS`;
+      return `            // TODO (agente): el diseño no declara (o declara de forma ambigua) un error
+            // para la unicidad de ${entity}.${label}; este code es una convención del
+            // scaffolding, no el contrato. Si el diseño lo declara, sustitúyelo.
             Map.entry("${constraint}", () -> new ConflictException(
-                    "Ya existe un ${entity} con ese ${label}", "${code}", 409, null))`;
+                    "${message}", "${code}", 409, null))`;
     })
     .join(',\n');
 
@@ -399,10 +429,6 @@ function constraintMapConstant(constraints) {
      */
     private static final Map<String, Supplier<DomainException>> CONSTRAINT_TO_ERROR = Map.ofEntries(
 ${entries});`;
-}
-
-function capitalizeFirst(name) {
-  return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
 // @RestControllerAdvice central: validación, errores de framework, jerarquía

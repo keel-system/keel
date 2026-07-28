@@ -85,7 +85,14 @@ export function buildModel({ manifest, layers, stack = null }) {
         reliability: layers.messaging.publishing?.reliability ?? 'best-effort',
         // Destinos a purgar entre flujos, y el subconjunto que publica el servicio.
         channels: channels.all,
-        publishChannels: channels.publish
+        publishChannels: channels.publish,
+        // Topología FÍSICA de la publicación: un solo destino por servicio con una
+        // routing key por evento (mapping.md § messaging). El canal del diseño es
+        // una agrupación lógica, NO el nombre del topic: quien sondee el broker
+        // tiene que leer `destination` y discriminar por evento.
+        destinationDefault: channels.destinationDefault,
+        destinationEnv: 'MESSAGING_DESTINATION',
+        eventTypesByChannel: channels.eventTypesByChannel
       }
     : null;
   const subscriptions = collectSubscriptions(layers, services, domainTypes, inlineEnumName, warnings);
@@ -701,17 +708,29 @@ function collectRefDtos(layers, services, domainTypes, inlineEnumName, childDtos
 function collectChannels(layers, service) {
   const serviceSlug = kebabCase(service.name);
   const declared = Object.keys(layers.messaging?.channels ?? {});
-  const events = Object.values(layers.messaging?.publishing?.events ?? {});
+  const events = Object.entries(layers.messaging?.publishing?.events ?? {});
   const publish = new Set();
   const all = new Set(declared);
-  for (const def of events) {
+  // Canal lógico → nombres de evento que caen en él. Es lo que permite discriminar
+  // dentro del destino único: el nombre del evento es literalmente el
+  // `metadata.eventType` que estampa EventMetadata.now(...) al emitirlo.
+  const eventTypesByChannel = {};
+  for (const [name, def] of events) {
+    const channel = def?.channel ?? `${serviceSlug}.events`;
     if (def?.channel) publish.add(def.channel);
     else all.add(`${serviceSlug}.events`);
+    (eventTypesByChannel[channel] ??= []).push(name);
   }
   for (const [name, def] of Object.entries(layers.messaging?.subscriptions ?? {})) {
     if (!def?.channel) all.add(`${def?.source ? kebabCase(def.source) : kebabCase(name)}.events`);
   }
-  return { all: [...all], publish: [...publish] };
+  return {
+    all: [...all],
+    publish: [...publish],
+    eventTypesByChannel,
+    // Mismo default que emite config.js en `messaging.publishing.destination`.
+    destinationDefault: `${serviceSlug}.events`
+  };
 }
 
 function collectEvents(layers, services, service, domainTypes, inlineEnumName, warnings) {

@@ -6,16 +6,20 @@ DSL → código sigue en `.claude/conventions/mapping.md`.
 ## Elección de key y orden
 
 Kafka solo garantiza orden **dentro de una partición**; la key decide la
-partición. La key por defecto del SKILL.md (nombre del evento) agrupa por tipo;
-si el diseño exige orden por entidad (p. ej. eventos del mismo agregado en
-orden), la key correcta es el **id del agregado**:
+partición. La key por defecto —y la que asume el resto de la cadena, outbox
+incluido— es la **routing key** del evento, que agrupa por tipo. Si el diseño
+exige orden por entidad (p. ej. eventos del mismo agregado en orden), la key
+correcta es el **id del agregado**:
 
 ```java
-kafkaTemplate.send(TOPIC, event.productId().toString(), envelope);
+kafkaTemplate.send(destination, event.productId().toString(), payload);
 ```
 
 Decide una vez por evento y documenta la decisión: cambiar la key en caliente
-rompe el orden durante la transición.
+rompe el orden durante la transición. **`payload` es siempre el `String` que
+produjo el `ObjectMapper` de la aplicación** — nunca el objeto Java: el producer
+está configurado con `StringSerializer` y pasarle un POJO lo dejaría en
+`toString()`, igual que un `JsonSerializer` lo escaparía dos veces.
 
 ## Fiabilidad del envío
 
@@ -31,8 +35,8 @@ qué implementas y cómo tratas el fallo:
   que al menos registra el fallo del future, no lo ignores:
 
   ```java
-  kafkaTemplate.send(topic, key, envelope).whenComplete((result, ex) -> {
-      if (ex != null) log.error("Evento {} no publicado", key, ex);
+  kafkaTemplate.send(destination, routingKey, payload).whenComplete((result, ex) -> {
+      if (ex != null) log.error("Evento {} no publicado", routingKey, ex);
   });
   ```
 

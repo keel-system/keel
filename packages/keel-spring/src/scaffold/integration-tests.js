@@ -786,36 +786,95 @@ ${purgeDoc}
   }
 
   // Kafka: sin purga posible (kcat no borra registros y devtools no trae las CLIs
-  // de Kafka). El aislamiento equivalente es una marca de offset por destino.
+  // de Kafka). El aislamiento equivalente es una marca de offset por canal sobre el
+  // topic único del servicio.
+  const eventTypes = model.messaging?.eventTypesByChannel ?? {};
+  const eventTypeEntries = Object.entries(eventTypes)
+    .map(([channel, names]) => `        "${channel}", List.of(${names.map((name) => `"${name}"`).join(', ')})`)
+    .join(',\n');
   return `
     private static final List<String> CHANNELS = List.of(${channels(model)
       .map((name) => `"${name}"`)
       .join(', ')});
 
+    /**
+     * Topic <b>físico</b> donde publica el servicio, que <b>no</b> es el canal del
+     * diseño: todos los eventos comparten el destino único
+     * \`messaging.publishing.destination\` y se distinguen por routing key
+     * (\`.claude/conventions/mapping.md\` § messaging). Se resuelve igual que el perfil
+     * \`local\`: la variable de entorno si está, y si no el default del diseño.
+     */
+    private static final String EVENT_TOPIC =
+            System.getenv().getOrDefault("${model.messaging?.destinationEnv ?? 'MESSAGING_DESTINATION'}", "${model.messaging?.destinationDefault ?? ''}");
+
+    /**
+     * Canal lógico → \`metadata.eventType\` de los eventos que el diseño publica en él.
+     * Es lo que permite que \`publishedMessages("<canal>", n)\` devuelva solo lo de ese
+     * canal aunque todo viaje por el mismo topic. Un canal que no esté aquí (el de una
+     * suscripción, por ejemplo) no filtra nada.
+     */
+    private static final Map<String, List<String>> CHANNEL_EVENT_TYPES = ${eventTypeEntries ? `Map.of(\n${eventTypeEntries});` : 'Map.of();'}
+
+    /** Offset del topic desde el que lee cada canal (su última purga/marca). */
     private static final Map<String, Long> MARKS = new ConcurrentHashMap<>();
 ${doc}
-    protected static String publishedMessages(String destination, int count) {
-        Long mark = MARKS.get(destination);
+    protected static String publishedMessages(String channel, int count) {
+        Long mark = MARKS.get(channel);
         // Con marca se lee todo lo publicado después de ella; sin marca, los últimos
         // \`count\` (lo que hacía este helper antes de existir el aislamiento).
         String offset = mark != null ? String.valueOf(mark) : "-" + count;
-        return devtools("kcat", "-b", "kafka:29092", "-t", destination, "-o", offset, "-e", "-q");
+        return filterByChannel(readTopic(offset), channel);
     }
 ${purgeDoc}
-    protected static void purgeMessages(String destination) {
-        MARKS.put(destination, nextOffset(destination));
+    protected static void purgeMessages(String channel) {
+        MARKS.put(channel, nextOffset());
     }
 
-    /** Marca todos los destinos declarados: es la parte del reset que el script no puede hacer. */
+    /** Marca todos los canales declarados: es la parte del reset que el script no puede hacer. */
     private static void markChannels() {
-        for (String destination : CHANNELS) {
-            try {
-                purgeMessages(destination);
-            } catch (RuntimeException e) {
-                // El topic aún no existe porque nadie ha publicado: la marca es 0.
-                MARKS.put(destination, 0L);
+        long offset;
+        try {
+            offset = nextOffset();
+        } catch (RuntimeException e) {
+            // El topic aún no existe porque nadie ha publicado: la marca es 0.
+            offset = 0L;
+        }
+        for (String channel : CHANNELS) {
+            MARKS.put(channel, offset);
+        }
+    }
+
+    /**
+     * Lee el topic del servicio desde un offset. El flag <b>\`-C\` es obligatorio</b>:
+     * kcat elige modo productor cuando su stdin no es un terminal —que es el caso de
+     * un \`exec\` lanzado por ProcessBuilder— y devolvería éxito con salida vacía, un
+     * falso negativo indistinguible de "el evento aún no llegó".
+     */
+    private static String readTopic(String offset) {
+        return devtools("kcat", "-C", "-b", "kafka:29092", "-t", EVENT_TOPIC, "-o", offset, "-e", "-q");
+    }
+
+    /**
+     * Deja solo los mensajes cuyo \`metadata.eventType\` pertenece al canal. Se filtra
+     * por el tipo de evento y no por la key del mensaje porque la key depende de la
+     * ruta de publicación (routing key en outbox, id del agregado en best-effort).
+     */
+    private static String filterByChannel(String output, String channel) {
+        List<String> types = CHANNEL_EVENT_TYPES.get(channel);
+        if (types == null || types.isEmpty()) {
+            return output;
+        }
+        StringBuilder kept = new StringBuilder();
+        for (String line : output.split("\\\\R")) {
+            String compact = line.replace(" ", "");
+            for (String type : types) {
+                if (compact.contains("\\"eventType\\":\\"" + type + "\\"")) {
+                    kept.append(line).append(System.lineSeparator());
+                    break;
+                }
             }
         }
+        return kept.toString();
     }
 
     /**
@@ -823,11 +882,11 @@ ${purgeDoc}
      * offsets existentes (\`-f %o\`), no por marca de tiempo: \`offsetsForTimes\` devuelve
      * -1 en un topic sin tráfico reciente, que es justo el caso del reset.
      *
-     * <p>Asume <b>una partición</b> por destino, que es lo que crea el Kafka
-     * single-node de \`infra/docker-compose.yaml\`.
+     * <p>Asume <b>una partición</b> en el topic del servicio, que es lo que crea el
+     * Kafka single-node de \`infra/docker-compose.yaml\`.
      */
-    private static long nextOffset(String destination) {
-        String output = devtools("kcat", "-b", "kafka:29092", "-t", destination, "-o", "beginning", "-e", "-q", "-f", "%o\\\\n");
+    private static long nextOffset() {
+        String output = devtools("kcat", "-C", "-b", "kafka:29092", "-t", EVENT_TOPIC, "-o", "beginning", "-e", "-q", "-f", "%o\\\\n");
         long last = -1L;
         for (String line : output.split("\\\\R")) {
             String trimmed = line.trim();
@@ -840,6 +899,16 @@ ${purgeDoc}
             }
         }
         return last + 1;
+    }
+
+    /** Publica un mensaje crudo en el topic del servicio (solo lo usa el humo del arnés). */
+    protected static void publishRaw(String key, String payload) {
+        devtoolsShell("printf '%s' " + shellQuote(payload)
+            + " | kcat -P -b kafka:29092 -t " + EVENT_TOPIC + " -k " + shellQuote(key));
+    }
+
+    private static String shellQuote(String value) {
+        return "'" + value.replace("'", "'\\\\''") + "'";
     }
 `;
 }
@@ -1017,7 +1086,14 @@ function smokeImports(model) {
     'org.junit.jupiter.api.Test',
     'org.junit.jupiter.api.Assertions'
   ];
-  if (brokerEntry(model)) imports.push('java.util.List');
+  const broker = brokerEntry(model);
+  // El humo de Kafka publica un mensaje real y lo espera de vuelta; el del resto
+  // de brokers solo recorre la lista de canales declarados.
+  if (broker?.id === 'kafka' && Object.keys(model.messaging?.eventTypesByChannel ?? {}).length > 0) {
+    imports.push('java.time.Duration', 'java.util.UUID');
+  } else if (broker) {
+    imports.push('java.util.List');
+  }
   return imports;
 }
 
@@ -1073,7 +1149,40 @@ ${checks.join('\n\n')}
 
   const broker = brokerEntry(model);
   const publishChannels = model.messaging?.publishChannels ?? [];
-  if (broker && publishChannels.length > 0) {
+  const kafkaProbes = broker?.id === 'kafka' ? Object.entries(model.messaging?.eventTypesByChannel ?? {}) : [];
+  if (kafkaProbes.length > 0) {
+    // Con Kafka el humo publica tráfico real y lo espera de vuelta. "Leer sin
+    // lanzar excepción" no vale: Kafka autocrea el topic vacío al primer sondeo,
+    // así que un topic equivocado —o un kcat que ni siquiera está consumiendo—
+    // pasa en verde exactamente igual que un canal sano y purgado.
+    const probes = kafkaProbes
+      .map(([channel, types]) => `        probeChannel("${channel}", "${types[0]}");`)
+      .join('\n');
+    tests.push(`
+    @Test
+    @Order(4)
+    @DisplayName("SMOKE-4: el sondeo de eventos lee de vuelta lo que se publica")
+    void eventChannelsAreReadableAndPurgeable() {
+${probes}
+    }
+
+    /**
+     * Publica un mensaje sintético con el \`eventType\` del canal y comprueba que el
+     * sondeo lo devuelve y que la purga lo deja fuera. Ejercita de una vez las tres
+     * piezas que el humo anterior no cubría: el topic físico correcto, kcat en modo
+     * consumidor y el filtrado por canal.
+     */
+    private void probeChannel(String channel, String eventType) {
+        String marker = UUID.randomUUID().toString();
+        purgeMessages(channel);
+        publishRaw(eventType, "{\\"metadata\\":{\\"eventId\\":\\"" + marker + "\\",\\"eventType\\":\\"" + eventType + "\\"},\\"data\\":{}}");
+        await(Duration.ofSeconds(15), () -> publishedMessages(channel, 1).contains(marker));
+        purgeMessages(channel);
+        Assertions.assertTrue(publishedMessages(channel, 1).isBlank(),
+            "El canal '" + channel + "' sigue entregando mensajes después de purgarlo.");
+    }
+`);
+  } else if (broker && publishChannels.length > 0) {
     tests.push(`
     @Test
     @Order(4)
