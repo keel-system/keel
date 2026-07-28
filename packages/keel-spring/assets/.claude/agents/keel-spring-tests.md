@@ -153,6 +153,21 @@ source set `integrationTest`, así que un test que importe un DTO o una entidad 
   (`.claude/skills/keel-spring-<broker|auth|redis>/`) y `.claude/conventions/infra-validation.md`:
   casi siempre es entorno, no contrato. Un `assertBody` degradado a modo laxo para que pase
   es el peor desenlace posible — deja el escenario en verde sin haberlo probado.
+- **Si el que falla es el arnés, dos sospechosos antes que ningún otro.** Un fallo de la
+  fontanería (excepción de `devtools`/`resetState`, o un `await` que agota el timeout sin
+  decir nada) suele ser una de estas dos cosas, y comprobarlas cuesta minutos frente a la
+  hora que cuesta reproducirlo desde cero:
+  1. **El destino aún no existe.** Contra un broker recién levantado nadie ha publicado
+     todavía: `kcat -o beginning` sale con `Unknown topic or partition` (código 1) y
+     `runProcess` lo convierte en excepción. Todo lo que lea offsets necesita la guarda de
+     `safeNextOffset()`.
+  2. **Quoting de `ProcessBuilder` en Windows.** Un cuerpo JSON embebido en la cadena de
+     `sh -c` llega al contenedor **sin las comillas dobles**: `docker.exe`/`podman.exe`
+     reconstruyen la línea de comandos y su escapado las corrompe. El síntoma es mudo — el
+     mensaje se publica, pero deformado, y el filtro por canal nunca lo reconoce. La regla
+     del arnés es que **todo cuerpo con comillas viaja por archivo** (`copyToDevtools`),
+     nunca en la línea de comandos; el javadoc de `devtools` lo dice. Si escribes un helper
+     nuevo que invoque una CLI del contenedor, respétala.
 - Nada de dobles de test, brokers embebidos (`@EmbeddedKafka`) ni `@MockBean`: lo que se
   valida es el servidor real contra la infraestructura levantada. Lo no observable por HTTP
   se comprueba con los helpers de la base (`publishedMessages`, `devtools`).

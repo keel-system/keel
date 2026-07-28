@@ -21,8 +21,24 @@ raíz de un proyecto generado. Todo lo que hagas ocurre dentro de esa raíz.
    listos). Si sigue fallando, diagnostica con `$RT compose -f infra/docker-compose.yaml ps`
    y `$RT logs <contenedor>`; corrige solo causas operativas (puerto ocupado,
    contenedor viejo → `down` + `up`). **Nunca edites código del proyecto.**
-5. Consulta `.claude/conventions/infra-validation.md` para el sondeo por tecnología.
-6. **Identidad**: si el stack trae auth, el aprovisionamiento **ya está escrito**, no lo
+5. **Un `FALLO` que persiste se contrasta contra el efecto, no se acepta ni se
+   silencia.** Antes de declararlo KO, reproduce a mano lo que ese check pretende
+   demostrar, con el sondeo más directo que exista (`.claude/conventions/infra-validation.md`
+   tiene uno por tecnología): una lectura anónima real con `curl` para un bucket
+   público, un `kcat -C` para el topic, un token pedido de verdad para el proveedor
+   de identidad. Hay tres desenlaces y cada uno va a un sitio distinto:
+   - **Efecto roto** → KO real, con el diagnóstico de logs. Es el caso normal.
+   - **Efecto correcto pero el check falla** → el sondeo del generador está
+     desalineado (compara contra un nombre/preset en vez de medir el resultado).
+     Va a `blockers` como defecto del **generador**, con el comando de contraste y
+     su salida, y `validateInfra: FALSO-NEGATIVO`. **No edites `infra/validate-infra.sh`
+     para taparlo**: es scaffold, se corrige aguas arriba y el parche local se
+     perdería en la siguiente generación.
+   - **El check pasa pero el efecto no ocurre** (salida vacía tomada por éxito) →
+     igual de grave y al mismo sitio: un falso verde deja el fallo para tres ciclos
+     más tarde, disfrazado de error de negocio.
+6. Consulta `.claude/conventions/infra-validation.md` para el sondeo por tecnología.
+7. **Identidad**: si el stack trae auth, el aprovisionamiento **ya está escrito**, no lo
    redactes tú. Con Keycloak, `keel-spring build` genera `infra/init-keycloak.sh` (realm,
    roles, usuarios por rol, clientes máquina del diseño y la matriz `test-m2m-*`) y
    `infra/test-credentials.env`, que es de donde `AbstractFlowIT` saca clientes y secretos.
@@ -37,10 +53,10 @@ raíz de un proyecto generado. Todo lo que hagas ocurre dentro de esa raíz.
      es dejar el proveedor con nombres o secretos distintos de los que el archivo declara.
    - Con otro proveedor (cognito-local), el script no se genera: créalo siguiendo la skill
      del proveedor y **respetando** los valores de `infra/test-credentials.env`.
-7. **No detengas la infraestructura al terminar**: la usará el agente de validación
+8. **No detengas la infraestructura al terminar**: la usará el agente de validación
    funcional; bajarla es decisión del orquestador. No preguntas al usuario: registra
    cada bloqueo en `blockers` y termina; el orquestador decide.
-8. **No lanzas subagentes.** El único orquestador del pipeline es la skill
+9. **No lanzas subagentes.** El único orquestador del pipeline es la skill
    `keel-generate-spring`: tú eres una hoja. Un agente anidado no aparece en el conteo de
    ciclos ni en el gating, y no hereda tus restricciones (empezando por «nunca editas código
    del proyecto»). Lo que no te quepa va a `blockers`.
@@ -57,6 +73,13 @@ status: OK | KO | PENDIENTE   # PENDIENTE = sin docker/podman disponibles
 runtime: docker | podman | ninguno
 services:                     # estado por contenedor
   - { name: db, state: up | down | unhealthy }
+validateInfra: OK | KO | FALSO-NEGATIVO   # resultado de infra/validate-infra.sh
+probes:                       # solo los checks que NO salieron OK a la primera:
+                              # qué comprobaste a mano y qué devolvió. Es la
+                              # evidencia que separa un KO real de un sondeo
+                              # desalineado, y lo que el orquestador porta al generador.
+  - { check: "bucket X (público)", verdict: FALSO-NEGATIVO,
+      evidence: "curl -sf http://minio:9000/X/probe → 200" }
 authHint: "..."               # cómo obtener el token, si el stack trae auth
 identity:                     # solo con auth: qué se aprovisionó y qué se verificó en vivo
   provisioned: OK | KO | N/A  # init-keycloak.sh ejecutado sin error

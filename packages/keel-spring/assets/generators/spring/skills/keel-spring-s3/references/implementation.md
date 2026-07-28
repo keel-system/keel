@@ -51,6 +51,14 @@ error técnico (500), no lo conviertas en «no encontrado».
 
 ## Presigned URLs (`signedUrl`)
 
+**Primero, mira si te hacen falta.** El puerto `FileStorage` declara `signedUrl`
+siempre, pero la firma solo tiene sentido sobre un objeto que no es de lectura
+pública. Si **todos** los buckets del diseño son `visibility: public`, `signedUrl`
+compone la URL pública directa y no necesitas ni el presigner ni sus credenciales:
+un `@Bean S3Presigner` sin un solo inyector es código muerto que además arrastra
+configuración (endpoint, region, path-style) que hay que mantener correcta para
+nada. Genera el bean solo si hay al menos un bucket `visibility: private`.
+
 ```java
 try (S3Presigner presigner = S3Presigner.builder()
         .region(region).credentialsProvider(creds)
@@ -77,14 +85,11 @@ try (S3Presigner presigner = S3Presigner.builder()
 
 ## Bucket en local
 
-El bucket lo crea la preparación del entorno local, una vez (no la app en cada
-arranque, y jamás en production):
-
-```bash
-mc alias set local http://minio:9000 minioadmin minioadmin && mc mb -p local/<bucket>
-```
-
-Déjalo en un script de `infra/` si los escenarios lo necesitan reproducible.
+No lo creas tú ni añadas scripts a `infra/`: el sidecar `minio-init` del
+`infra/docker-compose.yaml` que genera `keel-spring build` ya crea cada bucket
+declarado al levantar la infraestructura. Lo que sí es tuyo es que el adaptador
+lo asegure por su cuenta al arrancar — ver la sección siguiente, que es la que
+manda sobre el reparto.
 
 ## `visibility: public` — crear el bucket **no** lo hace público
 
@@ -128,6 +133,14 @@ private void ensurePublicRead(String bucket) {
 naturaleza: llamarlo en cada arranque deja siempre el mismo estado. Los buckets
 `visibility: private` **no** la llevan — su lectura va por `signedUrl` o mediada
 por el servicio.
+
+Sí: en local eso **reemplaza** el preset `download` que había puesto `minio-init`
+por esta policy, que es más restrictiva (solo `s3:GetObject`, sin listado público
+del bucket). Es lo correcto y no hay nada que alinear — `infra/validate-infra.sh`
+comprueba el **efecto** (un GET anónimo que responde 200), no el nombre del preset.
+Si ves un `FALLO` de bucket, contrástalo con una lectura anónima real antes de
+tocar nada: un rojo con la lectura en verde es un defecto del sondeo del generador
+(va a `blockers`), no de tu adaptador.
 
 ## Checklist
 

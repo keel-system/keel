@@ -83,6 +83,28 @@ pruebas** — ni unitarias (son un proceso posterior a esta generación) ni las 
 escenario que falla tras tu pase significa que tu pase cambió comportamiento: se
 revierte el ajuste, no se ajusta el test.
 
+**Proponer sí, aplicar no.** Buena parte de lo que encuentras y no puedes tocar no
+es una decisión de estilo: es un **hueco del diseño**. El caso típico lo produce el
+punto 8 del checklist — una excepción genérica que debería ser un error de dominio,
+pero *no hay ningún error equivalente declarado* en `domain.keel.yaml`, así que no
+tienes con qué sustituirla. Eso no es "pendiente de decisión humana" en prosa: es un
+artefacto de diseño que falta y que puedes redactar. Va a `designGaps` con el
+artefacto y la propuesta concreta, no a `remaining`:
+
+```yaml
+designGaps:
+  - gap: "S3FileStorage.download mapea NoSuchKeyException a IllegalArgumentException"
+    where: infrastructure/storage/S3FileStorage.java:92
+    artifact: domain.keel.yaml
+    proposal: "declarar error FILE_NOT_FOUND (http 404) y mapearlo desde storage.download"
+```
+
+La regla no cambia: **no** editas los artefactos del diseño ni el código para
+acomodarlos. Escribes la propuesta para que el diseñador la acepte o la descarte de
+un vistazo, en vez de tener que traducir una descripción en prosa. Lo que sí va a
+`remaining` es lo conductual sin hueco de diseño detrás (una decisión de negocio, un
+refactor que cambiaría un status HTTP ya declarado).
+
 ## Baseline de migraciones (solo si el proyecto tiene persistencia)
 
 Es tuyo porque solo aquí las entidades ya son definitivas. Sin baseline el
@@ -143,6 +165,10 @@ compiles: true | false
 scenarios: OK | KO        # ./gradlew integrationTest tras el pase: la no-regresión conductual
 baseline: OK | KO | N/A   # migraciones: N/A sin persistencia; OK si arrancó con PROFILE=local,migrations
 issuesFixed: [...]        # ajustes no-conductuales aplicados
-remaining: [...]          # hallazgos conductuales o que requieren decisión humana
+remaining: [...]          # hallazgos conductuales sin hueco de diseño detrás
+designGaps:               # huecos del diseño que encontraste, como propuesta accionable
+                          # (ver § Frontera). Cada uno con gap/where/artifact/proposal:
+                          # el diseñador lo acepta o lo descarta sin traducir prosa.
+  - { gap: "…", where: "Archivo.java:NN", artifact: domain.keel.yaml, proposal: "…" }
 blockers: [...]           # precondiciones rotas (escenarios sin validar, compilación rota al llegar)
 ```

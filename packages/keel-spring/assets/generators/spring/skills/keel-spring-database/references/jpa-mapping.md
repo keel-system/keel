@@ -99,10 +99,28 @@ Por orden de preferencia:
    (SQL Server). Sin código: la comparación ya ignora caso y acento.
 2. **Extensión de normalización**: `unaccent` en PostgreSQL. La extensión se crea
    desde **una migración de Flyway** (`CREATE EXTENSION IF NOT EXISTS unaccent;`),
-   que es parte del esquema del servicio — no un requisito manual del entorno —,
-   con un índice funcional sobre `lower(unaccent(<columna>))`. Requiere permisos
-   de creación de extensión: compruébalo contra la infra de prueba antes de
-   comprometerte con esta vía.
+   que es parte del esquema del servicio — no un requisito manual del entorno, y
+   **no** un `CommandLineRunner`/`@PostConstruct` que la cree al arrancar: eso deja
+   el esquema fuera del control de las migraciones y el baseline exportado ya no
+   describe la BD real. Va acompañada de un índice funcional sobre
+   `lower(unaccent(<columna>))`. Requiere permisos de creación de extensión:
+   compruébalo contra la infra de prueba antes de comprometerte con esta vía.
+
+   La extensión es **DDL**: lo que la usa es el índice, y la query se beneficia de
+   él sin nombrar la función si la vía 1 está disponible. Si aun así invocas
+   `unaccent` desde JPQL con `function(...)`, hay una trampa que rompe **todos** los
+   listados de golpe: un parámetro con nombre dentro de un `concat(...)` viaja sin
+   tipo y PostgreSQL falla en `prepare` con `function unaccent(bytea) does not
+   exist`, incluso en las llamadas sin término de búsqueda (el `prepare` ocurre
+   antes de evaluar `:q is null`). Castea siempre el parámetro:
+
+   ```java
+   // el cast(:q as string) no es decorativo: sin él la consulta no llega a ejecutarse
+   "where :q is null or lower(function('unaccent', p.name)) "
+     + "like lower(function('unaccent', concat('%', cast(:q as string), '%')))"
+   ```
+
+   Detalle completo y la regla general en `references/troubleshooting.md`.
 3. **Fallback portable, sin depender del dialecto** (el que aplica cuando 1 y 2
    no están disponibles): una **columna normalizada** que se puebla en el mapeo
    `toJpa` (`<campo>Normalized`), con el mismo plegado aplicado al término de

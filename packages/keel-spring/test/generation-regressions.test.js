@@ -210,6 +210,32 @@ test('§1.1: el sondeo del broker va por argv, nunca por una cadena con comillas
 
   const sqs = harness('snssqs');
   assert.ok(sqs.includes('"sqs", "purge-queue", "--queue-url"'));
+
+  // La rama Kafka aprendió la misma lección: el humo publica un JSON crudo y el
+  // cuerpo viaja por archivo, no embebido en la cadena de `sh -c`. Con el payload
+  // en la línea de comandos, Windows se come las comillas dobles y lo que llega al
+  // topic es `{metadata:{eventType:X}}`: el filtro por canal no lo reconoce y el
+  // test agota el timeout sin decir por qué.
+  const kafka = harness('kafka');
+  assert.ok(kafka.includes('private static void copyToDevtools(String content, String target)'));
+  assert.ok(kafka.includes('copyToDevtools(payload, PUBLISH_BODY);'));
+  assert.ok(!kafka.includes("printf '%s'"));
+  assert.ok(!kafka.includes('shellQuote(payload)'));
+});
+
+test('§1.1: la marca de offset tolera que el topic aún no exista (broker recién levantado)', () => {
+  const { read } = scaffoldExtended();
+  const harness = read('src/integrationTest/java/com/commerce/catalog/flows/AbstractFlowIT.java');
+
+  // Contra un broker sin publicaciones previas —el caso normal: la infra de prueba
+  // parte limpia— `kcat -o beginning` sale con "Unknown topic or partition" (código
+  // 1) y runProcess lo convierte en excepción. La guarda tiene que estar en las dos
+  // vías: el reset (markChannels) y la purga previa a un Then de "no se publica
+  // nada", que puede ser la primerísima operación contra el broker (SMOKE-4).
+  assert.ok(harness.includes('private static long safeNextOffset()'));
+  assert.ok(harness.includes('MARKS.put(channel, safeNextOffset())'));
+  assert.ok(harness.includes('long offset = safeNextOffset();'));
+  assert.ok(!harness.includes('MARKS.put(channel, nextOffset())'));
 });
 
 test('§1.2: el reset purga los destinos de mensajería declarados', () => {
@@ -573,7 +599,13 @@ test('storage: los buckets del diseño los prepara infra/, no el arranque de la 
   assert.ok(compose.includes('mc anonymous set download local/catalog-product-images'));
 
   // Y la infraestructura se declara mal desde el sondeo, antes de arrancar nada.
-  assert.ok(script.includes('mc anonymous get local/catalog-product-images'));
+  // El sondeo mide el EFECTO (un GET anónimo que responde 200), no el nombre del
+  // preset: en cuanto el adaptador aplica su propia bucket policy al arrancar,
+  // `mc anonymous get` la etiqueta `custom` y comparar contra `download` daba un
+  // FALLO que había que ir a desmentir a mano con un curl.
+  assert.ok(script.includes('curl -sf -o /dev/null http://minio:9000/catalog-product-images/.keel-anon-probe'));
+  assert.ok(script.includes('mc rm --force local/catalog-product-images/.keel-anon-probe'));
+  assert.ok(!script.includes('mc anonymous get'));
 
   // Nombre físico en la config: el adaptador lo lee, no lo inventa.
   assert.ok(storageYaml.includes('bucket: catalog-product-images'));

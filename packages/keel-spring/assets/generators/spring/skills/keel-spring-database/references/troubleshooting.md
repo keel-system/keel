@@ -33,6 +33,36 @@ después. Arreglo estructural: `JOIN FETCH`/`@EntityGraph` en el método del
 repositorio que alimenta ese flujo. Mitigación global:
 `hibernate.default_batch_fetch_size` (ver `references/configuration.md`).
 
+## `function <nombre>(bytea) does not exist` al listar o buscar
+
+Síntoma: **todos** los endpoints de listado/búsqueda responden `500`, con o sin
+término de búsqueda, mientras el resto del servicio funciona. En el log,
+PostgreSQL rechaza una función que sí existe (`unaccent`, `similarity`…) con un
+tipo de argumento absurdo (`bytea`).
+
+Causa: la query pasa un **parámetro con nombre dentro de una expresión
+compuesta** a una función nativa — `function('unaccent', concat('%', :q, '%'))`.
+Hibernate emite el parámetro como `?` sin tipo y PostgreSQL no puede inferirlo
+en esa posición, así que lo resuelve al tipo por defecto del driver. Falla en
+`prepare`, es decir **antes** de evaluar el `:q is null` que protege el resto de
+la condición: por eso también fallan las llamadas sin término de búsqueda.
+
+Arreglo: castea el parámetro explícitamente en el JPQL.
+
+```java
+// mal
+"lower(function('unaccent', p.name)) like lower(function('unaccent', concat('%', :q, '%')))"
+// bien
+"lower(function('unaccent', p.name)) like lower(function('unaccent', concat('%', cast(:q as string), '%')))"
+```
+
+Generalización, aplicable a cualquier dialecto: **una función nativa invocada
+sobre `concat`/`coalesce`/aritmética con un parámetro con nombre necesita
+`cast(:param as <tipo>)`**. El cast no cuesta nada y hace la query portable.
+Antes de comprometerte con `function(...)` en JPQL, mira si la vía 1 o la 3 de
+`jpa-mapping.md` § Búsqueda que ignora mayúsculas y acentos te evitan el
+problema entero.
+
 ## `OptimisticLockException` en escenarios concurrentes
 
 Es el comportamiento **deseado** del `lockVersion` (`@Version`): dos updates sobre

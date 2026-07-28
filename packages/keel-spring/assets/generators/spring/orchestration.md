@@ -79,7 +79,7 @@ flowchart TB
     QUALITY --> GATE3{Gating fase 3}
     GATE3 -->|"quality KO, baseline KO<br/>o scenarios KO<br/>→ revertir el pase de calidad"| STOP3[/"Detenerse y reportar"/]
     GATE3 -->|OK| README["⚙ Actualizar README<br/>guía de despliegue productivo<br/>(pasos + parámetros de parameters/production/*)"]
-    README --> CLOSE["⚙ Cierre: compose down · commit<br/>«Generado desde specs/&lt;servicio&gt; v&lt;version&gt;»<br/>+ resumen (matriz, remaining, blockers, designGaps)"]
+    README --> CLOSE["⚙ Cierre: INFORME-GENERACION.md · compose down · commit<br/>«Generado desde specs/&lt;servicio&gt; v&lt;version&gt;»<br/>+ resumen (matriz, remaining, blockers, designGaps)"]
 ```
 
 ## Por qué la fase 2 está partida en dos
@@ -177,12 +177,13 @@ candado y la regla escrita en cada agente, el porqué.
 | `assumptions` | `keel-spring-tests` | `keel-spring-validate` | Apuestas sobre infraestructura que la fase 1 no puede verificar (nombre de cola, cliente M2M, secreto, bucket). La parte mecánica la cubre el humo del arnés que el script ejecuta antes de la suite; lo que quede sin cubrir y explique una tanda de fallos es un bloqueo `systemic`, no una colección de fallos de negocio. |
 | matriz + `exit code` | ⚙ `infra/score-scenarios.sh` | Orquestador | La matriz `FL-* → OK \| FALLO \| NO_EJERCITADO`, determinista desde el XML. `0` → fase 3 sin invocar árbitro · `1` → invocar `keel-spring-validate` con los fallos · `2` → humo del arnés roto, la suite **no** se ejecutó: el ciclo es de arnés, no de negocio. |
 | `failures[].culprit` | `keel-spring-validate` | Orquestador | A quién relanzar: `code` → `keel-spring-code`; `test` y `harness` → `keel-spring-tests`; `design` → detenerse. |
-| `harnessPatches` | `keel-spring-tests` (relanzado) | Orquestador, resumen final | Parches al andamiaje generado (`AbstractFlowIT` y compañía). Van al resumen para portarlos al generador: un defecto del arnés que se queda en el proyecto lo vuelve a pagar entero la siguiente generación. |
+| `harnessPatches` | `keel-spring-tests` (relanzado) | Orquestador, `INFORME-GENERACION.md` | Parches al andamiaje generado (`AbstractFlowIT` y compañía). Van al informe de cierre para portarlos al generador: un defecto del arnés que se queda en el proyecto lo vuelve a pagar entero la siguiente generación. |
 | `failures` (escenario, `evidence`, `class`, request, response, esperado) | `keel-spring-validate` | `keel-spring-code` / `keel-spring-tests` (relanzado) | Evidencia **exacta** para el ciclo de fix. `evidence` es la ruta del volcado de `build/keel-failures/`: el relanzado abre el JSON crudo —antes de ejecutar nada, porque una pasada nueva lo sobrescribe—, no el extracto. `class` le dice qué clase re-ejecutar para verificarse. |
 | `verifiedClasses` | `keel-spring-code` (relanzado) | Orquestador, resumen | Qué clases quedaron verificadas en vivo antes de re-puntuar. Es señal de que el fix está listo para arbitrarse, **no** un escenario aprobado: la matriz la sigue componiendo el script con la suite completa. |
 | `blocking: systemic \| scoped` | `keel-spring-validate` | Orquestador | Contar los ciclos de fix: ver «Ciclos de fix» abajo. |
 | `coverageGaps` | `keel-spring-validate` | `keel-spring-tests` (relanzado), resumen | Categorías que ninguna clase de flujo ejercita: es cobertura que falta, no un fallo del código. |
-| `remaining` | `keel-spring-quality` | Resumen final | Hallazgos conductuales pendientes de decisión humana. |
+| `remaining` | `keel-spring-quality` | Resumen final | Hallazgos conductuales pendientes de decisión humana, sin hueco de diseño detrás. |
+| `probes[].verdict: FALSO-NEGATIVO` | `keel-spring-infra` | Orquestador, `INFORME-GENERACION.md` | Un check de `infra/validate-infra.sh` que falla con el efecto verificado en verde: el sondeo del generador está desalineado. No detiene nada (la infraestructura está sana), pero es un defecto del scaffold — se porta, no se parchea en el proyecto. |
 | `baseline` | `keel-spring-quality` | Orquestador | Gate de desplegabilidad: `KO` → relanzar una vez con el error; sin `OK` el commit lo dice explícitamente (production no arrancaría). |
 | `scenarios: OK \| KO` | `keel-spring-quality` | Orquestador | No-regresión: el pase de calidad no cambió comportamiento. `KO` → revertir el pase, no tocar las pruebas. |
 | `blockers` / `designGaps` | Cualquiera | Usuario | Contradicciones o huecos del diseño: se detiene la orquestación o se consolidan en el resumen; nunca se resuelven relanzando. |
@@ -251,6 +252,35 @@ El tope duro de la tabla acota el total de ciclos de fase 2 (los `scoped` más l
 que cerraron bloqueos sistémicos), para que ninguna calificación deje la
 orquestación en bucle. Alcanzado el límite que aplique, el orquestador reporta la
 matriz y se detiene.
+
+## El cierre devuelve al generador lo que es del generador
+
+Parte de lo que aparece durante una generación **no es de este proyecto**: es un defecto o
+un hueco del scaffold, reproducible en cualquier servicio con el mismo stack. Si se queda
+en el resumen de una sesión, la siguiente generación lo vuelve a pagar entero — el
+diagnóstico del arnés es de lo más caro del pipeline precisamente porque no hay
+antecedentes.
+
+Por eso el paso de cierre escribe `INFORME-GENERACION.md` en la raíz del proyecto, además
+del resumen en pantalla. No es un registro de trabajo ya resuelto: es la entrada para
+quien mantiene `keel-spring`. Va estructurado así:
+
+1. **Incidencias**, una por sección, cada una con síntoma, causa, **por qué es del
+   generador y no de este proyecto** (o lo contrario, dicho explícitamente), fix aplicado y
+   recomendación. Fuentes: `harnessPatches`, los `probes[].verdict: FALSO-NEGATIVO` de
+   infra, y los `failures` cuyo `culprit` fue `harness`.
+2. **Código determinístico mejorable**: tabla área → archivo (como **patrón**, no como ruta
+   de este proyecto) → cambio sugerido. Lo que un cambio en `keel-spring build` evitaría
+   repetir sin intervención de ningún agente.
+3. **Agentes y skills**: dónde un ciclo de diagnóstico fue largo por falta de un
+   antecedente documentado, y qué frase en qué skill lo habría acortado. Un `culprit` mal
+   atribuido o una tanda de fallos con una sola causa raíz son las señales.
+4. **Huecos del diseño**: los `designGaps` consolidados de los cinco agentes, con el
+   artefacto y la propuesta concreta. Son del **diseñador**, no del generador.
+
+Regla de oro del informe: cada entrada dice de quién es. Un hallazgo sin dueño no acciona
+nada, y una incidencia de este proyecto disfrazada de defecto del generador cuesta una
+investigación inútil aguas arriba.
 
 ## Autosuficiencia del proyecto generado
 

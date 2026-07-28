@@ -70,9 +70,10 @@ test('AbstractFlowIT se adapta a la silueta: sin api no hay ROUTE_BASE, con mess
   // `-C` es obligatorio: sin TTY en stdin, kcat elegiría modo productor.
   assert.ok(abstractFlow.includes('"kcat", "-C", "-b", "kafka:29092"'));
   assert.ok(!abstractFlow.includes('String.format('));
-  // Kafka no tiene purga: el aislamiento entre flujos es la marca de offset.
+  // Kafka no tiene purga: el aislamiento entre flujos es la marca de offset, y se
+  // toma con la guarda de "topic aún inexistente" (broker recién levantado).
   assert.ok(abstractFlow.includes('protected static void purgeMessages(String channel)'));
-  assert.ok(abstractFlow.includes('MARKS.put(channel, nextOffset())'));
+  assert.ok(abstractFlow.includes('MARKS.put(channel, safeNextOffset())'));
   // Sin storage ni file uploads no se genera el helper multipart.
   assert.ok(!abstractFlow.includes('MULTIPART_FORM_DATA'));
   // Con PostgreSQL (default) el aislamiento por flujo es el script, no @DirtiesContext.

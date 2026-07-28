@@ -285,8 +285,11 @@ function abstractImports(model) {
   // Resolución explícita del bash con el que se invocan los scripts de infra/.
   if (reset) imports.push('java.io.File', 'java.util.Locale');
   if (devtools) imports.push('java.nio.charset.StandardCharsets', 'java.util.ArrayList');
-  // El cuerpo del sondeo de RabbitMQ viaja por archivo, no por línea de comandos.
-  if (broker?.id === 'rabbitmq') imports.push('java.nio.file.Files', 'java.nio.file.Path');
+  // Los cuerpos que van a una CLI del contenedor viajan por archivo, no por línea
+  // de comandos (sondeo de RabbitMQ, publicación cruda en Kafka).
+  if (broker?.id === 'rabbitmq' || broker?.id === 'kafka') {
+    imports.push('java.nio.file.Files', 'java.nio.file.Path');
+  }
   // Marcas de offset por destino (aislamiento de Kafka, que no tiene purga).
   if (broker?.id === 'kafka') imports.push('java.util.Map', 'java.util.concurrent.ConcurrentHashMap');
   if (hasMultipart(model)) {
@@ -640,7 +643,7 @@ ${brokerSection(model)}
     protected static String devtoolsShell(String command) {
         return devtools("sh", "-c", command);
     }
-
+${bodyFileHelper(model)}
     /**
      * Ejecuta el proceso, <b>exige código de salida 0</b> y deja la evidencia en
      * {@link FailureCapture}. Ignorar el código es lo que convierte un \`curl -sf\`
@@ -704,6 +707,36 @@ ${brokerSection(model)}
 `;
 }
 
+// Copia de cuerpos al contenedor devtools. Es la contrapartida del javadoc de
+// `devtools`: todo cuerpo con comillas (un JSON) que necesite una CLI del
+// contenedor viaja por archivo. Lo comparten el sondeo de RabbitMQ y la
+// publicación cruda de Kafka; snssqs no lo necesita (la CLI de AWS toma el
+// cuerpo por argv sin comillas internas).
+function bodyFileHelper(model) {
+  const broker = brokerEntry(model);
+  if (broker?.id !== 'rabbitmq' && broker?.id !== 'kafka') return '';
+  return `
+    /**
+     * Copia un cuerpo al contenedor en vez de pasarlo como argumento: un JSON con
+     * comillas dentro de la línea de comandos es exactamente lo que el cliente de
+     * contenedores corrompe en Windows. \`ProcessBuilder\` reconstruye una única
+     * cadena de línea de comandos a partir de la lista de argumentos, y su escapado
+     * rompe las comillas dobles incrustadas antes de que \`docker.exe\`/\`podman.exe\`
+     * las reciba — el cuerpo llega sin comillas y el fallo aparece lejos de su causa.
+     */
+    private static void copyToDevtools(String content, String target) {
+        try {
+            Path temp = Files.createTempFile("keel-body", ".json");
+            Files.writeString(temp, content, StandardCharsets.UTF_8);
+            runProcess(List.of(containerRuntime(), "cp", temp.toString(), DEVTOOLS_CONTAINER + ":" + target));
+            Files.deleteIfExists(temp);
+        } catch (IOException e) {
+            throw new IllegalStateException("No se pudo preparar el cuerpo para devtools", e);
+        }
+    }
+`;
+}
+
 // Lectura y aislamiento del canal de eventos, por broker. La API es la misma en
 // los tres: publishedMessages(destino, n) devuelve lo publicado desde la última
 // purga/marca, y purgeMessages(destino) reabre esa ventana.
@@ -740,22 +773,6 @@ ${doc}
 ${purgeDoc}
     protected static void purgeMessages(String destination) {
         devtools("curl", "-sf", "-u", "guest:guest", "-XDELETE", RABBIT_API + destination + "/contents");
-    }
-
-    /**
-     * Copia el cuerpo del sondeo al contenedor en vez de pasarlo como argumento: un
-     * JSON con comillas dentro de la línea de comandos es exactamente lo que el
-     * cliente de contenedores corrompe en Windows.
-     */
-    private static void copyToDevtools(String content, String target) {
-        try {
-            Path temp = Files.createTempFile("keel-probe", ".json");
-            Files.writeString(temp, content, StandardCharsets.UTF_8);
-            runProcess(List.of(containerRuntime(), "cp", temp.toString(), DEVTOOLS_CONTAINER + ":" + target));
-            Files.deleteIfExists(temp);
-        } catch (IOException e) {
-            throw new IllegalStateException("No se pudo preparar el cuerpo del sondeo de mensajería", e);
-        }
     }
 `;
   }
@@ -817,6 +834,9 @@ ${purgeDoc}
 
     /** Offset del topic desde el que lee cada canal (su última purga/marca). */
     private static final Map<String, Long> MARKS = new ConcurrentHashMap<>();
+
+    /** Archivo del contenedor por el que viaja el cuerpo de {@link #publishRaw}. */
+    private static final String PUBLISH_BODY = "/tmp/keel-publish.json";
 ${doc}
     protected static String publishedMessages(String channel, int count) {
         Long mark = MARKS.get(channel);
@@ -827,20 +847,30 @@ ${doc}
     }
 ${purgeDoc}
     protected static void purgeMessages(String channel) {
-        MARKS.put(channel, nextOffset());
+        MARKS.put(channel, safeNextOffset());
     }
 
     /** Marca todos los canales declarados: es la parte del reset que el script no puede hacer. */
     private static void markChannels() {
-        long offset;
-        try {
-            offset = nextOffset();
-        } catch (RuntimeException e) {
-            // El topic aún no existe porque nadie ha publicado: la marca es 0.
-            offset = 0L;
-        }
+        long offset = safeNextOffset();
         for (String channel : CHANNELS) {
             MARKS.put(channel, offset);
+        }
+    }
+
+    /**
+     * Offset siguiente tolerando que el topic <b>aún no exista</b>: contra un broker
+     * recién levantado nadie ha publicado todavía, \`kcat -o beginning\` sale con
+     * \`Unknown topic or partition\` (código 1) y {@link #runProcess} lo convierte en
+     * excepción. La marca correcta en ese caso es 0. Lo necesitan por igual el reset
+     * (primer flujo de la suite) y la purga previa a un Then de "no se publica nada",
+     * que puede ser la primerísima operación contra el broker.
+     */
+    private static long safeNextOffset() {
+        try {
+            return nextOffset();
+        } catch (RuntimeException e) {
+            return 0L;
         }
     }
 
@@ -901,12 +931,22 @@ ${purgeDoc}
         return last + 1;
     }
 
-    /** Publica un mensaje crudo en el topic del servicio (solo lo usa el humo del arnés). */
+    /**
+     * Publica un mensaje crudo en el topic del servicio (solo lo usa el humo del arnés).
+     *
+     * <p>El cuerpo va por archivo vía {@link #copyToDevtools} y kcat lo lee de ahí
+     * (\`-l\`: una línea, un mensaje). Embeberlo en la cadena de \`sh -c\` es lo que
+     * prohíbe el javadoc de {@link #devtools}: en Windows las comillas dobles del JSON
+     * se pierden y lo que llega al topic es \`{metadata:{eventType:X}}\`, que el filtro
+     * por canal nunca reconoce — el síntoma es un timeout mudo, no un error.
+     */
     protected static void publishRaw(String key, String payload) {
-        devtoolsShell("printf '%s' " + shellQuote(payload)
-            + " | kcat -P -b kafka:29092 -t " + EVENT_TOPIC + " -k " + shellQuote(key));
+        copyToDevtools(payload, PUBLISH_BODY);
+        devtoolsShell("kcat -P -b kafka:29092 -t " + EVENT_TOPIC + " -k " + shellQuote(key)
+            + " -l " + PUBLISH_BODY);
     }
 
+    /** Comilla un valor <b>sin comillas dobles</b> (una key, nunca un cuerpo JSON). */
     private static String shellQuote(String value) {
         return "'" + value.replace("'", "'\\\\''") + "'";
     }

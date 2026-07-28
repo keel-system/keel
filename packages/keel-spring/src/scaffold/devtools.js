@@ -136,26 +136,44 @@ echo "Infraestructura OK."
 }
 
 // Comprobación de que el sidecar minio-init hizo su trabajo: cada bucket
-// declarado en storage.keel.yaml existe, y los `visibility: public` tienen la
-// policy de lectura anónima aplicada.
+// declarado en storage.keel.yaml existe, y los `visibility: public` sirven de
+// verdad una lectura anónima.
 //
 // Es lo que convierte un hueco de storage en un fallo de INFRAESTRUCTURA, visto
 // antes de arrancar el servidor, en vez de un bloqueo en cascada descubierto a
 // mitad de la validación funcional (toda la superficie que sube o lee ficheros
 // depende de esto).
+//
+// El sondeo público mide el EFECTO (un GET anónimo que devuelve 200), no el
+// nombre del preset. Comparar contra `mc anonymous get | grep download` daba un
+// falso FALLO en cuanto el adaptador de la app aplicaba su propia bucket policy
+// al arrancar: `mc` etiqueta como `custom` cualquier policy que no coincida byte
+// a byte con uno de sus presets, aunque sea más restrictiva y correcta (solo
+// `s3:GetObject`, sin `s3:ListBucket`). Un rojo que hay que ir a desmentir a mano
+// cuesta más que el check que lo produjo.
 function bucketChecks(selected, service, model) {
   if (!selected.some((s) => s.id === 'minio')) return [];
   const buckets = declaredBuckets(model ?? {});
   const container = `${service.name}-devtools`;
   const alias = 'mc alias set local http://minio:9000 minioadmin minioadmin >/dev/null';
   return buckets.map((bucket) => {
+    const object = '.keel-anon-probe';
+    const url = `http://minio:9000/${bucket.physicalName}/${object}`;
+    // Sube un objeto sonda, lo lee sin credenciales y lo borra pase lo que pase:
+    // el código de salida es el del GET anónimo, no el de la limpieza.
+    const anonymousRead = [
+      alias,
+      `printf keel > /tmp/${object}`,
+      `mc cp --quiet /tmp/${object} local/${bucket.physicalName}/${object} >/dev/null`
+    ].join(' && ');
     const probe =
       bucket.visibility === 'public'
-        ? `${alias} && mc anonymous get local/${bucket.physicalName} | grep -q download`
+        ? `${anonymousRead} || exit 1; curl -sf -o /dev/null ${url}; rc=$?; ` +
+          `mc rm --force local/${bucket.physicalName}/${object} >/dev/null 2>&1; exit $rc`
         : `${alias} && mc ls local/${bucket.physicalName}`;
     const label =
       bucket.visibility === 'public'
-        ? `bucket ${bucket.physicalName} (público: lectura anónima)`
+        ? `bucket ${bucket.physicalName} (público: lectura anónima efectiva)`
         : `bucket ${bucket.physicalName}`;
     return `check ${sq(label)} ${sq(container)} ${sq(probe)}`;
   });

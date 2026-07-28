@@ -16,6 +16,32 @@ Síntoma → causa → arreglo. Sondeo básico y recetas de infraestructura en
    (EXTERNAL); desde dentro de la red compose (devtools) es `kafka:29092`
    (INTERNAL). Una app en el host apuntando a `kafka:29092` no conecta.
 
+## El arnés de pruebas falla al sondear el topic
+
+Los helpers de `AbstractFlowIT` (`publishedMessages`, `purgeMessages`,
+`publishRaw`) son **scaffold del generador**, no código de este proyecto: no los
+reimplementes. Dos causas cubren casi todos sus fallos, y ambas se descartan en
+minutos:
+
+1. **El topic aún no existe.** Contra un broker recién levantado nadie ha
+   publicado todavía, así que `kcat -o beginning` sale con `Unknown topic or
+   partition` (código 1) y el arnés lo convierte en `IllegalStateException`.
+   Cualquier lectura de offsets tiene que tolerarlo devolviendo 0 — es lo que
+   hace `safeNextOffset()`. Síntoma típico: revienta el **primer** flujo de la
+   suite o el humo del arnés, y no vuelve a pasar en la segunda corrida.
+2. **El cuerpo llegó deformado (Windows).** Un JSON embebido en la cadena de
+   `sh -c` pierde las comillas dobles: `ProcessBuilder` reconstruye una única
+   línea de comandos y el escapado de `docker.exe`/`podman.exe` las corrompe
+   antes de que kcat las vea. Lo que aterriza en el topic es
+   `{metadata:{eventType:X}}`, que el filtro por `eventType` no reconoce: el
+   síntoma es un `await` que agota el timeout **sin ningún error**. La regla del
+   arnés es que todo cuerpo con comillas viaja por archivo (`copyToDevtools` +
+   `kcat -P -l <archivo>`), nunca en la línea de comandos.
+
+Para confirmar cuál de las dos es, publica a mano desde devtools y vuelve a leer:
+`kcat -b kafka:29092 -t <topic> -C -o beginning -e -q`. Si el mensaje está pero
+sin comillas, es la 2.
+
 ## El poll revienta en bucle con el mismo mensaje
 
 Poison pill: `JsonDeserializer` sin `ErrorHandlingDeserializer` lanza antes de
