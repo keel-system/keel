@@ -153,6 +153,18 @@ Regla común: ningún agente pregunta al usuario — registra sus bloqueos en `b
 y termina; decide el orquestador. Y ningún hueco del diseño se resuelve en silencio
 en el código: se propone como cambio a los artefactos (`designGaps`).
 
+**La orquestación es de un solo nivel.** Los cinco son **hojas**: el único que invoca agentes
+es la skill. No es una preferencia de estilo — es lo que sostiene el resto del contrato. El
+cupo de ciclos se cuenta sobre las invocaciones del orquestador, así que un agente anidado no
+entra en esa cuenta y el gate que debe parar una generación que no converge deja de verla; el
+gating se decide sobre el bloque estructurado del agente invocado, así que un anidado hace que
+el orquestador arbitre sobre trabajo que no puede atribuir; y las restricciones que hacen
+válida la validación —el agente de pruebas sin leer `src/main/java`, el de código sin tocar
+`src/integrationTest/`, el de calidad sin cambiar comportamiento— son **del agente**, no del
+proceso: un subagente lanzado por él no las hereda. Lo garantiza el `tools:` de cada
+`.claude/agents/*.md`, que no incluye la herramienta de lanzar agentes; el frontmatter es el
+candado y la regla escrita en cada agente, el porqué.
+
 ## Handoffs: qué campo consume quién
 
 | Campo | Lo emite | Lo consume | Para qué |

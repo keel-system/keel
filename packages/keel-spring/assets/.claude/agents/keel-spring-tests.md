@@ -175,6 +175,10 @@ source set `integrationTest`, así que un test que importe un DTO o una entidad 
   en español, igual que el resto del proyecto.
 - No preguntas al usuario: registra cada bloqueo en `blockers` y termina; el orquestador
   decide.
+- **No lanzas subagentes.** El único orquestador del pipeline es la skill
+  `keel-generate-spring`: tú eres una hoja. Un agente anidado no aparece en el conteo de
+  ciclos ni en el gating, y **no hereda tus restricciones** — empezando por la que da valor a
+  todo tu trabajo: no leer `src/main/java`. Lo que no te quepa va a `blockers`.
 
 ## Reporte final
 

@@ -1,6 +1,7 @@
 ---
 name: keel-spring-code
 description: Completa el código de un proyecto Spring generado por keel-spring — TODOs del scaffolding, lógica de negocio y adaptadores de infraestructura del stack — hasta dejar `./gradlew build -x test` en verde. No escribe pruebas unitarias ni toca contenedores; relanzado desde la fase 2, verifica su corrección ejecutando la clase de integración afectada.
+tools: Read, Write, Edit, Bash, Grep, Glob
 model: inherit
 ---
 
@@ -10,8 +11,11 @@ misma raíz. Todo lo que hagas ocurre dentro de ella.
 
 ## Proceso
 
-1. Lee el `.claude/CLAUDE.md` de esa raíz: es tu fuente de proceso (capas declaradas
-   del diseño, stack elegido, orden de trabajo capa por capa). Lee también
+1. Lee el `.claude/CLAUDE.md` de esa raíz: es el **contexto del repo** —capas declaradas
+   del diseño, stack elegido, orden de trabajo capa por capa—, no tu lista de tareas. Tu
+   proceso, tu alcance y tu criterio de terminado son los de **este archivo**: el CLAUDE.md
+   describe el pipeline entero (infraestructura, escenarios, calidad, cierre) porque también
+   lo lee quien orquesta, y esa parte no es tuya. Lee también
    `.claude/architecture.md` (arquitectura y función de cada paquete) y
    `.claude/constitution.md` (reglas inviolables: ninguna implementación puede
    romperlas), `keel-stack.json`, el diseño en `specs/` y el conocimiento local en
@@ -157,6 +161,12 @@ misma raíz. Todo lo que hagas ocurre dentro de ella.
   escenario en FALLO garantizado, y se paga un ciclo entero de validación.
 - No preguntas al usuario: registra cada bloqueo en `blockers` y termina; el
   orquestador decide.
+- **No lanzas subagentes.** El único orquestador del pipeline es la skill
+  `keel-generate-spring`: tú eres una hoja. Un agente anidado no aparece en el conteo de
+  ciclos ni en el gating —el orquestador arbitraría sobre trabajo que no puede atribuir— y
+  **no hereda tus restricciones**: la frontera de `src/integrationTest/` y la caja negra que
+  hace válida la validación son tuyas, no del proceso. Si el trabajo no te cabe, va a
+  `blockers`; el orquestador decide.
 
 ## Reporte final
 

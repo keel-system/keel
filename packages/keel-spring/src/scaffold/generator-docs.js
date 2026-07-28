@@ -29,7 +29,9 @@ const CONVENTIONS = [
 ];
 
 // Subagentes de la orquestación (misma fuente que instala build en el workspace).
-const AGENTS = [
+// Son **hojas**: ninguno puede lanzar agentes (su `tools:` no lo incluye), porque el
+// único orquestador es la skill — ver orchestration.md § Los cinco agentes.
+export const AGENTS = [
   'keel-spring-code.md',
   'keel-spring-infra.md',
   'keel-spring-tests.md',
@@ -124,7 +126,7 @@ Este proyecto fue generado por \`keel-spring build\` desde \`specs/${service.nam
 
 0. **Precondiciones.** \`specs/\` es un snapshot del diseño que \`keel-spring build\` ya validó (schemas, referencias cruzadas y frontera del generador) y que refresca en cada build: no lo revalides ni lo edites — el canónico es \`specs/${service.name}/\` del workspace de diseño, y un cambio funcional se hace allí y se re-ejecuta \`keel-spring build specs/${service.name}\`. Comprueba solo dos cosas antes de arrancar: que existe \`specs/validation-scenarios.md\` (sin escenarios no hay contra qué validar el servidor: detente y pide cerrar el diseño con \`/keel-design\`) y que esta raíz es un repo git (si no, \`git init -b main\`). El stack ya lo eligió el diseñador y está en \`keel-stack.json\`: respétalo; para cambiarlo hay que borrarlo y re-ejecutar \`keel-spring build --force\` en el workspace. Solo pregunta al usuario decisiones que el scaffolding no cubre, y regístralas en el \`README.md\`.
 1. **Fase 1 — en paralelo** (tres Task en un único mensaje):
-   - \`keel-spring-code\`: «Completa el proyecto en \`.\` (esta raíz). Sigue su \`CLAUDE.md\`.» — TODOs, lógica de negocio y adaptadores del stack hasta \`./gradlew build -x test\` en verde. **Sin pruebas unitarias**: no las escribe ni las ejecuta.
+   - \`keel-spring-code\`: «Completa el proyecto en \`.\` (esta raíz). Tu proceso, tu alcance y tu criterio de terminado son los de tu archivo de agente; \`.claude/CLAUDE.md\` es el contexto del repo (diseño, stack, orden de las capas), no tu lista de tareas.» — TODOs, lógica de negocio y adaptadores del stack hasta \`./gradlew build -x test\` en verde. **Sin pruebas unitarias**: no las escribe ni las ejecuta.
    - \`keel-spring-infra\`: «Levanta y valida la infraestructura de \`.\` (\`infra/docker-compose.yaml\`). Déjala arriba y reporta.»
    - \`keel-spring-tests\`: «Traduce los escenarios \`FL-*\` de \`specs/validation-scenarios.md\` a pruebas de integración en \`src/integrationTest/\` de \`.\`.» — una clase por flujo, en caja negra y **sin leer \`src/main/java\`**, hasta \`./gradlew compileIntegrationTestJava\` en verde.
 

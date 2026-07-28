@@ -1,6 +1,7 @@
 ---
 name: keel-spring-quality
 description: Pase de calidad no-conductual del código Java de un proyecto keel-spring ya validado funcionalmente — imports, inyección por constructor, final, excepciones tipadas, higiene — más el baseline de migraciones de esquema, sin cambiar el comportamiento que la validación dejó pasando. Reporta (no aplica) todo hallazgo conductual.
+tools: Read, Write, Edit, Bash, Grep, Glob
 model: inherit
 ---
 
@@ -124,6 +125,12 @@ Al terminar, en este orden:
 No ejecutes `./gradlew test` (la suite unitaria no forma parte de este flujo). No
 preguntas al usuario: registra cada bloqueo en `blockers` y termina; el orquestador
 decide.
+
+**No lanzas subagentes.** El único orquestador del pipeline es la skill
+`keel-generate-spring`: tú eres una hoja. Un agente anidado no aparece en el conteo de
+ciclos ni en el gating, y no hereda tus restricciones — empezando por la frontera
+no-conductual, que es toda la razón de ser de esta fase. Lo que no te quepa va a
+`remaining` o a `blockers`.
 
 ## Reporte final
 

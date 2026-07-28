@@ -127,14 +127,25 @@ export function generate(model) {
     '',
     service.description,
     '',
+    // Enrutado por audiencia, lo primero: este documento lo cargan tanto el
+    // orquestador como los agentes hoja, y sin decir quién es quién un agente
+    // acaba leyendo el pipeline de abajo como su propia lista de tareas.
+    '> **Quién eres.** Si acabas de invocar `/' + SKILL + '`, eres el **orquestador**: tu proceso está en la',
+    '> skill, y este documento es el contexto que pasas a los agentes. Si eres uno de los agentes de',
+    '> `.claude/agents/`, manda **tu propio archivo de agente**: aquí tienes el mapa del repo (diseño,',
+    '> stack, arquitectura, orden de las capas), no tu lista de tareas — tu alcance y tu criterio de',
+    '> terminado son los de tu agente, y **tú no lanzas agentes**.',
+    '',
     `Proyecto generado desde el diseño Keel \`${service.name}\` v${service.version} por keel-spring ${packageVersion()} ` +
-      '(scaffolding transversal al stack: el proyecto compila y arranca). Tu trabajo es lo que depende de la infraestructura ' +
-      'elegida o del negocio: implementaciones de puertos de infraestructura, lógica de negocio e invariantes. ' +
+      '(scaffolding transversal al stack: el proyecto compila y arranca). Lo que queda pendiente es lo que depende de la ' +
+      'infraestructura elegida o del negocio: implementaciones de puertos de infraestructura, lógica de negocio e invariantes ' +
+      '(repartido entre los agentes; ver § Quién ejecuta esto). ' +
       '**Sin pruebas unitarias**: no las escribas ni ejecutes `./gradlew test` — la suite es un proceso independiente y ' +
       'posterior a que el diseñador valide el servidor; el andamiaje de test que ya está (deps, perfil `test` con H2, ' +
       `\`${service.applicationClass}Tests\`) se deja intacto para esa fase. Los escenarios \`FL-*\` sí se traducen a pruebas de ` +
-      'integración en `src/integrationTest/` (caja negra contra el contrato, source set aparte). El criterio de terminado es la compilación en ' +
-      'verde más `./gradlew integrationTest` con el **100%** de los escenarios de `specs/validation-scenarios.md` en OK. ' +
+      'integración en `src/integrationTest/` (caja negra contra el contrato, source set aparte). El criterio de terminado **del ' +
+      'pipeline** es la compilación en verde más `./gradlew integrationTest` con el **100%** de los escenarios de ' +
+      '`specs/validation-scenarios.md` en OK. ' +
       'Este repo es **autosuficiente**: diseño, skill, convenciones y guías del stack van incluidos. ' +
       'Localiza los puntos de trabajo con `grep -rn "TODO" src`.',
     '',
@@ -166,7 +177,7 @@ export function generate(model) {
     '',
     '## Conocimiento local',
     '',
-    `La skill \`/${SKILL}\` de este proyecto arranca el proceso; \`.claude/conventions/\` trae las convenciones que consultan los subagentes, y las guías del stack`,
+    `La skill \`/${SKILL}\` de este proyecto arranca el proceso; \`.claude/conventions/\` trae las convenciones que consultan los agentes de \`.claude/agents/\`, y las guías del stack`,
     'están instaladas como skills propias por tecnología (solo las del stack elegido):',
     '',
     '- `.claude/conventions/mapping.md` — mapeo DSL Keel → código Spring, capa por capa. Síguelo estrictamente.',
@@ -177,11 +188,15 @@ export function generate(model) {
     '- `.claude/conventions/integration-tests.md` — cómo se traducen los escenarios `FL-*` a pruebas de integración.',
     ...techSkills.map((name) => `- \`.claude/skills/${name}/SKILL.md\` — ${SKILL_HINTS[name] ?? name}: qué dejó listo build y qué te toca a ti; sus \`references/\` (configuración, implementación, troubleshooting) se leen bajo demanda.`),
     '',
-    '## Proceso: completar el scaffolding, capa por capa',
+    '## Orden de trabajo: completar el scaffolding, capa por capa',
     '',
     ...steps.map((step, index) => `${index + 1}. ${step}`),
     '',
-    '## Verificación (obligatoria antes de dar por terminado)',
+    '## Verificación — criterio de salida del pipeline',
+    '',
+    'Lo que hace falta para dar por terminada **la generación**, repartido entre varios agentes. No es',
+    'el criterio de ninguno en particular: si eres un agente de `.claude/agents/`, el tuyo está en tu',
+    'archivo y suele ser más estrecho que esta lista.',
     '',
     '1. `./gradlew build -x test` en verde: compilación y empaquetado (en Windows `gradlew.bat build -x test`).'
   ];
@@ -215,23 +230,29 @@ export function generate(model) {
     );
   }
 
+  // Descriptivo a propósito ("quién ejecuta qué"), no imperativo: este párrafo lo
+  // lee también cada agente hoja, y redactado como procedimiento se convierte en
+  // su receta para lanzar agentes — incluido él mismo.
   lines.push(
     '',
-    `La skill \`/${SKILL}\` de este proyecto orquesta este flujo con los subagentes de \`.claude/agents/\`:`,
-    '`keel-spring-code` (código, sin tests) en paralelo con `keel-spring-infra` (infraestructura arriba y sana) y con',
-    '`keel-spring-tests` (escenarios `FL-*` → `src/integrationTest/`, en caja negra). Con los tres en OK, el orquestador',
-    'ejecuta `bash infra/score-scenarios.sh`, que corre la suite y compone la matriz desde el XML de JUnit: eso es',
-    'determinista y no gasta un agente. Solo si la matriz trae algo en rojo se invoca `keel-spring-validate`, que **solo',
-    'arbitra** de quién es la culpa de cada fallo. Al final, `keel-spring-quality` (pase de calidad no-conductual con la',
-    'compilación en verde' +
+    '## Quién ejecuta esto',
+    '',
+    `Lo reparte la skill \`/${SKILL}\`, **único orquestador** del pipeline: los agentes de \`.claude/agents/\` son`,
+    '**hojas** y ninguno invoca a otro (su `tools:` no lo incluye). El reparto es: `keel-spring-code` (código, sin',
+    'tests) en paralelo con `keel-spring-infra` (infraestructura arriba y sana) y con `keel-spring-tests` (escenarios',
+    '`FL-*` → `src/integrationTest/`, en caja negra). Con los tres en OK, la skill ejecuta `bash infra/score-scenarios.sh`,',
+    'que corre la suite y compone la matriz desde el XML de JUnit: eso es determinista y no gasta un agente. Solo si la',
+    'matriz trae algo en rojo se invoca `keel-spring-validate`, que **solo arbitra** de quién es la culpa de cada fallo.',
+    'Al final, `keel-spring-quality` (pase de calidad no-conductual con la compilación en verde' +
       (layersPresent.persistence ? ', más el baseline de migraciones del punto 4' : '') +
-      ', y los escenarios al 100% como no-regresión propia).'
+      ', y los escenarios al 100% como no-regresión propia). El pipeline completo —fases, gating y handoffs— está en',
+    '`.claude/orchestration.md`.'
   );
 
   lines.push(
     '',
-    'Al cerrar: commit en este repo (`Generado desde specs/' + service.name + ' v' + service.version + '`) y añade al `README.md`',
-    'las decisiones tomadas y cualquier hueco del diseño detectado.',
+    'El cierre —commit en este repo (`Generado desde specs/' + service.name + ' v' + service.version + '`) y el `README.md`',
+    'con las decisiones tomadas y los huecos del diseño detectados— lo hace **quien orquesta**, con todo lo anterior en verde.',
     ''
   );
 

@@ -317,6 +317,22 @@ test('CLAUDE.md contextual: specs, solo capas declaradas y skill local con conve
   assert.ok(claude.includes('Sin pruebas unitarias'));
   assert.ok(!claude.includes('**Tests**')); // ya no hay paso de escribir tests
 
+  // El CLAUDE.md lo cargan dos audiencias —quien orquesta y cada agente hoja— y
+  // describe el pipeline entero. Sin decir quién es quién, un agente lo lee como su
+  // propia lista de tareas y acaba lanzando a los agentes que el documento nombra
+  // (incluido él mismo), fuera del conteo de ciclos y del gating.
+  assert.ok(claude.includes('**Quién eres.**'));
+  assert.ok(claude.includes('**tú no lanzas agentes**'));
+  assert.ok(claude.includes('manda **tu propio archivo de agente**'));
+  // La verificación es el criterio de salida del pipeline, no el de cada agente:
+  // como "obligatoria antes de dar por terminado" contradecía al agente de código,
+  // que solo debe compilar.
+  assert.ok(claude.includes('## Verificación — criterio de salida del pipeline'));
+  assert.ok(!claude.includes('## Verificación (obligatoria antes de dar por terminado)'));
+  // El reparto se describe ("lo reparte la skill"), no se prescribe al lector.
+  assert.ok(claude.includes('## Quién ejecuta esto'));
+  assert.ok(claude.includes('**único orquestador**'));
+
   // architecture.md y constitution.md: documentos de primer nivel en .claude/.
   const architecture = read(workspace, '.claude/architecture.md');
   assert.ok(architecture.includes('hexagonal'));
@@ -326,11 +342,14 @@ test('CLAUDE.md contextual: specs, solo capas declaradas y skill local con conve
   assert.ok(constitution.includes('UseCaseMediator'));
   assert.ok(constitution.includes('XxxRepositoryImpl'));
 
-  // Skill propia del proyecto que apunta al CLAUDE.md como proceso y orquesta
-  // los subagentes de .claude/agents/.
+  // Skill propia del proyecto: es quien orquesta los agentes de .claude/agents/.
   const skill = read(workspace, '.claude/skills/keel-generate-spring/SKILL.md');
   assert.ok(skill.includes('name: keel-generate-spring'));
   assert.ok(skill.includes('CLAUDE.md'));
+  // El prompt de arranque no delega el proceso en el CLAUDE.md: es lo que hacía que
+  // el agente leyera el pipeline de ese documento como suyo.
+  assert.ok(!skill.includes('Sigue su `CLAUDE.md`'));
+  assert.ok(skill.includes('son los de tu archivo de agente'));
   assert.ok(skill.includes('autosuficiente'));
   assert.ok(skill.includes('keel-spring-code'));
   assert.ok(skill.includes('keel-spring-infra'));

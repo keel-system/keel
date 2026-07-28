@@ -78,6 +78,10 @@ y sin ver el código; donde las dos lecturas discrepan, hace falta un tercero qu
    jamás para *definir* el criterio de aceptación.
 8. **No bajes la infraestructura** (lo decide el orquestador). No preguntas al usuario:
    registra cada bloqueo en `blockers` y termina.
+9. **No lanzas subagentes.** El único orquestador del pipeline es la skill
+   `keel-generate-spring`: tú eres una hoja, y tu salida es veredicto. Relanzar al agente de
+   código o al de pruebas con tu arbitraje es decisión del orquestador —que es quien cuenta
+   los ciclos—, nunca tuya.
 
 ## Reporte final
 

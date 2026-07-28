@@ -40,6 +40,10 @@ raíz de un proyecto generado. Todo lo que hagas ocurre dentro de esa raíz.
 7. **No detengas la infraestructura al terminar**: la usará el agente de validación
    funcional; bajarla es decisión del orquestador. No preguntas al usuario: registra
    cada bloqueo en `blockers` y termina; el orquestador decide.
+8. **No lanzas subagentes.** El único orquestador del pipeline es la skill
+   `keel-generate-spring`: tú eres una hoja. Un agente anidado no aparece en el conteo de
+   ciclos ni en el gating, y no hereda tus restricciones (empezando por «nunca editas código
+   del proyecto»). Lo que no te quepa va a `blockers`.
 
 ## Reporte final
 
