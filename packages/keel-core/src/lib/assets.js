@@ -21,6 +21,37 @@ export function packageVersion() {
   return JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8')).version;
 }
 
+// Versiones del DSL que esta CLI entiende. NO se duplica como constante: es por
+// definición el enum del schema del manifiesto, y una copia solo añadiría una
+// forma nueva de desincronizarse. (Un generador sí declara su propia lista —ver
+// SUPPORTED_DSL en keel-spring—, porque la suya es un subconjunto: lo que sabe
+// mapear, que puede ir por detrás del DSL.)
+let supportedDslCache;
+
+export function supportedDsl() {
+  if (supportedDslCache) return supportedDslCache;
+  const schema = JSON.parse(fs.readFileSync(schemaPathFor('service'), 'utf8'));
+  const versions = schema?.properties?.keel?.enum;
+  if (!Array.isArray(versions) || versions.length === 0) {
+    throw new Error('service.schema.json no declara properties.keel.enum: no se puede saber qué DSL soporta esta CLI.');
+  }
+  supportedDslCache = Object.freeze([...versions]);
+  return supportedDslCache;
+}
+
+/**
+ * Archivos del payload que un workspace debe poder editar: la detección de
+ * deriva (`keel init --check`) los ignora. La portada de un registry está
+ * reescrita a propósito, y el CLAUDE.md de un workspace se adapta al equipo.
+ */
+export const CUSTOMIZABLE_PAYLOAD = [
+  'README.md',
+  'CLAUDE.md',
+  '.gitignore',
+  '.gitattributes',
+  'contracts/README.md'
+];
+
 // Generadores conocidos: cada uno es un paquete npm independiente con CLI propia.
 // Se instalan con `npm i -g <paquete>` y se preparan con `<paquete> build specs/<servicio>`.
 export const KNOWN_GENERATORS = {

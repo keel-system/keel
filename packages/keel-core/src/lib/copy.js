@@ -38,3 +38,46 @@ export function copyTree(srcDir, destDir, { force = false, renames = {} } = {}) 
   walk(srcDir, destDir);
   return { copied, skipped };
 }
+
+/**
+ * Compara el payload de srcDir con lo que hay en destDir, sin escribir nada.
+ * Recorre igual que copyTree() y devuelve las mismas rutas relativas POSIX.
+ *
+ * `ignore` son rutas relativas (ya renombradas) que el workspace tiene derecho a
+ * editar: la portada de un registry está reescrita a propósito y reportarla como
+ * desfasada en cada ejecución sería ruido que enseña a ignorar el aviso.
+ *
+ * Devuelve { stale, missing }: `stale` existe pero difiere del original,
+ * `missing` no existe. No hay `extra`: lo que el workspace añada por su cuenta
+ * (sus specs, sus docs) no es asunto de esta comparación.
+ */
+export function diffTree(srcDir, destDir, { renames = {}, ignore = [] } = {}) {
+  const ignored = new Set(ignore);
+  const stale = [];
+  const missing = [];
+
+  const walk = (src, dest) => {
+    for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+      const from = path.join(src, entry.name);
+      const destName = src === srcDir && !entry.isDirectory() && renames[entry.name]
+        ? renames[entry.name]
+        : entry.name;
+      const to = path.join(dest, destName);
+      if (entry.isDirectory()) {
+        if (fs.existsSync(to)) walk(from, to);
+        else missing.push(`${path.relative(destDir, to).split(path.sep).join('/')}/`);
+        continue;
+      }
+      const relative = path.relative(destDir, to).split(path.sep).join('/');
+      if (ignored.has(relative)) continue;
+      if (!fs.existsSync(to)) {
+        missing.push(relative);
+      } else if (!fs.readFileSync(from).equals(fs.readFileSync(to))) {
+        stale.push(relative);
+      }
+    }
+  };
+
+  walk(srcDir, destDir);
+  return { stale, missing };
+}

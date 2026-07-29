@@ -4,10 +4,18 @@ import pc from 'picocolors';
 import { templatesDir, isKeelWorkspace } from '../lib/assets.js';
 import { MANIFEST_FILE, KEBAB_NAME, resolveServiceRef, loadService } from '../lib/loader.js';
 import { rewriteManifestForDerivation } from '../lib/derive.js';
+import {
+  downloadDesign,
+  dslMismatchMessage,
+  dslSupport,
+  findDesign,
+  loadRegistryIndex,
+  parseRegistryRef
+} from '../lib/registry-source.js';
 
 const SEED_FILES = ['service.keel.yaml', 'domain.keel.yaml', 'use-cases.keel.yaml'];
 
-export function createService(name, options = {}) {
+export async function createService(name, options = {}) {
   if (!KEBAB_NAME.test(name)) {
     console.error(pc.red(`Nombre inválido: '${name}'. Usa kebab-case (ej. product-catalog).`));
     process.exitCode = 1;
@@ -29,6 +37,11 @@ export function createService(name, options = {}) {
   }
 
   if (options.from) {
+    const remote = parseRegistryRef(options.from);
+    if (remote) {
+      await deriveFromRegistry(name, remote, { cwd, serviceDir, options });
+      return;
+    }
     deriveService(name, options.from, { cwd, serviceDir });
     return;
   }
@@ -46,6 +59,58 @@ export function createService(name, options = {}) {
   console.log(`  2. Las capas opcionales (api, security, messaging...) se añaden al manifiesto cuando apliquen`);
   console.log(`     — plantillas en ${pc.cyan('templates/service/')}`);
   console.log(`  3. Valida con ${pc.cyan(`keel validate specs/${name}`)}`);
+}
+
+/**
+ * Deriva de un diseño del registry (`--from registry:<slug>`): descarga sus
+ * artefactos a un directorio temporal y sigue por el camino local, de modo que
+ * el linaje `basedOn` y el resto de la derivación son exactamente los mismos.
+ */
+async function deriveFromRegistry(name, remote, { cwd, serviceDir, options }) {
+  if (remote.error) {
+    console.error(pc.red(remote.error));
+    process.exitCode = 1;
+    return;
+  }
+
+  const loaded = await loadRegistryIndex(options);
+  if (loaded.error) {
+    console.error(pc.red(loaded.error));
+    process.exitCode = 1;
+    return;
+  }
+  for (const warning of loaded.warnings) console.error(`${pc.yellow('⚠')} ${warning}`);
+
+  const { design, error } = findDesign(loaded.index, remote.slug);
+  if (error) {
+    console.error(pc.red(error));
+    process.exitCode = 1;
+    return;
+  }
+
+  // Gate de compatibilidad **antes** de descargar: un diseño escrito con un DSL
+  // que esta CLI no conoce produce un workspace que `keel validate` rechaza, así
+  // que dejarlo a medias es peor que no traerlo.
+  if (dslSupport(design) === 'nueva') {
+    console.error(pc.red(`✘ ${dslMismatchMessage(design)}`));
+    process.exitCode = 1;
+    return;
+  }
+
+  console.log(pc.dim(`Descargando ${design.slug} v${design.service?.version ?? '?'} de ${loaded.url}…`));
+  const downloaded = await downloadDesign(design, { indexUrl: loaded.url });
+  if (downloaded.error) {
+    console.error(pc.red(downloaded.error));
+    process.exitCode = 1;
+    return;
+  }
+
+  try {
+    // El mensaje de éxito ya identifica el origen por su linaje (`<slug>@<versión>`).
+    deriveService(name, downloaded.dir, { cwd, serviceDir });
+  } finally {
+    fs.rmSync(downloaded.dir, { recursive: true, force: true });
+  }
 }
 
 // Deriva specs/<name> clonando un diseño existente: copia el manifiesto reescrito

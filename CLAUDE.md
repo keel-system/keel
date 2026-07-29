@@ -17,7 +17,7 @@ Los `.claude/skills/` y el `CLAUDE.md` bajo `assets/` **no son configuración de
 
 ### `packages/keel-core` — CLI `keel`
 
-- `src/cli.js` — entry point (commander). Comandos: `init`, `new`, `list`, `validate`, `describe`.
+- `src/cli.js` — entry point (commander). Comandos: `init`, `new`, `list`, `validate`, `describe`, `index`, `registry` (`list`/`search`/`show`). Usa `parseAsync`: el `--from registry:<slug>` de `new` descarga por red.
 - `src/commands/` — un archivo por comando.
 - `src/lib/`:
   - `assets.js` — constantes `LAYERS`, `REQUIRED_LAYERS` (`domain`, `use-cases`), `KNOWN_GENERATORS`, `isKeelWorkspace()`.
@@ -26,11 +26,13 @@ Los `.claude/skills/` y el `CLAUDE.md` bajo `assets/` **no son configuración de
   - `summarize-service.js` — `summarizeService()`, resumen puro del diseño para `keel describe`.
   - `crossrefs.js` — `checkCrossRefs()`, validación mecánica de referencias entre capas.
   - `derivatives.js` — `listDerivatives()`, inventario de los derivados del diseño (escenarios, `DESIGN.md`, contratos formales, panel, `INTEGRATION.md`) y su frescura: compara el `service.version` que cada uno lleva estampado con el del manifiesto (`fresh`/`stale`/`unstamped`/`missing`/`orphan`/`not-applicable`). Lo consume `keel describe` y lo orquesta la skill `/keel-evolve`.
+  - `design-index.js` — `buildIndex()`, `renderTable()`, `applyMarkers()`, `renderIndexJson()`: el índice de los diseños del workspace, proyección pura de `summarizeService()` + `listDerivatives()` + el sidecar `design.yaml` (schema propio, **fuera del DSL**). Agrupa por familia para que varias variantes del mismo problema (`notifications-multichannel`, `notifications-push-only`) se comparen en una subtabla. Escribe la tabla del `README.md` entre los marcadores `<!-- keel:servicios:start/end -->` —de los que es el **único** escritor: `/keel-handoff` ya no la redacta— y el `index.json`. Determinista a propósito (sin timestamps): de ahí que `keel index --check` sirva de puerta de CI.
+  - `registry-source.js` — acceso al registry remoto: `loadRegistryIndex()` (caché por URL en `~/.keel/registry/` con ETag y TTL de 24 h, `--refresh`/`--offline`, degradación a caché si la red falla), `findDesign()`, `searchDesigns()`, `downloadDesign()` (descarga selectiva de los `files` que el índice enumera, solo `specs/<slug>/`: sin tarballs, sin dependencias nuevas) y `parseRegistryRef()`. Un registry es un repo git servido por URLs raw, no un servicio: no hay `keel publish`.
   - `copy.js` — `copyTree()`, copia idempotente de assets.
   - `derive.js` — `rewriteManifestForDerivation()`, reescritura del manifiesto para `keel new --from` (derivar un diseño existente).
 - `src/index.js` — API pública que consumen los generadores (reexporta lo anterior).
-- `assets/core/` — payload: `schema/*.schema.json`, `templates/service/*.keel.yaml`, `.claude/skills/`, `docs/`, `CLAUDE.md` plantilla.
-- `test/crossrefs.test.js` — tests con `node:test`.
+- `assets/core/` — payload: `schema/*.schema.json` (incluye `design.schema.json`, metadatos de publicación, que **no** es una capa del DSL), `templates/service/*.keel.yaml`, `.claude/skills/`, `docs/`, `CLAUDE.md` plantilla.
+- `test/*.test.js` — tests con `node:test`.
 
 ### `packages/keel-spring` — generador Spring (CLI `keel-spring`)
 
@@ -71,7 +73,12 @@ La revisión **semántica** (calidad del diseño, invariantes, mínimo privilegi
 
 | Cambio | Archivos a tocar |
 |---|---|
-| Nuevo comando CLI | `keel-core/src/cli.js` + nuevo archivo en `src/commands/` |
+| Nuevo comando CLI | `keel-core/src/cli.js` + nuevo archivo en `src/commands/` (lógica pura en `src/lib/`, el comando solo consola y escritura) |
+| Cambio en el índice de diseños | `keel-core/src/lib/design-index.js` + test en `test/design-index.test.js`. El índice debe seguir siendo determinista (sin timestamps): `keel index --check` depende de ello |
+| Cambio en el acceso al registry | `keel-core/src/lib/registry-source.js` + test en `test/registry.test.js`. Todo lo de red entra por parámetro (`fetchImpl`, `now`, `cacheDir`): los tests no tocan red ni el HOME |
+| Nueva versión del DSL | Añadirla al enum de `properties.keel` en `assets/core/schema/service.schema.json` — **no hay constante duplicada**: `supportedDsl()` (`src/lib/assets.js`) la deriva de ahí y `test/supported-dsl.test.js` lo verifica. Después, `SUPPORTED_DSL` de cada generador cuando sepa mapearla |
+| Cambio del formato de `index.json` | Subir `INDEX_SCHEMA_VERSION` (`src/lib/design-index.js`) es **breaking para los consumidores**: primero se publica una CLI que lea el formato nuevo, y solo después regeneran los registries. Ver `assets/core/docs/design-registry.md § Compatibilidad` |
+| Nuevo archivo del payload que el workspace pueda editar | `CUSTOMIZABLE_PAYLOAD` (`src/lib/assets.js`), o `keel init --check` lo reportará como deriva |
 | Nueva regla de validación mecánica | `keel-core/src/lib/crossrefs.js` + test en `test/crossrefs.test.js` |
 | Nueva capa del DSL | `LAYERS` en `src/lib/assets.js` + `assets/core/schema/<capa>.schema.json` + `assets/core/templates/service/<capa>.keel.yaml` + `assets/core/docs/dsl/<capa>.md` + reglas en `crossrefs.js` |
 | Nuevo generador | Paquete `packages/keel-<tech>/` calcado de `keel-spring`; guía en `keel-core/assets/core/docs/building-a-generator.md`; registrar en `KNOWN_GENERATORS` (`src/lib/assets.js`) |
@@ -92,3 +99,4 @@ La revisión **semántica** (calidad del diseño, invariantes, mínimo privilegi
 - `packages/keel-core/assets/core/docs/dsl-reference.md` + `docs/dsl/<capa>.md` — referencia del DSL.
 - `packages/keel-core/assets/core/docs/building-a-generator.md` — cómo crear un generador.
 - `packages/keel-core/assets/core/docs/validation-scenarios.md` — escenarios Given/When/Then.
+- `packages/keel-core/assets/core/docs/design-registry.md` — publicar y consumir diseños reutilizables (registry, sidecar `design.yaml`, `keel index`, `keel registry`).

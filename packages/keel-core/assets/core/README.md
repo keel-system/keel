@@ -5,8 +5,9 @@ artefactos declarativos agnósticos de tecnología (`specs/<servicio>/`, un arte
 partir de los cuales se genera la implementación en la tecnología que se quiera.
 
 > Edita libremente esta introducción para describir tu organización, convenciones o cómo contribuir.
-> La tabla de la sección **Servicios diseñados** se regenera automáticamente al cerrar cada diseño
-> (`/keel-design`) o al ejecutar `/keel-handoff`; **no edites a mano el contenido entre los marcadores**.
+> La tabla de la sección **Servicios diseñados** la genera `keel index` (lo ejecutan `/keel-design` al
+> cerrar un diseño y `/keel-handoff`); **no edites a mano el contenido entre los marcadores**, se pisa
+> en la siguiente ejecución. `keel index --check` comprueba, sin escribir, que el índice sigue al día.
 
 ## Servicios diseñados
 

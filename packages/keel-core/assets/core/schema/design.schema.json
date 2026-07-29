@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schema/2.0/design.schema.json",
+  "title": "Keel Design Metadata",
+  "description": "Metadatos de publicación de un diseño en un registry (design.yaml). No forma parte del DSL: describe cómo se distribuye y descubre el diseño, no lo que el servicio hace.",
+  "type": "object",
+  "required": ["summary", "maturity"],
+  "additionalProperties": false,
+  "properties": {
+    "family": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "description": "Familia que agrupa variantes del mismo problema (ej. notifications). Por defecto, el propio slug del diseño."
+    },
+    "variant": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "description": "Nombre de la variante dentro de la familia (ej. multichannel). Obligatorio cuando family no coincide con el slug."
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 10,
+      "description": "Una o dos líneas para el índice del registry: qué resuelve este diseño."
+    },
+    "differsIn": {
+      "type": "string",
+      "minLength": 10,
+      "description": "Qué distingue a esta variante de sus hermanas de familia. Alimenta la columna 'Difiere en' del índice."
+    },
+    "maturity": {
+      "enum": ["draft", "stable", "reference"],
+      "description": "draft: en construcción. stable: usable en producción. reference: diseño ejemplar, mantenido como referencia de la metodología."
+    },
+    "tags": {
+      "type": "array",
+      "description": "Etiquetas de búsqueda (capacidades, integraciones, patrones).",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" }
+    },
+    "author": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Quién mantiene el diseño (usuario u organización)."
+    },
+    "license": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Licencia bajo la que se publica el diseño (ej. Apache-2.0)."
+    },
+    "requires": {
+      "type": "array",
+      "description": "Slugs de otros diseños del registry que este consume (coherente con la capa dependencies).",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" }
+    }
+  }
+}

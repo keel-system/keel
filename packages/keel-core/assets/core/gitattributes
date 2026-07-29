@@ -1,0 +1,13 @@
+# Un workspace Keel es texto (YAML, Markdown, JSON) y sus derivados se generan y
+# comparan byte a byte: `keel index --check` compara el índice regenerado con el
+# que hay en disco. Normalizar a LF en todas las plataformas evita que el mismo
+# comando dé resultados distintos en Windows y en el CI de Linux.
+* text=auto eol=lf
+
+# Binarios que pueden acabar en docs/<servicio>/ (diagramas, capturas).
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.pdf binary
+*.ico binary

@@ -81,19 +81,19 @@ Los artefactos son **declarativos**: guardan el *qué*, no el *por qué*. El rat
 
 ## Índice del repositorio (`README.md`)
 
-Tras escribir `DESIGN.md`, **actualiza el índice de servicios del `README.md` en la raíz del workspace** para que quien abra el repositorio descubra el diseño y pueda reutilizarlo. Reescribe **solo** la región delimitada por los marcadores, preservando la introducción y cualquier otra sección escrita por humanos:
+Tras escribir `DESIGN.md`, **actualiza el índice de servicios del `README.md` en la raíz del workspace** para que quien abra el repositorio descubra el diseño y pueda reutilizarlo. No lo escribas a mano: ejecuta
 
+```bash
+keel index
 ```
-<!-- keel:servicios:start -->
-...tabla generada...
-<!-- keel:servicios:end -->
-```
+
+El comando reescribe **solo** la región delimitada por los marcadores `<!-- keel:servicios:start -->` / `<!-- keel:servicios:end -->` —preservando la introducción y cualquier sección escrita por humanos— y regenera además `index.json`, el índice máquina del workspace. Deriva cada fila del propio diseño (identidad, dominio, capas, resumen y enlaces a los derivados que existen de verdad), así que es idempotente por construcción: ejecutarlo dos veces no duplica ni reordena filas.
 
 Reglas:
 
-- La tabla tiene una fila por servicio con columnas **Servicio | Descripción | Diseño | Integración**: `Servicio` es `service.name`; `Descripción` sale de `service.description`; `Diseño` enlaza `docs/<service.name>/DESIGN.md`; `Integración` enlaza `docs/<service.name>/INTEGRATION.md` **solo si el archivo existe** (si no, deja la celda con `—`).
-- **Upsert idempotente**: si el servicio ya tiene fila, actualízala; si no, añádela. Regenerar no debe duplicar filas. Ordena las filas alfabéticamente por servicio.
-- Si el `README.md` no existe (workspace sembrado antes de incluir el template), créalo con la misma estructura: título, introducción breve, sección `## Servicios diseñados` con los marcadores y la tabla.
+- **El índice tiene un único escritor, y es `keel index`.** Nunca edites la región entre marcadores a mano ni con Edit: dos escritores sobre la misma tabla la desincronizan en cuanto uno de los dos cambia de formato.
+- Si el comando avisa de que falta el `README.md` o los marcadores (workspace sembrado antes de incluir el template), créalo con la estructura mínima —título, introducción breve, sección `## Servicios diseñados` y las dos líneas de marcadores— y vuelve a ejecutar `keel index`.
+- Un aviso de `keel index` (un diseño que no carga, un `service.name` que no coincide con su directorio, un `design.yaml` inválido) hace que el comando salga con código 1. Repórtalo al humano en vez de darlo por bueno: el índice se generó, pero algo del workspace está mal.
 
 ## Coherencia
 

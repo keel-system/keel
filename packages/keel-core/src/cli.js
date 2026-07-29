@@ -6,6 +6,19 @@ import { list } from './commands/list.js';
 import { validate } from './commands/validate.js';
 import { describe } from './commands/describe.js';
 import { createService } from './commands/new.js';
+import { writeIndex } from './commands/index-cmd.js';
+import { listRegistry, searchRegistry, showRegistryDesign } from './commands/registry.js';
+
+/**
+ * Opciones comunes de los subcomandos que hablan con el registry remoto.
+ * Commander no propaga opciones a los subcomandos, así que se añaden a cada uno.
+ */
+function withRegistryOptions(command) {
+  return command
+    .option('--source <url>', 'URL del index.json del registry (por defecto, KEEL_REGISTRY_URL o el oficial)')
+    .option('--refresh', 'ignora la caché y vuelve a descargar el índice', false)
+    .option('--offline', 'usa solo la copia local del índice, sin red', false);
+}
 
 const program = new Command();
 
@@ -18,6 +31,7 @@ program
   .command('init')
   .description('Siembra un workspace Keel en el directorio actual (skills, schema, plantillas, docs)')
   .option('-f, --force', 'sobrescribe archivos existentes', false)
+  .option('--check', 'no escribe: falla si el payload del workspace quedó atrás respecto a esta CLI', false)
   .action((options) => init(options));
 
 program
@@ -25,12 +39,16 @@ program
   .description('Lista los generadores conocidos y su paquete npm')
   .action(() => list());
 
-program
-  .command('new')
-  .description('Crea el directorio de un servicio nuevo desde plantillas, o derivado de un diseño existente con --from')
-  .argument('<servicio>', 'nombre del servicio en kebab-case (ej. product-catalog)')
-  .option('--from <origen>', 'servicio existente del que derivar (nombre o ruta: billing | specs/billing)')
-  .action((servicio, options) => createService(servicio, options));
+withRegistryOptions(
+  program
+    .command('new')
+    .description('Crea el directorio de un servicio nuevo desde plantillas, o derivado de un diseño existente con --from')
+    .argument('<servicio>', 'nombre del servicio en kebab-case (ej. product-catalog)')
+    .option(
+      '--from <origen>',
+      'diseño del que derivar: nombre local (billing), ruta (specs/billing) o del registry (registry:catalog)'
+    )
+).action((servicio, options) => createService(servicio, options));
 
 program
   .command('validate')
@@ -45,4 +63,32 @@ program
   .argument('<servicio>', 'nombre del servicio (busca specs/<servicio>) o ruta al directorio/manifiesto')
   .action((servicio) => describe(servicio));
 
-program.parse();
+program
+  .command('index')
+  .description('Genera el índice de diseños del workspace: la tabla del README y index.json')
+  .option('--check', 'no escribe: falla si el índice quedó atrás (para CI)', false)
+  .action((options) => writeIndex(options));
+
+const registry = program
+  .command('registry')
+  .description('Explora el registry de diseños reutilizables de la comunidad');
+
+withRegistryOptions(
+  registry.command('list', { isDefault: true }).description('Lista los diseños publicados, agrupados por familia')
+).action((options) => listRegistry(options));
+
+withRegistryOptions(
+  registry
+    .command('search')
+    .description('Busca diseños por nombre, tags, dominio o descripción')
+    .argument('<término>', 'texto a buscar (ej. notifications, outbox, billing)')
+).action((termino, options) => searchRegistry(termino, options));
+
+withRegistryOptions(
+  registry
+    .command('show')
+    .description('Muestra la ficha completa de un diseño del registry')
+    .argument('<diseño>', 'slug del diseño (ej. catalog, notifications-multichannel)')
+).action((diseno, options) => showRegistryDesign(diseno, options));
+
+await program.parseAsync();

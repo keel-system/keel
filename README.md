@@ -10,6 +10,8 @@ Keel es una CLI de Node.js + una metodología para agentes que separa el *qué* 
 
 El mismo spec puede regenerarse tantas veces como se quiera, en tecnologías distintas, sin re-diseñar nada.
 
+Y porque un diseño agnóstico de tecnología es reutilizable **entre organizaciones**, no solo entre stacks, los diseños se publican en **registries**: repositorios con la forma de un workspace Keel de los que se descubre y deriva un diseño existente en vez de empezar en blanco. El oficial es [keel-system/keel-registry](https://github.com/keel-system/keel-registry); crear uno privado es `keel init` + `keel index`. Ver [design-registry.md](packages/keel-core/assets/core/docs/design-registry.md).
+
 ## Paquetes
 
 Este repo es un **monorepo npm workspaces** con dos tipos de paquete:
@@ -36,7 +38,14 @@ npm link --workspace packages/keel-spring        # comando `keel-spring`
 mkdir mi-proyecto && cd mi-proyecto
 
 keel init            # siembra el workspace: skills, schemas, plantillas, docs
-keel new mi-servicio # crea specs/mi-servicio/ (manifiesto + domain + use-cases)
+
+# ¿Ya existe un diseño que resuelva esto? Derivarlo cuesta una revisión;
+# diseñarlo de cero, una sesión de entrevista capa a capa.
+keel registry search catalogo             # busca en el registry de diseños reutilizables
+keel registry show catalog                # su ficha, sin descargarlo
+keel new mi-servicio --from registry:catalog   # lo deriva con linaje basedOn
+
+keel new mi-servicio # …o de cero: specs/mi-servicio/ (manifiesto + domain + use-cases)
 
 # En Claude Code, dentro del workspace:
 #   /keel-design specs/mi-servicio           diseña capa a capa; al cerrar genera
@@ -58,10 +67,13 @@ cd services/mi-servicio-spring
 
 | Comando | Qué hace |
 |---------|----------|
-| `keel init [--force]` | Copia al directorio actual todo lo necesario: skills del agente, schemas por capa, plantillas, docs y `CLAUDE.md`. Nunca sobrescribe sin `--force`. |
-| `keel new <servicio>` | Crea `specs/<servicio>/` con manifiesto + capas obligatorias desde plantillas. |
+| `keel init [--force] [--check]` | Copia al directorio actual todo lo necesario: skills del agente, schemas por capa, plantillas, docs y `CLAUDE.md`. Nunca sobrescribe sin `--force`. Con `--check` no escribe y falla si alguna copia del payload quedó atrás respecto a la CLI instalada (ignora los archivos que el workspace puede editar). |
+| `keel new <servicio> [--from <origen>]` | Crea `specs/<servicio>/` con manifiesto + capas obligatorias desde plantillas. Con `--from` deriva de un diseño existente (nombre local, ruta, o `registry:<diseño>`) estampando el linaje en `service.basedOn`. |
 | `keel list` | Lista los generadores conocidos y su paquete npm. |
 | `keel validate <ruta>` | Valida un servicio (directorio o manifiesto): schema de cada capa + referencias cruzadas entre artefactos (offline, con todos los errores). |
+| `keel describe <servicio>` | Resume un diseño para leerlo o reutilizarlo: identidad, estado, capas, contenido por capa y frescura de sus derivados. |
+| `keel index [--check]` | Genera el índice de diseños del workspace: la tabla del `README.md` (solo entre marcadores) y `index.json`. Con `--check` no escribe y falla si quedó atrás — es la puerta de CI de un registry. |
+| `keel registry [list\|search\|show]` | Explora el registry de diseños reutilizables. Fuente configurable con `--source` o `KEEL_REGISTRY_URL`; caché en `~/.keel/registry/` con `--refresh` y `--offline`. |
 | `keel-spring build <ruta> [--force] [--defaults]` | Comprueba la compatibilidad DSL, valida el diseño, pregunta el stack (persistido en `keel-stack.json`) y genera en `services/<servicio>-spring/` el scaffolding transversal al stack más el `.claude/` del agente (skill, agentes, conventions, skills del stack) y los snapshots de `specs/` y `docs/`. No escribe nada en el workspace de diseño. |
 
 ## El workspace sembrado
@@ -79,7 +91,9 @@ mi-proyecto/
 │   └── *.keel.yaml           #   api, security, messaging, http-clients, dependencies, persistence (opcionales)
 ├── templates/service/        # una plantilla por capa
 ├── contracts/<proveedor>/    # INTEGRATION.md de servidores externos de los que dependemos (entrada de /keel-consume)
-├── docs/                     # methodology, dsl-reference (índice), dsl/<capa>.md, building-a-generator
+├── index.json                # índice máquina de los diseños (keel index) — lo consume `keel registry`
+├── docs/                     # methodology, dsl-reference (índice), dsl/<capa>.md, building-a-generator,
+│                             # design-registry (publicar y consumir diseños reutilizables)
 └── services/<servicio>-<tech>/  # servicios generados por `keel-<tech> build` (un repo git propio cada uno)
     ├── .claude/              #   la skill del generador, sus agentes y conventions — el flujo de generación
     └── specs/                #   snapshot del diseño: el proyecto se completa sin el workspace
