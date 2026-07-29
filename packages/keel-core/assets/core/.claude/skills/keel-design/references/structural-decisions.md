@@ -56,7 +56,7 @@ aceptable que ese pedido nunca llegue a facturación?» sí lo es.
 | 3.6 | Resiliencia de una llamada saliente | `http-clients.clients.<c>.calls.<l>` | 3.7 |
 | 3.7 | Frontera transaccional | `persistence.consistency.transactionalBoundary` | 3.8 |
 | 3.8 | Paginación de una colección | `use-cases` (`paginated`) + `api.pagination` | 3.4 |
-| 3.9 | Concurrencia sobre la misma entidad | `use-cases.<op>.errors` + `unique` | 3.2 |
+| 3.9 | Concurrencia sobre la misma entidad | `persistence.consistency.optimisticLocking` + `use-cases.<op>.errors` | 3.2 y 3.8 |
 | 3.10 | Visibilidad de un bucket | `storage.buckets.<b>.visibility` | 3.9 |
 
 ---
@@ -232,12 +232,18 @@ el día que un cliente tiene mil registros en vez de diez.
 
 | Eje | Pregunta al diseñador | Respuesta → decisión |
 |---|---|---|
-| **Pérdida de actualización** | Si dos peticiones modifican la misma entidad a la vez, ¿es aceptable que la segunda pise a la primera? | "Sí" → último gana, y se dice explícitamente. "No" → conflicto declarado, con su `code` y su `http: 409`. |
+| **Pérdida de actualización** | Si dos peticiones modifican la misma entidad a la vez, ¿es aceptable que la segunda pise a la primera? | "Sí" → `optimisticLocking: none`, último gana, y se dice explícitamente. "No" → `all` (o `declared` si conviven agregados con y sin necesidad de conflicto), y el cliente recibe `409`. |
 | **Leer-y-luego-escribir** | ¿Hay operaciones que deciden en función de lo que acaban de leer (reservar stock, asignar numeración, comprobar un cupo)? | Sí → es una condición de carrera salvo que se declare la política. |
 | **Colisión de unicidad** | Por cada campo `unique`: ¿está declarado el error de colisión en las operaciones que lo escriben? | Falta un `code` estable si no. |
 
 **Trampa habitual**: dar "último gana" por supuesto porque nadie preguntó. Es una respuesta legítima
 —en muchos dominios, la correcta— pero tiene que ser una elección, no un descuido.
+
+La decisión se **materializa en `persistence`**, así que se toma en el paso 3.2 (con las operaciones
+delante, que es donde se ve la contención) y se escribe en el 3.8. `optimisticLocking` tiene default
+en el schema (`all`): es de los campos que se escriben solos si nadie los pregunta, y su elección es
+observable — cambia el status que ve el cliente. Declararlo en prosa dentro de `rules` no vale:
+ningún generador lee prosa.
 
 ---
 
@@ -264,4 +270,6 @@ secuenciales es un listado completo para quien itere.
 - [ ] Toda operación disparada por una suscripción con `retry` declara `idempotency`.
 - [ ] Todo `cache.invalidatedBy` enumera **todas** las vías de mutación, propias y ajenas.
 - [ ] Todo consumo M2M tiene operación propia, o `audience: both` con rationale escrito.
+- [ ] `optimisticLocking` se eligió con la contención de las escrituras delante, no se heredó del default.
+- [ ] Cada capa cerró con su **registro de decisiones estructurales** (elección, porqué, alternativa descartada): es lo que la clase 16 del análisis de huecos audita, y sin él ese barrido se hace contra la memoria.
 - [ ] Los pendientes estructurales están enumerados en el cierre de sesión, con nombre de operación o capa.
