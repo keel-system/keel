@@ -25,6 +25,19 @@ export function kebabCase(name) {
     .join('-');
 }
 
+// Nombre físico de un destino de mensajería (topic, cola, exchange) válido para
+// el broker elegido. El nombre por convención de Keel lleva punto
+// (`<servicio>.events`), idiomático en Kafka y RabbitMQ y donde ya funciona; pero
+// SNS y SQS solo admiten [A-Za-z0-9_-] en topics y colas, así que ahí el punto
+// hace que la creación del recurso falle y que la app arranque apuntando a una
+// cola que no existe. Se sanea al derivar el nombre, no al usarlo: así el
+// default del YAML, el @Value del publisher, la URL de la cola en el arnés y el
+// script de topología dicen todos lo mismo.
+export function brokerSafeName(name, broker) {
+  if (broker !== 'snssqs') return name;
+  return String(name).replace(/[^A-Za-z0-9_-]/g, '-');
+}
+
 export function snakeCase(name) {
   return words(name)
     .map((word) => word.toLowerCase())

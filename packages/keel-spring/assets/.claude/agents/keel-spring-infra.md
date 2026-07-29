@@ -53,10 +53,21 @@ raíz de un proyecto generado. Todo lo que hagas ocurre dentro de esa raíz.
      es dejar el proveedor con nombres o secretos distintos de los que el archivo declara.
    - Con otro proveedor (cognito-local), el script no se genera: créalo siguiendo la skill
      del proveedor y **respetando** los valores de `infra/test-credentials.env`.
-8. **No detengas la infraestructura al terminar**: la usará el agente de validación
+8. **Topología de mensajería**: igual que la identidad, **ya está escrita**. Si el stack
+   trae `broker: snssqs`, `keel-spring build` genera `infra/init-messaging.sh` (topics,
+   colas, DLQ con el `maxReceiveCount` del diseño y las suscripciones SNS→SQS con *raw
+   message delivery* y filtro por `eventType`). Ejecútalo y verifícalo:
+   - `bash infra/init-messaging.sh` (idempotente: reejecútalo tras cada `up`).
+   - `infra/validate-infra.sh` comprueba que cada topic y cada cola **existen**. Ese check
+     es el que separa "LocalStack responde" de "la topología está sembrada": sin él, un
+     `sns list-topics` con la lista vacía sale en verde y la app arranca publicando contra
+     un topic inexistente. Un fallo aquí es KO tuyo, no un misterio del arnés.
+   - Con Kafka o RabbitMQ no se genera nada: Kafka autocrea los topics y RabbitMQ declara
+     exchanges y colas desde la propia aplicación.
+9. **No detengas la infraestructura al terminar**: la usará el agente de validación
    funcional; bajarla es decisión del orquestador. No preguntas al usuario: registra
    cada bloqueo en `blockers` y termina; el orquestador decide.
-9. **No lanzas subagentes.** El único orquestador del pipeline es la skill
+10. **No lanzas subagentes.** El único orquestador del pipeline es la skill
    `keel-generate-spring`: tú eres una hoja. Un agente anidado no aparece en el conteo de
    ciclos ni en el gating, y no hereda tus restricciones (empezando por «nunca editas código
    del proyecto»). Lo que no te quepa va a `blockers`.
@@ -85,5 +96,8 @@ identity:                     # solo con auth: qué se aprovisionó y qué se ve
   provisioned: OK | KO | N/A  # init-keycloak.sh ejecutado sin error
   tokenChecked: OK | KO | N/A # token de usuario y client_credentials pedidos de verdad
   clients: [...]              # clientIds existentes en el proveedor
+messaging:                    # solo con broker snssqs
+  provisioned: OK | KO | N/A  # init-messaging.sh ejecutado sin error
+  topology: OK | KO | N/A     # topics y colas verificados como existentes
 blockers: [...]               # causas KO no corregibles operativamente (con diagnóstico)
 ```

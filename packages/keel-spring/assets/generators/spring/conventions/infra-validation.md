@@ -169,6 +169,7 @@ regeneran con el proyecto, y los dos lados leen los mismos valores.
 |---|---|
 | `infra/init-keycloak.sh` | el agente de infraestructura lo **ejecuta y verifica** (no lo escribe): realm, roles, un usuario por rol, los clientes máquina del diseño y la matriz `test-m2m-*` |
 | `infra/test-credentials.env` | `AbstractFlowIT` lo lee para resolver cliente, contraseña, URL de token y secretos M2M |
+| `infra/init-messaging.sh` (solo `broker: snssqs`) | mismo trato: el agente de infraestructura lo **ejecuta y verifica**, no lo escribe. Siembra topics, colas, sus DLQ (`maxReceiveCount` del `onFailure` del diseño) y las suscripciones SNS→SQS con *raw message delivery* y filtro por `eventType`. Sin él la app arranca publicando contra un topic que no existe, y `validate-infra.sh` lo caza porque comprueba que cada topic y cada cola **existan**, no solo que LocalStack responda |
 
 | Pieza | Convención | Sobreescribible con |
 |---|---|---|

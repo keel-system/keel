@@ -22,6 +22,19 @@ Falta `RawMessageDelivery=true` en la suscripción: SQS recibe el sobre SNS
 Recrea la suscripción con el atributo (no se puede parchear el código para
 «desenvolver»: el contrato del proyecto es raw delivery).
 
+## El mensaje llega como `EventEnvelope[metadata=…, data=…]` en vez de JSON
+
+Es el caso **inverso** al anterior, y del lado del publicador: alguien pasó el objeto
+`EventEnvelope` a `MessageBuilder.withPayload(...)` y lo envió con `snsTemplate.send(...)`.
+El `SnsTemplate` por defecto no tiene `MessageConverter` Jackson, así que publica el
+`toString()` del record — texto plano. No lanza, no falla el envío: el mensaje sale y
+revienta en el consumidor (o en la aserción del escenario).
+
+Arreglo: con un objeto en la mano se usa
+`snsTemplate.sendNotification(topic, envelope, "<Evento>")`. `withPayload` + `send` es
+solo para un `String` **ya serializado**, que es lo que entrega el outbox. Tabla completa en
+`SKILL.md § Envío al broker`.
+
 ## El mismo mensaje se procesa varias veces
 
 - **Visibility timeout menor que el tiempo de proceso**: el mensaje reaparece

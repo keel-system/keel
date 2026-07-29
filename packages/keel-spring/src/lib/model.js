@@ -3,7 +3,16 @@
 // src/scaffold/ solo renderizan este modelo; aquí vive toda la interpretación
 // del DSL (ver conventions/mapping.md).
 
-import { pascalCase, camelCase, kebabCase, snakeCase, screamingSnake, pluralize, basePackage } from './naming.js';
+import {
+  pascalCase,
+  camelCase,
+  kebabCase,
+  snakeCase,
+  screamingSnake,
+  pluralize,
+  basePackage,
+  brokerSafeName
+} from './naming.js';
 import { resolveType, beanValidationAnnotations, columnAnnotations } from './type-mapper.js';
 
 const CRUD_PREFIXES = ['create', 'get', 'list', 'update', 'delete'];
@@ -76,10 +85,10 @@ export function buildModel({ manifest, layers, stack = null }) {
   const childDtos = collectChildDtos(layers, services, domainTypes, inlineEnumName, warnings);
   // DTOs de referencia de las relaciones que el diseño marca con embed.
   const refDtos = collectRefDtos(layers, services, domainTypes, inlineEnumName, childDtos, warnings);
-  const events = collectEvents(layers, services, service, domainTypes, inlineEnumName, warnings);
+  const events = collectEvents(layers, services, service, domainTypes, inlineEnumName, warnings, stack);
   // Garantía de entrega declarada en el diseño: decide cómo se materializa la
   // publicación (outbox transaccional vs. envío directo tras commit).
-  const channels = layers.messaging ? collectChannels(layers, service) : null;
+  const channels = layers.messaging ? collectChannels(layers, service, stack) : null;
   const messaging = layers.messaging
     ? {
         reliability: layers.messaging.publishing?.reliability ?? 'best-effort',
@@ -95,7 +104,7 @@ export function buildModel({ manifest, layers, stack = null }) {
         eventTypesByChannel: channels.eventTypesByChannel
       }
     : null;
-  const subscriptions = collectSubscriptions(layers, services, domainTypes, inlineEnumName, warnings);
+  const subscriptions = collectSubscriptions(layers, services, domainTypes, inlineEnumName, warnings, stack);
   const pagination = layers.api?.pagination ?? null;
 
   // Base de rutas versionada (estilo del prototipo de referencia): el basePath
@@ -705,9 +714,13 @@ function collectRefDtos(layers, services, domainTypes, inlineEnumName, childDtos
 // todos los brokers, así que solo esos puede exigir la prueba de humo del arnés:
 // sin `channels`, el destino por convención es el exchange/topic del servicio, que
 // en un broker direccionado por cola (RabbitMQ) no es un destino legible.
-function collectChannels(layers, service) {
+function collectChannels(layers, service, stack) {
   const serviceSlug = kebabCase(service.name);
-  const declared = Object.keys(layers.messaging?.channels ?? {});
+  // Nombre FÍSICO del destino: el del diseño saneado para el broker elegido.
+  // Se aplica a todo lo que sale de aquí porque estos nombres acaban siendo
+  // recursos reales (topic, cola, exchange) y la URL de cola del arnés.
+  const safe = (name) => brokerSafeName(name, stack?.broker);
+  const declared = Object.keys(layers.messaging?.channels ?? {}).map(safe);
   const events = Object.entries(layers.messaging?.publishing?.events ?? {});
   const publish = new Set();
   const all = new Set(declared);
@@ -716,28 +729,29 @@ function collectChannels(layers, service) {
   // `metadata.eventType` que estampa EventMetadata.now(...) al emitirlo.
   const eventTypesByChannel = {};
   for (const [name, def] of events) {
-    const channel = def?.channel ?? `${serviceSlug}.events`;
-    if (def?.channel) publish.add(def.channel);
-    else all.add(`${serviceSlug}.events`);
+    const channel = safe(def?.channel ?? `${serviceSlug}.events`);
+    if (def?.channel) publish.add(safe(def.channel));
+    else all.add(safe(`${serviceSlug}.events`));
     (eventTypesByChannel[channel] ??= []).push(name);
   }
   for (const [name, def] of Object.entries(layers.messaging?.subscriptions ?? {})) {
-    if (!def?.channel) all.add(`${def?.source ? kebabCase(def.source) : kebabCase(name)}.events`);
+    if (!def?.channel) all.add(safe(`${def?.source ? kebabCase(def.source) : kebabCase(name)}.events`));
   }
   return {
     all: [...all],
     publish: [...publish],
     eventTypesByChannel,
     // Mismo default que emite config.js en `messaging.publishing.destination`.
-    destinationDefault: `${serviceSlug}.events`
+    destinationDefault: safe(`${serviceSlug}.events`)
   };
 }
 
-function collectEvents(layers, services, service, domainTypes, inlineEnumName, warnings) {
+function collectEvents(layers, services, service, domainTypes, inlineEnumName, warnings, stack) {
   const events = layers.messaging?.publishing?.events ?? {};
   const domainEntities = layers.domain?.entities ?? {};
   const emitters = emittersByEvent(services);
   const serviceSlug = kebabCase(service.name);
+  const safe = (name) => brokerSafeName(name, stack?.broker);
 
   return Object.entries(events).map(([name, def]) => {
     const emitted = emitters.get(name) ?? [];
@@ -751,8 +765,10 @@ function collectEvents(layers, services, service, domainTypes, inlineEnumName, w
       // Enrutado por convención: exchange/topic del servicio + clave por evento.
       // Ambos salen a parameters/ y llegan al código por @Value (nunca literales).
       destinationProperty: 'messaging.publishing.destination',
-      destinationDefault: `${serviceSlug}.events`,
+      destinationDefault: safe(`${serviceSlug}.events`),
       routingKeyProperty: `messaging.publishing.routing-keys.${kebabCase(name)}`,
+      // La routing key NO se sanea: no es el nombre de un recurso, es un atributo
+      // del mensaje (clave de enrutado en RabbitMQ, message attribute en SNS).
       routingKeyDefault: `${serviceSlug}.${kebabCase(name)}`,
       // Quién lo emite: la raíz de agregado del grupo cuya operación lo declara
       // en `emits`. Es lo que permite sembrar el raise(...) donde corresponde.
@@ -1188,7 +1204,7 @@ function capitalizeName(name) {
 
 // ─── Suscripciones de mensajería (messaging.subscriptions → consumers) ───────
 
-function collectSubscriptions(layers, services, domainTypes, inlineEnumName, warnings) {
+function collectSubscriptions(layers, services, domainTypes, inlineEnumName, warnings, stack) {
   const subs = layers.messaging?.subscriptions ?? {};
   const domainEntities = layers.domain?.entities ?? {};
 
@@ -1227,7 +1243,12 @@ function collectSubscriptions(layers, services, domainTypes, inlineEnumName, war
       messageRecord: `${pascalCase(name)}Message`,
       listenerClass: `${pascalCase(name)}Listener`,
       topicProperty: `messaging.subscriptions.${kebabCase(name)}.topic`,
-      topicDefault: `${def.source ? kebabCase(def.source) : kebabCase(name)}.events`,
+      // Nombre físico de la cola/topic de origen: saneado para el broker, igual
+      // que los destinos de publicación (naming.js § brokerSafeName).
+      topicDefault: brokerSafeName(
+        `${def.source ? kebabCase(def.source) : kebabCase(name)}.events`,
+        stack?.broker
+      ),
       // Contrato de recepción: sin él se asume la envoltura de Keel salvo que el
       // canal sea ajeno, donde el mensaje llega plano.
       envelope: contract.envelope ?? (external ? 'none' : 'keel'),

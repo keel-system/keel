@@ -24,8 +24,11 @@ aws ... sns subscribe --topic-arn <arn-topic> --protocol sqs \
   `<Evento>Message` falla. Con raw delivery llega el `EventEnvelope` tal cual.
 - `maxReceiveCount` = reintentos del `onFailure` del diseño; agotados, SQS
   mueve el mensaje a la DLQ solo (no hay código de retry que escribir).
-- Deja el script en `infra/` (p. ej. `infra/init-messaging.sh`) para que la
-  validación sea reproducible; en AWS real esta topología la crea la
+- **No escribas el script**: `keel-spring build` genera `infra/init-messaging.sh`
+  con esta misma receta, derivada del diseño (topics, colas, DLQ con el
+  `maxReceiveCount` del `onFailure`, suscripciones con raw delivery y filtro por
+  `eventType`). El agente de infraestructura lo ejecuta y `infra/validate-infra.sh`
+  verifica que los recursos existan. En AWS real esta topología la crea la
   plataforma (IaC), no la app.
 
 ## Envío
@@ -40,6 +43,10 @@ ya la resuelve el `<Servicio>DomainEventBridge` generado; lo tuyo es el envío:
   interrumpe la operación (no hay reintento).
 - El ARN va por `@Value` desde el YAML; el nombre lógico del evento viaja como
   subject/atributo para filtrado.
+- **La API depende de lo que tengas en la mano**: `String` ya serializado (outbox)
+  → `send` con `MessageBuilder.withPayload`; objeto (`EventEnvelope`, best-effort)
+  → `sendNotification`. Un objeto dentro de `withPayload` se publica como su
+  `toString()`, sin error visible. Tabla en `SKILL.md § Envío al broker`.
 
 ## Listener
 

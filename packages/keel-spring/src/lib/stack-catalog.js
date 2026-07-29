@@ -19,6 +19,18 @@
 // el resto lo ignora.
 
 import { declaredBuckets } from './buckets.js';
+
+// Credenciales de la infraestructura de prueba local (LocalStack y MinIO las
+// ignoran; el SDK y la AWS CLI exigen que EXISTAN). Van al contenedor devtools
+// —de donde salen `aws sns …` / `aws sqs …` en validate-infra.sh, reset-db.sh,
+// init-messaging.sh y el arnés de integración—, no solo a la config de la app:
+// sin ellas la CLI aborta con "Unable to locate credentials" aunque el servicio
+// responda perfectamente, y el check sale en rojo por un motivo que no es el suyo.
+export const LOCAL_AWS_ENV = {
+  AWS_ACCESS_KEY_ID: 'test',
+  AWS_SECRET_ACCESS_KEY: 'test',
+  AWS_DEFAULT_REGION: 'us-east-1'
+};
 //   cliResetCmd      (solo BD) comando que VACÍA LOS DATOS preservando el esquema
 //                    (los Given de los flujos FL-* asumen BD limpia); mismos
 //                    placeholders y mismo cliVia que cliValidateCmd. Ausente ⇒
@@ -303,7 +315,7 @@ export const BROKERS = {
     composeServices: () => ({
       localstack: {
         image: 'localstack/localstack:3.8',
-        environment: { SERVICES: 'sns,sqs', DEBUG: '0', AWS_DEFAULT_REGION: 'us-east-1' },
+        environment: { SERVICES: 'sns,sqs', DEBUG: '0', ...LOCAL_AWS_ENV },
         ports: ['4566:4566']
       }
     })

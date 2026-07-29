@@ -6,6 +6,8 @@
 // check por tecnología. Consume `selectedInfra(model)` de stack-catalog.js.
 
 import { declaredBuckets } from '../lib/buckets.js';
+import { LOCAL_AWS_ENV } from '../lib/stack-catalog.js';
+import { messagingTopologyChecks } from './messaging-provisioning.js';
 
 // Paquetes base del toolbox: shell + utilidades de red/JSON comunes a todos los checks.
 const BASE_PACKAGES = ['bash', 'curl', 'jq', 'netcat-openbsd'];
@@ -61,6 +63,9 @@ export function devtoolsService(selected, service) {
     build: { context: './docker', dockerfile: 'Dockerfile.devtools' },
     container_name: `${service.name}-devtools`,
     command: 'sleep infinity',
+    // Siempre, no solo con broker snssqs: el mismo toolbox sirve al storage
+    // (MinIO habla S3) y son credenciales dummy sin efecto fuera de la infra local.
+    environment: { ...LOCAL_AWS_ENV },
     ...(dependsOn.length > 0 ? { depends_on: dependsOn } : {})
   };
 }
@@ -81,6 +86,12 @@ export function validateInfraScript(selected, service, model = null) {
       return `check ${sq(label)} ${sq(container)} ${sq(concreteCmd(s.entry, dbName))}`;
     });
   checks.push(...bucketChecks(selected, service, model));
+  // Topología de mensajería: que los topics y colas EXISTAN. El check del
+  // catálogo (`sns list-topics`) da verde con la lista vacía, que es justo el
+  // estado roto — LocalStack sano y ni un solo recurso sembrado.
+  for (const { label, cmd } of messagingTopologyChecks(model ?? {})) {
+    checks.push(`check ${sq(label)} ${sq(`${service.name}-devtools`)} ${sq(cmd)}`);
+  }
 
   return `#!/usr/bin/env bash
 # validate-infra.sh — sondea la infraestructura de prueba de ${service.name}.

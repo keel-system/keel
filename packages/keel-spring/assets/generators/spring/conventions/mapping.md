@@ -350,6 +350,38 @@ propia operación de escritura. Si el `output` de la operación incluye un campo
 gestionado por el ORM, el adaptador usa `saveAndFlush(...)` para que el callback
 de auditoría corra dentro de la misma unidad de trabajo antes del mapeo.
 
+### Ordenar por un id `UUID`: nunca en memoria con `Comparator.comparing`
+
+`UUID.compareTo()` compara los dos `long` internos **con signo**. Postgres ordena
+el tipo `uuid` **byte a byte, sin signo**. Los dos órdenes divergen en cuanto el
+bit más alto está a 1 — es decir, en aproximadamente la mitad de los UUIDv4.
+
+Si un escenario dice "ordenado por id ascendente" y el handler ordena con
+`Comparator.comparing(Entidad::getId)`, el resultado no coincide con lo que
+devuelve un `ORDER BY id` de la base. Falla de forma intermitente y dependiente de
+los datos, que es la peor manera de fallar: pasa en local con tres filas
+sembradas y revienta con otras.
+
+- **Regla**: el orden lo fija la **consulta** (`ORDER BY id` en el repository, o
+  `Sort.by("id")`), no el código Java. Así el escenario compara contra la misma
+  semántica que la base.
+- Si de verdad tienes que ordenar en memoria (una lista ya materializada, un
+  batch que se reordena tras un `findAllById`), compara sin signo:
+
+```java
+Comparator<UUID> BY_UUID = Comparator
+        .comparingLong(UUID::getMostSignificantBits)
+        .thenComparingLong(UUID::getLeastSignificantBits);   // ❌ con signo
+
+Comparator<UUID> BY_UUID = (a, b) -> {
+    int hi = Long.compareUnsigned(a.getMostSignificantBits(), b.getMostSignificantBits());
+    return hi != 0 ? hi : Long.compareUnsigned(a.getLeastSignificantBits(), b.getLeastSignificantBits());
+};                                                            // ✅ orden de Postgres
+```
+
+Lo mismo aplica a un `findAllById` que se reordena para respetar el orden de
+entrada: ahí el orden lo fija la petición, no el id — no lo "arregles" ordenando.
+
 ## `storage` — storage.keel.yaml
 
 Sin esta capa (servicio que no maneja archivos), no se incluye SDK de object storage ni adaptador. El scaffolding determinista genera la dependencia Gradle (`software.amazon.awssdk:s3`), el servicio MinIO en el `infra/docker-compose.yaml` (con MinIO), el fragmento de configuración `parameters/<perfil>/storage.yaml` (clave `storage`: `provider`, `bucket`, `endpoint`, `region`, `access-key`, `secret-key`, `path-style-access` y la política de cada bucket del diseño bajo `storage.buckets.<b>`: `visibility`, `max-size-mb`, `allowed-content-types`), el límite `spring.servlet.multipart.max-file-size`/`max-request-size` con holgura sobre el mayor `maxSizeMb` declarado (el límite de negocio lo comprueba el caso de uso, en el orden del diseño), los `@ExceptionHandler` de multipart en el `ApiExceptionHandler`, el **puerto `FileStorage`** y el value object `StoredObject(storageKey, url, contentType, sizeBytes)` que devuelve `upload` (lo que el agregado guarda; `url` llega null en buckets de URL firmada, que se pide al leer). El agente escribe el adaptador completo siguiendo la skill `keel-spring-s3` (`.claude/skills/keel-spring-s3/SKILL.md`; bean `S3Client` + `S3FileStorage`, incluida `signedUrl`) más la política de negocio: validación de content-type/tamaño según los `buckets`.

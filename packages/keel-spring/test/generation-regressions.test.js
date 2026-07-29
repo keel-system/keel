@@ -645,3 +645,83 @@ test('C2/embed: una referencia a otro agregado se proyecta como objeto, no como 
   assert.ok(productMapper.includes('toUpdateProductResponseDto(Product entity, CategoryRefDto category)'));
   assert.ok(categoryMapper.includes('public CategoryRefDto toCategoryRefDto(Category entity)'));
 });
+
+// ─── Cuarto informe: infraestructura de mensajería (§1.1 y §1.2) ─────────────
+
+// Helper: scaffolding de la fixture con un broker concreto, devolviendo un lector
+// de archivos del proyecto generado.
+function scaffoldWithBroker(broker) {
+  const { manifest, layers, errors } = loadService(fixtureDir);
+  assert.deepEqual(errors, []);
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), `keel-broker-${broker}-`));
+  scaffoldService({ manifest, layers, workspace: out, force: true, stack: { broker } });
+  return (relative) =>
+    fs.readFileSync(path.join(out, 'services', 'catalog-spring', relative), 'utf8');
+}
+
+test('§1.1: el contenedor devtools trae credenciales AWS dummy', () => {
+  // Sin ellas la AWS CLI aborta con "Unable to locate credentials" dentro de
+  // devtools, y el check de LocalStack sale en rojo aunque SNS/SQS respondan.
+  const read = scaffoldWithBroker('snssqs');
+  const compose = read('infra/docker-compose.yaml');
+  const devtools = compose.slice(compose.indexOf('devtools:'));
+  assert.ok(devtools.includes('AWS_ACCESS_KEY_ID'), 'devtools sin AWS_ACCESS_KEY_ID');
+  assert.ok(devtools.includes('AWS_SECRET_ACCESS_KEY'), 'devtools sin AWS_SECRET_ACCESS_KEY');
+});
+
+test('§1.2: con snssqs el nombre físico del destino no lleva puntos', () => {
+  // SNS y SQS solo admiten [A-Za-z0-9_-] en topics y colas: `catalog.events`
+  // es un nombre inválido y la topología no llega a crearse.
+  const read = scaffoldWithBroker('snssqs');
+  const messagingYaml = read('src/main/resources/parameters/local/messaging.yaml');
+  const destination = messagingYaml.match(/destination:\s*(\S+)/)?.[1];
+  assert.ok(destination, 'no hay destination en parameters/local/messaging.yaml');
+  assert.ok(!destination.includes('.'), `destino inválido para SNS/SQS: ${destination}`);
+  assert.ok(destination.includes('catalog-events'), destination);
+});
+
+test('§1.2: con kafka se conserva el punto, que ahí es idiomático', () => {
+  const read = scaffoldWithBroker('kafka');
+  const destination = read('src/main/resources/parameters/local/messaging.yaml').match(/destination:\s*(\S+)/)?.[1];
+  assert.ok(destination.includes('catalog.events'), destination);
+});
+
+test('§1.2: con snssqs se genera la topología (topics, colas, DLQ, raw delivery)', () => {
+  // Sin este script nadie crea topics ni colas: la app arranca contra un topic
+  // inexistente y el humo del arnés muere con NonExistentQueue.
+  const { manifest, layers } = loadService(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'metering-digest')
+  );
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-topology-'));
+  scaffoldService({ manifest, layers, workspace: out, force: true, stack: { broker: 'snssqs' } });
+  const root = path.join(out, 'services', 'metering-digest-spring');
+
+  const script = fs.readFileSync(path.join(root, 'infra/init-messaging.sh'), 'utf8');
+  assert.ok(script.includes("create_topic 'metering-digest-events'"), 'falta el topic de publicación');
+  assert.ok(script.includes("create_topic 'metering-gateway-events'"), 'falta el topic de la fuente');
+  // La cola es del consumidor, y su DLQ lleva el maxReceiveCount del diseño.
+  assert.ok(script.includes("create_queue_with_dlq 'metering-digest-meter-reading-captured'"), script);
+  assert.ok(/create_queue_with_dlq '[^']+' \d+/.test(script), 'maxReceiveCount no es numérico');
+  assert.ok(script.includes('RawMessageDelivery=true'), 'sin raw delivery el listener recibe el sobre SNS');
+  assert.ok(script.includes('FilterPolicy'), 'sin filtro por eventType el fan-out entrega de más');
+
+  // El check tiene que medir que los recursos EXISTEN: `sns list-topics` da verde
+  // con la lista vacía, que es exactamente el estado roto.
+  const validate = fs.readFileSync(path.join(root, 'infra/validate-infra.sh'), 'utf8');
+  assert.ok(validate.includes('sns get-topic-attributes'), validate);
+  assert.ok(validate.includes('sqs get-queue-url'), validate);
+});
+
+test('§1.2: los brokers que autocrean topología no generan el script', () => {
+  for (const broker of ['kafka', 'rabbitmq']) {
+    const { manifest, layers } = loadService(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'metering-digest')
+    );
+    const out = fs.mkdtempSync(path.join(os.tmpdir(), `keel-topology-${broker}-`));
+    scaffoldService({ manifest, layers, workspace: out, force: true, stack: { broker } });
+    assert.ok(
+      !fs.existsSync(path.join(out, 'services/metering-digest-spring/infra/init-messaging.sh')),
+      `${broker} no necesita sembrar topología`
+    );
+  }
+});

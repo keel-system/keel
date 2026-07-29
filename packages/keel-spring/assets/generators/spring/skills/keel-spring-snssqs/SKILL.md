@@ -16,17 +16,37 @@ description: Guía de implementación de mensajería con Amazon SNS/SQS (LocalSt
 
 - `build.gradle`: BOM `spring-cloud-aws-dependencies` + starters SNS y SQS (mismo SDK contra LocalStack y AWS real).
 - `parameters/<perfil>/snssqs.yaml`: endpoint/región/credenciales por perfil (LocalStack en local).
-- `infra/docker-compose.yaml`: `localstack` (puerto 4566, servicios sns+sqs).
+- `infra/docker-compose.yaml`: `localstack` (puerto 4566, servicios sns+sqs) y el toolbox
+  `devtools` con la AWS CLI y sus credenciales dummy.
+- `infra/init-messaging.sh`: la topología de prueba (topics, colas, DLQ, suscripciones con
+  raw delivery). **No la crees a mano ni escribas otro script**: lo ejecuta el agente de
+  infraestructura y `infra/validate-infra.sh` comprueba que los recursos existan.
 - Contratos y cadena de publicación **ya generados**: `EventEnvelope` + `EventMetadata`, el record `<Evento>Event` que el agregado emite, su gemelo `<Evento>IntegrationEvent`, el `<Servicio>DomainEventBridge` que traduce uno en otro, y el record `<Evento>Message` por suscripción. Con `reliability: outbox`, además la tabla `outbox_event`, su repositorio y el `OutboxRelay`.
 - **Lo único tuyo al publicar es el envío**: implementar `OutboxDispatcher` (si `reliability: outbox`) o `<Evento>Publisher` (si `best-effort`), sustituyendo su stub. No reescribas el bridge, el relay ni el mapeo domain→integración.
 
 ## Envío al broker
 
+**Lo que viaja al topic es siempre JSON.** El `SnsTemplate` por defecto **no lleva un
+`MessageConverter` Jackson**, así que la API que elijas decide si hay serialización o no:
+
+| Lo que tienes en la mano | API | Qué publica |
+|---|---|---|
+| `String` ya serializado (el payload del outbox) | `send(destination, MessageBuilder.withPayload(payload)...)` | el `String` tal cual ✅ |
+| Objeto Java (`EventEnvelope<…>`) | `sendNotification(topic, envelope, subject)` | JSON del objeto ✅ |
+| Objeto Java (`EventEnvelope<…>`) | `send(destination, MessageBuilder.withPayload(envelope)...)` | **el `toString()` del record** ❌ |
+
+La tercera fila es el error caro: compila, publica sin lanzar, y el cuerpo del mensaje acaba
+siendo `EventEnvelope[metadata=EventMetadata[...], data=...]` — texto plano que ningún consumidor
+parsea y que rompe el contrato de `docs/asyncapi.yaml`. **Nunca metas un objeto en
+`MessageBuilder.withPayload`.** Si necesitas cabeceras *y* objeto a la vez, serializa tú con el
+`ObjectMapper` de la aplicación (el bean de `JacksonConfig`, con `TimestampModule`) y manda el
+`String`.
+
 Qué implementas depende de la `reliability` declarada en `messaging.keel.yaml`:
 
 **`outbox`** — implementa `OutboxDispatcher` (`infrastructure/messaging/outbox`) y elimina
-`OutboxDispatcherStub`. El payload que recibes **ya es la `EventEnvelope` serializada**: publícalo
-como cuerpo del mensaje, sin volver a serializar ni envolver.
+`OutboxDispatcherStub`. El payload que recibes **ya es la `EventEnvelope` serializada** por el
+bridge: publícalo como cuerpo del mensaje, sin volver a serializar ni envolver.
 
 ```java
 @Component
@@ -38,6 +58,8 @@ public class SnsOutboxDispatcher implements OutboxDispatcher {
 
     @Override
     public void dispatch(String destination, String routingKey, String eventType, String payload) {
+        // `payload` es un String: por eso withPayload + send es correcto aquí.
+        // Con un objeto en su lugar, esto publicaría su toString(). Ver la tabla de arriba.
         snsTemplate.send(destination, MessageBuilder.withPayload(payload)
                 .setHeader("eventType", eventType)
                 .setHeader("routingKey", routingKey)
@@ -49,12 +71,36 @@ public class SnsOutboxDispatcher implements OutboxDispatcher {
 Debe **lanzar** si la entrega no se confirma: el relay cuenta el intento y reintenta.
 
 **`best-effort`** — implementa cada `<Evento>Publisher` en `infrastructure/messaging` (elimina su
-stub) con
-`snsTemplate.sendNotification(topic, EventEnvelope.of(event.metadata(), event, correlationId), "<Evento>")`.
+stub). Aquí tienes el objeto, no un `String`, así que la API es `sendNotification`, que sí lo
+serializa:
+
+```java
+@Component
+public class Sns<Evento>Publisher implements <Evento>Publisher {
+
+    private final SnsTemplate snsTemplate;
+    private final String topic;
+
+    public Sns<Evento>Publisher(SnsTemplate snsTemplate,
+                                @Value("${messaging.publishing.destination}") String topic) {
+        this.snsTemplate = snsTemplate;
+        this.topic = topic;
+    }
+
+    @Override
+    public void publish(<Evento>IntegrationEvent event, String correlationId) {
+        snsTemplate.sendNotification(
+                topic,
+                EventEnvelope.of(event.metadata(), event, correlationId),
+                "<Evento>");
+    }
+}
+```
 
 En ambos casos el ARN/nombre del topic sale de `parameters/<perfil>/messaging.yaml`
-(`messaging.publishing.destination`) leído con `@Value`, nunca literal; crea el topic en LocalStack
-para local.
+(`messaging.publishing.destination`) leído con `@Value`, nunca literal. La topología local (topic,
+colas, DLQ y suscripciones) la deja `infra/init-messaging.sh`, que genera `keel-spring build`:
+ejecútalo y verifica el resultado, no crees los recursos a mano.
 
 ## Listener (uno por suscripción)
 

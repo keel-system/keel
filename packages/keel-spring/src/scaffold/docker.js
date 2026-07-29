@@ -8,6 +8,7 @@
 import YAML from 'yaml';
 import { DATABASES, BROKERS, AUTH, CACHES, STORAGE, selectedInfra } from '../lib/stack-catalog.js';
 import { needsDevtools, devtoolsService, dockerfileDevtools, validateInfraScript, resetDbScript } from './devtools.js';
+import { messagingProvisioning } from './messaging-provisioning.js';
 
 export function generate(model) {
   const { service, layersPresent, stack } = model;
@@ -73,6 +74,12 @@ export function generate(model) {
   const reset = resetDbScript(selected, service, model);
   if (reset) {
     files.push({ path: 'infra/reset-db.sh', content: reset });
+  }
+  // Topología de mensajería: solo los brokers que no la autocrean (hoy, snssqs).
+  // Sin ella la app arranca apuntando a un topic que no existe.
+  const messagingTopology = messagingProvisioning(model);
+  if (messagingTopology) {
+    files.push(messagingTopology);
   }
 
   return files;

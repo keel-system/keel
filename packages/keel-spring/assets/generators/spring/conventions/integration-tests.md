@@ -104,7 +104,10 @@ y ahorra un ciclo entero de validación funcional.
    test en paralelo: un `Given` que nombra un estado del lifecycle y un test que solo crea la
    entidad es un fallo garantizado, atribuido además al agente equivocado.
 10. Todo `jsonPath(...)` se captura en una variable tipada antes de interpolarlo —
-    § `jsonPath(...)` va siempre a una variable tipada.
+    § `jsonPath(...)` va siempre a una variable tipada. Y si la expresión lleva un filtro
+    `[?(...)]`, el destino es una `List<...>`, nunca un escalar — § Un filtro devuelve una
+    lista, no un elemento. Es auditable con un `grep` de `[?(`: cada uno debe leerse en una
+    lista.
 11. Toda vía que sirve una entidad desde **caché** compara `createdAt`/`updatedAt` entre la
    lectura que puebla la caché y la que la sirve, no solo los campos de negocio. El
    `Instant` es el campo que primero se rompe en el roundtrip de (de)serialización y el que
@@ -219,6 +222,29 @@ String categoryId = jsonPath(response, "$.category.id");
 La regla es la misma aunque haya varios argumentos: **captura primero, interpola después**.
 Además de evitar el fallo, deja la aserción de forma (`assertIsUuid`, `assertIsInstant`) junto a
 la extracción, que es donde se lee.
+
+### Un filtro devuelve una lista, no un elemento
+
+La segunda causa de `ClassCastException`, y la que más se propaga porque se copia entre clases.
+Una expresión de filtro `[?(...)]` devuelve **siempre** un `JSONArray`, aunque case un solo
+elemento, y encadenarle un índice final **no** lo desenvuelve con la configuración por defecto de
+la librería:
+
+```java
+// MAL: el filtro ya devolvió una lista; el [0] no la desenvuelve y el destino
+//      es escalar → ClassCastException (net.minidev.json.JSONArray → String).
+String url = jsonPath(response, "$.images[?(@.id=='%s')].url[0]".formatted(imageId));
+
+// BIEN: la lista se lee como lista, se comprueba su tamaño y se indexa en Java.
+List<String> urls = jsonPath(response, "$.images[?(@.id=='%s')].url".formatted(imageId));
+assertThat(urls).hasSize(1);
+String url = urls.get(0);
+```
+
+El `hasSize(1)` no es decoración: sin él, un filtro que casa cero elementos falla más tarde y en
+otro sitio (`IndexOutOfBounds` en el `get(0)`), y uno que casa dos pasa desapercibido. Casi
+siempre es más legible **evitar el filtro**: si el escenario fija el orden de la colección, indexa
+por posición (`$.images[0].url`) y deja que el STRICT de `assertBody` cubra el resto.
 
 ### Ausencia de campo: STRICT, no `isNull()`
 

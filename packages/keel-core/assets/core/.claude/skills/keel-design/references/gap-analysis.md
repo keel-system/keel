@@ -211,6 +211,7 @@ El hueco más caro y el que ninguna regla mecánica puede ver. **Ningún hallazg
 - Bucket `private`: ¿qué operación produce el acceso de lectura (URL firmada, descarga mediada)? Si ninguna la produce, el archivo es inaccesible por contrato.
 - Subida: ¿el archivo se sube en la misma operación que crea la entidad, o en dos pasos? Si son dos, ¿qué pasa si el segundo no llega?
 - ¿`maxSizeMb` y `allowedContentTypes` tienen errores declarados (`FILE_TOO_LARGE`, `UNSUPPORTED_CONTENT_TYPE`) en las operaciones que suben?
+- Y en el sentido contrario, el que se olvida: ¿qué devuelve una **lectura** (descarga o URL firmada) cuya clave ya no está en el bucket? Sin un error declarado (`FILE_NOT_FOUND`, `404`) el adaptador propaga la excepción cruda del SDK de storage y sale un `500` que no está en ningún contrato. Pasa más de lo que parece: la entidad conserva la key aunque el objeto se borre o se migre el bucket.
 
 ### 11. Superficie servidor-a-servidor
 
@@ -267,7 +268,7 @@ Un `schedule` es la única superficie del servicio sin cliente que espere respue
 *Aplica si:* hay capa `api`.
 
 - Con `auto: true`, las rutas públicas las deriva una convención (`docs/dsl/api.md`). **¿Ha visto el diseñador la lista de rutas resultante?** Es contrato público fijado sin que nadie lo aprobara; y las operaciones que no son CRUD son justo donde la derivación produce rutas que nadie querría.
-- ¿Qué `successStatus` devuelve cada creación, y trae cabecera `Location`? Los escenarios lo asumen; el YAML no lo dice salvo que se declare.
+- ¿Qué `successStatus` devuelve cada creación? Es lo único de esto que decide el diseño. La cabecera **`Location` no se declara**: la emite el generador en toda creación `201` cuyo `output` traiga `id`. Lo que hay que cerrar aquí es lo que sí es del diseño: **¿el `output` de cada creación devuelve el `id`?** Si no lo devuelve, el cliente no puede referenciar lo que acaba de crear ni habrá `Location` — casi siempre es un olvido, no una decisión.
 - `defaultAudience` fija la audiencia de todos los endpoints que no la declaran, incluidos los derivados por `auto`. ¿Se miró **uno a uno** cuál queda expuesto a quién, o se heredó en bloque?
 - **Versionado**: cuando este contrato cambie de forma incompatible, ¿qué pasa con los consumidores ya acoplados? La respuesta afecta a `basePath` y, si hay superficie M2M, es parte del contrato (clase 11).
 - ¿Llama un **navegador** directamente a esta API? Entonces `cors` es parte del contrato, no del despliegue. Si no se declaró, o no lo llama nadie desde el navegador, o el servicio no funcionará ahí.

@@ -852,6 +852,23 @@ export function checkCrossRefs({ layers, wip = false }) {
     }
   }
 
+  // storage: una operación que devuelve un archivo puede encontrarse con que la clave ya
+  // no está en el bucket (objeto borrado, bucket migrado; la entidad conserva la key).
+  // Sin un error declarado para esa ausencia, el adaptador propaga la excepción cruda del
+  // SDK de storage y sale un 500 que no está en ningún contrato.
+  for (const [opName, op] of Object.entries(useCases.operations ?? {})) {
+    const outputFields = Object.values(op?.output?.fields ?? {});
+    if (!outputFields.some((field) => field?.type === 'file')) continue;
+    const coversAbsence = (op.errors ?? []).some(
+      (error) => error?.http === 404 || /NOT_FOUND$/.test(error?.code ?? '')
+    );
+    if (!coversAbsence) {
+      warnings.push(
+        `use-cases: operations.${opName}: devuelve un archivo pero no declara ningún error para la clave inexistente (p. ej. FILE_NOT_FOUND con http: 404) — una lectura cuyo objeto ya no está en el bucket saldría como 500`
+      );
+    }
+  }
+
   // storage: buckets declarados pero sin ningún campo file que los referencie
   for (const bucketName of buckets) {
     if (!referencedBuckets.has(bucketName)) {

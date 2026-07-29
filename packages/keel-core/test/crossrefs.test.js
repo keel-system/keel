@@ -1478,3 +1478,51 @@ test('strategy on-demand no arrastra persistence ni messaging', () => {
   assert.deepEqual(errors, []);
   assert.deepEqual(warnings, []);
 });
+
+// --- storage: lectura de una clave que ya no está en el bucket -----------------
+
+const fileReadLayers = (errors = []) => ({
+  domain: {
+    entities: {
+      Product: entity({ image: { type: 'file', bucket: 'images' } }),
+    },
+  },
+  'use-cases': {
+    operations: {
+      getProductImage: {
+        type: 'query',
+        internal: true,
+        output: { fields: { image: { type: 'file', bucket: 'images' } } },
+        errors,
+      },
+    },
+  },
+  storage: { buckets: { images: { visibility: 'private' } } },
+});
+
+test('operación que devuelve un archivo sin error de ausencia es warning', () => {
+  const { errors, warnings } = run(fileReadLayers());
+  assert.deepEqual(errors, []);
+  assert.ok(
+    warnings.some(
+      (w) => w.includes('operations.getProductImage') && w.includes('clave inexistente')
+    )
+  );
+});
+
+test('un error con http 404 cubre la ausencia del archivo', () => {
+  const { warnings } = run(fileReadLayers([{ code: 'IMAGE_GONE', when: 'el objeto no está', http: 404 }]));
+  assert.deepEqual(warnings, []);
+});
+
+test('un code terminado en NOT_FOUND cubre la ausencia sin http explícito', () => {
+  const { warnings } = run(fileReadLayers([{ code: 'FILE_NOT_FOUND', when: 'el objeto no está' }]));
+  assert.deepEqual(warnings, []);
+});
+
+test('una operación que no devuelve archivos no dispara el warning', () => {
+  const layers = fileReadLayers();
+  layers['use-cases'].operations.getProductImage.output = { fields: { name: { type: 'string' } } };
+  const { warnings } = run(layers);
+  assert.ok(!warnings.some((w) => w.includes('clave inexistente')));
+});

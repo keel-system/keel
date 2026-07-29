@@ -22,11 +22,12 @@ Recorre los artefactos y construye la lista de obligaciones. Es un borrador de t
 | `domain.entities[].lifecycle` | un escenario por transición + una transición inválida + **todo estado alcanzado** |
 | `domain` campos `unique` | una colisión |
 | `domain` constraints y requeridos | casos borde `400` |
+| `api.endpoints` con `successStatus: 201` | una aserción de la cabecera `Location` (ver § 2) |
 | `api.endpoints` con `paginated` | primera página, siguiente, vacía, tope `maxSize` |
 | `api.endpoints[].audience: services/both` | contrato M2M completo (request + response + errores + auth) |
 | `security.access` | `401` sin credencial y `403` sin permiso, por operación protegida |
 | `messaging.subscriptions` | consumo + `onFailure` (retry/DLQ) + reentrega si hay `messageId` |
-| `storage.buckets` | subida feliz, lectura según `visibility`, `FILE_TOO_LARGE`, `UNSUPPORTED_CONTENT_TYPE` |
+| `storage.buckets` | subida feliz, lectura según `visibility`, lectura de una clave inexistente, `FILE_TOO_LARGE`, `UNSUPPORTED_CONTENT_TYPE` |
 
 Cuando el inventario esté completo, la **matriz de cobertura** sale de él, no de los flujos.
 
@@ -41,7 +42,10 @@ Estas convenciones son la salida natural de la clase 12 del análisis de huecos 
 - La **forma del cuerpo de error** es fija: `{timestamp, status, error, code, message, details}` (+ `correlationId`). La convención del servicio la **describe**, no la sustituye. Lo que sí decides es el `code` y el status de cada error, en el YAML.
 - El fallo de **audiencia** (`serviceAuth.validateAudience`) responde **403**, no 401.
 - Una operación `level: service` **no rechaza por sí sola un token de usuario**: la separación es por scopes, no por tipo de credencial.
+- La cabecera **`Location`** de una creación **no se declara ni se niega en el YAML**: se emite en toda operación con `successStatus: 201` cuyo `output` declare `id`, con la URI de la petición más el id devuelto. El escenario la asserta; lo que **no** puede hacer es afirmar "sin cabecera `Location`" ni fijarle una URI distinta de esa — ningún servidor correcto lo pasa. Si la creación no devuelve `id` (output vacío o una lista), entonces no hay `Location` que assertar.
 - Si un escenario ejercita **dos escrituras concurrentes**, el resultado lo fija `persistence.consistency.optimisticLocking` (`all`/`declared` → conflicto `409`; `none` → ambas con éxito, último escritor gana). Declararlo solo en prosa dentro de `rules` no vale: ningún generador lee prosa.
+
+Esta lista es una **copia manual** del contrato de keel-spring, y por eso envejece: la fuente real es `conventions/flow-fidelity.md`, que solo existe **dentro de un proyecto ya generado** (`services/<servicio>-<tech>/.claude/`), es decir, después de este paso. Si hay algún proyecto generado a mano, contrasta contra él; si el generador se comporta de otra forma que la descrita aquí, gana el generador y esta lista está desactualizada — repórtalo.
 
 ## 3. Agrupación en flujos
 
@@ -109,6 +113,7 @@ Dos pasadas, en este orden. No enseñes el archivo al usuario sin haberlas hecho
 Errores frecuentes que estas pasadas deben cazar:
 
 - `Then` que solo comprueba el status.
+- Creación `201` cuyo `Then` no asserta la cabecera `Location` — o, peor, que la **niega**.
 - Lista devuelta sin orden declarado.
 - Error sin status, o con status distinto al del artefacto.
 - Escenario cuyo `Given` depende de otro flujo.
