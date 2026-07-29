@@ -1,9 +1,8 @@
-import fs from 'node:fs';
-import path from 'node:path';
 import pc from 'picocolors';
 import { LAYERS } from '../lib/assets.js';
 import { resolveServiceRef } from '../lib/loader.js';
 import { summarizeService } from '../lib/summarize-service.js';
+import { listDerivatives } from '../lib/derivatives.js';
 
 function plural(count, singular, pluralForm) {
   return `${count} ${count === 1 ? singular : pluralForm}`;
@@ -141,6 +140,50 @@ function printStorage(storage) {
   }
 }
 
+const DERIVATIVE_MARKS = {
+  fresh: () => pc.green('✔'),
+  stale: () => pc.yellow('⚠'),
+  unstamped: () => pc.yellow('⚠'),
+  orphan: () => pc.red('✘'),
+  missing: () => pc.dim('○'),
+  'not-applicable': () => pc.dim('○')
+};
+
+function derivativeNote(entry) {
+  switch (entry.status) {
+    case 'fresh':
+      return pc.dim(`v${entry.stampedVersion}`);
+    case 'stale':
+      return pc.yellow(`v${entry.stampedVersion} → regenerar con ${entry.producer}`);
+    case 'unstamped':
+      return pc.yellow(`sin sello de versión → regenerar con ${entry.producer}`);
+    case 'orphan':
+      return pc.red(`sobra (${entry.reason}) → bórralo`);
+    case 'missing':
+      return pc.dim(`no generado — ${entry.producer}`);
+    default:
+      return pc.dim(`no aplica (${entry.reason})`);
+  }
+}
+
+function printDerivatives({ derivatives, counts }) {
+  const headline = [];
+  if (counts.fresh > 0) headline.push(`${counts.fresh} al día`);
+  const outdated = counts.stale + counts.unstamped;
+  if (outdated > 0) headline.push(`${outdated} desactualizado(s)`);
+  if (counts.orphan > 0) headline.push(`${counts.orphan} huérfano(s)`);
+  if (counts.missing > 0) headline.push(`${counts.missing} sin generar`);
+
+  console.log(pc.bold('Derivados del diseño:') + (headline.length > 0 ? pc.dim(` ${headline.join(', ')}`) : ''));
+  const width = Math.max(...derivatives.map((entry) => entry.path.length));
+  for (const entry of derivatives) {
+    console.log(`  ${DERIVATIVE_MARKS[entry.status]()} ${entry.path.padEnd(width)}  ${derivativeNote(entry)}`);
+  }
+  if (outdated > 0 || counts.orphan > 0) {
+    console.log(pc.dim('  Propaga el cambio del diseño a todos sus derivados con /keel-evolve.'));
+  }
+}
+
 const LAYER_PRINTERS = {
   domain: ['domain', printDomain],
   'use-cases': ['useCases', printUseCases],
@@ -198,11 +241,18 @@ export function describe(ref) {
     print(summary[key]);
   }
 
+  const derivatives = listDerivatives(resolved.dir);
+  if (derivatives.service) {
+    console.log();
+    printDerivatives(derivatives);
+  }
+
   console.log();
   console.log(pc.bold('Reutilización:'));
   const fromRef = service.name ?? ref;
   console.log(`  ${pc.cyan(`keel new <nuevo-servicio> --from ${fromRef}`)}  clona este diseño con linaje basedOn`);
-  if (service.name && fs.existsSync(path.join(process.cwd(), 'docs', service.name, 'DESIGN.md'))) {
-    console.log(`  ${pc.cyan(`docs/${service.name}/DESIGN.md`)}  ficha de reutilización y decisiones de diseño`);
+  const design = derivatives.derivatives.find((entry) => entry.id === 'design');
+  if (design?.exists) {
+    console.log(`  ${pc.cyan(design.path)}  ficha de reutilización y decisiones de diseño`);
   }
 }

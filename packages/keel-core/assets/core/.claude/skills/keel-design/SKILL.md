@@ -82,7 +82,7 @@ El catálogo completo —diez entradas, con sus ejes de decisión, sus consecuen
 
 6. **Documento de diseño (paso final).** Cerrados los escenarios, **ejecuta el flujo de `/keel-handoff`** (skill `keel-handoff`) para producir `docs/<servicio>/DESIGN.md` y actualizar el índice de servicios del `README.md`. Este es el mejor momento para capturar el **"por qué"** de las decisiones no obvias (fronteras de agregado, lifecycle, campos sensibles, códigos de error, resiliencia…): el humano está presente y el diseño fresco, así que haz la **entrevista inline** de rationale que pide `keel-handoff` en lugar de dejarla para después. Termina indicando los siguientes pasos: `keel-<tech> build specs/<servicio>` para elegir el stack y generar el proyecto (y después, dentro de `services/<servicio>-<tech>/`, `/keel-generate-<tech>` para completar el código) y `/keel-docs` para la documentación de integradores.
 
-Si el usuario quiere iterar una capa concreta de un servicio existente ("cambiemos la seguridad"), ve directo a esa capa; al cerrar, revisa qué referencias cruzadas de otras capas se ven afectadas.
+Si el usuario quiere iterar una capa concreta de un servicio existente ("cambiemos la seguridad"), ve directo a esa capa; al cerrar, revisa qué referencias cruzadas de otras capas se ven afectadas. Si el diseño **ya está cerrado** (validación en verde, escenarios y `DESIGN.md` producidos), ese cambio es una **evolución** y entra por `/keel-evolve specs/<servicio>`, que usa este mismo modo de iteración pero además versiona el contrato y regenera todos los derivados que el cambio deja atrás (contratos formales, panel, `INTEGRATION.md`). Iterar aquí sin pasar por ella deja documentación que miente.
 
 ## Modo derivación
 

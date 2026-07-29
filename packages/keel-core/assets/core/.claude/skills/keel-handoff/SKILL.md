@@ -34,7 +34,19 @@ Si una capa opcional no existe, su parte se omite (no se documenta lo que el ser
 
 ## Salida
 
-Genera `docs/<service.name>/DESIGN.md` dentro del workspace (misma ubicación que `INTEGRATION.md`), con estas secciones:
+Genera `docs/<service.name>/DESIGN.md` dentro del workspace (misma ubicación que `INTEGRATION.md`).
+
+Bajo el título, una línea de **sello de versión** con el mismo formato que `validation-scenarios.md`:
+
+```markdown
+# <servicio> — Documento de diseño
+
+> specs/<servicio> v<service.version>. Diseño cerrado; el porqué de las decisiones se entrevistó al cerrarlo.
+```
+
+No es decorativo: `keel describe <servicio>` compara ese sello con el manifiesto para saber si el documento nació de una versión anterior del diseño, y `/keel-evolve` decide con él qué regenerar. Actualízalo en cada regeneración.
+
+Secciones:
 
 1. **Propósito y alcance** — qué problema resuelve el servicio, a quién sirve y qué queda fuera, en uno o dos párrafos (desde `service.description` y el `domain`).
 2. **Modelo de dominio** — las entidades con sus campos relevantes; los value types con su significado (`SKU`, `Money`…) frente a repetir constraints; los `aggregates` (raíz + entidades internas) y por qué agrupan lo que cambia junto; los `lifecycle` con sus transiciones válidas. Marca los campos `computed`, `generated` y `sensitive`.
@@ -65,7 +77,7 @@ Los artefactos son **declarativos**: guardan el *qué*, no el *por qué*. El rat
    - **supuestos estructurales del diseño** (escala, tenancy, moneda, modelo de consistencia) y limitaciones deliberadas — alimentan la subsección «Supuestos y limitaciones» de la ficha de reutilización.
 
    Pregunta con `AskUserQuestion` cuando haya opciones claras, en texto libre cuando no. **Nunca inventes el rationale**: si el humano no lo aporta, deja la entrada marcada como `> rationale pendiente` para completar después.
-3. **Regeneración segura.** Al re-ejecutar sobre un `DESIGN.md` existente, **re-deriva las secciones mecánicas** (1-5 y las subsecciones mecánicas de la 7) pero **preserva la sección "Decisiones de diseño" y la subsección `### Supuestos y limitaciones`** ya redactadas (esta última se localiza por su encabezado literal): solo pregunta por decisiones o supuestos nuevos (elecciones notables que aparecieron desde la última vez) o por los que quedaron `pendiente`. A diferencia de `INTEGRATION.md`, que se sobrescribe entero, aquí el conocimiento humano capturado no se pierde en la regeneración.
+3. **Regeneración segura.** Al re-ejecutar sobre un `DESIGN.md` existente, refresca el sello de versión y **re-deriva las secciones mecánicas** (1-5 y las subsecciones mecánicas de la 7) pero **preserva la sección "Decisiones de diseño" y la subsección `### Supuestos y limitaciones`** ya redactadas (esta última se localiza por su encabezado literal): solo pregunta por decisiones o supuestos nuevos (elecciones notables que aparecieron desde la última vez) o por los que quedaron `pendiente`. A diferencia de `INTEGRATION.md`, que se sobrescribe entero, aquí el conocimiento humano capturado no se pierde en la regeneración.
 
 ## Índice del repositorio (`README.md`)
 

@@ -19,7 +19,11 @@ inventa ni se retoca el template para acomodarlo.
    `/*__KEEL_SPEC__*/ null` → el `openapi.yaml` recién generado **convertido a JSON**.
 4. Solo si hay capa `messaging`: lo mismo en `asyncapi.html` con `· AsyncAPI`, `asyncapi` y el
    `asyncapi.yaml` en JSON.
-5. Comprueba que cada archivo generado ya no contiene ningún `__KEEL_` ni `__KEEL_DATA__`, y que el
+5. En los tres archivos, sustituye `__KEEL_VERSION__` (segunda línea, el comentario
+   `<!-- keel:version __KEEL_VERSION__ -->`) por el `service.version` del manifiesto. Es el **sello
+   de frescura**: `keel describe` lo compara con el manifiesto para saber si el panel quedó atrás, y
+   `/keel-evolve` decide con él qué regenerar. Va **sin** la `v` delante (`1.2.0`, no `v1.2.0`).
+6. Comprueba que cada archivo generado ya no contiene ningún `__KEEL_` ni `__KEEL_DATA__`, y que el
    JSON incrustado parsea (extrae el bloque y pásalo por `node -e "JSON.parse(...)"`).
 
 Los tres archivos **se regeneran siempre y se sobrescriben enteros**.
@@ -218,6 +222,7 @@ api-key, secret ni token.
 ## Checklist de cierre
 
 - [ ] `overview.html` no contiene `/*__KEEL_DATA__*/` y su JSON parsea.
+- [ ] Los tres archivos llevan `<!-- keel:version <service.version> -->` en su segunda línea.
 - [ ] Las ocho tarjetas están presentes y en orden, con `active` coherente con las capas declaradas.
 - [ ] Toda operación de `use-cases` aparece exactamente una vez, con su audiencia y su regla de acceso.
 - [ ] Los badges *idempotente* / *cacheada* / nivel de seguridad coinciden con el diseño.

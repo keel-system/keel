@@ -49,6 +49,8 @@ OpenAPI 3.1 derivado mecánicamente:
 - Cada error declarado en `use-cases` como respuesta con su status y el schema común `{ code, message }`.
 - `info.version` = `service.version`; `info.description` resume el servicio.
 
+**Todo lo que generas lleva sello de versión.** `info.version` en `openapi.yaml` y `asyncapi.yaml`, la variable de colección `keelVersion` en la colección de negocio y el comentario `<!-- keel:version <service.version> -->` en la segunda línea de `overview.html`, `openapi.html` y `asyncapi.html`. Es lo que hace mecánicamente detectable que un derivado quedó atrás cuando el diseño cambia: `keel describe <servicio>` compara cada sello con el manifiesto y `/keel-evolve` decide con eso qué regenerar. Un derivado sin sello se reporta como desactualizado.
+
 Valida el resultado con `npx --yes @redocly/cli@latest lint docs/<service.name>/openapi.yaml` y corrige hasta que pase.
 
 ### 2. `postman/` — colecciones listas para importar

@@ -8,6 +8,8 @@ Este directorio es un **workspace Keel**, sembrado con `keel init`: aquí se dis
 keel new → /keel-design (+ /keel-consume si depende de otros servidores; cierra con DESIGN.md + README)
         → /keel-validate → keel-<tech> build → cd services/<servicio>-<tech> → /keel-generate-<tech>
         → /keel-docs + /keel-integrate
+
+y después, cada vez que el diseño cambie:  /keel-evolve
 ```
 
 1. **Crear** — `keel new <servicio>`: crea `specs/<servicio>/` con manifiesto (`service.keel.yaml`) + capas obligatorias (`domain`, `use-cases`). Para reutilizar un diseño existente ajustándolo: `keel new <nuevo> --from <origen>` clona sus artefactos y registra el linaje en `service.basedOn`; `/keel-design` lo detecta y entrevista solo sobre lo que cambia. Para decidir de qué diseño derivar: `keel describe <servicio>` resume identidad, estado, capas y contenido; `docs/<servicio>/DESIGN.md` explica las decisiones y su porqué.
@@ -19,6 +21,7 @@ keel new → /keel-design (+ /keel-consume si depende de otros servidores; cierr
 
    No hay ninguna skill de generación en este workspace: el generador vive solo dentro del proyecto que produce. Si el diseño cambia, se re-ejecuta el paso 1 (solo añade archivos nuevos; con `--force` sobrescribe lo generado) y se vuelve a entrar al proyecto.
 5. **Documentar** — `/keel-docs specs/<servicio>` deriva los **contratos formales** y el panel de revisión: `openapi.yaml` (HTTP), `asyncapi.yaml` (eventos, si hay capa `messaging`), colecciones Postman en `postman/` y `overview.html`, el panel visual del servicio (capacidades, casos de uso como acordeones por audiencia, eventos, clientes HTTP) con visores para renderizar ambos contratos (`openapi.html`, `asyncapi.html`). `/keel-integrate specs/<servicio>` deriva `INTEGRATION.md`, el **contrato servidor-a-servidor en prosa** (cómo obtener el token M2M, qué reintentar, qué publicar) para que otro servidor lo consuma. (El documento de diseño `DESIGN.md` ya se produjo al cerrar el diseño; `/keel-handoff specs/<servicio>` lo **regenera** cuando el spec cambia.)
+6. **Evolucionar** — `/keel-evolve specs/<servicio>`: la puerta única para cambiar un diseño **ya cerrado**. Traduce el cambio a capas afectadas, itera solo esas con `/keel-design`, versiona el contrato (patch/minor/major) y **regenera en cascada todos los derivados** que el cambio deja atrás: `validation-scenarios.md`, `DESIGN.md`, los contratos formales y el panel de `/keel-docs`, e `INTEGRATION.md`. Cada derivado lleva estampado el `service.version` del que nació, y `keel describe <servicio>` los inventaría comparando ese sello con el manifiesto: es lo que hace mecánicamente visible que uno quedó atrás.
 
 ## Estructura
 
@@ -43,6 +46,7 @@ services/            # servicios generados por `keel-<tech> build` (un repo git 
 ## Reglas para el agente
 
 - **El diseño es la fuente de verdad.** Todo cambio funcional se hace en `specs/<servicio>/` y se regenera; nunca directamente en `services/`.
+- **Un diseño cerrado se cambia con `/keel-evolve`.** Cambiar el spec sin propagar deja derivados que mienten. Los derivados (`validation-scenarios.md`, `DESIGN.md`, `openapi.yaml`, `asyncapi.yaml`, Postman, `overview.html`, `INTEGRATION.md`) **jamás se editan a mano**: se regeneran con su skill.
 - **Cero tecnología en los specs.** Framework, BD, broker o proveedor de auth se deciden al generar, jamás al diseñar. El DSL nunca se modifica para acomodar a un generador: se ajusta el generador, nunca el DSL (regla inviolable en `docs/dsl-reference.md § Evolución del DSL`).
 - **Identificadores en inglés, prosa en español.** Todo nombre del DSL (types, entidades, campos, operaciones, eventos, errores, roles, canales, buckets) y todo lo que los generadores derivan de ellos (directorios, archivos, clases, tablas) va en inglés; las `description`, la documentación y la conversación con el usuario, en español.
 - **Una capa por vez.** Al diseñar o iterar, trabaja el artefacto de la capa activa y cierra sus referencias cruzadas antes de seguir.

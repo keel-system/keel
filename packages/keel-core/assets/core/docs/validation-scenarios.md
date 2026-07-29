@@ -54,6 +54,11 @@ ausencia vs nulo, colación, forma del cuerpo de error. Ver § Determinación ob
 **Notas de determinación**: ...
 ```
 
+La línea `> specs/<servicio> v<service.version>` es el **sello de frescura** del archivo, no una
+cita de cortesía: `keel describe <servicio>` la compara con el manifiesto para detectar que los
+escenarios nacieron de una versión anterior del diseño, y `/keel-evolve` decide con ella qué
+regenerar. Se actualiza en cada regeneración.
+
 ## Aislamiento y orden de ejecución
 
 El **flujo** (`FL-*`) es la unidad de aislamiento:

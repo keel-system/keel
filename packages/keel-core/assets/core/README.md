@@ -30,3 +30,6 @@ Este directorio es un **workspace Keel** (ver `CLAUDE.md` para el flujo completo
 4. `cd services/<servicio>-<tech>` y, dentro del proyecto, `/keel-generate-<tech>` — completa la implementación.
 5. `/keel-docs specs/<servicio>` — contratos formales (`openapi.yaml`, `asyncapi.yaml`), colecciones
    Postman y el panel visual del servicio (`overview.html`).
+6. `/keel-evolve specs/<servicio>` — cuando haya que **cambiar un diseño ya cerrado**: versiona el
+   contrato y regenera en cascada todos sus derivados. `keel describe <servicio>` dice en cualquier
+   momento cuáles están al día y cuáles quedaron atrás.

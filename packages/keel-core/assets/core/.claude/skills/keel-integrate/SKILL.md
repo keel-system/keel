@@ -105,3 +105,5 @@ Este `INTEGRATION.md` y los derivados de `/keel-docs` (`openapi.yaml`, `asyncapi
 eventos y payloads que el `asyncapi.yaml`, mismos códigos de error, mismos campos, misma seguridad. Ante regeneración, sobrescribe el archivo por completo (no edites incrementalmente).
 
 Antes de dar el documento por bueno, comprueba además que **el front-matter es completo y está versionado**: alguien lo va a consumir con `/keel-consume` sin leer la prosa, y comparará su `version` con la que tenga declarada para detectar qué cambió.
+
+Ese `version` es **exactamente el `service.version` del manifiesto**, nunca una versión propia del documento: hace de sello de frescura hacia dentro (`keel describe` lo compara con el manifiesto para detectar que el contrato quedó atrás; `/keel-evolve` decide con él qué regenerar) y de versión de contrato hacia fuera (el consumidor la compara con su `dependencies.<proveedor>.contract.version`). Son la misma cosa: el contrato publicado es el diseño en su versión.

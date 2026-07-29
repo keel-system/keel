@@ -5,5 +5,6 @@ export { LAYERS, REQUIRED_LAYERS, schemaDir, schemaPathFor, isKeelWorkspace } fr
 export { MANIFEST_FILE, resolveServiceDir, resolveServiceRef, loadService } from './lib/loader.js';
 export { validateService } from './lib/validate-service.js';
 export { summarizeService } from './lib/summarize-service.js';
+export { listDerivatives } from './lib/derivatives.js';
 export { checkCrossRefs } from './lib/crossrefs.js';
 export { copyTree } from './lib/copy.js';

@@ -25,6 +25,7 @@ Los `.claude/skills/` y el `CLAUDE.md` bajo `assets/` **no son configuración de
   - `validate-service.js` — `validateService()`, orquesta la validación.
   - `summarize-service.js` — `summarizeService()`, resumen puro del diseño para `keel describe`.
   - `crossrefs.js` — `checkCrossRefs()`, validación mecánica de referencias entre capas.
+  - `derivatives.js` — `listDerivatives()`, inventario de los derivados del diseño (escenarios, `DESIGN.md`, contratos formales, panel, `INTEGRATION.md`) y su frescura: compara el `service.version` que cada uno lleva estampado con el del manifiesto (`fresh`/`stale`/`unstamped`/`missing`/`orphan`/`not-applicable`). Lo consume `keel describe` y lo orquesta la skill `/keel-evolve`.
   - `copy.js` — `copyTree()`, copia idempotente de assets.
   - `derive.js` — `rewriteManifestForDerivation()`, reescritura del manifiesto para `keel new --from` (derivar un diseño existente).
 - `src/index.js` — API pública que consumen los generadores (reexporta lo anterior).

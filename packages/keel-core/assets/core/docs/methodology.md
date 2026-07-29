@@ -19,7 +19,8 @@ El corazón del método es una **fase de diseño iterativa** que se cierra una s
                      │   documentar integradores (opcional)  │
                      └───────────────────┬───────────────────┘
                                          │
-              evolución: cambia el spec  └──> vuelve al diseño y regenera
+        /keel-evolve: cambia el spec     └──> vuelve al diseño, versiona y regenera
+                                                (spec + TODOS sus derivados)
 ```
 
 1. **Diseñar** (`/keel-design`) — el agente entrevista al humano sobre el dominio y construye el diseño **capa a capa** (ver "Diseño por capas" más abajo): cada capa es un artefacto YAML propio que el humano aprueba, y **cierra validándose** (`keel validate --wip`, ver paso 2) antes de pasar a la siguiente, revisable en un diff pequeño. Diseñar y validar son el mismo bucle, no fases separadas: se itera hasta que el diseño completo pasa en verde. El **cierre** tiene dos partes. Primero un **análisis de huecos**: con la validación en verde, el agente interroga el diseño buscando lo que **no dice** —estados inalcanzables, errores sin guarda que los dispare, colecciones sin orden, borrados sin política de cascada—, huecos que ninguna regla mecánica puede echar de menos porque no rompen ninguna referencia, y que acabaría decidiendo por su cuenta el agente que genere el código; cada hallazgo se cierra con una decisión del humano que se materializa en los artefactos. El barrido parte de un inventario de las unidades a recorrer y reporta **su cobertura** además de sus hallazgos: sin esa tabla, una clase de huecos que se recorrió y salió limpia es indistinguible de una que nadie miró. Después produce `specs/<servicio>/validation-scenarios.md` (formato: [validation-scenarios.md](validation-scenarios.md)): escenarios Given/When/Then que cubren toda operación y todo error declarado. Ese archivo es el **contrato de equivalencia entre implementaciones**: del mismo diseño se generan servidores en stacks distintos, y es lo único que garantiza que se comporten igual — lo que un escenario no fija (el orden de una lista, el formato de una fecha, el status de un error) lo decide cada generador por su cuenta. Como paso final del cierre, el agente ejecuta automáticamente `/keel-handoff` para derivar `docs/<servicio>/DESIGN.md` (capturando en el momento el porqué de las decisiones) y actualizar el índice de servicios del `README.md` del workspace. Esta es **documentación de diseño**: queda lista al cerrar, **antes de generar nada**, de modo que el diseño sea visible y reutilizable por otros equipos apenas se termina.
@@ -117,7 +118,15 @@ Prácticas:
 - El diseño vive en git; cada cambio es un commit sobre `specs/<servicio>/`, no sobre el código generado. El diseño por capas hace que cada commit toque normalmente un solo artefacto.
 - Antes de un cambio major, ejecutar `/keel-docs` y `/keel-integrate` sobre ambas versiones y comparar los `openapi.yaml` (contrato HTTP), los `asyncapi.yaml` (contrato de eventos) y los `INTEGRATION.md` (contrato servidor-a-servidor) para enumerar exactamente qué rompe.
 - Los códigos de error y nombres de evento son contrato público: renombrarlos siempre es major.
-- Tras cambiar el spec: `/keel-validate` → regenerar los proyectos afectados → `/keel-docs`. La documentación nunca se edita a mano.
+- **Un diseño cerrado se cambia con `/keel-evolve`**, no reentrando a mano por cada skill. La documentación nunca se edita a mano.
+
+### La cascada: el spec no es lo único que cambia
+
+Del spec nacen siete derivados —`validation-scenarios.md`, `DESIGN.md`, `openapi.yaml`, `asyncapi.yaml`, las colecciones Postman, `overview.html` e `INTEGRATION.md`— repartidos entre cuatro skills. Cambiar el spec y olvidar uno no deja el diseño «a medias»: deja un artefacto que **miente**, y en el caso de `INTEGRATION.md` deja a otro equipo integrándose contra un contrato que ya no existe.
+
+Por eso la evolución es una skill propia y no una nota al pie. **`/keel-evolve`** traduce el cambio a capas afectadas antes de editar, itera solo esas con `/keel-design` (reabriendo las decisiones estructurales que el cambio toca, en vez de heredarlas en silencio), clasifica el salto de versión con el diseñador según la tabla de arriba, reejecuta el análisis de huecos sobre lo tocado y **regenera en cascada** los derivados que existían, en orden: escenarios → `/keel-handoff` → `/keel-docs` → `/keel-integrate`.
+
+Lo que hace verificable esa cascada es que **cada derivado lleva estampado el `service.version` del que nació** (`info.version` en los contratos formales, la variable `keelVersion` en Postman, un comentario `keel:version` en el panel y los visores, la línea `> specs/<servicio> v<versión>` en los dos markdown derivados, el front-matter en `INTEGRATION.md`). `keel describe <servicio>` compara cada sello con el manifiesto y reporta los que quedaron atrás, los que nunca se generaron y los que **sobran** (un `asyncapi.yaml` que sobrevivió a la retirada de la capa `messaging`). Es la única comprobación mecánica de frescura del método: el resto —qué regenerar y en qué orden— lo decide la skill.
 
 ## Código generado y ediciones manuales
 
@@ -131,4 +140,4 @@ Cada tecnología es un generador con paquete npm y CLI propios — `npm i -g kee
 
 - **Fase 1 (esta)**: metodología, DSL v2.0 multi-artefacto (schemas por capa, cross-refs en la CLI), skills, y la CLI `keel` (init/new/add/list/validate); generador `spring` como esqueleto (aún pendiente de adaptar a 2.0).
 - **Fase 2**: primer servicio real (productos/catálogos) generado en Spring Boot; adaptar el generador spring al diseño por capas y poblar su `golden/`.
-- **Futuro**: más generadores (nest, fastapi), publicación en npm, detección de drift entre spec y código generado, sincronización inversa.
+- **Futuro**: más generadores (nest, fastapi), publicación en npm, detección de drift entre spec y **código generado** (la de spec ↔ documentación ya la cubren los sellos de versión y `keel describe`), sincronización inversa.

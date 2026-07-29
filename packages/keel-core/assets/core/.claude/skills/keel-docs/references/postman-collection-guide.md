@@ -13,6 +13,10 @@ archivos de environment: las globals bastan. Verifica que cada JSON emitido es v
 
 - **`{{baseUrl}}`** — variable de colección, default `http://localhost:8080`; prefijo
   de toda URL de negocio (`{{baseUrl}}` + `basePath` de `api` + ruta del endpoint).
+- **`keelVersion`** — variable de colección de la colección de negocio con el
+  `service.version` del manifiesto (sin `v` delante). No se usa en ninguna request:
+  es el **sello de frescura** con el que `keel describe` detecta que la colección
+  nació de una versión anterior del diseño y `/keel-evolve` decide qué regenerar.
 - **`token_<rol-kebab>`** — global donde la auth guarda cada token. El rol sale de
   `security.roles` y del Given de los escenarios, en kebab-case y sin prefijo
   `ROLE_`: `ADMIN → token_admin`, `CATALOG_MANAGER → token_catalog-manager`.
@@ -28,12 +32,17 @@ archivos de environment: las globals bastan. Verifica que cada JSON emitido es v
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [],
-  "variable": [{ "key": "baseUrl", "value": "http://localhost:8080" }]
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080" },
+    { "key": "keelVersion", "value": "<service.version>" }
+  ]
 }
 ```
 
 `item` contiene requests o **carpetas** (objeto con `name` + su propio `item[]`).
-Cada request puede llevar `event[]` con un script `test`.
+Cada request puede llevar `event[]` con un script `test`. `keelVersion` va solo en la
+colección de negocio: la de auth es idempotente y no se regenera, así que sellarla
+mentiría sobre su frescura.
 
 ## `auth-collection.json`
 
