@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import Ajv2020Module from 'ajv/dist/2020.js';
 import { rewriteManifestForDerivation } from '../src/lib/derive.js';
-import { schemaPathFor } from '../src/lib/assets.js';
+import { schemaPathFor, supportedDsl } from '../src/lib/assets.js';
 import { createService } from '../src/commands/new.js';
 
 const Ajv2020 = Ajv2020Module.default ?? Ajv2020Module;
@@ -128,6 +128,108 @@ test('keel new --from falla si origen y destino son el mismo servicio', (t) => {
   createService('billing', { from: 'billing' });
 
   assert.equal(process.exitCode, 1);
+});
+
+// --- Derivación desde el registry: los derivados del origen ---------------
+
+const REGISTRY_URL = 'https://example.test/registry/index.json';
+
+function registryFixture({ files, missing = [] }) {
+  const [dsl] = supportedDsl();
+  const index = {
+    schemaVersion: 1,
+    designs: [
+      {
+        slug: 'billing',
+        family: 'billing',
+        variant: null,
+        service: { name: 'billing', version: '1.2.0', dsl, domain: 'commerce', basedOn: null, description: 'Facturación.' },
+        metadata: null,
+        layers: ['domain', 'use-cases'],
+        counts: {},
+        status: { ok: true, pending: 0, errors: 0 },
+        derivatives: {},
+        docs: { design: 'docs/billing/DESIGN.md', overview: null, integration: null },
+        files: Object.keys(files)
+      }
+    ],
+    families: []
+  };
+  const routes = { [REGISTRY_URL]: JSON.stringify(index) };
+  for (const [file, body] of Object.entries(files)) routes[`https://example.test/registry/${file}`] = body;
+  for (const file of missing) delete routes[`https://example.test/registry/${file}`];
+
+  return async (url) => {
+    const body = routes[typeof url === 'string' ? url : url.toString()];
+    if (body === undefined) return { ok: false, status: 404, headers: { get: () => null }, text: async () => '' };
+    return { ok: true, status: 200, headers: { get: () => null }, text: async () => body };
+  };
+}
+
+const REGISTRY_FILES = {
+  'specs/billing/service.keel.yaml': MANIFEST_ORIGIN,
+  'specs/billing/domain.keel.yaml': 'entities:\n  Invoice:\n    fields: {}\n',
+  'specs/billing/use-cases.keel.yaml': 'operations: {}\n',
+  'specs/billing/validation-scenarios.md': '# escenarios\n',
+  'docs/billing/DESIGN.md': '# Diseño de billing\n',
+  'docs/billing/overview.html': '<html></html>',
+  'docs/billing/postman/billing-collection.json': '{}'
+};
+
+function withRegistry(t, fetchImpl) {
+  const previous = globalThis.fetch;
+  globalThis.fetch = fetchImpl;
+  t.after(() => {
+    globalThis.fetch = previous;
+  });
+  return { source: REGISTRY_URL, fetchImpl, cacheDir: fs.mkdtempSync(path.join(os.tmpdir(), 'keel-regcache-')) };
+}
+
+test('keel new --from registry deja la documentación del origen en docs/<nuevo>/origin/', async (t) => {
+  const base = makeWorkspace(t);
+  const registry = withRegistry(t, registryFixture({ files: REGISTRY_FILES }));
+
+  await createService('billing-eu', { from: 'registry:billing', ...registry });
+
+  assert.notEqual(process.exitCode, 1);
+  assert.match(fs.readFileSync(path.join(base, 'specs', 'billing-eu', 'service.keel.yaml'), 'utf8'), /basedOn: billing@1\.2\.0/);
+
+  const originDir = path.join(base, 'docs', 'billing-eu', 'origin');
+  assert.deepEqual(fs.readdirSync(originDir).sort(), [
+    'DESIGN.md',
+    'README.md',
+    'overview.html',
+    'postman',
+    'validation-scenarios.md'
+  ]);
+  assert.equal(fs.readFileSync(path.join(originDir, 'DESIGN.md'), 'utf8'), '# Diseño de billing\n');
+  assert.ok(fs.existsSync(path.join(originDir, 'postman', 'billing-collection.json')));
+  assert.match(fs.readFileSync(path.join(originDir, 'README.md'), 'utf8'), /billing@1\.2\.0/);
+  // La carpeta de referencia no invade los derivados propios del servicio nuevo.
+  assert.equal(fs.existsSync(path.join(base, 'docs', 'billing-eu', 'DESIGN.md')), false);
+});
+
+test('keel new --from registry --no-docs no escribe docs/<nuevo>/', async (t) => {
+  const base = makeWorkspace(t);
+  const registry = withRegistry(t, registryFixture({ files: REGISTRY_FILES }));
+
+  await createService('billing-eu', { from: 'registry:billing', docs: false, ...registry });
+
+  assert.notEqual(process.exitCode, 1);
+  assert.equal(fs.existsSync(path.join(base, 'specs', 'billing-eu', 'service.keel.yaml')), true);
+  assert.equal(fs.existsSync(path.join(base, 'docs', 'billing-eu')), false);
+});
+
+test('keel new --from registry deriva igual aunque falte un derivado', async (t) => {
+  const base = makeWorkspace(t);
+  const registry = withRegistry(t, registryFixture({ files: REGISTRY_FILES, missing: ['docs/billing/DESIGN.md'] }));
+
+  await createService('billing-eu', { from: 'registry:billing', ...registry });
+
+  assert.notEqual(process.exitCode, 1);
+  const originDir = path.join(base, 'docs', 'billing-eu', 'origin');
+  assert.equal(fs.existsSync(path.join(originDir, 'DESIGN.md')), false);
+  assert.equal(fs.existsSync(path.join(originDir, 'overview.html')), true);
 });
 
 test('keel new --from falla si el YAML del origen está roto', (t) => {

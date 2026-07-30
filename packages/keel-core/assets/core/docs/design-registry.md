@@ -29,10 +29,19 @@ servicio al nombre que tú elijas**. El slug del registry nunca llega a tu códi
 
 Después, `/keel-design specs/mi-catalogo` arranca en modo derivación y entrevista solo sobre lo que cambia.
 
-Lo que **no** se descarga son los derivados (`DESIGN.md`, `openapi.yaml`, `overview.html`…): son función del
-spec y se regeneran en tu workspace con `/keel-handoff` y `/keel-docs`. Descargarlos sería heredar
-documentación que va a quedar obsoleta en cuanto ajustes el diseño. Para **evaluar** un diseño antes de
-descargarlo, `keel registry show` da las URLs de los derivados publicados.
+Junto al spec se descarga la **documentación del origen** —`DESIGN.md`, los contratos formales, el panel,
+las colecciones Postman y su `validation-scenarios.md`— en `docs/<nuevo>/origin/`, con un `README.md` que
+deja constancia de la procedencia. Es lo que explica **por qué** el diseño del que partes es como es:
+sin ella, derivar es copiar artefactos a ciegas.
+
+Va en la subcarpeta `origin/` y no en `docs/<nuevo>/` a propósito: esos documentos llevan estampada la
+versión del **origen** y hablan del servicio del origen, así que como derivados propios estarían `stale`
+desde el primer día. `keel describe` y `keel index` inventarían por lista explícita de rutas, de modo que
+`origin/` les es invisible: es material de referencia congelado, no se regenera y se borra cuando ya no
+aporta. Los derivados **propios** de tu servicio salen de `/keel-handoff` y `/keel-docs`.
+
+Con `--no-docs` se descarga solo el spec. Y para **evaluar** un diseño antes de descargar nada,
+`keel registry show` da las URLs de los derivados publicados.
 
 ### Red, caché y fuentes alternativas
 
@@ -42,6 +51,7 @@ descargarlo, `keel registry show` da las URLs de los derivados publicados.
 | `KEEL_REGISTRY_URL` | Lo mismo, por entorno (precedencia: `--source` > variable > oficial) |
 | `--refresh` | Ignora el TTL y revalida contra la red |
 | `--offline` | Usa solo la copia local, sin red |
+| `--no-docs` | Solo en `keel new`: descarga el spec sin la documentación del origen |
 
 El índice se cachea en `~/.keel/registry/`, una entrada por URL (un registry privado no pisa al oficial),
 con `ETag` y un TTL de 24 h. Si la red falla y hay copia local, se usa la copia con un aviso: quedarse sin

@@ -350,22 +350,83 @@ test('un diseño con DSL más nuevo no se descarga: el gate va antes de la red',
   assert.match(result.error, /no lista el manifiesto/);
 });
 
-test('la descarga trae solo los artefactos del spec, planos, no los derivados', async () => {
-  const entry = design('catalog');
-  const base = 'https://example.test/registry/';
-  const fetchImpl = fakeFetch({
-    [`${base}specs/catalog/service.keel.yaml`]: { body: 'keel: "2.3"\n' },
-    [`${base}specs/catalog/domain.keel.yaml`]: { body: 'entities: {}\n' },
-    [`${base}specs/catalog/use-cases.keel.yaml`]: { body: 'operations: {}\n' }
+// Fixture completo: spec + escenarios + los derivados de docs/, incluido uno en
+// subcarpeta (Postman) para fijar que la subruta se conserva.
+function fullDesign(slug = 'catalog') {
+  return design(slug, {
+    files: [
+      `specs/${slug}/service.keel.yaml`,
+      `specs/${slug}/domain.keel.yaml`,
+      `specs/${slug}/use-cases.keel.yaml`,
+      `specs/${slug}/validation-scenarios.md`,
+      `docs/${slug}/DESIGN.md`,
+      `docs/${slug}/overview.html`,
+      `docs/${slug}/postman/${slug}-collection.json`
+    ]
   });
+}
 
-  const result = await downloadDesign(entry, { indexUrl: URL_INDEX, fetchImpl, tmpRoot: os.tmpdir() });
+function fullRoutes(base = 'https://example.test/registry/', slug = 'catalog') {
+  return {
+    [`${base}specs/${slug}/service.keel.yaml`]: { body: 'keel: "2.3"\n' },
+    [`${base}specs/${slug}/domain.keel.yaml`]: { body: 'entities: {}\n' },
+    [`${base}specs/${slug}/use-cases.keel.yaml`]: { body: 'operations: {}\n' },
+    [`${base}specs/${slug}/validation-scenarios.md`]: { body: '# FL-1\n' },
+    [`${base}docs/${slug}/DESIGN.md`]: { body: '# Diseño\n' },
+    [`${base}docs/${slug}/overview.html`]: { body: '<html></html>' },
+    [`${base}docs/${slug}/postman/${slug}-collection.json`]: { body: '{}' }
+  };
+}
+
+test('la descarga reparte el spec plano y los derivados del origen, con sus subrutas', async () => {
+  const fetchImpl = fakeFetch(fullRoutes());
+
+  const result = await downloadDesign(fullDesign(), { indexUrl: URL_INDEX, fetchImpl, tmpRoot: os.tmpdir() });
 
   assert.equal(result.error, undefined);
-  assert.deepEqual(fs.readdirSync(result.dir).sort(), ['domain.keel.yaml', 'service.keel.yaml', 'use-cases.keel.yaml']);
+  assert.deepEqual(fs.readdirSync(result.dir).sort(), [
+    'domain.keel.yaml',
+    'service.keel.yaml',
+    'use-cases.keel.yaml',
+    'validation-scenarios.md'
+  ]);
   assert.equal(fs.readFileSync(path.join(result.dir, 'service.keel.yaml'), 'utf8'), 'keel: "2.3"\n');
-  assert.equal(fetchImpl.calls.length, 3, 'no debe descargar docs/');
-  fs.rmSync(result.dir, { recursive: true, force: true });
+
+  assert.deepEqual(fs.readdirSync(result.docsDir).sort(), ['DESIGN.md', 'overview.html', 'postman', 'validation-scenarios.md']);
+  assert.equal(fs.readFileSync(path.join(result.docsDir, 'DESIGN.md'), 'utf8'), '# Diseño\n');
+  assert.ok(fs.existsSync(path.join(result.docsDir, 'postman', 'catalog-collection.json')), 'la subcarpeta postman/ se conserva');
+  // Los escenarios viajan al bundle de referencia sin volver a pedirse.
+  assert.equal(fetchImpl.calls.filter((c) => c.url.endsWith('validation-scenarios.md')).length, 1);
+  assert.deepEqual(result.warnings, []);
+
+  fs.rmSync(result.root, { recursive: true, force: true });
+});
+
+test('con docs: false solo se piden los artefactos del spec', async () => {
+  const fetchImpl = fakeFetch(fullRoutes());
+
+  const result = await downloadDesign(fullDesign(), { indexUrl: URL_INDEX, fetchImpl, tmpRoot: os.tmpdir(), docs: false });
+
+  assert.equal(result.error, undefined);
+  assert.deepEqual(result.docsFiles, []);
+  assert.deepEqual(fs.readdirSync(result.docsDir), []);
+  assert.equal(fetchImpl.calls.length, 4, 'no debe descargar docs/');
+  fs.rmSync(result.root, { recursive: true, force: true });
+});
+
+test('un derivado que no se puede descargar es un aviso, no un error: la derivación sigue', async () => {
+  const routes = fullRoutes();
+  delete routes['https://example.test/registry/docs/catalog/DESIGN.md'];
+  const fetchImpl = fakeFetch(routes);
+
+  const result = await downloadDesign(fullDesign(), { indexUrl: URL_INDEX, fetchImpl, tmpRoot: os.tmpdir() });
+
+  assert.equal(result.error, undefined);
+  assert.equal(result.warnings.length, 1);
+  assert.match(result.warnings[0], /docs\/catalog\/DESIGN\.md/);
+  assert.ok(fs.existsSync(path.join(result.dir, 'service.keel.yaml')), 'el spec se descarga entero');
+  assert.ok(fs.existsSync(path.join(result.docsDir, 'overview.html')), 'los demás derivados siguen llegando');
+  fs.rmSync(result.root, { recursive: true, force: true });
 });
 
 test('un índice cuyo diseño no lista el manifiesto no se puede derivar', async () => {

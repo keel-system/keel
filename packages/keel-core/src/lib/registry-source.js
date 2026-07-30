@@ -261,42 +261,107 @@ export function searchDesigns(index, term) {
 }
 
 /**
- * Descarga los artefactos del diseño (solo `specs/<slug>/`: es lo que necesita
- * la derivación; los derivados de `docs/` se consultan en línea) a un directorio
- * temporal, con los nombres planos que espera un directorio de servicio.
+ * Descarga los artefactos del diseño a un directorio temporal con dos ramas:
  *
- * Devuelve { dir, files } o { error }. Quien llama es responsable de borrar dir.
+ * - `<root>/spec/` — los `specs/<slug>/`, con los nombres planos que espera un
+ *   directorio de servicio: es lo que consume la derivación.
+ * - `<root>/docs/` — los derivados publicados (`DESIGN.md`, `openapi.yaml`,
+ *   `overview.html`, `postman/`…), relativos a `docs/<servicio>/`, más el
+ *   `validation-scenarios.md` del spec. Son **material de referencia** del
+ *   origen: quien llama los deja en `docs/<nuevo>/origin/`, nunca como derivados
+ *   propios del servicio derivado. Se omiten con `docs: false`.
+ *
+ * Un fallo descargando el spec es fatal (sin manifiesto no hay derivación); un
+ * fallo descargando un derivado solo suma un aviso: perder la derivación entera
+ * porque falta un `DESIGN.md` sería peor que quedarse sin él.
+ *
+ * Devuelve { root, dir, files, docsDir, docsFiles, warnings } o { error }.
+ * Quien llama es responsable de borrar `root`.
  */
-export async function downloadDesign(design, { indexUrl, fetchImpl = globalThis.fetch, tmpRoot = os.tmpdir() }) {
+export async function downloadDesign(design, { indexUrl, fetchImpl = globalThis.fetch, tmpRoot = os.tmpdir(), docs = true }) {
   const prefix = `specs/${design.slug}/`;
-  const wanted = (design.files ?? []).filter((file) => file.startsWith(prefix));
+  const all = design.files ?? [];
+  const wanted = all.filter((file) => file.startsWith(prefix));
 
   if (!wanted.some((file) => file.endsWith('/service.keel.yaml'))) {
     return { error: `El índice del registry no lista el manifiesto de '${design.slug}': no se puede derivar.` };
   }
 
   const base = baseUrlOf(indexUrl);
-  const dir = fs.mkdtempSync(path.join(tmpRoot, 'keel-registry-'));
-  const written = [];
+  const root = fs.mkdtempSync(path.join(tmpRoot, 'keel-registry-'));
+  const dir = path.join(root, 'spec');
+  const docsDir = path.join(root, 'docs');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.mkdirSync(docsDir, { recursive: true });
 
-  for (const file of wanted) {
+  const written = [];
+  const docsWritten = [];
+  const warnings = [];
+
+  const fetchText = async (file) => {
     const url = `${base}${file}`;
     let response;
     try {
       response = await fetchImpl(url);
     } catch (error) {
-      fs.rmSync(dir, { recursive: true, force: true });
       return { error: `No se pudo descargar ${file} — ${error.message}` };
     }
     if (!response.ok) {
-      fs.rmSync(dir, { recursive: true, force: true });
       return { error: `No se pudo descargar ${file} — HTTP ${response.status} en ${url}` };
+    }
+    return { text: await response.text() };
+  };
+
+  for (const file of wanted) {
+    const result = await fetchText(file);
+    if (result.error) {
+      fs.rmSync(root, { recursive: true, force: true });
+      return { error: result.error };
     }
     const target = path.join(dir, file.slice(prefix.length));
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, await response.text());
+    fs.writeFileSync(target, result.text);
     written.push(file);
   }
 
-  return { dir, files: written };
+  if (docs) {
+    for (const file of all) {
+      const relative = docsTargetOf(file, prefix);
+      if (!relative) continue;
+      // Los escenarios ya están descargados con el spec: se copian, no se repiden.
+      if (file.startsWith(prefix)) {
+        const source = path.join(dir, file.slice(prefix.length));
+        if (!fs.existsSync(source)) continue;
+        fs.mkdirSync(path.dirname(path.join(docsDir, relative)), { recursive: true });
+        fs.copyFileSync(source, path.join(docsDir, relative));
+        docsWritten.push(file);
+        continue;
+      }
+      const result = await fetchText(file);
+      if (result.error) {
+        warnings.push(result.error);
+        continue;
+      }
+      const target = path.join(docsDir, relative);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, result.text);
+      docsWritten.push(file);
+    }
+  }
+
+  return { root, dir, files: written, docsDir, docsFiles: docsWritten, warnings };
+}
+
+/**
+ * Ruta de un archivo del índice dentro del bundle de referencia, o null si no es
+ * un derivado. Los de `docs/<servicio>/` conservan su subruta (para que
+ * `postman/<n>-collection.json` siga en su carpeta); del spec solo viajan los
+ * escenarios de validación, que son el otro documento que explica el diseño.
+ */
+function docsTargetOf(file, specPrefix) {
+  if (file === `${specPrefix}validation-scenarios.md`) return 'validation-scenarios.md';
+  if (file.startsWith(specPrefix) || !file.startsWith('docs/')) return null;
+  const rest = file.slice('docs/'.length);
+  const cut = rest.indexOf('/');
+  return cut === -1 ? null : rest.slice(cut + 1);
 }

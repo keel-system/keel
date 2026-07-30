@@ -51,7 +51,8 @@ keel system check                         # ¿el mapa sigue coincidiendo con los
 # diseñarlo de cero, una sesión de entrevista capa a capa.
 keel registry search catalogo             # busca en el registry de diseños reutilizables
 keel registry show catalog                # su ficha, sin descargarlo
-keel new mi-servicio --from registry:catalog   # lo deriva con linaje basedOn
+keel new mi-servicio --from registry:catalog   # lo deriva con linaje basedOn, y trae la documentación
+                                          # del origen a docs/mi-servicio/origin/ (--no-docs la omite)
 
 keel new mi-servicio # …o de cero: specs/mi-servicio/ (manifiesto + domain + use-cases)
 

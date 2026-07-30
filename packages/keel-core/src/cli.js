@@ -49,6 +49,7 @@ withRegistryOptions(
       '--from <origen>',
       'diseño del que derivar: nombre local (billing), ruta (specs/billing) o del registry (registry:catalog)'
     )
+    .option('--no-docs', 'al derivar del registry, no descarga la documentación del origen (solo el spec)')
 ).action((servicio, options) => createService(servicio, options));
 
 program
