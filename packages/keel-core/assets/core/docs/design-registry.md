@@ -27,12 +27,23 @@ mismo camino que una derivación local: copia el manifiesto reescrito y las capa
 servicio al nombre que tú elijas**. El slug del registry nunca llega a tu código: `keel new notifications
 --from registry:notifications-push-only` deja un servicio llamado `notifications`.
 
+También se clona `validation-scenarios.md`, con la ruta de su cabecera reapuntada al servicio nuevo pero
+**conservando el sello de versión del origen**. El manifiesto derivado nace en `0.1.0`, así que
+`keel describe` los reporta `stale` desde el primer momento: es la señal correcta. Los escenarios
+heredados son el **punto de partida** —el inventario de obligaciones que ya estaba resuelto—, no el
+contrato de tu servicio; se regeneran al cerrar el diseño derivado, como en cualquier otro diseño.
+
 Después, `/keel-design specs/mi-catalogo` arranca en modo derivación y entrevista solo sobre lo que cambia.
 
-Junto al spec se descarga la **documentación del origen** —`DESIGN.md`, los contratos formales, el panel,
-las colecciones Postman y su `validation-scenarios.md`— en `docs/<nuevo>/origin/`, con un `README.md` que
-deja constancia de la procedencia. Es lo que explica **por qué** el diseño del que partes es como es:
-sin ella, derivar es copiar artefactos a ciegas.
+Junto al spec se descarga la **documentación del origen** —`DESIGN.md`, `INTEGRATION.md`, los contratos
+formales, el panel, todas las colecciones Postman y su `validation-scenarios.md`— en `docs/<nuevo>/origin/`,
+con un `README.md` que deja constancia de la procedencia. Es lo que explica **por qué** el diseño del que
+partes es como es: sin ella, derivar es copiar artefactos a ciegas.
+
+Lo que llega es lo que el `index.json` del registry enumera en `files`, ni más ni menos. Si el origen tenía
+derivados sin generar cuando se indexó, `keel new` lo dice (`el registry publica N de M derivados`) en vez
+de dejar que los eches de menos: el arreglo es del lado del registry —generarlos y reindexar con
+`keel index`—, no tuyo.
 
 Va en la subcarpeta `origin/` y no en `docs/<nuevo>/` a propósito: esos documentos llevan estampada la
 versión del **origen** y hablan del servicio del origen, así que como derivados propios estarían `stale`
@@ -57,6 +68,11 @@ El índice se cachea en `~/.keel/registry/`, una entrada por URL (un registry pr
 con `ETag` y un TTL de 24 h. Si la red falla y hay copia local, se usa la copia con un aviso: quedarse sin
 índice por un corte de red sería peor que servir uno de ayer. Sin red y sin caché, el error explica el
 camino manual (`git clone` + `--from <ruta>`), que funciona siempre.
+
+**El TTL no se aplica a `keel new --from registry:`**, que revalida siempre (salvo con `--offline`).
+Hojear el catálogo tolera un índice de ayer; materializar un diseño, no: uno desactualizado deja el
+workspace sin los derivados que se publicaron entre medias, y sin nada que lo delate. La revalidación
+cuesta un `304` gracias al `ETag`, y la línea de descarga dice de dónde salió el índice (`red` o `caché`).
 
 Un `index.json` con un `schemaVersion` mayor del que entiende la CLI se rechaza pidiendo actualizar
 `keel-core`, en vez de malinterpretarlo.

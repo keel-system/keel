@@ -148,14 +148,45 @@ function countsOf(summary) {
  * POSIX. Es lo que permite a un consumidor remoto descargar un diseño suelto
  * sin clonar el repo ni descomprimir un tarball.
  */
-function filesOf({ slug, layers, metadata, derivatives }) {
+function filesOf({ cwd, slug, serviceName, layers, metadata, derivatives }) {
   const files = [`specs/${slug}/${MANIFEST_FILE}`];
   for (const layer of layers) files.push(`specs/${slug}/${layer}.keel.yaml`);
   if (metadata) files.push(`specs/${slug}/${SIDECAR_FILE}`);
   for (const entry of derivatives) {
     if (entry.exists) files.push(entry.path);
   }
+  for (const file of postmanFiles(cwd, serviceName)) {
+    if (!files.includes(file)) files.push(file);
+  }
   return files;
+}
+
+/**
+ * Colecciones Postman de docs/<servicio>/postman/, en orden alfabético.
+ *
+ * El catálogo de derivados conoce una sola colección por diseño (la del
+ * servicio, que es la que puede quedarse atrás y por tanto la que hay que
+ * sellar), pero /keel-docs escribe también `auth-collection.json`: sin este
+ * barrido, quien deriva del registry se queda sin la colección con la que se
+ * obtiene el token. `keel-spring` ya barre el directorio entero por el mismo
+ * motivo (ver keel-spring/src/lib/keel-docs.js).
+ *
+ * Ordenado para no romper el determinismo del que depende `keel index --check`.
+ */
+function postmanFiles(cwd, serviceName) {
+  if (!serviceName) return [];
+  const dir = path.join(cwd, 'docs', serviceName, 'postman');
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
+    .map((entry) => entry.name)
+    .sort()
+    .map((name) => `docs/${serviceName}/postman/${name}`);
 }
 
 /**
@@ -228,7 +259,16 @@ export function buildIndex(cwd = process.cwd()) {
         overview: docPath('overview'),
         integration: docPath('integration')
       },
-      files: filesOf({ slug, layers: layers.present, metadata, derivatives: inventory.derivatives })
+      // serviceName y no slug: los derivados viven en docs/<service.name>/ (ver
+      // listDerivatives), que en un registry con variantes puede no coincidir.
+      files: filesOf({
+        cwd,
+        slug,
+        serviceName: inventory.service?.name,
+        layers: layers.present,
+        metadata,
+        derivatives: inventory.derivatives
+      })
     });
   }
 

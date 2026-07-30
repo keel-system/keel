@@ -240,6 +240,36 @@ test('files lista el manifiesto, las capas, el sidecar y los derivados que exist
   assert.equal(design.docs.overview, null);
 });
 
+test('files publica todas las colecciones Postman, no solo la que el catálogo de derivados sella', () => {
+  const cwd = workspace({
+    catalog: {
+      layers: ['domain', 'use-cases', 'api'],
+      docs: {
+        'postman/catalog-collection.json': JSON.stringify({ variable: [{ key: 'keelVersion', value: '1.0.0' }] }),
+        'postman/auth-collection.json': '{}',
+        'postman/notas.md': 'no es una colección'
+      }
+    }
+  });
+  const design = bySlug(buildIndex(cwd)).catalog;
+  const postman = design.files.filter((file) => file.includes('/postman/'));
+
+  // auth-collection.json es salida de /keel-docs igual que la del servicio, pero
+  // no es un derivado sellado: sin el barrido no llegaría a quien deriva. Primero
+  // van los derivados del catálogo y luego el barrido, ordenado: orden estable.
+  assert.deepEqual(postman, ['docs/catalog/postman/catalog-collection.json', 'docs/catalog/postman/auth-collection.json']);
+  // Sin duplicar la que el catálogo ya listó, y sin colar lo que no es colección.
+  assert.equal(design.files.filter((file) => file.endsWith('catalog-collection.json')).length, 1);
+  assert.equal(design.files.some((file) => file.endsWith('notas.md')), false);
+});
+
+test('sin directorio postman/, files no cambia', () => {
+  const cwd = workspace({ catalog: { docs: { 'DESIGN.md': '> specs/catalog v1.0.0. Ficha.\n' } } });
+  const design = bySlug(buildIndex(cwd)).catalog;
+
+  assert.equal(design.files.some((file) => file.includes('/postman/')), false);
+});
+
 test('la columna de documentación solo enlaza derivados que existen', () => {
   const cwd = workspace({
     catalog: { docs: { 'DESIGN.md': '> specs/catalog v1.0.0. Ficha.\n', 'overview.html': '<!-- keel:version 1.0.0 -->\n' } }

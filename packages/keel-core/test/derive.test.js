@@ -4,8 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import Ajv2020Module from 'ajv/dist/2020.js';
-import { rewriteManifestForDerivation } from '../src/lib/derive.js';
+import { rewriteManifestForDerivation, rewriteScenariosForDerivation } from '../src/lib/derive.js';
 import { schemaPathFor, supportedDsl } from '../src/lib/assets.js';
+import { loadRegistryIndex } from '../src/lib/registry-source.js';
 import { createService } from '../src/commands/new.js';
 
 const Ajv2020 = Ajv2020Module.default ?? Ajv2020Module;
@@ -46,6 +47,28 @@ test('rewriteManifestForDerivation no doble-prefija una description ya pendiente
   assert.match(out, /TODO: describe en una frase qué resuelve\./);
 });
 
+const SCENARIOS_ORIGIN = `# Escenarios de validación — billing
+
+> specs/billing v1.2.0. Derivados del diseño; regenerar al cambiarlo.
+
+## FL-1 Emitir factura
+`;
+
+test('rewriteScenariosForDerivation reapunta la ruta y conserva la versión del origen', () => {
+  const out = rewriteScenariosForDerivation(SCENARIOS_ORIGIN, { name: 'billing-eu' });
+
+  assert.match(out, /^> specs\/billing-eu v1\.2\.0\. Derivados/m);
+  // La versión no se toca: el manifiesto derivado nace en 0.1.0, así que el sello
+  // heredado es justo lo que deja los escenarios `stale` en keel describe.
+  assert.doesNotMatch(out, /v0\.1\.0/);
+  assert.match(out, /## FL-1 Emitir factura/);
+});
+
+test('rewriteScenariosForDerivation deja intacto un archivo sin cabecera de sello', () => {
+  const source = '# escenarios\n\n## FL-1\n';
+  assert.equal(rewriteScenariosForDerivation(source, { name: 'billing-eu' }), source);
+});
+
 test('el schema del manifiesto acepta basedOn con formato servicio@versión y rechaza el resto', () => {
   const ajv = new Ajv2020({ allErrors: true, strict: false });
   ajv.addSchema(JSON.parse(fs.readFileSync(schemaPathFor('common'), 'utf8')));
@@ -81,13 +104,13 @@ function makeWorkspace(t) {
   fs.writeFileSync(path.join(originDir, 'service.keel.yaml'), MANIFEST_ORIGIN);
   fs.writeFileSync(path.join(originDir, 'domain.keel.yaml'), 'entities:\n  Invoice:\n    fields: {}\n');
   fs.writeFileSync(path.join(originDir, 'use-cases.keel.yaml'), 'operations: {}\n');
-  fs.writeFileSync(path.join(originDir, 'validation-scenarios.md'), '# escenarios\n');
+  fs.writeFileSync(path.join(originDir, 'validation-scenarios.md'), SCENARIOS_ORIGIN);
 
   process.chdir(base);
   return base;
 }
 
-test('keel new --from clona las capas, reescribe el manifiesto y excluye validation-scenarios.md', (t) => {
+test('keel new --from clona las capas, reescribe el manifiesto y hereda validation-scenarios.md', (t) => {
   const base = makeWorkspace(t);
 
   createService('billing-eu', { from: 'billing' });
@@ -102,7 +125,23 @@ test('keel new --from clona las capas, reescribe el manifiesto y excluye validat
     fs.readFileSync(path.join(base, 'specs', 'billing', 'domain.keel.yaml'), 'utf8')
   );
   assert.equal(fs.existsSync(path.join(destDir, 'use-cases.keel.yaml')), true);
-  assert.equal(fs.existsSync(path.join(destDir, 'validation-scenarios.md')), false);
+
+  // Los escenarios llegan como punto de partida, con la ruta reapuntada y el
+  // sello del origen: `keel describe` los verá stale, que es lo que toca hasta
+  // que se regeneren al cerrar el diseño derivado.
+  const scenarios = fs.readFileSync(path.join(destDir, 'validation-scenarios.md'), 'utf8');
+  assert.match(scenarios, /^> specs\/billing-eu v1\.2\.0\./m);
+  assert.match(scenarios, /## FL-1 Emitir factura/);
+});
+
+test('keel new --from deriva igual si el origen no tiene escenarios', (t) => {
+  const base = makeWorkspace(t);
+  fs.rmSync(path.join(base, 'specs', 'billing', 'validation-scenarios.md'));
+
+  createService('billing-eu', { from: 'billing' });
+
+  assert.notEqual(process.exitCode, 1);
+  assert.equal(fs.existsSync(path.join(base, 'specs', 'billing-eu', 'validation-scenarios.md')), false);
 });
 
 test('keel new --from acepta el origen como ruta (specs/billing)', (t) => {
@@ -170,7 +209,7 @@ const REGISTRY_FILES = {
   'specs/billing/service.keel.yaml': MANIFEST_ORIGIN,
   'specs/billing/domain.keel.yaml': 'entities:\n  Invoice:\n    fields: {}\n',
   'specs/billing/use-cases.keel.yaml': 'operations: {}\n',
-  'specs/billing/validation-scenarios.md': '# escenarios\n',
+  'specs/billing/validation-scenarios.md': SCENARIOS_ORIGIN,
   'docs/billing/DESIGN.md': '# Diseño de billing\n',
   'docs/billing/overview.html': '<html></html>',
   'docs/billing/postman/billing-collection.json': '{}'
@@ -207,6 +246,57 @@ test('keel new --from registry deja la documentación del origen en docs/<nuevo>
   assert.match(fs.readFileSync(path.join(originDir, 'README.md'), 'utf8'), /billing@1\.2\.0/);
   // La carpeta de referencia no invade los derivados propios del servicio nuevo.
   assert.equal(fs.existsSync(path.join(base, 'docs', 'billing-eu', 'DESIGN.md')), false);
+  // Y los escenarios también quedan en el spec, reapuntados: origin/ es la copia
+  // congelada, specs/ el punto de partida editable.
+  assert.match(
+    fs.readFileSync(path.join(base, 'specs', 'billing-eu', 'validation-scenarios.md'), 'utf8'),
+    /^> specs\/billing-eu v1\.2\.0\./m
+  );
+});
+
+test('derivar del registry revalida el índice aunque la caché siga dentro del TTL', async (t) => {
+  const base = makeWorkspace(t);
+  // El índice viejo no listaba los derivados: es exactamente el escenario que
+  // dejaba docs/<nuevo>/origin/ incompleto sin decir nada.
+  const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-regcache-'));
+  t.after(() => fs.rmSync(cacheDir, { recursive: true, force: true }));
+
+  const viejo = Object.fromEntries(Object.entries(REGISTRY_FILES).filter(([file]) => file.startsWith('specs/')));
+  await loadRegistryIndex({ source: REGISTRY_URL, fetchImpl: registryFixture({ files: viejo }), cacheDir, env: {} });
+
+  const registry = withRegistry(t, registryFixture({ files: REGISTRY_FILES }));
+  await createService('billing-eu', { from: 'registry:billing', ...registry, cacheDir });
+
+  assert.notEqual(process.exitCode, 1);
+  assert.ok(fs.existsSync(path.join(base, 'docs', 'billing-eu', 'origin', 'DESIGN.md')));
+});
+
+test('derivar con --offline no toca la red: se sirve de la caché', async (t) => {
+  const base = makeWorkspace(t);
+  const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-regcache-'));
+  t.after(() => fs.rmSync(cacheDir, { recursive: true, force: true }));
+
+  await loadRegistryIndex({
+    source: REGISTRY_URL,
+    fetchImpl: registryFixture({ files: REGISTRY_FILES }),
+    cacheDir,
+    env: {}
+  });
+
+  // El índice solo puede salir de la caché; los artefactos sí se descargan.
+  let indexHits = 0;
+  const fetchImpl = registryFixture({ files: REGISTRY_FILES });
+  const spy = async (url) => {
+    if (String(url) === REGISTRY_URL) indexHits += 1;
+    return fetchImpl(url);
+  };
+  const registry = withRegistry(t, spy);
+
+  await createService('billing-eu', { from: 'registry:billing', ...registry, offline: true, cacheDir });
+
+  assert.notEqual(process.exitCode, 1);
+  assert.equal(indexHits, 0);
+  assert.ok(fs.existsSync(path.join(base, 'specs', 'billing-eu', 'service.keel.yaml')));
 });
 
 test('keel new --from registry --no-docs no escribe docs/<nuevo>/', async (t) => {

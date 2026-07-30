@@ -3,7 +3,7 @@ import path from 'node:path';
 import pc from 'picocolors';
 import { templatesDir, isKeelWorkspace } from '../lib/assets.js';
 import { MANIFEST_FILE, KEBAB_NAME, resolveServiceRef, loadService } from '../lib/loader.js';
-import { rewriteManifestForDerivation } from '../lib/derive.js';
+import { rewriteManifestForDerivation, rewriteScenariosForDerivation } from '../lib/derive.js';
 import { copyTree } from '../lib/copy.js';
 import {
   downloadDesign,
@@ -15,6 +15,9 @@ import {
 } from '../lib/registry-source.js';
 
 const SEED_FILES = ['service.keel.yaml', 'domain.keel.yaml', 'use-cases.keel.yaml'];
+
+// Único derivado que vive en el directorio del servicio (ver derivatives.js).
+const SCENARIOS_FILE = 'validation-scenarios.md';
 
 export async function createService(name, options = {}) {
   if (!KEBAB_NAME.test(name)) {
@@ -74,7 +77,14 @@ async function deriveFromRegistry(name, remote, { cwd, serviceDir, options }) {
     return;
   }
 
-  const loaded = await loadRegistryIndex(options);
+  // Materializar un diseño no es hojear el catálogo: el índice es **un** archivo
+  // y revalidarlo cuesta un 304 (loadRegistryIndex ya manda el ETag), mientras
+  // que derivar de un índice de ayer produce un workspace incompleto en silencio
+  // — los derivados que ese índice aún no listaba no se descargan ni avisan. El
+  // TTL de 24 h se queda para `keel registry list/search/show`, que sí es
+  // navegación. Con --offline manda el usuario, y si la red falla ya se degrada
+  // a la caché con un aviso.
+  const loaded = await loadRegistryIndex({ ...options, refresh: options.offline ? false : true });
   if (loaded.error) {
     console.error(pc.red(loaded.error));
     process.exitCode = 1;
@@ -98,7 +108,9 @@ async function deriveFromRegistry(name, remote, { cwd, serviceDir, options }) {
     return;
   }
 
-  console.log(pc.dim(`Descargando ${design.slug} v${design.service?.version ?? '?'} de ${loaded.url}…`));
+  console.log(
+    pc.dim(`Descargando ${design.slug} v${design.service?.version ?? '?'} de ${loaded.url} (índice: ${loaded.from})…`)
+  );
   const downloaded = await downloadDesign(design, { indexUrl: loaded.url, docs: options.docs !== false });
   if (downloaded.error) {
     console.error(pc.red(downloaded.error));
@@ -110,7 +122,7 @@ async function deriveFromRegistry(name, remote, { cwd, serviceDir, options }) {
   try {
     // El mensaje de éxito ya identifica el origen por su linaje (`<slug>@<versión>`).
     deriveService(name, downloaded.dir, { cwd, serviceDir });
-    if (process.exitCode !== 1) {
+    if (process.exitCode !== 1 && options.docs !== false) {
       writeOriginDocs(name, downloaded, { cwd, design, indexUrl: loaded.url });
     }
   } finally {
@@ -126,7 +138,12 @@ async function deriveFromRegistry(name, remote, { cwd, serviceDir, options }) {
  * allowlist de rutas, así que la subcarpeta le es invisible.
  */
 function writeOriginDocs(name, downloaded, { cwd, design, indexUrl }) {
-  if ((downloaded.docsFiles ?? []).length === 0) return;
+  if ((downloaded.docsFiles ?? []).length === 0) {
+    console.error(`\n${pc.yellow('⚠')} El índice del registry no publica ningún derivado de '${design.slug}'.`);
+    console.error(`  ${pc.dim(`No hay docs/${name}/origin/: derivas del spec a ciegas, sin el porqué del diseño.`)}`);
+    console.error(`  ${pc.dim('Pide al mantenedor del registry que genere los derivados y reindexe con `keel index`.')}`);
+    return;
+  }
 
   const originDir = path.join(cwd, 'docs', name, 'origin');
   fs.mkdirSync(originDir, { recursive: true });
@@ -137,6 +154,19 @@ function writeOriginDocs(name, downloaded, { cwd, design, indexUrl }) {
   for (const file of [...copied].sort()) console.log(`  ${pc.dim('•')} docs/${name}/origin/${file}`);
   if (copied.includes('DESIGN.md')) {
     console.log(`  Empieza por ${pc.cyan(`docs/${name}/origin/DESIGN.md`)}: las decisiones del diseño y su porqué.`);
+  }
+
+  // El índice ya sabe cuántos derivados le faltaban al origen cuando se indexó.
+  // Decirlo aquí es lo que separa «este diseño no tiene panel» de «el registry
+  // está desactualizado», que sin este aviso se ven exactamente igual: un archivo
+  // que no aparece.
+  const missing = design.derivatives?.missing ?? 0;
+  if (missing > 0) {
+    const total = missing + (design.derivatives?.fresh ?? 0) + (design.derivatives?.stale ?? 0) + (design.derivatives?.unstamped ?? 0);
+    console.error(
+      `\n${pc.yellow('⚠')} El registry publica ${total - missing} de ${total} derivados de '${design.slug}': ${missing} no existía(n) al indexarlo.`
+    );
+    console.error(`  ${pc.dim('Pide al mantenedor del registry que los genere y reindexe con `keel index`.')}`);
   }
 }
 
@@ -158,8 +188,11 @@ function originReadme({ design, indexUrl }) {
 }
 
 // Deriva specs/<name> clonando un diseño existente: copia el manifiesto reescrito
-// (nombre, versión 0.1.0, linaje basedOn, description pendiente) y las capas
-// declaradas tal cual. validation-scenarios.md no se clona: se regenera al cerrar.
+// (nombre, versión 0.1.0, linaje basedOn, description pendiente), las capas
+// declaradas tal cual y, si existe, validation-scenarios.md con su cabecera
+// reapuntada al servicio nuevo. Los escenarios llegan con el sello del origen, o
+// sea `stale`: el punto de partida está, y `keel describe` recuerda que hay que
+// regenerarlos al cerrar el diseño derivado.
 function deriveService(name, from, { cwd, serviceDir }) {
   const resolved = resolveServiceRef(from, cwd);
   if (resolved.error) {
@@ -203,10 +236,26 @@ function deriveService(name, from, { cwd, serviceDir }) {
     written.push(fileName);
   }
 
+  const scenarios = path.join(originDir, SCENARIOS_FILE);
+  const inherited = fs.existsSync(scenarios);
+  if (inherited) {
+    const text = fs.readFileSync(scenarios, 'utf8');
+    fs.writeFileSync(path.join(serviceDir, SCENARIOS_FILE), rewriteScenariosForDerivation(text, { name }));
+    written.push(SCENARIOS_FILE);
+  }
+
   console.log(pc.bold(pc.green(`✔ Servicio derivado: specs/${name}/ (a partir de ${basedOn})`)));
-  for (const file of written) console.log(`  ${pc.dim('•')} specs/${name}/${file}`);
+  for (const file of written) {
+    const note = file === SCENARIOS_FILE ? pc.dim(` (heredado de ${basedOn}: regenerarlo al cerrar)`) : '';
+    console.log(`  ${pc.dim('•')} specs/${name}/${file}${note}`);
+  }
   console.log('\nPróximos pasos:');
   console.log(`  1. Ajusta el diseño con ${pc.cyan(`/keel-design specs/${name}`)} (arrancará en modo derivación: solo lo que cambia)`);
   console.log(`  2. Redacta la description del manifiesto (quedó marcada como pendiente de revisar)`);
   console.log(`  3. Valida con ${pc.cyan(`keel validate --wip specs/${name}`)}`);
+  if (inherited) {
+    console.log(
+      `  4. Regenera los escenarios al cerrar: los heredados llevan el sello de ${basedOn} y ${pc.cyan('keel describe')} los marca ${pc.yellow('stale')}`
+    );
+  }
 }

@@ -19,3 +19,18 @@ export function rewriteManifestForDerivation(sourceText, { name, basedOn }) {
   // lineWidth: 0 evita plegar líneas largas (la description prefijada) al serializar
   return doc.toString({ lineWidth: 0 });
 }
+
+/**
+ * Reescribe la cabecera de los escenarios heredados: solo la **ruta** del
+ * blockquote de sello (`> specs/<origen> v1.2.0 …` → `> specs/<nuevo> v1.2.0 …`).
+ *
+ * La versión se conserva a propósito. El manifiesto derivado nace en 0.1.0, así
+ * que el sello del origen deja los escenarios en `stale` para `keel describe`
+ * (ver derivatives.js): es la señal correcta —hay que regenerarlos tras ajustar
+ * el diseño— y renumerarlos aquí sería afirmar que ya describen al servicio nuevo.
+ *
+ * Un archivo sin esa cabecera se devuelve intacto: se copia tal cual.
+ */
+export function rewriteScenariosForDerivation(sourceText, { name }) {
+  return sourceText.replace(/^(>\s*)specs\/\S+(\s+v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)/m, `$1specs/${name}$2`);
+}
