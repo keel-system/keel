@@ -64,6 +64,7 @@ keel-<tech>/
 │   └── scaffold/        # un módulo por artefacto transversal al stack (patrón de keel-spring)
 ├── assets/              # fuente del .claude/ del proyecto generado: skill, agents, conventions, skills/<infra>
 └── test/
+    └── fixtures/        # diseños completos (specs/<servicio>/) con los que se prueba el scaffolding
 ```
 
 **Criterio de frontera del scaffolding**: build genera todo lo derivable mecánicamente del diseño + `keel-stack.json` cuyo código es idéntico sea cual sea la opción de infra elegida (más deps/config/compose, derivados del catálogo de stack). Lo que cambia según la opción concreta (publisher Kafka vs Rabbit, adaptador de storage…) se documenta en la skill por tecnología correspondiente (`skills/keel-<tech>-<infra>/`) y lo escribe el agente. El proyecto recién generado debe compilar y arrancar sin el trabajo del agente (los huecos son stubs que fallan en ejecución, no en compilación).
@@ -90,6 +91,19 @@ Es el corazón del generador: cada construcción del DSL (entidad, campo `unique
 - Define el orden de autoridad: spec > mapping > criterio del agente (documentado).
 - Incluye la política de tests: por operación (feliz + cada error), por invariante, y el comando de verificación que debe pasar antes de dar la generación por terminada.
 
+## Fixtures de diseño: la red contra las regresiones del scaffolding
+
+El scaffolding es una función determinista del diseño más `keel-stack.json`, así que se prueba como tal: una **fixture** es un `specs/<servicio>/` completo bajo `test/fixtures/`, y cada test la carga con `loadService()`, la pasa por `scaffoldService()` a un workspace temporal (`fs.mkdtempSync`) y **afirma sobre el texto emitido**. Ver `packages/keel-spring/test/generation-regressions.test.js` y `test/shape-coverage.test.js`.
+
+Lo que se afirma es el rasgo concreto que estaba en juego —que un `{slug}` de la ruta salga como `@PathVariable String slug`, que un POST de transición responda 200 y no 201, que sin `lifecycle` no aparezca ningún `transitionTo`—, nunca el árbol de salida entero congelado. La diferencia importa: una comparación contra una salida congelada se rompe con cada cambio intencional y acaba regenerándose a ciegas, que es como muere la utilidad de un ejemplo de referencia. Un test que nombra su rasgo dice, cuando se pone rojo, **qué** se rompió.
+
+Dos usos, y conviene no mezclarlos en el mismo archivo:
+
+- **Regresiones.** Cada bug determinista que aparezca en una generación real se congela como caso con la fixture que lo reproduce, antes de arreglarlo. La fuente natural es el informe de una generación completada: lo que el agente tuvo que corregir a mano es exactamente lo que el scaffolding debió haber emitido bien.
+- **Cobertura de siluetas.** Una fixture sola sesga el generador hacia su forma. Un generador ajustado al CRUD sobre un agregado con entidad hija y lifecycle **parece correcto** hasta que llega un servicio sin capa `api`, disparado por una suscripción y un `schedule`, sin `aggregates` y sin estados. Mantén al menos dos fixtures **opuestas en los ejes que importan** (entrada HTTP vs. mensajería, con y sin lifecycle, con y sin entidades hijas) y afirma sobre la segunda tanto lo que debe aparecer como lo que **no debe**: la mitad de los fallos de silueta son piezas generadas de más que no compilan. Una guarda barata y muy rentable: recorrer todos los archivos generados y comprobar que ningún `import` del propio paquete base apunta a una clase que no se generó — es el fallo típico al condicionar piezas por capa.
+
+Esto cubre lo que el scaffolding emite; lo que escribe el agente después lo cubren los escenarios `FL-*` del diseño (`validation-scenarios.md`) ejecutados contra la infraestructura real.
+
 ## Proceso para crear un generador nuevo
 
 Un generador nuevo es un paquete `packages/keel-<tech>/` en el monorepo de Keel (ej. el futuro `keel-nest`):
@@ -97,7 +111,7 @@ Un generador nuevo es un paquete `packages/keel-<tech>/` en el monorepo de Keel 
 1. Copia `packages/keel-spring/` y adapta: `package.json` (name, bin, descripción), `src/lib/assets.js` (skill y tecnología), y el contenido de `assets/` — README, skill y conventions de la tecnología (verifica versiones actuales del stack con `find-docs`).
 2. Escribe la tabla de mapeo completa recorriendo `docs/dsl-reference.md` construcción por construcción.
 3. Pruébalo en un workspace: `npm link` del paquete, `keel-<tech> build specs/<servicio>` y genera un servicio existente (idealmente el mismo diseño que otro generador ya generó); después `cd` al proyecto y completa con `/keel-generate-<tech>`. Compara comportamiento observable con el otro generador: mismos endpoints, mismos códigos de error, mismos eventos.
-4. Refina la skill y las conventions con lo aprendido. El generador mejora con cada uso.
+4. Refina la skill y las conventions con lo aprendido, y **congela lo aprendido en fixtures**: los bugs de scaffolding que salieron en esa generación como casos de regresión, y una segunda fixture de silueta opuesta a la que usaste para probar. El generador mejora con cada uso, y las fixtures son lo que impide que empeore por el camino.
 
 ## Versionado
 
