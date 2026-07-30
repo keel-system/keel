@@ -21,11 +21,28 @@ clients:
   #           sku: { type: string, required: true }
   #         queryParams:
   #           currency: { type: string }
+  #         headers:               # cabeceras propias de la llamada (nunca credenciales: eso es auth).
+  #                                # El nombre va en camelCase como todo campo del DSL; el nombre real
+  #                                # de la cabecera se declara con wireName.
+  #           tenantId: { type: string, required: true, wireName: X-Tenant-Id }
   #       response:
   #         fields:
   #           amount: { type: decimal, required: true }
   #           currency: { type: string, required: true }
   #       timeoutMs: 2000
-  #       retry: { maxAttempts: 3, backoff: exponential, initialDelayMs: 200, retryOn: [timeout, 5xx] }
+  #       retry: { maxAttempts: 3, backoff: exponential, initialDelayMs: 200, maxDelayMs: 5000, retryOn: [timeout, 5xx] }
   #       circuitBreaker: { failureRateThreshold: 50, slidingWindowSize: 20, waitDurationMs: 30000 }
   #       fallback: Devolver el último precio conocido en caché; si no existe, error PRICE_UNAVAILABLE.
+  #     quotePrices:
+  #       contract: Cotiza en lote los SKU indicados.
+  #       method: POST
+  #       path: /prices/quote
+  #       request:
+  #         body:                  # solo en POST/PUT/PATCH (un GET/DELETE con body es error de schema)
+  #           skus:        { type: string, list: true, required: true, constraints: { maxItems: 100 } }
+  #           requestedAt: { type: timestamp, required: true, wireName: requested_at }
+  #                                # wireName: el nombre real del cable cuando no es el nuestro
+  #       response:
+  #         fields:
+  #           quotes: { type: json, required: true }
+  #       timeoutMs: 4000

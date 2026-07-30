@@ -30,7 +30,16 @@ consistency:
 - **La frontera la decide el diseñador**, no el agente: con `per-aggregate` un cambio puede confirmar y el otro no, y eso es consistencia eventual aceptada — una decisión de negocio, no un ajuste de rendimiento. Ejes de decisión: `.claude/skills/keel-design/references/structural-decisions.md` §3.7.
 - `consistency.optimisticLocking` decide qué pasa cuando **dos escrituras concurrentes** caen sobre la misma raíz de agregado. También es decisión de negocio, y también observable: cambia el status que ve el cliente.
   - `all` (por defecto): toda raíz de agregado lleva control de versión. Una escritura sobre una versión obsoleta es un **conflicto** y el cliente recibe un error de concurrencia (en HTTP, `409`), no un éxito silencioso. Es lo correcto cuando perder una edición ajena tiene coste: inventario, saldos, estados con máquina de transiciones.
-  - `declared`: solo las raíces que declaren un campo de versión en `domain`. Útil cuando conviven agregados con y sin necesidad de conflicto.
+  - `declared`: solo las raíces que declaren el campo reservado **`lockVersion`** en `domain`. Útil cuando conviven agregados con y sin necesidad de conflicto. El campo se declara en la raíz del agregado y lo lleva la infraestructura, nunca el cliente:
+
+    ```yaml
+    entities:
+      Product:
+        fields:
+          lockVersion: { type: int, generated: true }
+    ```
+
+    `lockVersion` es el **único nombre** que reconoce esta política: es una convención del método, no un nombre libre. `keel validate` avisa si `declared` no encuentra ninguna raíz que lo declare, porque tal como queda el diseño es indistinguible de `none`.
   - `none`: **último escritor gana**. Ninguna escritura falla por concurrencia y la última en confirmar prevalece. Es una decisión legítima —una edición de ficha de catálogo, una preferencia de usuario— pero deliberada: se acepta perder la escritura intermedia.
 - La elección tiene que ser **coherente con `validation-scenarios.md`**: un escenario que ejercita dos mutaciones concurrentes y espera dos respuestas de éxito exige `none`; uno que espera un conflicto exige `all` o `declared`. Declararlo en prosa dentro de `rules` no basta — ningún generador lee prosa, y el resultado es un servidor que contradice su propio escenario.
 

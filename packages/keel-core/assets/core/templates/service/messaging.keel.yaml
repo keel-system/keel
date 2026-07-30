@@ -39,11 +39,14 @@ publishing:
 #         location: header
 #         name: messageId
 #       unknownFields: ignore           # ignore | fail
+#       schemaRef: schemas/stock-depleted-v2.avsc
+#                                       # puntero al schema que publica la fuente (informativo:
+#                                       # ni keel validate ni los generadores lo resuelven)
 #     payload:
 #       productId: { type: uuid, required: true, wireName: product_id }
 #     triggers: retireProduct
 #     input:                            # campo del input de la operación → campo del payload
 #       productId: productId
 #     onFailure:
-#       retry: { maxAttempts: 5, backoff: exponential, initialDelayMs: 1000 }
+#       retry: { maxAttempts: 5, backoff: exponential, initialDelayMs: 1000, maxDelayMs: 30000 }
 #       deadLetter: true

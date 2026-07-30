@@ -9,6 +9,7 @@ service:
   # keel validate trata cualquier description que empiece por "TODO" como placeholder pendiente.
   description: "TODO: describe en una frase qué problema de negocio resuelve este servicio."
   # domain: commerce
+  # basedOn: billing@1.2.0         # linaje: diseño@versión del que se derivó (lo escribe `keel new --from`)
 
 layers:
   domain: domain.keel.yaml         # obligatoria

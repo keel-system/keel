@@ -344,6 +344,26 @@ const domainForEmbed = () => ({
   },
 });
 
+test('embeber una entidad que no figura en ningún agregado es válido (es su propio agregado)', () => {
+  const domain = domainForEmbed();
+  delete domain.aggregates.Customer; // Customer queda fuera de todo agregado declarado
+  const layers = {
+    domain,
+    'use-cases': {
+      operations: {
+        getOrder: {
+          kind: 'query',
+          internal: true,
+          input: { entity: 'Order' },
+          output: { entity: 'Order', embed: ['customer'] },
+        },
+      },
+    },
+  };
+  const { errors } = run(layers);
+  assert.deepEqual(errors, []);
+});
+
 const embedLayers = (embed, { direction = 'output' } = {}) => ({
   domain: domainForEmbed(),
   'use-cases': {
@@ -447,7 +467,9 @@ test('bucket declarado sin ningún campo file que lo referencie es warning', () 
 // --- messaging: canales ↔ eventos/suscripciones ---
 
 const domainForMessaging = () => ({ entities: { Product: entity() } });
-const useCasesForMessaging = () => ({ operations: { retireProduct: { kind: 'command' } } });
+const useCasesForMessaging = () => ({
+  operations: { retireProduct: { kind: 'command', emits: ['ProductRetired'] } },
+});
 
 test('evento y suscripción cuyo canal existe en channels no produce errores ni warnings', () => {
   const layers = {
@@ -691,8 +713,8 @@ test('wireName en una capa interna es error', () => {
 const domainForM2m = () => ({ entities: { Product: entity() } });
 const useCasesForM2m = () => ({
   operations: {
-    getProduct: { kind: 'query' },
-    getProductPrice: { kind: 'query' },
+    getProduct: { kind: 'query', input: { fields: { id: { type: 'uuid' } } }, output: { entity: 'Product' } },
+    getProductPrice: { kind: 'query', input: { fields: { id: { type: 'uuid' } } }, output: { entity: 'Product' } },
   },
 });
 
@@ -1525,4 +1547,272 @@ test('una operación que no devuelve archivos no dispara el warning', () => {
   layers['use-cases'].operations.getProductImage.output = { fields: { name: { type: 'string' } } };
   const { warnings } = run(layers);
   assert.ok(!warnings.some((w) => w.includes('clave inexistente')));
+});
+
+// --- api: variables de ruta ↔ input, internal y coherencia method ↔ kind ---
+
+const apiLayers = (endpoint, opOverrides = {}) => ({
+  domain: {
+    entities: {
+      Product: entity(
+        { sku: { type: 'string', unique: true } },
+        { relations: { category: { entity: 'Category', cardinality: 'many-to-one' } } }
+      ),
+      Category: entity(),
+    },
+  },
+  'use-cases': {
+    operations: {
+      getProduct: {
+        kind: 'query',
+        input: { fields: { sku: { type: 'string' } } },
+        output: { entity: 'Product' },
+        ...opOverrides,
+      },
+    },
+  },
+  api: { endpoints: { getProduct: endpoint } },
+  security: { authentication: { protocol: 'oidc' }, access: { default: { level: 'public' } } },
+});
+
+test('variable de ruta que el input declara es válida', () => {
+  const { errors, warnings } = run(apiLayers({ method: 'GET', path: '/products/{sku}' }));
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
+test('variable de ruta ausente del input es error', () => {
+  const { errors } = run(apiLayers({ method: 'GET', path: '/products/{id}' }));
+  assert.ok(
+    errors.some((e) =>
+      e.includes(`api: endpoints.getProduct.path: la variable '{id}' no está en el input de la operación`)
+    )
+  );
+});
+
+test('varias variables de ruta se reportan por separado', () => {
+  const { errors } = run(apiLayers({ method: 'GET', path: '/catalogs/{catalogId}/products/{id}' }));
+  assert.equal(errors.filter((e) => e.includes('no está en el input de la operación')).length, 2);
+});
+
+test('input void con variables en la ruta es error', () => {
+  const { errors } = run(apiLayers({ method: 'GET', path: '/products/{sku}' }, { input: 'void' }));
+  assert.ok(errors.some((e) => e.includes(`la variable '{sku}' no está en el input de la operación`)));
+});
+
+test('ruta sin variables no exige nada del input', () => {
+  const { errors, warnings } = run(apiLayers({ method: 'GET', path: '/products' }, { input: 'void' }));
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
+test('con input { entity } la variable resuelve contra los campos de la entidad', () => {
+  const { errors } = run(apiLayers({ method: 'GET', path: '/products/{sku}' }, { input: { entity: 'Product' } }));
+  assert.deepEqual(errors, []);
+});
+
+test('con input { entity } una relación resuelve por su nombre o con sufijo Id', () => {
+  const byName = run(apiLayers({ method: 'GET', path: '/products/{category}' }, { input: { entity: 'Product' } }));
+  assert.deepEqual(byName.errors, []);
+  const byId = run(apiLayers({ method: 'GET', path: '/products/{categoryId}' }, { input: { entity: 'Product' } }));
+  assert.deepEqual(byId.errors, []);
+});
+
+test('un campo excluido del input no resuelve la variable de ruta', () => {
+  const { errors } = run(
+    apiLayers({ method: 'GET', path: '/products/{sku}' }, { input: { entity: 'Product', exclude: ['sku'] } })
+  );
+  assert.ok(errors.some((e) => e.includes(`la variable '{sku}' no está en el input de la operación`)));
+});
+
+test('exponer una operación internal: true es error', () => {
+  const { errors } = run(apiLayers({ method: 'GET', path: '/products/{sku}' }, { internal: true }));
+  assert.ok(errors.some((e) => e.includes('api: endpoints.getProduct: la operación está declarada internal: true')));
+});
+
+test('un endpoint cuya operación no existe no cascada más errores', () => {
+  const layers = apiLayers({ method: 'GET', path: '/products/{sku}' });
+  layers.api.endpoints.getOther = { method: 'GET', path: '/others/{id}' };
+  const { errors } = run(layers);
+  assert.deepEqual(errors, ['api: endpoints.getOther: la operación no existe en use-cases']);
+});
+
+test('query expuesta con un método distinto de GET es warning', () => {
+  const { errors, warnings } = run(apiLayers({ method: 'POST', path: '/products/{sku}/search' }));
+  assert.deepEqual(errors, []);
+  assert.ok(warnings.some((w) => w.includes('api: endpoints.getProduct.method: la operación es kind: query')));
+});
+
+test('command expuesto con GET es warning', () => {
+  const layers = apiLayers({ method: 'GET', path: '/products/{sku}' }, { kind: 'command' });
+  const { warnings } = run(layers);
+  assert.ok(warnings.some((w) => w.includes('la operación es kind: command y se expone con GET')));
+});
+
+// --- use-cases: cache.keyFields ↔ input ---
+
+const cacheLayers = (cache) => {
+  const layers = apiLayers({ method: 'GET', path: '/products/{sku}' });
+  layers['use-cases'].operations.getProduct.cache = cache;
+  return layers;
+};
+
+test('keyFields que el input declara es válido', () => {
+  const { errors, warnings } = run(cacheLayers({ ttlSeconds: 60, keyFields: ['sku'] }));
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
+test('keyFields con un campo ajeno al input es error', () => {
+  const { errors } = run(cacheLayers({ ttlSeconds: 60, keyFields: ['skuu'] }));
+  assert.ok(
+    errors.some((e) =>
+      e.includes(`use-cases: getProduct.cache.keyFields: el campo 'skuu' no está en el input de la operación`)
+    )
+  );
+});
+
+test('keyFields sobre una operación con input void es error', () => {
+  const layers = cacheLayers({ ttlSeconds: 60, keyFields: ['sku'] });
+  layers['use-cases'].operations.getProduct.input = 'void';
+  const { errors } = run(layers);
+  assert.ok(errors.some((e) => e.includes(`cache.keyFields: el campo 'sku' no está en el input`)));
+});
+
+// --- use-cases: paginated ↔ list y ↔ api.pagination ---
+
+const paginatedLayers = (output, pagination = { style: 'offset', defaultSize: 20, maxSize: 100 }) => ({
+  domain: { entities: { Product: entity() } },
+  'use-cases': { operations: { listProducts: { kind: 'query', input: 'void', output } } },
+  api: {
+    endpoints: { listProducts: { method: 'GET', path: '/products' } },
+    ...(pagination ? { pagination } : {}),
+  },
+  security: { authentication: { protocol: 'oidc' }, access: { default: { level: 'public' } } },
+});
+
+test('paginated con list y con api.pagination es válido', () => {
+  const { errors, warnings } = run(paginatedLayers({ entity: 'Product', list: true, paginated: true }));
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
+test('paginated sin list es la forma canónica y no dispara nada', () => {
+  // El sobre de paginación ya envuelve la colección: list sería redundante.
+  const { errors, warnings } = run(paginatedLayers({ entity: 'Product', paginated: true }));
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
+test('paginated sin pagination en api es warning', () => {
+  const { errors, warnings } = run(paginatedLayers({ entity: 'Product', list: true, paginated: true }, null));
+  assert.deepEqual(errors, []);
+  assert.ok(warnings.some((w) => w.includes('paginated: true pero api no declara pagination')));
+});
+
+test('un output sin paginated no dispara nada', () => {
+  const { errors, warnings } = run(paginatedLayers({ entity: 'Product', list: true }, null));
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
+// --- messaging: eventos publicados que nadie emite ---
+
+test('evento publicado que ninguna operación emite es warning', () => {
+  const layers = {
+    domain: { entities: { Product: entity() } },
+    'use-cases': { operations: { retireProduct: { kind: 'command', input: 'void', output: 'void' } } },
+    messaging: { publishing: { events: { ProductRetired: { payload: {} } } } },
+  };
+  const { errors, warnings } = run(layers);
+  assert.deepEqual(errors, []);
+  assert.ok(
+    warnings.some((w) =>
+      w.includes('messaging: publishing.events.ProductRetired: evento declarado pero ninguna operación lo emite')
+    )
+  );
+});
+
+test('sin capa use-cases utilizable no se avisa de eventos sin emisor', () => {
+  const layers = {
+    domain: { entities: { Product: entity() } },
+    'use-cases': {},
+    messaging: { publishing: { events: { ProductRetired: { payload: {} } } } },
+  };
+  const { warnings } = run(layers, true);
+  assert.ok(!warnings.some((w) => w.includes('ninguna operación lo emite')));
+});
+
+// --- security: authentication.protocol none ↔ reglas que exigen identidad ---
+
+const noAuthLayers = (access) => ({
+  domain: { entities: { Product: entity() } },
+  'use-cases': { operations: { listProducts: { kind: 'query', input: 'void', output: { entity: 'Product' } } } },
+  api: { endpoints: { listProducts: { method: 'GET', path: '/products' } } },
+  security: { authentication: { protocol: 'none' }, access },
+});
+
+test('protocol none con todo público es válido', () => {
+  const { errors, warnings } = run(noAuthLayers({ default: { level: 'public' } }));
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
+test('protocol none con default que exige identidad es error', () => {
+  const { errors } = run(noAuthLayers({ default: { level: 'required' } }));
+  assert.ok(
+    errors.some((e) => e.includes(`security: authentication.protocol: 'none' pero access.default exige identidad`))
+  );
+});
+
+test('protocol none con una regla por operación que exige identidad es error', () => {
+  const layers = noAuthLayers({ default: { level: 'public' }, rules: { listProducts: { level: 'admin' } } });
+  const { errors } = run(layers);
+  assert.ok(errors.some((e) => e.includes('access.rules.listProducts exige identidad')));
+});
+
+test('protocol none con roles sobre un nivel public sigue siendo error', () => {
+  const layers = noAuthLayers({ default: { level: 'public', roles: ['admin'] } });
+  layers.security.roles = { admin: { description: 'Administra el catálogo' } };
+  const { errors } = run(layers);
+  assert.ok(errors.some((e) => e.includes(`protocol: 'none' pero access.default exige identidad`)));
+});
+
+// --- domain: default de un campo enum ---
+
+const enumLayers = (field, types = {}) => ({
+  domain: { types, entities: { Product: entity({ status: field }) } },
+  'use-cases': {},
+});
+
+test('default que es un valor del enum inline es válido', () => {
+  const { errors } = run(enumLayers({ type: 'enum', values: ['DRAFT', 'ACTIVE'], default: 'DRAFT' }));
+  assert.deepEqual(errors, []);
+});
+
+test('default ajeno al enum inline es error', () => {
+  const { errors } = run(enumLayers({ type: 'enum', values: ['DRAFT', 'ACTIVE'], default: 'BORRADOR' }));
+  assert.ok(
+    errors.some((e) =>
+      e.includes(`domain: Product.fields.status: default 'BORRADOR' no es un valor del enum (DRAFT, ACTIVE)`)
+    )
+  );
+});
+
+test('default ajeno a un enum nominal es error', () => {
+  const { errors } = run(
+    enumLayers({ type: 'ProductStatus', default: 'BORRADOR' }, { ProductStatus: { values: ['DRAFT', 'ACTIVE'] } })
+  );
+  assert.ok(errors.some((e) => e.includes(`default 'BORRADOR' no es un valor del enum (DRAFT, ACTIVE)`)));
+});
+
+test('default sobre un campo no enum no se comprueba', () => {
+  const { errors } = run(enumLayers({ type: 'string', default: 'lo que sea' }));
+  assert.deepEqual(errors, []);
+});
+
+test('default de un campo enum list comprueba cada valor', () => {
+  const { errors } = run(enumLayers({ type: 'enum', values: ['A', 'B'], list: true, default: ['A', 'C'] }));
+  assert.equal(errors.filter((e) => e.includes('no es un valor del enum')).length, 1);
+  assert.ok(errors.some((e) => e.includes(`default 'C' no es un valor del enum`)));
 });

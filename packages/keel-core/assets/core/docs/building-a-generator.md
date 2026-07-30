@@ -68,14 +68,14 @@ keel-<tech>/
 
 **Criterio de frontera del scaffolding**: build genera todo lo derivable mecánicamente del diseño + `keel-stack.json` cuyo código es idéntico sea cual sea la opción de infra elegida (más deps/config/compose, derivados del catálogo de stack). Lo que cambia según la opción concreta (publisher Kafka vs Rabbit, adaptador de storage…) se documenta en la skill por tecnología correspondiente (`skills/keel-<tech>-<infra>/`) y lo escribe el agente. El proyecto recién generado debe compilar y arrancar sin el trabajo del agente (los huecos son stubs que fallan en ejecución, no en compilación).
 
-El paquete **no duplica la validación ni los schemas**: importa `validateService`, `loadService`, `copyTree`, etc. de `keel-core`, que es quien define el DSL. La versión soportada se declara en `src/lib/assets.js` (`SUPPORTED_DSL`), en `package.json` (`"keel": { "dsl": "2.0" }`) y en el README del generador.
+El paquete **no duplica la validación ni los schemas**: importa `validateService`, `loadService`, `copyTree`, etc. de `keel-core`, que es quien define el DSL. La versión soportada se declara en `src/lib/assets.js` (`SUPPORTED_DSL`), en `package.json` (`"keel": { "dsl": "2.3" }`) y en el README del generador.
 
 ## El contrato (README.md del generador)
 
 Debe declarar explícitamente:
 
 1. **Entrada**: el diseño multi-artefacto de `specs/<servicio>/` (manifiesto + capas), validado (`keel validate` + `/keel-validate`).
-2. **Compatibilidad**: qué versiones del DSL soporta (`keel: "2.0"` del manifiesto). Ante una versión no soportada, el generador se detiene — nunca genera "a ver qué sale".
+2. **Compatibilidad**: qué versiones del DSL soporta (`keel: "2.3"` del manifiesto). Ante una versión no soportada, el generador se detiene — nunca genera "a ver qué sale".
 3. **Salida**: repo git propio en `services/<service.name>-<tech>/`, con tests pasando y README que registra `Generado desde <spec> v<service.version>` + decisiones de generación.
 4. **Regla de oro**: el generador nunca inventa ni corrige funcionalidad; los huecos del spec se reportan como cambios propuestos al spec.
 

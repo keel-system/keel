@@ -72,6 +72,7 @@ Atributos de campo:
 | Atributo | Significado |
 |----------|-------------|
 | `type` | Tipo base, value type de `types`, o `enum` (exige `values`) |
+| `description` | Qué significa el campo en el negocio (prosa, en español); no cambia el contrato |
 | `bucket` | Solo (y obligatorio) con `type: file`: bucket de la capa `storage` donde vive el archivo |
 | `required` | El campo debe tener valor al crear |
 | `unique` | No pueden existir dos registros con el mismo valor |
@@ -79,9 +80,13 @@ Atributos de campo:
 | `generated` | Lo asigna la infraestructura (ids, timestamps); nunca lo envía el cliente |
 | `computed` | Lo deriva una regla de dominio a partir de otros campos (la regla es el valor del atributo); nunca lo envía el cliente. Excluyente con `generated` |
 | `sensitive` | Nunca sale en outputs ni eventos por defecto; solo si un payload lo pide explícitamente vía `fields` |
-| `default` | Valor si el cliente no lo provee |
+| `default` | Valor si el cliente no lo provee. Sobre un campo `enum` debe ser uno de sus `values` — `keel validate` lo comprueba |
 | `list` | El campo es una **colección** de valores del tipo declarado (`{ type: Discount, list: true }`). Excluyente con `id`, `unique`, `generated` y `type: file` |
 | `constraints` | `min`, `max`, `minLength`, `maxLength`, `pattern`, `scale`; con `list`, además `minItems` y `maxItems` |
+
+### `lockVersion` — nombre reservado
+
+`lockVersion` es el único nombre de campo con significado fijado por el método: declarado en la **raíz de un agregado** (`lockVersion: { type: int, generated: true }`), marca esa raíz como sujeta a bloqueo optimista cuando `persistence` elige `consistency.optimisticLocking: declared`. Fuera de ese caso no se declara — con `all` (el defecto) toda raíz lo lleva sin que haya que escribirlo, y con `none` no lo lleva ninguna. Ver [persistence.md](persistence.md).
 
 ### Colección: ¿`list` o entidad hija?
 

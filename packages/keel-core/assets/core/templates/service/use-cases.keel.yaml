@@ -13,6 +13,8 @@ operations:
   #       name: { type: string, required: true }
   #   output: { entity: Product }
   #   idempotency: { keySource: client-key, ttlSeconds: 86400 }
+  #   preconditions:                 # qué debe ser cierto ANTES de ejecutar (prosa)
+  #     - El catálogo indicado existe y no está archivado.
   #   rules:
   #     - El sku se normaliza a mayúsculas antes de validar unicidad.
   #   errors:
@@ -28,9 +30,20 @@ operations:
   #   output: { entity: Product }
   #   # exclude admite dot-path para no exponer campos de una entidad hija o value object:
   #   # output: { entity: Product, exclude: [internalNote, variants.costPrice] }
+  #   # embed proyecta una referencia a OTRO agregado como objeto anidado en vez de <relación>Id
+  #   # (solo en output, solo many-to-one/one-to-one, sin encadenar):
+  #   # output: { entity: Product, embed: [catalog] }
   #   cache: { ttlSeconds: 300, keyFields: [id], invalidatedBy: [ProductRetired] }
+  #                                  # keyFields nombra campos del input de ESTA operación
   #   errors:
   #     - { code: PRODUCT_NOT_FOUND, when: No existe un producto con ese id., http: 404 }
+  #
+  # listProducts:
+  #   description: Lista los productos del catálogo de forma paginada.
+  #   kind: query
+  #   input: "void"
+  #   output: { entity: Product, paginated: true }
+  #                                  # paginated ya implica la colección; exige pagination en la capa api
   #
   # reconcilePrices:
   #   description: Reconcilia precios contra el servicio de pricing cada noche.
@@ -38,3 +51,13 @@ operations:
   #   input: "void"
   #   output: "void"
   #   schedule: { cron: "0 3 * * *" }
+  #
+  # recalculateStock:
+  #   description: Recalcula el stock disponible de un producto.
+  #   kind: command
+  #   internal: true                 # sin superficie externa: no se expone por HTTP ni la dispara un evento.
+  #                                  # La llaman otras operaciones del propio servicio
+  #   input:
+  #     fields:
+  #       productId: { type: uuid, required: true }
+  #   output: "void"

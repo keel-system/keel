@@ -9,6 +9,7 @@
 #   ProductStatus:                        # enum nominal, reutilizable en entidades y payloads
 #     values: [draft, active, retired]
 #   Money:                                # value object compuesto, sin identidad propia
+#     description: Importe con su moneda.
 #     fields:
 #       amount:   { type: decimal, required: true, constraints: { min: 0, scale: 2 } }
 #       currency: { type: string, required: true, constraints: { pattern: "^[A-Z]{3}$" } }
@@ -24,9 +25,17 @@ entities:
   #     slug:     { type: string, computed: Se deriva del name normalizado a kebab-case. }
   #     apiToken: { type: string, sensitive: true }
   #     photo:    { type: file, bucket: productImages }   # archivo en un bucket de la capa storage
-  #     status:   { type: ProductStatus, default: draft }
+  #     status:   { type: ProductStatus, default: draft }  # default debe ser uno de los values del enum
+  #     origin:   { type: enum, values: [manual, import], default: manual }   # enum inline, sin nombre reutilizable
+  #     tags:     { type: string, list: true, constraints: { maxItems: 10 } }
+  #                                         # colección de valores SIN identidad propia (si la tienen: entidad hija
+  #                                         # + relations). Excluyente con id/unique/generated y con type: file
+  #     discounts: { type: Discount, list: true, description: Descuentos vigentes del producto. }
+  #     lockVersion: { type: int, generated: true }
+  #                                         # nombre RESERVADO, solo en la raíz de un agregado y solo si persistence
+  #                                         # declara consistency.optimisticLocking: declared (ver docs/dsl/persistence.md)
   #   relations:
-  #     catalog: { entity: Catalog, cardinality: many-to-one }
+  #     catalog: { entity: Catalog, cardinality: many-to-one, required: true, description: Catálogo al que pertenece. }
   #   lifecycle:                          # solo las transiciones listadas son válidas
   #     field: status
   #     transitions:

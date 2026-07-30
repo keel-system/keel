@@ -34,6 +34,7 @@ export function checkCrossRefs({ layers, wip = false }) {
   const referencedBuckets = new Set(); // buckets citados por algún campo file (para detectar huérfanos)
   const channels = new Set(Object.keys(messaging?.channels ?? {}));
   const referencedChannels = new Set(); // canales citados por eventos/suscripciones (para detectar huérfanos)
+  const emittedEvents = new Set(); // eventos citados por algún emits (para detectar publicados que nadie emite)
   const httpCallKeys = new Set(); // `${clientId}|${callName}` — lo llena el bloque http-clients
   const usedHttpCalls = new Set(); // clientes citados por algún need (para detectar clientes sin dependencia)
 
@@ -69,6 +70,22 @@ export function checkCrossRefs({ layers, wip = false }) {
       if (typeof type === 'string' && /^[A-Z]/.test(type) && !types.has(type)) {
         errors.push(`${where}.${name}: el tipo '${type}' no existe en domain: types`);
       }
+      // Un default que no es uno de los valores del enum es un estado inalcanzable:
+      // el generador lo emite tal cual y la entidad nace en un valor que su propia
+      // máquina de estados no conoce.
+      if (field?.default !== undefined) {
+        const values = enumValuesOf(field);
+        if (values) {
+          const defaults = field.list === true && Array.isArray(field.default) ? field.default : [field.default];
+          for (const value of defaults) {
+            if (!values.includes(value)) {
+              errors.push(
+                `${where}.${name}: default '${value}' no es un valor del enum (${values.join(', ')})`
+              );
+            }
+          }
+        }
+      }
       // Campo file: su bucket debe existir en la capa storage (que se diseña al final).
       if (type === 'file' && field?.bucket) {
         referencedBuckets.add(field.bucket);
@@ -92,6 +109,33 @@ export function checkCrossRefs({ layers, wip = false }) {
     if (field.type === 'enum') return field.values ?? null;
     const named = domain.types?.[field.type];
     return Array.isArray(named?.values) ? named.values : null;
+  };
+
+  // Campos que el input de una operación espera recibir de fuera: los generated
+  // (id, timestamps de auditoría) y los computed nunca vienen en el mensaje.
+  const inputFieldsOf = (input) => {
+    if (!input || input === 'void') return null;
+    if (input.fields) return input.fields;
+    if (input.entity && entities.has(input.entity)) {
+      const excluded = new Set(input.exclude ?? []);
+      return Object.fromEntries(
+        Object.entries(domain.entities[input.entity].fields ?? {}).filter(([name]) => !excluded.has(name))
+      );
+    }
+    return null;
+  };
+
+  // ¿Puede el input de una operación resolver este nombre? Lo consultan las variables
+  // de ruta de api y las keyFields de cache. Con input { entity: X } se admite además
+  // una relación, por su nombre o con el sufijo del id, con la misma tolerancia que
+  // aplica persistence a naturalKey/indexes.
+  const inputAcceptsName = (op, name) => {
+    const fields = inputFieldsOf(op?.input);
+    if (fields && Object.hasOwn(fields, name)) return true;
+    const entityName = op?.input?.entity;
+    const relations = entityName ? domain.entities?.[entityName]?.relations ?? {} : {};
+    if (Object.hasOwn(relations, name)) return true;
+    return name.endsWith('Id') && Object.hasOwn(relations, name.slice(0, -2));
   };
 
   // Un item de exclude puede ser un dot-path que entra en entidades hijas (relaciones) o en
@@ -158,15 +202,22 @@ export function checkCrossRefs({ layers, wip = false }) {
     // entidad interna del mismo agregado ya se proyecta anidada por defecto.
     // La auto-referencia (Category.parent → Category) sí es válida: apunta a
     // otra instancia, que es su propio agregado.
+    // Una entidad que no figura en ningún agregado es un agregado propio de una sola
+    // entidad (el bloque domain ya lo avisa), así que referenciarla es referenciar una raíz.
     const aggregateRoots = new Set(Object.values(domain.aggregates ?? {}).map((agg) => agg.root));
-    const targetIsRoot = aggregateRoots.size === 0 || aggregateRoots.has(relation.entity);
+    const targetIsRoot =
+      aggregateRoots.size === 0 || aggregateRoots.has(relation.entity) || !aggregateOf.has(relation.entity);
     if (!targetIsRoot) {
       errors.push(
         `${where}.embed '${relName}': '${relation.entity}' es una entidad interna del agregado '${aggregateOf.get(relation.entity)}' y ya se proyecta anidada; embed es para referencias a la raíz de otro agregado`
       );
       return;
     }
-    if (relation.entity !== rootEntity && aggregateOf.get(rootEntity) === aggregateOf.get(relation.entity)) {
+    if (
+      relation.entity !== rootEntity &&
+      aggregateOf.has(rootEntity) &&
+      aggregateOf.get(rootEntity) === aggregateOf.get(relation.entity)
+    ) {
       errors.push(
         `${where}.embed '${relName}': '${relation.entity}' pertenece al mismo agregado que '${rootEntity}'; embed es para referencias a otro agregado`
       );
@@ -183,6 +234,13 @@ export function checkCrossRefs({ layers, wip = false }) {
     if (!payload || payload === 'void') return;
     if (payload.entity && !entities.has(payload.entity)) {
       errors.push(`${where}: la entidad '${payload.entity}' no existe en domain: entities`);
+    }
+    // paginated ya implica la colección (el sobre { items, page, size, … } la envuelve),
+    // pero sin la política de pagination de api el generador no tiene tamaño de página ni tope.
+    if (direction === 'output' && payload.paginated === true && !api?.pagination) {
+      warnings.push(
+        `${where}: paginated: true pero api no declara pagination (style/defaultSize/maxSize) — el generador no tiene tamaño de página ni tope`
+      );
     }
     if (payload.entity && entities.has(payload.entity)) {
       for (const path of payload.exclude ?? []) {
@@ -305,6 +363,7 @@ export function checkCrossRefs({ layers, wip = false }) {
     checkPayload(op.input, `use-cases: ${opName}.input`, { direction: 'input' });
     checkPayload(op.output, `use-cases: ${opName}.output`);
     for (const event of op.emits ?? []) {
+      emittedEvents.add(event);
       if (!publishedEvents.has(event)) {
         if (!messaging && wip) {
           pending.push(`use-cases: ${opName}.emits: el evento '${event}' está pendiente de definir en messaging`);
@@ -327,15 +386,56 @@ export function checkCrossRefs({ layers, wip = false }) {
         }
       }
     }
+    // La clave de caché se compone con campos del input: un nombre que la operación no
+    // recibe produce una clave que nunca varía por ese eje (o que el generador no puede
+    // resolver), y el fallo es silencioso — se sirve la entrada equivocada.
+    for (const keyField of op.cache?.keyFields ?? []) {
+      if (!inputAcceptsName(op, keyField)) {
+        errors.push(
+          `use-cases: ${opName}.cache.keyFields: el campo '${keyField}' no está en el input de la operación`
+        );
+      }
+    }
     if (op.cache && op.kind !== 'query') {
       warnings.push(`use-cases: ${opName}: tiene cache pero no es kind: query`);
     }
   }
 
-  // api: endpoints → operaciones
-  for (const opName of Object.keys(api?.endpoints ?? {})) {
+  // api: endpoints → operaciones, variables de ruta ↔ input, y coherencia con la operación
+  for (const [opName, endpoint] of Object.entries(api?.endpoints ?? {})) {
+    const where = `api: endpoints.${opName}`;
     if (!operationNames.has(opName)) {
-      errors.push(`api: endpoints.${opName}: la operación no existe en use-cases`);
+      errors.push(`${where}: la operación no existe en use-cases`);
+      continue;
+    }
+    const op = operations[opName];
+    // internal: true declara que la operación no tiene superficie externa. Exponerla por
+    // HTTP contradice esa declaración; el warning de operación huérfana cubre el caso opuesto.
+    if (op.internal === true) {
+      errors.push(
+        `${where}: la operación está declarada internal: true — una operación interna no se expone por HTTP`
+      );
+    }
+    // Cada {variable} de la ruta se convierte en un parámetro de ruta que el generador
+    // tiene que bindear a un campo del input. La comprobación espejo existe desde 2.1
+    // para http-clients (path ↔ request.pathParams); esta es la del lado servidor.
+    for (const variable of [...(endpoint.path ?? '').matchAll(/\{([A-Za-z][A-Za-z0-9]*)\}/g)].map((m) => m[1])) {
+      if (!inputAcceptsName(op, variable)) {
+        errors.push(
+          `${where}.path: la variable '{${variable}}' no está en el input de la operación — el generador no tiene a qué bindear el parámetro de ruta`
+        );
+      }
+    }
+    // Aviso, no error: una búsqueda con criterios extensos por POST es legítima.
+    if (op.kind === 'query' && endpoint.method !== undefined && endpoint.method !== 'GET') {
+      warnings.push(
+        `${where}.method: la operación es kind: query y se expone con ${endpoint.method} — una lectura se expone con GET salvo que la entrada no quepa en la URL`
+      );
+    }
+    if (op.kind === 'command' && endpoint.method === 'GET') {
+      warnings.push(
+        `${where}.method: la operación es kind: command y se expone con GET — una escritura no debe viajar en un método idempotente y cacheable`
+      );
     }
   }
 
@@ -378,6 +478,28 @@ export function checkCrossRefs({ layers, wip = false }) {
         if (!permissions.has(scope)) {
           errors.push(`security: serviceClients.${client}: el scope '${scope}' no existe en security: permissions`);
         }
+      }
+    }
+    // protocol: none declara que el servicio no autentica a nadie. Una regla que exija
+    // identidad (nivel por encima de public, roles, permisos o scopes) no tiene entonces
+    // de dónde sacar el sujeto contra el que decidir: el diseño se contradice.
+    if (security.authentication?.protocol === 'none') {
+      const demandsIdentity = (rule) =>
+        Boolean(rule) &&
+        ((rule.level !== undefined && rule.level !== 'public') ||
+          rule.roles !== undefined ||
+          rule.permissions !== undefined ||
+          rule.scopes !== undefined);
+      const offending = [
+        ...(demandsIdentity(security.access?.default) ? ['access.default'] : []),
+        ...Object.entries(security.access?.rules ?? {})
+          .filter(([, rule]) => demandsIdentity(rule))
+          .map(([opName]) => `access.rules.${opName}`)
+      ];
+      if (offending.length > 0) {
+        errors.push(
+          `security: authentication.protocol: 'none' pero ${offending.join(', ')} exige identidad (level distinto de public, roles, permissions o scopes) — sin autenticación no hay sujeto contra el que decidir`
+        );
       }
     }
     // cors: política del canal HTTP entrante, sin sentido sin capa api. Y con el
@@ -508,20 +630,6 @@ export function checkCrossRefs({ layers, wip = false }) {
       );
     }
   }
-  // Campos que el input de una operación espera recibir de fuera: los generated
-  // (id, timestamps de auditoría) y los computed nunca vienen en el mensaje.
-  const inputFieldsOf = (input) => {
-    if (!input || input === 'void') return null;
-    if (input.fields) return input.fields;
-    if (input.entity && entities.has(input.entity)) {
-      const excluded = new Set(input.exclude ?? []);
-      return Object.fromEntries(
-        Object.entries(domain.entities[input.entity].fields ?? {}).filter(([name]) => !excluded.has(name))
-      );
-    }
-    return null;
-  };
-
   for (const [eventName, sub] of Object.entries(messaging?.subscriptions ?? {})) {
     const where = `messaging: subscriptions.${eventName}`;
     checkFieldMap(sub.payload, `${where}.payload`, { allowWireName: true });
@@ -847,7 +955,7 @@ export function checkCrossRefs({ layers, wip = false }) {
     );
     if (withVersion.length === 0) {
       warnings.push(
-        `persistence: consistency.optimisticLocking: 'declared' pero ninguna raíz de agregado declara el campo 'lockVersion' en domain — equivale a 'none' (último escritor gana). Declara el campo donde el conflicto deba observarse, o usa 'all'/'none' explícitamente`
+        `persistence: consistency.optimisticLocking: 'declared' pero ninguna raíz de agregado declara el campo reservado 'lockVersion' en domain (p. ej. 'lockVersion: { type: int, generated: true }' en la raíz, ver docs/dsl/persistence.md) — tal como está equivale a 'none' (último escritor gana). Declara el campo donde el conflicto deba observarse, o usa 'all'/'none' explícitamente`
       );
     }
   }
@@ -874,6 +982,17 @@ export function checkCrossRefs({ layers, wip = false }) {
     if (!referencedBuckets.has(bucketName)) {
       warnings.push(
         `storage: buckets.${bucketName}: bucket declarado pero sin ningún campo file que lo referencie`
+      );
+    }
+  }
+
+  // messaging: eventos publicados que ninguna operación emite. Nada los produciría en
+  // ejecución: o falta el emits en la operación que causa el hecho, o el evento sobra.
+  // Con use-cases aún en plantilla no hay nada que contrastar (el pending ya lo dice).
+  for (const eventName of operationNames.size > 0 ? publishedEvents : []) {
+    if (!emittedEvents.has(eventName)) {
+      warnings.push(
+        `messaging: publishing.events.${eventName}: evento declarado pero ninguna operación lo emite (use-cases: emits) — nada lo publicaría`
       );
     }
   }

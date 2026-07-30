@@ -1,0 +1,244 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { validateService } from '../src/lib/validate-service.js';
+
+function makeServiceDir(t, files) {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-validate-'));
+  t.after(() => fs.rmSync(base, { recursive: true, force: true }));
+  for (const [name, content] of Object.entries(files)) {
+    fs.writeFileSync(path.join(base, name), content);
+  }
+  return base;
+}
+
+function manifest({ layers = ['domain', 'use-cases'], description = 'Gestiona la facturación de pedidos.' } = {}) {
+  const layerLines = layers.map((l) => `  ${l}: ${l}.keel.yaml`).join('\n');
+  return (
+    'keel: "2.3"\n' +
+    'service:\n' +
+    '  name: billing\n' +
+    '  version: 1.0.0\n' +
+    `  description: ${description}\n` +
+    `layers:\n${layerLines}\n`
+  );
+}
+
+const DOMAIN = `
+entities:
+  Invoice:
+    fields:
+      id:    { type: uuid, id: true, generated: true }
+      total: { type: decimal, required: true }
+`;
+
+const USE_CASES = `
+operations:
+  createInvoice:
+    description: Da de alta una factura.
+    kind: command
+    internal: true
+    input:
+      fields:
+        total: { type: decimal, required: true }
+    output: { entity: Invoice }
+`;
+
+// --- camino feliz ---
+
+test('un diseño completo y coherente valida en verde', (t) => {
+  const dir = makeServiceDir(t, {
+    'service.keel.yaml': manifest(),
+    'domain.keel.yaml': DOMAIN,
+    'use-cases.keel.yaml': USE_CASES
+  });
+  const result = validateService(dir);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.loadErrors, []);
+  assert.deepEqual(result.schemaErrors, []);
+  assert.deepEqual(result.crossRefErrors, []);
+  assert.deepEqual(result.pending, []);
+});
+
+test('los warnings no impiden que el diseño sea generable', (t) => {
+  const dir = makeServiceDir(t, {
+    'service.keel.yaml': manifest(),
+    'domain.keel.yaml': DOMAIN,
+    // sin internal ni endpoint ni schedule: operación huérfana, que es warning
+    'use-cases.keel.yaml': USE_CASES.replace('    internal: true\n', '')
+  });
+  const result = validateService(dir);
+  assert.equal(result.ok, true);
+  assert.ok(result.warnings.some((w) => w.includes('operación huérfana')));
+});
+
+// --- capa 0: diseño incompleto (plantillas y placeholders) ---
+
+test('una capa obligatoria en estado plantilla es pending, no error de schema', (t) => {
+  const dir = makeServiceDir(t, {
+    'service.keel.yaml': manifest(),
+    'domain.keel.yaml': DOMAIN,
+    'use-cases.keel.yaml': 'operations:\n'
+  });
+  const result = validateService(dir);
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.schemaErrors, []);
+  assert.ok(result.pending.some((p) => p.includes('use-cases.keel.yaml sigue siendo la plantilla: no define ninguna operación')));
+});
+
+test('cada capa con plantilla reconocible se detecta por su hint', (t) => {
+  const cases = {
+    domain: ['entities:\n', 'no define ninguna entidad'],
+    'use-cases': ['operations:\n', 'no define ninguna operación'],
+    messaging: ['publishing:\n  events:\n', 'no define eventos publicados ni suscripciones'],
+    'http-clients': ['clients:\n', 'no define ningún cliente'],
+    dependencies: ['dependencies:\n', 'no declara ninguna dependencia'],
+    persistence: ['entities:\n', 'no menciona ninguna entidad']
+  };
+  for (const [layer, [content, hint]] of Object.entries(cases)) {
+    const files = {
+      'service.keel.yaml': manifest({ layers: ['domain', 'use-cases', layer].filter((l, i, a) => a.indexOf(l) === i) }),
+      'domain.keel.yaml': DOMAIN,
+      'use-cases.keel.yaml': USE_CASES
+    };
+    files[`${layer}.keel.yaml`] = content;
+    const result = validateService(makeServiceDir(t, files));
+    assert.ok(
+      result.pending.some((p) => p.includes(`${layer}.keel.yaml sigue siendo la plantilla: ${hint}`)),
+      `${layer}: no se detectó la plantilla (${JSON.stringify(result.pending)})`
+    );
+  }
+});
+
+test('una description que sigue siendo TODO es pending', (t) => {
+  const dir = makeServiceDir(t, {
+    'service.keel.yaml': manifest({ description: 'TODO describe el servicio' }),
+    'domain.keel.yaml': DOMAIN,
+    'use-cases.keel.yaml': USE_CASES
+  });
+  const result = validateService(dir);
+  assert.equal(result.ok, false);
+  assert.ok(result.pending.some((p) => p.includes('service.description sigue siendo un placeholder')));
+});
+
+test('el placeholder heredado de las plantillas antiguas también es pending', (t) => {
+  const dir = makeServiceDir(t, {
+    'service.keel.yaml': manifest({
+      description: 'Describe en una frase qué problema de negocio resuelve este servicio.'
+    }),
+    'domain.keel.yaml': DOMAIN,
+    'use-cases.keel.yaml': USE_CASES
+  });
+  const result = validateService(dir);
+  assert.ok(result.pending.some((p) => p.includes('service.description sigue siendo un placeholder')));
+});
+
+// --- el corte antes de las referencias cruzadas ---
+
+test('sin --wip los pendientes cortan antes de cruzar referencias', (t) => {
+  const dir = makeServiceDir(t, {
+    'service.keel.yaml': manifest({ description: 'TODO describe el servicio' }),
+    'domain.keel.yaml': DOMAIN,
+    // referencia una entidad inexistente: si se llegara a cruzar, saldría en crossRefErrors
+    'use-cases.keel.yaml': USE_CASES.replace('{ entity: Invoice }', '{ entity: Receipt }')
+  });
+  const result = validateService(dir);
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.crossRefErrors, []);
+  assert.deepEqual(result.warnings, []);
+});
+
+test('con --wip los pendientes no cortan y las referencias sí se cruzan', (t) => {
+  const dir = makeServiceDir(t, {
+    'service.keel.yaml': manifest({ description: 'TODO describe el servicio' }),
+    'domain.keel.yaml': DOMAIN,
+    'use-cases.keel.yaml': USE_CASES.replace('{ entity: Invoice }', '{ entity: Receipt }')
+  });
+  const result = validateService(dir, { wip: true });
+  assert.equal(result.ok, false);
+  assert.ok(result.crossRefErrors.some((e) => e.includes(`la entidad 'Receipt' no existe en domain: entities`)));
+});
+
+test('un error de schema corta antes de cruzar referencias', (t) => {
+  const dir = makeServiceDir(t, {
+    'service.keel.yaml': manifest(),
+    'domain.keel.yaml': DOMAIN,
+    'use-cases.keel.yaml': USE_CASES + '    campoDesconocido: 1\n'
+  });
+  const result = validateService(dir);
+  assert.equal(result.ok, false);
+  assert.ok(result.schemaErrors.some((entry) => entry.file === 'use-cases.keel.yaml'));
+  assert.deepEqual(result.crossRefErrors, []);
+});
+
+test('una capa en plantilla no se valida contra su schema', (t) => {
+  // `messaging: publishing: events:` sin events viola el anyOf del schema; como es
+  // plantilla, se reporta como pending y no como error de schema.
+  const dir = makeServiceDir(t, {
+    'service.keel.yaml': manifest({ layers: ['domain', 'use-cases', 'messaging'] }),
+    'domain.keel.yaml': DOMAIN,
+    'use-cases.keel.yaml': USE_CASES,
+    'messaging.keel.yaml': 'publishing:\n  events:\n'
+  });
+  const result = validateService(dir);
+  assert.deepEqual(result.schemaErrors, []);
+  assert.ok(result.pending.some((p) => p.includes('messaging.keel.yaml sigue siendo la plantilla')));
+});
+
+// --- en modo wip, una capa en plantilla se trata como ausente al cruzar ---
+
+test('con --wip un emits contra una messaging en plantilla queda pendiente, no roto', (t) => {
+  const dir = makeServiceDir(t, {
+    'service.keel.yaml': manifest({ layers: ['domain', 'use-cases', 'messaging'] }),
+    'domain.keel.yaml': DOMAIN,
+    'use-cases.keel.yaml': USE_CASES + '    emits: [InvoiceCreated]\n',
+    'messaging.keel.yaml': 'publishing:\n  events:\n'
+  });
+  const result = validateService(dir, { wip: true });
+  assert.deepEqual(result.crossRefErrors, []);
+  assert.ok(
+    result.pending.some((p) => p.includes(`emits: el evento 'InvoiceCreated' está pendiente de definir en messaging`))
+  );
+});
+
+test('con la capa messaging ya diseñada un emits desconocido sí es error', (t) => {
+  const dir = makeServiceDir(t, {
+    'service.keel.yaml': manifest({ layers: ['domain', 'use-cases', 'messaging'] }),
+    'domain.keel.yaml': DOMAIN,
+    'use-cases.keel.yaml': USE_CASES + '    emits: [InvoiceCreated]\n',
+    'messaging.keel.yaml': 'publishing:\n  events:\n    InvoicePaid:\n      payload: { id: { type: uuid } }\n'
+  });
+  const result = validateService(dir, { wip: true });
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.crossRefErrors.some((e) =>
+      e.includes(`emits: el evento 'InvoiceCreated' no está en messaging: publishing.events`)
+    )
+  );
+});
+
+// --- carga ---
+
+test('sin manifiesto se devuelve el resultado vacío sin tocar schemas', (t) => {
+  const dir = makeServiceDir(t, { 'domain.keel.yaml': DOMAIN });
+  const result = validateService(dir);
+  assert.equal(result.ok, false);
+  assert.equal(result.manifest, undefined);
+  assert.ok(result.loadErrors.length > 0);
+  assert.deepEqual(result.schemaErrors, []);
+});
+
+test('un error de carga corta antes de cruzar referencias', (t) => {
+  const dir = makeServiceDir(t, {
+    'service.keel.yaml': manifest({ layers: ['domain', 'use-cases', 'persistence'] }),
+    'domain.keel.yaml': DOMAIN,
+    'use-cases.keel.yaml': USE_CASES
+    // persistence.keel.yaml declarado en layers pero ausente del disco
+  });
+  const result = validateService(dir);
+  assert.equal(result.ok, false);
+  assert.ok(result.loadErrors.length > 0);
+  assert.deepEqual(result.crossRefErrors, []);
+});

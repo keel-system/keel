@@ -102,6 +102,7 @@ Es también la forma que asume `envelope: keel` al describir el [contrato de rec
 
 - Cada suscripción indica su `source`, el `payload` esperado y la operación local que dispara (`triggers`, referencia por nombre a `use-cases`).
 - `onFailure` declara la política de consumo: `retry` (reintentos con backoff) y `deadLetter` (tras agotarlos, el mensaje va a una DLQ).
+- `retry` admite `maxAttempts` (obligatorio), `backoff` (`fixed` | `exponential`, por defecto `exponential`), `initialDelayMs` y `maxDelayMs` (tope al que la espera deja de crecer con `backoff: exponential`) — el mismo juego de campos que `http-clients`.
 - Si una suscripción reintenta (`maxAttempts > 1`), la operación disparada debería declarar `idempotency` — la skill `/keel-validate` lo comprueba.
 
 ### Contrato de recepción (`contract`)
