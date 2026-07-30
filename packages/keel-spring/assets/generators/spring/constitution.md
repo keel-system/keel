@@ -56,4 +56,4 @@ Cómo se escriben los value objects monetarios y sus operaciones: `conventions/d
 
 ## Ante ambigüedad
 
-Orden de autoridad: **diseño > conventions > golden > criterio del agente** (documentado en el README del proyecto generado). Nunca se inventa comportamiento no declarado en los artefactos para tapar un hueco.
+Orden de autoridad: **diseño > conventions > criterio del agente** (documentado en el README del proyecto generado). Nunca se inventa comportamiento no declarado en los artefactos para tapar un hueco.

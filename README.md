@@ -21,7 +21,7 @@ Este repo es un **monorepo npm workspaces** con dos tipos de paquete:
 | Paquete | CLI | Qué hace |
 |---------|-----|----------|
 | `packages/keel-core` | `keel` | El core: siembra workspaces, crea servicios y valida diseños. Define el DSL (schemas, docs, plantillas) y expone su validación como librería para los generadores. |
-| `packages/keel-spring` | `keel-spring` | Generador Spring Boot: `build` instala su skill + convenciones + referencias, valida el diseño, pregunta el stack y genera el scaffolding transversal (el proyecto arranca); el código dependiente de la infra elegida y la lógica de negocio los genera el agente. Futuro: `keel-nest`, `keel-fastapi`, … |
+| `packages/keel-spring` | `keel-spring` | Generador Spring Boot: `build` valida el diseño, pregunta el stack y genera `services/<servicio>-spring/` con el scaffolding transversal (el proyecto arranca) más el `.claude/` de ese proyecto —skill, agentes, conventions y skills del stack—; en el workspace de diseño no escribe nada. El código dependiente de la infra elegida y la lógica de negocio los completa el agente. Futuro: `keel-nest`, `keel-fastapi`, … |
 
 ## Instalación
 
@@ -31,8 +31,6 @@ npm install
 npm link --workspace packages/keel-core          # comando `keel`
 npm link --workspace packages/keel-spring        # comando `keel-spring`
 ```
-
-(Publicación en npm pendiente; los `bin` ya están configurados.)
 
 ## Uso
 
@@ -132,7 +130,7 @@ keel/
     │   └── assets/core/          # lo que `keel init` siembra (skills, schemas, plantillas, docs)
     └── keel-spring/              # generador Spring Boot
         ├── src/                  # CLI: comando build + scaffolding transversal (src/scaffold, src/lib)
-        └── assets/               # lo que `keel-spring build` instala (skill + conventions + skills por tecnología + golden)
+        └── assets/               # lo que `keel-spring build` instala (skill + agentes + conventions + skills por tecnología)
 ```
 
 Los assets **son** la metodología: el DSL se documenta en `packages/keel-core/assets/core/docs/dsl-reference.md`, el schema vive en `packages/keel-core/assets/core/schema/`, y cada generador en su propio paquete `packages/keel-<tech>/`. Para crear un generador nuevo: `packages/keel-core/assets/core/docs/building-a-generator.md`.
@@ -143,3 +141,10 @@ Los assets **son** la metodología: el DSL se documenta en `packages/keel-core/a
 - **Cero tecnología en el diseño.** ORM, framework, broker, proveedor de auth o base de datos concreta se deciden al generar, nunca al diseñar.
 - **Iterable por humanos y agentes, capa a capa.** Cada artefacto es YAML legible y pequeño: un humano revisa una capa en un diff, un agente la produce y la consume; las capas se relacionan por nombre y `keel validate` comprueba las referencias.
 - **Regenerable.** Cambiar de stack es re-ejecutar la generación, no reescribir el diseño.
+
+## Estado y roadmap
+
+- **DSL Keel 2.3**: diez capas (dos obligatorias, ocho opcionales) con validación en tres niveles — JSON Schema por capa, referencias cruzadas mecánicas y revisión semántica del agente.
+- **CLI `keel` completa**: `init`, `new`, `list`, `validate`, `describe`, `index`, `system` y `registry`, más las ocho skills del flujo de diseño que siembra `keel init`.
+- **Un generador en producción**: `keel-spring` (Spring Boot 3.5 / Java 21), con orquestación de cinco subagentes y puntuación determinista de escenarios. Criterio de terminado: `./gradlew build -x test` en verde más `./gradlew integrationTest` con el 100% de los escenarios `FL-*` en OK contra la infraestructura real.
+- **Pendiente**: publicación en npm (los `bin` ya están configurados); más generadores (`keel-nest`, `keel-fastapi`); detección de drift entre spec y **código generado** —la de spec ↔ documentación ya la cubren los sellos de versión y `keel describe`—; sincronización inversa.

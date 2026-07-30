@@ -14,7 +14,7 @@ cd services/<servicio>-spring
 ## Contrato
 
 - **Entrada**: el diseño multi-artefacto de un servicio de este workspace — `specs/<servicio>/` con manifiesto (`service.keel.yaml`) más un artefacto por capa —, **ya validado** (`keel validate` + `/keel-validate`). `keel-spring build` ejecuta esa validación antes de generar el scaffolding.
-- **Compatibilidad**: DSL `keel: "2.0"` y `keel: "2.1"`. Si el manifiesto declara otra versión, el generador se detiene y lo reporta.
+- **Compatibilidad**: DSL `keel: "2.0"`, `"2.1"`, `"2.2"` y `"2.3"`. Si el manifiesto declara otra versión, el generador se detiene y lo reporta.
 - **Salida**: un repo git propio en `services/<service.name>-spring/`, compilando (`./gradlew build -x test`) y con los escenarios `FL-*` validados en vivo al 100%, un README que registra `Generado desde specs/<servicio> v<service.version>` y las decisiones de generación tomadas, y `.claude/` (`CLAUDE.md`, `architecture.md`, `constitution.md`, skill orquestadora, `conventions/`, skills por tecnología del stack) + `specs/` (snapshot) que permiten al agente completar la generación arrancando con cwd en el propio proyecto o desde un clon del repo.
 - **Regeneración segura**: re-ejecutar `build` solo añade archivos nuevos; lo implementado por el agente no se pisa (con `--force` se sobrescribe todo lo generado).
 - **El diseño manda**: este generador nunca inventa ni corrige funcionalidad. Un hueco en el diseño se reporta como cambio propuesto a los artefactos, no se resuelve en el código.
@@ -37,14 +37,9 @@ cd services/<servicio>-spring
 | `conventions/dependencies.md` | Capa `dependencies`: proyecciones de réplica (`<Entidad>Projector` / `<Entidad>Reader`) y su cableado listener → guard → mediator → handler |
 | `conventions/virtual-threads.md` | I/O paralela con hilos virtuales en query handlers |
 | `skills/` | Skills por tecnología del stack (`keel-spring-<tech>/` — database, kafka, rabbitmq, snssqs, s3, redis, keycloak, cognito; SKILL.md + `references/` bajo demanda), instaladas condicionalmente en el `.claude/skills/` del proyecto generado según `keel-stack.json` |
-| `golden/` | Ejemplo de referencia para estilo y detección de regresiones |
 
 ## Compatibilidad
 
 | Generador | DSL Keel |
 |-----------|----------|
-| keel-spring (actual) | `keel: "2.0"`, `keel: "2.1"` |
-
-## Estado
-
-**Esqueleto.** Las convenciones están definidas; se consolidarán generando el primer servicio real, que además poblará `golden/`.
+| keel-spring (actual) | `keel: "2.0"`, `keel: "2.1"`, `keel: "2.2"`, `keel: "2.3"` |

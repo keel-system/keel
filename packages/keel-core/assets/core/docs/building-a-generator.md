@@ -62,7 +62,7 @@ keel-<tech>/
 │   ├── commands/build.js
 │   ├── lib/             # assets.js (rutas + SUPPORTED_DSL), model.js (DSL → modelo), stack-catalog/config
 │   └── scaffold/        # un módulo por artefacto transversal al stack (patrón de keel-spring)
-├── assets/              # fuente del .claude/ del proyecto generado: skill, agents, conventions, skills/<infra>, golden
+├── assets/              # fuente del .claude/ del proyecto generado: skill, agents, conventions, skills/<infra>
 └── test/
 ```
 
@@ -87,12 +87,8 @@ Es el corazón del generador: cada construcción del DSL (entidad, campo `unique
 - **Nada declarado se ignora en silencio.** El DSL es más ancho que cualquier generador concreto, y eso es correcto: se ajusta el generador, nunca el DSL. Lo que no vale es que el generador reciba una construcción que no sabe mapear y produzca su default como si nada — el diseñador cree que se generó y nadie se lo desmiente. Declara la frontera **en código**, no solo en prosa: un módulo tipo `src/lib/supported-features.js` que el comando `build` consulta justo después del chequeo de `SUPPORTED_DSL` y que devuelve errores (impiden generar) y avisos (dejan seguir, diciendo qué se genera en su lugar). Es el sitio donde se acumula todo lo que el generador aún no cubre, y desaparece de allí cuando se implementa. Sin ese chequeo, la superficie no cubierta es exactamente la que ningún diseño de ejemplo haya usado todavía — y no se descubre hasta que un servicio real la necesita.
 - La capa `dependencies` es de **síntesis**: sus referencias (`fetchedFrom`, `replica.fedBy`) apuntan a construcciones que el generador ya traduce desde `http-clients` y `messaging`, así que no debe producir un segundo cliente ni un segundo listener. Lo que sí exige código propio es `replica` (materializar la copia y mantenerla al día de forma idempotente) y `onMiss` (la política de lectura cuando el dato falta: pedirlo, fallar con el error declarado, o degradar). Un generador puede ignorar la capa entera y seguir siendo correcto para `strategy: on-demand`; con `replicated` no, porque la copia no se mantendría sola.
 - Los `code` de error y nombres de evento se trasladan exactos: son contrato público.
-- Define el orden de autoridad: spec > mapping > golden > criterio del agente (documentado).
+- Define el orden de autoridad: spec > mapping > criterio del agente (documentado).
 - Incluye la política de tests: por operación (feliz + cada error), por invariante, y el comando de verificación que debe pasar antes de dar la generación por terminada.
-
-## El golden example
-
-Tras la primera generación real aprobada, congela en `golden/` el diseño usado y el resultado. Sirve como referencia de estilo y como detector de regresiones: al cambiar la skill o las conventions, regenera el diseño fijo y compara contra el golden.
 
 ## Proceso para crear un generador nuevo
 
@@ -101,7 +97,7 @@ Un generador nuevo es un paquete `packages/keel-<tech>/` en el monorepo de Keel 
 1. Copia `packages/keel-spring/` y adapta: `package.json` (name, bin, descripción), `src/lib/assets.js` (skill y tecnología), y el contenido de `assets/` — README, skill y conventions de la tecnología (verifica versiones actuales del stack con `find-docs`).
 2. Escribe la tabla de mapeo completa recorriendo `docs/dsl-reference.md` construcción por construcción.
 3. Pruébalo en un workspace: `npm link` del paquete, `keel-<tech> build specs/<servicio>` y genera un servicio existente (idealmente el mismo diseño que otro generador ya generó); después `cd` al proyecto y completa con `/keel-generate-<tech>`. Compara comportamiento observable con el otro generador: mismos endpoints, mismos códigos de error, mismos eventos.
-4. Refina la skill y las conventions con lo aprendido y puebla `golden/`. El generador mejora con cada uso.
+4. Refina la skill y las conventions con lo aprendido. El generador mejora con cada uso.
 
 ## Versionado
 

@@ -149,7 +149,7 @@ misma raíz. Todo lo que hagas ocurre dentro de ella.
 - Todo identificador que escribas (paquetes, directorios, archivos, clases, métodos,
   variables, tablas) va en inglés; comentarios y docs en español. Un identificador en
   español en el diseño no se traduce por tu cuenta: es un `blocker`.
-- Ante ambigüedad: diseño > conventions > golden > tu criterio (documentado).
+- Ante ambigüedad: diseño > conventions > tu criterio (documentado).
 - **Un hueco de infraestructura no es un `designGap`.** Si una regla del diseño no
   tiene la vía nativa disponible (una extensión SQL que no está, una capacidad del
   dialecto que falta), busca la implementación equivalente en la capa de aplicación

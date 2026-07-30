@@ -149,10 +149,4 @@ El flujo asume regeneración completa: el proyecto generado se puede borrar y vo
 
 ## Añadir una tecnología nueva
 
-Cada tecnología es un generador con paquete npm y CLI propios — `npm i -g keel-<tech>`, y `keel-<tech> build specs/<servicio>` genera el proyecto (los conocidos: `keel list`) —: su contrato (README), su skill de generación, sus conventions (tabla de mapeo spec → código), sus skills por tecnología del stack (instaladas condicionalmente en el proyecto generado según `keel-stack.json`) y su golden example. Todo eso se instala en el `.claude/` del proyecto generado, nunca en el workspace de diseño. La receta completa para crear uno está en [building-a-generator.md](building-a-generator.md). El generador es el "template": mejora con cada generación.
-
-## Estado actual y fases
-
-- **Fase 1 (esta)**: metodología, DSL v2.0 multi-artefacto (schemas por capa, cross-refs en la CLI), skills, y la CLI `keel` (init/new/add/list/validate); generador `spring` como esqueleto (aún pendiente de adaptar a 2.0).
-- **Fase 2**: primer servicio real (productos/catálogos) generado en Spring Boot; adaptar el generador spring al diseño por capas y poblar su `golden/`.
-- **Futuro**: más generadores (nest, fastapi), publicación en npm, detección de drift entre spec y **código generado** (la de spec ↔ documentación ya la cubren los sellos de versión y `keel describe`), sincronización inversa.
+Cada tecnología es un generador con paquete npm y CLI propios — `npm i -g keel-<tech>`, y `keel-<tech> build specs/<servicio>` genera el proyecto (los conocidos: `keel list`) —: su contrato (README), su skill de generación, sus conventions (tabla de mapeo spec → código) y sus skills por tecnología del stack (instaladas condicionalmente en el proyecto generado según `keel-stack.json`). Todo eso se instala en el `.claude/` del proyecto generado, nunca en el workspace de diseño. La receta completa para crear uno está en [building-a-generator.md](building-a-generator.md). El generador es el "template": mejora con cada generación.

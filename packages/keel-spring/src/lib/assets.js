@@ -4,7 +4,8 @@ import { fileURLToPath } from 'node:url';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-// Assets del generador: skill + conventions + golden que `build` copia al workspace.
+// Assets del generador: fuente del .claude/ del proyecto generado (skill, agentes,
+// conventions, skills por tecnología). Nada de esto se copia al workspace de diseño.
 export const assetsDir = path.join(packageRoot, 'assets');
 
 // Wrapper de Gradle vendorizado (fuera de assets/: solo va al proyecto generado).

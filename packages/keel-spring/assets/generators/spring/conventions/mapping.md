@@ -1,6 +1,6 @@
 # Mapeo diseño Keel → código Spring
 
-Tabla normativa, organizada por capa del diseño (`specs/<servicio>/<capa>.keel.yaml`). Ante ambigüedad, el orden de autoridad es: diseño > esta tabla > golden > criterio del agente (documentando la decisión en el README generado). Las capas opcionales solo se generan si están declaradas en `layers` del manifiesto.
+Tabla normativa, organizada por capa del diseño (`specs/<servicio>/<capa>.keel.yaml`). Ante ambigüedad, el orden de autoridad es: diseño > esta tabla > criterio del agente (documentando la decisión en el README generado). Las capas opcionales solo se generan si están declaradas en `layers` del manifiesto.
 
 Buena parte de esta tabla la materializa ya el **scaffolding determinista** de `keel-spring build` (ver `project-layout.md`, sección "Qué genera el scaffolding"). Decisiones fijas del scaffolding que el agente debe conocer:
 
