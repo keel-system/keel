@@ -6,9 +6,18 @@ import path from 'node:path';
  * existen en destino se dejan intactos y se reportan como omitidos.
  * `renames` mapea nombres de archivo en la raíz de srcDir a su nombre en
  * destino (p. ej. `gitignore` → `.gitignore`, que npm excluye del tarball).
+ *
+ * `preserve` son rutas relativas (ya renombradas) que el workspace tiene derecho
+ * a editar: se copian si faltan —en un workspace nuevo son la semilla— pero
+ * **nunca se sobrescriben, ni con force**, y salen en `preserved`. Es la
+ * contraparte del `ignore` de diffTree(): sin esto, el `keel init --force` que
+ * recomienda `keel init --check` pisaría justo lo que `--check` respeta.
+ *
  * Devuelve rutas relativas a destDir, con separador POSIX para mostrar.
  */
-export function copyTree(srcDir, destDir, { force = false, renames = {} } = {}) {
+export function copyTree(srcDir, destDir, { force = false, renames = {}, preserve = [] } = {}) {
+  const preserved = [];
+  const untouchable = new Set(preserve);
   const copied = [];
   const skipped = [];
 
@@ -24,7 +33,10 @@ export function copyTree(srcDir, destDir, { force = false, renames = {} } = {}) 
         walk(from, to);
       } else {
         const relative = path.relative(destDir, to).split(path.sep).join('/');
-        if (fs.existsSync(to) && !force) {
+        const exists = fs.existsSync(to);
+        if (exists && untouchable.has(relative)) {
+          preserved.push(relative);
+        } else if (exists && !force) {
           skipped.push(relative);
         } else {
           fs.mkdirSync(path.dirname(to), { recursive: true });
@@ -36,7 +48,7 @@ export function copyTree(srcDir, destDir, { force = false, renames = {} } = {}) 
   };
 
   walk(srcDir, destDir);
-  return { copied, skipped };
+  return { copied, skipped, preserved };
 }
 
 /**

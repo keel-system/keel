@@ -65,6 +65,38 @@ test('los archivos personalizables no cuentan como deriva, por muy reescritos qu
   assert.deepEqual(result.missing, []);
 });
 
+test('poner al día el payload con --force conserva lo personalizable y actualiza el resto', () => {
+  // La propiedad que necesita un registry publicado: `keel init --check` le dice que
+  // su payload quedó atrás y le manda ejecutar `keel init --force`; ese --force no
+  // puede costarle la portada entre marcadores ni su CLAUDE.md.
+  const dir = seeded();
+  const portada = '# Keel Registry\n\n<!-- keel:servicios:start -->\ntabla\n<!-- keel:servicios:end -->\n';
+  fs.writeFileSync(path.join(dir, 'README.md'), portada);
+  fs.writeFileSync(path.join(dir, 'CLAUDE.md'), '# Reglas del equipo\n');
+  fs.writeFileSync(path.join(dir, '.gitattributes'), '* text=auto eol=lf\n');
+  // y un trozo del payload que sí debe volver a su versión original
+  const schema = path.join(dir, 'schema', 'domain.schema.json');
+  const original = fs.readFileSync(schema, 'utf8');
+  fs.writeFileSync(schema, '{"desfasado": true}\n');
+
+  const { preserved } = copyTree(coreDir, dir, {
+    force: true,
+    renames: RENAMES,
+    preserve: CUSTOMIZABLE_PAYLOAD
+  });
+
+  assert.deepEqual(preserved.sort(), [...CUSTOMIZABLE_PAYLOAD].sort());
+  assert.equal(fs.readFileSync(path.join(dir, 'README.md'), 'utf8'), portada);
+  assert.equal(fs.readFileSync(path.join(dir, 'CLAUDE.md'), 'utf8'), '# Reglas del equipo\n');
+  assert.equal(fs.readFileSync(path.join(dir, '.gitattributes'), 'utf8'), '* text=auto eol=lf\n');
+  assert.equal(fs.readFileSync(schema, 'utf8'), original);
+
+  // Y el resultado es exactamente lo que `keel init --check` considera al día.
+  const result = diff(dir);
+  assert.deepEqual(result.stale, []);
+  assert.deepEqual(result.missing, []);
+});
+
 test('lo que el workspace añade por su cuenta no es deriva', () => {
   const dir = seeded();
   fs.mkdirSync(path.join(dir, 'specs', 'catalog'), { recursive: true });

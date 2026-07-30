@@ -46,10 +46,17 @@ export function init({ force = false, check = false } = {}) {
   }
 
   const target = process.cwd();
-  const { copied, skipped } = copyTree(coreDir, target, { force, renames: RENAMES });
+  // preserve: los archivos que el workspace reescribe a propósito (la portada de un registry,
+  // su CLAUDE.md) no se pisan ni con --force. Es la misma lista que checkPayload() ignora.
+  const { copied, skipped, preserved } = copyTree(coreDir, target, {
+    force,
+    renames: RENAMES,
+    preserve: CUSTOMIZABLE_PAYLOAD
+  });
 
   for (const file of copied) console.log(`  ${pc.green('+')} ${file}`);
   for (const file of skipped) console.log(`  ${pc.yellow('=')} ${file} ${pc.dim('(ya existía, omitido)')}`);
+  for (const file of preserved) console.log(`  ${pc.cyan('=')} ${file} ${pc.dim('(es tuyo, no se sobrescribe)')}`);
 
   console.log();
   // Los archivos existentes nunca se pisan sin --force. Al actualizar keel-core eso deja el
@@ -57,7 +64,8 @@ export function init({ force = false, check = false } = {}) {
   // más nueva sería rechazado por su propio schema), así que aquí se dice explícitamente.
   const updateHint = pc.dim(
     '  Tras actualizar keel-core, ejecuta `keel init --force` para poner al día schemas, plantillas, docs y skills\n' +
-      '  del workspace (tus specs/ y docs/<servicio>/ no se tocan: no forman parte del payload).\n' +
+      '  del workspace (tus specs/ y docs/<servicio>/ no se tocan: no forman parte del payload,\n' +
+      `  y ${CUSTOMIZABLE_PAYLOAD.join(', ')} se conservan aunque uses --force).\n` +
       '  `keel init --check` dice, sin escribir, si alguna copia quedó atrás.'
   );
 
@@ -68,6 +76,9 @@ export function init({ force = false, check = false } = {}) {
   }
 
   console.log(pc.bold(pc.green('✔ Workspace Keel inicializado.')));
+  if (preserved.length > 0) {
+    console.log(pc.cyan(`  ${preserved.length} archivo(s) tuyo(s) se conservaron: ${preserved.join(', ')}.`));
+  }
   if (skipped.length > 0) {
     console.log(pc.yellow(`  ${skipped.length} archivo(s) existente(s) se dejaron intactos (usa --force para sobrescribir).`));
     console.log(updateHint);

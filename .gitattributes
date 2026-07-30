@@ -1,0 +1,18 @@
+# El payload de `keel init` (assets/core/) se copia byte a byte a cada workspace y
+# después se compara byte a byte: `diffTree()` decide la deriva con
+# `readFileSync(a).equals(readFileSync(b))`, así que un salto de línea distinto hace
+# que `keel init --check` reporte como desfasado un archivo idéntico. Los workspaces
+# normalizan a LF (el `.gitattributes` que este mismo payload siembra lo fija), de
+# modo que este repo tiene que entregar LF también en Windows: si no, la puerta da
+# resultados distintos en local y en el CI de Linux.
+* text=auto eol=lf
+
+# Binarios que viven en los assets (plantillas HTML de /keel-docs traen recursos)
+# o que pueden acabar en un proyecto generado.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.pdf binary
+*.ico binary
+*.jar binary
