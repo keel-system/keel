@@ -4,7 +4,6 @@ import pc from 'picocolors';
 import { templatesDir, isKeelWorkspace } from '../lib/assets.js';
 import { MANIFEST_FILE, KEBAB_NAME, resolveServiceRef, loadService } from '../lib/loader.js';
 import { rewriteManifestForDerivation, rewriteScenariosForDerivation } from '../lib/derive.js';
-import { copyTree } from '../lib/copy.js';
 import {
   downloadDesign,
   dslMismatchMessage,
@@ -111,7 +110,11 @@ async function deriveFromRegistry(name, remote, { cwd, serviceDir, options }) {
   console.log(
     pc.dim(`Descargando ${design.slug} v${design.service?.version ?? '?'} de ${loaded.url} (índice: ${loaded.from})…`)
   );
-  const downloaded = await downloadDesign(design, { indexUrl: loaded.url, docs: options.docs !== false });
+  // Derivar trae **solo el spec**: los derivados del origen (DESIGN.md, contratos
+  // formales, panel, INTEGRATION.md) describen al servicio del origen y se van a
+  // regenerar de todas formas al cerrar el diseño derivado. Quien quiera el diseño
+  // tal cual, con sus derivados al día, adopta con `keel registry get`.
+  const downloaded = await downloadDesign(design, { indexUrl: loaded.url, docs: false });
   if (downloaded.error) {
     console.error(pc.red(downloaded.error));
     process.exitCode = 1;
@@ -122,69 +125,9 @@ async function deriveFromRegistry(name, remote, { cwd, serviceDir, options }) {
   try {
     // El mensaje de éxito ya identifica el origen por su linaje (`<slug>@<versión>`).
     deriveService(name, downloaded.dir, { cwd, serviceDir });
-    if (process.exitCode !== 1 && options.docs !== false) {
-      writeOriginDocs(name, downloaded, { cwd, design, indexUrl: loaded.url });
-    }
   } finally {
     fs.rmSync(downloaded.root, { recursive: true, force: true });
   }
-}
-
-/**
- * Deja los derivados del origen en `docs/<nuevo>/origin/` como material de
- * referencia. **No** van a `docs/<nuevo>/` porque ahí serían los derivados del
- * servicio nuevo: llevan estampada la versión del origen y `keel describe` los
- * reportaría `stale` desde el primer día. `listDerivatives()` trabaja con una
- * allowlist de rutas, así que la subcarpeta le es invisible.
- */
-function writeOriginDocs(name, downloaded, { cwd, design, indexUrl }) {
-  if ((downloaded.docsFiles ?? []).length === 0) {
-    console.error(`\n${pc.yellow('⚠')} El índice del registry no publica ningún derivado de '${design.slug}'.`);
-    console.error(`  ${pc.dim(`No hay docs/${name}/origin/: derivas del spec a ciegas, sin el porqué del diseño.`)}`);
-    console.error(`  ${pc.dim('Pide al mantenedor del registry que genere los derivados y reindexe con `keel index`.')}`);
-    return;
-  }
-
-  const originDir = path.join(cwd, 'docs', name, 'origin');
-  fs.mkdirSync(originDir, { recursive: true });
-  const { copied } = copyTree(downloaded.docsDir, originDir, { force: true });
-  fs.writeFileSync(path.join(originDir, 'README.md'), originReadme({ design, indexUrl }));
-
-  console.log(`\n${pc.bold(`Documentación del origen: docs/${name}/origin/`)} ${pc.dim('(referencia; no son derivados de este servicio)')}`);
-  for (const file of [...copied].sort()) console.log(`  ${pc.dim('•')} docs/${name}/origin/${file}`);
-  if (copied.includes('DESIGN.md')) {
-    console.log(`  Empieza por ${pc.cyan(`docs/${name}/origin/DESIGN.md`)}: las decisiones del diseño y su porqué.`);
-  }
-
-  // El índice ya sabe cuántos derivados le faltaban al origen cuando se indexó.
-  // Decirlo aquí es lo que separa «este diseño no tiene panel» de «el registry
-  // está desactualizado», que sin este aviso se ven exactamente igual: un archivo
-  // que no aparece.
-  const missing = design.derivatives?.missing ?? 0;
-  if (missing > 0) {
-    const total = missing + (design.derivatives?.fresh ?? 0) + (design.derivatives?.stale ?? 0) + (design.derivatives?.unstamped ?? 0);
-    console.error(
-      `\n${pc.yellow('⚠')} El registry publica ${total - missing} de ${total} derivados de '${design.slug}': ${missing} no existía(n) al indexarlo.`
-    );
-    console.error(`  ${pc.dim('Pide al mantenedor del registry que los genere y reindexe con `keel index`.')}`);
-  }
-}
-
-function originReadme({ design, indexUrl }) {
-  const origin = `${design.service?.name ?? design.slug}@${design.service?.version ?? '?'}`;
-  return [
-    `# Documentación de origen — ${origin}`,
-    '',
-    `Derivados publicados del diseño \`${design.slug}\` del registry (\`${indexUrl}\`), descargados al`,
-    'derivar este servicio. Son **material de referencia del origen**: explican por qué el diseño del que',
-    'partes es como es, y no describen a este servicio.',
-    '',
-    '- **No se editan y no se regeneran.** Quedan congelados en la versión del origen.',
-    '- Los derivados **propios** de este servicio se producen con `/keel-handoff` (DESIGN.md) y',
-    '  `/keel-docs` (contratos formales y panel), y viven un nivel más arriba, en `docs/<servicio>/`.',
-    '- Cuando ya no aporten, esta carpeta se borra: nada del método depende de ella.',
-    ''
-  ].join('\n');
 }
 
 // Deriva specs/<name> clonando un diseño existente: copia el manifiesto reescrito

@@ -266,12 +266,12 @@ export function searchDesigns(index, term) {
  * - `<root>/spec/` — los `specs/<slug>/`, con los nombres planos que espera un
  *   directorio de servicio: es lo que consume la derivación.
  * - `<root>/docs/` — los derivados publicados (`DESIGN.md`, `openapi.yaml`,
- *   `overview.html`, `postman/`…), relativos a `docs/<servicio>/`, más el
- *   `validation-scenarios.md` del spec. Son **material de referencia** del
- *   origen: quien llama los deja en `docs/<nuevo>/origin/`, nunca como derivados
- *   propios del servicio derivado. Se omiten con `docs: false`.
+ *   `overview.html`, `postman/`…), relativos a `docs/<servicio>/`. Los usa
+ *   **adoptar** (`keel registry get`), que los deja en `docs/<slug>/` como
+ *   derivados al día del servicio. Derivar pasa `docs: false`: los del origen
+ *   describen al servicio del origen y se regeneran al cerrar el derivado.
  *
- * Un fallo descargando el spec es fatal (sin manifiesto no hay derivación); un
+ * Un fallo descargando el spec es fatal (sin manifiesto no hay diseño); un
  * fallo descargando un derivado solo suma un aviso: perder la derivación entera
  * porque falta un `DESIGN.md` sería peor que quedarse sin él.
  *
@@ -328,15 +328,6 @@ export async function downloadDesign(design, { indexUrl, fetchImpl = globalThis.
     for (const file of all) {
       const relative = docsTargetOf(file, prefix);
       if (!relative) continue;
-      // Los escenarios ya están descargados con el spec: se copian, no se repiden.
-      if (file.startsWith(prefix)) {
-        const source = path.join(dir, file.slice(prefix.length));
-        if (!fs.existsSync(source)) continue;
-        fs.mkdirSync(path.dirname(path.join(docsDir, relative)), { recursive: true });
-        fs.copyFileSync(source, path.join(docsDir, relative));
-        docsWritten.push(file);
-        continue;
-      }
       const result = await fetchText(file);
       if (result.error) {
         warnings.push(result.error);
@@ -353,13 +344,15 @@ export async function downloadDesign(design, { indexUrl, fetchImpl = globalThis.
 }
 
 /**
- * Ruta de un archivo del índice dentro del bundle de referencia, o null si no es
- * un derivado. Los de `docs/<servicio>/` conservan su subruta (para que
- * `postman/<n>-collection.json` siga en su carpeta); del spec solo viajan los
- * escenarios de validación, que son el otro documento que explica el diseño.
+ * Ruta de un archivo del índice dentro de la rama de docs, relativa a
+ * `docs/<servicio>/`, o null si no es un derivado de ahí. Conservan su subruta
+ * para que `postman/<n>-collection.json` siga en su carpeta.
+ *
+ * `validation-scenarios.md` **no** entra aquí aunque sea un derivado: vive en el
+ * directorio del servicio y viaja por la rama del spec. Duplicarlo dejaría un
+ * `docs/<servicio>/validation-scenarios.md` que `listDerivatives()` no espera.
  */
 function docsTargetOf(file, specPrefix) {
-  if (file === `${specPrefix}validation-scenarios.md`) return 'validation-scenarios.md';
   if (file.startsWith(specPrefix) || !file.startsWith('docs/')) return null;
   const rest = file.slice('docs/'.length);
   const cut = rest.indexOf('/');

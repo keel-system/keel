@@ -1,6 +1,20 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import pc from 'picocolors';
-import { supportedDsl } from '../lib/assets.js';
-import { baseUrlOf, dslSupport, findDesign, loadRegistryIndex, searchDesigns } from '../lib/registry-source.js';
+import { isKeelWorkspace, supportedDsl } from '../lib/assets.js';
+import { MANIFEST_FILE } from '../lib/loader.js';
+import { SIDECAR_FILE } from '../lib/design-index.js';
+import { stampAdoptedManifest } from '../lib/derive.js';
+import { copyTree } from '../lib/copy.js';
+import {
+  baseUrlOf,
+  downloadDesign,
+  dslMismatchMessage,
+  dslSupport,
+  findDesign,
+  loadRegistryIndex,
+  searchDesigns
+} from '../lib/registry-source.js';
 
 const MATURITY_LABEL = { reference: 'referencia', stable: 'estable', draft: 'borrador' };
 const MATURITY_COLOR = { reference: pc.green, stable: pc.cyan, draft: pc.yellow };
@@ -101,7 +115,8 @@ export async function listRegistry(options = {}) {
   noteUnsupported(index.designs);
   console.log(pc.dim(`Fuente: ${url}`));
   console.log(`Ficha completa: ${pc.cyan('keel registry show <diseño>')}`);
-  console.log(`Reutilizar:     ${pc.cyan('keel new <mi-servicio> --from registry:<diseño>')}`);
+  console.log(`Adoptar:        ${pc.cyan('keel registry get <diseño>')} ${pc.dim('— tal cual, listo para generar')}`);
+  console.log(`Derivar:        ${pc.cyan('keel new <mi-servicio> --from registry:<diseño>')} ${pc.dim('— para ajustarlo')}`);
 }
 
 /** `keel registry search <término>`: filtra por slug, tags, dominio o prosa. */
@@ -203,5 +218,115 @@ export async function showRegistryDesign(slug, options = {}) {
     return;
   }
   console.log(pc.bold('Reutilización:'));
-  console.log(`  ${pc.cyan(`keel new <mi-servicio> --from registry:${design.slug}`)}`);
+  console.log(`  ${pc.cyan(`keel registry get ${design.slug}`)}  tal cual, con sus derivados al día`);
+  console.log(`  ${pc.cyan(`keel new <mi-servicio> --from registry:${design.slug}`)}  derivarlo para ajustarlo`);
+}
+
+/**
+ * `keel registry get <slug>`: **adoptar** un diseño, no derivarlo.
+ *
+ * Trae el diseño tal cual —mismo nombre, misma versión, misma description— con
+ * sus derivados en `docs/<slug>/`, donde `keel describe` los ve al día y
+ * `keel-<tech> build` los recoge. Es la otra intención frente a `keel new
+ * --from registry:`, que renombra, resetea a 0.1.0 y obliga a regenerarlo todo:
+ * derivar para adoptar significaría reconstruir a mano artefactos que ya
+ * existían y ya pasaron el CI del registry.
+ */
+export async function getRegistryDesign(slug, options = {}) {
+  const cwd = process.cwd();
+  if (!isKeelWorkspace(cwd)) {
+    console.error(pc.red('Este directorio no es un workspace Keel. Ejecuta primero: keel init'));
+    process.exitCode = 1;
+    return;
+  }
+
+  const serviceDir = path.join(cwd, 'specs', slug);
+  if (fs.existsSync(serviceDir) && !options.force) {
+    console.error(pc.red(`Ya existe specs/${slug}.`));
+    console.error(pc.dim('  Usa --force para reemplazarlo, o `keel new <otro> --from registry:' + slug + '` para derivarlo con otro nombre.'));
+    process.exitCode = 1;
+    return;
+  }
+
+  // Adoptar es materializar un diseño, no hojear el catálogo: se revalida el
+  // índice igual que al derivar (ver el comentario en new.js).
+  const loaded = await loadRegistryIndex({ ...options, refresh: options.offline ? false : true });
+  if (loaded.error) {
+    console.error(pc.red(loaded.error));
+    process.exitCode = 1;
+    return;
+  }
+  for (const warning of loaded.warnings) console.error(`${pc.yellow('⚠')} ${warning}`);
+
+  const { design, error } = findDesign(loaded.index, slug);
+  if (error) {
+    console.error(pc.red(error));
+    process.exitCode = 1;
+    return;
+  }
+
+  if (dslSupport(design) === 'nueva') {
+    console.error(pc.red(`✘ ${dslMismatchMessage(design)}`));
+    process.exitCode = 1;
+    return;
+  }
+
+  const version = design.service?.version ?? '?';
+  console.log(pc.dim(`Descargando ${design.slug} v${version} de ${loaded.url} (índice: ${loaded.from})…`));
+  const downloaded = await downloadDesign(design, { indexUrl: loaded.url });
+  if (downloaded.error) {
+    console.error(pc.red(downloaded.error));
+    process.exitCode = 1;
+    return;
+  }
+  for (const warning of downloaded.warnings ?? []) console.error(`${pc.yellow('⚠')} ${warning}`);
+
+  try {
+    // El sidecar es metadato de publicación **del origen** (author, license,
+    // maturity): copiarlo haría que el índice del adoptante presentara el diseño
+    // como publicado por él. Solo se escribe si decide republicarlo.
+    fs.rmSync(path.join(downloaded.dir, SIDECAR_FILE), { force: true });
+
+    const spec = copyTree(downloaded.dir, serviceDir, { force: true });
+    const manifestFile = path.join(serviceDir, MANIFEST_FILE);
+    const basedOn = `${design.service?.name ?? design.slug}@${version}`;
+    fs.writeFileSync(manifestFile, stampAdoptedManifest(fs.readFileSync(manifestFile, 'utf8'), { basedOn }));
+
+    console.log(pc.bold(pc.green(`✔ Diseño adoptado: specs/${slug}/ (${basedOn}, sin cambios)`)));
+    for (const file of [...spec.copied].sort()) console.log(`  ${pc.dim('•')} specs/${slug}/${file}`);
+
+    const docsFiles = downloaded.docsFiles ?? [];
+    if (docsFiles.length > 0) {
+      const docsDir = path.join(cwd, 'docs', slug);
+      const docs = copyTree(downloaded.docsDir, docsDir, { force: true });
+      console.log(`\n${pc.bold(`Derivados: docs/${slug}/`)} ${pc.dim('(al día: nacen con la versión que documentan)')}`);
+      for (const file of [...docs.copied].sort()) console.log(`  ${pc.dim('•')} docs/${slug}/${file}`);
+    }
+    warnIncompleteRegistry(design);
+
+    console.log('\nPróximos pasos:');
+    console.log(`  1. Registra el diseño en el índice del workspace: ${pc.cyan('keel index')}`);
+    console.log(`  2. Revísalo con ${pc.cyan(`keel describe ${slug}`)} ${pc.dim('(los derivados deben salir al día)')}`);
+    console.log(`  3. Genera el servidor: ${pc.cyan(`keel-<tech> build specs/${slug}`)}`);
+    console.log(pc.dim(`  Si necesitas cambiarlo, es una evolución: /keel-evolve specs/${slug}.`));
+  } finally {
+    fs.rmSync(downloaded.root, { recursive: true, force: true });
+  }
+}
+
+/**
+ * El índice sabe cuántos derivados le faltaban al diseño cuando se indexó.
+ * Decirlo separa «este diseño no tiene panel» de «el registry está
+ * desactualizado», que sin el aviso se ven igual: un archivo que no aparece.
+ * Adoptando duele más que derivando, porque el adoptante no va a regenerar nada.
+ */
+function warnIncompleteRegistry(design) {
+  const counts = design.derivatives ?? {};
+  const missing = counts.missing ?? 0;
+  if (missing === 0) return;
+  const total = missing + (counts.fresh ?? 0) + (counts.stale ?? 0) + (counts.unstamped ?? 0);
+  console.error(
+    `\n${pc.yellow('⚠')} El registry publica ${total - missing} de ${total} derivados de '${design.slug}': ${missing} no existía(n) al indexarlo.`
+  );
+  console.error(`  ${pc.dim('Tendrás que generarlos tú (/keel-docs, /keel-integrate) o pedir al mantenedor que reindexe con `keel index`.')}`);
 }

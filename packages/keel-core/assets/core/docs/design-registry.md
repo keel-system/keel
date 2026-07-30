@@ -17,42 +17,69 @@ El registry oficial es [keel-system/keel-registry](https://github.com/keel-syste
 keel registry                       # todos los diseños, agrupados por familia
 keel registry search notifications  # filtra por slug, familia, tags, dominio o prosa
 keel registry show catalog          # ficha completa: capas, contenido, enlaces a la documentación
-
-keel new mi-catalogo --from registry:catalog
 ```
 
-`--from registry:<slug>` descarga los artefactos del diseño a un directorio temporal y sigue exactamente el
-mismo camino que una derivación local: copia el manifiesto reescrito y las capas declaradas, estampa
-`service.basedOn: <slug>@<versión>`, marca la `description` como pendiente de revisar y **renombra el
-servicio al nombre que tú elijas**. El slug del registry nunca llega a tu código: `keel new notifications
---from registry:notifications-push-only` deja un servicio llamado `notifications`.
+Evaluado el diseño, hay **dos formas de traértelo**, y la diferencia no es de comodidad sino de intención:
+
+| | **Adoptar** — `keel registry get catalog` | **Derivar** — `keel new mi-catalogo --from registry:catalog` |
+|---|---|---|
+| Cuándo | el diseño te sirve **tal cual** | vas a **cambiarlo** |
+| `service.name` | el del origen | el que tú elijas |
+| `service.version` | la del origen | `0.1.0` |
+| `description` | intacta | marcada `TODO: revisar…` |
+| `basedOn` | `<slug>@<versión>` | `<slug>@<versión>` |
+| `validation-scenarios.md` | del origen, **al día** | heredado, `stale` |
+| Derivados de `docs/` | en `docs/<slug>/`, **al día** | **no se traen** |
+| Siguiente paso | `keel-<tech> build` | `/keel-design` |
+
+### Adoptar: `keel registry get <diseño>`
+
+Trae el diseño **sin tocarlo**, con sus derivados publicados en `docs/<diseño>/`. Como nacen con la misma
+versión que documentan, `keel describe` los ve al día y puedes ir directo a generar: no hay nada que
+regenerar. Es lo que quieres cuando un diseño maduro resuelve tu problema, que es el mejor resultado
+posible de un registry.
+
+Dos cosas que no se copian, a propósito:
+
+- **El sidecar `design.yaml`** — es metadato de publicación **del origen** (`author`, `license`,
+  `maturity`, `family`). Copiarlo haría que tu `README.md` presentara el diseño como publicado por ti.
+  Solo lo escribes si decides republicarlo.
+- **Nada más.** El manifiesto llega íntegro salvo `service.basedOn`, que se estampa aunque el nombre y la
+  versión coincidan con el origen: se lee como «esto *es* `catalog@0.3.0`». Sin ese sello, en cuanto
+  cambies algo y `/keel-evolve` suba la versión habrás forkeado sin marca, y no quedará forma mecánica de
+  saber de dónde venía.
+
+Si luego necesitas cambiar el diseño adoptado, no es una derivación: es una **evolución** normal, y entra
+por `/keel-evolve specs/<diseño>`.
+
+### Derivar: `keel new <nuevo> --from registry:<slug>`
+
+Descarga el diseño a un directorio temporal y sigue exactamente el mismo camino que una derivación local:
+copia el manifiesto reescrito y las capas declaradas, estampa `service.basedOn`, marca la `description`
+como pendiente de revisar y **renombra el servicio al nombre que tú elijas**. El slug del registry nunca
+llega a tu código: `keel new notifications --from registry:notifications-push-only` deja un servicio
+llamado `notifications`.
 
 También se clona `validation-scenarios.md`, con la ruta de su cabecera reapuntada al servicio nuevo pero
 **conservando el sello de versión del origen**. El manifiesto derivado nace en `0.1.0`, así que
-`keel describe` los reporta `stale` desde el primer momento: es la señal correcta. Los escenarios
-heredados son el **punto de partida** —el inventario de obligaciones que ya estaba resuelto—, no el
-contrato de tu servicio; se regeneran al cerrar el diseño derivado, como en cualquier otro diseño.
+`keel describe` lo reporta `stale` desde el primer momento: es la señal correcta. Los escenarios heredados
+son el **punto de partida** —el inventario de obligaciones que ya estaba resuelto—, no el contrato de tu
+servicio; se regeneran al cerrar el diseño derivado.
+
+**Los derivados de `docs/` no se traen.** `DESIGN.md`, los contratos formales, el panel e `INTEGRATION.md`
+describen al servicio del origen, y derivar significa que vas a completar el diseño: se regeneran de todas
+formas al cerrarlo, con `/keel-handoff`, `/keel-docs` y `/keel-integrate`. Si lo que querías era quedártelos,
+lo que querías era adoptar. Mientras tanto, la documentación del origen sigue publicada en el registry:
+`keel registry show` da sus URLs.
 
 Después, `/keel-design specs/mi-catalogo` arranca en modo derivación y entrevista solo sobre lo que cambia.
 
-Junto al spec se descarga la **documentación del origen** —`DESIGN.md`, `INTEGRATION.md`, los contratos
-formales, el panel, todas las colecciones Postman y su `validation-scenarios.md`— en `docs/<nuevo>/origin/`,
-con un `README.md` que deja constancia de la procedencia. Es lo que explica **por qué** el diseño del que
-partes es como es: sin ella, derivar es copiar artefactos a ciegas.
+### Lo que llega es lo que el índice enumera
 
-Lo que llega es lo que el `index.json` del registry enumera en `files`, ni más ni menos. Si el origen tenía
-derivados sin generar cuando se indexó, `keel new` lo dice (`el registry publica N de M derivados`) en vez
-de dejar que los eches de menos: el arreglo es del lado del registry —generarlos y reindexar con
-`keel index`—, no tuyo.
-
-Va en la subcarpeta `origin/` y no en `docs/<nuevo>/` a propósito: esos documentos llevan estampada la
-versión del **origen** y hablan del servicio del origen, así que como derivados propios estarían `stale`
-desde el primer día. `keel describe` y `keel index` inventarían por lista explícita de rutas, de modo que
-`origin/` les es invisible: es material de referencia congelado, no se regenera y se borra cuando ya no
-aporta. Los derivados **propios** de tu servicio salen de `/keel-handoff` y `/keel-docs`.
-
-Con `--no-docs` se descarga solo el spec. Y para **evaluar** un diseño antes de descargar nada,
-`keel registry show` da las URLs de los derivados publicados.
+En ambos casos, lo que se descarga es lo que el `index.json` del registry lista en `files`, ni más ni menos.
+Si el diseño tenía derivados sin generar cuando se indexó, `keel registry get` lo dice (`el registry publica
+N de M derivados`) en vez de dejar que los eches de menos: adoptando duele más, porque no ibas a regenerar
+nada. El arreglo es del lado del registry —generarlos y reindexar con `keel index`—, no tuyo.
 
 ### Red, caché y fuentes alternativas
 
@@ -62,17 +89,18 @@ Con `--no-docs` se descarga solo el spec. Y para **evaluar** un diseño antes de
 | `KEEL_REGISTRY_URL` | Lo mismo, por entorno (precedencia: `--source` > variable > oficial) |
 | `--refresh` | Ignora el TTL y revalida contra la red |
 | `--offline` | Usa solo la copia local, sin red |
-| `--no-docs` | Solo en `keel new`: descarga el spec sin la documentación del origen |
+| `--force` | Solo en `keel registry get`: reemplaza `specs/<diseño>` si ya existe |
 
 El índice se cachea en `~/.keel/registry/`, una entrada por URL (un registry privado no pisa al oficial),
 con `ETag` y un TTL de 24 h. Si la red falla y hay copia local, se usa la copia con un aviso: quedarse sin
 índice por un corte de red sería peor que servir uno de ayer. Sin red y sin caché, el error explica el
 camino manual (`git clone` + `--from <ruta>`), que funciona siempre.
 
-**El TTL no se aplica a `keel new --from registry:`**, que revalida siempre (salvo con `--offline`).
-Hojear el catálogo tolera un índice de ayer; materializar un diseño, no: uno desactualizado deja el
-workspace sin los derivados que se publicaron entre medias, y sin nada que lo delate. La revalidación
-cuesta un `304` gracias al `ETag`, y la línea de descarga dice de dónde salió el índice (`red` o `caché`).
+**El TTL no se aplica al traerse un diseño** —ni `keel registry get` ni `keel new --from registry:`—, que
+revalidan siempre (salvo con `--offline`). Hojear el catálogo tolera un índice de ayer; materializar un
+diseño, no: uno desactualizado deja el workspace sin los archivos que se publicaron entre medias, y sin nada
+que lo delate. La revalidación cuesta un `304` gracias al `ETag`, y la línea de descarga dice de dónde salió
+el índice (`red` o `caché`).
 
 Un `index.json` con un `schemaVersion` mayor del que entiende la CLI se rechaza pidiendo actualizar
 `keel-core`, en vez de malinterpretarlo.

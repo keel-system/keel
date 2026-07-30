@@ -21,6 +21,22 @@ export function rewriteManifestForDerivation(sourceText, { name, basedOn }) {
 }
 
 /**
+ * Estampa la procedencia en el manifiesto de un diseño **adoptado** (`keel
+ * registry get`): solo `service.basedOn`. Nombre, versión y description quedan
+ * intactos — adoptar es quedarse el diseño tal cual, no derivarlo.
+ *
+ * Se estampa aunque el nombre y la versión coincidan con el origen: se lee como
+ * «esto *es* catalog@0.3.0». Sin ello, en cuanto el adoptante toque algo y
+ * /keel-evolve lo suba de versión, ha forkeado sin marca y no queda forma
+ * mecánica de saber de dónde venía.
+ */
+export function stampAdoptedManifest(sourceText, { basedOn }) {
+  const doc = YAML.parseDocument(sourceText);
+  doc.setIn(['service', 'basedOn'], basedOn);
+  return doc.toString({ lineWidth: 0 });
+}
+
+/**
  * Reescribe la cabecera de los escenarios heredados: solo la **ruta** del
  * blockquote de sello (`> specs/<origen> v1.2.0 …` → `> specs/<nuevo> v1.2.0 …`).
  *

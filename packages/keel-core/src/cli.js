@@ -8,7 +8,7 @@ import { describe } from './commands/describe.js';
 import { createService } from './commands/new.js';
 import { writeIndex } from './commands/index-cmd.js';
 import { checkSystem, showSystem } from './commands/system.js';
-import { listRegistry, searchRegistry, showRegistryDesign } from './commands/registry.js';
+import { getRegistryDesign, listRegistry, searchRegistry, showRegistryDesign } from './commands/registry.js';
 
 /**
  * Opciones comunes de los subcomandos que hablan con el registry remoto.
@@ -49,7 +49,6 @@ withRegistryOptions(
       '--from <origen>',
       'diseño del que derivar: nombre local (billing), ruta (specs/billing) o del registry (registry:catalog)'
     )
-    .option('--no-docs', 'al derivar del registry, no descarga la documentación del origen (solo el spec)')
 ).action((servicio, options) => createService(servicio, options));
 
 program
@@ -107,5 +106,13 @@ withRegistryOptions(
     .description('Muestra la ficha completa de un diseño del registry')
     .argument('<diseño>', 'slug del diseño (ej. catalog, notifications-multichannel)')
 ).action((diseno, options) => showRegistryDesign(diseno, options));
+
+withRegistryOptions(
+  registry
+    .command('get')
+    .description('Adopta un diseño tal cual: specs/<diseño>/ + sus derivados al día, listo para generar')
+    .argument('<diseño>', 'slug del diseño (ej. catalog, notifications-multichannel)')
+    .option('-f, --force', 'reemplaza specs/<diseño> si ya existe', false)
+).action((diseno, options) => getRegistryDesign(diseno, options));
 
 await program.parseAsync();

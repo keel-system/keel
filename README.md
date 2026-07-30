@@ -47,12 +47,14 @@ keel init            # siembra el workspace: skills, schemas, plantillas, docs
 keel system                               # olas de construcción: quién se puede diseñar ya, y en paralelo
 keel system check                         # ¿el mapa sigue coincidiendo con los diseños? (puerta de CI)
 
-# ¿Ya existe un diseño que resuelva esto? Derivarlo cuesta una revisión;
-# diseñarlo de cero, una sesión de entrevista capa a capa.
+# ¿Ya existe un diseño que resuelva esto? Adoptarlo no cuesta nada; derivarlo, una
+# revisión; diseñarlo de cero, una sesión de entrevista capa a capa.
 keel registry search catalogo             # busca en el registry de diseños reutilizables
 keel registry show catalog                # su ficha, sin descargarlo
-keel new mi-servicio --from registry:catalog   # lo deriva con linaje basedOn, y trae la documentación
-                                          # del origen a docs/mi-servicio/origin/ (--no-docs la omite)
+keel registry get catalog                 # ¿sirve tal cual? lo adopta sin tocarlo, con sus
+                                          # derivados al día: listo para generar
+keel new mi-servicio --from registry:catalog   # ¿hay que cambiarlo? lo deriva con linaje basedOn:
+                                          # solo el spec, porque el diseño se va a completar
 
 keel new mi-servicio # …o de cero: specs/mi-servicio/ (manifiesto + domain + use-cases)
 

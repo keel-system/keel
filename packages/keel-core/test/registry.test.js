@@ -17,6 +17,8 @@ import {
   searchDesigns
 } from '../src/lib/registry-source.js';
 import { supportedDsl } from '../src/lib/assets.js';
+import { getRegistryDesign } from '../src/commands/registry.js';
+import { REGISTRY_FILES, makeWorkspace, registryFixture, withRegistry } from './helpers/registry.js';
 
 const URL_INDEX = 'https://example.test/registry/index.json';
 
@@ -378,7 +380,7 @@ function fullRoutes(base = 'https://example.test/registry/', slug = 'catalog') {
   };
 }
 
-test('la descarga reparte el spec plano y los derivados del origen, con sus subrutas', async () => {
+test('la descarga reparte el spec plano y los derivados de docs/, con sus subrutas', async () => {
   const fetchImpl = fakeFetch(fullRoutes());
 
   const result = await downloadDesign(fullDesign(), { indexUrl: URL_INDEX, fetchImpl, tmpRoot: os.tmpdir() });
@@ -392,10 +394,12 @@ test('la descarga reparte el spec plano y los derivados del origen, con sus subr
   ]);
   assert.equal(fs.readFileSync(path.join(result.dir, 'service.keel.yaml'), 'utf8'), 'keel: "2.3"\n');
 
-  assert.deepEqual(fs.readdirSync(result.docsDir).sort(), ['DESIGN.md', 'overview.html', 'postman', 'validation-scenarios.md']);
+  assert.deepEqual(fs.readdirSync(result.docsDir).sort(), ['DESIGN.md', 'overview.html', 'postman']);
   assert.equal(fs.readFileSync(path.join(result.docsDir, 'DESIGN.md'), 'utf8'), '# Diseño\n');
   assert.ok(fs.existsSync(path.join(result.docsDir, 'postman', 'catalog-collection.json')), 'la subcarpeta postman/ se conserva');
-  // Los escenarios viajan al bundle de referencia sin volver a pedirse.
+  // Los escenarios viven en el directorio del servicio: viajan por la rama del
+  // spec y no se duplican en la de docs, donde nadie los espera.
+  assert.equal(fs.existsSync(path.join(result.docsDir, 'validation-scenarios.md')), false);
   assert.equal(fetchImpl.calls.filter((c) => c.url.endsWith('validation-scenarios.md')).length, 1);
   assert.deepEqual(result.warnings, []);
 
@@ -450,4 +454,105 @@ test('si falla la descarga de un archivo, no queda directorio temporal a medias'
   assert.match(result.error, /HTTP 404/);
   const after = fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith('keel-registry-')).length;
   assert.equal(after, before, 'el directorio temporal debe limpiarse');
+});
+
+// --- Adoptar: keel registry get -------------------------------------------
+
+test('registry get trae el diseño tal cual: nombre, versión y description del origen', async (t) => {
+  const base = makeWorkspace(t, { localOrigin: false });
+  const registry = withRegistry(t, registryFixture({ files: REGISTRY_FILES }));
+
+  await getRegistryDesign('billing', registry);
+
+  assert.notEqual(process.exitCode, 1);
+  const manifest = fs.readFileSync(path.join(base, 'specs', 'billing', 'service.keel.yaml'), 'utf8');
+  assert.match(manifest, /name: billing\b/);
+  assert.match(manifest, /version: 1\.2\.0/);
+  assert.match(manifest, /description: Gestiona la facturación de pedidos\./);
+  assert.doesNotMatch(manifest, /TODO/);
+  // El linaje se estampa aunque nombre y versión coincidan: sin él, la primera
+  // evolución sería un fork sin marca.
+  assert.match(manifest, /basedOn: billing@1\.2\.0/);
+});
+
+test('registry get deja los derivados en docs/<slug>/, no en una subcarpeta origin/', async (t) => {
+  const base = makeWorkspace(t, { localOrigin: false });
+  const registry = withRegistry(t, registryFixture({ files: REGISTRY_FILES }));
+
+  await getRegistryDesign('billing', registry);
+
+  const docsDir = path.join(base, 'docs', 'billing');
+  assert.deepEqual(fs.readdirSync(docsDir).sort(), ['DESIGN.md', 'overview.html', 'postman']);
+  assert.ok(fs.existsSync(path.join(docsDir, 'postman', 'billing-collection.json')));
+  assert.equal(fs.existsSync(path.join(docsDir, 'origin')), false);
+  // Los escenarios son del spec: no se duplican en docs/.
+  assert.equal(fs.existsSync(path.join(docsDir, 'validation-scenarios.md')), false);
+  assert.ok(fs.existsSync(path.join(base, 'specs', 'billing', 'validation-scenarios.md')));
+});
+
+test('registry get no copia el sidecar de publicación del origen', async (t) => {
+  const base = makeWorkspace(t, { localOrigin: false });
+  const registry = withRegistry(t, registryFixture({ files: REGISTRY_FILES }));
+
+  await getRegistryDesign('billing', registry);
+
+  // design.yaml lleva author/license/maturity del que lo publicó: copiarlo haría
+  // que el índice del adoptante presentara el diseño como suyo.
+  assert.equal(fs.existsSync(path.join(base, 'specs', 'billing', 'design.yaml')), false);
+});
+
+test('registry get no pisa un specs/<slug> existente sin --force', async (t) => {
+  const base = makeWorkspace(t, { localOrigin: false });
+  const registry = withRegistry(t, registryFixture({ files: REGISTRY_FILES }));
+  fs.mkdirSync(path.join(base, 'specs', 'billing'), { recursive: true });
+  fs.writeFileSync(path.join(base, 'specs', 'billing', 'service.keel.yaml'), 'mío\n');
+
+  await getRegistryDesign('billing', registry);
+
+  assert.equal(process.exitCode, 1);
+  assert.equal(fs.readFileSync(path.join(base, 'specs', 'billing', 'service.keel.yaml'), 'utf8'), 'mío\n');
+
+  process.exitCode = 0;
+  await getRegistryDesign('billing', { ...registry, force: true });
+  assert.notEqual(process.exitCode, 1);
+  assert.match(fs.readFileSync(path.join(base, 'specs', 'billing', 'service.keel.yaml'), 'utf8'), /version: 1\.2\.0/);
+});
+
+test('registry get falla fuera de un workspace Keel', async (t) => {
+  const base = makeWorkspace(t, { localOrigin: false });
+  fs.rmSync(path.join(base, 'schema'), { recursive: true, force: true });
+  const registry = withRegistry(t, registryFixture({ files: REGISTRY_FILES }));
+
+  await getRegistryDesign('billing', registry);
+
+  assert.equal(process.exitCode, 1);
+});
+
+test('registry get avisa cuando el índice no publica todos los derivados', async (t) => {
+  makeWorkspace(t, { localOrigin: false });
+  const registry = withRegistry(
+    t,
+    registryFixture({ files: REGISTRY_FILES, derivatives: { fresh: 3, missing: 6 } })
+  );
+  const errors = [];
+  const previous = console.error;
+  console.error = (message) => errors.push(String(message));
+  t.after(() => {
+    console.error = previous;
+  });
+
+  await getRegistryDesign('billing', registry);
+
+  assert.notEqual(process.exitCode, 1);
+  assert.ok(errors.some((line) => /publica 3 de 9 derivados/.test(line)), errors.join('\n'));
+});
+
+test('registry get rechaza un diseño con DSL más nuevo antes de descargar nada', async (t) => {
+  const base = makeWorkspace(t, { localOrigin: false });
+  const registry = withRegistry(t, registryFixture({ files: REGISTRY_FILES, dsl: '99.0' }));
+
+  await getRegistryDesign('billing', registry);
+
+  assert.equal(process.exitCode, 1);
+  assert.equal(fs.existsSync(path.join(base, 'specs', 'billing')), false);
 });
