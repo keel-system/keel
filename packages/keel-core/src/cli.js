@@ -7,6 +7,7 @@ import { validate } from './commands/validate.js';
 import { describe } from './commands/describe.js';
 import { createService } from './commands/new.js';
 import { writeIndex } from './commands/index-cmd.js';
+import { checkSystem, showSystem } from './commands/system.js';
 import { listRegistry, searchRegistry, showRegistryDesign } from './commands/registry.js';
 
 /**
@@ -68,6 +69,21 @@ program
   .description('Genera el índice de diseños del workspace: la tabla del README y index.json')
   .option('--check', 'no escribe: falla si el índice quedó atrás (para CI)', false)
   .action((options) => writeIndex(options));
+
+const system = program
+  .command('system')
+  .description('Mapa del sistema (system.yaml): olas de construcción, mapa de contextos y deriva contra los diseños');
+
+system
+  .command('show', { isDefault: true })
+  .description('Muestra las olas de construcción, el estado de cada servicio y el mapa de contextos')
+  .option('--json', 'emite el plan completo en JSON (entrada de /keel-decompose)', false)
+  .action((options) => showSystem(options));
+
+system
+  .command('check')
+  .description('Contrasta el mapa con los diseños reales: la única comprobación cross-servicio (para CI)')
+  .action(() => checkSystem());
 
 const registry = program
   .command('registry')

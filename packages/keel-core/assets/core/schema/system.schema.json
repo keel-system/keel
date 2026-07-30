@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schema/2.0/system.schema.json",
+  "title": "Keel System Map",
+  "description": "Mapa de un sistema repartido en varios servicios (system.yaml). No forma parte del DSL: el DSL describe un servicio, este archivo describe cómo se reparte un encargo entre servicios, quién consume a quién y en qué orden se construyen. Lo escribe /keel-decompose y lo verifica `keel system check`.",
+  "type": "object",
+  "required": ["system", "services"],
+  "additionalProperties": false,
+  "properties": {
+    "system": {
+      "type": "object",
+      "description": "Identidad del encargo del que nace el mapa.",
+      "required": ["name", "description"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$",
+          "description": "Nombre del sistema en kebab-case (ej. airline-ticketing)."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 10,
+          "description": "Qué resuelve el sistema completo, en una o dos líneas."
+        },
+        "tdr": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Ruta al documento de requisitos del que nace el mapa (ej. docs/system/tdr.md). Es procedencia informativa: no se resuelve ni se valida."
+        }
+      }
+    },
+    "services": {
+      "type": "object",
+      "description": "Un servicio por clave, en kebab-case, con el mismo nombre que tendrá su specs/<servicio>/.",
+      "minProperties": 1,
+      "propertyNames": { "pattern": "^[a-z][a-z0-9-]*$" },
+      "additionalProperties": { "$ref": "#/$defs/service" }
+    }
+  },
+  "$defs": {
+    "service": {
+      "type": "object",
+      "required": ["summary", "responsibility"],
+      "additionalProperties": false,
+      "properties": {
+        "summary": {
+          "type": "string",
+          "minLength": 10,
+          "description": "Una línea: qué hace este servicio. Alimenta la tabla de `keel system`."
+        },
+        "responsibility": {
+          "type": "string",
+          "minLength": 10,
+          "description": "De qué es la única fuente de verdad. Si no se puede escribir en una frase, la frontera está mal trazada."
+        },
+        "notResponsible": {
+          "type": "array",
+          "description": "Lo que NO es suyo aunque el TDR lo mencione cerca. Es la mitad de la frontera que se olvida y la que evita que dos servicios se peleen por el mismo dato.",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 3 }
+        },
+        "owns": {
+          "type": "array",
+          "description": "Conceptos del TDR que le pertenecen (candidatos a entidad del dominio, en inglés y PascalCase). Son candidatos para el brief, no entidades decididas.",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[A-Z][A-Za-z0-9]*$" }
+        },
+        "publishes": {
+          "type": "array",
+          "description": "Eventos de negocio que este servicio publica (PascalCase, en pasado). Es lo que hace verificable la arista del consumidor: `keel system check` comprueba que lo que alguien se suscribe aquí está declarado.",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[A-Z][A-Za-z0-9]*$" }
+        },
+        "status": {
+          "enum": ["planned", "designing", "designed"],
+          "default": "planned",
+          "description": "Estado declarado del diseño. `keel system check` lo contrasta con la realidad de specs/: planned sin specs/, designing con el diseño en progreso, designed con la validación en verde y sus derivados al día."
+        },
+        "external": {
+          "type": "boolean",
+          "default": false,
+          "description": "true si es un sistema que no diseñamos aquí (una pasarela, un ERP, un legado). No se le espera specs/, su contrato vive en contracts/<servicio>/INTEGRATION.md y nunca bloquea el orden de construcción."
+        },
+        "derivedFrom": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Diseño del registry del que este servicio se va a derivar en vez de diseñarse de cero (ej. notifications-multichannel). Se materializa con `keel new <servicio> --from registry:<diseño>`."
+        },
+        "after": {
+          "type": "array",
+          "description": "Servicios que deben construirse antes por prioridad de negocio, no por contrato. Añade aristas al orden sin declarar una dependencia que el diseño no tiene.",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" }
+        },
+        "consumes": {
+          "type": "array",
+          "description": "Aristas del mapa de contextos: de quién necesita algo este servicio. Una arista por proveedor y canal.",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/edge" }
+        }
+      }
+    },
+    "edge": {
+      "type": "object",
+      "required": ["from", "kind", "what", "why"],
+      "additionalProperties": false,
+      "properties": {
+        "from": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$",
+          "description": "Servicio proveedor. Debe existir como clave de `services`."
+        },
+        "kind": {
+          "enum": ["http", "events"],
+          "description": "Canal. http: el consumidor no puede completar su operación sin el dato en el instante. events: solo necesita reaccionar o mantener una copia."
+        },
+        "what": {
+          "type": "array",
+          "description": "Qué necesita, en lenguaje de negocio (ej. 'tarifa vigente del tramo'). Se convierte en los `needs` de la capa dependencies al diseñar.",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 3 }
+        },
+        "events": {
+          "type": "array",
+          "description": "Con kind: events, los eventos concretos a los que se suscribe. `keel system check` comprueba que el proveedor los declara en su `publishes` y, si ya tiene diseño, que su capa messaging los publica.",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[A-Z][A-Za-z0-9]*$" }
+        },
+        "strategy": {
+          "enum": ["on-demand", "replicated"],
+          "description": "Estrategia acordada a nivel de sistema para ese dato: pedirlo cada vez que se decide (on-demand) o mantener una copia local alimentada por eventos (replicated). Es la misma decisión que /keel-consume entrevista dato a dato; declararla aquí la preacuerda en vez de reabrirla en cada servicio."
+        },
+        "why": {
+          "type": "string",
+          "minLength": 10,
+          "description": "Por qué esta arista existe y por qué por este canal. Sin porqué, una arista es una integración que nadie pidió."
+        },
+        "blocking": {
+          "type": "boolean",
+          "default": true,
+          "description": "¿Hace falta el INTEGRATION.md del proveedor para poder diseñar este servicio? Es la única arista que cuenta para el orden de construcción. false significa que este servicio se puede diseñar antes, en modo degradado o porque el acoplamiento va en el otro sentido."
+        }
+      }
+    }
+  }
+}

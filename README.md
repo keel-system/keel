@@ -10,6 +10,8 @@ Keel es una CLI de Node.js + una metodología para agentes que separa el *qué* 
 
 El mismo spec puede regenerarse tantas veces como se quiera, en tecnologías distintas, sin re-diseñar nada.
 
+Y cuando el encargo no es un servicio sino un **sistema** (un documento de requisitos con varios dominios dentro), hay una fase previa: `/keel-decompose` decide con el humano qué servicios hay y dónde está la frontera de cada uno, y `keel system` calcula **en qué orden se construyen** —quien publica contrato va antes que quien lo consume— y contrasta ese mapa contra los diseños reales. Cada servicio sale con su propio *brief*, así que varias personas diseñan en paralelo sin releer el encargo. Ver [system-decomposition.md](packages/keel-core/assets/core/docs/system-decomposition.md).
+
 Y porque un diseño agnóstico de tecnología es reutilizable **entre organizaciones**, no solo entre stacks, los diseños se publican en **registries**: repositorios con la forma de un workspace Keel de los que se descubre y deriva un diseño existente en vez de empezar en blanco. El oficial es [keel-system/keel-registry](https://github.com/keel-system/keel-registry); crear uno privado es `keel init` + `keel index`. Ver [design-registry.md](packages/keel-core/assets/core/docs/design-registry.md).
 
 ## Paquetes
@@ -38,6 +40,14 @@ npm link --workspace packages/keel-spring        # comando `keel-spring`
 mkdir mi-proyecto && cd mi-proyecto
 
 keel init            # siembra el workspace: skills, schemas, plantillas, docs
+
+# ¿El encargo es un SISTEMA (varios dominios) y no un servicio? Descomponerlo primero.
+# En Claude Code, dentro del workspace:
+#   /keel-decompose docs/system/tdr.md       decide fronteras con el humano y escribe
+#                                            system.yaml (el mapa), docs/system/SYSTEM.md (el porqué)
+#                                            y un docs/system/briefs/<servicio>.md por servicio
+keel system                               # olas de construcción: quién se puede diseñar ya, y en paralelo
+keel system check                         # ¿el mapa sigue coincidiendo con los diseños? (puerta de CI)
 
 # ¿Ya existe un diseño que resuelva esto? Derivarlo cuesta una revisión;
 # diseñarlo de cero, una sesión de entrevista capa a capa.
@@ -73,6 +83,7 @@ cd services/mi-servicio-spring
 | `keel validate <ruta>` | Valida un servicio (directorio o manifiesto): schema de cada capa + referencias cruzadas entre artefactos (offline, con todos los errores). |
 | `keel describe <servicio>` | Resume un diseño para leerlo o reutilizarlo: identidad, estado, capas, contenido por capa y frescura de sus derivados. |
 | `keel index [--check]` | Genera el índice de diseños del workspace: la tabla del `README.md` (solo entre marcadores) y `index.json`. Con `--check` no escribe y falla si quedó atrás — es la puerta de CI de un registry. |
+| `keel system [show \| check]` | Lee el mapa del sistema (`system.yaml`, de `/keel-decompose`). `show` (por defecto, con `--json`) muestra las **olas de construcción** —calculadas como orden topológico de las aristas bloqueantes, no declaradas—, el estado de cada servicio, el mapa de contextos y quién puede diseñarse ya. `check` contrasta el mapa contra los diseños reales: es la **única comprobación cross-servicio** (`keel validate` no ve más allá de un servicio) y llega a cruzar dos specs — que el proveedor publique de verdad el evento que el mapa promete a su consumidor. Ninguno escribe nada. |
 | `keel registry [list\|search\|show]` | Explora el registry de diseños reutilizables. Fuente configurable con `--source` o `KEEL_REGISTRY_URL`; caché en `~/.keel/registry/` con `--refresh` y `--offline`. |
 | `keel-spring build <ruta> [--force] [--defaults]` | Comprueba la compatibilidad DSL, valida el diseño, pregunta el stack (persistido en `keel-stack.json`) y genera en `services/<servicio>-spring/` el scaffolding transversal al stack más el `.claude/` del agente (skill, agentes, conventions, skills del stack) y los snapshots de `specs/` y `docs/`. No escribe nada en el workspace de diseño. |
 
@@ -82,8 +93,11 @@ cd services/mi-servicio-spring
 mi-proyecto/
 ├── CLAUDE.md                 # el flujo, para el agente
 ├── README.md                 # índice de servicios diseñados (enlaza cada DESIGN.md) — página de entrada del repo
-├── .claude/skills/           # keel-design, keel-consume, keel-validate, keel-docs, keel-integrate, keel-handoff
+├── .claude/skills/           # keel-decompose, keel-design, keel-consume, keel-validate, keel-docs,
+│                             # keel-integrate, keel-handoff, keel-evolve
 ├── schema/                   # un JSON Schema por capa + common.schema.json
+├── system.yaml               # el mapa del sistema, si hay más de un servicio (de /keel-decompose)
+│                             # NO es una capa del DSL: reparte el encargo, no describe un servicio
 ├── specs/<servicio>/         # el diseño de cada servicio, un artefacto por capa — la fuente de verdad
 │   ├── service.keel.yaml     #   manifiesto: identidad + capas declaradas
 │   ├── domain.keel.yaml      #   entidades, types, invariantes (obligatoria)
@@ -93,7 +107,9 @@ mi-proyecto/
 ├── contracts/<proveedor>/    # INTEGRATION.md de servidores externos de los que dependemos (entrada de /keel-consume)
 ├── index.json                # índice máquina de los diseños (keel index) — lo consume `keel registry`
 ├── docs/                     # methodology, dsl-reference (índice), dsl/<capa>.md, building-a-generator,
-│                             # design-registry (publicar y consumir diseños reutilizables)
+│                             # design-registry (diseños reutilizables), system-decomposition (el mapa)
+├── docs/system/              # el encargo y su descomposición: tdr.md, SYSTEM.md (fronteras y su porqué)
+│                             # y briefs/<servicio>.md — un encargo por servicio, entrada de /keel-design
 └── services/<servicio>-<tech>/  # servicios generados por `keel-<tech> build` (un repo git propio cada uno)
     ├── .claude/              #   la skill del generador, sus agentes y conventions — el flujo de generación
     └── specs/                #   snapshot del diseño: el proyecto se completa sin el workspace

@@ -23,6 +23,7 @@ export {
   renderIndexJson,
   renderTable
 } from './lib/design-index.js';
+export { SYSTEM_FILE, buildSystemPlan, loadSystemMap, renderPlanTable } from './lib/system-map.js';
 export {
   DEFAULT_REGISTRY_URL,
   REGISTRY_PREFIX,

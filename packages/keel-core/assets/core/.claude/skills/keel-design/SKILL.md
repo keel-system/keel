@@ -31,6 +31,8 @@ El catálogo completo —diez entradas, con sus ejes de decisión, sus consecuen
 
 1. **Punto de partida.** Si `specs/<servicio>/` existe, lee el manifiesto y las capas presentes, resume el estado en 3-5 frases y continúa desde ahí; si el manifiesto declara `service.basedOn`, trabaja en **modo derivación** (ver sección más abajo). Si no existe, créalo con `keel new <servicio>` cuando conozcas el nombre; si el usuario quiere reutilizar un diseño existente ajustándolo, créalo con `keel new <nuevo> --from <origen>`.
 
+   **Si existe `docs/system/briefs/<servicio>.md`**, léelo antes de entrevistar: este servicio viene de la descomposición de un sistema (`/keel-decompose`) y el brief ya trae su frontera, sus conceptos y capacidades candidatas, quién le consume y las integraciones acordadas con su porqué. Arranca el paso 2 desde ahí en vez de desde cero, pero **confirma cada punto con el usuario en vez de asumirlo**: el brief es una hipótesis del sistema, no un spec, y su sección «lo que decides tú» enumera a propósito lo que sigue abierto (idempotencia, caché, outbox, frontera transaccional, concurrencia, paginación). Nada de lo que trae el brief exime de las decisiones estructurales del paso 3.
+
 2. **Entrevista de dominio.** Antes de escribir YAML, entiende el dominio. Pregunta (con AskUserQuestion cuando haya opciones claras, en texto libre cuando no):
    - ¿Qué problema resuelve el servicio? ¿Quiénes lo consumen (clientes HTTP, otros servicios, eventos)?
    - ¿Cuáles son los conceptos centrales (futuras entidades) y sus ciclos de vida?

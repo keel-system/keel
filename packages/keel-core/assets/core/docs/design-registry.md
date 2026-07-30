@@ -96,6 +96,13 @@ el índice con su `service.description` como resumen.
 **Los tags describen lo que el diseño declara**, no lo que uno querría que declarase: si pones `outbox`, la
 capa `messaging` debe declarar `reliability: outbox`.
 
+`requires` es metadato de publicación: dice de qué otros diseños del registry depende este, para que quien lo
+descargue sepa qué arrastra. **No es el mapa de un sistema** — si el workspace tiene uno (`system.yaml`, de
+`/keel-decompose`), `requires` debe ser coherente con las aristas `consumes` de ese servicio; quien resuelve y
+verifica el grafo es `keel system check`, no el registry. Ojo con no confundir los dos ejes: `family` agrupa
+**variantes alternativas del mismo problema** y `system.yaml` describe **composición**. Detalle en
+[system-decomposition.md](system-decomposition.md).
+
 ### Variantes del mismo problema
 
 Varios diseños pueden resolver el mismo dominio de formas distintas, y eso es deseable: quien descarga elige
