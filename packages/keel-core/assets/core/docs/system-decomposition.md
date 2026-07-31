@@ -75,7 +75,7 @@ services:
 | `publishes` | no | Eventos que publica. Es lo que hace verificable la arista del consumidor |
 | `status` | no (`planned`) | Estado declarado. La CLI lo contrasta con la realidad de `specs/` |
 | `external` | no (`false`) | Un sistema que no diseñamos aquí. No se le espera `specs/`, su contrato vive en `contracts/<servicio>/INTEGRATION.md` y **nunca bloquea el orden** |
-| `derivedFrom` | no | Diseño del registry del que se derivará: `keel new <servicio> --from registry:<diseño>` en vez de una sesión de diseño completa |
+| `derivedFrom` | no | Diseño del registry del que partirá este servicio, en vez de una sesión de diseño completa. Si hay que ajustarlo, se deriva con `keel new <servicio> --from registry:<diseño>`; si sirve tal cual y el nombre del mapa coincide con el del diseño, se **adopta** con `keel registry get <diseño>` y el servicio nace ya cerrado |
 | `after` | no | Servicios que van antes por **prioridad de negocio**, no por contrato |
 | `consumes` | no | Las aristas del mapa de contextos |
 
@@ -176,6 +176,8 @@ Son ejes distintos y conviene no confundirlos:
   (`notifications-multichannel` vs. `notifications-push-only`). No es composición.
 - **`system.yaml`** describe **composición**: varios servicios distintos que forman un sistema.
 
-Un servicio del mapa puede resolverse derivando del registry (`derivedFrom`), y entonces
-`design.yaml.requires` del diseño derivado debería ser coherente con sus aristas del mapa. Detalle del
-registry en [design-registry.md](design-registry.md).
+Un servicio del mapa puede resolverse desde el registry (`derivedFrom`), derivándolo o adoptándolo tal
+cual, y entonces `design.yaml.requires` de ese diseño debería ser coherente con sus aristas del mapa. Un
+servicio **adoptado** entra en el mapa ya con `status` de diseño cerrado y publica su contrato desde el
+primer día, así que no bloquea a nadie: es la forma más barata de cerrar una ola. Detalle del registry en
+[design-registry.md](design-registry.md).
