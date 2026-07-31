@@ -115,7 +115,12 @@ operations:
         position:
           type: int
           required: true
-    output: "void"
+    # Devuelve el AGREGADO, no la imagen creada: es la silueta de "añadir X a la
+    # colección de Y", donde el 201 y el id de la respuesta hablan de cosas
+    # distintas. Fija la regla de Location del caso sub-recurso → padre.
+    output:
+      entity: Product
+      embed: [brand, category]
     errors:
       - code: PRODUCT_NOT_FOUND
         when: No existe un producto con ese id.

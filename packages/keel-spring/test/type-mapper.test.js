@@ -39,6 +39,27 @@ test('beanValidationAnnotations combina required y constraints', () => {
   assert.ok(annotations.some((a) => a.startsWith('@Pattern')));
 });
 
+test('beanValidationAnnotations sin inheritTypeFormat deja fuera el patrón del value type', () => {
+  const resolved = resolveType('SKU', domainTypes);
+
+  // El formato del value type describe el valor ya normalizado, así que no puede
+  // replicarse en un DTO de ENTRADA: Bean Validation corre antes de que el handler
+  // normalice (conventions/mapping.md § Normalización antes que validación).
+  const inherited = beanValidationAnnotations({ required: true }, resolved, { inheritTypeFormat: false });
+  assert.ok(inherited.includes('@NotBlank'));
+  assert.ok(inherited.some((a) => a.startsWith('@Size(max = 8')), inherited.join(' '));
+  assert.ok(!inherited.some((a) => a.startsWith('@Pattern')), inherited.join(' '));
+
+  // El que el CAMPO declara por su cuenta sí se queda: es una restricción de esta
+  // entrada, no la forma del tipo.
+  const own = beanValidationAnnotations(
+    { required: true, constraints: { pattern: '^[a-z]+$' } },
+    resolved,
+    { inheritTypeFormat: false }
+  );
+  assert.ok(own.includes('@Pattern(regexp = "^[a-z]+$")'), own.join(' '));
+});
+
 test('beanValidationAnnotations usa DecimalMin para decimales', () => {
   const resolved = resolveType('decimal', domainTypes);
   const annotations = beanValidationAnnotations({ required: true, constraints: { min: 0 } }, resolved);

@@ -60,8 +60,21 @@ export function resolveType(typeRef, domainTypes = {}) {
  * Anotaciones Bean Validation para un campo de DTO de entrada.
  * Combina las constraints del campo con las del value type escalar (aplanado).
  */
-export function beanValidationAnnotations(field, resolved) {
-  const constraints = { ...resolved.constraints, ...(field.constraints ?? {}) };
+export function beanValidationAnnotations(field, resolved, { inheritTypeFormat = true } = {}) {
+  const own = field.constraints ?? {};
+  // `inheritTypeFormat: false` deja fuera el `pattern` que el campo hereda de su
+  // VALUE TYPE, conservando el que el campo declare por su cuenta. Es lo que
+  // necesita un DTO de ENTRADA: el formato del value type describe el valor ya
+  // normalizado (`SKU` es `^[A-Z0-9]…`, y el diseño normaliza a mayúsculas antes
+  // de validar), pero Bean Validation corre sobre el DTO antes de que el handler
+  // normalice nada — un sku en minúsculas moría con 422 VALIDATION_ERROR sin
+  // llegar nunca a la regla de negocio. Ese formato lo hace cumplir el constructor
+  // del value object del dominio, que es donde el modelo rico lo quiere de todos
+  // modos (conventions/mapping.md § Normalización antes que validación de formato
+  // y conventions/domain-modeling.md).
+  const constraints = inheritTypeFormat
+    ? { ...resolved.constraints, ...own }
+    : { ...resolved.constraints, ...own, pattern: own.pattern ?? null };
 
   // Campo colección: las anotaciones son del contenedor, no del elemento.
   // minItems/maxItems acotan la cardinalidad; required significa "presente y no vacío".

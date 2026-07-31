@@ -1816,3 +1816,63 @@ test('default de un campo enum list comprueba cada valor', () => {
   assert.equal(errors.filter((e) => e.includes('no es un valor del enum')).length, 1);
   assert.ok(errors.some((e) => e.includes(`default 'C' no es un valor del enum`)));
 });
+
+// --- use-cases: consistencia de proyección (el hueco que solo aparecía generando) ---
+
+// Dos operaciones que devuelven la misma entidad: una resuelve la referencia con
+// embed y la otra la deja como id plano.
+const projectionLayers = (listOutput) => ({
+  domain: domainForEmbed(),
+  'use-cases': {
+    operations: {
+      getOrder: {
+        description: 'Recupera un pedido por su id.',
+        kind: 'query',
+        internal: true,
+        input: { entity: 'Order' },
+        output: { entity: 'Order', embed: ['customer'] },
+      },
+      listOrders: {
+        description: 'Lista los pedidos.',
+        kind: 'query',
+        internal: true,
+        output: listOutput,
+      },
+    },
+  },
+});
+
+test('proyección asimétrica de una referencia embebida es aviso, no error', () => {
+  const { errors, warnings } = run(projectionLayers({ entity: 'Order', list: true }));
+  assert.deepEqual(errors, []);
+  assert.equal(warnings.length, 1, warnings.join('\n'));
+  assert.match(warnings[0], /listOrders/);
+  assert.match(warnings[0], /'customerId' plano/);
+  assert.match(warnings[0], /getOrder/);
+});
+
+test('proyección coherente en todas las operaciones no avisa', () => {
+  const { errors, warnings } = run(
+    projectionLayers({ entity: 'Order', list: true, embed: ['customer'] })
+  );
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
+test('una referencia excluida del payload no cuenta como proyección asimétrica', () => {
+  // Sin la relación no hay nada que embeber: dejarla fuera es una decisión
+  // explícita del diseño, no un olvido.
+  const { errors, warnings } = run(
+    projectionLayers({ entity: 'Order', list: true, exclude: ['customer'] })
+  );
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
+test('una sola operación por entidad no puede ser asimétrica consigo misma', () => {
+  const layers = projectionLayers({ entity: 'Order' });
+  delete layers['use-cases'].operations.listOrders;
+  const { errors, warnings } = run(layers);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});

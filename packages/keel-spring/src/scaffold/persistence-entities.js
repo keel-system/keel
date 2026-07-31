@@ -61,6 +61,28 @@ export function jpaMembers(model, entity) {
   return members;
 }
 
+// Campos por los que una colección hija tiene un orden PROPIO del diseño: un
+// número de posición explícito. No es cosmético — cuando el dominio expone
+// `position`, el orden es contrato observable (la galería de un producto se
+// devuelve en su orden), y una colección `@OneToMany` sin `@OrderBy` la entrega en
+// el orden que decida la base de datos. Tras un reorder eso significa que la
+// colección en memoria no refleja el orden recién guardado salvo que cada
+// adaptador se acuerde de reordenarla al mapear.
+const ORDERING_FIELDS = ['position', 'order', 'sortOrder', 'sequence'];
+const ORDERING_KINDS = new Set(['int', 'integer', 'long', 'short', 'number', 'decimal']);
+
+/** Campo de orden explícito de la entidad hija, o null si no lo declara. */
+export function orderingFieldOf(model, entityName) {
+  const child = model.entities.find((e) => e.name === entityName);
+  if (!child) return null;
+  return (
+    child.fields.find(
+      (field) =>
+        !field.list && ORDERING_FIELDS.includes(field.name) && (!field.base || ORDERING_KINDS.has(field.base))
+    ) ?? null
+  );
+}
+
 // Nombre de la relación con la que `childName` apunta de vuelta a `parentName`
 // (back-reference declarada en el diseño), o null si la relación es unidireccional.
 // Es el mappedBy del @OneToMany del padre y el setter que el mapeo debe rellenar.
@@ -311,6 +333,12 @@ function renderJpaEntity(model, entity) {
           // FK en la tabla hija (unidireccional CON @JoinColumn: sin join table).
           annotation = `@OneToMany(cascade = CascadeType.ALL, orphanRemoval = true)\n    @JoinColumn(name = "${snakeCase(entity.name)}_id")`;
         }
+      }
+      // Orden declarado por el diseño: lo aplica la propia consulta, no el mapeo.
+      const ordering = orderingFieldOf(model, member.relation.entity);
+      if (ordering) {
+        imports.add('jakarta.persistence.OrderBy');
+        annotation += `\n    @OrderBy("${ordering.name} ASC")`;
       }
       imports.add('java.util.List');
       imports.add('java.util.ArrayList');

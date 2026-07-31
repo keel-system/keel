@@ -3,6 +3,14 @@ types:
     description: Estados de publicación de un producto.
     values: [draft, active, retired]
 
+  # Value type con formato: describe el sku YA normalizado (el diseño lo pasa a
+  # mayúsculas antes de validar unicidad). Replicarlo como @Pattern en el DTO de
+  # entrada rechaza el valor crudo antes de que el handler normalice nada.
+  SKU:
+    description: Referencia comercial única del producto.
+    base: string
+    constraints: { pattern: "^[A-Z0-9][A-Z0-9-]{3,19}$" }
+
 entities:
   Category:
     description: Categoría del catálogo, raíz de su propio agregado.
@@ -35,7 +43,7 @@ entities:
         id: true
         generated: true
       sku:
-        type: string
+        type: SKU
         required: true
         unique: true
       name:

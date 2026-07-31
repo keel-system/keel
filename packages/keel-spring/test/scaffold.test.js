@@ -177,7 +177,11 @@ test('scaffoldService genera el proyecto completo con contenido clave', () => {
   const adapter = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/persistence/repositories/ProductRepositoryImpl.java');
   assert.ok(adapter.includes('implements ProductRepository'));
   assert.ok(adapter.includes('private Product toDomain(ProductJpa jpa)'));
-  assert.ok(adapter.includes('private ProductJpa toJpa(Product domain)'));
+  // El volcado dominio → JPA se aplica sobre la instancia que save() cargó, que
+  // puede estar gestionada; construir una nueva convertiría el save en un merge
+  // sobre detached (y con @Version, en un 409 sin concurrencia).
+  assert.ok(adapter.includes('private void applyToJpa(Product domain, ProductJpa jpa)'));
+  assert.ok(adapter.includes('.findById(entity.getId()).orElseGet(ProductJpa::new)'));
   // La versión de concurrencia viaja en ambos sentidos del mapeo.
   assert.ok(adapter.includes('jpa.getLockVersion()'));
   assert.ok(adapter.includes('jpa.setLockVersion(domain.getLockVersion());'));
@@ -1593,7 +1597,12 @@ test('persistencia: relación interna con @JoinColumn (FK en la hija, sin join t
   // El adaptador mapea la colección interna en ambos sentidos.
   const adapter = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/persistence/repositories/OrderRepositoryImpl.java');
   assert.ok(adapter.includes('jpa.getLines().stream().map(this::toDomain).toList()'));
-  assert.ok(adapter.includes('jpa.setLines(new ArrayList<>(domain.getLines().stream().map(this::toJpa).toList()));'));
+  // Ida: reconciliación por identidad sobre la colección gestionada. Recrear las
+  // hijas en cada guardado deja huérfanas y rompe el bloqueo optimista.
+  assert.ok(adapter.includes('Map<UUID, OrderLineJpa> linesManaged = new HashMap<>();'), adapter);
+  assert.ok(adapter.includes('OrderLineJpa childJpa = child.getId() != null ? linesManaged.get(child.getId()) : null;'));
+  assert.ok(adapter.includes('jpa.getLines().clear();'));
+  assert.ok(adapter.includes('jpa.getLines().addAll(linesReconciled);'));
 });
 
 test('persistencia: value object anidado deja TODO en vez de columna/mapa inválidos', () => {

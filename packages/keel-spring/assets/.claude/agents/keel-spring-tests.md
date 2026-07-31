@@ -168,6 +168,13 @@ source set `integrationTest`, así que un test que importe un DTO o una entidad 
      del arnés es que **todo cuerpo con comillas viaja por archivo** (`copyToDevtools`),
      nunca en la línea de comandos; el javadoc de `devtools` lo dice. Si escribes un helper
      nuevo que invoque una CLI del contenedor, respétala.
+- **Un `SMOKE-4` rojo casi nunca es Java.** «No se pudo leer el canal '<x>'» o
+  «`NonExistentQueue`» dicen que **la topología no está sembrada**, no que `AbstractFlowIT` esté
+  roto: el helper compone la URL del destino por concatenación y falla si el recurso no existe.
+  Mira `infra/init-messaging.sh` y `bash infra/validate-infra.sh` **antes** que `src/integrationTest`.
+  El síntoma aparece por partida doble —en el humo y como `AVISO` en el `resetState()` de cada
+  clase de flujo—, y ambos son el mismo hecho. Si el script no crea el recurso que el arnés lee,
+  es defecto del **generador**: va a `blockers`, no se parchea el Java para esquivarlo.
 - Nada de dobles de test, brokers embebidos (`@EmbeddedKafka`) ni `@MockBean`: lo que se
   valida es el servidor real contra la infraestructura levantada. Lo no observable por HTTP
   se comprueba con los helpers de la base (`publishedMessages`, `devtools`).

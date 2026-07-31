@@ -443,12 +443,17 @@ function minioInitService(buckets) {
     'mc ls local;'
   ].join('\n');
 
+  // Sin `restart`: corre una vez y termina, que es el default de compose. Declarar
+  // `restart: "no"` explícitamente lo rompía en podman-compose, que lee el YAML con
+  // su propio parser (el `no` sin comillas es el booleano false de YAML) y aborta
+  // con «"False" is not a valid restart policy» — el sidecar no llegaba a crearse y
+  // toda la superficie que sube o lee ficheros quedaba bloqueada. `infra/` declara
+  // podman como runtime de primera clase (conventions/infra-validation.md), así que
+  // el compose generado no puede depender de una extensión de docker-compose.
   return {
     image: 'minio/mc:RELEASE.2024-10-08T09-37-26Z',
     depends_on: ['minio'],
-    entrypoint: ['sh', '-c', script + '\n'],
-    // Corre una vez y termina: no es un servicio de larga vida.
-    restart: 'no'
+    entrypoint: ['sh', '-c', script + '\n']
   };
 }
 

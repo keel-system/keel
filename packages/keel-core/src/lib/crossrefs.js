@@ -401,6 +401,50 @@ export function checkCrossRefs({ layers, wip = false }) {
     }
   }
 
+  // use-cases: consistencia de proyección — si la mayoría de las operaciones que
+  // devuelven una entidad resuelven una referencia con `embed`, la que no lo hace
+  // suele ser un olvido, no una decisión.
+  //
+  // Es la única forma MECÁNICA de ver un hueco que hoy solo aparece generando: los
+  // escenarios de `validation-scenarios.md` son prosa y nada los cruza con los
+  // artefactos, así que "cada elemento del listado trae brand y category como
+  // objetos anidados" contra un `output` sin `embed` no se detecta hasta que la
+  // suite de integración falla, con toda la infraestructura levantada — el punto
+  // más caro posible. La señal no es el escenario: es la asimetría dentro del
+  // propio DSL. Aviso y no error: proyectar distinto en un listado que en el
+  // detalle es una decisión legítima (payload más liviano), solo que hay que
+  // tomarla a propósito.
+  const projections = new Map();
+  for (const [opName, op] of Object.entries(operations)) {
+    const output = op.output;
+    if (!output || output === 'void' || !output.entity || !entities.has(output.entity)) continue;
+    if (!projections.has(output.entity)) projections.set(output.entity, []);
+    projections.get(output.entity).push({
+      opName,
+      embed: new Set(output.embed ?? []),
+      // Un `exclude` deja la relación fuera del payload entero: no hay nada que
+      // embeber y no es asimetría.
+      exclude: new Set((output.exclude ?? []).map((path) => String(path).split('.')[0]))
+    });
+  }
+  for (const [entityName, payloads] of projections) {
+    if (payloads.length < 2) continue;
+    const relations = Object.keys(domain.entities?.[entityName]?.relations ?? {});
+    for (const relName of relations) {
+      const embedders = payloads.filter((payload) => payload.embed.has(relName));
+      if (embedders.length === 0) continue;
+      const plain = payloads.filter((payload) => !payload.embed.has(relName) && !payload.exclude.has(relName));
+      if (plain.length === 0) continue;
+      warnings.push(
+        `use-cases: ${plain.map((payload) => payload.opName).join(', ')}: ` +
+          `devuelve${plain.length > 1 ? 'n' : ''} '${entityName}' con '${relName}Id' plano, ` +
+          `mientras ${embedders.map((payload) => payload.opName).join(', ')} ` +
+          `lo${embedders.length > 1 ? 's' : ''} resuelve${embedders.length > 1 ? 'n' : ''} con embed: [${relName}] — ` +
+          'si es deliberado, ignóralo; si no, el consumidor recibe un id que le obliga a una segunda llamada'
+      );
+    }
+  }
+
   // api: endpoints → operaciones, variables de ruta ↔ input, y coherencia con la operación
   for (const [opName, endpoint] of Object.entries(api?.endpoints ?? {})) {
     const where = `api: endpoints.${opName}`;

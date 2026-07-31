@@ -138,7 +138,11 @@ function renderMessage(model, operation) {
 
     const annotations = [];
     if (!fromPath.has(component.name)) {
-      for (const annotation of component.validation ?? []) {
+      // Entrada: sin el formato heredado del value type, que el diseño puede estar
+      // normalizando en el handler (mapping.md § Normalización antes que validación
+      // de formato). Presencia, tamaño y rango sí se quedan: no compiten con
+      // ninguna normalización.
+      for (const annotation of component.inputValidation ?? component.validation ?? []) {
         imports.add(`jakarta.validation.constraints.${annotation.slice(1).split('(')[0]}`);
         annotations.push(annotation);
       }

@@ -155,11 +155,22 @@ function renderAdapter(model, entity, paginated) {
     imports.add('org.springframework.context.ApplicationEventPublisher');
     imports.add('org.springframework.transaction.annotation.Transactional');
   }
+  // Se parte de la instancia GESTIONADA cuando el agregado ya existe: guardar un
+  // grafo reconstruido a mano es un merge sobre entidades detached, y con @Version
+  // eso falla con ObjectOptimisticLockingFailureException aunque no haya
+  // concurrencia ninguna. Cargarla también es lo que permite reconciliar las
+  // colecciones hijas por identidad en vez de recrearlas (ver applyToJpa).
+  const loadManaged = `        ${entity.name}Jpa jpa = entity.getId() != null
+                ? ${jpaField}.findById(entity.getId()).orElseGet(${entity.name}Jpa::new)
+                : new ${entity.name}Jpa();
+        applyToJpa(entity, jpa);`;
   const saveBody = emitsEvents
-    ? `        ${entity.name} saved = toDomain(${jpaField}.save(toJpa(entity)));
+    ? `${loadManaged}
+        ${entity.name} saved = toDomain(${jpaField}.save(jpa));
         entity.pullDomainEvents().forEach(eventPublisher::publishEvent);
         return saved;`
-    : `        return toDomain(${jpaField}.save(toJpa(entity)));`;
+    : `${loadManaged}
+        return toDomain(${jpaField}.save(jpa));`;
 
   methods.push(
     `    @Override${emitsEvents ? '\n    @Transactional' : ''}
@@ -172,9 +183,21 @@ ${saveBody}
     }`
   );
 
+  // Entidades que alguien construye desde cero al mapear (relación one-to-one
+  // interna): solo esas necesitan el atajo `toJpa`. El resto se vuelca sobre una
+  // instancia existente con `applyToJpa`, y emitir la fábrica igualmente dejaría un
+  // método privado sin usar en cada adaptador.
+  const builtFresh = new Set(
+    involved.flatMap((involvedEntity) =>
+      jpaMembers(model, involvedEntity)
+        .filter((member) => member.kind === 'relationOne' && !member.relation?.backReference)
+        .map((member) => member.relation.entity)
+    )
+  );
+
   const mappers = involved.flatMap((involvedEntity) => [
     renderToDomain(model, involvedEntity, imports),
-    renderToJpa(model, involvedEntity, imports)
+    renderToJpa(model, involvedEntity, imports, builtFresh.has(involvedEntity.name))
   ]);
 
   const fields = [`    private final ${entity.name}JpaRepository ${jpaField};`];
@@ -266,8 +289,8 @@ function renderToDomain(model, entity, imports) {
     }`;
 }
 
-function renderToJpa(model, entity, imports) {
-  const lines = [`        ${entity.name}Jpa jpa = new ${entity.name}Jpa();`];
+function renderToJpa(model, entity, imports, needsFactory = false) {
+  const lines = [];
   for (const member of jpaMembers(model, entity)) {
     if (member.kind === 'vo') {
       const getter = `domain.get${capitalize(member.name)}()`;
@@ -312,22 +335,42 @@ function renderToJpa(model, entity, imports) {
       // Lista mutable: Hibernate gestiona la colección.
       imports.add('java.util.ArrayList');
       const inverse = backReferenceTo(model, member.relation.entity, entity.name);
+      const childJpa = `${member.relation.entity}Jpa`;
+      const getter = `domain.get${capitalize(member.name)}()`;
+      const accessor = `jpa.get${capitalize(member.name)}()`;
+      imports.add('java.util.List');
+      imports.add('java.util.Map');
+      imports.add('java.util.HashMap');
+      const local = `${member.name}Reconciled`;
+      // Reconciliación por identidad sobre la colección GESTIONADA, no un grafo
+      // nuevo. Construir hijas con `new` en cada guardado convierte el save() en un
+      // merge sobre entidades detached: con @Version, Hibernate ve la versión que
+      // trae el grafo recién armado y lanza ObjectOptimisticLockingFailureException
+      // (409 CONCURRENT_MODIFICATION) hasta en flujos secuenciales de un solo
+      // actor. Se reutiliza la instancia gestionada de cada hija que ya existía y
+      // solo son nuevas las que el dominio acaba de añadir; clear()+addAll sobre la
+      // colección gestionada deja que orphanRemoval borre las que se fueron.
+      lines.push(
+        `        Map<UUID, ${childJpa}> ${member.name}Managed = new HashMap<>();`,
+        `        for (${childJpa} child : ${accessor}) ${member.name}Managed.put(child.getId(), child);`,
+        `        List<${childJpa}> ${local} = new ArrayList<>();`,
+        `        for (${member.relation.entity} child : ${getter}) {`,
+        `            ${childJpa} childJpa = child.getId() != null ? ${member.name}Managed.get(child.getId()) : null;`,
+        `            if (childJpa == null) childJpa = new ${childJpa}();`,
+        `            applyToJpa(child, childJpa);`
+      );
       if (inverse) {
         // Bidireccional: la hija es dueña de la FK, así que hay que estampar el
         // padre en cada hija. El mapeo de la hija nunca vuelve al padre (sería
         // recursión infinita): el vínculo se cierra aquí, en un solo sentido.
-        imports.add('java.util.List');
-        const local = `${member.name}Jpa`;
-        lines.push(
-          `        List<${member.relation.entity}Jpa> ${local} = domain.get${capitalize(member.name)}().stream().map(this::toJpa).toList();`,
-          `        ${local}.forEach(child -> child.set${capitalize(inverse)}(jpa));`,
-          `        jpa.set${capitalize(member.name)}(new ArrayList<>(${local}));`
-        );
-      } else {
-        lines.push(
-          `        jpa.set${capitalize(member.name)}(new ArrayList<>(domain.get${capitalize(member.name)}().stream().map(this::toJpa).toList()));`
-        );
+        lines.push(`            childJpa.set${capitalize(inverse)}(jpa);`);
       }
+      lines.push(
+        `            ${local}.add(childJpa);`,
+        '        }',
+        `        ${accessor}.clear();`,
+        `        ${accessor}.addAll(${local});`
+      );
     } else if (member.kind === 'relationOne' && member.relation?.backReference) {
       // La back-reference la estampa el padre al mapear su colección.
       lines.push(`        // ${member.name}: lo estampa ${member.relation.entity}RepositoryImpl al mapear su colección.`);
@@ -344,9 +387,20 @@ function renderToJpa(model, entity, imports) {
   if (entity.usesOptimisticLocking && !entity.declaresLockVersion) {
     lines.push('        jpa.setLockVersion(domain.getLockVersion());');
   }
-  lines.push('        return jpa;');
 
-  return `    private ${entity.name}Jpa toJpa(${entity.name} domain) {
+  // `applyToJpa` vuelca el dominio sobre una instancia que puede estar GESTIONADA
+  // (la que save() cargó, o la hija reutilizada al reconciliar). `toJpa` es solo el
+  // atajo para cuando de verdad hace falta una nueva.
+  const factory = needsFactory
+    ? `    private ${entity.name}Jpa toJpa(${entity.name} domain) {
+        ${entity.name}Jpa jpa = new ${entity.name}Jpa();
+        applyToJpa(domain, jpa);
+        return jpa;
+    }
+
+`
+    : '';
+  return `${factory}    private void applyToJpa(${entity.name} domain, ${entity.name}Jpa jpa) {
 ${lines.join('\n')}
     }`;
 }

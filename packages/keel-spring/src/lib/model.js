@@ -247,6 +247,9 @@ function resolveField(ownerName, fieldName, field, domainTypes, inlineEnumName, 
     wireName: field.wireName && field.wireName !== fieldName ? field.wireName : null,
     description: field.description ?? null,
     validation: beanValidationAnnotations(field, resolved),
+    // La misma lista para un DTO de entrada: sin el formato heredado del value
+    // type, que solo se cumple después de normalizar (ver type-mapper.js).
+    inputValidation: beanValidationAnnotations(field, resolved, { inheritTypeFormat: false }),
     // Una colección no es una columna: su mapeo (@ElementCollection) lo pone la Jpa,
     // no columnAnnotations. Sin persistence o sin list, comportamiento previo.
     columns: persisted && !isList ? columnAnnotations(fieldName, field, resolved) : [],

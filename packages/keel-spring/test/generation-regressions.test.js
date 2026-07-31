@@ -74,9 +74,21 @@ test('§1.3: toda creación con id en la salida devuelve la cabecera Location', 
     )
   );
   assert.ok(product.includes('import org.springframework.web.servlet.support.ServletUriComponentsBuilder;'));
-  // addProductImage declara `output: void`: sin id que referenciar no hay URI que
-  // construir, así que se queda con @ResponseStatus(CREATED) y sin Location.
-  assert.ok(image.includes('@ResponseStatus(HttpStatus.CREATED)'));
+
+  // addProductImage crea un SUB-RECURSO y devuelve el agregado padre: el `id` de la
+  // respuesta es el del producto, no el de la imagen. La regla general (URI de la
+  // petición + id del output) daba `/products/{productId}/images/{productId}`, que
+  // no es la ruta de nada. Location apunta al agregado devuelto.
+  assert.ok(
+    product.includes(
+      'ServletUriComponentsBuilder.fromCurrentContextPath()\n                    .path("/api/v1/products/{productId}").buildAndExpand(productId).toUri()'
+    ),
+    product
+  );
+  assert.ok(!product.includes('/images/{id}'));
+
+  // removeProductImage sigue con `output: void`: sin id que referenciar no hay URI
+  // que construir, así que se queda con @ResponseStatus y sin Location.
   assert.ok(!image.includes('ResponseEntity.created('));
   // Nunca se envuelve un retorno vacío solo por el status.
   assert.ok(!product.includes('ResponseEntity<Void>'));
@@ -119,7 +131,9 @@ test('DTOs: las relaciones entran — referencia por id y entidad hija como DTO 
 
 test('campos file: endpoint multipart con MultipartFile y FileUpload en el mensaje', () => {
   const { read } = scaffoldExtended();
-  const controller = read(controllerPath('productimage'));
+  // addProductImage devuelve Product, así que su endpoint vive en el controlador
+  // del agregado que devuelve, no en el de la entidad hija.
+  const controller = read(controllerPath('product'));
   const command = read(`${JAVA}/application/commands/AddProductImageCommand.java`);
 
   assert.ok(controller.includes('consumes = MediaType.MULTIPART_FORM_DATA_VALUE'));
@@ -140,9 +154,9 @@ test('relación bidireccional: mappedBy en la raíz y mapeo sin ciclo', () => {
   assert.ok(parentJpa.includes('@OneToMany(mappedBy = "product"'));
   assert.ok(childJpa.includes('@ManyToOne(optional = false)'));
   // El mapper de la hija no vuelve al padre; el vínculo lo estampa el padre.
-  const childToJpa = adapter.slice(adapter.indexOf('private ProductImageJpa toJpa('));
-  assert.ok(!childToJpa.includes('toJpa(domain.getProduct())'));
-  assert.ok(adapter.includes('.forEach(child -> child.setProduct(jpa))'));
+  const childToJpa = adapter.slice(adapter.indexOf('private void applyToJpa(ProductImage domain'));
+  assert.ok(!childToJpa.includes('applyToJpa(domain.getProduct()'));
+  assert.ok(adapter.includes('childJpa.setProduct(jpa);'));
   // Y el dominio de la hija no arrastra la referencia al padre.
   assert.ok(!childDomain.includes('Product product'));
 });
@@ -598,6 +612,11 @@ test('storage: los buckets del diseño los prepara infra/, no el arranque de la 
   assert.ok(compose.includes('mc mb --ignore-existing local/catalog-product-images'));
   assert.ok(compose.includes('mc anonymous set download local/catalog-product-images'));
 
+  // Sin política de reinicio: `restart: "no"` es válido en docker-compose pero
+  // podman-compose lo lee como el booleano false de YAML y aborta el sidecar
+  // («"False" is not a valid restart policy»), dejando el bucket sin crear.
+  assert.ok(!compose.includes('restart:'), compose);
+
   // Y la infraestructura se declara mal desde el sondeo, antes de arrancar nada.
   // El sondeo mide el EFECTO (un GET anónimo que responde 200), no el nombre del
   // preset: en cuanto el adaptador aplica su propia bucket policy al arrancar,
@@ -702,14 +721,29 @@ test('§1.2: con snssqs se genera la topología (topics, colas, DLQ, raw deliver
   // La cola es del consumidor, y su DLQ lleva el maxReceiveCount del diseño.
   assert.ok(script.includes("create_queue_with_dlq 'metering-digest-meter-reading-captured'"), script);
   assert.ok(/create_queue_with_dlq '[^']+' \d+/.test(script), 'maxReceiveCount no es numérico');
-  assert.ok(script.includes('RawMessageDelivery=true'), 'sin raw delivery el listener recibe el sobre SNS');
+  assert.ok(script.includes('RawMessageDelivery'), 'sin raw delivery el listener recibe el sobre SNS');
   assert.ok(script.includes('FilterPolicy'), 'sin filtro por eventType el fan-out entrega de más');
+
+  // Cola de ARNÉS por canal de publicación, con el nombre del canal: es lo que
+  // AbstractFlowIT#publishedMessages busca al componer la URL. Sin ella el humo del
+  // arnés muere con NonExistentQueue y la suite entera se queda sin correr — y este
+  // servicio no tiene subscriptions de negocio que la creasen de rebote.
+  assert.ok(script.includes("create_queue_with_dlq 'digests' 5"), script);
+  assert.ok(script.includes("subscribe 'metering-digest-events' 'digests' 'DailyDigestClosed'"), script);
+
+  // Ningun JSON viaja inline en el argv: podman.exe en Windows corrompe las
+  // comillas anidadas al reenviar la linea de comandos al contenedor.
+  assert.ok(!/--attributes\s+\w+='?\{/.test(script), 'JSON de politica inline en el argv');
+  assert.ok(script.includes('put_json'), script);
 
   // El check tiene que medir que los recursos EXISTEN: `sns list-topics` da verde
   // con la lista vacía, que es exactamente el estado roto.
   const validate = fs.readFileSync(path.join(root, 'infra/validate-infra.sh'), 'utf8');
   assert.ok(validate.includes('sns get-topic-attributes'), validate);
-  assert.ok(validate.includes('sqs get-queue-url'), validate);
+  assert.ok(validate.includes('sqs get-queue-url --queue-name metering-digest-meter-reading-captured'), validate);
+  // Y la de arnés también: mientras no se comprobaba, validate-infra.sh daba verde
+  // sobre el estado que después tumbaba la suite.
+  assert.ok(validate.includes('sqs get-queue-url --queue-name digests'), validate);
 });
 
 test('§1.2: los brokers que autocrean topología no generan el script', () => {
@@ -724,4 +758,30 @@ test('§1.2: los brokers que autocrean topología no generan el script', () => {
       `${broker} no necesita sembrar topología`
     );
   }
+});
+
+test('colección hija con orden explícito: @OrderBy en la entidad JPA', () => {
+  const { read } = scaffoldExtended();
+  const parentJpa = read(`${JAVA}/infrastructure/persistence/entities/ProductJpa.java`);
+
+  // `ProductImage.position` hace del orden un contrato observable (la galería se
+  // devuelve ordenada). Sin @OrderBy, la colección llega en el orden que decida la
+  // base de datos, y tras un reorder la lista en memoria no refleja lo recién
+  // guardado salvo que cada adaptador se acuerde de reordenarla al mapear.
+  assert.ok(parentJpa.includes('@OrderBy("position ASC")'), parentJpa);
+  assert.ok(parentJpa.includes('import jakarta.persistence.OrderBy;'));
+});
+
+test('normalización antes que formato: el patrón del value type no llega al DTO de entrada', () => {
+  const { read } = scaffoldExtended();
+  const command = read(`${JAVA}/application/commands/CreateProductCommand.java`);
+
+  // `sku` es de tipo SKU, cuyo formato describe el valor YA normalizado. Bean
+  // Validation corre sobre el DTO antes de que el handler normalice nada: con
+  // @Pattern, un sku en minúsculas moría con 422 VALIDATION_ERROR sin llegar a la
+  // regla de negocio que debía responder 409 SKU_ALREADY_EXISTS — el escenario
+  // fallaba por el error equivocado (conventions/mapping.md).
+  assert.ok(!command.includes('@Pattern'), command);
+  // Presencia sí se queda: no compite con ninguna normalización.
+  assert.ok(command.includes('@NotBlank String sku'), command);
 });

@@ -117,6 +117,33 @@ handler o en el constructor del value object del dominio (que es donde el modelo
 rico la quiere de todos modos, ver `domain-modeling.md`). `@NotNull`/`@NotBlank`
 sí pueden quedarse: no compiten con ninguna normalización.
 
+**Lo que ya hace `build`**: el `pattern` que un campo **hereda de su value type**
+no se emite en los mensajes de entrada (commands y queries) — el formato del tipo
+describe el valor ya normalizado. El `pattern` que el **campo declara por su
+cuenta** sí se emite: es una restricción de esa entrada concreta, no la forma del
+tipo. Si aun así una entrada llega con una anotación que compite con una
+normalización declarada, es un caso que el diseño no expresa: repórtalo como
+`designGap`, no lo arregles quitando la anotación a mano.
+
+### Ordenar por un campo con columna normalizada
+
+Cuando el diseño dice que un texto se compara o se ordena **ignorando mayúsculas y
+acentos**, `build` genera la columna normalizada del campo (`nameNormalized`) y el
+repositorio que la consulta. El `Sort` del listado tiene que usar **esa misma
+columna**, no la cruda:
+
+```java
+// mal: ordena por bytes, y 'Ácme' cae después de 'Zeta'
+Sort.by(Sort.Order.asc("name"), Sort.Order.asc("id"))
+// bien: misma fuente de verdad que el filtro
+Sort.by(Sort.Order.asc("nameNormalized"), Sort.Order.asc("id"))
+```
+
+La regla es "existe columna normalizada del campo por el que ordeno ⇒ ordeno por
+ella". Tratarlas como independientes hace que el filtro y el orden del mismo
+listado discrepen, y el escenario falla en un elemento del medio de la página —
+el fallo más caro de diagnosticar de todos.
+
 ### El sobre de error es contrato del generador
 
 A diferencia de "ausencia vs. nulo", la **forma** del cuerpo de error no es negociable por el
@@ -160,6 +187,27 @@ Lo que le toca al agente:
 
 En ambos casos, un value object compuesto sin ningún valor se mapea a `null` — eso lo decide el
 mapeo, no Jackson (ver `domain-modeling.md`).
+
+**Colecciones: `NON_NULL` no basta.** Un dominio sano representa "sin elementos" con `List.of()`,
+no con `null`, así que un campo `list` opcional sigue viajando como `[]` bajo `NON_NULL` — que es
+justo lo que "un campo sin valor se omite" dice que no debe pasar. Para las clases con campos de
+colección opcionales, `@JsonInclude(JsonInclude.Include.NON_EMPTY)`: cubre nulos y vacíos con una
+sola anotación. Si el diseño distingue "lista vacía" de "sin lista" (raro, pero es contrato si lo
+dice), entonces `NON_NULL` y que el mapper produzca `null`; decidirlo por su cuenta es inventar
+contrato.
+
+### `Location`: la ruta del recurso que la respuesta describe
+
+La regla general de un `201` es "URI de la petición + el `id` del `output`", y `build` la emite ya
+resuelta. Tiene una excepción que **también genera `build`**, y conviene conocerla para no
+"corregirla": cuando la operación añade algo a la colección de un agregado y devuelve **el
+agregado** (`POST /products/{productId}/images` con `output: { entity: Product }`), el `id` de la
+respuesta es el del **padre**, no el del sub-recurso creado. Aplicar la regla general daría
+`/products/{productId}/images/{productId}`, que no es la ruta de nada. En ese caso `Location`
+apunta al agregado devuelto: `/api/v1/products/{productId}`.
+
+Es genérico de cualquier "añadir X a la colección de Y devolviendo Y". Si un escenario espera otra
+cosa, es discrepancia de diseño (`designGap`), no algo que se ajuste en el controller.
 
 ### Formato de los instantes
 
