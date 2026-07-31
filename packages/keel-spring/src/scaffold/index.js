@@ -25,6 +25,7 @@ import * as valueTypes from './value-types.js';
 import * as entities from './entities.js';
 import * as embeddables from './embeddables.js';
 import * as persistenceEntities from './persistence-entities.js';
+import * as auditing from './auditing.js';
 import * as exceptions from './exceptions.js';
 import * as repositories from './repositories.js';
 import * as dtos from './dtos.js';
@@ -64,6 +65,7 @@ const GENERATORS = [
   entities,
   embeddables,
   persistenceEntities,
+  auditing,
   exceptions,
   repositories,
   dtos,

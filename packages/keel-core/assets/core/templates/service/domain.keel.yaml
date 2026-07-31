@@ -34,6 +34,12 @@ entities:
   #     lockVersion: { type: int, generated: true }
   #                                         # nombre RESERVADO, solo en la raíz de un agregado y solo si persistence
   #                                         # declara consistency.optimisticLocking: declared (ver docs/dsl/persistence.md)
+  #     createdAt: { type: timestamp, generated: true }
+  #     updatedAt: { type: timestamp, generated: true }
+  #                                         # nombres RESERVADOS, solo si persistence declara audit.timestamps: declared
+  #     createdBy: { type: string, generated: true }
+  #     updatedBy: { type: string, generated: true }
+  #                                         # nombres RESERVADOS, solo si persistence declara audit.authorship: declared
   #   relations:
   #     catalog: { entity: Catalog, cardinality: many-to-one, required: true, description: Catálogo al que pertenece. }
   #   lifecycle:                          # solo las transiciones listadas son válidas

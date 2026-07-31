@@ -33,7 +33,7 @@ src/main/java/<base>/
     │   ├── events/      # <Evento>IntegrationEvent (gemelos de wire)
     │   └── outbox/      # (solo reliability: outbox) OutboxEventJpa + relay + PUERTO OutboxDispatcher
     ├── persistence/
-    │   ├── entities/    # AuditableEntity + XxxJpa (@Entity; VOs aplanados a columnas con prefijo)
+    │   ├── entities/    # XxxJpa (@Entity; VOs aplanados a columnas con prefijo) + AuditableEntity (persistence.audit: all)
     │   └── repositories/ # XxxJpaRepository (Spring Data) + XxxRepositoryImpl (adaptador toDomain/toJpa)
     ├── storage/         # (solo con capa storage) adaptador FileStorage (S3/MinIO)
     ├── http/            # (solo con capa http-clients) adaptadores RestClient + resilience4j + auth saliente + DTOs wire + mapper ACL

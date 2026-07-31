@@ -57,6 +57,7 @@ aceptable que ese pedido nunca llegue a facturación?» sí lo es.
 | 3.7 | Frontera transaccional | `persistence.consistency.transactionalBoundary` | 3.8 |
 | 3.8 | Paginación de una colección | `use-cases` (`paginated`) + `api.pagination` | 3.4 |
 | 3.9 | Concurrencia sobre la misma entidad | `persistence.consistency.optimisticLocking` + `use-cases.<op>.errors` | 3.2 y 3.8 |
+| 3.9b | Rastro de auditoría | `persistence.audit` (+ campos reservados en `domain`) | 3.8 |
 | 3.10 | Visibilidad de un bucket | `storage.buckets.<b>.visibility` | 3.9 |
 
 ---
@@ -247,6 +248,24 @@ ningún generador lee prosa.
 
 ---
 
+### 3.9b Rastro de auditoría — `persistence.audit`
+
+| Eje | Pregunta al diseñador | Respuesta → decisión |
+|---|---|---|
+| **Tiempos** | ¿Hace falta saber cuándo se creó y modificó cada registro? ¿Y alguien lo lee desde fuera, o solo se consulta operando la base? | Solo operando → `timestamps: all` (el defecto): la columna existe y no ensucia ningún contrato. Lo lee un cliente → `declared` + los campos en `domain`, porque solo lo que está en `domain` puede salir en un `output`. Nada → `none`. |
+| **Autoría** | ¿Hay que poder responder "quién hizo este cambio" —cumplimiento, disputas, soporte—? | Sí → `authorship: all` o `declared` con el mismo criterio de arriba. **Exige capa `security`**: sin principal autenticado no hay autor. |
+| **Escrituras sin usuario** | Con autoría: ¿qué se registra cuando el cambio no lo hace una persona (un evento consumido, un proceso nocturno)? | El generador escribe un centinela (`system`), nunca `null`. Si el negocio necesita distinguir *qué* proceso fue, eso es un campo de dominio, no auditoría. |
+
+**Trampa habitual**: pedir `createdBy` y descubrir al validar el flujo que la operación que lo
+escribe es un consumidor de eventos, donde no hay usuario. La autoría responde "quién", y en una
+escritura asíncrona la respuesta honesta es "nadie": si lo que se necesita es rastrear el origen,
+el correlation id ya lo da sin declarar nada.
+
+`timestamps` tiene default (`all`) y `authorship` también (`none`): los dos se escriben solos si
+nadie pregunta, y el segundo silencia una necesidad de cumplimiento que aparece tarde.
+
+---
+
 ### 3.10 Visibilidad de un bucket — `visibility: private | public`
 
 | Eje | Pregunta al diseñador | Respuesta → decisión |
@@ -271,5 +290,6 @@ secuenciales es un listado completo para quien itere.
 - [ ] Todo `cache.invalidatedBy` enumera **todas** las vías de mutación, propias y ajenas.
 - [ ] Todo consumo M2M tiene operación propia, o `audience: both` con rationale escrito.
 - [ ] `optimisticLocking` se eligió con la contención de las escrituras delante, no se heredó del default.
+- [ ] `audit.timestamps` y `audit.authorship` se preguntaron: si el rastro es parte del contrato es `declared` (campos en `domain`), no `all`.
 - [ ] Cada capa cerró con su **registro de decisiones estructurales** (elección, porqué, alternativa descartada): es lo que la clase 16 del análisis de huecos audita, y sin él ese barrido se hace contra la memoria.
 - [ ] Los pendientes estructurales están enumerados en el cierre de sesión, con nombre de operación o capa.

@@ -12,6 +12,13 @@ entities:
   #   naturalKey: [sku]
   #   indexes: [[status], [sku]]
 
+# Qué se registra de cada escritura. Con 'declared' los campos reservados
+# (createdAt/updatedAt, createdBy/updatedBy) se declaran en domain y son
+# proyectables en los output; con 'all' los pone la infraestructura y no se nombran.
+# audit:
+#   timestamps: all                        # all | declared | none
+#   authorship: none                       # all | declared | none  (exige capa security)
+
 # consistency:
 #   transactionalBoundary: per-operation   # per-operation | per-aggregate
 #   optimisticLocking: all                 # all | declared | none

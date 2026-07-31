@@ -16,9 +16,11 @@ optimista de la raíz de agregado — `lockVersion` con `@Version` — **ya lo g
 build**; solo el caso borde hija-a-hija con `OPTIMISTIC_FORCE_INCREMENT` es tuyo
 — ver `jpa-mapping.md`. Un `version` que declare el diseño es otra cosa: contador
 de dominio, campo corriente, y lo incrementa el agregado.)
+La auditoría (`persistence.audit`) tampoco es tuya: build genera las columnas o
+las anotaciones que pida la política y, si hay autoría, el `AuditorAwareConfig`
+que las puebla — no escribas otro `AuditorAware`.
 Build nunca deja código que no compila: donde no puede decidir deja un
-`// TODO (agente): …` que debes resolver — la autoría (`createdBy`/`updatedBy`) es
-uno de esos casos: build anota los campos, tú provees el `AuditorAware`.
+`// TODO (agente): …` que debes resolver.
 Esta skill cubre además lo que solo varía en configuración: tuning, dialecto y
 validación/reset de datos.
 
@@ -54,8 +56,7 @@ validación/reset de datos.
 
 1. **Resolver los TODO de build**: busca `// TODO (agente)` en
    `infrastructure/persistence/` (value objects anidados, mapeos que build no pudo
-   aplanar, el `AuditorAware` de la autoría si la entidad declara
-   `createdBy`/`updatedBy`) y complétalos con `references/jpa-mapping.md`.
+   aplanar) y complétalos con `references/jpa-mapping.md`.
 2. **Extender el mapeo estructural**: aplica lo de `references/jpa-mapping.md`
    cuando `persistence.keel.yaml`/`domain.keel.yaml` exijan relaciones
    bidireccionales, to-many entre agregados, `@Embeddable`, converters o `json`→jsonb.
@@ -79,7 +80,7 @@ Léelas bajo demanda, no todas de golpe:
 
 | Referencia | Cuándo leerla |
 |---|---|
-| `references/jpa-mapping.md` | Al resolver un `// TODO (agente)` de persistencia (incluido el `AuditorAware` de la autoría) o al mapear algo que build no cubre (relaciones bidireccionales/to-many entre agregados, VO anidados/`@Embeddable`, converters, `json`→jsonb; el `lockVersion`/`@Version` base ya lo genera build, aquí solo el caso borde `OPTIMISTIC_FORCE_INCREMENT`) |
+| `references/jpa-mapping.md` | Al resolver un `// TODO (agente)` de persistencia o al mapear algo que build no cubre (relaciones bidireccionales/to-many entre agregados, VO anidados/`@Embeddable`, converters, `json`→jsonb; el `lockVersion`/`@Version` base ya lo genera build, aquí solo el caso borde `OPTIMISTIC_FORCE_INCREMENT`) |
 | `references/migrations.md` | Al producir el baseline de `db/migration/` (exportar, revisar, probar) y al añadir migraciones posteriores |
 | `references/configuration.md` | Antes de tocar `parameters/<perfil>/db.yaml` o propiedades `spring.jpa.*` (Hikari, batching, N+1, locking) |
 | `references/dialects/<database>.md` | Al decidir tipos de columna, depurar el dialecto o preparar su validación/reset (solo el del stack) |

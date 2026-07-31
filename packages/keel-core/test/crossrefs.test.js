@@ -146,6 +146,95 @@ test("optimisticLocking 'all' y 'none' no exigen nada del dominio", () => {
   }
 });
 
+// --- persistence: audit ---
+
+const withAudit = (audit, domain = baseDomain(), extra = {}) => ({
+  domain,
+  'use-cases': {},
+  persistence: { default: { model: 'relational' }, entities: { Order: {} }, audit },
+  ...extra,
+});
+
+const securityLayer = { authentication: { protocol: 'oidc' }, access: { default: { level: 'authenticated' } } };
+
+test('sin bloque audit los defectos (timestamps all, authorship none) validan limpio', () => {
+  const { errors, warnings } = run(withAudit(undefined));
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
+test("audit.timestamps 'declared' con los campos reservados en domain valida limpio", () => {
+  const domain = baseDomain();
+  domain.entities.Order.fields.createdAt = { type: 'timestamp', generated: true };
+  domain.entities.Order.fields.updatedAt = { type: 'timestamp', generated: true };
+  const { errors, warnings } = run(withAudit({ timestamps: 'declared' }, domain));
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
+test("audit.timestamps 'declared' sin ningún campo declarado es error", () => {
+  const { errors } = run(withAudit({ timestamps: 'declared' }));
+  assert.ok(errors.some((e) => e.includes("audit.timestamps: 'declared'") && e.includes('createdAt/updatedAt')));
+});
+
+test("declarar un campo reservado bajo 'all' o 'none' es error", () => {
+  for (const policy of ['all', 'none']) {
+    const domain = baseDomain();
+    domain.entities.Order.fields.createdAt = { type: 'timestamp', generated: true };
+    const { errors } = run(withAudit({ timestamps: policy }, domain));
+    assert.ok(
+      errors.some((e) => e.includes(`audit.timestamps: '${policy}'`) && e.includes('Order.createdAt')),
+      policy
+    );
+  }
+});
+
+test('campo reservado de auditoría sin generated es error (el cliente podría enviarlo)', () => {
+  const domain = baseDomain();
+  domain.entities.Order.fields.createdAt = { type: 'timestamp' };
+  const { errors } = run(withAudit({ timestamps: 'declared' }, domain));
+  assert.ok(errors.some((e) => e.includes('Order.fields.createdAt') && e.includes("generated: true")));
+});
+
+test('campo reservado de auditoría con el tipo equivocado es error', () => {
+  const domain = baseDomain();
+  domain.entities.Order.fields.createdBy = { type: 'uuid', generated: true };
+  const { errors } = run(withAudit({ authorship: 'declared' }, domain), false);
+  assert.ok(errors.some((e) => e.includes('Order.fields.createdBy') && e.includes("exige 'string'")));
+});
+
+test("audit.authorship 'declared' con capa security valida limpio", () => {
+  const domain = baseDomain();
+  domain.entities.Order.fields.createdBy = { type: 'string', generated: true };
+  domain.entities.Order.fields.updatedBy = { type: 'string', generated: true };
+  const { errors, warnings } = run(withAudit({ authorship: 'declared' }, domain, { security: securityLayer }));
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
+test('autoría sin capa security es error: no hay actor que registrar', () => {
+  for (const policy of ['all', 'declared']) {
+    const domain = baseDomain();
+    if (policy === 'declared') domain.entities.Order.fields.createdBy = { type: 'string', generated: true };
+    const { errors } = run(withAudit({ authorship: policy }, domain));
+    assert.ok(errors.some((e) => e.includes('audit.authorship') && e.includes('capa security')), policy);
+  }
+});
+
+test("audit.authorship 'all' con security no exige nada del dominio", () => {
+  const { errors, warnings } = run(withAudit({ authorship: 'all' }, baseDomain(), { security: securityLayer }));
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
+test('sin capa persistence las reglas de auditoría no aplican', () => {
+  const domain = baseDomain();
+  domain.entities.Order.fields.createdBy = { type: 'string' };
+  const { errors, warnings } = run({ domain, 'use-cases': {} });
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
 // --- persistence: miembros de naturalKey e indexes → domain ---
 
 // Order tiene un campo escalar, un value object compuesto (total → Money) y una hija;

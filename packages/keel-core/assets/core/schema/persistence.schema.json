@@ -47,6 +47,25 @@
         }
       }
     },
+    "audit": {
+      "type": "object",
+      "description": "Qué se registra automáticamente de cada escritura. Los campos reservados (createdAt/updatedAt, createdBy/updatedBy) solo se declaran en domain con la política 'declared'.",
+      "additionalProperties": false,
+      "properties": {
+        "timestamps": {
+          "type": "string",
+          "enum": ["all", "declared", "none"],
+          "default": "all",
+          "description": "Registro de cuándo se creó y modificó cada fila. 'all': todas las entidades persistidas lo llevan, invisible al contrato. 'declared': solo las que declaren los campos reservados 'createdAt'/'updatedAt' en domain, que quedan visibles en los output que los proyecten. 'none': ninguna."
+        },
+        "authorship": {
+          "type": "string",
+          "enum": ["all", "declared", "none"],
+          "default": "none",
+          "description": "Registro de quién creó y modificó cada fila; exige capa security (el autor sale del principal autenticado). 'all': todas las entidades persistidas lo llevan, invisible al contrato. 'declared': solo las que declaren los campos reservados 'createdBy'/'updatedBy' en domain, que quedan visibles en los output que los proyecten. 'none': ninguna."
+        }
+      }
+    },
     "consistency": {
       "type": "object",
       "additionalProperties": false,

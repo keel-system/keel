@@ -106,7 +106,7 @@ Los componentes de application NO importan Spring: se marcan con `@ApplicationCo
 ### Qué se descartó del prototipo de referencia (y por qué)
 
 - **Paquete `shared/` y Spring Modulith**: keel genera un microservicio independiente; sus piezas transversales (mediator, errores, auditoría, envelope, logging) viven como funcionalidad del propio servicio y no hay módulos que aislar.
-- **Soft-delete (`FullAuditableEntity` + `@SQLRestriction`)**: el DSL Keel no lo declara; por defecto el borrado es físico y el soft-delete es decisión del agente si el diseño lo pide. La auditoría `createdAt`/`updatedAt` SÍ se genera (global, vía `AuditableEntity`).
+- **Soft-delete (`FullAuditableEntity` + `@SQLRestriction`)**: el DSL Keel no lo declara; por defecto el borrado es físico y el soft-delete es decisión del agente si el diseño lo pide. La auditoría (tiempos y autoría) SÍ la declara el DSL, en `persistence.audit`, y la genera build entera: `AuditableEntity` con la política `all`, anotaciones sobre los campos del dominio con `declared`, nada con `none`.
 
 Nota: `@LogExceptions` en el prototipo era decorativa (sin `@Aspect`); aquí se porta **implementada** con `LogExceptionsAspect` + `spring-boot-starter-aop`.
 

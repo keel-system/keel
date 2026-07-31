@@ -1003,6 +1003,60 @@ export function checkCrossRefs({ layers, wip = false }) {
       );
     }
   }
+  // Auditoría: cada eje ('timestamps', 'authorship') se declara de UNA sola forma.
+  // Con 'all' las columnas las pone la infraestructura y no se nombran en domain; con
+  // 'declared' se nombran ahí porque el diseño quiere proyectarlas en algún output.
+  // Mezclar ambas cosas es justo lo que hacía el comportamiento implícito anterior,
+  // donde declarar el campo desactivaba la política sin que nadie lo hubiese decidido.
+  if (persistence) {
+    const AUDIT_AXES = [
+      { axis: 'timestamps', fields: ['createdAt', 'updatedAt'], type: 'timestamp', fallback: 'all' },
+      { axis: 'authorship', fields: ['createdBy', 'updatedBy'], type: 'string', fallback: 'none' }
+    ];
+    for (const { axis, fields, type, fallback } of AUDIT_AXES) {
+      const policy = persistence.audit?.[axis] ?? fallback;
+      const declaredBy = [];
+      for (const [entityName, entity] of Object.entries(domain.entities ?? {})) {
+        for (const fieldName of fields) {
+          const field = entity?.fields?.[fieldName];
+          if (!field) continue;
+          declaredBy.push(`${entityName}.${fieldName}`);
+          if (policy !== 'declared') continue;
+          // Sin `generated` el campo entra en el input de las operaciones que derivan
+          // su payload de la entidad: el cliente podría mandar su propia auditoría.
+          if (!field.generated) {
+            errors.push(
+              `domain: entities.${entityName}.fields.${fieldName}: campo reservado de auditoría declarado sin 'generated: true' — lo asigna la infraestructura y nunca puede venir del cliente (ver docs/dsl/persistence.md § audit)`
+            );
+          }
+          if (field.type !== type) {
+            errors.push(
+              `domain: entities.${entityName}.fields.${fieldName}: campo reservado de auditoría de tipo '${field.type}'; persistence: audit.${axis} exige '${type}'`
+            );
+          }
+        }
+      }
+      if (policy !== 'declared' && declaredBy.length > 0) {
+        errors.push(
+          `persistence: audit.${axis}: '${policy}' pero domain declara el campo reservado ${declaredBy.join(', ')} — con '${policy}' esas columnas las decide la política y no se nombran en domain. Usa 'declared' si el diseño necesita proyectarlas en algún output`
+        );
+      }
+      if (policy === 'declared' && declaredBy.length === 0) {
+        errors.push(
+          `persistence: audit.${axis}: 'declared' pero ninguna entidad declara los campos reservados (${fields.join('/')}) en domain — tal como está equivale a 'none'. Decláralos donde deban registrarse, o usa 'all'/'none' explícitamente`
+        );
+      }
+    }
+    // La autoría sale del principal autenticado: sin capa security no hay actor y la
+    // columna solo registraría el centinela del generador, que es trazabilidad
+    // técnica (el correlation id), no autoría.
+    const authorship = persistence.audit?.authorship ?? 'none';
+    if (authorship !== 'none' && !security) {
+      errors.push(
+        `persistence: audit.authorship: '${authorship}' exige la capa security: sin principal autenticado no hay autor que registrar (declara la capa, o usa 'none' y confía la trazabilidad al correlation id)`
+      );
+    }
+  }
 
   // storage: una operación que devuelve un archivo puede encontrarse con que la clave ya
   // no está en el bucket (objeto borrado, bucket migrado; la entidad conserva la key).

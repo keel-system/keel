@@ -164,13 +164,19 @@ function renderAdapter(model, entity, paginated) {
                 ? ${jpaField}.findById(entity.getId()).orElseGet(${entity.name}Jpa::new)
                 : new ${entity.name}Jpa();
         applyToJpa(entity, jpa);`;
+  // El listener de auditoría escribe @LastModifiedDate/@LastModifiedBy en el FLUSH,
+  // no en el save: sobre una instancia gestionada, save() no fuerza flush y el
+  // toDomain() de vuelta devolvería los valores anteriores. Solo importa cuando el
+  // diseño proyecta esos campos al dominio ('declared'), que es justo cuando pueden
+  // acabar en la respuesta de la operación.
+  const save = entity.projectsManagedAudit ? 'saveAndFlush' : 'save';
   const saveBody = emitsEvents
     ? `${loadManaged}
-        ${entity.name} saved = toDomain(${jpaField}.save(jpa));
+        ${entity.name} saved = toDomain(${jpaField}.${save}(jpa));
         entity.pullDomainEvents().forEach(eventPublisher::publishEvent);
         return saved;`
     : `${loadManaged}
-        return toDomain(${jpaField}.save(jpa));`;
+        return toDomain(${jpaField}.${save}(jpa));`;
 
   methods.push(
     `    @Override${emitsEvents ? '\n    @Transactional' : ''}

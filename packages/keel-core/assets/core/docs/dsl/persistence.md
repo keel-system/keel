@@ -16,6 +16,10 @@ entities:
   Catalog:
     naturalKey: [slug]
 
+audit:
+  timestamps: all                        # all | declared | none
+  authorship: none                       # all | declared | none
+
 consistency:
   transactionalBoundary: per-operation   # per-operation | per-aggregate
   optimisticLocking: all                 # all | declared | none
@@ -25,6 +29,23 @@ consistency:
 - `naturalKey`: campos que identifican la entidad para el negocio, además del `id` técnico.
 - `indexes`: índices sugeridos por los patrones de consulta de `use-cases`; cada índice es la lista de miembros que lo componen.
 - Los miembros de `naturalKey` e `indexes` nombran, en ambos casos: un **campo** (`sku`), una **relación** —indistintamente por su nombre (`category`) o con el sufijo del id (`categoryId`)— o el **subcampo de un value type compuesto** con dot-path (`price.amount`). El generador resuelve la columna real; `keel validate` comprueba que el miembro existe en la entidad de `domain`.
+- `audit` decide **qué se registra automáticamente de cada escritura**, en dos ejes independientes: `timestamps` (cuándo se creó y modificó la fila) y `authorship` (quién). Cada uno toma `all`, `declared` o `none`.
+  - `all`: toda entidad persistida lo lleva. Las columnas las pone la infraestructura, **no se nombran en `domain`** y no aparecen en ningún contrato: existen para operar y auditar, no para que las lea un cliente. Es el defecto de `timestamps`.
+  - `declared`: solo las entidades que declaren los **campos reservados** en `domain`. Es la política a elegir cuando la auditoría es parte del contrato — al estar en `domain`, los `output` que la proyecten la devuelven al cliente. Los nombres son fijos y llevan siempre `generated: true`, porque los asigna la infraestructura y jamás pueden venir del cliente:
+
+    ```yaml
+    entities:
+      Product:
+        fields:
+          createdAt: { type: timestamp, generated: true }
+          updatedAt: { type: timestamp, generated: true }
+          createdBy: { type: string, generated: true }
+          updatedBy: { type: string, generated: true }
+    ```
+
+  - `none`: no se registra nada. Es el defecto de `authorship`.
+  - **Un eje se declara de una sola forma**: nombrar un campo reservado bajo `all` o `none` es un error de validación, igual que elegir `declared` y no declarar ninguno. Lo que decide si la columna existe es la política, nunca cómo se llamen los campos.
+  - `authorship` distinto de `none` **exige la capa `security`**: el autor es el principal autenticado. Sin ella no hay actor y `keel validate` lo rechaza; para la trazabilidad puramente técnica ya está el correlation id, que todo generador propaga sin que el diseño lo pida. En las escrituras que no nacen de una petición (relay de eventos, procesos programados) no hay principal: el generador registra un valor centinela, no `null`.
 - `consistency.transactionalBoundary` es la frontera que el generador debe respetar; si `messaging` declara `reliability: outbox`, la escritura del evento comparte esta frontera.
 - `per-aggregate`: cada transacción abarca como máximo un agregado declarado en `domain: aggregates` (raíz + entidades internas). Exige que `domain` los declare — `keel validate` lo comprueba. `per-operation`: la transacción es la operación completa, sin frontera de agregado.
 - **La frontera la decide el diseñador**, no el agente: con `per-aggregate` un cambio puede confirmar y el otro no, y eso es consistencia eventual aceptada — una decisión de negocio, no un ajuste de rendimiento. Ejes de decisión: `.claude/skills/keel-design/references/structural-decisions.md` §3.7.

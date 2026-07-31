@@ -46,7 +46,6 @@ entities:
       slug:      { type: string, computed: Se deriva del name normalizado a kebab-case. }
       apiToken:  { type: string, sensitive: true }
       status:    { type: ProductStatus, default: draft }
-      createdAt: { type: timestamp, generated: true }
     relations:
       catalog: { entity: Catalog, cardinality: many-to-one }
     lifecycle:
@@ -84,9 +83,17 @@ Atributos de campo:
 | `list` | El campo es una **colección** de valores del tipo declarado (`{ type: Discount, list: true }`). Excluyente con `id`, `unique`, `generated` y `type: file` |
 | `constraints` | `min`, `max`, `minLength`, `maxLength`, `pattern`, `scale`; con `list`, además `minItems` y `maxItems` |
 
-### `lockVersion` — nombre reservado
+### Nombres reservados
 
-`lockVersion` es el único nombre de campo con significado fijado por el método: declarado en la **raíz de un agregado** (`lockVersion: { type: int, generated: true }`), marca esa raíz como sujeta a bloqueo optimista cuando `persistence` elige `consistency.optimisticLocking: declared`. Fuera de ese caso no se declara — con `all` (el defecto) toda raíz lo lleva sin que haya que escribirlo, y con `none` no lo lleva ninguna. Ver [persistence.md](persistence.md).
+Cinco nombres de campo tienen significado fijado por el método. Ninguno se declara por gusto: cada uno **solo** aparece cuando la capa `persistence` elige la política `declared` del eje correspondiente, y en cualquier otro caso declararlo es un error de validación (con `all` la infraestructura pone la columna sin que se nombre; con `none` no hay columna). Todos llevan `generated: true`: los asigna la infraestructura y nunca vienen del cliente.
+
+| Campo | Tipo | Lo activa | Para qué se declara |
+|---|---|---|---|
+| `lockVersion` | `int` | `consistency.optimisticLocking: declared` | Marca esa **raíz de agregado** como sujeta a bloqueo optimista |
+| `createdAt` / `updatedAt` | `timestamp` | `audit.timestamps: declared` | Registrar cuándo se creó y modificó la fila **y poder proyectarlo** en un `output` |
+| `createdBy` / `updatedBy` | `string` | `audit.authorship: declared` | Ídem para **quién** lo hizo (exige capa `security`) |
+
+La diferencia entre `all` y `declared` no es si la columna existe, sino si el diseño la considera parte del **contrato**: lo que está en `domain` puede salir en un payload; lo que pone la política, no. Ver [persistence.md](persistence.md).
 
 ### Colección: ¿`list` o entidad hija?
 

@@ -1,8 +1,8 @@
-// Clase @SpringBootApplication del servicio generado. Con capa persistence
-// habilita la auditoría JPA (createdAt/updatedAt automáticos vía
-// AuditableEntity).
+// Clase @SpringBootApplication del servicio generado. Habilita la auditoría JPA
+// cuando el diseño la declara (persistence.audit).
 
 import { javaFile, javaPath } from './render.js';
+import { auditsAnything } from './auditing.js';
 import { usesOutbox } from './outbox.js';
 import { usesIdempotency } from './idempotency.js';
 
@@ -10,7 +10,10 @@ export function generate(model) {
   const { service } = model;
   const imports = ['org.springframework.boot.SpringApplication', 'org.springframework.boot.autoconfigure.SpringBootApplication'];
   const annotations = ['@SpringBootApplication'];
-  if (model.layersPresent.persistence) {
+  // Auditoría JPA: solo si el diseño registra algo (persistence.audit). El bean
+  // AuditorAware de la autoría, cuando lo hay, lo autodetecta Spring Data — no
+  // hace falta nombrarlo con auditorAwareRef.
+  if (model.layersPresent.persistence && auditsAnything(model)) {
     imports.push('org.springframework.data.jpa.repository.config.EnableJpaAuditing');
     annotations.push('@EnableJpaAuditing');
   }

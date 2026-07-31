@@ -112,6 +112,10 @@ export function buildModel({ manifest, layers, stack = null }) {
   // controller (no en server.servlet.context-path).
   const api = { routeBase: versionedRouteBase(layers.api?.basePath, service.name) };
 
+  // Política de auditoría del diseño. La consumen persistence-entities (qué lleva
+  // AuditableEntity) y auditing (si hace falta el AuditorAware que puebla la autoría).
+  const audit = auditPolicies(persistence);
+
   const security = collectSecurity(layers, services, api.routeBase, warnings);
   const httpClients = collectHttpClients(layers, domainTypes, inlineEnumName, warnings);
   const storage = collectStorage(layers);
@@ -122,7 +126,7 @@ export function buildModel({ manifest, layers, stack = null }) {
   // y suscripciones ya resueltos, y les cuelga los retro-enlaces que consumen los scaffolds.
   const dependencies = collectDependencies(layers, entities, httpClients, subscriptions, errors, warnings);
 
-  return { service, layersPresent, enums, valueObjects, entities, services, errors, childDtos, refDtos, hasFileUploads, events, messaging, subscriptions, pagination, api, security, httpClients, dependencies, storage, warnings };
+  return { service, layersPresent, enums, valueObjects, entities, services, errors, childDtos, refDtos, hasFileUploads, events, messaging, subscriptions, pagination, api, audit, security, httpClients, dependencies, storage, warnings };
 }
 
 function buildService(manifest, stack) {
@@ -334,10 +338,39 @@ function locksEntity(policy, isAggregateRoot, declaresLockVersion) {
   return true;
 }
 
+// Auditoría (persistence.audit), dos ejes independientes con el mismo enum que el
+// bloqueo optimista. Los defectos son los del schema: registrar CUÁNDO cambió una
+// fila es sano por defecto ('all'); registrar QUIÉN exige capa security, así que
+// se pide explícitamente ('none'). `keel validate` ya garantiza que los campos
+// reservados solo aparezcan con 'declared', de modo que aquí no hay que arbitrar
+// entre la política y lo que el dominio nombra.
+const AUDIT_FIELDS = {
+  timestamps: ['createdAt', 'updatedAt'],
+  authorship: ['createdBy', 'updatedBy']
+};
+
+export function auditPolicies(persistence) {
+  return {
+    timestamps: persistence?.audit?.timestamps ?? 'all',
+    authorship: persistence?.audit?.authorship ?? 'none'
+  };
+}
+
+// Política EFECTIVA de un eje para una entidad concreta: 'all' la lleva por
+// herencia de AuditableEntity (columna invisible al contrato), 'declared' solo si
+// esta entidad nombra alguno de los campos reservados (y entonces el campo es del
+// dominio, proyectable en un output).
+function auditsEntity(policy, persisted, fieldNames, axis) {
+  if (!persisted || policy === 'none') return 'none';
+  if (policy === 'declared') return AUDIT_FIELDS[axis].some((name) => fieldNames.has(name)) ? 'declared' : 'none';
+  return 'all';
+}
+
 function collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPersistence, warnings) {
   const aggregates = domain.aggregates ?? {};
   const internalOf = aggregateIndex(domain);
   const lockingPolicy = persistence?.consistency?.optimisticLocking ?? 'all';
+  const auditPolicy = auditPolicies(persistence);
 
   const entities = [];
   for (const [name, def] of Object.entries(domain.entities ?? {})) {
@@ -346,6 +379,7 @@ function collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPe
     const fields = Object.entries(def.fields ?? {}).map(([fieldName, field]) =>
       resolveField(name, fieldName, field, domainTypes, inlineEnumName, { persisted })
     );
+    const fieldNames = new Set(fields.map((field) => field.name));
 
     const relations = [];
     for (const [relName, rel] of Object.entries(def.relations ?? {})) {
@@ -370,15 +404,6 @@ function collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPe
       });
     }
 
-    // Autoría: build anota los campos, pero el AuditorAware que los puebla depende
-    // del diseño (actor del SecurityContext vs. correlation id) y lo escribe el
-    // agente. Sin él las columnas quedarían a null sin que nada falle.
-    if (persisted && fields.some((f) => f.name === 'createdBy' || f.name === 'updatedBy')) {
-      warnings.push(
-        `Entidad ${name}: autoría declarada (createdBy/updatedBy). Build anota @CreatedBy/@LastModifiedBy; el AuditorAware<String> y el auditorAwareRef los completa el agente (skill keel-spring-database).`
-      );
-    }
-
     // `lockVersion` es el campo que build reserva para el @Version de JPA en toda
     // raíz de agregado: es un valor opaco de infraestructura, distinto de un
     // `version` que el diseño declare (contador de dominio que viaja en la API y en
@@ -393,6 +418,9 @@ function collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPe
         `Entidad ${name}: el diseño declara el campo lockVersion, nombre que build reserva para el @Version de JPA (concurrencia optimista). Se anota el declarado en vez de generar uno propio; renombra el campo del diseño si su semántica es de negocio.`
       );
     }
+
+    const auditTimestamps = auditsEntity(auditPolicy.timestamps, persisted, fieldNames, 'timestamps');
+    const auditAuthorship = auditsEntity(auditPolicy.authorship, persisted, fieldNames, 'authorship');
 
     const lifecycle = def.lifecycle
       ? {
@@ -423,6 +451,14 @@ function collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPe
       // esta raíz porta control de versión y, con ello, si dos escrituras
       // concurrentes producen un conflicto observable o gana la última.
       usesOptimisticLocking: locksEntity(lockingPolicy, !internalOf.has(name), declaresLockVersion),
+      // Auditoría efectiva de esta entidad, eje a eje ('all' | 'declared' | 'none').
+      // 'all' la resuelve la herencia de AuditableEntity; 'declared' anota los
+      // campos que el dominio ya nombra. Y si la entidad proyecta alguno de esos
+      // campos al dominio, su repositorio tiene que hacer flush al guardar: el
+      // listener de auditoría escribe en el flush, no en el save.
+      auditTimestamps,
+      auditAuthorship,
+      projectsManagedAudit: auditTimestamps === 'declared' || auditAuthorship === 'declared',
       naturalKey: persistenceMeta.naturalKey ?? null,
       indexes: persistenceMeta.indexes ?? []
     });

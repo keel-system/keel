@@ -378,25 +378,30 @@ Sin esta capa (servicio sin estado propio), no se incluye JPA ni base de datos.
 | `entities.X.indexes` | `@Index` en la entidad por cada lista de campos (`idx_<tabla>_<campos>`); de ahí pasa al baseline de migraciones al exportarlo |
 | `consistency.transactionalBoundary: per-operation` | La transacción por mensaje que abre `UseCaseMediator` ya lo cumple: la operación completa es la transacción |
 | `consistency.transactionalBoundary: per-aggregate` | El command debe tocar una sola raíz de agregado dentro de la transacción del mediator; nunca dos agregados en la misma transacción (si necesitas semántica especial, anota el handler con `@Transactional` y documenta la excepción) |
-| auditoría `createdAt`/`updatedAt` | Automática: `AuditableEntity` (`@MappedSuperclass` + JPA auditing). Si la entidad declara sus propios timestamps, build no hereda pero anota esos campos con `@CreatedDate`/`@LastModifiedDate` + `@EntityListeners` (se auto-pueblan igual) |
-| autoría `createdBy`/`updatedBy` declarada en la entidad | Build anota los campos con `@CreatedBy`/`@LastModifiedBy` y deja un `// TODO (agente)`: falta el `AuditorAware<String>` (actor del `SecurityContext`, o el correlation id si no hay usuario) y su `@EnableJpaAuditing(auditorAwareRef = "...")`. Sin él las columnas quedan a `null` — resolverlo es obligatorio |
+| `audit.timestamps` / `audit.authorship` | **Lo gobierna el diseño** (`all` \| `declared` \| `none`) y build lo aplica entero. Con `all`: las columnas viven en `AuditableEntity` (`@MappedSuperclass` + `@EntityListeners`), el dominio no las nombra y no salen en ningún contrato. Con `declared`: los campos son del **dominio** (el diseño los declara con `generated: true` para poder proyectarlos en un `output`) y build los anota en su `XxxJpa` con `@CreatedDate`/`@LastModifiedDate`/`@CreatedBy`/`@LastModifiedBy` + `@EntityListeners` en la clase. Con `none`: no se genera nada, ni `@EnableJpaAuditing`. **No lo reintroduzcas por criterio propio**: una columna de auditoría que el diseño no pidió acaba en el baseline de migraciones |
+| autoría: de dónde sale el actor | `AuditorAwareConfig` (`infrastructure/configurations/audit/`), generado por build siempre que `audit.authorship` no sea `none`. Lee el principal del `SecurityContext` — con protocolo de token, el claim que `JwtAuthConverter` fijó como `principalClaim` (`preferred_username` en Keycloak, `username` en Cognito, `sub` en el genérico). **Es total**: en una escritura sin petición detrás (relay del outbox, listener del broker, `@Scheduled`) devuelve el centinela `system` o `system:<correlationId>`, nunca `Optional.empty()` — por eso las columnas pueden ser `NOT NULL`. Spring Data autodetecta el bean: `auditorAwareRef` no hace falta. **No escribas otro `AuditorAware`** |
 | bloqueo optimista en la raíz de agregado | **Lo gobierna el diseño**, en `persistence.consistency.optimisticLocking` (`all` por defecto \| `declared` \| `none`), y build lo aplica: con `all`/`declared` genera el campo `@Version @Column(name = "lock_version") private Long lockVersion` en la `XxxJpa`, `lockVersion` en el constructor de rehidratación del dominio (último parámetro) + `getLockVersion()`, propagación en `toDomain`/`toJpa`, y el handler que traduce `ObjectOptimisticLockingFailureException` a **409 `OPTIMISTIC_LOCK_CONFLICT`**. No lo reañadas ni dupliques el handler. Con `none` **no se genera nada de esto**: el diseño ha declarado "último escritor gana" y una escritura concurrente no debe fallar — no lo reintroduzcas por criterio propio, ni siquiera "por seguridad": convertiría en `409` un escenario que espera dos `200`. Solo si el diseño exige detectar updates concurrentes que tocan **solo entidades hijas** distintas sin modificar la raíz, refuérzalo con `LockModeType.OPTIMISTIC_FORCE_INCREMENT` (`references/configuration.md`) |
 | campo `version` declarado en una entidad del DSL | Campo escalar corriente, **no** el `@Version` de JPA (que es `lockVersion`, aparte): es un contador de **dominio** que viaja en la API y en los payloads de eventos. Lo incrementa el agregado en cada método mutador que el diseño describe como cambio observable, y es el contador contra el que se compara un `expectedVersion` de la entrada — ver `conventions/flow-fidelity.md` |
 | soft-delete, `json`→jsonb, converters, ids numéricos generados | No los genera build (dependen del diseño avanzado): los añade el agente siguiendo `keel-spring-database`/`references/jpa-mapping.md`, cubiertos por escenarios `FL-*` |
-| operación de escritura cuya **respuesta** expone un campo de auditoría del ORM (`updatedAt`) | El adaptador guarda con **`saveAndFlush(...)`**, no `save(...)` — ver el aviso de abajo |
+| entidad que proyecta auditoría al dominio (`audit.*: declared`) | Su adaptador guarda con **`saveAndFlush(...)`**, no `save(...)` — lo genera build; ver el aviso de abajo |
 
-### `saveAndFlush` cuando la respuesta lleva campos de auditoría
+### `saveAndFlush` cuando la auditoría llega al dominio
 
-`@LastModifiedDate`/`@PreUpdate` corren en el **flush** de Hibernate. Con el
+`@LastModifiedDate`/`@LastModifiedBy` corren en el **flush** de Hibernate. Con el
 `UseCaseMediator` abriendo la transacción y haciendo commit al final, ese flush
 ocurre *después* de que el handler ya mapeó el objeto devuelto por `save(...)` a
 DTO: la respuesta sale con el `updatedAt` viejo.
 
 Es un fallo fácil de pasar por alto porque **un `GET` posterior muestra el valor
 correcto** y enmascara el síntoma: lo único que está mal es la respuesta de la
-propia operación de escritura. Si el `output` de la operación incluye un campo
-gestionado por el ORM, el adaptador usa `saveAndFlush(...)` para que el callback
-de auditoría corra dentro de la misma unidad de trabajo antes del mapeo.
+propia operación de escritura.
+
+Build ya lo resuelve: si la entidad proyecta campos de auditoría al dominio
+(política `declared`, que es la única en la que esos campos pueden acabar en una
+respuesta), su `XxxRepositoryImpl.save(...)` usa `saveAndFlush(...)`. Con la
+política `all` las columnas no llegan al dominio y no hay nada que adelantar. Lo
+que sí sigue siendo tuyo: si escribes un adaptador o una query a mano y la
+respuesta debe llevar un valor que el ORM gestiona, fuerza el flush igual.
 
 ### Ordenar por un id `UUID`: nunca en memoria con `Comparator.comparing`
 

@@ -13,5 +13,10 @@ entities:
     indexes:
       # Índice sobre una relación y sobre un campo que es palabra reservada.
       - [product, position, primary]
+audit:
+  # Product y Category declaran createdAt en domain porque su ficha lo devuelve:
+  # la auditoría de tiempos es parte del contrato, no solo de la tabla.
+  timestamps: declared
+
 consistency:
   transactionalBoundary: per-operation

@@ -1630,53 +1630,154 @@ test('persistencia: value object anidado deja TODO en vez de columna/mapa invál
   assert.ok(adapter.includes('// TODO (agente): mapear Address.geo (value object anidado).')); // toJpa
 });
 
-test('persistencia: timestamps de auditoría declarados se auto-pueblan (no se pierden)', () => {
-  const workspace = makeWorkspace();
+// --- persistence.audit ---
+
+const JPA_ENTITIES = 'src/main/java/com/commerce/productcatalog/infrastructure/persistence/entities';
+const AUDITOR_CONFIG = 'src/main/java/com/commerce/productcatalog/infrastructure/configurations/audit/AuditorAwareConfig.java';
+
+// Diseño con auditoría: la política, los campos que exige 'declared' y la capa
+// security sin la que la autoría no se admite.
+function withAudit(audit, { declaredFields = {}, security = true } = {}) {
   const { manifest, layers } = loadFixture();
+  const patchedManifest = structuredClone(manifest);
   const patched = structuredClone(layers);
+  patched.persistence.audit = audit;
   patched.domain.entities.Ledger = {
-    description: 'Registro contable con auditoría propia.',
-    fields: {
-      id: { type: 'uuid', id: true, generated: true },
-      createdAt: { type: 'timestamp' },
-      updatedAt: { type: 'timestamp' }
-    }
+    description: 'Registro contable.',
+    fields: { id: { type: 'uuid', id: true, generated: true }, ...declaredFields }
   };
+  patched.persistence.entities.Ledger = { persisted: true };
+  if (security) {
+    patchedManifest.layers.security = 'security.keel.yaml';
+    patched.security = {
+      authentication: { protocol: 'oidc' },
+      access: { default: { level: 'required' } }
+    };
+  }
+  return { manifest: patchedManifest, layers: patched };
+}
 
-  scaffoldService({ manifest, layers: patched, workspace });
+const auditField = (type) => ({ type, generated: true });
 
-  const ledgerJpa = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/persistence/entities/LedgerJpa.java');
-  assert.ok(!ledgerJpa.includes('extends AuditableEntity')); // no hereda (evita campos duplicados)
-  assert.ok(ledgerJpa.includes('@EntityListeners(AuditingEntityListener.class)'));
-  assert.ok(ledgerJpa.includes('@CreatedDate'));
-  assert.ok(ledgerJpa.includes('@LastModifiedDate'));
+test("audit 'all': las columnas viven en AuditableEntity y el dominio no las nombra", () => {
+  const workspace = makeWorkspace();
+  scaffoldService({ ...withAudit({ timestamps: 'all', authorship: 'all' }), workspace });
+
+  const auditable = read(workspace, `${JPA_ENTITIES}/AuditableEntity.java`);
+  assert.ok(auditable.includes('@Column(name = "created_at", nullable = false, updatable = false)'));
+  assert.ok(auditable.includes('@Column(name = "updated_by", nullable = false)'));
+  assert.ok(auditable.includes('@CreatedBy'));
+  assert.ok(auditable.includes('@LastModifiedBy'));
+
+  const ledgerJpa = read(workspace, `${JPA_ENTITIES}/LedgerJpa.java`);
+  assert.ok(ledgerJpa.includes('extends AuditableEntity'));
+  // El listener llega por herencia: repetirlo en la subclase sería ruido.
+  assert.ok(!ledgerJpa.includes('@EntityListeners'));
+  assert.ok(!ledgerJpa.includes('private Instant createdAt;'));
 });
 
-test('persistencia: autoría declarada se anota y deja el TODO del AuditorAware', () => {
+test("audit 'declared': los campos son del dominio y se anotan en su propia Jpa", () => {
   const workspace = makeWorkspace();
-  const { manifest, layers } = loadFixture();
-  const patched = structuredClone(layers);
-  patched.domain.entities.Ledger = {
-    description: 'Registro contable con autoría.',
-    fields: {
-      id: { type: 'uuid', id: true, generated: true },
-      createdBy: { type: 'string' },
-      updatedBy: { type: 'string' }
-    }
+  scaffoldService({
+    ...withAudit(
+      { timestamps: 'declared', authorship: 'declared' },
+      {
+        declaredFields: {
+          createdAt: auditField('timestamp'),
+          updatedAt: auditField('timestamp'),
+          createdBy: auditField('string'),
+          updatedBy: auditField('string')
+        }
+      }
+    ),
+    workspace
+  });
+
+  const ledgerJpa = read(workspace, `${JPA_ENTITIES}/LedgerJpa.java`);
+  // No hereda: sus columnas son miembros propios. Pero necesita el listener.
+  assert.ok(!ledgerJpa.includes('extends AuditableEntity'));
+  assert.ok(ledgerJpa.includes('@EntityListeners(AuditingEntityListener.class)'));
+  for (const annotation of ['@CreatedDate', '@LastModifiedDate', '@CreatedBy', '@LastModifiedBy']) {
+    assert.ok(ledgerJpa.includes(annotation), annotation);
+  }
+  // Con ningún eje en 'all' no hay base que heredar.
+  assert.ok(!exists(workspace, `${JPA_ENTITIES}/AuditableEntity.java`));
+});
+
+test("audit 'none': ni columnas, ni listener, ni @EnableJpaAuditing", () => {
+  const workspace = makeWorkspace();
+  scaffoldService({ ...withAudit({ timestamps: 'none', authorship: 'none' }), workspace });
+
+  assert.ok(!exists(workspace, `${JPA_ENTITIES}/AuditableEntity.java`));
+  assert.ok(!exists(workspace, AUDITOR_CONFIG));
+  const ledgerJpa = read(workspace, `${JPA_ENTITIES}/LedgerJpa.java`);
+  assert.ok(!ledgerJpa.includes('AuditableEntity'));
+  assert.ok(!ledgerJpa.includes('@EntityListeners'));
+  const application = read(workspace, 'src/main/java/com/commerce/productcatalog/ProductCatalogApplication.java');
+  assert.ok(!application.includes('@EnableJpaAuditing'));
+});
+
+test('autoría: el AuditorAware se genera y nunca devuelve vacío', () => {
+  const workspace = makeWorkspace();
+  scaffoldService({ ...withAudit({ authorship: 'all' }), workspace });
+
+  const config = read(workspace, AUDITOR_CONFIG);
+  assert.ok(config.includes('AuditorAware<String> auditorProvider()'));
+  // El principal del JWT es getName(): el claim que fijó JwtAuthConverter.
+  assert.ok(config.includes('instanceof JwtAuthenticationToken token'));
+  assert.ok(config.includes('Optional.of(token.getName())'));
+  // Sin petición detrás hay centinela, no Optional.empty(): las columnas de
+  // autoría son NOT NULL y el relay del outbox también escribe.
+  assert.ok(!config.includes('Optional.empty()'));
+  assert.ok(config.includes('CorrelationContext.get()'));
+  assert.ok(config.includes('private static final String SYSTEM = "system";'));
+  // Spring Data autodetecta el único bean: auditorAwareRef sobraría.
+  const application = read(workspace, 'src/main/java/com/commerce/productcatalog/ProductCatalogApplication.java');
+  assert.ok(application.includes('@EnableJpaAuditing'));
+  assert.ok(!application.includes('auditorAwareRef'));
+});
+
+test('timestamps sin autoría no genera AuditorAware (el reloj no necesita bean)', () => {
+  const workspace = makeWorkspace();
+  scaffoldService({ ...withAudit({ timestamps: 'all' }, { security: false }), workspace });
+  assert.ok(!exists(workspace, AUDITOR_CONFIG));
+  assert.ok(exists(workspace, `${JPA_ENTITIES}/AuditableEntity.java`));
+});
+
+test('auditoría proyectada al dominio: el repositorio hace flush al guardar', () => {
+  const workspace = makeWorkspace();
+  scaffoldService({
+    ...withAudit({ timestamps: 'declared' }, { declaredFields: { updatedAt: auditField('timestamp') } }),
+    workspace
+  });
+
+  // El listener escribe en el flush: con save() a secas la respuesta de un update
+  // devolvería el updatedAt anterior.
+  const ledgerAdapter = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/persistence/repositories/LedgerRepositoryImpl.java');
+  assert.ok(ledgerAdapter.includes('.saveAndFlush(jpa)'));
+  // Product no proyecta auditoría al dominio: no paga el flush.
+  const productAdapter = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/persistence/repositories/ProductRepositoryImpl.java');
+  assert.ok(productAdapter.includes('.save(jpa)'));
+  assert.ok(!productAdapter.includes('.saveAndFlush(jpa)'));
+});
+
+test('campo de auditoría declarado: fuera del DTO de entrada, dentro del de salida', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = withAudit({ timestamps: 'declared' }, { declaredFields: { createdAt: auditField('timestamp') } });
+  // Una operación que crea Ledger y devuelve la entidad completa.
+  layers['use-cases'].operations.createLedger = {
+    description: 'Abre un registro contable.',
+    kind: 'command',
+    input: { entity: 'Ledger' },
+    output: { entity: 'Ledger' }
   };
+  scaffoldService({ manifest, layers, workspace });
 
-  const { warnings } = scaffoldService({ manifest, layers: patched, workspace });
-
-  const ledgerJpa = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/persistence/entities/LedgerJpa.java');
-  assert.ok(ledgerJpa.includes('extends AuditableEntity')); // autoría sin timestamps propios no rompe la herencia
-  assert.ok(ledgerJpa.includes('@CreatedBy'));
-  assert.ok(ledgerJpa.includes('@LastModifiedBy'));
-  assert.ok(ledgerJpa.includes('org.springframework.data.annotation.CreatedBy'));
-  assert.ok(ledgerJpa.includes('org.springframework.data.annotation.LastModifiedBy'));
-  // El TODO del AuditorAware se emite una sola vez por entidad, no uno por campo.
-  assert.equal(ledgerJpa.split('TODO (agente): provee un AuditorAware').length - 1, 1);
-  // Segunda señal: warning de build, visible sin abrir el código generado.
-  assert.ok(warnings.some((w) => w.includes('Ledger') && w.includes('autoría declarada')));
+  const app = 'src/main/java/com/commerce/productcatalog/application';
+  // `generated: true` lo mantiene fuera de la entrada: nadie puede enviar su propia
+  // auditoría. Y dentro de la salida, que es para lo que el diseño lo declaró.
+  assert.ok(!read(workspace, `${app}/commands/CreateLedgerCommand.java`).includes('createdAt'));
+  assert.ok(read(workspace, `${app}/dtos/CreateLedgerResponseDto.java`).includes('Instant createdAt'));
 });
 
 test('operación sin patrón CRUD ni endpoint explícito cae a POST con aviso', () => {

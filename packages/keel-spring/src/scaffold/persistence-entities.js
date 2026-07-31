@@ -125,58 +125,89 @@ export function uniqueConstraints(model) {
   return entries;
 }
 
+// AuditableEntity solo existe si algún eje de persistence.audit vale 'all': es la
+// política que pone columnas que el dominio no nombra. Con 'declared' los campos
+// son del diseño y se anotan en su propia Jpa; con 'none' no hay nada que heredar.
+export function usesAuditableEntity(model) {
+  return model.audit?.timestamps === 'all' || model.audit?.authorship === 'all';
+}
+
 export function generate(model) {
   if (!model.layersPresent.persistence) return [];
   return [
-    renderAuditableEntity(model),
+    ...(usesAuditableEntity(model) ? [renderAuditableEntity(model)] : []),
     ...model.entities.filter((entity) => entity.persisted).map((entity) => renderJpaEntity(model, entity))
   ];
 }
 
-// Base de auditoría (portada del shared del prototipo): createdAt/updatedAt
-// automáticos vía Spring Data JPA auditing (@EnableJpaAuditing en la
+// Base de auditoría (portada del shared del prototipo): las columnas que el diseño
+// delega en la política vía Spring Data JPA auditing (@EnableJpaAuditing en la
 // Application). Soft-delete queda como decisión del agente (el DSL no lo declara).
 function renderAuditableEntity(model) {
+  const timestamps = model.audit?.timestamps === 'all';
+  const authorship = model.audit?.authorship === 'all';
+  const imports = [
+    'jakarta.persistence.Column',
+    'jakarta.persistence.EntityListeners',
+    'jakarta.persistence.MappedSuperclass',
+    'org.springframework.data.jpa.domain.support.AuditingEntityListener'
+  ];
+  const members = [];
+  const accessors = [];
+  if (timestamps) {
+    imports.push('java.time.Instant', 'org.springframework.data.annotation.CreatedDate', 'org.springframework.data.annotation.LastModifiedDate');
+    members.push(
+      `    @CreatedDate
+    @Column(name = "created_at", nullable = false, updatable = false)
+    private Instant createdAt;`,
+      `    @LastModifiedDate
+    @Column(name = "updated_at", nullable = false)
+    private Instant updatedAt;`
+    );
+    accessors.push(
+      `    public Instant getCreatedAt() {
+        return createdAt;
+    }`,
+      `    public Instant getUpdatedAt() {
+        return updatedAt;
+    }`
+    );
+  }
+  if (authorship) {
+    imports.push('org.springframework.data.annotation.CreatedBy', 'org.springframework.data.annotation.LastModifiedBy');
+    members.push(
+      `    @CreatedBy
+    @Column(name = "created_by", nullable = false, updatable = false)
+    private String createdBy;`,
+      `    @LastModifiedBy
+    @Column(name = "updated_by", nullable = false)
+    private String updatedBy;`
+    );
+    accessors.push(
+      `    public String getCreatedBy() {
+        return createdBy;
+    }`,
+      `    public String getUpdatedBy() {
+        return updatedBy;
+    }`
+    );
+  }
+
+  const registers = [timestamps ? 'cuándo' : null, authorship ? 'quién' : null].filter(Boolean).join(' y ');
   const body = `/**
- * Base de las entidades JPA auditables: createdAt/updatedAt automáticos vía
- * Spring Data JPA auditing. Timestamps en Instant (UTC).
+ * Base de las entidades JPA auditables: registra ${registers} vía Spring Data JPA
+ * auditing, sin que el dominio nombre estas columnas (persistence.audit).
  */
 @MappedSuperclass
 @EntityListeners(AuditingEntityListener.class)
 public abstract class AuditableEntity {
 
-    @CreatedDate
-    @Column(name = "created_at", nullable = false, updatable = false)
-    private Instant createdAt;
-
-    @LastModifiedDate
-    @Column(name = "updated_at", nullable = false)
-    private Instant updatedAt;
-
-    public Instant getCreatedAt() {
-        return createdAt;
-    }
-
-    public Instant getUpdatedAt() {
-        return updatedAt;
-    }
+${[...members, ...accessors].join('\n\n')}
 }`;
 
   return {
     path: javaPath(model, JPA_PKG, 'AuditableEntity'),
-    content: javaFile(
-      subPackage(model, JPA_PKG),
-      [
-        'jakarta.persistence.Column',
-        'jakarta.persistence.EntityListeners',
-        'jakarta.persistence.MappedSuperclass',
-        'java.time.Instant',
-        'org.springframework.data.annotation.CreatedDate',
-        'org.springframework.data.annotation.LastModifiedDate',
-        'org.springframework.data.jpa.domain.support.AuditingEntityListener'
-      ],
-      body
-    )
+    content: javaFile(subPackage(model, JPA_PKG), imports.sort(), body)
   };
 }
 
@@ -186,15 +217,17 @@ function renderJpaEntity(model, entity) {
   const declarations = [];
   const accessors = [];
 
-  // Auditoría automática, salvo que el diseño ya declare sus propios timestamps:
-  // en ese caso no se hereda AuditableEntity (evita campos duplicados) pero los
-  // campos declarados se anotan igualmente como managed (ver bucle scalar).
-  const audited = !entity.fields.some((field) => field.name === 'createdAt' || field.name === 'updatedAt');
-
-  // Autoría declarada por el diseño (createdBy/updatedBy): build anota los campos,
-  // pero quien los puebla es un AuditorAware que solo el agente puede escribir (de
-  // dónde sale el actor depende del diseño). El TODO se emite una vez por entidad.
-  let pendingAuditorTodo = entity.fields.some((field) => field.name === 'createdBy' || field.name === 'updatedBy');
+  // Auditoría: la política decide dónde vive cada columna. Con 'all' la hereda de
+  // AuditableEntity y el dominio ni la nombra; con 'declared' el campo ES del
+  // dominio y aquí solo se anota para que el listener lo pueble.
+  const inheritsAuditable = entity.auditTimestamps === 'all' || entity.auditAuthorship === 'all';
+  const declaredAudit = new Map();
+  if (entity.auditTimestamps === 'declared') {
+    declaredAudit.set('createdAt', 'CreatedDate').set('updatedAt', 'LastModifiedDate');
+  }
+  if (entity.auditAuthorship === 'declared') {
+    declaredAudit.set('createdBy', 'CreatedBy').set('updatedBy', 'LastModifiedBy');
+  }
 
   for (const member of members) {
     if (member.kind === 'scalar') {
@@ -206,16 +239,6 @@ function renderJpaEntity(model, entity) {
         imports.add('jakarta.persistence.Id');
         lines.push('    @Id');
       }
-      // Timestamps de auditoría declarados por el diseño: se auto-pueblan vía el
-      // AuditingEntityListener del @EntityListeners de la clase (no se pierden).
-      if (!audited && field.name === 'createdAt') {
-        imports.add('org.springframework.data.annotation.CreatedDate');
-        lines.push('    @CreatedDate');
-      }
-      if (!audited && field.name === 'updatedAt') {
-        imports.add('org.springframework.data.annotation.LastModifiedDate');
-        lines.push('    @LastModifiedDate');
-      }
       // Caso borde: el diseño declara un campo llamado lockVersion, el nombre que
       // build reserva para el @Version. Se anota el declarado en vez de generar un
       // segundo campo (ver el aviso de model.js).
@@ -223,21 +246,13 @@ function renderJpaEntity(model, entity) {
         imports.add('jakarta.persistence.Version');
         lines.push('    @Version');
       }
-      // Autoría: la puebla el mismo AuditingEntityListener (heredado de
-      // AuditableEntity o puesto en la clase), pero solo si hay un AuditorAware
-      // registrado; sin él estas columnas quedarían a null en silencio.
-      if (field.name === 'createdBy' || field.name === 'updatedBy') {
-        if (pendingAuditorTodo) {
-          lines.push(
-            '    // TODO (agente): provee un AuditorAware<String> (el actor del SecurityContext, o el',
-            '    // correlation id si no hay usuario) y regístralo con @EnableJpaAuditing(auditorAwareRef = "...")',
-            '    // en la clase Application — ver la skill keel-spring-database.'
-          );
-          pendingAuditorTodo = false;
-        }
-        const annotation = field.name === 'createdBy' ? 'CreatedBy' : 'LastModifiedBy';
-        imports.add(`org.springframework.data.annotation.${annotation}`);
-        lines.push(`    @${annotation}`);
+      // Campos de auditoría que el diseño declara ('declared'): los puebla el
+      // AuditingEntityListener del @EntityListeners de la clase, con el actor que
+      // resuelve AuditorAwareConfig en el caso de la autoría.
+      const auditAnnotation = declaredAudit.get(field.name);
+      if (auditAnnotation) {
+        imports.add(`org.springframework.data.annotation.${auditAnnotation}`);
+        lines.push(`    @${auditAnnotation}`);
       }
       for (const annotation of field.columns) {
         if (annotation.startsWith('@Enumerated')) {
@@ -384,16 +399,17 @@ function renderJpaEntity(model, entity) {
   }
 
   const header = ['@Entity'];
-  if (!audited) {
-    // Auditoría sobre timestamps declarados por el diseño: la entidad no hereda
-    // AuditableEntity pero sí escucha el listener que puebla @CreatedDate/@LastModifiedDate.
+  if (!inheritsAuditable && declaredAudit.size > 0) {
+    // Auditoría sobre campos declarados por el diseño: la entidad no hereda
+    // AuditableEntity (sus columnas son miembros propios) pero sí necesita el
+    // listener que las puebla.
     imports.add('jakarta.persistence.EntityListeners');
     imports.add('org.springframework.data.jpa.domain.support.AuditingEntityListener');
     header.push('@EntityListeners(AuditingEntityListener.class)');
   }
   header.push(renderTableAnnotation(model, entity, members, imports));
   const body = `${header.join('\n')}
-public class ${entity.name}Jpa${audited ? ' extends AuditableEntity' : ''} {
+public class ${entity.name}Jpa${inheritsAuditable ? ' extends AuditableEntity' : ''} {
 
 ${declarations.join('\n\n')}
 

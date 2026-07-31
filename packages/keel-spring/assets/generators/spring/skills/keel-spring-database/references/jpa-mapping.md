@@ -140,16 +140,20 @@ Por orden de preferencia:
 
 ## 4. Auditoría y locking
 
-- **createdAt/updatedAt**: ya los puebla build (`AuditableEntity` o, si el diseño
-  declara sus propios timestamps, `@EntityListeners` + `@CreatedDate`/`@LastModifiedDate`
-  sobre esos campos). No los reimplementes.
-- **Autoría (`createdBy`/`updatedBy`)**: si la entidad los declara, build ya anotó los
-  campos con `@CreatedBy`/`@LastModifiedBy` y dejó un `// TODO (agente)` en la `XxxJpa`
-  (build también lo avisa por consola). Resuélvelo: provee un `AuditorAware<String>` que
-  lea el actor del `SecurityContext` (o del correlation id si no hay usuario) y
-  regístralo con `@EnableJpaAuditing(auditorAwareRef = "…")` en la clase Application.
-  Sin ese bean las anotaciones no pueblan nada y las columnas quedan a `null` en
-  silencio: no es opcional.
+- **Auditoría (`persistence.audit`): entera de build, nada tuyo.** La política del
+  diseño decide dónde vive cada columna y build la aplica: con `all`, en
+  `AuditableEntity`; con `declared`, sobre los campos que el dominio ya declara,
+  anotados en la `XxxJpa` + `@EntityListeners` en la clase; con `none`, ni columnas
+  ni `@EnableJpaAuditing`. **No añadas columnas de auditoría que el diseño no pidió**:
+  acabarían en el baseline de migraciones sin que nadie las haya decidido.
+- **El actor de la autoría** lo resuelve `AuditorAwareConfig`
+  (`infrastructure/configurations/audit/`), que build genera siempre que
+  `audit.authorship` no sea `none`: lee el principal del `SecurityContext` y, en las
+  escrituras sin petición detrás (relay del outbox, listeners, `@Scheduled`), devuelve
+  el centinela `system`/`system:<correlationId>` en vez de vacío — por eso las columnas
+  pueden ser `NOT NULL`. Spring Data autodetecta el bean; `auditorAwareRef` no hace
+  falta. **No escribas un segundo `AuditorAware`**: dos beans del mismo tipo rompen el
+  arranque.
 - **Locking optimista (`lockVersion`)**: **ya lo genera build** en la raíz de agregado
   (`isAggregateRoot`): campo `@Version @Column(name = "lock_version") private Long lockVersion`
   en la `XxxJpa`, `lockVersion` en el constructor de rehidratación del dominio +

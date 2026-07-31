@@ -93,12 +93,13 @@ agregado — un handler nunca lo llama; llama al método semántico. Una transic
 (el flujo exige éxito cuando el estado ya es el destino) se resuelve en el método semántico
 retornando antes de llamar al guard (ver `flow-fidelity.md`).
 
-**`updatedAt` en la respuesta de la mutación**: si el `output` de la operación expone un campo de
-auditoría que gestiona el ORM (`updatedAt`, `version`), el adaptador del repositorio debe guardar
-con `saveAndFlush(...)`, no `save(...)`. `@LastModifiedDate` corre en el flush y, con la
-transacción del `UseCaseMediator`, ese flush llega **después** de que el handler ya mapeó la
-respuesta: sale el valor viejo. Engaña porque un `GET` posterior sí muestra el correcto — el fallo
-está solo en la respuesta de la escritura. Detalle en `mapping.md § persistence`.
+**`updatedAt` en la respuesta de la mutación**: cuando el diseño proyecta auditoría al dominio
+(`persistence.audit: declared`), el adaptador del repositorio guarda con `saveAndFlush(...)`, no
+`save(...)` — **lo genera build**. `@LastModifiedDate` corre en el flush y, con la transacción del
+`UseCaseMediator`, ese flush llegaría **después** de que el handler ya mapeó la respuesta: saldría
+el valor viejo. Engaña porque un `GET` posterior sí muestra el correcto — el fallo está solo en la
+respuesta de la escritura. Si escribes tú un adaptador cuya respuesta lleve un valor que gestiona
+el ORM, fuerza el flush igual. Detalle en `mapping.md § persistence`.
 
 ## Colecciones y entidades hijas
 

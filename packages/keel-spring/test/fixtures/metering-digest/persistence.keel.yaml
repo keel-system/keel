@@ -16,6 +16,10 @@ entities:
     indexes:
       - [day]
 
+audit:
+  # MeterReading declara createdAt en domain: la ingesta lo devuelve al cliente.
+  timestamps: declared
+
 consistency:
   # Cada operación toca una sola raíz y no hay agregados compuestos: la frontera es
   # la operación, no el agregado.
