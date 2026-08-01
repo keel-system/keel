@@ -35,7 +35,10 @@ Antes de tocar tipos de columna del dialecto, lee `references/dialects/<database
   `open-in-view: false`, el fetch que falte se resuelve en el **repositorio** con
   `JOIN FETCH` o `@EntityGraph`, nunca abriendo la vista ni poniendo EAGER a ciegas
   (ver `references/configuration.md`, sección N+1). No pongas EAGER para "arreglar"
-  una `LazyInitializationException`.
+  una `LazyInitializationException`. Esto vale para relaciones **dentro** de un
+  agregado, que son las únicas navegables; para traer datos de **otra raíz** no hay
+  asociación que hacer fetch — eso se resuelve por lote o con un join proyectado,
+  ver `references/read-queries.md` y `.claude/conventions/read-composition.md`.
 - **Relación to-many entre agregados** (`one-to-many`/`many-to-many` hacia otra
   raíz): build **no la genera** (emite un warning). Modélala tú **sin** violar la
   frontera de agregado:

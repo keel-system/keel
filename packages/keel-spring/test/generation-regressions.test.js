@@ -718,6 +718,11 @@ test('C2/embed: una referencia a otro agregado se proyecta como objeto, no como 
   // El objeto lo resuelve el handler: entra como parámetro, no como null pendiente.
   assert.ok(productMapper.includes('toUpdateProductResponseDto(Product entity, CategoryRefDto category)'));
   assert.ok(categoryMapper.includes('public CategoryRefDto toCategoryRefDto(Category entity)'));
+
+  // Y el handler tiene con qué resolverlo: el parámetro del mapper sin su
+  // resolver dejaba el proyecto sin compilar. Detalle en read-composition.test.js.
+  const handler = read(`${JAVA}/application/usecases/UpdateProductCommandHandler.java`);
+  assert.ok(handler.includes('private final CategoryRefResolver categoryRefResolver;'));
 });
 
 // ─── Cuarto informe: infraestructura de mensajería (§1.1 y §1.2) ─────────────

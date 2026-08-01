@@ -30,6 +30,7 @@ import * as exceptions from './exceptions.js';
 import * as repositories from './repositories.js';
 import * as dtos from './dtos.js';
 import * as mappers from './mappers.js';
+import * as refResolvers from './ref-resolvers.js';
 import * as events from './events.js';
 import * as correlation from './correlation.js';
 import * as messaging from './messaging.js';
@@ -70,6 +71,7 @@ const GENERATORS = [
   repositories,
   dtos,
   mappers,
+  refResolvers,
   events,
   correlation,
   messaging,

@@ -63,8 +63,17 @@ reporta en vez de aplicar.
    hoy no invoca ningún caso de uso** (`download`, `signedUrl`): son los que se cuelan, y el
    día que se usen cambian el status HTTP de la respuesta. Cambiar el tipo de excepción es
    conductual → va a `remaining` con archivo y línea, no se aplica aquí.
-9. **Higiene general**: sin código muerto, variables sin usar ni warnings triviales;
-   nombres y formato coherentes con el código vecino.
+9. **Consultas dentro de un bucle (N+1)**: busca llamadas a repositorio o a un
+   `<Raíz>RefResolver.resolve(UUID)` **dentro** de un `stream()`/`map()`/`forEach` o de un
+   `for` sobre una colección. Es el defecto que ningún otro gate ve: compila, los escenarios
+   `FL-*` pasan en verde, y la operación hace una consulta por elemento (100 productos con
+   dos `embed` = 201 consultas). El arreglo es el lote —`resolve(Collection)` con los ids de
+   la página e indexar por id— y está en `.claude/conventions/read-composition.md`.
+   **Es conductual: repórtalo en `remaining`** con archivo, línea y el número de consultas
+   que implica; no lo apliques, porque el arreglo reordena el cuerpo del handler y a veces
+   exige un adaptador de lectura nuevo.
+10. **Higiene general**: sin código muerto, variables sin usar ni warnings triviales;
+    nombres y formato coherentes con el código vecino.
 
 ## Frontera: no-conductual vs conductual
 

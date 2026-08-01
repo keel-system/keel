@@ -12,6 +12,8 @@ src/main/java/<base>/
 │   ├── usecases/        # XxxCommandHandler / XxxQueryHandler (@ApplicationComponent)
 │   ├── dtos/            # XxxResponseDto + PagedResponse<T>
 │   ├── mappers/         # <Entidad>ApplicationMapper (dominio → ResponseDto)
+│   ├── support/         # solo con embed: <Raíz>RefResolver — produce el <Raíz>RefDto de un
+│                        #   agregado ajeno POR LOTE (una consulta por agregado, no por elemento)
 │   └── projection/      # solo con capa dependencies: <E>Projector (mantiene la copia
 │                        #   local de un dato ajeno) + <E>Reader (la lee con la política onMiss)
 ├── domain/              # el negocio — puro, sin JPA ni ningún framework

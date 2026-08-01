@@ -8,6 +8,7 @@
 import { javaFile, javaPath, subPackage, javadoc } from './render.js';
 import { INTERFACES_PKG, ANNOTATIONS_PKG, MEDIATOR_PKG } from './mediator.js';
 import { domainTypeImport } from './entities.js';
+import { refTargetsOf } from './ref-resolvers.js';
 
 // Componentes del record mensaje: parámetros de ruta (en el orden del path) +
 // campos del body + paginación (queries). Compartidos con el controller para
@@ -194,6 +195,16 @@ function renderHandler(model, service, operation) {
     imports.add(`${subPackage(model, 'application.mappers')}.${mapper}`);
     dependencies.push({ type: mapper, name: mapper[0].toLowerCase() + mapper.slice(1) });
   }
+  // Referencias embebidas (`embed`): el mapper las exige por parámetro y el
+  // agregado solo guarda el id ajeno, así que sin el resolver el handler ni
+  // siquiera compila. Se inyecta el resolver —nunca el repositorio de la otra
+  // raíz— porque es lo que resuelve por lote (conventions/read-composition.md).
+  const embedded = refTargetsOf(model, operation);
+  for (const { entity } of embedded) {
+    const resolver = `${entity.name}RefResolver`;
+    imports.add(`${subPackage(model, 'application.support')}.${resolver}`);
+    dependencies.push({ type: resolver, name: resolver[0].toLowerCase() + resolver.slice(1) });
+  }
   // El handler NO publica eventos: los emite el agregado con raise(...) y el
   // adaptador de repositorio los drena al persistir (conventions/domain-modeling.md).
 
@@ -228,6 +239,21 @@ function renderHandler(model, service, operation) {
   }
   if (operation.cache) {
     notes.push(`Caché: ttlSeconds=${operation.cache.ttlSeconds}, keyFields=[${operation.cache.keyFields.join(', ')}]`);
+  }
+  // El patrón se escribe entero en el stub porque es donde el agente decide, y
+  // la diferencia entre lote y bucle no se ve en el resultado: solo en el número
+  // de consultas (100 elementos × 2 embeds = 201 vs. 3).
+  for (const { entity, ref } of embedded) {
+    const resolver = `${entity.name[0].toLowerCase()}${entity.name.slice(1)}RefResolver`;
+    if (operation.paginated || operation.returnsList) {
+      notes.push(
+        `Embed ${entity.name}: resolver por LOTE — recoge los ${entity.name[0].toLowerCase()}${entity.name.slice(1)}Id distintos de la página, una sola llamada a ${resolver}.resolve(ids) y ${ref.name} = map.get(id) al mapear cada elemento. NUNCA findById dentro del stream: es un N+1 (conventions/read-composition.md)`
+      );
+    } else {
+      notes.push(
+        `Embed ${entity.name}: ${ref.name} = ${resolver}.resolve(<id>) (conventions/read-composition.md)`
+      );
+    }
   }
   const noteLines = notes.map((note) => `        // ${note}`);
 

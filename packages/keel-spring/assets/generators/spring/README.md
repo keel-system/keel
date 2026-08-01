@@ -34,6 +34,7 @@ cd services/<servicio>-spring
 | `conventions/flow-fidelity.md` | Auditoría de fidelidad al flujo: checklist previa a implementar cada handler |
 | `conventions/domain-modeling.md` | Modelado del dominio: agregados ricos, invariantes, value objects y reparto de la validación entre capas |
 | `conventions/domain-services.md` | Cuándo y cómo crear servicios de dominio (`@DomainComponent`) |
+| `conventions/read-composition.md` | Cómo se resuelven las referencias `embed` (por lote con el `<Raíz>RefResolver`) y cuándo hace falta un join proyectado en un adaptador de lectura |
 | `conventions/dependencies.md` | Capa `dependencies`: proyecciones de réplica (`<Entidad>Projector` / `<Entidad>Reader`) y su cableado listener → guard → mediator → handler |
 | `conventions/virtual-threads.md` | I/O paralela con hilos virtuales en query handlers |
 | `skills/` | Skills por tecnología del stack (`keel-spring-<tech>/` — database, kafka, rabbitmq, snssqs, s3, redis, keycloak, cognito; SKILL.md + `references/` bajo demanda), instaladas condicionalmente en el `.claude/skills/` del proyecto generado según `keel-stack.json` |

@@ -7,6 +7,7 @@
 import { javaFile, javaPath, subPackage } from './render.js';
 import { domainMembers, domainSubPackage, capitalize } from './entities.js';
 import { jpaMembers, backReferenceTo, JPA_PKG } from './persistence-entities.js';
+import { isRefTarget } from './ref-resolvers.js';
 
 const PORT_PKG = 'domain.repository';
 const REPO_PKG = 'infrastructure.persistence.repositories';
@@ -19,9 +20,14 @@ export function generate(model) {
     const paginated = model.services.some(
       (group) => group.entity === entity.name && group.operations.some((op) => op.paginated)
     );
-    files.push(renderPort(model, entity, paginated));
+    // Lectura por lote: solo las raíces que algún payload embebe (`embed`) la
+    // necesitan, y solo ellas la reciben — un puerto no se ensancha con métodos
+    // que nadie llama. Es lo que permite resolver los embeds de una página con
+    // una consulta por agregado en vez de una por elemento (N+1).
+    const batchLookup = isRefTarget(model, entity.name);
+    files.push(renderPort(model, entity, paginated, batchLookup));
     files.push(renderJpaRepository(model, entity));
-    files.push(renderAdapter(model, entity, paginated));
+    files.push(renderAdapter(model, entity, paginated, batchLookup));
   }
   return files;
 }
@@ -46,7 +52,7 @@ function naturalKeyFinder(entity) {
 
 // Puerto de salida del dominio: interfaz sin dependencia de JPA (usa
 // Page/Pageable de Spring Data como pragmatismo, igual que el prototipo).
-function renderPort(model, entity, paginated) {
+function renderPort(model, entity, paginated, batchLookup) {
   const imports = new Set([
     `${subPackage(model, domainSubPackage(entity))}.${entity.name}`,
     'java.util.Optional',
@@ -54,6 +60,16 @@ function renderPort(model, entity, paginated) {
   ]);
 
   const methods = [`    Optional<${entity.name}> findById(UUID id);`];
+  if (batchLookup) {
+    imports.add('java.util.Collection');
+    imports.add('java.util.List');
+    methods.push(`    /**
+     * Carga en UNA consulta las raíces de la colección de ids. El orden de salida
+     * NO está garantizado y los ids inexistentes simplemente no aparecen: quien
+     * llama indexa por id (ver ${entity.name}RefResolver).
+     */
+    List<${entity.name}> findAllById(Collection<UUID> ids);`);
+  }
   const finder = naturalKeyFinder(entity);
   if (finder) {
     for (const param of finder.params) for (const name of param.imports) imports.add(name);
@@ -106,7 +122,7 @@ function renderJpaRepository(model, entity) {
 
 // Adaptador: implementa el puerto delegando en Spring Data y mapeando
 // domain↔JPA de forma explícita (sin reflexión ni mappers externos).
-function renderAdapter(model, entity, paginated) {
+function renderAdapter(model, entity, paginated, batchLookup) {
   const imports = new Set([
     `${subPackage(model, PORT_PKG)}.${entity.name}Repository`,
     `${subPackage(model, JPA_PKG)}.${entity.name}Jpa`,
@@ -130,6 +146,14 @@ function renderAdapter(model, entity, paginated) {
         return ${jpaField}.findById(id).map(this::toDomain);
     }`
   ];
+  if (batchLookup) {
+    imports.add('java.util.Collection');
+    imports.add('java.util.List');
+    methods.push(`    @Override
+    public List<${entity.name}> findAllById(Collection<UUID> ids) {
+        return ${jpaField}.findAllById(ids).stream().map(this::toDomain).toList();
+    }`);
+  }
   const finder = naturalKeyFinder(entity);
   if (finder) {
     for (const param of finder.params) for (const name of param.imports) imports.add(name);

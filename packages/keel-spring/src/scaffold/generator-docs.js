@@ -24,6 +24,7 @@ const CONVENTIONS = [
   'flow-fidelity.md',
   'domain-modeling.md',
   'domain-services.md',
+  'read-composition.md',
   'dependencies.md',
   'virtual-threads.md'
 ];

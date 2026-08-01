@@ -29,9 +29,24 @@ EAGER global: eso convierte cada query en un producto cartesiano silencioso.
 ## N+1 (una query por elemento de una lista)
 
 Visible en local con `show-sql: true`: una query «madre» y N idénticas
-después. Arreglo estructural: `JOIN FETCH`/`@EntityGraph` en el método del
-repositorio que alimenta ese flujo. Mitigación global:
+después. **Hay dos N+1 distintos y se ven igual en el log; mira a qué tabla van
+las N consultas**, porque el arreglo no es el mismo:
+
+**1. Intra-agregado** — las N consultas van a la tabla de una entidad **hija**
+(`select ... from product_image where product_id = ?`). Es el N+1 clásico de
+Hibernate: una colección lazy que se toca por elemento. Arreglo estructural:
+`JOIN FETCH`/`@EntityGraph` en el método del repositorio que alimenta ese flujo,
+de modo que el agregado salga completo del adaptador. Mitigación global:
 `hibernate.default_batch_fetch_size` (ver `references/configuration.md`).
+
+**2. Entre agregados** — las N consultas van a la tabla de **otra raíz**
+(`select ... from brand where id = ?`), típicamente resolviendo los `embed` de un
+listado. Aquí `JOIN FETCH` y `@EntityGraph` **no aplican**: no hay asociación que
+recorrer, solo una columna `UUID`, y `default_batch_fetch_size` tampoco (no hay
+colección lazy que lotear). El arreglo es **aplicativo**: resolver por lote con el
+`<X>RefResolver` que build inyecta en el handler — ver
+`.claude/conventions/read-composition.md`. Si además la operación filtra u ordena por un
+campo del agregado ajeno, el lote no basta: `references/read-queries.md`.
 
 ## `function <nombre>(bytea) does not exist` al listar o buscar
 

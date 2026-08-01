@@ -55,6 +55,15 @@ misma raíz. Todo lo que hagas ocurre dentro de ella.
    añades tú: `existsBy…` para una unicidad, un `findAll()` para un listado sin paginar, un
    contador para una regla de cardinalidad. Añádelo al puerto de dominio **y** a su adaptador
    JPA, nunca inyectando el `JpaRepository` en un handler.
+
+   **Las referencias embebidas (`embed`) se resuelven por lote.** Cuando el mapper te pide un
+   `<Raíz>RefDto` por parámetro, build ya te inyectó el `<Raíz>RefResolver` correspondiente:
+   una llamada a `resolve(ids)` con los ids de la página entera, y `map.get(id)` al mapear
+   cada elemento. Un `findById` o un `resolve(UUID)` **dentro de un stream o bucle sobre una
+   colección es un defecto**, no una optimización pendiente: 100 elementos con dos embeds son
+   201 consultas, y los escenarios `FL-*` pasan igual en verde, así que nadie te va a avisar.
+   El criterio completo —incluido cuándo el lote no basta y hace falta un join proyectado en
+   un adaptador de lectura— está en `.claude/conventions/read-composition.md`.
 4. Verifica **solo** con `./gradlew build -x test` (en Windows
    `gradlew.bat build -x test`): compilación y empaquetado en verde. No ejecutes
    `docker compose`, `bootRun` ni escenarios funcionales: de eso se encargan otros
