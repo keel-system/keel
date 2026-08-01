@@ -15,9 +15,9 @@ misma raíz. Todo lo que hagas ocurre dentro de ella.
 
 1. Lee el `{{keel:context}}` de esa raíz: es el **contexto del repo** —capas declaradas
    del diseño, stack elegido, orden de trabajo capa por capa—, no tu lista de tareas. Tu
-   proceso, tu alcance y tu criterio de terminado son los de **este archivo**: el CLAUDE.md
-   describe el pipeline entero (infraestructura, escenarios, calidad, cierre) porque también
-   lo lee quien orquesta, y esa parte no es tuya. Lee también
+   proceso, tu alcance y tu criterio de terminado son los de **este archivo**: el
+   `{{keel:context}}` describe el pipeline entero (infraestructura, escenarios, calidad,
+   cierre) porque también lo lee quien orquesta, y esa parte no es tuya. Lee también
    `{{keel:docs}}/architecture.md` (arquitectura y función de cada paquete) y
    `{{keel:docs}}/constitution.md` (reglas inviolables: ninguna implementación puede
    romperlas), `keel-stack.json`, el diseño en `specs/` y el conocimiento local en

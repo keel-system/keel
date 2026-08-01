@@ -98,6 +98,14 @@ test('los assets neutrales no citan rutas de harness: para eso están los tokens
     for (const harness of HARNESSES) {
       const dir = harness.tokens.skills.split('/')[0];
       assert.equal(text.includes(dir), false, `${path.relative(skillsSourceDir, file)} cita ${dir} en vez de un token`);
+      // El archivo de contexto se llama distinto en cada harness, así que nombrarlo
+      // en literal es la misma mentira que citar `.claude/`, y se cuela por debajo
+      // de la comprobación de rutas porque no lleva barra. Va `{{keel:context}}`.
+      assert.equal(
+        text.includes(harness.contextFile),
+        false,
+        `${path.relative(skillsSourceDir, file)} nombra ${harness.contextFile} en vez de {{keel:context}}`
+      );
     }
   }
 });

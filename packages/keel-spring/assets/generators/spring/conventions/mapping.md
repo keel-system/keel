@@ -408,7 +408,7 @@ Capa de **síntesis**: casi todo lo que referencia ya está generado por otras c
 
 | Diseño | Código |
 |--------|--------|
-| `dependencies.D` | Nada propio: documenta en el README y el `CLAUDE.md` del proyecto de quién depende el servicio y a qué versión de contrato |
+| `dependencies.D` | Nada propio: documenta en el README y en el archivo de contexto del repo de quién depende el servicio y a qué versión de contrato |
 | `needs.n.strategy: on-demand` | **Nada nuevo**: el handler de cada operación de `usedBy` invoca el puerto `<C>Client` ya generado |
 | `needs.n.usedBy` | Javadoc del Reader y de los handlers implicados; es la trazabilidad caso de uso ↔ integración |
 | `needs.n.fetchedFrom` | Referencia al método `<call>` del puerto `<C>Client`; la resiliencia ya está en su adaptador, no la repitas |

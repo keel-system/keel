@@ -73,8 +73,8 @@ skill \`keel-spring-database\`.
 - **Nunca edites una migración ya aplicada** en cualquier ambiente: Flyway guarda
   su checksum y el arranque fallará. Los cambios van en una \`V<n+1>\` nueva.
 - **Nunca \`flyway clean\`**: borra el esquema. Está deshabilitado en \`production\`.
-- El esquema que describan estas migraciones debe respetar \`specs/${model.service.name}\`
-  (claves naturales e índices de \`persistence.keel.yaml\`); el diseño manda.
+- El esquema que describan estas migraciones debe respetar el snapshot del diseño
+  en \`specs/\` (claves naturales e índices de \`persistence.keel.yaml\`); el diseño manda.
 `;
 }
 

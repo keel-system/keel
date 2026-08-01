@@ -96,6 +96,13 @@ export function generate(model) {
   return files;
 }
 
+// Nombres del archivo de contexto de cada harness (CLAUDE.md, AGENTS.md). En
+// material compartido son tan mentira como una ruta `.claude/`: el archivo existe
+// con OTRO nombre para quien use el otro harness. Y a diferencia de la ruta, aquí
+// el token tampoco vale (docContent los rechaza), así que la frase tiene que
+// hablar del "archivo de contexto del repo" sin nombrarlo.
+const CONTEXT_FILES = new RegExp(`\\b(${HARNESSES.map((h) => h.contextFile.replace('.', '\\.')).join('|')})`, 'g');
+
 /**
  * Las docs de apoyo viven en un único sitio, compartido por todos los harnesses:
  * ahí una ruta `.claude/…` mentiría a quien use el otro. Así que solo se resuelve
@@ -109,6 +116,14 @@ function docContent(sourceFile) {
     throw new Error(
       `${path.basename(sourceFile)} cita rutas de harness (${[...new Set(leftover)].join(', ')}), ` +
         `pero vive en ${DOCS_DIR}/ y lo leen los dos: nombra la skill o el agente en vez de su ruta.`
+    );
+  }
+  const contextFiles = resolved.match(CONTEXT_FILES);
+  if (contextFiles) {
+    throw new Error(
+      `${path.basename(sourceFile)} nombra el archivo de contexto (${[...new Set(contextFiles)].join(', ')}), ` +
+        `pero vive en ${DOCS_DIR}/ y lo leen los dos, donde ese archivo se llama de otra forma: ` +
+        'di "el archivo de contexto del repo" sin nombrarlo.'
     );
   }
   return resolved;

@@ -137,7 +137,11 @@ out/
 .vscode/
 `;
 
+  // Los scripts de infra/ los ejecuta bash (contenedor o Git Bash): con CRLF el
+  // shebang se rompe. Un clon en Windows con core.autocrlf=true los convertiría
+  // si no se fijan aquí, igual que ya se fija gradlew.
   const gitattributes = `/gradlew        text eol=lf
+*.sh            text eol=lf
 *.bat           text eol=crlf
 *.jar           binary
 `;

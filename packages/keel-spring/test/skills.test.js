@@ -113,6 +113,44 @@ test('agentes de la orquestación: son hojas, no pueden lanzar subagentes', () =
   }
 });
 
+test('los assets del generador no nombran rutas ni archivos de harness: para eso está el token', () => {
+  // Dos familias de asset, y ninguna puede nombrar un harness:
+  //  - agents/ y skills/ son fuente NEUTRAL y se proyectan a los dos, así que un
+  //    literal sobrevive la proyección y le miente a la mitad de los usuarios.
+  //  - conventions/ y las guías van a docs/keel/ en copia ÚNICA, donde ni siquiera
+  //    cabe el token (docContent los rechaza): ahí la frase no debe nombrarlo.
+  // El nombre del archivo de contexto se cuela por debajo de la comprobación de
+  // rutas porque no lleva barra, y es justo el caso que se ha escapado.
+  const roots = [
+    path.join(assetsDir, 'agents'),
+    path.join(assetsDir, 'generators', 'spring')
+  ];
+
+  // Los dos README.md de assets/ son contrato interno para quien desarrolla el
+  // generador y no se instalan en ningún proyecto: ahí nombrar `.claude/` describe
+  // el mecanismo, no instruye a nadie.
+  const INTERNAL = ['README.md', 'skills/README.md'];
+
+  let checked = 0;
+  for (const root of roots) {
+    for (const rel of walkFiles(root)) {
+      if (!rel.endsWith('.md') || INTERNAL.includes(rel)) continue;
+      const text = fs.readFileSync(path.join(root, rel), 'utf8');
+      checked++;
+      for (const harness of HARNESSES) {
+        const dir = harness.tokens.skills.split('/')[0];
+        assert.equal(text.includes(dir), false, `${rel} cita ${dir} en vez de {{keel:skills}}/{{keel:agents}}`);
+        assert.equal(
+          text.includes(harness.contextFile),
+          false,
+          `${rel} nombra ${harness.contextFile}: usa {{keel:context}}, o si vive en docs/keel/ di "el archivo de contexto del repo"`
+        );
+      }
+    }
+  }
+  assert.ok(checked > 20, `solo se auditaron ${checked} assets: ¿se movió alguna raíz?`);
+});
+
 test('skills por tecnología: frontmatter con name coherente y tabla de referencias', () => {
   const skillNames = fs
     .readdirSync(skillsDir, { withFileTypes: true })
