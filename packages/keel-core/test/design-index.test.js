@@ -16,6 +16,10 @@ import {
 } from '../src/lib/design-index.js';
 import { packageVersion, supportedDsl } from '../src/lib/assets.js';
 
+// Versión vigente del DSL: derivada, no escrita. Solo se soporta una, y un literal
+// aquí volvería a romper estos tests en el siguiente cambio de versión.
+const DSL = supportedDsl()[0];
+
 function write(file, content) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, content);
@@ -51,7 +55,7 @@ function workspace(designs, { readme = defaultReadme() } = {}) {
       path.join(dir, 'service.keel.yaml'),
       manifest ??
         [
-          'keel: "2.3"',
+          `keel: "${DSL}"`,
           'service:',
           `  name: ${name}`,
           `  version: ${version}`,
@@ -216,7 +220,7 @@ test('los recuentos y las capas describen el contenido del diseño', () => {
   assert.equal(design.counts.operations, 2);
   assert.equal(design.counts.commands, 1);
   assert.equal(design.counts.queries, 1);
-  assert.equal(design.service.dsl, '2.3');
+  assert.equal(design.service.dsl, DSL);
   assert.equal(design.service.version, '1.0.0');
 });
 

@@ -3,6 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { supportedDsl } from '../src/lib/assets.js';
+
+// Versión vigente del DSL: derivada, no escrita. Solo se soporta una, y un literal
+// aquí volvería a romper estos tests en el siguiente cambio de versión.
+const DSL = supportedDsl()[0];
 import { resolveServiceRef } from '../src/lib/loader.js';
 import { summarizeService } from '../src/lib/summarize-service.js';
 
@@ -18,7 +23,7 @@ function makeServiceDir(t, files) {
 function manifest({ layers, basedOn } = {}) {
   const layerLines = (layers ?? ['domain', 'use-cases']).map((l) => `  ${l}: ${l}.keel.yaml`).join('\n');
   return (
-    'keel: "2.0"\n' +
+    `keel: "${DSL}"\n` +
     'service:\n' +
     '  name: billing\n' +
     '  version: 1.2.0\n' +
@@ -95,7 +100,7 @@ test('summarizeService resume un servicio completo domain + use-cases', (t) => {
   assert.deepEqual(result.service, {
     name: 'billing',
     version: '1.2.0',
-    dsl: '2.0',
+    dsl: DSL,
     domain: 'commerce',
     basedOn: 'catalog@2.0.0',
     description: 'Gestiona la facturación de pedidos.'

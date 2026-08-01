@@ -22,12 +22,16 @@ import { REGISTRY_FILES, makeWorkspace, registryFixture, withRegistry } from './
 
 const URL_INDEX = 'https://example.test/registry/index.json';
 
+// Versión vigente del DSL: derivada, no escrita. Solo se soporta una, y un literal
+// aquí volvería a romper estos tests en el siguiente cambio de versión.
+const DSL = supportedDsl()[0];
+
 function design(slug, overrides = {}) {
   return {
     slug,
     family: overrides.family ?? slug,
     variant: overrides.variant ?? null,
-    service: { name: slug, version: '1.0.0', dsl: '2.3', domain: 'commerce', basedOn: null, description: `Diseño ${slug}.` },
+    service: { name: slug, version: '1.0.0', dsl: DSL, domain: 'commerce', basedOn: null, description: `Diseño ${slug}.` },
     metadata: overrides.metadata ?? null,
     layers: ['domain', 'use-cases'],
     counts: { entities: 1, operations: 2 },
@@ -314,12 +318,12 @@ test('la búsqueda cubre slug, tags, dominio, resumen y descripción', () => {
   assert.deepEqual(searchDesigns(index, 'inexistente'), []);
 });
 
-test('dslSupport clasifica soportado, más nuevo y sin declarar', () => {
+test('dslSupport clasifica soportado, incompatible y sin declarar', () => {
   const [primera] = supportedDsl();
 
   assert.equal(dslSupport(design('catalog')), 'ok', 'el fixture usa una versión soportada');
   assert.equal(dslSupport({ service: { dsl: primera } }), 'ok');
-  assert.equal(dslSupport({ service: { dsl: '9.0' } }), 'nueva');
+  assert.equal(dslSupport({ service: { dsl: '9.0' } }), 'incompatible');
   assert.equal(dslSupport({ service: { dsl: null } }), 'desconocida');
   assert.equal(dslSupport({ service: {} }), 'desconocida');
   assert.equal(dslSupport({}), 'desconocida');
@@ -327,10 +331,10 @@ test('dslSupport clasifica soportado, más nuevo y sin declarar', () => {
 
 test('dslSupport acepta una lista de soportadas inyectada', () => {
   assert.equal(dslSupport({ service: { dsl: '3.0' } }, { supported: ['3.0'] }), 'ok');
-  assert.equal(dslSupport({ service: { dsl: '2.3' } }, { supported: ['3.0'] }), 'nueva');
+  assert.equal(dslSupport({ service: { dsl: '2.3' } }, { supported: ['3.0'] }), 'incompatible');
 });
 
-test('el mensaje de DSL incompatible dice qué declara, qué se soporta y qué hacer', () => {
+test('el mensaje de un DSL más nuevo dice qué declara, qué se soporta y que actualice', () => {
   const message = dslMismatchMessage({ slug: 'futuro', service: { dsl: '9.0' } }, { supported: ['2.3'] });
 
   assert.match(message, /'futuro'/);
@@ -339,12 +343,23 @@ test('el mensaje de DSL incompatible dice qué declara, qué se soporta y qué h
   assert.match(message, /Actualiza keel-core/);
 });
 
+test('el mensaje de un DSL anterior NO aconseja actualizar: no arreglaría nada', () => {
+  // Con una sola versión soportada este es el caso frecuente, y "actualiza la
+  // CLI" mandaría al usuario a perseguir una versión que ya tiene.
+  const message = dslMismatchMessage({ slug: 'viejo', service: { dsl: '2.0' } }, { supported: ['2.4'] });
+
+  assert.match(message, /'viejo'/);
+  assert.match(message, /keel 2\.0/);
+  assert.match(message, /versión anterior/);
+  assert.doesNotMatch(message, /Actualiza keel-core/);
+});
+
 test('un diseño con DSL más nuevo no se descarga: el gate va antes de la red', async () => {
   // downloadDesign se llamaría después del gate; si el gate falla y aun así se
   // descarga, este fetch tumba el test en vez de dejar pasar el bug.
   const futuro = design('futuro', { extra: { service: { name: 'futuro', version: '1.0.0', dsl: '9.0' } } });
 
-  assert.equal(dslSupport(futuro), 'nueva');
+  assert.equal(dslSupport(futuro), 'incompatible');
   const result = await downloadDesign(
     { ...futuro, files: ['docs/futuro/DESIGN.md'] },
     { indexUrl: URL_INDEX, fetchImpl: () => assert.fail('no debe tocar la red') }

@@ -195,6 +195,11 @@
               "type": "array",
               "description": "Relaciones hacia OTRO agregado que este payload proyecta como objeto anidado en vez de como '<relación>Id'. Solo en output: el consumidor recibe 'category': { … } en lugar de 'categoryId'. El objeto lleva los campos propios del agregado referenciado, sin sus relaciones (la proyección no encadena).",
               "items": { "$ref": "#/$defs/operationName" }
+            },
+            "sort": {
+              "type": "array",
+              "description": "Orden POR DEFECTO de un payload de salida con 'list' o 'paginated', como '<campo>[:asc|desc]' (default 'asc'). Es contrato: es lo que recibe quien no pide un orden concreto. El id del agregado se añade siempre como último criterio de desempate, aunque no se declare 'sort': sin él, dos páginas consecutivas pueden repetir u omitir filas. Un dot-path ('brand.name') ordena por un campo de otro agregado y exige que esa relación esté en 'embed' del mismo payload; la profundidad se corta en 1, igual que 'embed'.",
+              "items": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*(\\.[a-z][A-Za-z0-9]*)?(:(asc|desc))?$" }
             }
           }
         },

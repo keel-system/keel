@@ -85,6 +85,8 @@ En el **dominio** la colección es una lista mutable interna con getter inmutabl
 | `operations.op` con `input`/`output.entity` **interna** a un agregado (p. ej. `AddOrderLine` sobre `OrderLine`) | El handler igual inyecta el repositorio de la **raíz** (`OrderRepository`) — nunca uno de la hija, que no existe. El agente carga la raíz por id, invoca su método de negocio (`order.addLine(...)`, ver `domain-modeling.md § Colecciones y entidades hijas`) y persiste la raíz |
 | `kind: query` | Sin efectos; el `UseCaseMediator` la despacha en transacción `readOnly` (el handler no lleva `@Transactional`) |
 | `input`/`output` `{ entity: X }` | DTOs derivados de la entidad; en input quedan fuera `generated`/`computed`; en output quedan fuera `sensitive` y los campos de `exclude`. Las **relaciones entran por defecto**: una referencia a otro agregado como `<relación>Id` (UUID) —salvo que el output la marque con `embed`, en cuyo caso el DTO lleva el `<Raíz>RefDto` que **produce el `<Raíz>RefResolver` que build inyecta en el handler**, siempre por lote: cómo usarlo, en [read-composition](read-composition.md)— y una entidad hija como su propio `<Hija>Dto` (`List<…>` si es `one-to-many`), que build genera. Un `exclude` con **dot-path** (`lines.costPrice`, `address.zip`) recorta el DTO **anidado**: build genera la hija completa y señala cada ruta con un warning — ese warning es la señal de trabajo del agente. En el **input** las hijas no entran (se gestionan por sus propias operaciones); si un flujo las recibe anidadas, build lo avisa y lo modela el agente |
+| `output` con `sort` | **Generado entero, no tocar salvo por lo de abajo.** El orden declarado va como constante `<OPERACION>_ORDER` en el controller, aplicada solo si el cliente no manda `?sort=` (`withDefaultOrder`). Y el adaptador del agregado añade **siempre** el id como desempate (`TIE_BREAKER` + `withStableOrder`), venga el orden de donde venga: sin él, dos páginas consecutivas pueden repetir una fila y omitir otra. Un listado paginado **sin** `sort` declarado queda ordenado por id, no sin orden |
+| `sort` con **dot-path** (`brand.name`, sobre una relación en `embed`) | build **no** lo traduce y emite un warning: entre agregados hay una columna `UUID`, no una asociación navegable, así que no hay property path que dar a Spring Data. Lo implementa el agente con un adaptador de **lectura** y JPQL proyectado — [read-composition](read-composition.md) y `skills/keel-spring-database/references/read-queries.md`. El stub del handler lleva la nota |
 | `input` con un campo `type: file` | Endpoint `multipart/form-data`: el binario llega como `@RequestPart MultipartFile` y viaja al mensaje como `FileUpload(content, filename, contentType, size)`; el resto de campos, como `@RequestParam`. El handler sube el contenido por el puerto `FileStorage` y guarda en el dominio la **clave** del objeto (String), que es lo que el `output` expone |
 | `preconditions` / `rules` | Lógica del `handle(...)` del handler, en el mismo orden del diseño, comentadas con la frase del diseño cuando no sea obvia |
 | `rules` con **normalización previa** (upper/lower/trim antes de validar formato o unicidad) | El campo **no** lleva `@Pattern`/`@Size` de Bean Validation en el DTO de entrada — ver el aviso de abajo |
@@ -128,9 +130,11 @@ normalización declarada, es un caso que el diseño no expresa: repórtalo como
 ### Ordenar por un campo con columna normalizada
 
 Cuando el diseño dice que un texto se compara o se ordena **ignorando mayúsculas y
-acentos**, `build` genera la columna normalizada del campo (`nameNormalized`) y el
-repositorio que la consulta. El `Sort` del listado tiene que usar **esa misma
-columna**, no la cruda:
+acentos**, la columna normalizada del campo (`nameNormalized`) y el repositorio que la
+consulta **los escribes tú** — es el fallback portable de
+`skills/keel-spring-database/references/jpa-mapping.md` § Búsqueda que ignora mayúsculas y
+acentos; build no la deriva porque el DSL no declara esa normalización como tal. El `Sort`
+del listado tiene que usar **esa misma columna**, no la cruda:
 
 ```java
 // mal: ordena por bytes, y 'Ácme' cae después de 'Zeta'
@@ -143,6 +147,10 @@ La regla es "existe columna normalizada del campo por el que ordeno ⇒ ordeno p
 ella". Tratarlas como independientes hace que el filtro y el orden del mismo
 listado discrepen, y el escenario falla en un elemento del medio de la página —
 el fallo más caro de diagnosticar de todos.
+
+**Al introducir la columna normalizada, actualiza la constante `<OPERACION>_ORDER` que
+build generó en el controller**: apunta al campo crudo, que es el único que el diseño
+nombra. Es el mismo cambio, y olvidarlo deja el orden por defecto discrepando del filtro.
 
 **Alcance de la normalización**: la columna normalizada se genera para campos
 escalares. Una colección (`list: true`, que se persiste como `@ElementCollection`)

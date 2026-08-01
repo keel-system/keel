@@ -3,6 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { supportedDsl } from '../src/lib/assets.js';
+
+// Versión vigente del DSL: derivada, no escrita. Solo se soporta una, y un literal
+// aquí volvería a romper estos tests en el siguiente cambio de versión.
+const DSL = supportedDsl()[0];
 import { validateService } from '../src/lib/validate-service.js';
 
 function makeServiceDir(t, files) {
@@ -17,7 +22,7 @@ function makeServiceDir(t, files) {
 function manifest({ layers = ['domain', 'use-cases'], description = 'Gestiona la facturación de pedidos.' } = {}) {
   const layerLines = layers.map((l) => `  ${l}: ${l}.keel.yaml`).join('\n');
   return (
-    'keel: "2.3"\n' +
+    `keel: "${DSL}"\n` +
     'service:\n' +
     '  name: billing\n' +
     '  version: 1.0.0\n' +

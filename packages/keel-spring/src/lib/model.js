@@ -543,6 +543,42 @@ function addImplicitAggregateRelations(entities, aggregates, warnings) {
 
 // ─── Operaciones, servicios, controllers y errores ───────────────────────────
 
+// Orden por defecto de una salida de varios elementos (`sort` del DSL). Solo el
+// orden DECLARADO: el desempate por id lo añade el adaptador de repositorio, que
+// es el único punto por el que pasa toda consulta paginada del agregado — y que
+// tiene que aplicarlo también cuando el cliente manda su propio ?sort=.
+//
+// Un criterio sobre un agregado embebido (`brand.name`) NO se puede traducir a una
+// property path de Spring Data: entre agregados hay una columna UUID, no una
+// asociación navegable. Se marca `embedded` para que build avise y el agente lo
+// resuelva con un join proyectado (conventions/read-composition.md).
+function resolveSort(opName, op, domainEntities, warnings) {
+  const output = typeof op.output === 'object' ? op.output : null;
+  const declared = output?.sort ?? [];
+  if (declared.length === 0) return [];
+
+  const entityName = payloadEntity(op.output);
+  const embedded = new Set(output?.embed ?? []);
+
+  return declared.map((criterion) => {
+    const [path, direction = 'asc'] = String(criterion).split(':');
+    const [head, nested] = path.split('.');
+    const relation = nested ? domainEntities[entityName]?.relations?.[head] : null;
+
+    if (relation && embedded.has(head)) {
+      warnings.push(
+        `Operación '${opName}': ordena por '${path}', un campo del agregado embebido '${relation.entity}'. La resolución por lote no puede ordenar por él (entre agregados no hay asociación navegable): hace falta un adaptador de lectura con join proyectado — skills/keel-spring-database/references/read-queries.md`
+      );
+      return { path, direction, embedded: true, relation: head, field: nested, property: null };
+    }
+
+    // Subcampo de value object compuesto: build lo aplana a columna con prefijo,
+    // así que la property path de JPA es el nombre compuesto.
+    const property = nested ? `${head}${nested[0].toUpperCase()}${nested.slice(1)}` : head;
+    return { path, direction, embedded: false, relation: null, field: nested ?? head, property };
+  });
+}
+
 function collectOperations(layers, domainTypes, inlineEnumName, service, warnings) {
   const operations = layers['use-cases']?.operations ?? {};
   const api = layers.api ?? null;
@@ -620,6 +656,7 @@ function collectOperations(layers, domainTypes, inlineEnumName, service, warning
           : null,
       returnsList: Boolean(typeof op.output === 'object' && op.output?.list),
       paginated: Boolean(typeof op.output === 'object' && op.output?.paginated),
+      sort: resolveSort(opName, op, domainEntities, warnings),
       preconditions: op.preconditions ?? [],
       rules: op.rules ?? [],
       errors: (op.errors ?? []).map((e) => e.code),

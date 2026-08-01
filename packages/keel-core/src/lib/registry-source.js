@@ -194,26 +194,43 @@ export async function loadRegistryIndex({
  * ¿Entiende esta CLI el DSL con el que se escribió el diseño?
  *
  * - `ok`: la versión está entre las soportadas.
- * - `nueva`: el diseño usa un DSL que esta CLI no conoce. Derivarlo produciría
- *   un workspace que `keel validate` rechaza (el enum del schema del manifiesto
- *   es el mismo que alimenta `supportedDsl()`), así que es un error al derivar.
+ * - `incompatible`: el diseño usa un DSL que esta CLI no acepta. Derivarlo
+ *   produciría un workspace que `keel validate` rechaza (el enum del schema del
+ *   manifiesto es el mismo que alimenta `supportedDsl()`), así que es un error
+ *   al derivar. Cubre las dos direcciones: la versión puede ser más nueva que
+ *   esta CLI o más vieja que lo que ya acepta — con una sola versión soportada,
+ *   lo segundo es lo habitual.
  * - `desconocida`: el índice no declara la versión — se avisa, no se bloquea.
  */
 export function dslSupport(design, { supported = supportedDsl() } = {}) {
   const dsl = design?.service?.dsl;
   if (typeof dsl !== 'string' || dsl === '') return 'desconocida';
-  return supported.includes(dsl) ? 'ok' : 'nueva';
+  return supported.includes(dsl) ? 'ok' : 'incompatible';
 }
 
 /**
  * Mensaje accionable para un diseño con DSL no soportado, con la misma forma que
  * el gate de compatibilidad de los generadores (`keel-spring build`).
+ *
+ * La salida depende de la dirección: actualizar la CLI solo arregla el caso de un
+ * diseño escrito con un DSL más nuevo. Si el diseño es de una versión anterior,
+ * actualizar no sirve de nada y el consejo sería una pista falsa.
  */
 export function dslMismatchMessage(design, { supported = supportedDsl() } = {}) {
-  return (
-    `El diseño '${design.slug}' usa el DSL keel ${design.service?.dsl} y esta CLI soporta: ${supported.join(', ')}.\n` +
-    '  Actualiza keel-core para poder derivarlo (`npm i -g keel-core@latest`).'
-  );
+  const dsl = design.service?.dsl;
+  const masNuevo = typeof dsl === 'string' && supported.every((version) => compareDsl(dsl, version) > 0);
+  const salida = masNuevo
+    ? '  Actualiza keel-core para poder derivarlo (`npm i -g keel-core@latest`).'
+    : '  Es una versión anterior a la que esta CLI acepta: hay que migrar el diseño al DSL vigente.';
+
+  return `El diseño '${design.slug}' usa el DSL keel ${dsl} y esta CLI soporta: ${supported.join(', ')}.\n${salida}`;
+}
+
+/** Orden numérico de dos versiones `mayor.menor` del DSL. */
+function compareDsl(a, b) {
+  const [aMayor, aMenor] = String(a).split('.').map(Number);
+  const [bMayor, bMenor] = String(b).split('.').map(Number);
+  return aMayor !== bMayor ? aMayor - bMayor : aMenor - bMenor;
 }
 
 /** Busca un diseño por slug. Devuelve { design } o { error } con sugerencias. */

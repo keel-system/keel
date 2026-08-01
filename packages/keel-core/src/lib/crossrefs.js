@@ -230,6 +230,87 @@ export function checkCrossRefs({ layers, wip = false }) {
     }
   };
 
+  // sort declara el orden POR DEFECTO de una salida de varios elementos. Es
+  // contrato —es lo que recibe quien no pide un orden concreto— y por eso solo
+  // vive en el output y solo sobre campos que ese payload realmente proyecta.
+  // El desempate por id lo añade el generador siempre, se declare o no: sin él
+  // dos páginas consecutivas pueden repetir u omitir filas.
+  const checkSort = (payload, where) => {
+    const scalarField = (entityName, fieldName) => {
+      const field = domain.entities[entityName]?.fields?.[fieldName];
+      if (!field) return { ok: false, reason: 'missing' };
+      // Una colección no tiene un orden por columna, y un value object compuesto
+      // ordena por un subcampo suyo, no por el objeto entero.
+      if (field.list === true) return { ok: false, reason: 'list' };
+      if (typeof field.type === 'string' && domain.types?.[field.type]?.fields) {
+        return { ok: false, reason: 'composite' };
+      }
+      return { ok: true };
+    };
+
+    const seen = new Set();
+    for (const criterion of payload.sort ?? []) {
+      const [path] = String(criterion).split(':');
+      if (seen.has(path)) {
+        errors.push(`${where}.sort '${criterion}': '${path}' ya está declarado; un criterio de orden no se repite`);
+        continue;
+      }
+      seen.add(path);
+
+      const [head, nested] = path.split('.');
+      if (!nested) {
+        // Una relación no se ordena como tal: o es otro agregado (y entonces se
+        // ordena por uno de sus campos, con dot-path) o es una entidad hija.
+        if (domain.entities[payload.entity]?.relations?.[head]) {
+          errors.push(
+            `${where}.sort '${criterion}': '${head}' es una relación, no un campo; para ordenar por el agregado referenciado usa '${head}.<campo>' y embébelo`
+          );
+          continue;
+        }
+        const check = scalarField(payload.entity, head);
+        if (check.reason === 'missing') {
+          errors.push(`${where}.sort '${criterion}': el campo '${head}' no existe en la entidad '${payload.entity}'`);
+        } else if (check.reason === 'list') {
+          errors.push(`${where}.sort '${criterion}': '${head}' es una colección y no define un orden; ordena por un campo escalar`);
+        } else if (check.reason === 'composite') {
+          errors.push(
+            `${where}.sort '${criterion}': '${head}' es un value object compuesto; ordena por uno de sus subcampos ('${head}.<subcampo>')`
+          );
+        }
+        continue;
+      }
+
+      // Dot-path: solo sobre una relación EMBEBIDA. Ordenar por algo que la
+      // respuesta no devuelve rompe el contrato, y exigir el embed es lo que
+      // hace que el generador pueda detectar que este listado necesita un join.
+      const relation = domain.entities[payload.entity]?.relations?.[head];
+      const composite = domain.entities[payload.entity]?.fields?.[head];
+      if (relation) {
+        if (!(payload.embed ?? []).includes(head)) {
+          errors.push(
+            `${where}.sort '${criterion}': ordena por un campo de '${relation.entity}', que este payload no proyecta; añade '${head}' a embed o ordena por un campo propio`
+          );
+          continue;
+        }
+        if (!entities.has(relation.entity)) continue; // relación rota: la reporta domain
+        const check = scalarField(relation.entity, nested);
+        if (check.reason === 'missing') {
+          errors.push(`${where}.sort '${criterion}': el campo '${nested}' no existe en la entidad '${relation.entity}'`);
+        } else if (check.reason !== undefined && check.ok !== true) {
+          errors.push(`${where}.sort '${criterion}': '${nested}' no es un campo escalar de '${relation.entity}'`);
+        }
+      } else if (composite && typeof composite.type === 'string' && domain.types?.[composite.type]?.fields) {
+        if (!domain.types[composite.type].fields[nested]) {
+          errors.push(`${where}.sort '${criterion}': el value object '${composite.type}' no tiene el campo '${nested}'`);
+        }
+      } else {
+        errors.push(
+          `${where}.sort '${criterion}': '${head}' no es una relación ni un value object de '${payload.entity}'`
+        );
+      }
+    }
+  };
+
   const checkPayload = (payload, where, { direction = 'output' } = {}) => {
     if (!payload || payload === 'void') return;
     if (payload.entity && !entities.has(payload.entity)) {
@@ -252,6 +333,15 @@ export function checkCrossRefs({ layers, wip = false }) {
           continue;
         }
         checkEmbed(payload.entity, relName, where);
+      }
+      if ((payload.sort ?? []).length > 0) {
+        if (direction === 'input') {
+          errors.push(`${where}.sort: el orden es una decisión de la salida; en la entrada no tiene efecto`);
+        } else if (payload.list !== true && payload.paginated !== true) {
+          errors.push(`${where}.sort: solo tiene sentido en una salida de varios elementos (list o paginated)`);
+        } else {
+          checkSort(payload, where);
+        }
       }
     }
     if (payload.fields) checkFieldMap(payload.fields, where);

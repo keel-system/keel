@@ -3,6 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { supportedDsl } from '../src/lib/assets.js';
+
+// Versión vigente del DSL: derivada, no escrita. Solo se soporta una, y un literal
+// aquí volvería a romper estos tests en el siguiente cambio de versión.
+const DSL = supportedDsl()[0];
 import { copyTree, diffTree } from '../src/lib/copy.js';
 import { CUSTOMIZABLE_PAYLOAD, coreDir } from '../src/lib/assets.js';
 
@@ -100,7 +105,7 @@ test('poner al día el payload con --force conserva lo personalizable y actualiz
 test('lo que el workspace añade por su cuenta no es deriva', () => {
   const dir = seeded();
   fs.mkdirSync(path.join(dir, 'specs', 'catalog'), { recursive: true });
-  fs.writeFileSync(path.join(dir, 'specs', 'catalog', 'service.keel.yaml'), 'keel: "2.3"\n');
+  fs.writeFileSync(path.join(dir, 'specs', 'catalog', 'service.keel.yaml'), `keel: "${DSL}"\n`);
   fs.writeFileSync(path.join(dir, 'index.json'), '{}\n');
 
   const result = diff(dir);

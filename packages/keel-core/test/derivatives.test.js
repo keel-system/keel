@@ -3,6 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { supportedDsl } from '../src/lib/assets.js';
+
+// Versión vigente del DSL: derivada, no escrita. Solo se soporta una, y un literal
+// aquí volvería a romper estos tests en el siguiente cambio de versión.
+const DSL = supportedDsl()[0];
 import { listDerivatives } from '../src/lib/derivatives.js';
 
 const VERSION = '1.2.0';
@@ -24,7 +29,7 @@ function workspace({ layers = ['domain', 'use-cases'], docs = {}, scenarios = nu
   write(
     path.join(serviceDir, 'service.keel.yaml'),
     [
-      'keel: "2.0"',
+      `keel: "${DSL}"`,
       'service:',
       '  name: catalog',
       `  version: ${version}`,

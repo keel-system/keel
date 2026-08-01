@@ -3,6 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { supportedDsl } from '../src/lib/assets.js';
+
+// Versión vigente del DSL: derivada, no escrita. Solo se soporta una, y un literal
+// aquí volvería a romper estos tests en el siguiente cambio de versión.
+const DSL = supportedDsl()[0];
 import Ajv2020Module from 'ajv/dist/2020.js';
 import { rewriteManifestForDerivation, rewriteScenariosForDerivation, stampAdoptedManifest } from '../src/lib/derive.js';
 import { schemaPathFor } from '../src/lib/assets.js';
@@ -75,7 +80,7 @@ test('el schema del manifiesto acepta basedOn con formato servicio@versión y re
   const check = ajv.compile(JSON.parse(fs.readFileSync(schemaPathFor('service'), 'utf8')));
 
   const manifest = (basedOn) => ({
-    keel: '2.0',
+    keel: DSL,
     service: { name: 'billing-eu', version: '0.1.0', description: 'Facturación para la región europea.', basedOn },
     layers: { domain: 'domain.keel.yaml', 'use-cases': 'use-cases.keel.yaml' }
   });

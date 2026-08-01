@@ -3,6 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { supportedDsl } from '../src/lib/assets.js';
+
+// Versión vigente del DSL: derivada, no escrita. Solo se soporta una, y un literal
+// aquí volvería a romper estos tests en el siguiente cambio de versión.
+const DSL = supportedDsl()[0];
 import { buildSystemPlan, loadSystemMap, renderPlanTable } from '../src/lib/system-map.js';
 
 function write(file, content) {
@@ -26,7 +31,7 @@ function workspace({ system = null, designs = {}, docs = {} } = {}) {
     write(
       path.join(dir, 'service.keel.yaml'),
       [
-        'keel: "2.3"',
+        `keel: "${DSL}"`,
         'service:',
         `  name: ${slug}`,
         `  version: ${version}`,

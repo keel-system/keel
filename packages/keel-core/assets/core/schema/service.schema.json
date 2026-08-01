@@ -9,8 +9,8 @@
   "properties": {
     "keel": {
       "type": "string",
-      "description": "Versión del DSL Keel usada por este servicio.",
-      "enum": ["2.0", "2.1", "2.2", "2.3"]
+      "description": "Versión del DSL Keel usada por este servicio. Se soporta UNA sola: los schemas no gatean primitivos por versión, así que aceptar versiones anteriores haría que este campo declarase una intención que nada comprueba. Ver docs/dsl-reference.md § Historial de versiones.",
+      "enum": ["2.4"]
     },
     "service": {
       "type": "object",

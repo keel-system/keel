@@ -165,9 +165,26 @@ function renderAdapter(model, entity, paginated, batchLookup) {
   if (paginated) {
     imports.add('org.springframework.data.domain.Page');
     imports.add('org.springframework.data.domain.Pageable');
+    imports.add('org.springframework.data.domain.PageRequest');
+    imports.add('org.springframework.data.domain.Sort');
     methods.push(`    @Override
     public Page<${entity.name}> list(Pageable pageable) {
-        return ${jpaField}.findAll(pageable).map(this::toDomain);
+        return ${jpaField}.findAll(withStableOrder(pageable)).map(this::toDomain);
+    }
+
+    /**
+     * Añade el id como último criterio de orden si no está ya. Sin desempate, dos
+     * páginas consecutivas de la misma consulta pueden repetir una fila y omitir
+     * otra: cuando el ORDER BY empata, la base de datos no garantiza un orden
+     * estable entre consultas. Se aplica también al orden que pida el cliente,
+     * que es justo el caso que un @PageableDefault no cubre.
+     */
+    private static Pageable withStableOrder(Pageable pageable) {
+        Sort sort = pageable.getSort();
+        if (sort.getOrderFor("${entity.idField?.name ?? 'id'}") != null) {
+            return pageable;
+        }
+        return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), sort.and(TIE_BREAKER));
     }`);
   }
   // Drenaje de eventos de dominio: save() es el único punto por el que pasa
@@ -230,7 +247,16 @@ ${saveBody}
     renderToJpa(model, involvedEntity, imports, builtFresh.has(involvedEntity.name))
   ]);
 
-  const fields = [`    private final ${entity.name}JpaRepository ${jpaField};`];
+  const fields = [];
+  if (paginated) {
+    // Desempate universal del agregado: el orden declarado en el diseño es por
+    // operación (lo aplica el controller), pero esto vale para toda consulta
+    // paginada de esta raíz, venga el orden de donde venga.
+    fields.push(
+      `    private static final Sort TIE_BREAKER = Sort.by(Sort.Order.asc("${entity.idField?.name ?? 'id'}"));\n`
+    );
+  }
+  fields.push(`    private final ${entity.name}JpaRepository ${jpaField};`);
   const ctorParams = [`${entity.name}JpaRepository ${jpaField}`];
   const ctorAssigns = [`        this.${jpaField} = ${jpaField};`];
   if (emitsEvents) {

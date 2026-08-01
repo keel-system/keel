@@ -42,8 +42,11 @@ operations:
   #   description: Lista los productos del catálogo de forma paginada.
   #   kind: query
   #   input: "void"
-  #   output: { entity: Product, paginated: true }
+  #   output: { entity: Product, paginated: true, sort: [name:asc] }
   #                                  # paginated ya implica la colección; exige pagination en la capa api
+  #                                  # sort es el orden POR DEFECTO (contrato); el id se añade siempre
+  #                                  # como desempate, aunque no lo declares. Un dot-path ordena por otro
+  #                                  # agregado y exige embeberlo: sort: [catalog.name:asc], embed: [catalog]
   #
   # reconcilePrices:
   #   description: Reconcilia precios contra el servicio de pricing cada noche.

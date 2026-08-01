@@ -120,7 +120,7 @@ operations:
     # distintas. Fija la regla de Location del caso sub-recurso → padre.
     output:
       entity: Product
-      embed: [brand, category]
+      embed: [category]
     errors:
       - code: PRODUCT_NOT_FOUND
         when: No existe un producto con ese id.

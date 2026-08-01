@@ -92,8 +92,15 @@ function renderController(model, service) {
     `${subPackage(model, MEDIATOR_PKG)}.UseCaseMediator`
   ]);
 
+  const constants = routed.flatMap((operation) => defaultOrderConstant(operation));
   const methods = routed.map((operation) => renderMethod(model, operation, imports));
   if (routed.some((operation) => operation.multipart)) methods.push(fileUploadHelper(model, imports));
+  if (constants.length > 0) {
+    imports.add('org.springframework.data.domain.PageRequest');
+    imports.add('org.springframework.data.domain.Pageable');
+    imports.add('org.springframework.data.domain.Sort');
+    methods.push(defaultOrderHelper());
+  }
 
   const tagDescription = model.service.description
     ? `, description = ${JSON.stringify(model.service.description)}`
@@ -109,7 +116,7 @@ function renderController(model, service) {
 ${validatesParams ? '@Validated\n' : ''}@RequestMapping("${model.api.routeBase}")
 @Tag(name = "${groupName}"${tagDescription})
 public class ${service.controllerClass} {
-
+${constants.length > 0 ? '\n' + constants.join('\n') + '\n' : ''}
     private final UseCaseMediator mediator;
 
     public ${service.controllerClass}(UseCaseMediator mediator) {
@@ -184,6 +191,46 @@ function parentLocationPath(model, operation, param) {
   const path = String(operation.route.path);
   const marker = `{${param.name}}`;
   return `${model.api.routeBase}${path.slice(0, path.indexOf(marker) + marker.length)}`;
+}
+
+// Orden por defecto declarado en el diseño (`sort`). Va en el controller y no en
+// el adaptador porque es una decisión POR OPERACIÓN —dos listados del mismo
+// agregado pueden ordenar distinto y comparten un único list(Pageable)— y porque
+// es el contrato HTTP: es lo que recibe quien no manda ?sort=. El desempate por
+// id lo pone el adaptador aparte, y sí es universal.
+//
+// Un criterio sobre un agregado embebido no se traduce: 'brand.name' no es una
+// property path válida (no hay asociación navegable). Ese caso lo resuelve el
+// agente con un adaptador de lectura, ya avisado por model.js y por el stub.
+function orderConstantName(operation) {
+  return `${operation.name.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toUpperCase()}_ORDER`;
+}
+
+function translatableSort(operation) {
+  const sort = operation.sort ?? [];
+  if (sort.length === 0 || sort.some((criterion) => criterion.embedded)) return [];
+  return sort;
+}
+
+function defaultOrderConstant(operation) {
+  const sort = translatableSort(operation);
+  if (sort.length === 0) return [];
+  const orders = sort.map((c) => `Sort.Order.${c.direction}("${c.property}")`).join(', ');
+  return [`    private static final Sort ${orderConstantName(operation)} = Sort.by(${orders});`];
+}
+
+function defaultOrderHelper() {
+  return `    /**
+     * Aplica el orden por defecto del diseño cuando el cliente no pide uno propio.
+     * El desempate por id lo añade el adaptador de repositorio, sobre cualquiera
+     * de los dos órdenes.
+     */
+    private static Pageable withDefaultOrder(Pageable pageable, Sort defaultOrder) {
+        if (pageable.getSort().isSorted()) {
+            return pageable;
+        }
+        return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), defaultOrder);
+    }`;
 }
 
 function renderMethod(model, operation, imports) {
@@ -331,7 +378,11 @@ function renderMethod(model, operation, imports) {
         params.push(`@RequestParam${required} ${validation}${component.javaType} ${component.name}`);
       }
     }
-    dispatchArg = `new ${operation.messageClass}(${components.map((c) => c.name).join(', ')})`;
+    const withOrder = translatableSort(operation).length > 0;
+    const args = components.map((c) =>
+      c.name === 'pageable' && withOrder ? `withDefaultOrder(pageable, ${orderConstantName(operation)})` : c.name
+    );
+    dispatchArg = `new ${operation.messageClass}(${args.join(', ')})`;
   }
 
   const dispatch = `mediator.dispatch(${dispatchArg});`;

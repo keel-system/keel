@@ -101,7 +101,7 @@ async function deriveFromRegistry(name, remote, { cwd, serviceDir, options }) {
   // Gate de compatibilidad **antes** de descargar: un diseño escrito con un DSL
   // que esta CLI no conoce produce un workspace que `keel validate` rechaza, así
   // que dejarlo a medias es peor que no traerlo.
-  if (dslSupport(design) === 'nueva') {
+  if (dslSupport(design) === 'incompatible') {
     console.error(pc.red(`✘ ${dslMismatchMessage(design)}`));
     process.exitCode = 1;
     return;

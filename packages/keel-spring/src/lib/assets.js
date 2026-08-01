@@ -15,7 +15,9 @@ export const TECH = 'spring';
 export const SKILL = 'keel-generate-spring';
 
 // Versiones del DSL keel que este generador sabe mapear (manifest.keel del servicio).
-export const SUPPORTED_DSL = ['2.0', '2.1', '2.2', '2.3'];
+// Una sola, en espejo del enum de service.schema.json: keel-core no acepta
+// versiones anteriores porque sus schemas no gatean primitivos por versión.
+export const SUPPORTED_DSL = ['2.4'];
 
 // Stack del scaffolding generado (un solo sitio para actualizarlo).
 export const SPRING_BOOT_VERSION = '3.5.3';

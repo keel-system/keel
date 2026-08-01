@@ -2118,3 +2118,107 @@ test('una sola operación por entidad no puede ser asimétrica consigo misma', (
   assert.deepEqual(errors, []);
   assert.deepEqual(warnings, []);
 });
+
+// --- use-cases: sort (orden por defecto de una salida de varios elementos) ---
+
+// Order tiene un campo escalar (placedAt), una colección (tags), un value object
+// compuesto (total) y dos relaciones: lines (hija) y customer (otra raíz).
+const domainForSort = () => ({
+  types: { Money: { fields: { amount: { type: 'decimal' }, currency: { type: 'string' } } } },
+  entities: {
+    Order: entity(
+      {
+        placedAt: { type: 'datetime' },
+        tags: { type: 'string', list: true },
+        total: { type: 'Money' },
+      },
+      {
+        relations: {
+          lines: { entity: 'OrderLine', cardinality: 'one-to-many' },
+          customer: { entity: 'Customer', cardinality: 'many-to-one' },
+        },
+      }
+    ),
+    OrderLine: entity(),
+    Customer: entity({ name: { type: 'string' } }),
+  },
+  aggregates: {
+    Order: { root: 'Order', entities: ['OrderLine'] },
+    Customer: { root: 'Customer' },
+  },
+});
+
+const sortLayers = (output) => ({
+  domain: domainForSort(),
+  'use-cases': {
+    operations: {
+      listOrders: {
+        description: 'Lista los pedidos.',
+        kind: 'query',
+        internal: true,
+        input: 'void',
+        output,
+      },
+    },
+  },
+});
+
+test('sort por un campo escalar propio es válido, con y sin dirección', () => {
+  const { errors } = run(sortLayers({ entity: 'Order', list: true, sort: ['placedAt:desc', 'id'] }));
+  assert.deepEqual(errors, []);
+});
+
+test('sort por un campo de un agregado embebido es válido si está en embed', () => {
+  const { errors } = run(
+    sortLayers({ entity: 'Order', paginated: true, embed: ['customer'], sort: ['customer.name:asc'] })
+  );
+  assert.deepEqual(errors, []);
+});
+
+test('sort por un agregado NO embebido es error: ordena por algo que no devuelve', () => {
+  const { errors } = run(sortLayers({ entity: 'Order', paginated: true, sort: ['customer.name:asc'] }));
+  assert.ok(
+    errors.some((e) =>
+      e.includes(`listOrders.output.sort 'customer.name:asc': ordena por un campo de 'Customer', que este payload no proyecta`)
+    )
+  );
+});
+
+test('sort sin list ni paginated es error: un objeto único no se ordena', () => {
+  const { errors } = run(sortLayers({ entity: 'Order', sort: ['placedAt:asc'] }));
+  assert.ok(errors.some((e) => e.includes('listOrders.output.sort: solo tiene sentido en una salida de varios elementos')));
+});
+
+test('sort en el input es error: el orden es una decisión de la salida', () => {
+  const layers = sortLayers({ entity: 'Order', list: true });
+  layers['use-cases'].operations.listOrders.input = { entity: 'Order', sort: ['placedAt:asc'] };
+  const { errors } = run(layers);
+  assert.ok(errors.some((e) => e.includes('listOrders.input.sort: el orden es una decisión de la salida')));
+});
+
+test('sort por un campo inexistente es error', () => {
+  const { errors } = run(sortLayers({ entity: 'Order', list: true, sort: ['nope:asc'] }));
+  assert.ok(errors.some((e) => e.includes(`listOrders.output.sort 'nope:asc': el campo 'nope' no existe en la entidad 'Order'`)));
+});
+
+test('sort por una colección es error: no define un orden', () => {
+  const { errors } = run(sortLayers({ entity: 'Order', list: true, sort: ['tags:asc'] }));
+  assert.ok(errors.some((e) => e.includes(`'tags' es una colección y no define un orden`)));
+});
+
+test('sort por un value object compuesto es error: hay que bajar a un subcampo', () => {
+  const { errors } = run(sortLayers({ entity: 'Order', list: true, sort: ['total:asc'] }));
+  assert.ok(errors.some((e) => e.includes(`'total' es un value object compuesto`)));
+  // Y el subcampo sí vale.
+  assert.deepEqual(run(sortLayers({ entity: 'Order', list: true, sort: ['total.amount:desc'] })).errors, []);
+});
+
+test('sort por una relación sin bajar a un campo es error', () => {
+  const { errors } = run(sortLayers({ entity: 'Order', list: true, sort: ['customer:asc'] }));
+  assert.ok(errors.some((e) => e.includes(`'customer' es una relación, no un campo`)));
+});
+
+test('sort con el mismo campo repetido es error', () => {
+  const { errors } = run(sortLayers({ entity: 'Order', list: true, sort: ['placedAt:asc', 'placedAt:desc'] }));
+  assert.ok(errors.some((e) => e.includes(`ya está declarado; un criterio de orden no se repite`)));
+});

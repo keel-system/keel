@@ -31,6 +31,8 @@ Para arrancarlo a mano en cualquier momento: `docker compose -f infra/docker-com
 
 | Paquete | DSL Keel |
 |---------|----------|
-| keel-spring 0.1.x | `keel: "2.0"`, `keel: "2.1"`, `keel: "2.2"`, `keel: "2.3"` |
+| keel-spring 0.1.x | `keel: "2.4"` |
+
+Una sola versión, en espejo de lo que acepta `keel validate`: los schemas del DSL no gatean primitivos por versión, así que aceptar las anteriores haría que el campo `keel` de un manifiesto declarase una intención que nada comprueba. El razonamiento completo, en `docs/dsl-reference.md § Historial de versiones`.
 
 El contrato completo del generador está en [`assets/generators/spring/README.md`](assets/generators/spring/README.md). Para crear un generador de otra tecnología con este mismo patrón: `docs/building-a-generator.md` del workspace (o `packages/keel-core/assets/core/docs/building-a-generator.md` en el monorepo).

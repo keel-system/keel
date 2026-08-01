@@ -41,18 +41,18 @@ function summaryOf(design) {
 function dslBadge(design) {
   const support = dslSupport(design);
   if (support === 'ok') return '';
-  if (support === 'nueva') return pc.red(`[DSL ${design.service.dsl} — actualiza keel-core]`);
+  if (support === 'incompatible') return pc.red(`[DSL ${design.service.dsl} — incompatible]`);
   return pc.yellow('[DSL sin declarar]');
 }
 
 /** ¿Algún diseño de la lista queda fuera de lo que soporta esta CLI? */
 function noteUnsupported(designs) {
-  const unsupported = designs.filter((design) => dslSupport(design) === 'nueva');
+  const unsupported = designs.filter((design) => dslSupport(design) === 'incompatible');
   if (unsupported.length === 0) return;
   console.log(
     pc.yellow(
-      `⚠ ${plural(unsupported.length, 'diseño', 'diseños')} usa${unsupported.length === 1 ? '' : 'n'} un DSL más nuevo que esta CLI ` +
-        `(soporta: ${supportedDsl().join(', ')}). Actualiza keel-core para poder derivarlo${unsupported.length === 1 ? '' : 's'}.`
+      `⚠ ${plural(unsupported.length, 'diseño', 'diseños')} usa${unsupported.length === 1 ? '' : 'n'} un DSL que esta CLI no acepta ` +
+        `(soporta: ${supportedDsl().join(', ')}). 'keel registry show <diseño>' dice qué hacer con cada uno.`
     )
   );
 }
@@ -209,7 +209,7 @@ export async function showRegistryDesign(slug, options = {}) {
   }
 
   console.log();
-  if (dslSupport(design) === 'nueva') {
+  if (dslSupport(design) === 'incompatible') {
     console.log(pc.bold(pc.red('No derivable con esta CLI:')));
     console.log(
       `  El diseño usa el DSL keel ${service.dsl} y esta CLI soporta ${supportedDsl().join(', ')}.\n` +
@@ -265,7 +265,7 @@ export async function getRegistryDesign(slug, options = {}) {
     return;
   }
 
-  if (dslSupport(design) === 'nueva') {
+  if (dslSupport(design) === 'incompatible') {
     console.error(pc.red(`✘ ${dslMismatchMessage(design)}`));
     process.exitCode = 1;
     return;

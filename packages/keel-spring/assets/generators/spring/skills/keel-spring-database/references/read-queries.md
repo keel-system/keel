@@ -10,6 +10,11 @@ comprueba el criterio de `.claude/conventions/read-composition.md`:
   estructuralmente incapaz (no se pagina en BD por una columna ausente de la consulta madre).
   Sigue aquí.
 
+Cuando es una **ordenación**, no tienes que deducirlo: el diseño lo declara
+(`sort: [brand.name:asc]`), build emite el warning *"ordena por … campo del agregado
+embebido"* y deja la nota en el stub del handler. Esa es la señal que te trae aquí. Con un
+filtro la detección es tuya: el DSL no los declara y llegan como `@RequestParam`.
+
 ## Entity join ad-hoc: el join sin asociación
 
 Entre agregados no hay `@ManyToOne`, solo una columna `UUID`. JPQL permite unir dos entidades por

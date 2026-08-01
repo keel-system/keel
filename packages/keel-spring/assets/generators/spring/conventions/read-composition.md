@@ -58,8 +58,16 @@ de productos solo sirve para reglas de negocio (`flow-fidelity.md` § Validació
 ## La excepción: join proyectado
 
 El lote resuelve el N+1, pero **no puede filtrar ni ordenar por un campo del agregado
-embebido**. Si la operación tiene que devolver los productos *ordenados por nombre de marca*,
-o *filtrados por el slug de la categoría*, y además pagina:
+embebido**.
+
+**No tienes que detectarlo tú cuando es una ordenación**: si el diseño declara
+`sort: [brand.name:asc]`, build emite un warning y deja la nota en el stub del handler —
+la constante `<OPERACION>_ORDER` del controller **no** se genera en ese caso, porque
+`brand.name` no es una property path válida de Spring Data. Con un filtro sí es tuya la
+detección: el DSL no declara filtros y llegan como `@RequestParam`.
+
+Si la operación tiene que devolver los productos *ordenados por nombre de marca*, o
+*filtrados por el slug de la categoría*, y además pagina:
 
 - no se pagina en BD por una columna que no está en la consulta madre, y
 - ordenar en memoria la página **ya recortada** da un orden falso — `mapping.md` ya lo prohíbe
@@ -96,6 +104,8 @@ respuesta, y es más simple, reutiliza los mappers y se beneficia de la caché.
 
 ## Checklist
 
+- [ ] Ningún warning de build del tipo "ordena por … campo del agregado embebido" quedó sin
+      su adaptador de lectura.
 - [ ] Toda referencia embebida se resuelve con el `<X>RefResolver` que build inyecta.
 - [ ] Ninguna llamada a repositorio ni a `resolve(UUID)` dentro de un `stream`/bucle sobre una colección.
 - [ ] El número de consultas de una operación de listado **no depende** del tamaño de la página.

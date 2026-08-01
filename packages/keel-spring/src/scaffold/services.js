@@ -240,6 +240,15 @@ function renderHandler(model, service, operation) {
   if (operation.cache) {
     notes.push(`Caché: ttlSeconds=${operation.cache.ttlSeconds}, keyFields=[${operation.cache.keyFields.join(', ')}]`);
   }
+  // Ordenar por un campo de otro agregado es el único caso en que la resolución
+  // por lote no basta: no se pagina en BD por una columna ausente de la consulta
+  // madre. Aquí el agente necesita saberlo antes de escribir nada.
+  for (const criterion of operation.sort ?? []) {
+    if (!criterion.embedded) continue;
+    notes.push(
+      `Orden: el diseño ordena por '${criterion.path}', campo del agregado embebido — el lote no puede ordenar por él. Hace falta un adaptador de LECTURA con JPQL proyectado (left join sobre la columna id), no el repositorio del agregado: skills/keel-spring-database/references/read-queries.md`
+    );
+  }
   // El patrón se escribe entero en el stub porque es donde el agente decide, y
   // la diferencia entre lote y bucle no se ve en el resultado: solo en el número
   // de consultas (100 elementos × 2 embeds = 201 vs. 3).
