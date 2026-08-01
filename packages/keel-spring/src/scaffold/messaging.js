@@ -13,7 +13,7 @@
 // Lo único que depende del broker elegido (keel-stack.json) es el ENVÍO: la
 // implementación de OutboxDispatcher (modo outbox) o de <Evento>Publisher
 // (best-effort) y los listeners, que escribe el agente siguiendo la skill
-// .claude/skills/keel-spring-<broker>/.
+// keel-spring-<broker>.
 
 import { javaFile, javaPath, subPackage } from './render.js';
 import { domainTypeImport } from './entities.js';
@@ -273,7 +273,7 @@ public class ${stubClass} implements ${event.publisherClass} {
     @Override
     public void publish(${event.integrationClass} event, String correlationId) {
         // TODO (agente): sustituir este stub por el publisher real del broker
-        //   elegido en keel-stack.json (skill .claude/skills/keel-spring-<broker>/):
+        //   elegido en keel-stack.json (skill keel-spring-<broker>):
         //   envolver con EventEnvelope.of(event.metadata(), event, correlationId)
         //   y publicar en el destino/routing key declarados. Mientras tanto solo
         //   se traza, para que el contexto arranque sin broker.
@@ -294,7 +294,7 @@ public class ${stubClass} implements ${event.publisherClass} {
 
 // Record del payload esperado del evento suscrito (contrato de la fuente).
 // El listener que lo consume depende del broker: lo escribe el agente
-// (skill .claude/skills/keel-spring-<broker>/) despachando la operación
+// (skill keel-spring-<broker>) despachando la operación
 // 'triggers' vía UseCaseMediator.
 function renderSubscriptionMessage(model, sub) {
   const imports = new Set();

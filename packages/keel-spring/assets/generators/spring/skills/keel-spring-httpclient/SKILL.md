@@ -16,9 +16,9 @@ que build deja como `// TODO (agente)` porque no es derivable del diseño.
 - Lee `specs/http-clients.keel.yaml`: cada `clients.<c>` con su `purpose`, `auth`
   y sus `calls` (`contract`, y opcionalmente `method`/`path`/`request`/`response`,
   `retry`, `circuitBreaker`, `fallback`) — el diseño es la única fuente de verdad.
-- Sigue estrictamente `.claude/conventions/mapping.md` §`http-clients` (mapeo
+- Sigue estrictamente `{{keel:docs}}/conventions/mapping.md` §`http-clients` (mapeo
   normativo DSL → código); la estructura de paquetes está en
-  `.claude/conventions/project-layout.md`.
+  `{{keel:docs}}/conventions/project-layout.md`.
 - **Frontera hexagonal** (inviolable): el puerto `<C>Client` y los records de
   resultado `<X>Result` viven en `domain/clients`; el adaptador `<C>HttpAdapter`,
   los DTOs wire (`<X>Request`/`<X>Response`, el contrato del tercero tal cual) y
@@ -83,4 +83,4 @@ servicio real. Según lo que fije el diseño y los escenarios `FL-*` de
 `specs/validation-scenarios.md`, apunta `http-clients.<c>.base-url` (perfil
 `local`/`test`) a un stub/mock HTTP levantado en `infra/` o ejercita solo los
 caminos que no dependan de la llamada. Recetas de sondeo en
-`.claude/conventions/infra-validation.md`.
+`{{keel:docs}}/conventions/infra-validation.md`.

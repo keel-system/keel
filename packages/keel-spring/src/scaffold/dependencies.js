@@ -105,7 +105,7 @@ function renderProjector(model, dependency, need, entity) {
 `;
 
   const todo = `    // TODO (agente): añade a ${entity.name} los dos métodos de dominio que usa este
-    // projector (el dominio no tiene setters, ver .claude/conventions/domain-modeling.md):
+    // projector (el dominio no tiene setters, ver docs/keel/conventions/domain-modeling.md):
     //   ${factorySignature}   — factory de la copia; genera el id
     //   ${updateSignature}   — actualiza los campos informados
 `;

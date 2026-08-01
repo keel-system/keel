@@ -52,7 +52,7 @@ clients:
 - `retry.retryOn`: `timeout`, `5xx`, `connection`. Nunca reintentar 4xx.
 - `circuitBreaker`: `failureRateThreshold` (% de fallos que abre el circuito), `slidingWindowSize` (llamadas observadas), `waitDurationMs` (espera antes de probar de nuevo).
 - Todo `circuitBreaker` debería tener `fallback` definido: qué hace el servicio cuando el circuito está abierto. `keel validate` avisa si falta; la skill `/keel-validate` revisa la calidad del fallback.
-- **La resiliencia la decide el diseñador**, no el agente: el `timeoutMs` sale del presupuesto de latencia de **nuestra** operación (nunca del SLA ajeno), la caída del tercero se traduce a un `code` propio, y un `fallback` que produce datos plausibles pero falsos es peor que el error que evita. Ejes de decisión: `.claude/skills/keel-design/references/structural-decisions.md` §3.6.
+- **La resiliencia la decide el diseñador**, no el agente: el `timeoutMs` sale del presupuesto de latencia de **nuestra** operación (nunca del SLA ajeno), la caída del tercero se traduce a un `code` propio, y un `fallback` que produce datos plausibles pero falsos es peor que el error que evita. Ejes de decisión: `references/structural-decisions.md` de la skill `keel-design` §3.6.
 
 ## Qué NO va aquí
 

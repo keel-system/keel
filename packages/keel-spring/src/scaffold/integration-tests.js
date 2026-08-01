@@ -818,7 +818,7 @@ ${purgeDoc}
      * Topic <b>físico</b> donde publica el servicio, que <b>no</b> es el canal del
      * diseño: todos los eventos comparten el destino único
      * \`messaging.publishing.destination\` y se distinguen por routing key
-     * (\`.claude/conventions/mapping.md\` § messaging). Se resuelve igual que el perfil
+     * (\`docs/keel/conventions/mapping.md\` § messaging). Se resuelve igual que el perfil
      * \`local\`: la variable de entorno si está, y si no el default del diseño.
      */
     private static final String EVENT_TOPIC =
@@ -1034,7 +1034,7 @@ ${clientKeys}        throw new IllegalArgumentException("Cliente de servicio no 
      * \`keel-spring build\` junto al script de aprovisionamiento: un realm por
      * servicio, el cliente público \`${userTestClient(model)}\` con direct access
      * grants y un usuario por rol cuyo nombre <b>es</b> el rol
-     * (.claude/conventions/infra-validation.md). Sobreescribible por entorno
+     * (docs/keel/conventions/infra-validation.md). Sobreescribible por entorno
      * (AUTH_TOKEN_URL, AUTH_TEST_CLIENT, AUTH_TEST_PASSWORD).
      */
     protected String tokenFor(String role) {

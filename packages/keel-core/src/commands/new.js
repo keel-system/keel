@@ -58,7 +58,7 @@ export async function createService(name, options = {}) {
   console.log(pc.bold(pc.green(`✔ Servicio creado: specs/${name}/`)));
   for (const file of SEED_FILES) console.log(`  ${pc.dim('•')} specs/${name}/${file}`);
   console.log('\nPróximos pasos:');
-  console.log(`  1. Diseña las capas con ${pc.cyan(`/keel-design specs/${name}`)} (Claude Code)`);
+  console.log(`  1. Diseña las capas con ${pc.cyan(`/keel-design specs/${name}`)} (en tu agente)`);
   console.log(`  2. Las capas opcionales (api, security, messaging...) se añaden al manifiesto cuando apliquen`);
   console.log(`     — plantillas en ${pc.cyan('templates/service/')}`);
   console.log(`  3. Valida con ${pc.cyan(`keel validate specs/${name}`)}`);

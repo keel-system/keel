@@ -1,7 +1,7 @@
 # Redis/Valkey — troubleshooting
 
 Síntoma → causa → arreglo. Sondeo básico en
-`.claude/conventions/infra-validation.md`.
+`{{keel:docs}}/conventions/infra-validation.md`.
 
 ## `SerializationException` al cachear algo con fecha/hora
 

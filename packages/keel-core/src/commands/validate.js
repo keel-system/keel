@@ -107,5 +107,5 @@ export function validate(inputPath, options = {}) {
   }
   console.log(pc.bold(pc.green('✔ Servicio válido')) + pc.dim(` — ${name} v${version} (DSL keel ${manifest?.keel})`));
   console.log(pc.dim(`  Capas: ${layerList}`));
-  console.log(pc.dim('Recuerda la capa semántica: /keel-validate en Claude Code revisa la calidad del diseño.'));
+  console.log(pc.dim('Recuerda la capa semántica: /keel-validate en tu agente revisa la calidad del diseño.'));
 }

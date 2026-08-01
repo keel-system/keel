@@ -2,7 +2,7 @@
 
 Síntoma → causa → arreglo. Particularidades por dialecto en
 `references/dialects/<database>.md`; sondeo en
-`.claude/conventions/infra-validation.md`.
+`{{keel:docs}}/conventions/infra-validation.md`.
 
 ## `Connection is not available, request timed out` (pool agotado)
 
@@ -45,7 +45,7 @@ listado. Aquí `JOIN FETCH` y `@EntityGraph` **no aplican**: no hay asociación 
 recorrer, solo una columna `UUID`, y `default_batch_fetch_size` tampoco (no hay
 colección lazy que lotear). El arreglo es **aplicativo**: resolver por lote con el
 `<X>RefResolver` que build inyecta en el handler — ver
-`.claude/conventions/read-composition.md`. Si además la operación filtra u ordena por un
+`{{keel:docs}}/conventions/read-composition.md`. Si además la operación filtra u ordena por un
 campo del agregado ajeno, el lote no basta: `references/read-queries.md`.
 
 ## `function <nombre>(bytea) does not exist` al listar o buscar

@@ -65,8 +65,8 @@ esquema, con las migraciones gobernando de verdad:
 PROFILE=local,migrations ./gradlew bootRun
 \`\`\`
 
-El procedimiento completo y su checklist están en
-\`.claude/skills/keel-spring-database/references/migrations.md\`.
+El procedimiento completo y su checklist están en \`references/migrations.md\` de la
+skill \`keel-spring-database\`.
 
 ## Reglas duras
 

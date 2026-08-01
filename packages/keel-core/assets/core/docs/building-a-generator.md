@@ -22,7 +22,7 @@ cd services/<servicio>-<tech>
 
 El paso 1 existe porque **el stack lo elige el diseñador a mano** (BD, broker, auth, caché, storage — solo lo que el diseño necesita): es una decisión humana que no se deriva del spec, y queda persistida en `keel-stack.json` del proyecto. El paso 2 se ejecuta **con el cwd en la raíz del proyecto**, no en el workspace: el proyecto es autosuficiente y la skill no toma argumentos.
 
-**El workspace de diseño no recibe nada del generador.** No hay skill de generación, ni agentes, ni conventions, ni `generators/<tech>/` en él: el workspace es solo diseño. Todo el conocimiento de generación se instala en el `.claude/` del proyecto que el generador produce, leyéndolo directamente de los `assets/` del paquete npm. Un generador nuevo **no debe** sembrar nada en el workspace: duplicaría el conocimiento y abriría un segundo camino de generación (el problema exacto que este flujo normaliza).
+**El workspace de diseño no recibe nada del generador.** No hay skill de generación, ni agentes, ni conventions, ni `generators/<tech>/` en él: el workspace es solo diseño. Todo el conocimiento de generación se instala en el proyecto que el generador produce, leyéndolo directamente de los `assets/` del paquete npm. Un generador nuevo **no debe** sembrar nada en el workspace: duplicaría el conocimiento y abriría un segundo camino de generación (el problema exacto que este flujo normaliza).
 
 ## Qué genera `keel-<tech> build`
 
@@ -33,22 +33,25 @@ services/<servicio>-<tech>/
 ├── <el proyecto>        # scaffolding transversal al stack: deps, config, infra de prueba, estructura
 ├── keel-stack.json      # el stack elegido por el diseñador (se reutiliza sin repreguntar)
 ├── specs/               # snapshot del diseño (build lo REFRESCA siempre; el canónico es el del workspace)
+├── AGENTS.md            # contexto especializado por servicio: orden de capas declaradas, stack, verificación
+├── CLAUDE.md            # el mismo contexto con el nombre que busca Claude Code
 ├── docs/                # snapshot de los contratos formales de /keel-docs (si ya se generaron)
-└── .claude/
-    ├── CLAUDE.md        # contextual y especializado por servicio: orden de capas declaradas, stack, verificación
-    ├── architecture.md  # arquitectura del proyecto generado y función de cada paquete
-    ├── constitution.md  # reglas inviolables: qué rompería la arquitectura o serían malas prácticas
-    ├── orchestration.md # el pipeline: fases, gating, handoffs (si el completado se orquesta con subagentes)
-    ├── conventions/     # copia local de las conventions (mapping, project-layout…)
-    ├── agents/          # los subagentes del completado
-    └── skills/
-        ├── keel-generate-<tech>/   # la ÚNICA skill de generación; se invoca sin argumentos
-        └── keel-<tech>-<infra>/    # solo las del stack elegido (condicional según keel-stack.json)
+│   └── keel/            # conocimiento agnóstico del harness — una sola copia
+│       ├── architecture.md   # arquitectura del proyecto generado y función de cada paquete
+│       ├── constitution.md   # reglas inviolables: qué rompería la arquitectura o serían malas prácticas
+│       ├── orchestration.md  # el pipeline: fases, gating, handoffs (si se orquesta con subagentes)
+│       └── conventions/      # copia local de las conventions (mapping, project-layout…)
+└── .claude/ .opencode/  # lo que carga el harness, proyectado a la convención de cada uno
+    ├── <agentes>        # los subagentes del completado
+    └── <skills>         # keel-generate-<tech> (la ÚNICA de generación, sin argumentos)
+                         # + keel-<tech>-<infra> solo las del stack elegido (según keel-stack.json)
 ```
 
 Con eso el proyecto es un **repo autosuficiente**: quien lo clone, sin el workspace Keel, puede finalizar la generación. La skill del proyecto conviene **sintetizarla** (parametrizada por servicio, stack y capas presentes) en vez de copiar un asset estático: así solo existe una definición del pipeline y no puede divergir.
 
-Si el generador orquesta el completado con subagentes (patrón de `keel-spring`: agente de código en paralelo con agente de infraestructura, agente de validación funcional después y un pase de calidad no-conductual al final), sus definiciones viven en `assets/.claude/agents/` y se instalan en `.claude/agents/` del proyecto. Patrón recomendado de **handoff estructurado**: cada subagente cierra su reporte con un bloque parseable (`status`, `blockers[]`, `failures[]`…) y la skill orquestadora decide avances y relanzamientos sobre esos campos, nunca sobre prosa.
+**Dos destinos, y la frontera importa.** Lo que un harness *carga* —skills, comandos, agentes, archivo de contexto— cambia de sitio y de frontmatter según la herramienta, así que se emite con `emitHarnessFiles()` de `keel-core`: los assets son la fuente **neutral** (frontmatter con `tools: [read, bash…]` y `spawns: false`; rutas citadas como `{{keel:skills}}`, `{{keel:agents}}`, `{{keel:context}}`, `{{keel:docs}}`) y cada descriptor de `HARNESSES` la traduce. Se emiten **todos** los harnesses: el proyecto sirve para cualquiera sin decidir nada al generarlo. Lo que solo es markdown que un agente lee por ruta va a `docs/keel/`, **una sola copia**, y por eso **no puede citar rutas de harness**: ahí un `.claude/…` mentiría a quien use el otro — se nombra la skill o el agente, no su ruta.
+
+Si el generador orquesta el completado con subagentes (patrón de `keel-spring`: agente de código en paralelo con agente de infraestructura, agente de validación funcional después y un pase de calidad no-conductual al final), sus definiciones viven en `assets/agents/` con frontmatter neutral. Patrón recomendado de **handoff estructurado**: cada subagente cierra su reporte con un bloque parseable (`status`, `blockers[]`, `failures[]`…) y la skill orquestadora decide avances y relanzamientos sobre esos campos, nunca sobre prosa.
 
 **Regeneración segura**: re-ejecutar `build` solo añade archivos nuevos y nunca pisa lo que el agente implementó; `--force` sobrescribe todo lo generado (avisando de qué se perdería). Los snapshots de `specs/` y `docs/` son la excepción: se refrescan siempre.
 
@@ -62,12 +65,12 @@ keel-<tech>/
 │   ├── commands/build.js
 │   ├── lib/             # assets.js (rutas + SUPPORTED_DSL), model.js (DSL → modelo), stack-catalog/config
 │   └── scaffold/        # un módulo por artefacto transversal al stack (patrón de keel-spring)
-├── assets/              # fuente del .claude/ del proyecto generado: skill, agents, conventions, skills/<infra>
+├── assets/              # fuente NEUTRAL del conocimiento del proyecto: agents/, conventions, skills/<infra>
 └── test/
     └── fixtures/        # diseños completos (specs/<servicio>/) con los que se prueba el scaffolding
 ```
 
-**Criterio de frontera del scaffolding**: build genera todo lo derivable mecánicamente del diseño + `keel-stack.json` cuyo código es idéntico sea cual sea la opción de infra elegida (más deps/config/compose, derivados del catálogo de stack). Lo que cambia según la opción concreta (publisher Kafka vs Rabbit, adaptador de storage…) se documenta en la skill por tecnología correspondiente (`skills/keel-<tech>-<infra>/`) y lo escribe el agente. El proyecto recién generado debe compilar y arrancar sin el trabajo del agente (los huecos son stubs que fallan en ejecución, no en compilación).
+**Criterio de frontera del scaffolding**: build genera todo lo derivable mecánicamente del diseño + `keel-stack.json` cuyo código es idéntico sea cual sea la opción de infra elegida (más deps/config/compose, derivados del catálogo de stack). Lo que cambia según la opción concreta (publisher Kafka vs Rabbit, adaptador de storage…) se documenta en la skill por tecnología correspondiente (`keel-<tech>-<infra>`) y lo escribe el agente. El proyecto recién generado debe compilar y arrancar sin el trabajo del agente (los huecos son stubs que fallan en ejecución, no en compilación).
 
 El paquete **no duplica la validación ni los schemas**: importa `validateService`, `loadService`, `copyTree`, etc. de `keel-core`, que es quien define el DSL. La versión soportada se declara en `src/lib/assets.js` (`SUPPORTED_DSL`), en `package.json` (`"keel": { "dsl": "2.3" }`) y en el README del generador.
 

@@ -19,7 +19,7 @@ buckets:
 ```
 
 - Cada bucket declara qué se le permite guardar: `allowedContentTypes` (tipos MIME, obligatorio) y `maxSizeMb` (tamaño máximo por archivo).
-- `visibility`: `private` (default) exige URLs firmadas o lectura mediada por el servicio; `public` permite lectura directa. **La decide el diseñador**, no el agente: con `public` la URL es la única protección, y con `private` alguna operación tiene que producir el acceso de lectura o el archivo es inaccesible por contrato. Ejes de decisión: `.claude/skills/keel-design/references/structural-decisions.md` §3.10.
+- `visibility`: `private` (default) exige URLs firmadas o lectura mediada por el servicio; `public` permite lectura directa. **La decide el diseñador**, no el agente: con `public` la URL es la única protección, y con `private` alguna operación tiene que producir el acceso de lectura o el archivo es inaccesible por contrato. Ejes de decisión: `references/structural-decisions.md` de la skill `keel-design` §3.10.
 - Los nombres de bucket van en `camelCase`; son referencias lógicas, no nombres físicos del proveedor.
 
 ## Cómo se referencia un archivo desde el dominio

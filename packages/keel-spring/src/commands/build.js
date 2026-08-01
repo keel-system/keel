@@ -145,7 +145,7 @@ export async function build(inputPath, { force = false, defaults = false } = {})
     )
   );
 
-  // Snapshot del diseño dentro del proyecto: junto con .claude/ hace el repo
+  // Snapshot del diseño dentro del proyecto: junto con el conocimiento del agente hace el repo
   // autosuficiente (quien lo clone finaliza la generación sin el workspace).
   // Siempre se refresca: el canónico es specs/<servicio> del workspace.
   const snapshotDir = path.join(projectDir, 'specs');
@@ -184,7 +184,7 @@ export async function build(inputPath, { force = false, defaults = false } = {})
   console.log(`
 Siguiente paso — la generación se completa dentro del proyecto:
   1. ${pc.cyan(`cd ${scaffold.outDir}`)}
-  2. abre Claude Code ahí y ejecuta ${pc.cyan(`/${SKILL}`)} ${pc.dim('(sin argumentos)')}
+  2. abre tu agente ahí y ejecuta ${pc.cyan(`/${SKILL}`)} ${pc.dim('(sin argumentos)')}
 
 Orquesta el completado: código + infraestructura en paralelo, validación funcional de los
 escenarios contra el servidor real y pase de calidad al final.`);

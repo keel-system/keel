@@ -1,7 +1,7 @@
 # SNS/SQS — patrones de implementación
 
 Complementa las secciones Publisher/Listener del SKILL.md. El mapeo normativo
-DSL → código sigue en `.claude/conventions/mapping.md`.
+DSL → código sigue en `{{keel:docs}}/conventions/mapping.md`.
 
 ## Topología local (LocalStack): fan-out SNS → SQS
 
@@ -121,4 +121,4 @@ no cambia**: sigue siendo `listener → IdempotencyGuard → UseCaseMediator →
 saltándose el mediator (lo prohíbe `constitution.md`) y duplicaría la deduplicación que ya hace el
 guard. La suscripción tiene `triggers` obligatorio precisamente para que esa operación exista.
 
-Detalle completo en `.claude/conventions/dependencies.md`.
+Detalle completo en `{{keel:docs}}/conventions/dependencies.md`.

@@ -94,7 +94,7 @@ function renderConfig(model) {
  * Deliberadamente NO se toca la inclusión de propiedades nulas: "ausencia vs.
  * nulo" es una convención de determinación del diseño y se implementa con
  * @JsonInclude en las clases que la necesiten, no como default global (ver
- * .claude/conventions/mapping.md).
+ * docs/keel/conventions/mapping.md).
  */
 @Configuration
 public class JacksonConfig {

@@ -6,7 +6,7 @@
 // Es transversal al stack: el contexto vive en un ThreadLocal + MDC (para que
 // aparezca en todo log) y lo puebla el filtro HTTP en la entrada síncrona. La
 // entrada asíncrona (listeners del broker) la puebla el agente con runWith,
-// siguiendo la skill .claude/skills/keel-spring-<broker>/.
+// siguiendo la skill keel-spring-<broker>.
 
 import { javaFile, javaPath, subPackage } from './render.js';
 

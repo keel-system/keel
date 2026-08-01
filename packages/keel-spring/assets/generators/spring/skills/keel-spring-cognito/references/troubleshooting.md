@@ -1,7 +1,7 @@
 # Cognito — troubleshooting
 
 Síntoma → causa → arreglo. Sondeo básico en
-`.claude/conventions/infra-validation.md`.
+`{{keel:docs}}/conventions/infra-validation.md`.
 
 ## 401 con un token que «debería» valer
 

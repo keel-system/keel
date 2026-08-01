@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-// Assets del generador: fuente del .claude/ del proyecto generado (skill, agentes,
+// Assets del generador: fuente neutral del conocimiento del proyecto generado (skill, agentes,
 // conventions, skills por tecnología). Nada de esto se copia al workspace de diseño.
 export const assetsDir = path.join(packageRoot, 'assets');
 

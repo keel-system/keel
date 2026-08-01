@@ -1,7 +1,7 @@
 # HTTP clients — patrones de implementación
 
 Complementa la sección «Qué implementa el agente» del SKILL.md. El mapeo
-normativo DSL → código sigue en `.claude/conventions/mapping.md`. Todo el código
+normativo DSL → código sigue en `{{keel:docs}}/conventions/mapping.md`. Todo el código
 de este documento vive en `infrastructure/http` (adaptador y mapper); el puerto y
 los `<X>Result` están en `domain/clients`.
 
@@ -130,4 +130,4 @@ un TODO: pedir el dato al proveedor cuando la copia local aún no lo tiene. Cóm
    `Optional.empty()` y deja que decida quien llama.
 6. **Cuidado con la transacción**: el mediator ya abrió una al despachar el caso de uso, así que la
    llamada de red ocurre dentro. Desde una query es aceptable; desde un command que escribe, resuelve
-   el dato antes de despachar. Ver `.claude/conventions/dependencies.md`.
+   el dato antes de despachar. Ver `{{keel:docs}}/conventions/dependencies.md`.

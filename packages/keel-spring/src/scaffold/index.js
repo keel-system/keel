@@ -46,7 +46,7 @@ import * as dependencies from './dependencies.js';
 import * as storage from './storage.js';
 import * as services from './services.js';
 import * as readme from './readme.js';
-import * as claudeMd from './claude-md.js';
+import * as contextMd from './context-md.js';
 import * as generatorDocs from './generator-docs.js';
 
 const GENERATORS = [
@@ -87,7 +87,7 @@ const GENERATORS = [
   storage,
   services,
   readme,
-  claudeMd,
+  contextMd,
   generatorDocs
 ];
 

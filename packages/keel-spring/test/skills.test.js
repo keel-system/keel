@@ -7,6 +7,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { HARNESSES, emitHarnessFiles, splitFrontmatter } from 'keel-core';
 import { assetsDir } from '../src/lib/assets.js';
 import { AGENTS } from '../src/scaffold/generator-docs.js';
 
@@ -60,29 +61,55 @@ test('skills por tecnología: references citados existen y ninguno queda huérfa
 });
 
 test('agentes de la orquestación: son hojas, no pueden lanzar subagentes', () => {
-  const agentsDir = path.join(assetsDir, '.claude', 'agents');
+  // La propiedad se comprueba dos veces, y hacen falta las dos: en la fuente
+  // neutral (que nadie olvide declararla) y en cada proyección (que el descriptor
+  // del harness la traduzca de verdad a su mecanismo, que no es el mismo).
+  const agentsDir = path.join(assetsDir, 'agents');
   const agents = fs.readdirSync(agentsDir).filter((name) => name.endsWith('.md'));
-  assert.equal(agents.length, AGENTS.length, 'la lista AGENTS de generator-docs.js y assets/.claude/agents/ divergen');
+  assert.equal(agents.length, AGENTS.length, 'la lista AGENTS de generator-docs.js y assets/agents/ divergen');
 
   for (const file of agents) {
     assert.ok(AGENTS.includes(file), `${file} no está en la lista AGENTS de generator-docs.js: no se instalaría`);
     const content = fs.readFileSync(path.join(agentsDir, file), 'utf8');
-    const frontmatter = content.split('---')[1] ?? '';
-    const tools = /^tools:\s*(.+)$/m.exec(frontmatter);
+    const { meta } = splitFrontmatter(content);
 
     // Sin `tools:` el agente hereda el juego completo, incluida la herramienta de
     // lanzar subagentes: es lo que permitía que un agente se invocase a sí mismo,
     // fuera del conteo de ciclos y del gating del orquestador.
-    assert.ok(tools, `${file}: sin \`tools:\` hereda todas las herramientas, incluida la de lanzar agentes`);
-    const declared = tools[1].split(',').map((name) => name.trim());
-    for (const name of declared) {
-      assert.ok(
-        !SPAWNING_TOOLS.includes(name),
-        `${file}: declara ${name}; el único orquestador es la skill, los agentes son hojas`
-      );
-    }
+    assert.ok(Array.isArray(meta.tools), `${file}: sin \`tools:\` hereda todas las herramientas`);
+    assert.equal(meta.spawns, false, `${file}: debe declarar \`spawns: false\`; el único orquestador es la skill`);
     // El porqué, escrito donde se lee (orchestration.md § Los cinco agentes).
     assert.ok(content.includes('No lanzas subagentes'), `${file}: falta la regla explícita de agente hoja`);
+  }
+
+  // Y ahora la traducción: cada harness cierra la puerta a su manera.
+  const emitted = emitHarnessFiles({ agents: agents.map((file) => path.join(agentsDir, file)) });
+
+  for (const harness of HARNESSES) {
+    for (const file of agents) {
+      const name = path.basename(file, '.md');
+      const projected = emitted.find((entry) => entry.path === harness.agentPath(name));
+      assert.ok(projected, `${harness.id}: falta la proyección de ${name}`);
+      const meta = splitFrontmatter(projected.content).meta;
+
+      if (typeof meta.tools === 'string') {
+        // Claude Code: `tools` es la lista completa, así que basta con no nombrarlas.
+        for (const tool of meta.tools.split(',').map((t) => t.trim())) {
+          assert.ok(!SPAWNING_TOOLS.includes(tool), `${harness.id}/${name}: declara ${tool}`);
+        }
+      } else {
+        // opencode: `tools` se mezcla con los defaults, así que omitir no basta —
+        // lanzar agentes es un permiso, y tiene que estar denegado explícitamente.
+        for (const tool of SPAWNING_TOOLS) {
+          assert.notEqual(meta.tools?.[tool.toLowerCase()], true, `${harness.id}/${name}: concede ${tool}`);
+        }
+        assert.equal(
+          meta.permission?.task?.['*'],
+          'deny',
+          `${harness.id}/${name}: sin denegar el permiso task, hereda la capacidad de lanzar agentes`
+        );
+      }
+    }
   }
 });
 

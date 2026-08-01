@@ -92,7 +92,7 @@ Lo que sale al broker no es el evento de dominio ni el payload a secas: es la **
 
 La metadata **no se regenera** en ningún punto de la cadena: nace en el `raise` dentro del agregado y el bridge solo le añade el `correlationId`, que el dominio no puede conocer (regla en `constitution.md`). Por eso el `eventId` sirve de clave de deduplicación extremo a extremo, y por eso el `IdempotencyGuard` del lado consumidor cae por defecto en `envelope.metadata().eventId()`.
 
-Fuera del cuerpo del mensaje viajan los **atributos de transporte**, que no forman parte del contrato de datos: el destino y la routing key (`@Value` sobre `parameters/<perfil>/messaging.yaml`, nunca hardcodeados) y el header de tipo que cada broker añade al publicar. Cómo se materializan depende del stack: `.claude/skills/keel-spring-<broker>/`.
+Fuera del cuerpo del mensaje viajan los **atributos de transporte**, que no forman parte del contrato de datos: el destino y la routing key (`@Value` sobre `parameters/<perfil>/messaging.yaml`, nunca hardcodeados) y el header de tipo que cada broker añade al publicar. Cómo se materializan depende del stack: lo cubre la skill `keel-spring-<broker>` del proyecto.
 
 Esta envoltura es **contrato del DSL, no del generador**: la definición canónica está en `docs/dsl/messaging.md § La envoltura Keel` del workspace, y es lo que asume `contract.envelope: keel` de una suscripción. Aquí solo se documenta su realización en Java; un generador de otra tecnología debe emitir exactamente la misma forma.
 

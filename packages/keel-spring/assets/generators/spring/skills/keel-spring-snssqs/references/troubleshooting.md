@@ -1,7 +1,7 @@
 # SNS/SQS — troubleshooting
 
 Síntoma → causa → arreglo. Sondeo básico en
-`.claude/conventions/infra-validation.md`.
+`{{keel:docs}}/conventions/infra-validation.md`.
 
 ## El listener no recibe lo que SNS publica
 

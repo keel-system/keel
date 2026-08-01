@@ -1,13 +1,15 @@
-// CLAUDE.md contextual del proyecto generado: punto de entrada para el agente
-// que completa la generación arrancando en contexto limpio con cwd en el propio
-// proyecto (o en un clon del repo, sin el workspace Keel). Especializado por
-// servicio: solo las capas declaradas del diseño y las skills por tecnología del stack.
+// Contexto del proyecto generado (CLAUDE.md / AGENTS.md según el harness): punto
+// de entrada para el agente que completa la generación arrancando en contexto
+// limpio con cwd en el propio proyecto (o en un clon del repo, sin el workspace
+// Keel). Especializado por servicio: solo las capas declaradas del diseño y las
+// skills por tecnología del stack.
 
+import { emitHarnessFiles } from 'keel-core';
 import { packageVersion, SKILL } from '../lib/assets.js';
 import { selectedInfra } from '../lib/stack-catalog.js';
 import { describeStack } from '../lib/stack-config.js';
 import { needsDevtools } from './devtools.js';
-import { stackSkills } from './generator-docs.js';
+import { DOCS_DIR, stackSkills } from './generator-docs.js';
 
 const SKILL_HINTS = {
   'keel-spring-database': 'tuning de datasource/Hikari, particularidades del dialecto y validación de la BD (el código JPA ya lo genera build)',
@@ -25,7 +27,7 @@ export function generate(model) {
   const techSkills = stackSkills(model);
   const selected = selectedInfra(model);
   const hasDevtools = needsDevtools(selected);
-  const brokerRef = layersPresent.messaging && stack.broker ? `.claude/skills/keel-spring-${stack.broker}/SKILL.md` : null;
+  const brokerRef = layersPresent.messaging && stack.broker ? `{{keel:skills}}/keel-spring-${stack.broker}/SKILL.md` : null;
 
   const artifacts = [
     ['service.keel.yaml', 'manifiesto: nombre, versión, DSL y capas declaradas'],
@@ -49,10 +51,10 @@ export function generate(model) {
       '`UseCaseMediator`). Implementa `preconditions` y `rules` en el orden del artefacto lanzando los errores de `domain/errors`' +
       (stack.cache
         ? '; las políticas `cache` se anotan sobre los adaptadores con las constantes de `CacheConfig` (ya generado), ' +
-          'según la skill `.claude/skills/keel-spring-redis/SKILL.md`'
+          'según la skill `{{keel:skills}}/keel-spring-redis/SKILL.md`'
         : '') +
       '.',
-    '**domain** (`specs/domain.keel.yaml`): siguiendo `.claude/conventions/domain-modeling.md`, escribe el factory de creación, ' +
+    '**domain** (`specs/domain.keel.yaml`): siguiendo `{{keel:docs}}/conventions/domain-modeling.md`, escribe el factory de creación, ' +
       'los métodos semánticos de cada transición del `lifecycle` y la guarda de cada `// TODO invariante` en `domain/aggregate`; ' +
       'deriva los campos `computed` marcados `// TODO computed`. El agregado sale sin setters: la mutación va por métodos de ' +
       'negocio. El dominio es puro: nada de JPA aquí.'
@@ -98,12 +100,12 @@ export function generate(model) {
         'Projector desde el listener. Completa los `// TODO (agente)`: en el dominio, `<Entidad>.projectionOf(...)` y ' +
         '`<Entidad>.applySnapshot(...)` (el dominio no tiene setters), y en el Reader la hidratación por el puerto del cliente. ' +
         'Las necesidades `on-demand` no generan nada nuevo: se resuelven por el puerto de ' +
-        '`domain/clients` que ya existe. Reglas completas en `.claude/conventions/dependencies.md`.'
+        '`domain/clients` que ya existe. Reglas completas en `{{keel:docs}}/conventions/dependencies.md`.'
     );
   }
   if (layersPresent.storage) {
     steps.push(
-      '**storage** (`specs/storage.keel.yaml`): siguiendo la skill `.claude/skills/keel-spring-s3/SKILL.md`, implementa el bean del cliente y el ' +
+      '**storage** (`specs/storage.keel.yaml`): siguiendo la skill `{{keel:skills}}/keel-spring-s3/SKILL.md`, implementa el bean del cliente y el ' +
         'adaptador del puerto `FileStorage` (upload devuelve `StoredObject`; download/delete/signedUrl), con la validación ' +
         'de content-type/tamaño de los `buckets` del diseño.'
     );
@@ -114,7 +116,7 @@ export function generate(model) {
         '`consistency.transactionalBoundary` en los handlers. El esquema de los ambientes desplegados lo gobiernan las ' +
         'migraciones de `src/main/resources/db/migration/` (production usa `ddl-auto: validate`): el baseline se exporta de ' +
         'las entidades **ya finales** con `bash infra/export-schema.sh` en el cierre, no al empezar. ' +
-        'Para migraciones, tuning del datasource/Hikari y particularidades del dialecto, la skill `.claude/skills/keel-spring-database/SKILL.md`.'
+        'Para migraciones, tuning del datasource/Hikari y particularidades del dialecto, la skill `{{keel:skills}}/keel-spring-database/SKILL.md`.'
     );
   }
   steps.push(
@@ -132,7 +134,7 @@ export function generate(model) {
     // acaba leyendo el pipeline de abajo como su propia lista de tareas.
     '> **Quién eres.** Si acabas de invocar `/' + SKILL + '`, eres el **orquestador**: tu proceso está en la',
     '> skill, y este documento es el contexto que pasas a los agentes. Si eres uno de los agentes de',
-    '> `.claude/agents/`, manda **tu propio archivo de agente**: aquí tienes el mapa del repo (diseño,',
+    '> `{{keel:agents}}/`, manda **tu propio archivo de agente**: aquí tienes el mapa del repo (diseño,',
     '> stack, arquitectura, orden de las capas), no tu lista de tareas — tu alcance y tu criterio de',
     '> terminado son los de tu agente, y **tú no lanzas agentes**.',
     '',
@@ -159,14 +161,14 @@ export function generate(model) {
     '|---|---|',
     ...artifacts.map(([file, hint]) => `| \`specs/${file}\` | ${hint} |`),
     '',
-    'Reglas inviolables completas en `.claude/constitution.md`. Si un escenario contradice el spec, el hueco es del',
+    'Reglas inviolables completas en `{{keel:docs}}/constitution.md`. Si un escenario contradice el spec, el hueco es del',
     'diseño: proponlo como cambio a los artefactos, no lo acomodes en el código. Todo identificador nuevo (paquetes,',
     'directorios, archivos, clases, métodos, variables, tablas) va en inglés; comentarios y docs en español.',
     '',
     '## Arquitectura',
     '',
-    '`.claude/architecture.md` describe la arquitectura hexagonal + CQRS del proyecto y la función de cada paquete',
-    '(`domain`, `application`, `infrastructure`). `.claude/constitution.md` recoge las reglas que esa arquitectura',
+    '`{{keel:docs}}/architecture.md` describe la arquitectura hexagonal + CQRS del proyecto y la función de cada paquete',
+    '(`domain`, `application`, `infrastructure`). `{{keel:docs}}/constitution.md` recoge las reglas que esa arquitectura',
     'nunca puede romper (frontera hexagonal, transaccionalidad, contratos públicos, precisión numérica). Léelos antes de tocar código',
     'si no conoces ya la estructura.',
     '',
@@ -177,16 +179,16 @@ export function generate(model) {
     '',
     '## Conocimiento local',
     '',
-    `La skill \`/${SKILL}\` de este proyecto arranca el proceso; \`.claude/conventions/\` trae las convenciones que consultan los agentes de \`.claude/agents/\`, y las guías del stack`,
+    `La skill \`/${SKILL}\` de este proyecto arranca el proceso; \`{{keel:docs}}/conventions/\` trae las convenciones que consultan los agentes de \`{{keel:agents}}/\`, y las guías del stack`,
     'están instaladas como skills propias por tecnología (solo las del stack elegido):',
     '',
-    '- `.claude/conventions/mapping.md` — mapeo DSL Keel → código Spring, capa por capa. Síguelo estrictamente.',
-    '- `.claude/conventions/project-layout.md` — estructura del proyecto y sus paquetes.',
-    '- `.claude/conventions/domain-modeling.md` — cómo se modela el dominio: agregados ricos, invariantes, value objects y',
+    '- `{{keel:docs}}/conventions/mapping.md` — mapeo DSL Keel → código Spring, capa por capa. Síguelo estrictamente.',
+    '- `{{keel:docs}}/conventions/project-layout.md` — estructura del proyecto y sus paquetes.',
+    '- `{{keel:docs}}/conventions/domain-modeling.md` — cómo se modela el dominio: agregados ricos, invariantes, value objects y',
     '  reparto de la validación entre capas.',
-    '- `.claude/conventions/infra-validation.md` — sondeo por tecnología de la infraestructura de prueba.',
-    '- `.claude/conventions/integration-tests.md` — cómo se traducen los escenarios `FL-*` a pruebas de integración.',
-    ...techSkills.map((name) => `- \`.claude/skills/${name}/SKILL.md\` — ${SKILL_HINTS[name] ?? name}: qué dejó listo build y qué te toca a ti; sus \`references/\` (configuración, implementación, troubleshooting) se leen bajo demanda.`),
+    '- `{{keel:docs}}/conventions/infra-validation.md` — sondeo por tecnología de la infraestructura de prueba.',
+    '- `{{keel:docs}}/conventions/integration-tests.md` — cómo se traducen los escenarios `FL-*` a pruebas de integración.',
+    ...techSkills.map((name) => `- \`{{keel:skills}}/${name}/SKILL.md\` — ${SKILL_HINTS[name] ?? name}: qué dejó listo build y qué te toca a ti; sus \`references/\` (configuración, implementación, troubleshooting) se leen bajo demanda.`),
     '',
     '## Orden de trabajo: completar el scaffolding, capa por capa',
     '',
@@ -195,7 +197,7 @@ export function generate(model) {
     '## Verificación — criterio de salida del pipeline',
     '',
     'Lo que hace falta para dar por terminada **la generación**, repartido entre varios agentes. No es',
-    'el criterio de ninguno en particular: si eres un agente de `.claude/agents/`, el tuyo está en tu',
+    'el criterio de ninguno en particular: si eres un agente de `{{keel:agents}}/`, el tuyo está en tu',
     'archivo y suele ser más estrecho que esta lista.',
     '',
     '1. `./gradlew build -x test` en verde: compilación y empaquetado (en Windows `gradlew.bat build -x test`).'
@@ -237,8 +239,8 @@ export function generate(model) {
     '',
     '## Quién ejecuta esto',
     '',
-    `Lo reparte la skill \`/${SKILL}\`, **único orquestador** del pipeline: los agentes de \`.claude/agents/\` son`,
-    '**hojas** y ninguno invoca a otro (su `tools:` no lo incluye). El reparto es: `keel-spring-code` (código, sin',
+    `Lo reparte la skill \`/${SKILL}\`, **único orquestador** del pipeline: los agentes de \`{{keel:agents}}/\` son`,
+    '**hojas** y ninguno invoca a otro (su frontmatter no se lo permite). El reparto es: `keel-spring-code` (código, sin',
     'tests) en paralelo con `keel-spring-infra` (infraestructura arriba y sana) y con `keel-spring-tests` (escenarios',
     '`FL-*` → `src/integrationTest/`, en caja negra). Con los tres en OK, la skill ejecuta `bash infra/score-scenarios.sh`,',
     'que corre la suite y compone la matriz desde el XML de JUnit: eso es determinista y no gasta un agente. Solo si la',
@@ -246,7 +248,7 @@ export function generate(model) {
     'Al final, `keel-spring-quality` (pase de calidad no-conductual con la compilación en verde' +
       (layersPresent.persistence ? ', más el baseline de migraciones del punto 4' : '') +
       ', y los escenarios al 100% como no-regresión propia). El pipeline completo —fases, gating y handoffs— está en',
-    '`.claude/orchestration.md`.'
+    '`{{keel:docs}}/orchestration.md`.'
   );
 
   lines.push(
@@ -256,5 +258,8 @@ export function generate(model) {
     ''
   );
 
-  return [{ path: '.claude/CLAUDE.md', content: lines.join('\n') }];
+  // Un archivo por harness, cada uno con sus rutas resueltas. Duplicar no cuesta
+  // aquí: esto lo regenera `build` en cada ejecución y nadie lo edita a mano —
+  // al contrario que el contexto del workspace, que sí es del equipo.
+  return emitHarnessFiles({ context: { content: lines.join('\n') }, extraTokens: { docs: DOCS_DIR } });
 }

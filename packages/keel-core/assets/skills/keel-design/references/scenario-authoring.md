@@ -61,7 +61,7 @@ Estas convenciones son la salida natural de la clase 12 del análisis de huecos 
 - La cabecera **`Location`** de una creación **no se declara ni se niega en el YAML**: se emite en toda operación con `successStatus: 201` cuyo `output` declare `id`, con la URI de la petición más el id devuelto. El escenario la asserta; lo que **no** puede hacer es afirmar "sin cabecera `Location`" ni fijarle una URI distinta de esa — ningún servidor correcto lo pasa. Si la creación no devuelve `id` (output vacío o una lista), entonces no hay `Location` que assertar.
 - Si un escenario ejercita **dos escrituras concurrentes**, el resultado lo fija `persistence.consistency.optimisticLocking` (`all`/`declared` → conflicto `409`; `none` → ambas con éxito, último escritor gana). Declararlo solo en prosa dentro de `rules` no vale: ningún generador lee prosa.
 
-Esta lista es una **copia manual** del contrato de keel-spring, y por eso envejece: la fuente real es `conventions/flow-fidelity.md`, que solo existe **dentro de un proyecto ya generado** (`services/<servicio>-<tech>/.claude/`), es decir, después de este paso. Si hay algún proyecto generado a mano, contrasta contra él; si el generador se comporta de otra forma que la descrita aquí, gana el generador y esta lista está desactualizada — repórtalo.
+Esta lista es una **copia manual** del contrato de keel-spring, y por eso envejece: la fuente real es `docs/keel/conventions/flow-fidelity.md`, que solo existe **dentro de un proyecto ya generado** (`services/<servicio>-<tech>/`), es decir, después de este paso. Si hay algún proyecto generado a mano, contrasta contra él; si el generador se comporta de otra forma que la descrita aquí, gana el generador y esta lista está desactualizada — repórtalo.
 
 ## 3. Agrupación en flujos
 

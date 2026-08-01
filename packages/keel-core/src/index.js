@@ -39,3 +39,7 @@ export {
 } from './lib/registry-source.js';
 export { checkCrossRefs } from './lib/crossrefs.js';
 export { copyTree, diffTree } from './lib/copy.js';
+// Harnesses de agente: un generador no debe saber si escribe .claude/ o .opencode/,
+// solo pedir la proyección de sus skills y sus agentes.
+export { HARNESSES, applyTokens, emitHarnessFiles, harnessById, harnessLabels, splitFrontmatter } from './lib/harness.js';
+export { diffGenerated, writeFiles } from './lib/write.js';

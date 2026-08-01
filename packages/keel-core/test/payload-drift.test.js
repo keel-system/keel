@@ -9,18 +9,40 @@ import { supportedDsl } from '../src/lib/assets.js';
 // aquí volvería a romper estos tests en el siguiente cambio de versión.
 const DSL = supportedDsl()[0];
 import { copyTree, diffTree } from '../src/lib/copy.js';
-import { CUSTOMIZABLE_PAYLOAD, coreDir } from '../src/lib/assets.js';
+import { CUSTOMIZABLE_PAYLOAD, coreDir, skillsSourceDir } from '../src/lib/assets.js';
+import { emitHarnessFiles } from '../src/lib/harness.js';
+import { diffGenerated, writeFiles } from '../src/lib/write.js';
 
 const RENAMES = { gitignore: '.gitignore', gitattributes: '.gitattributes' };
+
+// El payload tiene dos mitades y `keel init` escribe ambas: lo que se COPIA de
+// assets/core/ y lo que se PROYECTA por harness desde assets/skills/. Los tests de
+// deriva tienen que ver las dos, o las skills dejarían de estar cubiertas justo
+// cuando pasaron a generarse.
+function harnessFiles() {
+  const skills = fs
+    .readdirSync(skillsSourceDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => path.join(skillsSourceDir, entry.name));
+  return emitHarnessFiles({ skills, context: { canonical: 'AGENTS.md' }, extraTokens: { docs: 'docs' } });
+}
 
 /** Un workspace recién sembrado desde los assets reales de la CLI. */
 function seeded() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-drift-'));
   copyTree(coreDir, dir, { renames: RENAMES });
+  writeFiles(harnessFiles(), dir);
   return dir;
 }
 
-const diff = (dir) => diffTree(coreDir, dir, { renames: RENAMES, ignore: CUSTOMIZABLE_PAYLOAD });
+const diff = (dir) => {
+  const copied = diffTree(coreDir, dir, { renames: RENAMES, ignore: CUSTOMIZABLE_PAYLOAD });
+  const generated = diffGenerated(harnessFiles(), dir, { ignore: CUSTOMIZABLE_PAYLOAD });
+  return {
+    stale: [...copied.stale, ...generated.stale],
+    missing: [...copied.missing, ...generated.missing]
+  };
+};
 
 test('un workspace recién sembrado no tiene deriva', () => {
   const result = diff(seeded());
@@ -36,6 +58,23 @@ test('un schema modificado a mano se reporta como desfasado', () => {
 
   const result = diff(dir);
   assert.deepEqual(result.stale, ['schema/domain.schema.json']);
+  assert.deepEqual(result.missing, []);
+});
+
+test('una skill proyectada editada a mano se reporta, en el harness que sea', () => {
+  // Las skills dejaron de copiarse para pasar a proyectarse por harness; sin
+  // diffGenerated, `keel init --check` las perdería de vista sin decirlo.
+  const dir = seeded();
+  for (const rel of ['.claude/skills/keel-design/SKILL.md', '.opencode/skills/keel-design/SKILL.md']) {
+    const target = path.join(dir, ...rel.split('/'));
+    fs.writeFileSync(target, `${fs.readFileSync(target, 'utf8')}\n`);
+  }
+
+  const result = diff(dir);
+  assert.deepEqual(result.stale.sort(), [
+    '.claude/skills/keel-design/SKILL.md',
+    '.opencode/skills/keel-design/SKILL.md'
+  ]);
   assert.deepEqual(result.missing, []);
 });
 
@@ -73,28 +112,37 @@ test('los archivos personalizables no cuentan como deriva, por muy reescritos qu
 test('poner al día el payload con --force conserva lo personalizable y actualiza el resto', () => {
   // La propiedad que necesita un registry publicado: `keel init --check` le dice que
   // su payload quedó atrás y le manda ejecutar `keel init --force`; ese --force no
-  // puede costarle la portada entre marcadores ni su CLAUDE.md.
+  // puede costarle la portada entre marcadores ni su archivo de contexto.
   const dir = seeded();
   const portada = '# Keel Registry\n\n<!-- keel:servicios:start -->\ntabla\n<!-- keel:servicios:end -->\n';
   fs.writeFileSync(path.join(dir, 'README.md'), portada);
-  fs.writeFileSync(path.join(dir, 'CLAUDE.md'), '# Reglas del equipo\n');
+  fs.writeFileSync(path.join(dir, 'AGENTS.md'), '# Reglas del equipo\n');
+  fs.writeFileSync(path.join(dir, 'CLAUDE.md'), '# Otro contexto propio\n');
   fs.writeFileSync(path.join(dir, '.gitattributes'), '* text=auto eol=lf\n');
-  // y un trozo del payload que sí debe volver a su versión original
+  // y dos trozos del payload que sí deben volver a su versión original: uno de cada
+  // mitad, porque cada una se pone al día por su cuenta.
   const schema = path.join(dir, 'schema', 'domain.schema.json');
   const original = fs.readFileSync(schema, 'utf8');
   fs.writeFileSync(schema, '{"desfasado": true}\n');
+  const skill = path.join(dir, '.opencode', 'skills', 'keel-design', 'SKILL.md');
+  const originalSkill = fs.readFileSync(skill, 'utf8');
+  fs.writeFileSync(skill, '# desfasada\n');
 
-  const { preserved } = copyTree(coreDir, dir, {
+  const copiado = copyTree(coreDir, dir, {
     force: true,
     renames: RENAMES,
     preserve: CUSTOMIZABLE_PAYLOAD
   });
+  const proyectado = writeFiles(harnessFiles(), dir, { force: true, preserve: CUSTOMIZABLE_PAYLOAD });
 
+  const preserved = [...copiado.preserved, ...proyectado.preserved];
   assert.deepEqual(preserved.sort(), [...CUSTOMIZABLE_PAYLOAD].sort());
   assert.equal(fs.readFileSync(path.join(dir, 'README.md'), 'utf8'), portada);
-  assert.equal(fs.readFileSync(path.join(dir, 'CLAUDE.md'), 'utf8'), '# Reglas del equipo\n');
+  assert.equal(fs.readFileSync(path.join(dir, 'AGENTS.md'), 'utf8'), '# Reglas del equipo\n');
+  assert.equal(fs.readFileSync(path.join(dir, 'CLAUDE.md'), 'utf8'), '# Otro contexto propio\n');
   assert.equal(fs.readFileSync(path.join(dir, '.gitattributes'), 'utf8'), '* text=auto eol=lf\n');
   assert.equal(fs.readFileSync(schema, 'utf8'), original);
+  assert.equal(fs.readFileSync(skill, 'utf8'), originalSkill);
 
   // Y el resultado es exactamente lo que `keel init --check` considera al día.
   const result = diff(dir);

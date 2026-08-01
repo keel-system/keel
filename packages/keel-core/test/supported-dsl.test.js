@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { CUSTOMIZABLE_PAYLOAD, coreDir, schemaPathFor, supportedDsl } from '../src/lib/assets.js';
+import { emitHarnessFiles } from '../src/lib/harness.js';
 import path from 'node:path';
 
 test('supportedDsl() es exactamente el enum del schema del manifiesto', () => {
@@ -31,12 +32,21 @@ test('todas las versiones soportadas son de la familia 2.x', () => {
   }
 });
 
-test('los archivos personalizables del payload existen de verdad en los assets', () => {
+test('los archivos personalizables del payload existen de verdad en el workspace sembrado', () => {
   // Una entrada mal escrita dejaría de ignorarse en silencio y `keel init --check`
-  // reportaría deriva sobre un archivo que el usuario tiene derecho a editar.
+  // reportaría deriva sobre un archivo que el usuario tiene derecho a editar. El
+  // payload tiene dos mitades: lo que se copia de assets/core/ y lo que se proyecta
+  // por harness (el alias del archivo de contexto), y una entrada vale en cualquiera.
   const renames = { '.gitignore': 'gitignore', '.gitattributes': 'gitattributes' };
+  const emitted = new Set(
+    emitHarnessFiles({ context: { canonical: 'AGENTS.md' } }).map((file) => file.path)
+  );
+
   for (const file of CUSTOMIZABLE_PAYLOAD) {
     const source = renames[file] ?? file;
-    assert.ok(fs.existsSync(path.join(coreDir, source)), `${source} debería existir en assets/core/`);
+    assert.ok(
+      fs.existsSync(path.join(coreDir, source)) || emitted.has(file),
+      `${source} debería existir en assets/core/ o salir de la proyección de harness`
+    );
   }
 });

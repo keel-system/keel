@@ -85,7 +85,7 @@ Paquete base: `<group>.<serviceNameSinGuiones>` (ej. `com.example.productcatalog
 
 ## Qué genera el scaffolding y qué completa el agente
 
-**Criterio de frontera**: build genera todo lo derivable mecánicamente del diseño + `keel-stack.json` cuyo código es idéntico sea cual sea la opción de infraestructura elegida (más las dependencias, la config y el compose, que sí se derivan del catálogo). El agente escribe el código cuya implementación cambia según la infraestructura (publishers/listeners del broker, adaptador de storage), guiado por las skills por tecnología `keel-spring-<tech>` (instaladas en `.claude/skills/` del proyecto según el stack), además de la lógica de negocio. Las pruebas unitarias **no** forman parte de la generación: son un proceso independiente posterior a la validación funcional (ver `mapping.md`, «Cobertura funcional»).
+**Criterio de frontera**: build genera todo lo derivable mecánicamente del diseño + `keel-stack.json` cuyo código es idéntico sea cual sea la opción de infraestructura elegida (más las dependencias, la config y el compose, que sí se derivan del catálogo). El agente escribe el código cuya implementación cambia según la infraestructura (publishers/listeners del broker, adaptador de storage), guiado por las skills por tecnología `keel-spring-<tech>` (instaladas como skills del proyecto según el stack), además de la lógica de negocio. Las pruebas unitarias **no** forman parte de la generación: son un proceso independiente posterior a la validación funcional (ver `mapping.md`, «Cobertura funcional»).
 
 `keel-spring build` genera de forma determinista (re-ejecutable: solo añade archivos nuevos, `--force` sobrescribe):
 

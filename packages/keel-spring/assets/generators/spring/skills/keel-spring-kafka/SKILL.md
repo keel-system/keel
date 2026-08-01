@@ -9,7 +9,7 @@ description: Guía de implementación de mensajería con Apache Kafka en un proy
 
 - Aplica solo si `keel-stack.json` declara `"broker": "kafka"`.
 - Lee `specs/messaging.keel.yaml`: eventos, suscripciones, `reliability` y `onFailure` — el diseño es la única fuente de verdad funcional.
-- Sigue estrictamente `.claude/conventions/mapping.md`; la estructura de paquetes está en `.claude/conventions/project-layout.md`.
+- Sigue estrictamente `{{keel:docs}}/conventions/mapping.md`; la estructura de paquetes está en `{{keel:docs}}/conventions/project-layout.md`.
 - **Frontera**: build ya dejó dependencias, config por perfil, compose y contratos (abajo); esta skill cubre solo el código que depende de Kafka.
 
 ## Qué dejó listo build
@@ -134,4 +134,4 @@ Léelas bajo demanda, no todas de golpe:
 
 ## Validación
 
-Desde devtools: `kcat -b kafka:29092 -L` (metadata) y `kcat -b kafka:29092 -t <topic> -C -c 1` para inspeccionar eventos publicados. Recetas completas en `.claude/conventions/infra-validation.md`.
+Desde devtools: `kcat -b kafka:29092 -L` (metadata) y `kcat -b kafka:29092 -t <topic> -C -c 1` para inspeccionar eventos publicados. Recetas completas en `{{keel:docs}}/conventions/infra-validation.md`.

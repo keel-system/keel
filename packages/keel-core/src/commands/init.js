@@ -1,8 +1,29 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import pc from 'picocolors';
-import { CUSTOMIZABLE_PAYLOAD, coreDir, packageVersion } from '../lib/assets.js';
+import { CUSTOMIZABLE_PAYLOAD, coreDir, packageVersion, skillsSourceDir } from '../lib/assets.js';
 import { copyTree, diffTree } from '../lib/copy.js';
+import { HARNESSES, emitHarnessFiles, harnessLabels } from '../lib/harness.js';
+import { diffGenerated, writeFiles } from '../lib/write.js';
 
 const RENAMES = { gitignore: '.gitignore', gitattributes: '.gitattributes' };
+
+/**
+ * Artefactos de agente del workspace: las skills del flujo de diseño, proyectadas
+ * a la convención de cada harness soportado, más el alias del archivo de contexto
+ * (el texto vive en AGENTS.md, que sí es payload copiado).
+ *
+ * No son copias sino proyecciones, así que quedan fuera de copyTree/diffTree: de
+ * ahí que init y checkPayload los traten aparte con writeFiles/diffGenerated.
+ */
+function harnessFiles() {
+  const skills = fs
+    .readdirSync(skillsSourceDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => path.join(skillsSourceDir, entry.name));
+
+  return emitHarnessFiles({ skills, context: { canonical: 'AGENTS.md' }, extraTokens: { docs: 'docs' } });
+}
 
 /**
  * Comprueba si el payload del workspace sigue al día respecto a la CLI instalada,
@@ -13,10 +34,13 @@ const RENAMES = { gitignore: '.gitignore', gitattributes: '.gitattributes' };
  */
 export function checkPayload() {
   const target = process.cwd();
-  const { stale, missing } = diffTree(coreDir, target, {
+  const copied = diffTree(coreDir, target, {
     renames: RENAMES,
     ignore: CUSTOMIZABLE_PAYLOAD
   });
+  const generated = diffGenerated(harnessFiles(), target, { ignore: CUSTOMIZABLE_PAYLOAD });
+  const stale = [...copied.stale, ...generated.stale];
+  const missing = [...copied.missing, ...generated.missing];
 
   if (stale.length === 0 && missing.length === 0) {
     console.log(pc.green(`✔ El payload del workspace está al día con keel-core ${packageVersion()}.`));
@@ -48,11 +72,17 @@ export function init({ force = false, check = false } = {}) {
   const target = process.cwd();
   // preserve: los archivos que el workspace reescribe a propósito (la portada de un registry,
   // su CLAUDE.md) no se pisan ni con --force. Es la misma lista que checkPayload() ignora.
-  const { copied, skipped, preserved } = copyTree(coreDir, target, {
+  const tree = copyTree(coreDir, target, {
     force,
     renames: RENAMES,
     preserve: CUSTOMIZABLE_PAYLOAD
   });
+  // Y las skills, proyectadas a cada harness desde la misma fuente neutral.
+  const projected = writeFiles(harnessFiles(), target, { force, preserve: CUSTOMIZABLE_PAYLOAD });
+
+  const copied = [...tree.copied, ...projected.copied];
+  const skipped = [...tree.skipped, ...projected.skipped];
+  const preserved = [...tree.preserved, ...projected.preserved];
 
   for (const file of copied) console.log(`  ${pc.green('+')} ${file}`);
   for (const file of skipped) console.log(`  ${pc.yellow('=')} ${file} ${pc.dim('(ya existía, omitido)')}`);
@@ -86,12 +116,13 @@ export function init({ force = false, check = false } = {}) {
   console.log(`
 Próximos pasos:
   1. ${pc.cyan('keel new mi-servicio')}    crea specs/mi-servicio/ (manifiesto + capas obligatorias)
-  2. Abre Claude Code aquí y ejecuta ${pc.cyan('/keel-design specs/mi-servicio')}
+  2. Abre tu agente aquí y ejecuta ${pc.cyan('/keel-design specs/mi-servicio')}
   3. ${pc.cyan('keel validate specs/mi-servicio')}
   4. Instala el generador de tu tecnología: ${pc.cyan('npm i -g keel-spring')} (${pc.cyan('keel list')} para ver los conocidos)
   5. ${pc.cyan('keel-spring build specs/mi-servicio')}  elige el stack y genera services/mi-servicio-spring/
   6. ${pc.cyan('cd services/mi-servicio-spring')}
-  7. Abre Claude Code ahí y ejecuta ${pc.cyan('/keel-generate-spring')} ${pc.dim('(sin argumentos)')}
+  7. Abre tu agente ahí y ejecuta ${pc.cyan('/keel-generate-spring')} ${pc.dim('(sin argumentos)')}
 
+${pc.dim(`Las skills quedaron sembradas para ${harnessLabels()} (${HARNESSES.map((h) => h.tokens.commands).join(', ')}).`)}
 La metodología completa está en ${pc.cyan('docs/methodology.md')}.`);
 }

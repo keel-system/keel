@@ -4,7 +4,7 @@ Guías de trabajo por tecnología para lo que **no** genera `keel-spring build`
 porque depende de la infraestructura elegida (código de adaptadores, tuning de
 configuración, preparación de entorno y validación). Cada tecnología es una
 skill independiente que build instala **condicionalmente** en el
-`.claude/skills/` del proyecto generado: si el broker es kafka, solo se instala
+`el directorio de skills/` del proyecto generado: si el broker es kafka, solo se instala
 `keel-spring-kafka`, y así con cada categoría. El subagente `keel-spring-code`
 las descubre como skills del proyecto.
 
@@ -53,4 +53,4 @@ SKILL.md, nunca todos de golpe: el SKILL.md basta para el caso simple.
 
 Cada skill indica: qué dejó listo build (dependencias, fragmentos de config,
 contenedor de prueba, contratos), qué le toca al agente y cómo validar la
-tecnología (recetas completas en `.claude/conventions/infra-validation.md`).
+tecnología (recetas completas en `docs/keel/conventions/infra-validation.md`).

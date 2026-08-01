@@ -114,10 +114,11 @@ export function generate(model) {
     '`@LogExceptions` con su aspecto, contratos `EventEnvelope`/`EventMetadata` con puertos `<Evento>Publisher` y stub,',
     'controllers `V1` con springdoc y `ApiExceptionHandler`), más configuración por perfiles y la infraestructura de prueba en `infra/`.',
     'El código que depende de la infraestructura elegida (publishers/listeners del broker, adaptador de storage)',
-    'lo escribe el agente siguiendo las skills por tecnología `.claude/skills/keel-spring-<tech>/` (instaladas solo las del stack de `keel-stack.json`).',
-    'El punto de entrada para el agente es `.claude/CLAUDE.md` (junto con `.claude/architecture.md` y',
-    '`.claude/constitution.md`); el repo es autosuficiente: incluye el diseño (snapshot en `specs/`), los contratos',
-    'formales (snapshot en `docs/`), la skill y las guías del stack en `.claude/`.',
+    'lo escribe el agente siguiendo las skills por tecnología `keel-spring-<tech>` (instaladas solo las del stack de `keel-stack.json`).',
+    'El punto de entrada para el agente es el archivo de contexto del repo (`AGENTS.md`, que `CLAUDE.md` importa),',
+    'junto con `docs/keel/architecture.md` y `docs/keel/constitution.md`; el repo es autosuficiente: incluye el diseño',
+    '(snapshot en `specs/`), los contratos formales (snapshot en `docs/`), las conventions en `docs/keel/` y —sembrados',
+    'para Claude Code y para opencode— la skill del generador, sus agentes y las guías del stack elegido.',
     '',
     'Swagger UI (local/develop): http://localhost:8080/swagger-ui.html — deshabilitado en production.',
     '',
@@ -140,10 +141,10 @@ export function generate(model) {
     pendingLayers.push('- `security`: el `SecurityFilterChain` ya está generado; crea el realm en el Keycloak de prueba (http://localhost:8180, admin/admin).');
   }
   if (layersPresent.messaging) {
-    pendingLayers.push('- `messaging`: haz `raise(...)` de cada evento en el método de negocio del agregado (la traducción a evento de integración y la entrega ya están generadas) e implementa el envío al broker — `OutboxDispatcher` o `<Evento>Publisher` según la `reliability` — y los `<Evento>Listener` de las suscripciones, según la skill `.claude/skills/keel-spring-<broker>/`.');
+    pendingLayers.push('- `messaging`: haz `raise(...)` de cada evento en el método de negocio del agregado (la traducción a evento de integración y la entrega ya están generadas) e implementa el envío al broker — `OutboxDispatcher` o `<Evento>Publisher` según la `reliability` — y los `<Evento>Listener` de las suscripciones, según la skill `keel-spring-<broker>`.');
   }
   if (layersPresent.storage) {
-    pendingLayers.push('- `storage`: implementa el adaptador de `FileStorage` (bean del cliente + upload/download/delete/signedUrl) según la skill `.claude/skills/keel-spring-s3/`.');
+    pendingLayers.push('- `storage`: implementa el adaptador de `FileStorage` (bean del cliente + upload/download/delete/signedUrl) según la skill `keel-spring-s3`.');
   }
   if (layersPresent.httpClients) {
     pendingLayers.push('- `http-clients`: puerto + adaptador RestClient + mapper ACL ya generados; completa los `*Fallback` (y el tipado records/mapper solo en llamadas declaradas en prosa).');

@@ -81,7 +81,7 @@ Ahí, y solo ahí, la respuesta es una consulta única con join proyectado:
 - JPQL con **entity join ad-hoc** sobre la columna id: `left join BrandJpa b on b.id = p.brandId`.
   No hace falta asociación y es portable a los seis dialectos del catálogo.
 - Proyección **plana** ensamblada en Java, `countQuery` propia. El cómo está en la skill de
-  base de datos: `.claude/skills/keel-spring-database/references/read-queries.md`.
+  base de datos: la skill `keel-spring-database`, `references/read-queries.md`.
 - **Nunca** un `@ManyToOne` entre dos raíces para poder usar `JOIN FETCH`/`@EntityGraph`: eso sí
   rompe la frontera de agregado, y arrastra cascadas y lazy loading entre agregados.
 - **Nunca** native query: el servicio se genera para seis dialectos y el SQL crudo no es portable.

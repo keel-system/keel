@@ -130,7 +130,7 @@ ${queues.map(renderQueue).join('\n')}`);
 # RAW MESSAGE DELIVERY es obligatorio: sin el, SNS mete el mensaje real dentro de
 # su propio sobre ({"Type":"Notification","Message":"..."}) y el listener recibe
 # una envoltura que el contrato del diseno no describe. Ver
-# .claude/skills/keel-spring-snssqs/SKILL.md.
+# la skill keel-spring-snssqs.
 #
 # En AWS real esta topologia la crea la plataforma (IaC), no este script.
 #

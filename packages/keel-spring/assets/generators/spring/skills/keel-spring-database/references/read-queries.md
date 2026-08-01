@@ -1,7 +1,7 @@
 # Consultas de lectura que proyectan otro agregado
 
 Esta referencia es la **excepción**, no el caso normal. Antes de escribir una línea de JPQL,
-comprueba el criterio de `.claude/conventions/read-composition.md`:
+comprueba el criterio de `{{keel:docs}}/conventions/read-composition.md`:
 
 - ¿La operación solo necesita **mostrar** los datos del agregado embebido? → resuélvelo con el
   `<X>RefResolver` que build inyecta en el handler (una consulta por agregado, por lote).

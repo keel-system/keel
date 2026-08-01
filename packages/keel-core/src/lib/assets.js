@@ -5,6 +5,10 @@ import { fileURLToPath } from 'node:url';
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 export const coreDir = path.join(packageRoot, 'assets', 'core');
+// Fuente **neutral** de las skills del flujo de diseño: vive fuera de coreDir a
+// propósito, porque no se copia — se proyecta a la convención de cada harness
+// (ver lib/harness.js). Si estuviera dentro, copyTree la sembraría tal cual.
+export const skillsSourceDir = path.join(packageRoot, 'assets', 'skills');
 export const schemaDir = path.join(coreDir, 'schema');
 export const templatesDir = path.join(coreDir, 'templates', 'service');
 
@@ -42,10 +46,13 @@ export function supportedDsl() {
 /**
  * Archivos del payload que un workspace debe poder editar: la detección de
  * deriva (`keel init --check`) los ignora. La portada de un registry está
- * reescrita a propósito, y el CLAUDE.md de un workspace se adapta al equipo.
+ * reescrita a propósito, y el contexto de agente de un workspace se adapta al
+ * equipo. `AGENTS.md` es el que lleva el texto; `CLAUDE.md` lo importa en una
+ * línea, y también es suyo: si el equipo prefiere separarlos, puede.
  */
 export const CUSTOMIZABLE_PAYLOAD = [
   'README.md',
+  'AGENTS.md',
   'CLAUDE.md',
   '.gitignore',
   '.gitattributes',

@@ -6,7 +6,7 @@
 // Todo lo de aquí es transversal al broker: la tabla, el repositorio, el
 // polling, los reintentos y la purga. Lo único acoplado al broker es el ENVÍO,
 // que sale por el puerto OutboxDispatcher; su implementación la escribe el
-// agente siguiendo la skill .claude/skills/keel-spring-<broker>/.
+// agente siguiendo la skill keel-spring-<broker>.
 
 import { javaFile, javaPath, subPackage } from './render.js';
 
@@ -229,7 +229,7 @@ function renderDispatcherPort(model) {
  *
  * Es lo ÚNICO acoplado al broker en todo el patrón; la implementación vive en
  * infrastructure/messaging y la escribe el agente según keel-stack.json
- * (skill .claude/skills/keel-spring-<broker>/).
+ * (skill keel-spring-<broker>).
  */
 public interface OutboxDispatcher {
 
@@ -258,7 +258,7 @@ public class OutboxDispatcherStub implements OutboxDispatcher {
     @Override
     public void dispatch(String destination, String routingKey, String eventType, String payload) {
         // TODO (agente): sustituir este stub por el dispatcher real del broker
-        //   elegido en keel-stack.json (skill .claude/skills/keel-spring-<broker>/):
+        //   elegido en keel-stack.json (skill keel-spring-<broker>):
         //   enviar el payload tal cual (ya es la EventEnvelope serializada) al
         //   destino/routing key indicados, con content-type application/json.
         log.warn("OutboxDispatcher no implementado: {} no salió a {}/{}", eventType, destination, routingKey);

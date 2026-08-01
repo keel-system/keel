@@ -166,7 +166,7 @@ por si acaso.
 Tampoco lo son un `shared`/`common` (lo compartido que es código es una librería; lo que es dato tiene
 un dueño de negocio), ni un servicio por tabla, ni un orquestador sin dominio propio. El catálogo
 completo de antipatrones, con los seis ejes de corte, está en
-`.claude/skills/keel-decompose/references/boundary-heuristics.md`.
+`references/boundary-heuristics.md` de la skill `keel-decompose`.
 
 ## Relación con el registry
 

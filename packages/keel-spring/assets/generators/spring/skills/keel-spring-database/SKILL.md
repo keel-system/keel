@@ -31,8 +31,8 @@ validación/reset de datos.
   (lee **solo** ese).
 - Lee `specs/persistence.keel.yaml`: mapeo, claves naturales, índices y
   `consistency` — el diseño es la única fuente de verdad funcional.
-- Sigue estrictamente `.claude/conventions/mapping.md`; la estructura de
-  paquetes está en `.claude/conventions/project-layout.md`.
+- Sigue estrictamente `{{keel:docs}}/conventions/mapping.md`; la estructura de
+  paquetes está en `{{keel:docs}}/conventions/project-layout.md`.
 - **Frontera**: build ya dejó el código JPA, la config por perfil y el compose;
   esta skill cubre solo tuning, dialecto y validación.
 
@@ -73,7 +73,7 @@ validación/reset de datos.
    **componer bien una lectura no es tuning anticipado, es corrección**. Que una
    operación de listado haga una consulta por elemento (N+1) es un defecto desde
    el primer día, no una optimización pendiente — el criterio está en
-   `.claude/conventions/read-composition.md` y la técnica en `references/read-queries.md`.
+   `{{keel:docs}}/conventions/read-composition.md` y la técnica en `references/read-queries.md`.
 5. **Dialecto**: revisa `references/dialects/<database>.md` antes de decidir
    tipos de columna no triviales (JSON, UUID, texto largo) o de depurar
    diferencias entre H2 (tests) y la BD real.
@@ -95,4 +95,4 @@ Léelas bajo demanda, no todas de golpe:
 
 Sondeo y reset por dialecto desde devtools (o el propio contenedor):
 `infra/validate-infra.sh` y `bash infra/reset-db.sh` entre flujos.
-Recetas completas en `.claude/conventions/infra-validation.md`.
+Recetas completas en `{{keel:docs}}/conventions/infra-validation.md`.

@@ -9,7 +9,7 @@ description: Guía de implementación de mensajería con RabbitMQ en un proyecto
 
 - Aplica solo si `keel-stack.json` declara `"broker": "rabbitmq"`.
 - Lee `specs/messaging.keel.yaml`: eventos, suscripciones, `reliability` y `onFailure` — el diseño es la única fuente de verdad funcional.
-- Sigue estrictamente `.claude/conventions/mapping.md`; la estructura de paquetes está en `.claude/conventions/project-layout.md`.
+- Sigue estrictamente `{{keel:docs}}/conventions/mapping.md`; la estructura de paquetes está en `{{keel:docs}}/conventions/project-layout.md`.
 - **Frontera**: build ya dejó dependencias, config por perfil, compose y contratos (abajo); esta skill cubre solo el código que depende de RabbitMQ.
 
 ## Qué dejó listo build
@@ -169,4 +169,4 @@ Léelas bajo demanda, no todas de golpe:
 
 Desde devtools: `curl -sf -u guest:guest http://rabbitmq:15672/api/healthchecks/node`;
 la UI de management (localhost:15672) permite inspeccionar exchanges, colas y mensajes.
-Recetas completas en `.claude/conventions/infra-validation.md`.
+Recetas completas en `{{keel:docs}}/conventions/infra-validation.md`.

@@ -12,7 +12,7 @@ y prod (S3); la diferencia (endpoint / path-style) vive en `storage.yaml` por pe
 
 - Aplica solo si `keel-stack.json` declara `"storage": "minio"` o `"storage": "s3"`.
 - Lee `specs/storage.keel.yaml`: buckets, políticas de acceso y validaciones — el diseño es la única fuente de verdad funcional.
-- Sigue estrictamente `.claude/conventions/mapping.md`; la estructura de paquetes está en `.claude/conventions/project-layout.md`.
+- Sigue estrictamente `{{keel:docs}}/conventions/mapping.md`; la estructura de paquetes está en `{{keel:docs}}/conventions/project-layout.md`.
 - **Frontera**: build ya dejó dependencias, config por perfil, compose y el puerto (abajo); esta skill cubre solo el código que depende del SDK S3.
 
 ## Qué dejó listo build
@@ -119,4 +119,4 @@ Léelas bajo demanda, no todas de golpe:
 
 Desde devtools: `mc alias set local http://minio:9000 minioadmin minioadmin && mc ready local`;
 `mc ls local/<bucket>` para inspeccionar objetos subidos.
-Recetas completas en `.claude/conventions/infra-validation.md`.
+Recetas completas en `{{keel:docs}}/conventions/infra-validation.md`.

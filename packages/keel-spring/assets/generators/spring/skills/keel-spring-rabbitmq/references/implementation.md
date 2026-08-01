@@ -2,7 +2,7 @@
 
 Complementa las secciones Publisher/Listener del SKILL.md con los patrones
 completos. El mapeo normativo DSL → código sigue en
-`.claude/conventions/mapping.md`.
+`{{keel:docs}}/conventions/mapping.md`.
 
 ## Topología en código, idempotente
 
@@ -140,4 +140,4 @@ no cambia**: sigue siendo `listener → IdempotencyGuard → UseCaseMediator →
 saltándose el mediator (lo prohíbe `constitution.md`) y duplicaría la deduplicación que ya hace el
 guard. La suscripción tiene `triggers` obligatorio precisamente para que esa operación exista.
 
-Detalle completo en `.claude/conventions/dependencies.md`.
+Detalle completo en `{{keel:docs}}/conventions/dependencies.md`.

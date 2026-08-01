@@ -1,7 +1,7 @@
 # RabbitMQ — troubleshooting
 
 Síntoma → causa → arreglo. Sondeo básico y recetas de infraestructura en
-`.claude/conventions/infra-validation.md`.
+`{{keel:docs}}/conventions/infra-validation.md`.
 
 ## `PRECONDITION_FAILED - inequivalent arg ...` al arrancar
 

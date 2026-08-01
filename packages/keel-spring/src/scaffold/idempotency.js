@@ -5,7 +5,7 @@
 // Todo lo de aquí es transversal al broker — la tabla de procesados, la
 // inserción atómica y la purga —, igual que en outbox.js. Lo único acoplado al
 // broker es QUIÉN llama al guard: el listener, que escribe el agente siguiendo
-// la skill .claude/skills/keel-spring-<broker>/.
+// la skill keel-spring-<broker>.
 
 import { javaFile, javaPath, subPackage } from './render.js';
 

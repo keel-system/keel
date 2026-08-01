@@ -254,8 +254,8 @@ ${assignments.join('\n')}`);
 # listado completo), a diferencia de GET clients; por eso el id de un client-scope se
 # busca por coincidencia exacta ",<nombre>$" sobre el csv id,name.
 #
-# Convenciones: .claude/conventions/infra-validation.md
-#               .claude/skills/keel-spring-keycloak/references/test-clients.md
+# Convenciones: docs/keel/conventions/infra-validation.md
+#               references/test-clients.md de la skill keel-spring-keycloak
 set -euo pipefail
 export MSYS_NO_PATHCONV=1
 

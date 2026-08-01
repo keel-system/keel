@@ -55,7 +55,7 @@ spring:
   es la red de seguridad.
 - Esa red **no cubre** el N+1 **entre agregados** (una consulta por elemento a otra
   raíz, resolviendo `embed`): no hay colección lazy que lotear. Ese es aplicativo y
-  se resuelve con el `<X>RefResolver` — `.claude/conventions/read-composition.md`.
+  se resuelve con el `<X>RefResolver` — `{{keel:docs}}/conventions/read-composition.md`.
 
 ## Locking optimista
 

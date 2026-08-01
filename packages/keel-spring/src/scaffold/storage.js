@@ -1,7 +1,7 @@
 // Object storage (capa storage): solo el contrato transversal. Build genera el
 // puerto de dominio FileStorage; el adaptador (S3/MinIO u otro) y el bean del
 // cliente dependen del proveedor elegido (keel-stack.json) y los escribe el
-// agente siguiendo la skill .claude/skills/keel-spring-s3/, parametrizados
+// agente siguiendo la skill keel-spring-s3, parametrizados
 // por storage.yaml por perfil.
 
 import { screamingSnake } from '../lib/naming.js';

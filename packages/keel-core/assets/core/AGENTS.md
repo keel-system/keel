@@ -22,7 +22,7 @@ y después, cada vez que el diseño cambie:  /keel-evolve
 3. **Diseñar** — `/keel-design specs/<servicio>`: entrevista al humano y construye el diseño **capa a capa** (domain → use-cases → dependencies → api → security → messaging → http-clients → persistence → storage), aprobando cada artefacto antes del siguiente. Si el servicio **depende de otros servidores** (necesita un dato que no es suyo), el bloque de integración ejecuta `/keel-consume` a partir del `INTEGRATION.md` del proveedor: entrevista la estrategia de cada dato (pedirlo al decidir vs. mantener una copia local) y escribe de una pasada las capas `dependencies`, `http-clients` y `messaging` coherentes entre sí. La invocación es automática dentro de `/keel-design`; se ejecuta a mano solo si la dependencia aparece con el diseño ya cerrado, o cuando el proveedor publica una versión nueva de su contrato. Las capas opcionales se declaran en el manifiesto solo si aplican. Referencia: `docs/dsl-reference.md` (índice) y `docs/dsl/<capa>.md`. El cierre ejecuta primero un **análisis de huecos** (lo que el diseño no dice y algún generador tendría que inventar) y produce después `specs/<servicio>/validation-scenarios.md` (escenarios Given/When/Then; formato en `docs/validation-scenarios.md`), el **contrato de equivalencia** con el que se validará todo servidor generado de este diseño, sea cual sea su stack; y, como paso final automático, ejecuta `/keel-handoff` para derivar `docs/<servicio>/DESIGN.md` (características + decisiones de diseño con su porqué) y actualizar el índice de servicios del `README.md`.
 4. **Validar** — `/keel-validate` (usa `keel validate specs/<servicio>` para schemas por capa + referencias cruzadas, y añade la checklist semántica).
 5. **Generar** — siempre **dos pasos**, y en este orden:
-   1. `keel-<tech> build specs/<servicio>` **desde este workspace**. Cada generador es un paquete npm con CLI propia: se instala con `npm i -g keel-<tech>` (ej. `keel-spring`; ver conocidos: `keel list`). El comando valida el diseño, **pregunta el stack** al diseñador (BD, broker, auth… — decisión manual, persistida en `keel-stack.json`) y genera en `services/<servicio>-<tech>/` el scaffolding transversal al stack más todo el conocimiento que el agente necesita (`.claude/` con skill propia, agentes, conventions y las guías por tecnología del stack elegido) y un snapshot del diseño en `specs/`. El proyecto queda como **repo autosuficiente**.
+   1. `keel-<tech> build specs/<servicio>` **desde este workspace**. Cada generador es un paquete npm con CLI propia: se instala con `npm i -g keel-<tech>` (ej. `keel-spring`; ver conocidos: `keel list`). El comando valida el diseño, **pregunta el stack** al diseñador (BD, broker, auth… — decisión manual, persistida en `keel-stack.json`) y genera en `services/<servicio>-<tech>/` el scaffolding transversal al stack más todo el conocimiento que el agente necesita (la skill del generador, sus agentes y las guías por tecnología del stack elegido, sembradas para los dos harnesses; las conventions en `docs/keel/`) y un snapshot del diseño en `specs/`. El proyecto queda como **repo autosuficiente**.
    2. `cd services/<servicio>-<tech>` y, **dentro de ese proyecto**, `/keel-generate-<tech>` (sin argumentos). Ahí el agente completa el código dependiente de la infra elegida y la lógica de negocio, y valida los escenarios contra el servidor real.
 
    No hay ninguna skill de generación en este workspace: el generador vive solo dentro del proyecto que produce. Si el diseño cambia, se re-ejecuta el paso 1 (solo añade archivos nuevos; con `--force` sobrescribe lo generado) y se vuelve a entrar al proyecto.
@@ -32,12 +32,15 @@ y después, cada vez que el diseño cambie:  /keel-evolve
 ## Estructura
 
 ```
-CLAUDE.md            # este archivo
+AGENTS.md            # este archivo (CLAUDE.md lo importa: es el mismo contexto con el nombre
+                     # que busca Claude Code; se edita AGENTS.md, nunca la copia)
 README.md            # índice de servicios diseñados (enlaza el DESIGN.md de cada uno); página de entrada del repo
 system.yaml          # el mapa del sistema, si el workspace tiene más de un servicio (de /keel-decompose)
                      # NO es una capa del DSL: describe cómo se reparte el encargo, no lo que hace un servicio
 .gitignore           # excluye services/ del repo del workspace (aquí solo se versiona el diseño)
-.claude/skills/      # las skills del flujo de diseño (las de los generadores viven en cada services/<x>/)
+.claude/ .opencode/  # las skills del flujo de diseño, sembradas para los dos harnesses de agente
+                     # soportados (mismo contenido, la convención de cada uno); las de los
+                     # generadores no están aquí: viven en cada services/<x>/
 schema/              # un JSON Schema por capa + common.schema.json ($defs compartidos)
 specs/<servicio>/    # el diseño de cada servicio, un artefacto por capa — la fuente de verdad
                      # (+ validation-scenarios.md: escenarios de validación derivados, al cerrar el diseño;
@@ -54,7 +57,8 @@ docs/                # methodology, dsl-reference (índice), dsl/<capa>.md, buil
 docs/system/         # el encargo y su descomposición (de /keel-decompose): tdr.md, SYSTEM.md
                      # y briefs/<servicio>.md — un encargo por servicio, entrada de /keel-design
 services/            # servicios generados por `keel-<tech> build` (un repo git propio cada uno,
-                     # autosuficiente: trae su .claude/ con la skill del generador y el snapshot del diseño)
+                     # autosuficiente: trae la skill del generador —para los dos harnesses—,
+                     # sus conventions en docs/keel/ y el snapshot del diseño)
 ```
 
 ## Reglas para el agente

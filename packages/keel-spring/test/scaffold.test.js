@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadService } from 'keel-core';
+import { HARNESSES, loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
 import { assetsDir, wrapperDir, GRADLE_VERSION } from '../src/lib/assets.js';
 
@@ -306,7 +306,7 @@ test('CLAUDE.md contextual: specs, solo capas declaradas y skill local con conve
   const workspace = makeWorkspace();
   scaffoldService({ ...loadFixture(), workspace });
 
-  const claude = read(workspace, '.claude/CLAUDE.md');
+  const claude = read(workspace, 'CLAUDE.md');
   assert.ok(claude.includes('specs/service.keel.yaml')); // snapshot local del diseño
   assert.ok(claude.includes('../../specs/product-catalog/')); // canónico del workspace
   assert.ok(claude.includes('persistence.keel.yaml'));
@@ -316,8 +316,8 @@ test('CLAUDE.md contextual: specs, solo capas declaradas y skill local con conve
   assert.ok(claude.includes('keel-stack.json'));
   assert.ok(claude.includes('infra/docker-compose.yaml')); // la infraestructura de prueba vive en infra/
   assert.ok(claude.includes('keel-spring-code')); // la skill orquesta los subagentes
-  assert.ok(claude.includes('.claude/architecture.md'));
-  assert.ok(claude.includes('.claude/constitution.md'));
+  assert.ok(claude.includes('docs/keel/architecture.md'));
+  assert.ok(claude.includes('docs/keel/constitution.md'));
   // Sin pruebas unitarias en el flujo: el gate es compilar + los escenarios end-to-end.
   assert.ok(claude.includes('./gradlew build -x test'));
   assert.ok(claude.includes('Sin pruebas unitarias'));
@@ -339,12 +339,12 @@ test('CLAUDE.md contextual: specs, solo capas declaradas y skill local con conve
   assert.ok(claude.includes('## Quién ejecuta esto'));
   assert.ok(claude.includes('**único orquestador**'));
 
-  // architecture.md y constitution.md: documentos de primer nivel en .claude/.
-  const architecture = read(workspace, '.claude/architecture.md');
+  // architecture.md y constitution.md: documentos de primer nivel en docs/keel/.
+  const architecture = read(workspace, 'docs/keel/architecture.md');
   assert.ok(architecture.includes('hexagonal'));
   assert.ok(architecture.includes('domain'));
   assert.ok(architecture.includes('application'));
-  const constitution = read(workspace, '.claude/constitution.md');
+  const constitution = read(workspace, 'docs/keel/constitution.md');
   assert.ok(constitution.includes('UseCaseMediator'));
   assert.ok(constitution.includes('XxxRepositoryImpl'));
 
@@ -373,14 +373,14 @@ test('CLAUDE.md contextual: specs, solo capas declaradas y skill local con conve
   assert.ok(skill.includes('Despliegue en producción'));
   assert.ok(skill.includes('parameters/production'));
   // El detalle del gating no se duplica: remite a orchestration.md.
-  assert.ok(skill.includes('.claude/orchestration.md'));
+  assert.ok(skill.includes('docs/keel/orchestration.md'));
 
   // orchestration.md: el pipeline canónico, instalado junto a architecture/constitution.
-  const orchestration = read(workspace, '.claude/orchestration.md');
+  const orchestration = read(workspace, 'docs/keel/orchestration.md');
   assert.ok(orchestration.includes('Ciclos de fix'));
   assert.ok(!orchestration.includes('del workspace y del proyecto'));
 
-  // Conventions siempre, hermanas de agents/ y skills/ en .claude/ (las lee
+  // Conventions siempre, junto al resto de docs de apoyo en docs/keel/ (las lee
   // cualquiera de los 4 subagentes, no solo la skill orquestadora); el fixture
   // no elige broker/auth/cache/storage → sin skills de esas categorías, pero
   // declara persistence → keel-spring-database (default postgresql) acompaña
@@ -391,11 +391,11 @@ test('CLAUDE.md contextual: specs, solo capas declaradas y skill local con conve
   const conventions = fs.readdirSync(conventionsDir).filter((f) => f.endsWith('.md'));
   assert.ok(conventions.length >= 9);
   for (const convention of conventions) {
-    assert.ok(exists(workspace, `.claude/conventions/${convention}`), `falta .claude/conventions/${convention}`);
+    assert.ok(exists(workspace, `docs/keel/conventions/${convention}`), `falta docs/keel/conventions/${convention}`);
   }
   // La derivación del contrato de cable: lo único que permite escribir las pruebas
   // en caja negra sin adivinar la forma de la respuesta.
-  assert.ok(read(workspace, '.claude/conventions/integration-tests.md').includes('Del DSL al cable'));
+  assert.ok(read(workspace, 'docs/keel/conventions/integration-tests.md').includes('Del DSL al cable'));
   assert.ok(!exists(workspace, '.claude/skills/keel-generate-spring/conventions'));
   assert.ok(!exists(workspace, '.claude/skills/keel-generate-spring/references'));
   const skillDirs = fs.readdirSync(path.join(workspace, 'services', 'product-catalog-spring', '.claude', 'skills')).sort();
@@ -413,7 +413,7 @@ test('skill de base de datos: directorio completo con el dialecto del stack, sol
   // el CLAUDE.md remite a la skill desde el paso de persistence.
   assert.ok(exists(workspace, '.claude/skills/keel-spring-database/references/dialects/postgresql.md'));
   assert.ok(exists(workspace, '.claude/skills/keel-spring-database/references/dialects/h2.md'));
-  const claude = read(workspace, '.claude/CLAUDE.md');
+  const claude = read(workspace, 'CLAUDE.md');
   assert.ok(claude.includes('.claude/skills/keel-spring-database/SKILL.md'));
 
   // Sin capa persistence no hay skill de BD.
@@ -425,6 +425,50 @@ test('skill de base de datos: directorio completo con el dialecto del stack, sol
   delete strippedManifest.layers.persistence;
   scaffoldService({ manifest: strippedManifest, layers: stripped, workspace: bare });
   assert.ok(!fs.existsSync(path.join(bare, 'services', 'product-catalog-spring', '.claude', 'skills', 'keel-spring-database')));
+});
+
+test('los dos harnesses reciben el mismo conocimiento, cada uno en su convención', () => {
+  // La propiedad que hace que el proyecto sirva para cualquiera de los dos sin
+  // elegir nada al generarlo: ninguna proyección puede quedarse corta. Se compara
+  // el inventario, no los bytes — el frontmatter sí difiere, es lo que traduce.
+  const workspace = makeWorkspace();
+  scaffoldService({ ...loadFixture(), workspace });
+  const projectDir = path.join(workspace, 'services', 'product-catalog-spring');
+
+  const inventory = (harness) => {
+    const root = path.join(projectDir, harness.tokens.skills.split('/')[0]);
+    const walk = (dir, prefix = '') => {
+      const out = [];
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+        if (entry.isDirectory()) out.push(...walk(path.join(dir, entry.name), rel));
+        else out.push(rel);
+      }
+      return out;
+    };
+    // Se normaliza el nombre del directorio contenedor (skills/ vs agent/): lo que
+    // se compara es qué skills y qué agentes hay, no cómo los llama cada harness.
+    const skillsDirName = path.basename(harness.tokens.skills);
+    const agentsDirName = path.basename(harness.tokens.agents);
+    return walk(root)
+      .map((rel) => rel.replace(new RegExp(`^${skillsDirName}/`), 'SKILL:').replace(new RegExp(`^${agentsDirName}/`), 'AGENT:'))
+      // Los comandos son un artefacto propio de los harnesses que los separan de
+      // las skills: no tienen contraparte y quedan fuera de la comparación.
+      .filter((rel) => rel.startsWith('SKILL:') || rel.startsWith('AGENT:'))
+      .sort();
+  };
+
+  const [first, ...rest] = HARNESSES;
+  const expected = inventory(first);
+  assert.ok(expected.length > 0);
+  for (const harness of rest) {
+    assert.deepEqual(inventory(harness), expected, `${harness.id} no recibe el mismo conocimiento que ${first.id}`);
+  }
+
+  // Y el contexto del repo existe con el nombre que busca cada uno.
+  for (const harness of HARNESSES) {
+    assert.ok(fs.existsSync(path.join(projectDir, harness.contextFile)), `falta ${harness.contextFile}`);
+  }
 });
 
 test('source set integrationTest: compila sin src/main/java (paralelismo real)', () => {
@@ -616,7 +660,7 @@ test('sin capa security no hay aprovisionamiento de identidad que generar', () =
   assert.ok(!exists(workspace, 'infra/test-credentials.env'));
 });
 
-test('agentes de la orquestación: copiados al .claude/agents/ del proyecto', () => {
+test('agentes de la orquestación: proyectados al directorio de agentes de cada harness', () => {
   const workspace = makeWorkspace();
   scaffoldService({ ...loadFixture(), workspace });
 
@@ -674,7 +718,7 @@ test('skills por tecnología: solo las del stack elegido', () => {
   scaffoldService({ manifest: patchedManifest, layers: patched, workspace, stack: { broker: 'rabbitmq' } });
   assert.equal(fs.readFileSync(refPath, 'utf8'), 'editado');
 
-  const claude = read(workspace, '.claude/CLAUDE.md');
+  const claude = read(workspace, 'CLAUDE.md');
   assert.ok(claude.includes('messaging.keel.yaml'));
   assert.ok(claude.includes('.claude/skills/keel-spring-rabbitmq/SKILL.md'));
 });

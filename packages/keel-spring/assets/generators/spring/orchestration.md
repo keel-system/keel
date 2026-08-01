@@ -3,7 +3,7 @@
 Cómo la skill `/keel-generate-spring` — ejecutada **dentro de este proyecto** (`cd` a la
 raíz y `/keel-generate-spring`, sin argumentos) — lo completa hasta dejarlo funcional y
 validado. La skill **no escribe código**: es la **orquestadora** de cinco subagentes
-instalados en `.claude/agents/`, y toma sus decisiones de avance/relanzamiento (gating)
+instalados como subagentes del proyecto, y toma sus decisiones de avance/relanzamiento (gating)
 sobre el bloque estructurado (`status`, `blockers`, `failures`…) con el que cada agente
 cierra su reporte.
 
@@ -41,7 +41,7 @@ verde va del script directo a la fase 3 **sin invocar a ningún árbitro**.
 
 ```mermaid
 flowchart TB
-    PRE["⚙ Precondiciones (cwd = raíz del proyecto):<br/>snapshot del diseño en specs/ · specs/validation-scenarios.md<br/>keel-stack.json · .claude/ completo"]
+    PRE["⚙ Precondiciones (cwd = raíz del proyecto):<br/>snapshot del diseño en specs/ · specs/validation-scenarios.md<br/>keel-stack.json · skills y agentes instalados"]
 
     PRE --> F1
     subgraph F1["Fase 1 — tres agentes en paralelo"]
@@ -143,7 +143,7 @@ recursos:
 
 | Agente | Responsabilidad | Qué lee | Qué NO hace |
 |---|---|---|---|
-| `keel-spring-code` | Completa TODOs, lógica de negocio, invariantes y adaptadores del stack hasta `./gradlew build -x test` en verde. Antes de cada handler ejecuta la auditoría de [flow-fidelity](conventions/flow-fidelity.md). Relanzado desde la fase 2, lee la evidencia cruda de `build/keel-failures/` y cierra verificando su fix con `./gradlew integrationTest --tests '<ClaseAfectada>'`. | `.claude/CLAUDE.md` del proyecto (orden de capas), `architecture.md`, `constitution.md`, `specs/`, conventions ([mapping](conventions/mapping.md) estricto) y las skills `keel-spring-<tech>` del stack (SKILL.md primero, `references/` bajo demanda). | No escribe pruebas unitarias ni ejecuta `./gradlew test`; no toca contenedores ni ejecuta `bootRun`. En la fase 1 tampoco ejecuta escenarios; en el ciclo de fix ejecuta **solo** las clases que le señaló el arbitraje — y ejecutar `src/integrationTest/` nunca es editarlo. Su verde por clase no aprueba escenarios. |
+| `keel-spring-code` | Completa TODOs, lógica de negocio, invariantes y adaptadores del stack hasta `./gradlew build -x test` en verde. Antes de cada handler ejecuta la auditoría de [flow-fidelity](conventions/flow-fidelity.md). Relanzado desde la fase 2, lee la evidencia cruda de `build/keel-failures/` y cierra verificando su fix con `./gradlew integrationTest --tests '<ClaseAfectada>'`. | El archivo de contexto del proyecto (orden de capas), `architecture.md`, `constitution.md`, `specs/`, conventions ([mapping](conventions/mapping.md) estricto) y las skills `keel-spring-<tech>` del stack (SKILL.md primero, `references/` bajo demanda). | No escribe pruebas unitarias ni ejecuta `./gradlew test`; no toca contenedores ni ejecuta `bootRun`. En la fase 1 tampoco ejecuta escenarios; en el ciclo de fix ejecuta **solo** las clases que le señaló el arbitraje — y ejecutar `src/integrationTest/` nunca es editarlo. Su verde por clase no aprueba escenarios. |
 | `keel-spring-infra` | Levanta `infra/docker-compose.yaml` con docker o podman (detección: `$CONTAINER_RUNTIME` → `docker` → `podman`), sondea con `infra/validate-infra.sh` (reintentos) y deja la infraestructura **arriba** para la validación. Con auth, **ejecuta y verifica** `infra/init-keycloak.sh` (que genera build) contra los valores de `infra/test-credentials.env`: no lo redacta. | [infra-validation](conventions/infra-validation.md) (sondeo por tecnología vía el contenedor `devtools`), la reference de auth del stack. | Nunca edita código del proyecto; solo corrige causas operativas (puerto ocupado, contenedor viejo). No baja la infraestructura al terminar. |
 | `keel-spring-tests` | Traduce **una vez** los escenarios `FL-*` a pruebas de integración JUnit en `src/integrationTest/java/**/flows/` (una clase por flujo, `@DisplayName` con el id, `@BeforeAll` con `resetState()`), en caja negra: HTTP y JSON, jamás DTOs ni entidades. Cierra con `./gradlew compileIntegrationTestJava` en verde. | `specs/` (todas las capas + `validation-scenarios.md`), `docs/openapi.yaml`, [integration-tests](conventions/integration-tests.md) y la `AbstractFlowIT` que generó build. | **No lee `src/main/java`** (es la garantía de independencia), no implementa negocio, no escribe pruebas unitarias y no ejecuta las IT en la fase 1. |
 | `keel-spring-validate` | **Árbitro**, y solo eso: recibe los escenarios que el script ya puntuó en FALLO y decide, contra el `Then` original y la evidencia de `build/keel-failures/`, si la culpa es `code \| test \| harness \| design`. **Se invoca solo si hay rojo**: con la matriz al 100% no corre. | `specs/validation-scenarios.md`, [integration-tests](conventions/integration-tests.md), [infra-validation](conventions/infra-validation.md) y los volcados de los fallos que recibe. | **No ejecuta la suite ni compone la matriz** (eso es del script: una pasada nueva sobrescribe los volcados). No corrige código ni escribe/edita tests; no siembra datos a mano; no baja la infraestructura. |
@@ -162,7 +162,7 @@ el orquestador arbitre sobre trabajo que no puede atribuir; y las restricciones 
 válida la validación —el agente de pruebas sin leer `src/main/java`, el de código sin tocar
 `src/integrationTest/`, el de calidad sin cambiar comportamiento— son **del agente**, no del
 proceso: un subagente lanzado por él no las hereda. Lo garantiza el `tools:` de cada
-`.claude/agents/*.md`, que no incluye la herramienta de lanzar agentes; el frontmatter es el
+su archivo de agente, que no les concede la herramienta de lanzar agentes; el frontmatter es el
 candado y la regla escrita en cada agente, el porqué.
 
 ## Handoffs: qué campo consume quién
@@ -285,8 +285,8 @@ investigación inútil aguas arriba.
 ## Autosuficiencia del proyecto generado
 
 `build` deja en este proyecto todo lo que el pipeline necesita: la skill orquestadora
-(`.claude/skills/keel-generate-spring/`), los cinco agentes (`.claude/agents/`), las
-conventions (`.claude/conventions/`), `architecture.md` y `constitution.md`, las skills por
+(`keel-generate-spring`), los cinco agentes, las
+conventions (`{{keel:docs}}/conventions/`), `architecture.md` y `constitution.md`, las skills por
 tecnología del stack elegido y un snapshot del diseño en `specs/`. **No hay nada del
 generador en el workspace de diseño**: el pipeline se ejecuta siempre con el cwd en esta
 raíz, y funciona idéntico desde un clon del repo, sin el workspace.
