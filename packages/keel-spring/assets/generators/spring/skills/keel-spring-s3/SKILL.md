@@ -18,7 +18,7 @@ y prod (S3); la diferencia (endpoint / path-style) vive en `storage.yaml` por pe
 ## Qué dejó listo build
 
 - `build.gradle`: `software.amazon.awssdk:s3` (AWS SDK v2).
-- `parameters/<perfil>/storage.yaml`: provider, endpoint, región, credenciales, bucket y `path-style-access` por perfil (local apunta al MinIO del compose; test trae valores dummy), más la **política de cada bucket del diseño** bajo `storage.buckets.<bucket>`: `visibility`, `max-size-mb` y `allowed-content-types`. Aplícala desde ahí; no la re-derives ni la hardcodees.
+- `parameters/<perfil>/storage.yaml`: provider, endpoint, región, credenciales, bucket y `path-style-access` por perfil (local apunta al MinIO del compose; test trae valores dummy), más la **política de cada bucket del diseño** bajo `storage.buckets.<bucket>`: `visibility`, `max-size-mb` y `allowed-content-types`. Al código entra por el puerto `StoragePolicies`/`BucketPolicy` que genera `build`; no la re-derives ni la hardcodees.
 - `spring.servlet.multipart.max-file-size` / `max-request-size` en `application.yaml`, con **holgura** sobre el mayor `maxSizeMb` declarado (sin ningún límite Spring corta en 1MB; con el límite exacto, Tomcat emitiría el 413 antes del caso de uso y ninguna guarda anterior del diseño podría precederlo). El límite de negocio lo comprueba el caso de uso, en el orden que fija el diseño.
 - `ApiExceptionHandler` con los handlers de `MaxUploadSizeExceededException` (413 `FILE_TOO_LARGE`) y `MissingServletRequestPartException` (400): no los redeclares.
 - `infra/docker-compose.yaml`: MinIO (9000 + consola 9001, minioadmin/minioadmin) — solo con `storage: minio`.
@@ -56,7 +56,11 @@ public class S3Config {
 
 ## Adaptador (`infrastructure/storage/S3FileStorage`)
 
-`@Component` que implementa `FileStorage` inyectando `S3Client` y `@Value("${storage.bucket}")`:
+`@Component` que implementa `FileStorage` inyectando `S3Client` y el puerto
+`StoragePolicies` (lo genera `build`; su implementación `StorageProperties` bindea
+`storage.buckets.*`). **No hay clave `storage.bucket` global**: el nombre físico sale
+siempre de `policies.forBucket(StoragePolicies.<BUCKET>).bucket()`, con la constante
+del bucket que el diseño declara.
 
 - `upload` → `s3Client.putObject(PutObjectRequest..., RequestBody.fromBytes(content))` y devuelve un `StoredObject`
 - `download` → `s3Client.getObjectAsBytes(GetObjectRequest...).asByteArray()`
@@ -69,15 +73,29 @@ El campo `url` depende del bucket: con acceso público, la URL estable del
 objeto; con acceso firmado, **null** — la URL caduca, así que no se persiste y
 se pide al leer con `signedUrl(storageKey)`.
 
-Valida content-type y tamaño según los `buckets` declarados en `storage.keel.yaml`
-antes de subir (error de negocio, no excepción genérica).
+Valida content-type y tamaño **en el caso de uso**, antes de llamar al puerto, para
+poder lanzar el error declarado (`FILE_TOO_LARGE`, `UNSUPPORTED_CONTENT_TYPE`) y no
+una excepción genérica del SDK. Los valores no se escriben a mano: el handler
+inyecta `StoragePolicies` y pregunta.
+
+```java
+BucketPolicy policy = policies.forBucket(StoragePolicies.PRODUCT_IMAGES);
+if (!policy.allowsContentType(contentType)) throw new UnsupportedContentTypeError(...);
+if (!policy.allowsSize(content.length)) throw new FileTooLargeError(...);
+```
+
+Que la aplicación pueda hacer esto sin `@Value` es justo el motivo de que el puerto
+exista: `maxSizeMb` y `allowedContentTypes` viven en `storage.keel.yaml`, y copiarlos
+como literales en el handler crea un espejo que nadie sincroniza cuando el diseño
+cambia.
 
 **Nombre físico del bucket**: sale de la config, nunca lo inventes. Cada bucket
 declarado en `storage.keel.yaml` tiene su nombre real en
 `storage.buckets.<nombreDelDiseño>.bucket` del fragmento
-`parameters/<perfil>/storage.yaml`. Es el contrato con el sidecar `minio-init`
-de `infra/docker-compose.yaml`, que ya ha creado exactamente esos buckets: si el
-adaptador usa otro nombre, sube a un bucket que nadie preparó.
+`parameters/<perfil>/storage.yaml`, y lo devuelve `BucketPolicy.bucket()`. Es el
+contrato con el sidecar `minio-init` de `infra/docker-compose.yaml`, que ya ha creado
+exactamente esos buckets: si el adaptador usa otro nombre, sube a un bucket que nadie
+preparó.
 
 **Bucket `visibility: public`**: crearlo no lo hace público — S3 y MinIO los
 crean privados. En el entorno de prueba la policy de lectura anónima ya la

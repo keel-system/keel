@@ -401,6 +401,65 @@ export function checkCrossRefs({ layers, wip = false }) {
     }
   }
 
+  // use-cases: una caché que embebe otro agregado tiene que poder invalidarse cuando
+  // cambia ESE agregado, no solo cuando cambia la entidad principal. `invalidatedBy`
+  // se validaba solo en la dirección barata —que el nombre del evento exista—, que no
+  // ve el fallo caro: una query que proyecta `brand` como objeto anidado y lista
+  // únicamente eventos de producto sirve el nombre (o el estado) viejo de la marca
+  // hasta que expire el TTL, y ninguna capa del diseño lo delata. Peor aún cuando la
+  // entidad embebida no publica ningún evento: ahí la invalidación no es que se haya
+  // olvidado, es que es MECÁNICAMENTE IMPOSIBLE, y eso solo se descubre con la suite
+  // de integración y la infraestructura levantada.
+  //
+  // Qué muta una entidad: los eventos que emiten los commands que la devuelven. Es la
+  // aproximación que el DSL permite, y basta para separar los dos casos.
+  const mutationEvents = new Map();
+  for (const op of Object.values(operations)) {
+    if (op.kind !== 'command') continue;
+    const mutated = op.output?.entity ?? op.input?.entity;
+    if (!mutated || !entities.has(mutated)) continue;
+    for (const event of op.emits ?? []) {
+      if (!mutationEvents.has(mutated)) mutationEvents.set(mutated, new Set());
+      mutationEvents.get(mutated).add(event);
+    }
+  }
+  for (const [opName, op] of Object.entries(operations)) {
+    // Sin capa messaging y con el diseño en progreso, los nombres de invalidatedBy ya
+    // están en pending: no hay nada firme contra lo que contrastar todavía.
+    if (!op.cache || (!messaging && wip)) continue;
+    const output = op.output;
+    if (!output || output === 'void' || !output.entity || !entities.has(output.entity)) continue;
+    const where = `use-cases: ${opName}.cache`;
+    const invalidatedBy = new Set(op.cache.invalidatedBy ?? []);
+    const covers = (events) => [...events].some((event) => invalidatedBy.has(event));
+    let ownReported = false;
+
+    for (const relName of output.embed ?? []) {
+      const target = domain.entities?.[output.entity]?.relations?.[relName]?.entity;
+      if (!target || !entities.has(target)) continue; // relación rota: la reporta checkEmbed
+      const mutators = mutationEvents.get(target) ?? new Set();
+      if (covers(mutators)) continue;
+      if (target === output.entity) ownReported = true;
+      errors.push(
+        mutators.size === 0
+          ? `${where}: la caché proyecta '${target}' anidado (embed: [${relName}]) y ninguna operación publica eventos de '${target}': el objeto embebido no tiene forma de invalidarse antes del TTL — declara el evento en messaging y añádelo a invalidatedBy, o quita el embed`
+          : `${where}: la caché proyecta '${target}' anidado (embed: [${relName}]) y invalidatedBy no incluye ninguno de los eventos que lo mutan [${[...mutators].sort().join(', ')}] — el objeto embebido queda rancio hasta el TTL`
+      );
+    }
+
+    // La entidad cacheada en sí. Aviso y no error: aceptar staleness acotado por el TTL
+    // en la entidad principal es una decisión legítima (y a veces el propósito de la
+    // caché), mientras que un embed rancio suele sorprender a quien lee el contrato.
+    const own = mutationEvents.get(output.entity) ?? new Set();
+    const uncovered = [...own].filter((event) => !invalidatedBy.has(event)).sort();
+    if (!ownReported && uncovered.length > 0) {
+      warnings.push(
+        `${where}: '${output.entity}' cambia con [${uncovered.join(', ')}], que invalidatedBy no lista — ` +
+          'si el staleness hasta el TTL es deliberado, ignóralo; si no, la lectura sirve datos viejos'
+      );
+    }
+  }
+
   // use-cases: consistencia de proyección — si la mayoría de las operaciones que
   // devuelven una entidad resuelven una referencia con `embed`, la que no lo hace
   // suele ser un olvido, no una decisión.
@@ -975,6 +1034,28 @@ export function checkCrossRefs({ layers, wip = false }) {
     for (const index of spec?.indexes ?? []) {
       for (const member of index ?? []) {
         checkPersistenceMember(entityName, entity, member, 'indexes');
+      }
+    }
+
+    // Una natural key (= constraint UNIQUE) sobre un campo `computed` de una entidad
+    // hija es el patrón de la colección ordenada por posición: `(productId, position)`
+    // con `position` recompactada al borrar y reasignada al reordenar. El agregado se
+    // guarda entero, y cualquier orden de escritura que pase por un estado intermedio
+    // —dos filas compartiendo posición a mitad del reparto— choca contra el índice
+    // único, que es inmediato y no diferido, incluso sin concurrencia ninguna.
+    // El diseño tiene ya toda la información para verlo; el generador solo lo descubre
+    // con la base de datos delante y un fallo por cada fila afectada.
+    const aggregate = aggregateOf.get(entityName);
+    const isChild = aggregate !== undefined && aggregates[aggregate]?.root !== entityName;
+    if (isChild) {
+      const computed = (spec?.naturalKey ?? []).filter(
+        (member) => entity.fields?.[String(member).split('.')[0]]?.computed
+      );
+      for (const member of computed) {
+        warnings.push(
+          `persistence: entities.${entityName}.naturalKey: '${member}' es un campo computed de una entidad interna del agregado '${aggregate}', y la natural key es una constraint UNIQUE — ` +
+            'al recalcularlo para toda la colección el guardado debe evitar el estado intermedio en que dos filas comparten valor; si el recálculo no es masivo, ignóralo'
+        );
       }
     }
   }

@@ -86,7 +86,8 @@ audiencia** que meta la audiencia del servicio (`security.audience`, por defecto
 el nombre del servicio) en el claim `aud`: admin console → Clients →
 `<service-client>` → Client scopes → dedicated scope → Add mapper → Audience,
 con «Included Custom Audience» = la audiencia. Sin ese mapper el token no trae
-el `aud` esperado y el servicio responde 401.
+el `aud` esperado y el servicio responde 403 (el token se autentica; lo que falla
+es la autorización).
 
 Token:
 
@@ -109,4 +110,5 @@ distingue (`level: service` + scopes) y la validación debe ejercitar el flujo r
 4. M2M: en el token `client_credentials` comprueba el claim `scope` (los scopes
    del diseño, separados por espacio) y —si `validateAudience: true`— que `aud`
    incluye la audiencia del servicio. Cliente sin el scope exigido → 403; token
-   con `aud` de otro servicio → 401.
+   con `aud` de otro servicio → 403 también (ver `test-clients.md`: el 401 queda
+   reservado a la ausencia de credencial válida).

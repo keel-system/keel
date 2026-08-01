@@ -499,11 +499,11 @@ function securityYaml(model, profile) {
 function storageYaml(model, profile) {
   const { stack } = model;
   const isMinio = stack.storage === 'minio';
-  const lines = [
-    'storage:',
-    `  provider: ${stack.storage}`,
-    `  bucket: ${envValue(profile, 'STORAGE_BUCKET', `${model.service.name}-files`)}`
-  ];
+  // Sin clave `bucket` global: los buckets son los que declara el diseño, bajo
+  // `storage.buckets.<nombre>`. Una clave por defecto invitaba a leerla con
+  // @Value y a subir a un bucket que el sidecar minio-init nunca crea — el fallo
+  // solo aparece al leer el objeto, muy lejos de la subida que lo causó.
+  const lines = ['storage:', `  provider: ${stack.storage}`];
   if (isMinio) {
     lines.push(`  endpoint: ${envValue(profile, 'STORAGE_ENDPOINT', 'http://localhost:9000')}`);
   } else if (profile === 'local') {

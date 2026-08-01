@@ -336,7 +336,6 @@ const PARAMETER_PURPOSES = {
   SECURITY_API_KEY: 'Clave API que deben enviar los clientes del servicio.',
   SECURITY_AUDIENCE: 'Audiencia (claim `aud`) exigida a los tokens de clientes máquina.',
   SECURITY_CORS_ALLOWED_ORIGINS: 'Orígenes permitidos por CORS (separados por coma).',
-  STORAGE_BUCKET: 'Bucket por defecto del object storage.',
   STORAGE_ENDPOINT: 'Endpoint del object storage compatible S3.',
   STORAGE_REGION: 'Región del object storage.',
   STORAGE_ACCESS_KEY: 'Access key del object storage.',

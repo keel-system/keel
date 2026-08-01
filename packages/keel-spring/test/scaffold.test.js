@@ -293,7 +293,9 @@ test('README.md: guía de despliegue productivo con pasos y parámetros obligato
   scaffoldService({ manifest: patchedManifest, layers: patched, workspace: rich, stack: { broker: 'kafka', auth: 'keycloak', storage: 'minio' } });
   const richReadme = read(rich, 'README.md');
   assert.ok(richReadme.includes('| `KAFKA_BOOTSTRAP_SERVERS` |'));
-  assert.ok(richReadme.includes('| `STORAGE_BUCKET` |'));
+  // Un bucket por el que declara el diseño; no hay bucket "por defecto".
+  assert.ok(richReadme.includes('| `STORAGE_BUCKET_PRODUCT_IMAGES` |'));
+  assert.ok(!richReadme.includes('| `STORAGE_BUCKET` |'));
   assert.ok(richReadme.includes('| `STORAGE_ENDPOINT` |')); // solo con minio
   assert.ok(richReadme.includes('| `OAUTH2_ISSUER_URI` |'));
   // KAFKA_GROUP_ID tiene default: operativo, no obligatorio.

@@ -148,6 +148,7 @@ tocar nada: un rojo con la lectura en verde es un defecto del sondeo del generad
 - [ ] Claves con UUID, sin nombre del cliente ni PII.
 - [ ] `NoSuchKeyException` → error de dominio; ninguna clase del SDK fuera de infrastructure.
 - [ ] Presigned con expiración del diseño y host alcanzable por el consumidor.
-- [ ] Nombre de bucket leído de `storage.buckets.<nombre>.bucket`, nunca literal en el código.
+- [ ] Nombre de bucket leído del puerto `StoragePolicies` (`forBucket(...).bucket()`), nunca literal en el código ni por `@Value("${storage.bucket}")`, que ya no existe.
+- [ ] `maxSizeMb` y `allowedContentTypes` consultados con `BucketPolicy`, no copiados como constantes en el caso de uso.
 - [ ] En local, el bucket lo prepara `minio-init` (compose); la app lo asegura igualmente para entornos reales.
 - [ ] Cada bucket `visibility: public` con su bucket policy de lectura anónima aplicada (idempotente, también sobre buckets ya existentes).

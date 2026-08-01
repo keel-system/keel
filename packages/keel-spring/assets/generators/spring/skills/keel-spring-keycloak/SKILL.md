@@ -38,8 +38,8 @@ diseño exija lógica que el mapeo de claims no cubre — p. ej. autorización p
    —si `validateAudience: true`— el mapper de audiencia (receta en
    `references/environment.md`). Los nombres de cliente y scopes salen **exactos**
    del diseño; no inventes clientes ni scopes.
-   Si los escenarios además distinguen "sin scope" (403) de "audiencia inválida"
-   (401), monta los clientes de prueba con la plantilla de
+   Si los escenarios además distinguen "sin scope" de "audiencia inválida" —los dos
+   responden 403, por causas distintas—, monta los clientes de prueba con la plantilla de
    `references/test-clients.md`: el mapper de audiencia y los scopes de permisos
    deben vivir en client scopes **separados**, o cada variante negativa mezclará
    las dos condiciones y no se podrá afirmar cuál causó la respuesta.
@@ -50,7 +50,8 @@ diseño exija lógica que el mapeo de claims no cubre — p. ej. autorización p
 4. **Verifica el mapeo**: un usuario sin el rol requerido debe recibir 403 y uno con
    él 2xx, según `access.rules` del diseño. Para M2M: cliente sin el scope exigido →
    403, con él → 2xx; y con `validateAudience: true`, token sin la audiencia del
-   servicio en `aud` → 401.
+   servicio en `aud` → 403 (no 401: el token se autentica, y lo que lo rechaza es
+   el `AudienceAuthorizationFilter`, que es autorización).
 
 ## Referencias
 

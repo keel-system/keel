@@ -32,15 +32,24 @@ description: Guía de implementación de mensajería con Amazon SNS/SQS (LocalSt
 | Lo que tienes en la mano | API | Qué publica |
 |---|---|---|
 | `String` ya serializado (el payload del outbox) | `send(destination, MessageBuilder.withPayload(payload)...)` | el `String` tal cual ✅ |
-| Objeto Java (`EventEnvelope<…>`) | `sendNotification(topic, envelope, subject)` | JSON del objeto ✅ |
+| Objeto Java (`EventEnvelope<…>`) | serializar con el `ObjectMapper` y `send` con `withPayload(json)` | JSON, y admite cabeceras ✅ |
+| Objeto Java (`EventEnvelope<…>`) | `sendNotification(topic, envelope, subject)` | JSON del objeto, pero **sin message attributes** ⚠️ |
 | Objeto Java (`EventEnvelope<…>`) | `send(destination, MessageBuilder.withPayload(envelope)...)` | **el `toString()` del record** ❌ |
 
-La tercera fila es el error caro: compila, publica sin lanzar, y el cuerpo del mensaje acaba
+La cuarta fila es el error caro: compila, publica sin lanzar, y el cuerpo del mensaje acaba
 siendo `EventEnvelope[metadata=EventMetadata[...], data=...]` — texto plano que ningún consumidor
 parsea y que rompe el contrato de `docs/asyncapi.yaml`. **Nunca metas un objeto en
 `MessageBuilder.withPayload`.** Si necesitas cabeceras *y* objeto a la vez, serializa tú con el
 `ObjectMapper` de la aplicación (el bean de `JacksonConfig`, con `TimestampModule`) y manda el
 `String`.
+
+**El tercer argumento de `sendNotification` es el `Subject` de SNS, no un message attribute**, y esa
+distinción decide si los mensajes llegan. `infra/init-messaging.sh` suscribe cada cola con
+`RawMessageDelivery=true` y una `FilterPolicy` sobre el message attribute **`eventType`**: con raw
+delivery el Subject se descarta por completo, así que un mensaje publicado con `sendNotification` no
+trae `eventType`, la `FilterPolicy` no casa y la cola **no recibe nada**. No hay error, ni log, ni
+excepción: los escenarios de integración simplemente no ven el evento y el fallo parece del arnés.
+Por eso `sendNotification` no sirve para publicar aquí, ni siquiera en el camino `best-effort`.
 
 Qué implementas depende de la `reliability` declarada en `messaging.keel.yaml`:
 
@@ -71,31 +80,48 @@ public class SnsOutboxDispatcher implements OutboxDispatcher {
 Debe **lanzar** si la entrega no se confirma: el relay cuenta el intento y reintenta.
 
 **`best-effort`** — implementa cada `<Evento>Publisher` en `infrastructure/messaging` (elimina su
-stub). Aquí tienes el objeto, no un `String`, así que la API es `sendNotification`, que sí lo
-serializa:
+stub). Aquí tienes el objeto, no un `String`, y además necesitas la cabecera `eventType`: serializa
+con el `ObjectMapper` de la aplicación y envía con `send`, que es la única API que fija message
+attributes.
 
 ```java
 @Component
 public class Sns<Evento>Publisher implements <Evento>Publisher {
 
+    private static final String EVENT_TYPE = "<Evento>";
+
     private final SnsTemplate snsTemplate;
+    private final ObjectMapper objectMapper;
     private final String topic;
 
-    public Sns<Evento>Publisher(SnsTemplate snsTemplate,
+    public Sns<Evento>Publisher(SnsTemplate snsTemplate, ObjectMapper objectMapper,
                                 @Value("${messaging.publishing.destination}") String topic) {
         this.snsTemplate = snsTemplate;
+        this.objectMapper = objectMapper;
         this.topic = topic;
     }
 
     @Override
     public void publish(<Evento>IntegrationEvent event, String correlationId) {
-        snsTemplate.sendNotification(
-                topic,
-                EventEnvelope.of(event.metadata(), event, correlationId),
-                "<Evento>");
+        try {
+            String payload = objectMapper.writeValueAsString(
+                    EventEnvelope.of(event.metadata(), event, correlationId));
+            // eventType como message ATTRIBUTE: es sobre lo que filtra la FilterPolicy
+            // que siembra infra/init-messaging.sh. Sin él la cola descarta el mensaje
+            // en silencio. El Subject de sendNotification no vale: raw delivery lo tira.
+            snsTemplate.send(topic, MessageBuilder.withPayload(payload)
+                    .setHeader("eventType", EVENT_TYPE)
+                    .build());
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("No se pudo serializar " + EVENT_TYPE, exception);
+        }
     }
 }
 ```
+
+El `ObjectMapper` que inyectas es el bean de la aplicación (`JacksonConfig`, con `TimestampModule`):
+no construyas uno nuevo, o los instantes del sobre saldrán con otro formato que el que declara
+`docs/asyncapi.yaml`.
 
 En ambos casos el ARN/nombre del topic sale de `parameters/<perfil>/messaging.yaml`
 (`messaging.publishing.destination`) leído con `@Value`, nunca literal. La topología local (topic,

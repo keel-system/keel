@@ -506,16 +506,48 @@ function renderMultipartHandlers(imports) {
 // en el catch-all como 500. Es un 409: el cliente debe releer y reintentar con el
 // estado actual. No lo confundas con un conflicto de `expectedVersion` que declare
 // el diseño: ese lo comprueba el dominio contra su propio contador.
-function renderOptimisticLockHandler(imports) {
+function renderOptimisticLockHandler(model, imports) {
   imports.add('org.springframework.orm.ObjectOptimisticLockingFailureException');
+  const message = 'El recurso fue modificado por otra operación concurrente; reintenta con el estado actual';
+  const declared = declaredConcurrencyError(model);
+  if (declared) {
+    imports.add(`${subPackage(model, 'domain.errors')}.${declared.exceptionClass}`);
+    return `
+    // El diseño declara '${declared.code}' para este conflicto y ese code viaja en la
+    // respuesta pública: es contrato con el integrador, así que gana al genérico del
+    // scaffolding. Se delega en onDomainException para que status y forma del cuerpo
+    // salgan de la misma metadata que el resto de errores declarados.
+    @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
+    public ResponseEntity<ErrorResponse> onOptimisticLockingFailure(ObjectOptimisticLockingFailureException exception) {
+        return onDomainException(new ${declared.exceptionClass}("${message}"));
+    }
+`;
+  }
   return `
+    // TODO (agente): el diseño no declara (o declara de forma ambigua) un error 409
+    // para la modificación concurrente; este code es una convención del scaffolding,
+    // no el contrato. Si el diseño lo declara, sustitúyelo.
     @ResponseStatus(HttpStatus.CONFLICT)
     @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
     public ErrorResponse onOptimisticLockingFailure(ObjectOptimisticLockingFailureException exception) {
         return new ErrorResponse(HttpStatus.CONFLICT.value(), "Conflict", "OPTIMISTIC_LOCK_CONFLICT",
-                "El recurso fue modificado por otra operación concurrente; reintenta con el estado actual", List.of());
+                "${message}", List.of());
     }
 `;
+}
+
+// El error de conflicto por concurrencia que declara el diseño, si lo hay. Mismo
+// criterio que declaredUniquenessError: 409 de status fijo, y con cero o varios
+// candidatos no se adivina. Un `dynamicStatus` queda fuera porque su status llega
+// por constructor y aquí no hay operación de la que deducirlo.
+const CONCURRENCY_CODE =
+  /(^|_)(CONCURRENT_MODIFICATION|CONCURRENT_UPDATE|OPTIMISTIC_LOCK_CONFLICT|OPTIMISTIC_LOCKING_FAILURE|VERSION_CONFLICT)$/;
+
+function declaredConcurrencyError(model) {
+  const candidates = (model.errors ?? []).filter(
+    (error) => error.http === 409 && !error.dynamicStatus && CONCURRENCY_CODE.test(screamingSnake(error.code))
+  );
+  return candidates.length === 1 ? candidates[0] : null;
 }
 
 function renderExceptionHandler(model) {
@@ -555,7 +587,7 @@ function renderExceptionHandler(model) {
   // generar el handler documentaría un 409 que el contrato niega.
   const optimisticLock =
     model.layersPresent.persistence && model.entities.some((entity) => entity.usesOptimisticLocking)
-      ? renderOptimisticLockHandler(imports)
+      ? renderOptimisticLockHandler(model, imports)
       : '';
   const multipart = model.layersPresent.storage ? renderMultipartHandlers(imports) : '';
 

@@ -72,7 +72,7 @@ operations:
 ## Políticas del caso de uso
 
 - `idempotency: { keySource: client-key | payload-hash, ttlSeconds }` — la operación puede repetirse sin efectos duplicados. Obligatoria de considerar en commands disparados por subscriptions con reintentos.
-- `cache: { ttlSeconds, keyFields, invalidatedBy: [Evento, ...] }` — solo para queries; `invalidatedBy` referencia eventos de messaging.
+- `cache: { ttlSeconds, keyFields, invalidatedBy: [Evento, ...] }` — solo para queries; `invalidatedBy` referencia eventos de messaging. Si el `output` declara `embed`, la caché proyecta **otro agregado** dentro de la respuesta y ese agregado también tiene que poder invalidarla: `keel validate` da **error** si ningún evento de la entidad embebida está en `invalidatedBy` (y avisa de los eventos de la entidad principal que falten). Sin esa regla, un cambio en la marca embebida en la ficha de producto no se ve hasta que expira el TTL, y nada en el diseño lo delata.
 - `schedule: { cron }` — trigger temporal, único trigger que se declara aquí.
 
 `idempotency` y `cache` son **decisiones estructurales**: fijan lo que el servicio garantiza (qué se puede repetir sin daño, qué puede llegar rancio), así que las decide el diseñador y no el agente. El agente recomienda con su porqué y pregunta; nunca las escribe en silencio. Ejes de decisión, consecuencias observables y trampas: `.claude/skills/keel-design/references/structural-decisions.md` §3.2 y §3.3.

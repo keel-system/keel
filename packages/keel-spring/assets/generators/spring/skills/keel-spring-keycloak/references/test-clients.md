@@ -7,16 +7,28 @@ distintos por causas distintas:
 - **sin el scope exigido** → `403` (autenticado, pero sin la authority `SCOPE_*`)
 - **audiencia inválida** → `403` (el token es válido y está autenticado; lo que
   falla es la autorización: el `AudienceAuthorizationFilter` no encuentra la
-  audiencia del servicio en el claim `aud`). Un `401` aquí significa que el token
-  no se autenticó siquiera — otra causa distinta
+  audiencia del servicio en el claim `aud`)
 
-Para poder afirmar cuál de las dos condiciones produjo la respuesta, los clientes
-de prueba tienen que variar **una sola** de ellas cada vez. El error típico es
+**La regla completa, que este documento no contradice en ninguna línea:**
+
+| Situación | Status |
+|---|---|
+| Sin cabecera `Authorization`, o token inválido/caducado | `401` |
+| Token válido sin el scope exigido | `403` |
+| Token válido con la audiencia de otro servicio | `403` |
+
+El `401` está reservado a la **autenticación**. Si aparece en cualquiera de los dos
+casos de abajo, el token no llegó a autenticarse y la causa es otra —issuer
+distinto, firma, expiración—: diagnostícala antes de tocar nada de scopes o
+audiencia (`references/troubleshooting.md`).
+
+Para poder afirmar cuál de las dos condiciones produjo el `403`, los clientes de
+prueba tienen que variar **una sola** de ellas cada vez. El error típico es
 acoplarlas sin querer: el cliente pensado para "sin scope" se queda también sin el
 mapper de audiencia (porque el mapper vivía en el mismo client scope), así que su
-`401` no prueba nada sobre el scope; y el cliente de "audiencia inválida" trae el
-scope correcto por default. Con las variables acopladas, cada ajuste obliga a otra
-ronda contra el servidor real.
+`403` no prueba nada sobre el scope —lo habrían producido las dos condiciones—; y
+el cliente de "audiencia inválida" trae el scope correcto por default. Con las
+variables acopladas, cada ajuste obliga a otra ronda contra el servidor real.
 
 ## Desacoplar las dos variables
 
@@ -38,8 +50,8 @@ explícitamente por cliente.
 |---|---|---|---|
 | `test-m2m-ok` | `aud-<servicio>` + `<recurso>:<accion>` | scope ✓ / aud ✓ | Camino feliz M2M → 2xx |
 | `test-m2m-no-scope` | `aud-<servicio>` | scope ✗ / aud ✓ | Aísla el **403 por scope** |
-| `test-m2m-bad-aud` | `aud-wrong` + `<recurso>:<accion>` | scope ✓ / aud ✗ | Aísla el **401 por audiencia** |
-| `test-m2m-none` | (ninguno) | scope ✗ / aud ✗ | Control: confirma que el fallo de audiencia gana al de scope (401, no 403) |
+| `test-m2m-bad-aud` | `aud-wrong` + `<recurso>:<accion>` | scope ✓ / aud ✗ | Aísla el **403 por audiencia** |
+| `test-m2m-none` | (ninguno) | scope ✗ / aud ✗ | Control: con las dos condiciones fallando sigue siendo `403`, nunca `401` |
 
 Los clientes de prueba son **adicionales** a los `serviceClients` que declara el
 diseño: esos se crean con su `clientId` exacto y su configuración correcta, y son
@@ -97,5 +109,5 @@ done
 ```
 
 Si `test-m2m-no-scope` no muestra el `aud` correcto, las variables siguen
-acopladas: el `401` que dé no probará nada sobre el scope. Arréglalo **aquí**, no
-después de ver fallar el escenario.
+acopladas: el `403` que dé no probará nada sobre el scope, porque la audiencia lo
+explicaría igual de bien. Arréglalo **aquí**, no después de ver fallar el escenario.

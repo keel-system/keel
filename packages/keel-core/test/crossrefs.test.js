@@ -309,6 +309,40 @@ test('un subcampo inexistente del value object es error', () => {
   );
 });
 
+// --- persistence: natural key sobre un campo recalculado de una entidad hija ---
+
+const computedNaturalKey = (entityName, naturalKey) => {
+  const layers = persistenceMembers({ [entityName]: { naturalKey } });
+  layers.domain.entities.OrderLine.fields.position.computed =
+    'Es la última posición libre al añadir; se recompacta al borrar.';
+  layers.domain.entities.Order.fields.code.computed = 'Se deriva del identificador.';
+  return layers;
+};
+
+test('naturalKey sobre un campo computed de una entidad hija es aviso', () => {
+  const { errors, warnings } = run(computedNaturalKey('OrderLine', ['order', 'position']));
+  assert.deepEqual(errors, []);
+  assert.ok(
+    warnings.some((w) =>
+      w.includes(
+        `persistence: entities.OrderLine.naturalKey: 'position' es un campo computed de una entidad interna del agregado 'Order'`
+      )
+    ),
+    warnings.join('\n')
+  );
+});
+
+test('naturalKey sobre un campo computed de la raíz no avisa', () => {
+  // La raíz no se reparte entre filas hermanas: no hay estado intermedio colisionante.
+  const { warnings } = run(computedNaturalKey('Order', ['code']));
+  assert.ok(!warnings.some((w) => w.includes('es un campo computed')), warnings.join('\n'));
+});
+
+test('naturalKey sobre un campo no computed de una entidad hija no avisa', () => {
+  const { warnings } = run(persistenceMembers({ OrderLine: { naturalKey: ['order', 'position'] } }));
+  assert.ok(!warnings.some((w) => w.includes('es un campo computed')), warnings.join('\n'));
+});
+
 // --- use-cases: exclude con dot-path (proyección de entidades hijas) ---
 
 // Dominio con relación a hija en el mismo agregado (Order → lines → OrderLine), un campo
@@ -1956,6 +1990,125 @@ test('una referencia excluida del payload no cuenta como proyección asimétrica
   );
   assert.deepEqual(errors, []);
   assert.deepEqual(warnings, []);
+});
+
+// --- use-cases: caché con embed sin vía de invalidación ---
+
+// getOrder cachea Order embebiendo customer. Los commands declaran qué eventos
+// publica cada entidad: es de ahí de donde sale "qué muta lo cacheado".
+const cacheEmbedLayers = ({
+  invalidatedBy = ['OrderUpdated'],
+  embed = ['customer'],
+  customerEmits = ['CustomerUpdated'],
+  events = ['OrderUpdated', 'CustomerUpdated'],
+} = {}) => ({
+  domain: domainForEmbed(),
+  'use-cases': {
+    operations: {
+      getOrder: {
+        description: 'Recupera un pedido por su id.',
+        kind: 'query',
+        internal: true,
+        input: { entity: 'Order' },
+        output: { entity: 'Order', embed },
+        cache: { ttlSeconds: 300, keyFields: ['id'], invalidatedBy },
+      },
+      updateOrder: {
+        description: 'Cambia un pedido.',
+        kind: 'command',
+        internal: true,
+        input: { entity: 'Order' },
+        // Misma proyección que getOrder: si no, salta el aviso de asimetría, que
+        // es de otra regla y ensucia las aserciones de esta.
+        output: { entity: 'Order', embed },
+        emits: ['OrderUpdated'],
+      },
+      ...(customerEmits.length > 0
+        ? {
+            updateCustomer: {
+              description: 'Cambia un cliente.',
+              kind: 'command',
+              internal: true,
+              input: { entity: 'Customer' },
+              output: { entity: 'Customer' },
+              emits: customerEmits,
+            },
+          }
+        : {}),
+    },
+  },
+  messaging: {
+    channels: { main: {} },
+    publishing: {
+      events: Object.fromEntries(events.map((name) => [name, { channel: 'main', payload: {} }])),
+    },
+  },
+});
+
+test('caché que embebe una entidad sin ningún evento propio es error', () => {
+  // El caso de catalog: la ficha embebe brand/category y messaging no declara
+  // ningún evento suyo. No es un olvido de invalidatedBy: es imposible invalidar.
+  const { errors } = run(
+    cacheEmbedLayers({ customerEmits: [], events: ['OrderUpdated'] })
+  );
+  assert.ok(
+    errors.some((e) =>
+      e.includes(
+        `use-cases: getOrder.cache: la caché proyecta 'Customer' anidado (embed: [customer]) y ninguna operación publica eventos de 'Customer'`
+      )
+    ),
+    errors.join('\n')
+  );
+});
+
+test('caché que embebe una entidad con eventos que invalidatedBy no lista es error', () => {
+  const { errors } = run(cacheEmbedLayers());
+  assert.ok(
+    errors.some((e) =>
+      e.includes(
+        `use-cases: getOrder.cache: la caché proyecta 'Customer' anidado (embed: [customer]) y invalidatedBy no incluye ninguno de los eventos que lo mutan [CustomerUpdated]`
+      )
+    ),
+    errors.join('\n')
+  );
+});
+
+test('caché que lista el evento de la entidad embebida es válida', () => {
+  const { errors, warnings } = run(
+    cacheEmbedLayers({ invalidatedBy: ['OrderUpdated', 'CustomerUpdated'] })
+  );
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
+test('caché sin embed no exige eventos de las entidades referenciadas', () => {
+  // Sin embed la referencia viaja como customerId: el objeto no se proyecta y no
+  // hay nada que pueda quedar rancio.
+  const { errors } = run(cacheEmbedLayers({ embed: [] }));
+  assert.deepEqual(errors, []);
+});
+
+test('evento de la entidad cacheada ausente de invalidatedBy es aviso, no error', () => {
+  const { errors, warnings } = run(
+    cacheEmbedLayers({ invalidatedBy: ['CustomerUpdated'], embed: [] })
+  );
+  assert.deepEqual(errors, []);
+  assert.ok(
+    warnings.some((w) =>
+      w.includes(`use-cases: getOrder.cache: 'Order' cambia con [OrderUpdated], que invalidatedBy no lista`)
+    ),
+    warnings.join('\n')
+  );
+});
+
+test('con --wip y sin capa messaging la caché no se contrasta todavía', () => {
+  const layers = cacheEmbedLayers({ customerEmits: [], events: [] });
+  delete layers.messaging;
+  const { errors } = run(layers, true);
+  assert.ok(
+    !errors.some((e) => e.includes('la caché proyecta')),
+    errors.join('\n')
+  );
 });
 
 test('una sola operación por entidad no puede ser asimétrica consigo misma', () => {

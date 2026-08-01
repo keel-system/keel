@@ -42,10 +42,13 @@ ya la resuelve el `<Servicio>DomainEventBridge` generado; lo tuyo es el envío:
 - `best-effort`: implementas `<Evento>Publisher`; un fallo se loguea y no
   interrumpe la operación (no hay reintento).
 - El ARN va por `@Value` desde el YAML; el nombre lógico del evento viaja como
-  subject/atributo para filtrado.
-- **La API depende de lo que tengas en la mano**: `String` ya serializado (outbox)
-  → `send` con `MessageBuilder.withPayload`; objeto (`EventEnvelope`, best-effort)
-  → `sendNotification`. Un objeto dentro de `withPayload` se publica como su
+  **message attribute `eventType`**, que es sobre lo que filtran las suscripciones.
+  No es el `Subject` de SNS: con `RawMessageDelivery=true` el Subject se descarta
+  y la `FilterPolicy` deja el mensaje fuera de la cola sin decir nada.
+- **Publica siempre un `String` con `send`**, en los dos caminos: el outbox ya te
+  da el payload serializado; en best-effort lo serializas tú con el `ObjectMapper`
+  de la aplicación. `sendNotification` serializa pero no admite message attributes,
+  así que aquí no sirve; y un objeto dentro de `withPayload` se publica como su
   `toString()`, sin error visible. Tabla en `SKILL.md § Envío al broker`.
 
 ## Listener

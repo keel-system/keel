@@ -144,6 +144,54 @@ ella". Tratarlas como independientes hace que el filtro y el orden del mismo
 listado discrepen, y el escenario falla en un elemento del medio de la página —
 el fallo más caro de diagnosticar de todos.
 
+**Alcance de la normalización**: la columna normalizada se genera para campos
+escalares. Una colección (`list: true`, que se persiste como `@ElementCollection`)
+**no** tiene columna equivalente, así que sobre ella solo puedes plegar mayúsculas.
+Si un filtro cubre a la vez un campo escalar y una colección, los dos no se
+comportan igual ante los acentos, y eso es una asimetría observable: decláralo como
+`designGap` en vez de fingir paridad, porque cerrarla de verdad exige que el diseño
+declare la estrategia de normalización de la colección.
+
+### Colecciones hijas ordenadas por posición
+
+Cuando una entidad hija lleva un campo de posición (`position`, `sortOrder`…) y ese
+campo entra en la `naturalKey` —`(productId, position)`— la constraint resultante es
+**UNIQUE**, y en la base de datos es **inmediata**, no diferida: se comprueba fila a
+fila durante el flush, no al hacer commit.
+
+Eso rompe la forma natural de escribir un reordenamiento o una recompactación tras
+un borrado, porque el reparto pasa por estados intermedios en los que dos filas
+comparten posición aunque el estado final sea perfectamente válido:
+
+```java
+// mal: al bajar la imagen 3 a la posición 2, durante un instante hay dos filas
+// con position=2, y el índice único aborta el flush. Sin concurrencia ninguna.
+images.forEach(image -> image.setPosition(newPositions.get(image.getId())));
+repository.saveAndFlush(product);
+```
+
+El patrón que funciona es desplazar toda la colección fuera del rango en uso, hacer
+flush, y solo entonces asignar las posiciones definitivas:
+
+```java
+// 1. saca las posiciones del rango válido (el offset supera cualquier posición real)
+int offset = images.size() + 1;
+images.forEach(image -> image.setPosition(image.getPosition() + offset));
+repository.saveAndFlush(product);
+// 2. ahora ninguna asignación puede chocar con una fila que aún no se ha movido
+images.forEach(image -> image.setPosition(newPositions.get(image.getId())));
+repository.saveAndFlush(product);
+```
+
+Aplica a las tres operaciones que tocan el reparto: reordenar, borrar (que
+recompacta las siguientes) e insertar en medio. **Un fallo por cada fila afectada
+parece un fallo por escenario y es uno solo**: si ves varios escenarios de la misma
+colección cayendo con violación de constraint única, no los diagnostiques por
+separado.
+
+Si el rango final y el inicial no se solapan (añadir siempre al final, por ejemplo),
+el offset sobra: el coste es un flush extra y solo se paga donde hay reparto.
+
 ### El sobre de error es contrato del generador
 
 A diferencia de "ausencia vs. nulo", la **forma** del cuerpo de error no es negociable por el
@@ -437,14 +485,14 @@ entrada: ahí el orden lo fija la petición, no el id — no lo "arregles" orden
 
 ## `storage` — storage.keel.yaml
 
-Sin esta capa (servicio que no maneja archivos), no se incluye SDK de object storage ni adaptador. El scaffolding determinista genera la dependencia Gradle (`software.amazon.awssdk:s3`), el servicio MinIO en el `infra/docker-compose.yaml` (con MinIO), el fragmento de configuración `parameters/<perfil>/storage.yaml` (clave `storage`: `provider`, `bucket`, `endpoint`, `region`, `access-key`, `secret-key`, `path-style-access` y la política de cada bucket del diseño bajo `storage.buckets.<b>`: `visibility`, `max-size-mb`, `allowed-content-types`), el límite `spring.servlet.multipart.max-file-size`/`max-request-size` con holgura sobre el mayor `maxSizeMb` declarado (el límite de negocio lo comprueba el caso de uso, en el orden del diseño), los `@ExceptionHandler` de multipart en el `ApiExceptionHandler`, el **puerto `FileStorage`** y el value object `StoredObject(storageKey, url, contentType, sizeBytes)` que devuelve `upload` (lo que el agregado guarda; `url` llega null en buckets de URL firmada, que se pide al leer). El agente escribe el adaptador completo siguiendo la skill `keel-spring-s3` (`.claude/skills/keel-spring-s3/SKILL.md`; bean `S3Client` + `S3FileStorage`, incluida `signedUrl`) más la política de negocio: validación de content-type/tamaño según los `buckets`.
+Sin esta capa (servicio que no maneja archivos), no se incluye SDK de object storage ni adaptador. El scaffolding determinista genera la dependencia Gradle (`software.amazon.awssdk:s3`), el servicio MinIO en el `infra/docker-compose.yaml` (con MinIO), el fragmento de configuración `parameters/<perfil>/storage.yaml` (clave `storage`: `provider`, `endpoint`, `region`, `access-key`, `secret-key`, `path-style-access` y la política de cada bucket del diseño bajo `storage.buckets.<b>`: `bucket`, `visibility`, `max-size-mb`, `allowed-content-types` — **no hay clave `bucket` global**: los buckets son los que declara el diseño), el límite `spring.servlet.multipart.max-file-size`/`max-request-size` con holgura sobre el mayor `maxSizeMb` declarado (el límite de negocio lo comprueba el caso de uso, en el orden del diseño), los `@ExceptionHandler` de multipart en el `ApiExceptionHandler`, el **puerto `FileStorage`** y el value object `StoredObject(storageKey, url, contentType, sizeBytes)` que devuelve `upload` (lo que el agregado guarda; `url` llega null en buckets de URL firmada, que se pide al leer), y el **puerto `StoragePolicies`** + `BucketPolicy` con su adaptador `StorageProperties` (binding de `storage.buckets.*`), que es como la política declarada llega a la capa `application` sin `@Value`. El agente escribe el adaptador completo siguiendo la skill `keel-spring-s3` (`.claude/skills/keel-spring-s3/SKILL.md`; bean `S3Client` + `S3FileStorage`, incluida `signedUrl`) más la política de negocio: validación de content-type/tamaño según los `buckets`.
 
 | Diseño | Código |
 |--------|--------|
 | capa `storage` presente | Puerto `domain/storage/FileStorage` (interface: `upload`, `download`, `delete`, `signedUrl`) — scaffolding. Adaptador `infrastructure/storage/S3FileStorage` + `infrastructure/configurations/storage/S3Config` (bean `S3Client`, AWS SDK v2, sirve para MinIO y S3, configurado desde la clave `storage` de los perfiles) — agente, según la skill `keel-spring-s3` |
-| `buckets.B` | Un bucket físico por bucket lógico (nombre derivado de `B`, prefijado por servicio/entorno para evitar colisiones); el adaptador lo crea/valida al arrancar en local |
-| `buckets.B.allowedContentTypes` | Validación de content-type en la subida antes de tocar el storage → error `UNSUPPORTED_CONTENT_TYPE` (declararlo en use-cases) |
-| `buckets.B.maxSizeMb` | Validación de tamaño **en el caso de uso**, en el orden que fija el diseño → error `FILE_TOO_LARGE` (agente). Build fija el límite del servlet (`spring.servlet.multipart.max-file-size`) al **doble** del mayor `maxSizeMb` declarado, deliberadamente: si cortase justo en el límite de negocio, Tomcat emitiría el 413 antes del handler y ninguna guarda que el diseño ponga antes podría precederlo. El handler de `MaxUploadSizeExceededException` → `413 FILE_TOO_LARGE` queda como red de seguridad |
+| `buckets.B` | Un bucket físico por bucket lógico (nombre derivado de `B`, prefijado por servicio/entorno para evitar colisiones); el adaptador lo crea/valida al arrancar en local. Su nombre y su política se leen con `StoragePolicies.forBucket(StoragePolicies.B)`, nunca como literal ni por `@Value` — scaffolding |
+| `buckets.B.allowedContentTypes` | Validación de content-type en la subida antes de tocar el storage, con `BucketPolicy.allowsContentType(...)` → error `UNSUPPORTED_CONTENT_TYPE` (declararlo en use-cases) |
+| `buckets.B.maxSizeMb` | Validación de tamaño **en el caso de uso**, con `BucketPolicy.allowsSize(...)` y en el orden que fija el diseño → error `FILE_TOO_LARGE` (agente). Build fija el límite del servlet (`spring.servlet.multipart.max-file-size`) al **doble** del mayor `maxSizeMb` declarado, deliberadamente: si cortase justo en el límite de negocio, Tomcat emitiría el 413 antes del handler y ninguna guarda que el diseño ponga antes podría precederlo. El handler de `MaxUploadSizeExceededException` → `413 FILE_TOO_LARGE` queda como red de seguridad |
 | `buckets.B.visibility: private` | El objeto no es de lectura pública; la descarga se sirve mediada por el servicio o vía **URL firmada** temporal (`signedUrl`) |
 | `buckets.B.visibility: public` | Lectura directa permitida: el adaptador **debe aplicar la bucket policy de lectura anónima** (idempotente, en cada arranque; S3 y MinIO crean los buckets privados). Sin ella la subida responde `201` y el `GET` directo `403`. La URL pública puede exponerse en el ResponseDto |
 | campo `file` de una entidad | La entidad persiste la **key** del objeto (String); el controller recibe el binario como `multipart/form-data` (`MultipartFile`), el handler valida contra el bucket y delega en `FileStorage`, y guarda la key devuelta |

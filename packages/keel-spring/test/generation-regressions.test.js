@@ -383,6 +383,39 @@ test('la violación de unicidad usa el error declarado del diseño cuando lo hay
   assert.ok(handler.includes('TODO (agente)'));
 });
 
+test('storage: la política declarada llega a la aplicación por un puerto, no por @Value', () => {
+  // maxSizeMb y allowedContentTypes viajaban solo al YAML, y la capa application
+  // no puede leer @Value sin romper la frontera hexagonal: acababan como
+  // literales en el command handler, un espejo del diseño que nadie sincroniza.
+  const { read } = scaffoldExtended();
+  const policy = read(`${JAVA}/domain/storage/BucketPolicy.java`);
+  const port = read(`${JAVA}/domain/storage/StoragePolicies.java`);
+  const properties = read(`${JAVA}/infrastructure/storage/StorageProperties.java`);
+  const config = read(`${JAVA}/infrastructure/storage/StoragePolicyConfig.java`);
+
+  assert.ok(policy.includes('public boolean allowsContentType(String contentType)'), policy);
+  assert.ok(policy.includes('public boolean allowsSize(long sizeBytes)'), policy);
+  // El nombre del bucket es una constante: renombrarlo en el diseño rompe la
+  // compilación, no una subida en producción.
+  assert.ok(port.includes('String PRODUCT_IMAGES = "productImages";'), port);
+  assert.ok(properties.includes('@ConfigurationProperties("storage")'), properties);
+  assert.ok(properties.includes('implements StoragePolicies'), properties);
+  assert.ok(config.includes('@EnableConfigurationProperties(StorageProperties.class)'), config);
+
+  // El puerto es de dominio: nada de Spring en él.
+  assert.ok(!port.includes('org.springframework'), port);
+  assert.ok(!policy.includes('org.springframework'), policy);
+});
+
+test('storage: no se emite una clave `bucket` global que ningún minio-init crea', () => {
+  const { read } = scaffoldExtended();
+  const local = read('src/main/resources/parameters/local/storage.yaml');
+
+  // La skill de S3 instruía leerla con @Value, y apuntaba a un bucket inexistente.
+  assert.ok(!/^ {2}bucket:/m.test(local), local);
+  assert.ok(local.includes('    productImages:'), local);
+});
+
 test('§1.6: la tabla de parámetros de production sale de los YAML generados, no de una lista a mano', () => {
   const { read } = scaffoldExtended();
   const readme = read('README.md');
@@ -535,6 +568,28 @@ test('concurrencia: optimisticLocking all (default) sigue protegiendo toda raíz
 
   assert.ok(jpa.includes('@Version\n    @Column(name = "lock_version")'));
   assert.ok(read(`${JAVA}/infrastructure/rest/ApiExceptionHandler.java`).includes('OPTIMISTIC_LOCK_CONFLICT'));
+});
+
+test('concurrencia: el code del conflicto sale del diseño cuando lo declara', () => {
+  // El 409 por @Version llega con el code del scaffolding solo si el diseño no
+  // tiene el suyo. Declarado, es contrato público: gana al genérico.
+  const { manifest, layers, errors } = loadService(fixtureDir);
+  assert.deepEqual(errors, []);
+  const patched = structuredClone(layers);
+  patched['use-cases'].operations.updateProduct.errors.push({
+    code: 'CONCURRENT_MODIFICATION',
+    when: 'El producto fue modificado por otra petición desde que se leyó.',
+    http: 409
+  });
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-concurrency-'));
+  scaffoldService({ manifest, layers: patched, workspace, force: true });
+  const advice = fs.readFileSync(
+    path.join(workspace, 'services', 'catalog-spring', JAVA, 'infrastructure/rest/ApiExceptionHandler.java'),
+    'utf8'
+  );
+
+  assert.ok(advice.includes('onDomainException(new ConcurrentModificationError('), advice);
+  assert.ok(!advice.includes('OPTIMISTIC_LOCK_CONFLICT'), advice);
 });
 
 test('concurrencia: optimisticLocking declared solo protege las raíces con lockVersion', () => {

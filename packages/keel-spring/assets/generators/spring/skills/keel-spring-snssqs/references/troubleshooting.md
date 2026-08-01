@@ -30,10 +30,30 @@ El `SnsTemplate` por defecto no tiene `MessageConverter` Jackson, así que publi
 `toString()` del record — texto plano. No lanza, no falla el envío: el mensaje sale y
 revienta en el consumidor (o en la aserción del escenario).
 
-Arreglo: con un objeto en la mano se usa
-`snsTemplate.sendNotification(topic, envelope, "<Evento>")`. `withPayload` + `send` es
-solo para un `String` **ya serializado**, que es lo que entrega el outbox. Tabla completa en
+Arreglo: serializa el sobre con el `ObjectMapper` de la aplicación y manda el `String`.
+`withPayload` + `send` es correcto siempre que lo que entre sea un `String` ya serializado
+—lo que entrega el outbox, o lo que produces tú en best-effort—. Tabla completa en
 `SKILL.md § Envío al broker`.
+
+## El escenario publica el evento pero la cola está vacía
+
+El síntoma engaña: la operación devuelve `2xx`, el publisher no loguea nada, el topic existe,
+la cola existe, y `AbstractFlowIT#publishedMessages` no encuentra el mensaje. Parece un fallo
+del arnés y casi nunca lo es.
+
+Causa habitual: el mensaje salió **sin el message attribute `eventType`**, y la `FilterPolicy`
+de la suscripción lo descartó. SNS no notifica un mensaje filtrado — para él es el
+comportamiento correcto.
+
+Comprueba en este orden:
+
+1. El publisher fija `.setHeader("eventType", "<Evento>")`. Si usa `sendNotification(topic,
+   objeto, "<Evento>")`, ese tercer argumento es el **Subject**, que `RawMessageDelivery=true`
+   descarta: ese es el fallo.
+2. El valor coincide **exactamente** con el nombre del evento del diseño, que es lo que
+   `infra/init-messaging.sh` puso en la `FilterPolicy` (distingue mayúsculas).
+3. La suscripción tiene el filtro que esperas:
+   `aws sns get-subscription-attributes --subscription-arn <arn>`.
 
 ## El mismo mensaje se procesa varias veces
 

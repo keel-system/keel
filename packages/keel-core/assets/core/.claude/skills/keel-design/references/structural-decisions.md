@@ -110,11 +110,27 @@ clientes con timeout lo necesita igual, y ahí no lo comprueba nadie.
 |---|---|---|
 | **Tolerancia** | ¿Qué pasa en el negocio si esta respuesta refleja el mundo de hace N minutos? | "Nada" → candidata. "Se cobra mal / se decide mal" → sin caché. |
 | **Invalidación** | Enumera **todas** las vías por las que este dato cambia: operaciones propias **y** eventos ajenos. | Cada una es una entrada de `invalidatedBy`. Si no puedes enumerarlas, no hay caché. |
+| **Proyección** | ¿El `output` trae algún `embed`? Entonces repite la pregunta anterior **sobre la entidad embebida**, no solo sobre la principal. | Los eventos de esa entidad también son entradas de `invalidatedBy`. |
 | **Clave** | ¿Qué campos del input distinguen una respuesta de otra? ¿Depende de **quién** pregunta? | Los `keyFields`. Si depende de la identidad del llamante y no está en el input, cachear filtra datos entre usuarios. |
 
-**Consecuencia observable de un `invalidatedBy` incompleto**: el dato rancio no se sirve "un rato"
-—se sirve **indefinidamente**, hasta que alguien toque una de las vías que sí están listadas. Es el
-fallo más caro de esta entrada y el más silencioso.
+**Consecuencia observable de un `invalidatedBy` incompleto**: el dato rancio se sirve hasta que expire
+el TTL o hasta que alguien toque una de las vías que sí están listadas. Es el fallo más silencioso de
+esta entrada, porque el servicio responde `200` y nada distingue una respuesta vieja de una fresca.
+
+**El caso del `embed` es peor que un olvido.** Una ficha que proyecta `brand` y `category` como objetos
+anidados depende de tres agregados, no de uno, pero es fácil enumerar solo las vías del principal. Y si
+esas entidades no publican **ningún** evento, `invalidatedBy` no es que esté incompleto: la invalidación
+es imposible de expresar, y el TTL pasa a ser la única cota. `keel validate` lo marca en rojo, así que
+la decisión hay que tomarla aquí, y solo hay tres salidas legítimas:
+
+1. Declarar los eventos de esa entidad en `messaging` y añadirlos a `invalidatedBy`.
+2. Quitar el `embed` — el consumidor recibe el id y lee el objeto por su propia vía, sin caché de por medio.
+3. Aceptar el staleness acotado por el TTL, lo que obliga a quitar la caché o a bajar el TTL a algo que
+   el negocio tolere.
+
+Lo que **no** es una salida es dejarlo escrito en `rules` y esperar que el generador lo resuelva: si
+además algún escenario de validación exige ver el cambio reflejado de inmediato, el diseño se está
+contradiciendo a sí mismo y ese conflicto se paga entero en la fase de generación.
 
 **Trampa habitual**: cachear una query que devuelve campos que dependen del rol o de la propiedad del
 recurso. Si dos usuarios distintos comparten clave de caché, el primero decide lo que ve el segundo.

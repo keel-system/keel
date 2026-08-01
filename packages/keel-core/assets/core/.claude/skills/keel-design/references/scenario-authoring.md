@@ -17,7 +17,10 @@ Recorre los artefactos y construye la lista de obligaciones. Es un borrador de t
 | `operations[].preconditions/rules` | un orden de evaluación por command, más un escenario de precedencia si hay ≥2 errores |
 | `operations[].emits[]` | una aserción de evento (nombre + payload + canal) |
 | `operations[].idempotency` | reintento con misma clave |
+| `operations[].output.embed` | una aserción del **objeto anidado** (no del `<relación>Id`), con sus campos |
+| `operations[].output.exclude` | una aserción de **ausencia** por cada ruta excluida |
 | `operations[].cache.invalidatedBy` | un ciclo leer → mutar → releer **por cada vía** listada |
+| `operations[].cache.ttlSeconds` | un escenario de **retención**: mutar por una vía que **no** está en `invalidatedBy` y comprobar que la lectura sigue sirviendo el valor viejo |
 | `operations[].schedule` | disparo y efecto observable |
 | `domain.entities[].lifecycle` | un escenario por transición + una transición inválida + **todo estado alcanzado** |
 | `domain` campos `unique` | una colisión |
@@ -30,6 +33,19 @@ Recorre los artefactos y construye la lista de obligaciones. Es un borrador de t
 | `storage.buckets` | subida feliz, lectura según `visibility`, lectura de una clave inexistente, `FILE_TOO_LARGE`, `UNSUPPORTED_CONTENT_TYPE` |
 
 Cuando el inventario esté completo, la **matriz de cobertura** sale de él, no de los flujos.
+
+### La lista de campos de una respuesta se deriva del artefacto, no de tu lectura
+
+El formato exige que el `Then` fije el **cuerpo completo**. De dónde sale ese cuerpo no es opinión: para un `output: { entity: X, … }`, es
+
+> los campos de `domain.entities.X` — menos las rutas de `exclude` — más un objeto anidado por cada relación de `embed` — más los campos con `default`, que viajan **siempre** aunque la petición no los mande.
+
+Enumerarlo de memoria es el error que más contradicciones internas produce, y son caras: un escenario dice que la creación devuelve seis campos, otro del mismo documento asume un séptimo que el primero negó, y el desacuerdo no aflora hasta que un agente tiene que elegir a cuál obedecer. El caso típico es un `status` con `default: active`: no aparece en la petición, así que se olvida en la respuesta, mientras el flujo de transición de estado que viene después lo da por descontado.
+
+Dos consecuencias prácticas:
+
+- La cláusula **"el cuerpo no trae ningún campo adicional"** convierte la enumeración en contrato cerrado. Escríbela solo cuando hayas derivado la lista del artefacto; sobre una lista enumerada de memoria, lo que fija es un error.
+- Si al derivarla descubres que el `output` no proyecta algo que el escenario necesita —una relación que debería venir anidada y viaja como id—, **el que cambia es el YAML**, no el escenario. Vuelve a la capa `use-cases` antes de seguir.
 
 ## 2. Convenciones de determinación
 
@@ -110,14 +126,20 @@ Dos pasadas, en este orden. No enseñes el archivo al usuario sin haberlas hecho
 
 **Pasada de equivalencia.** Por cada punto de `docs/validation-scenarios.md § Determinación observable`, comprueba que está fijado o declarado indiferente. Y a cada escenario, hazle la pregunta de calidad: *¿podría una implementación plausible pero distinta pasar este escenario comportándose de otra manera?* Si la respuesta es sí, el escenario es decorativo — concrétalo.
 
+**Pasada de campos.** Por cada entidad que algún `Then` enumera, deriva su proyección del artefacto (la regla del paso 1) y compárala contra **todas** las enumeraciones de esa entidad en el documento. Tienen que coincidir entre sí y con el YAML. Basta un campo con `default` que aparezca en un flujo y falte en otro para que el documento se contradiga.
+
 Errores frecuentes que estas pasadas deben cazar:
 
 - `Then` que solo comprueba el status.
 - Creación `201` cuyo `Then` no asserta la cabecera `Location` — o, peor, que la **niega**.
+- Campo con `default` ausente de la enumeración de una respuesta de creación, y presente en otro flujo del mismo documento.
+- Relación con `embed` afirmada como `<relación>Id` (o al revés) en algún `Then`.
 - Lista devuelta sin orden declarado.
 - Error sin status, o con status distinto al del artefacto.
 - Escenario cuyo `Given` depende de otro flujo.
 - `invalidatedBy` con tres vías y un solo ciclo de invalidación probado.
+- Caché sin escenario de retención: sin él, una implementación que **no cachea nada** pasa todos los escenarios de invalidación.
+- Escenario que exige ver un cambio reflejado de inmediato en un objeto `embed` cuya entidad no publica ningún evento en `invalidatedBy`: es una exigencia que ningún generador puede cumplir, y lo que hay que corregir es el diseño (o el escenario), no el servidor.
 - Estado del `lifecycle` que ningún flujo alcanza.
 - Evento en `emits` que no aparece en ningún `Then`.
 
