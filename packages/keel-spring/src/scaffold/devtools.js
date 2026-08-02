@@ -109,14 +109,26 @@ if [ -z "$RUNTIME" ]; then
 fi
 
 fail=0
+# Reintentos porque 'Up' no es 'listo': Keycloak en start-dev, Kafka y LocalStack
+# publican su listener bastante después de que el contenedor arranque, y un solo
+# intento a los pocos segundos de 'up -d' da un FALLO que a la segunda pasada es
+# verde — un falso negativo que hace perder el tiempo buscando en la infra lo que
+# no está roto. Con la infra sana el primer intento acierta y esto no cuesta nada.
+RETRIES="\${KEEL_CHECK_RETRIES:-5}"
+DELAY="\${KEEL_CHECK_DELAY:-5}"
 check() {
   label="$1"; container="$2"; cmd="$3"
-  if $RUNTIME exec "$container" sh -c "$cmd" >/dev/null 2>&1; then
-    echo "  OK     $label"
-  else
-    echo "  FALLO  $label"
-    fail=$((fail + 1))
-  fi
+  attempt=1
+  while [ "$attempt" -le "$RETRIES" ]; do
+    if $RUNTIME exec "$container" sh -c "$cmd" >/dev/null 2>&1; then
+      echo "  OK     $label"
+      return
+    fi
+    attempt=$((attempt + 1))
+    [ "$attempt" -le "$RETRIES" ] && sleep "$DELAY"
+  done
+  echo "  FALLO  $label (tras $RETRIES intentos)"
+  fail=$((fail + 1))
 }
 
 echo "Validando infraestructura vía '$RUNTIME exec'…"

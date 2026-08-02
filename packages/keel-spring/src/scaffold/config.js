@@ -24,9 +24,11 @@ const localClientApiKey = (clientName) => `local-${clientName}-key`;
 const LOCAL_CORS_ORIGINS = 'http://localhost:3000,http://localhost:5173';
 
 // Gradiente de externalización: literal en local, env var con default en
-// develop y env var obligatoria (sin default) en production.
+// develop y env var obligatoria (sin default) en production. `test` es literal
+// como local: es un perfil cerrado (H2, sin infra externa) que debe arrancar sin
+// que nadie exporte nada.
 function envValue(profile, varName, localValue) {
-  if (profile === 'local') return String(localValue);
+  if (profile === 'local' || profile === 'test') return String(localValue);
   if (profile === 'develop') return `\${${varName}:${localValue}}`;
   return `\${${varName}}`;
 }
@@ -499,21 +501,51 @@ function securityYaml(model, profile) {
 function storageYaml(model, profile) {
   const { stack } = model;
   const isMinio = stack.storage === 'minio';
+  // El perfil test es cerrado: H2, sin contenedores y sin salida a la red. Se
+  // genera con esta misma función y no con una copia aparte, porque la copia ya
+  // se desincronizó una vez (emitía la clave plana `bucket:`, eliminada del
+  // contrato, y StorageProperties.forBucket lanzaba en cuanto alguien la usaba).
+  const isTest = profile === 'test';
   // Sin clave `bucket` global: los buckets son los que declara el diseño, bajo
   // `storage.buckets.<nombre>`. Una clave por defecto invitaba a leerla con
   // @Value y a subir a un bucket que el sidecar minio-init nunca crea — el fallo
   // solo aparece al leer el objeto, muy lejos de la subida que lo causó.
   const lines = ['storage:', `  provider: ${stack.storage}`];
-  if (isMinio) {
+  if (isTest) {
+    // Endpoint local SIEMPRE, también con `storage: s3`. Sin él, el
+    // `@Value("${storage.endpoint:}")` del bean queda vacío, no hay
+    // endpointOverride y el S3Client apunta al S3 REAL de AWS: cualquier llamada
+    // al arrancar el contexto (un ensureBucket del adaptador) sale a Internet con
+    // credenciales de juguete y tumba @SpringBootTest. El puerto 9000 no escucha
+    // en test; es deliberado: si algo llama, falla en local y rápido.
+    lines.push('  endpoint: http://localhost:9000');
+  } else if (isMinio) {
     lines.push(`  endpoint: ${envValue(profile, 'STORAGE_ENDPOINT', 'http://localhost:9000')}`);
   } else if (profile === 'local') {
     lines.push('  # S3 real: el endpoint lo resuelve el SDK por región; define STORAGE_ENDPOINT solo para un compatible.');
   }
   lines.push(
     `  region: ${envValue(profile, 'STORAGE_REGION', 'us-east-1')}`,
-    `  access-key: ${envValue(profile, 'STORAGE_ACCESS_KEY', isMinio ? 'minioadmin' : 'changeme')}`,
-    `  secret-key: ${envValue(profile, 'STORAGE_SECRET_KEY', isMinio ? 'minioadmin' : 'changeme')}`,
-    isMinio ? '  path-style-access: true' : '  path-style-access: false'
+    `  access-key: ${envValue(profile, 'STORAGE_ACCESS_KEY', isTest ? 'test' : isMinio ? 'minioadmin' : 'changeme')}`,
+    `  secret-key: ${envValue(profile, 'STORAGE_SECRET_KEY', isTest ? 'test' : isMinio ? 'minioadmin' : 'changeme')}`,
+    isMinio || isTest ? '  path-style-access: true' : '  path-style-access: false'
+  );
+
+  // Aprovisionamiento de buckets desde la propia app (el ensureBucket /
+  // ensurePublicRead idempotente del adaptador, ver la skill keel-spring-s3).
+  // Es una decisión de ENTORNO, no de código, y por eso viaja en la config:
+  //   - local: lo hace el sidecar minio-init del compose, pero dejarlo activo no
+  //     cuesta nada y cubre a quien levante la infra a mano.
+  //   - test: false, imprescindible. No hay S3 ni MinIO al que llamar y el
+  //     arranque del contexto no puede depender de la red.
+  //   - production: opt-in. Crear buckets desde la app exige permisos
+  //     s3:CreateBucket/PutBucketPolicy que la plataforma no suele conceder —y
+  //     que no conviene pedir—, así que por defecto no, y quien tenga un entorno
+  //     real sin nada que provisione lo activa con STORAGE_ENSURE_BUCKETS.
+  lines.push(
+    `  ensure-buckets-on-startup: ${
+      isTest ? 'false' : profile === 'local' ? 'true' : profile === 'develop' ? '${STORAGE_ENSURE_BUCKETS:true}' : '${STORAGE_ENSURE_BUCKETS:false}'
+    }`
   );
 
   // Política declarada por bucket en el diseño: la aplica el adaptador
@@ -680,19 +712,33 @@ function testProfileFiles(model) {
     );
   }
 
-  // Storage: valores dummy para que el bean S3Client (S3Config) y el adaptador
-  // S3FileStorage se creen en @SpringBootTest sin infra real (no conectan al
-  // construirse). Igual que persistence recibe H2 en el perfil test.
-  if (model.layersPresent.storage) {
+  // Storage: mismo generador que el resto de perfiles (endpoint local,
+  // credenciales de juguete, aprovisionamiento desactivado y el mapa completo de
+  // `storage.buckets.*`), para que el bean S3Client, el adaptador S3FileStorage y
+  // el binding StorageProperties se creen en @SpringBootTest sin infra real ni
+  // salida a la red. Igual que persistence recibe H2 en el perfil test.
+  if (model.layersPresent.storage && model.stack.storage) {
+    fragments.push(fragment('test', 'storage', storageYaml(model, 'test')));
+  }
+
+  // Resource server JWT: sin issuer-uri ni jwk-set-uri, Boot no autoconfigura
+  // ningún JwtDecoder y la SecurityFilterChain que genera build no se puede
+  // construir — @SpringBootTest muere con NoSuchBeanDefinitionException. Se
+  // siembra un jwk-set-uri de juguete porque, a diferencia de issuer-uri (que
+  // resuelve el discovery OIDC), el JWK set se pide de forma perezosa en la
+  // primera validación: basta para crear el decoder y no toca la red al arrancar.
+  // El decoder no valida nada de verdad; solo permite que el contexto cargue.
+  if (model.layersPresent.security && (model.security?.protocol === 'oidc' || model.security?.protocol === 'jwt')) {
     fragments.push(
-      fragment('test', 'storage', [
-        'storage:',
-        '  provider: s3',
-        '  bucket: test-bucket',
-        '  region: us-east-1',
-        '  access-key: test',
-        '  secret-key: test',
-        '  path-style-access: true'
+      fragment('test', 'oauth2', [
+        'spring:',
+        '  security:',
+        '    oauth2:',
+        '      resourceserver:',
+        '        jwt:',
+        '          # Perfil test: no hay proveedor de identidad. Puerto 9 (discard) a',
+        '          # propósito: si algo intentara resolverlo, falla en local y rápido.',
+        '          jwk-set-uri: http://localhost:9/.well-known/jwks.json'
       ].join('\n') + '\n')
     );
   }

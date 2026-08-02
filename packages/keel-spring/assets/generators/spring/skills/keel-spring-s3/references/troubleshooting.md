@@ -13,16 +13,32 @@ correcto. Segunda causa: credenciales distintas de las del compose
 
 ## `NoSuchBucket`
 
-El bucket no existe en el MinIO local: créalo
-(`mc mb -p local/<bucket>`, receta en `references/implementation.md`). Los
-volúmenes del compose persisten entre reinicios, pero un
-`docker compose down -v` los borra — recrea el bucket tras limpiar volúmenes.
+El bucket no existe en el MinIO local: créalo con `mc mb -p local/<bucket>` (el
+aprovisionamiento desde la app está en `references/implementation.md §
+Aprovisionamiento de buckets`). Los volúmenes del compose persisten entre
+reinicios, pero un `docker compose down -v` los borra — recrea el bucket tras
+limpiar volúmenes.
+
+## `./gradlew test` falla con una excepción del SDK al cargar el contexto
+
+Síntoma: `<Nombre>ApplicationTests.contextLoads()` muere con un error de conexión,
+`SdkClientException` o un timeout contra `s3.<region>.amazonaws.com`. El perfil
+`test` no tiene S3 ni MinIO: algo está llamando al SDK **al arrancar**.
+
+- Aprovisionamiento sin guarda: el componente que asegura los buckets ignora
+  `storage.ensure-buckets-on-startup` (que en `test` vale `false`). Ver
+  `references/implementation.md § Aprovisionamiento de buckets`.
+- Llamada en el constructor de un bean en vez de en `@PostConstruct` tras la guarda.
+- `parameters/test/storage.yaml` editado sin `endpoint`: el `@Value("${storage.endpoint:}")`
+  queda vacío, no hay `endpointOverride` y el SDK sale a AWS real. `build` lo
+  siembra apuntando a `http://localhost:9000` precisamente para eso.
 
 ## La subida responde `201` pero el `GET` directo a la URL da `403`
 
 Bucket declarado `visibility: public` sin bucket policy de lectura anónima:
-crearlo no lo hace público. Aplica la policy (idempotente, en cada arranque —
-receta en `references/implementation.md`) o, en local,
+crearlo no lo hace público. Aplica la policy (idempotente, en cada arranque en que
+`storage.ensure-buckets-on-startup` lo permita — receta en
+`references/implementation.md § visibility: public`) o, en local,
 `mc anonymous set download local/<bucket>`. El síntoma engaña porque la escritura
 y el evento van bien: solo falla el Then que lee la imagen.
 

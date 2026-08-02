@@ -30,7 +30,11 @@ validación funcional contra el servidor real.
 > escenarios en OK. La suite de pruebas **unitarias** sigue siendo un proceso
 > **independiente y posterior**, que arranca cuando el diseñador ha validado el
 > funcionamiento del servidor; el andamiaje que deja `build` (deps, perfil `test` con H2,
-> `<Nombre>ApplicationTests`) se conserva intacto para esa fase.
+> `<Nombre>ApplicationTests`) se conserva intacto para esa fase. La única excepción es
+> `./gradlew test` en la fase 3: ahí esa suite es solo `contextLoads()`, y es lo único que
+> comprueba que **todos los beans arrancan bajo el perfil `test`** —los escenarios corren
+> con `@ActiveProfiles("local")` contra infraestructura real y no lo cubren—. No se
+> escriben pruebas unitarias nuevas; solo se ejecuta la que `build` ya dejó.
 
 ## El pipeline
 
@@ -75,9 +79,9 @@ flowchart TB
     CODE -.->|"tras el ciclo de fix<br/>se vuelve SIEMPRE al script"| SCORE
     TESTS -.-> SCORE
 
-    QUALITY(["🤖 Fase 3 — keel-spring-quality<br/>pase no-conductual + ./gradlew build -x test en verde<br/>+ ./gradlew integrationTest al 100% (no-regresión)<br/>+ baseline de migraciones (con persistence)"])
+    QUALITY(["🤖 Fase 3 — keel-spring-quality<br/>pase no-conductual + ./gradlew build -x test en verde<br/>+ ./gradlew integrationTest al 100% (no-regresión)<br/>+ ./gradlew test (contextLoads bajo perfil test)<br/>+ baseline de migraciones (con persistence)"])
     QUALITY --> GATE3{Gating fase 3}
-    GATE3 -->|"quality KO, baseline KO<br/>o scenarios KO<br/>→ revertir el pase de calidad"| STOP3[/"Detenerse y reportar"/]
+    GATE3 -->|"quality KO, baseline KO,<br/>contextTest KO o scenarios KO<br/>→ revertir el pase de calidad"| STOP3[/"Detenerse y reportar"/]
     GATE3 -->|OK| README["⚙ Actualizar README<br/>guía de despliegue productivo<br/>(pasos + parámetros de parameters/production/*)"]
     README --> CLOSE["⚙ Cierre: INFORME-GENERACION.md · compose down · commit<br/>«Generado desde specs/&lt;servicio&gt; v&lt;version&gt;»<br/>+ resumen (matriz, remaining, blockers, designGaps)"]
 ```
@@ -186,6 +190,7 @@ candado y la regla escrita en cada agente, el porqué.
 | `probes[].verdict: FALSO-NEGATIVO` | `keel-spring-infra` | Orquestador, `INFORME-GENERACION.md` | Un check de `infra/validate-infra.sh` que falla con el efecto verificado en verde: el sondeo del generador está desalineado. No detiene nada (la infraestructura está sana), pero es un defecto del scaffold — se porta, no se parchea en el proyecto. |
 | `baseline` | `keel-spring-quality` | Orquestador | Gate de desplegabilidad: `KO` → relanzar una vez con el error; sin `OK` el commit lo dice explícitamente (production no arrancaría). |
 | `scenarios: OK \| KO` | `keel-spring-quality` | Orquestador | No-regresión: el pase de calidad no cambió comportamiento. `KO` → revertir el pase, no tocar las pruebas. |
+| `contextTest: OK \| KO` | `keel-spring-quality` | Orquestador | `./gradlew test`: el contexto arranca bajo el perfil `test` (H2, sin infra, sin red). Cubre lo que los escenarios no ven, porque corren con `@ActiveProfiles("local")` contra infraestructura real: un adaptador que conecta al construirse o un bean que espera config que el perfil `test` no declara. `KO` → relanzar una vez con el error; sin `OK`, el commit lo dice. |
 | `blockers` / `designGaps` | Cualquiera | Usuario | Contradicciones o huecos del diseño: se detiene la orquestación o se consolidan en el resumen; nunca se resuelven relanzando. |
 
 ## El ciclo de fix se verifica a sí mismo, pero no se aprueba a sí mismo

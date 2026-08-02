@@ -221,9 +221,20 @@ export function generate(model) {
     );
   }
 
+  // Arranque del contexto: los escenarios corren con @ActiveProfiles("local")
+  // contra infraestructura real, así que no ven lo que se rompe en el perfil
+  // `test` (H2, sin contenedores, sin red) — un adaptador que conecta al
+  // construirse, o un bean que espera config que ese perfil no declara.
+  const contextStep = selected.length > 0 ? 4 : 3;
+  lines.push(
+    `${contextStep}. Arranque del contexto: \`./gradlew test\` — en este punto la suite unitaria es solo \`contextLoads()\`, y es lo`,
+    '   único que comprueba que **todos los beans arrancan bajo el perfil `test`** que genera `build`. No se escriben',
+    '   pruebas unitarias nuevas aquí: la suite unitaria es un proceso posterior.'
+  );
+
   // Gate de migraciones: se comprueba al final, cuando las entidades ya no cambian.
   if (layersPresent.persistence) {
-    const step = selected.length > 0 ? 4 : 3;
+    const step = contextStep + 1;
     lines.push(
       `${step}. Migraciones: con las entidades ya finales, \`bash infra/export-schema.sh\`, revisa el DDL y cópialo como`,
       '   `src/main/resources/db/migration/V1__baseline_schema.sql`; luego arranca con `PROFILE=local,migrations` sobre una',

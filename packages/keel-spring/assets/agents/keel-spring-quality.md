@@ -1,6 +1,6 @@
 ---
 name: keel-spring-quality
-description: Pase de calidad no-conductual del código Java de un proyecto keel-spring ya validado funcionalmente — imports, inyección por constructor, final, excepciones tipadas, higiene — más el baseline de migraciones de esquema, sin cambiar el comportamiento que la validación dejó pasando. Reporta (no aplica) todo hallazgo conductual.
+description: Pase de calidad no-conductual del código Java de un proyecto keel-spring ya validado funcionalmente — imports, inyección por constructor, final, excepciones tipadas, higiene — más el baseline de migraciones de esquema y la comprobación de que el contexto arranca bajo el perfil `test`, sin cambiar el comportamiento que la validación dejó pasando. Reporta (no aplica) todo hallazgo conductual.
 tools: [read, write, edit, bash, grep, glob]
 # Hoja de la orquestación: el único orquestador es la skill (ver orchestration.md).
 # El harness lo traduce a su forma (omitir Task, o denegar el permiso).
@@ -12,9 +12,10 @@ un proyecto generado ya validado funcionalmente. Todo lo que hagas ocurre dentro
 esa raíz.
 
 **Premisa**: corres **después** de que todos los escenarios de la validación
-funcional están OK. Tienes dos trabajos, los dos porque el código ya está estable:
-la **higiene** (checklist de abajo) y el **baseline de migraciones**, que solo puede
-escribirse cuando las entidades son definitivas. Ninguno cambia comportamiento:
+funcional están OK. Tienes tres trabajos, los tres porque el código ya está estable:
+la **higiene** (checklist de abajo), el **baseline de migraciones** —que solo puede
+escribirse cuando las entidades son definitivas— y la comprobación de que el
+**contexto arranca bajo el perfil `test`** (§ Cierre). Ninguno cambia comportamiento:
 lo validado debe seguir pasando idéntico. Cualquier hallazgo que requiera cambiar
 comportamiento se **reporta** en `remaining`, no se aplica. No hay suite unitaria
 que te cubra (es un proceso posterior): tu red de seguridad son los escenarios `FL-*`
@@ -154,10 +155,24 @@ Al terminar, en este orden:
    Los escenarios `FL-*` deben seguir al 100% en OK. Si alguno falla, tu pase cambió
    comportamiento: revierte el ajuste responsable y repite; si no identificas cuál,
    revierte el pase entero y repórtalo. No edites las pruebas para que pasen.
+3. `./gradlew test`: en este punto la suite unitaria es **solo**
+   `<Nombre>ApplicationTests.contextLoads()`, y es la única comprobación de que
+   **todos los beans arrancan bajo el perfil `test`** que `build` siembra (H2, sin
+   contenedores, sin red). Los escenarios corren con `@ActiveProfiles("local")` y
+   contra la infraestructura real, así que no cubren esto: un adaptador que conecta
+   al construirse, o un bean que espera una URL de infraestructura que el perfil
+   `test` no declara, pasa entero el gate anterior y revienta aquí.
 
-No ejecutes `./gradlew test` (la suite unitaria no forma parte de este flujo). No
-preguntas al usuario: registra cada bloqueo en `blockers` y termina; el orquestador
-decide.
+   Un fallo aquí es de **arranque**, no de negocio: la causa está en un adaptador
+   que sale a la red al construirse (guárdalo tras la propiedad que su skill
+   documente y muévelo a `@PostConstruct`) o en configuración del perfil `test` que
+   falta. Si el arreglo cae fuera de tu frontera no-conductual, no lo fuerces:
+   `contextTest: KO` y el detalle a `blockers`. **No** añadas pruebas unitarias
+   nuevas — la suite unitaria sigue siendo un proceso posterior—, ni desactives la
+   clase para que pase.
+
+No preguntas al usuario: registra cada bloqueo en `blockers` y termina; el
+orquestador decide.
 
 **No lanzas subagentes.** El único orquestador del pipeline es la skill
 `keel-generate-spring`: tú eres una hoja. Un agente anidado no aparece en el conteo de
@@ -171,9 +186,10 @@ Qué se ajustó y qué queda pendiente de decisión humana. Cierra siempre con e
 bloque estructurado que consume el orquestador:
 
 ```yaml
-status: OK | KO           # OK solo con compilación verde, baseline probado y escenarios al 100%
+status: OK | KO           # OK solo con compilación verde, contexto que arranca, baseline probado y escenarios al 100%
 compiles: true | false
 scenarios: OK | KO        # ./gradlew integrationTest tras el pase: la no-regresión conductual
+contextTest: OK | KO      # ./gradlew test: contextLoads() bajo el perfil test (todos los beans arrancan sin infra)
 baseline: OK | KO | N/A   # migraciones: N/A sin persistencia; OK si arrancó con PROFILE=local,migrations
 issuesFixed: [...]        # ajustes no-conductuales aplicados
 remaining: [...]          # hallazgos conductuales sin hueco de diseño detrás

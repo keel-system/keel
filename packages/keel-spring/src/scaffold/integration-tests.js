@@ -447,12 +447,26 @@ ${hasIdempotency(model) ? `
         return HttpMethod.POST.equals(method) || HttpMethod.PUT.equals(method) || HttpMethod.PATCH.equals(method);
     }
 
+${hasIdempotency(model) ? `
     protected String idempotencyKey() {
         return UUID.randomUUID().toString();
     }
-${hasMultipart(model) ? `
+` : ''}${hasMultipart(model) ? `
     /** Subida multipart: la parte binaria más los campos simples del formulario. */
     protected Response multipart(String path, String partName, String filename, String contentType, byte[] content, Map<String, String> fields${security ? ', String token' : ''}) {
+        return multipart(path, partName, filename, contentType, content, fields${security ? ', token' : ''}, ${hasIdempotency(model) ? 'idempotencyKey()' : 'null'});
+    }
+${hasIdempotency(model) ? `
+    /**
+     * Variante con \`Idempotency-Key\` explícita, simétrica a {@link #exchangeWithKey}:
+     * repetir la misma clave en dos subidas es lo que ejercita la deduplicación de
+     * una operación multipart.
+     */
+    protected Response multipartWithKey(String path, String partName, String filename, String contentType, byte[] content, Map<String, String> fields${security ? ', String token' : ''}, String idempotencyKey) {
+        return multipart(path, partName, filename, contentType, content, fields${security ? ', token' : ''}, idempotencyKey);
+    }
+` : ''}
+    private Response multipart(String path, String partName, String filename, String contentType, byte[] content, Map<String, String> fields${security ? ', String token' : ''}, String idempotencyKey) {
         ByteArrayResource part = new ByteArrayResource(content) {
             @Override
             public String getFilename() {
@@ -468,7 +482,9 @@ ${hasMultipart(model) ? `
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.MULTIPART_FORM_DATA);
-        headers.set("Idempotency-Key", idempotencyKey());${security ? `
+        if (idempotencyKey != null) {
+            headers.set("Idempotency-Key", idempotencyKey);
+        }${security ? `
         if (token != null) {
             headers.setBearerAuth(token);
         }` : ''}

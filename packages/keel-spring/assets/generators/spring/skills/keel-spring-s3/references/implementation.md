@@ -83,13 +83,84 @@ try (S3Presigner presigner = S3Presigner.builder()
   que verá el consumidor (`http://localhost:9000` si valida desde el host);
   la firma incluye el host — no se puede reescribir después.
 
-## Bucket en local
+## Aprovisionamiento de buckets: `storage.ensure-buckets-on-startup`
 
-No lo creas tú ni añadas scripts a `infra/`: el sidecar `minio-init` del
-`infra/docker-compose.yaml` que genera `keel-spring build` ya crea cada bucket
-declarado al levantar la infraestructura. Lo que sí es tuyo es que el adaptador
-lo asegure por su cuenta al arrancar — ver la sección siguiente, que es la que
-manda sobre el reparto.
+En local **no lo creas tú ni añadas scripts a `infra/`**: el sidecar `minio-init`
+del `infra/docker-compose.yaml` que genera `keel-spring build` ya crea cada bucket
+declarado al levantar la infraestructura.
+
+Aun así el adaptador lleva su propio aprovisionamiento idempotente, porque en un
+entorno real no hay compose que prepare nada. Pero **no es incondicional**: si lo
+fuera, arrancar el contexto donde no hay S3 alcanzable —empezando por el perfil
+`test` que genera el propio `build`, con H2 y sin contenedores— saldría a la red y
+el arranque fallaría. Quién lo hace es una decisión de **entorno**, y viaja en la
+config que `build` siembra:
+
+| Perfil | `storage.ensure-buckets-on-startup` | Por qué |
+|---|---|---|
+| `local` | `true` | Redundante con `minio-init`, pero cubre a quien levante la infra a mano |
+| `test` | `false` | No hay nada a lo que llamar; el contexto debe cargar sin red |
+| `develop` | `${STORAGE_ENSURE_BUCKETS:true}` | Entorno efímero, normalmente sin plataforma que provisione |
+| `production` | `${STORAGE_ENSURE_BUCKETS:false}` | Crear buckets exige `s3:CreateBucket`/`PutBucketPolicy`, permisos que no conviene pedir: lo normal es que el bucket lo provea la plataforma. Opt-in para quien no la tenga |
+
+La guarda va **dentro** del componente, leída con `@Value`, y el punto de enganche
+es un `@PostConstruct` de un componente propio — no lo metas en el constructor del
+adaptador ni en el del bean `S3Client`: un fallo de red durante la construcción del
+bean deja el contexto sin arrancar y sin mensaje útil.
+
+```java
+@Component
+public class S3BucketBootstrap {
+
+    private static final Logger log = LoggerFactory.getLogger(S3BucketBootstrap.class);
+
+    private final S3Client s3Client;
+    private final StoragePolicies policies;
+    private final boolean ensureOnStartup;
+
+    public S3BucketBootstrap(S3Client s3Client, StoragePolicies policies,
+            @Value("${storage.ensure-buckets-on-startup:false}") boolean ensureOnStartup) {
+        this.s3Client = s3Client;
+        this.policies = policies;
+        this.ensureOnStartup = ensureOnStartup;
+    }
+
+    @PostConstruct
+    void ensureBuckets() {
+        // Sin esta guarda, arrancar en un perfil sin S3 alcanzable (test, o
+        // cualquier entorno donde la plataforma ya provee el bucket) sale a la red
+        // y tumba el contexto. El default `false` es deliberado: si la propiedad
+        // faltara, lo seguro es no tocar nada.
+        if (!ensureOnStartup) {
+            log.debug("storage.ensure-buckets-on-startup=false: no se aprovisionan buckets");
+            return;
+        }
+        // Una constante por bucket declarado en storage.keel.yaml (las genera build
+        // en el puerto StoragePolicies): nunca literales.
+        for (String name : List.of(StoragePolicies.<BUCKET>, /* … */)) {
+            BucketPolicy policy = policies.forBucket(name);
+            ensureBucket(policy.bucket());
+            if (policy.publicRead()) {
+                ensurePublicRead(policy.bucket());
+            }
+        }
+    }
+
+    private void ensureBucket(String bucket) {
+        try {
+            s3Client.headBucket(HeadBucketRequest.builder().bucket(bucket).build());
+        } catch (NoSuchBucketException e) {
+            s3Client.createBucket(CreateBucketRequest.builder().bucket(bucket).build());
+        }
+    }
+
+    // ensurePublicRead: ver la sección siguiente.
+}
+```
+
+`headBucket` + `createBucket` en vez de `createBucket` a secas: crear un bucket que
+ya existe responde `BucketAlreadyOwnedByYou` en S3 real pero `BucketAlreadyExists`
+contra otros compatibles, y distinguir por excepción es más frágil que preguntar.
 
 ## `visibility: public` — crear el bucket **no** lo hace público
 
@@ -112,10 +183,10 @@ mc anonymous set download local/<bucket>   # solo los visibility: public
 y `infra/validate-infra.sh` comprueba que quedaron así. No lo repliques a mano
 ni edites el compose para ello.
 
-Lo que sigue siendo tuyo es el adaptador, de forma **idempotente y en cada
-arranque** — en un entorno real no hay compose que prepare nada (no solo cuando
-el bucket se acaba de crear: los buckets preexistentes también deben quedar
-bien), para cada bucket con `visibility: public`:
+Lo que sigue siendo tuyo es aplicarla desde la app, de forma **idempotente y en
+cada arranque en que la guarda de la sección anterior lo permita** — no solo
+cuando el bucket se acaba de crear: los buckets preexistentes también deben quedar
+bien —, para cada bucket con `visibility: public`:
 
 ```java
 private void ensurePublicRead(String bucket) {
@@ -151,4 +222,5 @@ tocar nada: un rojo con la lectura en verde es un defecto del sondeo del generad
 - [ ] Nombre de bucket leído del puerto `StoragePolicies` (`forBucket(...).bucket()`), nunca literal en el código ni por `@Value("${storage.bucket}")`, que ya no existe.
 - [ ] `maxSizeMb` y `allowedContentTypes` consultados con `BucketPolicy`, no copiados como constantes en el caso de uso.
 - [ ] En local, el bucket lo prepara `minio-init` (compose); la app lo asegura igualmente para entornos reales.
+- [ ] El aprovisionamiento de la app va tras la guarda `@Value("${storage.ensure-buckets-on-startup:false}")` y en un `@PostConstruct`, nunca en el constructor de un bean. Verificable: `PROFILE=test` (o `./gradlew test`) debe arrancar el contexto sin tocar la red.
 - [ ] Cada bucket `visibility: public` con su bucket policy de lectura anónima aplicada (idempotente, también sobre buckets ya existentes).

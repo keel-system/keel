@@ -121,6 +121,10 @@ test('scaffoldService genera el proyecto completo con contenido clave', () => {
   assert.ok(advice.includes('@ExceptionHandler(DomainException.class)'));
   assert.ok(advice.includes('@ExceptionHandler(Exception.class)'));
   assert.ok(advice.includes('"VALIDATION_ERROR"'));
+  // Parámetro de query obligatorio ausente: Spring lo rechaza ANTES de Bean
+  // Validation, así que sin su handler cae en el catch-all y sale 500 por un 400.
+  assert.ok(advice.includes('@ExceptionHandler(MissingServletRequestParameterException.class)'));
+  assert.ok(advice.includes('org.springframework.web.bind.MissingServletRequestParameterException'));
   // Conflicto de concurrencia optimista → 409 (no cae en el catch-all 500).
   assert.ok(advice.includes('@ExceptionHandler(ObjectOptimisticLockingFailureException.class)'));
   assert.ok(advice.includes('"OPTIMISTIC_LOCK_CONFLICT"'));
@@ -675,7 +679,11 @@ test('agentes de la orquestación: proyectados al directorio de agentes de cada 
     // El árbitro ya no ejecuta la suite ni compone la matriz (eso es del script):
     // recibe los fallos puntuados y solo emite veredicto.
     ['keel-spring-validate', ['culprit: code', 'evidence:', 'score-scenarios.sh']],
-    ['keel-spring-quality', ['no-conductual']]
+    // El pase de calidad es el único que ejecuta ./gradlew test: en ese punto la
+    // suite unitaria es solo contextLoads(), y es lo único que comprueba que los
+    // beans arrancan bajo el perfil test (los escenarios corren con perfil local
+    // contra infraestructura real y no lo ven).
+    ['keel-spring-quality', ['no-conductual', './gradlew test', 'contextTest']]
   ]) {
     const agent = read(workspace, `.claude/agents/${name}.md`);
     assert.ok(agent.includes(`name: ${name}`));
@@ -839,6 +847,10 @@ test('devtools: compose trae el toolbox + Dockerfile + validate-infra.sh con las
   assert.ok(script.includes('psql -h db')); // check de la BD
   assert.ok(script.includes('kcat -b kafka:29092')); // check del broker
   assert.ok(script.includes('product-catalog-devtools')); // ejecuta vía docker exec en devtools
+  // 'Up' no es 'listo' (Keycloak, Kafka, LocalStack): sin reintentos, el sondeo
+  // inmediato tras 'up -d' da un FALLO que a la segunda pasada es verde.
+  assert.ok(script.includes('KEEL_CHECK_RETRIES:-5'));
+  assert.ok(script.includes('while [ "$attempt" -le "$RETRIES" ]'));
 
   // Reset de datos entre flujos: vacía las tablas preservando el esquema.
   const reset = read(workspace, 'infra/reset-db.sh');
@@ -920,10 +932,23 @@ test('capa storage: gradle con SDK S3, compose con MinIO y fragmento de config p
   assert.ok(!exists(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/configurations/storage/S3Config.java'));
   assert.ok(!exists(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/storage/S3FileStorage.java'));
 
-  // Perfil test: fragmento storage dummy para el adaptador que escriba el agente.
+  // Perfil test: mismo generador que el resto de perfiles, no una copia aparte.
   const testStorage = read(workspace, 'src/main/resources/parameters/test/storage.yaml');
-  assert.ok(testStorage.includes('bucket: test-bucket'));
   assert.ok(read(workspace, 'src/main/resources/application-test.yaml').includes('classpath:parameters/test/storage.yaml'));
+  // El mapa de buckets, no la clave plana `bucket:` que StorageProperties ya no
+  // bindea (forBucket lanzaría en cuanto el adaptador preguntase).
+  assert.ok(testStorage.includes('  buckets:'));
+  assert.ok(testStorage.includes('    productImages:'));
+  assert.ok(!/^ {2}bucket:/m.test(testStorage));
+  // Endpoint local SIEMPRE: sin él el S3Client apunta al S3 real de AWS y
+  // cualquier llamada al arrancar el contexto sale a Internet.
+  assert.ok(testStorage.includes('endpoint: http://localhost:9000'));
+  assert.ok(testStorage.includes('access-key: test'));
+  // Y nada de aprovisionar buckets: en test no hay a qué llamar.
+  assert.ok(testStorage.includes('ensure-buckets-on-startup: false'));
+  // La guarda existe en todos los perfiles, con production en opt-in.
+  assert.ok(localStorage.includes('ensure-buckets-on-startup: true'));
+  assert.ok(productionStorage.includes('ensure-buckets-on-startup: ${STORAGE_ENSURE_BUCKETS:false}'));
 });
 
 test('storage con s3 elegido: mismo SDK pero sin contenedor MinIO en el compose', () => {
@@ -994,6 +1019,18 @@ test('capa security (oidc): SecurityFilterChain con matchers por ruta + JwtAuthC
   assert.ok(buildGradle.includes('spring-boot-starter-security'));
   assert.ok(buildGradle.includes('spring-boot-starter-oauth2-resource-server'));
   assert.ok(read(workspace, 'src/main/resources/parameters/local/oauth2.yaml').includes('issuer-uri'));
+
+  // Perfil test: build NO genera ningún JwtDecoder (el decoder lo autoconfigura
+  // Boot), así que sin fragmento oauth2 el perfil test se queda sin decoder y
+  // @SpringBootTest muere con NoSuchBeanDefinitionException al construir la
+  // cadena. Se siembra jwk-set-uri y no issuer-uri: el JWK set se resuelve de
+  // forma perezosa en la primera validación, así que el contexto carga sin red.
+  assert.ok(!config.includes('JwtDecoder'));
+  const testOauth2 = read(workspace, 'src/main/resources/parameters/test/oauth2.yaml');
+  assert.ok(testOauth2.includes('jwk-set-uri:'));
+  assert.ok(!testOauth2.includes('issuer-uri'));
+  assert.ok(read(workspace, 'src/main/resources/application-test.yaml').includes('classpath:parameters/test/oauth2.yaml'));
+
   assert.ok(exists(workspace, '.claude/skills/keel-spring-keycloak/SKILL.md')); // skill del auth elegido
   // La skill se instala como directorio completo: sus references viajan con ella.
   assert.ok(exists(workspace, '.claude/skills/keel-spring-keycloak/references/test-clients.md'));

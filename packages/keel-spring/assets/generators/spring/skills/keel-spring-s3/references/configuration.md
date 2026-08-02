@@ -55,16 +55,29 @@ spring:
 
 - **local**: MinIO del compose (`http://localhost:9000` para la app; desde
   devtools el host es `minio`). Consola web en `localhost:9001`.
-- **test**: valores dummy ya generados (el bean se crea sin conectar; los
-  tests unitarios no tocan storage real).
+- **test**: perfil cerrado ya generado — credenciales de juguete, el mapa
+  completo de `storage.buckets.*`, `endpoint: http://localhost:9000` **aunque el
+  stack sea `s3`** (sin él el SDK apuntaría al S3 real de AWS) y
+  `ensure-buckets-on-startup: false`. El contexto debe cargar sin red: no lo
+  edites para que algo "funcione" en test.
 - **develop/production**: bucket/credenciales por env var (gradiente); recuerda
   quitar `endpoint` si el destino es S3 real.
+
+### `storage.ensure-buckets-on-startup`
+
+Decide si la app aprovisiona sus buckets al arrancar (`ensureBucket` /
+`ensurePublicRead`). `build` la siembra en los cuatro perfiles: `true` en local,
+`false` en test, `${STORAGE_ENSURE_BUCKETS:true}` en develop y
+`${STORAGE_ENSURE_BUCKETS:false}` en production. La receta del componente que la
+lee está en `references/implementation.md`.
 
 ## Qué no hacer
 
 - No pongas credenciales reales en ningún YAML (ni en develop como default).
-- No crees buckets desde la app en production (permiso innecesario y
-  peligroso): el bucket lo provee la plataforma; en local se crea una vez
-  (ver `references/implementation.md`).
+- No aprovisiones buckets desde la app **incondicionalmente**: pasa siempre por
+  `storage.ensure-buckets-on-startup` (receta en `references/implementation.md`).
+  En production su default es `false` a propósito — el bucket lo suele proveer la
+  plataforma y `s3:CreateBucket`/`PutBucketPolicy` son permisos que no conviene
+  pedir; quien tenga un entorno real sin nada que provisione lo activa por env var.
 - No sirvas archivos privados proxyeando bytes por el servicio si el diseño
   pide URLs firmadas: presigned URL y que el cliente descargue directo.

@@ -21,6 +21,14 @@ bash infra/validate-infra.sh                        # un check por tecnología d
 comando de sondeo dentro del contenedor que corresponde. Si todo responde, imprime
 `Infraestructura OK.`; si no, lista los `FALLO` y sale con `1`.
 
+Cada check reintenta antes de darse por vencido (5 intentos separados 5s,
+ajustables con `KEEL_CHECK_RETRIES` / `KEEL_CHECK_DELAY`), porque que el contenedor
+reporte `Up` no significa que su listener acepte conexiones: Keycloak en `start-dev`,
+Kafka y LocalStack tardan un margen en publicarlo, y un sondeo inmediato tras
+`up -d` daría un `FALLO` que a la segunda pasada es verde. Un `FALLO` del script es
+por tanto una dependencia realmente caída, no un arranque lento: no lo repitas a
+mano esperando que cambie, diagnostica el contenedor.
+
 ## Patrón manual
 
 El contenedor `<servicio>-devtools` trae solo las CLIs del stack y alcanza a los
@@ -128,6 +136,14 @@ usar bloqueo optimista, renombrar) deja por tanto columnas huérfanas en las tab
 columna huérfana `NOT NULL` hace fallar **todo** `INSERT` sobre esa tabla con un 409 de
 violación de integridad que no menciona la causa. El síntoma es inconfundible: la suite
 entera cae de golpe en las operaciones de escritura de un agregado, con el mismo error.
+
+`update` tampoco **altera** una constraint que ya existe, y el caso que más despista es la
+`CHECK` de un enum: Hibernate la crea una sola vez con los valores del momento, así que si el
+diseño renombra o añade un valor (`RETIRED` → `DISCONTINUED`) entre dos generaciones sobre la
+misma BD, la tabla conserva la lista vieja. Toda escritura del valor nuevo cae con
+`violates check constraint "<tabla>_<campo>_check"` **para un valor que el enum del código sí
+declara** — y no hay migración que lo corrija, porque en `local` no hay Flyway hasta el
+baseline del cierre. Misma salida: recrear el esquema.
 
 La salida es recrear el esquema, sin tocar el volumen ni los contenedores:
 

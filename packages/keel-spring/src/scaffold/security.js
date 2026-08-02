@@ -197,7 +197,12 @@ ${corsLine}            .authorizeHttpRequests(auth -> auth.anyRequest().permitAl
   // eso se comprueba como autorización, en un filtro posterior a la
   // autenticación y anterior al AuthorizationFilter, cuya AccessDeniedException
   // traduce a 403 el ExceptionTranslationFilter.
-  let decoderBean = '';
+  //
+  // Por eso aquí no se genera NINGÚN bean JwtDecoder: el decoder lo autoconfigura
+  // Boot desde `spring.security.oauth2.resourceserver.jwt.*`, que build siembra
+  // por perfil (issuer-uri en local/develop/production, jwk-set-uri de juguete en
+  // test, ver config.js). Un decoder propio aquí obligaría a hardcodear una clave
+  // en src/main y a acoplar esta clase al perfil de pruebas.
   if (validateAudience) {
     imports.add('org.springframework.beans.factory.annotation.Value');
     fields.push(`
@@ -287,7 +292,7 @@ ${fields.join('')}${errorHandlers}${beforeMainChain}
         http
 ${chain.join('\n')};
         return http.build();
-    }${converterBean}${decoderBean}${serviceApiKeyBean}
+    }${converterBean}${serviceApiKeyBean}
 }`;
 
   return { path: javaPath(model, SECURITY_PKG, 'SecurityConfig'), content: javaFile(subPackage(model, SECURITY_PKG), [...imports], body) };

@@ -95,6 +95,20 @@ funciones, collations, casing de identificadores y semántica de NULL difieren
 degradando la query: confirma contra la BD real (escenario `FL-*`) y, si la
 query no puede expresarse portable, documenta la decisión.
 
+## `violates check constraint "<tabla>_<campo>_check"` con un valor que el enum sí declara
+
+En `local` el esquema lo mantiene `ddl-auto: update`, que **solo añade**: crea la
+`CHECK` de un enum una vez, con los valores de entonces, y no vuelve a tocarla. Si el
+diseño renombró o añadió un valor (`RETIRED` → `DISCONTINUED`) entre dos generaciones
+sobre la misma BD, la tabla conserva la lista vieja y rechaza el valor nuevo aunque el
+`enum` de Java, la entidad y el DDL que exportarías hoy sean correctos. Y no hay
+migración que lo reconcilie: en `local` no hay Flyway hasta el baseline del cierre.
+
+No lo busques en el código ni en una anotación `@Check`: comprueba la constraint viva
+(`\d+ <tabla>` en psql, `information_schema.check_constraints` en el resto) y compárala
+con el enum. La salida es recrear el esquema —`bash infra/reset-db.sh --schema`—, no
+editar la constraint a mano, que dejaría la BD distinta del DDL que Hibernate generaría.
+
 ## `ddl-auto: validate` falla al arrancar en production
 
 El esquema real no coincide con las entidades (columna/tipo/nullable). Es un

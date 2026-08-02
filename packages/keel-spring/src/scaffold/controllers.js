@@ -621,6 +621,7 @@ function renderExceptionHandler(model) {
     'org.springframework.http.converter.HttpMessageNotReadableException',
     'org.springframework.web.HttpRequestMethodNotSupportedException',
     'org.springframework.web.bind.MethodArgumentNotValidException',
+    'org.springframework.web.bind.MissingServletRequestParameterException',
     'org.springframework.web.bind.annotation.ExceptionHandler',
     'org.springframework.web.bind.annotation.ResponseStatus',
     'org.springframework.web.bind.annotation.RestControllerAdvice',
@@ -679,6 +680,17 @@ ${constants.join('')}
     @ExceptionHandler({HttpMessageNotReadableException.class, MethodArgumentTypeMismatchException.class})
     public ErrorResponse onMalformedRequest(Exception exception) {
         return new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "Bad Request", "Petición malformada");
+    }
+
+    // Un @RequestParam obligatorio que no viaja en la query lo rechaza Spring
+    // ANTES de Bean Validation, así que ningún @NotBlank del parámetro llega a
+    // evaluarse: sin este handler el caso "parámetro ausente" cae en el catch-all
+    // y devuelve 500 donde el contrato espera 400.
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ErrorResponse onMissingRequestParameter(MissingServletRequestParameterException exception) {
+        return new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "Bad Request",
+                "Falta el parámetro '" + exception.getParameterName() + "' en la petición");
     }
 
     @ResponseStatus(HttpStatus.METHOD_NOT_ALLOWED)

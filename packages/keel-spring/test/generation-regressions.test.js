@@ -314,6 +314,46 @@ test('humo del arnés: con Kafka publica tráfico real; con RabbitMQ, los canale
 
 // ─── Fricciones de la generación de catalog-spring (informe de fricciones) ────
 
+test('el arnés permite fijar la Idempotency-Key también en una subida multipart', () => {
+  const { read } = scaffoldExtended();
+  const harness = read('src/integrationTest/java/com/commerce/catalog/flows/AbstractFlowIT.java');
+
+  // Sin esta variante, el punto "repetir la subida con la misma clave no duplica"
+  // de un escenario de imágenes es inexpresable: la firma corta genera una clave
+  // nueva por llamada, así que la segunda subida nunca es un reintento.
+  assert.ok(harness.includes('protected Response multipartWithKey('));
+  assert.ok(harness.includes('String idempotencyKey) {'));
+  // La firma corta sigue existiendo y delega: los escenarios que no ejercitan
+  // deduplicación no cambian.
+  assert.ok(harness.includes('Map<String, String> fields) {\n        return multipart('));
+  // El header ya no se estampa incondicionalmente: sale de la clave recibida.
+  assert.ok(!harness.includes('headers.set("Idempotency-Key", idempotencyKey());'));
+  assert.ok(harness.includes('headers.set("Idempotency-Key", idempotencyKey);'));
+});
+
+test('sin idempotencia declarada, el arnés no estampa Idempotency-Key en multipart', () => {
+  const { manifest, layers } = loadService(fixtureDir);
+  const sinIdempotencia = structuredClone(layers);
+  for (const operation of Object.values(sinIdempotencia['use-cases'].operations)) {
+    delete operation.idempotency;
+  }
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-regression-'));
+  scaffoldService({ manifest, layers: sinIdempotencia, workspace, force: true });
+  const harness = fs.readFileSync(
+    path.join(workspace, 'services/catalog-spring/src/integrationTest/java/com/commerce/catalog/flows/AbstractFlowIT.java'),
+    'utf8'
+  );
+
+  // Enviar el header donde el diseño no declara idempotencia prueba un contrato
+  // que el servicio no tiene: `exchange` ya lo evitaba, `multipart` no.
+  assert.ok(!harness.includes('multipartWithKey'));
+  assert.ok(!harness.includes('exchangeWithKey'));
+  // No hay clave que estampar: ambas rutas delegan con null y la guarda del
+  // header nunca se cumple. `idempotencyKey()` no llega a invocarse en ninguna.
+  assert.ok(!harness.includes('idempotencyKey()'));
+  assert.ok(harness.includes('if (idempotencyKey != null) {'));
+});
+
 test('el arnés sondea el topic físico del servicio, no el canal lógico', () => {
   const { read } = scaffoldExtended();
   const harness = read('src/integrationTest/java/com/commerce/catalog/flows/AbstractFlowIT.java');
@@ -844,4 +884,32 @@ test('normalización antes que formato: el patrón del value type no llega al DT
   assert.ok(!command.includes('@Pattern'), command);
   // Presencia sí se queda: no compite con ninguna normalización.
   assert.ok(command.includes('@NotBlank String sku'), command);
+});
+
+test('config de storage: el mapa storage.buckets.* está en los CUATRO perfiles, test incluido', () => {
+  const { read } = scaffoldExtended();
+
+  // El perfil test tenía su propio YAML escrito a mano, y se desincronizó: emitía
+  // la clave plana `bucket: test-bucket` que el refactor a `storage.buckets.*`
+  // eliminó del contrato, así que StorageProperties.forBucket lanzaba
+  // IllegalStateException en cuanto el adaptador preguntaba por la política.
+  // Ahora los cuatro salen de storageYaml(); esta prueba lo fija.
+  for (const profile of ['local', 'develop', 'production', 'test']) {
+    const yaml = read(`src/main/resources/parameters/${profile}/storage.yaml`);
+    assert.ok(yaml.includes('  buckets:'), `${profile}: falta el mapa de buckets`);
+    assert.ok(yaml.includes('    productImages:'), `${profile}: falta el bucket del diseño`);
+    assert.ok(yaml.includes('      visibility: public'), `${profile}: falta la visibilidad declarada`);
+    assert.ok(yaml.includes('      max-size-mb: 5'), `${profile}: falta el límite del diseño`);
+    // La clave plana ya no existe: si reaparece, el adaptador vuelve a poder
+    // leerla con @Value y a subir a un bucket que nadie preparó.
+    assert.ok(!/^ {2}bucket:/m.test(yaml), `${profile}: clave 'bucket' plana, eliminada del contrato`);
+    // La guarda de aprovisionamiento va en todos: sin ella el adaptador la lee
+    // con el default `false` y en local no se asegura nada.
+    assert.ok(yaml.includes('ensure-buckets-on-startup:'), `${profile}: falta la guarda de aprovisionamiento`);
+  }
+
+  // El perfil test es cerrado: sin red, sin aprovisionar y sin salir a AWS.
+  const testYaml = read('src/main/resources/parameters/test/storage.yaml');
+  assert.ok(testYaml.includes('ensure-buckets-on-startup: false'), testYaml);
+  assert.ok(testYaml.includes('endpoint: http://localhost:9000'), testYaml);
 });

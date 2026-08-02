@@ -18,7 +18,7 @@ y prod (S3); la diferencia (endpoint / path-style) vive en `storage.yaml` por pe
 ## Qué dejó listo build
 
 - `build.gradle`: `software.amazon.awssdk:s3` (AWS SDK v2).
-- `parameters/<perfil>/storage.yaml`: provider, endpoint, región, credenciales, bucket y `path-style-access` por perfil (local apunta al MinIO del compose; test trae valores dummy), más la **política de cada bucket del diseño** bajo `storage.buckets.<bucket>`: `visibility`, `max-size-mb` y `allowed-content-types`. Al código entra por el puerto `StoragePolicies`/`BucketPolicy` que genera `build`; no la re-derives ni la hardcodees.
+- `parameters/<perfil>/storage.yaml`: provider, endpoint, región, credenciales, `path-style-access` y `ensure-buckets-on-startup` por perfil (local apunta al MinIO del compose; test trae valores de juguete, endpoint local y la guarda a `false`), más la **política de cada bucket del diseño** bajo `storage.buckets.<bucket>`: `visibility`, `max-size-mb` y `allowed-content-types`. Al código entra por el puerto `StoragePolicies`/`BucketPolicy` que genera `build`; no la re-derives ni la hardcodees.
 - `spring.servlet.multipart.max-file-size` / `max-request-size` en `application.yaml`, con **holgura** sobre el mayor `maxSizeMb` declarado (sin ningún límite Spring corta en 1MB; con el límite exacto, Tomcat emitiría el 413 antes del caso de uso y ninguna guarda anterior del diseño podría precederlo). El límite de negocio lo comprueba el caso de uso, en el orden que fija el diseño.
 - `ApiExceptionHandler` con los handlers de `MaxUploadSizeExceededException` (413 `FILE_TOO_LARGE`) y `MissingServletRequestPartException` (400): no los redeclares.
 - `infra/docker-compose.yaml`: MinIO (9000 + consola 9001, minioadmin/minioadmin) — solo con `storage: minio`.
@@ -99,11 +99,16 @@ preparó.
 
 **Bucket `visibility: public`**: crearlo no lo hace público — S3 y MinIO los
 crean privados. En el entorno de prueba la policy de lectura anónima ya la
-aplica `minio-init`, y `infra/validate-infra.sh` lo comprueba. Aun así el
-adaptador **mantiene** su `ensureBucket`/`ensurePublicRead` idempotente en el
-arranque (receta en `references/implementation.md`): en un entorno real no hay
-compose que lo haga, y sin ello la subida responde `201` y la lectura directa
-`403`.
+aplica `minio-init`, y `infra/validate-infra.sh` lo comprueba. Aun así la app
+lleva su propio `ensureBucket`/`ensurePublicRead` idempotente para los entornos
+reales, donde no hay compose que lo haga y sin ello la subida responde `201` y la
+lectura directa `403`.
+
+Pero **no es incondicional**: va tras la guarda `storage.ensure-buckets-on-startup`
+que `build` siembra por perfil (`false` en `test`, opt-in en production). Sin ella,
+arrancar donde no hay S3 alcanzable —empezando por el perfil `test`, con H2 y sin
+contenedores— sale a la red y tumba el contexto. Receta completa, con la guarda y
+el punto de enganche, en `references/implementation.md`.
 
 ## Referencias
 

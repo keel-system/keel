@@ -77,6 +77,44 @@ Un `list` sobre un campo de entidad (colección de valores sin identidad) es una
 
 En el **dominio** la colección es una lista mutable interna con getter inmutable (`List.copyOf`): el alta/baja de elementos va por métodos de negocio de la raíz, nunca por el getter. El adaptador de repositorio reconstruye el VO en ambos sentidos (`toDomain`/`toJpa`); no toques ese mapeo salvo para cerrar los TODO de VO anidado.
 
+### Cuando el diseño llama «restricción de integridad» a una referencia entre agregados
+
+Entre agregados solo hay una columna `UUID <relación>Id` (fila `relations` de la tabla): sin
+asociación navegable, y por tanto sin nada que impida borrar la raíz referenciada. Con eso, un
+`deleteBrand` que exija «no se borra mientras exista algún producto que la referencie» solo
+puede implementarse como **check-then-act** —contar productos, borrar—, y entre las dos
+sentencias cabe una escritura concurrente que cree el producto que acaba de comprobarse que
+no existía: la marca se borra y queda un producto apuntando a nada.
+
+Cuando el diseño llama a esa referencia «restricción de integridad» (o declara un error del
+tipo `<X>_IN_USE`), la comprobación en el handler **no basta**: es el mensaje de error amable,
+no la garantía. La garantía es una **FK real en el esquema, sin asociación JPA**: la columna sigue siendo un
+`UUID` plano en el dominio y en la entidad, y solo la BD sabe que apunta a otra tabla.
+
+No se declara con anotaciones: el atributo `foreignKey` vive en `@JoinColumn`, que exige una
+asociación, y sobre un `UUID` básico Hibernate no emite ninguna FK. Va en el **baseline de
+migraciones**, escrito a mano tras exportarlo (`infra/export-schema.sh` parte de las entidades,
+así que tampoco la incluye):
+
+```sql
+ALTER TABLE product ADD CONSTRAINT fk_product_brand
+    FOREIGN KEY (brand_id) REFERENCES brand (id);
+```
+
+El borrado concurrente falla entonces en la BD, y su violación se traduce por
+`CONSTRAINT_TO_ERROR` (`ApiExceptionHandler`) al error declarado: el cliente ve el mismo 409
+que en el camino no concurrente, con el mismo `code` — registra ahí el nombre de la constraint.
+
+Consecuencia a asumir: en `local` (esquema por `ddl-auto`, sin Flyway hasta el cierre) la FK
+no existe, así que un escenario `FL-*` que ejercite la carrera no la verá cerrada hasta que se
+ejecute contra el baseline. No es motivo para omitirla, sí para decirlo en el reporte.
+
+Mantén la comprobación previa: da el error sin gastar una transacción abortada en el caso
+normal. Lo que cambia es que deja de ser la única defensa.
+
+Si el diseño **acepta** la ventana (lo dice su `rule`), no añadas la FK: documentar el
+comportamiento y contradecirlo en el esquema es peor que cualquiera de las dos opciones.
+
 ## `use-cases` — use-cases.keel.yaml
 
 | Diseño | Código |
@@ -378,6 +416,7 @@ La publicación va **entera generada** salvo el envío físico. La cadena es: el
 | `subscriptions.E.contract.format` / `schemaRef` | Deserializador del formato (JSON por defecto; avro/protobuf → schema registry de la fuente) |
 | `subscriptions.E.contract.unknownFields` | `ignore` → `@JsonIgnoreProperties(ignoreUnknown = true)` en el record; `fail` → sin la anotación (scaffolding) |
 | `payload.<campo>.wireName` | `@JsonProperty("<wireName>")` en el componente del record (scaffolding); el nombre del DSL se mantiene en Java |
+| campo `file` en un `payload` | La **key** del objeto, tal cual la guarda el dominio. El wire de `messaging` **nunca** resuelve una URL de storage: resolver la key a URL pública (o firmada) es exclusivo del `ResponseDto` de la capa `api`. Un consumidor recibe una referencia estable al objeto; una URL caducaría, ataría el evento al proveedor de storage y se rompería al cambiar de bucket. Que el DSL describa el campo con la misma frase en `api` y en `messaging` («referencia al objeto, no el binario») no los iguala: el destino es lo que decide |
 | `subscriptions.E.input` | Argumentos del command/query de `triggers` al despachar: componente ← campo del payload (identidad por nombre si no se declara); el javadoc del record generado lo lleva escrito |
 | `channels.<c>.external: true` | El nombre físico del topic/cola lo pone su dueño: propiedad en `parameters/<perfil>`, nunca hardcodeado ni declarado en la topología local |
 | `subscriptions.E.onFailure.retry` | Reintentos con backoff según `maxAttempts`/`backoff`/`initialDelayMs` y el techo `maxDelayMs` si está declarado (ej. `DefaultErrorHandler` con `ExponentialBackOff` y su `maxInterval`) |

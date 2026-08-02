@@ -28,6 +28,7 @@ export function generate(model) {
     './gradlew bootRun',
     './gradlew build -x test        # compilación y empaquetado (no ejecuta pruebas)',
     './gradlew integrationTest      # escenarios FL-* contra la infraestructura de arriba',
+    './gradlew test                 # contextLoads(): el contexto arranca con perfil test (H2, sin infra)',
     '```',
     '',
     `Requiere Java ${JAVA_VERSION} (el wrapper de Gradle va incluido; en Windows usa \`gradlew.bat\`).`,
