@@ -654,6 +654,17 @@ test('AbstractFlowIT con capa security: credenciales por rol contra el proveedor
   // puede escribir los escenarios negativos de M2M contando con que existirán.
   assert.ok(initKeycloak.includes('clientId=test-m2m-no-scope'));
   assert.ok(initKeycloak.includes('catalog:read'));
+
+  // La sesión admin espera a que Keycloak esté listo y aborta si no lo consigue.
+  // 'start-dev' tarda decenas de segundos en la primera pasada y el compose no le
+  // pone healthcheck: sin la espera, kcadm falla, run() se traga el error —tolera
+  // el 409 de idempotencia— y el script sale con 0 sin haber creado el realm.
+  assert.ok(initKeycloak.includes('KEEL_KC_WAIT_ATTEMPTS'));
+  assert.ok(initKeycloak.includes('KEEL_KC_WAIT_DELAY'));
+  // El login NO pasa por run(): es prerrequisito, no una creación idempotente.
+  assert.ok(!initKeycloak.includes('run "config credentials'));
+  assert.ok(initKeycloak.includes('no acepto una sesion admin tras'));
+  assert.ok(initKeycloak.includes('exit 1'));
 });
 
 test('sin capa security no hay aprovisionamiento de identidad que generar', () => {

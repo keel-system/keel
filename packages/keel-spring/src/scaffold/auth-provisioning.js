@@ -135,8 +135,31 @@ function keycloakScript(model) {
 
   const blocks = [];
 
-  blocks.push(`echo "== Sesion admin =="
-run "config credentials --server http://localhost:8080 --realm master --user admin --password admin"
+  // La sesion admin NO pasa por run(): es prerrequisito de todo lo que sigue y
+  // run() traga cualquier error para tolerar el 409 de idempotencia. Contra un
+  // Keycloak todavia arrancando ('start-dev' tarda decenas de segundos en la
+  // primera pasada, y el compose no le pone healthcheck), kcadm.sh falla, y sin
+  // esta espera el script recorreria todas sus secciones sin aprovisionar nada y
+  // saldria con 0 — un proveedor vacio que la suite descubre mucho despues.
+  // El propio 'config credentials' es el sondeo: comprueba justo lo que el script
+  // necesita, sin depender de otro contenedor ni de un curl dentro de la imagen.
+  blocks.push(`echo "== Sesion admin (espera a que Keycloak acepte kcadm) =="
+KC_WAIT_ATTEMPTS="\${KEEL_KC_WAIT_ATTEMPTS:-60}"
+KC_WAIT_DELAY="\${KEEL_KC_WAIT_DELAY:-2}"
+attempt=1
+while :; do
+  if eval "$KC config credentials --server http://localhost:8080 --realm master --user admin --password admin" >/dev/null 2>&1; then
+    echo "  sesion admin establecida (intento $attempt)"
+    break
+  fi
+  if [ "$attempt" -ge "$KC_WAIT_ATTEMPTS" ]; then
+    echo "Keycloak no acepto una sesion admin tras $KC_WAIT_ATTEMPTS intentos ($((KC_WAIT_ATTEMPTS * KC_WAIT_DELAY))s)." >&2
+    echo "Diagnostica con: $RUNTIME compose -f infra/docker-compose.yaml logs keycloak" >&2
+    exit 1
+  fi
+  attempt=$((attempt + 1))
+  sleep "$KC_WAIT_DELAY"
+done
 
 echo "== Realm =="
 run "create realms -s realm=$REALM -s enabled=true"
@@ -248,7 +271,9 @@ ${assignments.join('\n')}`);
 # no se editan aqui a mano — si algo tiene que cambiar, cambia en el diseno.
 #
 # Idempotente: las creaciones toleran el 409 de Keycloak (recurso ya existente), asi
-# que se puede reejecutar tras cada 'compose up'.
+# que se puede reejecutar tras cada 'compose up'. Espera a que Keycloak acepte una
+# sesion admin antes de empezar (KEEL_KC_WAIT_ATTEMPTS / KEEL_KC_WAIT_DELAY) y aborta
+# si no lo consigue: aprovisionar a medias es peor que no aprovisionar.
 #
 # Nota: el GET client-scopes de Keycloak NO filtra por -q name=... (devuelve el
 # listado completo), a diferencia de GET clients; por eso el id de un client-scope se
