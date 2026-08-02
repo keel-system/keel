@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schema/2.0/publish.schema.json",
+  "title": "Keel Workspace Publication",
+  "description": "Dónde vive publicado este workspace (publish.yaml, en la raíz). No forma parte del DSL: no dice nada de ningún servicio, solo permite que `keel index` escriba en el README enlaces navegables a los derivados HTML (panel y visores), que en relativo GitHub muestra como código fuente. Es opcional: sin él, el índice enlaza en relativo.",
+  "type": "object",
+  "required": ["repo"],
+  "additionalProperties": false,
+  "properties": {
+    "repo": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$",
+      "description": "Repositorio de GitHub donde se publica el workspace, como <org>/<repo> (ej. keel-system/keel-registry)."
+    },
+    "branch": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Rama desde la que se sirven los archivos publicados. Por defecto, main."
+    }
+  }
+}

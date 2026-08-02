@@ -33,10 +33,11 @@ const USE_CASES = 'operations:\n  createProduct:\n    kind: command\n  listProdu
  * description, layers, sidecar, docs }. `sidecar` se serializa como YAML a mano
  * para no depender del orden de claves de la librería.
  */
-function workspace(designs, { readme = defaultReadme() } = {}) {
+function workspace(designs, { readme = defaultReadme(), publish = null } = {}) {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-index-'));
   write(path.join(cwd, 'schema', 'service.schema.json'), '{}'); // isKeelWorkspace
   write(path.join(cwd, 'README.md'), readme);
+  if (publish !== null) write(path.join(cwd, 'publish.yaml'), publish);
 
   for (const [slug, spec] of Object.entries(designs)) {
     const {
@@ -283,6 +284,90 @@ test('la columna de documentación solo enlaza derivados que existen', () => {
   assert.match(table, /\[diseño\]\(docs\/catalog\/DESIGN\.md\)/);
   assert.match(table, /\[panel\]\(docs\/catalog\/overview\.html\)/);
   assert.doesNotMatch(table, /INTEGRATION\.md/);
+});
+
+// Los visores de los contratos formales: /keel-docs los genera y hasta ahora no
+// llegaban a la portada, que es el único punto de entrada de un registry.
+const VIEWERS = {
+  'DESIGN.md': '> specs/catalog v1.0.0. Ficha.\n',
+  'overview.html': '<!-- keel:version 1.0.0 -->\n',
+  'openapi.html': '<!-- keel:version 1.0.0 -->\n',
+  'asyncapi.html': '<!-- keel:version 1.0.0 -->\n'
+};
+const withViewers = { catalog: { layers: ['domain', 'use-cases', 'api', 'messaging'], docs: VIEWERS } };
+
+test('la columna de documentación enlaza también los visores de los contratos formales', () => {
+  const index = buildIndex(workspace(withViewers));
+  const design = bySlug(index).catalog;
+
+  assert.equal(design.docs.openapiViewer, 'docs/catalog/openapi.html');
+  assert.equal(design.docs.asyncapiViewer, 'docs/catalog/asyncapi.html');
+
+  const table = renderTable(index);
+  assert.match(table, /\[API\]\(docs\/catalog\/openapi\.html\)/);
+  assert.match(table, /\[eventos\]\(docs\/catalog\/asyncapi\.html\)/);
+});
+
+test('un diseño sin capa messaging no enlaza el visor de eventos', () => {
+  const cwd = workspace({ catalog: { layers: ['domain', 'use-cases', 'api'], docs: VIEWERS } });
+  const design = bySlug(buildIndex(cwd)).catalog;
+
+  // El archivo está en disco, pero el derivado no aplica: es un huérfano, no un enlace.
+  assert.equal(design.docs.asyncapiViewer, null);
+  assert.doesNotMatch(renderTable(buildIndex(cwd)), /\[eventos\]/);
+});
+
+test('con publish.yaml, los HTML se enlazan por htmlpreview y los markdown siguen en relativo', () => {
+  const cwd = workspace(
+    { catalog: { layers: ['domain', 'use-cases', 'api', 'messaging'], docs: VIEWERS } },
+    { publish: 'repo: keel-system/keel-registry\nbranch: main\n' }
+  );
+  const table = renderTable(buildIndex(cwd));
+  const base = 'https://htmlpreview.github.io/?https://raw.githubusercontent.com/keel-system/keel-registry/main';
+
+  assert.ok(table.includes(`[panel](${base}/docs/catalog/overview.html)`));
+  assert.ok(table.includes(`[API](${base}/docs/catalog/openapi.html)`));
+  assert.ok(table.includes(`[eventos](${base}/docs/catalog/asyncapi.html)`));
+  // GitHub renderiza los .md por sí solo y en relativo funcionan además en local.
+  assert.match(table, /\[diseño\]\(docs\/catalog\/DESIGN\.md\)/);
+});
+
+test('publish.yaml sin branch asume main', () => {
+  const cwd = workspace(withViewers, { publish: 'repo: acme/designs\n' });
+
+  assert.deepEqual(buildIndex(cwd).publish, { repo: 'acme/designs', branch: 'main' });
+  assert.match(renderTable(buildIndex(cwd)), /raw\.githubusercontent\.com\/acme\/designs\/main\//);
+});
+
+test('un publish.yaml inválido avisa y cae a enlaces relativos, sin tumbar el índice', () => {
+  for (const [body, expected] of [
+    ['branch: main\n', /must have required property 'repo'/],
+    ['repo: sin-barra\n', /must match pattern/],
+    ['repo: acme/designs\ntag: v1\n', /propiedad no reconocida 'tag'/],
+    ['repo: [\n', /YAML inválido/]
+  ]) {
+    const index = buildIndex(workspace(withViewers, { publish: body }));
+
+    assert.equal(index.publish, null);
+    assert.equal(index.designs.length, 1, `el índice se construye igual con: ${body}`);
+    assert.match(index.warnings.join('\n'), /^publish\.yaml: /m);
+    assert.match(index.warnings.join('\n'), expected);
+    assert.match(renderTable(index), /\[panel\]\(docs\/catalog\/overview\.html\)/);
+  }
+});
+
+test('publish es config de renderizado: ni viaja a index.json ni cuenta para --check', () => {
+  const publish = 'repo: keel-system/keel-registry\n';
+  const conPublish = buildIndex(workspace(withViewers, { publish }));
+  const sinPublish = buildIndex(workspace(withViewers));
+
+  assert.equal(JSON.parse(renderIndexJson(conPublish)).publish, undefined);
+  // Las claves nuevas de docs sí son contenido del catálogo y sí viajan.
+  assert.equal(
+    JSON.parse(renderIndexJson(conPublish)).designs[0].docs.openapiViewer,
+    'docs/catalog/openapi.html'
+  );
+  assert.equal(canonicalJson(indexContract(conPublish)), canonicalJson(indexContract(sinPublish)));
 });
 
 test('applyMarkers reemplaza solo la región marcada y preserva el resto', () => {

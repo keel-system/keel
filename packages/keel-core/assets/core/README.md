@@ -6,15 +6,21 @@ partir de los cuales se genera la implementación en la tecnología que se quier
 
 > Edita libremente esta introducción para describir tu organización, convenciones o cómo contribuir.
 > La tabla de la sección **Servicios diseñados** la genera `keel index` (lo ejecutan `/keel-design` al
-> cerrar un diseño y `/keel-handoff`); **no edites a mano el contenido entre los marcadores**, se pisa
-> en la siguiente ejecución. `keel index --check` comprueba, sin escribir, que el índice sigue al día.
+> cerrar un diseño, `/keel-handoff` y `/keel-docs`); **no edites a mano el contenido entre los
+> marcadores**, se pisa en la siguiente ejecución. `keel index --check` comprueba, sin escribir, que el
+> índice sigue al día.
 
 ## Servicios diseñados
 
-Cada servicio enlaza su **documento de diseño** (`DESIGN.md`: modelo de dominio, invariantes, decisiones y
-cómo reutilizarlo), y, si existen, su **contrato servidor-a-servidor** (`INTEGRATION.md`, de `/keel-integrate`)
-y sus **contratos formales y panel de revisión** (`openapi.yaml`, `asyncapi.yaml`, Postman y
-`overview.html`, de `/keel-docs`).
+Cada servicio enlaza, si existen: su **documento de diseño** (`DESIGN.md`: modelo de dominio, invariantes,
+decisiones y cómo reutilizarlo), el **panel de revisión** (`overview.html`, de `/keel-docs`: el servicio
+entero de un vistazo, con enlaces a los contratos y a las colecciones Postman), los visores de sus
+**contratos formales** —**API** (`openapi.html`) y **eventos** (`asyncapi.html`)— y su **contrato
+servidor-a-servidor** (`INTEGRATION.md`, de `/keel-integrate`).
+
+> Los tres enlaces HTML solo se abren renderizados en GitHub si el workspace declara dónde está publicado.
+> Crea un `publish.yaml` en esta raíz con `repo: <org>/<repo>` (y `branch:` si no es `main`) y vuelve a
+> ejecutar `keel index`: sin él quedan como enlaces relativos, que GitHub muestra como código fuente.
 
 <!-- keel:servicios:start -->
 _Aún no hay servicios diseñados. Cierra un diseño con `/keel-design specs/<servicio>` para poblar esta tabla._

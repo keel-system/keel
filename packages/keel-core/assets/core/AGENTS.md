@@ -34,7 +34,10 @@ y después, cada vez que el diseño cambie:  /keel-evolve
 ```
 AGENTS.md            # este archivo (CLAUDE.md lo importa: es el mismo contexto con el nombre
                      # que busca Claude Code; se edita AGENTS.md, nunca la copia)
-README.md            # índice de servicios diseñados (enlaza el DESIGN.md de cada uno); página de entrada del repo
+README.md            # índice de servicios diseñados (enlaza el DESIGN.md, el panel y los visores de cada
+                     # uno); página de entrada del repo
+publish.yaml         # opcional: dónde está publicado este workspace (repo: <org>/<repo>), para que el
+                     # índice enlace los HTML navegables. NO es una capa del DSL ni describe ningún servicio
 system.yaml          # el mapa del sistema, si el workspace tiene más de un servicio (de /keel-decompose)
                      # NO es una capa del DSL: describe cómo se reparte el encargo, no lo que hace un servicio
 .gitignore           # excluye services/ del repo del workspace (aquí solo se versiona el diseño)
@@ -70,6 +73,6 @@ services/            # servicios generados por `keel-<tech> build` (un repo git 
 - **Una capa por vez.** Al diseñar o iterar, trabaja el artefacto de la capa activa y cierra sus referencias cruzadas antes de seguir.
 - **Una capa opcional existe ⇔ está declarada en `layers`** del manifiesto. No crees artefactos de capas que el servicio no necesita.
 - **Nunca generes desde un diseño inválido** ni con un generador cuya compatibilidad de versión DSL no cubra el manifiesto.
-- **El índice del `README.md` lo genera `keel index`**, nunca se edita a mano la región entre los marcadores `<!-- keel:servicios:start/end -->`. Lo ejecutan `/keel-design` al cerrar y `/keel-handoff`.
+- **El índice del `README.md` lo genera `keel index`**, nunca se edita a mano la región entre los marcadores `<!-- keel:servicios:start/end -->`. Lo ejecutan `/keel-design` al cerrar, `/keel-handoff` y `/keel-docs`. Si el workspace se publica en GitHub, un `publish.yaml` en la raíz (`repo: <org>/<repo>`) hace que el índice enlace el panel y los visores de forma navegable en vez de como código fuente.
 - **El mapa no sustituye al diseño, y no se ignora.** `system.yaml` dice qué servicios hay y quién consume a quién; lo que cada uno hace vive solo en `specs/<servicio>/`. Cuando `keel system check` reporte que el mapa y un diseño no coinciden, **se corrige uno de los dos** — un mapa que quedó atrás miente igual que un `DESIGN.md` que quedó atrás. Las olas de construcción las calcula `keel system`: no se escriben a mano ni se declaran en el mapa.
 - La metodología completa está en `docs/methodology.md`; descomponer un encargo en servicios, en `docs/system-decomposition.md`; publicar y consumir diseños reutilizables, en `docs/design-registry.md`.

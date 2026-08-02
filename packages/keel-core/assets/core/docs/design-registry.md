@@ -123,6 +123,31 @@ El listón para publicar (lo comprueba el CI del registry) es:
 6. Identificadores en inglés, prosa en español. Cero tecnología en el diseño.
 7. `keel index` ejecutado y su resultado commiteado.
 
+Ese listón es **por diseño**. Lo que sigue es config **del repo**, se hace una vez y no lo comprueba nadie.
+
+### `publish.yaml`: enlaces navegables desde la portada
+
+El índice enlaza los derivados de cada diseño. Los `.md` (`DESIGN.md`, `INTEGRATION.md`) se enlazan en
+relativo y GitHub los renderiza; los `.html` de `/keel-docs` —el panel `overview.html` y los visores
+`openapi.html` y `asyncapi.html`— no: un enlace relativo a un `.html` muestra el **código fuente**, o sea
+que el panel, que es justo lo que hace revisable un diseño sin leer el spec, queda inalcanzable.
+
+Para resolverlo, la raíz del workspace lleva un `publish.yaml` que dice dónde está publicado:
+
+```yaml
+repo: keel-system/keel-registry   # <org>/<repo>, obligatorio
+branch: main                      # opcional, por defecto main
+```
+
+Con él, `keel index` enruta esos tres enlaces por `htmlpreview.github.io`, que sirve el archivo crudo ya
+renderizado. Se eligió frente a GitHub Pages porque **no exige configurar nada en el repo**: un fork de un
+registry funciona en cuanto cambia esta línea. El archivo se valida contra `schema/publish.schema.json`;
+es **opcional** y uno inválido no tumba el índice (avisa y cae a relativo), porque un workspace privado que
+no se publica en ningún sitio no tiene por qué declarar nada.
+
+Es **configuración del workspace, no de un diseño**: por eso vive en la raíz y no en el sidecar, y por eso
+no entra en `index.json` — quien descarga un diseño recibe rutas relativas al repo, que es lo que descarga.
+
 ### El sidecar `design.yaml`
 
 Los metadatos de publicación van en `specs/<slug>/design.yaml`, **fuera del DSL**: el manifiesto describe el
@@ -204,8 +229,13 @@ que alguien reindexara. La procedencia informa; el contenido de los diseños obl
 
 ### Cambiar el formato del índice
 
+**Añadir** una clave nueva (por ejemplo, un derivado más en `docs` de cada diseño) es aditivo y **no** sube
+la versión: una CLI anterior lee las claves que conoce e ignora el resto. Subirla ahí rompería a quien no
+hace falta romper.
+
 Subir `INDEX_SCHEMA_VERSION` es **breaking para los consumidores**: las CLIs anteriores rechazan el índice
-nuevo (a propósito, con mensaje claro, en vez de malinterpretarlo). El orden correcto es:
+nuevo (a propósito, con mensaje claro, en vez de malinterpretarlo). Se reserva para cuando cambia el
+significado de algo que ya existía. El orden correcto es:
 
 1. Publicar una versión de `keel-core` que **lea** el formato nuevo.
 2. Esperar a que esté disponible para los consumidores.
@@ -236,11 +266,12 @@ ejecuciones sobre el mismo workspace producen bytes idénticos — que es lo que
 Escribe en dos sitios:
 
 - **`README.md`**, solo entre `<!-- keel:servicios:start -->` y `<!-- keel:servicios:end -->`. El resto del
-  archivo (introducción, secciones humanas) se preserva.
+  archivo (introducción, secciones humanas) se preserva. La columna «Documentación» enlaza los derivados
+  que existen —diseño, panel, API, eventos, integración—, con los HTML navegables si hay `publish.yaml`.
 - **`index.json`**, el índice máquina que consume `keel registry`.
 
-**El índice tiene un único escritor, y es `keel index`.** `/keel-design` y `/keel-handoff` lo ejecutan; nadie
-edita la región entre marcadores a mano. Un aviso al indexar (un diseño que no carga, un `service.name` que
+**El índice tiene un único escritor, y es `keel index`.** `/keel-design`, `/keel-handoff` y `/keel-docs` lo
+ejecutan; nadie edita la región entre marcadores a mano. Un aviso al indexar (un diseño que no carga, un `service.name` que
 no coincide con su directorio, un `design.yaml` inválido) hace que el comando salga con código 1: el índice
 se genera, pero algo del workspace está mal.
 

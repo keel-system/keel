@@ -100,6 +100,36 @@ ejecución. Tu trabajo es derivar el objeto de datos.
 **Contrato campo a campo del objeto `KEEL`, orden de las tarjetas y procedimiento de sustitución en
 `references/overview-html-guide.md` — léela antes de generar.**
 
+## Índice del repositorio (`README.md`)
+
+Tras escribir los derivados, **actualiza el índice de servicios del `README.md`** de la raíz del
+workspace: hasta que no se regenera, la portada no enlaza el panel ni los visores que acabas de
+generar. No lo escribas a mano: ejecuta desde la raíz del workspace
+
+```bash
+keel index
+```
+
+**El índice tiene un único escritor, y es `keel index`.** Nunca edites la región entre
+`<!-- keel:servicios:start -->` y `<!-- keel:servicios:end -->` a mano ni con Edit: se pisa en la
+siguiente ejecución. Si el comando avisa de que falta el `README.md` o los marcadores, créalo con la
+estructura mínima —título, introducción breve, sección `## Servicios diseñados` y las dos líneas de
+marcadores— y vuelve a ejecutarlo.
+
+**Enlaces navegables.** GitHub muestra un `.html` enlazado en relativo como código fuente, así que
+`overview.html`, `openapi.html` y `asyncapi.html` solo se abren de verdad desde la portada si el
+workspace declara dónde está publicado, en un `publish.yaml` en la raíz:
+
+```yaml
+repo: <org>/<repo>     # obligatorio
+branch: main           # opcional, por defecto main
+```
+
+Con él, `keel index` enruta esos tres enlaces por htmlpreview; sin él los deja en relativo (correcto
+en local, inservible en GitHub). Si el workspace se publica en GitHub y no existe el archivo,
+**sugiérelo**; no lo crees por iniciativa propia: es configuración del equipo, no un derivado del
+diseño, y adivinar el repo mal deja enlaces rotos en la portada.
+
 ## Coherencia
 
 `openapi.yaml`, `asyncapi.yaml`, las colecciones Postman y el panel salen del mismo diseño y deben

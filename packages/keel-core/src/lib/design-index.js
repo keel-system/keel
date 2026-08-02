@@ -8,7 +8,9 @@
 // El índice es una proyección pura de lo que ya saben summarizeService() (qué
 // contiene cada diseño) y listDerivatives() (qué derivados existen y si están
 // al día), más un sidecar opcional `design.yaml` con los metadatos de
-// publicación que no caben en el DSL (familia, variante, madurez, tags).
+// publicación que no caben en el DSL (familia, variante, madurez, tags), más un
+// `publish.yaml` opcional en la raíz que solo dice dónde está publicado el
+// workspace: lo justo para que los derivados HTML se enlacen navegables.
 //
 // Determinismo: el índice no lleva marcas de tiempo ni rutas absolutas. Dos
 // ejecuciones sobre el mismo workspace producen bytes idénticos, que es lo que
@@ -26,6 +28,7 @@ import { listDerivatives } from './derivatives.js';
 const Ajv2020 = Ajv2020Module.default ?? Ajv2020Module;
 
 export const SIDECAR_FILE = 'design.yaml';
+export const PUBLISH_FILE = 'publish.yaml';
 export const INDEX_FILE = 'index.json';
 export const README_FILE = 'README.md';
 export const MARKER_START = '<!-- keel:servicios:start -->';
@@ -43,13 +46,9 @@ const EMPTY_TABLE =
 const MATURITY_ORDER = { reference: 0, stable: 1, draft: 2 };
 const MATURITY_LABEL = { reference: 'referencia', stable: 'estable', draft: 'borrador' };
 
-function readSidecarSchema() {
-  return JSON.parse(fs.readFileSync(schemaPathFor('design'), 'utf8'));
-}
-
-function buildSidecarValidator() {
+function buildValidator(schemaName) {
   const ajv = new Ajv2020({ allErrors: true, strict: false });
-  return ajv.compile(readSidecarSchema());
+  return ajv.compile(JSON.parse(fs.readFileSync(schemaPathFor(schemaName), 'utf8')));
 }
 
 /**
@@ -112,6 +111,37 @@ function readSidecar(dir, slug, validate) {
   }
 
   return { metadata: doc, errors: [] };
+}
+
+/**
+ * Lee y valida `publish.yaml` de la raíz del workspace: dónde está publicado
+ * esto, que es lo único que falta para que los derivados HTML se puedan enlazar
+ * de forma navegable (ver docsHref).
+ *
+ * Opcional a propósito: un workspace privado que no se publica en ningún sitio
+ * no tiene por qué declarar nada, y sin el archivo el índice enlaza en relativo
+ * exactamente como antes. Inválido tampoco tumba el índice —mismo criterio que
+ * el sidecar—: se avisa y se cae a relativo.
+ */
+function readPublishConfig(cwd, validate) {
+  const file = path.join(cwd, PUBLISH_FILE);
+  if (!fs.existsSync(file)) return { publish: null, errors: [] };
+
+  let doc;
+  try {
+    doc = YAML.parse(fs.readFileSync(file, 'utf8'));
+  } catch (error) {
+    return { publish: null, errors: [`${PUBLISH_FILE}: YAML inválido — ${error.message}`] };
+  }
+
+  if (!validate(doc)) {
+    return {
+      publish: null,
+      errors: [`${PUBLISH_FILE}: no cumple publish.schema.json — ${describeAjvErrors(validate.errors)}`]
+    };
+  }
+
+  return { publish: { repo: doc.repo, branch: doc.branch ?? 'main' }, errors: [] };
 }
 
 /** Recuentos por capa: lo que hace comparable un diseño con otro de un vistazo. */
@@ -196,9 +226,12 @@ function postmanFiles(cwd, serviceName) {
  * Devuelve { schemaVersion, designs, families, warnings }.
  */
 export function buildIndex(cwd = process.cwd()) {
-  const validateSidecar = buildSidecarValidator();
+  const validateSidecar = buildValidator('design');
   const warnings = [];
   const designs = [];
+
+  const { publish, errors: publishErrors } = readPublishConfig(cwd, buildValidator('publish'));
+  warnings.push(...publishErrors);
 
   for (const slug of designSlugs(cwd)) {
     const dir = path.join(cwd, 'specs', slug);
@@ -235,7 +268,14 @@ export function buildIndex(cwd = process.cwd()) {
 
     const inventory = listDerivatives(dir, { cwd });
     const byId = new Map(inventory.derivatives.map((entry) => [entry.id, entry]));
-    const docPath = (id) => (byId.get(id)?.exists ? byId.get(id).path : null);
+    // `applicable` además de `exists`: un derivado huérfano (existe, pero la capa
+    // que lo justificaba ya no está) describe una superficie que el diseño no
+    // tiene, y enlazarlo desde la portada sería exactamente la mentira que este
+    // índice existe para evitar. `keel describe` ya lo reporta como orphan.
+    const docPath = (id) => {
+      const entry = byId.get(id);
+      return entry?.exists && entry.applicable ? entry.path : null;
+    };
 
     designs.push({
       slug,
@@ -257,6 +297,8 @@ export function buildIndex(cwd = process.cwd()) {
       docs: {
         design: docPath('design'),
         overview: docPath('overview'),
+        openapiViewer: docPath('openapi-viewer'),
+        asyncapiViewer: docPath('asyncapi-viewer'),
         integration: docPath('integration')
       },
       // serviceName y no slug: los derivados viven en docs/<service.name>/ (ver
@@ -277,6 +319,11 @@ export function buildIndex(cwd = process.cwd()) {
     // Procedencia, para que un desajuste entre registry y CLI sea diagnosticable.
     // No forma parte del contrato: indexContract() la excluye (ver ahí el motivo).
     generatedBy: { keelCore: packageVersion(), dsl: [...supportedDsl()] },
+    // Config de renderizado del README, no contenido del catálogo: no viaja a
+    // index.json ni cuenta para --check (renderIndexJson e indexContract la
+    // descartan). Un consumidor remoto no la necesita: recibe rutas relativas
+    // al repo, que es lo que descarga.
+    publish,
     designs,
     families: groupByFamily(designs),
     warnings
@@ -293,7 +340,7 @@ export function buildIndex(cwd = process.cwd()) {
  */
 export function indexContract(index) {
   if (index == null || typeof index !== 'object') return index;
-  const { generatedBy, warnings, ...contract } = index;
+  const { generatedBy, warnings, publish, ...contract } = index;
   return contract;
 }
 
@@ -362,15 +409,37 @@ function layersCell(design) {
 }
 
 /**
+ * Destino de un enlace del índice.
+ *
+ * Los `.md` se enlazan siempre en relativo: GitHub los renderiza y además
+ * funcionan al navegar el repo en local. Un `.html` en relativo, en cambio, se
+ * muestra como **código fuente**, que es tanto como no enlazarlo: cuando el
+ * workspace declara dónde está publicado (`publish.yaml`), se enruta por
+ * htmlpreview, que sirve el archivo crudo ya renderizado sin exigir GitHub
+ * Pages ni ninguna otra configuración en el repo. Sin `publish.yaml` no hay
+ * URL absoluta que construir, así que se cae a relativo.
+ */
+export function docsHref(relPath, publish) {
+  if (!publish?.repo || !relPath.endsWith('.html')) return relPath;
+  const branch = publish.branch ?? 'main';
+  return `https://htmlpreview.github.io/?https://raw.githubusercontent.com/${publish.repo}/${branch}/${relPath}`;
+}
+
+/**
  * Enlaces a los derivados que existen de verdad; nunca a un archivo ausente.
  * Sale del propio índice (`design.docs`), así que la tabla es función pura del
  * índice y no vuelve a tocar disco.
  */
-function docsCell(design) {
+function docsCell(design, publish) {
   const links = [];
-  if (design.docs.design) links.push(`[diseño](${design.docs.design})`);
-  if (design.docs.overview) links.push(`[panel](${design.docs.overview})`);
-  if (design.docs.integration) links.push(`[integración](${design.docs.integration})`);
+  const link = (label, relPath) => {
+    if (relPath) links.push(`[${label}](${docsHref(relPath, publish)})`);
+  };
+  link('diseño', design.docs.design);
+  link('panel', design.docs.overview);
+  link('API', design.docs.openapiViewer);
+  link('eventos', design.docs.asyncapiViewer);
+  link('integración', design.docs.integration);
   return links.length > 0 ? links.join(' · ') : '—';
 }
 
@@ -395,6 +464,7 @@ export function renderTable(index) {
   if (index.designs.length === 0) return EMPTY_TABLE;
 
   const bySlug = new Map(index.designs.map((design) => [design.slug, design]));
+  const publish = index.publish ?? null;
   const lines = [
     '| Diseño | Dominio | Madurez | Resumen | Capas | Documentación |',
     '|---|---|---|---|---|---|'
@@ -407,7 +477,7 @@ export function renderTable(index) {
     if (members.length === 1) {
       const design = members[0];
       lines.push(
-        `| [\`${design.slug}\`](specs/${design.slug}/) | ${cell(design.service.domain)} | ${maturityCell(design)} | ${summaryCell(design)} | ${layersCell(design)} | ${docsCell(design)} |`
+        `| [\`${design.slug}\`](specs/${design.slug}/) | ${cell(design.service.domain)} | ${maturityCell(design)} | ${summaryCell(design)} | ${layersCell(design)} | ${docsCell(design, publish)} |`
       );
       continue;
     }
@@ -429,7 +499,7 @@ export function renderTable(index) {
         '|---|---|---|---|---|',
         ...members.map(
           (design) =>
-            `| [\`${design.slug}\`](specs/${design.slug}/) | ${maturityCell(design)} | ${cell(design.metadata?.differsIn ?? design.metadata?.summary ?? design.service.description)} | ${layersCell(design)} | ${docsCell(design)} |`
+            `| [\`${design.slug}\`](specs/${design.slug}/) | ${maturityCell(design)} | ${cell(design.metadata?.differsIn ?? design.metadata?.summary ?? design.service.description)} | ${layersCell(design)} | ${docsCell(design, publish)} |`
         )
       ].join('\n')
     );
@@ -475,7 +545,7 @@ export function applyMarkers(readme, table) {
  * Windows, y emitir LF a ciegas haría que `--check` no convergiera nunca ahí.
  */
 export function renderIndexJson(index, { eol = '\n' } = {}) {
-  const { warnings, ...stable } = index;
+  const { warnings, publish, ...stable } = index;
   const text = `${JSON.stringify(stable, null, 2)}\n`;
   return eol === '\n' ? text : text.split('\n').join(eol);
 }
