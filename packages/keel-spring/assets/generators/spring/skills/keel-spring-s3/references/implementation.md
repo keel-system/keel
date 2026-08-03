@@ -36,18 +36,33 @@ s3Client.putObject(PutObjectRequest.builder()
 
 ## Download y errores
 
-```java
-try {
-    return s3Client.getObjectAsBytes(b -> b.bucket(bucket).key(key)).asByteArray();
-} catch (NoSuchKeyException e) {
-    throw new FileNotFoundError(key);   // el error declarado en el diseño
-}
-```
-
 Mapea las excepciones del SDK a errores del dominio en el adaptador: fuera de
 `infrastructure` no debe verse ninguna clase `software.amazon.*`. `S3Exception`
 5xx/timeout agotados los reintentos del SDK → deja subir la excepción como
 error técnico (500), no lo conviertas en «no encontrado».
+
+**Qué lanzar cuando la clave no existe.** La capa `storage` del DSL declara buckets y
+políticas, **no errores**: no hay ningún `FILE_NOT_FOUND` que copiar de ahí, y buscarlo lleva
+al reflejo equivocado de tirar un `IllegalStateException` —que `ApiExceptionHandler` traduce a
+500, es decir «el servidor está roto» cuando lo cierto es «esa clave no está»—. La jerarquía:
+
+1. Si **la operación que invoca `download`** declara un error para ese caso en sus `errors`,
+   lanza su `<PascalCode>Error`: es el contrato público y lo genera `build`.
+2. Si no lo declara, usa la subclase base que `build` genera siempre, con un `code`
+   convencional:
+
+```java
+try {
+    return s3Client.getObjectAsBytes(b -> b.bucket(bucket).key(key)).asByteArray();
+} catch (NoSuchKeyException e) {
+    // Sin error declarado en el diseño: subclase base + code convencional. Sigue siendo
+    // error de dominio (404), no filtra software.amazon.* y no inventa una clase nueva.
+    throw new NotFoundException("No existe el archivo " + key, "FILE_NOT_FOUND", 404, null);
+}
+```
+
+Y repórtalo en `designGaps`: que un `code` del contrato salga de una convención del generador
+en vez del diseño es exactamente lo que ese bloque existe para señalar.
 
 ## Presigned URLs (`signedUrl`)
 
@@ -217,7 +232,7 @@ tocar nada: un rojo con la lectura en verde es un defecto del sondeo del generad
 
 - [ ] Validación de content-type (real, no declarado) y tamaño → errores del diseño.
 - [ ] Claves con UUID, sin nombre del cliente ni PII.
-- [ ] `NoSuchKeyException` → error de dominio; ninguna clase del SDK fuera de infrastructure.
+- [ ] `NoSuchKeyException` → error de dominio (el `<PascalCode>Error` de la operación si lo declara; si no, `NotFoundException` con `code` `FILE_NOT_FOUND`, **nunca `IllegalStateException`**); ninguna clase del SDK fuera de infrastructure.
 - [ ] Presigned con expiración del diseño y host alcanzable por el consumidor.
 - [ ] Nombre de bucket leído del puerto `StoragePolicies` (`forBucket(...).bucket()`), nunca literal en el código ni por `@Value("${storage.bucket}")`, que ya no existe.
 - [ ] `maxSizeMb` y `allowedContentTypes` consultados con `BucketPolicy`, no copiados como constantes en el caso de uso.

@@ -1,5 +1,10 @@
 const BASE_TYPES = new Set(['string', 'text', 'int', 'long', 'decimal', 'boolean', 'uuid', 'date', 'timestamp', 'json', 'file']);
 
+// Statuses de éxito que por definición de HTTP no llevan cuerpo. El schema de api
+// limita successStatus a 2xx, así que 304 no es alcanzable, pero se enumera igual:
+// la regla es del protocolo, no del rango que hoy admita el schema.
+const STATUSES_WITHOUT_BODY = new Set([204, 205, 304]);
+
 /**
  * Validación mecánica de referencias cruzadas entre capas.
  * Recibe { layers } (ya validadas contra sus schemas) y devuelve { errors, warnings, pending }.
@@ -628,6 +633,27 @@ export function checkCrossRefs({ layers, wip = false }) {
     if (op.kind === 'command' && endpoint.method === 'GET') {
       warnings.push(
         `${where}.method: la operación es kind: command y se expone con GET — una escritura no debe viajar en un método idempotente y cacheable`
+      );
+    }
+    // El status y el cuerpo son las dos mitades de la misma respuesta, y viven en capas
+    // distintas: nada las cruzaba, así que un 204 con output entity llegaba intacto al
+    // controller generado (build combina ambos tal cual vienen del diseño) y producía una
+    // respuesta que ningún cliente HTTP puede consumir.
+    const voidOutput = op.output === 'void';
+    if (STATUSES_WITHOUT_BODY.has(endpoint.successStatus) && !voidOutput) {
+      errors.push(
+        `${where}.successStatus: ${endpoint.successStatus} es un status sin cuerpo y la operación declara output — sube el status a uno que admita cuerpo (200) o pon output: "void" en use-cases`
+      );
+    }
+    if (endpoint.successStatus !== undefined && !STATUSES_WITHOUT_BODY.has(endpoint.successStatus) && voidOutput) {
+      warnings.push(
+        `${where}.successStatus: ${endpoint.successStatus} admite cuerpo y la operación declara output: "void" — la respuesta irá vacía; 204 describe mejor ese contrato`
+      );
+    }
+    // DELETE sin successStatus: el generador asume 204 (no hay dónde declararlo si no).
+    if (endpoint.successStatus === undefined && endpoint.method === 'DELETE' && !voidOutput) {
+      warnings.push(
+        `${where}: DELETE sin successStatus se genera como 204 (sin cuerpo) y la operación declara output — declara el successStatus que quieres o pon output: "void"`
       );
     }
   }

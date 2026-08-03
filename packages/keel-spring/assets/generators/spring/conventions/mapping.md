@@ -131,11 +131,30 @@ comportamiento y contradecirlo en el esquema es peor que cualquiera de las dos o
 | `errors[].code` | `<PascalCode>Error` en `domain/errors` con el `code` exacto, extendiendo la subclase base de su `http` (404→`NotFoundException`, 409→`ConflictException`…; status sin subclase → `DomainException` con el `httpStatus` en la metadata); `ApiExceptionHandler` la traduce a `ErrorResponse` (`timestamp`, `status`, `error`, `code`, `message`, `details`) |
 | El mismo `code` con `http` **distinto** en dos operaciones | Una sola clase, pero con el status como **parámetro** del constructor (`new XxxError(mensaje, 422)`): extiende `DomainException` y `ApiExceptionHandler` resuelve el status desde la metadata. Cada handler pasa el `http` que su operación declara — pasarlo mal es un error de contrato invisible a la compilación |
 | `emits` | `raise(<E>Event.of(...))` **dentro del método de negocio del agregado** que provoca el cambio (`domain-modeling.md`); el handler no publica ni inyecta publishers. El adaptador de repositorio drena el buffer al persistir y el bridge lo entrega según `messaging.publishing.reliability` |
-| `idempotency: { keySource: client-key }` | Header `Idempotency-Key` requerido en esas operaciones; registro de claves procesadas con el `ttlSeconds` del diseño |
+| `idempotency: { keySource: client-key }` | Header `Idempotency-Key` en esas operaciones; registro de claves procesadas con el `ttlSeconds` del diseño. **Si el cliente no la manda**, ver abajo |
 | `idempotency: { keySource: payload-hash }` | Hash del payload como clave de deduplicación; mismo registro con TTL |
 | `cache` (solo queries) | Build genera `CacheConfig` (`@EnableCaching`, `CacheManager`, una constante y un TTL por operación cacheada, serializador JSON con `JavaTimeModule`, degradación a miss). El agente solo anota el adaptador: `@Cacheable(cacheNames = CacheConfig.<OPERACION>_CACHE, key = …, sync = true)` con la clave de `keyFields`, y `@CacheEvict` para `invalidatedBy` |
 | `schedule: { cron }` | `@Scheduled(cron = ...)` que despacha el mensaje de la operación vía `UseCaseMediator`; sin endpoint |
 | `internal: true` | Solo mensaje + handler en application; sin endpoint ni listener |
+
+### `Idempotency-Key` ausente: se ejecuta, no se rechaza
+
+`keySource: client-key` dice **de dónde sale la clave**, no que la cabecera sea obligatoria:
+el DSL no tiene dónde declarar esa exigencia, y un rechazo necesita un `code` público que
+solo puede nacer en `use-cases.keel.yaml § errors`. Así que la regla, cuando el diseño no
+declara nada:
+
+- **Sin cabecera, la operación se ejecuta con normalidad, simplemente sin deduplicar.** No se
+  inventa un `IDEMPOTENCY_KEY_REQUIRED` ni se devuelve 400: un `code` que no está en el
+  diseño no es contrato, no aparece en el OpenAPI generado y ningún escenario lo cubre.
+- **Con cabecera**, el comportamiento completo: primera vez se ejecuta y se registra la
+  clave; repetición dentro del `ttlSeconds` devuelve la respuesta original sin re-ejecutar.
+
+Si el diseñador quiere que sea obligatoria, la vía es declarar el error en los `errors` de esa
+operación (`{ code: IDEMPOTENCY_KEY_REQUIRED, when: …, http: 400 }`), y entonces el mapeo es
+el de cualquier otro `errors[].code`. Que la operación se ejecute sin deduplicar es una
+decisión **silenciosa** —no hay `Then` que la observe—, así que va al reporte como
+`designGaps` aunque no bloquee ningún escenario.
 
 ### Normalización antes que validación de formato
 

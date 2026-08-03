@@ -246,6 +246,34 @@ otro sitio (`IndexOutOfBounds` en el `get(0)`), y uno que casa dos pasa desaperc
 siempre es más legible **evitar el filtro**: si el escenario fija el orden de la colección, indexa
 por posición (`$.images[0].url`) y deja que el STRICT de `assertBody` cubra el resto.
 
+### Un nodo objeto o array no se vuelve JSON con `toString()`
+
+La trampa más cara de las de este bloque, porque **no falla donde está**. Un `$.campo` escalar
+devuelve el `String`/`Integer` que se espera, pero un nodo **objeto o array** lo materializa el
+proveedor por defecto de JsonPath como `LinkedHashMap`/`List` (jackson-databind está en el
+classpath vía `spring-boot-starter-web`), y `Object.toString()` sobre ellos da sintaxis de Java
+—`{clave=valor}`—, no JSON. El texto resultante parece correcto en un log y es basura para
+cualquier lector de JSON:
+
+```java
+// MAL: el 'data' del evento sale como "{productId=…, sku=…}"; el JsonPath.read
+//      posterior lanza PathNotFoundException y el JSONAssert falla por su propia
+//      técnica, aunque el evento del broker sea exactamente el que pide el Then.
+String data = JsonPath.read(payload, "$.data").toString();
+String sku = JsonPath.read(data, "$.sku");
+
+// BIEN: se re-serializa con el helper del arnés, agnóstico del proveedor de JsonPath.
+String data = toJson(JsonPath.read(payload, "$.data"));
+String sku = JsonPath.read(data, "$.sku");
+```
+
+`toJson(Object)` es `protected` en `AbstractFlowIT` y vale para cualquier nodo, venga de
+`jsonPath(response, …)` o de un `JsonPath.read` sobre otra cadena. Donde más aparece es el
+`data` de un evento leído del broker (la envoltura `{metadata, data}` de
+`architecture.md § Forma del mensaje publicado`), y ahí el modo de fallo es especialmente
+traicionero: el error se atribuye al código o a la mensajería, no a la aserción. En una
+generación real este patrón enmascaró **doce escenarios en un ciclo de validación entero**.
+
 ### Ausencia de campo: STRICT, no `isNull()`
 
 La vía normal es `assertBody(...)`: JSONAssert en modo STRICT ya falla si aparece una clave que
@@ -315,10 +343,31 @@ Toda afirmación del `Then` se comprueba, por orden de preferencia:
    preparación sigue en el canal y la aserción "no se publica nada" falla por algo que no
    tiene que ver con la acción. La ventana de observación se abre **donde empieza lo que se
    está probando**, no donde empieza el flujo.
-3. Por `devtools("cli", "arg", …)` en crudo, solo para lo que ninguna de las dos vías
+3. Por **descarga directa desde la JVM del test**, para lo que quedó en un bucket de
+   storage. Un `Then` que afirma "el archivo subido está en el bucket y es el que se envió"
+   se comprueba pidiendo la URL pública que devolvió la propia API con
+   `java.net.http.HttpClient`, y comparando bytes o su SHA-256:
+
+   ```java
+   HttpResponse<byte[]> stored = HttpClient.newHttpClient().send(
+           HttpRequest.newBuilder(URI.create(url)).GET().build(),
+           HttpResponse.BodyHandlers.ofByteArray());
+   assertThat(stored.statusCode()).isEqualTo(200);
+   assertThat(stored.body()).isEqualTo(sentBytes);   // o su digest, si el cuerpo es grande
+   ```
+
+   Es el mismo consumidor que el real —quien lea esa URL en producción es un cliente HTTP,
+   no una CLI— y no depende de la topología de red del compose. **No se hace desde
+   `devtools`**: dentro de un contenedor `localhost` es el propio contenedor, no el host, así
+   que una URL pública (`http://localhost:9000/…`) no resuelve ahí — en docker igual que en
+   podman. Con un bucket `visibility: private` no hay URL pública: la vía es la operación del
+   diseño que firma o media el acceso, no un atajo por la infraestructura.
+4. Por `devtools("cli", "arg", …)` en crudo, solo para lo que ninguna de las vías anteriores
    alcanza. Los argumentos van como **lista**, nunca como una cadena concatenada: es un
    `<runtime> exec` directo, sin shell. Si hace falta un pipe o una redirección, la variante
-   explícita es `devtoolsShell("…")`.
+   explícita es `devtoolsShell("…")`. Y los servicios de respaldo se nombran **por su nombre
+   de red** (`db`, `minio`, `kafka`, `keycloak`), nunca por `localhost`, por lo mismo que en
+   el punto anterior.
 
 ### Qué deja limpio el reset, exactamente
 

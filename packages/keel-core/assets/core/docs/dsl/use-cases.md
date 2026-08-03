@@ -76,7 +76,7 @@ operations:
 
 ## Políticas del caso de uso
 
-- `idempotency: { keySource: client-key | payload-hash, ttlSeconds }` — la operación puede repetirse sin efectos duplicados. Obligatoria de considerar en commands disparados por subscriptions con reintentos.
+- `idempotency: { keySource: client-key | payload-hash, ttlSeconds }` — la operación puede repetirse sin efectos duplicados. Obligatoria de considerar en commands disparados por subscriptions con reintentos. `client-key` dice **de dónde sale la clave** (una cabecera `Idempotency-Key` en la superficie HTTP), no que sea obligatoria: sin ella el generador ejecuta la operación **sin deduplicar**, porque rechazarla exigiría un `code` público y este campo no lo declara. Si el contrato es que sea obligatoria, decláralo como un error más de la operación (`{ code: IDEMPOTENCY_KEY_REQUIRED, when: …, http: 400 }`): `errors` es el único sitio donde nace un `code` del contrato.
 - `cache: { ttlSeconds, keyFields, invalidatedBy: [Evento, ...] }` — solo para queries; `invalidatedBy` referencia eventos de messaging. Si el `output` declara `embed`, la caché proyecta **otro agregado** dentro de la respuesta y ese agregado también tiene que poder invalidarla: `keel validate` da **error** si ningún evento de la entidad embebida está en `invalidatedBy` (y avisa de los eventos de la entidad principal que falten). Sin esa regla, un cambio en la marca embebida en la ficha de producto no se ve hasta que expira el TTL, y nada en el diseño lo delata.
 - `schedule: { cron }` — trigger temporal, único trigger que se declara aquí.
 

@@ -1772,6 +1772,53 @@ test('command expuesto con GET es warning', () => {
   assert.ok(warnings.some((w) => w.includes('la operación es kind: command y se expone con GET')));
 });
 
+// --- api: successStatus ↔ output de la operación ---
+
+const statusLayers = (endpointOverrides, opOverrides = {}) =>
+  apiLayers(
+    { method: 'DELETE', path: '/products/{sku}', ...endpointOverrides },
+    { kind: 'command', ...opOverrides }
+  );
+
+test('204 con output entity es error', () => {
+  const { errors } = run(statusLayers({ successStatus: 204 }));
+  assert.ok(
+    errors.some((e) =>
+      e.includes('api: endpoints.getProduct.successStatus: 204 es un status sin cuerpo y la operación declara output')
+    )
+  );
+});
+
+test('204 con output void valida limpio', () => {
+  const { errors, warnings } = run(statusLayers({ successStatus: 204 }, { output: 'void' }));
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
+test('200 con output void es warning, no error', () => {
+  const { errors, warnings } = run(statusLayers({ successStatus: 200 }, { output: 'void' }));
+  assert.deepEqual(errors, []);
+  assert.ok(warnings.some((w) => w.includes('200 admite cuerpo y la operación declara output: "void"')));
+});
+
+test('200 con output entity no dice nada', () => {
+  const { errors, warnings } = run(statusLayers({ successStatus: 200 }));
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
+test('DELETE sin successStatus y con output es warning (el generador asume 204)', () => {
+  const { errors, warnings } = run(statusLayers({}));
+  assert.deepEqual(errors, []);
+  assert.ok(warnings.some((w) => w.includes('DELETE sin successStatus se genera como 204')));
+});
+
+test('DELETE sin successStatus con output void valida limpio', () => {
+  const { errors, warnings } = run(statusLayers({}, { output: 'void' }));
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
 // --- use-cases: cache.keyFields ↔ input ---
 
 const cacheLayers = (cache) => {

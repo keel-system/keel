@@ -278,6 +278,9 @@ function abstractImports(model) {
     'org.springframework.http.client.JdkClientHttpRequestFactory',
     'org.springframework.test.context.ActiveProfiles',
     'com.jayway.jsonpath.JsonPath',
+    // Re-serialización de los nodos que extrae JsonPath (`toJson`). No depende del
+    // stack: cualquier flujo que compare un fragmento de JSON lo necesita.
+    'com.fasterxml.jackson.databind.ObjectMapper',
     'org.skyscreamer.jsonassert.JSONAssert',
     'org.skyscreamer.jsonassert.JSONCompareMode'
   ];
@@ -348,6 +351,9 @@ ${layersPresent.api ? `
     /** Prefijo de todas las rutas del servicio (basePath del diseño + versión). */
     protected static final String ROUTE_BASE = "${model.api.routeBase}";
 ` : ''}
+    /** Re-serializa a JSON los nodos que devuelve JsonPath. Ver {@link #toJson}. */
+    private static final ObjectMapper JSON = new ObjectMapper();
+
     @Autowired
     protected TestRestTemplate rest;
 ${security && tokenProtocol(model) ? '\n    private final Map<String, String> credentials = new ConcurrentHashMap<>();\n' : ''}
@@ -512,6 +518,29 @@ ${hasIdempotency(model) ? `
     /** Valor no determinista del cuerpo (id generado, marca de tiempo), por JsonPath. */
     protected <T> T jsonPath(Response response, String path) {
         return JsonPath.read(response.body(), path);
+    }
+
+    /**
+     * JSON válido a partir de un nodo <b>objeto o array</b> extraído con
+     * {@link #jsonPath} (o con {@code JsonPath.read} sobre cualquier otra cadena).
+     *
+     * <p>Con jackson-databind en el classpath —lo trae {@code spring-boot-starter-web}—
+     * el proveedor por defecto de JsonPath materializa esos nodos como
+     * {@code LinkedHashMap}/{@code List}, y {@code Object.toString()} sobre ellos da
+     * sintaxis de Java ({@code {clave=valor}}), no JSON: volver a leer ese texto con
+     * {@code JsonPath.read} lanza {@code PathNotFoundException} aunque el servidor cumpla
+     * el contrato, y compararlo con {@code JSONAssert} falla por su propia técnica.
+     * Re-serializar con Jackson es agnóstico de qué proveedor de JsonPath esté activo.
+     *
+     * <p>El caso donde más aparece es el {@code data} de un evento leído del broker
+     * ({@code $.data} de la envoltura {@code {metadata, data}}).
+     */
+    protected String toJson(Object value) {
+        try {
+            return JSON.writeValueAsString(value);
+        } catch (Exception e) {
+            throw new AssertionError("No se pudo serializar el fragmento JSON: " + e.getMessage(), e);
+        }
     }
 
     protected void assertIsUuid(String value) {

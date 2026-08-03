@@ -98,7 +98,10 @@ source set `integrationTest`, así que un test que importe un DTO o una entidad 
    `T = Object[]` y el test revienta en runtime con `ClassCastException`— y se excluyen del
    `assertBody` estricto. Para verificar que un campo **no** viene, `assertBody` STRICT; y si
    hace falta puntualmente, `assertThatThrownBy(...).isInstanceOf(PathNotFoundException.class)`,
-   nunca `.isNull()` (`JsonPath.read` lanza sobre clave ausente). Ambos patrones, con ejemplo,
+   nunca `.isNull()` (`JsonPath.read` lanza sobre clave ausente). Y un nodo **objeto o array**
+   extraído con JsonPath se convierte a JSON con `toJson(...)` del arnés, **nunca con
+   `.toString()`**: un `Map` así impreso da `{clave=valor}`, no JSON, y el fallo aparece lejos
+   de su causa —típicamente al releer el `data` de un evento—. Los tres patrones, con ejemplo,
    en `{{keel:docs}}/conventions/integration-tests.md`.
 7. Con las clases escritas y **antes** de compilar, recorre la **checklist** de
    `{{keel:docs}}/conventions/integration-tests.md` § Del DSL al cable: cada ruta contrastada

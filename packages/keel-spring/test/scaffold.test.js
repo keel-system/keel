@@ -518,6 +518,15 @@ test('scaffolding de integración: AbstractFlowIT y FailureCapture, sin clases d
   assert.ok(!abstractFlow.includes('new ProcessBuilder("bash"'));
   assert.ok(abstractFlow.includes('BASH_EXECUTABLE'));
   assert.ok(abstractFlow.includes('JSONCompareMode.STRICT'));
+  // toJson: un nodo objeto/array de JsonPath se re-serializa con Jackson, nunca con
+  // toString() (daría sintaxis de Map de Java). No depende del stack: el import va
+  // una sola vez y el helper existe siempre.
+  assert.ok(abstractFlow.includes('protected String toJson(Object value)'));
+  assert.ok(abstractFlow.includes('JSON.writeValueAsString(value)'));
+  assert.equal(
+    abstractFlow.split('\n').filter((line) => line === 'import com.fasterxml.jackson.databind.ObjectMapper;').length,
+    1
+  );
   assert.ok(abstractFlow.includes('protected void await(Duration timeout, BooleanSupplier condition)'));
   assert.ok(abstractFlow.includes('JdkClientHttpRequestFactory')); // PATCH sin dependencias nuevas
   assert.ok(abstractFlow.includes('ROUTE_BASE = "/api/v1"'));
