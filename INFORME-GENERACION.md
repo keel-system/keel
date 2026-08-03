@@ -1,66 +1,106 @@
-# Informe de generación
+# Informe de generación — catalog-spring
 
-Lo que apareció durante la generación de `catalog-spring` desde `specs/catalog` v0.1.0 y **no es de
-este proyecto**, sino del generador (`keel-spring`) o de los artefactos que trae. Cada entrada dice
-de quién es.
+Generado desde `specs/catalog` v0.2.0. Lo que sigue **no es de este proyecto**: es lo que
+`keel-generate-spring` (o el generador `keel-spring`) debería absorber para que la próxima
+generación con este stack no lo vuelva a pagar. Estructura según
+`docs/keel/orchestration.md § El cierre devuelve al generador lo que es del generador`.
 
-## Parches al arnés de test compartido (`AbstractFlowIT` y utilidades hermanas)
+## 1. Incidencias
 
-Detectados por `keel-spring-tests` al corregir sus propias clases; el defecto vive en el patrón que
-el generador siembra en cada proyecto, no en este repo en particular.
+### `deploy/docker-compose.yaml` no es orquestable con `podman-compose` cuando `dockerfile` está en subcarpeta
 
-1. **`Events.java` — `JsonPath.read(payload, "$.data").toString()` no produce JSON válido.**
-   Con json-path 2.9.0 y Jackson en el classpath (vía `spring-boot-starter-web`), `$.data` se
-   materializa como `java.util.LinkedHashMap`, y `LinkedHashMap.toString()` da sintaxis de `Map` de
-   Java (`{clave=valor}`), no JSON. Cualquier re-lectura posterior con `JsonPath.read(...)` sobre ese
-   string falla con `PathNotFoundException`, aunque el evento real en el broker sea correcto. Enmascaró
-   12 escenarios en un ciclo de validación entero antes de detectarse. Fix aplicado: re-serializar con
-   `ObjectMapper.writeValueAsString(...)` (agnóstico del proveedor de JsonPath activo) en vez de
-   `.toString()` sobre el resultado crudo.
+- **Síntoma**: `keel-spring-quality` no pudo ejecutar `deploy/up.sh` en este host
+  (Windows + podman). `podman compose` (que delega en `docker-compose.exe`) falla por un
+  problema de `podman machine`/named-pipe ajeno al proyecto; pero además
+  `podman-compose` 1.5.0 (Python), la vía que sí funcionó para `infra/`, falla con
+  `no Containerfile or Dockerfile specified or found in context directory` al no resolver
+  `dockerfile: deploy/Dockerfile` cuando difiere de `context: ..`.
+- **Causa**: `deploy/docker-compose.yaml` declara `build: { context: .., dockerfile: deploy/Dockerfile }`.
+  `podman build -f deploy/Dockerfile .` (invocado directo, sin compose) construye la imagen
+  sin error, así que el `Dockerfile` en sí es correcto.
+- **Por qué es del generador**: el patrón `context`/`dockerfile` en subcarpetas distintas es
+  el mismo en cualquier servicio `keel-spring` con este scaffold de `deploy/`; no depende de
+  nada que este proyecto haya decidido.
+- **Fix aplicado**: ninguno — `deploy/` no se toca a mano según la regla del pipeline.
+- **Recomendación**: o bien mover el `Dockerfile` a la raíz del build context (`deploy/`
+  como contexto, con las rutas del `COPY` ajustadas), o documentar en el scaffold la
+  invocación alternativa (`podman build -f deploy/Dockerfile -t <tag> .` seguido de
+  `podman run`/`podman-compose` solo para el resto de servicios) para hosts con
+  `podman-compose` en vez de Docker real.
 
-2. **Mismo patrón roto repetido en una clase individual.** `BrandCreationFlowIT.java` tenía
-   `firstItem.toString()` sobre un nodo `Map` extraído con `jsonPath(...)` — el mismo bug de raíz,
-   copiado por el propio agente al escribir la clase. Sugiere que el patrón correcto para comparar
-   fragmentos JSON extraídos con JsonPath no está claro desde las conventions/skills que consume el
-   agente de tests; valdría la pena documentarlo explícitamente (p. ej. un helper `Events.toJson(Object)`
-   en el andamiaje base, no reinventado por cada proyecto).
+Ningún `harnessPatches`, ningún `probes[].verdict: FALSO-NEGATIVO` de infraestructura y
+ningún `failures` con `culprit: harness` aparecieron en esta generación — los dos fallos que
+salieron en la puntuación fueron uno de la prueba (`FL-IMG-001-A`) y uno del código de este
+proyecto (`FL-PRD-001-A`), ambos ya corregidos.
 
-3. **Verificación de binarios de storage acoplada a una topología de red que no se cumple en podman.**
-   `ProductImageFlowIT` verificaba el SHA-256 del archivo subido ejecutando `curl` **dentro del
-   contenedor `devtools`** contra la URL pública (`http://localhost:9000/...`), resoluble desde el host
-   pero no desde dentro de ese contenedor en este entorno (podman, no docker). Fix aplicado: descargar
-   el binario directamente desde el proceso JVM del test con `java.net.http.HttpClient` contra la URL
-   pública, sin pasar por `devtools`. Si el patrón "verificar con curl desde devtools" es el que
-   documentan las skills `keel-spring-s3`, conviene revisar si asume una topología de red (docker
-   compose "clásico") que no es universal entre runtimes de contenedor.
+## 2. Código determinístico mejorable
 
+| Área | Patrón (no ruta de este proyecto) | Cambio sugerido |
+|---|---|---|
+| `infrastructure/messaging/<Servicio>DomainEventBridge` | El bridge scaffoldeado calcula una variable local `envelope` y expone un campo `@Value` de routing-key **por evento**, pero cada `<Evento>Publisher` que el agente escribe construye su propio envelope y lee su propia clave — dejando 9 variables y 10 campos sin usar en este proyecto. | Si el diseño del bridge es "solo despacha, el publisher decide forma y destino", el scaffold no debería generar ese cálculo por evento en el bridge; o, si el bridge sí debe centralizar el envelope, los publishers deberían recibirlo por parámetro en vez de reconstruirlo. |
 
-## Huecos de diseño (`designGaps`)
+## 3. Agentes y skills
 
-Reportados por `keel-spring-code` y `keel-spring-quality` a lo largo del pipeline. Ninguno bloqueó los
-escenarios `FL-*` (los tres primeros son invisibles en la validación funcional actual); se documentan
-para que se evalúen como cambios a `specs/catalog` vía `/keel-evolve`, no se acomodaron en el código.
+- **`keel-spring-code` y los campos "ausente" de `messaging.keel.yaml`**: el escenario
+  `FL-PRD-001-A` falló en `code` porque `ProductCreatedIntegrationEvent` serializaba
+  `primaryImage` como `null` en vez de omitirlo, pese a que `docs/keel/conventions/mapping.md`
+  (líneas 296-303) ya documenta la regla (`@JsonInclude(NON_NULL)` a nivel de campo, no de
+  clase). El agente de código no cruzó explícitamente cada campo de `messaging.keel.yaml`
+  marcado como "ausente mientras..." contra esa regla antes de reportar `status: OK`. Costó un
+  ciclo completo de arbitraje + fix + re-puntuación. Recomendación: que
+  `docs/keel/conventions/mapping.md` o la checklist de cierre del agente de código incluya un
+  paso explícito "para cada campo `type: file`/opcional de `messaging.keel.yaml` cuya
+  `description` diga 'ausente' o similar, confirmar `@JsonInclude(NON_NULL)` en el DTO de
+  evento antes de dar la capa por completa".
+- **`keel-spring-tests` y la técnica de aserción de ausencia**: `FL-IMG-001-A` fue un simple
+  error de lectura del `Then` (aserción sobre la ruta equivocada), pero `FL-PRD-001-A` reveló
+  además que la primera versión de la prueba probaba "campo ausente" con
+  `assertThatThrownBy(() -> JsonPath.read(...)).isInstanceOf(PathNotFoundException.class)`,
+  una técnica que depende del `JsonProvider` resuelto por classpath (con
+  `JacksonJsonNodeJsonProvider` una hoja ausente devuelve `null` en vez de lanzar). Vale la
+  pena documentar en `docs/keel/conventions/integration-tests.md` el patrón correcto y
+  agnóstico del provider (parsear a `JsonNode` de Jackson y usar `.has(campo)`) como la forma
+  estándar de afirmar ausencia de un campo en un evento o respuesta.
 
-1. **`removeProductImage`**: `specs/api.keel.yaml` declara `successStatus: 204`, pero
-   `specs/use-cases.keel.yaml` declara `output: { entity: Product, embed: [brand, category] }`. Un
-   `204` no debería llevar cuerpo; el controller generado por `build` los combina tal cual vienen del
-   diseño. Propuesta: `api.keel.yaml` a un status con cuerpo (200) o `use-cases.keel.yaml` a
-   `output: "void"`.
+## 4. Huecos del diseño
 
-2. **`Idempotency-Key` requerida sin `code` de error para su ausencia.** El diseño exige la cabecera en
-   `createProduct`/`addProductImage` pero no declara qué pasa si falta. Decisión tomada en este proyecto:
-   sin cabecera, se ejecuta sin deduplicar.
+Consolidados de los cinco agentes (`code`, `infra`, `tests`, `validate`, `quality`). Son del
+**diseñador**, no del generador — se proponen como cambio a `specs/catalog/` en el workspace,
+vía `/keel-evolve`.
 
-3. **Colisión de `Product.slug` bajo alta simultánea sin `code` declarado.** Se usa
-   `PRODUCT_SLUG_ALREADY_EXISTS` por convención del scaffolding (mismo patrón que ya aplica a otras
-   unicidades no declaradas), no por contrato.
+- **`ProductImage.productId` — inconsistencia entre contratos derivados**: `docs/openapi.yaml`
+  declara `productId` como campo requerido en el esquema `ProductImage` (tanto en la respuesta
+  de `addProductImage` como embebido en `images[]`), pero `specs/validation-scenarios.md`
+  (FL-IMG-001, punto 3) fija el cuerpo de imagen exactamente como
+  `{ id, file, altText, position, isPrimary }`, sin `productId`. No causó ningún fallo (el
+  código real ya sigue `validation-scenarios.md`), pero es una discrepancia real entre
+  artefactos derivados de la misma capa `api`. Propuesta: revisar si `api.keel.yaml` declara
+  `productId` en el DTO de imagen y, si no debe viajar, corregir la derivación de
+  `docs/openapi.yaml` en `/keel-docs`.
+- **`Product.slug` — sin código de error para la ventana de carrera del sufijo numérico**: la
+  restricción `uk_products_slug` sigue con la convención genérica del scaffolding
+  (`PRODUCT_SLUG_ALREADY_EXISTS`) porque `use-cases.keel.yaml` no declara un error específico
+  para esa carrera. Propuesta: declarar el error en `createProduct`/`updateProduct`.
+- **`BRAND_IN_USE`/`CATEGORY_IN_USE` — sin FK real en el baseline frente a la carrera con
+  `createProduct`**: la integridad referencial para esa carrera concreta no quedó en
+  `V1__baseline_schema.sql`. Propuesta: si el diseño exige consistencia fuerte ahí, declararlo
+  en `persistence.keel.yaml` (índice/constraint) en vez de dejarlo solo a nivel de aplicación.
+- **`Idempotency-Key` no declarada obligatoria**: `createProduct`/`addProductImage` ejecutan
+  sin deduplicar si el cliente no manda la cabecera — comportamiento correcto según
+  `docs/keel/conventions/mapping.md`, pero es una decisión silenciosa sin ningún `Then` que la
+  observe. Propuesta: si el diseño quiere garantizar idempotencia, declarar la cabecera como
+  obligatoria en `api.keel.yaml` para esas operaciones.
+- **`S3FileStorage.download` — sin error declarado y sin caso de uso que lo invoque**: el
+  adaptador ya mapea `NoSuchKeyException` a un `FILE_NOT_FOUND` convencional (404), pero
+  ningún caso de uso actual descarga una imagen de producto por esta vía, y `domain.keel.yaml`
+  no declara ese error. Propuesta: si en el futuro se expone una descarga directa, declarar
+  `FILE_NOT_FOUND` (404) en esa operación.
 
-4. **`S3FileStorage.download` mapea `NoSuchKeyException` a `IllegalStateException`** en vez de a un
-   error de dominio, porque `storage.keel.yaml` no declara un error `FILE_NOT_FOUND` para el bucket
-   `productImages`. Invisible en los escenarios `FL-*` actuales porque ningún caso de uso invoca
-   `download` todavía (solo `signedUrl`, que no falla al ser el bucket público); se activaría con el
-   primer consumidor futuro del método.
+### Nota — cobertura de escenarios de carrera (no es un huecos de diseño, es límite del arnés)
 
-## Otros
-
-Ninguno adicional que reportar.
+`keel-spring-tests` no pudo ejercitar tres casos borde de concurrencia real (dos altas
+paralelas con el mismo `sku`; `createProduct` en carrera con `deleteBrand`/`deleteCategory`;
+`reactivateProduct` sobre un producto en `draft` aislado) porque requieren orquestar hilos o
+estado que el arnés secuencial de JUnit no aísla determinísticamente. No es un defecto del
+generador ni un hueco del diseño: queda anotado aquí para quien decida si vale la pena una
+infraestructura de prueba de concurrencia dedicada.

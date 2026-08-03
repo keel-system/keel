@@ -84,7 +84,8 @@ reporta en vez de aplicar.
 injection; añadir `final`; reemplazar una excepción genérica por la de dominio
 **equivalente ya existente** sin cambiar el status HTTP ni el flujo; eliminar código
 muerto; normalizar formato; **añadir el baseline de migraciones** (ver la sección
-siguiente: describe el esquema que ya existe, no lo cambia).
+siguiente: describe el esquema que ya existe, con la única adición de las FK entre
+agregados que el diseño exige y que ningún exportador puede emitir).
 
 **Prohibido (repórtalo en `remaining`, no lo apliques)**: añadir o eliminar
 validaciones o invariantes; cambiar firmas públicas, DTOs o mapeos de persistencia;
@@ -131,6 +132,18 @@ Sigue `{{keel:skills}}/keel-spring-database/references/migrations.md`; en corto:
    `uk_*`/`idx_*` intactos (el `ApiExceptionHandler` traduce por nombre de
    constraint), `not null` en los `required`, tipos del dialecto — y cópialo como
    `src/main/resources/db/migration/V1__baseline_schema.sql`.
+
+   Un punto de esa checklist es **tuyo y solo tuyo**, porque el DDL exportado
+   nunca lo trae: las **FK entre agregados**. Una referencia a otro agregado es un
+   `UUID` plano sin asociación JPA, así que Hibernate no emite ninguna FK; pero
+   cuando el diseño declara un error `<X>_IN_USE` o llama «restricción de
+   integridad» a esa referencia, la comprobación del handler no es la garantía —lo
+   es la FK— y el único sitio donde puede existir es este archivo. Añádela a mano
+   y registra su nombre en el `CONSTRAINT_TO_ERROR` del `ApiExceptionHandler`
+   (`{{keel:docs}}/conventions/mapping.md § Cuando el diseño llama «restricción de
+   integridad» a una referencia entre agregados`, que también dice cuándo **no**
+   ponerla). Añadirla es no-conductual en el camino normal: solo cierra la carrera
+   que el diseño dice que no debe existir.
 3. Pruébalo sobre una BD **sin esquema** (recrea el contenedor: `docker compose -f
    infra/docker-compose.yaml down -v && … up -d`) con
    `PROFILE=local,migrations ./gradlew bootRun`: el arranque debe pasar el
@@ -145,36 +158,17 @@ tipo no cuadra: corrige el SQL exportado y repite. Si no converge, no maquilles 
 regístralo en `blockers` con el error exacto. **Nunca** relajes `ddl-auto` fuera de
 `local` ni habilites `baseline-on-migrate` para que arranque.
 
-## Smoke de despliegue (`deploy/`)
+## `deploy/` no es tuyo
 
-Lo último, y **después del baseline**: el contenedor corre con el perfil `develop`,
-que aplica las migraciones y deja a Hibernate solo validando, así que sin
-`V1__baseline_schema.sql` no arranca. Por eso este paso va aquí y no antes.
+El proyecto trae un segundo stack de contenedores, `deploy/`: el servicio ya
+empaquetado en su imagen, para que **el diseñador** lo pruebe a mano cuando quiera
+(ver `{{keel:docs}}/conventions/project-layout.md`). Lo genera `keel-spring build`
+entero y **no lo enciendes ni lo editas**: no forma parte de ninguna fase del
+pipeline. Tu infraestructura es `infra/`, que es contra la que corren los escenarios.
 
-`deploy/` es el otro stack de contenedores del proyecto (el servicio ya empaquetado,
-para que el diseñador lo pruebe a mano; ver `{{keel:docs}}/conventions/project-layout.md`).
-Lo genera `keel-spring build` entero: tu trabajo es **encenderlo una vez y comprobar
-que arranca**, no escribirlo.
-
-1. Baja `infra/` antes: los dos composes publican los mismos puertos.
-2. `bash deploy/up.sh` — construye la imagen y espera a que la app responda. El
-   script detecta runtime y frontend de compose solo; no elijas tú entre docker y
-   podman.
-3. Con capa `security`, pide un token de usuario contra el realm que Keycloak
-   importó al arrancar, con los valores de `infra/test-credentials.env`
-   (`AUTH_TEST_CLIENT`, `AUTH_TEST_PASSWORD`, un usuario = un rol del diseño). Que
-   devuelva `access_token` es lo que prueba que el realm entró bien.
-4. `bash deploy/down.sh -v` y vuelve a levantar `infra/` si te queda algo por
-   ejecutar contra ella.
-
-**Frontera**: no editas nada de `deploy/` — ni el compose, ni el Dockerfile, ni el
-realm. Si falla, es un defecto **del generador**, exactamente igual que un falso
-negativo de `validate-infra.sh` para el agente de infraestructura: `deploySmoke: KO`
-y el detalle a `blockers`, con el error y el fragmento de log que lo demuestra. Un
-parche local aquí se pierde en el siguiente `build` y deja el defecto sin arreglar
-para todos los demás servicios.
-
-Si el proyecto no tiene `deploy/up.sh` (build antiguo), `deploySmoke: N/A`.
+Si al pasar por ahí ves algo roto en `deploy/`, va a `remaining` como observación —
+nunca a `blockers`, porque no bloquea nada tuyo, y nunca parcheado a mano: se
+perdería en el siguiente `build`.
 
 ## Cierre
 
@@ -217,12 +211,11 @@ Qué se ajustó y qué queda pendiente de decisión humana. Cierra siempre con e
 bloque estructurado que consume el orquestador:
 
 ```yaml
-status: OK | KO           # OK solo con compilación verde, contexto que arranca, baseline probado, escenarios al 100% y deploy que levanta
+status: OK | KO           # OK solo con compilación verde, contexto que arranca, baseline probado y escenarios al 100%
 compiles: true | false
 scenarios: OK | KO        # ./gradlew integrationTest tras el pase: la no-regresión conductual
 contextTest: OK | KO      # ./gradlew test: contextLoads() bajo el perfil test (todos los beans arrancan sin infra)
 baseline: OK | KO | N/A   # migraciones: N/A sin persistencia; OK si arrancó con PROFILE=local,migrations
-deploySmoke: OK | KO | N/A # deploy/: la app levanta en contenedor y responde readiness (y da token, con security)
 issuesFixed: [...]        # ajustes no-conductuales aplicados
 remaining: [...]          # hallazgos conductuales sin hueco de diseño detrás
 designGaps:               # huecos del diseño que encontraste, como propuesta accionable

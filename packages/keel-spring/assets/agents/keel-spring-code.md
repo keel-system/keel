@@ -84,7 +84,11 @@ misma raíz. Todo lo que hagas ocurre dentro de ella.
    (`{{keel:docs}}/conventions/mapping.md`, § Auditoría de consistencia del contrato):
    cada nombre de campo que `specs/validation-scenarios.md` menciona en una
    respuesta, contrastado contra el DTO real; "ausencia vs. nulo" propagada a los
-   value objects compuestos; ningún value object proyectado exponiendo métodos
+   value objects compuestos **y a los payloads de evento** —cada campo de
+   `messaging.keel.yaml` cuya `description` diga que se omite mientras no tenga
+   valor lleva su `@JsonInclude(NON_NULL)` en el componente, y esa excepción no
+   aparece en `validation-scenarios.md`, que solo habla de respuestas HTTP—;
+   ningún value object proyectado exponiendo métodos
    derivados (`isXxx()`) que Jackson convierta en propiedades. Una decisión bien
    tomada en un agregado se olvida en el siguiente: esta pasada es la que lo
    detecta sin gastar un ciclo de validación funcional.

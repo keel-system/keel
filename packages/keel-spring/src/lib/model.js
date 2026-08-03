@@ -1031,7 +1031,12 @@ function collectStorage(layers) {
     // Límite de subida del servlet: el mayor de los declarados (cada bucket
     // aplica además el suyo). Sin ninguno, se deja el default de Spring.
     maxSizeMb: sizes.length > 0 ? Math.max(...sizes) : null,
-    hasPublicBucket: buckets.some((b) => b.visibility === 'public')
+    hasPublicBucket: buckets.some((b) => b.visibility === 'public'),
+    // Decide si el puerto FileStorage declara download: un bucket público se lee
+    // del borde y el servicio nunca intermedia el binario, así que ahí el método
+    // no lo invoca nadie y solo obliga al agente a implementar un camino
+    // inalcanzable (ver storage.js § renderPort).
+    hasPrivateBucket: buckets.some((b) => b.visibility === 'private')
   };
 }
 

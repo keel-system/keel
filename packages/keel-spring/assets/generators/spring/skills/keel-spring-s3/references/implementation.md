@@ -41,7 +41,11 @@ Mapea las excepciones del SDK a errores del dominio en el adaptador: fuera de
 5xx/timeout agotados los reintentos del SDK → deja subir la excepción como
 error técnico (500), no lo conviertas en «no encontrado».
 
-**Qué lanzar cuando la clave no existe.** La capa `storage` del DSL declara buckets y
+**Qué lanzar cuando la clave no existe.** Aplica solo si el puerto declara `download`, y
+`build` lo declara únicamente cuando el diseño tiene algún bucket `visibility: private`: sobre
+un bucket público el binario se lee del borde y ningún caso de uso pide los bytes al servicio,
+así que ahí no hay método que implementar ni error que echar en falta. La capa `storage` del
+DSL declara buckets y
 políticas, **no errores**: no hay ningún `FILE_NOT_FOUND` que copiar de ahí, y buscarlo lleva
 al reflejo equivocado de tirar un `IllegalStateException` —que `ApiExceptionHandler` traduce a
 500, es decir «el servidor está roto» cuando lo cierto es «esa clave no está»—. La jerarquía:

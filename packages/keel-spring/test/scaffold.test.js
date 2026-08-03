@@ -703,9 +703,7 @@ test('agentes de la orquestación: proyectados al directorio de agentes de cada 
     // suite unitaria es solo contextLoads(), y es lo único que comprueba que los
     // beans arrancan bajo el perfil test (los escenarios corren con perfil local
     // contra infraestructura real y no lo ven).
-    // Y es también el único que enciende deploy/: el smoke va después del baseline
-    // porque el contenedor corre con perfil develop y sin migraciones no arranca.
-    ['keel-spring-quality', ['no-conductual', './gradlew test', 'contextTest', 'bash deploy/up.sh', 'deploySmoke']]
+    ['keel-spring-quality', ['no-conductual', './gradlew test', 'contextTest']]
   ]) {
     const agent = read(workspace, `.claude/agents/${name}.md`);
     assert.ok(agent.includes(`name: ${name}`));
@@ -713,6 +711,13 @@ test('agentes de la orquestación: proyectados al directorio de agentes de cada 
       assert.ok(agent.includes(marker), `${name}.md debería mencionar ${marker}`);
     }
   }
+
+  // deploy/ es prueba manual del diseñador: ninguna fase lo enciende. Lo genera
+  // build igual, pero un gate sobre él añadía un modo de fallo (el runtime de
+  // contenedores del host) sobre algo que el pipeline no necesita.
+  const quality = read(workspace, '.claude/agents/keel-spring-quality.md');
+  assert.ok(!quality.includes('deploySmoke'));
+  assert.ok(!quality.includes('deploy/up.sh'));
 
   // El arbitraje es lo único irreducible del nodo: si el agente vuelve a ejecutar
   // la suite, sobrescribe los volcados que vino a leer y el camino verde vuelve a
@@ -1092,6 +1097,11 @@ test('capa storage: gradle con SDK S3, compose con MinIO y fragmento de config p
   assert.ok(port.includes('StoredObject upload(String key, byte[] content, String contentType);'));
   assert.ok(port.includes('String signedUrl(String key);'));
   assert.ok(!port.includes('org.springframework')); // puerto puro de dominio
+  // Bucket público: el binario se lee del borde y ningún caso de uso pide los
+  // bytes al servicio. Declarar download igual obligaba al agente a implementar
+  // un camino inalcanzable y a reportar como hueco del diseño el error que le
+  // faltaba (el FILE_NOT_FOUND de una descarga que nadie hace).
+  assert.ok(!port.includes('download'));
 
   const storedObject = read(workspace, 'src/main/java/com/commerce/productcatalog/domain/storage/StoredObject.java');
   assert.ok(storedObject.includes('public record StoredObject(String storageKey, URI url, String contentType, Long sizeBytes)'));
@@ -1116,6 +1126,26 @@ test('capa storage: gradle con SDK S3, compose con MinIO y fragmento de config p
   // La guarda existe en todos los perfiles, con production en opt-in.
   assert.ok(localStorage.includes('ensure-buckets-on-startup: true'));
   assert.ok(productionStorage.includes('ensure-buckets-on-startup: ${STORAGE_ENSURE_BUCKETS:false}'));
+});
+
+test('capa storage: con un bucket private el puerto sí declara download', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const patched = structuredClone(layers);
+  // Mismo diseño que el caso de arriba salvo la visibilidad: es lo único que
+  // decide si el servicio tiene que servir el binario él mismo.
+  patched.storage = { buckets: { productImages: { visibility: 'private', allowedContentTypes: ['image/png'], maxSizeMb: 5 } } };
+  patched.domain.entities.Product.fields.photo = { type: 'file', bucket: 'productImages' };
+  const patchedManifest = structuredClone(manifest);
+  patchedManifest.layers.storage = 'storage.keel.yaml';
+  scaffoldService({ manifest: patchedManifest, layers: patched, workspace });
+
+  const port = read(workspace, 'src/main/java/com/commerce/productcatalog/domain/storage/FileStorage.java');
+  assert.ok(port.includes('byte[] download(String key);'));
+  // El resto del puerto no depende de la visibilidad.
+  assert.ok(port.includes('StoredObject upload(String key, byte[] content, String contentType);'));
+  assert.ok(port.includes('void delete(String key);'));
+  assert.ok(port.includes('String signedUrl(String key);'));
 });
 
 test('storage con s3 elegido: mismo SDK pero sin contenedor MinIO en el compose', () => {
@@ -1620,6 +1650,12 @@ test('best-effort: agregado acumula, adaptador drena y el bridge publica tras co
   for (const ajeno of ['SnsTemplate', 'KafkaTemplate', 'RabbitTemplate']) {
     assert.ok(!bridge.includes(ajeno));
   }
+  // En best-effort el bridge no toca el transporte: la envoltura la arma el
+  // publisher (es quien lo conoce) y el destino/routing key los lee él de sus
+  // propias propiedades. Calcularlos aquí dejaba una variable local por evento y
+  // un @Value por evento sin usar.
+  assert.ok(!bridge.includes('EventEnvelope'));
+  assert.ok(!bridge.includes('@Value'));
 
   // El evento de integración es el gemelo de wire, no el de dominio. La metadata
   // sigue siendo componente (la usa el bridge) pero no viaja dentro de 'data':
@@ -1660,6 +1696,11 @@ test('outbox: fila en la misma transacción, relay determinista y envío tras el
   assert.ok(bridge.includes('@EventListener'));
   assert.ok(!bridge.includes('@TransactionalEventListener'));
   assert.ok(bridge.includes('append(productCreatedRoutingKey, "ProductCreatedIntegrationEvent", envelope);'));
+  // Con outbox sí son suyos: la envoltura es lo que serializa en la fila, y el
+  // destino/routing key los escribe él (no hay publisher que los lea).
+  assert.ok(bridge.includes('EventEnvelope<ProductCreatedIntegrationEvent> envelope = EventEnvelope.of('));
+  assert.ok(bridge.includes('@Value'));
+  assert.ok(bridge.includes('private String destination;'));
 
   const entity = read(workspace, `${outboxDir}/OutboxEventJpa.java`);
   assert.ok(entity.includes('@Table(name = "outbox_event"'));

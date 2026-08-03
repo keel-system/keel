@@ -113,7 +113,6 @@ public record ${event.integrationClass}(@JsonIgnore EventMetadata metadata${payl
 function renderBridge(model, outbox) {
   const imports = new Set([
     correlationImport(model),
-    'org.springframework.beans.factory.annotation.Value',
     'org.springframework.stereotype.Component'
     // EventEnvelope vive en este mismo paquete: no se importa.
   ]);
@@ -127,6 +126,7 @@ function renderBridge(model, outbox) {
   const ctorAssigns = [];
 
   if (outbox) {
+    imports.add('org.springframework.beans.factory.annotation.Value');
     imports.add('org.springframework.context.event.EventListener');
     imports.add('com.fasterxml.jackson.core.JsonProcessingException');
     imports.add('com.fasterxml.jackson.databind.ObjectMapper');
@@ -152,15 +152,22 @@ function renderBridge(model, outbox) {
     }
   }
 
-  const destinationField = model.events[0]
-    ? `    @Value("\${${model.events[0].destinationProperty}:${model.events[0].destinationDefault}}")\n    private String destination;`
+  // Destino y routing key solo los necesita el modo outbox, que es quien escribe
+  // la fila (append). En best-effort el bridge no toca el transporte: cada
+  // <Evento>Publisher lee sus propias propiedades, así que declararlas aquí
+  // dejaba un @Value muerto por evento más el del destino.
+  const destinationField =
+    outbox && model.events[0]
+      ? `    @Value("\${${model.events[0].destinationProperty}:${model.events[0].destinationDefault}}")\n    private String destination;`
+      : '';
+  const routingFields = outbox
+    ? model.events
+        .map(
+          (event) =>
+            `    @Value("\${${event.routingKeyProperty}:${event.routingKeyDefault}}")\n    private String ${routingField(event)};`
+        )
+        .join('\n\n')
     : '';
-  const routingFields = model.events
-    .map(
-      (event) =>
-        `    @Value("\${${event.routingKeyProperty}:${event.routingKeyDefault}}")\n    private String ${routingField(event)};`
-    )
-    .join('\n\n');
 
   const methods = model.events.map((event) => renderBridgeMethod(event, outbox)).join('\n\n');
 
@@ -178,9 +185,7 @@ function renderBridge(model, outbox) {
 @Component
 public class ${model.service.className}DomainEventBridge {
 
-${[destinationField, routingFields].filter(Boolean).join('\n\n')}
-
-${fields.join('\n')}
+${[destinationField, routingFields, fields.join('\n')].filter(Boolean).join('\n\n')}
 
     public ${model.service.className}DomainEventBridge(${ctorParams.join(', ')}) {
 ${ctorAssigns.join('\n')}
@@ -202,13 +207,20 @@ function renderBridgeMethod(event, outbox) {
     ? `        append(${routingField(event)}, "${event.integrationClass}", envelope);`
     : `        ${publisherField(event)}.publish(integrationEvent, correlationId);`;
 
+  // La envoltura solo la construye el bridge en modo outbox: es lo que serializa
+  // en la fila. En best-effort la arma el publisher (tiene que hacerlo de todos
+  // modos, porque es quien conoce el transporte), así que calcularla aquí dejaba
+  // una variable local sin usar por evento.
+  const envelope = outbox
+    ? `        EventEnvelope<${event.integrationClass}> envelope = EventEnvelope.of(event.metadata(), integrationEvent, correlationId);\n`
+    : '';
+
   return `    /** ${event.name}: evento de dominio → evento de integración. */
     ${listener}
     public void on${event.className}(${event.className} event) {
         String correlationId = CorrelationContext.get();
         ${event.integrationClass} integrationEvent = new ${event.integrationClass}(event.metadata()${args ? `, ${args}` : ''});
-        EventEnvelope<${event.integrationClass}> envelope = EventEnvelope.of(event.metadata(), integrationEvent, correlationId);
-${delivery}
+${envelope}${delivery}
     }`;
 }
 

@@ -7,8 +7,8 @@ Guía para el agente: cómo comprobar mecánicamente que la infraestructura de p
 > `infra/` es la infraestructura de la generación, con la app corriendo fuera.
 > `deploy/` es el servicio ya empaquetado en su imagen, para que una persona lo
 > pruebe a mano; no lleva `devtools` ni scripts de sondeo, se levanta con
-> `bash deploy/up.sh` y solo lo enciende el pase de calidad, una vez, para su
-> `deploySmoke`. La comparación completa está en `conventions/project-layout.md`.
+> `bash deploy/up.sh` y **ninguna fase de la generación lo enciende**: es del
+> diseñador. La comparación completa está en `conventions/project-layout.md`.
 > No los levantes a la vez: publican los mismos puertos.
 Es el trabajo del agente `keel-spring-infra` (fase de infraestructura de la
 orquestación de `/keel-generate-spring`), **después** de levantar el compose y

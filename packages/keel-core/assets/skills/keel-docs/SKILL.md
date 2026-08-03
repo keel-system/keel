@@ -45,6 +45,10 @@ OpenAPI 3.1 derivado mecánicamente:
 
 - Un path por endpoint de `api` (o derivado de `auto`), con verbo, `successStatus` y parámetros de path/query según el input de la operación.
 - Schemas de componentes desde `domain` (`entities` y `types`; constraints → `pattern`, `maxLength`, `minimum`…; enums → `enum`).
+- Las `relations` de una entidad **no son todas propiedades**, y aquí es donde un OpenAPI derivado a ojo se separa del contrato real. Los `aggregates` del diseño mandan:
+  - relación a una entidad **del mismo agregado** → schema anidado (`$ref`, o `array` de `$ref` si la cardinalidad es `one-to-many`);
+  - relación a **otro agregado** (`many-to-one`/`one-to-one`) → una sola propiedad `<relación>Id` de tipo `uuid`: entre agregados solo viaja el id;
+  - **back-reference** de una entidad hija hacia la raíz de su propio agregado → **se omite**, ni en `properties` ni en `required`. El schema hijo solo aparece anidado bajo su raíz, así que el vínculo ya está en la estructura: declararlo otra vez inventa un campo (`ProductImage.productId`) que ni el servidor devuelve ni los escenarios esperan, y el primero que se lo crea es quien integra contra el contrato.
 - `components.securitySchemes` y `security` por operación desde `security` (protocolo → scheme; permisos → scopes cuando el protocolo los soporte). Con `serviceAuth: client-credentials`, un scheme `oauth2` con flow `clientCredentials` cuyos scopes salen de los exigidos por las reglas `level: service`; las operaciones `audience: services` referencian ese scheme (y las `both`, ambos).
 - Cada error declarado en `use-cases` como respuesta con su status y el schema común `{ code, message }`.
 - `info.version` = `service.version`; `info.description` resume el servicio.

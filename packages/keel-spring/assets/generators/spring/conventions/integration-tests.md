@@ -290,6 +290,12 @@ assertThatThrownBy(() -> jsonPath(response, "$.categoryId"))
 (`null` explícito **sí** devuelve `null`: si el diseño distingue ausente de nulo —`mapping.md §
 Ausencia vs. nulo`— son dos aserciones distintas.)
 
+Vale igual para el `data` de un evento, con un matiz de fontanería: ahí no hay `Response`, así
+que se parte de `toJson(JsonPath.read(message, "$.data"))` —JSON de verdad, no el `toString()`
+de un `Map`, § anterior— y se lee sobre esa cadena. Y suele bastar con la comparación STRICT
+del `data` completo: un campo que el diseño manda omitir y llega como `null` es una clave extra,
+y JSONAssert ya falla por ella sin ninguna aserción dedicada.
+
 ## Idempotencia, credenciales y estado
 
 - `Idempotency-Key`: la base añade una uuid **nueva por request** en toda mutación.

@@ -46,6 +46,25 @@ esta checklist antes de aceptarlo.
   aviso no es informativo: es trabajo pendiente.
 - **Nullabilidad**: `not null` en los campos `required` y en las FK de relaciones
   requeridas. Es la última línea de defensa de un invariante.
+- **FK entre agregados: nunca están en el DDL exportado, y a veces tienen que
+  estar en el baseline.** Una referencia a otro agregado es una columna `UUID`
+  plana sin asociación JPA, así que Hibernate no emite ninguna FK y
+  `export-schema.sh` —que parte de las entidades— tampoco puede inventarla.
+  Repasa el diseño: por cada error del tipo `<X>_IN_USE`, o cada `rule` que llame
+  «restricción de integridad» a una referencia entre agregados, la comprobación
+  del handler es solo el mensaje amable — la garantía es la FK, y la añades tú:
+
+  ```sql
+  ALTER TABLE products ADD CONSTRAINT fk_products_brand
+      FOREIGN KEY (brand_id) REFERENCES brands (id);
+  ```
+
+  Registra ese nombre de constraint en el `CONSTRAINT_TO_ERROR` del
+  `ApiExceptionHandler`, o la violación se degrada a un 409 genérico en vez del
+  `code` declarado. El razonamiento completo —incluido cuándo **no** ponerla (el
+  diseño acepta la ventana explícitamente)— está en
+  `{{keel:docs}}/conventions/mapping.md § Cuando el diseño llama «restricción de
+  integridad» a una referencia entre agregados`.
 - **Tipos del dialecto**: revisa `dialects/<database>.md` antes de aceptar los
   tipos de columnas no triviales (JSON/jsonb, UUID, texto largo, `decimal` con
   precisión/escala). Ajústalos a mano si el default de Hibernate no es el que

@@ -186,7 +186,25 @@ public record StoredObject(String storageKey, URI url, String contentType, Long 
 }
 
 // Puerto de salida puro (dominio): sin dependencias de infraestructura.
+//
+// `download` es el único método condicional: sobre un bucket `visibility: public`
+// el binario se lee directamente del borde y ningún caso de uso lo pide por aquí,
+// pero el @Override sí es obligatorio — así que declararlo siempre forzaba al
+// agente a implementar un camino inalcanzable y a reportar como hueco del diseño
+// el error que le faltaba (el FILE_NOT_FOUND de una descarga que nadie hace).
+// Mismo criterio que la skill keel-spring-s3 ya aplica a `signedUrl`.
 function renderPort(model) {
+  const download = model.storage?.hasPrivateBucket
+    ? `
+    /**
+     * Trae el binario: solo existe porque el diseño declara algún bucket
+     * visibility: private, cuyo contenido no es de lectura directa y tiene que
+     * servirlo el propio servicio.
+     */
+    byte[] download(String key);
+`
+    : '';
+
   const body = `/**
  * Puerto de almacenamiento de archivos. La implementación (proveedor del
  * stack) vive en infrastructure/storage; la escribe el agente. El dominio
@@ -199,9 +217,7 @@ public interface FileStorage {
      * pueda guardar la referencia.
      */
     StoredObject upload(String key, byte[] content, String contentType);
-
-    byte[] download(String key);
-
+${download}
     void delete(String key);
 
     String signedUrl(String key);

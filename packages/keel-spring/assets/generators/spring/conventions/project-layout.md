@@ -153,7 +153,7 @@ El proyecto generado trae dos stacks de contenedores, y confundirlos cuesta caro
 | | `infra/` | `deploy/` |
 |---|---|---|
 | Para qué | La infraestructura **de la generación** | El **servicio empaquetado**, para probarlo a mano |
-| Quién lo usa | El agente `keel-spring-infra`, y la suite `integrationTest` contra él | El diseñador, con Postman o un front; y el pase de calidad una vez, para el `deploySmoke` |
+| Quién lo usa | El agente `keel-spring-infra`, y la suite `integrationTest` contra él | Solo el diseñador, con Postman o un front. Ninguna fase de la generación lo enciende |
 | Dónde corre la app | Fuera del contenedor (`bootRun`, el IDE, JUnit) | Dentro, desde la imagen de `deploy/Dockerfile` |
 | Qué trae de más | El toolbox `devtools` con las CLIs, `validate-infra.sh`, `reset-db.sh`, `init-keycloak.sh` | UIs de inspección (kafka-ui, RedisInsight), el realm de Keycloak ya importado |
 | Perfil | `local` (`ddl-auto: update`, Flyway apagado) | `develop` (Flyway aplicando `db/migration/`) |

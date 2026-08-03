@@ -10,9 +10,9 @@
 //              UIs para mirar por dentro, y el realm de Keycloak ya poblado.
 //              Sin devtools: aquí no hay nada que sondear por CLI.
 //
-// Todo es determinista y sale del diseño. El agente de calidad solo lo enciende
-// una vez al final del pipeline para comprobar que arranca (deploySmoke); no
-// escribe nada de esto.
+// Todo es determinista y sale del diseño. Ninguna fase de la generación lo
+// enciende: es prueba manual del diseñador, que lo levanta cuando quiera. Los
+// agentes tampoco escriben nada de esto.
 //
 // Portabilidad docker/podman: un único compose y un único Dockerfile, sin claves
 // específicas de Docker (nada de host-gateway ni network_mode), con los puertos

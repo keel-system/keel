@@ -297,6 +297,21 @@ Lo que le toca al agente:
   en las clases del contrato afectadas (DTOs de respuesta y payloads de evento), a nivel de clase.
   Nunca reintroduciéndolo como default global en `application.yaml`: eso arrastra al broker y a
   cualquier otro serializador que use el mapper de la aplicación.
+- Si un **campo concreto** declara lo contrario que la convención global —típicamente en su
+  `description` de `messaging.keel.yaml` o de `domain.keel.yaml`: *"ausente mientras no tenga
+  ninguna"*, *"se omite si…"*—, **gana el campo**: la convención global fija el default del
+  servicio, no una regla sin excepciones. Y entonces la anotación va **en el componente**, no
+  en la clase:
+
+  ```java
+  public record ProductCreatedIntegrationEvent(@JsonIgnore EventMetadata metadata, UUID productId,
+          String description, @JsonInclude(JsonInclude.Include.NON_NULL) String primaryImage) {
+  }
+  ```
+
+  Anotar la clase sería un fallo de contrato en el otro sentido: arrastraría a `description`,
+  que sigue la convención global y **sí** tiene que viajar como `null`. Un `NON_NULL` de clase
+  solo es correcto cuando la convención global ya dice "se omite".
 
 En ambos casos, un value object compuesto sin ningún valor se mapea a `null` — eso lo decide el
 mapeo, no Jackson (ver `domain-modeling.md`).
@@ -381,6 +396,14 @@ agregado se olvida en el siguiente. Antes de dar la capa por cerrada:
    (`isZero()`, `isPositive()`): Jackson los serializa como propiedades extra
    (`"zero": true`) y filtran detalle de implementación al contrato público
    (ver `domain-modeling.md`).
+4. Recorrer los campos de `publishing.events.*.payload` de `messaging.keel.yaml`
+   —el contrato de evento no lo cubre `validation-scenarios.md`, que habla de
+   respuestas HTTP— y, por cada uno cuya `description` diga que se omite mientras
+   no tenga valor ("ausente mientras…", "se omite si…"), confirmar el
+   `@JsonInclude(NON_NULL)` **en el componente** del record de integración
+   (§ Ausencia vs. nulo). Es el punto ciego típico: la excepción vive en una
+   `description` de una capa que esta auditoría no miraba, así que se descubre en
+   la validación funcional y cuesta un ciclo entero.
 
 ## `api` — api.keel.yaml
 
