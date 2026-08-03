@@ -2,6 +2,14 @@
 
 Guía para el agente: cómo comprobar mecánicamente que la infraestructura de prueba
 (la de `infra/docker-compose.yaml` generado) responde, usando el contenedor `devtools`.
+
+> El proyecto tiene **dos** composes y este documento habla solo del primero.
+> `infra/` es la infraestructura de la generación, con la app corriendo fuera.
+> `deploy/` es el servicio ya empaquetado en su imagen, para que una persona lo
+> pruebe a mano; no lleva `devtools` ni scripts de sondeo, se levanta con
+> `bash deploy/up.sh` y solo lo enciende el pase de calidad, una vez, para su
+> `deploySmoke`. La comparación completa está en `conventions/project-layout.md`.
+> No los levantes a la vez: publican los mismos puertos.
 Es el trabajo del agente `keel-spring-infra` (fase de infraestructura de la
 orquestación de `/keel-generate-spring`), **después** de levantar el compose y
 **antes** de que se ejerciten los escenarios: si la infra no está lista, un

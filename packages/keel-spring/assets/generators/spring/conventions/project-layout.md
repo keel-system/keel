@@ -144,4 +144,20 @@ El agente de código de la orquestación (`keel-spring-code`, lanzado por `/keel
 - `application` orquesta: cada handler valida precondiciones, aplica rules en el orden del spec, persiste **a través del puerto**. No publica eventos: los emite el agregado con `raise(...)` y el adaptador los drena al persistir (`domain-modeling.md`). Un handler no invoca a otro handler directamente; si necesita otro caso de uso, despacha su mensaje vía `UseCaseMediator`.
 - `infrastructure/rest` solo traduce: construye/fusiona el mensaje desde los parámetros HTTP, lo despacha vía `UseCaseMediator` y deja los errores al `ApiExceptionHandler`. Sin lógica de negocio.
 - El mapeo domain↔JPA vive únicamente en los `XxxRepositoryImpl`; ni los handlers ni los controllers ven una clase `Jpa`.
-- Lo operativo que el scaffolding no produce (Dockerfile de la app, CI) puede añadirse a mano al repo generado y sobrevive regeneraciones.
+- Lo operativo que el scaffolding no produce (CI, manifiestos de Kubernetes) puede añadirse a mano al repo generado y sobrevive regeneraciones.
+
+### Dos destinos de infraestructura: `infra/` y `deploy/`
+
+El proyecto generado trae dos stacks de contenedores, y confundirlos cuesta caro porque publican los mismos puertos:
+
+| | `infra/` | `deploy/` |
+|---|---|---|
+| Para qué | La infraestructura **de la generación** | El **servicio empaquetado**, para probarlo a mano |
+| Quién lo usa | El agente `keel-spring-infra`, y la suite `integrationTest` contra él | El diseñador, con Postman o un front; y el pase de calidad una vez, para el `deploySmoke` |
+| Dónde corre la app | Fuera del contenedor (`bootRun`, el IDE, JUnit) | Dentro, desde la imagen de `deploy/Dockerfile` |
+| Qué trae de más | El toolbox `devtools` con las CLIs, `validate-infra.sh`, `reset-db.sh`, `init-keycloak.sh` | UIs de inspección (kafka-ui, RedisInsight), el realm de Keycloak ya importado |
+| Perfil | `local` (`ddl-auto: update`, Flyway apagado) | `develop` (Flyway aplicando `db/migration/`) |
+
+Ninguno de los dos se escribe a mano: los genera `keel-spring build` y se regeneran con él. Un agente que necesite tocar algo de `deploy/` está ante un defecto del generador, no ante una tarea suya.
+
+La imagen es multi-etapa con el jar explotado en las capas de Spring Boot, usuario no-root y `HEALTHCHECK` contra `/actuator/health/readiness`; su contexto de build es la **raíz** del proyecto (necesita `src/` y el wrapper vendorizado), de ahí el `.dockerignore` de la raíz. Los scripts `deploy/up.sh` y `deploy/down.sh` resuelven runtime (`CONTAINER_RUNTIME` → docker → podman) y frontend de compose (`podman compose`, con `podman-compose` de fallback), igual que ya hacen los scripts de `infra/`.

@@ -145,6 +145,37 @@ tipo no cuadra: corrige el SQL exportado y repite. Si no converge, no maquilles 
 regístralo en `blockers` con el error exacto. **Nunca** relajes `ddl-auto` fuera de
 `local` ni habilites `baseline-on-migrate` para que arranque.
 
+## Smoke de despliegue (`deploy/`)
+
+Lo último, y **después del baseline**: el contenedor corre con el perfil `develop`,
+que aplica las migraciones y deja a Hibernate solo validando, así que sin
+`V1__baseline_schema.sql` no arranca. Por eso este paso va aquí y no antes.
+
+`deploy/` es el otro stack de contenedores del proyecto (el servicio ya empaquetado,
+para que el diseñador lo pruebe a mano; ver `{{keel:docs}}/conventions/project-layout.md`).
+Lo genera `keel-spring build` entero: tu trabajo es **encenderlo una vez y comprobar
+que arranca**, no escribirlo.
+
+1. Baja `infra/` antes: los dos composes publican los mismos puertos.
+2. `bash deploy/up.sh` — construye la imagen y espera a que la app responda. El
+   script detecta runtime y frontend de compose solo; no elijas tú entre docker y
+   podman.
+3. Con capa `security`, pide un token de usuario contra el realm que Keycloak
+   importó al arrancar, con los valores de `infra/test-credentials.env`
+   (`AUTH_TEST_CLIENT`, `AUTH_TEST_PASSWORD`, un usuario = un rol del diseño). Que
+   devuelva `access_token` es lo que prueba que el realm entró bien.
+4. `bash deploy/down.sh -v` y vuelve a levantar `infra/` si te queda algo por
+   ejecutar contra ella.
+
+**Frontera**: no editas nada de `deploy/` — ni el compose, ni el Dockerfile, ni el
+realm. Si falla, es un defecto **del generador**, exactamente igual que un falso
+negativo de `validate-infra.sh` para el agente de infraestructura: `deploySmoke: KO`
+y el detalle a `blockers`, con el error y el fragmento de log que lo demuestra. Un
+parche local aquí se pierde en el siguiente `build` y deja el defecto sin arreglar
+para todos los demás servicios.
+
+Si el proyecto no tiene `deploy/up.sh` (build antiguo), `deploySmoke: N/A`.
+
 ## Cierre
 
 Al terminar, en este orden:
@@ -186,11 +217,12 @@ Qué se ajustó y qué queda pendiente de decisión humana. Cierra siempre con e
 bloque estructurado que consume el orquestador:
 
 ```yaml
-status: OK | KO           # OK solo con compilación verde, contexto que arranca, baseline probado y escenarios al 100%
+status: OK | KO           # OK solo con compilación verde, contexto que arranca, baseline probado, escenarios al 100% y deploy que levanta
 compiles: true | false
 scenarios: OK | KO        # ./gradlew integrationTest tras el pase: la no-regresión conductual
 contextTest: OK | KO      # ./gradlew test: contextLoads() bajo el perfil test (todos los beans arrancan sin infra)
 baseline: OK | KO | N/A   # migraciones: N/A sin persistencia; OK si arrancó con PROFILE=local,migrations
+deploySmoke: OK | KO | N/A # deploy/: la app levanta en contenedor y responde readiness (y da token, con security)
 issuesFixed: [...]        # ajustes no-conductuales aplicados
 remaining: [...]          # hallazgos conductuales sin hueco de diseño detrás
 designGaps:               # huecos del diseño que encontraste, como propuesta accionable

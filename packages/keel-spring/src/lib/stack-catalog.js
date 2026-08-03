@@ -526,3 +526,133 @@ export function selectedInfra(model) {
   }
   return infra;
 }
+
+// ─── Solo para deploy/ (pruebas manuales) ────────────────────────────────────
+//
+// Las dos tablas de abajo las consume ÚNICAMENTE scaffold/deploy.js. No entran en
+// infra/docker-compose.yaml, y es deliberado: ahí la espera a que un servicio esté
+// listo ya la resuelve el bucle de reintentos de validate-infra.sh, y el agente de
+// infraestructura sabe leer un FALLO transitorio. En deploy/ no hay agente: el
+// contenedor de la app arranca solo y necesita `depends_on: service_healthy` para
+// no morir contra una BD que todavía no acepta conexiones.
+
+/**
+ * Healthcheck por tecnología, para el `depends_on` del servicio `app` en deploy/.
+ * El comando se ejecuta DENTRO del contenedor sondeado, así que solo usa
+ * herramientas que trae su propia imagen (no las de devtools, que en deploy/ no
+ * existe). Honrado igual por docker y por podman.
+ *
+ * sqlserver no aparece: su composeService ya declara el suyo.
+ */
+export const HEALTHCHECKS = {
+  postgresql: (db) => ({
+    test: ['CMD-SHELL', `pg_isready -U ${db} -d ${db}`],
+    interval: '5s',
+    timeout: '5s',
+    retries: 20
+  }),
+  mysql: () => ({
+    test: ['CMD-SHELL', 'mysqladmin ping -h 127.0.0.1 --silent'],
+    interval: '5s',
+    timeout: '5s',
+    retries: 30
+  }),
+  mariadb: () => ({
+    test: ['CMD-SHELL', 'healthcheck.sh --connect --innodb_initialized'],
+    interval: '5s',
+    timeout: '5s',
+    retries: 30
+  }),
+  oracle: () => ({
+    // La imagen gvenzl trae su propio healthcheck.sh; Oracle tarda minutos en la
+    // primera pasada, de ahí el start_period largo.
+    test: ['CMD-SHELL', 'healthcheck.sh'],
+    interval: '10s',
+    timeout: '10s',
+    retries: 30,
+    start_period: '60s'
+  }),
+  kafka: () => ({
+    test: ['CMD-SHELL', '/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list'],
+    interval: '10s',
+    timeout: '10s',
+    retries: 20
+  }),
+  rabbitmq: () => ({
+    test: ['CMD-SHELL', 'rabbitmq-diagnostics -q ping'],
+    interval: '10s',
+    timeout: '10s',
+    retries: 20
+  }),
+  snssqs: () => ({
+    test: ['CMD-SHELL', 'curl -sf http://localhost:4566/_localstack/health'],
+    interval: '5s',
+    timeout: '5s',
+    retries: 30
+  }),
+  keycloak: () => ({
+    // La imagen de Keycloak 26 no trae curl ni wget (UBI micro): el sondeo va por
+    // el /dev/tcp de bash contra el puerto de management, que KC_HEALTH_ENABLED
+    // abre en el 9000. Es el patrón que documenta el propio proyecto.
+    test: [
+      'CMD-SHELL',
+      "exec 3<>/dev/tcp/localhost/9000 && echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3 | grep -q '\"status\": \"UP\"'"
+    ],
+    interval: '5s',
+    timeout: '5s',
+    retries: 40
+  }),
+  redis: () => ({
+    test: ['CMD-SHELL', 'redis-cli ping'],
+    interval: '5s',
+    timeout: '5s',
+    retries: 20
+  }),
+  valkey: () => ({
+    test: ['CMD-SHELL', 'valkey-cli ping'],
+    interval: '5s',
+    timeout: '5s',
+    retries: 20
+  }),
+  minio: () => ({
+    test: ['CMD-SHELL', 'curl -sf http://localhost:9000/minio/health/live'],
+    interval: '5s',
+    timeout: '5s',
+    retries: 20
+  })
+};
+
+/**
+ * UIs de inspección que se añaden SOLO al compose de pruebas manuales, para que el
+ * diseñador pueda mirar por dentro lo que la API no le enseña (qué mensajes
+ * salieron, qué claves quedaron en caché). Mismo estilo que composeServices.
+ *
+ * No hay entrada para rabbitmq, minio ni keycloak: sus consolas ya vienen en la
+ * propia imagen (15672, 9001, 8180) y añadir un contenedor sería duplicarlas. Se
+ * documentan en el README, que es donde el diseñador las busca.
+ */
+export const UI_SERVICES = {
+  kafka: () => ({
+    'kafka-ui': {
+      image: 'provectuslabs/kafka-ui:v0.7.2',
+      environment: {
+        KAFKA_CLUSTERS_0_NAME: 'local',
+        // El listener interno: kafka-ui vive dentro de la red, como devtools.
+        KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: 'kafka:29092',
+        DYNAMIC_CONFIG_ENABLED: 'true'
+      },
+      ports: ['${KAFKA_UI_PORT:-8081}:8080'],
+      depends_on: ['kafka']
+    }
+  }),
+  redis: () => ({ redisinsight: redisInsightService('redis') }),
+  valkey: () => ({ redisinsight: redisInsightService('valkey') })
+};
+
+function redisInsightService(serviceKey) {
+  return {
+    image: 'redis/redisinsight:2.62',
+    ports: ['${REDISINSIGHT_PORT:-5540}:5540'],
+    depends_on: [serviceKey]
+  };
+}

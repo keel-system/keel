@@ -703,7 +703,9 @@ test('agentes de la orquestación: proyectados al directorio de agentes de cada 
     // suite unitaria es solo contextLoads(), y es lo único que comprueba que los
     // beans arrancan bajo el perfil test (los escenarios corren con perfil local
     // contra infraestructura real y no lo ven).
-    ['keel-spring-quality', ['no-conductual', './gradlew test', 'contextTest']]
+    // Y es también el único que enciende deploy/: el smoke va después del baseline
+    // porque el contenedor corre con perfil develop y sin migraciones no arranca.
+    ['keel-spring-quality', ['no-conductual', './gradlew test', 'contextTest', 'bash deploy/up.sh', 'deploySmoke']]
   ]) {
     const agent = read(workspace, `.claude/agents/${name}.md`);
     assert.ok(agent.includes(`name: ${name}`));
@@ -884,6 +886,142 @@ test('devtools: compose trae el toolbox + Dockerfile + validate-infra.sh con las
   assert.ok(reset.includes('DROP SCHEMA public CASCADE'));
 });
 
+test('deploy: el servicio empaquetado para pruebas manuales, distinto de la infra de generación', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const patched = structuredClone(layers);
+  patched.messaging = { publishing: { reliability: 'best-effort', events: { ProductCreated: { payload: { entity: 'Product' } } } } };
+  const patchedManifest = structuredClone(manifest);
+  patchedManifest.layers.messaging = 'messaging.keel.yaml';
+
+  scaffoldService({ manifest: patchedManifest, layers: patched, workspace });
+
+  // Imagen: multietapa con el jar explotado en las capas de Boot (un cambio de
+  // código reescribe kilobytes, no el jar entero) y usuario sin privilegios.
+  const dockerfile = read(workspace, 'deploy/Dockerfile');
+  assert.ok(dockerfile.includes('AS deps'));
+  assert.ok(dockerfile.includes('-jdk-alpine'));
+  assert.ok(dockerfile.includes('-jre-alpine')); // el runtime no arrastra el JDK
+  assert.ok(dockerfile.includes('-Djarmode=tools -jar application.jar extract --layers'));
+  assert.ok(dockerfile.includes('/workspace/extracted/dependencies/'));
+  assert.ok(dockerfile.includes('USER app'));
+  // wget de BusyBox: la base alpine no trae curl, y el healthcheck lo honran los
+  // dos runtimes. Es lo que consume el bucle de espera de up.sh.
+  assert.ok(dockerfile.includes('HEALTHCHECK'));
+  assert.ok(dockerfile.includes('wget -q -O - http://localhost:8080/actuator/health/readiness'));
+
+  // El contexto de build es la raíz (necesita src/ y el wrapper), así que el
+  // .dockerignore va allí y no en deploy/.
+  const dockerignore = read(workspace, '.dockerignore');
+  assert.ok(dockerignore.includes('build/'));
+  assert.ok(dockerignore.includes('infra/'));
+
+  const compose = read(workspace, 'deploy/docker-compose.yaml');
+  // La app corre DENTRO, con el único perfil redirigible por entorno: `local` fija
+  // literales con localhost y quedaría clavado fuera de la red de contenedores.
+  assert.ok(compose.includes('dockerfile: deploy/Dockerfile'));
+  assert.ok(compose.includes('PROFILE: develop'));
+  assert.ok(compose.includes('DB_URL: jdbc:postgresql://db:5432/product_catalog'));
+  assert.ok(compose.includes('KAFKA_BOOTSTRAP_SERVERS: kafka:29092'));
+  assert.ok(!compose.includes('DB_URL: jdbc:postgresql://localhost'));
+  // Aquí no hay agente que reintente un sondeo: la app espera a que sus
+  // dependencias estén sanas o arranca contra una BD que no acepta conexiones.
+  assert.ok(compose.includes('condition: service_healthy'));
+  assert.ok(compose.includes('pg_isready -U product_catalog'));
+  // Sin toolbox: en deploy/ no hay nada que sondear por CLI.
+  assert.ok(!compose.includes('devtools'));
+  // UIs de inspección: lo que la API no enseña.
+  assert.ok(compose.includes('provectuslabs/kafka-ui'));
+
+  const env = read(workspace, 'deploy/.env');
+  assert.ok(env.includes('APP_PORT=8080'));
+  assert.ok(env.includes('DB_PORT=5432'));
+  // Podman rootless no puede publicar por debajo de 1024.
+  for (const [, port] of env.matchAll(/^[A-Z_]+_PORT=(\d+)$/gm)) {
+    assert.ok(Number(port) > 1024, `puerto publicado por debajo de 1024: ${port}`);
+  }
+});
+
+test('deploy: los scripts sirven igual con docker que con podman', () => {
+  const workspace = makeWorkspace();
+  scaffoldService({ ...loadFixture(), workspace });
+
+  for (const name of ['deploy/up.sh', 'deploy/down.sh']) {
+    const script = read(workspace, name);
+    assert.ok(script.startsWith('#!/usr/bin/env bash'));
+    // Misma detección que validate-infra.sh / reset-db.sh / init-keycloak.sh: quien
+    // exporta CONTAINER_RUNTIME=podman para generar no aprende nada nuevo aquí.
+    assert.ok(script.includes('CONTAINER_RUNTIME'));
+    assert.ok(script.includes('podman-compose')); // fallback sin el frontend delegado
+  }
+
+  const up = read(workspace, 'deploy/up.sh');
+  // El sondeo va por HTTP contra el puerto publicado, no por `compose ps --format`:
+  // ni el formato de esa salida ni el nombre que cada frontend da al contenedor son
+  // los mismos en docker y en podman-compose.
+  assert.ok(up.includes('/actuator/health/readiness'));
+  assert.ok(!up.includes('ps --format'));
+  // Lee el .env para sondear e imprimir el puerto REAL si alguien lo cambió.
+  assert.ok(up.includes('. "$ENV_FILE"'));
+
+  // El compose no puede usar extensiones que solo entiende Docker.
+  const compose = read(workspace, 'deploy/docker-compose.yaml');
+  assert.ok(!compose.includes('host-gateway'));
+  assert.ok(!compose.includes('network_mode'));
+});
+
+test('deploy: con Keycloak el realm se importa al arrancar, sin ejecutar nada', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const patched = structuredClone(layers);
+  patched.security = {
+    authentication: {
+      protocol: 'oidc',
+      serviceAuth: { protocol: 'oauth2', audience: 'catalog-api', validateAudience: true }
+    },
+    access: { default: { level: 'required' }, rules: { createProduct: { roles: ['admin'], scopes: ['catalog:write'] } } },
+    serviceClients: { billing: { scopes: ['catalog:write'] } }
+  };
+  const patchedManifest = structuredClone(manifest);
+  patchedManifest.layers.security = 'security.keel.yaml';
+
+  scaffoldService({ manifest: patchedManifest, layers: patched, workspace });
+
+  const compose = read(workspace, 'deploy/docker-compose.yaml');
+  assert.ok(compose.includes('--import-realm'));
+  assert.ok(compose.includes('/opt/keycloak/data/import/realm-export.json:ro'));
+  // El issuer partido: la app alcanza keycloak:8080, pero el token se pide contra
+  // localhost:8180 y el `iss` no casaría. jwk-set-uri (que Boot prioriza sobre
+  // issuer-uri) resuelve las claves por la ruta interna sin hacer discovery.
+  assert.ok(compose.includes('SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: http://keycloak:8080/realms/product-catalog/'));
+  assert.ok(compose.includes('KC_HOSTNAME: http://localhost:${KEYCLOAK_PORT:-8180}'));
+
+  const realm = JSON.parse(read(workspace, 'deploy/keycloak/realm-export.json'));
+  assert.equal(realm.realm, 'product-catalog');
+  assert.deepEqual(realm.roles.realm.map((r) => r.name), ['admin']);
+  // Un usuario por rol (username = rol) + uno sin ninguno: el 403 por rol
+  // insuficiente necesita un sujeto autenticado.
+  assert.deepEqual(realm.users.map((u) => u.username), ['admin', 'no-role']);
+  assert.equal(realm.users[0].credentials[0].value, 'password');
+
+  const byId = Object.fromEntries(realm.clients.map((c) => [c.clientId, c]));
+  assert.ok(byId['product-catalog-spring-test'].directAccessGrantsEnabled);
+  assert.equal(byId.billing.secret, 'billing-secret');
+  // Audiencia y permisos en client scopes separados: si viajaran juntos, el cliente
+  // «sin scope» perdería también la audiencia y dejaría de probar nada del scope.
+  assert.deepEqual(byId['test-m2m-no-scope'].defaultClientScopes, ['aud-catalog-api']);
+  assert.deepEqual(byId['test-m2m-bad-aud'].defaultClientScopes, ['aud-wrong', 'catalog:write']);
+  assert.deepEqual(byId['test-m2m-none'].defaultClientScopes, []);
+});
+
+test('deploy: sin capa security no hay realm que importar', () => {
+  const workspace = makeWorkspace();
+  const { copied } = scaffoldService({ ...loadFixture(), workspace });
+
+  assert.ok(!copied.some((f) => f.includes('realm-export.json')));
+  assert.ok(!read(workspace, 'deploy/docker-compose.yaml').includes('keycloak'));
+});
+
 test('h2 como BD elegida: sin contenedor de BD ni devtools, pero con dependencia Gradle', () => {
   const workspace = makeWorkspace();
   const { manifest, layers } = loadFixture();
@@ -900,6 +1038,15 @@ test('h2 como BD elegida: sin contenedor de BD ni devtools, pero con dependencia
   assert.ok(!copied.some((f) => f.includes('Dockerfile.devtools')));
   assert.ok(!copied.includes('infra/validate-infra.sh'));
   assert.ok(!copied.includes('infra/reset-db.sh')); // h2: reiniciar la app basta
+
+  // deploy/ SÍ se genera: la asimetría es deliberada. infra/ no existe porque no
+  // hay nada que sondear, pero el servicio se contenedoriza igual — es lo que se
+  // le entrega al diseñador para probarlo.
+  assert.ok(copied.includes('deploy/Dockerfile'));
+  assert.ok(copied.includes('deploy/docker-compose.yaml'));
+  const compose = read(workspace, 'deploy/docker-compose.yaml');
+  assert.ok(compose.includes('dockerfile: deploy/Dockerfile'));
+  assert.ok(!compose.includes('image: postgres')); // h2 va en memoria, dentro de la app
 
   assert.ok(read(workspace, 'build.gradle').includes("runtimeOnly 'com.h2database:h2'"));
 });

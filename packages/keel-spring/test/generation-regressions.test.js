@@ -913,3 +913,86 @@ test('config de storage: el mapa storage.buckets.* está en los CUATRO perfiles,
   assert.ok(testYaml.includes('ensure-buckets-on-startup: false'), testYaml);
   assert.ok(testYaml.includes('endpoint: http://localhost:9000'), testYaml);
 });
+
+// El realm de prueba se describe en DOS formatos: bash contra kcadm
+// (infra/init-keycloak.sh, para la generación) y JSON de import
+// (deploy/keycloak/realm-export.json, para las pruebas manuales). Los dos salen de
+// realmSpec(), pero eso es una puerta que alguien puede saltarse: esta prueba
+// compara los artefactos YA RENDERIZADOS, que es lo que de verdad se ejecuta.
+test('identidad: el script de kcadm y el realm importado declaran exactamente lo mismo', () => {
+  const { manifest, layers, errors } = loadService(fixtureDir);
+  assert.deepEqual(errors, []);
+  const patched = structuredClone(layers);
+  patched.security = {
+    authentication: {
+      protocol: 'oidc',
+      serviceAuth: { protocol: 'oauth2', audience: 'catalog-api', validateAudience: true }
+    },
+    access: {
+      default: { level: 'required' },
+      rules: { createProduct: { roles: ['admin', 'editor'], scopes: ['catalog:write'] } }
+    },
+    serviceClients: { billing: { scopes: ['catalog:write'] } }
+  };
+  const patchedManifest = structuredClone(manifest);
+  patchedManifest.layers.security = 'security.keel.yaml';
+
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-realm-'));
+  scaffoldService({ manifest: patchedManifest, layers: patched, workspace, force: true });
+  const read = (relative) =>
+    fs.readFileSync(path.join(workspace, 'services', 'catalog-spring', relative), 'utf8');
+
+  const script = read('infra/init-keycloak.sh');
+  const realm = JSON.parse(read('deploy/keycloak/realm-export.json'));
+  const collect = (pattern) => [...script.matchAll(pattern)].map((match) => match[1]).sort();
+
+  // Roles.
+  assert.deepEqual(
+    collect(/create roles -r \$REALM -s name=(\S+?)"/g),
+    realm.roles.realm.map((role) => role.name).sort()
+  );
+
+  // Usuarios: el script los recorre en un bucle `for USER in ...`.
+  const users = script.match(/for USER in (.+); do/)[1].split(' ').sort();
+  assert.deepEqual(users, realm.users.map((user) => user.username).sort());
+
+  // Clientes y, sobre todo, sus secretos: un desajuste aquí no da un error de
+  // arranque, da un 401 que parece un bug del servicio.
+  const scriptClients = [...script.matchAll(/clientId=(\S+) .*?-s secret=(\S+?)"/g)]
+    .map(([, id, secret]) => `${id}=${secret}`)
+    .sort();
+  const exportClients = realm.clients
+    .filter((client) => client.secret)
+    .map((client) => `${client.clientId}=${client.secret}`)
+    .sort();
+  assert.deepEqual(scriptClients, exportClients);
+
+  // El cliente público de tokens de usuario, que no lleva secreto.
+  const userClient = script.match(/USER_CLIENT=(\S+)/)[1];
+  assert.ok(realm.clients.some((client) => client.clientId === userClient && client.publicClient));
+
+  // Client scopes: los de permiso más los de audiencia (aud-<audiencia>, y
+  // aud-wrong solo si el diseño valida audiencia).
+  const scriptScopes = collect(/create client-scopes -r \$REALM -s name=(\S+?) /g)
+    .map((name) => name.replace('aud-$SVC', `aud-${script.match(/^SVC=(\S+)/m)[1]}`))
+    .sort();
+  assert.deepEqual(scriptScopes, realm.clientScopes.map((scope) => scope.name).sort());
+
+  // Y la asignación: cada `assign_scope <cliente> "$SCOPE_n"` del script tiene que
+  // corresponderse con un defaultClientScopes del export.
+  // Solo los de permiso (los que llevan `attributes`), en orden de declaración:
+  // es el orden del que salen los índices de $SCOPE_n.
+  const scopeNames = [...script.matchAll(/-s name=(\S+) -s protocol=openid-connect -s 'attributes/g)].map((m) => m[1]);
+  const assignedByClient = {};
+  for (const [, client, ref] of script.matchAll(/assign_scope (\S+) "\$(\S+?)"/g)) {
+    const name = ref === 'AUD_OK' ? `aud-${script.match(/^SVC=(\S+)/m)[1]}` : ref === 'AUD_BAD' ? 'aud-wrong' : scopeNames[Number(ref.replace('SCOPE_', ''))];
+    (assignedByClient[client] ??= []).push(name);
+  }
+  for (const client of realm.clients.filter((c) => c.secret)) {
+    assert.deepEqual(
+      (client.defaultClientScopes ?? []).slice().sort(),
+      (assignedByClient[client.clientId] ?? []).sort(),
+      `client scopes desalineados para ${client.clientId}`
+    );
+  }
+});

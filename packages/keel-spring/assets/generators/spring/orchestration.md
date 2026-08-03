@@ -79,9 +79,9 @@ flowchart TB
     CODE -.->|"tras el ciclo de fix<br/>se vuelve SIEMPRE al script"| SCORE
     TESTS -.-> SCORE
 
-    QUALITY(["🤖 Fase 3 — keel-spring-quality<br/>pase no-conductual + ./gradlew build -x test en verde<br/>+ ./gradlew integrationTest al 100% (no-regresión)<br/>+ ./gradlew test (contextLoads bajo perfil test)<br/>+ baseline de migraciones (con persistence)"])
+    QUALITY(["🤖 Fase 3 — keel-spring-quality<br/>pase no-conductual + ./gradlew build -x test en verde<br/>+ ./gradlew integrationTest al 100% (no-regresión)<br/>+ ./gradlew test (contextLoads bajo perfil test)<br/>+ baseline de migraciones (con persistence)<br/>+ smoke de deploy/ (la app levanta en contenedor)"])
     QUALITY --> GATE3{Gating fase 3}
-    GATE3 -->|"quality KO, baseline KO,<br/>contextTest KO o scenarios KO<br/>→ revertir el pase de calidad"| STOP3[/"Detenerse y reportar"/]
+    GATE3 -->|"quality KO, baseline KO, contextTest KO,<br/>scenarios KO o deploySmoke KO<br/>→ revertir el pase de calidad"| STOP3[/"Detenerse y reportar"/]
     GATE3 -->|OK| README["⚙ Actualizar README<br/>guía de despliegue productivo<br/>(pasos + parámetros de parameters/production/*)"]
     README --> CLOSE["⚙ Cierre: INFORME-GENERACION.md · compose down · commit<br/>«Generado desde specs/&lt;servicio&gt; v&lt;version&gt;»<br/>+ resumen (matriz, remaining, blockers, designGaps)"]
 ```
@@ -191,6 +191,7 @@ candado y la regla escrita en cada agente, el porqué.
 | `baseline` | `keel-spring-quality` | Orquestador | Gate de desplegabilidad: `KO` → relanzar una vez con el error; sin `OK` el commit lo dice explícitamente (production no arrancaría). |
 | `scenarios: OK \| KO` | `keel-spring-quality` | Orquestador | No-regresión: el pase de calidad no cambió comportamiento. `KO` → revertir el pase, no tocar las pruebas. |
 | `contextTest: OK \| KO` | `keel-spring-quality` | Orquestador | `./gradlew test`: el contexto arranca bajo el perfil `test` (H2, sin infra, sin red). Cubre lo que los escenarios no ven, porque corren con `@ActiveProfiles("local")` contra infraestructura real: un adaptador que conecta al construirse o un bean que espera config que el perfil `test` no declara. `KO` → relanzar una vez con el error; sin `OK`, el commit lo dice. |
+| `deploySmoke: OK \| KO \| N/A` | `keel-spring-quality` | Orquestador | El servicio empaquetado arranca: `bash deploy/up.sh` deja la app respondiendo readiness y, con `security`, el realm importado entrega token. Es lo único que prueba la imagen y el compose de pruebas manuales antes de dárselos al diseñador. `KO` es defecto **del generador**, como un `FALSO-NEGATIVO` de `validate-infra.sh`: se porta al scaffold, no se parchea en el proyecto. |
 | `blockers` / `designGaps` | Cualquiera | Usuario | Contradicciones o huecos del diseño: se detiene la orquestación o se consolidan en el resumen; nunca se resuelven relanzando. |
 
 ## El ciclo de fix se verifica a sí mismo, pero no se aprueba a sí mismo

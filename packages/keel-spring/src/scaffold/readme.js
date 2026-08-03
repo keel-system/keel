@@ -4,6 +4,8 @@
 import { JAVA_VERSION, packageVersion } from '../lib/assets.js';
 import { selectedInfra } from '../lib/stack-catalog.js';
 import { needsDevtools } from './devtools.js';
+import { publishedUrls } from './deploy.js';
+import { realmSpec } from './auth-provisioning.js';
 import { generate as generateConfig } from './config.js';
 
 export function generate(model) {
@@ -79,6 +81,8 @@ export function generate(model) {
       );
     }
   }
+
+  lines.push(...manualTestingSection(model));
 
   lines.push(
     '## Perfiles y ambientes',
@@ -219,6 +223,83 @@ function docsSection(model) {
     'esos dos documentos los producen `/keel-handoff` y `/keel-integrate`, no `/keel-docs`, y no viajan en el snapshot.',
     ''
   ];
+}
+
+// Sección «Pruebas manuales en contenedor»: cómo levantar el servicio entero en
+// deploy/ para probarlo con Postman o con un front. Es el otro destino de
+// infraestructura del proyecto y la sección existe, sobre todo, para que nadie lo
+// confunda con infra/, que es la de la generación.
+function manualTestingSection(model) {
+  const { service, layersPresent, stack } = model;
+  const realm = stack.auth === 'keycloak' ? realmSpec(model) : null;
+
+  const lines = [
+    '## Pruebas manuales en contenedor',
+    '',
+    'Cuando el flujo de generación termina en verde, `deploy/` levanta el servicio **y** su',
+    'infraestructura en contenedores, para probarlo a mano con Postman, con curl o con un front.',
+    'Funciona igual con Docker que con Podman: el runtime se detecta solo, y se fuerza con',
+    '`CONTAINER_RUNTIME=podman` si tienes los dos.',
+    '',
+    '```bash',
+    'bash deploy/up.sh      # construye la imagen, levanta todo y espera a que responda',
+    'bash deploy/down.sh    # apaga (con -v borra además los datos)',
+    '```',
+    '',
+    '| URL | Qué es |',
+    '|---|---|',
+    ...publishedUrls(model).map(({ label, url }) => `| ${plainUrl(url)} | ${label} |`),
+    '',
+    'Los puertos publicados salen de `deploy/.env`: si ya tienes algo ocupando el 8080 o el 5432,',
+    'cámbialo ahí y vuelve a ejecutar `up.sh`.',
+    ''
+  ];
+
+  if (realm) {
+    lines.push(
+      `El realm \`${realm.realm}\` se importa al arrancar Keycloak, ya poblado con lo que declara el diseño:`,
+      `un usuario por rol (username = rol: ${realm.users.map((user) => user.username).join(', ')}), todos con contraseña`,
+      `\`${realm.password}\`, y los clientes máquina con sus secretos. No hay que ejecutar nada para provisionarlo.`,
+      '',
+      '```bash',
+      `curl -s -d 'grant_type=password&client_id=${realm.userClient}&username=${realm.users[0].username}&password=${realm.password}' \\`,
+      `  http://localhost:8180/realms/${realm.realm}/protocol/openid-connect/token | jq -r .access_token`,
+      '```',
+      '',
+      'Aviso sobre el token: dentro de la red de contenedores la app alcanza a Keycloak como',
+      '`keycloak:8080`, pero tú pides el token contra `localhost:8180`, así que el `iss` no coincidiría.',
+      'Por eso el contenedor valida con `jwk-set-uri` en vez de `issuer-uri`: **aquí no se comprueba el claim',
+      '`iss`** (sí la firma, la caducidad, la audiencia y los roles). La validación completa sigue viva en el',
+      'perfil `local` y en `./gradlew integrationTest`, que hablan con Keycloak por la misma URL que la app.',
+      ''
+    );
+  }
+
+  if (layersPresent.persistence) {
+    lines.push(
+      'El contenedor corre con el perfil `develop`, que aplica las migraciones de `db/migration/` y deja a',
+      'Hibernate solo validando el esquema. Por eso **necesita el baseline**: hasta que exista',
+      '`src/main/resources/db/migration/V1__baseline_schema.sql` —lo produce el pase de calidad del flujo de',
+      'generación— la app arrancará y morirá diciendo que el esquema no valida. Es lo correcto: preferimos',
+      'eso a que un despliegue arranque contra un esquema que nadie ha declarado.',
+      ''
+    );
+  }
+
+  lines.push(
+    `\`deploy/\` y \`infra/\` no son lo mismo y no conviene tenerlos arriba a la vez (publican los mismos`,
+    `puertos): \`infra/\` es la infraestructura **de la generación**, con el toolbox \`${service.name}-devtools\` y`,
+    'sus scripts de sondeo y reset, y ahí la app corre fuera del contenedor. `deploy/` es el servicio ya',
+    'empaquetado, para una persona.',
+    ''
+  );
+  return lines;
+}
+
+// El README lo lee una persona: las URLs van con su puerto por defecto, no con la
+// sintaxis de interpolación del compose.
+function plainUrl(url) {
+  return `<${url.replace(/\$\{[A-Z_]+:-(\d+)\}/g, '$1')}>`;
 }
 
 // Filas de la tabla de infraestructura, derivadas del catálogo (misma fuente que

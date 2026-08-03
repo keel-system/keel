@@ -66,6 +66,76 @@ function testM2mClients(model) {
   return clients;
 }
 
+/**
+ * El realm de prueba como ESTRUCTURA DE DATOS, derivada del diseño.
+ *
+ * Fuente única de dos artefactos que describen lo mismo en formatos distintos:
+ * `infra/init-keycloak.sh` (bash contra kcadm, para la generación) y
+ * `deploy/keycloak/realm-export.json` (import declarativo, para las pruebas
+ * manuales). Los dos renderizan desde aquí y ninguno recalcula nada, que es lo
+ * único que impide que diverjan: un rol añadido al diseño aparece en ambos o en
+ * ninguno. Hay además un test de paridad que compara los dos artefactos ya
+ * renderizados, por si alguien se salta esta puerta.
+ *
+ * Devuelve null si el diseño no lleva identidad basada en token.
+ */
+export function realmSpec(model) {
+  if (!model.layersPresent.security || !usesTokens(model)) return null;
+  const security = model.security;
+  const roles = security?.roles ?? [];
+  const scopes = security?.scopes ?? [];
+  const serviceClients = (security?.serviceClients ?? []).map((client) => ({
+    name: client.name,
+    secret: serviceClientSecret(client.name),
+    // Un cliente sin scopes propios recibe todos los del servicio (mismo criterio
+    // que el script original); se filtra por los declarados para no asignar uno
+    // que no existe como client scope.
+    scopes: (client.scopes.length > 0 ? client.scopes : scopes).filter((scope) => scopes.includes(scope))
+  }));
+  const m2m = testM2mClients(model);
+
+  // Cada cliente de prueba varía UNA sola condición respecto al camino feliz:
+  // 'ok' lleva audiencia buena y todos los scopes, 'no-scope' pierde los scopes,
+  // 'bad-aud' cambia la audiencia, y 'none' es el control sin nada.
+  const m2mClients = m2m.map((name) => ({
+    name,
+    secret: TEST_SECRET,
+    audience: name === 'test-m2m-bad-aud' ? 'wrong' : name === 'test-m2m-none' ? null : 'ok',
+    scopes: name === 'test-m2m-no-scope' || name === 'test-m2m-none' ? [] : scopes
+  }));
+
+  return {
+    realm: model.service.name,
+    audience: security?.serviceAuth?.audience ?? model.service.name,
+    validateAudience: security?.serviceAuth?.validateAudience === true,
+    password: PASSWORD,
+    userClient: userTestClient(model),
+    roles,
+    // Un usuario por rol (username = rol) más uno sin ninguno: el 403 por rol
+    // insuficiente necesita un sujeto autenticado.
+    users: [...roles, NO_ROLE_USER].map((username) => ({
+      username,
+      roles: roles.includes(username) ? [username] : []
+    })),
+    scopes,
+    serviceClients,
+    m2mClients
+  };
+}
+
+/**
+ * Clientes con asignación de client scopes, en el orden en que se emiten: primero
+ * los del diseño (audiencia buena + sus scopes) y luego la matriz de prueba.
+ * Solo tiene sentido si el diseño declara scopes y hay algún cliente.
+ */
+function scopeAssignments(spec) {
+  if (spec.scopes.length === 0) return [];
+  return [
+    ...spec.serviceClients.map((client) => ({ name: client.name, audience: 'ok', scopes: client.scopes })),
+    ...spec.m2mClients
+  ];
+}
+
 export function generate(model) {
   if (!model.layersPresent.security || !usesTokens(model)) return [];
   const files = [credentialsEnv(model)];
@@ -124,14 +194,8 @@ function credentialsEnv(model) {
 // ─── infra/init-keycloak.sh ──────────────────────────────────────────────────
 
 function keycloakScript(model) {
-  const security = model.security;
-  const realm = model.service.name;
-  const audience = security?.serviceAuth?.audience ?? model.service.name;
-  const roles = security?.roles ?? [];
-  const scopes = security?.scopes ?? [];
-  const serviceClients = security?.serviceClients ?? [];
-  const m2m = testM2mClients(model);
-  const validateAudience = security?.serviceAuth?.validateAudience === true;
+  const spec = realmSpec(model);
+  const { realm, audience, roles, scopes, serviceClients, m2mClients, validateAudience } = spec;
 
   const blocks = [];
 
@@ -172,7 +236,7 @@ run "create clients -r $REALM -s clientId=$USER_CLIENT -s enabled=true -s public
 ${roles.map((role) => `run "create roles -r $REALM -s name=${role}"`).join('\n')}
 
 echo "== Usuarios de prueba: uno por rol (username = rol) + uno sin roles =="
-for USER in ${[...roles, NO_ROLE_USER].join(' ')}; do
+for USER in ${spec.users.map((user) => user.username).join(' ')}; do
   run "create users -r $REALM -s username=$USER -s enabled=true -s email=$USER@example.com -s emailVerified=true -s firstName=Test -s lastName=User"
   run "set-password -r $REALM --username $USER --new-password $PASSWORD"
 done
@@ -208,48 +272,30 @@ ${scopes
   .join('\n')}`);
   }
 
+  const machineClient = (client) =>
+    `run "create clients -r $REALM -s clientId=${client.name} -s enabled=true -s publicClient=false -s serviceAccountsEnabled=true -s secret=${client.secret}"`;
+
   if (serviceClients.length > 0) {
     blocks.push(`echo "== Clientes maquina del diseno (security.serviceClients) =="
-${serviceClients
-  .map(
-    (client) =>
-      `run "create clients -r $REALM -s clientId=${client.name} -s enabled=true -s publicClient=false -s serviceAccountsEnabled=true -s secret=${serviceClientSecret(client.name)}"`
-  )
-  .join('\n')}`);
+${serviceClients.map(machineClient).join('\n')}`);
   }
 
-  if (m2m.length > 0) {
+  if (m2mClients.length > 0) {
     blocks.push(`echo "== Clientes M2M de prueba (matriz scope x audiencia) =="
-${m2m
-  .map(
-    (client) =>
-      `run "create clients -r $REALM -s clientId=${client} -s enabled=true -s publicClient=false -s serviceAccountsEnabled=true -s secret=${TEST_SECRET}"`
-  )
-  .join('\n')}`);
+${m2mClients.map(machineClient).join('\n')}`);
   }
 
-  if (scopes.length > 0 && (serviceClients.length > 0 || m2m.length > 0)) {
+  const assigned = scopeAssignments(spec);
+  if (assigned.length > 0) {
     const assignments = [];
-    for (const client of serviceClients) {
-      assignments.push(`assign_scope ${client.name} "$AUD_OK"`);
-      const own = client.scopes.length > 0 ? client.scopes : scopes;
-      for (const scope of own) {
-        const index = scopes.indexOf(scope);
-        if (index >= 0) assignments.push(`assign_scope ${client.name} "$SCOPE_${index}"`);
+    for (const client of assigned) {
+      // test-m2m-none no lleva ninguno: es el control.
+      if (client.audience === 'ok') assignments.push(`assign_scope ${client.name} "$AUD_OK"`);
+      if (client.audience === 'wrong') assignments.push(`assign_scope ${client.name} "$AUD_BAD"`);
+      for (const scope of client.scopes) {
+        assignments.push(`assign_scope ${client.name} "$SCOPE_${scopes.indexOf(scope)}"`);
       }
     }
-    // La matriz: cada cliente de prueba varía UNA sola condición respecto al camino feliz.
-    const allScopes = scopes.map((_, index) => `$SCOPE_${index}`);
-    if (m2m.includes('test-m2m-ok')) {
-      assignments.push('assign_scope test-m2m-ok "$AUD_OK"');
-      for (const ref of allScopes) assignments.push(`assign_scope test-m2m-ok "${ref}"`);
-    }
-    if (m2m.includes('test-m2m-no-scope')) assignments.push('assign_scope test-m2m-no-scope "$AUD_OK"');
-    if (m2m.includes('test-m2m-bad-aud')) {
-      assignments.push('assign_scope test-m2m-bad-aud "$AUD_BAD"');
-      for (const ref of allScopes) assignments.push(`assign_scope test-m2m-bad-aud "${ref}"`);
-    }
-    // test-m2m-none no lleva ninguno: es el control.
 
     blocks.push(`assign_scope() {
   local CLIENT_ID="$1" SCOPE_ID="$2"

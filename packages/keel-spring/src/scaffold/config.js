@@ -16,12 +16,16 @@ const PROFILES = ['local', 'develop', 'production'];
 // Credenciales de juguete del perfil local (mismo criterio que minioadmin en el
 // compose de prueba): existen para que los escenarios de validación autentiquen
 // sin editar YAML a mano, y nunca salen de local.
-const LOCAL_API_KEY = 'local-dev-api-key';
-const localClientApiKey = (clientName) => `local-${clientName}-key`;
+// Se exportan porque el compose de pruebas manuales (scaffold/deploy.js) tiene que
+// pasar EXACTAMENTE estos valores por entorno: el perfil `develop` con el que corre
+// el contenedor declara estas claves como obligatorias y sin default, así que un
+// literal reinventado allí no daría un 401 raro — impediría arrancar la app.
+export const LOCAL_API_KEY = 'local-dev-api-key';
+export const localClientApiKey = (clientName) => `local-${clientName}-key`;
 
 // Orígenes CORS del perfil local: los puertos de dev habituales de una SPA
 // (Create React App / Next.js y Vite), para probar un front sin editar YAML.
-const LOCAL_CORS_ORIGINS = 'http://localhost:3000,http://localhost:5173';
+export const LOCAL_CORS_ORIGINS = 'http://localhost:3000,http://localhost:5173';
 
 // Gradiente de externalización: literal en local, env var con default en
 // develop y env var obligatoria (sin default) en production. `test` es literal

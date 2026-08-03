@@ -137,11 +137,32 @@ out/
 .vscode/
 `;
 
+  // El contexto de build de deploy/Dockerfile es la RAÍZ del proyecto (necesita
+  // src/ y el wrapper vendorizado), así que el .dockerignore va aquí y no en
+  // deploy/. Fuera queda todo lo que no entra en la imagen: lo ya compilado (que
+  // se recompila dentro y solo serviría para invalidar capas), la infraestructura
+  // de la generación y la documentación.
+  const dockerignore = `.git/
+.gradle/
+build/
+out/
+infra/
+deploy/
+docs/
+specs/
+.idea/
+.vscode/
+*.md
+`;
+
   // Los scripts de infra/ los ejecuta bash (contenedor o Git Bash): con CRLF el
   // shebang se rompe. Un clon en Windows con core.autocrlf=true los convertiría
   // si no se fijan aquí, igual que ya se fija gradlew.
+  // Un Dockerfile con CRLF rompe el build en cuanto hay una línea continuada con
+  // `\`: el `\r` queda dentro del comando. Mismo motivo que los .sh.
   const gitattributes = `/gradlew        text eol=lf
 *.sh            text eol=lf
+Dockerfile*     text eol=lf
 *.bat           text eol=crlf
 *.jar           binary
 `;
@@ -150,7 +171,8 @@ out/
     { path: 'build.gradle', content: buildGradle },
     { path: 'settings.gradle', content: settingsGradle },
     { path: '.gitignore', content: gitignore },
-    { path: '.gitattributes', content: gitattributes }
+    { path: '.gitattributes', content: gitattributes },
+    { path: '.dockerignore', content: dockerignore }
   ];
 }
 
