@@ -55,7 +55,7 @@ services/<servicio>-spring/
     │   │   ├── events/          # DomainEvent + EventMetadata + records de evento (+ PUERTOS <Evento>Publisher si best-effort)
     │   │   ├── errors/          # DomainException + subclases por status + <PascalCode>Error por code
     │   │   ├── repository/      # PUERTOS: <Entidad>Repository (interfaces)
-    │   │   └── storage/         # (solo con capa storage) PUERTO FileStorage (upload/download/delete/signedUrl) + VO StoredObject
+    │   │   └── storage/         # (solo con capa storage) PUERTO FileStorage (upload/delete + download/signedUrl si hay bucket privado, publicUrl si lo hay público) + VO StoredObject
     │   └── infrastructure/
     │       ├── configurations/usecase/  # UseCaseMediator (frontera transaccional) + Container + AutoRegister + UseCaseConfig
     │       ├── scheduling/      # <X>Scheduler (@Scheduled, adaptador timer que despacha vía mediator)
@@ -98,7 +98,7 @@ Paquete base: `<group>.<serviceNameSinGuiones>` (ej. `com.example.productcatalog
 - `infrastructure/messaging/subscriptions/` (solo con capa `messaging` que declare `subscriptions`): por suscripción, el record `<Evento>Message` (payload, contrato de la fuente). El `<Evento>Listener` (binding al canal + política `onFailure` + apertura de la correlación + deduplicación + dispatch de `triggers` vía mediator) depende del broker: lo escribe el agente siguiendo la skill `keel-spring-<broker>`.
 - `infrastructure/messaging/idempotency/` (con `subscriptions` + capa `persistence`): `ProcessedEventJpa` (tabla `processed_event`, PK compuesta handler+evento), su repositorio e `IdempotencyGuard` (`tryRecord` en transacción propia, purga por cron parametrizada). Es la cara simétrica del outbox: este garantiza que un evento no se pierde, aquel que reentregarlo no lo procese dos veces. El listener del agente lo **usa**; no escribe otro mecanismo.
 - `infrastructure/correlation/` + `infrastructure/web/`: `CorrelationContext` (ThreadLocal + MDC, con `runWith` para los listeners) y, con capa `api`, `CorrelationFilter` (header `X-Correlation-Id`, generado si no viene y devuelto en la respuesta). De ahí salen el `correlationId` de cada `EventEnvelope`, el del `ErrorResponse` y el de cada línea de log.
-- `domain/storage/` (solo con capa `storage`): puerto `FileStorage` (dominio, upload/download/delete/signedUrl) y el VO `StoredObject(storageKey, url, contentType, sizeBytes)` que devuelve `upload` — lo que el agregado guarda. El bean del cliente y el adaptador (`S3Config` + `S3FileStorage`, parametrizados por `parameters/<perfil>/storage.yaml`) los escribe el agente siguiendo la skill `keel-spring-s3`; un único adaptador sirve MinIO y S3 (mismo protocolo).
+- `domain/storage/` (solo con capa `storage`): puerto `FileStorage` (dominio) y el VO `StoredObject(storageKey, url, contentType, sizeBytes)` que devuelve `upload` — lo que el agregado guarda. Sus métodos toman el **bucket lógico** además de la key, y los de lectura son condicionales: `download`/`signedUrl` solo con algún bucket `private`, `publicUrl` solo con alguno `public` (conventions/mapping.md § `storage`). El bean del cliente y el adaptador (`S3Config` + `S3FileStorage`, parametrizados por `parameters/<perfil>/storage.yaml`) los escribe el agente siguiendo la skill `keel-spring-s3`; un único adaptador sirve MinIO y S3 (mismo protocolo).
 
 ### Desacople de la capa application (mejora sobre el prototipo)
 

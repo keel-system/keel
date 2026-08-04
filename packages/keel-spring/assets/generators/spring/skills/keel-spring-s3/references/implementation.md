@@ -1,8 +1,9 @@
 # S3/MinIO — patrones de implementación
 
-Complementa el bean y el adaptador del SKILL.md. El puerto `FileStorage`
-(upload/download/delete/signedUrl) y el value object `StoredObject` que devuelve
-`upload` ya existen en `domain/storage`.
+Complementa el bean y el adaptador del SKILL.md. El puerto `FileStorage` y el
+value object `StoredObject` que devuelve `upload` ya existen en `domain/storage`;
+qué métodos declara el puerto depende de la visibilidad de los buckets del diseño
+(ver abajo).
 
 ## Claves de objeto
 
@@ -68,15 +69,43 @@ try {
 Y repórtalo en `designGaps`: que un `code` del contrato salga de una convención del generador
 en vez del diseño es exactamente lo que ese bloque existe para señalar.
 
-## Presigned URLs (`signedUrl`)
+## URLs de lectura
 
-**Primero, mira si te hacen falta.** El puerto `FileStorage` declara `signedUrl`
-siempre, pero la firma solo tiene sentido sobre un objeto que no es de lectura
-pública. Si **todos** los buckets del diseño son `visibility: public`, `signedUrl`
-compone la URL pública directa y no necesitas ni el presigner ni sus credenciales:
-un `@Bean S3Presigner` sin un solo inyector es código muerto que además arrastra
-configuración (endpoint, region, path-style) que hay que mantener correcta para
-nada. Genera el bean solo si hay al menos un bucket `visibility: private`.
+**El puerto ya te dice cuál de las dos escribir**, porque sus métodos de lectura
+son condicionales por visibilidad:
+
+| El diseño declara | El puerto trae | Escribes |
+|---|---|---|
+| algún bucket `public` | `publicUrl(bucket, key)` | Concatenación desde `public-base-url`. Sin SDK, sin firma, sin presigner |
+| algún bucket `private` | `signedUrl(bucket, key)` y `download(bucket, key)` | El presigner de abajo |
+| ambos | los tres | ambas cosas, cada una para su bucket — de ahí el parámetro `bucket` |
+
+No hay caso en que un método haga el trabajo del otro: si solo hay buckets
+públicos, `signedUrl` **no existe** y no tienes que decidir nada; el `@Bean
+S3Presigner` sobra y con él la configuración (endpoint, region, path-style) que
+habría que mantener correcta para nada.
+
+### `publicUrl`
+
+```java
+@Override
+public String publicUrl(String bucket, String key) {
+    return "%s/%s/%s".formatted(
+            properties.publicBaseUrl(), policies.forBucket(bucket).bucket(), key);
+}
+```
+
+`storage.public-base-url` es la base que alcanza **el consumidor** — el CDN o el
+borde en un entorno real, `http://localhost:9000` en local. **No es `endpoint`**:
+ese es con quien hablas tú, y en compose es `http://minio:9000`, un nombre de red
+que fuera del compose no resuelve. Una URL compuesta con el endpoint interno se
+guarda, se serializa y solo se descubre rota cuando alguien abre la imagen.
+
+Quien la consume es el `<Entidad>ApplicationMapper` que genera `build`: la key
+llega al `ResponseDto` ya resuelta, sin que ni el handler ni el controller
+intervengan. Tú solo pones el adaptador.
+
+### Presigned URLs (`signedUrl`)
 
 ```java
 try (S3Presigner presigner = S3Presigner.builder()
@@ -92,9 +121,12 @@ try (S3Presigner presigner = S3Presigner.builder()
 }
 ```
 
-- Expiración corta y del **diseño** (política del bucket), no un default
-  inventado; para uploads directos del cliente, `presignPutObject` con
-  content-type fijado en la petición firmada.
+- Expiración **corta** (minutos, no horas). El DSL no la declara — `storage.keel.yaml`
+  no tiene campo de expiración —, así que es un default tuyo: ponla en
+  `parameters/<perfil>/storage.yaml` para que se pueda cambiar sin recompilar, y
+  anótalo en `designGaps` si el flujo del diseño depende de un valor concreto.
+  Para uploads directos del cliente, `presignPutObject` con content-type fijado
+  en la petición firmada.
 - El presigner puede ser un bean singleton (mismo ciclo que el cliente) en
   vez de try-with-resources por llamada si `signedUrl` es frecuente.
 - **Ojo con el host en local**: una URL firmada con `http://minio:9000` no es

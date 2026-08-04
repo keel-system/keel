@@ -214,7 +214,7 @@ Mismas reglas de traducción que ya aplica `openapi.yaml`, sobre `domain.types`:
 | `uuid` | `type: string, format: uuid` |
 | `date` / `timestamp` | `type: string, format: date` / `date-time` |
 | `json` | `type: object` |
-| `file` | `type: string` + `description` con el bucket lógico (viaja la referencia, no el binario) |
+| `file` | `type: string` + `description` con el bucket lógico (viaja la referencia, no el binario). **Sin `format: uri`, y sin excepción por bucket público**: un evento lleva siempre la key. La asimetría con OpenAPI —donde un bucket `public` sí publica URL— es deliberada: una URL en un evento caduca, ata el mensaje al proveedor de storage y se rompe al cambiar de bucket, mientras que una respuesta HTTP se consume en el acto |
 | value type escalar (`base` + `constraints`) | schema propio en `components.schemas.<Type>` |
 | enum nominal (`values`) | `type: string, enum: [...]` |
 | value object (`fields`) | `type: object` con sus propiedades |

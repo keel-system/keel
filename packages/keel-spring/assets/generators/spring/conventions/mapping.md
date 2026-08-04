@@ -46,7 +46,7 @@ Buena parte de esta tabla la materializa ya el **scaffolding determinista** de `
 | `uuid` / `timestamp` / `date` | `UUID` / `Instant` / `LocalDate` |
 | `text` | `String` con `@Column(columnDefinition = "text")` |
 | `json` | `String` o `JsonNode` mapeado a jsonb, según prefiera el usuario |
-| `file` (con `bucket`) | `String` con la clave/referencia del objeto en su bucket; el binario vive en el object storage (capa `storage`), no en la BD. El campo persiste solo la key; subida/descarga vía el puerto `FileStorage` |
+| `file` (con `bucket`) | `String` con la clave/referencia del objeto en su bucket; el binario vive en el object storage (capa `storage`), no en la BD. El campo persiste solo la key; subida/descarga vía el puerto `FileStorage`. Lo que ese campo expone **en el cable** no es siempre la key: ver [§ `storage`](#storage--storagekeelyaml) |
 
 ### Cardinalidad (`list`, DSL 2.1)
 
@@ -125,17 +125,52 @@ comportamiento y contradecirlo en el esquema es peor que cualquiera de las dos o
 | `input`/`output` `{ entity: X }` | DTOs derivados de la entidad; en input quedan fuera `generated`/`computed`; en output quedan fuera `sensitive` y los campos de `exclude`. Las **relaciones entran por defecto**: una referencia a otro agregado como `<relación>Id` (UUID) —salvo que el output la marque con `embed`, en cuyo caso el DTO lleva el `<Raíz>RefDto` que **produce el `<Raíz>RefResolver` que build inyecta en el handler**, siempre por lote: cómo usarlo, en [read-composition](read-composition.md)— y una entidad hija como su propio `<Hija>Dto` (`List<…>` si es `one-to-many`), que build genera. Un `exclude` con **dot-path** (`lines.costPrice`, `address.zip`) recorta el DTO **anidado**: build genera la hija completa y señala cada ruta con un warning — ese warning es la señal de trabajo del agente. En el **input** las hijas no entran (se gestionan por sus propias operaciones); si un flujo las recibe anidadas, build lo avisa y lo modela el agente |
 | `output` con `sort` | **Generado entero, no tocar salvo por lo de abajo.** El orden declarado va como constante `<OPERACION>_ORDER` en el controller, aplicada solo si el cliente no manda `?sort=` (`withDefaultOrder`). Y el adaptador del agregado añade **siempre** el id como desempate (`TIE_BREAKER` + `withStableOrder`), venga el orden de donde venga: sin él, dos páginas consecutivas pueden repetir una fila y omitir otra. Un listado paginado **sin** `sort` declarado queda ordenado por id, no sin orden |
 | `sort` con **dot-path** (`brand.name`, sobre una relación en `embed`) | build **no** lo traduce y emite un warning: entre agregados hay una columna `UUID`, no una asociación navegable, así que no hay property path que dar a Spring Data. Lo implementa el agente con un adaptador de **lectura** y JPQL proyectado — [read-composition](read-composition.md) y `skills/keel-spring-database/references/read-queries.md`. El stub del handler lleva la nota |
-| `input` con un campo `type: file` | Endpoint `multipart/form-data`: el binario llega como `@RequestPart MultipartFile` y viaja al mensaje como `FileUpload(content, filename, contentType, size)`; el resto de campos, como `@RequestParam`. El handler sube el contenido por el puerto `FileStorage` y guarda en el dominio la **clave** del objeto (String), que es lo que el `output` expone |
+| `input` con un campo `type: file` | Endpoint `multipart/form-data`: el binario llega como `@RequestPart MultipartFile` y viaja al mensaje como `FileUpload(content, filename, contentType, size)`; el resto de campos, como `@RequestParam`. El handler sube el contenido por el puerto `FileStorage` y guarda en el dominio la **clave** del objeto (String). Lo que el `output` expone se deriva de la visibilidad del bucket y **lo resuelve el mapper que genera build**, no el handler: ver [§ `storage`](#storage--storagekeelyaml) |
 | `preconditions` / `rules` | Lógica del `handle(...)` del handler, en el mismo orden del diseño, comentadas con la frase del diseño cuando no sea obvia |
 | `rules` con **normalización previa** (upper/lower/trim antes de validar formato o unicidad) | El campo **no** lleva `@Pattern`/`@Size` de Bean Validation en el DTO de entrada — ver el aviso de abajo |
 | `errors[].code` | `<PascalCode>Error` en `domain/errors` con el `code` exacto, extendiendo la subclase base de su `http` (404→`NotFoundException`, 409→`ConflictException`…; status sin subclase → `DomainException` con el `httpStatus` en la metadata); `ApiExceptionHandler` la traduce a `ErrorResponse` (`timestamp`, `status`, `error`, `code`, `message`, `details`) |
 | El mismo `code` con `http` **distinto** en dos operaciones | Una sola clase, pero con el status como **parámetro** del constructor (`new XxxError(mensaje, 422)`): extiende `DomainException` y `ApiExceptionHandler` resuelve el status desde la metadata. Cada handler pasa el `http` que su operación declara — pasarlo mal es un error de contrato invisible a la compilación |
 | `emits` | `raise(<E>Event.of(...))` **dentro del método de negocio del agregado** que provoca el cambio (`domain-modeling.md`); el handler no publica ni inyecta publishers. El adaptador de repositorio drena el buffer al persistir y el bridge lo entrega según `messaging.publishing.reliability` |
-| `idempotency: { keySource: client-key }` | Header `Idempotency-Key` en esas operaciones; registro de claves procesadas con el `ttlSeconds` del diseño. **Si el cliente no la manda**, ver abajo |
-| `idempotency: { keySource: payload-hash }` | Hash del payload como clave de deduplicación; mismo registro con TTL |
+| `idempotency: { keySource: client-key }` | **Build genera el mecanismo entero**: el puerto `IdempotencyStore` (`domain/idempotency`), su adaptador y la tabla `idempotency_record` (`infrastructure/persistence/idempotency`), el `IdempotencyContext` (`application/support`) y el filtro que le lleva la cabecera `Idempotency-Key`. Tú solo lo **usas** en el handler — ver abajo. No escribas otro registro: ni tabla propia, ni `SET NX` en la caché |
+| `idempotency: { keySource: payload-hash }` | Mismo mecanismo; lo que cambia es de dónde sale la clave: el hash determinista del payload en vez de la cabecera |
 | `cache` (solo queries) | Build genera `CacheConfig` (`@EnableCaching`, `CacheManager`, una constante y un TTL por operación cacheada, serializador JSON con `JavaTimeModule`, degradación a miss). El agente solo anota el adaptador: `@Cacheable(cacheNames = CacheConfig.<OPERACION>_CACHE, key = …, sync = true)` con la clave de `keyFields`, y `@CacheEvict` para `invalidatedBy` |
 | `schedule: { cron }` | `@Scheduled(cron = ...)` que despacha el mensaje de la operación vía `UseCaseMediator`; sin endpoint |
 | `internal: true` | Solo mensaje + handler en application; sin endpoint ni listener |
+
+### Cómo se usa el `IdempotencyStore` en el handler
+
+El orden importa, y es el mismo para `client-key` y `payload-hash` (solo cambia de dónde sale la
+clave):
+
+```java
+Optional<String> key = IdempotencyContext.get();   // vacío = el cliente no mandó la cabecera
+if (key.isPresent()) {
+    String signature = /* hash determinista del contenido del command */;
+    Optional<StoredRequest> previa = idempotencyStore.find("<nombreOperacion>", key.get());
+    if (previa.isPresent()) {
+        if (!previa.get().signature().equals(signature)) {
+            throw new /* el error que el diseño declare para la clave reutilizada */;
+        }
+        return /* la MISMA respuesta, reconstruida desde previa.get().resourceId() */;
+    }
+    // … ejecuta el caso de uso …
+    idempotencyStore.save("<nombreOperacion>", key.get(), signature, id.toString(), <ttlSeconds>);
+}
+```
+
+- El `scope` es el **nombre de la operación** del diseño: la misma cabecera en dos operaciones
+  distintas no debe colisionar.
+- La repetición **no re-ejecuta nada**: ni escrituras, ni eventos. Si el escenario dice que
+  `listProducts` sigue devolviendo `totalElements: 1` y que no se publica un segundo evento, eso es
+  lo que se está comprobando.
+- `save(...)` corre **dentro de la transacción del comando**, a propósito: si el comando revierte,
+  el registro revierte con él. No lo saques a una transacción propia — una clave marcada sin recurso
+  detrás haría que el reintento devolviese una respuesta que nunca existió.
+- Dos peticiones simultáneas con la misma clave chocan en la clave primaria y una revierte. Es el
+  desenlace correcto: de dos peticiones idénticas, exactamente una se ejecutó.
+- El `code` del conflicto por firma distinta sale **del diseño** (`errors[]` de la operación). Si el
+  diseño no declara ninguno, es `designGap`: repórtalo, no inventes un `code` — no estaría en el
+  OpenAPI y ningún escenario lo cubre.
 
 ### `Idempotency-Key` ausente: se ejecuta, no se rechaza
 
@@ -183,6 +218,15 @@ cuenta** sí se emite: es una restricción de esa entrada concreta, no la forma 
 tipo. Si aun así una entrada llega con una anotación que compite con una
 normalización declarada, es un caso que el diseño no expresa: repórtalo como
 `designGap`, no lo arregles quitando la anotación a mano.
+
+**Con qué error falla entonces el formato.** Al sacar la validación del DTO, el fallo de formato
+deja de ser un `VALIDATION_ERROR` automático y pasa a ser tuyo. Si el diseño **no** declara un
+`code` para ese caso (el DSL no permite colgar un `code` de una `constraints`, así que casi nunca
+lo hará), lanza la `VALIDATION_ERROR` genérica del `ApiExceptionHandler` y **repórtalo como
+`designGap`** — nunca inventes un `code` nuevo: no aparece en el OpenAPI generado, ningún escenario
+lo espera y el cliente no puede programar contra él. Si el escenario exige un status distinto del
+que da la validación genérica, eso también es `designGap`, y entonces la vía es que el diseño lo
+declare en `errors[]`.
 
 ### Ordenar por un campo con columna normalizada
 
@@ -458,7 +502,7 @@ La publicación va **entera generada** salvo el envío físico. La cadena es: el
 | `subscriptions.E.contract.format` / `schemaRef` | Deserializador del formato (JSON por defecto; avro/protobuf → schema registry de la fuente) |
 | `subscriptions.E.contract.unknownFields` | `ignore` → `@JsonIgnoreProperties(ignoreUnknown = true)` en el record; `fail` → sin la anotación (scaffolding) |
 | `payload.<campo>.wireName` | `@JsonProperty("<wireName>")` en el componente del record (scaffolding); el nombre del DSL se mantiene en Java |
-| campo `file` en un `payload` | La **key** del objeto, tal cual la guarda el dominio. El wire de `messaging` **nunca** resuelve una URL de storage: resolver la key a URL pública (o firmada) es exclusivo del `ResponseDto` de la capa `api`. Un consumidor recibe una referencia estable al objeto; una URL caducaría, ataría el evento al proveedor de storage y se rompería al cambiar de bucket. Que el DSL describa el campo con la misma frase en `api` y en `messaging` («referencia al objeto, no el binario») no los iguala: el destino es lo que decide |
+| campo `file` en un `payload` | La **key** del objeto, tal cual la guarda el dominio. El wire de `messaging` **nunca** resuelve una URL de storage: resolver la key a URL es exclusivo del `ResponseDto` de la capa `api`, y ahí lo hace el mapper que genera build (ver [§ `storage`](#storage--storagekeelyaml)). Un consumidor recibe una referencia estable al objeto; una URL caducaría, ataría el evento al proveedor de storage y se rompería al cambiar de bucket. Que el DSL describa el campo con la misma frase en `api` y en `messaging` («referencia al objeto, no el binario») no los iguala: el destino es lo que decide. La asimetría sale gratis porque los payloads los genera otro módulo (`events.js`) y ahí no hay nada que resolver |
 | `subscriptions.E.input` | Argumentos del command/query de `triggers` al despachar: componente ← campo del payload (identidad por nombre si no se declara); el javadoc del record generado lo lleva escrito |
 | `channels.<c>.external: true` | El nombre físico del topic/cola lo pone su dueño: propiedad en `parameters/<perfil>`, nunca hardcodeado ni declarado en la topología local |
 | `subscriptions.E.onFailure.retry` | Reintentos con backoff según `maxAttempts`/`backoff`/`initialDelayMs` y el techo `maxDelayMs` si está declarado (ej. `DefaultErrorHandler` con `ExponentialBackOff` y su `maxInterval`) |
@@ -574,17 +618,37 @@ entrada: ahí el orden lo fija la petición, no el id — no lo "arregles" orden
 
 ## `storage` — storage.keel.yaml
 
-Sin esta capa (servicio que no maneja archivos), no se incluye SDK de object storage ni adaptador. El scaffolding determinista genera la dependencia Gradle (`software.amazon.awssdk:s3`), el servicio MinIO en el `infra/docker-compose.yaml` (con MinIO), el fragmento de configuración `parameters/<perfil>/storage.yaml` (clave `storage`: `provider`, `endpoint`, `region`, `access-key`, `secret-key`, `path-style-access` y la política de cada bucket del diseño bajo `storage.buckets.<b>`: `bucket`, `visibility`, `max-size-mb`, `allowed-content-types` — **no hay clave `bucket` global**: los buckets son los que declara el diseño), el límite `spring.servlet.multipart.max-file-size`/`max-request-size` con holgura sobre el mayor `maxSizeMb` declarado (el límite de negocio lo comprueba el caso de uso, en el orden del diseño), los `@ExceptionHandler` de multipart en el `ApiExceptionHandler`, el **puerto `FileStorage`** y el value object `StoredObject(storageKey, url, contentType, sizeBytes)` que devuelve `upload` (lo que el agregado guarda; `url` llega null en buckets de URL firmada, que se pide al leer), y el **puerto `StoragePolicies`** + `BucketPolicy` con su adaptador `StorageProperties` (binding de `storage.buckets.*`), que es como la política declarada llega a la capa `application` sin `@Value`. El agente escribe el adaptador completo siguiendo la skill `keel-spring-s3` del proyecto (bean `S3Client` + `S3FileStorage`, incluida `signedUrl`) más la política de negocio: validación de content-type/tamaño según los `buckets`.
+Sin esta capa (servicio que no maneja archivos), no se incluye SDK de object storage ni adaptador. El scaffolding determinista genera la dependencia Gradle (`software.amazon.awssdk:s3`), el servicio MinIO en el `infra/docker-compose.yaml` (con MinIO), el fragmento de configuración `parameters/<perfil>/storage.yaml` (clave `storage`: `provider`, `endpoint`, `region`, `access-key`, `secret-key`, `path-style-access`, `public-base-url` si hay algún bucket público, y la política de cada bucket del diseño bajo `storage.buckets.<b>`: `bucket`, `visibility`, `max-size-mb`, `allowed-content-types` — **no hay clave `bucket` global**: los buckets son los que declara el diseño), el límite `spring.servlet.multipart.max-file-size`/`max-request-size` con holgura sobre el mayor `maxSizeMb` declarado (el límite de negocio lo comprueba el caso de uso, en el orden del diseño), los `@ExceptionHandler` de multipart en el `ApiExceptionHandler`, el **puerto `FileStorage`** y el value object `StoredObject(storageKey, url, contentType, sizeBytes)` que devuelve `upload` (lo que el agregado guarda; `url` llega null en buckets privados, cuya URL se pide al leer porque caduca), el **puerto `StoragePolicies`** + `BucketPolicy` con su adaptador `StorageProperties` (binding de `storage.buckets.*`), que es como la política declarada llega a la capa `application` sin `@Value`, y **la resolución de la key a URL en el mapper de salida** (ver más abajo). El agente escribe el adaptador completo siguiendo la skill `keel-spring-s3` del proyecto (bean `S3Client` + `S3FileStorage`) más la política de negocio: validación de content-type/tamaño según los `buckets`.
+
+### Qué expone un campo `file` en el cable
+
+Lo decide la **visibilidad de su bucket**, y es determinista — no es una elección del
+agente ni algo que el diseño tenga que declarar aparte:
+
+| Destino | Bucket `public` | Bucket `private` |
+|---|---|---|
+| `ResponseDto` (capa `api`) | **URL absoluta**, resuelta por el `<Entidad>ApplicationMapper` con `fileStorage.publicUrl(...)` — **lo genera build** | La **key** |
+| `payload` (capa `messaging`) | La **key** | La **key** |
+
+En un bucket privado el DTO **nunca** lleva una URL firmada: caduca, y una respuesta
+que caduca no se puede cachear ni reemitir por idempotencia. La lectura de un objeto
+privado la sirve la operación que el diseño declare para eso.
+
+El mapper recibe `FileStorage` por constructor solo si alguno de sus DTOs proyecta un
+campo `file` de bucket público, y nombra el bucket por la constante de `StoragePolicies`,
+nunca como literal. **No lo reescribas a mano**: si un campo sale mal, lo que está mal es
+la visibilidad del diseño o el adaptador, no el mapper.
 
 | Diseño | Código |
 |--------|--------|
-| capa `storage` presente | Puerto `domain/storage/FileStorage` (interface: `upload`, `download`, `delete`, `signedUrl`) — scaffolding. Adaptador `infrastructure/storage/S3FileStorage` + `infrastructure/configurations/storage/S3Config` (bean `S3Client`, AWS SDK v2, sirve para MinIO y S3, configurado desde la clave `storage` de los perfiles) — agente, según la skill `keel-spring-s3` |
+| capa `storage` presente | Puerto `domain/storage/FileStorage` — scaffolding. Cada método toma el **bucket lógico** además de la key (`upload(bucket, key, …)`), porque con dos buckets declarados la key sola no dice a cuál se sube ni cómo se resuelve una lectura. Adaptador `infrastructure/storage/S3FileStorage` + `infrastructure/configurations/storage/S3Config` (bean `S3Client`, AWS SDK v2, sirve para MinIO y S3, configurado desde la clave `storage` de los perfiles) — agente, según la skill `keel-spring-s3` |
+| Métodos del puerto | `upload` y `delete` siempre. `download` y `signedUrl` **solo con algún bucket `private`**; `publicUrl` **solo con algún bucket `public`**. Un método que el diseño no puede necesitar no se declara: obligaría a implementar un `@Override` inalcanzable, y en el caso de la URL empujaba a sobrecargar `signedUrl` para que compusiera URLs públicas — semántica que la firma no dice y que el agente termina supliendo con un método inventado |
 | `buckets.B` | Un bucket físico por bucket lógico (nombre derivado de `B`, prefijado por servicio/entorno para evitar colisiones); el adaptador lo crea/valida al arrancar en local. Su nombre y su política se leen con `StoragePolicies.forBucket(StoragePolicies.B)`, nunca como literal ni por `@Value` — scaffolding |
 | `buckets.B.allowedContentTypes` | Validación de content-type en la subida antes de tocar el storage, con `BucketPolicy.allowsContentType(...)` → error `UNSUPPORTED_CONTENT_TYPE` (declararlo en use-cases) |
 | `buckets.B.maxSizeMb` | Validación de tamaño **en el caso de uso**, con `BucketPolicy.allowsSize(...)` y en el orden que fija el diseño → error `FILE_TOO_LARGE` (agente). Build fija el límite del servlet (`spring.servlet.multipart.max-file-size`) al **doble** del mayor `maxSizeMb` declarado, deliberadamente: si cortase justo en el límite de negocio, Tomcat emitiría el 413 antes del handler y ninguna guarda que el diseño ponga antes podría precederlo. El handler de `MaxUploadSizeExceededException` → `413 FILE_TOO_LARGE` queda como red de seguridad |
-| `buckets.B.visibility: private` | El objeto no es de lectura pública; la descarga se sirve mediada por el servicio o vía **URL firmada** temporal (`signedUrl`) |
-| `buckets.B.visibility: public` | Lectura directa permitida: el adaptador **debe aplicar la bucket policy de lectura anónima** (idempotente, en cada arranque; S3 y MinIO crean los buckets privados). Sin ella la subida responde `201` y el `GET` directo `403`. La URL pública puede exponerse en el ResponseDto |
-| campo `file` de una entidad | La entidad persiste la **key** del objeto (String); el controller recibe el binario como `multipart/form-data` (`MultipartFile`), el handler valida contra el bucket y delega en `FileStorage`, y guarda la key devuelta |
+| `buckets.B.visibility: private` | El objeto no es de lectura pública; la descarga se sirve mediada por el servicio o vía **URL firmada** temporal (`signedUrl`), pedida al leer y nunca incrustada en un `ResponseDto` |
+| `buckets.B.visibility: public` | Lectura directa permitida: el adaptador **debe aplicar la bucket policy de lectura anónima** (idempotente, en cada arranque; S3 y MinIO crean los buckets privados). Sin ella la subida responde `201` y el `GET` directo `403`. El `ResponseDto` expone la **URL absoluta**, compuesta desde `storage.public-base-url` — la que alcanza el consumidor (CDN o borde; `localhost` en local), **no** el `endpoint` con el que el servicio habla con el almacén, que en compose es un nombre de red que fuera no resuelve |
+| campo `file` de una entidad | La entidad persiste la **key** del objeto (String); el controller recibe el binario como `multipart/form-data` (`MultipartFile`), el handler valida contra el bucket y delega en `FileStorage`, y guarda la key devuelta. La traducción al cable la hace el mapper, no el handler |
 
 ## Cobertura funcional (criterio de "generación terminada")
 

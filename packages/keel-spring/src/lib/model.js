@@ -241,6 +241,10 @@ function resolveField(ownerName, fieldName, field, domainTypes, inlineEnumName, 
     elementJavaType: resolved.javaType,
     kind: resolved.kind,
     base: resolved.base ?? null,
+    // Bucket lógico de un campo `file`. Sin él, aguas abajo nadie puede decidir
+    // por visibilidad: el DTO de salida de un bucket público expone la URL y el
+    // de uno privado la key, y esa decisión se toma en el mapper.
+    bucket: field.bucket ?? null,
     isId: Boolean(field.id),
     required: Boolean(field.required),
     unique: Boolean(field.unique),
@@ -1495,6 +1499,7 @@ function relationField({ name, javaType, elementJavaType = null, imports = [], k
     elementJavaType: elementJavaType ?? javaType,
     kind,
     base,
+    bucket: null,
     childEntity,
     refEntity,
     isId: false,

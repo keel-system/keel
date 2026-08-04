@@ -101,8 +101,11 @@ source set `integrationTest`, así que un test que importe un DTO o una entidad 
    nunca `.isNull()` (`JsonPath.read` lanza sobre clave ausente). Y un nodo **objeto o array**
    extraído con JsonPath se convierte a JSON con `toJson(...)` del arnés, **nunca con
    `.toString()`**: un `Map` así impreso da `{clave=valor}`, no JSON, y el fallo aparece lejos
-   de su causa —típicamente al releer el `data` de un evento—. Los tres patrones, con ejemplo,
-   en `{{keel:docs}}/conventions/integration-tests.md`.
+   de su causa —típicamente al releer el `data` de un evento—. Y **todo formateo de un número o
+   una fecha lleva `Locale.ROOT`** (`String.format(Locale.ROOT, "%.2f", price)`): sin él, el
+   locale por defecto de la JVM decide el separador decimal y en un host con coma el fixture
+   manda `"price": 89,90`, que muere con 400 en el `Given` sin mencionar jamás el locale. Los
+   cuatro patrones, con ejemplo, en `{{keel:docs}}/conventions/integration-tests.md`.
 7. Con las clases escritas y **antes** de compilar, recorre la **checklist** de
    `{{keel:docs}}/conventions/integration-tests.md` § Del DSL al cable: cada ruta contrastada
    contra `api`, cada `code` de error copiado literal, cada campo del `assertBody` presente

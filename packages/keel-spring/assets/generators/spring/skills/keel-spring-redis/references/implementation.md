@@ -61,31 +61,29 @@ se va a la BD. El `CacheErrorHandler` que lo garantiza **ya viene en el
 `CacheConfig` generado** (loguea WARN y sigue). Si necesitas comportamiento
 distinto por operación, ajústalo ahí; la regla es: error de caché ≠ error de negocio.
 
-## Idempotencia (`idempotency` en commands del diseño)
+## Idempotencia (`idempotency` en commands del diseño): no va en Redis
 
-Esta es la idempotencia **del cliente HTTP**: la que evita que reintentar una
-petición ejecute el comando dos veces. No la confundas con la idempotencia de
-**consumo de mensajes**, que ya resuelve `IdempotencyGuard`
-(`infrastructure/messaging/idempotency/`, tabla `processed_event`) y que los
-listeners usan tal cual — no la reimplementes con Redis.
+Ninguna de las dos idempotencias del método se implementa aquí:
 
-`SET NX EX` atómico sobre la clave derivada de `keySource`:
+- La de **consumo de mensajes** la resuelve `IdempotencyGuard`
+  (`infrastructure/messaging/idempotency/`, tabla `processed_event`), que los
+  listeners usan tal cual.
+- La de **comando HTTP** la resuelve el puerto `IdempotencyStore` y su adaptador
+  JPA (tabla `idempotency_record`), que build genera junto con el filtro de la
+  cabecera. Cómo usarlo en el handler: `conventions/mapping.md`.
 
-```java
-Boolean first = redisTemplate.opsForValue()
-        .setIfAbsent("<servicio>:idem:" + key, "1", Duration.ofSeconds(ttl));
-if (Boolean.FALSE.equals(first)) {
-    // Repetida dentro del TTL: devuelve el resultado previo o el conflicto
-    // que dicte el diseño; NUNCA re-ejecutes la operación.
-}
-```
+Un `SET NX EX` guardando un flag **no puede** cumplir el contrato, y por eso se
+descartó: la repetición no se rechaza, se **reproduce** — hay que devolver la
+respuesta original, con el id del recurso creado, así que hace falta guardar ese
+id y una firma del contenido. Y sobre todo, el registro tiene que commitear en la
+misma transacción que el agregado: con Redis y la BD como dos almacenes, marcar
+antes de ejecutar deja la clave envenenada durante todo el TTL si la transacción
+revierte, y marcar después abre la ventana para que dos reintentos ejecuten
+ambos. Es la misma razón por la que el método genera el outbox en vez de publicar
+directo al broker.
 
-- La clave se marca **antes** de ejecutar; si la operación falla con error de
-  negocio, decide según el diseño si liberas la clave (`DELETE`) para permitir
-  reintento — y documenta la decisión.
-- A diferencia de la caché, aquí un Redis caído sí es un dilema: aceptar la
-  operación (riesgo de duplicado) o rechazarla (503). Si el diseño no lo dice,
-  es un `designGap` — repórtalo.
+Redis en este servicio es **caché**, y ahí sí puede degradar a miss sin
+consecuencias. Una idempotencia degradada es un alta duplicada.
 
 ## Naming de claves
 

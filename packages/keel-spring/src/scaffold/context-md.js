@@ -106,8 +106,9 @@ export function generate(model) {
   if (layersPresent.storage) {
     steps.push(
       '**storage** (`specs/storage.keel.yaml`): siguiendo la skill `{{keel:skills}}/keel-spring-s3/SKILL.md`, implementa el bean del cliente y el ' +
-        'adaptador del puerto `FileStorage` (upload devuelve `StoredObject`; download/delete/signedUrl), con la validación ' +
-        'de content-type/tamaño de los `buckets` del diseño.'
+        'adaptador del puerto `FileStorage` (upload devuelve `StoredObject`), con la validación ' +
+        'de content-type/tamaño de los `buckets` del diseño. Implementa **exactamente** los métodos que declara el ' +
+        'puerto: los de lectura son condicionales a la visibilidad de los buckets.'
     );
   }
   if (layersPresent.persistence) {

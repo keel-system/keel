@@ -95,7 +95,10 @@ public class Sns<Evento>Publisher implements <Evento>Publisher {
     private final String topic;
 
     public Sns<Evento>Publisher(SnsTemplate snsTemplate, ObjectMapper objectMapper,
-                                @Value("${messaging.publishing.destination}") String topic) {
+                                // Siempre con default: sin él, un contexto que no importe
+                                // parameters/<perfil>/messaging.yaml (el @SpringBootTest del
+                                // perfil test) muere con PlaceholderResolutionException.
+                                @Value("${messaging.publishing.destination:<servicio>.events}") String topic) {
         this.snsTemplate = snsTemplate;
         this.objectMapper = objectMapper;
         this.topic = topic;

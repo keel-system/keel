@@ -1093,15 +1093,35 @@ test('capa storage: gradle con SDK S3, compose con MinIO y fragmento de config p
   // cliente (S3/MinIO) los escribe el agente según el stack.
   const port = read(workspace, 'src/main/java/com/commerce/productcatalog/domain/storage/FileStorage.java');
   assert.ok(port.includes('public interface FileStorage'));
-  // upload devuelve StoredObject: sin él el agregado no tiene qué persistir.
-  assert.ok(port.includes('StoredObject upload(String key, byte[] content, String contentType);'));
-  assert.ok(port.includes('String signedUrl(String key);'));
+  // upload devuelve StoredObject: sin él el agregado no tiene qué persistir. El
+  // bucket lógico viaja en la firma: con dos buckets declarados, la key sola no
+  // le dice al adaptador a cuál sube ni cómo resuelve una lectura.
+  assert.ok(port.includes('StoredObject upload(String bucket, String key, byte[] content, String contentType);'));
   assert.ok(!port.includes('org.springframework')); // puerto puro de dominio
   // Bucket público: el binario se lee del borde y ningún caso de uso pide los
   // bytes al servicio. Declarar download igual obligaba al agente a implementar
   // un camino inalcanzable y a reportar como hueco del diseño el error que le
   // faltaba (el FILE_NOT_FOUND de una descarga que nadie hace).
   assert.ok(!port.includes('download'));
+  // Mismo criterio para la URL, y es el que cierra el hueco que llevó al agente a
+  // inventarse un publicUrl propio: con `signedUrl` incondicional, resolver la key
+  // de un bucket público pasaba por que ese método compusiera la URL pública —
+  // semántica que la firma no dice por ninguna parte. Aquí publicUrl existe y
+  // signedUrl no, porque no hay nada privado que firmar.
+  assert.ok(port.includes('String publicUrl(String bucket, String key);'));
+  assert.ok(!port.includes('signedUrl'));
+
+  // Y el mapper lo usa: el ResponseDto de un bucket público expone la URL
+  // absoluta, no la key. La constante sale de StoragePolicies para que el nombre
+  // del bucket no viaje como literal.
+  const mapper = read(workspace, 'src/main/java/com/commerce/productcatalog/application/mappers/ProductApplicationMapper.java');
+  assert.ok(mapper.includes('public ProductApplicationMapper(FileStorage fileStorage)'));
+  assert.ok(mapper.includes('fileStorage.publicUrl(StoragePolicies.PRODUCT_IMAGES, entity.getPhoto())'));
+
+  // La base pública es la que ve el CONSUMIDOR, no el endpoint interno con el que
+  // el servicio habla con MinIO: una URL con `minio:9000` no resuelve fuera del compose.
+  assert.ok(localStorage.includes('public-base-url: http://localhost:9000'));
+  assert.ok(productionStorage.includes('public-base-url: ${STORAGE_PUBLIC_BASE_URL}'));
 
   const storedObject = read(workspace, 'src/main/java/com/commerce/productcatalog/domain/storage/StoredObject.java');
   assert.ok(storedObject.includes('public record StoredObject(String storageKey, URI url, String contentType, Long sizeBytes)'));
@@ -1128,7 +1148,7 @@ test('capa storage: gradle con SDK S3, compose con MinIO y fragmento de config p
   assert.ok(productionStorage.includes('ensure-buckets-on-startup: ${STORAGE_ENSURE_BUCKETS:false}'));
 });
 
-test('capa storage: con un bucket private el puerto sí declara download', () => {
+test('capa storage: con un bucket private el puerto declara download y signedUrl, y el DTO lleva la key', () => {
   const workspace = makeWorkspace();
   const { manifest, layers } = loadFixture();
   const patched = structuredClone(layers);
@@ -1141,11 +1161,50 @@ test('capa storage: con un bucket private el puerto sí declara download', () =>
   scaffoldService({ manifest: patchedManifest, layers: patched, workspace });
 
   const port = read(workspace, 'src/main/java/com/commerce/productcatalog/domain/storage/FileStorage.java');
-  assert.ok(port.includes('byte[] download(String key);'));
+  assert.ok(port.includes('byte[] download(String bucket, String key);'));
+  assert.ok(port.includes('String signedUrl(String bucket, String key);'));
+  // Nada público que resolver: el método no está y el agente no puede exponer por
+  // error una URL directa de un objeto que no lo es.
+  assert.ok(!port.includes('publicUrl'));
   // El resto del puerto no depende de la visibilidad.
-  assert.ok(port.includes('StoredObject upload(String key, byte[] content, String contentType);'));
-  assert.ok(port.includes('void delete(String key);'));
-  assert.ok(port.includes('String signedUrl(String key);'));
+  assert.ok(port.includes('StoredObject upload(String bucket, String key, byte[] content, String contentType);'));
+  assert.ok(port.includes('void delete(String bucket, String key);'));
+
+  // El ResponseDto sigue llevando la key: una URL firmada incrustada en una
+  // respuesta caduca, y la lectura la sirve la operación que el diseño declare.
+  const mapper = read(workspace, 'src/main/java/com/commerce/productcatalog/application/mappers/ProductApplicationMapper.java');
+  assert.ok(mapper.includes('entity.getPhoto()'));
+  assert.ok(!mapper.includes('FileStorage')); // el mapper no arrastra lo que no usa
+
+  // Sin bucket público no hay base pública que configurar.
+  assert.ok(!read(workspace, 'src/main/resources/parameters/local/storage.yaml').includes('public-base-url'));
+});
+
+test('capa storage: con visibilidad mixta el puerto declara ambas URLs y el mapper resuelve solo la pública', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const patched = structuredClone(layers);
+  patched.storage = {
+    buckets: {
+      productImages: { visibility: 'public', allowedContentTypes: ['image/png'], maxSizeMb: 5 },
+      productManuals: { visibility: 'private', allowedContentTypes: ['application/pdf'], maxSizeMb: 10 }
+    }
+  };
+  patched.domain.entities.Product.fields.photo = { type: 'file', bucket: 'productImages' };
+  patched.domain.entities.Product.fields.manual = { type: 'file', bucket: 'productManuals' };
+  const patchedManifest = structuredClone(manifest);
+  patchedManifest.layers.storage = 'storage.keel.yaml';
+  scaffoldService({ manifest: patchedManifest, layers: patched, workspace });
+
+  const port = read(workspace, 'src/main/java/com/commerce/productcatalog/domain/storage/FileStorage.java');
+  assert.ok(port.includes('String publicUrl(String bucket, String key);'));
+  assert.ok(port.includes('String signedUrl(String bucket, String key);'));
+
+  // Es el caso que justifica el parámetro `bucket`: con la key sola, el adaptador
+  // no puede decidir si una lectura se firma o se compone.
+  const mapper = read(workspace, 'src/main/java/com/commerce/productcatalog/application/mappers/ProductApplicationMapper.java');
+  assert.ok(mapper.includes('fileStorage.publicUrl(StoragePolicies.PRODUCT_IMAGES, entity.getPhoto())'));
+  assert.ok(!mapper.includes('entity.getManual() != null ? fileStorage'));
 });
 
 test('storage con s3 elegido: mismo SDK pero sin contenedor MinIO en el compose', () => {
@@ -1674,6 +1733,15 @@ test('best-effort: agregado acumula, adaptador drena y el bridge publica tras co
   // Sin outbox no hay tabla ni relay, y el enrutado sale a parameters/.
   assert.ok(!exists(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/outbox/OutboxRelay.java'));
   assert.ok(read(workspace, 'src/main/resources/parameters/local/messaging.yaml').includes('product-created: product-catalog.product-created'));
+  // Y también al perfil `test`: el publisher que escribe el agente lee el destino
+  // con un @Value sin default, así que sin este fragmento el contexto de
+  // @SpringBootTest muere con PlaceholderResolutionException.
+  const testMessaging = read(workspace, 'src/main/resources/parameters/test/messaging.yaml');
+  assert.ok(testMessaging.includes('destination: ${MESSAGING_DESTINATION:'));
+  assert.ok(testMessaging.includes('product-created: product-catalog.product-created'));
+  assert.ok(read(workspace, 'src/main/resources/application-test.yaml').includes('classpath:parameters/test/messaging.yaml'));
+  // Ningún placeholder sin default: el perfil test arranca sin exportar nada.
+  assert.ok(!/\$\{[^:}]+\}/.test(testMessaging));
   // Las deps del broker elegido sí van en gradle (las usa el código del agente).
   assert.ok(read(workspace, 'build.gradle').includes('spring-cloud-aws-starter-sns'));
 });
@@ -2184,6 +2252,73 @@ test('sin suscripciones no se genera el registro de idempotencia', () => {
   assert.ok(
     !exists(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/idempotency/IdempotencyGuard.java')
   );
+});
+
+test('idempotencia de comando: store transaccional, contexto y filtro de la cabecera', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+
+  scaffoldService({ manifest, layers, workspace });
+
+  const base = 'src/main/java/com/commerce/productcatalog';
+  // El puerto vive en dominio; el adaptador, en persistencia. Y el javadoc lo
+  // separa explícitamente del guard de consumo: son dos mecanismos distintos.
+  const port = read(workspace, `${base}/domain/idempotency/IdempotencyStore.java`);
+  assert.ok(port.includes('Optional<StoredRequest> find(String scope, String idempotencyKey);'));
+  assert.ok(port.includes('record StoredRequest(String signature, String resourceId)'));
+  assert.ok(port.includes('IdempotencyGuard'));
+
+  const dir = `${base}/infrastructure/persistence/idempotency`;
+  const entity = read(workspace, `${dir}/IdempotencyRecordJpa.java`);
+  assert.ok(entity.includes('@Table(name = "idempotency_record")'));
+  assert.ok(entity.includes('@EmbeddedId'));
+  // "scope" es palabra del SQL estándar: la columna no puede llamarse así.
+  assert.ok(entity.includes('@Column(name = "operation_scope"'));
+  assert.ok(entity.includes('@Column(name = "expires_at"'));
+
+  // La atomicidad es el motivo de existir de esta implementación: save se une a
+  // la transacción del caso de uso (REQUIRED), al revés que IdempotencyGuard.
+  const store = read(workspace, `${dir}/JpaIdempotencyStore.java`);
+  assert.ok(store.includes('implements IdempotencyStore'));
+  assert.ok(store.includes('@Transactional\n    public void save('));
+  assert.ok(!store.includes('propagation = Propagation.REQUIRES_NEW'));
+  assert.ok(store.includes('@Scheduled(cron = "${idempotency-record.purge.cron:'));
+  assert.ok(read(workspace, `${dir}/IdempotencyRecordJpaRepository.java`).includes('deleteExpiredBefore'));
+  assert.ok(read(workspace, `${base}/ProductCatalogApplication.java`).includes('@EnableScheduling'));
+
+  // La cabecera es transporte: llega por contexto, no como componente del Command
+  // (Jackson deserializa el Command entero desde el cuerpo).
+  const context = read(workspace, `${base}/application/support/IdempotencyContext.java`);
+  assert.ok(context.includes('public static Optional<String> get()'));
+  const filter = read(workspace, `${base}/infrastructure/web/IdempotencyKeyFilter.java`);
+  assert.ok(filter.includes('public static final String HEADER = "Idempotency-Key";'));
+  assert.ok(filter.includes('IdempotencyContext.clear();'));
+  const command = read(workspace, `${base}/application/commands/CreateProductCommand.java`);
+  assert.ok(!command.includes('idempotencyKey'));
+
+  // La cadencia de la purga sale de parameters/, en todos los perfiles.
+  assert.ok(read(workspace, 'src/main/resources/parameters/local/idempotency.yaml').includes('cron: "0 30 4 * * *"'));
+  assert.ok(read(workspace, 'src/main/resources/parameters/test/idempotency.yaml').includes('${IDEMPOTENCY_PURGE_CRON:'));
+  assert.ok(read(workspace, 'src/main/resources/application-test.yaml').includes('classpath:parameters/test/idempotency.yaml'));
+
+  // Y el stub del handler dice qué usar, para que el agente no reinvente el registro.
+  const handler = read(workspace, `${base}/application/usecases/CreateProductCommandHandler.java`);
+  assert.ok(handler.includes('IdempotencyContext.get()'));
+  assert.ok(handler.includes('scope="createProduct"'));
+});
+
+test('sin idempotencia declarada no se genera el registro de comando', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const patched = structuredClone(layers);
+  delete patched['use-cases'].operations.createProduct.idempotency;
+
+  scaffoldService({ manifest, layers: patched, workspace });
+
+  const base = 'src/main/java/com/commerce/productcatalog';
+  assert.ok(!exists(workspace, `${base}/domain/idempotency/IdempotencyStore.java`));
+  assert.ok(!exists(workspace, `${base}/infrastructure/web/IdempotencyKeyFilter.java`));
+  assert.ok(!exists(workspace, 'src/main/resources/parameters/local/idempotency.yaml'));
 });
 
 test('unique: constraint nombrada en la tabla y traducida al error de negocio', () => {

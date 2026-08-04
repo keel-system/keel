@@ -914,6 +914,54 @@ test('config de storage: el mapa storage.buckets.* está en los CUATRO perfiles,
   assert.ok(testYaml.includes('endpoint: http://localhost:9000'), testYaml);
 });
 
+test('config del perfil test: los fragmentos con placeholders del código están todos', () => {
+  const { read } = scaffoldExtended();
+
+  // testProfileFiles() escribe su propia tabla de fragmentos, y por eso se
+  // desincronizó de la del bucle de perfiles: faltaba `messaging`, y el publisher
+  // que escribe el agente lee el destino con un @Value sin default, así que
+  // @SpringBootTest moría con PlaceholderResolutionException antes de ejecutar
+  // ninguna prueba. Cada fragmento del perfil test tiene que arrancar sin que
+  // nadie exporte nada: ningún ${VAR} sin default.
+  const importados = read('src/main/resources/application-test.yaml');
+  for (const name of ['db', 'messaging', 'idempotency', 'storage']) {
+    assert.ok(importados.includes(`classpath:parameters/test/${name}.yaml`), `${name}: no se importa en el perfil test`);
+    const yaml = read(`src/main/resources/parameters/test/${name}.yaml`);
+    assert.ok(!/\$\{[^:}]+\}/.test(yaml), `${name}: placeholder sin default en el perfil test`);
+  }
+});
+
+test('crones parametrizados: las comillas van fuera del placeholder, no dentro', () => {
+  const { read } = scaffoldExtended();
+
+  // `${VAR:"0 0 4 * * *"}` resuelve al literal CON las comillas, y Spring rechaza
+  // el @Scheduled al arrancar ("invalid cron expression") en todo perfil que no
+  // sea local. Salió a la luz al añadir messaging al perfil test, pero el defecto
+  // estaba en develop y production desde siempre.
+  for (const profile of ['local', 'develop', 'production', 'test']) {
+    for (const name of ['messaging', 'idempotency']) {
+      const yaml = read(`src/main/resources/parameters/${profile}/${name}.yaml`);
+      for (const linea of yaml.split('\n').filter((l) => l.trim().startsWith('cron:'))) {
+        assert.ok(!/:\s*\$\{[^}]*"/.test(linea), `${profile}/${name}: comillas dentro del placeholder → ${linea}`);
+        assert.match(linea, /cron: "[^"]+"$/, `${profile}/${name}: el cron va entrecomillado entero → ${linea}`);
+      }
+    }
+  }
+});
+
+test('idempotencia de comando: la cabecera llega por contexto, no por el controller', () => {
+  const { read } = scaffoldExtended();
+
+  // El binding del controller es generado entero (conventions/mapping.md): si la
+  // cabecera se colara ahí, el agente tendría que editar un archivo que la
+  // convención le prohíbe tocar. Y en el Command tampoco: Jackson lo deserializa
+  // entero desde el cuerpo, así que un componente más sería settable desde el body.
+  const controller = read(`${JAVA}/infrastructure/rest/controllers/product/v1/ProductV1Controller.java`);
+  assert.ok(!controller.includes('Idempotency-Key'), controller);
+  assert.ok(!read(`${JAVA}/application/commands/CreateProductCommand.java`).includes('idempotencyKey'));
+  assert.ok(read(`${JAVA}/infrastructure/web/IdempotencyKeyFilter.java`).includes('IdempotencyContext.set(request.getHeader(HEADER));'));
+});
+
 // El realm de prueba se describe en DOS formatos: bash contra kcadm
 // (infra/init-keycloak.sh, para la generación) y JSON de import
 // (deploy/keycloak/realm-export.json, para las pruebas manuales). Los dos salen de

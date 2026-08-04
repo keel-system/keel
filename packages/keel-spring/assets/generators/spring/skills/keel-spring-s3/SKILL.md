@@ -18,11 +18,12 @@ y prod (S3); la diferencia (endpoint / path-style) vive en `storage.yaml` por pe
 ## Qué dejó listo build
 
 - `build.gradle`: `software.amazon.awssdk:s3` (AWS SDK v2).
-- `parameters/<perfil>/storage.yaml`: provider, endpoint, región, credenciales, `path-style-access` y `ensure-buckets-on-startup` por perfil (local apunta al MinIO del compose; test trae valores de juguete, endpoint local y la guarda a `false`), más la **política de cada bucket del diseño** bajo `storage.buckets.<bucket>`: `visibility`, `max-size-mb` y `allowed-content-types`. Al código entra por el puerto `StoragePolicies`/`BucketPolicy` que genera `build`; no la re-derives ni la hardcodees.
+- `parameters/<perfil>/storage.yaml`: provider, endpoint, región, credenciales, `path-style-access`, `public-base-url` (solo con algún bucket público: la base que ve el **consumidor**, distinta del `endpoint` con el que hablas tú con el almacén) y `ensure-buckets-on-startup` por perfil (local apunta al MinIO del compose; test trae valores de juguete, endpoint local y la guarda a `false`), más la **política de cada bucket del diseño** bajo `storage.buckets.<bucket>`: `visibility`, `max-size-mb` y `allowed-content-types`. Al código entra por el puerto `StoragePolicies`/`BucketPolicy` que genera `build`; no la re-derives ni la hardcodees.
 - `spring.servlet.multipart.max-file-size` / `max-request-size` en `application.yaml`, con **holgura** sobre el mayor `maxSizeMb` declarado (sin ningún límite Spring corta en 1MB; con el límite exacto, Tomcat emitiría el 413 antes del caso de uso y ninguna guarda anterior del diseño podría precederlo). El límite de negocio lo comprueba el caso de uso, en el orden que fija el diseño.
 - `ApiExceptionHandler` con los handlers de `MaxUploadSizeExceededException` (413 `FILE_TOO_LARGE`) y `MissingServletRequestPartException` (400): no los redeclares.
 - `infra/docker-compose.yaml`: MinIO (9000 + consola 9001, minioadmin/minioadmin) — solo con `storage: minio`.
-- Puerto `FileStorage` en `domain/storage` (upload/download/delete/signedUrl) y el value object `StoredObject` que devuelve `upload`.
+- Puerto `FileStorage` en `domain/storage` y el value object `StoredObject` que devuelve `upload`. **Lee su firma antes de escribir el adaptador**: qué métodos de lectura declara depende de la visibilidad de los buckets del diseño (`upload`/`delete` siempre; `download` y `signedUrl` solo con algún bucket `private`; `publicUrl` solo con alguno `public`). Implementa exactamente los que están y **no añadas ninguno**: si te falta uno, es que la visibilidad del diseño no es la que crees.
+- La resolución de la key a URL en los `ResponseDto` ya la genera `build` en el `<Entidad>ApplicationMapper` (llama a `publicUrl`). No la escribas tú ni la muevas al handler.
 
 ## Bean del cliente (`infrastructure/configurations/storage/S3Config`)
 
@@ -60,18 +61,20 @@ public class S3Config {
 `StoragePolicies` (lo genera `build`; su implementación `StorageProperties` bindea
 `storage.buckets.*`). **No hay clave `storage.bucket` global**: el nombre físico sale
 siempre de `policies.forBucket(StoragePolicies.<BUCKET>).bucket()`, con la constante
-del bucket que el diseño declara.
+del bucket que el diseño declara. Cada método del puerto recibe ese nombre **lógico**
+como primer parámetro: traducirlo al físico es justo tu trabajo aquí.
 
 - `upload` → `s3Client.putObject(PutObjectRequest..., RequestBody.fromBytes(content))` y devuelve un `StoredObject`
 - `download` → `s3Client.getObjectAsBytes(GetObjectRequest...).asByteArray()`
 - `delete` → `s3Client.deleteObject(DeleteObjectRequest...)`
-- `signedUrl` → `S3Presigner` con la política de expiración del diseño (buckets privados).
+- `publicUrl` → concatenación de `storage.public-base-url`, el bucket físico y la key. Sin SDK ni firma: es una URL estable de un objeto de lectura anónima.
+- `signedUrl` → `S3Presigner`, con la expiración corta que fijes como default del adaptador (el DSL no la declara).
 
 `StoredObject(storageKey, url, contentType, sizeBytes)` es lo que el agregado
 guarda; siempre lleva `storageKey`, que es lo que identifica el objeto después.
-El campo `url` depende del bucket: con acceso público, la URL estable del
-objeto; con acceso firmado, **null** — la URL caduca, así que no se persiste y
-se pide al leer con `signedUrl(storageKey)`.
+El campo `url` depende del bucket: en uno público, la URL estable (la misma que
+compone `publicUrl`); en uno privado, **null** — la URL caduca, así que no se
+persiste y se pide al leer con `signedUrl`.
 
 Valida content-type y tamaño **en el caso de uso**, antes de llamar al puerto, para
 poder lanzar el error declarado (`FILE_TOO_LARGE`, `UNSUPPORTED_CONTENT_TYPE`) y no

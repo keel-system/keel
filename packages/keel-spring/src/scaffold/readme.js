@@ -149,7 +149,7 @@ export function generate(model) {
     pendingLayers.push('- `messaging`: haz `raise(...)` de cada evento en el método de negocio del agregado (la traducción a evento de integración y la entrega ya están generadas) e implementa el envío al broker — `OutboxDispatcher` o `<Evento>Publisher` según la `reliability` — y los `<Evento>Listener` de las suscripciones, según la skill `keel-spring-<broker>`.');
   }
   if (layersPresent.storage) {
-    pendingLayers.push('- `storage`: implementa el adaptador de `FileStorage` (bean del cliente + upload/download/delete/signedUrl) según la skill `keel-spring-s3`.');
+    pendingLayers.push('- `storage`: implementa el adaptador de `FileStorage` (bean del cliente + los métodos que el puerto declare: los de lectura dependen de la visibilidad de los buckets) según la skill `keel-spring-s3`.');
   }
   if (layersPresent.httpClients) {
     pendingLayers.push('- `http-clients`: puerto + adaptador RestClient + mapper ACL ya generados; completa los `*Fallback` (y el tipado records/mapper solo en llamadas declaradas en prosa).');

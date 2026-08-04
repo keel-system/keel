@@ -66,6 +66,11 @@ reporta en vez de aplicar.
    hoy no invoca ningún caso de uso** (`download`, `signedUrl`): son los que se cuelan, y el
    día que se usen cambian el status HTTP de la respuesta. Cambiar el tipo de excepción es
    conductual → va a `remaining` con archivo y línea, no se aplica aquí.
+
+   Y comprueba que el adaptador implementa **exactamente** el puerto: un método de más
+   (típicamente un `publicUrl` o un `signedUrl` añadidos a mano) es la señal de que el
+   agente no encontró el que sí estaba, o de que la visibilidad declarada no es la que el
+   código asume. Repórtalo en `remaining` con el bucket implicado.
 9. **Consultas dentro de un bucle (N+1)**: busca llamadas a repositorio o a un
    `<Raíz>RefResolver.resolve(UUID)` **dentro** de un `stream()`/`map()`/`forEach` o de un
    `for` sobre una colección. Es el defecto que ningún otro gate ve: compila, los escenarios

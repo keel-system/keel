@@ -9,6 +9,7 @@ import { physicalBucketName } from '../lib/buckets.js';
 import { screamingSnake } from '../lib/naming.js';
 import { usesOutbox } from './outbox.js';
 import { usesIdempotency } from './idempotency.js';
+import { usesHttpIdempotency } from './http-idempotency.js';
 import { usesCorrelation } from './correlation.js';
 
 const PROFILES = ['local', 'develop', 'production'];
@@ -45,6 +46,16 @@ function envWithDefault(profile, varName, localValue) {
   return `\${${varName}:${localValue}}`;
 }
 
+// Variante para expresiones cron. No basta con envWithDefault: la expresión hay
+// que entrecomillarla en YAML (empieza por dígito y lleva '*'), y si las comillas
+// van DENTRO del default del placeholder pasan a formar parte del valor —
+// `${VAR:"0 0 4 * * *"}` resuelve a `"0 0 4 * * *"` con las comillas incluidas y
+// Spring rechaza el @Scheduled al arrancar ("invalid cron expression"). Así que
+// se entrecomilla el escalar entero y el default va desnudo.
+function cronWithDefault(profile, varName, cron) {
+  return profile === 'local' ? `"${cron}"` : `"\${${varName}:${cron}}"`;
+}
+
 // Variante para valores que NO tienen un default razonable fuera de local (el
 // diseño no los declara): literal en local y env var obligatoria en el resto,
 // para fallar al arrancar en vez de apuntar en silencio a un destino erróneo.
@@ -77,8 +88,14 @@ export function generate(model) {
     // Enrutado de publicación (destino + clave por evento) y, si el diseño
     // declara reliability: outbox, cadencia del relay y retención de la purga.
     // También la purga del registro de idempotencia del lado consumidor.
-    if (layersPresent.messaging && (model.events.length > 0 || usesIdempotency(model))) {
+    if (messagingApplies(model)) {
       fragments.push(fragment(profile, 'messaging', messagingYaml(model, profile)));
+    }
+    // Purga del registro de idempotencia de comando (cabecera Idempotency-Key).
+    // Va aparte del fragmento messaging porque no depende de la capa messaging:
+    // un diseño puede declarar idempotencia sin publicar ni consumir nada.
+    if (usesHttpIdempotency(model)) {
+      fragments.push(fragment(profile, 'idempotency', idempotencyYaml(profile)));
     }
     if (stack.cache === 'redis' || stack.cache === 'valkey') {
       // Valkey habla protocolo Redis: misma configuración spring.data.redis.
@@ -374,7 +391,7 @@ function messagingYaml(model, profile) {
       '  purge:',
       '    # Borrado del registro de idempotencia; la retención solo tiene que',
       '    # cubrir la ventana en la que el broker puede reentregar un mensaje.',
-      `    cron: ${envWithDefault(profile, 'PROCESSED_EVENT_PURGE_CRON', '"0 0 4 * * *"')}`,
+      `    cron: ${cronWithDefault(profile, 'PROCESSED_EVENT_PURGE_CRON', '0 0 4 * * *')}`,
       `    retention-days: ${envWithDefault(profile, 'PROCESSED_EVENT_PURGE_RETENTION_DAYS', 14)}`
     );
   }
@@ -395,11 +412,24 @@ function messagingYaml(model, profile) {
       `      max-ms: ${envWithDefault(profile, 'OUTBOX_RELAY_BACKOFF_MAX_MS', 60000)}`,
       '  purge:',
       '    # Borrado diario de lo ya publicado; la tabla no es un histórico.',
-      `    cron: ${envWithDefault(profile, 'OUTBOX_PURGE_CRON', '"0 0 3 * * *"')}`,
+      `    cron: ${cronWithDefault(profile, 'OUTBOX_PURGE_CRON', '0 0 3 * * *')}`,
       `    retention-days: ${envWithDefault(profile, 'OUTBOX_PURGE_RETENTION_DAYS', 7)}`
     );
   }
   return lines.join('\n') + '\n';
+}
+
+// Cadencia de la purga del registro de idempotencia de comando. La retención no
+// se parametriza: cada fila lleva su propia caducidad, calculada con el
+// ttlSeconds que el diseño declara para esa operación.
+function idempotencyYaml(profile) {
+  return [
+    'idempotency-record:',
+    '  purge:',
+    '    # Borrado de las claves ya caducadas; la ventana de deduplicación la fija',
+    '    # el ttlSeconds del diseño, no esta cadencia.',
+    `    cron: ${cronWithDefault(profile, 'IDEMPOTENCY_PURGE_CRON', '0 30 4 * * *')}`
+  ].join('\n') + '\n';
 }
 
 function redisYaml(profile) {
@@ -437,6 +467,14 @@ function oauth2Yaml(model, profile) {
 // Hay fragmento 'security' si el servicio se protege con api-key (security.api-key),
 // si el diseño valida audiencia (security.audience) o si los clientes máquina se
 // autentican por api-key (security.api-keys.*).
+// Un solo predicado para el fragmento `messaging`, compartido por el bucle de
+// perfiles y por el perfil `test`: la tabla de fragmentos está escrita dos veces
+// (testProfileFiles no la reutiliza porque sus valores son de juguete), y sin
+// esto las dos divergen — que es justo lo que pasó con este fragmento.
+function messagingApplies(model) {
+  return Boolean(model.layersPresent.messaging && (model.events.length > 0 || usesIdempotency(model)));
+}
+
 function securityApplies(model) {
   const sec = model.security;
   if (!sec) return false;
@@ -534,6 +572,30 @@ function storageYaml(model, profile) {
     `  secret-key: ${envValue(profile, 'STORAGE_SECRET_KEY', isTest ? 'test' : isMinio ? 'minioadmin' : 'changeme')}`,
     isMinio || isTest ? '  path-style-access: true' : '  path-style-access: false'
   );
+
+  // Base de las URLs públicas, solo con algún bucket `visibility: public`. NO es
+  // `endpoint`: ese es con quien habla el servicio (en compose, `http://minio:9000`,
+  // un nombre de red que fuera no resuelve), y una URL compuesta con él llega al
+  // consumidor rota. Aquí va la que el consumidor alcanza — el borde/CDN en un
+  // entorno real, el host en local. Sin bucket público no se emite: el puerto
+  // tampoco declara `publicUrl`, así que nadie la leería.
+  if (model.storage?.hasPublicBucket) {
+    if (isTest) {
+      // Perfil cerrado: valor inerte y coherente con el `endpoint` de arriba. No
+      // se llama a nadie, pero el binding de StorageProperties no puede quedar a null.
+      lines.push('  public-base-url: http://localhost:9000');
+    } else if (profile === 'local') {
+      lines.push(`  public-base-url: ${envValue(profile, 'STORAGE_PUBLIC_BASE_URL', 'http://localhost:9000')}`);
+    } else {
+      // Sin default, también en develop: una base vacía no falla, compone URLs
+      // rotas que solo se ven al abrir una imagen. Mejor no arrancar.
+      lines.push(
+        '  # URL base con la que el CONSUMIDOR lee los objetos públicos (CDN o borde),',
+        '  # no el endpoint interno del almacén.',
+        '  public-base-url: ${STORAGE_PUBLIC_BASE_URL}'
+      );
+    }
+  }
 
   // Aprovisionamiento de buckets desde la propia app (el ensureBucket /
   // ensurePublicRead idempotente del adaptador, ver la skill keel-spring-s3).
@@ -723,6 +785,20 @@ function testProfileFiles(model) {
   // salida a la red. Igual que persistence recibe H2 en el perfil test.
   if (model.layersPresent.storage && model.stack.storage) {
     fragments.push(fragment('test', 'storage', storageYaml(model, 'test')));
+  }
+
+  // Enrutado de publicación: el bridge que genera build lee `${...:default}`,
+  // pero el publisher que escribe el agente siguiendo la skill del broker lee el
+  // destino sin default — y sin este fragmento el contexto de @SpringBootTest
+  // muere con PlaceholderResolutionException antes de ejecutar ninguna prueba.
+  // messagingYaml es reutilizable tal cual: todos sus valores pasan por
+  // envWithDefault, que fuera de `local` produce ${VAR:default}.
+  if (messagingApplies(model)) {
+    fragments.push(fragment('test', 'messaging', messagingYaml(model, 'test')));
+  }
+
+  if (usesHttpIdempotency(model)) {
+    fragments.push(fragment('test', 'idempotency', idempotencyYaml('test')));
   }
 
   // Resource server JWT: sin issuer-uri ni jwk-set-uri, Boot no autoconfigura

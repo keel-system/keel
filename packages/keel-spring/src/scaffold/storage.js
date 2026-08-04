@@ -103,13 +103,26 @@ ${constants}
 // que lo genera build y no el agente.
 function renderProperties(model) {
   const domainPkg = subPackage(model, DOMAIN_PKG);
+  // `public-base-url` solo con algún bucket público. Es la base con la que el
+  // adaptador compone `publicUrl`, y es la que ve el CONSUMIDOR (CDN, o el host
+  // en local): distinta del `endpoint` con el que el servicio habla con el
+  // almacén, que en compose es un nombre de red que fuera no resuelve.
+  const publicBaseUrl = model.storage?.hasPublicBucket
+    ? `String publicBaseUrl, `
+    : '';
+  const publicBaseUrlDoc = model.storage?.hasPublicBucket
+    ? `
+ *
+ * <p>{@code publicBaseUrl} es la base de las URLs que devuelve {@code publicUrl}
+ * del puerto: la que alcanza el consumidor, no el endpoint interno.`
+    : '';
   const body = `/**
  * Política de los buckets, leída de \`storage.buckets.*\`. El fragmento por perfil
  * lo genera \`keel-spring build\` desde storage.keel.yaml: esta clase es el único
- * sitio donde esos valores entran al código.
+ * sitio donde esos valores entran al código.${publicBaseUrlDoc}
  */
 @ConfigurationProperties("storage")
-public record StorageProperties(Map<String, BucketProperties> buckets) implements StoragePolicies {
+public record StorageProperties(${publicBaseUrl}Map<String, BucketProperties> buckets) implements StoragePolicies {
 
     public record BucketProperties(String bucket, String visibility, Integer maxSizeMb,
             List<String> allowedContentTypes) {
@@ -171,9 +184,9 @@ function renderStoredObject(model) {
  *
  * @param storageKey clave del objeto en el proveedor; siempre presente y es la
  *                   que identifica el binario para descargarlo o borrarlo
- * @param url        URL resoluble. En almacenes públicos viene poblada; en los
- *                   de URL firmada llega null y se obtiene al leer, con
- *                   {@code signedUrl(storageKey)}, porque caduca
+ * @param url        URL resoluble. En un bucket público viene poblada (la misma
+ *                   que compone {@code publicUrl}); en uno privado llega null y
+ *                   se obtiene al leer, con {@code signedUrl}, porque caduca
  * @param contentType MIME del binario (por ejemplo image/png)
  * @param sizeBytes  tamaño en bytes
  */
@@ -187,21 +200,60 @@ public record StoredObject(String storageKey, URI url, String contentType, Long 
 
 // Puerto de salida puro (dominio): sin dependencias de infraestructura.
 //
-// `download` es el único método condicional: sobre un bucket `visibility: public`
-// el binario se lee directamente del borde y ningún caso de uso lo pide por aquí,
-// pero el @Override sí es obligatorio — así que declararlo siempre forzaba al
-// agente a implementar un camino inalcanzable y a reportar como hueco del diseño
-// el error que le faltaba (el FILE_NOT_FOUND de una descarga que nadie hace).
-// Mismo criterio que la skill keel-spring-s3 ya aplica a `signedUrl`.
+// Dos decisiones que el puerto expresa en su FIRMA, no en un párrafo de la skill:
+//
+// 1. Cada método toma el `bucket` LÓGICO (el nombre del diseño, el mismo que
+//    indexa StoragePolicies.forBucket). Con un solo bucket sobra, pero en cuanto
+//    el diseño declara dos el adaptador no puede decidir nada a partir de la key:
+//    ni a qué bucket sube ni si una lectura se firma o se compone.
+//
+// 2. `download`, `publicUrl` y `signedUrl` son CONDICIONALES por visibilidad.
+//    Declararlos siempre obliga al agente a implementar un @Override inalcanzable
+//    —y a reportar como hueco del diseño el error que le falta, p. ej. el
+//    FILE_NOT_FOUND de una descarga que nadie hace—. Peor aún era el caso de la
+//    URL: con `signedUrl` incondicional, la única forma de resolver la key de un
+//    bucket público era que ese método compusiera la URL pública, semántica
+//    invisible en el nombre que el agente no encuentra y suple inventando un
+//    método propio. Con `publicUrl` presente si y solo si hay bucket público, lo
+//    que necesita está donde lo busca y se llama como lo que hace.
 function renderPort(model) {
-  const download = model.storage?.hasPrivateBucket
+  const storage = model.storage ?? {};
+
+  const download = storage.hasPrivateBucket
     ? `
     /**
      * Trae el binario: solo existe porque el diseño declara algún bucket
      * visibility: private, cuyo contenido no es de lectura directa y tiene que
      * servirlo el propio servicio.
      */
-    byte[] download(String key);
+    byte[] download(String bucket, String key);
+`
+    : '';
+
+  const publicUrl = storage.hasPublicBucket
+    ? `
+    /**
+     * URL absoluta y estable del objeto, para exponerla en un ResponseDto. Solo
+     * existe porque el diseño declara algún bucket visibility: public, cuyo
+     * contenido se lee directamente del borde.
+     *
+     * <p>Se compone desde \`storage.public-base-url\` (la que ve el CONSUMIDOR:
+     * el CDN, o localhost en local), nunca desde el endpoint interno con el que
+     * el servicio habla con el almacén — esa URL no la resuelve nadie fuera de
+     * la red del compose.
+     */
+    String publicUrl(String bucket, String key);
+`
+    : '';
+
+  const signedUrl = storage.hasPrivateBucket
+    ? `
+    /**
+     * URL de lectura temporal de un objeto que no es público. Solo existe
+     * porque el diseño declara algún bucket visibility: private. Caduca: se
+     * pide al leer y no se persiste ni se cachea en una respuesta.
+     */
+    String signedUrl(String bucket, String key);
 `
     : '';
 
@@ -209,6 +261,10 @@ function renderPort(model) {
  * Puerto de almacenamiento de archivos. La implementación (proveedor del
  * stack) vive en infrastructure/storage; la escribe el agente. El dominio
  * solo depende de esta interfaz.
+ *
+ * <p>El parámetro {@code bucket} es el nombre LÓGICO del diseño (las constantes
+ * de {@link StoragePolicies}), no el físico del proveedor: traducirlo es cosa
+ * del adaptador.
  */
 public interface FileStorage {
 
@@ -216,12 +272,10 @@ public interface FileStorage {
      * Sube el binario y devuelve cómo quedó almacenado, para que el agregado
      * pueda guardar la referencia.
      */
-    StoredObject upload(String key, byte[] content, String contentType);
-${download}
-    void delete(String key);
-
-    String signedUrl(String key);
-}`;
+    StoredObject upload(String bucket, String key, byte[] content, String contentType);
+${download}${publicUrl}
+    void delete(String bucket, String key);
+${signedUrl}}`;
   return {
     path: javaPath(model, DOMAIN_PKG, 'FileStorage'),
     content: javaFile(subPackage(model, DOMAIN_PKG), [], body)

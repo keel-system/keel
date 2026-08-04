@@ -161,6 +161,11 @@ misma raíz. Todo lo que hagas ocurre dentro de ella.
   `CorrelationContext.runWith(...)` y deduplican con `IdempotencyGuard.tryRecord(...)`
   (`infrastructure/messaging/idempotency`). Escribir otra tabla de procesados o un `SET NX`
   propio para esto es generación incorrecta.
+- Lo mismo con la idempotencia **de comando** (`idempotency` en una operación): el puerto
+  `IdempotencyStore`, su adaptador, la tabla `idempotency_record`, el `IdempotencyContext` y el
+  filtro de la cabecera **ya están generados**. Tu trabajo es usarlos en el handler según
+  `{{keel:docs}}/conventions/mapping.md`; una tabla propia o un `SET NX` para esto es generación
+  incorrecta, aunque el stack traiga caché.
 - Todo identificador que escribas (paquetes, directorios, archivos, clases, métodos,
   variables, tablas) va en inglés; comentarios y docs en español. Un identificador en
   español en el diseño no se traduce por tu cuenta: es un `blocker`.

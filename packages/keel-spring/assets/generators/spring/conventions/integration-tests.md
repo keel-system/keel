@@ -223,6 +223,26 @@ La regla es la misma aunque haya varios argumentos: **captura primero, interpola
 Además de evitar el fallo, deja la aserción de forma (`assertIsUuid`, `assertIsInstant`) junto a
 la extracción, que es donde se lee.
 
+### Todo formateo de números y fechas lleva `Locale.ROOT`
+
+`String.format`/`.formatted(...)` usan el locale **por defecto de la JVM**, que es el del host donde
+corre la generación. En un host con coma decimal (`es_ES`, `es_CO`, `pt_BR`…) el importe se
+serializa con coma y el cuerpo deja de ser JSON válido:
+
+```java
+// MAL: en un host con locale de coma decimal produce "price": 89,90
+"{\"price\": %.2f}".formatted(price);
+
+// BIEN: el formato del fixture no depende de dónde se ejecute.
+"{\"price\": %s}".formatted(String.format(Locale.ROOT, "%.2f", price));
+```
+
+El síntoma es desconcertante porque no menciona el locale: la petición muere con **400** en el
+`Given` (montando el fixture), mucho antes de llegar a la regla que el escenario quería probar, y
+la misma suite pasa en verde en un host con punto decimal. Aplica a cualquier helper de fixture
+que componga texto a partir de un número o una fecha — `priceFor(...)`, `amountFor(...)`,
+formateo de `Instant`/`LocalDate` con `DateTimeFormatter` (que también acepta `withLocale`).
+
 ### Un filtro devuelve una lista, no un elemento
 
 La segunda causa de `ClassCastException`, y la que más se propaga porque se copia entre clases.
@@ -352,7 +372,10 @@ Toda afirmación del `Then` se comprueba, por orden de preferencia:
 3. Por **descarga directa desde la JVM del test**, para lo que quedó en un bucket de
    storage. Un `Then` que afirma "el archivo subido está en el bucket y es el que se envió"
    se comprueba pidiendo la URL pública que devolvió la propia API con
-   `java.net.http.HttpClient`, y comparando bytes o su SHA-256:
+   `java.net.http.HttpClient`, y comparando bytes o su SHA-256. Que la respuesta traiga una
+   URL y no la key no es una suposición del test: sobre un bucket `visibility: public` el
+   `ResponseDto` expone la URL absoluta por construcción, y la compone el mapper que genera
+   build (conventions/mapping.md § `storage`):
 
    ```java
    HttpResponse<byte[]> stored = HttpClient.newHttpClient().send(
@@ -366,8 +389,9 @@ Toda afirmación del `Then` se comprueba, por orden de preferencia:
    no una CLI— y no depende de la topología de red del compose. **No se hace desde
    `devtools`**: dentro de un contenedor `localhost` es el propio contenedor, no el host, así
    que una URL pública (`http://localhost:9000/…`) no resuelve ahí — en docker igual que en
-   podman. Con un bucket `visibility: private` no hay URL pública: la vía es la operación del
-   diseño que firma o media el acceso, no un atajo por la infraestructura.
+   podman. La `public-base-url` del perfil `local` ya apunta ahí por eso mismo. Con un bucket
+   `visibility: private` no hay URL pública —el `ResponseDto` lleva la key— y la vía es la
+   operación del diseño que firma o media el acceso, no un atajo por la infraestructura.
 4. Por `devtools("cli", "arg", …)` en crudo, solo para lo que ninguna de las vías anteriores
    alcanza. Los argumentos van como **lista**, nunca como una cadena concatenada: es un
    `<runtime> exec` directo, sin shell. Si hace falta un pipe o una redirección, la variante
@@ -381,6 +405,12 @@ Toda afirmación del `Then` se comprueba, por orden de preferencia:
 intacto, `flyway_schema_history` aparte), **claves `<servicio>:*` de la caché** y los
 **destinos de mensajería declarados** en `messaging.keel.yaml § channels` (en Kafka, que no
 tiene purga, la ventana la abre una marca de offset con el mismo efecto observable).
+
+El reset limpia **datos**, nunca **esquema**. Si un campo del dominio cambió de nombre entre
+iteraciones, `ddl-auto: update` dejó la columna vieja con su `NOT NULL` y toda escritura de ese
+agregado falla con un conflicto de integridad que ningún `Then` menciona: eso no lo arregla
+`resetState()` sino `bash infra/reset-db.sh --schema`, y el diagnóstico está en
+`infra-validation.md § Cuando el esquema queda a medio camino`.
 
 Un recurso que **no** esté en esa lista no se da por limpio por analogía con la BD: o se
 purga en el propio test, o se declara en `assumptions` del reporte. Sin declararlo, el

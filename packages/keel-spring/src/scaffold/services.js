@@ -235,7 +235,10 @@ function renderHandler(model, service, operation) {
     );
   }
   if (operation.idempotency) {
-    notes.push(`Idempotencia: keySource=${operation.idempotency.keySource}${operation.idempotency.ttlSeconds ? `, ttlSeconds=${operation.idempotency.ttlSeconds}` : ''}`);
+    const ttl = operation.idempotency.ttlSeconds ?? 86400;
+    notes.push(
+      `Idempotencia: keySource=${operation.idempotency.keySource}, ttlSeconds=${ttl}. El puerto IdempotencyStore y su adaptador ya están generados — NO escribas otro registro (ni tabla propia, ni SET NX en la caché). La clave llega por IdempotencyContext.get() (vacío = el cliente no mandó la cabecera: ejecuta sin deduplicar, no rechaces). Si hay clave: find(scope, clave) con scope="${operation.name}"; si hay registro con la MISMA firma, reconstruye la respuesta desde su resourceId sin re-ejecutar nada (ni escrituras ni eventos); si la firma difiere, lanza el error que el diseño declare para ese caso; si no hay registro, ejecuta y llama a save(...) dentro de la misma transacción del comando`
+    );
   }
   if (operation.cache) {
     notes.push(`Caché: ttlSeconds=${operation.cache.ttlSeconds}, keyFields=[${operation.cache.keyFields.join(', ')}]`);

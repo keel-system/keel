@@ -2,12 +2,29 @@
 // traduce el agregado de dominio a los ResponseDto de las operaciones cuyos
 // payloads derivan de esa entidad, y a los <Hija>Dto de las entidades hijas que
 // esos payloads proyectan. Asignación campo a campo, sin reflexión.
+//
+// Es también el ÚNICO sitio donde la key de un objeto de storage se resuelve a
+// URL, y por eso la asimetría api/messaging sale gratis: aquí solo se producen
+// DTOs de respuesta HTTP; los payloads de los eventos los genera events.js y
+// siguen llevando la key, que es una referencia estable al objeto y no caduca
+// (conventions/mapping.md § storage).
 
 import { javaFile, javaPath, subPackage } from './render.js';
 import { domainMembers, domainSubPackage, capitalize } from './entities.js';
 import { ANNOTATIONS_PKG } from './mediator.js';
+import { isPublicBucket } from '../lib/buckets.js';
+import { screamingSnake } from '../lib/naming.js';
 
 const MAPPER_PKG = 'application.mappers';
+const STORAGE_PKG = 'domain.storage';
+
+// Un campo de un DTO de salida que hay que resolver a URL: `file` cuyo bucket es
+// de lectura pública. Con bucket privado el DTO sigue llevando la key — una URL
+// firmada incrustada en una respuesta caduca, y la lectura la sirve la operación
+// que el diseño declare para eso.
+function isPublicFile(model, field) {
+  return field.base === 'file' && !field.list && isPublicBucket(model, field.bucket);
+}
 
 export function generate(model) {
   // Agrupa los responseDto derivados de entidad por entidad de origen.
@@ -73,10 +90,27 @@ function renderMapper(model, entity, dtos) {
     methods.push(renderMethod(model, childEntity, child, imports));
   }
 
+  // El puerto entra por constructor solo si algún DTO de este mapper proyecta un
+  // campo `file` de bucket público. Sin eso, el mapper sigue siendo la función
+  // pura que era y no arrastra una dependencia que no usa.
+  const needsStorage = [...dtos, ...children].some((dto) => (dto.fields ?? []).some((field) => isPublicFile(model, field)));
+  let constructor = '';
+  if (needsStorage) {
+    imports.add(`${subPackage(model, STORAGE_PKG)}.FileStorage`);
+    imports.add(`${subPackage(model, STORAGE_PKG)}.StoragePolicies`);
+    constructor = `    private final FileStorage fileStorage;
+
+    public ${entity.name}ApplicationMapper(FileStorage fileStorage) {
+        this.fileStorage = fileStorage;
+    }
+
+`;
+  }
+
   const body = `@ApplicationComponent
 public class ${entity.name}ApplicationMapper {
 
-${methods.join('\n\n')}
+${constructor}${methods.join('\n\n')}
 }`;
 
   return {
@@ -107,6 +141,12 @@ function renderMethod(model, entity, dto, imports) {
       return `null /* TODO (agente): ${field.name} no es getter directo de ${entity.name}; mapéalo (¿subcampo de value object?) */`;
     }
     const getter = `entity.get${capitalize(field.name)}()`;
+    // Bucket público: el DTO expone la URL absoluta, no la key. La constante del
+    // bucket sale de StoragePolicies para que su nombre no viaje como literal —
+    // si el diseño lo renombra, lo que falla es la compilación.
+    if (isPublicFile(model, field)) {
+      return `${getter} != null ? fileStorage.publicUrl(StoragePolicies.${screamingSnake(field.bucket)}, ${getter}) : null`;
+    }
     // Entidad hija: se proyecta con su propio DTO, nunca con el del padre.
     if (field.kind === 'childDto') {
       return field.list

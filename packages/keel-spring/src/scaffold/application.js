@@ -5,6 +5,7 @@ import { javaFile, javaPath } from './render.js';
 import { auditsAnything } from './auditing.js';
 import { usesOutbox } from './outbox.js';
 import { usesIdempotency } from './idempotency.js';
+import { usesHttpIdempotency } from './http-idempotency.js';
 
 export function generate(model) {
   const { service } = model;
@@ -17,9 +18,10 @@ export function generate(model) {
     imports.push('org.springframework.data.jpa.repository.config.EnableJpaAuditing');
     annotations.push('@EnableJpaAuditing');
   }
-  // El relay del outbox y la purga del registro de idempotencia son @Scheduled:
-  // sin esto las filas no saldrían nunca y la tabla de procesados no se purgaría.
-  if (usesOutbox(model) || usesIdempotency(model)) {
+  // El relay del outbox y las purgas de los dos registros de idempotencia (el de
+  // consumo y el de comando) son @Scheduled: sin esto las filas no saldrían nunca
+  // y las tablas crecerían sin límite.
+  if (usesOutbox(model) || usesIdempotency(model) || usesHttpIdempotency(model)) {
     imports.push('org.springframework.scheduling.annotation.EnableScheduling');
     annotations.push('@EnableScheduling');
   }

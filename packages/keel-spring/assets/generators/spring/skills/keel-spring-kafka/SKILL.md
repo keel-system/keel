@@ -82,7 +82,10 @@ public class KafkaProductCreatedPublisher implements ProductCreatedPublisher {
 
 En ambos casos el topic y la key salen de `parameters/<perfil>/messaging.yaml`
 (`messaging.publishing.destination` y `messaging.publishing.routing-keys.<evento-kebab>`), leídos
-con `@Value`: no los escribas literales. **La key del mensaje es la routing key**, no el id del
+con `@Value` **y siempre con default** —`@Value("${messaging.publishing.destination:<destino>}")`,
+igual que el bridge generado—: un placeholder sin default hace que cualquier contexto que no importe
+ese fragmento (el `@SpringBootTest` del perfil `test`, por ejemplo) muera al arrancar con
+`PlaceholderResolutionException`. No los escribas literales. **La key del mensaje es la routing key**, no el id del
 agregado: es lo que hace que el particionado agrupe por tipo de evento y lo que asume el resto de la
 cadena (outbox y arnés incluidos).
 

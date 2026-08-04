@@ -29,7 +29,7 @@ recetas; solo cambia la imagen del compose.
 ## Qué implementa el agente
 
 La caché se activa porque alguna operación del diseño declara `cache`
-(`ttlSeconds`, `keyFields`) y/o `idempotency` (`keySource`, `ttlSeconds`).
+(`ttlSeconds`, `keyFields`).
 
 - **Caché de lectura** (`cache` en queries): anota el adaptador (o un decorator
   del puerto) con `@Cacheable(cacheNames = CacheConfig.<OPERACION>_CACHE, …)` —
@@ -43,10 +43,12 @@ La caché se activa porque alguna operación del diseño declara `cache`
   > caché** — ni varios `cacheNames`, ni dos entradas `sync = true` dentro de un
   > `@Caching`. Si dos operaciones del diseño cachean por la misma clave, van en
   > métodos distintos. Detalle y alternativas en `references/implementation.md`.
-- **Idempotencia** (`idempotency` en commands): guarda la clave
-  (`keySource`, p. ej. el header del cliente) con `SET NX EX <ttlSeconds>`;
-  si ya existe, devuelve el resultado previo o el conflicto que dicte el diseño,
-  sin re-ejecutar la operación.
+- **Idempotencia** (`idempotency` en commands): **no es tuya**. La resuelve el
+  `IdempotencyStore` que genera build, con una fila transaccional; tú solo lo usas
+  en el handler siguiendo `conventions/mapping.md`. No la reimplementes aquí con
+  `SET NX EX`: ese mecanismo guarda un flag, y el contrato exige **reproducir la
+  respuesta original** (id del recurso incluido). El porqué, en
+  `references/implementation.md`.
 
 ## Referencias
 

@@ -23,3 +23,13 @@ export function declaredBuckets(model) {
     physicalName: physicalBucketName(model, bucket)
   }));
 }
+
+// ¿El bucket lógico que nombra un campo `file` es de lectura pública? Es lo que
+// decide qué expone el DTO de salida: la URL absoluta (público) o la key
+// (privado, cuya lectura la sirve una operación del diseño). Un nombre que no
+// está declarado es falso, no una excepción: crossrefs ya lo rechaza antes de
+// llegar aquí, y en modo --wip el build tiene que seguir produciendo algo.
+export function isPublicBucket(model, name) {
+  if (!name) return false;
+  return (model.storage?.buckets ?? []).some((bucket) => bucket.name === name && bucket.visibility === 'public');
+}

@@ -15,6 +15,7 @@ import { javaFile, javaPath } from './render.js';
 import { DATABASES, BROKERS, CACHES, selectedInfra } from '../lib/stack-catalog.js';
 import { needsDevtools } from './devtools.js';
 import { tokenUrl, userTestClient } from './auth-provisioning.js';
+import { declaresIdempotency } from './http-idempotency.js';
 
 // El reset por script existe con las mismas condiciones con las que docker.js lo
 // genera: una BD con cliResetCmd, una caché que vaciar, o destinos de mensajería
@@ -58,9 +59,10 @@ function usesDevtools(model) {
   return needsDevtools(selectedInfra(model));
 }
 
-function hasIdempotency(model) {
-  return model.services.some((group) => group.operations.some((operation) => operation.idempotency));
-}
+// El arnés manda la cabecera si el diseño la declara, tenga o no persistencia
+// donde registrarla: el predicado es el mismo que gobierna el scaffolding del
+// store, importado de allí para que no haya dos lecturas del mismo campo.
+const hasIdempotency = declaresIdempotency;
 
 function hasMultipart(model) {
   return Boolean(model.hasFileUploads || model.layersPresent.storage);
