@@ -140,6 +140,37 @@ test('el placeholder heredado de las plantillas antiguas también es pending', (
   assert.ok(result.pending.some((p) => p.includes('service.description sigue siendo un placeholder')));
 });
 
+// --- schema: las dos formas de depender ---
+
+test('una dependencia que ni lee ni pide trabajo no cumple el schema', (t) => {
+  const withDependency = (body) => ({
+    'service.keel.yaml': manifest({ layers: ['domain', 'use-cases', 'dependencies'] }),
+    'domain.keel.yaml': DOMAIN,
+    'use-cases.keel.yaml': USE_CASES,
+    'dependencies.keel.yaml': `dependencies:\n  catalog:\n    description: Fuente de verdad de productos.\n${body}`
+  });
+
+  // Ni needs ni activations: declarar el proveedor no declara ninguna dependencia.
+  const empty = validateService(makeServiceDir(t, withDependency('')));
+  assert.ok(empty.schemaErrors.some((entry) => entry.file === 'dependencies.keel.yaml'));
+
+  // Solo activations: es una dependencia legítima, no una a la que le falte algo.
+  const activationOnly = validateService(
+    makeServiceDir(
+      t,
+      withDependency(
+        '    activations:\n' +
+          '      requestInvoice:\n' +
+          '        triggeredBy: [reconcile]\n' +
+          '        via: { publishes: InvoiceRequested }\n' +
+          '        effect: El proveedor emite la factura del pedido.\n'
+      )
+    ),
+    { wip: true }
+  );
+  assert.deepEqual(activationOnly.schemaErrors, []);
+});
+
 // --- el corte antes de las referencias cruzadas ---
 
 test('sin --wip los pendientes cortan antes de cruzar referencias', (t) => {

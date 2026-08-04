@@ -77,7 +77,33 @@ services:
 | `external` | no (`false`) | Un sistema que no diseñamos aquí. No se le espera `specs/`, su contrato vive en `contracts/<servicio>/INTEGRATION.md` y **nunca bloquea el orden** |
 | `derivedFrom` | no | Diseño del registry del que partirá este servicio, en vez de una sesión de diseño completa. Si hay que ajustarlo, se deriva con `keel new <servicio> --from registry:<diseño>`; si sirve tal cual y el nombre del mapa coincide con el del diseño, se **adopta** con `keel registry get <diseño>` y el servicio nace ya cerrado |
 | `after` | no | Servicios que van antes por **prioridad de negocio**, no por contrato |
-| `consumes` | no | Las aristas del mapa de contextos |
+| `consumes` | no | Aristas de **lectura**: de quién necesita un dato |
+| `invokes` | no | Aristas de **activación**: a quién le pide que haga algo |
+
+### Las dos formas de depender
+
+Un servicio puede depender de otro de dos maneras, y el mapa las dibuja **en sentidos opuestos**:
+
+|  | `consumes` — leer | `invokes` — activar |
+|---|---|---|
+| Qué se obtiene | Un **dato** del proveedor | **Trabajo** que hace el proveedor |
+| Ejemplo | `booking` lee de `flight-catalog` la tarifa del tramo | `booking` le pide a `notifications` que mande el billete |
+| Quién dibuja la arista | Quien **lee** | Quien **pide** |
+| Qué contrato hace falta | La **salida** del proveedor | La **entrada** del proveedor: qué mandarle |
+| En la capa `dependencies` | `needs` | `activations` |
+
+La regla de la flecha sale de quién tiene que conocer a quién. Al **leer**, el proveedor no sabe quién
+le consume, y esa ignorancia es la propiedad que le permite desplegarse solo: por eso la arista la
+dibuja el consumidor. Al **activarlo**, el que tiene que conocer la firma del otro es el que pide, así
+que es él quien la dibuja — y quien va **después** en el orden de construcción.
+
+Confundirlas tiene un coste concreto: si `booking` necesita el `INTEGRATION.md` de `notifications`
+para saber qué campos mandarle y esa dependencia se apunta como un `consumes` de `notifications`
+hacia `booking`, el mapa programa `booking` primero, justo al revés de lo que hace falta.
+
+**El corte, en una pregunta:** *¿me llevo un dato suyo, o le dejo un trabajo?* Si lo que se escribe en
+`what` es una acción —«inicio del cobro», «retención del asiento», «envío del correo»— la arista es un
+`invokes`, por mucho que técnicamente sea un `GET` o un `POST`.
 
 ### `consumes[]`
 
@@ -91,8 +117,31 @@ services:
 | `why` | **sí** | Por qué existe la arista y por qué por ese canal. Una arista sin porqué es una integración que nadie pidió |
 | `blocking` | no (`true`) | **Es lo que fija el orden**: `true` = no puedo diseñarme sin su `INTEGRATION.md` |
 
-Las aristas las dibuja **quien necesita el dato**, nunca quien lo tiene: un proveedor no sabe quién le
-consume, y esa ignorancia es la propiedad que le permite desplegarse solo.
+### `invokes[]`
+
+| Campo | Oblig. | Para qué |
+|---|---|---|
+| `to` | **sí** | Quien hace el trabajo. Debe existir en `services` |
+| `kind` | **sí** | `http` si se le llama y se espera su respuesta; `events` si se le manda un mensaje-petición y se sigue |
+| `what` | **sí** | Qué se le pide que **haga**, en lenguaje de negocio. Se convierte en las `activations` de la capa `dependencies` al diseñar |
+| `events` | no | Con `kind: events`, los mensajes-petición que se emiten. `check` comprueba que el proveedor los consuma con `nature: request` |
+| `why` | **sí** | Por qué se delega este trabajo en vez de hacerlo, y por qué por ese canal |
+| `blocking` | no (`true`) | Por defecto sí, y con más razón que al leer: sin su contrato de entrada no se sabe qué mandarle |
+
+```yaml
+  booking:
+    invokes:
+      - to: notifications
+        kind: events
+        what: [enviar el billete al pasajero]
+        events: [DeliveryRequested]
+        why: El aviso al pasajero es trabajo de notifications; booking solo dice a quién y con qué.
+```
+
+Un evento así **no es un hecho al que otro reacciona por su cuenta**: es un encargo, y el proveedor
+tiene que aceptarlo declarándolo en su capa `messaging` como `subscriptions.<Evento>` con
+`nature: request`. Ese par —`invokes` de un lado, `request` del otro— es lo que convierte una
+publicación anónima en un acuerdo verificable entre dos servicios.
 
 ## `keel system`
 
@@ -106,14 +155,17 @@ No escriben nada: la prosa la produce `/keel-decompose` y el índice del `README
 
 ### Las olas se calculan, no se declaran
 
-No hay campo `wave`. Las olas son un orden topológico sobre las aristas **bloqueantes** hacia
-servicios que diseñamos aquí; cada nivel se ordena alfabéticamente, así que la salida es determinista.
-Un `external` no entra en ninguna ola: su contrato ya existe.
+No hay campo `wave`. Las olas son un orden topológico sobre las aristas **bloqueantes** —de los dos
+tipos: un `consumes` pone al lector después del proveedor y un `invokes` pone al que pide después de
+quien hace el trabajo— hacia servicios que diseñamos aquí; cada nivel se ordena alfabéticamente, así
+que la salida es determinista. Un `external` no entra en ninguna ola: su contrato ya existe.
 
-Lo que no entra en ninguna ola es un **ciclo**, y `check` lo reporta con las aristas implicadas. Antes
-de romperlo, comprueba si una está dibujada al revés — el caso más común es un proveedor que no
-necesita conocer a su consumidor (le basta recibir su identificador como dato opaco). Si el ciclo es
-real, se elige qué lado se diseña en modo degradado y esa arista se marca `blocking: false`.
+Lo que no entra en ninguna ola es un **ciclo**, y `check` lo reporta con las aristas implicadas (`←`
+para las de lectura, `→` para las de activación). Antes de romperlo, comprueba si una está dibujada al
+revés — el caso más común es un proveedor que no necesita conocer a su consumidor (le basta recibir su
+identificador como dato opaco), y el segundo más común es una activación apuntada como si fuera una
+lectura del proveedor hacia quien le pide. Si el ciclo es real, se elige qué lado se diseña en modo
+degradado y esa arista se marca `blocking: false`.
 
 ### `keel system check`: la única comprobación cross-servicio del método
 
@@ -122,13 +174,21 @@ de un mismo diseño. Que el `source: flight-catalog` de una suscripción exista,
 publique de verdad ese evento, no lo comprobaba nada. Eso es lo que hace esta puerta:
 
 1. **El mapa contra sí mismo** — aristas contra servicios no declarados, ciclos bloqueantes, eventos
-   suscritos que el proveedor no declara en `publishes`.
+   suscritos que el proveedor no declara en `publishes`, y **contradicciones de dirección**: un mismo
+   canal declarado a la vez como trabajo que le pedimos (`invokes`) y como hecho nuestro al que el
+   otro reacciona (`consumes`) — son dos acoplamientos opuestos, y juntos fabrican un ciclo que no existe.
 2. **El mapa contra la realidad** — el `status` declarado contra el estado real de `specs/`, diseños
    del workspace que el mapa no conoce, servicios `external` que sin embargo tienen `specs/`.
-3. **Un diseño contra el mapa** — dependencias que el diseño declara y el mapa no conoce (integración
-   que nadie planificó) y suscripciones a fuentes que el mapa no contempla.
-4. **Un diseño contra otro diseño** — que el proveedor publique en su capa `messaging` los eventos que
-   el mapa promete a su consumidor.
+3. **Un diseño contra el mapa** — dependencias que el diseño declara y el mapa no conoce, cada una
+   contra su propia arista (los `needs` contra `consumes`, las `activations` contra `invokes`: leer de
+   alguien y encargarle trabajo son integraciones distintas), y suscripciones `fact` a fuentes que el
+   mapa no contempla.
+4. **Un diseño contra otro diseño**, en las dos direcciones:
+   - que el proveedor **publique** en su capa `messaging` los eventos que el mapa promete a su consumidor;
+   - que quien recibe un encargo lo **consuma** de verdad, y además con `nature: request` — si lo
+     declara como `fact`, el emisor cree haber delegado un trabajo y el receptor solo está reaccionando
+     por su cuenta a algo que considera ajeno;
+   - que a quien se invoca por HTTP exponga alguna puerta a servicios (`audience: services` o `both`).
 
 **Asimetría deliberada:** lo que el mapa planificó y un diseño aún no implementa solo es deriva cuando
 ese diseño está **cerrado** — mientras se diseña, faltar es lo normal y reportarlo sería ruido en cada

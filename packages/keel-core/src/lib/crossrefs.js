@@ -41,7 +41,7 @@ export function checkCrossRefs({ layers, wip = false }) {
   const referencedChannels = new Set(); // canales citados por eventos/suscripciones (para detectar huérfanos)
   const emittedEvents = new Set(); // eventos citados por algún emits (para detectar publicados que nadie emite)
   const httpCallKeys = new Set(); // `${clientId}|${callName}` — lo llena el bloque http-clients
-  const usedHttpCalls = new Set(); // clientes citados por algún need (para detectar clientes sin dependencia)
+  const usedHttpCalls = new Set(); // clientes citados por algún need o activación (para detectar clientes sin dependencia)
 
   // Códigos de error declarados: el catálogo completo y el subconjunto por operación.
   // Los consume dependencies (onMiss.action: fail exige un error que alguien declare).
@@ -1007,6 +1007,35 @@ export function checkCrossRefs({ layers, wip = false }) {
       }
     };
 
+    // Una llamada saliente citada por un need (fetchedFrom) o por una activación (via).
+    // Citarla es lo que justifica que el cliente exista: alimenta usedHttpCalls.
+    const checkHttpCallRef = (ref, where) => {
+      const { client, call } = ref;
+      usedHttpCalls.add(client);
+      if (!httpClients) {
+        if (wip) {
+          pending.push(`${where}: el cliente '${client}' está pendiente de definir en http-clients`);
+        } else {
+          errors.push(`${where}: el cliente '${client}' no está en http-clients: clients (no hay capa http-clients)`);
+        }
+      } else if (!(client in (httpClients.clients ?? {}))) {
+        errors.push(`${where}: el cliente '${client}' no está en http-clients: clients`);
+      } else if (!httpCallKeys.has(`${client}|${call}`)) {
+        errors.push(`${where}: la llamada '${call}' no existe en http-clients: clients.${client}.calls`);
+      }
+    };
+
+    // Un error de negocio citado por un need (onMiss) o por una activación (onFailure):
+    // el generador solo lo genera si alguna operación lo declaró en su catálogo.
+    const checkDeclaredError = (code, where, ops, opsField) => {
+      if (!code) return;
+      if (!declaredErrorCodes.has(code)) {
+        errors.push(`${where}: el código '${code}' no lo declara ninguna operación de use-cases`);
+      } else if (!(ops ?? []).some((opName) => errorCodesByOp.get(opName)?.has(code))) {
+        warnings.push(`${where}: '${code}' no lo declara ninguna de las operaciones de ${opsField}`);
+      }
+    };
+
     // Un evento consumido del proveedor: existe como suscripción y su source concuerda.
     const checkConsumedEvent = (event, where, depName, label) => {
       if (!consumedEvents.has(event)) {
@@ -1039,23 +1068,7 @@ export function checkCrossRefs({ layers, wip = false }) {
         }
 
         if (spec.fetchedFrom) {
-          const { client, call } = spec.fetchedFrom;
-          usedHttpCalls.add(client);
-          if (!httpClients) {
-            if (wip) {
-              pending.push(`${where}.fetchedFrom: el cliente '${client}' está pendiente de definir en http-clients`);
-            } else {
-              errors.push(
-                `${where}.fetchedFrom: el cliente '${client}' no está en http-clients: clients (no hay capa http-clients)`
-              );
-            }
-          } else if (!(client in (httpClients.clients ?? {}))) {
-            errors.push(`${where}.fetchedFrom: el cliente '${client}' no está en http-clients: clients`);
-          } else if (!httpCallKeys.has(`${client}|${call}`)) {
-            errors.push(
-              `${where}.fetchedFrom: la llamada '${call}' no existe en http-clients: clients.${client}.calls`
-            );
-          }
+          checkHttpCallRef(spec.fetchedFrom, `${where}.fetchedFrom`);
         }
 
         if (spec.replica) {
@@ -1066,28 +1079,56 @@ export function checkCrossRefs({ layers, wip = false }) {
 
           // Que el error exista es error duro: el generador lanza esa excepción y solo
           // la genera si alguna operación la declaró en su catálogo.
-          const code = spec.replica.onMiss?.error;
-          if (code) {
-            if (!declaredErrorCodes.has(code)) {
-              errors.push(
-                `${where}.replica.onMiss.error: el código '${code}' no lo declara ninguna operación de use-cases`
-              );
-            } else if (!(spec.usedBy ?? []).some((opName) => errorCodesByOp.get(opName)?.has(code))) {
-              warnings.push(
-                `${where}.replica.onMiss.error: '${code}' no lo declara ninguna de las operaciones de usedBy`
-              );
-            }
-          }
+          checkDeclaredError(spec.replica.onMiss?.error, `${where}.replica.onMiss.error`, spec.usedBy, 'usedBy');
         }
       }
 
+      // Activaciones: la otra forma de depender. Se le pide trabajo al proveedor, así que
+      // lo que se comprueba no es de dónde se lee un dato, sino que el canal por el que se
+      // le pide exista de verdad y que la operación propia sepa qué hacer si no sale.
+      for (const [action, spec] of Object.entries(dep.activations ?? {})) {
+        const where = `dependencies: ${depName}.activations.${action}`;
+
+        for (const opName of spec.triggeredBy ?? []) {
+          if (!operationNames.has(opName)) {
+            errors.push(`${where}.triggeredBy: la operación '${opName}' no existe en use-cases`);
+          }
+        }
+
+        const via = spec.via ?? {};
+        if (via.client) {
+          checkHttpCallRef(via, `${where}.via`);
+        } else if (via.publishes) {
+          if (!publishedEvents.has(via.publishes)) {
+            if (!messaging && wip) {
+              pending.push(`${where}.via: el evento '${via.publishes}' está pendiente de definir en messaging: publishing`);
+            } else {
+              errors.push(
+                `${where}.via: el evento '${via.publishes}' no está en messaging: publishing.events` +
+                  (messaging ? '' : ' (no hay capa messaging)')
+              );
+            }
+          }
+          // Publicar no devuelve resultado: si la operación necesita el desenlace para
+          // continuar, el canal tiene que ser síncrono. Es una contradicción del diseño,
+          // no una preferencia de implementación.
+          if (spec.awaits === 'outcome') {
+            errors.push(
+              `${where}.awaits: 'outcome' exige un canal síncrono — publicar '${via.publishes}' no devuelve el resultado del trabajo`
+            );
+          }
+        }
+
+        checkDeclaredError(spec.onFailure?.error, `${where}.onFailure.error`, spec.triggeredBy, 'triggeredBy');
+      }
+
+      const activationNames = new Set(Object.keys(dep.activations ?? {}));
       for (const [index, compensation] of (dep.compensations ?? []).entries()) {
-        checkConsumedEvent(
-          compensation.onEvent,
-          `dependencies: ${depName}.compensations[${index}]`,
-          depName,
-          'suscripción'
-        );
+        const where = `dependencies: ${depName}.compensations[${index}]`;
+        checkConsumedEvent(compensation.onEvent, where, depName, 'suscripción');
+        if (compensation.undoes && !activationNames.has(compensation.undoes)) {
+          errors.push(`${where}.undoes: la activación '${compensation.undoes}' no existe en ${depName}.activations`);
+        }
       }
     }
 
@@ -1096,11 +1137,15 @@ export function checkCrossRefs({ layers, wip = false }) {
     for (const clientId of Object.keys(httpClients?.clients ?? {})) {
       if (!usedHttpCalls.has(clientId)) {
         warnings.push(
-          `http-clients: clients.${clientId}: ningún need de dependencies lo usa — ¿de qué dependencia forma parte?`
+          `http-clients: clients.${clientId}: ningún need ni activación de dependencies lo usa — ¿de qué dependencia forma parte?`
         );
       }
     }
     for (const [event, sub] of Object.entries(subscriptions)) {
+      // Una suscripción `request` es una puerta de entrada nuestra, no una dependencia:
+      // quien la emite se acopla a nosotros, y exigirle un bloque en dependencies
+      // invertiría el sentido del acoplamiento.
+      if (sub.nature === 'request') continue;
       if (sub.source && !declaredDependencies.has(sub.source)) {
         warnings.push(
           `messaging: subscriptions.${event}: su source '${sub.source}' no está declarado en dependencies`

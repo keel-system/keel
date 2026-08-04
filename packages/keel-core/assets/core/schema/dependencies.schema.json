@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://keel.dev/schema/2.0/dependencies.schema.json",
   "title": "Keel Dependencies Layer",
-  "description": "Servidores de los que este servicio depende: qué dato ajeno necesita de cada uno, dónde vive la verdad que lee y qué hace cuando le falta. Esta capa REFERENCIA a las demás (http-clients, messaging, domain, use-cases); nunca las redeclara.",
+  "description": "Servidores de los que este servicio depende, de las dos maneras en que se puede depender: leyendo un dato ajeno (needs) o pidiéndole que haga algo (activations). Esta capa REFERENCIA a las demás (http-clients, messaging, domain, use-cases); nunca las redeclara.",
   "type": "object",
   "required": ["dependencies"],
   "additionalProperties": false,
@@ -18,7 +18,7 @@
   "$defs": {
     "dependency": {
       "type": "object",
-      "required": ["needs"],
+      "anyOf": [{ "required": ["needs"] }, { "required": ["activations"] }],
       "additionalProperties": false,
       "properties": {
         "description": { "type": "string" },
@@ -42,9 +42,16 @@
         "needs": {
           "type": "object",
           "minProperties": 1,
-          "description": "Cada dato ajeno que este servicio necesita de este proveedor.",
+          "description": "Cada dato ajeno que este servicio necesita de este proveedor para decidir.",
           "propertyNames": { "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/operationName" },
           "additionalProperties": { "$ref": "#/$defs/need" }
+        },
+        "activations": {
+          "type": "object",
+          "minProperties": 1,
+          "description": "Cada trabajo que este servicio le pide al proveedor. No se lee un dato: se le pide que actúe, y por eso este diseño se acopla a su contrato de ENTRADA (el §Endpoints o §Suscripciones de su INTEGRATION.md).",
+          "propertyNames": { "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/operationName" },
+          "additionalProperties": { "$ref": "#/$defs/activation" }
         },
         "compensations": {
           "type": "array",
@@ -58,6 +65,10 @@
               "onEvent": {
                 "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/typeName",
                 "description": "Evento consumido (debe existir en messaging: subscriptions)."
+              },
+              "undoes": {
+                "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/operationName",
+                "description": "Activación de este mismo proveedor que se deshace (debe existir en activations). Opcional porque no toda compensación revierte una activación declarada, pero declararla es lo que hace verificable el par hacer/deshacer."
               },
               "description": { "type": "string" }
             }
@@ -119,6 +130,114 @@
             }
           },
           "then": { "required": ["fetchedFrom"] }
+        }
+      ]
+    },
+    "activation": {
+      "type": "object",
+      "required": ["triggeredBy", "via", "effect"],
+      "additionalProperties": false,
+      "description": "Trabajo que este servicio le pide al proveedor. Es la otra forma de depender: no se lee un dato, se activa a otro, y por eso obliga a conocer su firma de entrada.",
+      "properties": {
+        "description": { "type": "string" },
+        "triggeredBy": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Operaciones de este servicio que la disparan (deben existir en use-cases: operations). Es el único enlace del DSL entre un caso de uso y el trabajo que delega.",
+          "items": { "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/operationName" }
+        },
+        "via": {
+          "description": "Canal por el que se activa: una llamada saliente de http-clients, o un evento propio de messaging: publishing. La firma que viaja por él la fija el PROVEEDOR, no este diseño.",
+          "oneOf": [
+            { "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/httpCallRef" },
+            {
+              "type": "object",
+              "required": ["publishes"],
+              "additionalProperties": false,
+              "properties": {
+                "publishes": {
+                  "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/typeName",
+                  "description": "Evento propio (debe existir en messaging: publishing.events) cuyo payload cumple lo que el proveedor exige para actuar."
+                },
+                "description": { "type": "string" }
+              }
+            }
+          ]
+        },
+        "effect": {
+          "type": "string",
+          "minLength": 10,
+          "description": "Qué hace el proveedor cuando se le activa, en lenguaje de negocio (ej. 'sale un correo de confirmación hacia el comprador'). Sin efecto declarado, una activación es una llamada que nadie pidió."
+        },
+        "awaits": {
+          "type": "string",
+          "enum": ["outcome", "acknowledgement", "nothing"],
+          "default": "acknowledgement",
+          "description": "Qué necesita saber la operación propia. outcome: el resultado del trabajo, y no puede continuar sin él. acknowledgement: que el proveedor lo aceptó, no que lo terminó. nothing: se delega y se sigue. Es una decisión de negocio: determina si el trabajo ajeno puede fallar sin que se entere nadie.",
+          "$comment": "outcome exige un canal síncrono: publicar un evento no devuelve resultado. Lo comprueba crossrefs."
+        },
+        "onFailure": { "$ref": "#/$defs/onFailure" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "type": "object",
+            "required": ["via"],
+            "properties": { "via": { "type": "object", "required": ["client"] } }
+          },
+          "then": { "required": ["onFailure"] }
+        },
+        {
+          "if": {
+            "type": "object",
+            "required": ["via"],
+            "properties": { "via": { "type": "object", "required": ["publishes"] } }
+          },
+          "then": { "not": { "required": ["onFailure"] } }
+        }
+      ]
+    },
+    "onFailure": {
+      "type": "object",
+      "required": ["action"],
+      "additionalProperties": false,
+      "description": "Qué hace la operación propia cuando la activación no sale. Es comportamiento observable en su API, por eso cada acción obliga a declarar su consecuencia de negocio. Solo aplica a la activación síncrona: con un evento, la entrega la garantiza el outbox.",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": ["fail", "degrade", "ignore"],
+          "description": "fail: la operación propia falla con el error declarado y no deja rastro del trabajo pedido. degrade: continúa con el resultado degradado que se describe. ignore: continúa como si nada; solo es honesto cuando el negocio no cuenta con ese trabajo."
+        },
+        "error": {
+          "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/errorCode",
+          "description": "Error con el que falla la operación (alguna operación de use-cases debe declararlo). Obligatorio y exclusivo de action fail."
+        },
+        "degradedTo": {
+          "type": "string",
+          "minLength": 5,
+          "description": "Qué resultado obtiene el cliente cuando el trabajo no se pide, en prosa. Obligatorio y exclusivo de action degrade."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "action": { "const": "fail" } }, "required": ["action"] },
+          "then": {
+            "required": ["error"],
+            "not": { "required": ["degradedTo"] }
+          }
+        },
+        {
+          "if": { "properties": { "action": { "const": "degrade" } }, "required": ["action"] },
+          "then": {
+            "required": ["degradedTo"],
+            "not": { "required": ["error"] }
+          }
+        },
+        {
+          "if": { "properties": { "action": { "const": "ignore" } }, "required": ["action"] },
+          "then": {
+            "not": { "anyOf": [{ "required": ["error"] }, { "required": ["degradedTo"] }] }
+          }
         }
       ]
     },

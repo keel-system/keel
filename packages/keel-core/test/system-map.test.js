@@ -90,11 +90,31 @@ ${events
   .join('\n')}
 `;
 
+// Un proveedor del que se LEE: lo contrasta el mapa contra `consumes`.
 const dependencies = (names) => `dependencies:
 ${names
   .map(
     (name) => `  ${name}:
-    description: Proveedor ${name} declarado por el diseño.`
+    description: Proveedor ${name} declarado por el diseño.
+    needs:
+      ${name.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())}Data:
+        usedBy: [searchFlights]
+        strategy: on-demand`
+  )
+  .join('\n')}
+`;
+
+// Un proveedor al que se le PIDE trabajo: lo contrasta el mapa contra `invokes`.
+const activations = (names) => `dependencies:
+${names
+  .map(
+    (name) => `  ${name}:
+    description: Proveedor ${name} al que este diseño le delega trabajo.
+    activations:
+      notify${name.replace(/(^|-)([a-z])/g, (_, __, letter) => letter.toUpperCase())}:
+        triggeredBy: [searchFlights]
+        via: { publishes: FlightScheduled }
+        effect: El proveedor hace su trabajo al recibir el mensaje.`
   )
   .join('\n')}
 `;
@@ -362,7 +382,7 @@ test('una dependencia que el diseño declara y el mapa no conoce es deriva siemp
 
   assert.ok(
     messages(buildSystemPlan(cwd)).some((message) =>
-      /specs\/flight-catalog: depende de 'fare-pricing' y el mapa no lo conoce/.test(message)
+      /specs\/flight-catalog: lee datos de 'fare-pricing' y el mapa no lo conoce/.test(message)
     )
   );
 });
@@ -501,4 +521,181 @@ test('la tabla es determinista y lista las olas en orden', () => {
   assert.ok(rows[2].includes('flight-catalog'), rows[2]);
   assert.ok(rows[3].includes('seat-inventory'), rows[3]);
   assert.match(first, /flight-catalog \(events\)/);
+});
+
+// --- Aristas de activación ---------------------------------------------------
+
+// El servicio genérico al que se le pide trabajo. Su diseño tiene que cerrar en
+// verde: el check espejo solo se le exige a un proveedor ya diseñado.
+const NOTIFY_USE_CASES = `operations:
+  sendNotice:
+    description: Envía un aviso al destinatario indicado.
+    kind: command
+    input:
+      fields:
+        code: { type: string, required: true }
+    output: { entity: Flight }
+`;
+
+// Consume el mensaje como `request`: eso es lo que lo convierte en una puerta de
+// entrada suya en vez de en una reacción por cuenta propia.
+const NOTIFY_SUBSCRIPTION = `subscriptions:
+  DeliveryRequested:
+    source: booking
+    nature: request
+    payload:
+      code: { type: string, required: true }
+    triggers: sendNotice
+`;
+
+const NOTIFY_ENTRY = `  notifications:
+    summary: Envío de correos y avisos a los pasajeros.
+    responsibility: Única fuente de verdad de qué aviso se mandó y cuándo.
+`;
+
+const bookingInvokes = (extra = '') => `  booking:
+    summary: Reservas de vuelo de principio a fin.
+    responsibility: Única fuente de verdad del estado de una reserva.
+    publishes: [DeliveryRequested]
+    invokes:
+      - to: notifications
+        kind: events
+        what: [enviar el correo de confirmación al pasajero]
+        events: [DeliveryRequested]
+        why: El aviso al pasajero es trabajo de notifications, no de booking.
+${extra}`;
+
+test('una invocación bloqueante pone al invocador DESPUÉS del proveedor', () => {
+  const plan = buildSystemPlan(
+    workspace({ system: systemYaml(NOTIFY_ENTRY + bookingInvokes()) })
+  );
+
+  // El invocador necesita la firma de entrada del otro para saber qué mandarle:
+  // es exactamente el caso que antes el mapa ordenaba al revés.
+  assert.deepEqual(plan.waves, [
+    { level: 1, services: ['notifications'] },
+    { level: 2, services: ['booking'] }
+  ]);
+  assert.deepEqual(byName(plan).notifications.invokedBy, ['booking']);
+  assert.deepEqual(byName(plan).booking.invokedBy, []);
+});
+
+test('una invocación no bloqueante no ordena las olas', () => {
+  const plan = buildSystemPlan(
+    workspace({
+      system: systemYaml(NOTIFY_ENTRY + bookingInvokes().replace('why: El aviso', 'blocking: false\n        why: El aviso'))
+    })
+  );
+
+  assert.deepEqual(plan.waves, [{ level: 1, services: ['booking', 'notifications'] }]);
+});
+
+test('invocar por eventos exige que el proveedor los consuma como request', () => {
+  const design = (nature) => ({
+    notifications: {
+      layers: {
+        domain: DOMAIN,
+        'use-cases': NOTIFY_USE_CASES,
+        messaging: NOTIFY_SUBSCRIPTION.replace('nature: request', nature)
+      }
+    }
+  });
+
+  // Tratado como hecho: nadie se ha comprometido a hacer el trabajo.
+  const asFact = buildSystemPlan(
+    workspace({ system: systemYaml(NOTIFY_ENTRY + bookingInvokes()), designs: design('nature: fact') })
+  );
+  assert.ok(
+    messages(asFact).some((message) => /consume 'DeliveryRequested' como 'fact'/.test(message)),
+    messages(asFact).join('\n')
+  );
+
+  // Tratado como petición: el acuerdo está cerrado por los dos lados.
+  const asRequest = buildSystemPlan(
+    workspace({ system: systemYaml(NOTIFY_ENTRY + bookingInvokes()), designs: design('nature: request') })
+  );
+  assert.ok(!messages(asRequest).some((message) => /DeliveryRequested/.test(message)), messages(asRequest).join('\n'));
+});
+
+test('un mensaje no puede ser a la vez petición nuestra y hecho al que el otro reacciona', () => {
+  const cwd = workspace({
+    system: systemYaml(
+      NOTIFY_ENTRY.trimEnd() +
+        `
+    consumes:
+      - from: booking
+        kind: events
+        what: [reservas confirmadas]
+        events: [DeliveryRequested]
+        why: Reacciona a la confirmación por su cuenta.
+` +
+        bookingInvokes()
+    )
+  });
+
+  const plan = buildSystemPlan(cwd);
+  assert.ok(
+    messages(plan).some((message) => /le pide trabajo a 'notifications' y 'notifications' declara que consume/.test(message)),
+    messages(plan).join('\n')
+  );
+  // El ciclo espurio que esa contradicción fabricaría no debe tragarse el error.
+  assert.ok(plan.findings.some((finding) => finding.level === 'error'));
+});
+
+test('pedir trabajo por HTTP a quien no expone puerta M2M es aviso', () => {
+  const cwd = workspace({
+    system: systemYaml(
+      NOTIFY_ENTRY +
+        `  booking:
+    summary: Reservas de vuelo de principio a fin.
+    responsibility: Única fuente de verdad del estado de una reserva.
+    invokes:
+      - to: notifications
+        kind: http
+        what: [enviar el correo de confirmación al pasajero]
+        why: El aviso al pasajero es trabajo de notifications, no de booking.
+`
+    ),
+    designs: {
+      notifications: {
+        layers: {
+          domain: DOMAIN,
+          'use-cases': NOTIFY_USE_CASES,
+          api: 'style: rest\nbasePath: /api/v1\nendpoints:\n  sendNotice: { method: POST, path: /notices }\n'
+        }
+      }
+    }
+  });
+
+  assert.ok(
+    messages(buildSystemPlan(cwd)).some((message) => /no expone ningún endpoint con audience/.test(message)),
+    messages(buildSystemPlan(cwd)).join('\n')
+  );
+});
+
+test('una activación que el mapa no conoce es deriva siempre', () => {
+  const cwd = workspace({
+    system: systemYaml(CATALOG_ENTRY),
+    designs: {
+      'flight-catalog': {
+        layers: { ...catalogDesign.layers, dependencies: activations(['notifications']) }
+      }
+    }
+  });
+
+  assert.ok(
+    messages(buildSystemPlan(cwd)).some((message) =>
+      /specs\/flight-catalog: le pide trabajo a 'notifications' y el mapa no lo conoce/.test(message)
+    ),
+    messages(buildSystemPlan(cwd)).join('\n')
+  );
+});
+
+test('la tabla separa lo que se lee de lo que se pide', () => {
+  const plan = buildSystemPlan(workspace({ system: systemYaml(NOTIFY_ENTRY + bookingInvokes()) }));
+  const rendered = renderPlanTable(plan);
+
+  assert.equal(rendered, renderPlanTable(buildSystemPlan(workspace({ system: systemYaml(NOTIFY_ENTRY + bookingInvokes()) }))));
+  assert.ok(rendered.split('\n')[0].includes('Le pide a'));
+  assert.match(rendered, /notifications \(events\)/);
 });

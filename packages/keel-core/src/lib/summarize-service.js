@@ -75,6 +75,7 @@ function summarizeMessaging(doc) {
     return {
       name,
       source: sub.source ?? null,
+      nature: sub.nature ?? 'fact',
       channel: sub.channel ?? null,
       external: sub.channel ? doc?.channels?.[sub.channel]?.external === true : false,
       triggers: sub.triggers ?? null,
@@ -125,6 +126,20 @@ function summarizeDependencies(doc) {
           onMiss: spec.replica?.onMiss?.action ?? null,
           client: spec.fetchedFrom?.client ?? null,
           call: spec.fetchedFrom?.call ?? null
+        };
+      }),
+      activations: keysOf(dep.activations).map((action) => {
+        const spec = dep.activations[action] ?? {};
+        return {
+          name: action,
+          triggeredBy: Array.isArray(spec.triggeredBy) ? spec.triggeredBy : [],
+          // El canal se resume como el par que lo identifica: una llamada saliente o
+          // un evento propio. Cuál de los dos es se ve por qué campo viene relleno.
+          client: spec.via?.client ?? null,
+          call: spec.via?.call ?? null,
+          publishes: spec.via?.publishes ?? null,
+          awaits: spec.awaits ?? 'acknowledgement',
+          onFailure: spec.onFailure?.action ?? null
         };
       }),
       compensations: Array.isArray(dep.compensations) ? dep.compensations.map((item) => item?.onEvent ?? null) : []

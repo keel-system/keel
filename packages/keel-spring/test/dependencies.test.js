@@ -247,3 +247,30 @@ test('sin capa dependencies el modelo y el scaffold quedan intactos (retrocompat
   assert.deepEqual(generateDependencies(model), []);
   assert.equal(model.entities.find((e) => e.name === 'ProductSnapshot').replicaOf, undefined);
 });
+
+test('una dependencia solo de activación se resuelve sin needs y no genera nada', () => {
+  const layers = baseLayers();
+  // Se le pide trabajo al proveedor; no se le lee ningún dato. El código del
+  // canal ya sale de http-clients y messaging: aquí no hay nada que materializar.
+  layers.dependencies.dependencies.notifications = {
+    description: 'Servicio de avisos al comprador.',
+    contract: { version: '1.2.0' },
+    activations: {
+      sendOrderConfirmation: {
+        triggeredBy: ['createOrder'],
+        via: { client: 'catalog', call: 'getProductsByIds' },
+        effect: 'Sale un correo de confirmación hacia el comprador.',
+        onFailure: { action: 'ignore' }
+      }
+    }
+  };
+
+  const model = modelFrom(layers);
+  const notifications = model.dependencies.find((dependency) => dependency.id === 'notifications');
+
+  assert.equal(notifications.contractVersion, '1.2.0');
+  assert.deepEqual(notifications.needs, []);
+  assert.deepEqual(notifications.compensations, []);
+  // La réplica del otro proveedor sigue generándose: una cosa no tapa la otra.
+  assert.ok(generateDependencies(model).some((file) => file.path.endsWith('ProductSnapshotProjector.java')));
+});

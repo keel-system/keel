@@ -108,7 +108,12 @@ function printDependencies(dependencies) {
   for (const dep of dependencies.dependencies) {
     const notes = [];
     if (dep.contractVersion) notes.push(`contrato ${dep.contractVersion}`);
-    notes.push(plural(dep.needs.length, 'necesidad', 'necesidades'));
+    // Las dos formas de depender se cuentan por separado, y la que vale cero no se
+    // enseña: un «0 necesidades» en una dependencia de solo activación haría pensar
+    // que falta algo, cuando lo que hay es la otra clase de dependencia.
+    if (dep.needs.length > 0) notes.push(plural(dep.needs.length, 'necesidad', 'necesidades'));
+    if (dep.activations.length > 0) notes.push(plural(dep.activations.length, 'activación', 'activaciones'));
+    if (dep.needs.length === 0 && dep.activations.length === 0) notes.push('sin necesidades ni activaciones');
     if (dep.compensations.length > 0) notes.push(`compensa ante ${dep.compensations.join(', ')}`);
     console.log(`  ${pc.dim('•')} ${dep.name}${pc.dim(` (${notes.join(', ')})`)}`);
     for (const need of dep.needs) {
@@ -123,6 +128,13 @@ function printDependencies(dependencies) {
       console.log(
         `      ${pc.dim('-')} ${need.name}  ${pc.cyan(need.strategy ?? '?')}${detail.length > 0 ? pc.dim(` (${detail.join('; ')})`) : ''}`
       );
+    }
+    for (const action of dep.activations) {
+      const detail = [];
+      detail.push(action.publishes ? `publica ${action.publishes}` : `${action.client}.${action.call}`);
+      if (action.onFailure) detail.push(`onFailure: ${action.onFailure}`);
+      if (action.triggeredBy.length > 0) detail.push(`disparada por ${action.triggeredBy.join(', ')}`);
+      console.log(`      ${pc.dim('-')} ${action.name}  ${pc.cyan(`activa: ${action.awaits}`)}${pc.dim(` (${detail.join('; ')})`)}`);
     }
   }
 }

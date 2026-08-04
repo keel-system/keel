@@ -27,7 +27,11 @@ export function showSystem({ json = false } = {}) {
     console.log(pc.bold('Mapa de contextos'));
     for (const edge of contexts) {
       const detail = [edge.kind, edge.strategy, edge.blocking ? null : 'no bloqueante'].filter(Boolean).join(', ');
-      console.log(`  ${edge.to} ${pc.dim('←')} ${edge.from} ${pc.dim(`(${detail})`)}: ${edge.what.join(', ')}`);
+      // La flecha va en el sentido de la relación, no en el de la dependencia:
+      // `←` es "le lee un dato" y `→` es "le pide trabajo". Dibujar las dos igual
+      // borraría precisamente lo que distingue a una arista de la otra.
+      const arrow = edge.relation === 'invokes' ? pc.dim('→') : pc.dim('←');
+      console.log(`  ${edge.to} ${arrow} ${edge.from} ${pc.dim(`(${detail})`)}: ${edge.what.join(', ')}`);
     }
   }
 

@@ -179,6 +179,7 @@ test('summarizeService resume las capas opcionales', (t) => {
       {
         name: 'OrderPlaced',
         source: 'orders',
+        nature: 'fact',
         channel: null,
         external: false,
         triggers: 'createInvoice',

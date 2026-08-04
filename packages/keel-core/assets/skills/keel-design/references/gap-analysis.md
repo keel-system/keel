@@ -173,14 +173,22 @@ Por cada suscripción:
 
 *Aplica si:* hay capa `dependencies`, `http-clients` o suscripciones a eventos ajenos.
 
-Si el servicio declara la capa `dependencies`, este barrido se hace **por `need`**, no por cliente: la unidad de análisis es el dato que necesitamos, no el canal por el que llega.
+Si el servicio declara la capa `dependencies`, este barrido se hace **por `need` y por `activation`**, no por cliente: la unidad de análisis es el dato que necesitamos o el trabajo que encargamos, no el canal por el que viaja.
 
-Por cada cliente de `http-clients`, cada suscripción y cada `need`:
+Por cada cliente de `http-clients`, cada suscripción, cada `need` y cada `activation`:
 
 - Cuando la dependencia **cae o tarda**, ¿qué ve el llamante de nuestra API? ¿Un error declarado con `code` propio, o un fallo genérico? Un timeout sin traducción a error de negocio es un hueco de contrato.
 - El `fallback` del circuit breaker: ¿produce un resultado **correcto** (valor por defecto aceptable para el negocio) o solo evita el error? Un fallback que devuelve datos falsos silenciosamente es peor que fallar. **Mismo criterio para `onMiss.action: degrade`**: si el cliente no puede distinguir la respuesta degradada de la normal, no es degradación, es un bug declarado.
 - ¿La llamada externa ocurre **dentro** de una transacción de escritura? Si sí, un timeout deja la transacción abierta: hay que separar. Ojo con los `need` de `strategy: on-demand` usados por un `command`.
-- Si la llamada externa es una **escritura** que no podemos deshacer y luego fallamos, ¿queda inconsistencia? ¿Hay compensación? Si la hay, ¿está declarada en `dependencies.<dep>.compensations` y respaldada por una suscripción real, o solo vive en la conversación?
+- Si la llamada externa es una **escritura** que no podemos deshacer y luego fallamos, ¿queda inconsistencia? ¿Hay compensación? Si la hay, ¿está declarada en `dependencies.<dep>.compensations` (con su `undoes` apuntando a la activación que revierte) y respaldada por una suscripción real, o solo vive en la conversación?
+
+Por cada `activation`:
+
+- ¿Está en la casilla correcta? Un `need` con `strategy: on-demand` cuyo `fetchedFrom` apunta a una llamada que **cambia estado** en el proveedor y cuya respuesta no decide nada es una activación mal declarada: el acoplamiento va al revés de como está escrito y queda fuera del mapa del sistema.
+- Si ese trabajo **no llegara a hacerse**, ¿quién lo echaría de menos y cuándo se enteraría? Es la pregunta que valida el `awaits` y el `onFailure`: con `awaits: nothing` o `onFailure: ignore` la operación propia responde éxito y el trabajo puede no existir nunca.
+- ¿La activación ocurre **dentro** de la transacción de escritura? Además del timeout, hay un segundo problema que no tiene el `need`: si la transacción falla después, el trabajo ya se encargó y no se deshace solo.
+- Con `via: { publishes }`, ¿el proveedor lo declara como `nature: request` en su diseño? Si lo consume como `fact`, nadie se ha comprometido a atenderlo: publicamos y esperamos.
+- ¿El `effect` describe lo que el proveedor **hace de verdad**, sacado de su contrato, o es el nombre de la llamada repetido?
 
 Por cada `need` con `strategy: replicated`:
 

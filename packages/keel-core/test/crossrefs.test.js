@@ -1596,7 +1596,7 @@ test('cliente http que ningún need usa es warning', () => {
     calls: { quote: { contract: 'POST /quotes -> coste de envío.' } },
   };
   const { warnings } = run(layers);
-  assert.ok(warnings.some((w) => w.includes('clients.shipping: ningún need de dependencies lo usa')));
+  assert.ok(warnings.some((w) => w.includes('clients.shipping: ningún need ni activación de dependencies lo usa')));
 });
 
 test('suscripción cuyo source no está en dependencies es warning', () => {
@@ -1608,6 +1608,155 @@ test('suscripción cuyo source no está en dependencies es warning', () => {
   };
   const { warnings } = run(layers);
   assert.ok(warnings.some((w) => w.includes(`subscriptions.StockDepleted: su source 'inventory' no está declarado`)));
+});
+
+// --- dependencies: activaciones (pedirle trabajo a otro, no leerle un dato) ----
+
+/**
+ * Un servicio que no lee nada de `notifications`: solo le pide que envíe el
+ * aviso. Es el caso que antes había que disfrazar de `need`.
+ */
+const activationLayers = () => ({
+  domain: { entities: { Order: entity({ total: { type: 'decimal', required: true } }) } },
+  'use-cases': {
+    operations: {
+      confirmOrder: {
+        description: 'Confirma el pedido y avisa al comprador.',
+        kind: 'command',
+        input: { fields: { orderId: { type: 'uuid', required: true } } },
+        output: { entity: 'Order' },
+        errors: [{ code: 'NOTICE_UNAVAILABLE', when: 'No se pudo encargar el aviso al comprador.' }],
+      },
+    },
+  },
+  api: { endpoints: { confirmOrder: { method: 'POST', path: '/orders/{orderId}/confirm' } } },
+  security: { authentication: { protocol: 'oidc' }, access: { default: { level: 'required' } } },
+  'http-clients': {
+    clients: {
+      notifications: {
+        purpose: 'Encargar el envío de avisos al comprador.',
+        calls: { sendEmail: { contract: 'POST /emails -> acuse del encargo.' } },
+      },
+    },
+  },
+  dependencies: {
+    dependencies: {
+      notifications: {
+        description: 'Servicio de avisos: no le leemos nada, le pedimos que envíe.',
+        contract: { version: '1.2.0' },
+        activations: {
+          sendOrderConfirmation: {
+            triggeredBy: ['confirmOrder'],
+            via: { client: 'notifications', call: 'sendEmail' },
+            effect: 'Sale un correo de confirmación hacia el comprador.',
+            onFailure: { action: 'fail', error: 'NOTICE_UNAVAILABLE' },
+          },
+        },
+      },
+    },
+  },
+  persistence: { default: { model: 'relational' }, entities: { Order: {} } },
+});
+
+const activation = (layers) => layers.dependencies.dependencies.notifications.activations.sendOrderConfirmation;
+
+test('una dependencia solo de activación valida limpia, sin need inventado', () => {
+  const { errors, warnings } = run(activationLayers());
+  assert.deepEqual(errors, []);
+  // La regresión que motivó todo esto: el cliente HTTP ya no queda huérfano por
+  // no colgar de ningún `need`.
+  assert.deepEqual(warnings, []);
+});
+
+test('triggeredBy hacia una operación inexistente es error', () => {
+  const layers = activationLayers();
+  activation(layers).triggeredBy = ['cancelOrder'];
+  const { errors } = run(layers);
+  assert.ok(errors.some((e) => e.includes(`triggeredBy: la operación 'cancelOrder' no existe en use-cases`)));
+});
+
+test('via hacia una llamada que no existe es error', () => {
+  const layers = activationLayers();
+  activation(layers).via = { client: 'notifications', call: 'sendSms' };
+  const { errors } = run(layers);
+  assert.ok(errors.some((e) => e.includes(`via: la llamada 'sendSms' no existe en http-clients`)));
+});
+
+test('activar por evento exige que el evento se publique', () => {
+  const layers = activationLayers();
+  activation(layers).via = { publishes: 'DeliveryRequested' };
+  delete activation(layers).onFailure;
+  delete layers['http-clients'];
+
+  const missing = run(layers);
+  assert.ok(missing.errors.some((e) => e.includes(`el evento 'DeliveryRequested' no está en messaging: publishing.events`)));
+
+  layers.messaging = {
+    publishing: {
+      events: { DeliveryRequested: { payload: { recipient: { type: 'string', required: true } } } },
+    },
+  };
+  const declared = run(layers);
+  assert.deepEqual(declared.errors, []);
+});
+
+test('awaits outcome por evento es contradictorio', () => {
+  const layers = activationLayers();
+  delete layers['http-clients'];
+  activation(layers).via = { publishes: 'DeliveryRequested' };
+  activation(layers).awaits = 'outcome';
+  delete activation(layers).onFailure;
+  layers.messaging = {
+    publishing: { events: { DeliveryRequested: { payload: { recipient: { type: 'string', required: true } } } } },
+  };
+  const { errors } = run(layers);
+  assert.ok(errors.some((e) => e.includes(`awaits: 'outcome' exige un canal síncrono`)));
+});
+
+test('onFailure.error debe declararlo alguna operación', () => {
+  const layers = activationLayers();
+  activation(layers).onFailure = { action: 'fail', error: 'MAILBOX_FULL' };
+  const { errors } = run(layers);
+  assert.ok(errors.some((e) => e.includes(`onFailure.error: el código 'MAILBOX_FULL' no lo declara ninguna operación`)));
+});
+
+test('compensations.undoes hacia una activación inexistente es error', () => {
+  const layers = activationLayers();
+  layers.messaging = {
+    subscriptions: {
+      OrderPaymentFailed: {
+        source: 'notifications',
+        payload: { orderId: { type: 'uuid', required: true } },
+        triggers: 'confirmOrder',
+      },
+    },
+  };
+  layers.dependencies.dependencies.notifications.compensations = [
+    { onEvent: 'OrderPaymentFailed', undoes: 'sendOrderCancellation' },
+  ];
+  const { errors } = run(layers);
+  assert.ok(errors.some((e) => e.includes(`undoes: la activación 'sendOrderCancellation' no existe`)));
+});
+
+test('una suscripción request no le debe dependencia a quien la activa', () => {
+  const layers = activationLayers();
+  layers.messaging = {
+    subscriptions: {
+      DeliveryRequested: {
+        source: 'storefront',
+        nature: 'request',
+        payload: { orderId: { type: 'uuid', required: true } },
+        triggers: 'confirmOrder',
+      },
+    },
+  };
+  const asRequest = run(layers);
+  assert.ok(!asRequest.warnings.some((w) => w.includes(`su source 'storefront' no está declarado`)), asRequest.warnings.join('\n'));
+
+  // Como hecho al que reaccionamos por cuenta propia, sí es una dependencia.
+  layers.messaging.subscriptions.DeliveryRequested.nature = 'fact';
+  const asFact = run(layers);
+  assert.ok(asFact.warnings.some((w) => w.includes(`su source 'storefront' no está declarado`)));
 });
 
 test('strategy on-demand no arrastra persistence ni messaging', () => {

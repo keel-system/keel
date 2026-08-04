@@ -179,21 +179,11 @@ services:
     owns: [Booking, Passenger, BookingItem]
     publishes: [BookingConfirmed, BookingCancelled]
     consumes:
-      - from: seat-inventory
-        kind: http
-        what: [retención del asiento, confirmación del asiento]
-        strategy: on-demand
-        why: No se puede confirmar una reserva sin saber en ese instante que el asiento quedó retenido.
       - from: fare-pricing
         kind: http
         what: [precio total con impuestos del itinerario]
         strategy: on-demand
         why: Las tarifas cambian a diario; cotizar con un precio viejo es cobrar mal.
-      - from: payments
-        kind: http
-        what: [inicio del cobro de la reserva]
-        strategy: on-demand
-        why: La reserva se confirma solo si el cobro se acepta.
       - from: payments
         kind: events
         what: [resultado del cobro]
@@ -201,6 +191,21 @@ services:
         why: >
           La captura puede resolverse después de responder al usuario; el fallo tiene que liberar el
           asiento sin que nadie esté esperando.
+    # Lo que sigue NO son datos que booking lea: son trabajos que encarga. Retener un
+    # asiento y cobrar cambian estado en el otro servicio, y booking tiene que conocer la
+    # firma de entrada de los dos. De ahí que la flecha la dibuje él y que los dos vayan
+    # antes que booking en el orden de construcción.
+    invokes:
+      - to: seat-inventory
+        kind: http
+        what: [retener el asiento, confirmar el asiento]
+        why: >
+          No se puede confirmar una reserva sin saber en ese instante que el asiento quedó
+          retenido: hace falta el desenlace, no un aviso.
+      - to: payments
+        kind: http
+        what: [iniciar el cobro de la reserva]
+        why: La reserva se confirma solo si el cobro se acepta; el resultado tardío llega por evento.
 
   payments:
     summary: Cobro y reembolso contra la pasarela contratada.
@@ -208,11 +213,10 @@ services:
     notResponsible: [qué se está cobrando, quién es el pasajero, el itinerario]
     owns: [Payment, Refund]
     publishes: [PaymentCaptured, PaymentFailed, RefundIssued]
-    consumes:
-      - from: card-gateway
+    invokes:
+      - to: card-gateway
         kind: http
-        what: [autorización de la tarjeta, captura del cargo, devolución]
-        strategy: on-demand
+        what: [autorizar la tarjeta, capturar el cargo, devolver el importe]
         why: El cargo real lo ejecuta la pasarela ya contratada; aquí se orquesta y se registra.
 
   card-gateway:
@@ -245,6 +249,11 @@ services:
     notResponsible: [decidir si una reserva es válida, emitir el billete, reembolsar]
     owns: [Notification, Template]
     derivedFrom: notifications-multichannel
+    # Aquí notifications es REACTIVO, no encargado: nadie le pide que avise, él decide
+    # avisar ante hechos que ya pasaron, y por eso las aristas las dibuja él. El contraste
+    # con `booking → payments` (arriba) es exactamente la distinción de esta skill: si el
+    # TDR dijera "booking le pasa a notifications la plantilla y el destinatario", entonces
+    # booking conocería su firma y la arista sería un `invokes` de booking.
     consumes:
       - from: booking
         kind: events
@@ -275,7 +284,8 @@ system: airline-ticketing
 wave: 2
 publishes: [SeatHeld, SeatReleased, SeatConfirmed]
 consumes: [{ from: flight-catalog, kind: events, strategy: replicated, blocking: true }]
-consumedBy: [booking]
+consumedBy: []
+invokedBy: [booking]
 ---
 # Brief — seat-inventory
 

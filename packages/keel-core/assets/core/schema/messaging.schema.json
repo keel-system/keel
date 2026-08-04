@@ -73,6 +73,12 @@
             "type": "string",
             "description": "Servicio o sistema que origina el evento."
           },
+          "nature": {
+            "type": "string",
+            "enum": ["fact", "request"],
+            "default": "fact",
+            "description": "Qué es el mensaje para este servicio. fact: un hecho que ocurrió en el origen y al que reaccionamos por nuestra cuenta; el origen no sabe que existimos y es una dependencia nuestra. request: una petición de trabajo dirigida a nosotros; su payload es CONTRATO PÚBLICO de entrada de este servicio (va al §Suscripciones del INTEGRATION.md), quien lo emite se acopla a nosotros, y su source no es una dependencia."
+          },
           "channel": {
             "type": "string",
             "pattern": "^[a-z][A-Za-z0-9]*$",

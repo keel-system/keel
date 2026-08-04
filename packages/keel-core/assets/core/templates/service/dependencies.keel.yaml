@@ -1,6 +1,13 @@
 # Capa dependencies — de qué otros servidores depende este servicio.
-# Declara, por proveedor, qué dato ajeno se necesita (needs), quién lo necesita (usedBy),
-# dónde vive la verdad que se lee (strategy) y qué pasa cuando falta (onMiss).
+#
+# Hay DOS formas de depender de otro, y se declaran por separado:
+#   needs        → le LEO un dato: qué dato, quién lo necesita (usedBy), dónde vive la
+#                  verdad que se lee (strategy) y qué pasa cuando falta (onMiss).
+#   activations  → le PIDO que haga algo: qué trabajo, quién lo dispara (triggeredBy),
+#                  por qué canal (via), qué efecto tiene y qué pasa si no sale.
+# El corte: "¿me llevo un dato suyo, o le dejo un trabajo?". Al leer, el proveedor no
+# sabe que existimos; al activarlo, somos NOSOTROS los que nos acoplamos a su firma de
+# entrada. Un mismo proveedor puede aparecer de las dos formas en un solo bloque.
 #
 # Regla de la capa: REFERENCIA, nunca redeclara.
 #   - el método, la ruta, el timeout y la resiliencia de la llamada → http-clients
@@ -36,3 +43,21 @@ dependencies:
   #   compensations:
   #     - onEvent: OrderPaymentFailed              # suscripción existente en messaging
   #       description: Al fallar el cobro se revierte la reserva hecha contra catalog.
+  #       # undoes: reserveStock                   # activación de este proveedor que se deshace
+  #
+  # notifications:
+  #   description: Servicio de avisos. No le leemos nada: le pedimos que envíe.
+  #   contract:
+  #     version: "1.2.0"
+  #     source: contracts/notifications/INTEGRATION.md
+  #   activations:
+  #     sendOrderConfirmation:
+  #       description: El aviso al comprador es trabajo de notifications, no nuestro.
+  #       triggeredBy: [confirmOrder]              # operaciones de use-cases que lo disparan
+  #       via: { publishes: DeliveryRequested }    # evento propio de messaging: publishing…
+  #       # via: { client: notifications, call: sendEmail }   # …o llamada de http-clients
+  #       effect: Sale un correo de confirmación hacia el comprador.
+  #       awaits: nothing                          # outcome | acknowledgement | nothing
+  #       # onFailure:                             # obligatorio solo con via de http-clients
+  #       #   action: degrade                      # fail | degrade | ignore
+  #       #   degradedTo: El pedido se confirma y el aviso se reintenta aparte.

@@ -101,9 +101,27 @@ Es también la forma que asume `envelope: keel` al describir el [contrato de rec
 ## Suscripciones
 
 - Cada suscripción indica su `source`, el `payload` esperado y la operación local que dispara (`triggers`, referencia por nombre a `use-cases`).
+- `nature` declara **qué es el mensaje para este servicio**, y es lo que decide de qué lado cae el acoplamiento (ver abajo).
 - `onFailure` declara la política de consumo: `retry` (reintentos con backoff) y `deadLetter` (tras agotarlos, el mensaje va a una DLQ).
 - `retry` admite `maxAttempts` (obligatorio), `backoff` (`fixed` | `exponential`, por defecto `exponential`), `initialDelayMs` y `maxDelayMs` (tope al que la espera deja de crecer con `backoff: exponential`) — el mismo juego de campos que `http-clients`.
 - Si una suscripción reintenta (`maxAttempts > 1`), la operación disparada debería declarar `idempotency` — la skill `/keel-validate` lo comprueba.
+
+### `nature` — hecho ajeno o petición dirigida a nosotros
+
+Dos mensajes idénticos en el cable pueden significar cosas opuestas, y de eso depende quién se acopla a quién.
+
+| | `fact` (por defecto) | `request` |
+|---|---|---|
+| Qué es | Algo que **pasó** en el origen | Algo que nos **piden** hacer |
+| Quién decide el payload | El emisor, para describir su hecho | **Nosotros**: es nuestra firma de entrada |
+| Quién se acopla | Nosotros al emisor | El emisor a nosotros |
+| El emisor sabe que existimos | No | Sí: nos eligió para el trabajo |
+| Es una dependencia nuestra | Sí → va en `dependencies` | No: es una puerta de entrada |
+| Dónde se publica | En nuestro diseño | En nuestro `INTEGRATION.md` §Suscripciones |
+
+Un `fact` es `OrderPlaced`: `orders` lo publica porque pasó, y quien quiera reaccionar lo hace por su cuenta. Un `request` es `DeliveryRequested`: quien lo emite nos está encargando un envío, con los campos que **nosotros** exigimos para poder hacerlo.
+
+La consecuencia práctica: un `request` **no obliga a declarar su `source` como dependencia** (no dependemos de quien nos da trabajo), y su payload es contrato público que no se puede cambiar sin avisar. El otro lado lo declara con una `activation` (`dependencies`) y una arista `invokes` (`system.yaml`); `keel system check` comprueba que las dos lecturas coinciden — si alguien nos manda trabajo y nosotros lo tratamos como `fact`, nadie se ha comprometido a atenderlo.
 
 ### Contrato de recepción (`contract`)
 
@@ -133,7 +151,8 @@ Es también la forma que asume `envelope: keel` al describir el [contrato de rec
 ## Qué NO va aquí
 
 - Qué operación emite cada evento → `use-cases` (`emits`).
-- **Por qué existe una suscripción**: de qué dependencia forma parte, qué copia local alimenta y qué compensa → capa `dependencies`. Aquí se declara el canal de entrada; allí, la razón de negocio que lo justifica.
+- **Por qué existe una suscripción `fact`**: de qué dependencia forma parte, qué copia local alimenta y qué compensa → capa `dependencies`. Aquí se declara el canal de entrada; allí, la razón de negocio que lo justifica. (Una suscripción `request` no tiene entrada en `dependencies`: su razón de ser es que alguien nos encarga trabajo, y eso se declara en el diseño de quien nos lo encarga.)
+- **A quién le pedimos trabajo publicando un evento**: eso no es una decisión de esta capa. Aquí solo vive el evento y su payload; que exista *para* que un servicio concreto actúe, y contra qué versión de su contrato, va en `dependencies: activations`.
 - La frontera transaccional que sostiene el outbox → `persistence` (`consistency`).
 - El broker concreto y el nombre físico del topic/cola que respalda cada canal → se deciden al **generar**, nunca en el spec. También el de un canal `external`, cuyo nombre real ya existe fuera: entra como parámetro de despliegue, no como dato de diseño.
 - El consumer group / la durabilidad de la suscripción y el número de consumidores → decisión de generación y despliegue.

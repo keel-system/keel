@@ -96,7 +96,9 @@ El documento tiene, en orden:
    payload de ejemplo, que es el contenido de `data` y no el mensaje completo. `### Suscripciones` (lo que
    **debe publicar** quien quiera activar una operación: origen `source`, canal, **contrato de
    recepción** — envelope, discriminador, `messageId`/clave de dedupe —, payload esperado y política
-   `onFailure`).
+   `onFailure`), **separando las `nature: request` de las `nature: fact`**: las primeras son puertas de
+   entrada de este servicio y su payload es contrato público que alguien cumple para encargarle trabajo;
+   las segundas son reacciones propias a hechos ajenos, y nadie se integra contra ellas.
 
 ## Coherencia
 

@@ -72,6 +72,7 @@ Extrae cinco inventarios **sin decidir nada todavía** y preséntalos en tablas:
 | Conceptos | Sustantivos con ciclo de vida propio | Se reparten entre servicios; luego, entidades |
 | Actores | Quién hace qué y desde dónde | Anticipa superficies (web, app, otros servidores) |
 | Eventos de negocio | Cosas que **pasan** y a alguien más le importan | Son las aristas de eventos del mapa |
+| Trabajo delegable | Cosas que hay que **hacer** y no son de quien las necesita (avisar, cobrar, auditar, facturar) | Son las aristas de **activación** del mapa |
 | Restricciones | Dinero, regulación, picos de carga, plazos, sistemas ya existentes | Fuerzan fronteras y el orden |
 
 Este paso es la mitad del valor de la skill: un TDR siempre tiene huecos, y sacarlos **antes** de
@@ -104,21 +105,43 @@ mal. Nómbralos distinto y dilo en `SYSTEM.md`.
 
 ### 4. Mapa de contextos
 
-Por cada par de servicios que conversan, decide **sentido, canal y estrategia**, y pregunta lo que
-no se deduzca del TDR:
+Por cada par de servicios que conversan, decide primero **de qué tipo es la relación**, porque de eso
+depende hacia dónde apunta la flecha:
 
-- **Sentido.** Lo dibuja quien **necesita** el dato, no quien lo tiene. Un proveedor no sabe quién le
-  consume, y esa ignorancia es la propiedad que hace que se pueda desplegar solo.
-- **Canal.** Regla de corte: si el consumidor **no puede completar su operación** sin el dato en el
-  instante → `kind: http`. Si solo necesita **reaccionar** a algo que pasó, o mantener una copia
-  local → `kind: events`.
-- **Estrategia** (`on-demand` | `replicated`). Es la misma decisión que `/keel-consume` entrevista
-  dato a dato; acordarla aquí evita reabrirla siete veces, y el brief la arrastra.
-- **`why`.** Una arista sin porqué es una integración que nadie pidió. Escríbelo siempre.
+**La pregunta de corte: ¿me llevo un dato suyo, o le dejo un trabajo?**
 
-Cada arista de eventos declara los **nombres de los eventos** (`events:`) y el proveedor los declara
-en su `publishes`. No es burocracia: es lo único que permite a `keel system check` comprobar que el
-consumidor no se está integrando contra un evento que nadie publica.
+|  | `consumes` — leer | `invokes` — activar |
+|---|---|---|
+| Qué obtiene | Un **dato** del otro | **Trabajo** que hace el otro |
+| Quién dibuja la arista | Quien **lee** | Quien **pide** |
+| Ejemplo | `booking` lee la tarifa del tramo de `flight-catalog` | `booking` le pide a `notifications` que mande el billete |
+| Quién conoce a quién | El lector conoce al proveedor; el proveedor no sabe que existe | **El que pide** conoce la firma de entrada del otro |
+
+No las mezcles. Es el error más caro del mapa: si `booking` necesita saber qué campos mandarle a
+`notifications` y lo apuntas como `notifications.consumes.from: booking`, el orden de construcción
+sale al revés — el mapa programará `booking` antes de que exista el contrato que necesita.
+
+**Señal mecánica:** mira lo que escribiste en `what`. Si es un sustantivo de dato («tarifa vigente del
+tramo», «estado del asiento») es `consumes`. Si es una acción («inicio del cobro», «retención del
+asiento», «envío del correo») es `invokes`, por mucho que técnicamente sea un `GET`.
+
+Después, por cada arista:
+
+- **Canal.**
+  - En `consumes`: si el consumidor **no puede completar su operación** sin el dato en el instante →
+    `kind: http`. Si solo necesita **reaccionar** a algo que pasó, o mantener una copia local → `kind: events`.
+  - En `invokes`: si necesita **saber cómo salió** el trabajo para continuar → `kind: http`. Si le
+    basta con encargarlo → `kind: events`.
+- **Estrategia** (solo en `consumes`: `on-demand` | `replicated`). Es la misma decisión que
+  `/keel-consume` entrevista dato a dato; acordarla aquí evita reabrirla siete veces, y el brief la arrastra.
+- **`why`.** Una arista sin porqué es una integración que nadie pidió. En un `invokes`, el porqué
+  responde además *por qué este trabajo no es nuestro*.
+
+Cada arista de eventos declara los **nombres de los eventos** (`events:`), y el otro extremo tiene que
+declararlos también, cada uno en el suyo: en un `consumes`, el proveedor los lista en su `publishes`;
+en un `invokes`, el proveedor los consume con `nature: request` (su compromiso de atenderlos). No es
+burocracia: es lo único que permite a `keel system check` comprobar que nadie se integra contra un
+evento que nadie publica ni encarga trabajo que nadie ha aceptado.
 
 ### 5. Orden de construcción
 
@@ -126,6 +149,10 @@ Marca cada arista `blocking: true|false` — **es la decisión que fija el orden
 significa "no puedo diseñar este servicio sin el `INTEGRATION.md` del proveedor", que es literalmente
 lo que pide el paso 2 de `/keel-design`. `blocking: false` significa que se puede diseñar antes: en
 modo degradado, o porque el acoplamiento va en el otro sentido.
+
+Vale para las dos clases de arista. En un `invokes` la respuesta es «sí» casi siempre y por un motivo
+más fuerte que al leer: sin el contrato de **entrada** del proveedor no se sabe qué campos mandarle,
+así que ni siquiera se puede diseñar el payload.
 
 Escribe `system.yaml` y ejecuta `keel system`. Las olas las calcula la CLI; no las escribas tú.
 
@@ -163,7 +190,9 @@ system: airline-ticketing
 wave: 2
 publishes: [SeatHeld, SeatReleased, SeatConfirmed]
 consumes: [{ from: flight-catalog, kind: events, strategy: replicated, blocking: true }]
-consumedBy: [booking]
+invokes: []
+consumedBy: []
+invokedBy: [booking]
 ---
 # Brief — seat-inventory
 
@@ -175,8 +204,10 @@ consumedBy: [booking]
 ## Qué NO es suyo
 ## Conceptos que le pertenecen (candidatos a entidad)
 ## Capacidades (candidatas a caso de uso)
-## Quién le consume y para qué        ← anticipa la superficie servidor-a-servidor
-## Integraciones acordadas en el mapa ← canal, estrategia y su porqué, por arista
+## Quién le consume y para qué        ← quién le LEE datos: anticipa la superficie de lectura M2M
+## Quién le encarga trabajo y cuál    ← quién le ACTIVA: sus operaciones son contrato de entrada,
+                                        y su firma no se podrá cambiar sin romper a quien la usa
+## Integraciones acordadas en el mapa ← canal, estrategia y su porqué, por arista (de los dos tipos)
 ## Lo que el mapa ya decidió · lo que decides tú al diseñar
 ## Extracto literal del TDR relevante
 ## Cómo arrancar

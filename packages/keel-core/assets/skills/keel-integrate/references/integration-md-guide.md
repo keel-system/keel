@@ -232,16 +232,30 @@ evento de `messaging.publishing.events`:
 ### Suscripciones
 
 Por evento de `messaging.subscriptions` — esto es lo que **debe publicar** quien quiera activar una
-operación de este servicio:
+operación de este servicio.
 
-- **Origen** (`source`) y **canal**.
+**Separa las dos naturalezas, porque no prometen lo mismo.** Una suscripción `nature: request` es una
+**puerta de entrada** de este servicio: su payload es contrato público, alguien lo emite para
+encargarnos trabajo y no podemos cambiar su firma sin romperle. Una `nature: fact` es lo contrario:
+reaccionamos por nuestra cuenta a un hecho ajeno, y el emisor ni sabe que existimos — se documenta
+como información, no como promesa. Encabeza cada grupo diciendo cuál es cuál; quien lee este archivo
+para integrarse solo puede apoyarse en las primeras.
+
+Por cada una:
+
+- **Origen** (`source`) y **canal**. En una `request`, `source` es quién nos encarga el trabajo hoy;
+  la puerta vale para quien cumpla el contrato.
 - **Contrato de recepción**: `envelope` (+ `payloadPath` si `wrapped`), `discriminator` (cómo se
   reconoce este tipo en el canal), `messageId` (**clave de deduplicación**), `format`. Con
   `envelope: keel` no repitas la forma: remite a §Publicados → *Forma del mensaje* (es la misma
   envoltura, ahora del lado de quien publica hacia este servicio). Con `wrapped`/`none`, descríbela
   aquí, que es propia de la fuente.
-- **Payload esperado** (con `wireName` si el campo llega con otro nombre en el cable).
+- **Payload esperado** (con `wireName` si el campo llega con otro nombre en el cable). En una
+  `request`, es **la firma que hay que cumplir para que hagamos el trabajo**: enumera qué campos son
+  obligatorios y qué pasa si falta alguno.
 - **Operación disparada** (`triggers`) y política `onFailure` (retry/backoff, deadLetter).
+- Solo en `request`: **qué hace este servicio al recibirlo**, en una frase. Quien lo emite necesita
+  saber qué provocó, y es lo que copiará en el `effect` de su activación.
 
 ## Checklist de cierre
 

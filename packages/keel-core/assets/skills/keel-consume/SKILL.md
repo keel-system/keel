@@ -1,6 +1,6 @@
 ---
 name: keel-consume
-description: "Diseña la integración de este servicio como consumidor de otro servidor a partir de su INTEGRATION.md: entrevista la estrategia de cada dato ajeno que necesita y escribe las capas dependencies, http-clients y messaging coherentes entre sí. Usar cuando un servicio necesite un dato que no es suyo."
+description: "Diseña la integración de este servicio con otro servidor a partir de su INTEGRATION.md: entrevista qué dato ajeno necesita y qué trabajo le encarga, y escribe las capas dependencies, http-clients y messaging coherentes entre sí. Usar cuando un servicio necesite un dato que no es suyo, o necesite que otro servicio haga algo."
 argument-hint: "<specs/servicio> [INTEGRATION.md del proveedor]"
 ---
 
@@ -62,17 +62,28 @@ auth M2M, qué eventos publica, qué versión.
 
 En modo degradado, **una lista de huecos vacía es señal de que algo se inventó**. Revísalo.
 
-## Paso 2 — inventario de necesidades
+## Paso 2 — inventario, con las dos preguntas
 
 Antes de tocar YAML, y en lenguaje de negocio. Recorre las operaciones de `use-cases` del servicio
-propio y pregunta, una a una: **¿qué dato que no es nuestro necesita esta operación para decidir?**
+propio y hazle a cada una **las dos preguntas**, porque hay dos formas de depender de otro servicio:
 
-Sale la lista de `needs`, cada uno con su `usedBy`. **Nunca al revés**: empezar por los endpoints que el
-proveedor ofrece produce clientes HTTP que ninguna operación usa (y `keel validate` te avisará de ello).
+1. **¿Qué dato que no es nuestro necesita esta operación para decidir?** → sale un `need`, con su `usedBy`.
+2. **¿Qué parte de esta operación no es responsabilidad nuestra y se la pedimos a otro?** → sale una
+   `activation`, con su `triggeredBy`.
 
-Un `need` es un dato ("el precio vigente del producto"), no un endpoint ni un evento.
+**Nunca al revés**: empezar por los endpoints que el proveedor ofrece produce clientes HTTP que ninguna
+operación usa (y `keel validate` te avisará de ello).
 
-## Paso 3 — entrevista de estrategia, por need
+El corte entre las dos, en una frase: **¿me llevo un dato suyo, o le dejo un trabajo?** Un `need` es un
+dato ("el precio vigente del producto"); una `activation` es un trabajo ("que mande el correo de
+confirmación"). No es una distinción de estilo: al leer, el proveedor no sabe que existimos; al
+activarlo, **nosotros** nos acoplamos a su firma de entrada, y eso es lo que hay que declarar. Si una
+llamada saliente es un `POST` que cambia estado en el otro y no devuelve un dato que usemos para
+decidir, es una activación, no un `need` con `strategy: on-demand`.
+
+Un mismo proveedor puede aparecer de las dos formas: un solo bloque con `needs` y `activations`.
+
+## Paso 3a — entrevista de estrategia, por need
 
 El núcleo de la skill. **Usa `AskUserQuestion`; no decidas por tu cuenta**: la estrategia cambia lo que
 el servicio puede prometer a sus clientes, y eso es del diseñador.
@@ -94,6 +105,30 @@ Si sale `replicated`, segunda ronda:
   con `degrade`, qué resultado exactamente.
 - **Qué campos** se copian: solo los que alguna operación de `usedBy` lee.
 
+## Paso 3b — entrevista de encargo, por activación
+
+También con `AskUserQuestion`, y por el mismo motivo: qué pasa cuando el trabajo delegado no se hace es
+una promesa al cliente, no un detalle técnico.
+
+1. **`effect`** — ¿qué hace exactamente el proveedor al recibirlo? En lenguaje de negocio, y **sacado de
+   su `INTEGRATION.md`, no supuesto**. Si no está claro qué provoca la llamada, no está claro el encargo.
+2. **`awaits`** — ¿esta operación necesita **el resultado** del trabajo para continuar (`outcome`), le
+   basta con que el proveedor lo aceptara (`acknowledgement`), o lo delega y sigue (`nothing`)? Pregúntalo
+   así, en consecuencias: con `acknowledgement` o `nothing`, el trabajo **puede no llegar a hacerse** y
+   la operación propia habrá respondido que todo fue bien. ¿Es aceptable?
+3. **`via`** — el canal se deduce de lo anterior, no se elige por gusto: `outcome` exige una llamada de
+   `http-clients`; un encargo que se delega puede ir por un evento propio (`{ publishes: <Evento> }`).
+4. **`onFailure`** (solo con `via` HTTP) — `fail` con qué error visible, `degrade` con qué resultado
+   exacto, o `ignore`. Cuidado con `ignore`: solo es honesto si el negocio de verdad no cuenta con ese
+   trabajo; si alguien lo va a echar de menos, es `fail` o `degrade`.
+5. **`contract.version`** — con más razón que al leer. Una activación nos acopla al contrato de
+   **entrada** del proveedor, y un campo nuevo obligatorio en su firma nos rompe sin que toquemos nada.
+
+**Si la activación va por evento**, hay un compromiso del otro lado que hay que verificar, no suponer:
+su diseño tiene que declarar ese evento en `messaging: subscriptions.<Evento>` con `nature: request`. Si
+en su `INTEGRATION.md` §Suscripciones no aparece, no está aceptando el encargo: publicar el evento y
+esperar que actúe es una integración que nadie ha acordado. Decláralo como hueco y di a quién pedírselo.
+
 ## Paso 4 — escritura coherente, en una pasada
 
 Los artefactos se tocan **juntos o quedan incoherentes**; esta es la razón de ser de la skill. Escríbelos
@@ -104,18 +139,24 @@ en orden de capa y valida con `keel validate --wip` sobre la marcha.
 | `domain` | La entidad de la copia, con **solo los campos que este servicio lee**, `unique: true` en el `keyField`, y una `description` que diga que es una proyección de `<proveedor>` y **no fuente de verdad**. Nunca copies el agregado ajeno entero. |
 | `use-cases` | La **operación de proyección** (`internal: true`, p. ej. `applyProductSnapshot`) que la suscripción dispara — una réplica la exige, porque `subscriptions.triggers` es obligatorio. Y los `errors` nuevos que exige `onMiss.action: fail`, en **cada** operación de `usedBy`. |
 | `http-clients` | `clients.<proveedor>` con `purpose`, `auth` derivado de `m2mAuth` (`client-credentials` → `oauth2-client-credentials`; **si el front-matter no da `tokenUrl`, pregúntalo**, el schema lo exige), y una `calls.<name>` por endpoint que se use, con `contract` en prosa + `method`/`path` del front-matter + `request`/`response` tipados del cuerpo. `timeoutMs`, `retry`, `circuitBreaker` y `fallback` se **entrevistan**, nunca se ponen por defecto. |
-| `messaging` | El canal con `external: true`, y una `subscriptions.<Evento>` por cada evento de `fedBy` y por cada compensación: `source` = nombre del proveedor, `contract` (`envelope: keel` si el proveedor es un servicio Keel), `payload`, `triggers` y `onFailure`. |
+| `messaging` (entrada) | El canal con `external: true`, y una `subscriptions.<Evento>` por cada evento de `fedBy` y por cada compensación: `source` = nombre del proveedor, `contract` (`envelope: keel` si el proveedor es un servicio Keel), `payload`, `triggers` y `onFailure`. |
+| `messaging` (salida) | Con una activación por evento: el `publishing.events.<Evento>` que se emite, **con el payload que exige el proveedor** — lo copias de su `INTEGRATION.md` §Suscripciones, campo a campo; su firma la fija él, no nosotros. |
 | `persistence` | La entidad de la copia en `entities`, con índice por `keyField`. |
-| `dependencies` + manifiesto | La capa entera (síntesis de todo lo anterior) y `layers.dependencies` en `service.keel.yaml`. |
+| `dependencies` + manifiesto | La capa entera (síntesis de todo lo anterior: `needs` y `activations`) y `layers.dependencies` en `service.keel.yaml`. |
 | `security` | **Nada** — y dilo al usuario: `serviceClients` cataloga a quien nos consume a nosotros; como consumidores no aportamos scopes propios. |
 
 ## Paso 5 — cierre
 
 1. `keel validate specs/<servicio>` (sin `--wip` si el resto del diseño está cerrado; con `--wip` si
    `/keel-consume` se ejecutó a mitad de `/keel-design`).
-2. Resume lo escrito: dependencias, needs con su estrategia, y qué capas se tocaron.
+2. Resume lo escrito: dependencias, needs con su estrategia, activaciones con su `awaits`, y qué capas
+   se tocaron.
 3. **Lista de huecos**, cada uno con a quién pedírselo.
-4. Sugiere el barrido de las clases 7 y 8 de `keel-design/references/gap-analysis.md` sobre lo escrito.
+4. Si el workspace tiene `system.yaml`, avisa de qué aristas hay que añadirle: los proveedores nuevos de
+   los que se **lee** van a `consumes` del servicio, y aquellos a los que se les **encarga** trabajo van
+   a `invokes`. `keel system check` lo reportará si no; y una activación apuntada como `consumes` del
+   proveedor hacia nosotros invierte el orden de construcción.
+5. Sugiere el barrido de las clases 7 y 8 de `keel-design/references/gap-analysis.md` sobre lo escrito.
 
 ## Modo diff — el proveedor publica una versión nueva
 
@@ -135,4 +176,9 @@ hallazgo grave, no una línea a borrar: esa copia se queda sin una de sus vías 
 - Inventar rutas, payloads, `messageId` o `discriminator`.
 - Declarar una llamada HTTP que ninguna operación usa, o una suscripción que no alimenta ninguna réplica
   ni dispara nada.
+- **Declarar como `need` lo que es una activación** — un `strategy: on-demand` cuyo `fetchedFrom` apunta
+  a una llamada que no devuelve ningún dato que se use para decidir. Valida, y miente: dice que el dato
+  vive en el proveedor cuando lo que vive allí es el trabajo, y deja el acoplamiento fuera del mapa.
+- Inventar el payload de un evento de activación. Su firma la fija el proveedor, y sale de su
+  `INTEGRATION.md` §Suscripciones o no sale.
 - Tocar `security` para añadirnos como cliente de nosotros mismos.

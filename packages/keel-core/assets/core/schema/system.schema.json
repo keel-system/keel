@@ -99,9 +99,15 @@
         },
         "consumes": {
           "type": "array",
-          "description": "Aristas del mapa de contextos: de quién necesita algo este servicio. Una arista por proveedor y canal.",
+          "description": "Aristas de LECTURA: de quién necesita un dato este servicio para decidir. La dibuja quien lee. Una arista por proveedor y canal.",
           "minItems": 1,
           "items": { "$ref": "#/$defs/edge" }
+        },
+        "invokes": {
+          "type": "array",
+          "description": "Aristas de ACTIVACIÓN: a quién le pide este servicio que haga algo. La dibuja quien pide, porque es él quien tiene que conocer la firma de entrada del otro — y por eso es él quien va después en el orden de construcción. Una arista por proveedor y canal.",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/invocation" }
         }
       }
     },
@@ -117,11 +123,11 @@
         },
         "kind": {
           "enum": ["http", "events"],
-          "description": "Canal. http: el consumidor no puede completar su operación sin el dato en el instante. events: solo necesita reaccionar o mantener una copia."
+          "description": "Canal por el que llega el dato. http: el consumidor no puede completar su operación sin el dato en el instante. events: solo necesita reaccionar o mantener una copia. (Pedirle trabajo al proveedor no es esto: eso es `invokes`.)"
         },
         "what": {
           "type": "array",
-          "description": "Qué necesita, en lenguaje de negocio (ej. 'tarifa vigente del tramo'). Se convierte en los `needs` de la capa dependencies al diseñar.",
+          "description": "Qué DATO necesita, en lenguaje de negocio (ej. 'tarifa vigente del tramo'). Se convierte en los `needs` de la capa dependencies al diseñar. Si lo que se escribe aquí es una acción ('inicio del cobro', 'retención del asiento'), la arista está mal: es una invocación y va en `invokes`.",
           "minItems": 1,
           "uniqueItems": true,
           "items": { "type": "string", "minLength": 3 }
@@ -145,7 +151,48 @@
         "blocking": {
           "type": "boolean",
           "default": true,
-          "description": "¿Hace falta el INTEGRATION.md del proveedor para poder diseñar este servicio? Es la única arista que cuenta para el orden de construcción. false significa que este servicio se puede diseñar antes, en modo degradado o porque el acoplamiento va en el otro sentido."
+          "description": "¿Hace falta el INTEGRATION.md del proveedor para poder diseñar este servicio? Cuenta para el orden de construcción, igual que el de una invocación. false significa que este servicio se puede diseñar antes, en modo degradado o porque el acoplamiento va en el otro sentido."
+        }
+      }
+    },
+    "invocation": {
+      "type": "object",
+      "required": ["to", "kind", "what", "why"],
+      "additionalProperties": false,
+      "description": "Arista de activación: este servicio le pide a otro que haga algo. Se convierte en las `activations` de la capa dependencies al diseñar.",
+      "properties": {
+        "to": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$",
+          "description": "Servicio que hace el trabajo. Debe existir como clave de `services`."
+        },
+        "kind": {
+          "enum": ["http", "events"],
+          "description": "Canal por el que se le pide. http: se le llama y se espera su respuesta. events: se le manda un mensaje-petición y se sigue. En ambos casos la firma la fija el proveedor."
+        },
+        "what": {
+          "type": "array",
+          "description": "Qué se le pide que HAGA, en lenguaje de negocio (ej. 'enviar el correo de confirmación al comprador'). Un dato no va aquí: eso es `consumes`.",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 3 }
+        },
+        "events": {
+          "type": "array",
+          "description": "Con kind: events, los mensajes-petición que este servicio emite. `keel system check` comprueba que el proveedor los consume como suscripción de naturaleza `request`: si los trata como un hecho, nadie se ha comprometido a hacer el trabajo.",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[A-Z][A-Za-z0-9]*$" }
+        },
+        "why": {
+          "type": "string",
+          "minLength": 10,
+          "description": "Por qué este servicio delega este trabajo en vez de hacerlo, y por qué por este canal."
+        },
+        "blocking": {
+          "type": "boolean",
+          "default": true,
+          "description": "¿Hace falta el INTEGRATION.md del proveedor para poder diseñar este servicio? Por defecto sí, y con más razón que al leer: sin su contrato de entrada no se sabe qué mandarle. Es lo que coloca al invocador DESPUÉS del proveedor en las olas."
         }
       }
     }

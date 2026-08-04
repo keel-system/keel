@@ -150,8 +150,24 @@ function readSpec(cwd, name) {
     // INTEGRATION.md al día, `/keel-design` entra en modo degradado.
     contract: integration?.status ?? 'not-applicable',
     dependencies: (summary.dependencies?.dependencies ?? []).map((dep) => dep.name),
+    // Un proveedor al que solo se le pide trabajo también es una dependencia del
+    // diseño, pero se contrasta contra `invokes`, no contra `consumes`.
+    activatedProviders: (summary.dependencies?.dependencies ?? [])
+      .filter((dep) => (dep.activations ?? []).length > 0)
+      .map((dep) => dep.name),
+    readProviders: (summary.dependencies?.dependencies ?? [])
+      .filter((dep) => (dep.needs ?? []).length > 0)
+      .map((dep) => dep.name),
     published: summary.messaging?.published ?? [],
-    subscriptions: (summary.messaging?.subscriptions ?? []).map((sub) => ({ name: sub.name, source: sub.source }))
+    subscriptions: (summary.messaging?.subscriptions ?? []).map((sub) => ({
+      name: sub.name,
+      source: sub.source,
+      nature: sub.nature ?? 'fact'
+    })),
+    // Para comprobar que a quien se invoca por HTTP enseña de verdad una puerta M2M.
+    machineEndpoints: (summary.api?.endpoints ?? []).filter((endpoint) =>
+      ['services', 'both'].includes(endpoint.audience)
+    ).length
   };
 }
 
@@ -160,6 +176,11 @@ function readSpec(cwd, name) {
  * **bloqueantes** hacia servicios que diseñamos aquí: un proveedor externo ya
  * tiene contrato y uno no bloqueante se puede diseñar en paralelo (en modo
  * degradado, o porque el acoplamiento va en el otro sentido).
+ *
+ * Cuentan las dos direcciones de dependencia, y por el mismo motivo: hace falta
+ * el contrato del otro para diseñarse. Al leer (`consumes`) es su contrato de
+ * salida; al pedirle trabajo (`invokes`) es el de entrada, sin el cual no se
+ * sabe qué mandarle.
  *
  * Kahn por niveles, cada nivel ordenado alfabéticamente. Lo que no entra en
  * ninguna ola es un ciclo: se devuelve aparte para que quien llame lo reporte.
@@ -177,6 +198,11 @@ function computeWaves(services) {
       if (edge.blocking === false) continue;
       if (!buildable.includes(edge.from) || edge.from === name) continue;
       required.add(edge.from);
+    }
+    for (const edge of entry.invokes ?? []) {
+      if (edge.blocking === false) continue;
+      if (!buildable.includes(edge.to) || edge.to === name) continue;
+      required.add(edge.to);
     }
     for (const before of entry.after ?? []) {
       if (buildable.includes(before) && before !== name) required.add(before);
@@ -201,18 +227,37 @@ function computeWaves(services) {
 
 /**
  * Aristas del mapa como lista plana, para la vista de contextos y el JSON.
+ *
+ * `from`/`to` es siempre proveedor → dependiente, venga la arista de un
+ * `consumes` (el dependiente lee) o de un `invokes` (el dependiente pide). Lo
+ * que las distingue es `relation`: quien pinta el mapa necesita saber si la
+ * flecha transporta un dato o una petición de trabajo.
  */
 function flattenEdges(services) {
   const edges = [];
-  for (const to of Object.keys(services).sort()) {
-    for (const edge of services[to].consumes ?? []) {
+  for (const name of Object.keys(services).sort()) {
+    for (const edge of services[name].consumes ?? []) {
       edges.push({
         from: edge.from,
-        to,
+        to: name,
+        relation: 'reads',
         kind: edge.kind,
         what: edge.what,
         events: edge.events ?? null,
         strategy: edge.strategy ?? null,
+        blocking: edge.blocking !== false,
+        why: edge.why
+      });
+    }
+    for (const edge of services[name].invokes ?? []) {
+      edges.push({
+        from: edge.to,
+        to: name,
+        relation: 'invokes',
+        kind: edge.kind,
+        what: edge.what,
+        events: edge.events ?? null,
+        strategy: null,
         blocking: edge.blocking !== false,
         why: edge.why
       });
@@ -300,6 +345,82 @@ export function buildSystemPlan(cwd = process.cwd()) {
         }
       }
     }
+    // --- Aristas de activación: este servicio le pide trabajo a otro ---------
+    const invoked = new Set();
+    for (const edge of entry.invokes ?? []) {
+      const label = `services.${name}.invokes[${edge.to}]`;
+      if (edge.to === name) {
+        findings.push(error(`${label}: un servicio no se invoca a sí mismo.`));
+        continue;
+      }
+      if (!(edge.to in declared)) {
+        findings.push(error(`${label}: '${edge.to}' no está declarado en services. Añádelo al mapa o corrige la arista.`));
+        continue;
+      }
+      const key = `${edge.to}/${edge.kind}`;
+      if (invoked.has(key)) {
+        findings.push(warning(`${label}: hay dos aristas ${edge.kind} contra '${edge.to}'. Únelas en una con todos sus 'what'.`));
+      }
+      invoked.add(key);
+      if (edge.kind === 'http' && edge.events) {
+        findings.push(warning(`${label}: 'events' solo aplica a aristas de tipo events; en una arista http no significa nada.`));
+      }
+      if (edge.kind === 'events' && !edge.events) {
+        findings.push(
+          warning(
+            `${label}: arista de eventos sin 'events'. Sin los nombres del mensaje no se puede comprobar que '${edge.to}' se comprometa a atenderlo.`
+          )
+        );
+      }
+
+      // Un mensaje no puede ser a la vez una petición que le hacemos y un hecho
+      // nuestro al que el otro reacciona por su cuenta: son dos acoplamientos
+      // opuestos, y declarados a la vez fabrican un ciclo que no existe.
+      const mirrored = (declared[edge.to].consumes ?? []).find(
+        (other) => other.from === name && other.kind === edge.kind
+      );
+      if (mirrored) {
+        findings.push(
+          error(
+            `${label}: '${name}' declara que le pide trabajo a '${edge.to}' y '${edge.to}' declara que consume de '${name}' por el mismo canal. ` +
+              'Decide cuál es: si el trabajo se le pide, la arista es solo esta; si el otro reacciona a un hecho nuestro por su cuenta, la arista es solo su consumes.'
+          )
+        );
+      }
+
+      const provider = specs.get(edge.to);
+      for (const event of edge.events ?? []) {
+        // Espejo del acuerdo de eventos, con el sentido invertido: al leer se
+        // comprueba que el proveedor PUBLIQUE; al pedirle trabajo, que ESCUCHE.
+        if (provider?.actualStatus !== 'designed') continue;
+        const sub = provider.subscriptions.find((entry) => entry.name === event);
+        if (!sub) {
+          findings.push(
+            error(
+              `specs/${edge.to}: el mapa dice que '${name}' le pide trabajo con '${event}', pero su capa messaging no lo consume. ` +
+                'Sin suscripción, el mensaje se publica y no lo atiende nadie.'
+            )
+          );
+        } else if (sub.nature !== 'request') {
+          findings.push(
+            error(
+              `specs/${edge.to}: consume '${event}' como 'fact', pero '${name}' lo emite para pedirle trabajo. ` +
+                "Un 'fact' es un hecho al que se reacciona por cuenta propia: nadie se compromete a atenderlo, y su payload no es contrato de entrada. " +
+                `Márcalo nature: request en messaging: subscriptions.${event}, o corrige la arista.`
+            )
+          );
+        }
+      }
+      // Pedir trabajo por HTTP exige una puerta abierta a servicios.
+      if (edge.kind === 'http' && provider?.actualStatus === 'designed' && provider.machineEndpoints === 0) {
+        findings.push(
+          warning(
+            `specs/${edge.to}: '${name}' le llama por HTTP, pero su capa api no expone ningún endpoint con audience 'services' ni 'both'.`
+          )
+        );
+      }
+    }
+
     for (const before of entry.after ?? []) {
       if (!(before in declared)) {
         findings.push(error(`services.${name}.after: '${before}' no está declarado en services.`));
@@ -307,9 +428,11 @@ export function buildSystemPlan(cwd = process.cwd()) {
         findings.push(error(`services.${name}.after: un servicio no va después de sí mismo.`));
       }
     }
-    if (entry.external && entry.consumes) {
+    if (entry.external && (entry.consumes || entry.invokes)) {
       findings.push(
-        warning(`services.${name}: es external y declara 'consumes'. Lo que consume un sistema ajeno no es asunto de este mapa.`)
+        warning(
+          `services.${name}: es external y declara 'consumes' o 'invokes'. Lo que consume o invoca un sistema ajeno no es asunto de este mapa.`
+        )
       );
     }
   }
@@ -318,11 +441,14 @@ export function buildSystemPlan(cwd = process.cwd()) {
   const { waves, cycle } = computeWaves(declared);
   if (cycle.length > 0) {
     const breakable = cycle
-      .flatMap((name) =>
-        (declared[name].consumes ?? [])
+      .flatMap((name) => [
+        ...(declared[name].consumes ?? [])
           .filter((edge) => edge.blocking !== false && cycle.includes(edge.from))
-          .map((edge) => `${name} ← ${edge.from}`)
-      )
+          .map((edge) => `${name} ← ${edge.from}`),
+        ...(declared[name].invokes ?? [])
+          .filter((edge) => edge.blocking !== false && cycle.includes(edge.to))
+          .map((edge) => `${name} → ${edge.to}`)
+      ])
       .sort();
     findings.push(
       error(
@@ -390,8 +516,21 @@ export function buildSystemPlan(cwd = process.cwd()) {
         blocking: edge.blocking !== false,
         why: edge.why
       })),
+      invokes: (entry.invokes ?? []).map((edge) => ({
+        to: edge.to,
+        kind: edge.kind,
+        what: edge.what,
+        events: edge.events ?? null,
+        blocking: edge.blocking !== false,
+        why: edge.why
+      })),
       consumedBy: names
         .filter((other) => (declared[other].consumes ?? []).some((edge) => edge.from === name))
+        .sort(),
+      // Quién nos pide trabajo: es lo que convierte nuestras puertas de entrada
+      // en contrato con alguien concreto, y alimenta el brief del servicio.
+      invokedBy: names
+        .filter((other) => (declared[other].invokes ?? []).some((edge) => edge.to === name))
         .sort()
     };
   });
@@ -405,9 +544,11 @@ export function buildSystemPlan(cwd = process.cwd()) {
     // Set: dos aristas al mismo proveedor (una http y una de eventos) esperan un
     // único contrato, y listarlo dos veces solo hace ruido.
     const missing = new Set(
-      service.consumes
-        .filter((edge) => edge.blocking)
-        .map((edge) => byName.get(edge.from))
+      [
+        ...service.consumes.filter((edge) => edge.blocking).map((edge) => edge.from),
+        ...service.invokes.filter((edge) => edge.blocking).map((edge) => edge.to)
+      ]
+        .map((provider) => byName.get(provider))
         .filter((provider) => provider && !provider.external && provider.contract !== 'fresh')
         .map((provider) => `${provider.name} (${provider.contract === 'stale' ? 'contrato atrasado' : 'sin contrato'})`)
     );
@@ -449,13 +590,27 @@ function checkSpecDrift(name, entry, declared, spec) {
   const findings = [];
   const closed = spec.actualStatus === 'designed';
 
+  // Cada forma de depender se contrasta contra su propia arista: leer un dato de
+  // alguien y pedirle trabajo son acoplamientos distintos, y confundirlos aquí
+  // haría pasar por planificada una integración que el mapa nunca vio.
   const providers = [...new Set((entry.consumes ?? []).map((edge) => edge.from))].sort();
+  const invoked = [...new Set((entry.invokes ?? []).map((edge) => edge.to))].sort();
 
-  for (const dep of spec.dependencies) {
+  for (const dep of spec.readProviders) {
     if (!providers.includes(dep)) {
       findings.push(
         warning(
-          `specs/${name}: depende de '${dep}' y el mapa no lo conoce. Añade la arista a services.${name}.consumes con su porqué, o quita la dependencia.`
+          `specs/${name}: lee datos de '${dep}' y el mapa no lo conoce. Añade la arista a services.${name}.consumes con su porqué, o quita la dependencia.`
+        )
+      );
+    }
+  }
+
+  for (const dep of spec.activatedProviders) {
+    if (!invoked.includes(dep)) {
+      findings.push(
+        warning(
+          `specs/${name}: le pide trabajo a '${dep}' y el mapa no lo conoce. Añade la arista a services.${name}.invokes con su porqué, o quita la activación.`
         )
       );
     }
@@ -463,10 +618,19 @@ function checkSpecDrift(name, entry, declared, spec) {
 
   if (closed) {
     for (const provider of providers) {
-      if (!spec.dependencies.includes(provider)) {
+      if (!spec.readProviders.includes(provider)) {
         findings.push(
           warning(
-            `specs/${name}: el mapa planifica consumir '${provider}' y su capa dependencies no lo declara. Resuélvelo con /keel-consume.`
+            `specs/${name}: el mapa planifica consumir '${provider}' y su capa dependencies no declara ningún need suyo. Resuélvelo con /keel-consume.`
+          )
+        );
+      }
+    }
+    for (const provider of invoked) {
+      if (!spec.activatedProviders.includes(provider)) {
+        findings.push(
+          warning(
+            `specs/${name}: el mapa planifica pedirle trabajo a '${provider}' y su capa dependencies no declara ninguna activación suya. Resuélvelo con /keel-consume.`
           )
         );
       }
@@ -478,6 +642,9 @@ function checkSpecDrift(name, entry, declared, spec) {
   // método que cruza dos specs.
   for (const sub of spec.subscriptions) {
     if (!sub.source) continue;
+    // Una suscripción `request` no es una dependencia nuestra sino una puerta de
+    // entrada: la verifica el mapa desde el lado de quien nos la pide.
+    if (sub.nature === 'request') continue;
     const edge = (entry.consumes ?? []).find((item) => item.from === sub.source && item.kind === 'events');
     if (!edge) {
       findings.push(
@@ -518,7 +685,7 @@ export function renderPlanTable(plan) {
     if (service.wave === null && !service.external) rows.push(row('—', service));
   }
 
-  const headers = ['Ola', 'Servicio', 'Estado', 'Consume de', 'Publica'];
+  const headers = ['Ola', 'Servicio', 'Estado', 'Lee de', 'Le pide a', 'Publica'];
   lines.push(table(headers, rows));
 
   const externals = plan.services.filter((service) => service.external);
@@ -539,13 +706,16 @@ export function renderPlanTable(plan) {
 }
 
 function row(wave, service) {
+  const peers = (edges, peer) =>
+    edges.length === 0
+      ? '—'
+      : edges.map((edge) => `${edge[peer]} (${edge.kind}${edge.blocking ? '' : ', no bloqueante'})`).join(', ');
   return [
     String(wave),
     service.name,
     service.statusLabel,
-    service.consumes.length === 0
-      ? '—'
-      : service.consumes.map((edge) => `${edge.from} (${edge.kind}${edge.blocking ? '' : ', no bloqueante'})`).join(', '),
+    peers(service.consumes, 'from'),
+    peers(service.invokes, 'to'),
     service.publishes.length === 0 ? '—' : service.publishes.join(', ')
   ];
 }

@@ -1,9 +1,32 @@
 # Guía de entrevista de `/keel-consume`
 
-Tablas de apoyo para los pasos 3 y 4. Todos los ejemplos usan el dominio compartido de la documentación:
-`order-service` depende de `catalog` para conocer el precio de un producto.
+Tablas de apoyo para los pasos 3 y 4. Los ejemplos usan el dominio compartido de la documentación:
+`order-service` **lee** de `catalog` el precio de un producto y le **encarga** a `notifications` el
+correo de confirmación.
 
-## 1. Decidir la estrategia
+## 0. Antes de nada: ¿qué clase de dependencia es?
+
+|  | `need` — leer | `activation` — activar |
+|---|---|---|
+| La pregunta | ¿Qué dato que no es nuestro necesita esta operación **para decidir**? | ¿Qué parte de esta operación **no es responsabilidad nuestra**? |
+| Lo que obtenemos | Un dato | Un trabajo hecho |
+| A qué nos acopla | A la **salida** del proveedor | A su **entrada**: la firma exacta que hay que mandarle |
+| Efecto en el proveedor | Ninguno: leer no cambia nada suyo | Cambia su estado: hemos provocado algo |
+
+**Señal mecánica:** si la llamada saliente es un `POST`/`PUT`/`DELETE` y lo que devuelve no se usa para
+decidir nada (un acuse, un id), es una activación. Un `need` con `strategy: on-demand` sobre un `POST`
+que no lee nada es el error clásico: valida, y deja el acoplamiento fuera del mapa del sistema.
+
+Ejemplos del dominio:
+
+| Lo que hace falta | Qué es | Por qué |
+|---|---|---|
+| El precio vigente del producto para cotizar | `need` | Es un dato de `catalog` y `catalog` no se entera de que lo leemos |
+| Que se envíe el correo de confirmación | `activation` | Es trabajo de `notifications`, y tenemos que saber qué campos exige para hacerlo |
+| Retener un asiento antes de confirmar | `activation` | Cambia el estado del otro servicio; el "¿quedó retenido?" es el desenlace, no el dato |
+| Que el histórico conserve el nombre del producto | `need` (`replicated`) | Es un dato que copiamos, no un encargo |
+
+## 1. Decidir la estrategia (needs)
 
 Las tres preguntas, con lo que significa cada respuesta:
 
@@ -49,6 +72,49 @@ Ejemplos del dominio:
 degradado que produce datos plausibles pero falsos es peor que fallar. Si el cliente no puede distinguir
 la respuesta degradada de la normal, no es `degrade` — es un bug declarado.
 
+## 3b. Entrevistar una activación
+
+| Eje | Pregunta al diseñador | Va a |
+|---|---|---|
+| **Efecto** | ¿Qué hace exactamente el proveedor al recibirlo? | `effect` (prosa, **sacado de su contrato**) |
+| **Desenlace** | ¿Esta operación necesita el resultado para continuar, le basta con que lo aceptara, o lo delega y sigue? | `awaits` |
+| **Canal** | *(se deduce del anterior)* | `via` |
+| **Fallo** | Si el encargo no sale, ¿qué ve el cliente de nuestra API? | `onFailure` |
+
+### `awaits`: qué se está prometiendo
+
+| | Qué significa | La consecuencia que hay que decirle al diseñador |
+|---|---|---|
+| `outcome` | Necesitamos el resultado para continuar | Exige `via` HTTP. Nuestra operación **no puede terminar** si el proveedor está caído |
+| `acknowledgement` | Basta con que lo aceptara | El trabajo puede fallar **después** y nuestra operación ya respondió que todo fue bien |
+| `nothing` | Se delega y se sigue | Nadie comprueba nunca que se hiciera. Solo es honesto si el negocio lo asume |
+
+La pregunta que desempata: **si ese trabajo no llegara a hacerse, ¿quién lo echaría de menos y cuándo se
+enteraría?** Si la respuesta es "el cliente, y tarde", ni `nothing` ni `ignore` son aceptables.
+
+### `onFailure`: qué exige cada acción (solo con `via` HTTP)
+
+| `action` | Exige | Qué observa el cliente | Cuándo elegirla |
+|---|---|---|---|
+| `fail` | `error`, declarado por alguna operación de `triggeredBy` | El error de negocio, con su status | La operación propia no tiene sentido sin ese trabajo |
+| `degrade` | `degradedTo` en prosa | Un resultado parcial y **distinguible** | La operación vale igual y el trabajo se recupera por otra vía |
+| `ignore` | nada | Nada: éxito normal | Solo si el negocio de verdad no cuenta con ese trabajo |
+
+`ignore` es a las activaciones lo que `degrade` a las réplicas: la opción peligrosa. Silencia un trabajo
+que no se hizo, y la operación propia responde `200`.
+
+### Activación por evento: el compromiso del otro lado
+
+Con `via: { publishes: <Evento> }` hace falta algo que no se puede suponer: el proveedor tiene que
+declararlo como `subscriptions.<Evento>` con **`nature: request`**. Eso es su compromiso de atenderlo, y
+es lo que hace que el payload que publicamos sea contrato y no una esperanza.
+
+| Lo que ves en su `INTEGRATION.md` | Qué significa |
+|---|---|
+| §Suscripciones lista el evento con sus campos | Acepta el encargo: copia el payload campo a campo |
+| No aparece, pero sí un endpoint equivalente | El canal acordado es HTTP: usa `via: { client, call }` |
+| No aparece nada | **Hueco**, no invención. Publicar el evento y esperar que actúe no es una integración acordada |
+
 ## 4. Mapeo: front-matter del `INTEGRATION.md` → DSL del consumidor
 
 | Origen (contrato del proveedor) | Destino (spec de este servicio) |
@@ -69,15 +135,23 @@ la respuesta degradada de la normal, no es `degrade` — es un bug declarado.
 | `events.published[].channel` | `messaging.channels.<c>` con `external: true` |
 | tabla de payload de cada evento | `messaging.subscriptions.<E>.payload` (solo los campos que usamos) |
 | `metadata.eventId` de la envoltura Keel | `contract.messageId: { location: field, name: metadata.eventId }` |
+| §Suscripciones: evento que el proveedor **atiende** (`nature: request` en su diseño) | `messaging.publishing.events.<E>` **nuestro**, con su payload **completo tal como él lo exige**, más `dependencies.<p>.activations.<a>.via: { publishes: <E> }` |
+| §Endpoints con efecto (crear, retener, cobrar, enviar) | `http-clients…calls.<c>` + `dependencies.<p>.activations.<a>.via: { client, call }` — **no** un `need` |
 
 Lo que **nunca** se traslada: `basePath` absoluto, credenciales, `tokenUrl` de un entorno concreto, el
 modelo de datos completo del proveedor, y sus códigos de error tal cual como errores nuestros.
 
 ## 5. Checklist de cierre
 
+- [ ] Cada dependencia está en la casilla correcta: lo que se **lee** en `needs`, lo que se **encarga**
+      en `activations`. Ningún `need` cuyo `fetchedFrom` apunte a una llamada que no devuelve un dato usado.
 - [ ] Todo `need` tiene al menos una operación en `usedBy`, y esa operación existe.
-- [ ] Todo cliente HTTP escrito lo usa algún `need`; toda suscripción escrita alimenta una réplica o
-      es una compensación declarada.
+- [ ] Toda activación tiene `triggeredBy`, `via` y un `effect` sacado del contrato del proveedor, no supuesto.
+- [ ] Toda activación por evento tiene su contraparte `nature: request` en el diseño del proveedor, o
+      está declarada como hueco.
+- [ ] Todo `onFailure.action: fail` tiene su `error` declarado en las operaciones de `triggeredBy`.
+- [ ] Todo cliente HTTP escrito lo usa algún `need` o alguna activación; toda suscripción escrita
+      alimenta una réplica o es una compensación declarada.
 - [ ] Toda réplica declara `onMiss`, y su `fedBy` cubre **altas, cambios y bajas**.
 - [ ] Todo `onMiss.action: fail` tiene su `error` declarado en **cada** operación de `usedBy`.
 - [ ] La entidad de la réplica está en `persistence.entities`, su `keyField` es `unique`, y su
