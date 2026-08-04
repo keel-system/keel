@@ -58,15 +58,23 @@ bash infra/export-schema.sh                         # → ${BASELINE_SQL}
 \`\`\`
 
 Revisa el SQL exportado (nombres de constraint e índices, tipos del dialecto) y
-cópialo como \`${BASELINE_MIGRATION}\`. Luego pruébalo sobre una BD sin
-esquema, con las migraciones gobernando de verdad:
+cópialo como \`${BASELINE_MIGRATION}\`. Eso lo produce el **pase de calidad** del
+flujo de generación, que además lo verifica en estático: \`diff\` contra el DDL
+exportado y contraste con las entidades \`Jpa\` y el diseño.
+
+**La prueba en vivo es tuya**, antes del primer despliegue: el baseline solo está
+probado si ha creado el esquema **desde cero** —contra una BD que Hibernate ya
+pobló con \`ddl-auto: update\`, el \`validate\` pasaría sin ejercitar nada—.
 
 \`\`\`bash
-PROFILE=local,migrations ./gradlew bootRun
+docker compose -f infra/docker-compose.yaml down -v   # borra el volumen: BD sin esquema
+docker compose -f infra/docker-compose.yaml up -d
+PROFILE=local,migrations ./gradlew bootRun            # Flyway crea, Hibernate valida
 \`\`\`
 
-El procedimiento completo y su checklist están en \`references/migrations.md\` de la
-skill \`keel-spring-database\`.
+El pipeline no la ejecuta a propósito: borrar el volumen destruiría la base de datos
+sobre la que corren los escenarios \`FL-*\`. El procedimiento completo y su checklist
+están en \`references/migrations.md\` de la skill \`keel-spring-database\`.
 
 ## Reglas duras
 
@@ -103,7 +111,10 @@ spring:
 }
 
 // Perfil migrations: lo que ocurre en develop/production, reproducible en local.
-// Sirve para probar el baseline antes de commitearlo.
+// Lo usa el diseñador para probar el baseline a mano antes del primer despliegue
+// (el pase de calidad lo entrega verificado en estático, no probado: arrancar con
+// este perfil exige una BD sin esquema, y borrar ese volumen se llevaría por delante
+// la base sobre la que corren los escenarios).
 function migrationsYaml() {
   return `# Perfil migrations: el esquema lo gobiernan las migraciones de db/migration/
 # y Hibernate solo valida — igual que en develop/production. Se activa SOBRE otro
@@ -175,7 +186,9 @@ echo "Esquema exportado en $TARGET."
 ${constraintCheck(model)}
 echo "Revísalo (constraints, índices, tipos del dialecto) y cópialo como:"
 echo "  src/main/resources/db/migration/${BASELINE_MIGRATION}"
-echo "Después pruébalo sobre una BD sin esquema: PROFILE=local,migrations ./gradlew bootRun"
+echo "Después, doble check estático: diff contra este archivo y contraste con las entidades y el diseño."
+echo "La prueba en vivo (PROFILE=local,migrations sobre una BD sin esquema) la hace el diseñador:"
+echo "  borra el volumen de la BD, que es la misma sobre la que corren los escenarios."
 `;
 }
 

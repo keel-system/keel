@@ -138,8 +138,9 @@ export function generate(model) {
   if (layersPresent.persistence) {
     pendingLayers.push(
       '- `persistence`: producir el baseline de migraciones (`bash infra/export-schema.sh` con las entidades ya finales), ' +
-        'revisarlo y commitearlo como `src/main/resources/db/migration/V1__baseline_schema.sql`; probarlo sobre una BD sin ' +
-        'esquema con `PROFILE=local,migrations` (sin él, `production` no arranca: Hibernate solo valida).'
+        'revisarlo, verificarlo con el doble check estático y commitearlo como ' +
+        '`src/main/resources/db/migration/V1__baseline_schema.sql` (sin él, `production` no arranca: Hibernate solo valida). ' +
+        'Probarlo en vivo sobre una BD sin esquema queda para ti, a mano: ver «Despliegue en producción».'
     );
   }
   if (layersPresent.security && stack.auth === 'keycloak') {
@@ -331,10 +332,21 @@ function productionSection(model) {
       '2. Comprueba que `src/main/resources/db/migration/` contiene el baseline (`V1__baseline_schema.sql`) ' +
         'y las migraciones posteriores: Flyway las aplica al arrancar y registra cada una en `flyway_schema_history`. ' +
         'Si tu ambiente exige aplicarlas en un paso previo al despliegue, arranca una única instancia con ' +
-        '`FLYWAY_ENABLED=true` y el resto con `FLYWAY_ENABLED=false`, o ejecuta Flyway por CLI contra la misma carpeta.'
+        '`FLYWAY_ENABLED=true` y el resto con `FLYWAY_ENABLED=false`, o ejecuta Flyway por CLI contra la misma carpeta.',
+      '3. **Prueba el baseline sobre una BD sin esquema — este paso es tuyo y el pipeline no lo ejecuta.** ' +
+        'El pase de calidad entrega el baseline exportado de las entidades y verificado en estático (`baselineTested: PENDING`), ' +
+        'pero solo está *probado* si ha creado el esquema desde cero: contra una BD que Hibernate ya pobló con ' +
+        '`ddl-auto: update`, el `validate` pasaría sin ejercitar la migración. Con la infraestructura local:\n\n' +
+        '   ```bash\n' +
+        '   docker compose -f infra/docker-compose.yaml down -v   # borra el volumen: BD sin esquema\n' +
+        '   docker compose -f infra/docker-compose.yaml up -d\n' +
+        '   PROFILE=local,migrations ./gradlew bootRun            # Flyway crea, Hibernate valida\n' +
+        '   ```\n\n' +
+        '   Arranque limpio = baseline correcto. Un fallo de `validate` aquí es exactamente el que tendrías en ' +
+        'producción, y dice qué columna o tipo no cuadra: corrige el SQL y repite.'
     );
   }
-  const n = layersPresent.persistence ? 3 : 2;
+  const n = layersPresent.persistence ? 4 : 2;
   steps.push(
     `${n}. Exporta las variables de entorno obligatorias de la tabla de abajo (secretos y endpoints reales del ambiente; en production ninguna trae valor por defecto).`,
     `${n + 1}. Arranca el servicio: \`PROFILE=production java -jar build/libs/*.jar\`.`,

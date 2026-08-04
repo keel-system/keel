@@ -65,9 +65,10 @@ validación/reset de datos.
    migraciones Flyway de `src/main/resources/db/migration/`, que **están vacías
    hasta que las llenes**: sin baseline el servicio no arranca desplegado. Se
    exporta de las entidades ya finales con `bash infra/export-schema.sh`, se
-   revisa y se prueba con `PROFILE=local,migrations` sobre una BD sin esquema.
-   Procedimiento completo y checklist en `references/migrations.md`. Es el último
-   paso de la persistencia, no el primero.
+   revisa y se verifica con el doble check estático; la prueba en vivo
+   (`PROFILE=local,migrations` sobre una BD sin esquema) la hace el diseñador
+   fuera de la generación. Procedimiento completo y checklist en
+   `references/migrations.md`. Es el último paso de la persistencia, no el primero.
 4. **Tuning solo si un escenario lo pide**: pool Hikari, batching, fetch — con
    `references/configuration.md`. No tunees por adelantado. Ojo con la frontera:
    **componer bien una lectura no es tuning anticipado, es corrección**. Que una
@@ -85,7 +86,7 @@ Léelas bajo demanda, no todas de golpe:
 | Referencia | Cuándo leerla |
 |---|---|
 | `references/jpa-mapping.md` | Al resolver un `// TODO (agente)` de persistencia o al mapear algo que build no cubre (relaciones bidireccionales/to-many entre agregados, VO anidados/`@Embeddable`, converters, `json`→jsonb; el `lockVersion`/`@Version` base ya lo genera build, aquí solo el caso borde `OPTIMISTIC_FORCE_INCREMENT`) |
-| `references/migrations.md` | Al producir el baseline de `db/migration/` (exportar, revisar, probar) y al añadir migraciones posteriores |
+| `references/migrations.md` | Al producir el baseline de `db/migration/` (exportar, revisar, doble check) y al añadir migraciones posteriores |
 | `references/read-queries.md` | Al implementar una query que filtra u ordena por un campo de un agregado **embebido** (`embed`), que es cuando el lote del `<X>RefResolver` no basta y hace falta un join proyectado en un adaptador de lectura |
 | `references/configuration.md` | Antes de tocar `parameters/<perfil>/db.yaml` o propiedades `spring.jpa.*` (Hikari, batching, N+1, locking) |
 | `references/dialects/<database>.md` | Al decidir tipos de columna, depurar el dialecto o preparar su validación/reset (solo el del stack) |

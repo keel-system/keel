@@ -1,6 +1,6 @@
 ---
 name: keel-spring-quality
-description: Pase de calidad no-conductual del código Java de un proyecto keel-spring ya validado funcionalmente — imports, inyección por constructor, final, excepciones tipadas, higiene — más el baseline de migraciones de esquema y la comprobación de que el contexto arranca bajo el perfil `test`, sin cambiar el comportamiento que la validación dejó pasando. Reporta (no aplica) todo hallazgo conductual.
+description: Pase de calidad no-conductual del código Java de un proyecto keel-spring ya validado funcionalmente — imports, inyección por constructor, final, excepciones tipadas, higiene — más el baseline de migraciones de esquema (generado y doble-checkeado en estático; la prueba en vivo es del diseñador) y la comprobación de que el contexto arranca bajo el perfil `test`, sin cambiar el comportamiento que la validación dejó pasando. Reporta (no aplica) todo hallazgo conductual.
 tools: [read, write, edit, bash, grep, glob]
 # Hoja de la orquestación: el único orquestador es la skill (ver orchestration.md).
 # El harness lo traduce a su forma (omitir Task, o denegar el permiso).
@@ -14,7 +14,8 @@ esa raíz.
 **Premisa**: corres **después** de que todos los escenarios de la validación
 funcional están OK. Tienes tres trabajos, los tres porque el código ya está estable:
 la **higiene** (checklist de abajo), el **baseline de migraciones** —que solo puede
-escribirse cuando las entidades son definitivas— y la comprobación de que el
+escribirse cuando las entidades son definitivas, y que **produces y verificas en
+estático, sin probarlo contra la base de datos**— y la comprobación de que el
 **contexto arranca bajo el perfil `test`** (§ Cierre). Ninguno cambia comportamiento:
 lo validado debe seguir pasando idéntico. Cualquier hallazgo que requiera cambiar
 comportamiento se **reporta** en `remaining`, no se aplica. No hay suite unitaria
@@ -90,7 +91,8 @@ injection; añadir `final`; reemplazar una excepción genérica por la de domini
 **equivalente ya existente** sin cambiar el status HTTP ni el flujo; eliminar código
 muerto; normalizar formato; **añadir el baseline de migraciones** (ver la sección
 siguiente: describe el esquema que ya existe, con la única adición de las FK entre
-agregados que el diseño exige y que ningún exportador puede emitir).
+agregados que el diseño exige y que ningún exportador puede emitir; se entrega
+verificado en estático, no probado contra la BD).
 
 **Prohibido (repórtalo en `remaining`, no lo apliques)**: añadir o eliminar
 validaciones o invariantes; cambiar firmas públicas, DTOs o mapeos de persistencia;
@@ -127,8 +129,10 @@ refactor que cambiaría un status HTTP ya declarado).
 
 Es tuyo porque solo aquí las entidades ya son definitivas. Sin baseline el
 servicio **no es desplegable**: en `develop`/`production` Hibernate solo valida
-(`ddl-auto: validate`) y `src/main/resources/db/migration/` sale vacío de build.
-Sigue `{{keel:skills}}/keel-spring-database/references/migrations.md`; en corto:
+(`ddl-auto: validate`) y `src/main/resources/db/migration/` sale vacío de build. Tu
+entregable es el archivo **completo y listo para producción**; su prueba en vivo es
+del diseñador. Sigue `{{keel:skills}}/keel-spring-database/references/migrations.md`;
+en corto:
 
 1. Con la infraestructura arriba, `bash infra/export-schema.sh` → el DDL de las
    entidades queda en `build/schema/baseline.sql` (log en `build/schema/export.log`).
@@ -149,19 +153,54 @@ Sigue `{{keel:skills}}/keel-spring-database/references/migrations.md`; en corto:
    integridad» a una referencia entre agregados`, que también dice cuándo **no**
    ponerla). Añadirla es no-conductual en el camino normal: solo cierra la carrera
    que el diseño dice que no debe existir.
-3. Pruébalo sobre una BD **sin esquema** (recrea el contenedor: `docker compose -f
-   infra/docker-compose.yaml down -v && … up -d`) con
-   `PROFILE=local,migrations ./gradlew bootRun`: el arranque debe pasar el
-   `validate` con el esquema puesto **solo** por Flyway. Contra una BD que
-   Hibernate ya pobló no habrías probado nada.
-4. Deja la infraestructura arriba y la BD lista para tu propia re-ejecución de
-   `./gradlew integrationTest` (los flujos `FL-*` parten de BD limpia: cada clase
-   resetea en su `@BeforeAll`).
+3. **Doble check estático** del archivo ya copiado (§ siguiente). Dos pasadas
+   independientes, ninguna enciende nada.
+4. Deja la infraestructura **como estaba** —arriba y con su esquema— para tu propia
+   re-ejecución de `./gradlew integrationTest` (los flujos `FL-*` parten de BD limpia:
+   cada clase resetea en su `@BeforeAll`). No recrees el contenedor ni borres su
+   volumen: destruirías el estado sobre el que corre tu propia no-regresión.
 
-Si el arranque con `migrations` falla, el mensaje de `validate` dice qué columna o
-tipo no cuadra: corrige el SQL exportado y repite. Si no converge, no maquilles —
-regístralo en `blockers` con el error exacto. **Nunca** relajes `ddl-auto` fuera de
-`local` ni habilites `baseline-on-migrate` para que arranque.
+Si el doble check no converge —una discrepancia que no sabes explicar ni corregir—,
+no maquilles: regístrala en `blockers` con el detalle exacto. **Nunca** relajes
+`ddl-auto` fuera de `local` ni habilites `baseline-on-migrate`.
+
+## El doble check (y qué NO haces)
+
+**No pruebas el baseline contra la base de datos.** No arrancas la app con
+`PROFILE=local,migrations`, no bajas la infraestructura, no borras volúmenes ni
+recreas contenedores. Esa prueba en vivo la hace **el diseñador** a mano, después de
+la generación. Lo tuyo es entregarlo completo y verificado en estático:
+
+1. **Pasada de fidelidad al export**: `diff` entre `build/schema/baseline.sql` y el
+   `V1__baseline_schema.sql` que commiteas. Toda diferencia tiene que ser una edición
+   **deliberada y justificable** —constraints renombradas a su nombre del diseño, FK
+   entre agregados añadidas, `drop table`/`drop constraint` eliminados, tipos del
+   dialecto ajustados—. Una diferencia que no sepas explicar es un error tuyo, no una
+   mejora. El `AVISO:` que imprime `export-schema.sh` es insumo de esta pasada: si
+   quedó alguna constraint sin nombrar, aquí se ve.
+2. **Pasada contra las fuentes del diseño**, sin mirar el export: recorre las
+   entidades `XxxJpa` finales, `specs/persistence.keel.yaml` y `specs/domain.keel.yaml`
+   y comprueba **sobre el SQL** que están todas las tablas (una por `XxxJpa`, las
+   `<entidad>_<campo>` de los `@ElementCollection`, y `outbox_event`/`processed_event`
+   si el diseño los usa), los nombres `uk_*`/`idx_*` declarados, el `not null` de cada
+   campo `required`, y que cada constraint nombrada en el `CONSTRAINT_TO_ERROR` del
+   `ApiExceptionHandler` existe en el archivo **y al revés**.
+
+Son dos pasadas y no una porque cazan cosas distintas: la primera, lo que rompiste al
+editar el DDL; la segunda, lo que un DDL exportado nunca delata —una tabla que falta
+porque la entidad no quedó anotada, una FK entre agregados que olvidaste añadir—.
+
+En el reporte deja los comandos exactos de la prueba pendiente, para que el diseñador
+no tenga que reconstruirlos:
+
+```bash
+docker compose -f infra/docker-compose.yaml down -v   # BD sin esquema
+docker compose -f infra/docker-compose.yaml up -d
+PROFILE=local,migrations ./gradlew bootRun            # Flyway crea, Hibernate valida
+```
+
+Y comprueba que el `README.md` los recoge en su sección `## Despliegue en producción`
+(el scaffolding ya los siembra ahí): si no están, es lo único que puedes añadir tú.
 
 ## `deploy/` no es tuyo
 
@@ -216,11 +255,14 @@ Qué se ajustó y qué queda pendiente de decisión humana. Cierra siempre con e
 bloque estructurado que consume el orquestador:
 
 ```yaml
-status: OK | KO           # OK solo con compilación verde, contexto que arranca, baseline probado y escenarios al 100%
+status: OK | KO           # OK solo con compilación verde, contexto que arranca, baseline entregado y escenarios al 100%
 compiles: true | false
 scenarios: OK | KO        # ./gradlew integrationTest tras el pase: la no-regresión conductual
 contextTest: OK | KO      # ./gradlew test: contextLoads() bajo el perfil test (todos los beans arrancan sin infra)
-baseline: OK | KO | N/A   # migraciones: N/A sin persistencia; OK si arrancó con PROFILE=local,migrations
+baseline: OK | KO | N/A   # migraciones: N/A sin persistencia; OK = V1__baseline_schema.sql commiteado
+                          # y con las DOS pasadas del doble check en verde
+baselineTested: PENDING | N/A   # siempre PENDING con persistencia: la prueba en vivo (PROFILE=local,migrations
+                                # sobre BD sin esquema) la hace el diseñador, no este pase
 issuesFixed: [...]        # ajustes no-conductuales aplicados
 remaining: [...]          # hallazgos conductuales sin hueco de diseño detrás
 designGaps:               # huecos del diseño que encontraste, como propuesta accionable

@@ -75,11 +75,46 @@ esta checklist antes de aceptarlo.
 
 Cópialo entonces como `src/main/resources/db/migration/V1__baseline_schema.sql`.
 
-## 3. Probarlo de verdad
+## 3. Doble check estático
 
-El baseline solo está validado si ha creado el esquema **desde cero**. Contra una
-BD que Hibernate ya pobló con `ddl-auto: update`, el `validate` pasaría sin haber
-ejercitado nada.
+El baseline se entrega **verificado, no probado**: la prueba en vivo es del
+diseñador (§4). Lo que sí haces son dos pasadas independientes sobre el
+`V1__baseline_schema.sql` ya copiado. Ninguna enciende nada — ni la app, ni un
+contenedor nuevo.
+
+**Pasada 1 — fidelidad al export.**
+
+```bash
+diff build/schema/baseline.sql src/main/resources/db/migration/V1__baseline_schema.sql
+```
+
+Toda diferencia tiene que ser una edición **deliberada y justificable**: las
+constraints renombradas a su nombre del diseño, las FK entre agregados añadidas,
+los `drop table`/`drop constraint` eliminados, los tipos del dialecto ajustados.
+Una diferencia que no sepas explicar no es una mejora: es algo que rompiste al
+editar. El `AVISO:` que imprimió `export-schema.sh` es insumo de esta pasada.
+
+**Pasada 2 — contra las fuentes del diseño**, sin mirar el export. Recorre las
+entidades `XxxJpa` finales, `specs/persistence.keel.yaml` y `specs/domain.keel.yaml`
+y comprueba **sobre el SQL**:
+
+- una `create table` por cada `XxxJpa` persistida, más las `<entidad>_<campo>` de
+  los `@ElementCollection` y `outbox_event`/`processed_event` si el diseño los usa;
+- los nombres `uk_*`/`idx_*` declarados, todos presentes;
+- `not null` en cada campo `required` y en las FK de relaciones requeridas;
+- cada constraint nombrada en el `CONSTRAINT_TO_ERROR` del `ApiExceptionHandler`
+  existe en el archivo, **y al revés**: ninguna FK entre agregados añadida se quedó
+  sin su entrada.
+
+Son dos y no una porque cazan cosas distintas: la primera ve lo que rompiste
+editando; la segunda, lo que un DDL exportado nunca delata — una tabla que falta
+porque la entidad no quedó anotada, una FK entre agregados olvidada.
+
+## 4. La prueba en vivo la hace el diseñador
+
+Fuera de la generación, a mano, antes del primer despliegue. El baseline solo está
+**probado** si ha creado el esquema **desde cero**: contra una BD que Hibernate ya
+pobló con `ddl-auto: update`, el `validate` pasaría sin haber ejercitado nada.
 
 ```bash
 docker compose -f infra/docker-compose.yaml down -v   # borra el volumen: BD sin esquema
@@ -89,7 +124,13 @@ PROFILE=local,migrations ./gradlew bootRun            # Flyway crea, Hibernate v
 
 Arranque limpio = baseline correcto. Un fallo de `validate` aquí es exactamente
 el fallo que tendrías en producción, con el mensaje que te dice qué columna o
-tipo no coincide.
+tipo no coincide; se corrige el SQL y se repite.
+
+El pase de calidad **no** ejecuta esto: borrar el volumen destruiría la base de
+datos sobre la que corre su propia no-regresión (`./gradlew integrationTest`), y el
+diseñador tiene que ver ese arranque con sus ojos antes de desplegar. Los comandos
+quedan escritos en el `README.md` del proyecto (§ Despliegue en producción) y en el
+`README.md` de `db/migration/`.
 
 ## Migraciones posteriores
 

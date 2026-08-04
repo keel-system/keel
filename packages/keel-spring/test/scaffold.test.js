@@ -2616,3 +2616,35 @@ test('migraciones: mecanismo Flyway completo y baseline a cargo del agente', () 
   // (el comando va entre comillas simples de bash: sq() reescribe las internas)
   assert.ok(read(workspace, 'infra/reset-db.sh').includes('flyway_schema_history'));
 });
+
+// El pipeline entrega el baseline verificado en estático, no probado: arrancar con
+// el perfil `migrations` exige una BD sin esquema, y borrar ese volumen se llevaría
+// la base sobre la que corren los escenarios. Esa prueba es del diseñador, así que
+// los textos que él lee tienen que decirlo y traer los comandos.
+test('migraciones: la prueba en vivo del baseline queda atribuida al diseñador', () => {
+  const workspace = makeWorkspace();
+  scaffoldService({ ...loadFixture(), workspace });
+
+  const migrationsReadme = read(workspace, 'src/main/resources/db/migration/README.md');
+  assert.ok(migrationsReadme.includes('La prueba en vivo es tuya'));
+  assert.ok(migrationsReadme.includes('PROFILE=local,migrations ./gradlew bootRun'));
+  assert.ok(migrationsReadme.includes('down -v'));
+
+  // README del proyecto: la sección de despliegue es donde el diseñador busca los
+  // pasos, y el paso pendiente lleva sus comandos exactos.
+  const readme = read(workspace, 'README.md');
+  const production = readme.slice(readme.indexOf('## Despliegue en producción'));
+  assert.ok(production.includes('este paso es tuyo y el pipeline no lo ejecuta'));
+  assert.ok(production.includes('baselineTested: PENDING'));
+  assert.ok(production.includes('PROFILE=local,migrations ./gradlew bootRun'));
+
+  // El script de export cierra remitiendo al doble check, no a la prueba.
+  const exportScript = read(workspace, 'infra/export-schema.sh');
+  assert.ok(exportScript.includes('doble check estático'));
+  assert.ok(exportScript.includes('La prueba en vivo (PROFILE=local,migrations sobre una BD sin esquema) la hace el diseñador'));
+
+  // Contexto del repo: el paso de verificación no le pide al agente arrancar nada.
+  const agents = read(workspace, 'AGENTS.md');
+  assert.ok(agents.includes('doble check estático'));
+  assert.ok(agents.includes('verificación **manual del diseñador**'));
+});

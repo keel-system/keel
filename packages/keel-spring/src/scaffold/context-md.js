@@ -238,9 +238,11 @@ export function generate(model) {
     const step = contextStep + 1;
     lines.push(
       `${step}. Migraciones: con las entidades ya finales, \`bash infra/export-schema.sh\`, revisa el DDL y cópialo como`,
-      '   `src/main/resources/db/migration/V1__baseline_schema.sql`; luego arranca con `PROFILE=local,migrations` sobre una',
-      '   BD **sin esquema** (recrea el contenedor de BD) y confirma que el arranque pasa el `validate`. Sin baseline el',
-      '   servicio no puede desplegarse: en `production` Hibernate no crea nada.'
+      '   `src/main/resources/db/migration/V1__baseline_schema.sql`; verifícalo con el **doble check estático** (`diff`',
+      '   contra el DDL exportado + contraste con las entidades `Jpa` y el diseño). Sin baseline el servicio no puede',
+      '   desplegarse: en `production` Hibernate no crea nada. La prueba en vivo —arrancar con `PROFILE=local,migrations`',
+      '   sobre una BD **sin esquema**— es una verificación **manual del diseñador**, posterior a la generación: exige',
+      '   borrar el volumen de la BD, que es la misma sobre la que corren los escenarios.'
     );
   }
 
