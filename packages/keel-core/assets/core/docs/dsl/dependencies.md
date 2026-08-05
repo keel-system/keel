@@ -156,7 +156,9 @@ Obligatorio con `via` HTTP, por el mismo motivo que `onMiss` en una réplica: si
 
 Eventos ante los que este servicio **deshace lo que hizo contra el proveedor** (una reserva que no llegó a cobrarse, un envío que se anuló). Aquí solo se declara **el hecho y contra quién**: la operación que se ejecuta vive en `messaging: subscriptions.<evento>.triggers`, y no se repite.
 
-`undoes` cita la `activation` que se revierte, y es lo que cierra el par hacer/deshacer: si lo que se compensa es un trabajo que le encargamos a otro, ese encargo debería estar declarado.
+`undoes` cita la `activation` que se revierte, y es lo que cierra el par hacer/deshacer: si lo que se compensa es un trabajo que le encargamos a otro, ese encargo debería estar declarado. Solo puede citar una activación **de este mismo proveedor**: compensar el trabajo de tres servidores son tres bloques.
+
+En el **mapa del sistema**, una compensación son dos aristas hacia el mismo proveedor: `invokes` por la activación, y `consumes` con `kind: events` por el evento que la deshace. No es contradicción de dirección (esa salta cuando el otro declara consumir de nosotros) ni fabrica un ciclo: las dos apuntan en el mismo sentido. Sin la segunda, `keel system check` reporta la suscripción como una fuente que el mapa no contempla.
 
 ## Qué comprueba `keel validate`
 

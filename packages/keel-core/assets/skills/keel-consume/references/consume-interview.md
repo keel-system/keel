@@ -152,6 +152,9 @@ modelo de datos completo del proveedor, y sus códigos de error tal cual como er
 - [ ] Todo `onFailure.action: fail` tiene su `error` declarado en las operaciones de `triggeredBy`.
 - [ ] Todo cliente HTTP escrito lo usa algún `need` o alguna activación; toda suscripción escrita
       alimenta una réplica o es una compensación declarada.
+- [ ] Toda compensación tiene, si el workspace lleva `system.yaml`, la arista `consumes` con
+      `kind: events` hacia ese proveedor —además del `invokes` de la activación que deshace—: sin ella
+      `keel system check` da la suscripción por no contemplada.
 - [ ] Toda réplica declara `onMiss`, y su `fedBy` cubre **altas, cambios y bajas**.
 - [ ] Todo `onMiss.action: fail` tiene su `error` declarado en **cada** operación de `usedBy`.
 - [ ] La entidad de la réplica está en `persistence.entities`, su `keyField` es `unique`, y su

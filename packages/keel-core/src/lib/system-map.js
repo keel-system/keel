@@ -158,6 +158,12 @@ function readSpec(cwd, name) {
     readProviders: (summary.dependencies?.dependencies ?? [])
       .filter((dep) => (dep.needs ?? []).length > 0)
       .map((dep) => dep.name),
+    // Consumir el evento de fallo de alguien a quien le encargas trabajo también
+    // es leer de él, aunque no haya ningún `need`: la suscripción `fact` que
+    // sostiene una compensación exige su arista `consumes` igual que una réplica.
+    compensatedProviders: (summary.dependencies?.dependencies ?? [])
+      .filter((dep) => (dep.compensations ?? []).length > 0)
+      .map((dep) => dep.name),
     published: summary.messaging?.published ?? [],
     subscriptions: (summary.messaging?.subscriptions ?? []).map((sub) => ({
       name: sub.name,
@@ -618,10 +624,13 @@ function checkSpecDrift(name, entry, declared, spec) {
 
   if (closed) {
     for (const provider of providers) {
-      if (!spec.readProviders.includes(provider)) {
+      // Una arista de lectura la justifica un `need` o una compensación: el
+      // evento de fallo de un proveedor al que se le encarga trabajo se lee sin
+      // que exista ningún dato suyo que replicar ni consultar.
+      if (!spec.readProviders.includes(provider) && !spec.compensatedProviders.includes(provider)) {
         findings.push(
           warning(
-            `specs/${name}: el mapa planifica consumir '${provider}' y su capa dependencies no declara ningún need suyo. Resuélvelo con /keel-consume.`
+            `specs/${name}: el mapa planifica consumir '${provider}' y su capa dependencies no declara ningún need ni compensación suya. Resuélvelo con /keel-consume.`
           )
         );
       }

@@ -456,6 +456,123 @@ subscriptions:
   );
 });
 
+// --- Compensaciones ---------------------------------------------------------
+// Relación SOLO de compensación: se le encarga trabajo a un proveedor y se
+// consume su evento de fallo, sin leerle ningún dato. No hay `needs`, así que la
+// arista `consumes` que la suscripción exige la justifica la compensación.
+
+const paymentsDependency = ({ compensated = true } = {}) => `dependencies:
+  payments:
+    description: Cobro de la reserva, del que este diseño solo espera el desenlace.
+    activations:
+      chargeBooking:
+        triggeredBy: [scheduleFlight]
+        via: { publishes: FlightScheduled }
+        effect: Se inicia el cobro de la reserva contra el medio de pago del pasajero.
+        awaits: nothing
+${
+  compensated
+    ? `    compensations:
+      - onEvent: PaymentFailed
+        undoes: chargeBooking
+        description: El cobro se rechazó a posteriori y el vuelo deja de estar reservado.
+`
+    : ''
+}`;
+
+// El evento de fallo del proveedor: un `fact` suyo, no un encargo nuestro.
+const PAYMENTS_MESSAGING = `${messaging(['FlightScheduled'])}subscriptions:
+  PaymentFailed:
+    description: El cobro aceptado no pudo completarse.
+    source: payments
+    payload:
+      code: { type: string, required: true }
+    triggers: scheduleFlight
+`;
+
+const compensatingDesign = (options) => ({
+  layers: {
+    domain: DOMAIN,
+    'use-cases': USE_CASES,
+    messaging: PAYMENTS_MESSAGING,
+    dependencies: paymentsDependency(options)
+  }
+});
+
+const PAYMENTS_ENTRY = `  payments:
+    summary: Cobro y reembolso de reservas.
+    responsibility: Única fuente de verdad del estado de un cobro.
+    publishes: [PaymentFailed]
+`;
+
+const CATALOG_INVOKES_PAYMENTS = `  flight-catalog:
+    summary: Vuelos programados, rutas y tramos.
+    responsibility: Única fuente de verdad de qué se puede volar y cuándo.
+    owns: [Flight]
+    publishes: [FlightScheduled]
+    status: designed
+    invokes:
+      - to: payments
+        kind: events
+        what: [cobro de la reserva]
+        events: [FlightScheduled]
+        why: Cobrar no es responsabilidad del catálogo de vuelos.
+        blocking: false
+`;
+
+const READS_PAYMENT_OUTCOME = `    consumes:
+      - from: payments
+        kind: events
+        what: [desenlace del cobro]
+        events: [PaymentFailed]
+        why: Sin el desenlace real del cobro no se puede compensar lo que se encargó.
+        blocking: false
+`;
+
+test('una compensación justifica la arista de lectura hacia el proveedor al que se le encarga trabajo', () => {
+  const cwd = workspace({
+    system: systemYaml(PAYMENTS_ENTRY + CATALOG_INVOKES_PAYMENTS + READS_PAYMENT_OUTCOME),
+    designs: { 'flight-catalog': compensatingDesign() }
+  });
+
+  // El diseño tiene que estar cerrado: es la rama que antes dejaba el catch-22.
+  assert.equal(byName(buildSystemPlan(cwd))['flight-catalog'].status, 'designed');
+
+  const found = messages(buildSystemPlan(cwd));
+  assert.ok(!found.some((message) => /planifica consumir 'payments'/.test(message)), found.join(' · '));
+  assert.ok(!found.some((message) => /no declara esa arista de eventos/.test(message)), found.join(' · '));
+});
+
+test('una compensación sin su arista de eventos en el mapa sigue siendo deriva', () => {
+  const cwd = workspace({
+    system: systemYaml(PAYMENTS_ENTRY + CATALOG_INVOKES_PAYMENTS),
+    designs: { 'flight-catalog': compensatingDesign() }
+  });
+
+  assert.ok(
+    messages(buildSystemPlan(cwd)).some((message) =>
+      /specs\/flight-catalog: se suscribe a 'PaymentFailed' de 'payments' y el mapa no declara esa arista de eventos/.test(
+        message
+      )
+    )
+  );
+});
+
+test('una arista de lectura sin need ni compensación sigue avisando en un diseño cerrado', () => {
+  const cwd = workspace({
+    system: systemYaml(PAYMENTS_ENTRY + CATALOG_INVOKES_PAYMENTS + READS_PAYMENT_OUTCOME),
+    designs: { 'flight-catalog': compensatingDesign({ compensated: false }) }
+  });
+
+  assert.ok(
+    messages(buildSystemPlan(cwd)).some((message) =>
+      /specs\/flight-catalog: el mapa planifica consumir 'payments' y su capa dependencies no declara ningún need ni compensación suya/.test(
+        message
+      )
+    )
+  );
+});
+
 test('un diseño del workspace que el mapa no conoce se avisa', () => {
   const cwd = workspace({ system: systemYaml(CATALOG_ENTRY), designs: { 'fare-pricing': catalogDesign } });
   assert.ok(

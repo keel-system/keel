@@ -182,7 +182,11 @@ publique de verdad ese evento, no lo comprobaba nada. Eso es lo que hace esta pu
 3. **Un diseño contra el mapa** — dependencias que el diseño declara y el mapa no conoce, cada una
    contra su propia arista (los `needs` contra `consumes`, las `activations` contra `invokes`: leer de
    alguien y encargarle trabajo son integraciones distintas), y suscripciones `fact` a fuentes que el
-   mapa no contempla.
+   mapa no contempla. Una arista `consumes` la justifica un `need` **o una compensación**: el evento de
+   fallo de un proveedor al que se le encarga trabajo se lee sin que exista ningún dato suyo que
+   consultar ni replicar, y es lo que hace que una relación solo de compensación se pueda declarar
+   entera —`invokes` por la activación, `consumes` de eventos por el evento que la deshace— sin que el
+   mapa la dé por incompleta.
 4. **Un diseño contra otro diseño**, en las dos direcciones:
    - que el proveedor **publique** en su capa `messaging` los eventos que el mapa promete a su consumidor;
    - que quien recibe un encargo lo **consuma** de verdad, y además con `nature: request` — si lo
