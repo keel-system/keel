@@ -1399,6 +1399,61 @@ test('capa security (clientes máquina por api-key): clave local usable y env va
   assert.ok(developSecurity.includes('billing-worker: ${API_KEY_BILLING_WORKER}')); // sin default: fail-closed
 });
 
+// Proveedor de prueba de las integraciones salientes: sin él, un flujo FL-* que
+// llama a otro servidor no se puede puntuar — falla por conexión rechazada, que
+// no dice nada del código. Se gatea por diseño, no por stack.
+test('capa http-clients: la infraestructura de prueba levanta un proveedor stub', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const patchedManifest = structuredClone(manifest);
+  patchedManifest.layers['http-clients'] = 'http-clients.keel.yaml';
+  const patched = structuredClone(layers);
+  patched['http-clients'] = {
+    clients: {
+      pricing: {
+        purpose: 'Obtener el precio vigente de un producto.',
+        calls: { getPrice: { contract: 'GET /prices/{sku} -> { amount: decimal }' } }
+      }
+    }
+  };
+
+  scaffoldService({ manifest: patchedManifest, layers: patched, workspace });
+
+  const compose = read(workspace, 'infra/docker-compose.yaml');
+  assert.ok(compose.includes('wiremock/wiremock:'));
+  assert.ok(compose.includes('8090:8080'));
+  assert.ok(compose.includes('./http-stubs:/home/wiremock'));
+  // El montaje necesita el directorio: si no existe, el runtime lo crea como root.
+  assert.ok(exists(workspace, 'infra/http-stubs/mappings/.gitkeep'));
+
+  // El reset lo deja como recién arrancado: los mappings del flujo anterior son
+  // estado sucio igual que una fila.
+  const reset = read(workspace, 'infra/reset-db.sh');
+  assert.ok(reset.includes('__admin/reset'));
+
+  // Arnés: programar, contar y resetear desde el propio escenario.
+  const abstractIt = read(workspace, 'src/integrationTest/java/com/commerce/productcatalog/flows/AbstractFlowIT.java');
+  assert.ok(abstractIt.includes('protected static void stubFor(String method, String pathPattern, int status, String jsonBody)'));
+  assert.ok(abstractIt.includes('protected static void stubFailure('));
+  assert.ok(abstractIt.includes('protected static int stubCallCount('));
+  assert.ok(abstractIt.includes('http://localhost:8090/__admin'));
+
+  // Y el humo del arnés lo cubre: en rojo, el fallo es de fontanería, no de negocio.
+  const smoke = read(workspace, 'src/integrationTest/java/com/commerce/productcatalog/flows/HarnessSmokeIT.java');
+  assert.ok(smoke.includes('SMOKE-6'));
+  assert.ok(smoke.includes('httpStubIsProgrammable'));
+});
+
+test('sin capa http-clients no hay proveedor stub en la infraestructura', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  scaffoldService({ manifest, layers, workspace });
+
+  assert.ok(!read(workspace, 'infra/docker-compose.yaml').includes('wiremock'));
+  assert.ok(!exists(workspace, 'infra/http-stubs/mappings/.gitkeep'));
+  assert.ok(!read(workspace, 'infra/reset-db.sh').includes('__admin/reset'));
+});
+
 test('capa http-clients: RestClient configurado + resilience4j + fallback stub', () => {
   const workspace = makeWorkspace();
   const { manifest, layers } = loadFixture();
@@ -1458,7 +1513,10 @@ test('capa http-clients: RestClient configurado + resilience4j + fallback stub',
   // resilience4j en gradle + fragmento de config con instancias derivadas del diseño.
   assert.ok(read(workspace, 'build.gradle').includes('resilience4j-spring-boot3'));
   const hc = read(workspace, 'src/main/resources/parameters/local/http-clients.yaml');
-  assert.ok(hc.includes('base-url: http://localhost:8081')); // literal solo en local
+  // Literal solo en local, y apuntando al proveedor de prueba del compose: el
+  // proveedor real no está en infra/, y sin stub ningún flujo que lo atraviese
+  // se puede puntuar.
+  assert.ok(hc.includes('base-url: http://localhost:8090'));
   assert.ok(hc.includes('max-attempts: 3'));
   assert.ok(hc.includes('wait-duration: 200ms'));
   // El techo declarado por el diseño acota el backoff exponencial.

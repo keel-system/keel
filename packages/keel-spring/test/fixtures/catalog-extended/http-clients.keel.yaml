@@ -1,0 +1,102 @@
+clients:
+  # Proveedor del que se LEE un dato ajeno (needs · on-demand): el precio vigente
+  # no es del catálogo y no se replica — se pide al consultar la ficha.
+  pricing:
+    purpose: Precio vigente del producto, que es propiedad del servicio de precios.
+    auth:
+      type: api-key
+      headerName: X-Api-Key
+    calls:
+      getPrice:
+        contract: GET /prices/{sku} devuelve { amount, currency }.
+        method: GET
+        path: /prices/{sku}
+        request:
+          pathParams:
+            sku:
+              type: string
+              required: true
+        response:
+          fields:
+            amount:
+              type: decimal
+              required: true
+              constraints: { scale: 2 }
+            currency:
+              type: string
+              required: true
+        timeoutMs: 2000
+        retry:
+          maxAttempts: 3
+          initialDelayMs: 200
+          maxDelayMs: 4000
+          retryOn: [timeout, 5xx]
+        circuitBreaker:
+          failureRateThreshold: 50
+          slidingWindowSize: 20
+          waitDurationMs: 30000
+        fallback: Devolver el último precio conocido en caché.
+
+  # Proveedor al que se le PIDE trabajo (activations): la reindexación del
+  # buscador no la hace el catálogo, y su fallo no puede tumbar la operación.
+  search-index:
+    purpose: Índice de búsqueda del catálogo, que mantiene el servicio de búsqueda.
+    calls:
+      reindexProduct:
+        contract: PUT /index/products/{productId} reindexa el producto y devuelve { indexedAt }.
+        method: PUT
+        path: /index/products/{productId}
+        request:
+          pathParams:
+            productId:
+              type: uuid
+              required: true
+          body:
+            sku:
+              type: string
+              required: true
+            name:
+              type: string
+              required: true
+        response:
+          fields:
+            indexedAt:
+              type: timestamp
+              required: true
+        timeoutMs: 3000
+        circuitBreaker:
+          failureRateThreshold: 60
+          slidingWindowSize: 10
+          waitDurationMs: 20000
+        fallback: Seguir sin reindexar; el buscador se pone al día en su siguiente barrido.
+
+  # Tercer proveedor, activado con onFailure: fail — sin él la retirada del
+  # producto no puede darse por buena.
+  compliance:
+    purpose: Registro regulatorio de retiradas de producto, obligatorio antes de retirar.
+    auth:
+      type: bearer-static
+    calls:
+      recordWithdrawal:
+        contract: POST /withdrawals registra la retirada y devuelve { recordId }.
+        method: POST
+        path: /withdrawals
+        request:
+          body:
+            productId:
+              type: uuid
+              required: true
+            reason:
+              type: string
+              required: true
+        response:
+          fields:
+            recordId:
+              type: uuid
+              required: true
+        timeoutMs: 4000
+        circuitBreaker:
+          failureRateThreshold: 50
+          slidingWindowSize: 10
+          waitDurationMs: 30000
+        fallback: Rechazar la retirada; sin inscripción regulatoria no puede darse por buena.

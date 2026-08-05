@@ -22,3 +22,24 @@ publishing:
         status:
           type: ProductStatus
           required: true
+
+subscriptions:
+  # Alimenta la copia local del precio de proveedor (dependencies: pricing.supplierPrice).
+  SupplierPriceChanged:
+    description: El servicio de precios cambió el precio de proveedor de un producto.
+    source: pricing
+    payload:
+      sku:        { type: string, required: true }
+      amount:     { type: decimal, required: true, constraints: { scale: 2 } }
+      currency:   { type: string, required: true }
+      occurredAt: { type: timestamp, required: true }
+    triggers: projectSupplierPrice
+
+  # Compensación: deshace a posteriori el trabajo que se delegó en compliance.
+  WithdrawalRejected:
+    description: El registro regulatorio rechazó una retirada ya inscrita.
+    source: compliance
+    payload:
+      productId: { type: uuid, required: true }
+      reason:    { type: string, required: true }
+    triggers: reactivateWithdrawnProduct

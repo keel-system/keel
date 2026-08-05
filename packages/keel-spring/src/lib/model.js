@@ -124,7 +124,16 @@ export function buildModel({ manifest, layers, stack = null }) {
 
   // Dependencias con otros servidores. Va al final: sintetiza entidades, clientes
   // y suscripciones ya resueltos, y les cuelga los retro-enlaces que consumen los scaffolds.
-  const dependencies = collectDependencies(layers, entities, httpClients, subscriptions, errors, warnings);
+  const dependencies = collectDependencies(
+    layers,
+    entities,
+    httpClients,
+    subscriptions,
+    errors,
+    events,
+    services,
+    warnings
+  );
 
   return { service, layersPresent, enums, valueObjects, entities, services, errors, childDtos, refDtos, hasFileUploads, events, messaging, subscriptions, pagination, api, audit, security, httpClients, dependencies, storage, warnings };
 }
@@ -1163,8 +1172,20 @@ function collectHttpClients(layers, domainTypes, inlineEnumName, warnings) {
 // messaging), solo declara por qué existen y qué hay que materializar además.
 // Lo único que exige código propio es `replica`: la copia local y su política
 // de lectura cuando el dato falta (onMiss).
+//
+// Las dos mitades del DSL —`needs` (leo un dato del proveedor) y `activations`
+// (le pido trabajo)— acaban aquí como retro-enlaces colgados de las piezas ya
+// resueltas, igual que `entity.replicaOf` o `sub.feedsReplica`:
+//
+//   operation.dependencyNeeds       ← needs cuyo `usedBy` cita la operación
+//   operation.dependencyActivations ← activaciones cuyo `triggeredBy` la cita
+//   call.activations                ← activaciones que salen por esa llamada HTTP
+//
+// `usedBy` y `triggeredBy` son el único enlace del DSL entre un caso de uso y el
+// trabajo que delega: si no aterrizan en el stub del handler, el diseño declara
+// una obligación que nadie ve al escribir el código.
 
-function collectDependencies(layers, entities, httpClients, subscriptions, errors, warnings) {
+function collectDependencies(layers, entities, httpClients, subscriptions, errors, events, services, warnings) {
   const declared = layers.dependencies?.dependencies;
   if (!declared) return null;
 
@@ -1172,6 +1193,11 @@ function collectDependencies(layers, entities, httpClients, subscriptions, error
   const clientById = new Map((httpClients ?? []).map((client) => [client.id, client]));
   const subscriptionByEvent = new Map((subscriptions ?? []).map((sub) => [sub.name, sub]));
   const errorByCode = new Map((errors ?? []).map((error) => [error.code, error]));
+  const eventByName = new Map((events ?? []).map((event) => [event.name, event]));
+  const opByName = new Map();
+  for (const group of services ?? []) {
+    for (const operation of group.operations) opByName.set(operation.name, operation);
+  }
 
   const result = [];
   for (const [depId, dep] of Object.entries(declared)) {
@@ -1181,14 +1207,51 @@ function collectDependencies(layers, entities, httpClients, subscriptions, error
       const replica = spec.replica
         ? resolveReplica(depId, needName, spec.replica, entityByName, subscriptionByEvent, errorByCode, warnings)
         : null;
-      needs.push({
+      const need = {
         name: needName,
         description: spec.description ?? '',
         strategy: spec.strategy,
         usedBy: spec.usedBy ?? [],
         fetch,
         replica
-      });
+      };
+      needs.push(need);
+      for (const opName of need.usedBy) {
+        const operation = opByName.get(opName);
+        if (!operation) continue;
+        (operation.dependencyNeeds ??= []).push({ dependency: depId, need });
+      }
+    }
+
+    const activations = [];
+    for (const [name, spec] of Object.entries(dep.activations ?? {})) {
+      const via = spec.via ?? {};
+      const activation = {
+        name,
+        description: spec.description ?? '',
+        triggeredBy: spec.triggeredBy ?? [],
+        effect: spec.effect ?? '',
+        // El default del schema: pedir el trabajo y esperar solo el acuse.
+        awaits: spec.awaits ?? 'acknowledgement',
+        onFailure: resolveOnFailure(depId, name, spec.onFailure, errorByCode, warnings),
+        http: via.client ? resolveActivationCall(depId, name, via, clientById, warnings) : null,
+        // Evento propio del servicio: lo emite el agregado con raise(...), no el
+        // handler. Aquí solo se resuelve su clase para poder citarla en el stub.
+        event: via.publishes ? (eventByName.get(via.publishes) ?? { name: via.publishes, className: null }) : null
+      };
+      activations.push(activation);
+
+      for (const opName of activation.triggeredBy) {
+        const operation = opByName.get(opName);
+        if (!operation) continue;
+        (operation.dependencyActivations ??= []).push({ dependency: depId, activation });
+      }
+      // Retro-enlace hacia la llamada: es lo que permite a http-clients.js
+      // escribir el cuerpo del fallback del circuit breaker con la política que
+      // el diseño ya declaró en onFailure, en vez de dejar un TODO.
+      if (activation.http?.callRef) {
+        (activation.http.callRef.activations ??= []).push({ dependency: depId, activation });
+      }
     }
 
     const compensations = (dep.compensations ?? []).map((item) => {
@@ -1204,6 +1267,7 @@ function collectDependencies(layers, entities, httpClients, subscriptions, error
       contractVersion: dep.contract?.version ?? null,
       contractSource: dep.contract?.source ?? null,
       needs,
+      activations,
       compensations
     });
   }
@@ -1226,6 +1290,49 @@ function resolveFetch(depId, needName, fetchedFrom, clientById, warnings) {
     mapperClass: client.mapperClass,
     call: call.name,
     resultType: call.resultType
+  };
+}
+
+// Canal síncrono de una activación. Mismo shape que resolveFetch más `callRef`:
+// la llamada viva, para colgarle el retro-enlace que lee http-clients.js.
+function resolveActivationCall(depId, name, via, clientById, warnings) {
+  const client = clientById.get(via.client);
+  const call = client?.calls.find((c) => c.name === via.call) ?? null;
+  if (!call) {
+    warnings.push(
+      `Activación '${depId}.${name}' (dependencies): la llamada '${via.client}.${via.call}' no existe en http-clients; el stub del handler no podrá citarla.`
+    );
+    return null;
+  }
+  return {
+    clientId: client.id,
+    clientClass: client.clientClass,
+    mapperClass: client.mapperClass,
+    call: call.name,
+    resultType: call.resultType,
+    instanceName: call.instanceName,
+    callRef: call
+  };
+}
+
+// Política declarada para cuando el proveedor no responde. Se resuelve igual que
+// `onMiss` de una réplica —misma tabla de errores, mismo status por constructor—
+// porque es la misma decisión en el otro lado del acoplamiento.
+function resolveOnFailure(depId, name, onFailure, errorByCode, warnings) {
+  if (!onFailure) return null;
+  const error = onFailure.error ? errorByCode.get(onFailure.error) : null;
+  if (onFailure.error && !error) {
+    warnings.push(
+      `Activación '${depId}.${name}' (dependencies): el error '${onFailure.error}' de onFailure no está en el catálogo de use-cases; su clase no existe todavía.`
+    );
+  }
+  return {
+    action: onFailure.action,
+    error: onFailure.error ?? null,
+    exceptionClass: error?.exceptionClass ?? null,
+    dynamicStatus: error?.dynamicStatus ?? false,
+    httpStatus: error?.http ?? 502,
+    degradedTo: onFailure.degradedTo ?? null
   };
 }
 

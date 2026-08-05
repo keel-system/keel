@@ -50,5 +50,36 @@ export function checkSupportedFeatures(manifest, layers) {
     );
   }
 
+  // Versión del contrato del proveedor. El diseño la declara para que romperla
+  // sea una decisión consciente, pero el servidor generado no la comprueba en
+  // runtime: no negocia versión, no manda cabecera de versión y no falla al
+  // arrancar si el proveedor ya no la sirve. Un cambio incompatible se descubre
+  // en la primera llamada, y el aviso está para que nadie cuente con otra cosa.
+  const versioned = Object.entries(layers?.dependencies?.dependencies ?? {})
+    .filter(([, dep]) => dep?.contract?.version)
+    .map(([id, dep]) => `${id}@${dep.contract.version}`);
+  if (versioned.length > 0) {
+    warnings.push(
+      `dependencies.contract.version (${versioned.join(', ')}): informativo. keel-spring no comprueba en runtime que el proveedor siga sirviendo esa versión — un cambio incompatible aparecerá como fallo de la llamada, no al arrancar. Si el proveedor versiona por ruta o cabecera, ponlo en la llamada de http-clients.`
+    );
+  }
+
+  // `awaits` describe qué se espera del proveedor, y eso aterriza como
+  // instrucción en el stub del handler, no como código: no se genera ninguna
+  // espera, correlación ni máquina de estados que ligue la respuesta con la
+  // operación. Con `outcome` la diferencia importa —el desenlace depende de lo
+  // que devuelva el proveedor— así que se dice en voz alta.
+  const awaitingOutcome = [];
+  for (const [id, dep] of Object.entries(layers?.dependencies?.dependencies ?? {})) {
+    for (const [name, activation] of Object.entries(dep?.activations ?? {})) {
+      if (activation?.awaits === 'outcome') awaitingOutcome.push(`${id}.${name}`);
+    }
+  }
+  if (awaitingOutcome.length > 0) {
+    warnings.push(
+      `dependencies.activations.awaits: outcome (${awaitingOutcome.join(', ')}): keel-spring lo traduce a "usa el cuerpo de la respuesta" como nota en el handler, no a ningún mecanismo de espera ni de correlación. Si el proveedor resuelve de forma asíncrona (responde 202 y avisa después), el diseño necesita además una suscripción a su evento de resultado: la llamada síncrona sola no lo cubre.`
+    );
+  }
+
   return { errors, warnings };
 }

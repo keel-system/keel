@@ -217,7 +217,8 @@ export function resetDbScript(selected, service, model = null) {
   const broker = selected.find((s) => s.category === 'broker' && s.entry.cliPurgeCmd);
   const destinations = model?.messaging?.channels ?? [];
   const purges = broker && destinations.length > 0 ? destinations : [];
-  if (!db && !cache && purges.length === 0) return null;
+  const httpStub = selected.find((s) => s.category === 'httpStub');
+  if (!db && !cache && purges.length === 0 && !httpStub) return null;
 
   const dbName = service.name.replace(/-/g, '_');
   const steps = [];
@@ -280,13 +281,26 @@ else
 fi`);
   }
 
+  // Stub del proveedor: los mappings que programó el flujo anterior son estado
+  // sucio igual que una fila, y el log de peticiones lo leen los verify de los
+  // tests. Tolerante a fallo como las purgas: que el stub no esté arriba no
+  // ensucia nada, y abortar aquí bloquearía flujos que no lo usan.
+  if (httpStub) {
+    steps.push(`if $RUNTIME exec ${sq(`${service.name}-devtools`)} sh -c ${sq(httpStub.entry.cliResetCmd)}; then
+  echo "Stub de proveedores reiniciado (${httpStub.entry.label}: mappings y log de peticiones)."
+else
+  echo "AVISO: no se pudo reiniciar el stub HTTP (¿está 'wiremock' arriba?). Continúo." >&2
+fi`);
+  }
+
   const supportsSchema = Boolean(db?.entry.cliDropSchemaCmd);
   return `#!/usr/bin/env bash
 # reset-db.sh — deja el estado de prueba de ${service.name} como recién arrancado:
 # ${[
     db ? 'vacía los datos de la BD (esquema intacto)' : null,
     cache ? 'borra las claves de la caché' : null,
-    purges.length > 0 ? `purga los destinos de mensajería (${purges.join(', ')})` : null
+    purges.length > 0 ? `purga los destinos de mensajería (${purges.join(', ')})` : null,
+    httpStub ? 'reinicia el stub de proveedores (mappings y log de peticiones)' : null
   ]
     .filter(Boolean)
     .join(', ')}.

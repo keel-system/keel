@@ -61,3 +61,24 @@ Síntoma → causa probable → arreglo. Antes de tocar nada confirma el diseño
 - **Arreglo**: captura en el adaptador (`.onStatus(...)` o try/catch) y lanza la
   `DomainException` con el `code` declarado en use-cases. Solo `infrastructure/http`
   importa tipos de `org.springframework.web.client`.
+
+  La traducción es **por status**, y el criterio no es de infraestructura sino del
+  diseño: un `404` del proveedor suele ser "no existe" (el `onMiss`/`onFailure`
+  declarado), un `409` un conflicto suyo que hay que propagar con significado, y un
+  `5xx` o un timeout es indisponibilidad — ahí no traduzcas: deja que suban como
+  `ResourceAccessException`/`HttpServerErrorException` para que `@Retry` y el
+  circuit breaker hagan su trabajo. Capturarlas mata la resiliencia declarada.
+
+## Conexión rechazada al ejecutar los flujos `FL-*`
+
+- **Causa**: el proveedor real no está en `infra/`. En el perfil `local` las
+  `base-url` apuntan al **WireMock** del compose (`http://localhost:8090`), y o no
+  está levantado, o el escenario no programó ningún mapping para esa ruta.
+- **Arreglo**: `bash infra/validate-infra.sh` (el humo `SMOKE-6` cubre el ciclo
+  entero). Si el stub está en pie, el Given del escenario tiene que programar la
+  respuesta con `stubFor(...)`; el log del contenedor —arranca con `--verbose`—
+  dice qué petición no casó con ningún mapping. Detalle en
+  `docs/keel/conventions/integration-tests.md § El proveedor de prueba`.
+- **Ojo**: si el mapping existe pero el escenario falla igual, compara la ruta del
+  patrón con la que arma el adaptador. `urlPathPattern` casa contra el path **sin**
+  query: una `?` en el patrón nunca casa.

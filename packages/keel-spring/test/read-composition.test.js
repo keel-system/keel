@@ -78,10 +78,12 @@ test('embed: el handler recibe el resolver de cada RefDto que su mapper exige', 
 
   // El mapper pide el CategoryRefDto por parámetro...
   assert.ok(mapper.includes('toUpdateProductResponseDto(Product entity, CategoryRefDto category)'));
-  // ...y el handler tiene con qué producirlo: sin esto no compila.
+  // ...y el handler tiene con qué producirlo: sin esto no compila. El resolver
+  // es un parámetro del constructor, no necesariamente el último: la operación
+  // también dispara una activación, que inyecta su propio puerto.
   assert.ok(handler.includes('import com.commerce.catalog.application.support.CategoryRefResolver;'));
   assert.ok(handler.includes('private final CategoryRefResolver categoryRefResolver;'));
-  assert.ok(handler.includes('CategoryRefResolver categoryRefResolver)'));
+  assert.ok(/public UpdateProductCommandHandler\([^)]*CategoryRefResolver categoryRefResolver[,)]/.test(handler));
 
   // Y no se le cuela el repositorio de la otra raíz: para esto va el resolver.
   assert.ok(!handler.includes('CategoryRepository'));

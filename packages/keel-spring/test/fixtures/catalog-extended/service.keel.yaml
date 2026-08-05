@@ -11,3 +11,5 @@ layers:
   persistence: persistence.keel.yaml
   messaging: messaging.keel.yaml
   storage: storage.keel.yaml
+  http-clients: http-clients.keel.yaml
+  dependencies: dependencies.keel.yaml

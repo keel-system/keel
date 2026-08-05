@@ -442,13 +442,50 @@ Los efectos asíncronos (publicación, consumo de una suscripción) se esperan c
 Inspeccionar la base de datos sirve para **diagnosticar** un fallo, jamás para **definir** el
 criterio de aceptación: lo que solo es verificable por dentro no es contrato.
 
+## El proveedor de prueba (capa `http-clients`)
+
+Los servidores de los que este depende por HTTP **no están** en `infra/`: en su lugar hay un
+**WireMock** en `http://localhost:8090`, y las `base-url` de los clientes apuntan ahí en el perfil
+`local` —el que activan estas pruebas—. Sin él, cualquier flujo que atraviese un cliente falla por
+conexión rechazada, que no dice nada sobre el código.
+
+**No contradice la regla de arriba.** Lo prohibido son los dobles que sustituyen la fontanería
+*dentro* de la JVM (`@MockBean`, `@EmbeddedKafka`): con ellos no se valida el adaptador real, ni la
+serialización, ni el timeout, ni el circuit breaker. El stub es un proceso aparte que habla HTTP por
+el mismo socket que hablaría el proveedor — exactamente lo que LocalStack es para SNS/SQS. El
+servidor no sabe que no es real, y la prueba sigue siendo de caja negra.
+
+Helpers de `AbstractFlowIT`:
+
+| Helper | Para qué |
+|---|---|
+| `stubFor(método, patrónRuta, status, cuerpoJson)` | El Given: qué responde el proveedor en **este** escenario |
+| `stubFailure(método, patrónRuta, status)` | Ejercitar `onFailure`/`onMiss` y el circuit breaker (5xx reintenta, 4xx no) |
+| `stubCallCount(método, patrónRuta)` | El Then: cuántas veces se llamó al proveedor — la única forma en caja negra de afirmar que un dato se cacheó, o que algo no se reintentó |
+| `resetStubs()` | Limpieza explícita a mitad de un flujo; entre clases ya lo hace `resetState()` |
+
+Reglas:
+
+- **El Given programa lo suyo, y solo lo suyo.** Un mapping que sobrevive a su escenario es estado
+  global: el orden de ejecución acaba decidiendo el resultado. `resetState()` los borra por clase.
+- **Los mappings van en el test, no en `infra/http-stubs/mappings/`.** Un archivo esconde en otro
+  sitio la mitad del escenario. El directorio existe para lo que no pertenece a ningún flujo.
+- **El patrón de ruta es la ruta del proveedor**, la que declara la llamada en `http-clients`
+  (`urlPathPattern`, regex sobre el path sin query).
+- La sonda `SMOKE-6` cubre el ciclo entero (programar, llamar, contar, resetear). Si está roja, el
+  problema es del arnés o del compose: no se ejecuta la suite.
+
 ## Lo que se declara en vez de simularse
 
 Un escenario que el diseño no permite ejercitar de forma determinista no se traduce a un
 test que siempre pasa: se declara en `uncovered` con su motivo. Casos típicos: la DLQ de
-`onFailure` (exige provocar el fallo del handler desde fuera), las operaciones con
-`schedule`, y `onMiss: degrade` cuando depende de un proveedor externo. Declararlo es
-información; un test decorativo es ruido que además da falsa seguridad.
+`onFailure` (exige provocar el fallo del handler desde fuera) y las operaciones con
+`schedule`. Declararlo es información; un test decorativo es ruido que además da falsa seguridad.
+
+**Depender de otro servidor ya no es motivo de `uncovered`**: con el stub, un flujo que lee o activa
+a un proveedor se programa y se puntúa como cualquier otro, y su camino de fallo también
+(`stubFailure`). Solo queda fuera lo que el stub no reproduce de forma determinista — una caída a
+mitad de respuesta, o una degradación que depende de la latencia real del proveedor.
 
 ## Ejecución
 

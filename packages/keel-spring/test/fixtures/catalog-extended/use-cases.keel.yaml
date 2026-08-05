@@ -98,6 +98,9 @@ operations:
       - code: PRODUCT_NOT_FOUND
         when: No existe un producto con ese id.
         http: 404
+      - code: COMPLIANCE_UNAVAILABLE
+        when: El registro regulatorio no responde y la retirada no puede darse por inscrita.
+        http: 502
     emits: [ProductUpdated]
 
   addProductImage:
@@ -144,4 +147,44 @@ operations:
         http: 404
       - code: CATEGORY_NOT_FOUND
         when: La categoría del producto ya no existe.
+        http: 404
+
+  # Operaciones de proyección: sin trigger externo, las dispara la suscripción al
+  # evento del proveedor. La copia solo se escribe por aquí.
+  projectSupplierPrice:
+    description: Aplica a la copia local el precio de proveedor que informa el servicio de precios.
+    kind: command
+    internal: true
+    input:
+      fields:
+        sku:
+          type: string
+          required: true
+        amount:
+          type: decimal
+          required: true
+        currency:
+          type: string
+          required: true
+        occurredAt:
+          type: timestamp
+          required: true
+    output: "void"
+
+  reactivateWithdrawnProduct:
+    description: Devuelve a activo un producto cuya retirada rechazó el registro regulatorio.
+    kind: command
+    internal: true
+    input:
+      fields:
+        productId:
+          type: uuid
+          required: true
+        reason:
+          type: string
+          required: true
+    output: "void"
+    errors:
+      - code: PRODUCT_NOT_FOUND
+        when: No existe un producto con ese id.
         http: 404

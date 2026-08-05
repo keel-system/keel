@@ -495,10 +495,59 @@ export const STORAGE = {
   }
 };
 
+// ─── Proveedores de prueba de las integraciones salientes ────────────────────
+//
+// Un servicio que depende de otro por HTTP no tiene con quién hablar en `infra/`:
+// el proveedor real no está, y sin él ningún escenario FL-* que atraviese un
+// cliente de la capa `http-clients` se puede puntuar — falla por conexión
+// rechazada, que no dice nada sobre el código. WireMock lo cierra hablando el
+// mismo protocolo por el mismo socket que hablaría el proveedor: la prueba sigue
+// siendo de caja negra. No es un doble en el sentido que prohíbe
+// conventions/integration-tests.md (@MockBean, @EmbeddedKafka): esos sustituyen
+// la fontanería DENTRO de la JVM; esto es un proceso aparte, exactamente igual
+// que LocalStack sustituye a SNS/SQS.
+//
+// No es una elección de stack: no entra en CATALOG ni en STACK_DEFAULTS ni en el
+// cuestionario. Se gatea por diseño (capa http-clients), como la skill
+// keel-spring-httpclient.
+export const HTTP_STUB = {
+  id: 'wiremock',
+  label: 'WireMock (proveedor de prueba de las integraciones salientes)',
+  image: 'wiremock/wiremock:3.13.1',
+  port: 8080,
+  publishedPort: 8090,
+  serviceKey: 'wiremock',
+  cliTool: 'curl',
+  cliVia: 'devtools',
+  // /__admin/mappings responde 200 en cuanto el admin API está en pie, sin
+  // depender de qué versión introdujo /__admin/health.
+  cliValidateCmd: 'curl -sf -o /dev/null http://wiremock:8080/__admin/mappings',
+  // Deja el stub como recién arrancado: borra los mappings programados por el
+  // flujo anterior y el log de peticiones que verifican los tests.
+  cliResetCmd: 'curl -sf -o /dev/null -XPOST http://wiremock:8080/__admin/reset',
+  composeServices: () => ({
+    wiremock: {
+      image: 'wiremock/wiremock:3.13.1',
+      // --verbose deja en el log qué petición no casó con ningún mapping, que es
+      // el diagnóstico que hace falta cuando un escenario falla contra el stub.
+      command: ['--verbose', '--global-response-templating'],
+      ports: ['8090:8080'],
+      volumes: ['./http-stubs:/home/wiremock:z']
+    }
+  })
+};
+
 export const STACK_DEFAULTS = { database: 'postgresql', broker: 'kafka', auth: 'keycloak', cache: 'redis', storage: 'minio' };
 
 // Índice de categoría → diccionario, para recorridos genéricos.
-const CATALOG = { database: DATABASES, broker: BROKERS, auth: AUTH, cache: CACHES, storage: STORAGE };
+const CATALOG = {
+  database: DATABASES,
+  broker: BROKERS,
+  auth: AUTH,
+  cache: CACHES,
+  storage: STORAGE,
+  httpStub: { wiremock: HTTP_STUB }
+};
 
 /**
  * Tecnologías elegidas que levantan contenedor (con su metadata de validación),
@@ -514,7 +563,10 @@ export function selectedInfra(model) {
     broker: layersPresent.messaging ? stack.broker : null,
     auth: stack.auth && stack.auth !== 'none' ? stack.auth : null,
     cache: stack.cache,
-    storage: layersPresent.storage ? stack.storage : null
+    storage: layersPresent.storage ? stack.storage : null,
+    // Gateado por diseño, no por stack: si hay integraciones salientes hace
+    // falta con quién hablar en la infraestructura de prueba.
+    httpStub: layersPresent.httpClients ? HTTP_STUB.id : null
   };
 
   const infra = [];

@@ -24,7 +24,9 @@ import { declaresIdempotency } from './http-idempotency.js';
 function hasResetScript(model) {
   const { layersPresent, stack } = model;
   const db = layersPresent.persistence && stack.database ? DATABASES[stack.database] : null;
-  return Boolean(db?.cliResetCmd || stack.cache || purgeableChannels(model).length > 0);
+  // El stub de proveedores cuenta: sus mappings y su log de peticiones son estado
+  // sucio igual que una fila, y devtools.js ya los reinicia desde el script.
+  return Boolean(db?.cliResetCmd || stack.cache || purgeableChannels(model).length > 0 || layersPresent.httpClients);
 }
 
 // El aislamiento de la BD entre clases de flujo lo da @DirtiesContext cuando la BD
@@ -319,8 +321,23 @@ function abstractImports(model) {
       'java.util.concurrent.ConcurrentHashMap'
     );
   }
+  // Programación del proveedor de prueba (WireMock): admin API por HTTP crudo,
+  // porque el TestRestTemplate apunta al servidor bajo prueba, no al stub.
+  if (hasHttpClients(model)) {
+    imports.push(
+      'java.net.URI',
+      'java.net.http.HttpClient',
+      'java.net.http.HttpRequest',
+      'java.net.http.HttpResponse',
+      'java.io.IOException'
+    );
+  }
   if (needsDirtiesContext(model)) imports.push('org.springframework.test.annotation.DirtiesContext');
   return imports;
+}
+
+function hasHttpClients(model) {
+  return Boolean(model.layersPresent.httpClients);
 }
 
 function abstractBody(model) {
@@ -574,7 +591,99 @@ ${hasIdempotency(model) ? `
     }
 
     // ── Estado e infraestructura ─────────────────────────────────────────────
-${resetSection(model)}${devtoolsSection(model)}${securitySection(model)}}`;
+${resetSection(model)}${httpStubSection(model)}${devtoolsSection(model)}${securitySection(model)}}`;
+}
+
+// Proveedor de prueba de las integraciones salientes. Es infraestructura, no un
+// doble: un proceso aparte que habla HTTP por el mismo socket que hablaría el
+// proveedor real, así que el escenario sigue siendo de caja negra. Sin esto, un
+// flujo que atraviesa un cliente de http-clients no se puede puntuar — falla por
+// conexión rechazada, que no dice nada sobre el código.
+function httpStubSection(model) {
+  if (!hasHttpClients(model)) return '';
+  const clients = model.httpClients.map((client) => client.id).join(', ');
+  return `
+    /** Admin API del proveedor de prueba (WireMock de infra/docker-compose.yaml). */
+    private static final String STUB_ADMIN = "http://localhost:8090/__admin";
+
+    private static final HttpClient STUB_HTTP = HttpClient.newHttpClient();
+
+    /**
+     * Programa qué responde el proveedor en <b>este</b> escenario: método, ruta
+     * (regex sobre el path, sin query) y la respuesta que verá el servidor.
+     *
+     * <p>Clientes que salen por aquí: ${clients}. Sus \`base-url\` apuntan al stub en
+     * el perfil \`local\`, que es el que activan estas pruebas.
+     *
+     * <p>El Given de cada flujo programa lo suyo y {@code resetState()} lo limpia
+     * antes de la clase siguiente: un mapping que sobrevive a su escenario es
+     * estado global y hace que el orden de ejecución decida el resultado.
+     */
+    protected static void stubFor(String method, String pathPattern, int status, String jsonBody) {
+        String mapping = """
+                {"request": {"method": "%s", "urlPathPattern": "%s"},
+                 "response": {"status": %d, "headers": {"Content-Type": "application/json"}, "body": %s}}"""
+                .formatted(method, pathPattern, status, jsonBody == null ? "\\"\\"" : quote(jsonBody));
+        stubAdmin("/mappings", mapping);
+    }
+
+    /**
+     * Fallo del proveedor sin cuerpo útil: lo que ejercita el fallback declarado
+     * (onFailure/onMiss) y el circuit breaker. Un 5xx es reintentable; un 4xx no.
+     */
+    protected static void stubFailure(String method, String pathPattern, int status) {
+        stubFor(method, pathPattern, status, "{}");
+    }
+
+    /**
+     * Cuántas veces llamó el servidor al proveedor. Es la única forma de afirmar
+     * en caja negra que un dato se pidió una vez y se cacheó, o que una activación
+     * con {@code onFailure: ignore} no se reintentó.
+     */
+    protected static int stubCallCount(String method, String pathPattern) {
+        String body = stubAdmin("/requests/count",
+                """
+                {"method": "%s", "urlPathPattern": "%s"}""".formatted(method, pathPattern));
+        return JsonPath.read(body, "$.count");
+    }
+
+    /** Borra los mappings y el log de peticiones. Lo llama {@link #resetState()}. */
+    protected static void resetStubs() {
+        stubAdmin("/reset", "");
+    }
+
+    private static String stubAdmin(String path, String body) {
+        try {
+            HttpResponse<String> response = STUB_HTTP.send(
+                    HttpRequest.newBuilder(URI.create(STUB_ADMIN + path))
+                            .header("Content-Type", "application/json")
+                            .POST(HttpRequest.BodyPublishers.ofString(body))
+                            .build(),
+                    HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() >= 300) {
+                throw new AssertionError(
+                        "El proveedor de prueba rechazó " + path + " (HTTP " + response.statusCode() + "): " + response.body());
+            }
+            return response.body();
+        } catch (IOException | InterruptedException e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            throw new AssertionError(
+                    "No se pudo hablar con el proveedor de prueba en " + STUB_ADMIN
+                            + ". ¿Está levantado el compose de infra/? (bash infra/validate-infra.sh)", e);
+        }
+    }
+
+    /** Escapa un JSON para incrustarlo como cadena dentro de otro JSON. */
+    private static String quote(String value) {
+        try {
+            return JSON.writeValueAsString(value);
+        } catch (Exception e) {
+            throw new AssertionError("No se pudo escapar el cuerpo del stub", e);
+        }
+    }
+`;
 }
 
 function resetSection(model) {
@@ -608,7 +717,7 @@ function resetSection(model) {
      * de un flujo, un escenario usa lo que dejó el anterior.
      *
      * <p>Cubre exactamente lo que enumera \`infra/reset-db.sh\`: datos de la BD, claves
-     * de la caché y destinos de mensajería declarados. Un recurso que no esté en esa
+     * de la caché, destinos de mensajería declarados${model.layersPresent.httpClients ? ' y los mappings y el log de\n     * peticiones del proveedor de prueba' : ''}. Un recurso que no esté en esa
      * lista <b>no</b> se puede dar por limpio.
      */
     protected static void resetState() {
@@ -1181,6 +1290,15 @@ function smokeImports(model) {
   } else if (broker) {
     imports.push('java.util.List');
   }
+  if (hasHttpClients(model)) {
+    imports.push(
+      'java.io.IOException',
+      'java.net.URI',
+      'java.net.http.HttpClient',
+      'java.net.http.HttpRequest',
+      'java.net.http.HttpResponse'
+    );
+  }
   return imports;
 }
 
@@ -1299,6 +1417,42 @@ ${probes}
         resetState();
         Assertions.assertEquals("0", devtoolsShell("redis-cli -h ${cache.serviceKey} EXISTS ${key}").trim(),
             "El reset no borra las claves '${model.service.artifactId}:*': una entrada cacheada o una clave de idempotencia sobrevive al flujo.");
+    }
+`);
+  }
+
+  // El stub es fontanería como el broker: si no responde, todo flujo que llame a
+  // otro servicio falla con un error de conexión que parece de negocio. Ejercita
+  // el ciclo entero —programar, llamar, contar, resetear— porque cada pieza falla
+  // por su cuenta (un volumen mal montado deja el admin API en pie pero sin servir).
+  if (hasHttpClients(model)) {
+    tests.push(`
+    @Test
+    @Order(6)
+    @DisplayName("SMOKE-6: el proveedor de prueba se programa, responde y se resetea")
+    void httpStubIsProgrammable() {
+        resetStubs();
+        stubFor("GET", "/__keel-smoke", 200, "{\\"ok\\":true}");
+        Assertions.assertEquals(1, probeStub(), "El stub no devolvió lo programado en /__keel-smoke.");
+        Assertions.assertEquals(1, stubCallCount("GET", "/__keel-smoke"),
+            "El stub no contabiliza las llamadas: las aserciones sobre cuántas veces se llamó al proveedor no valdrían.");
+        resetStubs();
+        Assertions.assertEquals(0, stubCallCount("GET", "/__keel-smoke"),
+            "El reset no borra el log de peticiones: un flujo contaría llamadas del anterior.");
+    }
+
+    private int probeStub() {
+        try {
+            HttpResponse<String> response = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(URI.create("http://localhost:8090/__keel-smoke")).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            return response.statusCode() == 200 && response.body().contains("\\"ok\\"") ? 1 : 0;
+        } catch (IOException | InterruptedException e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            throw new AssertionError("El proveedor de prueba no responde en http://localhost:8090", e);
+        }
     }
 `);
   }

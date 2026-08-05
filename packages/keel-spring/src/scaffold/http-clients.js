@@ -284,10 +284,16 @@ function renderAdapter(model, client) {
 
   const methods = client.calls.map((call) => renderCallMethod(model, client, call, imports)).join('\n\n');
 
+  // Solo lo declara si algún fallback registra el fallo (onFailure: ignore):
+  // un logger sin uso es ruido que además dispara avisos de análisis estático.
+  const logger = imports.has('org.slf4j.Logger')
+    ? `    private static final Logger log = LoggerFactory.getLogger(${client.adapterClass}.class);\n\n`
+    : '';
+
   const body = `@Component
 public class ${client.adapterClass} implements ${client.clientClass} {
 
-    private final RestClient restClient;
+${logger}    private final RestClient restClient;
     private final ${client.mapperClass} mapper;
 
     public ${client.adapterClass}(@Qualifier("${client.beanName}") RestClient restClient, ${client.mapperClass} mapper) {
@@ -363,15 +369,77 @@ ${callBody}
   if (!hasFallback) return method;
 
   const fallbackParams = [...params, 'Throwable throwable'];
-  const fallbackDoc = call.fallback
-    ? `        // TODO (agente): ${call.fallback}`
-    : '        // TODO (agente): política de fallback del circuito abierto.';
   const fallback = `    private ${call.resultType} ${call.fallbackMethod}(${fallbackParams.join(', ')}) {
-${fallbackDoc}
-        throw new UnsupportedOperationException("TODO: fallback ${call.name}");
+${fallbackBody(model, client, call, imports)}
     }`;
 
   return `${method}\n\n${fallback}`;
+}
+
+// Cuerpo del fallback. Si el diseño ya declaró la política —una activación de la
+// capa `dependencies` que sale por esta llamada trae su `onFailure`— se genera,
+// en vez de dejar un TODO que obliga al agente a reinventar una decisión que ya
+// está tomada. Con varias activaciones por la misma llamada no se elige por él:
+// políticas distintas sobre un único método es un conflicto del diseño.
+function fallbackBody(model, client, call, imports) {
+  const activations = call.activations ?? [];
+
+  if (activations.length !== 1) {
+    // Sin política declarada, la prosa del diseño ES la instrucción al agente.
+    const doc = call.fallback
+      ? `        // TODO (agente): ${call.fallback}`
+      : '        // TODO (agente): política de fallback del circuito abierto.';
+    const listed =
+      activations.length > 1
+        ? `\n        // Varias activaciones salen por esta llamada y el diseño no puede darles políticas\n        // distintas sobre un único método: ${activations
+            .map(({ dependency, activation }) => `${dependency}.${activation.name} (onFailure: ${activation.onFailure?.action ?? 'sin declarar'})`)
+            .join('; ')}`
+        : '';
+    return `${doc}${listed}
+        throw new UnsupportedOperationException("TODO: fallback ${call.name}");`;
+  }
+
+  const prose = call.fallback ? `        // Fallback declarado en el diseño: ${call.fallback}\n` : '';
+
+  const { dependency, activation } = activations[0];
+  const { onFailure } = activation;
+  const origin = `        // Política declarada por la activación ${dependency}.${activation.name} (onFailure: ${onFailure?.action ?? 'sin declarar'}).\n`;
+
+  if (onFailure?.action === 'ignore') {
+    imports.add('org.slf4j.Logger');
+    imports.add('org.slf4j.LoggerFactory');
+    // Resultado neutro: el diseño dice que el fallo no interrumpe al llamante,
+    // así que no puede propagar la excepción ni inventarse datos del proveedor.
+    const empty = call.responseFields
+      .map((field) => (field.javaType.startsWith('List<') ? 'List.of()' : 'null'))
+      .join(', ');
+    if (call.responseFields.some((field) => field.javaType.startsWith('List<'))) imports.add('java.util.List');
+    return `${prose}${origin}        // El llamante sigue adelante: no propagues la excepción ni inventes datos del proveedor.
+        log.warn("${client.id}.${call.name} no disponible; se continúa sin él ({})", throwable.toString());
+        return new ${call.resultType}(${empty});`;
+  }
+
+  if (onFailure?.action === 'fail') {
+    const message = `"${dependency} no está disponible para ${activation.name}"`;
+    if (onFailure.exceptionClass) {
+      imports.add(`${subPackage(model, 'domain.errors')}.${onFailure.exceptionClass}`);
+      const args = onFailure.dynamicStatus ? `${message}, ${onFailure.httpStatus}` : message;
+      return `${prose}${origin}        throw new ${onFailure.exceptionClass}(${args});`;
+    }
+    return `${prose}${origin}        // TODO (agente): el diseño declara onFailure.error = ${onFailure.error}, pero ninguna
+        // operación de use-cases lo declara todavía, así que su clase no existe.
+        throw new UnsupportedOperationException("TODO: fallback ${call.name}");`;
+  }
+
+  if (onFailure?.action === 'degrade') {
+    return `${prose}${origin}        // TODO (agente): el resultado degradado es lógica de negocio y debe ser distinguible
+        // por el cliente de una respuesta normal — un dato plausible pero falso es peor que fallar:
+        //   ${onFailure.degradedTo}
+        throw new UnsupportedOperationException("TODO: fallback ${call.name}");`;
+  }
+
+  return `${prose}${origin}        // TODO (agente): la activación no declara onFailure.
+        throw new UnsupportedOperationException("TODO: fallback ${call.name}");`;
 }
 
 // ─── DTOs wire (contrato del sistema externo, solo infrastructure/http) ──────

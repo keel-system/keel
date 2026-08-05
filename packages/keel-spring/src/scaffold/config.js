@@ -655,9 +655,13 @@ function httpClientsYaml(model, profile) {
     const envVar = `${client.envPrefix}_BASE_URL`;
     lines.push(`  ${client.id}:`);
     if (profile === 'local') {
-      lines.push(`    # TODO (agente): URL del servicio de prueba/mock para ${client.id}.`);
+      // El proveedor real no está en infra/: en local se habla con el WireMock
+      // que levanta el compose, y cada prueba programa lo que ese cliente debe
+      // responder en su escenario (conventions/integration-tests.md § stub).
+      lines.push(`    # Proveedor de prueba (WireMock de infra/docker-compose.yaml).`);
+      lines.push(`    # Los mappings los programa cada test; nada que configurar aquí.`);
     }
-    lines.push(`    base-url: ${envRequired(profile, envVar, 'http://localhost:8081')}`);
+    lines.push(`    base-url: ${envRequired(profile, envVar, 'http://localhost:8090')}`);
     // Credenciales de la auth saliente: nunca vienen del diseño; gradiente de
     // env vars como el resto de secretos (oauth2 va aparte, en el bloque
     // spring.security.oauth2.client de más abajo).

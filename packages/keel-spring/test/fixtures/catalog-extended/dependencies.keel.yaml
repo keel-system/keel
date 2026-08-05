@@ -1,0 +1,76 @@
+# Las dos mitades de la capa, en un solo diseño: se LEE un dato ajeno (needs, con
+# sus dos estrategias) y se PIDE trabajo (activations, por los dos canales).
+dependencies:
+  pricing:
+    description: Servicio de precios, dueño del precio vigente y del precio de proveedor.
+    contract:
+      version: 2.1.0
+    needs:
+      currentPrice:
+        description: Precio vigente que acompaña a la ficha pública del producto.
+        strategy: on-demand
+        usedBy: [getProductBySlug]
+        fetchedFrom:
+          client: pricing
+          call: getPrice
+
+      supplierPrice:
+        description: Precio de proveedor, que se consulta en cada listado y no puede pagar una llamada por elemento.
+        strategy: replicated
+        usedBy: [listProducts, getProductsByIds]
+        fetchedFrom:
+          client: pricing
+          call: getPrice
+        replica:
+          entity: SupplierPrice
+          keyField: sku
+          fedBy: [SupplierPriceChanged]
+          freshness: Vale con que refleje el precio del último cambio publicado; unos segundos de retraso son aceptables.
+          onMiss:
+            action: fetch
+
+  search-index:
+    description: Servicio de búsqueda, que mantiene el índice del catálogo.
+    activations:
+      indexProduct:
+        description: Reindexado del producto tras darlo de alta o cambiarlo.
+        triggeredBy: [createProduct, updateProduct]
+        via:
+          client: search-index
+          call: reindexProduct
+        effect: El producto queda buscable con sus datos nuevos.
+        awaits: acknowledgement
+        onFailure:
+          action: ignore
+
+  notifications:
+    description: Servicio de avisos, que comunica a los suscriptores las novedades del catálogo.
+    activations:
+      announceNewProduct:
+        description: Aviso a los suscriptores de la categoría.
+        triggeredBy: [createProduct]
+        via:
+          publishes: ProductCreated
+        effect: Sale un aviso hacia los suscriptores de la categoría del producto.
+        awaits: nothing
+
+  compliance:
+    description: Registro regulatorio de retiradas, obligatorio antes de retirar un producto.
+    contract:
+      version: 1.0.0
+    activations:
+      recordWithdrawal:
+        description: Alta de la retirada en el registro regulatorio.
+        triggeredBy: [retireProduct]
+        via:
+          client: compliance
+          call: recordWithdrawal
+        effect: La retirada queda inscrita en el registro regulatorio con su motivo.
+        awaits: outcome
+        onFailure:
+          action: fail
+          error: COMPLIANCE_UNAVAILABLE
+    compensations:
+      - onEvent: WithdrawalRejected
+        undoes: recordWithdrawal
+        description: El registro rechazó la retirada a posteriori; el producto vuelve a estado activo.

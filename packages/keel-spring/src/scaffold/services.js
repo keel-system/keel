@@ -208,6 +208,29 @@ function renderHandler(model, service, operation) {
   // El handler NO publica eventos: los emite el agregado con raise(...) y el
   // adaptador de repositorio los drena al persistir (conventions/domain-modeling.md).
 
+  // Dependencias con otros servidores. Mismo criterio que el RefResolver: lo que
+  // el handler necesita para cumplir lo que el diseño le atribuyó se inyecta, o
+  // el camino de menor resistencia es no llamarlo. `usedBy` y `triggeredBy` son
+  // el único enlace del DSL entre el caso de uso y el trabajo que delega.
+  const injected = new Set(dependencies.map((dep) => dep.type));
+  const inject = (type, pkg) => {
+    if (injected.has(type)) return;
+    injected.add(type);
+    imports.add(`${subPackage(model, pkg)}.${type}`);
+    dependencies.push({ type, name: type[0].toLowerCase() + type.slice(1) });
+  };
+  for (const { need } of operation.dependencyNeeds ?? []) {
+    // on-demand: se pide al proveedor en el momento, por el puerto del cliente.
+    if (need.strategy === 'on-demand' && need.fetch) inject(need.fetch.clientClass, 'domain.clients');
+    // replicada: se lee por el Reader, que es quien aplica onMiss. Nunca el
+    // repositorio de la réplica: saltárselo se salta la política declarada.
+    if (need.strategy === 'replicated' && need.replica) inject(need.replica.readerClass, 'application.projection');
+  }
+  for (const { activation } of operation.dependencyActivations ?? []) {
+    // Solo el canal síncrono inyecta: `via.publishes` lo emite el agregado.
+    if (activation.http) inject(activation.http.clientClass, 'domain.clients');
+  }
+
   let fields = '';
   let constructor = '';
   if (dependencies.length > 0) {
@@ -267,6 +290,14 @@ function renderHandler(model, service, operation) {
       );
     }
   }
+  // Lo que este caso de uso debe a otros servidores. Va al final de las notas
+  // porque es lo último que se resuelve: el dato de fuera se trae antes de
+  // decidir, y el trabajo delegado sale después de haber decidido.
+  for (const { dependency, need } of operation.dependencyNeeds ?? []) notes.push(needNote(dependency, need));
+  for (const { dependency, activation } of operation.dependencyActivations ?? []) {
+    notes.push(activationNote(dependency, activation));
+  }
+
   const noteLines = notes.map((note) => `        // ${note}`);
 
   const paramName = operation.messageKind === 'query' ? 'query' : 'command';
@@ -285,6 +316,61 @@ ${noteLines.length > 0 ? noteLines.join('\n') + '\n' : ''}        throw new Unsu
     path: javaPath(model, 'application.usecases', operation.handlerClass),
     content: javaFile(subPackage(model, 'application.usecases'), [...imports], body)
   };
+}
+
+function decap(name) {
+  return name[0].toLowerCase() + name.slice(1);
+}
+
+// Nota de una necesidad (`needs`): de dónde sale el dato ajeno que esta
+// operación necesita, y por dónde NO se lee.
+function needNote(depId, need) {
+  const why = need.description ? ` — ${need.description}` : '';
+  if (need.strategy === 'on-demand') {
+    if (!need.fetch) {
+      return `Dependencia ${depId}.${need.name} (on-demand)${why}: el diseño no resuelve la llamada (fetchedFrom no apunta a ninguna de http-clients). No inventes el canal: dilo en el reporte`;
+    }
+    return `Dependencia ${depId}.${need.name} (on-demand)${why}: pide el dato a ${depId} con ${decap(need.fetch.clientClass)}.${need.fetch.call}(...) y mapea el ${need.fetch.resultType} a dominio con ${decap(need.fetch.mapperClass)} — el record wire nunca cruza a domain ni a application. El retry y el circuit breaker ya están en el adaptador: no los repitas (conventions/dependencies.md)`;
+  }
+
+  const { replica } = need;
+  if (!replica) {
+    return `Dependencia ${depId}.${need.name} (replicada)${why}: la réplica no se pudo resolver (revisa los avisos del build); no leas el dato por tu cuenta`;
+  }
+  const reader = `${decap(replica.readerClass)}.byKey(...)`;
+  const onMiss = {
+    fetch: `Si la copia aún no tiene el dato, el Reader lo pide al proveedor y lo guarda: no lo hidrates tú.`,
+    fail: `Si la copia aún no tiene el dato, el Reader lanza ${replica.onMiss.exceptionClass ?? replica.onMiss.error}: no lo captures para seguir con un valor inventado.`,
+    degrade: `Si la copia aún no tiene el dato, el Reader devuelve vacío y el resultado degradado lo escribes TÚ, distinguible por el cliente de una respuesta normal: ${replica.onMiss.degradedTo}`
+  }[replica.onMiss.action];
+  return `Dependencia ${depId}.${need.name} (replicada)${why}: lee ${replica.entityName} por ${reader}, que ya aplica onMiss: ${replica.onMiss.action}. ${onMiss} NUNCA leas el repositorio de la réplica directamente ni la escribas desde aquí — la proyección solo se escribe desde ${replica.projectorClass} (conventions/dependencies.md)`;
+}
+
+// Nota de una activación (`activations`): el trabajo que esta operación delega
+// en otro servidor. Es lo que el DSL declara y ningún artefacto materializaba.
+function activationNote(depId, activation) {
+  if (activation.event) {
+    const raise = activation.event.className ? `raise(${activation.event.className}.of(...))` : 'raise(...)';
+    return `Activación ${depId}.${activation.name}: ${activation.effect} — se delega publicando ${activation.event.name}, que emite el agregado con ${raise} dentro del método de negocio. El handler no publica nada, y no esperes respuesta: publicar un evento no devuelve resultado`;
+  }
+  if (!activation.http) {
+    return `Activación ${depId}.${activation.name}: ${activation.effect} — el diseño no resuelve el canal (via.client/call no existe en http-clients). No inventes la llamada: dilo en el reporte`;
+  }
+
+  const awaits = {
+    outcome: `awaits: outcome — el resultado que devuelve ${depId} condiciona el desenlace de esta operación: usa el cuerpo de la respuesta, no basta con que la llamada no falle.`,
+    acknowledgement: `awaits: acknowledgement — basta con que ${depId} acuse recibo; no interpretes el cuerpo como parte del desenlace.`,
+    nothing: `awaits: nothing — no se espera nada de vuelta, pero la llamada sigue siendo síncrona y ocurre DENTRO de la transacción que abrió el UseCaseMediator: su timeout la mantiene abierta (conventions/dependencies.md § transacción).`
+  }[activation.awaits];
+
+  const onFailure = activation.onFailure;
+  const failure = {
+    ignore: `onFailure: ignore — que ${depId} no responda no interrumpe esta operación; el fallback del adaptador ya lo absorbe y lo registra. No lo reintentes aquí.`,
+    fail: `onFailure: fail — si ${depId} no responde, esta operación falla con ${onFailure?.exceptionClass ?? onFailure?.error}; el fallback del adaptador ya la lanza. No la captures para convertirla en otra cosa.`,
+    degrade: `onFailure: degrade — si ${depId} no responde, esta operación degrada y el resultado degradado lo escribes TÚ: ${onFailure?.degradedTo}`
+  }[onFailure?.action];
+
+  return `Activación ${depId}.${activation.name}: ${activation.effect} — invoca ${decap(activation.http.clientClass)}.${activation.http.call}(...). ${awaits} ${failure ?? ''}`.trim();
 }
 
 function renderScheduler(model, service, scheduled) {

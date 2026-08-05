@@ -102,6 +102,32 @@ entities:
         required: true
         description: Producto al que pertenece la imagen.
 
+  # Copia local de un dato ajeno (dependencies: pricing.supplierPrice). NO es
+  # fuente de verdad: sus invariantes las garantiza el servicio de precios, y
+  # aquí solo se mantiene al día con sus eventos.
+  SupplierPrice:
+    description: Precio de proveedor de un producto, propiedad del servicio de precios.
+    fields:
+      id:
+        type: uuid
+        id: true
+        generated: true
+      sku:
+        type: string
+        required: true
+        unique: true
+      amount:
+        type: decimal
+        required: true
+        constraints: { min: 0, scale: 2 }
+      currency:
+        type: string
+        required: true
+      occurredAt:
+        type: timestamp
+        required: true
+        description: Instante del cambio en el origen; ordena las reentregas para que un hecho viejo no pise a uno nuevo.
+
 aggregates:
   Catalog:
     root: Product
