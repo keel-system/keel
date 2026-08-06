@@ -124,7 +124,8 @@ comportamiento y contradecirlo en el esquema es peor que cualquiera de las dos o
 | `kind: query` | Sin efectos; el `UseCaseMediator` la despacha en transacción `readOnly` (el handler no lleva `@Transactional`) |
 | `input`/`output` `{ entity: X }` | DTOs derivados de la entidad; en input quedan fuera `generated`/`computed`; en output quedan fuera `sensitive` y los campos de `exclude`. Las **relaciones entran por defecto**: una referencia a otro agregado como `<relación>Id` (UUID) —salvo que el output la marque con `embed`, en cuyo caso el DTO lleva el `<Raíz>RefDto` que **produce el `<Raíz>RefResolver` que build inyecta en el handler**, siempre por lote: cómo usarlo, en [read-composition](read-composition.md)— y una entidad hija como su propio `<Hija>Dto` (`List<…>` si es `one-to-many`), que build genera. Un `exclude` con **dot-path** (`lines.costPrice`, `address.zip`) recorta el DTO **anidado**: build genera la hija completa y señala cada ruta con un warning — ese warning es la señal de trabajo del agente. En el **input** las hijas no entran (se gestionan por sus propias operaciones); si un flujo las recibe anidadas, build lo avisa y lo modela el agente |
 | `output` con `sort` | **Generado entero, no tocar salvo por lo de abajo.** El orden declarado va como constante `<OPERACION>_ORDER` en el controller, aplicada solo si el cliente no manda `?sort=` (`withDefaultOrder`). Y el adaptador del agregado añade **siempre** el id como desempate (`TIE_BREAKER` + `withStableOrder`), venga el orden de donde venga: sin él, dos páginas consecutivas pueden repetir una fila y omitir otra. Un listado paginado **sin** `sort` declarado queda ordenado por id, no sin orden |
-| `sort` con **dot-path** (`brand.name`, sobre una relación en `embed`) | build **no** lo traduce y emite un warning: entre agregados hay una columna `UUID`, no una asociación navegable, así que no hay property path que dar a Spring Data. Lo implementa el agente con un adaptador de **lectura** y JPQL proyectado — [read-composition](read-composition.md) y `skills/keel-spring-database/references/read-queries.md`. El stub del handler lleva la nota |
+| `sort` con **dot-path** (`brand.name`, sobre una relación en `embed`) | build **no** lo traduce y emite un warning, en los dos modelos: de un agregado ajeno solo se guarda su id —una columna `UUID` o un campo `UUID`—, no una referencia navegable, así que no hay property path que dar a Spring Data. Lo implementa el agente con un adaptador de **lectura** (JPQL proyectado o `$lookup`, según el modelo) — [read-composition](read-composition.md) y el `references/read-queries.md` de la skill de tu base de datos. El stub del handler lleva la nota |
+| `sort` con **dot-path** sobre un value object (`price.amount`) | Sí se traduce, y a cosas distintas: en relacional a la columna aplanada (`priceAmount`), en documental a la ruta literal del subdocumento (`price.amount`) |
 | `input` con un campo `type: file` | Endpoint `multipart/form-data`: el binario llega como `@RequestPart MultipartFile` y viaja al mensaje como `FileUpload(content, filename, contentType, size)`; el resto de campos, como `@RequestParam`. El handler sube el contenido por el puerto `FileStorage` y guarda en el dominio la **clave** del objeto (String). Lo que el `output` expone se deriva de la visibilidad del bucket y **lo resuelve el mapper que genera build**, no el handler: ver [§ `storage`](#storage--storagekeelyaml) |
 | `preconditions` / `rules` | Lógica del `handle(...)` del handler, en el mismo orden del diseño, comentadas con la frase del diseño cuando no sea obvia |
 | `rules` con **normalización previa** (upper/lower/trim antes de validar formato o unicidad) | El campo **no** lleva `@Pattern`/`@Size` de Bean Validation en el DTO de entrada — ver el aviso de abajo |
@@ -550,13 +551,19 @@ Capa de **síntesis**: casi todo lo que referencia ya está generado por otras c
 
 ## `persistence` — persistence.keel.yaml
 
-Sin esta capa (servicio sin estado propio), no se incluye JPA ni base de datos.
+Sin esta capa (servicio sin estado propio), no se incluye persistencia ni base de datos.
+
+**El modelo lo elige el diseño, no el stack.** `default.model` decide qué rama de
+persistencia genera build, y el cuestionario solo ofrece los motores de ese modelo:
+un diseño `document` no puede acabar sobre PostgreSQL por descuido, ni al revés.
 
 | Diseño | Código |
 |--------|--------|
-| `default.model: relational` | Spring Data JPA (stack por defecto: ver project-layout.md). Es el **único** modelo que keel-spring genera: con `document` o `key-value`, `keel-spring build` falla con un error explícito en vez de emitir JPA por defecto — ese diseño necesita otro generador |
-| `entities.X.naturalKey` | Constraint única compuesta + método de búsqueda por clave natural en el repository |
-| `entities.X.indexes` | `@Index` en la entidad por cada lista de campos (`idx_<tabla>_<campos>`); de ahí pasa al baseline de migraciones al exportarlo |
+| `default.model: relational` | Spring Data JPA sobre uno de los seis dialectos del catálogo (ver project-layout.md): espejo `XxxJpa`, `JpaRepository`, adaptador, y el esquema gobernado por migraciones Flyway |
+| `default.model: document` | Spring Data MongoDB: espejo `XxxDocument`, `MongoRepository`, adaptador, y los índices en `MongoIndexConfig`. Ver *El agregado es un documento*, abajo |
+| `default.model: key-value` | **No soportado**: `keel-spring build` falla con un error explícito en vez de emitir algo por defecto. Ese diseño necesita otro generador |
+| `entities.X.naturalKey` | Constraint/índice único compuesto (`uk_<colección>_natural`) + método de búsqueda por clave natural en el repository |
+| `entities.X.indexes` | Un índice por cada lista de campos (`idx_<tabla|colección>_<campos>`). En relacional es un `@Index` de la entidad, que pasa al baseline al exportarlo; en documental lo crea `MongoIndexConfig` |
 | `consistency.transactionalBoundary: per-operation` | La transacción por mensaje que abre `UseCaseMediator` ya lo cumple: la operación completa es la transacción |
 | `consistency.transactionalBoundary: per-aggregate` | El command debe tocar una sola raíz de agregado dentro de la transacción del mediator; nunca dos agregados en la misma transacción (si necesitas semántica especial, anota el handler con `@Transactional` y documenta la excepción) |
 | `audit.timestamps` / `audit.authorship` | **Lo gobierna el diseño** (`all` \| `declared` \| `none`) y build lo aplica entero. Con `all`: las columnas viven en `AuditableEntity` (`@MappedSuperclass` + `@EntityListeners`), el dominio no las nombra y no salen en ningún contrato. Con `declared`: los campos son del **dominio** (el diseño los declara con `generated: true` para poder proyectarlos en un `output`) y build los anota en su `XxxJpa` con `@CreatedDate`/`@LastModifiedDate`/`@CreatedBy`/`@LastModifiedBy` + `@EntityListeners` en la clase. Con `none`: no se genera nada, ni `@EnableJpaAuditing`. **No lo reintroduzcas por criterio propio**: una columna de auditoría que el diseño no pidió acaba en el baseline de migraciones |
@@ -583,6 +590,40 @@ respuesta), su `XxxRepositoryImpl.save(...)` usa `saveAndFlush(...)`. Con la
 política `all` las columnas no llegan al dominio y no hay nada que adelantar. Lo
 que sí sigue siendo tuyo: si escribes un adaptador o una query a mano y la
 respuesta debe llevar un valor que el ORM gestiona, fuerza el flush igual.
+
+Esto es específico de JPA. En el modelo documental no hay flush diferido: la
+auditoría corre en un callback **antes** de convertir el documento, así que el objeto
+que devuelve `save(...)` ya trae los valores nuevos — y `saveAndFlush` ni siquiera
+existe en `MongoRepository`.
+
+### El agregado es un documento (`default.model: document`)
+
+Con este modelo la raíz de agregado **es** una colección y sus entidades internas van
+anidadas dentro de su documento. No tienen colección propia ni se consultan por
+separado: cargar el informe es cargar sus secciones y sus puntos.
+
+| Diseño | Documento |
+|--------|-----------|
+| campo escalar | `@Field(name = "<snake>")`; un `decimal` **siempre** con `targetType = FieldType.DECIMAL128` |
+| campo `list: true` | array del propio documento (no hay tabla de elementos) |
+| value object | subdocumento anidado (`XxxDocument`), no columnas con prefijo |
+| value object **dentro** de otro | otro subdocumento. Es el caso que en JPA deja un `// TODO (agente)`: aquí sale generado |
+| entidad hija del agregado | objeto o `List<HijaDocument>` anidados. Sin `mappedBy`, sin `cascade`, sin `orphanRemoval` |
+| back-reference de la hija a la raíz | **no se genera**: era un artefacto de la clave ajena y aquí no apunta a nada |
+| relación a **otro** agregado | `UUID <rel>Id`. **Nunca `@DBRef`**: parece un join y es una consulta por referencia, además de romper la frontera del agregado |
+| `optimisticLocking` | `@Version` de `org.springframework.data.annotation`; el conflicto llega como `OptimisticLockingFailureException` |
+| `audit` | las mismas anotaciones de `org.springframework.data.annotation`, activadas con `@EnableMongoAuditing`. Con `all`, solo las **raíces**: el callback actúa sobre el objeto que se guarda, no sobre lo anidado |
+
+Tres consecuencias que no son de mapeo y hay que tener presentes:
+
+- **La base ya no hace cumplir `required` ni `maxLength`.** Sin esquema, la única
+  defensa es la Bean Validation del borde. Recuperarlo es un validador `$jsonSchema`,
+  que es tuning del agente y no generación (skill `keel-spring-mongodb`).
+- **El límite de 16 MB por documento cae sobre la frontera del agregado.** Una
+  colección hija que crece sin cota es olor de diseño, no un problema de mapeo.
+- **El orden de una colección hija lo aplica el mapeo, no la base.** Donde JPA ponía
+  `@OrderBy`, aquí build emite un `Comparator` explícito en `toDomain`: un array de
+  Mongo conserva el orden de inserción, que tras un reorder ya no es el del diseño.
 
 ### Ordenar por un id `UUID`: nunca en memoria con `Comparator.comparing`
 

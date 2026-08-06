@@ -73,18 +73,42 @@ Si la operación tiene que devolver los productos *ordenados por nombre de marca
 - ordenar en memoria la página **ya recortada** da un orden falso — `mapping.md` ya lo prohíbe
   para otro caso: *el orden lo fija la consulta, no el código Java*.
 
-Ahí, y solo ahí, la respuesta es una consulta única con join proyectado:
+Ahí, y solo ahí, la respuesta es una consulta única con join proyectado. Lo que no
+cambia con el motor:
 
 - Va en un **adaptador de lectura separado** (`<X>ReadRepositoryImpl` + su interfaz), nunca en
-  el repositorio del agregado: ese sigue devolviendo agregados completos y no conoce tablas
-  ajenas.
+  el repositorio del agregado: ese sigue devolviendo agregados completos y no conoce tablas ni
+  colecciones ajenas.
+- Proyección **plana** ensamblada en Java, con su propio conteo para la paginación.
+- El **desempate por id** hay que añadirlo a mano: el `TIE_BREAKER` del repositorio del agregado
+  no llega aquí, y una paginación sin orden total repite y omite filas entre páginas.
+
+La técnica sí cambia, y la elige `keel-stack.json`:
+
+**`default.model: relational`** — skill `keel-spring-database`, `references/read-queries.md`:
+
 - JPQL con **entity join ad-hoc** sobre la columna id: `left join BrandJpa b on b.id = p.brandId`.
   No hace falta asociación y es portable a los seis dialectos del catálogo.
-- Proyección **plana** ensamblada en Java, `countQuery` propia. El cómo está en la skill de
-  base de datos: la skill `keel-spring-database`, `references/read-queries.md`.
 - **Nunca** un `@ManyToOne` entre dos raíces para poder usar `JOIN FETCH`/`@EntityGraph`: eso sí
   rompe la frontera de agregado, y arrastra cascadas y lazy loading entre agregados.
-- **Nunca** native query: el servicio se genera para seis dialectos y el SQL crudo no es portable.
+- **Nunca** native query: en esta rama el servicio se genera para seis dialectos y el SQL crudo
+  no es portable.
+
+**`default.model: document`** — skill `keel-spring-mongodb`, `references/read-queries.md`:
+
+- Agregación con `$lookup` sobre el campo id (`MongoTemplate.aggregate`), y `unwind` con
+  `preserveNullAndEmptyArrays = true` — sin ese `true` desaparecen del listado los documentos sin
+  referencia, que es un `INNER JOIN` donde el diseño casi siempre quiere un `LEFT`.
+- El `localField` del `$lookup` necesita índice, o cada página hace una búsqueda completa por
+  elemento. Se registra en `MongoIndexConfig` como cualquier otro.
+- **Nunca `@DBRef`** para ahorrarse la agregación: no es un join, es una consulta por
+  referencia hecha en el cliente — el mismo N+1 que esta convención existe para evitar.
+- Aquí no aplica la prohibición de «SQL crudo»: la agregación **es** la API de consulta del
+  motor, no un escape de él. Lo que sí sigue prohibido es que salga del adaptador de lectura.
+
+Muchos casos que en la rama relacional llegaban hasta aquí, en la documental no llegan: las
+entidades hijas ya vienen dentro del documento, así que solo cruzar la frontera de agregado
+justifica una agregación.
 
 Si la operación no filtra ni ordena por el agregado ajeno, no llegues aquí: el lote es la
 respuesta, y es más simple, reutiliza los mappers y se beneficia de la caché.

@@ -16,7 +16,7 @@ function makeWorkspace() {
   return dir;
 }
 
-function writeService(workspace, { keel = '2.0', persistenceModel = null } = {}) {
+function writeService(workspace, { keel = '2.0', persistenceModel = null, description = 'TODO: describir' } = {}) {
   const dir = path.join(workspace, 'specs', 'demo');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
@@ -26,7 +26,7 @@ function writeService(workspace, { keel = '2.0', persistenceModel = null } = {})
       'service:',
       '  name: demo',
       '  version: 0.1.0',
-      '  description: "TODO: describir"',
+      `  description: ${JSON.stringify(description)}`,
       'layers:',
       '  domain: domain.keel.yaml',
       '  use-cases: use-cases.keel.yaml',
@@ -74,7 +74,7 @@ test('los assets del generador existen en el paquete', async () => {
   // Skills por tecnología del stack (build las instala condicionalmente en el
   // proyecto generado según keel-stack.json).
   assert.ok(fs.existsSync(path.join(assetsDir, 'generators', 'spring', 'skills', 'README.md')), 'falta skills/README.md');
-  for (const tech of ['kafka', 'rabbitmq', 'snssqs', 's3', 'redis', 'keycloak', 'cognito', 'database', 'httpclient']) {
+  for (const tech of ['kafka', 'rabbitmq', 'snssqs', 's3', 'redis', 'keycloak', 'cognito', 'database', 'mongodb', 'httpclient']) {
     const skillDir = path.join(assetsDir, 'generators', 'spring', 'skills', `keel-spring-${tech}`);
     assert.ok(fs.existsSync(path.join(skillDir, 'SKILL.md')), `falta skills/keel-spring-${tech}/SKILL.md`);
     // Progressive disclosure: cada skill trae al menos references/configuration.md.
@@ -142,13 +142,49 @@ test('build rechaza una versión de DSL no soportada', async () => {
 
 test('build rechaza un modelo de almacenamiento que no genera', async () => {
   // La frontera del generador se comprueba antes de generar nada y antes de
-  // preguntar el stack: keel-spring solo genera el modelo relacional.
+  // preguntar el stack. Se aísla de las otras puertas a propósito (versión de DSL
+  // soportada y descripción real): si no, el exit 1 podría venir de cualquiera de
+  // ellas y el test pasaría sin comprobar la frontera.
   const workspace = makeWorkspace();
-  writeService(workspace, { persistenceModel: 'document' });
+  writeService(workspace, {
+    keel: SUPPORTED_DSL[0],
+    persistenceModel: 'key-value',
+    description: 'Servicio de prueba de la frontera del generador.'
+  });
 
   const exitCode = await runBuild(workspace, 'specs/demo');
   assert.equal(exitCode, 1);
   assert.ok(!fs.existsSync(path.join(workspace, 'services')));
+});
+
+test('build acepta el modelo documental y el diseño elige el motor', async () => {
+  // El reverso del test anterior, y la razón de que exista: `document` sí se genera
+  // (Spring Data MongoDB), así que ese gate no puede endurecerse por error sin que
+  // alguien se entere. Va sobre la fixture real y no sobre un esqueleto porque el
+  // build tiene una puerta anterior —la capa 0 de artefactos en plantilla— que un
+  // diseño mínimo no pasa nunca.
+  const workspace = makeWorkspace();
+  const fixture = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'inspection-reports');
+  const specDir = path.join(workspace, 'specs', 'inspection-reports');
+  fs.mkdirSync(specDir, { recursive: true });
+  fs.cpSync(fixture, specDir, { recursive: true });
+
+  const exitCode = await runBuild(workspace, 'specs/inspection-reports');
+  assert.equal(exitCode, undefined);
+
+  const outDir = path.join(workspace, 'services', 'inspection-reports-spring');
+  // El modelo lo declara el diseño y el cuestionario solo ofrece motores de ese
+  // modelo: sin elegir nada, `document` solo puede caer en mongodb.
+  const stack = JSON.parse(fs.readFileSync(path.join(outDir, 'keel-stack.json'), 'utf8'));
+  assert.equal(stack.database, 'mongodb');
+
+  // Y se instala la skill de ESE motor, no la relacional.
+  for (const harness of HARNESSES) {
+    const mongo = harness.skillPath('keel-spring-mongodb', 'SKILL.md');
+    assert.ok(fs.existsSync(path.join(outDir, ...mongo.split('/'))), `falta ${mongo}`);
+    const relational = harness.skillPath('keel-spring-database', 'SKILL.md');
+    assert.ok(!fs.existsSync(path.join(outDir, ...relational.split('/'))), `sobra ${relational}`);
+  }
 });
 
 test('build falla la validación de un diseño en plantilla', async () => {

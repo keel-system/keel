@@ -14,6 +14,7 @@ import {
   brokerSafeName
 } from './naming.js';
 import { resolveType, beanValidationAnnotations, columnAnnotations } from './type-mapper.js';
+import { DATABASES } from './stack-catalog.js';
 
 const CRUD_PREFIXES = ['create', 'get', 'list', 'update', 'delete'];
 
@@ -49,6 +50,11 @@ export function buildModel({ manifest, layers, stack = null }) {
   const domainTypes = domain.types ?? {};
   const persistence = layers.persistence ?? null;
   const hasPersistence = Boolean(persistence);
+  // Modelo de persistencia que gobierna el scaffolding. Se lee del catálogo y no
+  // del diseño para que haya UNA fuente: el motor elegido y el modelo declarado no
+  // pueden discrepar, porque el cuestionario solo ofrece motores del modelo que el
+  // diseño declara. Sin persistencia da igual el valor: nadie lo consulta.
+  const persistenceKind = DATABASES[stack?.database]?.kind ?? 'relational';
 
   const service = buildService(manifest, stack);
   service.basePath = layers.api?.basePath ?? null;
@@ -80,7 +86,7 @@ export function buildModel({ manifest, layers, stack = null }) {
     }
     for (const vo of valueObjects) vo.usedInCollection = collectionVoNames.has(vo.name);
   }
-  const { services, errors } = collectOperations(layers, domainTypes, inlineEnumName, service, warnings);
+  const { services, errors } = collectOperations(layers, domainTypes, inlineEnumName, service, warnings, persistenceKind);
   // DTOs de las entidades hijas proyectadas en algún payload de salida.
   const childDtos = collectChildDtos(layers, services, domainTypes, inlineEnumName, warnings);
   // DTOs de referencia de las relaciones que el diseño marca con embed.
@@ -135,7 +141,7 @@ export function buildModel({ manifest, layers, stack = null }) {
     warnings
   );
 
-  return { service, layersPresent, enums, valueObjects, entities, services, errors, childDtos, refDtos, hasFileUploads, events, messaging, subscriptions, pagination, api, audit, security, httpClients, dependencies, storage, warnings };
+  return { service, layersPresent, persistenceKind, enums, valueObjects, entities, services, errors, childDtos, refDtos, hasFileUploads, events, messaging, subscriptions, pagination, api, audit, security, httpClients, dependencies, storage, warnings };
 }
 
 function buildService(manifest, stack) {
@@ -450,6 +456,11 @@ function collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPe
       name,
       description: def.description ?? null,
       tableName: snakeCase(pluralize(name)),
+      // Alias de tableName, no un nombre distinto: es el MISMO identificador, y
+      // tiene que serlo porque de él salen los nombres de constraint/índice
+      // (`uk_<tabla>_natural`) que el ApiExceptionHandler busca en el mensaje de la
+      // violación. Existe para que la rama documental no tenga que decir «tabla».
+      collectionName: snakeCase(pluralize(name)),
       persisted,
       fields,
       idField: fields.find((f) => f.isId) ?? null,
@@ -562,16 +573,21 @@ function addImplicitAggregateRelations(entities, aggregates, warnings) {
 // tiene que aplicarlo también cuando el cliente manda su propio ?sort=.
 //
 // Un criterio sobre un agregado embebido (`brand.name`) NO se puede traducir a una
-// property path de Spring Data: entre agregados hay una columna UUID, no una
-// asociación navegable. Se marca `embedded` para que build avise y el agente lo
-// resuelva con un join proyectado (conventions/read-composition.md).
-function resolveSort(opName, op, domainEntities, warnings) {
+// property path de Spring Data, y da igual el motor: lo que este agregado guarda
+// del ajeno es su id, no una referencia navegable —una columna UUID en relacional,
+// un campo UUID en el documento—. Se marca `embedded` para que build avise y el
+// agente lo resuelva con un join proyectado (conventions/read-composition.md).
+function resolveSort(opName, op, domainEntities, warnings, persistenceKind = 'relational') {
   const output = typeof op.output === 'object' ? op.output : null;
   const declared = output?.sort ?? [];
   if (declared.length === 0) return [];
 
   const entityName = payloadEntity(op.output);
   const embedded = new Set(output?.embed ?? []);
+  const readQueriesRef =
+    persistenceKind === 'document'
+      ? 'skills/keel-spring-mongodb/references/read-queries.md'
+      : 'skills/keel-spring-database/references/read-queries.md';
 
   return declared.map((criterion) => {
     const [path, direction = 'asc'] = String(criterion).split(':');
@@ -580,19 +596,26 @@ function resolveSort(opName, op, domainEntities, warnings) {
 
     if (relation && embedded.has(head)) {
       warnings.push(
-        `Operación '${opName}': ordena por '${path}', un campo del agregado embebido '${relation.entity}'. La resolución por lote no puede ordenar por él (entre agregados no hay asociación navegable): hace falta un adaptador de lectura con join proyectado — skills/keel-spring-database/references/read-queries.md`
+        `Operación '${opName}': ordena por '${path}', un campo del agregado embebido '${relation.entity}'. La resolución por lote no puede ordenar por él (de ese agregado solo se guarda su id): hace falta un adaptador de lectura con join proyectado — ${readQueriesRef}`
       );
       return { path, direction, embedded: true, relation: head, field: nested, property: null };
     }
 
-    // Subcampo de value object compuesto: build lo aplana a columna con prefijo,
-    // así que la property path de JPA es el nombre compuesto.
-    const property = nested ? `${head}${nested[0].toUpperCase()}${nested.slice(1)}` : head;
+    // En el modelo documental el dot-path es literal: un value object es un
+    // subdocumento y una entidad hija va anidada DENTRO del documento raíz, así que
+    // `price.amount` y `sections.status` son las dos rutas reales del documento.
+    // En el relacional un VO se aplana a columna con prefijo, y la property path de
+    // JPA es el nombre compuesto.
+    const property = !nested
+      ? head
+      : persistenceKind === 'document'
+        ? `${head}.${nested}`
+        : `${head}${nested[0].toUpperCase()}${nested.slice(1)}`;
     return { path, direction, embedded: false, relation: null, field: nested ?? head, property };
   });
 }
 
-function collectOperations(layers, domainTypes, inlineEnumName, service, warnings) {
+function collectOperations(layers, domainTypes, inlineEnumName, service, warnings, persistenceKind) {
   const operations = layers['use-cases']?.operations ?? {};
   const api = layers.api ?? null;
   const domainEntities = layers.domain?.entities ?? {};
@@ -669,7 +692,7 @@ function collectOperations(layers, domainTypes, inlineEnumName, service, warning
           : null,
       returnsList: Boolean(typeof op.output === 'object' && op.output?.list),
       paginated: Boolean(typeof op.output === 'object' && op.output?.paginated),
-      sort: resolveSort(opName, op, domainEntities, warnings),
+      sort: resolveSort(opName, op, domainEntities, warnings, persistenceKind),
       preconditions: op.preconditions ?? [],
       rules: op.rules ?? [],
       errors: (op.errors ?? []).map((e) => e.code),

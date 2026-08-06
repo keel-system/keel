@@ -1,0 +1,27 @@
+publishing:
+  # Outbox: el documento del informe y su fila de outbox tienen que entrar en el
+  # mismo commit, y eso es lo que obliga a que la infraestructura sea un replica set.
+  reliability: outbox
+  events:
+    ReportSubmitted:
+      description: Un informe pasó a revisión.
+      payload:
+        reportId:
+          type: uuid
+          required: true
+        siteCode:
+          type: string
+          required: true
+        occurredAt:
+          type: timestamp
+          required: true
+
+subscriptions:
+  # Fuerza el registro de procesados (processed_event) del lado consumidor.
+  InspectorDeactivated:
+    description: El servicio de personal dio de baja a un inspector.
+    source: staffing
+    payload:
+      inspectorId: { type: uuid, required: true }
+      occurredAt:  { type: timestamp, required: true }
+    triggers: closePendingReports

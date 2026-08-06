@@ -1,0 +1,25 @@
+default:
+  model: document
+
+entities:
+  InspectionReport:
+    # Un emplazamiento no puede tener dos informes del mismo día: índice único
+    # compuesto (uk_inspection_reports_natural), que es el que el ApiExceptionHandler
+    # busca por nombre en el mensaje del driver al traducir la violación.
+    naturalKey: [siteCode, inspectedOn]
+    indexes:
+      # Dot-path a una entidad hija ANIDADA: solo es indexable en el modelo
+      # documental, donde la sección vive dentro del propio documento del informe.
+      - [sections.status]
+      - [status]
+  Inspector:
+    naturalKey: [badgeNumber]
+
+audit:
+  # Declarada, no delegada: el informe expone cuándo se creó y cuándo cambió, así
+  # que los campos son del dominio y viajan en la respuesta.
+  timestamps: declared
+
+consistency:
+  transactionalBoundary: per-aggregate
+  optimisticLocking: all

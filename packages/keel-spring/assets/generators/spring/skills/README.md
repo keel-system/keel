@@ -15,6 +15,7 @@ La mayoría se gatean por **stack** (`keel-stack.json`); una excepción,
 | Clave en `keel-stack.json` | Valor | Skill |
 |---|---|---|
 | `database` | `postgresql` / `mysql` / `mariadb` / `sqlserver` / `oracle` / `h2` | `keel-spring-database/` (skill única, reference por dialecto) |
+| `database` | `mongodb` | `keel-spring-mongodb/` |
 | `broker` | `kafka` | `keel-spring-kafka/` |
 | `broker` | `rabbitmq` | `keel-spring-rabbitmq/` |
 | `broker` | `snssqs` | `keel-spring-snssqs/` |
@@ -27,10 +28,18 @@ La mayoría se gatean por **stack** (`keel-stack.json`); una excepción,
 |---|---|
 | `http-clients` (integraciones HTTP salientes con RestClient + resilience4j) | `keel-spring-httpclient/` |
 
-`keel-spring-database` no enseña a escribir código JPA — el espejo `XxxJpa`,
-los `JpaRepository` y los adaptadores ya los genera build de forma transversal
-y el datasource va en `parameters/<perfil>/db.yaml` —: cubre tuning
-(Hikari, Hibernate), particularidades del dialecto elegido y validación.
+`database` es la única clave con **dos** skills, y no por tamaño: los seis dialectos
+relacionales comparten mapeo (JPA) y solo difieren en un reference por dialecto,
+mientras que el modelo documental no comparte nada con ellos —otro espejo, otros
+índices, otra transaccionalidad—. Cuál se instala lo decide `persistence.default.model`
+del diseño, que es también quien decide qué motores ofrece el cuestionario.
+
+Ninguna de las dos enseña a escribir el código de persistencia: el espejo (`XxxJpa` o
+`XxxDocument`), los repositorios de Spring Data y los adaptadores ya los genera build
+de forma transversal, y la conexión va en `parameters/<perfil>/db.yaml`.
+`keel-spring-database` cubre tuning (Hikari, Hibernate), migraciones,
+particularidades del dialecto y validación; `keel-spring-mongodb`, índices,
+transacciones sobre replica set, `$lookup` y evolución de documentos.
 
 ## Estructura (progressive disclosure)
 

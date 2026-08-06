@@ -1,0 +1,77 @@
+operations:
+  createReport:
+    description: Abre un informe de inspección en borrador para un emplazamiento y una fecha.
+    kind: command
+    input:
+      entity: InspectionReport
+    output:
+      entity: InspectionReport
+    errors:
+      - code: REPORT_ALREADY_EXISTS
+        when: Ya existe un informe de ese emplazamiento en esa fecha.
+        http: 409
+      - code: INSPECTOR_NOT_FOUND
+        when: El inspector referenciado no existe.
+        http: 422
+
+  getReport:
+    description: Recupera un informe completo con sus secciones y sus puntos.
+    kind: query
+    input:
+      fields:
+        id:
+          type: uuid
+          required: true
+    output:
+      entity: InspectionReport
+    errors:
+      - code: REPORT_NOT_FOUND
+        when: No existe un informe con ese id.
+        http: 404
+
+  listReports:
+    description: Lista los informes de forma paginada, con el inspector que los firma.
+    kind: query
+    input: "void"
+    output:
+      entity: InspectionReport
+      paginated: true
+      embed: [inspector]
+      # El primer criterio es el subcampo de un value object: en el modelo documental
+      # es la ruta literal del subdocumento (location.label) y en el relacional la
+      # columna aplanada (locationLabel). El desempate por id lo añade siempre el
+      # adaptador, se declare orden o no.
+      sort: [location.label:asc, inspectedOn:desc]
+
+  submitReport:
+    description: Envía a revisión un informe en borrador.
+    kind: command
+    input:
+      fields:
+        id:
+          type: uuid
+          required: true
+    output:
+      entity: InspectionReport
+    errors:
+      - code: REPORT_NOT_FOUND
+        when: No existe un informe con ese id.
+        http: 404
+      - code: INVALID_REPORT_STATE
+        when: El informe no está en un estado desde el que se pueda enviar.
+        http: 422
+      - code: CONCURRENT_MODIFICATION
+        when: Otra operación modificó el informe mientras se enviaba.
+        http: 409
+    emits: [ReportSubmitted]
+
+  closePendingReports:
+    description: Cierra los informes en borrador de un inspector dado de baja.
+    kind: command
+    internal: true
+    input:
+      fields:
+        inspectorId:
+          type: uuid
+          required: true
+    output: "void"

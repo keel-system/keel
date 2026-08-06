@@ -33,6 +33,7 @@ const PORT_VARS = {
   'db:3306': 'DB_PORT',
   'db:1433': 'DB_PORT',
   'db:1521': 'DB_PORT',
+  'db:27017': 'DB_PORT',
   'kafka:9092': 'KAFKA_PORT',
   'rabbitmq:5672': 'RABBITMQ_PORT',
   'rabbitmq:15672': 'RABBITMQ_UI_PORT',
@@ -175,7 +176,7 @@ function composeServices(model) {
     if (db?.composeService) {
       services.db = { ...db.composeService(dbName) };
       const health = HEALTHCHECKS[stack.database];
-      // sqlserver ya trae el suyo en composeService.
+      // sqlserver y mongodb ya traen el suyo en composeService.
       if (health && !services.db.healthcheck) services.db.healthcheck = health(dbName);
       volumes['db-data'] = null;
     }
@@ -230,15 +231,18 @@ function composeServices(model) {
   // UIs de inspección: lo que la API no enseña (qué mensajes salieron, qué claves
   // quedaron en caché). Las consolas de RabbitMQ, MinIO y Keycloak ya vienen en
   // sus imágenes y no añaden contenedor.
-  for (const id of [stack.broker, stack.cache]) {
+  for (const id of [stack.broker, stack.cache, stack.database]) {
     const ui = id ? UI_SERVICES[id] : null;
     if (!ui) continue;
-    // Una UI de mensajería sin capa messaging no tiene nada que enseñar.
+    // Una UI de mensajería sin capa messaging no tiene nada que enseñar; lo mismo
+    // vale para una consola de base de datos sin capa persistence.
     if (id === stack.broker && !layersPresent.messaging) continue;
-    Object.assign(services, ui());
+    if (id === stack.database && !layersPresent.persistence) continue;
+    Object.assign(services, ui(dbName));
   }
   if (services['kafka-ui']) env.push({ name: 'KAFKA_UI_PORT', value: '8081' });
   if (services.redisinsight) env.push({ name: 'REDISINSIGHT_PORT', value: '5540' });
+  if (services['mongo-express']) env.push({ name: 'MONGO_EXPRESS_PORT', value: '8082' });
 
   const { environment, extraEnv } = appEnvironment(model);
   env.push(...extraEnv);
@@ -297,9 +301,16 @@ function appEnvironment(model) {
 
   if (layersPresent.persistence && DATABASES[stack.database]?.serviceKey) {
     const db = DATABASES[stack.database];
-    environment.DB_URL = db.jdbcUrl(dbName).replace('localhost', 'db');
-    environment.DB_USERNAME = db.user(dbName);
-    environment.DB_PASSWORD = db.password;
+    // Dentro de la red de compose el host es `db`. Los motores relacionales solo
+    // cambian el host de su URL; Mongo además cambia el modo de conexión (replica
+    // set completo en vez de conexión directa), así que declara su URL interna.
+    environment.DB_URL = db.internalUrl ? db.internalUrl(dbName) : db.url(dbName).replace('localhost', 'db');
+    // La URI de Mongo lleva las credenciales dentro: no hay dos propiedades más
+    // que sobrescribir, y declararlas sería configuración que nadie lee.
+    if (db.kind !== 'document') {
+      environment.DB_USERNAME = db.user(dbName);
+      environment.DB_PASSWORD = db.password;
+    }
   }
 
   if (layersPresent.messaging) {

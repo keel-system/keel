@@ -1171,6 +1171,31 @@ export function checkCrossRefs({ layers, wip = false }) {
     }
     if (rest.length === 0) return;
 
+    // Dot-path sobre una relación a una entidad del MISMO agregado. Solo tiene
+    // sentido con `model: document`: ahí la hija va anidada dentro del documento de
+    // su raíz, así que 'sections.status' es una ruta real del mismo registro. En el
+    // modelo relacional la hija vive en otra tabla y un índice no la alcanza.
+    const relationTarget = relations[head]?.entity ?? relations[head.replace(/Id$/, '')]?.entity;
+    if (relationTarget) {
+      if (persistence?.default?.model !== 'document') {
+        errors.push(
+          `${where}: '${member}': '${head}' es una relación, y solo se puede indexar por un campo suyo con 'default.model: document' (ahí la entidad va anidada en el mismo registro); en el modelo relacional vive en otra tabla`
+        );
+        return;
+      }
+      if (!aggregateMembers(entityName).has(relationTarget)) {
+        errors.push(
+          `${where}: '${member}': '${relationTarget}' es otro agregado, del que este solo guarda el id; indexa por '${head}Id' o por un campo propio`
+        );
+        return;
+      }
+      const targetFields = domain.entities?.[relationTarget]?.fields ?? {};
+      if (!(rest[0] in targetFields)) {
+        errors.push(`${where}: '${member}': la entidad '${relationTarget}' no declara el campo '${rest[0]}'`);
+      }
+      return;
+    }
+
     // 'price.amount': el campo debe ser de un value type compuesto que declare ese subcampo.
     const subFields = domain.types?.[fields[head]?.type]?.fields;
     if (!subFields) {
@@ -1178,6 +1203,17 @@ export function checkCrossRefs({ layers, wip = false }) {
     } else if (!(rest[0] in subFields)) {
       errors.push(`${where}: '${member}': el tipo '${fields[head].type}' no declara el campo '${rest[0]}'`);
     }
+  };
+
+  // Entidades que comparten agregado con `entityName` (la raíz y sus internas).
+  // Es lo que distingue "va anidada en el mismo registro" de "es otro agregado, del
+  // que solo se guarda el id" — la frontera que ningún índice puede cruzar.
+  const aggregateMembers = (entityName) => {
+    for (const agg of Object.values(domain.aggregates ?? {})) {
+      const members = new Set([agg.root, ...(agg.entities ?? [])]);
+      if (members.has(entityName)) return members;
+    }
+    return new Set([entityName]);
   };
 
   // persistence: entidades → domain

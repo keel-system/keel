@@ -39,26 +39,39 @@ export const LOCAL_AWS_ENV = {
 //                    migraciones, no datos del servicio; truncarlo haría que el
 //                    siguiente arranque reaplicase el baseline sobre tablas ya
 //                    existentes y fallara.
-//   flywayDependencies  módulo Flyway del motor (Flyway 10+ saca cada dialecto de
-//                    flyway-core a su propio artefacto). Sin versión: la gestiona
-//                    el dependency management de Spring Boot.
+//   flywayDependencies  (solo BD relacional) módulo Flyway del motor (Flyway 10+
+//                    saca cada dialecto de flyway-core a su propio artefacto). Sin
+//                    versión: la gestiona el dependency management de Spring Boot.
+//                    Ausente en las BD documentales, que no tienen esquema que migrar.
 //   alpinePackages   paquetes apk a instalar en devtools para esa CLI ([] si se
 //                    instala por curl —sqlcmd, mc— o si basta la base).
+//   kind             (solo BD) 'relational' | 'document'. Discrimina qué modelo de
+//                    persistencia genera el scaffolding, y lo elige el DISEÑO
+//                    (persistence.default.model), no el cuestionario: con
+//                    `document` solo se ofrecen las entradas documentales y con
+//                    `relational` solo las relacionales. Todo lo que recorre
+//                    DATABASES para levantar y sondear infraestructura
+//                    (selectedInfra, docker.js, devtools.js, deploy.js) lee campos
+//                    comunes y no necesita mirar este campo: por eso hay una sola
+//                    tabla y no dos.
 
-// Motor de migraciones (común a los seis dialectos) + su módulo por motor.
+// Motor de migraciones (común a los seis dialectos relacionales) + su módulo por motor.
 const FLYWAY_CORE = "implementation 'org.flywaydb:flyway-core'";
+
+const MONGO_IMAGE = 'mongo:7';
 
 export const DATABASES = {
   postgresql: {
     id: 'postgresql',
     label: 'PostgreSQL',
+    kind: 'relational',
     gradleDependencies: ["runtimeOnly 'org.postgresql:postgresql'"],
     flywayDependencies: [FLYWAY_CORE, "runtimeOnly 'org.flywaydb:flyway-database-postgresql'"],
     image: 'postgres:16-alpine',
     port: 5432,
     user: (db) => db,
     password: 'changeme',
-    jdbcUrl: (db) => `jdbc:postgresql://localhost:5432/${db}`,
+    url: (db) => `jdbc:postgresql://localhost:5432/${db}`,
     serviceKey: 'db',
     cliTool: 'psql',
     cliVia: 'devtools',
@@ -78,6 +91,7 @@ export const DATABASES = {
   mysql: {
     id: 'mysql',
     label: 'MySQL',
+    kind: 'relational',
     gradleDependencies: ["runtimeOnly 'com.mysql:mysql-connector-j'"],
     // MySQL y MariaDB comparten módulo Flyway (flyway-mysql).
     flywayDependencies: [FLYWAY_CORE, "runtimeOnly 'org.flywaydb:flyway-mysql'"],
@@ -85,7 +99,7 @@ export const DATABASES = {
     port: 3306,
     user: (db) => db,
     password: 'changeme',
-    jdbcUrl: (db) => `jdbc:mysql://localhost:3306/${db}`,
+    url: (db) => `jdbc:mysql://localhost:3306/${db}`,
     serviceKey: 'db',
     cliTool: 'mysql',
     cliVia: 'devtools',
@@ -110,13 +124,14 @@ export const DATABASES = {
   mariadb: {
     id: 'mariadb',
     label: 'MariaDB',
+    kind: 'relational',
     gradleDependencies: ["runtimeOnly 'org.mariadb.jdbc:mariadb-java-client'"],
     flywayDependencies: [FLYWAY_CORE, "runtimeOnly 'org.flywaydb:flyway-mysql'"],
     image: 'mariadb:11',
     port: 3306,
     user: (db) => db,
     password: 'changeme',
-    jdbcUrl: (db) => `jdbc:mariadb://localhost:3306/${db}`,
+    url: (db) => `jdbc:mariadb://localhost:3306/${db}`,
     serviceKey: 'db',
     cliTool: 'mariadb',
     cliVia: 'devtools',
@@ -141,13 +156,14 @@ export const DATABASES = {
   sqlserver: {
     id: 'sqlserver',
     label: 'SQL Server',
+    kind: 'relational',
     gradleDependencies: ["runtimeOnly 'com.microsoft.sqlserver:mssql-jdbc'"],
     flywayDependencies: [FLYWAY_CORE, "runtimeOnly 'org.flywaydb:flyway-sqlserver'"],
     image: 'mcr.microsoft.com/mssql/server:2022-latest',
     port: 1433,
     user: () => 'sa',
     password: 'Str0ng_Passw0rd1',
-    jdbcUrl: (db) => `jdbc:sqlserver://localhost:1433;databaseName=${db};encrypt=false`,
+    url: (db) => `jdbc:sqlserver://localhost:1433;databaseName=${db};encrypt=false`,
     serviceKey: 'db',
     cliTool: 'sqlcmd',
     // sqlcmd (go-sqlcmd) se instala por curl en devtools; no hay paquete apk.
@@ -177,6 +193,7 @@ export const DATABASES = {
   oracle: {
     id: 'oracle',
     label: 'Oracle Database Free',
+    kind: 'relational',
     gradleDependencies: ["runtimeOnly 'com.oracle.database.jdbc:ojdbc11'"],
     flywayDependencies: [FLYWAY_CORE, "runtimeOnly 'org.flywaydb:flyway-database-oracle'"],
     image: 'gvenzl/oracle-free:23-slim',
@@ -184,7 +201,7 @@ export const DATABASES = {
     user: (db) => db,
     password: 'changeme',
     service: 'FREEPDB1',
-    jdbcUrl: () => 'jdbc:oracle:thin:@//localhost:1521/FREEPDB1',
+    url: () => 'jdbc:oracle:thin:@//localhost:1521/FREEPDB1',
     serviceKey: 'db',
     cliTool: 'sqlplus',
     // Oracle Instant Client es demasiado pesado para devtools: sqlplus ya viene
@@ -208,6 +225,7 @@ export const DATABASES = {
   h2: {
     id: 'h2',
     label: 'H2 (en memoria, sin contenedor)',
+    kind: 'relational',
     gradleDependencies: ["runtimeOnly 'com.h2database:h2'"],
     // H2 sigue soportado dentro de flyway-core: no tiene módulo propio.
     flywayDependencies: [FLYWAY_CORE],
@@ -215,12 +233,101 @@ export const DATABASES = {
     port: null,
     user: () => 'sa',
     password: '',
-    jdbcUrl: (db) => `jdbc:h2:mem:${db};MODE=LEGACY;DB_CLOSE_DELAY=-1`,
+    url: (db) => `jdbc:h2:mem:${db};MODE=LEGACY;DB_CLOSE_DELAY=-1`,
     // Sin serviceKey ⇒ no levanta contenedor ni entra en la validación de infra.
     cliVia: null,
     composeService: null
+  },
+  mongodb: {
+    id: 'mongodb',
+    label: 'MongoDB',
+    kind: 'document',
+    gradleDependencies: ["implementation 'org.springframework.boot:spring-boot-starter-data-mongodb'"],
+    // Sin flywayDependencies a propósito (ausente, no []): en el modelo documental
+    // no hay esquema que migrar. Los índices los crea MongoIndexConfig, que build
+    // deriva entero de persistence.keel.yaml.
+    image: MONGO_IMAGE,
+    port: 27017,
+    user: (db) => db,
+    password: 'changeme',
+    // La app corre en el HOST y el miembro del replica set se anuncia como
+    // `db:27017` (nombre de la red de compose), que el host no resuelve:
+    // directConnection=true corta el descubrimiento de topología y habla con el
+    // miembro al que ya está conectada. Las transacciones funcionan igual —lo que
+    // exigen es que el servidor SEA miembro de un replica set, no que el driver
+    // descubra el conjunto—. uuidRepresentation va en la URI para que también lo
+    // honre cualquier cliente que se construya a mano.
+    url: (db) =>
+      `mongodb://${db}:changeme@localhost:27017/${db}?authSource=admin&directConnection=true&uuidRepresentation=standard`,
+    // Desde DENTRO de la red de compose (deploy/) sí se resuelve `db`, así que ahí
+    // se usa el replica set completo y el driver puede reconectar tras un failover.
+    internalUrl: (db) =>
+      `mongodb://${db}:changeme@db:27017/${db}?authSource=admin&replicaSet=rs0&uuidRepresentation=standard`,
+    serviceKey: 'db',
+    cliTool: 'mongosh',
+    // mongosh no tiene paquete apk y el tarball oficial pesa más que la imagen de
+    // devtools entera; ya viene dentro de la imagen de Mongo, así que se valida
+    // ahí — mismo motivo y mismo mecanismo que Oracle con sqlplus.
+    cliVia: 'dbcontainer',
+    // Se sondea rs.status() y no un ping, a propósito: una base que responde al ping
+    // pero cuyo replica set no ha arrancado pasaría el check y fallaría en la primera
+    // transacción —justo el falso positivo que la validación de infra existe para
+    // cazar—. rs.status() lanza mientras el conjunto no exista, así que el fallo sale
+    // aquí y no tres fases más tarde.
+    cliValidateCmd:
+      "mongosh 'mongodb://{user}:{pass}@localhost:27017/{db}?authSource=admin&directConnection=true' --quiet --eval 'rs.status().ok'",
+    // Vacía los documentos preservando colecciones e ÍNDICES: los índices son el
+    // equivalente del esquema aquí, y recrearlos en cada flujo sería el error
+    // simétrico a truncar flyway_schema_history en la rama relacional. No hay
+    // historial de migraciones que excluir porque no hay migraciones.
+    cliResetCmd:
+      "mongosh 'mongodb://{user}:{pass}@localhost:27017/{db}?authSource=admin&directConnection=true' --quiet --eval 'db.getCollectionNames().forEach(function (c) { db.getCollection(c).deleteMany({}); })'",
+    // El equivalente de --schema: borra la base entera, índices incluidos.
+    // MongoIndexConfig los recrea en el siguiente arranque.
+    cliDropSchemaCmd:
+      "mongosh 'mongodb://{user}:{pass}@localhost:27017/{db}?authSource=admin&directConnection=true' --quiet --eval 'db.dropDatabase()'",
+    alpinePackages: [],
+    composeService: (db) => ({
+      image: MONGO_IMAGE,
+      // Las transacciones multi-documento (agregado + outbox_event en el mismo
+      // commit) SOLO existen sobre un replica set, así que hasta la infraestructura
+      // de prueba arranca como uno de un solo miembro.
+      command: ['--replSet', 'rs0', '--bind_ip_all'],
+      environment: {
+        MONGO_INITDB_ROOT_USERNAME: db,
+        MONGO_INITDB_ROOT_PASSWORD: 'changeme',
+        MONGO_INITDB_DATABASE: db
+      },
+      ports: ['27017:27017'],
+      volumes: ['db-data:/data/db'],
+      healthcheck: mongoHealthcheck(db)
+    })
   }
 };
+
+/**
+ * Healthcheck que además INICIA el replica set, y es idempotente: `rs.status()`
+ * lanza mientras el conjunto no existe, y el catch lo inicia; en las pasadas
+ * siguientes devuelve ok y no toca nada.
+ *
+ * Va aquí y no en un contenedor `mongo-init` aparte porque un sidecar one-shot
+ * nunca llega a `healthy`, y deploy.js construye su `depends_on: service_healthy`
+ * recorriendo los servicios con healthcheck: la app arrancaría contra una base sin
+ * replica set iniciado y moriría en la primera transacción. Con esto, arranque y
+ * espera son la misma pieza, igual en infra/ que en deploy/.
+ */
+function mongoHealthcheck(db) {
+  const init = `rs.initiate({_id:'rs0',members:[{_id:0,host:'db:27017'}]}).ok`;
+  return {
+    test: [
+      'CMD-SHELL',
+      `mongosh -u ${db} -p changeme --authenticationDatabase admin --quiet --eval "try { rs.status().ok } catch (e) { ${init} }" | grep -q 1`
+    ],
+    interval: '5s',
+    timeout: '5s',
+    retries: 30
+  };
+}
 
 // Aislamiento de la mensajería entre flujos de validación. `cliPurgeCmd` es la
 // primitiva que vacía un destino ({destination}) desde el contenedor devtools:
@@ -537,7 +644,34 @@ export const HTTP_STUB = {
   })
 };
 
-export const STACK_DEFAULTS = { database: 'postgresql', broker: 'kafka', auth: 'keycloak', cache: 'redis', storage: 'minio' };
+export const STACK_DEFAULTS = {
+  database: 'postgresql',
+  // Default de la rama documental. No es una segunda pregunta: el diseño elige el
+  // modelo (persistence.default.model) y el cuestionario solo ofrece las opciones
+  // de ESE modelo, así que un servicio nunca tiene ambos defaults en juego.
+  documentDatabase: 'mongodb',
+  broker: 'kafka',
+  auth: 'keycloak',
+  cache: 'redis',
+  storage: 'minio'
+};
+
+/**
+ * Motores que puede elegir un diseño según su `persistence.default.model`.
+ * El modelo lo declara el DISEÑO y el stack solo elige dentro de él: ofrecer
+ * PostgreSQL a un diseño `document` haría que el campo del DSL no significara nada.
+ * Cualquier valor que no sea 'document' se trata como relacional (es el default
+ * del schema y el modelo de los seis dialectos históricos).
+ */
+export function databasesForModel(persistenceModel) {
+  const kind = persistenceModel === 'document' ? 'document' : 'relational';
+  return Object.values(DATABASES).filter((entry) => entry.kind === kind);
+}
+
+/** Motor por defecto para un `persistence.default.model` dado. */
+export function defaultDatabaseFor(persistenceModel) {
+  return persistenceModel === 'document' ? STACK_DEFAULTS.documentDatabase : STACK_DEFAULTS.database;
+}
 
 // Índice de categoría → diccionario, para recorridos genéricos.
 const CATALOG = {
@@ -594,7 +728,8 @@ export function selectedInfra(model) {
  * herramientas que trae su propia imagen (no las de devtools, que en deploy/ no
  * existe). Honrado igual por docker y por podman.
  *
- * sqlserver no aparece: su composeService ya declara el suyo.
+ * sqlserver y mongodb no aparecen: sus composeService ya declaran el suyo (el de
+ * Mongo, además, inicia el replica set, así que tiene que ser el mismo en infra/).
  */
 export const HEALTHCHECKS = {
   postgresql: (db) => ({
@@ -682,6 +817,10 @@ export const HEALTHCHECKS = {
  * No hay entrada para rabbitmq, minio ni keycloak: sus consolas ya vienen en la
  * propia imagen (15672, 9001, 8180) y añadir un contenedor sería duplicarlas. Se
  * documentan en el README, que es donde el diseñador las busca.
+ *
+ * mongodb es la primera BD con entrada aquí, y es coherente con la regla: los
+ * motores relacionales se inspeccionan con la CLI que devtools ya trae, pero un
+ * documento anidado en una terminal es justo lo que esta tabla existe para evitar.
  */
 export const UI_SERVICES = {
   kafka: () => ({
@@ -698,7 +837,18 @@ export const UI_SERVICES = {
     }
   }),
   redis: () => ({ redisinsight: redisInsightService('redis') }),
-  valkey: () => ({ redisinsight: redisInsightService('valkey') })
+  valkey: () => ({ redisinsight: redisInsightService('valkey') }),
+  mongodb: (db) => ({
+    'mongo-express': {
+      image: 'mongo-express:1.0.2',
+      environment: {
+        ME_CONFIG_MONGODB_URL: `mongodb://${db}:changeme@db:27017/?authSource=admin&replicaSet=rs0`,
+        ME_CONFIG_BASICAUTH: 'false'
+      },
+      ports: ['${MONGO_EXPRESS_PORT:-8082}:8081'],
+      depends_on: ['db']
+    }
+  })
 };
 
 function redisInsightService(serviceKey) {

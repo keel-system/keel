@@ -4,7 +4,17 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { select } from '../src/lib/prompt.js';
-import { DATABASES, BROKERS, AUTH, CACHES, STORAGE, STACK_DEFAULTS, selectedInfra } from '../src/lib/stack-catalog.js';
+import {
+  DATABASES,
+  BROKERS,
+  AUTH,
+  CACHES,
+  STORAGE,
+  STACK_DEFAULTS,
+  selectedInfra,
+  databasesForModel,
+  defaultDatabaseFor
+} from '../src/lib/stack-catalog.js';
 import {
   askStackConfig,
   designUsesCache,
@@ -73,8 +83,53 @@ test('el catálogo declara metadata de validación coherente por opción con con
   }
 });
 
-test('cada dialecto declara su módulo Flyway y protege el historial en el reset', () => {
+test('toda base de datos declara su modelo de persistencia', () => {
+  // `kind` es lo que discrimina qué scaffolding se genera y qué motores ofrece el
+  // cuestionario. Una entrada sin él caería en la rama relacional por defecto y
+  // generaría JPA contra una base que no lo entiende.
   for (const [id, entry] of Object.entries(DATABASES)) {
+    assert.ok(['relational', 'document'].includes(entry.kind), `${id}: kind inválido (${entry.kind})`);
+  }
+});
+
+test('el motor documental no arrastra el mecanismo relacional', () => {
+  const mongo = DATABASES.mongodb;
+  assert.equal(mongo.kind, 'document');
+  // Ausente, no vacío: que no haya migraciones es una propiedad del modelo, y un []
+  // se leería como «las tiene, pero ninguna».
+  assert.equal(mongo.flywayDependencies, undefined);
+  assert.doesNotMatch(mongo.cliResetCmd, /flyway/i);
+  // El reset vacía documentos y PRESERVA los índices: son el esquema aquí, y
+  // recrearlos por flujo sería el error simétrico a truncar flyway_schema_history.
+  assert.match(mongo.cliResetCmd, /deleteMany/);
+  assert.match(mongo.cliDropSchemaCmd, /dropDatabase/);
+  // mongosh vive en la imagen de Mongo, como sqlplus en la de Oracle.
+  assert.equal(mongo.cliVia, 'dbcontainer');
+  // El sondeo comprueba el replica set, no un ping: una base que responde con el
+  // conjunto sin iniciar pasaría el check y fallaría en la primera transacción.
+  assert.match(mongo.cliValidateCmd, /rs\.status\(\)/);
+});
+
+test('el cuestionario solo ofrece motores del modelo que declara el diseño', () => {
+  assert.deepEqual(
+    databasesForModel('document').map((entry) => entry.id),
+    ['mongodb']
+  );
+  const relational = databasesForModel('relational').map((entry) => entry.id);
+  assert.equal(relational.length, 6);
+  assert.ok(!relational.includes('mongodb'));
+  // Sin modelo declarado se asume relacional: es el default del schema del DSL.
+  assert.deepEqual(databasesForModel(undefined), databasesForModel('relational'));
+  assert.equal(defaultDatabaseFor('document'), 'mongodb');
+  assert.equal(defaultDatabaseFor('relational'), 'postgresql');
+});
+
+test('cada dialecto RELACIONAL declara su módulo Flyway y protege el historial en el reset', () => {
+  for (const [id, entry] of Object.entries(DATABASES)) {
+    // Las bases documentales no tienen esquema que migrar: no declaran Flyway y su
+    // reset no puede excluir un historial que no existe. La partición es por `kind`,
+    // no por lista de ids, para que un motor nuevo caiga solo en su rama.
+    if (entry.kind !== 'relational') continue;
     // Motor + módulo del dialecto: sin él Flyway no reconoce la BD en runtime.
     assert.ok(Array.isArray(entry.flywayDependencies), `${id}: falta flywayDependencies`);
     assert.ok(

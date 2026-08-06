@@ -96,7 +96,7 @@ export function generate(model) {
     'PROFILE=production DB_URL=... DB_USERNAME=... DB_PASSWORD=... java -jar build/libs/*.jar',
     '```',
     '',
-    ...(layersPresent.persistence
+    ...(layersPresent.persistence && model.persistenceKind !== 'document'
       ? [
           'Hay además dos perfiles auxiliares, finos y aditivos, que se activan **sobre** otro',
           '(`PROFILE=local,<perfil>`) y sirven para trabajar el esquema: `schema-export` (Hibernate',
@@ -135,7 +135,13 @@ export function generate(model) {
   );
 
   const pendingLayers = [];
-  if (layersPresent.persistence) {
+  if (layersPresent.persistence && model.persistenceKind === 'document') {
+    pendingLayers.push(
+      '- `persistence`: verificar los índices (`bash infra/export-indexes.sh` con la infraestructura arriba) contra ' +
+        '`MongoIndexConfig` y `specs/persistence.keel.yaml`. No hay baseline que redactar: los índices los genera build ' +
+        'enteros desde el diseño, y como exportarlos solo lee, esta comprobación sí la ejecuta el pase de calidad.'
+    );
+  } else if (layersPresent.persistence) {
     pendingLayers.push(
       '- `persistence`: producir el baseline de migraciones (`bash infra/export-schema.sh` con las entidades ya finales), ' +
         'revisarlo, verificarlo con el doble check estático y commitearlo como ' +
@@ -276,7 +282,15 @@ function manualTestingSection(model) {
     );
   }
 
-  if (layersPresent.persistence) {
+  if (layersPresent.persistence && model.persistenceKind === 'document') {
+    lines.push(
+      'El contenedor corre con el perfil `develop` contra el mismo Mongo del compose, que arranca **como replica',
+      'set** de un miembro: las transacciones multi-documento lo exigen, y sin ellas el agregado y su fila de',
+      'outbox no podrían confirmarse juntos. Los índices los crea `MongoIndexConfig` en cada arranque, así que',
+      'aquí no hay baseline que esperar.',
+      ''
+    );
+  } else if (layersPresent.persistence) {
     lines.push(
       'El contenedor corre con el perfil `develop`, que aplica las migraciones de `db/migration/` y deja a',
       'Hibernate solo validando el esquema. Por eso **necesita el baseline**: hasta que exista',
@@ -320,14 +334,27 @@ function productionSection(model) {
   const lines = [
     '## Despliegue en producción',
     '',
-    'Pasos para levantar el servicio con el perfil `production` (esquema gobernado por',
-    'las migraciones Flyway de `src/main/resources/db/migration/` — `ddl-auto: validate`,',
-    'Hibernate no crea ni altera tablas —, Swagger UI deshabilitado y logs `root` en `WARN`):',
+    'Pasos para levantar el servicio con el perfil `production` (' +
+      (layersPresent.persistence
+        ? model.persistenceKind === 'document'
+          ? 'índices creados por `MongoIndexConfig` al arrancar, '
+          : 'esquema gobernado por las migraciones Flyway de `src/main/resources/db/migration/` — `ddl-auto: validate`, Hibernate no crea ni altera tablas —, '
+        : '') +
+      'Swagger UI deshabilitado y logs `root` en `WARN`):',
     ''
   ];
 
   const steps = ['1. Construye el artefacto: `./gradlew build -x test` (produce `build/libs/*.jar`).'];
-  if (layersPresent.persistence) {
+  if (layersPresent.persistence && model.persistenceKind === 'document') {
+    steps.push(
+      '2. Comprueba que la base es un **replica set**: sin él, la primera escritura transaccional falla con ' +
+        '«Transaction numbers are only allowed on a replica set member». En un Atlas o en cualquier despliegue ' +
+        'gestionado ya lo es; en uno propio hay que arrancarlo con `--replSet` e iniciarlo una vez.',
+      '3. Comprueba los índices tras el primer arranque (`db.<colección>.getIndexes()`): `MongoIndexConfig` los ' +
+        'crea al arrancar y es idempotente, pero **no** recrea uno que ya exista con otra forma. Si cambiaste ' +
+        '`naturalKey` o `indexes` sobre una base ya poblada, borra el índice viejo antes de desplegar.'
+    );
+  } else if (layersPresent.persistence) {
     steps.push(
       '2. Comprueba que `src/main/resources/db/migration/` contiene el baseline (`V1__baseline_schema.sql`) ' +
         'y las migraciones posteriores: Flyway las aplica al arrancar y registra cada una en `flyway_schema_history`. ' +

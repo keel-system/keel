@@ -5,6 +5,7 @@
 // El perfil activo se elige con la variable de entorno PROFILE (default local).
 
 import { DATABASES } from '../lib/stack-catalog.js';
+import { EMBEDDED_MONGO_VERSION } from '../lib/assets.js';
 import { physicalBucketName } from '../lib/buckets.js';
 import { screamingSnake } from '../lib/naming.js';
 import { usesOutbox } from './outbox.js';
@@ -168,7 +169,10 @@ function baseYaml(model) {
   // prejuzga; el servicio que deba omitirlos lo hace con @JsonInclude por clase,
   // que es la regla de conventions/mapping.md.
   lines.push('  jackson:', '    serialization:', '      write-dates-as-timestamps: false');
-  if (layersPresent.persistence) {
+  // open-in-view es de JPA: cierra la sesión al salir del servicio para que una
+  // relación LAZY no se cargue durante la serialización. En el modelo documental no
+  // hay sesión ni carga perezosa que cerrar — el documento viene entero.
+  if (layersPresent.persistence && model.persistenceKind !== 'document') {
     lines.push('  jpa:', '    open-in-view: false');
   }
   // Tope de página del diseño (api.pagination): sin max-page-size Spring admite
@@ -256,10 +260,11 @@ function managementYaml(profile) {
 
 function dbYaml(model, profile, dbName) {
   const db = DATABASES[model.stack.database] ?? DATABASES.postgresql;
+  if (db.kind === 'document') return documentDbYaml(db, profile, dbName);
   const lines = [
     'spring:',
     '  datasource:',
-    `    url: ${envValue(profile, 'DB_URL', db.jdbcUrl(dbName))}`,
+    `    url: ${envValue(profile, 'DB_URL', db.url(dbName))}`,
     `    username: ${envValue(profile, 'DB_USERNAME', db.user(dbName))}`,
     `    password: ${envValue(profile, 'DB_PASSWORD', db.password)}`,
     '    hikari:',
@@ -285,6 +290,28 @@ function dbYaml(model, profile, dbName) {
   lines.push('    properties:', '      hibernate:', '        auto_quote_keyword: true');
   lines.push(...flywayLines(profile));
   return lines.join('\n') + '\n';
+}
+
+/**
+ * Fragmento db del modelo documental. Mucho más corto que el relacional, y no por
+ * omisión: no hay pool JDBC, no hay dialecto, no hay `ddl-auto` y no hay
+ * migraciones. La configuración toda cabe en la URI, que ya trae credenciales,
+ * modo de conexión y representación de UUID (ver el catálogo).
+ */
+function documentDbYaml(db, profile, dbName) {
+  return (
+    [
+      'spring:',
+      '  data:',
+      '    mongodb:',
+      `      uri: ${envValue(profile, 'DB_URL', db.url(dbName))}`,
+      '      # Los índices los crea MongoIndexConfig, que build deriva entero de',
+      '      # persistence.keel.yaml: dejar que Spring los infiera de las anotaciones',
+      '      # los crearía con nombres suyos, y el ApiExceptionHandler traduce la',
+      '      # violación de unicidad buscando el nombre del índice en el mensaje.',
+      '      auto-index-creation: false'
+    ].join('\n') + '\n'
+  );
 }
 
 // Bloque spring.flyway del fragmento db. Las migraciones viven en
@@ -754,32 +781,57 @@ function httpClientsYaml(model, profile) {
   return lines.join('\n') + '\n';
 }
 
-// Perfil test: H2 en memoria (sin contenedores); los tests lo activan desde
+function testDbYaml(model) {
+  if (model.persistenceKind === 'document') {
+    // Flapdoodle arranca un mongod embebido, análogo de H2: sin contenedor y con el
+    // ciclo de vida del contexto de Spring. Arranca STANDALONE, así que en este
+    // perfil no hay transacciones multi-documento — de ahí el gestor no-op que
+    // genera document-config.js.
+    return (
+      [
+        'spring:',
+        '  data:',
+        '    mongodb:',
+        '      database: testdb',
+        '      auto-index-creation: false',
+        'de:',
+        '  flapdoodle:',
+        '    mongodb:',
+        '      embedded:',
+        `        version: ${EMBEDDED_MONGO_VERSION}`
+      ].join('\n') + '\n'
+    );
+  }
+  return (
+    [
+      'spring:',
+      '  datasource:',
+      '    url: jdbc:h2:mem:testdb;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE',
+      '    username: sa',
+      '    password: ""',
+      '  jpa:',
+      '    hibernate:',
+      '      ddl-auto: create-drop',
+      '    properties:',
+      '      hibernate:',
+      '        auto_quote_keyword: true',
+      '  flyway:',
+      '    # El esquema del perfil test lo crea Hibernate en H2: las migraciones de',
+      '    # db/migration/ están escritas para el dialecto real y no aplican aquí.',
+      '    enabled: false'
+    ].join('\n') + '\n'
+  );
+}
+
+// Perfil test: base embebida en memoria (sin contenedores) —H2 en el modelo
+// relacional, flapdoodle en el documental—; los tests lo activan desde
 // src/test/resources/application.yaml.
 function testProfileFiles(model) {
   const files = [];
   const fragments = [];
 
   if (model.layersPresent.persistence) {
-    fragments.push(
-      fragment('test', 'db', [
-        'spring:',
-        '  datasource:',
-        '    url: jdbc:h2:mem:testdb;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE',
-        '    username: sa',
-        '    password: ""',
-        '  jpa:',
-        '    hibernate:',
-        '      ddl-auto: create-drop',
-        '    properties:',
-        '      hibernate:',
-        '        auto_quote_keyword: true',
-        '  flyway:',
-        '    # El esquema del perfil test lo crea Hibernate en H2: las migraciones de',
-        '    # db/migration/ están escritas para el dialecto real y no aplican aquí.',
-        '    enabled: false'
-      ].join('\n') + '\n')
-    );
+    fragments.push(fragment('test', 'db', testDbYaml(model)));
   }
 
   // Storage: mismo generador que el resto de perfiles (endpoint local,

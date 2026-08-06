@@ -28,6 +28,11 @@ export const RESILIENCE4J_VERSION = '2.3.0';
 // Wrapper JsonNullable: solo se añade si el diseño declara alguna actualización
 // parcial (PATCH), donde el contrato distingue campo ausente de campo nulo.
 export const JACKSON_NULLABLE_VERSION = '0.2.6';
+// Mongo embebido del perfil `test` del modelo documental (el análogo de H2). El
+// artefacto y la versión del servidor que descarga van juntos: son las dos mitades
+// de la misma decisión.
+export const FLAPDOODLE_SPRING_VERSION = '4.20.0';
+export const EMBEDDED_MONGO_VERSION = '7.0.4';
 
 export function packageVersion() {
   return JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8')).version;

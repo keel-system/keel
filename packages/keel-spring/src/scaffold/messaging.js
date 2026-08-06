@@ -17,7 +17,7 @@
 
 import { javaFile, javaPath, subPackage } from './render.js';
 import { domainTypeImport } from './entities.js';
-import { usesOutbox } from './outbox.js';
+import { usesOutbox, outboxNames } from './outbox.js';
 import { correlationImport } from './correlation.js';
 
 const MESSAGING_PKG = 'infrastructure.messaging';
@@ -130,15 +130,18 @@ function renderBridge(model, outbox) {
     imports.add('org.springframework.context.event.EventListener');
     imports.add('com.fasterxml.jackson.core.JsonProcessingException');
     imports.add('com.fasterxml.jackson.databind.ObjectMapper');
-    imports.add(`${subPackage(model, 'infrastructure.messaging.outbox')}.OutboxEventJpa`);
-    imports.add(`${subPackage(model, 'infrastructure.messaging.outbox')}.OutboxEventJpaRepository`);
+    // El espejo persistido del outbox cambia de nombre con el modelo (Jpa /
+    // Document), pero el bridge lo usa igual: escribe la fila y se acabó.
+    const outboxTypes = outboxNames(model);
+    imports.add(`${subPackage(model, 'infrastructure.messaging.outbox')}.${outboxTypes.entity}`);
+    imports.add(`${subPackage(model, 'infrastructure.messaging.outbox')}.${outboxTypes.repository}`);
     imports.add('java.time.Instant');
     imports.add('java.util.UUID');
     fields.push(
-      '    private final OutboxEventJpaRepository outboxRepository;',
+      `    private final ${outboxTypes.repository} outboxRepository;`,
       '    private final ObjectMapper objectMapper;'
     );
-    ctorParams.push('OutboxEventJpaRepository outboxRepository', 'ObjectMapper objectMapper');
+    ctorParams.push(`${outboxTypes.repository} outboxRepository`, 'ObjectMapper objectMapper');
     ctorAssigns.push('        this.outboxRepository = outboxRepository;', '        this.objectMapper = objectMapper;');
   } else {
     imports.add('org.springframework.transaction.event.TransactionalEventListener');
@@ -228,7 +231,7 @@ ${envelope}${delivery}
 function renderOutboxAppend(model) {
   return `    private void append(String routingKey, String eventType, EventEnvelope<?> envelope) {
         try {
-            outboxRepository.save(new OutboxEventJpa(
+            outboxRepository.save(new ${outboxNames(model).entity}(
                     UUID.randomUUID(),
                     destination,
                     routingKey,

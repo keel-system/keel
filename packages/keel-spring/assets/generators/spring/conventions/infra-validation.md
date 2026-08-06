@@ -53,11 +53,21 @@ docker exec <servicio>-devtools <cli> <args>
 | MariaDB | `db` | `mariadb -h db -u <user> -p<pass> -e 'SELECT 1' <db>` |
 | SQL Server | `db` | `sqlcmd -S db -U sa -P '<pass>' -C -Q 'SELECT 1'` |
 | Oracle | `db` | `echo 'SELECT 1 FROM dual;' \| sqlplus -s <user>/<pass>@//localhost:1521/FREEPDB1` **(dentro de `<servicio>-db`, no en devtools)** |
+| MongoDB | `db` | `mongosh '<uri>' --quiet --eval 'rs.status().ok'` **(dentro de `<servicio>-db`, no en devtools)** — ver la nota de abajo |
 | Kafka | `kafka` | `kcat -b kafka:29092 -L` (listener interno; el host usa `localhost:9092`) |
 | RabbitMQ | `rabbitmq` | `curl -sf -u guest:guest http://rabbitmq:15672/api/healthchecks/node` |
 | SNS/SQS (LocalStack) | `localstack` | `aws --endpoint-url http://localstack:4566 --region us-east-1 sns list-topics` |
 | Redis | `redis` | `redis-cli -h redis PING` |
 | Valkey | `valkey` | `redis-cli -h valkey PING` |
+
+**MongoDB no se sondea con un ping, y es deliberado.** El servicio arranca como
+replica set de un miembro porque las transacciones multi-documento lo exigen (el
+agregado y su `outbox_event` tienen que entrar en el mismo commit). Una base que
+responde al ping pero cuyo replica set no ha arrancado **pasaría el check** y
+fallaría en la primera escritura con «Transaction numbers are only allowed on a
+replica set member» — un falso positivo de manual, tres fases más tarde. `rs.status()`
+lanza mientras el conjunto no exista, así que el fallo sale aquí. Igual que Oracle, se
+ejecuta dentro del propio contenedor: `mongosh` viene en su imagen.
 | MinIO | `minio` | `mc alias set local http://minio:9000 minioadmin minioadmin && mc ready local` |
 | Keycloak | `keycloak` | `curl -sf http://keycloak:8080/realms/master` |
 | Cognito | `cognito` | `curl -sf http://cognito:9229/health` |
@@ -122,10 +132,15 @@ clase. También se puede ejecutar a mano para diagnosticar.
 El script vacía los datos vía el CLI de la BD del stack (mismo mecanismo devtools
 que `validate-infra.sh`) **preservando el esquema**; las tablas de
 outbox/idempotencia, si existen, son tablas del mismo esquema y quedan incluidas.
-Una tabla queda fuera a propósito: `flyway_schema_history`, el historial de
-migraciones. No son datos del servicio, y truncarlo haría que el siguiente arranque
-con migraciones activas intentase reaplicar el baseline sobre tablas existentes y
-fallara. No quites esa exclusión del script.
+Con una base **relacional**, una tabla queda fuera a propósito:
+`flyway_schema_history`, el historial de migraciones. No son datos del servicio, y
+truncarlo haría que el siguiente arranque con migraciones activas intentase reaplicar
+el baseline sobre tablas existentes y fallara. No quites esa exclusión del script.
+
+Con una base **documental** no hay historial que excluir (no hay migraciones), pero
+sí un equivalente: el reset vacía los documentos y **preserva las colecciones y sus
+índices**. Los índices son el esquema aquí, y recrearlos en cada flujo sería el mismo
+error con otro nombre.
 El reset es **por flujo, no entre escenarios**: dentro de un flujo el escenario A
 crea el estado que el escenario B necesita (p. ej. el duplicado que B verifica).
 
@@ -158,6 +173,13 @@ La salida es recrear el esquema, sin tocar el volumen ni los contenedores:
 ```bash
 bash infra/reset-db.sh --schema   # borra las tablas; Hibernate las recrea al arrancar
 ```
+
+Con una base **documental** este modo existe por un motivo distinto pero simétrico:
+no hay `ddl-auto` que deje columnas huérfanas —un documento sin un campo simplemente
+no lo tiene—, pero sí índices. Mongo **rechaza** recrear un índice con el mismo nombre
+y otras claves, así que regenerar el proyecto tras cambiar `naturalKey` o `indexes`
+deja el índice viejo en pie y `MongoIndexConfig` fallando al arrancar. `--schema` hace
+`dropDatabase()` y los índices se recrean en el siguiente arranque.
 
 Ejecútalo tras cualquier `keel-spring build --force` que haya cambiado entidades, y ante ese
 409 sin explicación antes de buscar el bug en el código. Sin argumento, el script sigue

@@ -21,16 +21,27 @@ test('un diseño que no declara ninguna de las dos cosas tampoco produce nada', 
   assert.deepEqual(warnings, []);
 });
 
-test('un modelo de almacenamiento no relacional es error: keel-spring solo genera JPA', () => {
-  for (const model of ['document', 'key-value']) {
+test('key-value es error: es el único modelo de almacenamiento que no se genera', () => {
+  const { errors, warnings } = checkSupportedFeatures(manifest, {
+    persistence: { default: { model: 'key-value' } }
+  });
+
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /persistence\.default\.model/);
+  assert.match(errors[0], /key-value/);
+  assert.deepEqual(warnings, []);
+});
+
+test('relational y document pasan la frontera: keel-spring genera los dos', () => {
+  // El contrapunto del test anterior. Este módulo existe para que nada del DSL se
+  // ignore en silencio, pero el error simétrico —rechazar algo que sí se genera— es
+  // igual de caro: deja al diseñador sin camino con un mensaje que miente.
+  for (const model of ['relational', 'document']) {
     const { errors, warnings } = checkSupportedFeatures(manifest, {
       persistence: { default: { model } }
     });
 
-    assert.equal(errors.length, 1, `${model} debería ser error`);
-    assert.match(errors[0], /persistence\.default\.model/);
-    assert.match(errors[0], new RegExp(model));
-    assert.match(errors[0], /relacional/);
+    assert.deepEqual(errors, [], `${model} no debería ser error`);
     assert.deepEqual(warnings, []);
   }
 });

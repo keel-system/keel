@@ -13,6 +13,7 @@ import { DOCS_DIR, stackSkills } from './generator-docs.js';
 
 const SKILL_HINTS = {
   'keel-spring-database': 'tuning de datasource/Hikari, particularidades del dialecto y validación de la BD (el código JPA ya lo genera build)',
+  'keel-spring-mongodb': 'índices, transacciones sobre replica set, tuning del driver y lecturas compuestas ($lookup) — el código documental ya lo genera build',
   'keel-spring-kafka': 'broker Apache Kafka',
   'keel-spring-rabbitmq': 'broker RabbitMQ',
   'keel-spring-snssqs': 'broker Amazon SNS/SQS',
@@ -111,7 +112,16 @@ export function generate(model) {
         'puerto: los de lectura son condicionales a la visibilidad de los buckets.'
     );
   }
-  if (layersPresent.persistence) {
+  if (layersPresent.persistence && model.persistenceKind === 'document') {
+    steps.push(
+      '**persistence** (`specs/persistence.keel.yaml`, `default.model: document`): documentos `XxxDocument`, puertos y ' +
+        'adaptadores ya generados; respeta `consistency.transactionalBoundary` en los handlers. **El agregado es el ' +
+        'documento**: las entidades hijas van anidadas dentro de la raíz y una relación a otro agregado es un `UUID`, nunca ' +
+        'un `@DBRef`. Los índices los crea `MongoIndexConfig`, derivado entero del diseño: no hay migraciones que escribir, ' +
+        'y el cierre los **verifica** con `bash infra/export-indexes.sh`. ' +
+        'Para índices, transacciones, tuning y lecturas compuestas, la skill `{{keel:skills}}/keel-spring-mongodb/SKILL.md`.'
+    );
+  } else if (layersPresent.persistence) {
     steps.push(
       '**persistence** (`specs/persistence.keel.yaml`): entidades `Jpa`, puertos y adaptadores ya generados; respeta ' +
         '`consistency.transactionalBoundary` en los handlers. El esquema de los ambientes desplegados lo gobiernan las ' +

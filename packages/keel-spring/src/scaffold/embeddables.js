@@ -10,7 +10,9 @@ import { capitalize } from './entities.js';
 import { JPA_PKG } from './persistence-entities.js';
 
 export function generate(model) {
-  if (!model.layersPresent.persistence) return [];
+  // La rama documental tiene su propio espejo de value objects
+  // (document-embeddables.js): allí un VO es un subdocumento, no columnas.
+  if (!model.layersPresent.persistence || model.persistenceKind === 'document') return [];
   return model.valueObjects.filter((vo) => vo.usedInCollection).map((vo) => renderEmbeddable(model, vo));
 }
 

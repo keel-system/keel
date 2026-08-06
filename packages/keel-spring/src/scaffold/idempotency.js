@@ -19,9 +19,144 @@ export function usesIdempotency(model) {
   );
 }
 
+/** Nombres del espejo persistido del registro de procesados, por modelo. */
+export function processedEventNames(model) {
+  return model.persistenceKind === 'document'
+    ? { entity: 'ProcessedEventDocument', repository: 'ProcessedEventMongoRepository' }
+    : { entity: 'ProcessedEventJpa', repository: 'ProcessedEventJpaRepository' };
+}
+
 export function generate(model) {
   if (!usesIdempotency(model)) return [];
-  return [renderEntity(model), renderRepository(model), renderGuard(model)];
+  const document = model.persistenceKind === 'document';
+  return [
+    document ? renderDocument(model) : renderEntity(model),
+    document ? renderDocumentRepository(model) : renderRepository(model),
+    renderGuard(model)
+  ];
+}
+
+// ─── Espejo documental del registro de procesados ────────────────────────────
+//
+// La clave compuesta (handler, evento) sobrevive intacta: Mongo admite un _id que
+// sea un subdocumento, y la unicidad del _id es la misma garantía que daba la clave
+// primaria. Lo que cambia es CÓMO se escribe — ver la nota de insert() en el guard.
+
+function renderDocument(model) {
+  const body = `/**
+ * Registro de lo ya procesado: un par (handler, evento) por cada mensaje que un
+ * consumidor completó.
+ *
+ * La clave es compuesta a propósito: el mismo evento puede interesar a varios
+ * listeners, y cada uno debe procesarlo exactamente una vez. La unicidad la impone
+ * el _id del documento, no una consulta previa: es la base de datos la que arbitra
+ * la carrera entre dos entregas simultáneas del mismo mensaje.
+ */
+@Document(collection = "processed_event")
+public class ProcessedEventDocument {
+
+    @Id
+    private ProcessedEventId id;
+
+    @Field(name = "processed_at")
+    private Instant processedAt;
+
+    protected ProcessedEventDocument() {
+        // Requerido por el mapeo de Spring Data.
+    }
+
+    public ProcessedEventDocument(ProcessedEventId id, Instant processedAt) {
+        this.id = id;
+        this.processedAt = processedAt;
+    }
+
+    public ProcessedEventId getId() {
+        return id;
+    }
+
+    public Instant getProcessedAt() {
+        return processedAt;
+    }
+
+    /** Clave compuesta (handler, evento): va como subdocumento en el _id. */
+    public static class ProcessedEventId implements Serializable {
+
+        /** Identifica al consumidor; convención: nombre simple de la clase del listener. */
+        @Field(name = "handler_id")
+        private String handlerId;
+
+        /** Identificador del mensaje: el messageId declarado en el diseño o metadata.eventId. */
+        @Field(name = "event_id")
+        private String eventId;
+
+        protected ProcessedEventId() {
+            // Requerido por el mapeo de Spring Data.
+        }
+
+        public ProcessedEventId(String handlerId, String eventId) {
+            this.handlerId = handlerId;
+            this.eventId = eventId;
+        }
+
+        public String getHandlerId() {
+            return handlerId;
+        }
+
+        public String getEventId() {
+            return eventId;
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            if (this == other) {
+                return true;
+            }
+            if (other == null || getClass() != other.getClass()) {
+                return false;
+            }
+            ProcessedEventId that = (ProcessedEventId) other;
+            return Objects.equals(handlerId, that.handlerId) && Objects.equals(eventId, that.eventId);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(handlerId, eventId);
+        }
+    }
+}`;
+
+  return {
+    path: javaPath(model, IDEMPOTENCY_PKG, 'ProcessedEventDocument'),
+    content: javaFile(
+      subPackage(model, IDEMPOTENCY_PKG),
+      [
+        'java.io.Serializable',
+        'java.time.Instant',
+        'java.util.Objects',
+        'org.springframework.data.annotation.Id',
+        'org.springframework.data.mongodb.core.mapping.Document',
+        'org.springframework.data.mongodb.core.mapping.Field'
+      ],
+      body
+    )
+  };
+}
+
+function renderDocumentRepository(model) {
+  const body = `public interface ProcessedEventMongoRepository
+        extends MongoRepository<ProcessedEventDocument, ProcessedEventDocument.ProcessedEventId> {
+
+    long deleteByProcessedAtBefore(Instant cutoff);
+}`;
+
+  return {
+    path: javaPath(model, IDEMPOTENCY_PKG, 'ProcessedEventMongoRepository'),
+    content: javaFile(
+      subPackage(model, IDEMPOTENCY_PKG),
+      ['java.time.Instant', 'org.springframework.data.mongodb.repository.MongoRepository'],
+      body
+    )
+  };
 }
 
 function renderEntity(model) {
@@ -154,6 +289,31 @@ function renderRepository(model) {
 }
 
 function renderGuard(model) {
+  const { entity, repository } = processedEventNames(model);
+  const field = 'processedEventRepository';
+  // En el modelo documental, save() con un _id ya presente es un REEMPLAZO, no un
+  // error: la carrera se resolvería sobrescribiendo y el duplicado se procesaría
+  // otra vez. insert() fuerza la inserción y deja que el _id arbitre, que es
+  // exactamente lo que hacía la clave primaria en la rama relacional.
+  const write =
+    model.persistenceKind === 'document'
+      ? `            ${field}.insert(new ${entity}(key, Instant.now()));`
+      : `            ${field}.save(new ${entity}(key, Instant.now()));`;
+  // El sustantivo del log sigue al motor: en el relacional son filas de una tabla y
+  // en el documental, documentos de una colección. Es lo que verá quien lea el log.
+  // Quién arbitra la carrera: la clave primaria de la tabla o el _id del documento.
+  // La excepción es la misma en los dos casos — en Mongo llega como
+  // DuplicateKeyException, que es una DataIntegrityViolationException.
+  const arbiter =
+    model.persistenceKind === 'document'
+      ? 'el _id del documento es el árbitro y esta pierde.'
+      : 'la clave primaria es el árbitro y esta pierde.';
+  const purgedNoun =
+    model.persistenceKind === 'document' ? 'purgados {} documentos procesados' : 'purgadas {} filas procesadas';
+  const purgeCall =
+    model.persistenceKind === 'document'
+      ? `long deleted = ${field}.deleteByProcessedAtBefore(cutoff);`
+      : `int deleted = ${field}.deleteProcessedBefore(cutoff);`;
   const body = `/**
  * Guarda de idempotencia del consumidor.
  *
@@ -176,13 +336,13 @@ public class IdempotencyGuard {
 
     private static final Logger log = LoggerFactory.getLogger(IdempotencyGuard.class);
 
-    private final ProcessedEventJpaRepository processedEventRepository;
+    private final ${repository} ${field};
 
     @Value("\${processed-event.purge.retention-days:14}")
     private int retentionDays;
 
-    public IdempotencyGuard(ProcessedEventJpaRepository processedEventRepository) {
-        this.processedEventRepository = processedEventRepository;
+    public IdempotencyGuard(${repository} ${field}) {
+        this.${field} = ${field};
     }
 
     /**
@@ -192,16 +352,16 @@ public class IdempotencyGuard {
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public boolean tryRecord(String handlerId, String eventId) {
-        ProcessedEventJpa.ProcessedEventId key = new ProcessedEventJpa.ProcessedEventId(handlerId, eventId);
-        if (processedEventRepository.existsById(key)) {
+        ${entity}.ProcessedEventId key = new ${entity}.ProcessedEventId(handlerId, eventId);
+        if (${field}.existsById(key)) {
             return false;
         }
         try {
-            processedEventRepository.save(new ProcessedEventJpa(key, Instant.now()));
+${write}
             return true;
         } catch (DataIntegrityViolationException duplicate) {
             // Otra entrega del mismo mensaje ganó la carrera entre el existsById
-            // y el insert: la clave primaria es el árbitro y esta pierde.
+            // y el insert: ${arbiter}
             log.debug("Idempotencia: {} ya procesado por {} (carrera resuelta en la PK)", eventId, handlerId);
             return false;
         }
@@ -211,9 +371,9 @@ public class IdempotencyGuard {
     @Transactional
     public void purge() {
         Instant cutoff = Instant.now().minus(retentionDays, ChronoUnit.DAYS);
-        int deleted = processedEventRepository.deleteProcessedBefore(cutoff);
+        ${purgeCall}
         if (deleted > 0) {
-            log.info("Idempotencia: purgadas {} filas procesadas antes de {}", deleted, cutoff);
+            log.info("Idempotencia: ${purgedNoun} antes de {}", deleted, cutoff);
         }
     }
 }`;

@@ -1,0 +1,20 @@
+style: rest
+basePath: /api
+endpoints:
+  createReport:
+    method: POST
+    path: /reports
+    successStatus: 201
+  getReport:
+    method: GET
+    path: /reports/{id}
+  listReports:
+    method: GET
+    path: /reports
+  submitReport:
+    method: POST
+    path: /reports/{id}/submit
+pagination:
+  style: offset
+  defaultSize: 20
+  maxSize: 100

@@ -6,7 +6,16 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { DATABASES, BROKERS, AUTH, CACHES, STORAGE, STACK_DEFAULTS } from './stack-catalog.js';
+import {
+  DATABASES,
+  BROKERS,
+  AUTH,
+  CACHES,
+  STORAGE,
+  STACK_DEFAULTS,
+  databasesForModel,
+  defaultDatabaseFor
+} from './stack-catalog.js';
 import { select, promptText } from './prompt.js';
 import { defaultGroup, isValidPackage } from './naming.js';
 
@@ -53,10 +62,14 @@ export async function askStackConfig(manifest, layers, { defaults = false } = {}
   });
 
   if (layers.persistence) {
+    // El modelo de almacenamiento lo decide el DISEÑO, no el stack: aquí solo se
+    // elige el motor dentro del modelo que el diseño ya declaró. Con `document` la
+    // lista tiene un solo elemento y select() lo devuelve sin preguntar.
+    const persistenceModel = layers.persistence?.default?.model;
     stack.database = await select(
       '¿Qué base de datos usará el servicio?',
-      Object.values(DATABASES),
-      STACK_DEFAULTS.database,
+      databasesForModel(persistenceModel),
+      defaultDatabaseFor(persistenceModel),
       { defaults }
     );
   }

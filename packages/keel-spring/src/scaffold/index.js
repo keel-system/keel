@@ -6,7 +6,7 @@ import path from 'node:path';
 import { buildModel } from '../lib/model.js';
 import { writeFiles } from '../lib/writer.js';
 import { listKeelDocs } from '../lib/keel-docs.js';
-import { STACK_DEFAULTS } from '../lib/stack-catalog.js';
+import { STACK_DEFAULTS, defaultDatabaseFor } from '../lib/stack-catalog.js';
 import { designUsesCache } from '../lib/stack-config.js';
 import { defaultGroup } from '../lib/naming.js';
 import * as gradle from './gradle.js';
@@ -50,6 +50,11 @@ import * as services from './services.js';
 import * as readme from './readme.js';
 import * as contextMd from './context-md.js';
 import * as generatorDocs from './generator-docs.js';
+import * as documentEntities from './document-entities.js';
+import * as documentEmbeddables from './document-embeddables.js';
+import * as documentRepositories from './document-repositories.js';
+import * as documentIndexes from './document-indexes.js';
+import * as documentConfig from './document-config.js';
 
 const GENERATORS = [
   gradle,
@@ -69,9 +74,16 @@ const GENERATORS = [
   entities,
   embeddables,
   persistenceEntities,
+  // Rama documental de la persistencia: cada uno se gatea a sí mismo por
+  // model.persistenceKind, igual que sus gemelos relacionales de arriba.
+  documentEmbeddables,
+  documentEntities,
+  documentIndexes,
+  documentConfig,
   auditing,
   exceptions,
   repositories,
+  documentRepositories,
   dtos,
   mappers,
   refResolvers,
@@ -101,7 +113,12 @@ export function resolveStack(stack, layers, manifest) {
   const protocol = layers.security?.authentication?.protocol;
   return {
     group: stack?.group ?? defaultGroup(manifest),
-    database: layers.persistence ? (stack?.database ?? STACK_DEFAULTS.database) : null,
+    // El default sigue al modelo que declara el diseño: sin esto, un diseño
+    // `document` sin stack explícito (tests, scaffolding sin cuestionario)
+    // generaría JPA en silencio contra una base que no lo entiende.
+    database: layers.persistence
+      ? (stack?.database ?? defaultDatabaseFor(layers.persistence?.default?.model))
+      : null,
     broker: layers.messaging ? (stack?.broker ?? STACK_DEFAULTS.broker) : null,
     auth: protocol === 'oidc' || protocol === 'jwt' ? (stack?.auth ?? STACK_DEFAULTS.auth) : null,
     cache: designUsesCache(layers) ? (stack?.cache ?? STACK_DEFAULTS.cache) : null,

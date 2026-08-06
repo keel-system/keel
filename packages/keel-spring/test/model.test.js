@@ -536,3 +536,23 @@ test('exclude combina plano y dot-paths: aplica el plano y avisa de cada anidado
   assert.deepEqual(dtoFields, ['id', 'reference', 'address', 'lines']);
   assert.equal(model.warnings.filter((w) => w.includes('exclude')).length, 2);
 });
+
+test('persistenceKind sale del catálogo, no del diseño: una sola fuente', () => {
+  const { manifest, layers } = loadService(fixtureDir);
+
+  // Sin stack, el modelo asume relacional (el default del schema del DSL).
+  assert.equal(buildModel({ manifest, layers }).persistenceKind, 'relational');
+  assert.equal(buildModel({ manifest, layers, stack: { database: 'oracle' } }).persistenceKind, 'relational');
+  assert.equal(buildModel({ manifest, layers, stack: { database: 'mongodb' } }).persistenceKind, 'document');
+});
+
+test('collectionName es el MISMO identificador que tableName, no otro nombre', () => {
+  // Existe solo para que la rama documental no tenga que decir «tabla». Si divergiera,
+  // los nombres de constraint (uk_<tabla>_natural) dejarían de casar con los índices
+  // que crea MongoIndexConfig, y el ApiExceptionHandler no encontraría ninguno.
+  const model = loadModel();
+  for (const entity of model.entities) {
+    assert.equal(entity.collectionName, entity.tableName, entity.name);
+  }
+  assert.equal(model.entities.find((e) => e.name === 'Product').collectionName, 'products');
+});

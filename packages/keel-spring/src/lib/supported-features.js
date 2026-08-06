@@ -17,13 +17,15 @@ export function checkSupportedFeatures(manifest, layers) {
   const errors = [];
   const warnings = [];
 
-  // Modelo de almacenamiento: solo el relacional. El scaffolding de persistencia
-  // es JPA de arriba abajo (entidades espejo, Flyway, dialectos) y el
-  // cuestionario de stack solo ofrece motores relacionales.
+  // Modelo de almacenamiento: relacional (JPA + Flyway sobre los seis dialectos) y
+  // documental (Spring Data MongoDB, con el agregado como documento). El modelo lo
+  // elige el diseño y el cuestionario de stack solo ofrece los motores de ESE
+  // modelo. `key-value` no tiene scaffolding: no hay repositorio por agregado que
+  // generar sobre un almacén de pares clave/valor.
   const model = layers?.persistence?.default?.model;
-  if (model && model !== 'relational') {
+  if (model && model !== 'relational' && model !== 'document') {
     errors.push(
-      `persistence.default.model: ${model} no soportado por keel-spring, que solo genera el modelo relacional (JPA + Flyway; el cuestionario de stack solo ofrece motores relacionales). Ajusta el diseño o usa un generador que cubra ese modelo.`
+      `persistence.default.model: ${model} no soportado por keel-spring, que genera el modelo relacional (JPA + Flyway) y el documental (Spring Data MongoDB). Ajusta el diseño o usa un generador que cubra ese modelo.`
     );
   }
 

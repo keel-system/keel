@@ -21,7 +21,10 @@ const BASELINE_SQL = 'build/schema/baseline.sql';
 const BASELINE_MIGRATION = 'V1__baseline_schema.sql';
 
 export function generate(model) {
-  if (!model.layersPresent.persistence) return [];
+  // Todo este módulo es Flyway: en el modelo documental no hay esquema que migrar
+  // ni baseline que exportar. Su equivalente —los índices— lo genera
+  // document-indexes.js, y es determinista de punta a punta.
+  if (!model.layersPresent.persistence || model.persistenceKind === 'document') return [];
   return [
     { path: `${MIGRATIONS_DIR}/README.md`, content: migrationsReadme(model) },
     { path: 'src/main/resources/application-schema-export.yaml', content: schemaExportYaml() },

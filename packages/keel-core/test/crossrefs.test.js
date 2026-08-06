@@ -250,14 +250,16 @@ const domainForPersistenceMembers = () => ({
       { position: { type: 'int' } },
       { relations: { order: { entity: 'Order', cardinality: 'many-to-one' } } }
     ),
+    // Otro agregado: de él, Order solo guarda el id. Ningún índice lo alcanza.
+    Customer: entity({ email: { type: 'string' } }),
   },
   aggregates: { Order: { root: 'Order', entities: ['OrderLine'] } },
 });
 
-const persistenceMembers = (entities) => ({
+const persistenceMembers = (entities, model = 'relational') => ({
   domain: domainForPersistenceMembers(),
   'use-cases': {},
-  persistence: { default: { model: 'relational' }, entities },
+  persistence: { default: { model }, entities },
 });
 
 test('naturalKey e indexes sobre campos y value objects válidos no producen errores', () => {
@@ -289,6 +291,46 @@ test('un miembro de naturalKey que no existe en la entidad es error', () => {
   const { errors } = run(persistenceMembers({ Order: { naturalKey: ['slug'] } }));
   assert.ok(
     errors.some((e) => e.includes(`entities.Order.naturalKey: 'slug' no es un campo ni una relación`)),
+    errors.join('\n')
+  );
+});
+
+// Indexar por un campo de una entidad hija solo tiene sentido con `model: document`:
+// ahí la hija va anidada dentro del documento de su raíz, así que es una ruta real
+// del mismo registro. En el relacional vive en otra tabla y ningún índice la alcanza.
+test('un dot-path a una entidad hija es válido con model: document', () => {
+  const { errors } = run(persistenceMembers({ Order: { indexes: [['lines.position']] } }, 'document'));
+  assert.deepEqual(errors, []);
+});
+
+test('el mismo dot-path a una entidad hija es error con model: relational', () => {
+  const { errors } = run(persistenceMembers({ Order: { indexes: [['lines.position']] } }));
+  assert.ok(
+    errors.some((e) => e.includes("'lines.position': 'lines' es una relación")),
+    errors.join('\n')
+  );
+});
+
+test('ni siquiera con document se indexa por un campo de OTRO agregado', () => {
+  // La frontera del agregado no la mueve el motor: de un agregado ajeno solo se
+  // guarda su id, esté en una columna o en un campo del documento.
+  const domain = domainForPersistenceMembers();
+  domain.entities.Order.relations.customer = { entity: 'Customer', cardinality: 'many-to-one' };
+  const { errors } = run({
+    domain,
+    'use-cases': {},
+    persistence: { default: { model: 'document' }, entities: { Order: { indexes: [['customer.email']] } } },
+  });
+  assert.ok(
+    errors.some((e) => e.includes("'customer.email': 'Customer' es otro agregado")),
+    errors.join('\n')
+  );
+});
+
+test('un dot-path a un campo que la entidad hija no declara es error', () => {
+  const { errors } = run(persistenceMembers({ Order: { indexes: [['lines.postion']] } }, 'document'));
+  assert.ok(
+    errors.some((e) => e.includes("la entidad 'OrderLine' no declara el campo 'postion'")),
     errors.join('\n')
   );
 });

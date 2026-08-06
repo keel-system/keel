@@ -402,15 +402,17 @@ Toda afirmación del `Then` se comprueba, por orden de preferencia:
 ### Qué deja limpio el reset, exactamente
 
 `resetState()` cubre lo que enumera `infra/reset-db.sh`: **datos de la BD** (esquema
-intacto, `flyway_schema_history` aparte), **claves `<servicio>:*` de la caché** y los
-**destinos de mensajería declarados** en `messaging.keel.yaml § channels` (en Kafka, que no
-tiene purga, la ventana la abre una marca de offset con el mismo efecto observable).
+intacto — en relacional, `flyway_schema_history` aparte; en documental, colecciones e
+índices en pie), **claves `<servicio>:*` de la caché** y los **destinos de mensajería
+declarados** en `messaging.keel.yaml § channels` (en Kafka, que no tiene purga, la ventana la
+abre una marca de offset con el mismo efecto observable).
 
 El reset limpia **datos**, nunca **esquema**. Si un campo del dominio cambió de nombre entre
 iteraciones, `ddl-auto: update` dejó la columna vieja con su `NOT NULL` y toda escritura de ese
-agregado falla con un conflicto de integridad que ningún `Then` menciona: eso no lo arregla
-`resetState()` sino `bash infra/reset-db.sh --schema`, y el diagnóstico está en
-`infra-validation.md § Cuando el esquema queda a medio camino`.
+agregado falla con un conflicto de integridad que ningún `Then` menciona; con base documental
+el equivalente es un índice que cambió de forma y que Mongo se niega a recrear con el mismo
+nombre. Ninguno de los dos lo arregla `resetState()` sino `bash infra/reset-db.sh --schema`, y
+el diagnóstico está en `infra-validation.md § Cuando el esquema queda a medio camino`.
 
 Un recurso que **no** esté en esa lista no se da por limpio por analogía con la BD: o se
 purga en el propio test, o se declara en `assumptions` del reporte. Sin declararlo, el

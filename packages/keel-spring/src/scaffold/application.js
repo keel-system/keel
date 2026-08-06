@@ -11,12 +11,19 @@ export function generate(model) {
   const { service } = model;
   const imports = ['org.springframework.boot.SpringApplication', 'org.springframework.boot.autoconfigure.SpringBootApplication'];
   const annotations = ['@SpringBootApplication'];
-  // Auditoría JPA: solo si el diseño registra algo (persistence.audit). El bean
+  // Auditoría: solo si el diseño registra algo (persistence.audit). El bean
   // AuditorAware de la autoría, cuando lo hay, lo autodetecta Spring Data — no
-  // hace falta nombrarlo con auditorAwareRef.
+  // hace falta nombrarlo con auditorAwareRef. La anotación es la del módulo de
+  // Spring Data que corresponda al modelo de persistencia; el AuditorAware que la
+  // alimenta (auditing.js) es el mismo en los dos.
   if (model.layersPresent.persistence && auditsAnything(model)) {
-    imports.push('org.springframework.data.jpa.repository.config.EnableJpaAuditing');
-    annotations.push('@EnableJpaAuditing');
+    if (model.persistenceKind === 'document') {
+      imports.push('org.springframework.data.mongodb.config.EnableMongoAuditing');
+      annotations.push('@EnableMongoAuditing');
+    } else {
+      imports.push('org.springframework.data.jpa.repository.config.EnableJpaAuditing');
+      annotations.push('@EnableJpaAuditing');
+    }
   }
   // El relay del outbox y las purgas de los dos registros de idempotencia (el de
   // consumo y el de comando) son @Scheduled: sin esto las filas no saldrían nunca

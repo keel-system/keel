@@ -7,7 +7,8 @@ import {
   JAVA_VERSION,
   SPRINGDOC_VERSION,
   RESILIENCE4J_VERSION,
-  JACKSON_NULLABLE_VERSION
+  JACKSON_NULLABLE_VERSION,
+  FLAPDOODLE_SPRING_VERSION
 } from '../lib/assets.js';
 import { DATABASES, BROKERS, CACHES, STORAGE } from '../lib/stack-catalog.js';
 import { usesPartialUpdate } from './services.js';
@@ -24,7 +25,15 @@ export function generate(model) {
     "implementation 'org.springframework.boot:spring-boot-starter-actuator'",
     `implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:${SPRINGDOC_VERSION}'`
   ];
-  if (layersPresent.persistence) {
+  if (layersPresent.persistence && model.persistenceKind === 'document') {
+    dependencies.push(
+      ...(DATABASES[stack.database]?.gradleDependencies ?? []),
+      // Mongo embebido para el perfil `test`, análogo de H2: sin contenedor y con
+      // el ciclo de vida del contexto. No hay dependencia de migraciones porque no
+      // hay esquema que migrar — los índices los crea MongoIndexConfig.
+      `testImplementation 'de.flapdoodle.embed:de.flapdoodle.embed.mongo.spring30x:${FLAPDOODLE_SPRING_VERSION}'`
+    );
+  } else if (layersPresent.persistence) {
     dependencies.push(
       "implementation 'org.springframework.boot:spring-boot-starter-data-jpa'",
       ...(DATABASES[stack.database]?.gradleDependencies ?? []),

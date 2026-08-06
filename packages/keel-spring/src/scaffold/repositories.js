@@ -9,11 +9,11 @@ import { domainMembers, domainSubPackage, capitalize } from './entities.js';
 import { jpaMembers, backReferenceTo, JPA_PKG } from './persistence-entities.js';
 import { isRefTarget } from './ref-resolvers.js';
 
-const PORT_PKG = 'domain.repository';
-const REPO_PKG = 'infrastructure.persistence.repositories';
+export const PORT_PKG = 'domain.repository';
+export const REPO_PKG = 'infrastructure.persistence.repositories';
 
 export function generate(model) {
-  if (!model.layersPresent.persistence) return [];
+  if (!model.layersPresent.persistence || model.persistenceKind === 'document') return [];
 
   const files = [];
   for (const entity of model.entities.filter((e) => e.persisted && e.isAggregateRoot)) {
@@ -32,14 +32,14 @@ export function generate(model) {
   return files;
 }
 
-function naturalKeyParams(entity) {
+export function naturalKeyParams(entity) {
   return (entity.naturalKey ?? []).map((fieldName) => {
     const field = entity.fields.find((f) => f.name === fieldName);
     return { name: fieldName, javaType: field?.javaType ?? 'String', imports: field?.imports ?? [] };
   });
 }
 
-function naturalKeyFinder(entity) {
+export function naturalKeyFinder(entity) {
   const params = naturalKeyParams(entity);
   if (params.length === 0) return null;
   return {
@@ -52,7 +52,11 @@ function naturalKeyFinder(entity) {
 
 // Puerto de salida del dominio: interfaz sin dependencia de JPA (usa
 // Page/Pageable de Spring Data como pragmatismo, igual que el prototipo).
-function renderPort(model, entity, paginated, batchLookup) {
+//
+// Es agnóstico del motor por construcción —nombra el dominio y Page/Pageable, nada
+// más—, así que la rama documental lo REUTILIZA en vez de tener uno propio: el
+// contrato que ve el dominio no puede depender de dónde se guarda el agregado.
+export function renderPort(model, entity, paginated, batchLookup) {
   const imports = new Set([
     `${subPackage(model, domainSubPackage(entity))}.${entity.name}`,
     'java.util.Optional',
@@ -287,7 +291,7 @@ ${mappers.join('\n\n')}
   };
 }
 
-function collectInternalEntities(model, root) {
+export function collectInternalEntities(model, root) {
   const involved = [];
   const visit = (entity) => {
     if (!entity || involved.includes(entity)) return;

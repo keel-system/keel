@@ -37,7 +37,14 @@ export function usesHttpIdempotency(model) {
 
 export function generate(model) {
   if (!usesHttpIdempotency(model)) return [];
-  const files = [renderPort(model), renderContext(model), renderEntity(model), renderRepository(model), renderStore(model)];
+  const document = model.persistenceKind === 'document';
+  const files = [
+    renderPort(model),
+    renderContext(model),
+    document ? renderDocument(model) : renderEntity(model),
+    document ? renderDocumentRepository(model) : renderRepository(model),
+    document ? renderMongoStore(model) : renderStore(model)
+  ];
   // El filtro es el puente cabecera HTTP → contexto: sin capa api no hay cabecera.
   if (model.layersPresent.api) files.push(renderFilter(model));
   return files;
@@ -364,6 +371,237 @@ public class JpaIdempotencyStore implements IdempotencyStore {
 
   return {
     path: javaPath(model, ADAPTER_PKG, 'JpaIdempotencyStore'),
+    content: javaFile(
+      subPackage(model, ADAPTER_PKG),
+      [
+        `${subPackage(model, PORT_PKG)}.IdempotencyStore`,
+        'java.time.Instant',
+        'java.util.Optional',
+        'org.slf4j.Logger',
+        'org.slf4j.LoggerFactory',
+        'org.springframework.scheduling.annotation.Scheduled',
+        'org.springframework.stereotype.Component',
+        'org.springframework.transaction.annotation.Transactional'
+      ],
+      body
+    )
+  };
+}
+
+// ─── Espejo documental del registro de idempotencia HTTP ─────────────────────
+
+function renderDocument(model) {
+  const body = `/**
+ * Registro de una petición ya atendida, por clave de idempotencia.
+ *
+ * La clave es compuesta (operación, clave del cliente) y va como _id: la unicidad
+ * del _id es la que arbitra la carrera entre dos reintentos simultáneos, y quien la
+ * pierde revierte.
+ *
+ * La caducidad se guarda calculada (expires_at) en vez de deducirla del TTL al
+ * consultar: el ttlSeconds del diseño puede cambiar entre despliegues y los
+ * registros ya escritos conservan la ventana con la que se registraron.
+ */
+@Document(collection = "idempotency_record")
+public class IdempotencyRecordDocument {
+
+    @Id
+    private IdempotencyRecordId id;
+
+    /** Representación determinista del contenido con el que se usó la clave. */
+    @Field(name = "signature")
+    private String signature;
+
+    /** Id del recurso resultante; null si la operación no crea ninguno. */
+    @Field(name = "resource_id")
+    private String resourceId;
+
+    @Field(name = "created_at")
+    private Instant createdAt;
+
+    @Field(name = "expires_at")
+    private Instant expiresAt;
+
+    protected IdempotencyRecordDocument() {
+        // Requerido por el mapeo de Spring Data.
+    }
+
+    public IdempotencyRecordDocument(IdempotencyRecordId id, String signature, String resourceId, Instant createdAt, Instant expiresAt) {
+        this.id = id;
+        this.signature = signature;
+        this.resourceId = resourceId;
+        this.createdAt = createdAt;
+        this.expiresAt = expiresAt;
+    }
+
+    public IdempotencyRecordId getId() {
+        return id;
+    }
+
+    public String getSignature() {
+        return signature;
+    }
+
+    public String getResourceId() {
+        return resourceId;
+    }
+
+    public Instant getCreatedAt() {
+        return createdAt;
+    }
+
+    public Instant getExpiresAt() {
+        return expiresAt;
+    }
+
+    /** Clave compuesta (operación, clave de idempotencia): subdocumento del _id. */
+    public static class IdempotencyRecordId implements Serializable {
+
+        /** Nombre de la operación del diseño. */
+        @Field(name = "operation_scope")
+        private String scope;
+
+        @Field(name = "idempotency_key")
+        private String idempotencyKey;
+
+        protected IdempotencyRecordId() {
+            // Requerido por el mapeo de Spring Data.
+        }
+
+        public IdempotencyRecordId(String scope, String idempotencyKey) {
+            this.scope = scope;
+            this.idempotencyKey = idempotencyKey;
+        }
+
+        public String getScope() {
+            return scope;
+        }
+
+        public String getIdempotencyKey() {
+            return idempotencyKey;
+        }
+
+        @Override
+        public boolean equals(Object other) {
+            if (this == other) {
+                return true;
+            }
+            if (other == null || getClass() != other.getClass()) {
+                return false;
+            }
+            IdempotencyRecordId that = (IdempotencyRecordId) other;
+            return Objects.equals(scope, that.scope) && Objects.equals(idempotencyKey, that.idempotencyKey);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(scope, idempotencyKey);
+        }
+    }
+}`;
+
+  return {
+    path: javaPath(model, ADAPTER_PKG, 'IdempotencyRecordDocument'),
+    content: javaFile(
+      subPackage(model, ADAPTER_PKG),
+      [
+        'java.io.Serializable',
+        'java.time.Instant',
+        'java.util.Objects',
+        'org.springframework.data.annotation.Id',
+        'org.springframework.data.mongodb.core.mapping.Document',
+        'org.springframework.data.mongodb.core.mapping.Field'
+      ],
+      body
+    )
+  };
+}
+
+function renderDocumentRepository(model) {
+  const body = `public interface IdempotencyRecordMongoRepository
+        extends MongoRepository<IdempotencyRecordDocument, IdempotencyRecordDocument.IdempotencyRecordId> {
+
+    long deleteByExpiresAtBefore(Instant now);
+}`;
+
+  return {
+    path: javaPath(model, ADAPTER_PKG, 'IdempotencyRecordMongoRepository'),
+    content: javaFile(
+      subPackage(model, ADAPTER_PKG),
+      ['java.time.Instant', 'org.springframework.data.mongodb.repository.MongoRepository'],
+      body
+    )
+  };
+}
+
+function renderMongoStore(model) {
+  const body = `/**
+ * Adaptador MongoDB del registro de idempotencia.
+ *
+ * <p><b>Transaccionalidad</b>: {@code save} usa la propagación por defecto
+ * (REQUIRED), es decir, se une a la transacción del caso de uso — al revés que
+ * IdempotencyGuard, que registra en REQUIRES_NEW. La diferencia es deliberada:
+ * allí el registro debe sobrevivir al fallo del handler (el mensaje ya se
+ * consumió); aquí el registro y el recurso creado tienen que commitear juntos,
+ * porque una clave marcada sin recurso detrás haría que el reintento de una
+ * operación fallida devolviese una respuesta que nunca existió. Esa atomicidad
+ * entre dos colecciones es lo que exige el replica set.
+ *
+ * <p><b>Carreras</b>: se usa {@code insert} y no {@code save} a propósito. En Mongo
+ * un save con el _id ya presente REEMPLAZA en silencio, y la segunda petición
+ * pisaría el registro de la primera en vez de perder la carrera. Con insert, el _id
+ * arbitra igual que la clave primaria en la rama relacional: quien pierde recibe
+ * DuplicateKeyException —una DataIntegrityViolationException— que ApiExceptionHandler
+ * traduce a conflicto. De dos peticiones idénticas, exactamente una se ejecutó.
+ *
+ * <p>La cadencia de la purga sale de parameters/, nunca del código.
+ */
+@Component
+public class MongoIdempotencyStore implements IdempotencyStore {
+
+    private static final Logger log = LoggerFactory.getLogger(MongoIdempotencyStore.class);
+
+    private final IdempotencyRecordMongoRepository repository;
+
+    public MongoIdempotencyStore(IdempotencyRecordMongoRepository repository) {
+        this.repository = repository;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<StoredRequest> find(String scope, String idempotencyKey) {
+        Instant now = Instant.now();
+        return repository
+                .findById(new IdempotencyRecordDocument.IdempotencyRecordId(scope, idempotencyKey))
+                // Un registro caducado es como si no estuviera: la ventana de
+                // deduplicación la fija el diseño, no la purga (que va por lotes).
+                .filter(stored -> stored.getExpiresAt().isAfter(now))
+                .map(stored -> new StoredRequest(stored.getSignature(), stored.getResourceId()));
+    }
+
+    @Override
+    @Transactional
+    public void save(String scope, String idempotencyKey, String signature, String resourceId, long ttlSeconds) {
+        Instant now = Instant.now();
+        repository.insert(new IdempotencyRecordDocument(
+                new IdempotencyRecordDocument.IdempotencyRecordId(scope, idempotencyKey),
+                signature,
+                resourceId,
+                now,
+                now.plusSeconds(ttlSeconds)));
+    }
+
+    @Scheduled(cron = "\${idempotency-record.purge.cron:0 30 4 * * *}")
+    public void purge() {
+        long deleted = repository.deleteByExpiresAtBefore(Instant.now());
+        if (deleted > 0) {
+            log.info("Idempotencia HTTP: purgadas {} claves caducadas", deleted);
+        }
+    }
+}`;
+
+  return {
+    path: javaPath(model, ADAPTER_PKG, 'MongoIdempotencyStore'),
     content: javaFile(
       subPackage(model, ADAPTER_PKG),
       [

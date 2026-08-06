@@ -1,0 +1,12 @@
+keel: "2.5"
+service:
+  name: inspection-reports
+  version: 1.0.0
+  description: Registra los informes de inspección de campo de las instalaciones.
+  domain: operations
+layers:
+  domain: domain.keel.yaml
+  use-cases: use-cases.keel.yaml
+  api: api.keel.yaml
+  persistence: persistence.keel.yaml
+  messaging: messaging.keel.yaml

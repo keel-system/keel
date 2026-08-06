@@ -1,6 +1,6 @@
 ---
 name: keel-spring-quality
-description: Pase de calidad no-conductual del código Java de un proyecto keel-spring ya validado funcionalmente — imports, inyección por constructor, final, excepciones tipadas, higiene — más el baseline de migraciones de esquema (generado y doble-checkeado en estático; la prueba en vivo es del diseñador) y la comprobación de que el contexto arranca bajo el perfil `test`, sin cambiar el comportamiento que la validación dejó pasando. Reporta (no aplica) todo hallazgo conductual.
+description: Pase de calidad no-conductual del código Java de un proyecto keel-spring ya validado funcionalmente — imports, inyección por constructor, final, excepciones tipadas, higiene — más el baseline del esquema (con base relacional, el baseline de migraciones, generado y doble-checkeado en estático; con base documental, la verificación en vivo de los índices) y la comprobación de que el contexto arranca bajo el perfil `test`, sin cambiar el comportamiento que la validación dejó pasando. Reporta (no aplica) todo hallazgo conductual.
 tools: [read, write, edit, bash, grep, glob]
 # Hoja de la orquestación: el único orquestador es la skill (ver orchestration.md).
 # El harness lo traduce a su forma (omitir Task, o denegar el permiso).
@@ -125,7 +125,17 @@ un vistazo, en vez de tener que traducir una descripción en prosa. Lo que sí v
 `remaining` es lo conductual sin hueco de diseño detrás (una decisión de negocio, un
 refactor que cambiaría un status HTTP ya declarado).
 
-## Baseline de migraciones (solo si el proyecto tiene persistencia)
+## Baseline del esquema (solo si el proyecto tiene persistencia)
+
+Qué significa aquí «esquema» depende de `keel-stack.json`, y la diferencia no es de
+redacción: **mira el modelo antes de empezar**.
+
+- Base **relacional** (postgresql, mysql, mariadb, sqlserver, oracle, h2) → el
+  baseline de migraciones. Sigue leyendo esta sección.
+- Base **documental** (mongodb) → no hay baseline que redactar. Salta a
+  § *Verificación de índices (base documental)*.
+
+### Baseline de migraciones (base relacional)
 
 Es tuyo porque solo aquí las entidades ya son definitivas. Sin baseline el
 servicio **no es desplegable**: en `develop`/`production` Hibernate solo valida
@@ -163,6 +173,40 @@ en corto:
 Si el doble check no converge —una discrepancia que no sabes explicar ni corregir—,
 no maquilles: regístrala en `blockers` con el detalle exacto. **Nunca** relajes
 `ddl-auto` fuera de `local` ni habilites `baseline-on-migrate`.
+
+## Verificación de índices (base documental)
+
+Aquí **no redactas nada**: `MongoIndexConfig` ya trae todos los índices, derivados
+enteros de `specs/persistence.keel.yaml`. La asimetría con el baseline relacional es
+real y conviene entenderla, porque decide tu alcance: allí Hibernate *infiere* el DDL
+y hay que ver qué infirió; un índice de Mongo no se infiere de nada.
+
+Y por eso esta comprobación **sí la ejecutas de verdad**: leer índices es una
+operación de solo lectura, no exige arrancar la app con otro perfil ni borrar el
+volumen — que es lo único que impedía probar el baseline relacional sin destruir la
+base sobre la que corre tu propia no-regresión.
+
+Sigue `{{keel:skills}}/keel-spring-mongodb/references/indexes.md`; en corto:
+
+1. Con la infraestructura arriba y la app arrancada al menos una vez,
+   `bash infra/export-indexes.sh` → `build/schema/indexes.json`.
+2. Contrasta en los **tres** sentidos, y los tres importan:
+   - cada `uk_*`/`idx_*` de `MongoIndexConfig` aparece en el export, con las mismas
+     claves, el mismo orden y el mismo `unique`;
+   - no sobra ninguno — un índice que no salga de `MongoIndexConfig` lo creó otra
+     cosa, y su nombre no lo conoce el `ApiExceptionHandler`;
+   - cada `naturalKey`, cada campo `unique` y cada entrada de `indexes` de
+     `specs/persistence.keel.yaml` tiene el suyo.
+3. Comprueba el contrato de nombres: todo índice **único** del export tiene entrada
+   en el `CONSTRAINT_TO_ERROR` del `ApiExceptionHandler`, o su violación saldrá como
+   409 genérico en vez de como el error que declara el diseño. Es el equivalente
+   exacto de las constraints nombradas de la rama relacional.
+4. No apagues la infraestructura ni ejecutes `reset-db.sh --schema`: tu
+   no-regresión (`./gradlew integrationTest`) corre sobre esa misma base.
+
+Una discrepancia que no sepas explicar va a `blockers` con el detalle exacto.
+**Nunca** enciendas `auto-index-creation` para «arreglar» un índice que falta: los
+que crea Spring llevan su propio nombre y romperían la traducción del handler.
 
 ## El doble check (y qué NO haces)
 
@@ -255,14 +299,28 @@ Qué se ajustó y qué queda pendiente de decisión humana. Cierra siempre con e
 bloque estructurado que consume el orquestador:
 
 ```yaml
-status: OK | KO           # OK solo con compilación verde, contexto que arranca, baseline entregado y escenarios al 100%
+status: OK | KO           # OK solo con compilación verde, contexto que arranca, esquema entregado/verificado
+                          # y escenarios al 100%
 compiles: true | false
 scenarios: OK | KO        # ./gradlew integrationTest tras el pase: la no-regresión conductual
 contextTest: OK | KO      # ./gradlew test: contextLoads() bajo el perfil test (todos los beans arrancan sin infra)
-baseline: OK | KO | N/A   # migraciones: N/A sin persistencia; OK = V1__baseline_schema.sql commiteado
-                          # y con las DOS pasadas del doble check en verde
-baselineTested: PENDING | N/A   # siempre PENDING con persistencia: la prueba en vivo (PROFILE=local,migrations
-                                # sobre BD sin esquema) la hace el diseñador, no este pase
+
+# Dos pares de campos, uno por modelo de persistencia. Rellena SOLO el de tu stack y
+# deja el otro en N/A: son mecanismos distintos, no dos nombres de lo mismo.
+
+# --- base relacional ---
+baseline: OK | KO | N/A   # migraciones: N/A sin persistencia o con base documental;
+                          # OK = V1__baseline_schema.sql commiteado y con las DOS pasadas
+                          # del doble check en verde
+baselineTested: PENDING | N/A   # PENDING siempre que haya baseline: la prueba en vivo
+                                # (PROFILE=local,migrations sobre BD sin esquema) la hace el
+                                # diseñador, no este pase — arrancarla borraría el volumen
+
+# --- base documental ---
+indexes: OK | KO | N/A          # N/A sin persistencia o con base relacional; OK = los tres
+                                # contrastes en verde y el contrato de nombres comprobado
+indexesTested: OK | KO | N/A    # NUNCA PENDING: exportar índices solo lee, así que esta
+                                # comprobación sí se ejecuta aquí
 issuesFixed: [...]        # ajustes no-conductuales aplicados
 remaining: [...]          # hallazgos conductuales sin hueco de diseño detrás
 designGaps:               # huecos del diseño que encontraste, como propuesta accionable

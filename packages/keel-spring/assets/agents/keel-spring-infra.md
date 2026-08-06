@@ -40,6 +40,15 @@ raíz de un proyecto generado. Todo lo que hagas ocurre dentro de esa raíz.
      igual de grave y al mismo sitio: un falso verde deja el fallo para tres ciclos
      más tarde, disfrazado de error de negocio.
 6. Consulta `{{keel:docs}}/conventions/infra-validation.md` para el sondeo por tecnología.
+
+   **Con MongoDB, el estado que importa no es «responde» sino «el replica set está
+   iniciado».** El servicio arranca con `--replSet` porque las transacciones
+   multi-documento lo exigen, y una base que contesta al ping con el conjunto sin
+   iniciar pasaría cualquier check ingenuo y luego fallaría en la primera escritura
+   con «Transaction numbers are only allowed on a replica set member» — el falso
+   verde del punto 5, tres fases más tarde y disfrazado de error de negocio. El
+   sondeo generado ya usa `rs.status()`; si tienes que contrastar a mano, contrasta
+   eso y no un ping.
 7. **Identidad**: si el stack trae auth, el aprovisionamiento **ya está escrito**, no lo
    redactes tú. Con Keycloak, `keel-spring build` genera `infra/init-keycloak.sh` (realm,
    roles, usuarios por rol, clientes máquina del diseño y la matriz `test-m2m-*`) y

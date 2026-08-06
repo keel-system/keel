@@ -143,6 +143,37 @@ export function columnAnnotations(fieldName, field, resolved) {
   return annotations;
 }
 
+/**
+ * Anotaciones de campo de documento (Spring Data MongoDB), equivalente documental
+ * de columnAnnotations(). Devuelve una lista, igual que aquella.
+ *
+ * Es mucho más corta y no por descuido: en Mongo no hay esquema, así que
+ * `nullable`, `length`, `unique` y `columnDefinition` no tienen dónde aterrizar.
+ * La consecuencia hay que decirla en voz alta: `required` y `maxLength` los hacía
+ * cumplir la base de datos en la rama relacional, y aquí solo los hace cumplir la
+ * Bean Validation del borde (documentado en conventions/mapping.md; recuperarlos en
+ * la base es un validador $jsonSchema, que es tuning del agente y no generación).
+ *
+ * Tampoco hace falta quoteIdentifier: las restricciones de Mongo sobre un nombre de
+ * campo son no empezar por `$`, no contener `.` y no llamarse `_id`, y snakeCase()
+ * sobre un identificador del DSL no produce ninguna de las tres.
+ */
+export function documentAnnotations(fieldName, base) {
+  const attrs = [`name = "${snakeCase(fieldName)}"`];
+
+  // Sin targetType, el driver serializa BigDecimal como String y toda comparación u
+  // ordenación en la base pasa a ser lexicográfica ("10" < "9"). Decimal128 es el
+  // tipo decimal nativo, y es lo que exige la precisión numérica de constitution.md.
+  if (base === 'decimal') attrs.push('targetType = FieldType.DECIMAL128');
+
+  return [`@Field(${attrs.join(', ')})`];
+}
+
+/** ¿Este campo necesita el import de FieldType además del de Field? */
+export function needsFieldType(base) {
+  return base === 'decimal';
+}
+
 function escapeJava(value) {
   return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }

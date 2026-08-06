@@ -20,13 +20,13 @@ const JAVA = 'src/main/java/com/commerce/catalog';
 const CONTROLLER = `${JAVA}/infrastructure/rest/controllers/product/v1/ProductV1Controller.java`;
 const ADAPTER = `${JAVA}/infrastructure/persistence/repositories/ProductRepositoryImpl.java`;
 
-function scaffold(patch) {
+function scaffold(patch, stack) {
   const { manifest, layers, errors } = loadService(fixtureDir);
   assert.deepEqual(errors, []);
   const patched = structuredClone(layers);
   if (patch) patch(patched);
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-sort-'));
-  const result = scaffoldService({ manifest, layers: patched, workspace, force: true });
+  const result = scaffoldService({ manifest, layers: patched, workspace, force: true, stack });
   const read = (relative) =>
     fs.readFileSync(path.join(workspace, 'services', 'catalog-spring', relative), 'utf8');
   return { result, read };
@@ -98,4 +98,42 @@ test('una raíz sin operaciones paginadas no gana el desempate: no hay list(Page
   const categoryAdapter = read(`${JAVA}/infrastructure/persistence/repositories/CategoryRepositoryImpl.java`);
   assert.ok(!categoryAdapter.includes('TIE_BREAKER'));
   assert.ok(!categoryAdapter.includes('withStableOrder'));
+});
+
+test('un subcampo de value object se traduce distinto en cada modelo de persistencia', () => {
+  // La MISMA declaración del diseño (`price.amount`) apunta a sitios distintos: en
+  // relacional el VO se aplana a una columna con prefijo, así que la property path
+  // de Spring Data es el nombre compuesto; en documental el VO es un subdocumento y
+  // la ruta es literal. Traducirlo mal no rompe la compilación — da un
+  // PropertyReferenceException en la primera consulta, ya en ejecución.
+  const declare = (layers) => {
+    layers['use-cases'].operations.listProducts.output.sort = ['price.amount:asc'];
+  };
+
+  const relational = scaffold(declare).read(CONTROLLER);
+  const document = scaffold(declare, { database: 'mongodb' }).read(CONTROLLER);
+
+  assert.ok(relational.includes('Sort.Order.asc("priceAmount")'));
+  assert.ok(!relational.includes('"price.amount"'));
+  assert.ok(document.includes('Sort.Order.asc("price.amount")'));
+  assert.ok(!document.includes('"priceAmount"'));
+});
+
+test('el aviso por ordenar sobre un agregado embebido se conserva en los dos modelos', () => {
+  // De un agregado ajeno solo se guarda su id —columna UUID o campo UUID—, así que
+  // no hay ruta navegable en ninguno de los dos: el warning tiene que salir igual, y
+  // solo cambia a qué skill remite.
+  const declare = (layers) => {
+    layers['use-cases'].operations.updateProduct.output.sort = ['category.slug:asc'];
+  };
+
+  for (const [database, skill] of [
+    [undefined, 'keel-spring-database'],
+    ['mongodb', 'keel-spring-mongodb']
+  ]) {
+    const { result } = scaffold(declare, database ? { database } : undefined);
+    const warning = result.warnings.find((w) => w.includes("ordena por 'category.slug'"));
+    assert.ok(warning, `${database ?? 'relacional'}: falta el aviso`);
+    assert.ok(warning.includes(skill), `${database ?? 'relacional'}: el aviso no remite a ${skill}`);
+  }
 });

@@ -551,14 +551,28 @@ function renderMultipartHandlers(imports) {
 }
 
 // Conflicto de concurrencia optimista (lockVersion, el @Version de la raíz de
-// agregado): dos operaciones simultáneas escribieron sobre la misma versión.
-// Spring traduce el OptimisticLockException de JPA a
-// ObjectOptimisticLockingFailureException al hacer commit; sin este handler caería
-// en el catch-all como 500. Es un 409: el cliente debe releer y reintentar con el
-// estado actual. No lo confundas con un conflicto de `expectedVersion` que declare
-// el diseño: ese lo comprueba el dominio contra su propio contador.
+// agregado): dos operaciones simultáneas escribieron sobre la misma versión. Sin
+// este handler caería en el catch-all como 500. Es un 409: el cliente debe releer y
+// reintentar con el estado actual. No lo confundas con un conflicto de
+// `expectedVersion` que declare el diseño: ese lo comprueba el dominio contra su
+// propio contador.
+//
+// La excepción concreta depende del modelo, y por eso se ramifica en vez de capturar
+// siempre la superclase: JPA lanza ObjectOptimisticLockingFailureException (Spring
+// traduce el OptimisticLockException al hacer commit) y Spring Data MongoDB lanza
+// directamente OptimisticLockingFailureException, su padre. Capturar el padre
+// funcionaría en ambos, pero cambiaría el Java ya generado de todos los servicios
+// relacionales sin necesidad.
 function renderOptimisticLockHandler(model, imports) {
-  imports.add('org.springframework.orm.ObjectOptimisticLockingFailureException');
+  const exception =
+    model.persistenceKind === 'document'
+      ? 'OptimisticLockingFailureException'
+      : 'ObjectOptimisticLockingFailureException';
+  imports.add(
+    model.persistenceKind === 'document'
+      ? 'org.springframework.dao.OptimisticLockingFailureException'
+      : 'org.springframework.orm.ObjectOptimisticLockingFailureException'
+  );
   const message = 'El recurso fue modificado por otra operación concurrente; reintenta con el estado actual';
   const declared = declaredConcurrencyError(model);
   if (declared) {
@@ -568,8 +582,8 @@ function renderOptimisticLockHandler(model, imports) {
     // respuesta pública: es contrato con el integrador, así que gana al genérico del
     // scaffolding. Se delega en onDomainException para que status y forma del cuerpo
     // salgan de la misma metadata que el resto de errores declarados.
-    @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
-    public ResponseEntity<ErrorResponse> onOptimisticLockingFailure(ObjectOptimisticLockingFailureException exception) {
+    @ExceptionHandler(${exception}.class)
+    public ResponseEntity<ErrorResponse> onOptimisticLockingFailure(${exception} exception) {
         return onDomainException(new ${declared.exceptionClass}("${message}"));
     }
 `;
@@ -579,8 +593,8 @@ function renderOptimisticLockHandler(model, imports) {
     // para la modificación concurrente; este code es una convención del scaffolding,
     // no el contrato. Si el diseño lo declara, sustitúyelo.
     @ResponseStatus(HttpStatus.CONFLICT)
-    @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
-    public ErrorResponse onOptimisticLockingFailure(ObjectOptimisticLockingFailureException exception) {
+    @ExceptionHandler(${exception}.class)
+    public ErrorResponse onOptimisticLockingFailure(${exception} exception) {
         return new ErrorResponse(HttpStatus.CONFLICT.value(), "Conflict", "OPTIMISTIC_LOCK_CONFLICT",
                 "${message}", List.of());
     }

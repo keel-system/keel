@@ -1,0 +1,147 @@
+types:
+  ReportStatus:
+    description: Estados por los que pasa un informe de inspección.
+    values: [draft, submitted, approved, rejected]
+
+  SectionStatus:
+    description: Resultado de una sección del informe.
+    values: [pending, passed, failed]
+
+  # Value object DENTRO de otro value object. En el modelo relacional este caso no
+  # tiene columna que aplanar y build deja un TODO para el agente; en el documental
+  # es simplemente un objeto dentro de otro objeto.
+  GeoPoint:
+    description: Coordenadas de un punto sobre el terreno.
+    fields:
+      latitude:
+        type: decimal
+        required: true
+        constraints: { min: -90, max: 90, scale: 6 }
+      longitude:
+        type: decimal
+        required: true
+        constraints: { min: -180, max: 180, scale: 6 }
+
+  Location:
+    description: Emplazamiento inspeccionado, con sus coordenadas y su etiqueta.
+    fields:
+      coords:
+        type: GeoPoint
+        required: true
+      label:
+        type: string
+        required: true
+
+entities:
+  Inspector:
+    description: Inspector que firma los informes; raíz de su propio agregado.
+    fields:
+      id:
+        type: uuid
+        id: true
+        generated: true
+      badgeNumber:
+        type: string
+        required: true
+        unique: true
+      fullName:
+        type: string
+        required: true
+
+  InspectionReport:
+    description: Informe de una inspección de campo, raíz del agregado.
+    fields:
+      id:
+        type: uuid
+        id: true
+        generated: true
+      siteCode:
+        type: string
+        required: true
+      inspectedOn:
+        type: date
+        required: true
+      status:
+        type: ReportStatus
+        required: true
+        default: draft
+      location:
+        type: Location
+        required: true
+      tags:
+        type: string
+        list: true
+        description: Etiquetas libres del informe; array plano, sin tabla de elementos.
+      createdAt:
+        type: timestamp
+        generated: true
+      updatedAt:
+        type: timestamp
+        generated: true
+    relations:
+      inspector:
+        entity: Inspector
+        cardinality: many-to-one
+        required: true
+        description: Inspector que firma el informe; otro agregado, solo su id.
+      sections:
+        entity: ReportSection
+        cardinality: one-to-many
+        description: Secciones del informe.
+    lifecycle:
+      field: status
+      transitions:
+        draft: [submitted]
+        submitted: [approved, rejected]
+        approved: []
+        rejected: [draft]
+
+  ReportSection:
+    description: Sección del informe, entidad interna de su agregado.
+    fields:
+      id:
+        type: uuid
+        id: true
+        generated: true
+      title:
+        type: string
+        required: true
+      status:
+        type: SectionStatus
+        required: true
+        default: pending
+      position:
+        type: int
+        required: true
+        description: Orden de la sección dentro del informe; contrato observable.
+    relations:
+      report:
+        entity: InspectionReport
+        cardinality: many-to-one
+        required: true
+        description: Informe al que pertenece la sección.
+      items:
+        entity: SectionItem
+        cardinality: one-to-many
+        description: Puntos comprobados en la sección.
+
+  SectionItem:
+    description: Punto comprobado dentro de una sección; segundo nivel de anidamiento.
+    fields:
+      id:
+        type: uuid
+        id: true
+        generated: true
+      code:
+        type: string
+        required: true
+      passed:
+        type: boolean
+        required: true
+      remarks:
+        type: text
+
+aggregates:
+  Inspection:
+    root: InspectionReport
+    entities: [ReportSection, SectionItem]
