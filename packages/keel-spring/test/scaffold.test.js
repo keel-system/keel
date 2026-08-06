@@ -378,10 +378,17 @@ test('CLAUDE.md contextual: specs, solo capas declaradas y skill local con conve
   assert.ok(skill.includes('parameters/production'));
   // El detalle del gating no se duplica: remite a orchestration.md.
   assert.ok(skill.includes('docs/keel/orchestration.md'));
+  // Exclusividad: con un agente vivo el orquestador no toca el proyecto. Sin esta
+  // regla, el default del harness (subagente en segundo plano) le deja el turno
+  // abierto y lo más natural es que siga haciendo el trabajo que acaba de delegar
+  // — y una pasada suya de score-scenarios.sh borra los volcados del árbitro.
+  assert.ok(skill.includes('no ejecutes ninguna herramienta sobre el proyecto'));
+  assert.ok(skill.includes('Un solo actor sobre el proyecto'));
 
   // orchestration.md: el pipeline canónico, instalado junto a architecture/constitution.
   const orchestration = read(workspace, 'docs/keel/orchestration.md');
   assert.ok(orchestration.includes('Ciclos de fix'));
+  assert.ok(orchestration.includes('Un solo actor sobre el proyecto'));
   assert.ok(!orchestration.includes('del workspace y del proyecto'));
 
   // Conventions siempre, junto al resto de docs de apoyo en docs/keel/ (las lee

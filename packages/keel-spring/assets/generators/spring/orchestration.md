@@ -212,6 +212,33 @@ relanzado en la fase 2 cierra ejecutando **las clases que le señaló el arbitra
   contención de locks: `resetState()` vacía la base de datos en cada `@BeforeAll`, así que dos
   suites concurrentes se borran los datos entre sí y producen fallos que no son de nadie.
 
+## Un solo actor sobre el proyecto
+
+La serialización de arriba es un caso particular de una regla más ancha: **mientras un agente
+está vivo, nadie más toca este directorio — el orquestador incluido**. No hay un tercer actor
+en el pipeline, así que "nadie más" significa exactamente él.
+
+El motivo es el mismo que serializa a dos agentes, y no cambia porque quien invoque sea el
+orquestador: `infra/score-scenarios.sh` **sobrescribe** `build/keel-failures/`, que es la
+evidencia que `keel-spring-validate` está leyendo en ese momento; Gradle bloquea el directorio;
+y `resetState()` vacía la base de datos que la suite del agente está usando. Un `./gradlew` de
+cortesía «para ir adelantando» mientras el árbitro trabaja no adelanta nada: le quita la
+evidencia y produce fallos que no son de nadie.
+
+Hay una segunda razón, independiente de los locks: **el trabajo de un agente no lo puede hacer
+el orquestador aunque sepa hacerlo**. Es el mismo argumento que sostiene «La orquestación es de
+un solo nivel», aplicado al eje temporal en vez del jerárquico — las restricciones que hacen
+válida la validación (el de pruebas sin leer `src/main/java`, el árbitro sin corregir código, el
+de calidad sin cambiar comportamiento) son **del agente**, no del proceso: ejecutadas desde la
+sesión del orquestador no rige ninguna, y el gating pasa a decidirse sobre trabajo que no puede
+atribuir.
+
+La **única** ventana en la que el orquestador ejecuta algo sobre el proyecto es aquella en la
+que no hay ningún agente corriendo: la fase 2a (`score-scenarios.sh`, entre el cierre de la fase
+1 y el arbitraje) y los pasos de cierre —guía de despliegue, `INFORME-GENERACION.md`, `compose
+down` y commit—, ya con el pase de calidad terminado. Fuera de ahí, su trabajo es esperar el
+bloque estructurado y decidir el gating.
+
 ## Ciclos de fix: bloqueo sistémico ≠ fallos puntuales
 
 El cupo de la fase 2 son los ciclos código→re-puntuación para **fallos puntuales**
