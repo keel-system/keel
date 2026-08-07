@@ -110,17 +110,25 @@ entrada de tu cola, no el tamaño de la lista.
      para que los eventos que provoque el consumo hereden la correlación de
      origen y el contexto se cierre pase lo que pase (los hilos del pool se
      reutilizan).
-  2. `idempotencyGuard.tryRecord("<NombreDelListener>", id)` con el `messageId`
+  2. El `idempotencyGuard`, con `"<NombreDelListener>"` y el `messageId`
      declarado en la suscripción o, si no lo hay,
-     `envelope.metadata().eventId()`; si devuelve `false`, ack y return sin
+     `envelope.metadata().eventId()`; si dice que ya se procesó, ack y return sin
      procesar. El guard vive en `infrastructure/messaging/idempotency/`: no
-     escribas otro mecanismo.
+     escribas otro mecanismo. **El orden lo prescribe el javadoc del
+     `<Evento>Message` que generó build, y las dos formas no son
+     intercambiables**: `alreadyProcessed(...)` aquí y `record(...)` después de
+     despachar bien si la operación de `triggers` declara `transitions`;
+     `tryRecord(...)` aquí si no las declara.
   3. Despacho de la operación `triggers` vía `UseCaseMediator`.
 
-  Si la operación puede fallar de forma transitoria y debe reintentarse, llama a
-  `tryRecord` **después** de despachar: el guard escribe en su propia
-  transacción y registrar antes convertiría un fallo pasajero en un mensaje
-  perdido.
+  Por qué el orden importa: el guard escribe en su **propia** transacción, así
+  que sobrevive al fallo del handler. Registrar después (`record`) deja que un
+  fallo transitorio se reintente — el mensaje queda sin marcar y el broker lo
+  reentrega, y lo que frena la repetición es la transición del agregado.
+  Reclamar antes (`tryRecord`) cierra la ventana del duplicado, pero un fallo del
+  handler deja el mensaje marcado y **perdido**. Poner el segundo donde tocaba el
+  primero convierte un corte de red en trabajo que nadie hizo, y el gate `dedupe`
+  del pase de calidad lo marca `KO`.
 
 ## Checklist
 
@@ -128,7 +136,7 @@ entrada de tu cola, no el tamaño de la lista.
 - [ ] Stub del publisher eliminado (dos beans del puerto rompen la inyección).
 - [ ] Puerto de envío implementado según `reliability` (`OutboxDispatcher` u `<Evento>Publisher`), con su stub eliminado y el fallo propagado (outbox) o registrado (best-effort).
 - [ ] `onFailure` implementado con reintentos acotados y DLQ si `deadLetter: true`.
-- [ ] Listener envuelto en `CorrelationContext.runWith(...)` y deduplicado con `IdempotencyGuard.tryRecord(...)` (sin mecanismo propio).
+- [ ] Listener envuelto en `CorrelationContext.runWith(...)` y deduplicado con el `IdempotencyGuard` en el orden que prescribe el javadoc del `<Evento>Message` (sin mecanismo propio).
 
 ## Si la suscripción alimenta una proyección
 

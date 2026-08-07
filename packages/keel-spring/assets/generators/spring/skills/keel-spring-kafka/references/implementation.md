@@ -85,18 +85,25 @@ no escribas un mecanismo propio.
    mensaje de origen y el flujo completo se sigue en los logs. `runWith` cierra
    el contexto pase lo que pase, que es lo que evita que el siguiente mensaje
    atendido por ese hilo del pool herede una correlación ajena.
-2. **Descarta duplicados** con
-   `idempotencyGuard.tryRecord("<NombreDelListener>", id)`, donde `id` es el
-   `messageId` declarado en la suscripción o, si no lo hay,
-   `envelope.metadata().eventId()`. Si devuelve `false`, confirma el offset y
-   vuelve sin procesar. El guard y su tabla `processed_event` viven en
-   `infrastructure/messaging/idempotency/`.
+2. **Descarta duplicados** con el `idempotencyGuard`, pasándole
+   `"<NombreDelListener>"` y el `id` que declara el diseño: el `messageId` de la
+   suscripción o, si no lo hay, `envelope.metadata().eventId()`. Si dice que ya
+   se procesó, confirma el offset y vuelve sin procesar. El guard y su tabla
+   `processed_event` viven en `infrastructure/messaging/idempotency/`.
+   **El orden lo prescribe el javadoc del `<Evento>Message` que generó build, y
+   las dos formas no son intercambiables**: `alreadyProcessed(...)` aquí y
+   `record(...)` después de despachar bien si la operación de `triggers` declara
+   `transitions`; `tryRecord(...)` aquí si no las declara.
 3. **Despacha** la operación `triggers` vía `UseCaseMediator`.
 
-Cuándo registrar: si la operación puede fallar de forma transitoria y debe
-reintentarse, llama a `tryRecord` **después** de despachar. Registrar antes
-convierte un fallo pasajero en un mensaje perdido, porque el guard escribe en su
-propia transacción.
+Por qué el orden importa: el guard escribe en su **propia** transacción, así que
+sobrevive al fallo del handler. Registrar después (`record`) deja que un fallo
+transitorio se reintente — el mensaje queda sin marcar y el broker lo reentrega,
+y lo que frena la repetición es la transición del agregado. Reclamar antes
+(`tryRecord`) cierra la ventana del duplicado, pero un fallo del handler deja el
+mensaje marcado y **perdido**. Poner el segundo donde tocaba el primero convierte
+un corte de red en trabajo que nadie hizo, y el gate `dedupe` del pase de calidad
+lo marca `KO`.
 
 ## Observación
 
@@ -113,7 +120,7 @@ propia transacción.
 - [ ] Puerto de envío implementado según `reliability` (`OutboxDispatcher` u `<Evento>Publisher`), con su stub eliminado y el fallo propagado (outbox) o registrado (best-effort).
 - [ ] `onFailure` → reintentos acotados + DLT si `deadLetter: true`; errores de negocio excluidos.
 - [ ] `ErrorHandlingDeserializer` configurado (poison pills al DLT, no en bucle).
-- [ ] Listener envuelto en `CorrelationContext.runWith(...)` y deduplicado con `IdempotencyGuard.tryRecord(...)` (sin mecanismo propio).
+- [ ] Listener envuelto en `CorrelationContext.runWith(...)` y deduplicado con el `IdempotencyGuard` en el orden que prescribe el javadoc del `<Evento>Message` (sin mecanismo propio).
 
 ## Si la suscripción alimenta una proyección
 

@@ -46,9 +46,10 @@ dependencies:
   #       # undoes: reserveStock                   # activación de este proveedor que se deshace
   #     # La operación que la ejecuta vive en messaging: subscriptions.<evento>.triggers, y
   #     # tiene dos obligaciones que `keel validate` comprueba: NO poder aplicarse dos veces
-  #     # (contract.messageId, idempotency, o una transición de lifecycle irrepetible —
-  #     # deshacer dos veces el mismo trabajo no es deshacerlo) y devolver con `transitions`
-  #     # el estado propio que movió el trabajo que se encargó.
+  #     # (contract.messageId o una transición de lifecycle irrepetible; `idempotency` NO
+  #     # vale aquí: su clave llega por cabecera HTTP y el broker no la manda — deshacer
+  #     # dos veces el mismo trabajo no es deshacerlo) y devolver con `transitions` el
+  #     # estado propio que movió el trabajo que se encargó.
   #
   # notifications:
   #   description: Servicio de avisos. No le leemos nada: le pedimos que envíe.
@@ -63,6 +64,10 @@ dependencies:
   #       # via: { client: notifications, call: sendEmail }   # …o llamada de http-clients
   #       effect: Sale un correo de confirmación hacia el comprador.
   #       awaits: nothing                          # outcome | acknowledgement | nothing
+  #       # reconciledBy: sweepPendingDeliveries   # operación propia con `schedule`: barre los
+  #       #   encargos que nunca recibieron desenlace. Aplica cuando el encargo SÍ tiene un
+  #       #   desenlace que esperar (no en este `awaits: nothing`); sin ella, un proveedor que
+  #       #   cae o pierde el mensaje deja el trabajo colgado y nada lo detecta.
   #       # onFailure:                             # obligatorio solo con via de http-clients
   #       #   action: degrade                      # fail | degrade | ignore
   #       #   degradedTo: El pedido se confirma y el aviso se reintenta aparte.
