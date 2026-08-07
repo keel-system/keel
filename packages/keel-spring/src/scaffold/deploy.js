@@ -21,7 +21,16 @@
 
 import YAML from 'yaml';
 import { JAVA_VERSION } from '../lib/assets.js';
-import { DATABASES, BROKERS, AUTH, CACHES, STORAGE, HEALTHCHECKS, UI_SERVICES } from '../lib/stack-catalog.js';
+import {
+  DATABASES,
+  BROKERS,
+  AUTH,
+  CACHES,
+  STORAGE,
+  HEALTHCHECKS,
+  UI_SERVICES,
+  HTTP_STUB
+} from '../lib/stack-catalog.js';
 import { realmSpec } from './auth-provisioning.js';
 import { LOCAL_API_KEY, LOCAL_CORS_ORIGINS, localClientApiKey } from './config.js';
 
@@ -355,10 +364,19 @@ function appEnvironment(model) {
   // Integraciones salientes: `develop` las declara obligatorias y el diseño no
   // aporta URLs (son infraestructura). Van por .env para que el diseñador las
   // apunte a su mock sin editar el compose.
+  //
+  // El valor por defecto es el puerto donde `infra/` publica su WireMock, no un
+  // puerto cualquiera: es el stub que el diseñador ya tiene a mano. El 8081 que
+  // había antes es el de kafka-ui, que responde 200 con HTML a lo que le pidas —
+  // una integración apuntada ahí no falla, contesta mal.
   for (const client of model.httpClients ?? []) {
     const name = `${client.envPrefix}_BASE_URL`;
     environment[name] = `\${${name}}`;
-    extraEnv.push({ name, value: 'http://localhost:8081', comment: `URL del servicio de prueba para ${client.id}` });
+    extraEnv.push({
+      name,
+      value: `http://localhost:${HTTP_STUB.publishedPort}`,
+      comment: `URL del servicio de prueba para ${client.id}`
+    });
   }
 
   return { environment, extraEnv };

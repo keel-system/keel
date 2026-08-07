@@ -1,0 +1,80 @@
+clients:
+  # Proveedor al que se le PIDE trabajo (activación con onFailure: fail): sin veredicto
+  # del escáner, publicar el archivo no puede darse por bueno.
+  scanner:
+    purpose: Escáner antimalware, dueño del veredicto sobre el contenido de un binario.
+    auth:
+      type: bearer-static
+    calls:
+      scanAsset:
+        contract: POST /scans analiza el binario y devuelve { verdict, scannedAt }.
+        method: POST
+        path: /scans
+        request:
+          body:
+            assetId:
+              type: uuid
+              required: true
+            storageKey:
+              type: string
+              required: true
+        response:
+          fields:
+            verdict:
+              type: string
+              required: true
+            scannedAt:
+              type: timestamp
+              required: true
+        timeoutMs: 4000
+        # Escritura ajena con reintentos: sin clave, un timeout de red encargaría dos
+        # análisis del mismo binario.
+        idempotency:
+          keyFrom: payload-hash
+        retry:
+          maxAttempts: 3
+          initialDelayMs: 300
+          maxDelayMs: 4000
+          retryOn: [timeout, connection]
+        circuitBreaker:
+          failureRateThreshold: 50
+          slidingWindowSize: 10
+          waitDurationMs: 30000
+        fallback: Rechazar la publicación; sin veredicto no puede darse el archivo por limpio.
+
+  # Proveedor del que se LEE un dato ajeno (need · on-demand): la miniatura no es del
+  # custodio y no se replica — se pide al abrir la ficha.
+  rendering:
+    purpose: Servicio de renderizado, dueño de las miniaturas de los archivos.
+    auth:
+      type: api-key
+      headerName: X-Api-Key
+    calls:
+      getThumbnail:
+        contract: GET /thumbnails/{assetId} devuelve { url, width }.
+        method: GET
+        path: /thumbnails/{assetId}
+        request:
+          pathParams:
+            assetId:
+              type: uuid
+              required: true
+        response:
+          fields:
+            url:
+              type: string
+              required: true
+            width:
+              type: int
+              required: true
+        timeoutMs: 2000
+        retry:
+          maxAttempts: 2
+          initialDelayMs: 200
+          maxDelayMs: 2000
+          retryOn: [timeout, 5xx]
+        circuitBreaker:
+          failureRateThreshold: 60
+          slidingWindowSize: 20
+          waitDurationMs: 20000
+        fallback: Devolver la ficha sin miniatura.

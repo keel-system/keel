@@ -31,7 +31,13 @@ export function generate(model) {
       // Mongo embebido para el perfil `test`, análogo de H2: sin contenedor y con
       // el ciclo de vida del contexto. No hay dependencia de migraciones porque no
       // hay esquema que migrar — los índices los crea MongoIndexConfig.
-      `testImplementation 'de.flapdoodle.embed:de.flapdoodle.embed.mongo.spring30x:${FLAPDOODLE_SPRING_VERSION}'`
+      //
+      // El artefacto es `spring3x`, el genérico para Spring Boot 3.x, y no uno de los
+      // `spring3Nx`: esos están congelados en la línea de Boot que los nombra
+      // (`spring30x` se quedó en 4.11.0) y pedir la versión al día de uno de ellos no
+      // resuelve. Es un fallo que no se ve compilando `main` —el arnés sí lo arrastra
+      // por el classpath— y que solo caza `npm run compile-check`.
+      `testImplementation 'de.flapdoodle.embed:de.flapdoodle.embed.mongo.spring3x:${FLAPDOODLE_SPRING_VERSION}'`
     );
   } else if (layersPresent.persistence) {
     dependencies.push(
@@ -82,6 +88,23 @@ export function generate(model) {
     "testRuntimeOnly 'org.junit.platform:junit-platform-launcher'"
   );
 
+  // El mongod embebido es la base del perfil `test` (el análogo de H2), y el source
+  // set `integrationTest` hereda las dependencias de `test`. Con eso en el classpath,
+  // su autoconfiguración se activa TAMBIÉN bajo el perfil `local` de las IT y sustituye
+  // el MongoDatabaseFactory que debe apuntar al Mongo real de infra/: el contexto ni
+  // siquiera arranca (falla instanciando `version`, que solo declara parameters/test).
+  // No es simétrico con H2, que se limita a estar en el classpath sin reclamar la
+  // conexión, y por eso hace falta excluirlo explícitamente aquí.
+  const embeddedDbExclusion =
+    layersPresent.persistence && model.persistenceKind === 'document'
+      ? `
+    // El mongod embebido es del perfil \`test\`: fuera del classpath de las IT, que
+    // corren con perfil \`local\` contra el Mongo real de infra/. Si entra, su
+    // autoconfiguración reemplaza la conexión y el contexto no arranca.
+    integrationTestImplementation.exclude group: 'de.flapdoodle.embed'
+    integrationTestRuntimeOnly.exclude group: 'de.flapdoodle.embed'`
+      : '';
+
   const buildGradle = `plugins {
     id 'java'
     id 'org.springframework.boot' version '${SPRING_BOOT_VERSION}'
@@ -118,7 +141,7 @@ sourceSets {
 
 configurations {
     integrationTestImplementation.extendsFrom testImplementation
-    integrationTestRuntimeOnly.extendsFrom testRuntimeOnly
+    integrationTestRuntimeOnly.extendsFrom testRuntimeOnly${embeddedDbExclusion}
 }
 
 tasks.named('test') {

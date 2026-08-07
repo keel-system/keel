@@ -1,5 +1,21 @@
 # Troubleshooting
 
+## El contenedor de la base muere nada más arrancar (exit 2)
+
+Síntoma engañoso: todo lo demás falla por conexión rechazada, que no apunta a la
+causa. Míralo en el log del contenedor, no en el de la app:
+
+```bash
+docker logs <servicio>-db | tail -5
+# BadValue: security.keyFile is required when authorization is enabled with replica sets
+```
+
+Un replica set **con** autenticación exige además autenticación entre miembros, y
+mongod solo la acepta por keyFile. El compose que genera build ya arranca así (genera
+el secreto en el arranque, `chmod 400`, y encadena con `exec docker-entrypoint.sh`
+para conservar la creación del usuario root de la imagen oficial). Si alguien
+simplifica ese `command` a `--replSet rs0 --bind_ip_all`, la base deja de arrancar.
+
 ## «Transaction numbers are only allowed on a replica set member or mongos»
 
 El servidor no es miembro de un replica set, o el conjunto no se ha iniciado.

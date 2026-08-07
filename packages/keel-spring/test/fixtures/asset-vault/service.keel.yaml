@@ -1,0 +1,37 @@
+keel: "2.6"
+# Silueta DOCUMENTAL transversal, complementaria de `inspection-reports`: allí el eje
+# es la FORMA del documento (dos niveles de anidamiento, value object dentro de value
+# object, índices por dot-path) y aquí es todo lo que rodea al documento y que hasta
+# ahora solo se había generado en la rama relacional:
+#
+#   - security         → `audit.authorship: all` la EXIGE; auditoría de autoría en Mongo
+#   - cache            → la rama combinada BD+caché de `infra/reset-db.sh` con `cliVia: dbcontainer`
+#   - storage          → MinIO y Mongo en el mismo compose, con entrada multipart
+#   - http-clients     → un `need` on-demand y una activación con `onFailure: fail`
+#     + dependencies
+#   - idempotencia de PETICIÓN → `idempotency_record` + `ix_idempotency_record_expires_at`,
+#                                el único índice de infraestructura que ninguna fixture generaba
+#   - idempotencia de CONSUMO  → `processed_event` con `contract.messageId`
+#   - outbox                   → publicación fiable, que es lo que hace puntuable `broker-check`
+#
+# Y en los índices, las tres ramas de `documentPathsFor()` que faltaban: multikey sobre
+# un array (`labels`), referencia a otro agregado (`owner` → `owner_id`) y campo `unique`
+# suelto (`checksum` → `uk_assets_checksum`).
+#
+# Deliberadamente PLANA: una sola entidad hija y ningún value object. La forma del
+# documento ya la prueba `inspection-reports`; repetirla aquí solo alargaría la corrida.
+service:
+  name: asset-vault
+  version: 1.0.0
+  description: Custodia los archivos digitales de cada propietario y su ciclo de publicación.
+  domain: content
+layers:
+  domain: domain.keel.yaml
+  use-cases: use-cases.keel.yaml
+  api: api.keel.yaml
+  persistence: persistence.keel.yaml
+  security: security.keel.yaml
+  messaging: messaging.keel.yaml
+  storage: storage.keel.yaml
+  http-clients: http-clients.keel.yaml
+  dependencies: dependencies.keel.yaml

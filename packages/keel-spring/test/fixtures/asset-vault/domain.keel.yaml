@@ -1,0 +1,104 @@
+types:
+  AssetStatus:
+    description: Estados por los que pasa un archivo custodiado.
+    values: [draft, published, quarantined]
+
+entities:
+  Owner:
+    description: Propietario de los archivos; raíz de su propio agregado.
+    fields:
+      id:
+        type: uuid
+        id: true
+        generated: true
+      code:
+        type: string
+        required: true
+        description: Código estable del propietario dentro de la organización.
+      displayName:
+        type: string
+        required: true
+
+  Asset:
+    description: Archivo custodiado, raíz del agregado.
+    fields:
+      id:
+        type: uuid
+        id: true
+        generated: true
+      slug:
+        type: string
+        required: true
+        description: Nombre estable del archivo dentro de su propietario.
+      title:
+        type: string
+        required: true
+      # Campo `unique` suelto, distinto de la clave natural: dos propietarios no pueden
+      # custodiar el mismo binario. Es lo que genera un uk_ de campo (uk_assets_checksum)
+      # además del uk_ de clave natural.
+      checksum:
+        type: string
+        required: true
+        unique: true
+        description: Huella del binario, que identifica el contenido con independencia del nombre.
+      contentType:
+        type: string
+        required: true
+      sizeBytes:
+        type: long
+        required: true
+      storageKey:
+        type: string
+        required: true
+        description: Clave del binario dentro del bucket.
+      # Array plano: en el modelo documental se indexa como multikey, sin tabla de
+      # elementos ni join.
+      labels:
+        type: string
+        list: true
+        description: Etiquetas libres del archivo.
+      status:
+        type: AssetStatus
+        required: true
+        default: draft
+    relations:
+      owner:
+        entity: Owner
+        cardinality: many-to-one
+        required: true
+        description: Propietario del archivo; otro agregado, solo su id.
+      revisions:
+        entity: AssetRevision
+        cardinality: one-to-many
+        description: Revisiones del archivo, anidadas dentro de su documento.
+    lifecycle:
+      field: status
+      transitions:
+        draft: [published, quarantined]
+        published: [quarantined]
+        quarantined: []
+
+  AssetRevision:
+    description: Revisión del archivo, entidad interna de su agregado.
+    fields:
+      id:
+        type: uuid
+        id: true
+        generated: true
+      revisionNumber:
+        type: int
+        required: true
+        description: Orden de la revisión dentro del archivo; contrato observable.
+      note:
+        type: text
+    relations:
+      asset:
+        entity: Asset
+        cardinality: many-to-one
+        required: true
+        description: Archivo al que pertenece la revisión.
+
+aggregates:
+  Vault:
+    root: Asset
+    entities: [AssetRevision]

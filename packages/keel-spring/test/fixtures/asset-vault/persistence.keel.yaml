@@ -1,0 +1,25 @@
+default:
+  model: document
+
+entities:
+  Owner:
+    naturalKey: [code]
+  Asset:
+    # Clave natural COMPUESTA que atraviesa una referencia a otro agregado: en el
+    # documento es [owner_id, slug], y es la que el ApiExceptionHandler busca por
+    # nombre (uk_assets_natural) dentro del E11000 del driver.
+    naturalKey: [owner, slug]
+    indexes:
+      - [labels]   # array → índice multikey, sin tabla de elementos
+      - [owner]    # referencia a otro agregado → owner_id
+      - [status]
+
+# Autoría: exige la capa security (sin principal autenticado no hay autor). Es lo que
+# enciende @CreatedBy/@LastModifiedBy y el AuditorAware en la rama documental.
+audit:
+  timestamps: all
+  authorship: all
+
+consistency:
+  transactionalBoundary: per-aggregate
+  optimisticLocking: all

@@ -13,7 +13,7 @@
 
 import { javaFile, javaPath, subPackage } from './render.js';
 import { domainMembers, domainSubPackage, capitalize } from './entities.js';
-import { persistedMembers, orderingFieldOf } from './persistence-members.js';
+import { persistedMembers, orderingFieldOf, usesAuditableEntity } from './persistence-members.js';
 import { renderPort, naturalKeyFinder, collectInternalEntities, PORT_PKG, REPO_PKG } from './repositories.js';
 import { DOC_PKG } from './document-entities.js';
 import { documentValueObjects } from './document-embeddables.js';
@@ -43,7 +43,7 @@ function renderMongoRepository(model, entity) {
   ]);
 
   let methods = '';
-  const finder = naturalKeyFinder(entity);
+  const finder = naturalKeyFinder(model, entity);
   if (finder) {
     imports.add('java.util.Optional');
     for (const param of finder.params) for (const name of param.imports) imports.add(name);
@@ -89,7 +89,7 @@ function renderAdapter(model, entity, paginated, batchLookup) {
         return ${repoField}.findAllById(ids).stream().map(this::toDomain).toList();
     }`);
   }
-  const finder = naturalKeyFinder(entity);
+  const finder = naturalKeyFinder(model, entity);
   if (finder) {
     for (const param of finder.params) for (const name of param.imports) imports.add(name);
     methods.push(`    @Override
@@ -137,11 +137,31 @@ function renderAdapter(model, entity, paginated, batchLookup) {
   // Spring Data MongoDB corre en un callback ANTES de convertir el documento, no en
   // un flush diferido, así que el objeto que devuelve save() ya trae createdAt y
   // updatedAt puestos aunque el diseño los proyecte al dominio (audit: declared).
+  //
+  // Lo que sí hace falta es ARRASTRAR la auditoría de creación: `save` reemplaza el
+  // documento entero por el que acaba de construir el mapper, y el callback solo
+  // estampa @CreatedDate/@CreatedBy cuando el documento es nuevo. Sin releer el que
+  // había, cada actualización dejaría la creación a null. No tiene equivalente
+  // relacional: allí el merge de JPA conserva esas columnas solo.
+  const carriesAudit = usesAuditableEntity(model);
+  const carryAuditArgs = [
+    model.audit?.timestamps === 'all' ? 'existing.getCreatedAt()' : null,
+    model.audit?.authorship === 'all' ? 'existing.getCreatedBy()' : null
+  ].filter(Boolean);
+  const documentExpr = carriesAudit
+    ? `${entity.name}Document document = toDocument(entity);
+        ${repoField}
+                .findById(entity.getId())
+                .ifPresent(existing -> document.carryCreationAudit(${carryAuditArgs.join(', ')}));
+        `
+    : '';
+  const savedExpr = carriesAudit ? `${repoField}.save(document)` : `${repoField}.save(toDocument(entity))`;
+
   const saveBody = emitsEvents
-    ? `        ${entity.name} saved = toDomain(${repoField}.save(toDocument(entity)));
+    ? `        ${documentExpr}${entity.name} saved = toDomain(${savedExpr});
         entity.pullDomainEvents().forEach(eventPublisher::publishEvent);
         return saved;`
-    : `        return toDomain(${repoField}.save(toDocument(entity)));`;
+    : `        ${documentExpr}return toDomain(${savedExpr});`;
 
   methods.push(
     `    @Override${emitsEvents ? '\n    @Transactional' : ''}

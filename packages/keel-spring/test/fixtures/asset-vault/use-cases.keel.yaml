@@ -1,0 +1,144 @@
+operations:
+  uploadAsset:
+    description: Custodia un archivo nuevo de un propietario y guarda su binario.
+    kind: command
+    input:
+      fields:
+        ownerId:
+          type: uuid
+          required: true
+        slug:
+          type: string
+          required: true
+        title:
+          type: string
+          required: true
+        binary:
+          type: file
+          required: true
+          bucket: assetBinaries
+        labels:
+          type: string
+          list: true
+    output:
+      entity: Asset
+      embed: [owner]
+    errors:
+      # El code nombra los campos de la clave natural (`owner, slug`), que es la
+      # convención con la que el ApiExceptionHandler ata el índice único al error
+      # declarado. Con otro nombre no adivina: deja un TODO y se inventa un code.
+      - code: ASSET_OWNER_SLUG_ALREADY_EXISTS
+        when: Ese propietario ya custodia un archivo con ese nombre.
+        http: 409
+      - code: ASSET_CHECKSUM_ALREADY_EXISTS
+        when: Ese binario ya está custodiado con otro nombre.
+        http: 409
+      - code: OWNER_NOT_FOUND
+        when: El propietario referenciado no existe.
+        http: 422
+    emits: [AssetUploaded]
+    # Idempotencia de PETICIÓN: el cliente sube un archivo grande, se le va el timeout y
+    # reintenta. Es la que crea `idempotency_record`, y con ella el único índice de
+    # infraestructura documental que ninguna otra fixture llegaba a generar.
+    idempotency:
+      keySource: client-key
+      ttlSeconds: 86400
+
+  getAsset:
+    description: Recupera la ficha de un archivo con su propietario y su miniatura.
+    kind: query
+    input:
+      fields:
+        id:
+          type: uuid
+          required: true
+    # SIN `embed`: un objeto de otro agregado dentro de una respuesta cacheada solo se
+    # invalidaría con eventos de ese agregado, que este servicio no publica. La ficha
+    # cacheada lleva el ownerId; quien quiera el propietario entero lo pide aparte.
+    output:
+      entity: Asset
+    errors:
+      - code: ASSET_NOT_FOUND
+        when: No existe un archivo con ese id.
+        http: 404
+    cache:
+      ttlSeconds: 300
+      keyFields: [id]
+      invalidatedBy: [AssetUploaded, AssetPublished]
+
+  listAssets:
+    description: Lista los archivos custodiados de forma paginada.
+    kind: query
+    input: "void"
+    output:
+      entity: Asset
+      paginated: true
+      embed: [owner]
+      sort: [slug:asc]
+
+  publishAsset:
+    description: Publica un archivo en borrador tras darlo por limpio el escáner.
+    kind: command
+    input:
+      fields:
+        id:
+          type: uuid
+          required: true
+    output:
+      entity: Asset
+      embed: [owner]
+    transitions:
+      - entity: Asset
+        from: [draft]
+        to: published
+    errors:
+      - code: ASSET_NOT_FOUND
+        when: No existe un archivo con ese id.
+        http: 404
+      - code: INVALID_ASSET_STATE
+        when: El archivo no está en un estado desde el que se pueda publicar.
+        http: 422
+      - code: CONCURRENT_MODIFICATION
+        when: Otra operación modificó el archivo mientras se publicaba.
+        http: 409
+      - code: SCANNER_UNAVAILABLE
+        when: El escáner no responde y el archivo no puede darse por limpio.
+        http: 502
+    emits: [AssetPublished]
+
+  quarantineAsset:
+    description: Pone en cuarentena un archivo que el escáner marcó como infectado.
+    kind: command
+    # Interna: solo la dispara la suscripción. Exponerla por HTTP abriría un segundo
+    # camino que la deduplicación del listener no cubre.
+    internal: true
+    input:
+      fields:
+        assetId:
+          type: uuid
+          required: true
+        reason:
+          type: string
+          required: true
+    output: "void"
+    errors:
+      - code: ASSET_NOT_FOUND
+        when: No existe un archivo con ese id.
+        http: 404
+    # Declara transiciones, así que el guard de idempotencia usa el orden
+    # `alreadyProcessed` + `record`: la reentrega la frena la propia transición.
+    transitions:
+      - entity: Asset
+        from: [draft, published]
+        to: quarantined
+
+  reconcileScans:
+    description: Revisa los archivos publicados cuyo análisis sigue sin desenlace del escáner.
+    kind: command
+    internal: true
+    input: "void"
+    output: "void"
+    # La pata del SILENCIO: si el escáner nunca publica su hallazgo, no llega ningún
+    # evento y el archivo se queda publicado. Lo que no pasa solo lo detecta un barrido.
+    schedule:
+      cron: "*/30 * * * *"

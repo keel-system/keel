@@ -1,0 +1,6 @@
+buckets:
+  assetBinaries:
+    visibility: private
+    allowedContentTypes: [application/pdf, image/png, image/jpeg]
+    maxSizeMb: 25
+    description: Binarios de los archivos custodiados; solo accesibles por el servicio.

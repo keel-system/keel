@@ -1,0 +1,23 @@
+style: rest
+basePath: /api
+endpoints:
+  uploadAsset:
+    method: POST
+    path: /assets
+    successStatus: 201
+  getAsset:
+    method: GET
+    path: /assets/{id}
+    # La ficha la consultan personas y también el servicio de renderizado (cliente
+    # máquina): es el endpoint que hace que serviceAuth signifique algo.
+    audience: both
+  listAssets:
+    method: GET
+    path: /assets
+  publishAsset:
+    method: POST
+    path: /assets/{id}/publish
+pagination:
+  style: offset
+  defaultSize: 20
+  maxSize: 100

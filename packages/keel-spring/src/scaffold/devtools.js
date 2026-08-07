@@ -250,14 +250,21 @@ export function resetDbScript(selected, service, model = null) {
   if (db) {
     const container = db.cliVia === 'dbcontainer' ? `${service.name}-db` : `${service.name}-devtools`;
     const cmd = concreteCmd(db.entry, dbName, db.entry.cliResetCmd);
-    // --schema: además de los datos, se lleva por delante las TABLAS. Hace falta
-    // porque `ddl-auto: update` nunca elimina una columna obsoleta ni afloja un
-    // NOT NULL preexistente: tras regenerar entidades, una columna que ya no
-    // mapea nadie sigue en la tabla y rompe todo INSERT con un 409 opaco que no
-    // apunta a su causa. Vaciar los datos no lo arregla; recrear el esquema sí.
+    // --schema: además de los datos, se lleva por delante la ESTRUCTURA. Hace falta
+    // en relacional porque `ddl-auto: update` nunca elimina una columna obsoleta ni
+    // afloja un NOT NULL preexistente: tras regenerar entidades, una columna que ya
+    // no mapea nadie sigue en la tabla y rompe todo INSERT con un 409 opaco que no
+    // apunta a su causa. En documental el motivo es otro —un índice que cambia de
+    // claves no se puede recrear con el mismo nombre— y quien la rehace tampoco es
+    // el mismo, así que el texto se ramifica: prometer Hibernate en un proyecto
+    // Mongo manda al diseñador a buscar una configuración que no existe.
     const drop = db.entry.cliDropSchemaCmd
       ? concreteCmd(db.entry, dbName, db.entry.cliDropSchemaCmd)
       : null;
+    const rebuiltBy =
+      model?.persistenceKind === 'document'
+        ? 'las colecciones nacen al escribir y los índices los recrea MongoIndexConfig al arrancar la app'
+        : 'lo vuelve a crear Hibernate al arrancar la app';
     const dataStep = `if $RUNTIME exec ${sq(container)} sh -c ${sq(cmd)}; then
   echo "Datos reseteados (${db.entry.label})."
 else
@@ -269,7 +276,7 @@ fi`;
     } else {
       steps.push(`if [ "$MODE" = schema ]; then
   if $RUNTIME exec ${sq(container)} sh -c ${sq(drop)}; then
-    echo "Esquema recreado (${db.entry.label}): lo vuelve a crear Hibernate al arrancar la app."
+    echo "Esquema recreado (${db.entry.label}): ${rebuiltBy}."
   else
     echo "FALLO al recrear el esquema. ¿Está la infraestructura arriba ('$RUNTIME compose -f infra/docker-compose.yaml up -d')?" >&2
     exit 1
@@ -335,10 +342,17 @@ fi`);
       ? `
 #   bash infra/reset-db.sh --schema   # además, RECREA el esquema
 #
-# --schema es para después de regenerar entidades: 'ddl-auto: update' no elimina
+${
+          model?.persistenceKind === 'document'
+            ? `# --schema borra la base entera. Es para después de cambiar un índice de forma:
+# Mongo rechaza recrear el mismo nombre con otras claves, así que MongoIndexConfig
+# falla al arrancar y el arranque se queda a medias. Vaciar los datos no lo arregla
+# —el índice viejo sigue ahí—; borrar la base sí. El volumen no se toca.`
+            : `# --schema es para después de regenerar entidades: 'ddl-auto: update' no elimina
 # columnas obsoletas ni afloja un NOT NULL preexistente, así que el esquema queda
 # con restos que ninguna entidad mapea y todo INSERT falla con un 409 sin relación
 # aparente con la causa. Recrear el esquema es la salida; el volumen no se toca.`
+        }`
       : ''
   }
 set -u

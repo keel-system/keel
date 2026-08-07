@@ -99,6 +99,27 @@ function renderAuditableDocument(model) {
     );
   }
 
+  // Arrastre de la auditoría de creación. Es propio del modelo documental y no
+  // tiene equivalente relacional: allí el adaptador hace merge sobre la fila y las
+  // columnas de creación siguen donde estaban, mientras que aquí `save` REEMPLAZA
+  // el documento entero por el que construye el mapper, y el callback de auditoría
+  // solo estampa @CreatedDate/@CreatedBy cuando el documento es nuevo. Sin esto,
+  // toda actualización deja la creación a null — justo lo contrario de lo que
+  // `audit: all` promete.
+  const carryParams = [timestamps ? 'Instant createdAt' : null, authorship ? 'String createdBy' : null].filter(Boolean);
+  const carryAssignments = [
+    timestamps ? '        this.createdAt = createdAt;' : null,
+    authorship ? '        this.createdBy = createdBy;' : null
+  ].filter(Boolean);
+  const carry = `    /**
+     * Conserva la auditoría de creación al reemplazar el documento. Lo invoca el
+     * adaptador antes de guardar una raíz que ya existe: Mongo sustituye el
+     * documento completo, así que estos valores hay que traerlos del que había.
+     */
+    public void carryCreationAudit(${carryParams.join(', ')}) {
+${carryAssignments.join('\n')}
+    }`;
+
   const registers = [timestamps ? 'cuándo' : null, authorship ? 'quién' : null].filter(Boolean).join(' y ');
   const body = `/**
  * Base de los documentos auditables: registra ${registers} vía el auditing de Spring
@@ -106,7 +127,7 @@ function renderAuditableDocument(model) {
  */
 public abstract class AuditableDocument {
 
-${[...members, ...accessors].join('\n\n')}
+${[...members, ...accessors, carry].join('\n\n')}
 }`;
 
   return {

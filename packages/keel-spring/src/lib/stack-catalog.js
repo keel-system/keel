@@ -292,7 +292,27 @@ export const DATABASES = {
       // Las transacciones multi-documento (agregado + outbox_event en el mismo
       // commit) SOLO existen sobre un replica set, así que hasta la infraestructura
       // de prueba arranca como uno de un solo miembro.
-      command: ['--replSet', 'rs0', '--bind_ip_all'],
+      //
+      // Y un replica set CON autenticación exige autenticación entre miembros, que
+      // mongod solo acepta por keyFile: sin él no arranca siquiera —«security.keyFile
+      // is required when authorization is enabled with replica sets»— y el contenedor
+      // muere con exit 2 antes del primer sondeo. El secreto se genera en el arranque
+      // y no se persiste a propósito: con un solo miembro solo se usa para hablar
+      // consigo mismo, así que regenerarlo en cada arranque no rompe nada y evita
+      // meter un secreto en el repo. El `exec docker-entrypoint.sh` conserva el
+      // arranque de la imagen oficial —es quien crea el usuario root a partir de las
+      // MONGO_INITDB_*— y el chown es necesario porque mongod exige que el keyFile
+      // sea suyo y solo suyo (0400).
+      command: [
+        'bash',
+        '-c',
+        [
+          'openssl rand -base64 756 > /data/keyfile',
+          'chmod 400 /data/keyfile',
+          'chown mongodb:mongodb /data/keyfile',
+          'exec docker-entrypoint.sh mongod --replSet rs0 --keyFile /data/keyfile --bind_ip_all'
+        ].join(' && ')
+      ],
       environment: {
         MONGO_INITDB_ROOT_USERNAME: db,
         MONGO_INITDB_ROOT_PASSWORD: 'changeme',

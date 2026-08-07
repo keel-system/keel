@@ -34,7 +34,7 @@ evolución del esquema de documentos y verificación de índices.
 ## Qué dejó listo build
 
 - `build.gradle`: `spring-boot-starter-data-mongodb` +
-  `de.flapdoodle.embed.mongo.spring30x` como `testImplementation` (el perfil `test`
+  `de.flapdoodle.embed.mongo.spring3x` como `testImplementation` (el perfil `test`
   corre sobre un mongod embebido, análogo del H2 de la rama relacional).
 - `parameters/<perfil>/db.yaml`: la URI con gradiente por perfil
   (`directConnection=true` en local, porque la app corre en el host y el miembro se

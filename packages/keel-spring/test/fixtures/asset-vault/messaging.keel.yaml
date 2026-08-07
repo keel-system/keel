@@ -1,0 +1,50 @@
+publishing:
+  reliability: outbox
+  events:
+    AssetUploaded:
+      description: Se custodió un archivo nuevo.
+      payload:
+        assetId:
+          type: uuid
+          required: true
+        ownerId:
+          type: uuid
+          required: true
+        storageKey:
+          type: string
+          required: true
+        occurredAt:
+          type: timestamp
+          required: true
+    AssetPublished:
+      description: Un archivo custodiado pasó a estar publicado.
+      payload:
+        assetId:
+          type: uuid
+          required: true
+        status:
+          type: AssetStatus
+          required: true
+        occurredAt:
+          type: timestamp
+          required: true
+
+subscriptions:
+  MalwareDetected:
+    description: El escáner encontró código malicioso en un archivo ya custodiado.
+    source: security-scanner
+    payload:
+      assetId: { type: uuid, required: true }
+      reason:  { type: string, required: true }
+    contract:
+      envelope: keel
+      # La clave de deduplicación viaja declarada: es lo que alimenta `processed_event`,
+      # que en el modelo documental es una colección con su índice propio.
+      messageId: { location: header, name: messageId }
+    triggers: quarantineAsset
+    input:
+      assetId: assetId
+      reason: reason
+    onFailure:
+      retry: { maxAttempts: 5, backoff: exponential, initialDelayMs: 500, maxDelayMs: 15000 }
+      deadLetter: true

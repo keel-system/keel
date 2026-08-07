@@ -287,7 +287,9 @@ test('las dependencias y el perfil test siguen al modelo', () => {
   assert.ok(!gradle.includes('spring-boot-starter-data-jpa'));
   assert.ok(!gradle.includes('flyway'));
   assert.ok(!gradle.includes('com.h2database:h2'));
-  assert.ok(gradle.includes('de.flapdoodle.embed.mongo.spring30x'));
+  // `spring3x`, el genérico de Boot 3.x: los `spring3Nx` están congelados en la línea
+  // que los nombra y la versión al día no existe para ellos.
+  assert.ok(gradle.includes('de.flapdoodle.embed.mongo.spring3x:'));
 
   const testDb = read('src/main/resources/parameters/test/db.yaml');
   assert.ok(testDb.includes('flapdoodle'));

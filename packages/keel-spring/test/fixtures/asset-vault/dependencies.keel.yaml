@@ -1,0 +1,36 @@
+# Las dos mitades de la capa, con la superficie mínima: se LEE un dato ajeno (need
+# on-demand) y se PIDE trabajo (activación con onFailure: fail). Sin réplica: eso ya
+# lo prueba `catalog-extended`, y aquí solo alargaría la corrida.
+dependencies:
+  rendering:
+    description: Servicio de renderizado, dueño de las miniaturas de los archivos custodiados.
+    needs:
+      thumbnail:
+        description: Miniatura que acompaña a la ficha del archivo.
+        strategy: on-demand
+        usedBy: [getAsset]
+        fetchedFrom:
+          client: rendering
+          call: getThumbnail
+
+  security-scanner:
+    description: Escáner antimalware, obligatorio antes de publicar un archivo.
+    activations:
+      scanAsset:
+        description: Análisis del binario antes de darlo por publicable.
+        triggeredBy: [publishAsset]
+        via:
+          client: scanner
+          call: scanAsset
+        effect: El binario queda analizado y con veredicto del escáner.
+        awaits: outcome
+        # Sin esto, la compensación de abajo solo existe si el escáner se acuerda de
+        # publicar su hallazgo. Cuando no lo hace, nada lo detecta.
+        reconciledBy: reconcileScans
+        onFailure:
+          action: fail
+          error: SCANNER_UNAVAILABLE
+    compensations:
+      - onEvent: MalwareDetected
+        undoes: scanAsset
+        description: El escáner marcó el archivo como infectado después de publicarlo; pasa a cuarentena.

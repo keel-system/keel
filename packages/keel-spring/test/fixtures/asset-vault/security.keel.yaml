@@ -1,0 +1,37 @@
+# La capa que `audit.authorship: all` exige: sin principal autenticado no hay autor
+# que estampar en @CreatedBy/@LastModifiedBy.
+authentication:
+  protocol: oidc
+  tokenLocation: header
+  serviceAuth:
+    protocol: client-credentials
+    description: El servicio de renderizado consulta fichas para generar sus miniaturas.
+
+roles:
+  vault-admin:
+    description: Custodia archivos y decide qué se publica.
+  vault-reader:
+    description: Solo consulta los archivos custodiados.
+
+permissions:
+  asset:write:
+    description: Custodiar archivos y publicarlos.
+  asset:read:
+    description: Consultar los archivos custodiados.
+
+roleGrants:
+  vault-admin: [asset:write, asset:read]
+  vault-reader: [asset:read]
+
+serviceClients:
+  rendering-service:
+    description: Genera las miniaturas de los archivos publicados.
+    scopes: [asset:read]
+
+access:
+  default: { level: required }
+  rules:
+    uploadAsset: { level: required, permissions: [asset:write] }
+    publishAsset: { level: required, permissions: [asset:write] }
+    getAsset: { level: required, permissions: [asset:read], scopes: [asset:read] }
+    listAssets: { level: required, permissions: [asset:read] }

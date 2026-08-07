@@ -32,15 +32,46 @@ export function generate(model) {
   return files;
 }
 
-export function naturalKeyParams(entity) {
+/**
+ * Parámetros del finder de la clave natural, resueltos contra los MIEMBROS del
+ * agregado y no contra sus campos escalares.
+ *
+ * La diferencia la marca una clave natural que atraviesa una referencia a otro
+ * agregado (`naturalKey: [owner, slug]`): el diseño la nombra `owner`, pero ni el
+ * dominio ni el espejo tienen esa propiedad — guardan `ownerId`, un `UUID`. Spring
+ * Data valida los finders derivados al construir el contexto, así que un
+ * `findByOwnerAndSlug(String, …)` no falla al compilar: **tumba el arranque** con
+ * PropertyReferenceException, y solo se ve al levantar la aplicación.
+ */
+export function naturalKeyParams(model, entity) {
+  const members = domainMembers(model, entity);
   return (entity.naturalKey ?? []).map((fieldName) => {
+    // Por nombre propio (campo escalar) o por el nombre de la relación que el
+    // diseño usa (`owner` → miembro `ownerId`).
+    const member = members.find((m) => m.name === fieldName || m.relation?.name === fieldName);
+    if (member) {
+      // Un miembro escalar ENVUELVE al campo resuelto, y los imports del tipo
+      // (java.time.LocalDate, java.math.BigDecimal…) viven ahí dentro: tomarlos
+      // solo del miembro deja el finder citando un tipo que nadie importa.
+      return {
+        name: member.name,
+        javaType: member.javaType,
+        imports: member.imports ?? member.field?.imports ?? []
+      };
+    }
+
     const field = entity.fields.find((f) => f.name === fieldName);
+    if (!field) {
+      model.warnings.push(
+        `persistence.entities.${entity.name}: la clave natural nombra "${fieldName}", que no es un campo ni una relación del agregado; el finder derivado se genera con ese nombre tal cual y Spring Data lo rechazará al arrancar.`
+      );
+    }
     return { name: fieldName, javaType: field?.javaType ?? 'String', imports: field?.imports ?? [] };
   });
 }
 
-export function naturalKeyFinder(entity) {
-  const params = naturalKeyParams(entity);
+export function naturalKeyFinder(model, entity) {
+  const params = naturalKeyParams(model, entity);
   if (params.length === 0) return null;
   return {
     params,
@@ -74,7 +105,7 @@ export function renderPort(model, entity, paginated, batchLookup) {
      */
     List<${entity.name}> findAllById(Collection<UUID> ids);`);
   }
-  const finder = naturalKeyFinder(entity);
+  const finder = naturalKeyFinder(model, entity);
   if (finder) {
     for (const param of finder.params) for (const name of param.imports) imports.add(name);
     methods.push(`    Optional<${entity.name}> ${finder.name}(${finder.signature});`);
@@ -109,7 +140,7 @@ function renderJpaRepository(model, entity) {
   ]);
 
   let methods = '';
-  const finder = naturalKeyFinder(entity);
+  const finder = naturalKeyFinder(model, entity);
   if (finder) {
     imports.add('java.util.Optional');
     for (const param of finder.params) for (const name of param.imports) imports.add(name);
@@ -158,7 +189,7 @@ function renderAdapter(model, entity, paginated, batchLookup) {
         return ${jpaField}.findAllById(ids).stream().map(this::toDomain).toList();
     }`);
   }
-  const finder = naturalKeyFinder(entity);
+  const finder = naturalKeyFinder(model, entity);
   if (finder) {
     for (const param of finder.params) for (const name of param.imports) imports.add(name);
     methods.push(`    @Override

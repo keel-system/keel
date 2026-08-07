@@ -1764,8 +1764,12 @@ function asPayloadField(field, direction) {
     imports: [],
     kind: 'fileUpload',
     file: true,
-    // @NotBlank es de String: sobre un record component FileUpload reventaría en runtime.
-    validation: field.required ? ['@NotNull'] : []
+    // @NotBlank es de String: sobre un record component FileUpload reventaría en
+    // runtime. Hay que corregir las DOS listas: el DTO de entrada se anota desde
+    // `validation` y el command desde `inputValidation` (services.js), así que
+    // arreglar solo una deja la anotación inválida en el otro lado.
+    validation: field.required ? ['@NotNull'] : [],
+    inputValidation: field.required ? ['@NotNull'] : []
   };
 }
 

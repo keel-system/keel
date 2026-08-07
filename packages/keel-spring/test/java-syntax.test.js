@@ -182,6 +182,11 @@ const MATRIX = [
   // mínima para que un pipeline completo quepa en una corrida.
   ['stock-reservation', { broker: 'kafka' }],
   ['inspection-reports', {}],
+  // La silueta documental TRANSVERSAL: seguridad, caché, storage, clientes salientes
+  // e idempotencia de petición sobre Mongo. Dos brokers porque su listener y su relay
+  // son los de la rama documental, que no comparten código con los de la relacional.
+  ['asset-vault', { broker: 'kafka' }],
+  ['asset-vault', { broker: 'snssqs' }],
   ['product-catalog', {}]
 ];
 
