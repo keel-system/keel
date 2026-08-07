@@ -11,8 +11,24 @@ import { domainTypeImport } from './entities.js';
 
 const EVENTS_PKG = 'domain.events';
 
+/**
+ * ¿Hace falta `EventMetadata` aunque el servicio no publique nada?
+ *
+ * Sí, si consume: la `EventEnvelope` que genera messaging.js la lleva por
+ * composición, y un servicio que solo tiene `subscriptions` —un consumidor puro,
+ * que no es un caso raro— generaba una envoltura que importaba una clase
+ * inexistente. El `main` no compilaba, y el error señalaba a la envoltura en vez
+ * de a su causa.
+ */
+function needsMetadata(model) {
+  return model.events.length > 0 || (model.subscriptions ?? []).length > 0;
+}
+
 export function generate(model) {
-  if (model.events.length === 0) return [];
+  if (!needsMetadata(model)) return [];
+  // Sin eventos propios no hay nada que marcar con DomainEvent: lo único que se
+  // comparte con el lado consumidor es la metadata del mensaje.
+  if (model.events.length === 0) return [renderMetadata(model)];
 
   const files = [renderMarker(model), renderMetadata(model)];
 

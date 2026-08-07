@@ -212,10 +212,17 @@ matrix="$(awk '
     if (match(seg, /classname="[^"]*"/)) cls = substr(seg, RSTART + 11, RLENGTH - 12)
     if (name == "") next
 
+    # Sin classname no es un test: es el nodo contenedor que algunos runners
+    # emiten para la clase. Su @DisplayName suele empezar por el id del flujo, y
+    # colarlo duplica la fila y falsea el recuento (9 escenarios donde hay 6).
+    if (cls == "") next
+
     id = name
     if (index(id, ":") > 0) id = substr(id, 1, index(id, ":") - 1)
     gsub(/^[ \\t]+|[ \\t]+$/, "", id)
-    if (id !~ /^FL-/) next
+    # El id es un token, nunca una frase: un @DisplayName de clase como
+    # "FL-RES-001 · alta de reserva" no es un escenario.
+    if (id !~ /^FL-[A-Za-z0-9-]+$/) next
 
     sub(/^.*\\./, "", cls)
     if (seg ~ /<(failure|error)[ >]/) print "FALLO\\t" id "\\t" cls

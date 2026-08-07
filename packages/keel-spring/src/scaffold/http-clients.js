@@ -73,12 +73,12 @@ function callFields(call) {
 
 function renderConfig(model, client) {
   const imports = new Set([
+    'java.net.http.HttpClient',
     'java.time.Duration',
     'org.springframework.beans.factory.annotation.Value',
-    'org.springframework.boot.http.client.ClientHttpRequestFactoryBuilder',
-    'org.springframework.boot.http.client.ClientHttpRequestFactorySettings',
     'org.springframework.context.annotation.Bean',
     'org.springframework.context.annotation.Configuration',
+    'org.springframework.http.client.JdkClientHttpRequestFactory',
     'org.springframework.web.client.RestClient'
   ]);
 
@@ -118,12 +118,23 @@ public class ${client.configClass} {
     @Bean
     public RestClient ${client.beanName}(
             ${beanParams.join(',\n            ')}) {
-        ClientHttpRequestFactorySettings settings = ClientHttpRequestFactorySettings.defaults()
-                .withConnectTimeout(Duration.ofSeconds(5))
-                .withReadTimeout(Duration.ofMillis(${client.readTimeoutMs}));
+        // HTTP/1.1 explícito, y no el request factory que \`detect()\` elija. Sin más
+        // clientes en el classpath, detect() cae en el del JDK, que negocia HTTP/2 y
+        // contra un servidor en claro lo intenta con \`Upgrade: h2c\`: si el otro
+        // extremo no completa el upgrade, el CUERPO SE PIERDE y la llamada muere con
+        // \`Received RST_STREAM: Stream cancelled\`, que el fallback traduce a "el
+        // proveedor no está disponible". El síntoma acusa al proveedor y la causa
+        // está aquí — le pasa al WireMock que levanta el propio generador, así que
+        // sin esto ninguna activación con cuerpo es ejercitable.
+        HttpClient httpClient = HttpClient.newBuilder()
+                .version(HttpClient.Version.HTTP_1_1)
+                .connectTimeout(Duration.ofSeconds(5))
+                .build();
+        JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(httpClient);
+        requestFactory.setReadTimeout(Duration.ofMillis(${client.readTimeoutMs}));
 ${preamble.length > 0 ? preamble.join('\n') + '\n' : ''}        return RestClient.builder()
                 .baseUrl(baseUrl)
-${builderSteps.map((s) => `                ${s}`).join('\n')}${builderSteps.length > 0 ? '\n' : ''}                .requestFactory(ClientHttpRequestFactoryBuilder.detect().build(settings))
+${builderSteps.map((s) => `                ${s}`).join('\n')}${builderSteps.length > 0 ? '\n' : ''}                .requestFactory(requestFactory)
                 .build();
     }
 }`;
@@ -469,6 +480,14 @@ ${fallbackBody(model, client, call, imports)}
 // políticas distintas sobre un único método es un conflicto del diseño.
 function fallbackBody(model, client, call, imports) {
   const activations = call.activations ?? [];
+  // La causa se registra SIEMPRE, gane la política que gane. El fallback recibe el
+  // throwable y lo natural es tirarlo: entonces un fallo de integración —una
+  // negociación HTTP rota, un cuerpo que no deserializa— queda indistinguible de
+  // "el proveedor está caído", que es lo que dice el error que se lanza después.
+  // Diagnosticar eso sin el log cuesta instrumentar el adaptador a mano.
+  imports.add('org.slf4j.Logger');
+  imports.add('org.slf4j.LoggerFactory');
+  const trace = `        LoggerFactory.getLogger(${client.adapterClass}.class)\n                .warn("Fallback de ${client.id}.${call.name}", throwable);\n`;
 
   if (activations.length !== 1) {
     // Sin política declarada, la prosa del diseño ES la instrucción al agente.
@@ -481,7 +500,7 @@ function fallbackBody(model, client, call, imports) {
             .map(({ dependency, activation }) => `${dependency}.${activation.name} (onFailure: ${activation.onFailure?.action ?? 'sin declarar'})`)
             .join('; ')}`
         : '';
-    return `${doc}${listed}
+    return `${trace}${doc}${listed}
         throw new UnsupportedOperationException("TODO: fallback ${call.name}");`;
   }
 
@@ -500,7 +519,7 @@ function fallbackBody(model, client, call, imports) {
       .map((field) => (field.javaType.startsWith('List<') ? 'List.of()' : 'null'))
       .join(', ');
     if (call.responseFields.some((field) => field.javaType.startsWith('List<'))) imports.add('java.util.List');
-    return `${prose}${origin}        // El llamante sigue adelante: no propagues la excepción ni inventes datos del proveedor.
+    return `${trace}${prose}${origin}        // El llamante sigue adelante: no propagues la excepción ni inventes datos del proveedor.
         log.warn("${client.id}.${call.name} no disponible; se continúa sin él ({})", throwable.toString());
         return new ${call.resultType}(${empty});`;
   }
@@ -510,21 +529,21 @@ function fallbackBody(model, client, call, imports) {
     if (onFailure.exceptionClass) {
       imports.add(`${subPackage(model, 'domain.errors')}.${onFailure.exceptionClass}`);
       const args = onFailure.dynamicStatus ? `${message}, ${onFailure.httpStatus}` : message;
-      return `${prose}${origin}        throw new ${onFailure.exceptionClass}(${args});`;
+      return `${trace}${prose}${origin}        throw new ${onFailure.exceptionClass}(${args});`;
     }
-    return `${prose}${origin}        // TODO (agente): el diseño declara onFailure.error = ${onFailure.error}, pero ninguna
+    return `${trace}${prose}${origin}        // TODO (agente): el diseño declara onFailure.error = ${onFailure.error}, pero ninguna
         // operación de use-cases lo declara todavía, así que su clase no existe.
         throw new UnsupportedOperationException("TODO: fallback ${call.name}");`;
   }
 
   if (onFailure?.action === 'degrade') {
-    return `${prose}${origin}        // TODO (agente): el resultado degradado es lógica de negocio y debe ser distinguible
+    return `${trace}${prose}${origin}        // TODO (agente): el resultado degradado es lógica de negocio y debe ser distinguible
         // por el cliente de una respuesta normal — un dato plausible pero falso es peor que fallar:
         //   ${onFailure.degradedTo}
         throw new UnsupportedOperationException("TODO: fallback ${call.name}");`;
   }
 
-  return `${prose}${origin}        // TODO (agente): la activación no declara onFailure.
+  return `${trace}${prose}${origin}        // TODO (agente): la activación no declara onFailure.
         throw new UnsupportedOperationException("TODO: fallback ${call.name}");`;
 }
 

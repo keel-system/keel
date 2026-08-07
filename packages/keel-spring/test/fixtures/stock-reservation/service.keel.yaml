@@ -1,0 +1,26 @@
+keel: "2.6"
+# Diseño MÍNIMO cuya única razón de ser es la cadena de compensación e idempotencia,
+# que es lo que el resto de fixtures ejercita de refilón y ninguna prueba entera:
+#
+#   - idempotencia de PETICIÓN  → `createReservation` con `client-key`
+#   - idempotencia SALIENTE     → `inventory.reserveStock` con retry + payload-hash
+#   - idempotencia de CONSUMO   → `StockRejected` con contract.messageId
+#   - COMPENSACIÓN              → `releaseReservation`, con su guarda de dominio,
+#                                 su estado de vuelta y su reconciliación
+#
+# Deliberadamente sin storage, caché ni seguridad: cada una añade un contenedor y
+# trabajo de generación que no dice nada sobre lo anterior. Y sin `publishing`, que
+# arrastraría outbox, bridge y publisher — el schema admite `subscriptions` a solas.
+service:
+  name: stock-reservation
+  version: 1.0.0
+  description: Reserva stock para un pedido y lo libera si el almacén lo rechaza después.
+  domain: fulfillment
+layers:
+  domain: domain.keel.yaml
+  use-cases: use-cases.keel.yaml
+  api: api.keel.yaml
+  persistence: persistence.keel.yaml
+  messaging: messaging.keel.yaml
+  http-clients: http-clients.keel.yaml
+  dependencies: dependencies.keel.yaml

@@ -230,6 +230,12 @@ function renderHandler(model, service, operation) {
     // Solo el canal síncrono inyecta: `via.publishes` lo emite el agregado.
     if (activation.http) inject(activation.http.clientClass, 'domain.clients');
   }
+  // El registro de idempotencia, por el mismo criterio que lo anterior: el diseño
+  // le atribuyó a esta operación la garantía de no ejecutarse dos veces, y sin el
+  // puerto delante el camino de menor resistencia es no usarlo — o escribir otro.
+  if (operation.idempotency && model.layersPresent.persistence) {
+    inject('IdempotencyStore', 'domain.idempotency');
+  }
 
   let fields = '';
   let constructor = '';

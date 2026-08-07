@@ -1,0 +1,15 @@
+default:
+  model: relational
+entities:
+  Reservation:
+    # Un pedido, una reserva: es la clave con la que el llamante identifica el caso, y
+    # la que hace que un duplicado que se cuele por debajo de la idempotencia HTTP
+    # choque contra la base de datos en vez de crear una segunda fila.
+    naturalKey: [orderId]
+    indexes:
+      - [status]
+audit:
+  timestamps: declared
+consistency:
+  transactionalBoundary: per-operation
+  optimisticLocking: none

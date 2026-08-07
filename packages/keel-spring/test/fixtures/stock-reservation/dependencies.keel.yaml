@@ -1,0 +1,24 @@
+dependencies:
+  inventory:
+    description: Almacén, dueño del stock físico y de su bloqueo.
+    contract:
+      version: 1.0.0
+    activations:
+      reserveStock:
+        description: Bloqueo del stock del pedido en el almacén.
+        triggeredBy: [confirmReservation]
+        via:
+          client: inventory
+          call: reserveStock
+        effect: El stock del pedido queda bloqueado y deja de estar disponible para otros.
+        awaits: outcome
+        # Sin esto, toda la compensación depende de que el almacén se acuerde de
+        # publicar su rechazo. Cuando no lo hace, nada lo detecta.
+        reconciledBy: reconcileReservations
+        onFailure:
+          action: fail
+          error: STOCK_UNAVAILABLE
+    compensations:
+      - onEvent: StockRejected
+        undoes: reserveStock
+        description: El almacén rechazó el bloqueo a posteriori; la reserva se libera.

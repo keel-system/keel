@@ -193,7 +193,7 @@ operations:
     input: "void"
     output: "void"
     schedule:
-      cron: "0 0 * * * *"
+      cron: "0 * * * *"
 
   reactivateWithdrawnProduct:
     description: Devuelve a activo un producto cuya retirada rechazó el registro regulatorio.

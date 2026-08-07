@@ -399,10 +399,11 @@ function brokerYaml(model, profile) {
 // físico del exchange/topic puede diferir por ambiente.
 function messagingYaml(model, profile) {
   const lines = [];
+  const subscriptions = model.subscriptions ?? [];
+  if (model.events.length > 0 || subscriptions.length > 0) lines.push('messaging:');
   if (model.events.length > 0) {
     const first = model.events[0];
     lines.push(
-      'messaging:',
       '  publishing:',
       `    destination: ${envWithDefault(profile, 'MESSAGING_DESTINATION', first.destinationDefault)}`,
       '    routing-keys:'
@@ -410,6 +411,19 @@ function messagingYaml(model, profile) {
     for (const event of model.events) {
       const key = event.routingKeyProperty.split('.').pop();
       lines.push(`      ${key}: ${event.routingKeyDefault}`);
+    }
+  }
+  // El destino del que se CONSUME cada suscripción. Lo nombra su dueño, así que es
+  // configuración por perfil — y tiene que estar declarado aquí, no solo como TODO
+  // en el fragmento del broker: es la propiedad que lee el listener y a la que el
+  // arnés entrega. Si el agente inventa otro nombre, todo escenario de suscripción
+  // muere en un timeout mudo, que es el fallo más caro de diagnosticar del pipeline.
+  if (subscriptions.length > 0) {
+    lines.push('  subscriptions:');
+    for (const sub of subscriptions) {
+      const key = sub.topicProperty.split('.').slice(-2)[0];
+      const env = sub.topicProperty.toUpperCase().replace(/[.-]/g, '_');
+      lines.push(`    ${key}:`, `      topic: ${envWithDefault(profile, env, sub.topicDefault)}`);
     }
   }
   if (usesIdempotency(model)) {
@@ -879,23 +893,36 @@ function testProfileFiles(model) {
     );
   }
 
-  // OAuth2 saliente: registration dummy para que el ClientRegistrationRepository
-  // (y con él HttpClientsOAuth2Config) se cree en @SpringBootTest sin proveedor
-  // real. Los demás tipos de auth usan @Value con default vacío y no lo necesitan.
+  // Clientes salientes. La `base-url` va SIEMPRE, aunque en este perfil no se
+  // llame a nadie: el bean del RestClient se construye igual al levantar el
+  // contexto y su @Value no tiene default, así que sin ella `contextLoads()`
+  // —que es justo el gate de "todos los beans arrancan bajo el perfil test"—
+  // falla con un PlaceholderResolutionException. Puerto 9 (discard): si algo
+  // intentara salir de verdad, falla en local y rápido.
+  //
+  // OAuth2 saliente añade además una registration dummy para que el
+  // ClientRegistrationRepository se cree sin proveedor real; los otros tipos de
+  // auth usan @Value con default vacío y no lo necesitan.
   const oauthClients = (model.httpClients ?? []).filter((c) => c.auth?.type === 'oauth2-client-credentials');
-  if (model.layersPresent.httpClients && oauthClients.length > 0) {
-    const lines = ['spring:', '  security:', '    oauth2:', '      client:', '        registration:'];
-    for (const client of oauthClients) {
-      lines.push(
-        `          ${client.id}:`,
-        '            authorization-grant-type: client_credentials',
-        '            client-id: test',
-        '            client-secret: test'
-      );
+  if (model.layersPresent.httpClients && (model.httpClients ?? []).length > 0) {
+    const lines = ['http-clients:'];
+    for (const client of model.httpClients) {
+      lines.push(`  ${client.id}:`, '    base-url: http://localhost:9');
     }
-    lines.push('        provider:');
-    for (const client of oauthClients) {
-      lines.push(`          ${client.id}:`, '            token-uri: http://localhost/token');
+    if (oauthClients.length > 0) {
+      lines.push('spring:', '  security:', '    oauth2:', '      client:', '        registration:');
+      for (const client of oauthClients) {
+        lines.push(
+          `          ${client.id}:`,
+          '            authorization-grant-type: client_credentials',
+          '            client-id: test',
+          '            client-secret: test'
+        );
+      }
+      lines.push('        provider:');
+      for (const client of oauthClients) {
+        lines.push(`          ${client.id}:`, '            token-uri: http://localhost/token');
+      }
     }
     fragments.push(fragment('test', 'http-clients', lines.join('\n') + '\n'));
   }
@@ -910,10 +937,13 @@ function testProfileFiles(model) {
   });
   files.push(...fragments.map(({ path, content }) => ({ path, content })));
 
-  files.push({
-    path: 'src/test/resources/application.yaml',
-    content: ['spring:', '  profiles:', '    active: test', ''].join('\n')
-  });
+  // El perfil `test` lo activa @ActiveProfiles en la clase de prueba, NO un
+  // application.yaml en src/test/resources. Ese archivo tendría el mismo nombre
+  // que el de main y va delante en el classpath del source set `test`: lo OCULTA
+  // entero, así que bajo ese perfil desaparece todo lo que declara —empezando por
+  // `spring.application.name`, que es lo que las skills prescriben como groupId de
+  // un listener— y el contexto muere resolviendo una propiedad que en cualquier
+  // otro perfil existe. Se ve como un fallo del bean, no como lo que es.
 
   return files;
 }

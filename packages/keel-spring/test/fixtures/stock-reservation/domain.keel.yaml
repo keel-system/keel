@@ -1,0 +1,47 @@
+types:
+  ReservationStatus:
+    description: Estados por los que pasa una reserva de stock.
+    values: [pending, confirmed, released]
+
+entities:
+  Reservation:
+    description: Reserva de stock de un artículo para un pedido.
+    fields:
+      id:
+        type: uuid
+        id: true
+        generated: true
+      orderId:
+        type: uuid
+        required: true
+        unique: true
+        description: Pedido al que pertenece la reserva; uno por pedido.
+      sku:
+        type: string
+        required: true
+        constraints: { maxLength: 32 }
+      quantity:
+        type: int
+        required: true
+        constraints: { min: 1 }
+      status:
+        type: ReservationStatus
+        required: true
+        default: pending
+      releaseReason:
+        type: string
+        description: Por qué se liberó la reserva; lo escribe la compensación.
+      createdAt:
+        type: timestamp
+        generated: true
+    lifecycle:
+      field: status
+      transitions:
+        # `released` es terminal y no aparece en ningún `from`: es lo que hace
+        # IRREPETIBLE la compensación por construcción — aplicarla dos veces la
+        # rechaza el propio agregado, sin depender de ninguna guarda del borde.
+        # Y una reserva pendiente no tiene stock bloqueado todavía: no hay nada que
+        # compensar, así que tampoco hay arista pending → released.
+        pending: [confirmed]
+        confirmed: [released]
+        released: []

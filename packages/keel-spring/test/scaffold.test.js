@@ -241,7 +241,15 @@ test('scaffoldService genera el proyecto completo con contenido clave', () => {
   assert.ok(testDb.includes('jdbc:h2:mem:testdb'));
   // El DDL de las migraciones es del dialecto real: no aplica al H2 del perfil test.
   assert.ok(testDb.includes('flyway:') && testDb.includes('enabled: false'));
-  assert.ok(read(workspace, 'src/test/resources/application.yaml').includes('active: test'));
+  // El perfil test lo activa @ActiveProfiles, NO un application.yaml en
+  // src/test/resources: ese archivo ocultaría al de main en el classpath del
+  // source set `test` y con él `spring.application.name`, que es lo que las
+  // skills prescriben como groupId de un listener.
+  assert.ok(!exists(workspace, 'src/test/resources/application.yaml'));
+  assert.ok(
+    read(workspace, 'src/test/java/com/commerce/productcatalog/ProductCatalogApplicationTests.java')
+      .includes('@ActiveProfiles("test")')
+  );
 
   // Estilo Spring Initializr: wrapper incluido, .gitattributes y test de contexto.
   const projectDir = path.join(workspace, 'services', 'product-catalog-spring');
@@ -1500,7 +1508,11 @@ test('capa http-clients: RestClient configurado + resilience4j + fallback stub',
   const portDir = 'src/main/java/com/commerce/productcatalog/domain/clients';
   const config = read(workspace, `${httpDir}/PricingServiceClientConfig.java`);
   assert.ok(config.includes('public RestClient pricingServiceRestClient'));
-  assert.ok(config.includes('.withReadTimeout(Duration.ofMillis(2000))'));
+  assert.ok(config.includes('requestFactory.setReadTimeout(Duration.ofMillis(2000))'));
+  // HTTP/1.1 explícito: con el cliente del JDK negociando h2c contra un servidor
+  // en claro, el CUERPO de la petición se pierde y la llamada muere con
+  // `Received RST_STREAM`, que el fallback traduce a "el proveedor está caído".
+  assert.ok(config.includes('HttpClient.Version.HTTP_1_1'));
 
   // Puerto hexagonal en domain/clients con retorno en términos del dominio.
   const port = read(workspace, `${portDir}/PricingServiceClient.java`);
@@ -1648,6 +1660,104 @@ test('capa http-clients estructurada: records tipados, mapper ACL completo y aut
   const hcTest = read(workspace, 'src/main/resources/parameters/test/http-clients.yaml');
   assert.ok(hcTest.includes('client-id: test'));
   assert.ok(hcTest.includes('token-uri: http://localhost/token'));
+});
+
+// Los cuatro defectos que solo aparecieron al correr el pipeline entero contra
+// infraestructura real (INFORME-GENERACION.md de stock-reservation). Cada uno
+// rompía el arranque o la ejecución, y ninguno lo veía la suite de cadenas.
+
+test('un servicio que solo CONSUME genera su EventMetadata', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const patchedManifest = structuredClone(manifest);
+  patchedManifest.layers.messaging = 'messaging.keel.yaml';
+  const patched = structuredClone(layers);
+  // Sin `publishing`: el caso de cualquier consumidor puro.
+  patched.messaging = {
+    subscriptions: {
+      StockDepleted: {
+        source: 'inventory',
+        payload: { productId: { type: 'uuid', required: true } },
+        contract: { envelope: 'keel' },
+        triggers: 'retireProduct'
+      }
+    }
+  };
+
+  scaffoldService({ manifest: patchedManifest, layers: patched, workspace });
+
+  const base = 'src/main/java/com/commerce/productcatalog';
+  // La EventEnvelope la compone por valor: sin EventMetadata el `main` NO compila,
+  // y el error señala a la envoltura en vez de a su causa.
+  assert.ok(read(workspace, `${base}/infrastructure/messaging/EventEnvelope.java`).includes('EventMetadata'));
+  assert.ok(read(workspace, `${base}/domain/events/EventMetadata.java`).includes('record EventMetadata('));
+  // Y nada más de domain/events: sin eventos propios no hay nada que marcar.
+  assert.ok(!exists(workspace, `${base}/domain/events/DomainEvent.java`));
+});
+
+test('el destino de cada suscripción va a parameters/, no a un TODO', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const patchedManifest = structuredClone(manifest);
+  patchedManifest.layers.messaging = 'messaging.keel.yaml';
+  const patched = structuredClone(layers);
+  patched.messaging = {
+    subscriptions: {
+      StockDepleted: { source: 'inventory', payload: { productId: { type: 'uuid' } }, triggers: 'retireProduct' }
+    }
+  };
+
+  scaffoldService({ manifest: patchedManifest, layers: patched, workspace });
+
+  // Es la propiedad que lee el listener y a la que entrega el arnés. Si el agente
+  // tiene que inventarse el nombre, todo escenario de suscripción muere en un
+  // timeout mudo — el fallo más caro de diagnosticar del pipeline.
+  const local = read(workspace, 'src/main/resources/parameters/local/messaging.yaml');
+  assert.ok(local.includes('subscriptions:'));
+  assert.ok(local.includes('stock-depleted:'));
+  assert.ok(local.includes('topic: inventory.events'));
+  const develop = read(workspace, 'src/main/resources/parameters/develop/messaging.yaml');
+  assert.ok(develop.includes('${MESSAGING_SUBSCRIPTIONS_STOCK_DEPLETED_TOPIC:inventory.events}'));
+});
+
+test('el perfil test declara la base-url de todo cliente saliente', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const patchedManifest = structuredClone(manifest);
+  patchedManifest.layers['http-clients'] = 'http-clients.keel.yaml';
+  const patched = structuredClone(layers);
+  patched['http-clients'] = {
+    clients: {
+      pricing: { purpose: 'Precio vigente del producto.', calls: { getPrice: { contract: 'GET /prices/{sku}' } } }
+    }
+  };
+
+  scaffoldService({ manifest: patchedManifest, layers: patched, workspace });
+
+  // El bean del RestClient se construye al levantar el contexto y su @Value no
+  // tiene default: sin esto, `contextLoads()` —el gate de "todos los beans
+  // arrancan bajo el perfil test"— falla resolviendo el placeholder.
+  const hcTest = read(workspace, 'src/main/resources/parameters/test/http-clients.yaml');
+  assert.ok(hcTest.includes('pricing:'));
+  assert.ok(hcTest.includes('base-url:'));
+  assert.ok(read(workspace, 'src/main/resources/application-test.yaml').includes('parameters/test/http-clients.yaml'));
+});
+
+test('el handler de una operación con idempotency recibe el IdempotencyStore', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+
+  scaffoldService({ manifest, layers, workspace });
+
+  // Mismo criterio que el <C>Client de una activación: el diseño le atribuyó la
+  // garantía a esta operación, y sin el puerto delante el camino de menor
+  // resistencia es no usarlo — o escribir otro registro.
+  const handler = read(
+    workspace,
+    'src/main/java/com/commerce/productcatalog/application/usecases/CreateProductCommandHandler.java'
+  );
+  assert.ok(handler.includes('import com.commerce.productcatalog.domain.idempotency.IdempotencyStore;'));
+  assert.ok(handler.includes('private final IdempotencyStore idempotencyStore;'));
 });
 
 test('capa messaging (subscriptions): payload record transversal, sin listener del broker', () => {
@@ -1978,7 +2088,15 @@ test('sin capa persistence: POJOs sin JPA, sin repositorio ni datasource', () =>
   assert.ok(!copied.some((file) => file.includes('ProductRepository')));
   // Sin persistence no hay fragmento H2, pero el perfil test sigue existiendo.
   assert.ok(!copied.some((file) => file.includes('parameters/test/db.yaml')));
-  assert.ok(read(workspace, 'src/test/resources/application.yaml').includes('active: test'));
+  // El perfil test lo activa @ActiveProfiles, NO un application.yaml en
+  // src/test/resources: ese archivo ocultaría al de main en el classpath del
+  // source set `test` y con él `spring.application.name`, que es lo que las
+  // skills prescriben como groupId de un listener.
+  assert.ok(!exists(workspace, 'src/test/resources/application.yaml'));
+  assert.ok(
+    read(workspace, 'src/test/java/com/commerce/productcatalog/ProductCatalogApplicationTests.java')
+      .includes('@ActiveProfiles("test")')
+  );
 
   const buildGradle = read(workspace, 'build.gradle');
   assert.ok(!buildGradle.includes('data-jpa'));

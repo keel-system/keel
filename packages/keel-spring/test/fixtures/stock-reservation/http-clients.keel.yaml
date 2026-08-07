@@ -1,0 +1,40 @@
+clients:
+  inventory:
+    purpose: Bloquear y liberar el stock físico, que es propiedad del almacén.
+    calls:
+      reserveStock:
+        contract: POST /stock/reservations bloquea el stock del pedido y devuelve { reserved }.
+        method: POST
+        path: /stock/reservations
+        request:
+          body:
+            orderId:
+              type: uuid
+              required: true
+            sku:
+              type: string
+              required: true
+            quantity:
+              type: int
+              required: true
+        response:
+          fields:
+            reserved:
+              type: boolean
+              required: true
+        timeoutMs: 3000
+        # La cara SALIENTE de la idempotencia. Sin ella, un timeout de red haría que
+        # el reintento bloquease el stock dos veces en el almacén — y esa es
+        # exactamente la deuda que la compensación de abajo tendría que ir a limpiar.
+        idempotency:
+          keyFrom: payload-hash
+        retry:
+          maxAttempts: 3
+          backoff: exponential
+          initialDelayMs: 200
+          retryOn: [timeout, connection]
+        circuitBreaker:
+          failureRateThreshold: 50
+          slidingWindowSize: 10
+          waitDurationMs: 20000
+        fallback: Rechazar la confirmación con STOCK_UNAVAILABLE; sin bloqueo no hay reserva confirmada.

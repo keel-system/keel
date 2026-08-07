@@ -1,0 +1,104 @@
+operations:
+  createReservation:
+    description: Registra la intención de reservar stock para un pedido.
+    kind: command
+    input:
+      fields:
+        orderId:
+          type: uuid
+          required: true
+        sku:
+          type: string
+          required: true
+        quantity:
+          type: int
+          required: true
+    output:
+      entity: Reservation
+    errors:
+      - code: RESERVATION_ALREADY_EXISTS
+        when: Ya existe una reserva para ese pedido.
+        http: 409
+    # El eje de repetición del LLAMANTE: un cliente con timeout reintenta el POST y
+    # no puede acabar con dos reservas del mismo pedido. La clave la genera él.
+    idempotency:
+      keySource: client-key
+      ttlSeconds: 3600
+
+  confirmReservation:
+    description: Confirma la reserva encargando el bloqueo del stock al almacén.
+    kind: command
+    input:
+      fields:
+        id:
+          type: uuid
+          required: true
+    output:
+      entity: Reservation
+    errors:
+      - code: RESERVATION_NOT_FOUND
+        when: No existe una reserva con ese id.
+        http: 404
+      - code: STOCK_UNAVAILABLE
+        when: El almacén no pudo bloquear el stock del pedido.
+        http: 502
+    # Es la operación que MUEVE el estado, y por tanto la que crea la deuda: a partir
+    # de aquí hay trabajo encargado al almacén que alguien tendrá que deshacer.
+    transitions:
+      - entity: Reservation
+        from: [pending]
+        to: confirmed
+
+  getReservation:
+    description: Consulta el estado de una reserva.
+    kind: query
+    input:
+      fields:
+        id:
+          type: uuid
+          required: true
+    output:
+      entity: Reservation
+    errors:
+      - code: RESERVATION_NOT_FOUND
+        when: No existe una reserva con ese id.
+        http: 404
+
+  releaseReservation:
+    description: Libera la reserva cuando el almacén rechaza el bloqueo a posteriori.
+    kind: command
+    # Interna: solo la dispara la suscripción. Exponerla por HTTP abriría un segundo
+    # camino que la deduplicación del listener no cubre (keel validate lo da en rojo
+    # si no hay guarda de dominio; aquí la hay, pero no hace falta el endpoint).
+    internal: true
+    input:
+      fields:
+        orderId:
+          type: uuid
+          required: true
+        reason:
+          type: string
+          required: true
+    output: "void"
+    errors:
+      - code: RESERVATION_NOT_FOUND
+        when: No existe una reserva para ese pedido.
+        http: 404
+    # El estado de vuelta: deshacer contra el almacén sin devolver esto dejaría la
+    # reserva en `confirmed`, es decir, donde la puso un trabajo que ya no existe.
+    transitions:
+      - entity: Reservation
+        from: [confirmed]
+        to: released
+
+  reconcileReservations:
+    description: Revisa las reservas confirmadas que siguen sin desenlace del almacén.
+    kind: command
+    internal: true
+    input: "void"
+    output: "void"
+    # La pata del SILENCIO: si el almacén nunca publica su rechazo —cae, pierde el
+    # mensaje, o ni sabe que hay que deshacerlo— no llega ningún evento y la reserva
+    # se queda confirmada para siempre. Lo que no pasa solo lo detecta un barrido.
+    schedule:
+      cron: "*/15 * * * *"

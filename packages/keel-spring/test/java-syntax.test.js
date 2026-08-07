@@ -178,6 +178,9 @@ const MATRIX = [
   ['catalog-extended', { broker: 'rabbitmq' }],
   ['catalog-extended', { broker: 'snssqs' }],
   ['metering-digest', { broker: 'kafka' }],
+  // La silueta de la saga: compensación + las tres idempotencias, con la superficie
+  // mínima para que un pipeline completo quepa en una corrida.
+  ['stock-reservation', { broker: 'kafka' }],
   ['inspection-reports', {}],
   ['product-catalog', {}]
 ];

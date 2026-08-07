@@ -1,0 +1,13 @@
+style: rest
+basePath: /api
+endpoints:
+  createReservation:
+    method: POST
+    path: /reservations
+    successStatus: 201
+  confirmReservation:
+    method: POST
+    path: /reservations/{id}/confirm
+  getReservation:
+    method: GET
+    path: /reservations/{id}

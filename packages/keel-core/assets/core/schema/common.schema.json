@@ -370,7 +370,7 @@
       "required": ["cron"],
       "additionalProperties": false,
       "properties": {
-        "cron": { "type": "string", "minLength": 9, "description": "Expresión cron de 5 campos (agnóstica del scheduler)." },
+        "cron": { "type": "string", "pattern": "^\\S+( +\\S+){4}$", "description": "Expresión cron de EXACTAMENTE 5 campos (minuto hora día-mes mes día-semana), agnóstica del scheduler. El campo de segundos lo añade cada generador si su scheduler lo exige; declararlo aquí produce una expresión con un campo de más que el servicio generado rechaza AL ARRANCAR, lejísimos de donde está la causa." },
         "description": { "type": "string" }
       }
     },

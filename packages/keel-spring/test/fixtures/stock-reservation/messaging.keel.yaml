@@ -1,0 +1,25 @@
+# Sin `publishing`: este servicio no publica nada. Lo que se prueba aquí es la mitad
+# ENTRANTE — el evento con el que el almacén dice que su bloqueo no valió — y el
+# registro de procesados que impide aplicarlo dos veces.
+subscriptions:
+  StockRejected:
+    description: El almacén rechazó a posteriori un bloqueo de stock ya confirmado.
+    source: inventory
+    payload:
+      orderId: { type: uuid, required: true }
+      reason:  { type: string, required: true }
+    contract:
+      envelope: keel
+      # La clave de deduplicación viaja declarada, no por defecto: es lo que alimenta
+      # `processed_event` y lo que un escenario puede repetir a propósito.
+      messageId: { location: header, name: messageId }
+    triggers: releaseReservation
+    input:
+      orderId: orderId
+      reason: reason
+    # Una compensación puede llegar ANTES del hecho que compensa: entre que este
+    # servicio confirma la reserva y que el almacén publica su rechazo no hay orden
+    # garantizado. Los reintentos absorben esa carrera solos; la DLQ es la red.
+    onFailure:
+      retry: { maxAttempts: 5, backoff: exponential, initialDelayMs: 500, maxDelayMs: 15000 }
+      deadLetter: true
