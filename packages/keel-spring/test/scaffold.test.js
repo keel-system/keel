@@ -872,10 +872,14 @@ test('devtools: compose trae el toolbox + Dockerfile + validate-infra.sh con las
 
   const compose = read(workspace, 'infra/docker-compose.yaml');
   assert.ok(compose.includes('product-catalog-devtools')); // container_name determinista
-  assert.ok(compose.includes('Dockerfile.devtools'));
+  assert.ok(compose.includes('context: ./docker'));
+  // La imagen va etiquetada por el CONTENIDO del Dockerfile: sin eso, compose
+  // reutiliza el toolbox viejo y el síntoma es un 'aws: not found' que se lee
+  // como infraestructura rota.
+  assert.match(compose, /image: product-catalog-devtools:[0-9a-f]{12}/);
   assert.ok(compose.includes('kafka:29092')); // listener interno para clientes en red
 
-  const dockerfile = read(workspace, 'infra/docker/Dockerfile.devtools');
+  const dockerfile = read(workspace, 'infra/docker/Dockerfile');
   assert.ok(dockerfile.includes('FROM alpine:3.20'));
   assert.ok(dockerfile.includes('postgresql-client')); // BD por defecto
   assert.ok(dockerfile.includes('kcat')); // broker kafka
@@ -1052,7 +1056,7 @@ test('h2 como BD elegida: sin contenedor de BD ni devtools, pero con dependencia
 
   // H2 es en memoria: el fixture no tiene más infra → no hay compose ni toolbox.
   assert.ok(!copied.includes('infra/docker-compose.yaml'));
-  assert.ok(!copied.some((f) => f.includes('Dockerfile.devtools')));
+  assert.ok(!copied.some((f) => f.includes('infra/docker/Dockerfile')));
   assert.ok(!copied.includes('infra/validate-infra.sh'));
   assert.ok(!copied.includes('infra/reset-db.sh')); // h2: reiniciar la app basta
 

@@ -68,7 +68,7 @@ export function generate(model) {
   const files = [{ path: 'infra/docker-compose.yaml', content: header + YAML.stringify(compose, { nullStr: '' }) }];
 
   if (needsDevtools(selected)) {
-    files.push({ path: 'infra/docker/Dockerfile.devtools', content: dockerfileDevtools(selected) });
+    files.push({ path: 'infra/docker/Dockerfile', content: dockerfileDevtools(selected) });
   }
   // El script de validación existe siempre que haya algo que sondear (incluye el
   // caso 'dbcontainer', p. ej. Oracle, que no necesita devtools).

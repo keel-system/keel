@@ -8,7 +8,8 @@
   },
   "scripts": {
     "test": "node --test",
-    "compile-check": "node scripts/compile-check.js"
+    "compile-check": "node scripts/compile-check.js",
+    "broker-check": "node scripts/broker-check.js"
   },
   "files": [
     "src",

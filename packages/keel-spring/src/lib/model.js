@@ -873,8 +873,14 @@ function collectChannels(layers, service, stack) {
   const eventTypesByChannel = {};
   for (const [name, def] of events) {
     const channel = safe(def?.channel ?? `${serviceSlug}.events`);
-    if (def?.channel) publish.add(safe(def.channel));
-    else all.add(safe(`${serviceSlug}.events`));
+    // Declarado o implícito, es un canal por el que este servicio PUBLICA, y de
+    // eso cuelga todo lo que hay que sembrar y sondear: la cola de arnés de
+    // snssqs y el humo SMOKE-4. Mientras el implícito no contó, un diseño que no
+    // declarase `channel:` en sus eventos —el caso normal— generaba un arnés que
+    // leía una cola que nadie creaba: NonExistentQueue en el primer escenario que
+    // afirmara un evento publicado.
+    publish.add(channel);
+    if (!def?.channel) all.add(channel);
     (eventTypesByChannel[channel] ??= []).push(name);
   }
   for (const [name, def] of Object.entries(layers.messaging?.subscriptions ?? {})) {

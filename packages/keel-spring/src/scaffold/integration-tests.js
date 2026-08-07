@@ -17,6 +17,24 @@ import { DATABASES, BROKERS, CACHES, selectedInfra } from '../lib/stack-catalog.
 import { needsDevtools } from './devtools.js';
 import { tokenUrl, userTestClient } from './auth-provisioning.js';
 import { declaresIdempotency } from './http-idempotency.js';
+// Fuente única de los comandos de broker: lo que se emite aquí es lo mismo que
+// `scripts/broker-check.js` ejecuta contra los brokers reales.
+import {
+  ENDPOINTS,
+  deliverParts,
+  deliverShell,
+  emptyReadJava,
+  expr,
+  javaArgs,
+  offsetsParts,
+  prefix,
+  purgeParts,
+  rabbitProbeBodyJava,
+  rabbitPublishBodyJava,
+  readParts,
+  shellQuote,
+  UNKNOWN_TOPIC
+} from '../lib/broker-probes.js';
 
 // El reset por script existe con las mismas condiciones con las que docker.js lo
 // genera: una BD con cliResetCmd, una caché que vaciar, o destinos de mensajería
@@ -923,40 +941,44 @@ function brokerSection(model) {
      */`;
 
   if (broker.id === 'rabbitmq') {
+    const base = expr('RABBIT_API');
+    const read = readParts('rabbitmq', { destination: expr('destination'), bodyFile: expr('PROBE_BODY'), base });
+    const purge = purgeParts('rabbitmq', { destination: expr('destination'), base });
     return `
-    private static final String RABBIT_API = "http://rabbitmq:15672/api/queues/%2F/";
+    private static final String RABBIT_API = "${ENDPOINTS.rabbitmq.queuesApi}";
 
     private static final String PROBE_BODY = "/tmp/keel-probe.json";
 ${doc}
     protected static String publishedMessages(String destination, int count) {
         // Peek (ack_requeue_true): leer no consume, así que un escenario puede
         // assertar dos veces sobre el mismo mensaje.
-        copyToDevtools("{\\"count\\":" + count + ",\\"ackmode\\":\\"ack_requeue_true\\",\\"encoding\\":\\"auto\\"}", PROBE_BODY);
-        return devtools("curl", "-sf", "-u", "guest:guest", "-H", "content-type: application/json",
-            "-XPOST", "-d", "@" + PROBE_BODY, RABBIT_API + destination + "/get");
+        copyToDevtools(${rabbitProbeBodyJava('count')}, PROBE_BODY);
+        return devtools(${javaArgs(read)});
     }
 ${purgeDoc}
     protected static void purgeMessages(String destination) {
-        devtools("curl", "-sf", "-u", "guest:guest", "-XDELETE", RABBIT_API + destination + "/contents");
+        devtools(${javaArgs(purge)});
     }
 `;
   }
 
   if (broker.id === 'snssqs') {
+    const base = expr('QUEUE_URL');
+    const read = readParts('snssqs', { destination: expr('destination'), count: expr('String.valueOf(count)'), base });
+    const purge = purgeParts('snssqs', { destination: expr('destination'), base });
     return `
-    private static final String QUEUE_URL = "http://localstack:4566/000000000000/";
+    private static final String QUEUE_URL = "${ENDPOINTS.snssqs.queueUrlPrefix}";
 
-    private static final List<String> AWS = List.of("aws", "--endpoint-url", "http://localstack:4566", "--region", "us-east-1");
+    private static final List<String> AWS = List.of(${javaArgs(prefix('snssqs'))});
 ${doc}
     protected static String publishedMessages(String destination, int count) {
-        return aws("sqs", "receive-message", "--queue-url", QUEUE_URL + destination,
-            "--max-number-of-messages", String.valueOf(count), "--visibility-timeout", "0");
+        return aws(${javaArgs(read)});
     }
 ${purgeDoc}
     protected static void purgeMessages(String destination) {
         // PurgeQueue está limitada a una vez cada 60 s por cola en AWS real;
         // LocalStack no aplica esa cuota.
-        aws("sqs", "purge-queue", "--queue-url", QUEUE_URL + destination);
+        aws(${javaArgs(purge)});
     }
 
     private static String aws(String... arguments) {
@@ -1033,7 +1055,13 @@ ${purgeDoc}
         try {
             return nextOffset();
         } catch (RuntimeException e) {
-            return 0L;
+            // Solo el topic que aún no existe: si lo que falla es el broker, marcar 0
+            // en silencio convierte una infraestructura caída en una suite que empieza
+            // a correr y falla mucho más tarde, lejos de la causa.
+            if (isUnknownTopic(e)) {
+                return 0L;
+            }
+            throw e;
         }
     }
 
@@ -1044,7 +1072,26 @@ ${purgeDoc}
      * falso negativo indistinguible de "el evento aún no llegó".
      */
     private static String readTopic(String offset) {
-        return devtools("kcat", "-C", "-b", "kafka:29092", "-t", EVENT_TOPIC, "-o", offset, "-e", "-q");
+        try {
+            return devtools(${javaArgs(readParts('kafka', { destination: expr('EVENT_TOPIC'), offset: expr('offset') }))});
+        } catch (RuntimeException e) {
+            // Kafka crea el topic al primer PRODUCE, no al primer consumo: contra una
+            // infraestructura recién levantada, leer antes de que nadie haya publicado
+            // sale con \`Unknown topic or partition\` y código 1. Y ese es justo el caso
+            // de un Then que afirma que NO se publica nada, que es el primero que
+            // corre en cualquier suite: sin esto, el escenario revienta en vez de
+            // pasar. Solo se traga ese error concreto — un broker caído o un topic
+            // equivocado tienen que seguir doliendo.
+            if (isUnknownTopic(e)) {
+                return "";
+            }
+            throw e;
+        }
+    }
+
+    private static boolean isUnknownTopic(RuntimeException e) {
+        String message = e.getMessage();
+        return message != null && message.contains("${UNKNOWN_TOPIC}");
     }
 
     /**
@@ -1079,7 +1126,7 @@ ${purgeDoc}
      * Kafka single-node de \`infra/docker-compose.yaml\`.
      */
     private static long nextOffset() {
-        String output = devtools("kcat", "-C", "-b", "kafka:29092", "-t", EVENT_TOPIC, "-o", "beginning", "-e", "-q", "-f", "%o\\\\n");
+        String output = devtools(${javaArgs(offsetsParts({ destination: expr('EVENT_TOPIC') }))});
         long last = -1L;
         for (String line : output.split("\\\\R")) {
             String trimmed = line.trim();
@@ -1131,20 +1178,22 @@ function deliverySection(model) {
      */`;
 
   if (broker.id === 'rabbitmq') {
+    const publish = deliverParts('rabbitmq', { bodyFile: expr('DELIVER_BODY'), base: expr('RABBIT_PUBLISH') });
     return `
     /** Publicación por el exchange por defecto: la routing key <b>es</b> el nombre de la cola. */
-    private static final String RABBIT_PUBLISH = "http://rabbitmq:15672/api/exchanges/%2F/amq.default/publish";
+    private static final String RABBIT_PUBLISH = "${ENDPOINTS.rabbitmq.publishApi}";
 ${doc}
     protected static void deliverMessage(String destination, String key, String body, Map<String, String> headers) {
         // El cuerpo va en base64: incrustar un JSON dentro del campo \`payload\` (que es
         // una cadena JSON) exigiría escaparlo a mano, y ahí es donde se pierde un cuerpo.
-        String request = "{\\"properties\\":{\\"message_id\\":\\"" + key + "\\",\\"headers\\":" + headersJson(headers)
-            + "},\\"routing_key\\":\\"" + destination + "\\",\\"payload\\":\\""
-            + Base64.getEncoder().encodeToString(body.getBytes(StandardCharsets.UTF_8))
-            + "\\",\\"payload_encoding\\":\\"base64\\"}";
+        String request = ${rabbitPublishBodyJava({
+          key: 'key',
+          headers: 'headersJson(headers)',
+          destination: 'destination',
+          payload: 'Base64.getEncoder().encodeToString(body.getBytes(StandardCharsets.UTF_8))'
+        })};
         copyToDevtools(request, DELIVER_BODY);
-        devtools("curl", "-sf", "-u", "guest:guest", "-H", "content-type: application/json",
-            "-XPOST", "-d", "@" + DELIVER_BODY, RABBIT_PUBLISH);
+        devtools(${javaArgs(publish)});
     }
 ${headersJsonHelper()}`;
   }
@@ -1153,14 +1202,35 @@ ${headersJsonHelper()}`;
     return `
     /** Archivo del contenedor por el que viajan los atributos del mensaje entregado. */
     private static final String DELIVER_ATTRS = "/tmp/keel-deliver-attrs.json";
+
+    /**
+     * Prefijo del ARN de los topics. La entrega ENTRANTE se publica en el topic de
+     * la fuente —no en la cola de este consumidor—, que es como llega un mensaje de
+     * verdad: por la suscripción SNS→SQS que siembra \`infra/init-messaging.sh\`, con
+     * su filtro por \`eventType\`. Enviar directo a la cola se saltaría ese filtro.
+     */
+    private static final String TOPIC_ARN = "${ENDPOINTS.snssqs.topicArnPrefix}";
 ${doc}
     protected static void deliverMessage(String destination, String key, String body, Map<String, String> headers) {
         copyToDevtools(body, DELIVER_BODY);
-        List<String> argv = new ArrayList<>(List.of("sqs", "send-message",
-            "--queue-url", QUEUE_URL + destination, "--message-body", "file://" + DELIVER_BODY));
+        List<String> argv = new ArrayList<>(List.of(${javaArgs(
+          deliverParts('snssqs', {
+            destination: expr('destination'),
+            bodyFile: expr('DELIVER_BODY'),
+            base: expr('TOPIC_ARN')
+          })
+        )}));
         if (!headers.isEmpty()) {
             copyToDevtools(attributesJson(headers), DELIVER_ATTRS);
-            argv.addAll(List.of("--message-attributes", "file://" + DELIVER_ATTRS));
+            argv.addAll(List.of(${javaArgs(
+              deliverParts('snssqs', {
+                destination: expr('destination'),
+                bodyFile: expr('DELIVER_BODY'),
+                attrsFile: expr('DELIVER_ATTRS'),
+                base: expr('TOPIC_ARN'),
+                withAttributes: true
+              }).slice(-2)
+            )}));
         }
         aws(argv.toArray(String[]::new));
     }
@@ -1186,12 +1256,19 @@ ${doc}
     protected static void deliverMessage(String destination, String key, String body, Map<String, String> headers) {
         copyToDevtools(body, DELIVER_BODY);
         // \`-l\`: el archivo es UNA línea y por tanto UN mensaje.
-        StringBuilder command = new StringBuilder("kcat -P -b kafka:29092 -t ")
+        StringBuilder command = new StringBuilder("${kafkaDeliverPrefix()}")
             .append(shellQuote(destination)).append(" -k ").append(shellQuote(key));
         headers.forEach((name, value) -> command.append(" -H ").append(shellQuote(name + "=" + value)));
         devtoolsShell(command.append(" -l ").append(DELIVER_BODY).toString());
     }
 `;
+}
+
+// La cabeza de la línea de kcat, derivada del mismo constructor que ejecuta el
+// runner de conformidad: `kcat -P -b <bootstrap> -t ` (el destino lo añade el Java,
+// que es quien lo comilla en tiempo de ejecución).
+function kafkaDeliverPrefix() {
+  return deliverShell({ destination: '', key: '', bodyFile: '' }).split(shellQuote(''))[0];
 }
 
 // Un método por suscripción: el escenario no debería tener que saber en qué topic vive
@@ -1666,11 +1743,11 @@ ${tests.join('')}}`;
 }
 
 // "Nada publicado" no se expresa igual en cada broker: RabbitMQ devuelve una
-// lista JSON vacía, kcat no imprime nada y la CLI de SQS omite `Messages`.
+// lista JSON vacía, kcat no imprime nada y la CLI de SQS omite `Messages`. El
+// predicado vive en broker-probes.js, que es lo que ejecuta `broker-check`
+// contra el broker real: si aquí divergiera, el gate en vivo probaría otra cosa.
 function emptyReadExpression(broker) {
-  if (broker.id === 'rabbitmq') return 'publishedMessages(channel, 1).trim().equals("[]")';
-  if (broker.id === 'snssqs') return '!publishedMessages(channel, 1).contains("\\"Messages\\"")';
-  return 'publishedMessages(channel, 1).isBlank()';
+  return emptyReadJava(broker.id, 'publishedMessages(channel, 1)');
 }
 
 // ─── FailureCapture ──────────────────────────────────────────────────────────

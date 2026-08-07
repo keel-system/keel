@@ -16,7 +16,7 @@ El stack lo elige el diseñador en el **cuestionario de `keel-spring build`** (s
 
 El catálogo único de tecnologías (dependencias Gradle, imagen, servicio de compose y receta de validación por CLI) vive en `src/lib/stack-catalog.js` del generador.
 
-El scaffolding genera además, agrupado en el directorio `infra/` del proyecto, `infra/docker-compose.yaml` con la infraestructura de prueba elegida (BD, broker, auth, cache, storage) — solo si hay al menos un contenedor — más un contenedor **`devtools`** (`infra/docker/Dockerfile.devtools`), un script `infra/validate-infra.sh` para sondearla (ver "Validación de infraestructura") y, si la BD lo permite o hay caché, `infra/reset-db.sh` para dejar el estado limpio entre flujos de validación — vacía los datos y borra las claves `<servicio>:*` de la caché (ver `infra-validation.md`).
+El scaffolding genera además, agrupado en el directorio `infra/` del proyecto, `infra/docker-compose.yaml` con la infraestructura de prueba elegida (BD, broker, auth, cache, storage) — solo si hay al menos un contenedor — más un contenedor **`devtools`** (`infra/docker/Dockerfile`), un script `infra/validate-infra.sh` para sondearla (ver "Validación de infraestructura") y, si la BD lo permite o hay caché, `infra/reset-db.sh` para dejar el estado limpio entre flujos de validación — vacía los datos y borra las claves `<servicio>:*` de la caché (ver `infra-validation.md`).
 
 ## Estructura (hexagonal + CQRS, arquitectura del prototipo de referencia)
 
@@ -32,7 +32,7 @@ services/<servicio>-spring/
 ├── keel-stack.json              # stack elegido en el cuestionario (BD, broker, auth, cache)
 ├── infra/                       # todo lo relativo a levantar la infraestructura de prueba
 │   ├── docker-compose.yaml      # infraestructura de prueba + contenedor devtools (si el stack la necesita)
-│   ├── docker/Dockerfile.devtools  # toolbox Alpine con solo las CLIs del stack (psql, redis-cli, kcat, mc, aws…)
+│   ├── docker/Dockerfile           # toolbox Alpine con solo las CLIs del stack (psql, redis-cli, kcat, mc, aws…)
 │   ├── validate-infra.sh        # un check por tecnología: docker exec <svc>-devtools <cli>
 │   ├── reset-db.sh              # vacía los datos de la BD (esquema y flyway_schema_history intactos); se ejecuta antes de cada flujo FL-* (si la BD lo permite; H2 no lo necesita)
 │   └── export-schema.sh         # exporta el DDL de las entidades a build/schema/baseline.sql (perfil schema-export); origen del baseline de migraciones
@@ -137,7 +137,7 @@ Las credenciales del perfil `local` son deliberadamente de juguete y coinciden c
 
 ### Validación de infraestructura (contenedor `devtools`)
 
-Cuando el compose levanta contenedores sondeables, el scaffolding añade el servicio `devtools`: una caja de herramientas Alpine (`infra/docker/Dockerfile.devtools`) que instala **solo** las CLIs del stack elegido (`psql`/`mysql`/`mariadb`/`sqlcmd`, `kcat`, `redis-cli`, `mc`, `aws`, más `curl`/`jq`). Queda viva con `sleep infinity` y sin puertos: es un objetivo interno de `docker exec`, alcanza a los servicios de respaldo por su nombre de red (`db`, `kafka`/`localstack`, `redis`/`valkey`, `minio`, `keycloak`/`cognito`).
+Cuando el compose levanta contenedores sondeables, el scaffolding añade el servicio `devtools`: una caja de herramientas Alpine (`infra/docker/Dockerfile`) que instala **solo** las CLIs del stack elegido (`psql`/`mysql`/`mariadb`/`sqlcmd`, `kcat`, `redis-cli`, `mc`, `aws`, más `curl`/`jq`). Queda viva con `sleep infinity` y sin puertos: es un objetivo interno de `docker exec`, alcanza a los servicios de respaldo por su nombre de red (`db`, `kafka`/`localstack`, `redis`/`valkey`, `minio`, `keycloak`/`cognito`).
 
 El script generado `infra/validate-infra.sh` corre un check por tecnología (`docker exec <servicio>-devtools <cliValidateCmd>`, o dentro del propio contenedor para Oracle) y sale con código `!= 0` si alguno falla. Lo usa el agente `keel-spring-infra` de la orquestación, tras `docker compose -f infra/docker-compose.yaml up -d` (o `podman compose`, respetando `CONTAINER_RUNTIME`) y antes de que se ejerciten los escenarios, para confirmar que la infraestructura responde. Detalle por tecnología en `conventions/infra-validation.md`.
 

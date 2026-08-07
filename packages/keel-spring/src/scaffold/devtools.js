@@ -5,6 +5,7 @@
 // verificación funcional. Se acompaña de `validate-infra.sh`, que ejecuta un
 // check por tecnología. Consume `selectedInfra(model)` de stack-catalog.js.
 
+import { createHash } from 'node:crypto';
 import { declaredBuckets } from '../lib/buckets.js';
 import { LOCAL_AWS_ENV } from '../lib/stack-catalog.js';
 import { messagingTopologyChecks } from './messaging-provisioning.js';
@@ -17,7 +18,7 @@ export function needsDevtools(selected) {
   return selected.some((s) => s.cliVia === 'devtools');
 }
 
-// Dockerfile.devtools: base + los apk de las CLIs con cliVia 'devtools' + las
+// infra/docker/Dockerfile: base + los apk de las CLIs con cliVia 'devtools' + las
 // que se instalan por curl (sqlcmd para SQL Server, mc para MinIO).
 export function dockerfileDevtools(selected) {
   const viaDevtools = selected.filter((s) => s.cliVia === 'devtools');
@@ -57,10 +58,33 @@ export function dockerfileDevtools(selected) {
 // Servicio `devtools` del docker-compose: se construye desde ./docker (relativo
 // al propio compose, dentro de infra/), queda vivo con `sleep infinity` y depende
 // de los servicios que va a sondear.
+/**
+ * Etiqueta de la imagen del toolbox, derivada del CONTENIDO de su Dockerfile.
+ *
+ * Sin ella, compose la nombra por proyecto (`<proyecto>_devtools:latest`) y no
+ * reconstruye una etiqueta que ya existe: quien haya levantado el proyecto una vez
+ * sigue corriendo el toolbox viejo para siempre. Duele en dos casos que no son
+ * raros — cambiar de broker en el cuestionario de stack, y ampliar el toolbox en
+ * una versión nueva del generador—, y duele mal: el síntoma es un `aws: not found`
+ * o un `kcat: not found` en `validate-infra.sh`, que se lee como infraestructura
+ * rota y no como imagen caducada. Con la etiqueta atada al contenido, un toolbox
+ * distinto es una imagen distinta y compose no tiene nada que reutilizar.
+ */
+export function devtoolsImageTag(selected) {
+  return createHash('sha256').update(dockerfileDevtools(selected)).digest('hex').slice(0, 12);
+}
+
 export function devtoolsService(selected, service) {
   const dependsOn = [...new Set(selected.filter((s) => s.cliVia === 'devtools').map((s) => s.serviceKey))];
   return {
-    build: { context: './docker', dockerfile: 'Dockerfile.devtools' },
+    // Sin clave `dockerfile:` a propósito, y por eso el archivo se llama
+    // `Dockerfile` a secas: podman-compose no la honra —busca el nombre por
+    // defecto en el contexto y aborta con "no Containerfile or Dockerfile
+    // specified or found"—, así que el proyecto generado no se podía construir
+    // con el único frontend de compose que funciona en podman sobre Windows. El
+    // directorio `docker/` ya acota qué imagen es: el sufijo no aportaba nada.
+    build: { context: './docker' },
+    image: `${service.name}-devtools:${devtoolsImageTag(selected)}`,
     container_name: `${service.name}-devtools`,
     command: 'sleep infinity',
     // Siempre, no solo con broker snssqs: el mismo toolbox sirve al storage

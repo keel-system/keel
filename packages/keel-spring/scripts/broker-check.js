@@ -1,0 +1,633 @@
+#!/usr/bin/env node
+// Conformidad EN VIVO de la fontanería de brokers que emite `build`.
+//
+// Qué cubre y qué no. El generador habla con tres brokers por CLI desde el
+// contenedor devtools —kcat, la API de gestión de RabbitMQ, la CLI de AWS contra
+// LocalStack— y nada de eso se ejecuta en `npm test`: la suite compara cadenas y
+// `compile-check` compila, pero entre "compila" y "el pipeline completo con agente
+// lo prueba" no había ninguna red. Los comentarios de `integration-tests.js` son
+// el registro de los bugs que solo aparecieron en vivo, cada uno al precio de una
+// corrida entera del pipeline.
+//
+// **No arranca la aplicación**, a propósito: `AbstractFlowIT` es `@SpringBootTest`
+// y el `main` recién generado no compila (build deja TODOs para el agente). Lo que
+// sí es 100 % de `build` —y por tanto exigible en verde recién generado— es la capa
+// de infraestructura y sondeo, que es exactamente donde viven esos bugs.
+//
+// Los comandos NO se escriben aquí: salen de `src/lib/broker-probes.js`, el mismo
+// módulo del que el arnés renderiza su Java. Un runner con comandos propios
+// comprobaría que los brokers responden, no que el generador acierta.
+//
+//   node packages/keel-spring/scripts/broker-check.js [fixture] [--broker=<id>] [--keep]
+//   npm run broker-check --workspace packages/keel-spring
+//
+// Salidas: 0 todo OK · 1 hay fallos · 2 la infraestructura no levantó (sin veredicto).
+
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { loadService } from 'keel-core';
+import { resolveStack, scaffoldService } from '../src/scaffold/index.js';
+import { buildModel } from '../src/lib/model.js';
+import { kebabCase } from '../src/lib/naming.js';
+import {
+  BROKERS,
+  argv as toArgv,
+  deliverParts,
+  deliverShell,
+  headersJson,
+  isEmptyRead,
+  offsetsParts,
+  purgeParts,
+  rabbitProbeBody,
+  rabbitPublishBody,
+  readParts,
+  sqsAttributesJson,
+  UNKNOWN_TOPIC
+} from '../src/lib/broker-probes.js';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const fixturesDir = path.join(here, '..', 'test', 'fixtures');
+
+const args = process.argv.slice(2);
+const fixture = args.find((arg) => !arg.startsWith('--')) ?? 'catalog-extended';
+const keep = args.includes('--keep');
+const only = args.find((arg) => arg.startsWith('--broker='))?.split('=')[1];
+const brokers = only ? [only] : BROKERS;
+
+// ─── Ejecución de procesos ───────────────────────────────────────────────────
+
+function run(command, commandArgs, options = {}) {
+  const result = spawnSync(command, commandArgs, { encoding: 'utf8', ...options });
+  return {
+    status: result.status ?? 1,
+    stdout: result.stdout ?? '',
+    stderr: result.stderr ?? '',
+    error: result.error
+  };
+}
+
+/**
+ * Runtime y frontend de compose con la MISMA lógica que los scripts generados
+ * (`CONTAINER_RUNTIME`, luego docker, luego podman), con una diferencia que solo
+ * se ve en vivo: en Windows `podman compose` delega en el docker-compose.exe del
+ * PATH, que no encuentra el named pipe de la máquina podman y falla con un error
+ * de conexión. Por eso el fallback no se decide por disponibilidad sino por
+ * resultado: se prueba y, si no conecta, se pasa a `podman-compose`.
+ */
+function resolveRuntime() {
+  const preferred = process.env.CONTAINER_RUNTIME;
+  const candidates = preferred ? [preferred] : ['docker', 'podman'];
+  for (const runtime of candidates) {
+    if (run(runtime, ['--version']).status !== 0) continue;
+    const frontends =
+      runtime === 'podman'
+        ? [
+            { command: 'podman', prefix: ['compose'] },
+            { command: 'podman-compose', prefix: [] }
+          ]
+        : [{ command: 'docker', prefix: ['compose'] }];
+    return { runtime, frontends };
+  }
+  return null;
+}
+
+function composeUp(frontends, projectDir) {
+  const failures = [];
+  for (const frontend of frontends) {
+    const result = run(frontend.command, [...frontend.prefix, '-f', 'infra/docker-compose.yaml', 'up', '-d'], {
+      cwd: projectDir
+    });
+    if (result.status === 0) return { frontend, log: result.stdout + result.stderr };
+    failures.push(`${frontend.command}: ${(result.stderr || result.stdout).trim().split('\n').slice(-2).join(' ')}`);
+  }
+  return { frontend: null, log: failures.join('\n') };
+}
+
+function composeDown(frontend, projectDir) {
+  run(frontend.command, [...frontend.prefix, '-f', 'infra/docker-compose.yaml', 'down', '-v'], { cwd: projectDir });
+}
+
+// ─── El contenedor devtools: por donde pasan todos los comandos ──────────────
+
+function makeDevtools(runtime, container, projectDir) {
+  const exec = (parts) => run(runtime, ['exec', container, ...parts]);
+  return {
+    exec,
+    shell: (line) => run(runtime, ['exec', container, 'sh', '-c', line]),
+    copy: (content, remotePath) => {
+      const local = path.join(projectDir, `.keel-probe-${path.basename(remotePath)}`);
+      fs.writeFileSync(local, content, 'utf8');
+      const result = run(runtime, ['cp', local, `${container}:${remotePath}`]);
+      fs.rmSync(local, { force: true });
+      return result;
+    }
+  };
+}
+
+// ─── Escenarios ──────────────────────────────────────────────────────────────
+//
+// Cada uno ataca una clase de fallo concreta que ya se ha pagado al menos una vez.
+
+const BODY_FILE = '/tmp/keel-check-body.json';
+const PROBE_FILE = '/tmp/keel-check-probe.json';
+const ATTRS_FILE = '/tmp/keel-check-attrs.json';
+
+// Cuerpo con lo que rompe el paso por `exec`/`cp`: comillas dobles, acentos y un
+// `$` que una shell interpolaría.
+const TRICKY = 'acentós, "comillas" y $HOME sin interpolar';
+
+function scenarios(broker, context) {
+  const { devtools, topic, subscriptionTopic, subscriptionQueue, subscriptionName, publishEventType } = context;
+  // Todo lo que se publica en el canal propio viaja con su `eventType`: es lo que
+  // discrimina dentro del destino único (filtro de la suscripción en SNS, filtrado
+  // por canal en Kafka). Sin él, el broker descarta el mensaje con toda la razón y
+  // el escenario mediría el filtro, no lo que dice medir.
+  const outbound = publishEventType ? { eventType: publishEventType } : {};
+  // Dónde se ENTREGA un mensaje entrante y dónde se LEE no siempre coinciden: en
+  // snssqs se publica en el topic de la fuente y se lee de la cola del consumidor,
+  // que cuelga de él por la suscripción con filtro. En kafka y rabbitmq es el
+  // mismo destino.
+  const inbound = subscriptionTopic ?? topic;
+  const inboundRead = subscriptionQueue ?? inbound;
+
+  const read = (destination, options = {}) => {
+    if (broker === 'kafka') {
+      return devtools.exec(toArgv(broker, readParts(broker, { destination, offset: options.offset ?? 'beginning' })));
+    }
+    if (broker === 'rabbitmq') {
+      devtools.copy(rabbitProbeBody(options.count ?? 10), PROBE_FILE);
+      return devtools.exec(toArgv(broker, readParts(broker, { destination, bodyFile: PROBE_FILE })));
+    }
+    return devtools.exec(toArgv(broker, readParts(broker, { destination, count: String(options.count ?? 10) })));
+  };
+
+  const deliver = (destination, key, body, headers = {}) => {
+    if (broker === 'kafka') {
+      devtools.copy(body, BODY_FILE);
+      return devtools.shell(deliverShell({ destination, key, bodyFile: BODY_FILE, headers }));
+    }
+    if (broker === 'rabbitmq') {
+      devtools.copy(
+        rabbitPublishBody({
+          destination,
+          key,
+          headersJson: headersJson(headers),
+          payloadBase64: Buffer.from(body, 'utf8').toString('base64')
+        }),
+        BODY_FILE
+      );
+      return devtools.exec(toArgv(broker, deliverParts(broker, { destination, bodyFile: BODY_FILE })));
+    }
+    devtools.copy(body, BODY_FILE);
+    const withAttributes = Object.keys(headers).length > 0;
+    if (withAttributes) devtools.copy(sqsAttributesJson(headers), ATTRS_FILE);
+    return devtools.exec(
+      toArgv(broker, deliverParts(broker, { destination, bodyFile: BODY_FILE, attrsFile: ATTRS_FILE, withAttributes }))
+    );
+  };
+
+  const purge = (destination) => {
+    const parts = purgeParts(broker, { destination });
+    return parts ? devtools.exec(toArgv(broker, parts)) : { status: 0, stdout: '', stderr: '' };
+  };
+
+  /**
+   * Lee hasta juntar `expected` apariciones del marcador. Hace falta por dos
+   * razones que no son del generador: la entrega SNS→SQS no es instantánea, y una
+   * lectura de SQS puede devolver menos mensajes de los que hay aunque estén todos
+   * (long polling sobre varios servidores). Sin esto, un "solo llegó 1" no
+   * distinguiría "el broker deduplicó" —que es lo que BRK-7 juzga— de "aún no ha
+   * llegado el segundo".
+   */
+  const readUntil = (destination, marker, expected, attempts = 8) => {
+    let best = [];
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      // Se cuenta dentro de UNA respuesta, no acumulando entre lecturas: SQS lee
+      // con `--visibility-timeout 0`, así que el mismo mensaje vuelve en la lectura
+      // siguiente y sumar daría dos copias donde solo hay una.
+      const found = payloadsOf(broker, read(destination, { count: 10 }).stdout).filter((payload) =>
+        payload.includes(marker)
+      );
+      if (found.length > best.length) best = found;
+      if (best.length >= expected) break;
+      sleep(1500);
+    }
+    return best;
+  };
+
+  return [
+    {
+      id: 'BRK-1',
+      title: 'el destino de publicación existe o falla de forma reconocible',
+      // Dos exigencias distintas según quién siembra la topología. En snssqs y
+      // RabbitMQ el destino tiene que existir ya: el fallo histórico era arrancar
+      // contra una cola inexistente y morir con NonExistentQueue en el primer
+      // escenario. En Kafka el topic nace al primer PRODUCE, así que lo que se
+      // exige es lo contrario: que leer antes de publicar falle con el error que
+      // el arnés traduce a "no hay mensajes". Si Kafka cambiara ese texto, la
+      // tolerancia del arnés se rompería en silencio y solo se vería aquí.
+      check: () => {
+        const result = read(topic);
+        if (result.status === 0) return ok();
+        if (broker === 'kafka' && (result.stdout + result.stderr).includes(UNKNOWN_TOPIC)) return ok();
+        return ko(`lectura falló: ${firstLine(result.stderr || result.stdout)}`);
+      }
+    },
+    {
+      id: 'BRK-2',
+      title: 'publicar con marcador único y leerlo de vuelta',
+      // Topic/cola físicos equivocados, y kcat sin `-C` (que saldría en verde y mudo).
+      check: () => {
+        const marker = `keel-${Date.now()}`;
+        const sent = deliver(topic, marker, `{"marker":"${marker}"}`, outbound);
+        if (sent.status !== 0) return ko(`entrega falló: ${firstLine(sent.stderr || sent.stdout)}`);
+        const back = readUntil(topic, marker, 1);
+        return back.length > 0
+          ? ok()
+          : ko('el mensaje publicado no vuelve en la lectura');
+      }
+    },
+    {
+      id: 'BRK-3',
+      title: 'un cuerpo con comillas, acentos y $ vuelve intacto',
+      // Escapado por `exec`/`cp`: en Windows el cliente de contenedores corrompe
+      // las comillas de un JSON y el fallo aparece lejos de su causa.
+      check: () => {
+        // Igualdad EXACTA contra el cuerpo enviado, no `includes`: lo que se juzga
+        // es que no se pierda ni se altere un solo byte por el camino.
+        const body = JSON.stringify({ text: TRICKY });
+        const sent = deliver(topic, 'tricky', body, outbound);
+        if (sent.status !== 0) return ko(`entrega falló: ${firstLine(sent.stderr || sent.stdout)}`);
+        const back = readUntil(topic, body, 1);
+        return back.includes(body)
+          ? ok()
+          : ko(`el cuerpo no vuelve byte a byte: ${firstLine(back[back.length - 1] ?? '(nada)')}`);
+      }
+    },
+    {
+      id: 'BRK-4',
+      title: 'purgar deja la lectura vacía según el predicado del broker',
+      // Aislamiento entre flujos. En Kafka no hay purga posible: su equivalente es
+      // la marca de offset, que es lógica del arnés y no del canal — se comprueba
+      // que los offsets avancen, que es de lo que depende la marca.
+      check: () => {
+        if (broker === 'kafka') {
+          const before = lastOffset(devtools, topic);
+          deliver(topic, 'offset-probe', '{"n":1}', outbound);
+          const after = lastOffset(devtools, topic);
+          return after > before ? ok() : ko(`el offset no avanza (${before} → ${after})`);
+        }
+        deliver(topic, 'to-purge', '{"n":1}', outbound);
+        const purged = purge(topic);
+        if (purged.status !== 0) return ko(`purga falló: ${firstLine(purged.stderr || purged.stdout)}`);
+        const after = read(topic, { count: 1 });
+        return isEmptyRead(broker, after.stdout) ? ok() : ko(`tras purgar sigue habiendo mensajes: ${firstLine(after.stdout)}`);
+      }
+    },
+    {
+      id: 'BRK-6',
+      title: 'las cabeceras del mensaje entregado llegan al broker',
+      // La mitad ENTRANTE del arnés: el discriminador y la clave de deduplicación
+      // viajan en cabeceras, y sin ellas ninguna suscripción con contract es
+      // ejercitable.
+      check: () => {
+        const marker = `hdr-${Date.now()}`;
+        // El discriminador del diseño va en la cabecera: es lo que decide si el
+        // mensaje llega (filtro de la suscripción en SNS, binding en Rabbit) y lo
+        // que el listener usa para descartar lo que no es suyo.
+        const sent = deliver(inbound, marker, `{"marker":"${marker}"}`, {
+          eventType: subscriptionName ?? 'ProbeEvent',
+          messageId: marker
+        });
+        if (sent.status !== 0) return ko(`entrega con cabeceras falló: ${firstLine(sent.stderr || sent.stdout)}`);
+        const back = headersOf(broker, devtools, inboundRead, marker);
+        return back.includes(marker) ? ok() : ko('el mensaje con cabeceras no llega a su destino');
+      }
+    },
+    {
+      id: 'BRK-7',
+      title: 'entregar dos veces el mismo messageId entrega los dos mensajes',
+      // El escenario del que depende TODA la obligación de reentrega: si el broker
+      // deduplicase por su cuenta, el escenario de compensación pasaría en verde
+      // sin haber probado nada.
+      check: () => {
+        purge(inboundRead);
+        const marker = `dup-${Date.now()}`;
+        const body = `{"marker":"${marker}"}`;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const sent = deliver(inbound, marker, body, {
+            eventType: subscriptionName ?? 'ProbeEvent',
+            messageId: marker
+          });
+          if (sent.status !== 0) return ko(`entrega ${attempt + 1} falló: ${firstLine(sent.stderr || sent.stdout)}`);
+        }
+        const copies = readUntil(inboundRead, marker, 2).length;
+        return copies >= 2 ? ok() : ko(`el broker entregó ${copies} copia(s): la reentrega no es ejercitable`);
+      }
+    },
+    {
+      id: 'BRK-9',
+      title: 'sondear un destino virgen no revienta',
+      // Regresión ya documentada en `safeNextOffset`: contra un broker recién
+      // levantado el topic no existe y kcat sale con código 1, que el arnés
+      // convertía en excepción justo en el primer flujo de la suite.
+      check: () => {
+        const virgin = `keel-virgin-${Date.now()}`;
+        if (broker === 'kafka') {
+          const result = devtools.exec(toArgv(broker, offsetsParts({ destination: virgin, format: '%o\\n' })));
+          // Lo que se exige no es que salga 0, sino que el fallo sea reconocible:
+          // el arnés lo traduce a marca 0. Un cuelgue o un éxito mudo sí serían bugs.
+          return result.status === 0 || /unknown topic/i.test(result.stderr)
+            ? ok()
+            : ko(`fallo no reconocible: ${firstLine(result.stderr || result.stdout)}`);
+        }
+        const result = read(virgin, { count: 1 });
+        return result.status !== 0 || isEmptyRead(broker, result.stdout)
+          ? ok()
+          : ko('un destino inexistente devuelve algo que parece un mensaje');
+      }
+    }
+  ];
+}
+
+// ─── Utilidades de escenario ─────────────────────────────────────────────────
+
+const ok = () => ({ ok: true });
+const ko = (detail) => ({ ok: false, detail });
+
+function firstLine(text) {
+  return (text ?? '').trim().split('\n')[0] ?? '';
+}
+
+/**
+ * Los cuerpos de los mensajes leídos, ya desenvueltos de lo que cada CLI añade.
+ * No basta con buscar el texto en la salida cruda: RabbitMQ y SQS devuelven el
+ * mensaje DENTRO de un JSON, así que sus comillas vuelven escapadas otra vez y una
+ * comparación literal fallaría por la envoltura, no por el contenido. Esto es
+ * reimplementar el desenvuelto que hace el arnés — orquestación, no canal.
+ */
+function payloadsOf(broker, output) {
+  const text = (output ?? '').trim();
+  if (!text) return [];
+  if (broker === 'kafka') return text.split(/\r?\n/).filter(Boolean);
+  try {
+    if (broker === 'rabbitmq') {
+      return JSON.parse(text).map((message) =>
+        message.payload_encoding === 'base64'
+          ? Buffer.from(message.payload, 'base64').toString('utf8')
+          : message.payload
+      );
+    }
+    return (JSON.parse(text).Messages ?? []).map((message) => message.Body);
+  } catch {
+    // Una salida que no es el JSON esperado es en sí un hallazgo: se devuelve
+    // cruda para que el escenario falle con el texto delante.
+    return [text];
+  }
+}
+
+function lastOffset(devtools, topic) {
+  const result = devtools.exec(toArgv('kafka', offsetsParts({ destination: topic, format: '%o\\n' })));
+  if (result.status !== 0) return -1;
+  const offsets = result.stdout
+    .split(/\r?\n/)
+    .map((line) => Number.parseInt(line.trim(), 10))
+    .filter((value) => Number.isInteger(value));
+  return offsets.length > 0 ? Math.max(...offsets) : -1;
+}
+
+/** Lectura cruda con las cabeceras visibles, que cada CLI expone a su manera. */
+function headersOf(broker, devtools, destination, marker) {
+  if (broker === 'kafka') {
+    return devtools.exec(['kcat', '-C', '-b', 'kafka:29092', '-t', destination, '-o', 'beginning', '-e', '-q', '-f', '%h %s\\n'])
+      .stdout;
+  }
+  if (broker === 'rabbitmq') {
+    devtools.copy(rabbitProbeBody(10), PROBE_FILE);
+    return devtools.exec(toArgv(broker, readParts(broker, { destination, bodyFile: PROBE_FILE }))).stdout;
+  }
+  return devtools.exec([
+    ...toArgv(broker, readParts(broker, { destination, count: '10' })),
+    '--message-attribute-names',
+    'All'
+  ]).stdout;
+}
+
+// ─── Preparación por broker ──────────────────────────────────────────────────
+//
+// Lo que el runner tiene que arreglar por su cuenta, y por qué no es trampa: la
+// topología de RabbitMQ la declara la APLICACIÓN al arrancar (Spring AMQP), y este
+// check no arranca la aplicación. Declarar las colas aquí es preparar el terreno,
+// no sustituir lo que se está probando — en snssqs, en cambio, la topología sí es
+// de `build` (init-messaging.sh) y por eso se ejecuta el script generado.
+function prepare(broker, { devtools, runtime, projectDir, destinations }) {
+  if (broker === 'snssqs') {
+    // La primera pasada espera: sembrar es lo primero que se hace tras `up` y
+    // LocalStack publica su listener bastante después de arrancar el contenedor,
+    // igual que asume validate-infra.sh con sus reintentos.
+    const first = untilOk(() =>
+      run('sh', ['infra/init-messaging.sh'], { cwd: projectDir, env: { ...process.env, CONTAINER_RUNTIME: runtime } })
+    );
+    if (!first.ok) return `init-messaging.sh no llegó a sembrar: ${firstLine(first.last.stderr || first.last.stdout)}`;
+    // Y una segunda inmediata, que es la que juzga la IDEMPOTENCIA: el script se
+    // reejecuta tras cada `up`, y un create-topic que fallara al encontrarlo ya
+    // creado rompería el arranque a partir del segundo día.
+    const again = run('sh', ['infra/init-messaging.sh'], {
+      cwd: projectDir,
+      env: { ...process.env, CONTAINER_RUNTIME: runtime }
+    });
+    return again.status === 0
+      ? null
+      : `init-messaging.sh no es idempotente: falla al reejecutarse — ${firstLine(again.stderr || again.stdout)}`;
+  }
+  if (broker === 'rabbitmq') {
+    // La topología de RabbitMQ la declara la APLICACIÓN al arrancar (Spring AMQP),
+    // y este check no arranca la aplicación: declarar las colas aquí es preparar el
+    // terreno, no sustituir lo que se prueba. En snssqs, en cambio, la topología sí
+    // es de `build` y por eso se ejecuta su script.
+    for (const queue of destinations) {
+      const declared = untilOk(() =>
+        devtools.exec([
+          'curl', '-sf', '-u', 'guest:guest', '-H', 'content-type: application/json',
+          '-XPUT', '-d', '{"durable":true}', `http://rabbitmq:15672/api/queues/%2F/${queue}`
+        ])
+      );
+      if (!declared.ok) return `no se pudo declarar la cola '${queue}'`;
+    }
+  }
+  return null;
+}
+
+/** Reintenta mientras el broker termina de arrancar: 'Up' no es 'listo'. */
+function untilOk(action, attempts = 10, delayMs = 3000) {
+  let last = { status: 1, stdout: '', stderr: '' };
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    last = action();
+    if (last.status === 0) return { ok: true, last };
+    sleep(delayMs);
+  }
+  return { ok: false, last };
+}
+
+function sleep(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+// ─── Corrida ─────────────────────────────────────────────────────────────────
+
+function checkBroker(broker, runtimeInfo) {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), `keel-broker-${broker}-`));
+  const results = [];
+  let frontend = null;
+  let projectDir = null;
+  try {
+    const service = loadService(path.join(fixturesDir, fixture));
+    if (service.errors.length > 0) {
+      return { fatal: `la fixture no carga: ${service.errors.join(' · ')}`, results };
+    }
+    scaffoldService({
+      manifest: service.manifest,
+      layers: service.layers,
+      workspace,
+      force: true,
+      stack: { broker }
+    });
+    // Con el MISMO stack que el proyecto: los nombres físicos de topics y colas
+    // los sanea el broker elegido (SQS no admite puntos), así que un modelo sin
+    // stack sondearía destinos que no existen.
+    const stack = resolveStack({ broker }, service.layers, service.manifest);
+    const model = buildModel({ manifest: service.manifest, layers: service.layers, stack });
+    model.stack = stack;
+    const projectName = fs
+      .readdirSync(path.join(workspace, 'services'), { withFileTypes: true })
+      .find((entry) => entry.isDirectory()).name;
+    projectDir = path.join(workspace, 'services', projectName);
+
+    process.stdout.write(`${broker}: levantando infraestructura… `);
+    const up = composeUp(runtimeInfo.frontends, projectDir);
+    if (!up.frontend) return { fatal: `no levanta:\n${up.log}`, results };
+    frontend = up.frontend;
+    console.log(`OK (${up.frontend.command})`);
+
+    const topic = model.messaging?.destinationDefault;
+    const subscriptionTopic = (model.subscriptions ?? [])[0]?.topicDefault ?? null;
+    // El nombre del contenedor lo fija `devtoolsService(...)` a partir del servicio.
+    const devtools = makeDevtools(runtimeInfo.runtime, `${model.service.name}-devtools`, projectDir);
+
+    // La topología ANTES de validar, que es el orden que documenta el agente de
+    // infraestructura: `validate-infra.sh` comprueba que cada topic y cada cola
+    // EXISTAN —es lo que separa "LocalStack responde" de "la topología está
+    // sembrada"—, así que sembrarlas después dejaría el gate en rojo por algo que
+    // todavía no ha pasado.
+    const prepared = prepare(broker, {
+      devtools,
+      runtime: runtimeInfo.runtime,
+      projectDir,
+      destinations: [topic, subscriptionTopic].filter(Boolean)
+    });
+    if (prepared) return { fatal: prepared, results };
+
+    // `validate-infra.sh` ya reintenta: 'Up' no es 'listo'.
+    const validate = run('sh', ['infra/validate-infra.sh'], {
+      cwd: projectDir,
+      env: { ...process.env, CONTAINER_RUNTIME: runtimeInfo.runtime }
+    });
+    if (validate.status !== 0) {
+      return { fatal: `validate-infra.sh en rojo:\n${validate.stdout}${validate.stderr}`, results };
+    }
+
+    const subscription = (model.subscriptions ?? [])[0] ?? null;
+    // En snssqs la cola del consumidor la nombra el propio servicio: es lo que
+    // siembra `init-messaging.sh`, y leer de ella (y no del topic) es lo que
+    // ejercita la suscripción con su filtro.
+    const subscriptionQueue =
+      broker === 'snssqs' && subscription ? `${model.service.artifactId}-${kebabCase(subscription.name)}` : null;
+
+    for (const scenario of scenarios(broker, {
+      devtools,
+      topic,
+      subscriptionTopic,
+      subscriptionQueue,
+      subscriptionName: subscription?.name ?? null,
+      publishEventType: (model.messaging?.eventTypesByChannel?.[topic] ?? [])[0] ?? null
+    })) {
+      let outcome;
+      try {
+        outcome = scenario.check();
+      } catch (failure) {
+        outcome = ko(`excepción: ${failure.message}`);
+      }
+      results.push({ id: scenario.id, title: scenario.title, ...outcome });
+      console.log(`  ${outcome.ok ? 'OK  ' : 'KO  '} ${scenario.id} ${scenario.title}${outcome.ok ? '' : ` — ${outcome.detail}`}`);
+    }
+
+    // BRK-10 va al final porque borra estado: el reset por flujo tiene que dejar
+    // todos los destinos vacíos, o dos flujos se contaminan entre sí.
+    const reset = run('sh', ['infra/reset-db.sh'], {
+      cwd: projectDir,
+      env: { ...process.env, CONTAINER_RUNTIME: runtimeInfo.runtime }
+    });
+    const resetOk = reset.status === 0;
+    results.push({
+      id: 'BRK-10',
+      title: 'reset-db.sh deja el estado limpio',
+      ok: resetOk,
+      detail: resetOk ? undefined : firstLine(reset.stderr || reset.stdout)
+    });
+    console.log(`  ${resetOk ? 'OK  ' : 'KO  '} BRK-10 reset-db.sh deja el estado limpio`);
+
+    return { fatal: null, results };
+  } finally {
+    if (frontend && projectDir && !keep) composeDown(frontend, projectDir);
+    if (!keep) fs.rmSync(workspace, { recursive: true, force: true });
+    else console.log(`  (--keep) proyecto en ${projectDir}`);
+  }
+}
+
+// ─── Entrada ─────────────────────────────────────────────────────────────────
+
+if (!fs.existsSync(path.join(fixturesDir, fixture, 'service.keel.yaml'))) {
+  console.error(`No existe la fixture '${fixture}' en ${fixturesDir}`);
+  process.exit(2);
+}
+
+const runtimeInfo = resolveRuntime();
+if (!runtimeInfo) {
+  console.error('No hay docker ni podman utilizable en el PATH. Este check los necesita; el resto de la suite no.');
+  process.exit(2);
+}
+
+const matrix = {};
+let fatal = null;
+for (const broker of brokers) {
+  const outcome = checkBroker(broker, runtimeInfo);
+  matrix[broker] = outcome.results;
+  if (outcome.fatal) {
+    fatal = `${broker}: ${outcome.fatal}`;
+    console.error(`${broker}: ${outcome.fatal}`);
+    break;
+  }
+}
+
+console.log('\nMatriz broker × escenario');
+const ids = [...new Set(Object.values(matrix).flat().map((result) => result.id))];
+for (const id of ids) {
+  const cells = brokers.map((broker) => {
+    const found = (matrix[broker] ?? []).find((result) => result.id === id);
+    return `${broker}=${found ? (found.ok ? 'OK' : 'KO') : '--'}`;
+  });
+  console.log(`  ${id}  ${cells.join('  ')}`);
+}
+
+fs.writeFileSync(
+  path.join(process.cwd(), 'broker-check.json'),
+  JSON.stringify({ fixture, brokers, matrix, fatal }, null, 2),
+  'utf8'
+);
+
+const failures = Object.values(matrix).flat().filter((result) => !result.ok);
+if (fatal) process.exit(2);
+process.exit(failures.length > 0 ? 1 : 0);
