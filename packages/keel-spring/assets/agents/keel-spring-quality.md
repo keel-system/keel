@@ -208,34 +208,71 @@ Una discrepancia que no sepas explicar va a `blockers` con el detalle exacto.
 **Nunca** enciendas `auto-index-creation` para «arreglar» un índice que falta: los
 que crea Spring llevan su propio nombre y romperían la traducción del handler.
 
-## Deduplicación del consumo (solo con `subscriptions`)
+## La cadena de idempotencia y compensación
 
-`build` genera `IdempotencyGuard` y su tabla `processed_event`, pero **la llamada la
-escribe el agente de código**, no build. Es el único eslabón de la cadena de idempotencia
-que no está garantizado por construcción, y falla en silencio: un listener sin guard
-funciona perfectamente hasta la primera reentrega, que es justo cuando algo ya iba mal.
+Build genera **los mecanismos**; quien los **usa** es el agente de código. Ese es el
+único tramo de toda la cadena que no está garantizado por construcción, y falla en
+silencio: un listener sin guard, o un handler que ignora el `IdempotencyStore`,
+funcionan perfectamente hasta la primera repetición — que es justo cuando algo ya iba
+mal. Tres comprobaciones, todas **estáticas** y todas sobre código que **no puedes
+tocar**: lo que encuentres va a su campo del reporte en `KO` y el detalle a
+`remaining`, para que el orquestador lo devuelva al agente de código.
 
-Por cada `<Evento>Listener` de `infrastructure/messaging/subscriptions/`, comprueba en
-estático las **dos** mitades — referenciar el guard sin actuar sobre su respuesta no
-deduplica nada:
+### 1. Consumo de mensajes → `dedupe` (solo con `subscriptions`)
 
-1. Llama a `IdempotencyGuard.tryRecord(handlerId, eventId)`.
-2. **Descarta el mensaje cuando devuelve `false`**, sin despachar al `UseCaseMediator`.
+Por cada `<Evento>Listener` de `infrastructure/messaging/subscriptions/`, las **dos**
+mitades — referenciar el guard sin actuar sobre su respuesta no deduplica nada:
 
-Y que la clave sea la que el diseño declara: el `contract.messageId` de la suscripción si
-lo hay, y si no `envelope.metadata().eventId()`. Un `UUID.randomUUID()` o un timestamp
-como `eventId` compila, pasa cualquier prueba de camino feliz y deduplica **cero**.
+1. Consulta el `IdempotencyGuard`.
+2. **Descarta el mensaje** (ack sin despachar) cuando dice que ya se procesó.
 
-Esto es no-conductual solo en apariencia: si falta, **no lo arreglas tú** —es código de
-comportamiento, y tocarlo es la frontera de § Frontera—. Reporta `dedupe: KO` con la lista
-de listeners afectados y el detalle a `remaining`, para que el orquestador lo devuelva al
-agente de código. `N/A` si el diseño no declara `subscriptions`.
+Y en el **orden** que declara el javadoc del `<Evento>Message`, que no es
+intercambiable ni es cosa del agente:
 
-Nota de alcance: el gate **conductual** de esto es el escenario de reentrega
-(`AbstractFlowIT.deliverXxx(...)` llamado dos veces con el mismo `messageId`), que ya
-corrió antes de llegar tú. Esta comprobación estática existe porque un diseño puede no
-tener ese escenario todavía, y porque leer el listener dice *por qué* falla, no solo que
-falla.
+| Si la operación de `triggers`… | El listener debe… | Por qué |
+|---|---|---|
+| **declara `transitions`** | `alreadyProcessed(...)` antes y `record(...)` **después** de despachar bien | un fallo transitorio deja el mensaje sin marcar y el broker lo reentrega; la repetición la frena el agregado |
+| **no las declara** | `tryRecord(...)` antes de despachar | no hay guarda de dominio, así que la ventana solo se cierra reclamando antes |
+
+El error caro es el cruzado: `tryRecord` en un handler reintentable marca como
+procesado un mensaje que falló y **lo pierde**. Si lo ves, es `dedupe: KO` aunque el
+guard esté llamado.
+
+Y que la clave sea la que el diseño declara: el `contract.messageId` de la suscripción
+si lo hay, y si no `envelope.metadata().eventId()`. Un `UUID.randomUUID()` o un
+timestamp como `eventId` compila, pasa cualquier prueba de camino feliz y deduplica
+**cero**.
+
+### 2. Idempotencia de petición → `commandIdempotency`
+
+Por cada operación con `idempotency` en `specs/use-cases.keel.yaml`, su handler:
+
+1. Usa el `IdempotencyStore` generado — `find(...)` antes y `save(...)` dentro de la
+   transacción del comando. Ni tabla propia, ni `SET NX` en la caché, ni un flag.
+2. Firma con `CommandSignature.of(command)`. Una firma escrita a mano (concatenar
+   campos, `hashCode()`, `toString()`) es `KO`: se compara contra firmas guardadas en
+   otro despliegue, y `hashCode()` ni siquiera es estable entre arranques.
+3. Con `keySource: payload-hash`, **no** hay `IdempotencyContext`: la clave es la
+   firma. Un `if (key.isPresent())` ahí es el defecto exacto que hace que la operación
+   no deduplique nunca sin que nada lo delate.
+4. La repetición **no re-ejecuta nada**: ni escrituras, ni eventos.
+
+### 3. Compensación → `compensation`
+
+Por cada operación que el stub marca como compensación (nota
+`Compensación de <dep>…` en su handler):
+
+1. Ejecuta la transición de vuelta que declara el diseño — el método de negocio del
+   agregado, no un setter ni un `save` directo. Un `// TODO` vivo en ese método
+   semántico es `KO`.
+2. Deshace también **contra el proveedor** si el diseño declara la activación de
+   vuelta: el handler tiene su `<C>Client` inyectado precisamente para eso.
+3. No añade su propia guarda de repetición: la que vale es la del agregado.
+
+Nota de alcance: el gate **conductual** de todo esto son los escenarios `FL-*` (la
+reentrega del mismo `messageId`, el reintento con la misma clave), que ya corrieron
+antes de llegar tú. Estas comprobaciones existen porque un diseño puede no tener esos
+escenarios todavía, y porque leer el código dice *por qué* falla, no solo que falla.
 
 ## El doble check (y qué NO haces)
 
@@ -328,8 +365,8 @@ Qué se ajustó y qué queda pendiente de decisión humana. Cierra siempre con e
 bloque estructurado que consume el orquestador:
 
 ```yaml
-status: OK | KO           # OK solo con compilación verde, contexto que arranca, esquema entregado/verificado
-                          # y escenarios al 100%
+status: OK | KO           # OK solo con compilación verde, contexto que arranca, esquema entregado/verificado,
+                          # escenarios al 100% y la cadena de idempotencia/compensación sin KO
 compiles: true | false
 scenarios: OK | KO        # ./gradlew integrationTest tras el pase: la no-regresión conductual
 contextTest: OK | KO      # ./gradlew test: contextLoads() bajo el perfil test (todos los beans arrancan sin infra)
@@ -350,10 +387,16 @@ indexes: OK | KO | N/A          # N/A sin persistencia o con base relacional; OK
                                 # contrastes en verde y el contrato de nombres comprobado
 indexesTested: OK | KO | N/A    # NUNCA PENDING: exportar índices solo lee, así que esta
                                 # comprobación sí se ejecuta aquí
-# --- consumo de eventos (solo con capa messaging y subscriptions) ---
-dedupe: OK | KO | N/A     # N/A sin subscriptions; OK = TODO <Evento>Listener referencia
-                          # IdempotencyGuard.tryRecord(...) y descarta el mensaje cuando
-                          # devuelve false. KO con la lista de listeners que no lo hacen
+# --- la cadena de idempotencia y compensación: mecanismos generados, uso escrito ---
+dedupe: OK | KO | N/A     # N/A sin subscriptions; OK = TODO <Evento>Listener consulta el
+                          # IdempotencyGuard, descarta el duplicado y usa el ORDEN que el
+                          # javadoc de su <Evento>Message prescribe. KO con la lista
+commandIdempotency: OK | KO | N/A  # N/A si ninguna operación declara idempotency; OK = usan
+                          # IdempotencyStore + CommandSignature, sin registro propio y sin
+                          # rama "sin clave" en payload-hash
+compensation: OK | KO | N/A        # N/A sin compensations; OK = cada handler compensador
+                          # ejecuta su transición de vuelta (sin TODO vivo) y, si el diseño
+                          # declara la activación de vuelta, avisa al proveedor
 issuesFixed: [...]        # ajustes no-conductuales aplicados
 remaining: [...]          # hallazgos conductuales sin hueco de diseño detrás
 designGaps:               # huecos del diseño que encontraste, como propuesta accionable

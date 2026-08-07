@@ -95,6 +95,15 @@ clients:
               type: uuid
               required: true
         timeoutMs: 4000
+        # Escritura ajena con reintentos: sin clave, un timeout de red inscribiría la
+        # retirada dos veces en el registro regulatorio, y esa es exactamente la deuda
+        # que la compensación de más abajo tendría que ir a deshacer.
+        idempotency:
+          keyFrom: payload-hash
+        retry:
+          maxAttempts: 3
+          initialDelayMs: 300
+          retryOn: [timeout, connection]
         circuitBreaker:
           failureRateThreshold: 50
           slidingWindowSize: 10

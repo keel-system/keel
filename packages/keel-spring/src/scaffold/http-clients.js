@@ -15,9 +15,11 @@
 
 import { javaFile, javaPath, subPackage } from './render.js';
 import { domainTypeImport } from './entities.js';
+import { outboundIdempotentCalls } from './http-idempotency.js';
 
 const PORT_PKG = 'domain.clients';
 const HTTP_PKG = 'infrastructure.http';
+const SUPPORT_PKG = 'application.support';
 
 export function generate(model) {
   if (!model.layersPresent.httpClients || !model.httpClients) return [];
@@ -25,6 +27,7 @@ export function generate(model) {
   if (model.httpClients.some((client) => client.auth?.type === 'oauth2-client-credentials')) {
     files.push(renderOAuth2Config(model));
   }
+  if (outboundIdempotentCalls(model).length > 0) files.push(renderOutboundIdempotency(model));
   for (const client of model.httpClients) {
     files.push(renderConfig(model, client));
     files.push(renderPort(model, client));
@@ -309,6 +312,63 @@ ${methods}
   };
 }
 
+// La clave que ESTE servicio le manda al proveedor. Es la cara simétrica de la
+// idempotencia de entrada: allí evitamos que un cliente nos ejecute dos veces;
+// aquí, que nuestro propio @Retry ejecute dos veces su trabajo. Un timeout no
+// distingue "no llegó" de "llegó y se hizo", así que sin clave el reintento de un
+// POST es una segunda ejecución — y eso es justo la deuda que luego intentan
+// arreglar las compensaciones.
+function renderOutboundIdempotency(model) {
+  const body = `/**
+ * Clave de idempotencia saliente, por llamada.
+ *
+ * <p>Lo que la hace útil es que el reintento produzca la MISMA clave: resilience4j
+ * vuelve a invocar el método entero, así que cualquier cosa aleatoria o dependiente
+ * del instante pediría una ejecución nueva al proveedor en cada intento, que es
+ * exactamente lo que se quiere evitar.
+ */
+public final class OutboundIdempotency {
+
+    private OutboundIdempotency() {
+        // Clase de utilidad.
+    }
+
+    /** Clave por CONTENIDO: dos peticiones idénticas son la misma intención. */
+    public static String fromPayload(String call, Object payload) {
+        return CommandSignature.of(Arrays.asList(call, payload));
+    }
+
+    /**
+     * Clave por CORRELACIÓN: el proveedor deduplica por intención de negocio, no por
+     * contenido — dos peticiones idénticas de dos ejecuciones distintas sí deben
+     * ejecutarse las dos.
+     *
+     * <p>Sin correlación abierta (un hilo de fondo, un arranque) se cae a la firma del
+     * contenido: es lo único estable que queda, y una clave aleatoria sería peor que
+     * no mandar ninguna.
+     */
+    public static String correlated(String call, Object payload) {
+        String correlationId = CorrelationContext.get();
+        return correlationId == null
+                ? fromPayload(call, payload)
+                : CommandSignature.of(Arrays.asList(call, correlationId));
+    }
+}`;
+
+  return {
+    path: javaPath(model, HTTP_PKG, 'OutboundIdempotency'),
+    content: javaFile(
+      subPackage(model, HTTP_PKG),
+      [
+        `${subPackage(model, SUPPORT_PKG)}.CommandSignature`,
+        `${subPackage(model, 'infrastructure.correlation')}.CorrelationContext`,
+        'java.util.Arrays'
+      ],
+      body
+    )
+  };
+}
+
 function renderCallMethod(model, client, call, imports) {
   addFieldImports(model, imports, callFields(call));
   const params = callParams(call).map((p) => p.decl);
@@ -340,18 +400,44 @@ function renderCallMethod(model, client, call, imports) {
     const headerSteps = call.headerParams
       .map((f) => `\n                .header("${f.name}", ${f.javaType === 'String' ? f.name : `String.valueOf(${f.name})`})`)
       .join('');
+    // Con clave saliente el wire request se hoista a variable: la firma tiene que
+    // ser la del MISMO objeto que se envía, y calcularla dos veces (una para el
+    // body, otra para la cabecera) es la forma de que un día dejen de coincidir.
+    let preamble = '';
     let bodyStep = '';
+    let payloadExpr = null;
     if (call.requestType) {
       const args = call.bodyFields.map((f) => f.name).join(', ');
-      bodyStep = `\n                .body(mapper.to${pascal}Request(${args}))`;
+      if (call.idempotency) {
+        preamble = `        ${call.requestType} request = mapper.to${pascal}Request(${args});\n`;
+        bodyStep = '\n                .body(request)';
+        payloadExpr = 'request';
+      } else {
+        bodyStep = `\n                .body(mapper.to${pascal}Request(${args}))`;
+      }
     } else if (call.hasBody) {
       bodyStep = '\n                .body(body)';
+      payloadExpr = 'body';
+    }
+    let idempotencyStep = '';
+    if (call.idempotency) {
+      imports.add(`${subPackage(model, HTTP_PKG)}.OutboundIdempotency`);
+      if (!payloadExpr) {
+        // Sin cuerpo, lo que identifica la petición son sus parámetros (el DELETE
+        // de un recurso concreto). Arrays.asList y no List.of: un parámetro
+        // opcional puede venir nulo y List.of lo rechazaría en tiempo de ejecución.
+        const params = callParams(call).map((p) => p.field.name);
+        imports.add('java.util.Arrays');
+        payloadExpr = params.length > 0 ? `Arrays.asList(${params.join(', ')})` : 'null';
+      }
+      const factory = call.idempotency.keyFrom === 'correlation' ? 'correlated' : 'fromPayload';
+      idempotencyStep = `\n                .header("${call.idempotency.header}", OutboundIdempotency.${factory}("${call.name}", ${payloadExpr}))`;
     }
     const todo = call.typed
       ? ''
       : `        // TODO (agente): ajusta ${call.responseType} y el request al contract\n        //   ${call.contract}\n`;
-    callBody = `${todo}        ${call.responseType} response = restClient.${verb}()
-                ${uriStep}${headerSteps}${bodyStep}
+    callBody = `${todo}${preamble}        ${call.responseType} response = restClient.${verb}()
+                ${uriStep}${headerSteps}${idempotencyStep}${bodyStep}
                 .retrieve()
                 .body(${call.responseType}.class);
         return mapper.to${pascal}Result(response);`;

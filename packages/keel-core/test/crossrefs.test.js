@@ -1237,6 +1237,32 @@ test('circuitBreaker sin fallback es warning y con fallback no', () => {
   assert.ok(!con.warnings.some((w) => w.includes(`circuitBreaker sin fallback`)));
 });
 
+// Reintentar es ejecutar otra vez: en una escritura ajena, el reintento duplica el
+// efecto al otro lado y un timeout no distingue "no llegó" de "llegó y se hizo".
+test('retry sobre una escritura ajena sin idempotencia declarada es warning', () => {
+  const escritura = {
+    contract: 'POST /withdrawals inscribe la retirada',
+    method: 'POST',
+    path: '/withdrawals',
+    retry: { maxAttempts: 3, retryOn: ['timeout'] },
+  };
+  const sin = run(httpLayers(escritura));
+  assert.ok(sin.warnings.some((w) => w.includes('reintenta un POST sin declarar')), sin.warnings.join('\n'));
+
+  const con = run(httpLayers({ ...escritura, idempotency: { keyFrom: 'payload-hash' } }));
+  assert.ok(!con.warnings.some((w) => w.includes('reintenta un POST')), con.warnings.join('\n'));
+  assert.deepEqual(con.errors, []);
+});
+
+test('una lectura no gana el aviso, y una clave en un GET sí', () => {
+  const lectura = { contract: 'GET /prices -> precios', method: 'GET', path: '/prices' };
+  const conRetry = run(httpLayers({ ...lectura, retry: { maxAttempts: 3 } }));
+  assert.ok(!conRetry.warnings.some((w) => w.includes('sin declarar')), conRetry.warnings.join('\n'));
+
+  const conClave = run(httpLayers({ ...lectura, idempotency: { keyFrom: 'payload-hash' } }));
+  assert.ok(conClave.warnings.some((w) => w.includes(`'idempotency' en un GET no aporta nada`)));
+});
+
 test('campo file en request con bucket inexistente es error', () => {
   const layers = httpLayers({
     contract: 'Sube el comprobante del cobro',
@@ -2506,6 +2532,16 @@ const compLayers = () => ({
         output: 'void',
         transitions: [{ entity: 'Product', from: ['retired'], to: 'active' }],
       },
+      // La pata del silencio: si el registro nunca contesta, ningún evento llega y
+      // la compensación no se dispara. Lo que no pasa solo lo detecta un barrido.
+      reconcileWithdrawals: {
+        description: 'Revisa las retiradas inscritas que siguen sin desenlace del registro.',
+        kind: 'command',
+        internal: true,
+        input: 'void',
+        output: 'void',
+        schedule: { cron: '0 0 * * * *' },
+      },
     },
   },
   api: {
@@ -2546,6 +2582,7 @@ const compLayers = () => ({
             via: { client: 'compliance', call: 'recordWithdrawal' },
             effect: 'La retirada queda inscrita en el registro regulatorio.',
             awaits: 'outcome',
+            reconciledBy: 'reconcileWithdrawals',
             onFailure: { action: 'ignore' },
           },
         },
@@ -2567,6 +2604,122 @@ test('compensación con transición de vuelta declarada no produce errores ni wa
   const { errors, warnings } = run(compLayers());
   assert.deepEqual(errors, []);
   assert.deepEqual(warnings, []);
+});
+
+// ─── La saga incompleta ──────────────────────────────────────────────────────
+
+const dosProveedores = () => {
+  const layers = compLayers();
+  layers['http-clients'].clients.warehouse = {
+    purpose: 'Reservar el hueco de almacén de la retirada.',
+    calls: { bookSlot: { contract: 'POST /slots reserva el hueco de retirada.' } },
+  };
+  layers.dependencies.dependencies.warehouse = {
+    description: 'Almacén, que reserva el hueco físico de la retirada.',
+    activations: {
+      bookSlot: {
+        triggeredBy: ['retireProduct'],
+        via: { client: 'warehouse', call: 'bookSlot' },
+        effect: 'El hueco de almacén queda reservado para la retirada.',
+        onFailure: { action: 'ignore' },
+      },
+    },
+  };
+  return layers;
+};
+
+test('encargar a dos proveedores compensando solo uno avisa', () => {
+  const { warnings } = run(dosProveedores());
+  assert.ok(
+    warnings.some((w) => w.includes(`'retireProduct' encarga trabajo a varios proveedores`)),
+    warnings.join('\n')
+  );
+  assert.ok(warnings.some((w) => w.includes('warehouse.bookSlot queda hecho')));
+});
+
+test('sin ninguna compensación declarada no hay contradicción que señalar', () => {
+  const layers = dosProveedores();
+  delete layers.dependencies.dependencies.compliance.compensations;
+  const { warnings } = run(layers);
+  assert.ok(!warnings.some((w) => w.includes('encarga trabajo a varios proveedores')), warnings.join('\n'));
+});
+
+// ─── El silencio: el desenlace en el que no llega ningún evento ──────────────
+
+test('compensación sin reconciliación avisa: si el evento no llega, nadie deshace nada', () => {
+  const layers = compLayers();
+  delete layers.dependencies.dependencies.compliance.activations.recordWithdrawal.reconciledBy;
+  const { warnings } = run(layers);
+  assert.ok(
+    warnings.some((w) => w.includes(`la compensación solo se dispara si llega 'WithdrawalRejected'`)),
+    warnings.join('\n')
+  );
+});
+
+test('la reconciliación tiene que correr sola: sin schedule es error', () => {
+  const layers = compLayers();
+  delete layers['use-cases'].operations.reconcileWithdrawals.schedule;
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) => e.includes(`'reconcileWithdrawals' no declara 'schedule'`)),
+    errors.join('\n')
+  );
+});
+
+test('reconciledBy hacia una operación inexistente es error', () => {
+  const layers = compLayers();
+  layers.dependencies.dependencies.compliance.activations.recordWithdrawal.reconciledBy = 'noExiste';
+  const { errors } = run(layers);
+  assert.ok(errors.some((e) => e.includes(`la operación 'noExiste' no existe en use-cases`)));
+});
+
+test('DLQ sin forma declarada de reejecución avisa', () => {
+  const layers = compLayers();
+  // Con reconciliación no hay aviso: el barrido es la vía de reejecución.
+  assert.ok(!run(layers).warnings.some((w) => w.includes('DLQ es trabajo sin deshacer')));
+
+  delete layers.dependencies.dependencies.compliance.activations.recordWithdrawal.reconciledBy;
+  const { warnings } = run(layers);
+  assert.ok(
+    warnings.some((w) => w.includes('no tiene forma declarada de reejecutarse')),
+    warnings.join('\n')
+  );
+});
+
+// Cuando el evento lo publica el propio proveedor, avisarnos y rechazar el trabajo son la
+// misma acción: ya lo sabe. La deuda aparece cuando el disparo viene de otro sitio y él
+// sigue creyendo que su encargo está en pie.
+const thirdPartyTrigger = () => {
+  const layers = compLayers();
+  layers.messaging.subscriptions.WithdrawalRejected.source = 'orders';
+  layers.dependencies.dependencies.orders = {
+    description: 'Servicio de pedidos.',
+    contract: { version: '1.0.0' },
+  };
+  return layers;
+};
+
+const localWarnings = (layers) =>
+  run(layers).warnings.filter((w) => w.includes('sigue en pie'));
+
+test('compensación disparada por un tercero sin vuelta al proveedor avisa', () => {
+  const warnings = localWarnings(thirdPartyTrigger());
+  assert.equal(warnings.length, 1, warnings.join('\n'));
+  assert.ok(warnings[0].includes("'reactivateProduct'") && warnings[0].includes("'compliance'"));
+});
+
+test('declarar la activación de vuelta silencia el aviso de compensación sin alcance', () => {
+  const layers = thirdPartyTrigger();
+  layers['http-clients'].clients.compliance.calls.cancelWithdrawal = {
+    contract: 'DELETE /withdrawals/{id} -> baja de la inscripción.',
+  };
+  layers.dependencies.dependencies.compliance.activations.cancelWithdrawal = {
+    triggeredBy: ['reactivateProduct'],
+    via: { client: 'compliance', call: 'cancelWithdrawal' },
+    effect: 'La inscripción de la retirada queda anulada.',
+    onFailure: { action: 'ignore' },
+  };
+  assert.deepEqual(localWarnings(layers), []);
 });
 
 test('spec sin transitions no falla por la ausencia del campo (retrocompatibilidad)', () => {
@@ -2710,6 +2863,23 @@ test('idempotency en una operación sin endpoint HTTP es error', () => {
   );
   // Y el mensaje apunta al mecanismo correcto para su disparador.
   assert.ok(errors.some((e) => e.includes('la reentrega se ataja con contract.messageId')));
+});
+
+// Lo que se guarda de la primera ejecución es un id: con eso se reconstruye una
+// ficha, no una lista — que depende del estado del resto del sistema al responder.
+test('idempotency sobre una respuesta que no se reconstruye desde un id avisa', () => {
+  const layers = compLayers();
+  const op = layers['use-cases'].operations.retireProduct;
+  op.idempotency = { keySource: 'client-key', ttlSeconds: 3600 };
+  op.output = { entity: 'Product', list: true };
+  const { warnings } = run(layers);
+  assert.ok(
+    warnings.some((w) => w.includes('la respuesta es una lista y de la primera')),
+    warnings.join('\n')
+  );
+
+  op.output = { entity: 'Product' };
+  assert.ok(!run(layers).warnings.some((w) => w.includes('de la primera ejecución solo se guarda')));
 });
 
 test('idempotency en una operación expuesta por HTTP es su sitio y no produce error', () => {

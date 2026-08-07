@@ -29,24 +29,58 @@ export function declaresIdempotency(model) {
   return (model.services ?? []).some((group) => group.operations.some((operation) => operation.idempotency));
 }
 
+/** Operaciones con `idempotency`, filtrables por `keySource`. */
+export function idempotentOperations(model, keySource = null) {
+  return (model.services ?? []).flatMap((group) =>
+    group.operations.filter(
+      (operation) => operation.idempotency && (!keySource || operation.idempotency.keySource === keySource)
+    )
+  );
+}
+
 // Sin persistencia no hay dónde registrar la clave de forma transaccional, que
 // es justamente lo que distingue a este mecanismo.
 export function usesHttpIdempotency(model) {
   return Boolean(model.layersPresent.persistence && declaresIdempotency(model));
 }
 
+/** Llamadas salientes que mandan clave de idempotencia al proveedor. */
+export function outboundIdempotentCalls(model) {
+  return (model.httpClients ?? []).flatMap((client) =>
+    client.calls.filter((call) => call.idempotency).map((call) => ({ client, call }))
+  );
+}
+
+// La firma también la usa la cara SALIENTE (la clave que mandamos al proveedor),
+// que puede existir sin que ninguna operación propia declare `idempotency`.
+export function usesCommandSignature(model) {
+  return usesHttpIdempotency(model) || outboundIdempotentCalls(model).length > 0;
+}
+
 export function generate(model) {
-  if (!usesHttpIdempotency(model)) return [];
+  if (!usesCommandSignature(model)) return [];
+  // La firma del contenido es del mecanismo, no del handler: con `client-key`
+  // es lo que distingue una repetición legítima de una clave reutilizada con
+  // otro cuerpo, y con `payload-hash` ES la clave. Describirla en prosa dejaba
+  // que dos handlers del mismo servicio la calculasen distinto.
+  const files = [renderSignature(model)];
+  if (!usesHttpIdempotency(model)) return files;
+
   const document = model.persistenceKind === 'document';
-  const files = [
+  files.push(
     renderPort(model),
-    renderContext(model),
     document ? renderDocument(model) : renderEntity(model),
     document ? renderDocumentRepository(model) : renderRepository(model),
     document ? renderMongoStore(model) : renderStore(model)
-  ];
-  // El filtro es el puente cabecera HTTP → contexto: sin capa api no hay cabecera.
-  if (model.layersPresent.api) files.push(renderFilter(model));
+  );
+  // El contexto y el filtro son el camino de la CABECERA: solo existen si alguna
+  // operación declara `client-key`. Con `payload-hash` la clave no viaja por
+  // transporte —sale del propio contenido—, así que no hay nada que transportar.
+  if (idempotentOperations(model, 'client-key').length > 0) {
+    files.push(renderContext(model));
+    // El filtro es el puente cabecera HTTP → contexto: sin capa api no hay cabecera.
+    if (model.layersPresent.api) files.push(renderFilter(model));
+  }
   return files;
 }
 
@@ -70,7 +104,9 @@ public interface IdempotencyStore {
     /**
      * @param scope clave de agrupación: el nombre de la operación del diseño, para
      *              que la misma cabecera en dos operaciones distintas no colisione
-     * @param idempotencyKey valor de la cabecera Idempotency-Key
+     * @param idempotencyKey la clave: el valor de la cabecera Idempotency-Key con
+     *                       {@code keySource: client-key}, o CommandSignature.of(command)
+     *                       con {@code payload-hash} — ahí no hay cabecera
      * @return el registro previo, si esa clave ya se usó y no ha expirado
      */
     Optional<StoredRequest> find(String scope, String idempotencyKey);
@@ -147,6 +183,138 @@ public final class IdempotencyContext {
   };
 }
 
+function renderSignature(model) {
+  const body = `/**
+ * Firma determinista del contenido de un Command.
+ *
+ * Dos usos, según el {@code keySource} que declare la operación:
+ * <ul>
+ *   <li>{@code client-key}: es la FIRMA que se guarda junto a la clave del cliente.
+ *       Sirve para detectar que alguien reutilizó su Idempotency-Key con otro cuerpo.</li>
+ *   <li>{@code payload-hash}: es la CLAVE misma. No hay cabecera que leer — el diseño
+ *       dice que el mismo contenido significa la misma intención.</li>
+ * </ul>
+ *
+ * <p>Por qué está generada y no la escribe cada handler: la firma se compara contra
+ * una guardada en otro despliegue. Si dos handlers la calculan distinto —o el mismo
+ * la calcula distinto tras un refactor— la comparación deja de significar nada y no
+ * hay nada que lo delate: el sistema simplemente deja de deduplicar.
+ *
+ * <p>Canónica quiere decir: componentes de record ordenados por nombre, cada escalar
+ * precedido de su longitud (así ningún contenido puede imitar un separador) y el
+ * orden de una lista conservado, porque es parte del contenido. Un null se codifica
+ * como marca propia en vez de omitirse: "ausencia vs. nulo" es una convención de
+ * determinación del diseño, y colapsarlos daría la misma firma a dos peticiones que
+ * el contrato distingue. Un binario entra por su digest, nunca por su identidad de
+ * objeto.
+ *
+ * <p>No usa Jackson a propósito: el ObjectMapper de la aplicación lo configuran la
+ * serialización de la API y el broker, y un cambio ahí —una precisión temporal, un
+ * @JsonInclude— movería en silencio firmas ya almacenadas.
+ */
+public final class CommandSignature {
+
+    private CommandSignature() {
+        // Clase de utilidad.
+    }
+
+    /** @return SHA-256 en hexadecimal de la forma canónica del command */
+    public static String of(Object command) {
+        return HexFormat.of().formatHex(sha256(canonical(command).getBytes(StandardCharsets.UTF_8)));
+    }
+
+    /** Forma canónica: visible para poder verificarla en una prueba. */
+    static String canonical(Object value) {
+        if (value == null) {
+            return "~";
+        }
+        if (value instanceof Optional<?> optional) {
+            return optional.map(CommandSignature::canonical).orElse("~");
+        }
+        // La escala forma parte del valor en BigDecimal: 1.50 y 1.5 son el mismo
+        // importe y deben dar la misma firma.
+        if (value instanceof BigDecimal number) {
+            return scalar(number.stripTrailingZeros().toPlainString());
+        }
+        // Un binario (el contenido de un FileUpload) puede pesar megas: lo que entra
+        // en la firma es su digest. Lo que NUNCA puede entrar es lo que devolvería
+        // String.valueOf de un array — la identidad del objeto, distinta en cada
+        // ejecución: la operación dejaría de deduplicar y nada lo delataría.
+        if (value instanceof byte[] bytes) {
+            return scalar(HexFormat.of().formatHex(sha256(bytes)));
+        }
+        if (value.getClass().isArray()) {
+            return IntStream.range(0, Array.getLength(value))
+                    .mapToObj(index -> canonical(Array.get(value, index)))
+                    .collect(Collectors.joining(",", "[", "]"));
+        }
+        if (value instanceof Map<?, ?> map) {
+            return map.entrySet().stream()
+                    .map(entry -> scalar(String.valueOf(entry.getKey())) + canonical(entry.getValue()))
+                    .sorted()
+                    .collect(Collectors.joining(",", "{", "}"));
+        }
+        if (value instanceof Collection<?> items) {
+            // El orden SÍ cuenta: dos listas con los mismos elementos en distinto
+            // orden son dos peticiones distintas para cualquier lector del diseño.
+            return items.stream().map(CommandSignature::canonical).collect(Collectors.joining(",", "[", "]"));
+        }
+        if (value.getClass().isRecord()) {
+            return Arrays.stream(value.getClass().getRecordComponents())
+                    .sorted(Comparator.comparing(RecordComponent::getName))
+                    .map(component -> scalar(component.getName()) + canonical(read(component, value)))
+                    .collect(Collectors.joining(",", "{", "}"));
+        }
+        return scalar(String.valueOf(value));
+    }
+
+    private static Object read(RecordComponent component, Object owner) {
+        try {
+            return component.getAccessor().invoke(owner);
+        } catch (ReflectiveOperationException failure) {
+            throw new IllegalStateException("No se pudo leer el componente " + component.getName(), failure);
+        }
+    }
+
+    /** Prefijo de longitud: hace imposible que un contenido imite un separador. */
+    private static String scalar(String raw) {
+        return raw.length() + ":" + raw;
+    }
+
+    private static byte[] sha256(byte[] data) {
+        try {
+            return MessageDigest.getInstance("SHA-256").digest(data);
+        } catch (NoSuchAlgorithmException unavailable) {
+            throw new IllegalStateException("SHA-256 no disponible en esta JVM", unavailable);
+        }
+    }
+}`;
+
+  return {
+    path: javaPath(model, SUPPORT_PKG, 'CommandSignature'),
+    content: javaFile(
+      subPackage(model, SUPPORT_PKG),
+      [
+        'java.lang.reflect.Array',
+        'java.lang.reflect.RecordComponent',
+        'java.math.BigDecimal',
+        'java.nio.charset.StandardCharsets',
+        'java.security.MessageDigest',
+        'java.security.NoSuchAlgorithmException',
+        'java.util.Arrays',
+        'java.util.Collection',
+        'java.util.Comparator',
+        'java.util.HexFormat',
+        'java.util.Map',
+        'java.util.Optional',
+        'java.util.stream.Collectors',
+        'java.util.stream.IntStream'
+      ],
+      body
+    )
+  };
+}
+
 function renderEntity(model) {
   const body = `/**
  * Petición ya atendida: un par (operación, clave de idempotencia).
@@ -171,8 +339,13 @@ public class IdempotencyRecordJpa {
     @Column(name = "signature", nullable = false, length = 128)
     private String signature;
 
-    /** Id del recurso resultante; null si la operación no crea ninguno. */
-    @Column(name = "resource_id", length = 64)
+    /**
+     * Id del recurso resultante; null si la operación no crea ninguno.
+     *
+     * <p>255 y no 64: un id de dominio no siempre es un uuid, y quedarse corto no
+     * falla al validar sino al guardar — con la operación ya ejecutada.
+     */
+    @Column(name = "resource_id", length = 255)
     private String resourceId;
 
     @Column(name = "created_at", nullable = false)

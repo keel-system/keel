@@ -132,21 +132,28 @@ comportamiento y contradecirlo en el esquema es peor que cualquiera de las dos o
 | `errors[].code` | `<PascalCode>Error` en `domain/errors` con el `code` exacto, extendiendo la subclase base de su `http` (404→`NotFoundException`, 409→`ConflictException`…; status sin subclase → `DomainException` con el `httpStatus` en la metadata); `ApiExceptionHandler` la traduce a `ErrorResponse` (`timestamp`, `status`, `error`, `code`, `message`, `details`) |
 | El mismo `code` con `http` **distinto** en dos operaciones | Una sola clase, pero con el status como **parámetro** del constructor (`new XxxError(mensaje, 422)`): extiende `DomainException` y `ApiExceptionHandler` resuelve el status desde la metadata. Cada handler pasa el `http` que su operación declara — pasarlo mal es un error de contrato invisible a la compilación |
 | `emits` | `raise(<E>Event.of(...))` **dentro del método de negocio del agregado** que provoca el cambio (`domain-modeling.md`); el handler no publica ni inyecta publishers. El adaptador de repositorio drena el buffer al persistir y el bridge lo entrega según `messaging.publishing.reliability` |
-| `idempotency: { keySource: client-key }` | **Build genera el mecanismo entero**: el puerto `IdempotencyStore` (`domain/idempotency`), su adaptador y la tabla `idempotency_record` (`infrastructure/persistence/idempotency`), el `IdempotencyContext` (`application/support`) y el filtro que le lleva la cabecera `Idempotency-Key`. Tú solo lo **usas** en el handler — ver abajo. No escribas otro registro: ni tabla propia, ni `SET NX` en la caché |
-| `idempotency: { keySource: payload-hash }` | Mismo mecanismo; lo que cambia es de dónde sale la clave: el hash determinista del payload en vez de la cabecera |
+| `idempotency: { keySource: client-key }` | **Build genera el mecanismo entero**: el puerto `IdempotencyStore` (`domain/idempotency`), su adaptador y la tabla `idempotency_record` (`infrastructure/persistence/idempotency`), `CommandSignature` (`application/support`), el `IdempotencyContext` (`application/support`) y el filtro que le lleva la cabecera `Idempotency-Key`. Tú solo lo **usas** en el handler — ver abajo. No escribas otro registro: ni tabla propia, ni `SET NX` en la caché |
+| `idempotency: { keySource: payload-hash }` | Mismo almacén, **otro esqueleto**: la clave es `CommandSignature.of(command)`, no la cabecera. Build **no** genera `IdempotencyContext` ni el filtro, porque no hay nada que transportar. No hay caso «sin clave»: aquí se deduplica siempre |
 | `cache` (solo queries) | Build genera `CacheConfig` (`@EnableCaching`, `CacheManager`, una constante y un TTL por operación cacheada, serializador JSON con `JavaTimeModule`, degradación a miss). El agente solo anota el adaptador: `@Cacheable(cacheNames = CacheConfig.<OPERACION>_CACHE, key = …, sync = true)` con la clave de `keyFields`, y `@CacheEvict` para `invalidatedBy` |
 | `schedule: { cron }` | `@Scheduled(cron = ...)` que despacha el mensaje de la operación vía `UseCaseMediator`; sin endpoint |
 | `internal: true` | Solo mensaje + handler en application; sin endpoint ni listener |
 
 ### Cómo se usa el `IdempotencyStore` en el handler
 
-El orden importa, y es el mismo para `client-key` y `payload-hash` (solo cambia de dónde sale la
-clave):
+El orden de los pasos es el mismo en los dos `keySource`. Lo que cambia —y no es un detalle— es
+si puede **no haber clave**: con `client-key` la cabecera es opcional, con `payload-hash` la clave
+sale del propio contenido y siempre está.
+
+**La firma no la calculas tú**: `CommandSignature.of(command)` (`application/support`) ya está
+generada. Se compara contra una firma guardada en otro despliegue, así que dos formas de
+calcularla —o un refactor que cambie una— dejan de deduplicar sin que nada lo delate.
+
+`keySource: client-key`:
 
 ```java
 Optional<String> key = IdempotencyContext.get();   // vacío = el cliente no mandó la cabecera
 if (key.isPresent()) {
-    String signature = /* hash determinista del contenido del command */;
+    String signature = CommandSignature.of(command);
     Optional<StoredRequest> previa = idempotencyStore.find("<nombreOperacion>", key.get());
     if (previa.isPresent()) {
         if (!previa.get().signature().equals(signature)) {
@@ -159,6 +166,22 @@ if (key.isPresent()) {
 }
 ```
 
+`keySource: payload-hash` — sin `IdempotencyContext` y **sin el `if`**: envolver esto en un
+`key.isPresent()` que nunca se cumple es exactamente cómo una operación acaba sin deduplicar
+nunca y en silencio.
+
+```java
+String key = CommandSignature.of(command);         // la clave ES la firma
+Optional<StoredRequest> previa = idempotencyStore.find("<nombreOperacion>", key);
+if (previa.isPresent()) {
+    return /* la MISMA respuesta, reconstruida desde previa.get().resourceId() */;
+}
+// … ejecuta el caso de uso …
+idempotencyStore.save("<nombreOperacion>", key, key, id.toString(), <ttlSeconds>);
+```
+
+- Con `payload-hash` no hay conflicto de firma posible: misma clave implica mismo contenido. El
+  error de «clave reutilizada con otro cuerpo» solo aplica a `client-key`.
 - El `scope` es el **nombre de la operación** del diseño: la misma cabecera en dos operaciones
   distintas no debe colisionar.
 - La repetición **no re-ejecuta nada**: ni escrituras, ni eventos. Si el escenario dice que
@@ -174,6 +197,8 @@ if (key.isPresent()) {
   OpenAPI y ningún escenario lo cubre.
 
 ### `Idempotency-Key` ausente: se ejecuta, no se rechaza
+
+Esto es **solo de `client-key`**: con `payload-hash` no hay cabecera que pueda faltar.
 
 `keySource: client-key` dice **de dónde sale la clave**, no que la cabecera sea obligatoria:
 el DSL no tiene dónde declarar esa exigencia, y un rechazo necesita un `code` público que
@@ -497,8 +522,9 @@ La publicación va **entera generada** salvo el envío físico. La cadena es: el
 | `subscriptions.E` | Record `<E>Message` (scaffolding) + listener del broker elegido (agente: `@KafkaListener`/`@RabbitListener`/`@SqsListener`) que deserializa el payload y despacha la operación de `triggers` vía mediator |
 | `subscriptions.E.contract.envelope` | `keel` → deserializa `EventEnvelope<EMessage>` y usa `data()`; `none` → el mensaje es el payload; `wrapped` → record `<E>Envelope` (scaffolding) con el payload colgando de `payloadPath` |
 | `subscriptions.E.contract.discriminator` | Filtro del listener: header (`@Header`) o campo del cuerpo; lo que no coincide con `value` se **descarta sin excepción** (una excepción dispararía reintentos y DLQ) |
-| `subscriptions.E.contract.messageId` | Clave de deduplicación leída antes de despachar (header o campo): la entrega es at-least-once. Se pasa a `IdempotencyGuard.tryRecord("<Listener>", <messageId>)`; sin `messageId` declarado, se usa `envelope.metadata().eventId()` |
-| Cualquier `subscriptions` (con capa `persistence`) | Generado: `ProcessedEventJpa` (tabla `processed_event`, PK compuesta handler+evento) + `ProcessedEventJpaRepository` + `IdempotencyGuard` (`tryRecord` en transacción propia, purga por cron) + `@EnableScheduling`, en `infrastructure/messaging/idempotency`. Es el mecanismo de deduplicación del servicio: el agente lo **usa** desde el listener, no escribe otro |
+| `subscriptions.E.contract.messageId` | Clave de deduplicación leída antes de despachar (header o campo): la entrega es at-least-once. Sin `messageId` declarado, se usa `envelope.metadata().eventId()`. **Qué método del guard** lo dice el javadoc del record generado, y depende del diseño — ver la fila siguiente |
+| Cualquier `subscriptions` (con capa `persistence`) | Generado: `ProcessedEventJpa` (tabla `processed_event`, PK compuesta handler+evento) + `ProcessedEventJpaRepository` + `IdempotencyGuard` + `@EnableScheduling`, en `infrastructure/messaging/idempotency`. Es el mecanismo de deduplicación del servicio: el agente lo **usa** desde el listener, no escribe otro |
+| Orden del registro de consumo | **Si la operación de `triggers` declara `transitions`**: `alreadyProcessed(...)` antes de despachar y `record(...)` DESPUÉS de que el handler termine bien. Un fallo transitorio deja el mensaje sin marcar y el broker lo reentrega; la repetición la frena el agregado. **Si no las declara**: `tryRecord(...)` antes, que es atómico — cierra la ventana del duplicado al precio de que un fallo del handler deje el mensaje marcado y perdido. Nunca al revés: registrar antes en un handler reintentable convierte un corte de red en trabajo que nadie hizo |
 | `EventEnvelope.metadata.correlationId` | Sale de `CorrelationContext` (`infrastructure/correlation`), que puebla `CorrelationFilter` en cada request HTTP (header `X-Correlation-Id`, generado si no viene, devuelto en la respuesta) y el listener en cada mensaje con `CorrelationContext.runWith(...)`. También llega al `ErrorResponse` y a cada línea de log (`logging.pattern.correlation`) |
 | `subscriptions.E.contract.format` / `schemaRef` | Deserializador del formato (JSON por defecto; avro/protobuf → schema registry de la fuente) |
 | `subscriptions.E.contract.unknownFields` | `ignore` → `@JsonIgnoreProperties(ignoreUnknown = true)` en el record; `fail` → sin la anotación (scaffolding) |
@@ -527,6 +553,7 @@ La publicación va **entera generada** salvo el envío físico. La cadena es: el
 | `calls.x.retry` | resilience4j `@Retry` con `maxAttempts`/`backoff`/`initialDelayMs` y, si el diseño declara el techo, `maxDelayMs` → `exponential-max-wait-duration`; solo para `retryOn` (`timeout`, `5xx`, `connection`); nunca 4xx |
 | `calls.x.circuitBreaker` | resilience4j `@CircuitBreaker` con `failureRateThreshold`/`slidingWindowSize`/`waitDurationMs` |
 | `calls.x.fallback` | Método de fallback que implementa la frase del diseño; si dispara un error de negocio, usa el `code` declarado en use-cases |
+| `calls.x.idempotency` | Generado: `OutboundIdempotency` (`infrastructure/http`) y la cabecera ya estampada en la llamada, con el wire request hoistado a variable para que la firma sea la del mismo objeto que se envía. `payload-hash` → `fromPayload(...)`; `correlation` → `correlated(...)`, que cae a la firma si no hay correlación abierta (una clave aleatoria pediría una ejecución nueva en cada reintento). **No inventes otra clave** ni la generes en el handler |
 
 ## `dependencies` — dependencies.keel.yaml
 
@@ -547,7 +574,8 @@ Capa de **síntesis**: casi todo lo que referencia ya está generado por otras c
 | `onMiss.action: fetch` | `<E>Reader.byKey()` = repositorio `.or(() -> hydrate(...))`; `hydrate` invoca el puerto (ojo: el mediator ya abrió transacción — ver `dependencies.md` regla 6) |
 | `onMiss.action: fail` | `.orElseThrow(new <Code>Error(...))` — la excepción ya existe del catálogo de `use-cases` (con status por constructor si el `code` es de status dinámico) |
 | `onMiss.action: degrade` | `byKey()` devuelve `Optional<E>`; el resultado degradado lo escribe el agente siguiendo la prosa de `degradedTo`, y debe ser distinguible de una respuesta normal |
-| `compensations[].onEvent` | Nada nuevo: es una suscripción normal, solo etiquetada como compensación en la documentación del proyecto |
+| `compensations[].onEvent` | Ninguna clase nueva: es una suscripción normal. Lo que cambia es el **handler que despacha**, y el stub lo lleva escrito (ver la fila siguiente) |
+| `compensations[].undoes` | La activación que se deshace. Su nombre, las entidades cuyo lifecycle movió y la guarda que impide aplicarla dos veces van al javadoc del listener y a la nota del handler compensador. Deshacer contra el proveedor **y** devolver el estado propio son las dos mitades: hacer solo una deja la entidad donde la puso un trabajo que ya no existe. La guarda de reentrega no la añade el handler — o es la transición del agregado (dominio, cubre también el camino HTTP) o es el `messageId` del listener; si el diseño no declara ninguna, es `designGap` |
 
 ## `persistence` — persistence.keel.yaml
 

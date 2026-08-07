@@ -158,25 +158,39 @@ misma raíz. Todo lo que hagas ocurre dentro de ella.
   el relay y el mapeo domain→integración ya vienen generados: de `messaging` solo escribes el
   puerto de envío del broker (`OutboxDispatcher` o `<Evento>Publisher`) y los listeners.
 - Los listeners **usan** las piezas ya generadas, no las reinventan: abren la correlación con
-  `CorrelationContext.runWith(...)` y deduplican con `IdempotencyGuard.tryRecord(...)`
+  `CorrelationContext.runWith(...)` y deduplican con el `IdempotencyGuard`
   (`infrastructure/messaging/idempotency`). Escribir otra tabla de procesados o un `SET NX`
   propio para esto es generación incorrecta.
   **Es el único eslabón de la idempotencia de consumo que no está garantizado por
-  construcción**, así que se escribe entero o no protege nada: (a) llamar a `tryRecord`, (b)
-  **descartar el mensaje si devuelve `false`**, sin despachar al mediator, y (c) usar como
+  construcción**, así que se escribe entero o no protege nada: (a) consultar el guard, (b)
+  **descartar el mensaje** (ack sin despachar) cuando dice que ya se procesó, y (c) usar como
   clave la que declara el diseño — el `contract.messageId` de la suscripción si lo hay, y si
   no `envelope.metadata().eventId()`. Un id generado en el listener (`UUID.randomUUID()`, un
-  timestamp) compila, pasa el camino feliz y deduplica cero. Lo verifican dos gates: el
-  escenario de reentrega, que entrega el mismo `messageId` dos veces, y la comprobación
-  estática del agente de calidad (`dedupe: OK|KO`).
+  timestamp) compila, pasa el camino feliz y deduplica cero.
+  El **orden** no lo eliges tú: lo prescribe el javadoc del `<Evento>Message` que generó build,
+  y las dos formas no son intercambiables. Con `alreadyProcessed(...)` antes y `record(...)`
+  después, un fallo transitorio deja el mensaje sin marcar y el broker lo reentrega — pide una
+  transición de dominio detrás que frene la repetición. Con `tryRecord(...)` antes, la ventana
+  del duplicado se cierra pero un fallo del handler deja el mensaje marcado y **perdido**.
+  Poner el segundo donde tocaba el primero convierte un corte de red en trabajo que nadie hizo.
+  Lo verifican dos gates: el escenario de reentrega, que entrega el mismo `messageId` dos
+  veces, y la comprobación estática del agente de calidad (`dedupe: OK|KO`).
   Y el listener tiene que **escuchar el destino que declara el diseño**
   (`messaging.subscriptions.<n>.topic` de `parameters/`), porque es al que el arnés entrega:
   un topic hardcodeado o distinto deja todos los escenarios de suscripción en timeout mudo.
 - Lo mismo con la idempotencia **de comando** (`idempotency` en una operación): el puerto
-  `IdempotencyStore`, su adaptador, la tabla `idempotency_record`, el `IdempotencyContext` y el
-  filtro de la cabecera **ya están generados**. Tu trabajo es usarlos en el handler según
-  `{{keel:docs}}/conventions/mapping.md`; una tabla propia o un `SET NX` para esto es generación
-  incorrecta, aunque el stack traiga caché.
+  `IdempotencyStore`, su adaptador, la tabla `idempotency_record`, `CommandSignature` y —solo
+  con `client-key`— el `IdempotencyContext` y el filtro de la cabecera **ya están generados**.
+  Tu trabajo es usarlos en el handler según `{{keel:docs}}/conventions/mapping.md`; una tabla
+  propia o un `SET NX` para esto es generación incorrecta, aunque el stack traiga caché, y la
+  firma **nunca** se escribe a mano (`hashCode()` ni siquiera es estable entre arranques).
+  Con `keySource: payload-hash` no hay cabecera ni contexto: la clave **es**
+  `CommandSignature.of(command)` y siempre está. Envolver eso en un `if (key.isPresent())` es
+  el defecto exacto que hace que la operación no deduplique nunca y en silencio
+  (`commandIdempotency: OK|KO`).
+- Y con la idempotencia **saliente** (`idempotency` en una llamada de `http-clients`): la
+  cabecera ya la estampa el adaptador generado. No la muevas ni la recalcules — que la clave
+  del reintento sea la misma es lo único que la hace servir para algo.
 - Todo identificador que escribas (paquetes, directorios, archivos, clases, métodos,
   variables, tablas) va en inglés; comentarios y docs en español. Un identificador en
   español en el diseño no se traduce por tu cuenta: es un `blocker`.

@@ -201,11 +201,22 @@ public class ProcessedEventJpa {
     public static class ProcessedEventId implements Serializable {
 
         /** Identifica al consumidor; convención: nombre simple de la clase del listener. */
-        @Column(name = "handler_id", nullable = false, length = 512)
+        @Column(name = "handler_id", nullable = false, length = 128)
         private String handlerId;
 
-        /** Identificador del mensaje: el messageId declarado en el diseño o metadata.eventId. */
-        @Column(name = "event_id", nullable = false, length = 64)
+        /**
+         * Identificador del mensaje: el messageId declarado en el diseño o
+         * metadata.eventId.
+         *
+         * <p>255 y no 64: el id lo elige quien publica, y no siempre es un uuid — un
+         * id compuesto o un MessageDeduplicationId de SQS FIFO se pasan de 64 con
+         * facilidad. Y quedarse corto aquí no da un error de validación: da una
+         * violación de longitud al insertar, es decir, un mensaje que se va a la DLQ
+         * por no caber en la tabla que existe para no procesarlo dos veces. Las dos
+         * columnas suman menos de 1600 bytes en utf8mb4, por debajo del límite de
+         * índice de cualquier motor soportado.
+         */
+        @Column(name = "event_id", nullable = false, length = 255)
         private String eventId;
 
         protected ProcessedEventId() {
@@ -295,10 +306,15 @@ function renderGuard(model) {
   // error: la carrera se resolvería sobrescribiendo y el duplicado se procesaría
   // otra vez. insert() fuerza la inserción y deja que el _id arbitre, que es
   // exactamente lo que hacía la clave primaria en la rama relacional.
+  //
+  // Y en la relacional, saveAndFlush y no save: JPA difiere el INSERT hasta el
+  // flush, así que con save la violación de clave no salta dentro del try —
+  // salta al commit, fuera del catch, y el listener ve un error en vez de un
+  // duplicado. La diferencia es que el mensaje acabe confirmado o en la DLQ.
   const write =
     model.persistenceKind === 'document'
       ? `            ${field}.insert(new ${entity}(key, Instant.now()));`
-      : `            ${field}.save(new ${entity}(key, Instant.now()));`;
+      : `            ${field}.saveAndFlush(new ${entity}(key, Instant.now()));`;
   // El sustantivo del log sigue al motor: en el relacional son filas de una tabla y
   // en el documental, documentos de una colección. Es lo que verá quien lea el log.
   // Quién arbitra la carrera: la clave primaria de la tabla o el _id del documento.
@@ -317,19 +333,34 @@ function renderGuard(model) {
   const body = `/**
  * Guarda de idempotencia del consumidor.
  *
- * Los listeners llaman a {@link #tryRecord(String, String)} ANTES de despachar
- * el mensaje: si devuelve false, el mensaje ya se procesó y hay que confirmarlo
- * (ack) sin volver a ejecutarlo. La entrega de cualquier broker es at-least-once
- * y el relay del outbox reintenta, así que la reentrega no es un caso raro: es
- * el comportamiento normal ante cualquier corte.
+ * La entrega de cualquier broker es at-least-once y el relay del outbox
+ * reintenta, así que la reentrega no es un caso raro: es el comportamiento
+ * normal ante cualquier corte. Lo que esta clase decide es qué hacer con ella.
  *
- * El registro va en su PROPIA transacción (REQUIRES_NEW) para que quede escrito
- * aunque la del handler revierta... y precisamente por eso el orden importa: si
- * la operación de negocio puede fallar y debe reintentarse, registra DESPUÉS de
- * procesar. Registrar antes convierte un fallo transitorio en un mensaje
- * perdido.
+ * <p><b>Hay dos órdenes posibles y no son intercambiables.</b> El registro va en
+ * su PROPIA transacción (REQUIRES_NEW), así que sobrevive al fallo del handler —
+ * y eso es justo lo que hace que el orden importe:
  *
- * Cadencia y retención de la purga salen de parameters/, nunca del código.
+ * <ol>
+ *   <li><b>Procesar y luego registrar</b> ({@link #alreadyProcessed} antes,
+ *       {@link #record} después de que el handler termine bien). Es el
+ *       <b>predeterminado</b>. Un fallo transitorio deja el mensaje sin marcar,
+ *       el broker lo reentrega y se vuelve a intentar. El precio: si el proceso
+ *       muere entre el commit del negocio y el registro, la reentrega se procesa
+ *       dos veces — por eso este orden pide una guarda de dominio detrás (una
+ *       transición de lifecycle que no admita repetición), que es la única que
+ *       protege de verdad.</li>
+ *   <li><b>Registrar y luego procesar</b> ({@link #tryRecord}, atómico). Cierra
+ *       la ventana del duplicado, pero convierte cualquier fallo transitorio en
+ *       un mensaje <b>perdido</b>: quedó marcado como procesado y nunca se
+ *       ejecutó. Solo cuando reprocesar es inaceptable Y perder es tolerable.</li>
+ * </ol>
+ *
+ * <p>Deshacer trabajo (una compensación) va casi siempre por el primer orden: lo
+ * que no se puede perder es el mensaje que revierte algo real, y el guard del
+ * agregado absorbe la repetición.
+ *
+ * <p>Cadencia y retención de la purga salen de parameters/, nunca del código.
  */
 @Component
 public class IdempotencyGuard {
@@ -346,25 +377,51 @@ public class IdempotencyGuard {
     }
 
     /**
+     * ¿Ya se procesó este mensaje? Consulta sin efectos, para descartar la
+     * reentrega antes de despachar nada.
+     *
      * @param handlerId identificador del consumidor (nombre simple del listener)
      * @param eventId   identificador del mensaje (messageId del diseño o metadata.eventId)
-     * @return true si es la primera vez y hay que procesar; false si es un duplicado
+     * @return true si ya está registrado y hay que confirmarlo (ack) sin ejecutarlo
+     */
+    @Transactional(readOnly = true, propagation = Propagation.REQUIRES_NEW)
+    public boolean alreadyProcessed(String handlerId, String eventId) {
+        return ${field}.existsById(new ${entity}.ProcessedEventId(handlerId, eventId));
+    }
+
+    /**
+     * Registra el mensaje como procesado. Se llama DESPUÉS de que el handler haya
+     * terminado bien, en su propia transacción para que el registro no dependa de
+     * la del negocio (que ya commiteó).
+     *
+     * @return true si lo registró esta llamada; false si otra entrega simultánea
+     *         llegó primero — no es un error, es la carrera resuelta por la BD
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public boolean tryRecord(String handlerId, String eventId) {
+    public boolean record(String handlerId, String eventId) {
         ${entity}.ProcessedEventId key = new ${entity}.ProcessedEventId(handlerId, eventId);
-        if (${field}.existsById(key)) {
-            return false;
-        }
         try {
 ${write}
             return true;
         } catch (DataIntegrityViolationException duplicate) {
-            // Otra entrega del mismo mensaje ganó la carrera entre el existsById
-            // y el insert: ${arbiter}
-            log.debug("Idempotencia: {} ya procesado por {} (carrera resuelta en la PK)", eventId, handlerId);
+            // Dos entregas del mismo mensaje procesándose a la vez: ${arbiter}
+            log.debug("Idempotencia: {} ya registrado por {} (carrera resuelta en la clave)", eventId, handlerId);
             return false;
         }
+    }
+
+    /**
+     * Reclama el mensaje ANTES de procesarlo, de forma atómica. Ver la nota de la
+     * clase: si el handler falla después de esto, el mensaje se pierde.
+     *
+     * @return true si es la primera vez y hay que procesar; false si es un duplicado
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public boolean tryRecord(String handlerId, String eventId) {
+        if (alreadyProcessed(handlerId, eventId)) {
+            return false;
+        }
+        return record(handlerId, eventId);
     }
 
     @Scheduled(cron = "\${processed-event.purge.cron:0 0 4 * * *}")

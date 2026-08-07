@@ -176,6 +176,10 @@
           "description": "Qué necesita saber la operación propia. outcome: el resultado del trabajo, y no puede continuar sin él. acknowledgement: que el proveedor lo aceptó, no que lo terminó. nothing: se delega y se sigue. Es una decisión de negocio: determina si el trabajo ajeno puede fallar sin que se entere nadie.",
           "$comment": "outcome exige un canal síncrono: publicar un evento no devuelve resultado. Lo comprueba crossrefs."
         },
+        "reconciledBy": {
+          "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/operationName",
+          "description": "Operación propia (con `schedule`) que barre los encargos de esta activación que nunca recibieron desenlace. Es la pata del SILENCIO: una compensación se dispara ante un evento, y si el proveedor cae, pierde el mensaje o ni siquiera sabe que falló, ese evento no llega nunca y nada lo detecta. Sin esto, el único final posible de un encargo perdido es que lo note una persona."
+        },
         "onFailure": { "$ref": "#/$defs/onFailure" }
       },
       "allOf": [

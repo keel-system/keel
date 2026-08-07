@@ -1063,6 +1063,29 @@ export function checkCrossRefs({ layers, wip = false }) {
       if (call.circuitBreaker && !call.fallback) {
         warnings.push(`${where}: circuitBreaker sin fallback — define qué hace el servicio con el circuito abierto`);
       }
+
+      // Reintentar una escritura ajena la ejecuta dos veces al otro lado. Nuestra
+      // `idempotency` de use-cases protege de que un cliente nos repita a nosotros;
+      // no protege de que nosotros repitamos al proveedor, y un timeout no dice si
+      // el trabajo se hizo. Es además la deuda que las compensaciones intentan
+      // arreglar después, cuando ya hay dos cobros. GET es seguro por definición.
+      const unsafe = call.method && !['GET'].includes(call.method);
+      if (call.retry && (call.retry.maxAttempts ?? 1) > 1 && unsafe && !call.idempotency) {
+        warnings.push(
+          `${where}: reintenta un ${call.method} sin declarar 'idempotency' — cada reintento vuelve a ejecutar el ` +
+            `trabajo en el proveedor, y un timeout no distingue "no llegó" de "llegó y se hizo". Declara la clave que ` +
+            `le mandas (idempotency.keyFrom) o, si el proveedor no la honra, deja escrito en 'contract' que reintentar ` +
+            `duplica`
+        );
+      }
+      // Al revés: prometer una clave sin decir cómo se llama la cabecera es del
+      // schema; prometerla sin reintentos ni circuito no es un error, pero sí un
+      // dato del contrato del proveedor que conviene que se lea.
+      if (call.idempotency && call.method === 'GET') {
+        warnings.push(
+          `${where}: 'idempotency' en un GET no aporta nada — una lectura repetida no duplica ningún efecto`
+        );
+      }
     }
   }
 
@@ -1222,6 +1245,25 @@ export function checkCrossRefs({ layers, wip = false }) {
         }
 
         checkDeclaredError(spec.onFailure?.error, `${where}.onFailure.error`, spec.triggeredBy, 'triggeredBy');
+
+        // La reconciliación es un barrido, no una reacción: si no corre sola, no
+        // corre. Una operación sin `schedule` que se declare aquí es una promesa
+        // que nadie cumple — y justo la que se cumple sola cuando todo va bien.
+        if (spec.reconciledBy) {
+          const sweeper = operations[spec.reconciledBy];
+          if (!sweeper) {
+            errors.push(`${where}.reconciledBy: la operación '${spec.reconciledBy}' no existe en use-cases`);
+          } else if (!sweeper.schedule) {
+            errors.push(
+              `${where}.reconciledBy: '${spec.reconciledBy}' no declara 'schedule' — la reconciliación detecta lo que ` +
+                `NO ha pasado (un desenlace que no llegó), así que nada la dispara salvo el reloj`
+            );
+          } else if (sweeper.kind === 'query') {
+            errors.push(
+              `${where}.reconciledBy: '${spec.reconciledBy}' es kind: query — reconciliar es corregir el estado, no leerlo`
+            );
+          }
+        }
       }
 
       // Compensaciones. Hasta aquí solo se comprobaba que las referencias existieran, que
@@ -1316,7 +1358,36 @@ export function checkCrossRefs({ layers, wip = false }) {
         // a mano— es justo el que no manda cabecera, así que añadir `idempotency` tampoco
         // lo cierra. Lo único que protege por debajo de las dos puertas es el guard del
         // agregado, porque vive en el dominio y no en el borde.
+        const undone = compensation.undoes ? (dep.activations?.[compensation.undoes] ?? null) : null;
         const reachableByHttp = Boolean(api && (autoCoversOp(undoOpName) || apiEndpoints.has(undoOpName)));
+
+        // El silencio. Toda esta compensación cuelga de que llegue un evento, y hay
+        // un desenlace en el que no llega ninguno: el proveedor cae, pierde el
+        // mensaje, o ni siquiera sabe que su trabajo hay que deshacerlo. Entonces el
+        // encargo queda hecho, nuestro estado queda donde lo dejó, y no hay ningún
+        // hecho que dispare nada — el sistema no está roto, está callado, que es
+        // peor. Lo único que detecta lo que NO pasa es un barrido.
+        if (undone && !undone.reconciledBy) {
+          warnings.push(
+            `${where}: la compensación solo se dispara si llega '${compensation.onEvent}'. Si ese evento no llega nunca ` +
+              `—el proveedor cae, el mensaje se pierde, o el fallo ni se publica— el encargo de '${compensation.undoes}' ` +
+              `queda hecho y nadie lo deshace. Declara ${depName}.activations.${compensation.undoes}.reconciledBy con una ` +
+              `operación programada que barra los encargos sin desenlace`
+          );
+        }
+
+        // Y el otro final silencioso: la DLQ. Es la red que exige la regla de arriba,
+        // pero un mensaje ahí es trabajo que nadie deshizo esperando a que alguien
+        // lo mire. Si el diseño no dice por dónde se reejecuta —ni endpoint ni
+        // barrido— ese alguien tendrá que abrir la base de datos a mano.
+        if (sub.onFailure?.deadLetter && !reachableByHttp && !undone?.reconciledBy) {
+          warnings.push(
+            `${where}: la suscripción manda a la DLQ lo que no logra procesar, y lo que caiga ahí no tiene forma declarada ` +
+              `de reejecutarse: '${undoOpName}' no se expone por HTTP ni hay reconciliación que lo barra. Un mensaje en la ` +
+              `DLQ es trabajo sin deshacer esperando a que alguien lo note`
+          );
+        }
+
         if (reachableByHttp && !guards.includes('transitions')) {
           errors.push(
             `${where}: '${undoOpName}' se puede ejecutar por dos caminos (la suscripción a '${compensation.onEvent}' y su ` +
@@ -1345,8 +1416,71 @@ export function checkCrossRefs({ layers, wip = false }) {
               );
             }
           }
+
+          // La otra mitad. Deshacer el estado propio es la parte que se ve al probar; el
+          // trabajo encargado vive en el proveedor, y ahí solo hay dos desenlaces buenos:
+          // o el proveedor ya sabe que aquello no vale, o alguien se lo dice.
+          //
+          // Lo sabe cuando el evento que dispara la compensación lo publica ÉL: rechazar
+          // el trabajo y avisar es la misma acción, y pedirle además que lo deshaga sería
+          // hablar de más. Cuando el disparo viene de otro sitio —un fallo nuestro
+          // posterior, un tercero— el proveedor sigue creyendo que su encargo está en pie,
+          // y quien tiene que sacarlo de ese error es este servicio. Si la operación
+          // compensadora no aparece en ningún `triggeredBy` ni `usedBy` de la dependencia,
+          // no tiene por dónde: `triggeredBy` y `usedBy` son el único enlace del DSL entre
+          // un caso de uso y el trabajo que delega, así que el generador no le inyecta
+          // cliente alguno y el camino de menor resistencia del agente es no llamar a
+          // nadie. Aviso y no error: la deuda puede ser tolerable (un correo que ya se
+          // envió no se desenvía), pero se decide, no se olvida.
+          const fromProvider = !sub.source || sub.source === depName;
+          const reachesProvider =
+            Object.values(dep.activations ?? {}).some((spec) => (spec.triggeredBy ?? []).includes(undoOpName)) ||
+            Object.values(dep.needs ?? {}).some((spec) => (spec.usedBy ?? []).includes(undoOpName));
+          if (undone.via?.client && !fromProvider && !reachesProvider) {
+            warnings.push(
+              `${where}: '${undoOpName}' devuelve el estado propio, pero '${compensation.onEvent}' lo publica '${sub.source}' ` +
+                `y no '${depName}' — para '${depName}' el trabajo de '${compensation.undoes}' sigue en pie, y nada en el diseño ` +
+                `se lo desmiente: '${undoOpName}' no aparece en ningún 'triggeredBy' ni 'usedBy' suyo, así que tampoco recibe su ` +
+                `cliente. Declara la activación de vuelta con triggeredBy: [${undoOpName}], o deja escrito por qué la deuda con ` +
+                `'${depName}' es tolerable`
+            );
+          }
         }
       }
+    }
+
+    // La saga incompleta. Una operación que encarga trabajo a DOS proveedores tiene un
+    // punto intermedio: el primero ya está hecho y el segundo aún no. Si el diseño
+    // declara cómo deshacer uno de esos encargos, está admitiendo que ese punto
+    // intermedio existe y que hay que salir de él — y entonces callar sobre el otro
+    // encargo no es una decisión, es un olvido. Es la deuda que menos se ve, porque
+    // cada dependencia se lee por separado y el hueco solo aparece al cruzarlas.
+    const encargosPorOperacion = new Map();
+    const compensadas = new Set();
+    for (const [depName, dep] of Object.entries(dependencies.dependencies ?? {})) {
+      for (const [action, spec] of Object.entries(dep.activations ?? {})) {
+        for (const opName of spec.triggeredBy ?? []) {
+          if (!encargosPorOperacion.has(opName)) encargosPorOperacion.set(opName, []);
+          encargosPorOperacion.get(opName).push({ depName, action });
+        }
+      }
+      for (const compensation of dep.compensations ?? []) {
+        if (compensation.undoes) compensadas.add(`${depName}|${compensation.undoes}`);
+      }
+    }
+    for (const [opName, encargos] of encargosPorOperacion) {
+      if (new Set(encargos.map((e) => e.depName)).size < 2) continue;
+      const conVuelta = encargos.filter((e) => compensadas.has(`${e.depName}|${e.action}`));
+      const sinVuelta = encargos.filter((e) => !compensadas.has(`${e.depName}|${e.action}`));
+      // Sin ninguna compensación no hay contradicción que señalar: el diseño no ha
+      // admitido todavía que el encargo pueda tener que deshacerse.
+      if (conVuelta.length === 0 || sinVuelta.length === 0) continue;
+      warnings.push(
+        `dependencies: la operación '${opName}' encarga trabajo a varios proveedores y solo declara cómo deshacer el de ` +
+          `${conVuelta.map((e) => `${e.depName}.${e.action}`).join(', ')} — si falla después de haber encargado los dos, ` +
+          `${sinVuelta.map((e) => `${e.depName}.${e.action}`).join(', ')} queda hecho y nadie lo deshace. Declara su ` +
+          `compensación o deja escrito por qué esa deuda es tolerable`
+      );
     }
 
     // Inversas: todo canal de integración existe porque alguna dependencia lo justifica.
@@ -1627,6 +1761,23 @@ export function checkCrossRefs({ layers, wip = false }) {
         : `no la invoca ningún cliente externo: lo que evita el efecto doble es la clave natural en persistence o una transición de lifecycle irrepetible`;
       errors.push(
         `use-cases: ${opName}.idempotency: la clave llega por la cabecera Idempotency-Key y esta operación no tiene endpoint HTTP que la reciba — ${alternativa}`
+      );
+    }
+
+    // El contrato de la idempotencia no es rechazar la repetición: es DEVOLVER la
+    // respuesta original. Y lo que se guarda de la primera ejecución es el id del
+    // recurso creado — con eso se reconstruye la ficha de una entidad, pero no una
+    // lista ni una página: esas dependen del estado del resto del sistema en el
+    // momento de responder, y para entonces ya cambió. La repetición devolvería algo
+    // distinto de lo que devolvió la primera llamada, que es justo lo que promete no
+    // hacer. Void no entra: no devolver nada se reproduce solo.
+    const output = op.output;
+    if (op.idempotency && output && typeof output === 'object' && (output.list || output.paginated)) {
+      warnings.push(
+        `use-cases: ${opName}.idempotency: la respuesta es ${output.paginated ? 'paginada' : 'una lista'} y de la primera ` +
+          `ejecución solo se guarda el id del recurso — una repetición no puede devolver la MISMA respuesta, que es lo que ` +
+          `la idempotencia promete. O la operación devuelve el recurso creado, o lo que hace falta declarar es que la ` +
+          `repetición devuelve el estado actual`
       );
     }
   }

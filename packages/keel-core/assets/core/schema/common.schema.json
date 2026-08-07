@@ -273,6 +273,26 @@
         "description": { "type": "string" }
       }
     },
+    "outboundIdempotency": {
+      "type": "object",
+      "required": ["keyFrom"],
+      "additionalProperties": false,
+      "description": "Clave de idempotencia que ESTE servicio envía al proveedor para que un reintento no duplique el efecto al otro lado. Es la cara saliente de use-cases.<op>.idempotency: sin ella, un retry sobre una escritura ajena cobra, reserva o envía dos veces, y eso ya no lo arregla ninguna guarda propia. Solo tiene sentido si el proveedor la honra: su contrato debe decirlo.",
+      "properties": {
+        "keyFrom": {
+          "type": "string",
+          "enum": ["payload-hash", "correlation"],
+          "description": "De dónde sale la clave. 'payload-hash': firma determinista del contenido de la petición — el reintento manda lo mismo, luego la misma clave. 'correlation': el identificador de correlación de la ejecución en curso, para cuando el proveedor deduplica por intención de negocio y no por contenido (dos peticiones idénticas de dos ejecuciones distintas SÍ deben ejecutarse dos veces)."
+        },
+        "header": {
+          "type": "string",
+          "minLength": 1,
+          "default": "Idempotency-Key",
+          "description": "Cabecera que transporta la clave. Solo si el proveedor usa otra distinta de Idempotency-Key."
+        },
+        "description": { "type": "string" }
+      }
+    },
     "retryPolicy": {
       "type": "object",
       "required": ["maxAttempts"],
@@ -408,6 +428,7 @@
           }
         },
         "timeoutMs": { "type": "integer", "minimum": 1 },
+        "idempotency": { "$ref": "#/$defs/outboundIdempotency" },
         "retry": { "$ref": "#/$defs/retryPolicy" },
         "circuitBreaker": { "$ref": "#/$defs/circuitBreaker" },
         "fallback": {

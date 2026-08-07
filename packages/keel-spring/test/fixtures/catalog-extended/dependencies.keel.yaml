@@ -67,6 +67,9 @@ dependencies:
           call: recordWithdrawal
         effect: La retirada queda inscrita en el registro regulatorio con su motivo.
         awaits: outcome
+        # Sin esto, la compensación de abajo solo existe si el registro se acuerda de
+        # publicar su rechazo. Cuando no lo hace, nada lo detecta.
+        reconciledBy: reconcileWithdrawals
         onFailure:
           action: fail
           error: COMPLIANCE_UNAVAILABLE

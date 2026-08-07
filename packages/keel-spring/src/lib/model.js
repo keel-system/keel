@@ -1119,6 +1119,18 @@ function parseContract(contract) {
   return { method: match[1], path: match[2], pathVars };
 }
 
+function resolveOutboundIdempotency(clientId, callName, call, layers, warnings) {
+  const header = call.idempotency.header ?? 'Idempotency-Key';
+  const hasCorrelation = Boolean(layers.api || layers.messaging);
+  if (call.idempotency.keyFrom === 'correlation' && !hasCorrelation) {
+    warnings.push(
+      `http-clients ${clientId}.${callName}: idempotency.keyFrom 'correlation' sin capa api ni messaging — nadie abre el contexto de correlación, así que la clave sale del contenido de la petición.`
+    );
+    return { keyFrom: 'payload-hash', header };
+  }
+  return { keyFrom: call.idempotency.keyFrom, header };
+}
+
 function collectHttpClients(layers, domainTypes, inlineEnumName, warnings) {
   const clients = layers['http-clients']?.clients;
   if (!clients) return null;
@@ -1178,6 +1190,12 @@ function collectHttpClients(layers, domainTypes, inlineEnumName, warnings) {
         responseFields,
         contract: call.contract ?? '',
         timeoutMs: call.timeoutMs ?? null,
+        // La cara saliente de la idempotencia: la clave que le mandamos al proveedor
+        // para que NUESTRO reintento no ejecute su trabajo dos veces. `correlation`
+        // exige que haya correlación que leer: sin api ni messaging nadie abre el
+        // contexto, así que se degrada al contenido y se dice — una clave nula o
+        // aleatoria pediría una ejecución nueva en cada intento.
+        idempotency: call.idempotency ? resolveOutboundIdempotency(clientId, callName, call, layers, warnings) : null,
         retry: call.retry ?? null,
         circuitBreaker: call.circuitBreaker ?? null,
         fallback: call.fallback ?? null,
@@ -1288,6 +1306,9 @@ function collectDependencies(layers, entities, httpClients, subscriptions, error
         // El default del schema: pedir el trabajo y esperar solo el acuse.
         awaits: spec.awaits ?? 'acknowledgement',
         onFailure: resolveOnFailure(depId, name, spec.onFailure, errorByCode, warnings),
+        // La pata del silencio: qué operación programada barre los encargos que
+        // nunca recibieron desenlace. Sin ella, un encargo perdido no tiene final.
+        reconciledBy: spec.reconciledBy ?? null,
         http: via.client ? resolveActivationCall(depId, name, via, clientById, warnings) : null,
         // Evento propio del servicio: lo emite el agregado con raise(...), no el
         // handler. Aquí solo se resuelve su clase para poder citarla en el stub.
@@ -1300,6 +1321,22 @@ function collectDependencies(layers, entities, httpClients, subscriptions, error
         if (!operation) continue;
         (operation.dependencyActivations ??= []).push({ dependency: depId, activation });
       }
+      // La operación que reconcilia no aparece en ningún triggeredBy —no la dispara
+      // un caso de uso, la dispara el reloj—, así que sin este enlace su stub sería
+      // un @Scheduled vacío sin ninguna pista de qué tiene que barrer.
+      if (activation.reconciledBy) {
+        const sweeper = opByName.get(activation.reconciledBy);
+        // Qué queda esperando: el estado en el que dejaron la entidad las
+        // operaciones que encargaron el trabajo. Es por dónde empieza el barrido.
+        const waiting = [
+          ...new Set(
+            (activation.triggeredBy ?? [])
+              .flatMap((opName) => opByName.get(opName)?.transitions ?? [])
+              .map((transition) => `${transition.entity} en ${transition.to}`)
+          )
+        ];
+        if (sweeper) (sweeper.reconciles ??= []).push({ dependency: depId, activation, waiting });
+      }
       // Retro-enlace hacia la llamada: es lo que permite a http-clients.js
       // escribir el cuerpo del fallback del circuit breaker con la política que
       // el diseño ya declaró en onFailure, en vez de dejar un TODO.
@@ -1308,10 +1345,36 @@ function collectDependencies(layers, entities, httpClients, subscriptions, error
       }
     }
 
+    // Compensaciones. No generan código propio —son una suscripción normal—, pero sí
+    // cambian lo que el agente tiene que escribir en el handler que dispara la
+    // suscripción: deshacer trabajo encargado no es aplicar un cambio más. `undoes`
+    // es el único dato que dice QUÉ encargo se deshace, y con él, qué entidades movió
+    // ese encargo y por tanto a qué estado hay que devolverlas. Sin llevarlo hasta el
+    // stub, el agente lee un handler indistinguible de cualquier otro.
     const compensations = (dep.compensations ?? []).map((item) => {
       const sub = subscriptionByEvent.get(item.onEvent);
-      if (sub) sub.compensates = { dependency: depId, description: item.description ?? '' };
-      return { event: item.onEvent, description: item.description ?? '', subscription: sub ?? null };
+      const undone = item.undoes ? (activations.find((a) => a.name === item.undoes) ?? null) : null;
+      // Las entidades cuyo lifecycle movieron las operaciones que encargaron el
+      // trabajo: son las que la compensación tiene que devolver a su sitio.
+      const moves = [
+        ...new Set(
+          (undone?.triggeredBy ?? [])
+            .flatMap((opName) => opByName.get(opName)?.transitions ?? [])
+            .map((transition) => transition.entity)
+        )
+      ];
+      const mark = { dependency: depId, description: item.description ?? '', undoes: item.undoes ?? null, moves };
+      if (sub) {
+        sub.compensates = mark;
+        const undoOp = sub.trigger ? opByName.get(sub.trigger) : null;
+        if (undoOp) undoOp.compensates = { ...mark, event: item.onEvent, deduplicated: Boolean(sub.messageId) };
+      }
+      return {
+        event: item.onEvent,
+        description: item.description ?? '',
+        undoes: item.undoes ?? null,
+        subscription: sub ?? null
+      };
     });
 
     result.push({
@@ -1483,6 +1546,11 @@ function collectSubscriptions(layers, services, domainTypes, inlineEnumName, war
       externalChannel: external,
       trigger,
       triggerMessageClass: triggerOp?.messageClass ?? null,
+      // ¿Hay una guarda EN EL DOMINIO detrás de este listener? Es lo que decide el
+      // orden del registro de idempotencia: con ella, procesar y luego registrar (un
+      // fallo transitorio se reintenta); sin ella, la única forma de no repetir el
+      // efecto es reclamar antes, al precio de perder el mensaje si el handler falla.
+      triggerHasDomainGuard: (triggerOp?.transitions ?? []).length > 0,
       // Cómo se construye el mensaje CQRS desde el payload: componente del
       // command → campo del payload que lo alimenta (null = el agente decide).
       triggerArguments: triggerArguments(def, triggerOp, fields),

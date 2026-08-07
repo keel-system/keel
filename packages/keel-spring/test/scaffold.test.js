@@ -1720,6 +1720,12 @@ test('suscripción con contract: envoltura de la fuente, alias de campo y contra
   assert.ok(message.includes("payload cuelga de 'data'"));
   assert.ok(message.includes("Se reconoce por header 'eventType' == 'stock.depleted'"));
   assert.ok(message.includes("Deduplica por field 'messageId'"));
+  // Y CÓMO deduplicar, que no es intercambiable: retireProduct declara transiciones,
+  // así que la repetición la frena el agregado y lo que no puede perderse es el
+  // mensaje → registrar después de procesar.
+  assert.ok(message.includes('IdempotencyGuard.alreadyProcessed(...) antes de despachar'));
+  assert.ok(message.includes('record(...) DESPUÉS'));
+  assert.ok(!message.includes('tryRecord'));
   assert.ok(message.includes('RetireProductCommand(id = payload.productId())'));
 
   // La envoltura es la de la fuente, no la EventEnvelope de Keel.
@@ -2295,12 +2301,23 @@ test('idempotencia de consumo: registro de procesados transversal al broker', ()
   const entity = read(workspace, `${dir}/ProcessedEventJpa.java`);
   assert.ok(entity.includes('@Table(name = "processed_event")'));
   assert.ok(entity.includes('@EmbeddedId'));
+  // El id del mensaje lo elige quien publica y no siempre es un uuid: quedarse corto
+  // manda a la DLQ, por no caber, justo el mensaje que la tabla existe para deduplicar.
+  assert.ok(entity.includes('@Column(name = "event_id", nullable = false, length = 255)'));
 
   const guard = read(workspace, `${dir}/IdempotencyGuard.java`);
   assert.ok(guard.includes('@Transactional(propagation = Propagation.REQUIRES_NEW)'));
+  // Las dos puertas, porque el orden del registro no es intercambiable: procesar y
+  // luego registrar hace reintentable un fallo transitorio; reclamar antes cierra la
+  // ventana del duplicado a cambio de perder el mensaje si el handler falla.
+  assert.ok(guard.includes('public boolean alreadyProcessed(String handlerId, String eventId)'));
+  assert.ok(guard.includes('public boolean record(String handlerId, String eventId)'));
   assert.ok(guard.includes('public boolean tryRecord(String handlerId, String eventId)'));
   // La carrera la arbitra la clave primaria, no el existsById previo.
   assert.ok(guard.includes('catch (DataIntegrityViolationException duplicate)'));
+  // Y con flush: JPA difiere el INSERT hasta el commit, así que sin él la violación
+  // de clave salta FUERA del catch y el listener ve un error, no un duplicado.
+  assert.ok(guard.includes('saveAndFlush('));
   // Nada del broker concreto: quien llama al guard es el listener del agente.
   for (const ajeno of ['SnsTemplate', 'KafkaTemplate', 'RabbitTemplate']) {
     assert.ok(!guard.includes(ajeno));
@@ -2388,7 +2405,57 @@ test('sin idempotencia declarada no se genera el registro de comando', () => {
   const base = 'src/main/java/com/commerce/productcatalog';
   assert.ok(!exists(workspace, `${base}/domain/idempotency/IdempotencyStore.java`));
   assert.ok(!exists(workspace, `${base}/infrastructure/web/IdempotencyKeyFilter.java`));
+  assert.ok(!exists(workspace, `${base}/application/support/CommandSignature.java`));
   assert.ok(!exists(workspace, 'src/main/resources/parameters/local/idempotency.yaml'));
+});
+
+test('la firma del contenido se genera, no se deja escrita en prosa', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+
+  scaffoldService({ manifest, layers, workspace });
+
+  const signature = read(
+    workspace,
+    'src/main/java/com/commerce/productcatalog/application/support/CommandSignature.java'
+  );
+  assert.ok(signature.includes('public static String of(Object command)'));
+  // Canónica: componentes de record ordenados por nombre y escalares con prefijo de
+  // longitud. Si dos handlers la calculan distinto, la comparación deja de significar
+  // nada y nada lo delata — de ahí que no sea cosa del handler.
+  assert.ok(signature.includes('Comparator.comparing(RecordComponent::getName)'));
+  assert.ok(signature.includes('raw.length() + ":" + raw'));
+  // Un binario entra por su digest. Por identidad de objeto —lo que devuelve
+  // String.valueOf de un array— la firma cambiaría en cada arranque y la operación
+  // dejaría de deduplicar sin que nada lo delate.
+  assert.ok(signature.includes('value instanceof byte[] bytes'));
+  assert.ok(signature.includes('value.getClass().isArray()'));
+  // Sin Jackson a propósito: el ObjectMapper de la app lo configuran la API y el
+  // broker, y un cambio ahí movería firmas ya almacenadas.
+  assert.ok(!signature.includes('com.fasterxml.jackson'));
+});
+
+test('payload-hash: la clave es la firma, sin cabecera ni contexto que puedan faltar', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const patched = structuredClone(layers);
+  patched['use-cases'].operations.createProduct.idempotency = { keySource: 'payload-hash', ttlSeconds: 600 };
+
+  scaffoldService({ manifest, layers: patched, workspace });
+
+  const base = 'src/main/java/com/commerce/productcatalog';
+  // El mecanismo entero sigue estando…
+  assert.ok(exists(workspace, `${base}/domain/idempotency/IdempotencyStore.java`));
+  assert.ok(exists(workspace, `${base}/application/support/CommandSignature.java`));
+  // …pero el camino de la cabecera no: aquí no hay nada que transportar, y dejarlo
+  // llevaba al handler a preguntar por una clave que nunca está y no deduplicar nunca.
+  assert.ok(!exists(workspace, `${base}/application/support/IdempotencyContext.java`));
+  assert.ok(!exists(workspace, `${base}/infrastructure/web/IdempotencyKeyFilter.java`));
+
+  const handler = read(workspace, `${base}/application/usecases/CreateProductCommandHandler.java`);
+  assert.ok(handler.includes('CommandSignature.of(command)'));
+  assert.ok(handler.includes('siempre se deduplica'));
+  assert.ok(!handler.includes('IdempotencyContext.get()'));
 });
 
 test('unique: constraint nombrada en la tabla y traducida al error de negocio', () => {

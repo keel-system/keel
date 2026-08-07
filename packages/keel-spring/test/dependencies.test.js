@@ -443,6 +443,133 @@ test('stub: una activación por evento no inyecta nada y remite a raise(...)', (
   assert.ok(handler.includes('El handler no publica nada'));
 });
 
+// ─── Compensaciones ──────────────────────────────────────────────────────────
+//
+// No generan código propio: son una suscripción normal. Lo que cambian es lo que el
+// agente tiene que escribir en el handler que despachan, y eso solo se sabe leyendo
+// `undoes` — el único dato del DSL que dice QUÉ encargo se deshace y, por tanto, qué
+// estado hay que devolver. Mientras se quedaba en el YAML, el stub del compensador era
+// indistinguible del de cualquier otro command.
+
+const withCompensation = (layers = baseLayers()) => {
+  layers['use-cases'].operations.createOrder.transitions = [{ entity: 'Order', from: ['draft'], to: 'reserved' }];
+  layers['use-cases'].operations.applyProductSnapshot.transitions = [
+    { entity: 'Order', from: ['reserved'], to: 'draft' }
+  ];
+  layers.dependencies.dependencies.catalog.activations = {
+    reserveStock: {
+      triggeredBy: ['createOrder'],
+      via: { client: 'catalog', call: 'getProductsByIds' },
+      effect: 'El stock del producto queda reservado para el pedido.',
+      onFailure: { action: 'ignore' }
+    }
+  };
+  layers.dependencies.dependencies.catalog.compensations = [
+    { onEvent: 'ProductUpdated', undoes: 'reserveStock', description: 'Libera la reserva de stock.' }
+  ];
+  return layers;
+};
+
+test('compensación: el stub dice qué encargo deshace, qué estado devuelve y qué la hace irrepetible', () => {
+  const model = modelFrom(withCompensation());
+  const handler = handlerOf(model, 'ApplyProductSnapshotCommandHandler');
+
+  assert.ok(handler.includes("deshace la activación 'reserveStock'"));
+  assert.ok(handler.includes('movió el lifecycle de Order'));
+  // La guarda que cubre los dos caminos vive en el dominio, no en el handler.
+  assert.ok(handler.includes('la guarda es la transición del agregado'));
+
+  // Y el listener, que es donde se lee por qué existe esa suscripción.
+  const message = fileNamed(generateMessaging(model), 'ProductUpdatedMessage').content;
+  assert.ok(message.includes("deshaciendo la activación 'reserveStock'"));
+  assert.ok(message.includes('tiene que devolver ese estado'));
+});
+
+test('reconciliación: el stub del barrido dice qué busca y de dónde sale el umbral', () => {
+  const layers = withCompensation();
+  layers.dependencies.dependencies.catalog.activations.reserveStock.reconciledBy = 'sweepStaleReservations';
+  layers['use-cases'].operations.sweepStaleReservations = {
+    description: 'Revisa las reservas encargadas que siguen sin desenlace.',
+    kind: 'command',
+    internal: true,
+    input: 'void',
+    output: 'void',
+    schedule: { cron: '0 0 * * * *' }
+  };
+
+  const handler = handlerOf(modelFrom(layers), 'SweepStaleReservationsCommandHandler');
+
+  assert.ok(handler.includes('Reconciliación de catalog.reserveStock'));
+  // Lo que busca sale del estado en que quedó la entidad al encargar el trabajo.
+  assert.ok(handler.includes('Order en reserved'));
+  // Y el umbral no se inventa en una constante: es configuración.
+  assert.ok(handler.includes('sácalo de parameters/'));
+});
+
+test('compensación sin transición de vuelta: el estado que falta se reporta, no se inventa', () => {
+  const layers = withCompensation();
+  delete layers['use-cases'].operations.applyProductSnapshot.transitions;
+  layers.messaging.subscriptions.ProductUpdated.contract = {
+    messageId: { location: 'header', name: 'messageId' }
+  };
+
+  const handler = handlerOf(modelFrom(layers), 'ApplyProductSnapshotCommandHandler');
+
+  assert.ok(handler.includes('el diseño NO declara transición sobre Order'));
+  assert.ok(handler.includes('designGap'));
+  // Sin guard de dominio, lo único que queda es la puerta del listener — y se dice cuál es.
+  assert.ok(handler.includes('la deduplicación del listener por messageId'));
+
+  // Y el listener recibe el orden que le toca: sin transición que frene la repetición,
+  // la ventana solo se cierra reclamando antes — con su precio escrito.
+  const message = fileNamed(generateMessaging(modelFrom(layers)), 'ProductUpdatedMessage').content;
+  assert.ok(message.includes('IdempotencyGuard.tryRecord(...) antes de despachar'));
+  assert.ok(message.includes('deja el mensaje marcado y perdido'));
+});
+
+// ─── Idempotencia saliente ───────────────────────────────────────────────────
+//
+// La cara simétrica: la idempotencia de use-cases evita que un cliente NOS ejecute
+// dos veces; esta evita que nuestro propio @Retry ejecute dos veces el trabajo del
+// proveedor. Un timeout no distingue "no llegó" de "llegó y se hizo".
+
+const withOutboundKey = (layers, idempotency = { keyFrom: 'payload-hash' }) => {
+  const call = layers['http-clients'].clients.catalog.calls.getProductsByIds;
+  call.method = 'POST';
+  call.idempotency = idempotency;
+  call.retry = { maxAttempts: 3, retryOn: ['timeout'] };
+  return layers;
+};
+
+test('saliente: la clave viaja en la cabecera y firma el MISMO objeto que se envía', () => {
+  const adapter = adapterOf(modelFrom(withOutboundKey(baseLayers())));
+
+  // El wire request se hoista: calcular la firma aparte del cuerpo es cómo un día
+  // dejan de coincidir.
+  assert.ok(adapter.includes('GetProductsByIdsRequest request = mapper.toGetProductsByIdsRequest(ids);'));
+  assert.ok(adapter.includes('.body(request)'));
+  assert.ok(
+    adapter.includes('.header("Idempotency-Key", OutboundIdempotency.fromPayload("getProductsByIds", request))')
+  );
+});
+
+test('saliente: keyFrom correlation usa la correlación de la ejecución, no el contenido', () => {
+  const adapter = adapterOf(modelFrom(withOutboundKey(baseLayers(), { keyFrom: 'correlation', header: 'X-Request-Id' })));
+
+  assert.ok(adapter.includes('.header("X-Request-Id", OutboundIdempotency.correlated("getProductsByIds", request))'));
+});
+
+test('saliente: sin correlación que leer, la clave se degrada al contenido y se avisa', () => {
+  const layers = withOutboundKey(baseLayers(), { keyFrom: 'correlation' });
+  delete layers.messaging; // ni api ni messaging: nadie abre el contexto
+  const model = buildModel({ manifest, layers });
+
+  assert.ok(model.warnings.some((w) => w.includes("keyFrom 'correlation' sin capa api ni messaging")));
+  const adapter = adapterOf(model);
+  assert.ok(adapter.includes('OutboundIdempotency.fromPayload('));
+  assert.ok(!adapter.includes('OutboundIdempotency.correlated('));
+});
+
 // ─── El fallback del circuit breaker ─────────────────────────────────────────
 
 const adapterOf = (model) =>

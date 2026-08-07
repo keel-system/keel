@@ -54,6 +54,21 @@ clients:
 - Todo `circuitBreaker` debería tener `fallback` definido: qué hace el servicio cuando el circuito está abierto. `keel validate` avisa si falta; la skill `/keel-validate` revisa la calidad del fallback.
 - **La resiliencia la decide el diseñador**, no el agente: el `timeoutMs` sale del presupuesto de latencia de **nuestra** operación (nunca del SLA ajeno), la caída del tercero se traduce a un `code` propio, y un `fallback` que produce datos plausibles pero falsos es peor que el error que evita. Ejes de decisión: `references/structural-decisions.md` de la skill `keel-design` §3.6.
 
+## Idempotencia saliente (`idempotency`, por llamada)
+
+Reintentar es ejecutar otra vez. En una lectura da igual; en una escritura ajena —cobrar, reservar, inscribir— el reintento **duplica el efecto al otro lado**, y un timeout no distingue «no llegó» de «llegó y se hizo». Es la cara simétrica de `use-cases.<op>.idempotency`: aquella evita que un cliente nos ejecute dos veces a nosotros, esta que nosotros ejecutemos dos veces al proveedor. Y es la deuda que después intenta arreglar una `compensation`, cuando ya hay dos cargos.
+
+```yaml
+        idempotency: { keyFrom: payload-hash }        # o { keyFrom: correlation, header: X-Request-Id }
+        retry: { maxAttempts: 3, retryOn: [timeout, connection] }
+```
+
+- `keyFrom: payload-hash` — la clave es la firma determinista del contenido de la petición. El reintento manda lo mismo, luego repite clave. Es el caso normal.
+- `keyFrom: correlation` — la clave sale del identificador de correlación de la ejecución en curso. Se usa cuando el proveedor deduplica por **intención de negocio** y no por contenido: dos peticiones idénticas de dos ejecuciones distintas sí deben ejecutarse las dos.
+- `header` — solo si el proveedor usa una cabecera distinta de `Idempotency-Key`.
+- Solo sirve **si el proveedor la honra**: eso es parte de su contrato, no una decisión nuestra. Si no la honra, dilo en el `contract` de la llamada — que reintentar duplica es información que el siguiente que lea el diseño necesita.
+- `keel validate` avisa de un `retry` sobre un método no seguro (`POST`/`PUT`/`PATCH`/`DELETE`) sin `idempotency` declarada.
+
 ## Qué NO va aquí
 
 - Eventos asíncronos → capa `messaging`.

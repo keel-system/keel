@@ -85,17 +85,25 @@ revisar por qué un servicio sin estado emite eventos de dominio.
 
 ### 3.2 Idempotencia — `idempotency: { keySource, ttlSeconds }`
 
-**Antes de los ejes, sitúa el caso.** Hay **dos** ejes de repetición y cada uno tiene su mecanismo;
+**Antes de los ejes, sitúa el caso.** Hay **tres** ejes de repetición y cada uno tiene su mecanismo;
 elegir el equivocado es declarar una garantía que nada implementa:
 
 | Quién repite | Mecanismo | Dónde se declara |
 |---|---|---|
 | Un llamante HTTP que reintenta (timeout, doble clic) | clave que él manda en una cabecera | `use-cases.<op>.idempotency` ← **esta entrada** |
 | El broker, que reentrega el mismo mensaje | id del mensaje, o irrepetibilidad en el dominio | `messaging: subscriptions.<E>.contract.messageId`, o `use-cases.<op>.transitions` |
+| **Nosotros**, reintentando contra un proveedor | clave que le mandamos a él | `http-clients.clients.<c>.calls.<x>.idempotency` |
 
 Esta entrada es **solo la primera fila**: `idempotency` solo tiene sentido en una operación **con
 endpoint HTTP**, porque su clave entra por ahí. En una operación interna o disparada por evento,
 `keel validate` la da en rojo. Si el caso es el segundo, la decisión no es esta: es §3.5 y §3.11.
+
+El tercero es el que más se olvida, porque el reintento parece resiliencia y no repetición: si
+la llamada es una escritura ajena —cobrar, reservar, inscribir— cada reintento la ejecuta otra
+vez al otro lado, y un timeout no distingue «no llegó» de «llegó y se hizo». Pregunta simple:
+*«si esta llamada se manda dos veces, ¿el proveedor hace el trabajo dos veces?»*. Si la respuesta
+es sí y él ofrece una cabecera de idempotencia, decláralo; si no la ofrece, escríbelo en el
+`contract` — es la deuda que después tendrá que ir a limpiar una compensación.
 
 | Eje | Pregunta al diseñador | Respuesta → decisión |
 |---|---|---|
@@ -324,6 +332,8 @@ pasa con el trabajo ya hecho.
 | **Cuántos caminos** | ¿Se puede lanzar la compensación de más de una forma — el evento **y** un endpoint para que un operador la reejecute a mano? | Más de uno → el mecanismo tiene que estar en el **dominio** (`transitions`), no en el borde. `contract.messageId` cierra el listener y la cabecera cierra el filtro: cada una cubre su puerta y deja la otra abierta, y quien reejecuta a mano es justo el que no manda cabecera. `keel validate` lo da en rojo. |
 | **Estado propio** | El trabajo que se encarga suele mover el estado de una entidad nuestra. Al deshacerlo, **¿a qué estado vuelve?** | El estado destino → `use-cases.<op>.transitions` en la operación compensadora, **y** la arista correspondiente en `domain: lifecycle.transitions`. |
 | **Ventana** | Entre encargar y compensar pasa tiempo. ¿Puede el cliente ver la entidad en el estado intermedio? ¿Es aceptable? | Si no lo es, la frontera transaccional (§3.7) o el `awaits` (§3.6) están mal elegidos, no falta compensación. |
+| **Silencio** | Toda la compensación cuelga de que llegue un aviso. **¿Y si no llega ninguno?** El proveedor cae, pierde el mensaje, o ni siquiera sabe que su trabajo hay que deshacerlo. ¿Quién se entera, y cuándo? | «Alguien lo verá» no es una respuesta: no hay ningún hecho que dispare nada, y lo que no pasa solo lo detecta un barrido → `activations.<a>.reconciledBy` con una operación `schedule` que recorra los encargos sin desenlace. Pregunta también **cuánto tiempo** es demasiado (es configuración, no código) y **qué hace** con lo que encuentra: reintentar el encargo o compensarlo. `keel validate` avisa si falta. |
+| **La DLQ** | Si la compensación falla tantas veces que acaba en la cola de descartes, ¿por dónde se reejecuta? | O el endpoint de la operación (con su guarda de dominio, ver «Cuántos caminos») o el mismo barrido de la reconciliación. Sin ninguno de los dos, el final de ese mensaje es que alguien abra la base de datos a mano. |
 | **Orden** | El evento de compensación puede llegar **antes** que el hecho que compensa: entre que confirmamos nuestro trabajo y que el proveedor publica su fallo no hay orden garantizado. Si llega primero, ¿qué pasa? | Se rechaza —la transición no sale del estado en que aún no estamos—, así que la respuesta la da la política de la suscripción: `onFailure.retry` absorbe la carrera sin que nadie intervenga, y `deadLetter` es la red por si no se resuelve. Sin ninguno de los dos el mensaje se pierde en silencio, y `keel validate` lo da en rojo. No es un caso exótico: es el orden normal de dos hechos concurrentes. |
 
 **Consecuencia observable de no declararla**: el sistema queda con dos verdades distintas y ninguna

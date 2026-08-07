@@ -259,8 +259,52 @@ function renderHandler(model, service, operation) {
   }
   if (operation.idempotency) {
     const ttl = operation.idempotency.ttlSeconds ?? 86400;
+    const common =
+      `find(scope, clave) con scope="${operation.name}"; si hay registro con la MISMA firma, reconstruye la respuesta desde su resourceId sin re-ejecutar nada (ni escrituras ni eventos); si la firma difiere, lanza el error que el diseño declare para ese caso; si no hay registro, ejecuta y llama a save(...) dentro de la misma transacción del comando. ` +
+      `Qué NO cubre: la reentrega del mismo mensaje por el broker — esa la para el IdempotencyGuard del listener (tabla processed_event), que es otro mecanismo y no se toca desde aquí`;
+    // De dónde sale la clave cambia el ESQUELETO del handler, no un detalle: con
+    // payload-hash no hay cabecera que pueda faltar, así que la rama "sin clave,
+    // ejecuta sin deduplicar" no existe — escribirla dejaría la operación sin
+    // deduplicar nunca, en silencio.
+    const source =
+      operation.idempotency.keySource === 'payload-hash'
+        ? `La clave es CommandSignature.of(command) (application/support), que también es la firma: aquí NO hay cabecera ni IdempotencyContext, y por tanto tampoco caso "sin clave" — siempre se deduplica. `
+        : `La clave llega por IdempotencyContext.get() (vacío = el cliente no mandó la cabecera: ejecuta sin deduplicar, no rechaces) y la firma es CommandSignature.of(command) (application/support) — no la calcules a mano. Si hay clave: `;
     notes.push(
-      `Idempotencia: keySource=${operation.idempotency.keySource}, ttlSeconds=${ttl}. El puerto IdempotencyStore y su adaptador ya están generados — NO escribas otro registro (ni tabla propia, ni SET NX en la caché). La clave llega por IdempotencyContext.get() (vacío = el cliente no mandó la cabecera: ejecuta sin deduplicar, no rechaces). Si hay clave: find(scope, clave) con scope="${operation.name}"; si hay registro con la MISMA firma, reconstruye la respuesta desde su resourceId sin re-ejecutar nada (ni escrituras ni eventos); si la firma difiere, lanza el error que el diseño declare para ese caso; si no hay registro, ejecuta y llama a save(...) dentro de la misma transacción del comando. Qué NO cubre: la reentrega del mismo mensaje por el broker — esa la para el IdempotencyGuard del listener (tabla processed_event), que es otro mecanismo y no se toca desde aquí`
+      `Idempotencia: keySource=${operation.idempotency.keySource}, ttlSeconds=${ttl}. El puerto IdempotencyStore, su adaptador y CommandSignature ya están generados — NO escribas otro registro (ni tabla propia, ni SET NX en la caché) ni otra forma de firmar. ${source}${common}`
+    );
+  }
+  // Reconciliar es lo contrario de reaccionar: esta operación no la dispara ningún
+  // hecho, la dispara el reloj, y lo que busca es lo que NO ha pasado. Sin esta nota
+  // su stub sería un @Scheduled vacío.
+  for (const { dependency, activation, waiting } of operation.reconciles ?? []) {
+    notes.push(
+      `Reconciliación de ${dependency}.${activation.name}: barre los encargos que nunca recibieron desenlace — el evento que los cerraría puede no llegar nunca. ` +
+        (waiting.length > 0
+          ? `Los candidatos son ${waiting.join(', ')} que llevan demasiado tiempo ahí. `
+          : `Los candidatos son las entidades que quedaron esperando el desenlace. `) +
+        `El umbral de "demasiado tiempo" NO lo declara el diseño: sácalo de parameters/ con un default explícito, nunca de una constante en el código. ` +
+        `Y decide qué hace con cada uno según el efecto declarado ("${activation.effect}"): reintentar el encargo o disparar la compensación. Si el diseño no lo dice, es designGap`
+    );
+  }
+  // Compensar no es "otra escritura": deshace trabajo ya encargado a otro servidor,
+  // llega por un canal at-least-once y puede llegar antes que el hecho que compensa.
+  // Nada de eso se ve leyendo la operación sola, así que se escribe aquí.
+  if (operation.compensates) {
+    const { dependency, undoes, moves, event, deduplicated } = operation.compensates;
+    const restored = new Set((operation.transitions ?? []).map((transition) => transition.entity));
+    const pending = moves.filter((entity) => !restored.has(entity));
+    const guard = (operation.transitions ?? []).length > 0 ? 'transitions' : deduplicated ? 'messageId' : null;
+    notes.push(
+      `Compensación de ${dependency}${undoes ? ` — deshace la activación '${undoes}'` : ''}: la dispara la suscripción a ${event}. ` +
+        (moves.length > 0
+          ? `El trabajo que deshaces movió el lifecycle de ${moves.join(', ')}: devolver ese estado es parte de la compensación, no un extra${pending.length > 0 ? ` (el diseño NO declara transición sobre ${pending.join(', ')} — repórtalo como designGap en vez de inventar el estado destino)` : ''}. `
+          : '') +
+        (guard === 'transitions'
+          ? `Aplicarla dos veces no debe deshacer dos veces: la guarda es la transición del agregado, que rechaza la segunda desde un estado que ya no está en 'from'. Va en el DOMINIO, no en el handler.`
+          : guard === 'messageId'
+            ? `Aplicarla dos veces no debe deshacer dos veces: la guarda es la deduplicación del listener por messageId (IdempotencyGuard). El handler no añade ninguna otra.`
+            : `Aplicarla dos veces no debe deshacer dos veces y el diseño no declara guarda: repórtalo como designGap.`)
     );
   }
   if (operation.cache) {

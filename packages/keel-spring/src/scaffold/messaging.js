@@ -400,13 +400,26 @@ function contractJavadoc(sub) {
     lines.push(
       `Deduplica por ${sub.messageId.location} '${sub.messageId.name}' antes de despachar (la entrega es at-least-once).`
     );
+    // El orden del registro no es estilo: decide si un fallo transitorio se
+    // reintenta o se traga el mensaje. Lo elige el diseño, no el agente.
+    lines.push(
+      sub.triggerHasDomainGuard
+        ? `Orden: IdempotencyGuard.alreadyProcessed(...) antes de despachar y record(...) DESPUÉS de que el handler termine bien. La operación declara transiciones, así que la repetición la frena el agregado y lo que no puede perderse es el mensaje.`
+        : `Orden: IdempotencyGuard.tryRecord(...) antes de despachar — la operación no declara ninguna transición que frene la repetición, así que la ventana se cierra reclamando antes. Ojo: un fallo del handler deja el mensaje marcado y perdido; si eso no es tolerable, lo que falta es la guarda de dominio en el diseño.`
+    );
   }
   // La capa dependencies puede etiquetar esta suscripción como compensación de una
   // dependencia: no cambia el código, pero sí por qué existe.
   if (sub.compensates) {
+    const { dependency, description, undoes, moves } = sub.compensates;
     lines.push(
-      `Compensa la dependencia de ${sub.compensates.dependency}${sub.compensates.description ? `: ${sub.compensates.description}` : '.'}`
+      `Compensa la dependencia de ${dependency}${undoes ? ` deshaciendo la activación '${undoes}'` : ''}${description ? `: ${description}` : '.'}`
     );
+    if (moves.length > 0) {
+      lines.push(
+        `Ese trabajo movió el lifecycle de ${moves.join(', ')}: la operación que despacha este listener tiene que devolver ese estado, no solo avisar al proveedor.`
+      );
+    }
   }
   if (sub.deadLetter) {
     lines.push('Con onFailure.deadLetter: tras agotar los reintentos el mensaje va a la DLQ del broker (lo configura el agente).');
