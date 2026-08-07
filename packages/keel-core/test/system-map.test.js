@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { tmpDir } from './helpers/tmp.js';
 import { supportedDsl } from '../src/lib/assets.js';
 
 // Versión vigente del DSL: derivada, no escrita. Solo se soporta una, y un literal
@@ -21,7 +21,7 @@ function write(file, content) {
  * `designs` un mapa slug → { layers } con el contenido de cada capa.
  */
 function workspace({ system = null, designs = {}, docs = {} } = {}) {
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-system-'));
+  const cwd = tmpDir('keel-system-');
   write(path.join(cwd, 'schema', 'service.schema.json'), '{}'); // isKeelWorkspace
   if (system !== null) write(path.join(cwd, 'system.yaml'), system);
 

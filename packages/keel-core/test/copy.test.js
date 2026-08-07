@@ -1,12 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { tmpDir } from './helpers/tmp.js';
 import { copyTree } from '../src/lib/copy.js';
 
 function makeTmpDirs(t) {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-copy-'));
+  const base = tmpDir('keel-copy-');
   t.after(() => fs.rmSync(base, { recursive: true, force: true }));
   const src = path.join(base, 'src');
   const dest = path.join(base, 'dest');

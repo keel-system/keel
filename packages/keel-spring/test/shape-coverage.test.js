@@ -10,9 +10,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmpDir } from './helpers/tmp.js';
 import { loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
 
@@ -23,7 +23,7 @@ const JAVA = 'src/main/java/com/utilities/meteringdigest';
 function scaffoldMetering() {
   const { manifest, layers, errors } = loadService(fixtureDir);
   assert.deepEqual(errors, []);
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-shape-'));
+  const workspace = tmpDir('keel-shape-');
   const result = scaffoldService({ manifest, layers, workspace, force: true });
   const root = path.join(workspace, PROJECT);
   const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
@@ -86,7 +86,7 @@ test('AbstractFlowIT con BD en memoria: sin script de reset, aislamiento por @Di
   // genera infra/reset-db.sh: la base no puede invocar un script inexistente.
   const { manifest, layers, errors } = loadService(fixtureDir);
   assert.deepEqual(errors, []);
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-shape-h2-'));
+  const workspace = tmpDir('keel-shape-h2-');
   scaffoldService({ manifest, layers, workspace, force: true, stack: { database: 'h2' } });
 
   const root = path.join(workspace, PROJECT);

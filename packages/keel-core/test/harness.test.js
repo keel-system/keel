@@ -6,9 +6,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import YAML from 'yaml';
+import { tmpDir } from './helpers/tmp.js';
 import { skillsSourceDir } from '../src/lib/assets.js';
 import { HARNESSES, applyTokens, emitHarnessFiles, harnessById, splitFrontmatter } from '../src/lib/harness.js';
 import { diffGenerated, writeFiles } from '../src/lib/write.js';
@@ -130,7 +130,7 @@ test('un comando por skill, solo en los harnesses que separan comando y skill', 
 });
 
 test('un agente hoja no puede lanzar agentes en ningún harness', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-agent-'));
+  const dir = tmpDir('keel-agent-');
   const agent = path.join(dir, 'demo-agent.md');
   fs.writeFileSync(agent, '---\nname: demo-agent\ndescription: Demo.\ntools: [read, bash]\nspawns: false\n---\n\nCuerpo.\n');
 
@@ -191,7 +191,7 @@ test('la proyección es determinista: emitir dos veces da lo mismo', () => {
 });
 
 test('writeFiles y diffGenerated cierran el ciclo: lo escrito no tiene deriva', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-emit-'));
+  const dir = tmpDir('keel-emit-');
   const files = emitAll();
   writeFiles(files, dir);
 
@@ -204,7 +204,7 @@ test('writeFiles y diffGenerated cierran el ciclo: lo escrito no tiene deriva', 
 });
 
 test('writeFiles respeta lo existente sin force, y preserve ni con force', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-write-'));
+  const dir = tmpDir('keel-write-');
   writeFiles([{ path: 'a.md', content: 'uno' }], dir);
   fs.writeFileSync(path.join(dir, 'a.md'), 'editado');
 

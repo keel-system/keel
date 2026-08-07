@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { tmpDir } from './helpers/tmp.js';
 import {
   applyMarkers,
   buildIndex,
@@ -34,7 +34,7 @@ const USE_CASES = 'operations:\n  createProduct:\n    kind: command\n  listProdu
  * para no depender del orden de claves de la librería.
  */
 function workspace(designs, { readme = defaultReadme(), publish = null } = {}) {
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-index-'));
+  const cwd = tmpDir('keel-index-');
   write(path.join(cwd, 'schema', 'service.schema.json'), '{}'); // isKeelWorkspace
   write(path.join(cwd, 'README.md'), readme);
   if (publish !== null) write(path.join(cwd, 'publish.yaml'), publish);

@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { tmpDir } from './helpers/tmp.js';
 import { supportedDsl } from '../src/lib/assets.js';
 
 // Versión vigente del DSL: derivada, no escrita. Solo se soporta una, y un literal
@@ -177,7 +177,7 @@ test('derivar del registry revalida el índice aunque la caché siga dentro del 
   const base = makeWorkspace(t);
   // El índice viejo no listaba las capas nuevas: derivar de él dejaría el spec
   // incompleto y en silencio.
-  const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-regcache-'));
+  const cacheDir = tmpDir('keel-regcache-');
   t.after(() => fs.rmSync(cacheDir, { recursive: true, force: true }));
 
   const viejo = { ...REGISTRY_FILES };
@@ -193,7 +193,7 @@ test('derivar del registry revalida el índice aunque la caché siga dentro del 
 
 test('derivar con --offline no toca la red para el índice: se sirve de la caché', async (t) => {
   const base = makeWorkspace(t);
-  const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-regcache-'));
+  const cacheDir = tmpDir('keel-regcache-');
   t.after(() => fs.rmSync(cacheDir, { recursive: true, force: true }));
 
   await loadRegistryIndex({

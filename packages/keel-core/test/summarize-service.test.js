@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { tmpDir } from './helpers/tmp.js';
 import { supportedDsl } from '../src/lib/assets.js';
 
 // Versión vigente del DSL: derivada, no escrita. Solo se soporta una, y un literal
@@ -12,7 +12,7 @@ import { resolveServiceRef } from '../src/lib/loader.js';
 import { summarizeService } from '../src/lib/summarize-service.js';
 
 function makeServiceDir(t, files) {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-summarize-'));
+  const base = tmpDir('keel-summarize-');
   t.after(() => fs.rmSync(base, { recursive: true, force: true }));
   for (const [name, content] of Object.entries(files)) {
     fs.writeFileSync(path.join(base, name), content);
@@ -262,7 +262,7 @@ test('summarizeService refleja la ausencia de basedOn', (t) => {
 });
 
 test('resolveServiceRef resuelve nombre kebab-case a specs/<nombre>', (t) => {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-ref-'));
+  const base = tmpDir('keel-ref-');
   const prevCwd = process.cwd();
   t.after(() => {
     process.chdir(prevCwd);

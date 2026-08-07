@@ -9,9 +9,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmpDir } from './helpers/tmp.js';
 import { loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
 
@@ -25,7 +25,7 @@ function scaffold(patch, stack) {
   assert.deepEqual(errors, []);
   const patched = structuredClone(layers);
   if (patch) patch(patched);
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-sort-'));
+  const workspace = tmpDir('keel-sort-');
   const result = scaffoldService({ manifest, layers: patched, workspace, force: true, stack });
   const read = (relative) =>
     fs.readFileSync(path.join(workspace, 'services', 'catalog-spring', relative), 'utf8');

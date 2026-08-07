@@ -11,9 +11,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmpDir } from './helpers/tmp.js';
 import { loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
 
@@ -25,7 +25,7 @@ const DOCS = `${JAVA}/infrastructure/persistence/documents`;
 function scaffoldMeteringAsDocument() {
   const { manifest, layers, errors } = loadService(fixtureDir);
   assert.deepEqual(errors, []);
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-document-shape-'));
+  const workspace = tmpDir('keel-document-shape-');
   // El stack se pasa a mano: la fixture declara `model: relational`, y lo que se
   // ejercita aquí es el renderizador, no el gate del cuestionario (que ya cubre
   // stack.test.js). Es el mismo recurso que usa shape-coverage.test.js con H2.

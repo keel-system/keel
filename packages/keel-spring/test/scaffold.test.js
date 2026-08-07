@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmpDir } from './helpers/tmp.js';
 import { HARNESSES, loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
 import { assetsDir, wrapperDir, GRADLE_VERSION } from '../src/lib/assets.js';
@@ -17,7 +17,7 @@ function loadFixture() {
 }
 
 function makeWorkspace() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), 'keel-scaffold-'));
+  return tmpDir('keel-scaffold-');
 }
 
 function read(workspace, relative) {

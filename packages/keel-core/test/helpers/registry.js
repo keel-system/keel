@@ -5,8 +5,8 @@
 // temporal por test.
 
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { tmpDir } from './tmp.js';
 import { supportedDsl } from '../../src/lib/assets.js';
 
 export const REGISTRY_URL = 'https://example.test/registry/index.json';
@@ -93,7 +93,7 @@ export function registryFixture({ files, missing = [], derivatives = {}, dsl = s
 export function withRegistry(t, fetchImpl) {
   const previous = globalThis.fetch;
   globalThis.fetch = fetchImpl;
-  const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-regcache-'));
+  const cacheDir = tmpDir('keel-regcache-');
   t.after(() => {
     globalThis.fetch = previous;
     fs.rmSync(cacheDir, { recursive: true, force: true });
@@ -106,7 +106,7 @@ export function withRegistry(t, fetchImpl) {
  * para los tests de derivación local; los del registry no lo necesitan.
  */
 export function makeWorkspace(t, { localOrigin = true } = {}) {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-derive-'));
+  const base = tmpDir('keel-derive-');
   const prevCwd = process.cwd();
   const prevExitCode = process.exitCode;
   t.after(() => {

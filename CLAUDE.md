@@ -73,7 +73,10 @@ npm link --workspace packages/keel-core          # habilita `keel` local
 npm link --workspace packages/keel-spring        # habilita `keel-spring` local
 node packages/keel-core/src/cli.js <cmd>         # ejecutar sin link
 npm run compile-check --workspace packages/keel-spring   # compila de verdad el arnés generado (JDK + red, minutos)
+npm run clean                                    # raíz: barre raíces `keel-tests-*` que dejó un test muerto a la fuerza
 ```
+
+**Los tests no dejan basura**: un test que necesite un directorio temporal usa `tmpDir()` de `test/helpers/tmp.js` (fuente única en `keel-core`, con un shim de reexport en `keel-spring`), nunca `os.tmpdir()` a pelo. `tmpDir()` cuelga todo de una raíz por proceso que se borra en `process.on('exit')` — también cuando la suite falla, que es justo cuando un `rmSync` al final de la función no llega a ejecutarse. Los `t.after` que ya limpian siguen siendo válidos: liberan espacio a mitad de ejecución. `test/tmp-hygiene.test.js` (uno por paquete) prohíbe el patrón viejo, y `npm run clean` es la escotilla para lo único que el barrido no cubre: un SIGKILL.
 
 **El Java generado no se compila en `npm test`**: el resto de la suite compara cadenas, así que un template literal mal cerrado o un import olvidado pasa todos los `includes(...)` y revienta mucho después, dentro del proyecto generado. Hay dos redes, y conviene saber qué cubre cada una:
 
@@ -103,6 +106,7 @@ La revisión **semántica** (calidad del diseño, invariantes, mínimo privilegi
 | Nuevo archivo del payload que el workspace pueda editar | `CUSTOMIZABLE_PAYLOAD` (`src/lib/assets.js`), o `keel init --check` lo reportará como deriva |
 | Nuevo motor de base de datos | Entrada en `DATABASES` (`keel-spring/src/lib/stack-catalog.js`) con su `kind` (`relational` \| `document`), que es lo que decide qué rama del scaffolding se genera y qué ofrece el cuestionario — el modelo lo declara el **diseño** (`persistence.default.model`), no el stack. Un motor de un `kind` que ya existe no necesita nada más; uno de un `kind` nuevo es una rama entera de `src/scaffold/` (espejo, repositorios, esquema) + su skill + tests propios |
 | Nueva regla de validación mecánica | `keel-core/src/lib/crossrefs.js` + test en `test/crossrefs.test.js` |
+| Test que necesite un directorio temporal | `tmpDir('<prefijo>-')` de `test/helpers/tmp.js`, **nunca** `os.tmpdir()` a pelo: lo que cuelga de ahí lo borra el propio proceso al salir. `test/tmp-hygiene.test.js` lo verifica en los dos paquetes |
 | Nueva capa del DSL | `LAYERS` en `src/lib/assets.js` + `assets/core/schema/<capa>.schema.json` + `assets/core/templates/service/<capa>.keel.yaml` + `assets/core/docs/dsl/<capa>.md` + reglas en `crossrefs.js` |
 | Cambio en el andamiaje de pruebas (`src/scaffold/integration-tests.js`) | El archivo emite Java por plantilla, así que un `includes(...)` verde no dice que compile: pasar `npm run compile-check --workspace packages/keel-spring` **antes de darlo por hecho**. Toda pieza nueva del arnés se genera para los tres brokers (cada uno tiene su rama), y `test/java-syntax.test.js` la cubre sin JDK |
 | Nuevo generador | Paquete `packages/keel-<tech>/` calcado de `keel-spring`; guía en `keel-core/assets/core/docs/building-a-generator.md`; registrar en `KNOWN_GENERATORS` (`src/lib/assets.js`) |

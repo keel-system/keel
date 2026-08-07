@@ -10,9 +10,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmpDir } from './helpers/tmp.js';
 import { loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
 
@@ -26,7 +26,7 @@ const CONFIG = `${JAVA}/infrastructure/persistence/config`;
 function scaffoldReports() {
   const { manifest, layers, errors } = loadService(fixtureDir);
   assert.deepEqual(errors, []);
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-document-'));
+  const workspace = tmpDir('keel-document-');
   const result = scaffoldService({ manifest, layers, workspace, force: true, stack: { group: 'com.example' } });
   const root = path.join(workspace, PROJECT);
   const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');

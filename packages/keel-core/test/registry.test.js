@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { tmpDir } from './helpers/tmp.js';
 import {
   CACHE_TTL_MS,
   DEFAULT_REGISTRY_URL,
@@ -74,7 +74,7 @@ function fakeFetch(routes, { calls = [] } = {}) {
   return impl;
 }
 
-const tmpCache = () => fs.mkdtempSync(path.join(os.tmpdir(), 'keel-regcache-'));
+const tmpCache = () => tmpDir('keel-regcache-');
 
 test('parseRegistryRef distingue el prefijo del registry de una ruta o nombre local', () => {
   assert.deepEqual(parseRegistryRef('registry:catalog'), { slug: 'catalog' });
@@ -398,7 +398,7 @@ function fullRoutes(base = 'https://example.test/registry/', slug = 'catalog') {
 test('la descarga reparte el spec plano y los derivados de docs/, con sus subrutas', async () => {
   const fetchImpl = fakeFetch(fullRoutes());
 
-  const result = await downloadDesign(fullDesign(), { indexUrl: URL_INDEX, fetchImpl, tmpRoot: os.tmpdir() });
+  const result = await downloadDesign(fullDesign(), { indexUrl: URL_INDEX, fetchImpl, tmpRoot: tmpDir('keel-regroot-') });
 
   assert.equal(result.error, undefined);
   assert.deepEqual(fs.readdirSync(result.dir).sort(), [
@@ -424,7 +424,7 @@ test('la descarga reparte el spec plano y los derivados de docs/, con sus subrut
 test('con docs: false solo se piden los artefactos del spec', async () => {
   const fetchImpl = fakeFetch(fullRoutes());
 
-  const result = await downloadDesign(fullDesign(), { indexUrl: URL_INDEX, fetchImpl, tmpRoot: os.tmpdir(), docs: false });
+  const result = await downloadDesign(fullDesign(), { indexUrl: URL_INDEX, fetchImpl, tmpRoot: tmpDir('keel-regroot-'), docs: false });
 
   assert.equal(result.error, undefined);
   assert.deepEqual(result.docsFiles, []);
@@ -438,7 +438,7 @@ test('un derivado que no se puede descargar es un aviso, no un error: la derivac
   delete routes['https://example.test/registry/docs/catalog/DESIGN.md'];
   const fetchImpl = fakeFetch(routes);
 
-  const result = await downloadDesign(fullDesign(), { indexUrl: URL_INDEX, fetchImpl, tmpRoot: os.tmpdir() });
+  const result = await downloadDesign(fullDesign(), { indexUrl: URL_INDEX, fetchImpl, tmpRoot: tmpDir('keel-regroot-') });
 
   assert.equal(result.error, undefined);
   assert.equal(result.warnings.length, 1);
@@ -458,17 +458,18 @@ test('un índice cuyo diseño no lista el manifiesto no se puede derivar', async
 test('si falla la descarga de un archivo, no queda directorio temporal a medias', async () => {
   const entry = design('catalog');
   const base = 'https://example.test/registry/';
-  const before = fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith('keel-registry-')).length;
+  // Raíz propia: contar sobre el temporal del sistema mezclaría directorios de
+  // otras pruebas y de otros procesos.
+  const tmpRoot = tmpDir('keel-regroot-');
 
   const result = await downloadDesign(entry, {
     indexUrl: URL_INDEX,
     fetchImpl: fakeFetch({ [`${base}specs/catalog/service.keel.yaml`]: { body: 'keel: "2.3"\n' } }),
-    tmpRoot: os.tmpdir()
+    tmpRoot
   });
 
   assert.match(result.error, /HTTP 404/);
-  const after = fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith('keel-registry-')).length;
-  assert.equal(after, before, 'el directorio temporal debe limpiarse');
+  assert.deepEqual(fs.readdirSync(tmpRoot), [], 'el directorio temporal debe limpiarse');
 });
 
 // --- Adoptar: keel registry get -------------------------------------------

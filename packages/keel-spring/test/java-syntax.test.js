@@ -12,9 +12,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmpDir } from './helpers/tmp.js';
 import { loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
 
@@ -148,7 +148,7 @@ function missingImports(source, resolvableTypes) {
 function generatedJava(fixture, stack) {
   const { manifest, layers, errors } = loadService(path.join(fixturesDir, fixture));
   assert.deepEqual(errors, [], `${fixture}: la fixture no carga`);
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-syntax-'));
+  const workspace = tmpDir('keel-syntax-');
   scaffoldService({ manifest, layers, workspace, force: true, stack });
   const files = [];
   const walk = (dir) => {
@@ -167,7 +167,6 @@ function generatedJava(fixture, stack) {
     }
   };
   walk(workspace);
-  fs.rmSync(workspace, { recursive: true, force: true });
   return files;
 }
 

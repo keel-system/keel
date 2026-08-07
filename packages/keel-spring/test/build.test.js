@@ -1,15 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmpDir } from './helpers/tmp.js';
 import { HARNESSES } from 'keel-core';
 import { build } from '../src/commands/build.js';
 import { assetsDir, SUPPORTED_DSL } from '../src/lib/assets.js';
 
 function makeWorkspace() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-spring-'));
+  const dir = tmpDir('keel-spring-');
   // Marcador de workspace Keel (isKeelWorkspace)
   fs.mkdirSync(path.join(dir, 'schema'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'schema', 'service.schema.json'), '{}');

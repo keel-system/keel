@@ -4,7 +4,8 @@
   "type": "module",
   "workspaces": ["packages/*"],
   "scripts": {
-    "test": "npm test --workspaces --if-present"
+    "test": "npm test --workspaces --if-present",
+    "clean": "node scripts/clean-tmp.js"
   },
   "engines": {
     "node": ">=18"

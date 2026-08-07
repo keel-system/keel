@@ -7,9 +7,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmpDir } from './helpers/tmp.js';
 import { loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
 
@@ -19,7 +19,7 @@ const JAVA = 'src/main/java/com/commerce/catalog';
 function scaffoldExtended() {
   const { manifest, layers, errors } = loadService(fixtureDir);
   assert.deepEqual(errors, []);
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-regression-'));
+  const workspace = tmpDir('keel-regression-');
   const result = scaffoldService({ manifest, layers, workspace, force: true });
   const read = (relative) =>
     fs.readFileSync(path.join(workspace, 'services', 'catalog-spring', relative), 'utf8');
@@ -201,7 +201,7 @@ test('§1.1: el sondeo del broker va por argv, nunca por una cadena con comillas
   const { workspace } = scaffoldExtended();
   const harness = (broker) => {
     const { manifest, layers } = loadService(fixtureDir);
-    const out = fs.mkdtempSync(path.join(os.tmpdir(), `keel-probe-${broker}-`));
+    const out = tmpDir(`keel-probe-${broker}-`);
     scaffoldService({ manifest, layers, workspace: out, force: true, stack: { broker } });
     return fs.readFileSync(
       path.join(out, 'services/catalog-spring/src/integrationTest/java/com/commerce/catalog/flows/AbstractFlowIT.java'),
@@ -261,7 +261,7 @@ test('§1.2: el reset purga los destinos de mensajería declarados', () => {
   const { manifest, layers } = loadService(
     path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'metering-digest')
   );
-  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-purge-'));
+  const out = tmpDir('keel-purge-');
   scaffoldService({ manifest, layers, workspace: out, force: true, stack: { broker: 'rabbitmq' } });
   const reset = fs.readFileSync(path.join(out, 'services/metering-digest-spring/infra/reset-db.sh'), 'utf8');
 
@@ -276,7 +276,7 @@ test('§1.2: con Kafka no hay purga posible, el aislamiento es la marca de offse
   const { manifest, layers } = loadService(
     path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'metering-digest')
   );
-  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-mark-'));
+  const out = tmpDir('keel-mark-');
   scaffoldService({ manifest, layers, workspace: out, force: true, stack: { broker: 'kafka' } });
   const root = path.join(out, 'services/metering-digest-spring');
   const reset = fs.readFileSync(path.join(root, 'infra/reset-db.sh'), 'utf8');
@@ -308,7 +308,7 @@ test('humo del arnés: con Kafka publica tráfico real; con RabbitMQ, los canale
   const { manifest, layers } = loadService(
     path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'metering-digest')
   );
-  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-smoke-'));
+  const out = tmpDir('keel-smoke-');
   scaffoldService({ manifest, layers, workspace: out, force: true, stack: { broker: 'rabbitmq' } });
   const declared = fs.readFileSync(
     path.join(out, 'services/metering-digest-spring/src/integrationTest/java/com/utilities/meteringdigest/flows/HarnessSmokeIT.java'),
@@ -342,7 +342,7 @@ test('sin idempotencia declarada, el arnés no estampa Idempotency-Key en multip
   for (const operation of Object.values(sinIdempotencia['use-cases'].operations)) {
     delete operation.idempotency;
   }
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-regression-'));
+  const workspace = tmpDir('keel-regression-');
   scaffoldService({ manifest, layers: sinIdempotencia, workspace, force: true });
   const harness = fs.readFileSync(
     path.join(workspace, 'services/catalog-spring/src/integrationTest/java/com/commerce/catalog/flows/AbstractFlowIT.java'),
@@ -584,7 +584,7 @@ function scaffoldWithLocking(policy) {
   assert.deepEqual(errors, []);
   const patched = structuredClone(layers);
   patched.persistence.consistency = { ...(patched.persistence.consistency ?? {}), optimisticLocking: policy };
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-locking-'));
+  const workspace = tmpDir('keel-locking-');
   const result = scaffoldService({ manifest, layers: patched, workspace, force: true });
   const read = (relative) =>
     fs.readFileSync(path.join(workspace, 'services', 'catalog-spring', relative), 'utf8');
@@ -626,7 +626,7 @@ test('concurrencia: el code del conflicto sale del diseño cuando lo declara', (
     when: 'El producto fue modificado por otra petición desde que se leyó.',
     http: 409
   });
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-concurrency-'));
+  const workspace = tmpDir('keel-concurrency-');
   scaffoldService({ manifest, layers: patched, workspace, force: true });
   const advice = fs.readFileSync(
     path.join(workspace, 'services', 'catalog-spring', JAVA, 'infrastructure/rest/ApiExceptionHandler.java'),
@@ -777,7 +777,7 @@ test('C2/embed: una referencia a otro agregado se proyecta como objeto, no como 
 function scaffoldWithBroker(broker) {
   const { manifest, layers, errors } = loadService(fixtureDir);
   assert.deepEqual(errors, []);
-  const out = fs.mkdtempSync(path.join(os.tmpdir(), `keel-broker-${broker}-`));
+  const out = tmpDir(`keel-broker-${broker}-`);
   scaffoldService({ manifest, layers, workspace: out, force: true, stack: { broker } });
   return (relative) =>
     fs.readFileSync(path.join(out, 'services', 'catalog-spring', relative), 'utf8');
@@ -816,7 +816,7 @@ test('§1.2: con snssqs se genera la topología (topics, colas, DLQ, raw deliver
   const { manifest, layers } = loadService(
     path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'metering-digest')
   );
-  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-topology-'));
+  const out = tmpDir('keel-topology-');
   scaffoldService({ manifest, layers, workspace: out, force: true, stack: { broker: 'snssqs' } });
   const root = path.join(out, 'services', 'metering-digest-spring');
 
@@ -856,7 +856,7 @@ test('§1.2: los brokers que autocrean topología no generan el script', () => {
     const { manifest, layers } = loadService(
       path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'metering-digest')
     );
-    const out = fs.mkdtempSync(path.join(os.tmpdir(), `keel-topology-${broker}-`));
+    const out = tmpDir(`keel-topology-${broker}-`);
     scaffoldService({ manifest, layers, workspace: out, force: true, stack: { broker } });
     assert.ok(
       !fs.existsSync(path.join(out, 'services/metering-digest-spring/infra/init-messaging.sh')),
@@ -990,7 +990,7 @@ test('identidad: el script de kcadm y el realm importado declaran exactamente lo
   const patchedManifest = structuredClone(manifest);
   patchedManifest.layers.security = 'security.keel.yaml';
 
-  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-realm-'));
+  const workspace = tmpDir('keel-realm-');
   scaffoldService({ manifest: patchedManifest, layers: patched, workspace, force: true });
   const read = (relative) =>
     fs.readFileSync(path.join(workspace, 'services', 'catalog-spring', relative), 'utf8');
@@ -1062,7 +1062,7 @@ test('identidad: el script de kcadm y el realm importado declaran exactamente lo
 const harnessFor = (broker, fixture = 'catalog-extended') => {
   const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', fixture);
   const { manifest, layers } = loadService(dir);
-  const out = fs.mkdtempSync(path.join(os.tmpdir(), `keel-deliver-${broker}-`));
+  const out = tmpDir(`keel-deliver-${broker}-`);
   scaffoldService({ manifest, layers, workspace: out, force: true, stack: { broker } });
   const find = (root) => {
     for (const entry of fs.readdirSync(root, { withFileTypes: true })) {

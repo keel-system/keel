@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { tmpDir } from './helpers/tmp.js';
 import { select } from '../src/lib/prompt.js';
 import {
   DATABASES,
@@ -64,7 +64,7 @@ test('designUsesCache detecta operaciones con política de caché', () => {
 });
 
 test('read/writeStackConfig persisten y recuperan keel-stack.json', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-stack-'));
+  const dir = tmpDir('keel-stack-');
   assert.equal(readStackConfig(dir), null);
   const stack = { group: 'com.example', database: 'mariadb', broker: 'rabbitmq', auth: null, cache: null };
   writeStackConfig(dir, stack);

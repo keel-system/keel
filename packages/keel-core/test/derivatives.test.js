@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { tmpDir } from './helpers/tmp.js';
 import { supportedDsl } from '../src/lib/assets.js';
 
 // Versión vigente del DSL: derivada, no escrita. Solo se soporta una, y un literal
@@ -23,7 +23,7 @@ function write(file, content) {
  * ruta-relativa-a-docs/catalog → contenido.
  */
 function workspace({ layers = ['domain', 'use-cases'], docs = {}, scenarios = null, version = VERSION } = {}) {
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-derivatives-'));
+  const cwd = tmpDir('keel-derivatives-');
   const serviceDir = path.join(cwd, 'specs', 'catalog');
 
   write(

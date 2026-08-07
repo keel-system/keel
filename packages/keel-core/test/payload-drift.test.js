@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { tmpDir } from './helpers/tmp.js';
 import { supportedDsl } from '../src/lib/assets.js';
 
 // Versión vigente del DSL: derivada, no escrita. Solo se soporta una, y un literal
@@ -29,7 +29,7 @@ function harnessFiles() {
 
 /** Un workspace recién sembrado desde los assets reales de la CLI. */
 function seeded() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-drift-'));
+  const dir = tmpDir('keel-drift-');
   copyTree(coreDir, dir, { renames: RENAMES });
   writeFiles(harnessFiles(), dir);
   return dir;
@@ -162,7 +162,7 @@ test('lo que el workspace añade por su cuenta no es deriva', () => {
 });
 
 test('diffTree no escribe nada: un workspace vacío sigue vacío tras comprobarlo', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-drift-vacio-'));
+  const dir = tmpDir('keel-drift-vacio-');
   const result = diffTree(coreDir, dir, { renames: RENAMES, ignore: CUSTOMIZABLE_PAYLOAD });
 
   assert.ok(result.missing.length > 0, 'todo el payload falta');
