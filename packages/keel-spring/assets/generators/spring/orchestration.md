@@ -66,7 +66,7 @@ flowchart TB
 
     SCORE["⚙ Fase 2a — bash infra/score-scenarios.sh<br/>humo del arnés y, en verde, ./gradlew integrationTest<br/>matriz FL-* → OK | FALLO | NO_EJERCITADO desde el XML<br/>(determinista: sin agente, salida de Gradle al log)"]
     SCORE --> GATE2A{exit code}
-    GATE2A -->|"2 · humo KO → el arnés está roto,<br/>la suite no corrió: relanzar tests<br/>(no consume cupo)"| TESTS
+    GATE2A -->|"2 · humo KO → la suite no corrió:<br/>relanzar tests si la causa está en src/integrationTest/;<br/>si es de build (build.gradle, infra/), la parchea<br/>el orquestador (no consume cupo)"| TESTS
     GATE2A -->|"0 · matriz al 100%<br/>NO se invoca árbitro"| QUALITY
     GATE2A -->|"1 · hay FALLO o NO_EJERCITADO"| VALIDATE
 
@@ -117,6 +117,24 @@ servidor en production y la tabla de parámetros obligatorios, derivados de
 `src/main/resources/parameters/production/*.yaml` (todo `${VAR}` sin default) y del stack, más
 lo que los agentes cablearon al completar los adaptadores. El scaffolding deja un baseline
 determinista de esa sección; el orquestador la reconcilia con el código final.
+
+## Un exit 2 no siempre es del agente de pruebas
+
+Con `exit 2` la suite **no se ejecutó**: el humo del arnés está rojo y no hay matriz que
+arbitrar. El relanzamiento por defecto es a `keel-spring-tests`, pero **antes hay que mirar
+dónde está el defecto**, porque el humo cae por dos causas de dueños distintos:
+
+- **Dentro de `src/integrationTest/`** — el arnés Java o una clase de flujo. Es del agente de
+  pruebas: se relanza con el error, y no consume cupo.
+- **Fuera** — `build.gradle`, `infra/`, los scripts de `docker-compose`. Eso lo escribe
+  `keel-spring build`, y el agente de pruebas ni lo produjo ni tiene alcance para tocarlo: un
+  parche suyo ahí se pierde en la regeneración siguiente y, peor, lo deja creyendo que su
+  entrega estaba mal. **Lo corrige el orquestador** —que es quien sí ve el proyecto entero— y
+  la entrada va a `INFORME-GENERACION.md` § Incidencias como fix del **generador** a portar,
+  igual que un `harnessPatches` o un `probes[].verdict: FALSO-NEGATIVO`.
+
+El agente de pruebas relanzado tiene la simétrica de esta regla: si el diagnóstico apunta
+fuera de su alcance, devuelve `blockers` en vez de parchear.
 
 ## Por qué la fase 1 son tres agentes y ninguno espera a otro
 
@@ -179,7 +197,7 @@ candado y la regla escrita en cada agente, el porqué.
 | `identity` | `keel-spring-infra` | Orquestador, `keel-spring-validate` | Que el aprovisionamiento corrió y que el token se pidió **de verdad**. Sin `tokenChecked: OK`, todo escenario autenticado va a fallar en bloque y no por su contrato. |
 | `classes` / `uncovered` | `keel-spring-tests` | Orquestador, resumen final | Qué flujos quedaron traducidos y qué escenarios **no** se ejercitan (y por qué): dejan de darse por probados en silencio. |
 | `assumptions` | `keel-spring-tests` | `keel-spring-validate` | Apuestas sobre infraestructura que la fase 1 no puede verificar (nombre de cola, cliente M2M, secreto, bucket). La parte mecánica la cubre el humo del arnés que el script ejecuta antes de la suite; lo que quede sin cubrir y explique una tanda de fallos es un bloqueo `systemic`, no una colección de fallos de negocio. |
-| matriz + `exit code` | ⚙ `infra/score-scenarios.sh` | Orquestador | La matriz `FL-* → OK \| FALLO \| NO_EJERCITADO`, determinista desde el XML. `0` → fase 3 sin invocar árbitro · `1` → invocar `keel-spring-validate` con los fallos · `2` → humo del arnés roto, la suite **no** se ejecutó: el ciclo es de arnés, no de negocio. |
+| matriz + `exit code` | ⚙ `infra/score-scenarios.sh` | Orquestador | La matriz `FL-* → OK \| FALLO \| NO_EJERCITADO`, determinista desde el XML. `0` → fase 3 sin invocar árbitro · `1` → invocar `keel-spring-validate` con los fallos · `2` → humo del arnés roto, la suite **no** se ejecutó: el ciclo es de arnés, no de negocio, y **antes de relanzar hay que mirar dónde está el defecto** — ver «Un exit 2 no siempre es del agente de pruebas». |
 | `failures[].culprit` | `keel-spring-validate` | Orquestador | A quién relanzar: `code` → `keel-spring-code`; `test` y `harness` → `keel-spring-tests`; `design` → detenerse. |
 | `harnessPatches` | `keel-spring-tests` (relanzado) | Orquestador, `INFORME-GENERACION.md` | Parches al andamiaje generado (`AbstractFlowIT` y compañía). Van al informe de cierre para portarlos al generador: un defecto del arnés que se queda en el proyecto lo vuelve a pagar entero la siguiente generación. |
 | `failures` (escenario, `evidence`, `class`, request, response, esperado) | `keel-spring-validate` | `keel-spring-code` / `keel-spring-tests` (relanzado) | Evidencia **exacta** para el ciclo de fix. `evidence` es la ruta del volcado de `build/keel-failures/`: el relanzado abre el JSON crudo —antes de ejecutar nada, porque una pasada nueva lo sobrescribe—, no el extracto. `class` le dice qué clase re-ejecutar para verificarse. |

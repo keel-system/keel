@@ -214,6 +214,22 @@ test('el arnés resetea el estado con el script y sabe subir un binario', () => 
   assert.ok(harness.includes('infra/test-credentials.env'));
 });
 
+test('el arnés alcanza la base por su propio contenedor, no por el toolbox', () => {
+  const { read } = scaffoldVault();
+  const harness = read('src/integrationTest/java/com/content/assetvault/flows/AbstractFlowIT.java');
+
+  // mongosh no está en el toolbox (no hay paquete apk y el tarball pesa más que la
+  // imagen entera): vive dentro del contenedor de la propia base, igual que sqlplus
+  // con Oracle. Esa regla ya la aplican validate-infra.sh y reset-db.sh, y escribirla
+  // a mano en cada clase de prueba es justo lo que dejaba a Mongo inalcanzable.
+  assert.ok(harness.includes('private static final String DB_CONTAINER = "asset-vault-db";'));
+  assert.ok(harness.includes('protected static String db(String... argv)'));
+  assert.ok(harness.includes('protected static String dbShell(String command)'));
+  // El javadoc trae la invocación concreta del motor, copiada de la del catálogo:
+  // sin ella el agente tiene que deducir credenciales y URI.
+  assert.ok(harness.includes('mongodb://asset_vault:changeme@localhost:27017/asset_vault'));
+});
+
 test('nada del proyecto documental habla de JPA, Flyway ni H2', () => {
   const { read, exists, allFiles } = scaffoldVault();
 

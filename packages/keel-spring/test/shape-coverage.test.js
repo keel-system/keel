@@ -99,6 +99,9 @@ test('AbstractFlowIT con BD en memoria: sin script de reset, aislamiento por @Di
   assert.ok(!abstractFlow.includes('infra/reset-db.sh'));
   // El método sigue existiendo: toda clase de flujo llama a lo mismo.
   assert.ok(abstractFlow.includes('protected static void resetState()'));
+  // Y sin contenedor de BD tampoco hay a quién hablarle por CLI.
+  assert.ok(!abstractFlow.includes('DB_CONTAINER'));
+  assert.ok(!abstractFlow.includes('protected static String db(String... argv)'));
 });
 
 test('ningún archivo importa una clase propia que no se generó', () => {

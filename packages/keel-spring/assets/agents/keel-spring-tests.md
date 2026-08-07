@@ -80,9 +80,19 @@ source set `integrationTest`, así que un test que importe un DTO o una entidad 
      abrir la fase 2, antes de que se ejecute ninguna clase de flujo. Qué hacer si el arnés
      resulta estar roto está en `{{keel:docs}}/conventions/integration-tests.md` § El arnés es del
      generador.
+   - **Con capa `http-clients`, el proveedor de prueba se programa y se interroga desde el
+     test**: `stubFor` / `stubFailure` para el Given, y para el Then `stubCallCount` (cuántas
+     veces se llamó) o `stubRequests` + `stubRequestBody` / `stubRequestHeader` (**qué** se
+     envió: los campos del cuerpo saliente, o la cabecera de idempotencia sin la cual un
+     reintento nuestro encarga dos veces el mismo trabajo). Una cláusula sobre el contenido
+     de la llamada saliente **no** es un `uncovered`: el conteo no la cubre, pero el log sí.
    - Fíjate en **qué deja limpio `resetState()`** (BD, caché y los canales declarados) antes
      de escribir cualquier aserción que dependa de un estado inicial vacío. Lo que no esté
      en esa lista no se asume limpio: se purga en el test o se declara en `assumptions`.
+     Para vaciar **solo** la caché a mitad de flujo —medir un *miss* tras una invalidación—
+     está `clearCache()`, y para lo que no se ve por HTTP ni por el broker, `db(...)` /
+     `dbShell(...)`, que ya resuelven el contenedor correcto. No reimplementes ninguno de los
+     dos con `devtoolsShell` a mano.
 3. Escribe **una clase por flujo** en `src/integrationTest/java/<basePackage>/flows/`,
    llamada `<Flow>FlowIT` (p. ej. `ProductLifecycleFlowIT`), que hereda de `AbstractFlowIT`:
    - `@BeforeAll` que llama a `resetState()` — el reset es **por flujo**, jamás entre
@@ -151,6 +161,11 @@ source set `integrationTest`, así que un test que importe un DTO o una entidad 
      esconder dos causas distintas y arreglar una deja la otra para la pasada siguiente; y
      (b) registra el parche en `harnessPatches:` del reporte, que es lo que lo devuelve al
      generador en vez de dejarlo enterrado en este proyecto.
+   - **Si el defecto está fuera de `src/integrationTest/`, no lo toques**: `build.gradle`,
+     `infra/` y los scripts los produce `keel-spring build`, no tú, y un parche tuyo ahí se
+     pierde en la regeneración siguiente. Va a `blockers` con el archivo, la línea y el
+     defecto; lo aplica el orquestador y lo registra como fix del **generador**. Esto pasa
+     sobre todo con un humo KO (exit 2), donde la causa puede no estar en el arnés Java.
    - Cierra con `./gradlew integrationTest --tests '*HarnessSmokeIT'` en verde antes de
      devolver el control: si el humo del arnés sigue rojo, la suite completa no dirá nada
      útil.

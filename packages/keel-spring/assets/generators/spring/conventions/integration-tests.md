@@ -195,6 +195,9 @@ Reglas:
   en una sola aserción los campos presentes *y* la ausencia de los que no deben venir. Es la
   forma directa de cumplir "el `Then` verifica el cuerpo completo" del documento de
   escenarios.
+- `assertJson(actualJson, expectedJson)` es lo mismo sobre un JSON que no viene de una
+  `Response`: el cuerpo **saliente** que el servidor mandó al proveedor de prueba
+  (`stubRequestBody(...)`) o el `data` de un evento leído del broker.
 - Los valores **no deterministas** —ids generados, marcas de tiempo del servidor— no se
   comparan por literal: se extraen con `jsonPath(...)`, se verifican por forma
   (`assertIsUuid`, `assertIsInstant`) y se reinyectan en el JSON esperado para que el STRICT
@@ -392,7 +395,14 @@ Toda afirmación del `Then` se comprueba, por orden de preferencia:
    podman. La `public-base-url` del perfil `local` ya apunta ahí por eso mismo. Con un bucket
    `visibility: private` no hay URL pública —el `ResponseDto` lleva la key— y la vía es la
    operación del diseño que firma o media el acceso, no un atajo por la infraestructura.
-4. Por `devtools("cli", "arg", …)` en crudo, solo para lo que ninguna de las vías anteriores
+4. Por **la base de datos**, con `db("cli", "arg", …)` —o `dbShell("…")` si hace falta un pipe—,
+   para el efecto que ninguna operación del diseño devuelve. Resuelve el contenedor correcto por
+   sí solo: con Mongo y con Oracle la CLI vive dentro del contenedor de la BD, no en el toolbox,
+   y esa regla no se escribe a mano en una clase de prueba. El javadoc del método generado trae
+   la invocación concreta del motor elegido (credenciales y URI incluidas), copiada de la que
+   usa `infra/validate-infra.sh`. Sigue siendo el penúltimo recurso: si el servicio expone el
+   estado por su API, se comprueba por ahí, que es lo que hace un cliente.
+5. Por `devtools("cli", "arg", …)` en crudo, solo para lo que ninguna de las vías anteriores
    alcanza. Los argumentos van como **lista**, nunca como una cadena concatenada: es un
    `<runtime> exec` directo, sin shell. Si hace falta un pipe o una redirección, la variante
    explícita es `devtoolsShell("…")`. Y los servicios de respaldo se nombran **por su nombre
@@ -457,6 +467,13 @@ el equivalente es un índice que cambió de forma y que Mongo se niega a recrear
 nombre. Ninguno de los dos lo arregla `resetState()` sino `bash infra/reset-db.sh --schema`, y
 el diagnóstico está en `infra-validation.md § Cuando el esquema queda a medio camino`.
 
+**`clearCache()`** es el subconjunto de caché de ese reset, con su misma orden: vacía las claves
+`<servicio>:*` sin tocar nada más. Es lo que necesita el `Then` que mide un *miss* a mitad de
+flujo —que un dato se volvió a pedir al proveedor después de invalidarse— sin llevarse por
+delante los datos que dejaron los escenarios anteriores del mismo flujo. No se sustituye por un
+`devtoolsShell("redis-cli … DEL")` escrito a mano: el conjunto de claves que borra el helper y el
+que borra el reset son el mismo por construcción, y dos órdenes distintas se desalinean.
+
 Un recurso que **no** esté en esa lista no se da por limpio por analogía con la BD: o se
 purga en el propio test, o se declara en `assumptions` del reporte. Sin declararlo, el
 supuesto solo se rompe cuando alguien lleva varias sesiones de trabajo acumuladas — y
@@ -507,6 +524,9 @@ Helpers de `AbstractFlowIT`:
 | `stubFor(método, patrónRuta, status, cuerpoJson)` | El Given: qué responde el proveedor en **este** escenario |
 | `stubFailure(método, patrónRuta, status)` | Ejercitar `onFailure`/`onMiss` y el circuit breaker (5xx reintenta, 4xx no) |
 | `stubCallCount(método, patrónRuta)` | El Then: cuántas veces se llamó al proveedor — la única forma en caja negra de afirmar que un dato se cacheó, o que algo no se reintentó |
+| `stubRequests(método, patrónRuta)` | El Then que no se conforma con cuántas veces, sino con **qué** se envió: devuelve el log de peticiones recibidas, cada una como el JSON del stub |
+| `stubRequestBody(peticiónJson)` | El cuerpo saliente de una de esas peticiones, para compararlo con `assertJson(...)` |
+| `stubRequestHeader(peticiónJson, nombre)` | Una cabecera de esa petición, sin distinguir mayúsculas (el caso lo elige el cliente HTTP, no el contrato). `null` si no viajaba |
 | `resetStubs()` | Limpieza explícita a mitad de un flujo; entre clases ya lo hace `resetState()` |
 
 Reglas:
@@ -517,6 +537,18 @@ Reglas:
   sitio la mitad del escenario. El directorio existe para lo que no pertenece a ningún flujo.
 - **El patrón de ruta es la ruta del proveedor**, la que declara la llamada en `http-clients`
   (`urlPathPattern`, regex sobre el path sin query).
+- **Un `Then` sobre lo que se envió se asserta con el log, no con el conteo.** «La llamada al
+  proveedor llevaba tal dato» y «la llamada iba con `Idempotency-Key`» son cláusulas distintas de
+  «se llamó una vez», y `stubCallCount` no las cubre: dan igual con el cuerpo vacío. La segunda es
+  la que sostiene que un reintento *nuestro* no encarga dos veces el mismo trabajo, así que
+  dejarla sin asertar deja sin probar la garantía entera:
+
+  ```java
+  String call = stubRequests("POST", "/scans").get(0);
+  assertJson(stubRequestBody(call), """
+      {"assetId": "%s", "storageKey": "%s"}""".formatted(assetId, storageKey));
+  Assertions.assertNotNull(stubRequestHeader(call, "Idempotency-Key"));
+  ```
 - La sonda `SMOKE-6` cubre el ciclo entero (programar, llamar, contar, resetear). Si está roja, el
   problema es del arnés o del compose: no se ejecuta la suite.
 

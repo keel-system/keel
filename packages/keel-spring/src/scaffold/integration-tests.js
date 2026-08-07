@@ -14,7 +14,7 @@
 import { javaFile, javaPath } from './render.js';
 import { pascalCase } from '../lib/naming.js';
 import { DATABASES, BROKERS, CACHES, selectedInfra } from '../lib/stack-catalog.js';
-import { needsDevtools } from './devtools.js';
+import { cacheFlushCmd, concreteCmd, needsDevtools } from './devtools.js';
 import { tokenUrl, userTestClient } from './auth-provisioning.js';
 import { declaresIdempotency } from './http-idempotency.js';
 // Fuente única de los comandos de broker: lo que se emite aquí es lo mismo que
@@ -78,6 +78,33 @@ function brokerEntry(model) {
 // añadirlo al compose: sin él no se genera nada de sondeo.
 function usesDevtools(model) {
   return needsDevtools(selectedInfra(model));
+}
+
+// ¿Hay contenedor de BD al que hablar? Sin serviceKey no hay servicio en el compose
+// (H2 vive dentro de la JVM), y entonces no hay nada que sondear por CLI.
+function dbEntry(model) {
+  if (!model.layersPresent.persistence || !model.stack.database) return null;
+  const entry = DATABASES[model.stack.database];
+  return entry?.serviceKey ? entry : null;
+}
+
+// Misma regla que devtools.js aplica en validate-infra.sh y reset-db.sh: la CLI de
+// Mongo y de Oracle no está en el toolbox, sino dentro del contenedor de la BD.
+function dbContainer(model) {
+  const entry = dbEntry(model);
+  if (!entry) return null;
+  return entry.cliVia === 'dbcontainer' ? `${model.service.name}-db` : `${model.service.name}-devtools`;
+}
+
+// El motor de ejecución en contenedor hace falta para cualquiera de las dos vías.
+function usesContainerExec(model) {
+  return usesDevtools(model) || Boolean(dbEntry(model));
+}
+
+// Literal de cadena Java a partir de un comando del catálogo (que puede llevar
+// comillas simples y barras).
+function javaString(value) {
+  return `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;
 }
 
 // El arnés manda la cabecera si el diseño la declara, tenga o no persistencia
@@ -314,10 +341,13 @@ function abstractImports(model) {
     'org.skyscreamer.jsonassert.JSONAssert',
     'org.skyscreamer.jsonassert.JSONCompareMode'
   ];
-  if (reset || devtools || oidc) imports.push('java.io.IOException');
+  const containerExec = usesContainerExec(model);
+  if (reset || containerExec || oidc) imports.push('java.io.IOException');
   // Resolución explícita del bash con el que se invocan los scripts de infra/.
   if (reset) imports.push('java.io.File', 'java.util.Locale');
-  if (devtools) imports.push('java.nio.charset.StandardCharsets', 'java.util.ArrayList');
+  // Motor de ejecución en contenedor (runProcess) y las dos vías que lo usan:
+  // `devtools(...)` y `db(...)` construyen su lista de argumentos igual.
+  if (containerExec) imports.push('java.nio.charset.StandardCharsets', 'java.util.ArrayList');
   // Los cuerpos que van a una CLI del contenedor viajan por archivo, no por línea de
   // comandos: el sondeo de RabbitMQ, y con cualquier broker la entrega de mensajes
   // entrantes (deliverMessage), que es la que lleva JSON arbitrario del escenario.
@@ -360,7 +390,9 @@ function abstractImports(model) {
       'java.net.http.HttpClient',
       'java.net.http.HttpRequest',
       'java.net.http.HttpResponse',
-      'java.io.IOException'
+      'java.io.IOException',
+      // Log de peticiones del stub: las cabeceras llegan como objeto (stubRequestHeader).
+      'java.util.Map'
     );
   }
   if (needsDirtiesContext(model)) imports.push('org.springframework.test.annotation.DirtiesContext');
@@ -558,8 +590,17 @@ ${hasIdempotency(model) ? `
      * aquí: se extraen con {@link #jsonPath} y se verifican por forma.
      */
     protected void assertBody(Response response, String expectedJson) {
+        assertJson(response.body(), expectedJson);
+    }
+
+    /**
+     * Lo mismo, sobre un JSON que no viene de una {@link Response}: el cuerpo
+     * <b>saliente</b> que el servidor mandó al proveedor de prueba
+     * ({@code stubRequestBody(...)}), o el {@code data} de un evento leído del broker.
+     */
+    protected void assertJson(String actualJson, String expectedJson) {
         try {
-            JSONAssert.assertEquals(expectedJson, response.body(), JSONCompareMode.STRICT);
+            JSONAssert.assertEquals(expectedJson, actualJson, JSONCompareMode.STRICT);
         } catch (Exception e) {
             throw new AssertionError("El cuerpo no coincide con el esperado: " + e.getMessage(), e);
         }
@@ -622,7 +663,7 @@ ${hasIdempotency(model) ? `
     }
 
     // ── Estado e infraestructura ─────────────────────────────────────────────
-${resetSection(model)}${httpStubSection(model)}${devtoolsSection(model)}${securitySection(model)}}`;
+${resetSection(model)}${httpStubSection(model)}${devtoolsSection(model)}${dbSection(model)}${containerExecSection(model)}${securitySection(model)}}`;
 }
 
 // Proveedor de prueba de las integraciones salientes. Es infraestructura, no un
@@ -672,15 +713,57 @@ function httpStubSection(model) {
      * con {@code onFailure: ignore} no se reintentó.
      */
     protected static int stubCallCount(String method, String pathPattern) {
-        String body = stubAdmin("/requests/count",
-                """
-                {"method": "%s", "urlPathPattern": "%s"}""".formatted(method, pathPattern));
-        return JsonPath.read(body, "$.count");
+        return JsonPath.read(stubAdmin("/requests/count", stubCriterion(method, pathPattern)), "$.count");
+    }
+
+    /**
+     * Las peticiones que recibió el proveedor, cada una como el JSON con que las
+     * registra el stub: {@code {"url":…, "method":…, "headers":{…}, "body":"…"}}.
+     *
+     * <p>Es el Then que no se conforma con <i>cuántas</i> veces se llamó al proveedor
+     * sino con <b>qué</b> se le envió: que el cuerpo saliente lleve los campos que el
+     * diseño promete, o que la llamada viajara con la cabecera de idempotencia — sin
+     * ella, un reintento nuestro encarga dos veces el mismo trabajo y eso no se ve
+     * desde fuera. Con {@link #stubRequestBody} y {@link #stubRequestHeader} se leen
+     * las dos piezas sin conocer el formato del stub.
+     */
+    protected static List<String> stubRequests(String method, String pathPattern) {
+        List<Object> found = JsonPath.read(stubAdmin("/requests/find", stubCriterion(method, pathPattern)), "$.requests");
+        return found.stream().map(AbstractFlowIT::serialize).toList();
+    }
+
+    /** El cuerpo que viajó en esa petición, listo para {@link #assertJson}. */
+    protected static String stubRequestBody(String requestJson) {
+        return JsonPath.read(requestJson, "$.body");
+    }
+
+    /**
+     * Una cabecera de esa petición, buscada <b>sin distinguir mayúsculas</b>: quien
+     * decide el caso del nombre es el cliente HTTP, no el contrato. {@code null} si
+     * la petición no la llevaba.
+     */
+    protected static String stubRequestHeader(String requestJson, String name) {
+        Map<String, Object> headers = JsonPath.read(requestJson, "$.headers");
+        for (Map.Entry<String, Object> header : headers.entrySet()) {
+            if (header.getKey().equalsIgnoreCase(name)) {
+                return String.valueOf(header.getValue());
+            }
+        }
+        return null;
     }
 
     /** Borra los mappings y el log de peticiones. Lo llama {@link #resetState()}. */
     protected static void resetStubs() {
         stubAdmin("/reset", "");
+    }
+
+    /**
+     * Criterio de búsqueda del admin API, compartido por el conteo y el log: los dos
+     * tienen que seleccionar exactamente las mismas peticiones, así que es un literal.
+     */
+    private static String stubCriterion(String method, String pathPattern) {
+        return """
+                {"method": "%s", "urlPathPattern": "%s"}""".formatted(method, pathPattern);
     }
 
     private static String stubAdmin(String path, String body) {
@@ -712,6 +795,19 @@ function httpStubSection(model) {
             return JSON.writeValueAsString(value);
         } catch (Exception e) {
             throw new AssertionError("No se pudo escapar el cuerpo del stub", e);
+        }
+    }
+
+    /**
+     * Vuelve a JSON un nodo que extrajo JsonPath. Mismo motivo que {@link #toJson}:
+     * {@code toString()} sobre el {@code LinkedHashMap} que materializa JsonPath da
+     * sintaxis de Java, no JSON, y volver a leerlo lanza {@code PathNotFoundException}.
+     */
+    private static String serialize(Object node) {
+        try {
+            return JSON.writeValueAsString(node);
+        } catch (Exception e) {
+            throw new AssertionError("No se pudo serializar la petición del stub", e);
         }
     }
 `;
@@ -807,8 +903,6 @@ function devtoolsSection(model) {
   if (!usesDevtools(model)) return '';
   return `
     private static final String DEVTOOLS_CONTAINER = "${model.service.name}-devtools";
-
-    private static String containerRuntime;
 ${brokerEntry(model) ? `
     /** Archivo del contenedor por el que viaja el cuerpo de {@link #deliverMessage}. */
     private static final String DELIVER_BODY = "/tmp/keel-deliver.json";
@@ -833,7 +927,83 @@ ${brokerEntry(model) ? `
     protected static String devtoolsShell(String command) {
         return devtools("sh", "-c", command);
     }
-${bodyFileHelper(model)}
+${cacheHelper(model)}${bodyFileHelper(model)}`;
+}
+
+// Vaciado de la caché a mitad de escenario. La orden es literalmente la misma que
+// ejecuta infra/reset-db.sh (fuente única en devtools.js): un helper que borrase un
+// conjunto distinto del que borra el reset dejaría al escenario midiendo un estado
+// que ningún flujo puede reproducir.
+function cacheHelper(model) {
+  const cache = model.stack.cache ? CACHES[model.stack.cache] : null;
+  if (!cache) return '';
+  return `
+    /**
+     * Vacía las claves \`${model.service.artifactId}:*\` de la caché: las entradas
+     * cacheadas y las claves de idempotencia, que comparten prefijo por convención.
+     *
+     * <p>Es el subconjunto de caché de {@link #resetState()}, con su misma orden. Vale
+     * para el Then que necesita medir un <i>miss</i> a mitad de flujo —que un dato se
+     * volvió a pedir al proveedor tras invalidarse— sin llevarse por delante los datos
+     * que dejaron los escenarios anteriores del mismo flujo.
+     */
+    protected static void clearCache() {
+        devtoolsShell(${javaString(cacheFlushCmd(cache, model.service))});
+    }
+`;
+}
+
+// Acceso a la base de datos desde el arnés. Solo resuelve runtime y CONTENEDOR: el
+// comando lo escribe el escenario, porque lo que quiere comprobar es suyo. El
+// contenedor no es siempre el mismo —con Mongo y Oracle la CLI vive dentro del
+// propio contenedor de la BD (cliVia 'dbcontainer'), no en el toolbox—, y esa es
+// justo la parte que no se puede escribir a mano en una clase de prueba sin
+// duplicar la regla que ya aplican validate-infra.sh y reset-db.sh.
+function dbSection(model) {
+  const entry = dbEntry(model);
+  if (!entry) return '';
+  const dbName = model.service.name.replaceAll('-', '_');
+  return `
+    private static final String DB_CONTAINER = "${dbContainer(model)}";
+
+    /**
+     * Ejecuta una CLI contra la base de prueba y devuelve su salida. Argumentos
+     * siempre como <b>lista</b>, nunca concatenados en una cadena para \`sh -c\`: en
+     * Windows el cliente de contenedores reinterpreta las comillas escapadas y
+     * corrompe el comando antes de reenviarlo${usesDevtools(model) ? ' (ver {@link #devtools})' : ''}.
+     *
+     * <p>Lo que no se ve por HTTP y tampoco es un mensaje: que una escritura llegó de
+     * verdad al almacén, o que un borrado lógico dejó el documento donde debía. No es
+     * la vía por defecto —si el propio servicio lo expone por su API, se comprueba por
+     * ahí, que es lo que hace un cliente—, pero es la única para un efecto que ninguna
+     * operación del diseño devuelve.
+     *
+     * <p>La invocación del motor elegido (${entry.label}), la misma que usa
+     * \`infra/validate-infra.sh\`:
+     * <pre>dbShell(${javaString(concreteCmd(entry, dbName))});</pre>
+     */
+    protected static String db(String... argv) {
+        List<String> command = new ArrayList<>(List.of(containerRuntime(), "exec", DB_CONTAINER));
+        command.addAll(List.of(argv));
+        return runProcess(command);
+    }
+
+    /** Igual que {@link #db}, pero a través de un shell: pipes y redirecciones. */
+    protected static String dbShell(String command) {
+        return db("sh", "-c", command);
+    }
+`;
+}
+
+// Ejecución de comandos en un contenedor: el motor que comparten `devtools(...)` y
+// `db(...)`. Vive aparte de los dos porque sus condiciones no coinciden — un
+// proyecto documental sin nada más en el toolbox tiene BD que sondear y ningún
+// contenedor devtools, y al revés.
+function containerExecSection(model) {
+  if (!usesContainerExec(model)) return '';
+  return `
+    private static String containerRuntime;
+
     /**
      * Ejecuta el proceso, <b>exige código de salida 0</b> y deja la evidencia en
      * {@link FailureCapture}. Ignorar el código es lo que convierte un \`curl -sf\`
@@ -854,10 +1024,10 @@ ${bodyFileHelper(model)}
             }
             return output;
         } catch (IOException e) {
-            throw new IllegalStateException("No se pudo hablar con devtools: " + String.join(" ", command), e);
+            throw new IllegalStateException("No se pudo ejecutar el comando en el contenedor: " + String.join(" ", command), e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new IllegalStateException("Interrumpido hablando con devtools", e);
+            throw new IllegalStateException("Interrumpido hablando con el contenedor", e);
         }
     }
 
@@ -1570,7 +1740,9 @@ function smokeImports(model) {
       'java.net.URI',
       'java.net.http.HttpClient',
       'java.net.http.HttpRequest',
-      'java.net.http.HttpResponse'
+      'java.net.http.HttpResponse',
+      // El humo del stub lee su log de peticiones (stubRequests).
+      'java.util.List'
     );
   }
   return imports;
@@ -1685,12 +1857,20 @@ ${probes}
     tests.push(`
     @Test
     @Order(5)
-    @DisplayName("SMOKE-5: el reset vacía la caché del servicio")
+    @DisplayName("SMOKE-5: la caché del servicio se vacía (clearCache y reset)")
     void resetClearsCache() {
         devtoolsShell("redis-cli -h ${cache.serviceKey} SET ${key} 1");
+        clearCache();
+        Assertions.assertEquals("0", cacheProbe(),
+            "clearCache() no borra las claves '${model.service.artifactId}:*': un Then que mida un miss leería la entrada anterior.");
+        devtoolsShell("redis-cli -h ${cache.serviceKey} SET ${key} 1");
         resetState();
-        Assertions.assertEquals("0", devtoolsShell("redis-cli -h ${cache.serviceKey} EXISTS ${key}").trim(),
+        Assertions.assertEquals("0", cacheProbe(),
             "El reset no borra las claves '${model.service.artifactId}:*': una entrada cacheada o una clave de idempotencia sobrevive al flujo.");
+    }
+
+    private String cacheProbe() {
+        return devtoolsShell("redis-cli -h ${cache.serviceKey} EXISTS ${key}").trim();
     }
 `);
   }
@@ -1710,6 +1890,11 @@ ${probes}
         Assertions.assertEquals(1, probeStub(), "El stub no devolvió lo programado en /__keel-smoke.");
         Assertions.assertEquals(1, stubCallCount("GET", "/__keel-smoke"),
             "El stub no contabiliza las llamadas: las aserciones sobre cuántas veces se llamó al proveedor no valdrían.");
+        List<String> requests = stubRequests("GET", "/__keel-smoke");
+        Assertions.assertEquals(1, requests.size(),
+            "El stub no devuelve el log de peticiones: no se podría afirmar QUÉ se envió al proveedor, solo cuántas veces.");
+        Assertions.assertEquals("1", stubRequestHeader(requests.get(0), "x-keel-smoke"),
+            "El log de peticiones no conserva las cabeceras: la aserción sobre la cabecera de idempotencia saliente no valdría.");
         resetStubs();
         Assertions.assertEquals(0, stubCallCount("GET", "/__keel-smoke"),
             "El reset no borra el log de peticiones: un flujo contaría llamadas del anterior.");
@@ -1718,7 +1903,11 @@ ${probes}
     private int probeStub() {
         try {
             HttpResponse<String> response = HttpClient.newHttpClient().send(
-                    HttpRequest.newBuilder(URI.create("http://localhost:8090/__keel-smoke")).GET().build(),
+                    HttpRequest.newBuilder(URI.create("http://localhost:8090/__keel-smoke"))
+                            // Cabecera propia: la busca el humo por su nombre en OTRO caso, que
+                            // es como llegan las que pone un cliente HTTP de verdad.
+                            .header("X-Keel-Smoke", "1")
+                            .GET().build(),
                     HttpResponse.BodyHandlers.ofString());
             return response.statusCode() == 200 && response.body().contains("\\"ok\\"") ? 1 : 0;
         } catch (IOException | InterruptedException e) {

@@ -288,10 +288,8 @@ fi`);
   }
 
   if (cache) {
-    // Todas las claves del servicio: cachés (<servicio>:<uso>) y claves de
-    // idempotencia (<servicio>:idem:<clave>) comparten prefijo por convención.
     const host = cache.entry.serviceKey;
-    const flush = `redis-cli -h ${host} --scan --pattern '${service.artifactId}:*' | xargs -r redis-cli -h ${host} DEL >/dev/null`;
+    const flush = cacheFlushCmd(cache.entry, service);
     steps.push(`if $RUNTIME exec ${sq(`${service.name}-devtools`)} sh -c ${sq(flush)}; then
   echo "Caché vaciada (${cache.entry.label}: claves ${service.artifactId}:*)."
 else
@@ -379,10 +377,26 @@ ${steps.join('\n\n')}
 `;
 }
 
+/**
+ * Orden que vacía las claves del servicio en la caché, ejecutable dentro del
+ * contenedor devtools. Todas las claves: cachés (`<servicio>:<uso>`) y claves de
+ * idempotencia (`<servicio>:idem:<clave>`) comparten prefijo por convención.
+ *
+ * Es un export y no un literal porque tiene DOS consumidores —`infra/reset-db.sh`
+ * y el `clearCache()` del arnés (integration-tests.js)— y son lo mismo por
+ * definición: un helper que borrara un conjunto distinto del que borra el reset
+ * dejaría al escenario midiendo un estado que ningún flujo puede reproducir.
+ * Mismo criterio que `src/lib/broker-probes.js` con los comandos de broker.
+ */
+export function cacheFlushCmd(entry, service) {
+  const host = entry.serviceKey;
+  return `redis-cli -h ${host} --scan --pattern '${service.artifactId}:*' | xargs -r redis-cli -h ${host} DEL >/dev/null`;
+}
+
 // Sustituye los placeholders de un comando del catálogo (por defecto el
 // cliValidateCmd) con los valores concretos (credenciales de prueba). Solo las
 // BD usan user/pass/db/service.
-function concreteCmd(entry, dbName, cmd = entry.cliValidateCmd) {
+export function concreteCmd(entry, dbName, cmd = entry.cliValidateCmd) {
   const user = entry.user ? entry.user(dbName) : '';
   return cmd
     .replaceAll('{user}', user)

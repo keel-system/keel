@@ -1051,6 +1051,31 @@ test('deploy: sin capa security no hay realm que importar', () => {
   assert.ok(!read(workspace, 'deploy/docker-compose.yaml').includes('keycloak'));
 });
 
+test('BD con CLI en su propio contenedor y sin toolbox: el arnés conserva el motor de ejecución', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+
+  // Oracle (como Mongo) trae su CLI dentro del contenedor de la base, así que un
+  // proyecto sin nada más en el stack no genera contenedor devtools. `runProcess` y
+  // la detección de runtime vivían dentro de esa sección: aquí `db(...)` se quedaba
+  // sin motor y el arnés no compilaba.
+  scaffoldService({
+    manifest,
+    layers,
+    workspace,
+    stack: { database: 'oracle', broker: null, auth: null, cache: null, storage: null }
+  });
+
+  const harness = read(workspace, 'src/integrationTest/java/com/commerce/productcatalog/flows/AbstractFlowIT.java');
+  assert.ok(!harness.includes('DEVTOOLS_CONTAINER'));
+  assert.ok(harness.includes('private static final String DB_CONTAINER = "product-catalog-db";'));
+  assert.ok(harness.includes('private static String runProcess(List<String> command)'));
+  assert.ok(harness.includes('private static synchronized String containerRuntime()'));
+  // Y sus imports, que colgaban de la condición de devtools.
+  assert.ok(harness.includes('import java.util.ArrayList;'));
+  assert.ok(harness.includes('import java.nio.charset.StandardCharsets;'));
+});
+
 test('h2 como BD elegida: sin contenedor de BD ni devtools, pero con dependencia Gradle', () => {
   const workspace = makeWorkspace();
   const { manifest, layers } = loadFixture();
@@ -1462,10 +1487,27 @@ test('capa http-clients: la infraestructura de prueba levanta un proveedor stub'
   assert.ok(abstractIt.includes('protected static int stubCallCount('));
   assert.ok(abstractIt.includes('http://localhost:8090/__admin'));
 
+  // Y afirmar QUÉ se envió, no solo cuántas veces: sin el log de peticiones, una
+  // cláusula sobre el cuerpo saliente o sobre la cabecera de idempotencia se queda
+  // sin asertar (y la garantía que sostiene, sin probar).
+  assert.ok(abstractIt.includes('protected static List<String> stubRequests(String method, String pathPattern)'));
+  assert.ok(abstractIt.includes('protected static String stubRequestBody(String requestJson)'));
+  assert.ok(abstractIt.includes('protected static String stubRequestHeader(String requestJson, String name)'));
+  assert.ok(abstractIt.includes('"/requests/find"'));
+  // Conteo y log seleccionan las MISMAS peticiones: un solo criterio, no dos literales.
+  assert.ok(abstractIt.includes('private static String stubCriterion(String method, String pathPattern)'));
+  // La cabecera se busca sin distinguir caso: quien elige el caso es el cliente HTTP.
+  assert.ok(abstractIt.includes('equalsIgnoreCase(name)'));
+  // Y el cuerpo saliente se compara con la misma semántica que el entrante.
+  assert.ok(abstractIt.includes('protected void assertJson(String actualJson, String expectedJson)'));
+
   // Y el humo del arnés lo cubre: en rojo, el fallo es de fontanería, no de negocio.
   const smoke = read(workspace, 'src/integrationTest/java/com/commerce/productcatalog/flows/HarnessSmokeIT.java');
   assert.ok(smoke.includes('SMOKE-6'));
   assert.ok(smoke.includes('httpStubIsProgrammable'));
+  // El humo ejercita también el log: un helper que nadie prueba en vivo no está probado.
+  assert.ok(smoke.includes('stubRequests("GET", "/__keel-smoke")'));
+  assert.ok(smoke.includes('stubRequestHeader(requests.get(0), "x-keel-smoke")'));
 });
 
 test('sin capa http-clients no hay proveedor stub en la infraestructura', () => {
@@ -1476,6 +1518,11 @@ test('sin capa http-clients no hay proveedor stub en la infraestructura', () => 
   assert.ok(!read(workspace, 'infra/docker-compose.yaml').includes('wiremock'));
   assert.ok(!exists(workspace, 'infra/http-stubs/mappings/.gitkeep'));
   assert.ok(!read(workspace, 'infra/reset-db.sh').includes('__admin/reset'));
+
+  const abstractIt = read(workspace, 'src/integrationTest/java/com/commerce/productcatalog/flows/AbstractFlowIT.java');
+  for (const helper of ['stubFor(', 'stubCallCount(', 'stubRequests(', 'stubRequestHeader(']) {
+    assert.ok(!abstractIt.includes(helper), `sin http-clients no debería generarse ${helper}`);
+  }
 });
 
 test('capa http-clients: RestClient configurado + resilience4j + fallback stub', () => {

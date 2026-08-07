@@ -12,6 +12,8 @@ import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
 import { loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
+import { cacheFlushCmd } from '../src/scaffold/devtools.js';
+import { CACHES } from '../src/lib/stack-catalog.js';
 
 const fixtureDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'catalog-extended');
 const JAVA = 'src/main/java/com/commerce/catalog';
@@ -315,6 +317,24 @@ test('humo del arnés: con Kafka publica tráfico real; con RabbitMQ, los canale
     'utf8'
   );
   assert.ok(declared.includes('for (String channel : List.of("digests"))'));
+});
+
+test('clearCache() vacía exactamente lo mismo que el reset, con su misma orden', () => {
+  const { read, result } = scaffoldExtended();
+  const harness = read('src/integrationTest/java/com/commerce/catalog/flows/AbstractFlowIT.java');
+
+  // El Then que mide un miss tras una invalidación no puede resetear el estado
+  // entero: se llevaría por delante lo que dejaron los escenarios anteriores del
+  // mismo flujo. Y el conjunto de claves que borra tiene que ser EL MISMO que el
+  // del reset — de ahí que la orden salga de devtools.js y no de un literal aquí.
+  const expected = cacheFlushCmd(CACHES[result.stack.cache], { artifactId: 'catalog' });
+  assert.ok(harness.includes('protected static void clearCache()'));
+  assert.ok(harness.includes(`devtoolsShell("${expected}")`));
+
+  // Y el humo lo ejercita en vivo, no solo el reset completo.
+  const smoke = read('src/integrationTest/java/com/commerce/catalog/flows/HarnessSmokeIT.java');
+  assert.ok(smoke.includes('clearCache();'));
+  assert.ok(smoke.includes('clearCache() no borra las claves'));
 });
 
 // ─── Fricciones de la generación de catalog-spring (informe de fricciones) ────
