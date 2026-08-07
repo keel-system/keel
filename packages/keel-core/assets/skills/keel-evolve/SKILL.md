@@ -69,7 +69,7 @@ estructurales**—.
 Ese registro no es opcional en una evolución. Si el cambio reabre una entrada del catálogo
 (`keel-design/references/structural-decisions.md`) —una operación nueva necesita decidir su
 idempotencia, un evento nuevo su fiabilidad de publicación, una suscripción nueva su política de
-fallo—, **se vuelve a preguntar al diseñador**. La decisión que tomó para otra operación hace tres
+fallo, una `activation` nueva su compensación—, **se vuelve a preguntar al diseñador**. La decisión que tomó para otra operación hace tres
 meses no se hereda en silencio: heredarla es exactamente el default tácito que la metodología
 prohíbe.
 
@@ -101,6 +101,15 @@ referencias cruzadas afectadas**, no sobre el diseño entero. Un cambio pequeño
 maduro abre huecos nuevos que la validación mecánica no ve: un estado añadido al `lifecycle` al que
 ninguna operación lleva, una operación quitada que deja un error inalcanzable, una colección nueva
 sin orden total, un campo nuevo sin política de autorización a nivel de dato.
+
+**Tocar `lifecycle` o `activations` obliga además a revisar las `compensations` existentes**, y es
+la revisión que más fácil se salta porque el cambio parece de otra capa: retirar una transición o
+volver terminal un estado puede dejar sin arista de vuelta a una compensación que llevaba meses
+funcionando —`keel validate` lo da en rojo, pero el hallazgo aquí es *qué hacer*, no *que pase*—, y
+cambiar el `via` o el `effect` de una activación puede volver obsoleto lo que su compensación
+deshace. Recorre la clase 8 del barrido para cada compensación cuya activación o cuyas entidades
+haya tocado el cambio, y vuelve a responder las dos preguntas de §3.11: cómo no se aplica dos veces
+y a qué estado vuelve.
 
 Reporta la **tabla de cobertura** además de los hallazgos —es lo que distingue una clase que se
 recorrió y salió limpia de una que nadie miró— y cierra cada hallazgo con una decisión del usuario.

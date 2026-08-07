@@ -2460,3 +2460,463 @@ test('sort con el mismo campo repetido es error', () => {
   const { errors } = run(sortLayers({ entity: 'Order', list: true, sort: ['placedAt:asc', 'placedAt:desc'] }));
   assert.ok(errors.some((e) => e.includes(`ya está declarado; un criterio de orden no se repite`)));
 });
+
+// --- use-cases: transiciones de lifecycle y compensaciones verificables --------
+// El enlace operación ↔ máquina de estados, y las dos propiedades que hacen que una
+// compensación funcione: que no se aplique dos veces y que devuelva el estado propio a
+// donde estaba. Sin ellas una compensación valida en verde y falla en cada ejecución
+// (el guard del generador rechaza la transición no declarada) o deshace dos veces el
+// mismo trabajo.
+
+const compLayers = () => ({
+  domain: {
+    entities: {
+      Product: entity(
+        { status: { type: 'enum', values: ['draft', 'active', 'retired'], default: 'draft' } },
+        {
+          lifecycle: {
+            field: 'status',
+            transitions: { draft: ['active'], active: ['retired'], retired: ['active'] },
+          },
+        }
+      ),
+    },
+  },
+  'use-cases': {
+    operations: {
+      publishProduct: {
+        description: 'Publica un producto en borrador.',
+        kind: 'command',
+        input: { fields: { productId: { type: 'uuid', required: true } } },
+        output: 'void',
+        transitions: [{ entity: 'Product', from: ['draft'], to: 'active' }],
+      },
+      retireProduct: {
+        description: 'Retira un producto del catálogo.',
+        kind: 'command',
+        input: { fields: { productId: { type: 'uuid', required: true } } },
+        output: 'void',
+        transitions: [{ entity: 'Product', from: ['active'], to: 'retired' }],
+      },
+      reactivateProduct: {
+        description: 'Devuelve a activo un producto cuya retirada rechazó el registro.',
+        kind: 'command',
+        internal: true,
+        input: { fields: { productId: { type: 'uuid', required: true } } },
+        output: 'void',
+        transitions: [{ entity: 'Product', from: ['retired'], to: 'active' }],
+      },
+    },
+  },
+  api: {
+    endpoints: {
+      publishProduct: { method: 'POST', path: '/products/{productId}/publish' },
+      retireProduct: { method: 'POST', path: '/products/{productId}/retire' },
+    },
+  },
+  security: { authentication: { protocol: 'oidc' }, access: { default: { level: 'required' } } },
+  messaging: {
+    subscriptions: {
+      WithdrawalRejected: {
+        source: 'compliance',
+        payload: { productId: { type: 'uuid', required: true } },
+        triggers: 'reactivateProduct',
+        // Una compensación puede llegar antes del hecho que compensa: los reintentos
+        // absorben esa carrera y la DLQ es la red. Sin nada, el mensaje se pierde.
+        onFailure: { retry: { maxAttempts: 5, backoff: 'exponential' }, deadLetter: true },
+      },
+    },
+  },
+  'http-clients': {
+    clients: {
+      compliance: {
+        purpose: 'Inscribir las retiradas en el registro regulatorio.',
+        calls: { recordWithdrawal: { contract: 'POST /withdrawals -> inscripción de la retirada.' } },
+      },
+    },
+  },
+  dependencies: {
+    dependencies: {
+      compliance: {
+        description: 'Registro regulatorio de retiradas.',
+        contract: { version: '1.0.0' },
+        activations: {
+          recordWithdrawal: {
+            triggeredBy: ['retireProduct'],
+            via: { client: 'compliance', call: 'recordWithdrawal' },
+            effect: 'La retirada queda inscrita en el registro regulatorio.',
+            awaits: 'outcome',
+            onFailure: { action: 'ignore' },
+          },
+        },
+        compensations: [
+          {
+            onEvent: 'WithdrawalRejected',
+            undoes: 'recordWithdrawal',
+            description: 'El registro rechazó la retirada; el producto vuelve a activo.',
+          },
+        ],
+      },
+    },
+  },
+});
+
+const transitionOf = (layers, op = 'reactivateProduct') => layers['use-cases'].operations[op].transitions[0];
+
+test('compensación con transición de vuelta declarada no produce errores ni warnings', () => {
+  const { errors, warnings } = run(compLayers());
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
+test('spec sin transitions no falla por la ausencia del campo (retrocompatibilidad)', () => {
+  const layers = compLayers();
+  for (const op of Object.values(layers['use-cases'].operations)) delete op.transitions;
+  // La compensación se queda sin su guard, así que el error de idempotencia sí aparece;
+  // lo que no puede aparecer es un fallo por la ausencia del campo en sí.
+  const { errors } = run(layers);
+  assert.ok(!errors.some((e) => e.includes('.transitions[')), errors.join('\n'));
+});
+
+// A1-A5: la transición que una operación declara existe de verdad en el lifecycle.
+
+test('transitions hacia una entidad inexistente es error', () => {
+  const layers = compLayers();
+  transitionOf(layers).entity = 'Producto';
+  const { errors } = run(layers);
+  assert.ok(errors.some((e) => e.includes(`transitions[0].entity: la entidad 'Producto' no existe en domain: entities`)));
+});
+
+test('transitions sobre una entidad sin lifecycle es error', () => {
+  const layers = compLayers();
+  delete layers.domain.entities.Product.lifecycle;
+  const { errors } = run(layers);
+  assert.ok(errors.some((e) => e.includes(`la entidad 'Product' no declara lifecycle`)));
+});
+
+test('transitions con un estado destino fuera del enum es error', () => {
+  const layers = compLayers();
+  transitionOf(layers).to = 'revived';
+  const { errors } = run(layers);
+  assert.ok(errors.some((e) => e.includes(`transitions[0].to: el estado 'revived' no es un valor del enum 'status'`)));
+});
+
+test('transitions con un estado origen fuera del enum es error', () => {
+  const layers = compLayers();
+  transitionOf(layers).from = ['withdrawn'];
+  const { errors } = run(layers);
+  assert.ok(errors.some((e) => e.includes(`transitions[0].from: el estado 'withdrawn' no es un valor del enum 'status'`)));
+});
+
+test('transición que el lifecycle no declara es error, aunque ambos estados existan', () => {
+  // El caso real: el diseño declara `retired` terminal y una compensación necesita
+  // volver a `active`. Antes validaba en verde y el guard del generador la rechazaba
+  // en cada ejecución.
+  const layers = compLayers();
+  layers.domain.entities.Product.lifecycle.transitions.retired = [];
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) =>
+      e.includes(
+        `transitions[0]: la transición 'retired' → 'active' no está declarada en domain: Product.lifecycle.transitions.retired`
+      )
+    ),
+    errors.join('\n')
+  );
+});
+
+test('una query que declara transitions es error', () => {
+  const layers = compLayers();
+  layers['use-cases'].operations.reactivateProduct.kind = 'query';
+  const { errors } = run(layers);
+  assert.ok(errors.some((e) => e.includes(`reactivateProduct.transitions: una operación kind: query no cambia de estado`)));
+});
+
+// A6: la inversa — una transición que nadie ejecuta no es contrato, es intención.
+
+test('transición del lifecycle que ninguna operación ejecuta es warning', () => {
+  const layers = compLayers();
+  layers.domain.entities.Product.lifecycle.transitions.draft = ['active', 'retired'];
+  const { warnings } = run(layers);
+  assert.ok(
+    warnings.some((w) => w.includes(`transitions.draft: ninguna operación de use-cases declara ejecutar 'draft' → 'retired'`)),
+    warnings.join('\n')
+  );
+});
+
+// B1-B4: las propiedades de una compensación.
+
+test('compensación disparada por una query es error', () => {
+  const layers = compLayers();
+  const op = layers['use-cases'].operations.reactivateProduct;
+  op.kind = 'query';
+  delete op.transitions;
+  const { errors } = run(layers);
+  assert.ok(errors.some((e) => e.includes(`la operación 'reactivateProduct' que dispara la compensación es kind: query`)));
+});
+
+test('compensación sin ningún mecanismo que impida aplicarla dos veces es error', () => {
+  const layers = compLayers();
+  delete layers['use-cases'].operations.reactivateProduct.transitions;
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) => e.includes(`nada impide que 'reactivateProduct' se aplique dos veces`)),
+    errors.join('\n')
+  );
+});
+
+test('los dos mecanismos de idempotencia de evento valen por separado', () => {
+  const withMessageId = compLayers();
+  delete withMessageId['use-cases'].operations.reactivateProduct.transitions;
+  withMessageId.messaging.subscriptions.WithdrawalRejected.payload.eventId = { type: 'uuid', required: true };
+  withMessageId.messaging.subscriptions.WithdrawalRejected.contract = {
+    messageId: { location: 'field', name: 'eventId' },
+  };
+  const messageIdRun = run(withMessageId);
+  assert.ok(!messageIdRun.errors.some((e) => e.includes('se aplique dos veces')), messageIdRun.errors.join('\n'));
+
+  // El segundo es el fixture base: la transición retired → active no se puede repetir
+  // porque 'active' no está entre sus propios orígenes.
+  assert.ok(!run(compLayers()).errors.some((e) => e.includes('se aplique dos veces')));
+});
+
+test('idempotency NO protege la reentrega de un evento: es el otro eje de repetición', () => {
+  // La clave de `idempotency` llega por la cabecera Idempotency-Key, que el broker no
+  // manda: declararla no impide que la compensación se aplique dos veces. Darla por
+  // buena sería peor que no tener la regla — protegería en el papel y no en el código.
+  const layers = compLayers();
+  const op = layers['use-cases'].operations.reactivateProduct;
+  delete op.transitions;
+  op.idempotency = { keySource: 'payload-hash' };
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) => e.includes(`nada impide que 'reactivateProduct' se aplique dos veces`)),
+    errors.join('\n')
+  );
+});
+
+// La otra mitad: un bloque `idempotency` cuya clave no tiene por dónde entrar.
+
+test('idempotency en una operación sin endpoint HTTP es error', () => {
+  const layers = compLayers();
+  // reactivateProduct es internal y solo la dispara la suscripción.
+  layers['use-cases'].operations.reactivateProduct.idempotency = { keySource: 'client-key' };
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) =>
+      e.includes(`reactivateProduct.idempotency: la clave llega por la cabecera Idempotency-Key y esta operación no tiene endpoint HTTP`)
+    ),
+    errors.join('\n')
+  );
+  // Y el mensaje apunta al mecanismo correcto para su disparador.
+  assert.ok(errors.some((e) => e.includes('la reentrega se ataja con contract.messageId')));
+});
+
+test('idempotency en una operación expuesta por HTTP es su sitio y no produce error', () => {
+  const layers = compLayers();
+  layers['use-cases'].operations.retireProduct.idempotency = { keySource: 'client-key', ttlSeconds: 3600 };
+  const { errors } = run(layers);
+  assert.ok(!errors.some((e) => e.includes('.idempotency:')), errors.join('\n'));
+});
+
+test('sin endpoint y sin suscripción el mensaje señala la clave natural, no messageId', () => {
+  const layers = compLayers();
+  const ops = layers['use-cases'].operations;
+  ops.purgeDrafts = {
+    description: 'Elimina los borradores caducados una vez al día.',
+    kind: 'command',
+    input: { fields: {} },
+    output: 'void',
+    schedule: { cron: '0 0 3 * * *' },
+    idempotency: { keySource: 'payload-hash' },
+  };
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) => e.includes('purgeDrafts.idempotency') && e.includes('la clave natural en persistence')),
+    errors.join('\n')
+  );
+});
+
+test('una transición cuyo destino es también origen no basta como guard de idempotencia', () => {
+  const layers = compLayers();
+  layers.domain.entities.Product.lifecycle.transitions.active = ['retired', 'active'];
+  transitionOf(layers).from = ['retired', 'active'];
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) => e.includes(`nada impide que 'reactivateProduct' se aplique dos veces`)),
+    errors.join('\n')
+  );
+});
+
+test('sobre un canal externo el guard de lifecycle a solas es warning: la reentrega acaba en la DLQ', () => {
+  const layers = compLayers();
+  layers.messaging.channels = { 'compliance-events': { external: true } };
+  layers.messaging.subscriptions.WithdrawalRejected.channel = 'compliance-events';
+  const { warnings } = run(layers);
+  assert.ok(
+    warnings.some((w) => w.includes('solo la frena el guard de lifecycle')),
+    warnings.join('\n')
+  );
+});
+
+test('compensación que no devuelve el estado que movió el trabajo encargado es warning', () => {
+  // retireProduct mueve Product a retired y dispara la activación; si la compensación
+  // no declara ninguna transición sobre Product, el producto se queda retirado.
+  const layers = compLayers();
+  delete layers['use-cases'].operations.reactivateProduct.transitions;
+  layers['use-cases'].operations.reactivateProduct.idempotency = { keySource: 'payload-hash' };
+  const { warnings } = run(layers);
+  assert.ok(
+    warnings.some((w) => w.includes(`'reactivateProduct' no declara ninguna transición sobre esa entidad`)),
+    warnings.join('\n')
+  );
+});
+
+// C: la regla general de reentrega, que la doc anunciaba como error y nadie aplicaba.
+
+test('suscripción con reintentos y nada que impida el doble efecto es error', () => {
+  const layers = compLayers();
+  delete layers['use-cases'].operations.reactivateProduct.transitions;
+  layers.messaging.subscriptions.WithdrawalRejected.onFailure = { retry: { maxAttempts: 3 } };
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) => e.includes(`reintenta (maxAttempts: 3) y nada impide que 'reactivateProduct' se aplique dos veces`)),
+    errors.join('\n')
+  );
+});
+
+test('suscripción con reintentos protegida por la transición no es error', () => {
+  const layers = compLayers();
+  layers.messaging.subscriptions.WithdrawalRejected.onFailure = { retry: { maxAttempts: 3 } };
+  const { errors } = run(layers);
+  assert.ok(!errors.some((e) => e.includes('reintenta (maxAttempts: 3)')), errors.join('\n'));
+});
+
+// Guarda de puerta vs. guarda de dominio. `contract.messageId` cierra el listener y la
+// idempotency HTTP cierra el filtro: cada una cubre su camino y no sabe de la otra. Solo
+// la transición vive en el dominio, por debajo de las dos puertas. Si la compensación se
+// puede lanzar también a mano, es la única que sirve.
+
+// La compensación del fixture es `internal: true`; exponerla exige quitar esa marca,
+// porque un endpoint sobre una operación interna ya es error por su cuenta.
+const exposedCompensation = () => {
+  const layers = compLayers();
+  const op = layers['use-cases'].operations.reactivateProduct;
+  delete op.internal;
+  layers.api.endpoints.reactivateProduct = { method: 'POST', path: '/products/{productId}/reactivate' };
+  return layers;
+};
+
+test('compensación también invocable por HTTP protegida solo por messageId es error', () => {
+  const layers = exposedCompensation();
+  delete layers['use-cases'].operations.reactivateProduct.transitions;
+  layers.messaging.subscriptions.WithdrawalRejected.payload.eventId = { type: 'uuid', required: true };
+  layers.messaging.subscriptions.WithdrawalRejected.contract = {
+    messageId: { location: 'field', name: 'eventId' },
+  };
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) => e.includes(`'reactivateProduct' se puede ejecutar por dos caminos`)),
+    errors.join('\n')
+  );
+});
+
+test('la transición cubre los dos caminos: sin error aunque la compensación se exponga', () => {
+  // El fixture base ya declara retired → active, que es irrepetible.
+  const { errors } = run(exposedCompensation());
+  assert.ok(!errors.some((e) => e.includes('dos caminos')), errors.join('\n'));
+});
+
+test('añadir idempotency no salva a la compensación expuesta: no cierra la puerta que falta', () => {
+  const layers = exposedCompensation();
+  const op = layers['use-cases'].operations.reactivateProduct;
+  delete op.transitions;
+  op.idempotency = { keySource: 'client-key', ttlSeconds: 3600 };
+  layers.messaging.subscriptions.WithdrawalRejected.payload.eventId = { type: 'uuid', required: true };
+  layers.messaging.subscriptions.WithdrawalRejected.contract = {
+    messageId: { location: 'field', name: 'eventId' },
+  };
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) => e.includes(`'reactivateProduct' se puede ejecutar por dos caminos`)),
+    errors.join('\n')
+  );
+});
+
+test('la compensación interna de siempre no la toca la regla', () => {
+  // Un solo camino: la protección de ese camino basta, se llame como se llame.
+  const layers = compLayers();
+  delete layers['use-cases'].operations.reactivateProduct.transitions;
+  layers.messaging.subscriptions.WithdrawalRejected.payload.eventId = { type: 'uuid', required: true };
+  layers.messaging.subscriptions.WithdrawalRejected.contract = {
+    messageId: { location: 'field', name: 'eventId' },
+  };
+  const { errors } = run(layers);
+  assert.ok(!errors.some((e) => e.includes('dos caminos')), errors.join('\n'));
+});
+
+// --- Compensación: llegar fuera de orden y par hacer/deshacer -----------------
+// Entre confirmar nuestro trabajo y que el proveedor publique su fallo no hay orden
+// garantizado: la compensación puede llegar ANTES del hecho que compensa, y entonces
+// se rechaza. Lo que decide si se pierde o se recupera es la política de la suscripción.
+
+const withFailurePolicy = (onFailure) => {
+  const layers = compLayers();
+  const sub = layers.messaging.subscriptions.WithdrawalRejected;
+  if (onFailure) sub.onFailure = onFailure;
+  else delete sub.onFailure;
+  return layers;
+};
+
+test('compensación sin reintentos ni deadLetter es error: la llegada fuera de orden se pierde', () => {
+  const { errors } = run(withFailurePolicy(null));
+  assert.ok(
+    errors.some((e) => e.includes('no reintenta ni tiene deadLetter')),
+    errors.join('\n')
+  );
+});
+
+test('compensación con deadLetter pero sin reintentos es aviso, no error', () => {
+  const { errors, warnings } = run(withFailurePolicy({ deadLetter: true }));
+  assert.ok(!errors.some((e) => e.includes('no reintenta ni tiene deadLetter')), errors.join('\n'));
+  assert.ok(
+    warnings.some((w) => w.includes('acaba en la DLQ al primer intento')),
+    warnings.join('\n')
+  );
+});
+
+test('compensación con reintentos no produce ninguno de los dos', () => {
+  const { errors, warnings } = run(
+    withFailurePolicy({ retry: { maxAttempts: 5, backoff: 'exponential' }, deadLetter: true })
+  );
+  assert.ok(!errors.some((e) => e.includes('fuera de orden') || e.includes('no reintenta')), errors.join('\n'));
+  assert.ok(!warnings.some((w) => w.includes('DLQ al primer intento')), warnings.join('\n'));
+});
+
+test('compensación sin undoes habiendo activaciones es aviso', () => {
+  const layers = withFailurePolicy({ retry: { maxAttempts: 3 }, deadLetter: true });
+  delete layers.dependencies.dependencies.compliance.compensations[0].undoes;
+  const { warnings } = run(layers);
+  assert.ok(
+    warnings.some((w) => w.includes("no declara 'undoes' habiendo activaciones")),
+    warnings.join('\n')
+  );
+});
+
+test('sin activaciones, la ausencia de undoes no se avisa: no hay a qué apuntar', () => {
+  const layers = withFailurePolicy({ retry: { maxAttempts: 3 }, deadLetter: true });
+  const dep = layers.dependencies.dependencies.compliance;
+  delete dep.compensations[0].undoes;
+  delete dep.activations;
+  // Sin activaciones la dependencia necesita otro motivo de existir: un need la sostiene.
+  dep.needs = {
+    withdrawalStatus: {
+      description: 'Estado regulatorio de la retirada de un producto.',
+      usedBy: ['retireProduct'],
+      strategy: 'on-demand',
+      fetchedFrom: { client: 'compliance', call: 'recordWithdrawal' },
+    },
+  };
+  const { warnings } = run(layers);
+  assert.ok(!warnings.some((w) => w.includes("no declara 'undoes'")), warnings.join('\n'));
+});

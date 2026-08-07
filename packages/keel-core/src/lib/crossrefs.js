@@ -496,6 +496,74 @@ export function checkCrossRefs({ layers, wip = false }) {
     }
   }
 
+  // use-cases: transiciones de lifecycle que ejecuta cada operación. Es el único enlace
+  // del DSL entre un caso de uso y la máquina de estados de domain, y lo que hace
+  // verificable que la transición existe de verdad: el generador deriva un guard que
+  // rechaza cualquier destino no declarado, así que una operación que pide una arista
+  // que el lifecycle no tiene no falla al generar — falla en cada ejecución, en runtime.
+  const executedTransitions = new Set(); // `${entidad}|${from}|${to}` (para la inversa)
+  for (const [opName, op] of Object.entries(operations)) {
+    if (!op.transitions) continue;
+    // Una query no cambia de estado: si declara transiciones, una de las dos cosas miente.
+    if (op.kind === 'query') {
+      errors.push(`use-cases: ${opName}.transitions: una operación kind: query no cambia de estado`);
+    }
+    for (const [index, transition] of op.transitions.entries()) {
+      const where = `use-cases: ${opName}.transitions[${index}]`;
+      const entity = domain.entities?.[transition.entity];
+      if (!entity) {
+        errors.push(`${where}.entity: la entidad '${transition.entity}' no existe en domain: entities`);
+        continue;
+      }
+      const lifecycle = entity.lifecycle;
+      if (!lifecycle) {
+        errors.push(
+          `${where}.entity: la entidad '${transition.entity}' no declara lifecycle — sin máquina de estados no hay transición que ejecutar`
+        );
+        continue;
+      }
+      const values = enumValuesOf(entity.fields?.[lifecycle.field]);
+      // Si el lifecycle está mal formado, el bloque de domain ya lo reportó: no se duplica.
+      if (!values) continue;
+      const valueSet = new Set(values);
+      if (!valueSet.has(transition.to)) {
+        errors.push(
+          `${where}.to: el estado '${transition.to}' no es un valor del enum '${lifecycle.field}' de ${transition.entity}`
+        );
+        continue;
+      }
+      for (const from of transition.from ?? []) {
+        if (!valueSet.has(from)) {
+          errors.push(
+            `${where}.from: el estado '${from}' no es un valor del enum '${lifecycle.field}' de ${transition.entity}`
+          );
+          continue;
+        }
+        if (!(lifecycle.transitions?.[from] ?? []).includes(transition.to)) {
+          errors.push(
+            `${where}: la transición '${from}' → '${transition.to}' no está declarada en ` +
+              `domain: ${transition.entity}.lifecycle.transitions.${from} — el guard del generador la rechazaría siempre`
+          );
+          continue;
+        }
+        executedTransitions.add(`${transition.entity}|${from}|${transition.to}`);
+      }
+    }
+  }
+
+  // Inversa: una transición que ninguna operación ejecuta no es contrato, es intención.
+  for (const [entityName, entity] of Object.entries(domain.entities ?? {})) {
+    for (const [from, targets] of Object.entries(entity.lifecycle?.transitions ?? {})) {
+      for (const to of targets ?? []) {
+        if (!executedTransitions.has(`${entityName}|${from}|${to}`)) {
+          warnings.push(
+            `domain: ${entityName}.lifecycle.transitions.${from}: ninguna operación de use-cases declara ejecutar '${from}' → '${to}'`
+          );
+        }
+      }
+    }
+  }
+
   // use-cases: una caché que embebe otro agregado tiene que poder invalidarse cuando
   // cambia ESE agregado, no solo cuando cambia la entidad principal. `invalidatedBy`
   // se validaba solo en la dirección barata —que el nombre del evento exista—, que no
@@ -737,6 +805,7 @@ export function checkCrossRefs({ layers, wip = false }) {
 
   // auto: true solo deriva rutas por convención para operaciones con nombre CRUD
   const autoCoversOp = (name) => api?.auto === true && /^(create|get|list|update|delete)[A-Z]/.test(name);
+  const apiEndpoints = new Set(Object.keys(api?.endpoints ?? {}));
 
   // M2M: coherencia entre la audiencia de los endpoints y las reglas de acceso
   if (api && security) {
@@ -840,6 +909,27 @@ export function checkCrossRefs({ layers, wip = false }) {
       errors.push(`${where}: el canal '${channel}' no está en messaging: channels`);
     }
   };
+  // Un consumidor de eventos recibe at-least-once: el mismo mensaje puede llegar dos veces
+  // (reintento, redespliegue, fallo del ack). Dos mecanismos impiden que el efecto se
+  // aplique dos veces, y basta con uno.
+  //
+  // `use-cases.<op>.idempotency` NO es uno de ellos, aunque lo parezca: es el otro eje de
+  // repetición —el reintento de un llamante HTTP, identificado por la clave que manda en
+  // una cabecera—. El broker no manda esa cabecera, así que en el camino de eventos esa
+  // clave no existe y declararla no impide nada. Son dos mecanismos distintos incluso en
+  // el código generado (`processed_event` frente a `idempotency_record`), y confundirlos
+  // es peor que no tener la regla: da por protegida una operación que no lo está.
+  const redeliveryGuardsOf = (eventName) => {
+    const sub = messaging?.subscriptions?.[eventName];
+    const op = operations[sub?.triggers];
+    const guards = [];
+    if (sub?.contract?.messageId) guards.push('messageId'); // deduplicación antes del dominio
+    // Una transición cuyo destino no está entre sus propios orígenes es irrepetible por
+    // construcción: al segundo intento la entidad ya está en `to` y el guard la rechaza.
+    if ((op?.transitions ?? []).some((t) => !(t.from ?? []).includes(t.to))) guards.push('transitions');
+    return guards;
+  };
+
   for (const [eventName, event] of Object.entries(messaging?.publishing?.events ?? {})) {
     checkFieldMap(event.payload, `messaging: publishing.events.${eventName}.payload`);
     checkChannel(event.channel, `messaging: publishing.events.${eventName}.channel`);
@@ -880,6 +970,18 @@ export function checkCrossRefs({ layers, wip = false }) {
       errors.push(`${where}.triggers: la operación '${sub.triggers}' no existe en use-cases`);
       continue;
     }
+
+    // Reintentar es pedir explícitamente que el mismo mensaje se entregue más de una vez.
+    // Sin nada que lo impida, el efecto se aplica tantas veces como intentos haya.
+    const maxAttempts = sub.onFailure?.retry?.maxAttempts ?? 1;
+    if (maxAttempts > 1 && redeliveryGuardsOf(eventName).length === 0) {
+      errors.push(
+        `${where}: reintenta (maxAttempts: ${maxAttempts}) y nada impide que '${sub.triggers}' se aplique dos veces — ` +
+          `declara contract.messageId (deduplica el mensaje antes del dominio) o la transición de lifecycle que la hace ` +
+          `irrepetible. La idempotency de la operación no vale aquí: su clave llega por cabecera HTTP y el broker no la manda`
+      );
+    }
+
     const mapping = sub.input ?? {};
     for (const [inputField, payloadField] of Object.entries(mapping)) {
       if (!payloadFields.has(payloadField)) {
@@ -1122,12 +1224,127 @@ export function checkCrossRefs({ layers, wip = false }) {
         checkDeclaredError(spec.onFailure?.error, `${where}.onFailure.error`, spec.triggeredBy, 'triggeredBy');
       }
 
+      // Compensaciones. Hasta aquí solo se comprobaba que las referencias existieran, que
+      // es tratarlas como un hecho de topología. Pero una compensación es el punto del
+      // diseño donde un fallo silencioso cuesta más caro: se ejecuta ante un evento de
+      // fallo, por un canal at-least-once, y deshace trabajo real. Aplicarla dos veces
+      // libera el stock dos veces o reembolsa dos veces, y dejar la entidad propia en el
+      // estado que le puso el trabajo que se acaba de deshacer es una inconsistencia que
+      // ninguna otra capa ve.
       const activationNames = new Set(Object.keys(dep.activations ?? {}));
       for (const [index, compensation] of (dep.compensations ?? []).entries()) {
         const where = `dependencies: ${depName}.compensations[${index}]`;
         checkConsumedEvent(compensation.onEvent, where, depName, 'suscripción');
         if (compensation.undoes && !activationNames.has(compensation.undoes)) {
           errors.push(`${where}.undoes: la activación '${compensation.undoes}' no existe en ${depName}.activations`);
+        }
+        // Sin `undoes` el par hacer/deshacer no es verificable: nada puede contrastar que
+        // la compensación devuelva el estado que movió el trabajo encargado, ni saber qué
+        // encargo se queda sin deshacer si esta compensación desaparece. Solo se avisa
+        // habiendo activaciones — sin ellas, lo que se deshace es otra cosa y el campo no
+        // tendría a qué apuntar.
+        if (!compensation.undoes && activationNames.size > 0) {
+          warnings.push(
+            `${where}: no declara 'undoes' habiendo activaciones en '${depName}' (${[...activationNames].join(', ')}) — ` +
+              `sin él el par hacer/deshacer no es verificable y la comprobación del estado de vuelta no llega a evaluarse`
+          );
+        }
+
+        const sub = subscriptions[compensation.onEvent];
+        const undoOpName = sub?.triggers;
+        const undoOp = operations[undoOpName];
+        if (!undoOp) continue; // suscripción o triggers inexistentes: ya está reportado
+
+        if (undoOp.kind === 'query') {
+          errors.push(
+            `${where}: la operación '${undoOpName}' que dispara la compensación es kind: query — una lectura no deshace nada`
+          );
+        }
+
+        const guards = redeliveryGuardsOf(compensation.onEvent);
+        if (guards.length === 0) {
+          errors.push(
+            `${where}: la compensación se ejecuta ante un evento que puede reentregarse y nada impide que '${undoOpName}' ` +
+              `se aplique dos veces (deshacer dos veces el mismo trabajo no es deshacerlo) — declara contract.messageId en ` +
+              `messaging: subscriptions.${compensation.onEvent} o la transición de lifecycle que la hace irrepetible. ` +
+              `La idempotency de la operación no vale aquí: su clave llega por cabecera HTTP y el broker no la manda`
+          );
+        } else if (
+          guards.length === 1 &&
+          guards[0] === 'transitions' &&
+          sub.channel &&
+          messaging?.channels?.[sub.channel]?.external === true
+        ) {
+          // Sin envoltura Keel el consumidor no tiene un id de mensaje por defecto con el
+          // que deduplicar antes: la reentrega llega al dominio y sale rechazada por el
+          // guard. Es correcto, pero cada reentrega normal acaba en la cola de descartes.
+          warnings.push(
+            `${where}: sobre el canal externo '${sub.channel}' la reentrega solo la frena el guard de lifecycle de '${undoOpName}' — ` +
+              `declara contract.messageId para deduplicar antes de llegar al dominio y no mandar a la DLQ una reentrega normal`
+          );
+        }
+
+        // Llegar fuera de orden. Entre que este servicio confirma su trabajo y que el
+        // proveedor publica su fallo no hay ninguna garantía de orden: el evento de
+        // compensación puede llegar ANTES del hecho que compensa. Y entonces se rechaza
+        // —el guard de lifecycle no admite la transición desde un estado al que aún no se
+        // ha llegado, y sin guard el handler no encuentra qué deshacer—, así que lo que
+        // decide el desenlace es la política de la suscripción: sin reintentos el mensaje
+        // se pierde, y lo que se pierde es lo que deshace trabajo real contra otro
+        // servidor. No es un caso exótico; es el orden normal de dos hechos concurrentes.
+        const attempts = sub.onFailure?.retry?.maxAttempts ?? 1;
+        if (attempts <= 1 && !sub.onFailure?.deadLetter) {
+          errors.push(
+            `${where}: la suscripción a '${compensation.onEvent}' no reintenta ni tiene deadLetter — un evento de ` +
+              `compensación que llegue antes del hecho que compensa se rechaza y se pierde en silencio, y con él el ` +
+              `trabajo que nadie deshará. Declara onFailure.retry (absorbe la carrera sin intervención) o, como mínimo, deadLetter`
+          );
+        } else if (attempts <= 1) {
+          warnings.push(
+            `${where}: la suscripción a '${compensation.onEvent}' no reintenta, así que una llegada fuera de orden ` +
+              `acaba en la DLQ al primer intento — se salva el mensaje, pero exige intervención manual para una carrera ` +
+              `que unos reintentos con backoff resolverían solos`
+          );
+        }
+
+        // Guarda de puerta frente a guarda de dominio. `contract.messageId` deduplica en
+        // el listener y la `idempotency` HTTP en el filtro: cada uno cierra SU puerta y no
+        // sabe de la otra — son dos tablas con espacios de clave distintos (processed_event,
+        // por listener y id de mensaje; idempotency_record, por operación y clave del
+        // cliente). Si la compensación además se puede invocar por HTTP, una guarda de
+        // puerta deja el otro camino abierto; y ese llamante —el operador que la reejecuta
+        // a mano— es justo el que no manda cabecera, así que añadir `idempotency` tampoco
+        // lo cierra. Lo único que protege por debajo de las dos puertas es el guard del
+        // agregado, porque vive en el dominio y no en el borde.
+        const reachableByHttp = Boolean(api && (autoCoversOp(undoOpName) || apiEndpoints.has(undoOpName)));
+        if (reachableByHttp && !guards.includes('transitions')) {
+          errors.push(
+            `${where}: '${undoOpName}' se puede ejecutar por dos caminos (la suscripción a '${compensation.onEvent}' y su ` +
+              `endpoint HTTP), y lo declarado solo protege el de eventos — deduplicar el mensaje no impide una segunda ` +
+              `ejecución por HTTP. Declara la transición de lifecycle que la hace irrepetible: es la única guarda que vive ` +
+              `en el dominio y cubre los dos caminos. Añadir idempotency no basta: sin cabecera se ejecuta sin deduplicar, ` +
+              `y quien la reejecuta a mano no la manda`
+          );
+        }
+
+        // El par hacer/deshacer completo: si el trabajo que se encargó movió el estado
+        // propio, deshacerlo contra el proveedor sin devolver ese estado deja la entidad
+        // donde la dejó un trabajo que ya no existe.
+        if (compensation.undoes && activationNames.has(compensation.undoes)) {
+          const movedEntities = new Set(
+            (dep.activations[compensation.undoes].triggeredBy ?? [])
+              .flatMap((name) => operations[name]?.transitions ?? [])
+              .map((transition) => transition.entity)
+          );
+          const restoredEntities = new Set((undoOp.transitions ?? []).map((transition) => transition.entity));
+          for (const entityName of movedEntities) {
+            if (!restoredEntities.has(entityName)) {
+              warnings.push(
+                `${where}: la activación '${compensation.undoes}' se dispara desde operaciones que mueven el lifecycle de ` +
+                  `'${entityName}', y '${undoOpName}' no declara ninguna transición sobre esa entidad — ¿a qué estado vuelve?`
+              );
+            }
+          }
         }
       }
     }
@@ -1390,16 +1607,26 @@ export function checkCrossRefs({ layers, wip = false }) {
   const triggeredBySubscription = new Set(
     Object.values(messaging?.subscriptions ?? {}).map((sub) => sub.triggers)
   );
-  const apiEndpoints = new Set(Object.keys(api?.endpoints ?? {}));
   for (const [opName, op] of Object.entries(operations)) {
+    const reachableByHttp = Boolean(api && (autoCoversOp(opName) || apiEndpoints.has(opName)));
     const exposed =
-      op.internal === true ||
-      op.schedule !== undefined ||
-      (api && (autoCoversOp(opName) || apiEndpoints.has(opName))) ||
-      triggeredBySubscription.has(opName);
+      op.internal === true || op.schedule !== undefined || reachableByHttp || triggeredBySubscription.has(opName);
     if (!exposed) {
       warnings.push(
         `use-cases: ${opName}: operación huérfana — sin endpoint, sin subscription, sin schedule y sin internal: true`
+      );
+    }
+
+    // `idempotency` deduplica el reintento de un llamante que reenvía su clave por la
+    // cabecera Idempotency-Key. Sin endpoint HTTP esa cabecera no llega nunca, y lo que
+    // se genera es un almacén que nadie puebla: el bloque promete una garantía que nada
+    // implementa, y nadie vuelve a mirarlo. El mecanismo correcto depende del disparador.
+    if (op.idempotency && !reachableByHttp) {
+      const alternativa = triggeredBySubscription.has(opName)
+        ? `la dispara una suscripción: la reentrega se ataja con contract.messageId en messaging`
+        : `no la invoca ningún cliente externo: lo que evita el efecto doble es la clave natural en persistence o una transición de lifecycle irrepetible`;
+      errors.push(
+        `use-cases: ${opName}.idempotency: la clave llega por la cabecera Idempotency-Key y esta operación no tiene endpoint HTTP que la reciba — ${alternativa}`
       );
     }
   }

@@ -72,7 +72,13 @@ npm test --workspace packages/keel-core          # un paquete
 npm link --workspace packages/keel-core          # habilita `keel` local
 npm link --workspace packages/keel-spring        # habilita `keel-spring` local
 node packages/keel-core/src/cli.js <cmd>         # ejecutar sin link
+npm run compile-check --workspace packages/keel-spring   # compila de verdad el arnés generado (JDK + red, minutos)
 ```
+
+**El Java generado no se compila en `npm test`**: el resto de la suite compara cadenas, así que un template literal mal cerrado o un import olvidado pasa todos los `includes(...)` y revienta mucho después, dentro del proyecto generado. Hay dos redes, y conviene saber qué cubre cada una:
+
+- `keel-spring/test/java-syntax.test.js` — **siempre**, sin JDK, sobre la matriz de fixtures × brokers: estructura balanceada (con text blocks y literales bien tokenizados) y tipos citados sin import. Cubre las dos familias de error que introduce construir código con plantillas. Se autocomprueba con Java roto a propósito: un linter que solo sale en verde no distingue «no hay errores» de «no mira».
+- `npm run compile-check` — **opt-in**, con javac vía Gradle. Compila **solo el source set `integrationTest`**, y esa frontera no es pereza: el `main` recién generado **no compila a propósito** —build deja TODOs que el agente completa, y algunos son llamadas a métodos que él debe añadir (el projector de una réplica invoca `projectionOf`/`applySnapshot`, que escribe en la entidad)—. Su gate es `./gradlew build -x test` **después** del agente de código, dentro del pipeline. El arnés es 100% de build y su source set excluye `main` del classpath, así que sí puede exigirse verde recién generado.
 
 ## Flujo de validación (`validateService()`)
 
@@ -98,6 +104,7 @@ La revisión **semántica** (calidad del diseño, invariantes, mínimo privilegi
 | Nuevo motor de base de datos | Entrada en `DATABASES` (`keel-spring/src/lib/stack-catalog.js`) con su `kind` (`relational` \| `document`), que es lo que decide qué rama del scaffolding se genera y qué ofrece el cuestionario — el modelo lo declara el **diseño** (`persistence.default.model`), no el stack. Un motor de un `kind` que ya existe no necesita nada más; uno de un `kind` nuevo es una rama entera de `src/scaffold/` (espejo, repositorios, esquema) + su skill + tests propios |
 | Nueva regla de validación mecánica | `keel-core/src/lib/crossrefs.js` + test en `test/crossrefs.test.js` |
 | Nueva capa del DSL | `LAYERS` en `src/lib/assets.js` + `assets/core/schema/<capa>.schema.json` + `assets/core/templates/service/<capa>.keel.yaml` + `assets/core/docs/dsl/<capa>.md` + reglas en `crossrefs.js` |
+| Cambio en el andamiaje de pruebas (`src/scaffold/integration-tests.js`) | El archivo emite Java por plantilla, así que un `includes(...)` verde no dice que compile: pasar `npm run compile-check --workspace packages/keel-spring` **antes de darlo por hecho**. Toda pieza nueva del arnés se genera para los tres brokers (cada uno tiene su rama), y `test/java-syntax.test.js` la cubre sin JDK |
 | Nuevo generador | Paquete `packages/keel-<tech>/` calcado de `keel-spring`; guía en `keel-core/assets/core/docs/building-a-generator.md`; registrar en `KNOWN_GENERATORS` (`src/lib/assets.js`) |
 | Cambio de versión del DSL en un generador | Sincronizar `SUPPORTED_DSL` (`src/lib/assets.js` del generador) + campo `keel.dsl` de su `package.json` + su README |
 

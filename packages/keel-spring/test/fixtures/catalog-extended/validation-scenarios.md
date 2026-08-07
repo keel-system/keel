@@ -15,8 +15,11 @@
 > 2. `storage.buckets.productImages` declara `maxSizeMb` y `allowedContentTypes`, pero
 >    `addProductImage` no declara los errores `FILE_TOO_LARGE` ni `UNSUPPORTED_CONTENT_TYPE`. Los
 >    casos borde correspondientes quedan **sin cubrir** hasta que el diseño los declare.
-> 3. `Product.lifecycle` no permite salir de `retired`, pero ninguna operación declara el error de
->    transición inválida. FL-PRD-004-C lo deja anotado como hueco.
+> 3. Ninguna operación declara el error de transición inválida del `lifecycle`, aunque
+>    `retireProduct` y `reactivateWithdrawnProduct` declaran sus `transitions`. FL-PRD-004-D lo
+>    deja anotado como hueco.
+> 4. No hay operación que lleve un producto de `draft` a `active`: la arista existe en el
+>    `lifecycle` y nadie la ejecuta (`keel validate` lo avisa). Hueco declarado del fixture.
 
 ## Convenciones de determinación
 
@@ -52,7 +55,9 @@
 | updateProduct | FL-PRD-002 | usuarios |
 | listProducts | FL-PRD-003 | usuarios |
 | getProductsByIds | FL-PRD-003 | usuarios |
-| retireProduct | FL-PRD-004 | usuarios |
+| retireProduct | FL-PRD-004, FL-CMP-001 | usuarios |
+| projectSupplierPrice | FL-SUB-001 | interna (suscripción) |
+| reactivateWithdrawnProduct | FL-CMP-001 | interna (compensación) |
 | addProductImage | FL-IMG-001 | usuarios |
 | removeProductImage | FL-IMG-001 | usuarios |
 
@@ -245,8 +250,78 @@ una con `Idempotency-Key` propio.
 1. Status `404`.
 2. Cuerpo de error con `code` = `"PRODUCT_NOT_FOUND"`.
 
-**Casos borde**: retirar un producto ya `retired` no tiene error declarado en `use-cases` pese a
-que `lifecycle` cierra el estado (`retired: []`). Hueco del diseño: no se ejercita.
+#### FL-PRD-004-D: retirar un producto ya retirado
+
+**When**: `retireProduct` — `POST /api/v1/products/<r1>/retire` sobre el producto ya `retired`.
+**Then**:
+1. La petición se rechaza: `retired` no está entre los orígenes declarados en
+   `retireProduct.transitions` (`from: [draft, active]`).
+2. **Hueco del diseño**: `use-cases` no declara el error de transición inválida, así que el `code`
+   y el status exactos no están fijados por el contrato. No se ejercita hasta que el diseño los
+   declare.
+
+## Proyección del precio de proveedor
+
+### FL-SUB-001: llega un precio de proveedor y alimenta la copia local
+
+Cubre el consumo de `SupplierPriceChanged` (`source: pricing`), que dispara la operación
+interna `projectSupplierPrice`. El `When` se materializa con `deliverSupplierPriceChanged(...)`
+del arnés, que conoce el canal y la envoltura del contrato.
+
+**Given**: existe un producto con sku `SUP-1`.
+
+#### FL-SUB-001-A: consumo
+
+**When**: llega `SupplierPriceChanged` con payload
+`{sku: "SUP-1", amount: 12.50, currency: "EUR", occurredAt: "2026-01-01T00:00:00Z"}`.
+**Then**:
+1. Se ejecuta `projectSupplierPrice` y la copia local queda con ese precio, observado por
+   la API.
+
+#### FL-SUB-001-B: reentrega del mismo mensaje
+
+**When**: se entrega **otra vez** el mismo mensaje, con el **mismo** `messageId`.
+**Then**:
+1. La copia local sigue con un único precio para `SUP-1` y ningún efecto se repite.
+2. El canal `external` de esta suscripción no declara `contract.messageId`, así que la
+   deduplicación depende de la envoltura: **hueco declarado del fixture**, y es justo lo que
+   este escenario deja a la vista.
+
+## Compensación de la retirada
+
+### FL-CMP-001: el registro regulatorio rechaza una retirada ya inscrita
+
+Cubre la compensación `compliance.compensations[0]` (`undoes: recordWithdrawal`). La operación
+compensadora es `reactivateWithdrawnProduct`, interna y disparada solo por la suscripción.
+
+**Given**: la categoría `c1` existe.
+
+#### FL-CMP-001-A: preparación
+
+**When**: `createProduct` con sku `CMP-1` e `Idempotency-Key` propio, y después `retireProduct`
+sobre el `id` devuelto `<p1>`.
+**Then**:
+1. Status `201` y `200` respectivamente; `GET /api/v1/products` devuelve `<p1>` con
+   `status` = `"retired"`.
+
+#### FL-CMP-001-B: llega el rechazo y se compensa
+
+**When**: llega el evento entrante `WithdrawalRejected` (source `compliance`) con payload
+`{productId: <p1>, reason: "documentación incompleta"}`.
+**Then**:
+1. Se ejecuta `reactivateWithdrawnProduct`.
+2. `GET /api/v1/products` devuelve `<p1>` con `status` = `"active"`: el estado propio vuelve a
+   donde estaba antes de encargar la inscripción, no se queda donde lo dejó un trabajo que ya no
+   existe.
+
+#### FL-CMP-001-C: el mismo evento se reentrega
+
+**When**: se entrega **otra vez** el mismo `WithdrawalRejected` con idéntico payload.
+**Then**:
+1. `<p1>` sigue con `status` = `"active"`, y no hay ningún segundo efecto observable.
+2. Es lo que garantiza la transición declarada (`from: [retired] → active`): con el producto ya en
+   `active`, el guard del agregado rechaza reaplicarla. Sin este escenario, una implementación que
+   compensa dos veces pasa FL-CMP-001-B sin que nada lo delate.
 
 ## Imágenes de producto
 

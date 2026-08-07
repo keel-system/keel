@@ -2,7 +2,7 @@
 
 Archivo: `specs/<servicio>/use-cases.keel.yaml` · Schema: [`schema/use-cases.schema.json`](../../schema/use-cases.schema.json)
 
-Cada operación es un caso de uso completo: qué recibe, qué devuelve, qué reglas aplica, qué puede fallar y qué eventos emite. Aquí viven también las políticas que son **semántica del caso de uso** — idempotencia, caché y schedule — porque valen igual lo invoque REST o un evento.
+Cada operación es un caso de uso completo: qué recibe, qué devuelve, qué reglas aplica, qué puede fallar y qué eventos emite. Aquí viven también las políticas que son **semántica del caso de uso** — idempotencia, caché, schedule y las transiciones del `lifecycle` que ejecuta — porque valen igual lo invoque REST o un evento.
 
 ```yaml
 operations:
@@ -76,9 +76,29 @@ operations:
 
 ## Políticas del caso de uso
 
-- `idempotency: { keySource: client-key | payload-hash, ttlSeconds }` — la operación puede repetirse sin efectos duplicados. Obligatoria de considerar en commands disparados por subscriptions con reintentos. `client-key` dice **de dónde sale la clave** (una cabecera `Idempotency-Key` en la superficie HTTP), no que sea obligatoria: sin ella el generador ejecuta la operación **sin deduplicar**, porque rechazarla exigiría un `code` público y este campo no lo declara. Si el contrato es que sea obligatoria, decláralo como un error más de la operación (`{ code: IDEMPOTENCY_KEY_REQUIRED, when: …, http: 400 }`): `errors` es el único sitio donde nace un `code` del contrato.
+- `idempotency: { keySource: client-key | payload-hash, ttlSeconds }` — el **reintento del llamante HTTP** no produce efectos duplicados. `keySource` dice de dónde sale la clave, pero en ambos casos entra por la superficie HTTP (la cabecera `Idempotency-Key`), así que **solo tiene sentido en una operación con endpoint**: declararla en una operación interna o disparada por evento es error en `keel validate`, porque la clave llega por una puerta que esa operación no tiene. Declararla no la hace obligatoria: sin cabecera el generador ejecuta la operación **sin deduplicar**, porque rechazarla exigiría un `code` público y este campo no lo declara. Si el contrato es que sea obligatoria, decláralo como un error más de la operación (`{ code: IDEMPOTENCY_KEY_REQUIRED, when: …, http: 400 }`): `errors` es el único sitio donde nace un `code` del contrato.
+
+  **No confundir con la reentrega de un evento**, que es el otro eje de repetición y tiene su propio mecanismo: un mensaje que el broker entrega dos veces se ataja con `contract.messageId` en `messaging: subscriptions` (o con una `transitions` irrepetible). Son dos cosas distintas hasta en el código generado —dos tablas, `idempotency_record` y `processed_event`—, y `idempotency` no protege la segunda.
 - `cache: { ttlSeconds, keyFields, invalidatedBy: [Evento, ...] }` — solo para queries; `invalidatedBy` referencia eventos de messaging. Si el `output` declara `embed`, la caché proyecta **otro agregado** dentro de la respuesta y ese agregado también tiene que poder invalidarla: `keel validate` da **error** si ningún evento de la entidad embebida está en `invalidatedBy` (y avisa de los eventos de la entidad principal que falten). Sin esa regla, un cambio en la marca embebida en la ficha de producto no se ve hasta que expira el TTL, y nada en el diseño lo delata.
 - `schedule: { cron }` — trigger temporal, único trigger que se declara aquí.
+- `transitions: [{ entity, from: [estado, ...], to: estado }]` — las transiciones del `lifecycle` de `domain` que **esta** operación ejecuta. Solo en commands.
+
+### `transitions` — qué mueve la operación en la máquina de estados
+
+```yaml
+retireProduct:
+  kind: command
+  transitions:
+    - entity: Product
+      from: [active]
+      to: retired
+```
+
+Es el **único enlace del DSL** entre un caso de uso y el `lifecycle` de una entidad, que hasta ahora solo existía en prosa (`rules`). Y no es documentación: el generador deriva del `lifecycle` un guard que rechaza cualquier cambio de estado no declarado, así que una operación que necesita una arista que la máquina de estados no tiene **no falla al generar — falla en cada ejecución**. `keel validate` da error si la entidad no existe, si no declara `lifecycle`, si algún estado no es valor del enum, o si la transición `from` → `to` no está en `domain: <entidad>.lifecycle.transitions`. La inversa es aviso: una transición declarada en `domain` que ninguna operación ejecuta no es contrato, es intención.
+
+`from` es una lista porque un mismo command puede aplicarse desde varios orígenes (`[pending, reserved] → cancelled`). No se declaran las transiciones de **creación**: el estado inicial es el `default` del campo enum, no una arista.
+
+Hay un segundo efecto, y es el que importa en una **compensación**: una transición cuyo `to` **no** está entre sus propios `from` es irrepetible por construcción — al segundo intento la entidad ya está en el destino y el guard lo rechaza. Por eso vale como uno de los dos mecanismos con los que una compensación demuestra que no se puede aplicar dos veces (el otro es `contract.messageId` en la suscripción; `idempotency` **no** sirve para eso, ver abajo).
 
 `idempotency` y `cache` son **decisiones estructurales**: fijan lo que el servicio garantiza (qué se puede repetir sin daño, qué puede llegar rancio), así que las decide el diseñador y no el agente. El agente recomienda con su porqué y pregunta; nunca las escribe en silencio. Ejes de decisión, consecuencias observables y trampas: `references/structural-decisions.md` de la skill `keel-design` §3.2 y §3.3.
 

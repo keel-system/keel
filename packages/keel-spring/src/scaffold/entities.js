@@ -232,8 +232,18 @@ function renderLifecycle(entity, imports) {
     })
     .join(',\n');
 
+  // El diseño dice qué operación ejecuta cada transición (use-cases.<op>.transitions):
+  // nombrarla aquí es lo que ata el método semántico a su handler. Sin ella el TODO
+  // queda sin destinatario y el estado acaba mutándose desde fuera del agregado.
+  const executedBy = entity.lifecycle.executedBy ?? {};
   const semanticTodos = transitions
-    .flatMap(({ from, to }) => to.map((state) => `    // TODO (agente): método semántico ${from} → ${state} que valide la regla del diseño y llame a transitionTo(${enumType}.${state}).`))
+    .flatMap(({ from, to }) =>
+      to.map((state) => {
+        const ops = executedBy[`${from}|${state}`] ?? [];
+        const origin = ops.length ? ` (lo ejecuta ${ops.join(', ')})` : '';
+        return `    // TODO (agente): método semántico ${from} → ${state}${origin} que valide la regla del diseño y llame a transitionTo(${enumType}.${state}).`;
+      })
+    )
     .join('\n');
 
   return `    // Transiciones válidas del lifecycle del diseño; un estado con Set.of() es terminal.

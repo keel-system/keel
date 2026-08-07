@@ -23,6 +23,8 @@ Recorre los artefactos y construye la lista de obligaciones. Es un borrador de t
 | `operations[].cache.ttlSeconds` | un escenario de **retención**: mutar por una vía que **no** está en `invalidatedBy` y comprobar que la lectura sigue sirviendo el valor viejo |
 | `operations[].schedule` | disparo y efecto observable |
 | `domain.entities[].lifecycle` | un escenario por transición + una transición inválida + **todo estado alcanzado** |
+| `operations[].transitions` | la transición feliz + su aplicación desde un estado que **no** está en `from`, con el error de transición inválida |
+| `dependencies.*.compensations[]` | dos escenarios: el efecto completo de la compensación (trabajo deshecho **y** estado propio devuelto, leído por la API) + la **reentrega del mismo evento** sin segundo efecto |
 | `domain` campos `unique` | una colisión |
 | `domain` constraints y requeridos | casos borde `400` |
 | `api.endpoints` con `successStatus: 201` | una aserción de la cabecera `Location` (ver § 2) |
@@ -142,6 +144,7 @@ Errores frecuentes que estas pasadas deben cazar:
 - Escenario que exige ver un cambio reflejado de inmediato en un objeto `embed` cuya entidad no publica ningún evento en `invalidatedBy`: es una exigencia que ningún generador puede cumplir, y lo que hay que corregir es el diseño (o el escenario), no el servidor.
 - Estado del `lifecycle` que ningún flujo alcanza.
 - Evento en `emits` que no aparece en ningún `Then`.
+- **Compensación sin escenario de reentrega**: el flujo prueba que la compensación deshace el trabajo, y nada prueba que no lo deshaga dos veces. Es el hueco más caro de la lista, porque el segundo efecto no se ve al probar a mano — hay que reentregar el mensaje a propósito.
 
 ## 6. Regenerar sin romper
 

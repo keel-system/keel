@@ -93,7 +93,7 @@ service (manifiesto)
 |-------------|---------------|
 | `keel`, `service` | `service.keel.yaml` (+ bloque `layers`) |
 | `types`, `entities` | `domain.keel.yaml` (+ `aggregates`) |
-| `operations` | `use-cases.keel.yaml` (+ `idempotency`, `cache`, `schedule`, `internal` por operación) |
+| `operations` | `use-cases.keel.yaml` (+ `idempotency`, `cache`, `schedule`, `transitions`, `internal` por operación) |
 | `api` | `api.keel.yaml` |
 | `policies.auth` | `security.keel.yaml` (`access`, ahora con `roles`/`permissions`) |
 | `policies.pagination` | `api.keel.yaml` (`pagination`) |

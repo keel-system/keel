@@ -232,9 +232,14 @@ test('§1.1: el sondeo del broker va por argv, nunca por una cadena con comillas
   // test agota el timeout sin decir por qué.
   const kafka = harness('kafka');
   assert.ok(kafka.includes('private static void copyToDevtools(String content, String target)'));
-  assert.ok(kafka.includes('copyToDevtools(payload, PUBLISH_BODY);'));
+  // El copiado vive ahora en deliverMessage, del que publishRaw es un caso particular
+  // (el topic propio, sin cabeceras): una sola vía de entrega, una sola lección aprendida.
+  assert.ok(kafka.includes('copyToDevtools(body, DELIVER_BODY);'));
+  assert.ok(kafka.includes('deliverMessage(EVENT_TOPIC, key, payload, Map.of());'));
   assert.ok(!kafka.includes("printf '%s'"));
   assert.ok(!kafka.includes('shellQuote(payload)'));
+  // Y el cuerpo tampoco se cuela por la cadena de sh -c en la vía nueva.
+  assert.ok(!kafka.includes('shellQuote(body)'));
 });
 
 test('§1.1: la marca de offset tolera que el topic aún no exista (broker recién levantado)', () => {
@@ -1043,4 +1048,133 @@ test('identidad: el script de kcadm y el realm importado declaran exactamente lo
       `client scopes desalineados para ${client.clientId}`
     );
   }
+});
+
+// --- Entrega de eventos entrantes -------------------------------------------
+// `publishedMessages` lee lo que el servicio publica; `deliverXxx` inyecta lo que
+// consume. Sin esta mitad, una suscripción no se puede ejercitar y su REENTREGA
+// —el escenario que distingue deduplicar de aplicar dos veces— no era escribible:
+// la obligación existía en el diseño y el gate de generación no podía verla.
+
+// El paquete y el nombre del servicio salen del manifiesto de cada fixture, así que
+// la clase se busca en vez de componer su ruta: así el helper vale para cualquier
+// fixture nueva sin tener que recordar su basePackage.
+const harnessFor = (broker, fixture = 'catalog-extended') => {
+  const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', fixture);
+  const { manifest, layers } = loadService(dir);
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), `keel-deliver-${broker}-`));
+  scaffoldService({ manifest, layers, workspace: out, force: true, stack: { broker } });
+  const find = (root) => {
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      const full = path.join(root, entry.name);
+      if (entry.isDirectory()) {
+        const hit = find(full);
+        if (hit) return hit;
+      } else if (entry.name === 'AbstractFlowIT.java') {
+        return full;
+      }
+    }
+    return null;
+  };
+  const file = find(path.join(out, 'services'));
+  const content = file ? fs.readFileSync(file, 'utf8') : '';
+  fs.rmSync(out, { recursive: true, force: true });
+  return content;
+};
+
+test('cada suscripción tiene su deliver, en los tres brokers', () => {
+  for (const broker of ['kafka', 'rabbitmq', 'snssqs']) {
+    const harness = harnessFor(broker);
+    assert.ok(
+      harness.includes('protected static void deliverWithdrawalRejected(String messageId, String payloadJson)'),
+      `${broker}: falta el deliver de la compensación`
+    );
+    assert.ok(
+      harness.includes('protected static void deliverSupplierPriceChanged(String messageId, String payloadJson)'),
+      `${broker}: falta el deliver de la suscripción de proyección`
+    );
+    assert.ok(
+      harness.includes('protected static void deliverMessage(String destination, String key, String body, Map<String, String> headers)'),
+      `${broker}: falta la primitiva de entrega`
+    );
+    // El cuerpo viaja por archivo con los tres: es JSON del escenario, justo lo que
+    // el cliente de contenedores corrompe en Windows si va por la línea de comandos.
+    // Con RabbitMQ lo que se copia es el sobre de la API de gestión, con el cuerpo
+    // dentro en base64 — misma garantía, un envoltorio más.
+    assert.ok(
+      /copyToDevtools\((body|request), DELIVER_BODY\)/.test(harness),
+      `${broker}: el cuerpo entregado no viaja por archivo`
+    );
+  }
+});
+
+test('el deliver apunta al topic real de la suscripción, saneado por broker', () => {
+  // El canal es del proveedor (compliance), no el topic propio del servicio: publicar
+  // en EVENT_TOPIC dejaría el escenario en timeout mudo.
+  assert.ok(harnessFor('kafka').includes('"MESSAGING_SUBSCRIPTIONS_WITHDRAWAL_REJECTED_TOPIC", "compliance.events"'));
+  // SQS no admite puntos en el nombre de la cola: mismo saneado que el resto de destinos.
+  assert.ok(harnessFor('snssqs').includes('"MESSAGING_SUBSCRIPTIONS_WITHDRAWAL_REJECTED_TOPIC", "compliance-events"'));
+});
+
+test('la envoltura del deliver sale del contrato del diseño, no del test', () => {
+  // Envoltura Keel (sin contract declarado, canal propio): metadata + data, y el
+  // eventId ES el messageId — por eso repetirlo es la reentrega.
+  const keel = harnessFor('kafka');
+  assert.ok(keel.includes('\\"metadata\\":{\\"eventId\\":\\"" + messageId + "\\",\\"eventType\\":\\"WithdrawalRejected\\"},\\"data\\":" + payloadJson'));
+
+  // Envoltura wrapped con payloadPath y ambos datos en cabecera: el cuerpo cuelga de
+  // `data` y el discriminador y la clave viajan como cabeceras del broker.
+  const wrapped = harnessFor('kafka', 'metering-digest');
+  assert.ok(wrapped.includes('"{" + "\\"data\\":" + payloadJson + "}"'), wrapped.slice(0, 0) || 'falta el sobre wrapped');
+  assert.ok(wrapped.includes('Map.of("eventType", "MeterReadingCaptured", "messageId", messageId)'));
+});
+
+test('el javadoc del deliver enseña que repetir el messageId es la reentrega', () => {
+  const harness = harnessFor('kafka');
+  assert.ok(harness.includes('es la <b>reentrega</b> que el consumidor'));
+  assert.ok(harness.includes('Con valores distintos son dos hechos distintos, no una reentrega.'));
+});
+
+test('publishRaw pasa a ser un caso particular de deliverMessage', () => {
+  // Una sola vía de entrega: el humo del arnés y los escenarios comparten mecánica,
+  // así que un fallo de escapado se ve en SMOKE-4 antes que en ningún flujo.
+  const harness = harnessFor('kafka');
+  assert.ok(harness.includes('deliverMessage(EVENT_TOPIC, key, payload, Map.of());'));
+  assert.ok(!harness.includes('PUBLISH_BODY'));
+});
+
+test('sin suscripciones no se genera ningún deliver de evento', () => {
+  // product-catalog no consume nada: la primitiva genérica puede seguir estando
+  // (la usa el humo), pero no debe aparecer ningún deliver por evento.
+  const harness = harnessFor('kafka', 'product-catalog');
+  assert.ok(!/deliver[A-Z]\w+\(String messageId/.test(harness), 'no debería haber deliver por evento');
+});
+
+// --- Orden de los efectos en el stub del handler -----------------------------
+// Una llamada saliente no participa de la transacción: si sale antes de la guarda de
+// estado y la guarda rechaza, el rollback deshace la fila y deja el encargo hecho en
+// el otro servidor. El camino de menor resistencia del agente es el contrario —llamar
+// primero y mutar «cuando ya se sabe que salió bien»—, así que build lo dice.
+
+test('§1.1: el handler con transición y activación saliente lleva la nota de orden', () => {
+  const { read } = scaffoldExtended();
+  const handler = read(`${JAVA}/application/usecases/RetireProductCommandHandler.java`);
+
+  assert.ok(handler.includes('ORDEN de los efectos'), handler);
+  // La nota cita la transición concreta del diseño y la llamada concreta, no una regla
+  // genérica: sin los dos nombres el agente no sabe a qué se aplica.
+  assert.ok(handler.includes('Product: draft|active → retired'));
+  assert.ok(handler.includes('compliance.recordWithdrawal'));
+  assert.ok(handler.includes('La llamada saliente no es transaccional'));
+});
+
+test('§1.1: la nota de orden no se emite cuando no hay las dos cosas', () => {
+  const { read } = scaffoldExtended();
+  // Compensación: transición sí, activación saliente no.
+  const compensation = read(`${JAVA}/application/usecases/ReactivateWithdrawnProductCommandHandler.java`);
+  assert.ok(!compensation.includes('ORDEN de los efectos'), 'sin activación saliente no hay orden que fijar');
+
+  // Alta: activación no, transición tampoco (la creación no es una arista del lifecycle).
+  const create = read(`${JAVA}/application/usecases/CreateProductCommandHandler.java`);
+  assert.ok(!create.includes('ORDEN de los efectos'));
 });

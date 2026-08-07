@@ -59,8 +59,21 @@ source set `integrationTest`, así que un test que importe un DTO o una entidad 
 2. Lee `src/integrationTest/java/**/flows/AbstractFlowIT.java` y su
    `HarnessSmokeIT.java`: son la base que ya generó `build` y traen todo lo transversal
    (cliente HTTP sin excepciones en 4xx, `Idempotency-Key`, `resetState()`, `assertBody`,
-   `jsonPath`, `await`, credenciales, lectura y purga del canal de eventos).
+   `jsonPath`, `await`, credenciales, lectura y purga del canal de eventos, y **entrega de
+   eventos entrantes**).
    **Úsalas, no las reimplementes.**
+   - **Un `When` que dice «llega el evento X» se escribe con `deliverX(messageId, payloadJson)`**,
+     que `build` genera por cada suscripción del diseño. Ese helper ya sabe el topic real, la
+     envoltura del contrato (`keel`/`wrapped`/`none`) y dónde va el discriminador: tú solo pones
+     el payload. **No publiques a mano** contra el broker ni inventes el sobre — el sobre es
+     contrato del diseño, no del test.
+   - **La reentrega es llamar dos veces con el MISMO `messageId`.** Es la única forma de
+     distinguir un consumidor que deduplica de uno que aplica el efecto dos veces, y es
+     obligatoria en todo escenario que la pida (siempre, en una compensación: repetirla es
+     deshacer dos veces). Con `messageId` distintos son dos hechos distintos, no una reentrega
+     — un escenario así pasa en verde sin probar nada.
+   - Después de entregar, el efecto es **asíncrono**: se afirma con `await(...)` sobre una
+     lectura por la API, nunca inmediatamente después de la llamada.
    - **Son de solo lectura para ti en esta fase.** Sin infraestructura levantada no puedes
      saber si están rotas, así que no se parchean a ciegas: si falta una pieza transversal,
      va a `blockers` con la firma que propones. `HarnessSmokeIT` la ejercitará en vivo al

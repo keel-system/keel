@@ -64,6 +64,11 @@ test('scaffoldService genera el proyecto completo con contenido clave', () => {
   assert.ok(!product.includes('public Product() {'));
   assert.ok(product.includes('// TODO (agente): factory de creación create(...)'));
   assert.ok(product.includes('// TODO (agente): método semántico'));
+  // El TODO de una transición que el diseño atribuye a una operación (use-cases.transitions)
+  // la nombra: sin destinatario, el camino corto es mutar el estado fuera del agregado.
+  assert.ok(product.includes('método semántico ACTIVE → RETIRED (lo ejecuta retireProduct)'), product);
+  // Y la que ninguna operación declara se queda sin atribución, en vez de inventarla.
+  assert.ok(product.includes('método semántico DRAFT → ACTIVE que valide'), product);
   // Concurrencia optimista (Opción A): la raíz porta lockVersion, que viaja por el
   // constructor de rehidratación (último parámetro) y expone getter.
   assert.ok(product.includes('private Long lockVersion;'));

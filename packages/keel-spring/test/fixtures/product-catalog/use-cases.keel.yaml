@@ -45,6 +45,10 @@ operations:
           type: uuid
           required: true
     output: "void"
+    transitions:
+      - entity: Product
+        from: [draft, active]
+        to: retired
     preconditions:
       - El producto existe y no está ya retired.
     errors:

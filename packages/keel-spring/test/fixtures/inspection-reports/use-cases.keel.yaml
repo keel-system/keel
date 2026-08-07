@@ -53,6 +53,10 @@ operations:
           required: true
     output:
       entity: InspectionReport
+    transitions:
+      - entity: InspectionReport
+        from: [draft]
+        to: submitted
     errors:
       - code: REPORT_NOT_FOUND
         when: No existe un informe con ese id.

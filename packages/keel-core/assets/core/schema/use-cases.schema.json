@@ -47,6 +47,33 @@
             "description": "Nombres de eventos publicados (deben existir en messaging: publishing.events).",
             "items": { "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/typeName" }
           },
+          "transitions": {
+            "type": "array",
+            "minItems": 1,
+            "description": "Transiciones del lifecycle que esta operación ejecuta. Solo para commands: una query no cambia de estado. Es lo que enlaza un caso de uso con la máquina de estados de domain, y lo que hace verificable que una compensación pueda devolver la entidad a donde estaba.",
+            "items": {
+              "type": "object",
+              "required": ["entity", "from", "to"],
+              "additionalProperties": false,
+              "properties": {
+                "entity": {
+                  "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/typeName",
+                  "description": "Entidad cuyo lifecycle se recorre (debe declarar lifecycle en domain)."
+                },
+                "from": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": { "type": "string" },
+                  "description": "Estados de origen desde los que esta operación puede aplicarla. Cada uno debe permitir 'to' en domain: entities.<entity>.lifecycle.transitions."
+                },
+                "to": {
+                  "type": "string",
+                  "description": "Estado destino."
+                },
+                "description": { "type": "string" }
+              }
+            }
+          },
           "idempotency": {
             "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/idempotency",
             "description": "La operación debe poder repetirse sin efectos duplicados."

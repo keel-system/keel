@@ -104,7 +104,7 @@ Es también la forma que asume `envelope: keel` al describir el [contrato de rec
 - `nature` declara **qué es el mensaje para este servicio**, y es lo que decide de qué lado cae el acoplamiento (ver abajo).
 - `onFailure` declara la política de consumo: `retry` (reintentos con backoff) y `deadLetter` (tras agotarlos, el mensaje va a una DLQ).
 - `retry` admite `maxAttempts` (obligatorio), `backoff` (`fixed` | `exponential`, por defecto `exponential`), `initialDelayMs` y `maxDelayMs` (tope al que la espera deja de crecer con `backoff: exponential`) — el mismo juego de campos que `http-clients`.
-- Si una suscripción reintenta (`maxAttempts > 1`), la operación disparada debería declarar `idempotency` — la skill `/keel-validate` lo comprueba.
+- Si una suscripción reintenta (`maxAttempts > 1`), reintentar es pedir explícitamente que el mismo mensaje llegue más de una vez: sin nada que impida el doble efecto, la operación disparada se aplica tantas veces como intentos haya. `keel validate` lo da como **error** si no la protege ninguno de los dos mecanismos: `contract.messageId` aquí, o una `transitions` de lifecycle irrepetible en la operación (su `to` no está entre sus propios `from`). La `idempotency` de la operación **no** cuenta: su clave llega por una cabecera HTTP que el broker no manda.
 
 ### `nature` — hecho ajeno o petición dirigida a nosotros
 
@@ -137,7 +137,7 @@ La consecuencia práctica: un `request` **no obliga a declarar su `source` como 
 | ¿Qué hacemos con campos que envía y no declaramos? | `unknownFields` (`ignore` \| `fail`) |
 
 - `envelope: keel` — la fuente es otro servicio Keel y usa la [envoltura estándar](#la-envoltura-keel) (`metadata` + `data`): el payload llega en `data` y la deduplicación sale de `metadata.eventId`. `wrapped` — envoltura propia de la fuente, el payload cuelga de `payloadPath` (obligatorio). `none` — el mensaje **es** el payload. Por defecto se asume `keel` si el canal no es `external`, y `none` si lo es.
-- `messageId` es la **clave de deduplicación**: con reentregas (`retry`, DLQ, at-least-once) es lo que evita procesar dos veces el mismo evento. Es la contraparte de la `idempotency` de la operación.
+- `messageId` es la **clave de deduplicación**: con reentregas (`retry`, DLQ, at-least-once) es lo que evita procesar dos veces el mismo evento. Corta el doble efecto **antes** de llegar al dominio, y es imprescindible cuando el canal es `external` y no hay envoltura de la que sacar un id. Es el equivalente en el eje de eventos de lo que la `idempotency` de la operación hace en el eje HTTP, pero **no son intercambiables**: aquella se identifica por una cabecera que el broker no manda.
 - `wireName` solo es válido en contratos de sistemas externos (aquí y en `http-clients`): los identificadores del DSL van en inglés y `camelCase`, y `wireName` guarda el nombre real del cable (`product_id`, `numero_documento`). `keel validate` da error si aparece en una capa interna.
 
 ### Del mensaje a la operación (`input`)

@@ -58,6 +58,7 @@ aceptable que ese pedido nunca llegue a facturación?» sí lo es.
 | 3.8 | Paginación de una colección | `use-cases` (`paginated`) + `api.pagination` | 3.4 |
 | 3.9 | Concurrencia sobre la misma entidad | `persistence.consistency.optimisticLocking` + `use-cases.<op>.errors` | 3.2 y 3.8 |
 | 3.9b | Rastro de auditoría | `persistence.audit` (+ campos reservados en `domain`) | 3.8 |
+| 3.11 | Compensación de un trabajo encargado | `dependencies.<dep>.compensations` + `use-cases.<op>.transitions` | 3.7 |
 | 3.10 | Visibilidad de un bucket | `storage.buckets.<b>.visibility` | 3.9 |
 
 ---
@@ -84,11 +85,23 @@ revisar por qué un servicio sin estado emite eventos de dominio.
 
 ### 3.2 Idempotencia — `idempotency: { keySource, ttlSeconds }`
 
+**Antes de los ejes, sitúa el caso.** Hay **dos** ejes de repetición y cada uno tiene su mecanismo;
+elegir el equivocado es declarar una garantía que nada implementa:
+
+| Quién repite | Mecanismo | Dónde se declara |
+|---|---|---|
+| Un llamante HTTP que reintenta (timeout, doble clic) | clave que él manda en una cabecera | `use-cases.<op>.idempotency` ← **esta entrada** |
+| El broker, que reentrega el mismo mensaje | id del mensaje, o irrepetibilidad en el dominio | `messaging: subscriptions.<E>.contract.messageId`, o `use-cases.<op>.transitions` |
+
+Esta entrada es **solo la primera fila**: `idempotency` solo tiene sentido en una operación **con
+endpoint HTTP**, porque su clave entra por ahí. En una operación interna o disparada por evento,
+`keel validate` la da en rojo. Si el caso es el segundo, la decisión no es esta: es §3.5 y §3.11.
+
 | Eje | Pregunta al diseñador | Respuesta → decisión |
 |---|---|---|
-| **Quién repite** | ¿Quién puede ejecutar esto dos veces: un cliente con timeout que reintenta, una suscripción con `retry`, un usuario que pulsa dos veces? | Cualquiera de los tres → hace falta `idempotency`. |
+| **Quién repite** | ¿Puede un cliente ejecutar esto dos veces: un timeout que reintenta, un usuario que pulsa dos veces, un reproceso manual? | Sí → hace falta `idempotency`. (Si quien repite es el broker, el mecanismo es otro: ver la tabla de arriba.) |
 | **Daño** | Si se ejecuta dos veces, ¿qué pasa? | Doble cobro, doble alta, doble envío → obligatoria. Naturalmente idempotente (fijar un estado a un valor) → declarar que lo es basta. |
-| **Origen de la clave** | ¿Puede el llamante generar y repetir un identificador de intento? | Sí → `client-key`. No, pero el mismo cuerpo significa la misma intención → `payload-hash`. |
+| **Origen de la clave** | ¿Puede el llamante HTTP generar y repetir un identificador de intento? | Sí → `client-key`. No, pero el mismo cuerpo significa la misma intención → `payload-hash`. En ambos casos la clave viaja por la superficie HTTP. |
 | **Ventana** | ¿Cuánto tiempo debe una repetición devolver el resultado original en vez de ejecutarse de nuevo? | El `ttlSeconds`; pregúntalo en unidades de negocio ("el reintento del cliente entra en minutos"). |
 
 **Consecuencia observable de no declararla**: en una red real, con reintentos, el duplicado no es
@@ -98,9 +111,12 @@ probable — es seguro. La pregunta es cuándo, no si.
 generado por el cliente. Dos envíos idénticos producen hashes distintos y no deduplica nada. Si el
 payload no es estable, la única respuesta correcta es `client-key`.
 
-Toda operación disparada por una suscripción con `retry.maxAttempts > 1` necesita `idempotency`;
-`/keel-validate` lo da por **error**. Pero no es el único caso: un `POST` de cobro expuesto a
-clientes con timeout lo necesita igual, y ahí no lo comprueba nadie.
+Toda operación disparada por una suscripción con `retry.maxAttempts > 1` necesita estar protegida
+contra el doble efecto; **`keel validate` lo da en rojo** si no lo está por ninguno de los dos
+mecanismos del eje de eventos (`contract.messageId` en la suscripción, o una `transitions` de
+lifecycle irrepetible). El caso de **esta** entrada, en cambio, no lo comprueba nadie y depende
+enteramente de esta conversación: un `POST` de cobro expuesto a clientes con timeout necesita
+`idempotency` igual, y nada lo detecta.
 
 ---
 
@@ -295,6 +311,36 @@ secuenciales es un listado completo para quien itere.
 
 ---
 
+### 3.11 Compensación — `compensations` + la transición de vuelta
+
+Se pregunta **siempre que haya una `activation`**: encargar trabajo a otro y poder fallar después es
+lo que crea la deuda. No se pregunta «¿quieres una compensación?» —nadie responde a eso— sino qué
+pasa con el trabajo ya hecho.
+
+| Eje | Pregunta al diseñador | Respuesta → decisión |
+|---|---|---|
+| **Deuda** | Si le encargamos el trabajo y **luego** fallamos (o el proveedor lo rechaza a posteriori), ¿qué queda hecho que nadie va a deshacer? ¿Quién lo echaría de menos y cuándo? | Algo queda hecho → hace falta compensación, con su evento en `messaging: subscriptions` y su bloque `compensations` (con `undoes`). Nada queda hecho → decláralo, es la respuesta corta. |
+| **Doble aplicación** | El evento de fallo llega por un canal que **reentrega**. Si la compensación se ejecuta dos veces, ¿qué pasa? | Doble liberación, doble reembolso, doble aviso → uno de los dos mecanismos del eje de eventos (`contract.messageId` o una `transitions` irrepetible), elegido explícitamente. **Ojo con la respuesta fácil**: `idempotency` en la operación no vale aquí, porque su clave llega por una cabecera HTTP que el broker no manda. «No pasa nada» hay que poder defenderlo con el efecto delante. |
+| **Cuántos caminos** | ¿Se puede lanzar la compensación de más de una forma — el evento **y** un endpoint para que un operador la reejecute a mano? | Más de uno → el mecanismo tiene que estar en el **dominio** (`transitions`), no en el borde. `contract.messageId` cierra el listener y la cabecera cierra el filtro: cada una cubre su puerta y deja la otra abierta, y quien reejecuta a mano es justo el que no manda cabecera. `keel validate` lo da en rojo. |
+| **Estado propio** | El trabajo que se encarga suele mover el estado de una entidad nuestra. Al deshacerlo, **¿a qué estado vuelve?** | El estado destino → `use-cases.<op>.transitions` en la operación compensadora, **y** la arista correspondiente en `domain: lifecycle.transitions`. |
+| **Ventana** | Entre encargar y compensar pasa tiempo. ¿Puede el cliente ver la entidad en el estado intermedio? ¿Es aceptable? | Si no lo es, la frontera transaccional (§3.7) o el `awaits` (§3.6) están mal elegidos, no falta compensación. |
+| **Orden** | El evento de compensación puede llegar **antes** que el hecho que compensa: entre que confirmamos nuestro trabajo y que el proveedor publica su fallo no hay orden garantizado. Si llega primero, ¿qué pasa? | Se rechaza —la transición no sale del estado en que aún no estamos—, así que la respuesta la da la política de la suscripción: `onFailure.retry` absorbe la carrera sin que nadie intervenga, y `deadLetter` es la red por si no se resuelve. Sin ninguno de los dos el mensaje se pierde en silencio, y `keel validate` lo da en rojo. No es un caso exótico: es el orden normal de dos hechos concurrentes. |
+
+**Consecuencia observable de no declararla**: el sistema queda con dos verdades distintas y ninguna
+alarma. El stock reservado que nadie libera no da error — da faltantes semanas después.
+
+**Trampa habitual, y la razón de que este eje exista**: declarar la compensación y olvidar la arista
+de vuelta en el `lifecycle`. El diseño valida en verde, el generador deriva del `lifecycle` un guard
+que rechaza cualquier transición no declarada, y la compensación falla **en cada ejecución** — el
+peor sitio posible para un fallo, porque solo se ejecuta cuando algo ya había salido mal. Desde
+2.6 `keel validate` lo da en rojo, pero la respuesta («¿a qué estado vuelve?») sigue siendo del
+diseñador: la CLI comprueba que la arista existe, no que sea la correcta.
+
+**No confundir con `onFailure`** (§3.6): `onFailure` es qué hacemos si el encargo **no sale**; la
+compensación es qué hacemos con el encargo que **sí salió** y luego dejó de valer.
+
+---
+
 ## 4. Checklist de cierre
 
 - [ ] Toda entrada aplicable del catálogo tiene **decisión explícita del diseñador**, o pendiente anotado.
@@ -302,7 +348,10 @@ secuenciales es un listado completo para quien itere.
 - [ ] Cada pregunta ofreció la opción «sin \<mecanismo\>» con su **consecuencia observable**.
 - [ ] Las decisiones que se apartan de la recomendación tienen su porqué anotado para `/keel-handoff`.
 - [ ] `reliability: outbox` ⇒ existe capa `persistence`, y su frontera transaccional se decidió a la vez.
-- [ ] Toda operación disparada por una suscripción con `retry` declara `idempotency`.
+- [ ] Toda operación disparada por una suscripción con `retry` está protegida contra el doble efecto.
+- [ ] Toda `activation` que puede quedar hecha tras un fallo posterior tiene compensación, o su ausencia tiene un porqué escrito.
+- [ ] Toda compensación declara **cómo** no se aplica dos veces y **a qué estado vuelve** la entidad propia (con la arista en `domain: lifecycle`).
+- [ ] Toda operación que cambia un estado del `lifecycle` lo declara en `transitions`: ninguna arista de la máquina de estados se queda sin operación que la ejecute.
 - [ ] Todo `cache.invalidatedBy` enumera **todas** las vías de mutación, propias y ajenas.
 - [ ] Todo consumo M2M tiene operación propia, o `audience: both` con rationale escrito.
 - [ ] `optimisticLocking` se eligió con la contención de las escrituras delante, no se heredó del default.

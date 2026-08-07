@@ -208,6 +208,35 @@ Una discrepancia que no sepas explicar va a `blockers` con el detalle exacto.
 **Nunca** enciendas `auto-index-creation` para «arreglar» un índice que falta: los
 que crea Spring llevan su propio nombre y romperían la traducción del handler.
 
+## Deduplicación del consumo (solo con `subscriptions`)
+
+`build` genera `IdempotencyGuard` y su tabla `processed_event`, pero **la llamada la
+escribe el agente de código**, no build. Es el único eslabón de la cadena de idempotencia
+que no está garantizado por construcción, y falla en silencio: un listener sin guard
+funciona perfectamente hasta la primera reentrega, que es justo cuando algo ya iba mal.
+
+Por cada `<Evento>Listener` de `infrastructure/messaging/subscriptions/`, comprueba en
+estático las **dos** mitades — referenciar el guard sin actuar sobre su respuesta no
+deduplica nada:
+
+1. Llama a `IdempotencyGuard.tryRecord(handlerId, eventId)`.
+2. **Descarta el mensaje cuando devuelve `false`**, sin despachar al `UseCaseMediator`.
+
+Y que la clave sea la que el diseño declara: el `contract.messageId` de la suscripción si
+lo hay, y si no `envelope.metadata().eventId()`. Un `UUID.randomUUID()` o un timestamp
+como `eventId` compila, pasa cualquier prueba de camino feliz y deduplica **cero**.
+
+Esto es no-conductual solo en apariencia: si falta, **no lo arreglas tú** —es código de
+comportamiento, y tocarlo es la frontera de § Frontera—. Reporta `dedupe: KO` con la lista
+de listeners afectados y el detalle a `remaining`, para que el orquestador lo devuelva al
+agente de código. `N/A` si el diseño no declara `subscriptions`.
+
+Nota de alcance: el gate **conductual** de esto es el escenario de reentrega
+(`AbstractFlowIT.deliverXxx(...)` llamado dos veces con el mismo `messageId`), que ya
+corrió antes de llegar tú. Esta comprobación estática existe porque un diseño puede no
+tener ese escenario todavía, y porque leer el listener dice *por qué* falla, no solo que
+falla.
+
 ## El doble check (y qué NO haces)
 
 **No pruebas el baseline contra la base de datos.** No arrancas la app con
@@ -321,6 +350,10 @@ indexes: OK | KO | N/A          # N/A sin persistencia o con base relacional; OK
                                 # contrastes en verde y el contrato de nombres comprobado
 indexesTested: OK | KO | N/A    # NUNCA PENDING: exportar índices solo lee, así que esta
                                 # comprobación sí se ejecuta aquí
+# --- consumo de eventos (solo con capa messaging y subscriptions) ---
+dedupe: OK | KO | N/A     # N/A sin subscriptions; OK = TODO <Evento>Listener referencia
+                          # IdempotencyGuard.tryRecord(...) y descarta el mensaje cuando
+                          # devuelve false. KO con la lista de listeners que no lo hacen
 issuesFixed: [...]        # ajustes no-conductuales aplicados
 remaining: [...]          # hallazgos conductuales sin hueco de diseño detrás
 designGaps:               # huecos del diseño que encontraste, como propuesta accionable

@@ -72,6 +72,7 @@ export function buildModel({ manifest, layers, stack = null }) {
   const inlineEnumName = buildInlineEnumIndex(enums);
   const valueObjects = collectValueObjects(domainTypes, domainTypes, inlineEnumName, hasPersistence);
   const entities = collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPersistence, warnings);
+  attachTransitionExecutors(entities, layers['use-cases']?.operations ?? {});
 
   // Un VO usado en un campo colección (list) de una entidad persistida necesita
   // su espejo @Embeddable (XxxJpa): @ElementCollection<List<XxxJpa>>. Se marca
@@ -498,6 +499,32 @@ function collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPe
 // back-reference no rompa (A → B → A entre hijas, p. ej.) se traduce en un
 // StackOverflowError al guardar. Se avisa en build, que es cuando se puede
 // corregir el diseño; el síntoma en runtime no señala a nada.
+// Quién ejecuta cada transición: lo declara `use-cases.<op>.transitions` desde 2.6, y es
+// lo que convierte el TODO del guard en una instrucción con destinatario. Sin el nombre de
+// la operación, el agente lee «método semántico ACTIVE → RETIRED» y tiene que deducir a qué
+// handler pertenece; el camino de menor resistencia es no cablearlo y mutar el estado desde
+// fuera, que es justo lo que el guard privado existe para impedir.
+// `crossrefs` ya garantizó que la transición existe en el lifecycle: aquí solo se indexa.
+function attachTransitionExecutors(entities, operations) {
+  const byEntity = new Map(); // entidad → Map<`FROM|TO`, [operaciones]>
+  for (const [opName, op] of Object.entries(operations)) {
+    for (const transition of op.transitions ?? []) {
+      if (!byEntity.has(transition.entity)) byEntity.set(transition.entity, new Map());
+      const index = byEntity.get(transition.entity);
+      for (const from of transition.from ?? []) {
+        const key = `${screamingSnake(from)}|${screamingSnake(transition.to)}`;
+        if (!index.has(key)) index.set(key, []);
+        index.get(key).push(opName);
+      }
+    }
+  }
+  for (const entity of entities) {
+    if (!entity.lifecycle) continue;
+    const index = byEntity.get(entity.name) ?? new Map();
+    entity.lifecycle.executedBy = Object.fromEntries(index);
+  }
+}
+
 function warnMappingCycles(entities, warnings) {
   const byName = new Map(entities.map((entity) => [entity.name, entity]));
   const done = new Set();
@@ -698,6 +725,10 @@ function collectOperations(layers, domainTypes, inlineEnumName, service, warning
       errors: (op.errors ?? []).map((e) => e.code),
       emits: op.emits ?? [],
       idempotency: op.idempotency ?? null,
+      // Las transiciones del lifecycle que esta operación ejecuta (DSL 2.6). Aquí se
+      // usan para el ORDEN de los efectos en el stub del handler; el TODO del método
+      // semántico dentro del agregado lo cablea attachTransitionExecutors.
+      transitions: op.transitions ?? [],
       cache: op.cache ?? null,
       schedule: op.schedule ?? null
     };

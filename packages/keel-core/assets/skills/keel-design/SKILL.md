@@ -114,7 +114,7 @@ El diseño solo está terminado cuando `keel validate specs/<servicio>` (sin `--
 
 - Cada entidad tiene exactamente un campo `id: true`; si tiene campo de estado, sus transiciones válidas están en `lifecycle` (no solo en invariantes de texto).
 - Los campos derivados llevan `computed` con su regla; los secretos y credenciales llevan `sensitive: true`.
-- Todo estado del `lifecycle` es alcanzable: alguna operación transiciona hacia él. Un estado al que nadie lleva es diseño muerto o una operación olvidada.
+- Todo estado del `lifecycle` es alcanzable: alguna operación transiciona hacia él **y lo declara en `transitions`**. Un estado al que nadie lleva es diseño muerto o una operación olvidada; una arista que ninguna operación declara es intención, no contrato.
 - Cada `command` declara al menos un error posible; si "no puede fallar", cuestiónalo. Cada error declarado lo dispara una guarda concreta, y lleva `http` explícito cuando el status no sea el obvio.
 - Toda query que devuelve colección declara su orden (total: con desempate si el campo puede empatar) y pagina si puede crecer sin cota.
 - Invariantes y reglas son frases declarativas verificables, no vaguedades ("el sistema debe ser robusto").
@@ -124,7 +124,8 @@ El diseño solo está terminado cuando `keel validate specs/<servicio>` (sin `--
 - Operaciones que no son CRUD se modelan con nombre propio (`retireProduct`), no como updates genéricos.
 - Toda operación tiene un trigger (endpoint, subscription, schedule) o es `internal: true`.
 - Roles con mínimo privilegio; operaciones de mutación nunca `public` sin justificación explícita del usuario.
-- Todo circuit breaker tiene `fallback` definido; toda subscription con reintentos dispara una operación idempotente.
+- Todo circuit breaker tiene `fallback` definido; toda subscription con reintentos dispara una operación protegida contra el doble efecto.
+- **Toda compensación responde a las dos preguntas que la hacen funcionar**: cómo se garantiza que no se aplique dos veces (deshacer dos veces el mismo trabajo no es deshacerlo) y a qué estado vuelve la entidad propia, con esa arista declarada en el `lifecycle`. Es el camino de excepción: el que menos se prueba a mano y el que más cuesta cuando falla.
 - **Toda decisión estructural aplicable la tomó el diseñador**, no tú: ninguna entrada del catálogo (`references/structural-decisions.md`) quedó escrita por default tácito, y las que se apartan de tu recomendación llevan su porqué anotado. Los campos con default en el schema (`reliability`, `optimisticLocking`, `transactionalBoundary`, `audit.timestamps`, `audit.authorship`, `visibility`) son justo los que se escriben solos si nadie pregunta.
 - Toda operación con `schedule` tiene decidido qué pasa si una ejecución se solapa con la siguiente, si recupera lo que no procesó tras una parada, y cuánto procesa por ciclo.
 - **Los consumos servidor-a-servidor tienen operación y contrato propios**; `audience: both` solo donde el diseñador lo eligió a sabiendas, con rationale.

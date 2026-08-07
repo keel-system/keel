@@ -1,4 +1,4 @@
-keel: "2.5"
+keel: "2.6"
 service:
   name: metering-digest
   version: 1.0.0

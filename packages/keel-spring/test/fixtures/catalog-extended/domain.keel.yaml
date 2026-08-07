@@ -75,7 +75,9 @@ entities:
       transitions:
         draft: [active, retired]
         active: [retired]
-        retired: []
+        # No es terminal: el registro regulatorio puede rechazar la retirada a posteriori,
+        # y esa es la arista por la que vuelve la compensación de `compliance`.
+        retired: [active]
 
   ProductImage:
     description: Imagen de un producto, entidad interna de su agregado.

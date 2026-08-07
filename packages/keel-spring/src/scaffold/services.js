@@ -260,7 +260,7 @@ function renderHandler(model, service, operation) {
   if (operation.idempotency) {
     const ttl = operation.idempotency.ttlSeconds ?? 86400;
     notes.push(
-      `Idempotencia: keySource=${operation.idempotency.keySource}, ttlSeconds=${ttl}. El puerto IdempotencyStore y su adaptador ya están generados — NO escribas otro registro (ni tabla propia, ni SET NX en la caché). La clave llega por IdempotencyContext.get() (vacío = el cliente no mandó la cabecera: ejecuta sin deduplicar, no rechaces). Si hay clave: find(scope, clave) con scope="${operation.name}"; si hay registro con la MISMA firma, reconstruye la respuesta desde su resourceId sin re-ejecutar nada (ni escrituras ni eventos); si la firma difiere, lanza el error que el diseño declare para ese caso; si no hay registro, ejecuta y llama a save(...) dentro de la misma transacción del comando`
+      `Idempotencia: keySource=${operation.idempotency.keySource}, ttlSeconds=${ttl}. El puerto IdempotencyStore y su adaptador ya están generados — NO escribas otro registro (ni tabla propia, ni SET NX en la caché). La clave llega por IdempotencyContext.get() (vacío = el cliente no mandó la cabecera: ejecuta sin deduplicar, no rechaces). Si hay clave: find(scope, clave) con scope="${operation.name}"; si hay registro con la MISMA firma, reconstruye la respuesta desde su resourceId sin re-ejecutar nada (ni escrituras ni eventos); si la firma difiere, lanza el error que el diseño declare para ese caso; si no hay registro, ejecuta y llama a save(...) dentro de la misma transacción del comando. Qué NO cubre: la reentrega del mismo mensaje por el broker — esa la para el IdempotencyGuard del listener (tabla processed_event), que es otro mecanismo y no se toca desde aquí`
     );
   }
   if (operation.cache) {
@@ -296,6 +296,23 @@ function renderHandler(model, service, operation) {
   for (const { dependency, need } of operation.dependencyNeeds ?? []) notes.push(needNote(dependency, need));
   for (const { dependency, activation } of operation.dependencyActivations ?? []) {
     notes.push(activationNote(dependency, activation));
+  }
+  // Orden de los efectos. Solo se dice cuando hay las dos cosas, porque solo entonces
+  // se puede equivocar: una llamada saliente NO participa de la transacción, así que
+  // si sale antes de la guarda de estado y la guarda rechaza, el rollback deshace la
+  // fila y deja el encargo hecho. Es el fallo que convierte una reentrega inocente en
+  // un doble efecto real contra otro servidor.
+  const outgoing = (operation.dependencyActivations ?? []).filter(({ activation }) => activation.http);
+  if ((operation.transitions ?? []).length > 0 && outgoing.length > 0) {
+    const names = outgoing.map(({ dependency, activation }) => `${dependency}.${activation.name}`).join(', ');
+    const guards = operation.transitions
+      .map((t) => `${t.entity}: ${(t.from ?? []).join('|')} → ${t.to}`)
+      .join('; ');
+    notes.push(
+      `ORDEN de los efectos: aplica PRIMERO la transición de estado (${guards}) y solo después llama a ${names}. ` +
+        `La llamada saliente no es transaccional: si sale antes y la guarda del agregado rechaza el cambio, el rollback ` +
+        `revierte la fila pero el trabajo ya está encargado en el otro servidor y nadie lo deshace`
+    );
   }
 
   const noteLines = notes.map((note) => `        // ${note}`);

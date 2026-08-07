@@ -43,3 +43,9 @@ subscriptions:
       productId: { type: uuid, required: true }
       reason:    { type: string, required: true }
     triggers: reactivateWithdrawnProduct
+    # Una compensación puede llegar antes del hecho que compensa: entre que se confirma
+    # la retirada y que compliance publica su rechazo no hay orden garantizado. Los
+    # reintentos absorben esa carrera solos; la DLQ es la red por si no se resuelve.
+    onFailure:
+      retry: { maxAttempts: 5, backoff: exponential, initialDelayMs: 500, maxDelayMs: 30000 }
+      deadLetter: true

@@ -102,6 +102,10 @@ operations:
         when: El registro regulatorio no responde y la retirada no puede darse por inscrita.
         http: 502
     emits: [ProductUpdated]
+    transitions:
+      - entity: Product
+        from: [draft, active]
+        to: retired
 
   addProductImage:
     description: Añade una imagen al producto subiendo el archivo binario.
@@ -184,6 +188,13 @@ operations:
           type: string
           required: true
     output: "void"
+    # La transición de vuelta de la compensación, y a la vez lo que impide aplicarla dos
+    # veces: 'active' no está entre sus orígenes, así que la reentrega del evento la
+    # rechaza el guard en vez de reactivar dos veces.
+    transitions:
+      - entity: Product
+        from: [retired]
+        to: active
     errors:
       - code: PRODUCT_NOT_FOUND
         when: No existe un producto con ese id.

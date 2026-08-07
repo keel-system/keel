@@ -81,7 +81,7 @@ flowchart TB
 
     QUALITY(["🤖 Fase 3 — keel-spring-quality<br/>pase no-conductual + ./gradlew build -x test en verde<br/>+ ./gradlew integrationTest al 100% (no-regresión)<br/>+ ./gradlew test (contextLoads bajo perfil test)<br/>+ baseline de migraciones generado y doble-checkeado<br/>(con persistence; la prueba en vivo es del diseñador)"])
     QUALITY --> GATE3{Gating fase 3}
-    GATE3 -->|"quality KO, baseline KO, contextTest KO<br/>o scenarios KO<br/>→ revertir el pase de calidad"| STOP3[/"Detenerse y reportar"/]
+    GATE3 -->|"quality KO, baseline KO, contextTest KO,<br/>dedupe KO o scenarios KO<br/>→ revertir el pase de calidad"| STOP3[/"Detenerse y reportar"/]
     GATE3 -->|OK| README["⚙ Actualizar README<br/>guía de despliegue productivo<br/>(pasos + parámetros de parameters/production/*)"]
     README --> CLOSE["⚙ Cierre: INFORME-GENERACION.md · compose down · commit<br/>«Generado desde specs/&lt;servicio&gt; v&lt;version&gt;»<br/>+ resumen (matriz, remaining, blockers, designGaps)"]
 ```
@@ -192,6 +192,7 @@ candado y la regla escrita en cada agente, el porqué.
 | `baselineTested: PENDING` | `keel-spring-quality` | Orquestador, resumen final, `README.md` | Con persistencia es **siempre** `PENDING`: el pipeline entrega el baseline verificado en estático, no probado. La prueba en vivo (`down -v` → `up -d` → `PROFILE=local,migrations ./gradlew bootRun`) la hace el diseñador antes del primer despliegue, y sus comandos quedan en el `README.md` § Despliegue en producción. No es un fallo ni bloquea nada: es alcance, y el resumen final lo dice. |
 | `scenarios: OK \| KO` | `keel-spring-quality` | Orquestador | No-regresión: el pase de calidad no cambió comportamiento. `KO` → revertir el pase, no tocar las pruebas. |
 | `contextTest: OK \| KO` | `keel-spring-quality` | Orquestador | `./gradlew test`: el contexto arranca bajo el perfil `test` (H2, sin infra, sin red). Cubre lo que los escenarios no ven, porque corren con `@ActiveProfiles("local")` contra infraestructura real: un adaptador que conecta al construirse o un bean que espera config que el perfil `test` no declara. `KO` → relanzar una vez con el error; sin `OK`, el commit lo dice. |
+| `dedupe: OK \| KO \| N/A` | `keel-spring-quality` | Orquestador | Con `subscriptions`: todo `<Evento>Listener` llama a `IdempotencyGuard.tryRecord(...)` **y descarta el mensaje si devuelve `false`**. Es el único eslabón de la idempotencia de consumo que no está garantizado por construcción, y falla en silencio hasta la primera reentrega. `KO` → **relanzar al agente de código**, no al de calidad: es comportamiento, y el pase de higiene no lo toca. El gate conductual del mismo hecho es el escenario de reentrega (`deliverXxx` dos veces con el mismo `messageId`), que ya corrió antes; esta comprobación lo cubre cuando ese escenario todavía no existe. |
 | `blockers` / `designGaps` | Cualquiera | Usuario | Contradicciones o huecos del diseño: se detiene la orquestación o se consolidan en el resumen; nunca se resuelven relanzando. |
 
 ## El ciclo de fix se verifica a sí mismo, pero no se aprueba a sí mismo

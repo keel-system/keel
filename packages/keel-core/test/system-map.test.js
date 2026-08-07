@@ -485,9 +485,17 @@ const PAYMENTS_MESSAGING = `${messaging(['FlightScheduled'])}subscriptions:
   PaymentFailed:
     description: El cobro aceptado no pudo completarse.
     source: payments
+    contract:
+      messageId: { location: field, name: eventId }
     payload:
+      eventId: { type: uuid, required: true }
       code: { type: string, required: true }
     triggers: scheduleFlight
+    # Una compensación puede llegar antes del hecho que compensa: los reintentos
+    # absorben esa carrera y la DLQ es la red por si no se resuelve.
+    onFailure:
+      retry: { maxAttempts: 5, backoff: exponential }
+      deadLetter: true
 `;
 
 const compensatingDesign = (options) => ({

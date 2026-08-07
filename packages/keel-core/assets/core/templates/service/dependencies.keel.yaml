@@ -44,6 +44,11 @@ dependencies:
   #     - onEvent: OrderPaymentFailed              # suscripción existente en messaging
   #       description: Al fallar el cobro se revierte la reserva hecha contra catalog.
   #       # undoes: reserveStock                   # activación de este proveedor que se deshace
+  #     # La operación que la ejecuta vive en messaging: subscriptions.<evento>.triggers, y
+  #     # tiene dos obligaciones que `keel validate` comprueba: NO poder aplicarse dos veces
+  #     # (contract.messageId, idempotency, o una transición de lifecycle irrepetible —
+  #     # deshacer dos veces el mismo trabajo no es deshacerlo) y devolver con `transitions`
+  #     # el estado propio que movió el trabajo que se encargó.
   #
   # notifications:
   #   description: Servicio de avisos. No le leemos nada: le pedimos que envíe.

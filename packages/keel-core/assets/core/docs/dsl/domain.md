@@ -146,11 +146,13 @@ lifecycle:
 
 `keel validate` comprueba que `field` existe y es enum, que todo estado origen y destino pertenece a los valores del enum, y avisa si un valor del enum no declara sus transiciones.
 
+**Quién ejecuta cada transición se declara en `use-cases`**, con `transitions` en la operación. Aquí vive qué cambios de estado son legales; allí, qué caso de uso los provoca. Los dos lados se contrastan: una operación que pide una arista que este mapa no tiene es error (el guard derivado la rechazaría siempre), y una arista que ninguna operación ejecuta es aviso. Es la diferencia entre una máquina de estados que el diseño sostiene y una lista de estados que nadie recorre.
+
 Las **invariantes** quedan para las reglas que no se pueden expresar como transición (condiciones sobre otros campos, reglas cruzadas). Escritas en lenguaje natural declarativo y verificable: el generador las traduce a validaciones; el humano las revisa como frases.
 
 ## Qué NO va aquí
 
 - Cómo se persisten las entidades (índices, claves naturales, VO embebidos o en tabla) → capa `persistence`.
 - Cómo se aplica la frontera transaccional del agregado → capa `persistence` (`transactionalBoundary: per-aggregate`); aquí solo se declara la frontera.
-- Qué operaciones las manipulan → capa `use-cases`.
+- Qué operaciones las manipulan → capa `use-cases` (y qué transición ejecuta cada una, con `transitions`).
 - Qué campos devuelve cada operación → forma del payload en `use-cases` (`exclude`); aquí solo se marca lo estructural (`sensitive`).

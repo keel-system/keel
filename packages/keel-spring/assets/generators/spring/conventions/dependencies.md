@@ -81,6 +81,19 @@ suscripción ya declara `triggers`, así que la operación de proyección existe
    diseño: dilo en el reporte en vez de arreglarlo en el código.
 7. **No dupliques resiliencia.** El retry y el circuit breaker viven en el adaptador del cliente
    (resilience4j, desde `http-clients`). El Reader no los repite.
+8. **El encargo sale DESPUÉS de la guarda de estado.** Una activación por HTTP no participa de la
+   transacción: si la llamada sale antes de que el agregado valide y la guarda del `lifecycle`
+   rechaza el cambio, el rollback revierte la fila y **el trabajo queda encargado** en el otro
+   servidor, donde nadie lo va a deshacer. El orden es cargar → aplicar la transición y las
+   invariantes → llamar → confirmar. Build escribe la nota `ORDEN de los efectos` en el stub de
+   todo handler que tenga transición declarada y activación saliente, precisamente porque el
+   camino de menor resistencia es el contrario: llamar primero y mutar después «cuando ya se sabe
+   que salió bien». Regla en `constitution.md` § Consistencia y transacciones.
+
+   Con el orden correcto queda una ventana irreducible —transición aplicada, llamada hecha, commit
+   que falla— y esa **no** se cierra con código: es exactamente lo que una `compensations` del
+   diseño existe para cubrir. Si el diseño no la declara, es hueco de diseño y va al reporte, no
+   un `try/catch` inventado en el handler.
 
 ## `onMiss` → código
 

@@ -399,6 +399,49 @@ Toda afirmación del `Then` se comprueba, por orden de preferencia:
    de red** (`db`, `minio`, `kafka`, `keycloak`), nunca por `localhost`, por lo mismo que en
    el punto anterior.
 
+## Eventos entrantes: `deliverXxx(...)` y la reentrega
+
+`publishedMessages` lee lo que este servicio **publica**. Su simétrico es
+`deliver<Evento>(messageId, payloadJson)`, que `build` genera por cada suscripción del
+diseño y **entrega** un mensaje en el canal real del proveedor, como si lo hubiera puesto
+él. Es la única forma de materializar un `When` del tipo «llega el evento X», y por tanto
+la única de ejercitar una suscripción de punta a punta.
+
+El helper ya sabe tres cosas que son del **diseño**, no del test, y por eso no se
+reimplementan: el destino físico de la suscripción (que **no** es el topic propio del
+servicio, sino el del proveedor), la envoltura que declara su `contract`
+(`keel` / `wrapped` / `none`, con su `payloadPath`), y dónde viajan el discriminador y la
+clave de deduplicación (cabecera o campo). El test solo aporta el payload.
+
+**La reentrega se escribe llamando dos veces con el mismo `messageId`:**
+
+```java
+String mid = UUID.randomUUID().toString();
+deliverWithdrawalRejected(mid, "{\"productId\":\"" + productId + "\"}");
+await(Duration.ofSeconds(15), () -> "active".equals(jsonPath(get("/api/v1/products/" + productId), "$.status")));
+
+deliverWithdrawalRejected(mid, "{\"productId\":\"" + productId + "\"}");   // MISMO mid: reentrega
+// El Then afirma que NO hay segundo efecto.
+```
+
+Con `messageId` **distintos** son dos hechos distintos, no una reentrega: un escenario así
+pasa en verde contra un consumidor que no deduplica nada, que es exactamente el fallo que
+se pretendía cazar. Es el mismo error que una aserción negativa de mensajería sin evidencia
+afirmativa, y cuesta lo mismo: falsa seguridad.
+
+Dos consecuencias prácticas:
+
+- **El efecto es asíncrono.** Se afirma con `await(...)` sobre una lectura por la API, nunca
+  en la línea siguiente a la entrega.
+- **Una compensación siempre lleva los dos escenarios** —el efecto completo y la reentrega—,
+  porque deshacer dos veces el mismo trabajo no es deshacerlo. Es el camino que menos se
+  ejercita a mano y el que más cuesta cuando está roto: solo se ejecuta cuando algo ya había
+  salido mal.
+
+Si `deliverXxx` deja el escenario en timeout mudo, los dos sospechosos por orden son el
+**topic** al que escucha el listener (tiene que ser el que declara `parameters/`, que es al
+que el arnés entrega) y el **discriminador** del contrato, no el arnés.
+
 ### Qué deja limpio el reset, exactamente
 
 `resetState()` cubre lo que enumera `infra/reset-db.sh`: **datos de la BD** (esquema

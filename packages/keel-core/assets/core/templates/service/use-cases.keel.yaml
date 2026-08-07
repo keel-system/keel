@@ -1,5 +1,6 @@
 # Capa use-cases — los casos de uso del servicio.
-# Aquí viven también las políticas propias del caso de uso: idempotencia, caché y schedule.
+# Aquí viven también las políticas propias del caso de uso: idempotencia, caché y schedule,
+# y las transiciones del lifecycle de domain que cada operación ejecuta.
 # Quién los activa se declara en la capa que los expone (api: endpoints, messaging: subscriptions);
 # una operación sin trigger debe marcar internal: true o tener schedule.
 
@@ -20,6 +21,18 @@ operations:
   #   errors:
   #     - { code: SKU_ALREADY_EXISTS, when: Ya existe un producto con ese sku., http: 409 }
   #   emits: [ProductCreated]        # requiere capa messaging con el evento definido
+  #
+  # publishProduct:
+  #   description: Publica un producto en borrador.
+  #   kind: command
+  #   input:
+  #     fields:
+  #       id: { type: uuid, required: true }
+  #   output: "void"
+  #   transitions:                   # transiciones del lifecycle que ESTA operación ejecuta
+  #     - entity: Product            # debe declarar lifecycle en domain
+  #       from: [draft]              # cada origen debe permitir `to` en domain: lifecycle.transitions
+  #       to: active
   #
   # getProduct:
   #   description: Recupera un producto por su id.

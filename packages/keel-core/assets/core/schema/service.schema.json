@@ -10,7 +10,7 @@
     "keel": {
       "type": "string",
       "description": "Versión del DSL Keel usada por este servicio. Se soporta UNA sola: los schemas no gatean primitivos por versión, así que aceptar versiones anteriores haría que este campo declarase una intención que nada comprueba. Ver docs/dsl-reference.md § Historial de versiones.",
-      "enum": ["2.5"]
+      "enum": ["2.6"]
     },
     "service": {
       "type": "object",

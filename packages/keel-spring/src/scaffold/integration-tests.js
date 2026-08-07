@@ -12,6 +12,7 @@
 // puede importar una clase del servicio.
 
 import { javaFile, javaPath } from './render.js';
+import { pascalCase } from '../lib/naming.js';
 import { DATABASES, BROKERS, CACHES, selectedInfra } from '../lib/stack-catalog.js';
 import { needsDevtools } from './devtools.js';
 import { tokenUrl, userTestClient } from './auth-provisioning.js';
@@ -292,13 +293,18 @@ function abstractImports(model) {
   // Resolución explícita del bash con el que se invocan los scripts de infra/.
   if (reset) imports.push('java.io.File', 'java.util.Locale');
   if (devtools) imports.push('java.nio.charset.StandardCharsets', 'java.util.ArrayList');
-  // Los cuerpos que van a una CLI del contenedor viajan por archivo, no por línea
-  // de comandos (sondeo de RabbitMQ, publicación cruda en Kafka).
-  if (broker?.id === 'rabbitmq' || broker?.id === 'kafka') {
-    imports.push('java.nio.file.Files', 'java.nio.file.Path');
+  // Los cuerpos que van a una CLI del contenedor viajan por archivo, no por línea de
+  // comandos: el sondeo de RabbitMQ, y con cualquier broker la entrega de mensajes
+  // entrantes (deliverMessage), que es la que lleva JSON arbitrario del escenario.
+  // `devtools` en la condición porque todo esto vive dentro de devtoolsSection: sin
+  // contenedor no se genera, y el import quedaría sin uso.
+  if (broker && devtools) {
+    imports.push('java.nio.file.Files', 'java.nio.file.Path', 'java.util.ArrayList', 'java.util.Map');
   }
+  // El cuerpo entregado a RabbitMQ va en base64 dentro del sobre de la API de gestión.
+  if (broker?.id === 'rabbitmq' && devtools) imports.push('java.util.Base64');
   // Marcas de offset por destino (aislamiento de Kafka, que no tiene purga).
-  if (broker?.id === 'kafka') imports.push('java.util.Map', 'java.util.concurrent.ConcurrentHashMap');
+  if (broker?.id === 'kafka') imports.push('java.util.concurrent.ConcurrentHashMap');
   if (hasMultipart(model)) {
     imports.push(
       'java.util.Map',
@@ -778,7 +784,10 @@ function devtoolsSection(model) {
     private static final String DEVTOOLS_CONTAINER = "${model.service.name}-devtools";
 
     private static String containerRuntime;
-${brokerSection(model)}
+${brokerEntry(model) ? `
+    /** Archivo del contenedor por el que viaja el cuerpo de {@link #deliverMessage}. */
+    private static final String DELIVER_BODY = "/tmp/keel-deliver.json";
+` : ''}${brokerSection(model)}${deliverySection(model)}${subscriptionDeliverySection(model)}
     /**
      * Ejecuta un comando dentro del contenedor devtools y devuelve su salida.
      *
@@ -864,13 +873,13 @@ ${bodyFileHelper(model)}
 }
 
 // Copia de cuerpos al contenedor devtools. Es la contrapartida del javadoc de
-// `devtools`: todo cuerpo con comillas (un JSON) que necesite una CLI del
-// contenedor viaja por archivo. Lo comparten el sondeo de RabbitMQ y la
-// publicación cruda de Kafka; snssqs no lo necesita (la CLI de AWS toma el
-// cuerpo por argv sin comillas internas).
+// `devtools`: todo cuerpo con comillas (un JSON) que necesite una CLI del contenedor
+// viaja por archivo. Lo comparten el sondeo de RabbitMQ y, con los tres brokers, la
+// entrega de mensajes entrantes — que lleva el JSON que escribe el escenario, así que
+// es justo donde un escapado roto costaría más caro de diagnosticar.
 function bodyFileHelper(model) {
   const broker = brokerEntry(model);
-  if (broker?.id !== 'rabbitmq' && broker?.id !== 'kafka') return '';
+  if (!broker) return '';
   return `
     /**
      * Copia un cuerpo al contenedor en vez de pasarlo como argumento: un JSON con
@@ -991,8 +1000,6 @@ ${purgeDoc}
     /** Offset del topic desde el que lee cada canal (su última purga/marca). */
     private static final Map<String, Long> MARKS = new ConcurrentHashMap<>();
 
-    /** Archivo del contenedor por el que viaja el cuerpo de {@link #publishRaw}. */
-    private static final String PUBLISH_BODY = "/tmp/keel-publish.json";
 ${doc}
     protected static String publishedMessages(String channel, int count) {
         Long mark = MARKS.get(channel);
@@ -1087,24 +1094,207 @@ ${purgeDoc}
         return last + 1;
     }
 
-    /**
-     * Publica un mensaje crudo en el topic del servicio (solo lo usa el humo del arnés).
-     *
-     * <p>El cuerpo va por archivo vía {@link #copyToDevtools} y kcat lo lee de ahí
-     * (\`-l\`: una línea, un mensaje). Embeberlo en la cadena de \`sh -c\` es lo que
-     * prohíbe el javadoc de {@link #devtools}: en Windows las comillas dobles del JSON
-     * se pierden y lo que llega al topic es \`{metadata:{eventType:X}}\`, que el filtro
-     * por canal nunca reconoce — el síntoma es un timeout mudo, no un error.
-     */
+    /** Publica un mensaje crudo en el topic del servicio (solo lo usa el humo del arnés). */
     protected static void publishRaw(String key, String payload) {
-        copyToDevtools(payload, PUBLISH_BODY);
-        devtoolsShell("kcat -P -b kafka:29092 -t " + EVENT_TOPIC + " -k " + shellQuote(key)
-            + " -l " + PUBLISH_BODY);
+        deliverMessage(EVENT_TOPIC, key, payload, Map.of());
     }
 
     /** Comilla un valor <b>sin comillas dobles</b> (una key, nunca un cuerpo JSON). */
     private static String shellQuote(String value) {
         return "'" + value.replace("'", "'\\\\''") + "'";
+    }
+`;
+}
+
+// Entrega de mensajes ENTRANTES: la mitad que le faltaba al arnés. `publishedMessages`
+// lee lo que este servicio publica; esto inyecta lo que consume, que es lo único con lo
+// que se puede ejercitar una suscripción —y, sobre todo, su REENTREGA: el escenario que
+// distingue un consumidor que deduplica de uno que aplica el efecto dos veces—. Sin esta
+// primitiva, la obligación de escenario de una compensación no era ejecutable y el gate
+// de la generación no podía verla.
+function deliverySection(model) {
+  const broker = brokerEntry(model);
+  if (!broker) return '';
+  const doc = `
+    /**
+     * Entrega un mensaje <b>crudo</b> en un destino del broker real, como si lo hubiera
+     * publicado el servicio de origen. Es la contrapartida de {@link #publishedMessages}.
+     *
+     * <p>El cuerpo viaja por archivo vía {@link #copyToDevtools}, nunca embebido en la
+     * línea de comandos: en Windows el cliente de contenedores se come las comillas
+     * dobles del JSON y lo que llega al broker es un cuerpo roto que el consumidor nunca
+     * reconoce — el síntoma es un timeout mudo, no un error.
+     *
+     * <p>\`key\` es la clave de enrutado del broker, <b>no</b> la identidad del mensaje:
+     * la que deduplica viaja donde el contrato del diseño diga (metadata, cabecera o
+     * campo), y de eso se encarga cada \`deliverXxx\`.
+     */`;
+
+  if (broker.id === 'rabbitmq') {
+    return `
+    /** Publicación por el exchange por defecto: la routing key <b>es</b> el nombre de la cola. */
+    private static final String RABBIT_PUBLISH = "http://rabbitmq:15672/api/exchanges/%2F/amq.default/publish";
+${doc}
+    protected static void deliverMessage(String destination, String key, String body, Map<String, String> headers) {
+        // El cuerpo va en base64: incrustar un JSON dentro del campo \`payload\` (que es
+        // una cadena JSON) exigiría escaparlo a mano, y ahí es donde se pierde un cuerpo.
+        String request = "{\\"properties\\":{\\"message_id\\":\\"" + key + "\\",\\"headers\\":" + headersJson(headers)
+            + "},\\"routing_key\\":\\"" + destination + "\\",\\"payload\\":\\""
+            + Base64.getEncoder().encodeToString(body.getBytes(StandardCharsets.UTF_8))
+            + "\\",\\"payload_encoding\\":\\"base64\\"}";
+        copyToDevtools(request, DELIVER_BODY);
+        devtools("curl", "-sf", "-u", "guest:guest", "-H", "content-type: application/json",
+            "-XPOST", "-d", "@" + DELIVER_BODY, RABBIT_PUBLISH);
+    }
+${headersJsonHelper()}`;
+  }
+
+  if (broker.id === 'snssqs') {
+    return `
+    /** Archivo del contenedor por el que viajan los atributos del mensaje entregado. */
+    private static final String DELIVER_ATTRS = "/tmp/keel-deliver-attrs.json";
+${doc}
+    protected static void deliverMessage(String destination, String key, String body, Map<String, String> headers) {
+        copyToDevtools(body, DELIVER_BODY);
+        List<String> argv = new ArrayList<>(List.of("sqs", "send-message",
+            "--queue-url", QUEUE_URL + destination, "--message-body", "file://" + DELIVER_BODY));
+        if (!headers.isEmpty()) {
+            copyToDevtools(attributesJson(headers), DELIVER_ATTRS);
+            argv.addAll(List.of("--message-attributes", "file://" + DELIVER_ATTRS));
+        }
+        aws(argv.toArray(String[]::new));
+    }
+
+    /** Cabeceras → atributos de mensaje SQS, que es su equivalente en este broker. */
+    private static String attributesJson(Map<String, String> headers) {
+        StringBuilder json = new StringBuilder("{");
+        boolean first = true;
+        for (Map.Entry<String, String> header : headers.entrySet()) {
+            if (!first) {
+                json.append(',');
+            }
+            json.append('"').append(header.getKey())
+                .append("\\":{\\"DataType\\":\\"String\\",\\"StringValue\\":\\"").append(header.getValue()).append("\\"}");
+            first = false;
+        }
+        return json.append('}').toString();
+    }
+`;
+  }
+
+  return `${doc}
+    protected static void deliverMessage(String destination, String key, String body, Map<String, String> headers) {
+        copyToDevtools(body, DELIVER_BODY);
+        // \`-l\`: el archivo es UNA línea y por tanto UN mensaje.
+        StringBuilder command = new StringBuilder("kcat -P -b kafka:29092 -t ")
+            .append(shellQuote(destination)).append(" -k ").append(shellQuote(key));
+        headers.forEach((name, value) -> command.append(" -H ").append(shellQuote(name + "=" + value)));
+        devtoolsShell(command.append(" -l ").append(DELIVER_BODY).toString());
+    }
+`;
+}
+
+// Un método por suscripción: el escenario no debería tener que saber en qué topic vive
+// el evento, ni cómo lo envuelve la fuente, ni dónde declaró el contrato la clave de
+// deduplicación. Todo eso lo sabe el diseño, así que lo sabe build. Lo que queda en la
+// prueba es lo único que es del escenario: el payload y si el messageId se repite.
+function subscriptionDeliverySection(model) {
+  const broker = brokerEntry(model);
+  const subscriptions = model.subscriptions ?? [];
+  if (!broker || subscriptions.length === 0) return '';
+  return subscriptions.map((sub) => deliverMethod(sub)).join('');
+}
+
+function deliverMethod(sub) {
+  const headers = [];
+  if (sub.discriminator?.location === 'header') {
+    headers.push(`"${sub.discriminator.name}", "${sub.discriminator.value ?? sub.name}"`);
+  }
+  if (sub.messageId?.location === 'header') {
+    headers.push(`"${sub.messageId.name}", messageId`);
+  }
+  const headerMap = headers.length > 0 ? `Map.of(${headers.join(', ')})` : 'Map.of()';
+
+  // Dónde vive la identidad del mensaje decide qué escenario de reentrega es posible:
+  // si el contrato no la declara en ninguna parte, el consumidor solo puede deduplicar
+  // por el eventId de la envoltura Keel, y con `none` no hay ninguno.
+  const identity =
+    sub.envelope === 'keel'
+      ? 'el `eventId` de la envoltura Keel'
+      : sub.messageId
+        ? `el ${sub.messageId.location === 'header' ? 'header' : 'campo'} \`${sub.messageId.name}\` del contrato`
+        : null;
+
+  return `
+    /**
+     * Entrega {@code ${sub.name}} en su canal real, con la envoltura que declara el
+     * contrato del diseño (${sub.envelope}).
+     *
+     * <p>{@code messageId} es la identidad del mensaje${identity ? `, que viaja en ${identity}` : ''}:
+     * llamar dos veces con el <b>mismo</b> valor es la <b>reentrega</b> que el consumidor
+     * debe absorber sin segundo efecto, y es exactamente así como se escribe ese
+     * escenario. Con valores distintos son dos hechos distintos, no una reentrega.${
+       identity
+         ? ''
+         : `
+     *
+     * <p><b>Ojo</b>: el contrato de esta suscripción no declara {@code messageId} ni usa
+     * la envoltura Keel, así que el consumidor no tiene clave con la que deduplicar. Si
+     * el escenario de reentrega falla, el hueco está en el diseño, no en el código.`
+     }
+     */
+    protected static void deliver${pascalCase(sub.name)}(String messageId, String payloadJson) {
+        deliverMessage(${subscriptionTopicExpression(sub)}, messageId, ${envelopeExpression(sub)}, ${headerMap});
+    }
+`;
+}
+
+// El topic se resuelve como en el perfil `local`: la variable de entorno del parámetro
+// si está, y si no el default del diseño. Es la misma regla que EVENT_TOPIC, y la razón
+// es la misma: el arnés tiene que apuntar donde apunta la app, no donde cree el test.
+function subscriptionTopicExpression(sub) {
+  const envVar = sub.topicProperty.toUpperCase().replace(/[.-]/g, '_');
+  return `System.getenv().getOrDefault("${envVar}", "${sub.topicDefault}")`;
+}
+
+// Cómo se envuelve el payload al ponerlo en el cable, según el contrato declarado.
+function envelopeExpression(sub) {
+  if (sub.envelope === 'keel') {
+    // La fuente es otro servicio Keel: metadata + data, y el eventId ES la clave de
+    // deduplicación por defecto del consumidor (architecture.md § correlación).
+    return (
+      `"{\\"metadata\\":{\\"eventId\\":\\"" + messageId + "\\",\\"eventType\\":\\"${sub.name}\\"},\\"data\\":" + payloadJson + "}"`
+    );
+  }
+  if (sub.envelope === 'wrapped') {
+    const parts = [`"{"`];
+    if (sub.discriminator?.location === 'field') {
+      parts.push(`+ "\\"${sub.discriminator.name}\\":\\"${sub.discriminator.value ?? sub.name}\\","`);
+    }
+    if (sub.messageId?.location === 'field') {
+      parts.push(`+ "\\"${sub.messageId.name}\\":\\"" + messageId + "\\","`);
+    }
+    parts.push(`+ "\\"${sub.payloadPath}\\":" + payloadJson + "}"`);
+    return parts.join(' ');
+  }
+  // `none`: el mensaje ES el payload. Si el contrato declara la identidad en un campo,
+  // el escenario tiene que incluirla en el propio payloadJson — no hay dónde ponerla.
+  return 'payloadJson';
+}
+
+function headersJsonHelper() {
+  return `
+    private static String headersJson(Map<String, String> headers) {
+        StringBuilder json = new StringBuilder("{");
+        boolean first = true;
+        for (Map.Entry<String, String> header : headers.entrySet()) {
+            if (!first) {
+                json.append(',');
+            }
+            json.append('"').append(header.getKey()).append("\\":\\"").append(header.getValue()).append('"');
+            first = false;
+        }
+        return json.append('}').toString();
     }
 `;
 }

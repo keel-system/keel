@@ -14,7 +14,10 @@ operations:
         consumptionKwh: { type: decimal, required: true, constraints: { min: 0, scale: 3 } }
         source:         { type: ReadingSource, required: true }
     output: { entity: MeterReading }
-    idempotency: { keySource: payload-hash, ttlSeconds: 604800 }
+    # Sin `idempotency`: la clave de ese bloque llega por la cabecera Idempotency-Key y
+    # aquí no hay endpoint que la reciba. Lo que protege de verdad contra la reentrega es
+    # el `contract.messageId` de la suscripción, y contra el duplicado de negocio, la
+    # naturalKey [meterId, readAt] de persistence — que es lo que dicen las rules de abajo.
     preconditions:
       - La lectura no está ya registrada para ese contador y ese instante.
     rules:

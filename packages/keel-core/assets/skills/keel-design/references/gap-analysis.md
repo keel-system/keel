@@ -89,8 +89,8 @@ Por cada entidad con `lifecycle`:
 
 - ¿Qué estado tiene la entidad **recién creada**? ¿Lo dice el diseño (`default` del campo) o hay que adivinarlo?
 - Por cada estado: ¿hay alguna operación que **lleve** a él? Un estado inalcanzable es diseño muerto o una operación olvidada.
-- Por cada transición declarada: ¿qué operación la ejecuta? Una transición que nadie ejecuta no es contrato, es intención.
-- ¿Hay estados **terminales**? ¿Es correcto que no tengan salida, o el negocio necesita revertirlos (cancelar, reactivar, devolver)?
+- Por cada transición declarada: ¿qué operación la ejecuta, y **lo declara con `transitions`**? Una transición que nadie ejecuta no es contrato, es intención — `keel validate` lo avisa, pero quién debería ejecutarla es respuesta de diseño.
+- ¿Hay estados **terminales**? ¿Es correcto que no tengan salida, o el negocio necesita revertirlos (cancelar, reactivar, devolver)? **Cruza esta pregunta con las `compensations`**: una compensación que tiene que devolver la entidad a un estado anterior necesita esa arista de vuelta declarada aquí, y el estado terminal es justo donde se olvida (clase 8).
 - ¿Qué operaciones están **prohibidas** en cada estado, y con qué error? Modificar un pedido entregado suele ser un error declarado que nadie declara.
 
 ### 2. Guardas ↔ errores
@@ -124,7 +124,7 @@ Campo a campo, en `domain`:
 
 - Por cada `unique` en `domain` o `persistence`: ¿hay un `error` de colisión declarado en las operaciones que escriben ese campo?
 - ¿Qué pasa si **dos peticiones concurrentes** ejecutan el mismo command sobre la misma entidad? ¿Último gana, o conflicto explícito? Si el negocio no tolera la pérdida de actualizaciones, hay que declararlo — y el sitio donde se declara es `persistence.consistency.optimisticLocking` (clase 14), no la prosa de `rules`.
-- Operaciones con `retry` que las alcanzan (subscription con reintentos, `http-clients` con `retry`): ¿la operación destino es idempotente? ¿lo declara (`idempotency`)?
+- Operaciones con `retry` que las alcanzan: ¿la operación destino es idempotente, y **con el mecanismo del eje correcto**? Si quien reintenta es una subscription, es `contract.messageId` o una transición irrepetible; si es un cliente HTTP contra un endpoint nuestro, es `idempotency`. Declarar el de un eje contra la repetición del otro no protege nada.
 - ¿Hay operaciones que **leen y luego escriben** en función de lo leído (reservar stock, asignar numeración)? Ese patrón sin política de concurrencia es una condición de carrera declarada.
 
 ### 5. Consultas
@@ -181,6 +181,7 @@ Por cada cliente de `http-clients`, cada suscripción, cada `need` y cada `activ
 - El `fallback` del circuit breaker: ¿produce un resultado **correcto** (valor por defecto aceptable para el negocio) o solo evita el error? Un fallback que devuelve datos falsos silenciosamente es peor que fallar. **Mismo criterio para `onMiss.action: degrade`**: si el cliente no puede distinguir la respuesta degradada de la normal, no es degradación, es un bug declarado.
 - ¿La llamada externa ocurre **dentro** de una transacción de escritura? Si sí, un timeout deja la transacción abierta: hay que separar. Ojo con los `need` de `strategy: on-demand` usados por un `command`.
 - Si la llamada externa es una **escritura** que no podemos deshacer y luego fallamos, ¿queda inconsistencia? ¿Hay compensación? Si la hay, ¿está declarada en `dependencies.<dep>.compensations` (con su `undoes` apuntando a la activación que revierte) y respaldada por una suscripción real, o solo vive en la conversación?
+- Y si la hay, las dos preguntas que la hacen funcionar de verdad —`keel validate` las comprueba, pero la respuesta correcta es de diseño—: (a) el evento de fallo llega por un canal que **reentrega**; si la compensación se ejecuta dos veces, ¿qué pasa? ¿Qué la protege: `contract.messageId` o una transición irrepetible? (`idempotency` no: su clave llega por una cabecera HTTP que el broker no manda, y declararla ahí es error.) (b) el trabajo encargado movió el estado de una entidad nuestra: al deshacerlo, **¿a qué estado vuelve**, y esa arista está en `domain: lifecycle.transitions`? Si el estado de partida es terminal, la respuesta casi siempre es que falta la arista, no que la compensación sobre.
 
 Por cada `activation`:
 

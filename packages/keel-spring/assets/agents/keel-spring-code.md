@@ -161,6 +161,17 @@ misma raíz. Todo lo que hagas ocurre dentro de ella.
   `CorrelationContext.runWith(...)` y deduplican con `IdempotencyGuard.tryRecord(...)`
   (`infrastructure/messaging/idempotency`). Escribir otra tabla de procesados o un `SET NX`
   propio para esto es generación incorrecta.
+  **Es el único eslabón de la idempotencia de consumo que no está garantizado por
+  construcción**, así que se escribe entero o no protege nada: (a) llamar a `tryRecord`, (b)
+  **descartar el mensaje si devuelve `false`**, sin despachar al mediator, y (c) usar como
+  clave la que declara el diseño — el `contract.messageId` de la suscripción si lo hay, y si
+  no `envelope.metadata().eventId()`. Un id generado en el listener (`UUID.randomUUID()`, un
+  timestamp) compila, pasa el camino feliz y deduplica cero. Lo verifican dos gates: el
+  escenario de reentrega, que entrega el mismo `messageId` dos veces, y la comprobación
+  estática del agente de calidad (`dedupe: OK|KO`).
+  Y el listener tiene que **escuchar el destino que declara el diseño**
+  (`messaging.subscriptions.<n>.topic` de `parameters/`), porque es al que el arnés entrega:
+  un topic hardcodeado o distinto deja todos los escenarios de suscripción en timeout mudo.
 - Lo mismo con la idempotencia **de comando** (`idempotency` en una operación): el puerto
   `IdempotencyStore`, su adaptador, la tabla `idempotency_record`, el `IdempotencyContext` y el
   filtro de la cabecera **ya están generados**. Tu trabajo es usarlos en el handler según
