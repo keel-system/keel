@@ -187,6 +187,14 @@ publique de verdad ese evento, no lo comprobaba nada. Eso es lo que hace esta pu
    consultar ni replicar, y es lo que hace que una relación solo de compensación se pueda declarar
    entera —`invokes` por la activación, `consumes` de eventos por el evento que la deshace— sin que el
    mapa la dé por incompleta.
+
+   Cuando el fallo lo publica un **tercero** —se le encarga stock a `inventory` y lo que falla después
+   es el pago, en `payments`— la forma en el mapa son **tres** aristas, todas desde quien encarga:
+   `invokes inventory` por la reserva, `invokes inventory` otra vez por la liberación (la activación de
+   vuelta) y `consumes payments` con `kind: events` por el fallo. Lo que **no** aparece es ninguna
+   arista de `payments` a `inventory`: el proveedor no se suscribe al fallo de un tercero, porque quien
+   encarga el trabajo es quien lo deshace (`docs/dsl/dependencies.md` § De quién es la compensación).
+   Un mapa con esa arista es la señal de que la compensación está en el servicio equivocado.
 4. **Un diseño contra otro diseño**, en las dos direcciones:
    - que el proveedor **publique** en su capa `messaging` los eventos que el mapa promete a su consumidor;
    - que quien recibe un encargo lo **consuma** de verdad, y además con `nature: request` — si lo

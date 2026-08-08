@@ -3360,3 +3360,100 @@ test('con los dos escenarios no se dice nada', () => {
   const { warnings } = checkCrossRefs({ layers: compLayers(), scenarios: scenarioDoc(EFECTO, REENTREGA) });
   assert.ok(!warnings.some((w) => w.includes('WithdrawalRejected') && w.includes('escenario')), warnings.join('\n'));
 });
+
+// ---------------------------------------------------------------------------
+// La compensación disparada por un TERCERO. Es la forma más común de saga —se
+// encarga stock a inventory y lo que falla después es el pago, en payments— y
+// hasta ahora recibía un aviso por declarar el `source` correcto, que empujaba
+// justo al diseño equivocado: mover la suscripción al proveedor.
+// ---------------------------------------------------------------------------
+
+// compLayers con el fallo publicado por un tercero ('audit', ajeno a 'compliance')
+// y la activación de vuelta declarada, que es lo que alcanza al proveedor.
+const thirdPartyCompensation = () => {
+  const layers = compLayers();
+  layers.messaging.subscriptions.WithdrawalRejected.source = 'audit';
+  const dep = layers.dependencies.dependencies.compliance;
+  dep.activations.cancelWithdrawal = {
+    triggeredBy: ['reactivateProduct'],
+    via: { client: 'compliance', call: 'cancelWithdrawal' },
+    effect: 'La inscripción de la retirada queda anulada en el registro.',
+    onFailure: { action: 'ignore' },
+  };
+  layers['http-clients'].clients.compliance.calls.cancelWithdrawal = {
+    contract: 'DELETE /withdrawals/{id} -> anulación de la inscripción.',
+  };
+  return layers;
+};
+
+test('una compensación disparada por un tercero no avisa por el source', () => {
+  const { errors, warnings } = run(thirdPartyCompensation());
+  assert.deepEqual(errors, []);
+  assert.ok(!warnings.some((w) => w.includes('distinto de la dependencia')), warnings.join('\n'));
+  assert.ok(!warnings.some((w) => w.includes('sigue en pie')), warnings.join('\n'));
+});
+
+test('pero sin la activación de vuelta sigue avisando: el proveedor no se entera', () => {
+  // El test que prueba que se quitó un falso positivo y NO una comprobación.
+  const layers = thirdPartyCompensation();
+  delete layers.dependencies.dependencies.compliance.activations.cancelWithdrawal;
+  delete layers['http-clients'].clients.compliance.calls.cancelWithdrawal;
+  const { warnings } = run(layers);
+  assert.ok(
+    warnings.some((w) => w.includes("lo publica 'audit'") && w.includes('sigue en pie')),
+    warnings.join('\n')
+  );
+  // Y el aviso que se retiró no vuelve por la puerta de atrás.
+  assert.ok(!warnings.some((w) => w.includes('distinto de la dependencia')), warnings.join('\n'));
+});
+
+test('una compensación que publica el propio proveedor no dice nada (sin regresión)', () => {
+  const { warnings } = run(compLayers());
+  assert.ok(!warnings.some((w) => w.includes('distinto de la dependencia')), warnings.join('\n'));
+  assert.ok(!warnings.some((w) => w.includes('sigue en pie')), warnings.join('\n'));
+});
+
+test('el barrido que dispara la activación de VUELTA también está enlazado', () => {
+  // La tercera salida de §3.11: no reintenta el encargo, lo compensa. Es un
+  // triggeredBy de otra activación del mismo proveedor, y vale igual.
+  const layers = compLayers();
+  const dep = layers.dependencies.dependencies.compliance;
+  dep.activations.recordWithdrawal.triggeredBy = ['retireProduct'];
+  dep.activations.cancelWithdrawal = {
+    triggeredBy: ['reconcileWithdrawals'],
+    via: { client: 'compliance', call: 'cancelWithdrawal' },
+    effect: 'La inscripción sin desenlace queda anulada en el registro.',
+    onFailure: { action: 'ignore' },
+  };
+  layers['http-clients'].clients.compliance.calls.cancelWithdrawal = {
+    contract: 'DELETE /withdrawals/{id} -> anulación de la inscripción.',
+  };
+  const { warnings } = run(layers);
+  assert.ok(!warnings.some((w) => w.includes('corre por el reloj')), warnings.join('\n'));
+});
+
+test('encargar a OTRO proveedor no cuenta: no reconcilia este encargo', () => {
+  const layers = compLayers();
+  const compliance = layers.dependencies.dependencies.compliance;
+  compliance.activations.recordWithdrawal.triggeredBy = ['retireProduct'];
+  layers['http-clients'].clients.audit = {
+    purpose: 'Registrar incidencias de reconciliación.',
+    calls: { logIncident: { contract: 'POST /incidents -> incidencia registrada.' } },
+  };
+  layers.dependencies.dependencies.audit = {
+    description: 'Registro de incidencias operativas.',
+    activations: {
+      logIncident: {
+        triggeredBy: ['reconcileWithdrawals'],
+        via: { client: 'audit', call: 'logIncident' },
+        effect: 'Queda constancia de la retirada sin desenlace.',
+        onFailure: { action: 'ignore' },
+      },
+    },
+  };
+  const { warnings } = run(layers);
+  assert.ok(
+    warnings.some((w) => w.includes("'reconcileWithdrawals' corre por el reloj")),
+    warnings.join('\n')
+  );
+});

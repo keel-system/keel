@@ -161,7 +161,12 @@ Y esa última frase es literal: la garantía la da el outbox, no el hecho de pub
 
 Lo que detecta lo que **no** ha pasado es un barrido, así que `reconciledBy` cita una operación propia con `schedule` — `keel validate` da error si no lo tiene, porque una reconciliación que hay que disparar a mano no reconcilia nada. Qué hace con lo que encuentra (reintentar el encargo o disparar la compensación) es decisión de negocio, y el umbral de «demasiado tiempo» es configuración del servicio generado, nunca una constante en el código.
 
-Existir, correr por el reloj y no ser una lectura son la **forma** del barrido. Lo que lo hace un barrido *de esto* es estar enlazado con lo que reconcilia, y hay dos maneras —basta con una—: que la operación **mueva el lifecycle** de alguna entidad que el encargo dejó esperando (se rinde, o dispara la compensación), o que aparezca en el `triggeredBy` de la activación para **volver a encargar** el trabajo. Sin ninguna de las dos es aviso, y no es formalismo: `triggeredBy` y `transitions` son el único enlace del DSL entre una operación y lo que hace, así que el generador escribe un barrido sin cliente que llamar ni estado que mover. Un `schedule` que no toca nada pasa las tres comprobaciones de forma y no reconcilia nada — y como es la pata del silencio, nadie se entera nunca.
+Existir, correr por el reloj y no ser una lectura son la **forma** del barrido. Lo que lo hace un barrido *de esto* es estar enlazado con lo que reconcilia, y son las mismas salidas que hay que decidir de todos modos —reintentar el encargo, compensarlo o rendirse—; basta con una:
+
+- **Mueve el lifecycle** de alguna entidad que el encargo dejó esperando: se rinde y la saca de ahí.
+- **Encarga algo a ese mismo proveedor**, y da igual cuál de las dos cosas: aparecer en el `triggeredBy` de la activación reconciliada es reintentar el encargo, y en el de la activación de vuelta es compensarlo.
+
+Sin ninguna es aviso, y no es formalismo: `triggeredBy` y `transitions` son el único enlace del DSL entre una operación y lo que hace, así que el generador escribe un barrido sin cliente que llamar ni estado que mover. Un `schedule` que no toca nada pasa las tres comprobaciones de forma y no reconcilia nada — y como es la pata del silencio, nadie se entera nunca. Encargarle algo a **otro** proveedor (dejar constancia en un registro de incidencias) no cuenta: documenta el problema, no lo reconcilia.
 
 Una compensación **sin** `reconciledBy` en la activación que deshace es aviso: toda ella cuelga de que llegue un mensaje, y hay un final en el que no llega.
 
@@ -174,6 +179,57 @@ Eventos ante los que este servicio **deshace lo que hizo contra el proveedor** (
 **Omitirlo es error mientras la dependencia tenga activaciones**, y no por formalismo: sin saber qué encargo se deshace, quedan sin evaluar las cuatro comprobaciones que hacen que una compensación sea algo más que una suscripción con buen nombre —el estado de vuelta, el alcance al proveedor, la reconciliación del desenlace silencioso y la saga incompleta—. Un aviso que apaga media sección de validación no está proporcionado al daño.
 
 En el **mapa del sistema**, una compensación son dos aristas hacia el mismo proveedor: `invokes` por la activación, y `consumes` con `kind: events` por el evento que la deshace. No es contradicción de dirección (esa salta cuando el otro declara consumir de nosotros) ni fabrica un ciclo: las dos apuntan en el mismo sentido. Sin la segunda, `keel system check` reporta la suscripción como una fuente que el mapa no contempla.
+
+### De quién es la compensación
+
+**Quien encarga el trabajo es quien lo deshace.** No es una convención: es dónde vive el campo. `compensations` cuelga de `dependencies.<proveedor>` en el diseño **del que llama**, nunca en el del proveedor. El proveedor no sabe por qué le pidieron el trabajo, así que no puede saber cuándo deja de valer.
+
+Lo que sí cambia según el caso es **cuánto de la compensación cruza el cable**, y lo decide una sola pregunta: *¿quién publica el fallo?*
+
+| Quién lo publica | Qué sabe el proveedor | Qué hace la compensación |
+|---|---|---|
+| **El proveedor** (`StockRejected` de `inventory`) | Que su trabajo no vale: rechazarlo y anunciarlo son el mismo acto | Solo devolver el **estado propio**. Pedirle además que lo deshaga es hablar de más |
+| **Un tercero** (`PaymentFailed` de `payments`) | Nada: sigue creyendo que su encargo está en pie | Devolver el estado propio **y** encargarle la vuelta — una `activation` más hacia él. `keel validate` avisa si falta |
+
+El segundo caso es el más común, y conviene verlo entero. `orders` confirma un pedido y encarga stock a `inventory`; el pago falla después, en `payments`:
+
+```yaml
+# orders/messaging.keel.yaml
+subscriptions:
+  PaymentFailed:              # nature: fact — payments no sabe que existimos
+    source: payments
+    triggers: releaseOrderStock
+    contract: { messageId: { location: field, name: eventId } }
+    onFailure: { retry: { maxAttempts: 5, backoff: exponential }, deadLetter: true }
+
+# orders/dependencies.keel.yaml
+dependencies:
+  inventory:
+    activations:
+      reserveStock:
+        triggeredBy: [confirmOrder]
+        via: { publishes: ReserveStockRequested }
+        reconciledBy: sweepPendingReservations
+      releaseStock:                          # la activación de VUELTA
+        triggeredBy: [releaseOrderStock]
+        via: { publishes: ReleaseStockRequested }
+    compensations:
+      - onEvent: PaymentFailed               # de payments, no de inventory
+        undoes: reserveStock
+```
+
+`inventory` recibe `ReleaseStockRequested` como una suscripción `nature: request` —su payload es contrato público de entrada suyo— y **nunca se entera de que existe un pago**.
+
+**Por qué no al revés.** Que `inventory` se suscriba a `PaymentFailed` parece un salto menos, y es el error que más caro sale:
+
+- Pasaría a depender de `payments` sin ninguna razón de negocio: su responsabilidad es *quién tiene qué stock*, no *por qué*.
+- No escala. Cada llamante tiene sus propios modos de fallo, y mañana serían `ShipmentCancelled` y `FraudDetected`: `inventory` acabaría siendo el sitio donde vive el workflow de todos sus consumidores.
+- Para liberar **la reserva correcta**, el `PaymentFailed` tendría que traer su identidad — o sea, `payments` tendría que saber que existe un stock reservado.
+- **La política no es suya.** Un pago fallido no siempre libera: puede haber ventana de reintento. Eso lo decide `orders`.
+
+**Dos deduplicaciones, no una.** Se olvida casi siempre: `orders` tiene que sobrevivir a que le reentreguen `PaymentFailed`, e `inventory` a que le reentreguen `ReleaseStockRequested`. Son dos registros distintos en dos servicios distintos, y resolver solo el primero deja la mitad del camino abierta.
+
+**Evento antes que llamada síncrona.** Para la vuelta, `via: { publishes }` es preferible a `via: { client }`: la liberación tiene que acabar ocurriendo, y el outbox se lo garantiza sin que `orders` dependa de que `inventory` esté vivo justo cuando algo ya está fallando. El precio es que no hay `onFailure` ni desenlace, así que el `reconciledBy` de la activación pesa más: se publicó la liberación y no vuelve nada.
 
 ### Las dos obligaciones de una compensación
 
@@ -208,7 +264,7 @@ Por eso, si la operación de la compensación **además** está expuesta por HTT
 
 **Errores** — `usedBy` o `triggeredBy` hacia una operación inexistente · `fetchedFrom` o `via` hacia un cliente o una llamada que no existen en `http-clients` · `via.publishes` hacia un evento que no está en `messaging: publishing.events` · `awaits: outcome` sobre un `via` de evento (publicar no devuelve resultado) · `replica.entity` que no existe en `domain` · `replica.keyField` que no es campo de esa entidad · `replica` sin capa `persistence` (también con `--wip`: una copia necesita dónde guardarse) · `fedBy` o `compensations.onEvent` hacia un evento que no está en `messaging: subscriptions` · `compensations.undoes` hacia una activación inexistente · compensación **sin** `undoes` habiendo activaciones en esa dependencia (apaga en cascada las cuatro comprobaciones que dependen de saber qué encargo se deshace) · compensación cuya operación disparada es `kind: query` (una lectura no deshace nada) · compensación cuya operación no está protegida por **ninguno** de los dos mecanismos que impiden aplicarla dos veces · compensación cuya operación también se expone por HTTP y solo declara `contract.messageId` (una guarda de puerta no cubre el otro camino) · compensación cuya suscripción no reintenta ni tiene `deadLetter` (una llegada fuera de orden se pierde) · `onMiss.error` u `onFailure.error` que ninguna operación declara · `reconciledBy` hacia una operación inexistente, sin `schedule` o `kind: query`.
 
-**Avisos** — compensación cuya operación no devuelve el estado que movió el trabajo encargado · compensación que devuelve la entidad a un estado **terminal** del `lifecycle` (¿desenlace o callejón?) · compensación sin escenarios suyos en `validation-scenarios.md`, o con el del efecto pero sin el de **reentrega** · `reconciledBy` que no mueve el lifecycle de lo que quedó esperando ni reencarga el trabajo (un barrido que no toca lo que barre) · encargo por `via: { publishes }` con `publishing.reliability: best-effort` (el encargo se puede perder y no hay nada que compensar) · activación compensada sin `reconciledBy` (nada detecta el desenlace que no llega) · operación que encarga trabajo a **varios** proveedores declarando compensación solo para algunos (la saga incompleta) · compensación con `deadLetter` cuya operación no se expone por HTTP ni se reconcilia (la DLQ sin vía de reejecución) · compensación disparada por un evento de un tercero cuya operación no tiene por dónde avisar al proveedor · compensación con `deadLetter` pero sin reintentos · compensación sobre un canal `external` cuya única protección es el guard de lifecycle · la entidad de la réplica no está en `persistence: entities` · `keyField` sin `unique` · la suscripción citada declara un `source` distinto del nombre de la dependencia · `onMiss.error` declarado por una operación ajena a `usedBy` (y lo mismo con `onFailure.error` y `triggeredBy`) · dos needs replicando la misma entidad · un cliente de `http-clients` que ningún need ni activación usa · una suscripción `fact` cuyo `source` no está declarado como dependencia (una `request` no: quien nos activa no es una dependencia nuestra).
+**Avisos** — compensación cuya operación no devuelve el estado que movió el trabajo encargado · compensación que devuelve la entidad a un estado **terminal** del `lifecycle` (¿desenlace o callejón?) · compensación sin escenarios suyos en `validation-scenarios.md`, o con el del efecto pero sin el de **reentrega** · `reconciledBy` que no mueve el lifecycle de lo que quedó esperando ni encarga nada a ese proveedor —ni reintentar ni compensar— (un barrido que no toca lo que barre) · encargo por `via: { publishes }` con `publishing.reliability: best-effort` (el encargo se puede perder y no hay nada que compensar) · activación compensada sin `reconciledBy` (nada detecta el desenlace que no llega) · operación que encarga trabajo a **varios** proveedores declarando compensación solo para algunos (la saga incompleta) · compensación con `deadLetter` cuya operación no se expone por HTTP ni se reconcilia (la DLQ sin vía de reejecución) · compensación disparada por un evento de un tercero cuya operación no tiene por dónde avisar al proveedor · compensación con `deadLetter` pero sin reintentos · compensación sobre un canal `external` cuya única protección es el guard de lifecycle · la entidad de la réplica no está en `persistence: entities` · `keyField` sin `unique` · la suscripción citada declara un `source` distinto del nombre de la dependencia · `onMiss.error` declarado por una operación ajena a `usedBy` (y lo mismo con `onFailure.error` y `triggeredBy`) · dos needs replicando la misma entidad · un cliente de `http-clients` que ningún need ni activación usa · una suscripción `fact` cuyo `source` no está declarado como dependencia (una `request` no: quien nos activa no es una dependencia nuestra).
 
 Con `--wip`, las referencias a capas aún no diseñadas (`http-clients`, `messaging`) quedan como pendientes.
 

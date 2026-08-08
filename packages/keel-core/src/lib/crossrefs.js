@@ -1241,7 +1241,21 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
     };
 
     // Un evento consumido del proveedor: existe como suscripción y su source concuerda.
-    const checkConsumedEvent = (event, where, depName, label) => {
+    // `anySource`: si el evento consumido puede venir legítimamente de un servicio
+    // distinto del proveedor. Los dos sitios que llaman aquí no quieren lo mismo, y la
+    // asimetría es de fondo:
+    //
+    //   - `replica.fedBy` → NO. Una copia de un proveedor se alimenta de SUS eventos; que
+    //     la alimente un tercero es casi siempre un error de referencia.
+    //   - `compensations.onEvent` → SÍ. Que el fallo lo publique un tercero es la forma
+    //     más común de saga —encargamos stock a inventory y lo que falla después es el
+    //     pago, en payments— y avisar ahí empuja al diseño equivocado: la salida obvia
+    //     para quitarse el aviso es mover la suscripción al proveedor, que es justo lo que
+    //     no hay que hacer (quien encarga el trabajo es quien lo deshace). Lo que SÍ hay
+    //     que comprobar en ese caso ya lo cubre la regla del alcance al proveedor, más
+    //     abajo: sin evento suyo, el proveedor sigue creyendo que su encargo está en pie,
+    //     así que exige la activación de vuelta.
+    const checkConsumedEvent = (event, where, depName, label, { anySource = false } = {}) => {
       if (!consumedEvents.has(event)) {
         if (!messaging && wip) {
           pending.push(`${where}: el evento '${event}' está pendiente de definir en messaging: subscriptions`);
@@ -1254,7 +1268,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
         return;
       }
       const source = subscriptions[event]?.source;
-      if (source && source !== depName) {
+      if (!anySource && source && source !== depName) {
         warnings.push(
           `${where}: la ${label} '${event}' declara source '${source}', distinto de la dependencia '${depName}'`
         );
@@ -1362,12 +1376,18 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
             // dispare el reloj y que no sea una lectura. Falta lo que lo hace un barrido
             // de ESTO: un `schedule` que no toca nada de esta activación cumple las tres
             // condiciones y no reconcilia nada — y como es la pata del silencio, nadie se
-            // entera nunca. Dos formas legítimas de cerrarlo, y basta con una:
+            // entera nunca. Son las MISMAS dos salidas que §3.11 le pregunta al diseñador
+            // —«¿qué hace con lo que encuentra: reintentar el encargo o compensarlo?»— más
+            // la de rendirse, y basta con una:
             //
             //   - mueve el lifecycle de alguna entidad que dejó esperando el encargo
-            //     (se rinde, o dispara la compensación), o
-            //   - vuelve a encargar el trabajo, y entonces aparece en el `triggeredBy`
-            //     de esta misma activación.
+            //     (se rinde y la saca de ahí), o
+            //   - encarga algo a ESTE MISMO proveedor: reintentar el encargo (aparece en
+            //     el `triggeredBy` de esta activación) o compensarlo (en el de la
+            //     activación de vuelta). Las dos son un `triggeredBy` de la dependencia,
+            //     y por eso no se distinguen aquí: distinguirlas obligaría a adivinar
+            //     cuál de las activaciones deshace a cuál, que es lo que `undoes` declara
+            //     en `compensations` y no en este lado.
             //
             // Sin ninguna de las dos, el generador tampoco tiene por dónde: `triggeredBy`
             // y `transitions` son el único enlace del DSL entre una operación y lo que
@@ -1380,18 +1400,21 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
                 .map((transition) => transition.entity)
             );
             const movesWaiting = (sweeper.transitions ?? []).some((transition) => waiting.has(transition.entity));
-            const reencarga = (spec.triggeredBy ?? []).includes(spec.reconciledBy);
-            if (!movesWaiting && !reencarga) {
+            const encargaAlProveedor = Object.values(dep.activations ?? {}).some((activation) =>
+              (activation.triggeredBy ?? []).includes(spec.reconciledBy)
+            );
+            if (!movesWaiting && !encargaAlProveedor) {
               warnings.push(
                 `${where}.reconciledBy: '${spec.reconciledBy}' corre por el reloj, pero nada en el diseño lo enlaza con lo ` +
                   `que tiene que reconciliar` +
                   (waiting.size > 0
                     ? `: no declara ninguna transición sobre ${[...waiting].join(', ')} —las entidades que este encargo dejó ` +
-                      `esperando— ni aparece en el triggeredBy de '${action}' para volver a encargarlo. `
-                    : `: no aparece en el triggeredBy de '${action}' para volver a encargarlo, y las operaciones que lo ` +
-                      `disparan no mueven ningún lifecycle del que salir. `) +
+                      `esperando— ni aparece en el triggeredBy de ninguna activación de '${depName}' para reintentar el ` +
+                      `encargo o compensarlo. `
+                    : `: no aparece en el triggeredBy de ninguna activación de '${depName}' para reintentar el encargo o ` +
+                      `compensarlo, y las operaciones que disparan '${action}' no mueven ningún lifecycle del que salir. `) +
                   `Un barrido que no toca lo que barre pasa esta validación y no reconcilia nada, y es justo el camino que ` +
-                  `nadie ejercita: declara la transición de salida o el reintento del encargo`
+                  `nadie ejercita: declara la transición de salida, el reintento del encargo o la activación de vuelta`
               );
             }
           }
@@ -1408,7 +1431,10 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
       const activationNames = new Set(Object.keys(dep.activations ?? {}));
       for (const [index, compensation] of (dep.compensations ?? []).entries()) {
         const where = `dependencies: ${depName}.compensations[${index}]`;
-        checkConsumedEvent(compensation.onEvent, where, depName, 'suscripción');
+        // anySource: el fallo que dispara una compensación lo puede publicar el proveedor
+        // (ya sabe que su trabajo no vale) o un tercero (no lo sabe, y hay que decírselo).
+        // Las dos son formas legítimas y se distinguen más abajo, no aquí.
+        checkConsumedEvent(compensation.onEvent, where, depName, 'suscripción', { anySource: true });
         if (compensation.undoes && !activationNames.has(compensation.undoes)) {
           errors.push(`${where}.undoes: la activación '${compensation.undoes}' no existe en ${depName}.activations`);
         }
