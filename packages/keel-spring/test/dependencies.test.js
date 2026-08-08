@@ -518,13 +518,25 @@ test('compensación sin transición de vuelta: el estado que falta se reporta, n
   assert.ok(handler.includes('el diseño NO declara transición sobre Order'));
   assert.ok(handler.includes('designGap'));
   // Sin guard de dominio, lo único que queda es la puerta del listener — y se dice cuál es.
-  assert.ok(handler.includes('la deduplicación del listener por messageId'));
+  assert.ok(handler.includes('la deduplicación del listener por el id del mensaje'));
 
   // Y el listener recibe el orden que le toca: sin transición que frene la repetición,
   // la ventana solo se cierra reclamando antes — con su precio escrito.
   const message = fileNamed(generateMessaging(modelFrom(layers)), 'ProductUpdatedMessage').content;
   assert.ok(message.includes('IdempotencyGuard.tryRecord(...) antes de despachar'));
   assert.ok(message.includes('deja el mensaje marcado y perdido'));
+});
+
+test('con envoltura Keel la guarda del listener existe sin declarar messageId', () => {
+  // `metadata.eventId` es la identidad del mensaje y alimenta el mismo `processed_event`,
+  // así que la nota del stub no puede decir que el diseño se quedó sin guarda: lo diría
+  // justo cuando el agente tiene que llamar al guard.
+  const layers = withCompensation();
+  delete layers['use-cases'].operations.applyProductSnapshot.transitions;
+
+  const handler = handlerOf(modelFrom(layers), 'ApplyProductSnapshotCommandHandler');
+  assert.ok(handler.includes('la deduplicación del listener por el id del mensaje'));
+  assert.ok(!handler.includes('el diseño no declara guarda'));
 });
 
 // ─── Idempotencia saliente ───────────────────────────────────────────────────

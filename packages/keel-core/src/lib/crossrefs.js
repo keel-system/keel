@@ -919,11 +919,24 @@ export function checkCrossRefs({ layers, wip = false }) {
   // clave no existe y declararla no impide nada. Son dos mecanismos distintos incluso en
   // el código generado (`processed_event` frente a `idempotency_record`), y confundirlos
   // es peor que no tener la regla: da por protegida una operación que no lo está.
+  // La envoltura efectiva, con el default que documenta docs/dsl/messaging.md: keel si el
+  // canal no es external, none si lo es.
+  const envelopeOf = (sub) => {
+    const external = sub?.channel ? messaging?.channels?.[sub.channel]?.external === true : false;
+    return sub?.contract?.envelope ?? (external ? 'none' : 'keel');
+  };
+  // La clave con la que el listener deduplica antes de llegar al dominio. Puede declararla
+  // el contrato —una fuente ajena que la publica en un metadato del broker o en un campo—,
+  // pero con la envoltura Keel existe sin declarar nada: `metadata.eventId`, estampado una
+  // vez en el `raise`. Las dos alimentan el mismo `processed_event`, así que valen igual
+  // como guarda; lo que no vale igual es exigir la declarada cuando ya hay envoltura, que
+  // sería pedir un dato que ningún emisor Keel escribe.
+  const listenerDedupeKeyOf = (sub) => Boolean(sub?.contract?.messageId) || envelopeOf(sub) === 'keel';
   const redeliveryGuardsOf = (eventName) => {
     const sub = messaging?.subscriptions?.[eventName];
     const op = operations[sub?.triggers];
     const guards = [];
-    if (sub?.contract?.messageId) guards.push('messageId'); // deduplicación antes del dominio
+    if (sub && listenerDedupeKeyOf(sub)) guards.push('messageId'); // deduplicación antes del dominio
     // Una transición cuyo destino no está entre sus propios orígenes es irrepetible por
     // construcción: al segundo intento la entidad ya está en `to` y el guard la rechaza.
     if ((op?.transitions ?? []).some((t) => !(t.from ?? []).includes(t.to))) guards.push('transitions');
@@ -953,6 +966,18 @@ export function checkCrossRefs({ layers, wip = false }) {
       );
     }
     const wrapped = sub.contract?.envelope === 'wrapped';
+    // Con la envoltura Keel la identidad del mensaje YA existe: `metadata.eventId`, que el
+    // emisor estampa una vez en el `raise` y viaja intacta hasta el cable. Un `messageId`
+    // propio no añade nada y sí quita: un emisor Keel no escribe metadatos nativos del
+    // broker —la envoltura entera va en el cuerpo—, así que el listener leería vacío el
+    // dato que el diseño le manda usar para deduplicar.
+    if (envelopeOf(sub) === 'keel' && sub.contract?.messageId) {
+      warnings.push(
+        `${where}.contract.messageId: con envelope keel la identidad del mensaje ya es metadata.eventId (lo estampa el emisor en el raise y viaja intacto) — ` +
+          `declararlo aparte apunta a un dato que ningún emisor Keel escribe y el listener lo leería vacío. Este campo es para envelope none/wrapped, canales external ` +
+          `o fuentes que usan una propiedad nativa del broker`
+      );
+    }
     for (const key of ['discriminator', 'messageId']) {
       const ref = sub.contract?.[key];
       if (ref?.location !== 'field') continue;
@@ -977,8 +1002,9 @@ export function checkCrossRefs({ layers, wip = false }) {
     if (maxAttempts > 1 && redeliveryGuardsOf(eventName).length === 0) {
       errors.push(
         `${where}: reintenta (maxAttempts: ${maxAttempts}) y nada impide que '${sub.triggers}' se aplique dos veces — ` +
-          `declara contract.messageId (deduplica el mensaje antes del dominio) o la transición de lifecycle que la hace ` +
-          `irrepetible. La idempotency de la operación no vale aquí: su clave llega por cabecera HTTP y el broker no la manda`
+          `la fuente no trae envoltura Keel, así que no hay metadata.eventId del que deduplicar: declara contract.messageId ` +
+          `(el id que sí publique la fuente) o la transición de lifecycle que hace irrepetible la operación. La idempotency ` +
+          `de la operación no vale aquí: su clave llega por cabecera HTTP y el broker no la manda`
       );
     }
 
@@ -1307,7 +1333,8 @@ export function checkCrossRefs({ layers, wip = false }) {
         if (guards.length === 0) {
           errors.push(
             `${where}: la compensación se ejecuta ante un evento que puede reentregarse y nada impide que '${undoOpName}' ` +
-              `se aplique dos veces (deshacer dos veces el mismo trabajo no es deshacerlo) — declara contract.messageId en ` +
+              `se aplique dos veces (deshacer dos veces el mismo trabajo no es deshacerlo) — la fuente no trae envoltura Keel, ` +
+              `así que no hay metadata.eventId del que deduplicar: declara contract.messageId en ` +
               `messaging: subscriptions.${compensation.onEvent} o la transición de lifecycle que la hace irrepetible. ` +
               `La idempotency de la operación no vale aquí: su clave llega por cabecera HTTP y el broker no la manda`
           );

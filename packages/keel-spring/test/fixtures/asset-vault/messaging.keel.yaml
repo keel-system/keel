@@ -37,10 +37,10 @@ subscriptions:
       assetId: { type: uuid, required: true }
       reason:  { type: string, required: true }
     contract:
+      # Sin `messageId`: con envoltura Keel la clave de deduplicación es `metadata.eventId`,
+      # y es lo que alimenta `processed_event` — que en el modelo documental es una colección
+      # con su índice propio.
       envelope: keel
-      # La clave de deduplicación viaja declarada: es lo que alimenta `processed_event`,
-      # que en el modelo documental es una colección con su índice propio.
-      messageId: { location: header, name: messageId }
     triggers: quarantineAsset
     input:
       assetId: assetId

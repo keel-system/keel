@@ -9,10 +9,11 @@ subscriptions:
       orderId: { type: uuid, required: true }
       reason:  { type: string, required: true }
     contract:
+      # Sin `messageId`: la fuente es otro servicio Keel, así que la identidad del mensaje
+      # ya es `metadata.eventId` de la envoltura —estampado una vez en el `raise` y viaje
+      # intacto hasta el cable—, y es lo que alimenta `processed_event`. Declarar uno
+      # propio apuntaría a un metadato nativo del broker que ningún emisor Keel escribe.
       envelope: keel
-      # La clave de deduplicación viaja declarada, no por defecto: es lo que alimenta
-      # `processed_event` y lo que un escenario puede repetir a propósito.
-      messageId: { location: header, name: messageId }
     triggers: releaseReservation
     input:
       orderId: orderId

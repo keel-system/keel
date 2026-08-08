@@ -847,6 +847,42 @@ test('discriminator por campo fuera del payload es warning con envelope wrapped'
   );
 });
 
+test('messageId declarado con envelope keel es warning', () => {
+  const layers = contractLayers({
+    contract: {
+      envelope: 'keel',
+      messageId: { location: 'header', name: 'messageId' },
+    },
+  });
+  const { errors, warnings } = run(layers);
+  assert.deepEqual(errors, []);
+  assert.ok(
+    warnings.some((w) =>
+      w.includes(`subscriptions.StockDepleted.contract.messageId: con envelope keel la identidad del mensaje ya es metadata.eventId`)
+    )
+  );
+});
+
+test('messageId declarado sin envelope sobre canal interno es warning (el default es keel)', () => {
+  const layers = contractLayers(
+    { channel: undefined, contract: { messageId: { location: 'header', name: 'messageId' } } },
+    { external: false }
+  );
+  delete layers.messaging.subscriptions.StockDepleted.channel;
+  const { warnings } = run(layers);
+  assert.ok(warnings.some((w) => w.includes(`contract.messageId: con envelope keel`)));
+});
+
+test('messageId declarado con envelope wrapped o sobre canal external no avisa', () => {
+  const wrapped = run(contractLayers()).warnings;
+  assert.ok(!wrapped.some((w) => w.includes('contract.messageId:')));
+  // Canal external sin envelope explícito: el default es `none`, no `keel`.
+  const external = run(
+    contractLayers({ contract: { messageId: { location: 'header', name: 'messageId' } } })
+  ).warnings;
+  assert.ok(!external.some((w) => w.includes('contract.messageId:')));
+});
+
 test('publicar en un canal marcado external es warning', () => {
   const layers = contractLayers();
   layers.messaging.publishing = {
@@ -2600,6 +2636,15 @@ const compLayers = () => ({
 
 const transitionOf = (layers, op = 'reactivateProduct') => layers['use-cases'].operations[op].transitions[0];
 
+// Sin envoltura Keel no hay `metadata.eventId` del que deduplicar, y esa es la única
+// forma de dejar la suscripción sin clave de listener: con el default (`keel`) el
+// consumidor siempre tiene una, así que las guardas del dominio no se pueden probar
+// aisladas sobre el fixture base.
+const withoutKeelEnvelope = (layers) => {
+  layers.messaging.subscriptions.WithdrawalRejected.contract = { envelope: 'none' };
+  return layers;
+};
+
 test('compensación con transición de vuelta declarada no produce errores ni warnings', () => {
   const { errors, warnings } = run(compLayers());
   assert.deepEqual(errors, []);
@@ -2809,7 +2854,7 @@ test('compensación disparada por una query es error', () => {
 });
 
 test('compensación sin ningún mecanismo que impida aplicarla dos veces es error', () => {
-  const layers = compLayers();
+  const layers = withoutKeelEnvelope(compLayers());
   delete layers['use-cases'].operations.reactivateProduct.transitions;
   const { errors } = run(layers);
   assert.ok(
@@ -2833,11 +2878,22 @@ test('los dos mecanismos de idempotencia de evento valen por separado', () => {
   assert.ok(!run(compLayers()).errors.some((e) => e.includes('se aplique dos veces')));
 });
 
+test('la envoltura Keel es por sí sola la clave de deduplicación del listener', () => {
+  // `metadata.eventId` existe sin declarar nada y alimenta el mismo `processed_event` que
+  // un messageId declarado, así que vale igual como guarda. Exigir el messageId aquí sería
+  // pedir un dato que ningún emisor Keel escribe: la envoltura viaja en el cuerpo.
+  const layers = compLayers();
+  delete layers['use-cases'].operations.reactivateProduct.transitions;
+  layers.messaging.subscriptions.WithdrawalRejected.onFailure = { retry: { maxAttempts: 3 } };
+  const { errors } = run(layers);
+  assert.ok(!errors.some((e) => e.includes('se aplique dos veces')), errors.join('\n'));
+});
+
 test('idempotency NO protege la reentrega de un evento: es el otro eje de repetición', () => {
   // La clave de `idempotency` llega por la cabecera Idempotency-Key, que el broker no
   // manda: declararla no impide que la compensación se aplique dos veces. Darla por
   // buena sería peor que no tener la regla — protegería en el papel y no en el código.
-  const layers = compLayers();
+  const layers = withoutKeelEnvelope(compLayers());
   const op = layers['use-cases'].operations.reactivateProduct;
   delete op.transitions;
   op.idempotency = { keySource: 'payload-hash' };
@@ -2908,7 +2964,7 @@ test('sin endpoint y sin suscripción el mensaje señala la clave natural, no me
 });
 
 test('una transición cuyo destino es también origen no basta como guard de idempotencia', () => {
-  const layers = compLayers();
+  const layers = withoutKeelEnvelope(compLayers());
   layers.domain.entities.Product.lifecycle.transitions.active = ['retired', 'active'];
   transitionOf(layers).from = ['retired', 'active'];
   const { errors } = run(layers);
@@ -2945,7 +3001,7 @@ test('compensación que no devuelve el estado que movió el trabajo encargado es
 // C: la regla general de reentrega, que la doc anunciaba como error y nadie aplicaba.
 
 test('suscripción con reintentos y nada que impida el doble efecto es error', () => {
-  const layers = compLayers();
+  const layers = withoutKeelEnvelope(compLayers());
   delete layers['use-cases'].operations.reactivateProduct.transitions;
   layers.messaging.subscriptions.WithdrawalRejected.onFailure = { retry: { maxAttempts: 3 } };
   const { errors } = run(layers);

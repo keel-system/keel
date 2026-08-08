@@ -4,7 +4,7 @@ keel: "2.6"
 #
 #   - idempotencia de PETICIÓN  → `createReservation` con `client-key`
 #   - idempotencia SALIENTE     → `inventory.reserveStock` con retry + payload-hash
-#   - idempotencia de CONSUMO   → `StockRejected` con contract.messageId
+#   - idempotencia de CONSUMO   → `StockRejected` por el eventId de la envoltura Keel
 #   - COMPENSACIÓN              → `releaseReservation`, con su guarda de dominio,
 #                                 su estado de vuelta y su reconciliación
 #

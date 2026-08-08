@@ -46,7 +46,8 @@ dependencies:
   #       # undoes: reserveStock                   # activación de este proveedor que se deshace
   #     # La operación que la ejecuta vive en messaging: subscriptions.<evento>.triggers, y
   #     # tiene dos obligaciones que `keel validate` comprueba: NO poder aplicarse dos veces
-  #     # (contract.messageId o una transición de lifecycle irrepetible; `idempotency` NO
+  #     # (la clave del listener —metadata.eventId con envoltura Keel, contract.messageId si
+  #     # la fuente es ajena— o una transición de lifecycle irrepetible; `idempotency` NO
   #     # vale aquí: su clave llega por cabecera HTTP y el broker no la manda — deshacer
   #     # dos veces el mismo trabajo no es deshacerlo) y devolver con `transitions` el
   #     # estado propio que movió el trabajo que se encargó.

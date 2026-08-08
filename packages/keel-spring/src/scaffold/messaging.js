@@ -396,10 +396,17 @@ function contractJavadoc(sub) {
       `Se reconoce por ${sub.discriminator.location} '${sub.discriminator.name}' == '${sub.discriminator.value}': el canal transporta más tipos, descarta el resto.`
     );
   }
-  if (sub.messageId) {
-    lines.push(
-      `Deduplica por ${sub.messageId.location} '${sub.messageId.name}' antes de despachar (la entrega es at-least-once).`
-    );
+  // De dónde sale la clave de deduplicación. El contrato puede declararla —una fuente
+  // ajena que la pone en un metadato nativo del broker o en un campo del cuerpo—, pero con
+  // la envoltura Keel ya existe sin declarar nada: `metadata.eventId`. Y con `none` o
+  // `wrapped` sin `messageId` no hay ninguna, así que tampoco hay orden que prescribir.
+  const dedupeKey = sub.messageId
+    ? `${sub.messageId.location} '${sub.messageId.name}'`
+    : sub.envelope === 'keel'
+      ? 'metadata.eventId de la envoltura (lo estampa el emisor en el raise y viaja intacto)'
+      : null;
+  if (dedupeKey) {
+    lines.push(`Deduplica por ${dedupeKey} antes de despachar (la entrega es at-least-once).`);
     // El orden del registro no es estilo: decide si un fallo transitorio se
     // reintenta o se traga el mensaje. Lo elige el diseño, no el agente.
     lines.push(

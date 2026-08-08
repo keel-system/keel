@@ -309,7 +309,7 @@ function renderHandler(model, service, operation) {
         (guard === 'transitions'
           ? `Aplicarla dos veces no debe deshacer dos veces: la guarda es la transición del agregado, que rechaza la segunda desde un estado que ya no está en 'from'. Va en el DOMINIO, no en el handler.`
           : guard === 'messageId'
-            ? `Aplicarla dos veces no debe deshacer dos veces: la guarda es la deduplicación del listener por messageId (IdempotencyGuard). El handler no añade ninguna otra.`
+            ? `Aplicarla dos veces no debe deshacer dos veces: la guarda es la deduplicación del listener por el id del mensaje (IdempotencyGuard). El handler no añade ninguna otra.`
             : `Aplicarla dos veces no debe deshacer dos veces y el diseño no declara guarda: repórtalo como designGap.`)
     );
   }

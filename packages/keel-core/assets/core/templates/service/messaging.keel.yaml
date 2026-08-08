@@ -35,9 +35,10 @@ publishing:
 #         location: header              # header | field
 #         name: eventType
 #         value: stock.depleted
-#       messageId:                      # clave de deduplicación ante reentregas
-#         location: header
-#         name: messageId
+#       messageId:                      # clave de deduplicación ante reentregas. SOLO sin
+#         location: header              # envoltura Keel: con envelope keel la identidad ya
+#         name: messageId               # es metadata.eventId y declarar esto apunta a un
+#                                       # metadato que ningún emisor Keel escribe
 #       unknownFields: ignore           # ignore | fail
 #       schemaRef: schemas/stock-depleted-v2.avsc
 #                                       # puntero al schema que publica la fuente (informativo:

@@ -214,8 +214,12 @@ Toda operación con `audience: services`/`both` arrastra `security` (`level: ser
 gira para siempre, consumiendo la capacidad del consumidor. No falla nada visible: solo deja de
 avanzar.
 
-**Trampa habitual**: reintentar sin `messageId` en el `contract`. Sin clave de deduplicación, cada
-reintento es un procesamiento nuevo y completo.
+**Trampa habitual**: reintentar sin ninguna clave de deduplicación — cada reintento es entonces un
+procesamiento nuevo y completo. Ojo con el reflejo contrario: **la clave no siempre se declara**. Con
+`envelope: keel` ya existe (`metadata.eventId`, que el emisor estampa en el `raise` y viaja intacto),
+y declarar un `messageId` propio apuntaría a un metadato nativo del broker que ningún emisor Keel
+escribe. `contract.messageId` es para `none`, `wrapped` y canales `external`, donde no hay envoltura
+de la que tirar.
 
 ---
 

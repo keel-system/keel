@@ -1373,7 +1373,11 @@ function collectDependencies(layers, entities, httpClients, subscriptions, error
       if (sub) {
         sub.compensates = mark;
         const undoOp = sub.trigger ? opByName.get(sub.trigger) : null;
-        if (undoOp) undoOp.compensates = { ...mark, event: item.onEvent, deduplicated: Boolean(sub.messageId) };
+        // Hay clave de deduplicación en el listener si la declara el contrato o si la pone
+        // la envoltura Keel (`metadata.eventId`): las dos alimentan el mismo
+        // `processed_event`, así que las dos valen como guarda de puerta.
+        const deduplicated = Boolean(sub.messageId) || sub.envelope === 'keel';
+        if (undoOp) undoOp.compensates = { ...mark, event: item.onEvent, deduplicated };
       }
       return {
         event: item.onEvent,
