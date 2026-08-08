@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import Ajv2020Module from 'ajv/dist/2020.js';
 import { LAYERS, schemaPathFor } from './assets.js';
 import { MANIFEST_FILE, loadService } from './loader.js';
@@ -52,6 +53,21 @@ function placeholderDescription(manifest) {
   if (typeof description !== 'string') return false;
   const trimmed = description.trim();
   return /^TODO\b/i.test(trimmed) || trimmed === LEGACY_PLACEHOLDER_DESCRIPTION;
+}
+
+// El único derivado que la validación mecánica mira. No es una capa del DSL —es prosa—,
+// pero hay una obligación que solo se puede comprobar cruzándolo con el diseño: que cada
+// compensación tenga sus dos escenarios. Su AUSENCIA no se reporta aquí: que el diseño
+// esté cerrado sin escenarios es cosa de /keel-validate, y a mitad de diseño el archivo
+// no existe todavía. null significa «no hay documento que cruzar», no «documento vacío».
+const SCENARIOS_FILE = 'validation-scenarios.md';
+
+function readScenarios(dir) {
+  try {
+    return fs.readFileSync(path.join(dir, SCENARIOS_FILE), 'utf8');
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -124,7 +140,11 @@ export function validateService(dir, { wip = false } = {}) {
   // En modo wip las capas en plantilla se tratan como ausentes: sus referencias quedan pendientes, no rotas.
   const effectiveLayers = { ...layers };
   for (const layer of templateLayers) delete effectiveLayers[layer];
-  const { errors, warnings, pending: crossRefPending } = checkCrossRefs({ layers: effectiveLayers, wip });
+  const { errors, warnings, pending: crossRefPending } = checkCrossRefs({
+    layers: effectiveLayers,
+    wip,
+    scenarios: readScenarios(dir)
+  });
   result.crossRefErrors = errors;
   result.warnings = warnings;
   result.pending.push(...crossRefPending);

@@ -96,6 +96,8 @@ El orden de **validación** y el momento de **diseño** de `dependencies` no coi
 |----------|------|---------|
 | Que el **reintento del llamante HTTP** no duplique el efecto | use-cases (`idempotency`) | La clave la manda el cliente en una cabecera, así que solo existe donde hay endpoint: es semántica del caso de uso expuesto |
 | Que la **reentrega de un evento** no duplique el efecto | messaging (`subscriptions.<E>.contract.messageId`), o use-cases (`transitions`) | Es el otro eje de repetición y el broker no manda cabeceras: la clave es el id del mensaje, o la irrepetibilidad está en el dominio |
+| Que **nuestro reintento contra un proveedor** no le duplique el trabajo | http-clients (`calls.<x>.idempotency`) | El tercer eje: aquí repetimos nosotros, así que la clave la mandamos nosotros — y solo sirve si el proveedor la honra |
+| Qué pasa cuando el trabajo encargado **no tiene desenlace** | dependencies (`activations.<a>.reconciledBy`) → una operación con `schedule` | Es el único mecanismo que detecta lo que NO ha pasado: sin un hecho que reaccione, solo un barrido lo ve |
 | Qué transición del lifecycle ejecuta una operación | use-cases (`transitions`) | `domain` declara qué cambios de estado son legales; qué caso de uso los provoca es del caso de uso, y es lo que hace contrastables los dos lados |
 | Cómo se deshace el trabajo encargado a otro, y qué garantiza que no se deshaga dos veces | dependencies (`compensations`) + la operación que la ejecuta | La compensación es un comportamiento del servicio, no solo una arista del mapa: se ejecuta por un canal at-least-once y deshace trabajo real |
 | Caché de una query | use-cases | Qué se cachea y qué lo invalida es conocimiento de dominio |
@@ -112,7 +114,7 @@ El orden de **validación** y el momento de **diseño** de `dependencies` no coi
 | Qué necesita saber la operación sobre un trabajo delegado | dependencies (`awaits`) | Decidir que basta con un acuse es prometer que la operación puede terminar bien con el trabajo sin hacer |
 | Qué hace el servicio cuando el trabajo encargado no sale | dependencies (`onFailure`) | Comportamiento observable, igual que `onMiss` |
 | Que un evento consumido sea una petición dirigida a nosotros y no un hecho ajeno | messaging (`subscriptions.nature`) | Decide de qué lado cae el acoplamiento: una `request` es puerta de entrada nuestra y su payload es contrato público |
-| Outbox | messaging | Es la garantía de publicación de eventos |
+| Outbox | messaging (`publishing.reliability`) | Es la garantía de publicación de eventos. Exige capa `persistence`: la fila del evento se escribe en la misma transacción que el cambio de estado |
 | Paginación | api | Concern de la API |
 | Frontera transaccional | persistence | El generador la respeta al implementar outbox y commands |
 | Fronteras de consistencia (agregados) | domain | Qué entidades cambian juntas es conocimiento del dominio; persistence solo la respeta (`per-aggregate`) |

@@ -56,3 +56,53 @@ test('tokenLocation cookie es aviso, no error: se genera la cabecera y se dice',
   assert.match(warnings[0], /tokenLocation: cookie/);
   assert.match(warnings[0], /Authorization/);
 });
+
+// Las dos patas de la robustez que no aterrizan en una clase. El módulo existe para
+// que nada del DSL se ignore en silencio, y estas dos eran justo eso: campos que el
+// diseñador declara creyendo que se generan y que solo producen doctrina.
+
+test('una compensación avisa de que no genera ninguna clase propia', () => {
+  const { errors, warnings } = checkSupportedFeatures(manifest, {
+    dependencies: {
+      dependencies: {
+        payments: {
+          activations: { chargeBooking: { triggeredBy: ['bookSeat'] } },
+          compensations: [{ onEvent: 'PaymentFailed', undoes: 'chargeBooking' }]
+        }
+      }
+    }
+  });
+
+  assert.deepEqual(errors, []);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /dependencies\.compensations \(payments\.PaymentFailed → chargeBooking\)/);
+  assert.match(warnings[0], /suscripción normal/);
+});
+
+test('reconciledBy avisa de que queda fuera del gate conductual', () => {
+  const { errors, warnings } = checkSupportedFeatures(manifest, {
+    dependencies: {
+      dependencies: {
+        payments: {
+          activations: { chargeBooking: { triggeredBy: ['bookSeat'], reconciledBy: 'sweepPendingCharges' } }
+        }
+      }
+    }
+  });
+
+  assert.deepEqual(errors, []);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /payments\.chargeBooking → sweepPendingCharges/);
+  // Lo que el aviso tiene que decir en voz alta: ningún FL-* lo ejercita.
+  assert.match(warnings[0], /gate CONDUCTUAL/);
+  assert.match(warnings[0], /check-idempotency\.sh/);
+});
+
+test('una dependencia sin compensación ni reconciliación no dice nada', () => {
+  const { errors, warnings } = checkSupportedFeatures(manifest, {
+    dependencies: { dependencies: { payments: { needs: { rate: { usedBy: ['bookSeat'] } } } } }
+  });
+
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});

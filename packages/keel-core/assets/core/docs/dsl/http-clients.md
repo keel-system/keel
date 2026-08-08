@@ -48,7 +48,7 @@ clients:
 
 ## Resiliencia
 
-- `retry`: `maxAttempts` (obligatorio), `backoff` (`fixed` | `exponential`, por defecto `exponential`), `initialDelayMs` (espera antes del primer reintento) y `maxDelayMs` (tope al que la espera deja de crecer; solo tiene efecto con `backoff: exponential`, donde acota el crecimiento).
+- `retry`: `maxAttempts` (obligatorio), `backoff` (`fixed` | `exponential`, por defecto `exponential`), `initialDelayMs` (espera antes del primer reintento) y `maxDelayMs` (tope al que la espera deja de crecer; solo tiene efecto con `backoff: exponential`, donde acota el crecimiento). Con `backoff: fixed`, `maxDelayMs` **no hace nada y ninguna regla lo avisa**: es un límite declarado de la validación mecánica, no un descuido. Si aparece ahí, sobra.
 - `retry.retryOn`: `timeout`, `5xx`, `connection`. Nunca reintentar 4xx.
 - `circuitBreaker`: `failureRateThreshold` (% de fallos que abre el circuito), `slidingWindowSize` (llamadas observadas), `waitDurationMs` (espera antes de probar de nuevo).
 - Todo `circuitBreaker` debería tener `fallback` definido: qué hace el servicio cuando el circuito está abierto. `keel validate` avisa si falta; la skill `/keel-validate` revisa la calidad del fallback.

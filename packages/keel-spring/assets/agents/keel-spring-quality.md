@@ -214,9 +214,21 @@ Build genera **los mecanismos**; quien los **usa** es el agente de código. Ese 
 único tramo de toda la cadena que no está garantizado por construcción, y falla en
 silencio: un listener sin guard, o un handler que ignora el `IdempotencyStore`,
 funcionan perfectamente hasta la primera repetición — que es justo cuando algo ya iba
-mal. Tres comprobaciones, todas **estáticas** y todas sobre código que **no puedes
-tocar**: lo que encuentres va a su campo del reporte en `KO` y el detalle a
-`remaining`, para que el orquestador lo devuelva al agente de código.
+mal.
+
+**Ejecuta `bash infra/check-idempotency.sh`.** No leas el árbol a mano para esto: el
+script lo genera build con la matriz precomputada desde el diseño —qué listener toca qué
+orden, qué handler tiene qué `keySource`, qué operación barre qué activación— y no
+necesita ni infraestructura ni compilar. Sale `0` con todas las familias en verde y `1`
+con los hallazgos enumerados; una familia que no imprime es `N/A` (el diseño no la
+declara). Vuelca cada hallazgo tal cual a `remaining` y pon su familia en `KO`, para que
+el orquestador lo devuelva al agente de código. Todo esto es código que **no puedes
+tocar**.
+
+Lo que el script comprueba son **ausencias y cruces** (que el guard esté, que el orden
+sea el que toca, que el `@Scheduled` ya no lance): lo que no puede juzgar es si el
+algoritmo es correcto. Las cinco secciones de abajo dicen **por qué** falla cada cosa —
+es lo que tienes que entender para arbitrar un hallazgo, y lo que el script no dice.
 
 ### 1. Consumo de mensajes → `dedupe` (solo con `subscriptions`)
 
@@ -269,10 +281,40 @@ Por cada operación que el stub marca como compensación (nota
    vuelta: el handler tiene su `<C>Client` inyectado precisamente para eso.
 3. No añade su propia guarda de repetición: la que vale es la del agregado.
 
-Nota de alcance: el gate **conductual** de todo esto son los escenarios `FL-*` (la
-reentrega del mismo `messageId`, el reintento con la misma clave), que ya corrieron
-antes de llegar tú. Estas comprobaciones existen porque un diseño puede no tener esos
-escenarios todavía, y porque leer el código dice *por qué* falla, no solo que falla.
+### 4. Reconciliación → `reconciliation`
+
+La pata del **silencio**: el proveedor acepta el encargo y luego cae, así que no llega
+ningún evento y nada se dispara. Por cada operación con nota `Reconciliación de <dep>…`:
+
+1. El `@Scheduled` de `<Servicio>Scheduler` ya **no lanza**. Build lo deja con un
+   `UnsupportedOperationException` cuando el mensaje del barrido lleva argumentos: si
+   sigue ahí, el barrido no corre nunca.
+2. El handler saca el umbral de «demasiado tiempo» de `parameters/` con `@Value`, no de
+   una constante — el diseño no lo declara, así que es configuración.
+3. Hace algo con cada candidato coherente con el `effect` de la activación (reintentar el
+   encargo o disparar la compensación), no solo registrarlo en el log.
+
+**Es la única familia sin gate conductual**, y por eso la que más se apoya en ti: el
+arnés es caja negra y un cron no es alcanzable desde fuera, así que ningún escenario
+`FL-*` la ejercita — `conventions/integration-tests.md` la declara `uncovered` a
+propósito. Si esto pasa en verde sin estar escrito, no lo detecta nadie más.
+
+### 5. Entrega del outbox → `outboxDelivery`
+
+Con `reliability: outbox` el diseño prometió que ningún evento se pierde si la
+transacción confirma. Build genera el relay entero y deja el envío físico tras el puerto
+`OutboxDispatcher`, con un fallback (`OutboxDispatcherFallbackConfig`) que **no lanza**
+a propósito: si lanzara, el relay contaría el intento como fallo y las filas se
+acumularían. El precio de esa decisión es que marca como publicadas filas que nunca
+salieron. Tiene que existir un `OutboxDispatcher` real además del fallback — que **no se
+borra**: es `@ConditionalOnMissingBean`, se aparta solo y sigue ahí para fallar al
+arrancar fuera de `local` si algún día vuelve a faltar.
+
+Nota de alcance: el gate **conductual** de las tres primeras familias son los escenarios
+`FL-*` (la reentrega del mismo `messageId`, el reintento con la misma clave), que ya
+corrieron antes de llegar tú. Estas comprobaciones existen porque un diseño puede no
+tener esos escenarios todavía, porque leer el código dice *por qué* falla y no solo que
+falla, y porque las dos últimas familias no tienen ningún gate conductual detrás.
 
 ## El doble check (y qué NO haces)
 
@@ -388,15 +430,23 @@ indexes: OK | KO | N/A          # N/A sin persistencia o con base relacional; OK
 indexesTested: OK | KO | N/A    # NUNCA PENDING: exportar índices solo lee, así que esta
                                 # comprobación sí se ejecuta aquí
 # --- la cadena de idempotencia y compensación: mecanismos generados, uso escrito ---
+# Las cinco salen de `infra/check-idempotency.sh`: la familia que el script no imprime
+# es N/A (el diseño no la declara), la que imprime OK es OK, y la que imprime KO es KO
+# con sus hallazgos en `remaining`.
 dedupe: OK | KO | N/A     # N/A sin subscriptions; OK = TODO <Evento>Listener consulta el
-                          # IdempotencyGuard, descarta el duplicado y usa el ORDEN que el
-                          # javadoc de su <Evento>Message prescribe. KO con la lista
+                          # IdempotencyGuard, actúa sobre su respuesta y usa el ORDEN que el
+                          # javadoc de su <Evento>Message prescribe
 commandIdempotency: OK | KO | N/A  # N/A si ninguna operación declara idempotency; OK = usan
                           # IdempotencyStore + CommandSignature, sin registro propio y sin
                           # rama "sin clave" en payload-hash
 compensation: OK | KO | N/A        # N/A sin compensations; OK = cada handler compensador
                           # ejecuta su transición de vuelta (sin TODO vivo) y, si el diseño
                           # declara la activación de vuelta, avisa al proveedor
+reconciliation: OK | KO | N/A      # N/A sin reconciledBy; OK = el @Scheduled ya no lanza y el
+                          # barrido saca su umbral de parameters/ con @Value. Es la única
+                          # familia SIN gate conductual: ningún FL-* ejercita un cron
+outboxDelivery: OK | KO | N/A      # N/A sin reliability: outbox; OK = hay un OutboxDispatcher
+                          # real además del fallback que generó build
 issuesFixed: [...]        # ajustes no-conductuales aplicados
 remaining: [...]          # hallazgos conductuales sin hueco de diseño detrás
 designGaps:               # huecos del diseño que encontraste, como propuesta accionable

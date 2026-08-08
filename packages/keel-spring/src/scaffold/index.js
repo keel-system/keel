@@ -38,6 +38,7 @@ import * as messaging from './messaging.js';
 import * as outbox from './outbox.js';
 import * as idempotency from './idempotency.js';
 import * as httpIdempotency from './http-idempotency.js';
+import * as idempotencyCheck from './idempotency-check.js';
 import * as cache from './cache.js';
 import * as jackson from './jackson.js';
 import * as controllers from './controllers.js';
@@ -102,6 +103,9 @@ const GENERATORS = [
   dependencies,
   storage,
   services,
+  // Después de services: su matriz cita clases que los generadores de arriba nombran,
+  // aunque el script solo las busque en tiempo de ejecución.
+  idempotencyCheck,
   readme,
   contextMd,
   generatorDocs

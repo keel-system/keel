@@ -10,9 +10,18 @@ const STATUSES_WITHOUT_BODY = new Set([204, 205, 304]);
  * Recibe { layers } (ya validadas contra sus schemas) y devuelve { errors, warnings, pending }.
  * Con wip: true, las referencias hacia delante a una capa messaging aún no diseñada
  * (emits, cache.invalidatedBy) van a pending (diseño en progreso), no a errors.
+ *
+ * `scenarios` es el TEXTO de validation-scenarios.md, o null si no existe todavía. Se
+ * recibe en vez de leerse: esta función es pura y no toca disco (lo lee validateService,
+ * que es quien tiene el directorio). Solo hay una regla que lo mire —la obligación de los
+ * dos escenarios de una compensación—, y existe porque ese documento es la única parte
+ * del diseño que nada cruzaba con el resto: es prosa, y el gate conductual del generador
+ * solo puntúa lo que el documento declara, así que un escenario que falta no lo echa de
+ * menos nadie.
+ *
  * La calidad semántica (invariantes ambiguas, mínimo privilegio...) es de la skill /keel-validate.
  */
-export function checkCrossRefs({ layers, wip = false }) {
+export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
   const errors = [];
   const warnings = [];
   const pending = [];
@@ -40,6 +49,14 @@ export function checkCrossRefs({ layers, wip = false }) {
   const channels = new Set(Object.keys(messaging?.channels ?? {}));
   const referencedChannels = new Set(); // canales citados por eventos/suscripciones (para detectar huérfanos)
   const emittedEvents = new Set(); // eventos citados por algún emits (para detectar publicados que nadie emite)
+  // Operaciones que encargan trabajo a otro servidor. `triggeredBy` es el único enlace del
+  // DSL entre un caso de uso y el trabajo que delega, así que es también la única forma de
+  // saber que repetir esa operación repite un efecto fuera de este proceso.
+  const activatesProvider = new Set(
+    Object.values(dependencies?.dependencies ?? {}).flatMap((dep) =>
+      Object.values(dep.activations ?? {}).flatMap((spec) => spec.triggeredBy ?? [])
+    )
+  );
   const httpCallKeys = new Set(); // `${clientId}|${callName}` — lo llena el bloque http-clients
   const usedHttpCalls = new Set(); // clientes citados por algún need o activación (para detectar clientes sin dependencia)
 
@@ -932,16 +949,52 @@ export function checkCrossRefs({ layers, wip = false }) {
   // como guarda; lo que no vale igual es exigir la declarada cuando ya hay envoltura, que
   // sería pedir un dato que ningún emisor Keel escribe.
   const listenerDedupeKeyOf = (sub) => Boolean(sub?.contract?.messageId) || envelopeOf(sub) === 'keel';
+  // Una transición cuyo destino no está entre sus propios orígenes es irrepetible por
+  // construcción: al segundo intento la entidad ya está en `to` y el guard la rechaza.
+  // Es la única guarda que vive en el DOMINIO y no en un borde, así que vale para los
+  // dos ejes de repetición —la reentrega del broker y el reintento del llamante HTTP—:
+  // de ahí que la usen las dos reglas y no una copia cada una.
+  const hasIrrepeatableTransition = (op) => (op?.transitions ?? []).some((t) => !(t.from ?? []).includes(t.to));
+
+  // Los escenarios de un evento, troceados por su encabezado `### FL-XXX-NNN: …`. Se
+  // busca el nombre del evento —un token PascalCase, inconfundible en prosa— y dentro de
+  // los bloques que lo mencionan, la señal de que uno de ellos lo REENTREGA. Es una
+  // lectura de texto, con lo que eso implica: puede no reconocer una redacción rara, así
+  // que lo que produce es un aviso que dice «no encuentro», nunca un error que afirme que
+  // no existe. El coste de equivocarse en esa dirección es una frase; en la contraria,
+  // una compensación que deshace dos veces y ningún escenario que lo note.
+  const REDELIVERY = /reentrega|reentregad|reentregar|mismo mensaje|mismo messageId|segundo efecto|dos veces|duplicad/i;
+  const scenarioBlocks = (scenarios ?? '')
+    .split(/^#{2,4}\s+(?=FL-)/m)
+    .slice(1)
+    .filter((block) => /^FL-[A-Za-z0-9-]+/.test(block));
+  const scenariosMentioning = (eventName) => {
+    const mention = new RegExp(`\\b${eventName}\\b`);
+    return scenarioBlocks.filter((block) => mention.test(block));
+  };
   const redeliveryGuardsOf = (eventName) => {
     const sub = messaging?.subscriptions?.[eventName];
     const op = operations[sub?.triggers];
     const guards = [];
     if (sub && listenerDedupeKeyOf(sub)) guards.push('messageId'); // deduplicación antes del dominio
-    // Una transición cuyo destino no está entre sus propios orígenes es irrepetible por
-    // construcción: al segundo intento la entidad ya está en `to` y el guard la rechaza.
-    if ((op?.transitions ?? []).some((t) => !(t.from ?? []).includes(t.to))) guards.push('transitions');
+    if (hasIrrepeatableTransition(op)) guards.push('transitions');
     return guards;
   };
+
+  // El outbox es una tabla: la fila del evento se escribe en la MISMA transacción que el
+  // cambio de estado y un relay la publica después. Sin capa `persistence` no hay dónde
+  // escribirla, así que no hay nada que generar — y el generador no lo avisa, porque la
+  // ausencia de una capa entera no es un campo que él mire: `keel-spring` simplemente no
+  // genera outbox y publica en el acto. El diseño declara entrega garantizada y lo que se
+  // construye es best-effort, que es la peor forma de equivocarse: la promesa sobrevive en
+  // el documento y desaparece del servidor.
+  if (messaging?.publishing?.reliability === 'outbox' && !persistence) {
+    errors.push(
+      `messaging: publishing.reliability: 'outbox' exige capa persistence — la fila del evento se escribe en la misma ` +
+        `transacción que el cambio de estado, y sin almacén no hay dónde ponerla. Declara la capa persistence o baja a ` +
+        `best-effort, que es lo que de verdad se generaría`
+    );
+  }
 
   for (const [eventName, event] of Object.entries(messaging?.publishing?.events ?? {})) {
     checkFieldMap(event.payload, `messaging: publishing.events.${eventName}.payload`);
@@ -1260,6 +1313,22 @@ export function checkCrossRefs({ layers, wip = false }) {
               );
             }
           }
+          // Encargar trabajo publicando se apoya en que el evento salga sí o sí: por eso el
+          // schema prohíbe `onFailure` en esta rama —no hay fallo que capturar— y por eso no
+          // hay reintento que declarar. Pero esa garantía no la da publicar, la da el outbox:
+          // con `best-effort` el evento se manda y punto, y si el broker no está el encargo se
+          // pierde sin dejar rastro ni aquí ni en el proveedor. Y no hay compensación que
+          // valga para un trabajo que nunca llegó a encargarse: no hay nada que deshacer y
+          // nadie que publique el fallo. Es el único sitio donde `reliability` deja de ser una
+          // preferencia de entrega y pasa a sostener una dependencia.
+          if (publishedEvents.has(via.publishes) && (messaging?.publishing?.reliability ?? 'best-effort') !== 'outbox') {
+            warnings.push(
+              `${where}.via: el encargo a '${depName}' viaja publicando '${via.publishes}', pero messaging declara ` +
+                `reliability: ${messaging?.publishing?.reliability ?? 'best-effort'} — si el broker no está en ese instante ` +
+                `el encargo se pierde en silencio, y no hay compensación posible de un trabajo que nunca se pidió. ` +
+                `Declara publishing.reliability: outbox`
+            );
+          }
           // Publicar no devuelve resultado: si la operación necesita el desenlace para
           // continuar, el canal tiene que ser síncrono. Es una contradicción del diseño,
           // no una preferencia de implementación.
@@ -1288,6 +1357,43 @@ export function checkCrossRefs({ layers, wip = false }) {
             errors.push(
               `${where}.reconciledBy: '${spec.reconciledBy}' es kind: query — reconciliar es corregir el estado, no leerlo`
             );
+          } else {
+            // Hasta aquí solo se ha comprobado la FORMA del barrido: que exista, que lo
+            // dispare el reloj y que no sea una lectura. Falta lo que lo hace un barrido
+            // de ESTO: un `schedule` que no toca nada de esta activación cumple las tres
+            // condiciones y no reconcilia nada — y como es la pata del silencio, nadie se
+            // entera nunca. Dos formas legítimas de cerrarlo, y basta con una:
+            //
+            //   - mueve el lifecycle de alguna entidad que dejó esperando el encargo
+            //     (se rinde, o dispara la compensación), o
+            //   - vuelve a encargar el trabajo, y entonces aparece en el `triggeredBy`
+            //     de esta misma activación.
+            //
+            // Sin ninguna de las dos, el generador tampoco tiene por dónde: `triggeredBy`
+            // y `transitions` son el único enlace del DSL entre una operación y lo que
+            // hace, así que el stub del barrido nace sin cliente que llamar ni estado que
+            // mover. Aviso y no error: el desenlace puede ser solo avisar a un operador,
+            // pero entonces se dice, no se deja implícito.
+            const waiting = new Set(
+              (spec.triggeredBy ?? [])
+                .flatMap((name) => operations[name]?.transitions ?? [])
+                .map((transition) => transition.entity)
+            );
+            const movesWaiting = (sweeper.transitions ?? []).some((transition) => waiting.has(transition.entity));
+            const reencarga = (spec.triggeredBy ?? []).includes(spec.reconciledBy);
+            if (!movesWaiting && !reencarga) {
+              warnings.push(
+                `${where}.reconciledBy: '${spec.reconciledBy}' corre por el reloj, pero nada en el diseño lo enlaza con lo ` +
+                  `que tiene que reconciliar` +
+                  (waiting.size > 0
+                    ? `: no declara ninguna transición sobre ${[...waiting].join(', ')} —las entidades que este encargo dejó ` +
+                      `esperando— ni aparece en el triggeredBy de '${action}' para volver a encargarlo. `
+                    : `: no aparece en el triggeredBy de '${action}' para volver a encargarlo, y las operaciones que lo ` +
+                      `disparan no mueven ningún lifecycle del que salir. `) +
+                  `Un barrido que no toca lo que barre pasa esta validación y no reconcilia nada, y es justo el camino que ` +
+                  `nadie ejercita: declara la transición de salida o el reintento del encargo`
+              );
+            }
           }
         }
       }
@@ -1306,16 +1412,45 @@ export function checkCrossRefs({ layers, wip = false }) {
         if (compensation.undoes && !activationNames.has(compensation.undoes)) {
           errors.push(`${where}.undoes: la activación '${compensation.undoes}' no existe en ${depName}.activations`);
         }
-        // Sin `undoes` el par hacer/deshacer no es verificable: nada puede contrastar que
-        // la compensación devuelva el estado que movió el trabajo encargado, ni saber qué
-        // encargo se queda sin deshacer si esta compensación desaparece. Solo se avisa
-        // habiendo activaciones — sin ellas, lo que se deshace es otra cosa y el campo no
-        // tendría a qué apuntar.
+        // Sin `undoes` el par hacer/deshacer no es verificable: nada puede contrastar que la
+        // compensación devuelva el estado que movió el trabajo encargado, ni saber qué encargo
+        // se queda sin deshacer si esta compensación desaparece. Y no es una comprobación
+        // menos: su ausencia apaga en cascada las CUATRO reglas que hacen que una compensación
+        // sea algo más que una suscripción con buen nombre. Un aviso que desactiva media
+        // sección de validación no está proporcionado al daño, así que es error mientras haya
+        // activaciones — sin ellas, lo que se deshace es otra cosa y el campo no tendría a qué
+        // apuntar.
         if (!compensation.undoes && activationNames.size > 0) {
-          warnings.push(
+          errors.push(
             `${where}: no declara 'undoes' habiendo activaciones en '${depName}' (${[...activationNames].join(', ')}) — ` +
-              `sin él el par hacer/deshacer no es verificable y la comprobación del estado de vuelta no llega a evaluarse`
+              `sin él el par hacer/deshacer no es verificable y quedan sin evaluar las cuatro comprobaciones que dependen ` +
+              `de saber qué encargo se deshace: el estado de vuelta, el alcance al proveedor, la reconciliación del ` +
+              `desenlace silencioso y la saga incompleta. Declara cuál de esas activaciones deshace`
           );
+        }
+
+        // Los dos escenarios obligatorios. La regla la escribe docs/validation-scenarios.md
+        // § Reglas de cobertura, pero hasta ahora vivía solo ahí: el documento es prosa y
+        // el gate conductual del generador puntúa lo declarado contra lo ejercitado, así
+        // que una compensación sin escenario de reentrega salía verde por los dos lados —
+        // el diseño no lo exigía y el generador no lo echaba de menos. Y es exactamente el
+        // camino que menos se prueba a mano: solo se ejecuta cuando algo ya salió mal.
+        if (scenarios !== null) {
+          const mentions = scenariosMentioning(compensation.onEvent);
+          if (mentions.length === 0) {
+            warnings.push(
+              `${where}: no encuentro ningún escenario de validation-scenarios.md que mencione '${compensation.onEvent}' — ` +
+                `una compensación necesita dos: el efecto completo (llega el evento, el trabajo se deshace y el estado ` +
+                `propio vuelve, leído por la API) y la reentrega del mismo evento sin segundo efecto`
+            );
+          } else if (!mentions.some((block) => REDELIVERY.test(block))) {
+            warnings.push(
+              `${where}: los escenarios de '${compensation.onEvent}' cubren el efecto pero no encuentro el de REENTREGA — ` +
+                `deshacer dos veces el mismo trabajo no es deshacerlo, y es lo único que prueba que la guarda declarada ` +
+                `funciona de verdad. Añade un escenario que entregue el mismo mensaje otra vez y afirme que no hay ` +
+                `segundo efecto`
+            );
+          }
         }
 
         const sub = subscriptions[compensation.onEvent];
@@ -1440,6 +1575,26 @@ export function checkCrossRefs({ layers, wip = false }) {
               warnings.push(
                 `${where}: la activación '${compensation.undoes}' se dispara desde operaciones que mueven el lifecycle de ` +
                   `'${entityName}', y '${undoOpName}' no declara ninguna transición sobre esa entidad — ¿a qué estado vuelve?`
+              );
+            }
+          }
+
+          // Y el destino de la vuelta. Devolver el estado no basta si de ese estado no sale
+          // ninguna transición: la entidad queda parada para siempre donde la dejó una
+          // compensación, y el trabajo que se acaba de deshacer no se puede volver a
+          // encargar. A veces es exactamente lo correcto —`cancelled` y `refunded` son
+          // desenlaces, no callejones—, y distinguir un desenlace de un callejón es juicio
+          // semántico, de /keel-validate. Lo mecánico es el dato: aquí se pone encima de la
+          // mesa que la máquina de estados no deja salir de ahí.
+          for (const transition of undoOp.transitions ?? []) {
+            if (!movedEntities.has(transition.entity)) continue;
+            const outgoing = domain.entities?.[transition.entity]?.lifecycle?.transitions?.[transition.to];
+            if (Array.isArray(outgoing) && outgoing.length === 0) {
+              warnings.push(
+                `${where}: '${undoOpName}' devuelve '${transition.entity}' a '${transition.to}', que es un estado terminal ` +
+                  `de su lifecycle — de ahí no sale ninguna transición, así que el trabajo que se acaba de deshacer no se ` +
+                  `puede volver a encargar. Si '${transition.to}' es el desenlace definitivo, correcto; si se esperaba ` +
+                  `reintentar, el destino de la compensación es otro`
               );
             }
           }
@@ -1805,6 +1960,43 @@ export function checkCrossRefs({ layers, wip = false }) {
           `ejecución solo se guarda el id del recurso — una repetición no puede devolver la MISMA respuesta, que es lo que ` +
           `la idempotencia promete. O la operación devuelve el recurso creado, o lo que hace falta declarar es que la ` +
           `repetición devuelve el estado actual`
+      );
+    }
+
+    // El reintento del llamante. Un command expuesto por HTTP lo reenvía cualquiera sin
+    // pedir permiso —el móvil que perdió la respuesta, el proxy, el botón pulsado dos
+    // veces— y nada del protocolo distingue ese reenvío de una segunda intención. Dos
+    // cosas lo atajan y basta con una: `idempotency`, que deduplica en la puerta por la
+    // clave del cliente, o una transición irrepetible, que lo rechaza en el dominio. Es el
+    // simétrico del aviso de http-clients sobre `retry` sin `idempotency`: allí repetimos
+    // nosotros contra un proveedor, aquí nos repiten a nosotros.
+    //
+    // Dos recortes, y ninguno es por comodidad. El primero es del protocolo: PUT y DELETE
+    // son idempotentes por definición —repetirlos converge al mismo estado—, así que la
+    // repetición que hace daño llega por POST o PATCH. El segundo separa el daño
+    // recuperable del que no: dentro del servicio, un segundo insert lo puede frenar una
+    // clave natural en persistence, que es una salida legítima y el DSL no la ve; lo que
+    // ninguna clave natural desanda es un evento ya publicado o un encargo ya hecho a otro
+    // servidor. Se avisa de eso, que es donde la repetición sale del proceso y ya no vuelve.
+    const endpointMethod = api?.endpoints?.[opName]?.method;
+    const repeatableMethod = endpointMethod
+      ? endpointMethod === 'POST' || endpointMethod === 'PATCH'
+      : /^create[A-Z]/.test(opName); // auto: true deriva POST solo del prefijo create
+    const escapes = (op.emits ?? []).length > 0 || activatesProvider.has(opName);
+    if (
+      op.kind === 'command' &&
+      reachableByHttp &&
+      repeatableMethod &&
+      escapes &&
+      !op.idempotency &&
+      !hasIrrepeatableTransition(op)
+    ) {
+      const efecto = (op.emits ?? []).length > 0 ? `publica ${op.emits.join(', ')}` : 'encarga trabajo a otro servidor';
+      warnings.push(
+        `use-cases: ${opName}: es un command ${endpointMethod ?? 'POST'} que ${efecto}, y no declara ni 'idempotency' ni ` +
+          `una transición de lifecycle irrepetible — un reenvío del llamante (timeout, reintento del cliente, doble ` +
+          `pulsación) lo hace dos veces, y eso ya salió del servicio: ninguna clave natural lo desanda. Declara ` +
+          `idempotency para deduplicar en la puerta, o la transición que lo hace irrepetible en el dominio`
       );
     }
   }

@@ -46,3 +46,9 @@ clients:
   #         fields:
   #           quotes: { type: json, required: true }
   #       timeoutMs: 4000
+  #       retry: { maxAttempts: 3, backoff: exponential, retryOn: [timeout, 5xx] }
+  #       idempotency: { keyFrom: payload-hash, header: Idempotency-Key }
+  #                                # El TERCER eje de repetición: aquí repetimos NOSOTROS.
+  #                                # Reintentar una escritura ajena sin esto le duplica el
+  #                                # trabajo al proveedor, y solo sirve si él honra la
+  #                                # cabecera (mírale su INTEGRATION.md). En un GET sobra.

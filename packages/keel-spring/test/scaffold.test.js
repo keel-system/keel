@@ -2038,7 +2038,21 @@ test('outbox: fila en la misma transacción, relay determinista y envío tras el
     assert.ok(!relay.includes(ajeno));
   }
   assert.ok(read(workspace, `${outboxDir}/OutboxDispatcher.java`).includes('void dispatch(String destination'));
-  assert.ok(read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/OutboxDispatcherStub.java').includes('implements OutboxDispatcher'));
+  // El fallback del puerto: @Bean condicional, no @Component. El dispatcher real del
+  // agente lo aparta sin colisionar, así que no hay que borrar el archivo — y por eso
+  // el fail-fast sobrevive a la generación.
+  const fallback = read(
+    workspace,
+    'src/main/java/com/commerce/productcatalog/infrastructure/messaging/OutboxDispatcherFallbackConfig.java'
+  );
+  assert.ok(fallback.includes('@ConditionalOnMissingBean(OutboxDispatcher.class)'));
+  assert.ok(fallback.includes('public OutboxDispatcher outboxDispatcherStub(Environment environment)'));
+  assert.ok(!fallback.includes('@Component'));
+  // Que `dispatch` no lance tiene un precio: el relay marca como publicado lo que nunca
+  // salió. En local eso es lo que se quiere; fuera de local es perderlo todo en silencio.
+  assert.ok(fallback.includes('Set.of("local", "test")'));
+  assert.ok(fallback.includes('throw new IllegalStateException('));
+  assert.ok(!exists(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/OutboxDispatcherStub.java'));
 
   // Con outbox la entrega NO pasa por publishers: no se generan puerto ni stub.
   assert.ok(!exists(workspace, 'src/main/java/com/commerce/productcatalog/domain/events/ProductCreatedPublisher.java'));

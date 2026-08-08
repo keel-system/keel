@@ -278,3 +278,143 @@ test('un error de carga corta antes de cruzar referencias', (t) => {
   assert.ok(result.loadErrors.length > 0);
   assert.deepEqual(result.crossRefErrors, []);
 });
+
+// validation-scenarios.md es el único derivado que la validación mecánica lee, y solo
+// para una regla: la obligación de los dos escenarios de una compensación. Aquí se
+// comprueba el CABLEADO —que el archivo llegue desde disco hasta la regla—; el
+// contenido de la regla lo cubre crossrefs.test.js.
+
+const COMPENSATION_LAYERS = {
+  'domain.keel.yaml': `
+entities:
+  Shipment:
+    description: Un envío encargado a la transportista.
+    fields:
+      id:     { type: uuid, id: true, generated: true }
+      status: { type: enum, values: [requested, dispatched, cancelled], default: requested }
+    lifecycle:
+      field: status
+      transitions:
+        requested: [dispatched, cancelled]
+        dispatched: [cancelled]
+        cancelled: [requested]
+`,
+  'use-cases.keel.yaml': `
+operations:
+  dispatchShipment:
+    description: Encarga el envío a la transportista.
+    kind: command
+    internal: true
+    input:
+      fields:
+        shipmentId: { type: uuid, required: true }
+    output: void
+    transitions:
+      - { entity: Shipment, from: [requested], to: dispatched }
+  cancelShipment:
+    description: Anula el envío que la transportista rechazó.
+    kind: command
+    internal: true
+    input:
+      fields:
+        shipmentId: { type: uuid, required: true }
+    output: void
+    transitions:
+      - { entity: Shipment, from: [dispatched], to: cancelled }
+  sweepShipments:
+    description: Revisa los envíos encargados que siguen sin desenlace.
+    kind: command
+    internal: true
+    input: void
+    output: void
+    schedule: { cron: '0 * * * *' }
+`,
+  'messaging.keel.yaml': `
+subscriptions:
+  ShipmentRejected:
+    description: La transportista rechazó el envío encargado.
+    source: carrier
+    payload:
+      shipmentId: { type: uuid, required: true }
+    triggers: cancelShipment
+    onFailure:
+      retry: { maxAttempts: 3, backoff: exponential }
+      deadLetter: true
+`,
+  'http-clients.keel.yaml': `
+clients:
+  carrier:
+    purpose: Encargar envíos a la transportista.
+    calls:
+      requestShipment: { contract: 'POST /shipments -> acuse del encargo.' }
+`,
+  'dependencies.keel.yaml': `
+dependencies:
+  carrier:
+    description: Transportista que ejecuta los envíos.
+    activations:
+      requestShipment:
+        triggeredBy: [dispatchShipment, sweepShipments]
+        via: { client: carrier, call: requestShipment }
+        effect: La transportista recoge y entrega el paquete.
+        reconciledBy: sweepShipments
+        onFailure: { action: ignore }
+    compensations:
+      - onEvent: ShipmentRejected
+        undoes: requestShipment
+        description: La transportista rechazó el envío; se anula.
+`
+};
+
+const compensationService = (t, scenarios) =>
+  makeServiceDir(t, {
+    'service.keel.yaml':
+      `keel: "${DSL}"\n` +
+      'service:\n  name: shipping\n  version: 1.0.0\n' +
+      '  description: Coordina los envíos con la transportista.\n' +
+      'layers:\n' +
+      Object.keys(COMPENSATION_LAYERS)
+        .map((file) => `  ${file.replace('.keel.yaml', '')}: ${file}`)
+        .join('\n') +
+      '\n',
+    ...COMPENSATION_LAYERS,
+    ...(scenarios === null ? {} : { 'validation-scenarios.md': scenarios })
+  });
+
+test('sin validation-scenarios.md la regla de los dos escenarios no se evalúa', (t) => {
+  const { warnings } = validateService(compensationService(t, null));
+  assert.ok(!warnings.some((w) => w.includes('validation-scenarios.md')), warnings.join('\n'));
+  assert.ok(!warnings.some((w) => w.includes('REENTREGA')), warnings.join('\n'));
+});
+
+test('el documento llega desde disco: una compensación sin escenario de reentrega se avisa', (t) => {
+  const dir = compensationService(
+    t,
+    `# shipping — Escenarios de validación\n\n` +
+      `### FL-SHP-001: la transportista rechaza el envío\n` +
+      `**Given**: un envío en dispatched.\n**When**: llega ShipmentRejected.\n` +
+      `**Then**: el envío queda en cancelled, leído por la API.\n`
+  );
+  const { warnings } = validateService(dir);
+  assert.ok(
+    warnings.some((w) => w.includes("los escenarios de 'ShipmentRejected' cubren el efecto pero no encuentro el de REENTREGA")),
+    warnings.join('\n')
+  );
+});
+
+test('con los dos escenarios el diseño valida limpio de punta a punta', (t) => {
+  const dir = compensationService(
+    t,
+    `# shipping — Escenarios de validación\n\n` +
+      `### FL-SHP-001: la transportista rechaza el envío\n` +
+      `**Given**: un envío en dispatched.\n**When**: llega ShipmentRejected.\n` +
+      `**Then**: el envío queda en cancelled, leído por la API.\n\n` +
+      `### FL-SHP-002: ShipmentRejected se reentrega\n` +
+      `**Given**: la compensación ya se aplicó.\n**When**: se entrega el mismo mensaje otra vez.\n` +
+      `**Then**: no hay segundo efecto.\n`
+  );
+  const { ok, crossRefErrors, warnings } = validateService(dir);
+  assert.deepEqual(crossRefErrors, []);
+  assert.ok(ok);
+  assert.ok(!warnings.some((w) => w.includes('ShipmentRejected') && w.includes('escenario')), warnings.join('\n'));
+});

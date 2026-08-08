@@ -1729,6 +1729,9 @@ const activationLayers = () => ({
         kind: 'command',
         input: { fields: { orderId: { type: 'uuid', required: true } } },
         output: { entity: 'Order' },
+        // Encarga trabajo a otro servidor por POST: sin guarda, un reenvío del comprador
+        // manda dos correos, y eso ya salió del proceso.
+        idempotency: { keySource: 'client-key', ttlSeconds: 3600 },
         errors: [{ code: 'NOTICE_UNAVAILABLE', when: 'No se pudo encargar el aviso al comprador.' }],
       },
     },
@@ -2614,7 +2617,10 @@ const compLayers = () => ({
         contract: { version: '1.0.0' },
         activations: {
           recordWithdrawal: {
-            triggeredBy: ['retireProduct'],
+            // El barrido aparece aquí porque su desenlace es volver a encargar la
+            // inscripción: sin ese enlace (o sin una transición de salida) sería un
+            // `schedule` que no toca nada de lo que dice reconciliar.
+            triggeredBy: ['retireProduct', 'reconcileWithdrawals'],
             via: { client: 'compliance', call: 'recordWithdrawal' },
             effect: 'La retirada queda inscrita en el registro regulatorio.',
             awaits: 'outcome',
@@ -3119,13 +3125,15 @@ test('compensación con reintentos no produce ninguno de los dos', () => {
   assert.ok(!warnings.some((w) => w.includes('DLQ al primer intento')), warnings.join('\n'));
 });
 
-test('compensación sin undoes habiendo activaciones es aviso', () => {
+test('compensación sin undoes habiendo activaciones es error, no aviso', () => {
+  // Su ausencia apaga en cascada las cuatro reglas que dependen de saber qué encargo
+  // se deshace, así que un aviso no estaba proporcionado al daño.
   const layers = withFailurePolicy({ retry: { maxAttempts: 3 }, deadLetter: true });
   delete layers.dependencies.dependencies.compliance.compensations[0].undoes;
-  const { warnings } = run(layers);
+  const { errors } = run(layers);
   assert.ok(
-    warnings.some((w) => w.includes("no declara 'undoes' habiendo activaciones")),
-    warnings.join('\n')
+    errors.some((e) => e.includes("no declara 'undoes' habiendo activaciones")),
+    errors.join('\n')
   );
 });
 
@@ -3145,4 +3153,210 @@ test('sin activaciones, la ausencia de undoes no se avisa: no hay a qué apuntar
   };
   const { warnings } = run(layers);
   assert.ok(!warnings.some((w) => w.includes("no declara 'undoes'")), warnings.join('\n'));
+});
+
+// ---------------------------------------------------------------------------
+// La entrega garantizada, el destino de la vuelta y el reintento del llamante.
+// Tres huecos de la misma familia: el diseño declara una garantía y nada la
+// contrastaba con la capa que tiene que sostenerla.
+// ---------------------------------------------------------------------------
+
+test('reliability: outbox sin capa persistence es error', () => {
+  const layers = compLayers();
+  layers.messaging.publishing = { reliability: 'outbox', events: { ProductRetired: { payload: {} } } };
+  layers['use-cases'].operations.retireProduct.emits = ['ProductRetired'];
+  const conPersistence = run({ ...layers, persistence: { default: { model: 'relational' }, entities: { Product: {} } } });
+  assert.ok(!conPersistence.errors.some((e) => e.includes('exige capa persistence')), conPersistence.errors.join('\n'));
+
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) => e.includes("publishing.reliability: 'outbox' exige capa persistence")),
+    errors.join('\n')
+  );
+});
+
+test('best-effort sin outbox no dice nada: la fila solo hace falta si se prometió el outbox', () => {
+  const layers = compLayers();
+  layers.messaging.publishing = { events: { ProductRetired: { payload: {} } } };
+  layers['use-cases'].operations.retireProduct.emits = ['ProductRetired'];
+  const { errors } = run(layers);
+  assert.ok(!errors.some((e) => e.includes('exige capa persistence')), errors.join('\n'));
+});
+
+test('encargar trabajo publicando sobre best-effort es aviso: el encargo se puede perder', () => {
+  const layers = activationLayers();
+  delete layers['http-clients'];
+  activation(layers).via = { publishes: 'DeliveryRequested' };
+  delete activation(layers).onFailure;
+  layers.messaging = {
+    publishing: { events: { DeliveryRequested: { payload: { recipient: { type: 'string', required: true } } } } },
+  };
+  const { warnings } = run(layers);
+  assert.ok(
+    warnings.some((w) => w.includes("viaja publicando 'DeliveryRequested'") && w.includes('reliability: best-effort')),
+    warnings.join('\n')
+  );
+
+  // Con outbox el encargo no se pierde, que es justo lo que el schema da por hecho
+  // cuando prohíbe onFailure en esta rama.
+  layers.messaging.publishing.reliability = 'outbox';
+  const conOutbox = run(layers);
+  assert.ok(!conOutbox.warnings.some((w) => w.includes('viaja publicando')), conOutbox.warnings.join('\n'));
+});
+
+test('encargar por cliente HTTP no lo toca: ahí sí hay fallo que capturar', () => {
+  const { warnings } = run(activationLayers());
+  assert.ok(!warnings.some((w) => w.includes('viaja publicando')), warnings.join('\n'));
+});
+
+test('la compensación que devuelve a un estado terminal es aviso', () => {
+  const layers = compLayers();
+  const product = layers.domain.entities.Product;
+  product.fields.status.values.push('cancelled');
+  product.lifecycle.transitions.retired = ['active', 'cancelled'];
+  product.lifecycle.transitions.cancelled = [];
+  layers['use-cases'].operations.reactivateProduct.transitions = [
+    { entity: 'Product', from: ['retired'], to: 'cancelled' },
+  ];
+  const { warnings } = run(layers);
+  assert.ok(
+    warnings.some((w) => w.includes("devuelve 'Product' a 'cancelled', que es un estado terminal")),
+    warnings.join('\n')
+  );
+});
+
+test('la compensación que devuelve a un estado con salida no dice nada', () => {
+  // El fixture base vuelve a 'active', de donde sale 'retired'.
+  const { warnings } = run(compLayers());
+  assert.ok(!warnings.some((w) => w.includes('estado terminal')), warnings.join('\n'));
+});
+
+test('un command POST que publica sin guarda alguna es aviso', () => {
+  const layers = compLayers();
+  layers.messaging.publishing = { events: { ProductRetired: { payload: {} } } };
+  layers['use-cases'].operations.retireProduct.emits = ['ProductRetired'];
+  delete layers['use-cases'].operations.retireProduct.transitions;
+  const { warnings } = run(layers);
+  assert.ok(
+    warnings.some((w) => w.includes('use-cases: retireProduct:') && w.includes('publica ProductRetired')),
+    warnings.join('\n')
+  );
+});
+
+test('cualquiera de las dos guardas calla el aviso del reintento del llamante', () => {
+  const base = () => {
+    const layers = compLayers();
+    layers.messaging.publishing = { events: { ProductRetired: { payload: {} } } };
+    layers['use-cases'].operations.retireProduct.emits = ['ProductRetired'];
+    delete layers['use-cases'].operations.retireProduct.transitions;
+    return layers;
+  };
+  const noRepite = (warnings) => !warnings.some((w) => w.includes('use-cases: retireProduct:'));
+
+  // Guarda de puerta.
+  const conIdempotency = base();
+  conIdempotency['use-cases'].operations.retireProduct.idempotency = { keySource: 'client-key', ttlSeconds: 3600 };
+  assert.ok(noRepite(run(conIdempotency).warnings), run(conIdempotency).warnings.join('\n'));
+
+  // Guarda de dominio: la que trae el fixture de serie (active → retired, irrepetible).
+  const conTransicion = base();
+  conTransicion['use-cases'].operations.retireProduct.transitions = [
+    { entity: 'Product', from: ['active'], to: 'retired' },
+  ];
+  assert.ok(noRepite(run(conTransicion).warnings), run(conTransicion).warnings.join('\n'));
+});
+
+test('un command cuyo efecto no sale del proceso no dispara el aviso', () => {
+  // Sin emits y sin encargo a un proveedor, el segundo insert lo puede frenar una
+  // clave natural en persistence — una salida legítima que el DSL no ve.
+  // publishProduct es el caso: POST, sin emits y sin activación que lo dispare.
+  const layers = compLayers();
+  delete layers['use-cases'].operations.publishProduct.transitions;
+  const { warnings } = run(layers);
+  assert.ok(!warnings.some((w) => w.includes('use-cases: publishProduct:')), warnings.join('\n'));
+});
+
+test('PUT y DELETE no disparan el aviso: son idempotentes por definición del protocolo', () => {
+  const layers = compLayers();
+  layers.messaging.publishing = { events: { ProductRetired: { payload: {} } } };
+  layers['use-cases'].operations.retireProduct.emits = ['ProductRetired'];
+  delete layers['use-cases'].operations.retireProduct.transitions;
+  layers.api.endpoints.retireProduct = { method: 'DELETE', path: '/products/{productId}' };
+  const { warnings } = run(layers);
+  assert.ok(!warnings.some((w) => w.includes('use-cases: retireProduct:')), warnings.join('\n'));
+});
+
+// ---------------------------------------------------------------------------
+// Las dos patas que quedaban sin cruzar: un barrido que no toca lo que barre, y
+// la obligación de los dos escenarios de una compensación —la única regla que
+// mira validation-scenarios.md, porque es la única parte del diseño que nada
+// contrastaba con el resto.
+// ---------------------------------------------------------------------------
+
+test('un barrido que no toca lo que reconcilia es aviso', () => {
+  const layers = compLayers();
+  // Se le quita el enlace: queda un `schedule` que cumple la forma y no reconcilia nada.
+  layers.dependencies.dependencies.compliance.activations.recordWithdrawal.triggeredBy = ['retireProduct'];
+  const { errors, warnings } = run(layers);
+  assert.deepEqual(errors, []);
+  assert.ok(
+    warnings.some((w) => w.includes("'reconcileWithdrawals' corre por el reloj") && w.includes('Product')),
+    warnings.join('\n')
+  );
+});
+
+test('mover el lifecycle de lo que quedó esperando también cierra el barrido', () => {
+  const layers = compLayers();
+  const dep = layers.dependencies.dependencies.compliance;
+  dep.activations.recordWithdrawal.triggeredBy = ['retireProduct'];
+  // La otra forma legítima: en vez de reencargar, se rinde y devuelve el producto.
+  layers['use-cases'].operations.reconcileWithdrawals.transitions = [
+    { entity: 'Product', from: ['retired'], to: 'active' },
+  ];
+  const { warnings } = run(layers);
+  assert.ok(!warnings.some((w) => w.includes('corre por el reloj')), warnings.join('\n'));
+});
+
+const scenarioDoc = (...blocks) =>
+  `# catalog — Escenarios de validación\n\n## Flujos\n\n${blocks.join('\n\n')}\n`;
+
+const EFECTO = `### FL-CMP-001: el registro rechaza la retirada
+**Given**: un producto retirado cuya inscripción se encargó a compliance.
+**When**: llega WithdrawalRejected.
+**Then**: el producto vuelve a active, leído por GET /products/{id}.`;
+
+const REENTREGA = `### FL-CMP-002: WithdrawalRejected se reentrega
+**Given**: la compensación de FL-CMP-001 ya se aplicó.
+**When**: se entrega el MISMO mensaje otra vez (misma reentrega del broker).
+**Then**: no hay segundo efecto: el producto sigue en active y no se publica nada.`;
+
+test('sin documento de escenarios no se dice nada: no hay nada que cruzar', () => {
+  const { warnings } = run(compLayers());
+  assert.ok(!warnings.some((w) => w.includes('validation-scenarios.md')), warnings.join('\n'));
+  assert.ok(!warnings.some((w) => w.includes('REENTREGA')), warnings.join('\n'));
+});
+
+test('una compensación sin ningún escenario suyo es aviso', () => {
+  const scenarios = scenarioDoc(`### FL-PRD-001: alta de producto
+**Given**: nada.
+**When**: POST /products.
+**Then**: 201.`);
+  const { warnings } = checkCrossRefs({ layers: compLayers(), scenarios });
+  assert.ok(
+    warnings.some((w) => w.includes("ningún escenario de validation-scenarios.md que mencione 'WithdrawalRejected'")),
+    warnings.join('\n')
+  );
+});
+
+test('el efecto sin la reentrega es aviso: es el escenario que menos se escribe y más cuesta', () => {
+  const { warnings } = checkCrossRefs({ layers: compLayers(), scenarios: scenarioDoc(EFECTO) });
+  assert.ok(
+    warnings.some((w) => w.includes("los escenarios de 'WithdrawalRejected' cubren el efecto pero no encuentro el de REENTREGA")),
+    warnings.join('\n')
+  );
+});
+
+test('con los dos escenarios no se dice nada', () => {
+  const { warnings } = checkCrossRefs({ layers: compLayers(), scenarios: scenarioDoc(EFECTO, REENTREGA) });
+  assert.ok(!warnings.some((w) => w.includes('WithdrawalRejected') && w.includes('escenario')), warnings.join('\n'));
 });

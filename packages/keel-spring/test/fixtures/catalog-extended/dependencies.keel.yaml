@@ -61,7 +61,10 @@ dependencies:
     activations:
       recordWithdrawal:
         description: Alta de la retirada en el registro regulatorio.
-        triggeredBy: [retireProduct]
+        # El barrido aparece aquí porque su desenlace es volver a inscribir: es lo
+        # que lo enlaza con lo que reconcilia (la otra forma sería una transición de
+        # salida). Sin ese enlace sería un `schedule` que no toca nada de esto.
+        triggeredBy: [retireProduct, reconcileWithdrawals]
         via:
           client: compliance
           call: recordWithdrawal

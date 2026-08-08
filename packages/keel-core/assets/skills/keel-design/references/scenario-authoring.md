@@ -144,7 +144,7 @@ Errores frecuentes que estas pasadas deben cazar:
 - Escenario que exige ver un cambio reflejado de inmediato en un objeto `embed` cuya entidad no publica ningún evento en `invalidatedBy`: es una exigencia que ningún generador puede cumplir, y lo que hay que corregir es el diseño (o el escenario), no el servidor.
 - Estado del `lifecycle` que ningún flujo alcanza.
 - Evento en `emits` que no aparece en ningún `Then`.
-- **Compensación sin escenario de reentrega**: el flujo prueba que la compensación deshace el trabajo, y nada prueba que no lo deshaga dos veces. Es el hueco más caro de la lista, porque el segundo efecto no se ve al probar a mano — hay que reentregar el mensaje a propósito.
+- **Compensación sin escenario de reentrega**: el flujo prueba que la compensación deshace el trabajo, y nada prueba que no lo deshaga dos veces. Es el hueco más caro de la lista, porque el segundo efecto no se ve al probar a mano — hay que reentregar el mensaje a propósito. Es el único de esta lista que `keel validate` también caza (busca el `onEvent` en los escenarios y, entre los que lo mencionan, uno que lo reentregue), pero por texto: si el escenario existe con otra redacción, el aviso es un falso positivo que se cierra escribiendo «reentrega» donde toca; si no existe, hay que escribirlo.
 
 ## 6. Regenerar sin romper
 

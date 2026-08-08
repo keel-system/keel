@@ -559,6 +559,14 @@ test que siempre pasa: se declara en `uncovered` con su motivo. Casos típicos: 
 `onFailure` (exige provocar el fallo del handler desde fuera) y las operaciones con
 `schedule`. Declararlo es información; un test decorativo es ruido que además da falsa seguridad.
 
+Con una salvedad que conviene decir en voz alta, porque es donde esa exención sale más
+cara: la operación de una **reconciliación** (`activations.<a>.reconciledBy`) siempre cae
+aquí —el arnés es caja negra y un cron no se alcanza desde fuera— y es justo la que
+detecta lo que no ha pasado. `uncovered` no significa que nadie la mire: la cubre
+`infra/check-idempotency.sh` en estático (que el `@Scheduled` ya no lance, que el umbral
+salga de `parameters/`), y la prueba en vivo la hace el diseñador. Lo que no vale es
+inventarle un escenario que dispare el barrido por una puerta que el diseño no tiene.
+
 **Depender de otro servidor ya no es motivo de `uncovered`**: con el stub, un flujo que lee o activa
 a un proveedor se programa y se puntúa como cualquier otro, y su camino de fallo también
 (`stubFailure`). Solo queda fuera lo que el stub no reproduce de forma determinista — una caída a

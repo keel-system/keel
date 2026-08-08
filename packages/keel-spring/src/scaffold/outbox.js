@@ -630,32 +630,72 @@ public interface OutboxDispatcher {
 }
 
 // Stub del puerto: el contexto arranca (y el relay corre) sin broker todavía.
-// Deliberadamente NO lanza: el relay lo interpretaría como fallo de entrega y
-// las filas se acumularían con attempts creciendo.
+//
+// Tres decisiones, y ninguna es de estilo:
+//
+// 1. `dispatch` NO lanza. El relay lo interpretaría como fallo de entrega y las filas
+//    se acumularían con `attempts` creciendo hasta la dead-letter.
+// 2. Va como @Bean con @ConditionalOnMissingBean, no como @Component. El agente
+//    escribe el dispatcher real y este se aparta solo: sin la condición serían dos
+//    beans del mismo puerto y el contexto no arrancaría, así que el camino de menor
+//    resistencia sería BORRAR este archivo — y entonces nada quedaría avisando.
+//    Sobre un @Component la condición no es fiable: depende del orden del scan.
+// 3. Falla al arrancar fuera de `local`/`test`. Que `dispatch` no lance tiene un
+//    precio: el relay marca como publicadas filas que nunca salieron, y `reliability:
+//    outbox` —que el diseño eligió para que ningún evento se perdiera— se convierte en
+//    perder todos los eventos sin un solo error. En local eso es justo lo que se quiere
+//    (arrancar sin broker); en cualquier otro perfil es la peor forma de fallar.
 function renderDispatcherStub(model) {
-  const body = `@Component
-public class OutboxDispatcherStub implements OutboxDispatcher {
+  const body = `/**
+ * Fallback del puerto de salida del outbox mientras no hay dispatcher real.
+ *
+ * Cede el sitio en cuanto exista otro bean de {@link OutboxDispatcher}: no hay que
+ * borrar este archivo, hay que escribir el de verdad.
+ */
+@Configuration
+public class OutboxDispatcherFallbackConfig {
 
-    private static final Logger log = LoggerFactory.getLogger(OutboxDispatcherStub.class);
+    private static final Logger log = LoggerFactory.getLogger(OutboxDispatcherFallbackConfig.class);
 
-    @Override
-    public void dispatch(String destination, String routingKey, String eventType, String payload) {
-        // TODO (agente): sustituir este stub por el dispatcher real del broker
-        //   elegido en keel-stack.json (skill keel-spring-<broker>):
-        //   enviar el payload tal cual (ya es la EventEnvelope serializada) al
-        //   destino/routing key indicados, con content-type application/json.
-        log.warn("OutboxDispatcher no implementado: {} no salió a {}/{}", eventType, destination, routingKey);
+    /** Perfiles en los que arrancar sin broker es legítimo. */
+    private static final Set<String> TOLERATED = Set.of("local", "test");
+
+    @Bean
+    @ConditionalOnMissingBean(OutboxDispatcher.class)
+    public OutboxDispatcher outboxDispatcherStub(Environment environment) {
+        List<String> active = List.of(environment.getActiveProfiles());
+        if (!active.isEmpty() && active.stream().noneMatch(TOLERATED::contains)) {
+            // El relay daría por publicada cada fila que le pase por aquí. Con
+            // reliability: outbox eso no es degradarse, es perderlo todo en silencio.
+            throw new IllegalStateException(
+                "No hay implementación de OutboxDispatcher y el perfil activo es " + active
+                    + ": el relay marcaría como publicados eventos que nunca salen del proceso. "
+                    + "Impleméntalo con la skill keel-spring-<broker> del stack elegido en keel-stack.json.");
+        }
+        log.warn("OutboxDispatcher sin implementar: los eventos NO salen del proceso (perfil {})", active);
+        return (destination, routingKey, eventType, payload) -> {
+            // TODO (agente): sustituir este stub por el dispatcher real del broker
+            //   elegido en keel-stack.json (skill keel-spring-<broker>):
+            //   enviar el payload tal cual (ya es la EventEnvelope serializada) al
+            //   destino/routing key indicados, con content-type application/json.
+            log.warn("OutboxDispatcher no implementado: {} no salió a {}/{}", eventType, destination, routingKey);
+        };
     }
 }`;
 
   return {
-    path: javaPath(model, 'infrastructure.messaging', 'OutboxDispatcherStub'),
+    path: javaPath(model, 'infrastructure.messaging', 'OutboxDispatcherFallbackConfig'),
     content: javaFile(
       subPackage(model, 'infrastructure.messaging'),
       [
+        'java.util.List',
+        'java.util.Set',
         'org.slf4j.Logger',
         'org.slf4j.LoggerFactory',
-        'org.springframework.stereotype.Component',
+        'org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean',
+        'org.springframework.context.annotation.Bean',
+        'org.springframework.context.annotation.Configuration',
+        'org.springframework.core.env.Environment',
         `${subPackage(model, OUTBOX_PKG)}.OutboxDispatcher`
       ],
       body

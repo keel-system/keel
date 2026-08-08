@@ -89,9 +89,11 @@ public class RabbitMqConfig {
 
 Qué implementas depende de la `reliability` declarada en `messaging.keel.yaml`:
 
-**`outbox`** — implementa `OutboxDispatcher` (`infrastructure/messaging/outbox`) y elimina
-`OutboxDispatcherStub`. El payload que recibes **ya es la `EventEnvelope` serializada**: mándalo
-tal cual, sin volver a serializar ni envolver.
+**`outbox`** — implementa `OutboxDispatcher` (`infrastructure/messaging/outbox`) como un `@Component`.
+**No borres `OutboxDispatcherFallbackConfig`**: su bean es `@ConditionalOnMissingBean`, así que se aparta
+solo en cuanto exista el tuyo, y sigue ahí para fallar al arrancar si algún día vuelve a faltar. El
+payload que recibes **ya es la `EventEnvelope` serializada**: mándalo tal cual, sin volver a
+serializar ni envolver.
 
 ```java
 @Component

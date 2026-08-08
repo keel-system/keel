@@ -6,7 +6,10 @@ dependencies:
     activations:
       reserveStock:
         description: Bloqueo del stock del pedido en el almacén.
-        triggeredBy: [confirmReservation]
+        # El barrido aparece aquí porque su desenlace es volver a pedir el bloqueo: es
+        # lo que lo enlaza con lo que reconcilia (la otra forma sería una transición de
+        # salida). Sin ese enlace sería un `schedule` que no toca nada de esto.
+        triggeredBy: [confirmReservation, reconcileReservations]
         via:
           client: inventory
           call: reserveStock

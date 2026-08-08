@@ -83,5 +83,33 @@ export function checkSupportedFeatures(manifest, layers) {
     );
   }
 
+  // Las dos patas de la robustez que NO aterrizan en una clase. Los otros tres ejes de
+  // repetición sí lo hacen entero —`idempotency_record` con su store, `processed_event`
+  // con su guard, `OutboundIdempotency` cableada en el adaptador—, y por eso no están
+  // aquí. Compensación y reconciliación son distintas: build sabe todo lo necesario y aun
+  // así lo único que produce es doctrina (javadoc y notas de stub), porque el trabajo real
+  // es lógica de negocio. Se dice en voz alta por lo mismo que `awaits: outcome`: quien
+  // declara el campo tiene derecho a saber qué recibe de vuelta.
+  const compensated = [];
+  const reconciled = [];
+  for (const [id, dep] of Object.entries(layers?.dependencies?.dependencies ?? {})) {
+    for (const compensation of dep?.compensations ?? []) {
+      compensated.push(`${id}.${compensation.onEvent}${compensation.undoes ? ` → ${compensation.undoes}` : ''}`);
+    }
+    for (const [name, activation] of Object.entries(dep?.activations ?? {})) {
+      if (activation?.reconciledBy) reconciled.push(`${id}.${name} → ${activation.reconciledBy}`);
+    }
+  }
+  if (compensated.length > 0) {
+    warnings.push(
+      `dependencies.compensations (${compensated.join(', ')}): keel-spring no genera ninguna clase propia — una compensación es una suscripción normal, y lo que build garantiza es su guarda (la transición del agregado o el IdempotencyGuard del listener) más la doctrina en el javadoc del <Evento>Message y en la nota del handler. Deshacer el trabajo, y devolver el estado que movió, lo escribe el agente de código y lo verifica el de calidad.`
+    );
+  }
+  if (reconciled.length > 0) {
+    warnings.push(
+      `dependencies.activations.reconciledBy (${reconciled.join(', ')}): build genera el @Scheduled con su cron y la nota de qué barrer, pero la consulta de candidatos, el umbral y la decisión (reintentar el encargo o compensarlo) los escribe el agente. Y queda fuera del gate CONDUCTUAL: el arnés de integración es caja negra y un cron no es alcanzable desde fuera, así que ningún escenario FL-* lo ejercita. Lo cubre infra/check-idempotency.sh en estático, y la prueba en vivo es del diseñador.`
+    );
+  }
+
   return { errors, warnings };
 }

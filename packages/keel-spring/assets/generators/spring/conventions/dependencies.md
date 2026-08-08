@@ -64,7 +64,11 @@ suscripción ya declara `triggers`, así que la operación de proyección existe
 3. **ACL siempre.** La respuesta del proveedor se mapea con el `<C>Mapper` del cliente a la entidad de
    dominio; el record wire nunca cruza a `domain` ni a `application`.
 4. **Idempotencia por construcción.** El upsert por `keyField` hace que una reentrega no corrompa la
-   copia. El `IdempotencyGuard` es la primera red; el upsert, la segunda.
+   copia. El `IdempotencyGuard` es la primera red; el upsert, la segunda. Y esa segunda red importa
+   más de lo que parece: la primera **caduca**. El guard recuerda los mensajes procesados durante
+   `processed-event.purge.retention-days` (default 14 días, en `parameters/`), y una reentrega
+   posterior a ese plazo vuelve a pasar. Con un upsert eso es inocuo; en un handler que **suma** en
+   vez de fijar, no lo sería — ahí la guarda que vale es la del dominio, que no tiene ventana.
    Como el dominio está encapsulado (sin setters, ver `domain-modeling.md`), el Projector no construye
    ni muta la entidad directamente: llama a `<E>.projectionOf(...)` para crearla y a
    `existing.applySnapshot(...)` para actualizarla. **Esos dos métodos los escribes tú**, con la firma

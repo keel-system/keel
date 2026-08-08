@@ -119,7 +119,22 @@ ${names
   .join('\n')}
 `;
 
-const catalogDesign = { layers: { domain: DOMAIN, 'use-cases': USE_CASES, messaging: messaging(['FlightScheduled']) } };
+// El outbox es una tabla: sin capa persistence el diseño no valida, y sin validar
+// no cuenta como `designed`, que es lo que estos tests contrastan.
+const PERSISTENCE = `default:
+  model: relational
+entities:
+  Flight: {}
+`;
+
+const catalogDesign = {
+  layers: {
+    domain: DOMAIN,
+    'use-cases': USE_CASES,
+    messaging: messaging(['FlightScheduled']),
+    persistence: PERSISTENCE
+  }
+};
 
 // --- Mapas de fixture -------------------------------------------------------
 
@@ -503,7 +518,8 @@ const compensatingDesign = (options) => ({
     domain: DOMAIN,
     'use-cases': USE_CASES,
     messaging: PAYMENTS_MESSAGING,
-    dependencies: paymentsDependency(options)
+    dependencies: paymentsDependency(options),
+    persistence: PERSISTENCE
   }
 });
 
