@@ -149,6 +149,8 @@ Un evento-comando **no deja de ser legítimo por serlo**: un servicio genérico 
 
 Es una decisión de **negocio**: `acknowledgement` y `nothing` significan que el trabajo puede no llegar a hacerse y que la operación propia dio el visto bueno igualmente. Si eso no es aceptable (un cobro), el `awaits` es `outcome`.
 
+`awaits` describe lo que la operación necesita para **terminar**, no cómo se entera después. Esperar el desenlace por un **evento** que llegará más tarde no es ninguno de los tres valores: es una combinación —publicar el encargo, dejar el agregado en un estado intermedio y suscribirse al evento de resultado— y en ella `awaits` es `acknowledgement`, porque la operación propia sí terminó. Es la forma que necesita `reconciledBy`, y está desarrollada abajo.
+
 ### `onFailure` — qué pasa si el encargo no sale
 
 Obligatorio con `via` HTTP, por el mismo motivo que `onMiss` en una réplica: siempre ocurre, y es comportamiento observable en la API propia. `fail` exige el `error` (declarado por alguna operación de `use-cases`), `degrade` exige el `degradedTo` en prosa, e `ignore` no exige nada — pero solo es honesto cuando el negocio de verdad no cuenta con ese trabajo. Con `via: { publishes }` no aplica: la entrega la garantiza `reliability: outbox`.
@@ -159,7 +161,31 @@ Y esa última frase es literal: la garantía la da el outbox, no el hecho de pub
 
 `onFailure` cubre que el encargo **no salga**, y una `compensation` cubre que el proveedor **avise** de que su trabajo no vale. Falta el tercer desenlace, que es el único que no produce ningún hecho: el proveedor acepta el encargo y luego cae, pierde el mensaje, o ni siquiera se entera de que hay que deshacerlo. Entonces no llega ningún evento, nada se dispara, y el encargo queda hecho con nuestra entidad esperando un desenlace que no va a venir. El sistema no está roto: está callado.
 
-Lo que detecta lo que **no** ha pasado es un barrido, así que `reconciledBy` cita una operación propia con `schedule` — `keel validate` da error si no lo tiene, porque una reconciliación que hay que disparar a mano no reconcilia nada. Qué hace con lo que encuentra (reintentar el encargo o disparar la compensación) es decisión de negocio, y el umbral de «demasiado tiempo» es configuración del servicio generado, nunca una constante en el código.
+**Qué es, en una frase**: un cron que consulta **tu propia base de datos** buscando agregados atascados en un estado de espera, y los desatasca. No es un coordinador distribuido ni un gestor de transacciones; mira tu estado, no el ajeno. Y es un mecanismo aparte porque **no detecta un fallo, detecta una ausencia**: un fallo produce un hecho al que reaccionar —una excepción, un evento—, y una ausencia no produce nada. Lo único que puede ver algo que no ocurrió es algo que corre solo, y de ahí el `schedule`: `keel validate` da error si la operación citada no lo tiene, porque una reconciliación que hay que disparar a mano no reconcilia nada.
+
+#### El requisito: un estado que signifique «esperando»
+
+Esto es lo que decide si la necesitas, y la pregunta es literal: **¿qué estado de mi `lifecycle` significa «esperando»?** Sin uno observable no hay nada que barrer y `reconciledBy` sobra. Depende de **cómo** se encarga el trabajo:
+
+| Forma de encargar | Cómo nos enteramos del desenlace | ¿Reconciliación? |
+|---|---|---|
+| **Síncrona** — `via: { client }` + `awaits: outcome` | En el acto: la llamada devuelve sí o no | Sí, pero para el silencio **en duda** (abajo) |
+| **Publicar y olvidar** — `via: { publishes }` + `awaits: nothing` | Nunca, y el negocio ya dijo que le vale | **No**: no hay nada esperando |
+| **Publicar y esperar el desenlace** — `via: { publishes }` **+ suscripción al evento de resultado + estado intermedio** | Por un evento que llega después | **Sí**: es su caso canónico |
+
+La tercera fila **no es un valor de `awaits`**: es una combinación que se declara en tres sitios. El encargo sale publicado, el agregado se queda en un estado como `awaitingStock`, y una suscripción a `StockReserved` / `StockRejected` lo saca de ahí. Si no llega ninguno de los dos, se queda ahí para siempre — sin excepción, sin log de error, sin alarma— y eso es exactamente lo que el barrido busca: `WHERE status = 'awaitingStock' AND updatedAt < ahora - umbral`.
+
+#### Tres silencios, tres barridos
+
+Confundirlos es lo que hace el concepto resbaladizo, porque cada uno busca algo distinto:
+
+| Silencio | Cuándo ocurre | Qué barre |
+|---|---|---|
+| **Esperando** | El desenlace por evento no llegó nunca | Lo parado en el estado de espera. Es el canónico |
+| **En duda** | La llamada síncrona dio timeout **después** de que el proveedor confirmara: nosotros revertimos, él no | Lo que **no** avanzó de nuestro lado y aun así pudo dejar trabajo hecho fuera |
+| **Deriva** | Los dos lados creen cosas distintas y ningún evento lo va a decir nunca | Se vuelve a preguntar. Es auditoría periódica, no reconciliación de un encargo concreto |
+
+Qué hace con lo que encuentra (reintentar el encargo, compensarlo o rendirse) es decisión de negocio, y el umbral de «demasiado tiempo» es configuración del servicio generado, nunca una constante en el código.
 
 Existir, correr por el reloj y no ser una lectura son la **forma** del barrido. Lo que lo hace un barrido *de esto* es estar enlazado con lo que reconcilia, y son las mismas salidas que hay que decidir de todos modos —reintentar el encargo, compensarlo o rendirse—; basta con una:
 

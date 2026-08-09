@@ -1,31 +1,27 @@
 clients:
   inventory:
-    purpose: Bloquear y liberar el stock físico, que es propiedad del almacén.
+    purpose: Anular el bloqueo de stock de los encargos que se dieron por perdidos.
     calls:
-      reserveStock:
-        contract: POST /stock/reservations bloquea el stock del pedido y devuelve { reserved }.
-        method: POST
-        path: /stock/reservations
+      cancelStock:
+        contract: DELETE /stock/reservations/{orderId} anula el bloqueo y devuelve { cancelled }.
+        method: DELETE
+        path: /stock/reservations/{orderId}
         request:
-          body:
+          pathParams:
             orderId:
               type: uuid
               required: true
-            sku:
-              type: string
-              required: true
-            quantity:
-              type: int
-              required: true
         response:
           fields:
-            reserved:
+            cancelled:
               type: boolean
               required: true
         timeoutMs: 3000
-        # La cara SALIENTE de la idempotencia. Sin ella, un timeout de red haría que
-        # el reintento bloquease el stock dos veces en el almacén — y esa es
-        # exactamente la deuda que la compensación de abajo tendría que ir a limpiar.
+        # La cara SALIENTE de la idempotencia, y aquí está especialmente bien traída: el
+        # barrido cancela un bloqueo que puede no existir, sobre un encargo del que ya no
+        # sabemos nada. Con `retry` y sin esto, un timeout de red haría que el almacén
+        # recibiera dos cancelaciones — y la segunda podría anular un bloqueo NUEVO del
+        # mismo pedido, creado entretanto.
         idempotency:
           keyFrom: payload-hash
         retry:
@@ -37,4 +33,4 @@ clients:
           failureRateThreshold: 50
           slidingWindowSize: 10
           waitDurationMs: 20000
-        fallback: Rechazar la confirmación con STOCK_UNAVAILABLE; sin bloqueo no hay reserva confirmada.
+        fallback: Dejar la reserva liberada de todos modos; el bloqueo huérfano lo resolverá el almacén por su cuenta.

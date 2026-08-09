@@ -26,7 +26,7 @@ operations:
       ttlSeconds: 3600
 
   confirmReservation:
-    description: Confirma la reserva encargando el bloqueo del stock al almacén.
+    description: Encarga al almacén el bloqueo del stock y deja la reserva esperando.
     kind: command
     input:
       fields:
@@ -39,14 +39,36 @@ operations:
       - code: RESERVATION_NOT_FOUND
         when: No existe una reserva con ese id.
         http: 404
-      - code: STOCK_UNAVAILABLE
-        when: El almacén no pudo bloquear el stock del pedido.
-        http: 502
-    # Es la operación que MUEVE el estado, y por tanto la que crea la deuda: a partir
-    # de aquí hay trabajo encargado al almacén que alguien tendrá que deshacer.
+    # El encargo viaja PUBLICADO, así que esta operación no conoce el desenlace: lo
+    # que hace es dejar la reserva esperándolo. Es la operación que crea la deuda —a
+    # partir de aquí hay trabajo encargado al almacén— y también la que crea el estado
+    # de espera del que vive `reconciledBy`.
+    emits: [StockReservationRequested]
     transitions:
       - entity: Reservation
         from: [pending]
+        to: awaitingStock
+
+  applyStockReserved:
+    description: Confirma la reserva cuando el almacén avisa de que bloqueó el stock.
+    kind: command
+    # El desenlace BUENO del encargo asíncrono. Sin esta operación la reserva no
+    # saldría nunca de la espera por la vía normal, y el barrido acabaría rindiéndose
+    # con todas: la reconciliación no sustituye al camino feliz, lo respalda.
+    internal: true
+    input:
+      fields:
+        orderId:
+          type: uuid
+          required: true
+    output: "void"
+    errors:
+      - code: RESERVATION_NOT_FOUND
+        when: No existe una reserva para ese pedido.
+        http: 404
+    transitions:
+      - entity: Reservation
+        from: [awaitingStock]
         to: confirmed
 
   getReservation:
@@ -85,20 +107,33 @@ operations:
         when: No existe una reserva para ese pedido.
         http: 404
     # El estado de vuelta: deshacer contra el almacén sin devolver esto dejaría la
-    # reserva en `confirmed`, es decir, donde la puso un trabajo que ya no existe.
+    # reserva donde la puso un trabajo que ya no existe. Los dos `from` no son laxitud:
+    # entre que se publica el encargo y que el almacén responde no hay orden garantizado,
+    # así que el rechazo puede llegar con la reserva todavía esperando (awaitingStock) o
+    # ya confirmada (confirmed). Ninguno de los dos vuelve a `released` desde `released`,
+    # que es lo que la mantiene irrepetible.
     transitions:
       - entity: Reservation
-        from: [confirmed]
+        from: [awaitingStock, confirmed]
         to: released
 
   reconcileReservations:
-    description: Revisa las reservas confirmadas que siguen sin desenlace del almacén.
+    description: Barre las reservas que llevan demasiado tiempo esperando al almacén.
     kind: command
     internal: true
     input: "void"
     output: "void"
-    # La pata del SILENCIO: si el almacén nunca publica su rechazo —cae, pierde el
-    # mensaje, o ni sabe que hay que deshacerlo— no llega ningún evento y la reserva
-    # se queda confirmada para siempre. Lo que no pasa solo lo detecta un barrido.
+    # La pata del SILENCIO. El encargo salió publicado y el desenlace llega por evento:
+    # si el almacén cae, pierde el mensaje o nunca responde, no llega NI StockReserved
+    # ni StockRejected, y la reserva se queda en `awaitingStock` para siempre. No hay
+    # excepción, no hay log de error, no hay alarma — una ausencia no produce ningún
+    # hecho al que reaccionar, y por eso lo único que la ve es algo que corre solo.
+    #
+    # Se rinde: cancela el encargo contra el almacén (por si llegó a bloquear stock sin
+    # que su respuesta nos llegara) y saca la reserva de la espera.
     schedule:
       cron: "*/15 * * * *"
+    transitions:
+      - entity: Reservation
+        from: [awaitingStock]
+        to: released

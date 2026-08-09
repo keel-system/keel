@@ -18,7 +18,11 @@ dependencies:
     activations:
       scanAsset:
         description: Análisis del binario antes de darlo por publicable.
-        triggeredBy: [publishAsset]
+        # El barrido vuelve a pedir el análisis: preguntar otra vez «¿este binario es
+        # seguro?» no tiene efecto acumulable —a diferencia de reencargar un bloqueo de
+        # stock, que reservaría dos veces—, así que reintentar el encargo es aquí la
+        # salida natural. Es lo que enlaza el barrido con lo que reconcilia.
+        triggeredBy: [publishAsset, reconcileScans]
         via:
           client: scanner
           call: scanAsset

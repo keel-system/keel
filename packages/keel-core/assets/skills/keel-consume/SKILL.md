@@ -116,12 +116,31 @@ una promesa al cliente, no un detalle técnico.
    basta con que el proveedor lo aceptara (`acknowledgement`), o lo delega y sigue (`nothing`)? Pregúntalo
    así, en consecuencias: con `acknowledgement` o `nothing`, el trabajo **puede no llegar a hacerse** y
    la operación propia habrá respondido que todo fue bien. ¿Es aceptable?
-3. **`via`** — el canal se deduce de lo anterior, no se elige por gusto: `outcome` exige una llamada de
-   `http-clients`; un encargo que se delega puede ir por un evento propio (`{ publishes: <Evento> }`).
-4. **`onFailure`** (solo con `via` HTTP) — `fail` con qué error visible, `degrade` con qué resultado
+3. **Desenlace diferido** — si la respuesta al punto 2 es «necesito enterarme, pero el proveedor no
+   puede contestar en el acto», la salida **no** es subir a `outcome`: es la tercera forma de encargar.
+   Se publica el encargo, la entidad queda en un **estado de espera** y el desenlace llega por un evento
+   de resultado al que nos suscribimos. `awaits` sigue siendo `acknowledgement` —la operación propia sí
+   terminó—. Pregunta entonces por dónde llega ese desenlace, y por el estado en el que la entidad se
+   queda mientras tanto.
+
+   Ojo con el error contrario: **el estado de espera no lo crea el evento, lo crea necesitar el
+   desenlace.** Un encargo `awaits: nothing` no lleva estado intermedio; ponérselo fabrica una espera
+   que el negocio no tiene y de la que nadie va a sacar a la entidad.
+
+   Si hay desenlace diferido, son **tres declaraciones acopladas** (detalle en
+   `references/consume-interview.md § Desenlace diferido`): el estado en `domain: lifecycle` con sus
+   aristas de salida y la `transitions` de la operación que encarga; la operación `internal` que aplica
+   el desenlace bueno, disparada por la suscripción al evento de resultado; y `reconciledBy` con una
+   operación `schedule` que barra lo que lleve demasiado tiempo esperando. Sin la tercera has construido
+   un sitio donde las cosas se quedan atascadas para siempre sin producir ningún error. Y avisa de que
+   ese estado es **contrato público**: la operación deja de poder prometer «confirmado» en su respuesta.
+4. **`via`** — el canal se deduce de lo anterior, no se elige por gusto: `outcome` exige una llamada de
+   `http-clients`; un encargo que se delega —con desenlace diferido o sin él— va por un evento propio
+   (`{ publishes: <Evento> }`).
+5. **`onFailure`** (solo con `via` HTTP) — `fail` con qué error visible, `degrade` con qué resultado
    exacto, o `ignore`. Cuidado con `ignore`: solo es honesto si el negocio de verdad no cuenta con ese
    trabajo; si alguien lo va a echar de menos, es `fail` o `degrade`.
-5. **`contract.version`** — con más razón que al leer. Una activación nos acopla al contrato de
+6. **`contract.version`** — con más razón que al leer. Una activación nos acopla al contrato de
    **entrada** del proveedor, y un campo nuevo obligatorio en su firma nos rompe sin que toquemos nada.
 
 **Si la activación va por evento**, hay un compromiso del otro lado que hay que verificar, no suponer:
@@ -136,10 +155,10 @@ en orden de capa y valida con `keel validate --wip` sobre la marcha.
 
 | Artefacto | Qué escribir |
 |---|---|
-| `domain` | La entidad de la copia, con **solo los campos que este servicio lee**, `unique: true` en el `keyField`, y una `description` que diga que es una proyección de `<proveedor>` y **no fuente de verdad**. Nunca copies el agregado ajeno entero. |
-| `use-cases` | La **operación de proyección** (`internal: true`, p. ej. `applyProductSnapshot`) que la suscripción dispara — una réplica la exige, porque `subscriptions.triggers` es obligatorio. Y los `errors` nuevos que exige `onMiss.action: fail`, en **cada** operación de `usedBy`. |
+| `domain` | La entidad de la copia, con **solo los campos que este servicio lee**, `unique: true` en el `keyField`, y una `description` que diga que es una proyección de `<proveedor>` y **no fuente de verdad**. Nunca copies el agregado ajeno entero. **Con desenlace diferido**, además: el **estado de espera** en el `lifecycle` de la entidad que queda esperando, con sus aristas de salida (confirmación, rechazo, rendición del barrido). |
+| `use-cases` | La **operación de proyección** (`internal: true`, p. ej. `applyProductSnapshot`) que la suscripción dispara — una réplica la exige, porque `subscriptions.triggers` es obligatorio. Y los `errors` nuevos que exige `onMiss.action: fail`, en **cada** operación de `usedBy`. **Con desenlace diferido**, además: la `transitions` que mete la entidad en la espera, la operación `internal` que **aplica el desenlace** (p. ej. `applyStockReserved`) y la operación con `schedule` que barre. |
 | `http-clients` | `clients.<proveedor>` con `purpose`, `auth` derivado de `m2mAuth` (`client-credentials` → `oauth2-client-credentials`; **si el front-matter no da `tokenUrl`, pregúntalo**, el schema lo exige), y una `calls.<name>` por endpoint que se use, con `contract` en prosa + `method`/`path` del front-matter + `request`/`response` tipados del cuerpo. `timeoutMs`, `retry`, `circuitBreaker` y `fallback` se **entrevistan**, nunca se ponen por defecto. |
-| `messaging` (entrada) | El canal con `external: true`, y una `subscriptions.<Evento>` por cada evento de `fedBy` y por cada compensación: `source` = nombre del proveedor, `contract` (`envelope: keel` si el proveedor es un servicio Keel), `payload`, `triggers` y `onFailure`. |
+| `messaging` (entrada) | El canal con `external: true`, y una `subscriptions.<Evento>` por cada evento de `fedBy`, por cada compensación y —con desenlace diferido— por el **evento de resultado** del encargo: `source` = nombre del proveedor, `contract` (`envelope: keel` si el proveedor es un servicio Keel), `payload`, `triggers` y `onFailure`. |
 | `messaging` (salida) | Con una activación por evento: el `publishing.events.<Evento>` que se emite, **con el payload que exige el proveedor** — lo copias de su `INTEGRATION.md` §Suscripciones, campo a campo; su firma la fija él, no nosotros. |
 | `persistence` | La entidad de la copia en `entities`, con índice por `keyField`. |
 | `dependencies` + manifiesto | La capa entera (síntesis de todo lo anterior: `needs` y `activations`) y `layers.dependencies` en `service.keel.yaml`. |

@@ -78,7 +78,8 @@ la respuesta degradada de la normal, no es `degrade` — es un bug declarado.
 |---|---|---|
 | **Efecto** | ¿Qué hace exactamente el proveedor al recibirlo? | `effect` (prosa, **sacado de su contrato**) |
 | **Desenlace** | ¿Esta operación necesita el resultado para continuar, le basta con que lo aceptara, o lo delega y sigue? | `awaits` |
-| **Canal** | *(se deduce del anterior)* | `via` |
+| **Desenlace diferido** | Si necesita el resultado pero el proveedor **no puede darlo en el acto**, ¿por dónde llega? | suscripción al evento de resultado + estado de espera en `domain: lifecycle` + `reconciledBy` |
+| **Canal** | *(se deduce de los dos anteriores)* | `via` |
 | **Fallo** | Si el encargo no sale, ¿qué ve el cliente de nuestra API? | `onFailure` |
 
 ### `awaits`: qué se está prometiendo
@@ -92,6 +93,23 @@ la respuesta degradada de la normal, no es `degrade` — es un bug declarado.
 La pregunta que desempata: **si ese trabajo no llegara a hacerse, ¿quién lo echaría de menos y cuándo se
 enteraría?** Si la respuesta es "el cliente, y tarde", ni `nothing` ni `ignore` son aceptables.
 
+**Y si la respuesta a `acknowledgement` es «no me vale, necesito enterarme», la salida no es subir a
+`outcome`.** Hay una tercera forma de encargar, y es la que se olvida porque no tiene un valor propio en
+el enum: **el desenlace diferido**. Se declara componiendo, y `awaits` sigue siendo `acknowledgement`
+—la operación propia sí terminó—:
+
+| | Encargo síncrono | Publicar y olvidar | **Desenlace diferido** |
+|---|---|---|---|
+| `via` | `{ client, call }` | `{ publishes }` | `{ publishes }` |
+| `awaits` | `outcome` | `nothing` | `acknowledgement` |
+| Cómo nos enteramos | La llamada devuelve sí o no | No nos enteramos | Por un **evento de resultado** al que nos suscribimos |
+| Estado de la entidad | Termina resuelta | Termina resuelta | Queda en un **estado de espera** |
+| Si no llega nada | No aplica: la llamada falla | No aplica: no esperamos nada | Se queda esperando para siempre → **`reconciledBy`** |
+
+**El estado de espera no lo crea el evento, lo crea necesitar el desenlace.** Un encargo `awaits:
+nothing` no lleva estado intermedio, y ponérselo fabrica una espera que el negocio no tiene y de la que
+nadie va a sacar a la entidad.
+
 ### `onFailure`: qué exige cada acción (solo con `via` HTTP)
 
 | `action` | Exige | Qué observa el cliente | Cuándo elegirla |
@@ -102,6 +120,23 @@ enteraría?** Si la respuesta es "el cliente, y tarde", ni `nothing` ni `ignore`
 
 `ignore` es a las activaciones lo que `degrade` a las réplicas: la opción peligrosa. Silencia un trabajo
 que no se hizo, y la operación propia responde `200`.
+
+### Desenlace diferido: las tres declaraciones acopladas
+
+No es un campo, son tres cosas que se escriben juntas o el diseño queda a medias:
+
+1. **El estado de espera**, en `domain: lifecycle` de la entidad que queda esperando, con sus aristas de
+   salida — confirmación, rechazo y rendición del barrido. Y la `transitions` de la operación que
+   encarga, que es la que mete la entidad ahí.
+2. **La operación que aplica el desenlace bueno** (`internal: true`), disparada por la suscripción al
+   evento de resultado. Sin ella la entidad no sale nunca de la espera por la vía normal y el barrido
+   acaba rindiéndose con todas: la reconciliación respalda el camino feliz, no lo sustituye.
+3. **`reconciledBy`** con su operación `schedule`, que barre lo que lleva demasiado tiempo esperando.
+
+Y una consecuencia que se pasa por alto: **el estado de espera es contrato público**. Si la API lo
+devuelve, el cliente lo ve y tiene que saber qué hacer con él; la operación deja de poder prometer
+«confirmado» en su respuesta, y los escenarios de validación tienen que afirmar el estado de espera, no
+el final.
 
 ### Activación por evento: el compromiso del otro lado
 

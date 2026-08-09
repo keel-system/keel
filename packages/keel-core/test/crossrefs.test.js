@@ -3457,3 +3457,23 @@ test('encargar a OTRO proveedor no cuenta: no reconcilia este encargo', () => {
     warnings.join('\n')
   );
 });
+
+test('reconciledBy sin estado de espera es aviso, aunque el barrido reencargue', () => {
+  // El caso que antes pasaba en silencio: el barrido cumplía el enlace (reencarga) y
+  // nadie comprobaba que hubiera algo parado que encontrar. Reconciliar es sacar de la
+  // espera lo que se quedó ahí; sin estado de espera no hay consulta que escribir.
+  const layers = compLayers();
+  delete layers['use-cases'].operations.retireProduct.transitions;
+  const { warnings } = run(layers);
+  assert.ok(
+    warnings.some((w) => w.includes('no hay un estado que signifique «esperando»')),
+    warnings.join('\n')
+  );
+});
+
+test('con estado de espera declarado no se dice nada (sin regresión)', () => {
+  // El fixture base: retireProduct mueve Product a `retired` al encargar la inscripción.
+  const { warnings } = run(compLayers());
+  assert.ok(!warnings.some((w) => w.includes('esperando»')), warnings.join('\n'));
+  assert.ok(!warnings.some((w) => w.includes('corre por el reloj')), warnings.join('\n'));
+});

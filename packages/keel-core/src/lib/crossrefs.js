@@ -1399,23 +1399,38 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
                 .flatMap((name) => operations[name]?.transitions ?? [])
                 .map((transition) => transition.entity)
             );
-            const movesWaiting = (sweeper.transitions ?? []).some((transition) => waiting.has(transition.entity));
-            const encargaAlProveedor = Object.values(dep.activations ?? {}).some((activation) =>
-              (activation.triggeredBy ?? []).includes(spec.reconciledBy)
-            );
-            if (!movesWaiting && !encargaAlProveedor) {
+            // Antes que el enlace, el requisito. Reconciliar es barrer lo que se quedó
+            // ESPERANDO, así que hace falta un estado del lifecycle que signifique eso —y
+            // lo crea la operación que encarga, moviendo la entidad al pedir el trabajo—.
+            // Si ninguna de las que disparan esta activación mueve ningún lifecycle, no
+            // hay nada parado que encontrar: el barrido correría cada N minutos sobre una
+            // consulta que no puede escribirse. Va aparte del enlace de abajo porque un
+            // barrido que reencarga lo enmascara: cumpliría esa comprobación y seguiría
+            // sin tener qué barrer.
+            if (waiting.size === 0) {
               warnings.push(
-                `${where}.reconciledBy: '${spec.reconciledBy}' corre por el reloj, pero nada en el diseño lo enlaza con lo ` +
-                  `que tiene que reconciliar` +
-                  (waiting.size > 0
-                    ? `: no declara ninguna transición sobre ${[...waiting].join(', ')} —las entidades que este encargo dejó ` +
-                      `esperando— ni aparece en el triggeredBy de ninguna activación de '${depName}' para reintentar el ` +
-                      `encargo o compensarlo. `
-                    : `: no aparece en el triggeredBy de ninguna activación de '${depName}' para reintentar el encargo o ` +
-                      `compensarlo, y las operaciones que disparan '${action}' no mueven ningún lifecycle del que salir. `) +
-                  `Un barrido que no toca lo que barre pasa esta validación y no reconcilia nada, y es justo el camino que ` +
-                  `nadie ejercita: declara la transición de salida, el reintento del encargo o la activación de vuelta`
+                `${where}.reconciledBy: ninguna de las operaciones que encargan '${action}' mueve el lifecycle de nada, ` +
+                  `así que no hay un estado que signifique «esperando» y el barrido no tiene qué buscar. Reconciliar es ` +
+                  `sacar de la espera lo que se quedó ahí: o la operación que encarga deja la entidad en ese estado ` +
+                  `—declarando su 'transitions'— o, si el desenlace se conoce en el acto, lo que sobra es 'reconciledBy'`
               );
+            } else {
+              // Y con el estado de espera ya declarado, el enlace: qué hace el barrido con
+              // lo que encuentra.
+              const movesWaiting = (sweeper.transitions ?? []).some((transition) => waiting.has(transition.entity));
+              const encargaAlProveedor = Object.values(dep.activations ?? {}).some((activation) =>
+                (activation.triggeredBy ?? []).includes(spec.reconciledBy)
+              );
+              if (!movesWaiting && !encargaAlProveedor) {
+                warnings.push(
+                  `${where}.reconciledBy: '${spec.reconciledBy}' corre por el reloj, pero nada en el diseño lo enlaza con ` +
+                    `lo que tiene que reconciliar: no declara ninguna transición sobre ${[...waiting].join(', ')} —las ` +
+                    `entidades que este encargo dejó esperando— ni aparece en el triggeredBy de ninguna activación de ` +
+                    `'${depName}' para reintentar el encargo o compensarlo. Un barrido que no toca lo que barre pasa esta ` +
+                    `validación y no reconcilia nada, y es justo el camino que nadie ejercita: declara la transición de ` +
+                    `salida, el reintento del encargo o la activación de vuelta`
+                );
+              }
             }
           }
         }

@@ -1,7 +1,10 @@
 types:
   ReservationStatus:
     description: Estados por los que pasa una reserva de stock.
-    values: [pending, confirmed, released]
+    # `awaitingStock` es el estado de ESPERA, y es lo que hace que la reconciliación
+    # tenga algo que barrer: el encargo se publicó y el desenlace llega por un evento
+    # que puede no llegar nunca. Sin un estado así, `reconciledBy` no tendría sentido.
+    values: [pending, awaitingStock, confirmed, released]
 
 entities:
   Reservation:
@@ -40,8 +43,13 @@ entities:
         # `released` es terminal y no aparece en ningún `from`: es lo que hace
         # IRREPETIBLE la compensación por construcción — aplicarla dos veces la
         # rechaza el propio agregado, sin depender de ninguna guarda del borde.
-        # Y una reserva pendiente no tiene stock bloqueado todavía: no hay nada que
+        # Y una reserva pendiente no tiene stock encargado todavía: no hay nada que
         # compensar, así que tampoco hay arista pending → released.
-        pending: [confirmed]
+        pending: [awaitingStock]
+        # Desde la espera se sale por tres sitios, y esa es toda la historia del
+        # encargo asíncrono: el almacén confirma (confirmed), el almacén rechaza o el
+        # barrido se rinde (released), o no pasa NADA y la reserva se queda aquí —
+        # que es justo lo que `reconciledBy` existe para detectar.
+        awaitingStock: [confirmed, released]
         confirmed: [released]
         released: []

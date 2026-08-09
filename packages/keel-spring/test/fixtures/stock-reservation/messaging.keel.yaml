@@ -1,10 +1,46 @@
-# Sin `publishing`: este servicio no publica nada. Lo que se prueba aquí es la mitad
-# ENTRANTE — el evento con el que el almacén dice que su bloqueo no valió — y el
-# registro de procesados que impide aplicarlo dos veces.
+# La silueta del encargo ASÍNCRONO, que es la que necesita reconciliación: se publica
+# la petición, la reserva se queda esperando, y el desenlace llega por uno de dos
+# eventos que pueden no llegar nunca. Aquí están las tres mitades: lo que sale
+# (publishing), lo que entra bien (StockReserved) y lo que entra mal (StockRejected).
+channels:
+  stockEvents:
+    description: Canal por el que este servicio encarga stock y el almacén responde.
+
+publishing:
+  # El encargo viaja publicado, así que la garantía de que sale no la da publicar: la
+  # da el outbox. Con `best-effort`, un broker caído en el instante del commit perdería
+  # el encargo sin dejar rastro, y no hay compensación posible de un trabajo que nunca
+  # se pidió — `keel validate` lo avisa.
+  reliability: outbox
+  events:
+    StockReservationRequested:
+      channel: stockEvents
+      description: Petición de bloqueo de stock dirigida al almacén.
+      payload:
+        orderId: { type: uuid, required: true }
+        sku:     { type: string, required: true }
+        quantity: { type: int, required: true }
+
 subscriptions:
-  StockRejected:
-    description: El almacén rechazó a posteriori un bloqueo de stock ya confirmado.
+  StockReserved:
+    description: El almacén confirma que bloqueó el stock del pedido.
     source: inventory
+    channel: stockEvents
+    payload:
+      orderId: { type: uuid, required: true }
+    contract:
+      envelope: keel
+    triggers: applyStockReserved
+    input:
+      orderId: orderId
+    onFailure:
+      retry: { maxAttempts: 5, backoff: exponential, initialDelayMs: 500, maxDelayMs: 15000 }
+      deadLetter: true
+
+  StockRejected:
+    description: El almacén rechaza el bloqueo de stock del pedido.
+    source: inventory
+    channel: stockEvents
     payload:
       orderId: { type: uuid, required: true }
       reason:  { type: string, required: true }
@@ -18,9 +54,9 @@ subscriptions:
     input:
       orderId: orderId
       reason: reason
-    # Una compensación puede llegar ANTES del hecho que compensa: entre que este
-    # servicio confirma la reserva y que el almacén publica su rechazo no hay orden
-    # garantizado. Los reintentos absorben esa carrera solos; la DLQ es la red.
+    # Una compensación puede llegar ANTES del hecho que compensa: entre que se publica
+    # el encargo y que el almacén responde no hay orden garantizado. Los reintentos
+    # absorben esa carrera solos; la DLQ es la red.
     onFailure:
       retry: { maxAttempts: 5, backoff: exponential, initialDelayMs: 500, maxDelayMs: 15000 }
       deadLetter: true

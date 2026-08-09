@@ -133,12 +133,15 @@ operations:
         to: quarantined
 
   reconcileScans:
-    description: Revisa los archivos publicados cuyo análisis sigue sin desenlace del escáner.
+    description: Vuelve a pedir el análisis de los archivos publicados sin veredicto firme.
     kind: command
     internal: true
     input: "void"
     output: "void"
-    # La pata del SILENCIO: si el escáner nunca publica su hallazgo, no llega ningún
-    # evento y el archivo se queda publicado. Lo que no pasa solo lo detecta un barrido.
+    # La pata del SILENCIO, en su variante de DERIVA: el escáner dio su veredicto en el
+    # acto, pero puede encontrar la amenaza más tarde y no publicarla nunca. Aquí no hay
+    # un desenlace que esperar sino una creencia que revalidar, así que el barrido no
+    # espera: vuelve a preguntar. Si el escáner responde con amenaza, el camino normal
+    # (ThreatFound → quarantineAsset) hace el resto.
     schedule:
       cron: "*/30 * * * *"

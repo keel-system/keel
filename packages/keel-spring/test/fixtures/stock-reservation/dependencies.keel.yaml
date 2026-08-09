@@ -6,22 +6,35 @@ dependencies:
     activations:
       reserveStock:
         description: Bloqueo del stock del pedido en el almacén.
-        # El barrido aparece aquí porque su desenlace es volver a pedir el bloqueo: es
-        # lo que lo enlaza con lo que reconcilia (la otra forma sería una transición de
-        # salida). Sin ese enlace sería un `schedule` que no toca nada de esto.
-        triggeredBy: [confirmReservation, reconcileReservations]
+        triggeredBy: [confirmReservation]
+        # Publicado, no llamado: el encargo tiene que acabar saliendo aunque el almacén
+        # esté caído, y eso lo garantiza el outbox. El precio es que aquí no hay
+        # desenlace —por eso el schema prohíbe `onFailure` en esta rama— y que la
+        # operación propia termina sin saber si el stock quedó bloqueado.
+        via:
+          publishes: StockReservationRequested
+        effect: El stock del pedido queda bloqueado y deja de estar disponible para otros.
+        # `acknowledgement`, no `outcome`: el desenlace existe, pero llega después y por
+        # otro canal (la suscripción a StockReserved / StockRejected). `outcome` exigiría
+        # un canal síncrono y `keel validate` lo daría en rojo.
+        awaits: acknowledgement
+        # La pata del SILENCIO. Si no llega ni la confirmación ni el rechazo, la reserva
+        # se queda en `awaitingStock` sin que nada lo delate: eso solo lo ve un barrido.
+        reconciledBy: reconcileReservations
+      cancelStock:
+        description: Cancelación del bloqueo de un encargo que se dio por perdido.
+        # Lo que ENLAZA el barrido con lo que reconcilia: rendirse no es solo mover el
+        # estado propio, es decírselo al almacén — que puede haber bloqueado el stock
+        # aunque su respuesta nunca nos llegara.
+        triggeredBy: [reconcileReservations]
         via:
           client: inventory
-          call: reserveStock
-        effect: El stock del pedido queda bloqueado y deja de estar disponible para otros.
+          call: cancelStock
+        effect: El bloqueo de stock del pedido queda anulado en el almacén.
         awaits: outcome
-        # Sin esto, toda la compensación depende de que el almacén se acuerde de
-        # publicar su rechazo. Cuando no lo hace, nada lo detecta.
-        reconciledBy: reconcileReservations
         onFailure:
-          action: fail
-          error: STOCK_UNAVAILABLE
+          action: ignore
     compensations:
       - onEvent: StockRejected
         undoes: reserveStock
-        description: El almacén rechazó el bloqueo a posteriori; la reserva se libera.
+        description: El almacén rechazó el bloqueo; la reserva se libera.

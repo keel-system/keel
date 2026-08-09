@@ -33,14 +33,17 @@
 | Operación | Flujos | Superficie |
 |-----------|--------|------------|
 | createReservation | FL-RES-001, FL-RES-001-B | usuarios |
-| confirmReservation | FL-RES-002, FL-RES-002-B | usuarios |
+| confirmReservation | FL-RES-002 | usuarios |
+| applyStockReserved | FL-RES-003 | suscripción (interna) |
 | getReservation | todos | usuarios |
 | releaseReservation | FL-CMP-001, FL-CMP-001-B | suscripción (interna) |
-| reconcileReservations | — | programada; sin efecto observable declarado |
+| reconcileReservations | — | programada; no alcanzable en caja negra |
 
-`reconcileReservations` no tiene flujo: el diseño declara **cuándo** corre, no qué corrige.
-Es un hueco declarado de esta fixture — lo que se prueba aquí es que la compensación por
-evento funciona, no la reconciliación por silencio.
+`reconcileReservations` no tiene flujo, y no por falta de efecto observable —lo tiene: saca
+la reserva de `awaitingStock` y llama al almacén— sino porque **el arnés es caja negra y un
+cron no se alcanza desde fuera**. Es `uncovered` declarado, y lo cubre
+`infra/check-idempotency.sh` en estático. El resto del encargo asíncrono sí se ejercita: el
+camino feliz (FL-RES-003), el rechazo (FL-CMP-001) y su reentrega (FL-CMP-001-B).
 
 ## Reserva de stock
 
@@ -63,30 +66,33 @@ evento funciona, no la reconciliación por silencio.
 2. No se crea una segunda reserva: el `orderId` sigue teniendo una sola, y un `POST` con
    `<o1>` y **otra** clave devuelve `409 RESERVATION_ALREADY_EXISTS`.
 
-## Confirmación contra el almacén
+## Encargo asíncrono al almacén
 
-### FL-RES-002: confirmar bloquea el stock en el proveedor
+### FL-RES-002: confirmar publica el encargo y deja la reserva esperando
 
-**Given**: existe la reserva `<r1>` de FL-RES-001 en `pending`; `inventory.reserveStock`
-responde `200 {reserved: true}`.
+**Given**: existe la reserva `<r1>` de FL-RES-001 en `pending`.
 
 **When**: `POST /api/v1/reservations/{r1}/confirm`.
 **Then**:
-1. Status `200` y `status` = `"confirmed"`.
-2. El proveedor recibió **exactamente una** llamada a `POST /stock/reservations`.
-3. Esa llamada llevaba la cabecera `Idempotency-Key`: es lo que impide que un reintento
-   nuestro bloquee el stock dos veces al otro lado.
+1. Status `200` y `status` = `"awaitingStock"` — **no** `confirmed`: esta operación no
+   conoce el desenlace, solo deja la reserva esperándolo.
+2. Se publica `StockReservationRequested` en el canal `stockEvents`, con `orderId` = `<o1>`,
+   `sku` y `quantity` de la reserva.
+3. El proveedor **no** recibe ninguna llamada HTTP: el encargo viaja publicado.
+4. `GET /api/v1/reservations/{r1}` sigue devolviendo `awaitingStock` — es el estado en el
+   que se queda si el almacén no responde nunca, y el que barre la reconciliación.
 
-#### FL-RES-002-B: el almacén no responde
+### FL-RES-003: el almacén confirma y la reserva sale de la espera
 
-**Given**: existe una reserva `<r2>` en `pending`; `inventory.reserveStock` devuelve `503`.
+**Given**: `<r1>` está en `awaitingStock` (FL-RES-002).
 
-**When**: `POST /api/v1/reservations/{r2}/confirm`.
+**When**: llega el evento entrante `StockReserved` con payload `{orderId: <o1>}`.
 **Then**:
-1. Status `502` con `code` = `"STOCK_UNAVAILABLE"`.
-2. `<r2>` sigue en `pending`: sin bloqueo no hay reserva confirmada.
-3. Los reintentos del cliente HTTP repiten la llamada con la **misma** clave de
-   idempotencia, no con una nueva.
+1. Se ejecuta `applyStockReserved`.
+2. `GET /api/v1/reservations/{r1}` devuelve `status` = `"confirmed"` y `releaseReason` =
+   `null`.
+3. Es el desenlace **bueno** del encargo: sin él la reserva no saldría nunca de la espera
+   por la vía normal, y el barrido acabaría rindiéndose con todas.
 
 ## Compensación: el almacén rechaza a posteriori
 
@@ -95,7 +101,7 @@ responde `200 {reserved: true}`.
 Cubre `inventory.compensations[0]` (`undoes: reserveStock`). La operación compensadora es
 `releaseReservation`, interna y disparada solo por la suscripción.
 
-**Given**: la reserva `<r1>` está en `confirmed` (FL-RES-002).
+**Given**: la reserva `<r1>` está en `confirmed` (FL-RES-003).
 
 **When**: llega el evento entrante `StockRejected` con payload
 `{orderId: <o1>, reason: "stock retirado por caducidad"}` y `messageId` `<m1>`.
@@ -113,7 +119,8 @@ Cubre `inventory.compensations[0]` (`undoes: reserveStock`). La operación compe
 1. `<r1>` sigue en `released` y `releaseReason` no cambia: ningún segundo efecto.
 2. El servicio **confirma** el mensaje sin volver a procesarlo — no acaba en la DLQ ni
    reintentando: una reentrega es el comportamiento normal de cualquier broker, no un fallo.
-3. Es lo que garantizan las dos mitades juntas: `contract.messageId` deduplica en el
-   listener, y la transición declarada (`from: [confirmed] → released`) rechaza la segunda
-   aplicación aunque el mensaje llegara por otro camino. Sin este escenario, una
+3. Es lo que garantizan las dos mitades juntas: la envoltura Keel deduplica en el listener
+   por `metadata.eventId`, y la transición declarada (`from: [awaitingStock, confirmed] →
+   released`) rechaza la segunda aplicación aunque el mensaje llegara por otro camino —
+   `released` no está en ningún `from`. Sin este escenario, una
    implementación que compensa dos veces pasa FL-CMP-001 sin que nada lo delate.
