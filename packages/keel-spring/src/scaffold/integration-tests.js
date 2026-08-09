@@ -13,8 +13,10 @@
 
 import { javaFile, javaPath } from './render.js';
 import { pascalCase } from '../lib/naming.js';
-import { DATABASES, BROKERS, CACHES, selectedInfra } from '../lib/stack-catalog.js';
+import { DATABASES, BROKERS, CACHES, selectedInfra, brokerContainer } from '../lib/stack-catalog.js';
 import { cacheFlushCmd, concreteCmd, needsDevtools } from './devtools.js';
+import { usesOutbox } from './outbox.js';
+import { needsMessagingProvisioning } from './messaging-provisioning.js';
 import { tokenUrl, userTestClient } from './auth-provisioning.js';
 import { declaresIdempotency } from './http-idempotency.js';
 // Fuente única de los comandos de broker: lo que se emite aquí es lo mismo que
@@ -316,9 +318,20 @@ function abstractImports(model) {
   const imports = [
     'java.time.Duration',
     'java.time.Instant',
+    'java.util.ArrayList',
     'java.util.List',
     'java.util.UUID',
     'java.util.function.BooleanSupplier',
+    // Los helpers de carrera (race/raceOf) son transversales: cualquier diseño puede
+    // tener un escenario que fije qué pasa cuando dos peticiones coinciden.
+    'java.util.concurrent.Callable',
+    'java.util.concurrent.CountDownLatch',
+    'java.util.concurrent.ExecutionException',
+    'java.util.concurrent.ExecutorService',
+    'java.util.concurrent.Executors',
+    'java.util.concurrent.Future',
+    'java.util.concurrent.TimeUnit',
+    'java.util.concurrent.TimeoutException',
     'org.junit.jupiter.api.BeforeAll',
     'org.junit.jupiter.api.MethodOrderer',
     'org.junit.jupiter.api.TestInstance',
@@ -343,8 +356,9 @@ function abstractImports(model) {
   ];
   const containerExec = usesContainerExec(model);
   if (reset || containerExec || oidc) imports.push('java.io.IOException');
-  // Resolución explícita del bash con el que se invocan los scripts de infra/.
-  if (reset) imports.push('java.io.File', 'java.util.Locale');
+  // Resolución explícita del bash con el que se invocan los scripts de infra/: la
+  // usan el reset de estado y la resiembra de topología de startBroker().
+  if (reset || needsBrokerReseed(model)) imports.push('java.io.File', 'java.util.Locale');
   // Motor de ejecución en contenedor (runProcess) y las dos vías que lo usan:
   // `devtools(...)` y `db(...)` construyen su lista de argumentos igual.
   if (containerExec) imports.push('java.nio.charset.StandardCharsets', 'java.util.ArrayList');
@@ -662,8 +676,74 @@ ${hasIdempotency(model) ? `
         throw new AssertionError("La condición no se cumplió en " + timeout);
     }
 
+    /**
+     * Ejecuta las tareas A LA VEZ y devuelve sus resultados en el orden de envío.
+     *
+     * <p>Para los escenarios que fijan qué pasa cuando dos peticiones idénticas, dos
+     * entregas del mismo mensaje o dos mutaciones sobre la misma entidad coinciden en
+     * el tiempo. Una sola instancia basta para ejercitarlos: el servidor es multihilo,
+     * y el árbitro de la carrera —la clave primaria, el lock de fila— es el mismo que
+     * arbitraría entre réplicas.
+     *
+     * <p>Tres reglas, y las tres son lo que hace que el escenario pruebe algo:
+     * <ul>
+     *   <li>Todas las tareas arrancan del <b>mismo latch</b>. Sin él, «simultáneo»
+     *       acaba siendo «una detrás de otra» —el coste de crear cada hilo basta para
+     *       serializarlas— y el escenario pasa sin haber ejercitado ninguna carrera.</li>
+     *   <li>Las excepciones <b>se relanzan</b>, no se tragan: un fallo silenciado en un
+     *       hilo secundario deja el {@code Then} afirmando sobre un {@code When} que
+     *       nunca ocurrió.</li>
+     *   <li>El método <b>no asserta nada</b>: junta y devuelve, para que toda aserción
+     *       siga ocurriendo en el hilo del test. Ahí es donde JUnit las recoge.</li>
+     * </ul>
+     *
+     * <p>El {@code Then} de una carrera se escribe como disyunción cerrada (los
+     * desenlaces admisibles, enumerados) más al menos una afirmación que no dependa de
+     * quién ganó — normalmente un conteo leído por la API. Ver
+     * conventions/integration-tests.md.
+     */
+    protected <T> List<T> race(List<Callable<T>> tasks) {
+        ExecutorService pool = Executors.newFixedThreadPool(tasks.size());
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+            List<Future<T>> pending = new ArrayList<>();
+            for (Callable<T> task : tasks) {
+                pending.add(pool.submit(() -> {
+                    start.await();
+                    return task.call();
+                }));
+            }
+            start.countDown();
+            List<T> results = new ArrayList<>();
+            for (Future<T> future : pending) {
+                try {
+                    results.add(future.get(30, TimeUnit.SECONDS));
+                } catch (ExecutionException e) {
+                    throw new AssertionError("Una rama de la carrera falló", e.getCause());
+                }
+            }
+            return results;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("La carrera fue interrumpida", e);
+        } catch (TimeoutException e) {
+            throw new AssertionError("La carrera no terminó a tiempo", e);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    /** La misma llamada, {@code times} veces a la vez. Ver {@link #race}. */
+    protected <T> List<T> raceOf(int times, Callable<T> task) {
+        List<Callable<T>> tasks = new ArrayList<>();
+        for (int i = 0; i < times; i++) {
+            tasks.add(task);
+        }
+        return race(tasks);
+    }
+
     // ── Estado e infraestructura ─────────────────────────────────────────────
-${resetSection(model)}${httpStubSection(model)}${devtoolsSection(model)}${dbSection(model)}${containerExecSection(model)}${securitySection(model)}}`;
+${resetSection(model)}${bashExecutableSection(model)}${httpStubSection(model)}${devtoolsSection(model)}${brokerControlSection(model)}${dbSection(model)}${containerExecSection(model)}${securitySection(model)}}`;
 }
 
 // Proveedor de prueba de las integraciones salientes. Es infraestructura, no un
@@ -819,6 +899,12 @@ function resetSection(model) {
   // destino, y eso vive en el proceso de test, no en el script.
   const kafka = brokerEntry(model)?.id === 'kafka';
   const marks = kafka ? '\n            markChannels();' : '';
+  // El broker vuelve a estar arriba ANTES de cualquier otra cosa del reset: un flujo
+  // de outbox lo detiene, y si su `finally` no llegó a correr (un assert que revienta
+  // antes, un timeout de Gradle) todos los flujos siguientes de la misma suite
+  // fallarían por una causa que no es la suya. Y el purgado del script habla con el
+  // broker, así que tiene que encontrarlo vivo.
+  const restore = usesBrokerControl(model) ? '\n        restoreBroker();' : '';
 
   if (!script) {
     return `
@@ -827,11 +913,13 @@ function resetSection(model) {
      * \`@DirtiesContext\` a nivel de clase. Se conserva el método para que toda clase
      * de flujo llame a lo mismo desde su \`@BeforeAll\`.
      */
-    protected static void resetState() {${
+    protected static void resetState() {${restore}${
       kafka
         ? `
         markChannels();`
-        : `
+        : restore
+          ? ''
+          : `
         // No-op: el contexto se recrea antes de cada clase de flujo.`
     }
     }
@@ -847,7 +935,7 @@ function resetSection(model) {
      * de la caché, destinos de mensajería declarados${model.layersPresent.httpClients ? ' y los mappings y el log de\n     * peticiones del proveedor de prueba' : ''}. Un recurso que no esté en esa
      * lista <b>no</b> se puede dar por limpio.
      */
-    protected static void resetState() {
+    protected static void resetState() {${restore}
         try {
             Process process = new ProcessBuilder(bashExecutable(), "infra/reset-db.sh").inheritIO().start();
             int exit = process.waitFor();
@@ -861,7 +949,17 @@ function resetSection(model) {
             throw new IllegalStateException("Interrumpido reseteando el estado", e);
         }
     }
+`;
+}
 
+// Resolución del bash con el que se invocan los scripts de `infra/`. Vive en su
+// propia sección porque tiene dos consumidores con condiciones distintas: el reset
+// de estado y —solo con brokers cuya topología no sobrevive a un reinicio— la
+// resiembra de startBroker(). Emitirlo dos veces no compila; emitirlo solo con el
+// reset dejaba a la resiembra sin él en el stack sin script.
+function bashExecutableSection(model) {
+  if (!hasResetScript(model) && !needsBrokerReseed(model)) return '';
+  return `
     /**
      * Ejecutable de bash con el que se invocan los scripts de \`infra/\`.
      *
@@ -928,6 +1026,140 @@ ${brokerEntry(model) ? `
         return devtools("sh", "-c", command);
     }
 ${cacheHelper(model)}${bodyFileHelper(model)}`;
+}
+
+// ─── Control del broker (escenarios de outbox) ───────────────────────────────
+//
+// La única palanca del arnés sobre la infraestructura viva, y existe por un motivo
+// muy concreto: sin ella, el outbox NO es observable en caja negra. Un escenario que
+// mute y compruebe que el evento acaba en el canal lo pasa igual de bien un servicio
+// que publica directo contra el broker dentro de la transacción — es decir, no prueba
+// el mecanismo, solo que hay eventos. Lo que distingue al outbox es que la petición
+// se completa y el evento sobrevive AUNQUE el broker no estuviera disponible en ese
+// instante; y para afirmar eso hay que poder quitar el broker de en medio.
+//
+// Solo se genera con `reliability: outbox`. En cualquier otro diseño detener el
+// broker no prueba nada: la publicación es best-effort por contrato y el escenario
+// que lo ejercitase estaría afirmando una garantía que el diseño no dio.
+function usesBrokerControl(model) {
+  return usesOutbox(model) && Boolean(brokerEntry(model)) && usesDevtools(model);
+}
+
+// Brokers cuya topología NO sobrevive a un reinicio del contenedor. LocalStack sirve
+// SNS/SQS desde memoria (sin PERSISTENCE), así que al arrancar de nuevo vuelve sin
+// topics ni colas: lo que se perdería no es el mensaje, es el destino, y el escenario
+// fallaría por «cola inexistente» en vez de por el outbox. La topología la siembra
+// `infra/init-messaging.sh`, que es idempotente por diseño, así que la resiembra es
+// literalmente el mismo script que usa el arranque de la infra. Kafka y RabbitMQ
+// conservan la suya: `stop`/`start` no borra el sistema de archivos del contenedor.
+function needsBrokerReseed(model) {
+  return usesBrokerControl(model) && needsMessagingProvisioning(model);
+}
+
+function brokerControlSection(model) {
+  if (!usesBrokerControl(model)) return '';
+  const broker = brokerEntry(model);
+  const reseed = needsBrokerReseed(model)
+    ? `
+        reseedTopology();`
+    : '';
+  const reseedMethod = needsBrokerReseed(model)
+    ? `
+    /**
+     * Vuelve a sembrar la topología de ${broker.label}: al reiniciar el contenedor se
+     * pierden topics y colas, y sin destino el escenario fallaría por una causa que no
+     * es la que está probando. Es el mismo script del arranque de la infra, que es
+     * idempotente a propósito.
+     */
+    private static void reseedTopology() {
+        try {
+            Process process = new ProcessBuilder(bashExecutable(), "infra/init-messaging.sh").inheritIO().start();
+            if (process.waitFor() != 0) {
+                throw new IllegalStateException("infra/init-messaging.sh falló al resembrar la topología tras levantar el broker");
+            }
+        } catch (IOException e) {
+            throw new IllegalStateException("No se pudo ejecutar infra/init-messaging.sh", e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrumpido resembrando la topología", e);
+        }
+    }
+`
+    : '';
+  return `
+    /** Contenedor de ${broker.label} en \`infra/docker-compose.yaml\`. */
+    private static final String BROKER_CONTAINER = "${brokerContainer(model.service.name, broker)}";
+
+    /** Espera máxima a que el broker vuelva a aceptar conexiones tras levantarlo. */
+    private static final Duration BROKER_READY_TIMEOUT = Duration.ofSeconds(90);
+
+    /**
+     * Detiene el contenedor del broker. Es la palanca de los escenarios de
+     * <b>outbox</b>: con el broker caído, una mutación tiene que responder igual y el
+     * canal tiene que seguir vacío — ahí es donde un servicio que publica directo
+     * dentro de la transacción se separa de uno que escribe en el outbox.
+     *
+     * <p><b>El escenario que lo llama tiene que restaurarlo</b>, y la forma correcta es
+     * un {@code finally}: dejarlo caído envenena todos los flujos siguientes de la
+     * misma suite, que fallarían por una causa ajena. Como red, {@link #resetState}
+     * vuelve a levantarlo al principio de cada clase de flujo, así que un test que
+     * muriera antes de su {@code finally} no arrastra el fallo más allá de su flujo.
+     *
+     * <p>No sustituye a nada: es infraestructura real parándose, no un doble.
+     */
+    protected static void stopBroker() {
+        runProcess(List.of(containerRuntime(), "stop", BROKER_CONTAINER));
+    }
+
+    /**
+     * Levanta el contenedor del broker y <b>espera a que acepte conexiones</b>. Las dos
+     * mitades importan: que el contenedor esté arrancado no es que el broker sirva, y
+     * seguir sin esperar deja al escenario afirmando sobre un canal que todavía no
+     * responde. El sondeo es el mismo que usa \`infra/validate-infra.sh\`.
+     */
+    protected static void startBroker() {
+        runProcess(List.of(containerRuntime(), "start", BROKER_CONTAINER));
+        awaitBrokerReady();${reseed}
+    }
+
+    /**
+     * Restaura el broker si algún escenario lo dejó caído. Idempotente: sobre un
+     * contenedor ya arrancado, \`start\` no hace nada y el sondeo acierta a la primera.
+     */
+    private static void restoreBroker() {
+        startBroker();
+    }
+
+    private static void awaitBrokerReady() {
+        Instant deadline = Instant.now().plus(BROKER_READY_TIMEOUT);
+        while (Instant.now().isBefore(deadline)) {
+            if (brokerAccepts()) {
+                return;
+            }
+            try {
+                Thread.sleep(500L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrumpido esperando al broker", e);
+            }
+        }
+        throw new IllegalStateException("${broker.label} no volvió a aceptar conexiones en " + BROKER_READY_TIMEOUT);
+    }
+
+    /**
+     * Sondeo de disponibilidad. Aquí el fallo <b>no</b> es un error: mientras el broker
+     * arranca, el comando falla porque tiene que fallar. Por eso es el único sitio del
+     * arnés donde se traga la excepción de {@link #runProcess}.
+     */
+    private static boolean brokerAccepts() {
+        try {
+            devtoolsShell(${javaString(broker.cliValidateCmd)});
+            return true;
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+${reseedMethod}`;
 }
 
 // Vaciado de la caché a mitad de escenario. La orden es literalmente la misma que
@@ -1958,6 +2190,7 @@ function failureCaptureImports() {
     'java.util.List',
     'java.util.Map',
     'java.util.Optional',
+    'java.util.concurrent.atomic.AtomicReference',
     'org.junit.jupiter.api.extension.ExtensionContext',
     'org.junit.jupiter.api.extension.TestWatcher',
     'org.springframework.http.HttpHeaders',
@@ -1971,6 +2204,10 @@ function failureCaptureBody() {
  * stack trace: al fallar un test vuelca el último intercambio HTTP completo a
  * \`build/keel-failures/&lt;FL-id&gt;.json\`. El agente de validación lo lee junto al XML
  * de JUnit y decide \`culprit: code | test | design\`.
+ *
+ * <p>La evidencia se guarda por hilo y, además, en un respaldo compartido: un escenario
+ * de carrera hace sus peticiones desde un pool, y sin el respaldo el volcado saldría
+ * vacío justo en el fallo más difícil de arbitrar.
  */
 public class FailureCapture implements TestWatcher {
 
@@ -1978,6 +2215,21 @@ public class FailureCapture implements TestWatcher {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final ThreadLocal<Map<String, Object>> LAST = new ThreadLocal<>();
     private static final ThreadLocal<Map<String, Object>> LAST_PROBE = new ThreadLocal<>();
+    // Respaldo compartido: la última evidencia venga del hilo que venga.
+    //
+    // Los ThreadLocal aíslan los métodos de test entre sí, que es lo correcto — pero un
+    // escenario de carrera (race/raceOf) hace sus peticiones desde un pool, y ahí el
+    // ThreadLocal del hilo del test está vacío: el volcado saldría sin request ni
+    // response y el agente de validación tendría que arbitrar a ciegas justo en el
+    // escenario más difícil de arbitrar. Se lee solo como último recurso, así que el
+    // aislamiento normal no cambia.
+    //
+    // Es correcto porque las clases de flujo NO corren en paralelo entre sí: no hay
+    // junit-platform.properties con paralelismo, y el orquestador las ejecuta en serie.
+    // Si algún día se activa, esto pasa a ser una fuente de evidencia cruzada y hay que
+    // cambiarlo por un mapa indexado por test.
+    private static final AtomicReference<Map<String, Object>> LAST_ANY = new AtomicReference<>();
+    private static final AtomicReference<Map<String, Object>> LAST_PROBE_ANY = new AtomicReference<>();
 
     /** Registra el intercambio en curso; solo se persiste si el test falla. */
     static void record(String method, String path, HttpHeaders requestHeaders, String requestBody, AbstractFlowIT.Response response) {
@@ -1996,6 +2248,7 @@ public class FailureCapture implements TestWatcher {
         exchange.put("request", request);
         exchange.put("response", received);
         LAST.set(exchange);
+        LAST_ANY.set(exchange);
     }
 
     /**
@@ -2010,6 +2263,7 @@ public class FailureCapture implements TestWatcher {
         probe.put("exitCode", exitCode);
         probe.put("output", output);
         LAST_PROBE.set(probe);
+        LAST_PROBE_ANY.set(probe);
     }
 
     @Override
@@ -2022,23 +2276,28 @@ public class FailureCapture implements TestWatcher {
         report.put("displayName", displayName);
         report.put("testClass", context.getTestClass().map(Class::getName).orElse("?"));
         report.put("assertion", Optional.ofNullable(cause.getMessage()).orElse(cause.toString()));
-        Map<String, Object> exchange = LAST.get();
+        Map<String, Object> exchange = Optional.ofNullable(LAST.get()).orElseGet(LAST_ANY::get);
         if (exchange != null) {
             report.putAll(exchange);
         }
-        Map<String, Object> probe = LAST_PROBE.get();
+        Map<String, Object> probe = Optional.ofNullable(LAST_PROBE.get()).orElseGet(LAST_PROBE_ANY::get);
         if (probe != null) {
             report.put("probe", probe);
         }
         write(scenario, report);
-        LAST.remove();
-        LAST_PROBE.remove();
+        clear();
     }
 
     @Override
     public void testSuccessful(ExtensionContext context) {
+        clear();
+    }
+
+    private static void clear() {
         LAST.remove();
         LAST_PROBE.remove();
+        LAST_ANY.set(null);
+        LAST_PROBE_ANY.set(null);
     }
 
     private static void write(String scenario, Map<String, Object> report) {

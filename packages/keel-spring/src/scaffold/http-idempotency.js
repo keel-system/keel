@@ -69,6 +69,7 @@ export function generate(model) {
   const document = model.persistenceKind === 'document';
   files.push(
     renderPort(model),
+    renderConflict(model),
     document ? renderDocument(model) : renderEntity(model),
     document ? renderDocumentRepository(model) : renderRepository(model),
     document ? renderMongoStore(model) : renderStore(model)
@@ -82,6 +83,52 @@ export function generate(model) {
     if (model.layersPresent.api) files.push(renderFilter(model));
   }
   return files;
+}
+
+// El desenlace de la carrera necesita un `code` propio, y no es un capricho de
+// forma: sin él, la petición que pierde llega al ApiExceptionHandler como una
+// violación de integridad cualquiera y el cliente recibe un 409 anónimo,
+// indistinguible del conflicto de negocio que la misma operación puede devolver.
+// Un escenario no puede afirmar sobre eso —validation-scenarios.md exige code y
+// status—, así que la carrera quedaba sin poder probarse.
+function renderConflict(model) {
+  const body = `/**
+ * Dos peticiones con la misma clave de idempotencia, a la vez.
+ *
+ * <p>No es el reintento normal: ese encuentra el registro ya commiteado y reproduce
+ * la respuesta sin ejecutar nada. Esto es la ventana estrecha en la que la primera
+ * petición aún no ha commiteado —y con varias réplicas, normalmente ni siquiera está
+ * en este proceso—, así que no hay respuesta que reproducir todavía. La única
+ * contestación honesta es «vuelve a intentarlo»: el registro guarda el id del recurso,
+ * no el cuerpo, y hasta que la ganadora no commitee ese id no existe.
+ *
+ * <p>Lo que sí queda garantizado es lo importante: la transacción de quien pierde
+ * revierte entera, así que de dos peticiones idénticas se ejecutó exactamente una.
+ */
+public class IdempotencyConflictException extends ConflictException {
+
+    public IdempotencyConflictException(String scope, String idempotencyKey, Throwable cause) {
+        // El constructor con metadata no acepta causa (DomainException guarda code y
+        // status en campos finales), así que la causa se encadena aparte: perderla
+        // dejaría el log sin el motivo real —qué constraint violó— justo en el fallo
+        // que solo se reproduce bajo carga.
+        super(
+                "Otra petición con la misma clave de idempotencia está en curso: " + scope + "/" + idempotencyKey,
+                "IDEMPOTENCY_KEY_IN_PROGRESS",
+                409,
+                new Object[] {scope, idempotencyKey});
+        initCause(cause);
+    }
+}`;
+
+  return {
+    path: javaPath(model, PORT_PKG, 'IdempotencyConflictException'),
+    content: javaFile(
+      subPackage(model, PORT_PKG),
+      [`${subPackage(model, 'domain.errors')}.ConflictException`],
+      body
+    )
+  };
 }
 
 function renderPort(model) {
@@ -327,9 +374,16 @@ function renderEntity(model) {
  * La caducidad se guarda calculada (expires_at) en vez de deducirla del TTL al
  * consultar: el ttlSeconds del diseño puede cambiar entre despliegues y las
  * filas ya escritas conservan la ventana con la que se registraron.
+ *
+ * <p>El índice sobre expires_at es de la purga, no de la lectura (que va por clave
+ * primaria): el barrido borra por rango y sin él cada réplica recorre la tabla
+ * entera. Mismo nombre que su equivalente documental, para que las dos ramas se
+ * comparen.
  */
 @Entity
-@Table(name = "idempotency_record")
+@Table(name = "idempotency_record", indexes = {
+        @Index(name = "ix_idempotency_record_expires_at", columnList = "expires_at")
+})
 public class IdempotencyRecordJpa {
 
     @EmbeddedId
@@ -442,6 +496,7 @@ public class IdempotencyRecordJpa {
         'jakarta.persistence.Embeddable',
         'jakarta.persistence.EmbeddedId',
         'jakarta.persistence.Entity',
+        'jakarta.persistence.Index',
         'jakarta.persistence.Table',
         'java.io.Serializable',
         'java.time.Instant',
@@ -490,10 +545,14 @@ function renderStore(model) {
  * operación fallida devolviese una respuesta que nunca existió.
  *
  * <p><b>Carreras</b>: dos peticiones simultáneas con la misma clave insertan la
- * misma PK y la BD arbitra; la que pierde revierte con violación de integridad,
- * que ApiExceptionHandler traduce a conflicto. Es el mismo desenlace que
- * cualquier otra carrera de escritura del diseño, y es el correcto: de las dos
- * peticiones idénticas, exactamente una se ejecutó.
+ * misma PK y la BD arbitra; la que pierde revierte entera, así que de las dos
+ * peticiones idénticas se ejecutó exactamente una. Con varias réplicas esto deja
+ * de ser un caso raro: las dos peticiones ni siquiera están en el mismo proceso, y
+ * nada salvo la clave primaria las coordina.
+ *
+ * <p>El desenlace se traduce a {@link IdempotencyConflictException} en vez de
+ * dejarlo subir crudo: sin code propio, el cliente recibiría un 409 indistinguible
+ * de un conflicto de negocio de la misma operación.
  *
  * <p>La cadencia de la purga sale de parameters/, nunca del código.
  */
@@ -524,12 +583,19 @@ public class JpaIdempotencyStore implements IdempotencyStore {
     @Transactional
     public void save(String scope, String idempotencyKey, String signature, String resourceId, long ttlSeconds) {
         Instant now = Instant.now();
-        repository.save(new IdempotencyRecordJpa(
-                new IdempotencyRecordJpa.IdempotencyRecordId(scope, idempotencyKey),
-                signature,
-                resourceId,
-                now,
-                now.plusSeconds(ttlSeconds)));
+        try {
+            // saveAndFlush y no save: JPA difiere el INSERT hasta el commit, y ahí la
+            // violación de clave ya no la ve este método —sale por el commit del
+            // UseCaseMediator, donde nada puede distinguirla ni traducirla—.
+            repository.saveAndFlush(new IdempotencyRecordJpa(
+                    new IdempotencyRecordJpa.IdempotencyRecordId(scope, idempotencyKey),
+                    signature,
+                    resourceId,
+                    now,
+                    now.plusSeconds(ttlSeconds)));
+        } catch (DataIntegrityViolationException concurrent) {
+            throw new IdempotencyConflictException(scope, idempotencyKey, concurrent);
+        }
     }
 
     @Scheduled(cron = "\${idempotency-record.purge.cron:0 30 4 * * *}")
@@ -547,11 +613,13 @@ public class JpaIdempotencyStore implements IdempotencyStore {
     content: javaFile(
       subPackage(model, ADAPTER_PKG),
       [
+        `${subPackage(model, PORT_PKG)}.IdempotencyConflictException`,
         `${subPackage(model, PORT_PKG)}.IdempotencyStore`,
         'java.time.Instant',
         'java.util.Optional',
         'org.slf4j.Logger',
         'org.slf4j.LoggerFactory',
+        'org.springframework.dao.DataIntegrityViolationException',
         'org.springframework.scheduling.annotation.Scheduled',
         'org.springframework.stereotype.Component',
         'org.springframework.transaction.annotation.Transactional'
@@ -724,8 +792,11 @@ function renderMongoStore(model) {
  * un save con el _id ya presente REEMPLAZA en silencio, y la segunda petición
  * pisaría el registro de la primera en vez de perder la carrera. Con insert, el _id
  * arbitra igual que la clave primaria en la rama relacional: quien pierde recibe
- * DuplicateKeyException —una DataIntegrityViolationException— que ApiExceptionHandler
- * traduce a conflicto. De dos peticiones idénticas, exactamente una se ejecutó.
+ * DuplicateKeyException —una DataIntegrityViolationException— que aquí se traduce a
+ * {@link IdempotencyConflictException} para que el cliente reciba un 409 con code
+ * propio, distinguible de un conflicto de negocio. De dos peticiones idénticas,
+ * exactamente una se ejecutó. Con varias réplicas, las dos ni siquiera están en el
+ * mismo proceso: el _id es lo único que las coordina.
  *
  * <p>La cadencia de la purga sale de parameters/, nunca del código.
  */
@@ -756,12 +827,16 @@ public class MongoIdempotencyStore implements IdempotencyStore {
     @Transactional
     public void save(String scope, String idempotencyKey, String signature, String resourceId, long ttlSeconds) {
         Instant now = Instant.now();
-        repository.insert(new IdempotencyRecordDocument(
-                new IdempotencyRecordDocument.IdempotencyRecordId(scope, idempotencyKey),
-                signature,
-                resourceId,
-                now,
-                now.plusSeconds(ttlSeconds)));
+        try {
+            repository.insert(new IdempotencyRecordDocument(
+                    new IdempotencyRecordDocument.IdempotencyRecordId(scope, idempotencyKey),
+                    signature,
+                    resourceId,
+                    now,
+                    now.plusSeconds(ttlSeconds)));
+        } catch (DataIntegrityViolationException concurrent) {
+            throw new IdempotencyConflictException(scope, idempotencyKey, concurrent);
+        }
     }
 
     @Scheduled(cron = "\${idempotency-record.purge.cron:0 30 4 * * *}")
@@ -778,11 +853,13 @@ public class MongoIdempotencyStore implements IdempotencyStore {
     content: javaFile(
       subPackage(model, ADAPTER_PKG),
       [
+        `${subPackage(model, PORT_PKG)}.IdempotencyConflictException`,
         `${subPackage(model, PORT_PKG)}.IdempotencyStore`,
         'java.time.Instant',
         'java.util.Optional',
         'org.slf4j.Logger',
         'org.slf4j.LoggerFactory',
+        'org.springframework.dao.DataIntegrityViolationException',
         'org.springframework.scheduling.annotation.Scheduled',
         'org.springframework.stereotype.Component',
         'org.springframework.transaction.annotation.Transactional'

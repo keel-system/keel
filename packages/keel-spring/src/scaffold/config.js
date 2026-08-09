@@ -450,7 +450,30 @@ function messagingYaml(model, profile) {
       '    # con tope max-ms): evita el hot-looping si el broker está caído.',
       '    backoff:',
       `      initial-ms: ${envWithDefault(profile, 'OUTBOX_RELAY_BACKOFF_INITIAL_MS', 1000)}`,
-      `      max-ms: ${envWithDefault(profile, 'OUTBOX_RELAY_BACKOFF_MAX_MS', 60000)}`,
+      // El tope se acorta en `local` —el perfil con el que corre la suite de
+      // integración— porque ahí el broker caído no es una avería sino un PASO del
+      // escenario de outbox: el flujo lo detiene, comprueba que la API responde igual
+      // y lo vuelve a levantar. Con el tope de producción, la fila acumula intentos
+      // mientras está caído y la entrega tras la recuperación llega decenas de
+      // segundos después: el escenario tendría que esperar más de lo que ninguna
+      // suite tolera, o saldría intermitente. En los demás perfiles el broker caído
+      // sí es una avería, y ahí el tope largo es exactamente lo que se quiere.
+      `      max-ms: ${envWithDefault(profile, 'OUTBOX_RELAY_BACKOFF_MAX_MS', profile === 'local' ? 2000 : 60000)}`
+    );
+    // Solo el modelo documental: ahí el reclamo del lote es una marca en la fila
+    // (claimed_at), no un lock, así que una réplica que muere la retendría para
+    // siempre. Esta ventana es lo que la libera — y por debajo de la latencia peor
+    // del broker, dos réplicas entregan la misma fila. En el relacional no existe:
+    // el lock lo suelta la conexión al caer.
+    if (model.persistenceKind === 'document') {
+      lines.push(
+        '    # Caducidad del reclamo de una fila: una réplica que muere con el lote en',
+        '    # vuelo lo retiene hasta que pasa este tiempo. Debe superar con holgura la',
+        '    # latencia peor del broker; por debajo, dos réplicas entregan lo mismo.',
+        `    claim-timeout-ms: ${envWithDefault(profile, 'OUTBOX_RELAY_CLAIM_TIMEOUT_MS', 60000)}`
+      );
+    }
+    lines.push(
       '  purge:',
       '    # Borrado diario de lo ya publicado; la tabla no es un histórico.',
       `    cron: ${cronWithDefault(profile, 'OUTBOX_PURGE_CRON', '0 0 3 * * *')}`,

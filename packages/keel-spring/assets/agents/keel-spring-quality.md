@@ -293,6 +293,11 @@ ningún evento y nada se dispara. Por cada operación con nota `Reconciliación 
    una constante — el diseño no lo declara, así que es configuración.
 3. Hace algo con cada candidato coherente con el `effect` de la activación (reintentar el
    encargo o disparar la compensación), no solo registrarlo en el log.
+4. La consulta **reclama** sus candidatos y en lotes acotados, en vez de leerlos. El
+   script comprueba que el patrón exista en alguna parte (`reclamo del barrido`); lo que
+   no puede comprobar es que sea el correcto, y eso sí es tuyo: el barrido corre en
+   **todas** las réplicas, así que un `findAllByStatus` deja que las N se lleven las
+   mismas filas y todas llamen al proveedor. Ver `conventions/concurrency.md`.
 
 **Es la única familia sin gate conductual**, y por eso la que más se apoya en ti: el
 arnés es caja negra y un cron no es alcanzable desde fuera, así que ningún escenario

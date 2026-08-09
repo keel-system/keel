@@ -1198,3 +1198,22 @@ test('§1.1: la nota de orden no se emite cuando no hay las dos cosas', () => {
   const create = read(`${JAVA}/application/usecases/CreateProductCommandHandler.java`);
   assert.ok(!create.includes('ORDEN de los efectos'));
 });
+
+// Los índices de purga de los tres registros de mecanismo (outbox, procesados y
+// claves de idempotencia) existían solo en la rama documental. En la relacional las
+// dos purgas hacían un recorrido completo de la tabla — y con varias réplicas, todas
+// a la misma hora. La paridad se congela por NOMBRE de índice porque es lo que
+// aparece en el baseline exportado y lo que un diff entre ramas puede comparar.
+test('los índices de purga tienen el mismo nombre en las dos ramas de persistencia', () => {
+  const { read } = scaffoldExtended();
+
+  const processed = read(`${JAVA}/infrastructure/messaging/idempotency/ProcessedEventJpa.java`);
+  assert.ok(processed.includes('@Index(name = "ix_processed_event_processed_at", columnList = "processed_at")'));
+
+  const record = read(`${JAVA}/infrastructure/persistence/idempotency/IdempotencyRecordJpa.java`);
+  assert.ok(record.includes('@Index(name = "ix_idempotency_record_expires_at", columnList = "expires_at")'));
+
+  // El outbox ya lo tenía; va en la misma aserción para que los tres se lean juntos.
+  const outbox = read(`${JAVA}/infrastructure/messaging/outbox/OutboxEventJpa.java`);
+  assert.ok(outbox.includes('ix_outbox_event_pending'));
+});

@@ -964,6 +964,14 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
   // no existe. El coste de equivocarse en esa dirección es una frase; en la contraria,
   // una compensación que deshace dos veces y ningún escenario que lo note.
   const REDELIVERY = /reentrega|reentregad|reentregar|mismo mensaje|mismo messageId|segundo efecto|dos veces|duplicad/i;
+  // Señal de que el escenario ejercita la repetición SIMULTÁNEA, que no es la
+  // secuencial con otras palabras: la de después encuentra la marca ya commiteada y
+  // la resuelve una lectura; la de a la vez cae en la ventana en la que todavía no lo
+  // está, que es donde vive el fallo y donde un servicio replicado pasa la mayor
+  // parte de su vida. Por eso `dos veces` NO entra aquí aunque esté en REDELIVERY:
+  // describe igual de bien las dos, y admitirla dejaría pasar el secuencial como si
+  // fuera el simultáneo — que es exactamente el escenario que falta.
+  const CONCURRENT = /simult[áa]ne|a la vez|al mismo tiempo|en paralelo|concurrent|carrera/i;
   const scenarioBlocks = (scenarios ?? '')
     .split(/^#{2,4}\s+(?=FL-)/m)
     .slice(1)
@@ -994,6 +1002,47 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
         `transacción que el cambio de estado, y sin almacén no hay dónde ponerla. Declara la capa persistence o baja a ` +
         `best-effort, que es lo que de verdad se generaría`
     );
+  }
+
+  // Escenario del outbox. La misma lectura de texto que la compensación, y por el
+  // mismo motivo: el gate del generador solo puntúa lo que validation-scenarios.md
+  // declara, así que un `reliability: outbox` sin escenario no lo echaba de menos
+  // nadie — y es el mecanismo cuyo escenario decorativo es más fácil de escribir sin
+  // darse cuenta. «El evento acaba llegando al canal» lo cumple igual un servicio que
+  // publica en línea dentro de la transacción; lo que separa a los dos es la mitad
+  // negativa (con el canal caído, la API responde igual y el canal sigue vacío), y por
+  // eso lo que se busca aquí es la señal de la INDISPONIBILIDAD, no la del evento.
+  if (scenarios !== null && messaging?.publishing?.reliability === 'outbox' && persistence) {
+    const UNAVAILABLE = /(canal|broker|mensajer[íi]a)[^.]{0,60}(indisponible|no disponible|ca[íi]d|detenid|apagad|parad|fuera de servicio)/i;
+    if (!scenarioBlocks.some((block) => UNAVAILABLE.test(block))) {
+      warnings.push(
+        `messaging: publishing.reliability: 'outbox' no tiene escenario que lo distinga de best-effort — no encuentro ` +
+          `ninguno en validation-scenarios.md con el canal INDISPONIBLE. Un escenario que solo afirme que el evento ` +
+          `acaba publicado lo pasa igual un servidor que publica en línea dentro de la operación, así que la garantía ` +
+          `que compra este campo queda sin verificar. Añade uno que, con el canal caído, afirme que la mutación responde ` +
+          `igual y que el canal sigue vacío, y que restablecido el evento llega exactamente una vez`
+      );
+    }
+  }
+
+  // Escenario de carrera de la clave de idempotencia, uno por operación que la
+  // declare. La señal se busca solo entre los escenarios que mencionan la operación:
+  // un servicio puede tener carreras de otras cosas, y encontrarlas no dice nada de
+  // esta. Misma asimetría que en la compensación — el reintento secuencial encuentra
+  // el registro de la clave ya commiteado y lo resuelve una lectura.
+  if (scenarios !== null) {
+    for (const [opName, op] of Object.entries(operations)) {
+      if (!op?.idempotency) continue;
+      const mentions = scenariosMentioning(opName);
+      if (mentions.length > 0 && !mentions.some((block) => CONCURRENT.test(block))) {
+        warnings.push(
+          `use-cases: operations.${opName} declara idempotency pero sus escenarios no cubren la CARRERA — dos peticiones ` +
+            `con la misma clave a la vez. El reintento secuencial encuentra el registro de la clave ya escrito, así que ` +
+            `pasa aunque no haya nada que arbitre la ventana previa al commit, que es la que un cliente con reintentos ` +
+            `automáticos golpea de verdad. El 'Then' es disyunción cerrada más un conteo por la API que afirme un solo recurso`
+        );
+      }
+    }
   }
 
   for (const [eventName, event] of Object.entries(messaging?.publishing?.events ?? {})) {
@@ -1470,7 +1519,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
           );
         }
 
-        // Los dos escenarios obligatorios. La regla la escribe docs/validation-scenarios.md
+        // Los tres escenarios obligatorios. La regla la escribe docs/validation-scenarios.md
         // § Reglas de cobertura, pero hasta ahora vivía solo ahí: el documento es prosa y
         // el gate conductual del generador puntúa lo declarado contra lo ejercitado, así
         // que una compensación sin escenario de reentrega salía verde por los dos lados —
@@ -1481,16 +1530,32 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
           if (mentions.length === 0) {
             warnings.push(
               `${where}: no encuentro ningún escenario de validation-scenarios.md que mencione '${compensation.onEvent}' — ` +
-                `una compensación necesita dos: el efecto completo (llega el evento, el trabajo se deshace y el estado ` +
-                `propio vuelve, leído por la API) y la reentrega del mismo evento sin segundo efecto`
+                `una compensación necesita tres: el efecto completo (llega el evento, el trabajo se deshace y el estado ` +
+                `propio vuelve, leído por la API), la reentrega del mismo evento sin segundo efecto, y la entrega del ` +
+                `mismo evento dos veces A LA VEZ`
             );
-          } else if (!mentions.some((block) => REDELIVERY.test(block))) {
-            warnings.push(
-              `${where}: los escenarios de '${compensation.onEvent}' cubren el efecto pero no encuentro el de REENTREGA — ` +
-                `deshacer dos veces el mismo trabajo no es deshacerlo, y es lo único que prueba que la guarda declarada ` +
-                `funciona de verdad. Añade un escenario que entregue el mismo mensaje otra vez y afirme que no hay ` +
-                `segundo efecto`
-            );
+          } else {
+            if (!mentions.some((block) => REDELIVERY.test(block))) {
+              warnings.push(
+                `${where}: los escenarios de '${compensation.onEvent}' cubren el efecto pero no encuentro el de REENTREGA — ` +
+                  `deshacer dos veces el mismo trabajo no es deshacerlo, y es lo único que prueba que la guarda declarada ` +
+                  `funciona de verdad. Añade un escenario que entregue el mismo mensaje otra vez y afirme que no hay ` +
+                  `segundo efecto`
+              );
+            }
+            // La tercera comprobación, y la que más se confunde con la anterior: un
+            // escenario que reentrega DESPUÉS encuentra la marca de procesado ya
+            // escrita y pasa aunque la guarda no cubra la ventana previa al commit —
+            // que con varias réplicas es el caso frecuente. Se pide por separado
+            // porque prueba algo distinto, no porque sea más exhaustivo.
+            if (!mentions.some((block) => CONCURRENT.test(block))) {
+              warnings.push(
+                `${where}: los escenarios de '${compensation.onEvent}' no cubren la DOBLE ENTREGA SIMULTÁNEA — la ` +
+                  `reentrega secuencial encuentra la marca de procesado ya escrita, así que pasa aunque la guarda no ` +
+                  `cubra la ventana en la que aún no lo está, que es donde el fallo ocurre de verdad. Añade un escenario ` +
+                  `que entregue el mismo mensaje dos veces a la vez y afirme el mismo efecto único`
+              );
+            }
           }
         }
 

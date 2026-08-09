@@ -16,7 +16,10 @@
 //
 // Los comandos NO se escriben aquí: salen de `src/lib/broker-probes.js`, el mismo
 // módulo del que el arnés renderiza su Java. Un runner con comandos propios
-// comprobaría que los brokers responden, no que el generador acierta.
+// comprobaría que los brokers responden, no que el generador acierta. La única
+// excepción es BRK-11 —la palanca de detener y levantar el broker de los escenarios
+// de outbox—, cuyos comandos son del runtime de contenedores y salen del catálogo
+// (`brokerContainer`, `cliValidateCmd`), que es también de donde los saca el arnés.
 //
 //   node packages/keel-spring/scripts/broker-check.js [fixture] [--broker=<id>] [--keep]
 //   npm run broker-check --workspace packages/keel-spring
@@ -32,6 +35,9 @@ import { loadService } from 'keel-core';
 import { resolveStack, scaffoldService } from '../src/scaffold/index.js';
 import { buildModel } from '../src/lib/model.js';
 import { kebabCase } from '../src/lib/naming.js';
+// El catálogo, no la lista de ids que exporta broker-probes con el mismo nombre: de
+// aquí salen el comando de sondeo y el nombre del contenedor que estampa el compose.
+import { BROKERS as BROKERS_CATALOG, brokerContainer } from '../src/lib/stack-catalog.js';
 import {
   BROKERS,
   argv as toArgv,
@@ -461,6 +467,58 @@ function prepare(broker, { devtools, runtime, projectDir, destinations }) {
   return null;
 }
 
+/**
+ * La secuencia de `stopBroker()` / `startBroker()` del arnés, contra la infra real.
+ * Mismos comandos que emite `integration-tests.js`: `<runtime> stop|start <nombre>`,
+ * el sondeo con el `cliValidateCmd` del catálogo y —solo donde hace falta— la
+ * resiembra con el script generado.
+ */
+function checkBrokerControl(broker, { runtime, projectDir, devtools, container }) {
+  const entry = BROKERS_CATALOG[broker];
+  const stopped = run(runtime, ['stop', container]);
+  if (stopped.status !== 0) {
+    return ko(`no se pudo detener '${container}': ${firstLine(stopped.stderr || stopped.stdout)}`);
+  }
+  // Con el broker parado el sondeo TIENE que fallar. Si sale verde, o el nombre del
+  // contenedor no es el del broker o el sondeo no mide lo que dice medir — y en
+  // cualquiera de los dos casos el escenario de outbox estaría comprobando que la
+  // API responde mientras el broker sigue vivo, que es exactamente el escenario
+  // decorativo que se quería evitar.
+  const whileDown = devtools.shell(entry.cliValidateCmd);
+  if (whileDown.status === 0) {
+    return ko(`el sondeo sigue en verde con '${container}' detenido: no está midiendo al broker`);
+  }
+  const started = run(runtime, ['start', container]);
+  if (started.status !== 0) {
+    return ko(`no se pudo levantar '${container}': ${firstLine(started.stderr || started.stdout)}`);
+  }
+  const ready = untilOk(() => devtools.shell(entry.cliValidateCmd), 20, 3000);
+  if (!ready.ok) {
+    return ko(`el broker no volvió a aceptar conexiones: ${firstLine(ready.last.stderr || ready.last.stdout)}`);
+  }
+  // La topología después del reinicio. LocalStack la sirve desde memoria y la pierde,
+  // así que el arnés resiembra; si algún día dejara de perderla, esto seguiría en
+  // verde (el script es idempotente) y la resiembra sería solo trabajo de más.
+  if (broker === 'snssqs') {
+    const reseeded = run('sh', ['infra/init-messaging.sh'], {
+      cwd: projectDir,
+      env: { ...process.env, CONTAINER_RUNTIME: runtime }
+    });
+    if (reseeded.status !== 0) {
+      return ko(`la resiembra tras el reinicio falló: ${firstLine(reseeded.stderr || reseeded.stdout)}`);
+    }
+  }
+  // El veredicto final es el gate de infraestructura completo: no basta con que el
+  // broker responda, tiene que estar como lo dejamos.
+  const validate = run('sh', ['infra/validate-infra.sh'], {
+    cwd: projectDir,
+    env: { ...process.env, CONTAINER_RUNTIME: runtime }
+  });
+  return validate.status === 0
+    ? ok()
+    : ko(`la infraestructura no queda sana tras el ciclo: ${firstLine(validate.stderr || validate.stdout)}`);
+}
+
 /** Reintenta mientras el broker termina de arrancar: 'Up' no es 'listo'. */
 function untilOk(action, attempts = 10, delayMs = 3000) {
   let last = { status: 1, stdout: '', stderr: '' };
@@ -578,6 +636,28 @@ function checkBroker(broker, runtimeInfo) {
       detail: resetOk ? undefined : firstLine(reset.stderr || reset.stdout)
     });
     console.log(`  ${resetOk ? 'OK  ' : 'KO  '} BRK-10 reset-db.sh deja el estado limpio`);
+
+    // BRK-11 va el último porque es el más destructivo: para el broker. Ejercita la
+    // palanca de los escenarios de outbox (`stopBroker`/`startBroker` de
+    // AbstractFlowIT), que es la única parte del arnés que actúa sobre la
+    // infraestructura y por tanto la única que ni compilar ni comparar cadenas
+    // pueden juzgar. Lo que se comprueba no es que el runtime sepa parar un
+    // contenedor, sino las dos cosas que el arnés da por ciertas: que el nombre del
+    // contenedor es el que `build` estampó —si no, el escenario esperaría 90 s a un
+    // contenedor que no existe— y que al volver el broker sirve, con su topología en
+    // pie. En LocalStack eso último exige resembrar, y aquí es donde se ve si el
+    // supuesto era correcto.
+    const brokerControl = checkBrokerControl(broker, {
+      runtime: runtimeInfo.runtime,
+      projectDir,
+      devtools,
+      container: brokerContainer(model.service.name, BROKERS_CATALOG[broker])
+    });
+    results.push({ id: 'BRK-11', title: 'el broker se puede detener y volver a levantar', ...brokerControl });
+    console.log(
+      `  ${brokerControl.ok ? 'OK  ' : 'KO  '} BRK-11 el broker se puede detener y volver a levantar` +
+        `${brokerControl.ok ? '' : ` — ${brokerControl.detail}`}`
+    );
 
     return { fatal: null, results };
   } finally {

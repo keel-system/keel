@@ -3330,6 +3330,11 @@ const REENTREGA = `### FL-CMP-002: WithdrawalRejected se reentrega
 **When**: se entrega el MISMO mensaje otra vez (misma reentrega del broker).
 **Then**: no hay segundo efecto: el producto sigue en active y no se publica nada.`;
 
+const SIMULTANEA = `### FL-CMP-003: WithdrawalRejected llega dos veces a la vez
+**Given**: un producto retirado cuya inscripción se encargó a compliance.
+**When**: se entregan dos copias del mismo mensaje SIMULTÁNEAMENTE.
+**Then**: el producto queda en active y GET /products cuenta exactamente una reactivación.`;
+
 test('sin documento de escenarios no se dice nada: no hay nada que cruzar', () => {
   const { warnings } = run(compLayers());
   assert.ok(!warnings.some((w) => w.includes('validation-scenarios.md')), warnings.join('\n'));
@@ -3356,9 +3361,122 @@ test('el efecto sin la reentrega es aviso: es el escenario que menos se escribe 
   );
 });
 
-test('con los dos escenarios no se dice nada', () => {
+test('la reentrega secuencial NO vale como doble entrega simultánea', () => {
+  // La propiedad que sostiene el tercer aviso: si `dos veces` contase como señal de
+  // simultaneidad, este documento —que solo reentrega— saldría limpio y el escenario
+  // que falta seguiría faltando sin que nadie lo dijera.
   const { warnings } = checkCrossRefs({ layers: compLayers(), scenarios: scenarioDoc(EFECTO, REENTREGA) });
+  assert.ok(
+    warnings.some((w) => w.includes("los escenarios de 'WithdrawalRejected' no cubren la DOBLE ENTREGA SIMULTÁNEA")),
+    warnings.join('\n')
+  );
+  // Y el de reentrega ya no se emite: son dos huecos distintos, no uno con dos avisos.
+  assert.ok(!warnings.some((w) => w.includes('no encuentro el de REENTREGA')), warnings.join('\n'));
+});
+
+test('con los tres escenarios no se dice nada', () => {
+  const { warnings } = checkCrossRefs({
+    layers: compLayers(),
+    scenarios: scenarioDoc(EFECTO, REENTREGA, SIMULTANEA),
+  });
   assert.ok(!warnings.some((w) => w.includes('WithdrawalRejected') && w.includes('escenario')), warnings.join('\n'));
+});
+
+// ---------------------------------------------------------------------------
+// Los otros dos mecanismos que el gate del generador no echaba de menos: el
+// outbox —cuyo escenario decorativo es trivial de escribir sin darse cuenta— y
+// la carrera de la clave de idempotencia.
+// ---------------------------------------------------------------------------
+
+// compLayers con entrega garantizada declarada. Necesita persistence: sin ella el
+// propio checkCrossRefs ya da error duro y el aviso de escenario no llega a mirarse.
+const outboxLayers = () => {
+  const layers = compLayers();
+  layers.persistence = { default: { model: 'relational' } };
+  layers.messaging.publishing = {
+    reliability: 'outbox',
+    events: { ProductRetired: { payload: { productId: { type: 'uuid', required: true } } } },
+  };
+  layers['use-cases'].operations.retireProduct.emits = ['ProductRetired'];
+  return layers;
+};
+
+const OUTBOX_DECORATIVO = `### FL-OBX-001: la retirada publica su evento
+**Given**: un producto activo.
+**When**: POST /products/{id}/retire.
+**Then**: el canal recibe un ProductRetired con el productId.`;
+
+const OUTBOX_REAL = `### FL-OBX-002: el evento sobrevive a un canal indisponible
+**Given**: un producto activo y el canal de eventos indisponible.
+**When**: POST /products/{id}/retire.
+**Then**: 200, el producto queda retirado y el canal sigue vacío. Restablecido el canal,
+en <= 10 s recibe exactamente un ProductRetired.`;
+
+test('un escenario que solo afirma que el evento llega no vale como cobertura del outbox', () => {
+  // La propiedad central: este documento describe un evento publicado, y lo pasaría
+  // igual un servidor que publica en línea. Si el aviso no saltara aquí, el gate
+  // estaría premiando justo al escenario que no distingue nada.
+  const { warnings } = checkCrossRefs({ layers: outboxLayers(), scenarios: scenarioDoc(OUTBOX_DECORATIVO) });
+  assert.ok(
+    warnings.some((w) => w.includes("reliability: 'outbox' no tiene escenario que lo distinga de best-effort")),
+    warnings.join('\n')
+  );
+});
+
+test('con el escenario del canal indisponible el outbox queda cubierto', () => {
+  const { warnings } = checkCrossRefs({
+    layers: outboxLayers(),
+    scenarios: scenarioDoc(OUTBOX_DECORATIVO, OUTBOX_REAL),
+  });
+  assert.ok(!warnings.some((w) => w.includes("reliability: 'outbox'")), warnings.join('\n'));
+});
+
+test('sin outbox declarado no se pide ningún escenario de canal caído', () => {
+  const layers = outboxLayers();
+  layers.messaging.publishing.reliability = 'best-effort';
+  const { warnings } = checkCrossRefs({ layers, scenarios: scenarioDoc(OUTBOX_DECORATIVO) });
+  assert.ok(!warnings.some((w) => w.includes('best-effort —')), warnings.join('\n'));
+});
+
+const idempotentLayers = () => {
+  const layers = compLayers();
+  layers['use-cases'].operations.retireProduct.idempotency = { keySource: 'header' };
+  return layers;
+};
+
+const RETIRADA_SECUENCIAL = `### FL-IDM-001: retireProduct se reintenta con la misma clave
+**Given**: un producto activo.
+**When**: se llama a retireProduct dos veces con la misma Idempotency-Key.
+**Then**: el segundo devuelve el mismo status y cuerpo, sin segundo efecto.`;
+
+const RETIRADA_CARRERA = `### FL-IDM-002: dos retireProduct con la misma clave a la vez
+**Given**: un producto activo.
+**When**: se lanzan dos retireProduct simultáneos con la misma Idempotency-Key.
+**Then**: uno devuelve 200 y el otro 200 o 409 IDEMPOTENCY_KEY_IN_PROGRESS; la API
+cuenta exactamente una retirada.`;
+
+test('idempotencia probada solo en secuencia es aviso', () => {
+  const { warnings } = checkCrossRefs({ layers: idempotentLayers(), scenarios: scenarioDoc(RETIRADA_SECUENCIAL) });
+  assert.ok(
+    warnings.some((w) => w.includes('operations.retireProduct declara idempotency') && w.includes('CARRERA')),
+    warnings.join('\n')
+  );
+});
+
+test('con el escenario de carrera la idempotencia queda cubierta', () => {
+  const { warnings } = checkCrossRefs({
+    layers: idempotentLayers(),
+    scenarios: scenarioDoc(RETIRADA_SECUENCIAL, RETIRADA_CARRERA),
+  });
+  assert.ok(!warnings.some((w) => w.includes('declara idempotency')), warnings.join('\n'));
+});
+
+test('una operación sin escenarios propios no recibe el aviso de carrera: ya lo dice la matriz', () => {
+  // Deliberado: si la operación no aparece en NINGÚN escenario, el hueco no es la
+  // carrera sino la cobertura entera, y eso lo reporta la revisión de la matriz.
+  // Emitir aquí «falta la carrera» apuntaría al síntoma pequeño del problema grande.
+  const { warnings } = checkCrossRefs({ layers: idempotentLayers(), scenarios: scenarioDoc(EFECTO) });
+  assert.ok(!warnings.some((w) => w.includes('declara idempotency')), warnings.join('\n'));
 });
 
 // ---------------------------------------------------------------------------

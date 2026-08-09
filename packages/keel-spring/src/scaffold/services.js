@@ -52,6 +52,19 @@ export function returnTypeImports(model, operation, imports) {
   else if (operation.returnsList) imports.add('java.util.List');
 }
 
+/**
+ * ¿El diseño declara alguna operación disparada por reloj?
+ *
+ * Lo consume application.js: sin @EnableScheduling, el <Servicio>Scheduler se genera
+ * con sus @Scheduled y no se dispara nunca — un barrido de reconciliación que
+ * simplemente no ocurre, sin que nada lo delate.
+ */
+export function hasScheduledOperations(model) {
+  return (model.services ?? []).some((service) =>
+    (service.operations ?? []).some((operation) => operation.schedule)
+  );
+}
+
 export function generate(model) {
   const files = [];
   for (const service of model.services) {

@@ -357,6 +357,17 @@ function mongoHealthcheck(db) {
 // pocas sesiones acumuladas para que nada de lo que se lee sea del escenario en
 // curso). Kafka no tiene purga con kcat: su aislamiento es una marca de offset
 // que vive en el proceso de test (ver AbstractFlowIT), no en el script.
+/**
+ * Nombre del contenedor del broker en infra/docker-compose.yaml. Fuente única de
+ * docker.js (que lo estampa como `container_name`) y del arnés de integración (que
+ * lo detiene y lo levanta en los escenarios de outbox): si cada uno lo compusiera
+ * por su cuenta, el día que cambie el patrón el arnés detendría un contenedor que
+ * no existe y el fallo saldría como un timeout, muy lejos de su causa.
+ */
+export function brokerContainer(serviceName, broker) {
+  return `${serviceName}-${broker.serviceKey}`;
+}
+
 export const BROKERS = {
   kafka: {
     id: 'kafka',

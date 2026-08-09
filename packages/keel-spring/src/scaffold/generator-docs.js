@@ -39,6 +39,7 @@ const CONVENTIONS = [
   'domain-services.md',
   'read-composition.md',
   'dependencies.md',
+  'concurrency.md',
   'virtual-threads.md'
 ];
 

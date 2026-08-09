@@ -443,10 +443,106 @@ Dos consecuencias prácticas:
 
 - **El efecto es asíncrono.** Se afirma con `await(...)` sobre una lectura por la API, nunca
   en la línea siguiente a la entrega.
-- **Una compensación siempre lleva los dos escenarios** —el efecto completo y la reentrega—,
-  porque deshacer dos veces el mismo trabajo no es deshacerlo. Es el camino que menos se
-  ejercita a mano y el que más cuesta cuando está roto: solo se ejecuta cuando algo ya había
-  salido mal.
+- **Una compensación siempre lleva los tres escenarios** —el efecto completo, la reentrega y
+  la doble entrega simultánea—, porque deshacer dos veces el mismo trabajo no es deshacerlo.
+  Es el camino que menos se ejercita a mano y el que más cuesta cuando está roto: solo se
+  ejecuta cuando algo ya había salido mal.
+
+### La doble entrega simultánea y la llamada de vuelta
+
+Los otros dos escenarios de una compensación no son variantes del primero.
+
+**Simultánea.** La reentrega secuencial encuentra la marca de `processed_event` ya
+commiteada, así que pasa aunque nada arbitre la ventana previa al commit — que con réplicas
+es el caso normal. Se escribe con `race`, con el mismo `messageId` en las dos ramas:
+
+```java
+String mid = UUID.randomUUID().toString();
+String body = "{\"productId\":\"" + productId + "\"}";
+race(List.of(
+    () -> { deliverWithdrawalRejected(mid, body); return null; },
+    () -> { deliverWithdrawalRejected(mid, body); return null; }
+));
+// El Then: disyunción cerrada del estado + un conteo por la API que no dependa del ganador.
+```
+
+**La llamada de vuelta.** El estado propio leído por la API es solo la mitad de la
+compensación, y la barata. Si lo que se deshace se le encargó a un proveedor por un cliente
+de `http-clients`, el `Then` afirma también **la cancelación que sale hacia él**, con
+`stubCallCount(...)` y `stubRequests(...)`:
+
+```java
+await(Duration.ofSeconds(15), () -> stubCallCount("DELETE", "/withdrawals/.*") == 1);
+String body = stubRequestBody(stubRequests("DELETE", "/withdrawals/.*").get(0));
+```
+
+Sin esa aserción, un servidor que revierte su fila y nunca avisa al proveedor pasa el
+escenario entero: queda internamente coherente y deja un encargo vivo ahí fuera que nadie va
+a cancelar. Es caja negra —el proveedor de prueba es un proceso aparte que habla HTTP por el
+mismo socket—, así que **no** se sustituye por mirar la base de datos.
+
+## Outbox: el canal indisponible
+
+Solo con `reliability: outbox` en el diseño. Es el **único** escenario del arnés que toca la
+infraestructura, y la razón es que el mecanismo consiste precisamente en no depender de que
+esté disponible: no hay forma de observarlo sin quitarla de en medio.
+
+`AbstractFlowIT` genera dos helpers para eso: `stopBroker()` detiene el contenedor del broker
+y `startBroker()` lo levanta **y espera a que vuelva a aceptar conexiones** (con LocalStack,
+además resiembra la topología, que no sobrevive al reinicio).
+
+```java
+purgeMessages("catalog.events");                         // la ventana empieza aquí
+stopBroker();
+try {
+    Response created = post("/api/v1/products", body);
+    assertBody(created, EXPECTED);                       // la API responde igual
+    assertFalse(publishedMessages("catalog.events", 1).contains("ProductCreated"));
+} finally {
+    startBroker();                                       // SIEMPRE, pase lo que pase arriba
+}
+await(Duration.ofSeconds(20), () -> publishedMessages("catalog.events", 5).contains("ProductCreated"));
+```
+
+Tres reglas, y saltarse cualquiera convierte el escenario en decorativo o en una avería:
+
+- **El `startBroker()` va en un `finally`.** Un flujo que deje el broker caído envenena todos
+  los siguientes de la suite, que fallarán por una causa que no es la suya. Como red,
+  `resetState()` lo levanta al principio de cada clase de flujo, pero eso es la red, no el
+  plan: entre el fallo y el siguiente `@BeforeAll` puede haber varios escenarios del mismo
+  flujo dando por buena una infraestructura que no está.
+- **La aserción del canal vacío va ANTES de levantar el broker**, y es la que hace que el
+  escenario pruebe algo. Sin ella, un servidor que publica en línea dentro de la transacción
+  pasa el escenario completo: su mensaje también acaba llegando.
+- **«Exactamente uno» tras la recuperación**, no «al menos uno». Un relay que entrega pero no
+  marca la fila reentrega para siempre, y sin ese conteo pasaría igual.
+
+El tiempo de espera tras levantar el broker tiene que cubrir el backoff del relay, que en el
+perfil `local` está acortado a propósito (`outbox.relay.backoff.max-ms`). Veinte segundos es
+holgado; menos de diez sale intermitente.
+
+Este escenario cumple por sí solo la regla de § Lo que no se ve por HTTP sobre las aserciones
+negativas: la evidencia afirmativa de que el canal entrega es el propio `await` final, en el
+mismo test. No hace falta añadir ninguna otra.
+
+## Idempotencia simultánea
+
+Toda operación con `idempotency` lleva dos escenarios, y el segundo es una carrera: el
+reintento secuencial encuentra el registro de la clave ya commiteado y lo resuelve una
+lectura, así que pasa aunque nada arbitre la ventana previa al commit — que es justo la que
+golpea un cliente con reintentos automáticos.
+
+```java
+String key = idempotencyKey();
+List<Response> results = raceOf(2, () -> exchangeWithKey(HttpMethod.POST, "/api/v1/orders", body, null, key));
+// Disyunción cerrada: ambas 201, o una 201 y la otra 409 IDEMPOTENCY_KEY_IN_PROGRESS.
+// Y la aserción que no depende del ganador: la API cuenta exactamente un pedido.
+```
+
+`409 IDEMPOTENCY_KEY_IN_PROGRESS` **no es un fallo**: es el contrato de la perdedora, cuya
+transacción revirtió entera, así que de las dos peticiones se ejecutó exactamente una. Un
+`Then` que solo enumere los desenlaces admisibles no puede fallar: el conteo leído por la API
+es obligatorio.
 
 Si `deliverXxx` deja el escenario en timeout mudo, los dos sospechosos por orden son el
 **topic** al que escucha el listener (tiene que ser el que declara `parameters/`, que es al
@@ -500,6 +596,32 @@ no lo son.
 
 Los efectos asíncronos (publicación, consumo de una suscripción) se esperan con
 `await(Duration.ofSeconds(n), () -> …)`, nunca con `Thread.sleep` a ojo.
+
+## Escenarios de carrera
+
+Un escenario cuyo `When` dice «a la vez» se escribe con `race(...)` o `raceOf(n, ...)` del arnés, **nunca
+con un `ExecutorService` propio**: los helpers arrancan todas las tareas del mismo latch, y sin eso
+«simultáneo» acaba siendo «una detrás de otra» —el coste de crear cada hilo basta para serializarlas— y el
+escenario pasa en verde sin haber ejercitado ninguna carrera.
+
+```java
+List<Response> responses = raceOf(2, () -> exchangeWithKey("POST", "/api/v1/reservations", body, token, key));
+```
+
+Tres reglas al usarlos:
+
+- **Toda aserción, en el hilo del test.** `race` junta y devuelve; no assertes dentro de la lambda. Es
+  también lo que mantiene íntegro el volcado de `FailureCapture`.
+- **El `Then` va como disyunción cerrada**: enumera los desenlaces admisibles, porque bajo una carrera real
+  no hay uno solo. Lo que **no** vale es cruzar dos observaciones distintas para deducir quién ganó.
+- **Más al menos una afirmación que no dependa del ganador**, y esa es la que prueba algo de verdad:
+  normalmente un conteo leído por la API («la lista contiene exactamente un recurso»). Un escenario que
+  solo enumera desenlaces admisibles no puede fallar.
+
+Estas carreras se ejercitan **dentro de una instancia**, y basta: el servidor es multihilo y el árbitro de
+la carrera —la clave primaria, el lock de fila— es el mismo que arbitraría entre réplicas. Lo que no se
+puede ejercitar así son las carreras entre `@Scheduled` de réplicas distintas; ver
+[`concurrency.md` § Lo que ningún gate cubre](concurrency.md).
 
 Inspeccionar la base de datos sirve para **diagnosticar** un fallo, jamás para **definir** el
 criterio de aceptación: lo que solo es verificable por dentro no es contrato.
@@ -566,6 +688,14 @@ detecta lo que no ha pasado. `uncovered` no significa que nadie la mire: la cubr
 `infra/check-idempotency.sh` en estático (que el `@Scheduled` ya no lance, que el umbral
 salga de `parameters/`), y la prueba en vivo la hace el diseñador. Lo que no vale es
 inventarle un escenario que dispare el barrido por una puerta que el diseño no tiene.
+
+**El outbox estuvo en esta lista y ya no está**, y la razón vale como criterio general. Su
+disparador tampoco es alcanzable —el relay corre por el reloj, igual que el barrido—, pero su
+**efecto sí**: el evento aparece o no aparece en el canal, y quitando la infraestructura de en
+medio esa diferencia se vuelve observable (ver § Outbox: el canal indisponible). Antes de
+declarar `uncovered` un mecanismo, la pregunta no es «¿puedo llamarlo?» sino «¿hay algo que
+cambie ahí fuera según esté bien o mal?». Si lo hay, el escenario existe aunque no se parezca
+a los demás.
 
 **Depender de otro servidor ya no es motivo de `uncovered`**: con el stub, un flujo que lee o activa
 a un proveedor se programa y se puntúa como cualquier otro, y su camino de fallo también

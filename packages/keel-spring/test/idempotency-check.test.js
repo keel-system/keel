@@ -102,6 +102,44 @@ test('lo que build sí genera no se reporta: el store está inyectado y no sale 
   assert.match(result.out, /falta 'CommandSignature/);
 });
 
+// El barrido corre en TODAS las réplicas —@Scheduled es «cada N minutos en cada
+// instancia», no «en el clúster»—, así que un findAllByStatus deja que las N se lleven
+// las mismas filas y todas llamen al servidor de al lado. El gate solo comprobaba el
+// @Value del umbral y el @Scheduled del disparador: lo único que decide si el barrido
+// es correcto con varias instancias no lo miraba nadie.
+test('el gate exige que el barrido reclame sus candidatos, y acotados', (t) => {
+  const project = build('catalog-extended');
+  const before = run(project);
+  if (before === null) return t.skip('sin bash en el PATH');
+  assert.match(before.out, /reclamo del barrido/);
+
+  // Un reclamo real lo apaga: bloqueo de fila con SKIP LOCKED (el hint -2) y lote
+  // acotado. Donde lo ponga el agente es asunto suyo, así que se busca en el árbol.
+  const adapter = path.join(project, 'src/main/java/com/commerce/catalog/infrastructure/persistence');
+  fs.mkdirSync(adapter, { recursive: true });
+  const claim = path.join(adapter, 'StaleClaimRepository.java');
+  const withBound = `package com.commerce.catalog.infrastructure.persistence;
+
+import java.util.List;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.Lock;
+import jakarta.persistence.LockModeType;
+
+public interface StaleClaimRepository {
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    List<Object> claimStale(Pageable pageable);
+}
+`;
+  fs.writeFileSync(claim, withBound);
+  assert.ok(!/reclamo del barrido/.test(run(project).out));
+
+  // Y sin cota vuelve el hallazgo: reclamar la tabla entera no es un lote, es un
+  // bloqueo largo que las demás réplicas esperan.
+  fs.writeFileSync(claim, withBound.replace('Pageable pageable', '').replace(/import.*Pageable;\n/, ''));
+  assert.match(run(project).out, /reclamo del barrido/);
+});
+
 test('los comentarios no cuentan como código: el TODO que se caza es el vivo', (t) => {
   const project = build('catalog-extended');
   const handler = execFileSync(

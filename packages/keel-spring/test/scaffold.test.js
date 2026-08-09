@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
 import { HARNESSES, loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
+import { hasScheduledOperations } from '../src/scaffold/services.js';
+import { generate as applicationFiles } from '../src/scaffold/application.js';
 import { assetsDir, wrapperDir, GRADLE_VERSION } from '../src/lib/assets.js';
 
 const fixtureDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'product-catalog');
@@ -2064,7 +2066,93 @@ test('outbox: fila en la misma transacción, relay determinista y envío tras el
   assert.ok(messagingYaml.includes('retention-days: 7'));
   assert.ok(messagingYaml.includes('max-attempts: 10'));
   assert.ok(messagingYaml.includes('initial-ms: 1000'));
-  assert.ok(messagingYaml.includes('max-ms: 60000'));
+  // El tope del backoff se acorta SOLO en local, que es el perfil con el que corre la
+  // suite de integración: ahí el broker caído es un paso del escenario de outbox, no
+  // una avería, y con el tope de producción la entrega tras la recuperación llegaría
+  // decenas de segundos después. Fuera de local el tope largo es lo correcto.
+  assert.ok(messagingYaml.includes('max-ms: 2000'));
+  assert.ok(
+    read(workspace, 'src/main/resources/parameters/develop/messaging.yaml').includes(
+      'max-ms: ${OUTBOX_RELAY_BACKOFF_MAX_MS:60000}'
+    )
+  );
+  // Y NO la caducidad del reclamo: aquí el lote se reclama con un lock de fila, que la
+  // conexión suelta al caer la réplica. Emitir el parámetro sería ofrecer una palanca
+  // que no está conectada a nada.
+  assert.ok(!messagingYaml.includes('claim-timeout-ms'));
+
+  // La palanca que hace observable el outbox en caja negra. Sin ella el único
+  // escenario posible —«el evento acaba llegando»— lo pasa igual un servidor que
+  // publica en línea, así que la garantía que compra `reliability: outbox` no
+  // tendría ningún gate conductual detrás.
+  const harness = read(
+    workspace,
+    'src/integrationTest/java/com/commerce/productcatalog/flows/AbstractFlowIT.java'
+  );
+  assert.ok(harness.includes('protected static void stopBroker()'));
+  assert.ok(harness.includes('protected static void startBroker()'));
+  // El contenedor se nombra igual que lo bautiza el compose: si cada lado lo
+  // compusiera por su cuenta, el arnés pararía un contenedor inexistente y el fallo
+  // saldría como un timeout, lejos de su causa.
+  assert.ok(harness.includes('BROKER_CONTAINER = "product-catalog-rabbitmq"'));
+  assert.ok(read(workspace, 'infra/docker-compose.yaml').includes('container_name: product-catalog-rabbitmq'));
+  // Levantar el contenedor no es que el broker sirva: se espera con el mismo sondeo
+  // que usa validate-infra.sh.
+  assert.ok(harness.includes('awaitBrokerReady()'));
+  assert.ok(harness.includes('curl -sf -u guest:guest http://rabbitmq:15672/api/healthchecks/node'));
+  // Y la red contra el flujo que muere antes de su finally.
+  assert.ok(harness.includes('restoreBroker();'));
+  // RabbitMQ conserva su topología al reiniciar: nada que resembrar.
+  assert.ok(!harness.includes('reseedTopology'));
+});
+
+test('sin outbox no hay palanca de broker: detenerlo no probaría ninguna garantía', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  // Mismo diseño, misma capa de mensajería, pero entrega best-effort declarada.
+  const { patched, patchedManifest } = withEvent(layers, manifest, 'best-effort');
+
+  scaffoldService({
+    manifest: patchedManifest,
+    layers: patched,
+    workspace,
+    stack: { database: 'postgres', broker: 'rabbitmq', auth: null, cache: null, storage: null }
+  });
+
+  const harness = read(
+    workspace,
+    'src/integrationTest/java/com/commerce/productcatalog/flows/AbstractFlowIT.java'
+  );
+  assert.ok(!harness.includes('stopBroker'));
+  assert.ok(!harness.includes('BROKER_CONTAINER'));
+  // El nombre del contenedor sí se estampa siempre: es del compose, no del arnés.
+  assert.ok(read(workspace, 'infra/docker-compose.yaml').includes('container_name: product-catalog-rabbitmq'));
+});
+
+test('con SNS/SQS el arranque del broker resiembra la topología, que no sobrevive al reinicio', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const { patched, patchedManifest } = withEvent(layers, manifest, 'outbox');
+
+  scaffoldService({
+    manifest: patchedManifest,
+    layers: patched,
+    workspace,
+    stack: { database: 'postgres', broker: 'snssqs', auth: null, cache: null, storage: null }
+  });
+
+  const harness = read(
+    workspace,
+    'src/integrationTest/java/com/commerce/productcatalog/flows/AbstractFlowIT.java'
+  );
+  // LocalStack sirve SNS/SQS desde memoria: al arrancar de nuevo vuelve sin topics ni
+  // colas. Lo que se perdería no es el mensaje sino el destino, y el escenario fallaría
+  // por «cola inexistente» en vez de por el outbox.
+  assert.ok(harness.includes('reseedTopology();'));
+  assert.ok(harness.includes('infra/init-messaging.sh'));
+  assert.ok(harness.includes('BROKER_CONTAINER = "product-catalog-localstack"'));
+  // bashExecutable() se define UNA vez aunque lo usen el reset y la resiembra.
+  assert.equal((harness.match(/private static String bashExecutable\(\)/g) ?? []).length, 1);
 });
 
 test('frontera hexagonal: application no importa los eventos de Spring', () => {
@@ -2482,25 +2570,40 @@ test('idempotencia de consumo: registro de procesados transversal al broker', ()
 
   const dir = 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/idempotency';
   const entity = read(workspace, `${dir}/ProcessedEventJpa.java`);
-  assert.ok(entity.includes('@Table(name = "processed_event")'));
+  assert.ok(entity.includes('@Table(name = "processed_event", indexes = {'));
   assert.ok(entity.includes('@EmbeddedId'));
+  // La purga borra por rango de fecha y la clave primaria no le sirve: sin este índice
+  // cada réplica recorre la tabla entera a la misma hora. Mismo nombre que el documental.
+  assert.ok(entity.includes('@Index(name = "ix_processed_event_processed_at", columnList = "processed_at")'));
   // El id del mensaje lo elige quien publica y no siempre es un uuid: quedarse corto
   // manda a la DLQ, por no caber, justo el mensaje que la tabla existe para deduplicar.
   assert.ok(entity.includes('@Column(name = "event_id", nullable = false, length = 255)'));
 
   const guard = read(workspace, `${dir}/IdempotencyGuard.java`);
-  assert.ok(guard.includes('@Transactional(propagation = Propagation.REQUIRES_NEW)'));
   // Las dos puertas, porque el orden del registro no es intercambiable: procesar y
   // luego registrar hace reintentable un fallo transitorio; reclamar antes cierra la
   // ventana del duplicado a cambio de perder el mensaje si el handler falla.
   assert.ok(guard.includes('public boolean alreadyProcessed(String handlerId, String eventId)'));
   assert.ok(guard.includes('public boolean record(String handlerId, String eventId)'));
   assert.ok(guard.includes('public boolean tryRecord(String handlerId, String eventId)'));
-  // La carrera la arbitra la clave primaria, no el existsById previo.
+  // La carrera la arbitra la clave primaria, no el existsById previo. Por eso tryRecord
+  // NO consulta antes de insertar: preguntar no cierra ninguna ventana que la clave no
+  // cierre ya, y con dos réplicas las dos pasarían igualmente la consulta.
   assert.ok(guard.includes('catch (DataIntegrityViolationException duplicate)'));
+  assert.ok(!/tryRecord\([^)]*\)\s*\{\s*if \(alreadyProcessed/.test(guard));
+  // La escritura vive en OTRO bean, y las dos razones son el proxy: dentro de la misma
+  // clase el REQUIRES_NEW no se aplicaría (auto-invocación), y capturar la violación
+  // dentro de la transacción que la provoca la deja rollback-only —el `return false`
+  // acabaría en UnexpectedRollbackException al commitear—.
+  assert.ok(guard.includes('writer.insert(new ProcessedEventJpa.ProcessedEventId(handlerId, eventId))'));
+  assert.ok(!guard.includes('Propagation.REQUIRES_NEW'));
+  const writer = read(workspace, `${dir}/ProcessedEventWriter.java`);
+  assert.ok(writer.includes('@Transactional(readOnly = true, propagation = Propagation.REQUIRES_NEW)'));
+  assert.ok(writer.includes('@Transactional(propagation = Propagation.REQUIRES_NEW)'));
   // Y con flush: JPA difiere el INSERT hasta el commit, así que sin él la violación
-  // de clave salta FUERA del catch y el listener ve un error, no un duplicado.
-  assert.ok(guard.includes('saveAndFlush('));
+  // de clave no saltaría en insert() sino al commitear, donde ya nadie la distingue.
+  assert.ok(writer.includes('saveAndFlush('));
+  assert.ok(!writer.includes('catch ('));
   // Nada del broker concreto: quien llama al guard es el listener del agente.
   for (const ajeno of ['SnsTemplate', 'KafkaTemplate', 'RabbitTemplate']) {
     assert.ok(!guard.includes(ajeno));
@@ -2540,11 +2643,14 @@ test('idempotencia de comando: store transaccional, contexto y filtro de la cabe
 
   const dir = `${base}/infrastructure/persistence/idempotency`;
   const entity = read(workspace, `${dir}/IdempotencyRecordJpa.java`);
-  assert.ok(entity.includes('@Table(name = "idempotency_record")'));
+  assert.ok(entity.includes('@Table(name = "idempotency_record", indexes = {'));
   assert.ok(entity.includes('@EmbeddedId'));
   // "scope" es palabra del SQL estándar: la columna no puede llamarse así.
   assert.ok(entity.includes('@Column(name = "operation_scope"'));
   assert.ok(entity.includes('@Column(name = "expires_at"'));
+  // La purga borra por rango de caducidad y la clave primaria no le sirve: sin índice,
+  // cada réplica recorre la tabla entera. Mismo nombre que el equivalente documental.
+  assert.ok(entity.includes('@Index(name = "ix_idempotency_record_expires_at", columnList = "expires_at")'));
 
   // La atomicidad es el motivo de existir de esta implementación: save se une a
   // la transacción del caso de uso (REQUIRED), al revés que IdempotencyGuard.
@@ -2552,6 +2658,14 @@ test('idempotencia de comando: store transaccional, contexto y filtro de la cabe
   assert.ok(store.includes('implements IdempotencyStore'));
   assert.ok(store.includes('@Transactional\n    public void save('));
   assert.ok(!store.includes('propagation = Propagation.REQUIRES_NEW'));
+  // Y con flush, para que la violación de clave salte AQUÍ: con save saldría por el
+  // commit del mediador, donde ya no se distingue de cualquier otro conflicto y el
+  // cliente recibe un 409 sin code que ningún escenario puede afirmar.
+  assert.ok(store.includes('saveAndFlush('));
+  assert.ok(store.includes('throw new IdempotencyConflictException(scope, idempotencyKey, concurrent)'));
+  const conflict = read(workspace, `${base}/domain/idempotency/IdempotencyConflictException.java`);
+  assert.ok(conflict.includes('extends ConflictException'));
+  assert.ok(conflict.includes('"IDEMPOTENCY_KEY_IN_PROGRESS"'));
   assert.ok(store.includes('@Scheduled(cron = "${idempotency-record.purge.cron:'));
   assert.ok(read(workspace, `${dir}/IdempotencyRecordJpaRepository.java`).includes('deleteExpiredBefore'));
   assert.ok(read(workspace, `${base}/ProductCatalogApplication.java`).includes('@EnableScheduling'));
@@ -2575,6 +2689,30 @@ test('idempotencia de comando: store transaccional, contexto y filtro de la cabe
   const handler = read(workspace, `${base}/application/usecases/CreateProductCommandHandler.java`);
   assert.ok(handler.includes('IdempotencyContext.get()'));
   assert.ok(handler.includes('scope="createProduct"'));
+});
+
+// Una operación con `schedule` genera su <Servicio>Scheduler con @Scheduled, pero
+// las anotaciones no hacen nada sin @EnableScheduling en la clase de aplicación. Y
+// nada lo delataba: check-idempotency.sh da la familia `reconciliation` por buena
+// porque el @Scheduled SÍ está en el fuente. Ninguna fixture lo reproduce —todas
+// traen suscripciones u outbox, que ya activaban el scheduling por su cuenta—, así
+// que la red va sobre un modelo sintético.
+test('un diseño con schedule y sin outbox ni suscripciones activa el scheduling igual', () => {
+  const scheduledModel = {
+    service: { basePackage: 'com.example.svc', applicationClass: 'SvcApplication' },
+    layersPresent: {},
+    services: [{ operations: [{ schedule: { cron: '0 * * * *' } }] }],
+    audit: {},
+    events: []
+  };
+
+  assert.equal(hasScheduledOperations(scheduledModel), true);
+  assert.equal(hasScheduledOperations({ services: [{ operations: [{}] }] }), false);
+  assert.equal(hasScheduledOperations({}), false);
+
+  const [application] = applicationFiles(scheduledModel);
+  assert.ok(application.content.includes('@EnableScheduling'));
+  assert.ok(application.content.includes('import org.springframework.scheduling.annotation.EnableScheduling;'));
 });
 
 test('sin idempotencia declarada no se genera el registro de comando', () => {

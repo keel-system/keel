@@ -228,15 +228,22 @@ test('el outbox reclama con findAndModify: no hay lock pesimista de fila que sos
 
 test('la idempotencia inserta en vez de guardar: un save con _id presente reemplazaría en silencio', () => {
   const { read } = scaffoldReports();
-  const guard = read(`${JAVA}/infrastructure/messaging/idempotency/IdempotencyGuard.java`);
+  const dir = `${JAVA}/infrastructure/messaging/idempotency`;
+  const writer = read(`${dir}/ProcessedEventWriter.java`);
+  const guard = read(`${dir}/IdempotencyGuard.java`);
 
   // Con save(), la segunda entrega del mismo mensaje pisaría el registro de la
   // primera y se procesaría otra vez: justo lo que este mecanismo existe para
   // impedir. Con insert(), el _id arbitra igual que la clave primaria.
-  assert.ok(guard.includes('.insert(new ProcessedEventDocument(key, Instant.now()))'));
-  assert.ok(!guard.includes('.save(new ProcessedEventDocument'));
-  // DuplicateKeyException es una DataIntegrityViolationException: el catch vale igual.
+  assert.ok(writer.includes('.insert(new ProcessedEventDocument(key, Instant.now()))'));
+  assert.ok(!writer.includes('.save(new ProcessedEventDocument'));
+  // La escritura va en su propia transacción y en otro bean: dentro del guard, la
+  // llamada no cruzaría el proxy y REQUIRES_NEW no se aplicaría.
+  assert.ok(writer.includes('@Transactional(propagation = Propagation.REQUIRES_NEW)'));
+  // DuplicateKeyException es una DataIntegrityViolationException: el catch vale igual,
+  // y vive fuera de la transacción que la provoca.
   assert.ok(guard.includes('catch (DataIntegrityViolationException duplicate)'));
+  assert.ok(!writer.includes('catch ('));
 });
 
 test('la infraestructura arranca como replica set y cada perfil usa su modo de conexión', () => {

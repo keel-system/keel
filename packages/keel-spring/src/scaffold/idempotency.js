@@ -32,6 +32,7 @@ export function generate(model) {
   return [
     document ? renderDocument(model) : renderEntity(model),
     document ? renderDocumentRepository(model) : renderRepository(model),
+    renderWriter(model),
     renderGuard(model)
   ];
 }
@@ -168,9 +169,16 @@ function renderEntity(model) {
  * listeners, y cada uno debe procesarlo exactamente una vez. La unicidad la
  * impone la clave primaria, no una consulta previa: es la BD la que arbitra la
  * carrera entre dos entregas simultáneas del mismo mensaje.
+ *
+ * <p>El índice sobre processed_at es de la purga, no de la lectura: el barrido
+ * diario borra por rango de fecha y la clave primaria no le sirve de nada. Sin él
+ * cada réplica hace un recorrido completo de la tabla a la misma hora. Mismo
+ * nombre que su equivalente documental, para que las dos ramas se comparen.
  */
 @Entity
-@Table(name = "processed_event")
+@Table(name = "processed_event", indexes = {
+        @Index(name = "ix_processed_event_processed_at", columnList = "processed_at")
+})
 public class ProcessedEventJpa {
 
     @EmbeddedId
@@ -264,6 +272,7 @@ public class ProcessedEventJpa {
         'jakarta.persistence.Embeddable',
         'jakarta.persistence.EmbeddedId',
         'jakarta.persistence.Entity',
+        'jakarta.persistence.Index',
         'jakarta.persistence.Table',
         'java.io.Serializable',
         'java.time.Instant',
@@ -299,7 +308,20 @@ function renderRepository(model) {
   };
 }
 
-function renderGuard(model) {
+// El escritor va en un bean APARTE del guard, y las dos razones son la misma vista
+// dos veces: el proxy de Spring.
+//
+//  - Propagación: un método @Transactional invocado desde otro método de la MISMA
+//    clase no pasa por el proxy, así que su REQUIRES_NEW no se aplica. Con el
+//    registro dentro del guard, tryRecord() llamando a record() heredaba la
+//    transacción del handler y el registro moría con su rollback — justo lo que el
+//    javadoc promete que no pasa.
+//  - Captura: en la rama relacional, una violación de clave deja la sesión de
+//    Hibernate inservible y marca la transacción rollback-only. Capturarla DENTRO de
+//    esa misma transacción no salva nada: el `return false` acaba en
+//    UnexpectedRollbackException al commitear. Aquí la excepción se LANZA y quien la
+//    captura está fuera, con su transacción ya revertida.
+function renderWriter(model) {
   const { entity, repository } = processedEventNames(model);
   const field = 'processedEventRepository';
   // En el modelo documental, save() con un _id ya presente es un REEMPLAZO, no un
@@ -308,13 +330,67 @@ function renderGuard(model) {
   // exactamente lo que hacía la clave primaria en la rama relacional.
   //
   // Y en la relacional, saveAndFlush y no save: JPA difiere el INSERT hasta el
-  // flush, así que con save la violación de clave no salta dentro del try —
-  // salta al commit, fuera del catch, y el listener ve un error en vez de un
-  // duplicado. La diferencia es que el mensaje acabe confirmado o en la DLQ.
+  // flush, así que con save la violación de clave no saltaría en insert() sino al
+  // commitear esta transacción, donde ya nadie puede distinguirla.
   const write =
     model.persistenceKind === 'document'
-      ? `            ${field}.insert(new ${entity}(key, Instant.now()));`
-      : `            ${field}.saveAndFlush(new ${entity}(key, Instant.now()));`;
+      ? `        ${field}.insert(new ${entity}(key, Instant.now()));`
+      : `        ${field}.saveAndFlush(new ${entity}(key, Instant.now()));`;
+  const body = `/**
+ * Escritura del registro de procesados: una transacción propia por operación, en un
+ * bean aparte del guard.
+ *
+ * <p><b>Las dos cosas son necesarias y por el mismo motivo: el proxy.</b> Si el guard
+ * llamara a sus propios métodos anotados, la llamada no pasaría por el proxy y
+ * {@code REQUIRES_NEW} no se aplicaría — el registro moriría con el rollback del
+ * handler, que es exactamente lo que no debe pasar. Y si el {@code catch} del
+ * duplicado viviera dentro de esta transacción, capturarlo no salvaría nada: la
+ * violación de clave la deja marcada rollback-only y el commit posterior fallaría.
+ * Aquí se LANZA; quien la interpreta está fuera.
+ *
+ * <p>No es una clase para tocar: quien la pliegue dentro de {@link IdempotencyGuard}
+ * reintroduce los dos fallos a la vez, y solo se manifiestan con dos entregas
+ * simultáneas del mismo mensaje — es decir, con varias réplicas en marcha.
+ */
+@Component
+class ProcessedEventWriter {
+
+    private final ${repository} ${field};
+
+    ProcessedEventWriter(${repository} ${field}) {
+        this.${field} = ${field};
+    }
+
+    @Transactional(readOnly = true, propagation = Propagation.REQUIRES_NEW)
+    boolean exists(${entity}.ProcessedEventId key) {
+        return ${field}.existsById(key);
+    }
+
+    /** Inserta o lanza. La violación de clave es el resultado esperado de una carrera. */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    void insert(${entity}.ProcessedEventId key) {
+${write}
+    }
+}`;
+
+  return {
+    path: javaPath(model, IDEMPOTENCY_PKG, 'ProcessedEventWriter'),
+    content: javaFile(
+      subPackage(model, IDEMPOTENCY_PKG),
+      [
+        'java.time.Instant',
+        'org.springframework.stereotype.Component',
+        'org.springframework.transaction.annotation.Propagation',
+        'org.springframework.transaction.annotation.Transactional'
+      ],
+      body
+    )
+  };
+}
+
+function renderGuard(model) {
+  const { entity, repository } = processedEventNames(model);
+  const field = 'processedEventRepository';
   // El sustantivo del log sigue al motor: en el relacional son filas de una tabla y
   // en el documental, documentos de una colección. Es lo que verá quien lea el log.
   // Quién arbitra la carrera: la clave primaria de la tabla o el _id del documento.
@@ -324,6 +400,8 @@ function renderGuard(model) {
     model.persistenceKind === 'document'
       ? 'el _id del documento es el árbitro y esta pierde.'
       : 'la clave primaria es el árbitro y esta pierde.';
+  const arbiter2 =
+    model.persistenceKind === 'document' ? 'la unicidad del _id de la colección' : 'la clave primaria de la tabla';
   const purgedNoun =
     model.persistenceKind === 'document' ? 'purgados {} documentos procesados' : 'purgadas {} filas procesadas';
   const purgeCall =
@@ -360,6 +438,12 @@ function renderGuard(model) {
  * que no se puede perder es el mensaje que revierte algo real, y el guard del
  * agregado absorbe la repetición.
  *
+ * <p><b>Con varias réplicas</b> la carrera deja de ser hipotética: dos entregas del
+ * mismo mensaje pueden estar procesándose a la vez en dos procesos distintos. Nada
+ * de aquí las coordina, y no hace falta — el árbitro es ${arbiter2}, que es
+ * compartida. Lo que sí importa es que la escritura y su interpretación estén en
+ * lados distintos del proxy: por eso el registro vive en {@link ProcessedEventWriter}.
+ *
  * <p>Cadencia y retención de la purga salen de parameters/, nunca del código.
  */
 @Component
@@ -367,12 +451,15 @@ public class IdempotencyGuard {
 
     private static final Logger log = LoggerFactory.getLogger(IdempotencyGuard.class);
 
+    private final ProcessedEventWriter writer;
+
     private final ${repository} ${field};
 
     @Value("\${processed-event.purge.retention-days:14}")
     private int retentionDays;
 
-    public IdempotencyGuard(${repository} ${field}) {
+    public IdempotencyGuard(ProcessedEventWriter writer, ${repository} ${field}) {
+        this.writer = writer;
         this.${field} = ${field};
     }
 
@@ -384,27 +471,26 @@ public class IdempotencyGuard {
      * @param eventId   identificador del mensaje (messageId del diseño o metadata.eventId)
      * @return true si ya está registrado y hay que confirmarlo (ack) sin ejecutarlo
      */
-    @Transactional(readOnly = true, propagation = Propagation.REQUIRES_NEW)
     public boolean alreadyProcessed(String handlerId, String eventId) {
-        return ${field}.existsById(new ${entity}.ProcessedEventId(handlerId, eventId));
+        return writer.exists(new ${entity}.ProcessedEventId(handlerId, eventId));
     }
 
     /**
      * Registra el mensaje como procesado. Se llama DESPUÉS de que el handler haya
-     * terminado bien, en su propia transacción para que el registro no dependa de
-     * la del negocio (que ya commiteó).
+     * terminado bien, en la transacción propia del writer para que el registro no
+     * dependa de la del negocio (que ya commiteó).
      *
      * @return true si lo registró esta llamada; false si otra entrega simultánea
      *         llegó primero — no es un error, es la carrera resuelta por la BD
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public boolean record(String handlerId, String eventId) {
-        ${entity}.ProcessedEventId key = new ${entity}.ProcessedEventId(handlerId, eventId);
         try {
-${write}
+            writer.insert(new ${entity}.ProcessedEventId(handlerId, eventId));
             return true;
         } catch (DataIntegrityViolationException duplicate) {
-            // Dos entregas del mismo mensaje procesándose a la vez: ${arbiter}
+            // Dos entregas del mismo mensaje procesándose a la vez, normalmente en dos
+            // réplicas distintas: ${arbiter} La transacción que revirtió es la del
+            // writer, no la de quien llama: aquí no hay nada roto que arrastrar.
             log.debug("Idempotencia: {} ya registrado por {} (carrera resuelta en la clave)", eventId, handlerId);
             return false;
         }
@@ -414,13 +500,14 @@ ${write}
      * Reclama el mensaje ANTES de procesarlo, de forma atómica. Ver la nota de la
      * clase: si el handler falla después de esto, el mensaje se pierde.
      *
+     * <p>Es la MISMA inserción que {@link #record}: lo que cambia es cuándo se llama,
+     * no cómo se escribe. No hay consulta previa a propósito — preguntar antes de
+     * insertar no cierra ninguna ventana que la clave no cierre ya, y añade una
+     * consulta por mensaje.
+     *
      * @return true si es la primera vez y hay que procesar; false si es un duplicado
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public boolean tryRecord(String handlerId, String eventId) {
-        if (alreadyProcessed(handlerId, eventId)) {
-            return false;
-        }
         return record(handlerId, eventId);
     }
 
@@ -448,7 +535,6 @@ ${write}
         'org.springframework.dao.DataIntegrityViolationException',
         'org.springframework.scheduling.annotation.Scheduled',
         'org.springframework.stereotype.Component',
-        'org.springframework.transaction.annotation.Propagation',
         'org.springframework.transaction.annotation.Transactional'
       ],
       body

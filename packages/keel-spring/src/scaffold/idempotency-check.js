@@ -174,6 +174,26 @@ function reconciliationChecks(model) {
       why: `barre ${operation.reconciles.map((r) => `${r.dependency}.${r.activation.name}`).join(', ')}: el umbral sale de parameters/ con @Value, no de una constante`
     });
   }
+  // Y lo único que decide si el barrido es correcto con varias réplicas: que la
+  // consulta RECLAME sus candidatos en vez de leerlos. @Scheduled es «cada N minutos
+  // en cada instancia», no «en el clúster», así que un findAllByStatus deja que las N
+  // se lleven las mismas filas y todas actúen — y actuar aquí es llamar a otro
+  // servidor. Se comprueba una vez por diseño, no por operación: basta con que el
+  // patrón exista en alguna parte del árbol que el agente escribió.
+  if (schedulers.size > 0) {
+    checks.push({
+      group: 'reconciliation',
+      subject: 'reclamo del barrido',
+      claim: 'PESSIMISTIC_WRITE|SKIP LOCKED|skip locked|findAndModify|@Modifying',
+      // Sin cota, el reclamo bloquea la tabla entera y el barrido deja de ser un lote.
+      bound: 'Pageable|PageRequest|[Ll]imit|first[0-9]|[Tt]op[0-9]',
+      // Las clases del mecanismo que build YA genera con el patrón: encontrarlas
+      // probaría lo que build hizo, no lo que el agente tenía que escribir.
+      exclude:
+        '/(OutboxEventJpaRepository|OutboxEventMongoRepository|OutboxRelay|OutboxEventJpa|OutboxEventDocument|ProcessedEventJpaRepository|ProcessedEventMongoRepository|IdempotencyRecordJpaRepository|IdempotencyRecordMongoRepository)\\.java',
+      why: 'ninguna consulta reclama candidatos (bloqueo con SKIP LOCKED, findAndModify o UPDATE ... RETURNING) con el lote acotado: el barrido corre en TODAS las réplicas y sin reclamo las N se llevan las mismas filas — ver conventions/dependencies.md § El barrido corre en todas las réplicas'
+    });
+  }
   for (const scheduler of schedulers) {
     checks.push({
       group: 'reconciliation',
@@ -192,6 +212,11 @@ function reconciliationChecks(model) {
 // 5. Entrega del outbox. El stub NO lanza a propósito (el relay contaría el intento como
 //    fallo), así que su precio es que marca como publicadas filas que nunca salieron. El
 //    fail-fast del arranque cubre los perfiles de verdad; esto lo cubre antes de arrancar.
+//    A diferencia de la reconciliación, esta familia SÍ tiene un escenario detrás desde que
+//    el arnés puede detener el broker (`FL-*` de canal indisponible), pero ese escenario
+//    llega tarde: corre con la aplicación arrancada, y si el dispatcher es el fallback la
+//    suite entera se ha ejecutado ya contra un servidor que descartaba eventos en silencio.
+//    Este check es el que lo dice antes.
 function outboxChecks(model) {
   if (!usesOutbox(model)) return [];
   return [
@@ -213,6 +238,9 @@ function script(model, checks) {
   const rows = checks.map((check) => {
     if (check.implementors) {
       return `impl ${shellQuote(check.group)} ${shellQuote(check.subject)} ${shellQuote(check.implementors)} ${shellQuote(check.exclude)} ${shellQuote(check.why)}`;
+    }
+    if (check.claim) {
+      return `claim ${shellQuote(check.group)} ${shellQuote(check.subject)} ${shellQuote(check.claim)} ${shellQuote(check.bound)} ${shellQuote(check.exclude)} ${shellQuote(check.why)}`;
     }
     const require = (check.require ?? []).join('\u0001');
     const forbid = (check.forbid ?? []).join('\u0001');
@@ -306,6 +334,30 @@ impl() {  # familia, sujeto, interfaz, clase excluida, porqué
   found="$(grep -rlE "implements[^{]*\\\\b$iface\\\\b|$iface[[:space:]]*\\\\(" "$SRC" 2>/dev/null \\
            | grep -v "/$excluded.java" | head -n 1)"
   [ -n "$found" ] || note "$group" "$subject: solo está el fallback $excluded — $why"
+}
+
+# Que exista una consulta que RECLAME candidatos, y acotada. Se busca en todo el árbol
+# y no en un archivo concreto: el reclamo vive en el adaptador de lectura y dónde lo
+# ponga el agente es asunto suyo. Las dos condiciones tienen que darse en el MISMO
+# archivo — un reclamo aquí y un Pageable en otro listado cualquiera no es un lote.
+#
+# Y sobre el CÓDIGO, no sobre la prosa: la nota que build deja en el stub del barrido
+# nombra el patrón para explicarlo, así que mirando el archivo entero este check saldría
+# verde por el propio comentario que dice lo que falta hacer.
+claim() {  # familia, sujeto, patrón de reclamo, patrón de cota, rutas excluidas, porqué
+  local group="$1" subject="$2" pattern="$3" bound="$4" excluded="$5" why="$6"
+  local file found="" code
+  while IFS= read -r file; do
+    [ -n "$file" ] || continue
+    code="$(sed -e 's://.*::' -e '/^[[:space:]]*\\*/d' -e '/^[[:space:]]*\\/\\*/d' "$file")"
+    if printf '%s' "$code" | grep -qE -- "$pattern" && printf '%s' "$code" | grep -qE -- "$bound"; then
+      found="$file"
+      break
+    fi
+  done <<EOF
+$(grep -rlE -- "$pattern" "$SRC" 2>/dev/null | grep -vE "$excluded")
+EOF
+  [ -n "$found" ] || note "$group" "$subject: $why"
 }
 
 ${rows.join('\n')}

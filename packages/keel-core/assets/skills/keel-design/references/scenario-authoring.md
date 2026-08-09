@@ -16,7 +16,7 @@ Recorre los artefactos y construye la lista de obligaciones. Es un borrador de t
 | `operations[].errors[]` | una aserción por `code`, con su status |
 | `operations[].preconditions/rules` | un orden de evaluación por command, más un escenario de precedencia si hay ≥2 errores |
 | `operations[].emits[]` | una aserción de evento (nombre + payload + canal) |
-| `operations[].idempotency` | reintento con misma clave |
+| `operations[].idempotency` | **dos**: el reintento secuencial con la misma clave (mismo status, mismo cuerpo, sin segundo efecto) + una **carrera** de dos peticiones con la misma clave a la vez, cuyo `Then` es disyunción cerrada (respuesta reproducida o `409` de clave en curso) **más un conteo por la API que afirma un solo recurso** |
 | `operations[].output.embed` | una aserción del **objeto anidado** (no del `<relación>Id`), con sus campos |
 | `operations[].output.exclude` | una aserción de **ausencia** por cada ruta excluida |
 | `operations[].cache.invalidatedBy` | un ciclo leer → mutar → releer **por cada vía** listada |
@@ -24,7 +24,7 @@ Recorre los artefactos y construye la lista de obligaciones. Es un borrador de t
 | `operations[].schedule` | disparo y efecto observable |
 | `domain.entities[].lifecycle` | un escenario por transición + una transición inválida + **todo estado alcanzado** |
 | `operations[].transitions` | la transición feliz + su aplicación desde un estado que **no** está en `from`, con el error de transición inválida |
-| `dependencies.*.compensations[]` | dos escenarios: el efecto completo de la compensación (trabajo deshecho **y** estado propio devuelto, leído por la API) + la **reentrega del mismo evento** sin segundo efecto |
+| `dependencies.*.compensations[]` | **tres** escenarios: el efecto completo (trabajo deshecho, estado propio devuelto leído por la API y —si el encargo salió por un cliente— la **llamada de vuelta al proveedor**) + la **reentrega del mismo evento** sin segundo efecto + la **doble entrega simultánea**, que tampoco lo produce |
 | `domain` campos `unique` | una colisión |
 | `domain` constraints y requeridos | casos borde `400` |
 | `api.endpoints` con `successStatus: 201` | una aserción de la cabecera `Location` (ver § 2) |
@@ -32,6 +32,8 @@ Recorre los artefactos y construye la lista de obligaciones. Es un borrador de t
 | `api.endpoints[].audience: services/both` | contrato M2M completo (request + response + errores + auth) |
 | `security.access` | `401` sin credencial y `403` sin permiso, por operación protegida |
 | `messaging.subscriptions` | consumo + `onFailure` (retry/DLQ) + reentrega si hay `messageId` |
+| `messaging.reliability: outbox` | un escenario de **supervivencia**: con el canal indisponible, la mutación responde igual y el canal sigue vacío; restablecido, el evento llega **exactamente una vez**. Las dos negaciones son lo que lo hace fallable |
+| `activations[].reconciledBy` | **ninguno, por construcción** — no hay puerta de caja negra que dispare un barrido por tiempo. Se declara el umbral y qué queda observable; la verificación es estática (ver `validation-scenarios.md § Lo que no tiene escenario`) |
 | `storage.buckets` | subida feliz, lectura según `visibility`, lectura de una clave inexistente, `FILE_TOO_LARGE`, `UNSUPPORTED_CONTENT_TYPE` |
 
 Cuando el inventario esté completo, la **matriz de cobertura** sale de él, no de los flujos.
@@ -62,6 +64,7 @@ Estas convenciones son la salida natural de la clase 12 del análisis de huecos 
 - Una operación `level: service` **no rechaza por sí sola un token de usuario**: la separación es por scopes, no por tipo de credencial.
 - La cabecera **`Location`** de una creación **no se declara ni se niega en el YAML**: se emite en toda operación con `successStatus: 201` cuyo `output` declare `id`, con la URI de la petición más el id devuelto. El escenario la asserta; lo que **no** puede hacer es afirmar "sin cabecera `Location`" ni fijarle una URI distinta de esa — ningún servidor correcto lo pasa. Si la creación no devuelve `id` (output vacío o una lista), entonces no hay `Location` que assertar.
 - Si un escenario ejercita **dos escrituras concurrentes**, el resultado lo fija `persistence.consistency.optimisticLocking` (`all`/`declared` → conflicto `409`; `none` → ambas con éxito, último escritor gana). Declararlo solo en prosa dentro de `rules` no vale: ningún generador lee prosa.
+- Si el escenario ejercita **dos peticiones simultáneas con la misma clave de idempotencia**, el desenlace admisible es doble y hay que enumerarlo: o las dos responden lo mismo, o la que pierde la carrera recibe **`409` con code `IDEMPOTENCY_KEY_IN_PROGRESS`** — la clave se registra en la misma transacción que el recurso, así que hasta que la ganadora no commitea no hay respuesta que reproducir. Lo que no admite disyunción es el efecto: la API tiene que devolver **exactamente un** recurso. Ese `code` lo emite el generador; no se inventa otro en el YAML.
 
 Esta lista es una **copia manual** del contrato de keel-spring, y por eso envejece: la fuente real es `docs/keel/conventions/flow-fidelity.md`, que solo existe **dentro de un proyecto ya generado** (`services/<servicio>-<tech>/`), es decir, después de este paso. Si hay algún proyecto generado a mano, contrasta contra él; si el generador se comporta de otra forma que la descrita aquí, gana el generador y esta lista está desactualizada — repórtalo.
 
@@ -144,7 +147,13 @@ Errores frecuentes que estas pasadas deben cazar:
 - Escenario que exige ver un cambio reflejado de inmediato en un objeto `embed` cuya entidad no publica ningún evento en `invalidatedBy`: es una exigencia que ningún generador puede cumplir, y lo que hay que corregir es el diseño (o el escenario), no el servidor.
 - Estado del `lifecycle` que ningún flujo alcanza.
 - Evento en `emits` que no aparece en ningún `Then`.
-- **Compensación sin escenario de reentrega**: el flujo prueba que la compensación deshace el trabajo, y nada prueba que no lo deshaga dos veces. Es el hueco más caro de la lista, porque el segundo efecto no se ve al probar a mano — hay que reentregar el mensaje a propósito. Es el único de esta lista que `keel validate` también caza (busca el `onEvent` en los escenarios y, entre los que lo mencionan, uno que lo reentregue), pero por texto: si el escenario existe con otra redacción, el aviso es un falso positivo que se cierra escribiendo «reentrega» donde toca; si no existe, hay que escribirlo.
+- **Compensación sin escenario de reentrega**: el flujo prueba que la compensación deshace el trabajo, y nada prueba que no lo deshaga dos veces. Es el hueco más caro de la lista, porque el segundo efecto no se ve al probar a mano — hay que reentregar el mensaje a propósito.
+- **Compensación sin la doble entrega simultánea**: no es la reentrega con otras palabras. La secuencial encuentra la marca de procesado ya commiteada; la simultánea cae en la ventana en la que todavía no lo está, que con réplicas es el caso normal.
+- **Idempotencia probada solo en secuencia**: mismo argumento. Reintentar después encuentra el registro de la clave ya escrito y lo resuelve una lectura; el fallo real vive en la ventana en la que aún no lo está. Sin el escenario de carrera, lo que se ha probado es la lectura.
+- **Outbox sin escenario de canal indisponible**, o con uno que solo afirma «el evento acaba llegando»: eso lo cumple igual un servicio que publica directo dentro de la operación, así que el escenario no distingue nada y el `reliability: outbox` del diseño queda sin verificar.
+- **Compensación que solo mira hacia dentro**: el `Then` verifica el estado propio devuelto y nada dice del proveedor al que se le encargó el trabajo. El servicio queda internamente coherente y con un encargo vivo ahí fuera que nadie va a cancelar, y ningún `Then` que solo lea la propia API puede notarlo.
+
+De esta lista, `keel validate` caza cuatro **por texto**: los dos de compensación (reentrega y doble entrega), el de la carrera de idempotencia y el del outbox. Busca la señal en los escenarios y avisa si no la encuentra. Si el escenario existe con otra redacción, el aviso es un falso positivo que se cierra escribiendo la palabra que toca («reentrega», «a la vez», «canal indisponible»); si no existe, hay que escribirlo. El último —la llamada de vuelta al proveedor— no se mecaniza: depende de qué encarga cada dependencia, y es revisión de `/keel-validate`.
 
 ## 6. Regenerar sin romper
 

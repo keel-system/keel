@@ -6,7 +6,16 @@
 // y se serializa con yaml (mismo patrón de merge del proyecto de referencia).
 
 import YAML from 'yaml';
-import { DATABASES, BROKERS, AUTH, CACHES, STORAGE, HTTP_STUB, selectedInfra } from '../lib/stack-catalog.js';
+import {
+  DATABASES,
+  BROKERS,
+  AUTH,
+  CACHES,
+  STORAGE,
+  HTTP_STUB,
+  selectedInfra,
+  brokerContainer
+} from '../lib/stack-catalog.js';
 import { needsDevtools, devtoolsService, dockerfileDevtools, validateInfraScript, resetDbScript } from './devtools.js';
 import { messagingProvisioning } from './messaging-provisioning.js';
 
@@ -25,7 +34,17 @@ export function generate(model) {
     }
   }
   if (layersPresent.messaging && stack.broker) {
-    Object.assign(services, BROKERS[stack.broker].composeServices());
+    const broker = BROKERS[stack.broker];
+    const brokerServices = broker.composeServices();
+    // Nombre fijo para el contenedor del broker, igual que la BD. Sin él, el nombre
+    // real lo compone el proyecto de compose (`<proyecto>-<servicio>-1`) y no hay
+    // forma portable de dirigirse a él: `compose ps --format` no lo es (por eso
+    // up.sh sondea por HTTP). Y el arnés lo necesita direccionable para detener y
+    // levantar el broker en los escenarios de outbox.
+    if (brokerServices[broker.serviceKey]) {
+      brokerServices[broker.serviceKey].container_name = brokerContainer(service.name, broker);
+    }
+    Object.assign(services, brokerServices);
   }
   if (stack.auth && stack.auth !== 'none') {
     Object.assign(services, AUTH[stack.auth].composeServices());

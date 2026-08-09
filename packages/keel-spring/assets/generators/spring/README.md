@@ -36,6 +36,7 @@ cd services/<servicio>-spring
 | `conventions/domain-services.md` | Cuándo y cómo crear servicios de dominio (`@DomainComponent`) |
 | `conventions/read-composition.md` | Cómo se resuelven las referencias `embed` (por lote con el `<Raíz>RefResolver`) y cuándo hace falta un join proyectado en un adaptador de lectura |
 | `conventions/dependencies.md` | Capa `dependencies`: proyecciones de réplica (`<Entidad>Projector` / `<Entidad>Reader`) y su cableado listener → guard → mediator → handler |
+| `conventions/concurrency.md` | El servicio corre replicado: quién arbitra cada mecanismo de repetición, la ventana del `409 IDEMPOTENCY_KEY_IN_PROGRESS`, los `@Scheduled` que corren en todas las instancias y qué no cubre ningún gate |
 | `conventions/virtual-threads.md` | I/O paralela con hilos virtuales en query handlers |
 | `skills/` | Skills por tecnología del stack (`keel-spring-<tech>/` — database, kafka, rabbitmq, snssqs, s3, redis, keycloak, cognito; SKILL.md + `references/` bajo demanda), instaladas condicionalmente en el `el directorio de skills/` del proyecto generado según `keel-stack.json` |
 

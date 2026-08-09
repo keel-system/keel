@@ -342,3 +342,24 @@ test('el mongod embebido no entra en el classpath de las pruebas de integración
   // Sigue estando en `test`, que es donde sí es la base del perfil.
   assert.ok(gradle.includes("testImplementation 'de.flapdoodle.embed:de.flapdoodle.embed.mongo.spring3x:"));
 });
+
+// La caducidad del reclamo solo existe en la rama documental: ahí el relay marca la
+// fila (claimed_at) en vez de bloquearla, así que una réplica que muere la retendría
+// para siempre. Vivía únicamente como default del @Value, es decir, como un parámetro
+// que nadie sabía que podía tocar — y es justo el que fija la ventana en la que dos
+// réplicas pueden entregar la misma fila.
+test('la caducidad del reclamo del relay se parametriza por perfil', () => {
+  const { read } = scaffoldVault();
+
+  const local = read('src/main/resources/parameters/local/messaging.yaml');
+  assert.ok(local.includes('claim-timeout-ms: 60000'), local);
+  for (const profile of ['develop', 'production', 'test']) {
+    const yaml = read(`src/main/resources/parameters/${profile}/messaging.yaml`);
+    assert.ok(yaml.includes('${OUTBOX_RELAY_CLAIM_TIMEOUT_MS:'), `${profile}: sin env para el claim`);
+  }
+
+  // Y el nombre coincide con lo que el relay lee: un parámetro emitido con otra clave
+  // sería un valor que se puede editar sin que nada lo aplique.
+  const relay = read(`${JAVA}/infrastructure/messaging/outbox/OutboxRelay.java`);
+  assert.ok(relay.includes('${outbox.relay.claim-timeout-ms:'));
+});

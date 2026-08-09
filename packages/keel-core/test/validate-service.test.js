@@ -402,7 +402,7 @@ test('el documento llega desde disco: una compensación sin escenario de reentre
   );
 });
 
-test('con los dos escenarios el diseño valida limpio de punta a punta', (t) => {
+test('con los tres escenarios el diseño valida limpio de punta a punta', (t) => {
   const dir = compensationService(
     t,
     `# shipping — Escenarios de validación\n\n` +
@@ -411,7 +411,10 @@ test('con los dos escenarios el diseño valida limpio de punta a punta', (t) => 
       `**Then**: el envío queda en cancelled, leído por la API.\n\n` +
       `### FL-SHP-002: ShipmentRejected se reentrega\n` +
       `**Given**: la compensación ya se aplicó.\n**When**: se entrega el mismo mensaje otra vez.\n` +
-      `**Then**: no hay segundo efecto.\n`
+      `**Then**: no hay segundo efecto.\n\n` +
+      `### FL-SHP-003: ShipmentRejected llega dos veces a la vez\n` +
+      `**Given**: un envío en dispatched.\n**When**: se entregan dos copias del mensaje simultáneamente.\n` +
+      `**Then**: el envío queda en cancelled y la API cuenta una sola cancelación.\n`
   );
   const { ok, crossRefErrors, warnings } = validateService(dir);
   assert.deepEqual(crossRefErrors, []);
