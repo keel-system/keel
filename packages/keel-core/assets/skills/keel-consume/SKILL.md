@@ -127,11 +127,13 @@ una promesa al cliente, no un detalle técnico.
    desenlace.** Un encargo `awaits: nothing` no lleva estado intermedio; ponérselo fabrica una espera
    que el negocio no tiene y de la que nadie va a sacar a la entidad.
 
-   Si hay desenlace diferido, son **tres declaraciones acopladas** (detalle en
+   Si hay desenlace diferido, son **cuatro declaraciones acopladas** (detalle en
    `references/consume-interview.md § Desenlace diferido`): el estado en `domain: lifecycle` con sus
-   aristas de salida y la `transitions` de la operación que encarga; la operación `internal` que aplica
-   el desenlace bueno, disparada por la suscripción al evento de resultado; y `reconciledBy` con una
-   operación `schedule` que barra lo que lleve demasiado tiempo esperando. Sin la tercera has construido
+   aristas de salida y la `transitions` de la operación que encarga; **la marca de cuándo empezó a
+   esperar**, un campo propio que estampa esa operación —`createdAt` y `updatedAt` no valen, y el porqué
+   está en la referencia—; la operación `internal` que aplica el desenlace bueno, disparada por la
+   suscripción al evento de resultado; y `reconciledBy` con una operación `schedule` que barra lo que
+   lleve demasiado tiempo esperando. Sin la tercera has construido
    un sitio donde las cosas se quedan atascadas para siempre sin producir ningún error. Y avisa de que
    ese estado es **contrato público**: la operación deja de poder prometer «confirmado» en su respuesta.
 4. **`via`** — el canal se deduce de lo anterior, no se elige por gusto: `outcome` exige una llamada de
@@ -155,7 +157,7 @@ en orden de capa y valida con `keel validate --wip` sobre la marcha.
 
 | Artefacto | Qué escribir |
 |---|---|
-| `domain` | La entidad de la copia, con **solo los campos que este servicio lee**, `unique: true` en el `keyField`, y una `description` que diga que es una proyección de `<proveedor>` y **no fuente de verdad**. Nunca copies el agregado ajeno entero. **Con desenlace diferido**, además: el **estado de espera** en el `lifecycle` de la entidad que queda esperando, con sus aristas de salida (confirmación, rechazo, rendición del barrido). |
+| `domain` | La entidad de la copia, con **solo los campos que este servicio lee**, `unique: true` en el `keyField`, y una `description` que diga que es una proyección de `<proveedor>` y **no fuente de verdad**. Nunca copies el agregado ajeno entero. **Con desenlace diferido**, además: el **estado de espera** en el `lifecycle` de la entidad que queda esperando, con sus aristas de salida (confirmación, rechazo, rendición del barrido), y la **marca temporal** de cuándo entró en él (un campo propio, no `createdAt` ni `updatedAt`), normalmente fuera del contrato con `exclude`. |
 | `use-cases` | La **operación de proyección** (`internal: true`, p. ej. `applyProductSnapshot`) que la suscripción dispara — una réplica la exige, porque `subscriptions.triggers` es obligatorio. Y los `errors` nuevos que exige `onMiss.action: fail`, en **cada** operación de `usedBy`. **Con desenlace diferido**, además: la `transitions` que mete la entidad en la espera, la operación `internal` que **aplica el desenlace** (p. ej. `applyStockReserved`) y la operación con `schedule` que barre. |
 | `http-clients` | `clients.<proveedor>` con `purpose`, `auth` derivado de `m2mAuth` (`client-credentials` → `oauth2-client-credentials`; **si el front-matter no da `tokenUrl`, pregúntalo**, el schema lo exige), y una `calls.<name>` por endpoint que se use, con `contract` en prosa + `method`/`path` del front-matter + `request`/`response` tipados del cuerpo. `timeoutMs`, `retry`, `circuitBreaker` y `fallback` se **entrevistan**, nunca se ponen por defecto. |
 | `messaging` (entrada) | El canal con `external: true`, y una `subscriptions.<Evento>` por cada evento de `fedBy`, por cada compensación y —con desenlace diferido— por el **evento de resultado** del encargo: `source` = nombre del proveedor, `contract` (`envelope: keel` si el proveedor es un servicio Keel), `payload`, `triggers` y `onFailure`. |

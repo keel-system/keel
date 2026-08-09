@@ -123,15 +123,20 @@ que no se hizo, y la operación propia responde `200`.
 
 ### Desenlace diferido: las tres declaraciones acopladas
 
-No es un campo, son tres cosas que se escriben juntas o el diseño queda a medias:
+No es un campo, son cuatro cosas que se escriben juntas o el diseño queda a medias:
 
 1. **El estado de espera**, en `domain: lifecycle` de la entidad que queda esperando, con sus aristas de
    salida — confirmación, rechazo y rendición del barrido. Y la `transitions` de la operación que
    encarga, que es la que mete la entidad ahí.
-2. **La operación que aplica el desenlace bueno** (`internal: true`), disparada por la suscripción al
+2. **La marca de cuándo empezó a esperar**, un campo propio de la entidad (`awaitingSince`) que estampa
+   esa misma operación. El estado dice *que* espera; el barrido necesita *desde cuándo*. Y las dos marcas
+   obvias no valen: `createdAt` es cuándo nació la entidad —puede confirmarse horas después— y un
+   `updatedAt` **rejuvenece** con cualquier otra escritura, dejando la entidad invisible al barrido para
+   siempre. Suele ir fuera del contrato (`exclude`): es un marcador operativo.
+3. **La operación que aplica el desenlace bueno** (`internal: true`), disparada por la suscripción al
    evento de resultado. Sin ella la entidad no sale nunca de la espera por la vía normal y el barrido
    acaba rindiéndose con todas: la reconciliación respalda el camino feliz, no lo sustituye.
-3. **`reconciledBy`** con su operación `schedule`, que barre lo que lleva demasiado tiempo esperando.
+4. **`reconciledBy`** con su operación `schedule`, que barre lo que lleva demasiado tiempo esperando.
 
 Y una consecuencia que se pasa por alto: **el estado de espera es contrato público**. Si la API lo
 devuelve, el cliente lo ve y tiene que saber qué hacer con él; la operación deja de poder prometer

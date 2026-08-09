@@ -289,8 +289,14 @@ function renderHandler(model, service, operation) {
         (waiting.length > 0
           ? `Los candidatos son ${waiting.join(', ')} que llevan demasiado tiempo ahí. `
           : `Los candidatos son las entidades que quedaron esperando el desenlace. `) +
+        `DESDE CUÁNDO: el estado dice que espera, no cuánto lleva. La marca temporal es un campo de la entidad que estampa la operación que encarga (busca uno tipo awaitingSince/requestedAt en el diseño). NO uses createdAt —es cuándo nació la entidad, no cuándo empezó a esperar— ni un updatedAt de auditoría, que rejuvenece con cualquier otra escritura y deja la entidad invisible al barrido para siempre. Si el diseño no declara ninguna marca, es designGap. ` +
         `El umbral de "demasiado tiempo" NO lo declara el diseño: sácalo de parameters/ con un default explícito, nunca de una constante en el código. ` +
-        `Y decide qué hace con cada uno según el efecto declarado ("${activation.effect}"): reintentar el encargo o disparar la compensación. Si el diseño no lo dice, es designGap`
+        `Y decide qué hace con cada uno según el efecto declarado ("${activation.effect}"): reintentar el encargo o disparar la compensación. Si el diseño no lo dice, es designGap. ` +
+        `CONCURRENCIA: este método corre en TODAS las réplicas del servicio a la vez, así que la consulta tiene que RECLAMAR los candidatos, no solo leerlos — mira OutboxRelay, que ya resuelve esto (lock de escritura con SKIP LOCKED y un Pageable que acota el lote, para que cada réplica se lleve un lote disjunto). ` +
+        `La transición del agregado NO basta: las réplicas leen antes de que ninguna confirme, así que todas pasan el guard y todas actúan; lo único que absorbe las llamadas repetidas al proveedor es la idempotencia saliente. ` +
+        `Y si lo que haces es reencargar publicando un evento, no lo absorbe nada: cada réplica hace su propio raise y estampa un metadata.eventId distinto, así que para el consumidor son N hechos y su processed_event no los deduplica. ` +
+        `ORDEN: reclamar → actuar fuera → confirmar, en ese orden. Si actúas contra el proveedor y mueres antes del commit, la entidad sigue esperando y la siguiente pasada repite la llamada, que es lo que absorbe la idempotencia saliente: tiene red. Al revés —commitear y luego actuar— si mueres en medio dejas la entidad resuelta y el trabajo vivo en el proveedor: un huérfano que no detecta nadie. ` +
+        `CARRERA CON EL CAMINO FELIZ: mientras barres puede llegar el evento de desenlace. Si al mover el candidato lo encuentras ya fuera del estado de espera, ganó el otro camino: es la carrera resuelta, no un fallo — no lo registres como error ni lo reintentes`
     );
   }
   // Compensar no es "otra escritura": deshace trabajo ya encargado a otro servidor,
@@ -466,7 +472,17 @@ function renderScheduler(model, service, scheduled) {
     }`;
   });
 
-  const body = `@Component
+  const body = `/**
+ * Disparadores por reloj de las operaciones que declaran \`schedule\`.
+ *
+ * <p><strong>Cada método corre en TODAS las réplicas del servicio</strong>: \`@Scheduled\` es
+ * "una vez por instancia", no "una vez en el clúster". El handler de una operación que
+ * ACTÚA sobre lo que encuentra (un barrido de reconciliación) tiene que reclamar sus
+ * candidatos en vez de solo leerlos — el patrón está en {@code OutboxRelay} y en
+ * docs/keel/conventions/dependencies.md. Las purgas generadas no lo necesitan: borrar lo
+ * caducado es idempotente por forma.
+ */
+@Component
 public class ${className} {
 
     private final UseCaseMediator mediator;

@@ -34,6 +34,14 @@ entities:
       releaseReason:
         type: string
         description: Por qué se liberó la reserva; lo escribe la compensación.
+      awaitingSince:
+        type: timestamp
+        description: >-
+          Cuándo entró la reserva en espera del almacén; lo estampa confirmReservation al
+          encargar el bloqueo. Es el campo sobre el que consulta el barrido, y tiene que ser
+          propio: createdAt dice cuándo nació la reserva (puede confirmarse horas después) y
+          un updatedAt rejuvenecería con cualquier otra escritura, dejándola invisible al
+          barrido para siempre.
       createdAt:
         type: timestamp
         generated: true

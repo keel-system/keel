@@ -173,7 +173,16 @@ Esto es lo que decide si la necesitas, y la pregunta es literal: **¿qué estado
 | **Publicar y olvidar** — `via: { publishes }` + `awaits: nothing` | Nunca, y el negocio ya dijo que le vale | **No**: no hay nada esperando |
 | **Publicar y esperar el desenlace** — `via: { publishes }` **+ suscripción al evento de resultado + estado intermedio** | Por un evento que llega después | **Sí**: es su caso canónico |
 
-La tercera fila **no es un valor de `awaits`**: es una combinación que se declara en tres sitios. El encargo sale publicado, el agregado se queda en un estado como `awaitingStock`, y una suscripción a `StockReserved` / `StockRejected` lo saca de ahí. Si no llega ninguno de los dos, se queda ahí para siempre — sin excepción, sin log de error, sin alarma— y eso es exactamente lo que el barrido busca: `WHERE status = 'awaitingStock' AND updatedAt < ahora - umbral`.
+La tercera fila **no es un valor de `awaits`**: es una combinación que se declara en cuatro sitios. El encargo sale publicado, el agregado se queda en un estado como `awaitingStock`, y una suscripción a `StockReserved` / `StockRejected` lo saca de ahí. Si no llega ninguno de los dos, se queda ahí para siempre — sin excepción, sin log de error, sin alarma— y eso es exactamente lo que el barrido busca.
+
+#### El cuarto sitio: desde cuándo espera
+
+El estado dice **que** espera; el barrido necesita saber **desde cuándo**, porque `status = 'awaitingStock'` incluye lo que empezó hace tres segundos. Hace falta una marca temporal, y las dos obvias no sirven:
+
+- **`createdAt` es cuándo nació la entidad, no cuándo entró en la espera.** Una reserva se crea y se confirma después: pueden pasar horas. Un barrido que mire `createdAt` cancelaría un encargo hecho hace treinta segundos.
+- **`updatedAt` rejuvenece.** Cualquier otra escritura durante la espera la deja pareciendo fresca, y el barrido **nunca la alcanza**: se queda esperando para siempre. Es el fallo que pasa las pruebas —donde nada más toca la entidad— y falla en producción.
+
+Lo único que dice la verdad es un **campo propio**, estampado al entrar en la espera por la operación que encarga y que nadie más toca (`awaitingSince`). Suele ser interno: se declara en `domain` y se deja fuera de las respuestas con `exclude`, porque es un marcador operativo y no algo que el cliente necesite.
 
 #### Tres silencios, tres barridos
 
@@ -186,6 +195,8 @@ Confundirlos es lo que hace el concepto resbaladizo, porque cada uno busca algo 
 | **Deriva** | Los dos lados creen cosas distintas y ningún evento lo va a decir nunca | Se vuelve a preguntar. Es auditoría periódica, no reconciliación de un encargo concreto |
 
 Qué hace con lo que encuentra (reintentar el encargo, compensarlo o rendirse) es decisión de negocio, y el umbral de «demasiado tiempo» es configuración del servicio generado, nunca una constante en el código.
+
+Una frontera que conviene tener presente al diseñar aunque no se declare aquí: **el barrido corre en todas las réplicas del servicio**, porque un `schedule` es «cada N minutos en cada instancia», no «cada N minutos en el clúster». Cómo se reparte el trabajo entre ellas —reclamar lotes disjuntos, un lock distribuido— es del generador y no del diseño, pero lo que sí es del diseño es no dar por hecho que el barrido se ejecuta una sola vez.
 
 Existir, correr por el reloj y no ser una lectura son la **forma** del barrido. Lo que lo hace un barrido *de esto* es estar enlazado con lo que reconcilia, y son las mismas salidas que hay que decidir de todos modos —reintentar el encargo, compensarlo o rendirse—; basta con una:
 

@@ -415,6 +415,16 @@ function contractJavadoc(sub) {
         : `Orden: IdempotencyGuard.tryRecord(...) antes de despachar — la operación no declara ninguna transición que frene la repetición, así que la ventana se cierra reclamando antes. Ojo: un fallo del handler deja el mensaje marcado y perdido; si eso no es tolerable, lo que falta es la guarda de dominio en el diseño.`
     );
   }
+  // Otro camino puede sacar a la entidad del mismo estado antes que este listener. El
+  // guard del agregado arbitra, y al perdedor se le rechaza la transición: eso es la
+  // carrera resuelta, no un fallo. Si el handler lo trata como error, onFailure.retry lo
+  // reintenta y acaba en la DLQ un mensaje perfectamente válido — ruido operativo que se
+  // lee como incidente. Solo se dice cuando build ve la carrera, no en toda suscripción.
+  if ((sub.triggerRaces ?? []).length > 0) {
+    lines.push(
+      `Compite con ${sub.triggerRaces.join(', ')}: sacan la entidad del mismo estado. Si al despachar la transición se rechaza porque otro llegó antes, es la carrera resuelta y NO un fallo — confirma el mensaje y no lo reintentes.`
+    );
+  }
   // La capa dependencies puede etiquetar esta suscripción como compensación de una
   // dependencia: no cambia el código, pero sí por qué existe.
   if (sub.compensates) {

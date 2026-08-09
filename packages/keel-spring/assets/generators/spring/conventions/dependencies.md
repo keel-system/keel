@@ -151,6 +151,61 @@ Si **varias** activaciones salen por la misma llamada, build no elige por ti: de
 enumerándolas. Dos políticas de fallo sobre un único método es un conflicto del diseño — dilo en el
 reporte en vez de inventarte una.
 
+## El barrido corre en todas las réplicas
+
+`@Scheduled` no es «una vez en el clúster», es **«una vez por instancia»**. Con N réplicas, el barrido de
+una reconciliación consulta «los atascados», las N obtienen **las mismas filas** y cada una actúa sobre
+ellas. Lo mismo vale para cualquier operación con `schedule` que *haga* algo con lo que encuentra; las
+purgas que genera `build` quedan fuera porque borrar lo caducado es idempotente por forma.
+
+Lo que engaña es que parece que ya hay protección, y solo la hay a medias:
+
+| Qué se repite | ¿Lo frena algo? |
+|---|---|
+| La transición del agregado | **Es una carrera, no una serialización.** Las N leen antes de que ninguna confirme, así que todas pasan el guard y todas actúan. Con `@Version` solo una escribe — pero las demás ya hicieron su trabajo externo |
+| La llamada al proveedor | Sí: la **idempotencia saliente** (`OutboundIdempotency`), si el diseño la declara. Es la red real |
+| Reencargar **publicando un evento** | **Nada.** Cada réplica hace su propio `raise` y estampa un `metadata.eventId` distinto: para el consumidor son N hechos y su `processed_event` no los deduplica |
+
+**La regla: reclamar, no leer.** La consulta del barrido no pide los candidatos, se los **lleva** —dentro
+de su transacción y en lotes acotados—, de modo que cada réplica trabaja sobre un conjunto disjunto y el
+paralelismo pasa de problema a ventaja. No hace falta infraestructura nueva, y el ejemplo vivo está en
+este mismo proyecto: `OutboxRelay.findPending` ya lo hace, y su javadoc lo explica. La técnica concreta
+de tu motor está en la skill `keel-spring-database` o `keel-spring-mongodb`, `references/read-queries.md`.
+
+Un **lock distribuido** (ShedLock, un advisory lock) solo compensa cuando el barrido tiene que ser único
+por negocio —consolidar un informe, emitir un fichero—: serializa a una instancia y desperdicia el resto.
+Para un barrido de reconciliación es la respuesta equivocada a la pregunta correcta.
+
+### El orden dentro del barrido
+
+**Reclamar → actuar fuera → confirmar.** No es preferencia: decide si hay red.
+
+| Orden | Si el proceso muere en medio |
+|---|---|
+| Reclamar, **actuar**, confirmar | La entidad sigue esperando y la siguiente pasada repite la llamada. La absorbe la **idempotencia saliente**. Tiene red |
+| Reclamar, confirmar, **actuar** | La entidad queda resuelta y el trabajo vivo en el proveedor: un huérfano que no detecta nadie. **No tiene red** |
+
+Es el mismo razonamiento que decide los dos órdenes del `IdempotencyGuard` (`alreadyProcessed`+`record`
+frente a `tryRecord`), aplicado a otro sitio: se prefiere repetir algo absorbible a perder algo que nadie
+va a echar de menos.
+
+### La carrera con el camino feliz
+
+Mientras el barrido reclama y actúa, puede llegar el evento de desenlace. Los dos van a mover la misma
+entidad, y **el guard del agregado es el árbitro**:
+
+- Gana el barrido → el listener intenta su transición y la entidad ya salió de ese estado: se rechaza.
+- Gana el listener → el barrido encuentra el candidato ya resuelto: se rechaza.
+
+**En los dos sentidos el rechazo es el desenlace normal, no un fallo.** El coste de confundirlo es
+concreto y confuso de diagnosticar: si el listener lanza excepción, `onFailure.retry` lo reintenta y
+acaba en la DLQ un mensaje perfectamente válido, por una carrera que se resolvió **bien**. Alguien lo
+leerá como un incidente. El listener confirma el mensaje sin reintentar; el barrido pasa al siguiente
+candidato sin registrarlo como error.
+
+Queda una ventana que ningún mecanismo propio cierra: que el proveedor confirme y procese la cancelación
+en orden inverso. Eso se acota con un umbral generoso, no con código.
+
 ## Antipatrones
 
 - Llamar al Projector desde el listener (salta el mediator y el guard).

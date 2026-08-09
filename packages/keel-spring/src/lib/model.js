@@ -1523,6 +1523,28 @@ function capitalizeName(name) {
 
 // ─── Suscripciones de mensajería (messaging.subscriptions → consumers) ───────
 
+/**
+ * Operaciones que sacan a la misma entidad del mismo estado de partida que `op`. Son las
+ * que compiten con ella: el barrido que se rinde frente al evento que confirma, dos
+ * desenlaces del mismo encargo. Devuelve los nombres, para poder citarlos.
+ */
+function racingOperations(op, opByName) {
+  if (!op) return [];
+  const origins = new Set(
+    (op.transitions ?? []).flatMap((t) => (t.from ?? []).map((from) => `${t.entity}|${from}`))
+  );
+  if (origins.size === 0) return [];
+  const racing = [];
+  for (const other of opByName.values()) {
+    if (other.name === op.name) continue;
+    const competes = (other.transitions ?? []).some((t) =>
+      (t.from ?? []).some((from) => origins.has(`${t.entity}|${from}`))
+    );
+    if (competes) racing.push(other.name);
+  }
+  return racing;
+}
+
 function collectSubscriptions(layers, services, domainTypes, inlineEnumName, warnings, stack) {
   const subs = layers.messaging?.subscriptions ?? {};
   const domainEntities = layers.domain?.entities ?? {};
@@ -1561,6 +1583,12 @@ function collectSubscriptions(layers, services, domainTypes, inlineEnumName, war
       // fallo transitorio se reintenta); sin ella, la única forma de no repetir el
       // efecto es reclamar antes, al precio de perder el mensaje si el handler falla.
       triggerHasDomainGuard: (triggerOp?.transitions ?? []).length > 0,
+      // ¿Hay OTRO camino que saque a la entidad del mismo estado del que la saca este
+      // listener? Si lo hay, los dos compiten y el guard del agregado arbitra: al perdedor
+      // se le rechaza la transición, y eso es la carrera resuelta, no un fallo. Importa
+      // decirlo porque tratarlo como error manda a la DLQ un mensaje perfectamente válido.
+      // Se precomputa aquí —y no en el javadoc— porque contractJavadoc solo recibe `sub`.
+      triggerRaces: racingOperations(triggerOp, opByName),
       // Cómo se construye el mensaje CQRS desde el payload: componente del
       // command → campo del payload que lo alimenta (null = el agente decide).
       triggerArguments: triggerArguments(def, triggerOp, fields),

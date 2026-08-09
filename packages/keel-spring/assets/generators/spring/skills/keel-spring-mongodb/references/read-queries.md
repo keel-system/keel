@@ -76,3 +76,39 @@ listado es ambiguo: un informe tiene varias secciones, así que Mongo ordena por
 mínimo (ascendente) o el máximo (descendente) del array. Si el diseño quiere «ordena
 por el estado de la sección X», eso es un campo derivado en la raíz, no un orden
 sobre el array.
+
+## Reclamar un lote: la consulta de un barrido
+
+Un barrido con `@Scheduled` corre en **todas** las réplicas a la vez, así que una consulta que solo
+*lee* devuelve los mismos documentos en todas y el trabajo se hace N veces
+(`conventions/dependencies.md § El barrido corre en todas las réplicas`).
+
+En MongoDB no hay `SELECT ... FOR UPDATE SKIP LOCKED`, y **no hace falta**: lo que sí hay es
+actualización atómica por documento. Se reclama con `findAndModify`, que filtra y marca en la misma
+operación, así que dos réplicas nunca se llevan el mismo documento:
+
+```java
+/**
+ * Reclama UNA reserva estancada y la marca como reclamada en la misma operación atómica.
+ * Se llama en bucle hasta agotar el lote: cada réplica se lleva documentos distintos.
+ */
+public Optional<ReservationDocument> claimStale(ReservationStatus status, Instant cutoff, Instant now) {
+    Query query = new Query(Criteria.where("status").is(status)
+        .and("updatedAt").lt(cutoff)
+        .orOperator(Criteria.where("claimedAt").exists(false),
+                    Criteria.where("claimedAt").lt(cutoff)));
+    Update update = new Update().set("claimedAt", now);
+    FindAndModifyOptions options = FindAndModifyOptions.options().returnNew(true);
+    return Optional.ofNullable(mongoTemplate.findAndModify(query, update, options, ReservationDocument.class));
+}
+```
+
+Tres cosas que no son opcionales:
+
+- **La marca de reclamación (`claimedAt`) es lo que hace el reclamo visible.** Sin ella el filtro
+  vuelve a encontrar el mismo documento en la siguiente vuelta del bucle.
+- **La marca caduca.** El `orOperator` de arriba vuelve a admitir lo reclamado hace demasiado: si una
+  réplica muere entre reclamar y actuar, ese documento tiene que volver a estar disponible o queda
+  atascado para siempre — el barrido habría creado el problema que venía a resolver.
+- **Un índice sobre `{ status: 1, updatedAt: 1 }`**, declarado en `MongoIndexConfig` como cualquier
+  otro: el barrido corre cada pocos minutos y sin índice recorre la colección entera cada vez.

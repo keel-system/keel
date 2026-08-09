@@ -504,6 +504,22 @@ test('reconciliación: el stub del barrido dice qué busca y de dónde sale el u
   assert.ok(handler.includes('Order en reserved'));
   // Y el umbral no se inventa en una constante: es configuración.
   assert.ok(handler.includes('sácalo de parameters/'));
+  // El barrido corre en todas las réplicas: reclamar, no leer. La transición del
+  // agregado es una carrera, no una serialización, y reencargar publicando produce N
+  // eventos con eventId distinto que nadie deduplica.
+  assert.ok(handler.includes('corre en TODAS las réplicas'));
+  assert.ok(handler.includes('RECLAMAR los candidatos'));
+  assert.ok(handler.includes('OutboxRelay'));
+  assert.ok(handler.includes('metadata.eventId distinto'));
+  // El estado dice QUE espera; el barrido necesita DESDE CUÁNDO, y las dos marcas
+  // obvias no valen: createdAt no es cuándo empezó a esperar y updatedAt rejuvenece.
+  assert.ok(handler.includes('DESDE CUÁNDO'));
+  assert.ok(handler.includes('NO uses createdAt'));
+  assert.ok(handler.includes('rejuvenece'));
+  // Reclamar → actuar fuera → confirmar: el orden que tiene red.
+  assert.ok(handler.includes('reclamar → actuar fuera → confirmar'));
+  // Y la carrera con el camino feliz no es un fallo.
+  assert.ok(handler.includes('CARRERA CON EL CAMINO FELIZ'));
 });
 
 test('compensación sin transición de vuelta: el estado que falta se reporta, no se inventa', () => {
@@ -658,4 +674,40 @@ test('frontera: contract.version y awaits: outcome se avisan, no se ignoran', ()
   assert.deepEqual(errors, []);
   assert.ok(warnings.some((w) => w.includes('contract.version') && w.includes('catalog@0.2.0')));
   assert.ok(warnings.some((w) => w.includes('awaits: outcome') && w.includes('notifications.sendOrderConfirmation')));
+});
+
+test('la carrera se anuncia solo cuando existe otro camino que saca del mismo estado', () => {
+  // Dos operaciones salen de `awaiting`: la del listener y un barrido. El guard del
+  // agregado arbitra, y al perdedor se le rechaza la transición — no es un fallo.
+  const layers = baseLayers();
+  layers.domain.entities.Order.fields.status = {
+    type: 'enum',
+    values: ['awaiting', 'confirmed', 'cancelled'],
+    default: 'awaiting'
+  };
+  layers.domain.entities.Order.lifecycle = {
+    field: 'status',
+    transitions: { awaiting: ['confirmed', 'cancelled'], confirmed: [], cancelled: [] }
+  };
+  layers['use-cases'].operations.applyProductSnapshot.transitions = [
+    { entity: 'Order', from: ['awaiting'], to: 'confirmed' }
+  ];
+
+  const solo = fileNamed(generateMessaging(modelFrom(layers)), 'ProductUpdatedMessage').content;
+  assert.ok(!solo.includes('Compite con'), solo);
+
+  // Ahora sí: un barrido que también sale de `awaiting`.
+  layers['use-cases'].operations.sweepStaleOrders = {
+    description: 'Cancela los pedidos que llevan demasiado tiempo esperando.',
+    kind: 'command',
+    internal: true,
+    input: 'void',
+    output: 'void',
+    schedule: { cron: '0 * * * * *' },
+    transitions: [{ entity: 'Order', from: ['awaiting'], to: 'cancelled' }]
+  };
+
+  const conCarrera = fileNamed(generateMessaging(modelFrom(layers)), 'ProductUpdatedMessage').content;
+  assert.ok(conCarrera.includes('Compite con sweepStaleOrders'), conCarrera);
+  assert.ok(conCarrera.includes('es la carrera resuelta y NO un fallo'), conCarrera);
 });

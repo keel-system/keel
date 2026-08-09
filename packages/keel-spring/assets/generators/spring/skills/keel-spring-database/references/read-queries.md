@@ -100,6 +100,41 @@ infrastructure/persistence/repositories/
 `BrandJpa`. El adaptador de lectura es el único punto donde dos esquemas se tocan, y eso es
 deliberado: acota el acoplamiento a un archivo.
 
+## Reclamar un lote: la consulta de un barrido
+
+Un barrido con `@Scheduled` corre en **todas** las réplicas a la vez, así que una consulta que solo
+*lee* devuelve las mismas filas en todas y el trabajo se hace N veces
+(`conventions/dependencies.md § El barrido corre en todas las réplicas`). La consulta tiene que
+**reclamar**: llevarse un lote acotado bajo lock de escritura con SKIP LOCKED, dentro de la
+transacción del barrido.
+
+```java
+/**
+ * Reservas que llevan demasiado tiempo esperando al almacén. Lock de escritura con
+ * SKIP LOCKED (el hint de lock timeout -2): con varias réplicas, cada una se lleva un
+ * lote disjunto en vez de competir por las mismas filas.
+ */
+@Lock(LockModeType.PESSIMISTIC_WRITE)
+@QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "-2"))
+@Query("select r from ReservationJpa r where r.status = :status and r.updatedAt < :cutoff order by r.updatedAt asc")
+List<ReservationJpa> claimStale(@Param("status") ReservationStatus status,
+                                @Param("cutoff") Instant cutoff,
+                                Pageable pageable);
+```
+
+Tres cosas que no son opcionales:
+
+- **El `Pageable`** acota el lote. Sin él, la primera réplica bloquea la tabla entera y las demás se
+  quedan sin nada que hacer — que es lo contrario de repartir.
+- **El lock vive hasta el fin de la transacción** del método que llama, así que el barrido tiene que
+  ser `@Transactional` y hacer su trabajo dentro. Si sales de la transacción y luego actúas, la fila
+  ya está suelta.
+- **En H2 (perfil `test`) SKIP LOCKED puede degradarse** a un lock normal. No invalida nada: la
+  validación de concurrencia se hace contra la base real de `infra/`.
+
+Es exactamente el patrón de `OutboxRelay.findPending`, que `build` ya genera en este mismo proyecto:
+míralo antes de escribir el tuyo.
+
 ## Qué no hacer
 
 - **`@ManyToOne` entre dos raíces** para poder usar `JOIN FETCH` o `@EntityGraph`. Rompe la
