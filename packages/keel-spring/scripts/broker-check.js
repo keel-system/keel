@@ -32,9 +32,9 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadService } from 'keel-core';
+import { deadLetterDestination, subscriptionDestination } from '../src/lib/dead-letter.js';
 import { resolveStack, scaffoldService } from '../src/scaffold/index.js';
 import { buildModel } from '../src/lib/model.js';
-import { kebabCase } from '../src/lib/naming.js';
 // El catálogo, no la lista de ids que exporta broker-probes con el mismo nombre: de
 // aquí salen el comando de sondeo y el nombre del contenedor que estampa el compose.
 import { BROKERS as BROKERS_CATALOG, brokerContainer } from '../src/lib/stack-catalog.js';
@@ -51,7 +51,9 @@ import {
   rabbitPublishBody,
   readParts,
   sqsAttributesJson,
-  UNKNOWN_TOPIC
+  UNKNOWN_TOPIC,
+  ENDPOINTS,
+  queueDeliverParts
 } from '../src/lib/broker-probes.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -146,7 +148,7 @@ const ATTRS_FILE = '/tmp/keel-check-attrs.json';
 const TRICKY = 'acentós, "comillas" y $HOME sin interpolar';
 
 function scenarios(broker, context) {
-  const { devtools, topic, subscriptionTopic, subscriptionQueue, subscriptionName, publishEventType } = context;
+  const { devtools, topic, subscriptionTopic, subscriptionQueue, subscriptionName, publishEventType, deadLetterQueue, deadLetterSource } = context;
   // Todo lo que se publica en el canal propio viaja con su `eventType`: es lo que
   // discrimina dentro del destino único (filtro de la suscripción en SNS, filtrado
   // por canal en Kafka). Sin él, el broker descarta el mensaje con toda la razón y
@@ -355,7 +357,62 @@ function scenarios(broker, context) {
           ? ok()
           : ko('un destino inexistente devuelve algo que parece un mensaje');
       }
-    }
+    },
+    ...(deadLetterQueue ? [{
+      id: 'BRK-12',
+      title: 'el destino de descarte existe y se lee con el nombre que el arnés usa',
+      // Cierra el falso verde más peligroso del arnés. `deadLetterMessages(...)` se usa
+      // sobre todo en NEGATIVO —«el mensaje se confirma sin acabar en la DLQ»—, y una
+      // lectura contra una cola que no existe devuelve vacío: la aserción pasaría para
+      // siempre sin mirar nada. Ya ocurrió en el propio generador, donde la primera
+      // versión del helper componía el nombre desde el topic y en SNS/SQS el consumidor
+      // tiene cola propia.
+      //
+      // Lo que NO puede probar este check: que el broker MUEVA ahí un mensaje agotado.
+      // Eso exige la aplicación viva rechazando el mensaje, y aquí no se arranca (el
+      // `main` recién generado ni siquiera compila). Su gate es un escenario `FL-*`.
+      check: () => {
+        const marker = `keel-dlq-${Date.now()}`;
+        // En snssqs se entrega DIRECTO a la cola: una DLQ no cuelga de ningún topic
+        // —se alcanza por redrive—, así que `sns publish` con su nombre falla. En los
+        // otros dos brokers el destino se nombra igual y vale la entrega normal.
+        if (broker === 'snssqs') {
+          devtools.copy(JSON.stringify({ marker }), BODY_FILE);
+          devtools.exec(toArgv(broker, queueDeliverParts({ destination: deadLetterQueue, bodyFile: BODY_FILE })));
+        } else {
+          deliver(deadLetterQueue, marker, JSON.stringify({ marker }));
+        }
+        const back = untilOk(() => {
+          const result = read(deadLetterQueue);
+          return result.status === 0 && result.stdout.includes(marker)
+            ? result
+            : { ...result, status: result.status === 0 ? 1 : result.status };
+        });
+        if (!back.ok) {
+          return ko(`entregado a '${deadLetterQueue}' y no vuelve: ${firstLine(back.last.stderr || back.last.stdout)}`);
+        }
+        if (broker !== 'snssqs') return ok();
+        // Y en SQS, además, que el enlace exista de verdad. La cola de descarte puede
+        // estar creada y la RedrivePolicy no haberse aplicado: entonces el mensaje
+        // agotado se reentrega para siempre en vez de apartarse, y la cola que el
+        // escenario mira está vacía por una razón que no es la que cree.
+        const attributes = devtools.exec([
+          ...toArgv(broker, []),
+          'sqs',
+          'get-queue-attributes',
+          '--queue-url',
+          `${ENDPOINTS.snssqs.queueUrlPrefix}${deadLetterSource}`,
+          '--attribute-names',
+          'RedrivePolicy'
+        ]);
+        if (attributes.status !== 0) {
+          return ko(`no se pueden leer los atributos de '${deadLetterSource}': ${firstLine(attributes.stderr)}`);
+        }
+        return attributes.stdout.includes(deadLetterQueue)
+          ? ok()
+          : ko(`la RedrivePolicy de '${deadLetterSource}' no apunta a '${deadLetterQueue}': ${firstLine(attributes.stdout)}`);
+      }
+    }] : [])
   ];
 }
 
@@ -520,6 +577,12 @@ function checkBrokerControl(broker, { runtime, projectDir, devtools, container }
 }
 
 /** Reintenta mientras el broker termina de arrancar: 'Up' no es 'listo'. */
+/** El destino de descarte de la primera suscripción que lo declare, o null. */
+function deadLetterFor(broker, model) {
+  const subscription = (model.subscriptions ?? []).find((sub) => sub.deadLetter);
+  return subscription ? deadLetterDestination(broker, model, subscription) : null;
+}
+
 function untilOk(action, attempts = 10, delayMs = 3000) {
   let last = { status: 1, stdout: '', stderr: '' };
   for (let attempt = 0; attempt < attempts; attempt++) {
@@ -584,7 +647,7 @@ function checkBroker(broker, runtimeInfo) {
       devtools,
       runtime: runtimeInfo.runtime,
       projectDir,
-      destinations: [topic, subscriptionTopic].filter(Boolean)
+      destinations: [topic, subscriptionTopic, deadLetterFor(broker, model)].filter(Boolean)
     });
     if (prepared) return { fatal: prepared, results };
 
@@ -602,7 +665,21 @@ function checkBroker(broker, runtimeInfo) {
     // siembra `init-messaging.sh`, y leer de ella (y no del topic) es lo que
     // ejercita la suscripción con su filtro.
     const subscriptionQueue =
-      broker === 'snssqs' && subscription ? `${model.service.artifactId}-${kebabCase(subscription.name)}` : null;
+      broker === 'snssqs' && subscription ? subscriptionDestination('snssqs', model, subscription) : null;
+
+    // El descarte se busca en LA SUSCRIPCIÓN QUE LO DECLARA, no en la primera del
+    // diseño. Mirar `subscriptions[0]` dejó BRK-12 sin ejecutarse en los tres brokers
+    // —en catalog-extended la primera no declara deadLetter— y la matriz salió verde
+    // con nueve escenarios sin que nada dijera que faltaba el décimo. Un escenario que
+    // se omite en silencio es peor que uno que falla.
+    const deadLetterSub = (model.subscriptions ?? []).find((sub) => sub.deadLetter) ?? null;
+    const deadLetterQueue = deadLetterSub ? deadLetterDestination(broker, model, deadLetterSub) : null;
+    // Y en SQS la RedrivePolicy se comprueba sobre la cola DE ESA suscripción.
+    const deadLetterSource =
+      broker === 'snssqs' && deadLetterSub ? subscriptionDestination('snssqs', model, deadLetterSub) : null;
+    if (!deadLetterQueue) {
+      console.log('  --   BRK-12 omitido: la fixture no declara onFailure.deadLetter en ninguna suscripción');
+    }
 
     for (const scenario of scenarios(broker, {
       devtools,
@@ -610,6 +687,8 @@ function checkBroker(broker, runtimeInfo) {
       subscriptionTopic,
       subscriptionQueue,
       subscriptionName: subscription?.name ?? null,
+      deadLetterQueue,
+      deadLetterSource,
       publishEventType: (model.messaging?.eventTypesByChannel?.[topic] ?? [])[0] ?? null
     })) {
       let outcome;

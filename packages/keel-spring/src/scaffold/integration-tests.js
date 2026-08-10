@@ -16,6 +16,7 @@ import { pascalCase } from '../lib/naming.js';
 import { DATABASES, BROKERS, CACHES, selectedInfra, brokerContainer } from '../lib/stack-catalog.js';
 import { cacheFlushCmd, concreteCmd, needsDevtools } from './devtools.js';
 import { usesOutbox } from './outbox.js';
+import { deadLetterDestination, deadLetterSubscriptions } from '../lib/dead-letter.js';
 import { needsMessagingProvisioning } from './messaging-provisioning.js';
 import { tokenUrl, userTestClient } from './auth-provisioning.js';
 import { declaresIdempotency } from './http-idempotency.js';
@@ -1046,7 +1047,7 @@ function devtoolsSection(model) {
 ${brokerEntry(model) ? `
     /** Archivo del contenedor por el que viaja el cuerpo de {@link #deliverMessage}. */
     private static final String DELIVER_BODY = "/tmp/keel-deliver.json";
-` : ''}${brokerSection(model)}${deliverySection(model)}${subscriptionDeliverySection(model)}
+` : ''}${brokerSection(model)}${deadLetterSection(model)}${deliverySection(model)}${subscriptionDeliverySection(model)}
     /**
      * Ejecuta un comando dentro del contenedor devtools y devuelve su salida.
      *
@@ -1590,6 +1591,67 @@ function bodyFileHelper(model) {
 // Lectura y aislamiento del canal de eventos, por broker. La API es la misma en
 // los tres: publishedMessages(destino, n) devuelve lo publicado desde la última
 // purga/marca, y purgeMessages(destino) reabre esa ventana.
+// Lo que acabó en el descarte. Es la mitad que le faltaba al arnés: sin ella, toda
+// cláusula del tipo «el mensaje se confirma sin acabar en la DLQ» quedaba `uncovered`,
+// y son cláusulas que importan — distinguen «el duplicado se frenó con una guarda» de
+// «el duplicado reventó y el broker lo apartó», que desde el estado propio se ven igual.
+//
+// El destino sale de `lib/dead-letter.js`, el mismo sitio del que lo toman la topología
+// y `broker-check`: si el arnés leyera un nombre compuesto aquí, un día leería una cola
+// distinta de la que el servicio alimenta y la aserción negativa saldría verde sin
+// haber mirado nada.
+function deadLetterSection(model) {
+  const subs = deadLetterSubscriptions(model);
+  const broker = brokerEntry(model);
+  if (subs.length === 0 || !broker) return '';
+
+  const entries = subs
+    .map((sub) => `Map.entry("${sub.name}", "${deadLetterDestination(broker.id, model, sub)}")`)
+    .join(',\n            ');
+
+  // Kafka: el DLT NO EXISTE hasta que se publica el primer descarte, así que la lectura
+  // del caso feliz —el que afirma que NADA acabó ahí— falla con «Unknown topic». Eso es
+  // «vacío», no una avería: sin esta traducción, la mitad negativa del escenario sería
+  // inasertable justo cuando el servicio se comporta bien. En RabbitMQ y SQS la cola la
+  // crea build de antemano y el caso no se da.
+  const read =
+    broker.id === 'kafka'
+      ? `        try {
+            return devtools(${javaArgs(readParts('kafka', { destination: expr('deadLetterTopic'), offset: expr('"-" + count') }))});
+        } catch (RuntimeException e) {
+            if (isUnknownTopic(e)) {
+                return "";
+            }
+            return emptyIfBrokerStopped(e);
+        }`
+      : '        return publishedMessages(deadLetterTopic, count);';
+
+  return `
+    /** Suscripción → su destino de descarte, derivados del diseño. */
+    private static final Map<String, String> DEAD_LETTER_OF = Map.ofEntries(
+            ${entries});
+
+    /**
+     * Los últimos {@code count} mensajes del descarte de una suscripción, o cadena
+     * vacía si no hay ninguno.
+     *
+     * <p>Úsalo también —y sobre todo— para la aserción NEGATIVA: que un duplicado
+     * frenado por la guarda de idempotencia se confirme <b>sin</b> acabar aquí es lo
+     * que distingue una repetición absorbida de una que reventó por dentro. Las dos
+     * dejan el estado propio idéntico.
+     */
+    protected static String deadLetterMessages(String subscription, int count) {
+        String deadLetterTopic = DEAD_LETTER_OF.get(subscription);
+        if (deadLetterTopic == null) {
+            throw new IllegalArgumentException(
+                    "La suscripción '" + subscription + "' no declara onFailure.deadLetter en el diseño: "
+                            + "no hay descarte sobre el que afirmar. Declaradas: " + DEAD_LETTER_OF.keySet());
+        }
+${read}
+    }
+`;
+}
+
 function brokerSection(model) {
   const broker = brokerEntry(model);
   if (!broker) return '';

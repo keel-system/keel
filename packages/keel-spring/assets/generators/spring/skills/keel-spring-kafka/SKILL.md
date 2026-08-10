@@ -101,8 +101,8 @@ public class StockDepletedListener {
 
     // ... constructor ...
 
-    @RetryableTopic(attempts = "5", backoff = @Backoff(delay = 1000, multiplier = 2.0),
-            dltStrategy = DltStrategy.FAIL_ON_ERROR)
+    // Sin @RetryableTopic: los reintentos y el descarte los aplica el
+    // DefaultErrorHandler que build ya declaró (ver DeadLetterConfig).
     @KafkaListener(topics = "${messaging.subscriptions.stock-depleted.topic:inventory-service.events}",
             groupId = "${spring.application.name}")
     public void on(StockDepletedMessage message) {
@@ -112,7 +112,13 @@ public class StockDepletedListener {
 ```
 
 - Topic configurable vía propiedad `messaging.subscriptions.<evento-kebab>.topic` (default `<fuente>.events`); groupId = `spring.application.name`. Con un canal `external: true` el nombre real lo pone el dueño del canal: va en `parameters/<perfil>`, nunca hardcodeado.
-- `onFailure` del diseño → `@RetryableTopic` (attempts/backoff declarados; `deadLetter: true` → `DltStrategy.FAIL_ON_ERROR`, si no `NO_DLT`).
+- `onFailure` del diseño → **ya está generado**: build emite `DeadLetterConfig` con un
+  `DefaultErrorHandler` (attempts y backoff del diseño) y un `DeadLetterPublishingRecoverer` que
+  publica en `<topic>.DLT` solo para las suscripciones que declaran `deadLetter: true`.
+  **No añadas `@RetryableTopic`.** Crea su propia cadena de topics `<topic>-retry-*` y
+  `<topic>-dlt`, así que el mensaje acabaría en un destino distinto del que la topología declara
+  y del que el arnés lee (`deadLetterMessages(...)`): la aserción de que el mensaje NO acabó en
+  el descarte saldría verde mirando una cola que nadie alimenta.
 - Mapea el `<Evento>Message` al mensaje de la operación `triggers` y despacha vía `UseCaseMediator`; el javadoc del record generado ya trae el mapeo campo a campo.
 
 ### El `contract` de la suscripción manda

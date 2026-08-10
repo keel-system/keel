@@ -864,7 +864,14 @@ test('§1.2: con snssqs se genera la topología (topics, colas, DLQ, raw deliver
   // AbstractFlowIT#publishedMessages busca al componer la URL. Sin ella el humo del
   // arnés muere con NonExistentQueue y la suite entera se queda sin correr — y este
   // servicio no tiene subscriptions de negocio que la creasen de rebote.
-  assert.ok(script.includes("create_queue_with_dlq 'digests' 5"), script);
+  // SIN DLQ, y eso importa: la cola de arnés no la consume la aplicación, la lee el
+  // arnés — y `publishedMessages` lee sin borrar, así que cada lectura incrementa el
+  // contador de recepciones de SQS. Con redrive, un escenario que sondee el canal más
+  // veces que `maxReceiveCount` vería el mensaje MOVIDO a la DLQ a mitad de la
+  // aserción y lo leería como «el canal está vacío». Antes la tenían todas por un
+  // default del script; ahora la DLQ es solo de quien la declara en el diseño.
+  assert.ok(script.includes("create_queue 'digests'"), script);
+  assert.ok(!script.includes("create_queue_with_dlq 'digests'"), script);
   assert.ok(script.includes("subscribe 'metering-digest-events' 'digests' 'DailyDigestClosed'"), script);
 
   // Ningun JSON viaja inline en el argv: podman.exe en Windows corrompe las

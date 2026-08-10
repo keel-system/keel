@@ -19,6 +19,7 @@ import { javaFile, javaPath, subPackage } from './render.js';
 import { domainTypeImport } from './entities.js';
 import { usesOutbox, outboxNames } from './outbox.js';
 import { correlationImport } from './correlation.js';
+import { deadLetterDestination } from '../lib/dead-letter.js';
 
 const MESSAGING_PKG = 'infrastructure.messaging';
 const INTEGRATION_PKG = 'infrastructure.messaging.events';
@@ -337,7 +338,7 @@ function renderSubscriptionMessage(model, sub) {
 
   const body = `/**
  * Payload del evento ${sub.name}${sub.source ? ` (fuente: ${sub.source})` : ''}.
-${contractJavadoc(sub)} */
+${contractJavadoc(sub, model)} */
 ${annotations.map((a) => `${a}\n`).join('')}public record ${sub.messageRecord}(${components}) {
 }`;
   return {
@@ -379,7 +380,7 @@ public record ${sub.envelopeRecord}(${components.join(', ')}) {
 }
 
 // El contrato de recepción, escrito donde el agente lo va a leer al escribir el listener.
-function contractJavadoc(sub) {
+function contractJavadoc(sub, model) {
   const lines = [];
   if (sub.envelope === 'wrapped') {
     lines.push(`Llega envuelto en ${sub.envelopeRecord}; el payload cuelga de '${sub.payloadPath}'.`);
@@ -439,7 +440,14 @@ function contractJavadoc(sub) {
     }
   }
   if (sub.deadLetter) {
-    lines.push('Con onFailure.deadLetter: tras agotar los reintentos el mensaje va a la DLQ del broker (lo configura el agente).');
+    // La topología es de BUILD desde que `dead-letter-config.js` la genera para los tres
+    // brokers. Antes esto decía «lo configura el agente», y con eso el campo del DSL
+    // declaraba una garantía que solo existía en SNS/SQS y cuyo destino nadie podía
+    // nombrar: ningún escenario podía afirmar sobre la cola.
+    const destination = deadLetterDestination(model.stack?.broker, model, sub);
+    lines.push(
+      `Con onFailure.deadLetter: tras agotar los reintentos el broker mueve el mensaje a ${destination}. La topología la genera build — NO la declares tú.`
+    );
   }
   if (sub.trigger) {
     const args = sub.triggerArguments

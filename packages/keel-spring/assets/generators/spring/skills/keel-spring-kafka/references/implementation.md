@@ -40,27 +40,29 @@ qué implementas y cómo tratas el fallo:
   });
   ```
 
-## Reintentos del listener: `@RetryableTopic` vs `DefaultErrorHandler`
+## Reintentos del listener: ya están generados
 
-- **`@RetryableTopic`** (el default de esta skill, no bloqueante): reintentos
-  vía topics `<topic>-retry-*` y DLT `<topic>-dlt`, creados automáticamente.
-  El consumidor sigue procesando otros mensajes mientras el fallido espera.
-- **`DefaultErrorHandler`** (en la container factory, bloqueante): reintenta
-  in-situ con `FixedBackOff`/`ExponentialBackOffWithMaxRetries` y entrega a
-  `DeadLetterPublishingRecoverer`. Úsalo si el orden por partición debe
-  sobrevivir al fallo (RetryableTopic saca el mensaje de su partición y rompe
-  el orden relativo).
+**`DeadLetterConfig` es de build.** Declara un `DefaultErrorHandler` con los intentos y
+el backoff que el diseño puso en `onFailure.retry`, y un `DeadLetterPublishingRecoverer`
+que publica en `<topic>.DLT` **solo** para las suscripciones con `deadLetter: true`. No
+lo redeclares ni lo sustituyas.
 
-En ambos, excluye lo no reintentable — un error de negocio declarado en el
-diseño no mejora reintentando:
+**No uses `@RetryableTopic`.** Es no bloqueante y resulta tentador, pero:
+
+- Crea su propia cadena `<topic>-retry-*` y `<topic>-dlt`, distinta del destino que
+  declara la topología y del que lee el arnés (`deadLetterMessages(...)`). La aserción
+  de que un mensaje **no** acabó en el descarte pasaría mirando una cola que nadie
+  alimenta, que es peor que no tenerla.
+- Saca el mensaje de su partición, así que rompe el orden relativo — y el orden por
+  partición es justo lo que se conserva con el error handler in-situ.
+
+Lo que sí te toca: excluir lo no reintentable. Un error de negocio declarado en el
+diseño no mejora repitiéndolo, y reintentarlo hasta agotar acaba mandando a la DLQ un
+mensaje perfectamente válido — ruido operativo que se lee como incidente:
 
 ```java
-@RetryableTopic(attempts = "5", backoff = @Backoff(delay = 1000, multiplier = 2.0),
-        dltStrategy = DltStrategy.FAIL_ON_ERROR,
-        exclude = { DomainException.class })  // directo al DLT, sin reintentos
+errorHandler.addNotRetryableExceptions(DomainException.class);
 ```
-
-(Con `DefaultErrorHandler`: `errorHandler.addNotRetryableExceptions(DomainException.class)`.)
 
 ## Poison pills
 
@@ -118,7 +120,7 @@ lo marca `KO`.
 - [ ] Stub del publisher eliminado (dos beans del puerto rompen la inyección).
 - [ ] Key elegida según la garantía de orden que exige el diseño.
 - [ ] Puerto de envío implementado según `reliability` (`OutboxDispatcher` u `<Evento>Publisher`), con su stub eliminado y el fallo propagado (outbox) o registrado (best-effort).
-- [ ] `onFailure` → reintentos acotados + DLT si `deadLetter: true`; errores de negocio excluidos.
+- [ ] `onFailure` → NO redeclarado (build genera DeadLetterConfig); errores de negocio excluidos con `addNotRetryableExceptions`.
 - [ ] `ErrorHandlingDeserializer` configurado (poison pills al DLT, no en bucle).
 - [ ] Listener envuelto en `CorrelationContext.runWith(...)` y deduplicado con el `IdempotencyGuard` en el orden que prescribe el javadoc del `<Evento>Message` (sin mecanismo propio).
 

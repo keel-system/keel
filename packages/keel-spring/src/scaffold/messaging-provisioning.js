@@ -12,7 +12,7 @@
 // Solo aplica a snssqs. Kafka autocrea topics y RabbitMQ declara sus exchanges y
 // colas desde la propia aplicación, así que ahí no hay topología que sembrar.
 
-import { kebabCase } from '../lib/naming.js';
+import { deadLetterDestination, subscriptionDestination } from '../lib/dead-letter.js';
 
 // Reintentos por defecto cuando el diseño no declara `onFailure.retry`. SQS mueve
 // el mensaje a la DLQ al agotar la cuenta; el contador incluye las reapariciones
@@ -76,13 +76,20 @@ export function messagingProvisioning(model) {
   // consumidor (este servicio), no la fuente: dos consumidores del mismo topic
   // necesitan colas distintas para recibir ambos el mensaje.
   const queues = subscriptions.map((sub) => ({
-    name: `${service.artifactId}-${kebabCase(sub.name)}`,
+    name: subscriptionDestination('snssqs', model, sub),
     topic: sub.topicDefault,
     eventTypes: [sub.name],
     // `retry` es la retryPolicy del diseño; lo que SQS cuenta es el número de
     // recepciones, es decir, maxAttempts.
     maxReceive: sub.retry?.maxAttempts ?? DEFAULT_MAX_RECEIVE,
-    deadLetter: sub.deadLetter !== false
+    // Lo que el DISEÑO declara, no un default del script. Antes era
+    // `sub.deadLetter !== false`, así que SQS creaba una DLQ aunque la suscripción no
+    // la pidiera —el schema tiene `default: false`— y ningún otro broker lo hacía: el
+    // mismo diseño tenía o no tenía descarte según el stack elegido, y el javadoc del
+    // listener solo lo mencionaba en un caso. Con esto los tres brokers dicen lo mismo
+    // y el campo del DSL vuelve a significar algo.
+    deadLetter: Boolean(sub.deadLetter),
+    deadLetterName: deadLetterDestination('snssqs', model, sub)
   }));
 
   // Los topics que hay que crear: el destino físico de este servicio y los de las
@@ -91,10 +98,12 @@ export function messagingProvisioning(model) {
   const sourceTopics = [...new Set(queues.map((q) => q.topic))];
   const allTopics = [...new Set([messaging.destinationDefault, ...sourceTopics])];
 
+  // El nombre de la DLQ viaja como ARGUMENTO y no se compone en bash: el arnés lee ese
+  // mismo destino para poder afirmar sobre él, y los dos salen de `deadLetterName()`.
   const renderQueue = (queue) =>
-    (queue.deadLetter === false
-      ? `create_queue ${sq(queue.name)}`
-      : `create_queue_with_dlq ${sq(queue.name)} ${queue.maxReceive ?? DEFAULT_MAX_RECEIVE}`) +
+    (queue.deadLetter
+      ? `create_queue_with_dlq ${sq(queue.name)} ${queue.maxReceive ?? DEFAULT_MAX_RECEIVE} ${sq(queue.deadLetterName)}`
+      : `create_queue ${sq(queue.name)}`) +
     `\nsubscribe ${sq(queue.topic)} ${sq(queue.name)}${queue.eventTypes.map((type) => ` ${sq(type)}`).join('')}`;
 
   const blocks = [
@@ -182,7 +191,7 @@ create_queue() {
 # onFailure.retry del diseno: agotado, SQS mueve el mensaje a la DLQ sin que haya
 # codigo de reintento que escribir.
 create_queue_with_dlq() {
-  queue="$1"; max_receive="$2"; dlq="\${queue}-dlq"
+  queue="$1"; max_receive="$2"; dlq="$3"
   create_queue "$dlq"
   create_queue "$queue"
   # El valor de RedrivePolicy es a su vez una cadena JSON: de ahi las comillas
@@ -270,7 +279,11 @@ export function messagingTopologyChecks(model) {
     // Las de arnés van primero porque su ausencia tumba la suite entera (el humo
     // del arnés) y no solo un flujo de negocio.
     ...harnessQueues(model).map((queue) => queue.name),
-    ...subscriptions.map((sub) => `${service.artifactId}-${kebabCase(sub.name)}`)
+    ...subscriptions.map((sub) => subscriptionDestination('snssqs', model, sub)),
+    // Y el descarte de quien lo declara: si la RedrivePolicy no llegó a aplicarse, la
+    // cola de negocio existe igual y el sondeo daría verde con el descarte ausente —
+    // justo el estado en el que un mensaje agotado se pierde en silencio.
+    ...subscriptions.filter((sub) => sub.deadLetter).map((sub) => deadLetterDestination('snssqs', model, sub))
   ];
   for (const queue of queues) {
     checks.push({

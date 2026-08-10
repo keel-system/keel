@@ -75,10 +75,13 @@ falta `enable.idempotence: true`.
 
 Es su diseño: `-retry-*` y `-dlt` por topic, y los mensajes en retry salen de
 su partición original (el orden relativo con mensajes posteriores se pierde).
-Si el orden importa, cambia a `DefaultErrorHandler` con backoff bloqueante
-(ver implementation.md). En local puedes limpiar los topics de retry sin
-miedo; en clusters reales su creación puede estar prohibida — pacta con la
-plataforma.
+
+**Si ves esos topics, alguien añadió `@RetryableTopic` y sobra**: build ya genera
+`DeadLetterConfig` con `DefaultErrorHandler` + `DeadLetterPublishingRecoverer`, que
+reintenta in-situ (conserva el orden) y publica en `<topic>.DLT`. Con los dos
+mecanismos a la vez el mensaje acaba en `-dlt` y no en `.DLT`, así que
+`deadLetterMessages(...)` lee una cola vacía y el escenario da por bueno un descarte
+que sí ocurrió. Quita la anotación; no cambies el destino del arnés.
 
 ## El envío «funciona» pero el evento no está en el topic
 

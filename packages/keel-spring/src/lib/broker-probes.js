@@ -193,6 +193,26 @@ export function deliverParts(broker, { destination, bodyFile, attrsFile, base, w
 }
 
 /**
+ * Entrega DIRECTA a una cola, sin pasar por el topic.
+ *
+ * Solo tiene sentido en snssqs y solo para destinos que no cuelgan de ningún topic —
+ * hoy, las colas de descarte: una DLQ se alcanza por redrive, no por suscripción, así
+ * que no hay ARN de topic con su nombre y `sns publish` falla con NotFound. En Kafka y
+ * RabbitMQ el destino se nombra igual se publique donde se publique, y `deliverParts`
+ * ya vale.
+ *
+ * No lo uses para un destino normal: saltarse el topic se salta también el filtro por
+ * `eventType`, que es la mitad del contrato de recepción.
+ */
+export function queueDeliverParts({ destination, bodyFile, base }) {
+  return [
+    'sqs', 'send-message',
+    '--queue-url', concat(base ?? ENDPOINTS.snssqs.queueUrlPrefix, destination),
+    '--message-body', concat('file://', bodyFile)
+  ];
+}
+
+/**
  * Kafka entrega por shell y no por argv: `-l` exige el archivo como argumento y
  * las cabeceras son flags repetibles. Se devuelve la línea ya montada.
  */

@@ -105,8 +105,8 @@ tras procesar el lote). No actives `enable.auto.commit`.
 ## Qué no hacer
 
 - No pongas `spring.json.trusted.packages: "*"` (desactiva la protección).
-- No configures reintentos del listener por properties: van en código
-  (`@RetryableTopic` / `DefaultErrorHandler`, ver `references/implementation.md`)
-  porque dependen del `onFailure` del diseño.
+- No configures reintentos del listener por properties ni por anotación: **ya los
+  genera build** en `DeadLetterConfig`, con los valores del `onFailure` del diseño
+  (ver `references/implementation.md`).
 - No crees topics por código (`KafkaAdmin`/`NewTopic`) salvo en local: en
   clusters reales los topics los gobierna la plataforma.

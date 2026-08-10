@@ -517,7 +517,38 @@ Tres reglas, y saltarse cualquiera convierte el escenario en decorativo o en una
 - **«Exactamente uno» tras la recuperación**, no «al menos uno». Un relay que entrega pero no
   marca la fila reentrega para siempre, y sin ese conteo pasaría igual.
 
-**El tiempo de espera tras levantar el broker no lo manda el backoff del relay.** Es el error
+**## Lo que acabó en el descarte
+
+Solo con `onFailure.deadLetter` en la suscripción. `deadLetterMessages(<suscripción>, n)`
+devuelve los últimos `n` mensajes de su cola de descarte, o cadena vacía si no hay ninguno.
+El destino lo resuelve build por broker (`<topic>.DLT` en Kafka, `<destino>-dlq` en RabbitMQ,
+`<cola>-dlq` en SQS): el escenario nombra la **suscripción del diseño**, nunca una cola.
+
+Su uso principal es la aserción **negativa**, y es la que justifica que exista:
+
+```java
+deliverWithdrawalRejected(payload, messageId);
+deliverWithdrawalRejected(payload, messageId);          // el mismo messageId, otra vez
+await(..., () -> "active".equals(statusOf(productId)));
+assertTrue(deadLetterMessages("WithdrawalRejected", 5).isBlank());
+```
+
+Que el efecto ocurra una sola vez no dice **cómo**. Un duplicado absorbido por la guarda de
+idempotencia y un duplicado que reventó por dentro dejan el estado propio idéntico: la
+diferencia es que el segundo acabó en el descarte, y sin esta aserción un servicio que trata
+la repetición como error pasa el escenario en verde mientras llena la DLQ en producción.
+
+Dos avisos:
+
+- **Con Kafka el topic `.DLT` no existe hasta el primer descarte**, así que el helper traduce
+  «topic desconocido» a vacío. Es correcto —no hay descarte— pero significa que la aserción
+  negativa también pasa si la topología no se creó: la positiva (un escenario que sí mande
+  algo al descarte) es la que prueba que el canal existe.
+- **No lo uses como sinónimo de «falló»**. Un mensaje llega al descarte tras agotar los
+  reintentos declarados, así que entre el fallo y el descarte hay tiempo: aserta con `await`,
+  no con una lectura puntual.
+
+El tiempo de espera tras levantar el broker no lo manda el backoff del relay.** Es el error
 natural —el relay es lo que estamos mirando— y hace fallar el escenario con el servidor
 funcionando perfectamente. Quien domina la recuperación es el **cliente del broker**: cuando el
 canal cae, el envío no falla rápido, sino que arrastra la conexión muerta hasta su timeout de
@@ -661,6 +692,7 @@ Helpers de `AbstractFlowIT`:
 | `stubCallCount(método, patrónRuta)` | El Then: cuántas veces se llamó al proveedor — la única forma en caja negra de afirmar que un dato se cacheó, o que algo no se reintentó |
 | `stubRequests(método, patrónRuta)` | El Then que no se conforma con cuántas veces, sino con **qué** se envió: devuelve el log de peticiones recibidas, cada una como el JSON del stub |
 | `stubRequestBody(peticiónJson)` | El cuerpo saliente de una de esas peticiones, para compararlo con `assertJson(...)` |
+| `deadLetterMessages(suscripción, n)` | Lo que acabó en la cola de descarte de una suscripción con `onFailure.deadLetter`; vacío si nada. Ver § Lo que acabó en el descarte |
 | `stubRequestHeader(peticiónJson, nombre)` | Una cabecera de esa petición, sin distinguir mayúsculas (el caso lo elige el cliente HTTP, no el contrato). `null` si no viajaba |
 | `resetStubs()` | Limpieza explícita a mitad de un flujo; entre clases ya lo hace `resetState()` |
 

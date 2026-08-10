@@ -131,9 +131,20 @@ con `@Value`: no los escribas literales. Declara ese exchange en la topología.
 `@Component` con `@RabbitListener(queues = "${messaging.subscriptions.<evento-kebab>.topic:<fuente>.events}")`
 que mapea el `<Evento>Message` al mensaje de la operación `triggers` y despacha vía
 `UseCaseMediator` (el javadoc del record generado ya trae el mapeo campo a campo).
-La política `onFailure` (retry/DLQ) se implementa con DLX/DLQ:
-declara la cola con `x-dead-letter-exchange` y limita reintentos (contador en header
-`x-death` o `RetryOperationsInterceptor` en la container factory).
+**La cola de la suscripción y su descarte los declara build**, en `DeadLetterConfig`:
+`QueueBuilder.durable(<destino>)` con `x-dead-letter-exchange` vacío y
+`x-dead-letter-routing-key` apuntando a `<destino>-dlq`, más la propia `-dlq`.
+
+**No las redeclares.** No es una cuestión de estilo: RabbitMQ rechaza con
+`PRECONDITION_FAILED` una segunda declaración de la misma cola con argumentos distintos,
+y el contenedor de listeners **no arranca**. Si además la declaras sin los argumentos de
+descarte, el mensaje agotado se pierde en silencio y `deadLetterMessages(...)` lee una
+cola vacía: el escenario daría por bueno un descarte que sí ocurrió.
+
+Lo que sí te toca: acotar los reintentos (contador en el header `x-death`, o un
+`RetryOperationsInterceptor` en la container factory) y **rechazar sin reencolar**
+(`basicNack` con `requeue=false`) al agotarlos — es lo que hace que el broker aplique el
+descarte que la cola ya tiene configurado.
 
 ### El `contract` de la suscripción manda
 

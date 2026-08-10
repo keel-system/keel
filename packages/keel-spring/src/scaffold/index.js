@@ -35,6 +35,7 @@ import * as refResolvers from './ref-resolvers.js';
 import * as events from './events.js';
 import * as correlation from './correlation.js';
 import * as messaging from './messaging.js';
+import * as deadLetterConfig from './dead-letter-config.js';
 import * as outbox from './outbox.js';
 import * as idempotency from './idempotency.js';
 import * as httpIdempotency from './http-idempotency.js';
@@ -91,6 +92,7 @@ const GENERATORS = [
   events,
   correlation,
   messaging,
+  deadLetterConfig,
   outbox,
   idempotency,
   httpIdempotency,

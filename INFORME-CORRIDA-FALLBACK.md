@@ -230,6 +230,80 @@ primaria— ya están probados y volver a probarlos es ejecutar el mismo código
 cambia por diseño, y por tanto sigue sin cubrir fuera de `stock-reservation`, es lo que escribe el
 **agente**: la consulta de reclamo del barrido y el handler compensador.
 
+## El descarte deja de ser una promesa
+
+Última pieza de esta serie, y la que cierra el único hueco que era **estructural**: no había forma
+de afirmar sobre la cola de descarte, así que toda cláusula del tipo «el mensaje se confirma sin
+acabar en la DLQ» quedaba `uncovered` por construcción.
+
+El diagnóstico inicial —«falta una primitiva del arnés»— era incompleto. Un helper que lea la DLQ
+solo es sólido donde **build sea dueño de la topología**, y no lo era:
+
+| Broker | Quién creaba la dead-letter |
+|---|---|
+| SNS/SQS | build (`RedrivePolicy` en `init-messaging.sh`) |
+| Kafka | **el agente** — build dejaba una frase en el javadoc |
+| RabbitMQ | **el agente** — build no declaraba ni una `Queue` |
+
+Con eso, `onFailure.deadLetter` declaraba una garantía que existía o no **según el stack elegido**,
+y cuyo destino nadie podía nombrar porque lo elegía quien implementara el listener.
+
+### Qué se cambió
+
+- **`src/lib/dead-letter.js`** — fuente única del destino, con la asimetría que importa:
+  `subscriptionDestination()` resuelve de dónde consume cada suscripción, que **no es lo mismo en
+  los tres brokers** (en SNS/SQS el consumidor tiene cola propia colgada del topic; en Kafka y
+  RabbitMQ consume del destino directamente).
+- **`src/scaffold/dead-letter-config.js`** — build pasa a generar la topología en los dos brokers
+  que no la tenían: `DefaultErrorHandler` + `DeadLetterPublishingRecoverer` en Kafka (con el
+  conjunto de topics con descarte declarado, porque el error handler es del *container factory* y
+  sin eso mandaría a DLT también las suscripciones que el diseño dejó sin él), y colas con
+  `x-dead-letter-exchange` en RabbitMQ.
+- **SQS alineado con el DSL**: la DLQ se crea solo si la suscripción la declara. Antes era
+  `deadLetter !== false`, o sea siempre.
+- **`deadLetterMessages(<suscripción>, n)`** en el arnés, documentado en
+  `conventions/integration-tests.md` con su uso principal —la aserción **negativa**— y sus dos
+  avisos.
+- **Doctrina**, con un conflicto de fondo: la skill de Kafka mandaba usar `@RetryableTopic`, que
+  crea `<topic>-dlt`, mientras build genera `<topic>.DLT`. Con los dos mecanismos a la vez el
+  mensaje acaba en un destino y el arnés lee el otro. En RabbitMQ el aviso es más duro:
+  redeclarar la cola con otros argumentos da `PRECONDITION_FAILED` y el contenedor **no arranca**.
+
+### 4. Tres defectos que solo `broker-check` podía ver
+
+Todos del mismo tipo —**código correcto apuntando al sitio equivocado**—, y ninguno visible para
+`npm test` ni para `compile-check`: los comandos estaban bien escritos y bien serializados.
+
+- **El destino en SQS.** La primera versión del helper componía el nombre desde el *topic*, y en
+  SNS/SQS el consumidor tiene cola propia: el arnés habría leído `compliance.events-dlq`, que no
+  existe. Una lectura contra una cola inexistente devuelve vacío, así que
+  `assertTrue(deadLetterMessages(...).isBlank())` habría pasado para siempre sin mirar nada. Es
+  exactamente el fallo que el módulo de fuente única existe para impedir, cometido igualmente por
+  componer el nombre en el call site.
+- **La entrega a la DLQ.** `BRK-12` fallaba en SQS porque una cola de descarte **no cuelga de
+  ningún topic** —se alcanza por redrive—, así que `sns publish` con su nombre falla. Se añadió
+  `queueDeliverParts()` a `broker-probes.js`, con la advertencia de no usarlo para un destino
+  normal: saltarse el topic se salta el filtro por `eventType`, que es la mitad del contrato de
+  recepción.
+- **El default de SQS ocultaba un fallo latente del arnés.** Las colas de *observación* del arnés
+  recibían DLQ por el mismo default. Y ahí es dañino: `publishedMessages` lee **sin borrar**, así
+  que cada sondeo incrementa el contador de recepciones; pasadas cinco, el broker apartaba el
+  mensaje y el arnés lo leía como «canal vacío» — intermitente, en mitad de una aserción y solo
+  con snssqs.
+
+### Y un verde en falso, que es el hallazgo de método
+
+La primera corrida de `broker-check` salió con **27 escenarios en OK y `BRK-12` sin ejecutarse en
+ninguno de los tres brokers**, sin una línea que lo dijera: el escenario se selecciona por la
+suscripción que declara `deadLetter` y el código miraba `subscriptions[0]`, que en
+`catalog-extended` no la declara. Corregido, y el runner **imprime ahora la omisión**.
+
+Es el tercer caso de la misma familia en esta serie —el test que cazaba el nombre de variable en
+vez del tipo, el regex multilínea contra un `grep` que va línea a línea, y esto—, así que conviene
+dejarlo como regla y no como anécdota: **comprobar que el check se ejecuta y muerde, no que sale
+verde**. Las tres veces el síntoma fue idéntico: una suite en verde que no había mirado lo que
+decía mirar.
+
 ## Verificación
 
 - `npm test` en verde en los dos workspaces (472 + 387) con los casos de regresión nuevos.
@@ -244,14 +318,21 @@ cambia por diseño, y por tanto sigue sin cubrir fuera de `stock-reservation`, e
   en las versiones anteriores: un check cuya ausencia no se contrasta no prueba nada.
 - El gate `dedupe`/`commandIdempotency` verificado **contra el proyecto real de la corrida**: verde
   con el árbol correcto y rojo con cada uno de los cuatro defectos reintroducidos por separado.
+- **`npm run broker-check` en verde con `BRK-12` en los tres brokers** (podman): el destino de
+  descarte existe, se lee con el nombre que usa el arnés, y en SQS la `RedrivePolicy` de la cola de
+  negocio apunta de verdad a esa DLQ. Es el único juez de esta parte — comparar cadenas no dice
+  nada de si el comando apunta a un recurso que existe, y los tres defectos de arriba estaban bien
+  escritos.
 
 ## Lo que sigue abierto
 
 1. **La guarda de campos `required` en los mappers** (arriba). Conductual, del generador, tres
    llamadas más afectadas: su propia decisión.
-2. **La cola dead-letter** sigue sin poder asertarse en ninguna fixture. Necesita una primitiva del
-   arnés (`deadLetterMessages(<suscripción>, n)`); sin ella, las cláusulas «se confirma sin acabar
-   en la DLQ» son `uncovered` por construcción.
+2. **Las cláusulas de descarte en las fixtures.** El mecanismo ya está: topología de build en los
+   tres brokers, helper en el arnés y destino probado contra brokers reales. Lo que falta es
+   escribir los `Then` que quedaron `uncovered` y **correrlos**: que el broker mueva de verdad un
+   mensaje agotado exige la aplicación viva rechazándolo, y eso `broker-check` no lo arranca por
+   diseño. Su gate es un escenario `FL-*`.
 3. **`FL-REC-001` en `catalog-extended`**: el barrido lo escribe el agente en cada diseño, así que
    el verde de `stock-reservation` no dice nada de este. Forzaría además a declarar la marca
    temporal de espera que `Product` no tiene y que el barrido suple con `createdAt`.

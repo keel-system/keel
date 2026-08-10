@@ -145,7 +145,12 @@ test('payload de suscripción: wireName y tipos de dominio con su import', () =>
   // Contrato de recepción escrito donde el agente lo va a leer.
   assert.ok(message.includes("el payload cuelga de 'data'"));
   assert.ok(message.includes("Deduplica por header 'messageId'"));
-  assert.ok(message.includes('va a la DLQ del broker'));
+  // El destino CONCRETO, no «la DLQ del broker»: la topología es de build desde que
+  // DeadLetterConfig la genera, así que el javadoc puede —y debe— nombrar la cola. Antes
+  // decía «lo configura el agente», que era falso en SNS/SQS y quedó falso en los tres.
+  assert.ok(message.includes('el broker mueve el mensaje a'), message);
+  assert.ok(message.includes('La topología la genera build'), message);
+  assert.ok(!message.includes('lo configura el agente'), message);
 });
 
 test('sin lifecycle no se genera máquina de estados en ninguna entidad', () => {
