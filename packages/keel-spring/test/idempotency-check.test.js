@@ -161,3 +161,79 @@ test('los comentarios no cuentan como código: el TODO que se caza es el vivo', 
   if (result === null) return t.skip('sin bash en el PATH');
   assert.ok(!/\[compensation\]/.test(result.out), result.out);
 });
+
+// La familia `dedupe` comprobaba el ORDEN y el USO del guard —que eran correctos— y
+// salió OK en una corrida real con la deduplicación COMPLETAMENTE ROTA: la escritura
+// del registro hacía `merge()` en vez de INSERT, así que `record()`/`tryRecord()`
+// devolvían `true` siempre. Estos tests fijan lo que faltaba, y lo hacen del único modo
+// que sirve: reintroduciendo cada defecto y exigiendo que el gate se ponga rojo. Un
+// check que solo se prueba contra el árbol bueno no distingue «mira» de «no mira».
+const javaFile = (project, name) => {
+  const found = execFileSync('bash', ['-c', `find src/main/java -name '${name}' | head -n 1`], {
+    cwd: project,
+    encoding: 'utf8'
+  }).trim();
+  return found ? path.join(project, found) : null;
+};
+
+const mutating = (project, file, mutate) => {
+  const original = fs.readFileSync(file, 'utf8');
+  const mutated = mutate(original);
+  assert.notEqual(mutated, original, 'la mutación no aplicó: el test no probaría nada');
+  fs.writeFileSync(file, mutated);
+  const result = run(project);
+  fs.writeFileSync(file, original);
+  return result;
+};
+
+test('dedupe: sin Persistable la escritura es un merge y el gate lo caza', (t) => {
+  const project = build('catalog-extended');
+  const entity = javaFile(project, 'ProcessedEventJpa.java');
+  if (!entity) return t.skip('sin bash en el PATH');
+
+  // Con la clave ASIGNADA y sin Persistable, SimpleJpaRepository.isNew() mira el id, lo
+  // ve no nulo y hace merge(): SELECT + UPDATE que no viola la clave y no lanza nada.
+  const result = mutating(project, entity, (s) => s.replace(/implements Persistable<[^>]+>/, ''));
+  if (result === null) return t.skip('sin bash en el PATH');
+  assert.match(result.out, /\[dedupe\][^\n]*ProcessedEventJpa/, result.out);
+});
+
+test('dedupe: un isNew() constante desactiva delete() y el gate lo caza', (t) => {
+  const project = build('catalog-extended');
+  const entity = javaFile(project, 'ProcessedEventJpa.java');
+  if (!entity) return t.skip('sin bash en el PATH');
+
+  // El más sutil de los cuatro: SimpleJpaRepository.delete() empieza con
+  // `if (isNew(entity)) return;`, así que un `true` constante lo convierte en un no-op
+  // silencioso y la retirada de la clave caducada deja de borrar. Arreglar el INSERT
+  // desactivaba el DELETE, y nada lo delataba.
+  const result = mutating(project, entity, (s) => s.replace('return !persisted;', 'return true;'));
+  if (result === null) return t.skip('sin bash en el PATH');
+  assert.match(result.out, /\[dedupe\][^\n]*ProcessedEventJpa/, result.out);
+});
+
+test('dedupe: sin saveAndFlush del repositorio la excepción no se traduce y el gate lo caza', (t) => {
+  const project = build('catalog-extended');
+  const writer = javaFile(project, 'ProcessedEventWriter.java');
+  if (!writer) return t.skip('sin bash en el PATH');
+
+  // La traducción de excepciones de Spring solo actúa al salir de un método proxeado, y
+  // el proxy del EntityManager no traduce: sale un ConstraintViolationException crudo
+  // que ningún catch de DataIntegrityViolationException reconoce, y el catch-all lo
+  // convierte en el 500 que los escenarios de carrera prohíben.
+  const result = mutating(project, writer, (s) => s.replace('.saveAndFlush(', '.persist('));
+  if (result === null) return t.skip('sin bash en el PATH');
+  assert.match(result.out, /\[dedupe\][^\n]*ProcessedEventWriter/, result.out);
+});
+
+test('commandIdempotency: la entidad de la clave también fuerza INSERT', (t) => {
+  const project = build('catalog-extended');
+  const entity = javaFile(project, 'IdempotencyRecordJpa.java');
+  if (!entity) return t.skip('sin bash en el PATH');
+
+  // Es lo que hace que la carrera de la clave la arbitre la base y no un candado en
+  // memoria, y lo que permite retirar la clave caducada antes de reinsertarla.
+  const result = mutating(project, entity, (s) => s.replace(/implements Persistable<[^>]+>/, ''));
+  if (result === null) return t.skip('sin bash en el PATH');
+  assert.match(result.out, /\[commandIdempotency\][^\n]*IdempotencyRecordJpa/, result.out);
+});

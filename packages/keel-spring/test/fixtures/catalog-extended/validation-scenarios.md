@@ -50,7 +50,7 @@
 
 | Operación | Flujos | Superficie |
 |-----------|--------|------------|
-| createProduct | FL-PRD-001, FL-PRD-002, FL-PRD-003, FL-PRD-004, FL-IMG-001 | usuarios |
+| createProduct | FL-PRD-001, FL-PRD-002, FL-PRD-003, FL-PRD-004, FL-IMG-001, FL-OBX-001 | usuarios |
 | getProductBySlug | FL-PRD-002 | usuarios |
 | updateProduct | FL-PRD-002 | usuarios |
 | listProducts | FL-PRD-003 | usuarios |
@@ -353,6 +353,45 @@ identificador de mensaje.
 3. El servicio no acaba con el mensaje en la cola de dead-letter: que la copia perdedora falle
    por dentro es lo que hace la guarda, pero el resultado observable de esa entrega es una
    confirmación sin efecto, no un error propagado.
+
+## Publicación con el canal caído
+
+### FL-OBX-001: el canal está indisponible cuando se da de alta un producto
+
+El escenario que separa `reliability: outbox` de `best-effort`, y el único. `FL-PRD-001-A` Then 4
+afirma que `ProductCreated` acaba en el canal, y eso lo cumple igual un servidor que publica en
+línea dentro de la operación: la diferencia solo se ve cuando el canal **no está** en el instante
+del commit. La mitad que importa es la negativa.
+
+**Given**: la categoría `c1` existe; no existe ningún producto con sku `OBX-1`.
+
+**When**: se **detiene el broker** y, con él parado, `createProduct` — `POST /api/v1/products` con
+`{"sku": "OBX-1", "name": "Cincel", "categoryId": "<c1>"}` e `Idempotency-Key` propia.
+**Then**:
+1. La mutación responde **igual que con el canal en pie**: status `201` y el cuerpo completo del
+   contrato, con `sku` = `"OBX-1"` y `status` = `"draft"`. La disponibilidad del broker no es
+   parte del contrato de la operación — si esta petición falla o tarda, el evento se está
+   publicando dentro de la transacción y la fiabilidad que se declaró es la del broker, no la
+   nuestra.
+2. `getProductsByIds` con `<id>` devuelve el producto: el alta está **commiteada**, no pendiente
+   de que el canal vuelva. Es la lectura por id que el diseño declara — no hay
+   `GET /products/{id}`, y el listado público va por slug de categoría.
+3. El canal del servicio sigue **vacío**. Es la afirmación que un servidor que publica en línea no
+   puede satisfacer: o habría fallado en el Then 1, o el evento estaría fuera.
+
+**When** (segunda mitad): se vuelve a **levantar el broker** y se espera a que esté listo.
+**Then**:
+4. `ProductCreated` para `<id>` aparece en el canal **exactamente una vez**, con el `productId` y
+   el `sku` `"OBX-1"` del alta. Ni cero —el alta no se perdió con el canal— ni dos —el reintento
+   del relay no duplica lo ya publicado—.
+
+**Notas de determinación**: el sku es propio de este flujo y el Then 4 se acota a **este**
+`productId`. Todos los demás flujos crean productos y publican el mismo evento, así que un
+«exactamente una vez» sin acotar mediría otra cosa.
+
+**Caso límite**: si el relay agotara sus intentos mientras el broker está parado, el evento
+acabaría en dead-letter y el Then 4 fallaría por «cero». Eso no es un fallo del escenario: es la
+política de reintentos declarada siendo más corta que la caída, y se arbitra como diseño.
 
 ## El fallback del proveedor
 

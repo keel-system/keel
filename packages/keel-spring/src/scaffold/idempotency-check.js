@@ -49,7 +49,14 @@ export function generate(model) {
 // suya. `require`/`forbid` son expresiones regulares extendidas (grep -E).
 
 function checksOf(model) {
-  return [...dedupeChecks(model), ...commandChecks(model), ...compensationChecks(model), ...reconciliationChecks(model), ...outboxChecks(model)];
+  return [
+    ...dedupeChecks(model),
+    ...insertChecks(model),
+    ...commandChecks(model),
+    ...compensationChecks(model),
+    ...reconciliationChecks(model),
+    ...outboxChecks(model)
+  ];
 }
 
 // 1. Consumo de mensajes. Las dos mitades —llamar al guard y ACTUAR sobre lo que
@@ -83,6 +90,111 @@ function dedupeChecks(model) {
         : `'${sub.trigger}' no declara transitions: tryRecord(...) antes de despachar, que es lo único que cierra la ventana`
     };
   });
+}
+
+// 1b. Que la escritura del registro sea un INSERT DE VERDAD.
+//
+// Las otras familias vigilan el trabajo del AGENTE, porque es el tramo que no está
+// garantizado por construcción. Esta vigila el de `build`, y hace falta por una razón
+// que una corrida demostró: los archivos build-owned NO son intocables. En la corrida
+// del fallback, el agente de código editó `ComplianceMapper.java`, que genera `build`.
+// «build lo generó bien» y «está bien en el árbol donde corre el gate» son cosas
+// distintas, y esta familia mide la segunda.
+//
+// El motivo de fondo es peor. La familia `dedupe` de arriba comprueba el ORDEN y el USO
+// del guard —que era correcto— y salió `OK` con la deduplicación COMPLETAMENTE ROTA:
+// `saveAndFlush` sobre una entidad de clave asignada sin `Persistable` hace que Spring
+// Data concluya que la fila ya existe y ejecute un `merge()` —SELECT + UPDATE— que no
+// viola la clave primaria y no lanza nada. `record()` y `tryRecord()` devolvían `true`
+// siempre. Un gate que aprueba eso no distingue «deduplica» de «llama a quien debe».
+//
+// Tres piezas, y ninguna sobra (las tres salieron de defectos reales):
+//   - `Persistable` en la entidad, para que sea INSERT y no merge.
+//   - `isNew()` NO constante: un flag que `@PostLoad` pone a true. Con `true` fijo,
+//     `SimpleJpaRepository.delete()` —que empieza con `if (isNew(entity)) return;`—
+//     se convierte en un no-op silencioso y la retirada de la clave caducada no borra
+//     nada. Arreglar el INSERT desactivó el DELETE, y nada lo delataba.
+//   - `saveAndFlush` del REPOSITORIO, no `entityManager.persist`: la traducción de
+//     excepciones de Spring solo actúa al salir de un método proxeado, y el proxy del
+//     EntityManager no traduce. Sin ella sale un `ConstraintViolationException` crudo
+//     que ningún `catch` de `DataIntegrityViolationException` reconoce, y el catch-all
+//     lo convierte en 500 — el desenlace que los escenarios de carrera prohíben.
+//
+// En la rama documental el reparto es otro: `insert()` ya fuerza la inserción y
+// `DuplicateKeyException` ya es una `DataIntegrityViolationException`, así que lo único
+// que hay que impedir es que alguien lo cambie por `save()`, que hace upsert y nunca
+// choca.
+function insertChecks(model) {
+  const document = model.persistenceKind === 'document';
+  const checks = [];
+
+  const writeCheck = (group, writerClass, why) => ({
+    group,
+    subject: `${writerClass}: la escritura es un INSERT`,
+    class: writerClass,
+    require: [document ? '\\.insert\\s*\\(' : '\\.saveAndFlush\\s*\\('],
+    forbid: document
+      ? // `save()` hace upsert: sobrescribe el registro y no choca nunca.
+        ['\\.save\\s*\\(']
+      : // `persist` a mano deja la excepción sin traducir y acaba en 500.
+        ['entityManager\\.persist\\s*\\(', 'getEntityManager\\(\\)'],
+    why
+  });
+
+  const entityCheck = (group, entityClass, why) => ({
+    group,
+    subject: `${entityClass}: la clave asignada fuerza INSERT y sigue siendo borrable`,
+    class: entityClass,
+    require: [
+      'implements\\s+Persistable',
+      // El marcador que pone el flag. `\b` al final para que un `@PostLoadLoQueSea`
+      // no lo satisfaga por prefijo.
+      '@PostLoad\\b',
+      // Y que `isNew()` CONSULTE el flag en vez de devolver una constante. Se exige
+      // la forma —el retorno negado de un campo— y no se prohíbe `return true`,
+      // porque `equals()` lleva uno legítimo y prohibirlo daría un KO falso.
+      //
+      // Tiene que ser un patrón de UNA LÍNEA: el script usa `grep -E`, que es línea
+      // a línea, así que un patrón que cruce el `{` de la firma y su `return` no
+      // dispara nunca. Ese error deja el check en verde permanente, que es peor que
+      // no tenerlo — se comprobó reintroduciendo el defecto y viendo si salta.
+      'return\\s+![A-Za-z_]'
+    ],
+    why
+  });
+
+  if (model.layersPresent.messaging && model.layersPresent.persistence && (model.subscriptions ?? []).length > 0) {
+    checks.push(
+      writeCheck(
+        'dedupe',
+        'ProcessedEventWriter',
+        document
+          ? 'insert() y NO save(): save hace upsert y una reentrega nunca chocaría'
+          : 'saveAndFlush del repositorio: su proxy traduce la violación de clave; entityManager.persist la deja cruda y acaba en 500'
+      )
+    );
+    if (!document) {
+      checks.push(
+        entityCheck(
+          'dedupe',
+          'ProcessedEventJpa',
+          'Persistable con isNew() por @PostLoad: sin él la clave asignada hace merge() y no deduplica; con `true` constante, delete() es un no-op'
+        )
+      );
+    }
+  }
+
+  if (declaresIdempotency(model) && model.layersPresent.persistence && !document) {
+    checks.push(
+      entityCheck(
+        'commandIdempotency',
+        'IdempotencyRecordJpa',
+        'Persistable con isNew() por @PostLoad: es lo que hace que la carrera de la clave la arbitre la base, y lo que permite retirar la clave caducada'
+      )
+    );
+  }
+
+  return checks;
 }
 
 // 2. Idempotencia de petición. El mecanismo está generado entero: lo que se comprueba

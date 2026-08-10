@@ -40,7 +40,7 @@
 | uploadAsset | FL-AST-001, FL-AST-001-B, FL-AST-001-C | usuarios (multipart) |
 | getAsset | FL-AST-003, FL-AST-003-B | usuarios y clientes máquina |
 | listAssets | FL-AST-004 | usuarios |
-| publishAsset | FL-AST-002, FL-AST-002-B | usuarios |
+| publishAsset | FL-AST-002, FL-AST-002-B, FL-OBX-001 | usuarios |
 | quarantineAsset | FL-QUA-001, FL-QUA-001-B | suscripción (interna) |
 | reconcileScans | — | programada; sin efecto observable declarado |
 
@@ -106,6 +106,49 @@ binario y un `Idempotency-Key` **nuevo**.
 1. Status `502` con `code` = `"SCANNER_UNAVAILABLE"`.
 2. `<a2>` sigue en `draft`: sin veredicto no hay publicación (`onFailure: fail`).
 3. No se publicó ningún `AssetPublished`.
+
+## Publicación con el canal caído
+
+### FL-OBX-001: el canal está indisponible cuando se publica
+
+El escenario que separa `reliability: outbox` de `best-effort`, y el único. Que `AssetPublished`
+acabe en el canal lo cumple igual un servidor que publica en línea dentro de la operación: la
+diferencia solo se ve cuando el canal **no está** en el instante del commit. La mitad que importa
+es la negativa.
+
+Se hace sobre `publishAsset` y no sobre `uploadAsset` a propósito: lo que se mide es el canal, y
+la subida arrastra el almacenamiento al escenario, que añade una causa de fallo ajena a lo que se
+prueba.
+
+**Given**: un archivo `<a3>` en `draft`, custodiado como en FL-AST-001; `scanner.scanAsset`
+responde `200 {verdict: "clean", scannedAt: <t>}`.
+
+**When**: se **detiene el broker** y, con él parado, `POST /api/v1/assets/{a3}/publish`.
+**Then**:
+1. La mutación responde **igual que con el canal en pie**: status `200` y `status` =
+   `"published"`. La disponibilidad del broker no es parte del contrato de la operación — si esta
+   petición falla o tarda, el evento se está publicando dentro de la transacción y la fiabilidad
+   que se declaró es la del broker, no la nuestra.
+2. `GET /api/v1/assets/{a3}` devuelve `published`: el cambio de estado está **commiteado**, no
+   pendiente de que el canal vuelva.
+3. El canal del servicio sigue **vacío**. Es la afirmación que un servidor que publica en línea no
+   puede satisfacer: o habría fallado en el Then 1, o el evento estaría fuera.
+4. El escáner recibió su llamada con normalidad: que el canal esté caído no cancela el trabajo
+   que la operación encarga por HTTP, que no pasa por el outbox.
+
+**When** (segunda mitad): se vuelve a **levantar el broker** y se espera a que esté listo.
+**Then**:
+5. `AssetPublished` para `<a3>` aparece en el canal **exactamente una vez**, con el `assetId` y
+   `status` = `"published"`. Ni cero —la publicación no se perdió con el canal— ni dos —el
+   reintento del relay no duplica lo ya publicado—.
+
+**Notas de determinación**: `<a3>` es propio de este flujo y el Then 5 se acota a **ese**
+`assetId`; FL-AST-002 publica el mismo evento para otro archivo, así que un «exactamente una vez»
+sin acotar mediría otra cosa.
+
+**Caso límite**: si el relay agotara sus intentos mientras el broker está parado, el evento
+acabaría en dead-letter y el Then 5 fallaría por «cero». Eso no es un fallo del escenario: es la
+política de reintentos declarada siendo más corta que la caída, y se arbitra como diseño.
 
 ## Consulta
 

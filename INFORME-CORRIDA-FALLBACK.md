@@ -8,6 +8,12 @@ sin tocar: **el fallback del circuit breaker capturaba `Throwable`**.
 cupo de 2. Las cinco familias de `check-idempotency.sh` en OK, `contextTest: OK`, `baseline: OK`.
 Stack PostgreSQL 16 + Kafka + Redis + MinIO + WireMock sobre podman 5.8.3 en Windows, JDK 21.
 
+Sobre el mismo proyecto se hizo después una **segunda tanda**, al revisar qué quedaba realmente
+cubierto: se añadió `FL-OBX-001` (el canal indisponible) y se re-puntuó a **35 de 35**, con un
+ciclo de arbitraje que resultó `culprit: test`. Va en § La segunda tanda, y de ella salieron dos
+arreglos más del generador: una convención que dimensionaba mal una espera y el gate `dedupe`,
+que daba falsos verdes.
+
 ## El problema
 
 `fallbackMethod` de resilience4j declaraba `Throwable`, así que **cualquier** excepción del
@@ -134,9 +140,99 @@ llamadas (un `amount` nulo pasaría de degradación silenciosa a 500). Es conduc
 generador, y merece su propia decisión — exactamente el mismo razonamiento por el que el fallback
 `Throwable` no se arregló de propina en la corrida anterior.
 
+## La segunda tanda: el outbox que nadie había ejecutado
+
+Al preguntarse qué quedaba cubierto de verdad tras la corrida apareció que **la entrega del
+outbox no estaba verificada en vivo en `catalog-extended`**. No era sospecha: `keel validate` lo
+decía en cada build, y la regla vive en `crossrefs.js:1015` — un escenario que solo afirme que el
+evento acaba publicado lo pasa igual un servidor que publica en línea dentro de la transacción.
+`FL-PRD-001-A` Then 4 era justo eso.
+
+El inventario destapó que el hueco era más ancho: **`asset-vault` tenía el mismo**. Se escribió
+`FL-OBX-001` en las dos —sobre `createProduct`/`ProductCreated` en catalog y sobre
+`publishAsset`/`AssetPublished` en asset-vault, elegido frente a `uploadAsset` porque la subida
+arrastra el almacenamiento a un escenario que mide el canal—. Ninguna fixture del repo promete ya
+`outbox` sin demostrarlo, y se comprobó que el check muerde validando las versiones anteriores:
+el aviso estaba en las dos y ya no está.
+
+**Resultado: 35 de 35**, con un ciclo de arbitraje.
+
+### 3. La convención dimensionaba mal la espera, y el agente la siguió
+
+El escenario falló en la primera puntuación. El árbitro dictaminó `culprit: test` y el
+diagnóstico es lo más valioso de esta tanda: **el servidor cumplía el `Then` entero y entregó el
+evento 1,3 s después de que la prueba dejara de mirar**.
+
+La causa no era el backoff del relay. Con el broker caído el `join()` del productor no falla
+rápido: arrastra la conexión muerta hasta `request.timeout.ms` —**30 s por defecto**, y el perfil
+`local` no lo baja—, y hasta que Kafka no cancela esa petición el relay sigue bloqueado sin
+reintentar. Una ventana de 20 s medida desde `startBroker()` no podía llegar nunca.
+
+Y el error no era del agente: era de **la documentación del generador**.
+`conventions/integration-tests.md` decía textualmente que la espera «tiene que cubrir el backoff
+del relay» y que «veinte segundos es holgado». El agente siguió esa guía al pie de la letra.
+
+Corregido en el payload con lo que la corrida midió: quien manda es el timeout del cliente del
+broker, 60 s es el mínimo prudente con los defaults, y el dato concreto del retraso de 1,3 s
+queda escrito para que nadie vuelva a dimensionarlo por el relay. Es el mismo patrón que el punto
+1 y que el 7 de la corrida anterior: cuando el arreglo cae en algo que produce `build` —código o
+prosa—, el arreglo va en el generador.
+
+Se descartó por escrito la solución fácil (bajar `request.timeout.ms` en el perfil `local`): haría
+que la suite midiera un cliente Kafka distinto del que corre en `develop`/`production`.
+
+## El gate `dedupe` dejó de dar falsos verdes
+
+Cerrado el hueco que la corrida de outbox dejó anotado y que este informe listaba como abierto: la
+familia `dedupe` de `check-idempotency.sh` comprobaba el **orden y el uso** del guard —que eran
+correctos— y salió `OK` con la deduplicación completamente rota.
+
+`insertChecks()` (`src/scaffold/idempotency-check.js`) añade lo que faltaba, y cada pieza es un
+defecto real de aquella corrida:
+
+- **`Persistable` en la entidad** — sin él, la clave asignada hace que Spring Data concluya que la
+  fila ya existe y ejecute `merge()`: SELECT + UPDATE que no viola la clave y no lanza nada.
+- **`isNew()` que consulta el flag, no constante** — `SimpleJpaRepository.delete()` empieza con
+  `if (isNew(entity)) return;`, así que un `true` fijo convierte el borrado en un no-op silencioso.
+- **`saveAndFlush` del repositorio, no `entityManager.persist`** — el proxy del EntityManager no
+  traduce excepciones, y el catch-all acaba en el 500 que los escenarios de carrera prohíben.
+
+En la rama documental el reparto es otro (`insert()` ya fuerza la inserción), así que ahí solo se
+prohíbe `save()`, que hace upsert y nunca chocaría.
+
+**Por qué esto va en el script si esas clases las genera `build`**, que no es obvio: el gate existe
+para vigilar el trabajo del *agente*, pero esta misma serie demostró que los archivos build-owned
+**no son intocables** — el agente de código editó `ComplianceMapper.java`. «Build lo generó bien» y
+«está bien en el árbol donde corre el gate» son cosas distintas.
+
+**La primera versión no mordía**, y conviene que quede escrito: el patrón que prohibía el `isNew()`
+constante cruzaba dos líneas, y `grep -E` es línea a línea, así que no podía dispararse nunca —
+salía verde con el defecto puesto, que es exactamente lo que se venía a corregir. Se detectó
+reintroduciendo el defecto en vez de comprobar solo el árbol bueno. Al arreglarlo apareció una
+segunda trampa: prohibir `return true;` daba un KO **falso**, porque `equals()` lleva uno legítimo;
+la versión final exige la forma correcta (`return !<campo>`) en vez de prohibir la incorrecta.
+
+La regresión (`test/idempotency-check.test.js`) reintroduce los cuatro defectos uno a uno y exige
+el rojo con el archivo señalado. Verificado además contra el proyecto real de la corrida.
+
+## Corrección sobre la cobertura de la reconciliación
+
+Este informe y el de outbox afirmaban que la reconciliación «no tiene ningún escenario `FL-*`
+detrás» porque un cron no se alcanza en caja negra. **Es falso desde que `stock-reservation` ganó
+`FL-REC-001`**, y su propio documento lo dice: `reconcileReservations` ya no es `uncovered`. La
+palanca es envejecer la fila —no el reloj del servicio ni el umbral— y esperar un tick del barrido.
+
+Lo que sí es cierto es que esa cobertura **existe en una sola fixture**: ni `catalog-extended` ni
+`asset-vault` ejercitan su barrido, y ninguna de las dos tiene los `FL-CLU-*`. Con una salvedad
+que importa al decidir si merece la pena repetirlos: los mecanismos que `build` genera enteros y
+no varían con el diseño —el reclamo del `OutboxRelay`, el arbitraje de la clave por la clave
+primaria— ya están probados y volver a probarlos es ejecutar el mismo código otra vez. Lo que sí
+cambia por diseño, y por tanto sigue sin cubrir fuera de `stock-reservation`, es lo que escribe el
+**agente**: la consulta de reclamo del barrido y el handler compensador.
+
 ## Verificación
 
-- `npm test` en verde en los dos workspaces con los casos de regresión nuevos.
+- `npm test` en verde en los dos workspaces (472 + 387) con los casos de regresión nuevos.
 - Los tests **muerden**: se comprobó revirtiendo el código. La primera versión de la prohibición
   de `Throwable` **no mordía** —cazaba el nombre de la variable, así que `Throwable t` colaba— y se
   endureció para prohibir el tipo. Es la lección del punto 6 de la corrida anterior: un test que
@@ -144,6 +240,23 @@ generador, y merece su propia decisión — exactamente el mismo razonamiento po
 - `compile-check` en verde para los tres brokers.
 - **El adaptador compiló de verdad** dentro del pipeline (`./gradlew build -x test`), que es la
   única red real: `compile-check` solo compila el source set `integrationTest` y nunca toca `main`.
+- El aviso de outbox de `keel validate` desaparece en las dos fixtures, comprobado que **estaba**
+  en las versiones anteriores: un check cuya ausencia no se contrasta no prueba nada.
+- El gate `dedupe`/`commandIdempotency` verificado **contra el proyecto real de la corrida**: verde
+  con el árbol correcto y rojo con cada uno de los cuatro defectos reintroducidos por separado.
+
+## Lo que sigue abierto
+
+1. **La guarda de campos `required` en los mappers** (arriba). Conductual, del generador, tres
+   llamadas más afectadas: su propia decisión.
+2. **La cola dead-letter** sigue sin poder asertarse en ninguna fixture. Necesita una primitiva del
+   arnés (`deadLetterMessages(<suscripción>, n)`); sin ella, las cláusulas «se confirma sin acabar
+   en la DLQ» son `uncovered` por construcción.
+3. **`FL-REC-001` en `catalog-extended`**: el barrido lo escribe el agente en cada diseño, así que
+   el verde de `stock-reservation` no dice nada de este. Forzaría además a declarar la marca
+   temporal de espera que `Product` no tiene y que el barrido suple con `createdAt`.
+4. **`asset-vault` no se ha corrido en vivo**: su `FL-OBX-001` está escrito y validado
+   mecánicamente, nada más. Asimetría deliberada, no olvido.
 
 ## Confirmaciones colaterales
 

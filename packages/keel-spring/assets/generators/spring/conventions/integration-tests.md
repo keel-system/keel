@@ -517,9 +517,22 @@ Tres reglas, y saltarse cualquiera convierte el escenario en decorativo o en una
 - **«Exactamente uno» tras la recuperación**, no «al menos uno». Un relay que entrega pero no
   marca la fila reentrega para siempre, y sin ese conteo pasaría igual.
 
-El tiempo de espera tras levantar el broker tiene que cubrir el backoff del relay, que en el
-perfil `local` está acortado a propósito (`outbox.relay.backoff.max-ms`). Veinte segundos es
-holgado; menos de diez sale intermitente.
+**El tiempo de espera tras levantar el broker no lo manda el backoff del relay.** Es el error
+natural —el relay es lo que estamos mirando— y hace fallar el escenario con el servidor
+funcionando perfectamente. Quien domina la recuperación es el **cliente del broker**: cuando el
+canal cae, el envío no falla rápido, sino que arrastra la conexión muerta hasta su timeout de
+petición. Con Kafka eso es `request.timeout.ms`, **30 s por defecto**, y hasta que esa petición no
+se cancela el relay sigue bloqueado en su `join()` sin volver a intentarlo. Un backoff acortado a
+1–2 s en el perfil `local` no adelanta nada.
+
+Así que la ventana tiene que cubrir **timeout del cliente + reconexión + un ciclo de relay**:
+**60 segundos** es el mínimo prudente con los defaults. Medido, no estimado: en una corrida real
+con ventana de 20 s el evento llegó **1,3 s después** de que expirara la espera, y el veredicto
+del arbitraje fue `culprit: test` — la aserción era demasiado estricta, no el servidor
+incumplidor.
+
+Que la espera sea larga no la vuelve laxa: lo que se afloja es cuánto se espera al **primero**,
+nunca el «exactamente uno» de la regla anterior.
 
 Este escenario cumple por sí solo la regla de § Lo que no se ve por HTTP sobre las aserciones
 negativas: la evidencia afirmativa de que el canal entrega es el propio `await` final, en el
