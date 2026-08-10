@@ -92,6 +92,34 @@ spring:
 El commit de offsets lo gestiona Spring (`ack-mode` BATCH por defecto: commit
 tras procesar el lote). No actives `enable.auto.commit`.
 
+## Consumer: `concurrency` (build ya la dejó parametrizada)
+
+`spring.kafka.listener.concurrency` sale en `parameters/<perfil>/kafka.yaml` con valor `1` y
+env var `KAFKA_LISTENER_CONCURRENCY`. **No la muevas al `@KafkaListener` como literal**: es un
+valor operativo que cambia por entorno, y quemarlo en el código rompe la regla de configuración
+del `constitution.md`.
+
+Es configuración de **la instancia**, no del cluster —son los hilos consumidores que arranca este
+proceso—, pero su techo lo pone el cluster:
+
+```
+paralelismo real del grupo = min(particiones, réplicas × concurrency)
+```
+
+Todo consumidor por encima del número de particiones queda asignado a **cero particiones** y en
+reposo: no es que rinda menos, es que no hace nada.
+
+- **local y develop**: 1 partición por decisión (SKILL.md § Topología). Subirla no da throughput y
+  sí mete rebalanceos en la suite de escenarios. Se queda en 1.
+- **producción**: el valor se coordina con las particiones que aprovisionó plataforma **y** con las
+  réplicas del despliegue. No es una elección del servicio en solitario.
+- **El orden**: con `concurrency > 1` se procesan varias particiones en paralelo, así que el orden
+  se conserva **por partición**, nunca por topic. Con la key por routing key eso significa orden
+  por tipo de evento.
+- Subirla **no exige código nuevo** para la deduplicación: quien arbitra las reentregas sigue
+  siendo la clave primaria de `processed_event`, igual que ya lo hacía entre réplicas
+  (`{{keel:docs}}/conventions/concurrency.md`). No "protejas" el listener con un `synchronized`.
+
 ## Por perfil
 
 - **local**: `localhost:9092` (listener EXTERNAL del compose); deja

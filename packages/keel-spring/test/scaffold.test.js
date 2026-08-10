@@ -319,6 +319,9 @@ test('README.md: guía de despliegue productivo con pasos y parámetros obligato
   assert.ok(richReadme.includes('| `OAUTH2_ISSUER_URI` |'));
   // KAFKA_GROUP_ID tiene default: operativo, no obligatorio.
   assert.ok(!richReadme.includes('| `KAFKA_GROUP_ID` |'));
+  // Y por lo mismo la concurrencia del listener: se ajusta por entorno, pero su
+  // ausencia no impide arrancar, así que no es una variable que haya que aportar.
+  assert.ok(!richReadme.includes('| `KAFKA_LISTENER_CONCURRENCY` |'));
 });
 
 test('CLAUDE.md contextual: specs, solo capas declaradas y skill local con conventions', () => {

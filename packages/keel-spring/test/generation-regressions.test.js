@@ -489,6 +489,25 @@ test('el producer de Kafka serializa String: un único punto de serialización',
   assert.ok(!kafka.includes('value-serializer: org.springframework.kafka.support.serializer.JsonSerializer'));
 });
 
+test('la concurrencia del listener de Kafka se parametriza y nunca es obligatoria', () => {
+  const { read } = scaffoldExtended();
+
+  // Es configuración de la INSTANCIA (hilos consumidores de este proceso), no del
+  // cluster: tiene que existir como propiedad o el agente acaba escribiéndola como
+  // literal en el @KafkaListener, que es lo que prohíbe constitution.md.
+  assert.ok(read('src/main/resources/parameters/local/kafka.yaml').includes('concurrency: 1'));
+
+  // Con default en todos los ambientes (envWithDefault, igual que KAFKA_GROUP_ID):
+  // nadie debe quedarse sin arrancar por no haber dicho cuántos hilos quiere.
+  for (const profile of ['develop', 'production']) {
+    const yaml = read(`src/main/resources/parameters/${profile}/kafka.yaml`);
+    assert.ok(
+      yaml.includes('concurrency: ${KAFKA_LISTENER_CONCURRENCY:1}'),
+      `${profile}: la concurrencia debe ser parametrizable y traer default`
+    );
+  }
+});
+
 test('el ObjectMapper de la caché sabe reconstruir agregados sin setters', () => {
   const { read } = scaffoldExtended();
   const cache = read(`${JAVA}/infrastructure/configurations/cache/CacheConfig.java`);

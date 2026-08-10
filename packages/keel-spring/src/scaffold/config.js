@@ -391,6 +391,14 @@ function brokerYaml(model, profile) {
     `      group-id: ${envWithDefault(profile, 'KAFKA_GROUP_ID', `${service.artifactId}-group`)}`,
     '      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer',
     '      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer',
+    '    listener:',
+    '      # Hilos consumidores por instancia. Es configuración de ESTE proceso, no del',
+    '      # cluster: el techo son las particiones del topic (que gobierna la plataforma)',
+    '      # y se multiplica por réplica — el paralelismo real del grupo es',
+    '      # min(particiones, réplicas × concurrency), y todo consumidor por encima de las',
+    '      # particiones queda asignado a cero y en reposo. En local y develop hay una sola',
+    '      # partición por decisión, así que subirlo ahí no da throughput y sí rebalanceos.',
+    `      concurrency: ${envWithDefault(profile, 'KAFKA_LISTENER_CONCURRENCY', 1)}`,
     '    # TODO (agente): topics y deserialización de consumo según messaging.keel.yaml'
   ].join('\n') + '\n';
 }

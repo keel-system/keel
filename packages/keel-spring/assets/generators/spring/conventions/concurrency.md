@@ -26,6 +26,15 @@ el orden dentro del barrido y la carrera con el camino feliz. No se repite aquí
 
 Las dos últimas filas son las que hay que mirar dos veces: son los únicos mecanismos sin garantía propia.
 
+**Subir la concurrencia del listener no añade nada a esta tabla.** Con Kafka,
+`spring.kafka.listener.concurrency` (parametrizada en `parameters/<perfil>/kafka.yaml`) multiplica los
+hilos consumidores **dentro de una instancia**, así que dos entregas del mismo mensaje pueden coincidir
+en el mismo proceso en vez de en dos pods. Cambia dónde ocurre la carrera, no quién la arbitra: sigue
+siendo la clave primaria de `processed_event`. Que la concurrencia venga de más réplicas o de más hilos
+es indistinguible para el store, que es justo la propiedad que hace que no haya código nuevo que
+escribir — y la razón por la que un `synchronized` alrededor del listener sigue sin servir de nada:
+protegería una de las instancias contra sí misma y ninguna contra las demás.
+
 ## La ventana de la clave de idempotencia
 
 El contrato del reintento normal es *reproducir*, no rechazar: la segunda petición con la misma clave
