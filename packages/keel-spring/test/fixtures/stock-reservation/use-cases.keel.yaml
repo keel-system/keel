@@ -24,7 +24,7 @@ operations:
     output:
       entity: Reservation
       # Marcador operativo del barrido, no algo que el cliente necesite.
-      exclude: [awaitingSince]
+      exclude: [reserveStockAwaitingSince]
     errors:
       - code: RESERVATION_ALREADY_EXISTS
         when: Ya existe una reserva para ese pedido.
@@ -46,7 +46,7 @@ operations:
     output:
       entity: Reservation
       # Marcador operativo del barrido, no algo que el cliente necesite.
-      exclude: [awaitingSince]
+      exclude: [reserveStockAwaitingSince]
     errors:
       - code: RESERVATION_NOT_FOUND
         when: No existe una reserva con ese id.
@@ -120,7 +120,7 @@ operations:
     output:
       entity: Reservation
       # Marcador operativo del barrido, no algo que el cliente necesite.
-      exclude: [awaitingSince]
+      exclude: [reserveStockAwaitingSince]
     errors:
       - code: RESERVATION_NOT_FOUND
         when: No existe una reserva con ese id.

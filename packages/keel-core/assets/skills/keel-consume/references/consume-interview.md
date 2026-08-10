@@ -128,11 +128,14 @@ No es un campo, son cuatro cosas que se escriben juntas o el diseño queda a med
 1. **El estado de espera**, en `domain: lifecycle` de la entidad que queda esperando, con sus aristas de
    salida — confirmación, rechazo y rendición del barrido. Y la `transitions` de la operación que
    encarga, que es la que mete la entidad ahí.
-2. **La marca de cuándo empezó a esperar**, un campo propio de la entidad (`awaitingSince`) que estampa
-   esa misma operación. El estado dice *que* espera; el barrido necesita *desde cuándo*. Y las dos marcas
-   obvias no valen: `createdAt` es cuándo nació la entidad —puede confirmarse horas después— y un
-   `updatedAt` **rejuvenece** con cualquier otra escritura, dejando la entidad invisible al barrido para
-   siempre. Suele ir fuera del contrato (`exclude`): es un marcador operativo.
+2. **La marca de cuándo empezó a esperar**, un campo propio de la entidad que estampa esa misma
+   operación, nombrado a partir de la activación: `<activacion>AwaitingSince` (`reserveStockAwaitingSince`).
+   El estado dice *que* espera; el barrido necesita *desde cuándo*. Y las dos marcas obvias no valen:
+   `createdAt` es cuándo nació la entidad —puede confirmarse horas después— y un `updatedAt`
+   **rejuvenece** con cualquier otra escritura, dejando la entidad invisible al barrido para siempre. El
+   prefijo tampoco es cosmética: si la entidad llega a esperar dos desenlaces, una marca única deja que
+   el segundo encargo pise la del primero. Suele ir fuera del contrato (`exclude`): es un marcador
+   operativo.
 3. **La operación que aplica el desenlace bueno** (`internal: true`), disparada por la suscripción al
    evento de resultado. Sin ella la entidad no sale nunca de la espera por la vía normal y el barrido
    acaba rindiéndose con todas: la reconciliación respalda el camino feliz, no lo sustituye.

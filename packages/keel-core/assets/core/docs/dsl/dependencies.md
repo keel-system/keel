@@ -182,7 +182,11 @@ El estado dice **que** espera; el barrido necesita saber **desde cuándo**, porq
 - **`createdAt` es cuándo nació la entidad, no cuándo entró en la espera.** Una reserva se crea y se confirma después: pueden pasar horas. Un barrido que mire `createdAt` cancelaría un encargo hecho hace treinta segundos.
 - **`updatedAt` rejuvenece.** Cualquier otra escritura durante la espera la deja pareciendo fresca, y el barrido **nunca la alcanza**: se queda esperando para siempre. Es el fallo que pasa las pruebas —donde nada más toca la entidad— y falla en producción.
 
-Lo único que dice la verdad es un **campo propio**, estampado al entrar en la espera por la operación que encarga y que nadie más toca (`awaitingSince`). Suele ser interno: se declara en `domain` y se deja fuera de las respuestas con `exclude`, porque es un marcador operativo y no algo que el cliente necesite.
+Lo único que dice la verdad es un **campo propio**, estampado al entrar en la espera por la operación que encarga y que nadie más toca. Suele ser interno: se declara en `domain` y se deja fuera de las respuestas con `exclude`, porque es un marcador operativo y no algo que el cliente necesite.
+
+El nombre lo pone el diseño —ninguna regla lo comprueba—, pero la convención es **derivarlo de la activación**: `<activacion>AwaitingSince`, es decir `reserveStockAwaitingSince` para la activación `reserveStock`. Las dos mitades hacen trabajos distintos y por eso ninguna sobra: el prefijo dice **de qué espera** es la marca, y el sufijo fijo dice **qué es** —el inicio de un intervalo abierto, que es justo como la usa el barrido (`… < now - umbral`)— y la hace reconocible por forma para quien la busque después.
+
+Lo que compra el prefijo es concreto: una misma entidad puede quedar esperando **dos desenlaces distintos** —dos activaciones, quizá de dos proveedores, cada una con su `reconciledBy`— y con un `awaitingSince` a secas el segundo encargo pisa la marca del primero. A partir de ahí cada barrido ve candidatos del otro y su umbral mide una espera que no es la suya. Un nombre genérico solo es seguro mientras la entidad espere una sola cosa, que es exactamente la condición que nadie recuerda al añadir la segunda activación.
 
 #### Tres silencios, tres barridos
 

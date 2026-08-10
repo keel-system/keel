@@ -49,14 +49,16 @@ entities:
           `noteStockCount` no es idempotente por naturaleza: aplicarla dos veces se ve. Es lo
           que hace observable la única guarda que le queda a una suscripción sin transición
           de lifecycle — el registro de procesados.
-      awaitingSince:
+      reserveStockAwaitingSince:
         type: timestamp
         description: >-
           Cuándo entró la reserva en espera del almacén; lo estampa confirmReservation al
           encargar el bloqueo. Es el campo sobre el que consulta el barrido, y tiene que ser
           propio: createdAt dice cuándo nació la reserva (puede confirmarse horas después) y
           un updatedAt rejuvenecería con cualquier otra escritura, dejándola invisible al
-          barrido para siempre.
+          barrido para siempre. El nombre lleva delante la activación que se espera
+          (`reserveStock`) porque una entidad puede acabar esperando dos desenlaces a la vez,
+          y entonces una marca compartida deja que el segundo encargo pise la del primero.
       createdAt:
         type: timestamp
         generated: true

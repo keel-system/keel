@@ -408,7 +408,7 @@ FL-RES-001 → FL-RES-002, sobre la que **no** se entrega ni `StockReserved` ni 
 El proveedor está programado para responder `200 {cancelled: true}` a
 `DELETE /stock/reservations/{orderId}`.
 
-**When**: se retrasa `awaitingSince` de `<r5>` por encima del umbral de paciencia —el escenario
+**When**: se retrasa `reserveStockAwaitingSince` de `<r5>` por encima del umbral de paciencia —el escenario
 lo hace directamente sobre la fila, que es la única variable a su alcance: el reloj del
 servicio no se toca y el umbral tampoco— y se espera a que pase un tick del barrido.
 **Then**:
