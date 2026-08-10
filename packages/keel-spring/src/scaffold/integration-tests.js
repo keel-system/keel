@@ -1641,8 +1641,17 @@ function deadLetterSection(model) {
             ${entries});
 
     /**
-     * Los últimos {@code count} mensajes del descarte de una suscripción, o cadena
-     * vacía si no hay ninguno.
+     * Los mensajes del descarte de una suscripción publicados ${
+       broker.id === 'kafka'
+         ? `<b>desde la marca de la clase de flujo actual</b> (los últimos {@code count}
+     * de respaldo si aún no hay marca), o cadena vacía si no hay ninguno. Lee desde la
+     * marca —y no «los últimos {@code count}» del topic entero— porque el descarte lo
+     * comparten todas las suscripciones y toda la suite, y en Kafka no hay purga que lo
+     * vacíe entre flujos: sin aislamiento, un mensaje muerto de un flujo anterior
+     * contamina la aserción negativa de cualquier flujo posterior`
+         : `desde el último reset (hasta {@code count}), o cadena vacía si no hay
+     * ninguno: \`reset-db.sh\` purga la cola de descarte junto a los canales`
+     }.
      *
      * <p>Úsalo también —y sobre todo— para la aserción NEGATIVA: que un duplicado
      * frenado por la guarda de idempotencia se confirme <b>sin</b> acabar aquí es lo
