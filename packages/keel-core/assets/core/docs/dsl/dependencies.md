@@ -188,6 +188,8 @@ El nombre lo pone el diseño —ninguna regla lo comprueba—, pero la convenci�
 
 Lo que compra el prefijo es concreto: una misma entidad puede quedar esperando **dos desenlaces distintos** —dos activaciones, quizá de dos proveedores, cada una con su `reconciledBy`— y con un `awaitingSince` a secas el segundo encargo pisa la marca del primero. A partir de ahí cada barrido ve candidatos del otro y su umbral mide una espera que no es la suya. Un nombre genérico solo es seguro mientras la entidad espere una sola cosa, que es exactamente la condición que nadie recuerda al añadir la segunda activación.
 
+Y declarar la marca no termina el trabajo: el par (estado, marca) es un **predicado que se ejecuta cada N minutos** sobre una tabla de negocio, así que quiere su índice compuesto en `persistence: entities.<E>.indexes`. Es el único patrón de consulta frecuente que no se ve mirando `use-cases`, y por eso está desarrollado en la referencia de esa capa.
+
 #### Tres silencios, tres barridos
 
 Confundirlos es lo que hace el concepto resbaladizo, porque cada uno busca algo distinto:

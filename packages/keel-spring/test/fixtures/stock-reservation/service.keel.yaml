@@ -9,8 +9,9 @@ keel: "2.6"
 #                                 su estado de vuelta y su reconciliación
 #
 # Deliberadamente sin storage, caché ni seguridad: cada una añade un contenedor y
-# trabajo de generación que no dice nada sobre lo anterior. Y sin `publishing`, que
-# arrastraría outbox, bridge y publisher — el schema admite `subscriptions` a solas.
+# trabajo de generación que no dice nada sobre lo anterior. Lo que sí entra es
+# `publishing` con `reliability: outbox`: el encargo viaja publicado, así que la
+# garantía de que sale es la quinta pieza de la cadena, no un extra.
 service:
   name: stock-reservation
   version: 1.0.0

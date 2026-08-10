@@ -8,6 +8,13 @@ entities:
     naturalKey: [orderId]
     indexes:
       - [status]
+      # El predicado del barrido `reconcileReservations`, que corre cada N minutos:
+      # estado de espera + cuánto lleva. Compuesto y en este orden —igualdad primero,
+      # rango después— porque es lo único que un B-tree aprovecha entero. Con el índice
+      # de `status` a solas, la base filtra por estado y evalúa la marca fila a fila: no
+      # se nota mientras `awaitingStock` esté poco poblado, y pasa a recorrer la tabla
+      # cuando acumula.
+      - [status, reserveStockAwaitingSince]
 audit:
   timestamps: declared
 consistency:
