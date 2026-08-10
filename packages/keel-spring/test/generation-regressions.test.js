@@ -294,6 +294,74 @@ test('§1.2: con Kafka no hay purga posible, el aislamiento es la marca de offse
   assert.ok(harness.includes('String offset = mark != null ? String.valueOf(mark) : "-" + count;'));
 });
 
+// El aislamiento entre flujos cubría BD, caché y canales, pero NO los destinos de
+// descarte, y ese hueco no se ve como ruido: la aserción típica sobre un DLT es
+// negativa —«el duplicado se absorbió sin acabar en el descarte»—, así que un mensaje
+// muerto que sobrevive al reset aparece como el flujo siguiente fallando por algo que
+// no hizo. Los dos brokers lo cierran por vías distintas porque Kafka no tiene purga.
+function scaffoldStockReservation(broker) {
+  const { manifest, layers, errors } = loadService(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'stock-reservation')
+  );
+  assert.deepEqual(errors, []);
+  const out = tmpDir('keel-dlq-');
+  scaffoldService({ manifest, layers, workspace: out, force: true, stack: { broker } });
+  const root = path.join(out, 'services/stock-reservation-spring');
+  return {
+    reset: () => fs.readFileSync(path.join(root, 'infra/reset-db.sh'), 'utf8'),
+    harness: () =>
+      fs.readFileSync(
+        path.join(root, 'src/integrationTest/java/com/fulfillment/stockreservation/flows/AbstractFlowIT.java'),
+        'utf8'
+      )
+  };
+}
+
+test('el reset aísla también el destino de descarte: con Kafka, marcando su offset', () => {
+  const harness = scaffoldStockReservation('kafka').harness();
+
+  // El sondeo de offsets va parametrizado: sin la sobrecarga, marcar un DLT sería
+  // marcar el topic del servicio y la marca no aislaría nada.
+  assert.ok(harness.includes('private static long nextOffset(String topic)'));
+  assert.ok(harness.includes('private static long safeNextOffset(String topic)'));
+  // markChannels() marca los DLT declarados, deduplicados: las tres suscripciones de
+  // la fixture multiplexan sobre el mismo `inventory.events.DLT`.
+  assert.ok(harness.includes('for (String deadLetterTopic : Set.copyOf(DEAD_LETTER_OF.values()))'));
+  assert.ok(harness.includes('MARKS.put(deadLetterTopic, safeNextOffset(deadLetterTopic))'));
+  // Y la lectura arranca en esa marca, no en «los últimos count» del topic entero.
+  assert.ok(harness.includes('Long mark = MARKS.get(deadLetterTopic);'));
+  assert.ok(!harness.includes('"-t", deadLetterTopic, "-o", "-" + count'));
+});
+
+test('el reset aísla también el destino de descarte: con RabbitMQ, purgando su cola', () => {
+  const { reset, harness } = scaffoldStockReservation('rabbitmq');
+
+  // Kafka no llega aquí (sin `cliPurgeCmd`), pero RabbitMQ y SQS sí: su DLQ persiste
+  // entre clases de flujo igual que cualquier otra cola.
+  assert.ok(reset().includes('/api/queues/%2F/inventory.events-dlq/contents'));
+  assert.ok(reset().includes('/api/queues/%2F/stockEvents/contents'));
+  // La marca de offset es exclusiva de Kafka: aquí el aislamiento ya lo dio el script.
+  assert.ok(!harness().includes('Set.copyOf(DEAD_LETTER_OF.values())'));
+});
+
+test('sin suscripciones con descarte no se marca ni se purga ningún DLT', () => {
+  const { manifest, layers } = loadService(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'inspection-reports')
+  );
+  const out = tmpDir('keel-nodlq-');
+  scaffoldService({ manifest, layers, workspace: out, force: true, stack: { broker: 'kafka' } });
+  const harness = fs.readFileSync(
+    path.join(out, 'services/inspection-reports-spring/src/integrationTest/java/com/operations/inspectionreports/flows/AbstractFlowIT.java'),
+    'utf8'
+  );
+
+  // `DEAD_LETTER_OF` solo existe si alguna suscripción lo declara: citarlo sin más
+  // dejaría el arnés sin compilar en todo diseño que no use descarte.
+  assert.ok(!harness.includes('DEAD_LETTER_OF'));
+  assert.ok(!harness.includes('import java.util.Set;'));
+  assert.ok(harness.includes('markChannels();'));
+});
+
 test('humo del arnés: con Kafka publica tráfico real; con RabbitMQ, los canales declarados', () => {
   const { read } = scaffoldExtended();
   // Con Kafka el destino por convención (`<servicio>.events`) ES el topic, así que

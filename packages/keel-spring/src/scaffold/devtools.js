@@ -7,6 +7,7 @@
 
 import { createHash } from 'node:crypto';
 import { declaredBuckets } from '../lib/buckets.js';
+import { deadLetterDestination, deadLetterSubscriptions } from '../lib/dead-letter.js';
 import { LOCAL_AWS_ENV } from '../lib/stack-catalog.js';
 import { messagingTopologyChecks } from './messaging-provisioning.js';
 
@@ -276,7 +277,17 @@ export function resetDbScript(selected, service, model = null) {
   const cache = selected.find((s) => s.category === 'cache');
   const broker = selected.find((s) => s.category === 'broker' && s.entry.cliPurgeCmd);
   const destinations = model?.messaging?.channels ?? [];
-  const purges = broker && destinations.length > 0 ? destinations : [];
+  // Los destinos de descarte se purgan igual que los canales, y por un motivo que no
+  // se ve hasta que muerde: un mensaje muerto sobrevive al reset (que solo tocaba BD,
+  // caché y canales) y contamina el flujo siguiente. Como la aserción sobre un DLT
+  // suele ser NEGATIVA —«se absorbió el duplicado sin acabar en el descarte»—, el
+  // arrastre no aparece como ruido sino como un escenario fallando por algo ajeno.
+  // Kafka no entra aquí (no tiene `cliPurgeCmd`): su aislamiento es la marca de offset
+  // que `AbstractFlowIT.markChannels()` fija sobre cada DLT.
+  const deadLetters = broker
+    ? [...new Set(deadLetterSubscriptions(model ?? {}).map((sub) => deadLetterDestination(broker.id, model, sub)))]
+    : [];
+  const purges = broker && destinations.length > 0 ? [...destinations, ...deadLetters] : deadLetters;
   const httpStub = selected.find((s) => s.category === 'httpStub');
   if (!db && !cache && purges.length === 0 && !httpStub) return null;
 

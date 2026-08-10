@@ -16,7 +16,7 @@ import { pascalCase } from '../lib/naming.js';
 import { DATABASES, BROKERS, CACHES, selectedInfra, brokerContainer } from '../lib/stack-catalog.js';
 import { cacheFlushCmd, concreteCmd, needsDevtools } from './devtools.js';
 import { usesOutbox } from './outbox.js';
-import { deadLetterDestination, deadLetterSubscriptions } from '../lib/dead-letter.js';
+import { deadLetterDestination, deadLetterSubscriptions, usesDeadLetter } from '../lib/dead-letter.js';
 import { needsMessagingProvisioning } from './messaging-provisioning.js';
 import { tokenUrl, userTestClient } from './auth-provisioning.js';
 import { declaresIdempotency } from './http-idempotency.js';
@@ -396,6 +396,10 @@ function abstractImports(model) {
   if (broker?.id === 'rabbitmq' && devtools) imports.push('java.util.Base64');
   // Marcas de offset por destino (aislamiento de Kafka, que no tiene purga).
   if (broker?.id === 'kafka') imports.push('java.util.concurrent.ConcurrentHashMap');
+  // `Set.copyOf` deduplica los destinos de descarte al marcarlos: varias suscripciones
+  // multiplexadas sobre el mismo topic comparten DLT, y marcarlo dos veces gastaría un
+  // sondeo de más contra el broker por cada clase de flujo.
+  if (broker?.id === 'kafka' && usesDeadLetter(model)) imports.push('java.util.Set');
   // Flag de la caída provocada por el propio escenario (palanca del outbox).
   if (usesBrokerControl(model)) imports.push('java.util.concurrent.atomic.AtomicBoolean');
   // Segunda réplica: proceso aparte lanzado desde el jar.
@@ -1614,10 +1618,15 @@ function deadLetterSection(model) {
   // «vacío», no una avería: sin esta traducción, la mitad negativa del escenario sería
   // inasertable justo cuando el servicio se comporta bien. En RabbitMQ y SQS la cola la
   // crea build de antemano y el caso no se da.
+  // Y se lee DESDE LA MARCA de la clase, no «los últimos count» del topic entero: el
+  // DLT lo comparten todas las suscripciones y toda la suite, y en Kafka no hay purga
+  // que lo vacíe entre flujos. `markChannels()` fija esa marca en cada `resetState()`.
   const read =
     broker.id === 'kafka'
-      ? `        try {
-            return devtools(${javaArgs(readParts('kafka', { destination: expr('deadLetterTopic'), offset: expr('"-" + count') }))});
+      ? `        Long mark = MARKS.get(deadLetterTopic);
+        String offset = mark != null ? String.valueOf(mark) : "-" + count;
+        try {
+            return devtools(${javaArgs(readParts('kafka', { destination: expr('deadLetterTopic'), offset: expr('offset') }))});
         } catch (RuntimeException e) {
             if (isUnknownTopic(e)) {
                 return "";
@@ -1655,6 +1664,10 @@ ${read}
 function brokerSection(model) {
   const broker = brokerEntry(model);
   if (!broker) return '';
+  // `DEAD_LETTER_OF` lo emite `deadLetterSection`, que solo existe si alguna
+  // suscripción declara el descarte: sin esto, `markChannels()` citaría un campo
+  // que no está y el arnés no compilaría.
+  const deadLetter = usesDeadLetter(model);
   // Tolerancia a la indisponibilidad que el ESCENARIO provocó. Sin la palanca de
   // outbox no existe tal caso, y entonces el helper no perdona nada: cualquier fallo
   // de lectura sigue siendo una infraestructura rota y tiene que doler donde ocurre.
@@ -1806,12 +1819,26 @@ ${purgeDoc}
         MARKS.put(channel, safeNextOffset());
     }
 
-    /** Marca todos los canales declarados: es la parte del reset que el script no puede hacer. */
+    /**
+     * Marca todos los canales declarados <b>y todos los destinos de descarte</b>: es la
+     * parte del reset que el script no puede hacer.
+     *
+     * <p>Los DLT entran aquí por la misma razón que los canales, pero el fallo que
+     * evitan es peor de ver: \`resetState()\` trunca la BD y reinicia el proveedor de
+     * prueba, así que un flujo que empieza limpio por todos lados sigue leyendo los
+     * mensajes muertos que dejó un flujo anterior. Y como la aserción típica sobre un
+     * DLT es NEGATIVA —«el duplicado se absorbió sin acabar en el descarte»—, la
+     * contaminación no se ve como ruido: se ve como el escenario fallando por algo que
+     * no hizo.
+     */
     private static void markChannels() {
         long offset = safeNextOffset();
         for (String channel : CHANNELS) {
             MARKS.put(channel, offset);
-        }
+        }${deadLetter ? `
+        for (String deadLetterTopic : Set.copyOf(DEAD_LETTER_OF.values())) {
+            MARKS.put(deadLetterTopic, safeNextOffset(deadLetterTopic));
+        }` : ''}
     }
 
     /**
@@ -1823,8 +1850,13 @@ ${purgeDoc}
      * que puede ser la primerísima operación contra el broker.
      */
     private static long safeNextOffset() {
+        return safeNextOffset(EVENT_TOPIC);
+    }
+
+    /** Igual que {@link #safeNextOffset()} pero contra un topic explícito (p. ej. un DLT). */
+    private static long safeNextOffset(String topic) {
         try {
-            return nextOffset();
+            return nextOffset(topic);
         } catch (RuntimeException e) {
             // Solo el topic que aún no existe: si lo que falla es el broker, marcar 0
             // en silencio convierte una infraestructura caída en una suite que empieza
@@ -1904,7 +1936,12 @@ ${purgeDoc}
      * Kafka single-node de \`infra/docker-compose.yaml\`.
      */
     private static long nextOffset() {
-        String output = devtools(${javaArgs(offsetsParts({ destination: expr('EVENT_TOPIC') }))});
+        return nextOffset(EVENT_TOPIC);
+    }
+
+    /** Igual que {@link #nextOffset()} pero contra un topic explícito (p. ej. un DLT). */
+    private static long nextOffset(String topic) {
+        String output = devtools(${javaArgs(offsetsParts({ destination: expr('topic') }))});
         long last = -1L;
         for (String line : output.split("\\\\R")) {
             String trimmed = line.trim();

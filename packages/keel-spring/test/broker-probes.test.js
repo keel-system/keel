@@ -140,7 +140,9 @@ test('los atributos de SQS llevan el DataType que exige la API', () => {
 test('el arnés generado contiene exactamente los comandos del módulo', () => {
   const kafka = harnessFor('kafka');
   assert.ok(kafka.includes(javaArgs(readParts('kafka', { destination: expr('EVENT_TOPIC'), offset: expr('offset') }))));
-  assert.ok(kafka.includes(javaArgs(offsetsParts({ destination: expr('EVENT_TOPIC'), format: '%o\\n' }))));
+  // El sondeo de offsets va parametrizado por topic (`nextOffset(String topic)`): no
+  // solo se marca el canal del servicio, también cada destino de descarte.
+  assert.ok(kafka.includes(javaArgs(offsetsParts({ destination: expr('topic'), format: '%o\\n' }))));
   // La tolerancia al topic virgen depende de un literal del broker: si Kafka
   // cambiara el texto, el arnés dejaría de traducirlo a "no hay mensajes".
   assert.ok(kafka.includes(UNKNOWN_TOPIC));
