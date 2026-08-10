@@ -37,6 +37,26 @@ subscriptions:
       retry: { maxAttempts: 5, backoff: exponential, initialDelayMs: 500, maxDelayMs: 15000 }
       deadLetter: true
 
+  StockCountAdjusted:
+    description: El almacén corrige la cantidad que tiene bloqueada para el pedido.
+    source: inventory
+    channel: stockEvents
+    payload:
+      orderId:         { type: uuid, required: true }
+      countedQuantity: { type: int, required: true }
+    contract:
+      envelope: keel
+    # Ni desenlace ni compensación: una corrección. `noteStockCount` no declara transiciones,
+    # así que aquí la deduplicación NO tiene detrás ninguna guarda de dominio y es lo único
+    # que impide que una reentrega vuelva a sumar en el contador. Es la rama `tryRecord`.
+    triggers: noteStockCount
+    input:
+      orderId: orderId
+      countedQuantity: countedQuantity
+    onFailure:
+      retry: { maxAttempts: 5, backoff: exponential, initialDelayMs: 500, maxDelayMs: 15000 }
+      deadLetter: true
+
   StockRejected:
     description: El almacén rechaza el bloqueo de stock del pedido.
     source: inventory

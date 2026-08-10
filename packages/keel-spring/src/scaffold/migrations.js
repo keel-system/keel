@@ -56,7 +56,7 @@ No se escribe a mano: se **exporta** de las entidades JPA ya finales, para que e
 esquema y el mapeo no puedan divergir.
 
 \`\`\`bash
-docker compose -f infra/docker-compose.yaml up -d   # el export necesita la BD arriba
+bash infra/up.sh                    # el export necesita la BD arriba
 bash infra/export-schema.sh                         # → ${BASELINE_SQL}
 \`\`\`
 
@@ -70,9 +70,9 @@ probado si ha creado el esquema **desde cero** —contra una BD que Hibernate ya
 pobló con \`ddl-auto: update\`, el \`validate\` pasaría sin ejercitar nada—.
 
 \`\`\`bash
-docker compose -f infra/docker-compose.yaml down -v   # borra el volumen: BD sin esquema
-docker compose -f infra/docker-compose.yaml up -d
-PROFILE=local,migrations ./gradlew bootRun            # Flyway crea, Hibernate valida
+bash infra/down.sh --volumes               # borra el volumen: BD sin esquema
+bash infra/up.sh
+PROFILE=local,migrations ./gradlew bootRun # Flyway crea, Hibernate valida
 \`\`\`
 
 El pipeline no la ejecuta a propósito: borrar el volumen destruiría la base de datos
@@ -147,7 +147,7 @@ function exportSchemaScript(model) {
 # copiarlo como src/main/resources/db/migration/${BASELINE_MIGRATION}.
 # Requiere la infraestructura de prueba arriba (el perfil local conecta a la BD).
 # Uso (desde la raíz del proyecto):
-#   docker compose -f infra/docker-compose.yaml up -d && bash infra/export-schema.sh
+#   bash infra/up.sh && bash infra/export-schema.sh
 set -u
 
 TARGET="${BASELINE_SQL}"

@@ -127,6 +127,16 @@ test('el registro de idempotencia de petición usa insert, no save', () => {
   // el registro de la primera en vez de perder la carrera.
   assert.ok(store.includes('repository.insert('));
   assert.ok(!/repository\.save\(/.test(store));
+
+  // Y retira el documento CADUCADO antes de insertar. `find` ya lo ignora por
+  // caducado, así que sin esto el handler ejecuta y el insert choca contra un
+  // documento que ya no protege nada: 409 IDEMPOTENCY_KEY_IN_PROGRESS hasta que la
+  // purga pase (una vez al día), con la ventana real de deduplicación fijada por la
+  // cadencia de la purga en vez de por el ttlSeconds del diseño. En la rama documental
+  // este defecto es ORIGINAL —`insert` nunca lo tapó, al revés que el merge de JPA—,
+  // así que estaba vivo en cualquier servicio documental con `idempotency`.
+  assert.ok(store.includes('.filter(stored -> !stored.getExpiresAt().isAfter(now))'), store);
+  assert.ok(store.includes('repository.deleteById(key)'), store);
 });
 
 test('reset-db.sh limpia por el contenedor de la base y no promete Hibernate', () => {

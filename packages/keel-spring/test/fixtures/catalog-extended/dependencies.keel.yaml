@@ -76,7 +76,26 @@ dependencies:
         onFailure:
           action: fail
           error: COMPLIANCE_UNAVAILABLE
+
+      # La ACTIVACIÓN DE VUELTA: es lo que convierte la compensación de abajo en algo
+      # más que un cambio de estado propio. Deshacer un trabajo encargado tiene dos
+      # mitades —devolver el estado propio y decírselo a quien lo hizo— y solo la
+      # primera se ve desde nuestra base: si falta la segunda, el registro conserva la
+      # inscripción de una retirada que ya no existe y todo parece consistente.
+      cancelWithdrawal:
+        description: Anulación de la inscripción de una retirada que el registro rechazó.
+        triggeredBy: [reactivateWithdrawnProduct]
+        via:
+          client: compliance
+          call: cancelWithdrawal
+        effect: La inscripción de la retirada queda anulada en el registro regulatorio.
+        awaits: outcome
+        # `ignore` y no `fail`: la reactivación del producto no puede quedar bloqueada
+        # porque el registro no responda. El fallback deja la inscripción huérfana y lo
+        # registra, que es lo que el diseño declara en el cliente.
+        onFailure:
+          action: ignore
     compensations:
       - onEvent: WithdrawalRejected
         undoes: recordWithdrawal
-        description: El registro rechazó la retirada a posteriori; el producto vuelve a estado activo.
+        description: El registro rechazó la retirada a posteriori; el producto vuelve a estado activo y la inscripción se anula.

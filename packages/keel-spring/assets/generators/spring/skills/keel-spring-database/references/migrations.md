@@ -17,7 +17,7 @@ No se escribe a mano: se exporta de las propias entidades, con el dialecto real
 del stack, para que esquema y mapeo no puedan divergir.
 
 ```bash
-docker compose -f infra/docker-compose.yaml up -d   # el export conecta a la BD
+bash infra/up.sh   # el export conecta a la BD
 bash infra/export-schema.sh                         # → build/schema/baseline.sql
 ```
 
@@ -118,7 +118,7 @@ pobló con `ddl-auto: update`, el `validate` pasaría sin haber ejercitado nada.
 
 ```bash
 docker compose -f infra/docker-compose.yaml down -v   # borra el volumen: BD sin esquema
-docker compose -f infra/docker-compose.yaml up -d
+bash infra/up.sh
 PROFILE=local,migrations ./gradlew bootRun            # Flyway crea, Hibernate valida
 ```
 

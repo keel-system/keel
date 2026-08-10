@@ -384,7 +384,7 @@ function renderEntity(model) {
 @Table(name = "idempotency_record", indexes = {
         @Index(name = "ix_idempotency_record_expires_at", columnList = "expires_at")
 })
-public class IdempotencyRecordJpa {
+public class IdempotencyRecordJpa implements Persistable<IdempotencyRecordJpa.IdempotencyRecordId> {
 
     @EmbeddedId
     private IdempotencyRecordId id;
@@ -408,6 +408,10 @@ public class IdempotencyRecordJpa {
     @Column(name = "expires_at", nullable = false)
     private Instant expiresAt;
 
+    /** Se pone a true al leer la fila de la base ({@code @PostLoad}). */
+    @Transient
+    private boolean persisted;
+
     protected IdempotencyRecordJpa() {
         // Requerido por JPA.
     }
@@ -420,8 +424,32 @@ public class IdempotencyRecordJpa {
         this.expiresAt = expiresAt;
     }
 
+    @Override
     public IdempotencyRecordId getId() {
         return id;
+    }
+
+    /**
+     * Nueva mientras no se haya leido de la base. NO es constante, y el matiz es el
+     * que hace que esto funcione: {@code SimpleJpaRepository.delete(...)} empieza con
+     * {@code if (isNew(entity)) return;}, asi que un {@code isNew()} que devuelva
+     * siempre {@code true} convierte el borrado en un NO-OP SILENCIOSO — y este
+     * adaptador necesita borrar, para retirar un registro caducado.
+     *
+     * <p>Con el flag por {@code @PostLoad}: una fila recien construida es nueva
+     * —{@code persist}, y la clave primaria arbitra la carrera entre dos peticiones
+     * simultaneas— y una fila leida de la base no lo es, asi que se puede borrar.
+     */
+    @Override
+    @Transient
+    public boolean isNew() {
+        return !persisted;
+    }
+
+    @PostLoad
+    @PostPersist
+    void markPersisted() {
+        this.persisted = true;
     }
 
     public String getSignature() {
@@ -497,10 +525,14 @@ public class IdempotencyRecordJpa {
         'jakarta.persistence.EmbeddedId',
         'jakarta.persistence.Entity',
         'jakarta.persistence.Index',
+        'jakarta.persistence.PostLoad',
+        'jakarta.persistence.PostPersist',
         'jakarta.persistence.Table',
+        'jakarta.persistence.Transient',
         'java.io.Serializable',
         'java.time.Instant',
-        'java.util.Objects'
+        'java.util.Objects',
+        'org.springframework.data.domain.Persistable'
       ],
       body
     )
@@ -583,12 +615,42 @@ public class JpaIdempotencyStore implements IdempotencyStore {
     @Transactional
     public void save(String scope, String idempotencyKey, String signature, String resourceId, long ttlSeconds) {
         Instant now = Instant.now();
+        IdempotencyRecordJpa.IdempotencyRecordId key =
+                new IdempotencyRecordJpa.IdempotencyRecordId(scope, idempotencyKey);
+        // Una fila CADUCADA es como si no estuviera —es lo que ya asume find(...)—, y
+        // tiene que serlo también aquí. Si no, la clave queda inutilizable entre su
+        // caducidad y la purga: find la ignora, el handler ejecuta, y la inserción
+        // choca con una fila que ya no protege nada. El cliente recibiría un 409
+        // IDEMPOTENCY_KEY_IN_PROGRESS durante casi un día, y la ventana real de
+        // deduplicación la fijaría la cadencia de la purga en vez del ttlSeconds del
+        // diseño, que es justo lo que ese campo compra.
+        //
+        // Se retira por el repositorio y no con un borrado masivo a propósito:
+        // find(...) acaba de cargar esa fila en ESTE contexto de persistencia, y un
+        // delete masivo no la desasocia — la inserción siguiente chocaría contra la
+        // copia gestionada en memoria en vez de contra la base.
+        repository.findById(key)
+                .filter(stored -> !stored.getExpiresAt().isAfter(now))
+                .ifPresent(expired -> {
+                    repository.delete(expired);
+                    // Antes del INSERT, y en esta transacción: si no, JPA reordena y la
+                    // inserción sale primero, contra la fila que aún está.
+                    repository.flush();
+                });
         try {
-            // saveAndFlush y no save: JPA difiere el INSERT hasta el commit, y ahí la
-            // violación de clave ya no la ve este método —sale por el commit del
-            // UseCaseMediator, donde nada puede distinguirla ni traducirla—.
+            // saveAndFlush del REPOSITORIO, no entityManager.persist a mano: la
+            // traduccion de excepciones de Spring ocurre al salir de un metodo
+            // proxeado, y el proxy de Spring Data convierte la violacion de Hibernate
+            // en DataIntegrityViolationException — que es lo que captura el catch de
+            // abajo. Con el EntityManager compartido dentro de un @Component no hay
+            // proxy que traduzca, sale un ConstraintViolationException crudo que
+            // ningun catch reconoce, y la carrera acaba en 500 en vez de en su code.
+            // El INSERT lo fuerza Persistable.isNew() en la entidad, no este metodo.
+            // Y saveAndFlush y no save porque JPA difiere el INSERT hasta el commit:
+            // sin el flush la violacion saldria por el commit del UseCaseMediator,
+            // donde ya nadie puede distinguirla ni traducirla.
             repository.saveAndFlush(new IdempotencyRecordJpa(
-                    new IdempotencyRecordJpa.IdempotencyRecordId(scope, idempotencyKey),
+                    key,
                     signature,
                     resourceId,
                     now,
@@ -827,9 +889,19 @@ public class MongoIdempotencyStore implements IdempotencyStore {
     @Transactional
     public void save(String scope, String idempotencyKey, String signature, String resourceId, long ttlSeconds) {
         Instant now = Instant.now();
+        IdempotencyRecordDocument.IdempotencyRecordId key =
+                new IdempotencyRecordDocument.IdempotencyRecordId(scope, idempotencyKey);
+        // Un documento CADUCADO es como si no estuviera —es lo que ya asume find(...)—,
+        // y tiene que serlo también aquí: si no, la clave queda inutilizable entre su
+        // caducidad y la purga (que va por lotes, una vez al día). El insert chocaría
+        // con un documento que ya no protege nada y el cliente recibiría un 409 por una
+        // ventana que el diseño dio por cerrada hace horas.
+        repository.findById(key)
+                .filter(stored -> !stored.getExpiresAt().isAfter(now))
+                .ifPresent(expired -> repository.deleteById(key));
         try {
             repository.insert(new IdempotencyRecordDocument(
-                    new IdempotencyRecordDocument.IdempotencyRecordId(scope, idempotencyKey),
+                    key,
                     signature,
                     resourceId,
                     now,

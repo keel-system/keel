@@ -16,7 +16,15 @@ import {
   selectedInfra,
   brokerContainer
 } from '../lib/stack-catalog.js';
-import { needsDevtools, devtoolsService, dockerfileDevtools, validateInfraScript, resetDbScript } from './devtools.js';
+import {
+  needsDevtools,
+  devtoolsService,
+  dockerfileDevtools,
+  validateInfraScript,
+  resetDbScript,
+  RUNTIME_RESOLUTION,
+  composeResolution
+} from './devtools.js';
 import { messagingProvisioning } from './messaging-provisioning.js';
 
 export function generate(model) {
@@ -86,6 +94,16 @@ export function generate(model) {
   const header = '# Infraestructura de prueba generada por keel-spring (según keel-stack.json).\n';
   const files = [{ path: 'infra/docker-compose.yaml', content: header + YAML.stringify(compose, { nullStr: '' }) }];
 
+  // Lanzador de la infraestructura de prueba. `deploy/` tenía el suyo desde el
+  // principio y `infra/` no, así que todo el repo —convenciones, agentes, mensajes
+  // de error de los propios scripts— mandaba un `compose up -d` a pelo. Con docker
+  // eso basta; con podman depende de un frontend delegado que puede no alcanzar el
+  // motor, y entonces la fase de infraestructura del pipeline muere en su primer
+  // comando con un error de named pipe que no señala a compose. El lanzador es el
+  // único sitio donde esa resolución tiene que vivir.
+  files.push({ path: 'infra/up.sh', content: infraUpScript(service) });
+  files.push({ path: 'infra/down.sh', content: infraDownScript(service) });
+
   if (needsDevtools(selected)) {
     files.push({ path: 'infra/docker/Dockerfile', content: dockerfileDevtools(selected) });
   }
@@ -134,5 +152,74 @@ flujos. Un mapping en un archivo es estado global compartido por toda la suite.
 Un \`mappings/*.json\` solo se justifica para lo que no pertenece a ningún flujo (por
 ejemplo, un endpoint que el proveedor expone siempre igual y que se consulta al
 arrancar). Formato y opciones: <https://wiremock.org/docs/stubbing/>.
+`;
+}
+
+// ─── infra/up.sh e infra/down.sh ─────────────────────────────────────────────
+//
+// El lanzador de la infraestructura de PRUEBA, que no se confunde con deploy/: allí
+// corre el servicio ya empaquetado para que el diseñador lo toque a mano; aquí solo
+// están las dependencias contra las que se puntúan los escenarios, y la aplicación
+// la arranca JUnit. Por eso este par no publica URLs ni sondea la app: levanta,
+// delega el «¿está listo?» en validate-infra.sh —que es quien sabe sondear cada
+// tecnología— y se aparta.
+
+const INFRA_PREAMBLE = `set -euo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+COMPOSE_FILE="$HERE/docker-compose.yaml"
+
+${RUNTIME_RESOLUTION}
+
+${composeResolution(['-f', '"$COMPOSE_FILE"'])}`;
+
+function infraUpScript(service) {
+  return `#!/usr/bin/env bash
+# up.sh — levanta la infraestructura de prueba de ${service.name}.
+#
+# Uso (desde la raíz del proyecto):
+#   bash infra/up.sh && bash infra/validate-infra.sh
+#
+# Resuelve el runtime (docker o podman, o \$CONTAINER_RUNTIME) y el frontend de
+# compose. Levantar NO es estar listo: Kafka, Keycloak y LocalStack publican su
+# listener bastante después de que el contenedor esté 'Up', así que quien decide si
+# se puede empezar es validate-infra.sh, que reintenta.
+${INFRA_PREAMBLE}
+
+echo "Levantando la infraestructura de ${service.name} con '\${COMPOSE[*]}'…"
+"\${COMPOSE[@]}" up -d
+
+echo ""
+echo "Contenedores arriba. Comprueba que están LISTOS antes de usarlos:"
+echo "  bash infra/validate-infra.sh"
+`;
+}
+
+function infraDownScript(service) {
+  return `#!/usr/bin/env bash
+# down.sh — para la infraestructura de prueba de ${service.name}.
+#
+# Uso (desde la raíz del proyecto):
+#   bash infra/down.sh           para los contenedores, CONSERVA los volúmenes
+#   bash infra/down.sh --volumes los borra también (la BD vuelve a nacer vacía)
+#
+# Para limpiar el ESTADO entre flujos de validación no se usa esto: es
+# infra/reset-db.sh, que vacía datos sin tirar los contenedores ni el historial de
+# migraciones. Borrar los volúmenes obliga a rearrancar y resembrar la topología.
+${INFRA_PREAMBLE}
+
+VOLUMES=""
+if [ "\${1:-}" = "--volumes" ] || [ "\${1:-}" = "-v" ]; then
+  VOLUMES="--volumes"
+fi
+
+echo "Parando la infraestructura de ${service.name}…"
+if [ -n "$VOLUMES" ]; then
+  "\${COMPOSE[@]}" down --volumes
+  echo "Contenedores y volúmenes borrados."
+else
+  "\${COMPOSE[@]}" down
+  echo "Contenedores parados; los volúmenes siguen ahí (usa --volumes para borrarlos)."
+fi
 `;
 }

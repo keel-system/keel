@@ -16,13 +16,19 @@ raíz de un proyecto generado. Todo lo que hagas ocurre dentro de esa raíz.
    necesita contenedores (H2/embebidos): repórtalo y termina OK.
 2. Detecta el runtime igual que `infra/validate-infra.sh`: `$CONTAINER_RUNTIME` si
    está definida; si no, `docker`; si no, `podman`. Sea `$RT` el elegido.
-3. Levanta: `$RT compose -f infra/docker-compose.yaml up -d --build` (si `$RT compose`
-   no existe como subcomando, prueba `docker-compose -f ...` / `podman-compose -f ...`).
+3. Levanta: **`bash infra/up.sh`**. No lo sustituyas por un `$RT compose ... up -d` a
+   mano: el script resuelve además el **frontend** de compose, y esa parte no es
+   adivinable desde fuera. `podman compose` no implementa compose, delega en el
+   binario de Docker Compose que haya en el PATH, y ese binario puede existir y
+   responder `version` sin ser capaz de hablar con el motor de podman — entonces el
+   `up` muere con un error de socket o de named pipe que no menciona compose por
+   ningún lado. `infra/up.sh` lo detecta con `compose ls` y cae a `podman-compose`.
 4. Sondea: `bash infra/validate-infra.sh` (respeta el mismo `$CONTAINER_RUNTIME`).
+   Levantar no es estar listo, y por eso son dos pasos.
    Si falla, espera ~10s y reintenta hasta 3 veces (los contenedores tardan en estar
-   listos). Si sigue fallando, diagnostica con `$RT compose -f infra/docker-compose.yaml ps`
-   y `$RT logs <contenedor>`; corrige solo causas operativas (puerto ocupado,
-   contenedor viejo → `down` + `up`). **Nunca edites código del proyecto.**
+   listos). Si sigue fallando, diagnostica con `$RT ps` y `$RT logs <contenedor>`;
+   corrige solo causas operativas (puerto ocupado, contenedor viejo →
+   `bash infra/down.sh` + `bash infra/up.sh`). **Nunca edites código del proyecto.**
 5. **Un `FALLO` que persiste se contrasta contra el efecto, no se acepta ni se
    silencia.** Antes de declararlo KO, reproduce a mano lo que ese check pretende
    demostrar, con el sondeo más directo que exista (`{{keel:docs}}/conventions/infra-validation.md`

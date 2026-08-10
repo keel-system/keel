@@ -333,7 +333,7 @@ test('CLAUDE.md contextual: specs, solo capas declaradas y skill local con conve
   assert.ok(claude.includes('validation-scenarios.md'));
   assert.ok(claude.includes('grep -rn "TODO" src'));
   assert.ok(claude.includes('keel-stack.json'));
-  assert.ok(claude.includes('infra/docker-compose.yaml')); // la infraestructura de prueba vive en infra/
+  assert.ok(claude.includes('infra/up.sh')); // la infraestructura de prueba vive en infra/, con su lanzador
   assert.ok(claude.includes('keel-spring-code')); // la skill orquesta los subagentes
   assert.ok(claude.includes('docs/keel/architecture.md'));
   assert.ok(claude.includes('docs/keel/constitution.md'));
@@ -999,6 +999,70 @@ test('deploy: los scripts sirven igual con docker que con podman', () => {
   const compose = read(workspace, 'deploy/docker-compose.yaml');
   assert.ok(!compose.includes('host-gateway'));
   assert.ok(!compose.includes('network_mode'));
+});
+
+// La infraestructura de PRUEBA también necesita lanzador, y por el mismo motivo que
+// deploy: `podman compose` no implementa compose, delega. Sin script, todo el repo
+// mandaba un `compose up -d` a pelo que en podman sobre Windows muere con un error de
+// named pipe — y es el PRIMER comando de la fase de infraestructura del pipeline.
+test('infra: tiene lanzador propio y resuelve el frontend de compose por si delega', () => {
+  const workspace = makeWorkspace();
+  scaffoldService({ ...loadFixture(), workspace });
+
+  for (const name of ['infra/up.sh', 'infra/down.sh']) {
+    const script = read(workspace, name);
+    assert.ok(script.startsWith('#!/usr/bin/env bash'), name);
+    assert.ok(script.includes('CONTAINER_RUNTIME'), name);
+    assert.ok(script.includes('podman-compose'), name);
+    // El sondeo es `compose ls` y NO `compose version`: version lo contesta el
+    // binario delegado sin tocar el motor, así que sale 0 justo en el caso que el
+    // fallback existe para cubrir. Es el bug que este par arregla, y si alguien
+    // vuelve a `version` el fallback deja de dispararse en silencio.
+    assert.ok(script.includes('podman compose ls'), name);
+    assert.ok(!script.includes('podman compose version'), name);
+  }
+
+  // up.sh levanta y se aparta: quien decide si está LISTO es validate-infra.sh, que
+  // reintenta. Levantar no es estar listo y son dos pasos a propósito.
+  const up = read(workspace, 'infra/up.sh');
+  assert.ok(up.includes('up -d'));
+  assert.ok(up.includes('validate-infra.sh'));
+
+  // down.sh conserva los volúmenes salvo que se los pidan: entre flujos se limpia
+  // con reset-db.sh, que no tira el historial de migraciones ni la topología.
+  const down = read(workspace, 'infra/down.sh');
+  assert.ok(down.includes('--volumes'));
+
+  // Y los scripts que fallan por infra caída mandan al lanzador, no al compose a pelo.
+  const validate = read(workspace, 'infra/validate-infra.sh');
+  assert.ok(validate.includes('bash infra/up.sh'), validate);
+  assert.ok(!validate.includes('compose -f infra/docker-compose.yaml up -d'), validate);
+});
+
+// deploy/ e infra/ resuelven runtime y frontend con el MISMO código. Dos criterios
+// escritos aparte divergen, y entonces el diseñador y el pipeline eligen distinto en
+// la misma máquina — que es exactamente el fallo difícil de creer.
+test('infra y deploy resuelven el runtime con el mismo criterio', () => {
+  const workspace = makeWorkspace();
+  scaffoldService({ ...loadFixture(), workspace });
+
+  const infraUp = read(workspace, 'infra/up.sh');
+  const deployUp = read(workspace, 'deploy/up.sh');
+
+  // El bloque de detección del runtime, literal y el mismo en los dos. (Entre él y
+  // la resolución de compose, deploy/ mete su .env; por eso se compara el bloque y
+  // no el tramo entero.)
+  const runtimeBlock = (script) => {
+    const from = script.indexOf('RUNTIME="${CONTAINER_RUNTIME');
+    return script.slice(from, script.indexOf('\nfi', from) + 3);
+  };
+  assert.ok(runtimeBlock(infraUp).includes('command -v podman'));
+  assert.equal(runtimeBlock(infraUp), runtimeBlock(deployUp));
+
+  // Y el sondeo del frontend, también el mismo.
+  for (const script of [infraUp, deployUp]) {
+    assert.ok(script.includes('! podman compose ls >/dev/null 2>&1'), script);
+  }
 });
 
 test('deploy: con Keycloak el realm se importa al arrancar, sin ejecutar nada', () => {
@@ -2104,6 +2168,59 @@ test('outbox: fila en la misma transacción, relay determinista y envío tras el
   assert.ok(harness.includes('restoreBroker();'));
   // RabbitMQ conserva su topología al reiniciar: nada que resembrar.
   assert.ok(!harness.includes('reseedTopology'));
+
+  // La palanca no basta: hay que poder AFIRMAR sobre el canal mientras está caído.
+  // Con el broker parado la lectura falla por transporte —no por «destino
+  // desconocido»—, así que sin esto el Then «el canal sigue vacío» revienta en vez de
+  // pasar, y ese Then es la ÚNICA cláusula que separa un outbox de publicar en línea:
+  // el resto del escenario lo cumple igual un servicio sin outbox ninguno.
+  assert.ok(harness.includes('BROKER_STOPPED'), harness);
+  assert.ok(harness.includes('emptyIfBrokerStopped'), harness);
+  // La condición es el flag, no el tipo de error: una infraestructura que se cae sola
+  // tiene que seguir doliendo donde se cae.
+  assert.match(harness, /if \(brokerIntentionallyStopped\(\)\) \{\s*return "";/);
+  // Se marca al parar y se limpia DESPUÉS del sondeo de readiness: entre el `start` y
+  // el primer listener que responde, el broker sigue sin servir.
+  const startBody = harness.slice(harness.indexOf('protected static void startBroker()'));
+  assert.ok(startBody.indexOf('awaitBrokerReady()') < startBody.indexOf('BROKER_STOPPED.set(false)'));
+});
+
+// Tres garantías de este método no dicen «esto es correcto» sino «esto es correcto
+// AUNQUE haya varias instancias»: el reclamo del relay, el del barrido y el arbitraje
+// de la clave de idempotencia. Con una sola instancia las tres pasan sus escenarios
+// sin ejercitarse — dos hilos de la misma JVM comparten pool, planificador y reloj.
+test('el arnés puede levantar una segunda réplica, y es un proceso aparte', () => {
+  const workspace = makeWorkspace();
+  scaffoldService({ ...loadFixture(), workspace });
+
+  const harness = read(
+    workspace,
+    'src/integrationTest/java/com/commerce/productcatalog/flows/AbstractFlowIT.java'
+  );
+  assert.ok(harness.includes('protected static int startReplica()'), harness);
+  assert.ok(harness.includes('protected static void stopReplica()'), harness);
+
+  // Proceso aparte desde el jar, NO un segundo contexto de Spring: el source set deja
+  // src/main/java fuera del compileClasspath —esa es la caja negra—, así que el arnés
+  // no puede ni nombrar la clase de aplicación. Y dos contextos en la misma JVM
+  // compartirían demasiado para que el resultado signifique lo que dice.
+  assert.ok(harness.includes('new ProcessBuilder('), harness);
+  assert.ok(harness.includes('"-jar"'), harness);
+  assert.ok(!/import com\.commerce\.productcatalog\.(?!.*flows)/.test(harness), harness);
+
+  // La salida va a un archivo: sin nadie leyendo el pipe, un arranque de Spring lo
+  // llena y la réplica se queda bloqueada escribiendo — un cuelgue que parece lentitud.
+  assert.ok(harness.includes('redirectOutput('), harness);
+  // Levantar no es estar listo: se sondea readiness antes de devolver el puerto.
+  assert.ok(harness.includes('/actuator/health/readiness'), harness);
+  // Y la red por si el finally de un escenario no llegó a correr.
+  assert.match(read(workspace, 'src/integrationTest/java/com/commerce/productcatalog/flows/AbstractFlowIT.java'), /resetState[\s\S]*?stopReplica\(\);/);
+
+  // El jar tiene que existir antes de la suite, y fresco: uno viejo levantaría una
+  // réplica con código distinto del que se está puntuando.
+  const score = read(workspace, 'infra/score-scenarios.sh');
+  assert.ok(score.includes('./gradlew bootJar'), score);
+  assert.ok(score.indexOf('bootJar') < score.indexOf("--tests '*HarnessSmokeIT'"), score);
 });
 
 test('sin outbox no hay palanca de broker: detenerlo no probaría ninguna garantía', () => {
@@ -2600,10 +2717,27 @@ test('idempotencia de consumo: registro de procesados transversal al broker', ()
   const writer = read(workspace, `${dir}/ProcessedEventWriter.java`);
   assert.ok(writer.includes('@Transactional(readOnly = true, propagation = Propagation.REQUIRES_NEW)'));
   assert.ok(writer.includes('@Transactional(propagation = Propagation.REQUIRES_NEW)'));
-  // Y con flush: JPA difiere el INSERT hasta el commit, así que sin él la violación
-  // de clave no saltaría en insert() sino al commitear, donde ya nadie la distingue.
-  assert.ok(writer.includes('saveAndFlush('));
+  // saveAndFlush del repositorio, y la entidad implementando Persistable con
+  // isNew() == true. Las dos mitades, y ninguna sobra:
+  //  - sin Persistable, la clave asignada hace que Spring Data deduzca merge() — un
+  //    SELECT + UPDATE que no viola la clave primaria, no lanza y hace que
+  //    record()/tryRecord() devuelvan true SIEMPRE: el registro no deduplicaba nada.
+  //    La rama alreadyProcessed lo tapaba con su consulta previa y con la guarda de
+  //    dominio del agregado; tryRecord no tiene ninguna de las dos.
+  //  - y con el EntityManager a pelo dentro de un @Component no hay proxy que
+  //    traduzca la excepción de Hibernate, así que el catch del llamante no casa y el
+  //    desenlace acaba en 500. La traducción la da el proxy de Spring Data.
+  assert.ok(writer.includes('saveAndFlush('), writer);
+  assert.ok(!writer.includes('entityManager.'), writer);
   assert.ok(!writer.includes('catch ('));
+  const processed = read(workspace, `${dir}/ProcessedEventJpa.java`);
+  assert.ok(processed.includes('implements Persistable<ProcessedEventJpa.ProcessedEventId>'), processed);
+  // isNew() NO es constante: SimpleJpaRepository.delete() empieza con
+  // `if (isNew(entity)) return;`, así que un true fijo convierte el borrado en un
+  // no-op silencioso. El flag lo pone @PostLoad: recién construida es nueva (persist,
+  // y la clave primaria arbitra), leída de la base no lo es (y se puede borrar).
+  assert.match(processed, /public boolean isNew\(\) \{\s*return !persisted;/);
+  assert.ok(processed.includes('@PostLoad'), processed);
   // Nada del broker concreto: quien llama al guard es el listener del agente.
   for (const ajeno of ['SnsTemplate', 'KafkaTemplate', 'RabbitTemplate']) {
     assert.ok(!guard.includes(ajeno));
@@ -2658,11 +2792,39 @@ test('idempotencia de comando: store transaccional, contexto y filtro de la cabe
   assert.ok(store.includes('implements IdempotencyStore'));
   assert.ok(store.includes('@Transactional\n    public void save('));
   assert.ok(!store.includes('propagation = Propagation.REQUIRES_NEW'));
-  // Y con flush, para que la violación de clave salte AQUÍ: con save saldría por el
-  // commit del mediador, donde ya no se distingue de cualquier otro conflicto y el
-  // cliente recibe un 409 sin code que ningún escenario puede afirmar.
-  assert.ok(store.includes('saveAndFlush('));
+  // persist + flush, nunca save/saveAndFlush — misma trampa que en ProcessedEventWriter:
+  // con la clave asignada, save hace merge y pisa el registro de la ganadora con el de
+  // la perdedora sin lanzar, así que la CARRERA deja de estar arbitrada y las dos
+  // peticiones se ejecutan. Aquí lo tapaba el find previo, que resuelve la repetición
+  // secuencial antes de llegar al save; el fallo solo aparece con dos simultáneas, que
+  // es exactamente el caso que esta clase existe para cerrar. Y el flush hace que la
+  // violación salte AQUÍ y no en el commit del mediador, donde ya no se distingue de
+  // cualquier otro conflicto y el cliente recibe un 409 sin code.
+  assert.ok(store.includes('saveAndFlush('), store);
+  // Sin EntityManager a pelo. Se mira el CÓDIGO, no la prosa: el javadoc explica
+  // justamente por qué no se usa, y buscar el nombre a secas daría falso positivo —
+  // el mismo motivo por el que check-idempotency.sh borra comentarios antes de mirar.
+  assert.ok(!/^\s*entityManager\./m.test(store), store);
   assert.ok(store.includes('throw new IdempotencyConflictException(scope, idempotencyKey, concurrent)'));
+  // El INSERT lo fuerza la entidad, no el adaptador: sin esto, save hace merge y pisa
+  // el registro de la ganadora con el de la perdedora sin lanzar — la carrera deja de
+  // estar arbitrada y las dos peticiones se ejecutan. El find previo lo tapa en el
+  // reintento secuencial, así que solo se ve con dos peticiones simultáneas.
+  const record = read(workspace, `${base}/infrastructure/persistence/idempotency/IdempotencyRecordJpa.java`);
+  assert.ok(record.includes('implements Persistable<IdempotencyRecordJpa.IdempotencyRecordId>'), record);
+  assert.match(record, /public boolean isNew\(\) \{\s*return !persisted;/);
+  assert.ok(record.includes('@PostLoad'), record);
+
+  // Y la fila CADUCADA se retira antes de insertar. `find` ya la ignora, así que sin
+  // esto el handler ejecuta y la inserción choca contra una fila que ya no protege
+  // nada: 409 IDEMPOTENCY_KEY_IN_PROGRESS durante casi un día (la purga va por lotes,
+  // una vez al día), y la ventana real de deduplicación pasa a fijarla la cadencia de
+  // la purga en vez del ttlSeconds del diseño. El filtro es el complemento EXACTO del
+  // de find: lo que aquel descarta por caducado es lo que este retira.
+  assert.ok(store.includes('.filter(stored -> !stored.getExpiresAt().isAfter(now))'), store);
+  assert.ok(store.includes('repository.delete(expired)'), store);
+  // El DELETE tiene que ir antes del INSERT, no reordenado al commit.
+  assert.ok(store.indexOf('repository.flush()') < store.indexOf('repository.saveAndFlush('), store);
   const conflict = read(workspace, `${base}/domain/idempotency/IdempotencyConflictException.java`);
   assert.ok(conflict.includes('extends ConflictException'));
   assert.ok(conflict.includes('"IDEMPOTENCY_KEY_IN_PROGRESS"'));
@@ -2689,6 +2851,15 @@ test('idempotencia de comando: store transaccional, contexto y filtro de la cabe
   const handler = read(workspace, `${base}/application/usecases/CreateProductCommandHandler.java`);
   assert.ok(handler.includes('IdempotencyContext.get()'));
   assert.ok(handler.includes('scope="createProduct"'));
+
+  // Y dice qué NO hacer con la carrera. El `find` no la ve —las dos peticiones lo
+  // fallan— así que quien la arbitra es la clave primaria del registro, vía la
+  // excepción que el adaptador ya traduce al 409 del contrato. Sin esta frase, el
+  // camino de menor resistencia es un try/catch «defensivo» alrededor de save que se
+  // traga justo eso: el servidor pasa el reintento secuencial y ejecuta dos veces en
+  // cuanto hay concurrencia, que es el caso normal con más de una réplica.
+  assert.ok(handler.includes('IDEMPOTENCY_KEY_IN_PROGRESS'), handler);
+  assert.match(handler, /NO captures esa excepción/);
 });
 
 // Una operación con `schedule` genera su <Servicio>Scheduler con @Scheduled, pero
@@ -3086,7 +3257,9 @@ test('migraciones: la prueba en vivo del baseline queda atribuida al diseñador'
   const migrationsReadme = read(workspace, 'src/main/resources/db/migration/README.md');
   assert.ok(migrationsReadme.includes('La prueba en vivo es tuya'));
   assert.ok(migrationsReadme.includes('PROFILE=local,migrations ./gradlew bootRun'));
-  assert.ok(migrationsReadme.includes('down -v'));
+  // Borrar el volumen: es lo que deja la BD sin esquema, que es la precondición de
+  // la prueba. Va por el lanzador, que resuelve el frontend de compose.
+  assert.ok(migrationsReadme.includes('infra/down.sh --volumes'));
 
   // README del proyecto: la sección de despliegue es donde el diseñador busca los
   // pasos, y el paso pendiente lleva sus comandos exactos.

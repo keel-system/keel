@@ -551,11 +551,22 @@ test('C3: PATCH parcial con tri-estado JsonNullable (ausente ≠ null explícito
   const buildGradle = read('build.gradle');
   const webConfig = read(`${JAVA}/infrastructure/configurations/WebConfig.java`);
 
-  assert.ok(command.includes('@Size(max = 200) JsonNullable<String> name'));
+  // La constraint va DENTRO del genérico. Fuera —`@Size(...) JsonNullable<String>`—
+  // queda sobre el CONTENEDOR: Hibernate Validator resuelve el validador por el tipo
+  // declarado, antes de mirar el valor, y lanza UnexpectedTypeException (HV000030) en
+  // TODA petición que traiga el campo, válida o no. El endpoint entero responde 500.
+  //
+  // Esta aserción fijaba la forma defectuosa y la suite salía verde: el `includes(...)`
+  // encuentra la anotación y encuentra el tipo, y no hay comparación de cadenas que
+  // distinga dónde está puesta. Lo destapó una corrida real (FL-PRD-002-D/E), y por eso
+  // ahora también se prohíbe explícitamente la forma vieja.
+  assert.ok(command.includes('JsonNullable<@Size(max = 200) String> name'), command);
+  assert.ok(!/@Size\([^)]*\)\s+JsonNullable</.test(command), command);
   assert.ok(command.includes('JsonNullable<UUID> categoryId'));
   assert.ok(buildGradle.includes('org.openapitools:jackson-databind-nullable'));
   assert.ok(webConfig.includes('public JsonNullableModule jsonNullableModule()'));
-  // Sin el value extractor, un @Size sobre JsonNullable no se evalúa nunca.
+  // Y el value extractor, que es lo que permite a Bean Validation desenvolver el
+  // contenedor para aplicar la constraint de dentro.
   const extractor = read('src/main/resources/META-INF/services/jakarta.validation.valueextraction.ValueExtractor');
   assert.ok(extractor.includes('JsonNullableValueExtractor'));
 });
@@ -1188,11 +1199,19 @@ test('§1.1: el handler con transición y activación saliente lleva la nota de 
   assert.ok(handler.includes('La llamada saliente no es transaccional'));
 });
 
-test('§1.1: la nota de orden no se emite cuando no hay las dos cosas', () => {
+test('§1.1: la nota de orden se emite solo cuando hay las dos cosas', () => {
   const { read } = scaffoldExtended();
-  // Compensación: transición sí, activación saliente no.
+
+  // Compensación CON activación de vuelta: transición y llamada saliente, así que hay
+  // orden que fijar — y el orden importa. La llamada no es transaccional: si sale
+  // antes y la guarda del agregado rechaza el cambio, el rollback revierte la fila
+  // pero el trabajo ya está deshecho en el otro servidor y nadie lo rehace.
   const compensation = read(`${JAVA}/application/usecases/ReactivateWithdrawnProductCommandHandler.java`);
-  assert.ok(!compensation.includes('ORDEN de los efectos'), 'sin activación saliente no hay orden que fijar');
+  assert.ok(compensation.includes('ORDEN de los efectos'), compensation);
+  assert.match(compensation, /aplica PRIMERO la transición de estado[\s\S]*?y solo después llama a compliance\.cancelWithdrawal/);
+  // Y el cliente se inyecta: sin él, el camino de menor resistencia es no llamarlo, y
+  // la compensación se queda a medias sin que nada en nuestra base lo delate.
+  assert.ok(compensation.includes('ComplianceClient complianceClient'), compensation);
 
   // Alta: activación no, transición tampoco (la creación no es una arista del lifecycle).
   const create = read(`${JAVA}/application/usecases/CreateProductCommandHandler.java`);

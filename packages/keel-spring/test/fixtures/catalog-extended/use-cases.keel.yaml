@@ -101,6 +101,13 @@ operations:
       - code: COMPLIANCE_UNAVAILABLE
         when: El registro regulatorio no responde y la retirada no puede darse por inscrita.
         http: 502
+      # El rechazo de la transición inválida. Sin declararlo, el guard del agregado
+      # rechaza igual —eso no depende del contrato— pero el cliente recibe un código
+      # que el diseño no conoce, y ningún escenario puede afirmar sobre él: era el
+      # hueco que dejaba FL-PRD-004-D sin ejercitar.
+      - code: PRODUCT_NOT_RETIRABLE
+        when: El producto no está en un estado desde el que pueda retirarse (ya está retirado).
+        http: 409
     emits: [ProductUpdated]
     transitions:
       - entity: Product

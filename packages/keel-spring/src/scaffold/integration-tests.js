@@ -158,6 +158,27 @@ export function generate(model) {
 // sale la matriz: volcarle miles de líneas en cada vuelta del bucle de fix lo
 // dejaría compactado antes de llegar a la fase de calidad. Hoy ese ruido lo
 // absorbe una sesión desechable; el script tiene que conservar esa propiedad.
+/**
+ * El jar que arranca la segunda réplica. Solo se construye cuando el diseno tiene
+ * algo que contrastar entre replicas: es medio minuto de bootJar y no se le cobra a
+ * quien no lo usa. Va ANTES del humo del arnes porque `startReplica()` lo exige en
+ * disco, y un jar viejo levantaria una réplica con codigo distinto del que se esta
+ * puntuando -un falso verde, o peor, un falso rojo imposible de atribuir.
+ */
+function replicaJarStep(model) {
+  if (!usesReplica(model)) return '';
+  return `  # Jar ejecutable para la segunda réplica (escenarios de clúster).
+  echo "Empaquetando el jar (bootJar)..."
+  if ! ./gradlew bootJar --console=plain >"$LOG" 2>&1; then
+    echo ""
+    echo "HARNESS: KO - bootJar falló, la suite NO se ejecutó."
+    echo "  log: $LOG"
+    exit 2
+  fi
+
+`;
+}
+
 function scoreScenariosScript(model) {
   return `#!/usr/bin/env bash
 # score-scenarios.sh — ejecuta las pruebas de integración de ${model.service.name} y
@@ -196,7 +217,7 @@ score_only=0
 
 if [ "$score_only" -eq 0 ]; then
   rm -rf "$RESULTS"
-  # Humo del arnés primero: son segundos y comprueba la fontanería de la que
+${replicaJarStep(model)}  # Humo del arnés primero: son segundos y comprueba la fontanería de la que
   # dependen TODAS las clases de flujo (reset, servidor vivo, credenciales,
   # canales, caché). En rojo no se ejecuta la suite: correrla sobre una
   # fontanería rota produce decenas de fallos que parecen de negocio y no lo
@@ -374,6 +395,23 @@ function abstractImports(model) {
   if (broker?.id === 'rabbitmq' && devtools) imports.push('java.util.Base64');
   // Marcas de offset por destino (aislamiento de Kafka, que no tiene purga).
   if (broker?.id === 'kafka') imports.push('java.util.concurrent.ConcurrentHashMap');
+  // Flag de la caída provocada por el propio escenario (palanca del outbox).
+  if (usesBrokerControl(model)) imports.push('java.util.concurrent.atomic.AtomicBoolean');
+  // Segunda réplica: proceso aparte lanzado desde el jar.
+  if (usesReplica(model)) {
+    imports.push(
+      'java.io.IOException',
+      'java.net.HttpURLConnection',
+      'java.net.ServerSocket',
+      'java.net.URI',
+      'java.nio.file.Files',
+      'java.nio.file.Path',
+      'java.time.Duration',
+      'java.time.Instant',
+      'java.util.concurrent.TimeUnit',
+      'java.util.stream.Stream'
+    );
+  }
   if (hasMultipart(model)) {
     imports.push(
       'java.util.Map',
@@ -743,7 +781,7 @@ ${hasIdempotency(model) ? `
     }
 
     // ── Estado e infraestructura ─────────────────────────────────────────────
-${resetSection(model)}${bashExecutableSection(model)}${httpStubSection(model)}${devtoolsSection(model)}${brokerControlSection(model)}${dbSection(model)}${containerExecSection(model)}${securitySection(model)}}`;
+${resetSection(model)}${bashExecutableSection(model)}${httpStubSection(model)}${devtoolsSection(model)}${brokerControlSection(model)}${replicaSection(model)}${dbSection(model)}${containerExecSection(model)}${securitySection(model)}}`;
 }
 
 // Proveedor de prueba de las integraciones salientes. Es infraestructura, no un
@@ -905,6 +943,10 @@ function resetSection(model) {
   // fallarían por una causa que no es la suya. Y el purgado del script habla con el
   // broker, así que tiene que encontrarlo vivo.
   const restore = usesBrokerControl(model) ? '\n        restoreBroker();' : '';
+  // Y una réplica viva sigue publicando y barriendo: si el finally de su escenario
+  // no llego a correr, los flujos siguientes fallarian por una causa ajena. Pararla
+  // es idempotente, asi que abrir cada clase con esto no cuesta nada.
+  const stopReplicaLine = usesReplica(model) ? '\n        stopReplica();' : '';
 
   if (!script) {
     return `
@@ -913,7 +955,7 @@ function resetSection(model) {
      * \`@DirtiesContext\` a nivel de clase. Se conserva el método para que toda clase
      * de flujo llame a lo mismo desde su \`@BeforeAll\`.
      */
-    protected static void resetState() {${restore}${
+    protected static void resetState() {${restore}${stopReplicaLine}${
       kafka
         ? `
         markChannels();`
@@ -935,7 +977,7 @@ function resetSection(model) {
      * de la caché, destinos de mensajería declarados${model.layersPresent.httpClients ? ' y los mappings y el log de\n     * peticiones del proveedor de prueba' : ''}. Un recurso que no esté en esa
      * lista <b>no</b> se puede dar por limpio.
      */
-    protected static void resetState() {${restore}
+    protected static void resetState() {${restore}${stopReplicaLine}
         try {
             Process process = new ProcessBuilder(bashExecutable(), "infra/reset-db.sh").inheritIO().start();
             int exit = process.waitFor();
@@ -1045,6 +1087,197 @@ function usesBrokerControl(model) {
   return usesOutbox(model) && Boolean(brokerEntry(model)) && usesDevtools(model);
 }
 
+/**
+ * ¿Tiene este diseño alguna garantia cuyo enunciado sea "arbitrado ENTRE replicas"?
+ *
+ * Son tres, y las tres se afirman en el codigo con un comentario que dice que varias
+ * instancias no se pisan: el relay del outbox (reclama filas con bloqueo de escritura
+ * y SKIP LOCKED), el barrido de reconciliación (@Scheduled corre en TODAS las réplicas,
+ * así que tiene que reclamar y no solo leer) y el registro de idempotencia de petición
+ * (la clave primaria arbitra dos peticiones que ni siquiera están en el mismo proceso).
+ * Con una sola instancia las tres pasan sus escenarios sin que nada de eso se ejercite:
+ * dos hilos de la misma JVM comparten pool y contexto.
+ */
+function usesReplica(model) {
+  return usesOutbox(model) || hasScheduledOperation(model) || declaresIdempotency(model);
+}
+
+function hasScheduledOperation(model) {
+  return (model.services ?? []).some((group) => group.operations.some((operation) => operation.schedule));
+}
+
+/**
+ * La segunda replica: un proceso aparte, arrancado del jar que produce `bootJar`.
+ *
+ * No es un segundo contexto de Spring dentro de esta JVM, y la diferencia importa por
+ * dos motivos. El de alcance: lo que se contrasta es que dos PROCESOS con pools,
+ * planificadores y relojes propios no se pisan, y dos contextos en la misma JVM
+ * comparten demasiado. Y el estructural: el source set de las pruebas deja
+ * `src/main/java` fuera del compileClasspath -esa es la caja negra-, así que el arnés
+ * no puede ni nombrar la clase de aplicación. Lanzar el jar respeta las dos cosas.
+ */
+function replicaSection(model) {
+  if (!usesReplica(model)) return '';
+  return REPLICA_BODY(model);
+}
+
+function REPLICA_BODY(model) {
+  const onReplica = model.layersPresent.api
+    ? `
+    /**
+     * Petición dirigida a la SEGUNDA réplica, no a la que arranca JUnit. Es lo que
+     * permite que dos peticiones simultáneas con la misma clave lleguen a procesos
+     * distintos: el caso que el registro de idempotencia existe para cerrar y el
+     * unico que dos hilos de esta JVM no reproducen.
+     */
+    protected Response onReplica(HttpMethod method, String path, String jsonBody${model.layersPresent.security ? ', String token' : ''}${hasIdempotency(model) ? ', String idempotencyKey' : ''}) {
+        if (REPLICA == null || !REPLICA.isAlive()) {
+            throw new IllegalStateException("La réplica no está arrancada: llama antes a startReplica()");
+        }
+        return exchange(method, "http://localhost:" + REPLICA_PORT + path, jsonBody${model.layersPresent.security ? ', token' : ', null'}${hasIdempotency(model) ? ', idempotencyKey' : ', null'});
+    }
+`
+    : '';
+  return `
+    // -- Segunda réplica ------------------------------------------------------
+
+    private static Process REPLICA;
+    private static int REPLICA_PORT;
+
+    /** Espera máxima a que la réplica acepte tráfico. Arrancar Spring no es instantáneo. */
+    private static final Duration REPLICA_READY_TIMEOUT = Duration.ofSeconds(120);
+
+    /**
+     * Arranca una segunda instancia del servicio contra la MISMA infraestructura y
+     * devuelve su puerto.
+     *
+     * <p>Es la palanca de los escenarios de clúster: con dos procesos vivos hay dos
+     * relays del outbox y dos barridos compitiendo por las mismas filas, y una
+     * peticion puede dirigirse a una réplica u otra. Sin esto, "lo arbitra la clave
+     * primaria" y "cada réplica se lleva un lote disjunto" son afirmaciones razonadas
+     * que ningún escenario toca.
+     *
+     * <p><b>El escenario que la arranca tiene que pararla</b>, en un {@code finally}:
+     * una réplica viva sigue publicando y barriendo durante los flujos siguientes, que
+     * fallarian por una causa ajena. Como red, {@link #resetState} la para al abrir
+     * cada clase.
+     *
+     * <p>Requiere el jar en {@code build/libs}: lo deja {@code infra/score-scenarios.sh},
+     * que ejecuta {@code bootJar} antes de la suite.
+     */
+    protected static int startReplica() {
+        if (REPLICA != null && REPLICA.isAlive()) {
+            return REPLICA_PORT;
+        }
+        Path jar = bootJar();
+        REPLICA_PORT = freePort();
+        Path log = Path.of("build", "keel-replica.log");
+        try {
+            Files.createDirectories(log.getParent());
+            // La salida va a un archivo y no al pipe del proceso: un arranque de Spring
+            // llena el búfer del pipe y, sin nadie leyéndolo, la réplica se queda
+            // bloqueada escribiendo. Un cuelgue que parece un arranque lento.
+            REPLICA = new ProcessBuilder(
+                            javaExecutable(),
+                            "-jar",
+                            jar.toString(),
+                            "--spring.profiles.active=local",
+                            "--server.port=" + REPLICA_PORT)
+                    .redirectErrorStream(true)
+                    .redirectOutput(log.toFile())
+                    .start();
+        } catch (IOException e) {
+            throw new IllegalStateException("No se pudo arrancar la segunda réplica desde " + jar, e);
+        }
+        awaitReplicaReady(log);
+        return REPLICA_PORT;
+    }
+
+    /** Para la réplica. Idempotente: sobre una ya parada no hace nada. */
+    protected static void stopReplica() {
+        if (REPLICA == null) {
+            return;
+        }
+        REPLICA.destroy();
+        try {
+            if (!REPLICA.waitFor(30, TimeUnit.SECONDS)) {
+                REPLICA.destroyForcibly();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            REPLICA.destroyForcibly();
+        }
+        REPLICA = null;
+    }
+${onReplica}
+    /** Localiza el jar ejecutable, descartando el -plain que Boot genera al lado. */
+    private static Path bootJar() {
+        Path libs = Path.of("build", "libs");
+        try (Stream<Path> files = Files.list(libs)) {
+            return files.filter(p -> p.getFileName().toString().endsWith(".jar"))
+                    .filter(p -> !p.getFileName().toString().endsWith("-plain.jar"))
+                    .findFirst()
+                    .orElseThrow(() -> new IllegalStateException(
+                            "No hay jar ejecutable en " + libs + ": ejecuta ./gradlew bootJar"));
+        } catch (IOException e) {
+            throw new IllegalStateException(
+                    "No se puede leer " + libs + ": ejecuta ./gradlew bootJar antes de la suite", e);
+        }
+    }
+
+    /** El mismo java que corre esta suite: no se depende de que haya uno en el PATH. */
+    private static String javaExecutable() {
+        return Path.of(System.getProperty("java.home"), "bin", "java").toString();
+    }
+
+    private static int freePort() {
+        try (ServerSocket socket = new ServerSocket(0)) {
+            return socket.getLocalPort();
+        } catch (IOException e) {
+            throw new IllegalStateException("No hay puerto libre para la réplica", e);
+        }
+    }
+
+    private static void awaitReplicaReady(Path log) {
+        Instant deadline = Instant.now().plus(REPLICA_READY_TIMEOUT);
+        while (Instant.now().isBefore(deadline)) {
+            if (!REPLICA.isAlive()) {
+                throw new IllegalStateException(
+                        "La réplica murió durante el arranque. Revisa " + log.toAbsolutePath());
+            }
+            if (replicaAccepts()) {
+                return;
+            }
+            try {
+                Thread.sleep(500L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrumpido esperando a la réplica", e);
+            }
+        }
+        stopReplica();
+        throw new IllegalStateException(
+                "La réplica no respondió en " + REPLICA_READY_TIMEOUT + ". Revisa " + log.toAbsolutePath());
+    }
+
+    private static boolean replicaAccepts() {
+        try {
+            HttpURLConnection connection = (HttpURLConnection)
+                    URI.create("http://localhost:" + REPLICA_PORT + "/actuator/health/readiness").toURL().openConnection();
+            connection.setConnectTimeout(1000);
+            connection.setReadTimeout(1000);
+            try {
+                return connection.getResponseCode() == 200;
+            } finally {
+                connection.disconnect();
+            }
+        } catch (IOException notYet) {
+            return false;
+        }
+    }
+`;
+}
+
 // Brokers cuya topología NO sobrevive a un reinicio del contenedor. LocalStack sirve
 // SNS/SQS desde memoria (sin PERSISTENCE), así que al arrancar de nuevo vuelve sin
 // topics ni colas: lo que se perdería no es el mensaje, es el destino, y el escenario
@@ -1109,6 +1342,9 @@ function brokerControlSection(model) {
      */
     protected static void stopBroker() {
         runProcess(List.of(containerRuntime(), "stop", BROKER_CONTAINER));
+        // A partir de aquí, un fallo de TRANSPORTE al leer el canal es el efecto
+        // buscado, no una infraestructura rota: ver {@link #brokerIntentionallyStopped}.
+        BROKER_STOPPED.set(true);
     }
 
     /**
@@ -1120,7 +1356,29 @@ function brokerControlSection(model) {
     protected static void startBroker() {
         runProcess(List.of(containerRuntime(), "start", BROKER_CONTAINER));
         awaitBrokerReady();${reseed}
+        // Se limpia DESPUÉS del sondeo: entre el \`start\` y el primer listener que
+        // responde el broker sigue sin servir, y una lectura ahí tiene que tolerarse
+        // igual que durante la parada.
+        BROKER_STOPPED.set(false);
     }
+
+    /**
+     * ¿Tiró el broker el propio escenario? Es la diferencia entre el fallo que se
+     * tolera y el que tiene que doler.
+     *
+     * <p>Leer el canal con el broker parado falla por <b>transporte</b>, no por «destino
+     * desconocido», así que la tolerancia que existe para el destino que aún no se ha
+     * creado no cubre este caso — y sin cubrirlo, el \`Then\` que afirma que <b>el canal
+     * sigue vacío durante la caída</b> no es asertable. Ese \`Then\` es justo la mitad
+     * negativa que separa un outbox de una publicación en línea: sin él, el escenario
+     * del canal indisponible lo pasa igual un servidor que no tiene outbox ninguno.
+     *
+     * <p>Lo que NO se tolera, y por eso esto es un flag y no un \`catch\` ancho: una
+     * infraestructura caída por su cuenta sigue reventando la suite en el sitio donde
+     * se cae. Solo se perdona la indisponibilidad que el escenario provocó a propósito
+     * y de la que es responsable de recuperarse.
+     */
+    private static final AtomicBoolean BROKER_STOPPED = new AtomicBoolean(false);
 
     /**
      * Restaura el broker si algún escenario lo dejó caído. Idempotente: sobre un
@@ -1335,6 +1593,40 @@ function bodyFileHelper(model) {
 function brokerSection(model) {
   const broker = brokerEntry(model);
   if (!broker) return '';
+  // Tolerancia a la indisponibilidad que el ESCENARIO provocó. Sin la palanca de
+  // outbox no existe tal caso, y entonces el helper no perdona nada: cualquier fallo
+  // de lectura sigue siendo una infraestructura rota y tiene que doler donde ocurre.
+  const outage = usesBrokerControl(model)
+    ? `
+    /**
+     * Traduce a «canal vacío» el fallo de leer un destino <b>mientras el propio
+     * escenario tiene el broker parado</b>, y solo ese. La condición es el flag, no el
+     * tipo de error: una infraestructura que se cae por su cuenta sigue reventando la
+     * suite en el punto donde se cayó.
+     */
+    private static String emptyIfBrokerStopped(RuntimeException e) {
+        if (brokerIntentionallyStopped()) {
+            return "";
+        }
+        throw e;
+    }
+
+    /** ¿Está el broker parado porque lo paró {@link #stopBroker}? */
+    private static boolean brokerIntentionallyStopped() {
+        return BROKER_STOPPED.get();
+    }
+`
+    : `
+    /** Sin palanca de broker no hay caída provocada: todo fallo de lectura es real. */
+    private static String emptyIfBrokerStopped(RuntimeException e) {
+        throw e;
+    }
+
+    /** Sin palanca de broker, ninguna caída la provoca el escenario. */
+    private static boolean brokerIntentionallyStopped() {
+        return false;
+    }
+`;
   const doc = `
     /**
      * Últimos mensajes publicados en un destino, leídos del broker <b>real</b> del
@@ -1362,13 +1654,17 @@ ${doc}
         // Peek (ack_requeue_true): leer no consume, así que un escenario puede
         // assertar dos veces sobre el mismo mensaje.
         copyToDevtools(${rabbitProbeBodyJava('count')}, PROBE_BODY);
-        return devtools(${javaArgs(read)});
+        try {
+            return devtools(${javaArgs(read)});
+        } catch (RuntimeException e) {
+            return emptyIfBrokerStopped(e);
+        }
     }
 ${purgeDoc}
     protected static void purgeMessages(String destination) {
         devtools(${javaArgs(purge)});
     }
-`;
+${outage}`;
   }
 
   if (broker.id === 'snssqs') {
@@ -1381,7 +1677,11 @@ ${purgeDoc}
     private static final List<String> AWS = List.of(${javaArgs(prefix('snssqs'))});
 ${doc}
     protected static String publishedMessages(String destination, int count) {
-        return aws(${javaArgs(read)});
+        try {
+            return aws(${javaArgs(read)});
+        } catch (RuntimeException e) {
+            return emptyIfBrokerStopped(e);
+        }
     }
 ${purgeDoc}
     protected static void purgeMessages(String destination) {
@@ -1395,7 +1695,7 @@ ${purgeDoc}
         argv.addAll(List.of(arguments));
         return devtools(argv.toArray(String[]::new));
     }
-`;
+${outage}`;
   }
 
   // Kafka: sin purga posible (kcat no borra registros y devtools no trae las CLIs
@@ -1470,6 +1770,11 @@ ${purgeDoc}
             if (isUnknownTopic(e)) {
                 return 0L;
             }
+            // Con el broker parado a propósito no hay offset que consultar, y marcar 0
+            // es correcto: no se ha publicado nada que la marca deba dejar fuera.
+            if (brokerIntentionallyStopped()) {
+                return 0L;
+            }
             throw e;
         }
     }
@@ -1494,7 +1799,9 @@ ${purgeDoc}
             if (isUnknownTopic(e)) {
                 return "";
             }
-            throw e;
+            // Y el broker que el propio escenario tiró: ahí el fallo es de transporte,
+            // no de topic, y «vacío» es la respuesta correcta.
+            return emptyIfBrokerStopped(e);
         }
     }
 
@@ -1559,7 +1866,7 @@ ${purgeDoc}
     private static String shellQuote(String value) {
         return "'" + value.replace("'", "'\\\\''") + "'";
     }
-`;
+${outage}`;
 }
 
 // Entrega de mensajes ENTRANTES: la mitad que le faltaba al arnés. `publishedMessages`

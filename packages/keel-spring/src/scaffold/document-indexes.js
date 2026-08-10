@@ -257,7 +257,7 @@ function exportIndexesScript(model) {
 # ejecutar con la suite de integración corriendo contra la misma base.
 #
 # Uso:  bash infra/export-indexes.sh
-# Antes: la infraestructura tiene que estar arriba (docker compose -f infra/docker-compose.yaml up -d)
+# Antes: la infraestructura tiene que estar arriba (bash infra/up.sh)
 #        y la aplicación haber arrancado al menos una vez (MongoIndexConfig crea los
 #        índices en el arranque).
 set -euo pipefail

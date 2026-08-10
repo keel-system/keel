@@ -17,13 +17,25 @@ escenario que falle no distingue bug de dependencia caída.
 
 ## Camino rápido
 
-Desde la raíz del proyecto (con podman, exporta `CONTAINER_RUNTIME=podman` y usa
-`podman compose`):
+Desde la raíz del proyecto (con podman, exporta `CONTAINER_RUNTIME=podman`):
 
 ```bash
-docker compose -f infra/docker-compose.yaml up -d   # levanta BD/broker/cache/storage/auth + devtools
-bash infra/validate-infra.sh                        # un check por tecnología del stack; sale != 0 si algo falla
+bash infra/up.sh              # levanta BD/broker/cache/storage/auth + devtools
+bash infra/validate-infra.sh  # un check por tecnología del stack; sale != 0 si algo falla
 ```
+
+Son **dos** pasos porque levantar no es estar listo: Kafka, Keycloak y LocalStack
+publican su listener bastante después de que el contenedor esté `Up`, y quien reintenta
+es el segundo script.
+
+`infra/up.sh` no es un alias de `compose up -d`: además del runtime resuelve el
+**frontend** de compose. `podman compose` no implementa compose, delega en el binario de
+Docker Compose que encuentre en el PATH — que puede responder `version` perfectamente y
+aun así no alcanzar el motor de podman (en Windows es lo habitual: busca el named pipe de
+Docker Desktop). El síntoma de saltarse el script es un error de socket sin una sola
+mención a compose. El sondeo correcto es `compose ls`, que para contestar tiene que
+llegar al motor, y el fallback es `podman-compose`. Para pararlo, `bash infra/down.sh`
+(con `--volumes` si además quieres que la base vuelva a nacer vacía).
 
 `infra/validate-infra.sh` ejecuta, por cada tecnología elegida en `keel-stack.json`, su
 comando de sondeo dentro del contenedor que corresponde. Si todo responde, imprime

@@ -13,6 +13,47 @@ import { messagingTopologyChecks } from './messaging-provisioning.js';
 // Paquetes base del toolbox: shell + utilidades de red/JSON comunes a todos los checks.
 const BASE_PACKAGES = ['bash', 'curl', 'jq', 'netcat-openbsd'];
 
+// Resolución del runtime de contenedores. La comparten todos los scripts generados
+// —los de `infra/` y los de `deploy/`—: mismo criterio y mismo mensaje de error.
+export const RUNTIME_RESOLUTION = `RUNTIME="\${CONTAINER_RUNTIME:-}"
+if [ -z "$RUNTIME" ]; then
+  if command -v docker >/dev/null 2>&1; then RUNTIME=docker
+  elif command -v podman >/dev/null 2>&1; then RUNTIME=podman
+  else echo "No se encontró docker ni podman en el PATH." >&2; exit 2; fi
+fi`;
+
+/**
+ * Resolución del frontend de compose, ya con el archivo y los argumentos fijados.
+ *
+ * El sondeo es `compose ls` y NO `compose version`, y la diferencia es la que hace
+ * que esto funcione: `podman compose` no implementa compose, DELEGA en el binario de
+ * Docker Compose que encuentre. `version` lo contesta ese binario solo, sin tocar el
+ * motor, así que sale 0 incluso cuando no puede hablar con podman —el caso típico en
+ * Windows, donde el docker-compose.exe del PATH busca el named pipe de Docker Desktop
+ * y no el de la máquina de podman—. El resultado era un fallback que nunca se
+ * activaba y un `up` que muere con un error de conexión que no menciona compose.
+ * `ls` enumera proyectos: para contestarlo hay que llegar al motor.
+ *
+ * @param {string[]} args argumentos comunes (`-f <archivo>`, `--env-file`…).
+ */
+export function composeResolution(args) {
+  const rendered = args.join(' ');
+  return `COMPOSE=()
+if [ "$RUNTIME" = "podman" ] && ! podman compose ls >/dev/null 2>&1; then
+  # El frontend delegado no alcanza el motor: podman-compose es un binario aparte
+  # que habla con podman directamente.
+  if command -v podman-compose >/dev/null 2>&1; then
+    COMPOSE=(podman-compose ${rendered})
+  else
+    echo "podman no puede ejecutar compose ('podman compose ls' falla) y no encuentro podman-compose." >&2
+    echo "Instala podman-compose ('pip install podman-compose') o arranca la máquina ('podman machine start')." >&2
+    exit 2
+  fi
+else
+  COMPOSE=("$RUNTIME" compose ${rendered})
+fi`;
+}
+
 // ¿El stack necesita el contenedor devtools? (alguna CLI vive en el toolbox).
 export function needsDevtools(selected) {
   return selected.some((s) => s.cliVia === 'devtools');
@@ -122,15 +163,10 @@ export function validateInfraScript(selected, service, model = null) {
 # Un check por tecnología elegida en keel-stack.json; ejecuta cada CLI dentro
 # del contenedor devtools (o del propio contenedor de la BD). Uso (desde la raíz
 # del proyecto; con podman, exporta CONTAINER_RUNTIME=podman):
-#   docker compose -f infra/docker-compose.yaml up -d && bash infra/validate-infra.sh
+#   bash infra/up.sh && bash infra/validate-infra.sh
 set -u
 
-RUNTIME="\${CONTAINER_RUNTIME:-}"
-if [ -z "$RUNTIME" ]; then
-  if command -v docker >/dev/null 2>&1; then RUNTIME=docker
-  elif command -v podman >/dev/null 2>&1; then RUNTIME=podman
-  else echo "No se encontró docker ni podman en el PATH." >&2; exit 2; fi
-fi
+${RUNTIME_RESOLUTION}
 
 fail=0
 # Reintentos porque 'Up' no es 'listo': Keycloak en start-dev, Kafka y LocalStack
@@ -175,7 +211,7 @@ if [ -n "$listeners" ]; then
 fi
 
 if [ "$fail" -ne 0 ]; then
-  echo "$fail comprobación(es) fallaron. ¿Está la infraestructura arriba ('$RUNTIME compose -f infra/docker-compose.yaml up -d') y lista?" >&2
+  echo "$fail comprobación(es) fallaron. ¿Está la infraestructura arriba ('bash infra/up.sh') y lista?" >&2
   exit 1
 fi
 echo "Infraestructura OK."
@@ -268,7 +304,7 @@ export function resetDbScript(selected, service, model = null) {
     const dataStep = `if $RUNTIME exec ${sq(container)} sh -c ${sq(cmd)}; then
   echo "Datos reseteados (${db.entry.label})."
 else
-  echo "FALLO al resetear los datos. ¿Está la infraestructura arriba ('$RUNTIME compose -f infra/docker-compose.yaml up -d')?" >&2
+  echo "FALLO al resetear los datos. ¿Está la infraestructura arriba ('bash infra/up.sh')?" >&2
   exit 1
 fi`;
     if (!drop) {
@@ -278,7 +314,7 @@ fi`;
   if $RUNTIME exec ${sq(container)} sh -c ${sq(drop)}; then
     echo "Esquema recreado (${db.entry.label}): ${rebuiltBy}."
   else
-    echo "FALLO al recrear el esquema. ¿Está la infraestructura arriba ('$RUNTIME compose -f infra/docker-compose.yaml up -d')?" >&2
+    echo "FALLO al recrear el esquema. ¿Está la infraestructura arriba ('bash infra/up.sh')?" >&2
     exit 1
   fi
 else
@@ -366,12 +402,7 @@ esac
 `
     : ''
 }
-RUNTIME="\${CONTAINER_RUNTIME:-}"
-if [ -z "$RUNTIME" ]; then
-  if command -v docker >/dev/null 2>&1; then RUNTIME=docker
-  elif command -v podman >/dev/null 2>&1; then RUNTIME=podman
-  else echo "No se encontró docker ni podman en el PATH." >&2; exit 2; fi
-fi
+${RUNTIME_RESOLUTION}
 
 ${steps.join('\n\n')}
 `;

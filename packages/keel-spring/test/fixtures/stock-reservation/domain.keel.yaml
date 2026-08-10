@@ -34,6 +34,21 @@ entities:
       releaseReason:
         type: string
         description: Por qué se liberó la reserva; lo escribe la compensación.
+      lastCountedQuantity:
+        type: int
+        description: >-
+          Última cantidad que el almacén dice tener bloqueada para este pedido. La escribe
+          `noteStockCount` desde la suscripción, sin mover el estado: un recuento no es un
+          desenlace del encargo, es una corrección de lo ya encargado.
+      adjustmentCount:
+        type: int
+        required: true
+        default: 0
+        description: >-
+          Cuántas correcciones de recuento ha recibido la reserva. Es un CONTADOR, y por eso
+          `noteStockCount` no es idempotente por naturaleza: aplicarla dos veces se ve. Es lo
+          que hace observable la única guarda que le queda a una suscripción sin transición
+          de lifecycle — el registro de procesados.
       awaitingSince:
         type: timestamp
         description: >-

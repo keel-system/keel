@@ -174,18 +174,29 @@ function renderEntity(model) {
  * diario borra por rango de fecha y la clave primaria no le sirve de nada. Sin él
  * cada réplica hace un recorrido completo de la tabla a la misma hora. Mismo
  * nombre que su equivalente documental, para que las dos ramas se comparen.
+ *
+ * <p><b>Implementa {@link Persistable}</b>, y de eso depende que todo lo anterior
+ * sea cierto. Con la clave ASIGNADA y sin esto, {@code SimpleJpaRepository.isNew()}
+ * mira el id, lo ve no nulo, concluye que la fila ya existe y hace {@code merge()} —
+ * un SELECT + UPDATE que NO viola la clave primaria y no lanza nada. El registro
+ * dejaría de deduplicar por completo, en silencio: la carrera no la arbitraría nadie
+ * y la reentrega se procesaría otra vez.
  */
 @Entity
 @Table(name = "processed_event", indexes = {
         @Index(name = "ix_processed_event_processed_at", columnList = "processed_at")
 })
-public class ProcessedEventJpa {
+public class ProcessedEventJpa implements Persistable<ProcessedEventJpa.ProcessedEventId> {
 
     @EmbeddedId
     private ProcessedEventId id;
 
     @Column(name = "processed_at", nullable = false)
     private Instant processedAt;
+
+    /** Se pone a true al leer la fila de la base ({@code @PostLoad}). */
+    @Transient
+    private boolean persisted;
 
     protected ProcessedEventJpa() {
         // Requerido por JPA.
@@ -196,8 +207,32 @@ public class ProcessedEventJpa {
         this.processedAt = processedAt;
     }
 
+    @Override
     public ProcessedEventId getId() {
         return id;
+    }
+
+    /**
+     * Nueva mientras no se haya leido de la base. NO es constante, y el matiz es
+     * justo el que hace que esto funcione: {@code SimpleJpaRepository.delete(...)}
+     * empieza con {@code if (isNew(entity)) return;}, asi que un {@code isNew()} que
+     * devuelva siempre {@code true} convierte el borrado en un NO-OP SILENCIOSO.
+     *
+     * <p>Con el flag por {@code @PostLoad}: una fila recien construida es nueva
+     * —{@code persist}, y la clave primaria arbitra la carrera, que es lo que este
+     * registro necesita— y una fila leida de la base no lo es, de modo que borrarla
+     * (retirar un registro caducado) funciona como en cualquier otra entidad.
+     */
+    @Override
+    @Transient
+    public boolean isNew() {
+        return !persisted;
+    }
+
+    @PostLoad
+    @PostPersist
+    void markPersisted() {
+        this.persisted = true;
     }
 
     public Instant getProcessedAt() {
@@ -273,10 +308,14 @@ public class ProcessedEventJpa {
         'jakarta.persistence.EmbeddedId',
         'jakarta.persistence.Entity',
         'jakarta.persistence.Index',
+        'jakarta.persistence.PostLoad',
+        'jakarta.persistence.PostPersist',
         'jakarta.persistence.Table',
+        'jakarta.persistence.Transient',
         'java.io.Serializable',
         'java.time.Instant',
-        'java.util.Objects'
+        'java.util.Objects',
+        'org.springframework.data.domain.Persistable'
       ],
       body
     )
@@ -324,14 +363,29 @@ function renderRepository(model) {
 function renderWriter(model) {
   const { entity, repository } = processedEventNames(model);
   const field = 'processedEventRepository';
+  const relational = model.persistenceKind !== 'document';
   // En el modelo documental, save() con un _id ya presente es un REEMPLAZO, no un
   // error: la carrera se resolvería sobrescribiendo y el duplicado se procesaría
   // otra vez. insert() fuerza la inserción y deja que el _id arbitre, que es
   // exactamente lo que hacía la clave primaria en la rama relacional.
   //
-  // Y en la relacional, saveAndFlush y no save: JPA difiere el INSERT hasta el
-  // flush, así que con save la violación de clave no saltaría en insert() sino al
-  // commitear esta transacción, donde ya nadie puede distinguirla.
+  // Y en la relacional, `saveAndFlush` sobre una entidad que implementa
+  // `Persistable` con `isNew() == true`. Las dos mitades son necesarias y ninguna
+  // sobra:
+  //
+  //  - `Persistable` fuerza el INSERT. Sin él, la clave ASIGNADA hace que Spring Data
+  //    deduzca `merge()` —SELECT + UPDATE— que no viola la clave primaria y no lanza:
+  //    el registro no deduplicaría NADA, en silencio.
+  //  - `saveAndFlush` del REPOSITORIO, y no `entityManager.persist` a mano, porque la
+  //    traducción de excepciones de Spring ocurre al salir de un método proxeado. El
+  //    proxy de Spring Data traduce la violación de Hibernate a
+  //    `DataIntegrityViolationException`, que es lo que el llamante captura; con el
+  //    EntityManager compartido dentro de un `@Component` no hay proxy que traduzca y
+  //    sale un `ConstraintViolationException` de Hibernate crudo que ningún `catch`
+  //    reconoce — y el desenlace de la carrera acaba en 500 en vez de en su código.
+  //  - Y `saveAndFlush` y no `save` porque JPA difiere el INSERT hasta el commit: sin
+  //    el flush la violación no saltaría aquí sino al commitear, donde ya nadie la
+  //    distingue.
   const write =
     model.persistenceKind === 'document'
       ? `        ${field}.insert(new ${entity}(key, Instant.now()));`

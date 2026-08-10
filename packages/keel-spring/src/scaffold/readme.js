@@ -25,7 +25,7 @@ export function generate(model) {
     '',
     '```bash'
   ];
-  if (infra.length > 0) lines.push('docker compose -f infra/docker-compose.yaml up -d   # infraestructura de prueba');
+  if (infra.length > 0) lines.push('bash infra/up.sh   # infraestructura de prueba');
   lines.push(
     './gradlew bootRun',
     './gradlew build -x test        # compilación y empaquetado (no ejecuta pruebas)',
@@ -65,7 +65,7 @@ export function generate(model) {
       'los escenarios funcionales, levántala y sondéala (con podman, exporta `CONTAINER_RUNTIME=podman`):',
       '',
       '```bash',
-      'docker compose -f infra/docker-compose.yaml up -d',
+      'bash infra/up.sh               # resuelve runtime y frontend de compose, y levanta',
       'bash infra/validate-infra.sh   # un check por tecnología; sale != 0 si algo falla',
       '```',
       '',
@@ -365,9 +365,9 @@ function productionSection(model) {
         'pero solo está *probado* si ha creado el esquema desde cero: contra una BD que Hibernate ya pobló con ' +
         '`ddl-auto: update`, el `validate` pasaría sin ejercitar la migración. Con la infraestructura local:\n\n' +
         '   ```bash\n' +
-        '   docker compose -f infra/docker-compose.yaml down -v   # borra el volumen: BD sin esquema\n' +
-        '   docker compose -f infra/docker-compose.yaml up -d\n' +
-        '   PROFILE=local,migrations ./gradlew bootRun            # Flyway crea, Hibernate valida\n' +
+        '   bash infra/down.sh --volumes               # borra el volumen: BD sin esquema\n' +
+        '   bash infra/up.sh\n' +
+        '   PROFILE=local,migrations ./gradlew bootRun # Flyway crea, Hibernate valida\n' +
         '   ```\n\n' +
         '   Arranque limpio = baseline correcto. Un fallo de `validate` aquí es exactamente el que tendrías en ' +
         'producción, y dice qué columna o tipo no cuadra: corrige el SQL y repite.'

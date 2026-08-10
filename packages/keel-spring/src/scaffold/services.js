@@ -119,12 +119,37 @@ export function usesPartialUpdate(model) {
 
 export const JSON_NULLABLE_IMPORT = 'org.openapitools.jackson.nullable.JsonNullable';
 
-function partialUpdateType(operation, component, fromPath, imports) {
-  if (!isPartialUpdate(operation) || fromPath.has(component.name)) return component.javaType;
-  if (component.required || component.file) return component.javaType;
-  if (!operation.bodyFields.some((field) => field.name === component.name)) return component.javaType;
+/** ¿Este componente va envuelto en `JsonNullable<T>` por ser opcional de un PATCH? */
+function isWrappedInJsonNullable(operation, component, fromPath) {
+  if (!isPartialUpdate(operation) || fromPath.has(component.name)) return false;
+  if (component.required || component.file) return false;
+  return operation.bodyFields.some((field) => field.name === component.name);
+}
+
+/**
+ * Tipo del componente y sus anotaciones, ya colocadas donde Bean Validation las
+ * entiende.
+ *
+ * <p>La colocación es lo delicado, y equivocarla no da un aviso: da un 500. Sobre un
+ * campo envuelto, `@Size(max = 200) JsonNullable<String>` deja la constraint sobre el
+ * CONTENEDOR, y Hibernate Validator resuelve el validador por el tipo declarado —
+ * antes de mirar el valor—, así que lanza `UnexpectedTypeException` (HV000030) en
+ * **toda** petición que traiga el campo, sea válido o no. El endpoint entero nace
+ * roto, y de una forma que ninguna comparación de cadenas ve: el texto contiene la
+ * anotación y contiene el tipo.
+ *
+ * <p>Lo correcto es dentro del genérico —`JsonNullable<@Size(max = 200) String>`—,
+ * que es además lo que dice el contrato: la restricción es del VALOR, no de que el
+ * campo venga o deje de venir. El `JsonNullableValueExtractor` que genera `web.js`
+ * es lo que hace que Bean Validation sepa desenvolverlo.
+ */
+function renderComponentType(operation, component, fromPath, imports, annotations) {
+  const prefix = annotations.length > 0 ? `${annotations.join(' ')} ` : '';
+  if (!isWrappedInJsonNullable(operation, component, fromPath)) {
+    return `${prefix}${component.javaType}`;
+  }
   imports.add(JSON_NULLABLE_IMPORT);
-  return `JsonNullable<${component.javaType}>`;
+  return `JsonNullable<${prefix}${component.javaType}>`;
 }
 
 // Record del mensaje. Lleva la Bean Validation de las constraints del diseño, sea
@@ -165,9 +190,7 @@ function renderMessage(model, operation) {
         annotations.push('@Valid');
       }
     }
-    const prefix = annotations.length > 0 ? annotations.join(' ') + ' ' : '';
-    const javaType = partialUpdateType(operation, component, fromPath, imports);
-    return `        ${prefix}${javaType} ${component.name}`;
+    return `        ${renderComponentType(operation, component, fromPath, imports, annotations)} ${component.name}`;
   });
 
   const componentBlock = rendered.length > 0 ? `\n${rendered.join(',\n')}\n` : '';
@@ -280,6 +303,14 @@ function renderHandler(model, service, operation) {
     const ttl = operation.idempotency.ttlSeconds ?? 86400;
     const common =
       `find(scope, clave) con scope="${operation.name}"; si hay registro con la MISMA firma, reconstruye la respuesta desde su resourceId sin re-ejecutar nada (ni escrituras ni eventos); si la firma difiere, lanza el error que el diseño declare para ese caso; si no hay registro, ejecuta y llama a save(...) dentro de la misma transacción del comando. ` +
+      // La CARRERA no la resuelve el find: dos peticiones simultáneas lo fallan las dos
+      // —ninguna ha commiteado— y llegan las dos a save. Quien arbitra es la clave
+      // primaria del registro, y el adaptador ya traduce esa violación al 409 del
+      // contrato. Sin decirlo, el camino de menor resistencia es envolver save en un
+      // try/catch «defensivo» que se traga justo la excepción que cierra la ventana, y
+      // el resultado es un servidor que pasa el reintento secuencial y ejecuta dos veces
+      // bajo concurrencia — que es el caso normal en cuanto hay más de una réplica.
+      `La CARRERA (dos peticiones con la misma clave a la vez) no la ve find: las dos encuentran vacío y las dos llegan a save. La arbitra la clave primaria del registro y el adaptador ya traduce la violación a IdempotencyConflictException (409 IDEMPOTENCY_KEY_IN_PROGRESS) — NO captures esa excepción ni la DataIntegrityViolationException que la origina: dejarla subir es lo que garantiza que de dos peticiones idénticas se ejecutó exactamente una. ` +
       `Qué NO cubre: la reentrega del mismo mensaje por el broker — esa la para el IdempotencyGuard del listener (tabla processed_event), que es otro mecanismo y no se toca desde aquí`;
     // De dónde sale la clave cambia el ESQUELETO del handler, no un detalle: con
     // payload-hash no hay cabecera que pueda faltar, así que la rama "sin clave,

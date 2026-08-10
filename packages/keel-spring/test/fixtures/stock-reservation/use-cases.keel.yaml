@@ -7,12 +7,20 @@ operations:
         orderId:
           type: uuid
           required: true
+        # Las constraints se repiten aquí y no solo en la entidad a propósito: el
+        # generador emite la validación desde el INPUT, así que una restricción que
+        # solo vive en `domain` no se comprueba en la frontera — la violación viaja
+        # hasta el agregado y sale como un 400 sin `code`, que ningún escenario puede
+        # afirmar. Declararla en los dos sitios es lo que hace que el rechazo sea
+        # contrato público (VALIDATION_ERROR) y no un accidente del dominio.
         sku:
           type: string
           required: true
+          constraints: { maxLength: 32 }
         quantity:
           type: int
           required: true
+          constraints: { min: 1 }
     output:
       entity: Reservation
       # Marcador operativo del barrido, no algo que el cliente necesite.
@@ -74,6 +82,32 @@ operations:
       - entity: Reservation
         from: [awaitingStock]
         to: confirmed
+
+  noteStockCount:
+    description: Anota la corrección de recuento que el almacén comunica sobre un pedido.
+    kind: command
+    # Interna: la dispara solo la suscripción.
+    internal: true
+    # La OTRA mitad de la idempotencia de consumo: esta operación NO declara `transitions`.
+    # Sin transición de lifecycle no hay guarda de dominio que rechace la segunda aplicación,
+    # así que el generador elige el otro orden del IdempotencyGuard —`tryRecord`: marcar ANTES
+    # de procesar—, que cierra la ventana del duplicado a cambio de perder el mensaje si el
+    # handler falla. `catalog-extended` ya genera esa rama, pero nadie la ha EJECUTADO: lo que
+    # esta operación aporta es un efecto observable en caja negra —un contador— sobre el
+    # diseño que sí se corre entero. Aplicarla dos veces se ve en la API.
+    input:
+      fields:
+        orderId:
+          type: uuid
+          required: true
+        countedQuantity:
+          type: int
+          required: true
+    output: "void"
+    errors:
+      - code: RESERVATION_NOT_FOUND
+        when: No existe una reserva para ese pedido.
+        http: 404
 
   getReservation:
     description: Consulta el estado de una reserva.
@@ -137,8 +171,14 @@ operations:
     #
     # Se rinde: cancela el encargo contra el almacén (por si llegó a bloquear stock sin
     # que su respuesta nos llegara) y saca la reserva de la espera.
+    # Cada minuto, no cada quince: el barrido es el ÚNICO mecanismo de los cinco sin gate
+    # conductual, y un cron de quince minutos no se alcanza desde una prueba de caja negra.
+    # Lo que hace que esto no sea un ajuste para la prueba es que el umbral —cuánto tiempo en
+    # espera es demasiado— vive aparte, en `parameters/`: el barrido corre a menudo y se
+    # rinde tarde, que es como se opera de verdad. El escenario no espera al umbral, retrasa
+    # `awaiting_since` en la base y espera al siguiente tick.
     schedule:
-      cron: "*/15 * * * *"
+      cron: "* * * * *"
     transitions:
       - entity: Reservation
         from: [awaitingStock]

@@ -254,11 +254,11 @@ una con `Idempotency-Key` propio.
 
 **When**: `retireProduct` — `POST /api/v1/products/<r1>/retire` sobre el producto ya `retired`.
 **Then**:
-1. La petición se rechaza: `retired` no está entre los orígenes declarados en
-   `retireProduct.transitions` (`from: [draft, active]`).
-2. **Hueco del diseño**: `use-cases` no declara el error de transición inválida, así que el `code`
-   y el status exactos no están fijados por el contrato. No se ejercita hasta que el diseño los
-   declare.
+1. Status `409` con `code` = `PRODUCT_NOT_RETIRABLE`: `retired` no está entre los orígenes
+   declarados en `retireProduct.transitions` (`from: [draft, active]`).
+2. El producto sigue en `retired` y **el proveedor no recibe una segunda inscripción**: el
+   rechazo ocurre en el agregado, antes de encargar nada. Una implementación que llamara al
+   registro y comprobara el estado después inscribiría una retirada por cada reintento.
 
 ## Proyección del precio de proveedor
 
@@ -313,15 +313,46 @@ sobre el `id` devuelto `<p1>`.
 2. `GET /api/v1/products` devuelve `<p1>` con `status` = `"active"`: el estado propio vuelve a
    donde estaba antes de encargar la inscripción, no se queda donde lo dejó un trabajo que ya no
    existe.
+3. **El proveedor recibe un `DELETE /withdrawals/{p1}`**: la compensación tiene dos mitades y
+   esta es la que no se ve desde nuestra base. Devolver solo el estado propio deja el registro
+   regulatorio con la inscripción de una retirada que ya no existe — una deuda ajena que, por
+   construcción, ninguna consulta a nuestro servicio delata.
+4. Esa llamada lleva cabecera `Idempotency-Key` no vacía: es una escritura con reintentos
+   contra un sistema ajeno, y una cancelación repetida por un timeout podría anular una
+   inscripción **nueva** del mismo producto creada entretanto.
 
 #### FL-CMP-001-C: el mismo evento se reentrega
 
 **When**: se entrega **otra vez** el mismo `WithdrawalRejected` con idéntico payload.
 **Then**:
 1. `<p1>` sigue con `status` = `"active"`, y no hay ningún segundo efecto observable.
-2. Es lo que garantiza la transición declarada (`from: [retired] → active`): con el producto ya en
+2. El proveedor **no** recibe una segunda cancelación: sigue con **exactamente una**. Es la
+   mitad del efecto único que vive fuera, y la que un `Then` que solo mire el estado propio no
+   ve — precisamente porque el estado propio ya era correcto antes de la reentrega.
+3. Es lo que garantiza la transición declarada (`from: [retired] → active`): con el producto ya en
    `active`, el guard del agregado rechaza reaplicarla. Sin este escenario, una implementación que
    compensa dos veces pasa FL-CMP-001-B sin que nada lo delate.
+
+#### FL-CMP-001-D: el mismo evento se entrega dos veces a la vez
+
+Lo que FL-CMP-001-C no prueba. La reentrega secuencial encuentra la marca de procesado ya
+escrita y el producto ya en `active`: pasa aunque nada cubra la ventana en la que ninguna de
+las dos cosas ha ocurrido todavía, que con varias réplicas consumiendo es el caso frecuente.
+
+**Given**: un producto `<p2>` con sku `CMP-2`, retirado como en FL-CMP-001-A.
+
+**When**: se entregan **simultáneamente** dos copias del mismo `WithdrawalRejected` con
+idéntico payload `{productId: <p2>, reason: "documentación incompleta"}` y el mismo
+identificador de mensaje.
+**Then**:
+1. `<p2>` queda en `status` = `"active"` — el efecto ocurre, una vez. Que ninguna de las dos
+   llegue a aplicarse es tan grave como que se apliquen las dos.
+2. El efecto es único en las **dos** superficies: el estado propio, y **exactamente una**
+   cancelación recibida por el proveedor. Un duplicado que solo se ve en una de las dos es un
+   duplicado que se escapa.
+3. El servicio no acaba con el mensaje en la cola de dead-letter: que la copia perdedora falle
+   por dentro es lo que hace la guarda, pero el resultado observable de esa entrega es una
+   confirmación sin efecto, no un error propagado.
 
 ## Imágenes de producto
 

@@ -109,3 +109,38 @@ clients:
           slidingWindowSize: 10
           waitDurationMs: 30000
         fallback: Rechazar la retirada; sin inscripción regulatoria no puede darse por buena.
+
+      # La OTRA MITAD de la compensación: deshacer contra el proveedor lo que se le
+      # encargó. Sin esta llamada, `reactivateWithdrawnProduct` solo devuelve el estado
+      # propio y el registro regulatorio se queda con una inscripción de una retirada
+      # que ya no existe — una deuda ajena que nadie detecta, porque en nuestra base
+      # todo queda consistente.
+      cancelWithdrawal:
+        contract: DELETE /withdrawals/{productId} anula la inscripción y devuelve { cancelled }.
+        method: DELETE
+        path: /withdrawals/{productId}
+        request:
+          pathParams:
+            productId:
+              type: uuid
+              required: true
+        response:
+          fields:
+            cancelled:
+              type: boolean
+              required: true
+        timeoutMs: 4000
+        # Misma razón que en el alta: se reintenta contra un sistema ajeno, y una
+        # cancelación repetida por un timeout de red podría anular una inscripción
+        # NUEVA del mismo producto, creada entretanto.
+        idempotency:
+          keyFrom: payload-hash
+        retry:
+          maxAttempts: 3
+          initialDelayMs: 300
+          retryOn: [timeout, connection]
+        circuitBreaker:
+          failureRateThreshold: 50
+          slidingWindowSize: 10
+          waitDurationMs: 30000
+        fallback: Dejar el producto reactivado de todos modos; la inscripción huérfana la resolverá el registro por su cuenta.

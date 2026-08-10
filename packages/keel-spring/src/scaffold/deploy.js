@@ -32,6 +32,7 @@ import {
   HTTP_STUB
 } from '../lib/stack-catalog.js';
 import { realmSpec } from './auth-provisioning.js';
+import { RUNTIME_RESOLUTION, composeResolution } from './devtools.js';
 import { LOCAL_API_KEY, LOCAL_CORS_ORIGINS, localClientApiKey } from './config.js';
 
 // Nombre de la variable de .env que publica cada puerto en el host. Explícito y no
@@ -415,22 +416,10 @@ function envFile(model, env) {
 
 // ─── deploy/up.sh y deploy/down.sh ───────────────────────────────────────────
 
-// Detección de runtime y de frontend de compose. Es el mismo criterio que
-// validate-infra.sh, reset-db.sh e init-keycloak.sh —$CONTAINER_RUNTIME, docker,
-// podman—, extendido con la resolución del frontend: `podman compose` delega en el
-// binario de Docker Compose y es el camino recomendado; `podman-compose` es el
-// fallback en las instalaciones que no lo tienen.
-const RUNTIME_PREAMBLE = `RUNTIME="\${CONTAINER_RUNTIME:-}"
-if [ -z "$RUNTIME" ]; then
-  if command -v docker >/dev/null 2>&1; then
-    RUNTIME=docker
-  elif command -v podman >/dev/null 2>&1; then
-    RUNTIME=podman
-  else
-    echo "No encuentro docker ni podman en el PATH." >&2
-    exit 1
-  fi
-fi
+// Detección de runtime y de frontend de compose. Ambas son las mismas que usan los
+// scripts de `infra/` y viven en devtools.js: un segundo criterio escrito aquí haría
+// que el diseñador y el pipeline resolvieran distinto en la misma máquina.
+const RUNTIME_PREAMBLE = `${RUNTIME_RESOLUTION}
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 COMPOSE_FILE="$HERE/docker-compose.yaml"
@@ -445,12 +434,7 @@ if [ -f "$ENV_FILE" ]; then
   set +a
 fi
 
-if [ "$RUNTIME" = "podman" ] && ! podman compose version >/dev/null 2>&1; then
-  # podman sin el frontend delegado: podman-compose es un binario aparte.
-  COMPOSE=(podman-compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE")
-else
-  COMPOSE=("$RUNTIME" compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE")
-fi`;
+${composeResolution(['-f', '"$COMPOSE_FILE"', '--env-file', '"$ENV_FILE"'])}`;
 
 function upScript(model) {
   const urls = publishedUrls(model)

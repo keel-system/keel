@@ -12,4 +12,10 @@ audit:
   timestamps: declared
 consistency:
   transactionalBoundary: per-operation
-  optimisticLocking: none
+  # `all`, no `none`: la compensación llega por un canal at-least-once y puede entregarse dos
+  # veces A LA VEZ. Sin versión en la raíz, los dos hilos leen la reserva en `confirmed`, los
+  # dos pasan la transición —que mira el estado que leyeron, no el que hay— y los dos escriben
+  # `released`: última escritura gana y el trabajo se deshace dos veces. La marca de procesado
+  # tampoco lo salva por sí sola, porque en esta rama se escribe DESPUÉS de procesar. El
+  # bloqueo optimista es lo que convierte esa carrera en un conflicto observable.
+  optimisticLocking: all

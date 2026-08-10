@@ -26,7 +26,7 @@ docker exec <servicio>-db mongosh -u <db> -p changeme --authenticationDatabase a
 ```
 
 - Lanza → el conjunto no existe. El healthcheck del compose lo inicia; si no ha
-  corrido, `docker compose -f infra/docker-compose.yaml up -d` y espera a `healthy`.
+  corrido, `bash infra/up.sh` y espera a `healthy`.
 - Devuelve `1` pero la app sigue fallando → la app no está hablando con ese
   contenedor (revisa la URI del perfil activo).
 

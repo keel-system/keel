@@ -351,9 +351,9 @@ En el reporte deja los comandos exactos de la prueba pendiente, para que el dise
 no tenga que reconstruirlos:
 
 ```bash
-docker compose -f infra/docker-compose.yaml down -v   # BD sin esquema
-docker compose -f infra/docker-compose.yaml up -d
-PROFILE=local,migrations ./gradlew bootRun            # Flyway crea, Hibernate valida
+bash infra/down.sh --volumes               # BD sin esquema
+bash infra/up.sh
+PROFILE=local,migrations ./gradlew bootRun # Flyway crea, Hibernate valida
 ```
 
 Y comprueba que el `README.md` los recoge en su sección `## Despliegue en producción`

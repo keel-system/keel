@@ -216,8 +216,8 @@ export function generate(model) {
 
   if (selected.length > 0) {
     lines.push(
-      '2. Infraestructura de prueba (en `infra/`): `docker compose -f infra/docker-compose.yaml up -d` (con podman,',
-      '   `CONTAINER_RUNTIME=podman podman compose -f infra/docker-compose.yaml up -d`)' +
+      '2. Infraestructura de prueba (en `infra/`): `bash infra/up.sh` (con podman,',
+      '   `CONTAINER_RUNTIME=podman bash infra/up.sh`; el script resuelve además el frontend de compose)' +
         (hasDevtools ? ' y `bash infra/validate-infra.sh` antes de ejercitar escenarios' : '') +
         ' — un fallo de dependencia no debe confundirse con un bug.',
       '3. Escenarios: `./gradlew integrationTest` — los flujos `FL-*` de `specs/validation-scenarios.md`, ya traducidos a',
