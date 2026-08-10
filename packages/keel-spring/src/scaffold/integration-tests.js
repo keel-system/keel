@@ -1941,8 +1941,15 @@ ${purgeDoc}
      * offsets existentes (\`-f %o\`), no por marca de tiempo: \`offsetsForTimes\` devuelve
      * -1 en un topic sin tráfico reciente, que es justo el caso del reset.
      *
-     * <p>Asume <b>una partición</b> en el topic del servicio, que es lo que crea el
-     * Kafka single-node de \`infra/docker-compose.yaml\`.
+     * <p>Asume <b>una partición</b> por topic, y eso es una <b>decisión</b>, no una
+     * limitación heredada del compose: la infraestructura de prueba se queda en el
+     * default del broker porque más particiones no compran nada en single-node, y en
+     * producción las gobierna el cluster (ver la skill keel-spring-kafka § Topología).
+     * Una marca escalar solo aísla mientras eso se cumpla — \`kcat -o\` aplica el offset
+     * a <b>cada</b> partición, así que con N particiones esta marca dejaría entrar
+     * mensajes de la corrida anterior y se saltaría los propios. Quien suba las
+     * particiones de \`infra/\` tiene que convertir MARKS en un mapa por partición y leer
+     * con \`-p\`; cambiar solo el compose deja la suite intermitente.
      */
     private static long nextOffset() {
         return nextOffset(EVENT_TOPIC);

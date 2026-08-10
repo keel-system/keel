@@ -20,6 +20,34 @@ description: Guía de implementación de mensajería con Apache Kafka en un proy
 - Contratos y cadena de publicación **ya generados**: `EventEnvelope` + `EventMetadata`, el record `<Evento>Event` que el agregado emite, su gemelo `<Evento>IntegrationEvent`, el `<Servicio>DomainEventBridge` que traduce uno en otro, y el record `<Evento>Message` por suscripción. Con `reliability: outbox`, además la tabla `outbox_event`, su repositorio y el `OutboxRelay`.
 - **Lo único tuyo al publicar es el envío**: implementar `OutboxDispatcher` (si `reliability: outbox`) o `<Evento>Publisher` (si `best-effort`), sustituyendo su stub. No reescribas el bridge, el relay ni el mapeo domain→integración.
 
+## Topología: los topics no los crea la aplicación
+
+**No declares `NewTopic` ni un `KafkaAdmin` con `autoCreate`.** No hay ninguna clase de topología
+que escribir: en local y develop los topics los autocrea el broker con **1 partición**, que es el
+valor que la infraestructura de prueba quiere; en producción los aprovisiona la plataforma con su
+IaC, junto con la retención, las réplicas y las cuotas.
+
+Que el topic no exista hasta el primer PRODUCE es normal y está previsto: el arnés de integración
+tolera el `Unknown topic or partition` de la primera lectura. No es una pieza que falte.
+
+Por qué la prohibición es dura, y no una preferencia:
+
+- **`KafkaAdmin` aumenta las particiones de un topic vivo al arrancar la app** si el `NewTopic`
+  declara más de las que tiene. Es irreversible —Kafka no reduce particiones— y rompe la afinidad
+  key→partición: el orden por key deja de estar garantizado entre lo publicado antes y después.
+- Declarar topics exige ACL de `CreateTopics`/`AlterPartitions` sobre el cluster. Un servicio en
+  producción debe tener `Describe`/`Write` sobre los suyos y nada más.
+- El número de particiones no es decisión del productor: lo fija el consumidor más exigente, y un
+  topic con varios consumidores es contrato compartido.
+- `modifyTopicConfigs` viene en `false`, así que un `NewTopic` ni siquiera corrige la retención o
+  la política de compactación de un topic existente. Toca lo peligroso e ignora lo demás.
+
+Con una sola partición, el orden está garantizado por topic y la **routing key sigue siendo la key
+correcta** del mensaje (ver § Envío al broker). Esto es coherente con
+`{{keel:docs}}/constitution.md` § Topología de infraestructura, que es la regla general; RabbitMQ
+sí declara su topología desde la aplicación porque sus declaraciones son idempotentes y no
+modifican recursos compartidos.
+
 ## Envío al broker
 
 **El valor que viaja al topic es siempre un `String` de JSON producido por el `ObjectMapper` de la

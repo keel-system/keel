@@ -108,5 +108,10 @@ tras procesar el lote). No actives `enable.auto.commit`.
 - No configures reintentos del listener por properties ni por anotación: **ya los
   genera build** en `DeadLetterConfig`, con los valores del `onFailure` del diseño
   (ver `references/implementation.md`).
-- No crees topics por código (`KafkaAdmin`/`NewTopic`) salvo en local: en
-  clusters reales los topics los gobierna la plataforma.
+- No crees topics por código (`KafkaAdmin`/`NewTopic`) **en ningún perfil**, local
+  incluido: ahí los autocrea el broker del compose con 1 partición, que es el
+  valor que la infraestructura de prueba quiere, y en los entornos reales los
+  gobierna la plataforma. El razonamiento completo está en SKILL.md § Topología.
+  Si algún entorno llegara a exigir que la app los declarase, sería bajo perfil,
+  con `KafkaAdmin.setAutoCreate(false)` en `production`, factor de replicación
+  `-1` (el default del broker) y nunca un número de particiones fijo.
