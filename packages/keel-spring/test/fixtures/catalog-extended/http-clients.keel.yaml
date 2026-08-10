@@ -106,7 +106,10 @@ clients:
           retryOn: [timeout, connection]
         circuitBreaker:
           failureRateThreshold: 50
-          slidingWindowSize: 10
+          # Ventana corta a propósito: es la única llamada del diseño cuyo circuito se
+          # abre dentro de un escenario (FL-CMP-002). El umbral se acorta, no la
+          # semántica — igual que un cron de barrido se baja para poder observarlo.
+          slidingWindowSize: 5
           waitDurationMs: 30000
         fallback: Rechazar la retirada; sin inscripción regulatoria no puede darse por buena.
 

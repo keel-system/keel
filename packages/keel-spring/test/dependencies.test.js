@@ -5,7 +5,9 @@ import { generate as generateDependencies } from '../src/scaffold/dependencies.j
 import { generate as generateMessaging } from '../src/scaffold/messaging.js';
 import { generate as generateServices } from '../src/scaffold/services.js';
 import { generate as generateHttpClients } from '../src/scaffold/http-clients.js';
+import { generate as generateConfig } from '../src/scaffold/config.js';
 import { checkSupportedFeatures } from '../src/lib/supported-features.js';
+import { providerFailures, recordedFailures } from '../src/lib/outbound-failures.js';
 
 const manifest = {
   keel: '2.2',
@@ -613,6 +615,43 @@ const withBreaker = (layers) => {
   return layers;
 };
 
+// El proveedor puede contestar sin cuerpo —un 204 es la respuesta más natural a un
+// DELETE— y entonces `body(...)` devuelve null. Sin guarda, el mapper desreferencia y
+// sale un NPE que el fallback del circuit breaker se traga por el camino escrito para
+// «el proveedor no responde»: una llamada que FUNCIONÓ se registra como caída, y con
+// onFailure: fail se convierte en el error de indisponibilidad del diseño. El síntoma
+// acusa al proveedor y la causa está en el adaptador. Lo destapó el pase de calidad de
+// una corrida real; ningún test de cadenas lo veía porque el texto generado era
+// sintácticamente impecable.
+test('cuerpo de respuesta ausente: se traduce a valores ausentes, no a caída del proveedor', () => {
+  const adapter = adapterOf(modelFrom(withActivation(withBreaker(baseLayers()))));
+
+  assert.ok(adapter.includes('if (response == null) {'), adapter);
+  // La guarda va ANTES del mapper: después no sirve de nada.
+  assert.ok(adapter.indexOf('if (response == null) {') < adapter.indexOf('mapper.toGetProductsByIdsResult('), adapter);
+  // El aviso dice la verdad y NO reutiliza el «no disponible» del fallback: es
+  // justamente lo que distingue este caso de una caída, y confundirlos era el bug.
+  assert.match(adapter, /log\.warn\("catalog\.getProductsByIds respondió sin cuerpo; el contrato declara 2 campo\(s\)"\)/);
+  assert.ok(!/respondió sin cuerpo[^"]*no disponible/.test(adapter), adapter);
+
+  // Y el resultado neutro es EL MISMO que el del fallback `ignore`: son la misma noción
+  // («no hay nada que el proveedor haya dicho») y el llamante no distingue los dos
+  // caminos, así que dos formas distintas del mismo vacío serían un contrato roto.
+  const neutral = 'return new GetProductsByIdsResult(null, null);';
+  assert.equal(adapter.split(neutral).length - 1, 2, adapter);
+});
+
+test('cuerpo de respuesta ausente: sin campos declarados no se emite guarda', () => {
+  const layers = baseLayers();
+  // Sin `response.fields`, el mapper devuelve `new XxxResult()` sin tocar la respuesta:
+  // no hay NPE posible y la guarda sería ruido.
+  delete layers['http-clients'].clients.catalog.calls.getProductsByIds.response;
+  const adapter = adapterOf(modelFrom(layers));
+
+  assert.ok(!adapter.includes('if (response == null) {'), adapter);
+  assert.ok(!adapter.includes('respondió sin cuerpo'), adapter);
+});
+
 test('fallback: onFailure ignore devuelve resultado neutro y lo registra', () => {
   const adapter = adapterOf(modelFrom(withActivation(withBreaker(baseLayers()))));
 
@@ -663,6 +702,110 @@ test('fallback: con dos activaciones por la misma llamada, build no elige por el
   assert.ok(adapter.includes('notifications.sendOrderConfirmation (onFailure: ignore)'));
   assert.ok(adapter.includes('billing.chargeOrder (onFailure: fail)'));
   assert.ok(adapter.includes('throw new UnsupportedOperationException("TODO: fallback getProductsByIds")'));
+});
+
+// ─── El fallback estrecho ────────────────────────────────────────────────────
+//
+// `fallbackMethod` de resilience4j solía declarar `Throwable`, así que CUALQUIER bug
+// del adaptador —un NPE, un ClassCastException, un cuerpo que no deserializa— se
+// registraba como «proveedor no disponible», y con onFailure: fail se convertía en el
+// error de indisponibilidad del diseño. Es lo que mantuvo un defecto de código meses
+// disfrazado de caída ajena. Ahora hay una sobrecarga por excepción que de verdad
+// significa algo del proveedor, y lo que ninguna acepta resilience4j lo relanza.
+
+const yamlOf = (model) => {
+  const withStack = { ...model, stack: { database: 'postgresql', broker: 'kafka' } };
+  return generateConfig(withStack).find((file) => file.path.endsWith('local/http-clients.yaml')).content;
+};
+
+test('fallback: sobrecargas tipadas y NINGUNA que declare Throwable', () => {
+  const adapter = adapterOf(modelFrom(withActivation(withBreaker(baseLayers()))));
+
+  for (const { simple, fqn } of providerFailures({ circuitBreaker: true })) {
+    assert.ok(adapter.includes(`getProductsByIdsFallback(List<UUID> ids, ${simple} throwable)`), simple);
+    assert.ok(adapter.includes(`import ${fqn};`), fqn);
+  }
+  // La prohibición explícita es el punto: un test que solo comprueba lo que SÍ hay no
+  // distingue «estrechado» de «estrechado y además el catch-all sigue ahí». Y se
+  // prohíbe el TIPO, no un nombre de variable: `Throwable t` colaba con el nombre.
+  // (`\b` antes de Exception no casa dentro de HttpClientErrorException.)
+  assert.ok(!/Fallback\([^)]*\b(?:Throwable|Exception)\s+\w+\)/.test(adapter), adapter);
+});
+
+test('fallback: nunca una sola sobrecarga, ni siquiera sin circuit breaker', () => {
+  // Con UN solo método de fallback resilience4j entra por un atajo cuya semántica ha
+  // cambiado entre versiones (hoy comprueba el tipo; antes invocaba siempre). Dos o
+  // más dejan el comportamiento fijado por el recorrido de superclases, que es estable.
+  const layers = withActivation(baseLayers());
+  layers['http-clients'].clients.catalog.calls.getProductsByIds.retry = { maxAttempts: 3 };
+  layers['http-clients'].clients.catalog.calls.getProductsByIds.fallback = 'Devolver la copia local.';
+  const adapter = adapterOf(modelFrom(layers));
+
+  assert.ok(adapter.split('private GetProductsByIdsResult getProductsByIdsFallback(').length - 1 >= 2, adapter);
+  // Sin circuito no puede lanzarse: declararla anunciaría un modo de fallo imposible.
+  assert.ok(!adapter.includes('CallNotPermittedException'), adapter);
+});
+
+test('fallback: sin retry ni circuito no se emiten métodos que nadie invoca', () => {
+  // El fallback lo dispara un aspecto. Sin ninguno, serían cinco privados muertos.
+  const layers = withActivation(baseLayers());
+  layers['http-clients'].clients.catalog.calls.getProductsByIds.fallback = 'Devolver la copia local.';
+  const adapter = adapterOf(modelFrom(layers));
+
+  assert.ok(!adapter.includes('getProductsByIdsFallback('), adapter);
+  assert.ok(!adapter.includes('getProductsByIdsUnavailable('), adapter);
+});
+
+test('fallback: la política vive en un solo cuerpo, no copiada por sobrecarga', () => {
+  const adapter = adapterOf(modelFrom(withActivation(withBreaker(baseLayers()))));
+
+  assert.ok(adapter.includes('private GetProductsByIdsResult getProductsByIdsUnavailable(List<UUID> ids, Throwable throwable)'));
+  // Una sola vez: N copias del cuerpo es la forma de que un día dejen de decir lo mismo.
+  assert.equal(adapter.split('log.warn("catalog.getProductsByIds no disponible').length - 1, 1, adapter);
+});
+
+test('fallback: el 4xx se atiende pero NO cuenta como caída del proveedor', () => {
+  // Asimetría deliberada, y es justo la que un refactor futuro «unificaría» por error:
+  // que nos rechacen no es que estén caídos. Un 401 por credencial caducada abriría el
+  // circuito culpando al proveedor de lo nuestro.
+  const model = modelFrom(withActivation(withBreaker(baseLayers())));
+  const adapter = adapterOf(model);
+
+  assert.ok(adapter.includes('getProductsByIdsFallback(List<UUID> ids, HttpClientErrorException throwable)'));
+  assert.ok(adapter.includes('rechazada por el proveedor'));
+  const circuit = yamlOf(model).split('circuitbreaker:')[1];
+  assert.ok(!circuit.includes('HttpClientErrorException'), circuit);
+});
+
+test('circuit breaker: record-exceptions sale de la MISMA tabla que las sobrecargas', () => {
+  // La promesa de «no pueden divergir» tiene que ser verificable, o es una intención.
+  const model = modelFrom(withActivation(withBreaker(baseLayers())));
+  const circuit = yamlOf(model).split('circuitbreaker:')[1];
+  const adapter = adapterOf(model);
+
+  assert.ok(circuit.includes('record-exceptions:'), circuit);
+  for (const fqn of recordedFailures()) {
+    assert.ok(circuit.includes(`- ${fqn}`), fqn);
+    // Y todo lo que cuenta para el circuito tiene sobrecarga que lo atienda.
+    assert.ok(adapter.includes(`import ${fqn};`), fqn);
+  }
+});
+
+test('resiliencia: el fallbackMethod va en el aspecto externo, no en el circuito', () => {
+  // Orden de aspectos: Retry(CircuitBreaker(llamada)). Con el fallback en el circuito,
+  // este atrapaba la excepción, ejecutaba el fallback y le devolvía un valor normal al
+  // retry, que veía éxito y NO reintentaba: el retry declarado estaba muerto.
+  const layers = withActivation(withBreaker(baseLayers()));
+  layers['http-clients'].clients.catalog.calls.getProductsByIds.retry = { maxAttempts: 3 };
+  const conRetry = adapterOf(modelFrom(layers));
+
+  assert.ok(conRetry.includes('@Retry(name = "catalog-get-products-by-ids", fallbackMethod = "getProductsByIdsFallback")'));
+  assert.ok(conRetry.includes('@CircuitBreaker(name = "catalog-get-products-by-ids")'));
+  assert.ok(!/@CircuitBreaker\([^)]*fallbackMethod/.test(conRetry), conRetry);
+
+  // Sin retry, el externo es el circuito y el fallback vuelve ahí.
+  const soloCb = adapterOf(modelFrom(withActivation(withBreaker(baseLayers()))));
+  assert.ok(soloCb.includes('@CircuitBreaker(name = "catalog-get-products-by-ids", fallbackMethod = "getProductsByIdsFallback")'));
 });
 
 // ─── Frontera declarada ──────────────────────────────────────────────────────

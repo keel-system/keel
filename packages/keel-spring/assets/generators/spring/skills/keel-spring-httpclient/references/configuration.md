@@ -32,6 +32,10 @@ resilience4j:
         failure-rate-threshold: 50
         sliding-window-size: 20
         wait-duration-in-open-state: 30000ms
+        record-exceptions:                                             # qué llena la ventana
+          - org.springframework.web.client.ResourceAccessException
+          - org.springframework.web.client.HttpServerErrorException
+          - org.springframework.web.client.UnknownHttpStatusCodeException
 ```
 
 Reglas que build ya aplica y que debes **preservar**:
@@ -45,6 +49,12 @@ Reglas que build ya aplica y que debes **preservar**:
   el fragmento.
 - **`ignore-exceptions` con `HttpClientErrorException`**: los 4xx no se reintentan.
   No lo quites.
+- **`record-exceptions` del circuito**: es una **whitelist** —lo que no esté ahí no
+  cuenta como fallo— y dice lo mismo que las sobrecargas del fallback del adaptador,
+  porque salen de la misma tabla. Solo entra lo que describe la salud del **proveedor**:
+  un 4xx (nos rechaza, pero contesta) y un bug del adaptador no abren su circuito. Sin
+  esta lista, el default de resilience4j cuenta toda excepción y el circuito se abre
+  por defectos propios acusando al tercero.
 - Los nombres de instancia son `<cliente>-<llamada>`: deben coincidir con los
   `name` de `@Retry`/`@CircuitBreaker`. Si no cuadran, resilience4j aplica su
   config por defecto en silencio.

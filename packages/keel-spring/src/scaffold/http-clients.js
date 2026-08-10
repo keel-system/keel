@@ -16,6 +16,7 @@
 import { javaFile, javaPath, subPackage } from './render.js';
 import { domainTypeImport } from './entities.js';
 import { outboundIdempotentCalls } from './http-idempotency.js';
+import { providerFailures } from '../lib/outbound-failures.js';
 
 const PORT_PKG = 'domain.clients';
 const HTTP_PKG = 'infrastructure.http';
@@ -298,8 +299,11 @@ function renderAdapter(model, client) {
 
   const methods = client.calls.map((call) => renderCallMethod(model, client, call, imports)).join('\n\n');
 
-  // Solo lo declara si algún fallback registra el fallo (onFailure: ignore):
-  // un logger sin uso es ruido que además dispara avisos de análisis estático.
+  // Solo lo declara si algo del adaptador registra: un fallback `ignore` o la guarda
+  // del cuerpo ausente. Un logger sin uso es ruido que además dispara avisos de
+  // análisis estático. Va DESPUÉS de renderizar los métodos a propósito — son ellos
+  // los que añaden el import, y calcularlo antes dejaría el campo sin declarar y el
+  // adaptador sin compilar.
   const logger = imports.has('org.slf4j.Logger')
     ? `    private static final Logger log = LoggerFactory.getLogger(${client.adapterClass}.class);\n\n`
     : '';
@@ -380,21 +384,51 @@ public final class OutboundIdempotency {
   };
 }
 
+/**
+ * Argumentos de un resultado SIN datos del proveedor: `List.of()` para las listas y
+ * `null` para el resto.
+ *
+ * Lo usan los dos caminos que llegan a esa situación —el fallback `ignore` y la
+ * respuesta sin cuerpo—, y por eso vive aquí en vez de duplicado: son la misma noción
+ * («no hay nada que el proveedor haya dicho») y si divergieran, dos caminos que el
+ * llamante no distingue devolverían formas distintas del mismo vacío.
+ *
+ * Las listas van vacías y no a `null` a propósito: quien recibe una colección la
+ * recorre, y un `null` ahí convierte una degradación prevista en un NPE.
+ */
+function neutralResultArgs(call, imports) {
+  if (call.responseFields.some((field) => field.javaType.startsWith('List<'))) imports.add('java.util.List');
+  return call.responseFields
+    .map((field) => (field.javaType.startsWith('List<') ? 'List.of()' : 'null'))
+    .join(', ');
+}
+
 function renderCallMethod(model, client, call, imports) {
   addFieldImports(model, imports, callFields(call));
   const params = callParams(call).map((p) => p.decl);
-  const hasFallback = Boolean(call.fallback || call.circuitBreaker);
+  // Hace falta algo que lo dispare: el fallback lo invoca un aspecto, así que sin
+  // retry ni circuito no hay quien lo llame y serían cinco métodos privados muertos.
+  const hasFallback = Boolean((call.fallback || call.circuitBreaker) && (call.retry || call.circuitBreaker));
   const pascal = call.resultType.replace(/Result$/, '');
 
+  // El fallbackMethod va en el aspecto MÁS EXTERNO, que es `@Retry`: el orden de
+  // resilience4j es Retry(CircuitBreaker(llamada)). Ponerlo en el circuito teniendo
+  // retry —como se hacía— dejaba el retry MUERTO: el aspecto del circuito atrapaba la
+  // excepción, ejecutaba el fallback y le devolvía al de retry un valor normal, así
+  // que veía éxito y no reintentaba nunca. Con el fallback fuera, el 5xx se reintenta
+  // de verdad, el circuito registra cada intento, y solo al agotarlos entra el
+  // fallback. `CallNotPermittedException` no está en `retry-exceptions`, así que
+  // atraviesa el retry sin consumir intentos y llega a su sobrecarga.
   const annotations = ['    @Override'];
   if (call.retry) {
     imports.add('io.github.resilience4j.retry.annotation.Retry');
-    const fb = hasFallback && !call.circuitBreaker ? `, fallbackMethod = "${call.fallbackMethod}"` : '';
+    const fb = hasFallback ? `, fallbackMethod = "${call.fallbackMethod}"` : '';
     annotations.push(`    @Retry(name = "${call.instanceName}"${fb})`);
   }
   if (call.circuitBreaker) {
     imports.add('io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker');
-    annotations.push(`    @CircuitBreaker(name = "${call.instanceName}", fallbackMethod = "${call.fallbackMethod}")`);
+    const fb = hasFallback && !call.retry ? `, fallbackMethod = "${call.fallbackMethod}"` : '';
+    annotations.push(`    @CircuitBreaker(name = "${call.instanceName}"${fb})`);
   }
 
   let callBody;
@@ -447,10 +481,34 @@ function renderCallMethod(model, client, call, imports) {
     const todo = call.typed
       ? ''
       : `        // TODO (agente): ajusta ${call.responseType} y el request al contract\n        //   ${call.contract}\n`;
+    // Cuerpo ausente. `body(...)` devuelve null cuando la respuesta no trae cuerpo —un
+    // 204, que es la contestación más natural a un DELETE—, y el mapper desreferencia:
+    // sin esta guarda sale un NPE que el fallback del circuit breaker se traga por el
+    // camino escrito para «el proveedor no responde». O sea que una llamada que
+    // FUNCIONÓ se registra como proveedor caído, y con onFailure: fail se convierte en
+    // el error de indisponibilidad del diseño. El síntoma acusa al proveedor y la causa
+    // está aquí.
+    //
+    // Se traduce como valores AUSENTES y no como fallo, porque el DSL ya puso esa
+    // decisión en otro sitio: `awaits: outcome` dice que el desenlace lo condiciona lo
+    // que devuelva el proveedor, así que quien decide qué hacer sin desenlace es el
+    // handler. Devolver el resultado neutro se lo entrega; lanzar se lo robaría.
+    //
+    // Solo con campos declarados: sin ellos el mapper devuelve `new XxxResult()` sin
+    // tocar la respuesta, así que no hay NPE posible y la guarda sería ruido.
+    const emptyBodyGuard =
+      call.responseFields.length > 0
+        ? (imports.add('org.slf4j.Logger'),
+          imports.add('org.slf4j.LoggerFactory'),
+          `\n        if (response == null) {
+            log.warn("${client.id}.${call.name} respondió sin cuerpo; el contrato declara ${call.responseFields.length} campo(s)");
+            return new ${call.resultType}(${neutralResultArgs(call, imports)});
+        }`)
+        : '';
     callBody = `${todo}${preamble}        ${call.responseType} response = restClient.${verb}()
                 ${uriStep}${headerSteps}${idempotencyStep}${bodyStep}
                 .retrieve()
-                .body(${call.responseType}.class);
+                .body(${call.responseType}.class);${emptyBodyGuard}
         return mapper.to${pascal}Result(response);`;
   } else {
     callBody = `        // TODO (agente): completar la llamada; el diseño no declara method/path ni el contract es parseable
@@ -465,12 +523,49 @@ ${callBody}
 
   if (!hasFallback) return method;
 
-  const fallbackParams = [...params, 'Throwable throwable'];
-  const fallback = `    private ${call.resultType} ${call.fallbackMethod}(${fallbackParams.join(', ')}) {
+  // El fallback NO captura `Throwable`. Se emite una sobrecarga por excepción que de
+  // verdad significa que el proveedor no está (`providerFailures`), y todas delegan en
+  // un único método con la política. Lo que no tiene sobrecarga —un NPE, un cast, un
+  // cuerpo que no deserializa, un 4xx— resilience4j lo relanza tal cual: un bug del
+  // adaptador se ve con su traza en vez de registrarse como caída ajena, que es lo que
+  // mantuvo un defecto de código meses sin diagnosticar.
+  //
+  // Son siempre DOS o más a propósito: con un solo método de fallback resilience4j no
+  // comprueba el tipo del último parámetro y lo invoca con cualquier excepción, así que
+  // una sola sobrecarga «estrecha» no estrecharía nada.
+  // `field` es null en la rama de cuerpo sin tipar (`Object body`), que es justo la
+  // que aparece cuando el contract es solo prosa: leerlo a secas reventaría ahí.
+  const args = [...callParams(call).map((p) => p.field?.name ?? 'body'), 'throwable'].join(', ');
+  const overloads = providerFailures({ circuitBreaker: Boolean(call.circuitBreaker) }).map((failure) => {
+    imports.add(failure.fqn);
+    // El rechazo se registra aparte antes de delegar: llamarlo «no disponible» a
+    // secas repetiría, en pequeño, el error de diagnóstico que este fallback corrige.
+    const rejection = failure.rejection
+      ? `        // Si el rechazo tiene significado de negocio —un 404 es "no existe", un 409 un
+        // conflicto suyo—, la traducción va con .onStatus(...) en la llamada, no aquí.
+        log.warn("${client.id}.${call.name} rechazada por el proveedor ({})", throwable.getStatusCode());\n`
+      : '';
+    return `    /** ${failure.reason} */
+    private ${call.resultType} ${call.fallbackMethod}(${[...params, `${failure.simple} throwable`].join(', ')}) {
+${rejection}        return ${call.unavailableMethod}(${args});
+    }`;
+  });
+
+  const unavailable = `    /**
+     * Política del diseño para cuando ${client.id}.${call.name} no sale.
+     *
+     * Solo llega aquí lo que ha hecho el PROVEEDOR: no responder, responder mal o
+     * rechazarnos. Un error de programación de este adaptador —un NPE, un cast, un
+     * cuerpo que no deserializa— no tiene sobrecarga que lo enrute y se propaga con
+     * su traza. No lo ensanches a \`Exception\` ni a \`Throwable\` para "que no se
+     * escape nada": lo que se escapa es el bug, y taparlo aquí es lo que mantuvo uno
+     * meses disfrazado de caída ajena.
+     */
+    private ${call.resultType} ${call.unavailableMethod}(${[...params, 'Throwable throwable'].join(', ')}) {
 ${fallbackBody(model, client, call, imports)}
     }`;
 
-  return `${method}\n\n${fallback}`;
+  return [method, ...overloads, unavailable].join('\n\n');
 }
 
 // Cuerpo del fallback. Si el diseño ya declaró la política —una activación de la
@@ -487,7 +582,12 @@ function fallbackBody(model, client, call, imports) {
   // Diagnosticar eso sin el log cuesta instrumentar el adaptador a mano.
   imports.add('org.slf4j.Logger');
   imports.add('org.slf4j.LoggerFactory');
-  const trace = `        LoggerFactory.getLogger(${client.adapterClass}.class)\n                .warn("Fallback de ${client.id}.${call.name}", throwable);\n`;
+  // Por el campo estático, no por un logger creado aquí: el import de arriba garantiza
+  // que `log` está declarado en el adaptador, así que el inline solo añadía una segunda
+  // instancia y una SEGUNDA línea de log del mismo evento. Los pases de calidad de
+  // cuatro corridas seguidas lo consolidaron a mano en el proyecto generado, que es la
+  // señal de que el arreglo va aquí y no allí.
+  const trace = `        log.warn("Fallback de ${client.id}.${call.name}", throwable);\n`;
 
   if (activations.length !== 1) {
     // Sin política declarada, la prosa del diseño ES la instrucción al agente.
@@ -515,12 +615,13 @@ function fallbackBody(model, client, call, imports) {
     imports.add('org.slf4j.LoggerFactory');
     // Resultado neutro: el diseño dice que el fallo no interrumpe al llamante,
     // así que no puede propagar la excepción ni inventarse datos del proveedor.
-    const empty = call.responseFields
-      .map((field) => (field.javaType.startsWith('List<') ? 'List.of()' : 'null'))
-      .join(', ');
-    if (call.responseFields.some((field) => field.javaType.startsWith('List<'))) imports.add('java.util.List');
-    return `${trace}${prose}${origin}        // El llamante sigue adelante: no propagues la excepción ni inventes datos del proveedor.
-        log.warn("${client.id}.${call.name} no disponible; se continúa sin él ({})", throwable.toString());
+    const empty = neutralResultArgs(call, imports);
+    // Una sola línea, no el trace genérico MÁS esta: son el mismo evento, y el mensaje
+    // de aquí dice más (que el llamante sigue adelante). El throwable va como argumento
+    // —no `toString()`— para conservar la traza: sin ella, diagnosticar un fallo de
+    // integración disfrazado de proveedor caído obliga a instrumentar a mano.
+    return `${prose}${origin}        // El llamante sigue adelante: no propagues la excepción ni inventes datos del proveedor.
+        log.warn("${client.id}.${call.name} no disponible; se continúa sin él", throwable);
         return new ${call.resultType}(${empty});`;
   }
 

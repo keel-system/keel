@@ -7,7 +7,16 @@ import { packageToPath } from '../lib/naming.js';
 // Ensambla un archivo .java: package + imports ordenados + cuerpo.
 export function javaFile(pkg, imports, body) {
   const lines = [`package ${pkg};`, ''];
-  const sorted = [...new Set(imports)].filter(Boolean).sort();
+  // Un tipo del PROPIO paquete no se importa: es legal pero redundante, y todo análisis
+  // estático lo marca. Se filtra aquí y no en cada emisor porque el emisor no siempre
+  // sabe dónde acabará el archivo —añade el nombre cualificado y ya está—, y porque
+  // repetir la comprobación en veinte módulos garantiza que alguno se la salte. Los
+  // pases de calidad de varias corridas venían borrando estos imports a mano en el
+  // proyecto generado, que es la señal de que el arreglo iba aquí.
+  const sorted = [...new Set(imports)]
+    .filter(Boolean)
+    .filter((name) => name.slice(0, name.lastIndexOf('.')) !== pkg)
+    .sort();
   if (sorted.length > 0) {
     for (const name of sorted) lines.push(`import ${name};`);
     lines.push('');

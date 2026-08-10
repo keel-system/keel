@@ -15,7 +15,10 @@ Síntoma → causa probable → arreglo. Antes de tocar nada confirma el diseño
 ## El circuito queda abierto permanentemente
 
 - **Causa**: cada reintento cuenta como fallo y llena la ventana; o `base-url`
-  inválida hace fallar el 100% de las llamadas.
+  inválida hace fallar el 100% de las llamadas. Lo que **no** puede ser la causa es un
+  bug tuyo o un 4xx: el `record-exceptions` que genera build es una whitelist y solo
+  el transporte, el 5xx y el status desconocido llenan la ventana. Si sospechas de
+  otra cosa, mira si la quitaron de ahí.
 - **Arreglo**: arregla primero la causa raíz (URL/stub). Revisa
   `failure-rate-threshold` y `sliding-window-size`: con la ventana llena de fallos
   reales, abrir es lo correcto. Tras `wait-duration-in-open-state` pasa a half-open;
@@ -49,10 +52,25 @@ Síntoma → causa probable → arreglo. Antes de tocar nada confirma el diseño
 ## El fallback no compila
 
 - **Causa**: firma desalineada. resilience4j exige que el `fallbackMethod` tenga los
-  **mismos parámetros** que el método anotado **más** un `Throwable` (o el tipo de
-  excepción concreto) al final, y el mismo tipo de retorno.
-- **Arreglo**: copia la firma del método y añade `Throwable t` al final. Si quieres
-  varios fallbacks por tipo de excepción, declara uno por tipo.
+  **mismos parámetros** que el método anotado **más** el tipo de excepción al final, y
+  el mismo tipo de retorno.
+- **Arreglo**: copia la firma del método y añade la excepción al final. Build ya emite
+  una sobrecarga por tipo; si añades una, respeta ese patrón — y **no** declares
+  `Throwable` ni `Exception` (ver la entrada siguiente).
+
+## Un fallo del proveedor sube como 500 en vez de entrar al fallback
+
+- **Causa**: la excepción no tiene sobrecarga que la enrute, y resilience4j relanza lo
+  que ninguna acepta. Eso es **deliberado**: al fallback solo llegan el circuito
+  abierto, el transporte, el 5xx, el status desconocido y el 4xx.
+- **Arreglo**: mira primero **de quién es el fallo**. Si lo que sube es un NPE, un
+  `ClassCastException` o un `RestClientException` de deserialización, es tuyo y el 500
+  está diciendo la verdad — arréglalo, no lo enrutes. Un fallback que capturaba
+  `Throwable` tuvo uno meses disfrazado de caída del proveedor.
+- Si de verdad es del proveedor y no está en la lista (p. ej. `UnknownContentTypeException`,
+  cuando el tercero devuelve una página HTML de error con 200), eso es un **contrato
+  roto**, no una caída: tradúcelo en la llamada con `.onStatus(...)` a la excepción de
+  dominio que dicte el diseño. Ensanchar el fallback no es la respuesta.
 
 ## El adaptador filtra `HttpClientErrorException` a application
 

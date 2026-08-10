@@ -354,6 +354,68 @@ identificador de mensaje.
    por dentro es lo que hace la guarda, pero el resultado observable de esa entrega es una
    confirmación sin efecto, no un error propagado.
 
+## El fallback del proveedor
+
+Los tres escenarios de esta sección ejercitan el **fallback estrecho** del adaptador HTTP:
+`recordWithdrawal` declara `onFailure: fail` con `COMPLIANCE_UNAVAILABLE`, así que el desenlace
+de cada modo de fallo es observable desde fuera. Ninguno necesita primitivas nuevas del arnés.
+
+### FL-CMP-002: el circuito se abre y sigue contestando lo que el diseño declara
+
+El camino que nunca se ha ejecutado en vivo. Cuando el circuito abre, resilience4j lanza
+`CallNotPermittedException`, que **no** es una excepción del proveedor ni de Spring: si el
+fallback no la atiende, sale cruda al llamante y el rechazo declarado se convierte en un 500.
+Con `slidingWindowSize: 5` y `failureRateThreshold: 50`, cinco fallos seguidos lo abren.
+
+**Given**: la categoría `c1` existe y el proveedor de compliance contesta `503` de forma
+sostenida (`stubFailure("POST", "/withdrawals", 503)`).
+
+**When**: se ejecuta `retireProduct` sobre cinco productos recién creados, y después una vez
+más sobre un sexto.
+
+**Then**:
+1. Las seis peticiones responden el error declarado `COMPLIANCE_UNAVAILABLE` con su status.
+   **Ninguna responde 500**: el circuito abierto es un modo de fallo previsto, no un defecto.
+2. La sexta ya no llega al proveedor — `stubCallCount` deja de crecer. Es lo que distingue un
+   circuito que abre de uno configurado y nunca aplicado.
+3. Ningún producto queda en `retired`: `onFailure: fail` dice que sin inscripción la retirada
+   no puede darse por buena, y eso vale igual cuando quien rechaza es el circuito.
+
+### FL-CMP-003: un cuerpo que viola el contrato no es una caída del proveedor
+
+El escenario que separa el comportamiento nuevo del viejo, y el que reproduce el defecto que
+motivó estrechar el fallback: un fallo de **integración nuestro** disfrazado de caída ajena.
+
+**Given**: la categoría `c1` existe y el proveedor contesta `200` con un cuerpo que no encaja
+en el contrato declarado (`stubFor("POST", "/withdrawals", 200, "{\"registrationId\": {}}")`).
+
+**When**: se ejecuta `retireProduct` sobre un producto recién creado.
+
+**Then**:
+1. La respuesta **no** es `COMPLIANCE_UNAVAILABLE`. El proveedor contestó, y a tiempo: acusarle
+   de estar caído es un diagnóstico falso que manda a mirar sus logs en vez de los nuestros.
+2. El fallo sube sin traducir (500) y el error de deserialización queda en el log del servidor.
+   Es un defecto del adaptador y el 500 dice la verdad: el contrato wire no describe lo que el
+   proveedor devuelve, y eso se arregla en `<X>Response`, no en el fallback.
+3. `stubCallCount` es 1: no se reintenta. Un cuerpo mal formado no mejora repitiéndolo, y
+   `retryOn` no lo incluye.
+
+### FL-CMP-004: un rechazo del proveedor sigue teniendo el desenlace declarado
+
+No-regresión. Un 4xx **sí** entra al fallback —el proveedor contestó, y hay que decidir qué
+hacer— aunque no cuente para la ventana del circuito: que nos rechacen no es que estén caídos.
+
+**Given**: la categoría `c1` existe y el proveedor contesta `400`
+(`stubFailure("POST", "/withdrawals", 400)`).
+
+**When**: se ejecuta `retireProduct` sobre un producto recién creado.
+
+**Then**:
+1. La respuesta es el error declarado `COMPLIANCE_UNAVAILABLE`: el desenlace es exactamente el
+   de siempre.
+2. El producto no queda en `retired`.
+3. `stubCallCount` es 1: los 4xx nunca se reintentan.
+
 ## Imágenes de producto
 
 ### FL-IMG-001: subida y borrado de imágenes en el bucket público

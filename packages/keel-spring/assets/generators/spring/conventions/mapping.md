@@ -551,8 +551,8 @@ La publicación va **entera generada** salvo el envío físico. La cadena es: el
 | `calls.x.response.fields` | Record wire `<X>Response` + record de dominio `<X>Result` + `to<X>Result(...)` en el mapper (mapeo campo a campo generado) |
 | `calls.x.timeoutMs` | Timeout de la llamada en la configuración del cliente |
 | `calls.x.retry` | resilience4j `@Retry` con `maxAttempts`/`backoff`/`initialDelayMs` y, si el diseño declara el techo, `maxDelayMs` → `exponential-max-wait-duration`; solo para `retryOn` (`timeout`, `5xx`, `connection`); nunca 4xx |
-| `calls.x.circuitBreaker` | resilience4j `@CircuitBreaker` con `failureRateThreshold`/`slidingWindowSize`/`waitDurationMs` |
-| `calls.x.fallback` | Método de fallback que implementa la frase del diseño; si dispara un error de negocio, usa el `code` declarado en use-cases |
+| `calls.x.circuitBreaker` | resilience4j `@CircuitBreaker` con `failureRateThreshold`/`slidingWindowSize`/`waitDurationMs`, más `record-exceptions`: solo transporte, 5xx y status desconocido llenan la ventana — un 4xx o un bug del adaptador no describen la salud del proveedor |
+| `calls.x.fallback` | Sobrecargas `<call>Fallback(..., <Excepción>)` —una por fallo que significa algo del proveedor, ninguna con `Throwable`— que delegan en `<call>Unavailable(..., Throwable)`, donde va la frase del diseño; si dispara un error de negocio, usa el `code` declarado en use-cases. El `fallbackMethod` se ancla al aspecto **externo** (`@Retry` si lo hay) |
 | `calls.x.idempotency` | Generado: `OutboundIdempotency` (`infrastructure/http`) y la cabecera ya estampada en la llamada, con el wire request hoistado a variable para que la firma sea la del mismo objeto que se envía. `payload-hash` → `fromPayload(...)`; `correlation` → `correlated(...)`, que cae a la firma si no hay correlación abierta (una clave aleatoria pediría una ejecución nueva en cada reintento). **No inventes otra clave** ni la generes en el handler |
 
 ## `dependencies` — dependencies.keel.yaml

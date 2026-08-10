@@ -1206,7 +1206,12 @@ function collectHttpClients(layers, domainTypes, inlineEnumName, warnings) {
         circuitBreaker: call.circuitBreaker ?? null,
         fallback: call.fallback ?? null,
         instanceName: `${clientId}-${kebabCase(callName)}`,
-        fallbackMethod: `${callName}Fallback`
+        fallbackMethod: `${callName}Fallback`,
+        // El fallback son varias sobrecargas tipadas —una por excepción que de verdad
+        // significa que el proveedor no está— y todas delegan aquí, que es donde vive
+        // la política. Una sola: si el cuerpo se duplicara por sobrecarga, las ramas
+        // podrían divergir y el llamante no distingue por cuál entró.
+        unavailableMethod: `${callName}Unavailable`
       };
     });
 

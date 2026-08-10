@@ -151,6 +151,14 @@ Si **varias** activaciones salen por la misma llamada, build no elige por ti: de
 enumerándolas. Dos políticas de fallo sobre un único método es un conflicto del diseño — dilo en el
 reporte en vez de inventarte una.
 
+El cuerpo vive en `<call>Unavailable(..., Throwable)`, y lo que llega ahí está **acotado**: el
+circuito abierto, un fallo de transporte, un 5xx, un status desconocido y un 4xx. Cada uno entra
+por su sobrecarga `<call>Fallback(..., <Excepción>)`, y lo que ninguna acepta —un NPE, un
+`ClassCastException`, un cuerpo que no deserializa— resilience4j lo **relanza**. Eso no es un
+hueco: es la función. Un fallback que declaraba `Throwable` registraba cualquier defecto propio
+como «el proveedor no está disponible», y con `onFailure: fail` lo convertía en el error de
+indisponibilidad del diseño — el síntoma acusaba al tercero y la causa estaba en casa.
+
 ## El barrido corre en todas las réplicas
 
 `@Scheduled` no es «una vez en el clúster», es **«una vez por instancia»**. Con N réplicas, el barrido de
@@ -220,4 +228,8 @@ en orden inverso. Eso se acota con un umbral generoso, no con código.
 - Capturar en el handler la excepción que lanza un fallback `onFailure: fail` para "seguir igual":
   el diseño dice que la operación falla si el proveedor no responde.
 - Reintentar en el handler una activación `onFailure: ignore` — el fallback ya la absorbió.
+- Añadir una sobrecarga `Throwable` o `Exception` al fallback para "que no se escape nada": lo que
+  se escapa es tu bug, y taparlo ahí es lo que mantuvo uno meses disfrazado de caída ajena.
+- Mover el `fallbackMethod` del `@Retry` al `@CircuitBreaker`: el retry es el aspecto externo, y
+  con el fallback dentro no reintenta nunca (el circuito le devuelve un valor normal).
 - Ignorar el cuerpo de la respuesta en una activación `awaits: outcome`.

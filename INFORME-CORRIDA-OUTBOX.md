@@ -289,6 +289,51 @@ declaró `PRODUCT_NOT_RETIRABLE` (409) y el escenario dejó de ser `NO_EJERCITAD
 añade la cláusula que importa: el rechazo ocurre **en el agregado**, antes de encargar nada, así
 que un reintento no inscribe una segunda retirada en el registro regulatorio.
 
+### 7. Un cuerpo de respuesta ausente rompía el adaptador HTTP
+
+Lo dejó anotado el pase de calidad de `catalog` como `remaining` —conductual, que ese agente
+tiene prohibido aplicar— y al verificarlo resultó ser del generador: `ComplianceMapper.java` es
+build-owned y el agente de código no lo tocó.
+
+`.retrieve().body(X.class)` devuelve `null` cuando la respuesta no trae cuerpo —un `204`, la
+contestación más natural a un `DELETE`— y la línea siguiente desreferencia. **El generador
+nunca había modelado «el proveedor no devuelve cuerpo»**: no hay `toBodilessEntity`, ni
+`ResponseEntity`, ni `Optional` en todo el módulo.
+
+Lo caro no es el NPE sino dónde acaba: el método lleva `@CircuitBreaker(fallbackMethod = …)`,
+cuyo fallback declara `Throwable` y captura cualquier cosa, así que **una llamada que funcionó
+se registraba como proveedor caído** — y con `onFailure: fail`, una inscripción correcta se
+convertía en el error de indisponibilidad y la retirada del producto se daba por fallida
+habiendo quedado inscrita. El síntoma acusaba al proveedor y la causa estaba en el adaptador.
+
+Corregido en `src/scaffold/http-clients.js` traduciendo el cuerpo ausente a **valores
+ausentes**, no a fallo: el adaptador devuelve el resultado neutro con un aviso que dice la
+verdad y no pasa por el fallback. La decisión es del handler y no del adaptador porque es donde
+el DSL la puso: `awaits: outcome` significa que el desenlace lo condiciona lo que devuelva el
+proveedor. El resultado neutro se extrajo a `neutralResultArgs()` y lo comparten los dos
+caminos que llegan a esa situación, para que no diverjan.
+
+**Lo que este fix no puede demostrar**: no hay escenario `FL-*` que lo distinga. Con
+`onFailure: ignore` lo observable en caja negra es idéntico antes y después; lo único que
+cambia es el log y que deje de contarse como caída. La red es la regresión del repo
+(`test/dependencies.test.js`) más `./gradlew build -x test` del proyecto generado — y conviene
+saber que **`compile-check` no vale aquí**: solo compila el source set `integrationTest`, no
+`main`.
+
+### 8. Dos defectos que los pases de calidad venían arreglando a mano en cada corrida
+
+Los cuatro informes de calidad de esta serie traen el mismo `issuesFixed`, palabra por palabra:
+un import redundante y un logger duplicado en los adaptadores HTTP. Que se repita en las cuatro
+es la señal de que el arreglo no iba en el proyecto:
+
+- **Logging duplicado en los fallbacks**: `fallbackBody` añadía el import de `Logger`
+  incondicionalmente —así que el campo estático `log` siempre existía— y aun así el trace creaba
+  un logger inline. Dos líneas del mismo evento. Consolidado en una sola, con el throwable como
+  argumento para conservar la traza.
+- **Imports del propio paquete**: se filtran ahora en `javaFile()` (`src/scaffold/render.js`),
+  no en cada emisor — el emisor no siempre sabe dónde acabará el archivo, y repetir la
+  comprobación en veinte módulos garantiza que alguno se la salte.
+
 ## Los dos arreglos de infraestructura pedidos aparte
 
 - **El sondeo del frontend de compose.** `deploy/up.sh` caía a `podman-compose` si
@@ -312,6 +357,13 @@ que un reintento no inscribe una segunda retirada en el registro regulatorio.
   correcto— y no que la escritura del registro sea un INSERT real. La regresión quedó en el
   test del repo; cerrarlo también en el script exigiría comprobar que la entidad implementa
   `Persistable`.
+
+## Pendiente, anotado y no tocado
+
+~~**El fallback captura `Throwable`.**~~ **Cerrado** en su propia corrida —
+`INFORME-CORRIDA-FALLBACK.md`. El fallback pasó a sobrecargas tipadas que delegan en
+`<call>Unavailable`, el circuito ganó `record-exceptions`, y por el camino apareció que el
+`@Retry` estaba muerto cuando había circuit breaker.
 
 ## Evaluado y descartado
 

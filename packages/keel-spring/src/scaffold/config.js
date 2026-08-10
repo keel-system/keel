@@ -8,6 +8,7 @@ import { DATABASES } from '../lib/stack-catalog.js';
 import { EMBEDDED_MONGO_VERSION } from '../lib/assets.js';
 import { physicalBucketName } from '../lib/buckets.js';
 import { screamingSnake } from '../lib/naming.js';
+import { recordedFailures } from '../lib/outbound-failures.js';
 import { usesOutbox } from './outbox.js';
 import { usesIdempotency } from './idempotency.js';
 import { usesHttpIdempotency } from './http-idempotency.js';
@@ -813,6 +814,13 @@ function httpClientsYaml(model, profile) {
         `        sliding-window-size: ${cb.slidingWindowSize ?? 20}`,
         `        wait-duration-in-open-state: ${cb.waitDurationMs ?? 30000}ms`
       );
+      // Qué llena la ventana. Sin esta lista el default de resilience4j cuenta TODA
+      // excepción, así que un 4xx —que el retry de arriba sí excluye— o un bug del
+      // adaptador abrían el circuito y dejaban al proveedor acusado de una caída que
+      // no era suya. Misma tabla que las sobrecargas del fallback del adaptador
+      // (src/lib/outbound-failures.js): son la misma pregunta y no pueden divergir.
+      lines.push('        record-exceptions:');
+      for (const fqn of recordedFailures()) lines.push(`          - ${fqn}`);
     }
   }
   return lines.join('\n') + '\n';

@@ -90,19 +90,37 @@ completas la **lógica** del método de fallback (build deja un stub):
 ```java
 @Override
 @Retry(name = "pricing-service-get-price", fallbackMethod = "getPriceFallback")
+@CircuitBreaker(name = "pricing-service-get-price")
 public ProductPriceResult getPrice(UUID sku, String currency) { ... }
 
-// misma firma + Throwable final; implementa la frase `fallback` del diseño
-private ProductPriceResult getPriceFallback(UUID sku, String currency, Throwable t) {
+// Una sobrecarga por excepción que significa algo del proveedor. Solo enrutan.
+private ProductPriceResult getPriceFallback(UUID sku, String currency, ResourceAccessException t) {
+    return getPriceUnavailable(sku, currency, t);
+}
+// … CallNotPermittedException, HttpServerErrorException,
+//    UnknownHttpStatusCodeException, HttpClientErrorException
+
+// AQUÍ va tu lógica: implementa la frase `fallback` del diseño.
+private ProductPriceResult getPriceUnavailable(UUID sku, String currency, Throwable t) {
     // p. ej. valor degradado documentado, o error de negocio con su code:
     throw new PriceUnavailableException(sku); // code exacto de use-cases
 }
 ```
 
-- Con `@Retry` **y** `@CircuitBreaker`, el `fallbackMethod` va en el
-  `@CircuitBreaker` (build ya lo coloca ahí): el retry agota intentos y, si el
-  circuito abre, dispara el fallback una sola vez.
-- La firma del fallback = la del método + un `Throwable` al final. Un fallback que
+- **No añadas una sobrecarga `Throwable` ni `Exception`.** resilience4j busca el
+  método cuyo último parámetro case con lo lanzado (clase exacta, subiendo por
+  superclases; gana el más específico) y **relanza el original si ninguno casa**. Esa
+  propagación es la función del diseño: un NPE, un cast o un cuerpo que no
+  deserializa son bugs tuyos y tienen que verse. Capturarlos aquí los disfraza de
+  caída del proveedor, que es exactamente el defecto que este arreglo cerró.
+- Y por eso build emite **siempre dos o más**: con una sola sobrecarga resilience4j
+  entra por un atajo cuya semántica ha cambiado entre versiones.
+- Con `@Retry` **y** `@CircuitBreaker`, el `fallbackMethod` va en el **`@Retry`**,
+  que es el aspecto externo (el orden es `Retry(CircuitBreaker(llamada))`). Ponerlo en
+  el circuito deja el retry muerto: el circuito atrapa la excepción, ejecuta el
+  fallback y le devuelve al retry un valor normal, así que ve éxito y no reintenta.
+  Build ya lo coloca bien; no lo muevas.
+- La firma de una sobrecarga = la del método + la excepción al final. Un fallback que
   no compila suele ser una firma desalineada.
 - El fallback es **lógica de negocio**, no un `UnsupportedOperationException`: o
   devuelve un resultado degradado válido o lanza el error de dominio declarado.

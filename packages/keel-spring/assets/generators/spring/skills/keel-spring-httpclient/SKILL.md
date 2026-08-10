@@ -38,10 +38,14 @@ que build deja como `// TODO (agente)` porque no es derivable del diseño.
   llamadas RestClient) + `<C>Mapper` (anticorrupción) + records `<X>Result` /
   DTOs wire `<X>Response` (y `<X>Request` si hay body).
 - Anotaciones resilience4j `@Retry` / `@CircuitBreaker` sobre los métodos que las
-  declaran, con método `<call>Fallback` stub.
+  declaran, con el `fallbackMethod` en el aspecto **externo** (`@Retry` si lo hay).
+- Varias sobrecargas `<call>Fallback(..., <Excepción>)` —una por excepción que
+  significa algo del proveedor— delegando todas en un `<call>Unavailable(..., Throwable)`
+  que es donde vive la política. Ninguna declara `Throwable`.
 - `parameters/<perfil>/http-clients.yaml`: `base-url` por env var, credenciales,
   registrations oauth2 e instancias `resilience4j.retry`/`.circuitbreaker`
-  (con `ignore-exceptions` para **no** reintentar 4xx).
+  (con `ignore-exceptions` para **no** reintentar 4xx, y `record-exceptions` para que
+  solo los fallos del proveedor llenen la ventana del circuito).
 
 ## Qué implementa el agente
 
@@ -55,16 +59,29 @@ que build deja como `// TODO (agente)` porque no es derivable del diseño.
    build deja `throw new UnsupportedOperationException("TODO: ...")`. Deriva verbo,
    URI, params y body de la frase `contract` y arma la llamada RestClient (patrón
    en `references/implementation.md`).
-3. **Fallback.** El stub `<call>Fallback(..., Throwable)` implementa la frase
-   `fallback` del diseño. Si el diseño dice que un fallo dispara un error de
+3. **Fallback.** Lo que implementas es **`<call>Unavailable(..., Throwable)`**, no las
+   sobrecargas: ellas solo enrutan. Si el diseño dice que un fallo dispara un error de
    negocio, lanza la `DomainException` con el **`code` exacto** declarado en
    use-cases; si dice devolver un valor degradado (cache, default), constrúyelo.
    Nunca dejes el `UnsupportedOperationException`.
+
+   **No añadas una sobrecarga `Throwable` ni `Exception`.** El fallback es estrecho a
+   propósito: lo que ninguna sobrecarga acepta, resilience4j lo relanza, y eso es lo
+   que hace visible un bug tuyo. Un fallback que capturaba `Throwable` registró
+   durante meses un NPE de este adaptador como «el proveedor está caído», y con
+   `onFailure: fail` lo convertía en el error de indisponibilidad del diseño: el
+   síntoma acusaba al tercero y la causa estaba en casa. Si crees que falta una
+   excepción, mira si es del proveedor o tuya antes de ensanchar nada.
 4. **Traducción de errores wire → dominio.** El adaptador no filtra
    `HttpClientErrorException`/`HttpServerErrorException` hacia application: usa
    `.onStatus(...)` (o captura en el adaptador) y traduce a la excepción de dominio
    que dicte el diseño. Un 4xx del tercero suele ser input a corregir; un
    5xx/timeout es reintentable (ya lo cubre `@Retry`).
+
+   El 4xx **sí** llega al fallback, con su propia línea de log, porque un rechazo hay
+   que decidirlo — pero no cuenta para el circuito: que nos rechacen no es que estén
+   caídos. Si el rechazo tiene significado (un 404 es «no existe», un 409 un conflicto
+   suyo), ese significado se declara aquí con `.onStatus(...)`, no en el fallback.
 
 ## Referencias
 

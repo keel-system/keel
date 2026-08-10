@@ -1637,11 +1637,19 @@ test('capa http-clients: RestClient configurado + resilience4j + fallback stub',
 
   const adapter = read(workspace, `${httpDir}/PricingServiceHttpAdapter.java`);
   assert.ok(adapter.includes('implements PricingServiceClient'));
-  assert.ok(adapter.includes('@Retry(name = "pricing-service-get-price")'));
-  assert.ok(adapter.includes('@CircuitBreaker(name = "pricing-service-get-price", fallbackMethod = "getPriceFallback")'));
+  // El fallbackMethod va en el aspecto EXTERNO (@Retry). En el circuito dejaba el
+  // retry muerto: el CB atrapaba la excepción, ejecutaba el fallback y le devolvía un
+  // valor normal al retry, que veía éxito y no reintentaba.
+  assert.ok(adapter.includes('@Retry(name = "pricing-service-get-price", fallbackMethod = "getPriceFallback")'));
+  assert.ok(adapter.includes('@CircuitBreaker(name = "pricing-service-get-price")'));
+  assert.ok(!adapter.includes('@CircuitBreaker(name = "pricing-service-get-price", fallbackMethod'));
   assert.ok(adapter.includes('.uri("/prices/{sku}", sku)')); // llamada funcional armada del contract
   assert.ok(adapter.includes('return mapper.toGetPriceResult(response);'));
-  assert.ok(adapter.includes('private GetPriceResult getPriceFallback(String sku, Throwable throwable)'));
+  // Sobrecargas tipadas, NUNCA una que declare Throwable: lo que ninguna acepta
+  // resilience4j lo relanza, y eso es lo que hace visible un bug del adaptador.
+  assert.ok(adapter.includes('private GetPriceResult getPriceFallback(String sku, ResourceAccessException throwable)'));
+  assert.ok(!/Fallback\([^)]*\b(?:Throwable|Exception)\s+\w+\)/.test(adapter), adapter);
+  assert.ok(adapter.includes('private GetPriceResult getPriceUnavailable(String sku, Throwable throwable)'));
   assert.ok(adapter.includes('// TODO (agente): Devolver el último precio conocido en caché.')); // fallback = stub de negocio
 
   // ACL: mapper stub (solo-prosa) + wire DTO vacío en infrastructure/http.
@@ -1664,6 +1672,10 @@ test('capa http-clients: RestClient configurado + resilience4j + fallback stub',
   assert.ok(hc.includes('exponential-max-wait-duration: 4000ms'));
   assert.ok(hc.includes('- org.springframework.web.client.HttpClientErrorException')); // 4xx nunca se reintenta
   assert.ok(hc.includes('failure-rate-threshold: 50'));
+  // Qué llena la ventana del circuito. Sin la lista, el default cuenta TODA excepción
+  // y un bug del adaptador abría el circuito acusando al proveedor.
+  assert.ok(hc.includes('record-exceptions:'));
+  assert.ok(hc.includes('- org.springframework.web.client.UnknownHttpStatusCodeException'));
   // Sin auth declarada: ni credenciales ni starter oauth2-client.
   assert.ok(!hc.includes('auth:'));
   assert.ok(!read(workspace, 'build.gradle').includes('oauth2-client'));
