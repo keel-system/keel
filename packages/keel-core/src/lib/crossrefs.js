@@ -1054,6 +1054,33 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
       );
     }
   }
+  // Varias suscripciones sobre el MISMO canal: cada listener ve el destino entero y
+  // tiene que saber qué mensajes son suyos. Con envoltura Keel eso ya está resuelto
+  // —`metadata.eventType` lo estampa el emisor—, y exigir que se declare sería pedir
+  // el mismo dato dos veces, igual que con `messageId`. Sin envoltura no lo está: los
+  // payloads llegan crudos y sin discriminador el listener deserializa el mensaje de
+  // otro, que según la forma del JSON falla con un error de parseo o —peor— cuela
+  // campos a null y procesa un evento que no era el suyo.
+  const subsByChannel = new Map();
+  for (const [eventName, sub] of Object.entries(messaging?.subscriptions ?? {})) {
+    if (!sub.channel) continue;
+    if (!subsByChannel.has(sub.channel)) subsByChannel.set(sub.channel, []);
+    subsByChannel.get(sub.channel).push([eventName, sub]);
+  }
+  for (const [channel, subs] of subsByChannel) {
+    if (subs.length < 2) continue;
+    const undiscriminated = subs.filter(
+      ([, sub]) => envelopeOf(sub) !== 'keel' && !sub.contract?.discriminator
+    );
+    for (const [eventName] of undiscriminated) {
+      warnings.push(
+        `messaging: subscriptions.${eventName}.contract.discriminator: el canal '${channel}' lo comparten ${subs.length} suscripciones y esta no declara ` +
+          `con qué distinguir sus mensajes de los demás. Sin envoltura Keel no hay 'metadata.eventType' que lo resuelva solo, así que el listener recibirá ` +
+          `también los ajenos y los deserializará como propios`
+      );
+    }
+  }
+
   for (const [eventName, sub] of Object.entries(messaging?.subscriptions ?? {})) {
     const where = `messaging: subscriptions.${eventName}`;
     checkFieldMap(sub.payload, `${where}.payload`, { allowWireName: true });

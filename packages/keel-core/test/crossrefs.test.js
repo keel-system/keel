@@ -883,6 +883,52 @@ test('messageId declarado con envelope wrapped o sobre canal external no avisa',
   assert.ok(!external.some((w) => w.includes('contract.messageId:')));
 });
 
+// Dos suscripciones sobre el mismo canal: cada listener ve el destino entero, así que
+// o hay algo con que distinguir los mensajes propios de los ajenos, o deserializa los
+// de otro. La envoltura Keel lo resuelve sola (`metadata.eventType`); sin ella, no.
+const sharedChannelLayers = (contract) => {
+  const layers = contractLayers({ contract });
+  layers.messaging.subscriptions.StockRestocked = {
+    ...layers.messaging.subscriptions.StockDepleted,
+    contract: contract ? { ...contract } : undefined
+  };
+  return layers;
+};
+
+test('canal compartido sin discriminador ni envoltura Keel es warning en cada suscripción', () => {
+  const { errors, warnings } = run(sharedChannelLayers({ envelope: 'none' }));
+  assert.deepEqual(errors, []);
+  for (const event of ['StockDepleted', 'StockRestocked']) {
+    assert.ok(
+      warnings.some((w) =>
+        w.includes(`subscriptions.${event}.contract.discriminator: el canal 'inventoryEvents' lo comparten 2 suscripciones`)
+      )
+    );
+  }
+});
+
+test('canal compartido con envoltura Keel no avisa: metadata.eventType ya lo distingue', () => {
+  const layers = sharedChannelLayers({ envelope: 'keel' });
+  // Con envoltura Keel el canal no puede ser external, que es lo que fuerza el default `none`.
+  layers.messaging.channels.inventoryEvents = { external: false };
+  const warnings = run(layers).warnings;
+  assert.ok(!warnings.some((w) => w.includes('contract.discriminator: el canal')));
+});
+
+test('canal compartido con discriminador declarado no avisa, y una sola suscripción tampoco', () => {
+  const declared = run(
+    sharedChannelLayers({
+      envelope: 'none',
+      discriminator: { location: 'header', name: 'eventType', value: 'stock.depleted' }
+    })
+  ).warnings;
+  assert.ok(!declared.some((w) => w.includes('contract.discriminator: el canal')));
+
+  // Sin canal compartido no hay a quién confundir: la regla no se dispara.
+  const alone = run(contractLayers({ contract: { envelope: 'none' } })).warnings;
+  assert.ok(!alone.some((w) => w.includes('contract.discriminator: el canal')));
+});
+
 test('publicar en un canal marcado external es warning', () => {
   const layers = contractLayers();
   layers.messaging.publishing = {
