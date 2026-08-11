@@ -64,7 +64,12 @@ operations:
     cache:
       ttlSeconds: 300
       keyFields: [id]
-      invalidatedBy: [AssetUploaded, AssetPublished]
+      # `ThumbnailDelivered` es un evento CONSUMIDO, no publicado, y está aquí por
+      # necesidad: la telemetría del renderizador mueve `thumbnailDeliveryCount`, que viaja
+      # en esta misma ficha. Sin invalidar, la respuesta cacheada seguiría diciendo el
+      # contador viejo hasta cinco minutos — la ficha mentiría sobre un dato que acaba de
+      # cambiar, y ningún escenario que lea por aquí podría afirmar nada del contador.
+      invalidatedBy: [AssetUploaded, AssetPublished, ThumbnailDelivered]
 
   listAssets:
     description: Lista los archivos custodiados de forma paginada.
@@ -132,6 +137,33 @@ operations:
         from: [draft, published]
         to: quarantined
 
+  noteThumbnailDelivery:
+    description: Anota la entrega de miniatura que el renderizador comunica.
+    kind: command
+    # Interna: la dispara solo la suscripción.
+    internal: true
+    # La OTRA mitad de la idempotencia de consumo, y la que `quarantineAsset` no puede
+    # dar: esta operación NO declara `transitions`. Sin guarda de dominio que rechace la
+    # segunda aplicación, el generador elige el otro orden del IdempotencyGuard
+    # —`tryRecord`: marcar ANTES de procesar—, que cierra la ventana del duplicado a
+    # cambio de perder el mensaje si el handler falla. Y como el mensaje llega SIN
+    # envoltura Keel, la clave de deduplicación no es `metadata.eventId` sino la cabecera
+    # nativa que declara la suscripción: son las dos ramas que ninguna fixture con
+    # escenarios llegaba a ejercitar juntas.
+    input:
+      fields:
+        assetId:
+          type: uuid
+          required: true
+        deliveredAt:
+          type: timestamp
+          required: true
+    output: "void"
+    errors:
+      - code: ASSET_NOT_FOUND
+        when: No existe un archivo con ese id.
+        http: 404
+
   reconcileScans:
     description: Vuelve a pedir el análisis de los archivos publicados sin veredicto firme.
     kind: command
@@ -143,5 +175,13 @@ operations:
     # un desenlace que esperar sino una creencia que revalidar, así que el barrido no
     # espera: vuelve a preguntar. Si el escáner responde con amenaza, el camino normal
     # (ThreatFound → quarantineAsset) hace el resto.
+    #
+    # Cada minuto, no cada media hora: la frecuencia del barrido y el umbral de paciencia
+    # —cuánto puede envejecer un veredicto antes de revalidarlo— son DOS cosas separadas,
+    # y solo la primera tiene que ser corta. El umbral vive en `parameters/`, así que el
+    # barrido corre a menudo y revalida tarde, que es como se opera de verdad; con un cron
+    # de treinta minutos el mecanismo no se alcanza desde una prueba de caja negra y se
+    # quedaría, como estaba, sin ningún gate conductual. El escenario no toca el umbral:
+    # envejece `lastScannedAt` en la base y espera al siguiente tick.
     schedule:
-      cron: "*/30 * * * *"
+      cron: "* * * * *"

@@ -140,6 +140,67 @@ public interface StaleClaimRepository {
   assert.match(run(project).out, /reclamo del barrido/);
 });
 
+// El umbral se comprueba APARTE del reclamo, y esa separación costó dos correcciones:
+// exigirlo en el handler de `application` pedía importar Spring donde la constitución lo
+// prohíbe, y exigirlo en el mismo archivo que el reclamo contradice el reparto que el
+// propio scaffold impone (puerto sin framework, adaptador con @Value, repositorio con la
+// consulta). Lo que queda es lo único afirmable sin suponer arquitectura.
+test('el gate exige que el umbral del barrido esté parametrizado, esté donde esté', (t) => {
+  const project = build('catalog-extended');
+  const before = run(project);
+  if (before === null) return t.skip('sin bash en el PATH');
+  assert.match(before.out, /umbral del barrido/);
+
+  const config = path.join(project, 'src/main/java/com/commerce/catalog/infrastructure/configurations');
+  fs.mkdirSync(config, { recursive: true });
+  const file = path.join(config, 'ReconciliationConfig.java');
+  const parameterized = `package com.commerce.catalog.infrastructure.configurations;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Configuration;
+
+@Configuration
+public class ReconciliationConfig {
+
+    @Value("\${reconciliation.stale-after-ms:900000}")
+    private long staleAfterMs;
+}
+`;
+  // Un adaptador de configuración aparte lo apaga: es donde el reparto hexagonal lo pone.
+  fs.writeFileSync(file, parameterized);
+  assert.ok(!/umbral del barrido/.test(run(project).out), 'el umbral parametrizado aparte sigue reportándose');
+
+  // Quemado en el código, vuelve: no se ajusta por entorno sin recompilar.
+  fs.writeFileSync(file, parameterized.replace(/@Value\([^)]*\)\n\s*private long staleAfterMs;/, 'private static final long STALE_AFTER_MS = 900000L;'));
+  assert.match(run(project).out, /umbral del barrido/);
+
+  // Y un @Value que no habla de la espera tampoco vale: cualquier configuración tiene
+  // uno, y aceptarlo dejaría el check verde en todo proyecto con Spring.
+  fs.writeFileSync(file, parameterized.replace('reconciliation.stale-after-ms:900000', 'app.page-size:20').replace('staleAfterMs', 'pageSize').replace('ReconciliationConfig', 'PagingConfig'));
+  fs.renameSync(file, path.join(config, 'PagingConfig.java'));
+  assert.match(run(project).out, /umbral del barrido/);
+});
+
+// El falso negativo que costó una corrida entera: el gate exigía `@Value` DENTRO del
+// handler de `application`, y la constitución que el propio generador siembra prohíbe
+// que esa capa importe Spring. No había forma de satisfacer las dos cosas, así que el
+// agente de calidad reportó el hallazgo como imposible tras dos pasadas.
+test('reconciliation no exige @Value en el handler, que es capa sin Spring', () => {
+  const project = build('catalog-extended');
+  const content = read(project);
+
+  const handlerRows = content
+    .split('\n')
+    .filter((line) => line.startsWith('unit ') && line.includes('reconciliation') && line.includes('CommandHandler'));
+  assert.ok(handlerRows.length > 0, 'no hay fila de reconciliation sobre el handler');
+  for (const row of handlerRows) {
+    assert.ok(!row.includes('@Value'), `la fila sigue exigiendo @Value en application: ${row}`);
+  }
+  // Pero el umbral no se deja de mirar: se mira en su propia fila, sin decir en qué
+  // archivo tiene que estar.
+  assert.match(content, /^claim 'reconciliation' 'umbral del barrido' '@Value\|@ConfigurationProperties'/m);
+});
+
 test('los comentarios no cuentan como código: el TODO que se caza es el vivo', (t) => {
   const project = build('catalog-extended');
   const handler = execFileSync(
@@ -236,4 +297,140 @@ test('commandIdempotency: la entidad de la clave también fuerza INSERT', (t) =>
   const result = mutating(project, entity, (s) => s.replace(/implements Persistable<[^>]+>/, ''));
   if (result === null) return t.skip('sin bash en el PATH');
   assert.match(result.out, /\[commandIdempotency\][^\n]*IdempotencyRecordJpa/, result.out);
+});
+
+// ─── Cosecha de la corrida con RabbitMQ ───────────────────────────────────────
+//
+// El gate buscaba `<Evento>Listener.java`, un archivo por suscripción. Con varias
+// suscripciones sobre la MISMA cola —el caso de RabbitMQ cuando comparten fuente—
+// eso son consumidores compitiendo: cada mensaje llega a uno solo y los demás no lo
+// ven. La implementación correcta es un listener único que enruta por eventType, y el
+// gate la marcaba KO. Un falso negativo cuyo camino de menor resistencia es romper el
+// consumo para que el script se calle.
+test('dedupe: con la cola compartida, el gate acepta un solo listener que enruta', (t) => {
+  const service = loadService(fixture('stock-reservation'));
+  const workspace = tmpDir('keel-idem-check-');
+  const result = scaffoldService({
+    manifest: service.manifest,
+    layers: service.layers,
+    workspace,
+    force: true,
+    stack: { broker: 'rabbitmq' }
+  });
+  const project = path.join(workspace, result.outDir);
+
+  const before = run(project);
+  if (before === null) return t.skip('sin bash en el PATH');
+  // Recién generado sigue habiendo hallazgo —no hay listener— pero es UNO para las tres
+  // suscripciones y nombra la cola, no tres archivos que no deberían existir.
+  assert.match(before.out, /inventory\.events \(StockReserved, StockCountAdjusted, StockRejected\)/);
+  assert.equal(before.out.match(/\[dedupe\] inventory\.events/g).length, 1, before.out);
+  assert.ok(!/StockCountAdjustedListener\.java/.test(before.out), before.out);
+
+  // El listener único, con las dos ramas: `record` tras despachar para las que tienen
+  // guarda de dominio y `tryRecord` antes para la que no.
+  const dir = path.join(project, 'src/main/java/com/fulfillment/stockreservation/infrastructure/messaging/subscriptions');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, 'InventoryEventsListener.java'),
+    `package com.fulfillment.stockreservation.infrastructure.messaging.subscriptions;
+
+public class InventoryEventsListener {
+
+    private final IdempotencyGuard guard;
+
+    public void onMessage(String eventType, String eventId, String payload) {
+        switch (eventType) {
+            case "StockReserved" -> {
+                StockReservedMessage message = parse(payload);
+                if (guard.alreadyProcessed(eventId)) {
+                    return;
+                }
+                dispatch(message);
+                guard.record(eventId);
+            }
+            case "StockRejected" -> {
+                StockRejectedMessage message = parse(payload);
+                if (guard.alreadyProcessed(eventId)) {
+                    return;
+                }
+                dispatch(message);
+                guard.record(eventId);
+            }
+            case "StockCountAdjusted" -> {
+                StockCountAdjustedMessage message = parse(payload);
+                if (!guard.tryRecord(eventId)) {
+                    return;
+                }
+                dispatch(message);
+            }
+            default -> { }
+        }
+    }
+}
+`
+  );
+  const after = run(project);
+  assert.ok(!/inventory\.events \(/.test(after.out), after.out);
+
+  // Y no es un cheque de adorno: sin la rama `tryRecord` —la única guarda de la
+  // suscripción que no tiene transición detrás— el hallazgo vuelve.
+  fs.writeFileSync(
+    path.join(dir, 'InventoryEventsListener.java'),
+    fs.readFileSync(path.join(dir, 'InventoryEventsListener.java'), 'utf8').replace('!guard.tryRecord(eventId)', 'guard.alreadyProcessed(eventId)')
+  );
+  assert.match(run(project).out, /inventory\.events \(/);
+});
+
+// Con Kafka la forma correcta es la contraria —cada listener tiene su grupo y recibe el
+// topic entero—, así que ahí el gate sigue exigiendo un archivo por suscripción. Si esto
+// se relajara para todos, el gate dejaría de ver un listener que falta.
+test('dedupe: con Kafka se sigue exigiendo un listener por suscripción', (t) => {
+  const service = loadService(fixture('stock-reservation'));
+  const workspace = tmpDir('keel-idem-check-');
+  const result = scaffoldService({
+    manifest: service.manifest,
+    layers: service.layers,
+    workspace,
+    force: true,
+    stack: { broker: 'kafka' }
+  });
+  const out = run(path.join(workspace, result.outDir));
+  if (out === null) return t.skip('sin bash en el PATH');
+  assert.match(out.out, /no existe StockReservedListener\.java/);
+  assert.match(out.out, /no existe StockCountAdjustedListener\.java/);
+  assert.match(out.out, /no existe StockRejectedListener\.java/);
+});
+
+// La otra mitad del aviso de retención: sin guarda de dominio NO es inocuo, y el javadoc
+// tiene que decirlo donde se lee, no solo en la referencia del DSL. `stock-reservation`
+// tiene las dos formas en el mismo diseño, que es lo que hace comparable el par.
+test('el javadoc del Message avisa de la ventana de retención según haya guarda o no', () => {
+  const service = loadService(fixture('stock-reservation'));
+  const workspace = tmpDir('keel-idem-check-');
+  const result = scaffoldService({
+    manifest: service.manifest,
+    layers: service.layers,
+    workspace,
+    force: true,
+    stack: { broker: 'kafka' }
+  });
+  const subs = path.join(
+    workspace,
+    result.outDir,
+    'src/main/java/com/fulfillment/stockreservation/infrastructure/messaging/subscriptions'
+  );
+  const read = (name) => fs.readFileSync(path.join(subs, name), 'utf8');
+
+  // Con transiciones (applyStockReserved): la repetición la frena el agregado.
+  const guarded = read('StockReservedMessage.java');
+  assert.ok(guarded.includes('processed-event.purge.retention-days'), guarded);
+  assert.ok(guarded.includes('esa no caduca'), guarded);
+
+  // Sin ellas (noteStockCount, un contador): pasada la retención el efecto se repite, y
+  // eso no lo arregla ningún parámetro — es un hueco del diseño.
+  const unguarded = read('StockCountAdjustedMessage.java');
+  assert.ok(unguarded.includes('Aquí NO es inocuo'), unguarded);
+  assert.ok(unguarded.includes('guarda de dominio'), unguarded);
+  assert.ok(!unguarded.includes('esa no caduca'), unguarded);
 });

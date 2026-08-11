@@ -13,6 +13,11 @@ entities:
       - [labels]   # array → índice multikey, sin tabla de elementos
       - [owner]    # referencia a otro agregado → owner_id
       - [status]
+      # El predicado del barrido `reconcileScans`: estado publicado + cuánto lleva sin
+      # revalidar. Compuesto y en este orden —igualdad primero, rango después— porque es
+      # lo único que un índice aprovecha entero. Con el de `status` a solas, la base
+      # filtra por estado y evalúa la marca documento a documento.
+      - [status, lastScannedAt]
 
 # Autoría: exige la capa security (sin principal autenticado no hay autor). Es lo que
 # enciende @CreatedBy/@LastModifiedBy y el AuditorAware en la rama documental.

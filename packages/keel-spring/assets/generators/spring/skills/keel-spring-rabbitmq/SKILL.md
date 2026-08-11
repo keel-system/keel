@@ -126,11 +126,28 @@ En ambos casos el exchange y la routing key salen de `parameters/<perfil>/messag
 (`messaging.publishing.destination` y `messaging.publishing.routing-keys.<evento-kebab>`), leídos
 con `@Value`: no los escribas literales. Declara ese exchange en la topología.
 
-## Listener (uno por suscripción)
+## Listener (uno por COLA, no uno por suscripción)
 
 `@Component` con `@RabbitListener(queues = "${messaging.subscriptions.<evento-kebab>.topic:<fuente>.events}")`
 que mapea el `<Evento>Message` al mensaje de la operación `triggers` y despacha vía
 `UseCaseMediator` (el javadoc del record generado ya trae el mapeo campo a campo).
+
+**Cuenta las colas antes de escribir el primero.** El destino sale de la FUENTE, así que
+varias suscripciones del mismo servicio de origen —o del mismo `channel`— resuelven a la
+**misma cola**. Y varios `@RabbitListener` sobre una cola no son varios oyentes: son
+consumidores **compitiendo**. El broker reparte, cada mensaje llega a uno solo y los demás
+no lo ven nunca; el que lo recibe suele ser el de otro tipo, que lo descarta o lo
+deserializa con los campos a null. El síntoma no es un error: son mensajes que se pierden
+en silencio y escenarios que fallan como si el handler no hubiera hecho su trabajo.
+
+Con la cola compartida, escribe **un solo listener** que enrute por el tipo del mensaje
+(`metadata.eventType` con envoltura Keel, o el `discriminator` que declare el `contract`) y
+despache al `<Evento>Message` que corresponda. Aquí no aplica lo de descartar lo ajeno: en
+esa cola no hay nada ajeno, todo es tuyo y va a una rama distinta.
+
+Esto es propio de RabbitMQ y no se traslada: en Kafka cada listener tiene su grupo y
+recibe el topic entero, y en SNS/SQS cada suscripción tiene cola propia colgada del topic.
+En los dos, un listener por suscripción es lo correcto.
 **La cola de la suscripción y su descarte los declara build**, en `DeadLetterConfig`:
 `QueueBuilder.durable(<destino>)` con `x-dead-letter-exchange` vacío y
 `x-dead-letter-routing-key` apuntando a `<destino>-dlq`, más la propia `-dlq`.

@@ -599,7 +599,7 @@ ${hasIdempotency(model) ? `
 ` : ''}${hasMultipart(model) ? `
     /** Subida multipart: la parte binaria más los campos simples del formulario. */
     protected Response multipart(String path, String partName, String filename, String contentType, byte[] content, Map<String, String> fields${security ? ', String token' : ''}) {
-        return multipart(path, partName, filename, contentType, content, fields${security ? ', token' : ''}, ${hasIdempotency(model) ? 'idempotencyKey()' : 'null'});
+        return multipartTo(path, partName, filename, contentType, content, fields${security ? ', token' : ''}, ${hasIdempotency(model) ? 'idempotencyKey()' : 'null'});
     }
 ${hasIdempotency(model) ? `
     /**
@@ -608,10 +608,19 @@ ${hasIdempotency(model) ? `
      * una operación multipart.
      */
     protected Response multipartWithKey(String path, String partName, String filename, String contentType, byte[] content, Map<String, String> fields${security ? ', String token' : ''}, String idempotencyKey) {
-        return multipart(path, partName, filename, contentType, content, fields${security ? ', token' : ''}, idempotencyKey);
+        return multipartTo(path, partName, filename, contentType, content, fields${security ? ', token' : ''}, idempotencyKey);
     }
 ` : ''}
-    private Response multipart(String path, String partName, String filename, String contentType, byte[] content, Map<String, String> fields${security ? ', String token' : ''}, String idempotencyKey) {
+    /**
+     * El cuerpo de la subida, contra la URL que se le pase.
+     *
+     * Toma la URL y no la ruta porque la subida también tiene que poder dirigirse a la
+     * SEGUNDA réplica ({@code onReplicaMultipart}), y ahí el destino es absoluto. Con la
+     * ruta cerrada dentro, un escenario de clúster sobre una operación multipart no se
+     * puede escribir — y ese es exactamente el caso que el registro de idempotencia
+     * existe para cerrar.
+     */
+    private Response multipartTo(String url, String partName, String filename, String contentType, byte[] content, Map<String, String> fields${security ? ', String token' : ''}, String idempotencyKey) {
         ByteArrayResource part = new ByteArrayResource(content) {
             @Override
             public String getFilename() {
@@ -633,9 +642,9 @@ ${hasIdempotency(model) ? `
         if (token != null) {
             headers.setBearerAuth(token);
         }` : ''}
-        ResponseEntity<String> entity = rest.exchange(path, HttpMethod.POST, new HttpEntity<>(form, headers), String.class);
+        ResponseEntity<String> entity = rest.exchange(url, HttpMethod.POST, new HttpEntity<>(form, headers), String.class);
         Response response = new Response(entity.getStatusCode().value(), entity.getHeaders(), entity.getBody());
-        FailureCapture.record("POST (multipart)", path, headers, "<" + content.length + " bytes>", response);
+        FailureCapture.record("POST (multipart)", url, headers, "<" + content.length + " bytes>", response);
         return response;
     }
 ` : ''}
@@ -1141,7 +1150,22 @@ function REPLICA_BODY(model) {
         }
         return exchange(method, "http://localhost:" + REPLICA_PORT + path, jsonBody${model.layersPresent.security ? ', token' : ', null'}${hasIdempotency(model) ? ', idempotencyKey' : ', null'});
     }
-`
+${hasMultipart(model) ? `
+    /**
+     * Lo mismo, para una operación MULTIPART. No es un adorno: sin esto, un diseño cuya
+     * mutación con clave de idempotencia es una subida —el caso de cualquier custodia de
+     * archivos— no puede escribir su escenario de clúster, porque {@link #onReplica} solo
+     * sabe mandar JSON. El escenario se queda sin ejercitar y lo que no se ejercita es
+     * justo lo que el registro de idempotencia existe para cerrar: dos peticiones con la
+     * misma clave en dos PROCESOS distintos.
+     */
+    protected Response onReplicaMultipart(String path, String partName, String filename, String contentType, byte[] content, Map<String, String> fields${model.layersPresent.security ? ', String token' : ''}${hasIdempotency(model) ? ', String idempotencyKey' : ''}) {
+        if (REPLICA == null || !REPLICA.isAlive()) {
+            throw new IllegalStateException("La réplica no está arrancada: llama antes a startReplica()");
+        }
+        return multipartTo("http://localhost:" + REPLICA_PORT + path, partName, filename, contentType, content, fields${model.layersPresent.security ? ', token' : ''}${hasIdempotency(model) ? ', idempotencyKey' : ', null'});
+    }
+` : ''}`
     : '';
   return `
     // -- Segunda réplica ------------------------------------------------------
@@ -1633,7 +1657,16 @@ function deadLetterSection(model) {
             }
             return emptyIfBrokerStopped(e);
         }`
-      : '        return publishedMessages(deadLetterTopic, count);';
+      : // El resto de brokers sí tienen la cola creada de antemano, así que leer no falla
+        // — pero «vacío» NO es cadena vacía en ninguno de los dos: la API de RabbitMQ
+        // devuelve el literal "[]" y la CLI de SQS un JSON sin la clave "Messages". El
+        // javadoc de este método promete cadena vacía y la aserción que de verdad importa
+        // es la NEGATIVA (`deadLetterMessages(...).isBlank()`), así que sin traducir, el
+        // caso en que el servicio se comporta bien es justo el que falla. Se traduce con
+        // el predicado del broker —el mismo de `broker-probes.js`— y no con una
+        // comparación escrita a mano, que es como se olvida uno de los dos.
+        `        String messages = publishedMessages(deadLetterTopic, count).trim();
+        return ${emptyReadJava(broker.id, 'messages')} ? "" : messages;`;
 
   return `
     /** Suscripción → su destino de descarte, derivados del diseño. */
@@ -1753,7 +1786,7 @@ ${outage}`;
 
   if (broker.id === 'snssqs') {
     const base = expr('QUEUE_URL');
-    const read = readParts('snssqs', { destination: expr('destination'), count: expr('String.valueOf(count)'), base });
+    const read = readParts('snssqs', { destination: expr('destination'), count: expr('String.valueOf(size)'), base });
     const purge = purgeParts('snssqs', { destination: expr('destination'), base });
     return `
     private static final String QUEUE_URL = "${ENDPOINTS.snssqs.queueUrlPrefix}";
@@ -1761,11 +1794,37 @@ ${outage}`;
     private static final List<String> AWS = List.of(${javaArgs(prefix('snssqs'))});
 ${doc}
     protected static String publishedMessages(String destination, int count) {
+        // SQS acota \`--max-number-of-messages\` a 1..10 y contesta InvalidParameterValue
+        // por encima: pedir de una vez los mensajes de un escenario de clúster reventaba
+        // la lectura en vez de esperar. Se pide por lotes y se corta en cuanto uno vuelve
+        // INCOMPLETO, que es la señal de que la cola no tiene más — seguir pidiendo con
+        // \`--visibility-timeout 0\` devolvería otra vez los mismos, y un conteo sobre el
+        // texto acumulado los contaría dos veces.
+        StringBuilder batches = new StringBuilder();
+        int remaining = Math.max(count, 1);
         try {
-            return aws(${javaArgs(read)});
+            while (remaining > 0) {
+                int size = Math.min(remaining, 10);
+                String batch = aws(${javaArgs(read)});
+                batches.append(batch);
+                remaining -= size;
+                if (receivedCount(batch) < size) {
+                    break;
+                }
+            }
         } catch (RuntimeException e) {
             return emptyIfBrokerStopped(e);
         }
+        return batches.toString();
+    }
+
+    /** Cuántos mensajes trae una respuesta de {@code receive-message}: uno por cuerpo. */
+    private static int receivedCount(String response) {
+        int total = 0;
+        for (int at = response.indexOf("\\"Body\\""); at >= 0; at = response.indexOf("\\"Body\\"", at + 1)) {
+            total++;
+        }
+        return total;
     }
 ${purgeDoc}
     protected static void purgeMessages(String destination) {
@@ -2117,6 +2176,18 @@ function deliverMethod(sub) {
   const headers = [];
   if (sub.discriminator?.location === 'header') {
     headers.push(`"${sub.discriminator.name}", "${sub.discriminator.value ?? sub.name}"`);
+  }
+  // El tipo del evento como atributo NATIVO del mensaje, además de donde lo lleve la
+  // envoltura. En SNS no es decorativo: `init-messaging.sh` suscribe cada cola con una
+  // FilterPolicy sobre el atributo `eventType`, así que un mensaje sin él lo descarta el
+  // broker EN SILENCIO — el escenario espera un efecto que nunca se dispara y el fallo
+  // apunta al handler, que no llegó a enterarse. En Kafka y RabbitMQ no enruta nada, pero
+  // es lo que estampa un emisor real (`props.setType`, header del record), así que
+  // mandarlo iguala el arnés a la fuente que suplanta en vez de a un caso especial.
+  // Si el discriminador del diseño YA ocupa ese nombre, no se repite: `Map.of` con dos
+  // claves iguales revienta en tiempo de ejecución.
+  if (sub.discriminator?.location !== 'header' || sub.discriminator.name !== 'eventType') {
+    headers.push(`"eventType", "${sub.name}"`);
   }
   if (sub.messageId?.location === 'header') {
     headers.push(`"${sub.messageId.name}", messageId`);

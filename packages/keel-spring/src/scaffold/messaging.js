@@ -415,6 +415,17 @@ function contractJavadoc(sub, model) {
         ? `Orden: IdempotencyGuard.alreadyProcessed(...) antes de despachar y record(...) DESPUÉS de que el handler termine bien. La operación declara transiciones, así que la repetición la frena el agregado y lo que no puede perderse es el mensaje.`
         : `Orden: IdempotencyGuard.tryRecord(...) antes de despachar — la operación no declara ninguna transición que frene la repetición, así que la ventana se cierra reclamando antes. Ojo: un fallo del handler deja el mensaje marcado y perdido; si eso no es tolerable, lo que falta es la guarda de dominio en el diseño.`
     );
+    // La ventana. Se dice AQUÍ —y no solo en la referencia del DSL— porque este javadoc
+    // es lo que lee quien escribe el listener, y la garantía que va a implementar no es
+    // la que su nombre sugiere: el registro se purga, así que «no se procesa dos veces»
+    // tiene fecha de caducidad. Con guarda de dominio da igual (el agregado no caduca);
+    // sin ella, el efecto es repetible en cuanto pasa la retención.
+    lines.push(
+      `La deduplicación tiene VENTANA: el registro se purga a los processed-event.purge.retention-days (default 14, en parameters/), así que una reentrega posterior se procesa como nueva.` +
+        (sub.triggerHasDomainGuard
+          ? ' Aquí es inocuo: la transición del agregado sigue rechazándola, y esa no caduca.'
+          : ' Aquí NO es inocuo: sin transición que la frene, pasada la retención el efecto se vuelve a aplicar. Si el negocio necesita una ventana mayor, el mecanismo correcto es una guarda de dominio, no esta deduplicación — y eso es un hueco del diseño, no algo que se arregle en el listener.')
+    );
   }
   // Otro camino puede sacar a la entidad del mismo estado antes que este listener. El
   // guard del agregado arbitra, y al perdedor se le rechaza la transición: eso es la

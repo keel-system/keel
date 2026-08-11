@@ -61,6 +61,28 @@ entities:
         type: AssetStatus
         required: true
         default: draft
+      # CONTADOR, y por eso `noteThumbnailDelivery` no es idempotente por naturaleza:
+      # aplicarla dos veces se ve en la API. Es lo que hace observable la única guarda
+      # que le queda a una suscripción sin transición de lifecycle — el registro de
+      # procesados—, y la clave de esa suscripción no es la envoltura Keel sino una
+      # cabecera nativa del renderizador.
+      thumbnailDeliveryCount:
+        type: int
+        required: true
+        default: 0
+        description: Cuántas entregas de su miniatura ha comunicado el renderizador.
+      lastDeliveredAt:
+        type: timestamp
+        description: Cuándo sirvió el renderizador la miniatura por última vez.
+      # La marca de espera del barrido. No se llama `scanAssetAwaitingSince` porque aquí
+      # no se espera un desenlace: el escáner responde en el acto y lo que envejece es la
+      # CREENCIA de que el archivo está limpio. Es el equivalente temporal que busca la
+      # nota del stub de reconciliación, y tiene que ser propio: `updatedAt` rejuvenece
+      # con cualquier otra escritura y dejaría el archivo invisible al barrido para
+      # siempre.
+      lastScannedAt:
+        type: timestamp
+        description: Cuándo dio el escáner su último veredicto sobre el binario.
     relations:
       owner:
         entity: Owner

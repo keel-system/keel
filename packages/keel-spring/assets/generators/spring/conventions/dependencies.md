@@ -214,6 +214,30 @@ candidato sin registrarlo como error.
 Queda una ventana que ningún mecanismo propio cierra: que el proveedor confirme y procese la cancelación
 en orden inverso. Eso se acota con un umbral generoso, no con código.
 
+## La deduplicación de consumo tiene ventana
+
+Vale para **toda** suscripción, no solo para las que alimentan una réplica (donde ya lo dice
+la regla 4). El `IdempotencyGuard` recuerda los mensajes procesados durante
+`processed-event.purge.retention-days` —14 días por defecto, en `parameters/`—, y la purga
+retira lo anterior. La garantía real es **«no se procesa dos veces dentro de la retención»**,
+no «nunca jamás».
+
+Cuál es su consecuencia depende de lo que haya debajo, y es la misma línea que separa los dos
+órdenes del guard:
+
+- **Con guarda de dominio** (la operación declara `transitions`): inocuo. La transición
+  rechaza la repetición y el agregado no caduca; la deduplicación solo ahorra trabajo.
+- **Sin ella** (`tryRecord`, un contador o un asignador): pasada la retención, el efecto se
+  vuelve a aplicar. Ninguna configuración lo arregla — subir la retención mueve la fecha, no
+  la quita.
+
+Por eso, cuando el negocio necesita que un hecho **no** pueda repetirse por muy tarde que
+reaparezca, el mecanismo correcto no es esta deduplicación sino una **guarda de dominio**: un
+estado, una marca o una clave natural que haga la segunda aplicación imposible por sí sola.
+Eso se decide en el diseño (`transitions` en la operación disparada, o un invariante del
+agregado), no en el listener. Si al escribirlo ves que hace falta y no está, es un
+`designGap`, no algo que se resuelva con un parámetro.
+
 ## Antipatrones
 
 - Llamar al Projector desde el listener (salta el mediator y el guard).

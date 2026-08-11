@@ -15,6 +15,7 @@
 // El agente de infraestructura ya no escribe el script: lo ejecuta y verifica.
 
 import { AUTH } from '../lib/stack-catalog.js';
+import { RUNTIME_RESOLUTION, composeResolution } from './devtools.js';
 
 const PASSWORD = 'password';
 // Secreto de los clientes M2M que solo existen para las variantes negativas de los
@@ -218,7 +219,7 @@ while :; do
   fi
   if [ "$attempt" -ge "$KC_WAIT_ATTEMPTS" ]; then
     echo "Keycloak no acepto una sesion admin tras $KC_WAIT_ATTEMPTS intentos ($((KC_WAIT_ATTEMPTS * KC_WAIT_DELAY))s)." >&2
-    echo "Diagnostica con: $RUNTIME compose -f infra/docker-compose.yaml logs keycloak" >&2
+    echo "Diagnostica con: \${COMPOSE[*]} logs keycloak" >&2
     exit 1
   fi
   attempt=$((attempt + 1))
@@ -330,11 +331,14 @@ ${assignments.join('\n')}`);
 set -euo pipefail
 export MSYS_NO_PATHCONV=1
 
-RUNTIME="\${CONTAINER_RUNTIME:-docker}"
-COMPOSE=(docker compose -f infra/docker-compose.yaml)
-if [ "$RUNTIME" = "podman" ]; then
-  COMPOSE=(podman compose -f infra/docker-compose.yaml)
-fi
+# Runtime y frontend de compose con la MISMA lógica que up.sh, y no una propia: este
+# script hardcodeaba \`podman compose\`, que en Windows delega en el docker-compose.exe del
+# PATH y no encuentra el named pipe de la máquina de podman. El síntoma era «Keycloak no
+# aceptó una sesión admin tras N intentos» con Keycloak perfectamente sano — un falso
+# negativo que acusa al servidor de un problema que es del frontend de compose.
+${RUNTIME_RESOLUTION}
+
+${composeResolution(['-f', 'infra/docker-compose.yaml'])}
 
 KC="\${COMPOSE[*]} exec -T keycloak /opt/keycloak/bin/kcadm.sh"
 REALM=${realm}

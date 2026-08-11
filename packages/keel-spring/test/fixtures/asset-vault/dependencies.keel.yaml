@@ -12,6 +12,26 @@ dependencies:
         fetchedFrom:
           client: rendering
           call: getThumbnail
+    activations:
+      # La ACTIVACIÓN DE VUELTA de la compensación. Sin ella, poner el archivo en
+      # cuarentena solo devuelve el estado propio y el renderizador sigue sirviendo la
+      # miniatura de un binario infectado: deshacer a medias deja al proveedor y a
+      # nosotros contando historias distintas. Es también lo que hace exigente la familia
+      # `compensation` del gate — con este `via.client`, el handler de `quarantineAsset`
+      # tiene que llegar al proveedor y no basta con mover el estado.
+      purgeThumbnail:
+        description: Retirada de la miniatura del archivo que pasó a cuarentena.
+        triggeredBy: [quarantineAsset]
+        via:
+          client: rendering
+          call: purgeThumbnail
+        effect: La miniatura del archivo deja de estar publicada en el renderizador.
+        # Ignorar y seguir: la cuarentena es lo que protege, y no se puede quedar sin
+        # aplicar porque el renderizador no responda. Lo que queda es una miniatura
+        # huérfana del lado ajeno, que es un coste menor que un archivo infectado
+        # publicado.
+        onFailure:
+          action: ignore
 
   security-scanner:
     description: Escáner antimalware, obligatorio antes de publicar un archivo.

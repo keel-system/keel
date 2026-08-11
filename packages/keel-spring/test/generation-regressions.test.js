@@ -14,6 +14,7 @@ import { loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
 import { cacheFlushCmd } from '../src/scaffold/devtools.js';
 import { CACHES } from '../src/lib/stack-catalog.js';
+import { emptyReadJava } from '../src/lib/broker-probes.js';
 
 const fixtureDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'catalog-extended');
 const JAVA = 'src/main/java/com/commerce/catalog';
@@ -418,7 +419,7 @@ test('el arnés permite fijar la Idempotency-Key también en una subida multipar
   assert.ok(harness.includes('String idempotencyKey) {'));
   // La firma corta sigue existiendo y delega: los escenarios que no ejercitan
   // deduplicación no cambian.
-  assert.ok(harness.includes('Map<String, String> fields) {\n        return multipart('));
+  assert.ok(harness.includes('Map<String, String> fields) {\n        return multipartTo('));
   // El header ya no se estampa incondicionalmente: sale de la clave recibida.
   assert.ok(!harness.includes('headers.set("Idempotency-Key", idempotencyKey());'));
   assert.ok(harness.includes('headers.set("Idempotency-Key", idempotencyKey);'));
@@ -1329,4 +1330,153 @@ test('los índices de purga tienen el mismo nombre en las dos ramas de persisten
   // El outbox ya lo tenía; va en la misma aserción para que los tres se lean juntos.
   const outbox = read(`${JAVA}/infrastructure/messaging/outbox/OutboxEventJpa.java`);
   assert.ok(outbox.includes('ix_outbox_event_pending'));
+});
+
+// ─── Cosecha de la corrida documental de asset-vault ──────────────────────────
+//
+// Lo que solo apareció al orquestar el pipeline entero sobre Mongo. Ninguno de los
+// dos lo veía la suite de cadenas: uno dejó un escenario sin ejercitar por una firma
+// que no existía, y el otro daba por muerto un Keycloak sano.
+
+test('el arnés sabe dirigir una subida multipart a la segunda réplica', () => {
+  const { read } = scaffoldExtended();
+  const harness = read('src/integrationTest/java/com/commerce/catalog/flows/AbstractFlowIT.java');
+
+  // Sin esto, el escenario de clúster de un diseño cuya mutación con clave es una
+  // SUBIDA es inexpresable: `onReplica` solo manda JSON. En la corrida documental
+  // FL-CLU-003 se quedó NO_EJERCITADO exactamente por aquí — y es el escenario que
+  // separa «lo arbitra la base» de «lo arbitra un candado en memoria».
+  assert.ok(harness.includes('protected Response onReplicaMultipart('));
+  // Reutiliza el cuerpo de la subida contra una URL absoluta, en vez de duplicarlo:
+  // dos constructores del mismo formulario se separan al primer cambio.
+  assert.match(harness, /onReplicaMultipart\([\s\S]*?return multipartTo\("http:\/\/localhost:" \+ REPLICA_PORT \+ path/);
+  // Y comparte la guarda de `onReplica`: llamar sin réplica arrancada es un error del
+  // escenario, no un fallo del servicio.
+  assert.match(harness, /onReplicaMultipart\([\s\S]*?La réplica no está arrancada/);
+});
+
+test('init-keycloak.sh resuelve el frontend de compose igual que up.sh', () => {
+  // Con asset-vault y no con catalog-extended: el script solo se genera cuando el
+  // diseño declara identidad por token, y es la fixture de la corrida que lo destapó.
+  const vaultDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'asset-vault');
+  const { manifest, layers, errors } = loadService(vaultDir);
+  assert.deepEqual(errors, []);
+  const workspace = tmpDir('keel-regression-');
+  scaffoldService({ manifest, layers, workspace, force: true });
+  const script = fs.readFileSync(
+    path.join(workspace, 'services', 'asset-vault-spring', 'infra', 'init-keycloak.sh'),
+    'utf8'
+  );
+
+  // El defecto: `podman compose` hardcodeado. En Windows delega en el
+  // docker-compose.exe del PATH, que busca el named pipe de Docker Desktop y no el de
+  // la máquina de podman — el `exec` falla y el script acusa a Keycloak de no arrancar
+  // («no aceptó una sesión admin tras N intentos») con Keycloak sirviendo desde hacía
+  // rato. Un falso negativo que señala al sitio equivocado.
+  assert.ok(!/COMPOSE=\(podman compose/.test(script), script);
+  assert.ok(!/COMPOSE=\(docker compose/.test(script), script);
+  // La misma resolución que up.sh: sondeo con `compose ls` (que sí toca el motor) y
+  // caída a podman-compose.
+  assert.ok(script.includes('! podman compose ls >/dev/null 2>&1'), script);
+  assert.ok(script.includes('COMPOSE=(podman-compose -f infra/docker-compose.yaml)'), script);
+  // Y el runtime se detecta, no se asume docker: en una máquina con solo podman el
+  // default anterior elegía un binario que no existe.
+  assert.ok(script.includes('command -v docker >/dev/null 2>&1'), script);
+  // El mensaje de diagnóstico cita el frontend que de verdad se usó.
+  assert.ok(script.includes('${COMPOSE[*]} logs keycloak'), script);
+});
+
+// ─── Cosecha de la corrida con RabbitMQ ───────────────────────────────────────
+
+test('deadLetterMessages traduce «cola viva y vacía» a cadena vacía en cada broker', () => {
+  const { manifest, layers, errors } = loadService(fixtureDir);
+  assert.deepEqual(errors, []);
+
+  // El defecto: delegaba en `publishedMessages` sin traducir, y «vacío» no es cadena
+  // vacía en ningún broker salvo Kafka — la API de RabbitMQ devuelve el literal "[]" y
+  // la CLI de SQS un JSON sin la clave "Messages". El javadoc promete cadena vacía y la
+  // aserción que importa es la NEGATIVA (`.isBlank()`), así que el caso en el que el
+  // servicio se comporta BIEN era justo el que fallaba: tres escenarios de dos clases
+  // distintas cayeron con `Expecting blank but was: "[]"`.
+  const expected = {
+    rabbitmq: 'messages.trim().equals("[]")',
+    snssqs: '!messages.contains("\\"Messages\\"")'
+  };
+  for (const [broker, predicate] of Object.entries(expected)) {
+    const workspace = tmpDir('keel-regression-');
+    scaffoldService({ manifest, layers, workspace, force: true, stack: { broker } });
+    const harness = fs.readFileSync(
+      path.join(workspace, 'services/catalog-spring/src/integrationTest/java/com/commerce/catalog/flows/AbstractFlowIT.java'),
+      'utf8'
+    );
+    assert.ok(harness.includes(`return ${predicate} ? "" : messages;`), `${broker}: ${harness.slice(0, 0)}falta la traducción de cola vacía`);
+    // El predicado sale del módulo compartido, no de una comparación escrita a mano:
+    // así el que se olvida no es un broker, es ninguno.
+    assert.ok(harness.includes(emptyReadJava(broker, 'messages')), broker);
+  }
+
+  // Y `publishedMessages` NO se toca: sigue devolviendo el crudo del broker, que es de
+  // lo que depende el humo del arnés para distinguir «no hay nada» de «no leí nada».
+  const workspace = tmpDir('keel-regression-');
+  scaffoldService({ manifest, layers, workspace, force: true, stack: { broker: 'rabbitmq' } });
+  const harness = fs.readFileSync(
+    path.join(workspace, 'services/catalog-spring/src/integrationTest/java/com/commerce/catalog/flows/AbstractFlowIT.java'),
+    'utf8'
+  );
+  const published = harness.slice(harness.indexOf('protected static String publishedMessages'));
+  assert.ok(!published.slice(0, 800).includes('? "" : messages'), published.slice(0, 800));
+});
+
+// ─── Cosecha de la corrida con SNS/SQS ────────────────────────────────────────
+
+test('la entrega de un evento entrante lleva el eventType como atributo nativo', () => {
+  const { manifest, layers, errors } = loadService(fixtureDir);
+  assert.deepEqual(errors, []);
+
+  // En SNS esto no es decoración: `init-messaging.sh` suscribe cada cola con una
+  // FilterPolicy sobre el atributo `eventType`, así que sin él el broker descarta el
+  // mensaje EN SILENCIO — seis escenarios de la corrida esperaban un efecto que nunca
+  // se disparaba, y el fallo señalaba al handler, que ni se enteró.
+  for (const broker of ['snssqs', 'rabbitmq', 'kafka']) {
+    const workspace = tmpDir('keel-regression-');
+    scaffoldService({ manifest, layers, workspace, force: true, stack: { broker } });
+    const harness = fs.readFileSync(
+      path.join(workspace, 'services/catalog-spring/src/integrationTest/java/com/commerce/catalog/flows/AbstractFlowIT.java'),
+      'utf8'
+    );
+    const deliver = harness.slice(harness.indexOf('protected static void deliverWithdrawalRejected('));
+    assert.match(deliver.slice(0, 400), /Map\.of\([^)]*"eventType", "WithdrawalRejected"/, broker);
+
+    // Y ninguna entrega de suscripción se queda con el mapa vacío, que era el estado
+    // anterior. `publishRaw` queda fuera a propósito: publica en el canal PROPIO y solo
+    // lo usa el humo del arnés, que mide la fontanería del canal y no el enrutado.
+    const methods = [
+      ...harness.matchAll(/protected static void deliver[A-Z]\w+\(String messageId, String payloadJson\) \{\s*deliverMessage\(([^;]*)\);/g)
+    ];
+    assert.ok(methods.length > 0, `${broker}: no hay entregas de suscripción`);
+    for (const [, args] of methods) {
+      assert.ok(args.includes('"eventType"'), `${broker}: una entrega va sin eventType — ${args}`);
+    }
+  }
+});
+
+test('la lectura de SQS pide por lotes: el límite de 10 es del broker, no del escenario', () => {
+  const { manifest, layers } = loadService(fixtureDir);
+  const workspace = tmpDir('keel-regression-');
+  scaffoldService({ manifest, layers, workspace, force: true, stack: { broker: 'snssqs' } });
+  const harness = fs.readFileSync(
+    path.join(workspace, 'services/catalog-spring/src/integrationTest/java/com/commerce/catalog/flows/AbstractFlowIT.java'),
+    'utf8'
+  );
+
+  // `--max-number-of-messages` acepta 1..10 y contesta InvalidParameterValue por encima:
+  // pedir de una vez los mensajes de un escenario de clúster reventaba la lectura.
+  assert.ok(harness.includes('int size = Math.min(remaining, 10);'), harness.slice(harness.indexOf('publishedMessages'), harness.indexOf('publishedMessages') + 900));
+  assert.ok(harness.includes('String.valueOf(size)'));
+  // Y se corta en cuanto un lote vuelve incompleto: con --visibility-timeout 0 el
+  // mensaje sigue visible, así que seguir pidiendo lo devolvería otra vez y un conteo
+  // sobre el texto acumulado lo contaría dos veces.
+  assert.ok(harness.includes('if (receivedCount(batch) < size) {'));
+  // El contador no se inventa nada: cuenta cuerpos de la respuesta de receive-message.
+  assert.match(harness, /private static int receivedCount\(String response\)/);
 });

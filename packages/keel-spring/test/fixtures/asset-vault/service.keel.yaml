@@ -11,7 +11,14 @@ keel: "2.6"
 #     + dependencies
 #   - idempotencia de PETICIÓN → `idempotency_record` + `ix_idempotency_record_expires_at`,
 #                                el único índice de infraestructura que ninguna fixture generaba
-#   - idempotencia de CONSUMO  → `processed_event` con `contract.messageId`
+#   - idempotencia de CONSUMO  → `processed_event`, y sus DOS ramas: `alreadyProcessed`+
+#     `record` con clave en la envoltura Keel (MalwareDetected, que sí declara transiciones)
+#     y `tryRecord` con clave en cabecera nativa de una fuente ajena (ThumbnailDelivered,
+#     cuyo trigger no declara ninguna) — la segunda no la ejercitaba ninguna fixture con
+#     escenarios: la única que declaraba `contract.messageId` no tiene capa `api`
+#   - compensación CON llamada de vuelta → `quarantineAsset` dispara `purgeThumbnail`, así
+#     que la familia `compensation` del gate exige que el handler llegue al proveedor
+#   - reconciliación con gate conductual → `reconcileScans` revalida veredictos envejecidos
 #   - outbox                   → publicación fiable, que es lo que hace puntuable `broker-check`
 #
 # Y en los índices, las tres ramas de `documentPathsFor()` que faltaban: multikey sobre

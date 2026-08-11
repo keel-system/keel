@@ -78,3 +78,31 @@ clients:
           slidingWindowSize: 20
           waitDurationMs: 20000
         fallback: Devolver la ficha sin miniatura.
+
+      # La mitad de la compensación que vive FUERA: al poner un archivo en cuarentena hay
+      # que retirar su miniatura del renderizador, que la sigue sirviendo.
+      purgeThumbnail:
+        contract: DELETE /thumbnails/{assetId} retira la miniatura publicada del archivo.
+        method: DELETE
+        path: /thumbnails/{assetId}
+        request:
+          pathParams:
+            assetId:
+              type: uuid
+              required: true
+        timeoutMs: 2000
+        # Escritura ajena con reintentos: sin clave, un timeout de red retiraría dos veces
+        # la misma miniatura — inocuo hoy, pero es la misma cabecera que impide que un
+        # reintento borre una miniatura NUEVA del mismo archivo.
+        idempotency:
+          keyFrom: payload-hash
+        retry:
+          maxAttempts: 3
+          initialDelayMs: 200
+          maxDelayMs: 2000
+          retryOn: [timeout, connection]
+        circuitBreaker:
+          failureRateThreshold: 60
+          slidingWindowSize: 20
+          waitDurationMs: 20000
+        fallback: Seguir con la cuarentena; la miniatura huérfana se retira en la siguiente pasada.

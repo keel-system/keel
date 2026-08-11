@@ -1,3 +1,13 @@
+# El canal de telemetría del renderizador, que no es nuestro. Lo declara `external`
+# porque eso es lo que cambia el contrato de recepción por defecto: la fuente no es un
+# servicio Keel, así que la identidad del mensaje deja de ser `metadata.eventId` y pasa a
+# ser lo que ella estampe — aquí, una cabecera nativa del broker. Es la otra mitad de la
+# idempotencia de consumo, y la que no tenía ninguna fixture con escenarios.
+channels:
+  renderingTelemetry:
+    description: Canal de telemetría del servicio de renderizado, propiedad de ese sistema.
+    external: true
+
 publishing:
   reliability: outbox
   events:
@@ -45,6 +55,35 @@ subscriptions:
     input:
       assetId: assetId
       reason: reason
+    onFailure:
+      retry: { maxAttempts: 5, backoff: exponential, initialDelayMs: 500, maxDelayMs: 15000 }
+      deadLetter: true
+
+  ThumbnailDelivered:
+    description: El renderizador sirvió la miniatura del archivo a un usuario final.
+    source: rendering
+    channel: renderingTelemetry
+    payload:
+      assetId:     { type: uuid, required: true }
+      deliveredAt: { type: timestamp, required: true }
+    contract:
+      # La fuente no es un servicio Keel: el mensaje llega PLANO y sin metadatos nuestros,
+      # así que la clave de deduplicación tiene que ser la que ella estampa. Va en cabecera
+      # del broker (header Kafka, atributo SQS, property AMQP), no en el cuerpo: es un dato
+      # del transporte del renderizador, no del hecho. Aquí `location: header` significa
+      # eso y no una cabecera HTTP.
+      envelope: none
+      format: json
+      messageId: { location: header, name: X-Render-Event-Id }
+      unknownFields: ignore
+    # Ni desenlace ni compensación: una corrección de contador. `noteThumbnailDelivery` no
+    # declara transiciones, así que la deduplicación NO tiene detrás ninguna guarda de
+    # dominio y es lo único que impide que una reentrega vuelva a sumar. Es la rama
+    # `tryRecord`, y con clave de cabecera en vez de envoltura.
+    triggers: noteThumbnailDelivery
+    input:
+      assetId: assetId
+      deliveredAt: deliveredAt
     onFailure:
       retry: { maxAttempts: 5, backoff: exponential, initialDelayMs: 500, maxDelayMs: 15000 }
       deadLetter: true

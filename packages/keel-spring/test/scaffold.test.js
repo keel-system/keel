@@ -1968,6 +1968,13 @@ test('suscripción con contract: envoltura de la fuente, alias de campo y contra
   assert.ok(message.includes('IdempotencyGuard.alreadyProcessed(...) antes de despachar'));
   assert.ok(message.includes('record(...) DESPUÉS'));
   assert.ok(!message.includes('tryRecord'));
+  // Y que la deduplicación CADUCA. Se dice aquí —además de en la referencia del DSL y en
+  // conventions/dependencies.md— porque este javadoc es lo que lee quien escribe el
+  // listener, y la garantía que va a implementar no es la que su nombre sugiere: el
+  // registro se purga. Con transiciones detrás es inocuo y el texto lo dice; sin ellas
+  // sería el efecto repitiéndose, y por eso el aviso cambia según el diseño.
+  assert.ok(message.includes('processed-event.purge.retention-days'), message);
+  assert.ok(message.includes('la transición del agregado sigue rechazándola, y esa no caduca'), message);
   assert.ok(message.includes('RetireProductCommand(id = payload.productId())'));
 
   // La envoltura es la de la fuente, no la EventEnvelope de Keel.

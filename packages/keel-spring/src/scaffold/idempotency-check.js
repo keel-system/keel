@@ -62,9 +62,80 @@ function checksOf(model) {
 // 1. Consumo de mensajes. Las dos mitades —llamar al guard y ACTUAR sobre lo que
 //    responde— más el orden, que no es intercambiable ni es cosa del agente: lo
 //    prescribe el javadoc del <Evento>Message y lo decide `triggerHasDomainGuard`.
+/**
+ * ¿Comparten cola las suscripciones que leen del mismo destino?
+ *
+ * Solo en RabbitMQ. Ahí varios `@RabbitListener` sobre la misma cola son consumidores
+ * COMPITIENDO: el broker reparte, cada mensaje llega a uno solo y los otros no lo ven
+ * nunca — así que la forma correcta es un único listener que enruta por `eventType`. En
+ * Kafka cada listener tiene su propio grupo y recibe el topic entero, y en SNS/SQS cada
+ * suscripción tiene cola propia colgada del topic: en los dos, un listener por evento es
+ * lo correcto. La diferencia no es de estilo, y decide qué puede afirmar este gate.
+ */
+function sharesQueue(model) {
+  return model.stack?.broker === 'rabbitmq';
+}
+
 function dedupeChecks(model) {
   if (!model.layersPresent.messaging || !model.layersPresent.persistence) return [];
-  return (model.subscriptions ?? []).map((sub) => {
+  const subscriptions = model.subscriptions ?? [];
+
+  // Agrupadas por destino físico cuando el broker las hace compartir cola: ahí el
+  // listener es uno y las comprobaciones por evento dejan de ser atribuibles.
+  if (sharesQueue(model)) {
+    const byDestination = new Map();
+    for (const sub of subscriptions) {
+      const destination = sub.topicDefault;
+      if (!byDestination.has(destination)) byDestination.set(destination, []);
+      byDestination.get(destination).push(sub);
+    }
+    return [...byDestination.entries()].flatMap(([destination, subs]) =>
+      subs.length > 1 ? [sharedListenerCheck(destination, subs)] : [listenerCheck(subs[0])]
+    );
+  }
+
+  return subscriptions.map(listenerCheck);
+}
+
+/**
+ * Varias suscripciones, una cola, un listener: lo que el gate puede seguir afirmando.
+ *
+ * Se comprueba que el guard esté y que aparezcan los ÓRDENES que el diseño exige —
+ * `record` si alguna suscripción tiene guarda de dominio, `tryRecord` si alguna no la
+ * tiene—, pero no se prohíbe el contrario: en un archivo con las dos ramas, el cruce no
+ * es atribuible a un evento concreto por presencia. Se pierde precisión y se dice; lo que
+ * no se puede hacer es dar KO a la única implementación correcta, que es lo que hacía
+ * antes — y el camino de menor resistencia para apagar ese KO es partir el listener en
+ * uno por evento, o sea romper el consumo.
+ */
+function sharedListenerCheck(destination, subs) {
+  const guarded = subs.filter((sub) => sub.triggerHasDomainGuard);
+  const unguarded = subs.filter((sub) => !sub.triggerHasDomainGuard);
+  return {
+    group: 'dedupe',
+    subject: `${destination} (${subs.map((sub) => sub.name).join(', ')})`,
+    // El nombre canónico si el agente lo usó; si no, el archivo se busca por contenido.
+    class: subs[0].listenerClass,
+    locate: subs.map((sub) => sub.messageRecord).join('|'),
+    require: [
+      'IdempotencyGuard',
+      `(if|return|while|&&|\\|\\||!)[^;]*\\.?(alreadyProcessed|tryRecord)\\s*\\(`,
+      ...(guarded.length > 0 ? ['\\.record\\s*\\('] : []),
+      ...(unguarded.length > 0 ? ['\\.tryRecord\\s*\\('] : [])
+    ],
+    forbid: ['UUID\\.randomUUID\\(\\)'],
+    why:
+      `las ${subs.length} suscripciones leen de la cola '${destination}': en RabbitMQ eso es UN listener que enruta por eventType ` +
+      `(varios serían consumidores compitiendo y cada mensaje llegaría a uno solo). Tienen que estar los dos órdenes que el diseño pide — ` +
+      (guarded.length > 0 ? `record(...) tras despachar para ${guarded.map((s) => s.name).join(', ')}` : '') +
+      (guarded.length > 0 && unguarded.length > 0 ? ' y ' : '') +
+      (unguarded.length > 0 ? `tryRecord(...) antes de despachar para ${unguarded.map((s) => s.name).join(', ')}` : '') +
+      ' — y cuál va con cuál lo dice el javadoc de cada <Evento>Message'
+  };
+}
+
+function listenerCheck(sub) {
+  {
     const guarded = sub.triggerHasDomainGuard;
     return {
       group: 'dedupe',
@@ -89,7 +160,7 @@ function dedupeChecks(model) {
         ? `'${sub.trigger}' declara transitions: alreadyProcessed(...) antes y record(...) DESPUÉS de despachar bien`
         : `'${sub.trigger}' no declara transitions: tryRecord(...) antes de despachar, que es lo único que cierra la ventana`
     };
-  });
+  }
 }
 
 // 1b. Que la escritura del registro sea un INSERT DE VERDAD.
@@ -279,11 +350,14 @@ function reconciliationChecks(model) {
       group: 'reconciliation',
       subject: operation.name,
       class: operation.handlerClass,
-      // El umbral de «demasiado tiempo» no lo declara el diseño: sale de parameters/,
-      // nunca de una constante. Es la instrucción concreta de la nota del stub.
-      require: ['@Value'],
+      // Aquí NO se exige `@Value`, y no es un olvido. El handler vive en `application`,
+      // que por constitución no importa Spring: exigirle la anotación obligaba a elegir
+      // entre pasar el gate y respetar la frontera hexagonal, y un agente que la ponga
+      // ahí para salir en verde deja el diseño peor de lo que estaba. El umbral se
+      // comprueba donde de verdad puede estar —el adaptador que ejecuta el reclamo—, en
+      // el check de abajo y sobre el MISMO archivo que reclama.
       forbid: ['TODO|UnsupportedOperationException'],
-      why: `barre ${operation.reconciles.map((r) => `${r.dependency}.${r.activation.name}`).join(', ')}: el umbral sale de parameters/ con @Value, no de una constante`
+      why: `barre ${operation.reconciles.map((r) => `${r.dependency}.${r.activation.name}`).join(', ')}: el barrido tiene que estar escrito, no dejado en un stub`
     });
   }
   // Y lo único que decide si el barrido es correcto con varias réplicas: que la
@@ -304,6 +378,26 @@ function reconciliationChecks(model) {
       exclude:
         '/(OutboxEventJpaRepository|OutboxEventMongoRepository|OutboxRelay|OutboxEventJpa|OutboxEventDocument|ProcessedEventJpaRepository|ProcessedEventMongoRepository|IdempotencyRecordJpaRepository|IdempotencyRecordMongoRepository)\\.java',
       why: 'ninguna consulta reclama candidatos (bloqueo con SKIP LOCKED, findAndModify o UPDATE ... RETURNING) con el lote acotado: el barrido corre en TODAS las réplicas y sin reclamo las N se llevan las mismas filas — ver conventions/dependencies.md § El barrido corre en todas las réplicas'
+    });
+    // Y el umbral de «demasiado tiempo», que no lo declara el diseño: sale de
+    // `parameters/`, nunca de una constante.
+    //
+    // Aparte del reclamo, y no en su mismo archivo. Dos intentos anteriores fallaron por
+    // suponer dónde vive: exigirlo en el handler de `application` pedía importar Spring
+    // donde la constitución lo prohíbe, y exigirlo junto al reclamo contradice el mismo
+    // reparto —puerto sin framework, adaptador con `@Value`, repositorio con la consulta—
+    // que el scaffold impone. Lo que sí se puede afirmar sin suponer arquitectura es que
+    // en ALGÚN archivo el umbral esté parametrizado Y hable de esperar: un `@Value`
+    // suelto en cualquier configuración no es el umbral de este barrido.
+    checks.push({
+      group: 'reconciliation',
+      subject: 'umbral del barrido',
+      claim: '@Value|@ConfigurationProperties',
+      bound: '[Ss]tale|[Aa]waiting|[Tt]hreshold|[Rr]econcil|[Uu]mbral',
+      // Lo que build ya parametriza por su cuenta: encontrarlo probaría lo que build
+      // hizo. El relay del outbox es el caso claro — tiene `@Value` y habla de reclamos.
+      exclude: '/(OutboxRelay|OutboxDispatcher[A-Za-z]*|ProcessedEventPurge[A-Za-z]*|IdempotencyRecordPurge[A-Za-z]*)\\.java',
+      why: 'el umbral de espera del barrido no está parametrizado en ninguna parte (@Value/@ConfigurationProperties sobre un valor que hable de la espera): quemado en el código no se ajusta por entorno sin recompilar — ver conventions/dependencies.md'
     });
   }
   for (const scheduler of schedulers) {
@@ -356,7 +450,7 @@ function script(model, checks) {
     }
     const require = (check.require ?? []).join('\u0001');
     const forbid = (check.forbid ?? []).join('\u0001');
-    return `unit ${shellQuote(check.group)} ${shellQuote(check.subject)} ${shellQuote(check.class)} ${shellQuote(require)} ${shellQuote(forbid)} ${shellQuote(check.why)}`;
+    return `unit ${shellQuote(check.group)} ${shellQuote(check.subject)} ${shellQuote(check.class)} ${shellQuote(require)} ${shellQuote(forbid)} ${shellQuote(check.locate ?? '')} ${shellQuote(check.why)}`;
   });
 
   const groups = [...new Set(checks.map((check) => check.group))];
@@ -409,10 +503,27 @@ locate() {
 }
 
 # Una unidad de comprobación: un archivo, lo que tiene que aparecer y lo que no.
-unit() {  # familia, sujeto, clase, requeridos (\\001), prohibidos (\\001), porqué
-  local group="$1" subject="$2" class="$3" required="$4" forbidden="$5" why="$6"
+unit() {  # familia, sujeto, clase, requeridos (\\001), prohibidos (\\001), localizador, porqué
+  local group="$1" subject="$2" class="$3" required="$4" forbidden="$5" locator="$6" why="$7"
   local file
   file="$(locate "$class")"
+  # Cuando el nombre canónico no existe pero el diseño admite otra forma —un listener
+  # único para varias suscripciones de la misma cola—, el archivo se busca por CONTENIDO:
+  # el que maneja esos mensajes y usa el guard. Sin esto, la implementación correcta se
+  # reporta como ausente y el camino de menor resistencia para apagar el hallazgo es
+  # partirla en la incorrecta.
+  if [ -z "$file" ] && [ -n "$locator" ]; then
+    local candidate
+    while IFS= read -r candidate; do
+      [ -n "$candidate" ] || continue
+      if grep -qE -- 'IdempotencyGuard' "$candidate" 2>/dev/null; then
+        file="$candidate"
+        break
+      fi
+    done <<EOF
+$(grep -rlE -- "$locator" "$SRC" 2>/dev/null | grep -v 'Message\\.java$')
+EOF
+  fi
   if [ -z "$file" ]; then
     note "$group" "$subject: no existe $class.java — $why"
     return
@@ -448,15 +559,16 @@ impl() {  # familia, sujeto, interfaz, clase excluida, porqué
   [ -n "$found" ] || note "$group" "$subject: solo está el fallback $excluded — $why"
 }
 
-# Que exista una consulta que RECLAME candidatos, y acotada. Se busca en todo el árbol
-# y no en un archivo concreto: el reclamo vive en el adaptador de lectura y dónde lo
-# ponga el agente es asunto suyo. Las dos condiciones tienen que darse en el MISMO
-# archivo — un reclamo aquí y un Pageable en otro listado cualquiera no es un lote.
+# Dos patrones que tienen que darse en el MISMO archivo, buscados en todo el árbol y no
+# en una ruta fija: dónde ponga el agente cada pieza es asunto suyo mientras respete la
+# frontera hexagonal. La pareja es lo que da sentido a cada uno por separado — un reclamo
+# aquí y un Pageable en otro listado cualquiera no es un lote acotado, y un @Value en una
+# configuración cualquiera no es el umbral de un barrido.
 #
 # Y sobre el CÓDIGO, no sobre la prosa: la nota que build deja en el stub del barrido
 # nombra el patrón para explicarlo, así que mirando el archivo entero este check saldría
 # verde por el propio comentario que dice lo que falta hacer.
-claim() {  # familia, sujeto, patrón de reclamo, patrón de cota, rutas excluidas, porqué
+claim() {  # familia, sujeto, patrón principal, patrón que lo acompaña, rutas excluidas, porqué
   local group="$1" subject="$2" pattern="$3" bound="$4" excluded="$5" why="$6"
   local file found="" code
   while IFS= read -r file; do

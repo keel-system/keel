@@ -148,7 +148,7 @@ const ATTRS_FILE = '/tmp/keel-check-attrs.json';
 const TRICKY = 'acentós, "comillas" y $HOME sin interpolar';
 
 function scenarios(broker, context) {
-  const { devtools, topic, subscriptionTopic, subscriptionQueue, subscriptionName, publishEventType, deadLetterQueue, deadLetterSource } = context;
+  const { devtools, topic, subscriptionTopic, subscriptionQueue, subscriptionName, publishEventType, deadLetterQueue, deadLetterSource, resetDb } = context;
   // Todo lo que se publica en el canal propio viaja con su `eventType`: es lo que
   // discrimina dentro del destino único (filtro de la suscripción en SNS, filtrado
   // por canal en Kafka). Sin él, el broker descarta el mensaje con toda la razón y
@@ -224,6 +224,45 @@ function scenarios(broker, context) {
       sleep(1500);
     }
     return best;
+  };
+
+  /**
+   * Entrega a la cola de descarte, que no se alcanza igual en los tres brokers: en
+   * snssqs una DLQ no cuelga de ningún topic —se llega a ella por redrive—, así que
+   * `sns publish` con su nombre falla y hay que enviar DIRECTO a la cola. En kafka y
+   * rabbitmq el destino se nombra igual y vale la entrega normal.
+   */
+  const deliverToDeadLetter = (marker) => {
+    if (broker === 'snssqs') {
+      devtools.copy(JSON.stringify({ marker }), BODY_FILE);
+      return devtools.exec(toArgv(broker, queueDeliverParts({ destination: deadLetterQueue, bodyFile: BODY_FILE })));
+    }
+    return deliver(deadLetterQueue, marker, JSON.stringify({ marker }));
+  };
+
+  /** Espera a que el marcador sea visible en el descarte: entregar no es haber llegado. */
+  const deadLetterHas = (marker) =>
+    untilOk(() => {
+      const result = read(deadLetterQueue);
+      return result.status === 0 && result.stdout.includes(marker)
+        ? result
+        : { ...result, status: result.status === 0 ? 1 : result.status };
+    });
+
+  /**
+   * Lo contrario, y hace falta por la misma razón que `readUntil`: una purga no es
+   * instantánea, y afirmar "vacío" en la primera lectura confundiría "se purgó" con
+   * "todavía no se ve". La lectura no consume (peek con requeue en RabbitMQ,
+   * `--visibility-timeout 0` en SQS), así que reintentar no altera lo que mide.
+   */
+  const untilEmpty = (destination, attempts = 6) => {
+    let last = { status: 0, stdout: '', stderr: '' };
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      last = read(destination, { count: 10 });
+      if (isEmptyRead(broker, last.stdout)) return { ok: true, last };
+      sleep(1000);
+    }
+    return { ok: false, last };
   };
 
   return [
@@ -373,21 +412,8 @@ function scenarios(broker, context) {
       // `main` recién generado ni siquiera compila). Su gate es un escenario `FL-*`.
       check: () => {
         const marker = `keel-dlq-${Date.now()}`;
-        // En snssqs se entrega DIRECTO a la cola: una DLQ no cuelga de ningún topic
-        // —se alcanza por redrive—, así que `sns publish` con su nombre falla. En los
-        // otros dos brokers el destino se nombra igual y vale la entrega normal.
-        if (broker === 'snssqs') {
-          devtools.copy(JSON.stringify({ marker }), BODY_FILE);
-          devtools.exec(toArgv(broker, queueDeliverParts({ destination: deadLetterQueue, bodyFile: BODY_FILE })));
-        } else {
-          deliver(deadLetterQueue, marker, JSON.stringify({ marker }));
-        }
-        const back = untilOk(() => {
-          const result = read(deadLetterQueue);
-          return result.status === 0 && result.stdout.includes(marker)
-            ? result
-            : { ...result, status: result.status === 0 ? 1 : result.status };
-        });
+        deliverToDeadLetter(marker);
+        const back = deadLetterHas(marker);
         if (!back.ok) {
           return ko(`entregado a '${deadLetterQueue}' y no vuelve: ${firstLine(back.last.stderr || back.last.stdout)}`);
         }
@@ -411,6 +437,43 @@ function scenarios(broker, context) {
         return attributes.stdout.includes(deadLetterQueue)
           ? ok()
           : ko(`la RedrivePolicy de '${deadLetterSource}' no apunta a '${deadLetterQueue}': ${firstLine(attributes.stdout)}`);
+      }
+    }] : []),
+    ...(deadLetterQueue && broker !== 'kafka' ? [{
+      id: 'BRK-13',
+      title: 'reset-db.sh vacía también el destino de descarte',
+      // El respaldo de que el descarte entra en el reset. BRK-10 solo mira el código
+      // de salida del script, y un destino que no se purga NO lo pone en rojo: las
+      // purgas son tolerantes a fallo a propósito (que la cola aún no exista no es
+      // estado sucio). O sea que la fila que promete «estado limpio» saldría verde con
+      // el descarte intacto, que es justo el arrastre que se quería cerrar: un mensaje
+      // muerto sobrevive al reset y contamina el flujo siguiente, y como la aserción
+      // sobre el descarte suele ser NEGATIVA —«se absorbió sin acabar en la DLQ»—, no
+      // aparece como ruido sino como un escenario fallando por algo ajeno.
+      //
+      // Va el último de los escenarios porque borra estado; BRK-10 vuelve a ejecutar el
+      // script después, que es idempotente.
+      check: () => {
+        const marker = `keel-reset-dlq-${Date.now()}`;
+        const sent = deliverToDeadLetter(marker);
+        if (sent.status !== 0) {
+          return ko(`entrega al descarte falló: ${firstLine(sent.stderr || sent.stdout)}`);
+        }
+        // Antes de resetear hay que VER el mensaje: purgar una cola en la que el
+        // marcador todavía no ha aterrizado dejaría el escenario verde sin haber
+        // purgado nada, que es el mismo falso verde que cierra BRK-12.
+        const landed = deadLetterHas(marker);
+        if (!landed.ok) {
+          return ko(`el marcador no llega a '${deadLetterQueue}': ${firstLine(landed.last.stderr || landed.last.stdout)}`);
+        }
+        const reset = resetDb();
+        if (reset.status !== 0) {
+          return ko(`reset-db.sh falló: ${firstLine(reset.stderr || reset.stdout)}`);
+        }
+        const empty = untilEmpty(deadLetterQueue);
+        return empty.ok
+          ? ok()
+          : ko(`tras el reset sigue habiendo mensajes en '${deadLetterQueue}': ${firstLine(empty.last.stdout)}`);
       }
     }] : [])
   ];
@@ -677,8 +740,20 @@ function checkBroker(broker, runtimeInfo) {
     // Y en SQS la RedrivePolicy se comprueba sobre la cola DE ESA suscripción.
     const deadLetterSource =
       broker === 'snssqs' && deadLetterSub ? subscriptionDestination('snssqs', model, deadLetterSub) : null;
+    // Un escenario que se omite en silencio es peor que uno que falla: los dos motivos
+    // de omisión se dicen, y no son el mismo. Sin `deadLetter` declarado no hay destino
+    // de descarte que mirar; con Kafka lo hay, pero no hay purga que ejercitar —el
+    // aislamiento del descarte es la marca de offset que fija `markChannels()`, y por
+    // eso el broker tampoco tiene `cliPurgeCmd` en el reset generado.
+    const resetDb = () =>
+      run('sh', ['infra/reset-db.sh'], {
+        cwd: projectDir,
+        env: { ...process.env, CONTAINER_RUNTIME: runtimeInfo.runtime }
+      });
     if (!deadLetterQueue) {
-      console.log('  --   BRK-12 omitido: la fixture no declara onFailure.deadLetter en ninguna suscripción');
+      console.log('  --   BRK-12 y BRK-13 omitidos: la fixture no declara onFailure.deadLetter en ninguna suscripción');
+    } else if (broker === 'kafka') {
+      console.log('  --   BRK-13 omitido: en Kafka no hay purga; el aislamiento del descarte es la marca de offset del arnés');
     }
 
     for (const scenario of scenarios(broker, {
@@ -689,6 +764,7 @@ function checkBroker(broker, runtimeInfo) {
       subscriptionName: subscription?.name ?? null,
       deadLetterQueue,
       deadLetterSource,
+      resetDb,
       publishEventType: (model.messaging?.eventTypesByChannel?.[topic] ?? [])[0] ?? null
     })) {
       let outcome;
@@ -702,19 +778,18 @@ function checkBroker(broker, runtimeInfo) {
     }
 
     // BRK-10 va al final porque borra estado: el reset por flujo tiene que dejar
-    // todos los destinos vacíos, o dos flujos se contaminan entre sí.
-    const reset = run('sh', ['infra/reset-db.sh'], {
-      cwd: projectDir,
-      env: { ...process.env, CONTAINER_RUNTIME: runtimeInfo.runtime }
-    });
+    // todos los destinos vacíos, o dos flujos se contaminan entre sí. Aquí solo se
+    // juzga que el script salga con 0; que el DESCARTE quede vacío lo afirma BRK-13,
+    // porque las purgas del script son tolerantes a fallo y no bajarían este código.
+    const reset = resetDb();
     const resetOk = reset.status === 0;
     results.push({
       id: 'BRK-10',
-      title: 'reset-db.sh deja el estado limpio',
+      title: 'reset-db.sh sale con 0',
       ok: resetOk,
       detail: resetOk ? undefined : firstLine(reset.stderr || reset.stdout)
     });
-    console.log(`  ${resetOk ? 'OK  ' : 'KO  '} BRK-10 reset-db.sh deja el estado limpio`);
+    console.log(`  ${resetOk ? 'OK  ' : 'KO  '} BRK-10 reset-db.sh sale con 0`);
 
     // BRK-11 va el último porque es el más destructivo: para el broker. Ejercita la
     // palanca de los escenarios de outbox (`stopBroker`/`startBroker` de
