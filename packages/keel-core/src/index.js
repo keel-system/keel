@@ -38,6 +38,9 @@ export {
   searchDesigns
 } from './lib/registry-source.js';
 export { checkCrossRefs } from './lib/crossrefs.js';
+// Los códigos que pone el framework cuando el diseño no nombra el conflicto de un mecanismo.
+// Un generador los toma de aquí: escritos a mano en cada uno, cada generación elige el suyo.
+export { FRAMEWORK_ERRORS, fixedFrameworkErrors, overrideFor } from './lib/framework-errors.js';
 export { copyTree, diffTree } from './lib/copy.js';
 // Harnesses de agente: un generador no debe saber si escribe .claude/ o .opencode/,
 // solo pedir la proyección de sus skills y sus agentes.

@@ -1,3 +1,5 @@
+import { FRAMEWORK_ERRORS, overrideFor } from './framework-errors.js';
+
 const BASE_TYPES = new Set(['string', 'text', 'int', 'long', 'decimal', 'boolean', 'uuid', 'date', 'timestamp', 'json', 'file']);
 
 // Statuses de éxito que por definición de HTTP no llevan cuerpo. El schema de api
@@ -1944,6 +1946,64 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
     if (withVersion.length === 0) {
       warnings.push(
         `persistence: consistency.optimisticLocking: 'declared' pero ninguna raíz de agregado declara el campo reservado 'lockVersion' en domain (p. ej. 'lockVersion: { type: int, generated: true }' en la raíz, ver docs/dsl/persistence.md) — tal como está equivale a 'none' (último escritor gana). Declara el campo donde el conflicto deba observarse, o usa 'all'/'none' explícitamente`
+      );
+    }
+  }
+  // Los DOS desenlaces de conflicto que trae encender `idempotency`, y que el diseño casi
+  // nunca nombra porque no los provoca su lógica: los provoca el mecanismo. El generador
+  // los emite con el código canónico del catálogo —si no, cada generación elegiría el suyo,
+  // que es lo que pasó en tres corridas seguidas—, pero el diseñador no se entera de que
+  // ese contrato existe salvo leyendo el código generado.
+  //
+  // Se mira el catálogo de errores del DISEÑO ENTERO y se avisa una vez, no por operación:
+  // los `errors` se agregan por servicio, así que un code declarado en una operación es el
+  // que sale también por las demás. Un aviso por operación prometería el canónico en la que
+  // no lo declara mientras el generador emite el de al lado — un aviso que miente.
+  {
+    const idempotentOps = Object.entries(useCases.operations ?? {})
+      .filter(([, op]) => op?.idempotency)
+      .map(([name]) => name);
+    if (idempotentOps.length > 0) {
+      const declared = Object.values(useCases.operations ?? {}).flatMap((op) =>
+        (op.errors ?? []).map((error) => ({ code: error.code, http: error.http }))
+      );
+      const sinNombrar = [FRAMEWORK_ERRORS.idempotencyRace, FRAMEWORK_ERRORS.idempotencyReuse].filter(
+        (entry) => !overrideFor(declared, entry)
+      );
+      if (sinNombrar.length > 0) {
+        warnings.push(
+          `use-cases: ${idempotentOps.join(', ')} declara${idempotentOps.length > 1 ? 'n' : ''} idempotency y el diseño no ` +
+            `nombra ${sinNombrar.length > 1 ? 'sus desenlaces de conflicto' : 'uno de sus desenlaces de conflicto'}. ` +
+            `Se usarán los códigos canónicos ${sinNombrar.map((entry) => `${entry.http} ${entry.code}`).join(' y ')} ` +
+            `(${sinNombrar.map((entry) => entry.when.split(/[.:]/)[0]).join('; ')}). ` +
+            `Son contrato público: los ven los integradores y los afirman los escenarios. Si este servicio usa otros codes, ` +
+            `decláralos en errors con el mismo status — ver docs/framework-errors.md`
+        );
+      }
+    }
+  }
+
+  // El conflicto del bloqueo optimista es OBSERVABLE por la API —el cliente recibe un 409—,
+  // así que tiene un `code` que forma parte del contrato. Se avisa una vez por diseño y no
+  // por operación: la política es del servicio entero, y repetirlo en cada command sería
+  // ruido en el sitio donde menos ayuda.
+  //
+  // Se exige que el diseño se haya PRONUNCIADO (que `consistency.optimisticLocking` esté
+  // escrito), no que la política resulte de aplicar el default del schema. La diferencia no es
+  // de rigor sino de a quién le sirve el aviso: quien eligió la política está decidiendo sobre
+  // concurrencia y quiere saber qué ve el cliente; a quien no ha llegado ahí, el mismo aviso en
+  // todos sus diseños solo le enseña a ignorar los avisos. El código canónico se aplica igual, y
+  // eso es lo que garantiza que el contrato exista: el catálogo, no este recordatorio.
+  if (['all', 'declared'].includes(persistence?.consistency?.optimisticLocking) && useCases.operations) {
+    const declared = Object.values(useCases.operations).flatMap((op) =>
+      (op.errors ?? []).map((error) => ({ code: error.code, http: error.http }))
+    );
+    if (!overrideFor(declared, FRAMEWORK_ERRORS.concurrency)) {
+      warnings.push(
+        `persistence: consistency.optimisticLocking: dos escrituras concurrentes sobre la misma raíz devuelven un ` +
+          `${FRAMEWORK_ERRORS.concurrency.http} al cliente y ninguna operación nombra ese error. Se usará el código canónico ` +
+          `'${FRAMEWORK_ERRORS.concurrency.code}'. Es contrato público: si este servicio usa otro, decláralo en los errors de ` +
+          `la operación donde el conflicto se observe, con status ${FRAMEWORK_ERRORS.concurrency.http} — ver docs/framework-errors.md`
       );
     }
   }

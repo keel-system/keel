@@ -134,7 +134,8 @@ test('scaffoldService genera el proyecto completo con contenido clave', () => {
   assert.ok(advice.includes('org.springframework.web.bind.MissingServletRequestParameterException'));
   // Conflicto de concurrencia optimista → 409 (no cae en el catch-all 500).
   assert.ok(advice.includes('@ExceptionHandler(ObjectOptimisticLockingFailureException.class)'));
-  assert.ok(advice.includes('"OPTIMISTIC_LOCK_CONFLICT"'));
+  // Con el code canónico del catálogo de keel-core, no con uno propio del scaffolding.
+  assert.ok(advice.includes('"CONCURRENT_MODIFICATION"'));
 
   const baseNotFound = read(workspace, 'src/main/java/com/commerce/productcatalog/domain/errors/NotFoundException.java');
   assert.ok(baseNotFound.includes('extends DomainException'));

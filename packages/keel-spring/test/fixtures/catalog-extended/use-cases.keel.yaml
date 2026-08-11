@@ -13,6 +13,16 @@ operations:
       - code: CATEGORY_NOT_FOUND
         when: La categoría referenciada no existe.
         http: 422
+      # Los dos desenlaces del mecanismo de idempotencia, NOMBRADOS por el diseño. Esta
+      # fixture cubre el camino del override —el generador usa estos codes en vez de los
+      # canónicos de framework-errors.md—; `stock-reservation` se queda sin declararlos y
+      # cubre el otro, que es el que recorrieron las tres corridas del pipeline.
+      - code: PRODUCT_KEY_IN_PROGRESS
+        when: Otra petición con la misma clave de idempotencia está en curso.
+        http: 409
+      - code: PRODUCT_KEY_REUSED
+        when: La misma clave de idempotencia llegó con un contenido distinto.
+        http: 409
     emits: [ProductCreated]
     idempotency:
       keySource: client-key

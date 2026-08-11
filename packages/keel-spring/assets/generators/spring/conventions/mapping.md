@@ -192,9 +192,11 @@ idempotencyStore.save("<nombreOperacion>", key, key, id.toString(), <ttlSeconds>
   detrás haría que el reintento devolviese una respuesta que nunca existió.
 - Dos peticiones simultáneas con la misma clave chocan en la clave primaria y una revierte. Es el
   desenlace correcto: de dos peticiones idénticas, exactamente una se ejecutó.
-- El `code` del conflicto por firma distinta sale **del diseño** (`errors[]` de la operación). Si el
-  diseño no declara ninguno, es `designGap`: repórtalo, no inventes un `code` — no estaría en el
-  OpenAPI y ningún escenario lo cubre.
+- El conflicto por **firma distinta** (misma clave, otro cuerpo) tiene su propia excepción generada:
+  `IdempotencyReuseException`, con el `code` canónico `409 IDEMPOTENCY_KEY_REUSED` o con el que el
+  diseño declare si nombra ese desenlace. Lánzala; no reutilices la de la carrera —son dos
+  desenlaces distintos— ni inventes un `code`. Esto **ya no es `designGap`**: el catálogo de
+  errores del framework lo cubre (`docs/framework-errors.md` del workspace de diseño).
 
 ### `Idempotency-Key` ausente: se ejecuta, no se rechaza
 
@@ -253,6 +255,23 @@ lo hará), lanza la `VALIDATION_ERROR` genérica del `ApiExceptionHandler` y **r
 lo espera y el cliente no puede programar contra él. Si el escenario exige un status distinto del
 que da la validación genérica, eso también es `designGap`, y entonces la vía es que el diseño lo
 declare en `errors[]`.
+
+### La lista cerrada de `code` que NO nacen en el diseño
+
+«Nunca inventes un `code`» tiene una contrapartida, y sin ella la regla empuja a inventar igual:
+hay conflictos que no los provoca la lógica sino el **mecanismo** que el diseño encendió —la
+carrera y la reutilización de una clave de idempotencia, la escritura sobre una versión obsoleta,
+la subida que pasa del tamaño del bucket—, y esos tienen código canónico. Los emite `build`, están
+enumerados en `docs/framework-errors.md` del workspace de diseño, y el diseño los sustituye
+declarando en `errors[]` un `code` de su familia con el mismo status.
+
+La regla completa, entonces:
+
+- Error de **negocio** sin declarar → `designGap`. Se reporta, no se inventa.
+- Error de **mecanismo** → el canónico del catálogo, que ya viene generado. Ni se inventa ni se
+  reporta: es el contrato.
+- Cualquier otra cosa que no esté en ninguno de los dos sitios → `designGap`. El catálogo es una
+  lista **cerrada**; no se amplía sobre la marcha.
 
 ### Ordenar por un campo con columna normalizada
 

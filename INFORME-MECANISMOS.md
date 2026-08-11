@@ -57,14 +57,18 @@ Dos observaciones que valen más que los arreglos:
 
 ## Lo que queda abierto, a sabiendas
 
-**1. El DSL no deja nombrar el desenlace de conflicto de los mecanismos que enciende.**
-Reportado por **las tres** corridas, con tres improvisaciones distintas para el mismo hecho:
-`IDEMPOTENCY_KEY_IN_PROGRESS`, `IDEMPOTENCY_KEY_REUSED` y —para el bloqueo optimista—
-`OPTIMISTIC_LOCK_CONFLICT`. Son contratos públicos que hoy elige cada corrida. La salida es
-una de dos, y conviene decidirla antes de la siguiente: que el bloque que enciende el
-mecanismo (`idempotency`, `consistency.optimisticLocking`) admita el `code` de su conflicto,
-o que la doctrina fije uno por mecanismo y lo documente como parte del contrato. No es un
-hueco de cobertura: es un hueco del lenguaje.
+**~~1. El DSL no deja nombrar el desenlace de conflicto de los mecanismos que enciende.~~**
+**CERRADO** el 11-ago-2026. Lo reportaron las tres corridas con tres improvisaciones distintas
+para el mismo hecho. La salida no fue añadir sintaxis sino cerrar la lista: un **catálogo
+canónico** de los códigos que pone el framework (`keel-core/src/lib/framework-errors.js` +
+`assets/core/docs/framework-errors.md`, atados por un test de paridad), que el generador emite
+en vez de inventar, y que el diseño **sustituye** declarando en `errors` un `code` de la familia
+del canónico —sintaxis que ya existía—. `keel validate` avisa, sin exigir, cuando un mecanismo
+con conflicto observable no lo nombra, y el aviso enseña el código que se va a usar. De paso
+cambió el canónico del bloqueo optimista a `CONCURRENT_MODIFICATION` (el que ya declaraban dos
+fixtures) y apareció la clase que faltaba para «misma clave, otro cuerpo». Lo que sigue siendo
+`designGap` es todo lo demás: el catálogo es una lista cerrada, no una puerta para ampliarla
+sobre la marcha.
 
 **2. Dialectos relacionales distintos de PostgreSQL** (eje F, descartado por decisión del
 diseñador). Lo demostrado es que el hint `jakarta.persistence.lock.timeout = -2` se traduce a

@@ -1778,7 +1778,15 @@ const activationLayers = () => ({
         // Encarga trabajo a otro servidor por POST: sin guarda, un reenvío del comprador
         // manda dos correos, y eso ya salió del proceso.
         idempotency: { keySource: 'client-key', ttlSeconds: 3600 },
-        errors: [{ code: 'NOTICE_UNAVAILABLE', when: 'No se pudo encargar el aviso al comprador.' }],
+        errors: [
+          { code: 'NOTICE_UNAVAILABLE', when: 'No se pudo encargar el aviso al comprador.' },
+          // Los dos desenlaces del mecanismo, nombrados. No son adorno del fixture: sin
+          // ellos el diseño recibe el aviso de «se usarán los canónicos», y este test
+          // afirma cero warnings. Declararlos es también el camino que documenta
+          // docs/framework-errors.md para sustituir un canónico.
+          { code: 'IDEMPOTENCY_KEY_IN_PROGRESS', when: 'Otra petición con la misma clave está en curso.', http: 409 },
+          { code: 'IDEMPOTENCY_KEY_REUSED', when: 'La misma clave llega con otro contenido.', http: 409 }
+        ],
       },
     },
   },
@@ -3514,7 +3522,10 @@ test('con el escenario de carrera la idempotencia queda cubierta', () => {
     layers: idempotentLayers(),
     scenarios: scenarioDoc(RETIRADA_SECUENCIAL, RETIRADA_CARRERA),
   });
-  assert.ok(!warnings.some((w) => w.includes('declara idempotency')), warnings.join('\n'));
+  // Se afirma sobre el aviso de la CARRERA, no sobre cualquiera que mencione la
+  // idempotencia: el mismo diseño recibe también el de los códigos canónicos de sus
+  // conflictos, que es otro asunto y no depende de los escenarios.
+  assert.ok(!warnings.some((w) => w.includes('CARRERA')), warnings.join('\n'));
 });
 
 test('una operación sin escenarios propios no recibe el aviso de carrera: ya lo dice la matriz', () => {
@@ -3522,7 +3533,10 @@ test('una operación sin escenarios propios no recibe el aviso de carrera: ya lo
   // carrera sino la cobertura entera, y eso lo reporta la revisión de la matriz.
   // Emitir aquí «falta la carrera» apuntaría al síntoma pequeño del problema grande.
   const { warnings } = checkCrossRefs({ layers: idempotentLayers(), scenarios: scenarioDoc(EFECTO) });
-  assert.ok(!warnings.some((w) => w.includes('declara idempotency')), warnings.join('\n'));
+  // Se afirma sobre el aviso de la CARRERA, no sobre cualquiera que mencione la
+  // idempotencia: el mismo diseño recibe también el de los códigos canónicos de sus
+  // conflictos, que es otro asunto y no depende de los escenarios.
+  assert.ok(!warnings.some((w) => w.includes('CARRERA')), warnings.join('\n'));
 });
 
 // ---------------------------------------------------------------------------
@@ -3640,4 +3654,128 @@ test('con estado de espera declarado no se dice nada (sin regresión)', () => {
   const { warnings } = run(compLayers());
   assert.ok(!warnings.some((w) => w.includes('esperando»')), warnings.join('\n'));
   assert.ok(!warnings.some((w) => w.includes('corre por el reloj')), warnings.join('\n'));
+});
+
+// ─── Errores del framework: el contrato que pone el mecanismo ─────────────────
+//
+// El hueco que cierran estas reglas lo reportaron TRES corridas completas del pipeline,
+// cada una improvisando un `code` distinto para el mismo hecho. El código canónico lo
+// garantiza el catálogo (docs/framework-errors.md); lo que faltaba era que el diseñador
+// se enterase de que ese contrato existe sin leer el código generado.
+
+const conflictLayers = (errors = []) => ({
+  domain: { entities: { Order: entity() } },
+  'use-cases': {
+    operations: {
+      placeOrder: {
+        description: 'Registra un pedido.',
+        kind: 'command',
+        input: { fields: { sku: { type: 'string', required: true } } },
+        output: { entity: 'Order' },
+        idempotency: { keySource: 'client-key', ttlSeconds: 3600 },
+        errors
+      }
+    }
+  },
+  api: { endpoints: { placeOrder: { method: 'POST', path: '/orders' } } }
+});
+
+const conflictWarnings = (layers) =>
+  run(layers).warnings.filter((warning) => /framework-errors\.md/.test(warning));
+
+test('idempotency sin nombrar sus desenlaces avisa con los códigos canónicos', () => {
+  const found = conflictWarnings(conflictLayers());
+  assert.equal(found.length, 1, found.join('\n'));
+  assert.match(found[0], /IDEMPOTENCY_KEY_IN_PROGRESS/);
+  assert.match(found[0], /IDEMPOTENCY_KEY_REUSED/);
+  // El aviso nombra la operación: con varias idempotentes hay que saber cuál falta.
+  assert.match(found[0], /placeOrder/);
+});
+
+test('declarar uno de los dos deja de avisar de ese, no de los dos', () => {
+  const found = conflictWarnings(
+    conflictLayers([{ code: 'ORDER_KEY_IN_PROGRESS', when: 'Otra petición con la misma clave.', http: 409 }])
+  );
+  assert.equal(found.length, 1);
+  // El declarado desaparece del aviso; el que sigue sin nombrar, no. Un aviso que
+  // enumerase los dos después de declarar uno enseñaría a ignorarlo.
+  assert.ok(!found[0].includes('IDEMPOTENCY_KEY_IN_PROGRESS'), found[0]);
+  assert.match(found[0], /IDEMPOTENCY_KEY_REUSED/);
+});
+
+test('nombrar los dos desenlaces silencia el aviso', () => {
+  const found = conflictWarnings(
+    conflictLayers([
+      { code: 'ORDER_KEY_IN_PROGRESS', when: 'Otra petición con la misma clave.', http: 409 },
+      { code: 'ORDER_KEY_REUSED', when: 'La misma clave con otro contenido.', http: 409 }
+    ])
+  );
+  assert.deepEqual(found, []);
+});
+
+test('un code de la familia con otro status no cuenta como declarado', () => {
+  // El status es parte del contrato: el generador solo sustituye el canónico por uno que
+  // responda lo mismo, así que aquí el aviso tiene que seguir.
+  const found = conflictWarnings(
+    conflictLayers([{ code: 'ORDER_KEY_IN_PROGRESS', when: 'Otra petición con la misma clave.', http: 422 }])
+  );
+  assert.equal(found.length, 1);
+  assert.match(found[0], /IDEMPOTENCY_KEY_IN_PROGRESS/);
+});
+
+const lockingLayers = (optimisticLocking, errors = []) => ({
+  domain: { entities: { Order: entity() }, aggregates: { Order: { root: 'Order', entities: [] } } },
+  'use-cases': {
+    operations: {
+      updateOrder: {
+        description: 'Actualiza el pedido.',
+        kind: 'command',
+        input: { fields: { id: { type: 'uuid', required: true } } },
+        output: { entity: 'Order' },
+        errors
+      }
+    }
+  },
+  persistence: { entities: { Order: {} }, consistency: { optimisticLocking } }
+});
+
+test('optimisticLocking declarado sin error de concurrencia avisa con el canónico', () => {
+  for (const policy of ['all', 'declared']) {
+    const found = conflictWarnings(lockingLayers(policy));
+    assert.equal(found.length, 1, `${policy}: ${found.join('\n')}`);
+    assert.match(found[0], /CONCURRENT_MODIFICATION/);
+  }
+});
+
+test('con optimisticLocking none no hay conflicto que nombrar', () => {
+  assert.deepEqual(conflictWarnings(lockingLayers('none')), []);
+});
+
+test('sin pronunciarse sobre la concurrencia no se avisa, aunque el default sea all', () => {
+  // El aviso es para quien está decidiendo sobre concurrencia. Emitirlo en todo diseño con
+  // persistence —el default del schema es `all`— solo enseñaría a ignorar los avisos; que
+  // el contrato exista igual lo garantiza el catálogo, no este recordatorio.
+  const layers = lockingLayers('all');
+  delete layers.persistence.consistency;
+  assert.deepEqual(conflictWarnings(layers), []);
+});
+
+test('cualquier code de la familia de concurrencia silencia el aviso, con el prefijo del dominio', () => {
+  const found = conflictWarnings(
+    lockingLayers('all', [{ code: 'ORDER_VERSION_CONFLICT', when: 'Otra operación modificó el pedido.', http: 409 }])
+  );
+  assert.deepEqual(found, []);
+});
+
+test('dos candidatos de la misma familia no cuentan: ahí no se adivina', () => {
+  // Con dos, el generador tampoco elige — usa el canónico—, así que el aviso tiene que
+  // seguir diciendo cuál va a salir.
+  const found = conflictWarnings(
+    lockingLayers('all', [
+      { code: 'ORDER_VERSION_CONFLICT', when: 'Otra operación modificó el pedido.', http: 409 },
+      { code: 'LINE_CONCURRENT_UPDATE', when: 'Otra operación modificó la línea.', http: 409 }
+    ])
+  );
+  assert.equal(found.length, 1);
+  assert.match(found[0], /CONCURRENT_MODIFICATION/);
 });

@@ -14,6 +14,7 @@ import { loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
 import { cacheFlushCmd } from '../src/scaffold/devtools.js';
 import { CACHES } from '../src/lib/stack-catalog.js';
+import { fixedFrameworkErrors } from 'keel-core';
 import { emptyReadJava } from '../src/lib/broker-probes.js';
 
 const fixtureDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'catalog-extended');
@@ -722,7 +723,7 @@ test('concurrencia: optimisticLocking none no genera @Version ni el 409 de confl
   // El contador de dominio que sí declara el diseño no se ve afectado.
   assert.ok(jpa.includes('private Long version;'));
   // Sin @Version no hay ObjectOptimisticLockingFailureException que traducir.
-  assert.ok(!advice.includes('OPTIMISTIC_LOCK_CONFLICT'));
+  assert.ok(!advice.includes('CONCURRENT_MODIFICATION'));
   assert.ok(!advice.includes('ObjectOptimisticLockingFailureException'));
 });
 
@@ -731,7 +732,11 @@ test('concurrencia: optimisticLocking all (default) sigue protegiendo toda raíz
   const jpa = read(`${JAVA}/infrastructure/persistence/entities/ProductJpa.java`);
 
   assert.ok(jpa.includes('@Version\n    @Column(name = "lock_version")'));
-  assert.ok(read(`${JAVA}/infrastructure/rest/ApiExceptionHandler.java`).includes('OPTIMISTIC_LOCK_CONFLICT'));
+  // El code CANÓNICO del catálogo (keel-core, docs/framework-errors.md), no una invención
+  // del scaffolding: nombra el hecho —algo cambió mientras escribías— y no la técnica con
+  // la que se detecta. `OPTIMISTIC_LOCK_CONFLICT`, que era el canónico anterior, sigue en
+  // la familia: un proyecto que quiera conservarlo solo tiene que declararlo en sus errors.
+  assert.ok(read(`${JAVA}/infrastructure/rest/ApiExceptionHandler.java`).includes('CONCURRENT_MODIFICATION'));
 });
 
 test('concurrencia: el code del conflicto sale del diseño cuando lo declara', () => {
@@ -1479,4 +1484,92 @@ test('la lectura de SQS pide por lotes: el límite de 10 es del broker, no del e
   assert.ok(harness.includes('if (receivedCount(batch) < size) {'));
   // El contador no se inventa nada: cuenta cuerpos de la respuesta de receive-message.
   assert.match(harness, /private static int receivedCount\(String response\)/);
+});
+
+// ─── Errores del framework: el catálogo manda, el diseño sustituye ────────────
+//
+// Tres corridas completas improvisaron tres codes distintos para el mismo conflicto,
+// porque el generador delegaba en un diseño que no tenía dónde declararlo. Ahora salen
+// del catálogo de keel-core y el diseño los sustituye con la sintaxis que ya existía.
+
+test('la reutilización de la clave de idempotencia tiene su excepción, con el code canónico', () => {
+  // `stock-reservation` declara idempotency y NO nombra sus conflictos: es el camino que
+  // recorrieron las tres corridas del pipeline, y el que antes dejaba al agente inventando.
+  const service = loadService(path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'stock-reservation'));
+  const workspace = tmpDir('keel-framework-errors-');
+  const result = scaffoldService({ manifest: service.manifest, layers: service.layers, workspace, force: true });
+  const root = path.join(workspace, result.outDir, 'src/main/java/com/fulfillment/stockreservation');
+  const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
+
+  const reuse = read('domain/idempotency/IdempotencyReuseException.java');
+  assert.ok(reuse.includes('"IDEMPOTENCY_KEY_REUSED"'), reuse);
+  assert.ok(reuse.includes('extends ConflictException'), reuse);
+  // Y no se confunde con la carrera, que es el otro desenlace y tiene su propia clase.
+  assert.ok(read('domain/idempotency/IdempotencyConflictException.java').includes('"IDEMPOTENCY_KEY_IN_PROGRESS"'));
+
+  // La nota del handler la nombra: sin eso, el agente vuelve a inventarse un code —que es
+  // exactamente lo que hizo en las tres corridas.
+  const handler = read('application/usecases/CreateReservationCommandHandler.java');
+  assert.ok(handler.includes('IdempotencyReuseException'), handler);
+  assert.ok(handler.includes('IDEMPOTENCY_KEY_REUSED'), handler);
+});
+
+test('un code del dominio en la familia sustituye al canónico de la reutilización', () => {
+  // catalog-extended sí los nombra (PRODUCT_KEY_IN_PROGRESS / PRODUCT_KEY_REUSED): el
+  // diseño manda sobre el contrato público.
+  const { read } = scaffoldExtended();
+  const reuse = read(`${JAVA}/domain/idempotency/IdempotencyReuseException.java`);
+  assert.ok(reuse.includes('"PRODUCT_KEY_REUSED"'), reuse);
+  assert.ok(!reuse.includes('IDEMPOTENCY_KEY_REUSED'), reuse);
+  // Y la nota del handler cita el code que de verdad va a salir por el cable.
+  const handler = read(`${JAVA}/application/usecases/CreateProductCommandHandler.java`);
+  assert.ok(handler.includes('PRODUCT_KEY_REUSED'), handler);
+});
+
+test('el 413 del límite de subida usa el error que el diseño declara', () => {
+  // Antes este handler emitía el canónico pasara lo que pasara, así que un diseño que
+  // declaraba FILE_TOO_LARGE recibía DOS nombres para el mismo 413 según por dónde
+  // llegara el rechazo: la política del bucket dentro del handler, o el límite de Spring
+  // antes de entrar. La fixture ya lo declara con un prefijo propio.
+  const { manifest, layers } = loadService(fixtureDir);
+  const patched = structuredClone(layers);
+  patched['use-cases'].operations.addProductImage.errors = [
+    ...(patched['use-cases'].operations.addProductImage.errors ?? []),
+    { code: 'PRODUCT_IMAGE_FILE_TOO_LARGE', when: 'La imagen supera el tamaño del bucket.', http: 413 }
+  ];
+  const workspace = tmpDir('keel-framework-errors-');
+  scaffoldService({ manifest, layers: patched, workspace, force: true });
+  const advice = fs.readFileSync(
+    path.join(workspace, 'services', 'catalog-spring', JAVA, 'infrastructure/rest/ApiExceptionHandler.java'),
+    'utf8'
+  );
+  assert.ok(advice.includes('"PRODUCT_IMAGE_FILE_TOO_LARGE"'), advice);
+});
+
+test('ningún code que salga por el cable se inventa fuera del catálogo', () => {
+  // La comprobación que cierra el asunto: todo `code` literal del ApiExceptionHandler y de
+  // las excepciones de mecanismo está o en el catálogo del framework, o declarado por el
+  // diseño, o derivado de una clave natural. Si aparece uno nuevo, el generador volvió a
+  // inventar — que es justo lo que este trabajo cierra.
+  const { manifest, layers } = loadService(fixtureDir);
+  const workspace = tmpDir('keel-framework-errors-');
+  scaffoldService({ manifest, layers, workspace, force: true });
+  const root = path.join(workspace, 'services', 'catalog-spring', JAVA);
+
+  const canonical = new Set(fixedFrameworkErrors().map((entry) => entry.code));
+  const declared = new Set(
+    Object.values(layers['use-cases'].operations).flatMap((op) => (op.errors ?? []).map((error) => error.code))
+  );
+
+  const sospechosos = [];
+  for (const relative of ['infrastructure/rest/ApiExceptionHandler.java', 'domain/idempotency/IdempotencyReuseException.java', 'domain/idempotency/IdempotencyConflictException.java']) {
+    const content = fs.readFileSync(path.join(root, relative), 'utf8');
+    for (const [, code] of content.matchAll(/"([A-Z][A-Z0-9_]{4,})"/g)) {
+      if (canonical.has(code) || declared.has(code)) continue;
+      // Los derivados de una clave natural llevan el sufijo de su familia.
+      if (code.endsWith('_ALREADY_EXISTS')) continue;
+      sospechosos.push(`${relative}: ${code}`);
+    }
+  }
+  assert.deepEqual(sospechosos, [], `codes fuera del catálogo:\n${sospechosos.join('\n')}`);
 });

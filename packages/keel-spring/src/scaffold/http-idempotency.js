@@ -17,6 +17,8 @@
 // entrega de la cabecera al handler. Lo que escribe el agente es el uso dentro
 // del handler, guiado por conventions/mapping.md.
 
+import { FRAMEWORK_ERRORS } from 'keel-core';
+import { declaredErrorFor } from '../lib/declared-errors.js';
 import { javaFile, javaPath, subPackage } from './render.js';
 
 const PORT_PKG = 'domain.idempotency';
@@ -70,6 +72,7 @@ export function generate(model) {
   files.push(
     renderPort(model),
     renderConflict(model),
+    renderReuse(model),
     document ? renderDocument(model) : renderEntity(model),
     document ? renderDocumentRepository(model) : renderRepository(model),
     document ? renderMongoStore(model) : renderStore(model)
@@ -123,6 +126,55 @@ public class IdempotencyConflictException extends ConflictException {
 
   return {
     path: javaPath(model, PORT_PKG, 'IdempotencyConflictException'),
+    content: javaFile(
+      subPackage(model, PORT_PKG),
+      [`${subPackage(model, 'domain.errors')}.ConflictException`],
+      body
+    )
+  };
+}
+
+// El OTRO desenlace del mecanismo, y el que faltaba. El javadoc de IdempotencyStore decía
+// que la reutilización de la clave con otro cuerpo «el diseño la resuelve con su propio
+// error», y el diseño no tenía dónde ponerlo: tres corridas completas del pipeline
+// improvisaron tres codes distintos para esto. Ahora sale del catálogo de keel-core, y el
+// diseño lo sustituye declarando uno de su familia.
+function renderReuse(model) {
+  const canonical = FRAMEWORK_ERRORS.idempotencyReuse;
+  const declared = declaredErrorFor(model, canonical);
+  const code = declared?.code ?? canonical.code;
+  const body = `/**
+ * La misma clave de idempotencia con un contenido DISTINTO.
+ *
+ * <p>No es la carrera ({@link IdempotencyConflictException}) ni el reintento normal. El
+ * cliente prometió, al mandar la clave, que dos peticiones con ella son la misma petición;
+ * esta no lo es. Las dos salidas posibles son deshonestas: reproducir la respuesta de la
+ * primera contesta a una pregunta que este cliente no hizo, y ejecutar la segunda rompe la
+ * promesa de la clave. Lo que queda es decírselo.
+ *
+ * <p>Se detecta comparando la firma del contenido (CommandSignature) con la que se guardó
+ * junto a la clave — por eso el registro guarda una firma y no un flag.${
+   declared
+     ? `\n *\n * <p>El code sale del error que el diseño declara para este conflicto.`
+     : `\n *\n * <p>El code es el CANÓNICO del framework (docs/framework-errors.md): el diseño no declara
+ * uno propio, y eso es una respuesta legítima, no un hueco. Para cambiarlo, declara en los
+ * errors de la operación un code de su familia con status ${canonical.http}.`
+ }
+ */
+public class IdempotencyReuseException extends ConflictException {
+
+    public IdempotencyReuseException(String scope, String idempotencyKey) {
+        super(
+                "La clave de idempotencia " + scope + "/" + idempotencyKey
+                        + " ya se usó con un contenido distinto",
+                "${code}",
+                ${canonical.http},
+                new Object[] {scope, idempotencyKey});
+    }
+}`;
+
+  return {
+    path: javaPath(model, PORT_PKG, 'IdempotencyReuseException'),
     content: javaFile(
       subPackage(model, PORT_PKG),
       [`${subPackage(model, 'domain.errors')}.ConflictException`],

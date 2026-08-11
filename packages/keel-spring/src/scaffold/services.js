@@ -5,6 +5,8 @@
 // donde el agente implementa la lógica. Los handlers dependen del PUERTO de
 // dominio (domain/repository) y del mapper de aplicación, nunca del JPA.
 
+import { FRAMEWORK_ERRORS } from 'keel-core';
+import { effectiveErrorCode } from '../lib/declared-errors.js';
 import { javaFile, javaPath, subPackage, javadoc } from './render.js';
 import { INTERFACES_PKG, ANNOTATIONS_PKG, MEDIATOR_PKG } from './mediator.js';
 import { domainTypeImport } from './entities.js';
@@ -302,7 +304,7 @@ function renderHandler(model, service, operation) {
   if (operation.idempotency) {
     const ttl = operation.idempotency.ttlSeconds ?? 86400;
     const common =
-      `find(scope, clave) con scope="${operation.name}"; si hay registro con la MISMA firma, reconstruye la respuesta desde su resourceId sin re-ejecutar nada (ni escrituras ni eventos); si la firma difiere, lanza el error que el diseño declare para ese caso; si no hay registro, ejecuta y llama a save(...) dentro de la misma transacción del comando. ` +
+      `find(scope, clave) con scope="${operation.name}"; si hay registro con la MISMA firma, reconstruye la respuesta desde su resourceId sin re-ejecutar nada (ni escrituras ni eventos); si la firma difiere, lanza IdempotencyReuseException (${FRAMEWORK_ERRORS.idempotencyReuse.http} ${effectiveErrorCode(model, FRAMEWORK_ERRORS.idempotencyReuse)}), que build genera para eso — no inventes un code ni reutilices el de la carrera, que es otro desenlace; si no hay registro, ejecuta y llama a save(...) dentro de la misma transacción del comando. ` +
       // La CARRERA no la resuelve el find: dos peticiones simultáneas lo fallan las dos
       // —ninguna ha commiteado— y llegan las dos a save. Quien arbitra es la clave
       // primaria del registro, y el adaptador ya traduce esa violación al 409 del

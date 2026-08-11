@@ -8,6 +8,8 @@
 // vía UseCaseMediator. Incluye @Tag/@Operation (springdoc) y el
 // @RestControllerAdvice central en infrastructure/rest.
 
+import { FRAMEWORK_ERRORS } from 'keel-core';
+import { declaredErrorFor } from '../lib/declared-errors.js';
 import { javaFile, javaPath, subPackage, javadoc } from './render.js';
 import {
   messageComponents,
@@ -477,19 +479,14 @@ function renderDataIntegrityHandler(model, imports, constantsOut) {
 `;
 }
 
-// El error declarado del diseño que representa violar la unicidad de estos
-// campos, si lo hay: un 409 de status fijo cuyo code termina en
-// <CAMPOS>_ALREADY_EXISTS. Con cero o varios candidatos no se adivina — el code
-// viaja en la respuesta pública, así que ambiguo se queda como TODO del agente.
+// La unicidad es el único canónico DERIVADO: su familia depende de los campos de la clave,
+// porque un servicio con varias claves naturales necesita un error por cada una.
 function declaredUniquenessError(model, fields) {
-  const suffix = `${screamingSnake(fields.join('_'))}_ALREADY_EXISTS`;
-  const candidates = (model.errors ?? []).filter(
-    (error) =>
-      error.http === 409 &&
-      !error.dynamicStatus &&
-      screamingSnake(error.code).endsWith(suffix)
+  return declaredErrorFor(
+    model,
+    FRAMEWORK_ERRORS.uniqueness,
+    FRAMEWORK_ERRORS.uniqueness.familyFor(screamingSnake(fields.join('_')))
   );
-  return candidates.length === 1 ? candidates[0] : null;
 }
 
 function constraintMapConstant(constraints) {
@@ -528,9 +525,16 @@ ${entries});`;
 // la petición llegue al controller: sin estos handlers caen en el catch-all y
 // devuelven 500 donde el diseño (storage.maxSizeMb, error FILE_TOO_LARGE) espera
 // 413/400. Son mecánicas: no dependen de la lógica del servicio.
-function renderMultipartHandlers(imports) {
+function renderMultipartHandlers(imports, model) {
   imports.add('org.springframework.web.multipart.MaxUploadSizeExceededException');
   imports.add('org.springframework.web.multipart.support.MissingServletRequestPartException');
+  // El diseño manda también aquí. Antes este handler emitía el canónico pasara lo que
+  // pasara, así que una fixture que declaraba FILE_TOO_LARGE en su operación recibía por
+  // el cable el code del scaffolding: dos nombres para el mismo 413 según por dónde
+  // llegara el rechazo (la política del bucket dentro del handler, o el límite de Spring
+  // antes de entrar).
+  const declared = declaredErrorFor(model, FRAMEWORK_ERRORS.fileTooLarge);
+  const tooLarge = declared?.code ?? FRAMEWORK_ERRORS.fileTooLarge.code;
   return `
     // ── Subida de archivos (capa storage) ────────────────────────────────────
 
@@ -538,7 +542,7 @@ function renderMultipartHandlers(imports) {
     @ExceptionHandler(MaxUploadSizeExceededException.class)
     public ErrorResponse onMaxUploadSizeExceeded(MaxUploadSizeExceededException exception) {
         return new ErrorResponse(HttpStatus.PAYLOAD_TOO_LARGE.value(), "Payload Too Large",
-                "FILE_TOO_LARGE", "El archivo supera el tamaño máximo permitido", List.of());
+                "${tooLarge}", "El archivo supera el tamaño máximo permitido", List.of());
     }
 
     @ResponseStatus(HttpStatus.BAD_REQUEST)
@@ -588,31 +592,25 @@ function renderOptimisticLockHandler(model, imports) {
     }
 `;
   }
+  const canonical = FRAMEWORK_ERRORS.concurrency;
   return `
-    // TODO (agente): el diseño no declara (o declara de forma ambigua) un error 409
-    // para la modificación concurrente; este code es una convención del scaffolding,
-    // no el contrato. Si el diseño lo declara, sustitúyelo.
+    // El diseño no nombra este conflicto, así que sale con el código CANÓNICO del
+    // framework (docs/framework-errors.md). No es una invención del scaffolding ni un
+    // hueco que reportar: es el contrato de este mecanismo cuando el diseño no declara
+    // uno propio. Para cambiarlo, decláralo en los errors de la operación donde se
+    // observe, con status ${canonical.http} y un code de su familia.
     @ResponseStatus(HttpStatus.CONFLICT)
     @ExceptionHandler(${exception}.class)
     public ErrorResponse onOptimisticLockingFailure(${exception} exception) {
-        return new ErrorResponse(HttpStatus.CONFLICT.value(), "Conflict", "OPTIMISTIC_LOCK_CONFLICT",
+        return new ErrorResponse(HttpStatus.CONFLICT.value(), "Conflict", "${canonical.code}",
                 "${message}", List.of());
     }
 `;
 }
 
-// El error de conflicto por concurrencia que declara el diseño, si lo hay. Mismo
-// criterio que declaredUniquenessError: 409 de status fijo, y con cero o varios
-// candidatos no se adivina. Un `dynamicStatus` queda fuera porque su status llega
-// por constructor y aquí no hay operación de la que deducirlo.
-const CONCURRENCY_CODE =
-  /(^|_)(CONCURRENT_MODIFICATION|CONCURRENT_UPDATE|OPTIMISTIC_LOCK_CONFLICT|OPTIMISTIC_LOCKING_FAILURE|VERSION_CONFLICT)$/;
-
+// El error de conflicto por concurrencia que declara el diseño, si lo hay.
 function declaredConcurrencyError(model) {
-  const candidates = (model.errors ?? []).filter(
-    (error) => error.http === 409 && !error.dynamicStatus && CONCURRENCY_CODE.test(screamingSnake(error.code))
-  );
-  return candidates.length === 1 ? candidates[0] : null;
+  return declaredErrorFor(model, FRAMEWORK_ERRORS.concurrency);
 }
 
 function renderExceptionHandler(model) {
@@ -655,7 +653,7 @@ function renderExceptionHandler(model) {
     model.layersPresent.persistence && model.entities.some((entity) => entity.usesOptimisticLocking)
       ? renderOptimisticLockHandler(model, imports)
       : '';
-  const multipart = model.layersPresent.storage ? renderMultipartHandlers(imports) : '';
+  const multipart = model.layersPresent.storage ? renderMultipartHandlers(imports, model) : '';
 
   const body = `@RestControllerAdvice
 public class ApiExceptionHandler {

@@ -139,6 +139,20 @@ en local, inservible en GitHub). Si el workspace se publica en GitHub y no exist
 **sugiérelo**; no lo crees por iniciativa propia: es configuración del equipo, no un derivado del
 diseño, y adivinar el repo mal deja enlaces rotos en la portada.
 
+## Los errores del framework también son contrato
+
+En las respuestas de error de `openapi.yaml` no van solo los `errors[]` de la operación: van
+también los códigos que pone el **framework** por haber encendido un mecanismo (`docs/framework-errors.md`).
+Una operación con `idempotency` puede devolver `409 IDEMPOTENCY_KEY_IN_PROGRESS` y
+`409 IDEMPOTENCY_KEY_REUSED`; con `optimisticLocking` distinto de `none`, sus mutaciones pueden
+devolver `409 CONCURRENT_MODIFICATION`; con un bucket que acota el tamaño, la subida puede devolver
+`413 FILE_TOO_LARGE`. Si el diseño declara un `code` de la familia de alguno, documenta **ese** —es
+el que sale por el cable— y no el canónico.
+
+No es exhaustividad por gusto: el cliente va a recibirlos, y un error que no está en el contrato
+publicado es un error contra el que nadie puede programar. Lo mismo vale para el `INTEGRATION.md`
+de `/keel-integrate`.
+
 ## Coherencia
 
 `openapi.yaml`, `asyncapi.yaml`, las colecciones Postman y el panel salen del mismo diseño y deben
