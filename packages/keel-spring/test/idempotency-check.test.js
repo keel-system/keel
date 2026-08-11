@@ -113,12 +113,48 @@ test('el gate exige que el barrido reclame sus candidatos, y acotados', (t) => {
   if (before === null) return t.skip('sin bash en el PATH');
   assert.match(before.out, /reclamo del barrido/);
 
-  // Un reclamo real lo apaga: bloqueo de fila con SKIP LOCKED (el hint -2) y lote
-  // acotado. Donde lo ponga el agente es asunto suyo, así que se busca en el árbol.
+  // Un reclamo real lo apaga: marca PERSISTIDA sobre un lote acotado. Donde lo ponga el
+  // agente es asunto suyo, así que se busca en el árbol.
   const adapter = path.join(project, 'src/main/java/com/commerce/catalog/infrastructure/persistence');
   fs.mkdirSync(adapter, { recursive: true });
   const claim = path.join(adapter, 'StaleClaimRepository.java');
   const withBound = `package com.commerce.catalog.infrastructure.persistence;
+
+import java.time.Instant;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+
+public interface StaleClaimRepository {
+
+    @Modifying
+    @Query(value = "update orders set reserve_stock_claimed_at = :now where id in (select id from orders where status = 'reserved' and reserve_stock_claimed_at is null limit :batch)", nativeQuery = true)
+    int claimStale(@Param("now") Instant now, @Param("batch") int batch);
+}
+`;
+  fs.writeFileSync(claim, withBound);
+  assert.ok(!/reclamo del barrido/.test(run(project).out));
+
+  // Y sin cota vuelve el hallazgo: reclamar la tabla entera no es un lote, es una
+  // transacción larga que las demás réplicas esperan.
+  fs.writeFileSync(claim, withBound.replace(' limit :batch', ''));
+  assert.match(run(project).out, /reclamo del barrido/);
+});
+
+// Un lock pesimista SÍ reparte filas disjuntas, pero solo mientras dura su transacción, y
+// en el barrido la llamada al proveedor va en medio: o la sostienes durante la llamada
+// —una conexión del pool retenida por la latencia de un tercero— o la sueltas antes y la
+// fila queda sin marca, con lo que las N réplicas vuelven a verla. El gate aceptaba esa
+// forma, así que no distinguía la correcta de la que se le parece.
+test('el gate no acepta un lock pesimista como reclamo del barrido', (t) => {
+  const project = build('catalog-extended');
+  if (run(project) === null) return t.skip('sin bash en el PATH');
+
+  const adapter = path.join(project, 'src/main/java/com/commerce/catalog/infrastructure/persistence');
+  fs.mkdirSync(adapter, { recursive: true });
+  fs.writeFileSync(
+    path.join(adapter, 'StaleClaimRepository.java'),
+    `package com.commerce.catalog.infrastructure.persistence;
 
 import java.util.List;
 import org.springframework.data.domain.Pageable;
@@ -130,14 +166,14 @@ public interface StaleClaimRepository {
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     List<Object> claimStale(Pageable pageable);
 }
-`;
-  fs.writeFileSync(claim, withBound);
-  assert.ok(!/reclamo del barrido/.test(run(project).out));
+`
+  );
 
-  // Y sin cota vuelve el hallazgo: reclamar la tabla entera no es un lote, es un
-  // bloqueo largo que las demás réplicas esperan.
-  fs.writeFileSync(claim, withBound.replace('Pageable pageable', '').replace(/import.*Pageable;\n/, ''));
-  assert.match(run(project).out, /reclamo del barrido/);
+  const after = run(project);
+  assert.match(after.out, /reclamo del barrido/);
+  // Y el mensaje tiene que decir qué forma se espera, no solo que falta algo: si no, el
+  // camino de menor resistencia es colar un @Modifying en cualquier parte.
+  assert.match(after.out, /MARCA PERSISTIDA/);
 });
 
 // El umbral se comprueba APARTE del reclamo, y esa separación costó dos correcciones:

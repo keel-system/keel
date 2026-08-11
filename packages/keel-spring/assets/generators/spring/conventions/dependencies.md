@@ -174,11 +174,30 @@ Lo que engaña es que parece que ya hay protección, y solo la hay a medias:
 | La llamada al proveedor | Sí: la **idempotencia saliente** (`OutboundIdempotency`), si el diseño la declara. Es la red real |
 | Reencargar **publicando un evento** | **Nada.** Cada réplica hace su propio `raise` y estampa un `metadata.eventId` distinto: para el consumidor son N hechos y su `processed_event` no los deduplica |
 
-**La regla: reclamar, no leer.** La consulta del barrido no pide los candidatos, se los **lleva** —dentro
-de su transacción y en lotes acotados—, de modo que cada réplica trabaja sobre un conjunto disjunto y el
-paralelismo pasa de problema a ventaja. No hace falta infraestructura nueva, y el ejemplo vivo está en
-este mismo proyecto: `OutboxRelay.findPending` ya lo hace, y su javadoc lo explica. La técnica concreta
-de tu motor está en la skill `keel-spring-database` o `keel-spring-mongodb`, `references/read-queries.md`.
+**La regla: reclamar, no leer.** La consulta del barrido no pide los candidatos, se los **lleva**, en
+lotes acotados, de modo que cada réplica trabaja sobre un conjunto disjunto y el paralelismo pasa de
+problema a ventaja. No hace falta infraestructura nueva.
+
+Pero *cómo* se los lleva no es indiferente, porque la llamada al proveedor va **en medio** (ver el orden,
+abajo). Hay dos formas de reclamar y aquí solo sirve una:
+
+| Forma | Qué aísla a las réplicas | ¿Sirve para el barrido? |
+|---|---|---|
+| **Lock pesimista** — `SELECT … FOR UPDATE SKIP LOCKED` | El lock de fila, que **vive lo que vive la transacción** | **No.** Obligaría a sostener la transacción durante la llamada al proveedor: una conexión del pool retenida por la latencia de un tercero |
+| **Marca persistida** — `UPDATE … SET <marca>` o `findAndModify` | La marca, que **sobrevive al commit** | **Sí.** La transacción del reclamo dura lo que dura un `UPDATE` y la llamada va fuera |
+
+**El barrido reclama con marca persistida.** Y precisamente porque la marca sobrevive al commit,
+sobrevive también a la muerte de la réplica que la puso: necesita **caducidad**, o un proceso que muera
+entre el reclamo y la llamada retiene el candidato para siempre. Pasado el plazo, vuelve a ser elegible.
+Regla para dimensionarlo: **`claim-timeout` > tamaño del lote × timeout de la llamada**, con holgura; por
+debajo, dos réplicas actúan sobre el mismo candidato, que es lo que el reclamo venía a evitar.
+
+El ejemplo vivo está en este mismo proyecto y es exactamente esta forma: la rama **documental** de
+`OutboxRelay` (`claimPending()`, con `outbox.relay.claim-timeout-ms`). La rama **relacional** del relay
+usa lock pesimista y **no es el modelo a copiar aquí**: allí lo que ocurre dentro de la transacción es la
+entrega al broker, que es corta y local; en el barrido es una llamada a otro servidor. La técnica
+concreta de tu motor está en la skill `keel-spring-database` o `keel-spring-mongodb`,
+`references/read-queries.md`.
 
 Un **lock distribuido** (ShedLock, un advisory lock) solo compensa cuando el barrido tiene que ser único
 por negocio —consolidar un informe, emitir un fichero—: serializa a una instancia y desperdicia el resto.
@@ -186,16 +205,56 @@ Para un barrido de reconciliación es la respuesta equivocada a la pregunta corr
 
 ### El orden dentro del barrido
 
-**Reclamar → actuar fuera → confirmar.** No es preferencia: decide si hay red.
+Con marca persistida hay **dos** commits, y confundirlos es de donde sale el error más caro de esta
+página. En orden:
+
+1. `UPDATE … SET <marca> = now WHERE <candidato>` + **commit**. Este commit no es opcional ni prematuro:
+   es lo que hace el reclamo visible a las demás réplicas. Sin él no aísla nada.
+2. La llamada al proveedor, **fuera de toda transacción**.
+3. La transición del agregado a su estado final + **commit**.
+
+El orden de 2 y 3 no es preferencia: decide si hay red.
 
 | Orden | Si el proceso muere en medio |
 |---|---|
-| Reclamar, **actuar**, confirmar | La entidad sigue esperando y la siguiente pasada repite la llamada. La absorbe la **idempotencia saliente**. Tiene red |
-| Reclamar, confirmar, **actuar** | La entidad queda resuelta y el trabajo vivo en el proveedor: un huérfano que no detecta nadie. **No tiene red** |
+| Reclamar, **actuar**, confirmar el desenlace | La entidad sigue reclamada y, al caducar la marca, la siguiente pasada repite la llamada. La absorbe la **idempotencia saliente**. Tiene red |
+| Reclamar, confirmar el desenlace, **actuar** | La entidad queda resuelta y el trabajo vivo en el proveedor: un huérfano que no detecta nadie. **No tiene red** |
 
 Es el mismo razonamiento que decide los dos órdenes del `IdempotencyGuard` (`alreadyProcessed`+`record`
 frente a `tryRecord`), aplicado a otro sitio: se prefiere repetir algo absorbible a perder algo que nadie
 va a echar de menos.
+
+#### El híbrido que hay que evitar
+
+Reclamar con `SKIP LOCKED` y **commitear antes** de llamar al proveedor. Parece la forma (1)(2)(3) de
+arriba, y no lo es: al confirmar, el lock se suelta y no queda nada en la fila que diga que alguien la
+tomó. Las N réplicas vuelven a verla en la pasada siguiente —o en la misma, si sus relojes coinciden— y
+todas actúan. Es el fallo exacto que el reclamo venía a evitar, con la apariencia de estar resuelto.
+
+Merece nombre propio porque es el único de los tres caminos que **ningún gate distingue solo**:
+`infra/check-idempotency.sh` ve el patrón del reclamo y su cota, no dónde cae el commit. Que el barrido
+sea correcto en este punto depende de quien lo escribe y de quien lo revisa.
+
+### Varios barridos en el mismo proceso
+
+El eje anterior es entre réplicas; este es dentro de una. Con hilos virtuales activados, los `@Scheduled`
+corren en un `SimpleAsyncTaskScheduler` de **concurrencia no acotada**: nada los serializa, así que los
+que compartan cadencia se disparan a la vez. Y compartirla es lo natural — «cada cinco minutos» es la
+declaración obvia para todos.
+
+Lo que se amontona cuando coinciden **no es la base de datos**: con reclamo persistido cada uno toma su
+conexión para un `UPDATE` y la suelta. Son las **llamadas salientes**, todas empujando a sus proveedores
+en el mismo segundo.
+
+Por eso `build` reparte el **campo de segundos** del cron, que es suyo: el diseño declara cinco campos y
+Spring quiere seis. Con tres barridos declarados «cada cinco minutos» salen en los segundos 0, 20 y 40 de
+ese minuto. La cadencia declarada no cambia, solo la fase. **Igualarlos a 0 «por limpieza» deshace el
+reparto** — el javadoc del `<Servicio>Scheduler` lo advierte donde se ve.
+
+Es una mitigación, no una garantía: reparte el arranque. Dos barridos que duren más que su separación se
+solapan igual, y contra eso el segundo inicial no puede nada. Acotar la concurrencia del scheduler
+(`concurrency-limit`) sí los serializaría, pero es **global**: se lo aplicaría también al `OutboxRelay`,
+que corre cada segundo, y un barrido largo pasaría a retrasar la entrega de eventos.
 
 ### La carrera con el camino feliz
 

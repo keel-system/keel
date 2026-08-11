@@ -518,10 +518,103 @@ test('reconciliación: el stub del barrido dice qué busca y de dónde sale el u
   assert.ok(handler.includes('DESDE CUÁNDO'));
   assert.ok(handler.includes('NO uses createdAt'));
   assert.ok(handler.includes('rejuvenece'));
-  // Reclamar → actuar fuera → confirmar: el orden que tiene red.
-  assert.ok(handler.includes('reclamar → actuar fuera → confirmar'));
+  // El reclamo es una MARCA PERSISTIDA, no un lock: la llamada al proveedor va en
+  // medio, y un lock solo aísla mientras dura su transacción. La marca se nombra por
+  // la activación, igual que la de espera.
+  assert.ok(handler.includes('MARCA PERSISTIDA'));
+  assert.ok(handler.includes('reserveStockClaimedAt'));
+  // Y como sobrevive al commit, sobrevive a la réplica que muera: tiene que caducar.
+  assert.ok(handler.includes('claim-timeout > lote × timeout de llamada'));
+  // El híbrido que ningún gate distingue: reclamar con lock y confirmar antes de
+  // llamar suelta el lock y deja la fila sin marca — las N vuelven a verla.
+  assert.ok(handler.includes('NO vale reclamar con SKIP LOCKED'));
+  // Dos commits, no uno: el del reclamo (que lo hace visible) y el del desenlace.
+  assert.ok(handler.includes('son DOS commits'));
   // Y la carrera con el camino feliz no es un fallo.
   assert.ok(handler.includes('CARRERA CON EL CAMINO FELIZ'));
+});
+
+// La nota genérica de orden («transición primero, llamada después») existe para que la
+// guarda del agregado rechace ANTES de una llamada irreversible. En un barrido esa
+// arbitración ya la hizo el reclamo y la transición es el DESENLACE de la llamada, no su
+// precondición: aplicarla primero resolvería la entidad sin saber si el proveedor aceptó.
+// Las dos notas juntas en el mismo stub no son dos consejos, son uno elegido al azar.
+test('reconciliación: el barrido no recibe además la nota de orden genérica, que dice lo contrario', () => {
+  const layers = withCompensation();
+  layers.dependencies.dependencies.catalog.activations.reserveStock.reconciledBy = 'sweepStaleReservations';
+  // Reencargar es lo que le da al barrido una llamada saliente propia.
+  layers.dependencies.dependencies.catalog.activations.reserveStock.triggeredBy = [
+    'createOrder',
+    'sweepStaleReservations'
+  ];
+  layers['use-cases'].operations.sweepStaleReservations = {
+    description: 'Revisa las reservas encargadas que siguen sin desenlace.',
+    kind: 'command',
+    internal: true,
+    input: 'void',
+    output: 'void',
+    schedule: { cron: '0 0 * * * *' },
+    transitions: [{ entity: 'Order', from: ['reserved'], to: 'draft' }]
+  };
+
+  const handler = handlerOf(modelFrom(layers), 'SweepStaleReservationsCommandHandler');
+
+  // Tiene las dos cosas —transición y llamada saliente—, así que la nota genérica se
+  // dispararía de no excluirse. El orden que vale es el del barrido.
+  assert.ok(handler.includes('son DOS commits'));
+  assert.ok(!handler.includes('ORDEN de los efectos'), handler);
+
+  // Y fuera del barrido la nota genérica sigue intacta: la exclusión es de la
+  // reconciliación, no una retirada de la regla.
+  const normal = handlerOf(modelFrom(withCompensation()), 'CreateOrderCommandHandler');
+  assert.ok(normal.includes('ORDEN de los efectos'));
+});
+
+// ─── El reparto de fase de los @Scheduled ────────────────────────────────────
+//
+// El DSL declara cron de cinco campos y build añade el de segundos. Poniéndolo a 0 en
+// todos, varios barridos que comparten cadencia —y compartirla es lo natural: "cada cinco
+// minutos" es la declaración obvia— arrancaban en el mismo instante y en todas las
+// réplicas a la vez. Lo que se amontona ahí no es la base de datos (el reclamo es un
+// UPDATE corto) sino las llamadas salientes, todas empujando a sus proveedores a la vez.
+
+const schedulersOf = (layers) =>
+  generateServices(modelFrom(layers))
+    .filter((file) => file.path.endsWith('Scheduler.java'))
+    .map((file) => file.content)
+    .join('\n');
+
+const withSweeps = (crons) => {
+  const layers = withCompensation();
+  for (const [name, cron] of Object.entries(crons)) {
+    layers['use-cases'].operations[name] = {
+      description: `Barrido ${name}.`,
+      kind: 'command',
+      internal: true,
+      input: 'void',
+      output: 'void',
+      schedule: { cron }
+    };
+  }
+  return layers;
+};
+
+test('scheduler: dos operaciones programadas no arrancan en el mismo segundo', () => {
+  const scheduler = schedulersOf(
+    withSweeps({ sweepStaleReservations: '*/5 * * * *', sweepOrphanOrders: '*/5 * * * *' })
+  );
+
+  assert.ok(scheduler.includes('@Scheduled(cron = "0 */5 * * * *")'), scheduler);
+  assert.ok(scheduler.includes('@Scheduled(cron = "30 */5 * * * *")'), scheduler);
+  // Y lo que NO cambia es la cadencia declarada: el reparto es de fase, no de frecuencia.
+  assert.equal((scheduler.match(/\*\/5 \* \* \* \*/g) ?? []).length, 2, scheduler);
+});
+
+// Con una sola operación no hay nada de lo que separarse, y desplazarla movería el cron
+// de todo diseño con un único barrido sin que nadie lo hubiera pedido.
+test('scheduler: con una sola operación programada el segundo sigue siendo 0', () => {
+  const scheduler = schedulersOf(withSweeps({ sweepStaleReservations: '0 3 * * *' }));
+  assert.ok(scheduler.includes('@Scheduled(cron = "0 0 3 * * *")'), scheduler);
 });
 
 test('compensación sin transición de vuelta: el estado que falta se reporta, no se inventa', () => {

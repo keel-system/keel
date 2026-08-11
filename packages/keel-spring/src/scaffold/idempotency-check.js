@@ -366,18 +366,28 @@ function reconciliationChecks(model) {
   // se lleven las mismas filas y todas actúen — y actuar aquí es llamar a otro
   // servidor. Se comprueba una vez por diseño, no por operación: basta con que el
   // patrón exista en alguna parte del árbol que el agente escribió.
+  //
+  // El patrón exige un cambio de estado PERSISTIDO, y antes aceptaba también un lock
+  // pesimista a secas. Aceptarlo era un hueco: un lock solo aísla mientras dura su
+  // transacción, y en el barrido la llamada al proveedor va EN MEDIO. De ahí salen dos
+  // caminos que el lock deja pasar y ninguno sirve — sostener la transacción durante la
+  // llamada (una conexión del pool retenida por la latencia de un tercero) o soltarla
+  // antes (el lock se va, la fila no queda marcada y las N réplicas vuelven a verla).
+  // El gate tiene que exigir la forma que la convención prescribe, no cualquiera que se
+  // le parezca. Lo que sigue sin poder ver es DÓNDE cae el commit; eso queda en la
+  // revisión, y conventions/dependencies.md lo dice con ese nombre.
   if (schedulers.size > 0) {
     checks.push({
       group: 'reconciliation',
       subject: 'reclamo del barrido',
-      claim: 'PESSIMISTIC_WRITE|SKIP LOCKED|skip locked|findAndModify|@Modifying',
+      claim: '@Modifying|@Update|findAndModify|findOneAndUpdate',
       // Sin cota, el reclamo bloquea la tabla entera y el barrido deja de ser un lote.
       bound: 'Pageable|PageRequest|[Ll]imit|first[0-9]|[Tt]op[0-9]',
       // Las clases del mecanismo que build YA genera con el patrón: encontrarlas
       // probaría lo que build hizo, no lo que el agente tenía que escribir.
       exclude:
         '/(OutboxEventJpaRepository|OutboxEventMongoRepository|OutboxRelay|OutboxEventJpa|OutboxEventDocument|ProcessedEventJpaRepository|ProcessedEventMongoRepository|IdempotencyRecordJpaRepository|IdempotencyRecordMongoRepository)\\.java',
-      why: 'ninguna consulta reclama candidatos (bloqueo con SKIP LOCKED, findAndModify o UPDATE ... RETURNING) con el lote acotado: el barrido corre en TODAS las réplicas y sin reclamo las N se llevan las mismas filas — ver conventions/dependencies.md § El barrido corre en todas las réplicas'
+      why: 'ninguna consulta reclama candidatos con una MARCA PERSISTIDA (UPDATE ... SET <marca> vía @Modifying, o findAndModify en Mongo) y el lote acotado: el barrido corre en TODAS las réplicas, y un lock pesimista no sirve aquí porque solo aísla mientras dura su transacción y la llamada al proveedor va en medio — ver conventions/dependencies.md § El barrido corre en todas las réplicas'
     });
     // Y el umbral de «demasiado tiempo», que no lo declara el diseño: sale de
     // `parameters/`, nunca de una constante.

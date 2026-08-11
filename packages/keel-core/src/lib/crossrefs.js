@@ -1509,6 +1509,35 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
                     `salida, el reintento del encargo o la activación de vuelta`
                 );
               }
+
+              // Y lo que cuesta barrer. La consulta del barrido filtra por el estado de
+              // espera y corre cada N minutos EN CADA RÉPLICA; sin un índice que empiece
+              // por ese campo es un recorrido completo de la tabla, repetido para siempre.
+              // No lo delata nada —el barrido es correcto, solo caro— y a escala se lleva
+              // por delante la caché de la base que sirve al camino feliz, así que el
+              // síntoma aparece lejos de la causa. Es lo único de este bloque que el
+              // diseño puede cerrar por sí solo: el campo lo nombra el lifecycle y el
+              // índice se declara en persistence.
+              //
+              // «Que EMPIECE por el campo» y no «que lo contenga»: un índice (customerId,
+              // status) no sirve para filtrar por status. Aviso y no error —un índice no
+              // es corrección— y redactado como el hecho que es, porque un orden distinto
+              // puede ser deliberado.
+              for (const waitingEntity of waiting) {
+                // `persistence` puede no estar declarada (no es capa requerida): sin ella
+                // no hay tabla de la que hablar, y el aviso no aplica.
+                const stored = persistence?.entities?.[waitingEntity];
+                const stateField = domain.entities?.[waitingEntity]?.lifecycle?.field;
+                if (!stored || stored.persisted === false || !stateField) continue;
+                if ((stored.indexes ?? []).some((index) => index[0] === stateField)) continue;
+                warnings.push(
+                  `${where}.reconciledBy: el barrido '${spec.reconciledBy}' busca ${waitingEntity} por su estado de espera, ` +
+                    `pero ningún índice de persistence.entities.${waitingEntity} empieza por '${stateField}' — esa consulta ` +
+                    `recorre la tabla entera cada vez que corre el schedule, y en cada réplica. Nada más lo va a señalar: ` +
+                    `el barrido sigue siendo correcto, solo caro. Declara ` +
+                    `persistence.entities.${waitingEntity}.indexes: [[${stateField}, <campo de la marca de espera>]]`
+                );
+              }
             }
           }
         }

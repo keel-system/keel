@@ -67,15 +67,51 @@ export function hasScheduledOperations(model) {
   );
 }
 
+// El segundo de arranque de cada @Scheduled, repartido dentro del minuto.
+//
+// El DSL declara un cron de CINCO campos y Spring quiere seis: el de segundos lo pone
+// build. Ponerlo a 0 en todos hacía que varios barridos que comparten cadencia —y
+// compartirla es lo natural, "cada cinco minutos" es la declaración obvia— arrancaran
+// en el mismo instante, y en todas las réplicas a la vez. Lo que se amontona ahí no es
+// la base de datos (el reclamo es un UPDATE corto) sino las LLAMADAS SALIENTES: todos
+// los barridos empujando a sus proveedores en el mismo segundo.
+//
+// Repartir la fase no cambia nada de lo que el diseño declara: la cadencia sigue siendo
+// la de su cron, solo cambia en qué segundo del minuto cae. Y es la misma decisión que
+// build ya tiene tomada a mano para sus purgas (outbox a las 3:00, processed_event a
+// las 4:00, idempotency_record a las 4:30), aplicada donde no se aplicaba.
+//
+// El reparto es por ÍNDICE, no por hash del nombre: lo que se busca es que NO coincidan,
+// y solo el índice lo garantiza —un hash reparte igual de bien en promedio y colisiona—.
+// El precio es que añadir un barrido corre la fase de los demás, y en un archivo que
+// build reescribe entero eso no cuesta nada.
+//
+// Es una mitigación, no una garantía: reparte el ARRANQUE. Dos barridos que duren más
+// que su separación se solapan igual, y contra eso el segundo inicial no puede nada.
+export function scheduleSeconds(model) {
+  const scheduled = (model.services ?? []).flatMap((service) =>
+    (service.operations ?? []).filter((operation) => operation.schedule)
+  );
+  const seconds = new Map();
+  scheduled.forEach((operation, index) => {
+    seconds.set(operation.name, Math.round((index * 60) / scheduled.length) % 60);
+  });
+  return seconds;
+}
+
 export function generate(model) {
   const files = [];
+  // Se calcula una vez para todo el modelo, no por servicio: dos agregados con barrido
+  // son dos clases Scheduler distintas, pero corren en el mismo proceso y contra los
+  // mismos proveedores. Repartir dentro de cada clase los dejaría coincidiendo entre sí.
+  const seconds = scheduleSeconds(model);
   for (const service of model.services) {
     for (const operation of service.operations) {
       files.push(renderMessage(model, operation));
       files.push(renderHandler(model, service, operation));
     }
     const scheduled = service.operations.filter((operation) => operation.schedule);
-    if (scheduled.length > 0) files.push(renderScheduler(model, service, scheduled));
+    if (scheduled.length > 0) files.push(renderScheduler(model, service, scheduled, seconds));
   }
   return files;
 }
@@ -338,10 +374,13 @@ function renderHandler(model, service, operation) {
         `DESDE CUÁNDO: el estado dice que espera, no cuánto lleva. La marca temporal es un campo de la entidad que estampa la operación que encarga; por convención se llama ${activation.name}AwaitingSince, así que empieza buscando ese, y si el diseño lo nombró de otro modo busca la marca de espera equivalente. NO uses createdAt —es cuándo nació la entidad, no cuándo empezó a esperar— ni un updatedAt de auditoría, que rejuvenece con cualquier otra escritura y deja la entidad invisible al barrido para siempre. Si la entidad espera VARIOS desenlaces, usa la marca de ESTA activación y no la de otra: con una compartida el segundo encargo pisa la del primero y el umbral mide una espera que no es la suya. Si el diseño no declara ninguna marca, es designGap. ` +
         `El umbral de "demasiado tiempo" NO lo declara el diseño: sácalo de parameters/ con un default explícito, nunca de una constante en el código. ` +
         `Y decide qué hace con cada uno según el efecto declarado ("${activation.effect}"): reintentar el encargo o disparar la compensación. Si el diseño no lo dice, es designGap. ` +
-        `CONCURRENCIA: este método corre en TODAS las réplicas del servicio a la vez, así que la consulta tiene que RECLAMAR los candidatos, no solo leerlos — mira OutboxRelay, que ya resuelve esto (lock de escritura con SKIP LOCKED y un Pageable que acota el lote, para que cada réplica se lleve un lote disjunto). ` +
+        `CONCURRENCIA: este método corre en TODAS las réplicas del servicio a la vez, así que la consulta tiene que RECLAMAR los candidatos, no solo leerlos, y el lote va acotado (Pageable/limit) para que cada réplica se lleve un conjunto disjunto. ` +
+        `CÓMO se reclama no es indiferente, porque la llamada al proveedor va EN MEDIO: reclama con una MARCA PERSISTIDA (UPDATE … SET ${activation.name}ClaimedAt = now, o findAndModify en Mongo) que confirmas ANTES de llamar, no con un lock pesimista. Un lock solo aísla mientras dura su transacción, así que sostenerlo durante la llamada retendría una conexión del pool por la latencia de un tercero. El ejemplo a copiar es la rama DOCUMENTAL de OutboxRelay (claimPending(), con claim-timeout-ms); la relacional usa lock pesimista y NO es el modelo aquí, porque lo que envuelve su transacción es la entrega al broker, corta y local. ` +
+        `La marca CADUCA: como sobrevive al commit, sobrevive también a la réplica que muera con el candidato en vuelo, y sin plazo lo retendría para siempre. El timeout sale de parameters/ igual que el umbral, y se dimensiona claim-timeout > lote × timeout de llamada; por debajo, dos réplicas actúan sobre el mismo candidato. ` +
+        `NO vale reclamar con SKIP LOCKED y confirmar antes de llamar: al confirmar se suelta el lock y no queda nada en la fila que diga que alguien la tomó, así que las N vuelven a verla y todas actúan — el fallo exacto que el reclamo evita, con apariencia de resuelto. Es lo único de este barrido que check-idempotency.sh no puede distinguir: ve el patrón del reclamo, no dónde cae el commit. ` +
         `La transición del agregado NO basta: las réplicas leen antes de que ninguna confirme, así que todas pasan el guard y todas actúan; lo único que absorbe las llamadas repetidas al proveedor es la idempotencia saliente. ` +
         `Y si lo que haces es reencargar publicando un evento, no lo absorbe nada: cada réplica hace su propio raise y estampa un metadata.eventId distinto, así que para el consumidor son N hechos y su processed_event no los deduplica. ` +
-        `ORDEN: reclamar → actuar fuera → confirmar, en ese orden. Si actúas contra el proveedor y mueres antes del commit, la entidad sigue esperando y la siguiente pasada repite la llamada, que es lo que absorbe la idempotencia saliente: tiene red. Al revés —commitear y luego actuar— si mueres en medio dejas la entidad resuelta y el trabajo vivo en el proveedor: un huérfano que no detecta nadie. ` +
+        `ORDEN: son DOS commits y no se confunden — (1) marcar el reclamo y confirmar, que es lo que lo hace visible a las demás réplicas; (2) llamar al proveedor, fuera de toda transacción; (3) transición al estado final y confirmar. Si actúas contra el proveedor y mueres antes de (3), la entidad sigue reclamada y al caducar la marca la siguiente pasada repite la llamada, que es lo que absorbe la idempotencia saliente: tiene red. Al revés —confirmar el desenlace y luego actuar— si mueres en medio dejas la entidad resuelta y el trabajo vivo en el proveedor: un huérfano que no detecta nadie. ` +
         `CARRERA CON EL CAMINO FELIZ: mientras barres puede llegar el evento de desenlace. Si al mover el candidato lo encuentras ya fuera del estado de espera, ganó el otro camino: es la carrera resuelta, no un fallo — no lo registres como error ni lo reintentes`
     );
   }
@@ -404,8 +443,17 @@ function renderHandler(model, service, operation) {
   // si sale antes de la guarda de estado y la guarda rechaza, el rollback deshace la
   // fila y deja el encargo hecho. Es el fallo que convierte una reentrega inocente en
   // un doble efecto real contra otro servidor.
+  //
+  // Y NO se dice en un barrido, aunque tenga las dos cosas: ahí el orden lo fija la nota
+  // de reconciliación, que es el contrario y por buenas razones. La regla de abajo existe
+  // para que la guarda del agregado rechace ANTES de una llamada irreversible; en un
+  // barrido esa arbitración ya la hizo el reclamo, y la transición no es la precondición
+  // sino el DESENLACE de la llamada. Aplicarla primero sería resolver la entidad sin saber
+  // si el proveedor aceptó — el orden que deja el trabajo vivo y a nadie buscándolo. Dos
+  // órdenes opuestos en el mismo stub no son dos consejos: son uno que el agente va a
+  // elegir al azar.
   const outgoing = (operation.dependencyActivations ?? []).filter(({ activation }) => activation.http);
-  if ((operation.transitions ?? []).length > 0 && outgoing.length > 0) {
+  if ((operation.transitions ?? []).length > 0 && outgoing.length > 0 && !(operation.reconciles ?? []).length) {
     const names = outgoing.map(({ dependency, activation }) => `${dependency}.${activation.name}`).join(', ');
     const guards = operation.transitions
       .map((t) => `${t.entity}: ${(t.from ?? []).join('|')} → ${t.to}`)
@@ -492,7 +540,7 @@ function activationNote(depId, activation) {
   return `Activación ${depId}.${activation.name}: ${activation.effect} — invoca ${decap(activation.http.clientClass)}.${activation.http.call}(...). ${awaits} ${failure ?? ''}`.trim();
 }
 
-function renderScheduler(model, service, scheduled) {
+function renderScheduler(model, service, scheduled, seconds) {
   const className = service.className.replace(/Service$/, 'Scheduler');
   const imports = new Set([
     `${subPackage(model, MEDIATOR_PKG)}.UseCaseMediator`,
@@ -511,8 +559,11 @@ function renderScheduler(model, service, scheduled) {
       call = `// TODO (agente): el mensaje requiere argumentos; construirlos aquí.
         throw new UnsupportedOperationException("TODO: despachar ${operation.messageClass} desde el scheduler");`;
     }
-    // El DSL usa cron de 5 campos; Spring añade el campo de segundos al inicio.
-    return `${description}    @Scheduled(cron = "0 ${operation.schedule.cron}")
+    // El DSL usa cron de 5 campos; Spring añade el campo de segundos al inicio, y ese
+    // segundo lo reparte scheduleSeconds() para que dos barridos con la misma cadencia
+    // no arranquen a la vez. No es decorativo: si vuelve a 0 en todos, vuelven a salir
+    // todas las llamadas al mismo tiempo.
+    return `${description}    @Scheduled(cron = "${seconds.get(operation.name) ?? 0} ${operation.schedule.cron}")
     public void ${operation.name}() {
         ${call}
     }`;
@@ -527,6 +578,13 @@ function renderScheduler(model, service, scheduled) {
  * candidatos en vez de solo leerlos — el patrón está en {@code OutboxRelay} y en
  * docs/keel/conventions/dependencies.md. Las purgas generadas no lo necesitan: borrar lo
  * caducado es idempotente por forma.
+ *
+ * <p><strong>El campo de segundos del cron no es 0 por casualidad.</strong> El diseño
+ * declara cinco campos y build añade el sexto, repartiendo el arranque dentro del minuto
+ * para que dos operaciones con la misma cadencia no salgan a la vez: lo que se amontona
+ * cuando coinciden no son las consultas —el reclamo es corto— sino las llamadas a los
+ * proveedores. La cadencia declarada no cambia; solo en qué segundo del minuto cae.
+ * Igualarlos a 0 «por limpieza» deshace ese reparto.
  */
 @Component
 public class ${className} {

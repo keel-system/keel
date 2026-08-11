@@ -2778,6 +2778,49 @@ test('reconciledBy hacia una operación inexistente es error', () => {
   assert.ok(errors.some((e) => e.includes(`la operación 'noExiste' no existe en use-cases`)));
 });
 
+// Lo que cuesta barrer. La consulta del barrido filtra por el estado de espera y corre
+// cada N minutos EN CADA RÉPLICA: sin un índice que empiece por ese campo recorre la
+// tabla entera, para siempre y sin que nada lo señale — el diseño sigue siendo correcto,
+// solo caro, así que no hay error que lo delate ni escenario que lo ejercite.
+const withPersistedProduct = (indexes) => {
+  const layers = compLayers();
+  layers.domain.entities.Product.fields.recordWithdrawalAwaitingSince = { type: 'timestamp' };
+  layers.persistence = {
+    default: { model: 'relational' },
+    entities: { Product: indexes ? { indexes } : {} },
+  };
+  return layers;
+};
+
+test('reconciliación sobre una entidad sin índice por el estado de espera avisa', () => {
+  const { errors, warnings } = run(withPersistedProduct(null));
+  assert.deepEqual(errors, []);
+  assert.ok(
+    warnings.some((w) => w.includes(`ningún índice de persistence.entities.Product empieza por 'status'`)),
+    warnings.join('\n')
+  );
+});
+
+test('el aviso del índice del barrido mira la CABECERA del índice, no que el campo aparezca', () => {
+  // Con el índice que sirve, nada que decir.
+  const bien = run(withPersistedProduct([['status', 'recordWithdrawalAwaitingSince']]));
+  assert.deepEqual(bien.errors, []);
+  assert.ok(!bien.warnings.some((w) => w.includes('empieza por')), bien.warnings.join('\n'));
+
+  // Y un índice que solo CONTIENE el estado no sirve para filtrar por él: sigue el aviso.
+  const mal = run(withPersistedProduct([['recordWithdrawalAwaitingSince', 'status']]));
+  assert.ok(
+    mal.warnings.some((w) => w.includes(`empieza por 'status'`)),
+    mal.warnings.join('\n')
+  );
+});
+
+// Sin capa persistence no hay tabla de la que hablar: el aviso no aplica y no se inventa.
+test('sin capa persistence el aviso del índice del barrido no se emite', () => {
+  const { warnings } = run(compLayers());
+  assert.ok(!warnings.some((w) => w.includes('empieza por')), warnings.join('\n'));
+});
+
 test('DLQ sin forma declarada de reejecución avisa', () => {
   const layers = compLayers();
   // Con reconciliación no hay aviso: el barrido es la vía de reejecución.
