@@ -91,19 +91,49 @@ const CALL_NOT_PERMITTED = {
 };
 
 /**
+ * La concesión del token no se pudo obtener (`oauth2-client-credentials`). Es el
+ * único fallo de esta tabla que ocurre ANTES de que salga la petición: lo lanza el
+ * `OAuth2ClientHttpRequestInterceptor` al intentar autorizar, así que ninguna de
+ * las otras sobrecargas —todas del transporte o de la respuesta— llega a verlo.
+ * Sin ella, un proveedor de identidad caído sale como 500 sin traducir aunque el
+ * resto del fallback funcione, y el `onFailure` que declaró el diseño no se aplica.
+ *
+ * Se declara el padre (`OAuth2AuthorizationException`) y no la
+ * `ClientAuthorizationException` que lanza el interceptor: cubre las dos y no
+ * depende de por cuál de los dos caminos falló la autorización.
+ *
+ * `recorded: false`, por el mismo criterio que el 4xx: quien no contesta es el
+ * emisor del token, no el proveedor de negocio. Abrir SU circuito por una caída
+ * ajena le acusaría de algo que no ha hecho, y mantendría las llamadas cortadas
+ * durante toda la ventana después de que la identidad ya hubiera vuelto.
+ *
+ * Lo destapó `FL-AUT-004` en la corrida de autenticación saliente: el escenario
+ * existía justamente para mirar este camino, y era el único que lo miraba.
+ */
+const OAUTH2_AUTHORIZATION = {
+  fqn: 'org.springframework.security.oauth2.core.OAuth2AuthorizationException',
+  simple: 'OAuth2AuthorizationException',
+  reason: 'No se pudo obtener el token: el proveedor de identidad no responde o nos rechaza.',
+  recorded: false
+};
+
+/**
  * Excepciones que el fallback de una llamada debe atender, en el orden en que se
  * emiten las sobrecargas.
  *
  * `circuitBreaker` gobierna si entra `CallNotPermittedException`: sin circuito no
- * puede lanzarse, y declararla dejaría un import de resilience4j sin motivo.
+ * puede lanzarse, y declararla dejaría un import de resilience4j sin motivo. Igual
+ * `oauth2` con `OAuth2AuthorizationException`: sin esa auth el tipo ni está en el
+ * classpath (el starter solo se añade cuando algún cliente la declara).
  *
  * SIEMPRE devuelve dos o más. No es casual y no debe «optimizarse» a una:
  * resilience4j comprueba el tipo del último parámetro solo cuando hay VARIOS
  * métodos de fallback; con uno solo lo invoca sea cual sea la excepción, que es
  * exactamente el embudo que esta tabla existe para cerrar.
  */
-export function providerFailures({ circuitBreaker = false } = {}) {
+export function providerFailures({ circuitBreaker = false, oauth2 = false } = {}) {
   const failures = [RESOURCE_ACCESS, SERVER_ERROR, UNKNOWN_STATUS, CLIENT_ERROR];
+  if (oauth2) failures.push(OAUTH2_AUTHORIZATION);
   return circuitBreaker ? [CALL_NOT_PERMITTED, ...failures] : failures;
 }
 

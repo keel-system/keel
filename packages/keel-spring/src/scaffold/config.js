@@ -4,7 +4,7 @@
 // (local literal → develop ${VAR:default} → production ${VAR} obligatoria).
 // El perfil activo se elige con la variable de entorno PROFILE (default local).
 
-import { DATABASES } from '../lib/stack-catalog.js';
+import { DATABASES, HTTP_STUB } from '../lib/stack-catalog.js';
 import { EMBEDDED_MONGO_VERSION } from '../lib/assets.js';
 import { physicalBucketName } from '../lib/buckets.js';
 import { screamingSnake } from '../lib/naming.js';
@@ -25,6 +25,13 @@ const PROFILES = ['local', 'develop', 'production'];
 // literal reinventado allí no daría un 401 raro — impediría arrancar la app.
 export const LOCAL_API_KEY = 'local-dev-api-key';
 export const localClientApiKey = (clientName) => `local-${clientName}-key`;
+
+// El proveedor de prueba del perfil local: el WireMock que levanta infra/ cuando
+// el diseño trae capa http-clients. Constante y no literal repetido porque son
+// DOS los sitios que tienen que apuntar al mismo sitio —la base-url de cada
+// cliente y el endpoint de token de los oauth2—, y basta con que uno se quede
+// atrás para que en local se hable con dos proveedores distintos.
+export const LOCAL_STUB_BASE_URL = `http://localhost:${HTTP_STUB.publishedPort}`;
 
 // Orígenes CORS del perfil local: los puertos de dev habituales de una SPA
 // (Create React App / Next.js y Vite), para probar un front sin editar YAML.
@@ -714,6 +721,32 @@ function storageYaml(model, profile) {
   return lines.join('\n') + '\n';
 }
 
+// El endpoint de token de un cliente oauth2 en el perfil local. El `tokenUrl` del
+// diseño describe al PROVEEDOR REAL —es contrato del socio, no configuración
+// nuestra—, así que en local hay que redirigirlo igual que la `base-url`: el
+// proveedor que hay levantado es el WireMock de infra/, no internet. Sin esto,
+// todo escenario que atraviese un cliente oauth2 falla por DNS o por conexión
+// antes de llegar a la llamada de negocio, y el síntoma no menciona al token.
+//
+// Se conserva el PATH declarado y solo se cambia el origen: el diseño dice dónde
+// pide el token ese proveedor, y un escenario que programe el stub tiene que poder
+// leerlo del diseño en vez de adivinar una ruta que nos hayamos inventado aquí.
+// Si el `tokenUrl` no es una URL absoluta parseable, se deja tal cual: es dato del
+// diseño y `keel validate` es quien tiene que juzgarlo, no el emisor de YAML.
+//
+// La redirección es de `local` y SOLO de `local`: en develop el valor del diseño es
+// el default de la env var y en production es obligatoria sin default. Colar el
+// stub como default fuera de local haría que un despliegue mal configurado pidiera
+// el token a un puerto de nuestra máquina en vez de fallar al arrancar.
+function tokenUri(client, profile) {
+  if (profile !== 'local') return client.auth.tokenUrl;
+  try {
+    return LOCAL_STUB_BASE_URL + new URL(client.auth.tokenUrl).pathname;
+  } catch {
+    return client.auth.tokenUrl;
+  }
+}
+
 // Config de las integraciones salientes (capa http-clients): base-url por
 // cliente (gradiente de env vars) + instancias resilience4j (retry/circuit
 // breaker) derivadas del diseño. Los clientes RestClient las consumen por
@@ -734,7 +767,7 @@ function httpClientsYaml(model, profile) {
       lines.push(`    # Proveedor de prueba (WireMock de infra/docker-compose.yaml).`);
       lines.push(`    # Los mappings los programa cada test; nada que configurar aquí.`);
     }
-    lines.push(`    base-url: ${envRequired(profile, envVar, 'http://localhost:8090')}`);
+    lines.push(`    base-url: ${envRequired(profile, envVar, LOCAL_STUB_BASE_URL)}`);
     // Credenciales de la auth saliente: nunca vienen del diseño; gradiente de
     // env vars como el resto de secretos (oauth2 va aparte, en el bloque
     // spring.security.oauth2.client de más abajo).
@@ -771,7 +804,7 @@ function httpClientsYaml(model, profile) {
     for (const client of oauthClients) {
       lines.push(
         `          ${client.id}:`,
-        `            token-uri: ${envValue(profile, `${client.envPrefix}_TOKEN_URL`, client.auth.tokenUrl)}`
+        `            token-uri: ${envValue(profile, `${client.envPrefix}_TOKEN_URL`, tokenUri(client, profile))}`
       );
     }
   }

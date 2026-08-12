@@ -29,6 +29,17 @@ dependencies:
           onMiss:
             action: fetch
 
+  legacy-erp:
+    description: ERP heredado, dueño del coste de aprovisionamiento de cada producto.
+    needs:
+      productCost:
+        description: Coste de aprovisionamiento que acompaña a la ficha del producto.
+        strategy: on-demand
+        usedBy: [getProductBySlug]
+        fetchedFrom:
+          client: legacy-erp
+          call: getCost
+
   search-index:
     description: Servicio de búsqueda, que mantiene el índice del catálogo.
     activations:
@@ -40,6 +51,26 @@ dependencies:
           call: reindexProduct
         effect: El producto queda buscable con sus datos nuevos.
         awaits: acknowledgement
+        onFailure:
+          action: ignore
+
+  partner-catalog:
+    description: Socio externo que replica nuestras fichas en su escaparate.
+    contract:
+      version: 3.0.0
+    activations:
+      notifyPartner:
+        description: Anuncio al socio del cambio de la ficha.
+        triggeredBy: [updateProduct]
+        via:
+          client: partner-catalog
+          call: notifyCatalogChange
+        effect: El socio recibe la ficha nueva y la refleja en su escaparate.
+        awaits: acknowledgement
+        # `ignore`: que el socio no conteste no puede bloquear la edición de nuestra
+        # propia ficha. Con esta política el cuerpo del fallback lo escribe `build`
+        # entero —resultado neutro y aviso—, así que el escenario del token caído
+        # mide el camino generado, no lo que improvise el agente.
         onFailure:
           action: ignore
 

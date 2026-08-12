@@ -452,12 +452,153 @@ function abstractImports(model) {
       'java.util.Map'
     );
   }
+  // Estado en memoria de la aplicación que el reset por CLI no alcanza.
+  if (usesCircuitBreakers(model)) {
+    imports.push('io.github.resilience4j.circuitbreaker.CircuitBreaker', 'io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry');
+  }
+  if (usesOutboundOAuth2(model)) {
+    imports.push('java.lang.reflect.Field', 'java.util.Map', 'org.springframework.security.oauth2.client.OAuth2AuthorizedClientService');
+  }
   if (needsDirtiesContext(model)) imports.push('org.springframework.test.annotation.DirtiesContext');
   return imports;
 }
 
 function hasHttpClients(model) {
   return Boolean(model.layersPresent.httpClients);
+}
+
+// Estado que vive en beans singleton de la aplicación y que `reset-db.sh` no puede
+// tocar: el script habla con la BD, el broker, la caché y el stub —procesos aparte—,
+// pero la ventana de un circuito y la concesión OAuth2 cacheada están DENTRO de la
+// JVM bajo prueba y sobreviven a todo el reset, entre escenarios y entre clases.
+//
+// Lo destapó la corrida de autenticación saliente: un circuito abría al tercer fallo
+// en vez de al quinto porque arrastraba dos de otra clase, y un token cacheado hacía
+// pasar un escenario cuyo proveedor de identidad debía estar caído. El segundo es el
+// peor de los dos: no falla, aprueba de más. Y el diagnóstico costó dos vueltas de
+// arbitraje porque la contaminación enmascaraba un defecto real del fallback.
+function usesCircuitBreakers(model) {
+  return (model.httpClients ?? []).some((client) => client.calls.some((call) => call.circuitBreaker));
+}
+
+function usesOutboundOAuth2(model) {
+  return (model.httpClients ?? []).some((client) => client.auth?.type === 'oauth2-client-credentials');
+}
+
+function hasInMemoryState(model) {
+  return usesCircuitBreakers(model) || usesOutboundOAuth2(model);
+}
+
+// Los beans se inyectan en la instancia (`@TestInstance(PER_CLASS)` hace que
+// `@BeforeAll` sea de instancia) y se copian a estáticos porque `resetState()` es
+// estático. El `@BeforeAll` de la superclase corre ANTES que el de la subclase, que
+// es quien llama a `resetState()`, así que para entonces ya están puestos.
+//
+// `required = false` en los dos: un proyecto puede tener circuitos y no oauth2, o al
+// revés, y esta clase es la misma para todos.
+function inMemoryStateFields(model) {
+  if (!hasInMemoryState(model)) return '';
+  const parts = [];
+  if (usesCircuitBreakers(model)) {
+    parts.push(`
+    @Autowired(required = false)
+    private CircuitBreakerRegistry circuitBreakerRegistry;
+
+    private static CircuitBreakerRegistry CIRCUIT_BREAKERS;`);
+  }
+  if (usesOutboundOAuth2(model)) {
+    parts.push(`
+    @Autowired(required = false)
+    private OAuth2AuthorizedClientService authorizedClientService;
+
+    private static OAuth2AuthorizedClientService AUTHORIZED_CLIENTS;`);
+  }
+  return `${parts.join('\n')}\n`;
+}
+
+function inMemoryStateCapture(model) {
+  const lines = [];
+  if (usesCircuitBreakers(model)) lines.push('        CIRCUIT_BREAKERS = circuitBreakerRegistry;');
+  if (usesOutboundOAuth2(model)) lines.push('        AUTHORIZED_CLIENTS = authorizedClientService;');
+  return lines.length > 0 ? `\n${lines.join('\n')}` : '';
+}
+
+// Los métodos, y la llamada que `resetState()` les hace. Se exponen como
+// `protected` porque el reset es POR CLASE: un escenario que necesite el circuito
+// cerrado a mitad de su propio flujo tiene que poder pedirlo sin reiniciar la BD.
+function inMemoryResetSection(model) {
+  if (!hasInMemoryState(model)) return '';
+  let section = '';
+  if (usesCircuitBreakers(model)) {
+    section += `
+    /**
+     * Devuelve todos los circuitos a CLOSED con su ventana vacía.
+     *
+     * <p>La ventana de un circuito vive en un bean singleton, no en la BD ni en el
+     * broker: sin esto, los fallos que provocó un escenario cuentan para el circuito
+     * del siguiente y de la clase siguiente. El síntoma es un circuito que abre antes
+     * de lo que dice el diseño, y la sospecha cae sobre la configuración, que está bien.
+     */
+    protected static void resetCircuitBreakers() {
+        if (CIRCUIT_BREAKERS == null) return;
+        CIRCUIT_BREAKERS.getAllCircuitBreakers().forEach(CircuitBreaker::reset);
+    }
+`;
+  }
+  if (usesOutboundOAuth2(model)) {
+    section += `
+    /**
+     * Olvida las concesiones OAuth2 ya obtenidas.
+     *
+     * <p>Es el reset que más importa de los dos, porque su ausencia no hace fallar un
+     * escenario: lo hace <b>pasar</b>. Un token cacheado de un escenario anterior sirve
+     * para autorizar la llamada de uno cuyo proveedor de identidad debía estar caído,
+     * así que el escenario que iba a medir esa caída aprueba sin haberla medido.
+     *
+     * <p>Se limpia por reflexión porque {@code OAuth2AuthorizedClientService} no expone
+     * ninguna forma de vaciarlo entero: {@code removeAuthorizedClient} exige el nombre
+     * del principal bajo el que quedó cacheada cada concesión, que con
+     * client_credentials lo pone Spring por dentro. Falla ruidosamente si no encuentra
+     * dónde limpiar: la alternativa —no hacer nada en silencio— es exactamente el
+     * defecto que este método existe para cerrar.
+     */
+    protected static void resetOAuth2AuthorizedClients() {
+        if (AUTHORIZED_CLIENTS == null) return;
+        int cleared = 0;
+        for (Field field : AUTHORIZED_CLIENTS.getClass().getDeclaredFields()) {
+            if (!Map.class.isAssignableFrom(field.getType())) continue;
+            try {
+                field.setAccessible(true);
+                Object value = field.get(AUTHORIZED_CLIENTS);
+                if (value instanceof Map<?, ?> map) {
+                    map.clear();
+                    cleared++;
+                }
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                throw new AssertionError("No se pudo vaciar el cache de concesiones OAuth2 (" + field.getName() + ")", e);
+            }
+        }
+        if (cleared == 0) {
+            throw new AssertionError(
+                    "El bean OAuth2AuthorizedClientService ("
+                            + AUTHORIZED_CLIENTS.getClass().getName()
+                            + ") no expone ningun Map que vaciar: un token cacheado sobrevivira entre escenarios"
+                            + " y hara pasar los que midan un proveedor de identidad caido.");
+        }
+    }
+`;
+  }
+  return section;
+}
+
+// La llamada desde `resetState()`. Va PRIMERO: es estado de la propia JVM, no
+// depende de que la infraestructura esté arriba, y así también se limpia cuando el
+// reset por script no existe.
+function inMemoryResetCalls(model) {
+  const lines = [];
+  if (usesCircuitBreakers(model)) lines.push('        resetCircuitBreakers();');
+  if (usesOutboundOAuth2(model)) lines.push('        resetOAuth2AuthorizedClients();');
+  return lines.length > 0 ? `\n${lines.join('\n')}` : '';
 }
 
 function abstractBody(model) {
@@ -495,12 +636,12 @@ ${layersPresent.api ? `
 
     @Autowired
     protected TestRestTemplate rest;
-${security && tokenProtocol(model) ? '\n    private final Map<String, String> credentials = new ConcurrentHashMap<>();\n' : ''}
+${security && tokenProtocol(model) ? '\n    private final Map<String, String> credentials = new ConcurrentHashMap<>();\n' : ''}${inMemoryStateFields(model)}
     @BeforeAll
     void configureHttpClient() {
         // El factory por defecto (HttpURLConnection) no soporta PATCH; el del
         // HttpClient del JDK sí, y no añade dependencias.
-        rest.getRestTemplate().setRequestFactory(new JdkClientHttpRequestFactory());
+        rest.getRestTemplate().setRequestFactory(new JdkClientHttpRequestFactory());${inMemoryStateCapture(model)}
     }
 
     /** Intercambio HTTP completo: lo que se asserta y lo que se vuelca al fallar. */
@@ -795,7 +936,7 @@ ${hasIdempotency(model) ? `
     }
 
     // ── Estado e infraestructura ─────────────────────────────────────────────
-${resetSection(model)}${bashExecutableSection(model)}${httpStubSection(model)}${devtoolsSection(model)}${brokerControlSection(model)}${replicaSection(model)}${dbSection(model)}${containerExecSection(model)}${securitySection(model)}}`;
+${resetSection(model)}${inMemoryResetSection(model)}${bashExecutableSection(model)}${httpStubSection(model)}${devtoolsSection(model)}${brokerControlSection(model)}${replicaSection(model)}${dbSection(model)}${containerExecSection(model)}${securitySection(model)}}`;
 }
 
 // Proveedor de prueba de las integraciones salientes. Es infraestructura, no un
@@ -837,6 +978,43 @@ function httpStubSection(model) {
      */
     protected static void stubFailure(String method, String pathPattern, int status) {
         stubFor(method, pathPattern, status, "{}");
+    }
+
+    /**
+     * El proveedor <b>no contesta</b>: corta la conexión antes de responder.
+     *
+     * <p>No es lo mismo que un 5xx y la diferencia importa, porque el diseño la
+     * declara: una llamada con {@code retryOn: [timeout, connection]} —lo habitual en
+     * una escritura ajena, donde repetir un 5xx puede duplicar el efecto— <b>no</b>
+     * reintenta un 500 y sí reintenta esto. Sin esta primitiva, ningún escenario puede
+     * ejercitar esa rama, y un retry declarado así queda sin cubrir por construcción.
+     *
+     * <p>Del lado del servidor llega como {@code ResourceAccessException}, que es lo
+     * que el generador lista en {@code retry-exceptions} para {@code connection}.
+     */
+    protected static void stubConnectionFault(String method, String pathPattern) {
+        String mapping = """
+                {"request": {"method": "%s", "urlPathPattern": "%s"},
+                 "response": {"fault": "CONNECTION_RESET_BY_PEER"}}"""
+                .formatted(method, pathPattern);
+        stubAdmin("/mappings", mapping);
+    }
+
+    /**
+     * El proveedor tarda más de lo que la llamada tolera: el otro modo de fallo que
+     * el DSL distingue del 5xx ({@code retryOn: [timeout]}).
+     *
+     * <p>{@code delayMs} tiene que superar el {@code timeoutMs} declarado para esa
+     * llamada, o el escenario mide una respuesta lenta y no un timeout. Llega como
+     * {@code ResourceAccessException}, igual que el corte de conexión.
+     */
+    protected static void stubTimeout(String method, String pathPattern, int delayMs) {
+        String mapping = """
+                {"request": {"method": "%s", "urlPathPattern": "%s"},
+                 "response": {"status": 200, "fixedDelayMilliseconds": %d,
+                              "headers": {"Content-Type": "application/json"}, "body": "{}"}}"""
+                .formatted(method, pathPattern, delayMs);
+        stubAdmin("/mappings", mapping);
     }
 
     /**
@@ -969,11 +1147,11 @@ function resetSection(model) {
      * \`@DirtiesContext\` a nivel de clase. Se conserva el método para que toda clase
      * de flujo llame a lo mismo desde su \`@BeforeAll\`.
      */
-    protected static void resetState() {${restore}${stopReplicaLine}${
+    protected static void resetState() {${inMemoryResetCalls(model)}${restore}${stopReplicaLine}${
       kafka
         ? `
         markChannels();`
-        : restore
+        : restore || hasInMemoryState(model)
           ? ''
           : `
         // No-op: el contexto se recrea antes de cada clase de flujo.`
@@ -991,7 +1169,7 @@ function resetSection(model) {
      * de la caché, destinos de mensajería declarados${model.layersPresent.httpClients ? ' y los mappings y el log de\n     * peticiones del proveedor de prueba' : ''}. Un recurso que no esté en esa
      * lista <b>no</b> se puede dar por limpio.
      */
-    protected static void resetState() {${restore}${stopReplicaLine}
+    protected static void resetState() {${inMemoryResetCalls(model)}${restore}${stopReplicaLine}
         try {
             Process process = new ProcessBuilder(bashExecutable(), "infra/reset-db.sh").inheritIO().start();
             int exit = process.waitFor();

@@ -15,6 +15,7 @@ declara garantías que nada implementa, así que el estado se lee por mecanismo:
 | Deshacer trabajo ya encargado | `dependencies.<d>.compensations` | Relacional (con y sin llamada de vuelta) y **documental con vuelta** |
 | El desenlace que no llega | `activations.<a>.reconciledBy` | Relacional y **documental**, las dos con gate conductual |
 | Outbox | `messaging.publishing.reliability` | Los **tres** brokers, con el canal caído de verdad |
+| Autenticación saliente | `http-clients.<c>.auth` | Los **cuatro** modos con credencial (`api-key`, `bearer-static`, `basic`, `oauth2-client-credentials`), afirmados en el cable. `INFORME-CORRIDA-HTTP-AUTH.md` |
 
 ## Cierre por eje
 
@@ -97,6 +98,13 @@ Ninguno sustituye a otro; el orden es de más barato a más caro:
 | `broker-check` | minutos, opt-in | La fontanería contra los tres brokers reales, incluida la palanca de parar y levantar | No arranca la JVM |
 | `check-idempotency.sh` | segundos, en el pipeline | Que el agente USE los mecanismos que build generó | Si el algoritmo es correcto |
 | `score-scenarios.sh` | la corrida entera | El comportamiento, contra infraestructura real | Lo que ningún `FL-*` alcanza: el cron y la entrega del outbox antes de arrancar |
+
+**Actualización del 12-ago-2026** (`INFORME-CORRIDA-HTTP-AUTH.md`): el hueco «que el broker
+**mueva** un mensaje agotado a la DLQ» queda **cerrado** — `FL-DLQ-001` lo ejercita con la
+aplicación viva, que era la condición que `BRK-12` decía que hacía falta. Y aparece un eje nuevo
+que ninguna corrida había tocado: la **autenticación saliente**, con tres defectos del generador
+cosechados, el más grave de ellos —una API abierta que quedaba tras un login por culpa del starter
+de OAuth2— del tipo que solo se ve arrancando el servidor.
 
 Los ocho defectos de la tabla anterior eran invisibles para los cuatro primeros. Esa es la
 razón por la que las corridas completas siguen haciendo falta, y por la que su cosecha —volver

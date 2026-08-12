@@ -51,13 +51,13 @@
 | Operación | Flujos | Superficie |
 |-----------|--------|------------|
 | createProduct | FL-PRD-001, FL-PRD-002, FL-PRD-003, FL-PRD-004, FL-IMG-001, FL-OBX-001 | usuarios |
-| getProductBySlug | FL-PRD-002 | usuarios |
-| updateProduct | FL-PRD-002 | usuarios |
+| getProductBySlug | FL-PRD-002, FL-AUT-001, FL-CBR-001 | usuarios |
+| updateProduct | FL-PRD-002, FL-AUT-003, FL-AUT-004 | usuarios |
 | listProducts | FL-PRD-003 | usuarios |
 | getProductsByIds | FL-PRD-003 | usuarios |
-| retireProduct | FL-PRD-004, FL-CMP-001 | usuarios |
+| retireProduct | FL-PRD-004, FL-CMP-001, FL-AUT-002, FL-RTY-001, FL-RTY-001-B | usuarios |
 | projectSupplierPrice | FL-SUB-001 | interna (suscripción) |
-| reactivateWithdrawnProduct | FL-CMP-001 | interna (compensación) |
+| reactivateWithdrawnProduct | FL-CMP-001, FL-DLQ-001 | interna (compensación) |
 | addProductImage | FL-IMG-001 | usuarios |
 | removeProductImage | FL-IMG-001 | usuarios |
 
@@ -498,3 +498,236 @@ hacer— aunque no cuente para la ventana del circuito: que nos rechacen no es q
 **Casos borde sin cubrir**: rechazo por tamaño (>5 MB) y por content-type no permitido. El diseño
 declara las políticas en `storage.buckets` pero no los `errors` correspondientes en
 `addProductImage`, así que el `code` y el status esperados no están fijados. Hueco del diseño.
+
+## Autenticación saliente
+
+Los cuatro modos de auth que declara `http-clients` acaban en una cabecera del request que sale, y
+esa cabecera **no la mira nadie**: el proveedor de prueba contesta igual con credencial que sin
+ella, así que un cliente mal configurado —una property vacía, un `defaultHeader` que el builder
+nunca aplicó, un interceptor no registrado— pasa todos los escenarios anteriores en verde y falla
+el día del despliegue contra el proveedor real. Estos flujos afirman la credencial **en el cable**,
+con `stubRequests(...)` y `stubRequestHeader(...)`.
+
+Ninguno necesita primitivas nuevas del arnés.
+
+### FL-AUT-001: las credenciales de lectura viajan en la petición
+
+Un solo `getProductBySlug` dispara los dos `need` on-demand del diseño —`pricing.currentPrice` y
+`legacy-erp.productCost`—, así que cubre de una vez los dos modos de auth de lectura, que además
+son los dos que se configuran de forma distinta (`defaultHeader` suelto contra `setBasicAuth`).
+
+**Given**: la categoría `c1` existe y hay un producto `<a1>` con sku `AUT-1` recuperable por el
+slug `tools`; ambos proveedores contestan `200` con un cuerpo válido
+(`stubFor("GET", "/prices/.*", 200, …)` y `stubFor("GET", "/costs/.*", 200, …)`); la caché de
+lecturas está vacía (`clearCache()`).
+
+**When**: `GET /api/v1/public/products/tools`.
+
+**Then**:
+1. Status `200` y el producto `<a1>`.
+2. La petición que recibió `/prices/{sku}` lleva la cabecera `X-Api-Key` **no vacía** — el nombre
+   exacto que declara `auth.headerName`, no el `X-Api-Key` por defecto de casualidad.
+3. La petición que recibió `/costs/{sku}` lleva `Authorization` empezando por `Basic ` y, **una vez
+   decodificado el base64**, el usuario y la contraseña del perfil `local`. Comprobar solo el
+   prefijo es lo mismo que no comprobar nada: `setBasicAuth` con credenciales vacías produce un
+   `Basic ` perfectamente formado.
+
+**Notas de determinación**: el `Given` limpia la caché porque `getProductBySlug` declara
+`ttlSeconds: 300` sobre `keyFields: [slug]` — una lectura servida de caché no llama a ningún
+proveedor y el `Then` mediría un request de otro flujo.
+
+### FL-AUT-002: la credencial estática de escritura viaja en la petición
+
+**Given**: la categoría `c1` existe, un producto `<a2>` con sku `AUT-2`, y el registro regulatorio
+contesta `200` con un cuerpo válido.
+
+**When**: `retireProduct` sobre `<a2>`.
+
+**Then**:
+1. Status `200` y el producto en `retired`.
+2. La petición que recibió `POST /withdrawals` lleva `Authorization` = `Bearer <token>` con el
+   token del perfil `local` — no una cadena vacía detrás del prefijo.
+
+### FL-AUT-003: OAuth2 pide el token una vez y lo reutiliza
+
+El único modo de auth cuya credencial **no** sale de configuración: hay que ir a buscarla a otro
+endpoint antes de la llamada de negocio. Dos cosas pueden salir mal y ninguna se ve desde el
+resultado de la operación — que el token no se pida (y la llamada salga sin `Authorization`), y que
+se pida en **cada** llamada (que funciona, y castiga al proveedor de identidad con una petición por
+operación).
+
+**Given**: la categoría `c1` existe y dos productos `<a3>` y `<a4>`; el endpoint de token contesta
+`200` con `{"access_token": "tok-partner-1", "token_type": "Bearer", "expires_in": 3600}`
+(`stubFor("POST", "/oauth2/token", 200, …)`) y `POST /partner/catalog-changes` contesta `200` con
+un cuerpo válido.
+
+**When**: `updateProduct` sobre `<a3>` y, a continuación, sobre `<a4>`.
+
+**Then**:
+1. Las dos responden `200`.
+2. El proveedor recibió **dos** `POST /partner/catalog-changes`, una por operación.
+3. Las dos llevan `Authorization` = `Bearer tok-partner-1`: exactamente el token que devolvió el
+   endpoint de token, no uno inventado ni el `client-secret` colado en su lugar.
+4. El endpoint de token recibió **exactamente una** petición. Es la mitad que distingue un cliente
+   OAuth2 correcto de uno que funciona: el `OAuth2AuthorizedClientManager` cachea la concesión
+   mientras no caduque, y `expires_in: 3600` garantiza que no lo hace dentro del flujo.
+
+**Notas de determinación**: el token es un literal propio de este flujo (`tok-partner-1`) para que
+el Then 3 sea una igualdad y no una comprobación de forma.
+
+### FL-AUT-004: el proveedor de identidad caído no se convierte en un 500 propio
+
+El modo de fallo que la capa `dependencies` ya declara, por un camino que ningún escenario
+recorre: aquí no falla el proveedor de negocio sino **el emisor del token**, y el fallo ocurre
+antes de que salga la primera petición de negocio. Si el adaptador no lo atiende, la excepción de
+la obtención del token sale cruda y `onFailure: ignore` se convierte en un 500.
+
+**Given**: la categoría `c1` existe y un producto `<a5>`; el endpoint de token contesta `500`
+(`stubFailure("POST", "/oauth2/token", 500)`).
+
+**When**: `updateProduct` sobre `<a5>`.
+
+**Then**:
+1. Status `200` y el producto actualizado. `notifyPartner` declara `onFailure: ignore`: que el
+   socio no se entere no puede bloquear la edición de nuestra propia ficha.
+2. `ProductUpdated` sale por el canal del servicio. El cambio ocurrió; lo que no ocurrió es el
+   anuncio.
+3. El proveedor **no** recibió ninguna `POST /partner/catalog-changes`: sin token no se sale, y
+   una llamada sin `Authorization` sería peor que ninguna —el socio la rechazaría y el diagnóstico
+   apuntaría a él—.
+
+## Reintento y circuito
+
+### FL-RTY-001: el reintento hace los intentos que declara, todos con la misma clave
+
+`recordWithdrawal` declara `retry.maxAttempts: 3` e `idempotency: {keyFrom: payload-hash}`. Las dos
+cosas son una sola garantía y ningún escenario las mide: un retry que hace más intentos de los
+declarados castiga a un proveedor caído, y un retry cuyos intentos llevan claves **distintas**
+inscribe la misma retirada tres veces en el registro regulatorio — que es exactamente la deuda que
+la compensación de FL-CMP-001 tendría luego que ir a deshacer, sin saber que son tres.
+
+**El modo de fallo importa y no es intercambiable**: esa llamada declara
+`retryOn: [timeout, connection]` y **excluye 5xx a propósito** —repetir una escritura que el
+proveedor pudo llegar a procesar arriesga la doble inscripción—. Así que el Given corta la
+conexión; con un 503 el retry no se aplicaría y el escenario estaría midiendo lo contrario de lo
+que el diseño declara.
+
+**Given**: la categoría `c1` existe, un producto `<r1>` con sku `RTY-1`, y el registro regulatorio
+**no contesta**: corta la conexión antes de responder
+(`stubConnectionFault("POST", "/withdrawals")`).
+
+**When**: `retireProduct` sobre `<r1>`.
+
+**Then**:
+1. La respuesta es el error declarado `COMPLIANCE_UNAVAILABLE` y `<r1>` no queda en `retired`.
+2. El proveedor recibió **exactamente 3** peticiones: ni 1 (el retry no se aplicó) ni 5 (el
+   `maxAttempts` que se lee es el de otro sitio). El circuito no interfiere: con
+   `slidingWindowSize: 5` tres registros no lo abren.
+3. Las **tres** llevan `Idempotency-Key` y es la **misma** en las tres. Un reintento con clave
+   nueva es un alta nueva vista desde el otro lado, y el proveedor no tiene forma de saberlo.
+
+#### FL-RTY-001-B: un 5xx en esa misma llamada NO se reintenta
+
+La mitad negativa, y la que convierte al escenario anterior en una medida de `retryOn` en vez de
+una medida de «hay retry». Sin ella, una configuración que reintentara todo pasaría el A.
+
+**Given**: lo mismo, pero el proveedor contesta `503` (`stubFailure("POST", "/withdrawals", 503)`)
+y un producto `<r2>` con sku `RTY-2`.
+
+**When**: `retireProduct` sobre `<r2>`.
+
+**Then**:
+1. La respuesta sigue siendo `COMPLIANCE_UNAVAILABLE`: el desenlace no cambia con el modo de fallo.
+2. El proveedor recibió **exactamente 1** petición. El 5xx está fuera del `retryOn` declarado.
+
+**Notas de determinación**: los dos escenarios corren tras `resetState()`, así que el conteo del
+stub empieza en cero. Sin ese reset, el Then 2 sumaría las llamadas de los flujos de compensación.
+
+**Hueco del arnés, declarado**: la variante «falla dos veces y a la tercera responde 200» —que
+probaría que el retry además *se recupera*— no es expresable hoy: los mappings del stub programan
+una respuesta fija y el arnés no expone los escenarios con estado de WireMock. Se deja anotado en
+vez de escribir un `Then` que la implementación no pueda satisfacer.
+
+### FL-CBR-001: el circuito se abre y vuelve
+
+`FL-CMP-002` ya prueba que un circuito **abre**. Que vuelva a cerrarse no lo prueba nadie, y es la
+mitad que convierte al circuito en un mecanismo de recuperación en vez de en un interruptor de un
+solo uso: un `waitDurationInOpenState` mal traducido —o un circuito que nunca pasa a semiabierto—
+deja al proveedor descartado para siempre después de una caída de tres segundos.
+
+`legacy-erp.getCost` existe para esto: `slidingWindowSize: 4`, `failureRateThreshold: 50` y
+`waitDurationMs: 3000`, sin `retry` que multiplique los registros de la ventana.
+
+**Given**: la categoría `c1` existe y un producto `<b1>` recuperable por el slug `tools`; el ERP
+contesta `503` de forma sostenida (`stubFailure("GET", "/costs/.*", 503)`); el proveedor de precios
+contesta `200`.
+
+**When**: se ejecuta `GET /api/v1/public/products/tools` cuatro veces, con `clearCache()` antes de
+cada una.
+
+**Then**:
+1. Las cuatro responden `200` con el producto. `getCost` declara `fallback` y su `need` es un
+   enriquecimiento: que el ERP esté caído no puede tumbar la lectura.
+2. `stubCallCount("GET", "/costs/.*")` es 4.
+
+**When** (segunda mitad): el ERP vuelve a contestar `200` con un cuerpo válido y se ejecuta una
+quinta lectura **inmediatamente**, con la caché limpia.
+
+**Then**:
+3. La lectura responde `200` y `stubCallCount` **sigue siendo 4**: el circuito está abierto y la
+   llamada no sale. Es lo que separa un circuito abierto de un proveedor que simplemente había
+   vuelto.
+
+**When** (tercera mitad): se espera a que pase la ventana de `waitDurationMs` (3 s) y se ejecuta
+una sexta lectura con la caché limpia.
+
+**Then**:
+4. `stubCallCount` es 5: la llamada **sí** sale. El circuito pasó a semiabierto y dejó pasar la
+   petición de prueba, que es la diferencia entre un mecanismo de recuperación y un interruptor
+   de un solo uso.
+
+**Notas de determinación**: la espera se hace con la primitiva de espera del arnés sobre una
+condición observable, nunca con una pausa fija — 3 s es el mínimo, no el tiempo que tarda. Los
+`clearCache()` son obligatorios: `getProductBySlug` cachea 300 s y una lectura servida de caché no
+llama al ERP, así que sin ellos el flujo mediría una sola llamada y cuatro aciertos de caché.
+
+**Hueco del diseño, declarado** (y del DSL, no solo de este fixture): el flujo se mide entero por
+el conteo de llamadas porque **el dato del `need` no es observable en la respuesta**.
+`getProductBySlug` declara `output: { entity: Product }`, y esa forma de payload no admite campos
+extra (`additionalProperties: false` en el schema), así que un `need` con `strategy: on-demand`
+y `usedBy: [getProductBySlug]` no tiene por dónde llegar al cuerpo. Le pasa igual a
+`pricing.currentPrice`, que lleva en el diseño desde antes. Mientras eso no se pueda expresar, el
+`Then` que afirmaría «el coste llegó hasta la respuesta» no se puede escribir, y afirmarlo de
+todos modos sería pedirle a la implementación algo que el contrato no tiene.
+
+## El descarte
+
+### FL-DLQ-001: la entrega que agota sus reintentos acaba en el descarte
+
+Hasta aquí la cola de descarte solo se comprueba **vacía** (FL-CMP-001-C, FL-CMP-001-D). Una
+aserción negativa sobre un destino que nunca recibe nada da verde exactamente igual que una sobre
+un destino que funciona: si la política de `onFailure` no llegara a configurarse —o el destino no
+existiera— todos esos `Then` seguirían pasando. Este flujo es la mitad positiva que los sostiene.
+
+`WithdrawalRejected` declara `retry.maxAttempts: 5` con backoff exponencial y `deadLetter: true`.
+
+**Given**: la categoría `c1` existe. No existe ningún producto con el id `<x1>` (un uuid que no
+corresponde a nada).
+
+**When**: llega el evento entrante `WithdrawalRejected` con payload
+`{productId: <x1>, reason: "documentación incompleta"}` — una compensación de un producto que no
+está. Es el caso que el propio diseño anota como carrera posible (la compensación puede llegar
+antes que el hecho que compensa), llevado a su desenlace: aquí el hecho no llega nunca.
+
+**Then**:
+1. `reactivateWithdrawnProduct` falla en cada intento; el consumo se reintenta hasta agotar los 5
+   que declara el diseño.
+2. El mensaje aparece en el destino de descarte de la suscripción — `deadLetterMessages` para
+   `WithdrawalRejected` devuelve el mensaje, con el `productId` `<x1>` que se entregó.
+3. Ningún producto del catálogo cambia de estado: el descarte no es un efecto parcial, es la
+   ausencia de efecto con constancia.
+
+**Notas de determinación**: el `productId` es propio de este flujo, así que el Then 2 se acota a
+**este** mensaje y no cuenta descartes de otros. Con backoff exponencial desde 500 ms, los cinco
+intentos consumen unos 7,5 s: la espera es sobre la aparición del mensaje en el descarte, no sobre
+un plazo fijo.

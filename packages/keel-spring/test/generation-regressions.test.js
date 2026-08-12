@@ -1603,3 +1603,64 @@ test('el eventType que publica el outbox es el que espera la FilterPolicy del br
   assert.ok(domainEvent.includes('EventMetadata.now("ProductCreated")'), domainEvent);
   assert.ok(emitted.includes('ProductCreated'), emitted.join(', '));
 });
+
+// --- Corrida de autenticación saliente (INFORME-CORRIDA-HTTP-AUTH.md) ---
+
+// El fallo que ocurre ANTES de que salga la petición. El interceptor de OAuth2 pide
+// el token al autorizar, así que un proveedor de identidad caído lanza desde dentro
+// del interceptor y ninguna de las sobrecargas del fallback —todas de transporte o de
+// respuesta— llega a verlo: el 500 sale sin traducir aunque el resto del fallback esté
+// bien. Lo destapó FL-AUT-004, que era el único escenario que miraba ese camino.
+test('el fallback de un cliente OAuth2 atiende el fallo de obtención del token', () => {
+  const { read } = scaffoldExtended();
+  const oauth = read(`${JAVA}/infrastructure/http/PartnerCatalogHttpAdapter.java`);
+
+  assert.ok(oauth.includes('import org.springframework.security.oauth2.core.OAuth2AuthorizationException;'), oauth);
+  assert.ok(/notifyCatalogChangeFallback\([^)]*OAuth2AuthorizationException throwable\)/.test(oauth), oauth);
+
+  // Y solo ahí: un cliente sin esa auth no puede recibir esa excepción, y declararla
+  // arrastraría el tipo (y su starter) a un proyecto que no lo tiene en el classpath.
+  const bearer = read(`${JAVA}/infrastructure/http/ComplianceHttpAdapter.java`);
+  assert.ok(!bearer.includes('OAuth2AuthorizationException'), bearer);
+});
+
+// La ventana del circuito describe la salud del PROVEEDOR DE NEGOCIO. Que no nos den
+// un token es cosa del emisor de identidad: contarlo abriría el circuito del socio por
+// una caída ajena y dejaría las llamadas cortadas toda la ventana después de que la
+// identidad ya hubiera vuelto. Mismo criterio que el 4xx, que tampoco cuenta.
+test('el fallo de token entra al fallback pero no cuenta para el circuito', () => {
+  const { read } = scaffoldExtended();
+  // `record-exceptions` es el único sitio del fragmento donde aparecen FQN de
+  // excepciones, así que basta con que el tipo no esté en el archivo entero.
+  const local = read('src/main/resources/parameters/local/http-clients.yaml');
+  assert.ok(local.includes('record-exceptions:'), local);
+  assert.ok(!local.includes('OAuth2AuthorizationException'), local);
+});
+
+// El diseño de catalog NO trae capa `security`: su API es abierta. Pero el cliente
+// `partner-catalog` declara auth oauth2 saliente, y su starter arrastra Spring
+// Security: sin una cadena propia, la autoconfiguración de Boot pone TODA la API
+// —incluido /actuator/health, que empieza a contestar 302— detrás de un login que
+// nadie pidió. El servicio nace roto por una dependencia que se pidió para salir.
+test('un cliente OAuth2 saliente no cierra la puerta de entrada de un servicio sin capa security', () => {
+  const { read, result } = scaffoldExtended();
+  const chain = read(`${JAVA}/infrastructure/configurations/security/OpenApiSecurityConfig.java`);
+
+  assert.ok(chain.includes('anyRequest().permitAll()'), chain);
+  assert.ok(chain.includes('formLogin(AbstractHttpConfigurer::disable)'), chain);
+  // Y no se inventa autenticación: no hay resource server ni filtro de api-key.
+  assert.ok(!chain.includes('oauth2ResourceServer'), chain);
+  assert.ok(!result.warnings.some((w) => /security/i.test(w)), result.warnings.join('\n'));
+
+  // Y solo cuando hace falta: sin cliente oauth2 no hay Spring Security en el
+  // classpath, así que una cadena declarada no compilaría.
+  const other = path.join(path.dirname(fixtureDir), 'stock-reservation');
+  const { manifest, layers } = loadService(other);
+  const workspace = tmpDir('keel-openchain-');
+  scaffoldService({ manifest, layers, workspace, force: true });
+  // Por nombre de archivo sobre el árbol entero, no contra una ruta escrita a mano:
+  // una ruta equivocada haría pasar esta aserción sin mirar nada.
+  const generated = fs.readdirSync(workspace, { recursive: true }).map(String);
+  assert.ok(generated.some((file) => file.endsWith('.java')), 'el scaffolding no generó Java');
+  assert.ok(!generated.some((file) => file.includes('OpenApiSecurityConfig')), 'se generó la cadena abierta sin cliente oauth2');
+});

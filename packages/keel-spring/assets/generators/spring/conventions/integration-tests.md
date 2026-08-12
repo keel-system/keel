@@ -703,6 +703,8 @@ Helpers de `AbstractFlowIT`:
 |---|---|
 | `stubFor(método, patrónRuta, status, cuerpoJson)` | El Given: qué responde el proveedor en **este** escenario |
 | `stubFailure(método, patrónRuta, status)` | Ejercitar `onFailure`/`onMiss` y el circuit breaker (5xx reintenta, 4xx no) |
+| `stubConnectionFault(método, patrónRuta)` | El proveedor **no contesta**: corta la conexión. Lo que ejercita `retryOn: [connection]` |
+| `stubTimeout(método, patrónRuta, msDeRetraso)` | El proveedor tarda más de lo que la llamada tolera. Lo que ejercita `retryOn: [timeout]`; el retraso tiene que superar el `timeoutMs` declarado |
 | `stubCallCount(método, patrónRuta)` | El Then: cuántas veces se llamó al proveedor — la única forma en caja negra de afirmar que un dato se cacheó, o que algo no se reintentó |
 | `stubRequests(método, patrónRuta)` | El Then que no se conforma con cuántas veces, sino con **qué** se envió: devuelve el log de peticiones recibidas, cada una como el JSON del stub |
 | `stubRequestBody(peticiónJson)` | El cuerpo saliente de una de esas peticiones, para compararlo con `assertJson(...)` |
@@ -718,6 +720,11 @@ Reglas:
   sitio la mitad del escenario. El directorio existe para lo que no pertenece a ningún flujo.
 - **El patrón de ruta es la ruta del proveedor**, la que declara la llamada en `http-clients`
   (`urlPathPattern`, regex sobre el path sin query).
+- **El modo de fallo del Given es el que declara `retryOn`, no el más cómodo de escribir.** Un
+  5xx y un corte de conexión no son intercambiables: una escritura ajena suele declarar
+  `retryOn: [timeout, connection]` —repetir un 5xx puede duplicar el efecto— y con ella un
+  `stubFailure(..., 503)` **no** se reintenta. Un escenario que espera reintentos sobre un 503
+  ahí no mide el retry: contradice el diseño, y el arbitraje correcto es corregir el escenario.
 - **Un `Then` sobre lo que se envió se asserta con el log, no con el conteo.** «La llamada al
   proveedor llevaba tal dato» y «la llamada iba con `Idempotency-Key`» son cláusulas distintas de
   «se llamó una vez», y `stubCallCount` no las cubre: dan igual con el cuerpo vacío. La segunda es

@@ -147,3 +147,87 @@ clients:
           slidingWindowSize: 10
           waitDurationMs: 30000
         fallback: Dejar el producto reactivado de todos modos; la inscripción huérfana la resolverá el registro por su cuenta.
+
+  # Cuarto proveedor, y el único con autenticación BÁSICA: un sistema heredado que
+  # no habla otra cosa. Su razón de estar aquí es doble — cubrir el tercer modo de
+  # auth del DSL, y ser el único circuito del diseño que puede observarse VOLVER:
+  # los demás tienen la ventana abierta en 30 s, que ningún escenario puede esperar.
+  legacy-erp:
+    purpose: Coste de aprovisionamiento del producto, que vive en el ERP heredado.
+    auth:
+      type: basic
+    calls:
+      getCost:
+        contract: GET /costs/{sku} devuelve { cost, currency }.
+        method: GET
+        path: /costs/{sku}
+        request:
+          pathParams:
+            sku:
+              type: string
+              required: true
+        response:
+          fields:
+            cost:
+              type: decimal
+              required: true
+              constraints: { scale: 2 }
+            currency:
+              type: string
+              required: true
+        timeoutMs: 2000
+        # Sin `retry` a propósito, y no por descuido: el retry es un aspecto EXTERNO
+        # al circuito, así que cada intento cuenta por separado en la ventana. Con
+        # reintentos, «cuántas llamadas hacen falta para abrir» deja de leerse del
+        # diseño y pasa a ser una multiplicación — y este cliente existe justamente
+        # para que ese conteo sea observable. El retry ya lo cubren `pricing` y
+        # `compliance`.
+        circuitBreaker:
+          failureRateThreshold: 50
+          # Ventana corta y espera corta, por la misma razón por la que `compliance`
+          # acorta la suya: se acorta el umbral, no la semántica. Con 3 s el paso a
+          # semiabierto cabe dentro de un escenario; con los 30 s del resto, no.
+          slidingWindowSize: 4
+          waitDurationMs: 3000
+        fallback: Servir la ficha sin coste; el margen se calcula en el siguiente refresco.
+
+  # Quinto proveedor, el único con OAuth2: un socio externo que no acepta claves
+  # estáticas. Ejercita el modo de auth que exige una llamada PREVIA a otro endpoint
+  # —la del token— y por tanto el único cuya credencial no sale de configuración.
+  partner-catalog:
+    purpose: Catálogo del socio, que replica nuestras fichas en su propio escaparate.
+    auth:
+      type: oauth2-client-credentials
+      # La URL del proveedor REAL, que es lo que el diseño describe. Redirigirla al
+      # doble de prueba es cosa del perfil `local`, no del diseño: escribir aquí la
+      # del stub sería declarar como contrato del socio una dirección de nuestra
+      # infraestructura de test.
+      tokenUrl: https://auth.partner.example/oauth2/token
+      scopes: [catalog.write]
+    calls:
+      notifyCatalogChange:
+        contract: POST /partner/catalog-changes anuncia el cambio y devuelve { acceptedAt }.
+        method: POST
+        path: /partner/catalog-changes
+        request:
+          body:
+            productId:
+              type: uuid
+              required: true
+            sku:
+              type: string
+              required: true
+            name:
+              type: string
+              required: true
+        response:
+          fields:
+            acceptedAt:
+              type: timestamp
+              required: true
+        timeoutMs: 3000
+        circuitBreaker:
+          failureRateThreshold: 60
+          slidingWindowSize: 10
+          waitDurationMs: 20000
+        fallback: Seguir sin anunciar el cambio; el socio se pone al día en su sincronización diaria.

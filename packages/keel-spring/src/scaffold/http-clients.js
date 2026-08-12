@@ -536,7 +536,14 @@ ${callBody}
   // `field` es null en la rama de cuerpo sin tipar (`Object body`), que es justo la
   // que aparece cuando el contract es solo prosa: leerlo a secas reventaría ahí.
   const args = [...callParams(call).map((p) => p.field?.name ?? 'body'), 'throwable'].join(', ');
-  const overloads = providerFailures({ circuitBreaker: Boolean(call.circuitBreaker) }).map((failure) => {
+  const failures = providerFailures({
+    circuitBreaker: Boolean(call.circuitBreaker),
+    // La obtención del token falla ANTES de que salga la petición, así que ninguna
+    // de las otras sobrecargas la ve. Va por cliente y no por llamada: la auth la
+    // declara el cliente entero.
+    oauth2: client.auth?.type === 'oauth2-client-credentials'
+  });
+  const overloads = failures.map((failure) => {
     imports.add(failure.fqn);
     // El rechazo se registra aparte antes de delegar: llamarlo «no disponible» a
     // secas repetiría, en pequeño, el error de diagnóstico que este fallback corrige.

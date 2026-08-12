@@ -1777,13 +1777,23 @@ test('capa http-clients estructurada: records tipados, mapper ACL completo y aut
   assert.ok(hc.includes('api-key: changeme'));
   assert.ok(hc.includes('authorization-grant-type: client_credentials'));
   assert.ok(hc.includes('scope: payments:write'));
-  assert.ok(hc.includes('token-uri: https://auth.example.com/token'));
+  // En local, el endpoint de token va al MISMO proveedor de prueba que la base-url,
+  // conservando el path que declara el diseño. Con la URL real del diseño, todo
+  // escenario que atraviese un cliente oauth2 falla por DNS antes de llegar a la
+  // llamada de negocio — y el síntoma no menciona el token por ninguna parte.
+  assert.ok(hc.includes('token-uri: http://localhost:8090/token'));
+  assert.ok(!hc.includes('auth.example.com'));
   const hcDevelop = read(workspace, 'src/main/resources/parameters/develop/http-clients.yaml');
   assert.ok(hcDevelop.includes('api-key: ${PRICING_SERVICE_API_KEY:changeme}'));
   assert.ok(hcDevelop.includes('client-id: ${PAYMENT_GATEWAY_CLIENT_ID:changeme}'));
+  // Fuera de local manda el diseño: develop lo lleva como default de la env var y
+  // production la exige. Redirigir al stub es cosa de local y solo de local.
+  assert.ok(hcDevelop.includes('token-uri: ${PAYMENT_GATEWAY_TOKEN_URL:https://auth.example.com/token}'));
   // base-url no la declara el diseño: obligatoria fuera de local, sin default que
   // haga que el servicio se llame a sí mismo.
   assert.ok(hcDevelop.includes('base-url: ${PRICING_SERVICE_BASE_URL}'));
+  const hcProduction = read(workspace, 'src/main/resources/parameters/production/http-clients.yaml');
+  assert.ok(hcProduction.includes('token-uri: ${PAYMENT_GATEWAY_TOKEN_URL}'));
 
   // Perfil test: registration dummy para levantar el contexto sin proveedor real.
   const hcTest = read(workspace, 'src/main/resources/parameters/test/http-clients.yaml');

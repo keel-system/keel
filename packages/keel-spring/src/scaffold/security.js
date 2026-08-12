@@ -25,9 +25,66 @@ function providerMeta(model) {
   );
 }
 
+// Spring Security acaba en el classpath sin que el diseño lo pida: el starter
+// `spring-boot-starter-oauth2-client`, que se añade para la auth SALIENTE de un
+// cliente `oauth2-client-credentials`, lo arrastra. Y su autoconfiguración cierra
+// la puerta de ENTRADA: sin ninguna SecurityFilterChain declarada, Spring Boot
+// registra la suya, que exige login en toda la API —`/actuator/health` incluido, que
+// pasa a contestar 302 al formulario—.
+//
+// El servicio nace roto por un efecto colateral de una dependencia que se pidió para
+// otra cosa, y el síntoma no menciona OAuth2 por ninguna parte. Lo destapó el humo
+// del arnés en la corrida de autenticación saliente; sin ese sondeo, el diagnóstico
+// habría sido mucho más caro.
+//
+// Los beans de OAuth2 Client quedan intactos: lo que se declara aquí es solo que la
+// entrada está abierta, que es lo que dice el diseño al no traer capa `security`.
+function needsOpenChain(model) {
+  return (model.httpClients ?? []).some((client) => client.auth?.type === 'oauth2-client-credentials');
+}
+
+function renderOpenSecurityConfig(model) {
+  const imports = [
+    'org.springframework.context.annotation.Bean',
+    'org.springframework.context.annotation.Configuration',
+    'org.springframework.security.config.annotation.web.builders.HttpSecurity',
+    'org.springframework.security.config.annotation.web.configuration.EnableWebSecurity',
+    'org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer',
+    'org.springframework.security.web.SecurityFilterChain'
+  ];
+  const body = `/**
+ * El diseño no declara capa \`security\`: la API es abierta. Esta cadena existe
+ * porque el starter de OAuth2 Client —que está aquí por la auth SALIENTE de un
+ * cliente— trae Spring Security, y sin una cadena propia su autoconfiguración
+ * pondría toda la API (y el actuator) detrás de un login que nadie pidió.
+ *
+ * No toca los beans de OAuth2 Client: la auth saliente sigue funcionando igual.
+ */
+@Configuration
+@EnableWebSecurity
+public class OpenApiSecurityConfig {
+
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        http
+            .csrf(AbstractHttpConfigurer::disable)
+            .httpBasic(AbstractHttpConfigurer::disable)
+            .formLogin(AbstractHttpConfigurer::disable)
+            .authorizeHttpRequests(auth -> auth.anyRequest().permitAll());
+        return http.build();
+    }
+}`;
+  return {
+    path: javaPath(model, SECURITY_PKG, 'OpenApiSecurityConfig'),
+    content: javaFile(subPackage(model, SECURITY_PKG), imports, body)
+  };
+}
+
 export function generate(model) {
   const sec = model.security;
-  if (!model.layersPresent.security || !sec) return [];
+  if (!model.layersPresent.security || !sec) {
+    return needsOpenChain(model) ? [renderOpenSecurityConfig(model)] : [];
+  }
 
   const files = [renderSecurityConfig(model, sec)];
   if (sec.cors) files.push(renderCorsConfig(model, sec.cors));
