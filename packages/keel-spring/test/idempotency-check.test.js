@@ -139,6 +139,22 @@ public interface StaleClaimRepository {
   // transacción larga que las demás réplicas esperan.
   fs.writeFileSync(claim, withBound.replace(' limit :batch', ''));
   assert.match(run(project).out, /reclamo del barrido/);
+
+  // El caso que antes pasaba en falso: la cota no está en el reclamo, pero el archivo
+  // tiene OTRA consulta paginada. Un repositorio es por definición donde viven todas las
+  // consultas del agregado, así que ese Pageable ajeno está casi siempre — y mientras la
+  // cota se buscara en el archivo entero, este check no podía fallar nunca.
+  fs.writeFileSync(
+    claim,
+    withBound.replace(' limit :batch', '').replace(
+      '}\n',
+      `
+    org.springframework.data.domain.Page<Object> findAllByStatus(String status, org.springframework.data.domain.Pageable pageable);
+}
+`
+    )
+  );
+  assert.match(run(project).out, /reclamo del barrido/);
 });
 
 // Un lock pesimista SÍ reparte filas disjuntas, pero solo mientras dura su transacción, y

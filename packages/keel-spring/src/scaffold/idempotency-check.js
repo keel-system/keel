@@ -381,8 +381,22 @@ function reconciliationChecks(model) {
       group: 'reconciliation',
       subject: 'reclamo del barrido',
       claim: '@Modifying|@Update|findAndModify|findOneAndUpdate',
-      // Sin cota, el reclamo bloquea la tabla entera y el barrido deja de ser un lote.
-      bound: 'Pageable|PageRequest|[Ll]imit|first[0-9]|[Tt]op[0-9]',
+      // Sin cota, el reclamo se lleva la tabla entera y el barrido deja de ser un lote:
+      // 50.000 atascados son 50.000 llamadas al proveedor en una sola pasada.
+      //
+      // Se busca en el CUERPO DEL MÉTODO del reclamo, no en el archivo. El reclamo vive en
+      // el adaptador del repositorio, que es por definición donde están todas las consultas
+      // del agregado — incluido el listado paginado de algún endpoint. Con el archivo
+      // entero, ese `Pageable` ajeno daba la cota por buena aunque el barrido no tuviera
+      // ninguna: comprobado sobre el adaptador de una corrida real, quitarle la cota al
+      // barrido dejaba el check en verde. Un check que no puede fallar no es un check.
+      scope: 'method',
+      // Y las DOS formas de acotar, porque dependen del modelo de persistencia y antes solo
+      // estaba la relacional: `Pageable`/`limit` en Spring Data, y un contador de lote en el
+      // bucle de `findAndModify` en Mongo, que no casa con ninguna de las otras. Sin esto,
+      // acotar el alcance al método dejaría en rojo a todo barrido documental correcto —
+      // pasaban solo por el `Pageable` prestado del listado de al lado.
+      bound: 'Pageable|PageRequest|[Ll]imit|first[0-9]|[Tt]op[0-9]|[Bb]atch[Ss]ize|batch-size',
       // Las clases del mecanismo que build YA genera con el patrón: encontrarlas
       // probaría lo que build hizo, no lo que el agente tenía que escribir.
       exclude:
@@ -456,7 +470,7 @@ function script(model, checks) {
       return `impl ${shellQuote(check.group)} ${shellQuote(check.subject)} ${shellQuote(check.implementors)} ${shellQuote(check.exclude)} ${shellQuote(check.why)}`;
     }
     if (check.claim) {
-      return `claim ${shellQuote(check.group)} ${shellQuote(check.subject)} ${shellQuote(check.claim)} ${shellQuote(check.bound)} ${shellQuote(check.exclude)} ${shellQuote(check.why)}`;
+      return `claim ${shellQuote(check.group)} ${shellQuote(check.subject)} ${shellQuote(check.claim)} ${shellQuote(check.bound)} ${shellQuote(check.exclude)} ${shellQuote(check.why)} ${shellQuote(check.scope ?? '')}`;
     }
     const require = (check.require ?? []).join('\u0001');
     const forbid = (check.forbid ?? []).join('\u0001');
@@ -569,22 +583,77 @@ impl() {  # familia, sujeto, interfaz, clase excluida, porqué
   [ -n "$found" ] || note "$group" "$subject: solo está el fallback $excluded — $why"
 }
 
-# Dos patrones que tienen que darse en el MISMO archivo, buscados en todo el árbol y no
-# en una ruta fija: dónde ponga el agente cada pieza es asunto suyo mientras respete la
-# frontera hexagonal. La pareja es lo que da sentido a cada uno por separado — un reclamo
-# aquí y un Pageable en otro listado cualquiera no es un lote acotado, y un @Value en una
+# Dos patrones que tienen que darse juntos, buscados en todo el árbol y no en una ruta
+# fija: dónde ponga el agente cada pieza es asunto suyo mientras respete la frontera
+# hexagonal. La pareja es lo que da sentido a cada uno por separado — un reclamo aquí y un
+# Pageable en otro listado cualquiera no es un lote acotado, y un @Value en una
 # configuración cualquiera no es el umbral de un barrido.
 #
 # Y sobre el CÓDIGO, no sobre la prosa: la nota que build deja en el stub del barrido
 # nombra el patrón para explicarlo, así que mirando el archivo entero este check saldría
 # verde por el propio comentario que dice lo que falta hacer.
-claim() {  # familia, sujeto, patrón principal, patrón que lo acompaña, rutas excluidas, porqué
-  local group="$1" subject="$2" pattern="$3" bound="$4" excluded="$5" why="$6"
-  local file found="" code
+#
+# CUÁNTO se acerca el segundo patrón lo decide el 7º argumento, y no es un detalle:
+#
+#   (vacío) el archivo entero. Es lo correcto cuando las dos piezas viven en sitios
+#           distintos de la clase por construcción — el umbral es un @Value de CAMPO, y
+#           un campo no está dentro de ningún método.
+#   method  solo el cuerpo del método donde cayó el primer patrón. Hace falta para la
+#           cota del barrido: su reclamo vive en el adaptador del repositorio, que es por
+#           definición donde están TODAS las consultas del agregado — incluido el listado
+#           paginado de algún endpoint. Con el archivo entero, ese Pageable ajeno daba el
+#           check por bueno pasara lo que pasara en el barrido, así que la comprobación no
+#           podía fallar nunca.
+#
+# El recorte tiene dos formas porque el reclamo tiene dos, y la primera no sirve para la
+# segunda:
+#
+#   1. Cuerpo entre llaves — el adaptador que implementa la consulta a mano (Mongo con
+#      MongoTemplate). Se aísla contando llaves.
+#   2. Miembro de una interfaz — el repositorio Spring Data, donde el reclamo es
+#      @Modifying + @Query + la firma, y NO hay cuerpo: contar llaves no encuentra nada.
+#      Se aísla por párrafo (líneas contiguas entre blancos), que es como quedan
+#      separados los miembros.
+#
+# Las dos son heurísticas, así que si ninguna aísla un bloque con el patrón se DEVUELVE EL
+# ARCHIVO ENTERO. Degradar al comportamiento anterior es lo único aceptable ahí: un recorte
+# mal alineado acusaría a un barrido correcto, y un check que exige lo imposible se apaga
+# rompiendo el código.
+methodBody() {  # patrón que localiza el reclamo
+  awk -v pat="$1" '
+    { line = $0
+      t = line; o = gsub(/\\{/, "", t)
+      t = line; c = gsub(/\\}/, "", t)
+      if (depth >= 1 && (buf != "" || o > 0)) buf = buf line "\\n"
+      depth += o - c
+      if (buf != "" && depth <= 1) {
+        if (buf ~ pat) { printf "%s", buf; exit }
+        buf = ""
+      }
+    }'
+}
+
+memberBlock() {  # patrón que localiza el reclamo
+  awk -v pat="$1" '
+    /^[[:space:]]*$/ { if (buf ~ pat) { printf "%s", buf; exit } buf = ""; next }
+    { buf = buf $0 "\\n" }
+    END { if (buf ~ pat) printf "%s", buf }'
+}
+
+claim() {  # familia, sujeto, patrón principal, patrón que lo acompaña, rutas excluidas, porqué, alcance
+  local group="$1" subject="$2" pattern="$3" bound="$4" excluded="$5" why="$6" scope="\${7:-}"
+  local file found="" code window
   while IFS= read -r file; do
     [ -n "$file" ] || continue
     code="$(sed -e 's://.*::' -e '/^[[:space:]]*\\*/d' -e '/^[[:space:]]*\\/\\*/d' "$file")"
-    if printf '%s' "$code" | grep -qE -- "$pattern" && printf '%s' "$code" | grep -qE -- "$bound"; then
+    printf '%s' "$code" | grep -qE -- "$pattern" || continue
+    window="$code"
+    if [ "$scope" = "method" ]; then
+      window="$(printf '%s' "$code" | methodBody "$pattern")"
+      [ -n "$window" ] || window="$(printf '%s' "$code" | memberBlock "$pattern")"
+      [ -n "$window" ] || window="$code"
+    fi
+    if printf '%s' "$window" | grep -qE -- "$bound"; then
       found="$file"
       break
     fi
