@@ -149,6 +149,12 @@ de una medida de «hay retry».
 
 ## Huecos de diseño
 
+> **Los dos primeros se cerraron el 12-ago-2026**, después de publicar este informe. El 1 con un
+> primitivo nuevo del DSL (`exposedAs`, versión 2.7) y el 2 con una corrección del generador —que
+> **no es la que este informe decía**, ver la nota al final de su apartado—. Se dejan escritos tal
+> como se reportaron, con el cierre anotado: un hueco que se borra al arreglarlo deja de enseñar
+> por qué existía.
+
 ### 1. El dato de un `need` no tiene por dónde llegar a la respuesta
 
 El más de fondo, y **no es del fixture sino del DSL**. `getProductBySlug` declara
@@ -166,6 +172,13 @@ Mismo patrón, con otra consecuencia, en `listProducts`/`getProductsByIds` con
 `pricing.supplierPrice`: el reader quedó completo y **sin ningún llamador**, porque invocarlo por
 elemento violaría la regla de no-N+1 sin que nadie consuma el dato.
 
+**Cerrado** (DSL 2.7): `needs.<n>.exposedAs` declara el campo con el que el dato viaja en la
+salida. La forma sale de donde ya está —`response.fields` de la llamada, o la entidad réplica— y
+el campo entra al mapper **por parámetro**, igual que un `embed`: el compilador no deja olvidarlo.
+El caso del listado tiene ahora su propio aviso de `keel validate` — exponer un `on-demand` en una
+salida de varios elementos es una llamada por elemento, y la salida es `replicated`, que es
+exactamente por lo que `supplierPrice` ya estaba declarado así.
+
 ### 2. El `code` de la carrera de idempotencia, por cuarta corrida consecutiva
 
 `IdempotencyConflictException` emite el canónico `IDEMPOTENCY_KEY_IN_PROGRESS`, y
@@ -174,6 +187,19 @@ puede sobrescribirlo sin capturar una excepción que `mapping.md` prohíbe captu
 ejercita esa rama. Es el mismo hueco que `INFORME-MECANISMOS.md` dio por cerrado con el catálogo
 de `framework-errors`: lo que queda abierto es que el diseño **declaró un código de otra familia**
 y nada lo avisó.
+
+**Corrección del diagnóstico, y cierre** (12-ago-2026). La última frase de arriba es **falsa**, y
+conviene que se vea el error: `PRODUCT_KEY_IN_PROGRESS` **sí** está en la familia
+(`/(^|_)KEY_IN_PROGRESS$/`) y **sí** lleva su 409, así que `overrideFor` lo habría aceptado. El
+aviso de `keel validate` callaba porque estaba haciendo bien su trabajo — el diseño sí había
+nombrado el desenlace—, y yo leí ese silencio como la causa en vez de como lo que era.
+
+La causa real estaba en el generador, entre dos funciones vecinas de `http-idempotency.js`:
+`renderReuse` consultaba `declaredErrorFor` y `renderConflict`, treinta líneas más arriba, escribía
+el canónico como literal Java. Ni el catálogo ni el mecanismo de sustitución tenían nada malo: solo
+una de las dos mitades lo usaba. Corregido, y con un guard que se verificó **revirtiendo la
+corrección a mano** para comprobar que falla — sin eso, el test solo demuestra que el código de
+hoy pasa, no que el de mañana no pueda volver atrás.
 
 ### 3. Menores
 

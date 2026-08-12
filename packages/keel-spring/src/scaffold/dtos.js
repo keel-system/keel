@@ -22,6 +22,10 @@ export function generate(model) {
   for (const childDto of model.childDtos ?? []) files.push(renderRecord(model, childDto));
   // Referencias embebidas (embed): el agregado ajeno proyectado en este payload.
   for (const refDto of model.refDtos ?? []) files.push(renderRecord(model, refDto));
+  // Datos de OTRO servicio que el diseño expone (dependencies: needs.<n>.exposedAs).
+  // Mismo papel que el RefDto, con la frontera un paso más allá: el RefDto es otro
+  // agregado de esta base, este es un dato que no es nuestro.
+  for (const needDto of model.needDtos ?? []) files.push(renderRecord(model, needDto));
 
   if (model.hasFileUploads) files.push(renderFileUpload(model));
   if (anyPaginated) files.push(renderPagedResponse(model));

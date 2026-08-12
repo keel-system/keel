@@ -1514,16 +1514,32 @@ test('la reutilización de la clave de idempotencia tiene su excepción, con el 
   assert.ok(handler.includes('IDEMPOTENCY_KEY_REUSED'), handler);
 });
 
-test('un code del dominio en la familia sustituye al canónico de la reutilización', () => {
+test('un code del dominio en la familia sustituye al canónico, en los DOS desenlaces', () => {
   // catalog-extended sí los nombra (PRODUCT_KEY_IN_PROGRESS / PRODUCT_KEY_REUSED): el
   // diseño manda sobre el contrato público.
+  //
+  // Los dos, y no solo la reutilización: la CARRERA emitía el canónico como literal
+  // aunque el diseño declarase el suyo. El efecto era una clase de error generada en
+  // domain/errors que no lanzaba nadie y un contrato público que decía una cosa
+  // mientras el servidor devolvía otra — y sin que nada lo delatara, porque el aviso
+  // de `keel validate` calla con razón cuando el diseño SÍ nombra el desenlace.
+  // Cuarta corrida consecutiva reportándolo (INFORME-CORRIDA-HTTP-AUTH.md).
   const { read } = scaffoldExtended();
+
   const reuse = read(`${JAVA}/domain/idempotency/IdempotencyReuseException.java`);
   assert.ok(reuse.includes('"PRODUCT_KEY_REUSED"'), reuse);
   assert.ok(!reuse.includes('IDEMPOTENCY_KEY_REUSED'), reuse);
-  // Y la nota del handler cita el code que de verdad va a salir por el cable.
+
+  const race = read(`${JAVA}/domain/idempotency/IdempotencyConflictException.java`);
+  assert.ok(race.includes('"PRODUCT_KEY_IN_PROGRESS"'), race);
+  assert.ok(!race.includes('IDEMPOTENCY_KEY_IN_PROGRESS'), race);
+
+  // Y las notas del handler citan los codes que de verdad van a salir por el cable: si
+  // dijeran otra cosa, el agente escribiría el escenario contra un contrato inexistente.
   const handler = read(`${JAVA}/application/usecases/CreateProductCommandHandler.java`);
   assert.ok(handler.includes('PRODUCT_KEY_REUSED'), handler);
+  assert.ok(handler.includes('PRODUCT_KEY_IN_PROGRESS'), handler);
+  assert.ok(!handler.includes('IDEMPOTENCY_KEY_IN_PROGRESS'), handler);
 });
 
 test('el 413 del límite de subida usa el error que el diseño declara', () => {
@@ -1663,4 +1679,59 @@ test('un cliente OAuth2 saliente no cierra la puerta de entrada de un servicio s
   const generated = fs.readdirSync(workspace, { recursive: true }).map(String);
   assert.ok(generated.some((file) => file.endsWith('.java')), 'el scaffolding no generó Java');
   assert.ok(!generated.some((file) => file.includes('OpenApiSecurityConfig')), 'se generó la cadena abierta sin cliente oauth2');
+});
+
+// --- exposedAs: el dato ajeno que llega a la respuesta ---
+//
+// Antes de este campo, un `need` se pedía al proveedor, atravesaba el anticorrupción y
+// se DESCARTABA: la forma `{entity: X}` de un payload no admite campos extra, así que
+// no había dónde ponerlo ni forma de declararlo. Tres diseños llegaron así, y el
+// `SupplierPriceReader` quedaba generado sin un solo llamador.
+test('un need con exposedAs llega al DTO y entra al mapper por parámetro', () => {
+  const { read } = scaffoldExtended();
+
+  // On-demand: la forma sale de response.fields de la llamada, no se declara otra vez.
+  const priceDto = read(`${JAVA}/application/dtos/CurrentPriceDto.java`);
+  assert.ok(priceDto.includes('public record CurrentPriceDto('), priceDto);
+  assert.ok(priceDto.includes('BigDecimal amount'), priceDto);
+
+  // Replicado: la forma sale de la entidad réplica.
+  assert.ok(read(`${JAVA}/application/dtos/SupplierPriceDto.java`).includes('public record SupplierPriceDto('));
+
+  // El campo está en la respuesta de CADA operación de usedBy.
+  const response = read(`${JAVA}/application/dtos/GetProductBySlugResponseDto.java`);
+  assert.ok(response.includes('CurrentPriceDto currentPrice'), response);
+  assert.ok(response.includes('ProductCostDto productCost'), response);
+
+  // Y entra al mapper por PARÁMETRO, no derivado de la entidad: es lo único que impide
+  // el camino de menor resistencia, que es pedir el dato y no ponerlo en ningún sitio.
+  // Un campo derivado se rellenaría con un TODO y compilaría igual.
+  const mapper = read(`${JAVA}/application/mappers/ProductApplicationMapper.java`);
+  assert.match(
+    mapper,
+    /toGetProductBySlugResponseDto\(Product entity, CurrentPriceDto currentPrice, ProductCostDto productCost\)/,
+    mapper
+  );
+  assert.match(mapper, /toListProductsResponseDto\(Product entity, SupplierPriceDto supplierPrice\)/, mapper);
+
+  // Y el stub dice dónde termina el dato, no solo cómo traerlo.
+  const handler = read(`${JAVA}/application/usecases/GetProductBySlugQueryHandler.java`);
+  assert.ok(handler.includes("campo 'currentPrice'"), handler);
+});
+
+test('un need SIN exposedAs no toca la respuesta', () => {
+  // La mitad que hace que el test anterior mida algo: sin el campo, el comportamiento
+  // es el de siempre —el dato sirve para decidir y no sale del servicio—.
+  const { manifest, layers } = loadService(fixtureDir);
+  const patched = structuredClone(layers);
+  for (const dep of Object.values(patched.dependencies.dependencies)) {
+    for (const need of Object.values(dep.needs ?? {})) delete need.exposedAs;
+  }
+  const workspace = tmpDir('keel-exposed-');
+  scaffoldService({ manifest, layers: patched, workspace, force: true });
+  const root = path.join(workspace, 'services', 'catalog-spring', JAVA);
+
+  assert.ok(!fs.existsSync(path.join(root, 'application/dtos/CurrentPriceDto.java')));
+  const response = fs.readFileSync(path.join(root, 'application/dtos/GetProductBySlugResponseDto.java'), 'utf8');
+  assert.ok(!response.includes('currentPrice'), response);
 });

@@ -88,6 +88,11 @@
           "description": "Operaciones de este servicio que necesitan el dato para decidir (deben existir en use-cases: operations).",
           "items": { "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/operationName" }
         },
+        "exposedAs": {
+          "type": "string",
+          "pattern": "^[a-z][A-Za-z0-9]*$",
+          "description": "Nombre del campo con el que este dato ajeno viaja en la SALIDA de todas las operaciones de usedBy. Sin él, el dato solo sirve para decidir y no sale del servicio. Su forma NO se declara aquí: sale de response.fields de la llamada de fetchedFrom (on-demand) o de la entidad réplica (replicated). Es siempre opcional en el contrato: si la llamada declara fallback, o la réplica onMiss degrade, el dato puede faltar y el campo llega nulo."
+        },
         "strategy": {
           "type": "string",
           "enum": ["on-demand", "replicated"],

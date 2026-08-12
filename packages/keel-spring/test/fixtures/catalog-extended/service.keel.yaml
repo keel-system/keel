@@ -1,4 +1,4 @@
-keel: "2.6"
+keel: "2.7"
 service:
   name: catalog
   version: 1.0.0

@@ -57,10 +57,13 @@ suscripción ya declara `triggers`, así que la operación de proyección existe
 1. **Una proyección solo se escribe desde su Projector.** Ningún handler de negocio la modifica. Si una
    operación propia necesita cambiar ese dato, el dato no era del proveedor: es un error de diseño y se
    corrige en el spec.
-2. **Una proyección nunca es fuente de verdad.** No se expone tal cual en un DTO público (si el cliente
-   necesita esos datos, se le devuelven como parte de la respuesta propia, no como recurso), no se le
+2. **Una proyección nunca es fuente de verdad.** No se expone tal cual en un DTO público, no se le
    aplican invariantes del dominio propio y no se valida contra reglas nuestras: sus invariantes las
-   garantiza el proveedor.
+   garantiza el proveedor. Si el cliente necesita esos datos, se le devuelven como parte de la
+   **respuesta propia**, y eso ya no es una instrucción en prosa: el diseño lo declara con
+   `needs.<n>.exposedAs`, y entonces `build` pone el campo en el `<Op>ResponseDto` y el
+   `<Entidad>ApplicationMapper` lo exige **por parámetro** — el compilador no deja olvidarlo. Sin
+   `exposedAs` el dato no sale del servicio, y pedirlo para descartarlo es un error de diseño.
 3. **ACL siempre.** La respuesta del proveedor se mapea con el `<C>Mapper` del cliente a la entidad de
    dominio; el record wire nunca cruza a `domain` ni a `application`.
 4. **Idempotencia por construcción.** El upsert por `keyField` hace que una reentrega no corrompa la

@@ -348,7 +348,7 @@ function renderHandler(model, service, operation) {
       // try/catch «defensivo» que se traga justo la excepción que cierra la ventana, y
       // el resultado es un servidor que pasa el reintento secuencial y ejecuta dos veces
       // bajo concurrencia — que es el caso normal en cuanto hay más de una réplica.
-      `La CARRERA (dos peticiones con la misma clave a la vez) no la ve find: las dos encuentran vacío y las dos llegan a save. La arbitra la clave primaria del registro y el adaptador ya traduce la violación a IdempotencyConflictException (409 IDEMPOTENCY_KEY_IN_PROGRESS) — NO captures esa excepción ni la DataIntegrityViolationException que la origina: dejarla subir es lo que garantiza que de dos peticiones idénticas se ejecutó exactamente una. ` +
+      `La CARRERA (dos peticiones con la misma clave a la vez) no la ve find: las dos encuentran vacío y las dos llegan a save. La arbitra la clave primaria del registro y el adaptador ya traduce la violación a IdempotencyConflictException (${FRAMEWORK_ERRORS.idempotencyRace.http} ${effectiveErrorCode(model, FRAMEWORK_ERRORS.idempotencyRace)}) — NO captures esa excepción ni la DataIntegrityViolationException que la origina: dejarla subir es lo que garantiza que de dos peticiones idénticas se ejecutó exactamente una. ` +
       `Qué NO cubre: la reentrega del mismo mensaje por el broker — esa la para el IdempotencyGuard del listener (tabla processed_event), que es otro mecanismo y no se toca desde aquí`;
     // De dónde sale la clave cambia el ESQUELETO del handler, no un detalle: con
     // payload-hash no hay cabecera que pueda faltar, así que la rama "sin clave,
@@ -434,7 +434,7 @@ function renderHandler(model, service, operation) {
   // Lo que este caso de uso debe a otros servidores. Va al final de las notas
   // porque es lo último que se resuelve: el dato de fuera se trae antes de
   // decidir, y el trabajo delegado sale después de haber decidido.
-  for (const { dependency, need } of operation.dependencyNeeds ?? []) notes.push(needNote(dependency, need));
+  for (const { dependency, need } of operation.dependencyNeeds ?? []) notes.push(needNote(dependency, need, operation));
   for (const { dependency, activation } of operation.dependencyActivations ?? []) {
     notes.push(activationNote(dependency, activation));
   }
@@ -491,13 +491,27 @@ function decap(name) {
 
 // Nota de una necesidad (`needs`): de dónde sale el dato ajeno que esta
 // operación necesita, y por dónde NO se lee.
-function needNote(depId, need) {
+// Dónde TERMINA el dato, cuando el diseño declara que además se devuelve. Sin esta
+// mitad, la nota decía cómo traerlo y nada más: el camino de menor resistencia era
+// pedirlo, mapearlo a dominio y descartarlo. El mapper ya lo exige por parámetro —no
+// compila sin él—, así que esto solo dice de dónde sacarlo.
+function exposeNote(need, operation) {
+  if (!need.exposedAs || !need.dtoName) return '';
+  const many = Boolean(operation?.returnsList || operation?.paginated);
+  const batch =
+    need.strategy === 'replicated' && many
+      ? ` Como la salida es de varios elementos, resuélvelo POR LOTE (una consulta con todas las claves) y NUNCA con una llamada dentro del stream: eso es un N+1.`
+      : '';
+  return ` El dato SALE en la respuesta: el mapper pide un ${need.dtoName} por parámetro y lo pone en el campo '${need.exposedAs}' — si no lo tienes, pásalo nulo, que es lo que el contrato admite cuando el proveedor no responde.${batch}`;
+}
+
+function needNote(depId, need, operation) {
   const why = need.description ? ` — ${need.description}` : '';
   if (need.strategy === 'on-demand') {
     if (!need.fetch) {
       return `Dependencia ${depId}.${need.name} (on-demand)${why}: el diseño no resuelve la llamada (fetchedFrom no apunta a ninguna de http-clients). No inventes el canal: dilo en el reporte`;
     }
-    return `Dependencia ${depId}.${need.name} (on-demand)${why}: pide el dato a ${depId} con ${decap(need.fetch.clientClass)}.${need.fetch.call}(...) y mapea el ${need.fetch.resultType} a dominio con ${decap(need.fetch.mapperClass)} — el record wire nunca cruza a domain ni a application. El retry y el circuit breaker ya están en el adaptador: no los repitas (conventions/dependencies.md)`;
+    return `Dependencia ${depId}.${need.name} (on-demand)${why}: pide el dato a ${depId} con ${decap(need.fetch.clientClass)}.${need.fetch.call}(...) y mapea el ${need.fetch.resultType} a dominio con ${decap(need.fetch.mapperClass)} — el record wire nunca cruza a domain ni a application. El retry y el circuit breaker ya están en el adaptador: no los repitas (conventions/dependencies.md).${exposeNote(need, operation)}`;
   }
 
   const { replica } = need;
@@ -510,7 +524,7 @@ function needNote(depId, need) {
     fail: `Si la copia aún no tiene el dato, el Reader lanza ${replica.onMiss.exceptionClass ?? replica.onMiss.error}: no lo captures para seguir con un valor inventado.`,
     degrade: `Si la copia aún no tiene el dato, el Reader devuelve vacío y el resultado degradado lo escribes TÚ, distinguible por el cliente de una respuesta normal: ${replica.onMiss.degradedTo}`
   }[replica.onMiss.action];
-  return `Dependencia ${depId}.${need.name} (replicada)${why}: lee ${replica.entityName} por ${reader}, que ya aplica onMiss: ${replica.onMiss.action}. ${onMiss} NUNCA leas el repositorio de la réplica directamente ni la escribas desde aquí — la proyección solo se escribe desde ${replica.projectorClass} (conventions/dependencies.md)`;
+  return `Dependencia ${depId}.${need.name} (replicada)${why}: lee ${replica.entityName} por ${reader}, que ya aplica onMiss: ${replica.onMiss.action}. ${onMiss} NUNCA leas el repositorio de la réplica directamente ni la escribas desde aquí — la proyección solo se escribe desde ${replica.projectorClass} (conventions/dependencies.md).${exposeNote(need, operation)}`;
 }
 
 // Nota de una activación (`activations`): el trabajo que esta operación delega

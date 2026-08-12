@@ -27,6 +27,12 @@ dependencies:
   #     productPricing:
   #       description: Precio y estado del producto al construir un pedido.
   #       usedBy: [createOrder, repriceOrder]      # operaciones de use-cases que lo necesitan
+  #       # exposedAs: pricing                     # el dato, además de servir para DECIDIR, viaja
+  #                                                # en la salida de esas operaciones con ese nombre.
+  #                                                # Sin él no sale del servicio. Su forma sale de
+  #                                                # response.fields de la llamada (on-demand) o de la
+  #                                                # entidad réplica; nunca es obligatorio en el
+  #                                                # contrato, porque el fallback puede dejarlo vacío
   #       strategy: replicated                     # on-demand | replicated
   #       fetchedFrom:                             # llamada de http-clients que resuelve el dato
   #         client: catalog                        # obligatorio con on-demand y con onMiss: fetch

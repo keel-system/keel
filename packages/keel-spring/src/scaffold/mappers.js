@@ -127,16 +127,25 @@ function renderMethod(model, entity, dto, imports) {
   // el handler quien lo resuelve, y así el compilador no deja olvidarlo.
   const refFields = dto.fields.filter((field) => field.kind === 'refDto');
   for (const ref of refFields) imports.add(`${subPackage(model, 'application.dtos')}.${ref.javaType}`);
+
+  // Y el dato de OTRO servicio que el diseño expone (needs.<n>.exposedAs): por la
+  // misma razón y con más motivo — no está en esta base ni siquiera por su id. Que
+  // sea parámetro es lo único que impide el camino de menor resistencia, que es
+  // pedirle el dato al proveedor y no ponerlo en ningún sitio.
+  const needFields = dto.fields.filter((field) => field.kind === 'needDto');
+  for (const need of needFields) imports.add(`${subPackage(model, 'application.dtos')}.${need.javaType}`);
+
   const params = [
     `${entity.name} entity`,
-    ...refFields.map((ref) => `${ref.javaType} ${ref.name}`)
+    ...refFields.map((ref) => `${ref.javaType} ${ref.name}`),
+    ...needFields.map((need) => `${need.javaType} ${need.name}`)
   ].join(', ');
 
   // Getters directos disponibles en la entidad de dominio; un campo del DTO que
   // no corresponda (p. ej. subcampo de value object o derivado) lo completa el agente.
   const gettable = new Set(domainMembers(model, entity).map((m) => m.name));
   const args = dto.fields.map((field) => {
-    if (field.kind === 'refDto') return field.name;
+    if (field.kind === 'refDto' || field.kind === 'needDto') return field.name;
     if (!gettable.has(field.name)) {
       return `null /* TODO (agente): ${field.name} no es getter directo de ${entity.name}; mapéalo (¿subcampo de value object?) */`;
     }

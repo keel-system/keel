@@ -142,7 +142,93 @@ export function buildModel({ manifest, layers, stack = null }) {
     warnings
   );
 
-  return { service, layersPresent, persistenceKind, enums, valueObjects, entities, services, errors, childDtos, refDtos, hasFileUploads, events, messaging, subscriptions, pagination, api, audit, security, httpClients, dependencies, storage, warnings };
+  // Los `need` que el diseño expone (`exposedAs`) pasan a ser un campo más de la
+  // respuesta de cada operación que los usa. Va después de collectDependencies porque
+  // es quien resuelve la forma del dato, y después de los refDtos porque es el mismo
+  // tipo de campo: uno que NO se deriva de la entidad y que por eso tiene que entrar
+  // al mapper por parámetro (ver mappers.js).
+  const needDtos = collectNeedDtos(layers, dependencies, services, domainTypes, inlineEnumName, warnings);
+
+  return { service, layersPresent, persistenceKind, enums, valueObjects, entities, services, errors, childDtos, refDtos, needDtos, hasFileUploads, events, messaging, subscriptions, pagination, api, audit, security, httpClients, dependencies, storage, warnings };
+}
+
+// El DTO de un dato ajeno expuesto, y su campo en la respuesta.
+//
+// La forma sale de donde ya está declarada —`response.fields` de la llamada con
+// on-demand, la entidad réplica con replicated—, nunca de `dependencies`: declararla
+// dos veces es invitar a que diverjan, y la que manda es la del proveedor.
+//
+// El campo es SIEMPRE opcional en el contrato. La llamada puede declarar `fallback` y
+// la réplica `onMiss: degrade`: el propio diseño ya dice que el dato puede faltar, así
+// que presentarlo como obligatorio prometería lo que él mismo desmiente.
+function collectNeedDtos(layers, dependencies, services, domainTypes, inlineEnumName, warnings) {
+  if (!dependencies) return [];
+  const domainEntities = layers.domain?.entities ?? {};
+  const built = [];
+  const seen = new Map(); // dtoName → fields ya resueltos
+  const opByName = new Map();
+  for (const group of services ?? []) {
+    for (const operation of group.operations) opByName.set(operation.name, operation);
+  }
+
+  // El campo se inyecta AQUÍ y no en payloadFields porque no sale de la entidad: sale
+  // de la capa dependencies, que se resuelve al final. Y se inyecta solo si el DTO se
+  // llegó a construir — un campo cuyo tipo no existe no compila.
+  const expose = (need, fields) => {
+    for (const opName of need.usedBy) {
+      const operation = opByName.get(opName);
+      if (!operation?.responseDto) continue;
+      if (operation.responseDto.fields.some((field) => field.name === need.exposedAs)) continue;
+      operation.responseDto.fields.push({
+        name: need.exposedAs,
+        javaType: need.dtoName,
+        imports: [],
+        kind: 'needDto',
+        need: need.name,
+        needFields: fields
+      });
+    }
+  };
+
+  for (const dependency of dependencies) {
+    for (const need of dependency.needs ?? []) {
+      if (!need.exposedAs) continue;
+      if (seen.has(need.dtoName)) {
+        expose(need, seen.get(need.dtoName));
+        continue;
+      }
+
+      let fields = [];
+      if (need.strategy === 'replicated' && need.replica?.entity) {
+        // La copia local ya es una entidad de dominio: se proyecta como cualquier otra.
+        if (!domainEntities[need.replica.entity]) continue;
+        fields = payloadFields(need.replica.entity, { entity: need.replica.entity }, {
+          direction: 'output',
+          domainEntities,
+          domainTypes,
+          inlineEnumName,
+          relations: null,
+          warnings
+        });
+      } else {
+        fields = need.fetch?.responseFields ?? [];
+      }
+
+      // Un DTO sin campos no se puede renderizar (un record vacío no tiene sentido) y
+      // además significa que el contrato del que sale no está tipado: el agente tiene
+      // que completarlo antes, y avisarlo aquí es más barato que un error de compilación.
+      if (fields.length === 0) {
+        warnings.push(
+          `Necesidad '${dependency.id}.${need.name}' (dependencies): declara exposedAs pero su origen no tiene campos tipados; el agente tiene que completar el contrato antes de poder exponerlo.`
+        );
+        continue;
+      }
+      seen.set(need.dtoName, fields);
+      built.push({ name: need.dtoName, fields });
+      expose(need, fields);
+    }
+  }
+  return built;
 }
 
 function buildService(manifest, stack) {
@@ -1295,6 +1381,10 @@ function collectDependencies(layers, entities, httpClients, subscriptions, error
         description: spec.description ?? '',
         strategy: spec.strategy,
         usedBy: spec.usedBy ?? [],
+        // El campo con el que el dato viaja en la salida, si el diseño lo declara.
+        // Sin él, el dato solo sirve para decidir y no sale del servicio.
+        exposedAs: spec.exposedAs ?? null,
+        dtoName: spec.exposedAs ? `${pascalCase(needName)}Dto` : null,
         fetch,
         replica
       };
@@ -1421,7 +1511,11 @@ function resolveFetch(depId, needName, fetchedFrom, clientById, warnings) {
     clientClass: client.clientClass,
     mapperClass: client.mapperClass,
     call: call.name,
-    resultType: call.resultType
+    resultType: call.resultType,
+    // La forma del dato, para el DTO de `exposedAs`: sale del contrato de la llamada
+    // y no se vuelve a declarar en `dependencies`. Dos declaraciones de lo mismo
+    // pueden divergir, y la que manda es la del proveedor.
+    responseFields: call.responseFields ?? []
   };
 }
 

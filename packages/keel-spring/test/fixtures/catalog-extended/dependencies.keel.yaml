@@ -10,6 +10,10 @@ dependencies:
         description: Precio vigente que acompaña a la ficha pública del producto.
         strategy: on-demand
         usedBy: [getProductBySlug]
+        # El dato no solo se usa para decidir: acompaña a la ficha, que es lo que dice
+        # su propia descripción. Sin declararlo, se pedía al proveedor y se descartaba
+        # tras el anticorrupción — y ningún escenario podía afirmar que llegara.
+        exposedAs: currentPrice
         fetchedFrom:
           client: pricing
           call: getPrice
@@ -18,6 +22,11 @@ dependencies:
         description: Precio de proveedor, que se consulta en cada listado y no puede pagar una llamada por elemento.
         strategy: replicated
         usedBy: [listProducts, getProductsByIds]
+        # La razón por la que este es `replicated` y no `on-demand` se ve justo aquí:
+        # se expone en un LISTADO, así que on-demand sería una llamada al proveedor por
+        # elemento. `keel validate` lo avisa. Antes de poder declarar esto, el reader
+        # quedaba generado y sin ningún llamador: nadie consumía el dato.
+        exposedAs: supplierPrice
         fetchedFrom:
           client: pricing
           call: getPrice
@@ -36,6 +45,7 @@ dependencies:
         description: Coste de aprovisionamiento que acompaña a la ficha del producto.
         strategy: on-demand
         usedBy: [getProductBySlug]
+        exposedAs: productCost
         fetchedFrom:
           client: legacy-erp
           call: getCost

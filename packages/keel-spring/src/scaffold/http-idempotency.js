@@ -94,7 +94,18 @@ export function generate(model) {
 // indistinguible del conflicto de negocio que la misma operación puede devolver.
 // Un escenario no puede afirmar sobre eso —validation-scenarios.md exige code y
 // status—, así que la carrera quedaba sin poder probarse.
+//
+// El `code` sale del catálogo de keel-core y el diseño lo sustituye declarando uno de
+// su familia, EXACTAMENTE igual que su gemela `renderReuse`. Estuvo escrito como
+// literal hasta que la corrida de autenticación saliente enseñó la consecuencia: un
+// diseño que declaraba `PRODUCT_KEY_IN_PROGRESS` —en familia y con su 409— generaba la
+// clase de error, no la lanzaba nadie, y por el cable salía el canónico. El aviso de
+// `keel validate` callaba con razón (el diseño SÍ había nombrado el desenlace), así
+// que nada lo delataba: el contrato público decía una cosa y el servidor otra.
 function renderConflict(model) {
+  const canonical = FRAMEWORK_ERRORS.idempotencyRace;
+  const declared = declaredErrorFor(model, canonical);
+  const code = declared?.code ?? canonical.code;
   const body = `/**
  * Dos peticiones con la misma clave de idempotencia, a la vez.
  *
@@ -106,7 +117,13 @@ function renderConflict(model) {
  * no el cuerpo, y hasta que la ganadora no commitee ese id no existe.
  *
  * <p>Lo que sí queda garantizado es lo importante: la transacción de quien pierde
- * revierte entera, así que de dos peticiones idénticas se ejecutó exactamente una.
+ * revierte entera, así que de dos peticiones idénticas se ejecutó exactamente una.${
+   declared
+     ? `\n *\n * <p>El code sale del error que el diseño declara para este conflicto.`
+     : `\n *\n * <p>El code es el CANÓNICO del framework (docs/framework-errors.md): el diseño no declara
+ * uno propio, y eso es una respuesta legítima, no un hueco. Para cambiarlo, declara en los
+ * errors de la operación un code de su familia con status ${canonical.http}.`
+ }
  */
 public class IdempotencyConflictException extends ConflictException {
 
@@ -117,8 +134,8 @@ public class IdempotencyConflictException extends ConflictException {
         // que solo se reproduce bajo carga.
         super(
                 "Otra petición con la misma clave de idempotencia está en curso: " + scope + "/" + idempotencyKey,
-                "IDEMPOTENCY_KEY_IN_PROGRESS",
-                409,
+                "${code}",
+                ${canonical.http},
                 new Object[] {scope, idempotencyKey});
         initCause(cause);
     }

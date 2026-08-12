@@ -524,7 +524,10 @@ lecturas está vacía (`clearCache()`).
 **When**: `GET /api/v1/public/products/tools`.
 
 **Then**:
-1. Status `200` y el producto `<a1>`.
+1. Status `200` y el producto `<a1>`, con `currentPrice` y `productCost` en el cuerpo: los dos
+   `need` declaran `exposedAs`, así que el dato ajeno **es parte de la respuesta**, no solo algo
+   que se pidió. Sin esta afirmación, un servidor que llama a los dos proveedores y descarta lo
+   que le contestan pasa los Then siguientes enteros.
 2. La petición que recibió `/prices/{sku}` lleva la cabecera `X-Api-Key` **no vacía** — el nombre
    exacto que declara `auth.headerName`, no el `X-Api-Key` por defecto de casualidad.
 3. La petición que recibió `/costs/{sku}` lleva `Authorization` empezando por `Basic ` y, **una vez
@@ -674,9 +677,9 @@ cada una.
 quinta lectura **inmediatamente**, con la caché limpia.
 
 **Then**:
-3. La lectura responde `200` y `stubCallCount` **sigue siendo 4**: el circuito está abierto y la
-   llamada no sale. Es lo que separa un circuito abierto de un proveedor que simplemente había
-   vuelto.
+3. La lectura responde `200`, **sin `productCost`** (el fallback declarado), y `stubCallCount`
+   **sigue siendo 4**: el circuito está abierto y la llamada no sale. Es lo que separa un circuito
+   abierto de un proveedor que simplemente había vuelto.
 
 **When** (tercera mitad): se espera a que pase la ventana de `waitDurationMs` (3 s) y se ejecuta
 una sexta lectura con la caché limpia.
@@ -685,20 +688,15 @@ una sexta lectura con la caché limpia.
 4. `stubCallCount` es 5: la llamada **sí** sale. El circuito pasó a semiabierto y dejó pasar la
    petición de prueba, que es la diferencia entre un mecanismo de recuperación y un interruptor
    de un solo uso.
+5. La lectura responde `200` **con `productCost`**, y con el coste que devolvió el ERP. El circuito
+   no solo dejó pasar la llamada: su resultado llegó hasta la respuesta. Es la mitad que distingue
+   este `200` del Then 3, donde el mismo status venía del fallback — y la que un `Then` sobre el
+   conteo de llamadas no puede ver.
 
 **Notas de determinación**: la espera se hace con la primitiva de espera del arnés sobre una
 condición observable, nunca con una pausa fija — 3 s es el mínimo, no el tiempo que tarda. Los
 `clearCache()` son obligatorios: `getProductBySlug` cachea 300 s y una lectura servida de caché no
 llama al ERP, así que sin ellos el flujo mediría una sola llamada y cuatro aciertos de caché.
-
-**Hueco del diseño, declarado** (y del DSL, no solo de este fixture): el flujo se mide entero por
-el conteo de llamadas porque **el dato del `need` no es observable en la respuesta**.
-`getProductBySlug` declara `output: { entity: Product }`, y esa forma de payload no admite campos
-extra (`additionalProperties: false` en el schema), así que un `need` con `strategy: on-demand`
-y `usedBy: [getProductBySlug]` no tiene por dónde llegar al cuerpo. Le pasa igual a
-`pricing.currentPrice`, que lleva en el diseño desde antes. Mientras eso no se pueda expresar, el
-`Then` que afirmaría «el coste llegó hasta la respuesta» no se puede escribir, y afirmarlo de
-todos modos sería pedirle a la implementación algo que el contrato no tiene.
 
 ## El descarte
 

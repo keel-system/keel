@@ -1253,6 +1253,58 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
     const subscriptions = messaging?.subscriptions ?? {};
     const replicaEntities = new Map(); // entidad → primer need que la replica
 
+    // `exposedAs` dice que el dato ajeno, además de servir para DECIDIR, viaja en la
+    // salida de las operaciones que lo usan. Es el hermano de `embed` para datos que
+    // no están en nuestra base, y se valida por lo mismo: que quepa donde dice que va.
+    //
+    // Sin este campo el dato se pedía, atravesaba el anticorrupción y se descartaba, y
+    // no había forma de expresar otra cosa —la forma `{entity: X}` de un payload no
+    // admite campos extra—. Tres diseños llegaron a producción así.
+    const checkExposedAs = (spec, where) => {
+      const field = spec.exposedAs;
+      for (const opName of spec.usedBy ?? []) {
+        const op = operations[opName];
+        if (!op) continue; // el usedBy roto ya lo reporta su propia regla
+
+        // Sin salida no hay dónde aterrizar, y el diseño se está contradiciendo:
+        // declara que el dato se devuelve por una operación que no devuelve nada.
+        if (op.output === 'void' || op.output == null) {
+          errors.push(
+            `${where}.exposedAs: '${opName}' no devuelve nada (output: void), así que el dato no tiene dónde viajar`
+          );
+          continue;
+        }
+
+        // Colisión con la entidad que se proyecta: el DTO tendría dos campos con el
+        // mismo nombre, y el que gana lo decide el orden en que se generan.
+        const entityName = op.output.entity;
+        const entity = entityName ? domain.entities?.[entityName] : null;
+        if (entity && (entity.fields?.[field] || entity.relations?.[field])) {
+          errors.push(
+            `${where}.exposedAs '${field}': '${entityName}' ya declara un campo o relación con ese nombre (output de '${opName}')`
+          );
+        }
+        // Y con los campos que el propio payload declara a mano.
+        if (op.output.fields?.[field]) {
+          errors.push(
+            `${where}.exposedAs '${field}': el output de '${opName}' ya declara un campo con ese nombre`
+          );
+        }
+
+        // Una llamada al proveedor POR ELEMENTO. No es un error —el diseño puede
+        // asumirlo a sabiendas— pero casi nunca es lo que se quiere, y el propio DSL
+        // ofrece la salida: `replicated` mantiene la copia local y la lectura del
+        // listado no sale del proceso. Es la misma clase de señal que la asimetría de
+        // proyección de `embed`: no hace falta un escenario para verla, basta con
+        // cruzar dos declaraciones del diseño.
+        if (spec.strategy === 'on-demand' && (op.output.list || op.output.paginated)) {
+          warnings.push(
+            `${where}.exposedAs: '${opName}' devuelve varios elementos y la estrategia es on-demand, así que el proveedor recibe una llamada por elemento — si el dato se expone en un listado, la estrategia que lo evita es 'replicated'`
+          );
+        }
+      }
+    };
+
     // Una réplica es una entidad de dominio que hay que guardar: sin persistence no hay dónde.
     // Como el per-aggregate de persistence, es error también con --wip.
     const checkReplica = (replica, need, where) => {
@@ -1361,6 +1413,10 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
           if (!operationNames.has(opName)) {
             errors.push(`${where}.usedBy: la operación '${opName}' no existe en use-cases`);
           }
+        }
+
+        if (spec.exposedAs) {
+          checkExposedAs(spec, where);
         }
 
         if (spec.fetchedFrom) {

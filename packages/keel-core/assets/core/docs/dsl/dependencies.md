@@ -77,8 +77,31 @@ Un `need` es **un dato ajeno concreto**, no un endpoint del proveedor. Se descub
 |---|---|---|
 | `usedBy` | ✅ | Operaciones de `use-cases` que necesitan el dato. Es el único enlace del DSL entre un caso de uso y su integración. |
 | `strategy` | ✅ | `on-demand` o `replicated` (ver abajo). |
+| `exposedAs` | — | El campo con el que el dato **viaja en la salida** de esas operaciones (ver abajo). |
 | `fetchedFrom` | según estrategia | Llamada de `http-clients` que resuelve el dato: `{ client, call }`. |
 | `replica` | con `replicated` | La copia local (ver abajo). |
+
+### `exposedAs` — cuando el dato además se devuelve
+
+La pregunta que descubre un `need` es «¿qué necesita esta operación para **decidir**?», y muchas veces la respuesta se agota ahí: el dato entra, se decide con él y no vuelve a aparecer. Pero otras el dato **es parte de la respuesta** —el precio vigente que acompaña a una ficha, el coste que el consumidor necesita para pintar un margen—, y eso hay que declararlo:
+
+```yaml
+needs:
+  currentPrice:
+    description: Precio vigente que acompaña a la ficha pública del producto.
+    strategy: on-demand
+    usedBy: [getProductBySlug]
+    exposedAs: currentPrice        # viaja en la salida con ese nombre
+    fetchedFrom: { client: pricing, call: getPrice }
+```
+
+Tres cosas que no son evidentes:
+
+- **La forma del dato no se declara aquí.** Sale de donde ya está: `response.fields` de la llamada de `fetchedFrom` con `on-demand`, y los campos de la entidad réplica con `replicated`. Declararla otra vez sería una segunda fuente de verdad, y la que manda es la del proveedor.
+- **El campo es siempre opcional en el contrato.** Si la llamada declara `fallback`, o la réplica `onMiss: degrade`, el propio diseño ya está diciendo que el dato puede faltar. Presentarlo como obligatorio prometería lo que él mismo desmiente.
+- **Exponerlo en un listado cambia la estrategia correcta.** Con `on-demand`, un `usedBy` que devuelve varios elementos es una llamada al proveedor **por elemento**: `keel validate` lo avisa y nombra la salida, que es `replicated`. Es el mismo criterio que ya gobierna `strategy`, visto desde la salida en vez de desde la decisión.
+
+Sin `exposedAs`, el dato solo sirve para decidir y no sale del servicio. Es el default, y es lo correcto en la mayoría de los casos: un dato ajeno en la respuesta acopla el contrato público al del proveedor.
 
 ## `strategy` — dónde vive la verdad que se lee
 

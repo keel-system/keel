@@ -3822,3 +3822,86 @@ test('dos candidatos de la misma familia no cuentan: ahí no se adivina', () => 
   assert.equal(found.length, 1);
   assert.match(found[0], /CONCURRENT_MODIFICATION/);
 });
+
+// --- exposedAs: el dato ajeno que además viaja en la respuesta ---
+//
+// Sin este campo, un `need` solo servía para DECIDIR y no había forma de decir que el
+// dato se devuelve: la forma `{entity: X}` de un payload no admite campos extra. Tres
+// diseños acabaron pidiendo un dato al proveedor para descartarlo tras el anticorrupción.
+
+test('exposedAs sobre una operación con salida es válido', () => {
+  const layers = depsLayers();
+  need(layers).exposedAs = 'pricing';
+  const { errors, warnings } = run(layers);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
+});
+
+test('exposedAs sobre una operación sin salida es error', () => {
+  const layers = depsLayers();
+  need(layers).usedBy = ['applyProductSnapshot'];
+  need(layers).exposedAs = 'pricing';
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) => e.includes(`'applyProductSnapshot' no devuelve nada`)),
+    errors.join('\n')
+  );
+});
+
+test('exposedAs que choca con un campo de la entidad proyectada es error', () => {
+  const layers = depsLayers();
+  need(layers).exposedAs = 'total'; // Order.total ya existe
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) => e.includes(`exposedAs 'total'`) && e.includes('ya declara un campo o relación')),
+    errors.join('\n')
+  );
+});
+
+// El aviso que da valor: es la misma clase de señal que la asimetría de proyección de
+// `embed` —se ve cruzando dos declaraciones del diseño, sin ejecutar nada— y nombra la
+// salida que el propio DSL ya ofrece.
+test('exposedAs on-demand sobre un listado avisa del N+1 y nombra replicated', () => {
+  const layers = depsLayers();
+  layers['use-cases'].operations.listOrders = {
+    description: 'Lista los pedidos del cliente.',
+    kind: 'query',
+    input: 'void',
+    output: { entity: 'Order', list: true, paginated: true },
+  };
+  const spec = need(layers);
+  spec.usedBy = ['listOrders'];
+  spec.exposedAs = 'pricing';
+  spec.strategy = 'on-demand';
+  delete spec.replica;
+
+  const { errors, warnings } = run(layers);
+  assert.deepEqual(errors, []);
+  assert.ok(
+    warnings.some((w) => w.includes("'listOrders' devuelve varios elementos") && w.includes("'replicated'")),
+    warnings.join('\n')
+  );
+});
+
+test('la misma salida de varios elementos con replicated no avisa', () => {
+  const layers = depsLayers();
+  layers['use-cases'].operations.listOrders = {
+    description: 'Lista los pedidos del cliente.',
+    kind: 'query',
+    input: 'void',
+    output: { entity: 'Order', list: true, paginated: true },
+  };
+  const spec = need(layers);
+  spec.usedBy = ['listOrders'];
+  spec.exposedAs = 'pricing';
+
+  const { errors, warnings } = run(layers);
+  assert.deepEqual(errors, []);
+  // Se mira el aviso concreto, no la lista entera: `listOrders` es una operación
+  // auxiliar de este test y arrastra sus propios avisos (sin endpoint, sin pagination),
+  // que no tienen nada que ver con lo que aquí se mide.
+  assert.ok(
+    !warnings.some((w) => w.includes('una llamada por elemento')),
+    warnings.join('\n')
+  );
+});
