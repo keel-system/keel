@@ -1573,3 +1573,33 @@ test('ningún code que salga por el cable se inventa fuera del catálogo', () =>
   }
   assert.deepEqual(sospechosos, [], `codes fuera del catálogo:\n${sospechosos.join('\n')}`);
 });
+
+// La etiqueta del sobre contra el filtro que la lee. Son dos piezas que build genera
+// por caminos distintos —el bridge escribe el `eventType` de la fila del outbox, y
+// `init-messaging.sh` siembra la FilterPolicy de la cola de arnés— y nada las comparaba:
+// con el nombre de la clase Java en el sobre, SNS descarta el mensaje EN SILENCIO (sin
+// error, sin log) y el escenario falla como si el handler no hubiera publicado.
+test('el eventType que publica el outbox es el que espera la FilterPolicy del broker', () => {
+  const { manifest, layers } = loadService(fixtureDir);
+  const workspace = tmpDir('keel-eventtype-');
+  scaffoldService({ manifest, layers, workspace, force: true, stack: { broker: 'snssqs' } });
+  const root = path.join(workspace, 'services', 'catalog-spring');
+  const bridge = fs.readFileSync(path.join(root, JAVA, 'infrastructure/messaging/CatalogDomainEventBridge.java'), 'utf8');
+  const provisioning = fs.readFileSync(path.join(root, 'infra/init-messaging.sh'), 'utf8');
+
+  // Lo que el bridge mete en la fila (tercer argumento de append) …
+  const emitted = [...bridge.matchAll(/append\([A-Za-z]+RoutingKey, "([^"]+)"/g)].map((m) => m[1]);
+  assert.ok(emitted.length > 0, bridge);
+  // … tiene que estar entre los valores con los que se suscribe la cola de arnés.
+  for (const eventType of emitted) {
+    assert.ok(
+      new RegExp(`^subscribe .*'${eventType}'`, 'm').test(provisioning),
+      `'${eventType}' no aparece en ninguna FilterPolicy de init-messaging.sh:\n${provisioning}`
+    );
+  }
+  // Y ser el MISMO literal que viaja en el cuerpo: el sobre y la carta no pueden
+  // decir cosas distintas.
+  const domainEvent = fs.readFileSync(path.join(root, JAVA, 'domain/events/ProductCreatedEvent.java'), 'utf8');
+  assert.ok(domainEvent.includes('EventMetadata.now("ProductCreated")'), domainEvent);
+  assert.ok(emitted.includes('ProductCreated'), emitted.join(', '));
+});

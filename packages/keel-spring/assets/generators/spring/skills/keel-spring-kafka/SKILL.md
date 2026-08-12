@@ -125,6 +125,8 @@ cadena (outbox y arnés incluidos).
 @Component
 public class StockDepletedListener {
 
+    private static final String EVENT_TYPE = "StockDepleted";
+
     private final UseCaseMediator mediator;
 
     // ... constructor ...
@@ -132,14 +134,20 @@ public class StockDepletedListener {
     // Sin @RetryableTopic: los reintentos y el descarte los aplica el
     // DefaultErrorHandler que build ya declaró (ver DeadLetterConfig).
     @KafkaListener(topics = "${messaging.subscriptions.stock-depleted.topic:inventory-service.events}",
-            groupId = "${spring.application.name}")
-    public void on(StockDepletedMessage message) {
-        mediator.dispatch(new RetireProductCommand(message.productId()));
+            groupId = "${spring.application.name}-stock-depleted")
+    public void on(EventEnvelope<StockDepletedMessage> envelope) {
+        // El topic transporta TODOS los eventos de la fuente: lo que no es tuyo se
+        // descarta con return, nunca con excepción (dispararía los reintentos).
+        if (!EVENT_TYPE.equals(envelope.metadata().eventType())) {
+            return;
+        }
+        mediator.dispatch(new RetireProductCommand(envelope.data().productId()));
     }
 }
 ```
 
-- Topic configurable vía propiedad `messaging.subscriptions.<evento-kebab>.topic` (default `<fuente>.events`); groupId = `spring.application.name`. Con un canal `external: true` el nombre real lo pone el dueño del canal: va en `parameters/<perfil>`, nunca hardcodeado.
+- Topic configurable vía propiedad `messaging.subscriptions.<evento-kebab>.topic` (default `<fuente>.events`). Con un canal `external: true` el nombre real lo pone el dueño del canal: va en `parameters/<perfil>`, nunca hardcodeado.
+- **`groupId` con sufijo por suscripción** (`${spring.application.name}-<evento-kebab>`), no el nombre de la app a secas. El destino por convención es `<fuente>.events`, así que dos suscripciones de la MISMA fuente comparten topic: con un único grupo serían dos consumidores del mismo grupo sobre el mismo topic y Kafka les repartiría las particiones — cada listener vería solo un trozo del tráfico y el resto se perdería en silencio. Un grupo por suscripción hace que cada listener reciba el topic entero, que es lo que asume el resto de la cadena (`infra/check-idempotency.sh` solo agrupa por cola en RabbitMQ, precisamente por esto).
 - `onFailure` del diseño → **ya está generado**: build emite `DeadLetterConfig` con un
   `DefaultErrorHandler` (attempts y backoff del diseño) y un `DeadLetterPublishingRecoverer` que
   publica en `<topic>.DLT` solo para las suscripciones que declaran `deadLetter: true`.
@@ -156,7 +164,8 @@ El bloque `contract` del diseño describe la forma real del mensaje que emite la
 - **`envelope: keel`** — deserializa a `EventEnvelope<XxxMessage>` y trabaja con `envelope.data()`.
 - **`envelope: none`** — el mensaje **es** el payload: deserializa directo a `XxxMessage`.
 - **`envelope: wrapped`** — build generó `<Evento>Envelope` con el payload colgando de `payloadPath`: deserializa a la envoltura y saca el payload de ahí. Si `payloadPath` está anidado, completa los niveles intermedios (build dejó un TODO).
-- **`discriminator`** — el topic transporta varios tipos de evento. Con `location: header`, filtra por `@Header("<name>")` y **descarta** (return, sin excepción, para no disparar reintentos) lo que no coincida con `value`; con `location: field`, deserializa a `JsonNode` y enruta por ese campo. Sin discriminador, y solo entonces, vale fijar un tipo por topic.
+- **`discriminator`** — el topic transporta varios tipos de evento. Con `location: header`, filtra por `@Header("<name>")` y **descarta** (return, sin excepción, para no disparar reintentos) lo que no coincida con `value`; con `location: field`, deserializa a `JsonNode` y enruta por ese campo.
+- **Sin `discriminator` y con `envelope: keel`, el discriminador es `metadata.eventType`, y filtrar por él es OBLIGATORIO.** Que el diseño no declare nada no significa que el topic traiga un solo tipo: significa que la envoltura Keel ya trae el campo y no hay que describirlo. El destino es `<fuente>.events` y por ahí van **todos** los eventos que publica esa fuente, consumas tú uno o tres. Un listener sin filtro deserializa un evento ajeno contra tu record (campos a `null`, o peor: encajan) y despacha tu operación con datos que no son de ese hecho. El javadoc del `<Evento>Message` que generó build dice el valor exacto a comparar. Fijar un tipo por topic sin filtro solo vale con `envelope: none` sobre un canal que su dueño garantiza monotipo.
 - **`messageId`** — es la clave de deduplicación: léela (header o campo) y descarta el mensaje si ya se procesó, **antes** de despachar. Es lo que hace segura la entrega at-least-once con `retry`/DLQ.
 - **`format: avro|protobuf`** — cambia el deserializador y, con `schemaRef`, exige schema registry: configúralo en `parameters/<perfil>/kafka.yaml`.
 - **`unknownFields`** y los `@JsonProperty` de alias ya vienen resueltos en el record generado: no los toques.

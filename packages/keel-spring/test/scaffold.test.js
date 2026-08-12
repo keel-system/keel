@@ -1919,6 +1919,15 @@ test('capa messaging (subscriptions): payload record transversal, sin listener d
   assert.ok(message.includes('EventEnvelope estándar de Keel'));
   assert.ok(message.includes('@JsonIgnoreProperties(ignoreUnknown = true)'));
 
+  // El discriminador que nadie declara: con la envoltura Keel, `metadata.eventType`
+  // viene siempre y el destino por convención transporta TODOS los eventos de la
+  // fuente. Sin esta línea, quien escribe el listener no tiene motivo para filtrar y
+  // despacha como suyo lo que no lo es (y con excepción en vez de return, mandaría al
+  // descarte un mensaje válido de otro tipo).
+  assert.ok(message.includes("Se reconoce por metadata.eventType == 'StockDepleted'"), message);
+  assert.ok(message.includes("'inventory-service.events' transporta todos los eventos de inventory-service"), message);
+  assert.ok(message.includes('SIN lanzar excepción'), message);
+
   // El listener depende del broker: lo escribe el agente, no build.
   assert.ok(!exists(workspace, `${subsDir}/StockDepletedListener.java`));
   // Broker por defecto (kafka): spring-kafka en gradle para el código del agente.
@@ -2089,7 +2098,11 @@ test('outbox: fila en la misma transacción, relay determinista y envío tras el
   const bridge = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/ProductCatalogDomainEventBridge.java');
   assert.ok(bridge.includes('@EventListener'));
   assert.ok(!bridge.includes('@TransactionalEventListener'));
-  assert.ok(bridge.includes('append(productCreatedRoutingKey, "ProductCreatedIntegrationEvent", envelope);'));
+  // El eventType de la fila es la etiqueta del SOBRE (message attribute / props.setType),
+  // no el tipo Java: tiene que ser el nombre del evento en el diseño, el mismo que estampa
+  // EventMetadata.now(...) en el cuerpo y contra el que filtra la FilterPolicy de SNS.
+  assert.ok(bridge.includes('append(productCreatedRoutingKey, "ProductCreated", envelope);'), bridge);
+  assert.ok(!bridge.includes('"ProductCreatedIntegrationEvent", envelope'), bridge);
   // Con outbox sí son suyos: la envoltura es lo que serializa en la fila, y el
   // destino/routing key los escribe él (no hay publisher que los lea).
   assert.ok(bridge.includes('EventEnvelope<ProductCreatedIntegrationEvent> envelope = EventEnvelope.of('));

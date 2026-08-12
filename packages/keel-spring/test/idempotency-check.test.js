@@ -486,3 +486,33 @@ test('el javadoc del Message avisa de la ventana de retención según haya guard
   assert.ok(unguarded.includes('guarda de dominio'), unguarded);
   assert.ok(!unguarded.includes('esa no caduca'), unguarded);
 });
+
+// Tres suscripciones de la MISMA fuente caen en el mismo destino por convención, así que
+// cada listener recibe también los otros dos eventos. El javadoc tiene que nombrar el
+// valor a comparar y a los compañeros de destino: sin eso, el camino de menor resistencia
+// es un listener por evento sin filtro, que deserializa lo ajeno contra su propio record.
+test('el javadoc del Message nombra el discriminador implícito y quién comparte destino', () => {
+  const service = loadService(fixture('stock-reservation'));
+  const workspace = tmpDir('keel-idem-check-');
+  const result = scaffoldService({
+    manifest: service.manifest,
+    layers: service.layers,
+    workspace,
+    force: true,
+    stack: { broker: 'kafka' }
+  });
+  const subs = path.join(
+    workspace,
+    result.outDir,
+    'src/main/java/com/fulfillment/stockreservation/infrastructure/messaging/subscriptions'
+  );
+  const message = fs.readFileSync(path.join(subs, 'StockReservedMessage.java'), 'utf8');
+
+  assert.ok(message.includes("Se reconoce por metadata.eventType == 'StockReserved'"), message);
+  // Los otros dos, por nombre: es lo que hace evidente que el destino es compartido.
+  assert.ok(message.includes('StockCountAdjusted'), message);
+  assert.ok(message.includes('StockRejected'), message);
+  // Descartar con excepción dispara onFailure.retry y acaba mandando al descarte un
+  // mensaje válido que era de otra suscripción.
+  assert.ok(message.includes('SIN lanzar excepción'), message);
+});

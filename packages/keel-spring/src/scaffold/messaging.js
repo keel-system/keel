@@ -207,8 +207,16 @@ ${methods}${outbox ? `\n\n${renderOutboxAppend(model)}` : ''}
 function renderBridgeMethod(event, outbox) {
   const args = event.fields.map((f) => `event.${f.name}()`).join(', ');
   const listener = outbox ? '@EventListener' : '@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)';
+  // El `eventType` de la fila del outbox es la ETIQUETA DEL SOBRE, no el tipo Java: el
+  // dispatcher la publica como atributo nativo del mensaje (message attribute en SNS,
+  // `props.setType` en AMQP) y en SNS es sobre ESE valor que filtra la FilterPolicy que
+  // siembra `init-messaging.sh` — cuyos valores salen de `eventTypesByChannel`, o sea,
+  // del nombre del evento en el diseño. Con el nombre de la clase el filtro no casa y
+  // SNS descarta el mensaje EN SILENCIO: no hay error, ni log, ni excepción; el evento
+  // simplemente no llega. Debe ser el mismo literal que estampa EventMetadata.now(...)
+  // en el cuerpo, o el sobre y la carta dirían cosas distintas.
   const delivery = outbox
-    ? `        append(${routingField(event)}, "${event.integrationClass}", envelope);`
+    ? `        append(${routingField(event)}, "${event.name}", envelope);`
     : `        ${publisherField(event)}.publish(integrationEvent, correlationId);`;
 
   // La envoltura solo la construye el bridge en modo outbox: es lo que serializa
@@ -395,6 +403,23 @@ function contractJavadoc(sub, model) {
   if (sub.discriminator) {
     lines.push(
       `Se reconoce por ${sub.discriminator.location} '${sub.discriminator.name}' == '${sub.discriminator.value}': el canal transporta más tipos, descarta el resto.`
+    );
+  } else if (sub.envelope === 'keel') {
+    // El discriminador que NADIE declara y que hace falta igual. Con una fuente ajena
+    // el diseño escribe `contract.discriminator` y este javadoc lo baja al listener;
+    // con una fuente Keel no hay nada que declarar —`metadata.eventType` viaja siempre—
+    // y por eso se olvidaba: el destino por convención es `<source>.events`, que
+    // transporta TODOS los eventos de esa fuente, así que un listener sin filtro
+    // despacha como suyo lo que no lo es. Se dice aunque este diseño tenga una sola
+    // suscripción de ese origen: cuántos tipos viajan por el canal lo decide lo que
+    // PUBLICA el emisor, no lo que nosotros consumimos.
+    const shared = (model.subscriptions ?? [])
+      .filter((other) => other.name !== sub.name && other.topicDefault === sub.topicDefault)
+      .map((other) => other.name);
+    lines.push(
+      `Se reconoce por metadata.eventType == '${sub.name}': '${sub.topicDefault}' transporta todos los eventos de ${sub.source ?? 'la fuente'}, ` +
+        `así que descarta el resto SIN lanzar excepción (una excepción dispara onFailure.retry y acaba mandando al descarte un mensaje válido que no era para ti).` +
+        (shared.length > 0 ? ` En este diseño el destino lo comparten ${shared.join(', ')}.` : '')
     );
   }
   // De dónde sale la clave de deduplicación. El contrato puede declararla —una fuente
