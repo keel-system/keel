@@ -358,8 +358,12 @@ function resolveField(ownerName, fieldName, field, domainTypes, inlineEnumName, 
     description: field.description ?? null,
     validation: beanValidationAnnotations(field, resolved),
     // La misma lista para un DTO de entrada: sin el formato heredado del value
-    // type, que solo se cumple después de normalizar (ver type-mapper.js).
-    inputValidation: beanValidationAnnotations(field, resolved, { inheritTypeFormat: false }),
+    // type, que solo se cumple después de normalizar, y sin la anotación de
+    // presencia de un campo con `default`, que por definición el cliente puede
+    // omitir (ver type-mapper.js). Las dos diferencias son del lado de ENTRADA:
+    // `validation` describe el valor ya formado y aquí se describe lo que llega
+    // por el cable, que es antes de que el dominio ponga nada.
+    inputValidation: beanValidationAnnotations(field, resolved, { inheritTypeFormat: false, honourDefault: true }),
     // Una colección no es una columna: su mapeo (@ElementCollection) lo pone la Jpa,
     // no columnAnnotations. Sin persistence o sin list, comportamiento previo.
     columns: persisted && !isList ? columnAnnotations(fieldName, field, resolved) : [],

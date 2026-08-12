@@ -1022,6 +1022,36 @@ test('normalización antes que formato: el patrón del value type no llega al DT
   assert.ok(command.includes('@NotBlank String sku'), command);
 });
 
+// El mismo defecto lo encontró y corrigió a mano el agente de código en DOS corridas
+// independientes sobre este diseño: reproducible y determinista, así que le toca al
+// generador y no a cada generación.
+test('un campo con default no exige presencia en el DTO de entrada', () => {
+  const { read } = scaffoldExtended();
+  const command = read(`${JAVA}/application/commands/CreateProductCommand.java`);
+
+  // `Product.status` declara `required: true` con `default: draft`. Las dos cosas son
+  // ciertas y no se contradicen: obligatorio es el VALOR (la columna sale
+  // `nullable = false`), opcional es que lo mande el cliente — que es lo que el DSL
+  // define como `default`. Con @NotNull, el camino feliz de createProduct —nadie manda
+  // el estado inicial de un recurso que aún no existe— devolvía 400 antes del handler.
+  assert.ok(!/@NotNull\s+ProductStatus status/.test(command), command);
+  assert.ok(command.includes('ProductStatus status'), command);
+
+  // Y no es que se hayan caído todas las anotaciones: `sku` no tiene default y sigue
+  // exigiéndose. Sin esta mitad, el test pasaría igual con la validación desactivada.
+  assert.ok(command.includes('@NotBlank String sku'), command);
+});
+
+test('la obligatoriedad de un campo con default sí llega a la entidad persistida', () => {
+  const { read } = scaffoldExtended();
+  const jpa = read(`${JAVA}/infrastructure/persistence/entities/ProductJpa.java`);
+
+  // La otra mitad de la regla anterior, y la que impide que el fix se lea como
+  // "los campos con default pasan a ser opcionales": lo que se relaja es lo que el
+  // cliente tiene que mandar, no lo que la fila puede guardar.
+  assert.ok(/@Column\(name = "status"[^)]*nullable = false/.test(jpa), jpa);
+});
+
 test('config de storage: el mapa storage.buckets.* está en los CUATRO perfiles, test incluido', () => {
   const { read } = scaffoldExtended();
 

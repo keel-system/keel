@@ -59,8 +59,28 @@ export function resolveType(typeRef, domainTypes = {}) {
 /**
  * Anotaciones Bean Validation para un campo de DTO de entrada.
  * Combina las constraints del campo con las del value type escalar (aplanado).
+ *
+ * `honourDefault: true` (lo pasa el lado de ENTRADA) deja fuera la anotación de
+ * PRESENCIA de un campo que declara `default`. No es una relajación del contrato:
+ * el DSL define `default` como «valor si el cliente no lo provee»
+ * (docs/dsl/domain.md), así que un campo con default es, por definición, omitible
+ * en el cable — y exigirlo rechaza con 400 justo el caso para el que el default
+ * existe. Con `required: true` **y** `default`, las dos cosas siguen siendo
+ * ciertas y no se contradicen: obligatorio es el VALOR (la columna es
+ * `nullable = false`, y eso lo pone `columnAnnotations`, que no mira aquí),
+ * opcional es que lo mande el cliente.
+ *
+ * Se descubrió generando `createProduct` sobre un agregado cuyo `status` declara
+ * `default: draft`: el DTO salía con `@NotNull` y el camino feliz de la operación
+ * —ningún cliente manda el estado inicial de un recurso que aún no existe—
+ * devolvía 400 antes de llegar al handler. El resto de anotaciones (formato,
+ * rango, tamaño) no se toca: si el cliente SÍ manda el campo, tiene que ser válido.
  */
-export function beanValidationAnnotations(field, resolved, { inheritTypeFormat = true } = {}) {
+export function beanValidationAnnotations(field, resolved, { inheritTypeFormat = true, honourDefault = false } = {}) {
+  // `!== undefined` y no un truthy check: `default: 0` y `default: false` son
+  // defaults tan legítimos como cualquier otro, y son justo los que un `if (default)`
+  // se deja fuera — el contador que arranca en cero y la bandera que arranca apagada.
+  const omitPresence = honourDefault && field.default !== undefined;
   const own = field.constraints ?? {};
   // `inheritTypeFormat: false` deja fuera el `pattern` que el campo hereda de su
   // VALUE TYPE, conservando el que el campo declare por su cuenta. Es lo que
@@ -82,7 +102,7 @@ export function beanValidationAnnotations(field, resolved, { inheritTypeFormat =
   // implementar, inline en el genérico (ver conventions/mapping.md).
   if (field.list) {
     const annotations = [];
-    if (field.required) annotations.push('@NotEmpty');
+    if (field.required && !omitPresence) annotations.push('@NotEmpty');
     if (constraints.minItems != null || constraints.maxItems != null) {
       const parts = [];
       if (constraints.minItems != null) parts.push(`min = ${constraints.minItems}`);
@@ -95,7 +115,7 @@ export function beanValidationAnnotations(field, resolved, { inheritTypeFormat =
   const annotations = [];
   const isString = resolved.javaType === 'String';
 
-  if (field.required) {
+  if (field.required && !omitPresence) {
     annotations.push(isString ? '@NotBlank' : '@NotNull');
   }
   if (constraints.minLength != null || constraints.maxLength != null) {

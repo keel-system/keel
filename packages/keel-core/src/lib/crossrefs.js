@@ -366,6 +366,26 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
         } else {
           checkSort(payload, where);
         }
+      } else if (direction === 'output' && (payload.list === true || payload.paginated === true)) {
+        // La simetría que faltaba. Un `sort` declarado se vigila con once reglas; su
+        // AUSENCIA no se vigilaba con ninguna, y es el caso que esconde una decisión
+        // en vez de una errata: hay un default correcto (orden por id, con su
+        // desempate), así que nada se rompe y nada avisa.
+        //
+        // El problema no es el default: es que el orden es CONTRATO, y cuando el
+        // diseño calla, la decisión se acaba tomando fuera del diseño — en la prosa de
+        // validation-scenarios.md, que ningún schema contrasta, o en el adaptador que
+        // el agente improvisa porque tiene que escribir algo. Las dos veces el
+        // artefacto promete una cosa y el servicio hace otra, sin que nada lo cruce.
+        // Por eso es aviso y no error: aceptar el orden por id es una decisión legítima
+        // — lo que no es legítimo es no haberla tomado.
+        warnings.push(
+          `${where}: devuelve varios elementos y no declara 'sort' — el orden será por id del agregado. ` +
+            (payload.paginated === true
+              ? `Es contrato: es lo que recibe quien no pide un '?sort='. `
+              : `Es contrato: es el orden en el que el consumidor recibe la colección. `) +
+            `Si los escenarios o el consumidor asumen otro (más reciente primero, alfabético…), decláralo aquí en vez de darlo por hecho fuera del diseño`
+        );
       }
     }
     if (payload.fields) checkFieldMap(payload.fields, where);

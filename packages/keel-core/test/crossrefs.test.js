@@ -22,6 +22,15 @@ const baseDomain = () => ({
 
 const run = (layers, wip = false) => checkCrossRefs({ layers, wip });
 
+// Varios fixtures de abajo declaran salidas de varios elementos sin `sort` porque lo
+// que miden es otra cosa (paginación, proyección de referencias, listas en el input).
+// Desde que existe el aviso de orden no declarado emiten uno legítimo y ajeno a su
+// asunto. Se filtra aquí en vez de meter un `sort` de relleno en cada fixture: el
+// relleno cambiaría lo que el test ejercita, el filtro no. Lo que NO se hace es relajar
+// la aserción a `some(...)`: el resto de la lista se sigue comprobando entera, que es
+// lo que convierte a estos tests en detectores de avisos nuevos e inesperados.
+const otherThanSortNotice = (warnings) => warnings.filter((w) => !w.includes("no declara 'sort'"));
+
 test('agregados bien formados no producen errores ni warnings', () => {
   const { errors, warnings } = run({ domain: baseDomain(), 'use-cases': {} });
   assert.deepEqual(errors, []);
@@ -1403,7 +1412,7 @@ test('campo list en el input de una operación es válido', () => {
     batchLayers({ type: 'uuid', list: true, required: true, constraints: { minItems: 1, maxItems: 100 } })
   );
   assert.deepEqual(errors, []);
-  assert.deepEqual(warnings, []);
+  assert.deepEqual(otherThanSortNotice(warnings), []);
 });
 
 test('campo list de escalar y de value object en una entidad es válido', () => {
@@ -2174,14 +2183,14 @@ const paginatedLayers = (output, pagination = { style: 'offset', defaultSize: 20
 test('paginated con list y con api.pagination es válido', () => {
   const { errors, warnings } = run(paginatedLayers({ entity: 'Product', list: true, paginated: true }));
   assert.deepEqual(errors, []);
-  assert.deepEqual(warnings, []);
+  assert.deepEqual(otherThanSortNotice(warnings), []);
 });
 
 test('paginated sin list es la forma canónica y no dispara nada', () => {
   // El sobre de paginación ya envuelve la colección: list sería redundante.
   const { errors, warnings } = run(paginatedLayers({ entity: 'Product', paginated: true }));
   assert.deepEqual(errors, []);
-  assert.deepEqual(warnings, []);
+  assert.deepEqual(otherThanSortNotice(warnings), []);
 });
 
 test('paginated sin pagination en api es warning', () => {
@@ -2193,7 +2202,7 @@ test('paginated sin pagination en api es warning', () => {
 test('un output sin paginated no dispara nada', () => {
   const { errors, warnings } = run(paginatedLayers({ entity: 'Product', list: true }, null));
   assert.deepEqual(errors, []);
-  assert.deepEqual(warnings, []);
+  assert.deepEqual(otherThanSortNotice(warnings), []);
 });
 
 // --- messaging: eventos publicados que nadie emite ---
@@ -2324,11 +2333,12 @@ const projectionLayers = (listOutput) => ({
 
 test('proyección asimétrica de una referencia embebida es aviso, no error', () => {
   const { errors, warnings } = run(projectionLayers({ entity: 'Order', list: true }));
+  const projection = otherThanSortNotice(warnings);
   assert.deepEqual(errors, []);
-  assert.equal(warnings.length, 1, warnings.join('\n'));
-  assert.match(warnings[0], /listOrders/);
-  assert.match(warnings[0], /'customerId' plano/);
-  assert.match(warnings[0], /getOrder/);
+  assert.equal(projection.length, 1, projection.join('\n'));
+  assert.match(projection[0], /listOrders/);
+  assert.match(projection[0], /'customerId' plano/);
+  assert.match(projection[0], /getOrder/);
 });
 
 test('proyección coherente en todas las operaciones no avisa', () => {
@@ -2336,7 +2346,7 @@ test('proyección coherente en todas las operaciones no avisa', () => {
     projectionLayers({ entity: 'Order', list: true, embed: ['customer'] })
   );
   assert.deepEqual(errors, []);
-  assert.deepEqual(warnings, []);
+  assert.deepEqual(otherThanSortNotice(warnings), []);
 });
 
 test('una referencia excluida del payload no cuenta como proyección asimétrica', () => {
@@ -2346,7 +2356,7 @@ test('una referencia excluida del payload no cuenta como proyección asimétrica
     projectionLayers({ entity: 'Order', list: true, exclude: ['customer'] })
   );
   assert.deepEqual(errors, []);
-  assert.deepEqual(warnings, []);
+  assert.deepEqual(otherThanSortNotice(warnings), []);
 });
 
 // --- use-cases: caché con embed sin vía de invalidación ---
@@ -2578,6 +2588,43 @@ test('sort por una relación sin bajar a un campo es error', () => {
 test('sort con el mismo campo repetido es error', () => {
   const { errors } = run(sortLayers({ entity: 'Order', list: true, sort: ['placedAt:asc', 'placedAt:desc'] }));
   assert.ok(errors.some((e) => e.includes(`ya está declarado; un criterio de orden no se repite`)));
+});
+
+// La ausencia de sort, que es el caso que esconde una DECISIÓN en vez de una errata:
+// hay un default correcto (orden por id), así que nada se rompe y nada avisaba. El
+// orden es contrato, y cuando el diseño calla la decisión se toma fuera de él — en la
+// prosa de validation-scenarios.md o en el adaptador que el agente improvisa.
+test('una salida paginada sin sort avisa: el orden es contrato y aquí no se declara', () => {
+  const { errors, warnings } = run(sortLayers({ entity: 'Order', paginated: true }));
+  assert.deepEqual(errors, []);
+  assert.ok(
+    warnings.some(
+      (w) =>
+        w.includes('listOrders.output: devuelve varios elementos y no declara') &&
+        w.includes('el orden será por id del agregado') &&
+        w.includes("quien no pide un '?sort='")
+    ),
+    warnings.join('\n')
+  );
+});
+
+test('una salida list sin sort avisa, con la consecuencia de una colección y no de una página', () => {
+  const { warnings } = run(sortLayers({ entity: 'Order', list: true }));
+  const warning = warnings.find((w) => w.includes('listOrders.output: devuelve varios elementos'));
+  assert.ok(warning, warnings.join('\n'));
+  assert.ok(warning.includes('el orden en el que el consumidor recibe la colección'), warning);
+});
+
+test('declarar sort apaga el aviso: es una decisión tomada, no un hueco', () => {
+  const { warnings } = run(sortLayers({ entity: 'Order', list: true, sort: ['placedAt:desc'] }));
+  assert.ok(!warnings.some((w) => w.includes('no declara')), warnings.join('\n'));
+});
+
+// El aviso es de una salida de VARIOS elementos: sobre un objeto único no hay orden que
+// declarar, y emitirlo ahí lo convertiría en ruido que se aprende a ignorar.
+test('una salida de un solo objeto no avisa por no declarar sort', () => {
+  const { warnings } = run(sortLayers({ entity: 'Order' }));
+  assert.ok(!warnings.some((w) => w.includes('devuelve varios elementos')), warnings.join('\n'));
 });
 
 // --- use-cases: transiciones de lifecycle y compensaciones verificables --------

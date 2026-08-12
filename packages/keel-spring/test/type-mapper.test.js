@@ -60,6 +60,60 @@ test('beanValidationAnnotations sin inheritTypeFormat deja fuera el patrón del 
   assert.ok(own.includes('@Pattern(regexp = "^[a-z]+$")'), own.join(' '));
 });
 
+// Un campo con `default` es, por definición del DSL, omitible en el cable («valor si
+// el cliente no lo provee»). Exigirlo en la ENTRADA rechaza con 400 justo el caso para
+// el que el default existe — el camino feliz de crear un recurso cuyo estado inicial lo
+// decide el dominio. Es un defecto que apareció DOS veces en la misma corrida.
+test('beanValidationAnnotations omite la presencia de un campo con default solo en la entrada', () => {
+  const resolved = resolveType('ProductStatus', domainTypes);
+  const field = { required: true, default: 'draft' };
+
+  // Salida / entidad: el valor sigue siendo obligatorio.
+  assert.ok(beanValidationAnnotations(field, resolved).includes('@NotNull'));
+
+  // Entrada: obligatorio es el VALOR, no que lo mande el cliente.
+  const input = beanValidationAnnotations(field, resolved, { inheritTypeFormat: false, honourDefault: true });
+  assert.deepEqual(input, []);
+});
+
+test('beanValidationAnnotations conserva las demás constraints de un campo con default', () => {
+  const resolved = resolveType('string', domainTypes);
+  const annotations = beanValidationAnnotations(
+    { required: true, default: 'x', constraints: { maxLength: 10, pattern: '^[a-z]+$' } },
+    resolved,
+    { inheritTypeFormat: false, honourDefault: true }
+  );
+  // Si el cliente SÍ lo manda, tiene que ser válido: solo cae la presencia.
+  assert.ok(!annotations.includes('@NotBlank'), annotations.join(' '));
+  assert.ok(annotations.some((a) => a.startsWith('@Size(max = 10')), annotations.join(' '));
+  assert.ok(annotations.includes('@Pattern(regexp = "^[a-z]+$")'), annotations.join(' '));
+});
+
+// `default: 0` y `default: false` son los que un `if (field.default)` se deja fuera, y
+// son justo los defaults típicos: el contador que arranca en cero y la bandera apagada.
+test('beanValidationAnnotations trata 0 y false como defaults legítimos', () => {
+  const zero = beanValidationAnnotations(
+    { required: true, default: 0 },
+    resolveType('int', domainTypes),
+    { inheritTypeFormat: false, honourDefault: true }
+  );
+  assert.deepEqual(zero, []);
+
+  const off = beanValidationAnnotations(
+    { required: true, default: false },
+    resolveType('boolean', domainTypes),
+    { inheritTypeFormat: false, honourDefault: true }
+  );
+  assert.deepEqual(off, []);
+});
+
+test('beanValidationAnnotations omite @NotEmpty de una lista con default', () => {
+  const resolved = resolveType('string', domainTypes);
+  const field = { required: true, list: true, default: [] };
+  assert.ok(beanValidationAnnotations(field, resolved).includes('@NotEmpty'));
+  assert.deepEqual(beanValidationAnnotations(field, resolved, { inheritTypeFormat: false, honourDefault: true }), []);
+});
+
 test('beanValidationAnnotations usa DecimalMin para decimales', () => {
   const resolved = resolveType('decimal', domainTypes);
   const annotations = beanValidationAnnotations({ required: true, constraints: { min: 0 } }, resolved);
