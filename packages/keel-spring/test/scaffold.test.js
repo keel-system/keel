@@ -610,6 +610,31 @@ test('puntuación de escenarios: script mecánico, no agente, y con salida compa
   assert.ok(!script.includes('culprit'));
 });
 
+// La matriz solo conoce los `FL-*`. Una prueba en rojo con otro nombre —un caso
+// borde que el agente añadió por su cuenta— no pasa por ninguna fila, así que sin
+// consultar a Gradle el script cantaría "100%" sobre una suite roja, y el pipeline
+// avanzaría de fase creyendo verde el servicio. Pasó de verdad: la corrida de
+// RabbitMQ terminó con 7 pruebas en rojo y la matriz solo contó 6.
+test('puntuación de escenarios: el veredicto de Gradle no se ignora', () => {
+  const workspace = makeWorkspace();
+  scaffoldService({ ...loadFixture(), workspace });
+
+  const script = read(workspace, 'infra/score-scenarios.sh');
+
+  // Se guarda el código de salida en vez de descartarlo…
+  assert.ok(script.includes('|| suite_failed=1'), script);
+  // …se inicializa, porque `set -u` está activo y --score no ejecuta la suite…
+  assert.ok(/^suite_failed=0$/m.test(script), script);
+  // …y se consulta ANTES de cantar el 100%.
+  const okLine = script.indexOf('RESULTADO: OK');
+  const guard = script.indexOf('if [ "$suite_failed" -ne 0 ]');
+  assert.ok(guard > 0 && guard < okLine, 'la comprobación va después del 100%');
+
+  // Y no basta con salir en rojo: hay que decir CUÁL prueba, o el diagnóstico
+  // obliga a abrir el log de Gradle entero.
+  assert.ok(script.includes('NO son escenarios'), script);
+});
+
 test('constraints del diseño en una query: Bean Validation en el @RequestParam y en el record', () => {
   const workspace = makeWorkspace();
   const { manifest, layers } = loadFixture();

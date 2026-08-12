@@ -657,6 +657,49 @@ function fallbackBody(model, client, call, imports) {
 
 // ─── DTOs wire (contrato del sistema externo, solo infrastructure/http) ──────
 
+/**
+ * Anticorrupción de la respuesta: los campos que el diseño declara `required` en
+ * `response.fields` tienen que venir de verdad.
+ *
+ * Sin esto, `required` era la única cosa del DSL que se declaraba y no la hacía
+ * cumplir nadie: el record salía pelado y un proveedor que devolviera `{}` pasaba
+ * por bueno. Con `awaits: outcome` eso no es un detalle — el diseño dice que el
+ * desenlace lo decide el CUERPO, así que el campo que falta es justo el que
+ * sostiene la decisión. Lo destapó `FL-CMP-003`.
+ *
+ * **Se lanza algo SIN sobrecarga de fallback, y es deliberado** (ver
+ * `lib/outbound-failures.js`): un cuerpo que viola el contrato no es «el proveedor
+ * está caído». Si entrara al fallback se aplicaría el `onFailure` del diseño y el
+ * llamante recibiría «proveedor no disponible» (502) por algo que no es una caída,
+ * y además contaría para el circuito, cortando llamadas a un proveedor que responde
+ * perfectamente. `IllegalStateException` no casa con ninguna sobrecarga, así que
+ * resilience4j la relanza tal cual y sale como 500 con su traza — el mismo criterio
+ * que esa tabla ya aplica a un cuerpo que no deserializa.
+ *
+ * Solo se comprueba el nulo, no el vacío: `required` en el cable significa
+ * «presente». Si una cadena vacía es inválida para el negocio, eso es una regla del
+ * dominio y no del contrato de transporte.
+ */
+function contractGuard(client, call) {
+  const required = (call.responseFields ?? []).filter((field) => field.required);
+  if (required.length === 0) return '';
+
+  const checks = required
+    .map(
+      (field) => `        if (${field.name} == null) {
+            throw new IllegalStateException(
+                    "${client.id}.${call.name}: la respuesta no trae '${field.name}', que el contrato declara obligatorio");
+        }`
+    )
+    .join('\n');
+
+  return `
+    public ${call.responseType} {
+${checks}
+    }
+`;
+}
+
 function renderResponse(model, client, call) {
   const imports = new Set();
   addFieldImports(model, imports, call.responseFields);
@@ -669,7 +712,7 @@ function renderResponse(model, client, call) {
  * Respuesta wire de ${client.id}.${call.name} (contrato del sistema externo).${todo}
  */
 public record ${call.responseType}(${components}) {
-}`;
+${contractGuard(client, call)}}`;
   return {
     path: javaPath(model, HTTP_PKG, call.responseType),
     content: javaFile(subPackage(model, HTTP_PKG), [...imports], body)

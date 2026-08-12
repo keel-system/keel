@@ -16,6 +16,7 @@ import { cacheFlushCmd } from '../src/scaffold/devtools.js';
 import { CACHES } from '../src/lib/stack-catalog.js';
 import { fixedFrameworkErrors } from 'keel-core';
 import { emptyReadJava } from '../src/lib/broker-probes.js';
+import { providerFailures } from '../src/lib/outbound-failures.js';
 
 const fixtureDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'catalog-extended');
 const JAVA = 'src/main/java/com/commerce/catalog';
@@ -1050,6 +1051,41 @@ test('la obligatoriedad de un campo con default sí llega a la entidad persistid
   // "los campos con default pasan a ser opcionales": lo que se relaja es lo que el
   // cliente tiene que mandar, no lo que la fila puede guardar.
   assert.ok(/@Column\(name = "status"[^)]*nullable = false/.test(jpa), jpa);
+});
+
+// `required` en `response.fields` era lo único del DSL que se declaraba y no hacía
+// cumplir nadie: el record salía pelado y un proveedor que devolviera `{}` pasaba por
+// bueno. Con `awaits: outcome` el desenlace lo decide el cuerpo, así que el campo que
+// falta es el que sostiene la decisión. Lo destapó FL-CMP-003.
+test('la respuesta de un proveedor comprueba los campos que el contrato declara obligatorios', () => {
+  const { read } = scaffoldExtended();
+  const response = read(`${JAVA}/infrastructure/http/RecordWithdrawalResponse.java`);
+
+  assert.ok(response.includes('public RecordWithdrawalResponse {'), response);
+  assert.ok(response.includes('if (recordId == null)'), response);
+
+  // El tipo importa tanto como la comprobación: NO puede ser una excepción con
+  // sobrecarga de fallback. Si entrara al fallback se aplicaría el `onFailure` del
+  // diseño —«proveedor no disponible», 502— por un proveedor que respondió
+  // perfectamente, y además contaría para su circuito. Sin sobrecarga, resilience4j
+  // la relanza y sale como 500, que es lo que el escenario exige.
+  assert.ok(response.includes('throw new IllegalStateException'), response);
+  for (const { simple } of providerFailures({ circuitBreaker: true, oauth2: true })) {
+    assert.ok(!response.includes(simple), `${simple} tiene sobrecarga de fallback: la guarda no puede lanzarla`);
+  }
+});
+
+test('un campo opcional de la respuesta no se comprueba, y una respuesta sin obligatorios no lleva guarda', () => {
+  const { read } = scaffoldExtended();
+
+  // `cancelled` es required → guarda. Si algún día deja de serlo, este test lo dice.
+  assert.ok(read(`${JAVA}/infrastructure/http/CancelWithdrawalResponse.java`).includes('if (cancelled == null)'));
+
+  // La mitad que impide que la guarda se vuelva ruido: solo la llevan los campos que
+  // el diseño marcó, no todos.
+  const price = read(`${JAVA}/infrastructure/http/GetPriceResponse.java`);
+  assert.ok(price.includes('if (amount == null)'), price);
+  assert.ok(price.includes('if (currency == null)'), price);
 });
 
 test('config de storage: el mapa storage.buckets.* está en los CUATRO perfiles, test incluido', () => {

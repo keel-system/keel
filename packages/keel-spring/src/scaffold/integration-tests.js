@@ -215,6 +215,9 @@ mkdir -p "$LOG_DIR"
 
 score_only=0
 [ "\${1:-}" = "--score" ] && score_only=1
+# Con --score la suite no se ejecuta aquí, así que no hay veredicto de Gradle que
+# contradiga a la matriz: 0 es el valor correcto para ese modo.
+suite_failed=0
 
 if [ "$score_only" -eq 0 ]; then
   rm -rf "$RESULTS"
@@ -234,7 +237,11 @@ ${replicaJarStep(model)}  # Humo del arnés primero: son segundos y comprueba la
   fi
   echo "Humo del arnés: OK."
   echo "Ejecutando la suite completa…"
-  ./gradlew integrationTest --console=plain >>"$LOG" 2>&1
+  # El código de salida de Gradle se GUARDA, no se ignora. La matriz solo mira los
+  # \`FL-*\`, así que una prueba en rojo que no sea un escenario —un caso borde que el
+  # agente añadió por su cuenta— no aparecería en ninguna fila y el script diría
+  # "100%" sobre una suite roja. Ver el cierre.
+  ./gradlew integrationTest --console=plain >>"$LOG" 2>&1 || suite_failed=1
 fi
 
 if [ ! -d "$RESULTS" ]; then
@@ -317,6 +324,38 @@ for id in $uncovered; do nc=$((nc + 1)); done
 
 echo ""
 if [ "$ko" -eq 0 ] && [ "$sk" -eq 0 ] && [ "$nc" -eq 0 ] && [ "$ok" -gt 0 ]; then
+  # La matriz está limpia. Antes de cantar el 100% hay que preguntarle a Gradle: la
+  # matriz solo conoce los \`FL-*\`, y una prueba en rojo con otro nombre no ha pasado
+  # por ninguna fila. Decir "100%" con la suite roja es peor que no tener gate — el
+  # pipeline avanzaría a la fase siguiente creyendo el servicio verde.
+  if [ "$suite_failed" -ne 0 ]; then
+    echo "RESULTADO: KO — los $ok escenario(s) FL-* están en OK, pero la suite falló."
+    echo "  Hay pruebas en rojo que NO son escenarios y por eso no salen en la matriz:"
+    awk '
+      BEGIN { RS = "<testcase " }
+      NR == 1 { next }
+      {
+        rec = $0
+        close_tag = index(rec, "</testcase>")
+        self_tag = index(rec, "/>")
+        if (close_tag > 0 && (self_tag == 0 || close_tag < self_tag)) seg = substr(rec, 1, close_tag)
+        else if (self_tag > 0) seg = substr(rec, 1, self_tag)
+        else seg = rec
+        name = ""; cls = ""
+        if (match(seg, /name="[^"]*"/)) name = substr(seg, RSTART + 6, RLENGTH - 7)
+        if (match(seg, /classname="[^"]*"/)) cls = substr(seg, RSTART + 11, RLENGTH - 12)
+        if (name == "" || cls == "") next
+        if (index(seg, "<failure") == 0 && index(seg, "<error") == 0) next
+        id = name; sub(/:.*/, "", id)
+        if (id ~ /^FL-[A-Za-z0-9-]+$/) next
+        sub(/.*\\./, "", cls)
+        printf "    %s  (%s)\\n", name, cls
+      }
+    ' "$RESULTS"/*.xml 2>/dev/null
+    echo "  log completo de Gradle: $LOG"
+    echo "  Son del agente de pruebas, no del diseño: o las arregla o las retira."
+    exit 1
+  fi
   echo "RESULTADO: OK — $ok escenario(s) al 100%."
   exit 0
 fi
