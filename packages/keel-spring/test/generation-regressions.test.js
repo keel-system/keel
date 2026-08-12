@@ -1088,6 +1088,44 @@ test('un campo opcional de la respuesta no se comprueba, y una respuesta sin obl
   assert.ok(price.includes('if (currency == null)'), price);
 });
 
+// La tercera frontera de datos ajenos, y la que quedaba sin comprobar.
+// `@JsonIgnoreProperties(ignoreUnknown = true)` cubre los campos de MÁS; los que faltan
+// entraban como null en silencio — incluido `occurredAt`, que es el que ordena las
+// reentregas para que un hecho viejo no pise a uno nuevo.
+test('el payload de un evento entrante comprueba sus campos obligatorios', () => {
+  const { read } = scaffoldExtended();
+  const message = read(`${JAVA}/infrastructure/messaging/subscriptions/SupplierPriceChangedMessage.java`);
+
+  assert.ok(message.includes('public void requireContract()'), message);
+  for (const field of ['sku', 'amount', 'currency', 'occurredAt']) {
+    assert.ok(message.includes(`if (${field} == null)`), `falta la comprobación de ${field}`);
+  }
+});
+
+// La diferencia con la guarda gemela de los clientes HTTP, y no es simetría mal hecha:
+// en un listener lanzar manda el mensaje al DESCARTE, y un canal compartido trae
+// mensajes ajenos que hay que descartar sin lanzar. En el constructor saltaría al
+// deserializar —antes del filtro por eventType— y mandaría a la DLQ un mensaje válido.
+test('la guarda del evento entrante NO va en el constructor: eso mandaría al descarte un mensaje ajeno', () => {
+  const { read } = scaffoldExtended();
+  const message = read(`${JAVA}/infrastructure/messaging/subscriptions/SupplierPriceChangedMessage.java`);
+
+  assert.ok(!message.includes('public SupplierPriceChangedMessage {'), message);
+  // Y el método dice cuándo llamarlo, que es la mitad que hace segura a la otra.
+  assert.ok(message.includes('DESPUÉS de filtrar por {@code metadata.eventType}'), message);
+});
+
+// La cuarta frontera. Aquí el dato es NUESTRO: un required nulo es un bug propio, y
+// saltar antes de mandarlo evita estrenarlo contra un tercero — encima en una escritura
+// con reintentos, donde el intento malo se repite tal cual.
+test('la petición saliente comprueba lo que el contrato del proveedor exige', () => {
+  const { read } = scaffoldExtended();
+  const request = read(`${JAVA}/infrastructure/http/RecordWithdrawalRequest.java`);
+
+  assert.ok(request.includes('public RecordWithdrawalRequest {'), request);
+  assert.ok(request.includes("la petición no lleva 'productId'"), request);
+});
+
 test('config de storage: el mapa storage.buckets.* está en los CUATRO perfiles, test incluido', () => {
   const { read } = scaffoldExtended();
 

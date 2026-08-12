@@ -320,6 +320,53 @@ public class ${stubClass} implements ${event.publisherClass} {
 // El listener que lo consume depende del broker: lo escribe el agente
 // (skill keel-spring-<broker>) despachando la operación
 // 'triggers' vía UseCaseMediator.
+/**
+ * Anticorrupción del payload entrante: los campos que el diseño declara `required`
+ * tienen que venir de verdad.
+ *
+ * `@JsonIgnoreProperties(ignoreUnknown = true)` cubre los campos de MÁS. Los que
+ * FALTAN entran como `null` sin que nada chiste, y no todos son inocuos: la marca
+ * temporal que ordena las reentregas —para que un hecho viejo no pise a uno nuevo—
+ * es un campo más de este record, y nula esa garantía se cae en silencio.
+ *
+ * **Va en un método aparte y NO en el constructor compacto**, que es la diferencia
+ * con la guarda gemela de `http-clients.js`, y no es simetría mal hecha: en una
+ * respuesta HTTP lanzar sube y sale como 500, pero aquí una excepción dispara el
+ * `onFailure.retry` del diseño y acaba mandando el mensaje al DESCARTE. Un canal
+ * compartido trae mensajes que no son nuestros —y hay que descartarlos sin lanzar,
+ * como ya avisa el javadoc del contrato—, así que una guarda en el constructor
+ * saltaría al deserializar, antes del filtro por `eventType`, y mandaría a la DLQ un
+ * mensaje ajeno perfectamente válido. Por eso la llamada va DESPUÉS de enrutar, y
+ * por eso `check-idempotency.sh` la exige (familia `payloadContract`): un método que
+ * nadie llama no comprueba nada.
+ */
+function requireContractMethod(sub) {
+  const required = (sub.fields ?? []).filter((field) => field.required);
+  if (required.length === 0) return '';
+
+  const checks = required
+    .map(
+      (field) => `        if (${field.name} == null) {
+            throw new IllegalStateException(
+                    "${sub.name}: el mensaje no trae '${field.name}', que el contrato declara obligatorio");
+        }`
+    )
+    .join('\n');
+
+  return `
+    /**
+     * Contrato de la fuente: los campos que el diseño declara obligatorios tienen que
+     * venir. Llámalo DESPUÉS de filtrar por {@code metadata.eventType} — un mensaje
+     * ajeno del canal compartido se descarta SIN lanzar, y lanzar aquí lo mandaría al
+     * descarte. Un payload que incumple el contrato sí agota sus reintentos y acaba
+     * en el descarte: es lo correcto, no se va a volver válido reintentándolo.
+     */
+    public void requireContract() {
+${checks}
+    }
+`;
+}
+
 function renderSubscriptionMessage(model, sub) {
   const imports = new Set();
   for (const field of sub.fields) {
@@ -348,7 +395,7 @@ function renderSubscriptionMessage(model, sub) {
  * Payload del evento ${sub.name}${sub.source ? ` (fuente: ${sub.source})` : ''}.
 ${contractJavadoc(sub, model)} */
 ${annotations.map((a) => `${a}\n`).join('')}public record ${sub.messageRecord}(${components}) {
-}`;
+${requireContractMethod(sub)}}`;
   return {
     path: javaPath(model, SUBSCRIPTIONS_PKG, sub.messageRecord),
     content: javaFile(subPackage(model, SUBSCRIPTIONS_PKG), [...imports], body)

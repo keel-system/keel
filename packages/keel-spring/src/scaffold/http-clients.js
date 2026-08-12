@@ -679,22 +679,27 @@ function fallbackBody(model, client, call, imports) {
  * Solo se comprueba el nulo, no el vacío: `required` en el cable significa
  * «presente». Si una cadena vacía es inválida para el negocio, eso es una regla del
  * dominio y no del contrato de transporte.
+ *
+ * La MISMA guarda sirve para la petición saliente, con otra lectura: ahí el dato es
+ * NUESTRO, así que un `required` nulo no es un proveedor que incumple sino un bug
+ * propio, y saltar antes de mandarlo evita estrenarlo contra un tercero — encima en
+ * una escritura con reintentos, donde el intento malo se repite.
  */
-function contractGuard(client, call) {
-  const required = (call.responseFields ?? []).filter((field) => field.required);
+function contractGuard(recordType, fields, { subject, what }) {
+  const required = (fields ?? []).filter((field) => field.required);
   if (required.length === 0) return '';
 
   const checks = required
     .map(
       (field) => `        if (${field.name} == null) {
             throw new IllegalStateException(
-                    "${client.id}.${call.name}: la respuesta no trae '${field.name}', que el contrato declara obligatorio");
+                    "${subject}: ${what} '${field.name}', que el contrato declara obligatorio");
         }`
     )
     .join('\n');
 
   return `
-    public ${call.responseType} {
+    public ${recordType} {
 ${checks}
     }
 `;
@@ -712,7 +717,10 @@ function renderResponse(model, client, call) {
  * Respuesta wire de ${client.id}.${call.name} (contrato del sistema externo).${todo}
  */
 public record ${call.responseType}(${components}) {
-${contractGuard(client, call)}}`;
+${contractGuard(call.responseType, call.responseFields, {
+  subject: `${client.id}.${call.name}`,
+  what: 'la respuesta no trae'
+})}}`;
   return {
     path: javaPath(model, HTTP_PKG, call.responseType),
     content: javaFile(subPackage(model, HTTP_PKG), [...imports], body)
@@ -728,7 +736,10 @@ function renderRequest(model, client, call) {
  * Body wire de ${client.id}.${call.name} (contrato del sistema externo).
  */
 public record ${call.requestType}(${components}) {
-}`;
+${contractGuard(call.requestType, call.bodyFields, {
+  subject: `${client.id}.${call.name}`,
+  what: 'la petición no lleva'
+})}}`;
   return {
     path: javaPath(model, HTTP_PKG, call.requestType),
     content: javaFile(subPackage(model, HTTP_PKG), [...imports], body)

@@ -197,12 +197,12 @@ function qualityTitleSuffix(model) {
 /**
  * El gate determinista del tramo que no está garantizado por construcción: build genera
  * los mecanismos de repetición y compensación, y el USO lo escribe el agente de código.
- * Se anuncia aquí porque dos de sus cinco familias —reconciliación y entrega del outbox—
+ * Se anuncia aquí porque dos de sus seis familias —reconciliación y entrega del outbox—
  * no tienen ningún escenario `FL-*` detrás, así que este es su único gate.
  */
 function qualityIdempotencyGate(model) {
   if (!usesIdempotencyCheck(model)) return '';
-  return ' Ese pase incluye `bash infra/check-idempotency.sh`, el gate determinista de la cadena de idempotencia y compensación (`dedupe`, `commandIdempotency`, `compensation`, `reconciliation`, `outboxDelivery`): build genera los mecanismos y el agente de código escribe el uso, que es el único tramo que no está garantizado por construcción. Dos de esas familias —**reconciliación** y **entrega del outbox**— no tienen ningún escenario `FL-*` detrás (un cron no se alcanza desde fuera, y el fallback del dispatcher no lanza), así que este es su único gate: si alguna sale `KO`, relánzalo con sus hallazgos exactos.';
+  return ' Ese pase incluye `bash infra/check-idempotency.sh`, el gate determinista de la cadena de idempotencia y compensación (`dedupe`, `payloadContract`, `commandIdempotency`, `compensation`, `reconciliation`, `outboxDelivery`): build genera los mecanismos y el agente de código escribe el uso, que es el único tramo que no está garantizado por construcción. Dos de esas familias —**reconciliación** y **entrega del outbox**— no tienen ningún escenario `FL-*` detrás (un cron no se alcanza desde fuera, y el fallback del dispatcher no lanza), así que este es su único gate: si alguna sale `KO`, relánzalo con sus hallazgos exactos.';
 }
 
 function qualitySchemaGate(model) {

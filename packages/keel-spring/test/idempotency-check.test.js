@@ -44,11 +44,11 @@ function run(project) {
   }
 }
 
-test('un diseño con las cinco familias genera el script con las cinco', () => {
+test('un diseño con las seis familias genera el script con las seis', () => {
   const project = build('catalog-extended');
   const content = read(project);
 
-  for (const group of ['dedupe', 'commandIdempotency', 'compensation', 'reconciliation', 'outboxDelivery']) {
+  for (const group of ['dedupe', 'payloadContract', 'commandIdempotency', 'compensation', 'reconciliation', 'outboxDelivery']) {
     assert.ok(content.includes(`${group}_ko=0`), `falta la familia ${group}`);
   }
 });
@@ -423,7 +423,9 @@ public class InventoryEventsListener {
 `
   );
   const after = run(project);
-  assert.ok(!/inventory\.events \(/.test(after.out), after.out);
+  // Acotado a SU familia: el mismo listener aparece tambien en payloadContract mientras
+  // no llame a requireContract(), y eso es correcto — es otra comprobacion, no ruido.
+  assert.ok(!/\[dedupe\] inventory\.events \(/.test(after.out), after.out);
 
   // Y no es un cheque de adorno: sin la rama `tryRecord` —la única guarda de la
   // suscripción que no tiene transición detrás— el hallazgo vuelve.
@@ -431,7 +433,7 @@ public class InventoryEventsListener {
     path.join(dir, 'InventoryEventsListener.java'),
     fs.readFileSync(path.join(dir, 'InventoryEventsListener.java'), 'utf8').replace('!guard.tryRecord(eventId)', 'guard.alreadyProcessed(eventId)')
   );
-  assert.match(run(project).out, /inventory\.events \(/);
+  assert.match(run(project).out, /\[dedupe\] inventory\.events \(/);
 });
 
 // Con Kafka la forma correcta es la contraria —cada listener tiene su grupo y recibe el
@@ -515,4 +517,76 @@ test('el javadoc del Message nombra el discriminador implícito y quién compart
   // Descartar con excepción dispara onFailure.retry y acaba mandando al descarte un
   // mensaje válido que era de otra suscripción.
   assert.ok(message.includes('SIN lanzar excepción'), message);
+});
+
+// El contrato del payload ENTRANTE. Es la otra mitad de «no te fíes del broker»:
+// `dedupe` vigila que un mensaje no se procese dos veces, y esto que lo que se procese
+// traiga lo que el diseño prometió. Sin el check, `requireContract()` es un método que
+// nadie llama — y el camino de menor resistencia es no llamarlo.
+test('el gate exige que el listener compruebe el contrato del payload entrante', () => {
+  const content = read(build('catalog-extended'));
+
+  assert.ok(content.includes("'payloadContract'"), content.slice(0, 400));
+  assert.ok(content.includes('\\.requireContract\\s*\\('), 'no exige la llamada');
+
+  // Y dice DÓNDE va la llamada. Es la parte que no puede perderse: lanzar antes de
+  // filtrar por eventType manda al descarte un mensaje ajeno perfectamente válido,
+  // que es justo lo que el javadoc del contrato lleva avisando desde antes.
+  assert.ok(content.includes('DESPUÉS del filtro por eventType'), content);
+});
+
+// Solo se exige lo que existe: un evento sin campos obligatorios no lleva
+// `requireContract()` en su record, así que pedir la llamada sería pedir lo imposible
+// — y un hallazgo imposible de resolver enseña a ignorar el gate entero.
+test('una suscripción sin campos obligatorios no entra en payloadContract', () => {
+  const service = loadService(fixture('catalog-extended'));
+  for (const sub of Object.values(service.layers.messaging.subscriptions ?? {})) {
+    for (const field of Object.values(sub.payload ?? {})) delete field.required;
+  }
+  const workspace = tmpDir('keel-idem-noreq-');
+  const result = scaffoldService({ manifest: service.manifest, layers: service.layers, workspace, force: true });
+  const content = fs.readFileSync(
+    path.join(workspace, result.outDir, 'infra', 'check-idempotency.sh'),
+    'utf8'
+  );
+
+  assert.ok(!content.includes("'payloadContract'"), 'exige un contrato que ningún record comprueba');
+  // El resto del gate sigue en pie: lo que se apaga es una familia, no el script.
+  assert.ok(content.includes("'dedupe'"), content.slice(0, 400));
+});
+
+// El control positivo. Que el gate salga rojo recién generado prueba que mira; que se
+// apague al escribir la llamada prueba que mira lo correcto. Sin esta mitad, un check
+// permanentemente en rojo pasaría por bueno y enseñaría a ignorarlo.
+test('payloadContract se apaga cuando el listener llama a requireContract()', (t) => {
+  const project = build('catalog-extended');
+  const before = run(project);
+  if (before === null) return t.skip('sin bash en el PATH');
+  assert.match(before.out, /\[payloadContract\] SupplierPriceChanged/);
+
+  const dir = path.join(project, 'src/main/java/com/commerce/catalog/infrastructure/messaging/subscriptions');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, 'SupplierPriceChangedListener.java'),
+    `package com.commerce.catalog.infrastructure.messaging.subscriptions;
+
+public class SupplierPriceChangedListener {
+
+    private final IdempotencyGuard guard;
+
+    public void onMessage(String eventType, String eventId, String payload) {
+        if (!"SupplierPriceChanged".equals(eventType)) {
+            return;
+        }
+        SupplierPriceChangedMessage message = parse(payload);
+        message.requireContract();
+        if (!guard.tryRecord(eventId)) {
+            return;
+        }
+        dispatch(message);
+    }
+}
+`
+  );
+  assert.ok(!/\[payloadContract\] SupplierPriceChanged/.test(run(project).out), run(project).out);
 });

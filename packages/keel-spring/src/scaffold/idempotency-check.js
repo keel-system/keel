@@ -51,6 +51,7 @@ export function generate(model) {
 function checksOf(model) {
   return [
     ...dedupeChecks(model),
+    ...payloadContractChecks(model),
     ...insertChecks(model),
     ...commandChecks(model),
     ...compensationChecks(model),
@@ -74,6 +75,73 @@ function checksOf(model) {
  */
 function sharesQueue(model) {
   return model.stack?.broker === 'rabbitmq';
+}
+
+// 1b. Contrato del payload entrante. Es la otra mitad de «no te fíes de lo que llega
+//     por el broker»: `dedupe` vigila que el mensaje no se procese dos veces, y esto
+//     que lo que se procese traiga lo que el diseño prometió.
+//
+//     Existe como check y no como constructor compacto del record por una razón
+//     concreta: en un listener, lanzar manda el mensaje al descarte, y un canal
+//     compartido trae mensajes AJENOS que hay que descartar sin lanzar. Por eso la
+//     guarda es un método (`requireContract()`) que se llama DESPUÉS de enrutar por
+//     `eventType` — y por eso hace falta comprobar que alguien lo llama: un método que
+//     nadie invoca no comprueba nada, y el camino de menor resistencia es no llamarlo.
+function payloadContractChecks(model) {
+  if (!model.layersPresent.messaging) return [];
+  // Solo las que tienen algo que exigir: sin campos `required` el record no lleva
+  // `requireContract()`, y pedir su llamada sería exigir lo imposible.
+  const subscriptions = (model.subscriptions ?? []).filter((sub) =>
+    (sub.fields ?? []).some((field) => field.required)
+  );
+  if (subscriptions.length === 0) return [];
+
+  // Mismo agrupado que `dedupe`, y por lo mismo: con RabbitMQ varias suscripciones
+  // comparten UN listener, así que un check por evento no sería atribuible.
+  if (sharesQueue(model)) {
+    const byDestination = new Map();
+    for (const sub of subscriptions) {
+      const destination = sub.topicDefault;
+      if (!byDestination.has(destination)) byDestination.set(destination, []);
+      byDestination.get(destination).push(sub);
+    }
+    return [...byDestination.entries()].map(([destination, subs]) =>
+      // Una sola suscripción en su cola no es un listener compartido, aunque el broker
+      // sea RabbitMQ: ahí no hay ramas de las que hablar. Mismo reparto que `dedupe`.
+      subs.length > 1 ? sharedContractCheck(destination, subs) : singleContractCheck(subs[0])
+    );
+  }
+
+  return subscriptions.map(singleContractCheck);
+}
+
+function singleContractCheck(sub) {
+  const required = (sub.fields ?? []).filter((field) => field.required).map((field) => field.name);
+  return {
+    group: 'payloadContract',
+    subject: sub.name,
+    class: sub.listenerClass,
+    require: ['\\.requireContract\\s*\\('],
+    forbid: [],
+    why:
+      `'${sub.name}' declara campos obligatorios (${required.join(', ')}): el payload los trae o el mensaje incumple ` +
+      `el contrato. La llamada va DESPUÉS del filtro por eventType — lanzar antes mandaría al descarte un mensaje ajeno`
+  };
+}
+
+function sharedContractCheck(destination, subs) {
+  return {
+    group: 'payloadContract',
+    subject: `${destination} (${subs.map((sub) => sub.name).join(', ')})`,
+    class: subs[0].listenerClass,
+    locate: subs.map((sub) => sub.messageRecord).join('|'),
+    require: ['\\.requireContract\\s*\\('],
+    forbid: [],
+    why:
+      `el listener de '${destination}' tiene que llamar a requireContract() del payload DESPUÉS de enrutar por eventType, ` +
+      `para ${subs.map((sub) => sub.name).join(', ')}. Lo que este check NO puede distinguir es si lo llama en TODAS las ` +
+      `ramas o solo en una: ve la llamada, no a cuántos eventos cubre`
+  };
 }
 
 function dedupeChecks(model) {
