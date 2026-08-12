@@ -461,6 +461,23 @@ function contractJavadoc(sub, model) {
     lines.push(
       `Compite con ${sub.triggerRaces.join(', ')}: sacan la entidad del mismo estado. Si al despachar la transición se rechaza porque otro llegó antes, es la carrera resuelta y NO un fallo — confirma el mensaje y no lo reintentes.`
     );
+    // Cuál es «se rechaza» no es evidente: el perdedor de una carrera SECUENCIAL topa con
+    // el guard del agregado, y el de una SIMULTÁNEA con el bloqueo optimista al hacer
+    // commit. Son la misma carrera con dos desenlaces, así que las dos van en el mismo
+    // catch. Se nombra la base de Spring (OptimisticLockingFailureException) y no la de
+    // JPA: cubre también la documental, y un catch por motor es una divergencia que se
+    // paga con el mensaje válido en la DLQ.
+    lines.push(
+      `Se rechaza de DOS formas y las dos son esta carrera: InvalidStateTransitionException (otro camino ya movió el estado) y OptimisticLockingFailureException (llegasteis a la vez y perdió el commit) — captúralas juntas, la segunda con la base de org.springframework.dao, no con la de JPA ni la de Mongo.`
+    );
+    if (sub.triggerHasDomainGuard) {
+      // Sin esto, la rama se escribe con un `return` seco y cada reentrega vuelve a cruzar
+      // el dominio entero para lanzar y capturar la misma excepción. El mensaje SÍ quedó
+      // atendido: lo atendió el otro camino.
+      lines.push(
+        `Esa rama termina igualmente en IdempotencyGuard.record(...): el mensaje quedó atendido —por el otro camino— y sin registrarlo cada reentrega vuelve a atravesar el dominio para acabar en el mismo catch.`
+      );
+    }
   }
   // La capa dependencies puede etiquetar esta suscripción como compensación de una
   // dependencia: no cambia el código, pero sí por qué existe.

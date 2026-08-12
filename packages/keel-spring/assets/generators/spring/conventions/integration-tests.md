@@ -402,6 +402,20 @@ Toda afirmación del `Then` se comprueba, por orden de preferencia:
    la invocación concreta del motor elegido (credenciales y URI incluidas), copiada de la que
    usa `infra/validate-infra.sh`. Sigue siendo el penúltimo recurso: si el servicio expone el
    estado por su API, se comprueba por ahí, que es lo que hace un cliente.
+
+   **El nombre de la tabla no se adivina.** Es el error que más ciclos de arbitraje ha
+   gastado en las corridas, y siempre con el mismo desenlace: un `culprit: test` por
+   `UPDATE reservation …` contra una tabla que se llama `reservations`. La regla es
+   mecánica y no exige leer `src/main/java`: **el nombre de la entidad, pluralizado y en
+   `snake_case`** (`Reservation` → `reservations`, `StockCount` → `stock_counts`), con las
+   columnas en `snake_case` del campo (`reserveStockAwaitingSince` →
+   `reserve_stock_awaiting_since`); en el modelo documental la colección sale de la misma
+   regla. **Las tablas del propio mecanismo son la excepción y van en singular**, porque no
+   son entidades del diseño: `processed_event`, `idempotency_record`, `outbox_event`.
+   Cuando exista, el DDL exportado en `build/schema/baseline.sql` lo confirma sin salir de
+   la caja negra — pero en la fase 1 todavía no existe, así que la regla es la fuente. Un
+   `db(...)` que falla por «relation does not exist» no es un defecto del servidor y no
+   debe escribirse como si lo fuera.
 5. Por `devtools("cli", "arg", …)` en crudo, solo para lo que ninguna de las vías anteriores
    alcanza. Los argumentos van como **lista**, nunca como una cadena concatenada: es un
    `<runtime> exec` directo, sin shell. Si hace falta un pipe o una redirección, la variante

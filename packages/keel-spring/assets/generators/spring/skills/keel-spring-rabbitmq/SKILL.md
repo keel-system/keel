@@ -108,14 +108,54 @@ public class RabbitOutboxDispatcher implements OutboxDispatcher {
         MessageProperties props = new MessageProperties();
         props.setContentType(MessageProperties.CONTENT_TYPE_JSON);
         props.setType(eventType);
+        // La CorrelationData no es decorativa: es lo que convierte el confirm asíncrono
+        // en algo que este método puede esperar, y lo que trae de vuelta el mensaje si
+        // ningún binding lo recogió.
+        CorrelationData confirmation = new CorrelationData(eventType + ":" + routingKey);
         rabbitTemplate.send(destination, routingKey,
-                MessageBuilder.withBody(payload.getBytes(StandardCharsets.UTF_8)).andProperties(props).build());
+                MessageBuilder.withBody(payload.getBytes(StandardCharsets.UTF_8)).andProperties(props).build(),
+                confirmation);
+        try {
+            CorrelationData.Confirm confirm = confirmation.getFuture().get(5, TimeUnit.SECONDS);
+            if (confirm == null || !confirm.isAck()) {
+                throw new AmqpException("El broker no confirmó la entrega en " + destination
+                        + " (" + routingKey + "): " + (confirm == null ? "sin respuesta" : confirm.getReason()));
+            }
+            // Un ack dice «lo recibí», no «lo entregué a alguien». Un exchange topic
+            // descarta sin destinatario y confirma igual: el returned es lo único que
+            // distingue las dos cosas, y llega antes que el confirm.
+            if (confirmation.getReturned() != null) {
+                throw new AmqpException("Publicado en " + destination + " sin binding para "
+                        + routingKey + ": el mensaje volvió sin entregar");
+            }
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new AmqpException("Interrumpido esperando la confirmación de " + routingKey, interrupted);
+        } catch (ExecutionException | TimeoutException notConfirmed) {
+            throw new AmqpException("Sin confirmación del broker para " + routingKey, notConfirmed);
+        }
     }
 }
 ```
 
+**Esperar el confirm no es opcional aquí, y es la diferencia con los otros dos brokers.**
+`send(...)` vuelve en cuanto el mensaje sale al socket; los confirms de RabbitMQ son
+**asíncronos**, así que sin `CorrelationData` y sin esperar el future nadie los mira: el relay
+marca la fila como publicada por el mero hecho de no haber petado, y un `nack` del broker o una
+routing key sin binding se pierden con el outbox en verde. Kafka tiene esa garantía por el
+`.join()` del `send`, y SNS por ser síncrono; RabbitMQ es el único donde hay que pedirla.
+
+Requiere los tres ajustes de `parameters/<perfil>/rabbitmq.yaml` que documenta
+`references/configuration.md` —`publisher-confirm-type: correlated`, `publisher-returns: true` y
+`template.mandatory: true`—: **sin `mandatory` no hay `getReturned()`**, y el caso «publicado en un
+exchange que no tiene a quién dárselo» se cuela como éxito. Los callbacks globales
+(`setConfirmCallback`/`setReturnsCallback`) siguen valiendo para **observar**, no para decidir:
+loguean después de que este método ya haya vuelto.
+
 Debe **lanzar** si la entrega no se confirma: el relay cuenta el intento y reintenta en la pasada
-siguiente. Tragarse la excepción marcaría como publicado algo que nunca salió.
+siguiente. Tragarse la excepción marcaría como publicado algo que nunca salió. El modo de fallo que
+esto sí introduce —publicar dos veces cuando el confirm llega tarde— es el que el diseño ya tolera:
+la entrega es at-least-once y el consumidor deduplica.
 
 **`best-effort`** — implementa cada `<Evento>Publisher` en `infrastructure/messaging` (elimina su
 stub: dos beans del puerto rompen la inyección) envolviendo con

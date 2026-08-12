@@ -100,6 +100,9 @@ están generadas; el listener solo las usa, en este orden:
    las dos formas no son intercambiables**: `alreadyProcessed(...)` aquí y
    `record(...)` después de despachar bien si la operación de `triggers` declara
    `transitions`; `tryRecord(...)` aquí si no las declara.
+   Si esa clave llega **nula o vacía**, no hay nada con que deduplicar: registra un
+   `warn` que lo diga y descarta, en vez de llamar al guard con un id nulo — un
+   registro con clave vacía deduplica contra todos los demás mensajes sin clave.
 3. Despacho de la operación `triggers` vía `UseCaseMediator`.
 
 Por qué el orden importa: el guard escribe en su **propia** transacción, así que
@@ -111,6 +114,55 @@ mensaje marcado y **perdido**. Poner el segundo donde tocaba el primero conviert
 un corte de red en trabajo que nadie hizo, y el gate `dedupe` del pase de calidad
 lo marca `KO`.
 
+### La carrera ya resuelta no es un fallo
+
+Cuando otro camino —otra suscripción, un barrido, una operación de la API— puede sacar a
+la entidad del mismo estado, tu despacho puede fallar sin que nada esté mal. Se rechaza de
+**dos** formas, y las dos son la misma carrera:
+
+- **`InvalidStateTransitionException`** — el otro llegó antes y el guard del agregado
+  rechaza la transición (carrera secuencial).
+- **`OptimisticLockingFailureException`** — llegasteis a la vez y perdiste el commit
+  (carrera simultánea, la que provoca la doble entrega del broker).
+
+Van en el **mismo `catch`**, y la segunda se captura por la base de
+`org.springframework.dao`: no por la `ObjectOptimisticLockingFailureException` de JPA ni
+por la del driver documental. Es la misma carrera con el mismo desenlace en los dos
+motores, y capturar solo la de tu motor —o solo la primera de las dos— manda a la DLQ un
+mensaje perfectamente válido en cuanto dos entregas coinciden en el tiempo.
+
+En esa rama **no lanzas**: confirmas el mensaje (borrado de la cola), lo registras a
+`debug` diciendo por qué, y —con el orden `record`— llamas a `record(...)` **igualmente**.
+El mensaje quedó atendido; lo atendió el otro camino. Sin ese registro, cada reentrega
+vuelve a atravesar el dominio entero para terminar en este mismo `catch`.
+
+No es tragarse un error: aquí se sabe *por qué* no se reintenta —el efecto ya está
+aplicado— y se dice. `build` lo anota en el javadoc del `<Evento>Message` cuando ve la
+carrera; que no lo anote no significa que no exista, significa que el diseño no la declara.
+
+## Poison pills: un cuerpo tuyo que no parsea
+
+El listener recibe el cuerpo y lo parsea **dentro** del método, así que ningún
+deserializador del contenedor ve el problema: el `try/catch` alrededor del `readValue` es
+tuyo, y ahí se decide si el descarte que declara el diseño significa algo.
+
+**Un cuerpo que es tuyo y no parsea se LANZA. Nunca `log.error(...); return;`.** Tragarlo
+borra el mensaje de la cola y lo hace desaparecer: la DLQ que cuelga de la `RedrivePolicy`
+no recibe nada, la aserción de «acabó en el descarte» mira una cola vacía y el único rastro
+es una línea de log que nadie está mirando. Lanzando, el mensaje vuelve a hacerse visible
+al vencer el visibility timeout y el `maxReceiveCount` lo acaba llevando a la DLQ, que es
+lo que el diseño declaró.
+
+Aquí no hay «no reintentable»: SQS cuenta recepciones, no tipos de excepción. Un cuerpo
+roto va a consumir sus `maxReceiveCount` intentos antes de la DLQ y **eso es correcto** —
+es el precio de que el descarte lo arbitre el broker y no la aplicación. No lo atajes
+borrando el mensaje a mano.
+
+**No lo confundas con descartar lo ajeno.** Con fan-out y `FilterPolicy` por `eventType`,
+en tu cola normalmente no hay nada ajeno; si aun así compruebas el tipo, ese caso —mensaje
+que no es tuyo— sí es un `return` limpio. La regla corta: *no es mío* → `return` sin
+excepción; *es mío y está roto* → excepción.
+
 ## Checklist
 
 - [ ] Topología creada por script reproducible en `infra/` (raw delivery, redrive, DLQ).
@@ -118,6 +170,8 @@ lo marca `KO`.
 - [ ] Puerto de envío implementado según `reliability` (`OutboxDispatcher` u `<Evento>Publisher`), con su stub eliminado y el fallo propagado (outbox) o registrado (best-effort).
 - [ ] `onFailure` → `maxReceiveCount` + DLQ según el diseño.
 - [ ] Visibility timeout ≥ 6× el tiempo de proceso del handler.
+- [ ] Un cuerpo propio que no parsea **lanza** (el `maxReceiveCount` lo lleva a la DLQ), nunca `log.error` + `return`.
+- [ ] La rama «carrera resuelta» captura `InvalidStateTransitionException` **y** `OptimisticLockingFailureException` (la base de `org.springframework.dao`), y con el orden `record` llama a `record(...)` igualmente.
 - [ ] Listener envuelto en `CorrelationContext.runWith(...)` y deduplicado con el `IdempotencyGuard` en el orden que prescribe el javadoc del `<Evento>Message` (sin mecanismo propio).
 
 ## Si la suscripción alimenta una proyección

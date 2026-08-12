@@ -63,9 +63,17 @@ rabbitTemplate.setReturnsCallback(returned ->
 ```
 
 Un NACK o un returned en modo `best-effort` es pérdida de evento: al menos
-déjalo en el log como error. En modo `outbox` no lo tragues: deja propagar la
-excepción desde `OutboxDispatcher` para que el relay cuente el intento y
-reintente — esa es la garantía real, no más reintentos en memoria.
+déjalo en el log como error, que es todo lo que se puede hacer cuando el envío ya
+volvió.
+
+**En modo `outbox` estos callbacks NO bastan, y confundirlo es el error caro.**
+Son asíncronos: se ejecutan cuando el dispatcher ya devolvió el control y el relay
+ya marcó la fila como publicada, así que loguean una pérdida que nadie va a
+reparar. La garantía se obtiene **esperando** el confirm con la `CorrelationData`
+de esa publicación —el snippet canónico está en `SKILL.md § Envío al broker`— y
+lanzando desde `dispatch(...)`, que es lo único que hace al relay contar el intento
+y reintentar en la pasada siguiente. Con la espera puesta, los callbacks quedan
+para **observar**, no para decidir.
 
 Los *returns* **solo llegan si el mensaje se publica como obligatorio**, así que
 enciéndelo: `template.setMandatory(true)` (o
@@ -103,6 +111,18 @@ entrada de tu cola, no el tamaño de la lista.
 - Errores de **conversión** (JSON malformado, tipo desconocido) son fatales por
   defecto (`ConditionalRejectingErrorHandler`): no se reintentan. No los
   captures para «reintentar»: un mensaje imparseable no mejora al repetirlo.
+- Ese default solo actúa cuando convierte **el contenedor**. Si tu listener recibe
+  `Message` o `String` y parsea **dentro** del método —que es lo normal cuando una
+  cola compartida obliga a enrutar por tipo—, el `try/catch` alrededor del
+  `readValue` es tuyo, y ahí se decide si el descarte que declara el diseño
+  significa algo. **Un cuerpo que es tuyo y no parsea se LANZA:
+  `AmqpRejectAndDontRequeueException`, que lo manda al DLX en el primer intento.
+  Nunca `log.error(...); return;`** — eso hace ack del mensaje y lo borra: la `-dlq`
+  que build declaró no recibe nada, la aserción de «acabó en el descarte» mira una
+  cola vacía y el único rastro es una línea de log que nadie está mirando.
+  **No lo confundas con enrutar por tipo en una cola compartida**: ahí el mensaje
+  parsea bien y va a otra rama del `switch`, no al descarte. La regla corta: *no es
+  de esta rama* → sigue; *es mío y está roto* → `AmqpRejectAndDontRequeueException`.
 - **Correlación e idempotencia**: RabbitMQ garantiza at-least-once (un `nack`
   con requeue o una reconexión reentregan). Ambas piezas ya están generadas; el
   listener solo las usa, en este orden:
@@ -118,7 +138,10 @@ entrada de tu cola, no el tamaño de la lista.
      `<Evento>Message` que generó build, y las dos formas no son
      intercambiables**: `alreadyProcessed(...)` aquí y `record(...)` después de
      despachar bien si la operación de `triggers` declara `transitions`;
-     `tryRecord(...)` aquí si no las declara.
+     `tryRecord(...)` aquí si no las declara. Si esa clave llega **nula o vacía**,
+     no hay nada con que deduplicar: registra un `warn` que lo diga y descarta, en
+     vez de llamar al guard con un id nulo — un registro con clave vacía deduplica
+     contra todos los demás mensajes sin clave.
   3. Despacho de la operación `triggers` vía `UseCaseMediator`.
 
   Por qué el orden importa: el guard escribe en su **propia** transacción, así
@@ -130,12 +153,40 @@ entrada de tu cola, no el tamaño de la lista.
   primero convierte un corte de red en trabajo que nadie hizo, y el gate `dedupe`
   del pase de calidad lo marca `KO`.
 
+### La carrera ya resuelta no es un fallo
+
+Cuando otro camino —otra suscripción, un barrido, una operación de la API— puede sacar a
+la entidad del mismo estado, tu despacho puede fallar sin que nada esté mal. Se rechaza de
+**dos** formas, y las dos son la misma carrera:
+
+- **`InvalidStateTransitionException`** — el otro llegó antes y el guard del agregado
+  rechaza la transición (carrera secuencial).
+- **`OptimisticLockingFailureException`** — llegasteis a la vez y perdiste el commit
+  (carrera simultánea, la que provoca la doble entrega del broker).
+
+Van en el **mismo `catch`**, y la segunda se captura por la base de
+`org.springframework.dao`: no por la `ObjectOptimisticLockingFailureException` de JPA ni
+por la del driver documental. Es la misma carrera con el mismo desenlace en los dos
+motores, y capturar solo la de tu motor —o solo la primera de las dos— manda al DLX un
+mensaje perfectamente válido en cuanto dos entregas coinciden en el tiempo.
+
+En esa rama **no lanzas**: haces ack, lo registras a `debug` diciendo por qué, y —con el
+orden `record`— llamas a `record(...)` **igualmente**. El mensaje quedó atendido; lo
+atendió el otro camino. Sin ese registro, cada reentrega vuelve a atravesar el dominio
+entero para terminar en este mismo `catch`.
+
+No es tragarse un error: aquí se sabe *por qué* no se reintenta —el efecto ya está
+aplicado— y se dice. `build` lo anota en el javadoc del `<Evento>Message` cuando ve la
+carrera; que no lo anote no significa que no exista, significa que el diseño no la declara.
+
 ## Checklist
 
 - [ ] Topología completa en `Declarables` (nada declarado a mano).
 - [ ] Stub del publisher eliminado (dos beans del puerto rompen la inyección).
 - [ ] Puerto de envío implementado según `reliability` (`OutboxDispatcher` u `<Evento>Publisher`), con su stub eliminado y el fallo propagado (outbox) o registrado (best-effort).
+- [ ] Con `outbox`, el `dispatch(...)` **espera** el confirm (`CorrelationData` + future) y lanza si hay nack, timeout o returned. Los callbacks globales no cuentan: son asíncronos.
 - [ ] `onFailure` implementado con reintentos acotados y DLQ si `deadLetter: true`.
+- [ ] Un cuerpo propio que no parsea lanza `AmqpRejectAndDontRequeueException`, nunca `log.error` + `return`.
 - [ ] Listener envuelto en `CorrelationContext.runWith(...)` y deduplicado con el `IdempotencyGuard` en el orden que prescribe el javadoc del `<Evento>Message` (sin mecanismo propio).
 
 ## Si la suscripción alimenta una proyección
