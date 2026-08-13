@@ -248,17 +248,43 @@ formateo de `Instant`/`LocalDate` con `DateTimeFormatter` (que también acepta `
 
 ### Un filtro devuelve una lista, no un elemento
 
-La segunda causa de `ClassCastException`, y la que más se propaga porque se copia entre clases.
 Una expresión de filtro `[?(...)]` devuelve **siempre** un `JSONArray`, aunque case un solo
-elemento, y encadenarle un índice final **no** lo desenvuelve con la configuración por defecto de
-la librería:
+elemento, y encadenarle un índice final **no** lo desenvuelve. Es la trampa más cara de esta
+página porque tiene dos caras y solo una avisa:
 
 ```java
-// MAL: el filtro ya devolvió una lista; el [0] no la desenvuelve y el destino
-//      es escalar → ClassCastException (net.minidev.json.JSONArray → String).
+// MAL, y AVISA: el destino es escalar → ClassCastException
+//      (net.minidev.json.JSONArray → String).
 String url = jsonPath(response, "$.images[?(@.id=='%s')].url[0]".formatted(imageId));
 
-// BIEN: la lista se lee como lista, se comprueba su tamaño y se indexa en Java.
+// MAL, y NO AVISA: el destino es Object, así que no hay cast que falle. Jayway
+//      devuelve una JSONArray VACÍA —nunca null, nunca PathNotFoundException—
+//      valga lo que valga el campo, así que esto es constantemente `true`.
+Object value = jsonPath(response, "$.items[?(@.id=='%s')].awaitingSince[0]".formatted(id));
+return value != null;
+```
+
+La segunda es la que hay que temer. Montada dentro de un `await(...)`, produce un **timeout que
+parece latencia del servidor** cuando el servidor ya había convergido — y manda a buscar el
+defecto donde no está. En la corrida del 13/08/2026 costó un ciclo de arbitraje completo y
+contaminó el diagnóstico de un defecto real que coincidía en el mismo lote.
+
+Por eso `jsonPath(...)` **rechaza** un path que indexe después de un filtro: lanza
+`IllegalArgumentException` explicando el porqué, en vez de dejar pasar una comprobación que no
+comprueba nada. Para localizar un elemento por uno de sus campos está `itemById(...)`, que filtra
+y toma el primero **en Java**:
+
+```java
+// BIEN: sin JsonPath después del filtro. Un campo nulo da vacío igual que un
+//       elemento ausente, que es justo lo que la pregunta quiere decir.
+boolean awaiting = itemById(response, "$.items", "id", productId)
+        .map(item -> item.get("awaitingSince"))
+        .isPresent();
+```
+
+Si de verdad hace falta la lista, se lee como lista y se indexa en Java, con su tamaño afirmado:
+
+```java
 List<String> urls = jsonPath(response, "$.images[?(@.id=='%s')].url".formatted(imageId));
 assertThat(urls).hasSize(1);
 String url = urls.get(0);

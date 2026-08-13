@@ -107,3 +107,64 @@ test('los marcadores del ejemplo no llevan <…>: doclint los leería como etiqu
     assert.ok(!/<[a-z_]+>/.test(example.replace(/<\/?(pre|b)>/g, '')), `${database}: marcador con < > en el ejemplo`);
   }
 });
+
+// ─── La guarda de JsonPath ───────────────────────────────────────────────────
+//
+// `$.items[?(@.id=='x')].campo[0]` no falla: MIENTE. Un filtro hace el path indefinido y
+// Jayway devuelve siempre una lista (vacía), nunca null y nunca PathNotFoundException, así
+// que un `valor != null` montado encima es constantemente cierto. Dentro de un `await(...)`
+// eso produce un timeout que parece latencia del servidor cuando el servidor ya había
+// convergido — y manda a buscar el defecto donde no está. Costó un ciclo de arbitraje en la
+// corrida del 13/08/2026 y contaminó el diagnóstico de un defecto real simultáneo.
+//
+// La convención ya avisaba de la variante que SÍ falla (destino escalar →
+// ClassCastException). Lo que faltaba era cerrar la variante silenciosa, y eso no lo hace un
+// documento: lo hace el arnés rechazando el path.
+
+test('el arnés rechaza indexar después de un filtro, que es el fallo que no avisa', () => {
+  const harness = harnessFor('postgresql');
+
+  assert.match(harness, /private static void rejectIndexAfterFilter\(String path\)/);
+  // La guarda está EN jsonPath, que es por donde pasa todo path crudo: ponerla solo en el
+  // helper nuevo dejaría intacto el camino por el que el defecto entró.
+  const method = harness.slice(harness.indexOf('protected <T> T jsonPath('));
+  assert.ok(method.slice(0, 200).includes('rejectIndexAfterFilter(path)'), method.slice(0, 200));
+  // Y el mensaje dice a dónde ir: una prohibición sin alternativa se sortea.
+  assert.match(harness, /Usa itemById\(\.\.\.\)/);
+});
+
+test('el arnés ofrece la alternativa: filtrar por id y quedarse con el primero en Java', () => {
+  const harness = harnessFor('postgresql');
+
+  assert.match(harness, /protected Optional<Map<String, Object>> itemById\(Response response, String collectionPath, String idField, Object idValue\)/);
+  // El índice se hace en Java (`findFirst`), no en el path.
+  const helper = harness.slice(harness.indexOf('protected Optional<Map<String, Object>> itemById'));
+  assert.ok(helper.slice(0, 500).includes('findFirst()'), helper.slice(0, 500));
+  // El collectionPath es un parámetro y no una constante: un listado paginado lo trae bajo
+  // $.items y una salida de lista es el array raíz.
+  assert.match(harness, /\$\.items/);
+});
+
+test('la guarda distingue un índice tras filtro de un índice normal', () => {
+  // El patrón solo se aplica a lo que va DESPUÉS del filtro: `$.images[0].url` es legítimo
+  // y tiene que seguir funcionando. Se comprueba sobre el regex renderizado, que es el que
+  // corre en el proyecto.
+  const harness = harnessFor('postgresql');
+  const line = harness.split('\n').find((l) => l.includes('INDEX_AFTER_FILTER = Pattern.compile('));
+  assert.ok(line, harness);
+  // El literal Java `"\\[\\s*\\d+\\s*\\]"` describe el regex `\[\s*\d+\s*\]`: se
+  // desescapan las barras para ejecutar aquí exactamente el mismo patrón.
+  const javaLiteral = line.slice(line.indexOf('"') + 1, line.lastIndexOf('"'));
+  const pattern = new RegExp(javaLiteral.split('\\\\').join('\\'));
+
+  const guard = (path) => {
+    const filter = path.indexOf('?(');
+    return filter >= 0 && pattern.test(path.slice(filter));
+  };
+
+  assert.ok(guard("$.items[?(@.id=='x')].awaitingSince[0]"), 'no caza el caso que costó el ciclo');
+  assert.ok(guard("$.images[?(@.id=='x')].url[ 0 ]"));
+  assert.ok(!guard('$.images[0].url'), 'un índice sin filtro delante es legítimo');
+  assert.ok(!guard("$.items[?(@.id=='x')].awaitingSince"), 'el filtro sin índice es la forma correcta');
+  assert.ok(!guard('$.id'));
+});

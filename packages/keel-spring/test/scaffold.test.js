@@ -635,6 +635,43 @@ test('puntuación de escenarios: el veredicto de Gradle no se ignora', () => {
   assert.ok(script.includes('NO son escenarios'), script);
 });
 
+// Un lock de una corrida anterior mata el humo del arnés exactamente donde lo mataría un
+// arnés roto, y leído como `exit 2` manda a revisar un andamiaje que está bien y a relanzar
+// a un agente que no tiene nada que arreglar. En la corrida del 13/08/2026 costó una corrida
+// completa de puntuación más un diagnóstico manual de PIDs.
+test('puntuación de escenarios: el entorno bloqueado no se disfraza de arnés roto', () => {
+  const workspace = makeWorkspace();
+  scaffoldService({ ...loadFixture(), workspace });
+
+  const script = read(workspace, 'infra/score-scenarios.sh');
+
+  // Código propio: el orquestador tiene que poder decidir SIN leer la prosa.
+  assert.ok(script.includes('exit 3'), script);
+  assert.ok(script.includes('ENTORNO:'), script);
+
+  // El primer paso es también el primer detector: si el directorio sigue ahí tras el
+  // `rm`, es un lock. Y se comprueba ANTES de acusar al arnés.
+  assert.ok(/rm -rf "\$RESULTS" 2>\/dev\/null/.test(script), script);
+  const detect = script.indexOf('if [ -d "$RESULTS" ]');
+  const harnessKo = script.indexOf('HARNESS: KO — la suite NO se ejecutó');
+  assert.ok(detect > 0 && detect < harnessKo, 'el lock se descarta después de acusar al arnés');
+
+  // Y el resto de pasos que Gradle puede perder por el mismo motivo miran el log antes
+  // de dar el veredicto: el código de salida de Gradle es 1 para esto igual que para
+  // una compilación rota, así que el discriminante está en el texto.
+  assert.ok(script.includes('blocked_by_lock'), script);
+  assert.ok(script.includes('Timeout waiting to lock'), script);
+  assert.ok(script.includes('being used by another process'), script);
+  for (const paso of ['el humo del arnés', 'la suite']) {
+    assert.ok(script.includes(`report_locked "${paso}"`), `sin descarte de lock en: ${paso}`);
+  }
+
+  // Una salida que no dice qué hacer obliga al mismo diagnóstico manual que costó el
+  // ciclo: el remedio va en el propio mensaje.
+  assert.ok(script.includes('./gradlew --stop'), script);
+  assert.ok(script.includes('jps -l'), script);
+});
+
 test('constraints del diseño en una query: Bean Validation en el @RequestParam y en el record', () => {
   const workspace = makeWorkspace();
   const { manifest, layers } = loadFixture();

@@ -66,6 +66,7 @@ flowchart TB
 
     SCORE["⚙ Fase 2a — bash infra/score-scenarios.sh<br/>humo del arnés y, en verde, ./gradlew integrationTest<br/>matriz FL-* → OK | FALLO | NO_EJERCITADO desde el XML<br/>(determinista: sin agente, salida de Gradle al log)"]
     SCORE --> GATE2A{exit code}
+    GATE2A -->|"3 · entorno bloqueado: ningún agente<br/>que relanzar — parar los Gradle vivos<br/>y volver a lanzar el script"| SCORE
     GATE2A -->|"2 · humo KO → la suite no corrió:<br/>relanzar tests si la causa está en src/integrationTest/;<br/>si es de build (build.gradle, infra/), la parchea<br/>el orquestador (no consume cupo)"| TESTS
     GATE2A -->|"0 · matriz al 100%<br/>NO se invoca árbitro"| QUALITY
     GATE2A -->|"1 · hay FALLO o NO_EJERCITADO"| VALIDATE
@@ -117,6 +118,26 @@ servidor en production y la tabla de parámetros obligatorios, derivados de
 `src/main/resources/parameters/production/*.yaml` (todo `${VAR}` sin default) y del stack, más
 lo que los agentes cablearon al completar los adaptadores. El scaffolding deja un baseline
 determinista de esa sección; el orquestador la reconcilia con el código final.
+
+## Un `exit 3` no es de nadie: es el entorno
+
+Con `exit 3` el script no llegó a ejecutar nada porque **otro proceso tiene bloqueado el
+directorio**. Casi siempre es una corrida anterior que se interrumpió —un timeout de la
+herramienta que la lanzó— y dejó vivos su proceso de Gradle y su Test Executor, que siguen
+sosteniendo el lock sobre `build/`.
+
+No hay agente que relanzar y no consume cupo: se paran los procesos (`./gradlew --stop`, y
+`jps -l | grep -i gradle` para los workers, que no siempre caen con eso) y se vuelve a lanzar
+el script tal cual.
+
+Tiene código propio porque su síntoma es indistinguible del `exit 2` si nadie lo separa: el
+humo del arnés muere igual, y leído como «arnés roto» manda a revisar un andamiaje que está
+perfectamente bien y a relanzar a un agente que no tiene nada que arreglar. En la corrida del
+13/08/2026 costó una corrida completa de puntuación más un diagnóstico manual de PIDs.
+
+**Y afecta a cómo lanzas el script**: es la razón por la que la fase 2a no se lanza en segundo
+plano con un timeout corto. Si tu herramienta lo mata a mitad, el proceso de Gradle sobrevive
+al `killed` que tú ves, y el siguiente intento se encuentra el lock.
 
 ## Un exit 2 no siempre es del agente de pruebas
 
@@ -197,7 +218,7 @@ candado y la regla escrita en cada agente, el porqué.
 | `identity` | `keel-spring-infra` | Orquestador, `keel-spring-validate` | Que el aprovisionamiento corrió y que el token se pidió **de verdad**. Sin `tokenChecked: OK`, todo escenario autenticado va a fallar en bloque y no por su contrato. |
 | `classes` / `uncovered` | `keel-spring-tests` | Orquestador, resumen final | Qué flujos quedaron traducidos y qué escenarios **no** se ejercitan (y por qué): dejan de darse por probados en silencio. |
 | `assumptions` | `keel-spring-tests` | `keel-spring-validate` | Apuestas sobre infraestructura que la fase 1 no puede verificar (nombre de cola, cliente M2M, secreto, bucket). La parte mecánica la cubre el humo del arnés que el script ejecuta antes de la suite; lo que quede sin cubrir y explique una tanda de fallos es un bloqueo `systemic`, no una colección de fallos de negocio. |
-| matriz + `exit code` | ⚙ `infra/score-scenarios.sh` | Orquestador | La matriz `FL-* → OK \| FALLO \| NO_EJERCITADO`, determinista desde el XML. `0` → fase 3 sin invocar árbitro · `1` → invocar `keel-spring-validate` con los fallos · `2` → humo del arnés roto, la suite **no** se ejecutó: el ciclo es de arnés, no de negocio, y **antes de relanzar hay que mirar dónde está el defecto** — ver «Un exit 2 no siempre es del agente de pruebas». |
+| matriz + `exit code` | ⚙ `infra/score-scenarios.sh` | Orquestador | La matriz `FL-* → OK \| FALLO \| NO_EJERCITADO`, determinista desde el XML. `0` → fase 3 sin invocar árbitro · `1` → invocar `keel-spring-validate` con los fallos · `2` → humo del arnés roto, la suite **no** se ejecutó: el ciclo es de arnés, no de negocio, y **antes de relanzar hay que mirar dónde está el defecto** — ver «Un exit 2 no siempre es del agente de pruebas» · `3` → entorno bloqueado (un Gradle de una corrida anterior sigue vivo): no se relanza a nadie, se paran los procesos y se repite el script — ver «Un `exit 3` no es de nadie». |
 | `failures[].culprit` | `keel-spring-validate` | Orquestador | A quién relanzar: `code` → `keel-spring-code`; `test` y `harness` → `keel-spring-tests`; `design` → detenerse. |
 | `harnessPatches` | `keel-spring-tests` (relanzado) | Orquestador, `INFORME-GENERACION.md` | Parches al andamiaje generado (`AbstractFlowIT` y compañía). Van al informe de cierre para portarlos al generador: un defecto del arnés que se queda en el proyecto lo vuelve a pagar entero la siguiente generación. |
 | `failures` (escenario, `evidence`, `class`, request, response, esperado) | `keel-spring-validate` | `keel-spring-code` / `keel-spring-tests` (relanzado) | Evidencia **exacta** para el ciclo de fix. `evidence` es la ruta del volcado de `build/keel-failures/`: el relanzado abre el JSON crudo —antes de ejecutar nada, porque una pasada nueva lo sobrescribe—, no el extracto. `class` le dice qué clase re-ejecutar para verificarse. |

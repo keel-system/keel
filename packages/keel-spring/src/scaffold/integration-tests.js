@@ -171,6 +171,7 @@ function replicaJarStep(model) {
   return `  # Jar ejecutable para la segunda réplica (escenarios de clúster).
   echo "Empaquetando el jar (bootJar)..."
   if ! ./gradlew bootJar --console=plain >"$LOG" 2>&1; then
+    blocked_by_lock && report_locked "el empaquetado del jar"
     echo ""
     echo "HARNESS: KO - bootJar falló, la suite NO se ejecutó."
     echo "  log: $LOG"
@@ -198,6 +199,15 @@ function scoreScenariosScript(model) {
 #   0  todos los escenarios en OK
 #   1  hay FALLO o NO_EJERCITADO → hay algo que arbitrar
 #   2  precondición o arnés roto: la suite no se ejecutó, no hay matriz que leer
+#   3  ENTORNO bloqueado: otro proceso sostiene este directorio. No es un defecto de
+#      nadie y no hay agente que relanzar — se resuelve y se reintenta.
+#
+# El 3 existe porque su síntoma se disfraza del 2. Una corrida anterior interrumpida
+# (un timeout de la herramienta que la lanzó) deja vivos el proceso de Gradle y su
+# Test Executor, que siguen sosteniendo un lock sobre build/. El siguiente intento
+# muere al limpiar los resultados, y leído como "HARNESS: KO" manda a revisar un
+# andamiaje que está perfectamente bien —o a relanzar al agente de pruebas, que no
+# tiene nada que arreglar—. Distinguirlo cuesta una comprobación y ahorra el ciclo.
 set -u
 
 RESULTS="build/test-results/integrationTest"
@@ -213,6 +223,28 @@ fi
 
 mkdir -p "$LOG_DIR"
 
+# ¿Lo que tumbó a Gradle fue un lock y no un defecto? Las cuatro formas en que se
+# manifiesta el mismo hecho: el lock propio de Gradle, y el del sistema de archivos
+# en sus dos dialectos (POSIX y Windows). Se mira el LOG y no el código de salida
+# porque Gradle devuelve 1 para esto igual que para una compilación rota.
+blocked_by_lock() {
+  grep -qiE "Timeout waiting to lock|Device or resource busy|being used by another process|Could not delete|Unable to delete" "$LOG" 2>/dev/null
+}
+
+report_locked() {  # $1 = qué paso se quedó bloqueado
+  echo ""
+  echo "ENTORNO: $1 no pudo continuar — otro proceso tiene bloqueado este directorio."
+  echo "  La suite NO se ejecutó, y esto NO es un defecto del arnés ni del código."
+  echo ""
+  echo "  Para resolverlo:"
+  echo "    ./gradlew --stop            # para los daemons de este proyecto"
+  echo "    jps -l | grep -i gradle     # los workers no siempre caen con --stop"
+  echo "    # y termina a mano los que queden antes de reintentar"
+  echo ""
+  echo "  log: $LOG"
+  exit 3
+}
+
 score_only=0
 [ "\${1:-}" = "--score" ] && score_only=1
 # Con --score la suite no se ejecuta aquí, así que no hay veredicto de Gradle que
@@ -220,7 +252,25 @@ score_only=0
 suite_failed=0
 
 if [ "$score_only" -eq 0 ]; then
-  rm -rf "$RESULTS"
+  # Limpiar los resultados es el primer paso Y el primer detector: si el directorio
+  # sigue ahí después del rm, no es un permiso —el script acaba de crear su propio
+  # log al lado— sino un lock, y el único que lo sostiene es un Gradle que no murió.
+  rm -rf "$RESULTS" 2>/dev/null
+  if [ -d "$RESULTS" ]; then
+    echo ""
+    echo "ENTORNO: no se pudo limpiar $RESULTS — otro proceso lo tiene abierto."
+    echo "  La suite NO se ejecutó, y esto NO es un defecto del arnés ni del código:"
+    echo "  casi siempre es una corrida anterior que se interrumpió sin terminar y dejó"
+    echo "  vivos su proceso de Gradle y su Test Executor."
+    echo ""
+    echo "  Para resolverlo:"
+    echo "    ./gradlew --stop            # para los daemons de este proyecto"
+    echo "    jps -l | grep -i gradle     # los workers no siempre caen con --stop"
+    echo "    # y termina a mano los que queden antes de reintentar"
+    echo ""
+    echo "  Cuando no quede ninguno, vuelve a lanzar este script tal cual."
+    exit 3
+  fi
 ${replicaJarStep(model)}  # Humo del arnés primero: son segundos y comprueba la fontanería de la que
   # dependen TODAS las clases de flujo (reset, servidor vivo, credenciales,
   # canales, caché). En rojo no se ejecuta la suite: correrla sobre una
@@ -228,6 +278,9 @@ ${replicaJarStep(model)}  # Humo del arnés primero: son segundos y comprueba la
   # son, y cuesta una pasada entera descubrirlo.
   echo "Humo del arnés (HarnessSmokeIT)…"
   if ! ./gradlew integrationTest --tests '*HarnessSmokeIT' --console=plain >"$LOG" 2>&1; then
+    # El lock se descarta ANTES de acusar al andamiaje: los dos matan el humo del
+    # arnés en el mismo sitio, y solo uno de los dos tiene a quien relanzar.
+    blocked_by_lock && report_locked "el humo del arnés"
     echo ""
     echo "HARNESS: KO — la suite NO se ejecutó."
     echo "  El defecto está en el andamiaje que generó build (AbstractFlowIT,"
@@ -242,6 +295,10 @@ ${replicaJarStep(model)}  # Humo del arnés primero: son segundos y comprueba la
   # agente añadió por su cuenta— no aparecería en ninguna fila y el script diría
   # "100%" sobre una suite roja. Ver el cierre.
   ./gradlew integrationTest --console=plain >>"$LOG" 2>&1 || suite_failed=1
+  # Y si lo que la tumbó a mitad fue el lock, la matriz que saldría de un XML
+  # incompleto sería todo NO_EJERCITADO: un rojo que mandaría a arbitrar un fallo
+  # que no existe.
+  [ "$suite_failed" -eq 1 ] && blocked_by_lock && report_locked "la suite"
 fi
 
 if [ ! -d "$RESULTS" ]; then
@@ -381,8 +438,14 @@ function abstractImports(model) {
     'java.time.Instant',
     'java.util.ArrayList',
     'java.util.List',
+    // `itemById` y la guarda de JsonPath son transversales: toda respuesta de colección
+    // se consulta por un elemento, y el índice tras un filtro no falla en ningún stack —
+    // miente en todos.
+    'java.util.Map',
+    'java.util.Optional',
     'java.util.UUID',
     'java.util.function.BooleanSupplier',
+    'java.util.regex.Pattern',
     // Los helpers de carrera (race/raceOf) son transversales: cualquier diseño puede
     // tener un escenario que fije qué pasa cuando dos peticiones coinciden.
     'java.util.concurrent.Callable',
@@ -854,8 +917,61 @@ ${hasIdempotency(model) ? `
 
     /** Valor no determinista del cuerpo (id generado, marca de tiempo), por JsonPath. */
     protected <T> T jsonPath(Response response, String path) {
+        rejectIndexAfterFilter(path);
         return JsonPath.read(response.body(), path);
     }
+
+    /**
+     * Un elemento de una colección del cuerpo, localizado por el valor de uno de sus
+     * campos. <b>Esta es la vía</b>: filtrar y quedarse con el primero se hace aquí, en
+     * Java, no encadenando un índice al JsonPath.
+     *
+     * <p>Devuelve vacío si no hay ningún elemento que case. Para preguntar por un campo
+     * del elemento —«¿ya se apagó la espera?»— se encadena sobre el {@code Optional}, y
+     * un campo nulo da vacío igual que un elemento ausente, que es justo lo que quiere
+     * decir la pregunta:
+     *
+     * <pre>itemById(response, "$.items", "id", productId)
+     *     .map(item -&gt; item.get("recordWithdrawalAwaitingSince"))
+     *     .isPresent()</pre>
+     *
+     * <p>El {@code collectionPath} es explícito porque no siempre es el mismo: un listado
+     * paginado lo trae bajo {@code $.items} y una salida de lista es el array raíz
+     * ({@code $}).
+     */
+    protected Optional<Map<String, Object>> itemById(Response response, String collectionPath, String idField, Object idValue) {
+        List<Map<String, Object>> items = JsonPath.read(response.body(), collectionPath);
+        return items.stream().filter(item -> String.valueOf(idValue).equals(String.valueOf(item.get(idField)))).findFirst();
+    }
+
+    /**
+     * Rechaza un JsonPath que indexa DESPUÉS de un filtro, que es el error que más caro
+     * sale de esta clase porque no falla: miente.
+     *
+     * <p>{@code $.items[?(@.id=='x')].campo[0]} no devuelve el campo del primer elemento
+     * que casa. Un filtro hace el path <i>indefinido</i>, y Jayway devuelve entonces
+     * SIEMPRE una {@code JSONArray} —vacía si no hay nada, pero nunca {@code null} y
+     * nunca {@code PathNotFoundException}—, valga lo que valga el campo de verdad. Un
+     * {@code valor != null} sobre eso es constantemente cierto, así que un
+     * {@code await(...)} construido encima expira aunque el servidor haya convergido hace
+     * rato: el síntoma es un timeout que parece latencia del servidor, y manda a buscar el
+     * defecto donde no está. En la corrida del 13/08/2026 costó un ciclo de arbitraje
+     * completo y contaminó el diagnóstico del defecto que sí era real.
+     *
+     * <p>La forma correcta es {@link #itemById}, que filtra y toma el primero en Java.
+     */
+    private static void rejectIndexAfterFilter(String path) {
+        int filter = path.indexOf("?(");
+        if (filter >= 0 && INDEX_AFTER_FILTER.matcher(path.substring(filter)).find()) {
+            throw new IllegalArgumentException(
+                    "JsonPath con índice después de un filtro: " + path
+                            + " — un filtro hace el path indefinido y Jayway devuelve siempre una lista (vacía), nunca el elemento,"
+                            + " así que la comprobación que montes encima será constantemente cierta. Usa itemById(...) y quédate"
+                            + " con el primero en Java.");
+        }
+    }
+
+    private static final Pattern INDEX_AFTER_FILTER = Pattern.compile("\\\\[\\\\s*\\\\d+\\\\s*\\\\]");
 
     /**
      * JSON válido a partir de un nodo <b>objeto o array</b> extraído con
