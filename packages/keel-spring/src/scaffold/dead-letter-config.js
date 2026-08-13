@@ -10,9 +10,35 @@
 // destino sale de `lib/dead-letter.js`, que es el mismo sitio del que lo lee el arnés.
 
 import { javaFile, javaPath, subPackage } from './render.js';
-import { deadLetterName, deadLetterSubscriptions } from '../lib/dead-letter.js';
+import { deadLetterName, deadLetterSubscriptions, subscriptionDestination } from '../lib/dead-letter.js';
 
 const MESSAGING_PKG = 'infrastructure.messaging';
+
+/**
+ * Las suscripciones con descarte, agrupadas por DESTINO.
+ *
+ * El mapeo evento→destino no es 1:1: dos suscripciones del mismo proveedor comparten
+ * canal (`WithdrawalAccepted` y `WithdrawalRejected` sobre `compliance.events`) y el
+ * DSL lo permite a propósito. Emitir un elemento por suscripción producía un
+ * `Set.of("a", "b", "b")`, que **no** es un aviso ni un duplicado inofensivo: `Set.of`
+ * lanza `IllegalArgumentException: duplicate element` en la inicialización ESTÁTICA de
+ * la clase, así que ninguna `@Configuration` completa su enhancement y el
+ * `ApplicationContext` entero se cae al arrancar. En la corrida del 13/08/2026 bloqueó
+ * el 100% de los escenarios: ni el humo del arnés llegó a levantar el contexto.
+ *
+ * Agrupar aquí, y no en cada rama, es lo que impide que el siguiente broker lo repita:
+ * la de RabbitMQ tenía la misma cardinalidad mal puesta y declaraba dos beans `Queue`
+ * para la misma cola.
+ */
+function byDestination(model, broker, subs) {
+  const groups = new Map();
+  for (const sub of subs) {
+    const destination = subscriptionDestination(broker, model, sub);
+    if (!groups.has(destination)) groups.set(destination, { destination, subs: [] });
+    groups.get(destination).subs.push(sub);
+  }
+  return [...groups.values()];
+}
 
 export function generate(model) {
   const subs = deadLetterSubscriptions(model);
@@ -34,22 +60,34 @@ export function generate(model) {
 // comporta como el default (registra y sigue), que es lo que significa no declararlo.
 function kafkaConfig(model, subs) {
   const imports = new Set([
+    'com.fasterxml.jackson.databind.ObjectMapper',
+    'java.nio.charset.StandardCharsets',
     'java.util.Set',
     'org.apache.kafka.common.TopicPartition',
+    'org.apache.kafka.common.errors.SerializationException',
+    'org.apache.kafka.common.serialization.Serializer',
+    'org.apache.kafka.common.serialization.StringSerializer',
     'org.slf4j.Logger',
     'org.slf4j.LoggerFactory',
     'org.springframework.context.annotation.Bean',
     'org.springframework.context.annotation.Configuration',
+    'org.springframework.kafka.core.DefaultKafkaProducerFactory',
     'org.springframework.kafka.core.KafkaTemplate',
+    'org.springframework.kafka.core.ProducerFactory',
     'org.springframework.kafka.listener.DeadLetterPublishingRecoverer',
     'org.springframework.kafka.listener.DefaultErrorHandler',
     'org.springframework.util.backoff.FixedBackOff'
   ]);
 
-  const topics = subs.map((sub) => `"${sub.topicDefault}"`).join(', ');
+  const groups = byDestination(model, 'kafka', subs);
+  const topics = groups.map((group) => `"${group.destination}"`).join(', ');
   const attempts = maxAttempts(subs);
   const delay = backoffMs(subs);
   const listed = subs.map((sub) => `${sub.name} → ${deadLetterName('kafka', sub.topicDefault)}`).join(', ');
+  const shared = groups
+    .filter((group) => group.subs.length > 1)
+    .map((group) => `${group.subs.map((sub) => sub.name).join(' y ')} comparten {@code ${group.destination}}`)
+    .join('; ');
 
   const body = `/**
  * Descarte de los mensajes que agotan sus reintentos: ${listed}.
@@ -68,13 +106,26 @@ public class DeadLetterConfig {
 
     private static final Logger log = LoggerFactory.getLogger(DeadLetterConfig.class);
 
-    /** Suscripciones con descarte declarado en el diseño. */
+    /**
+     * Topics de origen con descarte declarado en el diseño. Es un conjunto por TOPIC, no
+     * por suscripción${shared ? `: ${shared}` : ''}.
+     */
     private static final Set<String> DEAD_LETTERED = Set.of(${topics});
 
     @Bean
-    public DefaultErrorHandler kafkaErrorHandler(KafkaTemplate<Object, Object> kafkaTemplate) {
+    public DefaultErrorHandler kafkaErrorHandler(ProducerFactory<Object, Object> producerFactory, ObjectMapper objectMapper) {
+        // Template propio para republicar, construido como objeto PLANO y no como @Bean:
+        // un segundo bean de tipo KafkaTemplate apagaría el autoconfigurado, porque el
+        // @ConditionalOnMissingBean de Boot mira el tipo crudo y no los genéricos, y el
+        // publicador de eventos se quedaría sin el suyo.
+        DefaultKafkaProducerFactory<Object, Object> deadLetterProducerFactory = new DefaultKafkaProducerFactory<>(
+                producerFactory.getConfigurationProperties(),
+                keySerializer(),
+                deadLetterValueSerializer(objectMapper));
+        KafkaTemplate<Object, Object> deadLetterTemplate = new KafkaTemplate<>(deadLetterProducerFactory);
+
         DeadLetterPublishingRecoverer publisher = new DeadLetterPublishingRecoverer(
-                kafkaTemplate,
+                deadLetterTemplate,
                 (record, exception) -> new TopicPartition(record.topic() + ".DLT", -1));
 
         DefaultErrorHandler handler = new DefaultErrorHandler(
@@ -89,6 +140,55 @@ public class DeadLetterConfig {
                 new FixedBackOff(${delay}L, ${attempts - 1}L));
 
         return handler;
+    }
+
+    /**
+     * La clave del record que llega al recoverer es siempre la del origen (String).
+     * {@code StringSerializer} declara {@code Serializer<String>}, de ahí el cast a la
+     * firma {@code Object} que exige el factory.
+     */
+    @SuppressWarnings("unchecked")
+    private static Serializer<Object> keySerializer() {
+        return (Serializer<Object>) (Serializer<?>) new StringSerializer();
+    }
+
+    /**
+     * Serializador del valor que se republica, y la razón por la que este template existe.
+     *
+     * <p>Lo que llega al recoverer <b>no siempre es del mismo tipo</b>, y no lo decide esta
+     * clase: lo decide la deserialización del consumidor. Con un fallo de deserialización
+     * llega el {@code byte[]} crudo; con el {@code StringDeserializer} de partida, un
+     * {@code String}; y en cuanto el consumo pasa a {@code JsonDeserializer} —lo normal en
+     * cuanto el listener quiere el {@code EventEnvelope} tipado— llega el objeto ya
+     * deserializado. Reutilizar el {@code KafkaTemplate} autoconfigurado (cuyo serializador
+     * de valor es {@code StringSerializer}) funciona en los dos primeros casos y revienta
+     * con {@code ClassCastException} en el tercero — y ahí el {@code DefaultErrorHandler} no
+     * logra recuperar, hace seek al mismo offset y <b>reintenta para siempre</b>, dejando la
+     * partición atascada para todos los mensajes que vengan detrás.
+     *
+     * <p>Por eso el serializador es explícito y cubre los tres: los bytes y el texto pasan
+     * TAL CUAL —volver a envolverlos en JSON dejaría en el descarte un mensaje distinto del
+     * que se recibió, y el que lo inspeccione no encontraría lo que busca— y cualquier otra
+     * cosa se serializa con el {@code ObjectMapper} de la aplicación, el mismo que produce
+     * los eventos que salen, para que el JSON del descarte sea equivalente al del origen.
+     */
+    private static Serializer<Object> deadLetterValueSerializer(ObjectMapper objectMapper) {
+        return (topic, value) -> {
+            if (value == null) {
+                return null;
+            }
+            if (value instanceof byte[] bytes) {
+                return bytes;
+            }
+            if (value instanceof String text) {
+                return text.getBytes(StandardCharsets.UTF_8);
+            }
+            try {
+                return objectMapper.writeValueAsBytes(value);
+            } catch (Exception failure) {
+                throw new SerializationException("No se pudo serializar el mensaje para el descarte de " + topic, failure);
+            }
+        };
     }
 }`;
 
@@ -115,15 +215,21 @@ function rabbitConfig(model, subs) {
     'org.springframework.context.annotation.Configuration'
   ]);
 
-  const beans = subs
-    .map((sub) => {
-      const queue = sub.topicDefault;
-      const dlq = deadLetterName('rabbitmq', queue);
-      const bean = beanName(sub.name);
-      return `    /** Cola de ${sub.name}, con su descarte enlazado por argumentos. */
+  // Un par de beans por COLA, no por suscripción: con RabbitMQ las suscripciones que
+  // comparten destino consumen de la misma cola, así que emitir uno por evento producía
+  // dos beans declarando la misma —y dos más para el mismo descarte—. Aquí no llegaba a
+  // romper (los argumentos coincidían, y RabbitMQ solo rechaza la redeclaración cuando
+  // difieren), pero es la misma cardinalidad mal puesta que en Kafka tumbaba el arranque:
+  // se arregla en los dos lados o el próximo broker la hereda.
+  const beans = byDestination(model, 'rabbitmq', subs)
+    .map(({ destination, subs: sharing }) => {
+      const dlq = deadLetterName('rabbitmq', destination);
+      const bean = beanName(destination);
+      const who = sharing.map((sub) => sub.name).join(', ');
+      return `    /** Cola de ${who}, con su descarte enlazado por argumentos. */
     @Bean
     public Queue ${bean}Queue() {
-        return QueueBuilder.durable("${queue}")
+        return QueueBuilder.durable("${destination}")
                 .withArgument("x-dead-letter-exchange", "")
                 .withArgument("x-dead-letter-routing-key", "${dlq}")
                 .build();
@@ -167,4 +273,11 @@ ${beans}
 const maxAttempts = (subs) => Math.max(...subs.map((sub) => sub.retry?.maxAttempts ?? 3));
 const backoffMs = (subs) => Math.max(...subs.map((sub) => sub.retry?.initialDelayMs ?? 1000));
 
-const beanName = (name) => name.charAt(0).toLowerCase() + name.slice(1);
+// El nombre del bean sale del DESTINO, que puede traer puntos y guiones (`compliance.events`):
+// se camelliza para que sea un identificador Java válido y estable.
+const beanName = (name) =>
+  name
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean)
+    .map((part, index) => (index === 0 ? part.charAt(0).toLowerCase() + part.slice(1) : part.charAt(0).toUpperCase() + part.slice(1)))
+    .join('');
