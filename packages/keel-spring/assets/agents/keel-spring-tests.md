@@ -93,6 +93,17 @@ source set `integrationTest`, así que un test que importe un DTO o una entidad 
      está `clearCache()`, y para lo que no se ve por HTTP ni por el broker, `db(...)` /
      `dbShell(...)`, que ya resuelven el contenedor correcto. No reimplementes ninguno de los
      dos con `devtoolsShell` a mano.
+   - **Cualquier sentencia contra la base va por `db(String... argv)`**, y eso incluye los
+     helpers que escribas tú (sembrar un dato de arranque que ningún `Given` puede crear por
+     la API, retirar una fila para provocar un error). `dbShell(...)` es solo para lo que es
+     del shell: un pipe, una redirección. Armar el SQL como una cadena para `dbShell` es el
+     atajo natural —el javadoc del método trae la invocación de sondeo ya hecha, y se copia
+     sola— y es también un fallo sistémico: en Windows el cliente de contenedores reinterpreta
+     las comillas antes de que el comando llegue al contenedor y del SQL solo sobrevive un
+     fragmento. Como estos helpers se llaman desde `@BeforeAll`, cae la clase entera con
+     `initializationError` y la matriz sale con todos sus escenarios en `NO_EJERCITADO`. Ha
+     pasado en dos generaciones seguidas; el javadoc de `db` trae el ejemplo en forma de argv
+     del motor elegido, con la sentencia como un elemento más.
 3. Escribe **una clase por flujo** en `src/integrationTest/java/<basePackage>/flows/`,
    llamada `<Flow>FlowIT` (p. ej. `ProductLifecycleFlowIT`), que hereda de `AbstractFlowIT`:
    - `@BeforeAll` que llama a `resetState()` — el reset es **por flujo**, jamás entre

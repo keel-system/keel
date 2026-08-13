@@ -1695,10 +1695,25 @@ function cacheHelper(model) {
 // propio contenedor de la BD (cliVia 'dbcontainer'), no en el toolbox—, y esa es
 // justo la parte que no se puede escribir a mano en una clase de prueba sin
 // duplicar la regla que ya aplican validate-infra.sh y reset-db.sh.
+// Sentencia de ejemplo del javadoc de `db`. Es una LECTURA de una tabla que el
+// diseño garantiza (la raíz del primer agregado), y no un `SELECT 1`: lo que el
+// ejemplo tiene que enseñar es la sentencia entrando entera como un elemento del
+// argv, comillas incluidas — un ejemplo sin comillas no distingue las dos formas,
+// que es justo lo que hay que distinguir.
+function exampleStatement(entry) {
+  // Sin `<…>` en los marcadores de posición: el javadoc los leería como etiquetas
+  // HTML desconocidas y doclint los reporta, incluso dentro de un <pre>.
+  if (entry.kind === 'document') return 'db.getCollection("la_coleccion").countDocuments({ status: "active" })';
+  return "SELECT id FROM la_tabla WHERE slug = 'ejemplo'";
+}
+
 function dbSection(model) {
   const entry = dbEntry(model);
   if (!entry) return '';
   const dbName = model.service.name.replaceAll('-', '_');
+  const queryArgv = entry.cliQueryArgv
+    ? entry.cliQueryArgv({ user: entry.user ? entry.user(dbName) : '', pass: entry.password ?? '', db: dbName })
+    : null;
   return `
     private static final String DB_CONTAINER = "${dbContainer(model)}";
 
@@ -1714,9 +1729,18 @@ function dbSection(model) {
      * ahí, que es lo que hace un cliente—, pero es la única para un efecto que ninguna
      * operación del diseño devuelve.
      *
-     * <p>La invocación del motor elegido (${entry.label}), la misma que usa
-     * \`infra/validate-infra.sh\`:
-     * <pre>dbShell(${javaString(concreteCmd(entry, dbName))});</pre>
+     * <p><b>Toda sentencia va por aquí</b>, y cualquier helper propio que escribas
+     * encima también: el motor elegido (${entry.label}) se invoca así, y la sentencia
+     * entra como <b>un elemento más</b> del argv, con sus comillas intactas:${
+       queryArgv
+         ? `
+     * <pre>db(${queryArgv.map((part) => javaString(part)).join(', ')},
+     *    ${javaString(exampleStatement(entry))});</pre>`
+         : ` sqlplus lee
+     * la sentencia por su entrada estándar, así que este motor no tiene forma argv y
+     * la excepción es suya, no la norma:
+     * <pre>dbShell(${javaString(concreteCmd(entry, dbName))});</pre>`
+     }
      */
     protected static String db(String... argv) {
         List<String> command = new ArrayList<>(List.of(containerRuntime(), "exec", DB_CONTAINER));
@@ -1724,7 +1748,20 @@ function dbSection(model) {
         return runProcess(command);
     }
 
-    /** Igual que {@link #db}, pero a través de un shell: pipes y redirecciones. */
+    /**
+     * Igual que {@link #db}, pero a través de un shell: <b>solo</b> para lo que es del
+     * shell —un pipe, una redirección, un prefijo de entorno que no se pueda resolver
+     * con \`env\`—. La invocación de sondeo del motor, la misma que usa
+     * \`infra/validate-infra.sh\`:
+     * <pre>dbShell(${javaString(concreteCmd(entry, dbName))});</pre>
+     *
+     * <p><b>Una sentencia con comillas o con valores interpolados NO se arma como
+     * cadena para este método</b>, por cómodo que resulte copiar la línea de arriba:
+     * pasa por dos intérpretes (el cliente de contenedores y luego \`sh\`) y en Windows
+     * el primero se la come — el síntoma es un error de sintaxis del motor sobre un
+     * fragmento suelto de tu SQL, y como el fixture suele vivir en un \`@BeforeAll\`,
+     * cae la clase entera con \`initializationError\`. Para eso está {@link #db}.
+     */
     protected static String dbShell(String command) {
         return db("sh", "-c", command);
     }

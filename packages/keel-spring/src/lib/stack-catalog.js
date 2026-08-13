@@ -13,6 +13,19 @@
 //                    ejecuta dentro del propio contenedor) o null (sin sondeo).
 //   cliValidateCmd   comando de sondeo con placeholders {user} {pass} {db}
 //                    {service}; los hostnames apuntan al serviceKey (red interna).
+//   cliQueryArgv     (solo BD) la MISMA invocación, pero como lista de argumentos y
+//                    sin la consulta: lo que el arnés de integración pasa a
+//                    `db(String... argv)` para ejecutar una sentencia arbitraria. No
+//                    es un duplicado de cliValidateCmd por comodidad — son dos formas
+//                    con dos destinos: cliValidateCmd va a un script `sh` (donde el
+//                    prefijo de entorno y los pipes son del shell) y cliQueryArgv va a
+//                    ProcessBuilder, donde NO hay shell que interprete nada. Es la
+//                    diferencia que ha costado un ciclo completo de generación en dos
+//                    corridas seguidas: una sentencia con comillas armada como cadena
+//                    para `sh -c` la reescribe `podman.exe`/`docker.exe` en Windows
+//                    antes de que llegue al contenedor, y del SQL solo sobrevive un
+//                    fragmento. El prefijo de entorno se resuelve con `env VAR=valor`,
+//                    que es un ejecutable y no una construcción del shell.
 //
 // composeServices(model) recibe el modelo para las opciones cuyo contenedor
 // depende del diseño y no solo del stack (hoy, el sidecar de buckets de MinIO);
@@ -76,6 +89,10 @@ export const DATABASES = {
     cliTool: 'psql',
     cliVia: 'devtools',
     cliValidateCmd: "PGPASSWORD='{pass}' psql -h db -U {user} -d {db} -c 'SELECT 1' -q -t",
+    cliQueryArgv: ({ user, pass, db }) => [
+      'env', `PGPASSWORD=${pass}`, 'psql', '-h', 'db', '-U', user, '-d', db,
+      '-v', 'ON_ERROR_STOP=1', '-q', '-t', '-A', '-c'
+    ],
     cliResetCmd:
       "PGPASSWORD='{pass}' psql -h db -U {user} -d {db} -v ON_ERROR_STOP=1 -q -c \"DO \\$\\$ DECLARE stmt text; BEGIN SELECT 'TRUNCATE TABLE ' || string_agg(quote_ident(tablename), ', ') || ' RESTART IDENTITY CASCADE' INTO stmt FROM pg_tables WHERE schemaname = 'public' AND tablename <> 'flyway_schema_history'; IF stmt IS NOT NULL THEN EXECUTE stmt; END IF; END \\$\\$;\"",
     cliDropSchemaCmd:
@@ -104,6 +121,9 @@ export const DATABASES = {
     cliTool: 'mysql',
     cliVia: 'devtools',
     cliValidateCmd: "mysql -h db -u {user} -p'{pass}' -e 'SELECT 1' {db}",
+    // `-p` va PEGADO a la contraseña: separado, mysql lo lee como «pídemela por
+    // terminal» y el proceso se queda esperando una entrada que nunca llega.
+    cliQueryArgv: ({ user, pass, db }) => ['mysql', '-h', 'db', '-u', user, `-p${pass}`, '-N', '-B', db, '-e'],
     cliResetCmd:
       "mysql -h db -u {user} -p'{pass}' -N -B -e 'SELECT CONCAT(\"TRUNCATE TABLE \", table_name, \";\") FROM information_schema.tables WHERE table_schema = \"{db}\" AND table_name <> \"flyway_schema_history\"' | mysql -h db -u {user} -p'{pass}' --init-command='SET FOREIGN_KEY_CHECKS=0' {db}",
     cliDropSchemaCmd:
@@ -136,6 +156,7 @@ export const DATABASES = {
     cliTool: 'mariadb',
     cliVia: 'devtools',
     cliValidateCmd: "mariadb -h db -u {user} -p'{pass}' -e 'SELECT 1' {db}",
+    cliQueryArgv: ({ user, pass, db }) => ['mariadb', '-h', 'db', '-u', user, `-p${pass}`, '-N', '-B', db, '-e'],
     cliResetCmd:
       "mariadb -h db -u {user} -p'{pass}' -N -B -e 'SELECT CONCAT(\"TRUNCATE TABLE \", table_name, \";\") FROM information_schema.tables WHERE table_schema = \"{db}\" AND table_name <> \"flyway_schema_history\"' | mariadb -h db -u {user} -p'{pass}' --init-command='SET FOREIGN_KEY_CHECKS=0' {db}",
     cliDropSchemaCmd:
@@ -169,6 +190,7 @@ export const DATABASES = {
     // sqlcmd (go-sqlcmd) se instala por curl en devtools; no hay paquete apk.
     cliVia: 'devtools',
     cliValidateCmd: "sqlcmd -S db -U {user} -P '{pass}' -C -Q 'SELECT 1'",
+    cliQueryArgv: ({ user, pass, db }) => ['sqlcmd', '-S', 'db', '-U', user, '-P', pass, '-C', '-d', db, '-h', '-1', '-W', '-Q'],
     cliResetCmd:
       "sqlcmd -S db -U {user} -P '{pass}' -C -d {db} -Q \"EXEC sp_MSforeachtable 'ALTER TABLE ? NOCHECK CONSTRAINT ALL'; EXEC sp_MSforeachtable @command1 = 'DELETE FROM ?', @whereand = 'AND o.name <> ''flyway_schema_history'''; EXEC sp_MSforeachtable 'ALTER TABLE ? WITH CHECK CHECK CONSTRAINT ALL'\"",
     cliDropSchemaCmd:
@@ -276,6 +298,11 @@ export const DATABASES = {
     // aquí y no tres fases más tarde.
     cliValidateCmd:
       "mongosh 'mongodb://{user}:{pass}@localhost:27017/{db}?authSource=admin&directConnection=true' --quiet --eval 'rs.status().ok'",
+    cliQueryArgv: ({ user, pass, db }) => [
+      'mongosh',
+      `mongodb://${user}:${pass}@localhost:27017/${db}?authSource=admin&directConnection=true`,
+      '--quiet', '--eval'
+    ],
     // Vacía los documentos preservando colecciones e ÍNDICES: los índices son el
     // equivalente del esquema aquí, y recrearlos en cada flujo sería el error
     // simétrico a truncar flyway_schema_history en la rama relacional. No hay

@@ -202,6 +202,16 @@ entrega al broker, que es corta y local; en el barrido es una llamada a otro ser
 concreta de tu motor está en la skill `keel-spring-database` o `keel-spring-mongodb`,
 `references/read-queries.md`.
 
+**La cota del lote suele vivir en otra consulta, y está bien que así sea.** En JPQL un `@Modifying` no
+acepta un `Pageable`, así que en la rama relacional lo natural son **dos** consultas: una que selecciona
+los ids de los candidatos ya acotados (`Pageable`/`PageRequest`) y otra que los reclama con el `UPDATE`
+condicional (`… WHERE id IN :ids AND <marca> IS NULL`), más un token que distinga el lote propio del que
+otra réplica reclamó en la carrera. Que sean dos no es un rodeo: fusionarlas en una nativa con subselect
+`LIMIT` funciona, pero ata la consulta al dialecto y no es lo que pide `infra/check-idempotency.sh`, que
+comprueba las dos cosas por separado —que exista el reclamo con marca, y que exista la cota— sin exigir
+que estén en el mismo sitio. En la rama documental, `findAndModify` en un bucle con contador de lote hace
+las dos a la vez y también vale.
+
 Un **lock distribuido** (ShedLock, un advisory lock) solo compensa cuando el barrido tiene que ser único
 por negocio —consolidar un informe, emitir un fichero—: serializa a una instancia y desperdicia el resto.
 Para un barrido de reconciliación es la respuesta equivocada a la pregunta correcta.

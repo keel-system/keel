@@ -1776,12 +1776,38 @@ function payloadFields(opName, payload, { direction, domainEntities, domainTypes
     if (path.includes('.')) warnings.push(nestedExcludeWarning(opName, payload.entity, path, entity, domainTypes));
   }
 
+  // El campo de estado del `lifecycle` NO entra en una entrada derivada, aunque no esté
+  // marcado `generated`: quien lo mueve es la máquina de estados que el propio dominio
+  // declara —`createProduct` lo pone en su `default`, `retireProduct` lo mueve por su
+  // `transitions`—, nunca el cliente. Colarlo en el DTO no era ruido inofensivo: con
+  // `required: true` en el dominio, el DTO salía con `@NotNull` y el camino feliz de la
+  // creación respondía 400 hasta que el agente lo quitaba a mano. Dos generaciones
+  // seguidas lo reportaron y lo corrigieron igual, que es la señal de que le toca a build.
+  // Una operación que SÍ quiera recibir el estado lo declara en `input.fields`, y ese
+  // camino no pasa por aquí.
+  const lifecycleField = direction === 'input' ? entity.lifecycle?.field : null;
+
   const fields = [];
+  const defaulted = [];
   for (const [fieldName, field] of Object.entries(entity.fields ?? {})) {
     if (exclude.has(fieldName)) continue;
     if (direction === 'input' && (field.id || field.generated || field.computed)) continue;
+    if (fieldName === lifecycleField) continue;
     if (direction === 'output' && field.sensitive) continue;
+    // Lo que no se puede decidir mecánicamente: un campo con `default` puede ser una
+    // preferencia que el cliente sobreescribe (`currency: EUR`) o estado interno que
+    // decide el dominio (un contador de intentos). Build no lo adivina —lo pone en la
+    // entrada, que es lo que dice el diseño— pero lo enumera: si el diseñador quería lo
+    // segundo, la respuesta está en el DSL (`input.exclude`) y no en el código.
+    if (direction === 'input' && field.default !== undefined) defaulted.push(fieldName);
     fields.push(asPayloadField(resolveField(payload.entity, fieldName, field, domainTypes, inlineEnumName, { persisted: false }), direction));
+  }
+  if (defaulted.length > 0) {
+    warnings.push(
+      `Operación '${opName}': la entrada derivada de '${payload.entity}' incluye ${defaulted.map((name) => `'${name}'`).join(', ')}, ` +
+        `con 'default' declarado en domain. El cliente puede mandarlos y sobreescribir el valor del dominio; si son estado interno, ` +
+        `sácalos con 'input.exclude' en use-cases.keel.yaml en vez de dejar que el handler los ignore.`
+    );
   }
 
   // Las relaciones son parte del recurso, no un detalle de persistencia: una

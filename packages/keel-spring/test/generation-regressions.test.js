@@ -1026,21 +1026,37 @@ test('normalización antes que formato: el patrón del value type no llega al DT
 // El mismo defecto lo encontró y corrigió a mano el agente de código en DOS corridas
 // independientes sobre este diseño: reproducible y determinista, así que le toca al
 // generador y no a cada generación.
-test('un campo con default no exige presencia en el DTO de entrada', () => {
+test('el campo del lifecycle no entra en la entrada derivada', () => {
   const { read } = scaffoldExtended();
   const command = read(`${JAVA}/application/commands/CreateProductCommand.java`);
 
-  // `Product.status` declara `required: true` con `default: draft`. Las dos cosas son
-  // ciertas y no se contradicen: obligatorio es el VALOR (la columna sale
-  // `nullable = false`), opcional es que lo mande el cliente — que es lo que el DSL
-  // define como `default`. Con @NotNull, el camino feliz de createProduct —nadie manda
-  // el estado inicial de un recurso que aún no existe— devolvía 400 antes del handler.
-  assert.ok(!/@NotNull\s+ProductStatus status/.test(command), command);
-  assert.ok(command.includes('ProductStatus status'), command);
+  // `Product.status` declara `required: true` con `default: draft` y es el campo del
+  // `lifecycle`. Quien lo mueve es la máquina de estados del dominio —el default al
+  // crear, las `transitions` después—, nunca el cliente, así que no es un campo opcional
+  // de la entrada: no es de la entrada. Primero se le quitó el `@NotNull` (con él, el
+  // camino feliz de createProduct devolvía 400 antes de llegar al handler) y dos
+  // generaciones más tarde el agente seguía teniendo que razonar por qué el DTO le
+  // ofrecía un estado que debía ignorar.
+  assert.ok(!/ProductStatus status/.test(command), command);
 
-  // Y no es que se hayan caído todas las anotaciones: `sku` no tiene default y sigue
-  // exigiéndose. Sin esta mitad, el test pasaría igual con la validación desactivada.
+  // Y no es que se haya caído la entrada entera: `sku` sigue estando y sigue validado.
+  // Sin esta mitad, el test pasaría igual con el DTO vacío.
   assert.ok(command.includes('@NotBlank String sku'), command);
+});
+
+test('un campo con default que no es el del lifecycle sí entra, y sin exigir presencia', () => {
+  const { read } = scaffoldExtended();
+  const command = read(`${JAVA}/application/commands/AddProductImageCommand.java`);
+  const dto = read(`${JAVA}/application/dtos/ProductImageDto.java`);
+
+  // `ProductImage.primary` declara `default: false` y NO gobierna ningún lifecycle: es
+  // una preferencia que el cliente puede fijar, así que sigue en el contrato. La
+  // distinción importa —quitar todo lo que tenga `default` habría borrado también esto—
+  // y build no la adivina: la lee del `lifecycle` que el dominio declara.
+  assert.ok(dto.includes('Boolean primary') || dto.includes('boolean primary'), dto);
+  // Lo que sí se relaja es la presencia: un default es precisamente el valor de quien
+  // no lo manda.
+  assert.ok(!/@NotNull\s+Boolean primary/.test(command), command);
 });
 
 test('la obligatoriedad de un campo con default sí llega a la entidad persistida', () => {

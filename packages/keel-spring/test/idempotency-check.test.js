@@ -27,6 +27,12 @@ function build(name) {
   return path.join(workspace, result.outDir);
 }
 
+// ¿El script reporta ESTE sujeto? Se mira el encabezado del hallazgo y no el texto
+// entero: los `why` se citan entre ellos —el de la cota empieza por «el reclamo del
+// barrido no acota su lote»— y un `match` sobre el cuerpo confundiría los dos.
+const reports = (out, subject) =>
+  out.split(/\r?\n/).some((line) => /^\s*\[[a-zA-Z]+\]/.test(line) && line.split(':')[0].includes(subject));
+
 const script = (project) => path.join(project, 'infra', 'check-idempotency.sh');
 const read = (project) => fs.readFileSync(script(project), 'utf8');
 
@@ -111,7 +117,7 @@ test('el gate exige que el barrido reclame sus candidatos, y acotados', (t) => {
   const project = build('catalog-extended');
   const before = run(project);
   if (before === null) return t.skip('sin bash en el PATH');
-  assert.match(before.out, /reclamo del barrido/);
+  assert.ok(reports(before.out, 'reclamo del barrido'));
 
   // Un reclamo real lo apaga: marca PERSISTIDA sobre un lote acotado. Donde lo ponga el
   // agente es asunto suyo, así que se busca en el árbol.
@@ -133,17 +139,24 @@ public interface StaleClaimRepository {
 }
 `;
   fs.writeFileSync(claim, withBound);
-  assert.ok(!/reclamo del barrido/.test(run(project).out));
+  const green = run(project).out;
+  assert.ok(!reports(green, 'reclamo del barrido'));
+  assert.ok(!reports(green, 'lote del barrido'));
 
-  // Y sin cota vuelve el hallazgo: reclamar la tabla entera no es un lote, es una
-  // transacción larga que las demás réplicas esperan.
+  // Y sin cota vuelve el hallazgo —reclamar la tabla entera no es un lote, es una pasada
+  // con tantas llamadas al proveedor como filas atascadas—, pero por su propio sujeto: el
+  // reclamo sigue estando bien, lo que falta es la cota. Decir «no reclamas» cuando sí
+  // reclama manda a arreglar lo que ya estaba hecho.
   fs.writeFileSync(claim, withBound.replace(' limit :batch', ''));
-  assert.match(run(project).out, /reclamo del barrido/);
+  const unbounded = run(project).out;
+  assert.ok(reports(unbounded, 'lote del barrido'));
+  assert.ok(!reports(unbounded, 'reclamo del barrido'), 'la falta de cota se reporta como si faltara el reclamo');
 
-  // El caso que antes pasaba en falso: la cota no está en el reclamo, pero el archivo
-  // tiene OTRA consulta paginada. Un repositorio es por definición donde viven todas las
-  // consultas del agregado, así que ese Pageable ajeno está casi siempre — y mientras la
-  // cota se buscara en el archivo entero, este check no podía fallar nunca.
+  // El falso positivo que motivó acotar el alcance al método: la cota no está en el
+  // reclamo, pero el archivo tiene OTRA consulta paginada. Un repositorio es por
+  // definición donde viven todas las consultas del agregado, así que ese `Pageable` ajeno
+  // está casi siempre. Sigue sin valer, y ahora por un motivo que no depende de dónde
+  // esté: ese listado no habla de los candidatos de este barrido.
   fs.writeFileSync(
     claim,
     withBound.replace(' limit :batch', '').replace(
@@ -154,7 +167,48 @@ public interface StaleClaimRepository {
 `
     )
   );
-  assert.match(run(project).out, /reclamo del barrido/);
+  assert.ok(reports(run(project).out, 'lote del barrido'));
+});
+
+// El falso NEGATIVO simétrico, y el que apareció en la corrida del 13/08/2026: exigir la
+// cota dentro del método del reclamo daba por incorrecta la forma que la propia convención
+// prescribe. En JPQL un `@Modifying` no acepta `Pageable`, así que seleccionar candidatos
+// acotados y reclamarlos con un UPDATE condicional son DOS consultas por obligación — y el
+// camino de menor resistencia para callar el gate era fusionarlas en una nativa.
+test('el gate acepta que seleccionar y reclamar sean dos consultas, que es la forma correcta en JPQL', (t) => {
+  const project = build('catalog-extended');
+  if (run(project) === null) return t.skip('sin bash en el PATH');
+
+  const adapter = path.join(project, 'src/main/java/com/commerce/catalog/infrastructure/persistence');
+  fs.mkdirSync(adapter, { recursive: true });
+  fs.writeFileSync(
+    path.join(adapter, 'StaleClaimRepository.java'),
+    `package com.commerce.catalog.infrastructure.persistence;
+
+import java.time.Instant;
+import java.util.Collection;
+import java.util.List;
+import java.util.UUID;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+
+public interface StaleClaimRepository {
+
+    @Query("select o.id from OrderJpa o where o.awaitingSince < :threshold order by o.awaitingSince asc")
+    List<UUID> findReconciliationCandidateIds(@Param("threshold") Instant threshold, Pageable pageable);
+
+    @Modifying
+    @Query("update OrderJpa o set o.claimedAt = :now where o.id in :ids and o.claimedAt is null")
+    int claimCandidates(@Param("ids") Collection<UUID> ids, @Param("now") Instant now);
+}
+`
+  );
+
+  const out = run(project).out;
+  assert.ok(!reports(out, 'reclamo del barrido'), 'el UPDATE condicional no se reconoció como reclamo');
+  assert.ok(!reports(out, 'lote del barrido'), 'la cota en la consulta de candidatos no se reconoció');
 });
 
 // Un lock pesimista SÍ reparte filas disjuntas, pero solo mientras dura su transacción, y
@@ -186,7 +240,7 @@ public interface StaleClaimRepository {
   );
 
   const after = run(project);
-  assert.match(after.out, /reclamo del barrido/);
+  assert.ok(reports(after.out, 'reclamo del barrido'));
   // Y el mensaje tiene que decir qué forma se espera, no solo que falta algo: si no, el
   // camino de menor resistencia es colar un @Modifying en cualquier parte.
   assert.match(after.out, /MARCA PERSISTIDA/);

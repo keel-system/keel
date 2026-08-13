@@ -449,27 +449,48 @@ function reconciliationChecks(model) {
       group: 'reconciliation',
       subject: 'reclamo del barrido',
       claim: '@Modifying|@Update|findAndModify|findOneAndUpdate',
-      // Sin cota, el reclamo se lleva la tabla entera y el barrido deja de ser un lote:
-      // 50.000 atascados son 50.000 llamadas al proveedor en una sola pasada.
-      //
-      // Se busca en el CUERPO DEL MÉTODO del reclamo, no en el archivo. El reclamo vive en
-      // el adaptador del repositorio, que es por definición donde están todas las consultas
-      // del agregado — incluido el listado paginado de algún endpoint. Con el archivo
-      // entero, ese `Pageable` ajeno daba la cota por buena aunque el barrido no tuviera
-      // ninguna: comprobado sobre el adaptador de una corrida real, quitarle la cota al
-      // barrido dejaba el check en verde. Un check que no puede fallar no es un check.
+      // Se busca en el CUERPO DEL MÉTODO, no en el archivo, y lo que tiene que acompañar
+      // a la escritura es el VOCABULARIO del reclamo. Con el archivo entero bastaba un
+      // `@Modifying` cualquiera del adaptador; con el método, hay que estar marcando algo
+      // que se llame reclamo. Un `@Modifying` que ajusta un contador no lo satisface.
       scope: 'method',
-      // Y las DOS formas de acotar, porque dependen del modelo de persistencia y antes solo
-      // estaba la relacional: `Pageable`/`limit` en Spring Data, y un contador de lote en el
-      // bucle de `findAndModify` en Mongo, que no casa con ninguna de las otras. Sin esto,
-      // acotar el alcance al método dejaría en rojo a todo barrido documental correcto —
-      // pasaban solo por el `Pageable` prestado del listado de al lado.
-      bound: 'Pageable|PageRequest|[Ll]imit|first[0-9]|[Tt]op[0-9]|[Bb]atch[Ss]ize|batch-size',
+      bound: '[Cc]laim|[Rr]eclam',
       // Las clases del mecanismo que build YA genera con el patrón: encontrarlas
       // probaría lo que build hizo, no lo que el agente tenía que escribir.
       exclude:
         '/(OutboxEventJpaRepository|OutboxEventMongoRepository|OutboxRelay|OutboxEventJpa|OutboxEventDocument|ProcessedEventJpaRepository|ProcessedEventMongoRepository|IdempotencyRecordJpaRepository|IdempotencyRecordMongoRepository)\\.java',
-      why: 'ninguna consulta reclama candidatos con una MARCA PERSISTIDA (UPDATE ... SET <marca> vía @Modifying, o findAndModify en Mongo) y el lote acotado: el barrido corre en TODAS las réplicas, y un lock pesimista no sirve aquí porque solo aísla mientras dura su transacción y la llamada al proveedor va en medio — ver conventions/dependencies.md § El barrido corre en todas las réplicas'
+      why: 'ninguna consulta reclama candidatos con una MARCA PERSISTIDA (UPDATE ... SET <marca> vía @Modifying, o findAndModify en Mongo): el barrido corre en TODAS las réplicas, y un lock pesimista no sirve aquí porque solo aísla mientras dura su transacción y la llamada al proveedor va en medio — ver conventions/dependencies.md § El barrido corre en todas las réplicas'
+    });
+    // La cota del lote, APARTE del reclamo. Sin cota, el barrido se lleva la tabla entera
+    // y deja de ser un lote: 50.000 atascados son 50.000 llamadas al proveedor en una
+    // sola pasada.
+    //
+    // Va en su propio check por la tercera aplicación de la misma lección —la que ya
+    // separó el umbral—: no supongas dónde vive una pieza. Exigir la cota DENTRO del
+    // método del reclamo daba por incorrecta la forma que la propia convención prescribe,
+    // y en la rama relacional pedía algo que Spring Data no puede expresar: un
+    // `@Modifying` de JPQL no acepta `Pageable`, así que seleccionar los candidatos
+    // acotados y reclamarlos con un UPDATE condicional son dos consultas por obligación,
+    // no por gusto. El check salía rojo sobre un barrido correcto de una corrida real, y
+    // su camino de menor resistencia era fusionar las dos en una nativa para callarlo.
+    //
+    // Lo afirmable sin suponer arquitectura: que en ALGÚN sitio la cota exista Y hable de
+    // los candidatos de este barrido. Eso también cierra el falso positivo que motivó
+    // acotar el alcance —el `Pageable` del listado paginado de al lado—, porque ese
+    // listado no menciona candidatos ni reconciliación: antes pasaba por vecindad, ahora
+    // tiene que pasar por lo que dice.
+    checks.push({
+      group: 'reconciliation',
+      subject: 'lote del barrido',
+      // Las DOS formas de acotar, que dependen del modelo de persistencia: `Pageable` /
+      // `limit` en Spring Data, y un contador de lote en el bucle de `findAndModify` en
+      // Mongo, que no casa con ninguna de las otras.
+      claim: 'Pageable|PageRequest|[Ll]imit|first[0-9]|[Tt]op[0-9]|[Bb]atch[Ss]ize|batch-size',
+      bound: '[Cc]andidat|[Rr]econcil|[Cc]laim|[Rr]eclam|[Ss]tale',
+      scope: 'method',
+      exclude:
+        '/(OutboxEventJpaRepository|OutboxEventMongoRepository|OutboxRelay|OutboxEventJpa|OutboxEventDocument|ProcessedEventJpaRepository|ProcessedEventMongoRepository|IdempotencyRecordJpaRepository|IdempotencyRecordMongoRepository)\\.java',
+      why: 'el reclamo del barrido no acota su lote: ninguna consulta que limite el número de filas (Pageable/limit, o un contador de lote en Mongo) habla de los candidatos que se reconcilian. Puede ir en la misma consulta que reclama o en la que selecciona candidatos —en JPQL un @Modifying no acepta Pageable, así que ahí son dos por obligación—, pero tiene que existir: sin cota, una pasada con 50.000 atascados son 50.000 llamadas al proveedor'
     });
     // Y el umbral de «demasiado tiempo», que no lo declara el diseño: sale de
     // `parameters/`, nunca de una constante.
@@ -683,29 +704,29 @@ impl() {  # familia, sujeto, interfaz, clase excluida, porqué
 #      Se aísla por párrafo (líneas contiguas entre blancos), que es como quedan
 #      separados los miembros.
 #
-# Las dos son heurísticas, así que si ninguna aísla un bloque con el patrón se DEVUELVE EL
-# ARCHIVO ENTERO. Degradar al comportamiento anterior es lo único aceptable ahí: un recorte
-# mal alineado acusaría a un barrido correcto, y un check que exige lo imposible se apaga
-# rompiendo el código.
-methodBody() {  # patrón que localiza el reclamo
-  awk -v pat="$1" '
+# Las dos son heurísticas, y las dos recorren TODOS sus bloques buscando uno que traiga las
+# dos cosas — no el primero que traiga la primera—. Quedarse con el primero hacía que un
+# \`import …Pageable;\` (que es un bloque, y casa con el patrón de la cota) decidiera por el
+# archivo entero y tapara la consulta de más abajo, que sí la traía.
+methodBody() {  # patrón que localiza el reclamo, patrón que lo acompaña
+  awk -v pat="$1" -v bound="$2" '
     { line = $0
       t = line; o = gsub(/\\{/, "", t)
       t = line; c = gsub(/\\}/, "", t)
       if (depth >= 1 && (buf != "" || o > 0)) buf = buf line "\\n"
       depth += o - c
       if (buf != "" && depth <= 1) {
-        if (buf ~ pat) { printf "%s", buf; exit }
+        if (buf ~ pat && buf ~ bound) { printf "%s", buf; exit }
         buf = ""
       }
     }'
 }
 
-memberBlock() {  # patrón que localiza el reclamo
-  awk -v pat="$1" '
-    /^[[:space:]]*$/ { if (buf ~ pat) { printf "%s", buf; exit } buf = ""; next }
+memberBlock() {  # patrón que localiza el reclamo, patrón que lo acompaña
+  awk -v pat="$1" -v bound="$2" '
+    /^[[:space:]]*$/ { if (buf ~ pat && buf ~ bound) { printf "%s", buf; exit } buf = ""; next }
     { buf = buf $0 "\\n" }
-    END { if (buf ~ pat) printf "%s", buf }'
+    END { if (buf ~ pat && buf ~ bound) printf "%s", buf }'
 }
 
 claim() {  # familia, sujeto, patrón principal, patrón que lo acompaña, rutas excluidas, porqué, alcance
@@ -713,13 +734,18 @@ claim() {  # familia, sujeto, patrón principal, patrón que lo acompaña, rutas
   local file found="" code window
   while IFS= read -r file; do
     [ -n "$file" ] || continue
-    code="$(sed -e 's://.*::' -e '/^[[:space:]]*\\*/d' -e '/^[[:space:]]*\\/\\*/d' "$file")"
+    # Los imports fuera: un \`import …Pageable;\` es la declaración de una herramienta, no
+    # su uso, y aceptarlo daba por acotado un barrido que no acotaba nada.
+    code="$(sed -e 's://.*::' -e '/^[[:space:]]*\\*/d' -e '/^[[:space:]]*\\/\\*/d' -e '/^[[:space:]]*import /d' "$file")"
     printf '%s' "$code" | grep -qE -- "$pattern" || continue
-    window="$code"
     if [ "$scope" = "method" ]; then
-      window="$(printf '%s' "$code" | methodBody "$pattern")"
-      [ -n "$window" ] || window="$(printf '%s' "$code" | memberBlock "$pattern")"
-      [ -n "$window" ] || window="$code"
+      # Sin degradar al archivo entero cuando ningún bloque trae las dos: ese era el
+      # camino por el que la cota de un listado paginado vecino valía por la del barrido.
+      window="$(printf '%s' "$code" | methodBody "$pattern" "$bound")"
+      [ -n "$window" ] || window="$(printf '%s' "$code" | memberBlock "$pattern" "$bound")"
+      [ -n "$window" ] || continue
+    else
+      window="$code"
     fi
     if printf '%s' "$window" | grep -qE -- "$bound"; then
       found="$file"

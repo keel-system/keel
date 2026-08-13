@@ -395,13 +395,24 @@ Toda afirmación del `Then` se comprueba, por orden de preferencia:
    podman. La `public-base-url` del perfil `local` ya apunta ahí por eso mismo. Con un bucket
    `visibility: private` no hay URL pública —el `ResponseDto` lleva la key— y la vía es la
    operación del diseño que firma o media el acceso, no un atajo por la infraestructura.
-4. Por **la base de datos**, con `db("cli", "arg", …)` —o `dbShell("…")` si hace falta un pipe—,
-   para el efecto que ninguna operación del diseño devuelve. Resuelve el contenedor correcto por
-   sí solo: con Mongo y con Oracle la CLI vive dentro del contenedor de la BD, no en el toolbox,
-   y esa regla no se escribe a mano en una clase de prueba. El javadoc del método generado trae
-   la invocación concreta del motor elegido (credenciales y URI incluidas), copiada de la que
-   usa `infra/validate-infra.sh`. Sigue siendo el penúltimo recurso: si el servicio expone el
-   estado por su API, se comprueba por ahí, que es lo que hace un cliente.
+4. Por **la base de datos**, con `db("cli", "arg", …)` —`dbShell("…")` **solo** si hace falta un
+   pipe o una redirección—, para el efecto que ninguna operación del diseño devuelve. Resuelve el
+   contenedor correcto por sí solo: con Mongo y con Oracle la CLI vive dentro del contenedor de la
+   BD, no en el toolbox, y esa regla no se escribe a mano en una clase de prueba. El javadoc del
+   método generado trae la invocación concreta del motor elegido (credenciales y URI incluidas),
+   copiada de la que usa `infra/validate-infra.sh`. Sigue siendo el penúltimo recurso: si el
+   servicio expone el estado por su API, se comprueba por ahí, que es lo que hace un cliente.
+
+   **La sentencia entra como un elemento del argv, nunca dentro de una cadena para `sh -c`.**
+   No es una preferencia de estilo: el comando pasa por el cliente de contenedores antes que por
+   el shell, y en Windows `podman.exe`/`docker.exe` reinterpreta las comillas dobles de un
+   `psql -c "…"` armado a mano — del SQL sobrevive un fragmento y el motor responde con un error
+   de sintaxis que no se parece a la causa. La regla vale para los helpers **propios**: un
+   `seedCategory()` que arma su INSERT como cadena es el caso real que ha tumbado dos
+   generaciones, y como esos helpers viven en `@BeforeAll`, el fallo no es de un escenario sino
+   de la clase entera (`initializationError`, todos sus `FL-*` en `NO_EJERCITADO`). La única
+   excepción es Oracle, cuyo `sqlplus` lee la sentencia por la entrada estándar; ahí el javadoc
+   generado dice explícitamente que la forma argv no existe.
 
    **El nombre de la tabla no se adivina.** Es el error que más ciclos de arbitraje ha
    gastado en las corridas, y siempre con el mismo desenlace: un `culprit: test` por
