@@ -189,7 +189,9 @@ abajo). Hay dos formas de reclamar y aquí solo sirve una:
 | **Lock pesimista** — `SELECT … FOR UPDATE SKIP LOCKED` | El lock de fila, que **vive lo que vive la transacción** | **No.** Obligaría a sostener la transacción durante la llamada al proveedor: una conexión del pool retenida por la latencia de un tercero |
 | **Marca persistida** — `UPDATE … SET <marca>` o `findAndModify` | La marca, que **sobrevive al commit** | **Sí.** La transacción del reclamo dura lo que dura un `UPDATE` y la llamada va fuera |
 
-**El barrido reclama con marca persistida.** Y precisamente porque la marca sobrevive al commit,
+**El barrido reclama con marca persistida.** Ese commit **no lo tienes por defecto** en esta
+arquitectura y hay un solo sitio donde es legal obtenerlo: § *De dónde sale ese commit*, más abajo.
+Y precisamente porque la marca sobrevive al commit,
 sobrevive también a la muerte de la réplica que la puso: necesita **caducidad**, o un proceso que muera
 entre el reclamo y la llamada retiene el candidato para siempre. Pasado el plazo, vuelve a ser elegible.
 Regla para dimensionarlo: **`claim-timeout` > tamaño del lote × timeout de la llamada**, con holgura; por
@@ -237,6 +239,66 @@ Es el mismo razonamiento que decide los dos órdenes del `IdempotencyGuard` (`al
 frente a `tryRecord`), aplicado a otro sitio: se prefiere repetir algo absorbible a perder algo que nadie
 va a echar de menos.
 
+#### De dónde sale ese commit (el paso que no es tuyo por defecto)
+
+El punto 1 pide un commit **propio**, y en esta arquitectura no lo tienes por escribirlo: hay que ir a
+buscarlo, y solo hay un sitio donde es legal.
+
+`UseCaseMediator` envuelve el `handle()` **entero** en una única transacción de escritura, así que todo
+lo que el barrido haga —el reclamo, las llamadas y la confirmación— cae dentro de ella salvo que algo la
+rompa. Y `constitution.md` cierra el camino obvio: `application` no importa Spring, ni `@Transactional`
+ni un `TransactionTemplate` inyectado. El handler **no puede** abrirse su propia transacción, y no es un
+descuido de la constitución: es lo que mantiene los handlers agnósticos del framework.
+
+De ahí que un adaptador de repositorio anotado `@Transactional` **a secas no sirva aquí**: la propagación
+por defecto es `REQUIRED`, que se **une** a la transacción del mediator en vez de abrir una. El `UPDATE`
+del reclamo queda pendiente hasta que termina el barrido completo — es decir, hasta después de todas las
+llamadas al proveedor, que es exactamente cuando ya no aísla a nadie.
+
+El único sitio legal es el **adaptador**, que sí vive en `infrastructure` y sí puede hablar con Spring:
+
+```java
+/**
+ * Reclamo del barrido, en su PROPIA transacción: el commit de este UPDATE es lo que hace la
+ * marca visible a las demás réplicas antes de que ninguna llame al proveedor. Con la
+ * propagación por defecto (REQUIRED) se uniría a la transacción del UseCaseMediator y no
+ * commitearía hasta el final del barrido, que es lo mismo que no reclamar.
+ */
+@Override
+@Transactional(propagation = Propagation.REQUIRES_NEW)
+public int claimForReconciliation(List<UUID> ids, Instant claimedAt, Instant claimExpiredBefore) { … }
+```
+
+Dos honestidades sobre esto, porque media solución que se lee como entera es peor que ninguna:
+
+- **`REQUIRES_NEW` te da la visibilidad, no el punto 2.** La transacción externa del mediator sigue
+  abierta mientras llamas al proveedor, así que la conexión sigue retenida por la latencia de un tercero.
+  Que la llamada quede **fuera de toda transacción** exige que el barrido no se despache dentro de una, y
+  eso es cosa de `build`, no tuya: no lo arregles con más anotaciones.
+- **Un `flush()` no es un commit.** Empuja el `UPDATE` a la base dentro de la misma transacción; ninguna
+  otra réplica lo ve hasta que esa transacción confirme. Si lo que buscabas era visibilidad, no la tienes.
+
+#### La marca persistida que nunca commitea
+
+El error de arriba merece nombre propio porque **es el que más se parece a estar bien**. La forma del
+código es la recomendada —`UPDATE … SET <marca>` con `@Modifying`, lote acotado con `Pageable`, umbral
+parametrizado— y lo único que falta es dónde cae el commit, que no se ve leyendo la consulta: se ve
+leyendo la propagación, tres archivos más allá.
+
+Cómo se reconoce en revisión: el handler suele traer un comentario que **afirma** la propiedad («reclamo
+con commit propio, visible a las demás réplicas»). Si esa frase está y el adaptador no dice
+`REQUIRES_NEW`, la frase es la única parte del reclamo que existe. Compruébalo siempre en ese orden —
+primero la propagación del adaptador, después lo que promete el javadoc.
+
+Qué se pierde exactamente, que no es solo el aislamiento:
+
+- Las N réplicas ven los mismos candidatos y todas llaman al proveedor. La única red que queda es la
+  **idempotencia saliente**, que absorbe el duplicado pero no era para estar sola.
+- La transacción de escritura se sostiene durante **todas** las llamadas del lote: tamaño del lote ×
+  latencia del proveedor, con una conexión del pool retenida.
+- Si algo escapa del `catch` a mitad del bucle, revierte el lote entero: se pierden los reclamos **y** el
+  registro de los intentos ya encargados al proveedor.
+
 #### El híbrido que hay que evitar
 
 Reclamar con `SKIP LOCKED` y **commitear antes** de llamar al proveedor. Parece la forma (1)(2)(3) de
@@ -244,9 +306,11 @@ arriba, y no lo es: al confirmar, el lock se suelta y no queda nada en la fila q
 tomó. Las N réplicas vuelven a verla en la pasada siguiente —o en la misma, si sus relojes coinciden— y
 todas actúan. Es el fallo exacto que el reclamo venía a evitar, con la apariencia de estar resuelto.
 
-Merece nombre propio porque es el único de los tres caminos que **ningún gate distingue solo**:
-`infra/check-idempotency.sh` ve el patrón del reclamo y su cota, no dónde cae el commit. Que el barrido
-sea correcto en este punto depende de quien lo escribe y de quien lo revisa.
+Es el segundo de los dos caminos que **ningún gate distingue solo**, junto con la marca que nunca
+commitea: `infra/check-idempotency.sh` ve el patrón del reclamo y su cota, no dónde cae el commit —
+y no puede verlo sin presuponer un mecanismo concreto, que es justo lo que un gate no debe hacer. Los
+dos fallan por el mismo sitio y ninguno se distingue de lo correcto sin mirar la propagación. Que el
+barrido sea correcto en este punto depende de quien lo escribe y de quien lo revisa.
 
 ### Varios barridos en el mismo proceso
 
