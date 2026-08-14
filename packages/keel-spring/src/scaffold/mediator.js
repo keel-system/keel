@@ -190,6 +190,51 @@ public class UseCaseContainer {
   };
 }
 
+// El cuarto camino de despacho, y el único que no abre transacción. Se emite SIEMPRE
+// —también sin capa persistence, donde es idéntico a dispatch(Command)— para que el
+// scheduler pueda llamarlo sin preguntar por la capa: quién lo usa lo decide el DSL
+// (una operación con `schedule` que reconcilia una activación saliente), no el stack.
+//
+// Existe porque la garantía del barrido es un ORDEN de commits, no una transacción:
+// reclamar y confirmar, llamar fuera de toda transacción, confirmar el desenlace. Con
+// el handle() envuelto en una sola transacción de escritura, el reclamo no confirma
+// hasta el final del lote —así que no aísla a ninguna réplica— y la llamada al
+// proveedor retiene una conexión del pool por la latencia de un tercero. Ver
+// conventions/dependencies.md § El orden dentro del barrido.
+const DISPATCH_WITHOUT_TRANSACTION = `    /**
+     * Despacha un Command <b>sin abrir transacción</b>: las abre el adaptador de repositorio
+     * en cada llamada, así que el barrido controla dónde cae cada commit.
+     *
+     * <p>Es para las operaciones con {@code schedule} que ACTÚAN sobre lo que encuentran —un
+     * barrido de reconciliación—, donde la llamada al proveedor va EN MEDIO del trabajo. Su
+     * garantía es un orden de commits: (1) reclamar los candidatos y confirmar, que es lo que
+     * hace el reclamo visible a las demás réplicas; (2) llamar al proveedor, fuera de toda
+     * transacción; (3) confirmar el desenlace. Una transacción abarcadora rompe (1) —el
+     * reclamo no confirmaría hasta el final del lote— y rompe (2) —una conexión del pool
+     * retenida por la latencia de un tercero, multiplicada por el tamaño del lote—.
+     *
+     * <p>Las demás operaciones con {@code schedule} (una purga, un cierre diario) NO usan este
+     * camino: no llaman a nadie en medio y su transacción única es lo correcto.
+     *
+     * <p>Mismo razonamiento que el {@code OutboxRelay} de la rama documental, que tampoco es
+     * {@code @Transactional}: abrir una transacción solo serviría para mantenerla abierta
+     * durante I/O externo.
+     *
+     * <p>Ver docs/keel/conventions/dependencies.md § El orden dentro del barrido.
+     */
+    @SuppressWarnings("unchecked")
+    public <C extends Command> void dispatchWithoutTransaction(C command) {
+        CommandHandler<C> instance = (CommandHandler<C>) useCaseContainer.resolve(command.getClass());
+        instance.handle(command);
+    }
+
+    /** Igual que el anterior, para un barrido cuya operación declara \`output\`. */
+    @SuppressWarnings("unchecked")
+    public <R, C extends ReturningCommand<R>> R dispatchWithoutTransaction(C command) {
+        ReturningCommandHandler<C, R> instance = (ReturningCommandHandler<C, R>) useCaseContainer.resolve(command.getClass());
+        return instance.handle(command);
+    }`;
+
 function renderMediator(model) {
   const transactional = model.layersPresent.persistence;
 
@@ -200,8 +245,15 @@ function renderMediator(model) {
  *
  * La frontera transaccional del diseño vive aquí: las Query corren en
  * transacción readOnly y los Command en transacción de escritura, así los
- * handlers no dependen de Spring. Si una operación necesita semántica especial
- * (p. ej. REQUIRES_NEW), el agente puede anotar su handler con @Transactional.` : ''}
+ * handlers no dependen de Spring.
+ *
+ * <p>Con una excepción, {@link #dispatchWithoutTransaction}: los barridos que
+ * llaman a un proveedor EN MEDIO de su trabajo no pueden correr bajo una
+ * transacción abarcadora. Su javadoc explica por qué.
+ *
+ * <p>Si una operación necesita semántica transaccional especial, se resuelve en
+ * el ADAPTADOR de repositorio, que sí vive en infraestructura y puede hablar con
+ * Spring. El handler no: no importa Spring (constitution.md).` : ''}
  */`;
 
   let members;
@@ -233,7 +285,9 @@ function renderMediator(model) {
     public <R, C extends ReturningCommand<R>> R dispatch(C command) {
         ReturningCommandHandler<C, R> instance = (ReturningCommandHandler<C, R>) useCaseContainer.resolve(command.getClass());
         return writeTransaction.execute(status -> instance.handle(command));
-    }`;
+    }
+
+${DISPATCH_WITHOUT_TRANSACTION}`;
   } else {
     members = `    private final UseCaseContainer useCaseContainer;
 
@@ -256,7 +310,9 @@ function renderMediator(model) {
     public <R, C extends ReturningCommand<R>> R dispatch(C command) {
         ReturningCommandHandler<C, R> instance = (ReturningCommandHandler<C, R>) useCaseContainer.resolve(command.getClass());
         return instance.handle(command);
-    }`;
+    }
+
+${DISPATCH_WITHOUT_TRANSACTION}`;
   }
 
   const body = `${javadocHeader}

@@ -85,7 +85,9 @@ suscripción ya declara `triggers`, así que la operación de proyección existe
    un handler ocurre **dentro** de ella y la mantiene abierta durante todo el timeout de la llamada.
    Desde una query es aceptable; desde un command que escribe, resuelve el dato **antes** de despachar
    el command. Si eso no es posible, la necesidad probablemente debería ser `strategy: on-demand` en el
-   diseño: dilo en el reporte en vez de arreglarlo en el código.
+   diseño: dilo en el reporte en vez de arreglarlo en el código. **El barrido de una reconciliación es
+   la excepción**: se despacha sin transacción abarcadora, así que ahí un `onMiss: fetch` no retiene
+   ninguna conexión.
 7. **No dupliques resiliencia.** El retry y el circuit breaker viven en el adaptador del cliente
    (resilience4j, desde `http-clients`). El Reader no los repite.
 8. **El encargo sale DESPUÉS de la guarda de estado.** Una activación por HTTP no participa de la
@@ -189,8 +191,8 @@ abajo). Hay dos formas de reclamar y aquí solo sirve una:
 | **Lock pesimista** — `SELECT … FOR UPDATE SKIP LOCKED` | El lock de fila, que **vive lo que vive la transacción** | **No.** Obligaría a sostener la transacción durante la llamada al proveedor: una conexión del pool retenida por la latencia de un tercero |
 | **Marca persistida** — `UPDATE … SET <marca>` o `findAndModify` | La marca, que **sobrevive al commit** | **Sí.** La transacción del reclamo dura lo que dura un `UPDATE` y la llamada va fuera |
 
-**El barrido reclama con marca persistida.** Ese commit **no lo tienes por defecto** en esta
-arquitectura y hay un solo sitio donde es legal obtenerlo: § *De dónde sale ese commit*, más abajo.
+**El barrido reclama con marca persistida.** Ese commit lo tienes porque `build` despacha el barrido
+**sin** transacción abarcadora: § *De dónde sale ese commit*, más abajo.
 Y precisamente porque la marca sobrevive al commit,
 sobrevive también a la muerte de la réplica que la puso: necesita **caducidad**, o un proceso que muera
 entre el reclamo y la llamada retiene el candidato para siempre. Pasado el plazo, vuelve a ser elegible.
@@ -239,56 +241,48 @@ Es el mismo razonamiento que decide los dos órdenes del `IdempotencyGuard` (`al
 frente a `tryRecord`), aplicado a otro sitio: se prefiere repetir algo absorbible a perder algo que nadie
 va a echar de menos.
 
-#### De dónde sale ese commit (el paso que no es tuyo por defecto)
+#### De dónde sale ese commit: el barrido no corre en transacción
 
-El punto 1 pide un commit **propio**, y en esta arquitectura no lo tienes por escribirlo: hay que ir a
-buscarlo, y solo hay un sitio donde es legal.
+Los tres pasos son **tres commits en momentos distintos**, así que lo primero que hace falta es no tener
+una transacción abarcadora que los funda en uno. Eso **ya está resuelto por `build`** y no tienes que
+hacer nada para conseguirlo: el `<Servicio>Scheduler` despacha los barridos con
+`mediator.dispatchWithoutTransaction(...)` en vez de `mediator.dispatch(...)`, precisamente porque su
+garantía es un orden y no una transacción. Las demás operaciones con `schedule` —una purga, un cierre
+diario— siguen con su transacción única, que es lo correcto cuando no hay ninguna llamada a un tercero
+en medio.
 
-`UseCaseMediator` envuelve el `handle()` **entero** en una única transacción de escritura, así que todo
-lo que el barrido haga —el reclamo, las llamadas y la confirmación— cae dentro de ella salvo que algo la
-rompa. Y `constitution.md` cierra el camino obvio: `application` no importa Spring, ni `@Transactional`
-ni un `TransactionTemplate` inyectado. El handler **no puede** abrirse su propia transacción, y no es un
-descuido de la constitución: es lo que mantiene los handlers agnósticos del framework.
+Quién va por cada camino lo decide el diseño, no el generador ni tú: una operación con `schedule` que
+alguna activación declara como su `reconciledBy` es un barrido; el resto, no.
 
-De ahí que un adaptador de repositorio anotado `@Transactional` **a secas no sirva aquí**: la propagación
-por defecto es `REQUIRED`, que se **une** a la transacción del mediator en vez de abrir una. El `UPDATE`
-del reclamo queda pendiente hasta que termina el barrido completo — es decir, hasta después de todas las
-llamadas al proveedor, que es exactamente cuando ya no aísla a nadie.
+La consecuencia práctica, que es lo que tienes que escribir:
 
-El único sitio legal es el **adaptador**, que sí vive en `infrastructure` y sí puede hablar con Spring:
+- **El reclamo commitea con un `@Transactional` a secas** en el método del adaptador. No hace falta
+  `REQUIRES_NEW`: no hay ninguna transacción externa a la que unirse, así que la propagación por defecto
+  abre la suya y la confirma al salir del método. (`REQUIRES_NEW` sigue siendo correcto si te lo
+  encuentras escrito; simplemente ya no es necesario.)
+- **La llamada al proveedor queda fuera de toda transacción** por construcción, sin que tengas que
+  sacarla de ningún sitio.
+- **El adaptador tiene que bastarse solo**, y `build` ya lo genera así: la clase lleva
+  `@Transactional(readOnly = true)` y cada escritura su `@Transactional` de método. Toda consulta que
+  añadas hereda esa transacción de lectura —que es lo que mantiene la sesión abierta para las colecciones
+  LAZY que recorre el mapeo a dominio—, pero **si añades una escritura, anótala**: sin anotar iría contra
+  una transacción de solo lectura y fallará. Es un fallo en caliente, en la primera pasada, y eso es
+  deliberado: el modo de fallo anterior era no aislar nada sin que nadie se enterara.
 
-```java
-/**
- * Reclamo del barrido, en su PROPIA transacción: el commit de este UPDATE es lo que hace la
- * marca visible a las demás réplicas antes de que ninguna llame al proveedor. Con la
- * propagación por defecto (REQUIRED) se uniría a la transacción del UseCaseMediator y no
- * commitearía hasta el final del barrido, que es lo mismo que no reclamar.
- */
-@Override
-@Transactional(propagation = Propagation.REQUIRES_NEW)
-public int claimForReconciliation(List<UUID> ids, Instant claimedAt, Instant claimExpiredBefore) { … }
-```
-
-Dos honestidades sobre esto, porque media solución que se lee como entera es peor que ninguna:
-
-- **`REQUIRES_NEW` te da la visibilidad, no el punto 2.** La transacción externa del mediator sigue
-  abierta mientras llamas al proveedor, así que la conexión sigue retenida por la latencia de un tercero.
-  Que la llamada quede **fuera de toda transacción** exige que el barrido no se despache dentro de una, y
-  eso es cosa de `build`, no tuya: no lo arregles con más anotaciones.
-- **Un `flush()` no es un commit.** Empuja el `UPDATE` a la base dentro de la misma transacción; ninguna
-  otra réplica lo ve hasta que esa transacción confirme. Si lo que buscabas era visibilidad, no la tienes.
+Y un aviso que sigue valiendo: **un `flush()` no es un commit**. Empuja el `UPDATE` a la base dentro de
+la misma transacción; ninguna otra réplica lo ve hasta que esa transacción confirme.
 
 #### La marca persistida que nunca commitea
 
-El error de arriba merece nombre propio porque **es el que más se parece a estar bien**. La forma del
-código es la recomendada —`UPDATE … SET <marca>` con `@Modifying`, lote acotado con `Pageable`, umbral
-parametrizado— y lo único que falta es dónde cae el commit, que no se ve leyendo la consulta: se ve
-leyendo la propagación, tres archivos más allá.
+Este era el fallo antes de que `build` sacara el barrido de la transacción, y merece seguir escrito
+porque **es el que más se parece a estar bien** — y porque reaparece en cuanto alguien devuelve el
+barrido a una transacción abarcadora. La forma del código es la recomendada —`UPDATE … SET <marca>` con
+`@Modifying`, lote acotado con `Pageable`, umbral parametrizado— y lo único que falta es dónde cae el
+commit, que no se ve leyendo la consulta: se ve leyendo la propagación, tres archivos más allá.
 
 Cómo se reconoce en revisión: el handler suele traer un comentario que **afirma** la propiedad («reclamo
-con commit propio, visible a las demás réplicas»). Si esa frase está y el adaptador no dice
-`REQUIRES_NEW`, la frase es la única parte del reclamo que existe. Compruébalo siempre en ese orden —
-primero la propagación del adaptador, después lo que promete el javadoc.
+con commit propio, visible a las demás réplicas»). Comprueba siempre en este orden — primero cómo se
+despacha el barrido y qué anota el adaptador, después lo que promete el javadoc.
 
 Qué se pierde exactamente, que no es solo el aislamiento:
 

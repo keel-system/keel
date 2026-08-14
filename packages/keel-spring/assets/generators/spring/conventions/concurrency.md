@@ -66,6 +66,16 @@ preparados para eso:
 **Cualquier `@Scheduled` que escribas tú no hereda nada de eso.** Si actúa sobre lo que encuentra, tiene
 que reclamar. Está verificado por `infra/check-idempotency.sh`, familia `reconciliation`.
 
+Lo que **sí** hace `build` por ti en el barrido de una reconciliación es sacarlo de la transacción: el
+`<Servicio>Scheduler` lo despacha con `dispatchWithoutTransaction`, porque su garantía es un orden de
+commits —reclamar y confirmar, llamar al proveedor fuera de toda transacción, confirmar el desenlace— y
+una transacción abarcadora los funde en uno. Ver `dependencies.md § El orden dentro del barrido`.
+
+Ojo al criterio, que sale del diseño y no de lo que hace el código: es barrido lo que alguna activación
+declara como su `reconciledBy`. Una operación con `schedule` que actúe sobre lo que encuentra **sin**
+estar declarada así sigue corriendo en una transacción única — si de verdad llama a un tercero en medio,
+lo que falta es el `reconciledBy` en el diseño, y eso es un hallazgo para el reporte.
+
 ## El outbox entrega al menos una vez
 
 No es un defecto del relay: si el proceso muere entre la entrega al broker y el commit que marca la fila,

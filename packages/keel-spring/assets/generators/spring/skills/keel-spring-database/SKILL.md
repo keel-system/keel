@@ -48,7 +48,9 @@ validación/reset de datos.
 - `db/migration/` **vacío** (con su README) y los perfiles auxiliares
   `schema-export` y `migrations`: el mecanismo está, el baseline lo pones tú.
 - `application.yaml`: `spring.jpa.open-in-view: false` (no lo revertas: las
-  relaciones lazy se resuelven dentro del `UseCaseMediator`, no en la vista).
+  relaciones lazy se resuelven dentro de la transacción, no en la vista — la del
+  `UseCaseMediator` en los caminos normales, y la del propio adaptador cuando no
+  hay ninguna, que es para lo que su clase lleva `@Transactional(readOnly = true)`).
 - `infra/docker-compose.yaml`: contenedor de la BD elegida (h2 no levanta
   contenedor) e `infra/reset-db.sh` para vaciar datos entre flujos.
 

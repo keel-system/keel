@@ -373,3 +373,23 @@ test('la caducidad del reclamo del relay se parametriza por perfil', () => {
   const relay = read(`${JAVA}/infrastructure/messaging/outbox/OutboxRelay.java`);
   assert.ok(relay.includes('${outbox.relay.claim-timeout-ms:'));
 });
+
+// El barrido de una reconciliación corre SIN transacción abarcadora también en la rama
+// documental: el criterio es del diseño (`reconciledBy`), no del motor.
+//
+// Lo que NO se replica aquí es el otro lado del cambio. En JPA el adaptador lleva
+// @Transactional(readOnly = true) de clase porque sin sesión abierta el mapeo a dominio
+// revienta al recorrer una colección LAZY. En Mongo no hay nada de eso —el agregado ES el
+// documento y viene entero—, y la anotación abriría una transacción de Mongo en CADA
+// lectura de TODOS los caminos, que exige replica set y no es gratis. Coste sin
+// contrapartida: el adaptador documental se queda como estaba.
+test('el barrido documental se despacha sin transacción, y su adaptador no cambia', () => {
+  const { read } = scaffoldVault();
+
+  const scheduler = read(`${JAVA}/infrastructure/scheduling/AssetVaultScheduler.java`);
+  assert.ok(scheduler.includes('mediator.dispatchWithoutTransaction(new ReconcileScansCommand());'), scheduler);
+  assert.ok(!scheduler.includes('mediator.dispatch(new ReconcileScansCommand());'), scheduler);
+
+  const adapter = read(`${JAVA}/infrastructure/persistence/repositories/AssetRepositoryImpl.java`);
+  assert.ok(!adapter.includes('@Transactional(readOnly = true)'), adapter);
+});

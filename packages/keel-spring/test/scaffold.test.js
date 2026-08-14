@@ -158,6 +158,20 @@ test('scaffoldService genera el proyecto completo con contenido clave', () => {
   assert.ok(mediatorFile.includes('public <R, Q extends Query<R>> R dispatch(Q query)'));
   assert.ok(mediatorFile.includes('TransactionTemplate'));
   assert.ok(mediatorFile.includes('readTransaction.setReadOnly(true);'));
+  // El cuarto camino: sin transacción, para el barrido de una reconciliación. Las DOS
+  // sobrecargas, porque un barrido con `output` es un ReturningCommand y sin la segunda
+  // el `main` no compilaría — un fallo que ningún includes() de este archivo vería.
+  assert.ok(mediatorFile.includes('public <C extends Command> void dispatchWithoutTransaction(C command)'));
+  assert.ok(
+    mediatorFile.includes('public <R, C extends ReturningCommand<R>> R dispatchWithoutTransaction(C command)')
+  );
+  // Y no abren transacción: si tocaran writeTransaction serían dispatch con otro nombre.
+  // Se corta desde la PRIMERA declaración (no desde la primera mención, que está en el
+  // javadoc de clase, antes de que se declaren los TransactionTemplate).
+  const withoutTx = mediatorFile.slice(
+    mediatorFile.indexOf('public <C extends Command> void dispatchWithoutTransaction')
+  );
+  assert.ok(!withoutTx.includes('writeTransaction'), withoutTx);
   assert.ok(fs.existsSync(path.join(workspace, 'services', 'product-catalog-spring', 'src/main/java/com/commerce/productcatalog/infrastructure/configurations/usecase/UseCaseAutoRegister.java')));
   assert.ok(fs.existsSync(path.join(workspace, 'services', 'product-catalog-spring', 'src/main/java/com/commerce/productcatalog/application/interfaces/ReturningCommandHandler.java')));
 
@@ -189,6 +203,16 @@ test('scaffoldService genera el proyecto completo con contenido clave', () => {
   const adapter = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/persistence/repositories/ProductRepositoryImpl.java');
   assert.ok(adapter.includes('implements ProductRepository'));
   assert.ok(adapter.includes('private Product toDomain(ProductJpa jpa)'));
+  // El adaptador se basta solo. Bajo el mediator es un no-op (REQUIRED se une a la
+  // transacción existente e ignora el readOnly); importa en el único camino que no trae
+  // transacción, el barrido de una reconciliación, donde sin esto una consulta que
+  // devuelva un agregado con colecciones LAZY revienta con LazyInitializationException.
+  assert.ok(adapter.includes('@Transactional(readOnly = true)\npublic class ProductRepositoryImpl'), adapter);
+  assert.ok(adapter.includes('import org.springframework.transaction.annotation.Transactional;'));
+  // Y por eso mismo TODA escritura lleva su @Transactional de método: sin él heredaría
+  // el readOnly de la clase. Antes solo lo llevaba save() y solo cuando drenaba eventos.
+  assert.ok(adapter.includes('@Transactional\n    public Product save(Product entity)'), adapter);
+  assert.ok(adapter.includes('@Transactional\n    public void deleteById(UUID id)'), adapter);
   // El volcado dominio → JPA se aplica sobre la instancia que save() cargó, que
   // puede estar gestionada; construir una nueva convertiría el save en un merge
   // sobre detached (y con @Version, en un 409 sin concurrencia).
@@ -2493,6 +2517,10 @@ test('sin capa persistence: POJOs sin JPA, sin repositorio ni datasource', () =>
   // Sin persistence el mediator no abre transacciones.
   const mediatorFile = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/configurations/usecase/UseCaseMediator.java');
   assert.ok(!mediatorFile.includes('TransactionTemplate'));
+  // Y el camino sin transacción existe igual: quién lo usa lo decide el DSL (una operación
+  // con schedule que reconcilia), no el stack, así que el scheduler puede llamarlo sin
+  // preguntar por la capa. Aquí es simplemente idéntico a dispatch.
+  assert.ok(mediatorFile.includes('dispatchWithoutTransaction'));
 });
 
 test('persistencia: relación interna con @JoinColumn (FK en la hija, sin join table)', () => {

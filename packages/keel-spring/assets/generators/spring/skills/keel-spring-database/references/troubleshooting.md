@@ -11,7 +11,11 @@ orden de probabilidad:
 
 1. **Transacciones largas**: un handler hace I/O externo (HTTP, broker) dentro
    de la transacción del `UseCaseMediator`. Saca ese I/O fuera (o a
-   `afterCommit`); la transacción debe durar lo que duran las queries.
+   `afterCommit`); la transacción debe durar lo que duran las queries. Caso
+   típico: un barrido que llama a un proveedor por cada candidato. Si ese barrido
+   es el `reconciledBy` de una activación, `build` ya lo despacha sin transacción
+   abarcadora; si aun así retiene conexiones, mira que el adaptador no esté
+   envolviendo el lote entero en una sola.
 2. **Fuga**: conexión abierta a mano sin cerrar. Diagnostica con
    `leak-detection-threshold: 60000` en local y mira el stack trace que loguea.
 3. Pool realmente corto para la carga: **última** hipótesis; sube

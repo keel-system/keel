@@ -617,6 +617,77 @@ test('scheduler: con una sola operación programada el segundo sigue siendo 0', 
   assert.ok(scheduler.includes('@Scheduled(cron = "0 0 3 * * *")'), scheduler);
 });
 
+// ─── El barrido no corre en transacción ──────────────────────────────────────
+//
+// Un barrido son TRES commits en momentos distintos —reclamar y confirmar, llamar al
+// proveedor fuera de toda transacción, confirmar el desenlace— y el mediator los fundía
+// en uno envolviendo el handle() entero. El reclamo no se hacía visible a las demás
+// réplicas hasta el final del lote, que es cuando ya no aísla a nadie; la llamada al
+// tercero retenía una conexión del pool durante lote × latencia; y un error no capturado
+// revertía el lote entero. Se vio en la corrida del 14/08/2026: el código tenía la forma
+// correcta y un javadoc afirmando "reclamo con commit propio" sobre algo que no lo tenía.
+//
+// El criterio de qué operación va por cada camino NO es una heurística del generador: es
+// `reconciledBy` del diseño, el mismo campo del que `idempotency-check.js` deriva la
+// familia `reconciliation`. Que el gate y el scaffolding claven el mismo predicado sobre
+// el mismo dato vale más que cualquier precisión extra.
+
+const withReconciledSweep = (name) => {
+  const layers = withSweeps({ [name]: '* * * * *' });
+  layers.dependencies.dependencies.catalog.activations.reserveStock.reconciledBy = name;
+  return layers;
+};
+
+test('scheduler: el barrido de una reconciliación se despacha SIN transacción', () => {
+  const scheduler = schedulersOf(withReconciledSweep('sweepStaleReservations'));
+
+  assert.ok(
+    scheduler.includes('mediator.dispatchWithoutTransaction(new SweepStaleReservationsCommand());'),
+    scheduler
+  );
+  // Y no por el camino transaccional: el reclamo no confirmaría hasta el final del lote.
+  assert.ok(!scheduler.includes('mediator.dispatch(new SweepStaleReservationsCommand());'), scheduler);
+  // El porqué viaja con el método, o la siguiente lectura lo «unifica por limpieza».
+  assert.ok(scheduler.includes('sin transacción abarcadora'), scheduler);
+});
+
+// El caso mixto en UNA sola clase es el que de verdad acota el radio: no basta con que el
+// barrido cambie, hace falta que la operación programada de al lado NO cambie.
+test('scheduler: una operación con schedule que no reconcilia nada sigue en transacción', () => {
+  const layers = withReconciledSweep('sweepStaleReservations');
+  layers['use-cases'].operations.purgeOldOrders = {
+    description: 'Purga pedidos viejos.',
+    kind: 'command',
+    internal: true,
+    input: 'void',
+    output: 'void',
+    schedule: { cron: '0 4 * * *' }
+  };
+  const scheduler = schedulersOf(layers);
+
+  assert.ok(scheduler.includes('mediator.dispatch(new PurgeOldOrdersCommand());'), scheduler);
+  assert.ok(!scheduler.includes('mediator.dispatchWithoutTransaction(new PurgeOldOrdersCommand());'), scheduler);
+  // Y el barrido de la misma clase sigue por el suyo: conviven.
+  assert.ok(
+    scheduler.includes('mediator.dispatchWithoutTransaction(new SweepStaleReservationsCommand());'),
+    scheduler
+  );
+});
+
+// El stub del barrido decía "la llamada ocurre DENTRO de la transacción que abrió el
+// UseCaseMediator" en la nota de `awaits: nothing`, justo al lado de la nota de
+// reconciliación que le pide colocar sus commits. Dos frases opuestas en el mismo
+// comentario es peor que ninguna de las dos.
+test('el stub del barrido no promete una transacción que no existe', () => {
+  const layers = withReconciledSweep('sweepStaleReservations');
+  const handler = handlerOf(modelFrom(layers), 'SweepStaleReservationsCommandHandler');
+
+  assert.ok(handler.includes('SIN TRANSACCIÓN ABARCADORA'), handler);
+  assert.ok(!handler.includes('DENTRO de la transacción que abrió el UseCaseMediator'), handler);
+  // Y dice lo que el agente tiene que hacer con eso: anotar el reclamo, sin REQUIRES_NEW.
+  assert.ok(handler.includes('@Transactional'), handler);
+});
+
 test('compensación sin transición de vuelta: el estado que falta se reporta, no se inventa', () => {
   const layers = withCompensation();
   delete layers['use-cases'].operations.applyProductSnapshot.transitions;

@@ -380,6 +380,7 @@ function renderHandler(model, service, operation) {
         `NO vale reclamar con SKIP LOCKED y confirmar antes de llamar: al confirmar se suelta el lock y no queda nada en la fila que diga que alguien la tomó, así que las N vuelven a verla y todas actúan — el fallo exacto que el reclamo evita, con apariencia de resuelto. Es lo único de este barrido que check-idempotency.sh no puede distinguir: ve el patrón del reclamo, no dónde cae el commit. ` +
         `La transición del agregado NO basta: las réplicas leen antes de que ninguna confirme, así que todas pasan el guard y todas actúan; lo único que absorbe las llamadas repetidas al proveedor es la idempotencia saliente. ` +
         `Y si lo que haces es reencargar publicando un evento, no lo absorbe nada: cada réplica hace su propio raise y estampa un metadata.eventId distinto, así que para el consumidor son N hechos y su processed_event no los deduplica. ` +
+        `SIN TRANSACCIÓN ABARCADORA: a diferencia de los demás casos de uso, este NO corre dentro de una transacción — el scheduler lo despacha con mediator.dispatchWithoutTransaction() justo para que puedas colocar los commits donde toca. La consecuencia práctica: cada llamada al adaptador de repositorio abre y confirma la SUYA, así que el commit del reclamo sale de que el método del adaptador esté anotado @Transactional (a secas: no hace falta REQUIRES_NEW, porque no hay ninguna transacción externa a la que unirse), y la llamada al proveedor cae fuera de todas. A cambio, el adaptador tiene que bastarse solo: la clase lleva @Transactional(readOnly = true) y toda consulta que añadas hereda esa transacción de lectura; si añades una ESCRITURA, anótala @Transactional o fallará por transacción de solo lectura. ` +
         `ORDEN: son DOS commits y no se confunden — (1) marcar el reclamo y confirmar, que es lo que lo hace visible a las demás réplicas; (2) llamar al proveedor, fuera de toda transacción; (3) transición al estado final y confirmar. Si actúas contra el proveedor y mueres antes de (3), la entidad sigue reclamada y al caducar la marca la siguiente pasada repite la llamada, que es lo que absorbe la idempotencia saliente: tiene red. Al revés —confirmar el desenlace y luego actuar— si mueres en medio dejas la entidad resuelta y el trabajo vivo en el proveedor: un huérfano que no detecta nadie. ` +
         `CARRERA CON EL CAMINO FELIZ: mientras barres puede llegar el evento de desenlace. Si al mover el candidato lo encuentras ya fuera del estado de espera, ganó el otro camino: es la carrera resuelta, no un fallo — no lo registres como error ni lo reintentes`
     );
@@ -436,7 +437,7 @@ function renderHandler(model, service, operation) {
   // decidir, y el trabajo delegado sale después de haber decidido.
   for (const { dependency, need } of operation.dependencyNeeds ?? []) notes.push(needNote(dependency, need, operation));
   for (const { dependency, activation } of operation.dependencyActivations ?? []) {
-    notes.push(activationNote(dependency, activation));
+    notes.push(activationNote(dependency, activation, (operation.reconciles ?? []).length > 0));
   }
   // Orden de los efectos. Solo se dice cuando hay las dos cosas, porque solo entonces
   // se puede equivocar: una llamada saliente NO participa de la transacción, así que
@@ -529,7 +530,11 @@ function needNote(depId, need, operation) {
 
 // Nota de una activación (`activations`): el trabajo que esta operación delega
 // en otro servidor. Es lo que el DSL declara y ningún artefacto materializaba.
-function activationNote(depId, activation) {
+// `sweep` cambia una sola frase, la del `awaits: nothing`, pero no es un matiz: un barrido
+// se despacha SIN transacción abarcadora (ver renderScheduler), así que decirle ahí que la
+// llamada «ocurre dentro de la transacción que abrió el UseCaseMediator» sería contradecir,
+// en el mismo comentario, la nota de reconciliación que le dice lo contrario.
+function activationNote(depId, activation, sweep = false) {
   if (activation.event) {
     const raise = activation.event.className ? `raise(${activation.event.className}.of(...))` : 'raise(...)';
     return `Activación ${depId}.${activation.name}: ${activation.effect} — se delega publicando ${activation.event.name}, que emite el agregado con ${raise} dentro del método de negocio. El handler no publica nada, y no esperes respuesta: publicar un evento no devuelve resultado`;
@@ -541,7 +546,9 @@ function activationNote(depId, activation) {
   const awaits = {
     outcome: `awaits: outcome — el resultado que devuelve ${depId} condiciona el desenlace de esta operación: usa el cuerpo de la respuesta, no basta con que la llamada no falle.`,
     acknowledgement: `awaits: acknowledgement — basta con que ${depId} acuse recibo; no interpretes el cuerpo como parte del desenlace.`,
-    nothing: `awaits: nothing — no se espera nada de vuelta, pero la llamada sigue siendo síncrona y ocurre DENTRO de la transacción que abrió el UseCaseMediator: su timeout la mantiene abierta (conventions/dependencies.md § transacción).`
+    nothing: sweep
+      ? `awaits: nothing — no se espera nada de vuelta, pero la llamada sigue siendo síncrona y su timeout bloquea la pasada del barrido. Aquí NO hay transacción abarcadora que mantener abierta (este barrido se despacha sin ella), así que lo que se retiene es el turno, no una conexión del pool.`
+      : `awaits: nothing — no se espera nada de vuelta, pero la llamada sigue siendo síncrona y ocurre DENTRO de la transacción que abrió el UseCaseMediator: su timeout la mantiene abierta (conventions/dependencies.md § transacción).`
   }[activation.awaits];
 
   const onFailure = activation.onFailure;
@@ -563,12 +570,31 @@ function renderScheduler(model, service, scheduled, seconds) {
   ]);
 
   const methods = scheduled.map((operation) => {
-    const description = operation.schedule.description ? `${javadoc(operation.schedule.description, '    ')}` : '';
     const components = messageComponents(model, operation);
+    // El barrido de una activación saliente NO se despacha dentro de una transacción, y
+    // el criterio no es una heurística: `reconciles` lo puebla el modelo desde
+    // `dependencies.activations.<a>.reconciledBy`, que es el enlace del DSL que dice
+    // «esta operación con schedule barre los encargos de esta activación». Justo el
+    // conjunto de operaciones que tienen una llamada a un tercero EN MEDIO del trabajo.
+    // Las demás (una purga, un cierre diario) siguen con su transacción única, que es lo
+    // correcto para ellas: no llaman a nadie en medio.
+    const sweep = (operation.reconciles ?? []).length > 0;
+    const sweepNote = sweep
+      ? `${operation.schedule.description ? '<p>' : ''}Despachado <b>sin transacción abarcadora</b> a propósito: este barrido llama al proveedor
+EN MEDIO de su trabajo, así que su garantía es un orden de commits —reclamar y confirmar, llamar
+fuera de toda transacción, confirmar el desenlace— y no una transacción única. Igualarlo a
+{@code mediator.dispatch(...)} «por coherencia» con los demás métodos de esta clase deja el reclamo
+sin confirmar hasta el final del lote: ninguna réplica lo ve y todas actúan sobre los mismos
+candidatos.`
+      : '';
+    const description = javadoc(
+      [operation.schedule.description, sweepNote].filter(Boolean).join('\n\n'),
+      '    '
+    );
     let call;
     if (components.length === 0) {
       imports.add(`${subPackage(model, messagePackage(operation))}.${operation.messageClass}`);
-      call = `mediator.dispatch(new ${operation.messageClass}());`;
+      call = `mediator.${sweep ? 'dispatchWithoutTransaction' : 'dispatch'}(new ${operation.messageClass}());`;
     } else {
       call = `// TODO (agente): el mensaje requiere argumentos; construirlos aquí.
         throw new UnsupportedOperationException("TODO: despachar ${operation.messageClass} desde el scheduler");`;
@@ -592,6 +618,14 @@ function renderScheduler(model, service, scheduled, seconds) {
  * candidatos en vez de solo leerlos — el patrón está en {@code OutboxRelay} y en
  * docs/keel/conventions/dependencies.md. Las purgas generadas no lo necesitan: borrar lo
  * caducado es idempotente por forma.
+ *
+ * <p><strong>No todos los métodos despachan igual, y no es un descuido.</strong> Un barrido
+ * que reconcilia una activación saliente va por {@code dispatchWithoutTransaction}: su
+ * garantía es un ORDEN de commits (reclamar y confirmar, llamar al proveedor fuera de toda
+ * transacción, confirmar el desenlace), y una transacción abarcadora la rompe entera. El
+ * resto —purgas, cierres— va por {@code dispatch} y corre en una transacción única, que es
+ * lo correcto cuando no hay ninguna llamada a un tercero en medio. Quién usa cuál lo decide
+ * el diseño (\`dependencies.activations.<a>.reconciledBy\`), no esta clase.
  *
  * <p><strong>El campo de segundos del cron no es 0 por casualidad.</strong> El diseño
  * declara cinco campos y build añade el sexto, repartiendo el arranque dentro del minuto

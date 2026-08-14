@@ -229,7 +229,6 @@ function renderAdapter(model, entity, paginated, batchLookup) {
   const emitsEvents = model.events.some((event) => event.aggregate === entity.name);
   if (emitsEvents) {
     imports.add('org.springframework.context.ApplicationEventPublisher');
-    imports.add('org.springframework.transaction.annotation.Transactional');
   }
   // Se parte de la instancia GESTIONADA cuando el agregado ya existe: guardar un
   // grafo reconstruido a mano es un merge sobre entidades detached, y con @Version
@@ -254,12 +253,19 @@ function renderAdapter(model, entity, paginated, batchLookup) {
     : `${loadManaged}
         return toDomain(${jpaField}.${save}(jpa));`;
 
+  // Las escrituras llevan @Transactional SIEMPRE, no solo cuando drenan eventos: la clase
+  // es readOnly y sin la anotación de método una escritura sin transacción ambiente iría
+  // contra una transacción de solo lectura. Con transacción ambiente (el caso normal) la
+  // propagación por defecto se une a ella y no cambia nada.
+  imports.add('org.springframework.transaction.annotation.Transactional');
   methods.push(
-    `    @Override${emitsEvents ? '\n    @Transactional' : ''}
+    `    @Override
+    @Transactional
     public ${entity.name} save(${entity.name} entity) {
 ${saveBody}
     }`,
     `    @Override
+    @Transactional
     public void deleteById(UUID id) {
         ${jpaField}.deleteById(id);
     }`
@@ -300,7 +306,23 @@ ${saveBody}
     ctorAssigns.push('        this.eventPublisher = eventPublisher;');
   }
 
-  const body = `@Component
+  const body = `/**
+ * Adaptador del puerto ${entity.name}Repository.
+ *
+ * <p>El {@code @Transactional(readOnly = true)} de clase hace que este adaptador se baste solo.
+ * Casi siempre es un no-op: los caminos normales (REST, listeners) llegan aquí dentro de la
+ * transacción que abrió el {@code UseCaseMediator}, y la propagación por defecto se une a ella
+ * ignorando el flag. Importa en el único camino que NO trae transacción: el barrido de
+ * reconciliación, que se despacha con {@code dispatchWithoutTransaction} justo para poder colocar
+ * sus commits. Sin esto, una consulta que devuelva un agregado con colecciones LAZY reventaría
+ * ahí con {@code LazyInitializationException}.
+ *
+ * <p>Por eso mismo, <b>toda escritura lleva su {@code @Transactional} de método</b>: sin él
+ * heredaría el {@code readOnly} de la clase. Si añades una consulta de escritura a este
+ * adaptador, anótala — el fallo es en caliente y no silencioso, que es lo que se busca.
+ */
+@Component
+@Transactional(readOnly = true)
 public class ${entity.name}RepositoryImpl implements ${entity.name}Repository {
 
 ${fields.join('\n')}

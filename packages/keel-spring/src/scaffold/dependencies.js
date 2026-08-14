@@ -229,6 +229,10 @@ function missBody(model, dependency, need, entity) {
      * todo el timeout. Es aceptable desde un handler de query (read-only); desde un command que
      * escribe, resuelve el dato antes de despachar el command, o revisa con quien diseñó si esa
      * necesidad debería ser {@code strategy: on-demand}.
+     *
+     * <p>Con una excepción: desde el barrido de una reconciliación no hay transacción abarcadora
+     * —lo despacha {@code dispatchWithoutTransaction}—, así que ahí la llamada no retiene ninguna
+     * conexión y el {@code save} de {@code hydrate} abre y confirma la suya en el adaptador.
      */
     public Optional<${entity.name}> byKey(${keyFieldJavaType} ${keyField}) {
         return ${finder}.or(() -> hydrate(${keyField}));
