@@ -76,13 +76,13 @@ function kafkaConfig(model, subs) {
     'org.springframework.kafka.core.ProducerFactory',
     'org.springframework.kafka.listener.DeadLetterPublishingRecoverer',
     'org.springframework.kafka.listener.DefaultErrorHandler',
-    'org.springframework.util.backoff.FixedBackOff'
+    'org.springframework.util.backoff.BackOff'
   ]);
 
   const groups = byDestination(model, 'kafka', subs);
   const topics = groups.map((group) => `"${group.destination}"`).join(', ');
-  const attempts = maxAttempts(subs);
-  const delay = backoffMs(subs);
+  const backOff = retryBackOff(subs);
+  for (const imported of backOff.imports) imports.add(imported);
   const listed = subs.map((sub) => `${sub.name} → ${deadLetterName('kafka', sub.topicDefault)}`).join(', ');
   const shared = groups
     .filter((group) => group.subs.length > 1)
@@ -137,10 +137,12 @@ public class DeadLetterConfig {
                     log.error("Mensaje descartado de {} tras agotar los reintentos; el diseño no declara dead-letter para esta suscripción",
                             record.topic(), exception);
                 },
-                new FixedBackOff(${delay}L, ${attempts - 1}L));
+                retryBackOff());
 
         return handler;
     }
+
+${backOff.method}
 
     /**
      * La clave del record que llega al recoverer es siempre la del origen (String).
@@ -272,6 +274,68 @@ ${beans}
 // quedarse corto pierde mensajes de la que más paciencia pedía.
 const maxAttempts = (subs) => Math.max(...subs.map((sub) => sub.retry?.maxAttempts ?? 3));
 const backoffMs = (subs) => Math.max(...subs.map((sub) => sub.retry?.initialDelayMs ?? 1000));
+
+// `maxDelayMs` solo tiene sentido con curva: con `fixed` no hay nada que acotar. Se toma
+// el mayor de las que lo declaran, y `null` si ninguna lo hace (ahí manda el default de
+// Spring, 30 s, y ponerle un número sería inventarlo).
+function maxDelayMs(subs) {
+  const declared = subs.map((sub) => sub.retry?.maxDelayMs).filter((value) => typeof value === 'number');
+  return declared.length > 0 ? Math.max(...declared) : null;
+}
+
+/**
+ * El `BackOff` del error handler, derivado de `onFailure.retry.backoff`.
+ *
+ * El handler es **uno solo** para el container factory, así que las políticas de las
+ * suscripciones hay que reconciliarlas: con `maxAttempts` e `initialDelayMs` ya gana el
+ * mayor, y con la curva gana `exponential` en cuanto una la pida — es la más paciente de
+ * las dos, y el criterio tiene que ser el mismo (quedarse corto pierde los mensajes de la
+ * suscripción que más esperaba).
+ *
+ * El valor por defecto del DSL es `exponential` (`common.schema.json § retryPolicy`), así
+ * que emitir `FixedBackOff` siempre era además el caso menos probable: un diseño que no
+ * dice nada pedía curva y recibía intervalo plano.
+ *
+ * El multiplicador **no está en el DSL**: se deja el de Spring (1.5) en vez de inventar un
+ * número que ningún artefacto respalda.
+ */
+function retryBackOff(subs) {
+  const attempts = maxAttempts(subs);
+  const initial = backoffMs(subs);
+  const exponential = subs.some((sub) => (sub.retry?.backoff ?? 'exponential') === 'exponential');
+
+  if (!exponential) {
+    return {
+      imports: ['org.springframework.util.backoff.FixedBackOff'],
+      method: `    /** Intervalo plano: las suscripciones con descarte declaran {@code backoff: fixed}. */
+    private static BackOff retryBackOff() {
+        return new FixedBackOff(${initial}L, ${attempts - 1}L);
+    }`
+    };
+  }
+
+  const ceiling = maxDelayMs(subs);
+  const ceilingLine = ceiling === null ? '' : `\n        backOff.setMaxInterval(${ceiling}L);`;
+  const ceilingDoc =
+    ceiling === null
+      ? 'El diseño no declara {@code maxDelayMs}, así que\n     * el techo del intervalo es el de Spring (30 s).'
+      : `El techo del intervalo ({@code maxDelayMs}) es\n     * ${ceiling} ms.`;
+
+  return {
+    imports: ['org.springframework.util.backoff.ExponentialBackOff'],
+    method: `    /**
+     * Curva exponencial: las suscripciones con descarte declaran
+     * {@code backoff: exponential}. ${ceilingDoc} El multiplicador es el de Spring
+     * (1.5): el DSL no lo declara y ponerle otro sería un número sin respaldo en el diseño.
+     */
+    private static BackOff retryBackOff() {
+        ExponentialBackOff backOff = new ExponentialBackOff();
+        backOff.setInitialInterval(${initial}L);${ceilingLine}
+        backOff.setMaxAttempts(${attempts - 1});
+        return backOff;
+    }`
+  };
+}
 
 // El nombre del bean sale del DESTINO, que puede traer puntos y guiones (`compliance.events`):
 // se camelliza para que sea un identificador Java válido y estable.

@@ -116,6 +116,74 @@ test('kafka: el serializador del descarte cubre los tres tipos que puede recibir
   assert.ok(serializer.indexOf('value == null') < serializer.indexOf('instanceof'), serializer);
 });
 
+// El tercer defecto del mismo archivo, encontrado en la corrida del 14/08/2026: el
+// `BackOff` era un `FixedBackOff` fijo y `onFailure.retry.backoff` no se leía nunca. Las
+// tres suscripciones de la fixture declaran `exponential` —que además es el DEFAULT del
+// DSL—, así que el caso que el scaffold emitía era el menos probable de los dos: un diseño
+// que no dice nada pide curva y recibía intervalo plano. No rompió ningún escenario (el
+// número total de intentos sí coincidía), y por eso llegó a una corrida sin que nada lo
+// avisara: el gate de este archivo son los tests, no la matriz.
+function withBackoff(policy) {
+  const { manifest, layers } = sharedChannelDesign();
+  const messaging = structuredClone(layers.messaging);
+  for (const sub of Object.values(messaging.subscriptions)) {
+    if (sub.onFailure?.deadLetter) sub.onFailure.retry = { ...sub.onFailure.retry, ...policy };
+  }
+  return { manifest, layers: { ...layers, messaging } };
+}
+
+test('kafka: la curva del BackOff sale de onFailure.retry.backoff', () => {
+  const exponential = configFor('kafka', withBackoff({ maxAttempts: 5, backoff: 'exponential', initialDelayMs: 500, maxDelayMs: 30000 }));
+
+  assert.ok(exponential.includes('new ExponentialBackOff()'), exponential);
+  assert.ok(exponential.includes('backOff.setInitialInterval(500L);'), exponential);
+  assert.ok(exponential.includes('backOff.setMaxInterval(30000L);'), exponential);
+  // maxAttempts del DSL son ENTREGAS totales; el BackOff cuenta REINTENTOS, así que 5 → 4.
+  // Es la misma aritmética que tenía FixedBackOff y no puede cambiar al cambiar la curva.
+  assert.ok(exponential.includes('backOff.setMaxAttempts(4);'), exponential);
+  assert.ok(!exponential.includes('FixedBackOff'), exponential);
+  assert.ok(exponential.includes('import org.springframework.util.backoff.ExponentialBackOff;'), exponential);
+  assert.ok(!exponential.includes('import org.springframework.util.backoff.FixedBackOff;'), exponential);
+
+  const fixed = configFor('kafka', withBackoff({ maxAttempts: 5, backoff: 'fixed', initialDelayMs: 500 }));
+  assert.ok(fixed.includes('new FixedBackOff(500L, 4L)'), fixed);
+  assert.ok(!fixed.includes('ExponentialBackOff'), fixed);
+  assert.ok(!fixed.includes('import org.springframework.util.backoff.ExponentialBackOff;'), fixed);
+});
+
+test('kafka: sin backoff declarado gana el default del DSL, que es exponencial', () => {
+  // `common.schema.json § retryPolicy` fija `backoff` con default `exponential`, así que
+  // un diseño que solo declara `maxAttempts` está pidiendo curva. Emitir intervalo plano
+  // ahí es cambiar el diseño en silencio, no elegir un default conservador.
+  const config = configFor('kafka', withBackoff({ maxAttempts: 3, backoff: undefined, initialDelayMs: undefined, maxDelayMs: undefined }));
+
+  assert.ok(config.includes('new ExponentialBackOff()'), config);
+  assert.ok(config.includes('backOff.setMaxAttempts(2);'), config);
+  // Sin `maxDelayMs` no se estampa techo: manda el default de Spring (30 s). Poner un
+  // número aquí sería inventarlo, que es justo lo que este archivo dejó de hacer.
+  assert.ok(!config.includes('setMaxInterval'), config);
+  assert.ok(config.includes('el techo del intervalo es el de Spring'), config);
+});
+
+test('kafka: con políticas distintas gana la más paciente, curva incluida', () => {
+  // El error handler es UNO para el container factory, así que las políticas de las
+  // suscripciones hay que reconciliarlas. Con `maxAttempts` e `initialDelayMs` ya ganaba
+  // el mayor; la curva sigue el mismo criterio: basta que una pida exponencial.
+  const { manifest, layers } = sharedChannelDesign();
+  const messaging = structuredClone(layers.messaging);
+  const withDlq = Object.values(messaging.subscriptions).filter((sub) => sub.onFailure?.deadLetter);
+  assert.ok(withDlq.length > 1, 'la fixture parcheada tiene que traer más de una suscripción con descarte');
+  withDlq[0].onFailure.retry = { maxAttempts: 2, backoff: 'fixed', initialDelayMs: 100 };
+  withDlq[1].onFailure.retry = { maxAttempts: 5, backoff: 'exponential', initialDelayMs: 500, maxDelayMs: 20000 };
+
+  const config = configFor('kafka', { manifest, layers: { ...layers, messaging } });
+
+  assert.ok(config.includes('new ExponentialBackOff()'), config);
+  assert.ok(config.includes('backOff.setInitialInterval(500L);'), config);
+  assert.ok(config.includes('backOff.setMaxInterval(20000L);'), config);
+  assert.ok(config.includes('backOff.setMaxAttempts(4);'), config);
+});
+
 test('sin canal compartido el resultado no cambia: la deduplicación no altera el caso simple', () => {
   // La fixture tal cual: solo `WithdrawalRejected` declara descarte, así que hay un
   // único topic y nada que agrupar. Es la mitad que impide que este arreglo se lea como

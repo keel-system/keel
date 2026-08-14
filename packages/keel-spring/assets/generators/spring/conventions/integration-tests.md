@@ -103,11 +103,14 @@ y ahorra un ciclo entero de validación funcional.
    comprueba su propio status — § Traducir el `Given`. Es auditable leyendo el escenario y el
    test en paralelo: un `Given` que nombra un estado del lifecycle y un test que solo crea la
    entidad es un fallo garantizado, atribuido además al agente equivocado.
-10. Todo `jsonPath(...)` se captura en una variable tipada antes de interpolarlo —
-    § `jsonPath(...)` va siempre a una variable tipada. Y si la expresión lleva un filtro
-    `[?(...)]`, el destino es una `List<...>`, nunca un escalar — § Un filtro devuelve una
-    lista, no un elemento. Es auditable con un `grep` de `[?(`: cada uno debe leerse en una
-    lista.
+10. Todo `jsonPath(...)` y todo `JsonPath.read(...)` se captura en una variable tipada antes
+    de pasarlo a nada — nunca anidado dentro de `String.valueOf(...)`, `formatted(...)` u otra
+    llamada con sobrecargas, que eligen por el tipo estático y meten un cast que revienta en
+    runtime — § `jsonPath(...)` y `JsonPath.read(...)` van siempre a una variable tipada. Y si
+    la expresión lleva un filtro `[?(...)]`, el destino es una `List<...>`, nunca un escalar —
+    § Un filtro devuelve una lista, no un elemento. Las dos son auditables con un `grep`: `[?(`
+    debe leerse siempre en una lista, y `valueOf(jsonPath`/`valueOf(JsonPath` no debe aparecer
+    nunca.
 11. Toda vía que sirve una entidad desde **caché** compara `createdAt`/`updatedAt` entre la
    lectura que puebla la caché y la que la sirve, no solo los campos de negocio. El
    `Instant` es el campo que primero se rompe en el roundtrip de (de)serialización y el que
@@ -207,24 +210,44 @@ Reglas:
 - Un test que solo comprueba el status **no vale**. Es el modo de fallo que esta convention
   existe para eliminar.
 
-### `jsonPath(...)` va siempre a una variable tipada
+### `jsonPath(...)` y `JsonPath.read(...)` van siempre a una variable tipada
 
-`jsonPath` es genérico (`protected <T> T jsonPath(Response, String)`) y no valida nada: el tipo
-sale del sitio de la llamada. Interpolarlo directamente revienta en runtime:
+Las dos son genéricas (`protected <T> T jsonPath(Response, String)`, `static <T> T JsonPath.read(...)`)
+y no validan nada: **el tipo lo elige el sitio de la llamada**, no lo que hay dentro del JSON. Anidar
+la llamada dentro de otra deja que `javac` resuelva la sobrecarga a costa tuya y mete un cast que
+revienta en runtime:
 
 ```java
 // MAL: único argumento de un varargs Object..., javac infiere T = Object[]
 //      y el cast interno lanza ClassCastException con el String real que devuelve.
 "…%s…".formatted(jsonPath(response, "$.category.id"));
 
-// BIEN: el tipo queda anclado en la declaración.
+// MAL: entre String.valueOf(Object) y String.valueOf(char[]), la SEGUNDA es más
+//      específica, así que javac la elige e inserta un checkcast a char[] en el
+//      propio call site → ClassCastException: String cannot be cast to [C.
+String sku = String.valueOf(JsonPath.read(payload, "$.data.sku"));
+
+// BIEN: el tipo queda anclado en la declaración, y la sobrecarga ya no se elige sola.
 String categoryId = jsonPath(response, "$.category.id");
 "…%s…".formatted(categoryId);
+
+Object raw = JsonPath.read(payload, "$.data.sku");
+String sku = String.valueOf(raw);
 ```
 
-La regla es la misma aunque haya varios argumentos: **captura primero, interpola después**.
-Además de evitar el fallo, deja la aserción de forma (`assertIsUuid`, `assertIsInstant`) junto a
-la extracción, que es donde se lee.
+La regla es una sola y no depende de qué método reciba el valor: **captura primero en una variable
+(`String` si sabes que es texto, `Object` si no), usa después**. Nunca anides la extracción dentro de
+una llamada con sobrecargas — `String.valueOf`, `formatted`, `assertThat`, `List.of`… todas eligen
+por el tipo estático, que aquí es el que tú no has escrito.
+
+Vale la pena reconocer el síntoma, porque no se parece a lo que lo causa: una
+`ClassCastException` cruda (`class java.lang.String cannot be cast to class [C`) sin relación
+aparente con el `Then` que medía el escenario. Parece un defecto del arnés y no lo es —
+sustituir el proveedor de JsonPath no lo cambia, porque el cast lo puso el compilador en el
+código de la prueba. En la corrida del 14/08/2026 costó una ronda entera de arbitraje.
+
+Además de evitar el fallo, capturar deja la aserción de forma (`assertIsUuid`, `assertIsInstant`)
+junto a la extracción, que es donde se lee.
 
 ### Todo formateo de números y fechas lleva `Locale.ROOT`
 
