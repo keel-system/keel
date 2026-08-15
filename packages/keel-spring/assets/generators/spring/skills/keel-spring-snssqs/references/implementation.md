@@ -51,6 +51,68 @@ ya la resuelve el `<Servicio>DomainEventBridge` generado; lo tuyo es el envío:
   así que aquí no sirve; y un objeto dentro de `withPayload` se publica como su
   `toString()`, sin error visible. Tabla en `SKILL.md § Envío al broker`.
 
+### El resolver por defecto CREA el topic, y eso pierde mensajes
+
+`SnsTemplate` traduce el nombre a ARN con `DefaultTopicArnResolver`, que llama a
+`sns:CreateTopic` — idempotente, así que **no falla** si el topic no existe: lo crea.
+Suena inofensivo y no lo es. SNS entrega **en el momento**: un topic sin suscriptores
+descarta lo que se publique en él, sin error. Así que la primera publicación tras una
+caída del broker puede crear ella misma el topic, publicar contra él antes de que
+existan las colas y las suscripciones, y **el outbox marca la fila `published_at` y no
+vuelve a intentarlo**. El mensaje no está en ningún sitio y nada lo señala.
+
+Publicar contra un topic sin suscriptores es siempre una publicación que no entrega
+nada — no es un caso especial de pruebas. Sustituye el resolver por uno que **liste** y
+que además exija suscriptor confirmado:
+
+```java
+@Bean
+public TopicArnResolver topicArnResolver(SnsClient snsClient) {
+    TopicArnResolver existingTopic = new TopicsListingTopicArnResolver(snsClient); // ya no crea
+    TopicArnResolver subscribedTopic = name -> {
+        Arn arn = existingTopic.resolveTopicArn(name);
+        boolean hasSubscribers = snsClient
+                .listSubscriptionsByTopic(ListSubscriptionsByTopicRequest.builder().topicArn(arn.toString()).build())
+                .subscriptions().stream()
+                .anyMatch(subscription -> !"PendingConfirmation".equals(subscription.subscriptionArn()));
+        if (!hasSubscribers) {
+            throw new IllegalStateException("El topic " + name + " todavía no tiene ningún suscriptor confirmado");
+        }
+        return arn;
+    };
+    return new CachingTopicArnResolver(subscribedTopic);   // la topología no cambia en caliente
+}
+```
+
+Mientras no haya suscriptor, la resolución falla como cualquier otro fallo de destino y
+el relay reintenta con su backoff: la publicación queda atada al mismo evento que hace
+que el mensaje tenga a dónde ir, en vez de adelantársele.
+
+### Acota los timeouts del SDK, o el backoff del relay no gobierna nada
+
+Sin `apiCallAttemptTimeout` explícito, el `SnsClient` reintenta **puertas adentro** con
+su propia política (modo LEGACY, hasta 4 intentos con su propio backoff) antes de
+devolverte la excepción. Ese tiempo se **suma** al backoff del relay en vez de estar
+gobernado por él, y con `outbox.relay.max-attempts` acotado el presupuesto de intentos se
+agota en unas pocas llamadas de varios segundos: la fila cae en dead-letter **dentro de la
+misma pausa** que causó el fallo, que es justo lo que el outbox existe para evitar.
+
+```java
+@Component
+public class SnsOutboxClientCustomizer implements SnsClientCustomizer {
+    @Override
+    public void customize(SnsClientBuilder builder) {
+        builder.overrideConfiguration(ClientOverrideConfiguration.builder()
+                .apiCallAttemptTimeout(Duration.ofMillis(1500))
+                .apiCallTimeout(Duration.ofSeconds(3))
+                .retryStrategy(retry -> retry.maxAttempts(2))
+                .build());
+    }
+}
+```
+
+Más intentos baratos dentro de la ventana de caída, en vez de menos intentos caros.
+
 ## Listener
 
 ```java
@@ -61,19 +123,53 @@ public class StockDepletedListener {
 
     // ... constructor ...
 
-    @SqsListener("${messaging.subscriptions.stock-depleted.topic:inventory-service-stock-depleted}")
+    @SqsListener("${messaging.subscriptions.stock-depleted.queue:inventory-stock-depleted}")
     public void on(StockDepletedMessage message) {
         mediator.dispatch(new RetireProductCommand(message.productId()));
     }
 }
 ```
 
+- **`queue`, no `topic`.** Del topic se publica; se consume de una **cola**, y su nombre
+  lo fija este servicio (dos consumidores del mismo topic necesitan colas distintas).
+  `build` declara las dos claves por perfil y `infra/init-messaging.sh` crea la cola con
+  ese mismo nombre. Apuntar el `@SqsListener` al topic deja el listener escuchando un
+  destino que no existe y **todo escenario de suscripción muere en un timeout mudo**.
 - Ack `ON_SUCCESS` (default): una excepción deja el mensaje en la cola y el
   ciclo redrive/DLQ hace el resto. No captures excepciones para «evitar el
   reintento»: rompe la política `onFailure` del diseño.
 - Errores de negocio no reintenables: si el diseño declara que un error no
   debe reintentarse, trágalo tras registrarlo (ack) o mándalo tú a la DLQ —
   documenta la decisión; SQS no distingue tipos de excepción.
+
+### El backoff declarado no lo aplica la cola: lo aplicas tú
+
+`onFailure.retry` del diseño trae `backoff`, `initialDelayMs` y `maxDelayMs`. SQS **no
+tiene** backoff por reintento: relanzar la excepción deja que gobierne el
+`VisibilityTimeout` de la cola, que es **fijo** (30 s por defecto) — muy lejos de una
+curva exponencial de 500 ms a 30 s. El código compila, los tests aislados pasan y la
+política del diseño simplemente no existe.
+
+Se aplica extendiendo la visibilidad del mensaje en función de cuántas veces se ha
+recibido ya:
+
+```java
+@SqsListener("${messaging.subscriptions.withdrawal-rejected.queue:...}")
+public void on(WithdrawalRejectedMessage message,
+               @Header(SqsHeaders.MessageSystemAttributes.SQS_APPROXIMATE_RECEIVE_COUNT) String receiveCount,
+               Visibility visibility) {
+    try {
+        mediator.dispatch(...);
+    } catch (RuntimeException failure) {
+        visibility.extend((int) backoffSeconds(Integer.parseInt(receiveCount)));  // initial·2^(n-1), tope max
+        throw failure;   // sigue siendo un fallo: el reintento y la DLQ los gobierna la cola
+    }
+}
+```
+
+El `extend` **no sustituye** al relanzamiento: solo cambia cuándo vuelve a estar visible.
+Y el número de reintentos sigue siendo el `maxReceiveCount` del redrive, que `build` ya
+siembra desde `retry.maxAttempts`.
 
 ## FIFO (solo si el diseño exige orden)
 
@@ -168,7 +264,11 @@ excepción; *es mío y está roto* → excepción.
 - [ ] Topología creada por script reproducible en `infra/` (raw delivery, redrive, DLQ).
 - [ ] Stub del publisher eliminado; ARN por configuración, no literal.
 - [ ] Puerto de envío implementado según `reliability` (`OutboxDispatcher` u `<Evento>Publisher`), con su stub eliminado y el fallo propagado (outbox) o registrado (best-effort).
-- [ ] `onFailure` → `maxReceiveCount` + DLQ según el diseño.
+- [ ] `onFailure` → `maxReceiveCount` + DLQ según el diseño, **y su `backoff` aplicado con
+      `Visibility.extend(...)`**: la cola sola solo sabe de un timeout fijo.
+- [ ] `@SqsListener` apunta a la clave `queue` de la suscripción, no a `topic`.
+- [ ] El `TopicArnResolver` **lista**, no crea, y exige suscriptor confirmado.
+- [ ] `apiCallAttemptTimeout`/`apiCallTimeout` acotados en el `SnsClient` del envío.
 - [ ] Visibility timeout ≥ 6× el tiempo de proceso del handler.
 - [ ] Un cuerpo propio que no parsea **lanza** (el `maxReceiveCount` lo lleva a la DLQ), nunca `log.error` + `return`.
 - [ ] La rama «carrera resuelta» captura `InvalidStateTransitionException` **y** `OptimisticLockingFailureException` (la base de `org.springframework.dao`), y con el orden `record` llama a `record(...)` igualmente.

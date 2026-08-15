@@ -8,6 +8,7 @@ import { DATABASES, HTTP_STUB } from '../lib/stack-catalog.js';
 import { EMBEDDED_MONGO_VERSION } from '../lib/assets.js';
 import { physicalBucketName } from '../lib/buckets.js';
 import { screamingSnake } from '../lib/naming.js';
+import { subscriptionDestination } from '../lib/dead-letter.js';
 import { recordedFailures } from '../lib/outbound-failures.js';
 import { usesOutbox } from './outbox.js';
 import { usesIdempotency } from './idempotency.js';
@@ -440,6 +441,17 @@ function messagingYaml(model, profile) {
       const key = sub.topicProperty.split('.').slice(-2)[0];
       const env = sub.topicProperty.toUpperCase().replace(/[.-]/g, '_');
       lines.push(`    ${key}:`, `      topic: ${envWithDefault(profile, env, sub.topicDefault)}`);
+      // Con SNS/SQS el topic NO basta: del topic se publica, pero se consume de una
+      // COLA, y su nombre lo fija este servicio (dos consumidores del mismo topic
+      // necesitan colas distintas). `init-messaging.sh` ya la crea con este nombre; sin
+      // declararla aquí, el listener no tenía de dónde leerla y el agente la añadía a
+      // mano en los cuatro perfiles — o se la inventaba, y entonces todo escenario de
+      // suscripción moría en un timeout mudo. Sale del mismo helper que la siembra, que
+      // es lo que impide que las dos mitades se desincronicen.
+      if (model.stack?.broker === 'snssqs') {
+        const queueEnv = `${env.replace(/_TOPIC$/, '')}_QUEUE`;
+        lines.push(`      queue: ${envWithDefault(profile, queueEnv, subscriptionDestination('snssqs', model, sub))}`);
+      }
     }
   }
   if (usesIdempotency(model)) {

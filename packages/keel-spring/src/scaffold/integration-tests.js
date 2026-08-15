@@ -498,6 +498,9 @@ function abstractImports(model) {
   if (broker?.id === 'rabbitmq' && devtools) imports.push('java.util.Base64');
   // Marcas de offset por destino (aislamiento de Kafka, que no tiene purga).
   if (broker?.id === 'kafka') imports.push('java.util.concurrent.ConcurrentHashMap');
+  // Desescapado del campo Body de SQS (decodeBodies): solo lo necesita este broker,
+  // porque solo su CLI devuelve el cuerpo como cadena JSON escapada dentro del JSON.
+  if (broker?.id === 'snssqs') imports.push('java.util.regex.Matcher');
   // `Set.copyOf` deduplica los destinos de descarte al marcarlos: varias suscripciones
   // multiplexadas sobre el mismo topic comparten DLT, y marcarlo dos veces gastaría un
   // sondeo de más contra el broker por cada clase de flujo.
@@ -1651,12 +1654,141 @@ function needsBrokerReseed(model) {
   return usesBrokerControl(model) && needsMessagingProvisioning(model);
 }
 
+// La sonda de topología es exclusiva de SNS/SQS: es el único broker de los tres en el que
+// publicar contra un destino a medio sembrar SALE BIEN y descarta el mensaje. Con Kafka o
+// RabbitMQ, publicar sin destino falla y el relay reintenta, que es lo que se quiere.
+// Necesita además un evento propio que publicar como sonda y su cola de arnés, es decir,
+// que el servicio publique algo.
+function needsTopologyProbe(model) {
+  return needsBrokerReseed(model) && model.stack?.broker === 'snssqs' && (model.events ?? []).length > 0;
+}
+
+/**
+ * La sonda que confirma que la suscripción SNS→SQS resembrada ENTREGA, no solo que
+ * existe. Ver `needsTopologyProbe` para por qué solo aquí.
+ *
+ * Se lee el broker directamente (sin `publishedMessages`) a propósito: `BROKER_STOPPED`
+ * sigue en `true` mientras esto corre, así que un fallo de transporte real durante el
+ * sondeo se toleraría en silencio si pasara por el camino normal.
+ */
+function topologyProbeMethods(model) {
+  if (!needsTopologyProbe(model)) return '';
+  const probeEvent = model.events[0].name;
+  return `
+    /** Canal propio del servicio: es el que tiene cola de arnés de la que leer la sonda. */
+    private static final String TOPOLOGY_PROBE_DESTINATION = "${model.messaging.destinationDefault}";
+
+    /** Cuánto se espera, tras cada intento de sonda, a que llegue a la cola de arnés. */
+    private static final Duration TOPOLOGY_PROBE_ATTEMPT_TIMEOUT = Duration.ofSeconds(5);
+
+    /**
+     * Confirma que la suscripción SNS→SQS recién sembrada por {@link #reseedTopology}
+     * entrega de verdad, no solo que el topic y la cola existen.
+     *
+     * <p>SNS acepta un {@code publish} contra un topic recién creado aunque su suscripción
+     * todavía no esté wireada, y no lo hace fallar: entrega EN EL MOMENTO, así que sin
+     * suscriptor el mensaje se descarta sin ningún error observable. El {@code OutboxRelay}
+     * de la aplicación sondea de forma autónoma —no coordinada con este arnés— y puede
+     * publicar justo en esa ventana: marca la fila {@code published_at} y pierde el evento
+     * para siempre, porque desde su punto de vista el publish tuvo éxito. Publicar una sonda
+     * y esperar su llegada cierra la ventana <b>antes</b> de devolver el control al test:
+     * {@link #startBroker()} no libera {@code BROKER_STOPPED} hasta que esto confirma la
+     * entrega end-to-end.
+     *
+     * <p>Reintenta la sonda entera hasta {@link #BROKER_READY_TIMEOUT}: la primera puede
+     * perderse por la misma razón que esto existe para detectar, así que una sonda perdida
+     * no es un fallo — es la señal de reintentar.
+     */
+    private static void awaitTopologyWired() {
+        Instant deadline = Instant.now().plus(BROKER_READY_TIMEOUT);
+        while (true) {
+            String probeId = "keel-topology-probe-" + UUID.randomUUID();
+            deliverMessage(
+                    TOPOLOGY_PROBE_DESTINATION,
+                    probeId,
+                    "{\\"metadata\\":{\\"eventId\\":\\"" + probeId + "\\",\\"eventType\\":\\"${probeEvent}\\"},\\"data\\":{}}",
+                    Map.of("eventType", "${probeEvent}"));
+            if (topologyProbeArrived(probeId)) {
+                return;
+            }
+            if (Instant.now().isAfter(deadline)) {
+                throw new IllegalStateException(
+                        "La suscripción SNS→SQS de '" + TOPOLOGY_PROBE_DESTINATION
+                                + "' no entregó la sonda de verificación tras resembrar la topología en "
+                                + BROKER_READY_TIMEOUT + ": el wiring SNS→SQS no llegó a tiempo.");
+            }
+        }
+    }
+
+    /**
+     * Sondea la cola de arnés hasta encontrar la sonda, y la retira <b>solo a ella</b> por
+     * su {@code ReceiptHandle}.
+     *
+     * <p>Un {@code purge-queue} aquí sería el defecto simétrico al que este método cierra:
+     * el relay puede publicar un evento de negocio real mientras la sonda está en vuelo, y
+     * cae en la <b>misma</b> cola de arnés. Purgarla entera se lo llevaría por delante, el
+     * {@code Then} nunca vería su mensaje y el {@code await} agotaría su espera contra un
+     * evento que sí se publicó y que el outbox ya dio por entregado. No es hipotético: la
+     * primera versión de este arreglo usaba purge y reprodujo exactamente eso.
+     */
+    private static boolean topologyProbeArrived(String probeId) {
+        Instant attemptDeadline = Instant.now().plus(TOPOLOGY_PROBE_ATTEMPT_TIMEOUT);
+        while (Instant.now().isBefore(attemptDeadline)) {
+            String raw = aws("sqs", "receive-message", "--queue-url",
+                    QUEUE_URL + TOPOLOGY_PROBE_DESTINATION, "--max-number-of-messages", "10", "--visibility-timeout", "0");
+            for (Map<String, Object> message : receivedMessages(raw)) {
+                Object body = message.get("Body");
+                if (body != null && String.valueOf(body).contains(probeId)) {
+                    aws("sqs", "delete-message", "--queue-url", QUEUE_URL + TOPOLOGY_PROBE_DESTINATION,
+                            "--receipt-handle", String.valueOf(message.get("ReceiptHandle")));
+                    return true;
+                }
+            }
+            try {
+                Thread.sleep(200L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrumpido esperando la sonda de topología", e);
+            }
+        }
+        return false;
+    }
+
+    /**
+     * La lista {@code Messages} de una respuesta cruda de {@code receive-message}, o vacía
+     * si no había ninguno. Deliberadamente <b>no</b> pasa por {@code decodeBodies}: ese
+     * desescapado reinserta el {@code Body} sin volver a escaparlo, y el sobre de SNS que
+     * envuelve un evento real —cuando la sonda llega antes de que {@code RawMessageDelivery}
+     * esté activo— tiene comillas anidadas que corromperían el JSON. Aquí solo hace falta
+     * localizar un {@code ReceiptHandle} por el texto crudo de su cuerpo, no interpretarlo.
+     */
+    @SuppressWarnings("unchecked")
+    private static List<Map<String, Object>> receivedMessages(String raw) {
+        try {
+            return JsonPath.read(raw, "$.Messages");
+        } catch (com.jayway.jsonpath.PathNotFoundException e) {
+            return List.of();
+        }
+    }
+`;
+}
+
 function brokerControlSection(model) {
   if (!usesBrokerControl(model)) return '';
   const broker = brokerEntry(model);
+  // La resiembra por sí sola NO basta con SNS/SQS, y ese fue el fallo intermitente más
+  // caro de diagnosticar de la corrida del 14/08/2026: verde en aislamiento, rojo bajo la
+  // suite completa. `sns publish` contra un topic que existe pero cuya suscripción SNS→SQS
+  // todavía no está wireada **no falla** — SNS entrega en el momento, así que sin
+  // suscriptor el mensaje se descarta sin error. El OutboxRelay de la app sondea por su
+  // cuenta, sin coordinarse con el arnés, y puede publicar justo en esa ventana: marca la
+  // fila `published_at` y pierde el evento para siempre. Confirmar la entrega END-TO-END
+  // con una sonda antes de devolver el control es lo único que cierra la ventana.
+  const wireCheck = needsTopologyProbe(model) ? `
+        awaitTopologyWired();` : '';
   const reseed = needsBrokerReseed(model)
     ? `
-        reseedTopology();`
+        reseedTopology();${wireCheck}`
     : '';
   const reseedMethod = needsBrokerReseed(model)
     ? `
@@ -1679,7 +1811,7 @@ function brokerControlSection(model) {
             throw new IllegalStateException("Interrumpido resembrando la topología", e);
         }
     }
-`
+${topologyProbeMethods(model)}`
     : '';
   return `
     /** Contenedor de ${broker.label} en \`infra/docker-compose.yaml\`. */
@@ -1743,11 +1875,25 @@ function brokerControlSection(model) {
     private static final AtomicBoolean BROKER_STOPPED = new AtomicBoolean(false);
 
     /**
-     * Restaura el broker si algún escenario lo dejó caído. Idempotente: sobre un
-     * contenedor ya arrancado, \`start\` no hace nada y el sondeo acierta a la primera.
+     * Restaura el broker si algún escenario lo dejó caído — y <b>solo</b> entonces.
+     *
+     * <p>El reset abre CADA clase de flujo, así que esto corre decenas de veces por
+     * suite. Levantar un contenedor ya arrancado es barato, pero lo que cuelga de
+     * {@link #startBroker()} no lo es: con un broker cuya topología no sobrevive al
+     * reinicio, ahí dentro hay una resiembra y una sonda de entrega end-to-end que
+     * espera hasta {@link #BROKER_READY_TIMEOUT}. Hacerlas cuando nadie tiró el broker
+     * es trabajo inútil que, bajo la carga de la suite completa, agota su espera y mata
+     * la clase entera por una causa que no es la suya.
+     *
+     * <p>El flag ya existe y es fiable: los tests corren en una sola JVM (sin
+     * {@code forkEvery}), así que sobrevive entre clases. Si el escenario que lo tiró no
+     * llegó a su \`finally\`, el flag sigue en \`true\` y esto lo restaura igual — que es
+     * justo para lo que está.
      */
     private static void restoreBroker() {
-        startBroker();
+        if (BROKER_STOPPED.get()) {
+            startBroker();
+        }
     }
 
     private static void awaitBrokerReady() {
@@ -2073,6 +2219,64 @@ ${read}
 `;
 }
 
+// Desescapado del campo `Body` de SQS, exclusivo de este broker.
+//
+// La CLI de AWS devuelve el cuerpo de cada mensaje como una cadena JSON ESCAPADA dentro
+// del JSON de la respuesta, así que `publishedMessages(...)` devolvía comillas con
+// backslash y una aserción tan normal como `.contains("\"status\":\"draft\"")` no casaba
+// NUNCA, aunque el mensaje publicado fuera correcto. El síntoma es mudo —no un error, un
+// falso negativo— y en la corrida del 14/08/2026 apareció a la vez en tres clases de flujo
+// sin ninguna relación entre sí, que es justo la firma de un defecto de arnés. Peor: un
+// proyecto con aserciones más laxas (`.contains("draft")`) pasa de chiripa y nadie se
+// entera de que su comprobación no comprueba lo que dice.
+//
+// Se escribe con String.raw para que los backslashes del patrón lleguen tal cual a Java.
+const SQS_BODY_DECODING = String.raw`
+    /**
+     * Captura el valor entrecomillado de cada campo {@code "Body": "..."} de la salida de
+     * la CLI.
+     *
+     * <p>El grupo repetido es <b>posesivo</b> ({@code *+}), no perezoso: con un {@code Body}
+     * que trae muchos backslashes consecutivos —lo que ocurre cuando un mensaje llega
+     * <b>sin</b> raw message delivery, envuelto en el sobre de notificación de SNS por
+     * encima de la envoltura Keel— la forma perezosa es ambigua sobre cómo agrupar esa
+     * racha y el motor prueba exponencialmente muchas particiones antes de fallar: un solo
+     * {@code Body} así basta para agotar el stack ({@code StackOverflowError}) en vez de
+     * devolver un resultado. En cada posición la expansión es determinista de todos modos
+     * (backslash → el par, cualquier otro carácter → uno suelto), así que la forma posesiva
+     * no cambia qué matchea: solo le prohíbe al motor reconsiderarlo.
+     */
+    private static final Pattern BODY_FIELD = Pattern.compile("\"Body\":\\s*\"((?:\\\\.|[^\"\\\\])*+)\"");
+
+    /**
+     * Desescapa el {@code Body} de cada mensaje. La CLI lo devuelve como cadena JSON
+     * escapada, así que una aserción de texto como {@code .contains("\"status\":\"active\"")}
+     * no casa contra la salida cruda aunque el mensaje sea correcto — y el fallo es mudo.
+     *
+     * <p>Se desescapa <b>solo</b> el valor de {@code Body}: la envoltura ({@code Messages},
+     * {@code MessageId}, {@code ReceiptHandle}…) queda intacta porque hay comprobaciones que
+     * dependen de ella.
+     */
+    private static String decodeBodies(String raw) {
+        Matcher matcher = BODY_FIELD.matcher(raw);
+        StringBuilder result = new StringBuilder();
+        int last = 0;
+        while (matcher.find()) {
+            result.append(raw, last, matcher.start());
+            String escaped = matcher.group(1);
+            String decoded;
+            try {
+                decoded = JSON.readValue("\"" + escaped + "\"", String.class);
+            } catch (Exception e) {
+                decoded = escaped;
+            }
+            result.append("\"Body\": \"").append(decoded).append('"');
+            last = matcher.end();
+        }
+        result.append(raw, last, raw.length());
+        return result.toString();
+    }`;
+
 function brokerSection(model) {
   const broker = brokerEntry(model);
   if (!broker) return '';
@@ -2185,7 +2389,7 @@ ${doc}
         } catch (RuntimeException e) {
             return emptyIfBrokerStopped(e);
         }
-        return batches.toString();
+        return decodeBodies(batches.toString());
     }
 
     /** Cuántos mensajes trae una respuesta de {@code receive-message}: uno por cuerpo. */
@@ -2196,6 +2400,7 @@ ${doc}
         }
         return total;
     }
+${SQS_BODY_DECODING}
 ${purgeDoc}
     protected static void purgeMessages(String destination) {
         // PurgeQueue está limitada a una vez cada 60 s por cola en AWS real;

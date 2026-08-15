@@ -1855,3 +1855,121 @@ test('un need SIN exposedAs no toca la respuesta', () => {
   const response = fs.readFileSync(path.join(root, 'application/dtos/GetProductBySlugResponseDto.java'), 'utf8');
   assert.ok(!response.includes('currentPrice'), response);
 });
+
+// ─── La cola de cada suscripción, y el Body escapado de SQS ───────────────────
+//
+// Los dos salieron de la corrida SNS/SQS del 14/08/2026 y los dos son del generador,
+// no del proyecto: cualquier servicio con este broker los hereda.
+
+test('§1.2: con snssqs cada suscripción declara su COLA, no solo su topic', () => {
+  // Del topic se PUBLICA; se CONSUME de una cola, y su nombre lo fija este servicio
+  // (dos consumidores del mismo topic necesitan colas distintas). `init-messaging.sh`
+  // ya la creaba con ese nombre, pero ningún parámetro la declaraba: el listener no
+  // tenía de dónde leerla y el agente la añadía a mano en los cuatro perfiles — o se
+  // la inventaba, y entonces todo escenario de suscripción moría en un timeout mudo.
+  const read = scaffoldWithBroker('snssqs');
+
+  for (const profile of ['local', 'develop', 'production', 'test']) {
+    const yaml = read(`src/main/resources/parameters/${profile}/messaging.yaml`);
+    assert.ok(yaml.includes('queue:'), `${profile}: la suscripción no declara cola`);
+    assert.ok(
+      yaml.includes('catalog-supplier-price-changed'),
+      `${profile}: el nombre de cola no coincide con el que siembra init-messaging.sh`
+    );
+  }
+  // Y en los perfiles no locales sale por entorno, igual que el topic.
+  assert.ok(
+    read('src/main/resources/parameters/production/messaging.yaml')
+      .includes('${MESSAGING_SUBSCRIPTIONS_SUPPLIER_PRICE_CHANGED_QUEUE:'),
+    'la cola no es redirigible por entorno'
+  );
+
+  // La MISMA fuente que la siembra: si las dos mitades se desincronizan, el listener
+  // consume de una cola que nadie crea.
+  const script = read('infra/init-messaging.sh');
+  assert.ok(script.includes("'catalog-supplier-price-changed'"), script);
+});
+
+test('§1.2: los otros brokers no ganan una clave `queue` que no significa nada', () => {
+  for (const broker of ['kafka', 'rabbitmq']) {
+    const yaml = scaffoldWithBroker(broker)('src/main/resources/parameters/local/messaging.yaml');
+    assert.ok(!yaml.includes('queue:'), `${broker}: cola declarada donde no hay colas por suscripción`);
+  }
+});
+
+test('§1.2: con snssqs el arnés desescapa el campo Body de SQS', () => {
+  // La CLI de AWS devuelve el Body como cadena JSON ESCAPADA dentro del JSON de la
+  // respuesta, así que `.contains("\"status\":\"draft\"")` no casaba nunca aunque el
+  // mensaje fuera correcto: un falso negativo mudo. En la corrida apareció a la vez en
+  // tres clases de flujo sin relación entre sí, que es la firma de un defecto de arnés.
+  const harness = scaffoldWithBroker('snssqs')(
+    'src/integrationTest/java/com/commerce/catalog/flows/AbstractFlowIT.java'
+  );
+
+  assert.ok(harness.includes('return decodeBodies(batches.toString());'), 'publishedMessages devuelve la salida cruda');
+  assert.ok(harness.includes('private static String decodeBodies(String raw)'), harness);
+  assert.ok(harness.includes('import java.util.regex.Matcher;'), 'falta el import de Matcher');
+  // El grupo repetido es POSESIVO: con la forma perezosa, un Body sin raw delivery
+  // (envuelto en el sobre de notificación de SNS, con backslashes muy anidados) hace
+  // backtracking catastrófico y agota el stack en vez de devolver un resultado.
+  const patternLine = harness.split('\n').find((line) => line.includes('BODY_FIELD = Pattern.compile('));
+  assert.ok(patternLine, 'no se declara el patrón del campo Body');
+  assert.ok(patternLine.includes('*+'), `el grupo repetido no es posesivo: ${patternLine}`);
+
+  // Y no se toca la envoltura: hay comprobaciones que dependen de ella.
+  assert.ok(harness.includes('deadLetterMessages'), harness);
+});
+
+test('§1.2: los otros brokers no arrastran el desescapado de SQS', () => {
+  for (const broker of ['kafka', 'rabbitmq']) {
+    const harness = scaffoldWithBroker(broker)(
+      'src/integrationTest/java/com/commerce/catalog/flows/AbstractFlowIT.java'
+    );
+    assert.ok(!harness.includes('decodeBodies'), `${broker}: desescapado de SQS donde no hay SQS`);
+    assert.ok(!harness.includes('import java.util.regex.Matcher;'), `${broker}: import sin uso`);
+  }
+});
+
+// La skill del broker y lo que build genera tienen que decir lo mismo: si el ejemplo del
+// @SqsListener apunta al topic y build declara la cola, el agente escribe un listener
+// contra un destino que no existe y todo escenario de suscripción muere en un timeout mudo.
+// Fue exactamente el camino del hallazgo D.1 de la corrida del 14/08/2026.
+test('§1.2: la skill de snssqs y los parámetros generados nombran la misma clave', () => {
+  const skillDir = path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    '..', 'assets', 'generators', 'spring', 'skills', 'keel-spring-snssqs'
+  );
+  const skill = fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8');
+  const implementation = fs.readFileSync(path.join(skillDir, 'references', 'implementation.md'), 'utf8');
+
+  for (const [name, text] of [['SKILL.md', skill], ['implementation.md', implementation]]) {
+    const listeners = text.match(/@SqsListener\("\$\{[^"]+"\)/g) ?? [];
+    assert.ok(listeners.length > 0, `${name}: sin ejemplo de @SqsListener`);
+    for (const listener of listeners) {
+      assert.ok(listener.includes('.queue:'), `${name}: el listener consume de un topic — ${listener}`);
+    }
+  }
+
+  // Y la clave existe de verdad en lo que build emite.
+  const yaml = scaffoldWithBroker('snssqs')('src/main/resources/parameters/local/messaging.yaml');
+  assert.ok(/^\s+queue: /m.test(yaml), yaml);
+});
+
+// El reset abre CADA clase de flujo, así que restoreBroker() corre decenas de veces por
+// suite. Levantar un contenedor ya arrancado es barato; lo que cuelga de startBroker() no
+// —resiembra de topología y sonda de entrega end-to-end, con espera de hasta 90 s—. En la
+// corrida SNS/SQS del 14/08/2026 eso mató 14 clases enteras (55 escenarios NO_EJERCITADOS)
+// por agotar la espera bajo la carga de la suite completa, sin que ninguna tuviera nada
+// que ver con el outbox. El flag BROKER_STOPPED ya existía y no se consultaba.
+test('§1.2: el reset solo restaura el broker si un escenario lo tiró', () => {
+  const harness = scaffoldWithBroker('snssqs')(
+    'src/integrationTest/java/com/commerce/catalog/flows/AbstractFlowIT.java'
+  );
+
+  const restore = harness.slice(
+    harness.indexOf('private static void restoreBroker()'),
+    harness.indexOf('private static void awaitBrokerReady()')
+  );
+  assert.ok(restore.includes('BROKER_STOPPED.get()'), `restoreBroker no consulta el flag: ${restore}`);
+  assert.ok(restore.includes('startBroker();'), restore);
+});

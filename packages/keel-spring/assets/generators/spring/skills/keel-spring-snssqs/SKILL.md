@@ -135,8 +135,10 @@ ejecútalo y verifica el resultado, no crees los recursos a mano.
 
 ## Listener (uno por suscripción)
 
-`@Component` con `@SqsListener("${messaging.subscriptions.<evento-kebab>.topic:<fuente>.events}")`
-que mapea el `<Evento>Message` al mensaje de la operación `triggers` y despacha vía
+`@Component` con `@SqsListener("${messaging.subscriptions.<evento-kebab>.queue:<cola>}")`
+—la clave `queue`, **no** `topic`: del topic se publica, se consume de una cola, y `build`
+declara las dos por perfil— que mapea el `<Evento>Message` al mensaje de la operación
+`triggers` y despacha vía
 `UseCaseMediator` (el javadoc del record generado ya trae el mapeo campo a campo).
 La política `onFailure` se implementa con la redrive policy de la
 cola (`maxReceiveCount` = reintentos del diseño + DLQ); suscribe la cola al topic SNS
