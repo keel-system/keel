@@ -95,9 +95,10 @@ needs:
     fetchedFrom: { client: pricing, call: getPrice }
 ```
 
-Tres cosas que no son evidentes:
+Cuatro cosas que no son evidentes:
 
 - **La forma del dato no se declara aquí.** Sale de donde ya está: `response.fields` de la llamada de `fetchedFrom` con `on-demand`, y los campos de la entidad réplica con `replicated`. Declararla otra vez sería una segunda fuente de verdad, y la que manda es la del proveedor.
+- **Y viaja con esa forma entera: es un objeto, no un escalar.** `exposedAs: supplierPrice` sobre un origen `{amount, currency, occurredAt}` produce un campo `supplierPrice` con esos tres campos dentro — **no** el importe suelto, aunque el importe sea lo único que interese al que lo lee. Aplanar exigiría declarar *cuál* de los campos es el bueno, que es precisamente la segunda fuente de verdad que el punto anterior evita; y un origen que hoy tiene un solo campo puede tener dos mañana sin avisar. Merece decirse porque el nombre invita a leerlo al revés —`currentPrice` suena a número— y porque la forma **no es visible desde el nombre**: quien escriba un cliente, un escenario o una aserción contra esa salida tiene que ir al contrato de la llamada (o a la entidad réplica) a mirar los campos, no suponerlos.
 - **El campo es siempre opcional en el contrato.** Si la llamada declara `fallback`, o la réplica `onMiss: degrade`, el propio diseño ya está diciendo que el dato puede faltar. Presentarlo como obligatorio prometería lo que él mismo desmiente.
 - **Exponerlo en un listado cambia la estrategia correcta.** Con `on-demand`, un `usedBy` que devuelve varios elementos es una llamada al proveedor **por elemento**: `keel validate` lo avisa y nombra la salida, que es `replicated`. Es el mismo criterio que ya gobierna `strategy`, visto desde la salida en vez de desde la decisión.
 

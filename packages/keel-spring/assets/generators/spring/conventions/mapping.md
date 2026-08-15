@@ -162,8 +162,10 @@ if (key.isPresent()) {
         }
         return /* la MISMA respuesta, reconstruida desde previa.get().resourceId() */;
     }
-    // … ejecuta el caso de uso …
+    // RECLAMA PRIMERO: el id del recurso se decide aquí, no lo asigna la base.
+    UUID id = UUID.randomUUID();
     idempotencyStore.save("<nombreOperacion>", key.get(), signature, id.toString(), <ttlSeconds>);
+    // … y SOLO DESPUÉS ejecuta el caso de uso, con ese id …
 }
 ```
 
@@ -177,8 +179,10 @@ Optional<StoredRequest> previa = idempotencyStore.find("<nombreOperacion>", key)
 if (previa.isPresent()) {
     return /* la MISMA respuesta, reconstruida desde previa.get().resourceId() */;
 }
-// … ejecuta el caso de uso …
+// RECLAMA PRIMERO, igual que arriba.
+UUID id = UUID.randomUUID();
 idempotencyStore.save("<nombreOperacion>", key, key, id.toString(), <ttlSeconds>);
+// … y SOLO DESPUÉS ejecuta el caso de uso, con ese id …
 ```
 
 - Con `payload-hash` no hay conflicto de firma posible: misma clave implica mismo contenido. El
@@ -191,8 +195,18 @@ idempotencyStore.save("<nombreOperacion>", key, key, id.toString(), <ttlSeconds>
 - `save(...)` corre **dentro de la transacción del comando**, a propósito: si el comando revierte,
   el registro revierte con él. No lo saques a una transacción propia — una clave marcada sin recurso
   detrás haría que el reintento devolviese una respuesta que nunca existió.
-- Dos peticiones simultáneas con la misma clave chocan en la clave primaria y una revierte. Es el
-  desenlace correcto: de dos peticiones idénticas, exactamente una se ejecutó.
+- **El reclamo va antes del negocio, y ese orden es la mitad del mecanismo.** Dos peticiones
+  simultáneas con la misma clave chocan en la clave primaria del registro y una revierte: de dos
+  peticiones idénticas, exactamente una se ejecutó. Pero eso solo lo arbitra el registro si el
+  registro es lo **primero** que se escribe. Con el `save` al final, la perdedora llega antes a la
+  primera restricción de negocio que haya —la unicidad de un `sku`, de un `slug`— y el cliente
+  recibe *ese* `code` en vez del de la clave en curso. Sigue ejecutándose una sola vez, así que el
+  servidor parece correcto y lo que está roto es el contrato de errores; solo lo delata un
+  escenario de concurrencia que afirme el `code` exacto. Es un error que se ha cometido en tres
+  generaciones distintas: el orden natural al escribir el handler es el equivocado.
+- Reclamar primero obliga a **decidir el identificador del recurso antes de crearlo** (un
+  `UUID.randomUUID()` en el handler, no el id que asignaría la base al insertar): el registro
+  guarda ese `resourceId` y es lo que el reintento usa para reconstruir la respuesta.
 - El conflicto por **firma distinta** (misma clave, otro cuerpo) tiene su propia excepción generada:
   `IdempotencyReuseException`, con el `code` canónico `409 IDEMPOTENCY_KEY_REUSED` o con el que el
   diseño declare si nombra ese desenlace. Lánzala; no reutilices la de la carrera —son dos

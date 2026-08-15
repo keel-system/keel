@@ -343,6 +343,11 @@ function resolveField(ownerName, fieldName, field, domainTypes, inlineEnumName, 
     elementJavaType: resolved.javaType,
     kind: resolved.kind,
     base: resolved.base ?? null,
+    // El nombre del tipo TAL COMO lo escribe el diseño (`SKU`, `Email`), que
+    // `resolved` ya no conserva porque lo ha aplanado a su primitivo. Solo lo usa
+    // la nota del command cuando build deja fuera el formato heredado del tipo:
+    // sin el nombre, la nota no dice a qué declaración ir a mirar.
+    typeName: typeof field.type === 'string' ? field.type : null,
     // Bucket lógico de un campo `file`. Sin él, aguas abajo nadie puede decidir
     // por visibilidad: el DTO de salida de un bucket público expone la URL y el
     // de uno privado la key, y esa decisión se toma en el mapper.

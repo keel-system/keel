@@ -1018,9 +1018,21 @@ test('normalización antes que formato: el patrón del value type no llega al DT
   // @Pattern, un sku en minúsculas moría con 422 VALIDATION_ERROR sin llegar a la
   // regla de negocio que debía responder 409 SKU_ALREADY_EXISTS — el escenario
   // fallaba por el error equivocado (conventions/mapping.md).
-  assert.ok(!command.includes('@Pattern'), command);
+  // La anotación, no la palabra: lo que no puede estar es el @Pattern APLICADO al
+  // componente. La nota de abajo lo nombra a propósito, y un `includes('@Pattern')`
+  // a secas no distingue una cosa de la otra.
+  assert.ok(!/^\s*@[A-Za-z]*\s*@?Pattern\(|@Pattern\(regexp[^\n]*\)\s+String sku/m.test(command), command);
+  assert.ok(!command.includes('@NotBlank @Pattern'), command);
   // Presencia sí se queda: no compite con ninguna normalización.
   assert.ok(command.includes('@NotBlank String sku'), command);
+  // Y no se quita en silencio: quitarlo sin decirlo deja la entrada sin validar
+  // cuando el diseño NO normaliza ese campo (el sku de esta fixture se guarda tal
+  // cual llega), y el borde acepta un formato que el diseño prohíbe — un 201 donde
+  // el escenario espera un 400. Apareció en dos corridas seguidas y las dos veces lo
+  // arregló el agente a mano, que es la señal de que el generador no lo estaba
+  // planteando. La nota no decide por el diseño: deja la decisión escrita donde se ve.
+  assert.ok(command.includes('El @Pattern del value type SKU'), command);
+  assert.ok(command.includes('el formato tiene que volver aquí'), command);
 });
 
 // El mismo defecto lo encontró y corrigió a mano el agente de código en DOS corridas
@@ -1203,6 +1215,25 @@ test('crones parametrizados: las comillas van fuera del placeholder, no dentro',
       }
     }
   }
+});
+
+// El orden del reclamo apareció mal en TRES generaciones distintas, y la causa no era
+// el agente: la nota del stub le decía literalmente «si no hay registro, ejecuta y
+// llama a save(...)». Con el save al final, la perdedora de una carrera choca antes
+// contra la unicidad de negocio (`sku`) y el cliente recibe SKU_ALREADY_EXISTS en vez
+// del code de la clave en curso — el servidor sigue ejecutando una sola vez, así que
+// solo lo delata un escenario de concurrencia que afirme el code exacto.
+test('idempotencia de comando: el stub manda reclamar ANTES de ejecutar el negocio', () => {
+  const { read } = scaffoldExtended();
+  const handler = read(`${JAVA}/application/usecases/CreateProductCommandHandler.java`);
+
+  assert.ok(handler.includes('RECLAMA PRIMERO'), handler);
+  assert.ok(handler.includes('SOLO DESPUÉS ejecuta el negocio'), handler);
+  // Y el porqué, no solo la instrucción: sin él, «reclamar primero» es una preferencia
+  // de estilo que el siguiente refactor deshace.
+  assert.ok(handler.includes('EXIGE el orden de arriba'), handler);
+  // La instrucción vieja no puede sobrevivir en ninguna parte de la nota.
+  assert.ok(!handler.includes('ejecuta y llama a save'), handler);
 });
 
 test('idempotencia de comando: la cabecera llega por contexto, no por el controller', () => {

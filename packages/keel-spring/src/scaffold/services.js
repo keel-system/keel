@@ -181,6 +181,25 @@ function isWrappedInJsonNullable(operation, component, fromPath) {
  * campo venga o deje de venir. El `JsonNullableValueExtractor` que genera `web.js`
  * es lo que hace que Bean Validation sepa desenvolverlo.
  */
+/**
+ * El `regexp` del `@Pattern` que el campo hereda de su value type y que el mensaje
+ * de ENTRADA deja fuera, o `null` si no hay ninguno.
+ *
+ * Se deriva comparando las dos listas que el modelo ya calcula —`validation` (el
+ * valor ya formado) e `inputValidation` (lo que llega por el cable)— en vez de
+ * volver a resolver el tipo: son exactamente las dos caras cuya diferencia se
+ * quiere anunciar, así que si algún día dejan de diferir, esto deja de hablar solo.
+ * Un `pattern` que el CAMPO declara por su cuenta sobrevive en las dos listas y no
+ * cuenta como omitido, que es justo lo correcto: ese sí se está emitiendo.
+ */
+function droppedTypePattern(component) {
+  const patternOf = (annotations) =>
+    (annotations ?? []).find((annotation) => annotation.startsWith('@Pattern(')) ?? null;
+  const full = patternOf(component.validation);
+  if (!full || patternOf(component.inputValidation)) return null;
+  return full.match(/regexp\s*=\s*"(.*)"\s*\)$/)?.[1] ?? null;
+}
+
 function renderComponentType(operation, component, fromPath, imports, annotations) {
   const prefix = annotations.length > 0 ? `${annotations.join(' ')} ` : '';
   if (!isWrappedInJsonNullable(operation, component, fromPath)) {
@@ -214,6 +233,7 @@ function renderMessage(model, operation) {
     if (typeImport) imports.add(typeImport);
 
     const annotations = [];
+    const notes = [];
     if (!fromPath.has(component.name)) {
       // Entrada: sin el formato heredado del value type, que el diseño puede estar
       // normalizando en el handler (mapping.md § Normalización antes que validación
@@ -223,12 +243,29 @@ function renderMessage(model, operation) {
         imports.add(`jakarta.validation.constraints.${annotation.slice(1).split('(')[0]}`);
         annotations.push(annotation);
       }
+      // Y se DICE que se ha quitado. Quitarlo en silencio es la mitad mala de la
+      // decisión: si el diseño no normaliza este campo, el formato del tipo es el
+      // contrato del cable y aquí era el único sitio donde vivía, así que la entrada
+      // se queda sin validar y el borde acepta lo que el diseño prohíbe — un `201`
+      // donde el escenario espera un `400`, sin nada que lo delate en el código. Es
+      // una decisión que depende del diseño y build no puede tomarla (la normalización
+      // se declara en prosa, en `rules`), pero sí puede dejarla planteada donde se ve.
+      const dropped = droppedTypePattern(component);
+      if (dropped) {
+        notes.push(
+          `// El @Pattern del value type ${component.typeName ?? 'del campo'} (${dropped}) NO está aquí: el formato del tipo`,
+          '// describe el valor YA normalizado, y Bean Validation corre antes de que el handler normalice nada.',
+          '// Si el diseño normaliza este campo antes de validarlo, hazlo cumplir después (constructor del value',
+          '// object del dominio). Si NO lo normaliza, el formato tiene que volver aquí: nadie más lo comprueba.'
+        );
+      }
       if (component.kind === 'composite') {
         imports.add('jakarta.validation.Valid');
         annotations.push('@Valid');
       }
     }
-    return `        ${renderComponentType(operation, component, fromPath, imports, annotations)} ${component.name}`;
+    const noteBlock = notes.length > 0 ? notes.map((line) => `        ${line}\n`).join('') : '';
+    return `${noteBlock}        ${renderComponentType(operation, component, fromPath, imports, annotations)} ${component.name}`;
   });
 
   const componentBlock = rendered.length > 0 ? `\n${rendered.join(',\n')}\n` : '';
@@ -340,7 +377,7 @@ function renderHandler(model, service, operation) {
   if (operation.idempotency) {
     const ttl = operation.idempotency.ttlSeconds ?? 86400;
     const common =
-      `find(scope, clave) con scope="${operation.name}"; si hay registro con la MISMA firma, reconstruye la respuesta desde su resourceId sin re-ejecutar nada (ni escrituras ni eventos); si la firma difiere, lanza IdempotencyReuseException (${FRAMEWORK_ERRORS.idempotencyReuse.http} ${effectiveErrorCode(model, FRAMEWORK_ERRORS.idempotencyReuse)}), que build genera para eso — no inventes un code ni reutilices el de la carrera, que es otro desenlace; si no hay registro, ejecuta y llama a save(...) dentro de la misma transacción del comando. ` +
+      `find(scope, clave) con scope="${operation.name}"; si hay registro con la MISMA firma, reconstruye la respuesta desde su resourceId sin re-ejecutar nada (ni escrituras ni eventos); si la firma difiere, lanza IdempotencyReuseException (${FRAMEWORK_ERRORS.idempotencyReuse.http} ${effectiveErrorCode(model, FRAMEWORK_ERRORS.idempotencyReuse)}), que build genera para eso — no inventes un code ni reutilices el de la carrera, que es otro desenlace; si no hay registro, RECLAMA PRIMERO: decide el identificador del recurso, llama a save(scope, clave, firma, resourceId, ttl) y SOLO DESPUÉS ejecuta el negocio, todo dentro de la misma transacción del comando. ` +
       // La CARRERA no la resuelve el find: dos peticiones simultáneas lo fallan las dos
       // —ninguna ha commiteado— y llegan las dos a save. Quien arbitra es la clave
       // primaria del registro, y el adaptador ya traduce esa violación al 409 del
@@ -349,6 +386,13 @@ function renderHandler(model, service, operation) {
       // el resultado es un servidor que pasa el reintento secuencial y ejecuta dos veces
       // bajo concurrencia — que es el caso normal en cuanto hay más de una réplica.
       `La CARRERA (dos peticiones con la misma clave a la vez) no la ve find: las dos encuentran vacío y las dos llegan a save. La arbitra la clave primaria del registro y el adaptador ya traduce la violación a IdempotencyConflictException (${FRAMEWORK_ERRORS.idempotencyRace.http} ${effectiveErrorCode(model, FRAMEWORK_ERRORS.idempotencyRace)}) — NO captures esa excepción ni la DataIntegrityViolationException que la origina: dejarla subir es lo que garantiza que de dos peticiones idénticas se ejecutó exactamente una. ` +
+      // Y por eso el orden del párrafo anterior no es una preferencia de estilo: si el
+      // save va al FINAL del handler, en la carrera la perdedora choca antes contra la
+      // primera restricción de negocio que encuentre —la unicidad de un campo, típicamente—
+      // y el cliente recibe ESE código en vez del de la clave en curso. El servidor sigue
+      // ejecutando una sola vez, así que parece correcto; lo que rompe es el contrato de
+      // errores, y solo lo delata un escenario de concurrencia que afirme el code exacto.
+      `Y eso EXIGE el orden de arriba: con save al final, la perdedora de la carrera choca antes contra la primera restricción de negocio (la unicidad de algún campo) y sale su code, no el de la clave en curso — la garantía sigue en pie y el contrato de errores no. ` +
       `Qué NO cubre: la reentrega del mismo mensaje por el broker — esa la para el IdempotencyGuard del listener (tabla processed_event), que es otro mecanismo y no se toca desde aquí`;
     // De dónde sale la clave cambia el ESQUELETO del handler, no un detalle: con
     // payload-hash no hay cabecera que pueda faltar, así que la rama "sin clave,

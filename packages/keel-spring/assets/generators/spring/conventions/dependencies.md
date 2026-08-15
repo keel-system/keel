@@ -64,6 +64,11 @@ suscripción ya declara `triggers`, así que la operación de proyección existe
    `needs.<n>.exposedAs`, y entonces `build` pone el campo en el `<Op>ResponseDto` y el
    `<Entidad>ApplicationMapper` lo exige **por parámetro** — el compilador no deja olvidarlo. Sin
    `exposedAs` el dato no sale del servicio, y pedirlo para descartarlo es un error de diseño.
+   Ese campo es un **`<Need>Dto` anidado** con la forma de su origen (el `response.fields` de la
+   llamada, o los campos de la réplica), no el escalar que suene más útil: aplanarlo a un importe
+   obliga a elegir cuál de los campos del proveedor es «el bueno» —una decisión que el diseño no ha
+   tomado— y rompe el contrato en cuanto el origen gana un campo. `build` genera el record y la
+   firma del mapper, así que la forma ya está decidida: no se «simplifica» al implementarla.
 3. **ACL siempre.** La respuesta del proveedor se mapea con el `<C>Mapper` del cliente a la entidad de
    dominio; el record wire nunca cruza a `domain` ni a `application`.
 4. **Idempotencia por construcción.** El upsert por `keyField` hace que una reentrega no corrompa la
