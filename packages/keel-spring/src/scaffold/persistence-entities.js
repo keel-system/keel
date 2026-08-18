@@ -249,6 +249,17 @@ function renderJpaEntity(model, entity) {
         imports.add('jakarta.persistence.OrderBy');
         annotation += `\n    @OrderBy("${ordering.name} ASC")`;
       }
+      // Y el N+1 que ninguna aserción funcional ve: sin lote, recorrer esta colección
+      // desde el mapper cuesta UNA consulta POR ELEMENTO de la página. La respuesta es
+      // idéntica —por eso no lo caza ningún Then—, solo que un listado de 20 productos
+      // hace 20 consultas de más. Con el lote, Hibernate agrupa las cargas pendientes
+      // en un WHERE <fk> IN (...).
+      //
+      // Va en el mapeo además de en la propiedad global porque el tamaño es una decisión
+      // POR COLECCIÓN —se elige por encima de cualquier page.size() razonable— y porque
+      // aquí se lee junto al modelo, no en un YAML que nadie abre al revisar entidades.
+      imports.add('org.hibernate.annotations.BatchSize');
+      annotation += '\n    @BatchSize(size = 50)';
       imports.add('java.util.List');
       imports.add('java.util.ArrayList');
       declarations.push(`    ${annotation}\n    private List<${childJpa}> ${member.name} = new ArrayList<>();`);

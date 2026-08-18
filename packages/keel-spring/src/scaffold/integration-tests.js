@@ -2516,6 +2516,9 @@ function purgeWrapper(model) {
 // las estadísticas de Hibernate (activadas solo en local y test). No hay dependencia
 // nueva del arnés: es una lectura HTTP más.
 function queryCountSection(model) {
+  // Sin `api` no hay petición que medir, y tampoco existe el `get()` con el que se
+  // mediría: el contador sería una llamada a un helper que no está.
+  if (!model.layersPresent.api) return '';
   if (!model.layersPresent.persistence || model.persistenceKind !== 'relational') return '';
   const security = model.layersPresent.security && tokenProtocol(model);
   // El actuator no está entre las rutas públicas: con seguridad, la métrica se pide
@@ -2535,7 +2538,7 @@ function queryCountSection(model) {
      *
      * <pre>
      * long antes = queryCount();
-     * Response response = get(ROUTE_BASE + "/products?size=20"${security ? ', admin' : ''});
+     * Response response = get(unaRutaDeListado${security ? ', admin' : ''});
      * assertThat(queryCount() - antes).isLessThanOrEqualTo(4);
      * </pre>
      *
@@ -2549,7 +2552,10 @@ function queryCountSection(model) {
      * ÚNICA que corra en ese intervalo, y conviene ejecutarla dos veces midiendo la
      * segunda: la primera paga la caché de planes y la de segundo nivel.
      */
-    protected static long queryCount() {
+    // De INSTANCIA, no estático: se apoya en los helpers de petición, que lo son (y con
+    // seguridad, en el que cachea el token por rol en un campo). Declararlo static —como
+    // los helpers del broker, que sí lo son— no compila.
+    protected long queryCount() {
         Response response = ${call};
         if (response.status() != 200) {
             throw new IllegalStateException(

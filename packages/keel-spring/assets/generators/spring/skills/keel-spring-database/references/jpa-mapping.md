@@ -31,8 +31,10 @@ Antes de tocar tipos de columna del dialecto, lee `references/dialects/<database
   tiene la FK; el lado `mappedBy` **no** lleva `@JoinColumn`. Un solo `@JoinColumn`
   por relación (no lo dupliques en ambos lados: doble gestión de FK).
 - **Fetch**: mantén `LAZY` (default de to-many; fuérzalo en `@ManyToOne`/`@OneToOne`
-  con `fetch = FetchType.LAZY` si la asociación no se usa siempre). Con
-  `open-in-view: false`, el fetch que falte se resuelve en el **repositorio** con
+  con `fetch = FetchType.LAZY` si la asociación no se usa siempre). Las dos lecturas de UN
+  agregado —`findById` y el finder de clave natural— **ya salen con `@EntityGraph`** sobre
+  las colecciones hijas: no lo repitas ni lo quites. Con `open-in-view: false`, el fetch que
+  falte en OTRA consulta se resuelve en el **repositorio** con
   `JOIN FETCH` o `@EntityGraph`, nunca abriendo la vista ni poniendo EAGER a ciegas
   (ver `references/configuration.md`, sección N+1). No pongas EAGER para "arreglar"
   una `LazyInitializationException`. Esto vale para relaciones **dentro** de un

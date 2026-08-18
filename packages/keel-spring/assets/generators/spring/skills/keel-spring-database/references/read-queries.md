@@ -76,6 +76,13 @@ Por eso el `!= null` sobre el id ajeno es obligatorio.
 
 ## Paginación
 
+- **NUNCA `@EntityGraph` ni `JOIN FETCH` de una colección en una consulta paginada.**
+  Hibernate no puede aplicar `LIMIT` a un resultado con filas duplicadas por el join, así
+  que se trae **todas** las filas y pagina EN MEMORIA (`HHH000104`): funciona en la demo y
+  se cae con la tabla llena. En el listado, las colecciones van por lote (`@BatchSize`, ya
+  generado): coste constante y dos consultas acotadas. El `@EntityGraph` que build emite
+  está solo en las lecturas de UN agregado, y copiarlo a la consulta paginada es
+  exactamente este error.
 - **`countQuery` explícita siempre** que la consulta lleve join. La que deriva Spring Data cuenta
   filas del resultado del join; con `left join` a un `many-to-one` coincide, pero es frágil y en
   cuanto alguien añada un join a una colección el total pasa a estar inflado.

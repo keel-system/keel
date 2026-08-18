@@ -139,12 +139,40 @@ function renderJpaRepository(model, entity) {
     'java.util.UUID'
   ]);
 
+  // Colecciones hijas del agregado: se traen EN LA MISMA consulta al leer UN solo
+  // agregado. Con @BatchSize costarían una consulta extra por colección; con el grafo,
+  // ninguna.
+  //
+  // Y solo aquí: un @EntityGraph sobre una consulta PAGINADA obliga a Hibernate a traer
+  // todas las filas y paginar EN MEMORIA (HHH000104), que es cambiar dos consultas
+  // acotadas por una que crece con la tabla. Para el listado, el lote.
+  const childCollections = jpaMembers(model, entity)
+    .filter((member) => member.kind === 'relationMany')
+    .map((member) => member.name);
+  let graph = '';
+  if (childCollections.length > 0) {
+    imports.add('org.springframework.data.jpa.repository.EntityGraph');
+    const paths = childCollections.map((name) => JSON.stringify(name)).join(", ");
+    graph = `    @EntityGraph(attributePaths = { ${paths} })` + String.fromCharCode(10);
+  }
+
   let methods = '';
   const finder = naturalKeyFinder(model, entity);
   if (finder) {
     imports.add('java.util.Optional');
     for (const param of finder.params) for (const name of param.imports) imports.add(name);
-    methods = `\n\n    Optional<${entity.name}Jpa> ${finder.name}(${finder.signature});`;
+    // La clave natural es la otra lectura de UN agregado: mismo grafo, misma razón.
+    methods = `\n\n${graph}    Optional<${entity.name}Jpa> ${finder.name}(${finder.signature});`;
+  }
+
+  // findById lo hereda de JpaRepository: su grafo hay que declararlo sobrescribiendo la
+  // firma, y es la lectura de un agregado más frecuente de todas.
+  if (graph) {
+    imports.add('java.util.Optional');
+    methods += `
+
+${graph}    @Override
+    Optional<${entity.name}Jpa> findById(UUID id);`;
   }
 
   const body = `public interface ${entity.name}JpaRepository extends JpaRepository<${entity.name}Jpa, UUID> {${methods}\n}`;

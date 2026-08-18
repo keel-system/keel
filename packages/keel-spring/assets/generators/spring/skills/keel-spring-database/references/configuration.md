@@ -32,7 +32,12 @@ spring:
 
 ## Hibernate: batching y fetch
 
-Solo si hay escritura masiva o N+1 detectado:
+**El lote de colecciones YA está puesto y no se toca**: build emite
+`default_batch_fetch_size: 50` en todos los perfiles y un `@BatchSize(size = 50)` en cada
+colección del agregado. Añadir otra vez la propiedad —y menos con otro valor— deja dos
+números que dicen lo mismo y que se desincronizan a la primera.
+
+Lo de abajo es lo que **sí** decides tú, y solo con escritura masiva o un N+1 medido:
 
 ```yaml
 spring:
@@ -42,17 +47,16 @@ spring:
         jdbc.batch_size: 50          # agrupa INSERT/UPDATE en lotes JDBC
         order_inserts: true          # reordena para poder agrupar
         order_updates: true
-        # Carga colecciones lazy en lotes (mitiga N+1 sin tocar queries).
-        default_batch_fetch_size: 16
         # IN (?,?,...) con tamaños en potencias de 2: mejora el hit del plan cache.
         query.in_clause_parameter_padding: true
 ```
 
 - El batching **no funciona** con `GenerationType.IDENTITY` (MySQL/MariaDB sin
   secuencias): ver el dialect correspondiente.
-- El arreglo estructural del N+1 **intra-agregado** es `JOIN FETCH` /
-  `@EntityGraph` en el repositorio, no configuración; `default_batch_fetch_size`
-  es la red de seguridad.
+- El arreglo estructural del N+1 **intra-agregado** es `JOIN FETCH` / `@EntityGraph` en el
+  repositorio, no configuración. Build ya lo aplica donde es seguro —la lectura de UN
+  agregado: `findById` y el finder de clave natural—; `default_batch_fetch_size` es la red
+  para el resto.
 - Esa red **no cubre** el N+1 **entre agregados** (una consulta por elemento a otra
   raíz, resolviendo `embed`): no hay colección lazy que lotear. Ese es aplicativo y
   se resuelve con el `<X>RefResolver` — `{{keel:docs}}/conventions/read-composition.md`.

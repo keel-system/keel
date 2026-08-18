@@ -3484,7 +3484,7 @@ test('rendimiento: el arnés puede CONTAR consultas, que es lo que hace observab
   scaffoldService({ ...loadFixture(), workspace, force: true });
 
   const harness = read(workspace, 'src/integrationTest/java/com/commerce/productcatalog/flows/AbstractFlowIT.java');
-  assert.ok(harness.includes('protected static long queryCount()'), harness);
+  assert.ok(harness.includes('protected long queryCount()'), harness);
   assert.ok(harness.includes('/actuator/metrics/hibernate.statements?tag=status:prepared'), harness);
 
   // La cuenta la publica Micrometer desde las estadísticas de Hibernate...

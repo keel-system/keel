@@ -302,6 +302,17 @@ function dbYaml(model, profile, dbName) {
   // elegido. Sin esto, un campo del diseño llamado como una palabra reservada
   // (primary, order, user…) genera un DDL que no compila y su tabla no se crea.
   lines.push('    properties:', '      hibernate:', '        auto_quote_keyword: true');
+  // Red de seguridad del N+1 de colecciones, en TODOS los perfiles porque es una
+  // propiedad de producción, no de prueba. Cada colección generada lleva además su
+  // @BatchSize —la decisión por colección se lee junto al modelo—, pero esta cubre lo
+  // que se añada después sin acordarse de anotarlo, y las cargas perezosas que no son
+  // colecciones declaradas.
+  lines.push(
+    '        # Agrupa las cargas LAZY pendientes en un WHERE ... IN (...) en vez de una',
+    '        # consulta por elemento. Sin esto, recorrer una colección de una página de N',
+    '        # elementos son N consultas que ninguna aserción funcional distingue.',
+    '        default_batch_fetch_size: 50'
+  );
   // Contador de sentencias, que es lo que hace OBSERVABLE un N+1: sin él, «esta página
   // cuesta una consulta o veintiuna» es una opinión sobre el código, no un hecho que un
   // escenario pueda afirmar. Micrometer lo publica como `hibernate.statements` y el arnés
