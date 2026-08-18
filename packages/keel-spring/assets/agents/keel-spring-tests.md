@@ -59,9 +59,14 @@ source set `integrationTest`, así que un test que importe un DTO o una entidad 
 2. Lee `src/integrationTest/java/**/flows/AbstractFlowIT.java` y su
    `HarnessSmokeIT.java`: son la base que ya generó `build` y traen todo lo transversal
    (cliente HTTP sin excepciones en 4xx, `Idempotency-Key`, `resetState()`, `assertBody`,
-   `jsonPath`, `await`, credenciales, lectura y purga del canal de eventos, y **entrega de
-   eventos entrantes**).
+   `jsonPath`, `await`, credenciales, cabeceras de petición propias y **preflight CORS**
+   (`exchangeWithHeaders` / `preflight`, si el diseño declara `cors`), lectura y purga del canal
+   de eventos, y **entrega de eventos entrantes**).
    **Úsalas, no las reimplementes.**
+   - **Un escenario de CORS no es `uncovered`**: la base sabe mandar `Origin` y hacer el
+     `OPTIONS` del preflight. Cuál de los dos helpers toca —y por qué elegir mal deja el
+     escenario en verde sin probar nada— está en `{{keel:docs}}/conventions/integration-tests.md`
+     § CORS.
    - **Un `When` que dice «llega el evento X» se escribe con `deliverX(messageId, payloadJson)`**,
      que `build` genera por cada suscripción del diseño. Ese helper ya sabe el topic real, la
      envoltura del contrato (`keel`/`wrapped`/`none`) y dónde va el discriminador: tú solo pones

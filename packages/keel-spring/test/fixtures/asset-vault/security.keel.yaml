@@ -28,6 +28,17 @@ serviceClients:
     description: Genera las miniaturas de los archivos publicados.
     scopes: [asset:read]
 
+cors:
+  # La única fixture que declara política CORS, y por eso la única que renderiza los
+  # helpers `preflight`/`exchangeWithHeaders` del arnés: sin ella ese Java no lo compila
+  # ni lo tokeniza ningún test, que es justo cómo se cuela un template literal mal cerrado.
+  description: El back-office del vault es una SPA de otro origen y sube archivos desde el navegador.
+  # `false` porque el token viaja en Authorization y no en cookie; con `cookie` el schema
+  # de keel-core exigiría `true`.
+  allowCredentials: false
+  allowedHeaders: [Authorization, Content-Type, Idempotency-Key]
+  exposedHeaders: [X-Correlation-Id]
+
 access:
   default: { level: required }
   rules:

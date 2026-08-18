@@ -222,6 +222,12 @@ test('el arnés resetea el estado con el script y sabe subir un binario', () => 
   assert.ok(harness.includes('protected Response multipart('));
   assert.ok(harness.includes('protected String tokenFor(String role)'));
   assert.ok(harness.includes('infra/test-credentials.env'));
+  // Y la política CORS, que esta fixture es la ÚNICA en declarar: de aquí sale el único
+  // renderizado real de estos dos helpers, así que es lo que los mete en la matriz de
+  // `java-syntax.test.js` y en el alcance de `compile-check.js asset-vault`. Sin el
+  // bloque `cors` de su diseño, ese Java no lo compila ni lo tokeniza nadie.
+  assert.ok(harness.includes('protected Response preflight('));
+  assert.ok(harness.includes('protected Response exchangeWithHeaders('));
 });
 
 test('el arnés alcanza la base por su propio contenedor, no por el toolbox', () => {

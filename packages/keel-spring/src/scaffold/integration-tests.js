@@ -124,6 +124,14 @@ function tokenProtocol(model) {
   return protocol === 'oidc' || protocol === 'jwt';
 }
 
+// ¿El diseño declara política CORS? Es lo que enciende los dos únicos helpers del
+// arnés que mandan cabeceras de petición propias. Se gatea por el bloque declarado
+// —igual que `exchangeWithKey` se gatea por `idempotency`— porque un preflight
+// contra un servicio sin política CORS prueba una promesa que nadie hizo.
+function hasCors(model) {
+  return Boolean(model.security?.cors);
+}
+
 export function generate(model) {
   const pkg = `${model.service.basePackage}.flows`;
   return [
@@ -815,8 +823,49 @@ ${hasIdempotency(model) ? `
     protected Response exchangeWithKey(HttpMethod method, String path, String jsonBody, String token, String idempotencyKey) {
         return exchange(method, path, jsonBody, token, idempotencyKey);
     }
+` : ''}${hasCors(model) ? `
+    /**
+     * Variante con cabeceras de petición propias del escenario. Existe por la política
+     * CORS, que solo se observa si la petición dice de qué origen viene: sin \`Origin\`
+     * el servidor contesta lo mismo con política y sin ella.
+     *
+     * <p><b>No es la vía para \`Authorization\` ni para \`Idempotency-Key\`.</b> Los dos
+     * tienen su propio parámetro y su propia semántica (\`tokenFor(...)\` cachea por rol,
+     * la clave se repite solo donde se prueba la deduplicación); colarlos por el mapa
+     * salta esas garantías y hace que el escenario mida otra cosa.
+     */
+    protected Response exchangeWithHeaders(HttpMethod method, String path, String jsonBody, String token,
+            Map<String, String> extraHeaders) {
+        return exchange(method, path, jsonBody, token, ${hasIdempotency(model) ? 'idempotencyKey()' : 'null'}, extraHeaders);
+    }
+
+    /**
+     * Preflight CORS: el \`OPTIONS\` que el navegador manda ANTES de la petición real.
+     *
+     * <p>Va deliberadamente <b>sin</b> \`Authorization\`, que es como lo manda un navegador
+     * de verdad: el preflight es previo a la credencial. Por eso un 2xx aquí prueba algo
+     * que ninguna otra llamada del arnés puede probar — que el filtro de CORS corre antes
+     * de la autorización. Si contesta 401, la SPA no puede hacer ni una llamada.
+     *
+     * <p>\`requestHeaders\` es la lista separada por comas que el navegador anuncia
+     * (\`authorization,content-type\`); nulo si el escenario no anuncia ninguna.
+     */
+    protected Response preflight(String path, String origin, String requestMethod, String requestHeaders) {
+        Map<String, String> headers = requestHeaders == null
+                ? Map.of(HttpHeaders.ORIGIN, origin,
+                        HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, requestMethod)
+                : Map.of(HttpHeaders.ORIGIN, origin,
+                        HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, requestMethod,
+                        HttpHeaders.ACCESS_CONTROL_REQUEST_HEADERS, requestHeaders);
+        return exchange(HttpMethod.OPTIONS, path, null, null, null, headers);
+    }
 ` : ''}
     private Response exchange(HttpMethod method, String path, String jsonBody, String token, String idempotencyKey) {
+        return exchange(method, path, jsonBody, token, idempotencyKey, null);
+    }
+
+    private Response exchange(HttpMethod method, String path, String jsonBody, String token, String idempotencyKey,
+            Map<String, String> extraHeaders) {
         HttpHeaders headers = new HttpHeaders();
         headers.setAccept(List.of(MediaType.APPLICATION_JSON));
         if (jsonBody != null) {
@@ -827,6 +876,11 @@ ${hasIdempotency(model) ? `
         }
         if (idempotencyKey != null && isMutation(method)) {
             headers.set("Idempotency-Key", idempotencyKey);
+        }
+        // Al final a propósito: el escenario añade lo suyo sobre lo que el arnés ya puso,
+        // no al revés.
+        if (extraHeaders != null) {
+            extraHeaders.forEach(headers::set);
         }
         ResponseEntity<String> entity = rest.exchange(path, method, new HttpEntity<>(jsonBody, headers), String.class);
         Response response = new Response(entity.getStatusCode().value(), entity.getHeaders(), entity.getBody());

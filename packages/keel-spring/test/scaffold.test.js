@@ -1535,6 +1535,14 @@ test('capa security (api-key): filtro propio sin resource server ni fragmento oa
   assert.ok(!config.includes('.cors('));
   assert.ok(!exists(workspace, `${securityDir}/CorsConfig.java`));
   assert.ok(!read(workspace, 'src/main/resources/parameters/local/security.yaml').includes('allowed-origins'));
+
+  // Y el arnés tampoco trae con qué probarla: los dos únicos helpers que mandan
+  // cabeceras de petición propias se gatean por el bloque `cors` declarado, igual que
+  // `exchangeWithKey` se gatea por `idempotency`. Sin esta aserción el gate no lo ata
+  // nada y el arnés acabaría ofreciendo un preflight contra una política inexistente.
+  const harness = read(workspace, 'src/integrationTest/java/com/commerce/productcatalog/flows/AbstractFlowIT.java');
+  assert.ok(!harness.includes('protected Response preflight('));
+  assert.ok(!harness.includes('protected Response exchangeWithHeaders('));
 });
 
 test('capa security con cors: CorsConfig derivado del diseño + orígenes por ambiente', () => {
@@ -1581,6 +1589,20 @@ test('capa security con cors: CorsConfig derivado del diseño + orígenes por am
       'allowed-origins: ${SECURITY_CORS_ALLOWED_ORIGINS}'
     )
   );
+
+  // El arnés puede PROBARLA. Una política CORS que el generador emite pero que ninguna
+  // prueba puede observar es la mitad del trabajo: el preflight muere dentro de la
+  // cadena de seguridad, así que ninguna llamada normal del arnés lo alcanza. El
+  // preflight va sin token —es previo a la credencial— y el primitivo de cabeceras es
+  // lo que además permite el caso que NO es preflight: una petición normal con `Origin`.
+  const harness = read(workspace, 'src/integrationTest/java/com/commerce/productcatalog/flows/AbstractFlowIT.java');
+  assert.ok(harness.includes('protected Response preflight(String path, String origin, String requestMethod, String requestHeaders)'));
+  assert.ok(harness.includes('return exchange(HttpMethod.OPTIONS, path, null, null, null, headers);'));
+  assert.ok(harness.includes('HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, requestMethod'));
+  assert.ok(harness.includes('protected Response exchangeWithHeaders(HttpMethod method, String path, String jsonBody, String token,'));
+  // Las cabeceras del escenario se aplican DESPUÉS de las del arnés: se añade sobre lo
+  // que ya hay, no se pisa la semántica del token ni la de la clave de idempotencia.
+  assert.ok(harness.includes('extraHeaders.forEach(headers::set);'));
 });
 
 test('capa security (clientes máquina por api-key): clave local usable y env var obligatoria fuera', () => {

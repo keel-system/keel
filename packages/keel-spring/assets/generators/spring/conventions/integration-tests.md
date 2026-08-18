@@ -394,6 +394,25 @@ y JSONAssert ya falla por ella sin ninguna aserción dedicada.
   `src/main/resources/parameters/local/security.yaml`: se usan tal cual (`apiKey()`,
   `serviceCredential(...)`), no se inventan ni se edita el YAML.
 
+## CORS: los dos escenarios que no se parecen entre sí
+
+Con bloque `cors` en el diseño, la base trae dos helpers y **elegir mal es lo que hace que el
+escenario pase sin probar nada**:
+
+| Qué prueba el escenario | Helper | Por qué |
+|---|---|---|
+| El **preflight** | `preflight(path, origin, requestMethod, requestHeaders)` | Manda `OPTIONS` con `Origin` y `Access-Control-Request-*`, y **sin `Authorization`** — que es como lo manda un navegador. Un `2xx` aquí es lo único que prueba que el filtro de CORS corre **antes** de la autorización; un `401` significa que la SPA no puede hacer ni una llamada |
+| Una petición **normal** cross-origin | `exchangeWithHeaders(method, path, body, token, Map.of("Origin", origin))` | Lo que se afirma es `Access-Control-Expose-Headers` (lo que el navegador deja **leer** de la respuesta), y eso solo aparece si la petición dice de qué origen viene. **No es un preflight**: lleva su token y su verbo normales |
+
+Las cabeceras de respuesta se leen con `response.header("Access-Control-Allow-Origin")`, como
+cualquier otra. Los orígenes permitidos son dato de ambiente, no de diseño: en `local` valen
+`http://localhost:3000` y `http://localhost:5173`, así que el `Origin` del escenario sale de ahí
+y el caso negativo usa cualquier otro.
+
+`exchangeWithHeaders` **no es la vía para `Authorization` ni para `Idempotency-Key`**: los dos
+tienen su propio parámetro y su propia semántica (`tokenFor(...)` cachea por rol, la clave se
+repite solo donde se prueba la deduplicación). Colarlos por el mapa salta esas garantías.
+
 ## Lo que no se ve por HTTP
 
 Toda afirmación del `Then` se comprueba, por orden de preferencia:
