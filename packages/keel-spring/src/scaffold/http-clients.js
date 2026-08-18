@@ -640,11 +640,19 @@ function fallbackBody(model, client, call, imports) {
   // señal de que el arreglo va aquí y no allí.
   const trace = `        log.warn("Fallback de ${client.id}.${call.name}", throwable);\n`;
 
-  // Una política, y solo una. Con dos —dos activaciones, o una activación y un need— el
-  // conflicto es del diseño: un único método no puede hacer dos cosas distintas, y
-  // elegir por el diseñador sería decidir en silencio cuál de las dos promesas se rompe.
-  const policies = activations.length + needs.length;
-  if (policies !== 1) {
+  // Una política, y solo una. Con DOS DISTINTAS —dos activaciones, o una activación y un
+  // need— el conflicto es del diseño: un único método no puede hacer dos cosas a la vez,
+  // y elegir por el diseñador sería decidir en silencio cuál de las dos promesas se rompe.
+  //
+  // Pero contar FUENTES en vez de políticas convertía en conflicto algo que no lo es: dos
+  // consumidores del mismo dato que declaran lo MISMO. Pasa en cuanto una llamada sirve a
+  // la vez a un `need` on-demand y al rescate (`onMiss: fetch`) de una réplica, que es el
+  // caso normal de un proveedor con un solo endpoint. Ahí no hay nada que decidir.
+  const distinct = new Set([
+    ...activations.map(({ activation }) => `activation:${JSON.stringify(activation.onFailure ?? null)}`),
+    ...needs.map(({ need }) => `need:${JSON.stringify(need.onUnavailable)}`)
+  ]);
+  if (distinct.size !== 1) {
     // Sin política declarada, la prosa del diseño ES la instrucción al agente.
     const doc = call.fallback
       ? `        // TODO (agente): ${call.fallback}`
@@ -659,10 +667,10 @@ function fallbackBody(model, client, call, imports) {
       )
     ];
     const listed =
-      policies > 1
+      distinct.size > 1
         ? `
-        // Varias políticas salen por esta llamada y el diseño no puede darles caminos
-        // distintos sobre un único método: ${conflicting.join('; ')}`
+        // Varias políticas DISTINTAS salen por esta llamada y el diseño no puede darles
+        // caminos distintos sobre un único método: ${conflicting.join('; ')}`
         : '';
     return `${trace}${doc}${listed}
         throw new UnsupportedOperationException("TODO: fallback ${call.name}");`;
@@ -670,8 +678,10 @@ function fallbackBody(model, client, call, imports) {
 
   // La política del `need`, que es la que el hueco de diseño de la corrida reclamaba: el
   // dato que se PIDE al proveedor ya no depende de la prosa del `fallback`.
-  if (needs.length === 1) {
-    return needFallbackBody(model, client, call, needs[0], trace, imports);
+  // Puede haber varios needs si todos declaran la MISMA política (lo garantiza la
+  // comprobación de arriba): se cita el primero y se nombran todos.
+  if (needs.length > 0) {
+    return needFallbackBody(model, client, call, needs, trace, imports);
   }
 
   const prose = call.fallback ? `        // Fallback declarado en el diseño: ${call.fallback}\n` : '';
@@ -725,10 +735,12 @@ function fallbackBody(model, client, call, imports) {
 // vivía en la prosa del `fallback` de http-clients —capa técnica— y la acababa
 // eligiendo quien construía. En una corrida real eso produjo una caché del último
 // valor SIN expiración: un precio de hace tres días servido como vigente.
-function needFallbackBody(model, client, call, { dependency, need }, trace, imports) {
+function needFallbackBody(model, client, call, needs, trace, imports) {
+  const { dependency, need } = needs[0];
   const { onUnavailable } = need;
   const prose = call.fallback ? `        // Fallback declarado en el diseño: ${call.fallback}\n` : '';
-  const origin = `        // Política declarada por el need ${dependency}.${need.name} (onUnavailable: ${onUnavailable.action}).\n`;
+  const cited = needs.map(({ dependency: dep, need: n }) => `${dep}.${n.name}`).join(', ');
+  const origin = `        // Política declarada por ${needs.length > 1 ? `los needs ${cited}, que declaran la misma` : `el need ${cited}`} (onUnavailable: ${onUnavailable.action}).\n`;
 
   if (onUnavailable.action === 'fail') {
     const message = `"${dependency} no está disponible para ${need.name}"`;

@@ -872,7 +872,7 @@ test('fallback: con dos activaciones por la misma llamada, build no elige por el
   // El conflicto se cuenta sobre TODAS las políticas que salen por la llamada, no solo
   // sobre las activaciones: desde la 2.8 un `need` también trae la suya (`onUnavailable`),
   // y una activación más un need por el mismo método es el mismo choque.
-  assert.ok(adapter.includes('Varias políticas salen por esta llamada'));
+  assert.ok(adapter.includes('Varias políticas DISTINTAS salen por esta llamada'));
   assert.ok(adapter.includes('notifications.sendOrderConfirmation (activación, onFailure: ignore)'));
   assert.ok(adapter.includes('billing.chargeOrder (activación, onFailure: fail)'));
   assert.ok(adapter.includes('throw new UnsupportedOperationException("TODO: fallback getProductsByIds")'));
@@ -1110,7 +1110,7 @@ test('una activación y un need por la misma llamada: build no elige entre las d
   const layers = withActivation(withOnUnavailable({ action: 'fail', error: 'PRICE_UNAVAILABLE' }));
   const adapter = adapterOf(modelFrom(layers));
 
-  assert.ok(adapter.includes('Varias políticas salen por esta llamada'), adapter);
+  assert.ok(adapter.includes('Varias políticas DISTINTAS salen por esta llamada'), adapter);
   assert.ok(adapter.includes('catalog.productPricing (need, onUnavailable: fail)'), adapter);
   assert.ok(adapter.includes('notifications.sendOrderConfirmation (activación, onFailure: ignore)'), adapter);
   assert.ok(adapter.includes('throw new UnsupportedOperationException("TODO: fallback getProductsByIds")'));
