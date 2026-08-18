@@ -1452,7 +1452,7 @@ function devtoolsSection(model) {
 ${brokerEntry(model) ? `
     /** Archivo del contenedor por el que viaja el cuerpo de {@link #deliverMessage}. */
     private static final String DELIVER_BODY = "/tmp/keel-deliver.json";
-` : ''}${brokerSection(model)}${deadLetterSection(model)}${deliverySection(model)}${subscriptionDeliverySection(model)}
+` : ''}${brokerSection(model)}${outboxDrainSection(model)}${deadLetterSection(model)}${deliverySection(model)}${subscriptionDeliverySection(model)}
     /**
      * Ejecuta un comando dentro del contenedor devtools y devuelve su salida.
      *
@@ -2401,6 +2401,109 @@ const RABBIT_PAYLOAD_DECODING = String.raw`
         }
     }`;
 
+// Espera al drenaje del outbox antes de purgar un destino.
+//
+// La carrera que cierra, y que costó dos escenarios de la corrida del 18/08: el relay
+// drena la tabla cada `fixed-delay-ms`, y su fase respecto al `purgeMessages()` de un
+// test es arbitraria (la JVM lleva corriendo la suite entera y el relay no se reinicia
+// entre clases). Un evento legítimo del escenario ANTERIOR puede aterrizar en la cola
+// justo DESPUÉS de la purga, y el escenario siguiente lo lee como propio — con lo que
+// falla una aserción de «no se publicó nada» por algo que no tiene que ver con ella.
+//
+// Se espera por CONSULTA, no por un margen adivinado: un margen fijo no basta si el
+// relay acaba de empezar su ciclo, y sobra siempre que no haya nada pendiente. Y si la
+// espera se agota (relay caído, fila atascada), se sigue adelante: esto acota una
+// ventana de carrera, no es una condición del escenario, y bloquear aquí convertiría un
+// problema de otra capa en un timeout mudo en el sitio equivocado.
+function outboxDrainSection(model) {
+  const entry = dbEntry(model);
+  if (!usesOutbox(model) || !entry?.cliQueryArgv) return '';
+  const dbName = model.service.name.replaceAll('-', '_');
+  const argv = entry
+    .cliQueryArgv({ user: entry.user ? entry.user(dbName) : '', pass: entry.password ?? '', db: dbName })
+    .map((part) => javaString(part))
+    .join(', ');
+  // Mismos nombres de almacenamiento en los dos modelos (outbox.js): la columna/campo
+  // `published_at` a null es la fila que el relay todavía no entregó.
+  const statement =
+    entry.kind === 'document'
+      ? '"db.getCollection(\\"outbox_event\\").countDocuments({ destination: \\"" + destination + "\\", published_at: null })"'
+      : '"SELECT COUNT(*) FROM outbox_event WHERE destination = \'" + destination + "\' AND published_at IS NULL"';
+  return `
+    /** Cuánto se espera, como mucho, a que el relay entregue lo que tenga pendiente. */
+    private static final Duration OUTBOX_DRAIN_TIMEOUT = Duration.ofSeconds(15);
+
+    /**
+     * Espera a que no queden filas de {@code outbox_event} sin publicar para este
+     * destino. Ver el comentario de {@link #purgeMessages}: purgar sin esperar deja que
+     * un evento del escenario anterior aterrice después de la purga.
+     */
+    private static void awaitOutboxDrained(String destination) {
+        Instant deadline = Instant.now().plus(OUTBOX_DRAIN_TIMEOUT);
+        while (Instant.now().isBefore(deadline) && pendingOutboxRows(destination) > 0) {
+            try {
+                Thread.sleep(150L);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrumpido esperando el drenaje del outbox", interrupted);
+            }
+        }
+    }
+
+    /**
+     * Filas del outbox aún sin entregar para ese destino.
+     *
+     * <p>Cualquier fallo se traduce a 0 —seguir adelante— a propósito: esto acota una
+     * carrera, y un error leyendo la tabla no es una condición del escenario.
+     */
+    private static int pendingOutboxRows(String destination) {
+        try {
+            String output = db(${argv}, ${statement});
+            // Solo la ÚLTIMA línea: un cliente puede escribir avisos antes del resultado, y
+            // concatenar sus dígitos daría un número enorme que parecería trabajo pendiente.
+            String trimmed = output.trim();
+            int lastBreak = Math.max(trimmed.lastIndexOf('\\n'), trimmed.lastIndexOf('\\r'));
+            String digits = trimmed.substring(lastBreak + 1).replaceAll("[^0-9]", "");
+            return digits.isEmpty() ? 0 : Integer.parseInt(digits);
+        } catch (RuntimeException e) {
+            return 0;
+        }
+    }
+`;
+}
+
+// Con outbox, `purgeMessages` deja de ser la purga a secas: la purga cruda pasa a
+// `purgeDestination` (privada, una por broker) y el método público la envuelve con la
+// espera al drenaje. Sin outbox no hay relay que pueda entregar tarde, así que la purga
+// es directa y no se paga ninguna espera.
+function purgeEntryPoint(model) {
+  return drainsOutbox(model) ? 'private static void purgeDestination' : 'protected static void purgeMessages';
+}
+
+function drainsOutbox(model) {
+  return usesOutbox(model) && Boolean(dbEntry(model)?.cliQueryArgv);
+}
+
+// El wrapper público, común a los tres brokers.
+function purgeWrapper(model) {
+  if (!drainsOutbox(model)) return '';
+  return `
+    /**
+     * Vacía el destino, esperando antes a que el outbox no tenga nada pendiente para él.
+     *
+     * <p>La espera no es prudencia: sin ella, un evento legítimo del escenario ANTERIOR
+     * puede aterrizar en la cola justo después de la purga, y el escenario siguiente lo
+     * lee como propio — con lo que falla una aserción de «no se publicó nada» por algo
+     * que no tiene que ver con ella. El relay drena cada {@code fixed-delay-ms} y su fase
+     * respecto a este método es arbitraria.
+     */
+    protected static void purgeMessages(String destination) {
+        awaitOutboxDrained(destination);
+        purgeDestination(destination);
+    }
+`;
+}
+
 function brokerSection(model) {
   const broker = brokerEntry(model);
   if (!broker) return '';
@@ -2480,10 +2583,10 @@ ${doc}
     }
 ${RABBIT_PAYLOAD_DECODING}
 ${purgeDoc}
-    protected static void purgeMessages(String destination) {
+    ${purgeEntryPoint(model)}(String destination) {
         devtools(${javaArgs(purge)});
     }
-${outage}`;
+${purgeWrapper(model)}${outage}`;
   }
 
   if (broker.id === 'snssqs') {
@@ -2530,11 +2633,12 @@ ${doc}
     }
 ${SQS_BODY_DECODING}
 ${purgeDoc}
-    protected static void purgeMessages(String destination) {
+    ${purgeEntryPoint(model)}(String destination) {
         // PurgeQueue está limitada a una vez cada 60 s por cola en AWS real;
         // LocalStack no aplica esa cuota.
         aws(${javaArgs(purge)});
     }
+${purgeWrapper(model)}
 
     private static String aws(String... arguments) {
         List<String> argv = new ArrayList<>(AWS);
@@ -2586,9 +2690,10 @@ ${doc}
         return filterByChannel(readTopic(offset), channel);
     }
 ${purgeDoc}
-    protected static void purgeMessages(String channel) {
+    ${purgeEntryPoint(model)}(String channel) {
         MARKS.put(channel, safeNextOffset());
     }
+${purgeWrapper(model)}
 
     /**
      * Marca todos los canales declarados <b>y todos los destinos de descarte</b>: es la

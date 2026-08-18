@@ -214,7 +214,15 @@ Reglas:
 ### `jsonPath(...)` y `JsonPath.read(...)` van siempre a una variable tipada
 
 Las dos son genéricas (`protected <T> T jsonPath(Response, String)`, `static <T> T JsonPath.read(...)`)
-y no validan nada: **el tipo lo elige el sitio de la llamada**, no lo que hay dentro del JSON. Anidar
+y no validan nada: **el tipo lo elige el sitio de la llamada**, no lo que hay dentro del JSON.
+
+**Antes de tipar, mira la FORMA del campo en el contrato.** El que más engaña es el dato que
+viene de un `need` con `exposedAs`: viaja con la forma entera de su origen, así que
+`currentPrice` es un objeto (`{amount, currency, occurredAt}`) aunque el nombre suene a
+número. Tiparlo `String` compila y revienta al leer el primer cuerpo. Lo mismo con cualquier
+campo que el DTO declare como objeto anidado o lista.
+
+Anidar
 la llamada dentro de otra deja que `javac` resuelva la sobrecarga a costa tuya y mete un cast que
 revienta en runtime:
 
@@ -464,15 +472,23 @@ Toda afirmación del `Then` se comprueba, por orden de preferencia:
    cabeceras, no eventos. Localizar y contar se hacen sobre el sobre deserializado:
 
    ```java
-   /** Cuántos eventos del tipo dado hay en el canal para ese recurso. */
+   /** Cuántos eventos del tipo dado hay en el canal para ese recurso (RabbitMQ). */
    private static long countEvents(String messages, String eventType, String productId) {
-       List<String> payloads = JsonPath.read(messages, "$[*].payload");   // ← ruta del broker
+       // Map, NO String: el arnés ya desescapó el `payload` y lo dejó como objeto JSON.
+       // Tiparlo como String es un ClassCastException en cuanto se lee el primer mensaje.
+       List<Map<String, Object>> payloads = JsonPath.read(messages, "$[*].payload");
        return payloads.stream()
                .filter(p -> eventType.equals(JsonPath.read(p, "$.metadata.eventType")))
                .filter(p -> productId.equals(JsonPath.read(p, "$.data.productId")))
                .count();
    }
    ```
+
+   **El tipo depende del broker, y equivocarlo no es un matiz**: en RabbitMQ el sobre viene
+   ya deserializado (`Map`), y en SNS/SQS el arnés lo desescapa **dentro del texto**, así que
+   ahí `$..Body` sigue siendo `String` y hay que releerlo con `JsonPath.parse(body)`. La
+   tabla de arriba dice cuál es cuál; copiar el ejemplo del otro broker falla en la primera
+   lectura, no en una aserción.
 
    Un `hasEvent(...)` que además compare un campo del `data` (el estado resultante, por
    ejemplo) es la misma forma con `anyMatch`. Los dos son **helpers privados de la clase de

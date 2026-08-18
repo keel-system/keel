@@ -536,7 +536,9 @@ export const AUTH = {
     serviceKey: 'cognito-mock',
     cliTool: 'curl',
     cliVia: 'devtools',
-    cliValidateCmd: 'curl -sf http://cognito-mock:8080/health',
+    // /isalive, no /health: es el endpoint que usa el propio compose de la imagen. Con /health
+    // contesta 405 y el sondeo da un falso negativo sobre un emulador que está sirviendo bien.
+    cliValidateCmd: 'curl -sf http://cognito-mock:8080/isalive',
     alpinePackages: [],
     // El issuerId es el primer segmento de la ruta, y de él cuelgan `/token`,
     // `/jwks` y el descubrimiento. El config lo genera build desde el diseño

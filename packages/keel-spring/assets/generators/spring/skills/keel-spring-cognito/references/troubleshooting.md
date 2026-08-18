@@ -43,7 +43,7 @@ issuer + ids donde los uses.
 Con `issuer-uri`, Spring consulta `<issuer>/.well-known/openid-configuration`
 al arrancar: emulador caído o poolId inexistente la tumban. Orden correcto:
 compose up → init-cognito → ajustar YAML → bootRun. Sondeo:
-`curl -sf http://cognito-mock:8080/health` desde devtools.
+`curl -sf http://cognito-mock:8080/isalive` desde devtools.
 
 ## Funciona con el emulador pero no contra Cognito real
 

@@ -78,5 +78,5 @@ Léelas bajo demanda, no todas de golpe:
 
 ## Validación
 
-Sondeo desde devtools: `curl -sf http://cognito:9229/health`.
+Sondeo desde devtools: `curl -sf http://cognito-mock:8080/isalive`.
 Recetas completas en `{{keel:docs}}/conventions/infra-validation.md`.

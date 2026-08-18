@@ -82,7 +82,7 @@ lanza mientras el conjunto no exista, así que el fallo sale aquí. Igual que Or
 ejecuta dentro del propio contenedor: `mongosh` viene en su imagen.
 | MinIO | `minio` | `mc alias set local http://minio:9000 minioadmin minioadmin && mc ready local` |
 | Keycloak | `keycloak` | `curl -sf http://keycloak:8080/realms/master` |
-| Cognito | `cognito-mock` | `curl -sf http://cognito-mock:8080/health` |
+| Cognito | `cognito-mock` | `curl -sf http://cognito-mock:8080/isalive` |
 
 Las credenciales concretas son las de `infra/docker-compose.yaml` (usuario = nombre del
 servicio con guiones bajos, password `changeme` para las BD abiertas; `sa` /
