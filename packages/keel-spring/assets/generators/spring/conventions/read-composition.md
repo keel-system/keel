@@ -136,3 +136,49 @@ respuesta, y es más simple, reutiliza los mappers y se beneficia de la caché.
 - [ ] Si se filtra u ordena por un campo del agregado embebido, hay un adaptador de lectura con
       JPQL proyectado — y el repositorio del agregado quedó intacto.
 - [ ] Ningún `@ManyToOne`/`@OneToMany` entre dos raíces de agregado.
+
+## Afirmar el coste: `queryCount()` y los escenarios `FL-PERF-*`
+
+Todo lo de arriba —el lote, el join proyectado, el orden— se puede escribir bien y
+deshacerse en la refactorización siguiente sin que nada lo note: un `byKey()` que se
+cuela dentro de un `stream()` produce exactamente el mismo resultado, solo que con una
+consulta por elemento. **Es un fallo de coste, no de corrección, y ninguna aserción
+funcional lo ve.**
+
+Por eso el arnés cuenta sentencias. `queryCount()` devuelve las sentencias preparadas
+desde el arranque, y lo que se afirma es el **salto** alrededor de una petición:
+
+```java
+@Test
+@DisplayName("FL-PERF-001: el listado no paga una consulta por elemento")
+void listingDoesNotScaleWithPageSize() {
+    // Dos páginas de tamaños MUY distintos, medidas igual. Lo que se compara no es el
+    // número: es que no crezca con los elementos.
+    get(ROUTE_BASE + "/products?size=2", admin);          // calienta planes y caché
+    long beforeSmall = queryCount();
+    get(ROUTE_BASE + "/products?size=2", admin);
+    long small = queryCount() - beforeSmall;
+
+    long beforeLarge = queryCount();
+    get(ROUTE_BASE + "/products?size=20", admin);
+    long large = queryCount() - beforeLarge;
+
+    assertThat(large).isLessThanOrEqualTo(small + 1);
+}
+```
+
+Tres reglas para que estos escenarios no se conviertan en ruido:
+
+1. **Se compara la FORMA, no el número.** «Veinte elementos no cuestan más consultas que
+   dos» sobrevive a un índice nuevo, a una versión de Hibernate y a un `embed` añadido.
+   «Cuesta exactamente 4» se rompe con cualquiera de las tres y acaba subiéndose sin
+   mirar, que es como un gate se vuelve decorativo.
+2. **La petición medida tiene que ser la única del intervalo.** La cuenta es del proceso
+   entero y la comparten todas las clases; cualquier otra llamada en medio la ensucia.
+3. **Se mide la segunda ejecución.** La primera paga la caché de planes, la de segundo
+   nivel y la carga perezosa de metadatos.
+
+Y el corolario que importa al diseñar: **el N+1 más caro no suele ser de SQL, es de red**
+— una hidratación (`onMiss: fetch`) o una llamada saliente dentro de un bucle sobre la
+página. Esa no la cuenta `queryCount()`; se caza con el contador de llamadas del
+proveedor de prueba (`stubCallCount`), con el mismo criterio: que no crezca con la página.

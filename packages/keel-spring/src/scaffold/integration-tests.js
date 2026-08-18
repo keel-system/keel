@@ -1452,7 +1452,7 @@ function devtoolsSection(model) {
 ${brokerEntry(model) ? `
     /** Archivo del contenedor por el que viaja el cuerpo de {@link #deliverMessage}. */
     private static final String DELIVER_BODY = "/tmp/keel-deliver.json";
-` : ''}${brokerSection(model)}${outboxDrainSection(model)}${deadLetterSection(model)}${deliverySection(model)}${subscriptionDeliverySection(model)}
+` : ''}${queryCountSection(model)}${brokerSection(model)}${outboxDrainSection(model)}${deadLetterSection(model)}${deliverySection(model)}${subscriptionDeliverySection(model)}
     /**
      * Ejecuta un comando dentro del contenedor devtools y devuelve su salida.
      *
@@ -2500,6 +2500,64 @@ function purgeWrapper(model) {
     protected static void purgeMessages(String destination) {
         awaitOutboxDrained(destination);
         purgeDestination(destination);
+    }
+`;
+}
+
+// Contador de sentencias SQL, para acotar el COSTE de una lectura.
+//
+// Es lo que convierte «esto no hace N+1» de opinión sobre el código en algo que un
+// escenario afirma: se toma la cuenta antes y después de la petición y se compara el
+// salto contra una cota. Un listado que resuelve sus relaciones por lote cuesta un
+// número FIJO de consultas; uno que las resuelve elemento a elemento crece con la
+// página, y esa es exactamente la diferencia que la cota captura.
+//
+// La fuente es `hibernate.statements{status=prepared}`, que publica Micrometer desde
+// las estadísticas de Hibernate (activadas solo en local y test). No hay dependencia
+// nueva del arnés: es una lectura HTTP más.
+function queryCountSection(model) {
+  if (!model.layersPresent.persistence || model.persistenceKind !== 'relational') return '';
+  const security = model.layersPresent.security && tokenProtocol(model);
+  // El actuator no está entre las rutas públicas: con seguridad, la métrica se pide
+  // con un token cualquiera —vale el de cualquier rol— porque la regla de cierre es
+  // `authenticated()`.
+  const role = model.security?.roles?.[0] ?? null;
+  const call = security && role
+    ? `get("/actuator/metrics/hibernate.statements?tag=status:prepared", tokenFor("${role}"))`
+    : 'get("/actuator/metrics/hibernate.statements?tag=status:prepared")';
+  return `
+    /**
+     * Sentencias SQL preparadas desde que arrancó la aplicación.
+     *
+     * <p>Sirve para acotar el coste de una lectura: se lee antes y después de la
+     * petición y se afirma sobre el SALTO, nunca sobre el valor absoluto (la cuenta es
+     * del proceso entero y la comparten todas las clases de la suite).
+     *
+     * <pre>
+     * long antes = queryCount();
+     * Response response = get(ROUTE_BASE + "/products?size=20"${security ? ', admin' : ''});
+     * assertThat(queryCount() - antes).isLessThanOrEqualTo(4);
+     * </pre>
+     *
+     * <p><b>La cota se elige por FORMA, no por el número que salga hoy</b>: lo que se
+     * está afirmando es que el coste NO crece con el tamaño de la página. Un margen
+     * generoso sobre un coste constante sigue cazando el N+1; una cota ajustada al
+     * valor exacto se rompe con cualquier índice o versión de Hibernate y acaba
+     * subiéndose sin mirar, que es como un gate se convierte en ruido.
+     *
+     * <p>Para que la comparación signifique algo, la petición medida tiene que ser la
+     * ÚNICA que corra en ese intervalo, y conviene ejecutarla dos veces midiendo la
+     * segunda: la primera paga la caché de planes y la de segundo nivel.
+     */
+    protected static long queryCount() {
+        Response response = ${call};
+        if (response.status() != 200) {
+            throw new IllegalStateException(
+                    "No se pudo leer hibernate.statements (" + response.status() + "): ¿está el actuator expuesto y"
+                            + " generate_statistics activo en el perfil?");
+        }
+        Number value = JsonPath.read(response.body(), "$.measurements[0].value");
+        return value.longValue();
     }
 `;
 }

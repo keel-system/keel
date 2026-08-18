@@ -42,6 +42,12 @@ export function generate(model) {
   } else if (layersPresent.persistence) {
     dependencies.push(
       "implementation 'org.springframework.boot:spring-boot-starter-data-jpa'",
+      // Publica las estadísticas de Hibernate como métricas del actuator. Es lo que
+      // convierte «¿cuántas consultas cuesta esta lectura?» en un dato que un escenario
+      // puede afirmar, en vez de una lectura del código: sin él, un N+1 solo se ve
+      // revisando, y lo que solo se ve revisando vuelve en la siguiente refactorización.
+      // La versión la gobierna el BOM de Boot.
+      "implementation 'org.hibernate.orm:hibernate-micrometer'",
       ...(DATABASES[stack.database]?.gradleDependencies ?? []),
       // Migraciones de esquema: motor + módulo del dialecto elegido. Gobiernan el
       // esquema en develop/production (ahí Hibernate solo valida); en local están

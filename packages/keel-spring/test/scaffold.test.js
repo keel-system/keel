@@ -3475,3 +3475,23 @@ test('migraciones: la prueba en vivo del baseline queda atribuida al diseñador'
   assert.ok(agents.includes('doble check estático'));
   assert.ok(agents.includes('verificación **manual del diseñador**'));
 });
+
+test('rendimiento: el arnés puede CONTAR consultas, que es lo que hace observable un N+1', () => {
+  // Sin esto, «este listado no hace N+1» es una lectura del código: cierta hoy y sin
+  // nada que la sostenga tras la siguiente refactorización. Con el contador, un
+  // escenario afirma que el coste NO crece con el tamaño de la página.
+  const workspace = makeWorkspace();
+  scaffoldService({ ...loadFixture(), workspace, force: true });
+
+  const harness = read(workspace, 'src/integrationTest/java/com/commerce/productcatalog/flows/AbstractFlowIT.java');
+  assert.ok(harness.includes('protected static long queryCount()'), harness);
+  assert.ok(harness.includes('/actuator/metrics/hibernate.statements?tag=status:prepared'), harness);
+
+  // La cuenta la publica Micrometer desde las estadísticas de Hibernate...
+  assert.ok(read(workspace, 'build.gradle').includes("org.hibernate.orm:hibernate-micrometer"));
+  // ...y se activan SOLO donde se mide: llevar la cuenta cuesta, y en producción se
+  // paga en cada petición a cambio de un dato que allí nadie lee.
+  assert.ok(read(workspace, 'src/main/resources/parameters/local/db.yaml').includes('generate_statistics: true'));
+  assert.ok(!read(workspace, 'src/main/resources/parameters/production/db.yaml').includes('generate_statistics'));
+  assert.ok(!read(workspace, 'src/main/resources/parameters/develop/db.yaml').includes('generate_statistics'));
+});

@@ -302,6 +302,20 @@ function dbYaml(model, profile, dbName) {
   // elegido. Sin esto, un campo del diseño llamado como una palabra reservada
   // (primary, order, user…) genera un DDL que no compila y su tabla no se crea.
   lines.push('    properties:', '      hibernate:', '        auto_quote_keyword: true');
+  // Contador de sentencias, que es lo que hace OBSERVABLE un N+1: sin él, «esta página
+  // cuesta una consulta o veintiuna» es una opinión sobre el código, no un hecho que un
+  // escenario pueda afirmar. Micrometer lo publica como `hibernate.statements` y el arnés
+  // lo lee del actuator (ver AbstractFlowIT#queryCount).
+  //
+  // Solo en local y test: llevar la cuenta tiene coste, y en producción se paga en cada
+  // petición a cambio de un dato que allí nadie consulta.
+  if (profile === 'local' || profile === 'test') {
+    lines.push(
+      '        # Cuenta las sentencias preparadas. Lo lee el arnés para acotar el coste de',
+      '        # una lectura y cazar un N+1: es medición de prueba, no de producción.',
+      '        generate_statistics: true'
+    );
+  }
   lines.push(...flywayLines(profile));
   return lines.join('\n') + '\n';
 }
