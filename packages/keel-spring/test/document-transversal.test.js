@@ -158,6 +158,25 @@ test('reset-db.sh limpia por el contenedor de la base y no promete Hibernate', (
   assert.ok(reset.includes('MongoIndexConfig'));
 });
 
+test('reset-db.sh vacía también los buckets, que eran el único estado que sobrevivía', () => {
+  // Los objetos del bucket son estado sucio como una fila o un mensaje. No muerde
+  // mientras la clave lleve el id del recurso —no colisionan—, pero cualquier aserción
+  // sobre el CONTENIDO del bucket mediría lo que dejaron los flujos anteriores.
+  const { read } = scaffoldVault();
+  const reset = read('infra/reset-db.sh');
+
+  assert.ok(reset.includes('mc rm --recursive --force --quiet local/asset-vault-asset-binaries'), reset);
+  assert.ok(reset.includes('Bucket vaciado'), reset);
+  // Se borra el CONTENIDO, no el bucket: recrearlo es del sidecar minio-init, que solo
+  // corre al levantar la infraestructura — y con él se iría la policy.
+  assert.ok(!reset.includes('mc rb '), reset);
+  // Tolerante como las purgas: que el bucket no exista todavía no es estado sucio, y
+  // abortar el reset por eso bloquearía la suite entera.
+  assert.ok(reset.includes("AVISO: no se pudo vaciar el bucket"), reset);
+  // Y la cabecera lo dice: es el inventario de lo que el script deja limpio.
+  assert.ok(reset.includes('vacía los buckets (asset-vault-asset-binaries)'), reset);
+});
+
 test('validate-infra.sh sondea el replica set, no un ping', () => {
   const { read } = scaffoldVault();
   // Una base viva pero sin replica set acepta el ping y rechaza toda transacción: el

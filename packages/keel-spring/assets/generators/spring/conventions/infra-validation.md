@@ -114,7 +114,7 @@ Por eso cada clase de flujo (`<Flow>FlowIT`, ver [integration-tests](integration
 llama a `resetState()` desde su `@BeforeAll`, y ese método ejecuta:
 
 ```bash
-bash infra/reset-db.sh    # respeta CONTAINER_RUNTIME; datos, caché y canales fuera, esquema intacto
+bash infra/reset-db.sh    # respeta CONTAINER_RUNTIME; datos, caché, canales y buckets fuera, esquema intacto
 ```
 
 ### Qué recursos cubre el reset — y qué no
@@ -126,6 +126,8 @@ El script enumera en su cabecera exactamente lo que deja limpio, según el stack
 | Base de datos | vacía los datos preservando el esquema (y `flyway_schema_history`, ver abajo) |
 | Caché | borra las claves `<servicio>:*` (cachés e idempotencia comparten prefijo) |
 | Destinos de mensajería | purga cada canal declarado en `messaging.keel.yaml § channels` |
+| Buckets | vacía el **contenido** de cada bucket declarado en `storage.keel.yaml`, no el bucket: recrearlo es del sidecar `minio-init`, que solo corre al levantar la infraestructura, y con él se iría la policy pública |
+| Stub de proveedores | reinicia mappings y log de peticiones de WireMock |
 
 En Kafka no hay purga posible (kcat no borra registros), así que su equivalente lo aplica
 `AbstractFlowIT.resetState()`: una **marca de offset** por destino, tras la cual

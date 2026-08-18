@@ -289,7 +289,14 @@ export function resetDbScript(selected, service, model = null) {
     : [];
   const purges = broker && destinations.length > 0 ? [...destinations, ...deadLetters] : deadLetters;
   const httpStub = selected.find((s) => s.category === 'httpStub');
-  if (!db && !cache && purges.length === 0 && !httpStub) return null;
+  // Los objetos del bucket son estado sucio como una fila o un mensaje, y hasta ahora
+  // eran los únicos que sobrevivían al reset. No muerde en cuanto la clave lleva el id
+  // del recurso —no colisionan—, pero cualquier aserción sobre el CONTENIDO del bucket
+  // (cuántos objetos hay, que el borrado se llevó el binario) mide entonces lo que
+  // dejaron los flujos anteriores, y el escenario falla por algo que no está mirando.
+  const objectStorage = selected.find((s) => s.category === 'storage' && s.id === 'minio');
+  const buckets = objectStorage ? declaredBuckets(model ?? {}) : [];
+  if (!db && !cache && purges.length === 0 && !httpStub && buckets.length === 0) return null;
 
   const dbName = service.name.replace(/-/g, '_');
   const steps = [];
@@ -357,6 +364,20 @@ else
 fi`);
   }
 
+  // Vaciado de los buckets. `mc rm --recursive --force` sobre el bucket borra su
+  // CONTENIDO, no el bucket: recrearlo es cosa del sidecar minio-init, que solo corre
+  // al levantar la infraestructura, y sin él la policy pública se perdería. Tolerante a
+  // fallo como las purgas: que el bucket aún no exista no es estado sucio.
+  for (const bucket of buckets) {
+    const alias = 'mc alias set local http://minio:9000 minioadmin minioadmin >/dev/null';
+    const cmd = `${alias} && mc rm --recursive --force --quiet local/${bucket.physicalName} >/dev/null`;
+    steps.push(`if $RUNTIME exec ${sq(`${service.name}-devtools`)} sh -c ${sq(cmd)}; then
+  echo "Bucket vaciado (${bucket.physicalName})."
+else
+  echo "AVISO: no se pudo vaciar el bucket '${bucket.physicalName}' (¿aún no existe?). Continúo." >&2
+fi`);
+  }
+
   // Stub del proveedor: los mappings que programó el flujo anterior son estado
   // sucio igual que una fila, y el log de peticiones lo leen los verify de los
   // tests. Tolerante a fallo como las purgas: que el stub no esté arriba no
@@ -376,6 +397,7 @@ fi`);
     db ? 'vacía los datos de la BD (esquema intacto)' : null,
     cache ? 'borra las claves de la caché' : null,
     purges.length > 0 ? `purga los destinos de mensajería (${purges.join(', ')})` : null,
+    buckets.length > 0 ? `vacía los buckets (${buckets.map((b) => b.physicalName).join(', ')})` : null,
     httpStub ? 'reinicia el stub de proveedores (mappings y log de peticiones)' : null
   ]
     .filter(Boolean)
