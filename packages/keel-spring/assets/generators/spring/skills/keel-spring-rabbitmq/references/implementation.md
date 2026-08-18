@@ -185,6 +185,8 @@ carrera; que no lo anote no significa que no exista, significa que el diseño no
 - [ ] Stub del publisher eliminado (dos beans del puerto rompen la inyección).
 - [ ] Puerto de envío implementado según `reliability` (`OutboxDispatcher` u `<Evento>Publisher`), con su stub eliminado y el fallo propagado (outbox) o registrado (best-effort).
 - [ ] Con `outbox`, el `dispatch(...)` **espera** el confirm (`CorrelationData` + future) y lanza si hay nack, timeout o returned. Los callbacks globales no cuentan: son asíncronos.
+- [ ] El bean del listener container factory pasa por `SimpleRabbitListenerContainerFactoryConfigurer`. Sin él, `spring.rabbitmq.listener.simple.*` (incluido `retry.*`) no llega al contenedor y el YAML es decorado.
+- [ ] El `recovery-interval` del contenedor se fija a mano (`factory.setRecoveryInterval`, clave propia `rabbitmq.listener.recovery-interval-ms`: la propiedad de Boot no existe) y el `DISPATCH_DEADLINE` del dispatcher queda por encima.
 - [ ] `onFailure` implementado con reintentos acotados y DLQ si `deadLetter: true`.
 - [ ] Un cuerpo propio que no parsea lanza `AmqpRejectAndDontRequeueException`, nunca `log.error` + `return`.
 - [ ] Listener envuelto en `CorrelationContext.runWith(...)` y deduplicado con el `IdempotencyGuard` en el orden que prescribe el javadoc del `<Evento>Message` (sin mecanismo propio).

@@ -506,9 +506,11 @@ function abstractImports(model) {
   if (broker?.id === 'rabbitmq' && devtools) imports.push('java.util.Base64');
   // Marcas de offset por destino (aislamiento de Kafka, que no tiene purga).
   if (broker?.id === 'kafka') imports.push('java.util.concurrent.ConcurrentHashMap');
-  // Desescapado del campo Body de SQS (decodeBodies): solo lo necesita este broker,
-  // porque solo su CLI devuelve el cuerpo como cadena JSON escapada dentro del JSON.
-  if (broker?.id === 'snssqs') imports.push('java.util.regex.Matcher');
+  // Desescapado del cuerpo de aplicación (decodeBodies / decodePayloads). Lo necesitan
+  // los dos brokers que lo devuelven como cadena JSON escapada DENTRO del JSON de la
+  // respuesta: la CLI de SQS en su campo `Body` y la Management API de RabbitMQ en su
+  // campo `payload`. Kafka no: kcat escupe el registro tal cual.
+  if (broker?.id === 'snssqs' || broker?.id === 'rabbitmq') imports.push('java.util.regex.Matcher');
   // `Set.copyOf` deduplica los destinos de descarte al marcarlos: varias suscripciones
   // multiplexadas sobre el mismo topic comparten DLT, y marcarlo dos veces gastaría un
   // sondeo de más contra el broker por cada clase de flujo.
@@ -2331,6 +2333,74 @@ const SQS_BODY_DECODING = String.raw`
         return result.toString();
     }`;
 
+// Desescapado del campo `payload` de RabbitMQ, hermano del de SQS.
+//
+// La Management API devuelve el sobre de aplicación como una cadena JSON ESCAPADA dentro
+// del JSON de la respuesta, así que el texto crudo trae `{\"metadata\":...}` y una
+// aserción tan normal como `.contains("\"status\":\"active\"")` no casa NUNCA aunque el
+// evento publicado sea correcto. En la corrida del 18/08/2026, cuatro clases de flujo
+// escritas por separado cometieron el mismo error: eso es una trampa del arnés, no un
+// descuido del agente — el fallo es mudo (falso negativo, no error) y quien "arregla" la
+// aserción aflojándola (`.contains("active")`) pasa de chiripa sin comprobar nada.
+//
+// A diferencia del de SQS, aquí el valor decodificado se emite EMBEBIDO cuando es JSON, no
+// re-entrecomillado: así la respuesta sigue siendo JSON válido y `jsonPath` navega
+// `$[*].payload.metadata.eventType` sin re-parsear a mano, además de hacer que la
+// comparación por substring case.
+//
+// Se escribe con String.raw para que los backslashes del patrón lleguen tal cual a Java.
+const RABBIT_PAYLOAD_DECODING = String.raw`
+    /**
+     * Captura el valor entrecomillado de cada campo {@code "payload": "..."} de la
+     * respuesta de la Management API.
+     *
+     * <p>El grupo repetido es <b>posesivo</b> ({@code *+}) por la misma razón que su
+     * gemelo de SQS: con un payload lleno de backslashes consecutivos, la forma perezosa
+     * es ambigua sobre cómo agrupar la racha y el motor prueba exponencialmente muchas
+     * particiones antes de fallar — un solo mensaje así basta para agotar el stack. La
+     * expansión es determinista de todos modos, así que la forma posesiva no cambia qué
+     * matchea: solo le prohíbe al motor reconsiderarlo.
+     */
+    private static final Pattern PAYLOAD_FIELD = Pattern.compile("\"payload\":\\s*\"((?:\\\\.|[^\"\\\\])*+)\"");
+
+    /**
+     * Desescapa el {@code payload} de cada mensaje y lo deja EMBEBIDO como JSON.
+     *
+     * <p>Sin esto, lo que devuelve {@link #publishedMessages} trae el sobre de aplicación
+     * escapado dentro del JSON de la respuesta, y una aserción de texto como
+     * {@code .contains("\"status\":\"active\"")} no casa aunque el evento sea correcto —
+     * y el fallo es mudo. Con esto, el resultado sigue siendo JSON válido: lo natural es
+     * leerlo con {@code JsonPath} sobre {@code $[*].payload.metadata.eventType}.
+     *
+     * <p>Se toca <b>solo</b> el valor de {@code payload}: la envoltura
+     * ({@code properties}, {@code routing_key}, {@code payload_bytes}…) queda intacta
+     * porque hay comprobaciones que dependen de ella. Y sin mensajes no hay campo que
+     * tocar, así que un destino vacío sigue leyéndose como {@code []}.
+     */
+    private static String decodePayloads(String raw) {
+        Matcher matcher = PAYLOAD_FIELD.matcher(raw);
+        StringBuilder result = new StringBuilder();
+        int last = 0;
+        while (matcher.find()) {
+            result.append(raw, last, matcher.start());
+            result.append("\"payload\": ").append(embeddedPayload(matcher.group(1)));
+            last = matcher.end();
+        }
+        result.append(raw, last, raw.length());
+        return result.toString();
+    }
+
+    /** El payload como valor JSON si lo es; si no, tal cual vino (entrecomillado y escapado). */
+    private static String embeddedPayload(String escaped) {
+        try {
+            String decoded = JSON.readValue("\"" + escaped + "\"", String.class);
+            JSON.readTree(decoded);
+            return decoded;
+        } catch (Exception notJson) {
+            return "\"" + escaped + "\"";
+        }
+    }`;
+
 function brokerSection(model) {
   const broker = brokerEntry(model);
   if (!broker) return '';
@@ -2400,11 +2470,15 @@ ${doc}
         // assertar dos veces sobre el mismo mensaje.
         copyToDevtools(${rabbitProbeBodyJava('count')}, PROBE_BODY);
         try {
-            return devtools(${javaArgs(read)});
+            // Desescapado ANTES de devolver: quien llama nunca ve el sobre de
+            // aplicación como cadena escapada, que es la trampa que hacía fallar en
+            // silencio aserciones por lo demás correctas.
+            return decodePayloads(devtools(${javaArgs(read)}));
         } catch (RuntimeException e) {
             return emptyIfBrokerStopped(e);
         }
     }
+${RABBIT_PAYLOAD_DECODING}
 ${purgeDoc}
     protected static void purgeMessages(String destination) {
         devtools(${javaArgs(purge)});

@@ -7,7 +7,7 @@
 import { DATABASES, HTTP_STUB } from '../lib/stack-catalog.js';
 import { EMBEDDED_MONGO_VERSION } from '../lib/assets.js';
 import { physicalBucketName } from '../lib/buckets.js';
-import { screamingSnake } from '../lib/naming.js';
+import { kebabCase, screamingSnake } from '../lib/naming.js';
 import { subscriptionDestination } from '../lib/dead-letter.js';
 import { recordedFailures } from '../lib/outbound-failures.js';
 import { usesOutbox } from './outbox.js';
@@ -126,6 +126,11 @@ export function generate(model) {
     }
     if (layersPresent.httpClients && model.httpClients) {
       fragments.push(fragment(profile, 'http-clients', httpClientsYaml(model, profile)));
+    }
+    // Los números del barrido de reconciliación. Solo si hay barrido: sin `reconciledBy`
+    // el fragmento sería un archivo con parámetros que nadie lee.
+    if (reconciledActivations(model).length > 0) {
+      fragments.push(fragment(profile, 'reconciliation', reconciliationYaml(model, profile)));
     }
 
     files.push({
@@ -379,7 +384,18 @@ function brokerYaml(model, profile) {
       `    host: ${envValue(profile, 'RABBITMQ_HOST', 'localhost')}`,
       `    port: ${envValue(profile, 'RABBITMQ_PORT', 5672)}`,
       `    username: ${envValue(profile, 'RABBITMQ_USERNAME', 'guest')}`,
-      `    password: ${envValue(profile, 'RABBITMQ_PASSWORD', 'guest')}`
+      `    password: ${envValue(profile, 'RABBITMQ_PASSWORD', 'guest')}`,
+      // Clave PROPIA, no `spring.*`: `spring.rabbitmq.listener.simple.recovery-interval`
+      // NO existe —RabbitProperties no la expone—, así que declararla ahí no tendría
+      // ningún efecto y el contenedor se quedaría con el default INVISIBLE de
+      // AbstractMessageListenerContainer. Se saca a la luz porque no es solo del
+      // listener: el deadline de publicación del dispatcher del outbox tiene que quedar
+      // POR ENCIMA de este número (comparten ConnectionFactory, y un deadline más corto
+      // reinicia este reloj en cada timeout — el patrón que nunca converge). Un valor
+      // invisible no se puede respetar.
+      'rabbitmq:',
+      '  listener:',
+      `    recovery-interval-ms: ${envWithDefault(profile, 'RABBITMQ_LISTENER_RECOVERY_INTERVAL_MS', 5000)}`
     ].join('\n') + '\n';
   }
   return [
@@ -473,7 +489,17 @@ function messagingYaml(model, profile) {
       `    batch-size: ${envWithDefault(profile, 'OUTBOX_RELAY_BATCH_SIZE', 100)}`,
       '    # Tras agotar los reintentos, la fila queda como dead-letter (no se',
       '    # reintenta más ni se borra); se reporta a ERROR para inspección.',
-      `    max-attempts: ${envWithDefault(profile, 'OUTBOX_RELAY_MAX_ATTEMPTS', 10)}`,
+      // Y en `local` son MÁS, no por tolerancia sino por PRESUPUESTO: ahí el broker
+      // caído es un PASO del escenario de outbox, y lo que la fila tiene que aguantar es
+      // un reinicio de contenedor entero. Con el tope corto de abajo, diez intentos son
+      // ~20 s — menos de lo que tarda un broker en volver a servir bajo podman o docker
+      // en una máquina cargada, así que la fila moría como dead-letter justo antes de
+      // que el broker estuviera listo: el escenario fallaba por el presupuesto, no por
+      // lo que prueba. Las dos claves gobiernan cosas distintas — `backoff.max-ms` es la
+      // LATENCIA de la reentrega tras la recuperación y el producto de ambas es el
+      // presupuesto—, así que igualar los topes entre perfiles «para que no difieran»
+      // arregla el presupuesto rompiendo la latencia.
+      `    max-attempts: ${envWithDefault(profile, 'OUTBOX_RELAY_MAX_ATTEMPTS', profile === 'local' ? 40 : 10)}`,
       '    # Backoff exponencial entre reintentos de una misma fila (initial·2^(n-1),',
       '    # con tope max-ms): evita el hot-looping si el broker está caído.',
       '    backoff:',
@@ -725,6 +751,18 @@ function storageYaml(model, profile) {
         `      visibility: ${bucket.visibility}`
       );
       if (bucket.maxSizeMb != null) lines.push(`      max-size-mb: ${bucket.maxSizeMb}`);
+      // La caducidad del enlace firmado: la declara el diseño y la aplica el adaptador.
+      // Sin emitirla aquí, la ventana volvería a ser una constante elegida al escribir el
+      // código, que es justo lo que el diseño acaba de sacar de ahí.
+      if (bucket.signedUrlTtlSeconds != null) {
+        lines.push(
+          `      signed-url-ttl-seconds: ${envWithDefault(
+            profile,
+            `STORAGE_${screamingSnake(bucket.name)}_SIGNED_URL_TTL_SECONDS`,
+            bucket.signedUrlTtlSeconds
+          )}`
+        );
+      }
       if (bucket.allowedContentTypes.length > 0) {
         lines.push(`      allowed-content-types: ${bucket.allowedContentTypes.join(',')}`);
       }
@@ -1030,4 +1068,63 @@ function testProfileFiles(model) {
   // otro perfil existe. Se ve como un fallo del bean, no como lo que es.
 
   return files;
+}
+
+// Barrido de reconciliación: los tres números con los que decide, y de dónde sale cada
+// uno. NO son la misma clase de decisión, y por eso solo uno lo declara el diseño.
+//
+//   - `unanswered-after-seconds` — CUÁNTO SILENCIO SE TOLERA. Es del diseño
+//     (`dependencies.activations.<a>.unansweredAfterSeconds`): depende de cuánto tarda
+//     razonablemente ESE proveedor en contestar, que es conocimiento de negocio. Por
+//     activación, porque un mismo barrido puede reconciliar varias.
+//   - `claim-timeout-ms` — CUÁNTO RETIENE UN CANDIDATO una réplica que murió con el lote
+//     en vuelo. Mecánica de multi-réplica, no contrato: el generador ya la resuelve igual
+//     en `outbox.relay.claim-timeout-ms` sin preguntarle al diseño.
+//   - `batch-size` — CUÁNTO TRABAJO CABE EN UNA PASADA. Capacidad, familia de los
+//     backoffs: se ajusta con datos de producción delante, no en la mesa de diseño.
+//
+// Que los dos últimos NO estén en el diseño no es un olvido: el DSL veta los conceptos
+// de solución disfrazados de neutrales, y meterlos ahí habría hecho que el diseño
+// declarase mecánica en vez de decisiones.
+function reconciliationYaml(model, profile) {
+  const lines = ['reconciliation:'];
+  for (const { dependency, activation } of reconciledActivations(model)) {
+    const key = kebabCase(activation.name);
+    lines.push(
+      `  ${key}:`,
+      `    # Encargos a ${dependency} sin desenlace pasado este tiempo: candidatos del barrido.`,
+      '    # Lo declara el DISEÑO; aquí solo se parametriza para poder moverlo por entorno.',
+      `    unanswered-after-seconds: ${envWithDefault(
+        profile,
+        `RECONCILIATION_${screamingSnake(activation.name)}_UNANSWERED_AFTER_SECONDS`,
+        activation.unansweredAfterSeconds ?? 3600
+      )}`,
+      '    # Caducidad del reclamo: una réplica que muere con el lote en vuelo retiene sus',
+      '    # candidatos hasta que pasa esto. Del generador, no del diseño.',
+      `    claim-timeout-ms: ${envWithDefault(
+        profile,
+        `RECONCILIATION_${screamingSnake(activation.name)}_CLAIM_TIMEOUT_MS`,
+        60000
+      )}`,
+      '    # Cota del lote por pasada: sin ella, una tanda con 50.000 atascados son 50.000',
+      '    # llamadas al proveedor de una vez. Del generador, no del diseño.',
+      `    batch-size: ${envWithDefault(
+        profile,
+        `RECONCILIATION_${screamingSnake(activation.name)}_BATCH_SIZE`,
+        50
+      )}`
+    );
+  }
+  return lines.join('\n') + '\n';
+}
+
+/** Activaciones con barrido declarado, que son las que tienen parámetros que emitir. */
+function reconciledActivations(model) {
+  const found = [];
+  for (const dependency of model.dependencies ?? []) {
+    for (const activation of dependency.activations ?? []) {
+      if (activation.reconciledBy) found.push({ dependency: dependency.id, activation });
+    }
+  }
+  return found;
 }

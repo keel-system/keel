@@ -510,7 +510,7 @@ function reconciliationChecks(model) {
       // Lo que build ya parametriza por su cuenta: encontrarlo probaría lo que build
       // hizo. El relay del outbox es el caso claro — tiene `@Value` y habla de reclamos.
       exclude: '/(OutboxRelay|OutboxDispatcher[A-Za-z]*|ProcessedEventPurge[A-Za-z]*|IdempotencyRecordPurge[A-Za-z]*)\\.java',
-      why: 'el umbral de espera del barrido no está parametrizado en ninguna parte (@Value/@ConfigurationProperties sobre un valor que hable de la espera): quemado en el código no se ajusta por entorno sin recompilar — ver conventions/dependencies.md'
+      why: 'el umbral de espera del barrido no está parametrizado en ninguna parte (@Value/@ConfigurationProperties sobre un valor que hable de la espera): build ya lo dejó escrito en parameters/<perfil>/reconciliation.yaml con el valor que declara el diseño (unansweredAfterSeconds), así que lo que falta es LEERLO — quemado en el código no se ajusta por entorno sin recompilar, y además deja de ser el número que el diseñador decidió. Ver conventions/dependencies.md'
     });
   }
   for (const scheduler of schedulers) {

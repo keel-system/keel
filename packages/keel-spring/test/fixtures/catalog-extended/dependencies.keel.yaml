@@ -17,6 +17,15 @@ dependencies:
         fetchedFrom:
           client: pricing
           call: getPrice
+        # Qué ve el cliente si pricing no contesta. Antes esto solo existía como prosa en
+        # el `fallback` de la llamada («devolver el último precio conocido en caché»), que
+        # es la capa técnica: decía el mecanismo y no la política, así que la ventana de
+        # validez la acababa eligiendo quien construía — y en una corrida real salió sin
+        # ninguna. Aquí la decisión está entera: hasta cuándo vale, y qué pasa después.
+        onUnavailable:
+          action: lastKnown
+          maxAgeSeconds: 900
+          error: PRICE_UNAVAILABLE
 
       supplierPrice:
         description: Precio de proveedor, que se consulta en cada listado y no puede pagar una llamada por elemento.
@@ -49,6 +58,10 @@ dependencies:
         fetchedFrom:
           client: legacy-erp
           call: getCost
+        # Aquí la respuesta honesta no es servir un coste viejo: es servir la ficha sin él.
+        onUnavailable:
+          action: degrade
+          degradedTo: La ficha se devuelve sin coste de aprovisionamiento; el consumidor no puede pintar el margen y lo sabe porque el campo llega nulo.
 
   search-index:
     description: Servicio de búsqueda, que mantiene el índice del catálogo.
@@ -114,6 +127,10 @@ dependencies:
         # Sin esto, la compensación de abajo solo existe si el registro se acuerda de
         # publicar su rechazo. Cuando no lo hace, nada lo detecta.
         reconciledBy: reconcileWithdrawals
+        # Cuánto silencio del registro se tolera antes de volver a insistir. Es la
+        # decisión que el barrido no puede tomar solo: depende de cuánto tarda ESTE
+        # proveedor en contestar. En local el generador la baja por entorno.
+        unansweredAfterSeconds: 3600
         onFailure:
           action: fail
           error: COMPLIANCE_UNAVAILABLE

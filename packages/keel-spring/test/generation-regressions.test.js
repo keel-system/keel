@@ -1957,8 +1957,44 @@ test('§1.2: los otros brokers no arrastran el desescapado de SQS', () => {
       'src/integrationTest/java/com/commerce/catalog/flows/AbstractFlowIT.java'
     );
     assert.ok(!harness.includes('decodeBodies'), `${broker}: desescapado de SQS donde no hay SQS`);
-    assert.ok(!harness.includes('import java.util.regex.Matcher;'), `${broker}: import sin uso`);
   }
+  // Kafka además no desescapa NADA: kcat escupe el registro tal cual, así que ni
+  // decodePayloads ni el import de Matcher tienen a qué servir.
+  const kafka = scaffoldWithBroker('kafka')(
+    'src/integrationTest/java/com/commerce/catalog/flows/AbstractFlowIT.java'
+  );
+  assert.ok(!kafka.includes('decodePayloads'), 'kafka: desescapado donde el registro viaja crudo');
+  assert.ok(!kafka.includes('import java.util.regex.Matcher;'), 'kafka: import sin uso');
+});
+
+test('§1.4: con rabbitmq el arnés desescapa el campo payload de la Management API', () => {
+  // Mismo defecto que el de SQS y con la misma firma: el sobre de aplicación viaja como
+  // cadena JSON ESCAPADA dentro del JSON de la respuesta, así que una aserción tan normal
+  // como `.contains("\\"status\\":\\"active\\"")` no casa NUNCA aunque el evento publicado sea
+  // correcto. En la corrida del 18/08/2026 cayeron cuatro clases de flujo escritas por
+  // separado — cuando el mismo error aparece en clases sin relación, el defecto es del arnés.
+  const harness = scaffoldWithBroker('rabbitmq')(
+    'src/integrationTest/java/com/commerce/catalog/flows/AbstractFlowIT.java'
+  );
+
+  assert.ok(harness.includes('return decodePayloads(devtools('), 'publishedMessages devuelve la salida cruda');
+  assert.ok(harness.includes('private static String decodePayloads(String raw)'), harness);
+  assert.ok(harness.includes('import java.util.regex.Matcher;'), 'falta el import de Matcher');
+  // Posesivo, por lo mismo que el de SQS: la forma perezosa hace backtracking
+  // catastrófico con una racha de backslashes y agota el stack.
+  const patternLine = harness.split('\n').find((line) => line.includes('PAYLOAD_FIELD = Pattern.compile('));
+  assert.ok(patternLine, 'no se declara el patrón del campo payload');
+  assert.ok(patternLine.includes('*+'), `el grupo repetido no es posesivo: ${patternLine}`);
+
+  // Se emite EMBEBIDO cuando es JSON (el resultado sigue siendo JSON navegable con
+  // JsonPath), y tal cual vino cuando no lo es.
+  assert.ok(harness.includes('JSON.readTree(decoded);'), harness);
+  assert.ok(harness.includes('private static String embeddedPayload(String escaped)'), harness);
+
+  // Y el predicado de canal vacío sigue en pie: sin mensajes no hay campo `payload` que
+  // tocar, así que la purga se sigue leyendo como `[]`. Si esto se rompiera, toda
+  // aserción negativa de mensajería pasaría a fallar por el desescapado.
+  assert.ok(harness.includes('.trim().equals("[]")'), harness);
 });
 
 // La skill del broker y lo que build genera tienen que decir lo mismo: si el ejemplo del
@@ -2003,4 +2039,39 @@ test('§1.2: el reset solo restaura el broker si un escenario lo tiró', () => {
   );
   assert.ok(restore.includes('BROKER_STOPPED.get()'), `restoreBroker no consulta el flag: ${restore}`);
   assert.ok(restore.includes('startBroker();'), restore);
+});
+
+
+test('§4: los números del barrido salen de parameters/, y solo el umbral viene del diseño', () => {
+  // El designGap de la corrida: `schedule` solo admitía `cron`, así que el umbral de
+  // espera, la caducidad del reclamo y el tamaño de lote los elegía el agente — y en el
+  // diseño acabaron como PROSA dentro de `rules`, que no lee ninguna herramienta.
+  //
+  // La 2.8 no metió los tres en el DSL, y la asimetría es el punto: cuánto se espera a un
+  // proveedor antes de insistir es negocio (`unansweredAfterSeconds`); cuánto dura un
+  // reclamo y cuánto cabe en un lote son mecánica y capacidad, de la familia que
+  // `dsl-reference.md § Modificación del DSL equivocada` deja fuera a propósito.
+  const { read } = scaffoldExtended();
+
+  const local = read('src/main/resources/parameters/local/reconciliation.yaml');
+  assert.ok(local.includes('  record-withdrawal:'), local);
+  assert.ok(local.includes('unanswered-after-seconds: 3600'), local);
+  assert.ok(local.includes('claim-timeout-ms: 60000'), local);
+  assert.ok(local.includes('batch-size: 50'), local);
+
+  // Fuera de local, el gradiente habitual: el diseño fija el valor y el entorno puede
+  // moverlo sin recompilar, que es lo que hace compatible «lo declara el diseño» con «es
+  // configuración».
+  const production = read('src/main/resources/parameters/production/reconciliation.yaml');
+  assert.ok(
+    production.includes('unanswered-after-seconds: ${RECONCILIATION_RECORD_WITHDRAWAL_UNANSWERED_AFTER_SECONDS:3600}'),
+    production
+  );
+
+  // Y el perfil lo importa: un fragmento que nadie carga son parámetros que nadie lee.
+  assert.ok(read('src/main/resources/application-local.yaml').includes('parameters/local/reconciliation.yaml'));
+
+  // La nota del stub manda LEER el parámetro, no elegir un número.
+  const handler = read(`${JAVA}/application/usecases/ReconcileWithdrawalsCommandHandler.java`);
+  assert.ok(handler.includes('reconciliation.record-withdrawal.unanswered-after-seconds'), handler);
 });

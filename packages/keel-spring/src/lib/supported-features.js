@@ -100,6 +100,25 @@ export function checkSupportedFeatures(manifest, layers) {
       if (activation?.reconciledBy) reconciled.push(`${id}.${name} → ${activation.reconciledBy}`);
     }
   }
+  // `onUnavailable: lastKnown` sobre una llamada que el diseño solo describe en prosa.
+  // El almacén se alimenta del camino FELIZ del adaptador, y ese camino, sin method/path,
+  // es un TODO que el agente escribe: si no añade el `remember(...)`, el `recall(...)` del
+  // fallback no encuentra nunca nada y la política degrada en silencio a «fallar siempre»,
+  // que es justo lo que el diseño quiso evitar declarándola.
+  const untypedLastKnown = [];
+  for (const [id, dep] of Object.entries(layers?.dependencies?.dependencies ?? {})) {
+    for (const [name, need] of Object.entries(dep?.needs ?? {})) {
+      if (need?.onUnavailable?.action !== 'lastKnown' || !need.fetchedFrom) continue;
+      const call = layers?.['http-clients']?.clients?.[need.fetchedFrom.client]?.calls?.[need.fetchedFrom.call];
+      if (call && !call.method) untypedLastKnown.push(`${id}.${name}`);
+    }
+  }
+  if (untypedLastKnown.length > 0) {
+    warnings.push(
+      `dependencies.needs.onUnavailable: lastKnown (${untypedLastKnown.join(', ')}): la llamada que resuelve el dato no declara method/path, así que su camino feliz queda como TODO y build no puede insertar el remember(...) que alimenta el almacén. El rescate del fallback se genera igual, pero no encontrará nada hasta que el agente recuerde el resultado: declara method/path en la llamada, o revisa el adaptador antes de dar la política por aplicada.`
+    );
+  }
+
   if (compensated.length > 0) {
     warnings.push(
       `dependencies.compensations (${compensated.join(', ')}): keel-spring no genera ninguna clase propia — una compensación es una suscripción normal, y lo que build garantiza es su guarda (la transición del agregado o el IdempotencyGuard del listener) más la doctrina en el javadoc del <Evento>Message y en la nota del handler. Deshacer el trabajo, y devolver el estado que movió, lo escribe el agente de código y lo verifica el de calidad.`
@@ -107,7 +126,7 @@ export function checkSupportedFeatures(manifest, layers) {
   }
   if (reconciled.length > 0) {
     warnings.push(
-      `dependencies.activations.reconciledBy (${reconciled.join(', ')}): build genera el @Scheduled con su cron y la nota de qué barrer, pero la consulta de candidatos, el umbral y la decisión (reintentar el encargo o compensarlo) los escribe el agente. Y queda fuera del gate CONDUCTUAL: el arnés de integración es caja negra y un cron no es alcanzable desde fuera, así que ningún escenario FL-* lo ejercita. Lo cubre infra/check-idempotency.sh en estático, y la prueba en vivo es del diseñador.`
+      `dependencies.activations.reconciledBy (${reconciled.join(', ')}): build genera el @Scheduled con su cron, la nota de qué barrer y los tres números del barrido en parameters/<perfil>/reconciliation.yaml (el umbral sale del diseño, 'unansweredAfterSeconds'; la caducidad del reclamo y el tamaño de lote los pone el generador), pero la consulta de candidatos y la decisión (reintentar el encargo o compensarlo) las escribe el agente, que debe LEER esos parámetros en vez de elegir constantes. Y queda fuera del gate CONDUCTUAL: el arnés de integración es caja negra y un cron no es alcanzable desde fuera, así que ningún escenario FL-* lo ejercita. Lo cubre infra/check-idempotency.sh en estático, y la prueba en vivo es del diseñador.`
     );
   }
 

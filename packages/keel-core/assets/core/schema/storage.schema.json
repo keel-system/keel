@@ -34,8 +34,20 @@
             "minimum": 1,
             "description": "Tamaño máximo por archivo en megabytes."
           },
+          "signedUrlTtlSeconds": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Cuánto vale la URL firmada con la que se lee un objeto de este bucket. Es contrato con quien la recibe —cuánto tiempo tiene para descargar, y durante cuánto sirve si la reenvía a otro—, no un ajuste del proveedor: una ventana larga convierte el enlace en acceso permanente para quien lo comparta, y una corta rompe descargas legítimas. Solo válido con visibility private: en un bucket público no hay firma que caducar.",
+            "$comment": "Sin declararlo, la ventana la elige quien construye y no queda registrada en ninguna parte del diseño."
+          },
           "description": { "type": "string" }
-        }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "visibility": { "const": "public" } }, "required": ["visibility"] },
+            "then": { "not": { "required": ["signedUrlTtlSeconds"] } }
+          }
+        ]
       }
     }
   }

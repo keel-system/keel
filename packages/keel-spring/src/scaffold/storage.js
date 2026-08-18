@@ -41,7 +41,7 @@ function renderBucketPolicy(model) {
  * @param allowedContentTypes MIME admitidos; vacío significa "sin restricción"
  */
 public record BucketPolicy(String name, String bucket, boolean publicRead, Integer maxSizeMb,
-        List<String> allowedContentTypes) {
+        List<String> allowedContentTypes, Integer signedUrlTtlSeconds) {
 
     public BucketPolicy {
         allowedContentTypes = allowedContentTypes == null ? List.of() : List.copyOf(allowedContentTypes);
@@ -57,10 +57,28 @@ public record BucketPolicy(String name, String bucket, boolean publicRead, Integ
     public boolean allowsSize(long sizeBytes) {
         return maxSizeMb == null || sizeBytes <= (long) maxSizeMb * 1024L * 1024L;
     }
+
+    /**
+     * Cuánto vale la URL firmada de este bucket, según lo declara el diseño
+     * ({@code storage.buckets.<n>.signedUrlTtlSeconds}).
+     *
+     * <p><b>Es la ventana que usa el adaptador, no una sugerencia.</b> Es contrato con
+     * quien recibe el enlace: cuánto tiempo tiene para descargar, y durante cuánto le
+     * sirve a quien se lo reenvíe. Elegir aquí otro número al escribir el adaptador
+     * devuelve la decisión al código, que es de donde el diseño acaba de sacarla.
+     */
+    public Duration signedUrlTtl() {
+        if (signedUrlTtlSeconds == null) {
+            throw new IllegalStateException(
+                    "storage.buckets." + name + " no declara signedUrlTtlSeconds: un bucket privado se lee por"
+                            + " URL firmada, y esa firma tiene que caducar. Decláralo en el diseño.");
+        }
+        return Duration.ofSeconds(signedUrlTtlSeconds);
+    }
 }`;
   return {
     path: javaPath(model, DOMAIN_PKG, 'BucketPolicy'),
-    content: javaFile(subPackage(model, DOMAIN_PKG), ['java.util.List', 'java.util.Locale'], body)
+    content: javaFile(subPackage(model, DOMAIN_PKG), ['java.time.Duration', 'java.util.List', 'java.util.Locale'], body)
   };
 }
 
@@ -125,7 +143,7 @@ function renderProperties(model) {
 public record StorageProperties(${publicBaseUrl}Map<String, BucketProperties> buckets) implements StoragePolicies {
 
     public record BucketProperties(String bucket, String visibility, Integer maxSizeMb,
-            List<String> allowedContentTypes) {
+            List<String> allowedContentTypes, Integer signedUrlTtlSeconds) {
     }
 
     @Override
@@ -136,7 +154,7 @@ public record StorageProperties(${publicBaseUrl}Map<String, BucketProperties> bu
                     "storage.buckets." + name + " no está configurado: revisa parameters/<perfil>/storage.yaml");
         }
         return new BucketPolicy(name, properties.bucket(), "public".equals(properties.visibility()),
-                properties.maxSizeMb(), properties.allowedContentTypes());
+                properties.maxSizeMb(), properties.allowedContentTypes(), properties.signedUrlTtlSeconds());
     }
 }`;
   return {
@@ -252,6 +270,12 @@ function renderPort(model) {
      * URL de lectura temporal de un objeto que no es público. Solo existe
      * porque el diseño declara algún bucket visibility: private. Caduca: se
      * pide al leer y no se persiste ni se cachea en una respuesta.
+     *
+     * <p><b>Cuánto dura no lo elige el adaptador</b>: sale de
+     * {@code BucketPolicy#signedUrlTtl()}, que lo lee de lo que declaró el diseño. Es
+     * contrato con quien recibe el enlace —cuánto tiene para descargar, y durante cuánto
+     * le sirve a quien se lo reenvíe—, así que una constante en el adaptador devolvería
+     * esa decisión al código.
      */
     String signedUrl(String bucket, String key);
 `

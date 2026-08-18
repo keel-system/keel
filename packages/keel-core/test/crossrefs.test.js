@@ -601,7 +601,36 @@ const domainWithFile = (bucket = 'productImages') => ({
 });
 
 const storageLayer = (...bucketNames) => ({
-  buckets: Object.fromEntries(bucketNames.map((name) => [name, { allowedContentTypes: ['image/png'] }])),
+  // `signedUrlTtlSeconds` porque estos buckets son privados por default: sin él, el
+  // aviso de «la URL firmada caduca y el diseño no dice cuándo» ensucia toda fixture
+  // que solo quiera hablar de otra cosa.
+  buckets: Object.fromEntries(
+    bucketNames.map((name) => [name, { allowedContentTypes: ['image/png'], signedUrlTtlSeconds: 900 }])
+  ),
+});
+
+test('bucket privado sin caducidad de URL firmada es aviso', () => {
+  // `private` significa que la lectura pasa por una firma que caduca, y esa caducidad
+  // es contrato con quien recibe el enlace. Sin declararla la elige quien construya y
+  // no queda en el diseño: así es como un enlace pensado para minutos acaba durando
+  // días sin que nadie lo haya decidido.
+  const storage = storageLayer('productImages');
+  delete storage.buckets.productImages.signedUrlTtlSeconds;
+  const layers = { domain: domainWithFile('productImages'), 'use-cases': {}, storage };
+  const { errors, warnings } = run(layers);
+  assert.deepEqual(errors, []);
+  assert.ok(warnings.some((w) => w.includes("buckets.productImages: es private y no declara 'signedUrlTtlSeconds'")), warnings.join(' | '));
+});
+
+test('bucket público no reclama caducidad de URL firmada', () => {
+  // No hay firma que caducar: exigirla ahí sería pedir una decisión sobre un mecanismo
+  // que ese bucket no usa.
+  const storage = storageLayer('productImages');
+  delete storage.buckets.productImages.signedUrlTtlSeconds;
+  storage.buckets.productImages.visibility = 'public';
+  const layers = { domain: domainWithFile('productImages'), 'use-cases': {}, storage };
+  const { warnings } = run(layers);
+  assert.ok(!warnings.some((w) => w.includes('signedUrlTtlSeconds')), warnings.join(' | '));
 });
 
 test('campo file cuyo bucket existe en storage no produce errores ni warnings', () => {
@@ -1580,6 +1609,7 @@ const depsLayers = () => ({
             usedBy: ['createOrder'],
             strategy: 'replicated',
             fetchedFrom: { client: 'catalog', call: 'getProductsByIds' },
+            onUnavailable: { action: 'fail', error: 'PRICE_UNAVAILABLE' },
             replica: {
               entity: 'ProductSnapshot',
               keyField: 'productId',
@@ -1615,6 +1645,38 @@ test('usedBy hacia una operación inexistente es error', () => {
   need(layers).usedBy = ['repriceOrder'];
   const { errors } = run(layers);
   assert.ok(errors.some((e) => e.includes(`usedBy: la operación 'repriceOrder' no existe en use-cases`)));
+});
+
+test('un need que pide el dato al proveedor sin declarar onUnavailable es aviso', () => {
+  // La decisión que falta no es un detalle de implementación: es qué ve el cliente
+  // cuando el proveedor no contesta. Una activación lo declara en `onFailure` y una
+  // réplica en `onMiss`; el dato que se PIDE no tenía dónde, y acababa en la prosa del
+  // `fallback` de la llamada — que el generador no puede aplicar.
+  const layers = depsLayers();
+  delete need(layers).onUnavailable;
+  const { errors, warnings } = run(layers);
+  assert.deepEqual(errors, []);
+  assert.ok(warnings.some((w) => w.includes("needs.productPricing: no declara 'onUnavailable'")), warnings.join(' | '));
+});
+
+test('onUnavailable.error que ninguna operación declara es error', () => {
+  // Mismo trato que `onMiss.error`: el generador lanza esa excepción, y solo existe si
+  // alguna operación la declaró en su catálogo.
+  const layers = depsLayers();
+  need(layers).onUnavailable = { action: 'fail', error: 'PRICING_DOWN' };
+  const { errors } = run(layers);
+  assert.ok(errors.some((e) => e.includes("onUnavailable.error: el código 'PRICING_DOWN' no lo declara ninguna operación")), errors.join(' | '));
+});
+
+test('onUnavailable declarado por una operación ajena a usedBy es aviso', () => {
+  const layers = depsLayers();
+  layers['use-cases'].operations.applyProductSnapshot.errors = [
+    { code: 'SNAPSHOT_STALE', when: 'La copia local es más vieja que el evento recibido.' }
+  ];
+  need(layers).onUnavailable = { action: 'fail', error: 'SNAPSHOT_STALE' };
+  const { errors, warnings } = run(layers);
+  assert.deepEqual(errors, []);
+  assert.ok(warnings.some((w) => w.includes("onUnavailable.error: 'SNAPSHOT_STALE' no lo declara ninguna de las operaciones de usedBy")), warnings.join(' | '));
 });
 
 test('fetchedFrom con cliente inexistente es error', () => {
@@ -1961,7 +2023,7 @@ const fileReadLayers = (errors = []) => ({
       },
     },
   },
-  storage: { buckets: { images: { visibility: 'private' } } },
+  storage: { buckets: { images: { visibility: 'private', signedUrlTtlSeconds: 900 } } },
 });
 
 test('operación que devuelve un archivo sin error de ausencia es warning', () => {
@@ -2726,6 +2788,10 @@ const compLayers = () => ({
             effect: 'La retirada queda inscrita en el registro regulatorio.',
             awaits: 'outcome',
             reconciledBy: 'reconcileWithdrawals',
+            // Cuánto silencio del registro se tolera antes de volver a insistir: el barrido
+            // no se puede escribir sin este número, así que no declararlo solo se lo pasa a
+            // quien construya.
+            unansweredAfterSeconds: 3600,
             onFailure: { action: 'ignore' },
           },
         },
@@ -2751,6 +2817,18 @@ const withoutKeelEnvelope = (layers) => {
   layers.messaging.subscriptions.WithdrawalRejected.contract = { envelope: 'none' };
   return layers;
 };
+
+test('reconciledBy sin umbral de espera es aviso', () => {
+  // El barrido elige candidatos por «lleva demasiado sin desenlace», así que el número
+  // hace falta sí o sí: no declararlo no lo elimina, lo traslada a quien construya. Y
+  // cuál es el correcto depende del proveedor —cuánto tarda razonablemente en
+  // contestar—, que es justo lo que el diseñador sabe.
+  const layers = compLayers();
+  delete layers.dependencies.dependencies.compliance.activations.recordWithdrawal.unansweredAfterSeconds;
+  const { errors, warnings } = run(layers);
+  assert.deepEqual(errors, []);
+  assert.ok(warnings.some((w) => w.includes("reconciledBy: no declara 'unansweredAfterSeconds'")), warnings.join(' | '));
+});
 
 test('compensación con transición de vuelta declarada no produce errores ni warnings', () => {
   const { errors, warnings } = run(compLayers());

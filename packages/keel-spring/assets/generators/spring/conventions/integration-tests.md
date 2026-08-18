@@ -441,6 +441,44 @@ Toda afirmación del `Then` se comprueba, por orden de preferencia:
    preparación sigue en el canal y la aserción "no se publica nada" falla por algo que no
    tiene que ver con la acción. La ventana de observación se abre **donde empieza lo que se
    está probando**, no donde empieza el flujo.
+
+   **Lo que devuelve es la respuesta del broker, con el evento ANIDADO dentro.** No es el
+   sobre suelto: cada broker lo entrega en su propio envoltorio, y el sobre de aplicación
+   (`metadata` + `data`) viaja en un campo de ese envoltorio.
+
+   | Broker | Dónde está el sobre | Cómo se afirma |
+   |---|---|---|
+   | RabbitMQ | campo `payload` de cada elemento del array | `JsonPath` sobre `$[*].payload…`: el arnés lo deja embebido como JSON |
+   | SNS/SQS | campo `Body` de cada mensaje | por substring: el arnés lo desescapa en el texto, que deja de ser JSON navegable |
+   | Kafka | el registro **es** el sobre | `JsonPath` por línea |
+
+   En RabbitMQ y en SQS el campo llega del broker como **cadena JSON escapada dentro del
+   JSON de la respuesta**, y el arnés lo desescapa antes de devolverlo: sin eso, una
+   aserción tan normal como `.contains("\"status\":\"active\"")` no casaría NUNCA
+   aunque el evento publicado fuera correcto — y el fallo es **mudo**: un falso negativo,
+   no un error.
+
+   Lo que **no** funciona en ningún broker es **contar apariciones de un substring**: el
+   nombre del evento aparece también en las propiedades del mensaje, y el id del recurso
+   viaja en otro punto del sobre, así que un `.split("ProductUpdated").length` cuenta
+   cabeceras, no eventos. Localizar y contar se hacen sobre el sobre deserializado:
+
+   ```java
+   /** Cuántos eventos del tipo dado hay en el canal para ese recurso. */
+   private static long countEvents(String messages, String eventType, String productId) {
+       List<String> payloads = JsonPath.read(messages, "$[*].payload");   // ← ruta del broker
+       return payloads.stream()
+               .filter(p -> eventType.equals(JsonPath.read(p, "$.metadata.eventType")))
+               .filter(p -> productId.equals(JsonPath.read(p, "$.data.productId")))
+               .count();
+   }
+   ```
+
+   Un `hasEvent(...)` que además compare un campo del `data` (el estado resultante, por
+   ejemplo) es la misma forma con `anyMatch`. Los dos son **helpers privados de la clase de
+   flujo**: cada flujo cuenta lo suyo, y compartirlos por herencia acopla clases que se
+   escriben por separado.
+
 3. Por **descarga directa desde la JVM del test**, para lo que quedó en un bucket de
    storage. Un `Then` que afirma "el archivo subido está en el bucket y es el que se envió"
    se comprueba pidiendo la URL pública que devolvió la propia API con

@@ -105,6 +105,17 @@ export function generate(model) {
     integrationTestRuntimeOnly.exclude group: 'de.flapdoodle.embed'`
       : '';
 
+  // Con política CORS declarada, el arnés manda `Origin` en el preflight y en la
+  // petición normal cross-origin. El HttpClient del JDK —el que fija
+  // JdkClientHttpRequestFactory en AbstractFlowIT— la tiene en su lista de cabeceras
+  // RESTRINGIDAS y la descarta sin avisar: el servidor contesta entonces lo mismo que a
+  // una petición sin origen, así que un preflight que en realidad RECHAZA el origen se
+  // lee como 2xx sin ninguna cabecera `Access-Control-*`. Falso negativo mudo, que es
+  // justo el modo de fallo que el resto del arnés evita.
+  const corsJvmArgs = model.security?.cors
+    ? "\n    jvmArgs '-Djdk.httpclient.allowRestrictedHeaders=origin'"
+    : '';
+
   const buildGradle = `plugins {
     id 'java'
     id 'org.springframework.boot' version '${SPRING_BOOT_VERSION}'
@@ -155,7 +166,7 @@ tasks.register('integrationTest', Test) {
     testClassesDirs = sourceSets.integrationTest.output.classesDirs
     classpath = sourceSets.integrationTest.runtimeClasspath
     useJUnitPlatform()
-    shouldRunAfter tasks.named('test')
+    shouldRunAfter tasks.named('test')${corsJvmArgs}
 }
 `;
 

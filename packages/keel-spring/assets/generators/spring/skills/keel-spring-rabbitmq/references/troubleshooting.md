@@ -12,6 +12,27 @@ una cola ya creada). RabbitMQ no permite cambiar args de una cola viva.
 exec rabbitmq rabbitmqctl delete_queue <cola>`, o desde la UI 15672) y reinicia
 la app para que la redeclare. No «arregles» quitando la declaración del código.
 
+## El listener no reintenta: el mensaje cae a la DLQ al primer fallo
+
+`spring.rabbitmq.listener.simple.retry.*` está declarado pero el factory se construyó a
+mano (`new SimpleRabbitListenerContainerFactory()`), y esas propiedades solo las aplica
+`SimpleRabbitListenerContainerFactoryConfigurer`. Recablea el bean por el configurer
+(`SKILL.md`, snippet de `RabbitMqConfig`). Es un defecto **mudo**: la app arranca y el camino
+feliz funciona; solo el escenario de descarte lo descubre, y lo hace pareciendo un problema
+del diseño («el descarte llega demasiado pronto»).
+
+## Tras levantar el broker, el outbox reintenta sin converger
+
+Timeouts encadenados en el relay, cada intento agota su plazo y la fila nunca sale, aunque el
+broker ya responde. Causa: `DISPATCH_DEADLINE` por debajo del `recovery-interval` del
+contenedor de listeners, con el que se comparte `ConnectionFactory`. Cada timeout fuerza un
+`resetConnection()` que reinicia el ciclo de recuperación en curso, así que el intento
+siguiente vuelve a caer en medio de una reconexión. Se cierra con las tres piezas a la vez:
+`recovery-interval` explícito (`rabbitmq.listener.recovery-interval-ms`, porque la propiedad
+de Boot no existe), deadline derivado de él con holgura, y guarda de cooldown en el reset para
+no reiniciar el reloj en cada fallo. Ojo al diagnóstico fácil: parece «la VM va lenta», y por
+eso hace falta mirar el mecanismo antes de subir esperas.
+
 ## El mensaje se reentrega en bucle infinito
 
 El listener lanza excepción y el mensaje vuelve a la cola

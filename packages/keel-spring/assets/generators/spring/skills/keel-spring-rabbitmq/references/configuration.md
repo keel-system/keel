@@ -29,6 +29,13 @@ spring:
 
 ## Listener (contenedor simple)
 
+**Nada de esto se aplica solo por estar en el YAML.** `spring.rabbitmq.listener.simple.*` lo
+lee `SimpleRabbitListenerContainerFactoryConfigurer`, así que solo llega al contenedor si el
+bean del factory pasa por él (`configurer.configure(factory, connectionFactory)`, ver el
+snippet de `SKILL.md`). Con un `new SimpleRabbitListenerContainerFactory()` cableado a mano,
+todo lo de abajo es decorado: la app arranca, el camino feliz funciona y solo un escenario
+adverso descubre que el listener nunca agotó reintentos.
+
 ```yaml
 spring:
   rabbitmq:
@@ -52,6 +59,11 @@ spring:
 
 ## Reintentos declarativos (alternativa al DLX con TTL)
 
+**Es el bloque que más se pierde por el factory cableado a mano** (ver el aviso de § Listener):
+sin el configurer, `retry.*` no llega al contenedor y el mensaje que falla se rechaza al primer
+intento. El síntoma es que el escenario de descarte pasa «demasiado pronto» — cae a la DLQ sin
+haber reintentado.
+
 Para `onFailure` con reintentos en memoria (bloquean el consumidor mientras
 esperan; válido para backoffs cortos):
 
@@ -72,6 +84,28 @@ Agotados los reintentos, el mensaje se rechaza sin requeue → DLX si la cola lo
 declara. Para backoffs largos usa el patrón DLX+TTL de
 `references/implementation.md` (no bloquea el consumidor).
 
+## Recovery interval: la propiedad que no existe
+
+`spring.rabbitmq.listener.simple.recovery-interval` **no existe**: `RabbitProperties` no la
+expone, así que declararla en `parameters/` no tiene ningún efecto y el contenedor se queda con
+el default invisible de `AbstractMessageListenerContainer` (5000 ms). La única vía es
+`factory.setRecoveryInterval(...)` sobre el bean, leyendo una clave propia que **build ya
+deja escrita** en `parameters/<perfil>/rabbitmq.yaml` (no la dupliques ni la sustituyas por un
+literal):
+
+```yaml
+rabbitmq:
+  listener:
+    # Cada cuánto reintenta la conexión el contenedor de listeners. Clave PROPIA (no
+    # spring.*) porque la de Boot no existe. De aquí sale también el DISPATCH_DEADLINE
+    # del dispatcher del outbox, que tiene que quedar por encima: los dos comparten
+    # ConnectionFactory y un deadline más corto reinicia este reloj en cada timeout.
+    recovery-interval-ms: 5000
+```
+
+Que el número viva en un solo sitio es el punto: dispatcher y contenedor tienen que estar de
+acuerdo, y el modo de fallo de que no lo estén es una recuperación que nunca converge.
+
 ## Por perfil
 
 - **local**: valores del compose (guest/guest, localhost:5672); prefetch y
@@ -84,6 +118,8 @@ declara. Para backoffs largos usa el patrón DLX+TTL de
 
 ## Qué no hacer
 
+- No declares `spring.rabbitmq.listener.simple.recovery-interval`: no existe (ver arriba).
+  Queda en el YAML como una promesa que nadie cumple, y el contenedor sigue con su default.
 - No declares colas/exchanges en YAML ni a mano en la UI: la topología va en
   código (`Declarables`, ver `references/implementation.md`) para que el
   arranque sea reproducible.

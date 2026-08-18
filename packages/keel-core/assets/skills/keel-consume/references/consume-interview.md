@@ -68,6 +68,18 @@ Ejemplos del dominio:
 | `fail` | `error`, declarado por alguna operación de `usedBy` | El error de negocio, con su status | No hay forma de decidir bien sin el dato |
 | `degrade` | `degradedTo` en prosa | Un resultado parcial o conservador | El servicio puede dar una respuesta útil y honesta sin el dato |
 
+## 3a. `onUnavailable`: qué pasa si el proveedor no contesta
+
+Se pregunta **siempre que haya `fetchedFrom`** — con `on-demand` es la vía única, y con `replicated` + `onMiss: fetch` el rescate también puede fallar. Es la mitad que faltaba: la activación declara su `onFailure` y la réplica su `onMiss`, pero el dato que se PIDE no tenía dónde, así que la respuesta acababa en el `fallback` de `http-clients` (prosa, capa técnica) y la acababa tomando quien construía.
+
+| `action` | Exige | Qué observa el cliente |
+|---|---|---|
+| `fail` | `error`, declarado por alguna operación de `usedBy` | El error de negocio, con su status |
+| `degrade` | `degradedTo` en prosa | Un resultado parcial o conservador |
+| `lastKnown` | `maxAgeSeconds` **y** `error` | El último valor leído mientras no supere esa edad; superada, el error |
+
+**Con `lastKnown`, la pregunta que cierra la decisión no es «¿podemos servir el último valor?» sino «¿hasta cuándo deja de ser ese dato?».** Sin edad máxima, «el último precio conocido» no tiene final: uno de hace tres días se sirve igual que uno de hace un minuto. Por eso los dos campos van juntos — la ventana y qué pasa al superarla.
+
 **`degrade` es la peligrosa.** Aplica el mismo criterio que al `fallback` de `http-clients`: un resultado
 degradado que produce datos plausibles pero falsos es peor que fallar. Si el cliente no puede distinguir
 la respuesta degradada de la normal, no es `degrade` — es un bug declarado.

@@ -116,17 +116,20 @@ try (S3Presigner presigner = S3Presigner.builder()
         .build()) {
     return presigner.presignGetObject(p -> p
             .getObjectRequest(g -> g.bucket(bucket).key(key))
-            .signatureDuration(Duration.ofMinutes(expiration)))
+            .signatureDuration(policies.forBucket(bucket).signedUrlTtl()))
         .url().toString();
 }
 ```
 
-- Expiración **corta** (minutos, no horas). El DSL no la declara — `storage.keel.yaml`
-  no tiene campo de expiración —, así que es un default tuyo: ponla en
-  `parameters/<perfil>/storage.yaml` para que se pueda cambiar sin recompilar, y
-  anótalo en `designGaps` si el flujo del diseño depende de un valor concreto.
+- **La expiración no la eliges tú**: sale de `signedUrlTtlSeconds` del bucket, que el
+  diseño declara y build ya dejó en `parameters/<perfil>/storage.yaml` y en
+  `BucketPolicy#signedUrlTtl()`. Es contrato con quien recibe el enlace —cuánto tiene
+  para descargar, y durante cuánto le sirve a quien se lo reenvíe—, así que una
+  constante aquí (o un `@Value` propio) devuelve al código una decisión que el diseño
+  acaba de sacar de él. Si el bucket no la declara, `signedUrlTtl()` falla en caliente
+  con el motivo: eso es `designGap`, no un default que rellenar.
   Para uploads directos del cliente, `presignPutObject` con content-type fijado
-  en la petición firmada.
+  en la petición firmada — con la misma ventana, por lo mismo.
 - El presigner puede ser un bean singleton (mismo ciclo que el cliente) en
   vez de try-with-resources por llamada si `signedUrl` es frecuente.
 - **Ojo con el host en local**: una URL firmada con `http://minio:9000` no es

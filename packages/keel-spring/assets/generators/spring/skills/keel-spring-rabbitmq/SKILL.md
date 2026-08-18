@@ -74,16 +74,40 @@ public class RabbitMqConfig {
         return template;
     }
 
+    /**
+     * SIEMPRE vía el configurer de Boot. Un `new SimpleRabbitListenerContainerFactory()`
+     * cableado a mano IGNORA por completo `spring.rabbitmq.listener.simple.*` —
+     * `retry.*` incluido—, así que el listener no agota reintentos ni cae al descarte
+     * y el YAML que los declara es decorado. Es un defecto mudo: la app arranca y el
+     * camino feliz funciona; solo un escenario adverso lo descubre.
+     */
     @Bean
     public SimpleRabbitListenerContainerFactory rabbitListenerContainerFactory(
-            ConnectionFactory connectionFactory, MessageConverter messageConverter) {
+            SimpleRabbitListenerContainerFactoryConfigurer configurer,
+            ConnectionFactory connectionFactory,
+            MessageConverter messageConverter,
+            @Value("${rabbitmq.listener.recovery-interval-ms:5000}") long recoveryIntervalMillis) {
         SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
-        factory.setConnectionFactory(connectionFactory);
+        configurer.configure(factory, connectionFactory);
         factory.setMessageConverter(messageConverter);
+        // A mano porque NO existe `spring.rabbitmq.listener.simple.recovery-interval`:
+        // RabbitProperties no expone esa propiedad, así que declararla en parameters/ no
+        // tendría ningún efecto y el contenedor se quedaría con el default invisible de
+        // AbstractMessageListenerContainer (5000 ms). Es la misma clave de la que
+        // RabbitOutboxDispatcher deriva su deadline — ver la sección «Envío al broker».
+        factory.setRecoveryInterval(recoveryIntervalMillis);
         return factory;
     }
 }
 ```
+
+**El `recovery-interval` deja de ser invisible a propósito.** Es el reloj con el que el
+contenedor de listeners reintenta la conexión, y el dispatcher del outbox lo necesita para no
+pisarlo: los dos comparten `ConnectionFactory`. **Build ya deja la clave**
+`rabbitmq.listener.recovery-interval-ms` en `parameters/<perfil>/rabbitmq.yaml` con su
+gradiente: léela, no la dupliques ni la sustituyas por un literal. Ese YAML es el único
+sitio donde vive el número, y de ahí lo toman los dos — el contenedor por este bean y el
+dispatcher para derivar su deadline.
 
 ## Envío al broker
 
@@ -99,12 +123,73 @@ serializar ni envolver.
 @Component
 public class RabbitOutboxDispatcher implements OutboxDispatcher {
 
-    private final RabbitTemplate rabbitTemplate;
+    /**
+     * Deadline único del intento (send + espera del confirm), POR ENCIMA del
+     * `recovery-interval` del contenedor de listeners: ver la nota de abajo.
+     */
+    private static final Duration DISPATCH_DEADLINE = Duration.ofSeconds(6);
 
-    // ... constructor ...
+    private final RabbitTemplate rabbitTemplate;
+    private final long recoveryIntervalMillis;
+    private final AtomicLong lastConnectionResetAt = new AtomicLong(0L);
+    private final ExecutorService dispatchExecutor =
+            Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("outbox-dispatch-", 0).factory());
+
+    // ... constructor: @Value("${rabbitmq.listener.recovery-interval-ms:5000}") ...
 
     @Override
     public void dispatch(String destination, String routingKey, String eventType, String payload) {
+        // El intento va en un hilo aparte que se ABANDONA al agotar el plazo. Sin este
+        // envoltorio, una reconexión en curso deja el send síncrono bloqueado dentro del
+        // cliente AMQP (creación de canal, recuperación de la conexión compartida) sin
+        // lanzar nunca: el hilo del @Scheduled queda varado en un único intento en vez de
+        // reintentar con backoff, y la recuperación deja de ser predecible.
+        Future<Void> attempt = dispatchExecutor.submit(() -> {
+            sendAndAwaitConfirm(destination, routingKey, eventType, payload);
+            return null;
+        });
+        try {
+            attempt.get(DISPATCH_DEADLINE.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException timedOut) {
+            attempt.cancel(true);
+            resetConnectionAfterFailure();
+            throw new AmqpException("Sin confirmación del broker para " + routingKey + " en "
+                    + DISPATCH_DEADLINE + " (¿reconexión en curso?)", timedOut);
+        } catch (ExecutionException failed) {
+            resetConnectionAfterFailure();
+            Throwable cause = failed.getCause();
+            throw cause instanceof AmqpException amqp ? amqp
+                    : new AmqpException("Fallo entregando " + routingKey, cause);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            attempt.cancel(true);
+            resetConnectionAfterFailure();
+            throw new AmqpException("Interrumpido esperando la confirmación de " + routingKey, interrupted);
+        }
+    }
+
+    /**
+     * Descarta la conexión y el canal cacheados tras un fallo — pero NO si ya se
+     * descartaron hace menos de un `recovery-interval`: el contenedor de listeners
+     * comparte esta `ConnectionFactory` y tiene su propio ciclo de recuperación, y
+     * resetear en cada timeout le reinicia el reloj antes de que termine. Ese es el
+     * patrón que no converge.
+     */
+    private void resetConnectionAfterFailure() {
+        if (!(rabbitTemplate.getConnectionFactory() instanceof CachingConnectionFactory caching)) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        long previous = lastConnectionResetAt.get();
+        if (now - previous < recoveryIntervalMillis) {
+            return;
+        }
+        if (lastConnectionResetAt.compareAndSet(previous, now)) {
+            caching.resetConnection();
+        }
+    }
+
+    private void sendAndAwaitConfirm(String destination, String routingKey, String eventType, String payload) {
         MessageProperties props = new MessageProperties();
         props.setContentType(MessageProperties.CONTENT_TYPE_JSON);
         props.setType(eventType);
@@ -116,7 +201,8 @@ public class RabbitOutboxDispatcher implements OutboxDispatcher {
                 MessageBuilder.withBody(payload.getBytes(StandardCharsets.UTF_8)).andProperties(props).build(),
                 confirmation);
         try {
-            CorrelationData.Confirm confirm = confirmation.getFuture().get(5, TimeUnit.SECONDS);
+            CorrelationData.Confirm confirm =
+                    confirmation.getFuture().get(DISPATCH_DEADLINE.toMillis(), TimeUnit.MILLISECONDS);
             if (confirm == null || !confirm.isAck()) {
                 throw new AmqpException("El broker no confirmó la entrega en " + destination
                         + " (" + routingKey + "): " + (confirm == null ? "sin respuesta" : confirm.getReason()));
@@ -137,6 +223,15 @@ public class RabbitOutboxDispatcher implements OutboxDispatcher {
     }
 }
 ```
+
+**El deadline va por encima del `recovery-interval`, y no es tuning: es lo que hace que la
+recuperación converja.** Dispatcher y contenedor de listeners comparten `ConnectionFactory`. Si
+el plazo del intento es más corto que el ciclo de recuperación, cada intento que caiga en medio
+de una reconexión agota su plazo, fuerza el reset, y ese reset reinicia el reloj — el siguiente
+vuelve a caer en medio, indefinidamente. En un entorno algo más lento (podman en Windows, CI
+compartida) es lo que convierte «el broker vuelve» en «la fila no sale nunca». De ahí las tres
+piezas juntas: `recovery-interval` explícito, deadline derivado de él con holgura, y guarda de
+cooldown en el reset.
 
 **Esperar el confirm no es opcional aquí, y es la diferencia con los otros dos brokers.**
 `send(...)` vuelve en cuanto el mensaje sale al socket; los confirms de RabbitMQ son

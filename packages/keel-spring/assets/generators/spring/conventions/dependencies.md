@@ -123,6 +123,24 @@ status por constructor: el Reader ya lo pasa.
 Con `degrade`, el resultado debe ser **distinguible por el cliente** de una respuesta normal. Un dato
 plausible pero falso es peor que fallar.
 
+## `onUnavailable` → código
+
+`onMiss` es «la copia no lo tiene»; `onUnavailable` es «el proveedor no lo da». Lo declara el `need`
+y **build lo escribe entero** en el fallback del adaptador de `http-clients` — no es un TODO:
+
+| `action` | Qué genera build | Qué completa el agente |
+|---|---|---|
+| `fail` | El `throw` de la excepción del catálogo dentro del fallback | Nada |
+| `degrade` | Un TODO con la prosa de `degradedTo` | El resultado degradado, distinguible por el cliente |
+| `lastKnown` | El almacén `LastKnownValues`, el `remember(...)` en el camino feliz y el `recall(...)` acotado que se rinde con el error declarado | Nada |
+
+**`lastKnown` tiene dos mitades y ninguna sobra**: servir el último valor conocido, y **rendirse**
+cuando ya es más viejo que `maxAgeSeconds`. Sin la segunda es una caché sin expiración —un precio de
+hace tres días servido como vigente—, que es exactamente lo que salió cuando esta política solo
+existía como prosa en el `fallback` de la llamada. No la sustituyas por la caché del stack: el
+fallback tiene que seguir sirviendo con el proveedor caído **y** con la caché caída, y lo que promete
+es «lo último que ESTA instancia leyó».
+
 ## `activations`: el trabajo que se delega
 
 Una activación es una operación tuya pidiéndole a otro servidor que haga algo. El canal ya existe
@@ -183,6 +201,20 @@ Lo que engaña es que parece que ya hay protección, y solo la hay a medias:
 | La transición del agregado | **Es una carrera, no una serialización.** Las N leen antes de que ninguna confirme, así que todas pasan el guard y todas actúan. Con `@Version` solo una escribe — pero las demás ya hicieron su trabajo externo |
 | La llamada al proveedor | Sí: la **idempotencia saliente** (`OutboundIdempotency`), si el diseño la declara. Es la red real |
 | Reencargar **publicando un evento** | **Nada.** Cada réplica hace su propio `raise` y estampa un `metadata.eventId` distinto: para el consumidor son N hechos y su `processed_event` no los deduplica |
+
+**Los tres números del barrido salen de `parameters/<perfil>/reconciliation.yaml`, que build ya
+escribió** — léelos, no los elijas:
+
+| Clave | De dónde sale | Qué gobierna |
+|---|---|---|
+| `unanswered-after-seconds` | **del diseño** (`activations.<a>.unansweredAfterSeconds`) | Cuánto silencio del proveedor se tolera: define quién es candidato |
+| `claim-timeout-ms` | del generador | Cuánto retiene un candidato la réplica que murió con el lote en vuelo |
+| `batch-size` | del generador | Cuántos candidatos entran en una pasada |
+
+Que el primero venga del diseño y los otros dos no es deliberado: cuánto se espera a un proveedor
+antes de insistir es conocimiento de negocio; cuánto dura un reclamo y cuánto cabe en un lote son
+mecánica y capacidad. Una constante en el código para cualquiera de los tres es un hallazgo del pase
+de calidad, no un detalle.
 
 **La regla: reclamar, no leer.** La consulta del barrido no pide los candidatos, se los **lleva**, en
 lotes acotados, de modo que cada réplica trabaja sobre un conjunto disjunto y el paralelismo pasa de

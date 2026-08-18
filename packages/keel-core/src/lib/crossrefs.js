@@ -1441,6 +1441,27 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
 
         if (spec.fetchedFrom) {
           checkHttpCallRef(spec.fetchedFrom, `${where}.fetchedFrom`);
+
+          // Qué ve el cliente cuando el proveedor no contesta. Es la mitad que le
+          // faltaba a esta capa: la activación lo declara en `onFailure` y la réplica
+          // en `onMiss`, pero el dato que se PIDE al proveedor no tenía dónde, así que
+          // la respuesta acababa en la prosa del `fallback` de la llamada — capa
+          // técnica, y prosa que ningún generador puede aplicar. Aviso y no error
+          // porque el diseño sigue siendo legible sin ello; lo que no queda es
+          // construible sin que alguien invente la política.
+          if (!spec.onUnavailable) {
+            const call = `${spec.fetchedFrom.client}.${spec.fetchedFrom.call}`;
+            warnings.push(
+              `${where}: no declara 'onUnavailable': si ${call} falla, el diseño no dice qué ve el cliente ` +
+                `—fallar con un error propio, degradar, o servir el último valor conocido con su edad máxima—. ` +
+                `El 'fallback' de la llamada es prosa en la capa técnica: describe el mecanismo, no la política, ` +
+                `y quien construya elegirá por su cuenta`
+            );
+          } else {
+            // Mismo trato que `onMiss.error` y `onFailure.error`: el generador lanza esa
+            // excepción y solo existe si alguna operación la declaró en su catálogo.
+            checkDeclaredError(spec.onUnavailable.error, `${where}.onUnavailable.error`, spec.usedBy, 'usedBy');
+          }
         }
 
         if (spec.replica) {
@@ -1513,6 +1534,20 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
         // corre. Una operación sin `schedule` que se declare aquí es una promesa
         // que nadie cumple — y justo la que se cumple sola cuando todo va bien.
         if (spec.reconciledBy) {
+          // Cuánto silencio se tolera. El barrido no puede escribirse sin este número, así
+          // que no declararlo no lo elimina: lo traslada a quien construya, y ahí queda
+          // fuera del diseño y de su revisión. Los dos lados duelen —por debajo el barrido
+          // insiste antes de que al proveedor le haya dado tiempo a contestar, y cada
+          // insistencia es trabajo repetido contra él; por encima, un encargo perdido tarda
+          // de más en detectarse— y cuál es el correcto depende del proveedor, que es justo
+          // lo que el diseñador sabe y el generador no.
+          if (spec.unansweredAfterSeconds == null) {
+            warnings.push(
+              `${where}.reconciledBy: no declara 'unansweredAfterSeconds', así que el diseño no dice cuánto ` +
+                `silencio de ${depName} se tolera antes de volver a insistir. El barrido necesita ese umbral para ` +
+                `elegir candidatos: sin declararlo lo fija quien construya, y deja de ser una decisión revisable`
+            );
+          }
           const sweeper = operations[spec.reconciledBy];
           if (!sweeper) {
             errors.push(`${where}.reconciledBy: la operación '${spec.reconciledBy}' no existe en use-cases`);
@@ -2189,6 +2224,19 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
     if (!referencedBuckets.has(bucketName)) {
       warnings.push(
         `storage: buckets.${bucketName}: bucket declarado pero sin ningún campo file que lo referencie`
+      );
+    }
+    // Y cuánto vale el enlace con el que se lee lo que no es público. `private` significa
+    // que la lectura pasa por una firma que caduca, y esa caducidad es contrato con quien
+    // recibe el enlace: cuánto tiempo tiene para descargar, y durante cuánto le sirve a
+    // quien se lo reenvíe. Sin declararla, la ventana la elige quien construya y no queda
+    // en ninguna parte del diseño — que es como un enlace pensado para minutos acaba
+    // durando días sin que nadie lo haya decidido.
+    const bucket = storage?.buckets?.[bucketName] ?? {};
+    if ((bucket.visibility ?? 'private') === 'private' && bucket.signedUrlTtlSeconds == null) {
+      warnings.push(
+        `storage: buckets.${bucketName}: es private y no declara 'signedUrlTtlSeconds': la URL firmada con la ` +
+          `que se lee su contenido caduca, pero el diseño no dice cuándo`
       );
     }
   }

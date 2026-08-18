@@ -230,6 +230,10 @@ source set `integrationTest`, así que un test que importe un DTO o una entidad 
 - Nada de dobles de test, brokers embebidos (`@EmbeddedKafka`) ni `@MockBean`: lo que se
   valida es el servidor real contra la infraestructura levantada. Lo no observable por HTTP
   se comprueba con los helpers de la base (`publishedMessages`, `devtools`).
+  - **`publishedMessages` devuelve la respuesta del broker, con el evento ANIDADO dentro**,
+    no el sobre suelto. Contar apariciones de un substring cuenta cabeceras, no eventos:
+    dónde vive el sobre en cada broker y el patrón de conteo/localización que sí vale están
+    en `{{keel:docs}}/conventions/integration-tests.md` § Lo que no se ve por HTTP.
 - Un escenario que el diseño no permite ejercitar de forma determinista **no se inventa**:
   va a `uncovered` con su motivo. Declararlo vale más que un test decorativo que siempre
   pasa.

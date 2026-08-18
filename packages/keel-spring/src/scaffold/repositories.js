@@ -258,9 +258,35 @@ function renderAdapter(model, entity, paginated, batchLookup) {
   // contra una transacción de solo lectura. Con transacción ambiente (el caso normal) la
   // propagación por defecto se une a ella y no cambia nada.
   imports.add('org.springframework.transaction.annotation.Transactional');
+  // Menos en UN caso, y es el de la copia local de una dependencia `replicated`: ahí el
+  // save() se invoca desde la HIDRATACIÓN (onMiss), que ocurre dentro del camino de
+  // LECTURA — el query handler ya abrió su transacción como readOnly=true, y unirse a ella
+  // es escribir dentro de una transacción física de solo lectura. Es genérico del patrón
+  // `replicated`, no de un dominio concreto: donde hay onMiss hay escritura en la lectura.
+  const isReplica = Boolean(entity.replicaOf);
+  if (isReplica) {
+    imports.add('org.springframework.transaction.annotation.Propagation');
+  }
+  const saveTransaction = isReplica
+    ? `    /**
+     * Guarda la copia local en su PROPIA transacción.
+     *
+     * <p>{@code REQUIRES_NEW} no es decoración: a este método se llega también desde la
+     * hidratación de la réplica ({@code onMiss}), que corre dentro de una consulta — y esa
+     * transacción es {@code readOnly = true}. Unirse a ella con la propagación por defecto
+     * sería escribir en una transacción física de solo lectura. Suspenderla y abrir una
+     * propia es lo único que hace la escritura posible ahí.
+     *
+     * <p>Contrapartida deliberada: la copia queda commiteada aunque la lectura que la
+     * provocó falle después. Es lo que se quiere — la réplica es un dato cacheado de otro
+     * servicio, no parte del resultado de esta consulta.
+     */
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)`
+    : `    @Override
+    @Transactional`;
   methods.push(
-    `    @Override
-    @Transactional
+    `${saveTransaction}
     public ${entity.name} save(${entity.name} entity) {
 ${saveBody}
     }`,

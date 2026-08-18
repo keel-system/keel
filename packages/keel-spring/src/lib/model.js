@@ -1189,6 +1189,9 @@ function collectStorage(layers) {
   const buckets = Object.entries(storage.buckets ?? {}).map(([name, def]) => ({
     name,
     visibility: def?.visibility ?? 'private',
+    // Cuánto vale la URL firmada de este bucket. Solo tiene sentido en los privados,
+    // que son los únicos que se leen por firma; el schema lo veta en los públicos.
+    signedUrlTtlSeconds: def?.signedUrlTtlSeconds ?? null,
     maxSizeMb: def?.maxSizeMb ?? null,
     allowedContentTypes: def?.allowedContentTypes ?? [],
     description: def?.description ?? null
@@ -1395,8 +1398,18 @@ function collectDependencies(layers, entities, httpClients, subscriptions, error
         exposedAs: spec.exposedAs ?? null,
         dtoName: spec.exposedAs ? `${pascalCase(needName)}Dto` : null,
         fetch,
+        // Qué ve el cliente cuando el proveedor no da el dato. Es lo que permite a
+        // http-clients.js escribir el cuerpo del fallback en vez de dejar un TODO con la
+        // prosa del `fallback` de la llamada, que es lo que hacía que la política la
+        // eligiera quien construía.
+        onUnavailable: resolveOnUnavailable(depId, needName, spec.onUnavailable, errorByCode, warnings),
         replica
       };
+      // Retro-enlace hacia la llamada, hermano del de las activaciones: sin él la
+      // política del need no llega al sitio donde se escribe el fallback.
+      if (need.onUnavailable && fetch?.callRef) {
+        (fetch.callRef.needs ??= []).push({ dependency: depId, need });
+      }
       needs.push(need);
       for (const opName of need.usedBy) {
         const operation = opByName.get(opName);
@@ -1419,6 +1432,10 @@ function collectDependencies(layers, entities, httpClients, subscriptions, error
         // La pata del silencio: qué operación programada barre los encargos que
         // nunca recibieron desenlace. Sin ella, un encargo perdido no tiene final.
         reconciledBy: spec.reconciledBy ?? null,
+        // Cuánto silencio de ESTE proveedor se tolera antes de volver a insistir: es lo
+        // que el barrido usa para elegir candidatos. Va por activación porque un mismo
+        // barrido puede reconciliar varias y cada proveedor tarda lo suyo.
+        unansweredAfterSeconds: spec.unansweredAfterSeconds ?? null,
         http: via.client ? resolveActivationCall(depId, name, via, clientById, warnings) : null,
         // Evento propio del servicio: lo emite el agregado con raise(...), no el
         // handler. Aquí solo se resuelve su clase para poder citarla en el stub.
@@ -1524,7 +1541,10 @@ function resolveFetch(depId, needName, fetchedFrom, clientById, warnings) {
     // La forma del dato, para el DTO de `exposedAs`: sale del contrato de la llamada
     // y no se vuelve a declarar en `dependencies`. Dos declaraciones de lo mismo
     // pueden divergir, y la que manda es la del proveedor.
-    responseFields: call.responseFields ?? []
+    responseFields: call.responseFields ?? [],
+    // La llamada viva, para colgarle el retro-enlace que lee http-clients.js al
+    // escribir el fallback. Igual que en resolveActivationCall, y por lo mismo.
+    callRef: call
   };
 }
 
@@ -1568,6 +1588,29 @@ function resolveOnFailure(depId, name, onFailure, errorByCode, warnings) {
     dynamicStatus: error?.dynamicStatus ?? false,
     httpStatus: error?.http ?? 502,
     degradedTo: onFailure.degradedTo ?? null
+  };
+}
+
+// Política de indisponibilidad de un need, hermana de resolveOnFailure. La acción
+// `lastKnown` es la única con mecanismo propio: un almacén del último valor leído,
+// acotado por `maxAgeSeconds` — y el error es lo que pasa cuando ya no queda nada lo
+// bastante fresco, no un adorno.
+function resolveOnUnavailable(depId, needName, onUnavailable, errorByCode, warnings) {
+  if (!onUnavailable) return null;
+  const error = onUnavailable.error ? errorByCode.get(onUnavailable.error) : null;
+  if (onUnavailable.error && !error) {
+    warnings.push(
+      `Need '${depId}.${needName}' (dependencies): el error '${onUnavailable.error}' de onUnavailable no está en el catálogo de use-cases; su clase no existe todavía.`
+    );
+  }
+  return {
+    action: onUnavailable.action,
+    error: onUnavailable.error ?? null,
+    exceptionClass: error?.exceptionClass ?? null,
+    dynamicStatus: error?.dynamicStatus ?? false,
+    httpStatus: error?.http ?? 502,
+    degradedTo: onUnavailable.degradedTo ?? null,
+    maxAgeSeconds: onUnavailable.maxAgeSeconds ?? null
   };
 }
 

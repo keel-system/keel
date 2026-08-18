@@ -3,4 +3,8 @@ buckets:
     visibility: private
     allowedContentTypes: [application/pdf, image/png, image/jpeg]
     maxSizeMb: 25
+    # Cuánto vale el enlace firmado con el que se lee un binario. Es contrato con quien
+    # lo recibe: cuánto tiene para descargar, y durante cuánto le sirve a quien se lo
+    # reenvíe. Sin declararlo lo elegía el adaptador.
+    signedUrlTtlSeconds: 600
     description: Binarios de los archivos custodiados; solo accesibles por el servicio.

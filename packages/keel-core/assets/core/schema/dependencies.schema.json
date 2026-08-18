@@ -102,9 +102,17 @@
           "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/httpCallRef",
           "description": "Llamada de http-clients que resuelve el dato. Es la vía única con on-demand, y la vía de rescate con replicated + onMiss.action fetch."
         },
+        "onUnavailable": {
+          "$ref": "#/$defs/onUnavailable",
+          "description": "Qué pasa cuando el proveedor no contesta y el dato no se puede leer. Es la mitad que faltaba: una activación declara su onFailure y una réplica su onMiss, pero un dato que se pide al proveedor no tenía dónde decir qué ve el cliente cuando esa llamada falla — la respuesta acababa en la prosa del fallback de http-clients, que es capa técnica y que ningún generador puede aplicar. Aplica también con replicated + onMiss fetch: si el rescate falla, sigue sin haber dato."
+        },
         "replica": { "$ref": "#/$defs/replica" }
       },
       "allOf": [
+        {
+          "if": { "type": "object", "required": ["onUnavailable"] },
+          "then": { "required": ["fetchedFrom"] }
+        },
         {
           "if": { "properties": { "strategy": { "const": "on-demand" } }, "required": ["strategy"] },
           "then": {
@@ -185,9 +193,19 @@
           "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/operationName",
           "description": "Operación propia (con `schedule`) que barre los encargos de esta activación que nunca recibieron desenlace. Es la pata del SILENCIO: una compensación se dispara ante un evento, y si el proveedor cae, pierde el mensaje o ni siquiera sabe que falló, ese evento no llega nunca y nada lo detecta. Sin esto, el único final posible de un encargo perdido es que lo note una persona."
         },
+        "unansweredAfterSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Cuánto silencio del proveedor se tolera antes de que el barrido vuelva a insistir: un encargo de esta activación sin desenlace pasado ese tiempo es candidato. Es una decisión de negocio y de acuerdo con el proveedor —cuánto tarda razonablemente en contestar—, no una constante de implementación, y va POR ACTIVACIÓN porque un mismo barrido puede reconciliar varias y cada proveedor tarda lo suyo. Sin declararlo, el número lo elige quien construye: por debajo, el barrido insiste antes de que al proveedor le haya dado tiempo; por encima, un encargo perdido tarda de más en detectarse. Solo válido junto a reconciledBy.",
+          "$comment": "El generador lo emite como parámetro con override por entorno (mismo trato que cache.ttlSeconds): el diseño fija el valor, el entorno puede moverlo sin recompilar."
+        },
         "onFailure": { "$ref": "#/$defs/onFailure" }
       },
       "allOf": [
+        {
+          "if": { "type": "object", "required": ["unansweredAfterSeconds"] },
+          "then": { "required": ["reconciledBy"] }
+        },
         {
           "if": {
             "type": "object",
@@ -277,6 +295,57 @@
         },
         "onMiss": { "$ref": "#/$defs/onMiss" }
       }
+    },
+    "onUnavailable": {
+      "type": "object",
+      "required": ["action"],
+      "additionalProperties": false,
+      "description": "Política de este servicio cuando el proveedor del dato no está disponible. Mismo vocabulario que onMiss y onFailure, más una acción propia: servir el último valor conocido. Es comportamiento observable en la API, así que cada acción obliga a declarar su consecuencia.",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": ["fail", "degrade", "lastKnown"],
+          "description": "fail: la operación falla con el error declarado. degrade: continúa con el resultado degradado que se describe. lastKnown: se sirve el último valor que este servicio llegó a leer, mientras no supere maxAgeSeconds; superada esa edad no hay nada que servir y se falla con el error declarado."
+        },
+        "error": {
+          "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/errorCode",
+          "description": "Error con el que falla la operación (alguna operación de usedBy debe declararlo). Obligatorio con action fail y con action lastKnown —ahí es el desenlace cuando no queda ningún valor lo bastante fresco—, y vetado con degrade."
+        },
+        "degradedTo": {
+          "type": "string",
+          "minLength": 5,
+          "description": "Qué resultado obtiene el cliente cuando el dato no se puede leer, en prosa. Obligatorio y exclusivo de action degrade. Un resultado degradado que el cliente no puede distinguir del normal no es degradación: es un dato falso."
+        },
+        "maxAgeSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Edad máxima del último valor conocido que sigue siendo aceptable servir. Obligatorio y exclusivo de action lastKnown. El número solo se declara porque viene con su consecuencia: sin él, servir el último valor conocido no tiene final —un precio de hace tres días se sirve igual que uno de hace un minuto, y nadie decidió eso.",
+          "$comment": "No confundir con replica.freshness, que es prosa a propósito: allí la antigüedad la produce la latencia de los eventos del proveedor y no la controla este servicio. Aquí la ventana la decide y la aplica este servicio, y es observable en su respuesta."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "action": { "const": "fail" } }, "required": ["action"] },
+          "then": {
+            "required": ["error"],
+            "not": { "anyOf": [{ "required": ["degradedTo"] }, { "required": ["maxAgeSeconds"] }] }
+          }
+        },
+        {
+          "if": { "properties": { "action": { "const": "degrade" } }, "required": ["action"] },
+          "then": {
+            "required": ["degradedTo"],
+            "not": { "anyOf": [{ "required": ["error"] }, { "required": ["maxAgeSeconds"] }] }
+          }
+        },
+        {
+          "if": { "properties": { "action": { "const": "lastKnown" } }, "required": ["action"] },
+          "then": {
+            "required": ["maxAgeSeconds", "error"],
+            "not": { "required": ["degradedTo"] }
+          }
+        }
+      ]
     },
     "onMiss": {
       "type": "object",

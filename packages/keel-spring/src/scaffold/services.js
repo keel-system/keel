@@ -8,6 +8,7 @@
 import { FRAMEWORK_ERRORS } from 'keel-core';
 import { effectiveErrorCode } from '../lib/declared-errors.js';
 import { javaFile, javaPath, subPackage, javadoc } from './render.js';
+import { kebabCase } from '../lib/naming.js';
 import { INTERFACES_PKG, ANNOTATIONS_PKG, MEDIATOR_PKG } from './mediator.js';
 import { domainTypeImport } from './entities.js';
 import { refTargetsOf } from './ref-resolvers.js';
@@ -416,11 +417,13 @@ function renderHandler(model, service, operation) {
           ? `Los candidatos son ${waiting.join(', ')} que llevan demasiado tiempo ahí. `
           : `Los candidatos son las entidades que quedaron esperando el desenlace. `) +
         `DESDE CUÁNDO: el estado dice que espera, no cuánto lleva. La marca temporal es un campo de la entidad que estampa la operación que encarga; por convención se llama ${activation.name}AwaitingSince, así que empieza buscando ese, y si el diseño lo nombró de otro modo busca la marca de espera equivalente. NO uses createdAt —es cuándo nació la entidad, no cuándo empezó a esperar— ni un updatedAt de auditoría, que rejuvenece con cualquier otra escritura y deja la entidad invisible al barrido para siempre. Si la entidad espera VARIOS desenlaces, usa la marca de ESTA activación y no la de otra: con una compartida el segundo encargo pisa la del primero y el umbral mide una espera que no es la suya. Si el diseño no declara ninguna marca, es designGap. ` +
-        `El umbral de "demasiado tiempo" NO lo declara el diseño: sácalo de parameters/ con un default explícito, nunca de una constante en el código. ` +
+        `El umbral de "demasiado tiempo" LO DECLARA EL DISEÑO y build ya lo dejó escrito: léelo de ` +
+        `reconciliation.${kebabCase(activation.name)}.unanswered-after-seconds (parameters/<perfil>/reconciliation.yaml), nunca de una constante. ` +
+        `En el mismo bloque están claim-timeout-ms y batch-size, que NO son del diseño (mecánica y capacidad) pero se leen igual: de ahí, no del código. ` +
         `Y decide qué hace con cada uno según el efecto declarado ("${activation.effect}"): reintentar el encargo o disparar la compensación. Si el diseño no lo dice, es designGap. ` +
         `CONCURRENCIA: este método corre en TODAS las réplicas del servicio a la vez, así que la consulta tiene que RECLAMAR los candidatos, no solo leerlos, y el lote va acotado (Pageable/limit) para que cada réplica se lleve un conjunto disjunto. ` +
         `CÓMO se reclama no es indiferente, porque la llamada al proveedor va EN MEDIO: reclama con una MARCA PERSISTIDA (UPDATE … SET ${activation.name}ClaimedAt = now, o findAndModify en Mongo) que confirmas ANTES de llamar, no con un lock pesimista. Un lock solo aísla mientras dura su transacción, así que sostenerlo durante la llamada retendría una conexión del pool por la latencia de un tercero. El ejemplo a copiar es la rama DOCUMENTAL de OutboxRelay (claimPending(), con claim-timeout-ms); la relacional usa lock pesimista y NO es el modelo aquí, porque lo que envuelve su transacción es la entrega al broker, corta y local. ` +
-        `La marca CADUCA: como sobrevive al commit, sobrevive también a la réplica que muera con el candidato en vuelo, y sin plazo lo retendría para siempre. El timeout sale de parameters/ igual que el umbral, y se dimensiona claim-timeout > lote × timeout de llamada; por debajo, dos réplicas actúan sobre el mismo candidato. ` +
+        `La marca CADUCA: como sobrevive al commit, sobrevive también a la réplica que muera con el candidato en vuelo, y sin plazo lo retendría para siempre. El timeout es reconciliation.${kebabCase(activation.name)}.claim-timeout-ms, y se dimensiona claim-timeout > lote × timeout de llamada; por debajo, dos réplicas actúan sobre el mismo candidato. ` +
         `NO vale reclamar con SKIP LOCKED y confirmar antes de llamar: al confirmar se suelta el lock y no queda nada en la fila que diga que alguien la tomó, así que las N vuelven a verla y todas actúan — el fallo exacto que el reclamo evita, con apariencia de resuelto. Es lo único de este barrido que check-idempotency.sh no puede distinguir: ve el patrón del reclamo, no dónde cae el commit. ` +
         `La transición del agregado NO basta: las réplicas leen antes de que ninguna confirme, así que todas pasan el guard y todas actúan; lo único que absorbe las llamadas repetidas al proveedor es la idempotencia saliente. ` +
         `Y si lo que haces es reencargar publicando un evento, no lo absorbe nada: cada réplica hace su propio raise y estampa un metadata.eventId distinto, así que para el consumidor son N hechos y su processed_event no los deduplica. ` +

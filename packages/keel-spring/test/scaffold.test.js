@@ -935,6 +935,19 @@ test('stack elegido (mysql + rabbitmq) parametriza gradle, yaml y compose', () =
   const productionBroker = read(workspace, 'src/main/resources/parameters/production/rabbitmq.yaml');
   assert.ok(productionBroker.includes('username: ${RABBITMQ_USERNAME}'));
 
+  // El recovery-interval del contenedor de listeners, con clave PROPIA: la de Boot
+  // (`spring.rabbitmq.listener.simple.recovery-interval`) no existe, así que el valor
+  // real sería un default invisible. Y tiene que ser visible porque no es solo del
+  // listener: el deadline de publicación del dispatcher del outbox se deriva de él, y
+  // por debajo de este número cada timeout reinicia el reloj de recuperación — el
+  // patrón que hace que la entrega nunca converja tras levantar el broker.
+  assert.ok(localBroker.includes('recovery-interval-ms: 5000'), localBroker);
+  assert.ok(!localBroker.includes('spring.rabbitmq.listener.simple.recovery-interval'), localBroker);
+  assert.ok(
+    productionBroker.includes('recovery-interval-ms: ${RABBITMQ_LISTENER_RECOVERY_INTERVAL_MS:5000}'),
+    productionBroker
+  );
+
   // Con capa messaging: evento de dominio + puerto publisher transversal + stub
   // sin broker. La implementación real (Rabbit) la escribe el agente.
   const event = read(workspace, 'src/main/java/com/commerce/productcatalog/domain/events/ProductCreatedEvent.java');
@@ -1543,6 +1556,10 @@ test('capa security (api-key): filtro propio sin resource server ni fragmento oa
   const harness = read(workspace, 'src/integrationTest/java/com/commerce/productcatalog/flows/AbstractFlowIT.java');
   assert.ok(!harness.includes('protected Response preflight('));
   assert.ok(!harness.includes('protected Response exchangeWithHeaders('));
+  // Ni el interruptor de la JVM que hace viajar `Origin`: sin política CORS no hay
+  // cabecera restringida que levantar, y dejarlo puesto haría creer que el arnés
+  // prueba algo que aquí no existe.
+  assert.ok(!buildGradle.includes('allowRestrictedHeaders'));
 });
 
 test('capa security con cors: CorsConfig derivado del diseño + orígenes por ambiente', () => {
@@ -1603,6 +1620,17 @@ test('capa security con cors: CorsConfig derivado del diseño + orígenes por am
   // Las cabeceras del escenario se aplican DESPUÉS de las del arnés: se añade sobre lo
   // que ya hay, no se pisa la semántica del token ni la de la clave de idempotencia.
   assert.ok(harness.includes('extraHeaders.forEach(headers::set);'));
+
+  // Y la cabecera llega DE VERDAD al servidor. `Origin` está en la lista de cabeceras
+  // restringidas del HttpClient del JDK (el que fija `JdkClientHttpRequestFactory`), que
+  // la descarta sin avisar: sin este interruptor el servidor contesta lo mismo que a una
+  // petición sin origen y un preflight RECHAZADO se lee como 2xx sin cabeceras
+  // `Access-Control-*`. El escenario saldría verde sin haber probado la política.
+  assert.ok(
+    read(workspace, 'build.gradle').includes(
+      "jvmArgs '-Djdk.httpclient.allowRestrictedHeaders=origin'"
+    )
+  );
 });
 
 test('capa security (clientes máquina por api-key): clave local usable y env var obligatoria fuera', () => {
@@ -2282,7 +2310,17 @@ test('outbox: fila en la misma transacción, relay determinista y envío tras el
   assert.ok(read(workspace, 'src/main/java/com/commerce/productcatalog/ProductCatalogApplication.java').includes('@EnableScheduling'));
   const messagingYaml = read(workspace, 'src/main/resources/parameters/local/messaging.yaml');
   assert.ok(messagingYaml.includes('retention-days: 7'));
-  assert.ok(messagingYaml.includes('max-attempts: 10'));
+  // El PRESUPUESTO de reintentos (intentos × tope) se alarga solo en local, y por la
+  // razón contraria a la del tope: ahí la fila tiene que sobrevivir al reinicio de
+  // contenedor que el propio escenario provoca. Con diez intentos y el tope corto son
+  // ~20 s, menos de lo que tarda un broker en volver a servir, así que la fila moría
+  // como dead-letter justo antes de que el broker estuviera listo.
+  assert.ok(messagingYaml.includes('max-attempts: 40'));
+  assert.ok(
+    read(workspace, 'src/main/resources/parameters/develop/messaging.yaml').includes(
+      'max-attempts: ${OUTBOX_RELAY_MAX_ATTEMPTS:10}'
+    )
+  );
   assert.ok(messagingYaml.includes('initial-ms: 1000'));
   // El tope del backoff se acorta SOLO en local, que es el perfil con el que corre la
   // suite de integración: ahí el broker caído es un paso del escenario de outbox, no

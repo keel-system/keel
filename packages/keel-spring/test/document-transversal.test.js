@@ -399,3 +399,28 @@ test('el barrido documental se despacha sin transacción, y su adaptador no camb
   const adapter = read(`${JAVA}/infrastructure/persistence/repositories/AssetRepositoryImpl.java`);
   assert.ok(!adapter.includes('@Transactional(readOnly = true)'), adapter);
 });
+
+test('la caducidad de la URL firmada sale del diseño, no del adaptador', () => {
+  // El hueco que cerró la 2.8: `visibility: private` significa que la lectura pasa por
+  // una firma que caduca, y esa ventana es contrato con quien recibe el enlace —cuánto
+  // tiene para descargar, y durante cuánto le sirve a quien se lo reenvíe—. Sin campo en
+  // el DSL, la elegía el adaptador y no quedaba escrita en ninguna parte del diseño.
+  const { read } = scaffoldVault();
+
+  const local = read('src/main/resources/parameters/local/storage.yaml');
+  assert.ok(local.includes('signed-url-ttl-seconds: 600'), local);
+  const production = read('src/main/resources/parameters/production/storage.yaml');
+  assert.ok(
+    production.includes('signed-url-ttl-seconds: ${STORAGE_ASSET_BINARIES_SIGNED_URL_TTL_SECONDS:600}'),
+    production
+  );
+
+  // Y llega hasta el dominio por la política, que es lo que el adaptador tiene que
+  // preguntar en vez de decidir.
+  const policy = read(`${JAVA}/domain/storage/BucketPolicy.java`);
+  assert.ok(policy.includes('Integer signedUrlTtlSeconds'), policy);
+  assert.ok(policy.includes('public Duration signedUrlTtl()'), policy);
+  // Un bucket privado sin ventana declarada falla en caliente y con el motivo: es un
+  // hueco de diseño, no un default que rellenar en silencio.
+  assert.ok(policy.includes('no declara signedUrlTtlSeconds'), policy);
+});

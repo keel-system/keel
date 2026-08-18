@@ -42,6 +42,9 @@ operations:
       - code: PRODUCT_NOT_FOUND
         when: No existe un producto con ese slug.
         http: 404
+      - code: PRICE_UNAVAILABLE
+        when: El servicio de precios no responde y el último precio conocido ya es demasiado viejo para servirlo.
+        http: 503
     cache:
       ttlSeconds: 300
       keyFields: [slug]

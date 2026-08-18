@@ -46,6 +46,7 @@ import * as controllers from './controllers.js';
 import * as web from './web.js';
 import * as security from './security.js';
 import * as httpClients from './http-clients.js';
+import * as lastKnown from './last-known.js';
 import * as dependencies from './dependencies.js';
 import * as storage from './storage.js';
 import * as services from './services.js';
@@ -102,6 +103,8 @@ const GENERATORS = [
   web,
   security,
   httpClients,
+  // Después de httpClients: su almacén lo inyectan los adaptadores que genera aquel.
+  lastKnown,
   dependencies,
   storage,
   services,

@@ -6,6 +6,8 @@ import { generate as generateMessaging } from '../src/scaffold/messaging.js';
 import { generate as generateServices } from '../src/scaffold/services.js';
 import { generate as generateHttpClients } from '../src/scaffold/http-clients.js';
 import { generate as generateConfig } from '../src/scaffold/config.js';
+import { generate as generateRepositories } from '../src/scaffold/repositories.js';
+import { generate as generateLastKnown } from '../src/scaffold/last-known.js';
 import { checkSupportedFeatures } from '../src/lib/supported-features.js';
 import { providerFailures, recordedFailures } from '../src/lib/outbound-failures.js';
 
@@ -118,6 +120,7 @@ const baseLayers = () => ({
 
 const modelFrom = (layers) => buildModel({ manifest, layers });
 const replicaOf = (model) => model.dependencies[0].needs[0].replica;
+const NL = String.fromCharCode(10);
 const fileNamed = (files, name) => files.find((file) => file.path.endsWith(`${name}.java`));
 
 test('modelo: la capa dependencies se resuelve con sus retro-enlaces', () => {
@@ -504,8 +507,12 @@ test('reconciliación: el stub del barrido dice qué busca y de dónde sale el u
   assert.ok(handler.includes('Reconciliación de catalog.reserveStock'));
   // Lo que busca sale del estado en que quedó la entidad al encargar el trabajo.
   assert.ok(handler.includes('Order en reserved'));
-  // Y el umbral no se inventa en una constante: es configuración.
-  assert.ok(handler.includes('sácalo de parameters/'));
+  // Y el umbral ya no se inventa: desde la 2.8 lo declara el diseño
+  // (`unansweredAfterSeconds`) y build lo deja escrito en su parámetro, así que la nota
+  // manda LEERLO. Antes decía «sácalo de parameters/», que es lo mismo que decir «elige tú».
+  assert.ok(handler.includes('El umbral de "demasiado tiempo" LO DECLARA EL DISEÑO'));
+  assert.ok(handler.includes('reconciliation.reserve-stock.unanswered-after-seconds'));
+  assert.ok(handler.includes('reconciliation.reserve-stock.claim-timeout-ms'));
   // El barrido corre en todas las réplicas: reclamar, no leer. La transición del
   // agregado es una carrera, no una serialización, y reencargar publicando produce N
   // eventos con eventId distinto que nadie deduplica.
@@ -862,9 +869,12 @@ test('fallback: con dos activaciones por la misma llamada, build no elige por el
   };
   const adapter = adapterOf(modelFrom(layers));
 
-  assert.ok(adapter.includes('Varias activaciones salen por esta llamada'));
-  assert.ok(adapter.includes('notifications.sendOrderConfirmation (onFailure: ignore)'));
-  assert.ok(adapter.includes('billing.chargeOrder (onFailure: fail)'));
+  // El conflicto se cuenta sobre TODAS las políticas que salen por la llamada, no solo
+  // sobre las activaciones: desde la 2.8 un `need` también trae la suya (`onUnavailable`),
+  // y una activación más un need por el mismo método es el mismo choque.
+  assert.ok(adapter.includes('Varias políticas salen por esta llamada'));
+  assert.ok(adapter.includes('notifications.sendOrderConfirmation (activación, onFailure: ignore)'));
+  assert.ok(adapter.includes('billing.chargeOrder (activación, onFailure: fail)'));
   assert.ok(adapter.includes('throw new UnsupportedOperationException("TODO: fallback getProductsByIds")'));
 });
 
@@ -1017,4 +1027,91 @@ test('la carrera se anuncia solo cuando existe otro camino que saca del mismo es
   const conCarrera = fileNamed(generateMessaging(modelFrom(layers)), 'ProductUpdatedMessage').content;
   assert.ok(conCarrera.includes('Compite con sweepStaleOrders'), conCarrera);
   assert.ok(conCarrera.includes('es la carrera resuelta y NO un fallo'), conCarrera);
+});
+
+test('réplica: el save() de la copia local abre su propia transacción', () => {
+  const model = modelFrom(baseLayers());
+  const files = generateRepositories(model);
+
+  // La hidratación (onMiss: fetch) escribe dentro del camino de LECTURA: el query
+  // handler abrió su transacción como readOnly=true, y la propagación por defecto se
+  // uniría a ella. REQUIRES_NEW la suspende, que es lo único que hace posible escribir
+  // ahí.
+  const replica = fileNamed(files, 'ProductSnapshotRepositoryImpl');
+  assert.ok(replica);
+  assert.ok(
+    replica.content.includes(
+      '@Transactional(propagation = Propagation.REQUIRES_NEW)' + NL + '    public ProductSnapshot save('
+    )
+  );
+  assert.ok(replica.content.includes('import org.springframework.transaction.annotation.Propagation;'));
+
+  // Y NO se generaliza: un agregado normal se une a la transacción del caso de uso, que
+  // es lo que hace que su escritura y sus eventos compartan commit. Emitir REQUIRES_NEW
+  // ahí rompería esa atomicidad sin que nadie lo pidiera.
+  const aggregate = fileNamed(files, 'OrderRepositoryImpl');
+  assert.ok(aggregate);
+  assert.ok(!aggregate.content.includes('REQUIRES_NEW'));
+  assert.ok(aggregate.content.includes('@Transactional' + NL + '    public Order save('));
+});
+
+// ─── onUnavailable: la política del `need` (DSL 2.8) ─────────────────────────
+//
+// El hueco que cerró: un dato que se PIDE al proveedor no tenía dónde declarar qué ve
+// el cliente si esa llamada falla, así que la respuesta vivía en la prosa del `fallback`
+// de http-clients —capa técnica— y la acababa eligiendo quien construía. En una corrida
+// real eso produjo una caché del último valor SIN expiración.
+
+const withOnUnavailable = (policy) => {
+  const layers = withBreaker(baseLayers());
+  layers.dependencies.dependencies.catalog.needs.productPricing.onUnavailable = policy;
+  return layers;
+};
+
+test('onUnavailable fail: el fallback lanza el error del diseño en vez de dejar un TODO', () => {
+  const adapter = adapterOf(modelFrom(withOnUnavailable({ action: 'fail', error: 'PRICE_UNAVAILABLE' })));
+
+  assert.ok(adapter.includes('Política declarada por el need catalog.productPricing (onUnavailable: fail)'));
+  assert.ok(adapter.includes('throw new PriceUnavailableError('));
+  assert.ok(!adapter.includes('throw new UnsupportedOperationException("TODO: fallback getProductsByIds")'));
+});
+
+test('onUnavailable lastKnown: build escribe las DOS mitades, servir y rendirse', () => {
+  const model = modelFrom(withOnUnavailable({ action: 'lastKnown', maxAgeSeconds: 900, error: 'PRICE_UNAVAILABLE' }));
+  const adapter = adapterOf(model);
+
+  // El almacén se inyecta solo donde el diseño lo pide.
+  assert.ok(adapter.includes('private final LastKnownValues lastKnown;'), adapter);
+  // Y se alimenta del camino FELIZ: si solo se escribiera al fallar no habría nada que
+  // recordar.
+  assert.ok(adapter.includes('lastKnown.remember("getProductsByIds", ids, result);'), adapter);
+  // La ventana declarada, y el error con el que se acaba. Sin la segunda mitad esto es
+  // la caché sin expiración que el DSL acaba de prohibir.
+  assert.ok(adapter.includes('lastKnown.recall("getProductsByIds", ids, Duration.ofSeconds(900), GetProductsByIdsResult.class)'), adapter);
+  assert.ok(adapter.includes('.orElseThrow(() -> new PriceUnavailableError('), adapter);
+
+  // Y el almacén existe, acotado por edad Y por tamaño.
+  const store = generateLastKnown(model).find((file) => file.path.endsWith('LastKnownValues.java'));
+  assert.ok(store, 'no se generó LastKnownValues');
+  assert.ok(store.content.includes('MAX_ENTRIES'), store.content);
+  assert.ok(store.content.includes('Duration.between(entry.storedAt(), Instant.now()).compareTo(maxAge) > 0'), store.content);
+});
+
+test('sin ningún need lastKnown no se genera el almacén ni se inyecta', () => {
+  // Un almacén que nadie usa es un bean de más y un campo muerto en el adaptador.
+  const model = modelFrom(withOnUnavailable({ action: 'fail', error: 'PRICE_UNAVAILABLE' }));
+  assert.equal(generateLastKnown(model).length, 0);
+  assert.ok(!adapterOf(model).includes('LastKnownValues'));
+});
+
+test('una activación y un need por la misma llamada: build no elige entre las dos políticas', () => {
+  // Es el mismo choque que dos activaciones: un único método no puede hacer dos cosas
+  // distintas, y elegir sería decidir en silencio cuál de las dos promesas se rompe.
+  const layers = withActivation(withOnUnavailable({ action: 'fail', error: 'PRICE_UNAVAILABLE' }));
+  const adapter = adapterOf(modelFrom(layers));
+
+  assert.ok(adapter.includes('Varias políticas salen por esta llamada'), adapter);
+  assert.ok(adapter.includes('catalog.productPricing (need, onUnavailable: fail)'), adapter);
+  assert.ok(adapter.includes('notifications.sendOrderConfirmation (activación, onFailure: ignore)'), adapter);
+  assert.ok(adapter.includes('throw new UnsupportedOperationException("TODO: fallback getProductsByIds")'));
 });

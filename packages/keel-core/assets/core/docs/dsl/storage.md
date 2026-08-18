@@ -16,10 +16,12 @@ buckets:
     visibility: private                   # requiere URL firmada o acceso mediado
     allowedContentTypes: [application/pdf]
     maxSizeMb: 10
+    signedUrlTtlSeconds: 900              # cuánto vale ese enlace firmado
 ```
 
 - Cada bucket declara qué se le permite guardar: `allowedContentTypes` (tipos MIME, obligatorio) y `maxSizeMb` (tamaño máximo por archivo).
 - `visibility`: `private` (default) exige URLs firmadas o lectura mediada por el servicio; `public` permite lectura directa. **La decide el diseñador**, no el agente: con `public` la URL es la única protección, y con `private` alguna operación tiene que producir el acceso de lectura o el archivo es inaccesible por contrato. Ejes de decisión: `references/structural-decisions.md` de la skill `keel-design` §3.10.
+- `signedUrlTtlSeconds` (solo con `private`): **cuánto vale la URL firmada** con la que se lee su contenido. Es contrato con quien la recibe —cuánto tiempo tiene para descargar, y durante cuánto le sirve a quien se la reenvíe—, no un ajuste del proveedor: una ventana larga convierte el enlace en acceso permanente para el que lo comparta, y una corta rompe descargas legítimas. `keel validate` avisa si un bucket `private` no la declara, porque sin ella la elige quien construya y no queda escrita en ninguna parte. En un bucket `public` no aplica: no hay firma que caducar.
 - Los nombres de bucket van en `camelCase`; son referencias lógicas, no nombres físicos del proveedor.
 
 `visibility` decide además **qué publica el contrato**, sin que haya que declararlo aparte: un campo `file` de bucket `public` viaja en las **respuestas HTTP** como URL absoluta (`format: uri` en el OpenAPI derivado), y uno de bucket `private` como la key. En los **eventos** (`messaging`) viaja siempre la key, sea cual sea la visibilidad: una URL caduca, ata el mensaje al proveedor de storage y se rompe al cambiar de bucket, mientras que una respuesta HTTP se consume en el acto.

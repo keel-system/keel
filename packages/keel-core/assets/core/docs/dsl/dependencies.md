@@ -80,6 +80,7 @@ Un `need` es **un dato ajeno concreto**, no un endpoint del proveedor. Se descub
 | `exposedAs` | — | El campo con el que el dato **viaja en la salida** de esas operaciones (ver abajo). |
 | `fetchedFrom` | según estrategia | Llamada de `http-clients` que resuelve el dato: `{ client, call }`. |
 | `replica` | con `replicated` | La copia local (ver abajo). |
+| `onUnavailable` | — | Qué pasa cuando el proveedor no da el dato (ver abajo). Sin él, la política la elige quien construya. |
 
 ### `exposedAs` — cuando el dato además se devuelve
 
@@ -143,6 +144,36 @@ Obligatorio en toda réplica: es el hueco más caro de dejar implícito, porque 
 
 `degrade` es la opción peligrosa: un resultado degradado que produce datos plausibles pero falsos es peor que fallar. La skill `/keel-validate` lo revisa con el mismo criterio que el `fallback` de `http-clients`.
 
+## `onUnavailable` — qué pasa cuando el proveedor no contesta
+
+La otra mitad de `onMiss`, y durante mucho tiempo la que faltaba. `onMiss` dice qué pasa cuando **la copia** no tiene el dato; `onUnavailable` dice qué pasa cuando **el proveedor** no lo da: la llamada de `fetchedFrom` falla, agota su timeout o encuentra el circuito abierto. Aplica siempre que haya `fetchedFrom` — con `on-demand` es la vía única, y con `replicated` + `onMiss: fetch` es el rescate, que también puede fallar.
+
+Antes de existir, esa política solo se podía escribir como prosa en el `fallback` de la llamada, que vive en `http-clients` — **capa técnica**: describe el mecanismo («devolver el último precio conocido en caché») en vez de la decisión de negocio, y ningún generador puede aplicar una frase. El resultado era que la tomaba quien construía.
+
+| `action` | Qué exige | Qué observa el cliente |
+|---|---|---|
+| `fail` | `error`, declarado por alguna operación de `usedBy` | El error de negocio declarado, con su status |
+| `degrade` | `degradedTo` en prosa | Un resultado parcial o conservador, descrito ahí |
+| `lastKnown` | `maxAgeSeconds` **y** `error` | El último valor que este servicio llegó a leer, mientras no supere esa edad; superada, el error declarado |
+
+```yaml
+needs:
+  currentPrice:
+    strategy: on-demand
+    usedBy: [getProductBySlug]
+    fetchedFrom: { client: pricing, call: getPrice }
+    onUnavailable:
+      action: lastKnown
+      maxAgeSeconds: 900          # 15 minutos: pasado eso, ya no es un precio
+      error: PRICE_UNAVAILABLE    # el desenlace cuando no queda nada lo bastante fresco
+```
+
+**`maxAgeSeconds` es el único número de esta capa, y entra por su consecuencia.** «Servir el último valor conocido» sin edad máxima no tiene final: un precio de hace tres días se sirve igual que uno de hace un minuto, y nadie decidió eso. Por eso el schema exige los dos campos juntos — la ventana y qué pasa al superarla. No se contradice con `replica.freshness`, que sigue siendo prosa a propósito: allí la antigüedad la produce la latencia de los eventos del proveedor y este servicio no la controla; aquí la ventana la decide y la aplica él, y es observable en su respuesta.
+
+`degrade` es la opción peligrosa, con el mismo criterio de siempre: un resultado que el cliente no puede distinguir del normal no es degradación, es un dato falso.
+
+**Precedencia sobre el `fallback` de la llamada**: con `onUnavailable` declarado, esa es **la** política —es la que el generador aplica—, y el `fallback` de `http-clients` queda como resumen para humanos. Si dicen cosas distintas, la que se construye es esta.
+
 ## `activations` — qué trabajo le pide cada caso de uso
 
 Una `activation` es **un trabajo concreto que hace otro servicio**. Se descubre igual que un `need`, recorriendo los casos de uso propios, pero con la otra pregunta: *"¿qué parte de esta operación no es responsabilidad nuestra?"*.
@@ -155,6 +186,7 @@ Una `activation` es **un trabajo concreto que hace otro servicio**. Se descubre 
 | `awaits` | | `outcome`, `acknowledgement` (por defecto) o `nothing`. |
 | `onFailure` | con `via` HTTP | Qué hace la operación propia si el encargo no sale. |
 | `reconciledBy` | | Operación con `schedule` que barre los encargos que nunca recibieron desenlace. |
+| `unansweredAfterSeconds` | con `reconciledBy` | Cuánto silencio de **este** proveedor se tolera antes de que el barrido vuelva a insistir. |
 
 ### `via` — por dónde se le pide
 
@@ -329,9 +361,9 @@ Por eso, si la operación de la compensación **además** está expuesta por HTT
 
 ## Qué comprueba `keel validate`
 
-**Errores** — `usedBy` o `triggeredBy` hacia una operación inexistente · `fetchedFrom` o `via` hacia un cliente o una llamada que no existen en `http-clients` · `via.publishes` hacia un evento que no está en `messaging: publishing.events` · `awaits: outcome` sobre un `via` de evento (publicar no devuelve resultado) · `replica.entity` que no existe en `domain` · `replica.keyField` que no es campo de esa entidad · `replica` sin capa `persistence` (también con `--wip`: una copia necesita dónde guardarse) · `fedBy` o `compensations.onEvent` hacia un evento que no está en `messaging: subscriptions` · `compensations.undoes` hacia una activación inexistente · compensación **sin** `undoes` habiendo activaciones en esa dependencia (apaga en cascada las cuatro comprobaciones que dependen de saber qué encargo se deshace) · compensación cuya operación disparada es `kind: query` (una lectura no deshace nada) · compensación cuya operación no está protegida por **ninguno** de los dos mecanismos que impiden aplicarla dos veces · compensación cuya operación también se expone por HTTP y solo declara `contract.messageId` (una guarda de puerta no cubre el otro camino) · compensación cuya suscripción no reintenta ni tiene `deadLetter` (una llegada fuera de orden se pierde) · `onMiss.error` u `onFailure.error` que ninguna operación declara · `reconciledBy` hacia una operación inexistente, sin `schedule` o `kind: query`.
+**Errores** — `usedBy` o `triggeredBy` hacia una operación inexistente · `fetchedFrom` o `via` hacia un cliente o una llamada que no existen en `http-clients` · `via.publishes` hacia un evento que no está en `messaging: publishing.events` · `awaits: outcome` sobre un `via` de evento (publicar no devuelve resultado) · `replica.entity` que no existe en `domain` · `replica.keyField` que no es campo de esa entidad · `replica` sin capa `persistence` (también con `--wip`: una copia necesita dónde guardarse) · `fedBy` o `compensations.onEvent` hacia un evento que no está en `messaging: subscriptions` · `compensations.undoes` hacia una activación inexistente · compensación **sin** `undoes` habiendo activaciones en esa dependencia (apaga en cascada las cuatro comprobaciones que dependen de saber qué encargo se deshace) · compensación cuya operación disparada es `kind: query` (una lectura no deshace nada) · compensación cuya operación no está protegida por **ninguno** de los dos mecanismos que impiden aplicarla dos veces · compensación cuya operación también se expone por HTTP y solo declara `contract.messageId` (una guarda de puerta no cubre el otro camino) · compensación cuya suscripción no reintenta ni tiene `deadLetter` (una llegada fuera de orden se pierde) · `onMiss.error`, `onUnavailable.error` u `onFailure.error` que ninguna operación declara · `reconciledBy` hacia una operación inexistente, sin `schedule` o `kind: query`.
 
-**Avisos** — compensación cuya operación no devuelve el estado que movió el trabajo encargado · compensación que devuelve la entidad a un estado **terminal** del `lifecycle` (¿desenlace o callejón?) · compensación sin escenarios suyos en `validation-scenarios.md`, o con el del efecto pero sin el de **reentrega** · `reconciledBy` que no mueve el lifecycle de lo que quedó esperando ni encarga nada a ese proveedor —ni reintentar ni compensar— (un barrido que no toca lo que barre) · encargo por `via: { publishes }` con `publishing.reliability: best-effort` (el encargo se puede perder y no hay nada que compensar) · activación compensada sin `reconciledBy` (nada detecta el desenlace que no llega) · operación que encarga trabajo a **varios** proveedores declarando compensación solo para algunos (la saga incompleta) · compensación con `deadLetter` cuya operación no se expone por HTTP ni se reconcilia (la DLQ sin vía de reejecución) · compensación disparada por un evento de un tercero cuya operación no tiene por dónde avisar al proveedor · compensación con `deadLetter` pero sin reintentos · compensación sobre un canal `external` cuya única protección es el guard de lifecycle · la entidad de la réplica no está en `persistence: entities` · `keyField` sin `unique` · la suscripción citada declara un `source` distinto del nombre de la dependencia · `onMiss.error` declarado por una operación ajena a `usedBy` (y lo mismo con `onFailure.error` y `triggeredBy`) · dos needs replicando la misma entidad · un cliente de `http-clients` que ningún need ni activación usa · una suscripción `fact` cuyo `source` no está declarado como dependencia (una `request` no: quien nos activa no es una dependencia nuestra).
+**Avisos** — `need` con `fetchedFrom` que no declara `onUnavailable` (nadie ha dicho qué ve el cliente con el proveedor caído, y el `fallback` de la llamada es prosa técnica) · `reconciledBy` sin `unansweredAfterSeconds` (el barrido necesita el umbral para elegir candidatos: sin declararlo lo fija quien construya) · compensación cuya operación no devuelve el estado que movió el trabajo encargado · compensación que devuelve la entidad a un estado **terminal** del `lifecycle` (¿desenlace o callejón?) · compensación sin escenarios suyos en `validation-scenarios.md`, o con el del efecto pero sin el de **reentrega** · `reconciledBy` que no mueve el lifecycle de lo que quedó esperando ni encarga nada a ese proveedor —ni reintentar ni compensar— (un barrido que no toca lo que barre) · encargo por `via: { publishes }` con `publishing.reliability: best-effort` (el encargo se puede perder y no hay nada que compensar) · activación compensada sin `reconciledBy` (nada detecta el desenlace que no llega) · operación que encarga trabajo a **varios** proveedores declarando compensación solo para algunos (la saga incompleta) · compensación con `deadLetter` cuya operación no se expone por HTTP ni se reconcilia (la DLQ sin vía de reejecución) · compensación disparada por un evento de un tercero cuya operación no tiene por dónde avisar al proveedor · compensación con `deadLetter` pero sin reintentos · compensación sobre un canal `external` cuya única protección es el guard de lifecycle · la entidad de la réplica no está en `persistence: entities` · `keyField` sin `unique` · la suscripción citada declara un `source` distinto del nombre de la dependencia · `onMiss.error` declarado por una operación ajena a `usedBy` (y lo mismo con `onUnavailable.error`, y con `onFailure.error` y `triggeredBy`) · dos needs replicando la misma entidad · un cliente de `http-clients` que ningún need ni activación usa · una suscripción `fact` cuyo `source` no está declarado como dependencia (una `request` no: quien nos activa no es una dependencia nuestra).
 
 Con `--wip`, las referencias a capas aún no diseñadas (`http-clients`, `messaging`) quedan como pendientes.
 

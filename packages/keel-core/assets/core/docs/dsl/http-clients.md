@@ -52,6 +52,7 @@ clients:
 - `retry.retryOn`: `timeout`, `5xx`, `connection`. Nunca reintentar 4xx.
 - `circuitBreaker`: `failureRateThreshold` (% de fallos que abre el circuito), `slidingWindowSize` (llamadas observadas), `waitDurationMs` (espera antes de probar de nuevo).
 - Todo `circuitBreaker` debería tener `fallback` definido: qué hace el servicio cuando el circuito está abierto. `keel validate` avisa si falta; la skill `/keel-validate` revisa la calidad del fallback.
+- **El `fallback` es prosa, y la prosa no se construye.** Si esta llamada resuelve un `need` de `dependencies`, la política vive allí (`onUnavailable`: fallar con un error propio, degradar, o servir el último valor conocido con su edad máxima) y **esa** es la que el generador aplica; el `fallback` de aquí queda como resumen para humanos. Escribir la decisión solo aquí es lo que produjo, en una corrida real, una caché del último valor **sin expiración**: la frase decía «el último precio conocido» y no decía hasta cuándo.
 - **La resiliencia la decide el diseñador**, no el agente: el `timeoutMs` sale del presupuesto de latencia de **nuestra** operación (nunca del SLA ajeno), la caída del tercero se traduce a un `code` propio, y un `fallback` que produce datos plausibles pero falsos es peor que el error que evita. Ejes de decisión: `references/structural-decisions.md` de la skill `keel-design` §3.6.
 
 ## Idempotencia saliente (`idempotency`, por llamada)

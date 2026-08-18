@@ -17,6 +17,7 @@ import { javaFile, javaPath, subPackage } from './render.js';
 import { domainTypeImport } from './entities.js';
 import { outboundIdempotentCalls } from './http-idempotency.js';
 import { providerFailures } from '../lib/outbound-failures.js';
+import { callPolicy, clientRemembers } from './last-known.js';
 
 const PORT_PKG = 'domain.clients';
 const HTTP_PKG = 'infrastructure.http';
@@ -308,15 +309,23 @@ function renderAdapter(model, client) {
     ? `    private static final Logger log = LoggerFactory.getLogger(${client.adapterClass}.class);\n\n`
     : '';
 
+  // El almacén del último valor conocido solo se inyecta donde el diseño lo pide: un
+  // adaptador con un campo que ninguna llamada usa es ruido, y el bean existe solo si
+  // algún need declara `lastKnown`.
+  const remembers = clientRemembers(model, client);
+  const lastKnownField = remembers ? '\n    private final LastKnownValues lastKnown;' : '';
+  const lastKnownParam = remembers ? ', LastKnownValues lastKnown' : '';
+  const lastKnownAssign = remembers ? '\n        this.lastKnown = lastKnown;' : '';
+
   const body = `@Component
 public class ${client.adapterClass} implements ${client.clientClass} {
 
 ${logger}    private final RestClient restClient;
-    private final ${client.mapperClass} mapper;
+    private final ${client.mapperClass} mapper;${lastKnownField}
 
-    public ${client.adapterClass}(@Qualifier("${client.beanName}") RestClient restClient, ${client.mapperClass} mapper) {
+    public ${client.adapterClass}(@Qualifier("${client.beanName}") RestClient restClient, ${client.mapperClass} mapper${lastKnownParam}) {
         this.restClient = restClient;
-        this.mapper = mapper;
+        this.mapper = mapper;${lastKnownAssign}
     }
 
 ${methods}
@@ -403,12 +412,33 @@ function neutralResultArgs(call, imports) {
     .join(', ');
 }
 
+// La clave con la que se guarda y se recupera el último valor conocido: los mismos
+// parámetros con los que se hizo la llamada. Es lo que hace que el fallback devuelva el
+// último precio DE ESE SKU y no el del último que se consultara — que sería servir el
+// dato de otro recurso, mucho peor que no servir ninguno.
+function lastKnownKey(call, imports) {
+  const names = callParams(call).map((p) => p.field?.name ?? 'body');
+  if (names.length === 0) return '"-"';
+  if (names.length === 1) return names[0];
+  // Arrays.asList y no List.of: un parámetro opcional puede venir nulo y List.of lo
+  // rechaza en tiempo de ejecución, justo en el camino que tiene que ser el más robusto.
+  imports.add('java.util.Arrays');
+  return `Arrays.asList(${names.join(', ')})`;
+}
+
 function renderCallMethod(model, client, call, imports) {
   addFieldImports(model, imports, callFields(call));
   const params = callParams(call).map((p) => p.decl);
   // Hace falta algo que lo dispare: el fallback lo invoca un aspecto, así que sin
   // retry ni circuito no hay quien lo llame y serían cinco métodos privados muertos.
-  const hasFallback = Boolean((call.fallback || call.circuitBreaker) && (call.retry || call.circuitBreaker));
+  //
+  // Una política declarada en un `need` (`onUnavailable`) cuenta como razón para
+  // emitirlo, igual que la prosa del `fallback`: es la decisión del diseño sobre qué ve
+  // el cliente con el proveedor caído, y sin el método no se aplicaría en ninguna parte.
+  const hasFallback = Boolean(
+    (call.fallback || call.circuitBreaker || (call.needs ?? []).some(({ need }) => need.onUnavailable)) &&
+      (call.retry || call.circuitBreaker)
+  );
   const pascal = call.resultType.replace(/Result$/, '');
 
   // El fallbackMethod va en el aspecto MÁS EXTERNO, que es `@Retry`: el orden de
@@ -505,11 +535,21 @@ function renderCallMethod(model, client, call, imports) {
             return new ${call.resultType}(${neutralResultArgs(call, imports)});
         }`)
         : '';
+    // Con `onUnavailable: lastKnown`, el resultado se recuerda ANTES de devolverlo. El
+    // almacén se alimenta del camino feliz por definición: lo que sirve cuando el
+    // proveedor cae es lo último que contestó cuando no lo estaba.
+    const policy = callPolicy(model, client, call);
+    const rememberStep = policy
+      ? `
+        ${call.resultType} result = mapper.to${pascal}Result(response);
+        lastKnown.remember("${call.name}", ${lastKnownKey(call, imports)}, result);
+        return result;`
+      : `
+        return mapper.to${pascal}Result(response);`;
     callBody = `${todo}${preamble}        ${call.responseType} response = restClient.${verb}()
                 ${uriStep}${headerSteps}${idempotencyStep}${bodyStep}
                 .retrieve()
-                .body(${call.responseType}.class);${emptyBodyGuard}
-        return mapper.to${pascal}Result(response);`;
+                .body(${call.responseType}.class);${emptyBodyGuard}${rememberStep}`;
   } else {
     callBody = `        // TODO (agente): completar la llamada; el diseño no declara method/path ni el contract es parseable
         //   ${call.contract}
@@ -582,6 +622,10 @@ ${fallbackBody(model, client, call, imports)}
 // políticas distintas sobre un único método es un conflicto del diseño.
 function fallbackBody(model, client, call, imports) {
   const activations = call.activations ?? [];
+  // La otra mitad: un `need` que se resuelve por esta llamada trae su `onUnavailable`.
+  // Es lo que hace que la política del diseño llegue hasta aquí en vez de quedarse en la
+  // prosa del `fallback`, que es donde nadie podía aplicarla.
+  const needs = (call.needs ?? []).filter(({ need }) => need.onUnavailable);
   // La causa se registra SIEMPRE, gane la política que gane. El fallback recibe el
   // throwable y lo natural es tirarlo: entonces un fallo de integración —una
   // negociación HTTP rota, un cuerpo que no deserializa— queda indistinguible de
@@ -596,19 +640,38 @@ function fallbackBody(model, client, call, imports) {
   // señal de que el arreglo va aquí y no allí.
   const trace = `        log.warn("Fallback de ${client.id}.${call.name}", throwable);\n`;
 
-  if (activations.length !== 1) {
+  // Una política, y solo una. Con dos —dos activaciones, o una activación y un need— el
+  // conflicto es del diseño: un único método no puede hacer dos cosas distintas, y
+  // elegir por el diseñador sería decidir en silencio cuál de las dos promesas se rompe.
+  const policies = activations.length + needs.length;
+  if (policies !== 1) {
     // Sin política declarada, la prosa del diseño ES la instrucción al agente.
     const doc = call.fallback
       ? `        // TODO (agente): ${call.fallback}`
       : '        // TODO (agente): política de fallback del circuito abierto.';
+    const conflicting = [
+      ...activations.map(
+        ({ dependency, activation }) =>
+          `${dependency}.${activation.name} (activación, onFailure: ${activation.onFailure?.action ?? 'sin declarar'})`
+      ),
+      ...needs.map(
+        ({ dependency, need }) => `${dependency}.${need.name} (need, onUnavailable: ${need.onUnavailable.action})`
+      )
+    ];
     const listed =
-      activations.length > 1
-        ? `\n        // Varias activaciones salen por esta llamada y el diseño no puede darles políticas\n        // distintas sobre un único método: ${activations
-            .map(({ dependency, activation }) => `${dependency}.${activation.name} (onFailure: ${activation.onFailure?.action ?? 'sin declarar'})`)
-            .join('; ')}`
+      policies > 1
+        ? `
+        // Varias políticas salen por esta llamada y el diseño no puede darles caminos
+        // distintos sobre un único método: ${conflicting.join('; ')}`
         : '';
     return `${trace}${doc}${listed}
         throw new UnsupportedOperationException("TODO: fallback ${call.name}");`;
+  }
+
+  // La política del `need`, que es la que el hueco de diseño de la corrida reclamaba: el
+  // dato que se PIDE al proveedor ya no depende de la prosa del `fallback`.
+  if (needs.length === 1) {
+    return needFallbackBody(model, client, call, needs[0], trace, imports);
   }
 
   const prose = call.fallback ? `        // Fallback declarado en el diseño: ${call.fallback}\n` : '';
@@ -653,6 +716,59 @@ function fallbackBody(model, client, call, imports) {
 
   return `${trace}${prose}${origin}        // TODO (agente): la activación no declara onFailure.
         throw new UnsupportedOperationException("TODO: fallback ${call.name}");`;
+}
+
+// Cuerpo del fallback cuando la política la declara un `need` (`onUnavailable`).
+//
+// Es el hueco de diseño que cerró la 2.8: antes, un dato que se pide al proveedor no
+// tenía dónde declarar qué ve el cliente si esa llamada falla, así que la respuesta
+// vivía en la prosa del `fallback` de http-clients —capa técnica— y la acababa
+// eligiendo quien construía. En una corrida real eso produjo una caché del último
+// valor SIN expiración: un precio de hace tres días servido como vigente.
+function needFallbackBody(model, client, call, { dependency, need }, trace, imports) {
+  const { onUnavailable } = need;
+  const prose = call.fallback ? `        // Fallback declarado en el diseño: ${call.fallback}\n` : '';
+  const origin = `        // Política declarada por el need ${dependency}.${need.name} (onUnavailable: ${onUnavailable.action}).\n`;
+
+  if (onUnavailable.action === 'fail') {
+    const message = `"${dependency} no está disponible para ${need.name}"`;
+    if (onUnavailable.exceptionClass) {
+      imports.add(`${subPackage(model, 'domain.errors')}.${onUnavailable.exceptionClass}`);
+      const args = onUnavailable.dynamicStatus ? `${message}, ${onUnavailable.httpStatus}` : message;
+      return `${trace}${prose}${origin}        throw new ${onUnavailable.exceptionClass}(${args});`;
+    }
+    return `${trace}${prose}${origin}        // TODO (agente): el diseño declara onUnavailable.error = ${onUnavailable.error}, pero
+        // ninguna operación de use-cases lo declara todavía, así que su clase no existe.
+        throw new UnsupportedOperationException("TODO: fallback ${call.name}");`;
+  }
+
+  if (onUnavailable.action === 'degrade') {
+    return `${trace}${prose}${origin}        // TODO (agente): el resultado degradado es lógica de negocio y debe ser distinguible
+        // por el cliente de una respuesta normal — un dato plausible pero falso es peor que fallar:
+        //   ${onUnavailable.degradedTo}
+        throw new UnsupportedOperationException("TODO: fallback ${call.name}");`;
+  }
+
+  // `lastKnown`: el único con mecanismo propio, y por eso el único que build escribe
+  // entero. Las dos mitades son inseparables — servir el último valor y RENDIRSE cuando
+  // ya es demasiado viejo—: sin la segunda, esto es la caché sin expiración que el
+  // diseño acaba de prohibir.
+  imports.add('java.time.Duration');
+  const recall = `lastKnown.recall("${call.name}", ${lastKnownKey(call, imports)}, Duration.ofSeconds(${onUnavailable.maxAgeSeconds}), ${call.resultType}.class)`;
+  if (onUnavailable.exceptionClass) {
+    imports.add(`${subPackage(model, 'domain.errors')}.${onUnavailable.exceptionClass}`);
+    const message = `"${dependency} no está disponible y el último ${need.name} conocido supera los ${onUnavailable.maxAgeSeconds}s"`;
+    const args = onUnavailable.dynamicStatus ? `${message}, ${onUnavailable.httpStatus}` : message;
+    return `${trace}${prose}${origin}        // Dentro de la ventana declarada se sirve lo último que se leyó; fuera de ella no hay
+        // nada que servir — un valor más viejo que ${onUnavailable.maxAgeSeconds}s ya no es ese dato.
+        return ${recall}
+                .orElseThrow(() -> new ${onUnavailable.exceptionClass}(${args}));`;
+  }
+  return `${trace}${prose}${origin}        // TODO (agente): el diseño declara onUnavailable.error = ${onUnavailable.error}, pero
+        // ninguna operación de use-cases lo declara todavía, así que su clase no existe. El
+        // rescate del último valor conocido ya está escrito: solo falta con qué rendirse.
+        return ${recall}
+                .orElseThrow(() -> new UnsupportedOperationException("TODO: error de ${call.name}"));`;
 }
 
 // ─── DTOs wire (contrato del sistema externo, solo infrastructure/http) ──────
