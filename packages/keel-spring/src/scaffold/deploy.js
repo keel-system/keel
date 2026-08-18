@@ -31,7 +31,7 @@ import {
   UI_SERVICES,
   HTTP_STUB
 } from '../lib/stack-catalog.js';
-import { realmSpec } from './auth-provisioning.js';
+import { cognitoMockConfig, realmSpec } from './auth-provisioning.js';
 import { RUNTIME_RESOLUTION, composeResolution } from './devtools.js';
 import { LOCAL_API_KEY, LOCAL_CORS_ORIGINS, localClientApiKey } from './config.js';
 
@@ -49,6 +49,7 @@ const PORT_VARS = {
   'rabbitmq:15672': 'RABBITMQ_UI_PORT',
   'localstack:4566': 'LOCALSTACK_PORT',
   'keycloak:8080': 'KEYCLOAK_PORT',
+  'cognito-mock:8080': 'COGNITO_PORT',
   'redis:6379': 'REDIS_PORT',
   'valkey:6379': 'VALKEY_PORT',
   'minio:9000': 'MINIO_PORT',
@@ -91,6 +92,12 @@ export function generate(model) {
   files.push({ path: 'deploy/up.sh', content: upScript(model), executable: true });
   files.push({ path: 'deploy/down.sh', content: downScript(), executable: true });
 
+  // El emulador de Cognito lee su config del mismo archivo que en infra/, pero
+  // relativo a deploy/: son dos composes distintos y cada uno monta el suyo.
+  if (model.stack.auth === 'cognito') {
+    const config = cognitoMockConfig(model);
+    if (config) files.push({ path: 'deploy/cognito/mock-oauth2-config.json', content: config.content });
+  }
   const realm = model.stack.auth === 'keycloak' ? realmSpec(model) : null;
   if (realm) {
     files.push({ path: 'deploy/keycloak/realm-export.json', content: realmExport(realm) });
@@ -386,7 +393,10 @@ function appEnvironment(model) {
 function jwkSetUri(model) {
   const realmPath = `realms/${model.service.name}/protocol/openid-connect/certs`;
   if (model.stack.auth === 'keycloak') return `http://keycloak:8080/${realmPath}`;
-  if (model.stack.auth === 'cognito') return 'http://cognito:9229/local_userpool/.well-known/jwks.json';
+  // El issuerId del emulador es el nombre del servicio, así que la ruta es
+  // determinista (con un emulador de la API de Cognito habría sido un id de pool
+  // generado, imposible de escribir aquí).
+  if (model.stack.auth === 'cognito') return `http://cognito-mock:8080/${model.service.name}/jwks`;
   return null;
 }
 

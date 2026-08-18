@@ -82,7 +82,7 @@ lanza mientras el conjunto no exista, así que el fallo sale aquí. Igual que Or
 ejecuta dentro del propio contenedor: `mongosh` viene en su imagen.
 | MinIO | `minio` | `mc alias set local http://minio:9000 minioadmin minioadmin && mc ready local` |
 | Keycloak | `keycloak` | `curl -sf http://keycloak:8080/realms/master` |
-| Cognito | `cognito` | `curl -sf http://cognito:9229/health` |
+| Cognito | `cognito-mock` | `curl -sf http://cognito-mock:8080/health` |
 
 Las credenciales concretas son las de `infra/docker-compose.yaml` (usuario = nombre del
 servicio con guiones bajos, password `changeme` para las BD abiertas; `sa` /
@@ -225,7 +225,8 @@ regeneran con el proyecto, y los dos lados leen los mismos valores.
 
 | Archivo | Quién lo usa |
 |---|---|
-| `infra/init-keycloak.sh` | el agente de infraestructura lo **ejecuta y verifica** (no lo escribe): realm, roles, un usuario por rol, los clientes máquina del diseño y la matriz `test-m2m-*` |
+| `infra/init-keycloak.sh` (solo `auth: keycloak`) | el agente de infraestructura lo **ejecuta y verifica** (no lo escribe): realm, roles, un usuario por rol, los clientes máquina del diseño y la matriz `test-m2m-*` |
+| `infra/cognito/mock-oauth2-config.json` (solo `auth: cognito`) | **no hay nada que ejecutar**: el emulador lo lee al arrancar. Trae lo mismo que el script de Keycloak —usuarios por rol, uno sin roles, clientes máquina y la matriz `test-m2m-*`— pero como config declarativa. Lo que el agente verifica es el TOKEN: `cognito:groups`, el `scope` prefijado por el resource server y la ausencia de `aud` |
 | `infra/test-credentials.env` | `AbstractFlowIT` lo lee para resolver cliente, contraseña, URL de token y secretos M2M |
 | `infra/init-messaging.sh` (solo `broker: snssqs`) | mismo trato: el agente de infraestructura lo **ejecuta y verifica**, no lo escribe. Siembra topics, colas, sus DLQ (`maxReceiveCount` del `onFailure` del diseño) y las suscripciones SNS→SQS con *raw message delivery* y filtro por `eventType`. Sin él la app arranca publicando contra un topic que no existe, y `validate-infra.sh` lo caza porque comprueba que cada topic y cada cola **existan**, no solo que LocalStack responda |
 

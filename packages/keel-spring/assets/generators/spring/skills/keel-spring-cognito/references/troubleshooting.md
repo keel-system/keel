@@ -6,7 +6,8 @@ Síntoma → causa → arreglo. Sondeo básico en
 ## 401 con un token que «debería» valer
 
 1. **Issuer mismatch**: el `iss` del token no coincide con el `issuer-uri`
-   configurado. Con el emulador pasa al recrear el pool (poolId nuevo) sin
+   configurado. Con el emulador local ya no pasa por un poolId nuevo (el issuerId lo
+   fija el diseño); sí pasa al
    actualizar el YAML, o al pedir el token vía `cognito:9229` (devtools) y
    validar contra `localhost:9229`. Decodifica y compara:
    `echo $TOKEN | cut -d. -f2 | base64 -d | jq .iss`.
@@ -42,7 +43,7 @@ issuer + ids donde los uses.
 Con `issuer-uri`, Spring consulta `<issuer>/.well-known/openid-configuration`
 al arrancar: emulador caído o poolId inexistente la tumban. Orden correcto:
 compose up → init-cognito → ajustar YAML → bootRun. Sondeo:
-`curl -sf http://cognito:9229/health` desde devtools.
+`curl -sf http://cognito-mock:8080/health` desde devtools.
 
 ## Funciona con el emulador pero no contra Cognito real
 

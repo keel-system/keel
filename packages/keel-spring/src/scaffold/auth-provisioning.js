@@ -23,6 +23,9 @@ const PASSWORD = 'password';
 const TEST_SECRET = 'test-secret';
 // Usuario sin ningún rol: el 403 por rol insuficiente necesita un sujeto autenticado.
 const NO_ROLE_USER = 'no-role';
+// Resource server ajeno, para la variante negativa de la matriz M2M con Cognito: es
+// el prefijo de scope que hace que el token esté emitido para OTRA API.
+const FOREIGN_RESOURCE_SERVER = 'audiencia-ajena';
 
 /** Protocolos de identidad basados en token: son los que necesitan aprovisionamiento. */
 function usesTokens(model) {
@@ -43,8 +46,11 @@ export function secretEnvKey(clientName) {
 /** URL del endpoint de token del proveedor del stack. */
 export function tokenUrl(model) {
   const port = AUTH[model.stack.auth]?.port ?? 8180;
+  // Con cognito, el emulador local sirve OAuth2 estándar bajo el issuerId (que es
+  // el nombre del servicio): por eso el arnés no necesita ninguna rama propia y
+  // pide los tokens igual que con Keycloak.
   return model.stack.auth === 'cognito'
-    ? `http://localhost:${port}/local_userpool/protocol/openid-connect/token`
+    ? `http://localhost:${port}/${model.service.name}/token`
     : `http://localhost:${port}/realms/${model.service.name}/protocol/openid-connect/token`;
 }
 
@@ -141,6 +147,7 @@ export function generate(model) {
   if (!model.layersPresent.security || !usesTokens(model)) return [];
   const files = [credentialsEnv(model)];
   if (model.stack.auth === 'keycloak') files.push(keycloakScript(model));
+  if (model.stack.auth === 'cognito') files.push(cognitoMockConfig(model));
   return files;
 }
 
@@ -159,7 +166,7 @@ function credentialsEnv(model) {
     '# Cualquier variable de entorno del mismo nombre tiene prioridad sobre este archivo.',
     ''
   ];
-  if (model.stack.auth !== 'keycloak') {
+  if (model.stack.auth !== 'keycloak' && model.stack.auth !== 'cognito') {
     lines.push(
       `# Stack de identidad '${model.stack.auth}': build no genera el script de aprovisionamiento,`,
       '# pero estos son los valores con los que el arnés va a llamar. El agente de',
@@ -359,4 +366,79 @@ echo "  curl -s -d 'grant_type=password&client_id=$USER_CLIENT&username=${verify
 `;
 
   return { path: 'infra/init-keycloak.sh', content };
+}
+
+// ─── infra/cognito/mock-oauth2-config.json ───────────────────────────────────
+//
+// Tercera proyección de `realmSpec()`, hermana del script de Keycloak y de su
+// realm-export: los mismos roles, usuarios, scopes y clientes, escritos esta vez
+// como `tokenCallbacks` de mock-oauth2-server.
+//
+// Lo que emite NO es «un token cualquiera que sirva»: es un token con la forma
+// EXACTA de los de Cognito, incluidas sus dos rarezas, porque es lo único que
+// hace que lo que pase en local prediga lo que pasará contra el pool real:
+//
+//   - los scopes vienen prefijados por el resource server (`<servicio>/<scope>`),
+//     no como el `recurso:accion` pelado que emite Keycloak, y
+//   - los access token de `client_credentials` NO traen `aud`, traen `client_id`.
+//
+// Las dos las absorbe el código generado (security.js), y por eso el emulador
+// tiene que producirlas: un mock más cómodo dejaría verde un servicio que en
+// producción devuelve 403 a todas las máquinas.
+export function cognitoMockConfig(model) {
+  const spec = realmSpec(model);
+  const issuerId = spec.realm;
+
+  // Un mapping por usuario, emparejado por `username` (el grant es ROPC, como con
+  // Keycloak). El usuario sin roles emite el array vacío: sin él, «autenticado
+  // pero sin permiso» no sería observable y el 403 por rol no tendría sujeto.
+  const users = spec.users.map((user) => ({
+    requestParam: 'username',
+    match: user.username,
+    claims: {
+      sub: user.username,
+      username: user.username,
+      token_use: 'access',
+      'cognito:groups': user.roles,
+      client_id: spec.userClient
+    }
+  }));
+
+  // Un mapping por cliente máquina, emparejado por `client_id`.
+  //
+  // La matriz de prueba conserva su significado bajo semántica Cognito, y la clave
+  // está en el PREFIJO: como sus tokens de máquina no llevan `aud`, la audiencia se
+  // expresa en el resource server que prefija cada scope (`catalog/product:read` =
+  // «vale para la API de catalog»). Así, «audiencia ajena» se emite como scopes con
+  // OTRO prefijo, que es exactamente lo que el filtro generado rechaza — sin
+  // inventar ningún claim que Cognito real no emitiría.
+  const machines = [...spec.serviceClients, ...spec.m2mClients].map((client) => {
+    const resourceServer = client.audience === 'wrong' ? FOREIGN_RESOURCE_SERVER : spec.audience;
+    const claims = {
+      sub: client.name,
+      token_use: 'access',
+      client_id: client.name
+    };
+    // Sin scopes no hay claim `scope`: es el control de la matriz (`test-m2m-none`),
+    // y un claim vacío no significaría lo mismo que su ausencia.
+    if (client.scopes.length > 0) {
+      claims.scope = client.scopes.map((scope) => `${resourceServer}/${scope}`).join(' ');
+    }
+    return { requestParam: 'client_id', match: client.name, claims };
+  });
+
+  const config = {
+    interactiveLogin: false,
+    tokenCallbacks: [
+      {
+        issuerId,
+        tokenExpiry: 3600,
+        requestMappings: [...users, ...machines]
+      }
+    ]
+  };
+  return {
+    path: 'infra/cognito/mock-oauth2-config.json',
+    content: `${JSON.stringify(config, null, 2)}\n`
+  };
 }

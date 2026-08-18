@@ -4,7 +4,7 @@
 // (local literal → develop ${VAR:default} → production ${VAR} obligatoria).
 // El perfil activo se elige con la variable de entorno PROFILE (default local).
 
-import { DATABASES, HTTP_STUB } from '../lib/stack-catalog.js';
+import { AUTH, DATABASES, HTTP_STUB } from '../lib/stack-catalog.js';
 import { EMBEDDED_MONGO_VERSION } from '../lib/assets.js';
 import { physicalBucketName } from '../lib/buckets.js';
 import { kebabCase, screamingSnake } from '../lib/naming.js';
@@ -570,9 +570,16 @@ function oauth2Yaml(model, profile) {
     lines.push(`          issuer-uri: ${envValue(profile, 'OAUTH2_ISSUER_URI', `http://localhost:8180/realms/${service.name}`)}`);
   } else if (stack.auth === 'cognito') {
     if (profile === 'local') {
-      lines.push('          # cognito-local de prueba del docker-compose; crea el user pool y ajusta su id en el issuer.');
+      lines.push(
+        '          # Emulador del contrato de token de Cognito en el docker-compose. El issuer es',
+        '          # DETERMINISTA porque el issuerId lo elige el diseño (el nombre del servicio):',
+        '          # no hay ningún id de user pool que descubrir después de crearlo.',
+        '          # Fuera de local, aquí va el pool real: https://cognito-idp.<región>.amazonaws.com/<poolId>.'
+      );
     }
-    lines.push(`          issuer-uri: ${envValue(profile, 'OAUTH2_ISSUER_URI', 'http://localhost:9229/local_userpool')}`);
+    lines.push(
+      `          issuer-uri: ${envValue(profile, 'OAUTH2_ISSUER_URI', `http://localhost:${AUTH.cognito.port}/${service.name}`)}`
+    );
   } else {
     if (profile === 'local') {
       lines.push('          # TODO (agente): issuer real del resource server según security.keel.yaml.');

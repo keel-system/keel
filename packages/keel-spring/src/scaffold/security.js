@@ -421,6 +421,18 @@ function renderJwtAuthConverter(model) {
   const meta = providerMeta(model);
   const pkg = subPackage(model, SECURITY_PKG);
 
+  // Cognito emite los scopes prefijados por el resource server
+  // (`catalog/product:read`), no como el `recurso:accion` pelado que declara el
+  // diseño y que esperan los matchers `SCOPE_*`. Sin cortar el prefijo, un token
+  // de máquina correcto no casa con ninguna regla y todo sale 403 — y solo en
+  // producción, porque un emulador más cómodo no lo reproduce. `indexOf` devuelve
+  // -1 sin prefijo, así que la misma línea vale para un scope ya pelado.
+  const scopePrefix = model.stack.auth === 'cognito'
+    ? `
+                // Cognito: <resource-server>/<scope>. Sin prefijo, se queda igual.
+                .map(scope -> scope.substring(scope.indexOf('/') + 1))`
+    : '';
+
   const scopesAndPermissions = `
     private java.util.Collection<GrantedAuthority> extractScopes(Jwt jwt) {
         String scopeClaim = jwt.getClaimAsString("scope");
@@ -428,7 +440,7 @@ function renderJwtAuthConverter(model) {
             return java.util.Collections.emptyList();
         }
         return java.util.List.of(scopeClaim.split(" ")).stream()
-                .filter(s -> !s.isBlank())
+                .filter(s -> !s.isBlank())${scopePrefix}
                 .map(scope -> new SimpleGrantedAuthority("SCOPE_" + scope))
                 .map(GrantedAuthority.class::cast)
                 .toList();
@@ -629,10 +641,58 @@ public class SecurityErrorHandlers implements AuthenticationEntryPoint, AccessDe
 // 403. Validarlo en el JwtDecoder daría 401 y borraría esa distinción.
 function renderAudienceFilter(model) {
   const audience = audienceOf(model, model.security);
-  const body = `/**
- * Exige que el claim aud del JWT incluya la audiencia de este servicio
+  const cognito = model.stack.auth === 'cognito';
+
+  // La MISMA pregunta —«¿este token está emitido para nosotros?»— se responde con
+  // claims distintos según el proveedor, y no es una preferencia: los access token
+  // de `client_credentials` de Cognito NO llevan `aud`. Mirar `aud` ahí devolvería
+  // 403 a todos los clientes máquina en producción, con la agravante de que un
+  // emulador que sí lo emitiera lo dejaría verde en local.
+  //
+  // Lo que Cognito sí lleva es el scope prefijado por el resource server
+  // (`catalog/product:read`), y ese prefijo ES la audiencia: dice a qué API
+  // pertenece el permiso. Un token de usuario, que no trae scopes de máquina,
+  // tampoco pasa — que es justo lo que esta cadena tiene que rechazar.
+  const check = cognito
+    ? `        if (authentication instanceof JwtAuthenticationToken token && !issuedForUs(token.getToken())) {
+            throw new AccessDeniedException("El token no trae scopes de " + audience + ": no está emitido para este servicio");
+        }`
+    : `        if (authentication instanceof JwtAuthenticationToken token
+                && (token.getToken().getAudience() == null || !token.getToken().getAudience().contains(audience))) {
+            throw new AccessDeniedException("El token no está emitido para la audiencia " + audience);
+        }`;
+
+  const helper = cognito
+    ? `
+
+    /**
+     * ¿Trae el token algún scope de ESTE servicio? Cognito emite los custom scopes
+     * como {@code <resource-server>/<scope>}, así que el prefijo es lo que dice para
+     * qué API vale el permiso — el equivalente del {@code aud} que sus tokens de
+     * máquina no llevan.
+     */
+    private boolean issuedForUs(Jwt jwt) {
+        String scopes = jwt.getClaimAsString("scope");
+        if (scopes == null || scopes.isBlank()) {
+            return false;
+        }
+        String prefix = audience + "/";
+        return java.util.Arrays.stream(scopes.split(" ")).anyMatch(scope -> scope.startsWith(prefix));
+    }`
+    : '';
+
+  const doc = cognito
+    ? ` * Exige que el JWT traiga algún scope del resource server de este servicio
+ * (security.audience, por defecto "${audience}"), que es como Cognito expresa la
+ * audiencia: sus access token de client_credentials no llevan claim aud. Un token
+ * emitido para otra API —o uno de usuario— queda autenticado pero no autorizado:
+ * 403, no 401.`
+    : ` * Exige que el claim aud del JWT incluya la audiencia de este servicio
  * (security.audience, por defecto "${audience}"). Un token válido emitido para
- * otro servicio queda autenticado pero no autorizado: 403, no 401.
+ * otro servicio queda autenticado pero no autorizado: 403, no 401.`;
+
+  const body = `/**
+${doc}
  */
 public class AudienceAuthorizationFilter extends OncePerRequestFilter {
 
@@ -646,12 +706,9 @@ public class AudienceAuthorizationFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-        if (authentication instanceof JwtAuthenticationToken token
-                && (token.getToken().getAudience() == null || !token.getToken().getAudience().contains(audience))) {
-            throw new AccessDeniedException("El token no está emitido para la audiencia " + audience);
-        }
+${check}
         chain.doFilter(request, response);
-    }
+    }${helper}
 }`;
 
   return {
@@ -668,7 +725,8 @@ public class AudienceAuthorizationFilter extends OncePerRequestFilter {
         'org.springframework.security.core.Authentication',
         'org.springframework.security.core.context.SecurityContextHolder',
         'org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken',
-        'org.springframework.web.filter.OncePerRequestFilter'
+        'org.springframework.web.filter.OncePerRequestFilter',
+        ...(cognito ? ['org.springframework.security.oauth2.jwt.Jwt'] : [])
       ],
       body
     )

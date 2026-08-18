@@ -68,8 +68,12 @@ raíz de un proyecto generado. Todo lo que hagas ocurre dentro de esa raíz.
    - Si tuvieras que desviarte de esos valores por una limitación del entorno, actualiza
      `infra/test-credentials.env` —que es el contrato— y dilo en `authHint`. Lo que no vale
      es dejar el proveedor con nombres o secretos distintos de los que el archivo declara.
-   - Con otro proveedor (cognito-local), el script no se genera: créalo siguiendo la skill
-     del proveedor y **respetando** los valores de `infra/test-credentials.env`.
+   - Con `auth: cognito` **tampoco hay script que ejecutar**, y no es un hueco: el
+     emulador lee su configuración (`infra/cognito/mock-oauth2-config.json`, que también
+     genera build desde el diseño) al arrancar. Lo que verificas ahí es el TOKEN: pide uno,
+     decodifícalo y comprueba `cognito:groups`, el `scope` prefijado por el resource server
+     y que los de máquina NO traen `aud` — las tres cosas que hacen que lo que pase en local
+     prediga lo que pasará contra el pool real. Detalle en la skill `keel-spring-cognito`.
 8. **Topología de mensajería**: igual que la identidad, **ya está escrita**. Si el stack
    trae `broker: snssqs`, `keel-spring build` genera `infra/init-messaging.sh` (topics,
    colas, DLQ con el `maxReceiveCount` del diseño y las suscripciones SNS→SQS con *raw

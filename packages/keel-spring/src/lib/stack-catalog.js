@@ -512,21 +512,41 @@ export const AUTH = {
       }
     })
   },
+  // Amazon Cognito. En LOCAL no se levanta Cognito ni un emulador de su API: se
+  // levanta un servidor OAuth2 que emite tokens con la FORMA de los de Cognito.
+  //
+  // El servicio generado es un resource server puro —nunca llama a la API de
+  // administración de Cognito—, así que lo único que consume es el token: JWKS,
+  // `iss`, `exp` y los claims (`cognito:groups`, `scope`, `client_id`). Emular esa
+  // superficie cubre el diseño entero; emular la API de AWS, no: cognito-local (y
+  // moto) solo implementan `USER_PASSWORD_AUTH`, así que con ellos la mitad M2M del
+  // diseño se queda sin poder ejercitarse, y el pool id lo generan ellos, lo que
+  // además deja el issuer sin ser determinista. LocalStack sí lo cubre entero, pero
+  // Cognito está en sus planes de pago.
+  //
+  // Lo que esto NO prueba, y por eso el label lo dice: el mock no valida contraseñas
+  // (autenticar no es responsabilidad del servicio generado) ni emula el alta de
+  // pools, grupos y usuarios (eso se valida contra Cognito real, ver la skill).
   cognito: {
     id: 'cognito',
-    label: 'Amazon Cognito (cognito-local de prueba)',
+    label: 'Amazon Cognito (contrato de token emulado en local con mock-oauth2-server)',
     gradleDependencies: [],
-    image: 'jagregory/cognito-local:5.3.0',
+    image: 'ghcr.io/navikt/mock-oauth2-server:6.0.1',
     port: 9229,
-    serviceKey: 'cognito',
+    serviceKey: 'cognito-mock',
     cliTool: 'curl',
     cliVia: 'devtools',
-    cliValidateCmd: 'curl -sf http://cognito:9229/health',
+    cliValidateCmd: 'curl -sf http://cognito-mock:8080/health',
     alpinePackages: [],
+    // El issuerId es el primer segmento de la ruta, y de él cuelgan `/token`,
+    // `/jwks` y el descubrimiento. El config lo genera build desde el diseño
+    // (auth-provisioning.js), igual que el realm de Keycloak.
     composeServices: () => ({
-      cognito: {
-        image: 'jagregory/cognito-local:5.3.0',
-        ports: ['9229:9229']
+      'cognito-mock': {
+        image: 'ghcr.io/navikt/mock-oauth2-server:6.0.1',
+        environment: { JSON_CONFIG_PATH: '/cognito/mock-oauth2-config.json' },
+        volumes: ['./cognito/mock-oauth2-config.json:/cognito/mock-oauth2-config.json:ro'],
+        ports: ['9229:8080']
       }
     })
   },

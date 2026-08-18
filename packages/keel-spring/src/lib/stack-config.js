@@ -83,7 +83,7 @@ export async function askStackConfig(manifest, layers, { defaults = false } = {}
   }
   if (designUsesOidc(layers)) {
     stack.auth = await select(
-      '¿Añadir Keycloak al docker-compose como servidor de identidad de prueba?',
+      '¿Qué servidor de identidad de prueba se añade al docker-compose?',
       Object.values(AUTH),
       STACK_DEFAULTS.auth,
       { defaults }

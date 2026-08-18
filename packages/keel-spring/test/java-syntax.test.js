@@ -187,6 +187,11 @@ const MATRIX = [
   // son los de la rama documental, que no comparten código con los de la relacional.
   ['asset-vault', { broker: 'kafka' }],
   ['asset-vault', { broker: 'snssqs' }],
+  // Y con Cognito, que es la ÚNICA combinación que renderiza las dos variantes propias
+  // de ese proveedor: el corte del prefijo de scope en el converter y el filtro de
+  // audiencia que mira el scope en vez de `aud`. Sin esta fila, ese Java no lo tokeniza
+  // nadie — y es Java emitido por plantilla, que es justo donde se cuela un paréntesis.
+  ['asset-vault', { broker: 'kafka', auth: 'cognito' }],
   ['product-catalog', {}]
 ];
 
@@ -223,7 +228,7 @@ test('un text block no desincroniza el análisis', () => {
 });
 
 for (const [fixture, stack] of MATRIX) {
-  const label = `${fixture}${stack.broker ? ` (${stack.broker})` : ''}`;
+  const label = `${fixture}${stack.broker ? ` (${stack.broker})` : ''}${stack.auth ? ` + ${stack.auth}` : ''}`;
 
   test(`${label}: todo .java generado está estructuralmente balanceado`, () => {
     const problems = [];

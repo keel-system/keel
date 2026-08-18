@@ -137,7 +137,7 @@ Las credenciales del perfil `local` son deliberadamente de juguete y coinciden c
 
 ### Validación de infraestructura (contenedor `devtools`)
 
-Cuando el compose levanta contenedores sondeables, el scaffolding añade el servicio `devtools`: una caja de herramientas Alpine (`infra/docker/Dockerfile`) que instala **solo** las CLIs del stack elegido (`psql`/`mysql`/`mariadb`/`sqlcmd`, `kcat`, `redis-cli`, `mc`, `aws`, más `curl`/`jq`). Queda viva con `sleep infinity` y sin puertos: es un objetivo interno de `docker exec`, alcanza a los servicios de respaldo por su nombre de red (`db`, `kafka`/`localstack`, `redis`/`valkey`, `minio`, `keycloak`/`cognito`).
+Cuando el compose levanta contenedores sondeables, el scaffolding añade el servicio `devtools`: una caja de herramientas Alpine (`infra/docker/Dockerfile`) que instala **solo** las CLIs del stack elegido (`psql`/`mysql`/`mariadb`/`sqlcmd`, `kcat`, `redis-cli`, `mc`, `aws`, más `curl`/`jq`). Queda viva con `sleep infinity` y sin puertos: es un objetivo interno de `docker exec`, alcanza a los servicios de respaldo por su nombre de red (`db`, `kafka`/`localstack`, `redis`/`valkey`, `minio`, `keycloak`/`cognito-mock`).
 
 El script generado `infra/validate-infra.sh` corre un check por tecnología (`docker exec <servicio>-devtools <cliValidateCmd>`, o dentro del propio contenedor para Oracle) y sale con código `!= 0` si alguno falla. Lo usa el agente `keel-spring-infra` de la orquestación, tras `bash infra/up.sh` (que resuelve runtime y frontend de compose, respetando `CONTAINER_RUNTIME`) y antes de que se ejerciten los escenarios, para confirmar que la infraestructura responde. Detalle por tecnología en `conventions/infra-validation.md`.
 
