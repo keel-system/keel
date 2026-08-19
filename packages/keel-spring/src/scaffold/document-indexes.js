@@ -17,7 +17,7 @@
 
 import { snakeCase } from '../lib/naming.js';
 import { javaFile, javaPath, subPackage } from './render.js';
-import { persistedMembers, uniqueFields } from './persistence-members.js';
+import { persistedMembers, uniqueFields, indexName } from './persistence-members.js';
 import { usesOutbox } from './outbox.js';
 import { usesIdempotency } from './idempotency.js';
 import { usesHttpIdempotency } from './http-idempotency.js';
@@ -52,6 +52,11 @@ function warnAboutChildIndexes(model) {
   }
 }
 
+/** Valor de la condición como literal Java (una cadena va entrecomillada; un número o un booleano, no). */
+function javaLiteral(value) {
+  return typeof value === 'string' ? JSON.stringify(value) : String(value);
+}
+
 /**
  * Índices declarados por una entidad persistida, ya resueltos a rutas del documento.
  * Devuelve `[{ name, unique, paths, source }]` en el mismo orden en que build los
@@ -78,11 +83,20 @@ export function indexSpecs(model, entity, warnings) {
     });
   }
   for (const index of entity.indexes ?? []) {
-    const paths = index.flatMap((field) => documentPathsFor(model, entity, members, field, warnings));
     specs.push({
-      name: `idx_${entity.collectionName}_${index.map((field) => snakeCase(field.split('.').join('_'))).join('_')}`,
-      unique: false,
-      paths,
+      name: indexName(entity, index),
+      unique: index.unique,
+      paths: index.fields.flatMap((field) => documentPathsFor(model, entity, members, field, warnings)),
+      // La condición del diseño se traduce a partialFilterExpression, que es como
+      // MongoDB expresa una unicidad condicionada al estado. La ruta del campo se
+      // resuelve igual que la de los demás: en el documental un value object sigue
+      // siendo un subdocumento, no columnas aplanadas.
+      partialFilter: index.when
+        ? {
+            path: documentPathsFor(model, entity, members, index.when.field, warnings)[0],
+            equals: index.when.equals
+          }
+        : null,
       source: 'indexes'
     });
   }
@@ -196,12 +210,25 @@ function renderIndexConfig(model) {
     ...infrastructureIndexes(model)
   ].filter((entry) => entry.specs.length > 0);
 
+  // Solo si algún índice lleva condición: importar PartialIndexFilter y Criteria
+  // siempre dejaría dos imports sin usar en la mayoría de los proyectos.
+  if (collections.some(({ specs }) => specs.some((spec) => spec.partialFilter))) {
+    imports.add('org.springframework.data.mongodb.core.index.PartialIndexFilter');
+    imports.add('org.springframework.data.mongodb.core.query.Criteria');
+  }
+
   for (const { collection, field: indexField, specs } of collections) {
     const statements = specs.map((spec) => {
       const keys = spec.paths.map((path) => `\n                            .on("${path}", Sort.Direction.ASC)`).join('');
       const unique = spec.unique ? '\n                            .unique()' : '';
+      // La unicidad condicionada: el índice existe solo para los documentos que
+      // cumplen el filtro. Sin él, `.unique()` sobre esas claves prohibiría también
+      // las versiones históricas, que es el invariante contrario al declarado.
+      const partial = spec.partialFilter
+        ? `\n                            .partial(PartialIndexFilter.of(Criteria.where("${spec.partialFilter.path}").is(${javaLiteral(spec.partialFilter.equals)})))`
+        : '';
       return `            ${indexField}.createIndex(
-                    new Index()${keys}${unique}
+                    new Index()${keys}${unique}${partial}
                             .named("${spec.name}"));`;
     });
     blocks.push(

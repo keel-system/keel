@@ -874,6 +874,59 @@ Reglas:
 - La sonda `SMOKE-6` cubre el ciclo entero (programar, llamar, contar, resetear). Si está roja, el
   problema es del arnés o del compose: no se ejecuta la suite.
 
+## El buzón de correo (capa `mail`)
+
+Un servicio que manda correo tampoco tiene a quién mandárselo en `infra/`: en su lugar hay un
+**Mailpit** en `http://localhost:8025`, y `spring.mail.*` apunta a su SMTP (`localhost:1025`) en el
+perfil `local`. Es un servidor SMTP real que acepta la conexión y el mensaje y **no entrega nada a
+nadie**: se lo queda y lo sirve por una API REST.
+
+Vale la misma justificación que el proveedor de prueba: es un proceso aparte hablando SMTP por el
+mismo socket que hablaría el proveedor contratado, no un doble dentro de la JVM. Y da algo que un
+doble no daría: ningún correo de pruebas puede llegar a una dirección real.
+
+**Lo que separa una prueba de regresión de «lo he mirado y se ve bien» es esa API.** Sin ella, la
+verificación del correo es siempre manual.
+
+| Helper | Para qué |
+|---|---|
+| `awaitMailTo(dirección, n)` | **Por aquí empieza todo Then sobre correo.** Espera hasta 15 s a que haya `n` correos para esa dirección y devuelve sus ids, el más reciente primero |
+| `lastMailTo(dirección)` | El más reciente, ya resuelto a su detalle completo (espera igual que el anterior) |
+| `mailSubject(mensaje)` | El asunto tal como lo lee quien lo recibe: ya interpolado y ya saneado |
+| `mailHtml(mensaje)` / `mailText(mensaje)` | Las dos partes del cuerpo. Con `delivery.parts: [html, text]` hay que afirmar sobre las dos |
+| `mailFrom(mensaje)` | El remitente desde el que salió |
+| `mailCount(dirección)` | Cuántos hay **ahora**, sin esperar. Para el segundo correo que NO debe existir |
+| `assertNoMailTo(dirección)` | Que no salió ninguno. El Then de los rechazos |
+
+Reglas, y las tres primeras son la misma idea:
+
+- **El `Then` afirma sobre el buzón, no sobre el status.** La operación responde **aceptando el
+  encargo** (un `202`, o cualquier salida que no prometa que el correo ya salió), y eso es
+  deliberado: es lo que impide que la disponibilidad del proveedor SMTP entre en la transacción de
+  quien llama. Un escenario cuyo `Then` menciona el correo y solo comprueba el `202` no cubre nada.
+- **La espera no es opcional.** La entrega ocurre **después** de la respuesta. Una lectura seca
+  justo tras el 2xx es una carrera: el escenario fallaría unas veces sí y otras no, que es peor que
+  fallar siempre. Por eso `awaitMailTo` espera y `mailCount` no.
+- **`mailCount` nunca es la primera lectura.** Es para afirmar que no hay un *segundo* correo, y
+  solo vale después de haber esperado al primero con `awaitMailTo`. Contar sin haber esperado nada
+  mide el estado de antes de que ocurriera lo que se quería medir, y sale verde siempre.
+- **Un rechazo se afirma con `assertNoMailTo`, no con la ausencia de aserción.** Es lo único que
+  distingue «el rechazo llegó antes del envío» de «el rechazo llegó después, y el correo ya salió».
+  Cada `error` declarado que ocurra antes del envío necesita su escenario.
+- **La repetición se prueba de verdad.** Un correo que sale no lo deshace ninguna transacción, y el
+  destinatario es una persona real: el escenario que repite la operación con su guarda
+  (`idempotency` o la transición declarada) y comprueba `mailCount == 1` es el que sostiene esa
+  garantía. Sin él, la guarda está declarada y nadie sabe si se aplica.
+- `resetState()` vacía el buzón entre clases. Un correo del flujo anterior haría que el primer
+  `awaitMailTo` devolviera el mensaje equivocado — el mismo fallo que la purga de los canales evita
+  en el broker.
+
+Lo que **no** se puede probar aquí, y por eso no se intenta: Mailpit no rebota nada (una lista de
+supresión alimentada por el webhook del proveedor se ejercita invocando el endpoint con un payload
+de ejemplo, nunca provocando un rebote), no dice nada sobre entregabilidad (SPF, DKIM, DMARC y
+reputación son trabajo de DNS y de proveedor) y no aplica los límites del proveedor: lo acepta todo.
+
+
 ## Lo que se declara en vez de simularse
 
 Un escenario que el diseño no permite ejercitar de forma determinista no se traduce a un

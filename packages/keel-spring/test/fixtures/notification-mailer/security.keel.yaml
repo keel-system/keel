@@ -1,0 +1,26 @@
+authentication:
+  protocol: oidc
+  serviceAuth:
+    protocol: client-credentials
+    description: Cada sistema consumidor es un cliente máquina; la aplicación se deriva del token, nunca del cuerpo.
+
+permissions:
+  notification:send: { description: Pedir el envío de un correo. }
+  notification:read: { description: Consultar el estado de un envío. }
+  template:write: { description: Registrar o modificar una plantilla. }
+  template:publish: { description: Poner una versión de plantilla delante de clientes reales. }
+
+serviceClients:
+  orders-service:
+    description: Pedidos de la tienda; solo pide envíos.
+    scopes: [notification:send, notification:read]
+  orders-service-ci:
+    description: Pipeline de despliegue de pedidos; solo escribe plantillas.
+    scopes: [template:write, template:publish]
+
+access:
+  default: { level: service, scopes: [notification:send] }
+  rules:
+    registerTemplate: { level: service, scopes: [template:write] }
+    publishTemplate: { level: service, scopes: [template:publish] }
+    getNotification: { level: service, scopes: [notification:read] }

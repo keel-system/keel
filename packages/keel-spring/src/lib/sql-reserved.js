@@ -55,3 +55,23 @@ export function isReserved(name) {
 export function quoteIdentifier(name) {
   return isReserved(name) ? `\`${name}\`` : name;
 }
+
+// Carácter de quoting REAL de cada dialecto. El backtick de arriba solo vale
+// dentro de una anotación de Hibernate, que lo traduce; en SQL escrito a mano
+// —el appendix de índices condicionados— llega tal cual al motor y PostgreSQL
+// lo rechaza. Aquí no hay quien traduzca, así que se cita al dialecto.
+const QUOTE_CHARS = {
+  postgresql: ['"', '"'],
+  oracle: ['"', '"'],
+  h2: ['"', '"'],
+  mysql: ['`', '`'],
+  mariadb: ['`', '`'],
+  sqlserver: ['[', ']']
+};
+
+/** Identificador citado para SQL literal del dialecto elegido. */
+export function quoteIdentifierFor(dialect, name) {
+  if (!isReserved(name)) return name;
+  const [open, close] = QUOTE_CHARS[dialect] ?? ['"', '"'];
+  return `${open}${name}${close}`;
+}

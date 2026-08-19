@@ -1,0 +1,23 @@
+# La silueta que ninguna otra fixture tiene: un servicio cuya SALIDA es correo.
+description: Correo transaccional que este servicio emite en nombre de las aplicaciones registradas.
+
+delivery:
+  transport: smtp
+  parts: [html, text]
+
+sentBy:
+  - requestNotification
+  - acceptNotificationRequest
+
+sender:
+  source: data
+  fallback: no-reply@ejemplo.com
+  description: Cada aplicación registrada tiene su propio remitente verificado ante el proveedor.
+
+replyTo:
+  source: fixed
+  address: soporte@ejemplo.com
+
+templating:
+  source: data
+  declaredVariables: true

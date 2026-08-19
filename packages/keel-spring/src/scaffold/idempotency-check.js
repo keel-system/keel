@@ -56,7 +56,8 @@ function checksOf(model) {
     ...commandChecks(model),
     ...compensationChecks(model),
     ...reconciliationChecks(model),
-    ...outboxChecks(model)
+    ...outboxChecks(model),
+    ...mailChecks(model)
   ];
 }
 
@@ -401,6 +402,32 @@ function returnClientOf(model, operation) {
 // 4. Reconciliación. La pata del silencio, y la única que ningún escenario FL-* puede
 //    ejercitar: el arnés es caja negra y un cron no se alcanza desde fuera. Sin esto no
 //    la mira nadie.
+// La salida por correo. Pertenece a esta matriz por la misma razón que las demás
+// familias: build genera el mecanismo entero —el puerto, el adaptador, el
+// renderizador, y lo INYECTA en el handler de cada operación de `mail.sentBy`— y el
+// USO lo escribe el agente. Ese tramo no está garantizado por construcción.
+//
+// Y es especialmente barato de perder. Una operación que no manda el correo compila,
+// responde su 2xx y pasa todos sus escenarios menos el que mire el buzón: si el
+// diseño no llegó a escribir ese escenario, no falla nada en ninguna parte. Aquí sí.
+function mailChecks(model) {
+  const checks = [];
+  const senders = new Set(model.mail?.sentBy ?? []);
+  for (const operation of allOperations(model)) {
+    if (!senders.has(operation.name)) continue;
+    checks.push({
+      group: 'mailDelivery',
+      subject: operation.name,
+      class: operation.handlerClass,
+      // El puerto está inyectado: si no aparece en el cuerpo, el correo no sale.
+      require: ['mailSender\.send'],
+      forbid: ['TODO|UnsupportedOperationException'],
+      why: `el diseño le atribuye la salida por correo (mail.sentBy): tiene que componer el MailMessage y llamar a mailSender.send(...)`
+    });
+  }
+  return checks;
+}
+
 function reconciliationChecks(model) {
   const checks = [];
   const schedulers = new Set();

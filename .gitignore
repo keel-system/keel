@@ -2,3 +2,4 @@ node_modules/
 *.log
 # Matriz de la última corrida de `npm run broker-check` (artefacto local).
 broker-check.json
+mail-check.json

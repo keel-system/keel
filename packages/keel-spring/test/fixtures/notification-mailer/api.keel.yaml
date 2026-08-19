@@ -1,0 +1,16 @@
+style: rest
+basePath: /v1
+auto: false
+# Todos los consumidores son sistemas con credencial máquina: la aplicación se
+# deriva del token, y por eso ningún endpoint es de audiencia humana.
+defaultAudience: services
+endpoints:
+  registerTemplate: { method: PUT, path: "/templates/{templateKey}/{locale}" }
+  publishTemplate: { method: POST, path: "/templates/{templateId}/publish" }
+  requestNotification:
+    method: POST
+    path: "/notifications"
+    # Acepta y rastrea: la disponibilidad del proveedor SMTP no entra en la
+    # transacción de quien llama. Un proveedor lento no puede hacer que fallen los pedidos.
+    successStatus: 202
+  getNotification: { method: GET, path: "/notifications/{notificationId}" }

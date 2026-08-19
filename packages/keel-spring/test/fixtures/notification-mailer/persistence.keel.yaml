@@ -1,0 +1,32 @@
+default:
+  model: relational
+
+entities:
+  Application:
+    persisted: true
+    naturalKey: [key]
+
+  Template:
+    persisted: true
+    naturalKey: [application, key, locale, version]
+    indexes:
+      # «Como máximo una activa» NO es una unicidad de columnas: es una unicidad
+      # condicionada al estado. Sin la condición habría que elegir entre no poder
+      # tener nunca dos versiones o no garantizar nada.
+      - fields: [application, key, locale]
+        unique: true
+        when: { field: status, equals: active }
+        description: Como máximo una versión activa por aplicación, clave e idioma.
+
+  TemplateVariable:
+    persisted: true
+
+  Notification:
+    persisted: true
+    naturalKey: [applicationKey, dedupeKey]
+    indexes:
+      - [recipient, requestedAt]
+
+consistency:
+  transactionalBoundary: per-operation
+  optimisticLocking: all

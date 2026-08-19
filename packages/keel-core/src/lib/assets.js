@@ -14,7 +14,7 @@ export const templatesDir = path.join(coreDir, 'templates', 'service');
 
 // Capas del diseño Keel. Cada capa vive en <capa>.keel.yaml y se valida con <capa>.schema.json.
 // dependencies va tras messaging y http-clients: es una capa de síntesis y solo referencia hacia atrás.
-export const LAYERS = ['domain', 'use-cases', 'api', 'security', 'messaging', 'http-clients', 'dependencies', 'persistence', 'storage'];
+export const LAYERS = ['domain', 'use-cases', 'api', 'security', 'messaging', 'http-clients', 'dependencies', 'persistence', 'storage', 'mail'];
 export const REQUIRED_LAYERS = ['domain', 'use-cases'];
 
 export function schemaPathFor(name) {

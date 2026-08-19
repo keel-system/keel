@@ -110,6 +110,26 @@ export function uniqueFields(entity) {
   );
 }
 
+/**
+ * Nombre del índice, y es un CONTRATO compartido por cuatro sitios: la anotación
+ * del espejo relacional, el `MongoIndexConfig` del documental, el appendix de SQL
+ * de los índices parciales y el mapa del ApiExceptionHandler, que traduce una
+ * violación POR NOMBRE al error declarado del diseño. Compuesto en cada sitio por
+ * su cuenta, un cambio de patrón dejaría al handler buscando un nombre que ya no
+ * existe y el error del diseño se degradaría a un 409 genérico.
+ *
+ * El prefijo lo decide la unicidad, no la forma: `uk_` es el que el handler busca.
+ */
+export function indexName(entity, index) {
+  const suffix = index.fields.map((field) => snakeCase(field.split('.').join('_'))).join('_');
+  return `${index.unique ? 'uk' : 'idx'}_${entity.tableName ?? entity.collectionName}_${suffix}`;
+}
+
+/** Índices únicos condicionados: los que ningún motor expresa con una constraint de columnas. */
+export function partialUniqueIndexes(entity) {
+  return (entity.indexes ?? []).filter((index) => index.unique && index.when);
+}
+
 // Nombre de constraint → entidad y campo que la originan. Lo consume el
 // ApiExceptionHandler para traducir una violación de integridad al error
 // declarado del diseño en vez de a un 409 genérico.
@@ -133,6 +153,19 @@ export function uniqueConstraints(model) {
         constraint: `uk_${entity.tableName}_${snakeCase(field.name)}`,
         entity: entity.name,
         fields: [field.name]
+      });
+    }
+    // Los índices únicos del diseño entran por el mismo sitio, condicionados o no:
+    // su violación llega al handler igual que la de una constraint de tabla, y sin
+    // esta entrada el error declarado se degradaría a un 409 genérico — que es
+    // justo el caso que más importa, porque un índice parcial existe para sostener
+    // un invariante que el diseño nombró.
+    for (const index of (entity.indexes ?? []).filter((i) => i.unique)) {
+      entries.push({
+        constraint: indexName(entity, index),
+        entity: entity.name,
+        fields: index.fields,
+        when: index.when ?? null
       });
     }
   }

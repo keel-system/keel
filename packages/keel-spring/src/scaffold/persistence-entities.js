@@ -15,7 +15,9 @@ import {
   backReferenceTo,
   uniqueFields,
   uniqueConstraints,
-  usesAuditableEntity
+  usesAuditableEntity,
+  indexName,
+  partialUniqueIndexes
 } from './persistence-members.js';
 
 export const JPA_PKG = 'infrastructure.persistence.entities';
@@ -23,7 +25,7 @@ export const JPA_PKG = 'infrastructure.persistence.entities';
 // La taxonomía de miembros y las utilidades de clave/índice viven en
 // persistence-members.js, compartidas con la rama documental. Se reexportan aquí
 // porque este módulo era su origen y sigue siendo por donde entran sus consumidores.
-export { orderingFieldOf, backReferenceTo, uniqueFields, uniqueConstraints, usesAuditableEntity };
+export { orderingFieldOf, backReferenceTo, uniqueFields, uniqueConstraints, usesAuditableEntity, indexName, partialUniqueIndexes };
 export const jpaMembers = persistedMembers;
 
 export function generate(model) {
@@ -346,7 +348,7 @@ ${accessors.join('\n\n')}
  * de si la relación cruza frontera de agregado (externalRef vs. relationOne), y
  * esa es una decisión del generador que el diseño no tiene por qué conocer.
  */
-function columnsFor(model, entity, members, logicalName, warnings) {
+export function columnsFor(model, entity, members, logicalName, warnings) {
   const [head, ...rest] = String(logicalName).split('.');
   const member = members.find(
     (m) => m.name === head || m.relation?.name === head || (m.relation && `${m.relation.name}Id` === head)
@@ -403,18 +405,24 @@ function renderTableAnnotation(model, entity, members, imports) {
         : `uniqueConstraints = {\n        ${uniqueConstraints.join(',\n        ')}\n}`
     );
   }
-  if (entity.indexes.length > 0) {
+  // Los índices CONDICIONADOS no salen por aquí: `@Index` no tiene predicado y
+  // ningún JPA lo tiene, así que anotarlos crearía un índice único sobre todas las
+  // filas — que es exactamente lo contrario del invariante («como máximo una
+  // activa» pasaría a ser «como máximo una, activa o no»). Van al appendix de SQL
+  // que escribe migrations.js, que es el único sitio donde el predicado existe.
+  const annotatable = entity.indexes.filter((index) => !index.when);
+  if (annotatable.length > 0) {
     imports.add('jakarta.persistence.Index');
-    const indexes = entity.indexes
-      .map((fields) => {
+    const indexes = annotatable
+      .map((index) => {
         // El nombre del índice conserva el nombre lógico del diseño (es su
         // identidad en persistence.keel.yaml); la columnList usa la columna real.
-        const suffix = fields.map((f) => snakeCase(f.replace('.', '_'))).join('_');
-        const columns = fields
+        const columns = index.fields
           .flatMap((f) => columnsFor(model, entity, members, f, model.warnings))
           .map((c) => column(c))
           .join(', ');
-        return `@Index(name = "idx_${entity.tableName}_${suffix}", columnList = "${columns}")`;
+        const unique = index.unique ? ', unique = true' : '';
+        return `@Index(name = "${indexName(entity, index)}", columnList = "${columns}"${unique})`;
       })
       .join(', ');
     attrs.push(`indexes = { ${indexes} }`);

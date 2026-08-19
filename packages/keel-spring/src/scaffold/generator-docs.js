@@ -76,6 +76,9 @@ export function stackSkills(model) {
   }
   if (layersPresent.messaging && stack.broker) skills.push(`keel-spring-${stack.broker}`);
   if (layersPresent.storage && stack.storage) skills.push('keel-spring-s3');
+  // Gateada por capa, como la de clientes HTTP: el correo no es una elección de
+  // stack (no hay proveedor que elegir en build; se decide al desplegar).
+  if (layersPresent.mail) skills.push('keel-spring-mail');
   if (layersPresent.httpClients) skills.push('keel-spring-httpclient');
   if (stack.cache) skills.push('keel-spring-redis');
   if (stack.auth && stack.auth !== 'none') skills.push(`keel-spring-${stack.auth}`);
@@ -202,7 +205,7 @@ function qualityTitleSuffix(model) {
  */
 function qualityIdempotencyGate(model) {
   if (!usesIdempotencyCheck(model)) return '';
-  return ' Ese pase incluye `bash infra/check-idempotency.sh`, el gate determinista de la cadena de idempotencia y compensación (`dedupe`, `payloadContract`, `commandIdempotency`, `compensation`, `reconciliation`, `outboxDelivery`): build genera los mecanismos y el agente de código escribe el uso, que es el único tramo que no está garantizado por construcción. Dos de esas familias —**reconciliación** y **entrega del outbox**— no tienen ningún escenario `FL-*` detrás (un cron no se alcanza desde fuera, y el fallback del dispatcher no lanza), así que este es su único gate: si alguna sale `KO`, relánzalo con sus hallazgos exactos.';
+  return ' Ese pase incluye `bash infra/check-idempotency.sh`, el gate determinista de la cadena de idempotencia y compensación (`dedupe`, `payloadContract`, `commandIdempotency`, `compensation`, `reconciliation`, `outboxDelivery`, `mailDelivery`): build genera los mecanismos y el agente de código escribe el uso, que es el único tramo que no está garantizado por construcción. Dos de esas familias —**reconciliación** y **entrega del outbox**— no tienen ningún escenario `FL-*` detrás (un cron no se alcanza desde fuera, y el fallback del dispatcher no lanza), así que este es su único gate: si alguna sale `KO`, relánzalo con sus hallazgos exactos.';
 }
 
 function qualitySchemaGate(model) {

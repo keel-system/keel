@@ -60,6 +60,20 @@ Cómo se escriben los value objects monetarios y sus operaciones: `conventions/d
 - **El código no crea ni altera topología que la plataforma posee.** Topics de Kafka, buckets de object storage, esquemas de base de datos: en local los levanta `infra/` y en los entornos reales los aprovisiona el equipo de plataforma con su IaC. Declararlos desde la aplicación exige permisos administrativos sobre el cluster que un servicio no debe tener, y lo que se declara con un valor distinto del vivo **se altera al arrancar**, sin que nadie lo haya pedido y a veces sin vuelta atrás.
 - No es una prohibición de declarar **lo propio y reversible**: RabbitMQ declara sus exchanges y colas desde la aplicación porque esas declaraciones son idempotentes y no destructivas. La línea está en si la declaración puede **modificar** un recurso existente y compartido; ahí el código no entra.
 
+## Contenido de origen externo
+
+Aplica cuando el diseño declara la capa `mail` con `templating.source: data`, y a
+cualquier otro caso en que una **plantilla que se renderiza la escribe alguien de
+fuera del equipo** (por una API, por un back-office).
+
+- **El motor de plantillas no evalúa expresiones arbitrarias.** Nada de Thymeleaf con SpEL ni equivalentes: si quien registra la plantilla puede invocar métodos, tiene ejecución remota de código en el servidor. Se usa un motor sin lógica —Handlebars o Mustache—, sin helpers que alcancen la JVM y sin resolvers de fichero.
+- **Las variables se escapan por defecto.** Un dato con `<script>` se escribe como texto. El marcado va en la plantilla, nunca dentro de una variable.
+- **Ninguna variable interpolada llega a una cabecera sin sanear.** Un `` o un `
+` dentro del asunto de un correo cierra la cabecera `Subject:` y abre otra: es cómo se inyecta un `Bcc:` que nadie puso. El saneado va donde ningún camino pueda saltárselo (el constructor del value object), no en el adaptador que hoy lo envía.
+
+Las tres son invisibles: quitarlas no rompe ninguna prueba y el correo sigue
+saliendo. Por eso son reglas y no recomendaciones.
+
 ## Ante ambigüedad
 
 Orden de autoridad: **diseño > conventions > criterio del agente** (documentado en el README del proyecto generado). Nunca se inventa comportamiento no declarado en los artefactos para tapar un hueco.

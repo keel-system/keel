@@ -26,7 +26,8 @@ src/main/java/<base>/
 │   ├── errors/          # DomainException + subclases por status + <PascalCode>Error por code
 │   ├── repository/      # PUERTOS: <Entidad>Repository (interfaces)
 │   ├── clients/         # (solo con capa http-clients) PUERTOS <Cliente>Client + records <Llamada>Result
-│   └── storage/         # (solo con capa storage) PUERTO FileStorage
+│   ├── storage/         # (solo con capa storage) PUERTO FileStorage
+│   └── mail/            # (solo con capa mail) MailMessage y sus excepciones
 └── infrastructure/      # adaptadores — habla con el mundo exterior
     ├── configurations/usecase/  # UseCaseMediator (frontera transaccional) + Container + AutoRegister
     ├── scheduling/      # <X>Scheduler (@Scheduled), despacha vía mediator (el barrido, sin transacción)
@@ -38,6 +39,7 @@ src/main/java/<base>/
     │   ├── entities/    # XxxJpa (@Entity; VOs aplanados a columnas con prefijo) + AuditableEntity (persistence.audit: all)
     │   └── repositories/ # XxxJpaRepository (Spring Data) + XxxRepositoryImpl (adaptador toDomain/toJpa)
     ├── storage/         # (solo con capa storage) adaptador FileStorage (S3/MinIO)
+    ├── mail/            # (solo con capa mail) adaptador SMTP y renderizador — YA GENERADOS
     ├── http/            # (solo con capa http-clients) adaptadores RestClient + resilience4j + auth saliente + DTOs wire + mapper ACL
     ├── configurations/security/ # (solo con capa security) SecurityFilterChain + JwtAuthConverter
     └── rest/
@@ -55,6 +57,7 @@ src/main/java/<base>/
   - `persistence`: el único lugar donde existe el mapeo domain↔JPA (`toDomain`/`toJpa` explícitos en `XxxRepositoryImpl`); ni los handlers ni los controllers ven una clase `Jpa`.
   - `messaging`: el `<Servicio>DomainEventBridge` traduce cada evento de dominio a su `<Evento>IntegrationEvent` y lo entrega según la `reliability` del diseño (fila de `outbox` en la misma transacción, o publicación tras el commit). Lo único acoplado al broker es el envío —`OutboxDispatcher` o `<Evento>Publisher`— y los listeners: los escribe el agente siguiendo la skill `keel-spring-<broker>`.
   - `storage`: adaptador del puerto `FileStorage` (S3/MinIO) — lo escribe el agente siguiendo `keel-spring-s3`.
+  - `mail`: adaptador SMTP del puerto `MailSender` y el renderizador de plantillas — **los genera build enteros**, no el agente. Es la única excepción al reparto de esta lista, y está razonada en la constitución (§ Contenido de origen externo): lo que llevan dentro son dos defensas cuya ausencia no rompe ninguna prueba.
   - `http`: adaptadores `<Cliente>HttpAdapter` de los puertos `domain/clients`, con los DTOs wire del contrato del tercero y el mapper de **anticorrupción** `<Cliente>Mapper` (wire ↔ dominio): si el sistema externo cambia su contrato, el cambio se absorbe aquí, nunca en dominio ni application.
   - `rest`: controllers que **solo traducen** (construyen/fusionan el mensaje desde los parámetros HTTP, despachan vía mediator) y `ApiExceptionHandler` que traduce la jerarquía de dominio a `ErrorResponse`. Cero lógica de negocio.
   - `configurations/security`: `SecurityFilterChain` y conversión de claims a authorities, derivado enteramente de `security.keel.yaml`.
@@ -86,7 +89,7 @@ Lo que sale al broker no es el evento de dominio ni el payload a secas: es la **
 | `metadata.eventType` | `String` | `EventMetadata.now("<Evento>")` — nombre del evento en el diseño | Tipo lógico del evento. Discriminador cuando un canal transporta varios tipos. |
 | `metadata.eventVersion` | `int` | `EventMetadata.now(...)`, fijo a `1` | Versión del contrato de `data`. Se sube a mano al romper compatibilidad del payload. |
 | `metadata.occurredAt` | `Instant` | `Instant.now()` en el `raise` | Instante en que **ocurrió el hecho** en el dominio, no el del envío: con `reliability: outbox` el relay entrega después y los dos instantes difieren. |
-| `metadata.source` | `String` | `service.name` del diseño, horneado en `EventMetadata.now(...)` | Servicio emisor. |
+| `metadata.source` | `String` | `service.name` del diseño, horneado en `EventMetadata.now(...)` | Servicio emisor. Es **procedencia declarada**, no identidad verificada: el emisor lo escribe en el cuerpo y nadie lo comprueba, así que no se resuelve con él ningún inquilino, permiso ni autorización — para eso está el destino del que se consume o el principal que estampa el broker, ambos configuración de despliegue. Vale para trazar y diagnosticar. |
 | `metadata.correlationId` | `String` (nullable) | `CorrelationContext.get()` en el `<Servicio>DomainEventBridge`, vía `EventEnvelope.of(...)` | Correlación del request que originó el hecho — la misma que estampa `CorrelationFilter` (`X-Correlation-Id`), el `ErrorResponse` y cada línea de log. `null` si el hecho no nació de una petición (un `@Scheduled`, por ejemplo). |
 | `data` | `<Evento>IntegrationEvent` | El bridge, desde el evento de dominio | Gemelo de wire del evento: los campos del `payload` declarado en `messaging.keel.yaml`. Su componente `metadata` es `@JsonIgnore` — la metadata autoritativa es la del envelope y no se duplica en el cable. |
 

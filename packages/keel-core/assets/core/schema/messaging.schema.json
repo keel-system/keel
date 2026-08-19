@@ -141,6 +141,45 @@
               }
             ]
           },
+          "identity": {
+            "type": "object",
+            "required": ["field", "from", "onUnresolved"],
+            "additionalProperties": false,
+            "description": "De dónde sale, en este camino, la identidad de quien pide el trabajo. Por HTTP la pone el proveedor de identidad en un claim del token; por un broker no llega ningún token, así que hay que decir qué lo sustituye — y si no se dice, cada quien supondrá una cosa distinta. El dato NO viaja en el payload: ponerlo en dos sitios son dos versiones de la verdad, y tarde o temprano una deja de validarse.",
+            "properties": {
+              "field": {
+                "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/operationName",
+                "description": "Campo del input de la operación disparada que recibe la identidad ya resuelta. La operación la recibe RESUELTA y en ningún otro sitio del servicio se vuelve a leer el mensaje crudo: esa costura de un solo punto es lo que hace barato cambiar de mecanismo."
+              },
+              "from": {
+                "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/messageRef",
+                "description": "Dónde viaja la identidad en el mensaje. La diferencia entre las dos opciones no es de forma sino de QUIÉN LA GARANTIZA, y las dos son legítimas: lo que no lo es, es no haberlo decidido. 'header': un metadato que estampa el BROKER y el cliente no puede escribir (user_id de AMQP, SenderId de SQS) — la identidad la verifica quien autenticó la publicación, igual que por HTTP la verifica el proveedor de identidad. 'field' con dot-path: un campo del CUERPO (metadata.source), que el emisor escribe él mismo y nadie comprueba; ahí la garantía no es técnica sino una política de desarrollo, y por eso exige declarar 'trustedPublishers'."
+              },
+              "onUnresolved": {
+                "type": "string",
+                "enum": ["discard", "deadLetter"],
+                "description": "Qué se hace con un mensaje cuya identidad no resuelve a nada conocido. Es un fallo PERMANENTE, no transitorio: reintentarlo cinco veces con backoff no va a hacer aparecer lo que no existe, solo retrasa el descubrimiento y llena los logs. Por eso no hay opción de reintentar, y por eso se declara aparte de onFailure — que trata todo fallo como transitorio."
+              },
+              "trustedPublishers": {
+                "type": "string",
+                "minLength": 20,
+                "description": "Quién puede publicar en este canal y por qué se acepta que la identidad NO venga verificada, en prosa. Obligatorio y exclusivo de from.location 'field', que lee un dato que escribe el propio emisor. No es una casilla de conformidad: es la asunción que sostiene el mecanismo, y ponerla por escrito es lo que la hace revisable el día que cambie. La asunción que casi siempre está detrás tiene dos mitades y solo una es técnica — (1) nadie publica anónimamente en el canal: el broker autentica a los emisores, lo que acota el riesgo a quienes ya están dentro; (2) cada emisor pone su propio nombre, que es una política de desarrollo y nada en el camino la comprueba. Lo que queda vivo es un emisor REGISTRADO pidiendo trabajo en nombre de otro, y se acepta mientras todos sean sistemas propios en la misma malla de confianza.",
+                "$comment": "La señal para pasar a 'header' es inconfundible: el día que un emisor deje de estar dentro del perímetro (un tercero, otra organización, un cliente integrado) o que alguien pida no-repudio del origen para una auditoría. Cambiarlo es sustituir estas dos líneas: la resolución vive en un solo punto y no toca dominio, casos de uso ni esquema."
+              },
+              "description": { "type": "string" }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "type": "object",
+                  "required": ["from"],
+                  "properties": { "from": { "type": "object", "properties": { "location": { "const": "field" } }, "required": ["location"] } }
+                },
+                "then": { "required": ["trustedPublishers"] },
+                "else": { "not": { "required": ["trustedPublishers"] } }
+              }
+            ]
+          },
           "payload": { "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/fieldMap" },
           "triggers": {
             "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/operationName",

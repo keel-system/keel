@@ -14,11 +14,19 @@
 //   migrations     Flyway aplica db/migration/ y Hibernate solo valida.
 // Existen para que ni el agente ni el operador tengan que editar YAML a mano.
 
-import { uniqueConstraints } from './persistence-entities.js';
+import { uniqueConstraints, columnsFor, partialUniqueIndexes, indexName } from './persistence-entities.js';
+import { persistedMembers } from './persistence-members.js';
+import { quoteIdentifierFor } from '../lib/sql-reserved.js';
 
 const MIGRATIONS_DIR = 'src/main/resources/db/migration';
 const BASELINE_SQL = 'build/schema/baseline.sql';
 const BASELINE_MIGRATION = 'V1__baseline_schema.sql';
+// Appendix de DDL que Hibernate NO puede inferir de las entidades. Vive en el
+// classpath (no en db/migration/) porque no es una migración: es el complemento
+// del esquema, y lo consumen DOS caminos —la inicialización de los perfiles con
+// ddl-auto (local, test) y el baseline que el pase de calidad exporta—. Una sola
+// fuente, dos destinos: es el mismo trato que el realm de Keycloak.
+const PARTIAL_INDEXES_SQL = 'src/main/resources/db/partial-indexes.sql';
 
 export function generate(model) {
   // Todo este módulo es Flyway: en el modelo documental no hay esquema que migrar
@@ -29,8 +37,129 @@ export function generate(model) {
     { path: `${MIGRATIONS_DIR}/README.md`, content: migrationsReadme(model) },
     { path: 'src/main/resources/application-schema-export.yaml', content: schemaExportYaml() },
     { path: 'src/main/resources/application-migrations.yaml', content: migrationsYaml() },
-    { path: 'infra/export-schema.sh', content: exportSchemaScript(model) }
+    { path: 'infra/export-schema.sh', content: exportSchemaScript(model) },
+    { path: PARTIAL_INDEXES_SQL, content: partialIndexesSql(model) }
   ];
+}
+
+// ─── Índices únicos condicionados ────────────────────────────────────────────
+//
+// «Como máximo una versión activa por clave» no es una unicidad de columnas: es
+// una unicidad CONDICIONADA al estado. Con una constraint normal sobre esas
+// columnas no podrías tener nunca dos versiones; sin nada, dos publicaciones
+// simultáneas dejan dos activas y el invariante que el diseño declaró no lo
+// sostiene nadie — la comprobación previa del handler no cierra esa ventana.
+//
+// JPA no lo expresa (`@Index` no tiene predicado), así que sale por SQL. Y solo
+// dos de los seis dialectos lo tienen de verdad; en los demás el archivo dice en
+// voz alta que la garantía se queda en el caso de uso, en vez de generar un
+// índice que prohibiría también las versiones históricas.
+const PARTIAL_INDEX_DIALECTS = {
+  postgresql: (spec) =>
+    `CREATE UNIQUE INDEX IF NOT EXISTS ${spec.name} ON ${spec.table} (${spec.columns}) WHERE ${spec.predicate};`,
+  // SQL Server los llama índices filtrados y no admite IF NOT EXISTS: el guardia
+  // va por sys.indexes, que es el idioma del motor.
+  sqlserver: (spec) =>
+    `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = '${spec.name}')\n` +
+    `    CREATE UNIQUE INDEX ${spec.name} ON ${spec.table} (${spec.columns}) WHERE ${spec.predicate};`
+};
+
+/** Los índices condicionados del diseño, ya resueltos a tabla, columnas y predicado. */
+export function partialIndexSpecs(model) {
+  const specs = [];
+  // El SQL de este appendix va DIRECTO al motor: no pasa por Hibernate, así que
+  // el quoting tiene que ser el del dialecto y no el backtick que aquel traduce.
+  const quote = (name) => quoteIdentifierFor(model.stack.database, name);
+  for (const entity of model.entities.filter((e) => e.persisted)) {
+    const members = persistedMembers(model, entity);
+    for (const index of partialUniqueIndexes(entity)) {
+      const columns = index.fields
+        .flatMap((field) => columnsFor(model, entity, members, field, model.warnings))
+        .map(quote)
+        .join(', ');
+      const [whenColumn] = columnsFor(model, entity, members, index.when.field, model.warnings);
+      specs.push({
+        entity: entity.name,
+        name: indexName(entity, index),
+        table: quote(entity.tableName),
+        columns,
+        predicate: `${quote(whenColumn)} = ${sqlLiteral(index.when.equals)}`,
+        fields: index.fields,
+        when: index.when
+      });
+    }
+  }
+  return specs;
+}
+
+/**
+ * Si el diseño declara algún índice condicionado Y el motor elegido sabe crearlo.
+ * Las dos mitades importan: sin la segunda, los perfiles con ddl-auto intentarían
+ * ejecutar un archivo que solo contiene comentarios explicando por qué no hay nada.
+ */
+export function usesPartialIndexes(model) {
+  if (model.persistenceKind === 'document') return false;
+  return partialIndexSpecs(model).length > 0 && Boolean(PARTIAL_INDEX_DIALECTS[model.stack.database]);
+}
+
+function sqlLiteral(value) {
+  if (typeof value === 'string') return `'${value.replace(/'/g, "''")}'`;
+  if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
+  return String(value);
+}
+
+function partialIndexesSql(model) {
+  const specs = partialIndexSpecs(model);
+  const dialect = PARTIAL_INDEX_DIALECTS[model.stack.database];
+  const header = `-- Índices únicos condicionados, derivados de specs/persistence.keel.yaml.
+-- Generado por keel-spring build: NO se edita a mano (se regenera en cada build).
+--
+-- Hibernate no puede inferirlos de las entidades porque JPA no tiene predicado en
+-- @Index, así que este archivo es su única fuente. Lo consumen dos caminos:
+--   * los perfiles con ddl-auto (local, test), vía spring.sql.init;
+--   * el baseline de migraciones, al que infra/export-schema.sh lo añade.
+-- Por eso cada sentencia es idempotente: se ejecuta en cada arranque.
+`;
+
+  if (specs.length === 0) {
+    return `${header}
+-- El diseño no declara ningún índice condicionado (persistence.entities.<E>.indexes
+-- con 'when'). El archivo existe igualmente para que spring.sql.init tenga qué leer.
+`;
+  }
+
+  if (!dialect) {
+    // El diseño declaró un invariante que este motor no puede sostener. Es aviso y
+    // no error porque la mayoría de los diseños toleran la ventana de dos peticiones
+    // simultáneas; lo que no se tolera es no saber que existe.
+    model.warnings.push(
+      `persistence.indexes con 'when' (${specs.map((spec) => `${spec.entity}.[${spec.fields.join(', ')}]`).join(', ')}): ` +
+        `${model.stack.database} no tiene índices parciales, así que esos índices NO se crean y la unicidad ` +
+        `condicionada queda entera en el caso de uso, que no cierra la ventana de dos peticiones simultáneas. ` +
+        `db/partial-indexes.sql lo dice en voz alta y enumera las salidas del motor. Con PostgreSQL o SQL Server sí se generan.`
+    );
+    const lines = specs.map(
+      (spec) =>
+        `--   ${spec.name}: UNIQUE (${spec.fields.join(', ')}) donde ${spec.when.field} = ${spec.when.equals}` +
+        ` [entidad ${spec.entity}]`
+    );
+    return `${header}
+-- ATENCIÓN: ${model.stack.database} no tiene índices parciales, así que estos índices
+-- NO se crean y la garantía se queda ENTERA en el caso de uso — que no cierra la
+-- ventana de dos peticiones simultáneas. Los invariantes afectados:
+${lines.join('\n')}
+--
+-- Si esa ventana importa, las salidas del motor son una columna generada que valga
+-- NULL fuera de la condición (MySQL/MariaDB, Oracle) con una constraint única
+-- encima, o un bloqueo explícito en el caso de uso que publica. Ninguna de las dos
+-- la elige el generador: son decisiones con coste que se toman a la vista.
+`;
+  }
+
+  return `${header}
+${specs.map((spec) => `-- ${spec.entity}: como máximo una fila por (${spec.fields.join(', ')}) con ${spec.when.field} = ${spec.when.equals}.
+${dialect(spec)}`).join('\n\n')}
+`;
 }
 
 // README del directorio de migraciones: no es .sql, así que Flyway lo ignora y a
@@ -186,12 +315,29 @@ kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null
 
 echo "Esquema exportado en $TARGET."
-${constraintCheck(model)}
+${partialIndexAppend(model)}${constraintCheck(model)}
 echo "Revísalo (constraints, índices, tipos del dialecto) y cópialo como:"
 echo "  src/main/resources/db/migration/${BASELINE_MIGRATION}"
 echo "Después, doble check estático: diff contra este archivo y contraste con las entidades y el diseño."
 echo "La prueba en vivo (PROFILE=local,migrations sobre una BD sin esquema) la hace el diseñador:"
 echo "  borra el volumen de la BD, que es la misma sobre la que corren los escenarios."
+`;
+}
+
+// Los índices condicionados no están en el DDL exportado y no pueden estarlo:
+// Hibernate los desconoce. Se añaden aquí, al exportar, para que el baseline que
+// el pase de calidad copia ya los lleve — pedírselos al agente como un paso más
+// sería pedirle que recordara algo que build ya sabe, y su olvido no lo detecta
+// nadie hasta que dos peticiones simultáneas dejan dos filas activas.
+function partialIndexAppend(model) {
+  if (partialIndexSpecs(model).length === 0) return '';
+  if (!PARTIAL_INDEX_DIALECTS[model.stack.database]) return '';
+  return `
+if [ -f "${PARTIAL_INDEXES_SQL}" ]; then
+  echo "" >> "$TARGET"
+  cat "${PARTIAL_INDEXES_SQL}" >> "$TARGET"
+  echo "Añadidos al DDL los índices condicionados de ${PARTIAL_INDEXES_SQL} (Hibernate no los infiere)."
+fi
 `;
 }
 

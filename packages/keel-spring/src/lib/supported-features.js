@@ -143,5 +143,18 @@ export function checkSupportedFeatures(manifest, layers) {
     );
   }
 
+  // Capa mail. El transporte SMTP es el único que keel-spring genera, y el schema
+  // ya lo acota; lo que sí queda fuera de la generación es el ORIGEN del cuerpo:
+  // con `bundled` haría falta empaquetar los recursos, resolverlos por clave y
+  // decidir su ciclo de vida, y nada de eso existe. Generar la rama `data` en su
+  // lugar dejaría al diseñador creyendo que sus plantillas del repositorio se
+  // despliegan, cuando el servicio esperaría encontrarlas en la base de datos.
+  const templatingSource = layers?.mail?.templating?.source;
+  if (templatingSource && templatingSource !== 'data') {
+    errors.push(
+      `mail.templating.source: '${templatingSource}' no soportado por keel-spring, que genera el cuerpo como DATO del servicio (motor sin lógica sobre lo que la BD guarda). Con 'bundled' harían falta los recursos empaquetados y su resolución, que no se generan: usa 'data', o completa esa mitad a mano tras generar.`
+    );
+  }
+
   return { errors, warnings };
 }

@@ -98,6 +98,15 @@ source set `integrationTest`, así que un test que importe un DTO o una entidad 
      envió: los campos del cuerpo saliente, o la cabecera de idempotencia sin la cual un
      reintento nuestro encarga dos veces el mismo trabajo). Una cláusula sobre el contenido
      de la llamada saliente **no** es un `uncovered`: el conteo no la cubre, pero el log sí.
+   - **Con capa `mail`, el Then afirma sobre el BUZÓN, no sobre el 2xx.** La respuesta
+     acepta el encargo, no lo cumple: la entrega ocurre después. Empieza siempre por
+     `awaitMailTo(dirección, n)` —que espera— y solo entonces usa `lastMailTo`,
+     `mailSubject`, `mailHtml`, `mailText` o `mailFrom` sobre el mensaje. `mailCount`
+     es para el segundo correo que **no** debe existir (idempotencia), nunca para el
+     primero: contar sin haber esperado mide el estado de antes de que pasara lo que
+     se quería medir, y sale verde siempre. Para un rechazo, `assertNoMailTo` — es lo
+     único que afirma que el rechazo llegó ANTES del envío y no después. Un escenario
+     cuyo `Then` menciona el correo y solo comprueba el status **no** está cubierto.
    - Fíjate en **qué deja limpio `resetState()`** (BD, caché y los canales declarados) antes
      de escribir cualquier aserción que dependa de un estado inicial vacío. Lo que no esté
      en esa lista no se asume limpio: se purga en el test o se declara en `assumptions`.

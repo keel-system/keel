@@ -170,6 +170,7 @@ function countsOf(summary) {
   if (summary.dependencies) counts.dependencies = summary.dependencies.dependencies.length;
   if (summary.persistence) counts.persistedEntities = summary.persistence.entities.length;
   if (summary.storage) counts.buckets = summary.storage.buckets.length;
+  if (summary.mail) counts.mailSenders = summary.mail.sentBy.length;
   return counts;
 }
 

@@ -289,6 +289,7 @@ export function resetDbScript(selected, service, model = null) {
     : [];
   const purges = broker && destinations.length > 0 ? [...destinations, ...deadLetters] : deadLetters;
   const httpStub = selected.find((s) => s.category === 'httpStub');
+  const mailSink = selected.find((s) => s.category === 'mail');
   // Los objetos del bucket son estado sucio como una fila o un mensaje, y hasta ahora
   // eran los únicos que sobrevivían al reset. No muerde en cuanto la clave lleva el id
   // del recurso —no colisionan—, pero cualquier aserción sobre el CONTENIDO del bucket
@@ -296,7 +297,7 @@ export function resetDbScript(selected, service, model = null) {
   // dejaron los flujos anteriores, y el escenario falla por algo que no está mirando.
   const objectStorage = selected.find((s) => s.category === 'storage' && s.id === 'minio');
   const buckets = objectStorage ? declaredBuckets(model ?? {}) : [];
-  if (!db && !cache && purges.length === 0 && !httpStub && buckets.length === 0) return null;
+  if (!db && !cache && purges.length === 0 && !httpStub && !mailSink && buckets.length === 0) return null;
 
   const dbName = service.name.replace(/-/g, '_');
   const steps = [];
@@ -390,6 +391,17 @@ else
 fi`);
   }
 
+  // Buzón de correo: un mensaje del flujo anterior sigue ahí y el Then del
+  // siguiente afirmaría sobre el correo equivocado —el mismo fallo que la purga de
+  // los canales evita en el broker—. Tolerante a fallo como las demás purgas.
+  if (mailSink) {
+    steps.push(`if $RUNTIME exec ${sq(`${service.name}-devtools`)} sh -c ${sq(mailSink.entry.cliResetCmd)}; then
+  echo "Buzón de correo vaciado (${mailSink.entry.label})."
+else
+  echo "AVISO: no se pudo vaciar el buzón de correo (¿está 'mailpit' arriba?). Continúo." >&2
+fi`);
+  }
+
   const supportsSchema = Boolean(db?.entry.cliDropSchemaCmd);
   return `#!/usr/bin/env bash
 # reset-db.sh — deja el estado de prueba de ${service.name} como recién arrancado:
@@ -398,7 +410,8 @@ fi`);
     cache ? 'borra las claves de la caché' : null,
     purges.length > 0 ? `purga los destinos de mensajería (${purges.join(', ')})` : null,
     buckets.length > 0 ? `vacía los buckets (${buckets.map((b) => b.physicalName).join(', ')})` : null,
-    httpStub ? 'reinicia el stub de proveedores (mappings y log de peticiones)' : null
+    httpStub ? 'reinicia el stub de proveedores (mappings y log de peticiones)' : null,
+    mailSink ? 'vacía el buzón de correo' : null
   ]
     .filter(Boolean)
     .join(', ')}.

@@ -281,6 +281,11 @@ function renderMessage(model, operation) {
 
 // Handler de la operación: stub con las notas del diseño; lo implementa el
 // agente. Inyecta el puerto de dominio del agregado y el mapper si aplican.
+/** ¿El diseño le atribuye a esta operación la salida por correo? (`mail.sentBy`) */
+function sendsMail(model, operation) {
+  return (model.mail?.sentBy ?? []).includes(operation.name);
+}
+
 function renderHandler(model, service, operation) {
   // Sin imports de Spring: @ApplicationComponent es propia y la transacción la
   // abre el UseCaseMediator (Query→readOnly, Command→escritura).
@@ -348,6 +353,15 @@ function renderHandler(model, service, operation) {
   if (operation.idempotency && model.layersPresent.persistence) {
     inject('IdempotencyStore', 'domain.idempotency');
   }
+  // La salida por correo, por el mismo criterio: `mail.sentBy` es el único enlace
+  // del DSL entre un caso de uso y el correo, así que la operación que lo declara
+  // recibe el puerto delante. Sin inyectarlo, el camino de menor resistencia es no
+  // mandar el correo — y no lo detecta nada: la operación compila, responde y pasa
+  // sus escenarios salvo el que mire el buzón.
+  if (sendsMail(model, operation)) {
+    inject('MailSender', 'application.port.out');
+    if (model.mail?.templating) inject('TemplateRenderer', 'application.port.out');
+  }
 
   let fields = '';
   let constructor = '';
@@ -363,6 +377,14 @@ function renderHandler(model, service, operation) {
   annotations.push('    @LogExceptions');
 
   const notes = [];
+  if (sendsMail(model, operation)) {
+    notes.push(
+      `Correo: esta operación lo manda (mail.sentBy). Compón el MailMessage y llama a mailSender.send(...). ` +
+        `Un correo que sale NO lo deshace ningún rollback: ponlo DESPUÉS de que la guarda de repetición ` +
+        `(${operation.idempotency ? 'idempotency' : 'la transición declarada'}) haya decidido que esta ejecución es la buena. ` +
+        `El adaptador y el renderizador ya están escritos: no los toques — ver la skill keel-spring-mail`
+    );
+  }
   for (const text of operation.preconditions) notes.push(`Precondición: ${text}`);
   for (const text of operation.rules) notes.push(`Regla (en orden): ${text}`);
   for (const code of operation.errors) {

@@ -315,6 +315,22 @@ salieron. Tiene que existir un `OutboxDispatcher` real además del fallback — 
 borra**: es `@ConditionalOnMissingBean`, se aparta solo y sigue ahí para fallar al
 arrancar fuera de `local` si algún día vuelve a faltar.
 
+### 6. Salida por correo → `mailDelivery`
+
+Con capa `mail`, el diseño le atribuye a cada operación de `sentBy` que mande un correo.
+Build genera el mecanismo entero —el puerto `MailSender`, el adaptador SMTP, el
+renderizador— y lo **inyecta** en el handler de esas operaciones; componer el mensaje y
+llamar a `mailSender.send(...)` es del agente de código.
+
+Es la familia más barata de perder de todas: una operación que no manda el correo
+compila, responde su 2xx y pasa todos sus escenarios menos el que mire el buzón. Si el
+diseño no llegó a escribir ese escenario, no falla nada en ninguna parte. Aquí sí.
+
+Y una comprobación que este gate **no** hace y tú sí puedes: que el `send` esté **después**
+de la guarda de repetición (`idempotency` o la transición declarada) y de la confirmación
+de la transacción. Un correo que sale no lo deshace ningún rollback, y el destinatario es
+una persona real. Si está antes, es un hallazgo conductual: va a `remaining`.
+
 Nota de alcance: el gate **conductual** de las tres primeras familias son los escenarios
 `FL-*` (la reentrega del mismo `messageId`, el reintento con la misma clave), que ya
 corrieron antes de llegar tú. Estas comprobaciones existen porque un diseño puede no
@@ -452,6 +468,8 @@ reconciliation: OK | KO | N/A      # N/A sin reconciledBy; OK = el @Scheduled ya
                           # familia SIN gate conductual: ningún FL-* ejercita un cron
 outboxDelivery: OK | KO | N/A      # N/A sin reliability: outbox; OK = hay un OutboxDispatcher
                           # real además del fallback que generó build
+mailDelivery: OK | KO | N/A        # N/A sin capa mail; OK = cada operación de mail.sentBy
+                          # llama a mailSender.send(...) y ya no tiene TODO vivo
 issuesFixed: [...]        # ajustes no-conductuales aplicados
 remaining: [...]          # hallazgos conductuales sin hueco de diseño detrás
 designGaps:               # huecos del diseño que encontraste, como propuesta accionable

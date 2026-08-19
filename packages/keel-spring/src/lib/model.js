@@ -65,7 +65,8 @@ export function buildModel({ manifest, layers, stack = null }) {
     security: Boolean(layers.security),
     httpClients: Boolean(layers['http-clients']),
     dependencies: Boolean(layers.dependencies),
-    storage: Boolean(layers.storage)
+    storage: Boolean(layers.storage),
+    mail: Boolean(layers.mail)
   };
 
   const enums = collectEnums(domain, layers['http-clients'], warnings);
@@ -135,6 +136,7 @@ export function buildModel({ manifest, layers, stack = null }) {
   }
   const httpClients = collectHttpClients(layers, domainTypes, inlineEnumName, warnings);
   const storage = collectStorage(layers);
+  const mail = collectMail(layers);
 
   const hasFileUploads = services.some((group) => group.operations.some((operation) => operation.multipart));
 
@@ -158,7 +160,7 @@ export function buildModel({ manifest, layers, stack = null }) {
   // al mapper por parámetro (ver mappers.js).
   const needDtos = collectNeedDtos(layers, dependencies, services, domainTypes, inlineEnumName, warnings);
 
-  return { service, layersPresent, persistenceKind, enums, valueObjects, entities, services, errors, childDtos, refDtos, needDtos, hasFileUploads, events, messaging, subscriptions, pagination, api, audit, security, httpClients, dependencies, storage, warnings };
+  return { service, layersPresent, persistenceKind, enums, valueObjects, entities, services, errors, childDtos, refDtos, needDtos, hasFileUploads, events, messaging, subscriptions, pagination, api, audit, security, httpClients, dependencies, storage, mail, warnings };
 }
 
 // El DTO de un dato ajeno expuesto, y su campo en la respuesta.
@@ -589,13 +591,29 @@ function collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPe
       auditAuthorship,
       projectsManagedAudit: auditTimestamps === 'declared' || auditAuthorship === 'declared',
       naturalKey: persistenceMeta.naturalKey ?? null,
-      indexes: persistenceMeta.indexes ?? []
+      indexes: normalizeIndexes(persistenceMeta.indexes)
     });
   }
 
   addImplicitAggregateRelations(entities, aggregates, warnings);
   warnMappingCycles(entities, warnings);
   return entities;
+}
+
+/**
+ * Los índices del diseño, en una sola forma. El DSL admite dos —la lista de
+ * campos a secas y el objeto con `unique`/`when`— porque la corta cubre el caso
+ * habitual y obligar al objeto habría reescrito todos los diseños existentes.
+ * Todo lo que consume índices (el espejo relacional, el config de Mongo, el
+ * appendix de migraciones) trabaja contra ESTA forma y no vuelve a mirar cuál
+ * de las dos escribió el diseñador.
+ */
+export function normalizeIndexes(declared) {
+  return (declared ?? []).map((index) =>
+    Array.isArray(index)
+      ? { fields: index, unique: false, when: null }
+      : { fields: index.fields, unique: index.unique === true, when: index.when ?? null }
+  );
 }
 
 // Salvaguarda del mapeo domain↔JPA: el adaptador mapea cada relación interna
@@ -1217,6 +1235,53 @@ function collectStorage(layers) {
     // no lo invoca nadie y solo obliga al agente a implementar un camino
     // inalcanzable (ver storage.js § renderPort).
     hasPrivateBucket: buckets.some((b) => b.visibility === 'private')
+  };
+}
+
+// ─── Correo saliente (mail → puerto MailSender + adaptador SMTP) ─────────────
+
+// Lo que el diseño decide sobre el correo, ya resuelto a la forma que consumen el
+// scaffolding y el fragmento de configuración. Nada de proveedor: el servidor SMTP
+// y sus credenciales son dato de despliegue y viven en parameters/<perfil>/mail.yaml.
+function collectMail(layers) {
+  const mail = layers.mail;
+  if (!mail) return null;
+  const parts = mail.delivery?.parts ?? [];
+  return {
+    transport: mail.delivery?.transport ?? 'smtp',
+    parts,
+    hasHtml: parts.includes('html'),
+    hasText: parts.includes('text'),
+    // Las dos partes ⇒ multipart/alternative. Con una sola el mensaje es simple, y
+    // la diferencia la ve el adaptador: componer un multipart de una parte es un
+    // sobre vacío alrededor del mismo cuerpo.
+    multipart: parts.includes('html') && parts.includes('text'),
+    attachments: mail.delivery?.attachments === true,
+    sentBy: mail.sentBy ?? [],
+    sender: addressSource(mail.sender),
+    replyTo: addressSource(mail.replyTo),
+    templating: mail.templating
+      ? {
+          source: mail.templating.source,
+          // El cuerpo lo escribe alguien de fuera del equipo: el motor no puede
+          // evaluar expresiones arbitrarias. No es un campo del DSL —sería una
+          // capacidad que nada comprueba— sino la consecuencia de source: data,
+          // y aquí es donde el scaffolding la lee.
+          externalContent: mail.templating.source === 'data',
+          declaredVariables: mail.templating.declaredVariables === true
+        }
+      : null,
+    description: mail.description ?? null
+  };
+}
+
+function addressSource(spec) {
+  if (!spec) return null;
+  return {
+    source: spec.source,
+    address: spec.address ?? null,
+    fallback: spec.fallback ?? null,
+    description: spec.description ?? null
   };
 }
 

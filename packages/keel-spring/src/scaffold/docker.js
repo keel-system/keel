@@ -13,6 +13,7 @@ import {
   CACHES,
   STORAGE,
   HTTP_STUB,
+  MAIL_SINK,
   selectedInfra,
   brokerContainer
 } from '../lib/stack-catalog.js';
@@ -70,6 +71,13 @@ export function generate(model) {
   // llama a otro servicio no se puede puntuar (ver HTTP_STUB en stack-catalog).
   if (layersPresent.httpClients) {
     Object.assign(services, HTTP_STUB.composeServices());
+  }
+
+  // Destino de prueba del correo saliente, por el mismo motivo: un flujo que
+  // termina en un correo no se puede puntuar sin a quién mandárselo, y sin la API
+  // del buzón el Then sobre el correo es siempre manual (ver MAIL_SINK).
+  if (layersPresent.mail) {
+    Object.assign(services, MAIL_SINK.composeServices());
   }
 
   if (Object.keys(services).length === 0) return [];

@@ -1,0 +1,101 @@
+# Modelo A: la plantilla nace y vive aquí. La base de datos es el único sitio del
+# mundo donde está, y por eso Template es una entidad del dominio y no un recurso.
+
+types:
+  TemplateStatus:
+    description: Momento del ciclo de vida de una versión de plantilla.
+    values: [draft, active, retired]
+
+  NotificationStatus:
+    description: En qué punto está el envío pedido.
+    values: [accepted, sent, failed]
+
+entities:
+  Application:
+    description: Sistema consumidor autorizado a mandar correo. No es un usuario; es un sistema.
+    fields:
+      id: { type: uuid, id: true, generated: true }
+      key:
+        type: string
+        required: true
+        unique: true
+        constraints: { maxLength: 64 }
+        description: Identificador estable del sistema; casa con el client_id de su credencial máquina.
+      name: { type: string, required: true, constraints: { maxLength: 120 } }
+      defaultSender:
+        type: string
+        required: true
+        constraints: { maxLength: 320 }
+        description: Dirección verificada desde la que salen sus correos.
+      defaultLocale: { type: string, required: true, constraints: { maxLength: 10 } }
+      active:
+        type: boolean
+        required: true
+        description: A false, sus envíos se cortan al instante sin revocar credenciales ni desplegar.
+
+  Template:
+    description: Una versión concreta del contenido de un correo, propiedad de una aplicación.
+    lifecycle:
+      field: status
+      transitions:
+        draft:   [active]
+        active:  [retired]
+        retired: []
+    fields:
+      id: { type: uuid, id: true, generated: true }
+      key: { type: string, required: true, constraints: { maxLength: 64 } }
+      locale: { type: string, required: true, constraints: { maxLength: 10 } }
+      status: { type: TemplateStatus, required: true }
+      version: { type: int, required: true, constraints: { min: 1 } }
+      subject:
+        type: string
+        required: true
+        constraints: { maxLength: 200 }
+        description: Asunto con sus llaves sin procesar, tal cual lo escribió quien lo registró.
+      bodyHtml: { type: text, required: true }
+      bodyText: { type: text, required: true }
+      publishedAt: { type: timestamp }
+    relations:
+      application: { entity: Application, cardinality: many-to-one }
+      variables: { entity: TemplateVariable, cardinality: one-to-many }
+
+  TemplateVariable:
+    description: Variable que la plantilla declara aceptar; es contrato y se consulta en cada envío para validar.
+    fields:
+      id: { type: uuid, id: true, generated: true }
+      name: { type: string, required: true, constraints: { maxLength: 64 } }
+      required: { type: boolean, required: true }
+      description: { type: string, constraints: { maxLength: 255 } }
+
+  Notification:
+    description: Un envío pedido, con lo que se envió de verdad congelado dentro.
+    lifecycle:
+      field: status
+      transitions:
+        accepted: [sent, failed]
+        sent:     []
+        failed:   []
+    fields:
+      id: { type: uuid, id: true, generated: true }
+      applicationKey: { type: string, required: true, constraints: { maxLength: 64 } }
+      templateKey: { type: string, required: true, constraints: { maxLength: 64 } }
+      status: { type: NotificationStatus, required: true }
+      templateVersion:
+        type: int
+        required: true
+        description: Congelada. Con la plantilla ya en la v4, la traza sigue diciendo qué se envió.
+      locale: { type: string, required: true, constraints: { maxLength: 10 } }
+      recipient: { type: string, required: true, constraints: { maxLength: 320 } }
+      renderedSubject:
+        type: string
+        required: true
+        constraints: { maxLength: 200 }
+        description: Congelado y ya interpolado — es lo que leyó quien lo recibió.
+      dedupeKey: { type: string, required: true, constraints: { maxLength: 128 } }
+      requestedAt: { type: timestamp, generated: true }
+      sentAt: { type: timestamp }
+
+aggregates:
+  Application: { root: Application }
+  Template: { root: Template, entities: [TemplateVariable] }
+  Notification: { root: Notification }

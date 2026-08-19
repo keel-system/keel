@@ -4030,3 +4030,173 @@ test('la misma salida de varios elementos con replicated no avisa', () => {
     warnings.join('\n')
   );
 });
+
+// ─── Capa mail: el correo que el servicio emite ──────────────────────────────
+
+const mailUseCases = (extra = {}) => ({
+  operations: {
+    requestNotification: {
+      kind: 'command',
+      input: { fields: { templateKey: { type: 'string', required: true } } },
+      output: { fields: { notificationId: { type: 'uuid' } } },
+      ...extra,
+    },
+  },
+});
+
+const mailLayer = (overrides = {}) => ({
+  delivery: { transport: 'smtp', parts: ['html', 'text'] },
+  sentBy: ['requestNotification'],
+  sender: { source: 'data', fallback: 'no-reply@ejemplo.com' },
+  templating: { source: 'data', declaredVariables: true },
+  ...overrides,
+});
+
+// La operación que manda correo declara idempotencia: sin ella salta el aviso propio
+// del correo, que es legítimo pero ajeno a lo que cada fixture mide. Y la idempotencia
+// por cabecera exige endpoint HTTP que la reciba, de ahí la capa api que la acompaña.
+const guarded = { idempotency: { keyFrom: 'header', scope: 'client' } };
+const mailApi = { endpoints: { requestNotification: { method: 'POST', path: '/notifications' } } };
+
+test('capa mail bien formada no produce errores ni warnings', () => {
+  const { errors, warnings } = run({
+    domain: baseDomain(),
+    'use-cases': mailUseCases(guarded),
+    api: mailApi,
+    security: securityLayer,
+    mail: mailLayer(),
+  });
+  assert.deepEqual(errors, []);
+  // Solo se afirma sobre los avisos DE LA CAPA: los canónicos de idempotencia son de
+  // otro asunto y tienen sus propios tests; colarlos aquí ataría este test a ellos.
+  assert.deepEqual(warnings.filter((w) => w.startsWith('mail:')), []);
+});
+
+test('mail: sentBy que nombra una operación inexistente es error', () => {
+  // Es el único enlace del DSL entre un caso de uso y la salida por correo: si apunta
+  // al vacío, el generador no encuentra dónde inyectar el envío y no lo genera en
+  // ninguna parte, sin que nada lo diga.
+  const { errors } = run({
+    domain: baseDomain(),
+    'use-cases': mailUseCases(guarded),
+    api: mailApi,
+    mail: mailLayer({ sentBy: ['sendSomethingElse'] }),
+  });
+  assert.ok(errors.some((e) => e.includes("mail: sentBy: la operación 'sendSomethingElse' no existe")), errors.join(' | '));
+});
+
+test('mail: operación que manda correo sin guarda de repetición es aviso', () => {
+  // Un correo que sale no lo deshace ninguna transacción: si la operación se repite,
+  // el destinatario recibe el mensaje dos veces.
+  const { errors, warnings } = run({
+    domain: baseDomain(),
+    'use-cases': mailUseCases(),
+    mail: mailLayer(),
+  });
+  assert.deepEqual(errors, []);
+  assert.ok(
+    warnings.some((w) => w.includes("la operación 'requestNotification' manda correo y no declara 'idempotency'")),
+    warnings.join(' | ')
+  );
+});
+
+test('mail: remitente por dato sin fallback es aviso', () => {
+  const { warnings } = run({
+    domain: baseDomain(),
+    'use-cases': mailUseCases(guarded),
+    api: mailApi,
+    mail: mailLayer({ sender: { source: 'data' } }),
+  });
+  assert.ok(warnings.some((w) => w.includes("mail: sender: es 'data' y no declara 'fallback'")), warnings.join(' | '));
+});
+
+test('mail: html sin alternativa textual es aviso', () => {
+  // No falla en ninguna prueba: se ve en la carpeta de spam de quien lo recibe.
+  const { warnings } = run({
+    domain: baseDomain(),
+    'use-cases': mailUseCases(guarded),
+    api: mailApi,
+    mail: mailLayer({ delivery: { transport: 'smtp', parts: ['html'] } }),
+  });
+  assert.ok(warnings.some((w) => w.includes("delivery.parts: declara 'html' sin 'text'")), warnings.join(' | '));
+});
+
+test('mail: plantillas por dato sin variables declaradas es aviso', () => {
+  const { warnings } = run({
+    domain: baseDomain(),
+    'use-cases': mailUseCases(guarded),
+    api: mailApi,
+    mail: mailLayer({ templating: { source: 'data' } }),
+  });
+  assert.ok(warnings.some((w) => w.includes("templating: el cuerpo es 'data' y no declara 'declaredVariables'")), warnings.join(' | '));
+});
+
+// ─── identity: de dónde sale el inquilino cuando no hay token ────────────────
+
+const identityLayers = (identity, extra = {}) => ({
+  domain: baseDomain(),
+  'use-cases': {
+    operations: {
+      acceptRequest: {
+        kind: 'command',
+        internal: true,
+        input: { fields: { applicationKey: { type: 'string', required: true }, ref: { type: 'string', required: true } } },
+        output: 'void',
+      },
+    },
+  },
+  messaging: {
+    subscriptions: {
+      WorkRequested: {
+        source: 'any-registered-system',
+        nature: 'request',
+        contract: { envelope: 'keel' },
+        payload: { ref: { type: 'string', required: true } },
+        triggers: 'acceptRequest',
+        identity,
+        ...extra,
+      },
+    },
+  },
+});
+
+const sourceIdentity = {
+  field: 'applicationKey',
+  from: { location: 'field', name: 'metadata.source' },
+  trustedPublishers: 'El broker autentica a los emisores y todos son sistemas propios.',
+  onUnresolved: 'discard',
+};
+
+test('identity resuelve el campo del input: no se reclama como campo que falta del payload', () => {
+  // Sin esto, la regla de «campo requerido que no llega en el payload» marcaría en rojo
+  // justo el campo que la identidad rellena — que es todo el propósito del mecanismo.
+  const { errors } = run(identityLayers(sourceIdentity));
+  assert.deepEqual(errors, []);
+});
+
+test('identity que nombra un campo inexistente en el input es error', () => {
+  const { errors } = run(identityLayers({ ...sourceIdentity, field: 'tenantKey' }));
+  assert.ok(
+    errors.some((e) => e.includes("identity.field: la operación 'acceptRequest' no declara 'tenantKey'")),
+    errors.join(' | ')
+  );
+});
+
+test('el mismo campo en identity y en input es error: dos versiones de la verdad', () => {
+  // El dato de identidad viaja por un solo camino, o una de las dos deja de validarse.
+  const { errors } = run(identityLayers(sourceIdentity, { input: { applicationKey: 'ref' } }));
+  assert.ok(
+    errors.some((e) => e.includes("se resuelve además en 'input'")),
+    errors.join(' | ')
+  );
+});
+
+test('identity sobre metadata.* con envelope none es error: no hay envoltura de la que sacarla', () => {
+  const layers = identityLayers(sourceIdentity);
+  layers.messaging.subscriptions.WorkRequested.contract = { envelope: 'none' };
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) => e.includes("contract.envelope es 'none'")),
+    errors.join(' | ')
+  );
+});

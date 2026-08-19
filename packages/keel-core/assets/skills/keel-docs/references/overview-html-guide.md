@@ -81,6 +81,7 @@ aplica» (atenuada) — ese es el valor informativo: se ve de un vistazo lo que 
 | `cache` | Caché de respuestas | alguna operación declara `cache` | una fila por query cacheada: `[<operación>, "TTL <n>s · clave: <keyFields>"]` |
 | `storage` | Almacenamiento de archivos | hay capa `storage` | una fila por bucket: `[<bucket>, "<visibility> · <maxSizeMb> MB · <contentTypes>"]` |
 | `httpClients` | Integraciones HTTP salientes | hay capa `http-clients` | Clientes (nº), Llamadas (nº), Con circuit breaker (nº) |
+| `mail` | Correo saliente | hay capa `mail` | Transporte, Partes del cuerpo, Remitente (`fixed <dirección>` o `del dato` + si hay respaldo o se falla cerrado), Plantillas (`en la BD`/`en el repositorio` + si se validan las variables declaradas), y una fila por operación de `sentBy` con su guarda de repetición |
 | `security` | Seguridad | hay capa `security` | Protocolo, M2M (`serviceAuth.protocol` o `no`), Roles (nº), Permisos (nº), Clientes máquina (nº) |
 | `schedule` | Trabajos programados | alguna operación declara `schedule` | una fila por operación: `[<operación>, <cron>]` |
 

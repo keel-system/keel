@@ -8,9 +8,11 @@ skill independiente que build instala **condicionalmente** en el
 `keel-spring-kafka`, y así con cada categoría. El subagente `keel-spring-code`
 las descubre como skills del proyecto.
 
-La mayoría se gatean por **stack** (`keel-stack.json`); una excepción,
-`keel-spring-httpclient`, se gatea por **presencia de capa de diseño** (la capa
-`http-clients` no es una elección de stack, sino parte del diseño del servicio).
+La mayoría se gatean por **stack** (`keel-stack.json`); dos excepciones,
+`keel-spring-httpclient` y `keel-spring-mail`, se gatean por **presencia de capa de
+diseño**: ni las integraciones HTTP salientes ni el correo son elecciones de stack
+—no hay proveedor que elegir en build; se decide al desplegar— sino parte del
+diseño del servicio.
 
 | Clave en `keel-stack.json` | Valor | Skill |
 |---|---|---|
@@ -27,6 +29,14 @@ La mayoría se gatean por **stack** (`keel-stack.json`); una excepción,
 | Capa de diseño | Skill |
 |---|---|
 | `http-clients` (integraciones HTTP salientes con RestClient + resilience4j) | `keel-spring-httpclient/` |
+| `mail` (correo saliente por SMTP, con plantillas) | `keel-spring-mail/` |
+
+`keel-spring-mail` es la única cuyo adaptador **ya está escrito**: build genera el
+`SmtpMailSender` y el renderizador enteros, porque las dos defensas que llevan dentro
+—el saneado del asunto y el escapado de las variables— no aparecen en el camino de
+menor resistencia de nadie y su ausencia no rompe ninguna prueba. La skill existe para
+explicar qué NO tocar y para cubrir lo que sí es del agente: cuándo y dónde sale el
+correo respecto a la transacción.
 
 `database` es la única clave con **dos** skills, y no por tamaño: los seis dialectos
 relacionales comparten mapeo (JPA) y solo difieren en un reference por dialecto,

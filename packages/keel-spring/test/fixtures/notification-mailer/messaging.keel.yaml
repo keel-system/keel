@@ -1,0 +1,54 @@
+publishing:
+  reliability: outbox
+  events:
+    NotificationSent:
+      description: Salió el correo que se había pedido.
+      payload:
+        notificationId: { type: uuid, required: true }
+        applicationKey: { type: string, required: true }
+        templateKey:    { type: string, required: true }
+        recipient:      { type: string, required: true }
+        occurredAt:     { type: timestamp, required: true }
+
+subscriptions:
+  # UNA suscripción, genérica. Con OrderPlaced, UserRegistered, InvoiceIssued… cada
+  # alta de consumidor sería una edición del diseño; con un solo evento genérico, el
+  # sistema número doce entra sin tocar nada.
+  NotificationRequested:
+    description: Un sistema consumidor pide un envío por el canal genérico.
+    source: any-registered-system
+    nature: request
+    contract:
+      # Con envoltura Keel la identidad del mensaje YA es metadata.eventId: el
+      # emisor lo estampa una vez y una reentrega lo repite intacto. No hace falta
+      # declararlo aparte — y hace falta que exista, porque sin clave de
+      # deduplicación se mandan correos duplicados a clientes reales.
+      envelope: keel
+    # Por aquí no llega ningún token, así que hay que decir qué lo sustituye. Y el
+    # dato NO viaja en el payload: ponerlo en dos sitios son dos versiones de la
+    # verdad. Un `source` desconocido es un fallo PERMANENTE — reintentarlo cinco
+    # veces no va a hacer aparecer una fila que no existe.
+    identity:
+      field: applicationKey
+      # El inquilino sale del `source` de la envoltura: el campo que nombra al servicio
+      # emisor. No va en el payload —el dato de identidad está en un solo sitio, o hay
+      # dos versiones de la verdad y una deja de validarse.
+      from: { location: field, name: metadata.source }
+      trustedPublishers: >-
+        Nadie publica anónimamente en este canal: el broker autentica a los emisores, y
+        el conjunto de quienes pueden poner un mensaje son los sistemas registrados de la
+        organización. Sobre eso se acepta la segunda mitad, que es política de desarrollo
+        y no control técnico: cada emisor pone su propio nombre en `source` y nada lo
+        comprueba. Queda vivo que un sistema propio con un bug, o comprometido, pida un
+        envío en nombre de otra aplicación y salga desde su remitente verificado; se
+        asume mientras todos los emisores sean nuestros y estén en la misma malla de
+        confianza, y se revisa el día que entre un tercero o alguien pida no-repudio.
+      # Fallo PERMANENTE: reintentarlo cinco veces con backoff no va a hacer aparecer
+      # una aplicación que no existe, solo retrasa el descubrimiento y llena los logs.
+      onUnresolved: discard
+      description: El servicio emisor que nombra la envoltura del mensaje.
+    payload:
+      templateKey: { type: string, required: true }
+      locale:      { type: string }
+      recipient:   { type: string, required: true }
+    triggers: acceptNotificationRequest

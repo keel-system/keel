@@ -1,0 +1,122 @@
+operations:
+
+  publishTemplate:
+    description: Publica una versión de plantilla y la deja como la activa de su clave e idioma.
+    kind: command
+    input:
+      fields:
+        templateId: { type: uuid, required: true }
+    output: { entity: Template }
+    transitions:
+      - { entity: Template, from: [draft], to: active }
+      - { entity: Template, from: [active], to: retired, description: La versión que estaba activa se retira en el mismo acto. }
+    preconditions:
+      - La plantilla existe y está en borrador.
+    rules:
+      - Publicar una versión retira la que estuviera activa para esa clave e idioma.
+      - Como máximo hay una versión activa por aplicación, clave e idioma.
+    errors:
+      - { code: TEMPLATE_ALREADY_ACTIVE, when: Ya hay otra versión activa para esa clave e idioma., http: 409 }
+      - { code: CONCURRENT_MODIFICATION, when: Otra publicación modificó la misma plantilla a la vez., http: 409 }
+
+  registerTemplate:
+    description: Registra una versión nueva de una plantilla, en borrador.
+    kind: command
+    input:
+      fields:
+        templateKey: { type: string, required: true }
+        locale: { type: string, required: true }
+        subject: { type: string, required: true }
+        bodyHtml: { type: text, required: true }
+        bodyText: { type: text, required: true }
+    output: { entity: Template }
+    rules:
+      - Nace en borrador — registrar una plantilla no la pone delante de nadie.
+      - La versión es la siguiente de esa aplicación, clave e idioma.
+    errors:
+      - { code: TEMPLATE_VERSION_ALREADY_EXISTS, when: Otra petición registró esa misma versión a la vez., http: 409 }
+
+  requestNotification:
+    description: Acepta una petición de envío, la registra y devuelve su identificador.
+    kind: command
+    input:
+      fields:
+        applicationKey:
+          type: string
+          required: true
+          description: Sale del token, nunca del cuerpo de la petición.
+        templateKey: { type: string, required: true }
+        locale: { type: string }
+        recipient: { type: string, required: true }
+    output:
+      fields:
+        notificationId: { type: uuid }
+        status: { type: NotificationStatus }
+    idempotency:
+      keySource: client-key
+    preconditions:
+      - La aplicación está registrada y activa.
+      - Hay una plantilla activa con esa clave e idioma para esa aplicación.
+    rules:
+      - Las variables obligatorias que la plantilla declara tienen que venir todas.
+      - La versión de plantilla y el asunto ya interpolado se congelan en la notificación.
+      - Dos peticiones con la misma clave de idempotencia producen un solo correo.
+    errors:
+      - { code: TEMPLATE_NOT_FOUND, when: No hay plantilla activa con esa clave e idioma para esta aplicación., http: 422 }
+      - { code: MISSING_TEMPLATE_VARIABLE, when: Falta una variable que la plantilla declara obligatoria., http: 422 }
+      - { code: RECIPIENT_SUPPRESSED, when: La dirección está en la lista de supresión., http: 422 }
+      - { code: APPLICATION_INACTIVE, when: La aplicación está dada de baja., http: 403 }
+      - { code: IDEMPOTENCY_KEY_IN_PROGRESS, when: Otra petición con la misma clave se está atendiendo ahora mismo., http: 409 }
+      - { code: IDEMPOTENCY_KEY_REUSED, when: La misma clave llega con un contenido distinto., http: 409 }
+    emits: [NotificationSent]
+
+  acceptNotificationRequest:
+    description: Atiende una petición de envío llegada por el canal genérico de eventos.
+    kind: command
+    internal: true
+    input:
+      fields:
+        applicationKey:
+          type: string
+          required: true
+          description: Sale de la envoltura del mensaje, no del payload.
+        templateKey: { type: string, required: true }
+        locale: { type: string }
+        recipient: { type: string, required: true }
+    output: { entity: Notification }
+    transitions:
+      - { entity: Notification, from: [accepted], to: sent }
+    preconditions:
+      - La aplicación que publicó el mensaje está registrada y activa.
+    rules:
+      - Un mensaje reentregado no produce un segundo correo.
+      - Un mensaje de una aplicación desconocida se descarta sin reintentar.
+    errors:
+      - { code: TEMPLATE_NOT_FOUND, when: No hay plantilla activa con esa clave e idioma para esta aplicación., http: 422 }
+    emits: [NotificationSent]
+
+  getNotification:
+    description: Devuelve el estado de un envío para quien no escucha eventos.
+    kind: query
+    input:
+      fields:
+        notificationId: { type: uuid, required: true }
+    output: { entity: Notification }
+    errors:
+      - { code: NOTIFICATION_NOT_FOUND, when: No existe un envío con ese identificador., http: 404 }
+
+  recordDeliveryFailure:
+    description: Registra que el proveedor no aceptó un envío ya admitido.
+    kind: command
+    internal: true
+    input:
+      fields:
+        notificationId: { type: uuid, required: true }
+        reason: { type: string, required: true }
+    output: { entity: Notification }
+    transitions:
+      - { entity: Notification, from: [accepted], to: failed }
+    rules:
+      - Un envío ya marcado como enviado no puede pasar a fallido.
+    errors:
+      - { code: NOTIFICATION_NOT_FOUND, when: No existe un envío con ese identificador., http: 404 }

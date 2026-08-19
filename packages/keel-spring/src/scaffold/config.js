@@ -5,6 +5,7 @@
 // El perfil activo se elige con la variable de entorno PROFILE (default local).
 
 import { AUTH, DATABASES, HTTP_STUB } from '../lib/stack-catalog.js';
+import { usesPartialIndexes } from './migrations.js';
 import { EMBEDDED_MONGO_VERSION } from '../lib/assets.js';
 import { physicalBucketName } from '../lib/buckets.js';
 import { kebabCase, screamingSnake } from '../lib/naming.js';
@@ -123,6 +124,9 @@ export function generate(model) {
     }
     if (layersPresent.storage && stack.storage) {
       fragments.push(fragment(profile, 'storage', storageYaml(model, profile)));
+    }
+    if (layersPresent.mail) {
+      fragments.push(fragment(profile, 'mail', mailYaml(model, profile)));
     }
     if (layersPresent.httpClients && model.httpClients) {
       fragments.push(fragment(profile, 'http-clients', httpClientsYaml(model, profile)));
@@ -327,8 +331,42 @@ function dbYaml(model, profile, dbName) {
       '        generate_statistics: true'
     );
   }
+  lines.push(...sqlInitLines(model, profile));
   lines.push(...flywayLines(profile));
   return lines.join('\n') + '\n';
+}
+
+/**
+ * Inicialización del appendix de SQL en los perfiles donde el esquema lo pone
+ * Hibernate (local y test). Contiene los índices únicos condicionados, que JPA no
+ * expresa y Hibernate por tanto no crea: sin esto, en local el invariante que
+ * declaró el diseño («como máximo una activa») no lo sostiene nada, y el escenario
+ * que lo prueba pasaría en verde con dos peticiones simultáneas dejando dos filas.
+ *
+ * `defer-datasource-initialization` es lo que ordena las dos mitades: sin él, Boot
+ * ejecuta el script ANTES de que Hibernate cree las tablas y falla por tabla
+ * inexistente. En develop/production no aplica: allí el esquema lo pone Flyway y el
+ * appendix ya viaja dentro del baseline.
+ */
+function sqlInitLines(model, profile) {
+  // Solo `local`. El perfil `test` corre sobre H2, que no tiene índices parciales:
+  // ejecutar ahí el appendix —escrito para el dialecto elegido— rompería el arranque
+  // del contexto de @SpringBootTest por sintaxis, y un servicio con motor sin soporte
+  // ni siquiera tendría archivo que ejecutar. Ahí la unicidad condicionada no se
+  // comprueba, y no pasa nada: quien la ejercita es el escenario de integración, que
+  // corre contra el motor de verdad.
+  if (profile !== 'local') return [];
+  if (!usesPartialIndexes(model)) return [];
+  return [
+    '    # El appendix de SQL corre DESPUÉS de que Hibernate cree las tablas.',
+    '    defer-datasource-initialization: true',
+    '  sql:',
+    '    init:',
+    '      # Índices condicionados que Hibernate no infiere (ver db/partial-indexes.sql).',
+    '      mode: always',
+    '      data-locations: "classpath:db/partial-indexes.sql"',
+    '      continue-on-error: false'
+  ];
 }
 
 /**
@@ -690,6 +728,71 @@ function securityYaml(model, profile) {
 // S3FileStorage/S3Config que escribe el AGENTE siguiendo la skill del proveedor:
 // el scaffolding solo genera el puerto FileStorage, ver storage.js). MinIO local
 // coincide con el docker-compose; S3 usa los endpoints por defecto del SDK.
+/**
+ * Correo saliente. Sigue el mismo gradiente que el resto —literal en local,
+ * variable obligatoria en production— y son exactamente cuatro parámetros: cambiar
+ * de proveedor en producción es cambiarlos y reiniciar, con el mismo binario y sin
+ * recompilar. En producción no se escriben a mano (los inyecta un Secret, Vault o
+ * un gestor de secretos), pero el consumo sigue siendo por variable de entorno, así
+ * que el patrón no cambia.
+ *
+ * En local apunta al Mailpit de infra/: acepta la conexión sin autenticación ni
+ * TLS y no entrega nada a nadie, así que ningún correo de pruebas puede llegar a
+ * una dirección real. Con un proveedor de verdad en desarrollo, eso pasa el primer
+ * día.
+ *
+ * Lo que sale del DISEÑO —el remitente, las partes del cuerpo, si hay adjuntos— va
+ * bajo la clave `mail:`, aparte de `spring.mail`: no es configuración del
+ * transporte, es lo que el diseño decidió y el adaptador aplica.
+ */
+function mailYaml(model, profile) {
+  const isLocalish = profile === 'local' || profile === 'test';
+  const mail = model.mail ?? {};
+  const lines = [
+    'spring:',
+    '  mail:',
+    `    host: ${envValue(profile, 'MAIL_HOST', 'localhost')}`,
+    `    port: ${envValue(profile, 'MAIL_PORT', 1025)}`,
+    `    username: ${envValue(profile, 'MAIL_USERNAME', '')}`,
+    `    password: ${envValue(profile, 'MAIL_PASSWORD', '')}`,
+    '    properties:',
+    '      mail:',
+    '        smtp:'
+  ];
+  if (isLocalish) {
+    // Mailpit no exige ni autenticación ni cifrado, y pedirlos aquí haría fallar
+    // el envío contra la propia infraestructura de prueba.
+    lines.push('          auth: false', '          starttls:', '            enable: false');
+  } else {
+    lines.push(
+      `          auth: ${envWithDefault(profile, 'MAIL_SMTP_AUTH', true)}`,
+      '          starttls:',
+      `            enable: ${envWithDefault(profile, 'MAIL_SMTP_STARTTLS', true)}`
+    );
+  }
+  // Un envío que se queda esperando a un proveedor caído bloquea el hilo que lo
+  // hace. Los defaults de JavaMail son "sin timeout": el hilo espera para siempre.
+  lines.push(
+    `          connectiontimeout: ${envWithDefault(profile, 'MAIL_CONNECT_TIMEOUT_MS', 5000)}`,
+    `          timeout: ${envWithDefault(profile, 'MAIL_READ_TIMEOUT_MS', 5000)}`,
+    `          writetimeout: ${envWithDefault(profile, 'MAIL_WRITE_TIMEOUT_MS', 5000)}`
+  );
+
+  lines.push('', 'mail:', `  multipart: ${mail.multipart === true}`, `  attachments: ${mail.attachments === true}`);
+  if (mail.sender?.source === 'fixed') {
+    lines.push(`  sender: ${envValue(profile, 'MAIL_SENDER', mail.sender.address)}`);
+  } else if (mail.sender?.fallback) {
+    lines.push(
+      '  # Remitente de respaldo: se usa cuando el dato del servicio no lo resuelve.',
+      `  sender-fallback: ${envValue(profile, 'MAIL_SENDER_FALLBACK', mail.sender.fallback)}`
+    );
+  }
+  if (mail.replyTo?.source === 'fixed') {
+    lines.push(`  reply-to: ${envValue(profile, 'MAIL_REPLY_TO', mail.replyTo.address)}`);
+  }
+  return lines.join('\n') + '\n';
+}
+
 function storageYaml(model, profile) {
   const { stack } = model;
   const isMinio = stack.storage === 'minio';
@@ -1023,6 +1126,15 @@ function testProfileFiles(model) {
 
   if (usesHttpIdempotency(model)) {
     fragments.push(fragment('test', 'idempotency', idempotencyYaml('test')));
+  }
+
+  // Correo: el binding de las propiedades `mail.*` y el JavaMailSender que
+  // autoconfigura Boot se crean también en @SpringBootTest, o el contexto muere
+  // al construir el adaptador. En test apunta al mismo localhost:1025 que en
+  // local y NADA lo llama: el perfil test no ejercita el envío (eso es de los
+  // escenarios de integración, que corren contra el Mailpit de infra/).
+  if (model.layersPresent.mail) {
+    fragments.push(fragment('test', 'mail', mailYaml(model, 'test')));
   }
 
   // Resource server JWT: sin issuer-uri ni jwk-set-uri, Boot no autoconfigura

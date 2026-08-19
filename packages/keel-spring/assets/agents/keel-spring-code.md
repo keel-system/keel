@@ -36,7 +36,12 @@ misma raíz. Todo lo que hagas ocurre dentro de ella.
    no se resuelve en silencio.
 3. Localiza los puntos de trabajo con `grep -rn "TODO" src` y trabaja capa por capa
    en el orden del `{{keel:context}}`: application → domain → api → security →
-   messaging → http-clients → storage → persistence → configuración por ambiente.
+   messaging → http-clients → storage → mail → persistence → configuración por ambiente.
+   **El correo es la excepción del reparto**: su adaptador SMTP y su renderizador ya están
+   escritos enteros (build los genera), y no los tocas — lo tuyo es componer el
+   `MailMessage` en los handlers que `mail.sentBy` declara y decidir dónde va el `send`
+   respecto a la transacción. Lee la skill `keel-spring-mail` antes: lo que ese adaptador
+   lleva dentro son dos defensas cuya ausencia no rompe ninguna prueba.
    Antes de tocar `domain/` lee `{{keel:docs}}/conventions/domain-modeling.md` (agregados ricos:
    factory de creación, métodos semánticos del `lifecycle`, guarda por invariante, value
    objects auto-validados y reparto de la validación entre capas — el dominio generado no

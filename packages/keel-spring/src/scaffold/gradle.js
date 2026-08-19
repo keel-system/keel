@@ -7,6 +7,7 @@ import {
   JAVA_VERSION,
   SPRINGDOC_VERSION,
   RESILIENCE4J_VERSION,
+  HANDLEBARS_VERSION,
   JACKSON_NULLABLE_VERSION,
   FLAPDOODLE_SPRING_VERSION
 } from '../lib/assets.js';
@@ -76,6 +77,22 @@ export function generate(model) {
   }
   if (layersPresent.storage) {
     dependencies.push(...(STORAGE[stack.storage]?.gradleDependencies ?? []));
+  }
+  if (layersPresent.mail) {
+    // JavaMailSender + su autoconfiguración por spring.mail.*: es lo que hace que
+    // cambiar de proveedor sea cambiar variables de entorno y no recompilar.
+    dependencies.push("implementation 'org.springframework.boot:spring-boot-starter-mail'");
+    // Motor de plantillas SIN lógica arbitraria, y no es una preferencia estética.
+    // El cuerpo lo escribe alguien de fuera del equipo (templating.source: data),
+    // y Thymeleaf —lo natural en Spring— evalúa SpEL, que puede invocar métodos
+    // arbitrarios: eso es una ejecución remota de código esperando a suceder.
+    // Handlebars solo sustituye variables, recorre listas y evalúa condiciones
+    // simples; no hay forma de llamar a nada. Se paga en expresividad, y es más
+    // una virtud que un defecto: formatear un importe tiene reglas de locale y se
+    // prueba mucho mejor en el llamante que dentro de una cadena guardada en una fila.
+    if (model.mail?.templating) {
+      dependencies.push(`implementation 'com.github.jknack:handlebars:${HANDLEBARS_VERSION}'`);
+    }
   }
   if (layersPresent.httpClients) {
     // RestClient (starter-web) + resilience4j sobre AOP (starter-aop ya presente)

@@ -160,6 +160,18 @@ function summarizeStorage(doc) {
   return { buckets };
 }
 
+function summarizeMail(doc) {
+  return {
+    transport: doc?.delivery?.transport ?? null,
+    parts: doc?.delivery?.parts ?? [],
+    attachments: doc?.delivery?.attachments === true,
+    sentBy: doc?.sentBy ?? [],
+    senderSource: doc?.sender?.source ?? null,
+    templatingSource: doc?.templating?.source ?? null,
+    declaredVariables: doc?.templating?.declaredVariables === true
+  };
+}
+
 const LAYER_SUMMARIZERS = {
   domain: ['domain', summarizeDomain],
   'use-cases': ['useCases', summarizeUseCases],
@@ -169,7 +181,8 @@ const LAYER_SUMMARIZERS = {
   'http-clients': ['httpClients', summarizeHttpClients],
   dependencies: ['dependencies', summarizeDependencies],
   persistence: ['persistence', summarizePersistence],
-  storage: ['storage', summarizeStorage]
+  storage: ['storage', summarizeStorage],
+  mail: ['mail', summarizeMail]
 };
 
 /**

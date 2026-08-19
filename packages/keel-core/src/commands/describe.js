@@ -152,6 +152,19 @@ function printStorage(storage) {
   }
 }
 
+function printMail(mail) {
+  const headline = [mail.transport, mail.parts.join('+')].filter(Boolean).join(' ');
+  console.log(pc.bold('mail') + pc.dim(` — ${headline}`));
+  console.log(`  ${pc.dim('•')} remitente ${pc.cyan(mail.senderSource ?? '?')}`);
+  if (mail.templatingSource) {
+    const declared = mail.declaredVariables ? ', variables declaradas' : '';
+    console.log(`  ${pc.dim('•')} plantillas ${pc.cyan(mail.templatingSource)}${pc.dim(declared)}`);
+  }
+  if (mail.sentBy.length > 0) {
+    console.log(`  ${pc.dim('•')} lo envían ${pc.cyan(mail.sentBy.join(', '))}`);
+  }
+}
+
 const DERIVATIVE_MARKS = {
   fresh: () => pc.green('✔'),
   stale: () => pc.yellow('⚠'),
@@ -205,7 +218,8 @@ const LAYER_PRINTERS = {
   'http-clients': ['httpClients', printHttpClients],
   dependencies: ['dependencies', printDependencies],
   persistence: ['persistence', printPersistence],
-  storage: ['storage', printStorage]
+  storage: ['storage', printStorage],
+  mail: ['mail', printMail]
 };
 
 export function describe(ref) {

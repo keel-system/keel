@@ -1,0 +1,31 @@
+# Capa mail — el correo que este servicio EMITE.
+# Agnóstica del proveedor: se declara que se manda correo y con qué forma sale, no SMTP host ni SES/Brevo.
+# El proveedor concreto es dato de despliegue. Recuerda declarar la capa en service.keel.yaml → layers.mail.
+#
+# No confundir con otras dos capas que también "salen del servicio":
+#   http-clients  → llamadas HTTP a un proveedor que publica contrato.
+#   dependencies  → otros SERVIDORES de los que este depende (incluido "el servicio de notificación").
+# Un relay SMTP no es ninguna de las dos: no publica contrato y no es un servicio Keel.
+
+# delivery:
+#   transport: smtp
+#   parts: [html, text]        # las dos ⇒ multipart/alternative (sin la textual, los filtros antispam desconfían)
+#   # attachments: false       # true solo si los mensajes pueden llevar archivos
+
+# sentBy:                     # las operaciones que mandan correo (deben existir en use-cases)
+#   - requestNotification      # sin esto, el generador no sabe desde dónde se envía
+
+# sender:
+#   source: data               # data | fixed
+#   # address: no-reply@ejemplo.com    # obligatorio y exclusivo de source: fixed
+#   # fallback: no-reply@ejemplo.com   # solo con source: data; sin él, un dato sin remitente NO envía
+#   description: Sale del remitente verificado que cada aplicación consumidora tiene registrado.
+
+# replyTo:
+#   source: fixed
+#   address: soporte@ejemplo.com
+
+# templating:
+#   source: data               # data: el cuerpo es un dato del servicio (lo edita negocio, sin desplegar)
+#                              # bundled: el cuerpo son recursos del repositorio, versionados con el código
+#   declaredVariables: true    # cada plantilla declara sus variables y el envío se valida antes de renderizar

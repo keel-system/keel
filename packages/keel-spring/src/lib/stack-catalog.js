@@ -32,6 +32,7 @@
 // el resto lo ignora.
 
 import { declaredBuckets } from './buckets.js';
+import { validateCommand as mailValidateCmd, resetCommand as mailResetCmd, HTTP_PORT as MAIL_HTTP_PORT, SMTP_PORT as MAIL_SMTP_PORT, SERVICE as MAIL_SERVICE } from './mail-probes.js';
 
 // Credenciales de la infraestructura de prueba local (LocalStack y MinIO las
 // ignoran; el SDK y la AWS CLI exigen que EXISTAN). Van al contenedor devtools
@@ -724,6 +725,68 @@ export const HTTP_STUB = {
   })
 };
 
+// ─── Destino de prueba del correo saliente ───────────────────────────────────
+//
+// Gemelo exacto de HTTP_STUB, y por el mismo motivo: un servicio que manda correo
+// no tiene a quién mandárselo en `infra/`. Sin destino SMTP, cualquier escenario
+// FL-* que termine en un correo falla por conexión rechazada —que no dice nada
+// sobre el código— y la capa `mail` queda sin poder puntuarse.
+//
+// Mailpit es un servidor SMTP que acepta la conexión, la autenticación y el
+// mensaje, y NO entrega nada a nadie: se lo queda y lo sirve por una API REST.
+// Eso es lo que convierte «se envía el correo correcto» en algo que un test
+// automático puede afirmar; sin la API, la verificación del correo es siempre
+// manual. Y de paso quita el accidente que ocurre el primer día con un proveedor
+// real en desarrollo: ningún correo de pruebas puede llegar a una dirección de
+// verdad.
+//
+// No es un doble en el sentido que prohíbe conventions/integration-tests.md: no
+// sustituye nada dentro de la JVM, es un proceso aparte hablando SMTP por el
+// mismo socket que hablaría el proveedor. Igual que WireMock y que LocalStack.
+//
+// No es una elección de stack: no entra en CATALOG como categoría elegible ni en
+// STACK_DEFAULTS ni en el cuestionario. Se gatea por diseño (capa mail).
+//
+// Lo que NO cubre, y por eso la skill lo dice en voz alta: no rebota nada (la
+// lista de supresión y el webhook de rebotes hay que simularlos invocando el
+// endpoint), no dice nada sobre entregabilidad (SPF, DKIM, DMARC y reputación son
+// trabajo de DNS y de proveedor) y no aplica los límites del proveedor (tamaño
+// máximo del mensaje, envíos por segundo): lo acepta todo.
+export const MAIL_SINK = {
+  id: 'mailpit',
+  label: 'Mailpit (destino SMTP de prueba)',
+  image: 'axllent/mailpit:v1.21',
+  // El puerto que sondea y consulta todo el mundo es el HTTP; el SMTP es al que
+  // apunta la aplicación y no se sondea con curl.
+  port: MAIL_HTTP_PORT,
+  smtpPort: MAIL_SMTP_PORT,
+  serviceKey: MAIL_SERVICE,
+  cliTool: 'curl',
+  cliVia: 'devtools',
+  // Los comandos salen de mail-probes.js, no de un literal: el arnés y este
+  // sondeo tienen que hablar con la MISMA API o el gate en vivo prueba otra cosa.
+  cliValidateCmd: mailValidateCmd(),
+  // Vacía el buzón entre flujos de validación. Sin esto, un correo del flujo
+  // anterior sigue ahí y el Then del siguiente afirma sobre el mensaje equivocado
+  // — el mismo fallo que la purga de los canales del broker existe para evitar.
+  cliResetCmd: mailResetCmd(),
+  composeServices: () => ({
+    mailpit: {
+      image: 'axllent/mailpit:v1.21',
+      environment: {
+        // Buzón acotado: la infraestructura de prueba se levanta y se tira, y un
+        // buzón sin tope crece durante toda una corrida del pipeline.
+        MP_MAX_MESSAGES: 500,
+        // Sin autenticación SMTP en local, que es lo que hace que el fragmento
+        // `local` de la app no necesite credenciales (ver parameters/local/mail.yaml).
+        MP_SMTP_AUTH_ACCEPT_ANY: 'true',
+        MP_SMTP_AUTH_ALLOW_INSECURE: 'true'
+      },
+      ports: [`${MAIL_SMTP_PORT}:${MAIL_SMTP_PORT}`, `${MAIL_HTTP_PORT}:${MAIL_HTTP_PORT}`]
+    }
+  })
+};
+
 export const STACK_DEFAULTS = {
   database: 'postgresql',
   // Default de la rama documental. No es una segunda pregunta: el diseño elige el
@@ -760,7 +823,8 @@ const CATALOG = {
   auth: AUTH,
   cache: CACHES,
   storage: STORAGE,
-  httpStub: { wiremock: HTTP_STUB }
+  httpStub: { wiremock: HTTP_STUB },
+  mail: { mailpit: MAIL_SINK }
 };
 
 /**
@@ -780,7 +844,10 @@ export function selectedInfra(model) {
     storage: layersPresent.storage ? stack.storage : null,
     // Gateado por diseño, no por stack: si hay integraciones salientes hace
     // falta con quién hablar en la infraestructura de prueba.
-    httpStub: layersPresent.httpClients ? HTTP_STUB.id : null
+    httpStub: layersPresent.httpClients ? HTTP_STUB.id : null,
+    // Mismo criterio que el stub HTTP: gateado por diseño, no por stack. Si el
+    // servicio manda correo, hace falta a quién mandárselo.
+    mail: layersPresent.mail ? MAIL_SINK.id : null
   };
 
   const infra = [];
@@ -883,6 +950,13 @@ export const HEALTHCHECKS = {
   }),
   minio: () => ({
     test: ['CMD-SHELL', 'curl -sf http://localhost:9000/minio/health/live'],
+    interval: '5s',
+    timeout: '5s',
+    retries: 20
+  }),
+  // La imagen de Mailpit trae su propio comando de sondeo (no trae curl ni wget).
+  mailpit: () => ({
+    test: ['CMD-SHELL', '/mailpit readyz'],
     interval: '5s',
     timeout: '5s',
     retries: 20

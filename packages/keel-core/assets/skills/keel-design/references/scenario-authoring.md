@@ -39,6 +39,7 @@ Recorre los artefactos y construye la lista de obligaciones. Es un borrador de t
 | `messaging.reliability: outbox` | un escenario de **supervivencia**: con el canal indisponible, la mutación responde igual y el canal sigue vacío; restablecido, el evento llega **exactamente una vez**. Las dos negaciones son lo que lo hace fallable |
 | `activations[].reconciledBy` | **ninguno, por construcción** — no hay puerta de caja negra que dispare un barrido por tiempo. Se declara el umbral y qué queda observable; la verificación es estática (ver `validation-scenarios.md § Lo que no tiene escenario`) |
 | `storage.buckets` | subida feliz, lectura según `visibility`, lectura de una clave inexistente, `FILE_TOO_LARGE`, `UNSUPPORTED_CONTENT_TYPE` |
+| capa `mail` | que sale el correo (destinatario, asunto ya interpolado y las partes que declara `delivery.parts`), que **no** sale cuando la operación rechaza, y que un reintento con la misma guarda no manda un segundo. El Then afirma sobre el buzón, no sobre el 2xx: la respuesta acepta el encargo, no lo cumple |
 
 Cuando el inventario esté completo, la **matriz de cobertura** sale de él, no de los flujos.
 

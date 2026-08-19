@@ -34,6 +34,7 @@ Distinción operativa:
    | `dependencies[].needs` · `http-clients` `calls` | … | 8, 16 |
    | `security.access` / operaciones sobre datos de un titular | … | 9 |
    | `storage.buckets` | … | 10, 16 |
+   | `mail.sentBy` (las operaciones que mandan correo) | … | 17, 2, 16 |
    | `api.endpoints` `audience: services`/`both` | … | 11, 15 |
    | `persistence.entities` · `consistency` | … | 14, 16 |
    | todo el servicio | — | 12 |
@@ -53,6 +54,7 @@ Distinción operativa:
    | 5. Consultas | sí | `listOrders`, `searchOrders`, `getOrderHistory` | 1 hueco (#2), 2 ok |
    | 9. Autorización a nivel de dato | sí | 11/11 operaciones | 2 huecos (#1, #4) |
    | 10. Archivos | no — sin capa `storage` | — | — |
+   | 17. Correo saliente | no — sin capa `mail` | — | — |
 
    **Hallazgos** — todo lo encontrado, ordenado por severidad:
 
@@ -290,6 +292,23 @@ Un `schedule` es la única superficie del servicio sin cliente que espere respue
 - Operaciones `internal: true`: ¿quién las invoca de verdad? Una operación sin trigger y sin llamante conocido es código muerto declarado.
 
 No es hueco lo que ya es **contrato canónico** del DSL y por tanto no puede divergir: el sobre de paginación y los nombres `page`/`size` (`docs/dsl/api.md § pagination`). No lo listes.
+
+### 17. Correo saliente
+
+*Aplica si:* hay capa `mail`.
+
+Un correo es el único efecto de un servicio que **llega a una persona real y no se puede
+retirar**. Ninguna transacción lo deshace, ningún reintento lo corrige, y el destinatario
+ya lo ha leído. Eso cambia el peso de cada hueco de esta clase.
+
+- **La repetición.** ¿Cada operación de `sentBy` tiene guarda (`idempotency` o una transición)? Sin ella, un reintento del llamante —o una reentrega del broker, que es *at-least-once* por definición— manda el correo dos veces.
+- **El desenlace del envío que falla.** Si la operación responde antes de enviar (un `202`), ¿qué pasa cuando el envío falla después? ¿Se reintenta, se marca como fallido, se avisa a alguien? Sin desenlace declarado, el correo se pierde en silencio y quien lo pidió cree que salió.
+- **El orden de las comprobaciones.** ¿En qué punto exacto se manda respecto a las validaciones y a la persistencia? Cada comprobación que quede *después* del envío es un correo que no se puede retirar.
+- **El remitente.** Con `sender.source: data`, ¿qué pasa cuando el dato no lo resuelve? Sin `fallback` no se envía (falla cerrado, que quema menos reputación); con él, se envía desde la genérica. Las dos son decisiones legítimas y opuestas: la que no se toma la toma el generador.
+- **Las variables.** Con `templating.declaredVariables`, ¿hay error declarado para la variable obligatoria que falta? Sin él, se interpola vacía y el correo sale diciendo «Tu pedido por  € está confirmado» — un fallo que se descubre por la reclamación del cliente.
+- **El destinatario que no debe recibir.** ¿Hay algo que impida enviar a una dirección que rebotó o se quejó? Un rebote duro quema la reputación del remitente, que es **compartida** por todos los consumidores del servicio: no puede quedar en manos de cada llamante.
+- **Quién puede pedir el envío.** Si el servicio manda correo por cuenta de varios sistemas, ¿de dónde sale la identidad de quien lo pide — del token, o de un campo del cuerpo? Si viaja en el cuerpo, cualquier cliente autenticado puede enviar en nombre de otro, desde su remitente verificado.
+
 
 ### 16. Decisiones estructurales sin dueño
 

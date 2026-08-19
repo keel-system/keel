@@ -37,6 +37,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
   const dependencies = layers['dependencies'];
   const persistence = layers['persistence'];
   const storage = layers['storage'];
+  const mail = layers['mail'];
 
   const types = new Set(Object.keys(domain.types ?? {}));
   const entities = new Set(Object.keys(domain.entities ?? {}));
@@ -1159,6 +1160,36 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
       );
     }
 
+    // La identidad de quien pide el trabajo: no viene del payload, así que ni cuenta
+    // como campo mapeado ni puede estar además en `input`. Que el dato de identidad
+    // esté en un solo sitio es lo que impide que dos versiones de la verdad se
+    // desincronicen — y lo que hace que la operación reciba el inquilino ya resuelto
+    // en vez del mensaje crudo.
+    const identity = sub.identity;
+    if (identity) {
+      const opInputFields = inputFieldsOf(operations[sub.triggers]?.input);
+      if (opInputFields && !(identity.field in opInputFields)) {
+        errors.push(
+          `${where}.identity.field: la operación '${sub.triggers}' no declara '${identity.field}' en su input`
+        );
+      }
+      if (identity.field in (sub.input ?? {})) {
+        errors.push(
+          `${where}.identity.field: '${identity.field}' se resuelve además en 'input' — la identidad viaja por un ` +
+            `solo camino, o hay dos versiones de la verdad y una dejará de validarse`
+        );
+      }
+      // Con envoltura Keel el dato existe (metadata.source lo estampa el emisor); con
+      // una fuente que no la usa, un dot-path a 'metadata.*' apunta a algo que no llega.
+      const envelope = sub.contract?.envelope;
+      if (identity.from?.location === 'field' && identity.from.name.startsWith('metadata.') && envelope === 'none') {
+        errors.push(
+          `${where}.identity.from: lee '${identity.from.name}' pero contract.envelope es 'none' (el mensaje ES el ` +
+            `payload): no hay envoltura de la que sacar la identidad`
+        );
+      }
+    }
+
     const mapping = sub.input ?? {};
     for (const [inputField, payloadField] of Object.entries(mapping)) {
       if (!payloadFields.has(payloadField)) {
@@ -1175,6 +1206,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
       }
     }
     const covered = new Set(Object.keys(mapping));
+    if (sub.identity) covered.add(sub.identity.field);
     const usedPayloadFields = new Set(Object.values(mapping));
     for (const [inputField, def] of Object.entries(opInput)) {
       if (covered.has(inputField)) continue;
@@ -2037,8 +2069,17 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
       checkPersistenceMember(entityName, entity, member, 'naturalKey');
     }
     for (const index of spec?.indexes ?? []) {
-      for (const member of index ?? []) {
+      // Dos formas admitidas: la lista de campos a secas y el objeto con unique/when.
+      const fields = Array.isArray(index) ? index : (index?.fields ?? []);
+      for (const member of fields) {
         checkPersistenceMember(entityName, entity, member, 'indexes');
+      }
+      // El campo de la condición también es del dominio, y un typo ahí es peor que
+      // en los demás: el índice se crearía sobre una columna que no existe (o, en
+      // el modelo documental, sobre una ruta que nunca casa) y la unicidad que el
+      // diseño declaró no la sostendría nada, en silencio.
+      if (!Array.isArray(index) && index?.when) {
+        checkPersistenceMember(entityName, entity, index.when.field, 'indexes.when');
       }
     }
 
@@ -2237,6 +2278,69 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
       warnings.push(
         `storage: buckets.${bucketName}: es private y no declara 'signedUrlTtlSeconds': la URL firmada con la ` +
           `que se lee su contenido caduca, pero el diseño no dice cuándo`
+      );
+    }
+  }
+
+  // mail: qué operaciones mandan correo. Es el único enlace del DSL entre un caso de uso
+  // y la salida por correo, así que un nombre que no existe deja la capa apuntando al
+  // vacío: el generador no encontraría dónde inyectar el envío y no lo generaría en
+  // ninguna parte, sin que nada lo dijera.
+  if (mail) {
+    for (const opName of mail.sentBy ?? []) {
+      if (operationNames.size > 0 && !operationNames.has(opName)) {
+        errors.push(`mail: sentBy: la operación '${opName}' no existe en use-cases: operations`);
+      }
+    }
+
+    // Un correo que sale es un efecto FUERA de este proceso y no lo deshace ninguna
+    // transacción: si la operación que lo manda se repite, el destinatario recibe dos.
+    // Con N sistemas reintentando —y con un consumidor de eventos, que es at-least-once
+    // por definición— eso no es una hipótesis. La guarda existe en el DSL (idempotency en
+    // la operación, o la transición de un agregado): lo que no puede pasar es que no haya
+    // ninguna y nadie lo haya decidido.
+    for (const opName of mail.sentBy ?? []) {
+      const op = operations[opName];
+      if (!op) continue;
+      const guarded = op.idempotency != null || (op.transitions ?? []).length > 0;
+      if (!guarded) {
+        warnings.push(
+          `mail: sentBy: la operación '${opName}' manda correo y no declara 'idempotency' ni ninguna ` +
+            `transición: si se repite, el destinatario recibe el mensaje dos veces y eso no lo deshace ` +
+            `ninguna transacción`
+        );
+      }
+    }
+
+    // El remitente sin red: con source: data y sin fallback, un dato que no resuelve
+    // deja el mensaje sin remitente y el envío falla. Puede ser lo correcto (fallar
+    // cerrado antes que enviar desde una dirección que nadie verificó ante el proveedor),
+    // pero es una decisión, y el diseño tiene que haberla tomado a sabiendas.
+    if (mail.sender?.source === 'data' && !mail.sender.fallback) {
+      warnings.push(
+        "mail: sender: es 'data' y no declara 'fallback': un envío cuyo dato no resuelva el remitente no " +
+          'sale (falla cerrado). Si eso es lo que se quiere, dilo en su description; si no, declara la dirección de respaldo'
+      );
+    }
+
+    // La alternativa textual. No es por los clientes de correo de texto —quedan pocos—
+    // sino porque los filtros antispam desconfían de un HTML sin ella, y eso no se
+    // descubre en ninguna prueba local: se descubre en la carpeta de spam del cliente.
+    const parts = mail.delivery?.parts ?? [];
+    if (parts.includes('html') && !parts.includes('text')) {
+      warnings.push(
+        "mail: delivery.parts: declara 'html' sin 'text': un correo HTML sin alternativa textual lo penalizan " +
+          'los filtros antispam, y eso no falla en ninguna prueba — se ve en la carpeta de spam de quien lo recibe'
+      );
+    }
+
+    // Validar contra las variables DECLARADAS es lo que evita el fallo más caro: mandar
+    // un correo que dice «Tu pedido por  € está confirmado». Sin la declaración, una
+    // variable que falta se interpola vacía y el fallo se descubre por la reclamación.
+    if (mail.templating?.source === 'data' && !mail.templating.declaredVariables) {
+      warnings.push(
+        "mail: templating: el cuerpo es 'data' y no declara 'declaredVariables': una variable que falte se " +
+          'interpolará como vacío y el correo saldrá con un hueco donde iba el dato, sin que nada falle'
       );
     }
   }

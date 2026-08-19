@@ -91,7 +91,7 @@ Ningún evento viaja desnudo: todo mensaje que publica un servicio Keel sale env
 | `eventType` | `string` | Nombre del evento en el diseño (`ProductCreated`). Sirve de discriminador cuando un canal transporta varios tipos. |
 | `eventVersion` | `int` | Versión del contrato del `payload`. Arranca en `1` y solo sube al romper compatibilidad. |
 | `occurredAt` | `timestamp` | Instante ISO-8601 en UTC en que **ocurrió el hecho** en el dominio, no el del envío (con `reliability: outbox` pueden distar). |
-| `source` | `string` | Nombre del servicio emisor (`service.name` del manifiesto). |
+| `source` | `string` | Nombre del servicio emisor (`service.name` del manifiesto). Es **procedencia declarada**, no identidad verificada: sirve para trazar, nunca para autorizar (ver abajo). |
 | `correlationId` | `string` \| `null` | Correlación de la petición que originó el hecho; es lo que hila la traza end-to-end entre servicios. `null` si no hubo contexto de petición (p. ej. un job programado). |
 | `data` | objeto | El `payload` declarado en `publishing.events.<Evento>.payload`, con sus campos tal cual. |
 
@@ -99,6 +99,95 @@ Esta forma es **parte del contrato público**: `/keel-docs` la publica en el `as
 (el payload de cada mensaje publicado es `{ metadata, data }`), no solo en la documentación en prosa.
 
 Es también la forma que asume `envelope: keel` al describir el [contrato de recepción](#contrato-de-recepción-contract) de una suscripción, y la que **todo generador debe emitir**: es lo que permite que dos servicios Keel escritos en tecnologías distintas se consuman entre sí sin traductor. Cómo se materializa en cada stack (nombres de clase, serializador) es decisión del generador; la forma del cable, no.
+
+#### `source` es procedencia, no identidad
+
+Conviene decirlo aparte porque el campo invita a lo contrario. `source` lo estampa el
+emisor **en el cuerpo del mensaje**, hermano de `data`, con un valor que sale de su
+propio manifiesto. Nadie al otro lado lo comprueba —ningún generador lo lee siquiera— y
+cualquiera que pueda publicar en ese canal escribe ahí lo que quiera.
+
+De ahí la regla, que es sobre lo que `source` **es**: no es una credencial. La simetría con
+el eje HTTP es exacta y vale la pena tenerla presente: allí la identidad sale de la
+credencial (el token) y jamás del cuerpo de la petición; en un broker la credencial es lo
+que el **broker** autenticó en el momento de publicar. Un servicio que atienda a varios
+emisores y decida algo en función de quién le escribe tiene ahí su fuente verificada: el
+destino del que consume (una entrada por emisor, con ACL), o el principal que el propio
+broker estampa cuando la tecnología lo ofrece. Eso es **configuración de despliegue, no
+diseño**, y viaja con el nombre físico del topic/cola, que esta capa ya declara fuera del
+spec.
+
+Y con eso dicho: **hay organizaciones que resuelven el inquilino desde `source` a
+sabiendas**, y es una decisión defendible mientras todos los emisores sean sistemas propios
+que el broker ya autenticó. Lo que no se puede es hacerlo **sin decirlo** — que era el
+verdadero problema: un servicio que autoriza con un dato del cuerpo sin que el diseño lo
+declare en ninguna parte. Por eso esa vía existe, pero solo dentro de
+[`identity`](#cuando-el-inquilino-sí-tiene-que-salir-del-mensaje-identity) y obligando a
+escribir la asunción que la sostiene.
+
+Para lo demás, `source` sirve para lo mismo que `correlationId`: traza, diagnóstico y
+enrutado de soporte — saber de dónde dice venir un mensaje cuando alguien lo investiga.
+
+#### Cuando el inquilino sí tiene que salir del mensaje: `identity`
+
+Todo lo anterior dice por qué `source` no es identidad **verificada**. Lo que no dice es qué
+hacer cuando un servicio atiende a varios emisores y tiene que decidir algo según quién le
+escribe: ahí hace falta un inquilino, y por el broker no llega ningún token. `identity` es
+dónde se declara de dónde sale, y el efecto de declararlo es que el caso de uso recibe el
+inquilino **ya resuelto** en vez del mensaje crudo.
+
+```yaml
+subscriptions:
+  NotificationRequested:
+    source: any-registered-system
+    nature: request
+    contract: { envelope: keel }
+    identity:
+      field: applicationKey                        # campo del input de la operación disparada
+      from: { location: field, name: metadata.source }
+      trustedPublishers: >-
+        Nadie publica anónimamente en este canal: el broker autentica a los emisores. Sobre
+        eso se acepta que cada uno ponga su propio nombre en `source`, que es política de
+        desarrollo y no control técnico.
+      onUnresolved: discard                        # permanente: sin reintentos
+    payload: { ... }
+    triggers: acceptNotificationRequest
+```
+
+**Las dos opciones de `from` son legítimas; lo que no lo es es no haber decidido.**
+
+| | `location: header` | `location: field` |
+|---|---|---|
+| De dónde sale | Un metadato que estampa el **broker** (`user_id` de AMQP, `SenderId` de SQS) | Un campo del **cuerpo** (`metadata.source`) |
+| Quién la garantiza | El broker, que rechaza el `publish` si no coincide con la conexión | Una política de desarrollo: nada en el camino lo comprueba |
+| Qué hace falta para suplantar | Robar la credencial del emisor ante el broker | Escribir otro nombre en un campo |
+| Riesgo residual | Credencial filtrada | Un emisor **registrado** enviando en nombre de otro |
+
+Con `location: field`, el schema **exige `trustedPublishers`**: la asunción que sostiene el
+mecanismo, en prosa. No es una casilla de conformidad — es lo que hace la decisión revisable
+el día que cambie, y sin escribirla cada quien supondrá una cosa distinta. La asunción tiene
+casi siempre dos mitades y solo una es técnica: (1) el broker autentica a los emisores, lo
+que acota el riesgo a quienes ya están dentro; (2) cada emisor pone su propio nombre, que no
+lo comprueba nadie. La primera hace el trabajo pesado; la segunda **no elimina lo que queda**,
+y se acepta a sabiendas mientras todos los emisores sean sistemas propios en la misma malla
+de confianza.
+
+Dos cosas más que declarar `identity` cierra:
+
+- **El dato de identidad está en un solo sitio.** `identity.field` no puede aparecer además
+  en `input`: son dos versiones de la verdad, y tarde o temprano una deja de validarse. Por
+  eso tampoco viaja en el `payload`.
+- **`onUnresolved` es un fallo permanente, no transitorio.** Una identidad que no resuelve a
+  nada conocido no va a resolver en el intento cinco: reintentarlo con backoff solo retrasa el
+  descubrimiento y llena los logs. Por eso no hay opción de reintentar y se declara aparte de
+  `onFailure`, que trata todo fallo como transitorio.
+
+**La señal para pasar a `header` es inconfundible**: el día que un emisor deje de estar dentro
+del perímetro de confianza —un tercero, un sistema de otra organización, un cliente que se
+integra— o que alguien pida no-repudio del origen para una auditoría. Y cambiarlo es barato
+porque la resolución vive en **un único punto**: son estas dos líneas, y no tocan el dominio,
+ni los casos de uso, ni el esquema. Mientras tanto, `/keel-validate` relee la asunción en cada
+revisión en vez de darla por vigente.
 
 ## Suscripciones
 
@@ -162,5 +251,6 @@ La consecuencia práctica: un `request` **no obliga a declarar su `source` como 
 - **Por qué existe una suscripción `fact`**: de qué dependencia forma parte, qué copia local alimenta y qué compensa → capa `dependencies`. Aquí se declara el canal de entrada; allí, la razón de negocio que lo justifica. (Una suscripción `request` no tiene entrada en `dependencies`: su razón de ser es que alguien nos encarga trabajo, y eso se declara en el diseño de quien nos lo encarga.)
 - **A quién le pedimos trabajo publicando un evento**: eso no es una decisión de esta capa. Aquí solo vive el evento y su payload; que exista *para* que un servicio concreto actúe, y contra qué versión de su contrato, va en `dependencies: activations`.
 - La frontera transaccional que sostiene el outbox → `persistence` (`consistency`).
+- **Quién está autorizado a publicar** en un canal del que consumimos: ACLs del broker, credenciales del emisor, un destino por origen. Se decide al desplegar, y `metadata.source` no lo sustituye — es un dato que escribe el emisor, no una identidad verificada.
 - El broker concreto y el nombre físico del topic/cola que respalda cada canal → se deciden al **generar**, nunca en el spec. También el de un canal `external`, cuyo nombre real ya existe fuera: entra como parámetro de despliegue, no como dato de diseño.
 - El consumer group / la durabilidad de la suscripción y el número de consumidores → decisión de generación y despliegue.

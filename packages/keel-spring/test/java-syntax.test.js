@@ -192,7 +192,11 @@ const MATRIX = [
   // audiencia que mira el scope en vez de `aud`. Sin esta fila, ese Java no lo tokeniza
   // nadie — y es Java emitido por plantilla, que es justo donde se cuela un paréntesis.
   ['asset-vault', { broker: 'kafka', auth: 'cognito' }],
-  ['product-catalog', {}]
+  ['product-catalog', {}],
+  // La silueta del correo: la ÚNICA que renderiza la sección de buzón de
+  // AbstractFlowIT, el adaptador SMTP, el motor de plantillas y el appendix de
+  // índices condicionados. Sin esta fila, todo ese Java no lo tokeniza nadie.
+  ['notification-mailer', { broker: 'kafka' }]
 ];
 
 // El comprobador se comprueba a sí mismo. Un linter que solo sale en verde no

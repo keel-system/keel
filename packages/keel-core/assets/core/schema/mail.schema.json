@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schema/2.0/mail.schema.json",
+  "title": "Keel Mail Layer",
+  "description": "Correo electrónico que este servicio EMITE. Es la salida propia del servicio, no una dependencia de otro servidor (eso es 'dependencies') ni una integración HTTP saliente (eso es 'http-clients'): un proveedor SMTP no publica contrato ni es un servicio Keel. Agnóstica del proveedor —Mailpit en local, SES/Brevo/Postmark en producción se deciden al desplegar, no aquí— y declara solo lo que es decisión de diseño: que se manda correo, con qué forma sale y de dónde salen el remitente y el cuerpo.",
+  "type": "object",
+  "required": ["delivery", "sender", "sentBy"],
+  "additionalProperties": false,
+  "properties": {
+    "description": {
+      "type": "string",
+      "minLength": 10,
+      "description": "Qué correo emite este servicio y a quién, en lenguaje de negocio."
+    },
+    "delivery": {
+      "type": "object",
+      "required": ["transport", "parts"],
+      "additionalProperties": false,
+      "description": "Cómo sale el mensaje al mundo. El proveedor concreto NO se declara: es dato de despliegue.",
+      "properties": {
+        "transport": {
+          "type": "string",
+          "enum": ["smtp"],
+          "description": "Protocolo de salida. Hoy solo smtp, que es el denominador común de todos los proveedores (SES, Brevo, Postmark y cualquier relay lo hablan). Un enum de un solo valor no es decorativo: hace que añadir una API propietaria sea una decisión visible en el diseño y no un cambio silencioso del adaptador."
+        },
+        "parts": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Partes del cuerpo que viajan en cada mensaje. Con html y text sale un multipart/alternative, que es lo que evita que los filtros antispam desconfíen de un HTML sin alternativa textual — y por eso declarar 'html' sin 'text' es una decisión que se ve, no un olvido.",
+          "items": { "type": "string", "enum": ["html", "text"] }
+        },
+        "attachments": {
+          "type": "boolean",
+          "default": false,
+          "description": "Si los mensajes pueden llevar archivos adjuntos. Declararlo obliga a mirar el límite de tamaño del proveedor (los adjuntos viajan en base64, que infla un 33%), y su ausencia es lo que permite afirmar que el correo no es una vía de salida de ficheros."
+        }
+      }
+    },
+    "sentBy": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "description": "Operaciones de este servicio que mandan correo (deben existir en use-cases: operations). Es el ÚNICO enlace del DSL entre un caso de uso y la salida por correo, y por eso es obligatorio: sin él la capa declara que el servicio manda correo pero no dice desde dónde, el generador no sabe en qué handler inyectar el envío, y el camino de menor resistencia es no mandarlo. Mismo papel que 'usedBy' en un need de dependencies.",
+      "items": { "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/operationName" }
+    },
+    "sender": {
+      "$ref": "#/$defs/addressSource",
+      "description": "De qué dirección salen los mensajes. Es una decisión de negocio y de reputación: la dirección tiene que estar verificada ante el proveedor, así que quién la elige (el diseñador de una vez, o un dato del servicio por cada envío) es parte del diseño."
+    },
+    "replyTo": {
+      "$ref": "#/$defs/addressSource",
+      "description": "Dirección a la que responde quien recibe el correo, cuando no es la del remitente (se envía desde no-reply@ pero se quiere que respondan a soporte@). Opcional: sin ella, responder va al remitente."
+    },
+    "templating": {
+      "type": "object",
+      "required": ["source"],
+      "additionalProperties": false,
+      "description": "De dónde sale el cuerpo del mensaje. Es la decisión que más consecuencias arrastra de toda la capa, y por eso se declara aquí y no se deduce.",
+      "properties": {
+        "source": {
+          "type": "string",
+          "enum": ["data", "bundled"],
+          "description": "data: el cuerpo es un DATO de este servicio (una entidad del domain que alguien da de alta por API o back-office) — la base de datos es la fuente de verdad y dar de alta un correo nuevo no es un despliegue. bundled: el cuerpo son recursos del propio repositorio, versionados con el código y desplegados con él. La diferencia no es de mecanismo: 'data' significa que el contenido lo posee negocio y cambia sin tocar código, y que quien lo escribe puede ser ajeno al equipo — de donde sale la exigencia de que el motor de renderizado no evalúe expresiones arbitrarias."
+        },
+        "declaredVariables": {
+          "type": "boolean",
+          "default": false,
+          "description": "Si cada plantilla declara qué variables acepta y cuáles son obligatorias, y el envío se valida contra esa declaración antes de renderizar. Solo tiene sentido con source: data (con bundled la plantilla y el código que la rellena viajan en el mismo commit y se revisan juntos). Sin esto, una variable que falta se interpola como vacío y el correo sale diciendo 'Tu pedido por  € está confirmado': el fallo se descubre por la reclamación del cliente.",
+          "$comment": "Es una decisión de contrato, no de mecánica: qué entidad declara las variables y cómo se validan es domain y use-cases. Aquí solo se declara que ese contrato existe."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "source": { "const": "bundled" } }, "required": ["source"] },
+          "then": { "not": { "required": ["declaredVariables"] } }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "$comment": "Un cuerpo HTML sin plantilla es HTML compilado dentro del servicio, y eso convierte cada alta de correo en un despliegue.",
+      "if": {
+        "properties": {
+          "delivery": {
+            "type": "object",
+            "required": ["parts"],
+            "properties": { "parts": { "contains": { "const": "html" } } }
+          }
+        },
+        "required": ["delivery"]
+      },
+      "then": { "required": ["templating"] }
+    }
+  ],
+  "$defs": {
+    "addressSource": {
+      "type": "object",
+      "required": ["source"],
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "type": "string",
+          "enum": ["data", "fixed"],
+          "description": "data: la dirección sale de un dato del servicio, distinta según de parte de quién se envía. fixed: una sola dirección para todo el servicio, declarada aquí."
+        },
+        "address": {
+          "type": "string",
+          "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$",
+          "description": "La dirección. Obligatoria y exclusiva de source: fixed."
+        },
+        "fallback": {
+          "type": "string",
+          "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$",
+          "description": "Dirección con la que se envía cuando el dato no la resuelve. Solo con source: data. Sin ella, un dato que falta deja el envío sin remitente y el mensaje no sale — que puede ser exactamente lo que se quiere (fallar cerrado antes que enviar desde una dirección que nadie verificó), y por eso es opcional y no tiene default.",
+          "$comment": "Declararla es decir 'preferimos enviar desde la genérica antes que no enviar'. Omitirla es decir lo contrario. Las dos son decisiones; ninguna es el default."
+        },
+        "description": { "type": "string" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "source": { "const": "fixed" } }, "required": ["source"] },
+          "then": {
+            "required": ["address"],
+            "not": { "required": ["fallback"] }
+          }
+        },
+        {
+          "if": { "properties": { "source": { "const": "data" } }, "required": ["source"] },
+          "then": { "not": { "required": ["address"] } }
+        }
+      ]
+    }
+  }
+}

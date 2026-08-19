@@ -29,7 +29,8 @@ import {
   STORAGE,
   HEALTHCHECKS,
   UI_SERVICES,
-  HTTP_STUB
+  HTTP_STUB,
+  MAIL_SINK
 } from '../lib/stack-catalog.js';
 import { cognitoMockConfig, realmSpec } from './auth-provisioning.js';
 import { RUNTIME_RESOLUTION, composeResolution } from './devtools.js';
@@ -53,7 +54,9 @@ const PORT_VARS = {
   'redis:6379': 'REDIS_PORT',
   'valkey:6379': 'VALKEY_PORT',
   'minio:9000': 'MINIO_PORT',
-  'minio:9001': 'MINIO_CONSOLE_PORT'
+  'minio:9001': 'MINIO_CONSOLE_PORT',
+  'mailpit:1025': 'MAILPIT_SMTP_PORT',
+  'mailpit:8025': 'MAILPIT_UI_PORT'
 };
 
 export function generate(model) {
@@ -211,6 +214,15 @@ function composeServices(model) {
     const storageServices = STORAGE[stack.storage].composeServices(model);
     Object.assign(services, withHealthcheck(storageServices, stack.storage));
     if ('minio' in storageServices) volumes['minio-data'] = null;
+  }
+
+  // Destino del correo, también en las pruebas manuales: sin él la app arranca
+  // apuntando a un SMTP que no existe y el primer envío revienta. Y su interfaz
+  // web es justo lo que el diseñador quiere mirar aquí —cómo se ve el correo, con
+  // sus dos partes y sus cabeceras—, que es lo que la API no le enseña. No entra
+  // en UI_SERVICES porque no añade contenedor: la interfaz viene en la imagen.
+  if (layersPresent.mail) {
+    Object.assign(services, withHealthcheck(MAIL_SINK.composeServices(), MAIL_SINK.id));
   }
 
   // Keycloak: importa el realm al arrancar y abre el puerto de management que
@@ -385,6 +397,22 @@ function appEnvironment(model) {
       value: `http://localhost:${HTTP_STUB.publishedPort}`,
       comment: `URL del servicio de prueba para ${client.id}`
     });
+  }
+
+  // Correo: la app del compose habla con el Mailpit de al lado, por el nombre de
+  // servicio de la red (no por localhost, que dentro del contenedor es él mismo).
+  // Son los MISMOS cuatro parámetros que en producción apuntan al proveedor
+  // contratado: cambiar de Brevo a SES es cambiar estas variables y reiniciar.
+  if (model.layersPresent.mail) {
+    for (const [name, value, comment] of [
+      ['MAIL_HOST', 'mailpit', 'Servidor SMTP (en producción, el del proveedor contratado)'],
+      ['MAIL_PORT', '1025', 'Puerto SMTP (587 con STARTTLS en la mayoría de proveedores)'],
+      ['MAIL_USERNAME', '', 'Usuario SMTP (Mailpit acepta cualquiera; en producción es obligatorio)'],
+      ['MAIL_PASSWORD', '', 'Contraseña SMTP (en producción, de un gestor de secretos)']
+    ]) {
+      environment[name] = `\${${name}}`;
+      extraEnv.push({ name, value, comment });
+    }
   }
 
   return { environment, extraEnv };

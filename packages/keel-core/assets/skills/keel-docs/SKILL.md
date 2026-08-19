@@ -92,7 +92,7 @@ hasta que pase.
 ### 4. `overview.html` — panel del servicio (+ visores)
 
 Una página autocontenida que responde de un vistazo qué hace el servicio y qué infraestructura exige:
-capacidades (persistencia, broker, outbox, caché, storage, clientes HTTP, seguridad, jobs), los casos
+capacidades (persistencia, broker, outbox, caché, storage, correo, clientes HTTP, seguridad, jobs), los casos
 de uso como acordeones agrupados por audiencia (con entrada, salida, errores, idempotencia, caché y
 seguridad de cada uno), los eventos, los clientes HTTP y el modelo de dominio. Enlaza los contratos y
 los visores.

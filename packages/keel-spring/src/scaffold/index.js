@@ -49,6 +49,7 @@ import * as httpClients from './http-clients.js';
 import * as lastKnown from './last-known.js';
 import * as dependencies from './dependencies.js';
 import * as storage from './storage.js';
+import * as mail from './mail.js';
 import * as services from './services.js';
 import * as readme from './readme.js';
 import * as contextMd from './context-md.js';
@@ -107,6 +108,7 @@ const GENERATORS = [
   lastKnown,
   dependencies,
   storage,
+  mail,
   services,
   // Después de services: su matriz cita clases que los generadores de arriba nombran,
   // aunque el script solo las busque en tiempo de ejecución.

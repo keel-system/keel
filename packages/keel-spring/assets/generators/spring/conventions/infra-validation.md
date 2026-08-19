@@ -128,6 +128,7 @@ El script enumera en su cabecera exactamente lo que deja limpio, según el stack
 | Destinos de mensajería | purga cada canal declarado en `messaging.keel.yaml § channels` |
 | Buckets | vacía el **contenido** de cada bucket declarado en `storage.keel.yaml`, no el bucket: recrearlo es del sidecar `minio-init`, que solo corre al levantar la infraestructura, y con él se iría la policy pública |
 | Stub de proveedores | reinicia mappings y log de peticiones de WireMock |
+| Buzón de correo | vacía el buzón de Mailpit. Un correo del flujo anterior sigue ahí y el primer `awaitMailTo` del siguiente devolvería el mensaje equivocado — el mismo fallo que la purga de los canales evita en el broker |
 
 En Kafka no hay purga posible (kcat no borra registros), así que su equivalente lo aplica
 `AbstractFlowIT.resetState()`: una **marca de offset** por destino, tras la cual

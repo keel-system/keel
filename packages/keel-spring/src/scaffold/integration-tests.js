@@ -12,6 +12,7 @@
 // puede importar una clase del servicio.
 
 import { javaFile, javaPath } from './render.js';
+import { mailSection, hasMail, MAIL_IMPORTS } from './mail-harness.js';
 import { pascalCase } from '../lib/naming.js';
 import { DATABASES, BROKERS, CACHES, selectedInfra, brokerContainer } from '../lib/stack-catalog.js';
 import { cacheFlushCmd, concreteCmd, needsDevtools } from './devtools.js';
@@ -515,6 +516,9 @@ function abstractImports(model) {
   // multiplexadas sobre el mismo topic comparten DLT, y marcarlo dos veces gastaría un
   // sondeo de más contra el broker por cada clase de flujo.
   if (broker?.id === 'kafka' && usesDeadLetter(model)) imports.push('java.util.Set');
+  // Lectura del buzón: la dirección del escenario va codificada en la URL de
+  // búsqueda, así que la sección necesita el codificador y su charset.
+  if (hasMail(model)) imports.push(...MAIL_IMPORTS, 'java.util.ArrayList', 'java.util.List', 'java.util.Map');
   // Flag de la caída provocada por el propio escenario (palanca del outbox).
   if (usesBrokerControl(model)) imports.push('java.util.concurrent.atomic.AtomicBoolean');
   // Segunda réplica: proceso aparte lanzado desde el jar.
@@ -1150,7 +1154,7 @@ ${hasIdempotency(model) ? `
     }
 
     // ── Estado e infraestructura ─────────────────────────────────────────────
-${resetSection(model)}${inMemoryResetSection(model)}${bashExecutableSection(model)}${httpStubSection(model)}${devtoolsSection(model)}${brokerControlSection(model)}${replicaSection(model)}${dbSection(model)}${containerExecSection(model)}${securitySection(model)}}`;
+${resetSection(model)}${inMemoryResetSection(model)}${bashExecutableSection(model)}${httpStubSection(model)}${mailSection(model)}${devtoolsSection(model)}${brokerControlSection(model)}${replicaSection(model)}${dbSection(model)}${containerExecSection(model)}${securitySection(model)}}`;
 }
 
 // Proveedor de prueba de las integraciones salientes. Es infraestructura, no un
@@ -3513,6 +3517,23 @@ ${probes}
             }
             throw new AssertionError("El proveedor de prueba no responde en http://localhost:8090", e);
         }
+    }
+`);
+  }
+
+  // El buzón es fontanería igual que el broker: si no responde, todo flujo que
+  // termine en un correo falla en su Then con un error de conexión que no dice nada
+  // sobre el servicio. Y que arranque VACÍO importa tanto como que responda — un
+  // correo de la corrida anterior hace que el primer awaitMailTo devuelva el
+  // mensaje equivocado, y el escenario falla (o pasa) por el motivo que no es.
+  if (hasMail(model)) {
+    tests.push(`
+    @Test
+    @Order(7)
+    @DisplayName("SMOKE-7: el buzón de prueba responde y el reset lo deja vacío")
+    void mailSinkIsReachable() {
+        Assertions.assertEquals(0, mailCount("humo@keel.test"),
+            "El buzón no arranca vacío: un correo de la corrida anterior haría que el primer awaitMailTo de un flujo devolviera el mensaje equivocado.");
     }
 `);
   }

@@ -17,7 +17,7 @@ export const SKILL = 'keel-generate-spring';
 // Versiones del DSL keel que este generador sabe mapear (manifest.keel del servicio).
 // Una sola, en espejo del enum de service.schema.json: keel-core no acepta
 // versiones anteriores porque sus schemas no gatean primitivos por versión.
-export const SUPPORTED_DSL = ['2.8'];
+export const SUPPORTED_DSL = ['2.9'];
 
 // Stack del scaffolding generado (un solo sitio para actualizarlo).
 export const SPRING_BOOT_VERSION = '3.5.3';
@@ -25,6 +25,10 @@ export const JAVA_VERSION = 21;
 export const GRADLE_VERSION = '8.14';
 export const SPRINGDOC_VERSION = '2.8.9';
 export const RESILIENCE4J_VERSION = '2.3.0';
+// Motor de plantillas del correo, sin lógica arbitraria. Solo se añade con capa
+// mail: es la elección que impide que un cuerpo escrito fuera del equipo pueda
+// invocar métodos de la JVM (ver la nota de gradle.js).
+export const HANDLEBARS_VERSION = '4.4.0';
 // Wrapper JsonNullable: solo se añade si el diseño declara alguna actualización
 // parcial (PATCH), donde el contrato distingue campo ausente de campo nulo.
 export const JACKSON_NULLABLE_VERSION = '0.2.6';

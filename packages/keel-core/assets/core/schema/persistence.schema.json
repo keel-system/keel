@@ -37,11 +37,62 @@
           },
           "indexes": {
             "type": "array",
-            "description": "Índices sugeridos: cada índice es la lista de campos que lo componen.",
+            "description": "Índices sugeridos. Cada entrada es la lista de campos que lo componen (forma corta) o un objeto que además declara unicidad y la condición bajo la que se aplica.",
             "items": {
-              "type": "array",
-              "items": { "type": "string" },
-              "minItems": 1
+              "oneOf": [
+                {
+                  "type": "array",
+                  "description": "Forma corta: solo los campos, índice no único y sin condición.",
+                  "items": { "type": "string" },
+                  "minItems": 1
+                },
+                {
+                  "type": "object",
+                  "required": ["fields"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "fields": {
+                      "type": "array",
+                      "items": { "type": "string" },
+                      "minItems": 1,
+                      "description": "Campos que componen el índice."
+                    },
+                    "unique": {
+                      "type": "boolean",
+                      "default": false,
+                      "description": "Si la combinación de campos no puede repetirse. Es una GARANTÍA, no una expectativa: la comprobación previa del caso de uso produce el error de negocio en el caso normal, pero solo el índice impide que dos peticiones simultáneas la sorteen."
+                    },
+                    "when": {
+                      "type": "object",
+                      "required": ["field", "equals"],
+                      "additionalProperties": false,
+                      "description": "Condición bajo la que el índice aplica: la unicidad vale solo para las filas que la cumplen. Es lo que hace expresable un invariante del tipo «como máximo una versión ACTIVA por clave»: sin condición habría que elegir entre no poder tener nunca dos versiones o no garantizar nada. Se acota a 'campo = valor' a propósito — una expresión libre sería SQL dentro del diseño, y el diseño es agnóstico del motor.",
+                      "properties": {
+                        "field": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Campo de la entidad sobre el que se condiciona."
+                        },
+                        "equals": {
+                          "description": "Valor que ese campo debe tener para que el índice aplique.",
+                          "type": ["string", "number", "boolean"]
+                        }
+                      }
+                    },
+                    "description": { "type": "string" }
+                  },
+                  "allOf": [
+                    {
+                      "$comment": "Un índice condicionado que no es único no restringe nada: solo acelera consultas, y para eso no hace falta la condición.",
+                      "if": { "type": "object", "required": ["when"] },
+                      "then": {
+                        "properties": { "unique": { "const": true } },
+                        "required": ["unique"]
+                      }
+                    }
+                  ]
+                }
+              ]
             }
           }
         }

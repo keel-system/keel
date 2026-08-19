@@ -104,6 +104,7 @@ service (manifiesto)
 | `integrations` que expresan **dependencia de otro servidor** | `dependencies.keel.yaml`: `needs` si se le lee un dato (el porqué y la estrategia), `activations` si se le encarga trabajo (el porqué y el efecto) + `http-clients`/`messaging` como canales |
 | `integrations` kind `storage` (BD) | `persistence.keel.yaml` |
 | `integrations` kind `storage` (archivos/blobs) | `storage.keel.yaml` (buckets) + campos `file` en `domain.keel.yaml` |
+| correo saliente propio (SMTP) | `mail.keel.yaml` (transporte, remitente, plantillas y las operaciones que lo mandan) |
 
 ## División de responsabilidades
 

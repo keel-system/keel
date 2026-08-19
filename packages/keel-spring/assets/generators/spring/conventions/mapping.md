@@ -753,6 +753,53 @@ la visibilidad del diseño o el adaptador, no el mapper.
 | `buckets.B.visibility: public` | Lectura directa permitida: el adaptador **debe aplicar la bucket policy de lectura anónima** (idempotente, en cada arranque; S3 y MinIO crean los buckets privados). Sin ella la subida responde `201` y el `GET` directo `403`. El `ResponseDto` expone la **URL absoluta**, compuesta desde `storage.public-base-url` — la que alcanza el consumidor (CDN o borde; `localhost` en local), **no** el `endpoint` con el que el servicio habla con el almacén, que en compose es un nombre de red que fuera no resuelve |
 | campo `file` de una entidad | La entidad persiste la **key** del objeto (String); el controller recibe el binario como `multipart/form-data` (`MultipartFile`), el handler valida contra el bucket y delega en `FileStorage`, y guarda la key devuelta. La traducción al cable la hace el mapper, no el handler |
 
+## `mail` — mail.keel.yaml
+
+Sin esta capa (servicio que no manda correo), no se incluye ninguna dependencia de
+correo, ni destino SMTP en `infra/`, ni adaptador. Con ella, el reparto es **distinto
+al de las demás capas de infraestructura**: build genera también el adaptador.
+
+La frontera del generador dice que el código cuya implementación cambia según la
+infraestructura elegida lo escribe el agente. El correo no cumple esa condición: el
+transporte es SMTP en local y en producción, el adaptador es el mismo contra Mailpit
+y contra el proveedor contratado, y lo único que cambia son cuatro parámetros de
+configuración. Lo que sí cambia el reparto es lo que hay **dentro** del adaptador:
+dos defensas que no aparecen en el camino de menor resistencia de nadie y cuya
+ausencia no rompe ninguna prueba —el correo sale igual, y sale mal—.
+
+El scaffolding determinista genera: las dependencias Gradle
+(`spring-boot-starter-mail` y, con `templating`, Handlebars), el servicio **Mailpit**
+en `infra/docker-compose.yaml` con su sondeo y su purga en `reset-db.sh`, el
+fragmento `parameters/<perfil>/mail.yaml` (`spring.mail.*` con el gradiente habitual
+—literal en local, variable obligatoria en production— más timeouts explícitos,
+porque los defaults de JavaMail son *sin timeout*; y bajo la clave `mail:` lo que
+decidió el diseño: `multipart`, `attachments`, `sender-fallback`, `reply-to`), el
+value object `domain/mail/MailMessage`, el puerto `application/port/out/MailSender`
+con su `MailDeliveryException`, el **adaptador `infrastructure/mail/SmtpMailSender`
+completo**, y —con `templating`— el puerto `TemplateRenderer` y el adaptador
+`HandlebarsTemplateRenderer`. Más, en el arnés de integración, la sección que sabe
+leer el buzón (`awaitMailTo`, `lastMailTo`, `mailSubject`, `mailHtml`, `mailText`,
+`mailCount`, `assertNoMailTo`) y su sonda de humo.
+
+Al agente le queda **componer el mensaje y decidir cuándo sale**, que es lo único
+que es lógica de negocio. Lo cubre la skill `keel-spring-mail`.
+
+| Diseño | Código |
+|--------|--------|
+| capa `mail` presente | Puerto `application/port/out/MailSender` + adaptador `infrastructure/mail/SmtpMailSender` (`JavaMailSender`), **los dos de scaffolding**. El agente no escribe otro adaptador ni toca el que hay |
+| `delivery.transport: smtp` | `spring-boot-starter-mail` y `spring.mail.*`. Único valor hoy: es el denominador común de todos los proveedores, y por eso cambiar de proveedor es cambiar variables de entorno, no recompilar |
+| `delivery.parts: [html, text]` | `multipart/alternative` con las dos partes (`MimeMessageHelper#setText(text, html)`, en ese orden: la preferida va la última). Con una sola parte, mensaje simple. La alternativa textual no es por los clientes de texto —quedan pocos— sino porque los filtros antispam desconfían de un HTML sin ella, y eso no falla en ninguna prueba |
+| `delivery.attachments: true` | El record `MailMessage.Attachment` y la rama de `addAttachment` del adaptador. Sin declararlo, el mensaje no puede llevar adjuntos: es lo que permite afirmar que el correo no es una vía de salida de ficheros |
+| `sentBy: [op, …]` | Las operaciones donde el `MailSender` se inyecta y desde donde sale el correo. Es el **único** enlace del DSL entre un caso de uso y la salida por correo: sin él no habría dónde inyectarlo, y el camino de menor resistencia sería no mandarlo. `keel validate` avisa si alguna de esas operaciones no declara `idempotency` ni una transición — un correo que sale no lo deshace ninguna transacción |
+| `sender.source: fixed` | `mail.sender` en la configuración, inyectado por constructor. Una sola dirección para todo el servicio |
+| `sender.source: data` | El remitente viaja en el `MailMessage` que compone el handler (sale de un dato del servicio: el remitente verificado de cada consumidor) |
+| `sender.fallback` | `mail.sender-fallback`: el adaptador lo aplica cuando el dato no resuelve. **Sin declararlo, el adaptador falla cerrado** y no envía — que puede ser exactamente lo que se quiere: enviar desde una dirección que nadie verificó ante el proveedor quema la reputación de todos |
+| `replyTo` | `helper.setReplyTo(...)`, desde `mail.reply-to` con `source: fixed` o desde el mensaje con `source: data` |
+| `templating.source: data` | Puerto `TemplateRenderer` + `HandlebarsTemplateRenderer`, con caché de compilación por clave. **El motor no evalúa expresiones y eso es una decisión de seguridad, no de estilo**: el cuerpo lo escribe alguien ajeno al equipo, y un motor con SpEL sería ejecución remota de código. Ver `keel-spring-mail/references/security.md` |
+| `templating.declaredVariables: true` | Que existe un contrato de variables por plantilla y que el envío se valida contra él **antes** de renderizar. Qué entidad lo declara y cómo se valida es `domain` y `use-cases`; el error que se devuelve, también. Sin esta validación, una variable ausente se interpola vacía y el correo sale con un hueco donde iba el dato, sin que nada falle |
+| (siempre) | Saneado del asunto: se eliminan `\r` y `\n` en el **constructor** de `MailMessage`, no en el adaptador, para que ningún camino pueda saltárselo. Un salto de línea en una variable interpolada en el `Subject:` permite inyectar cabeceras SMTP — un `Bcc:` que nadie puso |
+| (siempre) | Escapado HTML por defecto de las variables (`{{var}}`, nunca `{{{var}}}`). Un dato que llega con `<script>` se escribe como texto: hay clientes de correo que ejecutan |
+
 ## Cobertura funcional (criterio de "generación terminada")
 
 La generación **no** está terminada si falta alguna de estas dos condiciones:
