@@ -50,6 +50,25 @@ Ejemplos del dominio:
 | Nombre e imagen del producto en el histórico de pedidos | `replicated` | Además de barato, es **deseable**: el histórico debe conservar lo que el cliente vio. |
 | Comprobar que un producto **existe** al crear el pedido | `replicated` con `onMiss: fetch` | La copia resuelve el 99 %; el alta recién creada se rescata con una llamada. |
 
+## 1b. `exposedAs`: ¿el dato además sale en la respuesta?
+
+Se pregunta para **todo** `need`, con la estrategia ya elegida y antes de pasar a la segunda ronda. Por
+defecto un `need` solo sirve para **decidir**: gobierna una guarda o un cálculo y no viaja al cliente.
+`exposedAs: <campo>` es lo contrario — el dato ajeno además **se devuelve** en la salida de las
+operaciones de `usedBy`, con ese nombre. El default (no exponerlo) es lo correcto en la mayoría de los
+casos, así que la pregunta se hace para poder decir que no a sabiendas.
+
+| Pregunta al diseñador | Va a | Trampa habitual |
+|---|---|---|
+| ¿El cliente necesita **ver** este dato, o solo que nosotros decidamos con él? | `exposedAs`, o su ausencia | Exponerlo «ya que lo tenemos» acopla nuestro contrato público al del proveedor: el día que él cambie la forma del dato, cambia nuestra respuesta. |
+| Si se expone, ¿con qué nombre viaja en **nuestro** contrato? | el valor de `exposedAs` | Es nuestro nombre, no el suyo. |
+| ¿Qué **forma** tiene el dato en el origen? | nada que declarar, pero sí que decir en voz alta | Viaja con la forma **entera** del origen: si allí es `{amount, currency}`, aquí es un objeto y no un número, aunque el nombre (`currentPrice`) invite a leerlo al revés. |
+| ¿Lo expone alguna operación que devuelve **varios elementos**? | vuelve al eje **Volumen** de § 1 | Con `on-demand` es una llamada al proveedor **por elemento** de la página. `keel validate` lo avisa; la salida es `replicated` o un endpoint de lote suyo. |
+
+Y una consecuencia de contrato que hay que decirle al diseñador antes de que la descubra un integrador:
+el campo expuesto es **siempre opcional**. Si la llamada declara `fallback`, o la política de
+`onUnavailable`/`onMiss` admite seguir sin el dato, el propio diseño ya está diciendo que puede faltar.
+
 ## 2. Segunda ronda, solo con `replicated`
 
 | Pregunta | Va a | Trampa habitual |
@@ -210,6 +229,9 @@ modelo de datos completo del proveedor, y sus códigos de error tal cual como er
 - [ ] Toda compensación tiene, si el workspace lleva `system.yaml`, la arista `consumes` con
       `kind: events` hacia ese proveedor —además del `invokes` de la activación que deshace—: sin ella
       `keel system check` da la suscripción por no contemplada.
+- [ ] De cada `need` se preguntó si el dato **además sale en la respuesta** (`exposedAs`), y la respuesta
+      —incluido el «no», que es el default— la dio el diseñador. Ninguno expuesto en una salida de varios
+      elementos con `strategy: on-demand`.
 - [ ] Toda réplica declara `onMiss`, y su `fedBy` cubre **altas, cambios y bajas**.
 - [ ] Todo `onMiss.action: fail` tiene su `error` declarado en **cada** operación de `usedBy`.
 - [ ] La entidad de la réplica está en `persistence.entities`, su `keyField` es `unique`, y su

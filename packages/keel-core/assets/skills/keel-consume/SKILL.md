@@ -95,6 +95,13 @@ Tres ejes (tabla de decisión completa en `references/consume-interview.md`):
    consecuencia de negocio?
 3. **Volumen** — ¿es una consulta por petición, o un listado que exigiría N llamadas?
 
+Y una cuarta pregunta que no es de estrategia pero se cierra aquí, porque cambia el **contrato
+público**: **¿el dato además sale en la respuesta?** (`exposedAs`). El default —no exponerlo— es lo
+correcto casi siempre, pero se pregunta igual en vez de asumirlo: un dato ajeno en nuestra salida
+acopla nuestro contrato al del proveedor, y viaja con la **forma entera** del origen (un objeto, no un
+escalar). Si además la operación devuelve varios elementos, la respuesta vuelve al eje **Volumen**.
+Trampas en `references/consume-interview.md § 1b`.
+
 Si sale `replicated`, segunda ronda:
 
 - **`freshness`** — tolerancia a leer un dato viejo, en prosa. Si el diseñador da un número, tradúcelo a

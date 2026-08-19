@@ -19,13 +19,13 @@ Ninguna de las cinco es una pregunta técnica disfrazada: todas cambian lo que e
 **prometer** a sus clientes y el coste de operarlo. Por eso **no son tuyas**. Tú conoces el mecanismo;
 el diseñador conoce el negocio que lo paga y lo que ocurre cuando falla.
 
-El catálogo de la sección 3 tiene diez entradas, pero **es un catálogo, no una lista cerrada**: ante
+El catálogo de la sección 3 tiene doce entradas, pero **es un catálogo, no una lista cerrada**: ante
 cualquier decisión que responda a una de las cinco preguntas de arriba, aplica el mismo protocolo
 aunque no esté aquí.
 
 ## 2. Protocolo de decisión
 
-Vale igual para las diez entradas:
+Vale igual para las doce entradas:
 
 1. **Recomienda una opción concreta, con su porqué.** Un menú neutro de tres opciones equivalentes le
    devuelve al humano el trabajo de pensar que tú puedes hacer por él. Di cuál elegirías y por qué,

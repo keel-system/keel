@@ -35,6 +35,11 @@ pagination: { style: offset, defaultSize: 20, maxSize: 100 }
   el cliente no lo manda y `maxSize` el tope: un `size` mayor se recorta a `maxSize`, no da error.
   Los nombres no se declaran en el DSL porque son los mismos para todo servicio y todo generador —
   **los escenarios de validación deben escribirse contra estos**.
+
+  Ese sobre es el de `style: offset`, que es el default y el único que hoy materializa algún generador.
+  `style: cursor` existe en el schema pero **ningún generador lo implementa**: quien lo declare recibirá
+  paginación por offset, y el generador debe decirlo en su build en vez de ignorarlo en silencio
+  (keel-spring lo avisa). Mientras no haya uno que lo sirva, declararlo es intención, no contrato.
 - Paths con `{param}` van entre comillas en YAML.
 
 ## Qué NO va aquí

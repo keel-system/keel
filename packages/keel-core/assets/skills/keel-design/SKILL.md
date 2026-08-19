@@ -25,7 +25,7 @@ No son preguntas técnicas: cambian lo que el servicio puede **prometer** a sus 
 - **Nunca lo escribas en silencio**, ni siquiera cuando la respuesta te parezca obvia o cuando el diseñador vaya a decir que sí. Un default tácito es una decisión que tomaste tú sin decirlo.
 - Si elige lo contrario a tu recomendación, **acata sin insistir** y anota el porqué para `/keel-handoff`.
 
-El catálogo completo —diez entradas, con sus ejes de decisión, sus consecuencias observables y sus trampas— está en `references/structural-decisions.md`. Léelo al empezar el paso 3 y ábrelo por la entrada que toque en cada capa. **Es un catálogo, no una lista cerrada**: ante cualquier decisión que responda a una de esas cinco preguntas, aplica el mismo protocolo aunque no esté ahí.
+El catálogo completo —doce entradas, con sus ejes de decisión, sus consecuencias observables y sus trampas— está en `references/structural-decisions.md`. Léelo al empezar el paso 3 y ábrelo por la entrada que toque en cada capa. **Es un catálogo, no una lista cerrada**: ante cualquier decisión que responda a una de esas cinco preguntas, aplica el mismo protocolo aunque no esté ahí.
 
 ## Proceso
 

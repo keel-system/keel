@@ -29,6 +29,19 @@ export function checkSupportedFeatures(manifest, layers) {
     );
   }
 
+  // Estilo de paginación. El sobre canónico del método (`items`/`page`/`size`/
+  // `totalElements`/`totalPages`) es el de offset, y es el único que keel-spring
+  // materializa: `cursor` no cambia nada del código generado. Sin esta entrada, un
+  // diseño que lo declara recibe paginación por offset y nadie se lo desmiente — y el
+  // hueco no aflora hasta que un integrador pide la página siguiente con un cursor que
+  // el servidor no emite.
+  const paginationStyle = layers?.api?.pagination?.style;
+  if (paginationStyle && paginationStyle !== 'offset') {
+    warnings.push(
+      `api.pagination.style: ${paginationStyle} no se aplica: keel-spring genera paginación por offset con el sobre canónico { items, page, size, totalElements, totalPages } y los query params 'page'/'size'. Escribe los escenarios contra ese sobre, o cambia el estilo a 'offset' para que el diseño diga lo que se genera.`
+    );
+  }
+
   // Ubicación del token: solo cabecera. La cadena de seguridad generada resuelve
   // el bearer de Authorization; un token en cookie exigiría otro converter y
   // protección CSRF, que no se generan.

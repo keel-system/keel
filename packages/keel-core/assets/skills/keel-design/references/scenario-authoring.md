@@ -25,12 +25,16 @@ Recorre los artefactos y construye la lista de obligaciones. Es un borrador de t
 | `domain.entities[].lifecycle` | un escenario por transición + una transición inválida + **todo estado alcanzado** |
 | `operations[].transitions` | la transición feliz + su aplicación desde un estado que **no** está en `from`, con el error de transición inválida |
 | `dependencies.*.compensations[]` | **tres** escenarios: el efecto completo (trabajo deshecho, estado propio devuelto leído por la API y —si el encargo salió por un cliente— la **llamada de vuelta al proveedor**) + la **reentrega del mismo evento** sin segundo efecto + la **doble entrega simultánea**, que tampoco lo produce |
+| `dependencies.*.needs[].onUnavailable` | uno por acción, con el proveedor indisponible: `fail` → el error declarado con su status; `degrade` → el resultado degradado exacto. Con `lastKnown`, **dos**: el **rescate** (hubo lectura previa → se sirve el último valor conocido) y el **arranque en frío** (no la hubo → el `error` declarado). Sin el segundo, un almacén que no guarda nada pasa el primero |
+| `dependencies.*.needs[].exposedAs` | una aserción del dato ajeno **en la salida**, con la forma entera de su origen: si el origen es un objeto, el campo expuesto es un objeto y no un escalar |
 | `domain` campos `unique` | una colisión |
 | `domain` constraints y requeridos | casos borde `400` |
 | `api.endpoints` con `successStatus: 201` | una aserción de la cabecera `Location` (ver § 2) |
 | `api.endpoints` con `paginated` | primera página, siguiente, vacía, tope `maxSize` |
+| query de colección con `embed`, `exposedAs` o un `need` `on-demand` | una afirmación de **coste**: dos páginas de tamaños muy distintos, y el trabajo de la operación no crece con el tamaño. Por **forma** («veinte no cuestan más que dos»), nunca por número absoluto. Solo con capa `api` |
 | `api.endpoints[].audience: services/both` | contrato M2M completo (request + response + errores + auth) |
 | `security.access` | `401` sin credencial y `403` sin permiso, por operación protegida |
+| `security.cors` | **dos**: el **preflight** (`OPTIONS` sin credencial → método y `allowedHeaders` aceptados, `maxAgeSeconds`) y una petición **normal cross-origin** cuyo `Then` afirma las cabeceras de `exposedHeaders`. El primero solo prueba que el preflight pasa; el segundo, que la respuesta le sirve al navegador |
 | `messaging.subscriptions` | consumo + `onFailure` (retry/DLQ) + reentrega si hay `messageId` |
 | `messaging.reliability: outbox` | un escenario de **supervivencia**: con el canal indisponible, la mutación responde igual y el canal sigue vacío; restablecido, el evento llega **exactamente una vez**. Las dos negaciones son lo que lo hace fallable |
 | `activations[].reconciledBy` | **ninguno, por construcción** — no hay puerta de caja negra que dispare un barrido por tiempo. Se declara el umbral y qué queda observable; la verificación es estática (ver `validation-scenarios.md § Lo que no tiene escenario`) |
@@ -140,6 +144,9 @@ Errores frecuentes que estas pasadas deben cazar:
 - Campo con `default` ausente de la enumeración de una respuesta de creación, y presente en otro flujo del mismo documento.
 - Relación con `embed` afirmada como `<relación>Id` (o al revés) en algún `Then`.
 - Lista devuelta sin orden declarado.
+- Afirmación de coste escrita contra un **número absoluto** («cuesta 4 consultas») en vez de contra la forma: se rompe con cualquier cambio de motor o proyección, y acaba subiéndose sin mirar hasta volverse decorativa.
+- CORS cubierto **solo** con el preflight: el servicio contesta al `OPTIONS` y el navegador sigue sin poder leer las cabeceras de `exposedHeaders`. Son dos escenarios porque son dos fallos distintos.
+- `onUnavailable: lastKnown` probado solo por el camino del rescate: sin el escenario de arranque en frío, un almacén que nunca guarda nada pasa igual y la política degrada en silencio a «fallar siempre».
 - Error sin status, o con status distinto al del artefacto.
 - Escenario cuyo `Given` depende de otro flujo.
 - `invalidatedBy` con tres vías y un solo ciclo de invalidación probado.
