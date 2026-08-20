@@ -939,6 +939,51 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
         }
       }
     }
+
+    // Un 403 que nada de lo declarado puede producir.
+    //
+    // Roles, permissions y scopes son GLOBALES: quien tiene el rol lo tiene para todo, así
+    // que una vez pasada la regla de acceso no queda nada declarado que distinga a un
+    // solicitante permitido de uno prohibido. Un error 403 declarado sobre esa operación
+    // describe entonces una discriminación —típicamente por recurso o por inquilino— que
+    // el diseño no dice cómo se evalúa: no hay claim, ni tabla de asignación, ni campo.
+    //
+    // Se descubre tarde y caro: el escenario que lo ejercita no es implementable, y el
+    // generador emite el catálogo del error igual, así que queda un código público que
+    // ningún camino produce. Aviso y no error porque la decisión es del diseño: puede
+    // acotarse por algo que todavía no se ha declarado.
+    const globallyScoped = new Set();
+    for (const [opName, op] of Object.entries(operations)) {
+      if (!exposedOps.has(opName)) continue;
+      const forbidden = (op.errors ?? []).filter((error) => error.http === 403);
+      if (forbidden.length === 0) continue;
+      const rule = security.access?.rules?.[opName] ?? security.access?.default;
+      // `public` no discrimina nada y ya tiene su propio aviso en otra regla. Y `service`
+      // queda FUERA: ahí quien llama es el cliente máquina, y su identidad es por cliente,
+      // no global — acotar por "los recursos de quien llama" es perfectamente producible
+      // sin declarar ningún claim extra. El hueco es el de los roles humanos.
+      if (!rule || rule.level === 'public' || rule.level === 'service') continue;
+      for (const error of forbidden) globallyScoped.add(`${error.code}\u0000${opName}`);
+    }
+    if (globallyScoped.size > 0) {
+      // Uno por código, no uno por operación: son cinco síntomas de una decisión que falta.
+      const byCode = new Map();
+      for (const entry of globallyScoped) {
+        const [code, opName] = entry.split('\u0000');
+        if (!byCode.has(code)) byCode.set(code, []);
+        byCode.get(code).push(opName);
+      }
+      for (const [code, ops] of byCode) {
+        const listed = ops.length > 3 ? `${ops.slice(0, 3).join(', ')} y ${ops.length - 3} más` : ops.join(', ');
+        warnings.push(
+          `security: el error '${code}' (403) que declara ${ops.length === 1 ? 'la operación' : 'las operaciones'} ` +
+            `${listed} no lo puede producir nada de lo declarado — roles, permissions y scopes son globales, ` +
+            `así que quien pasa la regla de acceso pasa para todos los recursos. Si el permiso se acota por recurso o ` +
+            `por inquilino, declara con qué se acota (el claim del token, la asignación que lo resuelve); si no se ` +
+            `acota, ese 403 sobra y su escenario no será implementable`
+        );
+      }
+    }
   }
 
   // messaging: canales, payloads y triggers
@@ -1065,6 +1110,61 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
             `automáticos golpea de verdad. El 'Then' es disyunción cerrada más un conteo por la API que afirme un solo recurso`
         );
       }
+    }
+  }
+
+  // Identidades que los escenarios NOMBRAN y el diseño no declara.
+  //
+  // Un escenario que dice «con la credencial de máquina del cliente `billing`» describe una
+  // superficie que no existe si `security.serviceClients` no declara a `billing`: no hay
+  // credencial que aprovisionar, así que el escenario no es ejercitable por la vía que él
+  // mismo exige. Y no se descubre al validar —el diseño es coherente consigo mismo— sino en
+  // mitad de la puntuación, cuando ya no hay identidad que inventar.
+  //
+  // No se puede comprobar «todo token entre comillas existe»: los escenarios están llenos de
+  // literales de datos de prueba, y un código de aplicación se escribe igual que un cliente.
+  // Lo que hace comprobable esto es que el vocabulario ya está fijado en
+  // docs/validation-scenarios.md § Reglas de cobertura («los escenarios hablan de "credencial
+  // de máquina del cliente `<serviceClient>`"»): se buscan ESAS formas, y de paso la regla le
+  // da dientes a la convención — un escenario que nombra al cliente de otra manera deja de
+  // ser comprobable, que es el incentivo correcto.
+  if (scenarios !== null && security) {
+    const undeclared = (pattern, declared) => {
+      const found = new Set();
+      for (const match of scenarios.matchAll(pattern)) {
+        const name = match[1]?.trim();
+        // `<serviceClient>` es el hueco de la plantilla del documento, no una identidad.
+        if (name && !name.startsWith('<') && !declared.has(name)) found.add(name);
+      }
+      return [...found];
+    };
+
+    // El `[\s*_`]*` intermedio no es laxitud: en markdown el nombre se resalta
+    // (`` `serviceClient` **`billing`** ``), y un `\s+` a secas no vería ninguna
+    // mención real. El ancla sigue siendo la palabra del vocabulario, no el backtick.
+    const clients = undeclared(
+      /(?:credencial de m[áa]quina del cliente|cliente (?:de )?m[áa]quina(?: del)?|serviceClient)[\s*_`]*`([^`]+)`/gi,
+      new Set(Object.keys(security.serviceClients ?? {}))
+    );
+    if (clients.length > 0) {
+      const one = clients.length === 1;
+      warnings.push(
+        `security: los escenarios nombran ${one ? 'el cliente máquina' : 'los clientes máquina'} ` +
+          `${clients.map((name) => `'${name}'`).join(', ')}, que serviceClients no declara — no hay credencial que ` +
+          `aprovisionar, así que ${one ? 'ese escenario no es ejercitable' : 'esos escenarios no son ejercitables'} ` +
+          `por la superficie M2M que ${one ? 'exige' : 'exigen'}. Declara ${one ? 'ese serviceClient' : 'esos serviceClients'} ` +
+          `con su mínimo privilegio, o corrige la prosa para que nombre a los que el diseño sí declara`
+      );
+    }
+
+    const roles = undeclared(/\brol(?:es)?[\s*_]*`([^`]+)`/gi, new Set(Object.keys(security.roles ?? {})));
+    if (roles.length > 0) {
+      const one = roles.length === 1;
+      warnings.push(
+        `security: los escenarios nombran ${one ? 'el rol' : 'los roles'} ` +
+          `${roles.map((name) => `'${name}'`).join(', ')}, que roles no declara — no hay token que emitir para ` +
+          `${one ? 'ese escenario' : 'esos escenarios'}. Declara ${one ? 'el rol' : 'los roles'}, o corrige la prosa`
+      );
     }
   }
 
@@ -2380,6 +2480,38 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
     if (!exposed) {
       warnings.push(
         `use-cases: ${opName}: operación huérfana — sin endpoint, sin subscription, sin schedule y sin internal: true`
+      );
+    }
+
+    // Una operación a la que solo alcanza el reloj. No hay puerta por la que un ejecutor
+    // de caja negra pueda llamarla, así que ningún escenario la va a ejercitar de verdad:
+    // esperar el ciclo es inviable (un barrido diario, más aún) y el escenario o no se
+    // escribe —queda un hueco que nadie declaró— o se escribe decorativo, que es peor
+    // porque además apaga la sospecha.
+    //
+    // Lo que separa a un barrido verificable de uno que no lo es NO es que alguien le
+    // haya escrito un escenario —FL-PRG-001 existía y era decorativo—, sino si el diseño
+    // declara algo que cambie ahí fuera: la pregunta correcta según
+    // docs/validation-scenarios.md § Lo que no tiene escenario («no "¿puedo llamarlo?"
+    // sino "¿hay algo que cambie ahí fuera según esté bien o mal?"»). Con `transitions`
+    // o con `emits`, ese algo está declarado y el escenario se escribe contra el efecto
+    // —así se verifica el barrido que despacha correo, sin poder invocarlo—. Sin
+    // ninguno de los dos, no hay ni puerta ni efecto declarado: nada que afirmar.
+    const sweepEffect = (op.transitions ?? []).length > 0 || (op.emits ?? []).length > 0;
+    if (
+      op.schedule !== undefined &&
+      !reachableByHttp &&
+      !triggeredBySubscription.has(opName) &&
+      op.internal !== true &&
+      !sweepEffect
+    ) {
+      warnings.push(
+        `use-cases: ${opName}: su único disparador es el schedule (${op.schedule.cron}) y no declara transitions ni ` +
+          `emits — no hay puerta por la que un ejecutor de caja negra la alcance NI efecto declarado contra el que ` +
+          `afirmar, así que cualquier escenario que se le escriba será decorativo. Si su efecto sí se observa, ` +
+          `decláralo (la transición o el evento) y escribe el escenario contra él; si su condición de entrada es un ` +
+          `umbral de tiempo que ninguna suite puede esperar, decláralo como hueco en validation-scenarios.md ` +
+          `§ Lo que no tiene escenario; y si tiene que ser verificable en el pipeline, expón además un disparador manual`
       );
     }
 

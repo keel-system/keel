@@ -257,3 +257,43 @@ test('la identidad de la suscripción sale de la envoltura, con su asunción dec
   // Y en un solo sitio: el mismo campo en `input` serían dos versiones de la verdad.
   assert.ok(!(identity.field in (layers.messaging.subscriptions.NotificationRequested.input ?? {})));
 });
+
+test('el arnés puede variar el emisor: identity.from es un parámetro del deliver, no una constante', () => {
+  // Sin esto, todos los mensajes que entrega el arnés vienen del mismo emisor y ningún
+  // escenario multi-inquilino es escribible — que es exactamente lo que ocurría: el
+  // sobre se emitía como literal cerrado con eventId y eventType, y nada más.
+  const { read } = scaffoldMailer();
+  const harness = read('src/integrationTest/java/com/platform/notificationmailer/flows/AbstractFlowIT.java');
+
+  assert.ok(harness.includes('deliverNotificationRequested(String messageId, String source, String payloadJson)'));
+  // Y el valor va DONDE el contrato dice que viaja: metadata.source de la envoltura.
+  assert.ok(harness.includes('+ ",\\"source\\":\\"" + source + "\\""'));
+});
+
+test('el javadoc del mensaje dice de dónde sale la identidad y qué hacer con un emisor desconocido', () => {
+  // Es lo único que lee quien escribe el listener. Sin ello el inquilino acaba saliendo
+  // del payload —que lo elige el llamante— o el mensaje desconocido se confirma en
+  // silencio, que son correos que no salen sin que nada dé error en ningún sitio.
+  const { read } = scaffoldMailer();
+  const message = read(`${JAVA}/infrastructure/messaging/subscriptions/NotificationRequestedMessage.java`);
+
+  assert.ok(message.includes("resuelve applicationKey desde el campo 'metadata.source'"));
+  assert.ok(message.includes('No la leas del payload'));
+  assert.ok(message.includes('onUnresolved: discard'));
+});
+
+test('la espera de correo sale del contrato: sin barrido de por medio se queda en el suelo', () => {
+  // En esta fixture el correo sale dentro de la operación que atiende la petición, así
+  // que no hay cron que cubrir. El valor importa menos que el hecho de que exista una
+  // constante: el literal repetido era lo que hacía imposible derivarlo.
+  const { read } = scaffoldMailer();
+  const harness = read('src/integrationTest/java/com/platform/notificationmailer/flows/AbstractFlowIT.java');
+
+  assert.ok(harness.includes('private static final int MAIL_AWAIT_SECONDS = 15;'));
+  assert.ok(harness.includes('Instant.now().plusSeconds(MAIL_AWAIT_SECONDS)'));
+  // Y el margen del Then negativo es el MISMO: con uno menor, «no ha llegado» y
+  // «todavía no ha llegado» son indistinguibles y el escenario sale verde siempre.
+  assert.ok(harness.includes('sleepQuietly(MAIL_AWAIT_SECONDS * 1000L)'));
+  // El literal ya no está en ninguna de las tres copias que tenía.
+  assert.ok(!harness.includes('plusSeconds(15)'));
+});

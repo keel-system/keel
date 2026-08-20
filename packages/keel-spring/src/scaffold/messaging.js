@@ -499,6 +499,21 @@ function contractJavadoc(sub, model) {
           : ' Aquí NO es inocuo: sin transición que la frene, pasada la retención el efecto se vuelve a aplicar. Si el negocio necesita una ventana mayor, el mecanismo correcto es una guarda de dominio, no esta deduplicación — y eso es un hueco del diseño, no algo que se arregle en el listener.')
     );
   }
+  // La identidad de quien pide el trabajo. Por HTTP la pone el proveedor de identidad en
+  // un claim; por un broker no llega ningún token, así que el diseño declara qué lo
+  // sustituye — y si eso no se dice AQUÍ, que es lo que lee quien escribe el listener, la
+  // costura de un solo punto que el DSL promete acaba repartida por el handler, o peor:
+  // el inquilino se toma del payload, que lo elige el llamante.
+  if (sub.identity) {
+    lines.push(
+      `Identidad del emisor: resuelve ${sub.identity.field} desde ${sub.identity.from.location === 'header' ? `el header '${sub.identity.from.name}'` : `el campo '${sub.identity.from.name}' del mensaje`}, y pásala YA RESUELTA a la operación. No la leas del payload: el DSL prohíbe que viaje ahí precisamente para que no haya dos versiones de la verdad.`
+    );
+    lines.push(
+      sub.identity.onUnresolved === 'deadLetter'
+        ? `Un emisor que no corresponda a nadie registrado va a la cola de descartes (onUnresolved: deadLetter): NO lo proceses y NO lo confirmes en silencio, porque el caso frecuente es un alta que falta y en silencio son efectos que no ocurren sin que nada dé error.`
+        : `Un emisor que no corresponda a nadie registrado se descarta (onUnresolved: discard): confirma el mensaje y déjalo trazado en el log. Es un fallo PERMANENTE — reintentarlo no hará aparecer un registro que no existe.`
+    );
+  }
   // Otro camino puede sacar a la entidad del mismo estado antes que este listener. El
   // guard del agregado arbitra, y al perdedor se le rechaza la transición: eso es la
   // carrera resuelta, no un fallo. Si el handler lo trata como error, onFailure.retry lo

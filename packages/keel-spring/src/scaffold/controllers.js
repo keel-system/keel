@@ -438,10 +438,17 @@ function renderDataIntegrityHandler(model, imports, constantsOut) {
   imports.add('java.util.Map');
   imports.add('java.util.function.Supplier');
   const errorsPkg = subPackage(model, 'domain.errors');
-  const resolved = constraints.map((constraint) => ({
-    ...constraint,
-    declared: declaredUniquenessError(model, constraint.fields)
-  }));
+  const resolved = constraints.map((constraint) => {
+    const raceOnly = raceOnlyConstraint(model, constraint);
+    return {
+      ...constraint,
+      raceOnly,
+      // Con `raceOnly` el error que toca es el de concurrencia, no el de unicidad: el
+      // conflicto no es «ya existe uno así» sino dos escrituras que se pisaron. El
+      // override del diseño se sigue respetando, solo que sobre la otra familia.
+      declared: raceOnly ? declaredConcurrencyError(model) : declaredUniquenessError(model, constraint.fields)
+    };
+  });
   for (const { declared } of resolved) {
     if (declared) imports.add(`${errorsPkg}.${declared.exceptionClass}`);
   }
@@ -479,6 +486,33 @@ function renderDataIntegrityHandler(model, imports, constantsOut) {
 `;
 }
 
+/**
+ * ¿Esta constraint solo puede romperla una carrera?
+ *
+ * Un campo `computed` no lo manda nunca el cliente: lo calcula el servicio. Si además el
+ * agregado que lo contiene lleva bloqueo optimista, violar su unicidad no es «ya existe
+ * uno así» —nadie pidió ese valor— sino dos escrituras concurrentes que calcularon el
+ * mismo. Traducirlo a un error de negocio de "ya existe" manda al cliente a corregir una
+ * entrada que no envió; el 409 de concurrencia le dice lo que de verdad ocurrió, que es
+ * que reintente.
+ */
+function raceOnlyConstraint(model, constraint) {
+  const entity = model.entities.find((e) => e.name === constraint.entity);
+  if (!entity) return false;
+
+  // El bloqueo se mira en la RAÍZ del agregado, no en la entidad: una entidad interna
+  // nunca lleva @Version propia (solo las raíces), y sin embargo está protegida por la
+  // de su raíz. Preguntárselo a ella misma daría siempre que no.
+  const root = model.entities.find((e) => e.name === entity.rootEntity) ?? entity;
+  if (!root.usesOptimisticLocking) return false;
+
+  // Basta con que UNO de los campos sea computed. Los demás pueden salir del cliente
+  // —en una clave (plantilla, versión) la plantilla la elige él—, pero si el que colisiona
+  // es el calculado, las dos filas tuvieron que calcularlo por separado. Lo que el cliente
+  // mandó no distingue este caso de ningún otro: no hay nada que pueda corregir.
+  return constraint.fields.some((name) => entity.fields.find((f) => f.name === name)?.computed);
+}
+
 // La unicidad es el único canónico DERIVADO: su familia depende de los campos de la clave,
 // porque un servicio con varias claves naturales necesita un error por cada una.
 function declaredUniquenessError(model, fields) {
@@ -491,15 +525,30 @@ function declaredUniquenessError(model, fields) {
 
 function constraintMapConstant(constraints) {
   const entries = constraints
-    .map(({ constraint, entity, fields, declared }) => {
+    .map(({ constraint, entity, fields, declared, raceOnly }) => {
       const label = fields.join(', ');
-      const message = `Ya existe un ${entity} con ese ${label}`;
+      const message = raceOnly
+        ? `Otra operación registró ${entity}.${label} a la vez; reintenta`
+        : `Ya existe un ${entity} con ese ${label}`;
+      const why = raceOnly
+        ? `            // ${entity}.${label} incluye un campo calculado por el servicio, y el agregado
+            // lleva bloqueo optimista: nadie PIDIÓ este valor, así que romper la constraint
+            // solo puede ser una carrera. Por eso es conflicto de concurrencia y no un "ya
+            // existe": el cliente no mandó nada que pueda corregir, lo que toca es reintentar.`
+        : `            // Unicidad de ${entity}.${label} → el error que el diseño declara para ella.`;
       if (declared) {
-        return `            // Unicidad de ${entity}.${label} → el error que el diseño declara para ella.
+        return `${why}
             Map.entry("${constraint}", () -> new ${declared.exceptionClass}(
                     "${message}"))`;
       }
-      const code = `${screamingSnake(entity)}_${screamingSnake(fields.join('_'))}_ALREADY_EXISTS`;
+      const code = raceOnly
+        ? FRAMEWORK_ERRORS.concurrency.code
+        : `${screamingSnake(entity)}_${screamingSnake(fields.join('_'))}_ALREADY_EXISTS`;
+      if (raceOnly) {
+        return `${why}
+            Map.entry("${constraint}", () -> new ConflictException(
+                    "${message}", "${code}", 409, null))`;
+      }
       return `            // TODO (agente): el diseño no declara (o declara de forma ambigua) un error
             // para la unicidad de ${entity}.${label}; este code es una convención del
             // scaffolding, no el contrato. Si el diseño lo declara, sustitúyelo.

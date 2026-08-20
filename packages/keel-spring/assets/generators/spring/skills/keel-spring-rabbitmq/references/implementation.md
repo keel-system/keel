@@ -153,6 +153,13 @@ entrada de tu cola, no el tamaño de la lista.
   primero convierte un corte de red en trabajo que nadie hizo, y el gate `dedupe`
   del pase de calidad lo marca `KO`.
 
+  Ojo con una fuente de confusión: si el listener tiene activado el retry
+  declarativo de Spring AMQP (`spring.rabbitmq.listener.simple.retry`), esos
+  reintentos **no son reentregas del broker** — reinvocan tu handler dentro de la
+  MISMA entrega, con el mismo `eventId` y sin volver a pasar por el guard. Eso NO
+  cambia el orden que te toca: lo dicta el diseño. Lo detalla
+  `references/configuration.md` § el retry en memoria no es una reentrega.
+
 ### La carrera ya resuelta no es un fallo
 
 Cuando otro camino —otra suscripción, un barrido, una operación de la API— puede sacar a

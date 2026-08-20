@@ -308,6 +308,59 @@ test('aggregates.entities: con relations explícita no se duplica la relación',
   assert.deepEqual(model.warnings, []);
 });
 
+// Un agregado de TRES niveles (Raíz → Hija → Nieta). Cada nivel declara hacia arriba,
+// que es como se escribe una jerarquía en el DSL, y nadie declara colecciones.
+function modelWithThreeLevelAggregate() {
+  const manifest = { keel: '2.0', service: { name: 'catalog', version: '0.1.0' }, layers: {} };
+  const layers = {
+    domain: {
+      entities: {
+        Application: { description: 'Aplicación.', fields: { id: { type: 'uuid', id: true } } },
+        Template: {
+          description: 'Plantilla.',
+          fields: { id: { type: 'uuid', id: true } },
+          relations: { application: { entity: 'Application', cardinality: 'many-to-one' } }
+        },
+        TemplateVersion: {
+          description: 'Versión de plantilla.',
+          fields: { id: { type: 'uuid', id: true } },
+          relations: { template: { entity: 'Template', cardinality: 'many-to-one' } }
+        }
+      },
+      aggregates: { Application: { root: 'Application', entities: ['Template', 'TemplateVersion'] } }
+    },
+    'use-cases': { operations: {} },
+    persistence: { entities: { Application: {}, Template: {}, TemplateVersion: {} } }
+  };
+  return buildModel({ manifest, layers });
+}
+
+test('agregado de tres niveles: la back-reference apunta al padre real, no siempre a la raíz', () => {
+  const model = modelWithThreeLevelAggregate();
+  const relationOf = (entity, name) => model.entities.find((e) => e.name === entity).relations.find((r) => r.name === name);
+
+  // La nieta apunta a la HIJA, que no es la raíz del agregado. Mirando solo a la raíz
+  // esta relación se quedaba sin back-reference, y entonces el padre emitía su propio
+  // @JoinColumn: dos columnas de FK físicas para una sola relación.
+  assert.equal(relationOf('TemplateVersion', 'template').backReference, true);
+  assert.equal(relationOf('Template', 'application').backReference, true);
+});
+
+test('agregado de tres niveles: la colección derivada cuelga del padre que la hija declara', () => {
+  const model = modelWithThreeLevelAggregate();
+  const collectionsOf = (entity) =>
+    model.entities.find((e) => e.name === entity).relations.filter((r) => r.cardinality === 'one-to-many');
+
+  // La colección de versiones va en Template, no en Application: es Template quien la
+  // gobierna, y ponerla en la raíz volvería a producir la segunda FK.
+  assert.deepEqual(collectionsOf('Template').map((r) => r.entity), ['TemplateVersion']);
+  assert.deepEqual(collectionsOf('Application').map((r) => r.entity), ['Template']);
+
+  // Y Template no queda "ya alcanzada" por la back-reference de su nieta: sin esto,
+  // Application se quedaba sin ninguna colección y el agregado sin forma de gobernarla.
+  assert.equal(collectionsOf('Application').length, 1);
+});
+
 test('aggregates.entities: rootEntity resuelve la raíz para raíz y para interna', () => {
   const model = modelWithInternalEntity(null);
   assert.equal(model.entities.find((e) => e.name === 'Product').rootEntity, 'Product');

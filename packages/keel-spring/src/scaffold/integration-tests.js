@@ -3068,6 +3068,13 @@ function deliverMethod(sub) {
   if (sub.messageId?.location === 'header') {
     headers.push(`"${sub.messageId.name}", messageId`);
   }
+  // La identidad del emisor, cuando el contrato dice que viaja en una cabecera del
+  // broker. Es un parámetro y no una constante porque el escenario multi-inquilino
+  // consiste precisamente en entregar dos mensajes que solo difieren en esto.
+  const delivery = sub.identityDelivery;
+  if (delivery?.placement === 'header') {
+    headers.push(`"${delivery.name}", ${IDENTITY_PARAM}`);
+  }
   const headerMap = headers.length > 0 ? `Map.of(${headers.join(', ')})` : 'Map.of()';
 
   // Dónde vive la identidad del mensaje decide qué escenario de reentrega es posible:
@@ -3096,12 +3103,37 @@ function deliverMethod(sub) {
      * <p><b>Ojo</b>: el contrato de esta suscripción no declara {@code messageId} ni usa
      * la envoltura Keel, así que el consumidor no tiene clave con la que deduplicar. Si
      * el escenario de reentrega falla, el hueco está en el diseño, no en el código.`
+     }${
+       delivery
+         ? `
+     *
+     * <p>{@code ${IDENTITY_PARAM}} es <b>la identidad de quien pide el trabajo</b>: por aquí no
+     * llega ningún token, así que el contrato declara que la sustituye
+     * {@code ${sub.identity.from.name}}, de donde el consumidor resuelve
+     * {@code ${sub.identity.field}}. Dos entregas que solo difieran en este valor son dos
+     * emisores distintos, y es así como se escribe cualquier escenario multi-inquilino. Un
+     * valor que no corresponda a nadie registrado es el camino de {@code onUnresolved:
+     * ${sub.identity.onUnresolved}}.`
+         : ''
      }
      */
-    protected static void deliver${pascalCase(sub.name)}(String messageId, String payloadJson) {
+    protected static void deliver${pascalCase(sub.name)}(${deliverParams(delivery)}) {
         deliverMessage(${subscriptionTopicExpression(sub)}, messageId, ${envelopeExpression(sub)}, ${headerMap});
     }
 `;
+}
+
+// El nombre del parámetro de identidad en los helpers de entrega. Único y estable:
+// los escenarios lo citan por posición, pero el javadoc y las convenciones por nombre.
+const IDENTITY_PARAM = 'source';
+
+// Las suscripciones sin identidad declarada conservan la firma de dos parámetros: el
+// contrato no dice que el emisor sea variable, así que pedirlo sería ruido en todos
+// los escenarios que ya están escritos contra ellas.
+function deliverParams(delivery) {
+  return delivery
+    ? `String messageId, String ${IDENTITY_PARAM}, String payloadJson`
+    : 'String messageId, String payloadJson';
 }
 
 // El topic se resuelve como en el perfil `local`: la variable de entorno del parámetro
@@ -3114,12 +3146,18 @@ function subscriptionTopicExpression(sub) {
 
 // Cómo se envuelve el payload al ponerlo en el cable, según el contrato declarado.
 function envelopeExpression(sub) {
+  const delivery = sub.identityDelivery;
   if (sub.envelope === 'keel') {
     // La fuente es otro servicio Keel: metadata + data, y el eventId ES la clave de
     // deduplicación por defecto del consumidor (architecture.md § correlación).
-    return (
-      `"{\\"metadata\\":{\\"eventId\\":\\"" + messageId + "\\",\\"eventType\\":\\"${sub.name}\\"},\\"data\\":" + payloadJson + "}"`
-    );
+    // `metadata` deja de ser un literal cerrado SOLO cuando el contrato declara ahí la
+    // identidad del emisor, que es el único campo que el escenario tiene que variar. Sin
+    // ella se emite de una pieza: partir la cadena no cambiaría lo que llega al cable,
+    // pero sí ensucia el arnés de todos los diseños que no la declaran.
+    const head = `"{\\"metadata\\":{\\"eventId\\":\\"" + messageId + "\\",\\"eventType\\":\\"${sub.name}\\"`;
+    return delivery?.placement === 'metadata'
+      ? `${head}" + ",\\"${delivery.name}\\":\\"" + ${IDENTITY_PARAM} + "\\"" + "},\\"data\\":" + payloadJson + "}"`
+      : `${head}},\\"data\\":" + payloadJson + "}"`;
   }
   if (sub.envelope === 'wrapped') {
     const parts = [`"{"`];
@@ -3128,6 +3166,9 @@ function envelopeExpression(sub) {
     }
     if (sub.messageId?.location === 'field') {
       parts.push(`+ "\\"${sub.messageId.name}\\":\\"" + messageId + "\\","`);
+    }
+    if (delivery?.placement === 'envelopeField') {
+      parts.push(`+ "\\"${delivery.name}\\":\\"" + ${IDENTITY_PARAM} + "\\","`);
     }
     parts.push(`+ "\\"${sub.payloadPath}\\":" + payloadJson + "}"`);
     return parts.join(' ');

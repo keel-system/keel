@@ -62,6 +62,10 @@ Antes de los flujos, fija las convenciones transversales del servicio en la secc
 
 Estas convenciones son la salida natural de la clase 12 del análisis de huecos (`gap-analysis.md`). Si llegaste aquí sin haberlas decidido, decídelas ahora con el usuario: son contrato, y sin ellas dos generadores divergen.
 
+**Solo se nombran identidades que el diseño declara.** Un escenario que dice «con la credencial de máquina del cliente `billing`» describe una superficie que **no existe** si `security.serviceClients` no declara a `billing`: no hay credencial que aprovisionar, y ese escenario no será ejercitable por la vía que él mismo exige — se descubre al puntuar, cuando ya no hay identidad que inventar. Lo mismo con los roles: se nombran los de `security.roles`, o no hay token que emitir.
+
+Es fácil caer en ello sin darse cuenta, porque el nombre suena natural: un código de aplicación de los datos de prueba se escribe igual que un cliente máquina. Cuando el escenario necesita una identidad que el diseño no tiene —dos consumidores distintos para probar el aislamiento, un cliente con un scope y **sin** otro para probar el mínimo privilegio—, lo que falta es **declararla** en `security`, no redactar como si existiera. `keel validate` avisa, y para verlo tiene que reconocer la forma canónica (`credencial de máquina del cliente \`<serviceClient>\``, `rol \`<rol>\``): escrito de otra manera el aviso no salta y el hueco vuelve a ser invisible.
+
 **Lo que no decide el diseñador.** Algunas afirmaciones del `Then` no dependen del diseño sino del generador, y escribirlas "como deberían ser" produce un escenario que ningún servidor correcto pasa. Antes de fijarlas, contrástalas con la documentación del generador previsto; si el diseño necesita otra cosa, es un cambio en el generador, no una convención que se declara y ya. En keel-spring, hoy:
 
 - La **forma del cuerpo de error** es fija: `{timestamp, status, error, code, message, details}` (+ `correlationId`). La convención del servicio la **describe**, no la sustituye. Lo que sí decides es el `code` y el status de cada error, en el YAML.

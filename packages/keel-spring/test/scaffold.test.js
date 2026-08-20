@@ -3170,6 +3170,54 @@ test('unique: constraint nombrada en la tabla y traducida al error de negocio', 
   assert.ok(handler.includes('TODO (agente)'));
 });
 
+test('unique sobre campo computed con bloqueo optimista: es carrera, no "ya existe"', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const patched = structuredClone(layers);
+  // Un campo que el servicio CALCULA: el cliente no lo manda nunca.
+  patched.domain.entities.Product.fields.sequence = {
+    type: 'int',
+    required: true,
+    unique: true,
+    computed: 'El mayor sequence existente más uno.'
+  };
+
+  scaffoldService({ manifest, layers: patched, workspace });
+
+  const handler = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/rest/ApiExceptionHandler.java');
+  assert.ok(handler.includes('Map.entry("uk_products_sequence"'));
+  // Nadie PIDIÓ este valor, así que romper la constraint solo puede ser una carrera:
+  // mandar al cliente a corregir una entrada que no envió no le dice nada accionable.
+  assert.ok(handler.includes('"CONCURRENT_MODIFICATION"'));
+  assert.ok(!handler.includes('PRODUCT_SEQUENCE_ALREADY_EXISTS'));
+  assert.ok(handler.includes('reintenta'));
+
+  // Y no se contagia: una constraint sobre un campo que sí manda el cliente sigue
+  // siendo el error de unicidad de siempre.
+  assert.ok(handler.includes('uk_products_natural'));
+});
+
+test('unique sobre campo computed SIN bloqueo optimista sigue siendo unicidad', () => {
+  // El razonamiento se apoya en las dos patas: si el agregado no lleva control de
+  // versión, la colisión no tiene por qué venir de una carrera observable y llamarla
+  // conflicto de concurrencia sería inventar una garantía que nada sostiene.
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const patched = structuredClone(layers);
+  patched.domain.entities.Product.fields.sequence = {
+    type: 'int',
+    required: true,
+    unique: true,
+    computed: 'El mayor sequence existente más uno.'
+  };
+  patched.persistence.consistency = { ...(patched.persistence.consistency ?? {}), optimisticLocking: 'none' };
+
+  scaffoldService({ manifest, layers: patched, workspace });
+
+  const handler = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/rest/ApiExceptionHandler.java');
+  assert.ok(handler.includes('"PRODUCT_SEQUENCE_ALREADY_EXISTS"'));
+});
+
 test('colecciones del dominio (DSL 2.1 list): @ElementCollection, @Embeddable y mapeo bidireccional', () => {
   const workspace = makeWorkspace();
   const { manifest, layers } = loadFixture();

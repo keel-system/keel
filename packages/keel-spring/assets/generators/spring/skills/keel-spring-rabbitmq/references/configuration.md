@@ -80,6 +80,29 @@ spring:
           max-interval: 10s
 ```
 
+### El retry en memoria NO es una reentrega del broker
+
+Y de ahí una interacción con el orden del `IdempotencyGuard` que no es evidente y que se
+paga cara: estos reintentos **reinvocan tu handler dentro de la MISMA entrega**. No hay
+segundo mensaje, el `eventId` es el mismo y el broker no ha vuelto a entregar nada.
+
+Consecuencias, según el orden que el javadoc del `<Evento>Message` te haya prescrito:
+
+- Con `alreadyProcessed(...)` + `record(...)` **después** del éxito: los N reintentos
+  vuelven a entrar con el registro todavía sin escribir, que es justo lo que se quiere —
+  el fallo transitorio se reintenta y el efecto no se duplica porque lo frena la
+  transición del agregado. Si en vez de eso reclamas **antes** de despachar, el primer
+  reintento se encuentra el mensaje ya marcado, se lo salta y el fallo transitorio se
+  convierte en un mensaje perdido en silencio: el reintento existe pero no reintenta nada.
+- Con `tryRecord(...)` antes de despachar: el registro ya está escrito cuando entra el
+  primer reintento, así que agotar los intentos **pierde el mensaje igual**. Es el precio
+  declarado de ese orden (lo elige el diseño al no declarar `transitions`), pero conviene
+  saberlo antes de subir `max-attempts` creyendo que compra durabilidad: no la compra.
+
+Regla corta: **el orden del guard lo dicta el diseño y no se ajusta para acomodar el
+retry**. Si el orden prescrito y la durabilidad que necesitas no encajan, lo que falta es
+una guarda de dominio en el diseño — no un `record()` movido de sitio.
+
 Agotados los reintentos, el mensaje se rechaza sin requeue → DLX si la cola lo
 declara. Para backoffs largos usa el patrón DLX+TTL de
 `references/implementation.md` (no bloquea el consumidor).

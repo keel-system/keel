@@ -253,12 +253,27 @@ function renderMessage(model, operation) {
       // se declara en prosa, en `rules`), pero sí puede dejarla planteada donde se ve.
       const dropped = droppedTypePattern(component);
       if (dropped) {
+        // A dónde mandar al agente depende de la forma del tipo, y decirlo mal es peor
+        // que no decirlo: un tipo ESCALAR (`ApplicationCode: {type: string, pattern: …}`)
+        // se aplana a String y NO tiene clase propia, así que mandarlo al "constructor del
+        // value object" es mandarlo a un archivo que no existe — y una instrucción que no
+        // se puede seguir no se sigue: el formato acaba sin comprobarse en ningún sitio.
         notes.push(
           `// El @Pattern del value type ${component.typeName ?? 'del campo'} (${dropped}) NO está aquí: el formato del tipo`,
-          '// describe el valor YA normalizado, y Bean Validation corre antes de que el handler normalice nada.',
-          '// Si el diseño normaliza este campo antes de validarlo, hazlo cumplir después (constructor del value',
-          '// object del dominio). Si NO lo normaliza, el formato tiene que volver aquí: nadie más lo comprueba.'
+          '// describe el valor YA normalizado, y Bean Validation corre antes de que el handler normalice nada.'
         );
+        if (component.kind === 'composite') {
+          notes.push(
+            `// Si el diseño normaliza este campo antes de validarlo, ya se cumple: el constructor compacto`,
+            `// de ${component.typeName} lo comprueba. Si NO lo normaliza, el formato tiene que volver aquí.`
+          );
+        } else {
+          notes.push(
+            `// Este tipo es escalar: se aplana a ${component.javaType ?? 'su primitivo'} y no tiene clase propia, así que`,
+            '// NADIE lo comprueba hoy. Si el diseño normaliza el campo, hazlo cumplir tras normalizar, en la',
+            '// entidad de dominio que lo recibe. Si NO lo normaliza, el formato tiene que volver aquí.'
+          );
+        }
       }
       if (component.kind === 'composite') {
         imports.add('jakarta.validation.Valid');

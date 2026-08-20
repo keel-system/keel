@@ -565,11 +565,30 @@ diseño y **entrega** un mensaje en el canal real del proveedor, como si lo hubi
 él. Es la única forma de materializar un `When` del tipo «llega el evento X», y por tanto
 la única de ejercitar una suscripción de punta a punta.
 
-El helper ya sabe tres cosas que son del **diseño**, no del test, y por eso no se
+El helper ya sabe cuatro cosas que son del **diseño**, no del test, y por eso no se
 reimplementan: el destino físico de la suscripción (que **no** es el topic propio del
 servicio, sino el del proveedor), la envoltura que declara su `contract`
-(`keel` / `wrapped` / `none`, con su `payloadPath`), y dónde viajan el discriminador y la
-clave de deduplicación (cabecera o campo). El test solo aporta el payload.
+(`keel` / `wrapped` / `none`, con su `payloadPath`), dónde viajan el discriminador y la
+clave de deduplicación (cabecera o campo), y **dónde viaja la identidad de quien pide el
+trabajo**. El test solo aporta el payload.
+
+Esa cuarta es la que cambia la firma. Cuando la suscripción declara `identity`, el helper
+recibe un parámetro más:
+
+```java
+deliver<Evento>(String messageId, String source, String payloadJson)
+```
+
+`source` es el valor que el consumidor va a resolver a un inquilino, puesto exactamente
+donde `identity.from` dice que viaja (un campo de la envoltura, o una cabecera del broker).
+Es un parámetro y no una constante porque **el escenario multi-inquilino consiste
+precisamente en variarlo**: dos entregas que solo difieren en `source` son dos emisores
+distintos, y un valor que no corresponda a nadie registrado es lo que ejercita
+`onUnresolved`. Sin ese parámetro todos los mensajes del arnés vienen del mismo emisor y
+ese grupo de escenarios no es escribible — el dato no puede colarse por `payloadJson`,
+porque el DSL prohíbe que la identidad viaje en el payload.
+
+Las suscripciones que **no** declaran `identity` conservan la firma de dos parámetros.
 
 **La reentrega se escribe llamando dos veces con el mismo `messageId`:**
 
@@ -675,8 +694,8 @@ El destino lo resuelve build por broker (`<topic>.DLT` en Kafka, `<destino>-dlq`
 Su uso principal es la aserción **negativa**, y es la que justifica que exista:
 
 ```java
-deliverWithdrawalRejected(payload, messageId);
-deliverWithdrawalRejected(payload, messageId);          // el mismo messageId, otra vez
+deliverWithdrawalRejected(messageId, payload);
+deliverWithdrawalRejected(messageId, payload);          // el mismo messageId, otra vez
 await(..., () -> "active".equals(statusOf(productId)));
 assertTrue(deadLetterMessages("WithdrawalRejected", 5).isBlank());
 ```
@@ -789,6 +808,25 @@ no lo son.
 Los efectos asíncronos (publicación, consumo de una suscripción) se esperan con
 `await(Duration.ofSeconds(n), () -> …)`, nunca con `Thread.sleep` a ojo.
 
+Y `n` tampoco se elige a ojo: **el techo de cualquier espera tiene que exceder el periodo
+del mecanismo que produce el efecto que espera**. Si lo que empuja el trabajo es una
+operación con `schedule`, ese periodo es su `cron` — más el desfase de fase que `build`
+reparte entre barridos de la misma cadencia (hasta 60 s: ver `conventions/dependencies.md`
+§ varios barridos en el mismo proceso). Un techo menor que el periodo no falla siempre:
+falla **según la fase del minuto en que arranque la suite**, que es verde o rojo por el
+reloj y no por el código — el peor modo de fallo que puede tener una prueba, porque
+reintentarla la "arregla".
+
+Lo mismo, y por la misma razón, en las aserciones **negativas**: un «no debe salir» que
+espera menos que el periodo del barrido sale verde **siempre**, también cuando el efecto
+acaba ocurriendo. Ahí el margen corto no produce un test intermitente, produce uno que no
+comprueba nada.
+
+Los helpers de espera que `build` genera ya vienen dimensionados así (`MAIL_AWAIT_SECONDS`
+sale del `schedule` más rápido del diseño). Si te encuentras subiendo un techo a mano para
+que un escenario deje de ser intermitente, eso es un **defecto del arnés**, no tuyo:
+repórtalo en vez de parchearlo, porque el siguiente proyecto que se genere lo redescubrirá.
+
 ## Escenarios de carrera
 
 Un escenario cuyo `When` dice «a la vez» se escribe con `race(...)` o `raceOf(n, ...)` del arnés, **nunca
@@ -890,7 +928,7 @@ verificación del correo es siempre manual.
 
 | Helper | Para qué |
 |---|---|
-| `awaitMailTo(dirección, n)` | **Por aquí empieza todo Then sobre correo.** Espera hasta 15 s a que haya `n` correos para esa dirección y devuelve sus ids, el más reciente primero |
+| `awaitMailTo(dirección, n)` | **Por aquí empieza todo Then sobre correo.** Espera hasta `MAIL_AWAIT_SECONDS` (derivado del `schedule` más rápido del diseño) a que haya `n` correos para esa dirección y devuelve sus ids, el más reciente primero |
 | `lastMailTo(dirección)` | El más reciente, ya resuelto a su detalle completo (espera igual que el anterior) |
 | `mailSubject(mensaje)` | El asunto tal como lo lee quien lo recibe: ya interpolado y ya saneado |
 | `mailHtml(mensaje)` / `mailText(mensaje)` | Las dos partes del cuerpo. Con `delivery.parts: [html, text]` hay que afirmar sobre las dos |

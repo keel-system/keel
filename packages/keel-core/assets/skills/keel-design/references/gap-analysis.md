@@ -105,6 +105,7 @@ Por cada `command`, cruzando `preconditions`, `rules`, `errors` y las constraint
 - Por cada guarda: ¿tiene error propio? Dos guardas distintas compartiendo `code` hacen indistinguibles dos fallos distintos para el cliente.
 - ¿El command declara **al menos un** error? Si "no puede fallar", pregunta por: no encontrado, ya existe, estado inválido, sin permiso.
 - ¿El **orden** de las guardas es el que el negocio quiere? El orden del array es el contrato de implementación (qué error ve el cliente cuando fallan dos a la vez) y es lo único que lo fija.
+- Y antes que eso: ¿es **implementable**? Cada guarda solo puede mirar datos que ya estén resueltos cuando le toca. Buscar un duplicado «dentro de la aplicación» no puede ir antes de resolver esa aplicación, por mucho que el negocio lo prefiera. Un orden imposible lo invierte quien implemente —no tiene otra salida—, y a partir de ahí el diseño y sus escenarios de precedencia describen un servidor que no existe.
 - ¿Cada `error` lleva `http`? Es opcional en el schema, pero el escenario lo exige. Si el status no es evidente, **decídelo aquí** — no en el markdown de escenarios. No admite cierre `aceptado`: sin `http`, cada generador elige el suyo.
 - ¿El mismo `code` aparece en operaciones distintas con status distinto? Es legítimo, pero debe ser deliberado y quedar declarado en ambas.
 
@@ -213,6 +214,7 @@ El hueco más caro y el que ninguna regla mecánica puede ver. **Ningún hallazg
 
 - Un permiso autoriza la **operación**. ¿Autoriza sobre **ese** recurso concreto? Un rol con `order:read`, ¿lee cualquier pedido, o solo los suyos? El DSL declara lo primero; el negocio casi siempre quiere lo segundo.
 - ¿De dónde sale la relación "es suyo": un campo de la entidad (`ownerId`, `customerId`) que se compara con la identidad del token? Si esa relación no está modelada, no se puede implementar.
+- Y el síntoma que delata que este hallazgo se cerró sin decidir: un **error 403 declarado** en operaciones cuya regla de acceso solo exige roles o permissions. `keel validate` lo avisa, pero llega tarde a propósito — cuando aparece, el diseño ya escribió errores y escenarios contra un alcance que no existe. La pregunta se hace aquí, antes.
 - Las **queries de colección**: ¿devuelven todo, o solo lo del solicitante? Es el mismo hueco, y aquí se convierte en fuga de datos masiva.
 - ¿Hay campos que un rol ve y otro no dentro de la **misma** respuesta?
 - Operaciones de mutación con acceso `public`: ¿deliberado?
@@ -266,6 +268,7 @@ Un `schedule` es la única superficie del servicio sin cliente que espere respue
 - ¿Cuánto procesa por ejecución? Un `schedule` que barre "lo pendiente" sin cota es el mismo problema que un lote sin `maxItems`, con el agravante de que crece solo.
 - Si falla a mitad, ¿qué queda hecho y qué no? ¿Se reintenta el ciclo entero, o continúa donde iba?
 - ¿En qué **zona horaria** vive el calendario, y qué pasa en los cambios de hora? "Todos los días a las 00:00" no es una hora hasta que se dice de quién (enlaza con la clase 12).
+- ¿Es **verificable**? Un `schedule` no se llama desde fuera, así que su escenario se escribe contra el **efecto**: qué cambia ahí fuera cuando el ciclo pasa. Si el diseño no declara ninguno (`transitions`, `emits`), no hay nada que afirmar y el escenario saldrá decorativo. Y si además su condición de entrada es un umbral de tiempo que ninguna suite puede esperar —«lleva 18 meses»—, decide entre las dos únicas salidas honestas: declararlo como hueco, o exponer un disparador manual además del reloj. `keel validate` avisa del caso sin efecto declarado.
 
 ### 14. Estado persistido
 
@@ -307,6 +310,7 @@ ya lo ha leído. Eso cambia el peso de cada hueco de esta clase.
 - **El remitente.** Con `sender.source: data`, ¿qué pasa cuando el dato no lo resuelve? Sin `fallback` no se envía (falla cerrado, que quema menos reputación); con él, se envía desde la genérica. Las dos son decisiones legítimas y opuestas: la que no se toma la toma el generador.
 - **Las variables.** Con `templating.declaredVariables`, ¿hay error declarado para la variable obligatoria que falta? Sin él, se interpola vacía y el correo sale diciendo «Tu pedido por  € está confirmado» — un fallo que se descubre por la reclamación del cliente.
 - **El destinatario que no debe recibir.** ¿Hay algo que impida enviar a una dirección que rebotó o se quejó? Un rebote duro quema la reputación del remitente, que es **compartida** por todos los consumidores del servicio: no puede quedar en manos de cada llamante.
+- **Y por dónde te enteras del rebote.** Es la mitad que casi siempre falta: el relay **acepta** el mensaje y responde OK; el rebote vuelve minutos u horas después. Si alguna regla depende de clasificarlo —suprimir la dirección, contar quejas, distinguir rebote duro de blando—, ¿por qué canal llega esa noticia (un webhook del proveedor, un buzón de retorno, un evento)? Sin canal declarado, esa regla no es implementable ni verificable: ninguna infraestructura de prueba rebota sola. La forma de la decisión ya existe en `dependencies` (`awaits`, `reconciledBy`): un desenlace que llega tarde o no llega.
 - **Quién puede pedir el envío.** Si el servicio manda correo por cuenta de varios sistemas, ¿de dónde sale la identidad de quien lo pide — del token, o de un campo del cuerpo? Si viaja en el cuerpo, cualquier cliente autenticado puede enviar en nombre de otro, desde su remitente verificado.
 
 

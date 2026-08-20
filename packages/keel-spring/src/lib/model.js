@@ -433,7 +433,7 @@ function aggregateIndex(domain) {
 }
 
 // Clasifica una relación del diseño desde la entidad que la declara:
-// - internal: entidad hija del mismo agregado (con backReference si apunta a la raíz)
+// - internal: entidad hija del mismo agregado (con backReference si apunta a su padre)
 // - external: otro agregado, representado por su id
 // - unsupported: colección hacia otro agregado, que el scaffolding no modela
 function classifyRelation(entityName, rel, internalOf, hasPersistence) {
@@ -443,9 +443,17 @@ function classifyRelation(entityName, rel, internalOf, hasPersistence) {
     internalOf.get(entityName)?.root === rel.entity;
 
   if (sameAggregate || !hasPersistence) {
+    // El padre de una entidad interna NO es necesariamente la raíz del agregado:
+    // en Raíz → Hija → Nieta, la nieta apunta a la hija. Mirar solo a la raíz
+    // dejaba la relación intermedia sin back-reference, y entonces el padre emite
+    // un @OneToMany unidireccional con su propio @JoinColumn mientras el hijo
+    // conserva el suyo — DOS columnas de FK físicas para una sola relación, cada
+    // una rellenada por un lado distinto del mapeo.
+    const self = internalOf.get(entityName);
+    const pointsAtOwnParent =
+      Boolean(self) && (rel.entity === self.root || internalOf.get(rel.entity)?.aggregate === self.aggregate);
     const backReference =
-      internalOf.get(entityName)?.root === rel.entity &&
-      (rel.cardinality === 'many-to-one' || rel.cardinality === 'one-to-one');
+      pointsAtOwnParent && (rel.cardinality === 'many-to-one' || rel.cardinality === 'one-to-one');
     return { kind: 'internal', backReference };
   }
   if (rel.cardinality === 'many-to-one' || rel.cardinality === 'one-to-one') return { kind: 'external', backReference: false };
@@ -690,16 +698,31 @@ function addImplicitAggregateRelations(entities, aggregates, warnings) {
     for (const inner of agg.entities ?? []) {
       if (!byName.has(inner)) continue;
       // Ya alcanzada: algún otro miembro del agregado declara una relación hacia
-      // ella. La back-reference de la propia hija hacia la raíz no cuenta: es el
-      // lado dueño de la FK, no la colección que el agregado necesita para
-      // gobernar sus hijas.
+      // ella. NINGUNA back-reference cuenta, venga de quien venga: es el lado dueño
+      // de la FK, no la colección que el agregado necesita para gobernar sus hijas.
+      // Mirar solo la de la propia hija no bastaba — en Raíz → Hija → Nieta, la
+      // back-reference de la NIETA apunta a la hija, y contarla daba por alcanzada a
+      // la hija sin que nadie declarase la colección que la raíz necesita: el
+      // agregado quedaba sin forma de gobernar sus hijas desde la raíz.
       const reachable = members.some(
-        (member) => member !== inner && (byName.get(member)?.relations ?? []).some((rel) => rel.entity === inner)
+        (member) =>
+          member !== inner &&
+          (byName.get(member)?.relations ?? []).some((rel) => rel.entity === inner && !rel.backReference)
       );
       if (reachable) continue;
 
+      // Dónde cuelga la colección derivada. Por defecto la raíz, pero si la hija ya
+      // declara ella misma hacia quién apunta DENTRO del agregado, es ese su padre y
+      // ahí va: derivarla en la raíz emitiría un @OneToMany con su propio @JoinColumn
+      // mientras la hija conserva el de su back-reference, que son dos FK para una
+      // sola relación (el mismo fallo que classifyRelation evita en el otro lado).
+      const owner =
+        byName.get(
+          (byName.get(inner)?.relations ?? []).find((rel) => rel.backReference)?.entity ?? agg.root
+        ) ?? root;
+
       const relName = camelCase(pluralize(inner));
-      root.relations.push({
+      owner.relations.push({
         name: relName,
         entity: inner,
         cardinality: 'one-to-many',
@@ -708,7 +731,7 @@ function addImplicitAggregateRelations(entities, aggregates, warnings) {
         implicit: true
       });
       warnings.push(
-        `Agregado ${aggName}: la entidad interna ${inner} no tiene relación declarada con ${agg.root}; se deriva ${agg.root}.${relName} (one-to-many). Decláralas en domain.entities.${agg.root}.relations si el nombre o la cardinalidad deben ser otros.`
+        `Agregado ${aggName}: la entidad interna ${inner} no tiene relación declarada con ${owner.name}; se deriva ${owner.name}.${relName} (one-to-many). Decláralas en domain.entities.${owner.name}.relations si el nombre o la cardinalidad deben ser otros.`
       );
     }
   }
@@ -1835,12 +1858,63 @@ function collectSubscriptions(layers, services, domainTypes, inlineEnumName, war
       discriminator: contract.discriminator ?? null,
       messageId: contract.messageId ?? null,
       unknownFields: contract.unknownFields ?? 'ignore',
+      // De dónde sale la identidad de quien pide el trabajo cuando el camino es un
+      // broker y no llega ningún token. El dato lo declara y lo valida el DSL, pero
+      // si no llega hasta aquí no lo conoce nadie: ni el javadoc del listener, que es
+      // donde el agente lee qué resolver, ni el arnés, que es quien tiene que poder
+      // variarlo para escribir dos inquilinos distintos.
+      identity: def.identity ?? null,
+      identityDelivery: identityDelivery(name, def.identity, contract, external, warnings),
       envelopeRecord: contract.envelope === 'wrapped' ? `${pascalCase(name)}Envelope` : null,
       fields,
       retry: def.onFailure?.retry ?? null,
       deadLetter: Boolean(def.onFailure?.deadLetter)
     };
   });
+}
+
+/**
+ * Dónde tiene que escribir el arnés la identidad del emisor para que el consumidor la
+ * lea por donde el contrato dice que viaja. No es una preferencia de estilo: si el
+ * escenario no puede variar ese valor, todos los mensajes que entrega pertenecen al
+ * mismo inquilino y el flujo multi-aplicación no es escribible.
+ *
+ * Devuelve null cuando el contrato no deja ningún hueco donde ponerla, avisando: el
+ * caso existe (`envelope: none` es el mensaje pelado) y callarlo dejaría al diseñador
+ * creyendo que su escenario discrimina emisores cuando no puede.
+ */
+function identityDelivery(name, identity, contract, external, warnings) {
+  if (!identity?.from) return null;
+  const { location, name: path } = identity.from;
+  const envelope = contract.envelope ?? (external ? 'none' : 'keel');
+
+  // Cabecera: la estampa el broker y el arnés la añade al mapa que ya compone.
+  // Es la única opción que no depende de cómo se envuelva el payload.
+  if (location === 'header') return { placement: 'header', name: path };
+
+  if (envelope === 'keel') {
+    // La envoltura Keel solo tiene dos ramas, y `data` la aporta el escenario en su
+    // payload: lo colocable aquí es `metadata.<algo>`.
+    const key = path.startsWith('metadata.') ? path.slice('metadata.'.length) : null;
+    if (key && !key.includes('.')) return { placement: 'metadata', name: key };
+    warnings.push(
+      `Suscripción ${name}: identity.from.name '${path}' no es un campo de metadata de la envoltura Keel, así que el arnés no puede variarlo. Decláralo como 'metadata.<campo>' o como location: header.`
+    );
+    return null;
+  }
+
+  if (envelope === 'wrapped') {
+    if (!path.includes('.')) return { placement: 'envelopeField', name: path };
+    warnings.push(
+      `Suscripción ${name}: identity.from.name '${path}' está anidado y el arnés solo compone campos del primer nivel de la envoltura. Aplánalo o decláralo como location: header.`
+    );
+    return null;
+  }
+
+  warnings.push(
+    `Suscripción ${name}: con envelope 'none' el mensaje ES el payload y no hay dónde poner la identidad, que el DSL prohíbe llevar en el payload. Los escenarios de esta suscripción no podrán variar el emisor: decláralo como location: header.`
+  );
+  return null;
 }
 
 // Mapeo declarado (input) o identidad por nombre, sobre los componentes del

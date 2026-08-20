@@ -16,9 +16,46 @@
 // mano en cada sitio, el gate en vivo comprobaría algo distinto de lo que se genera.
 
 import { HOST_BASE, ROUTES, FIELDS, HTTP_PORT, SEARCH_PREFIX, searchSuffix } from '../lib/mail-probes.js';
+import { fastestSchedulePeriod } from '../lib/cron-period.js';
 
 export function hasMail(model) {
   return Boolean(model.layersPresent.mail);
+}
+
+// Suelo de la espera cuando nada la empuja desde un barrido: la entrega ocurre justo
+// después de la respuesta y 15 s cubren de sobra el viaje al relay.
+const MAIL_AWAIT_FLOOR = 15;
+
+// Margen sobre el periodo del barrido. Cubre las dos cosas que se suman al periodo
+// nominal: el desfase de fase que `scheduleSeconds()` reparte entre barridos de la
+// misma cadencia (hasta 60 s) y el envío en sí.
+const MAIL_AWAIT_MARGIN = 15;
+
+// Techo por encima del cual una espera deja de ser una prueba y pasa a ser un cuelgue.
+const MAIL_AWAIT_CAP = 300;
+
+/**
+ * Cuántos segundos espera el arnés a que llegue un correo, derivado del contrato.
+ *
+ * No es un número de estilo. Si la única forma de que un mensaje llegue a la bandeja es
+ * un barrido con `schedule`, una espera inferior a su periodo falla según la fase del
+ * minuto en que arranque la suite: verde o rojo por el reloj, no por el código. Un
+ * literal fijo aquí hace intermitente cualquier diseño cuyo barrido sea más lento que él.
+ *
+ * Solo cuenta cuando alguna operación de `sentBy` es interna: si el correo sale dentro
+ * de la operación que atiende la petición, la espera no depende de ningún cron.
+ */
+function mailAwaitSeconds(model) {
+  const drivenBySweep = (model.mail?.sentBy ?? []).some((name) =>
+    (model.services ?? []).some((service) =>
+      (service.operations ?? []).some((operation) => operation.name === name && (operation.internal || operation.schedule))
+    )
+  );
+  if (!drivenBySweep) return { seconds: MAIL_AWAIT_FLOOR, period: null };
+
+  const period = fastestSchedulePeriod(model);
+  if (period == null) return { seconds: MAIL_AWAIT_FLOOR, period: null };
+  return { seconds: Math.min(MAIL_AWAIT_CAP, Math.max(MAIL_AWAIT_FLOOR, period + MAIL_AWAIT_MARGIN)), period };
 }
 
 /**
@@ -37,11 +74,41 @@ export function mailSection(model) {
       ? 'solo el cuerpo HTML'
       : 'solo el cuerpo en texto';
 
+  const wait = mailAwaitSeconds(model);
+  const tooSlow = wait.period != null && wait.period + MAIL_AWAIT_MARGIN > MAIL_AWAIT_CAP;
+
   return `
     /** API del buzón de prueba (Mailpit de infra/docker-compose.yaml). */
     private static final String MAIL_API = "${HOST_BASE}";
 
     private static final HttpClient MAIL_HTTP = HttpClient.newHttpClient();
+
+    /**
+     * Techo de cualquier espera de correo.${
+       wait.period == null
+         ? `
+     *
+     * <p>El correo sale dentro de la operación que atiende la petición, así que no hay
+     * ningún barrido de por medio: lo único que cubre esta espera es el viaje al relay.`
+         : `
+     *
+     * <p>Sale del contrato, no de un número redondo: el correo lo empuja un barrido con
+     * cadencia de ${wait.period} s (el \`schedule\` más rápido del diseño), y una espera
+     * más corta que su periodo falla según la fase en que arranque la suite — verde o
+     * rojo por el reloj y no por el código. Lleva ${MAIL_AWAIT_MARGIN} s de margen por el
+     * desfase que build reparte entre barridos de la misma cadencia.`
+     }${
+       tooSlow
+         ? `
+     *
+     * <p><b>Ojo</b>: ese periodo excede el techo de ${MAIL_AWAIT_CAP} s y se ha recortado
+     * ahí. Ningún escenario que dependa del barrido va a pasar tal cual, y no es algo que
+     * se arregle en la prueba: si tiene que ser verificable, el diseño necesita exponer un
+     * disparador de ese trabajo además del \`schedule\`.`
+         : ''
+     }
+     */
+    private static final int MAIL_AWAIT_SECONDS = ${wait.seconds};
 
     /**
      * Espera a que haya {@code count} correos para esa dirección y devuelve sus ids,
@@ -54,11 +121,11 @@ export function mailSection(model) {
      * transacción de quien llama. Una lectura seca justo tras el 2xx es una carrera, y
      * el escenario fallaría unas veces sí y otras no — que es peor que fallar siempre.
      *
-     * @throws AssertionError si en 15 s no han llegado los que se esperaban
+     * @throws AssertionError si en {@value #MAIL_AWAIT_SECONDS} s no han llegado los que se esperaban
      */
     protected static List<String> awaitMailTo(String address, int count) {
         List<String> ids = new ArrayList<>();
-        Instant deadline = Instant.now().plusSeconds(15);
+        Instant deadline = Instant.now().plusSeconds(MAIL_AWAIT_SECONDS);
         while (Instant.now().isBefore(deadline)) {
             ids = mailIdsTo(address);
             if (ids.size() >= count) {
@@ -72,7 +139,7 @@ export function mailSection(model) {
             }
         }
         throw new AssertionError("Se esperaban " + count + " correo(s) para " + address + " y llegaron "
-                + ids.size() + " en 15 s. El buzón se mira en http://localhost:${HTTP_PORT}");
+                + ids.size() + " en " + MAIL_AWAIT_SECONDS + " s. El buzón se mira en http://localhost:${HTTP_PORT}");
     }
 
     /** El correo más reciente para esa dirección, ya resuelto a su detalle completo. */
@@ -96,12 +163,19 @@ export function mailSection(model) {
      * Que NO salió ningún correo para esa dirección. Es el Then de los rechazos, y el
      * único que puede afirmar que el rechazo llegó ANTES del envío y no después.
      *
-     * <p>Espera un margen corto a propósito: sin él, «no ha llegado» y «todavía no ha
-     * llegado» son indistinguibles, y el escenario pasaría en verde también cuando el
-     * correo acaba saliendo un segundo más tarde.
+     * <p>Espera un margen a propósito: sin él, «no ha llegado» y «todavía no ha llegado»
+     * son indistinguibles, y el escenario pasaría en verde también cuando el correo acaba
+     * saliendo un momento más tarde. El margen es el MISMO techo que
+     * {@link #awaitMailTo}${
+       wait.period == null
+         ? ', porque es lo que tarda el camino que se está negando.'
+         : `, y por la misma razón: si el correo lo empuja un barrido de ${wait.period} s,
+     * un margen menor que su periodo hace que este Then salga verde SIEMPRE — también
+     * cuando el correo sale, que es justo lo que dice estar comprobando.`
+     }
      */
     protected static void assertNoMailTo(String address) {
-        sleepQuietly(1000L);
+        sleepQuietly(MAIL_AWAIT_SECONDS * 1000L);
         int count = mailCount(address);
         if (count > 0) {
             throw new AssertionError("No debía salir ningún correo para " + address + " y salieron " + count);

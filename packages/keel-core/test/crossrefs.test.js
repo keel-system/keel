@@ -4200,3 +4200,140 @@ test('identity sobre metadata.* con envelope none es error: no hay envoltura de 
     errors.join(' | ')
   );
 });
+
+// ---------------------------------------------------------------------------
+// Huecos que el diseño promete en prosa y ninguna declaración respalda. Los tres
+// salieron de la misma corrida: un diseño que validaba «✔ Servicio válido» y del
+// que la generación destapó siete huecos horas después. Los tres son AVISO, no
+// error: la decisión sigue siendo del diseño, lo que no puede es quedar sin tomar.
+// ---------------------------------------------------------------------------
+
+const scopedLayers = () => ({
+  domain: { entities: { Product: entity() }, aggregates: {} },
+  'use-cases': {
+    operations: {
+      getProduct: {
+        description: 'Consulta un producto.',
+        kind: 'query',
+        input: { fields: { id: { type: 'uuid', required: true } } },
+        output: { entity: 'Product' },
+        errors: [{ code: 'PRODUCT_FORBIDDEN', when: 'El producto no está en su alcance.', http: 403 }],
+      },
+    },
+  },
+  api: { endpoints: { getProduct: { method: 'GET', path: '/products/{id}' } } },
+  security: {
+    authentication: { protocol: 'oidc', tokenLocation: 'header' },
+    roles: { operator: { description: 'Opera el catálogo.' } },
+    permissions: { 'product:read': { description: 'Leer productos.' } },
+    roleGrants: { operator: ['product:read'] },
+    access: { default: { level: 'required', roles: ['operator'], permissions: ['product:read'] } },
+  },
+});
+
+test('un 403 que solo pueden producir roles globales es aviso: nada distingue a quién se le prohíbe', () => {
+  const { errors, warnings } = run(scopedLayers());
+  assert.deepEqual(errors, []);
+  assert.ok(
+    warnings.some((w) => w.includes("el error 'PRODUCT_FORBIDDEN' (403)") && w.includes('son globales')),
+    warnings.join('\n')
+  );
+});
+
+test('sin ningún 403 declarado no se dice nada del alcance', () => {
+  const layers = scopedLayers();
+  layers['use-cases'].operations.getProduct.errors = [
+    { code: 'PRODUCT_NOT_FOUND', when: 'No existe.', http: 404 },
+  ];
+  const { warnings } = run(layers);
+  assert.ok(!warnings.some((w) => w.includes('son globales')), warnings.join('\n'));
+});
+
+test("un 403 sobre level 'service' no se avisa: ahí el que llama ES el alcance", () => {
+  // La identidad de un cliente máquina es por cliente, no global: acotar a «los
+  // recursos de quien llama» es producible sin declarar ningún claim extra.
+  const layers = scopedLayers();
+  layers.api.defaultAudience = 'services';
+  layers.security.authentication.serviceAuth = { protocol: 'client-credentials' };
+  layers.security.access.default = { level: 'service', scopes: ['product:read'] };
+  const { warnings } = run(layers);
+  assert.ok(!warnings.some((w) => w.includes('son globales')), warnings.join('\n'));
+});
+
+test('un escenario que nombra un serviceClient que el diseño no declara es aviso', () => {
+  const layers = scopedLayers();
+  layers.api.defaultAudience = 'services';
+  layers.security.authentication.serviceAuth = { protocol: 'client-credentials' };
+  layers.security.access.default = { level: 'service', scopes: ['product:read'] };
+  layers.security.serviceClients = { 'billing-service': { description: 'Factura.', scopes: ['product:read'] } };
+  const scenarios = scenarioDoc(`### FL-PRD-001: consulta con credencial de máquina
+**Given**: existe un producto. El solicitante presenta un token del \`serviceClient\` **\`shipping\`**.
+**When**: GET /products/{id}.
+**Then**: 200.`);
+  const { warnings } = checkCrossRefs({ layers, scenarios });
+  assert.ok(
+    warnings.some((w) => w.includes("'shipping'") && w.includes('serviceClients no declara')),
+    warnings.join('\n')
+  );
+});
+
+test('el mismo escenario con el cliente declarado no dice nada', () => {
+  const layers = scopedLayers();
+  layers.api.defaultAudience = 'services';
+  layers.security.authentication.serviceAuth = { protocol: 'client-credentials' };
+  layers.security.access.default = { level: 'service', scopes: ['product:read'] };
+  layers.security.serviceClients = { shipping: { description: 'Envía.', scopes: ['product:read'] } };
+  const scenarios = scenarioDoc(`### FL-PRD-001: consulta con credencial de máquina
+**Given**: el solicitante presenta un token del \`serviceClient\` **\`shipping\`**.
+**When**: GET /products/{id}.
+**Then**: 200.`);
+  const { warnings } = checkCrossRefs({ layers, scenarios });
+  assert.ok(!warnings.some((w) => w.includes('serviceClients no declara')), warnings.join('\n'));
+});
+
+test('un rol que los escenarios nombran y security no declara es aviso', () => {
+  const scenarios = scenarioDoc(`### FL-PRD-001: alta
+**Given**: el solicitante tiene rol \`auditor\`.
+**When**: GET /products/{id}.
+**Then**: 200.`);
+  const { warnings } = checkCrossRefs({ layers: scopedLayers(), scenarios });
+  assert.ok(
+    warnings.some((w) => w.includes("'auditor'") && w.includes('roles no declara')),
+    warnings.join('\n')
+  );
+});
+
+test('un barrido sin puerta y sin efecto declarado es aviso', () => {
+  const layers = scopedLayers();
+  layers['use-cases'].operations.purgeOldProducts = {
+    description: 'Borra los datos personales de los productos viejos.',
+    kind: 'command',
+    input: 'void',
+    output: 'void',
+    schedule: { cron: '0 3 * * *' },
+  };
+  const { errors, warnings } = run(layers);
+  assert.deepEqual(errors, []);
+  assert.ok(
+    warnings.some((w) => w.includes('purgeOldProducts') && w.includes('no declara transitions ni emits')),
+    warnings.join('\n')
+  );
+});
+
+test('un barrido cuyo efecto SÍ está declarado no se avisa: el escenario se escribe contra el efecto', () => {
+  // Es la asimetría del documento de escenarios: el disparador no se alcanza en los
+  // dos casos, pero aquí hay algo que cambia ahí fuera contra lo que afirmar.
+  const layers = scopedLayers();
+  layers.domain.entities.Product = entity({ status: { type: 'enum', values: ['queued', 'sent'] } });
+  layers.domain.entities.Product.lifecycle = { field: 'status', transitions: { queued: ['sent'], sent: [] } };
+  layers['use-cases'].operations.dispatchQueued = {
+    description: 'Despacha los productos encolados.',
+    kind: 'command',
+    input: 'void',
+    output: 'void',
+    schedule: { cron: '* * * * *' },
+    transitions: [{ entity: 'Product', from: ['queued'], to: 'sent' }],
+  };
+  const { warnings } = run(layers);
+  assert.ok(!warnings.some((w) => w.includes('no declara transitions ni emits')), warnings.join('\n'));
+});
