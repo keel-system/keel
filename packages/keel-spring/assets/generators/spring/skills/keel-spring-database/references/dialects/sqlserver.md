@@ -38,6 +38,14 @@ transacciones cortas importan el doble. Si los escenarios muestran bloqueos de
 lectura, la opción de BD `READ_COMMITTED_SNAPSHOT ON` es el arreglo estándar
 (decisión de esquema: documéntala).
 
+### Reclamo de un barrido
+
+**No existe `SKIP LOCKED`**: el equivalente son hints de tabla, `WITH (UPDLOCK, READPAST, ROWLOCK)`,
+y es lo que emite Hibernate para este dialecto desde el hint `lock.timeout = -2`. La semántica no es
+idéntica —`READPAST` salta filas bloqueadas a nivel de fila, así que el `ROWLOCK` importa— y conviene
+comprobarlo contra la base real antes de fiarse. El `UPDATE` condicional del reclamo no depende de
+nada de esto.
+
 ## Validación y reset
 
 Desde devtools (`sqlcmd`, instalado por curl):

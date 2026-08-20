@@ -112,8 +112,35 @@ deliberado: acota el acoplamiento a un archivo.
 Un barrido con `@Scheduled` corre en **todas** las réplicas a la vez, así que una consulta que solo
 *lee* devuelve las mismas filas en todas y el trabajo se hace N veces
 (`conventions/dependencies.md § El barrido corre en todas las réplicas`). La consulta tiene que
-**reclamar**: llevarse un lote acotado bajo lock de escritura con SKIP LOCKED, dentro de la
-transacción del barrido.
+**reclamar**: llevarse un lote acotado, no solo leerlo.
+
+**Cómo se reclama depende de una sola pregunta: ¿hay una llamada externa entre reclamar y
+actuar?** Las dos formas son legítimas y no son intercambiables, y confundirlas es el error caro:
+
+| Entre reclamar y actuar… | Forma correcta | Por qué |
+|---|---|---|
+| no hay llamada externa (entregar al broker: corto y local) | lock de escritura con SKIP LOCKED, dentro de la transacción del barrido | El lock aísla mientras dura la transacción, y la transacción dura poco. Es lo que hace `OutboxRelay.findPending` |
+| sí la hay (un correo, un proveedor HTTP) | **marca persistida** que se commitea ANTES de llamar | El lock tendría que sostenerse durante la llamada, reteniendo una conexión del pool por la latencia de un tercero. La marca sobrevive al commit, que es lo que la hace visible a las demás réplicas |
+
+**Casi siempre `build` ya lo generó, y en las dos formas.** Lo que tienes que hacer es llamar al método
+del puerto, no escribir la consulta:
+
+| Barrido del diseño | Método generado | Cómo reclama |
+|---|---|---|
+| saca filas de una **cola** (`schedule` + `transitions` desde el estado inicial) | `claimFor<Operación>(int batchSize)` | `UPDATE` condicional sobre el propio lifecycle: la marca es el estado de destino que el diseño declara, así que no hace falta ninguna columna en paralelo |
+| es el **`reconciledBy`** de una activación | `claimFor<Barrido><Activación>()` | marca en `reconciliation_claim`, que sobrevive al commit y **caduca**; el umbral sale de `unansweredAfterSeconds` y el candidato de `<activación>AwaitingSince` |
+
+Solo lo escribes tú cuando `build` avisa de que no pudo generarlo: un rescate de un estado en vuelo sin
+`reconciledBy` (falta la cota temporal, que el DSL no declara), o una reconciliación cuyo diseño no da la
+marca de espera. Ahí copia la forma de la tabla de arriba, la que corresponda.
+
+**Y lo que depende del dialecto es solo una capa de esto**, que conviene no confundir con el reclamo:
+llevarse la fila es la escritura condicional, atómica en los seis motores; repartir los candidatos entre
+réplicas es `SKIP LOCKED`, que PostgreSQL, MySQL 8.0+, MariaDB 10.6+, Oracle 12c+ y SQL Server tienen y
+H2 no. `build` emite el hint solo donde el motor lo entiende y avisa donde no — sin él el reclamo sigue
+siendo correcto, solo que las N réplicas se pelean por la misma página. Ver `dialects/<motor>.md`.
+
+El ejemplo de abajo es la primera forma, la del lock.
 
 ```java
 /**
@@ -136,8 +163,10 @@ Tres cosas que no son opcionales:
 - **El lock vive hasta el fin de la transacción** del método que llama, así que el barrido tiene que
   ser `@Transactional` y hacer su trabajo dentro. Si sales de la transacción y luego actúas, la fila
   ya está suelta.
-- **En H2 (perfil `test`) SKIP LOCKED puede degradarse** a un lock normal. No invalida nada: la
-  validación de concurrencia se hace contra la base real de `infra/`.
+- **H2 acepta la sintaxis de SKIP LOCKED y la IGNORA.** No degrada con un error: se calla y las réplicas
+  vuelven a competir por la misma página. Por eso `build` no emite el hint cuando el motor elegido es H2
+  —y lo dice en un aviso—, y por eso validar la concurrencia contra el perfil `test` no demuestra nada:
+  se hace contra la base real de `infra/`.
 
 Es exactamente el patrón de `OutboxRelay.findPending`, que `build` ya genera en este mismo proyecto:
 míralo antes de escribir el tuyo.

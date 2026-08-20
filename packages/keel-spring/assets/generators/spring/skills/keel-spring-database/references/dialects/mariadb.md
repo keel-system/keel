@@ -26,6 +26,12 @@ motivo de rendimiento real).
   funciona igual.
 - **Fechas**: `datetime(6)` para `Instant`; mismo aviso 2038 para `TIMESTAMP`.
 
+### Reclamo de un barrido
+
+`FOR UPDATE SKIP LOCKED` desde **10.6** (MariaDB lo incorporó bastante después que MySQL: no des por
+hecho la paridad de versiones entre los dos). Por debajo, el reclamo sigue siendo correcto —lo
+garantiza el `UPDATE` condicional— pero las réplicas compiten por la misma página de candidatos.
+
 ## Validación y reset
 
 Desde devtools (`mariadb`, ya instalado):

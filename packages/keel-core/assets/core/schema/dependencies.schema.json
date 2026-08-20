@@ -199,12 +199,22 @@
           "description": "Cuánto silencio del proveedor se tolera antes de que el barrido vuelva a insistir: un encargo de esta activación sin desenlace pasado ese tiempo es candidato. Es una decisión de negocio y de acuerdo con el proveedor —cuánto tarda razonablemente en contestar—, no una constante de implementación, y va POR ACTIVACIÓN porque un mismo barrido puede reconciliar varias y cada proveedor tarda lo suyo. Sin declararlo, el número lo elige quien construye: por debajo, el barrido insiste antes de que al proveedor le haya dado tiempo; por encima, un encargo perdido tarda de más en detectarse. Solo válido junto a reconciledBy.",
           "$comment": "El generador lo emite como parámetro con override por entorno (mismo trato que cache.ttlSeconds): el diseño fija el valor, el entorno puede moverlo sin recompilar."
         },
+        "awaitingSince": {
+          "type": "string",
+          "pattern": "^[a-z][A-Za-z0-9]*$",
+          "description": "Campo de la entidad que dice DESDE CUÁNDO cuenta el reloj del barrido. El estado dice que espera; esto dice cuánto lleva, y sin ello el umbral de unansweredAfterSeconds no se puede aplicar a nada. Tiene que ser un campo propio, estampado al entrar en la espera por la operación que encarga, y que no toque nadie más: createdAt es cuándo nació la entidad (una reserva se crea y se confirma horas después, y el barrido cancelaría un encargo de hace treinta segundos) y un updatedAt de auditoría REJUVENECE con cualquier otra escritura, dejando la entidad invisible al barrido para siempre — el fallo que pasa las pruebas y no se acaba nunca en producción. En la variante de DERIVA, donde no se espera un desenlace sino que se revalida una creencia que envejece, el campo es la última revalidación (lastScannedAt) y no una espera: por eso lo nombra el diseño en vez de derivarse de la activación. Obligatorio junto a reconciledBy.",
+          "$comment": "crossrefs comprueba que exista en la entidad que queda esperando, que sea timestamp y que no lo gestione audit. La convención de nombre recomendada sigue siendo <activacion>AwaitingSince: el prefijo evita que dos activaciones de la misma entidad compartan marca."
+        },
         "onFailure": { "$ref": "#/$defs/onFailure" }
       },
       "allOf": [
         {
           "if": { "type": "object", "required": ["unansweredAfterSeconds"] },
           "then": { "required": ["reconciledBy"] }
+        },
+        {
+          "if": { "type": "object", "required": ["reconciledBy"] },
+          "then": { "required": ["awaitingSince"] }
         },
         {
           "if": {

@@ -109,7 +109,7 @@ la respuesta degradada de la normal, no es `degrade` — es un bug declarado.
 |---|---|---|
 | **Efecto** | ¿Qué hace exactamente el proveedor al recibirlo? | `effect` (prosa, **sacado de su contrato**) |
 | **Desenlace** | ¿Esta operación necesita el resultado para continuar, le basta con que lo aceptara, o lo delega y sigue? | `awaits` |
-| **Desenlace diferido** | Si necesita el resultado pero el proveedor **no puede darlo en el acto**, ¿por dónde llega? | suscripción al evento de resultado + estado de espera en `domain: lifecycle` + `reconciledBy` |
+| **Desenlace diferido** | Si necesita el resultado pero el proveedor **no puede darlo en el acto**, ¿por dónde llega? | suscripción al evento de resultado + estado de espera en `domain: lifecycle` + su marca temporal + `reconciledBy` con `awaitingSince` |
 | **Canal** | *(se deduce de los dos anteriores)* | `via` |
 | **Fallo** | Si el encargo no sale, ¿qué ve el cliente de nuestra API? | `onFailure` |
 
@@ -170,7 +170,7 @@ No es un campo, son cuatro cosas que se escriben juntas o el diseño queda a med
 3. **La operación que aplica el desenlace bueno** (`internal: true`), disparada por la suscripción al
    evento de resultado. Sin ella la entidad no sale nunca de la espera por la vía normal y el barrido
    acaba rindiéndose con todas: la reconciliación respalda el camino feliz, no lo sustituye.
-4. **`reconciledBy`** con su operación `schedule`, que barre lo que lleva demasiado tiempo esperando.
+4. **`reconciledBy`** con su operación `schedule`, que barre lo que lleva demasiado tiempo esperando, más los dos números que hacen ese «demasiado tiempo» comprobable: `unansweredAfterSeconds` (cuánto se tolera) y `awaitingSince` (qué campo dice desde cuándo se cuenta; obligatorio, y tiene que ser un campo propio que estampe la operación que encarga).
 
 Y una consecuencia que se pasa por alto: **el estado de espera es contrato público**. Si la API lo
 devuelve, el cliente lo ve y tiene que saber qué hacer con él; la operación deja de poder prometer

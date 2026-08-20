@@ -21,6 +21,7 @@ import { persistedMembers, uniqueFields, indexName } from './persistence-members
 import { usesOutbox } from './outbox.js';
 import { usesIdempotency } from './idempotency.js';
 import { usesHttpIdempotency } from './http-idempotency.js';
+import { reconciliationClaims } from './reconciliation-claim.js';
 
 const CONFIG_PKG = 'infrastructure.persistence.config';
 export const INDEX_EXPORT_FILE = 'build/schema/indexes.json';
@@ -147,8 +148,8 @@ export function documentPathsFor(model, entity, members, logicalName, warnings) 
 }
 
 /**
- * Índices de las colecciones que no salen del diseño sino del mecanismo: el outbox
- * y los dos registros de idempotencia. En la rama relacional los declara la propia
+ * Índices de las colecciones que no salen del diseño sino del mecanismo: el outbox,
+ * los dos registros de idempotencia y el reclamo de la reconciliación. En la rama relacional los declara la propia
  * entidad JPA (@Index) o los crea la clave primaria; aquí hay que pedirlos.
  *
  * No llevan índice único ninguno: la unicidad de processed_event y de
@@ -179,6 +180,14 @@ function infrastructureIndexes(model) {
       collection: 'idempotency_record',
       field: 'idempotencyRecordIndexes',
       specs: [{ name: 'ix_idempotency_record_expires_at', unique: false, paths: ['expires_at'] }]
+    });
+  }
+  if (reconciliationClaims(model).length > 0) {
+    entries.push({
+      collection: 'reconciliation_claim',
+      field: 'reconciliationClaimIndexes',
+      // De la purga, no del reclamo: el reclamo va por _id, que Mongo indexa siempre.
+      specs: [{ name: 'ix_reconciliation_claim_claimed_at', unique: false, paths: ['claimed_at'] }]
     });
   }
   return entries;

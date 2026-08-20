@@ -8,6 +8,8 @@ import { javaFile, javaPath, subPackage } from './render.js';
 import { domainMembers, domainSubPackage, capitalize } from './entities.js';
 import { jpaMembers, backReferenceTo, JPA_PKG } from './persistence-entities.js';
 import { isRefTarget } from './ref-resolvers.js';
+import * as claim from './claim.js';
+import * as reconciliationClaim from './reconciliation-claim.js';
 
 export const PORT_PKG = 'domain.repository';
 export const REPO_PKG = 'infrastructure.persistence.repositories';
@@ -115,6 +117,13 @@ export function renderPort(model, entity, paginated, batchLookup) {
     imports.add('org.springframework.data.domain.Pageable');
     methods.push(`    Page<${entity.name}> list(Pageable pageable);`);
   }
+  // El reclamo de los barridos. Va en el puerto —y no en un servicio aparte— porque es
+  // una consulta de persistencia como las demás, y porque su forma correcta depende del
+  // motor: dejarla fuera es dejar que la escriba quien no sabe contra qué corre.
+  methods.push(...claim.portMethods(model, entity, imports));
+  // El del barrido de reconciliación es otro reclamo distinto —marca persistida con
+  // caducidad, no transición del lifecycle— y por eso vive en su propio módulo.
+  methods.push(...reconciliationClaim.portMethods(model, entity, imports));
   methods.push(`    ${entity.name} save(${entity.name} entity);`, '    void deleteById(UUID id);');
 
   const body = `/**
@@ -174,6 +183,12 @@ function renderJpaRepository(model, entity) {
 ${graph}    @Override
     Optional<${entity.name}Jpa> findById(UUID id);`;
   }
+
+  const claimMethods = [
+    ...claim.jpaRepositoryMethods(model, entity, imports),
+    ...reconciliationClaim.jpaRepositoryMethods(model, entity, imports)
+  ];
+  if (claimMethods.length > 0) methods += `\n\n${claimMethods.join('\n\n')}`;
 
   const body = `public interface ${entity.name}JpaRepository extends JpaRepository<${entity.name}Jpa, UUID> {${methods}\n}`;
 
@@ -250,6 +265,8 @@ function renderAdapter(model, entity, paginated, batchLookup) {
         return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), sort.and(TIE_BREAKER));
     }`);
   }
+  methods.push(...claim.adapterMethods(model, entity, imports, jpaField));
+  methods.push(...reconciliationClaim.adapterMethods(model, entity, imports, jpaField));
   // Drenaje de eventos de dominio: save() es el único punto por el que pasa
   // todo cambio persistido del agregado, así que aquí se publican los eventos
   // que la raíz acumuló. Va dentro de la transacción: el bridge decide después
@@ -351,9 +368,18 @@ ${saveBody}
       `    private static final Sort TIE_BREAKER = Sort.by(Sort.Order.asc("${entity.idField?.name ?? 'id'}"));\n`
     );
   }
+  fields.push(...reconciliationClaim.adapterValueFields(model, entity));
   fields.push(`    private final ${entity.name}JpaRepository ${jpaField};`);
   const ctorParams = [`${entity.name}JpaRepository ${jpaField}`];
   const ctorAssigns = [`        this.${jpaField} = ${jpaField};`];
+  // La tienda del reclamo de reconciliación, solo donde hay uno: es la que arbitra qué
+  // réplica se lleva cada candidato.
+  const claimStore = reconciliationClaim.adapterCollaborator(model, entity);
+  if (claimStore) {
+    fields.push(`    private final ${claimStore.type} ${claimStore.field};`);
+    ctorParams.push(`${claimStore.type} ${claimStore.field}`);
+    ctorAssigns.push(`        this.${claimStore.field} = ${claimStore.field};`);
+  }
   if (emitsEvents) {
     fields.push('    private final ApplicationEventPublisher eventPublisher;');
     ctorParams.push('ApplicationEventPublisher eventPublisher');

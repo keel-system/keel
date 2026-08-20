@@ -29,6 +29,17 @@ entities:
       createdAt:
         type: timestamp
         generated: true
+      # La marca de espera del barrido `reconcileWithdrawals`, declarada en
+      # `dependencies.compliance.activations.recordWithdrawal.awaitingSince`. Tiene que ser
+      # propia: `createdAt` es cuándo nació el producto —puede retirarse meses después— y
+      # `version` no es tiempo. La estampa `retireProduct` al encargar la inscripción, y no
+      # la toca nadie más; es un marcador operativo, así que sale de las respuestas con
+      # `exclude`.
+      recordWithdrawalAwaitingSince:
+        type: timestamp
+        description: >-
+          Cuándo se encargó al registro regulatorio la inscripción de la retirada, y desde
+          cuándo cuenta el silencio que el barrido tolera.
     relations:
       parent:
         entity: Category
@@ -60,6 +71,17 @@ entities:
       createdAt:
         type: timestamp
         generated: true
+      # La marca de espera del barrido `reconcileWithdrawals`, declarada en
+      # `dependencies.compliance.activations.recordWithdrawal.awaitingSince`. Tiene que ser
+      # propia: `createdAt` es cuándo nació el producto —puede retirarse meses después— y
+      # `version` no es tiempo. La estampa `retireProduct` al encargar la inscripción, y no
+      # la toca nadie más; es un marcador operativo, así que sale de las respuestas con
+      # `exclude`.
+      recordWithdrawalAwaitingSince:
+        type: timestamp
+        description: >-
+          Cuándo se encargó al registro regulatorio la inscripción de la retirada, y desde
+          cuándo cuenta el silencio que el barrido tolera.
     relations:
       category:
         entity: Category

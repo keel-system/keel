@@ -2700,7 +2700,12 @@ const compLayers = () => ({
   domain: {
     entities: {
       Product: entity(
-        { status: { type: 'enum', values: ['draft', 'active', 'retired'], default: 'draft' } },
+        {
+          status: { type: 'enum', values: ['draft', 'active', 'retired'], default: 'draft' },
+          // La marca de la espera: desde cuándo se cuenta el silencio del registro. La
+          // declara la activación en `awaitingSince`, obligatoria con `reconciledBy`.
+          recordWithdrawalAwaitingSince: { type: 'timestamp' },
+        },
         {
           lifecycle: {
             field: 'status',
@@ -2792,6 +2797,7 @@ const compLayers = () => ({
             // no se puede escribir sin este número, así que no declararlo solo se lo pasa a
             // quien construya.
             unansweredAfterSeconds: 3600,
+            awaitingSince: 'recordWithdrawalAwaitingSince',
             onFailure: { action: 'ignore' },
           },
         },
@@ -2828,6 +2834,61 @@ test('reconciledBy sin umbral de espera es aviso', () => {
   const { errors, warnings } = run(layers);
   assert.deepEqual(errors, []);
   assert.ok(warnings.some((w) => w.includes("reconciledBy: no declara 'unansweredAfterSeconds'")), warnings.join(' | '));
+});
+
+// La marca de la espera (`awaitingSince`, DSL 2.10). El estado dice QUE espera; el barrido
+// necesita saber DESDE CUÁNDO, y hasta la 2.10 el nombre del campo era una convención que
+// nadie comprobaba: un diseño sin marca validaba en verde y otro que la nombraba por lo que
+// significa recibía un hueco falso del generador. Lo que se puede comprobar mecánicamente
+// —que exista, que sea tiempo y que no la reescriba la auditoría— se comprueba aquí.
+
+test('awaitingSince hacia un campo que no existe es error', () => {
+  const layers = compLayers();
+  layers.dependencies.dependencies.compliance.activations.recordWithdrawal.awaitingSince = 'noExiste';
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) => e.includes("awaitingSince: 'noExiste' no es un campo de Product")),
+    errors.join(' | ')
+  );
+});
+
+test('awaitingSince sobre un campo que no es timestamp es error', () => {
+  const layers = compLayers();
+  layers.dependencies.dependencies.compliance.activations.recordWithdrawal.awaitingSince = 'status';
+  const { errors } = run(layers);
+  assert.ok(errors.some((e) => e.includes("'status' es enum")), errors.join(' | '));
+});
+
+test('una marca que gestiona la auditoría es error: rejuvenece y el barrido no la alcanza nunca', () => {
+  // El fallo que pasa todas las pruebas —donde nada más toca la entidad— y en producción
+  // no se acaba nunca: cada escritura devuelve la marca a cero y la entidad no vuelve a ser
+  // candidata jamás. Nada lo delata, así que error y no aviso.
+  const layers = compLayers();
+  layers.domain.entities.Product.fields.updatedAt = { type: 'timestamp' };
+  layers.dependencies.dependencies.compliance.activations.recordWithdrawal.awaitingSince = 'updatedAt';
+  layers.persistence = { ...(layers.persistence ?? {}), audit: { timestamps: 'declared' } };
+  const { errors } = run(layers);
+  assert.ok(errors.some((e) => e.includes("'updatedAt' lo gestiona la auditoría")), errors.join(' | '));
+
+  // Sin auditoría de timestamps, el campo es del diseño y nadie lo reescribe: deja de serlo.
+  layers.persistence.audit.timestamps = 'none';
+  assert.deepEqual(
+    run(layers).errors.filter((e) => e.includes('awaitingSince')),
+    []
+  );
+});
+
+test('createdAt como marca es aviso, no error: solo vale si la espera empieza al crearse', () => {
+  const layers = compLayers();
+  layers.domain.entities.Product.fields.createdAt = { type: 'timestamp' };
+  layers.dependencies.dependencies.compliance.activations.recordWithdrawal.awaitingSince = 'createdAt';
+  layers.persistence = { ...(layers.persistence ?? {}), audit: { timestamps: 'none' } };
+  const { errors, warnings } = run(layers);
+  assert.deepEqual(errors.filter((e) => e.includes('awaitingSince')), []);
+  assert.ok(
+    warnings.some((w) => w.includes("'createdAt' es cuándo nació Product")),
+    warnings.join(' | ')
+  );
 });
 
 test('compensación con transición de vuelta declarada no produce errores ni warnings', () => {

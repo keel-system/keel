@@ -28,6 +28,7 @@ import * as embeddables from './embeddables.js';
 import * as persistenceEntities from './persistence-entities.js';
 import * as auditing from './auditing.js';
 import * as exceptions from './exceptions.js';
+import { warnUnsupportedDialect } from './claim.js';
 import * as repositories from './repositories.js';
 import * as dtos from './dtos.js';
 import * as mappers from './mappers.js';
@@ -38,6 +39,7 @@ import * as messaging from './messaging.js';
 import * as deadLetterConfig from './dead-letter-config.js';
 import * as outbox from './outbox.js';
 import * as idempotency from './idempotency.js';
+import * as reconciliationClaim from './reconciliation-claim.js';
 import * as httpIdempotency from './http-idempotency.js';
 import * as idempotencyCheck from './idempotency-check.js';
 import * as cache from './cache.js';
@@ -97,6 +99,10 @@ const GENERATORS = [
   deadLetterConfig,
   outbox,
   idempotency,
+  // La tabla del reclamo del barrido de reconciliación. Va con las demás tablas del
+  // generador (outbox, processed_event, idempotency_record) porque es de la misma
+  // familia: mecánica de multi-instancia, no algo que el diseño declare.
+  reconciliationClaim,
   httpIdempotency,
   cache,
   jackson,
@@ -145,6 +151,10 @@ export function scaffoldService({ manifest, layers, workspace, force = false, st
   // build.js los copia a docs/ del proyecto (la copia no pasa por writeFiles
   // aquí porque se refresca siempre, al margen de --force).
   model.docs = listKeelDocs(workspace, model.service.name);
+  // El motor elegido puede no repartir candidatos entre réplicas. No impide generar
+  // —el reclamo sigue siendo correcto— pero el diseñador tiene que saberlo antes de
+  // desplegar replicado, que es lo único que hace un barrido.
+  warnUnsupportedDialect(model);
   const outDir = path.join('services', model.service.projectName);
 
   const files = GENERATORS.flatMap((generator) => generator.generate(model));

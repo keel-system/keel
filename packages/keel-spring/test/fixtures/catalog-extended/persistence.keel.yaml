@@ -5,6 +5,11 @@ entities:
     naturalKey: [sku]
     indexes:
       - [status]
+      # El predicado del barrido `reconcileWithdrawals`: estado + cuánto lleva esperando la
+      # inscripción. Compuesto y en este orden —igualdad primero, rango después—, que es lo
+      # único que un B-tree aprovecha entero; con el de `status` a solas la base filtra por
+      # estado y evalúa la marca fila a fila, cada minuto y en cada réplica.
+      - [status, recordWithdrawalAwaitingSince]
       # Índice sobre una relación: la columna real es category_id, no category.
       - [category, status]
   Category:

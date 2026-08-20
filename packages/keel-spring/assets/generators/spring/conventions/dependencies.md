@@ -220,6 +220,24 @@ de calidad, no un detalle.
 lotes acotados, de modo que cada réplica trabaja sobre un conjunto disjunto y el paralelismo pasa de
 problema a ventaja. No hace falta infraestructura nueva.
 
+**Y normalmente no lo escribes tú: `build` lo genera.** El diseño ya dice lo que hace falta —qué campo
+mide la espera, en `awaitingSince`, obligatorio junto a `reconciledBy`—, así que el puerto del
+repositorio trae el método, y con él los tres números y la caducidad:
+
+```java
+List<Reservation> claimForReconcileReservationsReserveStock();   // sin batchSize: los tres números salen de parameters/
+```
+
+Llámalo y actúa sobre lo que devuelve. **No escribas un reclamo en paralelo al generado** —ni un finder
+por estado, ni un lock, ni una marca propia en la entidad—: un segundo mecanismo no reclama nada, solo
+reparte peor. Lo que sigue siendo tuyo es el ORDEN de los commits (justo abajo), qué haces con cada
+candidato y la carrera con el camino feliz.
+
+Si `build` avisó de que **no pudo** generarlo —el caso que queda es que el encargo deje esperando a dos
+entidades, donde «el lote» no está definido y elegir sería inventar—, entonces sí lo escribes tú, y lo que sigue describe exactamente
+la forma que tiene que tener. Lo demás de esta sección vale igual en los dos casos: explica *por qué* el
+reclamo generado es como es.
+
 Pero *cómo* se los lleva no es indiferente, porque la llamada al proveedor va **en medio** (ver el orden,
 abajo). Hay dos formas de reclamar y aquí solo sirve una:
 
@@ -236,12 +254,19 @@ entre el reclamo y la llamada retiene el candidato para siempre. Pasado el plazo
 Regla para dimensionarlo: **`claim-timeout` > tamaño del lote × timeout de la llamada**, con holgura; por
 debajo, dos réplicas actúan sobre el mismo candidato, que es lo que el reclamo venía a evitar.
 
-El ejemplo vivo está en este mismo proyecto y es exactamente esta forma: la rama **documental** de
-`OutboxRelay` (`claimPending()`, con `outbox.relay.claim-timeout-ms`). La rama **relacional** del relay
-usa lock pesimista y **no es el modelo a copiar aquí**: allí lo que ocurre dentro de la transacción es la
-entrega al broker, que es corta y local; en el barrido es una llamada a otro servidor. La técnica
-concreta de tu motor está en la skill `keel-spring-database` o `keel-spring-mongodb`,
-`references/read-queries.md`.
+El ejemplo vivo está en este mismo proyecto y es exactamente esta forma: la tabla `reconciliation_claim`
+con su `ReconciliationClaimStore` —lo que hay detrás del método generado— y, para el mismo patrón sin
+tabla aparte, la rama **documental** de `OutboxRelay` (`claimPending()`, con
+`outbox.relay.claim-timeout-ms`). La rama **relacional** del relay usa lock pesimista y **no es el modelo
+a copiar aquí**: allí lo que ocurre dentro de la transacción es la entrega al broker, que es corta y
+local; en el barrido es una llamada a otro servidor. La técnica concreta de tu motor está en la skill
+`keel-spring-database` o `keel-spring-mongodb`, `references/read-queries.md`.
+
+Y una aclaración sobre el reparto entre réplicas, que se confunde con el reclamo y no es lo mismo: el
+`SKIP LOCKED` que el reclamo generado pone en su SELECT de candidatos —solo donde el motor lo tiene— no
+aísla nada durante la llamada al proveedor. Es una optimización que evita que las N réplicas se peleen
+por la misma página, y su lock muere con la transacción del reclamo, que termina antes de llamar a
+nadie. Quien impide que dos actúen sobre el mismo candidato es la marca.
 
 **La cota del lote suele vivir en otra consulta, y está bien que así sea.** En JPQL un `@Modifying` no
 acepta un `Pageable`, así que en la rama relacional lo natural son **dos** consultas: una que selecciona
@@ -358,6 +383,11 @@ Por eso `build` reparte el **campo de segundos** del cron, que es suyo: el dise�
 Spring quiere seis. Con tres barridos declarados «cada cinco minutos» salen en los segundos 0, 20 y 40 de
 ese minuto. La cadencia declarada no cambia, solo la fase. **Igualarlos a 0 «por limpieza» deshace el
 reparto** — el javadoc del `<Servicio>Scheduler` lo advierte donde se ve.
+
+Y hay que decir lo que ese reparto **no** hace, porque su nombre invita a creerlo: no separa nada entre
+réplicas. El reparto es determinista sobre el diseño —el mismo cron produce los mismos segundos en todas
+partes—, así que las N réplicas disparan cada barrido **en el mismo segundo**. Contra el solapamiento
+entre instancias lo único que sirve es el reclamo.
 
 Es una mitigación, no una garantía: reparte el arranque. Dos barridos que duren más que su separación se
 solapan igual, y contra eso el segundo inicial no puede nada. Acotar la concurrencia del scheduler

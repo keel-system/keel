@@ -444,16 +444,53 @@ function renderHandler(model, service, operation) {
       `Idempotencia: keySource=${operation.idempotency.keySource}, ttlSeconds=${ttl}. El puerto IdempotencyStore, su adaptador y CommandSignature ya están generados — NO escribas otro registro (ni tabla propia, ni SET NX en la caché) ni otra forma de firmar. ${source}${common}`
     );
   }
+  // Todo barrido corre replicado, declare `reconciles` o no. La nota de reconciliación
+  // de abajo dice esto mismo con mucho más detalle, pero SOLO llega si la operación está
+  // enlazada a una activación — y el barrido que despacha una cola normalmente no lo
+  // está. Sin esta nota, el camino de menor resistencia es un findByEstado(...) que se
+  // lleva las mismas filas en las N réplicas y sale verde en una máquina con una sola.
+  if (operation.sweep && (operation.reconciles ?? []).length === 0) {
+    const claims = operation.claim ?? [];
+    notes.push(
+      `MULTI-INSTANCIA (no es opcional): este barrido corre en TODAS las réplicas del servicio a la vez — @Scheduled es «una vez por instancia», no «una vez en el clúster». ` +
+        (claims.length > 0
+          ? `Toma su lote con ${claims.map((claim) => `${claim.method}(batchSize)`).join(' y ')}, que build ya generó en el puerto del repositorio: reclama con un UPDATE condicional y devuelve SOLO las filas que esta instancia se llevó. `
+          : `El puerto del repositorio NO trae método de reclamo para este barrido, así que lo escribes tú: un UPDATE condicional que marque la fila y devuelva cuántas afectó (1 = es mía, 0 = otra llegó antes). `) +
+        `Lo que NO vale es leer con un finder y marcar después: entre la lectura y la marca las N réplicas ya se llevaron las mismas filas, y con un efecto que no se puede retirar —un correo, un cobro— eso son N efectos. ` +
+        `El lote va acotado, y actúa sobre lo reclamado FUERA de la transacción del reclamo: sostenerla durante una llamada externa retiene una conexión del pool por la latencia de un tercero. ` +
+        `Lo verifica infra/check-idempotency.sh, familia sweepClaim`
+    );
+  }
   // Reconciliar es lo contrario de reaccionar: esta operación no la dispara ningún
   // hecho, la dispara el reloj, y lo que busca es lo que NO ha pasado. Sin esta nota
   // su stub sería un @Scheduled vacío.
-  for (const { dependency, activation, waiting } of operation.reconciles ?? []) {
+  for (const { dependency, activation, waiting, claim } of operation.reconciles ?? []) {
+    // Dos notas distintas, y la diferencia no es de estilo: cuando build genera el
+    // reclamo, decirle al agente CÓMO reclamar sería pedirle que reescriba lo que ya
+    // existe — y el camino de menor resistencia de esa petición es un segundo mecanismo
+    // en paralelo al generado. Lo que sigue siendo suyo (el ORDEN de los commits, la
+    // carrera con el camino feliz, qué hacer con cada candidato) no lo puede generar
+    // nadie, y eso se queda en las dos.
+    if (claim) {
+      notes.push(
+        `Reconciliación de ${dependency}.${activation.name}: barre los encargos que nunca recibieron desenlace — el evento que los cerraría puede no llegar nunca. ` +
+          `EL RECLAMO YA ESTÁ GENERADO: toma el lote con ${claim.method}() del puerto ${claim.entity}Repository. Devuelve SOLO los candidatos que ESTA réplica se llevó —el barrido corre en todas a la vez— y ya trae dentro las tres decisiones: el umbral de espera que declara el diseño, la cota del lote y la caducidad de la marca, leídos de parameters/<perfil>/reconciliation.yaml. NO escribas otro reclamo (ni un finder por estado, ni un lock, ni una marca propia en ${claim.entity}): un segundo mecanismo en paralelo al generado no reclama nada, solo reparte peor. ` +
+          `Y decide qué hace con cada uno según el efecto declarado ("${activation.effect}"): reintentar el encargo o disparar la compensación. Si el diseño no lo dice, es designGap. ` +
+          `SIN TRANSACCIÓN ABARCADORA: a diferencia de los demás casos de uso, este NO corre dentro de una transacción — el scheduler lo despacha con mediator.dispatchWithoutTransaction() justo para que puedas colocar los commits donde toca. Cada llamada al adaptador abre y confirma la suya, y la del reclamo ya está confirmada cuando ${claim.method}() te devuelve la lista. ` +
+          `ORDEN: son DOS commits y no se confunden — (1) el reclamo, que ya está hecho y confirmado; (2) llamar al proveedor, FUERA de toda transacción; (3) transición al estado final y confirmar. Si actúas contra el proveedor y mueres antes de (3), la marca caduca y la siguiente pasada repite la llamada, que es lo que absorbe la idempotencia saliente: tiene red. Al revés —confirmar el desenlace y luego actuar— si mueres en medio dejas la entidad resuelta y el trabajo vivo en el proveedor: un huérfano que no detecta nadie. ` +
+          `La transición del agregado NO sustituye al reclamo, y el reclamo no sustituye a la idempotencia saliente: lo que absorbe una llamada repetida al proveedor —tras una caducidad, o tras un reintento— es solo esa. ` +
+          `Y si lo que haces es reencargar publicando un evento, no lo absorbe nada: cada réplica hace su propio raise y estampa un metadata.eventId distinto, así que para el consumidor son N hechos y su processed_event no los deduplica. ` +
+          `CARRERA CON EL CAMINO FELIZ: mientras barres puede llegar el evento de desenlace. Si al mover el candidato lo encuentras ya fuera del estado de espera, ganó el otro camino: es la carrera resuelta, no un fallo — no lo registres como error ni lo reintentes. ` +
+          `Lo verifica infra/check-idempotency.sh, familia reconciliation`
+      );
+      continue;
+    }
     notes.push(
       `Reconciliación de ${dependency}.${activation.name}: barre los encargos que nunca recibieron desenlace — el evento que los cerraría puede no llegar nunca. ` +
         (waiting.length > 0
           ? `Los candidatos son ${waiting.join(', ')} que llevan demasiado tiempo ahí. `
           : `Los candidatos son las entidades que quedaron esperando el desenlace. `) +
-        `DESDE CUÁNDO: el estado dice que espera, no cuánto lleva. La marca temporal es un campo de la entidad que estampa la operación que encarga; por convención se llama ${activation.name}AwaitingSince, así que empieza buscando ese, y si el diseño lo nombró de otro modo busca la marca de espera equivalente. NO uses createdAt —es cuándo nació la entidad, no cuándo empezó a esperar— ni un updatedAt de auditoría, que rejuvenece con cualquier otra escritura y deja la entidad invisible al barrido para siempre. Si la entidad espera VARIOS desenlaces, usa la marca de ESTA activación y no la de otra: con una compartida el segundo encargo pisa la del primero y el umbral mide una espera que no es la suya. Si el diseño no declara ninguna marca, es designGap. ` +
+        `DESDE CUÁNDO: el estado dice que espera, no cuánto lleva. La marca temporal la declara el diseño en dependencies.${dependency}.activations.${activation.name}.awaitingSince${activation.awaitingSince ? ` — es el campo ${activation.awaitingSince} de la entidad, que estampa la operación que encarga` : ''}. NO uses createdAt —es cuándo nació la entidad, no cuándo empezó a esperar— ni un updatedAt de auditoría, que rejuvenece con cualquier otra escritura y deja la entidad invisible al barrido para siempre. ` +
         `El umbral de "demasiado tiempo" LO DECLARA EL DISEÑO y build ya lo dejó escrito: léelo de ` +
         `reconciliation.${kebabCase(activation.name)}.unanswered-after-seconds (parameters/<perfil>/reconciliation.yaml), nunca de una constante. ` +
         `En el mismo bloque están claim-timeout-ms y batch-size, que NO son del diseño (mecánica y capacidad) pero se leen igual: de ahí, no del código. ` +
@@ -469,6 +506,7 @@ function renderHandler(model, service, operation) {
         `CARRERA CON EL CAMINO FELIZ: mientras barres puede llegar el evento de desenlace. Si al mover el candidato lo encuentras ya fuera del estado de espera, ganó el otro camino: es la carrera resuelta, no un fallo — no lo registres como error ni lo reintentes`
     );
   }
+
   // Compensar no es "otra escritura": deshace trabajo ya encargado a otro servidor,
   // llega por un canal at-least-once y puede llegar antes que el hecho que compensa.
   // Nada de eso se ve leyendo la operación sola, así que se escribe aquí.

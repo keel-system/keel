@@ -292,6 +292,7 @@ entities:
     fields:
       id:     { type: uuid, id: true, generated: true }
       status: { type: enum, values: [requested, dispatched, cancelled], default: requested }
+      requestShipmentAwaitingSince: { type: timestamp }
     lifecycle:
       field: status
       transitions:
@@ -358,6 +359,7 @@ dependencies:
         via: { client: carrier, call: requestShipment }
         effect: La transportista recoge y entrega el paquete.
         reconciledBy: sweepShipments
+        awaitingSince: requestShipmentAwaitingSince
         onFailure: { action: ignore }
     compensations:
       - onEvent: ShipmentRejected

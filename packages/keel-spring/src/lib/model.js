@@ -112,6 +112,7 @@ export function buildModel({ manifest, layers, stack = null }) {
         eventTypesByChannel: channels.eventTypesByChannel
       }
     : null;
+  classifyClaims(services, entities, layers, warnings);
   const subscriptions = collectSubscriptions(layers, services, domainTypes, inlineEnumName, warnings, stack);
   const pagination = layers.api?.pagination ?? null;
 
@@ -875,7 +876,21 @@ function collectOperations(layers, domainTypes, inlineEnumName, service, warning
       // semántico dentro del agregado lo cablea attachTransitionExecutors.
       transitions: op.transitions ?? [],
       cache: op.cache ?? null,
-      schedule: op.schedule ?? null
+      schedule: op.schedule ?? null,
+      // Relay: un barrido que RECLAMA trabajo pendiente. Se deduce, no se declara —
+      // correr replicado no es una decisión del diseño sino una restricción del
+      // despliegue, así que no hay campo del DSL que ponerle.
+      //
+      // La señal es `schedule` + `transitions`: sacar filas de un estado ES
+      // reclamarlas, y `@Scheduled` corre en TODAS las réplicas a la vez. Sin reclamo
+      // atómico las N instancias se llevan las mismas filas y todas actúan sobre ellas.
+      //
+      // Las purgas quedan fuera a propósito, y no por descuido: un barrido que solo
+      // borra lo caducado es idempotente por forma —borrar dos veces la misma fila da
+      // el mismo resultado que borrarla una—, así que solaparse no produce ningún
+      // efecto doble. El razonamiento largo está en conventions/dependencies.md
+      // § El barrido corre en todas las réplicas.
+      claim: null
     };
 
     if (!groups.has(groupName)) {
@@ -892,6 +907,107 @@ function collectOperations(layers, domainTypes, inlineEnumName, service, warning
   }
 
   return { services: [...groups.values()], errors: resolveErrorStatuses([...errorsByCode.values()], warnings) };
+}
+
+/**
+ * Qué barrido reclama trabajo, y qué reclama exactamente.
+ *
+ * Correr replicado no es una decisión del diseño sino una restricción del despliegue:
+ * `@Scheduled` es «una vez por instancia», no «una vez en el clúster», así que un
+ * barrido que LEA su lote se lo da entero a las N réplicas. Por eso no hay campo del
+ * DSL que declarar — se deduce — y por eso el reclamo lo genera build.
+ *
+ * Es barrido la operación que (a) tiene `schedule`, (b) NO recibe el id de lo que
+ * procesa —si el llamante ya eligió la fila, quien tuvo que reclamarla es él— y (c)
+ * declara `transitions`, que es lo que dice sobre qué entidad trabaja. Quedan fuera las
+ * disparadas por una suscripción (procesan el mensaje que les llega, no un lote) y las
+ * purgas sin transiciones (borrar lo caducado es idempotente por forma: solaparse no
+ * produce ningún efecto doble).
+ *
+ * Y lo que reclama sale del LIFECYCLE, no de las transiciones que el barrido declare:
+ * la cola es el estado inicial de la entidad —aquel al que ninguna transición lleva—,
+ * y su sucesor es la marca de que alguien la tomó. Esa marca es persistida y sobrevive
+ * al commit, que es lo que hace falta cuando entre reclamar y actuar hay una llamada
+ * externa. Mirar solo las transiciones del barrido no vale: en el diseño de referencia
+ * el paso `queued → sending` lo declara la operación interna que el barrido invoca, no
+ * el barrido.
+ */
+function classifyClaims(services, entities, layers, warnings) {
+  const byName = new Map(entities.map((entity) => [entity.name, entity]));
+  const bySubscription = new Set(
+    Object.values(layers.messaging?.subscriptions ?? {})
+      .map((sub) => sub?.triggers)
+      .filter(Boolean)
+  );
+  // Los barridos de reconciliación tienen su propio reclamo, y NO es este: sacan filas de
+  // un estado de espera —que por definición está «en vuelo»— con la cota temporal que el
+  // diseño declara (unansweredAfterSeconds) y una marca persistida que sobrevive al
+  // commit, porque la llamada al proveedor va en medio. Lo resuelve `reconciliationClaim`
+  // al recorrer las dependencias. Tratarlos aquí sería a la vez generar dos reclamos
+  // distintos para el mismo barrido y avisar de una cota que el diseño sí dio.
+  const byReconciliation = new Set(
+    Object.values(layers.dependencies?.dependencies ?? {})
+      .flatMap((dependency) => Object.values(dependency?.activations ?? {}))
+      .map((activation) => activation?.reconciledBy)
+      .filter(Boolean)
+  );
+
+  for (const service of services) {
+    for (const operation of service.operations) {
+      if (!operation.schedule) continue;
+      if (bySubscription.has(operation.name)) continue;
+      if (byReconciliation.has(operation.name)) continue;
+      // El llamante ya eligió la fila: reclamarla era cosa suya.
+      if (operation.hasIdParam || operation.bodyFields.length > 0) continue;
+
+      const transitions = operation.transitions ?? [];
+      if (transitions.length === 0) continue;
+
+      // Marca de barrido: vale aunque build no pueda generarle el reclamo. La nota al
+      // agente y el gate de calidad cuelgan de ESTO, no de que el reclamo exista.
+      operation.sweep = true;
+
+      const claims = [];
+      for (const transition of transitions) {
+        const entity = byName.get(transition.entity);
+        const lifecycle = entity?.lifecycle;
+        if (!lifecycle) continue;
+        const reached = new Set((lifecycle.transitions ?? []).flatMap((t) => t.to ?? []));
+
+        // Una COLA es un estado al que ninguna transición lleva: las filas se acumulan
+        // ahí esperando a que alguien las tome, y tomarlas todas es lo que el barrido
+        // quiere. Un estado al que sí se llega está EN VUELO: hay una instancia
+        // trabajando en esas filas ahora mismo, y reclamarlas le arrancaría el trabajo
+        // de las manos. El rescate legítimo de eso necesita una cota temporal («lleva
+        // más de N minutos ahí») que vive en la prosa de `rules` y que build no puede
+        // inventar — así que no se genera, y se dice en voz alta.
+        const queues = (transition.from ?? []).filter((state) => !reached.has(screamingSnake(state)));
+        const inFlight = (transition.from ?? []).filter((state) => reached.has(screamingSnake(state)));
+
+        if (inFlight.length > 0) {
+          warnings.push(
+            `use-cases: ${operation.name} saca ${transition.entity} de ${inFlight.join(', ')}, que es un estado EN ` +
+              `VUELO: otra réplica puede estar trabajando en esas filas ahora mismo. build NO genera ese reclamo, ` +
+              `porque un rescate necesita una cota temporal («lleva más de N minutos ahí») que el DSL no declara y ` +
+              `que build no puede inventar. Recláma­lo tú con esa cota — el gate de calidad comprueba que el barrido ` +
+              `reclame en vez de leer.`
+          );
+        }
+        if (queues.length === 0) continue;
+
+        const suffix = `${pascalCase(operation.name)}${transitions.length > 1 ? pascalCase(transition.to) : ''}`;
+        claims.push({
+          entity: transition.entity,
+          from: queues,
+          to: transition.to,
+          suffix,
+          method: `claimFor${suffix}`
+        });
+      }
+
+      if (claims.length > 0) operation.claim = claims;
+    }
+  }
 }
 
 // Un mismo `code` declarado con `http` distinto en dos operaciones no puede
@@ -1463,6 +1579,80 @@ function collectHttpClients(layers, domainTypes, inlineEnumName, warnings) {
 // trabajo que delega: si no aterrizan en el stub del handler, el diseño declara
 // una obligación que nadie ve al escribir el código.
 
+/**
+ * El reclamo del barrido de reconciliación, cuando build puede generarlo.
+ *
+ * Aquí el reclamo NO puede ser un lock: entre reclamar y actuar hay una llamada al
+ * proveedor, y un lock solo aísla mientras dura su transacción. Hace falta una marca
+ * PERSISTIDA con caducidad, y por eso el reclamo se apoya en una tabla propia del
+ * generador (`reconciliation_claim`) en vez de en el lifecycle: el estado de espera no
+ * puede cambiar —es justo lo que el barrido busca— así que no hay transición con la que
+ * marcar. La misma familia que `processed_event` o `idempotency_record`, y por el mismo
+ * motivo: es mecánica del generador, no algo que el diseño declare.
+ *
+ * Tres cosas tienen que salir del diseño, y si falta alguna build NO inventa nada: se
+ * queda sin reclamo generado, lo dice, y el barrido vuelve a ser entero del agente.
+ *
+ *   · UNA sola entidad en espera. Con dos, el barrido reclama dos cosas distintas y qué
+ *     significa «el lote» deja de estar definido.
+ *   · Su lifecycle, que es de donde salen los estados de espera.
+ *   · La MARCA TEMPORAL de la espera, que el diseño declara en `awaitingSince`. Sin ella
+ *     no hay «lleva demasiado tiempo»: el estado dice que espera, no cuánto lleva. Es
+ *     obligatoria junto a `reconciledBy`, así que aquí solo falta con `--wip`.
+ */
+function reconciliationClaim({ depId, activation, sweeper, waitingByEntity, entityByName, warnings }) {
+  const gap = (reason) => {
+    warnings.push(
+      `dependencies: ${depId}.${activation.name} declara reconciledBy: ${sweeper.name}, pero build no puede ` +
+        `generarle el reclamo — ${reason}. El barrido corre en TODAS las réplicas, así que el reclamo tiene que ` +
+        `existir igual: lo escribe el agente, y el gate de calidad (familia reconciliation) lo comprueba.`
+    );
+    return null;
+  };
+
+  if (waitingByEntity.size === 0) return gap('ninguna operación de triggeredBy declara transitions, así que no se sabe qué entidad queda esperando');
+  if (waitingByEntity.size > 1) {
+    return gap(`las operaciones que la disparan dejan esperando a ${[...waitingByEntity.keys()].join(' y ')}, y un reclamo sobre dos entidades no define qué es «el lote»`);
+  }
+
+  const [entityName, states] = [...waitingByEntity][0];
+  const entity = entityByName.get(entityName);
+  if (!entity?.lifecycle) return gap(`${entityName} no declara lifecycle, y los candidatos se eligen por su estado de espera`);
+
+  // La marca sale del diseño, no de una convención de nombre: `awaitingSince` es
+  // obligatorio junto a `reconciledBy` y `keel validate` ya comprobó que existe, que es
+  // timestamp y que no la gestiona la auditoría. La guarda que queda es defensiva —
+  // `build --wip` no exige diseño válido— y no el camino normal.
+  const awaitingField = activation.awaitingSince;
+  if (!awaitingField || !(entity.fields ?? []).some((field) => field.name === awaitingField)) {
+    return gap(
+      awaitingField
+        ? `${entityName} no declara el campo ${awaitingField} que nombra su awaitingSince`
+        : `la activación no declara 'awaitingSince', la marca de CUÁNDO empezó la espera (obligatoria con ` +
+          `reconciledBy desde el DSL 2.10: 'keel validate' lo dice como error, esto solo se alcanza con --wip)`
+    );
+  }
+
+  const suffix = `${pascalCase(sweeper.name)}${pascalCase(activation.name)}`;
+  return {
+    dependency: depId,
+    activation: activation.name,
+    entity: entityName,
+    states: [...states],
+    awaitingField,
+    // El umbral que declara el diseño. Viaja en el descriptor porque es el DEFAULT del
+    // @Value del adaptador: el valor vive en parameters/<perfil>/reconciliation.yaml, y
+    // el default tiene que ser el mismo número o el diseño diría una cosa y el binario
+    // otra en cuanto falte el fichero.
+    unansweredAfterSeconds: activation.unansweredAfterSeconds ?? 3600,
+    suffix,
+    method: `claimFor${suffix}`,
+    // La rama de `parameters/<perfil>/reconciliation.yaml` que config.js ya emite para
+    // esta activación: umbral del diseño, caducidad del reclamo y cota del lote.
+    configKey: kebabCase(activation.name)
+  };
+}
+
 function collectDependencies(layers, entities, httpClients, subscriptions, errors, events, services, warnings) {
   const declared = layers.dependencies?.dependencies;
   if (!declared) return null;
@@ -1533,6 +1723,11 @@ function collectDependencies(layers, entities, httpClients, subscriptions, error
         // que el barrido usa para elegir candidatos. Va por activación porque un mismo
         // barrido puede reconciliar varias y cada proveedor tarda lo suyo.
         unansweredAfterSeconds: spec.unansweredAfterSeconds ?? null,
+        // Y desde cuándo se cuenta ese silencio: el campo de la entidad que estampa la
+        // operación que encarga. Lo declara el diseño (DSL 2.10) porque el nombre depende
+        // de lo que la marca signifique —una espera o la última revalidación— y adivinarlo
+        // por convención acusaba de hueco a diseños que sí la declaraban.
+        awaitingSince: spec.awaitingSince ?? null,
         http: via.client ? resolveActivationCall(depId, name, via, clientById, warnings) : null,
         // Evento propio del servicio: lo emite el agregado con raise(...), no el
         // handler. Aquí solo se resuelve su clase para poder citarla en el stub.
@@ -1552,14 +1747,26 @@ function collectDependencies(layers, entities, httpClients, subscriptions, error
         const sweeper = opByName.get(activation.reconciledBy);
         // Qué queda esperando: el estado en el que dejaron la entidad las
         // operaciones que encargaron el trabajo. Es por dónde empieza el barrido.
-        const waiting = [
-          ...new Set(
-            (activation.triggeredBy ?? [])
-              .flatMap((opName) => opByName.get(opName)?.transitions ?? [])
-              .map((transition) => `${transition.entity} en ${transition.to}`)
-          )
-        ];
-        if (sweeper) (sweeper.reconciles ??= []).push({ dependency: depId, activation, waiting });
+        const waitingByEntity = new Map();
+        for (const opName of activation.triggeredBy ?? []) {
+          for (const transition of opByName.get(opName)?.transitions ?? []) {
+            if (!waitingByEntity.has(transition.entity)) waitingByEntity.set(transition.entity, new Set());
+            waitingByEntity.get(transition.entity).add(transition.to);
+          }
+        }
+        const waiting = [...waitingByEntity].flatMap(([entity, states]) =>
+          [...states].map((state) => `${entity} en ${state}`)
+        );
+        if (sweeper) {
+          (sweeper.reconciles ??= []).push({
+            dependency: depId,
+            activation,
+            waiting,
+            // El reclamo que build puede generarle, o null cuando el diseño no da lo
+            // que hace falta para generarlo sin inventar nada.
+            claim: reconciliationClaim({ depId, activation, sweeper, waitingByEntity, entityByName, warnings })
+          });
+        }
       }
       // Retro-enlace hacia la llamada: es lo que permite a http-clients.js
       // escribir el cuerpo del fallback del circuit breaker con la política que

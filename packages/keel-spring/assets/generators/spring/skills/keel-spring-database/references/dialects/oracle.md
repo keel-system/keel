@@ -33,6 +33,12 @@ definitivo debe fijar `CACHE` razonable (20+) para evitar contención.
 MVCC como PG: lectores no bloquean escritores; `@Version` encaja. `SELECT FOR
 UPDATE` solo si el diseño lo exige. `ORA-00060` (deadlock) → ordena updates.
 
+### Reclamo de un barrido
+
+`FOR UPDATE SKIP LOCKED` desde 12c (existía sin documentar desde mucho antes; a partir de 12c es
+soportado). Con `FETCH FIRST n ROWS ONLY` para acotar el lote, que es lo que Hibernate genera desde
+el `Pageable`.
+
 ## Validación y reset
 
 `sqlplus` vive **dentro del contenedor de Oracle** (no en devtools — el

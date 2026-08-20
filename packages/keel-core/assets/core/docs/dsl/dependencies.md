@@ -187,6 +187,7 @@ Una `activation` es **un trabajo concreto que hace otro servicio**. Se descubre 
 | `onFailure` | con `via` HTTP | Qué hace la operación propia si el encargo no sale. |
 | `reconciledBy` | | Operación con `schedule` que barre los encargos que nunca recibieron desenlace. |
 | `unansweredAfterSeconds` | con `reconciledBy` | Cuánto silencio de **este** proveedor se tolera antes de que el barrido vuelva a insistir. |
+| `awaitingSince` | **obligatorio** con `reconciledBy` | Campo de la entidad que dice **desde cuándo** cuenta ese silencio. El estado dice que espera; esto, cuánto lleva. |
 
 ### `via` — por dónde se le pide
 
@@ -240,9 +241,20 @@ El estado dice **que** espera; el barrido necesita saber **desde cuándo**, porq
 
 Lo único que dice la verdad es un **campo propio**, estampado al entrar en la espera por la operación que encarga y que nadie más toca. Suele ser interno: se declara en `domain` y se deja fuera de las respuestas con `exclude`, porque es un marcador operativo y no algo que el cliente necesite.
 
-El nombre lo pone el diseño —ninguna regla lo comprueba—, pero la convención es **derivarlo de la activación**: `<activacion>AwaitingSince`, es decir `reserveStockAwaitingSince` para la activación `reserveStock`. Las dos mitades hacen trabajos distintos y por eso ninguna sobra: el prefijo dice **de qué espera** es la marca, y el sufijo fijo dice **qué es** —el inicio de un intervalo abierto, que es justo como la usa el barrido (`… < now - umbral`)— y la hace reconocible por forma para quien la busque después.
+**Cuál es ese campo lo dice la activación, en `awaitingSince`, y es obligatorio junto a `reconciledBy`:**
 
-Lo que compra el prefijo es concreto: una misma entidad puede quedar esperando **dos desenlaces distintos** —dos activaciones, quizá de dos proveedores, cada una con su `reconciledBy`— y con un `awaitingSince` a secas el segundo encargo pisa la marca del primero. A partir de ahí cada barrido ve candidatos del otro y su umbral mide una espera que no es la suya. Un nombre genérico solo es seguro mientras la entidad espere una sola cosa, que es exactamente la condición que nadie recuerda al añadir la segunda activación.
+```yaml
+reserveStock:
+  reconciledBy: reconcileReservations
+  unansweredAfterSeconds: 1800
+  awaitingSince: reserveStockAwaitingSince
+```
+
+`keel validate` comprueba lo que se puede comprobar: que el campo exista en la entidad que queda esperando, que sea `timestamp` y que no lo gestione la auditoría —un `updatedAt` automático rejuvenece con cualquier escritura y deja la entidad invisible al barrido para siempre—. Con `createdAt` avisa, porque solo es correcto si la entidad entra en la espera al crearse. Lo que no puede comprobar —quién estampa el campo y si es el momento correcto— se queda para la revisión semántica de `/keel-validate`.
+
+El nombre sigue teniendo su convención, y ahora es una **recomendación** en vez del mecanismo: **derivarlo de la activación**, `<activacion>AwaitingSince`, es decir `reserveStockAwaitingSince` para la activación `reserveStock`. Las dos mitades hacen trabajos distintos y por eso ninguna sobra: el prefijo dice **de qué espera** es la marca, y el sufijo fijo dice **qué es** —el inicio de un intervalo abierto, que es justo como la usa el barrido (`… < now - umbral`)— y la hace reconocible por forma para quien la busque después.
+
+Lo que compra el prefijo es concreto: una misma entidad puede quedar esperando **dos desenlaces distintos** —dos activaciones, quizá de dos proveedores, cada una con su `reconciledBy`— y con un campo `awaitingSince` compartido el segundo encargo pisa la marca del primero. A partir de ahí cada barrido ve candidatos del otro y su umbral mide una espera que no es la suya. Un nombre genérico solo es seguro mientras la entidad espere una sola cosa, que es exactamente la condición que nadie recuerda al añadir la segunda activación.
 
 Y declarar la marca no termina el trabajo: el par (estado, marca) es un **predicado que se ejecuta cada N minutos** sobre una tabla de negocio, así que quiere su índice compuesto en `persistence: entities.<E>.indexes`. Es el único patrón de consulta frecuente que no se ve mirando `use-cases`, y por eso está desarrollado en la referencia de esa capa.
 
@@ -309,6 +321,8 @@ dependencies:
         triggeredBy: [confirmOrder]
         via: { publishes: ReserveStockRequested }
         reconciledBy: sweepPendingReservations
+        unansweredAfterSeconds: 1800
+        awaitingSince: reserveStockAwaitingSince
       releaseStock:                          # la activación de VUELTA
         triggeredBy: [releaseOrderStock]
         via: { publishes: ReleaseStockRequested }

@@ -131,6 +131,9 @@ dependencies:
         # decisión que el barrido no puede tomar solo: depende de cuánto tarda ESTE
         # proveedor en contestar. En local el generador la baja por entorno.
         unansweredAfterSeconds: 3600
+        # Y desde cuándo se cuenta ese silencio: el estado dice que la retirada espera
+        # inscripción, no cuánto lleva esperando. La estampa `retireProduct`.
+        awaitingSince: recordWithdrawalAwaitingSince
         onFailure:
           action: fail
           error: COMPLIANCE_UNAVAILABLE

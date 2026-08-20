@@ -15,17 +15,47 @@ import { scaffoldService } from '../src/scaffold/index.js';
 
 const fixture = (name) => path.join(process.cwd(), 'test', 'fixtures', name);
 
-function build(name) {
+function build(name, mutate = null) {
   const service = loadService(fixture(name));
+  const layers = mutate ? structuredClone(service.layers) : service.layers;
+  if (mutate) mutate(layers);
   const workspace = tmpDir('keel-idem-check-');
   const result = scaffoldService({
     manifest: service.manifest,
-    layers: service.layers,
+    layers,
     workspace,
     force: true
   });
   return path.join(workspace, result.outDir);
 }
+
+/**
+ * El mismo diseño, pero con el reclamo de la reconciliación SIN generar. Es lo que hace
+ * falta para probar los checks que solo aplican cuando build no pudo generarlo: con el
+ * reclamo generado, el gate exige llamarlo y esos tres checks no se emiten — que es
+ * justo lo que se quiere, porque pedirle al agente que reescriba lo que ya existe tiene
+ * como camino de menor resistencia un segundo mecanismo en paralelo.
+ *
+ * El hueco que se reproduce es el único que la validación no cierra: DOS entidades
+ * esperando el mismo desenlace, donde «el lote» deja de estar definido.
+ */
+const sinReclamoGenerado = (layers) => {
+  layers.domain.entities.Category.lifecycle = {
+    field: 'status',
+    transitions: { active: ['withdrawn'], withdrawn: ['active'] }
+  };
+  layers.domain.entities.Category.fields.status = {
+    type: 'enum',
+    values: ['active', 'withdrawn'],
+    required: true,
+    default: 'active'
+  };
+  layers['use-cases'].operations.retireProduct.transitions.push({
+    entity: 'Category',
+    from: ['active'],
+    to: 'withdrawn'
+  });
+};
 
 // ¿El script reporta ESTE sujeto? Se mira el encabezado del hallazgo y no el texto
 // entero: los `why` se citan entre ellos —el de la cota empieza por «el reclamo del
@@ -114,7 +144,7 @@ test('lo que build sí genera no se reporta: el store está inyectado y no sale 
 // @Value del umbral y el @Scheduled del disparador: lo único que decide si el barrido
 // es correcto con varias instancias no lo miraba nadie.
 test('el gate exige que el barrido reclame sus candidatos, y acotados', (t) => {
-  const project = build('catalog-extended');
+  const project = build('catalog-extended', sinReclamoGenerado);
   const before = run(project);
   if (before === null) return t.skip('sin bash en el PATH');
   assert.ok(reports(before.out, 'reclamo del barrido'));
@@ -217,7 +247,7 @@ public interface StaleClaimRepository {
 // fila queda sin marca, con lo que las N réplicas vuelven a verla. El gate aceptaba esa
 // forma, así que no distinguía la correcta de la que se le parece.
 test('el gate no acepta un lock pesimista como reclamo del barrido', (t) => {
-  const project = build('catalog-extended');
+  const project = build('catalog-extended', sinReclamoGenerado);
   if (run(project) === null) return t.skip('sin bash en el PATH');
 
   const adapter = path.join(project, 'src/main/java/com/commerce/catalog/infrastructure/persistence');
@@ -252,7 +282,7 @@ public interface StaleClaimRepository {
 // propio scaffold impone (puerto sin framework, adaptador con @Value, repositorio con la
 // consulta). Lo que queda es lo único afirmable sin suponer arquitectura.
 test('el gate exige que el umbral del barrido esté parametrizado, esté donde esté', (t) => {
-  const project = build('catalog-extended');
+  const project = build('catalog-extended', sinReclamoGenerado);
   const before = run(project);
   if (before === null) return t.skip('sin bash en el PATH');
   assert.match(before.out, /umbral del barrido/);
@@ -292,7 +322,7 @@ public class ReconciliationConfig {
 // que esa capa importe Spring. No había forma de satisfacer las dos cosas, así que el
 // agente de calidad reportó el hallazgo como imposible tras dos pasadas.
 test('reconciliation no exige @Value en el handler, que es capa sin Spring', () => {
-  const project = build('catalog-extended');
+  const project = build('catalog-extended', sinReclamoGenerado);
   const content = read(project);
 
   const handlerRows = content
@@ -305,6 +335,24 @@ test('reconciliation no exige @Value en el handler, que es capa sin Spring', () 
   // Pero el umbral no se deja de mirar: se mira en su propia fila, sin decir en qué
   // archivo tiene que estar.
   assert.match(content, /^claim 'reconciliation' 'umbral del barrido' '@Value\|@ConfigurationProperties'/m);
+});
+
+test('con el reclamo generado el gate exige LLAMARLO, y retira los tres checks del agente', () => {
+  // El riesgo que cierra este test: si los checks del agente siguieran emitiéndose sobre
+  // un diseño cuyo reclamo genera build, el camino de menor resistencia para apagarlos
+  // sería escribir un segundo mecanismo en paralelo al generado — que no reclama nada y
+  // reparte peor. Un check que pide la implementación incorrecta es peor que no tenerlo.
+  const content = read(build('catalog-extended'));
+
+  assert.match(content, /claimForReconcileWithdrawalsRecordWithdrawal/);
+  for (const subject of ['reclamo del barrido', 'lote del barrido', 'umbral del barrido']) {
+    assert.ok(!content.includes(`'${subject}'`), `sigue emitiéndose el check del agente: ${subject}`);
+  }
+  // Y sin reclamo generado siguen ahí, que es la otra mitad de la afirmación.
+  const fallback = read(build('catalog-extended', sinReclamoGenerado));
+  for (const subject of ['reclamo del barrido', 'lote del barrido', 'umbral del barrido']) {
+    assert.ok(fallback.includes(`'${subject}'`), `falta el check del agente: ${subject}`);
+  }
 });
 
 test('los comentarios no cuentan como código: el TODO que se caza es el vivo', (t) => {

@@ -181,6 +181,10 @@ const MATRIX = [
   // La silueta de la saga: compensación + las tres idempotencias, con la superficie
   // mínima para que un pipeline completo quepa en una corrida.
   ['stock-reservation', { broker: 'kafka' }],
+  // La misma silueta con un motor que NO reparte candidatos: es la rama SIN @Lock del
+  // reclamo (barrido, relay del outbox y reconciliación), que en las demás filas no la
+  // tokeniza nadie — y un import condicional mal puesto ahí no lo ve ningún includes().
+  ['stock-reservation', { broker: 'kafka', database: 'h2' }],
   ['inspection-reports', {}],
   // La silueta documental TRANSVERSAL: seguridad, caché, storage, clientes salientes
   // e idempotencia de petición sobre Mongo. Dos brokers porque su listener y su relay
@@ -232,7 +236,7 @@ test('un text block no desincroniza el análisis', () => {
 });
 
 for (const [fixture, stack] of MATRIX) {
-  const label = `${fixture}${stack.broker ? ` (${stack.broker})` : ''}${stack.auth ? ` + ${stack.auth}` : ''}`;
+  const label = `${fixture}${stack.broker ? ` (${stack.broker})` : ''}${stack.database ? ` / ${stack.database}` : ''}${stack.auth ? ` + ${stack.auth}` : ''}`;
 
   test(`${label}: todo .java generado está estructuralmente balanceado`, () => {
     const problems = [];

@@ -56,9 +56,57 @@ function checksOf(model) {
     ...commandChecks(model),
     ...compensationChecks(model),
     ...reconciliationChecks(model),
+    ...sweepClaimChecks(model),
     ...outboxChecks(model),
     ...mailChecks(model)
   ];
+}
+
+/**
+ * El reclamo de un barrido que NO está declarado como `reconciledBy`.
+ *
+ * La familia `reconciliation` ya cubre los que sí: los que reconcilian un desenlace de
+ * una activación. Pero un barrido que despacha una cola —el que manda el correo, el que
+ * reintenta— normalmente no está enlazado a ninguna activación, y quedaba sin nota y sin
+ * gate. Es el mismo riesgo con menos ceremonia: `@Scheduled` corre en todas las réplicas,
+ * y un finder normal se lleva las mismas filas en todas.
+ *
+ * Lo afirmable en estático es la forma del acceso, no si el algoritmo es correcto: que el
+ * handler RECLAME (llame al método que build generó, o escriba su propio UPDATE
+ * condicional) y que no se lleve el lote con una lectura simple del estado de partida.
+ */
+function sweepClaimChecks(model) {
+  const sweeps = (model.services ?? [])
+    .flatMap((service) => service.operations ?? [])
+    .filter((operation) => operation.sweep && (operation.reconciles ?? []).length === 0);
+  if (sweeps.length === 0) return [];
+
+  return sweeps.map((operation) => {
+    const claims = operation.claim ?? [];
+    // Con reclamo generado la exigencia es exacta: que lo llame. Sin él, lo afirmable es
+    // que exista una escritura de reclamo — no se puede exigir un nombre que build no
+    // eligió, y suponerlo daría por incorrecta cualquier forma legítima distinta.
+    const required = claims.length > 0
+      ? claims.map((claim) => `\\.?${claim.method}\\s*\\(`).join('|')
+      : '@Modifying|@Query\\s*\\(\\s*"\\s*update|findAndModify|findOneAndUpdate|[Cc]laim|[Rr]eclam';
+    return {
+      group: 'sweepClaim',
+      subject: operation.name,
+      class: operation.handlerClass,
+      require: [required],
+      // La lectura simple del estado de partida es EXACTAMENTE el patrón que produjo el
+      // fallo: findByStatusOrderBy…(QUEUED, PageRequest…) devuelve la misma página en
+      // todas las réplicas. Un finder derivado en el handler de un barrido no tiene
+      // ningún uso legítimo que el reclamo no cubra mejor.
+      forbid: ['\\.find(All)?By[A-Za-z]*\\s*\\('],
+      why:
+        `el barrido corre en TODAS las réplicas: tiene que RECLAMAR su lote ` +
+        (claims.length > 0
+          ? `llamando a ${claims.map((claim) => `${claim.method}()`).join(' / ')}, que build generó en el puerto`
+          : `con una escritura condicional que devuelva cuántas filas se llevó`) +
+        `, no leerlo con un finder — entre la lectura y la marca las N réplicas ya se llevaron las mismas filas`
+    };
+  });
 }
 
 // 1. Consumo de mensajes. Las dos mitades —llamar al guard y ACTUAR sobre lo que
@@ -439,6 +487,34 @@ function reconciliationChecks(model) {
       schedulers.add(service.className.replace(/Service$/, 'Scheduler'));
     }
   }
+  // El reclamo GENERADO. Cuando build lo produce, lo afirmable es exacto —que el handler
+  // lo llame— y los tres checks de abajo dejan de aplicar a esta operación: exigirle al
+  // agente que escriba el @Modifying, el Pageable y el @Value de algo que ya existe tiene
+  // como camino de menor resistencia un segundo mecanismo en paralelo al generado, que no
+  // reclama nada y reparte peor. Es la misma forma que la familia sweepClaim.
+  let pendingClaim = false;
+  for (const operation of allOperations(model)) {
+    for (const { dependency, activation, claim } of operation.reconciles ?? []) {
+      if (!claim) {
+        pendingClaim = true;
+        continue;
+      }
+      checks.push({
+        group: 'reconciliation',
+        subject: `${operation.name} · reclamo de ${dependency}.${activation.name}`,
+        class: operation.handlerClass,
+        require: [`\\.?${claim.method}\\s*\\(`],
+        // La lectura por estado es EXACTAMENTE el patrón que el reclamo evita: devuelve la
+        // misma página en todas las réplicas, y aquí actuar es llamar a otro servidor.
+        forbid: ['\\.find(All)?By[A-Za-z]*\\s*\\('],
+        why:
+          `el barrido corre en TODAS las réplicas: tiene que tomar su lote con ${claim.method}(), que build generó en ` +
+          `${claim.entity}Repository —reclama con una marca persistida que caduca, y devuelve solo lo que esta ` +
+          `instancia se llevó—, no leerlo con un finder ni con un reclamo escrito aparte`
+      });
+    }
+  }
+
   for (const operation of allOperations(model)) {
     if (!(operation.reconciles ?? []).length) continue;
     checks.push({
@@ -471,7 +547,7 @@ function reconciliationChecks(model) {
   // El gate tiene que exigir la forma que la convención prescribe, no cualquiera que se
   // le parezca. Lo que sigue sin poder ver es DÓNDE cae el commit; eso queda en la
   // revisión, y conventions/dependencies.md lo dice con ese nombre.
-  if (schedulers.size > 0) {
+  if (schedulers.size > 0 && pendingClaim) {
     checks.push({
       group: 'reconciliation',
       subject: 'reclamo del barrido',
@@ -485,7 +561,7 @@ function reconciliationChecks(model) {
       // Las clases del mecanismo que build YA genera con el patrón: encontrarlas
       // probaría lo que build hizo, no lo que el agente tenía que escribir.
       exclude:
-        '/(OutboxEventJpaRepository|OutboxEventMongoRepository|OutboxRelay|OutboxEventJpa|OutboxEventDocument|ProcessedEventJpaRepository|ProcessedEventMongoRepository|IdempotencyRecordJpaRepository|IdempotencyRecordMongoRepository)\\.java',
+        '/(OutboxEventJpaRepository|OutboxEventMongoRepository|OutboxRelay|OutboxEventJpa|OutboxEventDocument|ProcessedEventJpaRepository|ProcessedEventMongoRepository|IdempotencyRecordJpaRepository|IdempotencyRecordMongoRepository|ReconciliationClaim[A-Za-z]*)\\.java',
       why: 'ninguna consulta reclama candidatos con una MARCA PERSISTIDA (UPDATE ... SET <marca> vía @Modifying, o findAndModify en Mongo): el barrido corre en TODAS las réplicas, y un lock pesimista no sirve aquí porque solo aísla mientras dura su transacción y la llamada al proveedor va en medio — ver conventions/dependencies.md § El barrido corre en todas las réplicas'
     });
     // La cota del lote, APARTE del reclamo. Sin cota, el barrido se lleva la tabla entera
@@ -516,7 +592,7 @@ function reconciliationChecks(model) {
       bound: '[Cc]andidat|[Rr]econcil|[Cc]laim|[Rr]eclam|[Ss]tale',
       scope: 'method',
       exclude:
-        '/(OutboxEventJpaRepository|OutboxEventMongoRepository|OutboxRelay|OutboxEventJpa|OutboxEventDocument|ProcessedEventJpaRepository|ProcessedEventMongoRepository|IdempotencyRecordJpaRepository|IdempotencyRecordMongoRepository)\\.java',
+        '/(OutboxEventJpaRepository|OutboxEventMongoRepository|OutboxRelay|OutboxEventJpa|OutboxEventDocument|ProcessedEventJpaRepository|ProcessedEventMongoRepository|IdempotencyRecordJpaRepository|IdempotencyRecordMongoRepository|ReconciliationClaim[A-Za-z]*)\\.java',
       why: 'el reclamo del barrido no acota su lote: ninguna consulta que limite el número de filas (Pageable/limit, o un contador de lote en Mongo) habla de los candidatos que se reconcilian. Puede ir en la misma consulta que reclama o en la que selecciona candidatos —en JPQL un @Modifying no acepta Pageable, así que ahí son dos por obligación—, pero tiene que existir: sin cota, una pasada con 50.000 atascados son 50.000 llamadas al proveedor'
     });
     // Y el umbral de «demasiado tiempo», que no lo declara el diseño: sale de
@@ -536,7 +612,7 @@ function reconciliationChecks(model) {
       bound: '[Ss]tale|[Aa]waiting|[Tt]hreshold|[Rr]econcil|[Uu]mbral',
       // Lo que build ya parametriza por su cuenta: encontrarlo probaría lo que build
       // hizo. El relay del outbox es el caso claro — tiene `@Value` y habla de reclamos.
-      exclude: '/(OutboxRelay|OutboxDispatcher[A-Za-z]*|ProcessedEventPurge[A-Za-z]*|IdempotencyRecordPurge[A-Za-z]*)\\.java',
+      exclude: '/(OutboxRelay|OutboxDispatcher[A-Za-z]*|ProcessedEventPurge[A-Za-z]*|IdempotencyRecordPurge[A-Za-z]*|ReconciliationClaim[A-Za-z]*)\\.java',
       why: 'el umbral de espera del barrido no está parametrizado en ninguna parte (@Value/@ConfigurationProperties sobre un valor que hable de la espera): build ya lo dejó escrito en parameters/<perfil>/reconciliation.yaml con el valor que declara el diseño (unansweredAfterSeconds), así que lo que falta es LEERLO — quemado en el código no se ajusta por entorno sin recompilar, y además deja de ser el número que el diseñador decidió. Ver conventions/dependencies.md'
     });
   }

@@ -62,7 +62,7 @@ function scaffoldCognito(options) {
     ...securedFixture(options),
     workspace,
     force: true,
-    stack: { database: 'postgres', broker: 'kafka', auth: 'cognito', cache: null, storage: null }
+    stack: { database: 'postgresql', broker: 'kafka', auth: 'cognito', cache: null, storage: null }
   });
   return {
     read: (relative) => fs.readFileSync(path.join(workspace, PROJECT, relative), 'utf8'),
@@ -143,7 +143,7 @@ test('cognito: con Keycloak el filtro sigue mirando aud (no se generaliza el cam
     ...securedFixture(),
     workspace,
     force: true,
-    stack: { database: 'postgres', broker: 'kafka', auth: 'keycloak', cache: null, storage: null }
+    stack: { database: 'postgresql', broker: 'kafka', auth: 'keycloak', cache: null, storage: null }
   });
   const filter = fs.readFileSync(
     path.join(workspace, PROJECT, `${JAVA}/infrastructure/configurations/security/AudienceAuthorizationFilter.java`),

@@ -4,8 +4,12 @@ operations:
     kind: command
     input:
       entity: Product
+      # Marcador operativo del barrido, no algo que el cliente necesite.
+      exclude: [recordWithdrawalAwaitingSince]
     output:
       entity: Product
+      # Marcador operativo del barrido, no algo que el cliente necesite.
+      exclude: [recordWithdrawalAwaitingSince]
     errors:
       - code: SKU_ALREADY_EXISTS
         when: Ya existe un producto con ese sku.
@@ -38,6 +42,8 @@ operations:
           required: true
     output:
       entity: Product
+      # Marcador operativo del barrido, no algo que el cliente necesite.
+      exclude: [recordWithdrawalAwaitingSince]
     errors:
       - code: PRODUCT_NOT_FOUND
         when: No existe un producto con ese slug.
@@ -68,6 +74,8 @@ operations:
     output:
       entity: Product
       embed: [category]
+      # Marcador operativo del barrido, no algo que el cliente necesite.
+      exclude: [recordWithdrawalAwaitingSince]
     rules:
       - Un campo ausente de la entrada conserva su valor; un campo presente con valor nulo vacía el campo.
     errors:
@@ -83,6 +91,8 @@ operations:
     output:
       entity: Product
       paginated: true
+      # Marcador operativo del barrido, no algo que el cliente necesite.
+      exclude: [recordWithdrawalAwaitingSince]
 
   getProductsByIds:
     description: Recupera en lote los productos indicados por sus identificadores.
@@ -96,6 +106,8 @@ operations:
     output:
       entity: Product
       list: true
+      # Marcador operativo del barrido, no algo que el cliente necesite.
+      exclude: [recordWithdrawalAwaitingSince]
 
   retireProduct:
     description: Retira un producto del catálogo de forma definitiva.
@@ -107,6 +119,8 @@ operations:
           required: true
     output:
       entity: Product
+      # Marcador operativo del barrido, no algo que el cliente necesite.
+      exclude: [recordWithdrawalAwaitingSince]
     errors:
       - code: PRODUCT_NOT_FOUND
         when: No existe un producto con ese id.
@@ -148,6 +162,8 @@ operations:
     output:
       entity: Product
       embed: [category]
+      # Marcador operativo del barrido, no algo que el cliente necesite.
+      exclude: [recordWithdrawalAwaitingSince]
     errors:
       - code: PRODUCT_NOT_FOUND
         when: No existe un producto con ese id.

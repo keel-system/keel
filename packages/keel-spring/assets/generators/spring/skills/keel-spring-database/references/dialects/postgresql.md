@@ -31,6 +31,11 @@ Lo que build dejó: driver `org.postgresql:postgresql`, contenedor
 - Deadlocks: PG los detecta y mata una transacción (`deadlock detected`);
   ordena los updates multi-fila de forma consistente.
 
+### Reclamo de un barrido
+
+`FOR UPDATE SKIP LOCKED` desde 9.5, sin condiciones. Es el motor donde el reclamo del barrido está
+verificado en vivo, y el hint `jakarta.persistence.lock.timeout = -2` se traduce a `SKIP LOCKED`.
+
 ## Validación y reset
 
 Desde devtools (`psql`, ya instalado):

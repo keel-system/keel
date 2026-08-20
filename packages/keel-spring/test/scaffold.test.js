@@ -2160,7 +2160,7 @@ test('best-effort: agregado acumula, adaptador drena y el bridge publica tras co
     manifest: patchedManifest,
     layers: patched,
     workspace,
-    stack: { database: 'postgres', broker: 'snssqs', auth: null, cache: null, storage: null }
+    stack: { database: 'postgresql', broker: 'snssqs', auth: null, cache: null, storage: null }
   });
   assert.equal(stack.broker, 'snssqs');
 
@@ -2236,7 +2236,7 @@ test('outbox: fila en la misma transacción, relay determinista y envío tras el
     manifest: patchedManifest,
     layers: patched,
     workspace,
-    stack: { database: 'postgres', broker: 'rabbitmq', auth: null, cache: null, storage: null }
+    stack: { database: 'postgresql', broker: 'rabbitmq', auth: null, cache: null, storage: null }
   });
 
   const outboxDir = 'src/main/java/com/commerce/productcatalog/infrastructure/messaging/outbox';
@@ -2425,7 +2425,7 @@ test('sin outbox no hay palanca de broker: detenerlo no probaría ninguna garant
     manifest: patchedManifest,
     layers: patched,
     workspace,
-    stack: { database: 'postgres', broker: 'rabbitmq', auth: null, cache: null, storage: null }
+    stack: { database: 'postgresql', broker: 'rabbitmq', auth: null, cache: null, storage: null }
   });
 
   const harness = read(
@@ -2447,7 +2447,7 @@ test('con SNS/SQS el arranque del broker resiembra la topología, que no sobrevi
     manifest: patchedManifest,
     layers: patched,
     workspace,
-    stack: { database: 'postgres', broker: 'snssqs', auth: null, cache: null, storage: null }
+    stack: { database: 'postgresql', broker: 'snssqs', auth: null, cache: null, storage: null }
   });
 
   const harness = read(
@@ -2473,7 +2473,7 @@ test('frontera hexagonal: application no importa los eventos de Spring', () => {
     manifest: patchedManifest,
     layers: patched,
     workspace,
-    stack: { database: 'postgres', broker: 'rabbitmq', auth: null, cache: null, storage: null }
+    stack: { database: 'postgresql', broker: 'rabbitmq', auth: null, cache: null, storage: null }
   });
 
   const appDir = path.join(workspace, 'services', 'product-catalog-spring', 'src/main/java/com/commerce/productcatalog/application');

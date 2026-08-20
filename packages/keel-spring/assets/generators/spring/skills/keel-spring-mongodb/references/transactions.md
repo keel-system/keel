@@ -67,6 +67,22 @@ Si lo bajas por debajo de lo que tarda una entrega al broker, dos réplicas pued
 entregar el mismo evento — que es tolerable (la entrega es at-least-once y el
 consumidor deduplica) pero no gratis.
 
+## Reclamo de la reconciliación: `reconciliation_claim`
+
+El barrido de una reconciliación reclama con la MISMA técnica pero sobre una colección aparte, que
+`build` genera junto a su `ReconciliationClaimStore`: un `upsert` cuyo filtro pide el reclamo ya
+caducado, así que si la marca sigue viva no casa con nada, Mongo intenta insertar y el `_id` duplicado
+—`<activación>|<id>`— dice que el candidato es de otra réplica. Atómico por documento, sin transacción.
+
+Por qué no va la marca en el documento del agregado, que sería más corto: el estado de espera es justo
+lo que el barrido busca, y añadirle un campo de mecánica al documento del diseño lo mezcla con el
+dominio. Y por qué la clave lleva la activación: una entidad puede estar esperando varios desenlaces a
+la vez, y con una marca compartida el segundo encargo pisaría el reclamo del primero.
+
+Aquí también **la marca caduca** (`reconciliation.<activación>.claim-timeout-ms`), y por el mismo motivo
+que en el outbox — con una consecuencia peor si se dimensiona corto: lo que se repite no es una entrega
+al broker sino una llamada al proveedor, y eso solo lo absorbe la idempotencia saliente.
+
 ## Idempotencia: `insert`, nunca `save`
 
 En `IdempotencyGuard` y en `MongoIdempotencyStore` el registro se escribe con

@@ -1736,6 +1736,65 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
                   `—declarando su 'transitions'— o, si el desenlace se conoce en el acto, lo que sobra es 'reconciledBy'`
               );
             } else {
+              // La marca temporal: qué campo dice DESDE CUÁNDO. El estado dice que espera,
+              // no cuánto lleva, y `status = 'awaitingStock'` incluye lo que empezó hace
+              // tres segundos. El schema ya exige declararla junto a `reconciledBy`; lo que
+              // no puede comprobar es que el campo exista, que sea una marca de tiempo y
+              // que la estampe la operación que encarga y no otra cosa. Las dos primeras se
+              // comprueban aquí; la tercera es semántica y se queda en /keel-validate.
+              for (const waitingEntity of waiting) {
+                const field = domain.entities?.[waitingEntity]?.fields?.[spec.awaitingSince];
+                if (!field) {
+                  errors.push(
+                    `${where}.awaitingSince: '${spec.awaitingSince}' no es un campo de ${waitingEntity}, que es la ` +
+                      `entidad que este encargo deja esperando. Es la marca de CUÁNDO empezó la espera, y sin ella el ` +
+                      `umbral no se puede aplicar a nada: el barrido no sabría distinguir lo que lleva atascado una ` +
+                      `hora de lo que entró hace tres segundos`
+                  );
+                  continue;
+                }
+                if (field.type !== 'timestamp') {
+                  errors.push(
+                    `${where}.awaitingSince: '${spec.awaitingSince}' es ${field.type}, y la marca de la espera tiene ` +
+                      `que ser timestamp — el barrido la compara contra 'ahora menos el umbral'`
+                  );
+                  continue;
+                }
+                // Y los dos campos que el método ya señala como marca equivocada, que
+                // fallan de formas distintas y por eso no reciben el mismo trato.
+                //
+                // `updatedAt` gestionado por la auditoría REJUVENECE con cualquier otra
+                // escritura, así que la entidad se vuelve invisible al barrido para
+                // siempre. No da error, no da log y pasa todas las pruebas —donde nada más
+                // toca la entidad—, que es el perfil exacto de un fallo que solo aparece en
+                // producción y no se acaba nunca. Error, porque no hay lectura legítima: si
+                // la auditoría lo escribe, no es la marca de ESTA espera.
+                // Sin capa persistence no hay auditoría que gestione nada: el default 'all'
+                // solo aplica cuando la capa existe y no dice otra cosa.
+                const auditedTimestamps = persistence ? (persistence.audit?.timestamps ?? 'all') : 'none';
+                if (spec.awaitingSince === 'updatedAt' && auditedTimestamps !== 'none') {
+                  errors.push(
+                    `${where}.awaitingSince: 'updatedAt' lo gestiona la auditoría (persistence.audit.timestamps: ` +
+                      `${auditedTimestamps}), así que se reescribe en CADA escritura de ${waitingEntity}. Una marca que ` +
+                      `rejuvenece deja la entidad invisible al barrido para siempre, y no lo delata nada. Declara un ` +
+                      `campo propio que estampe la operación que encarga y que no toque nadie más — la convención es ` +
+                      `<activacion>AwaitingSince`
+                  );
+                  continue;
+                }
+                // `createdAt` no rejuvenece: dice cuándo NACIÓ la entidad. Es la marca
+                // correcta solo si entra en la espera al crearse, y eso el diseñador lo
+                // sabe y esta validación no. Aviso, con el caso que lo rompe.
+                if (spec.awaitingSince === 'createdAt') {
+                  warnings.push(
+                    `${where}.awaitingSince: 'createdAt' es cuándo nació ${waitingEntity}, no cuándo entró en la espera. ` +
+                      `Solo vale si las dos cosas ocurren a la vez; si la entidad se crea antes y el encargo se hace ` +
+                      `después —minutos u horas—, el barrido mide desde el nacimiento y da por atascado un encargo ` +
+                      `recién hecho. La marca segura es un campo propio que estampe la operación que encarga`
+                  );
+                }
+              }
+
               // Y con el estado de espera ya declarado, el enlace: qué hace el barrido con
               // lo que encuentra.
               const movesWaiting = (sweeper.transitions ?? []).some((transition) => waiting.has(transition.entity));
@@ -1778,7 +1837,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
                     `pero ningún índice de persistence.entities.${waitingEntity} empieza por '${stateField}' — esa consulta ` +
                     `recorre la tabla entera cada vez que corre el schedule, y en cada réplica. Nada más lo va a señalar: ` +
                     `el barrido sigue siendo correcto, solo caro. Declara ` +
-                    `persistence.entities.${waitingEntity}.indexes: [[${stateField}, <campo de la marca de espera>]]`
+                    `persistence.entities.${waitingEntity}.indexes: [[${stateField}, ${spec.awaitingSince}]]`
                 );
               }
             }

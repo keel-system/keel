@@ -9,6 +9,7 @@
 // agente siguiendo la skill keel-spring-<broker>.
 
 import { javaFile, javaPath, subPackage } from './render.js';
+import { claimSelectionSnippet, supportsSkipLocked } from '../lib/claim-sql.js';
 
 const OUTBOX_PKG = 'infrastructure.messaging.outbox';
 
@@ -196,19 +197,34 @@ public class OutboxEventJpa {
 }
 
 function renderRepository(model) {
+  // De qué motor se trata lo decide lib/claim-sql.js, igual que en el reclamo de un
+  // barrido: emitir el hint donde el motor no lo entiende no es inocuo — en H2 se acepta
+  // y se IGNORA (las réplicas siguen compitiendo, pero el javadoc promete lo contrario) y
+  // en MySQL <8.0, MariaDB <10.6 u Oracle 11 la consulta falla por sintaxis.
+  const skipLocked = supportsSkipLocked(model.stack?.database);
+  const selection = claimSelectionSnippet({
+    database: model.stack?.database,
+    subject: 'la entrega'
+  });
   const body = `public interface OutboxEventJpaRepository extends JpaRepository<OutboxEventJpa, UUID> {
 
     /**
      * Pendientes en orden de llegada que aún no agotaron los reintentos y cuyo
-     * backoff ya venció (nextAttemptAt null = elegible ya). Toma un lock de
+     * backoff ya venció (nextAttemptAt null = elegible ya). ${
+       skipLocked
+         ? `Toma un lock de
      * escritura con SKIP LOCKED (el hint de lock timeout -2): con varias réplicas
      * del relay, cada una se lleva un lote disjunto en vez de competir por las
-     * mismas filas. El lock se sostiene hasta el fin de la transacción del relay.
-     * En H2 (perfil test) SKIP LOCKED puede degradarse a lock normal; no afecta a
-     * la validación, que corre contra la BD real de infra/.
+     * mismas filas. El lock se sostiene hasta el fin de la transacción del relay,
+     * que es corta: lo que envuelve es la entrega al broker, no una llamada a un
+     * proveedor.`
+         : `El motor elegido no reparte
+     * candidatos entre réplicas, así que todas ven la misma página: la entrega
+     * sigue sin duplicarse —lo impide el marcado de la fila, que va en la misma
+     * transacción— pero N-1 réplicas tiran su ciclo.`
+     }
      */
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "-2"))
+${selection.annotations}
     @Query("select o from OutboxEventJpa o where o.publishedAt is null and o.attempts < :maxAttempts and (o.nextAttemptAt is null or o.nextAttemptAt <= :now) order by o.createdAt asc")
     List<OutboxEventJpa> findPending(@Param("maxAttempts") int maxAttempts, @Param("now") Instant now, Pageable pageable);
 
@@ -222,18 +238,17 @@ function renderRepository(model) {
     content: javaFile(
       subPackage(model, OUTBOX_PKG),
       [
-        'jakarta.persistence.LockModeType',
-        'jakarta.persistence.QueryHint',
         'java.time.Instant',
         'java.util.List',
         'java.util.UUID',
         'org.springframework.data.domain.Pageable',
         'org.springframework.data.jpa.repository.JpaRepository',
-        'org.springframework.data.jpa.repository.Lock',
         'org.springframework.data.jpa.repository.Modifying',
         'org.springframework.data.jpa.repository.Query',
-        'org.springframework.data.jpa.repository.QueryHints',
-        'org.springframework.data.repository.query.Param'
+        'org.springframework.data.repository.query.Param',
+        // Solo los arrastra el motor que reparte candidatos: pedirlos siempre dejaría
+        // imports sin usar en el que no.
+        ...selection.imports
       ],
       body
     )

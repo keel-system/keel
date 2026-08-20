@@ -15,6 +15,8 @@ import { javaFile, javaPath, subPackage } from './render.js';
 import { domainMembers, domainSubPackage, capitalize } from './entities.js';
 import { persistedMembers, orderingFieldOf, usesAuditableEntity } from './persistence-members.js';
 import { renderPort, naturalKeyFinder, collectInternalEntities, PORT_PKG, REPO_PKG } from './repositories.js';
+import * as claim from './claim.js';
+import * as reconciliationClaim from './reconciliation-claim.js';
 import { DOC_PKG } from './document-entities.js';
 import { documentValueObjects } from './document-embeddables.js';
 import { isRefTarget } from './ref-resolvers.js';
@@ -163,6 +165,16 @@ function renderAdapter(model, entity, paginated, batchLookup) {
         return saved;`
     : `        ${documentExpr}return toDomain(${savedExpr});`;
 
+  // Los reclamos: el del barrido de una cola (findAndModify sobre el propio documento) y
+  // el de la reconciliación (marca aparte con caducidad). El puerto los declara para los
+  // dos modelos de persistencia, así que aquí tienen que existir o el adaptador no
+  // implementaría su interfaz.
+  const claimMethods = [
+    ...claim.documentAdapterMethods(model, entity, imports),
+    ...reconciliationClaim.documentAdapterMethods(model, entity, imports)
+  ];
+  methods.push(...claimMethods);
+
   methods.push(
     `    @Override${emitsEvents ? '\n    @Transactional' : ''}
     public ${entity.name} save(${entity.name} entity) {
@@ -192,9 +204,24 @@ ${saveBody}
       `    private static final Sort TIE_BREAKER = Sort.by(Sort.Order.asc("${entity.idField?.name ?? 'id'}"));\n`
     );
   }
+  fields.push(...reconciliationClaim.adapterValueFields(model, entity));
   fields.push(`    private final ${entity.name}MongoRepository ${repoField};`);
   const ctorParams = [`${entity.name}MongoRepository ${repoField}`];
   const ctorAssigns = [`        this.${repoField} = ${repoField};`];
+  // MongoTemplate solo donde hay reclamo: los dos lo necesitan porque ni findAndModify ni
+  // una consulta acotada por la marca de espera se expresan con un repositorio derivado.
+  if (claimMethods.length > 0) {
+    imports.add('org.springframework.data.mongodb.core.MongoTemplate');
+    fields.push('    private final MongoTemplate mongoTemplate;');
+    ctorParams.push('MongoTemplate mongoTemplate');
+    ctorAssigns.push('        this.mongoTemplate = mongoTemplate;');
+  }
+  const claimStore = reconciliationClaim.adapterCollaborator(model, entity);
+  if (claimStore) {
+    fields.push(`    private final ${claimStore.type} ${claimStore.field};`);
+    ctorParams.push(`${claimStore.type} ${claimStore.field}`);
+    ctorAssigns.push(`        this.${claimStore.field} = ${claimStore.field};`);
+  }
   if (emitsEvents) {
     fields.push('    private final ApplicationEventPublisher eventPublisher;');
     ctorParams.push('ApplicationEventPublisher eventPublisher');

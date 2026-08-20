@@ -2071,7 +2071,18 @@ test('§4: los números del barrido salen de parameters/, y solo el umbral viene
   // Y el perfil lo importa: un fragmento que nadie carga son parámetros que nadie lee.
   assert.ok(read('src/main/resources/application-local.yaml').includes('parameters/local/reconciliation.yaml'));
 
-  // La nota del stub manda LEER el parámetro, no elegir un número.
+  // Y quién LEE cada número: el adaptador, no el handler. El handler vive en
+  // `application`, que por constitución no importa Spring, así que no puede leer
+  // configuración — por eso el reclamo generado no recibe `batchSize` por parámetro y los
+  // tres `@Value` están donde sí pueden estar.
+  const adapter = read(`${JAVA}/infrastructure/persistence/repositories/ProductRepositoryImpl.java`);
+  assert.ok(adapter.includes('reconciliation.record-withdrawal.unanswered-after-seconds:3600'), adapter);
+  assert.ok(adapter.includes('reconciliation.record-withdrawal.claim-timeout-ms:60000'), adapter);
+  assert.ok(adapter.includes('reconciliation.record-withdrawal.batch-size:50'), adapter);
+
+  // Y la nota del stub manda usar el reclamo generado —que es quien los aplica— en vez de
+  // elegir números o escribir otro reclamo.
   const handler = read(`${JAVA}/application/usecases/ReconcileWithdrawalsCommandHandler.java`);
-  assert.ok(handler.includes('reconciliation.record-withdrawal.unanswered-after-seconds'), handler);
+  assert.ok(handler.includes('claimForReconcileWithdrawalsRecordWithdrawal()'), handler);
+  assert.ok(handler.includes('parameters/<perfil>/reconciliation.yaml'), handler);
 });

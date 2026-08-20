@@ -75,6 +75,11 @@ dependencies:
   #       #   encargos que nunca recibieron desenlace. Aplica cuando el encargo SÍ tiene un
   #       #   desenlace que esperar (no en este `awaits: nothing`); sin ella, un proveedor que
   #       #   cae o pierde el mensaje deja el trabajo colgado y nada lo detecta.
+  #       # unansweredAfterSeconds: 1800           # cuánto silencio de ESTE proveedor se tolera
+  #       # awaitingSince: sendEmailAwaitingSince  # obligatorio con reconciledBy: el campo de la
+  #       #   entidad que dice DESDE CUÁNDO espera. El estado dice que espera, no cuánto lleva.
+  #       #   Campo propio, estampado al encargar: `createdAt` es cuándo nació la entidad y un
+  #       #   `updatedAt` de auditoría rejuvenece y la deja invisible al barrido para siempre.
   #       # onFailure:                             # obligatorio solo con via de http-clients
   #       #   action: degrade                      # fail | degrade | ignore
   #       #   degradedTo: El pedido se confirma y el aviso se reintenta aparte.

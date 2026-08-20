@@ -35,6 +35,12 @@ Lo que build dejó: driver `com.mysql:mysql-connector-j`, contenedor `mysql:8.0`
 - Deadlocks frecuentes con inserts concurrentes + uniques (gap locks): ordena
   las escrituras y reintenta la transacción si el diseño lo permite.
 
+### Reclamo de un barrido
+
+`FOR UPDATE SKIP LOCKED` desde **8.0**. En 5.7 no existe y la consulta falla con error de sintaxis
+—que al menos falla en voz alta—, pero el `UPDATE` condicional del reclamo sigue siendo correcto sin
+él: lo que se pierde es que las réplicas se repartan los candidatos, no la exclusión mutua.
+
 ## Validación y reset
 
 Desde devtools (`mysql`, ya instalado):

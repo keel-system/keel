@@ -279,11 +279,26 @@ function composeServices(model) {
     build: { context: '..', dockerfile: 'deploy/Dockerfile' },
     // Sin container_name: el proyecto ya prefija los nombres, y fijarlo sería la
     // única forma de colisionar con el stack de infra/.
-    ports: ['${APP_PORT:-8080}:8080'],
+    //
+    // El puerto se publica por RANGO, no fijo, y esa es la diferencia entre poder
+    // probar la premisa y no poder: el servidor generado se despliega replicado —los
+    // barridos reclaman su lote justo porque corren en todas las réplicas— y con un
+    // puerto de host fijo `--scale app=2` falla por colisión, así que no había forma
+    // de levantar dos instancias ni de ver si el reclamo funciona. Con el rango, cada
+    // réplica toma el siguiente puerto libre y la primera sigue estando en APP_PORT,
+    // que es lo que sondea up.sh.
+    ports: ['${APP_PORT:-8080}-${APP_PORT_MAX:-8089}:8080'],
     environment,
     ...dependsOn(services)
   };
-  env.unshift({ name: 'APP_PORT', value: '8080' });
+  env.unshift(
+    { name: 'APP_PORT', value: '8080' },
+    { name: 'APP_PORT_MAX', value: '8089' },
+    // Cuántas instancias levanta up.sh. Por defecto una —probar a mano no necesita
+    // más— pero subirlo a 2 es la única forma de ejercitar lo que el servidor asume
+    // siempre: que hay otra réplica haciendo lo mismo al mismo tiempo.
+    { name: 'APP_REPLICAS', value: '1' }
+  );
 
   return { services, volumes, env };
 }
@@ -498,8 +513,8 @@ export MSYS_NO_PATHCONV=1
 
 ${RUNTIME_PREAMBLE}
 
-echo "== Levantando (\${COMPOSE[0]}) =="
-"\${COMPOSE[@]}" up -d --build
+echo "== Levantando (\${COMPOSE[0]}, \${APP_REPLICAS:-1} instancia(s) de la app) =="
+"\${COMPOSE[@]}" up -d --build --scale app="\${APP_REPLICAS:-1}"
 
 # Espera activa a que la app responda. 'Up' no es 'listo': la JVM tarda, y con
 # persistencia ademas hay que aplicar las migraciones antes de aceptar trafico.

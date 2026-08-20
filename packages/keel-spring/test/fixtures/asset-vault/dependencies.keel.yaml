@@ -51,6 +51,15 @@ dependencies:
         # Sin esto, la compensación de abajo solo existe si el escáner se acuerda de
         # publicar su hallazgo. Cuando no lo hace, nada lo detecta.
         reconciledBy: reconcileScans
+        # Cuánto puede envejecer un veredicto antes de revalidarlo. No es lo mismo que la
+        # cadencia del barrido —que corre cada minuto—: el barrido mira a menudo y revalida
+        # tarde, que es como se opera de verdad.
+        unansweredAfterSeconds: 900
+        # Y desde cuándo se cuenta. Aquí la marca NO se llama `scanAssetAwaitingSince`
+        # porque no se espera ningún desenlace: el escáner contesta en el acto y lo que
+        # envejece es la CREENCIA de que el archivo está limpio. Es la variante de deriva,
+        # y por eso el campo lo nombra el diseño en vez de derivarse de la activación.
+        awaitingSince: lastScannedAt
         onFailure:
           action: fail
           error: SCANNER_UNAVAILABLE
