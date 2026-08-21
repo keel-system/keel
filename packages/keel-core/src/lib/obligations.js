@@ -55,6 +55,22 @@ export const OBLIGATIONS = {
     doc: 'framework-errors.md'
   },
 
+  'OBL-RESOURCE-SCOPE': {
+    gapClass: 9,
+    when: 'use-cases: una operación protegida por rol declara un error 403',
+    kind: 'decision',
+    // La única no exentable del catálogo, y la razón es la que da gap-analysis para toda la
+    // clase 9: aquí no existe un default seguro. «Aceptado» significaría que el generador
+    // decide quién alcanza qué, y lo que decide por omisión es que todo el mundo alcanza
+    // todo — un servidor que sirve a cualquier titular del rol los recursos de todos los
+    // inquilinos, con el 403 de su contrato sin que nada lo produzca.
+    waivable: false,
+    title: 'un 403 que nada de lo declarado puede producir',
+    closes:
+      '`authentication.scoping` con el claim que acota, o retirar ese 403 si el permiso no se acota por recurso',
+    doc: 'dsl/security.md'
+  },
+
   'OBL-CONCURRENCY-CODE': {
     gapClass: 4,
     when: 'persistence: `consistency.optimisticLocking` es `all` o `declared`',

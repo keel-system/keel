@@ -1297,6 +1297,21 @@ function collectSecurity(layers, services, routeBase, warnings) {
     scopes: def?.scopes ?? []
   }));
 
+  // Alcance por recurso (security.authentication.scoping). Roles, permissions y scopes son
+  // globales, así que sin este bloque no hay nada declarado que distinga a un solicitante
+  // permitido de uno prohibido sobre UN recurso concreto. Lo que el generador necesita de él
+  // es el nombre del claim y a quién NO se acota: con eso aprovisiona el proveedor de
+  // identidad, que es la mitad que antes había que parchear a mano en cada proyecto.
+  const rawScoping = sec.authentication?.scoping ?? null;
+  const scoping = rawScoping
+    ? {
+        claim: rawScoping.claim,
+        over: rawScoping.over,
+        error: rawScoping.error,
+        exemptRoles: rawScoping.exemptRoles ?? []
+      }
+    : null;
+
   // Permisos que otorga cada rol (security.roleGrants): derivable al 100% del
   // diseño, se materializa como mapa estático en el JwtAuthConverter para que
   // hasAnyAuthority("<recurso>:<accion>") funcione con IdPs que solo emiten roles.
@@ -1320,6 +1335,7 @@ function collectSecurity(layers, services, routeBase, warnings) {
     defaultAuthority: accessAuthority(defaultRule),
     usesAuthorities,
     serviceAuth,
+    scoping,
     serviceClients,
     roleGrants,
     roles,

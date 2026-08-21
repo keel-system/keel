@@ -4307,12 +4307,19 @@ const scopedLayers = () => ({
   },
 });
 
-test('un 403 que solo pueden producir roles globales es aviso: nada distingue a quién se le prohíbe', () => {
-  const { errors, warnings } = run(scopedLayers());
+test('un 403 que solo pueden producir roles globales levanta la obligación del alcance', () => {
+  // Fue aviso mientras el DSL no tuvo dónde declarar la acotación. Ahora que la tiene, es una
+  // obligación — y de las que no se pueden aceptar: por omisión, todo el mundo alcanza todo.
+  const { errors, obligations } = run(scopedLayers());
   assert.deepEqual(errors, []);
   assert.ok(
-    warnings.some((w) => w.includes("el error 'PRODUCT_FORBIDDEN' (403)") && w.includes('son globales')),
-    warnings.join('\n')
+    obligations.some(
+      (item) =>
+        item.id === 'OBL-RESOURCE-SCOPE' &&
+        item.message.includes("el error 'PRODUCT_FORBIDDEN' (403)") &&
+        item.message.includes('son globales')
+    ),
+    JSON.stringify(obligations)
   );
 });
 
@@ -4323,6 +4330,68 @@ test('sin ningún 403 declarado no se dice nada del alcance', () => {
   ];
   const { warnings } = run(layers);
   assert.ok(!warnings.some((w) => w.includes('son globales')), warnings.join('\n'));
+});
+
+// El alcance por recurso (DSL 2.11) es la respuesta que ese aviso llevaba pidiendo sin que el
+// DSL tuviera dónde darla. Mientras no existió, el aviso solo se podía aceptar a sabiendas —y
+// un aviso que solo se puede ignorar deja de ser un aviso.
+
+const withScoping = (extra = {}) => {
+  const layers = scopedLayers();
+  layers.security.authentication.scoping = {
+    claim: 'tenants',
+    over: 'Product.id',
+    error: 'PRODUCT_FORBIDDEN',
+    ...extra
+  };
+  return layers;
+};
+
+test('declarar el alcance por recurso cierra el aviso del 403', () => {
+  const { errors, warnings } = run(withScoping());
+  assert.deepEqual(errors, []);
+  assert.ok(!warnings.some((w) => w.includes('son globales')), warnings.join('\n'));
+});
+
+test('el alcance solo cubre SU error: otro 403 sigue avisando', () => {
+  // Declarar el alcance no es una amnistía para cualquier 403. Uno distinto sigue sin tener
+  // quien lo produzca, y taparlo aquí sería peor que el aviso original.
+  const layers = withScoping();
+  layers['use-cases'].operations.getProduct.errors.push({
+    code: 'PRODUCT_LOCKED',
+    when: 'Otro motivo de prohibición.',
+    http: 403
+  });
+  const { obligations } = run(layers);
+  assert.ok(
+    obligations.some(
+      (item) => item.id === 'OBL-RESOURCE-SCOPE' && item.message.includes("el error 'PRODUCT_LOCKED' (403)")
+    ),
+    JSON.stringify(obligations)
+  );
+});
+
+test('el alcance sobre una entidad o un campo que no existen es error', () => {
+  assert.ok(
+    run(withScoping({ over: 'Ghost.code' })).errors.some((e) => e.includes("la entidad 'Ghost' no existe")),
+    'entidad inexistente'
+  );
+  assert.ok(
+    run(withScoping({ over: 'Product.ghost' })).errors.some((e) => e.includes("no declara el campo 'ghost'")),
+    'campo inexistente'
+  );
+});
+
+test('exentar un rol que no está en el catálogo es error', () => {
+  const { errors } = run(withScoping({ exemptRoles: ['fantasma'] }));
+  assert.ok(errors.some((e) => e.includes("el rol 'fantasma' no está")), errors.join('\n'));
+});
+
+test('declarar el alcance sin declarar su error es error', () => {
+  // El alcance nombra el code; su status y su descripción viven en `errors`. Sin eso el 403
+  // queda prometido y sin contrato, que es justo el hueco que este primitivo cierra.
+  const { errors } = run(withScoping({ error: 'NUNCA_DECLARADO' }));
+  assert.ok(errors.some((e) => e.includes("'NUNCA_DECLARADO' no lo declara ninguna operación")), errors.join('\n'));
 });
 
 test("un 403 sobre level 'service' no se avisa: ahí el que llama ES el alcance", () => {

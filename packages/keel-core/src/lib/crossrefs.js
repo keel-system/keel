@@ -952,6 +952,38 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
       }
     }
 
+    // Alcance por recurso: el bloque que hace producible ese 403.
+    const scoping = security.authentication?.scoping;
+    if (scoping) {
+      const [entityName, fieldName] = String(scoping.over).split('.');
+      const entity = domain.entities?.[entityName];
+      if (!entity) {
+        errors.push(
+          `security: authentication.scoping.over: la entidad '${entityName}' no existe en domain — el alcance acota un recurso que el servicio no modela`
+        );
+      } else if (!Object.hasOwn(entity.fields ?? {}, fieldName)) {
+        errors.push(
+          `security: authentication.scoping.over: '${entityName}' no declara el campo '${fieldName}' — el claim tendría que compararse contra algo que no existe`
+        );
+      }
+      for (const role of scoping.exemptRoles ?? []) {
+        if (!Object.hasOwn(security.roles ?? {}, role)) {
+          errors.push(`security: authentication.scoping.exemptRoles: el rol '${role}' no está en el catálogo de roles`);
+        }
+      }
+      // El error del alcance tiene que ser un `code` que alguna operación declare: es ahí donde
+      // viven su status y su `when`. Declarar el alcance y no el error deja el 403 prometido y
+      // sin contrato — exactamente el hueco que este bloque existe para cerrar.
+      const declaresScopingError = Object.values(operations).some((op) =>
+        (op.errors ?? []).some((error) => error.code === scoping.error)
+      );
+      if (!declaresScopingError) {
+        errors.push(
+          `security: authentication.scoping.error: '${scoping.error}' no lo declara ninguna operación — declara el error (con su status 403 y su descripción) en las operaciones que se acotan`
+        );
+      }
+    }
+
     // Un 403 que nada de lo declarado puede producir.
     //
     // Roles, permissions y scopes son GLOBALES: quien tiene el rol lo tiene para todo, así
@@ -967,7 +999,12 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
     const globallyScoped = new Set();
     for (const [opName, op] of Object.entries(operations)) {
       if (!exposedOps.has(opName)) continue;
-      const forbidden = (op.errors ?? []).filter((error) => error.http === 403);
+      // El error del alcance por recurso SÍ es producible: `authentication.scoping` declara de
+      // dónde sale la acotación, el generador la aprovisiona y su escenario es implementable.
+      // Es la respuesta que este aviso llevaba pidiendo sin que el DSL tuviera dónde darla.
+      const forbidden = (op.errors ?? []).filter(
+        (error) => error.http === 403 && !(scoping && error.code === scoping.error)
+      );
       if (forbidden.length === 0) continue;
       const rule = security.access?.rules?.[opName] ?? security.access?.default;
       // `public` no discrimina nada y ya tiene su propio aviso en otra regla. Y `service`
@@ -987,8 +1024,13 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
       }
       for (const [code, ops] of byCode) {
         const listed = ops.length > 3 ? `${ops.slice(0, 3).join(', ')} y ${ops.length - 3} más` : ops.join(', ');
-        warnings.push(
-          `security: el error '${code}' (403) que declara ${ops.length === 1 ? 'la operación' : 'las operaciones'} ` +
+        // Obligación y no aviso desde que existe `authentication.scoping` (DSL 2.11): mientras
+        // el DSL no tuvo dónde declarar la acotación, esto solo se podía aceptar a sabiendas, y
+        // un aviso que solo se puede ignorar deja de ser un aviso.
+        obligation(
+          'OBL-RESOURCE-SCOPE',
+          'security',
+          `el error '${code}' (403) que declara ${ops.length === 1 ? 'la operación' : 'las operaciones'} ` +
             `${listed} no lo puede producir nada de lo declarado — roles, permissions y scopes son globales, ` +
             `así que quien pasa la regla de acceso pasa para todos los recursos. Si el permiso se acota por recurso o ` +
             `por inquilino, declara con qué se acota (el claim del token, la asignación que lo resuelve); si no se ` +

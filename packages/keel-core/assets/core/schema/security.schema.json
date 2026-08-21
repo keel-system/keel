@@ -18,6 +18,35 @@
           "description": "Protocolo de autenticación, agnóstico de proveedor (Keycloak, Auth0... se decide al generar)."
         },
         "tokenLocation": { "type": "string", "enum": ["header", "cookie"], "default": "header" },
+        "scoping": {
+          "type": "object",
+          "required": ["claim", "over", "error"],
+          "additionalProperties": false,
+          "description": "Alcance por recurso: roles, permissions y scopes son GLOBALES —quien pasa la regla de acceso, pasa para todos los recursos—, así que un servicio multi-inquilino necesita además acotar al recurso concreto. Este bloque declara de dónde sale esa acotación. Sin él, un servicio cuyas operaciones actúan sobre un recurso concreto sirve a cualquier titular del rol los recursos de todos los inquilinos, y el 403 que su diseño promete no lo produce nada.",
+          "properties": {
+            "claim": {
+              "type": "string",
+              "pattern": "^[a-zA-Z][a-zA-Z0-9_-]*$",
+              "description": "Nombre del claim del token que lleva la lista de recursos a los que el titular alcanza."
+            },
+            "over": {
+              "type": "string",
+              "pattern": "^[A-Z][A-Za-z0-9]*\\.[a-z][A-Za-z0-9]*$",
+              "description": "Qué identifica al recurso acotado, como Entidad.campo (ej. Application.code). El campo tiene que existir en domain y ser el que las operaciones reciben."
+            },
+            "error": {
+              "$ref": "common.schema.json#/$defs/errorCode",
+              "description": "El code con el que se rechaza una petición fuera del alcance. Es contrato público: los escenarios lo afirman y los integradores lo ven."
+            },
+            "exemptRoles": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "$ref": "common.schema.json#/$defs/roleName" },
+              "description": "Roles cuya función es transversal y que por tanto NO se acotan (un administrador que gobierna todos los recursos). Se declaran uno a uno: la exención es la parte peligrosa y no puede quedar implícita."
+            },
+            "description": { "type": "string" }
+          }
+        },
         "serviceAuth": {
           "type": "object",
           "required": ["protocol"],

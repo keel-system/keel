@@ -35,13 +35,20 @@ donde «aceptado» significaría dejársela al generador. Están marcadas como t
 | `OBL-IDEM-RACE-CODE` | `use-cases`: alguna operación declara `idempotency` | la carrera de la clave no tiene `code` nombrado | 4 | sí |
 | `OBL-IDEM-REUSE-CODE` | `use-cases`: alguna operación declara `idempotency` | el desenlace «misma clave, otro cuerpo» no tiene `code` nombrado | 4 | sí |
 | `OBL-CONCURRENCY-CODE` | `persistence`: `consistency.optimisticLocking` es `all` o `declared` | el conflicto de escritura concurrente no tiene `code` nombrado | 4 | sí |
+| `OBL-RESOURCE-SCOPE` | `use-cases`: una operación protegida por rol declara un error 403 | un 403 que nada de lo declarado puede producir | 9 | no |
 
 La columna **Clase** es la del análisis de huecos (`gap-analysis.md`), para que el barrido del
 agente y la validación mecánica hablen del mismo hueco con el mismo nombre.
 
 ## Cómo se cierran
 
-Las tres de la tabla se cierran igual, porque son la misma decisión sobre tres mecanismos: el
+`OBL-RESOURCE-SCOPE` va aparte porque es la única que **no admite aceptación**. Se cierra
+declarando `authentication.scoping` —de dónde sale la acotación por recurso: el claim del
+token, qué identifica al recurso, qué error rechaza y qué roles quedan exentos— o retirando
+ese 403 si el permiso no se acota por recurso. Aceptarla significaría que el generador decide
+quién alcanza qué, y lo que decide por omisión es que todo el mundo alcanza todo.
+
+Las otras tres se cierran igual entre sí, porque son la misma decisión sobre tres mecanismos: el
 conflicto que enciende el mecanismo llega al cliente con un `code`, y el diseño puede nombrarlo
 o dejar que se use el canónico de `framework-errors.md`. Nombrarlo es declarar en `errors` un
 `code` de la familia del canónico, con su mismo status. Aceptarlo es decir por escrito que el

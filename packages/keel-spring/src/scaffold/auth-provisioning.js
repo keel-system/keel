@@ -26,6 +26,12 @@ const NO_ROLE_USER = 'no-role';
 // Resource server ajeno, para la variante negativa de la matriz M2M con Cognito: es
 // el prefijo de scope que hace que el token esté emitido para OTRA API.
 const FOREIGN_RESOURCE_SERVER = 'audiencia-ajena';
+// Valor del claim de alcance por recurso con el que se siembran los usuarios NO exentos.
+// Es dato de prueba, no del diseño: el diseño declara de dónde sale la acotación, y qué
+// recurso concreto alcanza un usuario de prueba es cosa del escenario. Viaja a
+// test-credentials.env (`AUTH_SCOPED_RESOURCE`) para que el arnés lo lea en vez de
+// hardcodearlo, igual que ya hace con los secretos.
+const SCOPED_VALUE = 'keel-scoped-resource';
 
 /** Protocolos de identidad basados en token: son los que necesitan aprovisionamiento. */
 function usesTokens(model) {
@@ -91,6 +97,7 @@ export function realmSpec(model) {
   const security = model.security;
   const roles = security?.roles ?? [];
   const scopes = security?.scopes ?? [];
+  const scoping = security?.scoping ?? null;
   const serviceClients = (security?.serviceClients ?? []).map((client) => ({
     name: client.name,
     secret: serviceClientSecret(client.name),
@@ -122,8 +129,20 @@ export function realmSpec(model) {
     // insuficiente necesita un sujeto autenticado.
     users: [...roles, NO_ROLE_USER].map((username) => ({
       username,
-      roles: roles.includes(username) ? [username] : []
+      roles: roles.includes(username) ? [username] : [],
+      // Alcance por recurso: el claim se proyecta desde un atributo de usuario del mismo
+      // nombre, y solo lo llevan los roles que NO están exentos. Un usuario exento sin el
+      // atributo es justamente lo que hace observable la exención — si todos lo llevaran,
+      // el escenario que prueba que el administrador alcanza cualquier recurso no probaría
+      // nada. El valor es dato de PRUEBA, no del diseño, y por eso sale de una constante
+      // que también viaja a test-credentials.env: el escenario nombra la variable, no el
+      // literal.
+      attributes:
+        scoping && !scoping.exemptRoles.includes(username) && username !== NO_ROLE_USER
+          ? { [scoping.claim]: [SCOPED_VALUE] }
+          : {}
     })),
+    scoping,
     scopes,
     serviceClients,
     m2mClients
@@ -196,6 +215,17 @@ function credentialsEnv(model) {
   if (security?.roles?.length) {
     lines.push('', `# Usuarios de prueba (username = rol): ${security.roles.join(', ')}, ${NO_ROLE_USER}`);
   }
+  if (security?.scoping) {
+    const exempt = security.scoping.exemptRoles;
+    lines.push(
+      '',
+      `# Alcance por recurso: el claim '${security.scoping.claim}' de los usuarios NO exentos lleva`,
+      '# este valor. Los escenarios que ejercitan el alcance crean el recurso con este código y',
+      '# comprueban el rechazo sobre cualquier otro: se lee de aquí, no se escribe a mano.',
+      exempt.length > 0 ? `# Exentos (su token no lleva el claim): ${exempt.join(', ')}` : '# Ningún rol exento.',
+      `AUTH_SCOPED_RESOURCE=${SCOPED_VALUE}`
+    );
+  }
   return { path: 'infra/test-credentials.env', content: `${lines.join('\n')}\n` };
 }
 
@@ -260,6 +290,40 @@ for USER in ${spec.users.map((user) => user.username).join(' ')}; do
   run "set-password -r $REALM --username $USER --new-password $PASSWORD"
 done
 ${roles.map((role) => `run "add-roles -r $REALM --uusername ${role} --rolename ${role}"`).join('\n')}`);
+
+    // Alcance por recurso (security.authentication.scoping): el claim que acota qué recursos
+    // alcanza el titular. Son DOS piezas y las dos son imprescindibles — el atributo en cada
+    // usuario no exento, y el protocol mapper que lo proyecta al token—. Sin el mapper el
+    // atributo existe y el claim no llega; sin el atributo el mapper no tiene qué proyectar.
+    // En ninguno de los dos casos falla nada aquí: falla un 403 sin explicación dentro de un
+    // test de integración, minutos después.
+    const scoped = spec.users.filter((user) => Object.keys(user.attributes ?? {}).length > 0);
+    if (spec.scoping && scoped.length > 0) {
+      const { claim } = spec.scoping;
+      const mapperConfig = [
+        `-s name=${claim}-mapper`,
+        '-s protocol=openid-connect',
+        '-s protocolMapper=oidc-usermodel-attribute-mapper',
+        `-s 'config.\\"user.attribute\\"=${claim}'`,
+        `-s 'config.\\"claim.name\\"=${claim}'`,
+        `-s 'config.\\"jsonType.label\\"=String'`,
+        `-s 'config.\\"multivalued\\"=true'`,
+        `-s 'config.\\"access.token.claim\\"=true'`,
+        `-s 'config.\\"id.token.claim\\"=true'`
+      ].join(' ');
+      blocks.push(`echo "== Alcance por recurso: claim '${claim}' (security.authentication.scoping) =="
+# El claim sale de un atributo de usuario del mismo nombre, proyectado por un protocol mapper
+# sobre el cliente publico de usuario. Los roles exentos NO reciben el atributo: su token no
+# lleva el claim y su alcance es transversal por diseno.
+USER_CID=$(client_id_of "$USER_CLIENT")
+require_id "$USER_CID" "el cliente $USER_CLIENT"
+run "create clients/$USER_CID/protocol-mappers/models -r $REALM ${mapperConfig}"
+for SCOPED_USER in ${scoped.map((user) => user.username).join(' ')}; do
+  SCOPED_UID=$(user_id_of "$SCOPED_USER")
+  require_id "$SCOPED_UID" "el usuario $SCOPED_USER"
+  run "update users/$SCOPED_UID -r $REALM -s 'attributes.${claim}=[\\"${SCOPED_VALUE}\\"]'"
+done`);
+    }
   }
 
   // Audiencia y permisos en client scopes SEPARADOS: si viajan juntos, el cliente
@@ -270,6 +334,7 @@ ${roles.map((role) => `run "add-roles -r $REALM --uusername ${role} --rolename $
       'echo "== Client scopes de audiencia (desacoplados de los de permisos) =="',
       'run "create client-scopes -r $REALM -s name=aud-$SVC -s protocol=openid-connect"',
       'AUD_OK=$(scope_id_of "aud-$SVC")',
+      'require_id "$AUD_OK" "el client-scope aud-$SVC"',
       'run "create client-scopes/$AUD_OK/protocol-mappers/models -r $REALM -s name=aud-mapper -s protocol=openid-connect -s protocolMapper=oidc-audience-mapper -s \'config.\\"included.custom.audience\\"=$SVC\' -s \'config.\\"access.token.claim\\"=true\'"'
     ];
     if (validateAudience) {
@@ -277,6 +342,7 @@ ${roles.map((role) => `run "add-roles -r $REALM --uusername ${role} --rolename $
         '',
         'run "create client-scopes -r $REALM -s name=aud-wrong -s protocol=openid-connect"',
         'AUD_BAD=$(scope_id_of "aud-wrong")',
+        'require_id "$AUD_BAD" "el client-scope aud-wrong"',
         'run "create client-scopes/$AUD_BAD/protocol-mappers/models -r $REALM -s name=aud-mapper -s protocol=openid-connect -s protocolMapper=oidc-audience-mapper -s \'config.\\"included.custom.audience\\"=audiencia-ajena\' -s \'config.\\"access.token.claim\\"=true\'"'
       );
     }
@@ -286,7 +352,8 @@ ${roles.map((role) => `run "add-roles -r $REALM --uusername ${role} --rolename $
 ${scopes
   .map(
     (scope, index) =>
-      `run "create client-scopes -r $REALM -s name=${scope} -s protocol=openid-connect -s 'attributes.\\"include.in.token.scope\\"=true'"\nSCOPE_${index}=$(scope_id_of "${scope}")`
+      `run "create client-scopes -r $REALM -s name=${scope} -s protocol=openid-connect -s 'attributes.\\"include.in.token.scope\\"=true'"\n` +
+      `SCOPE_${index}=$(scope_id_of "${scope}")\nrequire_id "$SCOPE_${index}" "el client-scope ${scope}"`
   )
   .join('\n')}`);
   }
@@ -320,6 +387,7 @@ ${m2mClients.map(machineClient).join('\n')}`);
   local CLIENT_ID="$1" SCOPE_ID="$2"
   local CID
   CID=$(client_id_of "$CLIENT_ID")
+  require_id "$CID" "el cliente $CLIENT_ID"
   run "update clients/$CID/default-client-scopes/$SCOPE_ID -r $REALM"
 }
 
@@ -370,18 +438,43 @@ PASSWORD=${PASSWORD}
 # el aprovisionamiento quedaba a medias, el script salía 0, y el defecto reaparecía
 # minutos después como un 403 sin explicación dentro de un test de integración. Se
 # tolera el conflicto, que es la única forma de fallo esperada, y se aborta con el resto.
+#
+# OJO con la forma de capturar el codigo de salida. \`out=$(...); rc=$?\` NO sirve bajo
+# \`set -e\`: una asignacion por sustitucion de comandos toma el estado de salida de la
+# sustitucion, asi que un kcadm que devuelve != 0 —incluido el 409 que esta funcion existe
+# para tolerar— dispara errexit en la propia asignacion y jamas se llega a leer \`rc\`. El
+# efecto observado fue el peor posible: reejecutar el script sobre un realm ya sembrado
+# abortaba en silencio justo despues de crear el realm, dejando usuarios, roles y clientes
+# sin aprovisionar, con exit 1 y sin una sola linea de ERROR. La forma segura es capturar
+# el codigo en la MISMA sentencia, que es un contexto de condicion y suspende errexit.
 run() {
-  out=$(eval "$KC $*" 2>&1); rc=$?
+  out=$(eval "$KC $*" 2>&1) && rc=0 || rc=$?
   printf '%s\\n' "$out" | grep -v "compose provider\\|^\\[0m$\\|^$" || true
   if [ "$rc" -ne 0 ] && ! printf '%s' "$out" | grep -qi "409\\|already exists\\|exists with same\\|Conflict"; then
     echo "ERROR: kcadm falló ($rc) en: $*" >&2
     exit 1
   fi
 }
+# Los dos helpers de abajo terminan en un pipeline con grep/tail: bajo \`pipefail\` un «no
+# encontrado» —que es un resultado legitimo, no un fallo— devuelve != 0 y mataria el script
+# en la asignacion que lo llama, otra vez sin mensaje. Se cierra con \`|| true\` y el vacio se
+# juzga en require_id, que si dice QUE no se pudo resolver: morir es correcto aqui, morir
+# callado no.
 # id de un cliente por su clientId exacto (GET clients SI soporta -q).
-client_id_of() { eval "$KC get clients -r $REALM -q clientId=$1 --fields id --format csv --noquotes" 2>/dev/null | tr -d '\\r' | tail -1; }
+client_id_of() { eval "$KC get clients -r $REALM -q clientId=$1 --fields id --format csv --noquotes" 2>/dev/null | tr -d '\\r' | tail -1 || true; }
 # id de un client-scope por su name exacto (GET client-scopes NO soporta -q: filtra en local).
-scope_id_of() { eval "$KC get client-scopes -r $REALM --fields id,name --format csv --noquotes" 2>/dev/null | tr -d '\\r' | grep ",$1\\$" | cut -d, -f1; }
+scope_id_of() { eval "$KC get client-scopes -r $REALM --fields id,name --format csv --noquotes" 2>/dev/null | tr -d '\\r' | grep ",$1\\$" | cut -d, -f1 || true; }
+# id de un usuario por su username exacto (GET users SI soporta -q).
+user_id_of() { eval "$KC get users -r $REALM -q username=$1 --fields id --format csv --noquotes" 2>/dev/null | tr -d '\\r' | tail -1 || true; }
+# Un id vacio significa que el recurso no esta donde deberia: el aprovisionamiento va a medias
+# y seguir solo produce peticiones malformadas contra rutas con un id en blanco.
+require_id() {
+  if [ -z "$1" ]; then
+    echo "ERROR: no se pudo resolver $2 — el realm '$REALM' esta aprovisionado a medias." >&2
+    echo "  Revisa la salida anterior; si Keycloak se reinicio, vuelve a ejecutar este script." >&2
+    exit 1
+  fi
+}
 
 ${blocks.join('\n\n')}
 

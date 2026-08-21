@@ -37,6 +37,27 @@ access:
 - Permisos en formato `recurso:accion` (`product:write`); roles en kebab-case.
 - Principio de mínimo privilegio: la skill `/keel-validate` revisa que ningún rol acumule permisos que no use.
 
+## Alcance por recurso (`authentication.scoping`)
+
+`roles`, `permissions` y `scopes` son **globales**: quien pasa la regla de acceso, pasa para **todos** los recursos. Un servicio multi-inquilino necesita además acotar al recurso concreto, y eso no cabe en `access` — una regla de acceso decide si puedes ejecutar la operación, no sobre qué filas.
+
+```yaml
+authentication:
+  protocol: oidc
+  scoping:
+    claim: applications          # el claim del token con los recursos que alcanza el titular
+    over: Application.code       # qué identifica al recurso acotado (Entidad.campo de domain)
+    error: APPLICATION_FORBIDDEN # el code del rechazo: es contrato público
+    exemptRoles: [catalog-admin] # roles transversales, que NO se acotan
+```
+
+- `over` apunta a una entidad y un campo **que existen en `domain`**, y es el dato que las operaciones acotadas reciben.
+- `error` es un `code` que alguna operación tiene que declarar en sus `errors` (con su `403` y su `when`): ahí es donde vive el contrato. Declarar el alcance sin su error es un **error de validación**.
+- `exemptRoles` se enumera uno a uno. La exención es la parte peligrosa —un rol exento alcanza cualquier recurso— y no puede quedar implícita.
+- **Sin este bloque**, un 403 declarado sobre una operación protegida por rol describe una discriminación que nada evalúa: `keel validate` lo avisa, el generador emite el código igual, y el servidor acaba sirviendo a cualquier titular del rol los recursos de todos los inquilinos.
+- Qué recurso alcanza cada usuario **de prueba** no es del diseño: el generador siembra el proveedor de identidad con un valor convencional y lo publica para el arnés (en keel-spring, `AUTH_SCOPED_RESOURCE` de `infra/test-credentials.env`).
+- La comprobación en sí se escribe como `rule` en cada operación acotada — el DSL declara de dónde sale el alcance, no el algoritmo que lo aplica.
+
 ## Clientes máquina (M2M)
 
 Cuando otros servidores consumen endpoints del servicio (capa `api` con `audience: services` o `both`), la seguridad se modela con tres piezas:

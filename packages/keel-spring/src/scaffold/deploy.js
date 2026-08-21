@@ -625,7 +625,12 @@ function realmExport(spec) {
       enabled: true,
       publicClient: true,
       directAccessGrantsEnabled: true,
-      standardFlowEnabled: true
+      standardFlowEnabled: true,
+      // El mapper del claim de alcance por recurso, en paridad con el que
+      // `infra/init-keycloak.sh` crea sobre este mismo cliente. Sin él, el realm importado
+      // tiene los atributos de usuario pero ningún token los lleva, y la prueba manual del
+      // diseñador ve un 403 que la suite de integración no ve.
+      ...(spec.scoping ? { protocolMappers: [scopingMapper(spec.scoping.claim)] } : {})
     },
     ...[...spec.serviceClients, ...spec.m2mClients].map((client) => ({
       clientId: client.name,
@@ -658,7 +663,11 @@ function realmExport(spec) {
       firstName: 'Test',
       lastName: 'User',
       credentials: [{ type: 'password', value: spec.password, temporary: false }],
-      realmRoles: user.roles
+      realmRoles: user.roles,
+      // Los usuarios exentos del alcance NO llevan atributos, y eso es lo que hace la
+      // exención observable: si todos lo llevaran, el escenario que prueba que un rol
+      // transversal alcanza cualquier recurso no probaría nada.
+      ...(Object.keys(user.attributes ?? {}).length > 0 ? { attributes: user.attributes } : {})
     })),
     ...(clientScopes.length > 0 ? { clientScopes } : {}),
     clients
@@ -717,6 +726,28 @@ function audienceScope(name, audience) {
         config: { 'included.custom.audience': audience, 'access.token.claim': 'true' }
       }
     ]
+  };
+}
+
+/**
+ * El mapper que proyecta el atributo de usuario del alcance por recurso al claim del token.
+ * Es el gemelo declarativo del `create protocol-mappers/models` que emite
+ * `infra/init-keycloak.sh`: mismo nombre, mismo tipo y misma configuración, porque los dos
+ * describen el mismo realm y un test de paridad los compara.
+ */
+function scopingMapper(claim) {
+  return {
+    name: `${claim}-mapper`,
+    protocol: 'openid-connect',
+    protocolMapper: 'oidc-usermodel-attribute-mapper',
+    config: {
+      'user.attribute': claim,
+      'claim.name': claim,
+      'jsonType.label': 'String',
+      multivalued: 'true',
+      'access.token.claim': 'true',
+      'id.token.claim': 'true'
+    }
   };
 }
 

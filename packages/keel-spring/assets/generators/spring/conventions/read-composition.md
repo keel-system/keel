@@ -10,6 +10,18 @@ Esta convención fija ese cómo. Es el único documento que gobierna la composic
 respuesta de lectura; para reglas de negocio que cruzan agregados, ver `domain-services.md`,
 y para datos de **otro servicio**, `dependencies.md`.
 
+**El coste por elemento no es exclusivo de las lecturas**, y por eso la regla operativa de
+más abajo se enuncia sobre *cualquier* colección. El caso simétrico es un **command con
+entrada por lotes**: un input con una lista acotada por `maxItems` cuyo handler consulta algo
+una vez por elemento. Ahí `build` no ha generado ningún resolver —los resolvers salen de un
+`embed` en la **salida**, y aquí la lista está en la entrada—, así que el puerto solo trae el
+finder de un elemento y el camino de menor resistencia es el bucle. Ocurrió tal cual: un
+handler comprobando la lista de supresión con un `findByApplicationIdAndAddress(...)` por
+destinatario, hasta 20 por petición. **Si al puerto le falta el método de lote, se añade** —
+firma en el puerto de dominio y su implementación en el adaptador. Eso está dentro de la
+frontera del agente de código; el pase de calidad, que tiene prohibido cambiar firmas, solo
+puede reportarlo, y por eso llega tarde.
+
 ## La regla por defecto: por lote
 
 `build` genera un `<Raíz>RefResolver` en `application/support/` por cada agregado embebido y
@@ -48,8 +60,9 @@ en verde, así que ningún gate te va a avisar. La sobrecarga `resolve(UUID)` de
 para operaciones que devuelven **un** elemento (`getProduct`), nunca para usarse dentro de un
 stream sobre una colección.
 
-Regla operativa: **un `findById` o un `resolve(UUID)` dentro de un `stream`/bucle sobre una
-colección es un defecto**, igual que lo sería una consulta dentro de un `for`.
+Regla operativa: **una consulta dentro de un `stream`/bucle sobre una colección es un
+defecto** — un `findById`, un `resolve(UUID)` o cualquier finder del puerto—, y da igual que
+la colección sea la página que se devuelve o la lista que llegó en el input.
 
 Y no inyectes el repositorio del agregado ajeno para esto. El resolver ya encapsula la
 consulta por lote y la proyección con el mapper correcto; un `BrandRepository` en el handler
@@ -133,6 +146,8 @@ respuesta, y es más simple, reutiliza los mappers y se beneficia de la caché.
 - [ ] Toda referencia embebida se resuelve con el `<X>RefResolver` que build inyecta.
 - [ ] Ninguna llamada a repositorio ni a `resolve(UUID)` dentro de un `stream`/bucle sobre una colección.
 - [ ] El número de consultas de una operación de listado **no depende** del tamaño de la página.
+- [ ] En un command con **entrada por lotes**, el número de consultas no depende del tamaño de
+      la lista: si hizo falta un método de lote en el puerto, está añadido con su adaptador.
 - [ ] Si se filtra u ordena por un campo del agregado embebido, hay un adaptador de lectura con
       JPQL proyectado — y el repositorio del agregado quedó intacto.
 - [ ] Ningún `@ManyToOne`/`@OneToMany` entre dos raíces de agregado.
