@@ -4,6 +4,7 @@ import YAML from 'yaml';
 import pc from 'picocolors';
 import { MANIFEST_FILE, resolveServiceDir } from '../lib/loader.js';
 import { validateService } from '../lib/validate-service.js';
+import { DECISIONS_FILE } from '../lib/decisions.js';
 
 function printSchemaErrors(file, ajvErrors) {
   console.error(pc.bold(pc.red(`✘ ${file}`)));
@@ -58,9 +59,8 @@ export function validate(inputPath, options = {}) {
     return;
   }
 
-  const { manifest, layers, loadErrors, schemaErrors, crossRefErrors, warnings, pending } = validateService(dir, {
-    wip
-  });
+  const { manifest, layers, loadErrors, schemaErrors, crossRefErrors, warnings, pending, obligations } =
+    validateService(dir, { wip });
 
   if (loadErrors.length > 0 && !manifest) {
     for (const message of loadErrors) console.error(pc.red(`✘ ${message}`));
@@ -93,19 +93,62 @@ export function validate(inputPath, options = {}) {
     return;
   }
 
+  for (const entry of obligations.orphans) {
+    console.warn(
+      `${pc.yellow('⚠')} ${DECISIONS_FILE}: '${entry.id}' sobre '${entry.scope}' ya no la levanta el diseño — ` +
+        'la decisión describe un hueco que no existe; bórrala'
+    );
+  }
+
+  // Las obligaciones se reportan DESPUÉS de las referencias cruzadas y antes del veredicto: no
+  // son un error del diseño sino una decisión que nadie tomó, y listarlas junto a las referencias
+  // rotas confundiría las dos cosas. Bloquean igual, y esa es justo la diferencia con el aviso
+  // que este comando lleva imprimiendo bajo un «✔ Servicio válido».
+  if (!wip) {
+    const sinCerrar = [...obligations.open, ...obligations.stale];
+    if (obligations.errors.length > 0) {
+      console.error(pc.bold(pc.red(`✘ ${DECISIONS_FILE} — ${obligations.errors.length} error(es):`)));
+      for (const message of obligations.errors) console.error(`  ${pc.red('•')} ${message}`);
+    }
+    if (sinCerrar.length > 0) {
+      console.error(pc.bold(pc.red(`✘ Decisiones de diseño sin cerrar — ${sinCerrar.length}:`)));
+      for (const item of sinCerrar) {
+        const caducada = item.since ? pc.dim(` (aceptada en v${item.since}: el diseño cambió, reafírmala)`) : '';
+        console.error(`  ${pc.red('•')} ${pc.cyan(item.id)} ${item.scope}: ${item.message}${caducada}`);
+      }
+      console.error(
+        pc.dim(
+          `  Ciérralas en el diseño, o acéptalas por escrito en ${DECISIONS_FILE} con su motivo — ver docs/design-obligations.md`
+        )
+      );
+    }
+    if (obligations.errors.length > 0 || sinCerrar.length > 0) {
+      process.exitCode = 1;
+      return;
+    }
+  }
+
   const name = manifest?.service?.name ?? '(sin nombre)';
   const version = manifest?.service?.version ?? '?';
   const layerList = Object.keys(layers).join(', ');
+  const aceptadas =
+    obligations.accepted.length > 0
+      ? pc.dim(` — ${obligations.accepted.length} decisión(es) aceptada(s) en ${DECISIONS_FILE}`)
+      : '';
   if (wip && pending.length > 0) {
     console.log(
       pc.bold(pc.yellow('✔ Diseño en progreso')) +
         pc.dim(` — ${name} v${version}: ${pending.length} pendiente(s) de diseño`)
     );
     console.log(pc.dim(`  Capas: ${layerList}`));
+    const sinCerrar = obligations.open.length + obligations.stale.length;
+    if (sinCerrar > 0) console.log(pc.dim(`  Decisiones de diseño sin cerrar: ${sinCerrar}`));
     console.log(pc.dim('  Antes de generar debe pasar en verde: keel validate (sin --wip).'));
     return;
   }
-  console.log(pc.bold(pc.green('✔ Servicio válido')) + pc.dim(` — ${name} v${version} (DSL keel ${manifest?.keel})`));
+  console.log(
+    pc.bold(pc.green('✔ Servicio válido')) + pc.dim(` — ${name} v${version} (DSL keel ${manifest?.keel})`) + aceptadas
+  );
   console.log(pc.dim(`  Capas: ${layerList}`));
   console.log(pc.dim('Recuerda la capa semántica: /keel-validate en tu agente revisa la calidad del diseño.'));
 }

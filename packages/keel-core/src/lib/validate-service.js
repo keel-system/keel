@@ -4,6 +4,7 @@ import Ajv2020Module from 'ajv/dist/2020.js';
 import { LAYERS, schemaPathFor } from './assets.js';
 import { MANIFEST_FILE, loadService } from './loader.js';
 import { checkCrossRefs } from './crossrefs.js';
+import { loadDecisions, resolveObligations } from './decisions.js';
 
 const Ajv2020 = Ajv2020Module.default ?? Ajv2020Module;
 
@@ -80,8 +81,15 @@ function readScenarios(dir) {
  *     schemaErrors,      // [{ file, errors: <errores Ajv> }]
  *     crossRefErrors,    // strings (solo si schemas pasan)
  *     warnings,          // strings
- *     pending            // strings: plantillas/placeholders (+ pendientes cross-ref en wip)
+ *     pending,           // strings: plantillas/placeholders (+ pendientes cross-ref en wip)
+ *     obligations        // { open, accepted, stale, orphans, errors } — decisiones con id
  *   }
+ *
+ * Las obligaciones son el canal que separa «esto está roto» de «esto está sin decidir». Una
+ * abierta bloquea igual que un error, porque su desenlace es el mismo —alguien decidirá por el
+ * diseño, más tarde y sin dejar rastro— y porque cerrarla es barato: declararla en el DSL, o
+ * aceptarla por escrito en decisions.yaml. Con `wip` no bloquean: a mitad de diseño lo normal es
+ * tenerlas todas abiertas.
  */
 export function validateService(dir, { wip = false } = {}) {
   const result = {
@@ -92,7 +100,8 @@ export function validateService(dir, { wip = false } = {}) {
     schemaErrors: [],
     crossRefErrors: [],
     warnings: [],
-    pending: []
+    pending: [],
+    obligations: { open: [], accepted: [], stale: [], orphans: [], errors: [] }
   };
 
   const { manifest, layers, errors: loadErrors } = loadService(dir);
@@ -140,7 +149,12 @@ export function validateService(dir, { wip = false } = {}) {
   // En modo wip las capas en plantilla se tratan como ausentes: sus referencias quedan pendientes, no rotas.
   const effectiveLayers = { ...layers };
   for (const layer of templateLayers) delete effectiveLayers[layer];
-  const { errors, warnings, pending: crossRefPending } = checkCrossRefs({
+  const {
+    errors,
+    warnings,
+    pending: crossRefPending,
+    obligations: raised
+  } = checkCrossRefs({
     layers: effectiveLayers,
     wip,
     scenarios: readScenarios(dir)
@@ -149,6 +163,16 @@ export function validateService(dir, { wip = false } = {}) {
   result.warnings = warnings;
   result.pending.push(...crossRefPending);
 
-  result.ok = errors.length === 0;
+  // Capa 3: las decisiones que el diseño abrió, cruzadas con el registro que las acepta.
+  const { doc, errors: decisionErrors } = loadDecisions(dir);
+  result.obligations = resolveObligations(raised, doc, manifest?.service?.version);
+  result.obligations.errors.unshift(...decisionErrors);
+
+  const obligationsBlock =
+    result.obligations.open.length > 0 ||
+    result.obligations.stale.length > 0 ||
+    result.obligations.errors.length > 0;
+
+  result.ok = errors.length === 0 && (wip || !obligationsBlock);
   return result;
 }

@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schema/2.0/decisions.schema.json",
+  "title": "Keel Design Decisions",
+  "description": "Las obligaciones de diseño que este servicio deja abiertas a sabiendas, y la cobertura del análisis de huecos que las buscó (decisions.yaml, junto a las capas del servicio). No forma parte del DSL: no describe lo que el servicio hace, sino qué se decidió no declarar y por qué. Es el «aceptado» de gap-analysis.md escrito en disco en vez de en la conversación — una obligación cerrada EN el DSL no necesita entrada aquí.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "decisions": {
+      "type": "array",
+      "description": "Una entrada por obligación aceptada. Su presencia no la esconde: `keel validate` las sigue listando, con su motivo.",
+      "items": {
+        "type": "object",
+        "required": ["id", "scope", "reason", "since"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^OBL-[A-Z0-9-]+$",
+            "description": "Id del catálogo de obligaciones (docs/design-obligations.md). Uno que el catálogo no tenga es un error: sin entrada no hay doc que leer ni nada que contar."
+          },
+          "scope": {
+            "type": "string",
+            "minLength": 1,
+            "description": "A qué parte del diseño aplica, tal como la nombra la obligación (ej. 'use-cases', 'use-cases.createOrder')."
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 20,
+            "description": "Por qué se acepta dejarla sin declarar. Es lo único que distingue una decisión de un olvido, así que una frase que no diga nada no vale de nada."
+          },
+          "since": {
+            "type": "string",
+            "pattern": "^\\d+\\.\\d+\\.\\d+$",
+            "description": "service.version en el que se tomó la decisión. Cuando el diseño cambia de minor o de major, la aceptación caduca y hay que reafirmarla: la asunción que la sostenía puede haber dejado de ser cierta."
+          }
+        }
+      }
+    },
+    "coverage": {
+      "type": "array",
+      "description": "Qué clases del análisis de huecos se recorrieron y sobre qué unidades. Sin esta tabla, una clase que se recorrió y salió limpia es indistinguible de una que nadie miró.",
+      "items": {
+        "type": "object",
+        "required": ["gapClass", "units", "result"],
+        "additionalProperties": false,
+        "properties": {
+          "gapClass": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 17,
+            "description": "Clase de gap-analysis.md (1..17)."
+          },
+          "units": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "minLength": 1 },
+            "description": "Unidades del diseño sobre las que se aplicó la clase (entidades, operaciones, dependencias)."
+          },
+          "result": {
+            "enum": ["clean", "findings"],
+            "description": "clean: se recorrió y no encontró nada. findings: encontró, y lo encontrado está en decisions o cerrado en el DSL."
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,20 @@
+# Obligaciones de diseño que esta fixture deja abiertas a sabiendas.
+# Ver docs/design-obligations.md — el «aceptado» del análisis de huecos, por escrito.
+decisions:
+  - id: OBL-IDEM-RACE-CODE
+    scope: use-cases
+    reason: >
+      El contrato público de uploadAsset para la carrera de la clave es el canónico
+      409 IDEMPOTENCY_KEY_IN_PROGRESS. No hay un code de dominio que lo describa mejor.
+    since: 1.0.0
+  - id: OBL-IDEM-REUSE-CODE
+    scope: use-cases
+    reason: >
+      Misma clave con otro cuerpo devuelve el canónico 409 IDEMPOTENCY_KEY_REUSED.
+      El bucket no distingue ese caso de ningún otro conflicto de negocio.
+    since: 1.0.0
+
+coverage:
+  - gapClass: 4
+    units: [uploadAsset]
+    result: findings

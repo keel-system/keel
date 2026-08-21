@@ -1,0 +1,19 @@
+# Obligaciones de diseño que esta fixture deja abiertas a sabiendas.
+# Ver docs/design-obligations.md — el «aceptado» del análisis de huecos, por escrito.
+decisions:
+  - id: OBL-IDEM-RACE-CODE
+    scope: use-cases
+    reason: >
+      La carrera de la clave de createProduct se contesta con el canónico
+      409 IDEMPOTENCY_KEY_IN_PROGRESS, que es el contrato público de este servicio.
+    since: 1.0.0
+  - id: OBL-IDEM-REUSE-CODE
+    scope: use-cases
+    reason: >
+      Misma clave con otro cuerpo se contesta con el canónico 409 IDEMPOTENCY_KEY_REUSED.
+    since: 1.0.0
+
+coverage:
+  - gapClass: 4
+    units: [createProduct]
+    result: findings

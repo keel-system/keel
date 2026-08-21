@@ -1,0 +1,30 @@
+# Obligaciones de diseño que esta fixture deja abiertas a sabiendas.
+# Ver docs/design-obligations.md — el «aceptado» del análisis de huecos, por escrito.
+#
+# Las tres son las que la corrida en vivo del outbox reportó como designGaps 1, 3 y 4
+# (info/INFORME-CORRIDA-OUTBOX.md): el comportamiento era correcto y lo que faltaba era
+# escribir el contrato. Aquí se escribe — aceptando el canónico, que es lo que el servidor
+# ya devolvía.
+decisions:
+  - id: OBL-IDEM-RACE-CODE
+    scope: use-cases
+    reason: >
+      La carrera de la clave de createReservation se contesta con el canónico
+      409 IDEMPOTENCY_KEY_IN_PROGRESS, que es lo que afirma FL-RES-001-C.
+    since: 1.0.0
+  - id: OBL-IDEM-REUSE-CODE
+    scope: use-cases
+    reason: >
+      Misma clave con otro cuerpo se contesta con el canónico 409 IDEMPOTENCY_KEY_REUSED.
+    since: 1.0.0
+  - id: OBL-CONCURRENCY-CODE
+    scope: persistence
+    reason: >
+      El conflicto de escritura concurrente se contesta con el canónico
+      409 CONCURRENT_MODIFICATION; ninguna operación necesita un code propio para él.
+    since: 1.0.0
+
+coverage:
+  - gapClass: 4
+    units: [createReservation, cancelReservation, noteStockCount]
+    result: findings

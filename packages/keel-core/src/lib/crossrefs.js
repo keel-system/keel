@@ -1,4 +1,5 @@
 import { FRAMEWORK_ERRORS, overrideFor } from './framework-errors.js';
+import { obligationFor } from './obligations.js';
 
 const BASE_TYPES = new Set(['string', 'text', 'int', 'long', 'decimal', 'boolean', 'uuid', 'date', 'timestamp', 'json', 'file']);
 
@@ -27,6 +28,17 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
   const errors = [];
   const warnings = [];
   const pending = [];
+  const obligations = [];
+
+  // Una obligación es un aviso con id: una decisión que el diseño abrió al declarar algo y que
+  // nadie echa de menos si no se cierra. El id es lo que permite exentarla por escrito
+  // (decisions.yaml), contarla en el catálogo de diseños y seguirle la pista entre corridas —
+  // cosas que una cadena suelta no permite. Van por un canal propio y no por `warnings` porque
+  // su destino es otro: un aviso se lee, una obligación se cierra.
+  const obligation = (id, scope, message) => {
+    if (!obligationFor(id)) throw new Error(`crossrefs emite la obligación '${id}', que no está en el catálogo`);
+    obligations.push({ id, scope, message });
+  };
 
   const domain = layers['domain'] ?? {};
   const useCases = layers['use-cases'] ?? {};
@@ -2307,17 +2319,22 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
       const declared = Object.values(useCases.operations ?? {}).flatMap((op) =>
         (op.errors ?? []).map((error) => ({ code: error.code, http: error.http }))
       );
-      const sinNombrar = [FRAMEWORK_ERRORS.idempotencyRace, FRAMEWORK_ERRORS.idempotencyReuse].filter(
-        (entry) => !overrideFor(declared, entry)
-      );
-      if (sinNombrar.length > 0) {
-        warnings.push(
-          `use-cases: ${idempotentOps.join(', ')} declara${idempotentOps.length > 1 ? 'n' : ''} idempotency y el diseño no ` +
-            `nombra ${sinNombrar.length > 1 ? 'sus desenlaces de conflicto' : 'uno de sus desenlaces de conflicto'}. ` +
-            `Se usarán los códigos canónicos ${sinNombrar.map((entry) => `${entry.http} ${entry.code}`).join(' y ')} ` +
-            `(${sinNombrar.map((entry) => entry.when.split(/[.:]/)[0]).join('; ')}). ` +
-            `Son contrato público: los ven los integradores y los afirman los escenarios. Si este servicio usa otros codes, ` +
-            `decláralos en errors con el mismo status — ver docs/framework-errors.md`
+      // Un desenlace por obligación, y no los dos en una: son dos contratos públicos distintos y
+      // un diseño puede tener motivos para cerrar uno y aceptar el otro. Agruparlos obligaría a
+      // decidir los dos con el mismo argumento.
+      const desenlaces = [
+        { id: 'OBL-IDEM-RACE-CODE', entry: FRAMEWORK_ERRORS.idempotencyRace },
+        { id: 'OBL-IDEM-REUSE-CODE', entry: FRAMEWORK_ERRORS.idempotencyReuse }
+      ];
+      for (const { id, entry } of desenlaces) {
+        if (overrideFor(declared, entry)) continue;
+        obligation(
+          id,
+          'use-cases',
+          `${idempotentOps.join(', ')} declara${idempotentOps.length > 1 ? 'n' : ''} idempotency y el diseño no nombra ` +
+            `este desenlace de conflicto: ${entry.when.split(/[.:]/)[0]}. Se usará el código canónico ` +
+            `'${entry.http} ${entry.code}'. Es contrato público: lo ven los integradores y lo afirman los escenarios. ` +
+            `Si este servicio usa otro code, decláralo en errors con el mismo status — ver docs/framework-errors.md`
         );
       }
     }
@@ -2339,8 +2356,10 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
       (op.errors ?? []).map((error) => ({ code: error.code, http: error.http }))
     );
     if (!overrideFor(declared, FRAMEWORK_ERRORS.concurrency)) {
-      warnings.push(
-        `persistence: consistency.optimisticLocking: dos escrituras concurrentes sobre la misma raíz devuelven un ` +
+      obligation(
+        'OBL-CONCURRENCY-CODE',
+        'persistence',
+        `consistency.optimisticLocking: dos escrituras concurrentes sobre la misma raíz devuelven un ` +
           `${FRAMEWORK_ERRORS.concurrency.http} al cliente y ninguna operación nombra ese error. Se usará el código canónico ` +
           `'${FRAMEWORK_ERRORS.concurrency.code}'. Es contrato público: si este servicio usa otro, decláralo en los errors de ` +
           `la operación donde el conflicto se observe, con status ${FRAMEWORK_ERRORS.concurrency.http} — ver docs/framework-errors.md`
@@ -2642,5 +2661,5 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
     }
   }
 
-  return { errors, warnings, pending };
+  return { errors, warnings, pending, obligations };
 }

@@ -41,6 +41,10 @@ export { checkCrossRefs } from './lib/crossrefs.js';
 // Los códigos que pone el framework cuando el diseño no nombra el conflicto de un mecanismo.
 // Un generador los toma de aquí: escritos a mano en cada uno, cada generación elige el suyo.
 export { FRAMEWORK_ERRORS, fixedFrameworkErrors, overrideFor } from './lib/framework-errors.js';
+// Las decisiones que el diseño abre al declarar algo. Un generador las lee para poder decir
+// «esto es un hueco de diseño, y tiene id» en vez de reportarlo como frontera suya.
+export { OBLIGATIONS, obligationFor, obligationIds } from './lib/obligations.js';
+export { DECISIONS_FILE, loadDecisions, resolveObligations } from './lib/decisions.js';
 export { copyTree, diffTree } from './lib/copy.js';
 // Harnesses de agente: un generador no debe saber si escribe .claude/ o .opencode/,
 // solo pedir la proyección de sus skills y sus agentes.

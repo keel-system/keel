@@ -3909,47 +3909,58 @@ const conflictLayers = (errors = []) => ({
   api: { endpoints: { placeOrder: { method: 'POST', path: '/orders' } } }
 });
 
-const conflictWarnings = (layers) =>
-  run(layers).warnings.filter((warning) => /framework-errors\.md/.test(warning));
+// El canal cambió: estos conflictos ya no son un aviso que se lee sino una OBLIGACIÓN que se
+// cierra —con id, con exención por escrito en decisions.yaml y bloqueando mientras siga abierta—.
+// Lo que se mide es lo mismo que antes: qué se le dice al diseñador, y cuándo se calla.
+const conflictObligations = (layers) =>
+  run(layers).obligations.filter((item) => /framework-errors\.md/.test(item.message));
 
-test('idempotency sin nombrar sus desenlaces avisa con los códigos canónicos', () => {
-  const found = conflictWarnings(conflictLayers());
-  assert.equal(found.length, 1, found.join('\n'));
-  assert.match(found[0], /IDEMPOTENCY_KEY_IN_PROGRESS/);
-  assert.match(found[0], /IDEMPOTENCY_KEY_REUSED/);
-  // El aviso nombra la operación: con varias idempotentes hay que saber cuál falta.
-  assert.match(found[0], /placeOrder/);
+const conflictIds = (layers) => conflictObligations(layers).map((item) => item.id);
+
+test('idempotency sin nombrar sus desenlaces levanta una obligación por desenlace', () => {
+  const found = conflictObligations(conflictLayers());
+  // Dos, y no una que enumere los dos: son dos contratos públicos distintos, y un diseño puede
+  // tener motivos para cerrar uno y aceptar el otro.
+  assert.deepEqual(
+    found.map((item) => item.id),
+    ['OBL-IDEM-RACE-CODE', 'OBL-IDEM-REUSE-CODE']
+  );
+  assert.match(found[0].message, /IDEMPOTENCY_KEY_IN_PROGRESS/);
+  assert.match(found[1].message, /IDEMPOTENCY_KEY_REUSED/);
+  // Cada una nombra la operación: con varias idempotentes hay que saber cuál falta.
+  for (const item of found) assert.match(item.message, /placeOrder/);
 });
 
-test('declarar uno de los dos deja de avisar de ese, no de los dos', () => {
-  const found = conflictWarnings(
+test('declarar uno de los dos cierra esa obligación, no las dos', () => {
+  const found = conflictObligations(
     conflictLayers([{ code: 'ORDER_KEY_IN_PROGRESS', when: 'Otra petición con la misma clave.', http: 409 }])
   );
-  assert.equal(found.length, 1);
-  // El declarado desaparece del aviso; el que sigue sin nombrar, no. Un aviso que
-  // enumerase los dos después de declarar uno enseñaría a ignorarlo.
-  assert.ok(!found[0].includes('IDEMPOTENCY_KEY_IN_PROGRESS'), found[0]);
-  assert.match(found[0], /IDEMPOTENCY_KEY_REUSED/);
+  assert.deepEqual(
+    found.map((item) => item.id),
+    ['OBL-IDEM-REUSE-CODE']
+  );
+  assert.ok(!found[0].message.includes('IDEMPOTENCY_KEY_IN_PROGRESS'), found[0].message);
 });
 
-test('nombrar los dos desenlaces silencia el aviso', () => {
-  const found = conflictWarnings(
-    conflictLayers([
-      { code: 'ORDER_KEY_IN_PROGRESS', when: 'Otra petición con la misma clave.', http: 409 },
-      { code: 'ORDER_KEY_REUSED', when: 'La misma clave con otro contenido.', http: 409 }
-    ])
+test('nombrar los dos desenlaces cierra las dos obligaciones', () => {
+  assert.deepEqual(
+    conflictIds(
+      conflictLayers([
+        { code: 'ORDER_KEY_IN_PROGRESS', when: 'Otra petición con la misma clave.', http: 409 },
+        { code: 'ORDER_KEY_REUSED', when: 'La misma clave con otro contenido.', http: 409 }
+      ])
+    ),
+    []
   );
-  assert.deepEqual(found, []);
 });
 
 test('un code de la familia con otro status no cuenta como declarado', () => {
   // El status es parte del contrato: el generador solo sustituye el canónico por uno que
-  // responda lo mismo, así que aquí el aviso tiene que seguir.
-  const found = conflictWarnings(
+  // responda lo mismo, así que aquí la obligación tiene que seguir abierta.
+  const found = conflictObligations(
     conflictLayers([{ code: 'ORDER_KEY_IN_PROGRESS', when: 'Otra petición con la misma clave.', http: 422 }])
   );
-  assert.equal(found.length, 1);
-  assert.match(found[0], /IDEMPOTENCY_KEY_IN_PROGRESS/);
+  assert.ok(found.some((item) => item.id === 'OBL-IDEM-RACE-CODE'), JSON.stringify(found));
 });
 
 const lockingLayers = (optimisticLocking, errors = []) => ({
@@ -3968,16 +3979,17 @@ const lockingLayers = (optimisticLocking, errors = []) => ({
   persistence: { entities: { Order: {} }, consistency: { optimisticLocking } }
 });
 
-test('optimisticLocking declarado sin error de concurrencia avisa con el canónico', () => {
+test('optimisticLocking declarado sin error de concurrencia levanta su obligación', () => {
   for (const policy of ['all', 'declared']) {
-    const found = conflictWarnings(lockingLayers(policy));
-    assert.equal(found.length, 1, `${policy}: ${found.join('\n')}`);
-    assert.match(found[0], /CONCURRENT_MODIFICATION/);
+    const found = conflictObligations(lockingLayers(policy));
+    assert.equal(found.length, 1, `${policy}: ${JSON.stringify(found)}`);
+    assert.equal(found[0].id, 'OBL-CONCURRENCY-CODE');
+    assert.match(found[0].message, /CONCURRENT_MODIFICATION/);
   }
 });
 
 test('con optimisticLocking none no hay conflicto que nombrar', () => {
-  assert.deepEqual(conflictWarnings(lockingLayers('none')), []);
+  assert.deepEqual(conflictIds(lockingLayers('none')), []);
 });
 
 test('sin pronunciarse sobre la concurrencia no se avisa, aunque el default sea all', () => {
@@ -3986,27 +3998,30 @@ test('sin pronunciarse sobre la concurrencia no se avisa, aunque el default sea 
   // el contrato exista igual lo garantiza el catálogo, no este recordatorio.
   const layers = lockingLayers('all');
   delete layers.persistence.consistency;
-  assert.deepEqual(conflictWarnings(layers), []);
+  assert.deepEqual(conflictIds(layers), []);
 });
 
-test('cualquier code de la familia de concurrencia silencia el aviso, con el prefijo del dominio', () => {
-  const found = conflictWarnings(
-    lockingLayers('all', [{ code: 'ORDER_VERSION_CONFLICT', when: 'Otra operación modificó el pedido.', http: 409 }])
+test('cualquier code de la familia de concurrencia cierra la obligación, con el prefijo del dominio', () => {
+  assert.deepEqual(
+    conflictIds(
+      lockingLayers('all', [{ code: 'ORDER_VERSION_CONFLICT', when: 'Otra operación modificó el pedido.', http: 409 }])
+    ),
+    []
   );
-  assert.deepEqual(found, []);
 });
 
 test('dos candidatos de la misma familia no cuentan: ahí no se adivina', () => {
-  // Con dos, el generador tampoco elige — usa el canónico—, así que el aviso tiene que
-  // seguir diciendo cuál va a salir.
-  const found = conflictWarnings(
+  // Con dos, el generador tampoco elige — usa el canónico—, así que la obligación tiene que
+  // seguir abierta diciendo cuál va a salir.
+  const found = conflictObligations(
     lockingLayers('all', [
       { code: 'ORDER_VERSION_CONFLICT', when: 'Otra operación modificó el pedido.', http: 409 },
       { code: 'LINE_CONCURRENT_UPDATE', when: 'Otra operación modificó la línea.', http: 409 }
     ])
   );
   assert.equal(found.length, 1);
-  assert.match(found[0], /CONCURRENT_MODIFICATION/);
+  assert.equal(found[0].id, 'OBL-CONCURRENCY-CODE');
+  assert.match(found[0].message, /CONCURRENT_MODIFICATION/);
 });
 
 // --- exposedAs: el dato ajeno que además viaja en la respuesta ---
