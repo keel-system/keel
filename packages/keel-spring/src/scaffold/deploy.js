@@ -643,6 +643,12 @@ function realmExport(spec) {
     // Sesiones largas: una prueba manual no debería interrumpirse por un token
     // caducado a los cinco minutos.
     accessTokenLifespan: 1800,
+    // El equivalente declarativo del `update users/profile -s unmanagedAttributePolicy`
+    // que emite `infra/init-keycloak.sh`. Va aquí por PARIDAD: sin él, el realm que se
+    // importa en `deploy/` descarta en silencio cualquier atributo de usuario que sí
+    // persiste en el realm de `infra/`, y la prueba manual del diseñador contradice a la
+    // suite de integración por una diferencia que no está escrita en ninguna parte.
+    components: { 'org.keycloak.userprofile.UserProfileProvider': [userProfileComponent()] },
     roles: { realm: spec.roles.map((name) => ({ name })) },
     users: spec.users.map((user) => ({
       username: user.username,
@@ -659,6 +665,39 @@ function realmExport(spec) {
   };
 
   return `${JSON.stringify(realm, null, 2)}\n`;
+}
+
+/**
+ * El User Profile del realm, en el único sitio donde el formato de import lo admite:
+ * un componente `declarative-user-profile` cuya configuración es un STRING con el JSON
+ * del `UPConfig` dentro. No hay campo `unmanagedAttributePolicy` en la raíz del realm.
+ *
+ * Los cuatro atributos base van explícitos porque este componente SUSTITUYE al perfil
+ * por defecto: declararlo con solo la política dejaría el realm sin `username` ni
+ * `email` gestionados, y ahí ya no se puede crear un usuario.
+ *
+ * `ENABLED` (y no `ADMIN_EDIT`) porque el token de un usuario tiene que poder llevar el
+ * claim que sale del atributo: con las políticas de solo-admin el atributo existe pero
+ * no está disponible fuera de la interfaz de gestión.
+ */
+function userProfileComponent() {
+  const attribute = (name) => ({
+    name,
+    permissions: { view: ['admin', 'user'], edit: ['admin', 'user'] },
+    multivalued: false
+  });
+  return {
+    providerId: 'declarative-user-profile',
+    subComponents: {},
+    config: {
+      'kc.user.profile.config': [
+        JSON.stringify({
+          attributes: ['username', 'email', 'firstName', 'lastName'].map(attribute),
+          unmanagedAttributePolicy: 'ENABLED'
+        })
+      ]
+    }
+  };
 }
 
 /**

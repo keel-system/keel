@@ -76,7 +76,8 @@ function kafkaConfig(model, subs) {
     'org.springframework.kafka.core.ProducerFactory',
     'org.springframework.kafka.listener.DeadLetterPublishingRecoverer',
     'org.springframework.kafka.listener.DefaultErrorHandler',
-    'org.springframework.util.backoff.BackOff'
+    'org.springframework.util.backoff.BackOff',
+    `${subPackage(model, 'domain.errors')}.DomainException`
   ]);
 
   const groups = byDestination(model, 'kafka', subs);
@@ -138,6 +139,14 @@ public class DeadLetterConfig {
                             record.topic(), exception);
                 },
                 retryBackOff());
+
+        // Una violación de regla de negocio NO se reintenta: el mensaje no va a procesarse
+        // mejor dentro de un segundo, así que reintentarlo solo retrasa el descarte, ocupa
+        // el consumidor y —cuando la suscripción declara dead-letter— manda a la DLT algo
+        // que ya se resolvió al primer intento. El reintento existe para el fallo
+        // TRANSITORIO (la base que no responde, el broker que se cae), que en esta
+        // jerarquía es cualquier RuntimeException que no sea DomainException.
+        handler.addNotRetryableExceptions(DomainException.class);
 
         return handler;
     }

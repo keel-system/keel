@@ -215,7 +215,40 @@ export function queueDeliverParts({ destination, bodyFile, base }) {
 /**
  * Kafka entrega por shell y no por argv: `-l` exige el archivo como argumento y
  * las cabeceras son flags repetibles. Se devuelve la línea ya montada.
+ *
+ * OJO con `-l`: significa UN MENSAJE POR LÍNEA del archivo, no «el archivo es un
+ * mensaje». Quien escriba `bodyFile` es responsable de que el cuerpo vaya en una
+ * sola línea; si no, el mismo payload se publica troceado en varios mensajes rotos.
+ * Es lo que distingue esta rama de las otras dos: RabbitMQ manda el cuerpo en base64
+ * dentro del sobre y SNS/SQS manda el archivo entero, y ninguna es sensible a los
+ * saltos de línea.
  */
+/**
+ * ¿El cuerpo tiene que ir en UNA sola línea en el archivo de entrega? Solo con Kafka:
+ * `kcat -l` manda un mensaje por línea. Con RabbitMQ el cuerpo viaja en base64 dentro
+ * del sobre y con SNS/SQS el archivo entero es el mensaje, así que a esos les da igual.
+ *
+ * Vive aquí, y no en el emisor de Java ni en el runner de conformidad, por la misma
+ * razón que los comandos: si cada lado decidiera por su cuenta, `broker-check` probaría
+ * una entrega distinta de la que el generador escribe.
+ */
+export function needsSingleLineBody(brokerId) {
+  return brokerId === 'kafka';
+}
+
+/** El colapso, para el lado JavaScript (runner de conformidad). */
+export function collapseToSingleLine(body) {
+  return body.replace(/[\r\n]+/g, ' ');
+}
+
+/**
+ * El mismo colapso, como EXPRESIÓN Java, para el arnés generado: la cadena Java que se
+ * emite es el patrón que casa el retorno de carro y el salto de línea.
+ */
+export function collapseToSingleLineJava(expression) {
+  return `${expression}.replaceAll("[\\r\\n]+", " ")`;
+}
+
 export function deliverShell({ destination, key, bodyFile, headers = {} }) {
   const flags = Object.entries(headers)
     .map(([name, value]) => ` -H ${shellQuote(`${name}=${value}`)}`)

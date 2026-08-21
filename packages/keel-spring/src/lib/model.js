@@ -2233,7 +2233,37 @@ function relationPayloadFields(opName, payload, entity, { direction, relations: 
   for (const [relName, rel] of Object.entries(entity.relations ?? {})) {
     if (exclude.has(relName)) continue;
     const { kind, backReference } = classifyRelation(payload.entity, rel, internalOf, hasPersistence);
-    if (kind === 'unsupported' || backReference) continue;
+    if (kind === 'unsupported') continue;
+    if (backReference) {
+      // Apuntar al padre no se proyecta como objeto —eso encadenaría hija → raíz → hijas
+      // y devolvería el agregado entero dos veces—, pero SU ID sí es parte del recurso.
+      // Una entidad hija se proyecta de dos formas y las dos pasan por aquí: anidada en el
+      // payload de su raíz, y SUELTA cuando una operación la declara como su `output`
+      // (`output: { entity: <Hija> }`). En el segundo caso, un DTO sin el id del padre no
+      // dice a qué padre pertenece y el consumidor no tiene forma de recomponerlo; en el
+      // primero es una redundancia inofensiva, y es el mismo record en los dos sitios.
+      // No entra en el input: quien crea la hija ya nombra al padre en la ruta.
+      if (direction !== 'output') continue;
+      const parentId = `${relName}Id`;
+      if (exclude.has(parentId)) continue;
+      projected.push(
+        relationField({
+          name: parentId,
+          javaType: 'UUID',
+          imports: ['java.util.UUID'],
+          // `parentId` y no `base`: el mapper no puede derivarlo de la entidad —el dominio
+          // es puro y una hija no guarda un puntero a su raíz, la FK vive en persistencia—,
+          // así que entra como PARÁMETRO del método, igual que un `refDto`. Es lo que hace
+          // que el compilador no deje olvidarlo en vez de dejar un TODO que sale a null.
+          kind: 'parentId',
+          base: 'uuid',
+          parentEntity: rel.entity,
+          required: Boolean(rel.required),
+          description: rel.description
+        })
+      );
+      continue;
+    }
 
     if (kind === 'external') {
       // embed: el diseño pide el objeto anidado en vez del id (p. ej. 'category'
@@ -2289,7 +2319,7 @@ function relationPayloadFields(opName, payload, entity, { direction, relations: 
 
 // Campo de payload derivado de una relación, con la misma forma que los campos
 // resueltos por resolveField (todo render interpola estas propiedades).
-function relationField({ name, javaType, elementJavaType = null, imports = [], kind, base = null, childEntity = null, refEntity = null, list = false, required = false, description = null }) {
+function relationField({ name, javaType, elementJavaType = null, imports = [], kind, base = null, childEntity = null, refEntity = null, parentEntity = null, list = false, required = false, description = null }) {
   return {
     name,
     javaType,
@@ -2301,6 +2331,7 @@ function relationField({ name, javaType, elementJavaType = null, imports = [], k
     bucket: null,
     childEntity,
     refEntity,
+    parentEntity,
     isId: false,
     required,
     unique: false,

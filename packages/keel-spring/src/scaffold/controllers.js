@@ -9,7 +9,7 @@
 // @RestControllerAdvice central en infrastructure/rest.
 
 import { FRAMEWORK_ERRORS } from 'keel-core';
-import { declaredErrorFor } from '../lib/declared-errors.js';
+import { declaredErrorFor, declaredUniquenessErrorFor } from '../lib/declared-errors.js';
 import { javaFile, javaPath, subPackage, javadoc } from './render.js';
 import {
   messageComponents,
@@ -446,7 +446,14 @@ function renderDataIntegrityHandler(model, imports, constantsOut) {
       // Con `raceOnly` el error que toca es el de concurrencia, no el de unicidad: el
       // conflicto no es «ya existe uno así» sino dos escrituras que se pisaron. El
       // override del diseño se sigue respetando, solo que sobre la otra familia.
-      declared: raceOnly ? declaredConcurrencyError(model) : declaredUniquenessError(model, constraint.fields)
+      declared: raceOnly
+        ? declaredConcurrencyError(model)
+        : declaredUniquenessError(
+            model,
+            constraint.entity,
+            constraint.fields,
+            constraints.filter((other) => other.entity === constraint.entity).length === 1
+          )
     };
   });
   for (const { declared } of resolved) {
@@ -515,12 +522,8 @@ function raceOnlyConstraint(model, constraint) {
 
 // La unicidad es el único canónico DERIVADO: su familia depende de los campos de la clave,
 // porque un servicio con varias claves naturales necesita un error por cada una.
-function declaredUniquenessError(model, fields) {
-  return declaredErrorFor(
-    model,
-    FRAMEWORK_ERRORS.uniqueness,
-    FRAMEWORK_ERRORS.uniqueness.familyFor(screamingSnake(fields.join('_')))
-  );
+function declaredUniquenessError(model, entity, fields, soleConstraint) {
+  return declaredUniquenessErrorFor(model, FRAMEWORK_ERRORS.uniqueness, entity, fields, { soleConstraint });
 }
 
 function constraintMapConstant(constraints) {
@@ -722,7 +725,7 @@ ${constants.join('')}
                 .map(error -> error.getField() + " " + error.getDefaultMessage())
                 .toList();
         return new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "Validation Error",
-                "VALIDATION_ERROR", "La petición no supera las validaciones", details);
+                "${FRAMEWORK_ERRORS.validation.code}", "La petición no supera las validaciones", details);
     }
 
     @ResponseStatus(HttpStatus.BAD_REQUEST)
@@ -732,7 +735,7 @@ ${constants.join('')}
                 .map(violation -> violation.getPropertyPath() + " " + violation.getMessage())
                 .toList();
         return new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "Validation Error",
-                "VALIDATION_ERROR", "La petición viola restricciones declaradas", details);
+                "${FRAMEWORK_ERRORS.validation.code}", "La petición viola restricciones declaradas", details);
     }
 
     // ── Errores de framework ─────────────────────────────────────────────────
@@ -740,7 +743,8 @@ ${constants.join('')}
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     @ExceptionHandler({HttpMessageNotReadableException.class, MethodArgumentTypeMismatchException.class})
     public ErrorResponse onMalformedRequest(Exception exception) {
-        return new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "Bad Request", "Petición malformada");
+        return new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "Bad Request",
+                "${FRAMEWORK_ERRORS.validation.code}", "Petición malformada", null);
     }
 
     // Un @RequestParam obligatorio que no viaja en la query lo rechaza Spring
@@ -751,7 +755,8 @@ ${constants.join('')}
     @ExceptionHandler(MissingServletRequestParameterException.class)
     public ErrorResponse onMissingRequestParameter(MissingServletRequestParameterException exception) {
         return new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "Bad Request",
-                "Falta el parámetro '" + exception.getParameterName() + "' en la petición");
+                "${FRAMEWORK_ERRORS.validation.code}",
+                "Falta el parámetro '" + exception.getParameterName() + "' en la petición", null);
     }
 
     @ResponseStatus(HttpStatus.METHOD_NOT_ALLOWED)

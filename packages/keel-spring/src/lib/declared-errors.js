@@ -32,3 +32,50 @@ export function declaredErrorFor(model, entry, family) {
 export function effectiveErrorCode(model, entry, family) {
   return declaredErrorFor(model, entry, family)?.code ?? entry.code;
 }
+
+/**
+ * El error que el diseño declara para la UNICIDAD de una clave natural concreta.
+ *
+ * Se busca SOLO entre los errores de las operaciones que escriben esa entidad, y ese
+ * acotado es el punto entero de esta función. Buscar por nombre en todo el servicio —lo
+ * que se hacía antes— no es que fallara por defecto: fallaba por exceso. La familia sale
+ * de los CAMPOS de la clave, y el diseñador nombra sus errores por la ENTIDAD, así que la
+ * clave natural (application, code) de EmailTemplate casaba con el
+ * APPLICATION_CODE_ALREADY_EXISTS de Application —el error de OTRA entidad— y el
+ * conflicto de una plantilla duplicada salía por el cable con el código de una aplicación
+ * duplicada. Un fallo silencioso y con toda la pinta de estar bien.
+ *
+ * Dos pasadas, de más precisa a menos, y las dos dentro del acotado:
+ *   1. la familia derivada de los campos, por si el diseño nombra el error por ellos;
+ *   2. cualquier error 409 de esa entidad cuyo código diga «ya existe» — y esta SOLO si la
+ *      entidad tiene una única clave con unicidad (`soleConstraint`). Con dos, «el error de
+ *      ya existe de esta entidad» deja de ser una descripción y pasa a ser una apuesta: una
+ *      Product con clave natural `sku` y un `slug` único también acabaría mandando el
+ *      conflicto del slug por el código del sku. Ahí no se elige.
+ * Con cero o con más de uno no se elige: el emisor deja su TODO, que es lo honesto
+ * cuando el diseño no lo dijo o dijo algo ambiguo.
+ */
+export function declaredUniquenessErrorFor(model, entry, entity, fields, { soleConstraint = false } = {}) {
+  const scoped = errorsWrittenBy(model, entity);
+  if (scoped.length === 0) return null;
+  const byFields = pickOne(scoped, entry, entry.familyFor(screamingSnake(fields.join('_'))));
+  if (byFields || !soleConstraint) return byFields;
+  return pickOne(scoped, entry, /(^|_)ALREADY_EXISTS$/);
+}
+
+/** Los errores declarados por las operaciones cuyo grupo es esa entidad. */
+function errorsWrittenBy(model, entity) {
+  const codes = new Set(
+    (model.services ?? [])
+      .filter((service) => service.entity === entity)
+      .flatMap((service) => service.operations.flatMap((operation) => operation.errors ?? []))
+      .map((code) => screamingSnake(code))
+  );
+  return (model.errors ?? []).filter((error) => codes.has(screamingSnake(error.code)));
+}
+
+function pickOne(errors, entry, family) {
+  const normalized = errors.map((error) => ({ ...error, code: screamingSnake(error.code) }));
+  const match = overrideFor(normalized, entry, family);
+  return match ? errors[normalized.indexOf(match)] : null;
+}

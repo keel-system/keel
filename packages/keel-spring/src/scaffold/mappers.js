@@ -135,17 +135,26 @@ function renderMethod(model, entity, dto, imports) {
   const needFields = dto.fields.filter((field) => field.kind === 'needDto');
   for (const need of needFields) imports.add(`${subPackage(model, 'application.dtos')}.${need.javaType}`);
 
+  // El id de la raíz a la que pertenece una entidad hija. Por la misma razón que los dos
+  // anteriores: el dominio es puro y la hija no guarda un puntero a su padre —la FK vive
+  // en persistencia—, así que aquí no hay de dónde sacarlo y entra como parámetro. Quien
+  // la proyecta ANIDADA lo pasa solo (es el `entity` de ese mapper); quien la devuelve
+  // SUELTA —`output: { entity: <Hija> }`— es un handler, y el compilador se lo recuerda.
+  const parentFields = dto.fields.filter((field) => field.kind === 'parentId');
+  if (parentFields.length > 0) imports.add('java.util.UUID');
+
   const params = [
     `${entity.name} entity`,
     ...refFields.map((ref) => `${ref.javaType} ${ref.name}`),
-    ...needFields.map((need) => `${need.javaType} ${need.name}`)
+    ...needFields.map((need) => `${need.javaType} ${need.name}`),
+    ...parentFields.map((parent) => `UUID ${parent.name}`)
   ].join(', ');
 
   // Getters directos disponibles en la entidad de dominio; un campo del DTO que
   // no corresponda (p. ej. subcampo de value object o derivado) lo completa el agente.
   const gettable = new Set(domainMembers(model, entity).map((m) => m.name));
   const args = dto.fields.map((field) => {
-    if (field.kind === 'refDto' || field.kind === 'needDto') return field.name;
+    if (field.kind === 'refDto' || field.kind === 'needDto' || field.kind === 'parentId') return field.name;
     if (!gettable.has(field.name)) {
       return `null /* TODO (agente): ${field.name} no es getter directo de ${entity.name}; mapéalo (¿subcampo de value object?) */`;
     }
@@ -158,9 +167,25 @@ function renderMethod(model, entity, dto, imports) {
     }
     // Entidad hija: se proyecta con su propio DTO, nunca con el del padre.
     if (field.kind === 'childDto') {
-      return field.list
-        ? `${getter}.stream().map(this::to${field.elementJavaType}).toList()`
-        : `${getter} != null ? to${field.elementJavaType}(${getter}) : null`;
+      // Si el DTO de la hija lleva el id de su padre, el padre es justo `entity`: se le
+      // pasa aquí. Y entonces ya no vale la referencia a método (`this::toX`), porque el
+      // método tiene dos parámetros — de ahí la lambda.
+      const childDto = (model.childDtos ?? []).find((child) => child.entity === field.childEntity);
+      const parentField = (childDto?.fields ?? []).find((f) => f.kind === 'parentId');
+      // Y solo si el padre que la hija espera es ESTA entidad. Si el payload proyecta una
+      // nieta directamente (la raíz declarando una relación con la hija de su hija), el id
+      // que hay aquí no es el que ese DTO pide: pasarlo sería mentir con la firma correcta.
+      const carriesParent = Boolean(parentField) && parentField.parentEntity === entity.name;
+      const extra = carriesParent ? ', entity.getId()' : '';
+      if (parentField && !carriesParent) {
+        return `null /* TODO (agente): ${field.name} proyecta ${field.elementJavaType}, que pide el id de ${parentField.parentEntity}, y aquí solo hay un ${entity.name}; resuélvelo o proyecta desde su padre */`;
+      }
+      if (field.list) {
+        return carriesParent
+          ? `${getter}.stream().map(child -> to${field.elementJavaType}(child${extra})).toList()`
+          : `${getter}.stream().map(this::to${field.elementJavaType}).toList()`;
+      }
+      return `${getter} != null ? to${field.elementJavaType}(${getter}${extra}) : null`;
     }
     return getter;
   });

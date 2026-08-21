@@ -243,6 +243,17 @@ run "create clients -r $REALM -s clientId=$USER_CLIENT -s enabled=true -s public
     blocks.push(`echo "== Roles del diseno (security.keel.yaml) =="
 ${roles.map((role) => `run "create roles -r $REALM -s name=${role}"`).join('\n')}
 
+echo "== User Profile: atributos no gestionados =="
+# Keycloak 24+ usa User Profile DECLARATIVO por defecto: cualquier atributo de usuario
+# que no este en el schema del perfil se descarta AL GUARDAR, en silencio — sin error en
+# la respuesta (204) ni en la salida de kcadm. Un diseno cuyo control de acceso se acota
+# por un claim que sale de un atributo de usuario (el caso tipico: un claim con los
+# codigos de recurso a los que ese usuario alcanza) no puede aprovisionarlo sin esto, y
+# el sintoma no es un fallo de este script sino un 403 sin explicacion, minutos despues,
+# dentro de un test de integracion. El DSL no tiene hoy forma de declarar esos claims, asi
+# que el paso va SIEMPRE: no cuesta nada y quita la trampa a quien anada el atributo.
+run "update users/profile -r $REALM -s unmanagedAttributePolicy=ENABLED"
+
 echo "== Usuarios de prueba: uno por rol (username = rol) + uno sin roles =="
 for USER in ${spec.users.map((user) => user.username).join(' ')}; do
   run "create users -r $REALM -s username=$USER -s enabled=true -s email=$USER@example.com -s emailVerified=true -s firstName=Test -s lastName=User"
@@ -353,7 +364,20 @@ SVC=${audience}                     # audiencia del servicio (security.serviceAu
 USER_CLIENT=${userTestClient(model)} # cliente publico para tokens de usuario
 PASSWORD=${PASSWORD}
 
-run() { eval "$KC $*" 2>&1 | grep -v "compose provider\\|^\\[0m$\\|^$" || true; }
+# El script es IDEMPOTENTE: re-ejecutarlo sobre un realm ya sembrado devuelve 409 en
+# cada \`create\`, y eso es normal. Lo que NO es normal es cualquier otro fallo de kcadm,
+# y la versión anterior de este helper —un \`|| true\` incondicional— los tragaba todos:
+# el aprovisionamiento quedaba a medias, el script salía 0, y el defecto reaparecía
+# minutos después como un 403 sin explicación dentro de un test de integración. Se
+# tolera el conflicto, que es la única forma de fallo esperada, y se aborta con el resto.
+run() {
+  out=$(eval "$KC $*" 2>&1); rc=$?
+  printf '%s\\n' "$out" | grep -v "compose provider\\|^\\[0m$\\|^$" || true
+  if [ "$rc" -ne 0 ] && ! printf '%s' "$out" | grep -qi "409\\|already exists\\|exists with same\\|Conflict"; then
+    echo "ERROR: kcadm falló ($rc) en: $*" >&2
+    exit 1
+  fi
+}
 # id de un cliente por su clientId exacto (GET clients SI soporta -q).
 client_id_of() { eval "$KC get clients -r $REALM -q clientId=$1 --fields id --format csv --noquotes" 2>/dev/null | tr -d '\\r' | tail -1; }
 # id de un client-scope por su name exacto (GET client-scopes NO soporta -q: filtra en local).

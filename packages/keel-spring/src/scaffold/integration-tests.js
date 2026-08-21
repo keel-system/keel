@@ -27,6 +27,7 @@ import {
   ENDPOINTS,
   deliverParts,
   deliverShell,
+  collapseToSingleLineJava,
   emptyReadJava,
   expr,
   javaArgs,
@@ -388,36 +389,51 @@ sk=$(printf '%s\\n' "$matrix" | grep -c '^OMITIDO')
 nc=0
 for id in $uncovered; do nc=$((nc + 1)); done
 
+# Las pruebas en rojo que NO son escenarios: la matriz solo conoce los \`FL-*\`, y un
+# testcase con otro nombre no pasa por ninguna fila. El caso que más duele es el
+# \`initializationError\` que JUnit sintetiza cuando revienta un @BeforeAll: la clase
+# entera no llega a ejecutar ni un escenario, así que sus \`FL-*\` no aparecen en el XML
+# y reaparecen abajo como NO_EJERCITADO — una etiqueta que dice "sin cobertura" cuando
+# lo que hubo fue un rojo. Por eso esto es una función y se invoca en LOS DOS
+# desenlaces: enterrar la causa raíz en $LOG justo cuando hay algo que enmascarar es
+# exactamente lo que hacía la versión anterior, que solo la imprimía con la matriz limpia.
+non_scenario_failures() {
+  awk '
+    BEGIN { RS = "<testcase " }
+    NR == 1 { next }
+    {
+      rec = $0
+      close_tag = index(rec, "</testcase>")
+      self_tag = index(rec, "/>")
+      if (close_tag > 0 && (self_tag == 0 || close_tag < self_tag)) seg = substr(rec, 1, close_tag)
+      else if (self_tag > 0) seg = substr(rec, 1, self_tag)
+      else seg = rec
+      name = ""; cls = ""
+      if (match(seg, /name="[^"]*"/)) name = substr(seg, RSTART + 6, RLENGTH - 7)
+      if (match(seg, /classname="[^"]*"/)) cls = substr(seg, RSTART + 11, RLENGTH - 12)
+      if (name == "" || cls == "") next
+      if (seg !~ /<(failure|error)[ >]/) next
+      id = name
+      if (index(id, ":") > 0) id = substr(id, 1, index(id, ":") - 1)
+      gsub(/^[ \\t]+|[ \\t]+$/, "", id)
+      if (id ~ /^FL-[A-Za-z0-9-]+$/) next
+      sub(/.*\\./, "", cls)
+      printf "    %s  (%s)\\n", name, cls
+    }
+  ' "$RESULTS"/*.xml 2>/dev/null
+}
+
+broken="$(non_scenario_failures)"
+
 echo ""
 if [ "$ko" -eq 0 ] && [ "$sk" -eq 0 ] && [ "$nc" -eq 0 ] && [ "$ok" -gt 0 ]; then
-  # La matriz está limpia. Antes de cantar el 100% hay que preguntarle a Gradle: la
-  # matriz solo conoce los \`FL-*\`, y una prueba en rojo con otro nombre no ha pasado
-  # por ninguna fila. Decir "100%" con la suite roja es peor que no tener gate — el
-  # pipeline avanzaría a la fase siguiente creyendo el servicio verde.
+  # La matriz está limpia. Antes de cantar el 100% hay que preguntarle a Gradle: decir
+  # "100%" con la suite roja es peor que no tener gate — el pipeline avanzaría a la fase
+  # siguiente creyendo el servicio verde.
   if [ "$suite_failed" -ne 0 ]; then
     echo "RESULTADO: KO — los $ok escenario(s) FL-* están en OK, pero la suite falló."
     echo "  Hay pruebas en rojo que NO son escenarios y por eso no salen en la matriz:"
-    awk '
-      BEGIN { RS = "<testcase " }
-      NR == 1 { next }
-      {
-        rec = $0
-        close_tag = index(rec, "</testcase>")
-        self_tag = index(rec, "/>")
-        if (close_tag > 0 && (self_tag == 0 || close_tag < self_tag)) seg = substr(rec, 1, close_tag)
-        else if (self_tag > 0) seg = substr(rec, 1, self_tag)
-        else seg = rec
-        name = ""; cls = ""
-        if (match(seg, /name="[^"]*"/)) name = substr(seg, RSTART + 6, RLENGTH - 7)
-        if (match(seg, /classname="[^"]*"/)) cls = substr(seg, RSTART + 11, RLENGTH - 12)
-        if (name == "" || cls == "") next
-        if (index(seg, "<failure") == 0 && index(seg, "<error") == 0) next
-        id = name; sub(/:.*/, "", id)
-        if (id ~ /^FL-[A-Za-z0-9-]+$/) next
-        sub(/.*\\./, "", cls)
-        printf "    %s  (%s)\\n", name, cls
-      }
-    ' "$RESULTS"/*.xml 2>/dev/null
+    printf '%s\\n' "$broken"
     echo "  log completo de Gradle: $LOG"
     echo "  Son del agente de pruebas, no del diseño: o las arregla o las retira."
     exit 1
@@ -429,6 +445,16 @@ fi
 echo "RESULTADO: KO — $ok OK · $ko FALLO · $sk omitido(s) · $nc no ejercitado(s)."
 echo "  evidencia por fallo: $EVIDENCE/<FL-id>.json (request, response y aserción)"
 echo "  log completo de Gradle: $LOG"
+if [ -n "$broken" ]; then
+  echo ""
+  echo "  ARNÉS: hay pruebas en rojo que NO son escenarios y no salen en la matriz."
+  printf '%s\\n' "$broken"
+  echo "  Un \\\`initializationError\\\` aquí significa que esa clase no ejecutó NINGÚN escenario:"
+  echo "  los FL-* que le tocaban salen arriba como NO_EJERC, y no es falta de cobertura."
+  echo "  No hay nada que arbitrar escenario a escenario —no hay volcado que leer—, así que"
+  echo "  esto sale con 2 (arnés roto) y no con 1: se arregla la clase y se vuelve a puntuar."
+  exit 2
+fi
 exit 1
 `;
 }
@@ -465,6 +491,10 @@ function abstractImports(model) {
     'java.util.concurrent.Future',
     'java.util.concurrent.TimeUnit',
     'java.util.concurrent.TimeoutException',
+    // Resolución de la URL sin re-codificar (ver `uriOf`). No es condicional: toda
+    // llamada del arnés pasa por ahí, tenga o no el diseño un id con caracteres raros.
+    'java.net.URI',
+    'org.springframework.web.util.UriComponentsBuilder',
     'org.junit.jupiter.api.BeforeAll',
     'org.junit.jupiter.api.MethodOrderer',
     'org.junit.jupiter.api.TestInstance',
@@ -888,10 +918,28 @@ ${hasIdempotency(model) ? `
         if (extraHeaders != null) {
             extraHeaders.forEach(headers::set);
         }
-        ResponseEntity<String> entity = rest.exchange(path, method, new HttpEntity<>(jsonBody, headers), String.class);
+        ResponseEntity<String> entity = rest.exchange(uriOf(path), method, new HttpEntity<>(jsonBody, headers), String.class);
         Response response = new Response(entity.getStatusCode().value(), entity.getHeaders(), entity.getBody());
         FailureCapture.record(method.name(), path, headers, jsonBody, response);
         return response;
+    }
+
+    /**
+     * Resuelve el path a un {@link URI} <b>ya codificado</b>. Es la única forma de
+     * llamar a {@code rest.exchange(...)} en este arnés.
+     *
+     * <p>Pasarle un {@code String} elige la sobrecarga de PLANTILLA de URI, que vuelve a
+     * codificar lo que ya venía codificado: el {@code %40} de un email en la ruta llega
+     * al servidor como {@code %2540}, la petición no autentica y el escenario ve un 401
+     * que no tiene nada que ver con lo que estaba probando. Con {@code build(true)} se le
+     * dice a Spring que el path ya está codificado y que no lo toque.
+     *
+     * <p>Efecto deliberado: si el escenario compone una URL con un carácter ilegal sin
+     * codificar (un espacio crudo), esto <b>falla aquí</b>, señalando la URL. Antes esa
+     * misma entrada se corrompía en silencio y el fallo aparecía como un status inesperado.
+     */
+    protected static URI uriOf(String path) {
+        return UriComponentsBuilder.fromUriString(path).build(true).toUri();
     }
 
     private static boolean isMutation(HttpMethod method) {
@@ -948,7 +996,7 @@ ${hasIdempotency(model) ? `
         if (token != null) {
             headers.setBearerAuth(token);
         }` : ''}
-        ResponseEntity<String> entity = rest.exchange(url, HttpMethod.POST, new HttpEntity<>(form, headers), String.class);
+        ResponseEntity<String> entity = rest.exchange(uriOf(url), HttpMethod.POST, new HttpEntity<>(form, headers), String.class);
         Response response = new Response(entity.getStatusCode().value(), entity.getHeaders(), entity.getBody());
         FailureCapture.record("POST (multipart)", url, headers, "<" + content.length + " bytes>", response);
         return response;
@@ -3020,8 +3068,13 @@ ${doc}
 
   return `${doc}
     protected static void deliverMessage(String destination, String key, String body, Map<String, String> headers) {
-        copyToDevtools(body, DELIVER_BODY);
-        // \`-l\`: el archivo es UNA línea y por tanto UN mensaje.
+        // \`-l\` manda UN MENSAJE POR LÍNEA del archivo, así que el cuerpo se colapsa a una
+        // sola línea antes de copiarlo. Sin esto, un payload escrito como text block Java
+        // —la forma natural de escribir JSON en un escenario— se publica troceado en varios
+        // mensajes que el listener no puede deserializar, y de rebote satura la partición
+        // con reintentos hasta la dead-letter. JSON válido no necesita saltos de línea
+        // fuera de las cadenas, y dentro de una cadena viajan escapados como \\n.
+        copyToDevtools(${collapseToSingleLineJava('body')}, DELIVER_BODY);
         StringBuilder command = new StringBuilder("${kafkaDeliverPrefix()}")
             .append(shellQuote(destination)).append(" -k ").append(shellQuote(key));
         headers.forEach((name, value) -> command.append(" -H ").append(shellQuote(name + "=" + value)));
@@ -3230,7 +3283,7 @@ ${clientKeys}        throw new IllegalArgumentException("Cliente de servicio no 
             headers.setContentType(MediaType.APPLICATION_JSON);
         }
         headers.set("X-API-Key", apiKey);
-        ResponseEntity<String> entity = rest.exchange(path, method, new HttpEntity<>(jsonBody, headers), String.class);
+        ResponseEntity<String> entity = rest.exchange(uriOf(path), method, new HttpEntity<>(jsonBody, headers), String.class);
         Response response = new Response(entity.getStatusCode().value(), entity.getHeaders(), entity.getBody());
         FailureCapture.record(method.name(), path, headers, jsonBody, response);
         return response;

@@ -56,13 +56,14 @@ lo redeclares ni lo sustituyas.
 - Saca el mensaje de su partición, así que rompe el orden relativo — y el orden por
   partición es justo lo que se conserva con el error handler in-situ.
 
-Lo que sí te toca: excluir lo no reintentable. Un error de negocio declarado en el
-diseño no mejora repitiéndolo, y reintentarlo hasta agotar acaba mandando a la DLQ un
-mensaje perfectamente válido — ruido operativo que se lee como incidente:
+La exclusión de lo no reintentable **ya la hace `build`**: el `DefaultErrorHandler` que
+genera `DeadLetterConfig` sale con `addNotRetryableExceptions(DomainException.class)`
+puesto, porque un error de negocio declarado en el diseño no mejora repitiéndolo y
+reintentarlo hasta agotar acaba mandando a la DLQ un mensaje perfectamente válido. **No
+lo redeclares** ni construyas otro error handler para añadirlo.
 
-```java
-errorHandler.addNotRetryableExceptions(DomainException.class);
-```
+Lo único que te toca es **ampliar** esa lista con los tipos que lances tú y que tampoco
+sean transitorios — ver el caso del cuerpo no parseable, más abajo.
 
 Y si inyectas un `KafkaTemplate` en tu configuración, **decláralo con los mismos
 genéricos que ya usa `DeadLetterConfig`** (`KafkaTemplate<Object, Object>`). Hoy un
@@ -99,7 +100,7 @@ un JSON roto da el mismo JSON roto— y llegará al DLT en el primer intento:
 ```
 
 ```java
-// En tu KafkaConsumerConfig, junto a DomainException:
+// Ampliando la exclusión que DeadLetterConfig ya trae para DomainException:
 errorHandler.addNotRetryableExceptions(IllegalArgumentException.class);
 ```
 
@@ -191,7 +192,7 @@ carrera; que no lo anote no significa que no exista, significa que el diseño no
 - [ ] Stub del publisher eliminado (dos beans del puerto rompen la inyección).
 - [ ] Key elegida según la garantía de orden que exige el diseño.
 - [ ] Puerto de envío implementado según `reliability` (`OutboxDispatcher` u `<Evento>Publisher`), con su stub eliminado y el fallo propagado (outbox) o registrado (best-effort).
-- [ ] `onFailure` → NO redeclarado (build genera DeadLetterConfig); errores de negocio excluidos con `addNotRetryableExceptions`.
+- [ ] `onFailure` → NO redeclarado (build genera DeadLetterConfig, ya con `addNotRetryableExceptions(DomainException.class)`); solo se AMPLÍA la lista con tipos propios no transitorios.
 - [ ] `ErrorHandlingDeserializer` configurado (poison pills al DLT, no en bucle).
 - [ ] Un cuerpo propio que no parsea **lanza** (y su tipo está en `addNotRetryableExceptions`), nunca `log.error` + `return`; descartar lo ajeno sí es `return` sin excepción.
 - [ ] La rama «carrera resuelta» captura `InvalidStateTransitionException` **y** `OptimisticLockingFailureException` (la base de `org.springframework.dao`), y con el orden `record` llama a `record(...)` igualmente.

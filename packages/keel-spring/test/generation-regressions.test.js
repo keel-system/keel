@@ -15,7 +15,7 @@ import { scaffoldService } from '../src/scaffold/index.js';
 import { cacheFlushCmd } from '../src/scaffold/devtools.js';
 import { CACHES } from '../src/lib/stack-catalog.js';
 import { fixedFrameworkErrors } from 'keel-core';
-import { emptyReadJava } from '../src/lib/broker-probes.js';
+import { emptyReadJava, collapseToSingleLineJava } from '../src/lib/broker-probes.js';
 import { providerFailures } from '../src/lib/outbound-failures.js';
 
 const fixtureDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'catalog-extended');
@@ -129,9 +129,16 @@ test('DTOs: las relaciones entran — referencia por id y entidad hija como DTO 
   assert.ok(dto.includes('UUID categoryId'));
   assert.ok(dto.includes('List<ProductImageDto> images'));
   assert.ok(childDto.includes('public record ProductImageDto('));
-  // La hija se mapea con su propio DTO, no con un null pendiente.
-  assert.ok(mapper.includes('entity.getImages().stream().map(this::toProductImageDto).toList()'));
-  assert.ok(mapper.includes('public ProductImageDto toProductImageDto(ProductImage entity)'));
+  // El DTO de la hija lleva el id de su raíz. Sin él, un <Hija>Dto devuelto SUELTO
+  // —`output: { entity: <Hija> }`— no dice a qué padre pertenece, y el consumidor no
+  // tiene forma de recomponerlo (informe de notifications-spring § 2).
+  assert.ok(childDto.includes('UUID productId'));
+  // La hija se mapea con su propio DTO, no con un null pendiente. Y el id del padre entra
+  // por PARÁMETRO —el dominio es puro y la hija no guarda puntero a su raíz—, así que el
+  // compilador no deja olvidarlo: de ahí la lambda en vez de la referencia a método.
+  assert.ok(mapper.includes('entity.getImages().stream().map(child -> toProductImageDto(child, entity.getId())).toList()'));
+  assert.ok(mapper.includes('public ProductImageDto toProductImageDto(ProductImage entity, UUID productId)'));
+  assert.ok(!mapper.includes('productId no es getter directo'));
 });
 
 test('campos file: endpoint multipart con MultipartFile y FileUpload en el mensaje', () => {
@@ -239,7 +246,11 @@ test('§1.1: el sondeo del broker va por argv, nunca por una cadena con comillas
   assert.ok(kafka.includes('private static void copyToDevtools(String content, String target)'));
   // El copiado vive ahora en deliverMessage, del que publishRaw es un caso particular
   // (el topic propio, sin cabeceras): una sola vía de entrega, una sola lección aprendida.
-  assert.ok(kafka.includes('copyToDevtools(body, DELIVER_BODY);'));
+  // Y con Kafka el cuerpo se colapsa a UNA línea antes de copiarlo, porque `kcat -l`
+  // manda un mensaje POR LÍNEA: un payload escrito como text block llegaba troceado en
+  // varios mensajes indeserializables (informe de notifications-spring § 1.5).
+  assert.ok(kafka.includes(`copyToDevtools(${collapseToSingleLineJava('body')}, DELIVER_BODY);`));
+  assert.ok(!kafka.includes('copyToDevtools(body, DELIVER_BODY);'));
   assert.ok(kafka.includes('deliverMessage(EVENT_TOPIC, key, payload, Map.of());'));
   assert.ok(!kafka.includes("printf '%s'"));
   assert.ok(!kafka.includes('shellQuote(payload)'));
@@ -1332,6 +1343,139 @@ test('identidad: el script de kcadm y el realm importado declaran exactamente lo
   }
 });
 
+// --- Informe de generación de notifications-spring --------------------------
+// Cinco defectos del scaffolding que costaron rondas de arbitraje en una corrida
+// real. Ninguno tenía red: los cinco pasaban todos los `includes(...)` de esta
+// suite y solo aparecían dentro del proyecto generado, contra infraestructura.
+
+test('§1.1 informe: el realm habilita los atributos de usuario no gestionados, en los dos formatos', () => {
+  const { manifest, layers, errors } = loadService(fixtureDir);
+  assert.deepEqual(errors, []);
+  const patched = structuredClone(layers);
+  patched.security = {
+    authentication: { protocol: 'oidc' },
+    roles: { admin: { description: 'x' } },
+    access: { default: { level: 'required' }, rules: { createProduct: { roles: ['admin'] } } }
+  };
+  const patchedManifest = structuredClone(manifest);
+  patchedManifest.layers.security = 'security.keel.yaml';
+
+  const workspace = tmpDir('keel-userprofile-');
+  scaffoldService({ manifest: patchedManifest, layers: patched, workspace, force: true });
+  const read = (relative) =>
+    fs.readFileSync(path.join(workspace, 'services', 'catalog-spring', relative), 'utf8');
+
+  // Keycloak 24+ descarta EN SILENCIO cualquier atributo de usuario fuera del schema del
+  // User Profile: ni error HTTP ni salida de kcadm. Un claim acotado por atributo no
+  // persiste, y el síntoma es un 403 sin explicación en un test, minutos después.
+  const script = read('infra/init-keycloak.sh');
+  assert.ok(script.includes('run "update users/profile -r $REALM -s unmanagedAttributePolicy=ENABLED"'));
+  // Y va ANTES de crear los usuarios: fijarlo después no rescata lo ya descartado.
+  assert.ok(script.indexOf('users/profile') < script.indexOf('for USER in'));
+
+  // Paridad con el realm que se importa en deploy/: si solo lo hiciera el script, la
+  // prueba manual del diseñador contradiría a la suite por una diferencia no escrita.
+  const realm = JSON.parse(read('deploy/keycloak/realm-export.json'));
+  const component = realm.components['org.keycloak.userprofile.UserProfileProvider'][0];
+  assert.equal(component.providerId, 'declarative-user-profile');
+  const upConfig = JSON.parse(component.config['kc.user.profile.config'][0]);
+  assert.equal(upConfig.unmanagedAttributePolicy, 'ENABLED');
+  // Los cuatro atributos base van explícitos: este componente SUSTITUYE al perfil por
+  // defecto, y sin ellos el realm se queda sin username gestionado y no admite usuarios.
+  assert.deepEqual(upConfig.attributes.map((a) => a.name), ['username', 'email', 'firstName', 'lastName']);
+});
+
+test('§1.2 informe: run() propaga el fallo de kcadm y solo tolera el conflicto', () => {
+  const { manifest, layers, errors } = loadService(fixtureDir);
+  assert.deepEqual(errors, []);
+  const patched = structuredClone(layers);
+  patched.security = {
+    authentication: { protocol: 'oidc' },
+    roles: { admin: { description: 'x' } },
+    access: { default: { level: 'required' }, rules: { createProduct: { roles: ['admin'] } } }
+  };
+  const patchedManifest = structuredClone(manifest);
+  patchedManifest.layers.security = 'security.keel.yaml';
+  const workspace = tmpDir('keel-kcrun-');
+  scaffoldService({ manifest: patchedManifest, layers: patched, workspace, force: true });
+  const script = fs.readFileSync(
+    path.join(workspace, 'services', 'catalog-spring', 'infra', 'init-keycloak.sh'), 'utf8');
+
+  // El `|| true` incondicional de antes hacía que un aprovisionamiento a medias saliera 0.
+  assert.ok(!/run\(\) \{ eval .*\|\| true; \}/.test(script));
+  assert.ok(script.includes('ERROR: kcadm falló'));
+  // Pero el 409 sigue siendo tolerado: el script es idempotente por diseño.
+  assert.ok(script.includes('grep -qi "409\\|already exists'));
+});
+
+test('§1.4 informe: el arnés resuelve la URL sin re-codificarla', () => {
+  const harness = harnessFor('kafka');
+  // `rest.exchange(String, ...)` elige la sobrecarga de PLANTILLA de URI y re-codifica el
+  // `%` de un segmento ya codificado: el `%40` de un email llega como `%2540` y la
+  // petición contesta 401 sin haber llegado a autenticar.
+  assert.ok(harness.includes('protected static URI uriOf(String path)'));
+  assert.ok(harness.includes('UriComponentsBuilder.fromUriString(path).build(true).toUri()'));
+  assert.ok(!/rest\.exchange\((path|url),/.test(harness), 'queda una llamada por plantilla de URI');
+  assert.ok(harness.includes('rest.exchange(uriOf(path), method,'));
+});
+
+test('§2 informe: los 400 de la cadena de Spring llevan code, y sale del catálogo', () => {
+  const { read } = scaffoldExtended();
+  const handler = read(`${JAVA}/infrastructure/rest/ApiExceptionHandler.java`);
+  const validation = fixedFrameworkErrors().find((entry) => entry.code === 'VALIDATION_ERROR');
+  assert.ok(validation, 'VALIDATION_ERROR debe estar en el catálogo de framework-errors');
+
+  // Un cuerpo malformado y un parámetro ausente son la petición no superando validación
+  // de forma: dejarlos con `code: null` rompía el contrato que el resto del scaffolding
+  // se esfuerza en mantener estable.
+  const malformed = handler.slice(handler.indexOf('onMalformedRequest'));
+  assert.ok(malformed.slice(0, 300).includes(`"${validation.code}"`));
+  const missingParam = handler.slice(handler.indexOf('onMissingRequestParameter'));
+  assert.ok(missingParam.slice(0, 400).includes(`"${validation.code}"`));
+
+  // Un 405 NO es un error de validación: darle ese code mentiría.
+  const notAllowed = handler.slice(handler.indexOf('onMethodNotAllowed'));
+  assert.ok(!notAllowed.slice(0, 300).includes(`"${validation.code}"`));
+});
+
+test('§2 informe: la unicidad se resuelve con el error de SU entidad, no con el de otra', () => {
+  const { read } = scaffoldExtended();
+  const handler = read(`${JAVA}/infrastructure/rest/ApiExceptionHandler.java`);
+
+  // La fixture tiene DOS entidades con clave natural `sku`: Product y SupplierPrice. La
+  // familia de un canónico derivado sale de los CAMPOS, así que las dos casaban con el
+  // único SKU_ALREADY_EXISTS del diseño —declarado por createProduct— y el conflicto de
+  // una copia de precio duplicada salía por el cable con el código de un producto
+  // duplicado. Silencioso y con toda la pinta de estar bien.
+  const entryFor = (constraint) => {
+    const at = handler.indexOf(`Map.entry("${constraint}"`);
+    assert.ok(at > 0, `no hay entrada para ${constraint}`);
+    return handler.slice(at, at + 220);
+  };
+
+  // Product SÍ declara el suyo, y lo declara la operación que escribe Product.
+  assert.ok(entryFor('uk_products_natural').includes('SkuAlreadyExistsError'));
+  // SupplierPrice no declara ninguno: TODO, no el error de otra entidad.
+  const supplier = entryFor('uk_supplier_prices_natural');
+  assert.ok(!supplier.includes('SkuAlreadyExistsError'), supplier);
+  assert.ok(handler.includes('para la unicidad de SupplierPrice.sku'));
+});
+
+test('§2 informe: el error handler de Kafka no reintenta un error de negocio', () => {
+  const { manifest, layers } = loadService(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'catalog-extended'));
+  const workspace = tmpDir('keel-dlq-');
+  scaffoldService({ manifest, layers, workspace, force: true, stack: { broker: 'kafka' } });
+  const config = fs.readFileSync(
+    path.join(workspace, 'services', 'catalog-spring',
+      'src/main/java/com/commerce/catalog/infrastructure/messaging/DeadLetterConfig.java'), 'utf8');
+
+  // Sin esto, una violación de regla de negocio se reintenta hasta agotar la política y
+  // acaba en la DLT — un mensaje perfectamente válido, leído en operación como incidente.
+  assert.ok(config.includes('handler.addNotRetryableExceptions(DomainException.class);'));
+  assert.ok(config.includes('import com.commerce.catalog.domain.errors.DomainException;'));
+});
+
 // --- Entrega de eventos entrantes -------------------------------------------
 // `publishedMessages` lee lo que el servicio publica; `deliverXxx` inyecta lo que
 // consume. Sin esta mitad, una suscripción no se puede ejercitar y su REENTREGA
@@ -1384,7 +1528,7 @@ test('cada suscripción tiene su deliver, en los tres brokers', () => {
     // Con RabbitMQ lo que se copia es el sobre de la API de gestión, con el cuerpo
     // dentro en base64 — misma garantía, un envoltorio más.
     assert.ok(
-      /copyToDevtools\((body|request), DELIVER_BODY\)/.test(harness),
+      /copyToDevtools\((body|body\.replaceAll\([^)]*\)|request), DELIVER_BODY\)/.test(harness),
       `${broker}: el cuerpo entregado no viaja por archivo`
     );
   }

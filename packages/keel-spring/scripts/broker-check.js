@@ -43,6 +43,8 @@ import {
   argv as toArgv,
   deliverParts,
   deliverShell,
+  needsSingleLineBody,
+  collapseToSingleLine,
   headersJson,
   isEmptyRead,
   offsetsParts,
@@ -173,8 +175,13 @@ function scenarios(broker, context) {
   };
 
   const deliver = (destination, key, body, headers = {}) => {
+    // El mismo colapso que el arnés generado aplica antes de copiar, y de la MISMA
+    // fuente: `kcat -l` manda un mensaje por línea, así que un cuerpo multilínea se
+    // publicaría troceado. Si el runner no lo hiciera, probaría una entrega distinta
+    // de la que el generador escribe — que es justo lo que este módulo existe para evitar.
+    const wire = needsSingleLineBody(broker) ? collapseToSingleLine(body) : body;
     if (broker === 'kafka') {
-      devtools.copy(body, BODY_FILE);
+      devtools.copy(wire, BODY_FILE);
       return devtools.shell(deliverShell({ destination, key, bodyFile: BODY_FILE, headers }));
     }
     if (broker === 'rabbitmq') {
@@ -183,13 +190,13 @@ function scenarios(broker, context) {
           destination,
           key,
           headersJson: headersJson(headers),
-          payloadBase64: Buffer.from(body, 'utf8').toString('base64')
+          payloadBase64: Buffer.from(wire, 'utf8').toString('base64')
         }),
         BODY_FILE
       );
       return devtools.exec(toArgv(broker, deliverParts(broker, { destination, bodyFile: BODY_FILE })));
     }
-    devtools.copy(body, BODY_FILE);
+    devtools.copy(wire, BODY_FILE);
     const withAttributes = Object.keys(headers).length > 0;
     if (withAttributes) devtools.copy(sqsAttributesJson(headers), ATTRS_FILE);
     return devtools.exec(
@@ -312,6 +319,36 @@ function scenarios(broker, context) {
         return back.includes(body)
           ? ok()
           : ko(`el cuerpo no vuelve byte a byte: ${firstLine(back[back.length - 1] ?? '(nada)')}`);
+      }
+    },
+    {
+      id: 'BRK-3b',
+      title: 'un cuerpo MULTILÍNEA llega como UN solo mensaje',
+      // El defecto que costó cinco escenarios en la corrida de notifications-spring:
+      // `kcat -l` manda un mensaje POR LÍNEA del archivo, y un payload escrito como
+      // text block Java —la forma natural de escribir JSON en un escenario— llegaba
+      // troceado en varios mensajes indeserializables. BRK-3 no podía verlo: su cuerpo
+      // sale de `JSON.stringify`, que escapa cualquier salto, así que por construcción
+      // nunca lleva uno de verdad.
+      check: () => {
+        const pretty = JSON.stringify({ text: TRICKY, n: 1 }, null, 2);
+        if (!/[\r\n]/.test(pretty)) return ko('el cuerpo de prueba no es multilínea');
+        const sent = deliver(topic, 'multiline', pretty, outbound);
+        if (sent.status !== 0) return ko(`entrega falló: ${firstLine(sent.stderr || sent.stdout)}`);
+        // Se busca por el marcador que sobrevive al colapso; lo que se juzga es cuántos
+        // mensajes volvieron, no su forma: dos o más significan que se troceó.
+        const back = readUntil(topic, TRICKY, 1);
+        const hits = back.filter((line) => line.includes(TRICKY));
+        if (hits.length === 0) return ko('el cuerpo multilínea no vuelve en la lectura');
+        if (hits.length > 1) return ko(`el cuerpo se troceó en ${hits.length} mensajes`);
+        // Y sigue siendo JSON válido tras el colapso: los saltos estaban fuera de las
+        // cadenas, que es la premisa de colapsarlos.
+        try {
+          const parsed = JSON.parse(hits[0]);
+          return parsed.text === TRICKY ? ok() : ko('el contenido no sobrevive al colapso');
+        } catch (error) {
+          return ko(`el mensaje entregado no es JSON válido: ${error.message}`);
+        }
       }
     },
     {
