@@ -37,6 +37,24 @@ access:
 - Permisos en formato `recurso:accion` (`product:write`); roles en kebab-case.
 - Principio de mínimo privilegio: la skill `/keel-validate` revisa que ningún rol acumule permisos que no use.
 
+## Identidad del llamante (`authentication.callerIdentity`)
+
+Quién pide el trabajo — no si puede pedirlo (eso es `access`), sino **en nombre de qué recurso** lo pide.
+
+```yaml
+authentication:
+  protocol: oidc
+  callerIdentity:
+    field: applicationCode          # el campo del input que la recibe, YA resuelta
+    from: { source: serviceClient } # el cliente máquina de la credencial ES el recurso
+    # from: { source: claim, name: tenant }   # o un claim que puebla el proveedor
+```
+
+- Es el **hermano** de `messaging.subscriptions.<E>.identity`: el mismo hecho por la otra puerta. Si una operación entra por las dos, **las dos tienen que nombrar el mismo `field`** — dos campos son dos verdades, y la operación decidiría con uno u otro sin saberlo. `keel validate` lo da en rojo.
+- El campo **deja de viajar en el cuerpo** de la petición: lo estampa el servidor, igual que un campo `generated`. Quien hace la petición es justamente quien no debería poder elegir en nombre de quién actúa, así que no hay nada que comprobar ni ningún error de inconsistencia que declarar.
+- La resolución vive en **un solo punto**. Cambiar de la credencial a un claim son dos líneas y no toca dominio, casos de uso ni esquema.
+- Sin este bloque, un servicio que resuelve el inquilino por la credencial deja esa resolución en la prosa de una `rule`, y cada implementación la inventa: el dato acaba llegando del cuerpo o duplicado en dos campos que alguien tiene que reconciliar a mano.
+
 ## Alcance por recurso (`authentication.scoping`)
 
 `roles`, `permissions` y `scopes` son **globales**: quien pasa la regla de acceso, pasa para **todos** los recursos. Un servicio multi-inquilino necesita además acotar al recurso concreto, y eso no cabe en `access` — una regla de acceso decide si puedes ejecutar la operación, no sobre qué filas.

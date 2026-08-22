@@ -280,6 +280,18 @@ function renderMessage(model, operation) {
         annotations.push('@Valid');
       }
     }
+    // La identidad del llamante la estampa el servidor: no se acepta del cuerpo ni se anuncia en
+    // el contrato de entrada. Sin `@JsonIgnore` el campo seguiría siendo bindeable y saldría en el
+    // OpenAPI como si el integrador pudiera elegirlo — que es justo lo contrario de lo que el
+    // diseño declara al resolverlo por credencial.
+    if (component.resolvedIdentity) {
+      imports.add('com.fasterxml.jackson.annotation.JsonIgnore');
+      annotations.push('@JsonIgnore');
+      notes.push(
+        '// La resuelve el servidor desde la credencial (security.authentication.callerIdentity):',
+        '// no llega del cuerpo, la estampa el controller. Por el canal de eventos la estampa el listener.'
+      );
+    }
     const noteBlock = notes.length > 0 ? notes.map((line) => `        ${line}\n`).join('') : '';
     return `${noteBlock}        ${renderComponentType(operation, component, fromPath, imports, annotations)} ${component.name}`;
   });

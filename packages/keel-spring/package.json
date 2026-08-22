@@ -18,7 +18,7 @@
     "vendor"
   ],
   "keel": {
-    "dsl": "2.12"
+    "dsl": "2.13"
   },
   "engines": {
     "node": ">=18"

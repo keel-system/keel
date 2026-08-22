@@ -145,7 +145,7 @@
             "type": "object",
             "required": ["field", "from", "onUnresolved"],
             "additionalProperties": false,
-            "description": "De dónde sale, en este camino, la identidad de quien pide el trabajo. Por HTTP la pone el proveedor de identidad en un claim del token; por un broker no llega ningún token, así que hay que decir qué lo sustituye — y si no se dice, cada quien supondrá una cosa distinta. El dato NO viaja en el payload: ponerlo en dos sitios son dos versiones de la verdad, y tarde o temprano una deja de validarse.",
+            "description": "De dónde sale, en este camino, la identidad de quien pide el trabajo. Por HTTP la declara security.authentication.callerIdentity (el claim del token o el cliente máquina de la credencial); por un broker no llega ningún token, así que hay que decir qué lo sustituye. Si la operación entra por las DOS puertas, las dos identidades tienen que aterrizar en el mismo campo — y si no se dice, cada quien supondrá una cosa distinta. El dato NO viaja en el payload: ponerlo en dos sitios son dos versiones de la verdad, y tarde o temprano una deja de validarse.",
             "properties": {
               "field": {
                 "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/operationName",

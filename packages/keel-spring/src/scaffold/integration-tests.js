@@ -3388,7 +3388,25 @@ ${clientKeys}        throw new IllegalArgumentException("Cliente de servicio no 
 `
     : '';
 
-  return `
+  return `${
+    model.security?.scoping
+      ? `
+    /**
+     * El recurso al que alcanzan los usuarios de prueba NO exentos del alcance por recurso
+     * (\`${model.security.scoping.claim}\` en el token). <b>No lo escribas a mano en un escenario</b>:
+     * sale de \`infra/test-credentials.env\`, que es el mismo sitio del que lo lee el script que
+     * siembra el realm. Cuando este valor y el que usa el escenario no coincidían, la clase entera
+     * caía con un 403 en su \`@BeforeAll\` y el arreglo acababa siendo un parche a mano sobre un
+     * archivo que regenera build.
+     *
+     * <p>Los roles exentos (${(model.security.scoping.exemptRoles ?? []).join(', ') || 'ninguno'}) no llevan el claim: alcanzan cualquier recurso.
+     */
+    protected static String scopedResource() {
+        return env("AUTH_SCOPED_RESOURCE", "${model.security.scoping.testResource}");
+    }
+`
+      : ''
+  }
     /**
      * Bearer token de un usuario con el rol pedido, cacheado por rol.
      *

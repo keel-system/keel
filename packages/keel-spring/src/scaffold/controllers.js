@@ -355,6 +355,20 @@ function renderMethod(model, operation, imports) {
         inline.length > 110
           ? `new ${operation.messageClass}(\n                ${args.join(',\n                ')})`
           : inline;
+    } else if (components.some((component) => component.resolvedIdentity)) {
+      // La identidad del llamante NO se acepta del cuerpo: se reconstruye el record poniendo el
+      // valor que resuelve el servidor. Sin esto, el campo llegaría de quien hace la petición —que
+      // es exactamente quien no debería elegirlo—, y la alternativa era un segundo campo sintético
+      // que alguien tenía que reconciliar a mano.
+      imports.add(`${model.service.basePackage}.infrastructure.configurations.security.CallerIdentity`);
+      const args = components.map((component) =>
+        component.resolvedIdentity ? 'CallerIdentity.resolve()' : `command.${component.name}()`
+      );
+      const inline = `new ${operation.messageClass}(${args.join(', ')})`;
+      dispatchArg =
+        inline.length > 110
+          ? `new ${operation.messageClass}(\n                ${args.join(',\n                ')})`
+          : inline;
     } else {
       dispatchArg = 'command';
     }

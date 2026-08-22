@@ -953,6 +953,40 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
     }
 
     // Alcance por recurso: el bloque que hace producible ese 403.
+    // La identidad del llamante por HTTP: el hermano de `subscriptions.identity`, que cubre la
+    // otra puerta. Lo que se comprueba aquí es que el campo exista, que haya de dónde sacar la
+    // identidad, y —lo que más rinde— que las dos puertas dejen el dato en el MISMO sitio.
+    const callerIdentity = security.authentication?.callerIdentity;
+    if (callerIdentity) {
+      const serviceOps = Object.entries(operations).filter(
+        ([opName]) => (security.access?.rules?.[opName] ?? security.access?.default)?.level === 'service'
+      );
+      for (const [opName, op] of serviceOps) {
+        const inputFields = op.input && typeof op.input === 'object' ? (op.input.fields ?? {}) : {};
+        if (!Object.hasOwn(inputFields, callerIdentity.field)) {
+          errors.push(
+            `security: authentication.callerIdentity.field: '${callerIdentity.field}' no es un campo del input de '${opName}', que se expone con level 'service' — la identidad resuelta no tiene dónde aterrizar`
+          );
+        }
+      }
+      if (callerIdentity.from?.source === 'serviceClient' && Object.keys(security.serviceClients ?? {}).length === 0) {
+        errors.push(
+          `security: authentication.callerIdentity.from: 'serviceClient' pero el diseño no declara ningún serviceClient — no hay credencial de la que sacar la identidad`
+        );
+      }
+      // Dos puertas, dos campos: el servicio tendría dos verdades sobre quién pide el trabajo, y
+      // la operación decidiría con una u otra según por dónde entrara. Es el hueco que hace que
+      // alguien acabe reconciliando dos campos a mano.
+      for (const [subName, sub] of Object.entries(messaging?.subscriptions ?? {})) {
+        const subField = sub?.identity?.field;
+        if (subField && subField !== callerIdentity.field) {
+          errors.push(
+            `security: authentication.callerIdentity.field es '${callerIdentity.field}' y messaging.subscriptions.${subName}.identity.field es '${subField}': la misma identidad aterriza en dos campos distintos según la puerta por la que entre, así que la operación decidiría con uno u otro sin saberlo`
+          );
+        }
+      }
+    }
+
     const scoping = security.authentication?.scoping;
     if (scoping) {
       const [entityName, fieldName] = String(scoping.over).split('.');

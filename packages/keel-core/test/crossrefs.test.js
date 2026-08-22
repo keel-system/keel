@@ -4428,6 +4428,68 @@ const withScoping = (extra = {}) => {
   return layers;
 };
 
+// `callerIdentity` (DSL 2.13): el hermano de `subscriptions.identity` para la puerta HTTP.
+
+const withCallerIdentity = (extra = {}) => {
+  const layers = scopedLayers();
+  layers.security.access.rules = { getProduct: { level: 'service', scopes: ['product:read'] } };
+  layers.security.serviceClients = { billing: { scopes: ['product:read'] } };
+  layers.security.authentication.serviceAuth = { protocol: 'client-credentials' };
+  layers.security.authentication.callerIdentity = {
+    field: 'id',
+    from: { source: 'serviceClient' },
+    ...extra
+  };
+  return layers;
+};
+
+test('el campo de la identidad tiene que estar en el input de la operación de servicio', () => {
+  // Si no está, la identidad resuelta no tiene dónde aterrizar y el mecanismo no hace nada.
+  const layers = withCallerIdentity({ field: 'noExiste' });
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) => e.includes(`callerIdentity.field: 'noExiste' no es un campo del input`)),
+    errors.join('\n')
+  );
+});
+
+test('from serviceClient exige que el diseño declare alguno', () => {
+  const layers = withCallerIdentity();
+  delete layers.security.serviceClients;
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) => e.includes('no declara ningún serviceClient')),
+    errors.join('\n')
+  );
+});
+
+test('las dos puertas tienen que dejar la identidad en el MISMO campo', () => {
+  // Es la regla que más rinde de las tres, y ninguna otra la cubría: con dos campos el servicio
+  // tiene dos verdades sobre quién pide el trabajo y la operación decide con una u otra según por
+  // dónde entre — que es exactamente cómo se acaba reconciliando dos campos a mano.
+  //
+  // Se parte de compLayers, que sí tiene capa messaging con suscripciones: sobre un diseño sin
+  // ella la regla no tendría con qué contrastar y el test saldría verde sin mirar nada.
+  const layers = compLayers();
+  layers.security = {
+    authentication: {
+      protocol: 'oidc',
+      serviceAuth: { protocol: 'client-credentials' },
+      callerIdentity: { field: 'productId', from: { source: 'serviceClient' } }
+    },
+    serviceClients: { billing: {} },
+    access: { default: { level: 'required' } }
+  };
+  for (const sub of Object.values(layers.messaging.subscriptions)) {
+    sub.identity = { field: 'otroCampo', from: { location: 'header', name: 'user_id' }, onUnresolved: 'discard' };
+  }
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) => e.includes('la misma identidad aterriza en dos campos distintos')),
+    errors.join('\n')
+  );
+});
+
 test('declarar el alcance por recurso cierra el aviso del 403', () => {
   const { errors, warnings } = run(withScoping());
   assert.deepEqual(errors, []);

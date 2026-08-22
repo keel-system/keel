@@ -811,7 +811,14 @@ function collectOperations(layers, domainTypes, inlineEnumName, service, warning
     // segmento y con el tipo declarado en el diseño.
     const pathParams = resolvePathParams(opName, route, inputFields, warnings);
     const pathParamNames = new Set(pathParams.map((p) => p.name));
-    const bodyFields = inputFields.filter((f) => !pathParamNames.has(f.name));
+    // El campo que recibe la identidad del llamante sigue EN el mensaje —el handler la necesita—
+    // pero no se acepta del cuerpo: lo estampa el servidor desde la credencial. Se marca en vez de
+    // filtrarse porque el record del comando ES el cuerpo HTTP, y quitarlo de la lista lo quitaría
+    // también del mensaje, dejando al handler sin la identidad.
+    const identityField = layers.security?.authentication?.callerIdentity?.field ?? null;
+    const bodyFields = inputFields
+      .filter((f) => !pathParamNames.has(f.name))
+      .map((f) => (f.name === identityField ? { ...f, resolvedIdentity: true } : f));
     const outputFields = payloadFields(opName, op.output, { direction: 'output', domainEntities, domainTypes, inlineEnumName, relations, warnings });
 
     for (const error of op.errors ?? []) {
@@ -1308,13 +1315,31 @@ function collectSecurity(layers, services, routeBase, warnings) {
   // permitido de uno prohibido sobre UN recurso concreto. Lo que el generador necesita de él
   // es el nombre del claim y a quién NO se acota: con eso aprovisiona el proveedor de
   // identidad, que es la mitad que antes había que parchear a mano en cada proyecto.
+  // La identidad del llamante por HTTP. El campo que la recibe deja de viajar en el cuerpo: lo
+  // estampa el servidor desde la credencial, igual que el listener lo estampa desde el mensaje.
+  // Sin esto, el campo llegaba del cuerpo —que lo elige el llamante— y la resolución acababa en un
+  // segundo campo sintético que alguien tenía que reconciliar a mano.
+  const rawCallerIdentity = sec.authentication?.callerIdentity ?? null;
+  const callerIdentity = rawCallerIdentity
+    ? { field: rawCallerIdentity.field, source: rawCallerIdentity.from.source, claim: rawCallerIdentity.from.name ?? null }
+    : null;
+
   const rawScoping = sec.authentication?.scoping ?? null;
   const scoping = rawScoping
     ? {
         claim: rawScoping.claim,
         over: rawScoping.over,
         error: rawScoping.error,
-        exemptRoles: rawScoping.exemptRoles ?? []
+        exemptRoles: rawScoping.exemptRoles ?? [],
+        // El recurso con el que se siembran los usuarios de prueba no exentos. Se deriva aquí y no
+        // en el emisor porque lo consumen DOS —el script que siembra el realm y el arnés que pide
+        // los tokens—, y cuando cada uno lo resolvía por su cuenta el desajuste tumbaba clases
+        // enteras con un 403 en su `@BeforeAll`.
+        //
+        // Es el PRIMER `serviceClient` declarado: en un diseño con superficie M2M es el único
+        // candidato que puede originar tráfico, que es lo que el escenario del alcance necesita
+        // ejercitar. Sin `serviceClients` no hay nada que originar y basta un literal.
+        testResource: Object.keys(sec.serviceClients ?? {})[0] ?? 'keel-scoped-resource'
       }
     : null;
 
@@ -1341,6 +1366,7 @@ function collectSecurity(layers, services, routeBase, warnings) {
     defaultAuthority: accessAuthority(defaultRule),
     usesAuthorities,
     serviceAuth,
+    callerIdentity,
     scoping,
     serviceClients,
     roleGrants,

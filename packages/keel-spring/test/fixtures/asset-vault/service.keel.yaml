@@ -1,4 +1,4 @@
-keel: "2.12"
+keel: "2.13"
 # Silueta DOCUMENTAL transversal, complementaria de `inspection-reports`: allí el eje
 # es la FORMA del documento (dos niveles de anidamiento, value object dentro de value
 # object, índices por dot-path) y aquí es todo lo que rodea al documento y que hasta

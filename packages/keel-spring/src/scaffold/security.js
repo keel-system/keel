@@ -94,6 +94,7 @@ export function generate(model) {
   if (jwt && sec.serviceAuth?.validateAudience) files.push(renderAudienceFilter(model));
   if (sec.protocol !== 'none') files.push(renderSecurityErrorHandlers(model));
   if (needsServiceApiKeyFilter(sec)) files.push(renderServiceApiKeyFilter(model));
+  if (sec.callerIdentity) files.push(renderCallerIdentity(model, sec.callerIdentity));
   return files;
 }
 
@@ -845,4 +846,68 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
       body
     )
   };
+}
+
+/**
+ * De dónde sale, por HTTP, la identidad de QUIÉN pide el trabajo.
+ *
+ * Un solo punto de resolución, igual que el listener resuelve la suya del mensaje: la operación la
+ * recibe ya resuelta y en ningún otro sitio se vuelve a mirar el token. Esa costura de un punto es
+ * lo que hace barato cambiar de mecanismo — pasar de la credencial a un claim son dos líneas.
+ *
+ * El campo NO se acepta del cuerpo de la petición: quien la hace es justamente quien no debería
+ * poder elegir en nombre de quién actúa.
+ */
+function renderCallerIdentity(model, callerIdentity) {
+  const pkg = subPackage(model, SECURITY_PKG);
+  const imports = [
+    'org.springframework.security.core.Authentication',
+    'org.springframework.security.core.context.SecurityContextHolder',
+    'org.springframework.security.oauth2.jwt.Jwt',
+    'org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken'
+  ];
+
+  // Con `serviceClient` el identificador ES el cliente de la credencial. Keycloak lo pone en `azp`
+  // y otros proveedores en `client_id`: se miran los dos y se cae al nombre de la autenticación,
+  // que con client_credentials también es el cliente. Con `claim`, el nombre lo dice el diseño.
+  const extract =
+    callerIdentity.source === 'claim'
+      ? `        String value = jwt.getClaimAsString("${callerIdentity.claim}");`
+      : `        String value = jwt.getClaimAsString("azp");
+        if (value == null || value.isBlank()) {
+            value = jwt.getClaimAsString("client_id");
+        }
+        if (value == null || value.isBlank()) {
+            value = authentication.getName();
+        }`;
+
+  const body = `public final class CallerIdentity {
+
+    private CallerIdentity() {
+    }
+
+    /**
+     * El identificador del recurso en cuyo nombre llega la petición, ya resuelto.
+     *
+     * <p>Lanza si no hay identidad: una operación que la necesita no puede continuar sin ella, y
+     * seguir con un valor vacío escribiría datos a nombre de nadie. La cadena de seguridad ya
+     * rechaza al no autenticado, así que llegar aquí sin token es un fallo de configuración.
+     */
+    public static String resolve() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (!(authentication instanceof JwtAuthenticationToken token)) {
+            throw new IllegalStateException(
+                "No hay credencial en el contexto: '${callerIdentity.field}' se resuelve de la identidad del llamante.");
+        }
+        Jwt jwt = token.getToken();
+${extract}
+        if (value == null || value.isBlank()) {
+            throw new IllegalStateException(
+                "La credencial no identifica ningún recurso para '${callerIdentity.field}'.");
+        }
+        return value;
+    }
+}`;
+
+  return { path: javaPath(model, SECURITY_PKG, 'CallerIdentity'), content: javaFile(pkg, imports, body) };
 }

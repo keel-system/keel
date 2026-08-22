@@ -26,13 +26,14 @@ const NO_ROLE_USER = 'no-role';
 // Resource server ajeno, para la variante negativa de la matriz M2M con Cognito: es
 // el prefijo de scope que hace que el token esté emitido para OTRA API.
 const FOREIGN_RESOURCE_SERVER = 'audiencia-ajena';
-// Valor del claim de alcance por recurso con el que se siembran los usuarios NO exentos.
-// Es dato de prueba, no del diseño: el diseño declara de dónde sale la acotación, y qué
-// recurso concreto alcanza un usuario de prueba es cosa del escenario. Viaja a
-// test-credentials.env (`AUTH_SCOPED_RESOURCE`) para que el arnés lo lea en vez de
-// hardcodearlo, igual que ya hace con los secretos.
-const SCOPED_VALUE = 'keel-scoped-resource';
+// Valor del claim de alcance cuando el diseño no declara ningún `serviceClient`: sin superficie
+// M2M, el recurso acotado no tiene que originar tráfico y cualquier código sirve.
+const SCOPED_FALLBACK = 'keel-scoped-resource';
 
+/** El recurso acotado con el que se siembran los usuarios de prueba: lo deriva el modelo. */
+function scopedValue(model) {
+  return model.security?.scoping?.testResource ?? SCOPED_FALLBACK;
+}
 /** Protocolos de identidad basados en token: son los que necesitan aprovisionamiento. */
 function usesTokens(model) {
   const protocol = model.security?.protocol ?? 'none';
@@ -76,12 +77,10 @@ function testM2mClients(model) {
   if ((model.security?.scopes ?? []).length === 0) return [];
   const clients = ['test-m2m-ok', 'test-m2m-no-scope'];
   if (serviceAuth.validateAudience) clients.push('test-m2m-bad-aud', 'test-m2m-none');
-  // Con alcance por recurso, el recurso acotado necesita PODER ORIGINAR TRÁFICO. Sembrar el claim
-  // de los usuarios y no dar credencial a ese recurso deja el alcance probable solo por vías
-  // indirectas: en la primera corrida con `scoping`, el agente de pruebas tuvo que ejercitar el
-  // escenario por el canal de eventos porque no había forma de pedir nada por HTTP en nombre del
-  // recurso acotado. Se prueba entonces por una puerta que no es la que importa.
-  if (model.security?.scoping) clients.push(SCOPED_VALUE);
+  // El recurso acotado necesita PODER ORIGINAR TRÁFICO, y con el valor derivado del diseño ya lo
+  // puede: ES un `serviceClient` declarado, así que su credencial se crea con las demás. Aquí se
+  // añadía antes un cliente de prueba con ese nombre — el parche a un problema que la derivación
+  // elimina, y que además creaba una credencial que no correspondía a ningún recurso real.
   return clients;
 }
 
@@ -140,12 +139,11 @@ export function realmSpec(model) {
       // nombre, y solo lo llevan los roles que NO están exentos. Un usuario exento sin el
       // atributo es justamente lo que hace observable la exención — si todos lo llevaran,
       // el escenario que prueba que el administrador alcanza cualquier recurso no probaría
-      // nada. El valor es dato de PRUEBA, no del diseño, y por eso sale de una constante
-      // que también viaja a test-credentials.env: el escenario nombra la variable, no el
-      // literal.
+      // nada. El valor sale del DISEÑO (ver scopedValue) y viaja a test-credentials.env, de
+      // donde lo lee el arnés: el escenario nombra la variable, nunca el literal.
       attributes:
         scoping && !scoping.exemptRoles.includes(username) && username !== NO_ROLE_USER
-          ? { [scoping.claim]: [SCOPED_VALUE] }
+          ? { [scoping.claim]: [scopedValue(model)] }
           : {}
     })),
     scoping,
@@ -232,7 +230,7 @@ function credentialsEnv(model) {
       '# originar tráfico por HTTP; sin él, el alcance solo sería ejercitable por vías indirectas.',
       '# Su secreto es el compartido de la matriz de prueba (AUTH_CLIENT_SECRET).',
       exempt.length > 0 ? `# Exentos (su token no lleva el claim): ${exempt.join(', ')}` : '# Ningún rol exento.',
-      `AUTH_SCOPED_RESOURCE=${SCOPED_VALUE}`
+      `AUTH_SCOPED_RESOURCE=${scopedValue(model)}`
     );
   }
   return { path: 'infra/test-credentials.env', content: `${lines.join('\n')}\n` };
@@ -330,7 +328,7 @@ run "create clients/$USER_CID/protocol-mappers/models -r $REALM ${mapperConfig}"
 for SCOPED_USER in ${scoped.map((user) => user.username).join(' ')}; do
   SCOPED_UID=$(user_id_of "$SCOPED_USER")
   require_id "$SCOPED_UID" "el usuario $SCOPED_USER"
-  run "update users/$SCOPED_UID -r $REALM -s 'attributes.${claim}=[\\"${SCOPED_VALUE}\\"]'"
+  run "update users/$SCOPED_UID -r $REALM -s 'attributes.${claim}=[\\"${scopedValue(model)}\\"]'"
 done`);
     }
   }

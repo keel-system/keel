@@ -18,6 +18,48 @@
           "description": "Protocolo de autenticación, agnóstico de proveedor (Keycloak, Auth0... se decide al generar)."
         },
         "tokenLocation": { "type": "string", "enum": ["header", "cookie"], "default": "header" },
+        "callerIdentity": {
+          "type": "object",
+          "required": ["field", "from"],
+          "additionalProperties": false,
+          "description": "De dónde sale, por la superficie HTTP, la identidad de QUIÉN pide el trabajo — no si puede pedirlo (eso es access), sino en nombre de qué recurso lo pide. Es el hermano de messaging.subscriptions.<E>.identity: el mismo hecho por la otra puerta. Sin él, una operación que se resuelve por la credencial deja esa resolución en la prosa de una rule, y cada implementación la inventa: el campo acaba llegando del cuerpo (que lo elige el llamante) o duplicado en dos campos que hay que reconciliar.",
+          "properties": {
+            "field": {
+              "type": "string",
+              "pattern": "^[a-z][A-Za-z0-9]*$",
+              "description": "Campo del input que recibe la identidad YA RESUELTA. Ese campo deja de viajar en el cuerpo de la petición —lo estampa el servidor, igual que un campo generated—, así que el llamante no puede elegirlo ni hace falta comprobar que no mienta. Debe ser el MISMO campo que usa la identidad del camino de eventos, si la operación entra por las dos puertas: dos campos son dos verdades."
+            },
+            "from": {
+              "type": "object",
+              "required": ["source"],
+              "additionalProperties": false,
+              "description": "Qué del token identifica al recurso. Las dos opciones son legítimas; lo que no lo es es no haberlo decidido.",
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "enum": ["serviceClient", "claim"],
+                  "description": "'serviceClient': el cliente máquina de la credencial ES el recurso (la entrada de security.serviceClients se corresponde con el identificador del recurso). 'claim': el recurso viaja en un claim del token que puebla el proveedor de identidad."
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Nombre del claim. Obligatorio con source 'claim' y prohibido con 'serviceClient', donde el identificador es el propio cliente."
+                }
+              },
+              "allOf": [
+                {
+                  "if": { "properties": { "source": { "const": "claim" } }, "required": ["source"] },
+                  "then": { "required": ["name"] }
+                },
+                {
+                  "if": { "properties": { "source": { "const": "serviceClient" } }, "required": ["source"] },
+                  "then": { "not": { "required": ["name"] } }
+                }
+              ]
+            },
+            "description": { "type": "string" }
+          }
+        },
         "scoping": {
           "type": "object",
           "required": ["claim", "over", "error"],

@@ -389,7 +389,14 @@ y JSONAssert ya falla por ella sin ninguna aserción dedicada.
   test**: salen de `infra/test-credentials.env`, que genera `keel-spring build` junto al
   script de aprovisionamiento y que `AbstractFlowIT` lee. Un literal inventado a este lado es
   una apuesta contra la infraestructura, y cuando falla bloquea la suite entera en
-  `@BeforeAll` sin decir por qué. La convención completa —realm, cliente de prueba, usuario
+  `@BeforeAll` sin decir por qué.
+- Con **alcance por recurso** (`authentication.scoping`), el recurso al que alcanzan los usuarios
+  no exentos se pide con **`scopedResource()`** — nunca se escribe el código a mano. Ese valor lo
+  siembra `build` en el realm y lo publica en `test-credentials.env`, así que escribirlo aquí
+  crea una tercera copia del mismo dato: exactamente lo que tumbó tres clases con un
+  `403 APPLICATION_FORBIDDEN` en su `@BeforeAll`, y lo que hizo que arreglar el realm no
+  arreglara nada. Los roles exentos alcanzan cualquier recurso, así que el escenario negativo
+  —403 sobre otro recurso— se escribe con un rol **no** exento. La convención completa —realm, cliente de prueba, usuario
   por rol— está en [infra-validation](infra-validation.md) § Obtener un token.
 - Los **fixtures de identidad que ya documenta una skill del stack** (los clientes
   `test-m2m-*` de Keycloak, el usuario `no-role`, el cliente `<artifactId>-test`) se asumen

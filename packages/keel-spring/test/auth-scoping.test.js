@@ -24,7 +24,10 @@ import { scaffoldService } from '../src/scaffold/index.js';
 const fixtureDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'catalog-extended');
 
 const CLAIM = 'tenants';
-const SCOPED_VALUE = 'keel-scoped-resource';
+// El recurso acotado NO es un literal del generador: es el primer `serviceClient` del diseño —el
+// único que puede originar tráfico— y esta fixture declara `billing`. Cuando era un literal
+// inventado, no coincidía con el recurso de los escenarios y tumbaba clases enteras con un 403.
+const SCOPED_VALUE = 'billing';
 
 function security({ scoping = true } = {}) {
   return {
@@ -132,21 +135,25 @@ test('el valor del claim viaja a test-credentials.env, no al código de las prue
   assert.match(env, /Exentos \(su token no lleva el claim\): admin/);
 });
 
-test('el recurso acotado tiene credencial propia para poder originar tráfico', () => {
+test('el recurso acotado tiene credencial porque ES un serviceClient del diseño', () => {
   // Sembrar el claim y no dar credencial al recurso deja el alcance probable solo por vías
   // indirectas: en la primera corrida con `scoping`, el escenario tuvo que ir por el canal de
-  // eventos porque nadie podía pedir nada por HTTP en nombre del recurso acotado — y el alcance
-  // se acaba probando por una puerta que no es la que importa.
+  // eventos porque nadie podía pedir nada por HTTP en nombre del recurso acotado.
+  //
+  // La primera respuesta a eso fue añadir un cliente M2M de prueba con el nombre del literal, y
+  // era el parche equivocado: creaba una credencial que no correspondía a ningún recurso real y
+  // seguía sin coincidir con el que usan los escenarios. Derivando el valor del diseño el
+  // problema desaparece — la credencial ya existe porque el recurso ES un `serviceClient`.
   const { read } = build();
   const script = read('infra/init-keycloak.sh');
   const env = read('infra/test-credentials.env');
   const realm = JSON.parse(read('deploy/keycloak/realm-export.json'));
 
-  assert.match(script, new RegExp(`clientId=${SCOPED_VALUE}\\b`), 'el script no crea su cliente máquina');
-  // Comparte el secreto de la matriz de prueba (`AUTH_CLIENT_SECRET`), como el resto de clientes
-  // que no salen del diseño: no necesita clave propia, pero sí que la clave exista.
-  assert.match(env, /^AUTH_CLIENT_SECRET=/m, 'sin secreto compartido el cliente no es usable');
+  assert.match(script, new RegExp(`clientId=${SCOPED_VALUE}\\b`), 'el recurso acotado no tiene cliente');
+  assert.match(env, new RegExp(`^AUTH_CLIENT_SECRET_${SCOPED_VALUE.toUpperCase()}=`, 'm'), 'sin secreto no es usable');
   assert.match(env, /^AUTH_SCOPED_RESOURCE=/m);
+  // Y NO se crea un cliente de prueba extra con ese nombre: sobra en cuanto el valor sale del diseño.
+  assert.ok(!script.includes('clientId=keel-scoped-resource'), 'quedó el cliente M2M del literal viejo');
 
   const client = realm.clients.find((entry) => entry.clientId === SCOPED_VALUE);
   assert.ok(client, 'el realm importado no trae el cliente del recurso acotado');
@@ -154,6 +161,18 @@ test('el recurso acotado tiene credencial propia para poder originar tráfico', 
   // Con la audiencia buena: un cliente que no pasa la validación de `aud` no sirve para
   // ejercitar el alcance, sino para ejercitar la audiencia — que es otro escenario.
   assert.ok((client.defaultClientScopes ?? []).some((scope) => scope.startsWith('aud-')));
+});
+
+test('el arnés expone el recurso acotado, para que el escenario no lo escriba a mano', () => {
+  // Es la tercera pata del mismo contrato. Antes el valor se publicaba en test-credentials.env y
+  // NADIE lo leía —cero coincidencias de AUTH_SCOPED_RESOURCE en src/integrationTest/java—, así
+  // que el dato vivía en tres sitios y arreglar uno no arreglaba nada.
+  const { read } = build();
+  const harness = read('src/integrationTest/java/com/commerce/catalog/flows/AbstractFlowIT.java');
+
+  assert.match(harness, /protected static String scopedResource\(\)/);
+  assert.match(harness, /env\("AUTH_SCOPED_RESOURCE"/, 'no lo lee del archivo que lo produce');
+  assert.match(harness, new RegExp(`"${SCOPED_VALUE}"`), 'sin valor convencional de respaldo');
 });
 
 test('sin scoping declarado no se genera nada de esto', () => {
