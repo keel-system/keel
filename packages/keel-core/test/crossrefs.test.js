@@ -4448,7 +4448,7 @@ test('el campo de la identidad tiene que estar en el input de la operación de s
   const layers = withCallerIdentity({ field: 'noExiste' });
   const { errors } = run(layers);
   assert.ok(
-    errors.some((e) => e.includes(`callerIdentity.field: 'noExiste' no es un campo del input`)),
+    errors.some((e) => e.includes(`callerIdentity.field: 'noExiste' no es un campo del input de ninguna operación`)),
     errors.join('\n')
   );
 });

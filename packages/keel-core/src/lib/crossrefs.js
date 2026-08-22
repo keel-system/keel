@@ -958,16 +958,19 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
     // identidad, y —lo que más rinde— que las dos puertas dejen el dato en el MISMO sitio.
     const callerIdentity = security.authentication?.callerIdentity;
     if (callerIdentity) {
-      const serviceOps = Object.entries(operations).filter(
-        ([opName]) => (security.access?.rules?.[opName] ?? security.access?.default)?.level === 'service'
-      );
-      for (const [opName, op] of serviceOps) {
+      // El campo tiene que existir en ALGUNA operación, no en todas las de `level: service`. No
+      // toda operación de máquina actúa en nombre de un recurso: un relay que reporta un rebote
+      // llama con su propia credencial y no representa a ningún inquilino. Exigirlo en todas era
+      // pedir la forma incorrecta — y el camino de menor resistencia para callar ese error habría
+      // sido añadir un campo que nadie usa.
+      const landsSomewhere = Object.values(operations).some((op) => {
         const inputFields = op.input && typeof op.input === 'object' ? (op.input.fields ?? {}) : {};
-        if (!Object.hasOwn(inputFields, callerIdentity.field)) {
-          errors.push(
-            `security: authentication.callerIdentity.field: '${callerIdentity.field}' no es un campo del input de '${opName}', que se expone con level 'service' — la identidad resuelta no tiene dónde aterrizar`
-          );
-        }
+        return Object.hasOwn(inputFields, callerIdentity.field);
+      });
+      if (!landsSomewhere) {
+        errors.push(
+          `security: authentication.callerIdentity.field: '${callerIdentity.field}' no es un campo del input de ninguna operación — la identidad resuelta no tiene dónde aterrizar`
+        );
       }
       if (callerIdentity.from?.source === 'serviceClient' && Object.keys(security.serviceClients ?? {}).length === 0) {
         errors.push(
