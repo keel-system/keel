@@ -267,6 +267,11 @@ Por cada operación con `idempotency` en `specs/use-cases.keel.yaml`, su handler
 3. Con `keySource: payload-hash`, **no** hay `IdempotencyContext`: la clave es la
    firma. Un `if (key.isPresent())` ahí es el defecto exacto que hace que la operación
    no deduplique nunca sin que nada lo delate.
+3b. Con `keySource: payload-field` y la guarda en la clave natural **no hay ningún mecanismo
+   generado**: ni puerto, ni tabla, ni firma. Lo que se revisa entonces es que el handler busque
+   por la clave natural ANTES de insertar y devuelva el recurso existente — y que no se haya
+   escrito un registro paralelo para «cumplir» con lo de arriba, que es el camino de menor
+   resistencia y duplica una verdad que la constraint ya tiene.
 4. La repetición **no re-ejecuta nada**: ni escrituras, ni eventos.
 
 ### 3. Compensación → `compensation`

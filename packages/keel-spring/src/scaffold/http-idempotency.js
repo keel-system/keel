@@ -26,17 +26,42 @@ const SUPPORT_PKG = 'application.support';
 const ADAPTER_PKG = 'infrastructure.persistence.idempotency';
 const WEB_PKG = 'infrastructure.web';
 
-/** ¿Alguna operación del diseño declara `idempotency`? (independiente del stack) */
+/**
+ * ¿Alguna operación necesita el REGISTRO de claves? (independiente del stack)
+ *
+ * No basta con que declare `idempotency`: una operación cuya guarda es la clave natural del
+ * agregado ya está protegida por una constraint de la base —permanente y común a todas sus
+ * puertas—, así que un almacén aparte sería un segundo registro de lo mismo, con su propia
+ * caducidad y sin nadie que lo poble. En la corrida que destapó esto, `IdempotencyStore`,
+ * `IdempotencyContext` y `CommandSignature` se generaron y quedaron muertos.
+ */
 export function declaresIdempotency(model) {
-  return (model.services ?? []).some((group) => group.operations.some((operation) => operation.idempotency));
+  return (model.services ?? []).some((group) =>
+    group.operations.some((operation) => operation.idempotency && operation.idempotency.guard !== 'natural-key')
+  );
 }
 
-/** Operaciones con `idempotency`, filtrables por `keySource`. */
+/**
+ * Operaciones con `idempotency`, filtrables por `keySource`.
+ *
+ * Deja fuera las que se guardan con la clave natural: no usan el almacén, así que ni se les
+ * inyecta el puerto ni el gate les exige usarlo. Su algoritmo es otro y va en la nota del stub.
+ */
 export function idempotentOperations(model, keySource = null) {
   return (model.services ?? []).flatMap((group) =>
     group.operations.filter(
-      (operation) => operation.idempotency && (!keySource || operation.idempotency.keySource === keySource)
+      (operation) =>
+        operation.idempotency &&
+        operation.idempotency.guard !== 'natural-key' &&
+        (!keySource || operation.idempotency.keySource === keySource)
     )
+  );
+}
+
+/** Operaciones cuya guarda de repetición es la clave natural del agregado, no un almacén. */
+export function naturalKeyGuardedOperations(model) {
+  return (model.services ?? []).flatMap((group) =>
+    group.operations.filter((operation) => operation.idempotency?.guard === 'natural-key')
   );
 }
 

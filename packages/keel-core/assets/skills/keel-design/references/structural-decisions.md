@@ -90,13 +90,24 @@ elegir el equivocado es declarar una garantía que nada implementa:
 
 | Quién repite | Mecanismo | Dónde se declara |
 |---|---|---|
-| Un llamante HTTP que reintenta (timeout, doble clic) | clave que él manda en una cabecera | `use-cases.<op>.idempotency` ← **esta entrada** |
+| Un llamante que reintenta (timeout, doble clic) | clave que él manda: en una cabecera (`client-key`) o en el cuerpo (`payload-field`) | `use-cases.<op>.idempotency` ← **esta entrada** |
 | El broker, que reentrega el mismo mensaje | id del mensaje, o irrepetibilidad en el dominio | `messaging: subscriptions.<E>.contract.messageId`, o `use-cases.<op>.transitions` |
 | **Nosotros**, reintentando contra un proveedor | clave que le mandamos a él | `http-clients.clients.<c>.calls.<x>.idempotency` |
 
-Esta entrada es **solo la primera fila**: `idempotency` solo tiene sentido en una operación **con
-endpoint HTTP**, porque su clave entra por ahí. En una operación interna o disparada por evento,
-`keel validate` la da en rojo. Si el caso es el segundo, la decisión no es esta: es §3.5 y §3.11.
+Esta entrada es **solo la primera fila**, y dentro de ella hay una segunda pregunta que decide
+mucho más de lo que parece: **por dónde llega la clave**.
+
+- Con `keySource: client-key` viaja en la cabecera `Idempotency-Key`, así que solo tiene sentido en
+  una operación **con endpoint HTTP**. En una interna o disparada solo por evento, `keel validate`
+  la da en rojo; y si la operación tiene **las dos puertas** —endpoint y suscripción— también,
+  porque el broker no manda cabeceras y la mitad de las entradas se ejecutaría sin deduplicar.
+- Con `keySource: payload-field` la clave **es un campo del contrato** (`keyField`). Llega por
+  igual desde HTTP y desde el canal de eventos, y es la única forma que cubre una operación con dos
+  disparadores. Pregunta al diseñador cuál de las dos es su caso: si la clave ya viaja en el cuerpo
+  —porque el mismo mensaje entra por las dos vías, o porque el contrato ya la lleva—, la respuesta
+  es esta y no la cabecera.
+
+Si el caso es el de la segunda fila, la decisión no es esta: es §3.5 y §3.11.
 
 El tercero es el que más se olvida, porque el reintento parece resiliencia y no repetición: si
 la llamada es una escritura ajena —cobrar, reservar, inscribir— cada reintento la ejecuta otra

@@ -1,4 +1,4 @@
-keel: "2.11"
+keel: "2.12"
 # Diseño MÍNIMO cuya única razón de ser es la cadena de compensación e idempotencia,
 # que es lo que el resto de fixtures ejercita de refilón y ninguna prueba entera:
 #

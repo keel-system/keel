@@ -3210,6 +3210,87 @@ test('idempotency en una operación sin endpoint HTTP es error', () => {
   assert.ok(errors.some((e) => e.includes('la reentrega se ataja con contract.messageId')));
 });
 
+// `payload-field` (DSL 2.12): la clave ES un campo del contrato, así que no depende del transporte.
+// Es el hueco que cerró — un diseño real tenía una operación con dos puertas cuya clave viajaba en
+// el cuerpo, y lo único que el DSL sabía decir describía una cabecera que la mitad de las entradas
+// no lleva.
+
+test('con payload-field una operación sin endpoint SÍ puede declarar idempotencia', () => {
+  // Antes era error para cualquier keySource. Con la clave en el cuerpo no hay cabecera que echar
+  // de menos: una operación disparada solo por una suscripción la recibe igual.
+  const layers = compLayers();
+  const op = layers['use-cases'].operations.reactivateProduct;
+  op.input = { fields: { requestKey: { type: 'string', required: true } } };
+  op.idempotency = { keySource: 'payload-field', keyField: 'requestKey' };
+  const { errors } = run(layers);
+  assert.ok(
+    !errors.some((e) => e.includes('no tiene endpoint HTTP que la reciba')),
+    errors.join('\n')
+  );
+});
+
+/** El barrido con las DOS puertas: endpoint HTTP y suscripción disparándolo. */
+function twoDoorLayers() {
+  const layers = compLayers();
+  const op = layers['use-cases'].operations.reactivateProduct;
+  delete op.internal;
+  delete op.transitions;
+  layers.api = layers.api ?? { endpoints: {} };
+  layers.api.endpoints = layers.api.endpoints ?? {};
+  layers.api.endpoints.reactivateProduct = { method: 'POST', path: '/products/{id}/reactivate' };
+  return layers;
+}
+
+test('client-key con dos puertas es error: el broker no manda la cabecera', () => {
+  // La doctrina ya estaba escrita para compensaciones; esta es su forma general. La cabecera cierra
+  // la puerta HTTP y no existe en la del broker, así que la mitad de las entradas no deduplica.
+  const layers = twoDoorLayers();
+  layers['use-cases'].operations.reactivateProduct.idempotency = { keySource: 'client-key' };
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) => e.includes('entra por DOS puertas') && e.includes('reactivateProduct')),
+    errors.join('\n')
+  );
+});
+
+test('con payload-field las dos puertas quedan cubiertas', () => {
+  // La salida que el error propone tiene que funcionar de verdad: si señalara un camino cerrado,
+  // el mensaje mandaría a dar vueltas.
+  const layers = twoDoorLayers();
+  const op = layers['use-cases'].operations.reactivateProduct;
+  op.input = { fields: { requestKey: { type: 'string', required: true } } };
+  op.idempotency = { keySource: 'payload-field', keyField: 'requestKey' };
+  const { errors } = run(layers);
+  assert.ok(!errors.some((e) => e.includes('entra por DOS puertas')), errors.join('\n'));
+});
+
+test('con la puerta del broker ya cerrada, client-key y dos puertas no es error', () => {
+  // `contract.messageId` deduplica el mensaje en el listener: cada puerta tiene la suya y no falta
+  // ninguna. Marcarlo como error aquí exigiría un cambio que no arregla nada.
+  const layers = twoDoorLayers();
+  layers['use-cases'].operations.reactivateProduct.idempotency = { keySource: 'client-key' };
+  for (const sub of Object.values(layers.messaging.subscriptions)) {
+    if (sub.triggers === 'reactivateProduct') {
+      sub.contract = { ...(sub.contract ?? {}), messageId: { name: 'eventId' } };
+    }
+  }
+  const { errors } = run(layers);
+  assert.ok(!errors.some((e) => e.includes('entra por DOS puertas')), errors.join('\n'));
+});
+
+test('el keyField tiene que ser un campo del input', () => {
+  // Nombrar un campo que no está deja el mecanismo apuntando a la nada, y nada lo diría después.
+  const layers = compLayers();
+  const op = layers['use-cases'].operations.reactivateProduct;
+  op.input = { fields: { requestKey: { type: 'string', required: true } } };
+  op.idempotency = { keySource: 'payload-field', keyField: 'noExiste' };
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) => e.includes(`keyField: 'noExiste' no es un campo del input`)),
+    errors.join('\n')
+  );
+});
+
 // Lo que se guarda de la primera ejecución es un id: con eso se reconstruye una
 // ficha, no una lista — que depende del estado del resto del sistema al responder.
 test('idempotency sobre una respuesta que no se reconstruye desde un id avisa', () => {

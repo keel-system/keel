@@ -2593,6 +2593,14 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
   const triggeredBySubscription = new Set(
     Object.values(messaging?.subscriptions ?? {}).map((sub) => sub.triggers)
   );
+  // Las suscripciones que disparan cada operación, para poder mirar SUS guardas: una operación
+  // con dos puertas está protegida en la del broker solo si la suscripción deduplica el mensaje.
+  const subscriptionsTriggering = new Map();
+  for (const [subName, sub] of Object.entries(messaging?.subscriptions ?? {})) {
+    if (!sub?.triggers) continue;
+    if (!subscriptionsTriggering.has(sub.triggers)) subscriptionsTriggering.set(sub.triggers, []);
+    subscriptionsTriggering.get(sub.triggers).push({ name: subName, sub });
+  }
   for (const [opName, op] of Object.entries(operations)) {
     const reachableByHttp = Boolean(api && (autoCoversOp(opName) || apiEndpoints.has(opName)));
     const exposed =
@@ -2635,11 +2643,56 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
       );
     }
 
-    // `idempotency` deduplica el reintento de un llamante que reenvía su clave por la
-    // cabecera Idempotency-Key. Sin endpoint HTTP esa cabecera no llega nunca, y lo que
+    // DOS PUERTAS con guarda de una sola. Si la operación se alcanza por HTTP y además la dispara
+    // una suscripción, la cabecera Idempotency-Key cierra la primera y no existe en la segunda: la
+    // mitad de las entradas se ejecuta sin deduplicar. La doctrina ya estaba escrita para las
+    // compensaciones («añadir idempotency no basta: sin cabecera se ejecuta sin deduplicar»); esto
+    // la generaliza, porque la forma peligrosa no tiene nada de específico de una compensación.
+    //
+    // No basta con mirar `idempotency`: la puerta del broker puede estar cerrada por su cuenta —con
+    // `contract.messageId` en la suscripción, o con una transición irrepetible, que vive en el
+    // dominio y cubre las dos—. Solo es error cuando no hay ninguna de las dos.
+    if (op.idempotency?.keySource === 'client-key' && reachableByHttp && triggeredBySubscription.has(opName)) {
+      const subs = subscriptionsTriggering.get(opName) ?? [];
+      const brokerGuarded =
+        hasIrrepeatableTransition(op) || subs.every(({ sub }) => sub?.contract?.messageId !== undefined);
+      if (!brokerGuarded) {
+        const sinGuarda = subs
+          .filter(({ sub }) => sub?.contract?.messageId === undefined)
+          .map(({ name }) => name)
+          .join(', ');
+        errors.push(
+          `use-cases: ${opName}.idempotency: la operación entra por DOS puertas —su endpoint HTTP y la suscripción ` +
+            `${sinGuarda}— y 'client-key' solo cierra la primera: el broker no manda la cabecera Idempotency-Key, así que ` +
+            `los mensajes se ejecutan sin deduplicar. Declara la clave como campo del contrato ` +
+            `(keySource: payload-field, que llega por las dos), o messaging.subscriptions.${sinGuarda.split(', ')[0]}.contract.messageId, ` +
+            `o una transición de lifecycle irrepetible`
+        );
+      }
+    }
+
+    // La clave que ES un campo del input: no depende del transporte, así que llega igual por
+    // HTTP y por el canal de eventos. Tiene que existir en el input — nombrar un campo que no
+    // está deja el mecanismo apuntando a la nada.
+    if (op.idempotency?.keySource === 'payload-field') {
+      const keyField = op.idempotency.keyField;
+      const inputFields = op.input && typeof op.input === 'object' ? (op.input.fields ?? {}) : {};
+      if (!Object.hasOwn(inputFields, keyField)) {
+        errors.push(
+          `use-cases: ${opName}.idempotency.keyField: '${keyField}' no es un campo del input de la operación — la clave tiene que viajar en el contrato para poder deduplicar por ella`
+        );
+      }
+    }
+
+    // `idempotency` con `client-key` deduplica el reintento de un llamante que reenvía su clave
+    // por la cabecera Idempotency-Key. Sin endpoint HTTP esa cabecera no llega nunca, y lo que
     // se genera es un almacén que nadie puebla: el bloque promete una garantía que nada
     // implementa, y nadie vuelve a mirarlo. El mecanismo correcto depende del disparador.
-    if (op.idempotency && !reachableByHttp) {
+    //
+    // `payload-field` queda FUERA de esta regla, y es justo lo que vino a resolver: si la clave
+    // es un campo del cuerpo, no hay cabecera que echar de menos y una operación disparada solo
+    // por una suscripción puede declarar idempotencia con todo el sentido.
+    if (op.idempotency && op.idempotency.keySource !== 'payload-field' && !reachableByHttp) {
       const alternativa = triggeredBySubscription.has(opName)
         ? `la dispara una suscripción: la reentrega se ataja con contract.messageId en messaging`
         : `no la invoca ningún cliente externo: lo que evita el efecto doble es la clave natural en persistence o una transición de lifecycle irrepetible`;

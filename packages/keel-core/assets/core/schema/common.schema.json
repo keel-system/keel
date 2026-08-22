@@ -355,15 +355,36 @@
       "properties": {
         "keySource": {
           "type": "string",
-          "enum": ["client-key", "payload-hash"],
-          "description": "De dónde sale la clave de idempotencia: la envía el cliente o se deriva del payload."
+          "enum": ["client-key", "payload-hash", "payload-field"],
+          "description": "De dónde sale la clave de idempotencia. client-key: la envía el cliente en la cabecera Idempotency-Key, así que solo llega por la superficie HTTP. payload-hash: se deriva del contenido de la petición. payload-field: es un campo del propio input (keyField), o sea parte del contrato — llega por igual desde HTTP y desde el canal de eventos, que es la única forma que cubre una operación con dos disparadores."
+        },
+        "keyField": {
+          "type": "string",
+          "pattern": "^[a-z][A-Za-z0-9]*$",
+          "description": "Con keySource: payload-field, el campo del input que lleva la clave. Se nombra en vez de adivinarse: cuál identifica la petición es del diseño, no una convención del generador."
         },
         "ttlSeconds": {
           "type": "integer",
           "minimum": 1,
-          "description": "Ventana durante la que una repetición devuelve el resultado original."
+          "description": "Ventana durante la que una repetición devuelve el resultado original. Sin él la guarda es permanente."
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "keySource": { "const": "payload-field" } }, "required": ["keySource"] },
+          "then": { "required": ["keyField"] }
+        },
+        {
+          "if": {
+            "properties": { "keySource": { "enum": ["client-key", "payload-hash"] } },
+            "required": ["keySource"]
+          },
+          "then": {
+            "not": { "required": ["keyField"] },
+            "$comment": "keyField solo significa algo cuando la clave ES un campo del input: con la cabecera o con el hash del payload no hay campo que nombrar, y dejarlo pasar declararía una intención que nada implementa."
+          }
+        }
+      ]
     },
     "scheduleTrigger": {
       "type": "object",

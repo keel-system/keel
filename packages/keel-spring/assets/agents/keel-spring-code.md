@@ -193,6 +193,11 @@ misma raíz. Todo lo que hagas ocurre dentro de ella.
   `CommandSignature.of(command)` y siempre está. Envolver eso en un `if (key.isPresent())` es
   el defecto exacto que hace que la operación no deduplique nunca y en silencio
   (`commandIdempotency: OK|KO`).
+  Y con `keySource: payload-field` puede que **no haya nada generado**: si el campo de la clave
+  participa en la `naturalKey` del agregado, esa constraint ya es la guarda y build no emite ni
+  puerto ni tabla. Ahí el algoritmo es otro —buscar por la clave natural y devolver el recurso
+  existente, sin re-ejecutar nada— y **la nota del handler te dice cuál de los dos toca**: no lo
+  deduzcas del `keySource` a secas. Si no hay `IdempotencyStore` en el árbol, no lo escribas tú.
 - Y con la idempotencia **saliente** (`idempotency` en una llamada de `http-clients`): la
   cabecera ya la estampa el adaptador generado. No la muevas ni la recalcules — que la clave
   del reintento sea la misma es lo único que la hace servir para algo.

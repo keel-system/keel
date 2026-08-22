@@ -23,7 +23,8 @@
 // siendo juicio, y ese lo pone el agente de calidad — que ahora ejecuta esto en vez de
 // leer el árbol a mano.
 
-import { declaresIdempotency, idempotentOperations } from './http-idempotency.js';
+import { declaresIdempotency, idempotentOperations, naturalKeyGuardedOperations } from './http-idempotency.js';
+import { naturalKeyFinder } from './repositories.js';
 import { usesOutbox } from './outbox.js';
 
 /**
@@ -54,6 +55,7 @@ function checksOf(model) {
     ...payloadContractChecks(model),
     ...insertChecks(model),
     ...commandChecks(model),
+    ...naturalKeyChecks(model),
     ...compensationChecks(model),
     ...reconciliationChecks(model),
     ...sweepClaimChecks(model),
@@ -407,6 +409,37 @@ function commandChecks(model) {
         ? 'keySource: payload-hash — la clave es CommandSignature.of(command), sin IdempotencyContext ni rama «sin clave»'
         : 'keySource: client-key — la clave llega por IdempotencyContext.get() y la firma por CommandSignature.of(command)'
   }));
+}
+
+// 2.b Idempotencia guardada por la CLAVE NATURAL. Aquí build no genera ningún mecanismo —la
+//     constraint del agregado ya es la guarda—, así que exigir `IdempotencyStore` sería pedir una
+//     clase que no existe: el camino de menor resistencia para callar ese check sería escribir un
+//     registro paralelo, que es exactamente lo que no queremos. Lo afirmable es lo otro: que el
+//     handler BUSQUE por la clave natural antes de insertar, porque el contrato de la idempotencia
+//     no es rechazar la repetición sino devolver la respuesta original. Sin esa búsqueda el
+//     servidor contesta un 409 donde prometía el recurso, y eso solo lo delata un escenario.
+function naturalKeyChecks(model) {
+  return naturalKeyGuardedOperations(model)
+    .map((operation) => {
+      const entity = (model.entities ?? []).find((candidate) => candidate.name === operation.idempotency.entity);
+      const finder = entity ? naturalKeyFinder(model, entity) : null;
+      if (!finder) return null;
+      return {
+        group: 'commandIdempotency',
+        subject: operation.name,
+        class: operation.handlerClass,
+        require: [`${finder.name}\\s*\\(`],
+        forbid: [
+          // Un registro paralelo al que la constraint ya cubre: dos verdades sobre lo mismo, y la
+          // del almacén además caduca.
+          'IdempotencyStore'
+        ],
+        why:
+          `keySource: payload-field con guarda en la clave natural (${operation.idempotency.naturalKey.join(', ')}) — ` +
+          `la repetición se resuelve buscando con ${finder.name}(...) y devolviendo el recurso existente, no con un almacén`
+      };
+    })
+    .filter(Boolean);
 }
 
 // Las operaciones cuelgan de su servicio (un agregado, un servicio de aplicación), no

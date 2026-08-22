@@ -365,7 +365,9 @@ function renderHandler(model, service, operation) {
   // El registro de idempotencia, por el mismo criterio que lo anterior: el diseño
   // le atribuyó a esta operación la garantía de no ejecutarse dos veces, y sin el
   // puerto delante el camino de menor resistencia es no usarlo — o escribir otro.
-  if (operation.idempotency && model.layersPresent.persistence) {
+  // Con la guarda en la clave natural NO se inyecta: build no genera el puerto, y pedirlo aquí
+  // dejaría el handler sin compilar. La garantía la da la constraint del agregado.
+  if (operation.idempotency && operation.idempotency.guard !== 'natural-key' && model.layersPresent.persistence) {
     inject('IdempotencyStore', 'domain.idempotency');
   }
   // La salida por correo, por el mismo criterio: `mail.sentBy` es el único enlace
@@ -412,7 +414,30 @@ function renderHandler(model, service, operation) {
       `Emite: ${eventName} — lo hace ${event?.aggregate ?? 'el agregado'} con raise(${event?.className ?? `${eventName}Event`}.of(...)) dentro del método de negocio; el handler no publica nada`
     );
   }
-  if (operation.idempotency) {
+  // La guarda es la clave natural del agregado: otro esqueleto entero, y por eso su nota va
+  // aparte en vez de como variante de la de abajo. Aquí no hay almacén que reclamar ni firma que
+  // comparar — la constraint arbitra la carrera por su cuenta—, y lo que el handler tiene que
+  // hacer es buscar por esa clave y DEVOLVER lo que ya existe. Sin decirlo, el camino de menor
+  // resistencia es insertar y dejar que el choque suba como error, que rompe el contrato: una
+  // repetición devuelve la respuesta original, no un 409.
+  if (operation.idempotency?.guard === 'natural-key') {
+    const { keyField, naturalKey } = operation.idempotency;
+    notes.push(
+      `Idempotencia: keySource=payload-field, keyField=${keyField}. La guarda es la CLAVE NATURAL ` +
+        `(${naturalKey.join(', ')}) del agregado, no un almacén: build NO genera IdempotencyStore ni ` +
+        `CommandSignature para esta operación, y no debes escribir otro registro. Es permanente (no caduca ` +
+        `como un ttl) y cubre por igual todas las puertas por las que entra la operación, incluida la del ` +
+        `broker — que es lo que la cabecera Idempotency-Key no podía hacer. Algoritmo: busca por la clave ` +
+        `natural ANTES de insertar; si ya existe, devuelve ese mismo recurso sin re-ejecutar nada (ni ` +
+        `escrituras ni eventos) — una repetición devuelve la respuesta original, NO un error. La CARRERA la ` +
+        `arbitra la constraint: dos peticiones simultáneas fallan las dos la búsqueda y llegan las dos al ` +
+        `insert, así que NO captures la DataIntegrityViolationException para "arreglarlo" — reléela y ` +
+        `devuelve el recurso ganador, o déjala subir traducida a ` +
+        `${FRAMEWORK_ERRORS.idempotencyRace.http} ${effectiveErrorCode(model, FRAMEWORK_ERRORS.idempotencyRace)}. ` +
+        `Qué NO cubre: nada que ya haya salido del proceso antes del choque`
+    );
+  }
+  if (operation.idempotency && operation.idempotency.guard !== 'natural-key') {
     const ttl = operation.idempotency.ttlSeconds ?? 86400;
     const common =
       `find(scope, clave) con scope="${operation.name}"; si hay registro con la MISMA firma, reconstruye la respuesta desde su resourceId sin re-ejecutar nada (ni escrituras ni eventos); si la firma difiere, lanza IdempotencyReuseException (${FRAMEWORK_ERRORS.idempotencyReuse.http} ${effectiveErrorCode(model, FRAMEWORK_ERRORS.idempotencyReuse)}), que build genera para eso — no inventes un code ni reutilices el de la carrera, que es otro desenlace; si no hay registro, RECLAMA PRIMERO: decide el identificador del recurso, llama a save(scope, clave, firma, resourceId, ttl) y SOLO DESPUÉS ejecuta el negocio, todo dentro de la misma transacción del comando. ` +
