@@ -157,6 +157,20 @@ dónde está el defecto**, porque el humo cae por dos causas de dueños distinto
 El agente de pruebas relanzado tiene la simétrica de esta regla: si el diagnóstico apunta
 fuera de su alcance, devuelve `blockers` en vez de parchear.
 
+**Dónde mirar cuando el rojo es un `initializationError`.** Significa que una clase reventó en su
+`@BeforeAll` y no ejecutó ni un escenario: los `FL-*` que le tocaban aparecen arriba como
+`NO_EJERCITADO`, y eso **no** es falta de cobertura. La causa ya no hay que ir a buscarla:
+
+- `score-scenarios.sh` la imprime **bajo la clase**, en la lista de rojos que no son escenarios;
+- el volcado está en `build/keel-failures/<Clase>-init.json`, con `phase: "@BeforeAll"` y el
+  último `probe` —comando, código de salida y salida completa—;
+- y `build/keel-scenarios/run.log` trae la traza entera.
+
+El sospechoso habitual es un fixture que fabrica estado con `db(...)`: ahí el mensaje del motor
+dice literalmente qué rechazó (una tabla que no existe, un valor que no cumple el CHECK de la
+columna). Es del agente de pruebas. Si en cambio el mensaje es `reset-db.sh falló` o algo del
+compose, la infraestructura está caída y no hay nada que arbitrar: es entorno.
+
 ## Por qué la fase 1 son tres agentes y ninguno espera a otro
 
 Los tres arrancan a la vez porque **todos sus insumos ya están en disco** antes de empezar:

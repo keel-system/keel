@@ -410,7 +410,25 @@ function renderTableAnnotation(model, entity, members, imports) {
   // filas — que es exactamente lo contrario del invariante («como máximo una
   // activa» pasaría a ser «como máximo una, activa o no»). Van al appendix de SQL
   // que escribe migrations.js, que es el único sitio donde el predicado existe.
-  const annotatable = entity.indexes.filter((index) => !index.when);
+  // Y tampoco sale por aquí el índice sobre un campo que NO es columna de esta tabla: una lista
+  // (`@ElementCollection`) vive en su tabla hija, así que anotarlo en el padre produce un `@Index`
+  // sobre una columna inexistente. Compila, y revienta al aplicar el DDL contra el motor — o peor,
+  // se cuela en el baseline y hay que corregirlo a mano, que es lo que pasó en una corrida real.
+  // El resolutor se usa como sonda: si avisa, es que no supo resolverlo, y ahí no se inventa.
+  const resolves = (index) => {
+    const probe = [];
+    for (const field of index.fields) columnsFor(model, entity, members, field, probe);
+    if (probe.length === 0) return true;
+    model.warnings?.push(
+      `persistence.entities.${entity.name}: el índice '${index.name ?? index.fields.join('+')}' declara ` +
+        `"${index.fields.join(', ')}", que no es columna de '${entity.tableName}' (una lista vive en su tabla ` +
+        `hija). NO se anota: un @Index sobre una columna inexistente rompe el DDL. Declara el índice sobre ` +
+        `la tabla que de verdad tiene el dato, o retíralo de persistence.keel.yaml.`
+    );
+    return false;
+  };
+
+  const annotatable = entity.indexes.filter((index) => !index.when).filter(resolves);
   if (annotatable.length > 0) {
     imports.add('jakarta.persistence.Index');
     const indexes = annotatable

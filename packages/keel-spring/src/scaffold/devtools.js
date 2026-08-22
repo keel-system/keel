@@ -7,7 +7,7 @@
 
 import { createHash } from 'node:crypto';
 import { declaredBuckets } from '../lib/buckets.js';
-import { deadLetterDestination, deadLetterSubscriptions } from '../lib/dead-letter.js';
+import { deadLetterDestination, deadLetterSubscriptions, subscriptionDestination } from '../lib/dead-letter.js';
 import { LOCAL_AWS_ENV } from '../lib/stack-catalog.js';
 import { messagingTopologyChecks } from './messaging-provisioning.js';
 
@@ -276,7 +276,18 @@ export function resetDbScript(selected, service, model = null) {
   const db = selected.find((s) => s.category === 'database' && s.entry.cliResetCmd);
   const cache = selected.find((s) => s.category === 'cache');
   const broker = selected.find((s) => s.category === 'broker' && s.entry.cliPurgeCmd);
-  const destinations = model?.messaging?.channels ?? [];
+  // Lo que se purga son DESTINOS REALES, no nombres lógicos del diseño. Para un canal de
+  // publicación coinciden; para una SUSCRIPCIÓN, no: se consume de la cola de la fuente
+  // (`any-registered-system.events`) y no del canal que el diseño nombra
+  // (`notificationRequests`). Purgando el nombre lógico se purgaba una cola inexistente —y como
+  // la purga es tolerante a fallo, el AVISO se imprimía en cada reset y la cola de entrada
+  // arrastraba mensajes entre flujos, que es justo lo que este script existe para impedir.
+  // El resolutor es el mismo que ya usa el descarte unas líneas más abajo: componerlo a mano es
+  // exactamente el error del que advierte el javadoc de `dead-letter.js`.
+  const subscriptionQueues = broker
+    ? (model?.subscriptions ?? []).map((sub) => subscriptionDestination(broker.id, model, sub))
+    : [];
+  const destinations = [...new Set([...(model?.messaging?.publishChannels ?? []), ...subscriptionQueues])];
   // Los destinos de descarte se purgan igual que los canales, y por un motivo que no
   // se ve hasta que muerde: un mensaje muerto sobrevive al reset (que solo tocaba BD,
   // caché y canales) y contamina el flujo siguiente. Como la aserción sobre un DLT

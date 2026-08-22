@@ -34,6 +34,14 @@ y sin ver el código; donde las dos lecturas discrepan, hace falta un tercero qu
 2. Por cada fallo, **abre primero su volcado** `build/keel-failures/<FL-id>.json`: trae el
    request completo, la response completa y la aserción que falló. El extracto del prompt
    orienta; el JSON es la evidencia. Ábrelos **antes** de ejecutar nada.
+
+   Si lo que falló fue un `@BeforeAll` —la clase entera cae con `initializationError` y sus
+   escenarios salen como `NO_EJERCITADO`, que dice «sin cobertura» cuando lo que hubo fue un
+   rojo— el volcado se llama `build/keel-failures/<Clase>-init.json` y lleva `phase: "@BeforeAll"`
+   más el último `probe` ejecutado, con su comando, su código de salida y su salida completa. Ese
+   probe suele ser la respuesta entera: un fixture que fabrica estado por `db(...)` falla ahí, y
+   el mensaje del motor dice exactamente qué rechazó. **No es un fallo de comportamiento**: no lo
+   arbitres como `culprit: code` — la clase no llegó a ejercitar nada.
 3. **Arbitra contra el `Then` original.** Un fallo no se clasifica por la pinta del stack
    trace. Cuatro veredictos posibles:
    - **`culprit: code`** — el test refleja fielmente el `Then` y el servidor no lo cumple.

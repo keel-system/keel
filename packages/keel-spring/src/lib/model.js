@@ -2436,8 +2436,17 @@ function resolvePathParams(opName, route, inputFields, warnings) {
 }
 
 // Ruta de una operación: endpoint explícito > convención CRUD (auto) > fallback POST.
+//
+// `schedule` NO entra en esta guarda, y la diferencia costó cuatro escenarios en una corrida.
+// Un barrido puede tener DOS disparadores —el reloj y una llamada manual—, y el diseño lo dice
+// declarando las dos cosas: `schedule` en use-cases y su entrada en `api.endpoints`, con su regla
+// de acceso. Descartar la ruta por tener `schedule` dejaba la operación sin controller, la
+// petición caía en el patrón hermano (`GET /messages/{id}` para un `POST /messages/purge`) y
+// respondía 405 — con el agravante de que build no avisaba de nada, así que el agente de código
+// acababa escribiendo el mapping a mano y el siguiente `build --force` se lo llevaba por delante.
+// Lo que sí sigue sin exponerse es el barrido que NO declara endpoint: ver más abajo.
 function resolveRoute(opName, op, api, targetEntity, warnings) {
-  if (op.internal || op.schedule || !api) return null;
+  if (op.internal || !api) return null;
 
   // Público del endpoint (users | services | both): el propio, el default de la
   // capa api o users. Decide en qué SecurityFilterChain cae la ruta cuando el
@@ -2458,7 +2467,12 @@ function resolveRoute(opName, op, api, targetEntity, warnings) {
       audience: explicit.audience ?? defaultAudience
     };
   }
-  if (!api.auto) return null;
+  // Sin endpoint declarado, un barrido no se expone: su disparador es el reloj y nadie ha decidido
+  // que además tenga puerta. Inferirle una por convención CRUD —o peor, por el fallback POST— le
+  // abriría al mundo una operación que el diseño no publicó, y rompería la doctrina que sostienen
+  // el aviso de `crossrefs.js` sobre el schedule sin efecto declarado y § Lo que no tiene escenario
+  // de validation-scenarios.md, que dan por hecho que un barrido no se alcanza desde fuera.
+  if (op.schedule || !api.auto) return null;
 
   const prefix = CRUD_PREFIXES.find((p) => opName.startsWith(p) && opName.length > p.length);
   if (prefix) {

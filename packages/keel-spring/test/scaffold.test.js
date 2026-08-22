@@ -585,7 +585,13 @@ test('scaffolding de integración: AbstractFlowIT y FailureCapture, sin clases d
   assert.ok(!abstractFlow.includes('local-dev-api-key'));
 
   const capture = read(workspace, `${base}/FailureCapture.java`);
-  assert.ok(capture.includes('implements TestWatcher'));
+  // Las DOS interfaces, y la segunda no es un adorno: `TestWatcher` a secas no recibe nada cuando
+  // revienta un `@BeforeAll` —JUnit aborta el contenedor de la clase sin ejecutar ningún método—,
+  // que es precisamente el fallo que menos evidencia dejaba y más caro salía de diagnosticar.
+  // Este test afirmaba solo `implements TestWatcher` y por tanto congelaba el mecanismo a medias.
+  assert.ok(capture.includes('implements TestWatcher, LifecycleMethodExecutionExceptionHandler'));
+  assert.ok(capture.includes('handleBeforeAllMethodExecutionException'));
+  assert.ok(capture.includes('throw throwable;'), 'capturar no es tragar: el fallo se relanza');
   assert.ok(capture.includes('build'));
   assert.ok(capture.includes('keel-failures'));
 

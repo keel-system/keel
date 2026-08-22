@@ -281,9 +281,15 @@ test('§1.2: el reset purga los destinos de mensajería declarados', () => {
   scaffoldService({ manifest, layers, workspace: out, force: true, stack: { broker: 'rabbitmq' } });
   const reset = fs.readFileSync(path.join(out, 'services/metering-digest-spring/infra/reset-db.sh'), 'utf8');
 
-  // Los dos canales del diseño (el propio y el externo del que se consume).
+  // El canal propio, que es su propio destino.
   assert.ok(reset.includes('/api/queues/%2F/digests/contents'));
-  assert.ok(reset.includes('/api/queues/%2F/meterTelemetry/contents'));
+  // Y la cola de la suscripción, que NO es el canal que el diseño nombra: el diseño declara
+  // `channel: meterTelemetry` y se consume de `metering-gateway.events`. Este test afirmaba antes
+  // el nombre lógico, o sea una cola inexistente — congelando el defecto: la purga es tolerante a
+  // fallo, así que "purgar" algo que no existe se veía como un AVISO y la cola de entrada
+  // arrastraba mensajes entre flujos. Ver reset-purges.test.js.
+  assert.ok(reset.includes('/api/queues/%2F/metering-gateway.events/contents'));
+  assert.ok(!reset.includes('/api/queues/%2F/meterTelemetry/contents'), 'el canal lógico no es un destino');
   // Que la cola aún no exista no es estado sucio: el reset avisa y sigue.
   assert.ok(reset.includes('AVISO: no se pudo purgar'));
 });

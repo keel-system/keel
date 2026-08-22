@@ -76,6 +76,12 @@ function testM2mClients(model) {
   if ((model.security?.scopes ?? []).length === 0) return [];
   const clients = ['test-m2m-ok', 'test-m2m-no-scope'];
   if (serviceAuth.validateAudience) clients.push('test-m2m-bad-aud', 'test-m2m-none');
+  // Con alcance por recurso, el recurso acotado necesita PODER ORIGINAR TRÁFICO. Sembrar el claim
+  // de los usuarios y no dar credencial a ese recurso deja el alcance probable solo por vías
+  // indirectas: en la primera corrida con `scoping`, el agente de pruebas tuvo que ejercitar el
+  // escenario por el canal de eventos porque no había forma de pedir nada por HTTP en nombre del
+  // recurso acotado. Se prueba entonces por una puerta que no es la que importa.
+  if (model.security?.scoping) clients.push(SCOPED_VALUE);
   return clients;
 }
 
@@ -222,6 +228,9 @@ function credentialsEnv(model) {
       `# Alcance por recurso: el claim '${security.scoping.claim}' de los usuarios NO exentos lleva`,
       '# este valor. Los escenarios que ejercitan el alcance crean el recurso con este código y',
       '# comprueban el rechazo sobre cualquier otro: se lee de aquí, no se escribe a mano.',
+      '# Hay además un cliente máquina con ESE MISMO nombre, para que el recurso acotado pueda',
+      '# originar tráfico por HTTP; sin él, el alcance solo sería ejercitable por vías indirectas.',
+      '# Su secreto es el compartido de la matriz de prueba (AUTH_CLIENT_SECRET).',
       exempt.length > 0 ? `# Exentos (su token no lleva el claim): ${exempt.join(', ')}` : '# Ningún rol exento.',
       `AUTH_SCOPED_RESOURCE=${SCOPED_VALUE}`
     );

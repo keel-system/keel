@@ -418,7 +418,23 @@ non_scenario_failures() {
       gsub(/^[ \\t]+|[ \\t]+$/, "", id)
       if (id ~ /^FL-[A-Za-z0-9-]+$/) next
       sub(/.*\\./, "", cls)
+      # El MENSAJE, que es lo único que convierte esta línea en accionable. Estaba aquí desde
+      # siempre —el XML de JUnit lo guarda entero— y se descartaba: por stdout salía "IllegalState
+      # Exception at Clase.java:45" y a diagnosticarlo se le iba un ciclo completo. Se colapsa a
+      # una línea y se acota: quien lee esto es la sesión más larga del pipeline.
+      msg = ""
+      if (match(seg, /<(failure|error)[^>]*message="[^"]*"/)) {
+        frag = substr(seg, RSTART, RLENGTH)
+        if (match(frag, /message="[^"]*"/)) msg = substr(frag, RSTART + 9, RLENGTH - 10)
+      }
+      gsub(/&#10;/, " ", msg); gsub(/&#13;/, " ", msg)
+      gsub(/&quot;/, "\\"", msg)
+      gsub(/&lt;/, "<", msg); gsub(/&gt;/, ">", msg)
+      gsub(/&amp;/, "\\\\&", msg)
+      gsub(/  +/, " ", msg)
+      if (length(msg) > 400) msg = substr(msg, 1, 400) " [...]"
       printf "    %s  (%s)\\n", name, cls
+      if (msg != "") printf "      %s\\n", msg
     }
   ' "$RESULTS"/*.xml 2>/dev/null
 }
@@ -451,7 +467,9 @@ if [ -n "$broken" ]; then
   printf '%s\\n' "$broken"
   echo "  Un \\\`initializationError\\\` aquí significa que esa clase no ejecutó NINGÚN escenario:"
   echo "  los FL-* que le tocaban salen arriba como NO_EJERC, y no es falta de cobertura."
-  echo "  No hay nada que arbitrar escenario a escenario —no hay volcado que leer—, así que"
+  echo "  La causa va en la línea de debajo de cada clase; el volcado, en"
+  echo "  $EVIDENCE/<Clase>-init.json (con el último comando ejecutado y su salida)."
+  echo "  No hay escenario que arbitrar —la clase no llegó a ejercitar ninguno—, así que"
   echo "  esto sale con 2 (arnés roto) y no con 1: se arregla la clase y se vuelve a puntuar."
   exit 2
 fi
@@ -2073,8 +2091,57 @@ function cacheHelper(model) {
 function exampleStatement(entry) {
   // Sin `<…>` en los marcadores de posición: el javadoc los leería como etiquetas
   // HTML desconocidas y doclint los reporta, incluso dentro de un <pre>.
-  if (entry.kind === 'document') return 'db.getCollection("la_coleccion").countDocuments({ status: "active" })';
+  //
+  // El ejemplo documental NO filtra por un enum: era lo único con pinta de enum que el arnés
+  // ponía delante de quien escribe el SQL, y lo mostraba en minúsculas —la forma del cable, no
+  // la de la columna—. Un ejemplo que enseña el valor equivocado es peor que no tenerlo: la
+  // tabla de valores reales va aparte, en el javadoc de `db`.
+  if (entry.kind === 'document') return 'db.getCollection("la_coleccion").countDocuments({ archived: true })';
   return "SELECT id FROM la_tabla WHERE slug = 'ejemplo'";
+}
+
+/**
+ * Los enums que de verdad llegan a una columna, con sus valores ALMACENADOS.
+ *
+ * Quien escribe el SQL de un fixture no puede leer `src/main/java` (el source set deja `main`
+ * fuera de su compileClasspath), así que todo lo que ve del enum —`specs/`, `openapi.yaml`, el
+ * `@JsonValue`— muestra el literal del diseño en minúsculas. Pero la columna guarda `name()`, o
+ * sea la constante: `@Enumerated(EnumType.STRING)` en la rama relacional y la serialización por
+ * defecto de Spring Data en la documental. Esa asimetría el generador la conoce —la documenta en
+ * web.js y hasta genera un converter para cerrarla en el borde HTTP— y nunca cruzaba hasta aquí.
+ * El coste de no cruzarla fue una clase entera caída desde su `@BeforeAll` con un
+ * `initializationError` sin causa visible: `SET status = 'sending'` contra un
+ * `check (status in ('QUEUED','SENDING',…))`.
+ *
+ * Solo los de entidades PERSISTIDAS: los demás no aparecen en ninguna columna y serían ruido.
+ */
+/** El bloque del javadoc de `db` con los valores almacenados, o vacío si el diseño no tiene enums. */
+function enumValuesDoc(model) {
+  const enums = persistedEnums(model);
+  if (enums.length === 0) return '';
+  const rows = enums
+    .map((enumDef) => `     * ${enumDef.name}: ${enumDef.values.map((value) => value.constant).join(', ')}`)
+    .join('\n');
+  return `
+     *
+     * <p><b>Valores tal como se GUARDAN.</b> La columna lleva el nombre de la constante, no el
+     * literal del diseño que viaja en JSON: el que ves en \`specs/\` y en \`openapi.yaml\` es el
+     * del cable. Un WHERE con el literal no casa ninguna fila, y un UPDATE con él choca contra la
+     * restricción de la columna y se lleva la clase entera desde su \`@BeforeAll\`.
+     * <pre>
+${rows}
+     * </pre>`;
+}
+
+function persistedEnums(model) {
+  const referenced = new Set();
+  for (const entity of model.entities ?? []) {
+    if (!entity.persisted) continue;
+    for (const field of entity.fields ?? []) {
+      if (field.kind === 'enum' && field.javaType) referenced.add(field.javaType);
+    }
+  }
+  return (model.enums ?? []).filter((enumDef) => referenced.has(enumDef.name));
 }
 
 function dbSection(model) {
@@ -2110,7 +2177,7 @@ function dbSection(model) {
      * la sentencia por su entrada estándar, así que este motor no tiene forma argv y
      * la excepción es suya, no la norma:
      * <pre>dbShell(${javaString(concreteCmd(entry, dbName))});</pre>`
-     }
+     }${enumValuesDoc(model)}
      */
     protected static String db(String... argv) {
         List<String> command = new ArrayList<>(List.of(containerRuntime(), "exec", DB_CONTAINER));
@@ -3672,6 +3739,7 @@ function failureCaptureImports() {
     'java.util.Optional',
     'java.util.concurrent.atomic.AtomicReference',
     'org.junit.jupiter.api.extension.ExtensionContext',
+    'org.junit.jupiter.api.extension.LifecycleMethodExecutionExceptionHandler',
     'org.junit.jupiter.api.extension.TestWatcher',
     'org.springframework.http.HttpHeaders',
     'com.fasterxml.jackson.databind.ObjectMapper'
@@ -3689,7 +3757,7 @@ function failureCaptureBody() {
  * de carrera hace sus peticiones desde un pool, y sin el respaldo el volcado saldría
  * vacío justo en el fallo más difícil de arbitrar.
  */
-public class FailureCapture implements TestWatcher {
+public class FailureCapture implements TestWatcher, LifecycleMethodExecutionExceptionHandler {
 
     private static final Path OUTPUT = Path.of("build", "keel-failures");
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -3766,6 +3834,42 @@ public class FailureCapture implements TestWatcher {
         }
         write(scenario, report);
         clear();
+    }
+
+    /**
+     * Un <code>@BeforeAll</code> que revienta NO pasa por {@link #testFailed}: JUnit aborta el
+     * contenedor de la clase, ningún método llega a ejecutarse y el TestWatcher no recibe nada.
+     *
+     * <p>Y es justo la clase de fallo más cara de diagnosticar —la clase entera cae con
+     * <code>initializationError</code> y sus escenarios salen como NO_EJERCITADO, que dice "sin
+     * cobertura" cuando lo que hubo fue un rojo—. Hasta aquí era la única que no dejaba evidencia
+     * en disco, y eso pese a que {@link #recordProbe} ya tenía en memoria el comando, su código de
+     * salida y su salida completa en el instante del fallo.
+     */
+    @Override
+    public void handleBeforeAllMethodExecutionException(ExtensionContext context, Throwable throwable) throws Throwable {
+        String testClass = context.getTestClass().map(Class::getName).orElse("?");
+        String simpleName = testClass.substring(testClass.lastIndexOf('.') + 1);
+        String scenario = simpleName + "-init";
+
+        Map<String, Object> report = new LinkedHashMap<>();
+        report.put("scenario", scenario);
+        report.put("displayName", context.getDisplayName());
+        report.put("testClass", testClass);
+        report.put("phase", "@BeforeAll");
+        report.put("assertion", Optional.ofNullable(throwable.getMessage()).orElse(throwable.toString()));
+        Map<String, Object> exchange = Optional.ofNullable(LAST.get()).orElseGet(LAST_ANY::get);
+        if (exchange != null) {
+            report.putAll(exchange);
+        }
+        Map<String, Object> probe = Optional.ofNullable(LAST_PROBE.get()).orElseGet(LAST_PROBE_ANY::get);
+        if (probe != null) {
+            report.put("probe", probe);
+        }
+        write(scenario, report);
+        clear();
+        // Capturar no es tragar: se relanza para que el desenlace de la clase no cambie.
+        throw throwable;
     }
 
     @Override

@@ -103,7 +103,10 @@ test('Oracle declara que no tiene forma argv en vez de inventarse una', () => {
 test('los marcadores del ejemplo no llevan <…>: doclint los leería como etiquetas', () => {
   for (const database of ['postgresql', 'mysql', 'sqlserver']) {
     const doc = javadocOf(harnessFor(database), 'protected static String db(String... argv)');
-    const example = doc.slice(doc.indexOf('<pre>db('));
+    // Acotado al ejemplo y no «de aquí al final»: el javadoc sigue después con la tabla de
+    // valores de enum, y su `<p>` haría saltar esta comprobación sin que el ejemplo tenga nada.
+    const start = doc.indexOf('<pre>db(');
+    const example = doc.slice(start, doc.indexOf('</pre>', start));
     assert.ok(!/<[a-z_]+>/.test(example.replace(/<\/?(pre|b)>/g, '')), `${database}: marcador con < > en el ejemplo`);
   }
 });

@@ -190,6 +190,16 @@ tasks.register('integrationTest', Test) {
     classpath = sourceSets.integrationTest.runtimeClasspath
     useJUnitPlatform()
     shouldRunAfter tasks.named('test')${corsJvmArgs}
+    // El formato por defecto de Gradle imprime una sola línea por fallo —"IllegalStateException
+    // at Clase.java:45"— y tira el mensaje de la excepción. Aquí ese mensaje ES el diagnóstico:
+    // el arnés lo compone con el código de salida y la salida completa del comando que falló,
+    // y sin él un fallo de \`@BeforeAll\` cuesta un ciclo entero de investigación.
+    testLogging {
+        events 'failed'
+        exceptionFormat = 'full'
+        showStackTraces = true
+        showCauses = true
+    }
 }
 `;
 
