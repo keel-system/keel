@@ -157,6 +157,29 @@ dónde está el defecto**, porque el humo cae por dos causas de dueños distinto
 El agente de pruebas relanzado tiene la simétrica de esta regla: si el diagnóstico apunta
 fuera de su alcance, devuelve `blockers` en vez de parchear.
 
+## Un `NO_EJERC` es rojo, y tiene dueño
+
+La matriz cruza los `FL-*` que declara `specs/validation-scenarios.md` contra los que el XML
+de JUnit trae, así que un escenario **declarado y nunca traducido a prueba** aparece como
+`NO_EJERC` y hace salir el script con `1`, igual que un fallo. No es una fila informativa, y
+sin embargo es la más fácil de pasar por alto: no hay volcado de evidencia que leer ni
+aserción que arbitrar, porque no llegó a correr nada.
+
+Se arbitra igual que un fallo y con las mismas salidas:
+
+- **Se puede escribir** → es cobertura que falta: se relanza `keel-spring-tests` con esa lista,
+  y no consume cupo. Un escenario que el agente de pruebas dejó fuera por costoso o por largo
+  entra aquí, no en la lista siguiente.
+- **No se puede escribir por la superficie que el propio escenario exige** —no hay puerta que
+  dispare eso, o su `Given` no es alcanzable— → es `culprit: design` y **se detiene**: el
+  arreglo es reescribir el escenario o llevarlo a la sección «Lo que no tiene escenario, y por
+  qué» del documento, que existe exactamente para eso. Dejarlo declarado y sin prueba deja al
+  gate diciendo «sin cobertura» sobre una decisión que ya se tomó.
+
+Lo que no es una salida: cerrar la generación con la fila puesta. En una corrida real
+`FL-SND-030` se quedó sin traducir, el script lo cantó, y el informe de cierre no lo mencionó
+— ni el escenario ni el código de salida con el que terminó la suite.
+
 **Dónde mirar cuando el rojo es un `initializationError`.** Significa que una clase reventó en su
 `@BeforeAll` y no ejecutó ni un escenario: los `FL-*` que le tocaban aparecen arriba como
 `NO_EJERCITADO`, y eso **no** es falta de cobertura. La causa ya no hay que ir a buscarla:
@@ -356,6 +379,13 @@ Por eso el paso de cierre escribe `INFORME-GENERACION.md` en la raíz del proyec
 del resumen en pantalla. No es un registro de trabajo ya resuelto: es la entrada para
 quien mantiene `keel-spring`. Va estructurado así:
 
+0. **Cómo terminó la suite**: la matriz final de `infra/score-scenarios.sh` y su código de
+   salida, literales, antes que cualquier otra sección. No es ceremonia: en una corrida real
+   el informe abría con las incidencias del generador, y un escenario en FALLO y otro en
+   `NO_EJERC` quedaron reclasificados aguas abajo como «hueco conocido no bloqueante» — el
+   informe se leía como el de un servicio que pasó el gate. **Si esa matriz no está al 100%,
+   el proyecto no está cerrado**, y el informe es la propuesta de cambio a los artefactos, no
+   el acta de una entrega.
 1. **Incidencias**, una por sección, cada una con síntoma, causa, **por qué es del
    generador y no de este proyecto** (o lo contrario, dicho explícitamente), fix aplicado y
    recomendación. Fuentes: `harnessPatches`, los `probes[].verdict: FALSO-NEGATIVO` de

@@ -73,9 +73,23 @@ function checksOf(model) {
  * gate. Es el mismo riesgo con menos ceremonia: `@Scheduled` corre en todas las réplicas,
  * y un finder normal se lleva las mismas filas en todas.
  *
- * Lo afirmable en estático es la forma del acceso, no si el algoritmo es correcto: que el
- * handler RECLAME (llame al método que build generó, o escriba su propio UPDATE
- * condicional) y que no se lleve el lote con una lectura simple del estado de partida.
+ * Lo afirmable en estático es la forma del acceso, no si el algoritmo es correcto. Y
+ * DÓNDE es afirmable depende de si build pudo generar el reclamo:
+ *
+ * - **Con reclamo generado** (el barrido saca filas de una COLA, un estado al que no llega
+ *   ninguna transición) la exigencia es exacta y local: que el handler llame al método que
+ *   build puso en el puerto, y que no se lleve el lote con un finder.
+ * - **Sin él** —el barrido solo rescata filas EN VUELO, y build dijo en voz alta que no
+ *   genera ese reclamo porque la cota temporal vive en la prosa de `rules`— no se puede
+ *   exigir una forma que el propio generador no supo escribir, ni suponer que el reclamo
+ *   vive en ESE archivo: cuando el diseño delega el trabajo por elemento en otra operación
+ *   («el ciclo invoca sendQueuedMessage con su identificador»), el reclamo atómico vive en
+ *   el handler de la otra, y es correcto que viva ahí. Se busca en todo el árbol, atado al
+ *   agregado que se barre.
+ *
+ * La lección es la (a) de las corridas y ya costó una vez en otra familia: un check que
+ * exige la implementación incorrecta es peor que no tenerlo, porque su camino de menor
+ * resistencia es romper el código para callarlo.
  */
 function sweepClaimChecks(model) {
   const sweeps = (model.services ?? [])
@@ -83,30 +97,42 @@ function sweepClaimChecks(model) {
     .filter((operation) => operation.sweep && (operation.reconciles ?? []).length === 0);
   if (sweeps.length === 0) return [];
 
+  const CLAIM_WRITE = String.raw`@Modifying|@Query\s*\(\s*"\s*update|findAndModify|findOneAndUpdate|[Cc]laim|[Rr]eclam`;
+
   return sweeps.map((operation) => {
     const claims = operation.claim ?? [];
-    // Con reclamo generado la exigencia es exacta: que lo llame. Sin él, lo afirmable es
-    // que exista una escritura de reclamo — no se puede exigir un nombre que build no
-    // eligió, y suponerlo daría por incorrecta cualquier forma legítima distinta.
-    const required = claims.length > 0
-      ? claims.map((claim) => `\\.?${claim.method}\\s*\\(`).join('|')
-      : '@Modifying|@Query\\s*\\(\\s*"\\s*update|findAndModify|findOneAndUpdate|[Cc]laim|[Rr]eclam';
+    if (claims.length > 0) {
+      return {
+        group: 'sweepClaim',
+        subject: operation.name,
+        class: operation.handlerClass,
+        require: [claims.map((claim) => String.raw`\.?` + claim.method + String.raw`\s*\(`).join('|')],
+        // La lectura simple del estado de partida es EXACTAMENTE el patrón que produjo el
+        // fallo: findByStatusOrderBy…(QUEUED, PageRequest…) devuelve la misma página en
+        // todas las réplicas. Un finder derivado en el handler de un barrido que TIENE su
+        // reclamo generado no tiene ningún uso legítimo que el reclamo no cubra mejor.
+        forbid: [String.raw`\.find(All)?By[A-Za-z]*\s*\(`],
+        why:
+          `el barrido corre en TODAS las réplicas: tiene que RECLAMAR su lote llamando a ` +
+          `${claims.map((claim) => `${claim.method}()`).join(' / ')}, que build generó en el puerto, ` +
+          `no leerlo con un finder — entre la lectura y la marca las N réplicas ya se llevaron las mismas filas`
+      };
+    }
+    // El agregado que se barre: es lo que ata el reclamo encontrado a ESTE barrido y no a
+    // cualquier escritura condicional del proyecto.
+    const entities = [...new Set((operation.transitions ?? []).map((transition) => transition.entity))];
     return {
       group: 'sweepClaim',
       subject: operation.name,
-      class: operation.handlerClass,
-      require: [required],
-      // La lectura simple del estado de partida es EXACTAMENTE el patrón que produjo el
-      // fallo: findByStatusOrderBy…(QUEUED, PageRequest…) devuelve la misma página en
-      // todas las réplicas. Un finder derivado en el handler de un barrido no tiene
-      // ningún uso legítimo que el reclamo no cubra mejor.
-      forbid: ['\\.find(All)?By[A-Za-z]*\\s*\\('],
+      claim: CLAIM_WRITE,
+      bound: entities.join('|'),
+      exclude: '(^$)',
       why:
-        `el barrido corre en TODAS las réplicas: tiene que RECLAMAR su lote ` +
-        (claims.length > 0
-          ? `llamando a ${claims.map((claim) => `${claim.method}()`).join(' / ')}, que build generó en el puerto`
-          : `con una escritura condicional que devuelva cuántas filas se llevó`) +
-        `, no leerlo con un finder — entre la lectura y la marca las N réplicas ya se llevaron las mismas filas`
+        `el barrido corre en TODAS las réplicas, así que el trabajo que toma tiene que RECLAMARSE con una ` +
+        `escritura condicional sobre ${entities.join(', ')} —no leerse con un finder—, y no aparece ninguna en el ` +
+        `proyecto. build NO pudo generarla (este barrido saca filas de un estado EN VUELO, y su cota temporal ` +
+        `vive en la prosa de rules), así que la escribes tú: puede estar en ${operation.handlerClass} o en el ` +
+        `handler de la operación a la que el diseño le delega el trabajo por elemento, pero tiene que existir`
     };
   });
 }
@@ -276,8 +302,8 @@ function listenerCheck(sub) {
         'UUID\\.randomUUID\\(\\)'
       ],
       why: guarded
-        ? `'${sub.trigger}' declara transitions: alreadyProcessed(...) antes y record(...) DESPUÉS de despachar bien`
-        : `'${sub.trigger}' no declara transitions: tryRecord(...) antes de despachar, que es lo único que cierra la ventana`
+        ? `'${sub.trigger}' tiene guarda de dominio (${sub.triggerGuardKind === 'natural-key' ? 'su clave de idempotencia participa en la clave natural del agregado' : 'declara transitions'}): alreadyProcessed(...) antes y record(...) DESPUÉS de despachar bien`
+        : `'${sub.trigger}' no tiene guarda de dominio (ni transitions, ni clave de idempotencia sobre la clave natural): tryRecord(...) antes de despachar, que es lo único que cierra la ventana`
     };
   }
 }

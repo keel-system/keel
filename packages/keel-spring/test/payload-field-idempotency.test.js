@@ -25,7 +25,7 @@ const OP = 'createReservation';
 const KEY = 'requestKey';
 
 /** La fixture con la clave en el cuerpo, guardada por la clave natural (o no). */
-function generate({ inNaturalKey }) {
+function generate({ inNaturalKey, subscribed = false }) {
   const { manifest, layers, errors } = loadService(path.join(fixturesDir, 'stock-reservation'));
   assert.deepEqual(errors, []);
   const patched = structuredClone(layers);
@@ -34,6 +34,26 @@ function generate({ inNaturalKey }) {
   op.idempotency = { keySource: 'payload-field', keyField: KEY };
   patched.domain.entities.Reservation.fields[KEY] = { type: 'string', required: true };
   if (inNaturalKey) patched.persistence.entities.Reservation.naturalKey = ['orderId', KEY];
+  // La segunda puerta. `createReservation` NO declara transitions, así que es la operación
+  // que aísla lo que aquí se prueba: si el listener recibe el orden correcto, solo puede ser
+  // porque la guarda de la clave natural se ha visto.
+  if (subscribed) {
+    patched.messaging.subscriptions.ReservationRequested = {
+      description: 'Un sistema encarga la reserva por el canal de eventos.',
+      source: 'ordering',
+      channel: 'stockEvents',
+      nature: 'request',
+      contract: { envelope: 'keel' },
+      payload: {
+        orderId: { type: 'uuid', required: true },
+        sku: { type: 'string', required: true, constraints: { maxLength: 32 } },
+        quantity: { type: 'int', required: true, constraints: { min: 1 } },
+        [KEY]: { type: 'string', required: true }
+      },
+      triggers: OP,
+      input: { orderId: 'orderId', sku: 'sku', quantity: 'quantity', [KEY]: KEY }
+    };
+  }
 
   const workspace = tmpDir('keel-payloadfield-');
   scaffoldService({ manifest, layers: patched, workspace, force: true });
@@ -96,4 +116,52 @@ test('el gate exige la búsqueda por clave natural, y NO el almacén', () => {
   assert.match(gate, /commandIdempotency/);
   // El `forbid` sí lo nombra (para prohibirlo); lo que no puede es exigirlo.
   assert.ok(!/require=.*IdempotencyStore/.test(gate), 'exige un puerto que no existe');
+});
+
+
+// ─── La guarda que NO son transiciones ───────────────────────────────────────
+//
+// Un listener deduplica en uno de dos órdenes, y no son intercambiables: con guarda de
+// dominio detrás, `alreadyProcessed` + `record` DESPUÉS de despachar bien (un fallo
+// transitorio se reintenta); sin ella, `tryRecord` antes (cierra la ventana al precio de
+// perder el mensaje si el handler falla).
+//
+// Durante DSL 2.12 esa decisión miró SOLO `transitions`, así que una operación guardada
+// por su clave natural —permanente, y común a las dos puertas— recibía la instrucción de
+// reclamar antes. No es un matiz de redacción: en una corrida real produjo la carrera que
+// hace que un fallo terminal se vea como «ya procesado» y su reintento no llegue nunca al
+// descarte; y `check-idempotency.sh`, que sale de esta misma bandera, cantaba KO sobre el
+// listener que lo había corregido bien.
+const MESSAGE = `${JAVA}/infrastructure/messaging/subscriptions/ReservationRequestedMessage.java`;
+
+test('con la clave natural como guarda, el listener registra DESPUÉS de despachar', () => {
+  const { read } = generate({ inNaturalKey: true, subscribed: true });
+  const message = read(MESSAGE);
+
+  assert.ok(
+    message.includes('alreadyProcessed(...) antes de despachar y record(...) DESPUÉS'),
+    'no prescribe el orden que corresponde a una operación guardada'
+  );
+  assert.ok(message.includes('clave natural'), 'no nombra la guarda que de verdad frena la repetición');
+  // Las dos frases de la otra rama serían FALSAS aquí: esta operación no declara ninguna
+  // transición, y reclamar antes es justo lo que introduce la carrera.
+  assert.ok(!message.includes('tryRecord'), 'prescribe reclamar antes sobre una operación ya guardada');
+  assert.ok(!message.includes('declara transiciones'), 'atribuye la guarda a un lifecycle que no existe');
+
+  const gate = read('infra/check-idempotency.sh');
+  assert.ok(gate.includes('record'), 'el gate no menciona el registro posterior');
+  assert.ok(
+    gate.includes('su clave de idempotencia participa en la clave natural'),
+    'el gate explica el KO con una razón que no es la de este diseño'
+  );
+});
+
+test('sin ella, la misma suscripción sigue siendo la rama de tryRecord', () => {
+  // La simétrica, que es lo que impide que el arreglo se haya llevado por delante la otra
+  // rama: con `guard: store` no hay nada en el dominio que rechace la repetición.
+  const { read } = generate({ inNaturalKey: false, subscribed: true });
+  const message = read(MESSAGE);
+
+  assert.ok(message.includes('tryRecord(...) antes de despachar'), 'perdió la rama sin guarda');
+  assert.ok(!message.includes('record(...) DESPUÉS'), 'da por guardada una operación que no lo está');
 });

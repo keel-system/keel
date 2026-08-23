@@ -313,7 +313,30 @@ Impleméntalo literalmente; no supongas:
   `value`; con `location: field`, recibe `Message`/`JsonNode` y enruta por ese campo.
 - **`messageId`** — clave de deduplicación: léela (header/property AMQP o campo) y
   descarta lo ya procesado **antes** de despachar. Con requeue y DLQ la entrega es
-  at-least-once.
+  at-least-once. Con `envelope: keel` no hace falta declararla: la clave es
+  `metadata.eventId`, que el emisor estampa y la reentrega repite intacto.
+
+### Cuándo se REGISTRA lo procesado, que no es lo mismo que cuándo se comprueba
+
+Comprobar va siempre antes de despachar. **Registrar** tiene dos órdenes y no son
+intercambiables — los decide el diseño, no tú, y el javadoc del `<Evento>Message` que generó
+build dice cuál toca para cada suscripción:
+
+- **`alreadyProcessed(...)` antes y `record(...) DESPUÉS` de que el handler termine bien**, cuando
+  la operación tiene **guarda de dominio** detrás. Son dos formas de guarda y las dos cuentan: que
+  la operación declare `transitions` (el agregado rechaza la repetición) o que su clave de
+  idempotencia participe en la **clave natural** (la constraint la rechaza, y esa no caduca).
+- **`tryRecord(...)` antes de despachar** solo cuando no hay ninguna de las dos: cierra la ventana
+  del duplicado al precio de perder el mensaje si el handler falla.
+
+Registrar antes **cuando sí hay guarda** es el cruce caro, y su daño no aparece en el camino
+feliz: un fallo terminal deja el evento marcado como procesado, y el reintento que tenía que
+llevarlo a la cola de descartes se ve como «ya procesado» y no llega nunca. El mensaje se pierde
+en silencio y el equipo emisor no ve ningún error en ningún sitio. Lo verifica
+`infra/check-idempotency.sh`, familia `dedupe`.
+
+Y en las dos ramas, un fallo **de negocio** (uno de los `errors` declarados) no se registra ni se
+reintenta: se rechaza sin reencolar para que vaya al descarte, que es donde el emisor lo ve.
 - **`format: avro|protobuf`** — sustituye el `Jackson2JsonMessageConverter` por el
   converter del formato; `schemaRef` identifica el schema en el registry de la fuente.
 - **Canal `external: true`** — el nombre real de la cola/exchange lo pone su dueño: va en

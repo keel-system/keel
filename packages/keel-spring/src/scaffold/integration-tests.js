@@ -17,7 +17,12 @@ import { pascalCase } from '../lib/naming.js';
 import { DATABASES, BROKERS, CACHES, selectedInfra, brokerContainer } from '../lib/stack-catalog.js';
 import { cacheFlushCmd, concreteCmd, needsDevtools } from './devtools.js';
 import { usesOutbox } from './outbox.js';
-import { deadLetterDestination, deadLetterSubscriptions, usesDeadLetter } from '../lib/dead-letter.js';
+import {
+  deadLetterDestination,
+  deadLetterSubscriptions,
+  subscriptionDestination,
+  usesDeadLetter
+} from '../lib/dead-letter.js';
 import { needsMessagingProvisioning } from './messaging-provisioning.js';
 import { tokenUrl, userTestClient } from './auth-provisioning.js';
 import { declaresIdempotency } from './http-idempotency.js';
@@ -2687,6 +2692,104 @@ function queryCountSection(model) {
 `;
 }
 
+/**
+ * Canal del diseño → destino FÍSICO del broker, para los helpers que hablan con él.
+ *
+ * Un canal que este servicio publica coincide con su destino. Una SUSCRIPCIÓN, no: consume del
+ * destino que le da su `source` (y en SNS/SQS, de su cola propia colgada del topic), que es lo
+ * que resuelve `subscriptionDestination()` — la misma fuente de la que salen `reset-db.sh` y la
+ * configuración del listener. `deliverXxx` ya lo resolvía; `purgeMessages` y `publishedMessages`
+ * recibían el nombre del canal tal cual y hablaban con un destino que no existe: la purga fallaba
+ * con un error de transporte que no dice nada del nombre, y la lectura habría dado «canal vacío»
+ * para siempre, que es peor porque sale verde.
+ *
+ * Se emite el mapa solo cuando alguno difiere: donde canal y destino coinciden, resolver es la
+ * identidad y una tabla vacía sería ruido.
+ */
+function physicalDestinationSection(model) {
+  const broker = brokerEntry(model);
+  // El canal del que cuelga cada suscripción. Sin `channel` declarado, el canal ES su
+  // destino y no hay nada que traducir.
+  const byChannel = new Map();
+  for (const sub of model.subscriptions ?? []) {
+    if (!sub.channel) continue;
+    const physical = subscriptionDestination(broker.id, model, sub);
+    if (physical === sub.channel) continue;
+    const bucket = byChannel.get(sub.channel) ?? [];
+    bucket.push({ name: sub.name, physical });
+    byChannel.set(sub.channel, bucket);
+  }
+
+  const resolved = [];
+  const ambiguous = [];
+  for (const [channel, subs] of byChannel) {
+    const destinations = [...new Set(subs.map((sub) => sub.physical))];
+    if (destinations.length === 1) resolved.push([channel, destinations[0]]);
+    // Un canal que en este broker se reparte en varias colas —SNS/SQS le da una a cada
+    // consumidor— no tiene UN destino físico. Elegir uno purgaría la cola equivocada y la
+    // aserción siguiente saldría verde sin haber mirado nada, así que se falla en el sitio
+    // y con los nombres delante.
+    else ambiguous.push([channel, subs.map((sub) => `${sub.name} → ${sub.physical}`).join(', ')]);
+  }
+
+  const entriesOf = (rows) =>
+    rows.map(([key, value]) => `Map.entry("${key}", "${value}")`).join(',' + '\n' + '            ');
+
+  if (resolved.length === 0 && ambiguous.length === 0) {
+    return `
+    /**
+     * Canal del diseño → destino físico. En este diseño coinciden todos, así que resolver es la
+     * identidad; el punto de resolución existe igual para que los helpers no tengan que saberlo.
+     */
+    protected static String physicalDestination(String destination) {
+        return destination;
+    }
+`;
+  }
+
+  const ambiguousBlock =
+    ambiguous.length === 0
+      ? ''
+      : `
+    /** Canales que en este broker NO tienen un destino único, con quién los consume. */
+    private static final Map<String, String> SPLIT_ACROSS = Map.ofEntries(
+            ${entriesOf(ambiguous)});
+`;
+  const ambiguousGuard =
+    ambiguous.length === 0
+      ? ''
+      : `
+        String split = SPLIT_ACROSS.get(destination);
+        if (split != null) {
+            throw new IllegalArgumentException(
+                    "El canal '" + destination + "' lo consumen varias suscripciones con destino propio ("
+                            + split + "): no hay uno solo con el que hablar. Pasa el destino concreto.");
+        }`;
+
+  return `
+    /**
+     * Canal del diseño → destino físico real en el broker (${broker.label}).
+     *
+     * <p>Para un canal que este servicio PUBLICA, el nombre físico es el del canal. El de una
+     * SUSCRIPCIÓN lo deriva build de su \`source\` —y en SNS/SQS es además la cola propia del
+     * consumidor—, no del nombre del canal: hablarle al canal a secas es hablarle a un destino que
+     * no existe. Es la misma correspondencia que usan \`infra/reset-db.sh\` y la configuración del
+     * listener, y de la que ya salía el destino de \`deliverXxx\`.
+     */
+    private static final Map<String, String> PHYSICAL_OF = ${
+      resolved.length === 0
+        ? 'Map.of();'
+        : `Map.ofEntries(
+            ${entriesOf(resolved)});`
+    }
+${ambiguousBlock}
+    /** El destino con el que de verdad se habla, venga el nombre del canal o ya resuelto. */
+    protected static String physicalDestination(String destination) {${ambiguousGuard}
+        return PHYSICAL_OF.getOrDefault(destination, destination);
+    }
+`;
+}
+
 function brokerSection(model) {
   const broker = brokerEntry(model);
   if (!broker) return '';
@@ -2744,13 +2847,16 @@ function brokerSection(model) {
 
   if (broker.id === 'rabbitmq') {
     const base = expr('RABBIT_API');
-    const read = readParts('rabbitmq', { destination: expr('destination'), bodyFile: expr('PROBE_BODY'), base });
-    const purge = purgeParts('rabbitmq', { destination: expr('destination'), base });
+    // El destino con el que se habla es el FÍSICO: quien llama pasa el nombre del canal
+    // del diseño, que para una suscripción no es el de su cola.
+    const physical = expr('physicalDestination(destination)');
+    const read = readParts('rabbitmq', { destination: physical, bodyFile: expr('PROBE_BODY'), base });
+    const purge = purgeParts('rabbitmq', { destination: physical, base });
     return `
     private static final String RABBIT_API = "${ENDPOINTS.rabbitmq.queuesApi}";
 
     private static final String PROBE_BODY = "/tmp/keel-probe.json";
-${doc}
+${physicalDestinationSection(model)}${doc}
     protected static String publishedMessages(String destination, int count) {
         // Peek (ack_requeue_true): leer no consume, así que un escenario puede
         // assertar dos veces sobre el mismo mensaje.
@@ -2774,13 +2880,16 @@ ${purgeWrapper(model)}${outage}`;
 
   if (broker.id === 'snssqs') {
     const base = expr('QUEUE_URL');
-    const read = readParts('snssqs', { destination: expr('destination'), count: expr('String.valueOf(size)'), base });
-    const purge = purgeParts('snssqs', { destination: expr('destination'), base });
+    // Igual que en RabbitMQ: en SNS/SQS el consumidor tiene cola propia colgada del topic,
+    // así que el nombre del canal tampoco es el destino del que se lee ni el que se purga.
+    const physical = expr('physicalDestination(destination)');
+    const read = readParts('snssqs', { destination: physical, count: expr('String.valueOf(size)'), base });
+    const purge = purgeParts('snssqs', { destination: physical, base });
     return `
     private static final String QUEUE_URL = "${ENDPOINTS.snssqs.queueUrlPrefix}";
 
     private static final List<String> AWS = List.of(${javaArgs(prefix('snssqs'))});
-${doc}
+${physicalDestinationSection(model)}${doc}
     protected static String publishedMessages(String destination, int count) {
         // SQS acota \`--max-number-of-messages\` a 1..10 y contesta InvalidParameterValue
         // por encima: pedir de una vez los mensajes de un escenario de clúster reventaba
@@ -2833,7 +2942,8 @@ ${outage}`;
 
   // Kafka: sin purga posible (kcat no borra registros y devtools no trae las CLIs
   // de Kafka). El aislamiento equivalente es una marca de offset por canal sobre el
-  // topic único del servicio.
+  // topic único del servicio — y por eso aquí NO hace falta resolver el destino
+  // físico: no se le pasa ningún nombre de destino al broker, se marca un offset.
   const eventTypes = model.messaging?.eventTypesByChannel ?? {};
   const eventTypeEntries = Object.entries(eventTypes)
     .map(([channel, names]) => `        "${channel}", List.of(${names.map((name) => `"${name}"`).join(', ')})`)

@@ -146,7 +146,14 @@ export function columnAnnotations(fieldName, field, resolved) {
   const constraints = { ...resolved.constraints, ...(field.constraints ?? {}) };
 
   if (field.required || field.id) attrs.push('nullable = false');
-  if (field.unique) attrs.push('unique = true');
+  // NO se emite `unique = true` de columna, y no es un olvido. Toda columna única del
+  // diseño ya recibe su `@UniqueConstraint` NOMBRADA en el `@Table` —`uk_<tabla>_natural`
+  // para la clave natural, `uk_<tabla>_<campo>` para el resto (`renderTableAnnotation`)—, y
+  // ese nombre es el contrato: `uniqueConstraints()` lo usa para traducir la violación al
+  // `code` que el diseño declara. Con las dos, Hibernate emite además una constraint SIN
+  // nombre, la base rechaza por esa, y `ApiExceptionHandler` —que mapea por nombre— ya no
+  // reconoce el conflicto: un `409 CODE_ALREADY_EXISTS` degradado a error genérico, que es
+  // justo el caso que más importa porque solo aparece en la carrera.
   if (field.id) attrs.push('updatable = false');
   if (resolved.base === 'text') attrs.push('columnDefinition = "text"');
   if (constraints.maxLength != null && resolved.javaType === 'String' && resolved.base !== 'text') {

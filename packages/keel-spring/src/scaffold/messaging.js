@@ -482,10 +482,17 @@ function contractJavadoc(sub, model) {
     lines.push(`Deduplica por ${dedupeKey} antes de despachar (la entrega es at-least-once).`);
     // El orden del registro no es estilo: decide si un fallo transitorio se
     // reintenta o se traga el mensaje. Lo elige el diseño, no el agente.
+    // Qué es lo que frena la repetición cambia la frase, y la frase es lo que el agente
+    // implementa: decir «declara transiciones» sobre una operación guardada por su clave
+    // natural es falso y manda a buscar un lifecycle que no existe.
+    const guardReason =
+      sub.triggerGuardKind === 'natural-key'
+        ? `la clave de idempotencia participa en la clave natural del agregado, así que esa constraint ES la guarda —permanente y común a todas las puertas por las que entre la operación—`
+        : `la operación declara transiciones, así que la repetición la frena el agregado`;
     lines.push(
       sub.triggerHasDomainGuard
-        ? `Orden: IdempotencyGuard.alreadyProcessed(...) antes de despachar y record(...) DESPUÉS de que el handler termine bien. La operación declara transiciones, así que la repetición la frena el agregado y lo que no puede perderse es el mensaje.`
-        : `Orden: IdempotencyGuard.tryRecord(...) antes de despachar — la operación no declara ninguna transición que frene la repetición, así que la ventana se cierra reclamando antes. Ojo: un fallo del handler deja el mensaje marcado y perdido; si eso no es tolerable, lo que falta es la guarda de dominio en el diseño.`
+        ? `Orden: IdempotencyGuard.alreadyProcessed(...) antes de despachar y record(...) DESPUÉS de que el handler termine bien. ${guardReason} y lo que no puede perderse es el mensaje: registrar ANTES haría que un fallo terminal se viera como «ya procesado» y su reintento no llegara nunca al descarte.`
+        : `Orden: IdempotencyGuard.tryRecord(...) antes de despachar — la operación no declara ninguna guarda de dominio (ni transiciones, ni una clave de idempotencia sobre la clave natural) que frene la repetición, así que la ventana se cierra reclamando antes. Ojo: un fallo del handler deja el mensaje marcado y perdido; si eso no es tolerable, lo que falta es la guarda de dominio en el diseño.`
     );
     // La ventana. Se dice AQUÍ —y no solo en la referencia del DSL— porque este javadoc
     // es lo que lee quien escribe el listener, y la garantía que va a implementar no es
@@ -495,7 +502,7 @@ function contractJavadoc(sub, model) {
     lines.push(
       `La deduplicación tiene VENTANA: el registro se purga a los processed-event.purge.retention-days (default 14, en parameters/), así que una reentrega posterior se procesa como nueva.` +
         (sub.triggerHasDomainGuard
-          ? ' Aquí es inocuo: la transición del agregado sigue rechazándola, y esa no caduca.'
+          ? ` Aquí es inocuo: ${sub.triggerGuardKind === 'natural-key' ? 'la constraint de la clave natural' : 'la transición del agregado'} sigue rechazándola, y esa no caduca.`
           : ' Aquí NO es inocuo: sin transición que la frene, pasada la retención el efecto se vuelve a aplicar. Si el negocio necesita una ventana mayor, el mecanismo correcto es una guarda de dominio, no esta deduplicación — y eso es un hueco del diseño, no algo que se arregle en el listener.')
     );
   }

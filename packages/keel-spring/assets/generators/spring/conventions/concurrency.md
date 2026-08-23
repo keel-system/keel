@@ -115,7 +115,12 @@ haciendo ahora mismo. Ese lo escribes tú, con la cota. Lo mismo si el aviso dic
 reclamo de una reconciliación (falta la marca de espera, o hay dos entidades esperando).
 
 Verificado por `infra/check-idempotency.sh`: familia `reconciliation` para los barridos declarados como
-`reconciledBy`, y familia `sweepClaim` para todos los demás.
+`reconciledBy`, y familia `sweepClaim` para todos los demás. Y **dónde** lo busca depende de lo mismo:
+con el reclamo generado lo exige en el handler del barrido —ahí no hay ninguna forma legítima de leer el
+lote con un finder—; sin él lo busca en todo el árbol, atado al agregado que se barre, porque cuando el
+diseño delega el trabajo por elemento en otra operación («el ciclo invoca `sendQueuedMessage` con su
+identificador») el reclamo atómico vive en el handler de esa otra, que es donde le toca. El gate no
+decide por el diseño dónde va la pieza: comprueba que exista.
 
 Lo que **sí** hace `build` por ti en el barrido de una reconciliación es sacarlo de la transacción: el
 `<Servicio>Scheduler` lo despacha con `dispatchWithoutTransaction`, porque su garantía es un orden de

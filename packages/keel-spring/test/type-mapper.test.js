@@ -124,7 +124,16 @@ test('beanValidationAnnotations usa DecimalMin para decimales', () => {
 test('columnAnnotations produce @Column con nombre snake y flags', () => {
   const resolved = resolveType('SKU', domainTypes);
   const annotations = columnAnnotations('sku', { required: true, unique: true }, resolved);
-  assert.deepEqual(annotations, ['@Column(name = "sku", nullable = false, unique = true, length = 8)']);
+  assert.deepEqual(annotations, ['@Column(name = "sku", nullable = false, length = 8)']);
+});
+
+test('columnAnnotations NO duplica la unicidad en la columna', () => {
+  // La constraint del campo único la pone el `@Table` CON NOMBRE, y ese nombre es lo que
+  // traduce la violación al `code` del diseño. Un `unique = true` de columna añade una
+  // segunda constraint anónima: la base rechaza por ella y el handler, que mapea por
+  // nombre, ya no reconoce el conflicto.
+  const annotations = columnAnnotations('sku', { required: true, unique: true }, resolveType('SKU', domainTypes));
+  assert.ok(!annotations.some((a) => a.includes('unique')), 'la unicidad se declara dos veces');
 });
 
 test('columnAnnotations añade @Enumerated para enums y columnDefinition para text', () => {

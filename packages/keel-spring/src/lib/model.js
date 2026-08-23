@@ -2085,7 +2085,26 @@ function collectSubscriptions(layers, services, domainTypes, inlineEnumName, war
       // orden del registro de idempotencia: con ella, procesar y luego registrar (un
       // fallo transitorio se reintenta); sin ella, la única forma de no repetir el
       // efecto es reclamar antes, al precio de perder el mensaje si el handler falla.
-      triggerHasDomainGuard: (triggerOp?.transitions ?? []).length > 0,
+      //
+      // Son DOS formas, no una. La transición del agregado es la evidente. La otra la trajo
+      // el DSL 2.12: con `keySource: payload-field` cuyo `keyField` participa en la clave
+      // natural, la constraint del agregado ES la guarda —permanente y común a todas las
+      // puertas—, y `resolveIdempotency` ya la resolvió como `guard: 'natural-key'`. Mirar
+      // solo las transiciones prescribía `tryRecord` sobre una operación que sí está
+      // guardada, y eso no es un matiz de estilo: introduce la carrera que se quería evitar
+      // —el fallo terminal marca el evento como procesado y su reintento no llega nunca al
+      // descarte—, y el gate de `check-idempotency.sh`, construido desde esta misma bandera,
+      // acababa cantando KO sobre el listener correcto.
+      triggerHasDomainGuard:
+        (triggerOp?.transitions ?? []).length > 0 || triggerOp?.idempotency?.guard === 'natural-key',
+      // Cuál de las dos formas, que no es lo mismo a la hora de explicarla: el javadoc del
+      // <Evento>Message tiene que nombrar la que de verdad frena la repetición.
+      triggerGuardKind:
+        (triggerOp?.transitions ?? []).length > 0
+          ? 'transitions'
+          : triggerOp?.idempotency?.guard === 'natural-key'
+            ? 'natural-key'
+            : null,
       // ¿Hay OTRO camino que saque a la entidad del mismo estado del que la saca este
       // listener? Si lo hay, los dos compiten y el guard del agregado arbitra: al perdedor
       // se le rechaza la transición, y eso es la carrera resuelta, no un fallo. Importa

@@ -171,6 +171,45 @@ Tres cosas que no son opcionales:
 Es exactamente el patrón de `OutboxRelay.findPending`, que `build` ya genera en este mismo proyecto:
 míralo antes de escribir el tuyo.
 
+## Filtros opcionales: `IS NULL OR` no vale para fechas
+
+El idioma reflejo para un filtro que puede no venir es compararlo consigo mismo:
+
+```java
+// NO con Instant/OffsetDateTime en PostgreSQL: la consulta falla SIEMPRE, con filtros y sin ellos
+@Query("""
+    SELECT m FROM MessageJpa m WHERE
+        (:status IS NULL OR m.status = :status) AND
+        (:from IS NULL OR m.requestedAt >= :from)
+    """)
+```
+
+Con tipos simples (`String`, un enum, un código) funciona. Con un instante **no**: en la rama
+`IS NULL` el parámetro aparece sin ningún contexto del que el driver pueda inferir su tipo, y
+PostgreSQL rechaza la sentencia entera —`could not determine data type of parameter`— antes de
+mirar ningún valor. El `CAST` explícito tampoco lo salva. El síntoma engaña: no falla «cuando se
+filtra por fecha», falla en **toda** invocación de esa consulta, incluida la que no manda ningún
+filtro, así que parece un problema del listado y no del filtro.
+
+Las dos salidas, y las dos dejan el bind siempre directo:
+
+```java
+// (a) límites absolutos en el ADAPTADOR, antes de invocar al repositorio
+private static final Instant MIN_AT = Instant.parse("0001-01-01T00:00:00Z");
+private static final Instant MAX_AT = Instant.parse("9999-12-31T23:59:59Z");
+...
+Instant from = requestedFrom != null ? requestedFrom : MIN_AT;
+Instant to = requestedTo != null ? requestedTo : MAX_AT;
+
+// (b) o COALESCE en la propia JPQL, con el mismo efecto
+//     WHERE m.requestedAt >= COALESCE(:from, :minAt)
+```
+
+La (a) es la preferible: el repositorio queda con una condición de rango a secas, que es lo que
+el índice `[status, requestedAt]` del diseño aprovecha entero. Y ojo con lo que **no** hay que
+hacer: una ventana invertida (`from > to`) tiene que devolver **página vacía**, no un error — con
+límites absolutos sale sola, sin ninguna guarda extra.
+
 ## Qué no hacer
 
 - **`@ManyToOne` entre dos raíces** para poder usar `JOIN FETCH` o `@EntityGraph`. Rompe la
@@ -183,6 +222,8 @@ míralo antes de escribir el tuyo.
   y espera que la validación en H2 del perfil `test` no la soporte.
 - **Meter esta consulta en el repositorio del agregado.** Ese puerto es para cargar y guardar
   agregados; una vista de lectura no es un agregado.
+- **`(:param IS NULL OR columna >= :param)` con un instante o una fecha.** Ver la sección de
+  filtros opcionales: no es una cuestión de estilo, la consulta no llega a ejecutarse nunca.
 
 ## Verificación
 

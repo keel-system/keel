@@ -59,9 +59,19 @@ const PRESENCE_ANNOTATIONS = new Set(['@NotNull', '@NotBlank', '@NotEmpty']);
  * no existiría en el servidor: el record del mensaje se construye a mano en el
  * controller, así que sus anotaciones nunca se evalúan por esta vía. Exige
  * `@Validated` en la clase, que renderController añade al detectarlas.
+ *
+ * La lista es la de ENTRADA (`inputValidation`), la misma que usan los mensajes de
+ * command y query, y por el mismo motivo: el `pattern` que un campo hereda de su value
+ * type describe el valor YA NORMALIZADO, y aquí se está validando lo que llega por el
+ * cable. Emitirlo cierra la puerta a `/applications/Billing` o a `?code=BILLING`, que el
+ * diseño normaliza a minúsculas antes de comparar — un 400 sobre una petición que el
+ * contrato acepta, y encima con el error equivocado. El `pattern` que el campo declara
+ * POR SU CUENTA sobrevive en esa lista y se sigue emitiendo: es una restricción de esa
+ * entrada concreta, no la forma del tipo (ver conventions/mapping.md § Normalización
+ * antes que validación de formato).
  */
 function paramValidation(component, imports, { presence = true } = {}) {
-  const annotations = (component.validation ?? []).filter(
+  const annotations = (component.inputValidation ?? component.validation ?? []).filter(
     (annotation) => presence || !PRESENCE_ANNOTATIONS.has(annotation)
   );
   if (annotations.length === 0) return '';

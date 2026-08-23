@@ -64,7 +64,9 @@ test('entidad Product: tabla, id, aplanado de SKU, lifecycle y sensitive', () =>
 
   const sku = product.fields.find((f) => f.name === 'sku');
   assert.equal(sku.javaType, 'String'); // value type escalar aplanado
-  assert.ok(sku.columns.some((c) => c.includes('unique = true')));
+  // La unicidad NO viaja en la columna: la declara el @UniqueConstraint nombrado del
+  // @Table, que es el nombre por el que ApiExceptionHandler traduce la violación.
+  assert.ok(!sku.columns.some((c) => c.includes('unique')));
 
   const status = product.fields.find((f) => f.name === 'status');
   assert.equal(status.javaType, 'ProductStatus');

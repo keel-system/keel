@@ -97,10 +97,14 @@ test('el orden del guard sale del diseño, no del agente', () => {
   const withdrawal = content.split('\n').find((line) => line.startsWith("unit 'dedupe' 'WithdrawalRejected'"));
   assert.ok(withdrawal, 'no hay fila de dedupe para WithdrawalRejected');
   assert.ok(withdrawal.includes('\\.record\\s*\\('), withdrawal);
-  assert.match(content, /declara transitions: alreadyProcessed/);
-  // projectSupplierPrice no las declara → reclamar antes, al precio de perder el
-  // mensaje si el handler falla. El cruzado es el error caro, y va en `forbid`.
-  assert.match(content, /no declara transitions: tryRecord/);
+  assert.match(content, /tiene guarda de dominio \(declara transitions\): alreadyProcessed/);
+  // projectSupplierPrice no la tiene → reclamar antes, al precio de perder el mensaje si
+  // el handler falla. El cruzado es el error caro, y va en `forbid`.
+  //
+  // «Guarda de dominio» y «declara transitions» dejaron de ser lo mismo con el DSL 2.12: una
+  // clave de idempotencia que participa en la clave natural guarda igual —y no caduca—, así
+  // que el porqué nombra cuál de las dos es (ver payload-field-idempotency.test.js).
+  assert.match(content, /no tiene guarda de dominio \(ni transitions, ni clave de idempotencia/);
 });
 
 test('sin nada de esta familia no se genera script: un gate que siempre pasa no mira', () => {

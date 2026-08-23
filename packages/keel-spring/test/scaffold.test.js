@@ -3167,6 +3167,10 @@ test('unique: constraint nombrada en la tabla y traducida al error de negocio', 
   // sku es la clave natural: ya tiene su constraint, no se duplica.
   assert.ok(productJpa.includes('uk_products_natural'));
   assert.ok(!productJpa.includes('uk_products_sku'));
+  // Y NINGUNA de las dos se repite como `unique = true` de columna: esa es anónima, y la
+  // base rechazaría por ella, dejando a ApiExceptionHandler —que mapea por nombre— sin
+  // poder traducir el conflicto al `code` del diseño.
+  assert.ok(!productJpa.includes('unique = true'), 'la unicidad se declara dos veces');
 
   const handler = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/rest/ApiExceptionHandler.java');
   assert.ok(handler.includes('CONSTRAINT_TO_ERROR'));
