@@ -156,5 +156,48 @@ export function checkSupportedFeatures(manifest, layers) {
     );
   }
 
+  // Una operación interna a la que NO llega ningún disparador generado: ni `schedule`,
+  // ni endpoint (el schema ya lo prohíbe con `internal: true`), ni ninguna suscripción
+  // que la dispare. Solo puede ejecutarla otro handler llamándola, y ese enlace hoy vive
+  // en la prosa de `rules`: build no lo ve, así que hay tres cosas que NO puede hacer por
+  // el llamante, y las tres fallan en silencio con varias réplicas.
+  //
+  // Se avisa aquí y no se infiere quién llama a quién: adivinarlo sacaría de la
+  // transacción a barridos (purgas, cierres diarios) que sí la necesitan.
+  const triggeredBySubscription = new Set(
+    Object.values(layers?.messaging?.subscriptions ?? {})
+      .map((sub) => sub?.triggers)
+      .filter(Boolean)
+  );
+  const orphanInternal = [];
+  for (const [opName, op] of Object.entries(layers?.['use-cases']?.operations ?? {})) {
+    if (op?.internal !== true) continue;
+    if (op.schedule !== undefined) continue;
+    if (triggeredBySubscription.has(opName)) continue;
+    orphanInternal.push(opName);
+  }
+  // La consecuencia cara solo existe si entre reclamar y actuar hay I/O externo: es lo
+  // que hace que el commit del reclamo tenga que caer ANTES, y lo que convierte una
+  // transacción abarcadora en correo ya enviado que la base de datos deshace.
+  const sentBy = new Set(layers?.mail?.sentBy ?? []);
+  const externalIo = orphanInternal.filter(
+    (opName) => sentBy.has(opName) || layers?.['http-clients'] !== undefined || layers?.storage !== undefined
+  );
+  if (orphanInternal.length > 0) {
+    warnings.push(
+      `use-cases (${orphanInternal.join(', ')}): operación interna sin ningún disparador generado (ni schedule, ni endpoint, ni subscription). ` +
+        `La invoca otro handler, y ese enlace solo existe en la prosa de 'rules': build no lo ve, así que no enruta la transacción del llamante ` +
+        `ni sabe dónde vive su reclamo — el gate 'sweepClaim' de infra/check-idempotency.sh lo busca en todo el árbol por eso.` +
+        (externalIo.length > 0
+          ? ` Y con I/O externo de por medio (${externalIo.join(', ')}) eso no es un detalle: si quien la invoca es un barrido, build lo despacha ` +
+            `con mediator.dispatch(...) —transacción única sobre el lote entero—, y ahí el reclamo NO confirma hasta el final, así que ninguna ` +
+            `réplica lo ve, la llamada externa cae dentro de la transacción y el estado intermedio no llega a existir para nadie (con lo que un ` +
+            `rescate por marca de tiempo no encuentra nunca a sus candidatos). Si ese barrido llama de verdad a un tercero, el llamante va por ` +
+            `mediator.dispatchWithoutTransaction(...) y el reclamo confirma antes: ver docs/keel/conventions/concurrency.md § El reclamo con una ` +
+            `llamada externa en medio.`
+          : '')
+    );
+  }
+
   return { errors, warnings };
 }

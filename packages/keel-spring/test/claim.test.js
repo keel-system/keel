@@ -222,3 +222,29 @@ test('el aviso de dialecto es UNO solo y enumera todos los mecanismos afectados'
   warnUnsupportedDialect(fine);
   assert.deepEqual(fine.warnings.filter((warning) => warning.includes('SKIP LOCKED')), []);
 });
+
+test('el aviso de dialecto alcanza también al barrido cuyo reclamo NO generó build', () => {
+  // El caso que se quedaba fuera, y es el que MÁS lo necesita: cuando build no genera el
+  // reclamo (rescate de filas en vuelo), las dos capas las escribe el agente — y la que
+  // depende del motor es justo la que nadie le iba a mencionar. `warnUnsupportedDialect`
+  // solo recorría `operation.claim`, que aquí está vacío, así que callaba.
+  const model = modelFor(layersWith({ sweepTransitions: [{ entity: 'Job', from: ['running'], to: 'done' }] }), 'h2');
+
+  assert.equal(sweepOf(model).claim, null, 'la premisa del test: build no generó reclamo');
+  model.warnings = [];
+  warnUnsupportedDialect(model);
+
+  assert.equal(model.warnings.length, 1, model.warnings.join('\n'));
+  assert.match(model.warnings[0], /h2 no tiene SKIP LOCKED/);
+  assert.match(model.warnings[0], /drainJobs/);
+});
+
+test('y con un motor que sí reparte no se avisa de nada', () => {
+  // La simétrica: el aviso habla de un motor concreto, no del barrido. Sin ella, un
+  // `push` incondicional pasaría este archivo entero igual.
+  const model = modelFor(layersWith({ sweepTransitions: [{ entity: 'Job', from: ['running'], to: 'done' }] }), 'postgresql');
+  model.warnings = [];
+  warnUnsupportedDialect(model);
+
+  assert.deepEqual(model.warnings, []);
+});

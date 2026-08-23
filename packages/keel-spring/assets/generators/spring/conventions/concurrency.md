@@ -130,9 +130,53 @@ una transacción abarcadora los funde en uno. Ver `dependencies.md § El orden d
 Ojo a la diferencia, que ya no es «tiene gate o no lo tiene» sino cuánto hace `build`: el barrido
 declarado como `reconciledBy` de una activación sale además de la transacción (`dispatchWithoutTransaction`)
 porque su garantía es un orden de commits. El barrido que solo despacha una cola sigue corriendo en una
-transacción única: si de verdad llama a un tercero en medio, eso es lo que falta declarar en el diseño, y
-es un hallazgo para el reporte. Lo que **no** cambia entre los dos es el reclamo — los dos lo necesitan, y
-los dos lo tienen verificado.
+transacción única. Lo que **no** cambia entre los dos es el reclamo — los dos lo necesitan, y los dos lo
+tienen verificado.
+
+### El reclamo con una llamada externa en medio
+
+**Un reclamo que no ha confirmado no es un reclamo.** Es la regla, y no depende del motor: la escritura
+condicional puede estar perfecta y no servir de nada si cae dentro de una transacción que abarca el lote
+entero. Mientras esa transacción siga abierta, la fila reclamada es invisible para las demás réplicas —
+que es exactamente lo que el reclamo existía para evitar.
+
+El criterio operativo, en una línea: **si entre reclamar y actuar hay I/O externo —una llamada a un
+proveedor, un envío de correo, una subida a un bucket—, el reclamo tiene que estar confirmado antes de
+esa llamada.** El barrido de `reconciledBy` ya lo tiene resuelto por construcción (`build` lo despacha con
+`dispatchWithoutTransaction`, y cada método del adaptador abre y confirma la suya). Cualquier otro barrido
+que llame a un tercero **necesita ese mismo camino**, y hoy `build` no puede saberlo: el enlace entre el
+barrido y la operación que hace la llamada vive en la prosa de `rules`. Por eso `build` **avisa** —
+«operación interna sin ningún disparador generado»— en vez de decidirlo por su cuenta, y por eso es un
+hallazgo para el reporte cuando aparece.
+
+Dejarlo en `mediator.dispatch(...)` cuesta tres cosas, y ninguna se ve en una máquina con una sola
+instancia:
+
+1. **El reclamo no reparte.** La segunda réplica se bloquea en la primera fila del lote hasta que la
+   primera confirma el ciclo **entero** —incluidas todas sus llamadas externas—, y entonces ve cero filas
+   afectadas. No hay efecto duplicado, pero las réplicas se serializan y la segunda tira su ciclo
+   reteniendo una conexión del pool.
+2. **La llamada externa cae dentro de la transacción.** Un rollback posterior deshace el estado y no
+   deshace la llamada: el correo salió, la fila vuelve a `queued` y el ciclo siguiente lo manda otra vez.
+   Un correo no lo deshace ninguna transacción, y ese es justo el caso que el diseño suele preferir
+   evitar aun a costa de un falso negativo visible.
+3. **El estado intermedio no llega a existir para nadie.** Si `queued → sending → sent` ocurre entero
+   dentro de una transacción, ninguna otra sesión ve nunca `sending`: al confirmar ya es `sent`, y si el
+   proceso muere, vuelve a `queued`. Un rescate por marca de tiempo («lleva más de N minutos en
+   `sending`») **no encuentra jamás a sus candidatos**, y su escenario solo pasa porque la prueba fabrica
+   el estado en la base. El rescate y el reclamo son dos mitades del mismo mecanismo: la transacción
+   abarcadora desactiva las dos a la vez.
+
+Y el reclamo tiene **dos capas** — no confundirlas es lo que evita creer que esto es un problema de
+dialecto:
+
+- **Llevarse la fila** (`UPDATE … SET estado = :to WHERE id = :id AND estado = :from`, y mirar las filas
+  afectadas) es atómico en los seis motores, sin ayuda de nadie. Escríbelo en JPQL, nunca en SQL nativo.
+- **Elegir a qué filas tirarle** (`SKIP LOCKED`, o `READPAST` en SQL Server) es lo único que sí depende
+  del motor, y es una **optimización**: sin él el reclamo sigue siendo correcto, solo que las N réplicas
+  compiten por la misma página. Cuando `build` genera el reclamo, lo pone él; cuando no puede generarlo,
+  lo escribes tú — y `build` avisa de qué sabe hacer el motor elegido. En H2 no existe: acepta la
+  sintaxis y la ignora, así que validar la concurrencia contra el perfil `test` no demuestra nada.
 
 ## El outbox entrega al menos una vez
 

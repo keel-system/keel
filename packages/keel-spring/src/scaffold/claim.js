@@ -54,10 +54,30 @@ export function warnUnsupportedDialect(model) {
       .flatMap((operation) => operation.claim ?? [])
       .map((claim) => `${claim.method}()`),
     ...reconciliationClaims(model).map((claim) => `${claim.method}()`),
-    ...(usesOutbox(model) ? ['OutboxRelay.findPending()'] : [])
+    ...(usesOutbox(model) ? ['OutboxRelay.findPending()'] : []),
+    // Y los barridos cuyo reclamo NO pudo generar build (rescatan filas EN VUELO, con una
+    // cota temporal que vive en la prosa de `rules`). Son los que MÁS necesitan el aviso:
+    // ahí el SELECT de candidatos lo escribe el agente, y nadie le va a decir que en SQL
+    // Server el hint es otro ni que H2 acepta la sintaxis y la ignora. Antes quedaban fuera
+    // porque esta lista solo miraba los reclamos generados, que es justo lo que no hay.
+    ...unclaimedSweeps(model).map((operation) => `${operation.name} (barrido cuyo reclamo escribes tú)`)
   ];
   if (mechanisms.length === 0) return;
   model.warnings.push(unsupportedClaimWarning(database, mechanisms));
+}
+
+/**
+ * Los barridos marcados como tales a los que build NO les generó reclamo.
+ *
+ * `model.js` marca `sweep` a toda operación con `schedule` que actúa sobre lo que encuentra,
+ * pero solo emite `claim` cuando la transición sale de una COLA (un estado al que no llega
+ * ninguna transición). Rescatar filas en vuelo no cumple eso, y entonces las DOS capas del
+ * reclamo —la escritura condicional y la selección de candidatos— las escribe el agente.
+ */
+function unclaimedSweeps(model) {
+  return (model.services ?? [])
+    .flatMap((service) => service.operations ?? [])
+    .filter((operation) => operation.sweep && (operation.claim ?? []).length === 0);
 }
 
 /** Los reclamos de reconciliación que build pudo generar, de todos los barridos. */

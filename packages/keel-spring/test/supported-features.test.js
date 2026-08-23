@@ -130,3 +130,66 @@ test('pagination.style: offset (y su ausencia) no avisan de nada', () => {
     assert.deepEqual(warnings, [], `${JSON.stringify(pagination)} no debería avisar`);
   }
 });
+
+// ─── La operación interna a la que no llega ningún disparador generado ───────
+//
+// `internal: true` sin `schedule`, sin endpoint y sin ninguna suscripción que la dispare
+// solo puede ejecutarla OTRO handler. Ese enlace vive hoy en la prosa de `rules`, así que
+// build no lo ve — y de ahí salen tres cosas que no puede hacer por el llamante. La cara:
+// en una corrida real el barrido que manda el correo quedó despachado con una transacción
+// única sobre el lote entero, y con eso el reclamo (un UPDATE condicional impecable) dejó
+// de ser un reclamo: no confirma hasta el final, ninguna réplica lo ve, los envíos SMTP
+// caen dentro de la transacción y el estado `sending` no llega a existir para nadie.
+
+const withMail = (extra = {}) => ({
+  'use-cases': {
+    operations: {
+      dispatchQueued: { schedule: { cron: '* * * * *' }, transitions: [{ entity: 'Msg', from: ['sending'], to: 'failed' }] },
+      sendQueued: { internal: true },
+      ...(extra.operations ?? {})
+    }
+  },
+  mail: { sentBy: ['sendQueued'] },
+  ...extra.layers
+});
+
+test('la operación interna sin disparador se avisa, y con I/O externo se dice qué se pierde', () => {
+  const { errors, warnings } = checkSupportedFeatures(manifest, withMail());
+  const aviso = warnings.filter((w) => w.includes('sin ningún disparador generado'));
+
+  assert.deepEqual(errors, []);
+  assert.equal(aviso.length, 1, warnings.join('\n'));
+  assert.match(aviso[0], /sendQueued/);
+  // Las tres consecuencias, que son lo accionable: transacción, reclamo y dónde mirarlo.
+  assert.match(aviso[0], /dispatchWithoutTransaction/);
+  assert.match(aviso[0], /el reclamo NO confirma hasta el final/);
+  assert.match(aviso[0], /concurrency\.md/);
+});
+
+test('sin I/O externo el aviso se queda en el enlace invisible, sin la parte de la transacción', () => {
+  // Una interna que solo mueve datos propios no paga el precio caro: no hay llamada
+  // externa dentro de la transacción ni estado intermedio que nadie pueda observar.
+  const { warnings } = checkSupportedFeatures(manifest, {
+    'use-cases': { operations: { recalcular: { internal: true } } }
+  });
+  const aviso = warnings.filter((w) => w.includes('sin ningún disparador generado'));
+
+  assert.equal(aviso.length, 1);
+  assert.ok(!aviso[0].includes('dispatchWithoutTransaction'), aviso[0]);
+});
+
+test('una interna que SÍ tiene disparador no se avisa', () => {
+  // La simétrica, que es lo que impide que el aviso salga sobre media capa use-cases:
+  // con `schedule` o con una suscripción que la dispare, build sí conoce su entrada.
+  const conSchedule = checkSupportedFeatures(manifest, {
+    'use-cases': { operations: { barrer: { internal: true, schedule: { cron: '* * * * *' } } } }
+  });
+  const porSuscripcion = checkSupportedFeatures(manifest, {
+    'use-cases': { operations: { aplicar: { internal: true } } },
+    messaging: { subscriptions: { AlgoPasó: { triggers: 'aplicar' } } }
+  });
+
+  for (const { warnings } of [conSchedule, porSuscripcion]) {
+    assert.deepEqual(warnings.filter((w) => w.includes('sin ningún disparador generado')), []);
+  }
+});

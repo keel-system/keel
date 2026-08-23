@@ -76,6 +76,23 @@ Y en cualquiera de los dos casos: la operación tiene su guarda de repetición
 Respétala; no la sustituyas por una comprobación previa, que no cierra la ventana
 entre dos peticiones simultáneas.
 
+### Cuando quien envía es un barrido
+
+Si la operación de `sentBy` es `internal: true` y la invoca un `@Scheduled` por cada
+elemento de su tanda —el caso normal de una cola de salida—, la guarda de la transición
+**tiene que confirmar antes del envío**, y eso no ocurre solo: `build` despacha ese barrido
+con `mediator.dispatch(...)`, o sea una transacción única sobre el lote entero. Ahí el
+reclamo no confirma hasta el final, ninguna réplica lo ve, los envíos caen dentro de la
+transacción y el estado intermedio (`sending`) no existe nunca para nadie — con lo que un
+rescate por marca de tiempo no encuentra jamás a sus candidatos.
+
+Lo correcto es el camino que ya usa el barrido de reconciliación:
+`mediator.dispatchWithoutTransaction(...)` en el scheduler, con cada llamada al adaptador
+abriendo y confirmando la suya. `build` avisa de esta forma («operación interna sin ningún
+disparador generado») pero **no la cambia por ti**: no puede ver quién invoca a quién.
+Repórtalo y aplícalo. Detalle completo en `{{keel:docs}}/conventions/concurrency.md`
+§ *El reclamo con una llamada externa en medio*.
+
 ## Qué NO cubre Mailpit
 
 Tres cosas que solo se prueban contra un proveedor real, y conviene no descubrirlas
