@@ -213,7 +213,10 @@ function scoreScenariosScript(model) {
 # Salida: la matriz por stdout (la de Gradle va al log). Código de salida:
 #   0  todos los escenarios en OK
 #   1  hay FALLO o NO_EJERCITADO → hay algo que arbitrar
-#   2  precondición o arnés roto: la suite no se ejecutó, no hay matriz que leer
+#   2  precondición o arnés roto Y NADA QUE ARBITRAR: la suite no se ejecutó, o cayó
+#      alguna clase entera sin dejar ni un FL-* en FALLO. Si además hay escenarios en
+#      FALLO, sale 1: esos se arbitran, y devolver la corrida al agente de pruebas
+#      cuando el rojo es del servidor es un bucle que no converge.
 #   3  ENTORNO bloqueado: otro proceso sostiene este directorio. No es un defecto de
 #      nadie y no hay agente que relanzar — se resuelve y se reintenta.
 #
@@ -474,9 +477,17 @@ if [ -n "$broken" ]; then
   echo "  los FL-* que le tocaban salen arriba como NO_EJERC, y no es falta de cobertura."
   echo "  La causa va en la línea de debajo de cada clase; el volcado, en"
   echo "  $EVIDENCE/<Clase>-init.json (con el último comando ejecutado y su salida)."
-  echo "  No hay escenario que arbitrar —la clase no llegó a ejercitar ninguno—, así que"
-  echo "  esto sale con 2 (arnés roto) y no con 1: se arregla la clase y se vuelve a puntuar."
-  exit 2
+  if [ "$ko" -eq 0 ]; then
+    echo "  No hay ningún escenario en FALLO: no hay nada que arbitrar, así que esto sale"
+    echo "  con 2 (arnés roto) y no con 1: se arregla la clase y se vuelve a puntuar."
+    exit 2
+  fi
+  echo "  PERO hay $ko escenario(s) FL-* en FALLO, y eso SÍ se arbitra: esto sale con 1."
+  echo "  Arreglar el @BeforeAll NO los pone en verde. Una inicialización que revienta porque"
+  echo "  esperaba un comportamiento del servidor (un correo que no llega, un estado que no"
+  echo "  transita) es el MISMO rojo que los FL-* de arriba, visto antes: no es del arnés."
+  echo "  Salir con 2 aquí devolvería la corrida al agente de pruebas, que no puede leer"
+  echo "  src/main/java — es exactamente el bucle que esta condición cierra."
 fi
 exit 1
 `;
@@ -1156,6 +1167,51 @@ ${hasIdempotency(model) ? `
             }
         }
         throw new AssertionError("La condición no se cumplió en " + timeout);
+    }
+
+    private boolean preconditionsDone;
+    private AssertionError preconditionsFailure;
+
+    /**
+     * Precondición que depende del <b>comportamiento de la aplicación</b>: una espera de
+     * correo, un barrido que tiene que haber pasado, una transición del lifecycle que
+     * ninguna llamada provoca directamente. Se invoca desde {@code @BeforeEach}, y esa
+     * ubicación no es estilo.
+     *
+     * <p>En {@code @BeforeAll} el mismo fallo es <b>inatribuible</b>: JUnit aborta el
+     * contenedor de la clase con {@code initializationError}, ningún escenario llega a
+     * ejecutarse y sus {@code FL-*} salen de la matriz como NO_EJERCITADO — una etiqueta
+     * que dice «sin cobertura» cuando lo que hubo fue un rojo del servidor. La puntuación
+     * lo lee entonces como arnés roto y devuelve la corrida al agente de pruebas, que no
+     * puede leer {@code src/main/java} y por tanto no puede arreglarlo. Ese bucle costó
+     * una corrida entera.
+     *
+     * <p>Desde aquí, en cambio, el fallo cae sobre <b>cada escenario</b> de la clase: la
+     * matriz los marca FALLO, {@code FailureCapture} deja su volcado, y quien arbitra es
+     * {@code keel-spring-validate}, que sí puede dictaminar {@code culprit: code}.
+     *
+     * <p>Corre una sola vez por clase (las clases de flujo son
+     * {@code @TestInstance(PER_CLASS)}) y <b>memoriza también el fallo</b>: sin eso, una
+     * espera de correo agotada se pagaría entera en cada escenario de la clase.
+     *
+     * <p>Lo determinista —{@code resetState()}, las llamadas HTTP que devuelven 2xx por
+     * contrato— se queda en {@code @BeforeAll}. Aquí va solo lo que el servidor puede
+     * incumplir.
+     */
+    protected final void awaitPreconditions(Runnable seed) {
+        if (preconditionsFailure != null) {
+            throw preconditionsFailure;
+        }
+        if (preconditionsDone) {
+            return;
+        }
+        try {
+            seed.run();
+            preconditionsDone = true;
+        } catch (AssertionError e) {
+            preconditionsFailure = e;
+            throw e;
+        }
     }
 
     /**
@@ -3942,26 +3998,28 @@ public class FailureCapture implements TestWatcher, LifecycleMethodExecutionExce
         LAST_PROBE_ANY.set(probe);
     }
 
+    /**
+     * Marca del último volcado escrito, para que un fallo que llega DOS veces no se pise.
+     *
+     * <p>Un <code>@BeforeEach</code> que revienta pasa primero por
+     * {@link #handleBeforeEachMethodExecutionException} —con el intercambio y el sondeo todavía
+     * en memoria— y después por {@link #testFailed}, ya con {@link #clear} hecho. Sin esta
+     * guarda el segundo sobrescribe el volcado bueno con uno que solo tiene la aserción: sin
+     * request, sin response y sin <code>phase</code>. Un volcado vacío es peor que ninguno,
+     * porque quien arbitra lo abre y no encuentra nada que contrastar con el <code>Then</code>.
+     */
+    private static final ThreadLocal<String> DUMPED = new ThreadLocal<>();
+
     @Override
     public void testFailed(ExtensionContext context, Throwable cause) {
         String displayName = context.getDisplayName();
         String scenario = displayName.split(":")[0].trim();
-
-        Map<String, Object> report = new LinkedHashMap<>();
-        report.put("scenario", scenario);
-        report.put("displayName", displayName);
-        report.put("testClass", context.getTestClass().map(Class::getName).orElse("?"));
-        report.put("assertion", Optional.ofNullable(cause.getMessage()).orElse(cause.toString()));
-        Map<String, Object> exchange = Optional.ofNullable(LAST.get()).orElseGet(LAST_ANY::get);
-        if (exchange != null) {
-            report.putAll(exchange);
+        if (scenario.equals(DUMPED.get())) {
+            // Ya lo volcó el handler del ciclo de vida, y con más evidencia que la que queda aquí.
+            clear();
+            return;
         }
-        Map<String, Object> probe = Optional.ofNullable(LAST_PROBE.get()).orElseGet(LAST_PROBE_ANY::get);
-        if (probe != null) {
-            report.put("probe", probe);
-        }
-        write(scenario, report);
-        clear();
+        dump(scenario, displayName, context.getTestClass().map(Class::getName).orElse("?"), null, cause);
     }
 
     /**
@@ -3978,14 +4036,40 @@ public class FailureCapture implements TestWatcher, LifecycleMethodExecutionExce
     public void handleBeforeAllMethodExecutionException(ExtensionContext context, Throwable throwable) throws Throwable {
         String testClass = context.getTestClass().map(Class::getName).orElse("?");
         String simpleName = testClass.substring(testClass.lastIndexOf('.') + 1);
-        String scenario = simpleName + "-init";
+        dump(simpleName + "-init", context.getDisplayName(), testClass, "@BeforeAll", throwable);
+        // Capturar no es tragar: se relanza para que el desenlace de la clase no cambie.
+        throw throwable;
+    }
 
+    /**
+     * Un <code>@BeforeEach</code> que revienta tampoco tiene garantizado el paso por
+     * {@link #testFailed} — depende de la versión de JUnit—, y a diferencia del de
+     * <code>@BeforeAll</code> aquí SÍ hay escenario: el contexto es el del método de prueba, así
+     * que el volcado va a su <code>FL-id</code> y no a un <code>&lt;Clase&gt;-init</code>.
+     *
+     * <p>Es la mitad que faltaba de {@code awaitPreconditions}: sacar una espera del
+     * <code>@BeforeAll</code> hace que el fallo se atribuya al escenario, pero sin esto el
+     * escenario saldría FALLO <b>sin evidencia</b>, y la evidencia es justo lo que arbitra
+     * {@code keel-spring-validate}.
+     */
+    @Override
+    public void handleBeforeEachMethodExecutionException(ExtensionContext context, Throwable throwable) throws Throwable {
+        String displayName = context.getDisplayName();
+        dump(displayName.split(":")[0].trim(), displayName,
+                context.getTestClass().map(Class::getName).orElse("?"), "@BeforeEach", throwable);
+        throw throwable;
+    }
+
+    /** Vuelca el informe de un fallo con la evidencia que haya en memoria y limpia. */
+    private static void dump(String scenario, String displayName, String testClass, String phase, Throwable cause) {
         Map<String, Object> report = new LinkedHashMap<>();
         report.put("scenario", scenario);
-        report.put("displayName", context.getDisplayName());
+        report.put("displayName", displayName);
         report.put("testClass", testClass);
-        report.put("phase", "@BeforeAll");
-        report.put("assertion", Optional.ofNullable(throwable.getMessage()).orElse(throwable.toString()));
+        if (phase != null) {
+            report.put("phase", phase);
+        }
+        report.put("assertion", Optional.ofNullable(cause.getMessage()).orElse(cause.toString()));
         Map<String, Object> exchange = Optional.ofNullable(LAST.get()).orElseGet(LAST_ANY::get);
         if (exchange != null) {
             report.putAll(exchange);
@@ -3996,8 +4080,7 @@ public class FailureCapture implements TestWatcher, LifecycleMethodExecutionExce
         }
         write(scenario, report);
         clear();
-        // Capturar no es tragar: se relanza para que el desenlace de la clase no cambie.
-        throw throwable;
+        DUMPED.set(scenario);
     }
 
     @Override
@@ -4006,6 +4089,7 @@ public class FailureCapture implements TestWatcher, LifecycleMethodExecutionExce
     }
 
     private static void clear() {
+        DUMPED.remove();
         LAST.remove();
         LAST_PROBE.remove();
         LAST_ANY.set(null);

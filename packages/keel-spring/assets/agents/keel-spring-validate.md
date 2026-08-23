@@ -40,8 +40,18 @@ y sin ver el código; donde las dos lecturas discrepan, hace falta un tercero qu
    rojo— el volcado se llama `build/keel-failures/<Clase>-init.json` y lleva `phase: "@BeforeAll"`
    más el último `probe` ejecutado, con su comando, su código de salida y su salida completa. Ese
    probe suele ser la respuesta entera: un fixture que fabrica estado por `db(...)` falla ahí, y
-   el mensaje del motor dice exactamente qué rechazó. **No es un fallo de comportamiento**: no lo
-   arbitres como `culprit: code` — la clase no llegó a ejercitar nada.
+   el mensaje del motor dice exactamente qué rechazó.
+
+   **Mira la `assertion` antes de clasificarlo.** Si habla del arnés —una sentencia que el motor
+   rechaza, un contenedor que no responde, una credencial que no existe— es `culprit: harness` o
+   `culprit: test`, y la clase no llegó a ejercitar nada. Pero si habla del **comportamiento del
+   servidor** —un correo que no llega en su plazo, un estado que no transita, un evento que no se
+   publica— entonces es un rojo del servidor visto antes de tiempo, y es `culprit: code` como
+   cualquier otro: que la espera estuviera mal colocada (en `@BeforeAll` en vez de en
+   `awaitPreconditions`, ver regla 9 de `integration-tests.md`) no cambia de quién es el defecto.
+   Clasificarlo como arnés devuelve la corrida al agente de pruebas, que no puede leer
+   `src/main/java` — y eso no converge. Cuando ocurra, dilo también en `harnessPatches`: la espera
+   hay que moverla, además de arreglar el código.
 3. **Arbitra contra el `Then` original.** Un fallo no se clasifica por la pinta del stack
    trace. Cuatro veredictos posibles:
    - **`culprit: code`** — el test refleja fielmente el `Then` y el servidor no lo cumple.

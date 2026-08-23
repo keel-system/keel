@@ -129,6 +129,16 @@ source set `integrationTest`, así que un test que importe un DTO o una entidad 
    llamada `<Flow>FlowIT` (p. ej. `ProductLifecycleFlowIT`), que hereda de `AbstractFlowIT`:
    - `@BeforeAll` que llama a `resetState()` — el reset es **por flujo**, jamás entre
      escenarios: dentro del flujo, un escenario usa lo que dejó el anterior.
+   - **En `@BeforeAll` solo va lo determinista**: `resetState()` y las llamadas HTTP que
+     devuelven 2xx por contrato. Ninguna espera sobre el comportamiento del servidor
+     (`awaitMailTo`, `await(...)`, una lectura que dependa de un barrido) ni nada que dependa
+     de ella: eso va dentro de `awaitPreconditions(() -> { … })`, invocado desde un
+     `@BeforeEach`. Corre una sola vez por clase y memoriza también el fallo, así que no se
+     paga la espera en cada escenario. En `@BeforeAll` ese fallo sería **inatribuible** —la
+     clase cae con `initializationError` y sus `FL-*` salen `NO_EJERCITADO`, «sin cobertura»
+     donde hubo un rojo del servidor—; desde `@BeforeEach` cae sobre cada escenario como
+     FALLO, con su volcado, y lo arbitra quien puede dictaminar `culprit: code`. Regla 9 de
+     `{{keel:docs}}/conventions/integration-tests.md`.
    - Un método `@Test` por escenario, con `@Order(n)` en el orden del documento y
      `@DisplayName("FL-XXX-NNN-A: <título>")`. **El id exacto delante de los dos puntos**:
      la matriz `scenarios:` y los volcados de `build/keel-failures/` se derivan de ahí.

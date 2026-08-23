@@ -100,11 +100,25 @@ y ahorra un ciclo entero de validación funcional.
    **inmediatamente antes** de la acción bajo prueba. Es auditable con un `grep` del
    `purgeMessages` de cada aserción negativa: si el único reset del canal está en el
    `@BeforeAll`, el test está mal.
-9. Cada cláusula del `Given` de cada escenario tiene su llamada de siembra y esa llamada
+9. **Ninguna espera sobre el comportamiento de la aplicación va en `@BeforeAll`.** Ni
+   `awaitMailTo`, ni `await(...)`, ni una lectura que dependa de un barrido, ni nada que
+   dependa de él (el `db(...)` que retrasa un `requested_at` de un mensaje que tiene que estar
+   `sent`, la siembra que solo tiene sentido después). `@BeforeAll` hace lo **determinista**:
+   `resetState()` y las llamadas HTTP que devuelven 2xx por contrato. Lo demás va dentro de
+   `awaitPreconditions(() -> { … })`, invocado desde un `@BeforeEach` — corre una sola vez y
+   memoriza el fallo, así que no se paga la espera por escenario.
+
+   El motivo no es de estilo: en `@BeforeAll` ese fallo es **inatribuible**. JUnit aborta la
+   clase con `initializationError`, sus `FL-*` salen de la matriz como `NO_EJERCITADO` —«sin
+   cobertura» donde hubo un rojo del servidor— y la corrida vuelve al agente de pruebas, que no
+   puede leer `src/main/java`. Desde `@BeforeEach` cae sobre cada escenario como FALLO, con su
+   volcado, y lo arbitra quien puede dictaminar `culprit: code`. Es auditable con un `grep`:
+   un `awaitMailTo` o un `await(` dentro de un bloque `@BeforeAll` es un fallo.
+10. Cada cláusula del `Given` de cada escenario tiene su llamada de siembra y esa llamada
    comprueba su propio status — § Traducir el `Given`. Es auditable leyendo el escenario y el
    test en paralelo: un `Given` que nombra un estado del lifecycle y un test que solo crea la
    entidad es un fallo garantizado, atribuido además al agente equivocado.
-10. Todo `jsonPath(...)` y todo `JsonPath.read(...)` se captura en una variable tipada antes
+11. Todo `jsonPath(...)` y todo `JsonPath.read(...)` se captura en una variable tipada antes
     de pasarlo a nada — nunca anidado dentro de `String.valueOf(...)`, `formatted(...)` u otra
     llamada con sobrecargas, que eligen por el tipo estático y meten un cast que revienta en
     runtime — § `jsonPath(...)` y `JsonPath.read(...)` van siempre a una variable tipada. Y si
@@ -112,7 +126,7 @@ y ahorra un ciclo entero de validación funcional.
     § Un filtro devuelve una lista, no un elemento. Las dos son auditables con un `grep`: `[?(`
     debe leerse siempre en una lista, y `valueOf(jsonPath`/`valueOf(JsonPath` no debe aparecer
     nunca.
-11. Toda vía que sirve una entidad desde **caché** compara `createdAt`/`updatedAt` entre la
+12. Toda vía que sirve una entidad desde **caché** compara `createdAt`/`updatedAt` entre la
    lectura que puebla la caché y la que la sirve, no solo los campos de negocio. El
    `Instant` es el campo que primero se rompe en el roundtrip de (de)serialización y el que
    ningún escenario nombra explícitamente: comprobar solo los campos de negocio deja pasar
@@ -935,7 +949,7 @@ verificación del correo es siempre manual.
 
 | Helper | Para qué |
 |---|---|
-| `awaitMailTo(dirección, n)` | **Por aquí empieza todo Then sobre correo.** Espera hasta `MAIL_AWAIT_SECONDS` (derivado del `schedule` más rápido del diseño) a que haya `n` correos para esa dirección y devuelve sus ids, el más reciente primero |
+| `awaitMailTo(dirección, n)` | **Por aquí empieza todo Then sobre correo** — y solo dentro de un `@Test` o de `awaitPreconditions(...)`, nunca en `@BeforeAll` (regla 9). Espera hasta `MAIL_AWAIT_SECONDS` (derivado del `schedule` más rápido del diseño) a que haya `n` correos para esa dirección y devuelve sus ids, el más reciente primero |
 | `lastMailTo(dirección)` | El más reciente, ya resuelto a su detalle completo (espera igual que el anterior) |
 | `mailSubject(mensaje)` | El asunto tal como lo lee quien lo recibe: ya interpolado y ya saneado |
 | `mailHtml(mensaje)` / `mailText(mensaje)` | Las dos partes del cuerpo. Con `delivery.parts: [html, text]` hay que afirmar sobre las dos |
@@ -962,6 +976,9 @@ Reglas, y las tres primeras son la misma idea:
   destinatario es una persona real: el escenario que repite la operación con su guarda
   (`idempotency` o la transición declarada) y comprueba `mailCount == 1` es el que sostiene esa
   garantía. Sin él, la guarda está declarada y nadie sabe si se aplica.
+- **La espera va donde su fallo sea atribuible.** Si el correo es una *precondición* del
+  escenario y no su `Then` —hay que esperarlo para sembrar lo siguiente—, no se sube a
+  `@BeforeAll`: se envuelve en `awaitPreconditions(...)` desde `@BeforeEach`. Regla 9.
 - `resetState()` vacía el buzón entre clases. Un correo del flujo anterior haría que el primer
   `awaitMailTo` devolviera el mensaje equivocado — el mismo fallo que la purga de los canales evita
   en el broker.
