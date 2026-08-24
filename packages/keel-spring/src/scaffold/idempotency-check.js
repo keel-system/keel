@@ -130,9 +130,10 @@ function sweepClaimChecks(model) {
       why:
         `el barrido corre en TODAS las réplicas, así que el trabajo que toma tiene que RECLAMARSE con una ` +
         `escritura condicional sobre ${entities.join(', ')} —no leerse con un finder—, y no aparece ninguna en el ` +
-        `proyecto. build NO pudo generarla (este barrido saca filas de un estado EN VUELO, y su cota temporal ` +
-        `vive en la prosa de rules), así que la escribes tú: puede estar en ${operation.handlerClass} o en el ` +
-        `handler de la operación a la que el diseño le delega el trabajo por elemento, pero tiene que existir`
+        `proyecto. build NO pudo generarla y su aviso dice por qué (un rescate de un estado EN VUELO necesita el ` +
+        `campo que dice CUÁNDO se entró en él, y sobre dos estados a la vez no hay un solo reloj que medir), así ` +
+        `que la escribes tú CON SU COTA TEMPORAL: puede estar en ${operation.handlerClass} o en el handler de la ` +
+        `operación a la que el diseño le delega el trabajo por elemento, pero tiene que existir`
     };
   });
 }

@@ -1057,25 +1057,21 @@ function classifyClaims(services, entities, layers, warnings) {
         // Una COLA es un estado al que ninguna transición lleva: las filas se acumulan
         // ahí esperando a que alguien las tome, y tomarlas todas es lo que el barrido
         // quiere. Un estado al que sí se llega está EN VUELO: hay una instancia
-        // trabajando en esas filas ahora mismo, y reclamarlas le arrancaría el trabajo
-        // de las manos. El rescate legítimo de eso necesita una cota temporal («lleva
-        // más de N minutos ahí») que vive en la prosa de `rules` y que build no puede
-        // inventar — así que no se genera, y se dice en voz alta.
+        // trabajando en esas filas ahora mismo, y reclamarlas a secas le arrancaría el
+        // trabajo de las manos. Por eso el rescate lleva una cota temporal encima —ver
+        // `rescueClaim`—, y sin ella no se genera nada.
         const queues = (transition.from ?? []).filter((state) => !reached.has(screamingSnake(state)));
         const inFlight = (transition.from ?? []).filter((state) => reached.has(screamingSnake(state)));
 
+        const base = `${pascalCase(operation.name)}${transitions.length > 1 ? pascalCase(transition.to) : ''}`;
+
         if (inFlight.length > 0) {
-          warnings.push(
-            `use-cases: ${operation.name} saca ${transition.entity} de ${inFlight.join(', ')}, que es un estado EN ` +
-              `VUELO: otra réplica puede estar trabajando en esas filas ahora mismo. build NO genera ese reclamo, ` +
-              `porque un rescate necesita una cota temporal («lleva más de N minutos ahí») que el DSL no declara y ` +
-              `que build no puede inventar. Recláma­lo tú con esa cota — el gate de calidad comprueba que el barrido ` +
-              `reclame en vez de leer.`
-          );
+          const rescue = rescueClaim({ operation, transition, entity, inFlight, base, warnings });
+          if (rescue) claims.push(rescue);
         }
         if (queues.length === 0) continue;
 
-        const suffix = `${pascalCase(operation.name)}${transitions.length > 1 ? pascalCase(transition.to) : ''}`;
+        const suffix = base;
         claims.push({
           entity: transition.entity,
           from: queues,
@@ -1088,6 +1084,86 @@ function classifyClaims(services, entities, layers, warnings) {
       if (claims.length > 0) operation.claim = claims;
     }
   }
+}
+
+/**
+ * El rescate de un estado EN VUELO: recuperar las filas que otra réplica se llevó y dejó
+ * a medias porque murió con ellas en la mano.
+ *
+ * Es el MISMO reclamo que el de una cola —escritura condicional sobre el lifecycle— con
+ * una cota temporal encima: solo entran las filas que llevan en el estado más de lo que
+ * tarda un ciclo en terminar. Sin esa cota, «rescatar» es arrancarle el trabajo de las
+ * manos a quien lo está haciendo ahora mismo, y por eso build no generaba nada.
+ *
+ * Cerrarlo pide dos cosas, y solo una la aporta el diseño:
+ *
+ *   · CUÁNDO entró la fila en el estado. Es un campo de la entidad —`<estado>Since` o
+ *     `<estado>At`, timestamp—, la misma convención que ya estampa el reclamo de guarda
+ *     al entrar. Sin él no hay reloj sobre el que medir, y build no inventa uno:
+ *     `createdAt` es cuándo nació la fila, no cuándo empezó ESTE trabajo, y un
+ *     `updatedAt` de auditoría rejuvenece con cualquier otra escritura, que es el fallo
+ *     que pasa las pruebas y no se acaba nunca en producción.
+ *   · CUÁNTO se tolera. Eso NO es del diseño: es la caducidad de un reclamo —«asumimos
+ *     que la réplica que la tomó murió»—, la misma familia que
+ *     `outbox.relay.claim-timeout-ms` y `reconciliation.<x>.claim-timeout-ms`. Vive en
+ *     `parameters/<perfil>/sweep.yaml` y se mueve por entorno sin recompilar.
+ *
+ * Y ahí está la frontera con la reconciliación, que se le parece y no es lo mismo: allí
+ * lo que se espera es el desenlace de UN TERCERO, y cuánto silencio se tolera es una
+ * decisión de negocio que el diseño declara (`unansweredAfterSeconds`). Aquí lo que
+ * falló es una réplica NUESTRA, y cuánto tarda en dar señales de vida es mecánica.
+ */
+function rescueClaim({ operation, transition, entity, inFlight, base, warnings }) {
+  const gap = (reason) => {
+    warnings.push(
+      `use-cases: ${operation.name} saca ${transition.entity} de ${inFlight.join(', ')}, que es un estado EN VUELO: ` +
+        `otra réplica puede estar trabajando en esas filas ahora mismo, así que el rescate necesita una cota ` +
+        `temporal. build NO puede generarlo — ${reason}. El barrido corre en TODAS las réplicas, así que el ` +
+        `reclamo tiene que existir igual: lo escribes tú con esa cota, y el gate de calidad (familia sweepClaim) ` +
+        `lo comprueba.`
+    );
+    return null;
+  };
+
+  // Con dos estados en vuelo hay dos relojes —uno por estado—, y «lleva demasiado» deja
+  // de estar definido para el lote.
+  if (inFlight.length > 1) {
+    return gap(
+      `son dos estados en vuelo (${inFlight.join(', ')}) y cada uno tiene su propia marca de cuándo se entró en él`
+    );
+  }
+
+  const [state] = inFlight;
+  const stampNames = [`${state}Since`, `${state}At`];
+  const stamp = (entity.fields ?? []).find(
+    (field) => stampNames.includes(field.name) && field.base === 'timestamp'
+  );
+  if (!stamp) {
+    return gap(
+      `${transition.entity} no declara CUÁNDO entró en '${state}' (un campo ${stampNames.join(' o ')} de tipo ` +
+        `timestamp, estampado al entrar), y sin ese reloj no hay «lleva más de N minutos ahí» que medir`
+    );
+  }
+
+  const suffix = `Stalled${base}`;
+  return {
+    entity: transition.entity,
+    from: inFlight,
+    to: transition.to,
+    suffix,
+    method: `claimFor${suffix}`,
+    // Lo que lo distingue del reclamo de una cola, y lo único que claim.js necesita para
+    // añadirle su predicado temporal y su @Value.
+    stalled: {
+      state,
+      stampField: stamp.name,
+      // La rama de `parameters/<perfil>/sweep.yaml` que emite config.js. Va por reclamo
+      // y no por operación: un barrido con dos transiciones rescata dos cosas distintas
+      // y cada una tiene su propio plazo.
+      configKey: kebabCase(base),
+      defaultSeconds: 300
+    }
+  };
 }
 
 /**

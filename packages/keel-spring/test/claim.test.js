@@ -8,6 +8,7 @@ import { loadService } from 'keel-core';
 import { buildModel } from '../src/lib/model.js';
 import { generate as generateOutbox } from '../src/scaffold/outbox.js';
 import { generate as generateRepositories } from '../src/scaffold/repositories.js';
+import { generate as generateDocumentRepositories } from '../src/scaffold/document-repositories.js';
 import { warnUnsupportedDialect } from '../src/scaffold/claim.js';
 import { supportsSkipLocked } from '../src/lib/claim-sql.js';
 
@@ -18,7 +19,10 @@ import { supportsSkipLocked } from '../src/lib/claim-sql.js';
 
 const manifest = { keel: '2.0', service: { name: 'dispatch', version: '0.1.0' }, layers: {} };
 
-function layersWith({ sweepTransitions, extraOps = {}, subscriptions = null }) {
+function layersWith({ sweepTransitions, extraOps = {}, subscriptions = null, stampField = null, extraStates = [] }) {
+  const states = ['queued', 'running', ...extraStates, 'done'];
+  const transitions = { queued: ['running'], running: ['done', ...extraStates], done: [] };
+  for (const state of extraStates) transitions[state] = ['done'];
   return {
     domain: {
       entities: {
@@ -26,10 +30,13 @@ function layersWith({ sweepTransitions, extraOps = {}, subscriptions = null }) {
           description: 'Trabajo encolado.',
           fields: {
             id: { type: 'uuid', id: true, generated: true },
-            status: { type: 'enum', values: ['queued', 'running', 'done'] },
-            createdAt: { type: 'timestamp', generated: true }
+            status: { type: 'enum', values: states },
+            createdAt: { type: 'timestamp', generated: true },
+            // El reloj del rescate: cuándo entró la fila en el estado en vuelo. Lo declara
+            // el diseño porque no hay ningún otro campo que signifique eso.
+            ...(stampField ? { [stampField]: { type: 'timestamp' } } : {})
           },
-          lifecycle: { field: 'status', transitions: { queued: ['running'], running: ['done'], done: [] } }
+          lifecycle: { field: 'status', transitions }
         }
       },
       aggregates: { Job: { root: 'Job', entities: [] } }
@@ -121,20 +128,98 @@ test('con SKIP LOCKED el select de candidatos lo pide; sin él, se dice en voz a
   assert.equal(supportsSkipLocked('postgresql'), true);
 });
 
-test('un barrido que saca filas de un estado EN VUELO no recibe reclamo: es un rescate', () => {
-  // `running` es un estado al que otra transición lleva: hay una réplica trabajando en
-  // esas filas AHORA. Reclamarlas todas se lo arrancaría de las manos, y el rescate
-  // legítimo necesita una cota temporal («lleva más de N minutos ahí») que el DSL no
-  // declara y que build no puede inventar.
+// ─── El rescate de un estado EN VUELO ────────────────────────────────────────
+//
+// `running` es un estado al que otra transición lleva: hay una réplica trabajando en esas
+// filas AHORA. Reclamarlas a secas se lo arrancaría de las manos, así que el rescate solo
+// existe con una cota temporal encima. La cota tiene dos mitades y solo una la aporta el
+// diseño: el RELOJ (el campo que dice cuándo se entró en el estado) y el PLAZO, que es la
+// caducidad de un reclamo y vive en parameters/. Sin el reloj no hay rescate que generar.
+
+const rescueSweep = () =>
+  layersWith({
+    sweepTransitions: [{ entity: 'Job', from: ['running'], to: 'done' }],
+    stampField: 'runningSince'
+  });
+
+test('un rescate con su reloj declarado SÍ recibe reclamo, y es el de la cola más una cota', () => {
+  const model = modelFor(rescueSweep());
+  const [claim] = sweepOf(model).claim;
+
+  assert.equal(sweepOf(model).sweep, true);
+  assert.equal(claim.method, 'claimForStalledDrainJobs');
+  assert.deepEqual(claim.from, ['running']);
+  assert.equal(claim.stalled.stampField, 'runningSince');
+  assert.equal(claim.stalled.configKey, 'drain-jobs');
+  // Y ya no se avisa de un hueco que dejó de serlo.
+  assert.deepEqual(model.warnings.filter((warning) => warning.includes('EN VUELO')), []);
+});
+
+test('la cota va en las DOS consultas: sin ella en el UPDATE se rescata lo que acaba de entrar', () => {
+  const jpa = fileNamed(generateRepositories(modelFor(rescueSweep())), 'JobJpaRepository.java');
+
+  assert.match(
+    jpa,
+    /select e\.id from JobJpa e where e\.status in :states and e\.runningSince < :staleBefore order by e\.runningSince asc/
+  );
+  assert.match(
+    jpa,
+    /update JobJpa e set e\.status = :to where e\.id = :id and e\.status in :states and e\.runningSince < :staleBefore/
+  );
+  assert.match(jpa, /int claimForStalledDrainJobs\(.*Instant staleBefore\);/);
+  assert.match(jpa, /import java\.time\.Instant;/);
+});
+
+test('el plazo es del generador y se lee por @Value en el ADAPTADOR, no en el handler', () => {
+  const adapter = fileNamed(generateRepositories(modelFor(rescueSweep())), 'JobRepositoryImpl.java');
+
+  assert.match(adapter, /@Value\("\$\{sweep\.drain-jobs\.stalled-after-seconds:300\}"\)/);
+  assert.match(adapter, /private long stalledDrainJobsAfterSeconds;/);
+  // Se calcula UNA vez por tanda: recalcularlo por fila movería la cota entre el select
+  // y el update de cada una.
+  assert.match(adapter, /Instant staleBefore = Instant\.now\(\)\.minusSeconds\(stalledDrainJobsAfterSeconds\);/);
+  assert.match(adapter, /candidatesForStalledDrainJobs\(states, staleBefore, PageRequest\.of\(0, batchSize\)\)/);
+  assert.match(adapter, /claimForStalledDrainJobs\(id, states, JobStatus\.DONE, staleBefore\) == 1/);
+  assert.match(adapter, /@Transactional\(propagation = Propagation\.REQUIRES_NEW\)/);
+});
+
+test('el rescate documental filtra y marca en el mismo findAndModify, y por el más viejo', () => {
+  const model = modelFor(rescueSweep(), 'mongodb');
+  const adapter = fileNamed(generateDocumentRepositories(model), 'JobRepositoryImpl.java');
+
+  assert.match(adapter, /\.and\("runningSince"\)\.lt\(staleBefore\)/);
+  // Sin orden, con más atascados que batchSize los más antiguos no se rescatarían nunca.
+  assert.match(adapter, /Sort\.by\(Sort\.Direction\.ASC, "runningSince"\)/);
+  assert.match(adapter, /findAndModify\(query, update, options, JobDocument\.class\)/);
+});
+
+test('sin el reloj no se inventa ninguno: no hay reclamo y el aviso dice qué falta', () => {
+  // La entidad no declara cuándo entró en `running`. `createdAt` es cuándo NACIÓ la fila,
+  // no cuándo empezó este trabajo, y usarlo rescataría filas recién tomadas.
   const model = modelFor(layersWith({ sweepTransitions: [{ entity: 'Job', from: ['running'], to: 'done' }] }));
 
   assert.equal(sweepOf(model).sweep, true);
   assert.equal(sweepOf(model).claim, null);
+  const warning = model.warnings.find((w) => w.includes('EN VUELO') && w.includes('drainJobs'));
+  assert.ok(warning, model.warnings.join('\n'));
+  assert.match(warning, /runningSince o runningAt/);
+  assert.ok(!fileNamed(generateRepositories(model), 'JobJpaRepository.java').includes('claimForStalledDrainJobs'));
+});
+
+test('con dos estados en vuelo hay dos relojes, así que tampoco se genera', () => {
+  const model = modelFor(
+    layersWith({
+      sweepTransitions: [{ entity: 'Job', from: ['running', 'retrying'], to: 'done' }],
+      stampField: 'runningSince',
+      extraStates: ['retrying']
+    })
+  );
+
+  assert.equal(sweepOf(model).claim, null);
   assert.ok(
-    model.warnings.some((warning) => warning.includes('EN VUELO') && warning.includes('drainJobs')),
+    model.warnings.some((warning) => warning.includes('son dos estados en vuelo')),
     model.warnings.join('\n')
   );
-  assert.ok(!fileNamed(generateRepositories(model), 'JobJpaRepository.java').includes('claimForDrainJobs'));
 });
 
 test('una purga sin transiciones no es un barrido que reclame', () => {

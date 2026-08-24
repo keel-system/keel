@@ -456,6 +456,7 @@ ${saveBody}
       `    private static final Sort TIE_BREAKER = Sort.by(Sort.Order.asc("${entity.idField?.name ?? 'id'}"));\n`
     );
   }
+  fields.push(...claim.adapterValueFields(model, entity));
   fields.push(...reconciliationClaim.adapterValueFields(model, entity));
   fields.push(`    private final ${entity.name}JpaRepository ${jpaField};`);
   const ctorParams = [`${entity.name}JpaRepository ${jpaField}`];

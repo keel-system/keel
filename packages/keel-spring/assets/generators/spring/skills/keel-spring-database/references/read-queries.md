@@ -129,10 +129,20 @@ del puerto, no escribir la consulta:
 |---|---|---|
 | saca filas de una **cola** (`schedule` + `transitions` desde el estado inicial) | `claimFor<Operación>(int batchSize)` | `UPDATE` condicional sobre el propio lifecycle: la marca es el estado de destino que el diseño declara, así que no hace falta ninguna columna en paralelo |
 | es el **`reconciledBy`** de una activación | `claimFor<Barrido><Activación>()` | marca en `reconciliation_claim`, que sobrevive al commit y **caduca**; el umbral sale de `unansweredAfterSeconds` y el candidato de `<activación>AwaitingSince` |
+| **rescata** un estado en vuelo (`transitions` desde un estado al que otra transición lleva) | `claimForStalled<Operación>(int batchSize)` | el mismo `UPDATE` condicional del primer caso **más una cota temporal**: solo entran las filas cuyo `<estado>Since`/`<estado>At` es más viejo que `sweep.<operación>.stalled-after-seconds` |
 
-Solo lo escribes tú cuando `build` avisa de que no pudo generarlo: un rescate de un estado en vuelo sin
-`reconciledBy` (falta la cota temporal, que el DSL no declara), o una reconciliación cuyo diseño no da la
-marca de espera. Ahí copia la forma de la tabla de arriba, la que corresponda.
+Ese tercero merece una nota, porque es el que se escribe mal con más facilidad. La cota **no es opcional**:
+sin ella «rescatar» es arrancarle el trabajo de las manos a la réplica que lo está haciendo ahora mismo. Y
+tiene dos mitades con dueños distintos — el **reloj** lo declara el diseño (el campo de la entidad que dice
+cuándo se entró en el estado, que alguien tiene que estampar al entrar) y el **plazo** es del generador
+(`parameters/<perfil>/sweep.yaml`), porque es la caducidad de un reclamo y no una decisión de negocio.
+Dimensiónalo por encima de lo que tarda un ciclo completo. Lo que devuelve es trabajo **abandonado**, no
+trabajo nuevo: si el ciclo que murió ya produjo un efecto externo irreversible, repetirlo lo duplica.
+
+Solo lo escribes tú cuando `build` avisa de que no pudo generarlo: un rescate cuya entidad no declara el
+reloj (o que sale de dos estados en vuelo a la vez, donde no hay un solo reloj que medir), o una
+reconciliación cuyo diseño no da la marca de espera. Ahí copia la forma de la tabla de arriba, la que
+corresponda — **con su cota**.
 
 **Y lo que depende del dialecto es solo una capa de esto**, que conviene no confundir con el reclamo:
 llevarse la fila es la escritura condicional, atómica en los seis motores; repartir los candidatos entre

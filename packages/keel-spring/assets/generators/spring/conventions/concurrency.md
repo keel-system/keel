@@ -107,12 +107,33 @@ saber el desenlace sería mentir sobre lo que pasó. Nada de eso se inventa: la 
 `unansweredAfterSeconds` que declara el diseño y el candidato se elige por el campo que la activación
 declara en `awaitingSince` — el que dice desde cuándo espera.
 
-Cuando el barrido saca filas de un estado **en vuelo** sin ser una reconciliación declarada (rescatar lo
-que otra réplica dejó a medias), `build` **no** genera el reclamo y lo dice en un aviso: un rescate
-necesita una cota temporal —«lleva más de N minutos ahí»— que vive en la prosa de `rules` y que `build`
-no puede inventar. Sin esa cota, «rescatar» es arrancarle el trabajo de las manos a quien lo está
-haciendo ahora mismo. Ese lo escribes tú, con la cota. Lo mismo si el aviso dice que no pudo generar el
-reclamo de una reconciliación (falta la marca de espera, o hay dos entidades esperando).
+Y cuando el barrido saca filas de un estado **en vuelo** sin ser una reconciliación declarada (rescatar
+lo que otra réplica dejó a medias al morir), el reclamo **también** viene generado, con una tercera forma:
+
+```java
+List<Message> claimForStalledRescueStalledMessages(int batchSize);  // el UPDATE condicional + la cota
+```
+
+Es el reclamo de la cola con una **cota temporal** encima, y esa cota no es opcional: sin ella «rescatar»
+es arrancarle el trabajo de las manos a quien lo está haciendo ahora mismo. Tiene dos mitades con dueños
+distintos, y la frontera importa:
+
+- El **reloj** lo declara el diseño: el campo `<estado>Since` / `<estado>At` de la entidad, que dice cuándo
+  se entró en el estado. No se deriva ni se sustituye — `createdAt` es cuándo nació la fila, no cuándo
+  empezó ESTE trabajo, y un `updatedAt` de auditoría rejuvenece con cualquier otra escritura, lo que deja
+  la fila invisible al rescate para siempre. Si la entidad no lo declara, `build` no genera nada y lo dice.
+- El **plazo** es del generador: `sweep.<operación>.stalled-after-seconds` en
+  `parameters/<perfil>/sweep.yaml`. Es la caducidad de un reclamo —«asumimos que la réplica que la tomó
+  murió»—, misma familia que `outbox.relay.claim-timeout-ms`, no una decisión de negocio. Ahí está la
+  diferencia con `unansweredAfterSeconds`, que sí la declara el diseño: allí lo que se espera es el
+  desenlace de un TERCERO y cuánto silencio se le tolera es un acuerdo con él; aquí lo que falló es una
+  réplica nuestra.
+
+Lo que devuelve es trabajo **abandonado**, no trabajo nuevo: si el ciclo que murió ya produjo un efecto
+externo irreversible, repetirlo lo duplica — por eso ese efecto va detrás de su propio reclamo de guarda
+(más abajo). Solo lo escribes tú si el aviso de `build` dice que no pudo generarlo: la entidad no declara
+el reloj, el barrido sale de dos estados en vuelo a la vez (dos relojes, y «lleva demasiado» deja de estar
+definido para el lote) o falta la marca de espera de una reconciliación.
 
 Verificado por `infra/check-idempotency.sh`: familia `reconciliation` para los barridos declarados como
 `reconciledBy`, y familia `sweepClaim` para todos los demás. Y **dónde** lo busca depende de lo mismo:

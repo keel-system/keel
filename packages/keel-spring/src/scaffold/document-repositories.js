@@ -231,6 +231,7 @@ ${saveBody}
       `    private static final Sort TIE_BREAKER = Sort.by(Sort.Order.asc("${entity.idField?.name ?? 'id'}"));\n`
     );
   }
+  fields.push(...claim.adapterValueFields(model, entity));
   fields.push(...reconciliationClaim.adapterValueFields(model, entity));
   fields.push(`    private final ${entity.name}MongoRepository ${repoField};`);
   const ctorParams = [`${entity.name}MongoRepository ${repoField}`];

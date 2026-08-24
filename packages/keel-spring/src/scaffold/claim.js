@@ -23,11 +23,53 @@
 //     `jakarta.persistence.lock.timeout = -2` (el mismo que ya usa OutboxRelay). Es una
 //     OPTIMIZACIÓN: sin él el reclamo sigue siendo correcto, solo que las N réplicas
 //     compiten por la misma página y N-1 tiran su ciclo. Ver lib/claim-sql.js.
+//
+// Y hay DOS sujetos, no uno. El de arriba es la COLA: filas que esperan a que alguien
+// las tome. El otro es el RESCATE de un estado EN VUELO: filas que otra réplica se llevó
+// y dejó a medias al morir. Comparten toda la mecánica y se separan en una sola cosa —el
+// rescate lleva encima una cota temporal («lleva más de N ahí»), sin la cual reclamar es
+// arrancarle el trabajo de las manos a quien lo está haciendo ahora mismo—. Esa cota
+// tiene dos mitades: el reloj lo declara el diseño (el campo `<estado>Since`/`<estado>At`
+// de la entidad) y el plazo es del generador (`sweep.<x>.stalled-after-seconds` en
+// parameters/), porque es la caducidad de un reclamo y no una decisión de negocio. Quien
+// decide si hay rescate generable es `rescueClaim()` en lib/model.js; aquí solo se ve el
+// `claim.stalled` que dejó.
 
 import { subPackage } from './render.js';
 import { screamingSnake } from '../lib/naming.js';
 import { claimSelectionSnippet, supportsSkipLocked, unsupportedClaimWarning } from '../lib/claim-sql.js';
 import { usesOutbox } from './outbox.js';
+
+/**
+ * Los reclamos de RESCATE de esta entidad: los que sacan filas de un estado en vuelo con
+ * una cota temporal encima. Son reclamos normales con un predicado más, y lo que los
+ * separa —el reloj y el plazo— lo resolvió `rescueClaim()` en lib/model.js.
+ */
+function stalledClaimsFor(model, entityName) {
+  return claimsFor(model, entityName).filter((claim) => claim.stalled);
+}
+
+/** El campo `@Value` del adaptador con el plazo de un rescate. */
+const stalledValueField = (claim) => `${claim.suffix.charAt(0).toLowerCase()}${claim.suffix.slice(1)}AfterSeconds`;
+
+/**
+ * El plazo de cada rescate, leído de `parameters/<perfil>/sweep.yaml` que config.js
+ * emite. Va en el ADAPTADOR y no en el handler por el mismo reparto de siempre: el
+ * handler vive en `application`, que por constitución no importa Spring.
+ */
+export function adapterValueFields(model, entity) {
+  return stalledClaimsFor(model, entity.name).map(
+    (claim) => `    /**
+     * Cuánto puede llevar un ${entity.name} en ${claim.stalled.state} antes de darlo por abandonado.
+     * NO lo declara el diseño: es la caducidad de un reclamo —«la réplica que lo tomó murió»—,
+     * misma familia que outbox.relay.claim-timeout-ms. Dimensiónalo por encima de lo que tarda
+     * un ciclo completo, o el rescate se llevará trabajo que sigue vivo.
+     */
+    @Value("\${sweep.${claim.stalled.configKey}.stalled-after-seconds:${claim.stalled.defaultSeconds}}")
+    private long ${stalledValueField(claim)};
+`
+  );
+}
 
 /** Todos los reclamos que apuntan a esta entidad, venga de la operación que venga. */
 export function claimsFor(model, entityName) {
@@ -95,6 +137,7 @@ const stateList = (claim, enumType) =>
   claim.from.map((state) => `${enumType}.${enumConstant(state)}`).join(', ');
 
 function describe(claim, entityName) {
+  if (claim.stalled) return describeStalled(claim, entityName);
   return `Reclama hasta {@code batchSize} ${entityName} en estado ${claim.from.join(' o ')} y los pasa a ${claim.to}.
      *
      * <p><b>Reclama, no lee.</b> Corre en TODAS las réplicas del servicio a la vez
@@ -107,6 +150,30 @@ function describe(claim, entityName) {
      * visible a las demás. Actúa sobre lo que devuelve FUERA de esta llamada — sostener una
      * transacción durante un envío o una llamada a un proveedor es justo lo que este método
      * existe para evitar.`;
+}
+
+/**
+ * El javadoc del RESCATE. Dice dos cosas que el del reclamo de una cola no necesita: que
+ * hay una cota temporal y de dónde sale, y que lo que devuelve es trabajo ABANDONADO —
+ * porque tratarlo como trabajo nuevo es exactamente lo que produce el efecto doble.
+ */
+function describeStalled(claim, entityName) {
+  return `Rescata hasta {@code batchSize} ${entityName} ATASCADOS en ${claim.stalled.state} y los pasa a ${claim.to}.
+     *
+     * <p><b>Reclama, no lee.</b> Corre en TODAS las réplicas del servicio a la vez
+     * ({@code @Scheduled} es «una vez por instancia», no «una vez en el clúster»). El paso a
+     * ${claim.to} va en un UPDATE condicional, así que la fila que otra réplica rescató antes no
+     * aparece aquí, y el reclamo se COMMITEA antes de volver (transacción propia).
+     *
+     * <p><b>Y solo se lleva lo ABANDONADO.</b> ${claim.stalled.state} es un estado EN VUELO: hay
+     * una instancia trabajando en esas filas ahora mismo. La cota temporal es lo único que separa
+     * un rescate de arrancarle el trabajo de las manos — entran solo las filas cuyo
+     * {@code ${claim.stalled.stampField}} es más viejo que
+     * {@code sweep.${claim.stalled.configKey}.stalled-after-seconds}, que se ajusta por entorno.
+     * Ese plazo tiene que quedar por encima de lo que tarda un ciclo completo.
+     *
+     * <p>Lo que devuelve es trabajo que alguien dejó a medias, no trabajo nuevo: si el ciclo que
+     * murió ya produjo un efecto externo irreversible, repetirlo lo duplica. Actúa en consecuencia.`;
 }
 
 /** Métodos del puerto <E>Repository. */
@@ -127,7 +194,11 @@ export function portMethods(model, entity, imports) {
  * devuelve las filas como le convenga y «el más antiguo primero», que es lo que casi
  * todo barrido promete, deja de cumplirse sin que nada falle.
  */
-function orderFieldOf(entity) {
+function orderFieldOf(entity, claim) {
+  // En un rescate el orden sale del propio reloj de la cota: el que más lleva atascado,
+  // primero. Cualquier otro campo haría que una tanda con más atascados que batchSize
+  // volviera a mirar siempre las mismas filas y las más viejas no se rescataran nunca.
+  if (claim?.stalled) return claim.stalled.stampField;
   for (const candidate of ['createdAt', 'requestedAt', 'updatedAt']) {
     if (entity.fields.some((field) => field.name === candidate)) return candidate;
   }
@@ -140,7 +211,6 @@ export function jpaRepositoryMethods(model, entity, imports) {
   if (claims.length === 0) return [];
 
   const { enumType, field } = entity.lifecycle;
-  const orderField = orderFieldOf(entity);
   // La decisión de dialecto no se toma aquí: sale de lib/claim-sql.js, que es la misma
   // que consultan el relay del outbox y el reclamo de la reconciliación.
   const selection = claimSelectionSnippet({
@@ -148,6 +218,7 @@ export function jpaRepositoryMethods(model, entity, imports) {
     subject: 'el reclamo'
   });
 
+  if (claims.some((claim) => claim.stalled)) imports.add('java.time.Instant');
   imports.add('java.util.List');
   imports.add('java.util.UUID');
   imports.add('org.springframework.data.domain.Pageable');
@@ -157,20 +228,29 @@ export function jpaRepositoryMethods(model, entity, imports) {
   imports.add(`${subPackage(model, 'domain.enums')}.${enumType}`);
   for (const imported of selection.imports) imports.add(imported);
 
-  return claims.flatMap((claim) => [
-    `${selection.annotations}
-    @Query("select e.id from ${entity.name}Jpa e where e.${field} in :states order by e.${orderField} asc")
-    List<UUID> candidatesFor${claim.suffix}(@Param("states") List<${enumType}> states, Pageable pageable);`,
+  return claims.flatMap((claim) => {
+    const orderField = orderFieldOf(entity, claim);
+    // El predicado de la cota, en las DOS consultas. En el UPDATE no es redundante con
+    // el del SELECT: entre uno y otro puede haber pasado cualquier cosa, y sin él una
+    // fila que acabe de entrar en el estado —porque otra réplica la tomó legítimamente
+    // en esa ventana— se rescataría igual.
+    const stale = claim.stalled ? ` and e.${claim.stalled.stampField} < :staleBefore` : '';
+    const staleParam = claim.stalled ? ', @Param("staleBefore") Instant staleBefore' : '';
+    return [
+      `${selection.annotations}
+    @Query("select e.id from ${entity.name}Jpa e where e.${field} in :states${stale} order by e.${orderField} asc")
+    List<UUID> candidatesFor${claim.suffix}(@Param("states") List<${enumType}> states${staleParam}, Pageable pageable);`,
 
-    `    /**
+      `    /**
      * El reclamo propiamente dicho: pasa la fila a ${claim.to} SOLO si sigue en su estado
-     * de partida. Devuelve 1 si esta instancia se la llevó y 0 si otra llegó antes. Esa
-     * comparación en el WHERE es toda la exclusión mutua, y no depende del motor.
+     * de partida${claim.stalled ? ' y sigue estando atascada' : ''}. Devuelve 1 si esta instancia se la llevó y 0 si otra llegó
+     * antes. Esa comparación en el WHERE es toda la exclusión mutua, y no depende del motor.
      */
     @Modifying
-    @Query("update ${entity.name}Jpa e set e.${field} = :to where e.id = :id and e.${field} in :states")
-    int ${claim.method}(@Param("id") UUID id, @Param("states") List<${enumType}> states, @Param("to") ${enumType} to);`
-  ]);
+    @Query("update ${entity.name}Jpa e set e.${field} = :to where e.id = :id and e.${field} in :states${stale}")
+    int ${claim.method}(@Param("id") UUID id, @Param("states") List<${enumType}> states, @Param("to") ${enumType} to${staleParam});`
+    ];
+  });
 }
 
 /** Métodos del adaptador <E>RepositoryImpl (modelo relacional). */
@@ -186,26 +266,38 @@ export function adapterMethods(model, entity, imports, jpaField) {
   imports.add('org.springframework.transaction.annotation.Propagation');
   imports.add('org.springframework.transaction.annotation.Transactional');
   imports.add(`${subPackage(model, 'domain.enums')}.${enumType}`);
+  if (claims.some((claim) => claim.stalled)) {
+    imports.add('java.time.Instant');
+    imports.add('org.springframework.beans.factory.annotation.Value');
+  }
 
-  return claims.map(
-    (claim) => `    /**
+  return claims.map((claim) => {
+    // El instante se calcula UNA vez y se pasa a las dos consultas: recalcularlo dentro
+    // del bucle movería la cota entre el select y el update de cada fila.
+    const staleBefore = claim.stalled
+      ? `        // La cota del rescate: solo lo que lleva atascado más que el plazo configurado.
+        Instant staleBefore = Instant.now().minusSeconds(${stalledValueField(claim)});
+`
+      : '';
+    const staleArg = claim.stalled ? ', staleBefore' : '';
+    return `    /**
      * ${describe(claim, entity.name)}
      */
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public List<${entity.name}> ${claim.method}(int batchSize) {
-        List<${enumType}> states = List.of(${stateList(claim, enumType)});
-        List<UUID> candidates = ${jpaField}.candidatesFor${claim.suffix}(states, PageRequest.of(0, batchSize));
+${staleBefore}        List<${enumType}> states = List.of(${stateList(claim, enumType)});
+        List<UUID> candidates = ${jpaField}.candidatesFor${claim.suffix}(states${staleArg}, PageRequest.of(0, batchSize));
         List<${entity.name}> claimed = new ArrayList<>();
         for (UUID id : candidates) {
             // 1 = la fila era mía; 0 = otra réplica la reclamó entre el select y el update.
-            if (${jpaField}.${claim.method}(id, states, ${enumType}.${enumConstant(claim.to)}) == 1) {
+            if (${jpaField}.${claim.method}(id, states, ${enumType}.${enumConstant(claim.to)}${staleArg}) == 1) {
                 ${jpaField}.findById(id).map(this::toDomain).ifPresent(claimed::add);
             }
         }
         return claimed;
-    }`
-  );
+    }`;
+  });
 }
 
 /**
@@ -226,17 +318,39 @@ export function documentAdapterMethods(model, entity, imports) {
   imports.add('org.springframework.data.mongodb.core.query.Query');
   imports.add('org.springframework.data.mongodb.core.query.Update');
   imports.add(`${subPackage(model, 'domain.enums')}.${enumType}`);
+  if (claims.some((claim) => claim.stalled)) {
+    imports.add('java.time.Instant');
+    imports.add('org.springframework.beans.factory.annotation.Value');
+    imports.add('org.springframework.data.domain.Sort');
+  }
 
-  return claims.map(
-    (claim) => `    /**
+  return claims.map((claim) => {
+    const staleBefore = claim.stalled
+      ? `        // La cota del rescate: solo lo que lleva atascado más que el plazo configurado.
+        Instant staleBefore = Instant.now().minusSeconds(${stalledValueField(claim)});
+`
+      : '';
+    // El criterio temporal va DENTRO del findAndModify, que es lo que lo hace atómico:
+    // filtrar por atascado y marcar en la misma operación no deja ventana entre las dos.
+    const staleCriteria = claim.stalled
+      ? `
+                    .and("${claim.stalled.stampField}").lt(staleBefore)`
+      : '';
+    // El más viejo primero, y aquí hay que pedirlo: findAndModify sin orden devuelve lo
+    // que el motor tenga a mano, así que con más atascados que batchSize los más
+    // antiguos podrían no rescatarse nunca.
+    const order = claim.stalled
+      ? `.with(Sort.by(Sort.Direction.ASC, "${claim.stalled.stampField}"))`
+      : '';
+    return `    /**
      * ${describe(claim, entity.name)}
      */
     @Override
     public List<${entity.name}> ${claim.method}(int batchSize) {
-        List<${entity.name}> claimed = new ArrayList<>();
+${staleBefore}        List<${entity.name}> claimed = new ArrayList<>();
         FindAndModifyOptions options = FindAndModifyOptions.options().returnNew(true);
         for (int i = 0; i < batchSize; i++) {
-            Query query = Query.query(Criteria.where("${field}").in(List.of(${stateList(claim, enumType)})));
+            Query query = Query.query(Criteria.where("${field}").in(List.of(${stateList(claim, enumType)}))${staleCriteria})${order};
             Update update = new Update().set("${field}", ${enumType}.${enumConstant(claim.to)});
             ${entity.name}Document document = mongoTemplate.findAndModify(query, update, options, ${entity.name}Document.class);
             // Sin candidatos el lote se acaba antes que el batchSize, que es lo normal.
@@ -246,8 +360,8 @@ export function documentAdapterMethods(model, entity, imports) {
             claimed.add(toDomain(document));
         }
         return claimed;
-    }`
-  );
+    }`;
+  });
 }
 
 // ─── La guarda de una fila con un efecto externo irreversible ────────────────

@@ -136,6 +136,11 @@ export function generate(model) {
     if (reconciledActivations(model).length > 0) {
       fragments.push(fragment(profile, 'reconciliation', reconciliationYaml(model, profile)));
     }
+    // El plazo de cada rescate de un estado en vuelo. Solo si hay alguno: sin barrido que
+    // rescate, el fragmento sería un archivo con parámetros que nadie lee.
+    if (stalledClaims(model).length > 0) {
+      fragments.push(fragment(profile, 'sweep', sweepYaml(model, profile)));
+    }
 
     files.push({
       path: `src/main/resources/application-${profile}.yaml`,
@@ -1260,6 +1265,51 @@ function reconciliationYaml(model, profile) {
     );
   }
   return lines.join('\n') + '\n';
+}
+
+/**
+ * El plazo de los rescates: cuánto puede llevar una fila en un estado EN VUELO antes de
+ * darla por abandonada.
+ *
+ * Está aquí y no en el diseño por lo mismo que `claim-timeout-ms`: es la caducidad de un
+ * reclamo —«asumimos que la réplica que la tomó murió»—, mecánica de multi-réplica y no
+ * una decisión de negocio. Lo que SÍ sale del diseño es el reloj sobre el que se mide (el
+ * campo `<estado>Since`/`<estado>At` de la entidad), y sin él build no genera el rescate.
+ *
+ * Se distingue de `reconciliation.<x>.unanswered-after-seconds`, que sí es del diseño:
+ * allí lo que se espera es el desenlace de un TERCERO y cuánto silencio se le tolera es
+ * un acuerdo con él.
+ */
+function sweepYaml(model, profile) {
+  const lines = ['sweep:'];
+  for (const { operation, claim } of stalledClaims(model)) {
+    lines.push(
+      `  ${claim.stalled.configKey}:`,
+      `    # ${operation.name}: un ${claim.entity} lleva más de esto en ${claim.stalled.state} —medido sobre`,
+      `    # ${claim.stalled.stampField}— y se da por abandonado, así que otra réplica lo rescata.`,
+      '    # Del generador, no del diseño. Tiene que quedar POR ENCIMA de lo que tarda un ciclo',
+      '    # completo: por debajo, el rescate le arranca el trabajo a quien lo está haciendo.',
+      `    stalled-after-seconds: ${envWithDefault(
+        profile,
+        `SWEEP_${screamingSnake(claim.suffix)}_STALLED_AFTER_SECONDS`,
+        claim.stalled.defaultSeconds
+      )}`
+    );
+  }
+  return lines.join('\n') + '\n';
+}
+
+/** Los rescates que build generó, con la operación que los dispara. */
+function stalledClaims(model) {
+  const found = [];
+  for (const service of model.services ?? []) {
+    for (const operation of service.operations ?? []) {
+      for (const claim of operation.claim ?? []) {
+        if (claim.stalled) found.push({ operation, claim });
+      }
+    }
+  }
+  return found;
 }
 
 /** Activaciones con barrido declarado, que son las que tienen parámetros que emitir. */
