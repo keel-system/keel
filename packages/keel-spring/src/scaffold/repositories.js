@@ -8,6 +8,8 @@ import { javaFile, javaPath, subPackage } from './render.js';
 import { domainMembers, domainSubPackage, capitalize } from './entities.js';
 import { jpaMembers, backReferenceTo, JPA_PKG } from './persistence-entities.js';
 import { isRefTarget } from './ref-resolvers.js';
+import { isBaseType } from '../lib/type-mapper.js';
+import { pluralize } from '../lib/naming.js';
 import * as claim from './claim.js';
 import * as reconciliationClaim from './reconciliation-claim.js';
 
@@ -72,6 +74,53 @@ export function naturalKeyParams(model, entity) {
   });
 }
 
+/**
+ * El finder de la clave natural, POR LOTE.
+ *
+ * Existe por el caso simétrico al del `embed`: un command cuya entrada trae una lista
+ * acotada (`maxItems`) y cuyo handler tiene que consultar algo una vez por elemento. Los
+ * resolvers por lote salen de un `embed` en la SALIDA; aquí la lista está en la ENTRADA,
+ * así que el puerto solo traía el finder de un elemento y el camino de menor resistencia
+ * era el bucle. Ocurrió tal cual: un handler comprobando la lista de supresión con un
+ * `findByApplicationIdAndAddress(...)` por destinatario, hasta 20 consultas por petición
+ * (`conventions/read-composition.md`). Añadir el método era territorio del agente de
+ * código; el pase de calidad, que tiene prohibido cambiar firmas, solo pudo reportarlo.
+ *
+ * El enlace es mecánico y no una corazonada: el último componente de la clave natural y
+ * los elementos de esa lista son **el mismo value type declarado** (`EmailAddress`), que
+ * es precisamente lo que el diseño dice al ponerle nombre. Dos `string` no se atarían —
+ * por eso se exige un tipo con nombre y no un primitivo.
+ */
+export function naturalKeyBatchFinder(model, entity) {
+  const finder = naturalKeyFinder(model, entity);
+  if (!finder) return null;
+
+  const last = entity.naturalKey[entity.naturalKey.length - 1];
+  const field = entity.fields.find((f) => f.name === last);
+  // Un tipo con nombre, no un primitivo: `string` no ata nada con `string`.
+  if (!field || field.list || !field.typeName || isBaseType(field.typeName)) return null;
+
+  const listed = (model.services ?? [])
+    .flatMap((service) => service.operations ?? [])
+    .flatMap((operation) => operation.bodyFields ?? [])
+    .some((input) => input.list && input.typeName === field.typeName);
+  if (!listed) return null;
+
+  const leading = finder.params.slice(0, -1);
+  const tail = finder.params[finder.params.length - 1];
+  // `address` → `addresses`, no `addresss`: el parámetro se lee en el handler y un plural
+  // mal formado es la clase de detalle que se copia de una operación a la siguiente.
+  const plural = pluralize(tail.name);
+  return {
+    typeName: field.typeName,
+    elementType: field.javaType,
+    name: 'findAllBy' + finder.params.map((p) => capitalize(p.name)).join('And') + 'In',
+    signature: [...leading.map((p) => `${p.javaType} ${p.name}`), `Collection<${field.javaType}> ${plural}`].join(', '),
+    args: [...leading.map((p) => p.name), plural].join(', '),
+    imports: finder.params.flatMap((p) => p.imports ?? [])
+  };
+}
+
 export function naturalKeyFinder(model, entity) {
   const params = naturalKeyParams(model, entity);
   if (params.length === 0) return null;
@@ -112,6 +161,21 @@ export function renderPort(model, entity, paginated, batchLookup) {
     for (const param of finder.params) for (const name of param.imports) imports.add(name);
     methods.push(`    Optional<${entity.name}> ${finder.name}(${finder.signature});`);
   }
+  const batchFinder = naturalKeyBatchFinder(model, entity);
+  if (batchFinder) {
+    imports.add('java.util.Collection');
+    imports.add('java.util.List');
+    for (const name of batchFinder.imports) imports.add(name);
+    methods.push(`    /**
+     * El mismo finder, para una colección de ${batchFinder.typeName}: UNA consulta en vez
+     * de una por elemento. Alguna operación recibe esos valores en una lista acotada de su
+     * entrada, y comprobarlos en un bucle es N consultas por petición.
+     *
+     * <p>El orden de salida NO está garantizado y lo que no exista simplemente no aparece:
+     * quien llama indexa por ${batchFinder.typeName} lo que le vuelve.
+     */
+    List<${entity.name}> ${batchFinder.name}(${batchFinder.signature});`);
+  }
   if (paginated) {
     imports.add('org.springframework.data.domain.Page');
     imports.add('org.springframework.data.domain.Pageable');
@@ -121,6 +185,9 @@ export function renderPort(model, entity, paginated, batchLookup) {
   // una consulta de persistencia como las demás, y porque su forma correcta depende del
   // motor: dejarla fuera es dejar que la escriba quien no sabe contra qué corre.
   methods.push(...claim.portMethods(model, entity, imports));
+  // Y la guarda de una fila con un efecto externo irreversible detrás: mismo argumento,
+  // sujeto distinto (una fila que el llamante ya eligió, no un lote que se elige aquí).
+  methods.push(...claim.guardPortMethods(model, entity, imports));
   // El del barrido de reconciliación es otro reclamo distinto —marca persistida con
   // caducidad, no transición del lifecycle— y por eso vive en su propio módulo.
   methods.push(...reconciliationClaim.portMethods(model, entity, imports));
@@ -173,6 +240,15 @@ function renderJpaRepository(model, entity) {
     // La clave natural es la otra lectura de UN agregado: mismo grafo, misma razón.
     methods = `\n\n${graph}    Optional<${entity.name}Jpa> ${finder.name}(${finder.signature});`;
   }
+  const batchFinder = naturalKeyBatchFinder(model, entity);
+  if (batchFinder) {
+    imports.add('java.util.Collection');
+    imports.add('java.util.List');
+    for (const name of batchFinder.imports) imports.add(name);
+    // Derivado por Spring Data igual que el unitario: el sufijo `In` sobre el último
+    // componente de la clave es lo único que cambia.
+    methods += `\n\n${graph}    List<${entity.name}Jpa> ${batchFinder.name}(${batchFinder.signature});`;
+  }
 
   // findById lo hereda de JpaRepository: su grafo hay que declararlo sobrescribiendo la
   // firma, y es la lectura de un agregado más frecuente de todas.
@@ -186,6 +262,7 @@ ${graph}    @Override
 
   const claimMethods = [
     ...claim.jpaRepositoryMethods(model, entity, imports),
+    ...claim.guardJpaRepositoryMethods(model, entity, imports),
     ...reconciliationClaim.jpaRepositoryMethods(model, entity, imports)
   ];
   if (claimMethods.length > 0) methods += `\n\n${claimMethods.join('\n\n')}`;
@@ -240,6 +317,16 @@ function renderAdapter(model, entity, paginated, batchLookup) {
         return ${jpaField}.${finder.name}(${finder.args}).map(this::toDomain);
     }`);
   }
+  const batchFinder = naturalKeyBatchFinder(model, entity);
+  if (batchFinder) {
+    imports.add('java.util.Collection');
+    imports.add('java.util.List');
+    for (const name of batchFinder.imports) imports.add(name);
+    methods.push(`    @Override
+    public List<${entity.name}> ${batchFinder.name}(${batchFinder.signature}) {
+        return ${jpaField}.${batchFinder.name}(${batchFinder.args}).stream().map(this::toDomain).toList();
+    }`);
+  }
   if (paginated) {
     imports.add('org.springframework.data.domain.Page');
     imports.add('org.springframework.data.domain.Pageable');
@@ -266,6 +353,7 @@ function renderAdapter(model, entity, paginated, batchLookup) {
     }`);
   }
   methods.push(...claim.adapterMethods(model, entity, imports, jpaField));
+  methods.push(...claim.guardAdapterMethods(model, entity, imports, jpaField));
   methods.push(...reconciliationClaim.adapterMethods(model, entity, imports, jpaField));
   // Drenaje de eventos de dominio: save() es el único punto por el que pasa
   // todo cambio persistido del agregado, así que aquí se publican los eventos

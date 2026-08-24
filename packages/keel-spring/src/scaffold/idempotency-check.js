@@ -531,6 +531,31 @@ function mailChecks(model) {
       forbid: ['TODO|UnsupportedOperationException'],
       why: `el diseño le atribuye la salida por correo (mail.sentBy): tiene que componer el MailMessage y llamar a mailSender.send(...)`
     });
+
+    // Y la guarda, que es la otra mitad y la que no se ve fallar. Que el correo salga lo
+    // nota el escenario que mire el buzón; que salga DOS VECES tras una caída del proceso
+    // no lo nota nadie: ningún FL-* puede matar la aplicación entre el envío y el commit.
+    //
+    // Lo afirmable es exacto porque el reclamo lo genera build: que el handler lo llame. Sin
+    // esto, el camino de menor resistencia es la transición en memoria y el save() final —que
+    // ocurre DESPUÉS del envío—, y ahí una caída revierte la marca y el ciclo siguiente manda
+    // un segundo correo real. Pasó en una corrida, y el pase de calidad solo pudo reportarlo.
+    if (operation.guardClaim) {
+      const { guardClaim } = operation;
+      checks.push({
+        group: 'mailDelivery',
+        subject: `${operation.name} · guarda confirmada antes del envío`,
+        class: operation.handlerClass,
+        require: [String.raw`\.?` + guardClaim.method + String.raw`\s*\(`],
+        forbid: [],
+        why:
+          `la guarda contra el doble envío (${guardClaim.from.join(' o ')} → ${guardClaim.to}) tiene que estar ` +
+          `CONFIRMADA antes de mandar el correo, y hacerla en memoria no la confirma: el handler corre dentro de ` +
+          `la transacción del mediator, así que la marca no existe para nadie hasta el commit final —que llega ` +
+          `después del envío—. Llama a ${guardClaim.method}(...), que build generó en ${guardClaim.entity}Repository ` +
+          `con transacción propia, y trata su vacío como la carrera perdida`
+      });
+    }
   }
   return checks;
 }

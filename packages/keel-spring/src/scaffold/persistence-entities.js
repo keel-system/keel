@@ -200,10 +200,26 @@ function renderJpaEntity(model, entity) {
       imports.add('java.util.List');
       imports.add('java.util.ArrayList');
       const table = `${snakeCase(entity.name)}_${snakeCase(member.name)}`;
-      const collAnnotations = [
-        '@ElementCollection',
-        `@CollectionTable(name = "${table}", joinColumns = @JoinColumn(name = "${snakeCase(entity.name)}_id"))`
-      ];
+      const joinColumn = `${snakeCase(entity.name)}_id`;
+      const collTableAttrs = [`name = "${table}"`, `joinColumns = @JoinColumn(name = "${joinColumn}")`];
+      // El índice que el diseño declara sobre esta lista. La columna del ELEMENTO va
+      // primero: el filtro es una igualdad sobre el valor («¿a esta dirección le llegó
+      // algo?»), y la FK detrás para que el salto a la raíz no vuelva a la tabla.
+      const collectionIndexes = collectionIndexesOf(entity, members).byMember.get(member.name) ?? [];
+      if (collectionIndexes.length > 0) {
+        imports.add('jakarta.persistence.Index');
+        const rendered = collectionIndexes
+          .map((index) => {
+            const unique = index.unique ? ', unique = true' : '';
+            return (
+              `@Index(name = "${indexName(entity, index)}", ` +
+              `columnList = "${quoteIdentifier(snakeCase(member.name))}, ${quoteIdentifier(joinColumn)}"${unique})`
+            );
+          })
+          .join(', ');
+        collTableAttrs.push(collectionIndexes.length === 1 ? `indexes = ${rendered}` : `indexes = { ${rendered} }`);
+      }
+      const collAnnotations = ['@ElementCollection', `@CollectionTable(${collTableAttrs.join(', ')})`];
       const { element } = member;
       if (element.kind === 'vo') {
         // Elemento value object: su espejo @Embeddable XxxJpa (embeddables.js),
@@ -213,13 +229,16 @@ function renderJpaEntity(model, entity) {
         imports.add('jakarta.persistence.EnumType');
         imports.add('jakarta.persistence.Column');
         imports.add(`${subPackage(model, 'domain.enums')}.${element.javaType}`);
-        collAnnotations.push('@Enumerated(EnumType.STRING)');
-        collAnnotations.push(`@Column(name = "${snakeCase(member.name)}")`);
+        // Las mismas anotaciones que tendría suelto (elementColumns): la columna del
+        // elemento vive en la tabla hija, pero sigue siendo una columna.
+        collAnnotations.push(...member.field.elementColumns);
       } else {
-        // Escalar: columna directa en la tabla de elementos.
+        // Escalar: columna directa en la tabla de elementos, con las constraints de
+        // su value type. Componerla a mano aquí perdía el `length` del tipo, y con él
+        // la única cota que llega al DDL de la tabla que crece con cada elemento.
         for (const name of member.field.imports) imports.add(name);
         imports.add('jakarta.persistence.Column');
-        collAnnotations.push(`@Column(name = "${snakeCase(member.name)}")`);
+        collAnnotations.push(...member.field.elementColumns);
       }
       declarations.push(
         `    ${collAnnotations.join('\n    ')}\n    private List<${element.javaType}> ${member.name} = new ArrayList<>();`
@@ -374,6 +393,38 @@ export function columnsFor(model, entity, members, logicalName, warnings) {
   return [snakeCase(head)];
 }
 
+/**
+ * Índices declarados sobre un campo de COLECCIÓN, agrupados por el miembro al que
+ * pertenecen.
+ *
+ * No caben en el `@Table` de la entidad —una lista vive en su tabla hija, y un
+ * `@Index` sobre una columna que esa tabla no tiene rompe el DDL— pero sí en la
+ * hija, que la genera build entera: nombre de tabla, columna del elemento y FK a la
+ * raíz salen todos de aquí, así que materializarlo es exacto y no hay nada que
+ * inventar. Descartarlo con un aviso dejaba el índice declarado sin existir en
+ * ninguna parte: ni en la entidad, ni en el appendix de migrations.js (que solo
+ * cubre los CONDICIONADOS), y el filtro que el diseño quería acotar recorría entera
+ * una tabla que crece con cada elemento.
+ *
+ * Dos casos se quedan fuera a propósito, y los dos siguen avisando:
+ *  - el compuesto que mezcla la lista con columnas del padre: sus columnas no viven
+ *    en la misma tabla, así que ningún índice de un motor relacional las cubre;
+ *  - el elemento value object: su espejo @Embeddable aporta VARIAS columnas y el
+ *    índice, que nombra solo la lista, no dice sobre cuál va.
+ */
+export function collectionIndexesOf(entity, members) {
+  const byMember = new Map();
+  const handled = new Set();
+  for (const index of entity.indexes ?? []) {
+    if (index.when || index.fields.length !== 1) continue;
+    const member = members.find((m) => m.kind === 'elementCollection' && m.name === index.fields[0]);
+    if (!member || member.element.kind === 'vo') continue;
+    byMember.set(member.name, [...(byMember.get(member.name) ?? []), index]);
+    handled.add(index);
+  }
+  return { byMember, handled };
+}
+
 function renderTableAnnotation(model, entity, members, imports) {
   const attrs = [`name = "${quoteIdentifier(entity.tableName)}"`];
   const uniqueConstraints = [];
@@ -415,7 +466,12 @@ function renderTableAnnotation(model, entity, members, imports) {
   // sobre una columna inexistente. Compila, y revienta al aplicar el DDL contra el motor — o peor,
   // se cuela en el baseline y hay que corregirlo a mano, que es lo que pasó en una corrida real.
   // El resolutor se usa como sonda: si avisa, es que no supo resolverlo, y ahí no se inventa.
+  const { handled: inCollectionTable } = collectionIndexesOf(entity, members);
   const resolves = (index) => {
+    // Lo que se materializa en la tabla de elementos no es un índice perdido: sale
+    // por el @CollectionTable de su colección, y avisar de él sería pedir que se
+    // retire del diseño algo que build sí genera.
+    if (inCollectionTable.has(index)) return false;
     const probe = [];
     for (const field of index.fields) columnsFor(model, entity, members, field, probe);
     if (probe.length === 0) return true;

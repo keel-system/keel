@@ -22,6 +22,17 @@ const BASE_TYPES = {
 };
 
 /**
+ * ¿Este nombre de tipo es un primitivo del DSL, y no un value type declarado?
+ *
+ * La diferencia importa cuando se quiere ATAR dos sitios que hablan del mismo dato:
+ * dos campos `string` no tienen nada que ver entre sí, pero dos campos `EmailAddress`
+ * sí — el diseño les puso nombre justamente para decirlo.
+ */
+export function isBaseType(typeName) {
+  return typeof typeName === 'string' && Object.hasOwn(BASE_TYPES, typeName);
+}
+
+/**
  * Resuelve una referencia de tipo del diseño (tipo base, value type declarado en
  * domain.types, o nombre de clase generada) a su representación Java.
  * Devuelve { kind, javaType, imports, base?, constraints? }:

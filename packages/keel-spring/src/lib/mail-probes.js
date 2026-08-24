@@ -46,7 +46,7 @@ export const ROUTES = {
   /** Sondeo: responde en cuanto la API está en pie. */
   info: () => '/info',
   /** Mensajes que casan con un término de búsqueda, más recientes primero. */
-  search: (query, limit = 50) => `/search?query=${encodeURIComponent(query)}&limit=${limit}`,
+  search: (query, limit = SEARCH_LIMIT) => `/search?query=${encodeURIComponent(query)}${searchSuffix(limit)}`,
   /** Un mensaje completo por su id. */
   message: (id) => `/message/${id}`,
   /** Vacía el buzón entero (DELETE). */
@@ -64,7 +64,20 @@ export function toQuery(address) {
 // codificado + sufijo. Sale de aquí y no de dos literales en el Java por lo mismo
 // que todo lo demás de este módulo: si el parámetro cambia de nombre, cambia una vez.
 export const SEARCH_PREFIX = '/search?query=';
-export const searchSuffix = (limit = 50) => `&limit=${limit}`;
+export const SEARCH_LIMIT_PARAM = '&limit=';
+
+/**
+ * Techo de una búsqueda, y a la vez el punto donde el arnés decide repaginar.
+ *
+ * No es una preferencia: `limit` recorta la lista de mensajes de la respuesta, así que
+ * un escenario de volumen que mande más correos que este número a la misma dirección
+ * ve un conteo plano y ningún cambio en el servidor lo arregla. Quien lea la búsqueda
+ * tiene que mirar además `FIELDS.searchTotal` —el conteo de los que CASAN, sin
+ * recortar— y volver a pedir con ese total si lo supera. Ocurrió tal cual en una
+ * corrida real con el valor anterior, 50.
+ */
+export const SEARCH_LIMIT = 200;
+export const searchSuffix = (limit = SEARCH_LIMIT) => `${SEARCH_LIMIT_PARAM}${limit}`;
 
 /** Comando de sondeo desde devtools (curl dentro de la red del compose). */
 export function validateCommand() {

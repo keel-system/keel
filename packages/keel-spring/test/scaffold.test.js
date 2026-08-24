@@ -3261,7 +3261,10 @@ test('colecciones del dominio (DSL 2.1 list): @ElementCollection, @Embeddable y 
   const discountJpa = read(workspace, `${base}/infrastructure/persistence/entities/DiscountJpa.java`);
   assert.ok(discountJpa.includes('@Embeddable'));
   assert.ok(discountJpa.includes('public class DiscountJpa'));
-  assert.ok(discountJpa.includes('@Column(name = "code")'));
+  // La columna del embeddable sale con lo que declara el value object, no solo con su
+  // nombre: `required` es un NOT NULL de la tabla de elementos, y un `maxLength` sería
+  // su `length`. Compuesta a mano aquí, esa mitad se perdía.
+  assert.ok(discountJpa.includes('@Column(name = "code", nullable = false)'));
 
   // Adaptador: reconstrucción del VO en ambos sentidos, con import del embeddable.
   const repo = read(workspace, `${base}/infrastructure/persistence/repositories/ProductRepositoryImpl.java`);

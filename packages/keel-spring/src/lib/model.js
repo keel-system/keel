@@ -113,6 +113,7 @@ export function buildModel({ manifest, layers, stack = null }) {
       }
     : null;
   classifyClaims(services, entities, layers, warnings);
+  classifyGuardClaims(services, entities, layers);
   const subscriptions = collectSubscriptions(layers, services, domainTypes, inlineEnumName, warnings, stack);
   const pagination = layers.api?.pagination ?? null;
 
@@ -384,6 +385,18 @@ function resolveField(ownerName, fieldName, field, domainTypes, inlineEnumName, 
     // Una colección no es una columna: su mapeo (@ElementCollection) lo pone la Jpa,
     // no columnAnnotations. Sin persistence o sin list, comportamiento previo.
     columns: persisted && !isList ? columnAnnotations(fieldName, field, resolved) : [],
+    // Pero cada ELEMENTO de esa colección sí es una columna: vive en la tabla hija
+    // que genera @CollectionTable, y ahí es donde tienen que aterrizar las
+    // constraints de su value type. Sin esto, un `EmailAddress` con maxLength 254
+    // sale `varchar(255)` dentro de la lista mientras el mismo tipo, usado suelto,
+    // sale `varchar(254)`: la única cota que llega al DDL se pierde justo en la
+    // tabla que crece. El elemento compuesto no entra aquí — su espejo @Embeddable
+    // pone sus propias columnas (embeddables.js).
+    //
+    // El `field` va vacío a propósito: `required`, `id` y `unique` son de la LISTA,
+    // no de sus elementos, y sus constraints son de cardinalidad (maxItems).
+    elementColumns:
+      persisted && isList && resolved.kind !== 'composite' ? columnAnnotations(fieldName, {}, resolved) : [],
     initializer: fieldInitializer(field, resolved)
   };
 }
@@ -411,8 +424,14 @@ function collectValueObjects(types, domainTypes, inlineEnumName, hasPersistence)
     valueObjects.push({
       name,
       description: def.description ?? null,
+      // `persisted` sigue al diseño y no es siempre false: un VO usado en una
+      // colección se materializa como @Embeddable con columnas propias
+      // (embeddables.js), y sin esto sus campos salen sin `length` ni `nullable`
+      // —las constraints del value type no llegan al DDL de la tabla de elementos—.
+      // Cuando el VO se aplana con prefijo en la entidad, quien manda es `subs[]`
+      // de persistence-members.js y estas columnas no se consultan.
       fields: Object.entries(def.fields).map(([fieldName, field]) =>
-        resolveField(name, fieldName, field, domainTypes, inlineEnumName, { persisted: false })
+        resolveField(name, fieldName, field, domainTypes, inlineEnumName, { persisted: hasPersistence })
       ),
       embeddable: hasPersistence
     });
@@ -1019,6 +1038,78 @@ function classifyClaims(services, entities, layers, warnings) {
       }
 
       if (claims.length > 0) operation.claim = claims;
+    }
+  }
+}
+
+/**
+ * La guarda de una operación que produce un efecto externo IRREVERSIBLE sobre una fila
+ * concreta: un correo que sale no lo deshace ningún rollback.
+ *
+ * La forma es reconocible sin adivinar nada. La operación declara `A → B` y, en la misma
+ * lista, `B → C`: ese `B` intermedio no es un estado en el que la fila se quede, es la
+ * marca de que ESTA ejecución se llevó el trabajo. El diseño de referencia lo escribe
+ * así — `queued → sending`, `sending → sent`, `sending → failed` — y su prosa lo llama
+ * por su nombre: «la transición de queued a sending es la guarda contra el doble envío».
+ *
+ * Y no basta con hacer esa transición en memoria antes de enviar. El handler corre
+ * dentro de la transacción que abre el mediator, así que la marca no existe para nadie
+ * hasta el commit final, que llega DESPUÉS del envío: si el proceso cae entre el relay
+ * aceptando el correo y ese commit, la transacción revierte, la fila vuelve a estar
+ * disponible y el ciclo siguiente manda un SEGUNDO correo a una persona real. Ocurrió
+ * tal cual en una corrida. Por eso la marca se persiste en una transacción PROPIA
+ * (REQUIRES_NEW) antes de enviar: a partir de ahí, una caída deja la fila en `B`, que es
+ * exactamente el estado que el rescate del barrido busca — y el rescate no reenvía.
+ *
+ * `classifyClaims` no lo cubre y no es un olvido: allí el sujeto es un barrido que elige
+ * su lote, y esta operación recibe el id ya elegido. Quien se lo pasa tampoco lo reclamó
+ * —su propia transición sale de un estado EN VUELO, así que build no le generó reclamo—,
+ * de modo que sin esto la fila no la reclama nadie.
+ */
+function classifyGuardClaims(services, entities, layers) {
+  const byName = new Map(entities.map((entity) => [entity.name, entity]));
+  // Hoy el único efecto externo irreversible que build sabe atribuir a una operación es
+  // el correo (`mail.sentBy`): es el diseño quien lo dice, no una inferencia. Una llamada
+  // saliente no entra —el DSL declara su compensación aparte— y una subida a un bucket
+  // tampoco: sobrescribir la misma key es idempotente.
+  const irreversible = new Set(layers.mail?.sentBy ?? []);
+  if (irreversible.size === 0) return;
+
+  for (const service of services) {
+    for (const operation of service.operations) {
+      if (!irreversible.has(operation.name)) continue;
+      // Un barrido elige su propio lote, y su reclamo es el de `classifyClaims`: por
+      // lote y no por fila. Aquí el sujeto es la operación que trabaja sobre UNA, con el
+      // id ya elegido por quien la invoca.
+      if (operation.schedule) continue;
+
+      const transitions = operation.transitions ?? [];
+      // El estado intermedio: destino de una transición y origen de otra, en la MISMA
+      // operación. Es lo que lo distingue de un desenlace.
+      const departures = new Set(transitions.flatMap((t) => t.from ?? []));
+      const guard = transitions.find((t) => departures.has(t.to));
+      if (!guard) continue;
+
+      const entity = byName.get(guard.entity);
+      if (!entity?.lifecycle) continue;
+
+      // La marca de tiempo del estado intermedio, si la entidad la declara. El rescate
+      // mide sobre ella («lleva más de N minutos en B»), así que estamparla es parte del
+      // reclamo y no del trabajo posterior: una fila marcada sin instante es una fila que
+      // el rescate no encuentra nunca. El nombre se deriva del estado, y si la entidad no
+      // declara ninguno el reclamo solo cambia el estado.
+      const stampNames = [`${guard.to}Since`, `${guard.to}At`];
+      const stamp = entity.fields.find((field) => stampNames.includes(field.name) && field.base === 'timestamp');
+
+      operation.guardClaim = {
+        entity: guard.entity,
+        from: guard.from ?? [],
+        to: guard.to,
+        suffix: pascalCase(operation.name),
+        method: `claimFor${pascalCase(operation.name)}`,
+        stampField: stamp?.name ?? null,
+        operation: operation.name
+      };
     }
   }
 }

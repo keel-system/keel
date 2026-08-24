@@ -15,7 +15,16 @@
 // validate-infra.sh, la purga de reset-db.sh y el runner de conformidad. Escritos a
 // mano en cada sitio, el gate en vivo comprobaría algo distinto de lo que se genera.
 
-import { HOST_BASE, ROUTES, FIELDS, HTTP_PORT, SEARCH_PREFIX, searchSuffix } from '../lib/mail-probes.js';
+import {
+  HOST_BASE,
+  ROUTES,
+  FIELDS,
+  HTTP_PORT,
+  SEARCH_PREFIX,
+  SEARCH_LIMIT,
+  SEARCH_LIMIT_PARAM,
+  searchSuffix
+} from '../lib/mail-probes.js';
 import { fastestSchedulePeriod } from '../lib/cron-period.js';
 
 export function hasMail(model) {
@@ -212,9 +221,33 @@ export function mailSection(model) {
         return from == null ? null : (String) from.get("Address");
     }
 
-    /** Ids de los correos para esa dirección, más reciente primero. */
+    /**
+     * Techo de una búsqueda en el buzón, y el punto donde se repagina.
+     * Ver {@link #mailIdsTo}.
+     */
+    private static final int MAIL_SEARCH_LIMIT = ${SEARCH_LIMIT};
+
+    /**
+     * Ids de los correos para esa dirección, más reciente primero.
+     *
+     * <p>La respuesta trae dos cosas distintas: la lista de mensajes, <b>recortada</b> por
+     * {@code limit}, y el conteo de los que de verdad casan con el término, que no se recorta.
+     * Leer solo la lista deja un techo estructural: {@link #mailCount} y
+     * {@link #assertNoMailTo} saturan en {@value #MAIL_SEARCH_LIMIT}, y
+     * {@link #awaitMailTo} no se puede satisfacer por encima de esa cifra por muchos correos
+     * que entregue el servidor. El síntoma es un conteo plano en el escenario de volumen, y
+     * ningún cambio en la aplicación lo arregla — pasó tal cual en una corrida real.
+     *
+     * <p>Por eso se mira el total y, solo si supera el techo, se repite la búsqueda pidiendo
+     * exactamente ese total.
+     */
     private static List<String> mailIdsTo(String address) {
-        String body = mailApi("${SEARCH_PREFIX}" + urlEncode("to:" + address) + "${searchSuffix()}");
+        String query = urlEncode("to:" + address);
+        String body = mailApi("${SEARCH_PREFIX}" + query + "${searchSuffix()}");
+        Number matching = JsonPath.read(body, "${FIELDS.searchTotal}");
+        if (matching.intValue() > MAIL_SEARCH_LIMIT) {
+            body = mailApi("${SEARCH_PREFIX}" + query + "${SEARCH_LIMIT_PARAM}" + matching.intValue());
+        }
         List<String> ids = JsonPath.read(body, "${FIELDS.searchIds}");
         return new ArrayList<>(ids);
     }

@@ -46,7 +46,13 @@ function renderEmbeddable(model, vo) {
       lines.push('    @Enumerated(EnumType.STRING)');
     }
     imports.add('jakarta.persistence.Column');
-    lines.push(`    @Column(name = "${snakeCase(sub.name)}")`);
+    // Las columnas salen resueltas del modelo (`columnAnnotations`), no compuestas
+    // aquí: escritas a mano se quedaban en el nombre y perdían el `length` y el
+    // `nullable` que declara el value type, que es lo único que llega al DDL de la
+    // tabla de elementos. El @Enumerated ya lo trae la lista, así que se filtra.
+    for (const annotation of sub.columns.filter((line) => line.startsWith('@Column'))) {
+      lines.push(`    ${annotation}`);
+    }
     lines.push(`    private ${sub.javaType} ${sub.name};`);
     declarations.push(lines.join('\n'));
     pushAccessor(sub.name, sub.javaType);

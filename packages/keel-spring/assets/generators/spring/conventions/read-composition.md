@@ -17,10 +17,18 @@ una vez por elemento. Ahí `build` no ha generado ningún resolver —los resolv
 `embed` en la **salida**, y aquí la lista está en la entrada—, así que el puerto solo trae el
 finder de un elemento y el camino de menor resistencia es el bucle. Ocurrió tal cual: un
 handler comprobando la lista de supresión con un `findByApplicationIdAndAddress(...)` por
-destinatario, hasta 20 por petición. **Si al puerto le falta el método de lote, se añade** —
-firma en el puerto de dominio y su implementación en el adaptador. Eso está dentro de la
-frontera del agente de código; el pase de calidad, que tiene prohibido cambiar firmas, solo
-puede reportarlo, y por eso llega tarde.
+destinatario, hasta 20 por petición.
+
+Desde entonces `build` **sí genera** el método cuando el enlace es mecánico: si el último
+componente de la clave natural de una raíz y los elementos de esa lista son el mismo value
+type declarado (`EmailAddress`, no `string` — el diseño le puso nombre justamente para decir
+que hablan del mismo dato), el puerto trae `findAllBy…In(...)` además del finder unitario.
+Úsalo, e indexa por ese valor lo que te devuelva.
+
+Si el enlace no es mecánico —tipos primitivos, o una consulta que no es la clave natural— el
+método no está, y entonces **se añade**: firma en el puerto de dominio y su implementación en
+el adaptador. Eso está dentro de la frontera del agente de código; el pase de calidad, que
+tiene prohibido cambiar firmas, solo puede reportarlo, y por eso llega tarde.
 
 ## La regla por defecto: por lote
 

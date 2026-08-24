@@ -80,18 +80,29 @@ entre dos peticiones simultáneas.
 
 Si la operación de `sentBy` es `internal: true` y la invoca un `@Scheduled` por cada
 elemento de su tanda —el caso normal de una cola de salida—, la guarda de la transición
-**tiene que confirmar antes del envío**, y eso no ocurre solo: `build` despacha ese barrido
-con `mediator.dispatch(...)`, o sea una transacción única sobre el lote entero. Ahí el
-reclamo no confirma hasta el final, ninguna réplica lo ve, los envíos caen dentro de la
-transacción y el estado intermedio (`sending`) no existe nunca para nadie — con lo que un
-rescate por marca de tiempo no encuentra jamás a sus candidatos.
+**tiene que confirmar antes del envío**. Y eso no ocurre solo: el handler corre dentro de la
+transacción que abre el mediator, así que una transición hecha en memoria no existe para
+nadie hasta el `save()` final, que cae DESPUÉS del envío. Si el proceso muere en medio, la
+transacción revierte, la fila vuelve a estar disponible y el ciclo siguiente manda un
+**segundo correo a una persona real**. Y el estado intermedio (`sending`) no llega a existir
+nunca, con lo que un rescate por marca de tiempo no encuentra jamás a sus candidatos.
 
-Lo correcto es el camino que ya usa el barrido de reconciliación:
-`mediator.dispatchWithoutTransaction(...)` en el scheduler, con cada llamada al adaptador
-abriendo y confirmando la suya. `build` avisa de esta forma («operación interna sin ningún
-disparador generado») pero **no la cambia por ti**: no puede ver quién invoca a quién.
-Repórtalo y aplícalo. Detalle completo en `{{keel:docs}}/conventions/concurrency.md`
-§ *El reclamo con una llamada externa en medio*.
+Cuando el diseño declara ese estado intermedio —`A → B` y, en la misma operación, `B → C`—
+`build` genera el reclamo y **empieza por ahí**: `claimFor<Operación>(id)` en el puerto de la
+raíz, que hace la transición en una escritura condicional con transacción propia
+(`REQUIRES_NEW`) y devuelve el agregado ya reclamado, o vacío si otra ejecución llegó antes
+—esa es la carrera perdida, y se traduce al error que el diseño declara para «ya no está
+disponible»—. La nota del stub lo nombra, y el gate `mailDelivery` de
+`infra/check-idempotency.sh` comprueba que lo llames: ningún escenario `FL-*` puede ver
+fallar esto, porque ninguno mata la aplicación entre el envío y el commit.
+
+Aparte de la guarda queda el argumento del pool: bajo la transacción del llamante, una tanda
+de N elementos la retiene durante N latencias del proveedor. Para eso está la segunda
+variante del puerto `CommandDispatcher` —`dispatchWithoutTransaction(...)`, que `build`
+genera junto a la transaccional— y `mediator.dispatchWithoutTransaction(...)` en el
+scheduler. `build` avisa de la forma («operación interna sin ningún disparador generado»)
+pero **no elige por ti** quién invoca a quién. Detalle completo en
+`{{keel:docs}}/conventions/concurrency.md` § *El reclamo con una llamada externa en medio*.
 
 ## Qué NO cubre Mailpit
 

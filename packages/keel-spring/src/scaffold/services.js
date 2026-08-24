@@ -407,11 +407,23 @@ function renderHandler(model, service, operation) {
 
   const notes = [];
   if (sendsMail(model, operation)) {
+    const guard = operation.guardClaim;
     notes.push(
       `Correo: esta operación lo manda (mail.sentBy). Compón el MailMessage y llama a mailSender.send(...). ` +
-        `Un correo que sale NO lo deshace ningún rollback: ponlo DESPUÉS de que la guarda de repetición ` +
-        `(${operation.idempotency ? 'idempotency' : 'la transición declarada'}) haya decidido que esta ejecución es la buena. ` +
-        `El adaptador y el renderizador ya están escritos: no los toques — ver la skill keel-spring-mail`
+        `Un correo que sale NO lo deshace ningún rollback, así que la guarda tiene que estar CONFIRMADA ` +
+        `antes del envío — no basta con que haya ocurrido: ` +
+        (guard
+          ? // El reclamo existe: lo afirmable es exacto, y decirlo evita el camino de menor
+            // resistencia, que es hacer la transición en memoria y confiar en el save() final.
+            `empieza por ${guard.method}(...) del puerto ${guard.entity}Repository, que pasa el agregado a ` +
+            `${guard.to} en su PROPIA transacción y devuelve vacío si otra ejecución llegó antes ` +
+            `(esa es la carrera perdida: tradúcela al error que el diseño declara para «ya no está disponible»). ` +
+            `Hacer esa transición solo en memoria la deja sin existir para nadie hasta el commit final, que ` +
+            `llega DESPUÉS del envío: si el proceso cae en medio, la transacción revierte, el agregado vuelve a ` +
+            `${guard.from.join(' o ')} y el ciclo siguiente manda un SEGUNDO correo a una persona real`
+          : `${operation.idempotency ? 'la clave de idempotencia' : 'la transición declarada'} tiene que estar ` +
+            `persistida y confirmada antes de llamar a mailSender.send(...), no solo aplicada en memoria`) +
+        `. El adaptador y el renderizador ya están escritos: no los toques — ver la skill keel-spring-mail`
     );
   }
   for (const text of operation.preconditions) notes.push(`Precondición: ${text}`);

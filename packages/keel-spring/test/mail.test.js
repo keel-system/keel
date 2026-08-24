@@ -13,7 +13,16 @@ import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
 import { loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
-import { SEARCH_PREFIX, ROUTES, FIELDS, validateCommand, resetCommand } from '../src/lib/mail-probes.js';
+import {
+  SEARCH_PREFIX,
+  SEARCH_LIMIT,
+  SEARCH_LIMIT_PARAM,
+  searchSuffix,
+  ROUTES,
+  FIELDS,
+  validateCommand,
+  resetCommand
+} from '../src/lib/mail-probes.js';
 
 const fixtureDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'notification-mailer');
 const PROJECT = path.join('services', 'notification-mailer-spring');
@@ -149,6 +158,31 @@ test('el arnés sabe leer el buzón por las rutas compartidas', () => {
   assert.ok(harness.includes(FIELDS.searchIds), 'los ids no se leen por la ruta compartida');
 });
 
+// El techo de la búsqueda no es una preferencia: `limit` recorta la lista de mensajes,
+// y todos los helpers de correo cuentan por esa lista. Con el valor anterior (50) y sin
+// mirar el conteo real, un escenario de volumen fallaba con un conteo plano que ningún
+// cambio en la aplicación podía superar — ocurrió en una corrida real.
+test('la búsqueda del arnés no tiene techo: lee el conteo real y repagina con él', () => {
+  const { read } = scaffoldMailer();
+  const harness = read('src/integrationTest/java/com/platform/notificationmailer/flows/AbstractFlowIT.java');
+  assert.ok(
+    harness.includes(FIELDS.searchTotal),
+    'mailIdsTo no lee el conteo de coincidencias: los helpers saturan en el límite de la búsqueda'
+  );
+  assert.ok(
+    harness.includes(`private static final int MAIL_SEARCH_LIMIT = ${SEARCH_LIMIT};`),
+    'el techo de la búsqueda no sale de mail-probes.js'
+  );
+  assert.ok(
+    harness.includes(`"${SEARCH_LIMIT_PARAM}" + matching.intValue()`),
+    'no se repite la búsqueda con el total: el techo sigue ahí aunque se lea'
+  );
+  assert.ok(
+    harness.includes(`"${SEARCH_PREFIX}" + query + "${searchSuffix()}"`),
+    'la primera búsqueda no compone el sufijo compartido: el límite estaría escrito a mano'
+  );
+});
+
 test('el humo del arnés comprueba que el buzón responde y arranca vacío', () => {
   // Que arranque vacío importa tanto como que responda: un correo de la corrida
   // anterior hace que el primer awaitMailTo devuelva el mensaje equivocado.
@@ -159,6 +193,33 @@ test('el humo del arnés comprueba que el buzón responde y arranca vacío', () 
 });
 
 // ─── El índice único condicionado ────────────────────────────────────────────
+
+// Una lista no es una columna de la entidad, pero cada elemento suyo SÍ es una
+// columna de la tabla hija que genera build. Las dos mitades del mapeo se perdían
+// ahí: el `length` del value type (la única cota que llega al DDL) y el índice que
+// el diseño declara sobre la lista, que se descartaba con un aviso y no existía en
+// ninguna parte —ni en la entidad, ni en el appendix de migrations—.
+test('la tabla de elementos hereda la longitud del value type y el índice de la lista', () => {
+  const { read } = scaffoldMailer();
+  const entity = read(`${JAVA}/infrastructure/persistence/entities/NotificationJpa.java`);
+  assert.ok(
+    entity.includes('@Column(name = "copy_recipients", length = 254)'),
+    'la columna del elemento sale sin length: el maxLength del value type no llega al DDL'
+  );
+  assert.ok(
+    entity.includes(
+      '@CollectionTable(name = "notification_copy_recipients", joinColumns = @JoinColumn(name = "notification_id"), ' +
+        'indexes = @Index(name = "idx_notifications_copy_recipients", columnList = "copy_recipients, notification_id"))'
+    ),
+    'el índice declarado sobre la lista no se materializa en su tabla de elementos'
+  );
+  // Y no puede salir además en el @Table de la entidad: ahí la columna no existe y
+  // el DDL revienta al aplicarse.
+  assert.ok(
+    !/@Table\([^)]*copy_recipients/.test(entity),
+    'el índice de la lista se coló en el @Table de la entidad: esa columna no está en esa tabla'
+  );
+});
 
 test('«como máximo una activa» sale como índice parcial, no como constraint de columnas', () => {
   // Con UNIQUE (application, key, locale) a secas no podrías tener nunca dos

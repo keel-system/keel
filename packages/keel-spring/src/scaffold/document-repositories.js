@@ -14,7 +14,14 @@
 import { javaFile, javaPath, subPackage } from './render.js';
 import { domainMembers, domainSubPackage, capitalize } from './entities.js';
 import { persistedMembers, orderingFieldOf, usesAuditableEntity } from './persistence-members.js';
-import { renderPort, naturalKeyFinder, collectInternalEntities, PORT_PKG, REPO_PKG } from './repositories.js';
+import {
+  renderPort,
+  naturalKeyFinder,
+  naturalKeyBatchFinder,
+  collectInternalEntities,
+  PORT_PKG,
+  REPO_PKG
+} from './repositories.js';
 import * as claim from './claim.js';
 import * as reconciliationClaim from './reconciliation-claim.js';
 import { DOC_PKG } from './document-entities.js';
@@ -50,6 +57,15 @@ function renderMongoRepository(model, entity) {
     imports.add('java.util.Optional');
     for (const param of finder.params) for (const name of param.imports) imports.add(name);
     methods = `\n\n    Optional<${entity.name}Document> ${finder.name}(${finder.signature});`;
+  }
+  // El puerto es el MISMO en las dos ramas (lo reexporta repositories.js), así que lo que
+  // se declare allí hay que implementarlo aquí o el adaptador no compila.
+  const batchFinder = naturalKeyBatchFinder(model, entity);
+  if (batchFinder) {
+    imports.add('java.util.Collection');
+    imports.add('java.util.List');
+    for (const name of batchFinder.imports) imports.add(name);
+    methods += `\n\n    List<${entity.name}Document> ${batchFinder.name}(${batchFinder.signature});`;
   }
 
   const body = `public interface ${entity.name}MongoRepository extends MongoRepository<${entity.name}Document, UUID> {${methods}\n}`;
@@ -97,6 +113,16 @@ function renderAdapter(model, entity, paginated, batchLookup) {
     methods.push(`    @Override
     public Optional<${entity.name}> ${finder.name}(${finder.signature}) {
         return ${repoField}.${finder.name}(${finder.args}).map(this::toDomain);
+    }`);
+  }
+  const batchFinder = naturalKeyBatchFinder(model, entity);
+  if (batchFinder) {
+    imports.add('java.util.Collection');
+    imports.add('java.util.List');
+    for (const name of batchFinder.imports) imports.add(name);
+    methods.push(`    @Override
+    public List<${entity.name}> ${batchFinder.name}(${batchFinder.signature}) {
+        return ${repoField}.${batchFinder.name}(${batchFinder.args}).stream().map(this::toDomain).toList();
     }`);
   }
   if (paginated) {
@@ -171,6 +197,7 @@ function renderAdapter(model, entity, paginated, batchLookup) {
   // implementaría su interfaz.
   const claimMethods = [
     ...claim.documentAdapterMethods(model, entity, imports),
+    ...claim.guardDocumentAdapterMethods(model, entity, imports),
     ...reconciliationClaim.documentAdapterMethods(model, entity, imports)
   ];
   methods.push(...claimMethods);

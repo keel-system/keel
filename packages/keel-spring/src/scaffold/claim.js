@@ -249,3 +249,148 @@ export function documentAdapterMethods(model, entity, imports) {
     }`
   );
 }
+
+// ─── La guarda de una fila con un efecto externo irreversible ────────────────
+//
+// Otro reclamo, y no una variante del anterior: aquí no se elige un lote, se asegura
+// UNA fila que el llamante ya eligió. Lo que comparten es lo único que importa —una
+// escritura condicional que dice cuántas filas se llevó, y un commit propio— y lo que
+// los separa es que este existe porque después viene un correo, que no lo deshace
+// ningún rollback. Ver classifyGuardClaims() en lib/model.js.
+
+/** El reclamo de guarda que apunta a esta entidad, si alguna operación lo declara. */
+export function guardClaimsFor(model, entityName) {
+  return (model.services ?? [])
+    .flatMap((service) => service.operations ?? [])
+    .map((operation) => operation.guardClaim)
+    .filter((claim) => claim && claim.entity === entityName);
+}
+
+function describeGuard(claim, entityName) {
+  return `Reclama ESTE ${entityName} para ${claim.operation}: lo pasa a ${claim.to} solo si sigue
+     * en ${claim.from.join(' o ')}${claim.stampField ? `, y estampa ${claim.stampField}` : ''}. Devuelve
+     * el agregado ya reclamado, o vacío si otra ejecución llegó antes.
+     *
+     * <p><b>Y confirma antes de volver</b> (transacción propia). Eso es lo que lo hace una
+     * guarda y no una anotación en memoria: ${claim.operation} produce un efecto externo que
+     * NO se deshace, así que la marca tiene que existir para todo el mundo ANTES de
+     * producirlo. Si el proceso cae después del efecto y antes del commit final, la fila se
+     * queda en ${claim.to} —que es justo lo que busca el rescate del barrido— en vez de volver
+     * a ${claim.from.join(' o ')} y repetirse.
+     *
+     * <p>El vacío es la carrera perdida, y se traduce al error que el diseño declare para
+     * «ya no está disponible». No es un caso excepcional: es el caso normal cuando dos
+     * ejecuciones coinciden.`;
+}
+
+/** Método del puerto <E>Repository para el reclamo de guarda. */
+export function guardPortMethods(model, entity, imports) {
+  const claims = guardClaimsFor(model, entity.name);
+  if (claims.length === 0) return [];
+  imports.add('java.util.Optional');
+  imports.add('java.util.UUID');
+  return claims.map(
+    (claim) => `    /**
+     * ${describeGuard(claim, entity.name)}
+     */
+    Optional<${entity.name}> ${claim.method}(UUID id);`
+  );
+}
+
+/** Métodos de la interfaz Spring Data <E>JpaRepository para el reclamo de guarda. */
+export function guardJpaRepositoryMethods(model, entity, imports) {
+  const claims = guardClaimsFor(model, entity.name);
+  if (claims.length === 0) return [];
+
+  const { enumType, field } = entity.lifecycle;
+  imports.add('java.util.List');
+  imports.add('java.util.UUID');
+  imports.add('org.springframework.data.jpa.repository.Modifying');
+  imports.add('org.springframework.data.jpa.repository.Query');
+  imports.add('org.springframework.data.repository.query.Param');
+  imports.add(`${subPackage(model, 'domain.enums')}.${enumType}`);
+
+  return claims.map((claim) => {
+    const stamp = claim.stampField ? `, e.${claim.stampField} = :now` : '';
+    const stampParam = claim.stampField ? `, @Param("now") Instant now` : '';
+    if (claim.stampField) imports.add('java.time.Instant');
+    return `    /**
+     * La guarda de ${claim.operation}: pasa la fila a ${claim.to} SOLO si sigue en su estado
+     * de partida. Devuelve 1 si esta ejecución se la llevó y 0 si otra llegó antes. Esa
+     * comparación en el WHERE es toda la exclusión mutua, y no depende del motor.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("update ${entity.name}Jpa e set e.${field} = :to${stamp} where e.id = :id and e.${field} in :states")
+    int ${claim.method}(@Param("id") UUID id, @Param("states") List<${enumType}> states, @Param("to") ${enumType} to${stampParam});`;
+  });
+}
+
+/** Métodos del adaptador <E>RepositoryImpl para el reclamo de guarda (relacional). */
+export function guardAdapterMethods(model, entity, imports, jpaField) {
+  const claims = guardClaimsFor(model, entity.name);
+  if (claims.length === 0) return [];
+
+  const { enumType } = entity.lifecycle;
+  imports.add('java.util.List');
+  imports.add('java.util.Optional');
+  imports.add('java.util.UUID');
+  imports.add('org.springframework.transaction.annotation.Propagation');
+  imports.add('org.springframework.transaction.annotation.Transactional');
+  imports.add(`${subPackage(model, 'domain.enums')}.${enumType}`);
+
+  return claims.map((claim) => {
+    const stampArg = claim.stampField ? ', Instant.now()' : '';
+    if (claim.stampField) imports.add('java.time.Instant');
+    return `    /**
+     * ${describeGuard(claim, entity.name)}
+     */
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public Optional<${entity.name}> ${claim.method}(UUID id) {
+        // REQUIRES_NEW, y no la transacción del llamante: si la marca esperase al commit de
+        // aquella, no existiría para nadie durante el efecto externo, que es cuando hace falta.
+        int claimed = ${jpaField}.${claim.method}(
+                id, List.of(${stateList(claim, enumType)}), ${enumType}.${enumConstant(claim.to)}${stampArg});
+        if (claimed == 0) {
+            return Optional.empty();
+        }
+        return ${jpaField}.findById(id).map(this::toDomain);
+    }`;
+  });
+}
+
+/** Métodos del adaptador documental para el reclamo de guarda. */
+export function guardDocumentAdapterMethods(model, entity, imports) {
+  const claims = guardClaimsFor(model, entity.name);
+  if (claims.length === 0) return [];
+
+  const { enumType, field } = entity.lifecycle;
+  imports.add('java.util.List');
+  imports.add('java.util.Optional');
+  imports.add('java.util.UUID');
+  imports.add('org.springframework.data.mongodb.core.FindAndModifyOptions');
+  imports.add('org.springframework.data.mongodb.core.query.Criteria');
+  imports.add('org.springframework.data.mongodb.core.query.Query');
+  imports.add('org.springframework.data.mongodb.core.query.Update');
+  imports.add(`${subPackage(model, 'domain.enums')}.${enumType}`);
+
+  return claims.map((claim) => {
+    const stamp = claim.stampField ? `.set("${claim.stampField}", Instant.now())` : '';
+    if (claim.stampField) imports.add('java.time.Instant');
+    return `    /**
+     * ${describeGuard(claim, entity.name)}
+     */
+    @Override
+    public Optional<${entity.name}> ${claim.method}(UUID id) {
+        // findAndModify filtra y marca en la MISMA operación atómica sobre el documento: no
+        // hay ventana entre comprobar el estado y llevárselo, y tampoco hace falta abrir
+        // transacción para que la marca sea visible.
+        Query query = Query.query(Criteria.where("_id").is(id)
+                .and("${field}").in(List.of(${stateList(claim, enumType)})));
+        Update update = new Update().set("${field}", ${enumType}.${enumConstant(claim.to)})${stamp};
+        ${entity.name}Document document = mongoTemplate.findAndModify(
+                query, update, FindAndModifyOptions.options().returnNew(true), ${entity.name}Document.class);
+        return Optional.ofNullable(document).map(this::toDomain);
+    }`;
+  });
+}

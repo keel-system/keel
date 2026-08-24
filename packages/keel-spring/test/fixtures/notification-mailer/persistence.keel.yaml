@@ -26,6 +26,11 @@ entities:
     naturalKey: [applicationKey, dedupeKey]
     indexes:
       - [recipient, requestedAt]
+      # Índice sobre un campo de COLECCIÓN. No cabe en la tabla de la entidad —los
+      # elementos viven en la tabla hija—, pero build genera esa hija entera, así que
+      # lo materializa en su @CollectionTable. Sin él, «¿a esta dirección le llegó
+      # algo en copia?» recorre una tabla que crece con cada envío.
+      - [copyRecipients]
 
 consistency:
   transactionalBoundary: per-operation

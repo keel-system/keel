@@ -34,7 +34,15 @@ import { fileURLToPath } from 'node:url';
 import { loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
 import { tmpDir } from '../test/helpers/tmp.js';
-import { HTTP_PORT, SMTP_PORT, SEARCH_PREFIX, searchSuffix, ROUTES, FIELDS } from '../src/lib/mail-probes.js';
+import {
+  HTTP_PORT,
+  SMTP_PORT,
+  SEARCH_PREFIX,
+  SEARCH_LIMIT,
+  searchSuffix,
+  ROUTES,
+  FIELDS
+} from '../src/lib/mail-probes.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixturesDir = path.join(here, '..', 'test', 'fixtures');
@@ -158,8 +166,8 @@ async function api(pathname) {
   return response.json();
 }
 
-async function search(address) {
-  return api(SEARCH_PREFIX + encodeURIComponent(`to:${address}`) + searchSuffix());
+async function search(address, limit) {
+  return api(SEARCH_PREFIX + encodeURIComponent(`to:${address}`) + searchSuffix(limit));
 }
 
 /**
@@ -215,6 +223,8 @@ const TRICKY_SUBJECT = 'Tu pedido A-1042 está confirmado — "gracias"';
 const TRICKY_HTML = '<h1>Gracias por tu compra, Ana</h1><p>Total: 89,90 €</p>';
 const TRICKY_TEXT = 'Gracias por tu compra, Ana.\r\nTotal: 89,90 €';
 const ADDRESS = 'cliente+etiqueta@ejemplo.com';
+const VOLUME_ADDRESS = 'volumen@ejemplo.com';
+const OTHER_ADDRESS = 'otro@ejemplo.com';
 const SENDER = 'pedidos@tutienda.com';
 
 async function scenarios() {
@@ -289,6 +299,60 @@ async function scenarios() {
   await check('MAIL-6', 'la búsqueda discrimina por destinatario', async () => {
     const otros = read(await search('nadie@ejemplo.com'), FIELDS.searchIds) ?? [];
     if (otros.length !== 0) throw new Error(`la búsqueda devuelve ${otros.length} mensaje(s) de otro destinatario`);
+  });
+
+  // El techo de la búsqueda. `limit` recorta la LISTA de mensajes, y el arnés cuenta
+  // por esa lista: sin mirar el conteo real, `mailCount` satura en el límite y
+  // `awaitMailTo` no se puede satisfacer por encima de él por muchos correos que
+  // entregue el servidor. Pasó tal cual en una corrida real, con un escenario de
+  // volumen fallando con un conteo plano que ningún fix de aplicación podía superar.
+  //
+  // Se comprueba el MECANISMO con un límite explícito pequeño, no con 200 sockets: lo
+  // que puede estar mal es la aritmética (leer el total y volver a pedir con él) y el
+  // campo del que sale ese total, no la cifra concreta del techo.
+  await check('MAIL-8', 'el conteo de la búsqueda es el de los que CASAN, no el del buzón entero', async () => {
+    await purge();
+    for (let i = 1; i <= 3; i += 1) {
+      await sendMail({ from: SENDER, to: VOLUME_ADDRESS, subject: `Volumen ${i}`, html: `<p>${i}</p>`, text: `${i}` });
+    }
+    for (let i = 1; i <= 2; i += 1) {
+      await sendMail({ from: SENDER, to: OTHER_ADDRESS, subject: `Otro ${i}`, html: `<p>${i}</p>`, text: `${i}` });
+    }
+    const deadline = Date.now() + 10000;
+    while (Date.now() < deadline) {
+      const found = await search(VOLUME_ADDRESS);
+      if ((read(found, FIELDS.searchIds) ?? []).length === 3) {
+        const total = read(found, FIELDS.searchTotal);
+        if (total !== 3) {
+          throw new Error(
+            `${FIELDS.searchTotal} vale ${JSON.stringify(total)} con 3 mensajes que casan y 5 en el buzón: ` +
+              'no es el conteo de la búsqueda, así que repaginar con él pediría de más o de menos'
+          );
+        }
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    throw new Error('no llegaron los 3 mensajes de volumen en 10 s');
+  });
+
+  await check('MAIL-9', 'por encima del límite, el total permite repaginar y recuperarlos todos', async () => {
+    const recortada = await search(VOLUME_ADDRESS, 2);
+    const ids = read(recortada, FIELDS.searchIds) ?? [];
+    if (ids.length !== 2) {
+      throw new Error(`limit=2 devolvió ${ids.length} ids: el parámetro que el arnés emite no recorta la lista`);
+    }
+    const total = read(recortada, FIELDS.searchTotal);
+    if (total !== 3) throw new Error(`el total de una respuesta recortada vale ${JSON.stringify(total)}, no 3`);
+    // Exactamente lo que hace mailIdsTo cuando el total supera su techo.
+    const completa = await search(VOLUME_ADDRESS, total);
+    const todos = read(completa, FIELDS.searchIds) ?? [];
+    if (todos.length !== 3) {
+      throw new Error(`repaginar con limit=${total} devolvió ${todos.length} ids: el techo sigue ahí`);
+    }
+    if (SEARCH_LIMIT < 200) {
+      throw new Error(`SEARCH_LIMIT=${SEARCH_LIMIT}: el techo por defecto quedó por debajo de una tanda de despacho`);
+    }
   });
 
   await check('MAIL-7', 'la purga deja el buzón vacío entre flujos', async () => {

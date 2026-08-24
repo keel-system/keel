@@ -149,6 +149,15 @@ barrido y la operación que hace la llamada vive en la prosa de `rules`. Por eso
 «operación interna sin ningún disparador generado»— en vez de decidirlo por su cuenta, y por eso es un
 hallazgo para el reporte cuando aparece.
 
+Hay una excepción, y conviene saber hasta dónde llega. Cuando el efecto externo es **irreversible y sobre
+una fila concreta** —una operación de `mail.sentBy` cuyas transiciones declaran un estado EN VUELO,
+`queued → sending → sent|failed`— `build` genera el reclamo de esa fila: `claimFor<Operación>(id)`, una
+escritura condicional con transacción **propia** (`REQUIRES_NEW`) que estampa además la marca de tiempo
+del estado en vuelo si la entidad la declara. Llamarlo lo primero cierra el punto 2 y el punto 3 de la
+lista de abajo **con independencia de cómo se despache la operación**: la marca ya está confirmada cuando
+sale el correo. Lo que NO cierra es el punto 1 —la conexión retenida durante la tanda—, que sigue pidiendo
+`dispatchWithoutTransaction` en quien invoca.
+
 Dejarlo en `mediator.dispatch(...)` cuesta tres cosas, y ninguna se ve en una máquina con una sola
 instancia:
 

@@ -10,6 +10,12 @@ types:
     description: En qué punto está el envío pedido.
     values: [accepted, sent, failed]
 
+  EmailAddress:
+    base: string
+    description: Dirección de correo, con la longitud que admite el estándar.
+    constraints:
+      maxLength: 254
+
 entities:
   Application:
     description: Sistema consumidor autorizado a mandar correo. No es un usuario; es un sistema.
@@ -91,6 +97,13 @@ entities:
         required: true
         constraints: { maxLength: 200 }
         description: Congelado y ya interpolado — es lo que leyó quien lo recibió.
+      # Colección de valores sin identidad: en el modelo relacional vive en su tabla
+      # de elementos, y la longitud del value type tiene que llegar hasta ALLÍ.
+      copyRecipients:
+        type: EmailAddress
+        list: true
+        description: Direcciones en copia, congeladas con el envío.
+        constraints: { maxItems: 10 }
       dedupeKey: { type: string, required: true, constraints: { maxLength: 128 } }
       requestedAt: { type: timestamp, generated: true }
       sentAt: { type: timestamp }

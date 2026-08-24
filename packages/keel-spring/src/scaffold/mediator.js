@@ -92,6 +92,7 @@ public interface ReturningCommand<R> extends Dispatchable {
 
   files.push(...renderAnnotations(model));
   files.push(renderContainer(model), renderMediator(model), renderAutoRegister(model), renderUseCaseConfig(model));
+  files.push(...renderCommandDispatcher(model));
   return files;
 }
 
@@ -412,4 +413,152 @@ public class UseCaseAutoRegister implements CommandLineRunner {
       body
     )
   };
+}
+
+const PORT_PKG = 'application.port.out';
+
+/**
+ * Las operaciones internas a las que no llega ningún disparador generado.
+ *
+ * No tienen `schedule`, el schema les prohíbe endpoint y ninguna suscripción las
+ * dispara: la única forma de que se ejecuten es que OTRO handler las invoque. Y un
+ * handler no puede llamar a otro handler (constitution.md), así que ese enlace necesita
+ * un puerto — que build no generaba, y que por tanto se inventaba el agente.
+ */
+function orphanInternalOperations(model) {
+  const bySubscription = new Set((model.subscriptions ?? []).map((subscription) => subscription.trigger).filter(Boolean));
+  return (model.services ?? [])
+    .flatMap((service) => service.operations ?? [])
+    .filter((operation) => operation.internal && !operation.schedule && !bySubscription.has(operation.name));
+}
+
+/**
+ * El puerto de despacho entre casos de uso, y su adaptador sobre el mediator.
+ *
+ * Se genera —y no se deja al agente— por lo que pasó cuando no existía: el agente lo
+ * escribió con UN solo método, el transaccional, porque es el que necesitaba para
+ * compilar. Con eso, la operación invocada corre SIEMPRE dentro de la transacción del
+ * llamante, y si produce un efecto externo irreversible (un correo) la única salida
+ * —sacarla de esa transacción— exigía ampliar un puerto que él mismo acababa de
+ * escribir: nadie hace eso a mitad de un handler. El camino de menor resistencia era
+ * dejar el envío dentro de la transacción, y ahí está el segundo correo.
+ *
+ * Build no infiere QUIÉN llama a quién —adivinarlo sacaría de su transacción a barridos
+ * que sí la necesitan— pero sí sabe que ALGUIEN tiene que llamar, que es lo único que
+ * hace falta para dar las dos variantes y decir cuándo va cada una.
+ */
+function renderCommandDispatcher(model) {
+  const orphans = orphanInternalOperations(model);
+  if (orphans.length === 0) return [];
+
+  const interfacesPkg = subPackage(model, INTERFACES_PKG);
+  const names = orphans.map((operation) => operation.name).join(', ');
+  const irreversible = orphans.filter((operation) => operation.guardClaim);
+
+  const portBody = `/**
+ * Puerto de despacho de OTRO caso de uso desde un handler. Un handler nunca invoca a
+ * otro handler directamente (constitution.md); cuando lo necesita, despacha su mensaje
+ * por este puerto, que implementa un adaptador de infraestructura sobre el
+ * {@code UseCaseMediator}.
+ *
+ * <p>Existe porque el diseño declara ${orphans.length === 1 ? 'una operación interna' : 'operaciones internas'}
+ * sin disparador propio (${names}): no ${orphans.length === 1 ? 'tiene' : 'tienen'} ni {@code schedule}, ni
+ * endpoint, ni suscripción, así que ${orphans.length === 1 ? 'solo puede ejecutarla' : 'solo pueden ejecutarlas'}
+ * otro caso de uso.
+ *
+ * <p><b>Las dos variantes no son intercambiables</b>, y elegir la primera «porque es la
+ * de siempre» tiene consecuencias que no se ven hasta producción:
+ *
+ * <ul>
+ *   <li>{@code dispatch}: la operación invocada se une a la transacción del llamante.
+ *       Es lo correcto cuando todo el trabajo es de base de datos y quieres que sea
+ *       atómico con el del llamante.</li>
+ *   <li>{@code dispatchWithoutTransaction}: la operación invocada abre sus propias
+ *       transacciones, una por llamada al adaptador. Es lo correcto cuando hace <b>I/O
+ *       externo</b> —un correo, una llamada a un proveedor—: bajo la transacción del
+ *       llamante, una tanda de N elementos retiene una conexión del pool durante N
+ *       latencias de un tercero, y ningún estado intermedio existe para las demás
+ *       réplicas hasta que la tanda entera confirma.</li>
+ * </ul>${
+   irreversible.length > 0
+     ? `
+ *
+ * <p>Aquí ${irreversible.length === 1 ? 'la hay' : 'las hay'}: ${irreversible
+         .map((operation) => operation.name)
+         .join(', ')} produce${irreversible.length === 1 ? '' : 'n'} un efecto que no se deshace.
+ * Su guarda contra la repetición es un reclamo con transacción propia
+ * (${irreversible.map((operation) => `${operation.guardClaim.method}()`).join(', ')}), así que
+ * está a salvo con cualquiera de las dos — pero el argumento del pool sigue en pie.`
+     : ''
+ }
+ */
+public interface CommandDispatcher {
+
+    /** Despacha un Command dentro de la transacción del llamante. */
+    void dispatch(Command command);
+
+    /** Igual, para una operación que declara {@code output}. */
+    <R> R dispatch(ReturningCommand<R> command);
+
+    /** Despacha un Command <b>sin transacción abarcadora</b>: los commits los coloca el invocado. */
+    void dispatchWithoutTransaction(Command command);
+
+    /** Igual que el anterior, para una operación que declara {@code output}. */
+    <R> R dispatchWithoutTransaction(ReturningCommand<R> command);
+}`;
+
+  const adapterBody = `/**
+ * Adaptador del puerto {@link CommandDispatcher} sobre el {@link UseCaseMediator}. Vive
+ * en infraestructura porque es aquí donde se conoce el mediator; la capa application
+ * solo ve el puerto.
+ */
+@Component
+public class CommandDispatcherAdapter implements CommandDispatcher {
+
+    private final UseCaseMediator mediator;
+
+    public CommandDispatcherAdapter(UseCaseMediator mediator) {
+        this.mediator = mediator;
+    }
+
+    @Override
+    public void dispatch(Command command) {
+        mediator.dispatch(command);
+    }
+
+    @Override
+    public <R> R dispatch(ReturningCommand<R> command) {
+        return mediator.dispatch(command);
+    }
+
+    @Override
+    public void dispatchWithoutTransaction(Command command) {
+        mediator.dispatchWithoutTransaction(command);
+    }
+
+    @Override
+    public <R> R dispatchWithoutTransaction(ReturningCommand<R> command) {
+        return mediator.dispatchWithoutTransaction(command);
+    }
+}`;
+
+  return [
+    {
+      path: javaPath(model, PORT_PKG, 'CommandDispatcher'),
+      content: javaFile(subPackage(model, PORT_PKG), [`${interfacesPkg}.Command`, `${interfacesPkg}.ReturningCommand`], portBody)
+    },
+    {
+      path: javaPath(model, MEDIATOR_PKG, 'CommandDispatcherAdapter'),
+      content: javaFile(
+        subPackage(model, MEDIATOR_PKG),
+        [
+          `${subPackage(model, PORT_PKG)}.CommandDispatcher`,
+          `${interfacesPkg}.Command`,
+          `${interfacesPkg}.ReturningCommand`,
+          'org.springframework.stereotype.Component'
+        ],
+        adapterBody
+      )
+    }
+  ];
 }
