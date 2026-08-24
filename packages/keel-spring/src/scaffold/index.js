@@ -42,6 +42,7 @@ import * as idempotency from './idempotency.js';
 import * as reconciliationClaim from './reconciliation-claim.js';
 import * as httpIdempotency from './http-idempotency.js';
 import * as idempotencyCheck from './idempotency-check.js';
+import * as domainGuardsCheck from './domain-guards-check.js';
 import * as cache from './cache.js';
 import * as jackson from './jackson.js';
 import * as controllers from './controllers.js';
@@ -119,6 +120,7 @@ const GENERATORS = [
   // Después de services: su matriz cita clases que los generadores de arriba nombran,
   // aunque el script solo las busque en tiempo de ejecución.
   idempotencyCheck,
+  domainGuardsCheck,
   readme,
   contextMd,
   generatorDocs

@@ -15,7 +15,8 @@ hacerla tú.
 | Qué se valida | Dónde vive | Fuente en el diseño |
 |---|---|---|
 | Formato y obligatoriedad del contrato HTTP | Bean Validation en el record `XxxCommand`/`XxxQuery` | `constraints`, `required` |
-| Formato o rango de un tipo de valor | Compact constructor del record en `domain/valueobject` | `types.T` + `constraints` |
+| Formato o rango de un tipo de valor COMPUESTO | Compact constructor del record en `domain/valueobject` | `types.T` con `fields` |
+| Formato de un tipo de valor ESCALAR | `<Tipo>Format.validate(...)` en el dominio, tras normalizar | `types.T` con `base` + `constraints.pattern` |
 | Regla siempre cierta sobre el estado del agregado | Guarda en el agregado: factory de creación **y** cada método mutador | `invariants` |
 | Transición de estado válida | Método semántico del agregado apoyado en `transitionTo` | `lifecycle` |
 | Precondición que necesita consultar persistencia (unicidad, existencia) | Handler, vía el **puerto** de repositorio | `preconditions` |
@@ -39,7 +40,40 @@ Consecuencia práctica: si el escenario manda `acme-1` y el diseño declara
 test: o el `pattern` del diseño admite ambas formas, o el escenario está mandando algo que el
 contrato no acepta. Es un `designGap` y se reporta como tal.
 
+### El formato heredado de un value type escalar no está en el DTO
+
+Cuidado con la fila anterior: el `@Pattern` que un campo **hereda de su value type** no viaja al
+record de entrada, y no es un olvido. El formato de un tipo describe el valor **ya normalizado**
+(un `SKU` es `^[A-Z0-9]…` porque el diseño pasa el código a mayúsculas antes de comprobar nada), y
+Bean Validation corre sobre el DTO **antes** de que el handler normalice: dejarlo ahí rechazaría
+con 400 exactamente las peticiones que la normalización existe para aceptar. El que sí se queda es
+el `pattern` que el **campo** declara por su cuenta, que sí habla del valor tal como llega.
+
+Un tipo compuesto recoge ese formato en su compact constructor. Uno **escalar** se aplana a String
+y no tiene clase propia, así que build le genera una: `<Tipo>Format`, en `domain/valueobject`, con
+la regex del diseño escrita **una sola vez**. Llamarla es tuyo:
+
+```java
+// En el factory y en TODO método de negocio que asigne el campo, DESPUÉS de normalizar.
+public static Application create(String code, String senderAddress) {
+    ApplicationCodeFormat.validate(code);        // el handler ya lo pasó a minúsculas
+    EmailAddressFormat.validate(senderAddress);
+    …
+}
+```
+
+Nunca vuelvas a compilar la regex a mano ni la copies a un handler: dos definiciones del mismo
+formato es una que alguien actualizará sin la otra.
+
+Y hazlo en **todos** los campos de ese tipo, no solo donde un escenario lo exija. Es el fallo más
+caro de esta convención porque no se ve: el servicio compila, arranca y acepta valores que el
+diseño declara imposibles, y ningún `FL-*` que no lo mire lo delata. En una corrida real la suite
+cerró al 100% con dos operaciones aceptando un código de dos letras y `"roto"` como dirección de
+correo. `infra/check-domain-guards.sh` es el gate que lo caza: sale rojo mientras algún campo con
+formato declarado no tenga quien lo haga cumplir.
+
 ## Creación: factory, no constructor público
+
 
 El scaffolding genera un **constructor completo** cuyo único uso es la **rehidratación** desde
 persistencia (`XxxRepositoryImpl.toDomain`): recibe el estado ya validado que salió de la BD y no

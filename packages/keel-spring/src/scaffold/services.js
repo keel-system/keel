@@ -194,11 +194,10 @@ function isWrappedInJsonNullable(operation, component, fromPath) {
  * cuenta como omitido, que es justo lo correcto: ese sí se está emitiendo.
  */
 function droppedTypePattern(component) {
-  const patternOf = (annotations) =>
-    (annotations ?? []).find((annotation) => annotation.startsWith('@Pattern(')) ?? null;
-  const full = patternOf(component.validation);
-  if (!full || patternOf(component.inputValidation)) return null;
-  return full.match(/regexp\s*=\s*"(.*)"\s*\)$/)?.[1] ?? null;
+  // El contenedor de una colección no hereda el formato del elemento: sus
+  // anotaciones son de cardinalidad, y la nota iría al campo equivocado.
+  if (component.list) return null;
+  return component.inheritedPattern ?? null;
 }
 
 function renderComponentType(operation, component, fromPath, imports, annotations) {
@@ -269,9 +268,11 @@ function renderMessage(model, operation) {
           );
         } else {
           notes.push(
-            `// Este tipo es escalar: se aplana a ${component.javaType ?? 'su primitivo'} y no tiene clase propia, así que`,
-            '// NADIE lo comprueba hoy. Si el diseño normaliza el campo, hazlo cumplir tras normalizar, en la',
-            '// entidad de dominio que lo recibe. Si NO lo normaliza, el formato tiene que volver aquí.'
+            `// Este tipo es escalar: se aplana a ${component.javaType ?? 'su primitivo'} y no tiene clase propia, así`,
+            `// que lo hace cumplir ${component.typeName}Format.validate(...), que lleva la regex del diseño.`,
+            `// Llámalo DESPUÉS de normalizar (en el factory o el método de negocio de la entidad que`,
+            `// recibe el valor, o aquí mismo si el handler es quien normaliza). Si el diseño NO normaliza`,
+            '// este campo, el formato tiene que volver aquí como @Pattern.'
           );
         }
       }

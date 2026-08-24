@@ -342,6 +342,32 @@ corrieron antes de llegar tú. Estas comprobaciones existen porque un diseño pu
 tener esos escenarios todavía, porque leer el código dice *por qué* falla y no solo que
 falla, y porque las dos últimas familias no tienen ningún gate conductual detrás.
 
+
+## El formato de los value types escalares
+
+El mismo reparto que la sección anterior, sobre otra pieza. El DTO de entrada deja caer
+a propósito el `@Pattern` que un campo hereda de su value type: el formato describe el
+valor **ya normalizado** y Bean Validation corre antes de que el handler normalice nada.
+Un value type compuesto recoge ese formato en su constructor compacto; uno **escalar** se
+aplana a String, así que build le genera una clase `<Tipo>Format` con la regex del
+diseño — pero la **llamada** es del agente de código, en el factory de la entidad o en el
+método de negocio que asigna el campo.
+
+Sin esa llamada el servicio compila, arranca y **acepta valores que el diseño declara
+imposibles**. No lo delata ningún escenario que no lo mire: en una corrida real la suite
+cerró al 100% mientras dos operaciones aceptaban un código de dos letras y "roto" como
+dirección de correo, porque el guard solo se escribió donde un `FL-*` lo exigía. Un
+escenario por campo y por operación no es una red: es la misma lista escrita dos veces.
+
+**Ejecuta `bash infra/check-domain-guards.sh`.** Lo genera build con una fila por campo
+con formato declarado, no necesita infraestructura ni compilar, y comprueba dos cosas:
+que la clase `<Tipo>Format` exista y que **alguien la llame desde código vivo** — los
+comentarios no cuentan, porque build deja en el stub del factory un TODO que nombra la
+llamada que falta y el gate saldría verde por su propio aviso. No afirma dónde tiene que
+vivir la llamada: eso es del agente de código mientras respete la frontera hexagonal.
+Vuelca cada hallazgo a `remaining` y pon `valueTypeFormat` en `KO`. Si el diseño no
+declara ningún value type escalar con `pattern` el script no existe y la familia es `N/A`.
+
 ## El doble check (y qué NO haces)
 
 **No pruebas el baseline contra la base de datos.** No arrancas la app con
@@ -475,6 +501,11 @@ outboxDelivery: OK | KO | N/A      # N/A sin reliability: outbox; OK = hay un Ou
                           # real además del fallback que generó build
 mailDelivery: OK | KO | N/A        # N/A sin capa mail; OK = cada operación de mail.sentBy
                           # llama a mailSender.send(...) y ya no tiene TODO vivo
+# --- el formato de los value types escalares: clase generada, llamada escrita ---
+valueTypeFormat: OK | KO | N/A     # Sale de `infra/check-domain-guards.sh`. N/A si el diseño
+                          # no declara ningún value type escalar con `pattern` (el script no
+                          # se genera); OK = todo campo con formato declarado tiene quien lo
+                          # haga cumplir tras normalizar
 issuesFixed: [...]        # ajustes no-conductuales aplicados
 remaining: [...]          # hallazgos conductuales sin hueco de diseño detrás
 designGaps:               # huecos del diseño que encontraste, como propuesta accionable

@@ -8,6 +8,9 @@
 import { javaFile, javaPath, subPackage } from './render.js';
 import { sharedExceptionFor } from '../lib/model.js';
 import { usesCorrelation, correlationImport } from './correlation.js';
+// El `code` de un error del FRAMEWORK no se escribe a mano: sale del catálogo del
+// método (keel-core), que es su única definición.
+import { FRAMEWORK_ERRORS } from 'keel-core';
 
 const ERRORS_PKG = 'domain.errors';
 
@@ -59,6 +62,34 @@ export function generate(model) {
     files.push({
       path: javaPath(model, ERRORS_PKG, error.exceptionClass),
       content: javaFile(errorsPkg, [], errorClassBody(error))
+    });
+  }
+
+  // Formato de un value type escalar incumplido tras normalizar. El `code` es el
+  // canónico del catálogo del método (FRAMEWORK_ERRORS.validation, no sustituible por
+  // el diseño), y la clase solo existe si hay algún tipo escalar con `pattern`: sin
+  // eso nadie la lanzaría y sería una clase muerta en el contrato.
+  if ((model.formatTypes ?? []).length > 0) {
+    files.push({
+      path: javaPath(model, ERRORS_PKG, 'ValueFormatException'),
+      content: javaFile(
+        errorsPkg,
+        [],
+        `/**
+ * Un valor no cumple el formato de su value type declarado. Lo lanza la clase
+ * <Tipo>Format del dominio, que es donde vive la regex del diseño.
+ *
+ * No puede expresarse como Bean Validation sobre el DTO de entrada: el patrón
+ * describe el valor YA normalizado y el binding corre antes de normalizar nada
+ * (conventions/mapping.md § Normalización antes que validación de formato).
+ */
+public class ValueFormatException extends BadRequestException {
+
+    public ValueFormatException(String message) {
+        super(message, "${FRAMEWORK_ERRORS.validation.code}", ${FRAMEWORK_ERRORS.validation.http}, null);
+    }
+}`
+      )
     });
   }
 

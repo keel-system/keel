@@ -207,7 +207,18 @@ Reglas:
 4. Recuerda que la preparación **también publica eventos**: si el `Then` afirma "no se publica
    nada", va `purgeMessages(<canal>)` entre el `Given` y el `When` (§ checklist, punto 8).
 
+5. **Al aislar una guarda tardía, las guardas previas se satisfacen con datos válidos.** Un
+   escenario que prueba el alcance, la suspensión o cualquier rechazo que ocurre *al final* de la
+   cadena de comprobaciones necesita atravesar todo lo anterior: un cuerpo `{}`, un id inventado o
+   un token que no alcanza el recurso hacen que la petición muera antes, en otra guarda, con otro
+   `code` — y el escenario pasa a medir algo que no es lo suyo. El `Given` es la única fuente de
+   qué se está aislando; el resto del fixture tiene que ser **válido a propósito**. Cuando el mismo
+   endpoint ya aparece en otro escenario (de esta clase o de otra), cruza tu fixture con las
+   constraints y el alcance que aquel declara antes de darlo por bueno: tres de los seis
+   arbitrajes de una tanda real fueron este mismo defecto repetido.
+
 ## Aserciones: el cuerpo completo o nada
+
 
 - `assertBody(response, expectedJson)` compara con **JSONAssert en modo STRICT**: verifica
   en una sola aserción los campos presentes *y* la ausencia de los que no deben venir. Es la
@@ -979,6 +990,12 @@ Reglas, y las tres primeras son la misma idea:
 - **La espera va donde su fallo sea atribuible.** Si el correo es una *precondición* del
   escenario y no su `Then` —hay que esperarlo para sembrar lo siguiente—, no se sube a
   `@BeforeAll`: se envuelve en `awaitPreconditions(...)` desde `@BeforeEach`. Regla 9.
+- **Un `Then` sobre un estado transitorio se lee sin esperar.** «En este instante todavía no ha
+  salido», «aún no», «antes de que el despacho corra» son afirmaciones sobre el **ahora**, y se
+  leen con `mailCount`/`lastMailTo` directos. `assertNoMailTo` no vale ahí: espera —más de lo que
+  tarda el cron de despacho—, así que para cuando responde el correo ya salió y el escenario falla
+  midiendo un instante que no era el suyo. `assertNoMailTo` es para los rechazos **permanentes**:
+  el correo que no va a salir nunca.
 - `resetState()` vacía el buzón entre clases. Un correo del flujo anterior haría que el primer
   `awaitMailTo` devolviera el mensaje equivocado — el mismo fallo que la purga de los canales evita
   en el broker.

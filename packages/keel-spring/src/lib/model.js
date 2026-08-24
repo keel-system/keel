@@ -13,7 +13,7 @@ import {
   basePackage,
   brokerSafeName
 } from './naming.js';
-import { resolveType, beanValidationAnnotations, columnAnnotations } from './type-mapper.js';
+import { resolveType, beanValidationAnnotations, columnAnnotations, inheritedTypePattern } from './type-mapper.js';
 import { DATABASES } from './stack-catalog.js';
 
 const CRUD_PREFIXES = ['create', 'get', 'list', 'update', 'delete'];
@@ -72,6 +72,7 @@ export function buildModel({ manifest, layers, stack = null }) {
   const enums = collectEnums(domain, layers['http-clients'], warnings);
   const inlineEnumName = buildInlineEnumIndex(enums);
   const valueObjects = collectValueObjects(domainTypes, domainTypes, inlineEnumName, hasPersistence);
+  const formatTypes = collectFormatTypes(domainTypes);
   const entities = collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPersistence, warnings);
   attachTransitionExecutors(entities, layers['use-cases']?.operations ?? {});
 
@@ -162,7 +163,7 @@ export function buildModel({ manifest, layers, stack = null }) {
   // al mapper por parámetro (ver mappers.js).
   const needDtos = collectNeedDtos(layers, dependencies, services, domainTypes, inlineEnumName, warnings);
 
-  return { service, layersPresent, persistenceKind, enums, valueObjects, entities, services, errors, childDtos, refDtos, needDtos, hasFileUploads, events, messaging, subscriptions, pagination, api, audit, security, httpClients, dependencies, storage, mail, warnings };
+  return { service, layersPresent, persistenceKind, enums, valueObjects, formatTypes, entities, services, errors, childDtos, refDtos, needDtos, hasFileUploads, events, messaging, subscriptions, pagination, api, audit, security, httpClients, dependencies, storage, mail, warnings };
 }
 
 // El DTO de un dato ajeno expuesto, y su campo en la respuesta.
@@ -382,6 +383,17 @@ function resolveField(ownerName, fieldName, field, domainTypes, inlineEnumName, 
     // `validation` describe el valor ya formado y aquí se describe lo que llega
     // por el cable, que es antes de que el dominio ponga nada.
     inputValidation: beanValidationAnnotations(field, resolved, { inheritTypeFormat: false, honourDefault: true }),
+    // El formato que el campo hereda de su value type ESCALAR y que la entrada deja
+    // caer. Es lo que sostiene la clase `<Tipo>Format` del dominio y el gate que
+    // comprueba que alguien la llama: sin este dato aquí, el único sitio donde vive
+    // es la diferencia entre dos listas de anotaciones, que no es consultable.
+    // La misma cota que `collectFormatTypes`, y tiene que serlo: este dato es el que
+    // hace que la nota del command cite `<Tipo>Format` y que el gate exija una llamada.
+    // Si los dos lados no coincidieran, la nota mandaría a una clase que no se generó.
+    inheritedPattern:
+      resolved.kind === 'scalar-vt' && TEXT_BASES.has(resolved.base)
+        ? inheritedTypePattern(field, resolved)
+        : null,
     // Una colección no es una columna: su mapeo (@ElementCollection) lo pone la Jpa,
     // no columnAnnotations. Sin persistence o sin list, comportamiento previo.
     columns: persisted && !isList ? columnAnnotations(fieldName, field, resolved) : [],
@@ -413,6 +425,42 @@ function fieldInitializer(field, resolved) {
     if (resolved.base === 'timestamp') return 'Instant.now()';
   }
   return null;
+}
+
+// ─── Formato de los value types ESCALARES ────────────────────────────────────
+//
+// Un value type compuesto tiene clase propia y su constructor compacto hace cumplir
+// el `pattern` (value-types.js § patternGuards). Uno ESCALAR se aplana a su primitivo
+// y no tiene dónde: el DTO de entrada deja caer el formato a propósito —describe el
+// valor ya normalizado y Bean Validation corre antes de que el handler normalice—, y
+// si nadie lo recoge después, el formato no se comprueba en ningún sitio. Esto es el
+// «después»: una clase por tipo, con la regex del diseño escrita UNA vez.
+
+const TEXT_BASES = new Set(['string', 'text', 'json']);
+
+function collectFormatTypes(domainTypes) {
+  const formatTypes = [];
+  for (const [name, def] of Object.entries(domainTypes ?? {})) {
+    // Solo escalares: `values` es un enum y `fields` un compuesto, y los dos ya
+    // tienen su propio punto de cumplimiento.
+    if (!def?.base || def.values || def.fields) continue;
+    // Un `pattern` solo se puede hacer cumplir sobre texto: los bases que no se
+    // aplanan a String no llegan aquí ni aunque el diseño declare uno.
+    if (!TEXT_BASES.has(def.base)) continue;
+    const pattern = def.constraints?.pattern ?? null;
+    // Sin `pattern` no hay nada que comprobar aquí: `minLength`/`maxLength` sí
+    // sobreviven en el DTO de entrada, así que una clase para ellos no distinguiría
+    // «cumple» de «no mira».
+    if (!pattern) continue;
+    formatTypes.push({
+      name,
+      className: `${name}Format`,
+      base: def.base,
+      pattern,
+      description: def.description ?? null
+    });
+  }
+  return formatTypes;
 }
 
 // ─── Value objects compuestos ────────────────────────────────────────────────

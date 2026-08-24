@@ -46,6 +46,10 @@ misma raíz. Todo lo que hagas ocurre dentro de ella.
    factory de creación, métodos semánticos del `lifecycle`, guarda por invariante, value
    objects auto-validados y reparto de la validación entre capas — el dominio generado no
    trae setters y no se los añadas).
+   De ese reparto, la mitad que se olvida siempre: el formato de un value type ESCALAR no
+   está en el DTO de entrada (describe el valor ya normalizado), lo lleva la clase
+   `<Tipo>Format` que build genera, y hay que llamarla en TODOS los campos de ese tipo —
+   no solo donde un escenario lo exija. `infra/check-domain-guards.sh` lo comprueba.
    Al crear un servicio de dominio sigue `{{keel:docs}}/conventions/domain-services.md`; antes de
    paralelizar I/O en un handler consulta `{{keel:docs}}/conventions/virtual-threads.md` (solo
    query handlers con 2+ operaciones independientes).

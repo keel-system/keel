@@ -148,6 +148,25 @@ export function beanValidationAnnotations(field, resolved, { inheritTypeFormat =
 }
 
 /**
+ * El `pattern` que un campo HEREDA de su value type escalar, que es exactamente el
+ * que `beanValidationAnnotations(..., { inheritTypeFormat: false })` deja fuera del
+ * DTO de entrada. Null si el campo declara el suyo propio (entonces no se hereda
+ * nada y el de entrada lo conserva) o si el tipo no declara formato.
+ *
+ * Es la fuente ÚNICA de ese dato: lo consumen la nota del command (services.js),
+ * la clase `<Tipo>Format` del dominio (value-types.js) y el gate que verifica que
+ * alguien la llama (domain-guards-check.js). Con tres copias, el gate acabaría
+ * comprobando un formato distinto del que se genera.
+ *
+ * Para un campo COLECCIÓN el patrón es el del ELEMENTO: `resolved` ya es el tipo
+ * del elemento, no el del contenedor.
+ */
+export function inheritedTypePattern(field, resolved) {
+  if ((field?.constraints ?? {}).pattern != null) return null;
+  return resolved?.constraints?.pattern ?? null;
+}
+
+/**
  * Anotaciones JPA de columna para un campo de entidad persistida.
  * Devuelve una lista (puede incluir @Enumerated además de @Column).
  */
@@ -212,6 +231,6 @@ export function needsFieldType(base) {
   return base === 'decimal';
 }
 
-function escapeJava(value) {
+export function escapeJava(value) {
   return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }

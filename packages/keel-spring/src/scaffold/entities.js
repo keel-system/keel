@@ -132,9 +132,28 @@ function renderEntity(model, entity) {
 
   bodyParts.push(declarations.join('\n\n'));
 
+  // Formato de los value types escalares: el DTO de entrada lo deja caer a propósito
+  // (describe el valor ya normalizado) y la clase <Tipo>Format es quien lo hace cumplir.
+  // Se nombran aquí, campo a campo, porque el sitio donde tienen que llamarse es este:
+  // sin decir cuáles, la corrida real solo los puso donde un escenario los exigía.
+  const formatGuards = entity.fields.filter((field) => field.inheritedPattern && field.typeName);
+  for (const field of formatGuards) {
+    imports.add(`${subPackage(model, 'domain.valueobject')}.${field.typeName}Format`);
+  }
+  const guardTodo = formatGuards.length
+    ? [
+        '',
+        '    // TODO (agente): formato de los value types, tras normalizar, en el factory y en TODO',
+        ...formatGuards.map(
+          (field) =>
+            `    //   método que asigne el campo: ${field.typeName}Format.validate(${field.list ? `cada elemento de ${field.name}` : field.name});`
+        )
+      ].join('\n')
+    : '';
+
   bodyParts.push(`    // TODO (agente): factory de creación create(...) que aplique los invariantes,
     // derive los campos generated/computed y fije el estado inicial del lifecycle
-    // (conventions/domain-modeling.md). La mutación va por métodos de negocio, no por setters.`);
+    // (conventions/domain-modeling.md). La mutación va por métodos de negocio, no por setters.${guardTodo}`);
 
   if (members.length > 0 || entity.isAggregateRoot) {
     const paramParts = members.map((m) => `${m.javaType} ${m.name}`);
