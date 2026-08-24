@@ -31,10 +31,15 @@ const JAVA = 'src/main/java/com/platform/notificationmailer';
  * La fixture de correo con la silueta que la suya no tiene: un estado EN VUELO entre la
  * aceptación y el desenlace, y una operación interna que lo atraviesa mandando el correo.
  */
-function withGuardedSend({ stamp = true } = {}) {
+function withGuardedSend({ stamp = true, model = 'relational' } = {}) {
   const { manifest, layers, errors } = loadService(fixtureDir);
   assert.deepEqual(errors, []);
   const patched = structuredClone(layers);
+
+  // El modelo de persistencia lo declara el DISEÑO, y el motor va detrás. Con `document`
+  // el reclamo cambia de forma entera —findAndModify en vez de UPDATE condicional— y esa
+  // rama no la cubría ninguna fixture: ninguna combina modelo documental con capa `mail`.
+  patched.persistence.default = { ...(patched.persistence.default ?? {}), model };
 
   patched.domain.types.NotificationStatus.values = ['accepted', 'sending', 'sent', 'failed'];
   patched.domain.entities.Notification.lifecycle.transitions = {
@@ -67,7 +72,8 @@ function withGuardedSend({ stamp = true } = {}) {
   patched.mail.sentBy = ['sendAcceptedNotification'];
 
   const workspace = tmpDir('keel-guardclaim-');
-  const result = scaffoldService({ manifest, layers: patched, workspace, force: true });
+  const stack = model === 'document' ? { database: 'mongodb' } : undefined;
+  const result = scaffoldService({ manifest, layers: patched, workspace, force: true, stack });
   const read = (relative) => fs.readFileSync(path.join(workspace, result.outDir, relative), 'utf8');
   return { read, warnings: result?.warnings ?? [] };
 }
@@ -145,6 +151,80 @@ test('y el gate lo exige, porque ningún escenario FL-* puede verlo fallar', () 
   assert.ok(
     gate.includes(String.raw`\.?claimForSendAcceptedNotification\s*\(`),
     'el patrón del gate llegó al bash con los escapes comidos'
+  );
+});
+
+// ─── La misma guarda en el modelo documental ─────────────────────────────────
+//
+// No es una variante del mismo código: es otra forma entera. Donde el relacional necesita
+// un UPDATE condicional y una transacción propia para que la marca sea visible, Mongo lo
+// resuelve con findAndModify —filtro y escritura en la MISMA operación atómica sobre el
+// documento—, y por eso ahí no hace falta abrir ninguna transacción.
+//
+// Esta rama existía sin que ningún test la mirara: ninguna fixture combina modelo
+// documental con capa `mail`, así que se generaba a ciegas.
+
+test('documental: la guarda es un findAndModify, atómico y sin transacción propia', () => {
+  const { read } = withGuardedSend({ model: 'document' });
+  const adapter = read(`${JAVA}/infrastructure/persistence/repositories/NotificationRepositoryImpl.java`);
+  const method = adapter.slice(adapter.indexOf('public Optional<Notification> claimForSendAcceptedNotification'));
+
+  assert.match(method, /mongoTemplate\.findAndModify\(/, 'no se reclama con findAndModify');
+  // El filtro es la exclusión: la fila se toma SOLO si sigue en su estado de partida.
+  assert.match(method, /Criteria\.where\("_id"\)\.is\(id\)/);
+  assert.match(method, /\.and\("status"\)\.in\(List\.of\(NotificationStatus\.ACCEPTED\)\)/);
+  assert.match(method, /returnNew\(true\)/, 'sin returnNew se devuelve el documento de ANTES del reclamo');
+  // REQUIRES_NEW es la respuesta relacional a un problema que aquí no existe: pedirla
+  // obligaría a un replica set solo para esto.
+  assert.ok(
+    !method.includes('REQUIRES_NEW'),
+    'el reclamo documental no necesita transacción: findAndModify ya es atómico'
+  );
+});
+
+test('documental: el estado en vuelo se estampa en la misma operación', () => {
+  const { read } = withGuardedSend({ model: 'document' });
+  const adapter = read(`${JAVA}/infrastructure/persistence/repositories/NotificationRepositoryImpl.java`);
+  assert.match(
+    adapter,
+    /new Update\(\)\.set\("status", NotificationStatus\.SENDING\)\.set\("sendingSince", Instant\.now\(\)\)/,
+    'la marca de tiempo no entra en el findAndModify: el rescate no encontraría a sus candidatos'
+  );
+  // Los nombres son los de la PROPIEDAD, no los del campo BSON: el QueryMapper los resuelve
+  // por @Field. Escribirlos ya en snake_case funcionaría por accidente —una ruta que no
+  // resuelve se pasa tal cual— y dejaría de funcionar en cuanto cambiara el mapeo.
+  assert.ok(!adapter.includes('"sending_since"'), 'se nombró el campo BSON en vez de la propiedad');
+});
+
+test('documental: sin marca declarada, el reclamo solo cambia el estado', () => {
+  const { read } = withGuardedSend({ model: 'document', stamp: false });
+  const adapter = read(`${JAVA}/infrastructure/persistence/repositories/NotificationRepositoryImpl.java`);
+  assert.match(adapter, /new Update\(\)\.set\("status", NotificationStatus\.SENDING\);/);
+  assert.ok(!adapter.includes('sendingSince'), 'se estampa un campo que el documento no declara');
+});
+
+test('documental: no se cuela nada de la rama relacional', () => {
+  // El puerto es el MISMO en las dos ramas, así que un método declarado allí y no
+  // implementado aquí no compila. Y al revés: un @Modifying en un proyecto Mongo sería
+  // código muerto que nadie ejecuta.
+  const { read } = withGuardedSend({ model: 'document' });
+  const adapter = read(`${JAVA}/infrastructure/persistence/repositories/NotificationRepositoryImpl.java`);
+  assert.ok(!adapter.includes('@Modifying'), 'se generó la escritura relacional en el adaptador documental');
+  assert.ok(
+    read(`${JAVA}/domain/repository/NotificationRepository.java`).includes(
+      'Optional<Notification> claimForSendAcceptedNotification(UUID id);'
+    ),
+    'el puerto compartido perdió el reclamo en el modelo documental'
+  );
+});
+
+test('documental: el gate sigue exigiendo la guarda', () => {
+  // El reparto build/agente no cambia con el motor: build genera el reclamo, el uso lo
+  // escribe el agente, y sin gate ese tramo no lo verifica nadie.
+  const { read } = withGuardedSend({ model: 'document' });
+  assert.match(
+    read('infra/check-idempotency.sh'),
+    /unit 'mailDelivery' 'sendAcceptedNotification · guarda confirmada antes del envío'/
   );
 });
 
