@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
 import { loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
+import { harnessQueueName } from '../src/scaffold/messaging-provisioning.js';
 
 const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
@@ -68,15 +69,26 @@ test('en RabbitMQ un canal que PUBLICAMOS se traduce a nuestro destino, no al de
   assert.match(bodyOf(source, purge), /physicalDestination\(destination\)/);
 });
 
-test('en SNS/SQS tampoco lo parten las suscripciones: lo que publicamos tiene destino propio', () => {
-  // Aquí el defecto era peor que leer del buzón equivocado. Las tres suscripciones de
-  // `stockEvents` dan tres colas distintas, así que el canal caía en SPLIT_ACROSS y resolver
-  // LANZABA — reventando el humo del arnés para un canal cuyo destino de publicación está
-  // perfectamente definido. Un canal que publicamos nunca es ambiguo.
+test('en SNS/SQS lo publicado se lee de la cola de arnés, que se llama como el canal', () => {
+  // Aquí había dos defectos encadenados, y el segundo lo destapó la corrida de SNS/SQS.
+  //
+  // El primero: las tres suscripciones de `stockEvents` dan tres colas distintas, así que el
+  // canal caía en SPLIT_ACROSS y resolver LANZABA — reventando el humo del arnés para un
+  // canal cuyo destino de publicación está perfectamente definido. Un canal que publicamos
+  // nunca es ambiguo.
+  //
+  // El segundo: ese destino NO es el mismo que en RabbitMQ. En SNS/SQS `<slug>-events` es un
+  // TOPIC, y de un topic no se lee; el aprovisionamiento crea una cola de arnés cuyo nombre
+  // ES el del canal (`harnessQueueName`). Traducir aí el topic compone una URL de cola que no
+  // existe: la lectura muere con NonExistentQueue, o peor, no encuentra nada nunca y toda
+  // aserción negativa pasa en verde sin mirar.
   const source = harness('stock-reservation', 'snssqs');
 
-  assert.match(source, /Map\.entry\("stockEvents", "stock-reservation-events"\)/);
+  assert.equal(harnessQueueName('stockEvents'), 'stockEvents');
+  assert.ok(!source.includes('Map.entry("stockEvents"'), 'traduce un canal cuyo destino ya es él mismo');
   assert.ok(!source.includes('SPLIT_ACROSS'), source);
+  // Resolver sigue siendo un punto único aunque aquí sea la identidad.
+  assert.match(source, /protected static String physicalDestination\(String destination\)/);
 });
 
 test('sin ninguna suscripción con destino propio, resolver es la identidad y no se emite tabla', () => {

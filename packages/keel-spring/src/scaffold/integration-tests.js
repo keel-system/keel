@@ -20,6 +20,7 @@ import { usesOutbox } from './outbox.js';
 import {
   deadLetterDestination,
   deadLetterSubscriptions,
+  publishedDestination,
   subscriptionDestination,
   usesDeadLetter
 } from '../lib/dead-letter.js';
@@ -2819,8 +2820,13 @@ function physicalDestinationSection(model) {
   // publicamos, y con SNS/SQS ni eso — varias suscripciones lo partían en varias colas,
   // el canal caía en SPLIT_ACROSS y resolver LANZABA, reventando el humo del arnés para
   // un canal cuyo destino de publicación estaba perfectamente definido.
+  //
+  // Y el destino de un canal publicado NO es el mismo en los tres brokers, que es la
+  // segunda mitad del arreglo y la que se destapó en la corrida de SNS/SQS: en RabbitMQ se
+  // lee de la cola del destino único del servicio, pero en SNS/SQS eso es un TOPIC, y de un
+  // topic no se lee — el aprovisionamiento crea una cola de arnés cuyo nombre ES el del
+  // canal. Lo resuelve `publishedDestination`, que es la fuente única.
   const publishedChannels = model.messaging?.publishChannels ?? [];
-  const publishDestination = model.messaging?.destinationDefault ?? '';
 
   // El canal del que cuelga cada suscripción. Sin `channel` declarado, el canal ES su
   // destino y no hay nada que traducir.
@@ -2838,8 +2844,10 @@ function physicalDestinationSection(model) {
   }
 
   const resolved = publishedChannels
-    .filter((channel) => channel !== publishDestination)
-    .map((channel) => [channel, publishDestination]);
+    .map((channel) => [channel, publishedDestination(broker.id, model, channel)])
+    // Donde el destino ES el canal (SNS/SQS y su cola de arnés), resolver es la identidad y
+    // una entrada sería ruido que además invita a creer que ahí hay algo que traducir.
+    .filter(([channel, destination]) => channel !== destination);
   const ambiguous = [];
   for (const [channel, subs] of byChannel) {
     const destinations = [...new Set(subs.map((sub) => sub.physical))];

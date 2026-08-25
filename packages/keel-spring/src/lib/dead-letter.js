@@ -53,6 +53,27 @@ export function subscriptionDestination(broker, model, sub) {
   return broker === 'snssqs' ? `${model.service.artifactId}-${kebabCase(sub.name)}` : sub.topicDefault;
 }
 
+/**
+ * De dónde LEE el arnés lo que este servicio publica en un canal, que tampoco es lo mismo
+ * en los tres brokers — y es el gemelo de `subscriptionDestination`, con la misma trampa.
+ *
+ * En RabbitMQ se publica al destino único del servicio (`<slug>.events`) y de esa cola se
+ * lee. En SNS/SQS eso es un TOPIC, y de un topic no se lee: el aprovisionamiento crea una
+ * cola de arnés colgada de él cuyo nombre ES el del canal (`harnessQueueName`), así que ahí
+ * resolver es la identidad. Confundirlos compone una URL de cola que no existe, y la
+ * lectura muere con NonExistentQueue — o, peor, un `publishedMessages` que nunca encuentra
+ * nada y deja pasar en verde toda aserción negativa.
+ *
+ * Vive aquí por la misma razón que su gemelo: componerlo a mano en cada emisor es
+ * exactamente cómo se rompe.
+ */
+export function publishedDestination(broker, model, channel) {
+  // En SNS/SQS, la cola de arnés se llama como el canal (messaging-provisioning.js
+  // § harnessQueueName): resolver es la identidad y no hay entrada que emitir.
+  if (broker === 'snssqs') return channel;
+  return model.messaging?.destinationDefault ?? channel;
+}
+
 /** El destino de descarte de una suscripción, ya resuelto para su broker. */
 export function deadLetterDestination(broker, model, sub) {
   return deadLetterName(broker, subscriptionDestination(broker, model, sub));
