@@ -378,7 +378,12 @@ test('sin suscripciones con descarte no se marca ni se purga ningún DLT', () =>
   // `DEAD_LETTER_OF` solo existe si alguna suscripción lo declara: citarlo sin más
   // dejaría el arnés sin compilar en todo diseño que no use descarte.
   assert.ok(!harness.includes('DEAD_LETTER_OF'));
-  assert.ok(!harness.includes('import java.util.Set;'));
+  // Lo que se afirma es que no se marca ni se purga un DLT, no que falte un import
+  // concreto: `java.util.Set` tiene desde el arreglo del drenaje del outbox una segunda
+  // razón legítima para estar (OUTBOX_CHANNELS), y atar el test a él lo convertió en un
+  // proxy que se rompe por cambios que no tienen nada que ver con el descarte.
+  assert.ok(!harness.includes('deadLetterTopic'));
+  assert.ok(!harness.includes('DEAD_LETTER'));
   assert.ok(harness.includes('markChannels();'));
 });
 

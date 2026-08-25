@@ -185,6 +185,12 @@ const MATRIX = [
   // reclamo (barrido, relay del outbox y reconciliación), que en las demás filas no la
   // tokeniza nadie — y un import condicional mal puesto ahí no lo ve ningún includes().
   ['stock-reservation', { broker: 'kafka', database: 'h2' }],
+  // Y con RabbitMQ, que es donde `stockEvents` se usa en los DOS sentidos sobre el mismo
+  // broker: publicamos en él y nos suscribimos a él. Esa combinación renderiza la tabla
+  // PHYSICAL_OF, la espera al drenaje del outbox y el vacío propio del broker — tres
+  // secciones que en las filas de Kafka no las tokeniza nadie, y las tres se tocaron
+  // arreglando lo que reportó una corrida en vivo.
+  ['stock-reservation', { broker: 'rabbitmq' }],
   ['inspection-reports', {}],
   // La silueta documental TRANSVERSAL: seguridad, caché, storage, clientes salientes
   // e idempotencia de petición sobre Mongo. Dos brokers porque su listener y su relay

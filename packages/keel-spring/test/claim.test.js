@@ -333,3 +333,73 @@ test('y con un motor que sí reparte no se avisa de nada', () => {
 
   assert.deepEqual(model.warnings, []);
 });
+
+// ─── El reloj del reclamo ────────────────────────────────────────────────────
+//
+// Un reclamo que solo mueve el estado deja una ventana entre su commit (transacción
+// propia) y la escritura que estampa el reloj. La réplica que muera ahí deja la fila en el
+// estado nuevo con el reloj a NULL — y quien vendría a recogerla filtra por
+// `reloj < :staleBefore`, donde NULL no es «viejo», es UNKNOWN. Esa fila no vuelve a entrar
+// en ningún lote nunca más: el fallo que el rescate existía para cerrar, un paso antes.
+//
+// Lo destapó una corrida en vivo, y ningún gate ni ningún FL-* lo veía: el escenario del
+// rescate coloca la fila CON el reloj puesto, que es el estado posterior a la ventana.
+
+/** Una cola que desemboca en un estado en vuelo, que es donde vive el defecto. */
+const queueThenRescue = () =>
+  layersWith({
+    sweepTransitions: [
+      { entity: 'Job', from: ['queued'], to: 'running' },
+      { entity: 'Job', from: ['running'], to: 'done' }
+    ],
+    stampField: 'runningSince'
+  });
+
+test('el reclamo de una COLA estampa el reloj del rescate en su propio UPDATE', () => {
+  const model = modelFor(queueThenRescue());
+  const [queue, rescue] = sweepOf(model).claim;
+
+  assert.equal(queue.method, 'claimForDrainJobsRunning');
+  assert.deepEqual(queue.stamps, { field: 'runningSince', reason: 'el rescate del barrido' });
+  // El rescate SACA de `running`, no mete: su destino (`done`) no lo espera ningún reloj.
+  assert.equal(rescue.method, 'claimForStalledDrainJobsDone');
+  assert.equal(rescue.stamps, undefined);
+
+  const jpa = fileNamed(generateRepositories(model), 'JobJpaRepository.java');
+  assert.match(
+    jpa,
+    /update JobJpa e set e\.status = :to, e\.runningSince = :claimedAt where e\.id = :id and e\.status in :states"\)/
+  );
+  assert.match(jpa, /int claimForDrainJobsRunning\(.*@Param\("claimedAt"\) Instant claimedAt\);/);
+});
+
+test('el instante es uno por tanda, no uno por fila', () => {
+  const adapter = fileNamed(generateRepositories(modelFor(queueThenRescue())), 'JobRepositoryImpl.java');
+
+  // Fuera del bucle: recalcularlo por fila daría relojes distintos a filas que la misma
+  // instancia se llevó en la misma pasada.
+  const method = adapter.slice(adapter.indexOf('claimForDrainJobsRunning(int batchSize)'));
+  const body = method.slice(0, method.indexOf('\n    }'));
+  assert.match(body, /Instant claimedAt = Instant\.now\(\);[\s\S]*for \(UUID id : candidates\)/);
+  assert.match(body, /claimForDrainJobsRunning\(id, states, JobStatus\.RUNNING, claimedAt\) == 1/);
+});
+
+test('sin nadie que espere ese reloj, el reclamo no estampa nada', () => {
+  // `drainJobs` saca de la cola y punto: a `done` no lo barre ningún mecanismo con cota,
+  // así que estampar ahí sería escribir en una columna que nadie lee.
+  const model = modelFor(queueSweep());
+  const [claim] = sweepOf(model).claim;
+
+  assert.equal(claim.stamps, undefined);
+  const jpa = fileNamed(generateRepositories(model), 'JobJpaRepository.java');
+  assert.match(jpa, /update JobJpa e set e\.status = :to where e\.id = :id and e\.status in :states"\)/);
+  assert.ok(!jpa.includes('claimedAt'));
+});
+
+test('la rama documental estampa el reloj dentro del mismo findAndModify', () => {
+  const adapter = fileNamed(generateDocumentRepositories(modelFor(queueThenRescue(), 'mongodb')), 'JobRepositoryImpl.java');
+
+  // En el mismo Update: fuera de él habría la misma ventana que en SQL.
+  assert.match(adapter, /new Update\(\)\.set\("status", JobStatus\.RUNNING\)\.set\("runningSince", claimedAt\)/);
+  assert.match(adapter, /Instant claimedAt = Instant\.now\(\);/);
+});

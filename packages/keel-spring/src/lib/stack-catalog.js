@@ -129,7 +129,18 @@ export const DATABASES = {
       "mysql -h db -u {user} -p'{pass}' -N -B -e 'SELECT CONCAT(\"TRUNCATE TABLE \", table_name, \";\") FROM information_schema.tables WHERE table_schema = \"{db}\" AND table_name <> \"flyway_schema_history\"' | mysql -h db -u {user} -p'{pass}' --init-command='SET FOREIGN_KEY_CHECKS=0' {db}",
     cliDropSchemaCmd:
       "mysql -h db -u {user} -p'{pass}' -N -B -e 'SELECT CONCAT(\"DROP TABLE IF EXISTS \", table_name, \";\") FROM information_schema.tables WHERE table_schema = \"{db}\"' | mysql -h db -u {user} -p'{pass}' --init-command='SET FOREIGN_KEY_CHECKS=0' {db}",
-    alpinePackages: ['mysql-client'],
+    // `mysql-client` en Alpine es el cliente de MariaDB, y ese binario NO trae
+    // `caching_sha2_password.so` — que es el plugin de autenticación por defecto de
+    // MySQL 8, la imagen que este mismo catálogo levanta abajo. Sin el connector, TODO
+    // lo que hable con la base desde devtools muere con `ERROR 1045: Plugin
+    // caching_sha2_password could not be loaded`: el sondeo de validate-infra.sh, los dos
+    // modos de reset-db.sh y el `db(...)` del arnés. Y muere como FALSO NEGATIVO, que es
+    // lo caro: el servidor está sano y las credenciales son correctas, así que se busca
+    // el fallo donde no está. `mariadb-connector-c` es quien aporta el plugin.
+    //
+    // MariaDB no lo necesita (usa mysql_native_password), y los demás motores o salen por
+    // curl o traen su CLI en la imagen del servidor.
+    alpinePackages: ['mysql-client', 'mariadb-connector-c'],
     composeService: (db) => ({
       image: 'mysql:8.0',
       environment: {

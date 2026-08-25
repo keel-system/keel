@@ -71,3 +71,32 @@ public ValidateProductsResponseDto handle(ValidateProductsQuery query) {
   `ExecutionException`; desenvuélvelas propagando la `RuntimeException` de dominio tal
   cual (el `code` del diseño debe llegar intacto al `ApiExceptionHandler`). Ante
   `InterruptedException`, re-interrumpe el hilo (`Thread.currentThread().interrupt()`).
+
+## Dónde NO llegan los hilos virtuales: lo que corre por reloj
+
+El servicio arranca con `spring.threads.virtual.enabled: true`, y para atender peticiones es
+lo correcto: un hilo que se pasa la vida bloqueado en I/O es exactamente el caso para el que
+existen. Pero hay una frontera, y está en los `@Scheduled`.
+
+Casi toda tarea programada de este generador —el relay del outbox, un barrido, una purga—
+empieza reclamando un lote contra la base de datos. El driver JDBC y el pool de conexiones se
+bloquean dentro de secciones `synchronized`, y ahí un hilo virtual **no suelta su carrier: se
+queda clavado en él** (*pinning*). Con varias tareas coincidiendo, los carriers disponibles se
+agotan y los `@Scheduled` dejan de dispararse a su hora. Medido en una corrida: un cron de cada
+minuto salió casi **cuatro minutos** tarde.
+
+Y no da error. El barrido corre, hace su trabajo y llega tarde — que en un mecanismo con cota
+temporal encima (un rescate, una reconciliación) significa que la cota deja de medir lo que
+decía. Es un fallo que no aparece en una máquina de desarrollo con una instancia y sin carga.
+
+Por eso `build` genera `infrastructure/configurations/scheduling/SchedulingConfig`: un
+`ThreadPoolTaskScheduler` de **hilos de plataforma**, con un hilo por tarea programada.
+
+- **No lo borres ni lo sustituyas por configuración.** `spring.task.scheduling.pool.size` no
+  tiene efecto con hilos virtuales activados: la propiedad se escribe, no se lee y nada avisa.
+  Lo que funciona es que el bean exista — la auto-configuración de Boot solo pone el suyo si no
+  hay ninguno.
+- **Un hilo por tarea, no menos.** Acotarlo serializa los barridos entre sí, y entonces uno
+  lento retrasa la entrega de eventos del outbox. El tamaño sale de `scheduling.pool-size`.
+- **Todo lo demás sigue en hilos virtuales**: web, listeners del broker, clientes salientes y
+  el paralelismo dentro de un handler que describe el resto de este documento.

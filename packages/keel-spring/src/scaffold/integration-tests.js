@@ -34,6 +34,7 @@ import {
   deliverShell,
   collapseToSingleLineJava,
   emptyReadJava,
+  emptyReadValue,
   expr,
   javaArgs,
   offsetsParts,
@@ -580,6 +581,9 @@ function abstractImports(model) {
   // multiplexadas sobre el mismo topic comparten DLT, y marcarlo dos veces gastaría un
   // sondeo de más contra el broker por cada clase de flujo.
   if (broker?.id === 'kafka' && usesDeadLetter(model)) imports.push('java.util.Set');
+  // La espera al drenaje del outbox declara su propio Set de canales publicados, y se
+  // emite con los tres brokers (a diferencia del de arriba, que es solo de Kafka).
+  if (drainsOutbox(model)) imports.push('java.util.Set');
   // Lectura del buzón: la dirección del escenario va codificada en la URL de
   // búsqueda, así que la sección necesita el codificador y su charset.
   if (hasMail(model)) imports.push(...MAIL_IMPORTS, 'java.util.ArrayList', 'java.util.List', 'java.util.Map');
@@ -819,7 +823,19 @@ ${layersPresent.api ? `
 
     @Autowired
     protected TestRestTemplate rest;
-${security && tokenProtocol(model) ? '\n    private final Map<String, String> credentials = new ConcurrentHashMap<>();\n' : ''}${inMemoryStateFields(model)}
+${security && tokenProtocol(model) ? `
+    private final Map<String, String> credentials = new ConcurrentHashMap<>();
+
+    /**
+     * Cuánta vida le tiene que quedar a un token cacheado para seguir sirviendo. Cubre lo que
+     * tarde la petición en llegar y el desfase de reloj con el proveedor de identidad.
+     */
+    private static final Duration TOKEN_RENEWAL_MARGIN = Duration.ofSeconds(30);
+
+    /** El claim {@code exp} dentro del payload del JWT, leído sin librerías de por medio. */
+    private static final java.util.regex.Pattern EXP_CLAIM =
+            java.util.regex.Pattern.compile("\\"exp\\"\\\\s*:\\\\s*(\\\\d+)");
+` : ''}${inMemoryStateFields(model)}
     @BeforeAll
     void configureHttpClient() {
         // El factory por defecto (HttpURLConnection) no soporta PATCH; el del
@@ -2605,13 +2621,31 @@ function outboxDrainSection(model) {
     .join(', ');
   // Mismos nombres de almacenamiento en los dos modelos (outbox.js): la columna/campo
   // `published_at` a null es la fila que el relay todavía no entregó.
+  // Se consulta por EVENT_TOPIC, NO por el canal que recibe `purgeMessages`. La columna
+  // `destination` la escribe el publicador con `messaging.publishing.destination` —el
+  // destino FÍSICO, `<slug>.events`—, mientras que el canal es la agrupación LÓGICA del
+  // diseño (`stockEvents`). Consultar por el canal daba `COUNT(*) = 0` siempre: la espera
+  // volvía al instante sin esperar a nada, que es justo lo que su javadoc dice evitar.
   const statement =
     entry.kind === 'document'
-      ? '"db.getCollection(\\"outbox_event\\").countDocuments({ destination: \\"" + destination + "\\", published_at: null })"'
-      : '"SELECT COUNT(*) FROM outbox_event WHERE destination = \'" + destination + "\' AND published_at IS NULL"';
+      ? '"db.getCollection(\\"outbox_event\\").countDocuments({ destination: \\"" + OUTBOX_DESTINATION + "\\", published_at: null })"'
+      : '"SELECT COUNT(*) FROM outbox_event WHERE destination = \'" + OUTBOX_DESTINATION + "\' AND published_at IS NULL"';
+  const published = model.messaging?.publishChannels ?? [];
   return `
     /** Cuánto se espera, como mucho, a que el relay entregue lo que tenga pendiente. */
     private static final Duration OUTBOX_DRAIN_TIMEOUT = Duration.ofSeconds(15);
+
+    /**
+     * El destino FÍSICO que el publicador escribe en {@code outbox_event.destination}, que es
+     * {@code messaging.publishing.destination} y NO el canal lógico del diseño. Se declara aquí
+     * y no se reutiliza {@code EVENT_TOPIC} porque aquella constante solo existe en la rama
+     * Kafka del arnés, y esta espera se emite con los tres brokers.
+     */
+    private static final String OUTBOX_DESTINATION =
+            System.getenv().getOrDefault("${model.messaging?.destinationEnv ?? 'MESSAGING_DESTINATION'}", "${model.messaging?.destinationDefault ?? ''}");
+
+    /** Canales que ESTE servicio publica: son los únicos cuyo trabajo pasa por nuestro outbox. */
+    private static final Set<String> OUTBOX_CHANNELS = Set.of(${published.map((name) => `"${name}"`).join(', ')});
 
     /**
      * Espera a que no queden filas de {@code outbox_event} sin publicar para este
@@ -2619,8 +2653,13 @@ function outboxDrainSection(model) {
      * un evento del escenario anterior aterrice después de la purga.
      */
     private static void awaitOutboxDrained(String destination) {
+        // Un canal que este servicio no publica no pasa por nuestro outbox: no hay relay
+        // que pueda entregar tarde, así que no hay nada que esperar.
+        if (!OUTBOX_CHANNELS.contains(destination)) {
+            return;
+        }
         Instant deadline = Instant.now().plus(OUTBOX_DRAIN_TIMEOUT);
-        while (Instant.now().isBefore(deadline) && pendingOutboxRows(destination) > 0) {
+        while (Instant.now().isBefore(deadline) && pendingOutboxRows() > 0) {
             try {
                 Thread.sleep(150L);
             } catch (InterruptedException interrupted) {
@@ -2631,12 +2670,13 @@ function outboxDrainSection(model) {
     }
 
     /**
-     * Filas del outbox aún sin entregar para ese destino.
+     * Filas del outbox aún sin entregar.
      *
-     * <p>Cualquier fallo se traduce a 0 —seguir adelante— a propósito: esto acota una
-     * carrera, y un error leyendo la tabla no es una condición del escenario.
+     * <p>Un fallo aquí NO se traduce a 0. Cero significa «drenado», así que tragarse el
+     * error convierte una consulta rota en una espera que siempre pasa: los escenarios de
+     * outbox seguirían corriendo, en verde, sin esperar a nada. Que se oiga.
      */
-    private static int pendingOutboxRows(String destination) {
+    private static int pendingOutboxRows() {
         try {
             String output = db(${argv}, ${statement});
             // Solo la ÚLTIMA línea: un cliente puede escribir avisos antes del resultado, y
@@ -2646,7 +2686,10 @@ function outboxDrainSection(model) {
             String digits = trimmed.substring(lastBreak + 1).replaceAll("[^0-9]", "");
             return digits.isEmpty() ? 0 : Integer.parseInt(digits);
         } catch (RuntimeException e) {
-            return 0;
+            throw new IllegalStateException(
+                    "No se pudo leer outbox_event para saber si el relay había drenado. Sin esa lectura la "
+                            + "espera del outbox no espera a nada y lo que dependa de ella mide humo.",
+                    e);
         }
     }
 `;
@@ -2764,11 +2807,29 @@ function queryCountSection(model) {
  */
 function physicalDestinationSection(model) {
   const broker = brokerEntry(model);
+  // Los canales que ESTE servicio publica, y su destino: el único
+  // `messaging.publishing.destination` por el que sale todo lo nuestro.
+  //
+  // Se miran PRIMERO y ganan, y esa precedencia es el arreglo de un defecto real. Antes
+  // este mapa se construía solo desde `model.subscriptions`, así que un canal usado en
+  // los dos sentidos —publicamos en él Y nos suscribimos a él, que es la silueta de
+  // cualquier servicio que encarga trabajo y espera la respuesta por el mismo canal—
+  // recibía la entrada de la SUSCRIPCIÓN por ser la única que se miraba. Resultado:
+  // `publishedMessages("<canal>")` leía la cola del proveedor en vez del destino donde
+  // publicamos, y con SNS/SQS ni eso — varias suscripciones lo partían en varias colas,
+  // el canal caía en SPLIT_ACROSS y resolver LANZABA, reventando el humo del arnés para
+  // un canal cuyo destino de publicación estaba perfectamente definido.
+  const publishedChannels = model.messaging?.publishChannels ?? [];
+  const publishDestination = model.messaging?.destinationDefault ?? '';
+
   // El canal del que cuelga cada suscripción. Sin `channel` declarado, el canal ES su
   // destino y no hay nada que traducir.
   const byChannel = new Map();
   for (const sub of model.subscriptions ?? []) {
     if (!sub.channel) continue;
+    // Lo que publicamos manda: para ese canal el destino no es ambiguo ni es el del
+    // proveedor, es el nuestro.
+    if (publishedChannels.includes(sub.channel)) continue;
     const physical = subscriptionDestination(broker.id, model, sub);
     if (physical === sub.channel) continue;
     const bucket = byChannel.get(sub.channel) ?? [];
@@ -2776,7 +2837,9 @@ function physicalDestinationSection(model) {
     byChannel.set(sub.channel, bucket);
   }
 
-  const resolved = [];
+  const resolved = publishedChannels
+    .filter((channel) => channel !== publishDestination)
+    .map((channel) => [channel, publishDestination]);
   const ambiguous = [];
   for (const [channel, subs] of byChannel) {
     const destinations = [...new Set(subs.map((sub) => sub.physical))];
@@ -2826,7 +2889,10 @@ function physicalDestinationSection(model) {
     /**
      * Canal del diseño → destino físico real en el broker (${broker.label}).
      *
-     * <p>Para un canal que este servicio PUBLICA, el nombre físico es el del canal. El de una
+     * <p>Para un canal que este servicio PUBLICA, el destino físico es
+     * \`messaging.publishing.destination\` —uno solo para todo lo nuestro, con los eventos
+     * distinguidos por routing key—, y NO el nombre del canal ni, aunque el mismo canal se
+     * consuma, la cola del proveedor. El de una
      * SUSCRIPCIÓN lo deriva build de su \`source\` —y en SNS/SQS es además la cola propia del
      * consumidor—, no del nombre del canal: hablarle al canal a secas es hablarle a un destino que
      * no existe. Es la misma correspondencia que usan \`infra/reset-db.sh\` y la configuración del
@@ -2863,10 +2929,16 @@ function brokerSection(model) {
      * escenario tiene el broker parado</b>, y solo ese. La condición es el flag, no el
      * tipo de error: una infraestructura que se cae por su cuenta sigue reventando la
      * suite en el punto donde se cayó.
+     *
+     * <p>Y «vacío» se dice como lo diga ${broker.label}, no con la cadena vacía. Cada broker
+     * tiene su forma y el predicado que la reconoce es el mismo que usa el resto del arnés
+     * (lib/broker-probes.js): devolver {@code ""} donde este espera {@code "[]"} hacía fallar
+     * la aserción de canal vacío justo en el único escenario para el que esta palanca existe
+     * —el broker caído y el outbox reteniendo—.
      */
     private static String emptyIfBrokerStopped(RuntimeException e) {
         if (brokerIntentionallyStopped()) {
-            return "";
+            return ${javaString(emptyReadValue(broker.id))};
         }
         throw e;
     }
@@ -3538,7 +3610,7 @@ ${clientKeys}        throw new IllegalArgumentException("Cliente de servicio no 
      * adivinasen cada una su secreto es exactamente lo que bloqueaba la suite entera.
      */
     protected String serviceCredential(String client) {
-        return credentials.computeIfAbsent("client:" + client, key ->
+        return cachedToken("client:" + client, () ->
             requestToken("grant_type=client_credentials"
                 + "&client_id=" + client
                 + "&client_secret=" + clientSecret(client)));
@@ -3584,11 +3656,58 @@ ${clientKeys}        throw new IllegalArgumentException("Cliente de servicio no 
      * (AUTH_TOKEN_URL, AUTH_TEST_CLIENT, AUTH_TEST_PASSWORD).
      */
     protected String tokenFor(String role) {
-        return credentials.computeIfAbsent(role, key ->
+        return cachedToken(role, () ->
             requestToken("grant_type=password"
                 + "&client_id=" + env("AUTH_TEST_CLIENT", "${userTestClient(model)}")
-                + "&username=" + key
+                + "&username=" + role
                 + "&password=" + env("AUTH_TEST_PASSWORD", "password")));
+    }
+
+    /**
+     * El token cacheado de esa clave, pedido de nuevo si ya no sirve.
+     *
+     * <p>La caché sin caducidad era un fallo con forma de 401 sin relación con nada: esta clase
+     * es {@code PER_CLASS}, así que el token vive lo que dure la clase entera, y el realm de
+     * prueba emite tokens de <b>cinco minutos</b> (el default de Keycloak; el aprovisionamiento
+     * no fija {@code accessTokenLifespan}). Cualquier flujo con esperas largas —un rescate, una
+     * reconciliación— pasa de ahí y empieza a mandar credenciales caducadas a mitad de clase.
+     *
+     * <p>Se renueva con margen sobre el claim {@code exp}, sin librerías: el payload de un JWT es
+     * Base64 URL. Un token cuyo {@code exp} no se pueda leer se da por caducado — pedir otro
+     * cuesta una llamada; usar uno inservible cuesta un escenario en rojo por el motivo equivocado.
+     */
+    private String cachedToken(String key, java.util.function.Supplier<String> mint) {
+        String cached = credentials.get(key);
+        if (cached != null && !expiresWithin(cached, TOKEN_RENEWAL_MARGIN)) {
+            return cached;
+        }
+        String fresh = mint.get();
+        credentials.put(key, fresh);
+        return fresh;
+    }
+
+    /** ¿Le quedan a este token menos de {@code margin} de vida? */
+    private static boolean expiresWithin(String token, Duration margin) {
+        try {
+            // Por índices y no con split("\\."): un regex aquí obliga a escapar el punto dos
+            // veces (una para la plantilla, otra para Java) y es donde se cuela el escape roto.
+            int firstDot = token.indexOf('.');
+            int secondDot = firstDot < 0 ? -1 : token.indexOf('.', firstDot + 1);
+            if (secondDot < 0) {
+                return true;
+            }
+            String payload = new String(
+                    java.util.Base64.getUrlDecoder().decode(token.substring(firstDot + 1, secondDot)),
+                    java.nio.charset.StandardCharsets.UTF_8);
+            java.util.regex.Matcher matcher = EXP_CLAIM.matcher(payload);
+            if (!matcher.find()) {
+                return true;
+            }
+            Instant expiry = Instant.ofEpochSecond(Long.parseLong(matcher.group(1)));
+            return Instant.now().plus(margin).isAfter(expiry);
+        } catch (RuntimeException e) {
+            return true;
+        }
     }
 ${serviceCred}
     private String requestToken(String form) {

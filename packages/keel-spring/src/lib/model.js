@@ -163,6 +163,10 @@ export function buildModel({ manifest, layers, stack = null }) {
   // al mapper por parámetro (ver mappers.js).
   const needDtos = collectNeedDtos(layers, dependencies, services, domainTypes, inlineEnumName, warnings);
 
+  // Qué reloj estampa cada reclamo en su propio UPDATE. Va aquí y no en `classifyClaims`
+  // porque necesita el reclamo de RECONCILIACIÓN, que lo resuelve `collectDependencies`.
+  stampClaimClocks(services);
+
   return { service, layersPresent, persistenceKind, enums, valueObjects, formatTypes, entities, services, errors, childDtos, refDtos, needDtos, hasFileUploads, events, messaging, subscriptions, pagination, api, audit, security, httpClients, dependencies, storage, mail, warnings };
 }
 
@@ -1083,6 +1087,67 @@ function classifyClaims(services, entities, layers, warnings) {
 
       if (claims.length > 0) operation.claim = claims;
     }
+  }
+}
+
+/**
+ * El reloj de un reclamo: qué marca temporal tiene que estampar SU PROPIO `UPDATE`.
+ *
+ * Corre al final de `buildModel`, después de `collectDependencies`, porque solo entonces
+ * están a la vez las dos cosas que hay que cruzar: los reclamos de `classifyClaims` y el
+ * reclamo de reconciliación, que resuelve `reconciliationClaim` al recorrer dependencias.
+ *
+ * El agujero que cierra, y que una corrida en vivo destapó. Un reclamo mueve el estado y
+ * nada más; el reloj que ese estado necesita lo estampaba el handler DESPUÉS, en otra
+ * escritura. Pero el reclamo se commitea en transacción propia (REQUIRES_NEW), así que
+ * entre las dos hay una ventana real: la réplica que muere ahí deja la fila en el estado
+ * nuevo con el reloj a NULL. Y como quien vendría a recogerla filtra por
+ * `reloj < :staleBefore`, y en SQL `NULL < x` no es falso sino UNKNOWN, esa fila **no la
+ * recoge nadie jamás** — que es exactamente el fallo que el rescate existía para cerrar,
+ * reintroducido un paso antes.
+ *
+ * La regla, una sola para los dos relojes del método: si el estado de DESTINO de un
+ * reclamo es el estado de partida de un mecanismo que filtra por una marca temporal, esa
+ * marca va en el MISMO `UPDATE`. Ahí es atómica y sale gratis —es una columna más en un
+ * SET que ya se escribe—, mientras que fuera es una ventana que nadie puede cerrar.
+ *
+ * Los dos casos, y son simétricos:
+ *
+ *   · el reclamo de una COLA deja la fila donde la rescata el RESCATE (`<estado>Since`),
+ *   · el reclamo del RESCATE deja la fila donde la recoge la RECONCILIACIÓN
+ *     (`awaitingSince`, que declara el diseño).
+ *
+ * No se aplica a los reclamos de guarda: aquellos ya estampan su marca por su cuenta
+ * (`classifyGuardClaims`), y por la misma razón.
+ */
+function stampClaimClocks(services) {
+  const operations = (services ?? []).flatMap((service) => service.operations ?? []);
+  const allClaims = operations.flatMap((operation) => operation.claim ?? []);
+
+  // Los relojes que alguien consulta, indexados por «entidad + estado de partida». Salen
+  // de los dos mecanismos que esperan sobre una marca, y de ningún sitio más: inventar un
+  // reloj por convención de nombre es justo lo que `rescueClaim` se niega a hacer.
+  const clocks = new Map();
+  const put = (entity, state, field, reason) => {
+    if (!entity || !state || !field) return;
+    if (!clocks.has(`${entity}::${state}`)) clocks.set(`${entity}::${state}`, { field, reason });
+  };
+
+  for (const claim of allClaims) {
+    if (claim.stalled) put(claim.entity, claim.stalled.state, claim.stalled.stampField, 'el rescate del barrido');
+  }
+  for (const operation of operations) {
+    for (const { claim } of operation.reconciles ?? []) {
+      if (!claim) continue;
+      for (const state of claim.states ?? []) {
+        put(claim.entity, state, claim.awaitingField, 'el barrido de reconciliación');
+      }
+    }
+  }
+
+  for (const claim of allClaims) {
+    const clock = clocks.get(`${claim.entity}::${claim.to}`);
+    if (clock) claim.stamps = clock;
   }
 }
 

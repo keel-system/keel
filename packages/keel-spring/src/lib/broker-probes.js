@@ -314,6 +314,24 @@ export function isEmptyRead(broker, output) {
   return text === '';
 }
 
+/**
+ * Una lectura VACÍA, en la forma que cada broker la devuelve.
+ *
+ * Existe porque «vacío» no es la cadena vacía en todas partes, y quien tenga que
+ * FABRICAR una lectura vacía —el arnés, cuando el escenario paró el broker a propósito—
+ * no puede inventarse el literal: tiene que devolver algo que `isEmptyRead` reconozca. Un
+ * `""` con RabbitMQ no lo es, y la aserción de «canal vacío» fallaba justo en el único
+ * escenario para el que la palanca del broker existe.
+ *
+ * Invariante, y hay test: `isEmptyRead(b, emptyReadValue(b))` es cierto para todo broker.
+ */
+export function emptyReadValue(broker) {
+  if (broker === 'rabbitmq') return '[]';
+  // La CLI de SQS contesta un objeto JSON; sin mensajes, sin la clave `Messages`.
+  if (broker === 'snssqs') return '{}';
+  return '';
+}
+
 /** El mismo predicado, como expresión Java sobre una lectura. */
 export function emptyReadJava(broker, read) {
   if (broker === 'rabbitmq') return `${read}.trim().equals("[]")`;

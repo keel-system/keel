@@ -50,11 +50,15 @@ function bodyOf(source, method) {
   return source.slice(from, source.indexOf('\n    }', from));
 }
 
-test('en RabbitMQ el canal de la suscripción se traduce a su cola antes de hablar con el broker', () => {
-  // `stockEvents` es el canal declarado; la cola real la da el `source` (`inventory`).
+test('en RabbitMQ un canal que PUBLICAMOS se traduce a nuestro destino, no al del proveedor', () => {
+  // `stockEvents` se usa en los dos sentidos: publicamos en él y nos suscribimos a él. Antes
+  // este mapa se construía SOLO desde las suscripciones, así que ganaba la cola del proveedor
+  // (`inventory.events`) y `publishedMessages("stockEvents")` leía el buzón equivocado: un
+  // Then sobre lo que publicamos se afirmaba contra mensajes que no eran nuestros.
   const source = harness('stock-reservation', 'rabbitmq');
 
-  assert.match(source, /Map\.entry\("stockEvents", "inventory\.events"\)/);
+  assert.match(source, /Map\.entry\("stockEvents", "stock-reservation\.events"\)/);
+  assert.ok(!source.includes('Map.entry("stockEvents", "inventory.events")'), source);
   // Las DOS puertas, no solo la purga: la lectura tenía el mismo defecto sin haberse
   // manifestado todavía, y su fallo es el que no se ve.
   assert.match(bodyOf(source, 'publishedMessages'), /physicalDestination\(destination\)/);
@@ -64,15 +68,15 @@ test('en RabbitMQ el canal de la suscripción se traduce a su cola antes de habl
   assert.match(bodyOf(source, purge), /physicalDestination\(destination\)/);
 });
 
-test('y cuando el canal se reparte en varias colas, el arnés falla en el sitio en vez de purgar una al azar', () => {
-  // En SNS/SQS cada consumidor tiene su cola colgada del topic, así que las tres
-  // suscripciones de `stockEvents` no tienen UN destino: elegir uno purgaría la cola
-  // equivocada y el Then siguiente saldría verde sin haber mirado nada.
+test('en SNS/SQS tampoco lo parten las suscripciones: lo que publicamos tiene destino propio', () => {
+  // Aquí el defecto era peor que leer del buzón equivocado. Las tres suscripciones de
+  // `stockEvents` dan tres colas distintas, así que el canal caía en SPLIT_ACROSS y resolver
+  // LANZABA — reventando el humo del arnés para un canal cuyo destino de publicación está
+  // perfectamente definido. Un canal que publicamos nunca es ambiguo.
   const source = harness('stock-reservation', 'snssqs');
 
-  assert.match(source, /SPLIT_ACROSS/);
-  assert.match(source, /IllegalArgumentException/);
-  assert.match(source, /StockReserved → stock-reservation-stock-reserved/);
+  assert.match(source, /Map\.entry\("stockEvents", "stock-reservation-events"\)/);
+  assert.ok(!source.includes('SPLIT_ACROSS'), source);
 });
 
 test('sin ninguna suscripción con destino propio, resolver es la identidad y no se emite tabla', () => {

@@ -44,6 +44,7 @@ import * as httpIdempotency from './http-idempotency.js';
 import * as idempotencyCheck from './idempotency-check.js';
 import * as domainGuardsCheck from './domain-guards-check.js';
 import * as cache from './cache.js';
+import * as scheduling from './scheduling.js';
 import * as jackson from './jackson.js';
 import * as controllers from './controllers.js';
 import * as web from './web.js';
@@ -106,6 +107,11 @@ const GENERATORS = [
   reconciliationClaim,
   httpIdempotency,
   cache,
+  // El TaskScheduler de hilos de plataforma. Va junto a los mecanismos de arriba porque
+  // sirve a todos: los @Scheduled que emiten outbox, idempotency, reconciliationClaim y el
+  // <Servicio>Scheduler comparten scheduler, y con hilos virtuales el que pone Boot los
+  // deja clavados en el driver JDBC.
+  scheduling,
   jackson,
   controllers,
   web,

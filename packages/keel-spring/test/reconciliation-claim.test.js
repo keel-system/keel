@@ -262,3 +262,39 @@ test('con DOS entidades esperando, build no elige: avisa y el barrido vuelve a s
   const handler = fileNamed(generateServices(model), 'ReconcileShipmentsCommandHandler.java');
   assert.match(handler, /MARCA PERSISTIDA/);
 });
+
+// ─── El reloj de la espera lo estampa el reclamo que la crea ─────────────────
+//
+// El gemelo simétrico del defecto del reclamo de cola. `confirmReservation` deja la reserva
+// en `awaitingStock`, y ES un reclamo quien la pone ahí cuando el barrido lo hace: si el
+// `awaitingSince` se estampara en una escritura posterior, la réplica que muriese en medio
+// dejaría la fila esperando con la marca a NULL, y la reconciliación —que filtra por
+// `awaitingSince < :staleBefore`— no la miraría jamás. Justo la fila que más necesita que
+// alguien la mire: la que se quedó a medias.
+
+test('un reclamo que deja la fila esperando estampa el awaitingSince del diseño', () => {
+  // Se convierte `confirmReservation` en un barrido: pasa a moverse por reloj, sin id ni
+  // cuerpo, de modo que sea un RECLAMO quien deje la reserva en `awaitingStock`.
+  const model = modelFor({
+    mutate: (layers) => {
+      const op = layers['use-cases'].operations.confirmReservation;
+      op.input = 'void';
+      op.output = 'void';
+      op.internal = true;
+      op.schedule = { cron: '* * * * *' };
+    }
+  });
+
+  const claim = model.services
+    .flatMap((service) => service.operations)
+    .flatMap((operation) => operation.claim ?? [])
+    .find((entry) => entry.to === 'awaitingStock');
+  assert.ok(claim, 'no se generó el reclamo que deja la reserva esperando');
+  assert.deepEqual(claim.stamps, {
+    field: 'reserveStockAwaitingSince',
+    reason: 'el barrido de reconciliación'
+  });
+
+  const jpa = generateRepositories(model).find((file) => file.path.endsWith('ReservationJpaRepository.java'));
+  assert.match(jpa.content, /set e\.status = :to, e\.reserveStockAwaitingSince = :claimedAt/);
+});

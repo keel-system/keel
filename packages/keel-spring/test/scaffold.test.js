@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
 import { HARNESSES, loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
+import { isEmptyRead } from '../src/lib/broker-probes.js';
 import { hasScheduledOperations } from '../src/scaffold/services.js';
 import { generate as applicationFiles } from '../src/scaffold/application.js';
 import { assetsDir, wrapperDir, GRADLE_VERSION } from '../src/lib/assets.js';
@@ -2376,7 +2377,13 @@ test('outbox: fila en la misma transacción, relay determinista y envío tras el
   assert.ok(harness.includes('emptyIfBrokerStopped'), harness);
   // La condición es el flag, no el tipo de error: una infraestructura que se cae sola
   // tiene que seguir doliendo donde se cae.
-  assert.match(harness, /if \(brokerIntentionallyStopped\(\)\) \{\s*return "";/);
+  //
+  // Y devuelve el vacío QUE ESTE BROKER DICE, no la cadena vacía: con RabbitMQ vacío es
+  // `[]`, y el predicado que lo reconoce es el mismo para todo el arnés. Devolver `""`
+  // hacía fallar la aserción de canal vacío justo en el único escenario para el que esta
+  // palanca existe — en verde no se distingue de que el outbox no funcione.
+  assert.match(harness, /if \(brokerIntentionallyStopped\(\)\) \{\s*return "\[\]";/);
+  assert.ok(isEmptyRead('rabbitmq', '[]'), 'el valor devuelto no lo reconoce el predicado del broker');
   // Se marca al parar y se limpia DESPUÉS del sondeo de readiness: entre el `start` y
   // el primer listener que responde, el broker sigue sin servir.
   const startBody = harness.slice(harness.indexOf('protected static void startBroker()'));

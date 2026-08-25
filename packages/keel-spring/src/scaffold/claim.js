@@ -136,6 +136,21 @@ const enumConstant = (state) => screamingSnake(state);
 const stateList = (claim, enumType) =>
   claim.from.map((state) => `${enumType}.${enumConstant(state)}`).join(', ');
 
+/**
+ * La coletilla del reloj, común a los dos javadoc: quien lea el puerto tiene que saber que
+ * la marca ya viene puesta, porque el camino de menor resistencia —estamparla en el
+ * handler, después— es justo el que abre la ventana que este reclamo cerró.
+ */
+function describeStamp(claim) {
+  if (!claim.stamps) return '';
+  return `
+     *
+     * <p><b>Devuelve las filas con {@code ${claim.stamps.field}} ya estampado</b>: va dentro del propio
+     * UPDATE, porque ${claim.stamps.reason} consulta esa marca. NO la vuelvas a poner desde el
+     * handler — hacerlo ahí es una segunda escritura, y una caída entre las dos deja la fila con la
+     * marca a NULL, invisible para siempre a quien la buscaba por {@code < :staleBefore}.`;
+}
+
 function describe(claim, entityName) {
   if (claim.stalled) return describeStalled(claim, entityName);
   return `Reclama hasta {@code batchSize} ${entityName} en estado ${claim.from.join(' o ')} y los pasa a ${claim.to}.
@@ -149,7 +164,7 @@ function describe(claim, entityName) {
      * <p>El reclamo se COMMITEA antes de volver (transacción propia): eso es lo que lo hace
      * visible a las demás. Actúa sobre lo que devuelve FUERA de esta llamada — sostener una
      * transacción durante un envío o una llamada a un proveedor es justo lo que este método
-     * existe para evitar.`;
+     * existe para evitar.${describeStamp(claim)}`;
 }
 
 /**
@@ -173,7 +188,7 @@ function describeStalled(claim, entityName) {
      * Ese plazo tiene que quedar por encima de lo que tarda un ciclo completo.
      *
      * <p>Lo que devuelve es trabajo que alguien dejó a medias, no trabajo nuevo: si el ciclo que
-     * murió ya produjo un efecto externo irreversible, repetirlo lo duplica. Actúa en consecuencia.`;
+     * murió ya produjo un efecto externo irreversible, repetirlo lo duplica. Actúa en consecuencia.${describeStamp(claim)}`;
 }
 
 /** Métodos del puerto <E>Repository. */
@@ -218,7 +233,7 @@ export function jpaRepositoryMethods(model, entity, imports) {
     subject: 'el reclamo'
   });
 
-  if (claims.some((claim) => claim.stalled)) imports.add('java.time.Instant');
+  if (claims.some((claim) => claim.stalled || claim.stamps)) imports.add('java.time.Instant');
   imports.add('java.util.List');
   imports.add('java.util.UUID');
   imports.add('org.springframework.data.domain.Pageable');
@@ -236,6 +251,13 @@ export function jpaRepositoryMethods(model, entity, imports) {
     // en esa ventana— se rescataría igual.
     const stale = claim.stalled ? ` and e.${claim.stalled.stampField} < :staleBefore` : '';
     const staleParam = claim.stalled ? ', @Param("staleBefore") Instant staleBefore' : '';
+    // El reloj del estado de DESTINO, estampado en el MISMO SET que el cambio de estado.
+    // No es un adorno: si se estampa después, en otra escritura, la réplica que muera en
+    // medio deja la fila con el reloj a NULL, y quien vendría a recogerla filtra por
+    // `reloj < :staleBefore` — donde NULL no es «viejo», es UNKNOWN. La fila se queda ahí
+    // para siempre. Aquí va en la misma sentencia atómica y sale gratis.
+    const stamp = claim.stamps ? `, e.${claim.stamps.field} = :claimedAt` : '';
+    const stampParam = claim.stamps ? ', @Param("claimedAt") Instant claimedAt' : '';
     return [
       `${selection.annotations}
     @Query("select e.id from ${entity.name}Jpa e where e.${field} in :states${stale} order by e.${orderField} asc")
@@ -244,11 +266,22 @@ export function jpaRepositoryMethods(model, entity, imports) {
       `    /**
      * El reclamo propiamente dicho: pasa la fila a ${claim.to} SOLO si sigue en su estado
      * de partida${claim.stalled ? ' y sigue estando atascada' : ''}. Devuelve 1 si esta instancia se la llevó y 0 si otra llegó
-     * antes. Esa comparación en el WHERE es toda la exclusión mutua, y no depende del motor.
+     * antes. Esa comparación en el WHERE es toda la exclusión mutua, y no depende del motor.${
+       claim.stamps
+         ? `
+     *
+     * <p><b>Y estampa {@code ${claim.stamps.field}} en el MISMO UPDATE</b>, porque ${claim.stamps.reason}
+     * consulta esa marca para decidir qué recoger. Estamparla después, en otra escritura, deja una
+     * ventana: este reclamo ya está commiteado (transacción propia), así que una réplica que muera
+     * ahí deja la fila en ${claim.to} con la marca a NULL — y {@code NULL < :staleBefore} no es
+     * falso, es UNKNOWN, así que la fila no vuelve a entrar en ningún lote nunca más. No la
+     * vuelvas a estampar desde el handler: ya viene puesta.`
+         : ''
+     }
      */
     @Modifying
-    @Query("update ${entity.name}Jpa e set e.${field} = :to where e.id = :id and e.${field} in :states${stale}")
-    int ${claim.method}(@Param("id") UUID id, @Param("states") List<${enumType}> states, @Param("to") ${enumType} to${staleParam});`
+    @Query("update ${entity.name}Jpa e set e.${field} = :to${stamp} where e.id = :id and e.${field} in :states${stale}")
+    int ${claim.method}(@Param("id") UUID id, @Param("states") List<${enumType}> states, @Param("to") ${enumType} to${staleParam}${stampParam});`
     ];
   });
 }
@@ -270,6 +303,7 @@ export function adapterMethods(model, entity, imports, jpaField) {
     imports.add('java.time.Instant');
     imports.add('org.springframework.beans.factory.annotation.Value');
   }
+  if (claims.some((claim) => claim.stamps)) imports.add('java.time.Instant');
 
   return claims.map((claim) => {
     // El instante se calcula UNA vez y se pasa a las dos consultas: recalcularlo dentro
@@ -280,18 +314,27 @@ export function adapterMethods(model, entity, imports, jpaField) {
 `
       : '';
     const staleArg = claim.stalled ? ', staleBefore' : '';
+    // El instante del reclamo, también uno por tanda: dos filas de la misma pasada las
+    // tomó la misma instancia en el mismo momento, y darles relojes distintos solo haría
+    // que el rescate las recogiera en pasadas distintas sin ninguna razón.
+    const claimedAt = claim.stamps
+      ? `        // El reloj que ${claim.stamps.reason} va a consultar. Se estampa DENTRO del reclamo.
+        Instant claimedAt = Instant.now();
+`
+      : '';
+    const stampArg = claim.stamps ? ', claimedAt' : '';
     return `    /**
      * ${describe(claim, entity.name)}
      */
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public List<${entity.name}> ${claim.method}(int batchSize) {
-${staleBefore}        List<${enumType}> states = List.of(${stateList(claim, enumType)});
+${staleBefore}${claimedAt}        List<${enumType}> states = List.of(${stateList(claim, enumType)});
         List<UUID> candidates = ${jpaField}.candidatesFor${claim.suffix}(states${staleArg}, PageRequest.of(0, batchSize));
         List<${entity.name}> claimed = new ArrayList<>();
         for (UUID id : candidates) {
             // 1 = la fila era mía; 0 = otra réplica la reclamó entre el select y el update.
-            if (${jpaField}.${claim.method}(id, states, ${enumType}.${enumConstant(claim.to)}${staleArg}) == 1) {
+            if (${jpaField}.${claim.method}(id, states, ${enumType}.${enumConstant(claim.to)}${staleArg}${stampArg}) == 1) {
                 ${jpaField}.findById(id).map(this::toDomain).ifPresent(claimed::add);
             }
         }
@@ -323,6 +366,7 @@ export function documentAdapterMethods(model, entity, imports) {
     imports.add('org.springframework.beans.factory.annotation.Value');
     imports.add('org.springframework.data.domain.Sort');
   }
+  if (claims.some((claim) => claim.stamps)) imports.add('java.time.Instant');
 
   return claims.map((claim) => {
     const staleBefore = claim.stalled
@@ -330,6 +374,16 @@ export function documentAdapterMethods(model, entity, imports) {
         Instant staleBefore = Instant.now().minusSeconds(${stalledValueField(claim)});
 `
       : '';
+    // El mismo reloj que en la rama relacional, y por la misma razón: aquí entra en el
+    // `Update` del findAndModify, así que se estampa en la MISMA operación atómica que
+    // el cambio de estado. Fuera de ella habría una ventana, y un documento que la pille
+    // se queda con la marca a nulo — invisible para siempre a quien filtra por `lt`.
+    const claimedAt = claim.stamps
+      ? `        // El reloj que ${claim.stamps.reason} va a consultar. Se estampa DENTRO del reclamo.
+        Instant claimedAt = Instant.now();
+`
+      : '';
+    const stampUpdate = claim.stamps ? `.set("${claim.stamps.field}", claimedAt)` : '';
     // El criterio temporal va DENTRO del findAndModify, que es lo que lo hace atómico:
     // filtrar por atascado y marcar en la misma operación no deja ventana entre las dos.
     const staleCriteria = claim.stalled
@@ -347,11 +401,11 @@ export function documentAdapterMethods(model, entity, imports) {
      */
     @Override
     public List<${entity.name}> ${claim.method}(int batchSize) {
-${staleBefore}        List<${entity.name}> claimed = new ArrayList<>();
+${staleBefore}${claimedAt}        List<${entity.name}> claimed = new ArrayList<>();
         FindAndModifyOptions options = FindAndModifyOptions.options().returnNew(true);
         for (int i = 0; i < batchSize; i++) {
             Query query = Query.query(Criteria.where("${field}").in(List.of(${stateList(claim, enumType)}))${staleCriteria})${order};
-            Update update = new Update().set("${field}", ${enumType}.${enumConstant(claim.to)});
+            Update update = new Update().set("${field}", ${enumType}.${enumConstant(claim.to)})${stampUpdate};
             ${entity.name}Document document = mongoTemplate.findAndModify(query, update, options, ${entity.name}Document.class);
             // Sin candidatos el lote se acaba antes que el batchSize, que es lo normal.
             if (document == null) {
