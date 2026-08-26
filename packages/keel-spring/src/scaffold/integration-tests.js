@@ -16,7 +16,7 @@ import { mailSection, hasMail, MAIL_IMPORTS } from './mail-harness.js';
 import { pascalCase } from '../lib/naming.js';
 import { DATABASES, BROKERS, CACHES, selectedInfra, brokerContainer } from '../lib/stack-catalog.js';
 import { cacheFlushCmd, concreteCmd, needsDevtools } from './devtools.js';
-import { usesOutbox } from './outbox.js';
+import { outboxRelayBeanName, usesOutbox } from './outbox.js';
 import {
   deadLetterDestination,
   deadLetterSubscriptions,
@@ -590,6 +590,13 @@ function abstractImports(model) {
   if (hasMail(model)) imports.push(...MAIL_IMPORTS, 'java.util.ArrayList', 'java.util.List', 'java.util.Map');
   // Flag de la caída provocada por el propio escenario (palanca del outbox).
   if (usesBrokerControl(model)) imports.push('java.util.concurrent.atomic.AtomicBoolean');
+  // La pausa del relay resuelve su bean por NOMBRE desde el contexto: nada de src/main.
+  if (pausesRelay(model)) {
+    imports.push(
+      'org.springframework.context.ApplicationContext',
+      'org.springframework.scheduling.annotation.ScheduledAnnotationBeanPostProcessor'
+    );
+  }
   // Segunda réplica: proceso aparte lanzado desde el jar.
   if (usesReplica(model)) {
     imports.push(
@@ -836,12 +843,28 @@ ${security && tokenProtocol(model) ? `
     /** El claim {@code exp} dentro del payload del JWT, leído sin librerías de por medio. */
     private static final java.util.regex.Pattern EXP_CLAIM =
             java.util.regex.Pattern.compile("\\"exp\\"\\\\s*:\\\\s*(\\\\d+)");
+` : ''}${
+  pausesRelay(model)
+    ? `
+    /**
+     * El contexto de la aplicación, solo para pausar el relay durante la resiembra de la
+     * topología (ver {@link #pauseOutboxRelay()}). Se usa únicamente para resolver un bean
+     * por NOMBRE: nada de {@code src/main/java} entra aquí — ese paquete no está en el
+     * compileClasspath de este source set, y la caja negra sigue intacta.
+     */
+    @Autowired
+    private ApplicationContext applicationContext;
+
+    private static ApplicationContext CONTEXT;
 ` : ''}${inMemoryStateFields(model)}
     @BeforeAll
     void configureHttpClient() {
         // El factory por defecto (HttpURLConnection) no soporta PATCH; el del
         // HttpClient del JDK sí, y no añade dependencias.
-        rest.getRestTemplate().setRequestFactory(new JdkClientHttpRequestFactory());${inMemoryStateCapture(model)}
+        rest.getRestTemplate().setRequestFactory(new JdkClientHttpRequestFactory());${
+      pausesRelay(model) ? `
+        CONTEXT = applicationContext;` : ''
+    }${inMemoryStateCapture(model)}
     }
 
     /** Intercambio HTTP completo: lo que se asserta y lo que se vuelca al fallar. */
@@ -1863,6 +1886,19 @@ function needsBrokerReseed(model) {
 // RabbitMQ, publicar sin destino falla y el relay reintenta, que es lo que se quiere.
 // Necesita además un evento propio que publicar como sonda y su cola de arnés, es decir,
 // que el servicio publique algo.
+/**
+ * ¿Hay que parar el relay de la aplicación mientras se resiembra la topología?
+ *
+ * Solo donde el broker la PIERDE al reiniciar, que es lo mismo que decide `needsBrokerReseed`
+ * (LocalStack la sirve de memoria; Kafka y RabbitMQ la conservan). Donde no se pierde no hay
+ * ventana que cerrar, y un mecanismo de más ahí solo añade una forma de romperse.
+ *
+ * Y hace falta el outbox: sin relay no hay nadie publicando por su cuenta.
+ */
+function pausesRelay(model) {
+  return needsBrokerReseed(model) && usesOutbox(model);
+}
+
 function needsTopologyProbe(model) {
   return needsBrokerReseed(model) && model.stack?.broker === 'snssqs' && (model.events ?? []).length > 0;
 }
@@ -1877,10 +1913,36 @@ function needsTopologyProbe(model) {
  */
 function topologyProbeMethods(model) {
   if (!needsTopologyProbe(model)) return '';
-  const probeEvent = model.events[0].name;
+  // El evento y SU CANAL se eligen juntos, no por separado. La sonda se publica con
+  // `eventType` en los atributos, y la suscripción de cada cola de arnés lleva un FILTRO
+  // por ese campo (messaging-provisioning.js § harnessQueues): leer de la cola de otro
+  // canal no entregaría la sonda aunque la URL fuese válida.
+  const probe = model.events[0];
+  const probeEvent = probe.name;
+  // De dónde se LEE, que no es dónde se publica. Sale del resolutor canónico y no de una
+  // composición a mano — ver el javadoc de las dos constantes de abajo.
+  const probeQueue = publishedDestination(model.stack?.broker, model, probe.channel);
   return `
-    /** Canal propio del servicio: es el que tiene cola de arnés de la que leer la sonda. */
+    /**
+     * Topic al que se PUBLICA la sonda: el destino único del servicio, que es a lo que
+     * {@code deliverMessage} le antepone el ARN.
+     */
     private static final String TOPOLOGY_PROBE_DESTINATION = "${model.messaging.destinationDefault}";
+
+    /**
+     * Cola de la que se LEE la sonda, que <b>no</b> es la de arriba.
+     *
+     * <p>En SNS/SQS el destino de publicación es un TOPIC, y de un topic no se lee: el
+     * aprovisionamiento cuelga de él una cola de arnés cuyo nombre es el del CANAL
+     * ({@code infra/init-messaging.sh}). Usar el mismo nombre para las dos mitades pide un
+     * {@code sqs receive-message} contra una cola que no existe — y eso no fallaba en un
+     * sitio inocuo: {@link #startBroker()} no llega a soltar {@code BROKER_STOPPED}, el flag
+     * se queda en {@code true} para toda la JVM y cada clase de flujo posterior muere en su
+     * {@code @BeforeAll}. Con el flag puesto, además, {@code emptyIfBrokerStopped} da por
+     * «canal vacío» cualquier fallo de lectura: las aserciones negativas saldrían verdes sin
+     * mirar nada.
+     */
+    private static final String TOPOLOGY_PROBE_QUEUE = "${probeQueue}";
 
     /** Cuánto se espera, tras cada intento de sonda, a que llegue a la cola de arnés. */
     private static final Duration TOPOLOGY_PROBE_ATTEMPT_TIMEOUT = Duration.ofSeconds(5);
@@ -1917,7 +1979,8 @@ function topologyProbeMethods(model) {
             }
             if (Instant.now().isAfter(deadline)) {
                 throw new IllegalStateException(
-                        "La suscripción SNS→SQS de '" + TOPOLOGY_PROBE_DESTINATION
+                        "La suscripción SNS→SQS de '" + TOPOLOGY_PROBE_DESTINATION + "' → '"
+                                + TOPOLOGY_PROBE_QUEUE
                                 + "' no entregó la sonda de verificación tras resembrar la topología en "
                                 + BROKER_READY_TIMEOUT + ": el wiring SNS→SQS no llegó a tiempo.");
             }
@@ -1939,11 +2002,11 @@ function topologyProbeMethods(model) {
         Instant attemptDeadline = Instant.now().plus(TOPOLOGY_PROBE_ATTEMPT_TIMEOUT);
         while (Instant.now().isBefore(attemptDeadline)) {
             String raw = aws("sqs", "receive-message", "--queue-url",
-                    QUEUE_URL + TOPOLOGY_PROBE_DESTINATION, "--max-number-of-messages", "10", "--visibility-timeout", "0");
+                    QUEUE_URL + TOPOLOGY_PROBE_QUEUE, "--max-number-of-messages", "10", "--visibility-timeout", "0");
             for (Map<String, Object> message : receivedMessages(raw)) {
                 Object body = message.get("Body");
                 if (body != null && String.valueOf(body).contains(probeId)) {
-                    aws("sqs", "delete-message", "--queue-url", QUEUE_URL + TOPOLOGY_PROBE_DESTINATION,
+                    aws("sqs", "delete-message", "--queue-url", QUEUE_URL + TOPOLOGY_PROBE_QUEUE,
                             "--receipt-handle", String.valueOf(message.get("ReceiptHandle")));
                     return true;
                 }
@@ -1974,6 +2037,123 @@ function topologyProbeMethods(model) {
             return List.of();
         }
     }
+`;
+}
+
+/**
+ * Parar y reanudar el `@Scheduled` del relay de la aplicación durante la resiembra.
+ *
+ * Es la SEGUNDA mitad de lo que cierra `awaitTopologyWired`, y las dos hacen falta: la sonda
+ * confirma la entrega para sí misma, pero no puede cerrar la ventana para un publicador que
+ * corre en paralelo. Sin esta pausa, el relay publica en el hueco que va del topic recreado a
+ * su suscripción wireada — SNS acepta el publish, descarta el mensaje sin error, y el relay
+ * marca `published_at`: el evento de negocio se pierde para siempre.
+ *
+ * Sobre la caja negra, que es lo que primero llama la atención aquí: `conventions/
+ * integration-tests.md` prohibe COMPILAR contra `src/main/java`, que está fuera del
+ * compileClasspath. `main` sí está en el runtimeClasspath, y resolver un bean por NOMBRE
+ * devuelve `Object`, así que no se importa ninguna clase suya. Es el mismo terreno en el que
+ * el arnés ya vacía por reflexión el caché de OAuth2.
+ */
+function relayPauseMethods(model) {
+  if (!pausesRelay(model)) return '';
+  return `
+    /**
+     * El relay en el contexto de Spring. El nombre lo deriva build de la clase que él mismo
+     * genera (scaffold/outbox.js), no se escribe aquí: si se renombrara la clase, un literal
+     * a este lado dejaría la pausa sin efecto y en silencio.
+     */
+    private static final String OUTBOX_RELAY_BEAN = "${outboxRelayBeanName()}";
+
+    private static final AtomicBoolean OUTBOX_RELAY_PAUSED = new AtomicBoolean(false);
+
+    /**
+     * Detiene las tareas programadas del relay mientras la topología se recrea.
+     *
+     * <p><b>Por qué.</b> {@link #startBroker()} reinicia el contenedor entero, y con él se
+     * pierden destinos y suscripciones. Entre que {@code infra/init-messaging.sh} recrea el
+     * destino y que su suscripción queda wireada hay una ventana en la que el broker
+     * <b>acepta</b> la publicación y descarta el mensaje sin error. El relay sondea por su
+     * cuenta, no coordinado con este arnés: si cae ahí, marca la fila como publicada y el
+     * evento no existe para nadie.
+     *
+     * <p><b>Cómo.</b> Por el {@code ScheduledAnnotationBeanPostProcessor} del propio contexto:
+     * {@code postProcessBeforeDestruction} cancela las tareas registradas para ese bean y
+     * {@code postProcessAfterInitialization} vuelve a registrarlas. No se toca el código de la
+     * aplicación ni su configuración, y el bean se resuelve por nombre — su clase vive en
+     * {@code src/main/java}, que este source set no compila.
+     *
+     * <p><b>Falla ruidosamente si no cancela nada.</b> Una pausa que no pausa deja el defecto
+     * igual que antes pero con la apariencia de estar arreglado, y su síntoma —un evento
+     * perdido cada varias corridas— cuesta un ciclo entero de arbitraje.
+     */
+    private static void pauseOutboxRelay() {
+        ApplicationContext context = CONTEXT;
+        if (context == null || !context.containsBean(OUTBOX_RELAY_BEAN)) {
+            return;
+        }
+        if (!OUTBOX_RELAY_PAUSED.compareAndSet(false, true)) {
+            return;
+        }
+        ScheduledAnnotationBeanPostProcessor processor =
+                context.getBean(ScheduledAnnotationBeanPostProcessor.class);
+        int before = processor.getScheduledTasks().size();
+        processor.postProcessBeforeDestruction(context.getBean(OUTBOX_RELAY_BEAN), OUTBOX_RELAY_BEAN);
+        if (processor.getScheduledTasks().size() >= before) {
+            OUTBOX_RELAY_PAUSED.set(false);
+            throw new IllegalStateException(
+                    "No se canceló ninguna tarea programada de '" + OUTBOX_RELAY_BEAN + "': la pausa del "
+                            + "relay no está surtiendo efecto, y sin ella la resiembra pierde eventos en silencio.");
+        }
+    }
+
+    /** Vuelve a registrar las tareas del relay. El registrar ya tiene scheduler: se replanifican en el acto. */
+    private static void resumeOutboxRelay() {
+        ApplicationContext context = CONTEXT;
+        if (context == null || !OUTBOX_RELAY_PAUSED.compareAndSet(true, false)) {
+            return;
+        }
+        ScheduledAnnotationBeanPostProcessor processor =
+                context.getBean(ScheduledAnnotationBeanPostProcessor.class);
+        processor.postProcessAfterInitialization(context.getBean(OUTBOX_RELAY_BEAN), OUTBOX_RELAY_BEAN);
+    }
+`;
+}
+
+/**
+ * El cuerpo de `startBroker`. Va aparte porque con resiembra se envuelve en un try/finally
+ * —el relay de la aplicación tiene que estar parado durante toda ella— y eso cambia la
+ * indentación de todo el bloque: resolverla aquí evita el Java válido y torcido que sale de
+ * concatenar un `try {` delante de unas líneas ya indentadas.
+ */
+function startBrokerBody(model, reseed) {
+  const core = [
+    'runProcess(List.of(containerRuntime(), "start", BROKER_CONTAINER));',
+    'awaitBrokerReady();',
+    // `reseed` viene ya indentado para el cuerpo sin envolver: aquí se normaliza a
+    // sangría cero y se vuelve a aplicar la que toque más abajo.
+    ...reseed.split('\n').map((line) => line.trim()).filter(Boolean),
+    '// Se limpia DESPUÉS del sondeo: entre el `start` y el primer listener que',
+    '// responde el broker sigue sin servir, y una lectura ahí tiene que tolerarse',
+    '// igual que durante la parada.',
+    'BROKER_STOPPED.set(false);'
+  ];
+  const indent = (pad) => core.map((line) => `${pad}${line}`).join('\n');
+
+  if (!pausesRelay(model)) return `${indent('        ')}\n`;
+  return `        // El relay de la aplicación no puede publicar mientras la topología se recrea:
+        // ver pauseOutboxRelay(). Una pasada suya que estuviera en vuelo AHORA publica
+        // contra un broker todavía parado, así que falla y la fila se conserva — la
+        // pérdida solo ocurre con el destino ya recreado y sin suscripción detrás.
+        pauseOutboxRelay();
+        try {
+${indent('            ')}
+        } finally {
+            // En el finally y no al final: si la resiembra o el wiring lanzan, dejar el
+            // relay pausado convertiría un fallo en otro distinto y mucho peor — un
+            // servicio que deja de publicar sin que nadie lo note.
+            resumeOutboxRelay();
+        }
 `;
 }
 
@@ -2015,7 +2195,7 @@ function brokerControlSection(model) {
             throw new IllegalStateException("Interrumpido resembrando la topología", e);
         }
     }
-${topologyProbeMethods(model)}`
+${topologyProbeMethods(model)}${relayPauseMethods(model)}`
     : '';
   return `
     /** Contenedor de ${broker.label} en \`infra/docker-compose.yaml\`. */
@@ -2052,13 +2232,7 @@ ${topologyProbeMethods(model)}`
      * responde. El sondeo es el mismo que usa \`infra/validate-infra.sh\`.
      */
     protected static void startBroker() {
-        runProcess(List.of(containerRuntime(), "start", BROKER_CONTAINER));
-        awaitBrokerReady();${reseed}
-        // Se limpia DESPUÉS del sondeo: entre el \`start\` y el primer listener que
-        // responde el broker sigue sin servir, y una lectura ahí tiene que tolerarse
-        // igual que durante la parada.
-        BROKER_STOPPED.set(false);
-    }
+${startBrokerBody(model, reseed)}    }
 
     /**
      * ¿Tiró el broker el propio escenario? Es la diferencia entre el fallo que se
@@ -3662,6 +3836,17 @@ ${clientKeys}        throw new IllegalArgumentException("Cliente de servicio no 
      * grants y un usuario por rol cuyo nombre <b>es</b> el rol
      * (docs/keel/conventions/infra-validation.md). Sobreescribible por entorno
      * (AUTH_TOKEN_URL, AUTH_TEST_CLIENT, AUTH_TEST_PASSWORD).
+     *
+     * <p><b>Llámalo en cada petición; no guardes lo que devuelve.</b> La caché que hay detrás
+     * renueva el token cuando le queda poca vida, pero solo puede hacerlo si se le pregunta:
+     * un {@code token} capturado una vez en un campo o en {@code @BeforeAll} esquiva la
+     * renovación por completo. El realm de prueba emite tokens de <b>cinco minutos</b>, así que
+     * cualquier flujo con esperas reales —un rescate, una reconciliación, un barrido— se pasa
+     * de ahí a mitad de clase y empieza a mandar credenciales caducadas. Lo que se ve entonces
+     * no se parece a un problema de autenticación: un {@code 401} con cuerpo vacío y un
+     * {@code IllegalArgumentException: json string can not be null or empty} al intentar
+     * parsearlo, en un {@code Then} que no tiene nada que ver. Pedirlo por llamada no cuesta
+     * nada — si sigue siendo válido, devuelve el mismo.
      */
     protected String tokenFor(String role) {
         return cachedToken(role, () ->

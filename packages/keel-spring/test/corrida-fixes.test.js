@@ -9,6 +9,8 @@ import { scaffoldService } from '../src/scaffold/index.js';
 import { buildModel } from '../src/lib/model.js';
 import { generate as generateScheduling, scheduledTaskCount } from '../src/scaffold/scheduling.js';
 import { isEmptyRead, emptyReadValue } from '../src/lib/broker-probes.js';
+import { harnessQueueName } from '../src/scaffold/messaging-provisioning.js';
+import { outboxRelayBeanName } from '../src/scaffold/outbox.js';
 import { tmpDir } from './helpers/tmp.js';
 
 // Los defectos que destapó la corrida en vivo `corrida-claim-mysql` (MySQL + RabbitMQ +
@@ -197,4 +199,116 @@ test('el vacío que fabrica el arnés lo reconoce el predicado de su propio brok
   }
   // Y que no sean todos la cadena vacía, que haría el invariante trivialmente cierto.
   assert.equal(emptyReadValue('rabbitmq'), '[]');
+});
+
+// ─── Segunda corrida: SNS/SQS con el pipeline completo ───────────────────────
+//
+// Tres hallazgos más, y el primero es de la MISMA familia que `publishedDestination`: un
+// destino de broker compuesto a mano en vez de derivado de su resolutor. El anterior estaba
+// en PHYSICAL_OF; este, en la sonda de topología, que no se tocó entonces.
+
+const SNSSQS = { group: 'com.test', database: 'postgresql', broker: 'snssqs', auth: null, cache: null, storage: null };
+
+test('la sonda de topología lee de la COLA de arnés, no del topic al que publica', () => {
+  // El defecto: una sola constante para dos roles incompatibles. `deliverMessage` compone
+  // TOPIC_ARN + destino (y ahí `<slug>-events` es correcto), pero `sqs receive-message`
+  // compone QUEUE_URL + destino, y con ese mismo valor pide una cola que NO EXISTE —
+  // NonExistentQueue garantizado, siempre.
+  //
+  // Y no fallaba en un sitio inocuo: `awaitTopologyWired()` lanza, `startBroker()` no llega
+  // a `BROKER_STOPPED.set(false)`, el flag se queda en true para toda la JVM (no hay
+  // forkEvery) y `restoreBroker()` —que abre cada @BeforeAll— vuelve a matar cada clase
+  // posterior. En la corrida: 4 clases, 8 escenarios. Con el flag puesto, además,
+  // `emptyIfBrokerStopped` da por «canal vacío» cualquier fallo de lectura.
+  const harness = project('stock-reservation', SNSSQS).file('AbstractFlowIT.java');
+
+  // Dos constantes, y cada una con su papel.
+  assert.match(harness, /TOPOLOGY_PROBE_DESTINATION = "stock-reservation-events"/);
+  assert.match(harness, /TOPOLOGY_PROBE_QUEUE = "stockEvents"/);
+  // La cola es la que siembra el aprovisionamiento, derivada de la misma fuente.
+  assert.equal(harnessQueueName('stockEvents'), 'stockEvents');
+  // Se publica en el topic…
+  assert.match(harness, /deliverMessage\(\s*TOPOLOGY_PROBE_DESTINATION/);
+  // …y se lee y se borra en la cola. Ninguna de las dos contra el topic.
+  assert.ok(!harness.includes('QUEUE_URL + TOPOLOGY_PROBE_DESTINATION'), harness);
+  assert.equal((harness.match(/QUEUE_URL \+ TOPOLOGY_PROBE_QUEUE/g) ?? []).length, 2);
+});
+
+test('y el eventType de la sonda pertenece al canal del que lee', () => {
+  // La URL correcta no basta: la suscripción de cada cola de arnés lleva filtro por
+  // `eventType` (messaging-provisioning § harnessQueues). Leer de la cola de otro canal no
+  // entregaría la sonda nunca, y el síntoma sería idéntico al del defecto anterior.
+  const model = modelFor('stock-reservation', SNSSQS);
+  const probe = model.events[0];
+  const harness = project('stock-reservation', SNSSQS).file('AbstractFlowIT.java');
+
+  assert.match(harness, new RegExp(`TOPOLOGY_PROBE_QUEUE = "${probe.channel}"`));
+  assert.match(harness, new RegExp(`Map\\.of\\("eventType", "${probe.name}"\\)`));
+  assert.ok(
+    (model.messaging.eventTypesByChannel[probe.channel] ?? []).includes(probe.name),
+    'el evento de la sonda no pasa el filtro de la cola de la que se lee'
+  );
+});
+
+test('la sonda retira solo su mensaje, nunca purga la cola', () => {
+  // El defecto simétrico, y no es hipotético: la primera versión de este arreglo usó
+  // purge-queue y se llevó por delante un evento de negocio real que el relay acababa de
+  // publicar en esa misma cola. El Then se quedó esperando un mensaje que sí se publicó y
+  // que el outbox ya había dado por entregado.
+  const harness = project('stock-reservation', SNSSQS).file('AbstractFlowIT.java');
+  const from = harness.indexOf('private static boolean topologyProbeArrived');
+  const body = harness.slice(from, harness.indexOf('return false;', from));
+
+  assert.match(body, /"delete-message"/);
+  assert.match(body, /ReceiptHandle/);
+  assert.ok(!body.includes('purge-queue'), body);
+});
+
+test('el relay se pausa mientras se recrea la topología, y solo donde se pierde', () => {
+  // startBroker() reinicia el contenedor entero y con él se van destinos y suscripciones.
+  // Entre que el destino existe y su suscripción queda wireada, SNS ACEPTA el publish y
+  // descarta el mensaje sin error: el relay marca published_at y el evento no existe para
+  // nadie. `awaitTopologyWired` cierra esa ventana para su propia sonda, no para un
+  // publicador que corre en paralelo — hacen falta las dos mitades.
+  const harness = project('stock-reservation', SNSSQS).file('AbstractFlowIT.java');
+  const start = harness.slice(harness.indexOf('protected static void startBroker()'));
+  const body = start.slice(0, start.indexOf('\n    }\n'));
+
+  // La pausa envuelve TODO el arranque, y se levanta en un finally: dejar el relay parado
+  // por una excepción sería cambiar un fallo por otro mucho peor y mudo.
+  assert.ok(body.indexOf('pauseOutboxRelay();') < body.indexOf('reseedTopology();'));
+  assert.ok(body.indexOf('awaitTopologyWired();') < body.indexOf('resumeOutboxRelay();'));
+  assert.match(body, /\} finally \{/);
+  // El bean se resuelve por NOMBRE (su clase vive en src/main, fuera de este classpath) y
+  // ese nombre lo deriva build de la clase que él mismo genera.
+  assert.match(harness, new RegExp(`OUTBOX_RELAY_BEAN = "${outboxRelayBeanName()}"`));
+  assert.ok(!harness.includes('import com.test.'), 'el arnés importó algo de la aplicación');
+  // Una pausa que no pausa deja el defecto igual con apariencia de arreglado.
+  assert.match(harness, /No se canceló ninguna tarea programada/);
+});
+
+test('los brokers que conservan su topología no llevan nada de eso', () => {
+  // Kafka y RabbitMQ no la pierden al reiniciar, así que no hay ventana que cerrar y un
+  // mecanismo de más solo añade una forma de romperse.
+  for (const broker of ['rabbitmq', 'kafka']) {
+    const harness = project('stock-reservation', { ...SNSSQS, broker }).file('AbstractFlowIT.java');
+    assert.ok(!harness.includes('pauseOutboxRelay'), broker);
+    assert.ok(!harness.includes('TOPOLOGY_PROBE'), broker);
+    assert.ok(!harness.includes('ScheduledAnnotationBeanPostProcessor'), broker);
+  }
+});
+
+test('el javadoc de tokenFor dice que se pida por llamada, donde el agente lo lee', () => {
+  // Las 8 clases de flujo capturaron `token = tokenFor(...)` en @BeforeAll y lo reutilizaron.
+  // `cachedToken` renueva con margen, pero solo si se le pregunta: un token capturado esquiva
+  // la renovación entera. La advertencia existía… en el javadoc de `cachedToken`, que es
+  // private y por tanto invisible para quien escribe el test.
+  const harness = project('asset-vault', {
+    group: 'com.test', database: 'postgresql', broker: 'rabbitmq', auth: 'keycloak', cache: null, storage: 'minio'
+  }).file('AbstractFlowIT.java');
+
+  const from = harness.indexOf('Bearer token de un usuario con el rol pedido');
+  const javadoc = harness.slice(from, harness.indexOf('protected String tokenFor', from));
+  assert.match(javadoc, /no guardes lo que devuelve/i);
+  assert.match(javadoc, /cinco minutos/);
 });

@@ -13,6 +13,24 @@ import { claimSelectionSnippet, supportsSkipLocked } from '../lib/claim-sql.js';
 
 const OUTBOX_PKG = 'infrastructure.messaging.outbox';
 
+/** La clase del relay. Se nombra aquí una vez porque más de uno la referencia. */
+export const OUTBOX_RELAY_CLASS = 'OutboxRelay';
+
+/**
+ * El nombre con el que el relay vive en el contexto de Spring: el de su clase con la
+ * inicial en minúscula, que es la convención de `@Component` sin valor explícito.
+ *
+ * Existe como función exportada, y no como literal en quien lo necesite, por lo mismo que
+ * `harnessQueueName` o `publishedDestination`: el arnés de integración tiene que pausar
+ * este bean durante la resiembra de la topología y lo resuelve POR NOMBRE —no puede
+ * importar su clase, que vive en `main` y está fuera de su compileClasspath—, así que si
+ * el nombre se escribiera a mano en la plantilla del arnés, renombrar la clase aquí
+ * dejaría la pausa sin efecto y en silencio.
+ */
+export function outboxRelayBeanName() {
+  return `${OUTBOX_RELAY_CLASS.charAt(0).toLowerCase()}${OUTBOX_RELAY_CLASS.slice(1)}`;
+}
+
 // El outbox necesita una transacción de BD que compartir con el cambio del
 // agregado: sin capa persistence no hay nada que hacer atómico.
 export function usesOutbox(model) {
@@ -595,7 +613,7 @@ public class OutboxRelay {
 }`;
 
   return {
-    path: javaPath(model, OUTBOX_PKG, 'OutboxRelay'),
+    path: javaPath(model, OUTBOX_PKG, OUTBOX_RELAY_CLASS),
     content: javaFile(
       subPackage(model, OUTBOX_PKG),
       [
@@ -813,7 +831,7 @@ public class OutboxRelay {
 }`;
 
   return {
-    path: javaPath(model, OUTBOX_PKG, 'OutboxRelay'),
+    path: javaPath(model, OUTBOX_PKG, OUTBOX_RELAY_CLASS),
     content: javaFile(
       subPackage(model, OUTBOX_PKG),
       [
