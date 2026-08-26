@@ -78,7 +78,9 @@ validación/reset de datos.
    el primer día, no una optimización pendiente — el criterio está en
    `{{keel:docs}}/conventions/read-composition.md` y la técnica en `references/read-queries.md`.
 5. **Dialecto**: revisa `references/dialects/<database>.md` antes de decidir
-   tipos de columna no triviales (JSON, UUID, texto largo) o de depurar
+   tipos de columna no triviales (JSON, UUID, texto largo), antes de escribir
+   cualquier consulta **con bloqueo** (un reclamo de barrido: el aislamiento por
+   defecto del motor decide si bloqueas escrituras ajenas) o de depurar
    diferencias entre H2 (tests) y la BD real.
 
 ## Referencias
@@ -89,9 +91,9 @@ Léelas bajo demanda, no todas de golpe:
 |---|---|
 | `references/jpa-mapping.md` | Al resolver un `// TODO (agente)` de persistencia o al mapear algo que build no cubre (relaciones bidireccionales/to-many entre agregados, VO anidados/`@Embeddable`, converters, `json`→jsonb; el `lockVersion`/`@Version` base ya lo genera build, aquí solo el caso borde `OPTIMISTIC_FORCE_INCREMENT`) |
 | `references/migrations.md` | Al producir el baseline de `db/migration/` (exportar, revisar, doble check) y al añadir migraciones posteriores |
-| `references/read-queries.md` | Al implementar una query que filtra u ordena por un campo de un agregado **embebido** (`embed`), que es cuando el lote del `<X>RefResolver` no basta y hace falta un join proyectado en un adaptador de lectura |
+| `references/read-queries.md` | Al implementar una query que filtra u ordena por un campo de un agregado **embebido** (`embed`), que es cuando el lote del `<X>RefResolver` no basta y hace falta un join proyectado en un adaptador de lectura. **Y al escribir la consulta de un barrido**: cómo se reclama un lote sin que dos réplicas se lleven el mismo |
 | `references/configuration.md` | Antes de tocar `parameters/<perfil>/db.yaml` o propiedades `spring.jpa.*` (Hikari, batching, N+1, locking) |
-| `references/dialects/<database>.md` | Al decidir tipos de columna, depurar el dialecto o preparar su validación/reset (solo el del stack) |
+| `references/dialects/<database>.md` | Al decidir tipos de columna, depurar el dialecto o preparar su validación/reset (solo el del stack). **Y siempre que escribas una consulta con bloqueo** —un reclamo, un barrido—: lo que el motor hace por defecto con los locks no es igual en los seis, y equivocarse ahí bloquea escrituras ajenas sin que nada lo relacione con tu consulta |
 | `references/troubleshooting.md` | Si el arranque, el pool o las queries fallan (pool agotado, LazyInitializationException, drift H2/BD real) |
 
 ## Validación

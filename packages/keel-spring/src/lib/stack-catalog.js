@@ -86,6 +86,8 @@ export const DATABASES = {
     user: (db) => db,
     password: 'changeme',
     url: (db) => `jdbc:postgresql://localhost:5432/${db}`,
+    // Tipo `uuid` nativo: el literal en texto se convierte solo en la comparación.
+    uuidLiteral: (id) => id,
     serviceKey: 'db',
     cliTool: 'psql',
     cliVia: 'devtools',
@@ -141,6 +143,12 @@ export const DATABASES = {
     // MariaDB no lo necesita (usa mysql_native_password), y los demás motores o salen por
     // curl o traen su CLI en la imagen del servidor.
     alpinePackages: ['mysql-client', 'mariadb-connector-c'],
+    // Cómo se escribe un UUID en una sentencia a mano contra este motor. Hibernate mapea
+    // `java.util.UUID` a `binary(16)` aquí, así que el literal en texto plano NO casa con
+    // ninguna fila y tampoco falla: un WHERE con él devuelve vacío y un INSERT mete basura.
+    // Verificado en vivo — tres clases de flujo distintas lo adivinaron mal antes de que
+    // esto existiera.
+    uuidLiteral: (id) => `UUID_TO_BIN(${id})`,
     composeService: (db) => ({
       image: 'mysql:8.0',
       environment: {

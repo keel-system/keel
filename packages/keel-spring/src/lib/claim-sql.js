@@ -114,3 +114,71 @@ export function unsupportedClaimWarning(database, mechanisms) {
     `PostgreSQL, MySQL 8.0+, MariaDB 10.6+, Oracle 12c+ y SQL Server sí lo reparten.`
   );
 }
+
+// ─── El nivel de aislamiento del reclamo ─────────────────────────────────────
+//
+// La segunda cosa que cambia con el motor, y la que costó dos rondas de arbitraje en una
+// corrida sobre MySQL antes de que nadie mirara aquí.
+//
+// InnoDB arranca en REPEATABLE READ, y en ese nivel una lectura con bloqueo no toma solo
+// los registros que devuelve: toma NEXT-KEY LOCKS, que son el registro más el hueco que lo
+// precede. El hueco bloqueado impide INSERTAR filas nuevas en ese rango — no filas ya
+// existentes, filas que todavía no existen. `SKIP LOCKED` no salva de esto: salta las filas
+// que OTRO tiene tomadas, pero los huecos los sigue tomando esta misma consulta.
+//
+// El resultado en vivo es un servicio que se muerde la cola: el barrido escanea `status IN
+// (...)` para reclamar su lote, y mientras tanto un `INSERT` de un alta nueva se queda
+// esperando hasta `ERROR 1205: Lock wait timeout exceeded`. No es un problema de pruebas —
+// en producción es la API dejando de aceptar altas cada vez que pasa un barrido.
+//
+// La documentación de MySQL lo dice sin rodeos para el nivel de al lado: «In the READ
+// COMMITTED isolation level, InnoDB disables gap locking for locking reads, UPDATE, and
+// DELETE statements, except for foreign-key and duplicate-key checking».
+//
+// Y bajar el aislamiento aquí es seguro porque la transacción del reclamo es diminuta y no
+// necesita lecturas repetibles: selecciona candidatos, los marca uno a uno con un UPDATE
+// condicional —que es quien garantiza la exclusión mutua, no el nivel— y commitea. Ninguna
+// llamada externa ocurre dentro.
+
+/**
+ * Los motores cuyo default de aislamiento rompe el reclamo, y por tanto los únicos donde se
+ * declara uno explícito. PostgreSQL, Oracle y SQL Server ya arrancan en READ COMMITTED:
+ * anotarlos ahí sería ruido que sugiere una decisión donde no hay ninguna.
+ */
+const GAP_LOCKING_DEFAULTS = ['mysql', 'mariadb'];
+
+/** ¿Necesita este motor que el reclamo fije el aislamiento a mano? */
+export function needsReadCommitted(database) {
+  return GAP_LOCKING_DEFAULTS.includes(database);
+}
+
+/**
+ * La anotación `@Transactional` de un método de reclamo, con su comentario.
+ *
+ * Devuelve también los imports, que son condicionales: pedir `Isolation` donde no se usa
+ * dejaría un import muerto en los otros cuatro motores.
+ */
+export function claimTransaction(database, { indent = '    ', propagation = 'REQUIRES_NEW' } = {}) {
+  const attrs = propagation ? [`propagation = Propagation.${propagation}`] : [];
+  const imports = ['org.springframework.transaction.annotation.Transactional'];
+  if (propagation) imports.push('org.springframework.transaction.annotation.Propagation');
+
+  if (!needsReadCommitted(database)) {
+    return {
+      annotation: `${indent}@Transactional${attrs.length > 0 ? `(${attrs.join(', ')})` : ''}`,
+      imports
+    };
+  }
+  attrs.push('isolation = Isolation.READ_COMMITTED');
+  return {
+    annotation: [
+      `${indent}// READ_COMMITTED explícito, y no es una preferencia: ${database} arranca en`,
+      `${indent}// REPEATABLE READ, y ahí una lectura con bloqueo toma también los HUECOS entre`,
+      `${indent}// claves. Eso no frena a otro barrido —para eso está SKIP LOCKED— sino a los`,
+      `${indent}// INSERT de filas NUEVAS, que esperan hasta el lock wait timeout. Con un barrido`,
+      `${indent}// cada minuto, es la API dejando de aceptar altas mientras pasa.`,
+      `${indent}@Transactional(${attrs.join(', ')})`
+    ].join('\n'),
+    imports: [...imports, 'org.springframework.transaction.annotation.Isolation']
+  };
+}

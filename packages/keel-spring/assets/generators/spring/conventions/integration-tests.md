@@ -114,11 +114,27 @@ y ahorra un ciclo entero de validación funcional.
    puede leer `src/main/java`. Desde `@BeforeEach` cae sobre cada escenario como FALLO, con su
    volcado, y lo arbitra quien puede dictaminar `culprit: code`. Es auditable con un `grep`:
    un `awaitMailTo` o un `await(` dentro de un bloque `@BeforeAll` es un fallo.
-10. Cada cláusula del `Given` de cada escenario tiene su llamada de siembra y esa llamada
+10. **El token se pide en cada petición; nunca se guarda en una variable.** Ni en un campo, ni
+   en un local de `@BeforeAll`, ni en uno declarado antes de una espera. `tokenFor(...)` renueva
+   el token cuando le queda poca vida, pero solo puede hacerlo si se le pregunta: un valor
+   capturado esquiva la renovación entera.
+
+   El realm de prueba emite tokens de **cinco minutos**, así que cualquier flujo con esperas
+   reales —un rescate, una reconciliación, dos ticks de un barrido— se pasa de ahí a mitad de
+   clase. Y lo que se ve entonces no se parece a un problema de credenciales: un `401` con
+   cuerpo vacío y un `IllegalArgumentException: json string can not be null or empty` al
+   intentar parsearlo, en un `Then` que no tiene nada que ver con la autenticación. Se arbitra
+   como `culprit: code` antes de que nadie mire la fecha del token.
+
+   Esto está escrito aquí porque el aviso en el javadoc de `tokenFor` **no bastó**: dos corridas
+   distintas, con cuatro clases entre las dos, volvieron a capturarlo. El javadoc se lee al usar
+   el método; la decisión de guardarlo se toma antes, al montar la clase. Es auditable con un
+   `grep`: una asignación `token = tokenFor(` fuera de la línea de una petición es un fallo.
+11. Cada cláusula del `Given` de cada escenario tiene su llamada de siembra y esa llamada
    comprueba su propio status — § Traducir el `Given`. Es auditable leyendo el escenario y el
    test en paralelo: un `Given` que nombra un estado del lifecycle y un test que solo crea la
    entidad es un fallo garantizado, atribuido además al agente equivocado.
-11. Todo `jsonPath(...)` y todo `JsonPath.read(...)` se captura en una variable tipada antes
+12. Todo `jsonPath(...)` y todo `JsonPath.read(...)` se captura en una variable tipada antes
     de pasarlo a nada — nunca anidado dentro de `String.valueOf(...)`, `formatted(...)` u otra
     llamada con sobrecargas, que eligen por el tipo estático y meten un cast que revienta en
     runtime — § `jsonPath(...)` y `JsonPath.read(...)` van siempre a una variable tipada. Y si
@@ -126,7 +142,7 @@ y ahorra un ciclo entero de validación funcional.
     § Un filtro devuelve una lista, no un elemento. Las dos son auditables con un `grep`: `[?(`
     debe leerse siempre en una lista, y `valueOf(jsonPath`/`valueOf(JsonPath` no debe aparecer
     nunca.
-12. Toda vía que sirve una entidad desde **caché** compara `createdAt`/`updatedAt` entre la
+13. Toda vía que sirve una entidad desde **caché** compara `createdAt`/`updatedAt` entre la
    lectura que puebla la caché y la que la sirve, no solo los campos de negocio. El
    `Instant` es el campo que primero se rompe en el roundtrip de (de)serialización y el que
    ningún escenario nombra explícitamente: comprobar solo los campos de negocio deja pasar
@@ -582,6 +598,22 @@ Toda afirmación del `Then` se comprueba, por orden de preferencia:
    la caja negra — pero en la fase 1 todavía no existe, así que la regla es la fuente. Un
    `db(...)` que falla por «relation does not exist» no es un defecto del servidor y no
    debe escribirse como si lo fuera.
+
+   **Un UUID tampoco se escribe a mano: va por `uuidLiteral(id)`.** El motor decide cómo se
+   escribe un identificador dentro de una sentencia, y en MySQL la columna no es texto —
+   Hibernate mapea `java.util.UUID` a `binary(16)`, así que hace falta `UUID_TO_BIN('…')`.
+   `build` genera ese helper en `AbstractFlowIT` con la forma del motor elegido; compónerlo a
+   mano es adivinar.
+
+   Y este falla **peor** que el nombre de una tabla, que es lo que lo hace caro: el literal en
+   texto plano no casa con ninguna fila **ni da error**. El `WHERE` sale vacío, el `INSERT`
+   guarda algo que después no encuentra nadie, y lo que se lee no es «he escrito mal el SQL»
+   sino «el servicio no hizo lo que tenía que hacer». En una corrida se adivinó mal **tres
+   veces**, en tres clases distintas y a lo largo de dos rondas de arbitraje.
+
+   **Y la columna del bloqueo optimista se llama `lock_version`, no `version`.** Una fila
+   sembrada sin ella —o con el nombre equivocado— falla al primer `UPDATE` del servicio, y el
+   rojo aparece en el escenario, no en la siembra que lo causó.
 5. Por `devtools("cli", "arg", …)` en crudo, solo para lo que ninguna de las vías anteriores
    alcanza. Los argumentos van como **lista**, nunca como una cadena concatenada: es un
    `<runtime> exec` directo, sin shell. Si hace falta un pipe o una redirección, la variante

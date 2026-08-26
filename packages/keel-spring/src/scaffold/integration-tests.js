@@ -2306,6 +2306,50 @@ ${startBrokerBody(model, reseed)}    }
 ${reseedMethod}`;
 }
 
+/**
+ * El helper que escribe un UUID dentro de una sentencia a mano, con la forma que pide el
+ * motor elegido.
+ *
+ * Existe porque tres clases de flujo de una misma corrida lo adivinaron mal, cada una por su
+ * cuenta: en MySQL, Hibernate mapea `java.util.UUID` a `binary(16)`, y el literal en texto
+ * plano no casa con ninguna fila NI da error — un WHERE devuelve vacío y un INSERT mete
+ * basura. Eso no se lee como «he escrito mal el SQL»: se lee como que el servicio no hizo lo
+ * que tenía que hacer, y se arbitra dos veces antes de mirar aquí.
+ *
+ * Solo se emite donde el motor declara su forma en `stack-catalog.js`. En los que no la
+ * declaran no se inventa ninguna: un helper que devuelva lo que le parezca es peor que no
+ * tenerlo, porque su nombre promete que está resuelto.
+ */
+function uuidLiteralHelper(model) {
+  const entry = dbEntry(model);
+  if (!entry?.uuidLiteral) return '';
+  const example = entry.uuidLiteral(String.raw`"'" + id + "'"`);
+  const optimistic = model.persistenceKind === 'document' ? null : 'lock_version';
+  return `
+    /**
+     * Un UUID escrito para una sentencia de {@link #db}, con la forma que pide ${entry.label}.
+     *
+     * <p>No es azucarillo: aquí la columna no es texto, y un literal en texto plano no casa
+     * con ninguna fila <b>ni da error</b> — el WHERE sale vacío y el INSERT guarda algo que
+     * luego no encuentra nadie. El síntoma no se parece a un SQL mal escrito, se parece a un
+     * servicio que no hizo su trabajo.
+     *
+     * <pre>db(..., "SELECT status FROM &lt;tabla&gt; WHERE id = " + uuidLiteral(id));</pre>${
+       optimistic
+         ? `
+     *
+     * <p>Y la otra que se adivina mal: la columna del bloqueo optimista se llama
+     * {@code ${optimistic}}, no {@code version}. Una fila sembrada sin ella (o con el nombre
+     * equivocado) falla al primer UPDATE del servicio.`
+         : ''
+     }
+     */
+    protected static String uuidLiteral(String id) {
+        return ${example};
+    }
+`;
+}
+
 // Vaciado de la caché a mitad de escenario. La orden es literalmente la misma que
 // ejecuta infra/reset-db.sh (fuente única en devtools.js): un helper que borrase un
 // conjunto distinto del que borra el reset dejaría al escenario midiendo un estado
@@ -2436,6 +2480,7 @@ function dbSection(model) {
         command.addAll(List.of(argv));
         return runProcess(command);
     }
+${uuidLiteralHelper(model)}
 
     /**
      * Igual que {@link #db}, pero a través de un shell: <b>solo</b> para lo que es del

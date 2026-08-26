@@ -32,14 +32,51 @@ Lo que build dejó: driver `com.mysql:mysql-connector-j`, contenedor `mysql:8.0`
 
 - InnoDB bloquea por índice: updates sin índice sobre la condición escalan a
   bloqueos amplios; respeta los índices de `persistence.keel.yaml`.
-- Deadlocks frecuentes con inserts concurrentes + uniques (gap locks): ordena
-  las escrituras y reintenta la transacción si el diseño lo permite.
+- Deadlocks frecuentes con inserts concurrentes + uniques: ordena las escrituras
+  y reintenta la transacción si el diseño lo permite. Y **el perdedor de un
+  INSERT duplicado no siempre sale por violación de restricción**: InnoDB lo
+  hace esperar sobre el lock del primero, así que puede salir por lock-wait o
+  deadlock. Quien capture solo `DataIntegrityViolationException` se lleva una
+  excepción sin tratar justo cuando hay competencia.
+- **Los gap locks de una lectura con bloqueo son otra cosa, y tienen otra
+  respuesta** — ver abajo. Ordenar y reintentar no arregla ese caso.
 
 ### Reclamo de un barrido
 
 `FOR UPDATE SKIP LOCKED` desde **8.0**. En 5.7 no existe y la consulta falla con error de sintaxis
 —que al menos falla en voz alta—, pero el `UPDATE` condicional del reclamo sigue siendo correcto sin
 él: lo que se pierde es que las réplicas se repartan los candidatos, no la exclusión mutua.
+
+**Y todo método que reclame fija `READ_COMMITTED`.** No es una preferencia:
+
+```java
+@Transactional(propagation = Propagation.REQUIRES_NEW, isolation = Isolation.READ_COMMITTED)
+public List<Job> claimForDrainJobs(int batchSize) { … }
+```
+
+InnoDB arranca en `REPEATABLE READ`, y en ese nivel una lectura con bloqueo no toma solo los
+registros que devuelve: toma **next-key locks**, que son el registro *más el hueco que lo precede*.
+El hueco bloqueado impide `INSERT` de filas **nuevas** en ese rango — filas que todavía no existen.
+`SKIP LOCKED` no salva de esto: salta las filas que OTRO tiene tomadas, pero los huecos los toma
+esta misma consulta.
+
+El síntoma no se parece a un problema de bloqueo: el barrido escanea `status IN (...)` para
+reclamar su lote y, mientras, un alta que no tiene nada que ver se queda esperando hasta
+`ERROR 1205: Lock wait timeout exceeded`. **Y no es un problema de pruebas** — con un barrido cada
+minuto, es la API dejando de aceptar altas cada vez que pasa. Costó dos rondas completas de
+arbitraje encontrarlo en una corrida en vivo, porque nada apuntaba aquí.
+
+La documentación de MySQL lo dice del nivel de al lado: *«In the READ COMMITTED isolation level,
+InnoDB disables gap locking for locking reads, UPDATE, and DELETE statements, except for
+foreign-key and duplicate-key checking»*.
+
+Bajar el aislamiento aquí es seguro: la transacción de un reclamo es diminuta y no necesita
+lecturas repetibles — selecciona candidatos, los marca uno a uno con el `UPDATE` condicional (que
+es quien garantiza la exclusión mutua, no el nivel) y commitea.
+
+`build` ya lo emite en los reclamos que genera. Esta nota es para los que escribes **tú**: el
+barrido cuyo reclamo no pudo generarse —build lo dice en voz alta cuando ocurre— y cualquier
+consulta con bloqueo que añadas por tu cuenta.
 
 ## Validación y reset
 

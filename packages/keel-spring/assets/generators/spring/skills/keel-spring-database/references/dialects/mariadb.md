@@ -32,6 +32,24 @@ motivo de rendimiento real).
 hecho la paridad de versiones entre los dos). Por debajo, el reclamo sigue siendo correcto —lo
 garantiza el `UPDATE` condicional— pero las réplicas compiten por la misma página de candidatos.
 
+**Y todo método que reclame fija `READ_COMMITTED`**, igual que en MySQL y por el mismo motivo — es
+el mismo InnoDB con el mismo default:
+
+```java
+@Transactional(propagation = Propagation.REQUIRES_NEW, isolation = Isolation.READ_COMMITTED)
+public List<Job> claimForDrainJobs(int batchSize) { … }
+```
+
+En `REPEATABLE READ`, una lectura con bloqueo toma **next-key locks**: el registro *más el hueco que
+lo precede*. El hueco bloqueado impide `INSERT` de filas **nuevas** en ese rango, y `SKIP LOCKED` no
+salva de eso — salta las filas que otro tiene tomadas, pero los huecos los toma esta consulta. El
+síntoma es un alta ajena esperando hasta `ERROR 1205: Lock wait timeout exceeded` cada vez que pasa
+el barrido, y no se parece en nada a un problema de bloqueo.
+
+Ver `dialects/mysql.md` § Reclamo de un barrido para el razonamiento completo: costó dos rondas de
+arbitraje en una corrida en vivo. `build` ya lo emite en los reclamos que genera; esta nota es para
+los que escribes tú.
+
 ## Validación y reset
 
 Desde devtools (`mariadb`, ya instalado):

@@ -166,7 +166,7 @@ List<ReservationJpa> claimStale(@Param("status") ReservationStatus status,
                                 Pageable pageable);
 ```
 
-Tres cosas que no son opcionales:
+Cuatro cosas que no son opcionales:
 
 - **El `Pageable`** acota el lote. Sin él, la primera réplica bloquea la tabla entera y las demás se
   quedan sin nada que hacer — que es lo contrario de repartir.
@@ -177,6 +177,12 @@ Tres cosas que no son opcionales:
   vuelven a competir por la misma página. Por eso `build` no emite el hint cuando el motor elegido es H2
   —y lo dice en un aviso—, y por eso validar la concurrencia contra el perfil `test` no demuestra nada:
   se hace contra la base real de `infra/`.
+- **Bajo InnoDB (MySQL, MariaDB), además, el NIVEL DE AISLAMIENTO.** Su default es `REPEATABLE READ`, y
+  ahí una lectura con bloqueo toma también los huecos entre claves: bloquea los `INSERT` de filas
+  **nuevas** —no las que reclama— hasta el lock wait timeout. `SKIP LOCKED` no salva de eso. El método
+  lleva `isolation = Isolation.READ_COMMITTED`, y el porqué está en `dialects/mysql.md` § Reclamo de un
+  barrido. Costó dos rondas de arbitraje en una corrida en vivo porque el síntoma —un alta ajena que
+  no responde— no se parece a nada de esta consulta.
 
 Es exactamente el patrón de `OutboxRelay.findPending`, que `build` ya genera en este mismo proyecto:
 míralo antes de escribir el tuyo.

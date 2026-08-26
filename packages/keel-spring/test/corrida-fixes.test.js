@@ -9,6 +9,7 @@ import { scaffoldService } from '../src/scaffold/index.js';
 import { buildModel } from '../src/lib/model.js';
 import { generate as generateScheduling, scheduledTaskCount } from '../src/scaffold/scheduling.js';
 import { isEmptyRead, emptyReadValue } from '../src/lib/broker-probes.js';
+import { needsReadCommitted, claimTransaction } from '../src/lib/claim-sql.js';
 import { harnessQueueName } from '../src/scaffold/messaging-provisioning.js';
 import { outboxRelayBeanName } from '../src/scaffold/outbox.js';
 import { tmpDir } from './helpers/tmp.js';
@@ -311,4 +312,237 @@ test('el javadoc de tokenFor dice que se pida por llamada, donde el agente lo le
   const javadoc = harness.slice(from, harness.indexOf('protected String tokenFor', from));
   assert.match(javadoc, /no guardes lo que devuelve/i);
   assert.match(javadoc, /cinco minutos/);
+});
+
+// ─── Tercera corrida: Kafka, y lo que destapó fue de MySQL ───────────────────
+//
+// La corrida de Kafka no encontró nada del broker: encontró que el MOTOR llevaba roto desde
+// el principio, en algo que ninguna corrida anterior había ejercitado con carga concurrente
+// de verdad. Los dos primeros bloques son defectos de producción, no de pruebas.
+
+const MYSQL = { group: 'com.test', database: 'mysql', broker: 'kafka', auth: null, cache: null, storage: null };
+
+test('bajo MySQL, todo reclamo que escanea con SKIP LOCKED fija READ_COMMITTED', () => {
+  // InnoDB arranca en REPEATABLE READ, y ahí una lectura con bloqueo no toma solo los
+  // registros que devuelve: toma NEXT-KEY LOCKS, que incluyen el hueco anterior a cada clave.
+  // El hueco bloqueado impide INSERTAR filas nuevas en ese rango. `SKIP LOCKED` no salva de
+  // esto — salta las filas que otro tiene tomadas, pero los huecos los toma esta consulta.
+  //
+  // El efecto en vivo: el barrido escanea `status IN (...)` para reclamar su lote y, mientras,
+  // un alta nueva espera hasta `ERROR 1205: Lock wait timeout exceeded`. No es un problema de
+  // pruebas: en producción es la API dejando de aceptar altas cada vez que pasa un barrido.
+  //
+  // La documentación de MySQL lo dice del nivel de al lado: «In the READ COMMITTED isolation
+  // level, InnoDB disables gap locking for locking reads, UPDATE, and DELETE statements».
+  const project_ = project('stock-reservation', MYSQL);
+  const adapter = project_.file('ReservationRepositoryImpl.java');
+  const relay = project_.file('OutboxRelay.java');
+
+  // Los DOS que esta fixture tiene —el barrido de reconciliación y el relay del outbox—, y no
+  // solo el primero: el relay sostiene su transacción durante TODA la entrega al broker, así
+  // que ahí los gap locks no duran lo que un UPDATE, duran segundos. Y corre cada segundo.
+  // (El reclamo de COLA se cubre en claim.test.js, que es donde hay un diseño con cola.)
+  assert.match(adapter, /@Transactional\(isolation = Isolation\.READ_COMMITTED\)/);
+  assert.match(relay, /@Transactional\(isolation = Isolation\.READ_COMMITTED\)/);
+  assert.match(adapter, /import org\.springframework\.transaction\.annotation\.Isolation;/);
+});
+
+test('y los motores que ya arrancan en READ COMMITTED no se anotan', () => {
+  // PostgreSQL, Oracle y SQL Server ya están ahí: declararlo sería sugerir una decisión donde
+  // no hay ninguna, y ensuciar cinco motores por el defecto de uno.
+  const project_ = project('stock-reservation', { ...MYSQL, database: 'postgresql' });
+
+  assert.ok(!project_.file('ReservationRepositoryImpl.java').includes('Isolation.READ_COMMITTED'));
+  assert.ok(!project_.file('OutboxRelay.java').includes('Isolation.READ_COMMITTED'));
+  assert.equal(needsReadCommitted('postgresql'), false);
+  assert.equal(needsReadCommitted('mysql'), true);
+  assert.equal(needsReadCommitted('mariadb'), true);
+});
+
+test('perder la carrera de un INSERT tiene DOS formas, y las dos se capturan', () => {
+  // Dos INSERT concurrentes con la misma clave no siempre acaban en violación de restricción:
+  // InnoDB hace esperar al segundo sobre el lock del primero, y si el desenlace tarda sale por
+  // lock-wait timeout o deadlock — que Spring traduce a PessimisticLockingFailureException, no
+  // a DataIntegrityViolationException. La documentación de MySQL tiene una sección entera
+  // titulada «duplicate-key deadlock».
+  //
+  // Capturando solo la primera, el barrido revienta en vez de ceder el candidato, y la carrera
+  // de idempotencia acaba en 500 en vez de en el code que el diseño declara. Justo cuando hay
+  // competencia, que es lo único que estos dos registros existen para arbitrar.
+  const project_ = project('stock-reservation', MYSQL);
+
+  for (const clazz of ['ReconciliationClaimStore.java', 'JpaIdempotencyStore.java']) {
+    const src = project_.file(clazz);
+    // Las TRES, y cada una llega por su camino: la violación de restricción, el lock-wait o
+    // deadlock que InnoDB produce cuando el perdedor espera al ganador, y el fallo al CONFIRMAR
+    // la transacción — que no es una excepción de acceso a datos y se escapa de las otras dos.
+    // Las tres significan lo mismo aquí: el registro no quedó escrito, luego perdí la carrera.
+    assert.match(src, /catch \(DataIntegrityViolationException\s*\|\s*PessimisticLockingFailureException\s*\|\s*TransactionSystemException/, clazz);
+    assert.match(src, /import org\.springframework\.dao\.PessimisticLockingFailureException;/, clazz);
+    assert.match(src, /import org\.springframework\.transaction\.TransactionSystemException;/, clazz);
+  }
+});
+
+test('el arnés sabe escribir un UUID para su motor, en vez de que se adivine', () => {
+  // Tres clases de flujo distintas, en una misma corrida, adivinaron mal el tipo de la columna.
+  // En MySQL, Hibernate mapea `java.util.UUID` a `binary(16)`: el literal en texto plano no
+  // casa con ninguna fila NI da error — el WHERE sale vacío y el INSERT guarda basura. El
+  // síntoma no se lee como un SQL mal escrito, se lee como un servicio que no hizo su trabajo,
+  // y se arbitra dos veces antes de que alguien mire la columna.
+  const harness = project('stock-reservation', MYSQL).file('AbstractFlowIT.java');
+
+  assert.match(harness, /protected static String uuidLiteral\(String id\)/);
+  assert.match(harness, /return UUID_TO_BIN\("'" \+ id \+ "'"\);/);
+  // La otra que se adivinó mal, documentada junto al helper.
+  assert.match(harness, /lock_version/);
+
+  // Y en Postgres la forma es otra, porque el tipo es nativo.
+  const pg = project('stock-reservation', { ...MYSQL, database: 'postgresql' }).file('AbstractFlowIT.java');
+  assert.match(pg, /return "'" \+ id \+ "'";/);
+});
+
+test('la regla del token está donde se decide guardarlo, no solo donde se usa', () => {
+  // El javadoc de `tokenFor` ya avisaba —se añadió tras la corrida anterior— y NO bastó: dos
+  // clases de esta corrida volvieron a capturarlo. El javadoc se lee al usar el método; la
+  // decisión de guardarlo se toma antes, al montar la clase. Así que la regla va también en la
+  // convención que el agente de pruebas lee al empezar.
+  const convention = fs.readFileSync(
+    path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      '..', 'assets', 'generators', 'spring', 'conventions', 'integration-tests.md'
+    ),
+    'utf8'
+  );
+
+  assert.match(convention, /El token se pide en cada petición; nunca se guarda en una variable/);
+  assert.match(convention, /cinco minutos/);
+  // Y la lista sigue numerada de forma consecutiva: insertar una regla en medio y dejar dos
+  // con el mismo número hace que las referencias cruzadas dejen de apuntar a lo que dicen.
+  const numbers = [...convention.matchAll(/^(\d+)\. /gm)].map((m) => Number(m[1]));
+  const rules = numbers.slice(0, numbers.indexOf(1, 1) === -1 ? numbers.length : numbers.indexOf(1, 1));
+  assert.deepEqual(rules, rules.map((_, i) => i + 1), `la lista de reglas no es consecutiva: ${rules}`);
+});
+
+// ─── La doctrina, no solo el código ──────────────────────────────────────────
+//
+// Los dos defectos de MySQL no salieron caros por difíciles: salieron caros porque ninguna
+// guía que el agente lee los mencionaba. Arreglar lo que build genera evita que build lo
+// genere mal; no evita que el agente lo escriba mal, y sigue habiendo sitios donde escribe
+// él (los barridos de `unclaimedSweeps`, y todo el SQL crudo del arnés).
+//
+// Y hay un precedente que obliga a preguntar SIEMPRE quién va a leer cada nota: lo del UUID
+// ya estaba documentado en la guía de base de datos… que lee el agente de CÓDIGO, mientras
+// que quien lo necesitaba era el de PRUEBAS. El dato existía, en el documento equivocado.
+
+const asset = (...parts) =>
+  fs
+    .readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'assets', 'generators', 'spring', ...parts),
+      'utf8'
+    )
+    // Normalizado: en el working copy de Windows estos assets llevan CRLF y en el índice LF, así
+    // que una aserción multilínea atada a `\n` pasaría o fallaría según dónde se corra.
+    .replace(/\r\n/g, '\n');
+
+test('la guía de MySQL manda fijar READ_COMMITTED donde se reclama', () => {
+  const guide = asset('skills', 'keel-spring-database', 'references', 'dialects', 'mysql.md');
+  const section = guide.slice(guide.indexOf('### Reclamo de un barrido'), guide.indexOf('## Validación'));
+
+  // Dentro de la subsección del reclamo, no en cualquier parte del documento: quien llega
+  // aquí con el síntoma delante busca en esa sección, no lee las 60 líneas.
+  assert.match(section, /READ_COMMITTED/);
+  assert.match(section, /next-key locks/);
+  // El síntoma, que es lo que permite reconocerlo: no se parece a un problema de bloqueo.
+  assert.match(section, /Lock wait timeout/);
+  // Y que no es un problema de pruebas.
+  assert.match(section, /API dejando de aceptar altas/);
+});
+
+test('y el bullet vecino deja de dar el consejo equivocado para ese caso', () => {
+  // Antes decía «ordena las escrituras y reintenta» hablando de gap locks, que es correcto
+  // para deadlocks entre inserts y NO aplica al escaneo de un barrido. Quien llegara con el
+  // síntoma se quedaba con la respuesta de al lado.
+  const guide = asset('skills', 'keel-spring-database', 'references', 'dialects', 'mysql.md');
+  const concurrency = guide.slice(guide.indexOf('## Concurrencia'), guide.indexOf('### Reclamo de un barrido'));
+
+  assert.ok(!/gap locks\): ordena/.test(concurrency), concurrency);
+  assert.match(concurrency, /tienen otra\n  respuesta|otra respuesta/);
+  // Y la otra mitad del mismo motor: perder un INSERT duplicado tiene dos desenlaces.
+  assert.match(concurrency, /DataIntegrityViolationException/);
+});
+
+test('MariaDB lleva la misma nota: es el mismo InnoDB con el mismo default', () => {
+  const guide = asset('skills', 'keel-spring-database', 'references', 'dialects', 'mariadb.md');
+  const section = guide.slice(guide.indexOf('### Reclamo de un barrido'), guide.indexOf('## Validación'));
+
+  assert.match(section, /READ_COMMITTED/);
+  assert.match(section, /next-key locks/);
+});
+
+test('y los motores que no lo necesitan no lo mencionan', () => {
+  // PostgreSQL no tiene gap locks. Repetir la nota ahí sería enseñar a fijar un aislamiento
+  // por una razón que en ese motor no existe.
+  const guide = asset('skills', 'keel-spring-database', 'references', 'dialects', 'postgresql.md');
+  assert.ok(!guide.includes('READ_COMMITTED'), guide);
+});
+
+test('la convención del arnés dice cómo se escribe un UUID y cómo se llama la versión', () => {
+  // Estaba documentado… en la guía de base de datos, que el agente de PRUEBAS no lee. Por eso
+  // tres clases distintas lo adivinaron mal de forma independiente.
+  const convention = asset('conventions', 'integration-tests.md');
+  const section = convention.slice(
+    convention.indexOf('## Lo que no se ve por HTTP'),
+    convention.indexOf('## Eventos entrantes')
+  );
+
+  assert.match(section, /uuidLiteral\(id\)/);
+  assert.match(section, /binary\(16\)/);
+  // Lo que lo hace caro, y por qué no basta con decir «usa el helper»: falla en silencio.
+  assert.match(section, /ni da error/);
+  assert.match(section, /lock_version/);
+});
+
+test('lo que la guía manda escribir es lo que build genera', () => {
+  // El test que de verdad paga: ata la doctrina al generador. Una guía que enseñe a escribir
+  // algo distinto de lo que hay generado al lado es peor que no tenerla — el agente ve dos
+  // formas y elige, y la que elija será la de la guía porque es la que le hablaba a él.
+  const guide = asset('skills', 'keel-spring-database', 'references', 'dialects', 'mysql.md');
+  const generated = claimTransaction('mysql').annotation;
+
+  const annotation = generated.split('\n').find((line) => line.trim().startsWith('@Transactional'));
+  assert.match(guide, new RegExp(annotation.trim().replace(/[.()]/g, (c) => `\\${c}`)));
+
+  // Y el simétrico: donde el motor no lo necesita, ni la guía lo pide ni build lo emite.
+  assert.ok(!claimTransaction('postgresql').annotation.includes('Isolation'));
+});
+
+test('y el enrutado lleva a esa guía cuando toca: una nota que nadie abre no existe', () => {
+  // El error que esta misma corrección estuvo a punto de repetir. Lo del UUID ya estaba escrito
+  // en la guía de dialecto y aun así se adivinó mal tres veces, porque quien lo necesitaba no
+  // tenía motivo para abrirla. Poner la nota en el sitio correcto no basta: hay que darle al
+  // agente la razón para ir.
+  //
+  // Los dos disparadores que la tabla ofrecía eran «tipos de columna» y «drift H2». Escribir un
+  // reclamo no es ninguno de los dos.
+  const skill = asset('skills', 'keel-spring-database', 'SKILL.md');
+  const table = skill.slice(skill.indexOf('| Referencia | Cuándo leerla |'));
+
+  const dialectRow = table.split('\n').find((line) => line.includes('references/dialects/'));
+  assert.match(dialectRow, /bloqueo/, 'la fila del dialecto no dispara por una consulta con bloqueo');
+
+  const readQueriesRow = table.split('\n').find((line) => line.includes('references/read-queries.md'));
+  assert.match(readQueriesRow, /barrido/, 'la fila de read-queries no dispara por un barrido');
+
+  // Y el paso del procedimiento, que es lo que se lee en orden.
+  assert.match(skill, /antes de escribir\n   cualquier consulta \*\*con bloqueo\*\*/);
+});
+
+test('read-queries remite al dialecto desde la lista de lo no opcional', () => {
+  // Es donde el agente está mirando cuando escribe la consulta del reclamo: la lista de las
+  // cosas que no puede saltarse. El aislamiento es la cuarta.
+  const guide = asset('skills', 'keel-spring-database', 'references', 'read-queries.md');
+
+  assert.match(guide, /Cuatro cosas que no son opcionales/);
+  assert.match(guide, /NIVEL DE AISLAMIENTO/);
+  assert.match(guide, /dialects\/mysql\.md/);
 });

@@ -749,7 +749,21 @@ public class JpaIdempotencyStore implements IdempotencyStore {
                     resourceId,
                     now,
                     now.plusSeconds(ttlSeconds)));
-        } catch (DataIntegrityViolationException concurrent) {
+        } catch (DataIntegrityViolationException
+                | PessimisticLockingFailureException
+                | TransactionSystemException concurrent) {
+            // Las DOS familias. Dos peticiones con la misma clave a la vez no siempre chocan
+            // por violacion de restriccion: InnoDB hace esperar al segundo INSERT sobre el
+            // lock del primero, y si el desenlace tarda sale por lock-wait timeout o
+            // deadlock, que Spring traduce a PessimisticLockingFailure. Capturando solo la
+            // primera, la carrera acaba en 500 en vez de en el code que el diseno declara —
+            // y solo en el caso concurrente, que es el unico que este registro existe para
+            // arbitrar y el que menos se reproduce a mano.
+            //
+            // Y la tercera llega por otro camino: un fallo al CONFIRMAR la transaccion no
+            // viaja como excepcion de acceso a datos sino como TransactionSystemException,
+            // que no es DataAccessException y se escaparia de las dos anteriores. Significa
+            // lo mismo: el registro no quedo escrito, luego esta peticion perdio la carrera.
             throw new IdempotencyConflictException(scope, idempotencyKey, concurrent);
         }
     }
@@ -776,8 +790,10 @@ public class JpaIdempotencyStore implements IdempotencyStore {
         'org.slf4j.Logger',
         'org.slf4j.LoggerFactory',
         'org.springframework.dao.DataIntegrityViolationException',
+        'org.springframework.dao.PessimisticLockingFailureException',
         'org.springframework.scheduling.annotation.Scheduled',
         'org.springframework.stereotype.Component',
+        'org.springframework.transaction.TransactionSystemException',
         'org.springframework.transaction.annotation.Transactional'
       ],
       body

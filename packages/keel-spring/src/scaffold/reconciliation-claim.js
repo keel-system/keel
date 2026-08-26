@@ -24,7 +24,7 @@
 
 import { javaFile, javaPath, subPackage } from './render.js';
 import { screamingSnake } from '../lib/naming.js';
-import { claimSelectionSnippet } from '../lib/claim-sql.js';
+import { claimSelectionSnippet, claimTransaction } from '../lib/claim-sql.js';
 
 const CLAIM_PKG = 'infrastructure.persistence.reconciliation';
 
@@ -155,16 +155,20 @@ export function adapterMethods(model, entity, imports, jpaField) {
   imports.add('java.util.UUID');
   imports.add('org.springframework.beans.factory.annotation.Value');
   imports.add('org.springframework.data.domain.PageRequest');
-  imports.add('org.springframework.transaction.annotation.Transactional');
   imports.add(`${subPackage(model, 'domain.enums')}.${enumType}`);
   imports.add(`${subPackage(model, CLAIM_PKG)}.ReconciliationClaimStore`);
+  // La transacción del barrido, con el aislamiento que pida el motor: este método escanea
+  // candidatos con SKIP LOCKED igual que el reclamo de una cola, así que arrastra los mismos
+  // gap locks. Sale del mismo módulo que decide el hint (lib/claim-sql.js).
+  const claimTx = claimTransaction(model.stack?.database, { propagation: null });
+  for (const imported of claimTx.imports) imports.add(imported);
 
   return claims.map(
     (claim) => `    /**
      * ${describe(claim)}
      */
     @Override
-    @Transactional
+${claimTx.annotation}
     public List<${entity.name}> ${claim.method}() {
         Instant now = Instant.now();
         Instant staleBefore = now.minusSeconds(${claim.activation}UnansweredAfterSeconds);
@@ -489,8 +493,28 @@ public class ReconciliationClaimStore {
         try {
             writer.insert(new ReconciliationClaimJpa.ReconciliationClaimId(activation, entityId), now);
             return true;
-        } catch (DataIntegrityViolationException race) {
+        } catch (DataIntegrityViolationException
+                | PessimisticLockingFailureException
+                | TransactionSystemException race) {
             // Otra réplica insertó la marca entre el UPDATE y el INSERT: suya es.
+            //
+            // Las DOS familias, y la segunda no es defensiva. Dos INSERT concurrentes con la
+            // misma clave no siempre acaban en violación de restricción: InnoDB hace esperar
+            // al segundo sobre el lock del primero, y si el desenlace tarda sale por
+            // lock-wait timeout o deadlock — que Spring traduce a PessimisticLockingFailure,
+            // no a DataIntegrityViolation. Capturando solo la primera, el barrido revienta
+            // con una excepción en vez de ceder el candidato, y lo hace justo cuando hay
+            // competencia, que es cuando este código existe para funcionar.
+            //
+            // Y la TERCERA, que llega por otro camino: el insert corre en su propia
+            // transacción (REQUIRES_NEW), y esa transacción CONFIRMA al volver del proxy —
+            // o sea, aquí dentro. Un fallo en ese commit no viaja como excepción de acceso a
+            // datos sino como TransactionSystemException, que no es DataAccessException y se
+            // escaparía de las dos anteriores. Significa lo mismo: la marca no quedó
+            // confirmada, luego el candidato no es de esta instancia.
+            //
+            // Ceder de más es benigno: si el timeout viniera de otra cosa, esta pasada no se
+            // lleva el candidato y la siguiente lo recoge. Lo caro es lo contrario.
             return false;
         }
     }
@@ -504,7 +528,9 @@ public class ReconciliationClaimStore {
         'java.time.Instant',
         'java.util.UUID',
         'org.springframework.dao.DataIntegrityViolationException',
-        'org.springframework.stereotype.Component'
+        'org.springframework.dao.PessimisticLockingFailureException',
+        'org.springframework.stereotype.Component',
+        'org.springframework.transaction.TransactionSystemException'
       ],
       body
     )

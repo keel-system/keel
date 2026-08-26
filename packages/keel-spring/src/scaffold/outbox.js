@@ -9,7 +9,7 @@
 // agente siguiendo la skill keel-spring-<broker>.
 
 import { javaFile, javaPath, subPackage } from './render.js';
-import { claimSelectionSnippet, supportsSkipLocked } from '../lib/claim-sql.js';
+import { claimSelectionSnippet, claimTransaction, supportsSkipLocked } from '../lib/claim-sql.js';
 
 const OUTBOX_PKG = 'infrastructure.messaging.outbox';
 
@@ -737,6 +737,12 @@ public class OutboxDispatcherFallbackConfig {
 }
 
 function renderRelay(model) {
+  // El aislamiento del relay, y aquí importa más que en ningún otro reclamo: esta
+  // transacción no dura lo que un UPDATE, dura lo que la ENTREGA AL BROKER de todo el lote
+  // —su javadoc explica por qué tiene que sostener el lock hasta el commit—. Con los gap
+  // locks de REPEATABLE READ puestos durante esos segundos, y una pasada cada segundo, las
+  // altas de la API se quedan esperando casi todo el tiempo.
+  const claimTx = claimTransaction(model.stack?.database, { propagation: null });
   const body = `/**
  * Reenvía al broker las filas pendientes del outbox, ya fuera de la transacción
  * que las creó.
@@ -777,7 +783,7 @@ public class OutboxRelay {
     }
 
     @Scheduled(fixedDelayString = "\${outbox.relay.fixed-delay-ms:1000}")
-    @Transactional
+${claimTx.annotation}
     public void relay() {
         List<OutboxEventJpa> pending = outboxRepository.findPending(maxAttempts, Instant.now(), PageRequest.of(0, batchSize));
         for (OutboxEventJpa row : pending) {
@@ -844,7 +850,7 @@ public class OutboxRelay {
         'org.springframework.data.domain.PageRequest',
         'org.springframework.scheduling.annotation.Scheduled',
         'org.springframework.stereotype.Component',
-        'org.springframework.transaction.annotation.Transactional'
+        ...claimTx.imports
       ],
       body
     )

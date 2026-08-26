@@ -37,7 +37,7 @@
 
 import { subPackage } from './render.js';
 import { screamingSnake } from '../lib/naming.js';
-import { claimSelectionSnippet, supportsSkipLocked, unsupportedClaimWarning } from '../lib/claim-sql.js';
+import { claimSelectionSnippet, claimTransaction, supportsSkipLocked, unsupportedClaimWarning } from '../lib/claim-sql.js';
 import { usesOutbox } from './outbox.js';
 
 /**
@@ -296,8 +296,10 @@ export function adapterMethods(model, entity, imports, jpaField) {
   imports.add('java.util.List');
   imports.add('java.util.UUID');
   imports.add('org.springframework.data.domain.PageRequest');
-  imports.add('org.springframework.transaction.annotation.Propagation');
-  imports.add('org.springframework.transaction.annotation.Transactional');
+  // La transacción del reclamo, con su nivel de aislamiento: lo decide el motor, y sale
+  // del mismo módulo que decide SKIP LOCKED. Los imports son condicionales.
+  const claimTx = claimTransaction(model.stack?.database);
+  for (const imported of claimTx.imports) imports.add(imported);
   imports.add(`${subPackage(model, 'domain.enums')}.${enumType}`);
   if (claims.some((claim) => claim.stalled)) {
     imports.add('java.time.Instant');
@@ -327,7 +329,7 @@ export function adapterMethods(model, entity, imports, jpaField) {
      * ${describe(claim, entity.name)}
      */
     @Override
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+${claimTx.annotation}
     public List<${entity.name}> ${claim.method}(int batchSize) {
 ${staleBefore}${claimedAt}        List<${enumType}> states = List.of(${stateList(claim, enumType)});
         List<UUID> candidates = ${jpaField}.candidatesFor${claim.suffix}(states${staleArg}, PageRequest.of(0, batchSize));

@@ -86,8 +86,15 @@ test('el reclamo es una marca que caduca, y las dos vías de la carrera dicen qu
   assert.match(repository, /update ReconciliationClaimJpa c set c\.claimedAt = :now/);
   assert.match(repository, /c\.claimedAt <= :expiredBefore/);
   assert.match(repository, /int claimIfExpired\(/);
-  // Y si la fila no existía, la clave primaria arbitra la inserción simultánea.
-  assert.match(store, /catch \(DataIntegrityViolationException race\)/);
+  // Y si la fila no existía, la clave primaria arbitra la inserción simultánea — por sus DOS
+  // desenlaces: InnoDB hace esperar al segundo INSERT sobre el lock del primero, y si tarda
+  // sale por lock-wait o deadlock, que Spring traduce a PessimisticLockingFailure y no a
+  // DataIntegrityViolation. Con solo la primera, el barrido revienta en vez de ceder el
+  // candidato — y justo cuando hay competencia, que es lo único que este reclamo arbitra.
+  assert.match(
+    store,
+    /catch \(DataIntegrityViolationException\s*\|\s*PessimisticLockingFailureException\s*\|\s*TransactionSystemException race\)/
+  );
   assert.match(store, /return false;/);
   // La inserción va en un bean aparte: capturar la violación dentro de la misma
   // transacción la dejaría rollback-only.

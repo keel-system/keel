@@ -403,3 +403,19 @@ test('la rama documental estampa el reloj dentro del mismo findAndModify', () =>
   assert.match(adapter, /new Update\(\)\.set\("status", JobStatus\.RUNNING\)\.set\("runningSince", claimedAt\)/);
   assert.match(adapter, /Instant claimedAt = Instant\.now\(\);/);
 });
+
+test('el reclamo de una cola fija READ_COMMITTED donde el motor lo exige', () => {
+  // Es el mismo defecto de gap locks que destapó la corrida de MySQL, visto sobre el reclamo
+  // de COLA: el SELECT de candidatos escanea por rango con SKIP LOCKED, y bajo REPEATABLE READ
+  // eso bloquea los INSERT de filas NUEVAS hasta el lock-wait timeout. Con el barrido cada
+  // minuto, es la API dejando de aceptar altas mientras pasa.
+  const mysql = fileNamed(generateRepositories(modelFor(queueSweep(), 'mysql')), 'JobRepositoryImpl.java');
+  assert.match(mysql, /@Transactional\(propagation = Propagation\.REQUIRES_NEW, isolation = Isolation\.READ_COMMITTED\)/);
+  assert.match(mysql, /import org\.springframework\.transaction\.annotation\.Isolation;/);
+
+  // Y donde el motor ya arranca en READ COMMITTED no se anota: sería sugerir una decisión
+  // donde no hay ninguna, y dejar un import muerto.
+  const postgres = fileNamed(generateRepositories(modelFor(queueSweep(), 'postgresql')), 'JobRepositoryImpl.java');
+  assert.match(postgres, /@Transactional\(propagation = Propagation\.REQUIRES_NEW\)/);
+  assert.ok(!postgres.includes('Isolation'), postgres);
+});
