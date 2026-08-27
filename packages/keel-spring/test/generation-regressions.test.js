@@ -1782,14 +1782,23 @@ test('la lectura de SQS pide por lotes: el límite de 10 es del broker, no del e
 
   // `--max-number-of-messages` acepta 1..10 y contesta InvalidParameterValue por encima:
   // pedir de una vez los mensajes de un escenario de clúster reventaba la lectura.
-  assert.ok(harness.includes('int size = Math.min(remaining, 10);'), harness.slice(harness.indexOf('publishedMessages'), harness.indexOf('publishedMessages') + 900));
+  assert.match(harness, /int size = Math\.min\(Math\.max\(count, 1\) - seen\.size\(\), 10\);/);
   assert.ok(harness.includes('String.valueOf(size)'));
-  // Y se corta en cuanto un lote vuelve incompleto: con --visibility-timeout 0 el
-  // mensaje sigue visible, así que seguir pidiendo lo devolvería otra vez y un conteo
-  // sobre el texto acumulado lo contaría dos veces.
-  assert.ok(harness.includes('if (receivedCount(batch) < size) {'));
-  // El contador no se inventa nada: cuenta cuerpos de la respuesta de receive-message.
-  assert.match(harness, /private static int receivedCount\(String response\)/);
+  // Este test afirmaba antes que bastaba con cortar en el primer lote incompleto
+  // (`if (receivedCount(batch) < size)`), y **eso congelaba un defecto**: con
+  // --visibility-timeout 0 el mensaje vuelve a estar visible al instante, así que si el
+  // primer lote devuelve 10 completos el segundo puede repescar alguno y contarlo dos
+  // veces — acusando de duplicar eventos a un servicio que no duplica nada. Y los lotes se
+  // concatenaban tal cual, con lo que la salida ni siquiera era JSON válido.
+  assert.ok(!harness.includes('receivedCount('), 'sigue el conteo por texto que no dedupe');
+  // Lo que corta la repesca es deduplicar por el MessageId de SQS, que es único por
+  // mensaje y estable entre relecturas.
+  assert.match(harness, /seen\.add\(String\.valueOf\(message\.get\("MessageId"\)\)\)/);
+  // Con cota de intentos: sin ella, una cola que solo repesca lo ya visto sondea sin fin.
+  assert.match(harness, /int maxAttempts =/);
+  // Y el desescapado va al final, sobre la lista ya deduplicada: decodeBodies es textual y
+  // deja de ser JSON navegable, así que deduplicar después sería tarde.
+  assert.match(harness, /return decodeBodies\(seen\.isEmpty\(\) \? "\{\}" :/);
 });
 
 // ─── Errores del framework: el catálogo manda, el diseño sustituye ────────────
@@ -2092,7 +2101,10 @@ test('§1.2: con snssqs el arnés desescapa el campo Body de SQS', () => {
     'src/integrationTest/java/com/commerce/catalog/flows/AbstractFlowIT.java'
   );
 
-  assert.ok(harness.includes('return decodeBodies(batches.toString());'), 'publishedMessages devuelve la salida cruda');
+  // Lo que se afirma es que la salida PASA por decodeBodies, no la forma del argumento:
+  // atarlo a `batches.toString()` hizo que este test fallara al deduplicar la lectura, por
+  // un cambio que no tiene nada que ver con el desescapado que aquí se prueba.
+  assert.match(harness, /return decodeBodies\(/, 'publishedMessages devuelve la salida cruda');
   assert.ok(harness.includes('private static String decodeBodies(String raw)'), harness);
   assert.ok(harness.includes('import java.util.regex.Matcher;'), 'falta el import de Matcher');
   // El grupo repetido es POSESIVO: con la forma perezosa, un Body sin raw delivery

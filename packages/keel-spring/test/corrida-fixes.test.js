@@ -552,3 +552,122 @@ test('read-queries remite al dialecto desde la lista de lo no opcional', () => {
   assert.match(guide, /NIVEL DE AISLAMIENTO/);
   assert.match(guide, /dialects\/mysql\.md/);
 });
+
+// ─── Cuarta corrida: la de validación, y encontró tres más ───────────────────
+//
+// `corrida-claim-snssqs-v2` era la primera con el criterio invertido: comprobar arreglos, no
+// buscarlos. Encontró cuatro parches al arnés igualmente, y los tres de aquí comparten una
+// propiedad: NINGUNO se manifiesta con la clase de flujo aislada. Salen bajo la contención de
+// la suite completa, con dos réplicas y más de diez mensajes — el terreno que ni los tests de
+// cadenas ni compile-check pueden pisar.
+
+const SQS = { group: 'com.test', database: 'postgresql', broker: 'snssqs', auth: null, cache: null, storage: null };
+
+test('la lectura de SQS deduplica por MessageId: la repesca no es un duplicado real', () => {
+  // Con `--visibility-timeout 0` un mensaje devuelto vuelve a estar visible AL INSTANTE, así
+  // que el lote siguiente puede repescarlo. Cortar en el primer lote incompleto —lo que hacía
+  // el arnés— no evita el solape: si el primero devuelve 10 completos y el segundo repesca
+  // alguno, se cuenta dos veces. Y los lotes se concatenaban tal cual, con lo que la salida
+  // con más de 10 mensajes ni siquiera era JSON válido.
+  //
+  // El modo de fallo es el peor de los dos posibles: un conteo inflado **acusa de duplicar
+  // eventos a un servicio que no duplica nada**, y se arbitra como `culprit: code` contra
+  // código correcto. Se vio en FL-CLU-004, el único punto de la suite que pide más de 10.
+  const harness = project('stock-reservation', SQS).file('AbstractFlowIT.java');
+
+  assert.match(harness, /seen\.add\(String\.valueOf\(message\.get\("MessageId"\)\)\)/);
+  assert.match(harness, /Set<String> seen = new LinkedHashSet<>\(\)/);
+  // Cota de intentos: sin ella, una cola que solo puede repescar lo ya visto —menos mensajes
+  // reales que los pedidos— deja el bucle sondeando para siempre.
+  assert.match(harness, /int maxAttempts =/);
+  // El desescapado va al final: decodeBodies es TEXTUAL y deja de ser JSON navegable, así que
+  // deduplicar después sería tarde.
+  assert.match(harness, /return decodeBodies\(seen\.isEmpty\(\)/);
+});
+
+test('la clave del dedupe es el MessageId del broker, nunca el cuerpo', () => {
+  // Es la distinción que sostiene un escenario entero. Dos entregas legítimas del mismo
+  // evento —la reentrega que un escenario de idempotencia provoca a propósito— comparten
+  // cuerpo y `metadata.eventId`: deduplicar por ahí las fundiría en una y el escenario
+  // pasaría en verde sin haber probado nada. El MessageId de SQS es único por MENSAJE.
+  const harness = project('stock-reservation', SQS).file('AbstractFlowIT.java');
+  const from = harness.indexOf('protected static String publishedMessages');
+  const raw = harness.slice(from, harness.indexOf('\n    }', harness.indexOf('return decodeBodies', from)));
+  // Sin comentarios: el javadoc de este método EXPLICA por qué no se deduplica por `eventId`,
+  // y buscar el término sobre el texto crudo hacía que el test fallara por su propia prosa. Es
+  // el mismo cuidado que check-idempotency.sh se aplica a sí mismo, en el sentido contrario.
+  const body = raw.replace(/\/\/[^\n]*/g, '');
+
+  assert.ok(!body.includes('eventId'), 'deduplica por el id de aplicación: fundiría dos entregas legítimas');
+  assert.ok(!body.includes('hashCode'), body);
+});
+
+test('y las otras dos ramas no lo llevan, porque no tienen el defecto', () => {
+  // RabbitMQ pide un solo `get` con peek explícito (una petición no puede repescarse a sí
+  // misma) y Kafka lee por offset desde una marca. Añadir el dedupe ahí sería código muerto
+  // que además sugiere un problema que ese broker no tiene.
+  for (const broker of ['rabbitmq', 'kafka']) {
+    const harness = project('stock-reservation', { ...SQS, broker }).file('AbstractFlowIT.java');
+    assert.ok(!harness.includes('MessageId'), broker);
+    assert.ok(!harness.includes('LinkedHashSet'), broker);
+  }
+});
+
+test('leer un canal agotado no revienta: la salida vacía no es un camino ausente', () => {
+  // `JsonPath.read` sobre una cadena vacía lanza IllegalArgumentException («json string can
+  // not be null or empty»), que NO es el PathNotFoundException que ya se toleraba. Y como
+  // esto corre con BROKER_STOPPED todavía en true, la excepción mata el @BeforeAll de la
+  // clase entera: se llevó por delante ReconciliationFlowIT y CompensationFlowIT.
+  const harness = project('stock-reservation', SQS).file('AbstractFlowIT.java');
+  const from = harness.indexOf('private static List<Map<String, Object>> receivedMessages');
+  const body = harness.slice(from, harness.indexOf('\n    }', from));
+
+  // La guarda va ANTES del JsonPath.read, que es lo único que la hace efectiva.
+  assert.ok(body.indexOf('raw.isBlank()') < body.indexOf('JsonPath.read'), body);
+  assert.match(body, /PathNotFoundException/);
+  // Y se emite una sola vez: antes vivía dentro de la sonda de topología, que solo existe
+  // con la palanca de broker — emitirlo en los dos sitios no compilaría.
+  assert.equal((harness.match(/private static List<Map<String, Object>> receivedMessages/g) ?? []).length, 1);
+});
+
+test('toda lectura espera a que el outbox drene, sin que nadie tenga que acordarse', () => {
+  // El relay corre en su propio fixed-delay, INDEPENDIENTE del commit del estado: cuando un
+  // Then ve el estado ya cambiado, el evento puede no haber salido. Solo se nota bajo la
+  // contención de la suite (FL-CLU-003), no con la clase sola.
+  //
+  // El agente lo resolvió llamando a awaitOutboxDrained trece veces en cinco clases. Funciona,
+  // y es la forma que ya falló dos veces en este repo: el javadoc de tokenFor avisaba y dos
+  // corridas volvieron a capturar el token. Trece llamadas que recordar son trece ocasiones de
+  // olvidar una — y el fallo que produce olvidarla se parece a un servicio que no publicó.
+  for (const broker of ['snssqs', 'rabbitmq', 'kafka']) {
+    const harness = project('stock-reservation', { ...SQS, broker }).file('AbstractFlowIT.java');
+    const from = harness.indexOf('protected static String publishedMessages');
+    const head = harness.slice(from, from + 600);
+    assert.match(head, /awaitOutboxDrained\(/, broker);
+    // Y sigue siendo privado: si hiciera falta llamarlo desde fuera, volveríamos al problema.
+    assert.match(harness, /private static void awaitOutboxDrained/, broker);
+  }
+});
+
+test('salvo cuando el escenario paró el broker a propósito', () => {
+  // Ahí las filas están pendientes POR DISEÑO —es la premisa entera del escenario del canal
+  // indisponible— y el relay no puede drenarlas contra un broker caído: la espera no
+  // convergería nunca, se agotaría el timeout completo en cada lectura de ese flujo. El gate
+  // es el mismo flag que ya usa emptyIfBrokerStopped, y acierta en las dos mitades del
+  // escenario: tras startBroker() el flag ya está limpio y la espera vuelve a hacerse.
+  const harness = project('stock-reservation', SQS).file('AbstractFlowIT.java');
+  const from = harness.indexOf('private static void awaitOutboxDrained');
+  const body = harness.slice(from, harness.indexOf('\n    }', harness.indexOf('OUTBOX_DRAIN_TIMEOUT', from)));
+
+  assert.match(body, /if \(brokerIntentionallyStopped\(\)\) \{\s*\n\s*return;/);
+  // Y antes que eso, el canal que no publicamos: no hay relay que pueda entregar tarde.
+  assert.ok(body.indexOf('OUTBOX_CHANNELS.contains') < body.indexOf('brokerIntentionallyStopped'), body);
+});
+
+test('sin outbox no se espera nada, porque no hay relay', () => {
+  // La publicación va dentro de la transacción: cuando el estado se commitea, el evento ya
+  // está en el broker. Emitir la llamada ahí sería citar un método que no existe.
+  const harness = project('product-catalog', { ...SQS, broker: 'rabbitmq' }).file('AbstractFlowIT.java');
+
+  assert.ok(!harness.includes('awaitOutboxDrained'), harness.slice(0, 400));
+});

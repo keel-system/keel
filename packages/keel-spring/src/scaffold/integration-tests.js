@@ -582,6 +582,12 @@ function abstractImports(model) {
   // multiplexadas sobre el mismo topic comparten DLT, y marcarlo dos veces gastaría un
   // sondeo de más contra el broker por cada clase de flujo.
   if (broker?.id === 'kafka' && usesDeadLetter(model)) imports.push('java.util.Set');
+  // El dedupe de la lectura de SQS: un Set con orden de inserción (el orden importa — la
+  // lista que se devuelve es la que el escenario recorre) y el ObjectMapper para volver a
+  // serializar cada mensaje ya deduplicado.
+  if (broker?.id === 'snssqs') {
+    imports.push('com.fasterxml.jackson.core.JsonProcessingException', 'java.util.LinkedHashSet', 'java.util.Set');
+  }
   // La espera al drenaje del outbox declara su propio Set de canales publicados, y se
   // emite con los tres brokers (a diferencia del de arriba, que es solo de Kafka).
   if (drainsOutbox(model)) imports.push('java.util.Set');
@@ -2021,22 +2027,8 @@ function topologyProbeMethods(model) {
         return false;
     }
 
-    /**
-     * La lista {@code Messages} de una respuesta cruda de {@code receive-message}, o vacía
-     * si no había ninguno. Deliberadamente <b>no</b> pasa por {@code decodeBodies}: ese
-     * desescapado reinserta el {@code Body} sin volver a escaparlo, y el sobre de SNS que
-     * envuelve un evento real —cuando la sonda llega antes de que {@code RawMessageDelivery}
-     * esté activo— tiene comillas anidadas que corromperían el JSON. Aquí solo hace falta
-     * localizar un {@code ReceiptHandle} por el texto crudo de su cuerpo, no interpretarlo.
-     */
-    @SuppressWarnings("unchecked")
-    private static List<Map<String, Object>> receivedMessages(String raw) {
-        try {
-            return JsonPath.read(raw, "$.Messages");
-        } catch (com.jayway.jsonpath.PathNotFoundException e) {
-            return List.of();
-        }
-    }
+    // receivedMessages lo emite la rama SNS/SQS de brokerSection, que es donde vive la
+    // lectura de mensajes. La sonda solo existe con ese broker, así que lo tiene siempre.
 `;
 }
 
@@ -2882,6 +2874,13 @@ function outboxDrainSection(model) {
         if (!OUTBOX_CHANNELS.contains(destination)) {
             return;
         }
+        // Y con el broker parado POR EL PROPIO ESCENARIO no se espera: las filas están
+        // pendientes a propósito —es toda la premisa del escenario del canal indisponible—
+        // y el relay no puede drenarlas contra un broker caído. Esperar aquí no convergería
+        // nunca: se agotaría el timeout entero en cada lectura de ese flujo.
+        if (brokerIntentionallyStopped()) {
+            return;
+        }
         Instant deadline = Instant.now().plus(OUTBOX_DRAIN_TIMEOUT);
         while (Instant.now().isBefore(deadline) && pendingOutboxRows() > 0) {
             try {
@@ -2917,6 +2916,29 @@ function outboxDrainSection(model) {
         }
     }
 `;
+}
+
+/**
+ * La espera al drenaje, antepuesta a TODA lectura de mensajes.
+ *
+ * Va aquí dentro y no en las clases de flujo, y esa es la decisión. El agente de una corrida
+ * lo resolvió llamando a `awaitOutboxDrained` trece veces en cinco clases; funciona, y es la
+ * misma forma que ya ha fallado dos veces en este repo —el javadoc de `tokenFor` avisaba y dos
+ * corridas volvieron a capturar el token—. Trece llamadas que hay que recordar son trece
+ * oportunidades de olvidar una, y el fallo que produce olvidarla no se parece a un despiste:
+ * se parece a un servicio que no publicó su evento.
+ *
+ * El coste es una consulta a `outbox_event` por lectura, y cuando no hay nada pendiente vuelve
+ * en esa consulta. Cuando lo hay, esperar es exactamente lo que se quiere.
+ */
+function drainBeforeRead(model, parameter = 'destination') {
+  if (!drainsOutbox(model)) return '';
+  return `
+        // Antes de leer: el relay corre en su propio fixed-delay, independiente del commit
+        // del estado. Cuando un Then ve el estado ya cambiado, el evento puede no haber
+        // salido todavía — y eso solo se nota bajo la contención de la suite completa, no
+        // corriendo la clase sola.
+        awaitOutboxDrained(${parameter});`;
 }
 
 // Con outbox, `purgeMessages` deja de ser la purga a secas: la purga cruda pasa a
@@ -3216,7 +3238,7 @@ function brokerSection(model) {
 
     private static final String PROBE_BODY = "/tmp/keel-probe.json";
 ${physicalDestinationSection(model)}${doc}
-    protected static String publishedMessages(String destination, int count) {
+    protected static String publishedMessages(String destination, int count) {${drainBeforeRead(model)}
         // Peek (ack_requeue_true): leer no consume, así que un escenario puede
         // assertar dos veces sobre el mismo mensaje.
         copyToDevtools(${rabbitProbeBodyJava('count')}, PROBE_BODY);
@@ -3249,38 +3271,93 @@ ${purgeWrapper(model)}${outage}`;
 
     private static final List<String> AWS = List.of(${javaArgs(prefix('snssqs'))});
 ${physicalDestinationSection(model)}${doc}
-    protected static String publishedMessages(String destination, int count) {
-        // SQS acota \`--max-number-of-messages\` a 1..10 y contesta InvalidParameterValue
-        // por encima: pedir de una vez los mensajes de un escenario de clúster reventaba
-        // la lectura en vez de esperar. Se pide por lotes y se corta en cuanto uno vuelve
-        // INCOMPLETO, que es la señal de que la cola no tiene más — seguir pidiendo con
-        // \`--visibility-timeout 0\` devolvería otra vez los mismos, y un conteo sobre el
-        // texto acumulado los contaría dos veces.
-        StringBuilder batches = new StringBuilder();
-        int remaining = Math.max(count, 1);
+    protected static String publishedMessages(String destination, int count) {${drainBeforeRead(model)}
+        // Dos cosas se cruzan aquí y conviene no mezclarlas.
+        //
+        // La primera: SQS acota \`--max-number-of-messages\` a 1..10 y contesta
+        // InvalidParameterValue por encima, así que un escenario de clúster hay que pedirlo
+        // por lotes.
+        //
+        // La segunda, que es la que costó una corrida: con \`--visibility-timeout 0\` cada
+        // mensaje devuelto vuelve a estar visible AL INSTANTE, así que un lote posterior
+        // puede repescar uno ya contado. Cortar cuando un lote vuelve incompleto —lo que
+        // esto hacía— no evita el solape: si el primero devuelve 10 completos y el segundo
+        // repesca alguno, se cuenta dos veces. Y el resultado ni siquiera era JSON válido,
+        // porque los lotes se concatenaban tal cual.
+        //
+        // Se dedupe por \`MessageId\`, que SQS asigna por MENSAJE y es estable entre
+        // relecturas del mismo. No por el cuerpo ni por el id de aplicación: dos entregas
+        // legítimas del mismo evento —la reentrega que un escenario de idempotencia
+        // provoca a propósito— comparten cuerpo y \`metadata.eventId\`, y deduplicarlas
+        // dejaría ese escenario pasando en verde sin probar nada.
+        //
+        // El timeout NO se sube para arreglar esto: la lectura es un peek deliberado —un
+        // escenario puede afirmar dos veces sobre el mismo mensaje— y subirlo rompería esa
+        // propiedad para todos a cambio de arreglar uno.
+        Set<String> seen = new LinkedHashSet<>();
+        StringBuilder unique = new StringBuilder();
+        // Cota de lotes: sin ella, una cola que solo puede repescar lo ya visto —menos
+        // mensajes reales que los pedidos— deja el bucle sondeando para siempre.
+        int maxAttempts = (Math.max(count, 1) + 9) / 10 + 5;
         try {
-            while (remaining > 0) {
-                int size = Math.min(remaining, 10);
+            for (int attempt = 0; attempt < maxAttempts && seen.size() < Math.max(count, 1); attempt++) {
+                int size = Math.min(Math.max(count, 1) - seen.size(), 10);
                 String batch = aws(${javaArgs(read)});
-                batches.append(batch);
-                remaining -= size;
-                if (receivedCount(batch) < size) {
+                List<Map<String, Object>> messages = receivedMessages(batch);
+                if (messages.isEmpty()) {
+                    break;
+                }
+                for (Map<String, Object> message : messages) {
+                    if (seen.add(String.valueOf(message.get("MessageId")))) {
+                        appendMessage(unique, message);
+                    }
+                }
+                if (messages.size() < size) {
                     break;
                 }
             }
         } catch (RuntimeException e) {
             return emptyIfBrokerStopped(e);
         }
-        return decodeBodies(batches.toString());
+        // El desescapado va al final, sobre la lista ya deduplicada: decodeBodies es
+        // TEXTUAL y deja de ser JSON navegable, así que deduplicar después sería tarde.
+        return decodeBodies(seen.isEmpty() ? "{}" : "{\\"Messages\\": [" + unique + "]}");
     }
 
-    /** Cuántos mensajes trae una respuesta de {@code receive-message}: uno por cuerpo. */
-    private static int receivedCount(String response) {
-        int total = 0;
-        for (int at = response.indexOf("\\"Body\\""); at >= 0; at = response.indexOf("\\"Body\\"", at + 1)) {
-            total++;
+    /** Re-serializa un mensaje ya deduplicado y lo añade a la lista en construcción. */
+    private static void appendMessage(StringBuilder target, Map<String, Object> message) {
+        if (target.length() > 0) {
+            target.append(',');
         }
-        return total;
+        try {
+            target.append(JSON.writeValueAsString(message));
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("No se pudo re-serializar un mensaje de SQS", e);
+        }
+    }
+
+    /**
+     * La lista {@code Messages} de una respuesta cruda de {@code receive-message}, o vacía
+     * si no había ninguno. Deliberadamente <b>no</b> pasa por {@code decodeBodies}: ese
+     * desescapado reinserta el {@code Body} sin volver a escaparlo, y el sobre de SNS que
+     * envuelve un evento real —cuando llega antes de que {@code RawMessageDelivery} esté
+     * activo— tiene comillas anidadas que corromperían el JSON.
+     */
+    @SuppressWarnings("unchecked")
+    private static List<Map<String, Object>> receivedMessages(String raw) {
+        // Una cola agotada puede devolver la salida VACÍA —ni siquiera {}—, y sobre eso
+        // JsonPath lanza IllegalArgumentException("json string can not be null or empty"),
+        // que NO es el PathNotFoundException que se tolera abajo: se escapa, y como esto
+        // corre con BROKER_STOPPED todavía en true, mata el @BeforeAll de la clase entera.
+        // El mismo cuidado que ya tiene pendingOutboxRows con su salida numérica vacía.
+        if (raw == null || raw.isBlank()) {
+            return List.of();
+        }
+        try {
+            return JsonPath.read(raw, "$.Messages");
+        } catch (com.jayway.jsonpath.PathNotFoundException e) {
+            return List.of();
+        }
     }
 ${SQS_BODY_DECODING}
 ${purgeDoc}
@@ -3334,7 +3411,7 @@ ${outage}`;
     private static final Map<String, Long> MARKS = new ConcurrentHashMap<>();
 
 ${doc}
-    protected static String publishedMessages(String channel, int count) {
+    protected static String publishedMessages(String channel, int count) {${drainBeforeRead(model, 'channel')}
         Long mark = MARKS.get(channel);
         // Con marca se lee todo lo publicado después de ella; sin marca, los últimos
         // \`count\` (lo que hacía este helper antes de existir el aislamiento).
