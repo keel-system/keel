@@ -86,8 +86,9 @@ export const DATABASES = {
     user: (db) => db,
     password: 'changeme',
     url: (db) => `jdbc:postgresql://localhost:5432/${db}`,
-    // Tipo `uuid` nativo: el literal en texto se convierte solo en la comparación.
-    uuidLiteral: (id) => id,
+    // Tipo `uuid` nativo: el literal en texto se convierte solo en la comparación, así que
+    // basta con entrecomillarlo.
+    uuidLiteral: { prefix: "'", suffix: "'" },
     serviceKey: 'db',
     cliTool: 'psql',
     cliVia: 'devtools',
@@ -148,7 +149,14 @@ export const DATABASES = {
     // ninguna fila y tampoco falla: un WHERE con él devuelve vacío y un INSERT mete basura.
     // Verificado en vivo — tres clases de flujo distintas lo adivinaron mal antes de que
     // esto existiera.
-    uuidLiteral: (id) => `UUID_TO_BIN(${id})`,
+    //
+    // Se declara como el par de trozos que ENVUELVEN al identificador, no como una función
+    // que lo compone. Parece un rodeo y no lo es: lo que se genera es una EXPRESIÓN JAVA que
+    // produce SQL, y una función que devuelve `UUID_TO_BIN(<algo>)` invita a interpolar ahí
+    // la expresión Java — con lo que sale `UUID_TO_BIN("'" + id + "'")`, que en Java es una
+    // llamada a un método que no existe y tumba la compilación del source set entero. Pasó.
+    // Con dos trozos de texto no hay forma de confundir los dos lenguajes.
+    uuidLiteral: { prefix: "UUID_TO_BIN('", suffix: "')" },
     composeService: (db) => ({
       image: 'mysql:8.0',
       environment: {

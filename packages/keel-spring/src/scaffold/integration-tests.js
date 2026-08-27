@@ -2323,7 +2323,11 @@ ${reseedMethod}`;
 function uuidLiteralHelper(model) {
   const entry = dbEntry(model);
   if (!entry?.uuidLiteral) return '';
-  const example = entry.uuidLiteral(String.raw`"'" + id + "'"`);
+  // La expresión Java que produce el literal SQL: los dos trozos del catalogo, con el
+  // identificador concatenado en medio. Nada de interpolar Java dentro de una funcion que
+  // compone SQL — ver el comentario de `uuidLiteral` en stack-catalog.js.
+  const { prefix, suffix } = entry.uuidLiteral;
+  const example = `${javaString(prefix)} + id + ${javaString(suffix)}`;
   const optimistic = model.persistenceKind === 'document' ? null : 'lock_version';
   return `
     /**

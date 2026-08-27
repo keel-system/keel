@@ -35,6 +35,25 @@ const brokerArg = args.find((arg) => arg.startsWith('--broker='))?.split('=')[1]
 // Los tres brokers tienen ramas distintas de `deliverMessage` en el arnés: si no se
 // pide uno concreto, se comprueban todos. Es donde más barato sale un fallo de tipos.
 const brokers = brokerArg ? [brokerArg] : ['kafka', 'rabbitmq', 'snssqs'];
+const databaseArg = args.find((arg) => arg.startsWith('--database='))?.split('=')[1];
+
+/**
+ * Qué combinaciones se compilan.
+ *
+ * El broker es el eje evidente —tres ramas de `deliverMessage`— pero NO es el único: el
+ * arnés también tiene código que depende del MOTOR, y ese eje faltaba. Costó una corrida
+ * entera descubrirlo: `uuidLiteral()` se emitía con Java inválido bajo MySQL —una llamada a
+ * un método inexistente en vez de una cadena— y aquí salía verde SIEMPRE, porque sin
+ * `--database` el stack cae en el default (PostgreSQL) y ahí la misma plantilla produce Java
+ * válido por casualidad. El source set entero dejaba de compilar en el proyecto real.
+ *
+ * Así que se añade una pasada con MySQL, que es el otro motor cuyo arnés difiere. No se
+ * multiplican los seis por los tres brokers: eso son minutos por combinación y el código que
+ * cambia con el motor no cambia además con el broker.
+ */
+const combos = databaseArg
+  ? brokers.map((broker) => ({ broker, database: databaseArg }))
+  : [...brokers.map((broker) => ({ broker, database: null })), { broker: brokers[0], database: 'mysql' }];
 
 if (!fs.existsSync(path.join(fixturesDir, fixture, 'service.keel.yaml'))) {
   console.error(`No existe la fixture '${fixture}' en ${fixturesDir}`);
@@ -48,7 +67,7 @@ if (java.error) {
 }
 
 let failed = 0;
-for (const broker of brokers) {
+for (const { broker, database } of combos) {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), `keel-compile-${broker}-`));
   try {
     const { manifest, layers, errors } = loadService(path.join(fixturesDir, fixture));
@@ -56,14 +75,14 @@ for (const broker of brokers) {
       console.error(`${fixture}: la fixture no carga:\n  ${errors.join('\n  ')}`);
       process.exit(2);
     }
-    scaffoldService({ manifest, layers, workspace, force: true, stack: { broker } });
+    scaffoldService({ manifest, layers, workspace, force: true, stack: database ? { broker, database } : { broker } });
 
     const project = fs
       .readdirSync(path.join(workspace, 'services'), { withFileTypes: true })
       .find((entry) => entry.isDirectory());
     const projectDir = path.join(workspace, 'services', project.name);
 
-    process.stdout.write(`${fixture} (${broker}): compilando el arnés… `);
+    process.stdout.write(`${fixture} (${broker}${database ? `, ${database}` : ''}): compilando el arnés… `);
     // El wrapper vendorizado se invoca por `sh` para que valga igual en Windows.
     const result = spawnSync('sh', ['gradlew', 'compileIntegrationTestJava', '--console=plain', '--no-daemon'], {
       cwd: projectDir,

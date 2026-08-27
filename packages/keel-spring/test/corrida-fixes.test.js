@@ -392,7 +392,13 @@ test('el arnés sabe escribir un UUID para su motor, en vez de que se adivine', 
   const harness = project('stock-reservation', MYSQL).file('AbstractFlowIT.java');
 
   assert.match(harness, /protected static String uuidLiteral\(String id\)/);
-  assert.match(harness, /return UUID_TO_BIN\("'" \+ id \+ "'"\);/);
+  // Lo que se genera es una EXPRESIÓN JAVA que produce SQL, no SQL. Este test afirmaba antes
+  // `return UUID_TO_BIN("'" + id + "'");`, que es una llamada a un método Java inexistente:
+  // congeló el código roto y tumbó la compilación del source set entero en una corrida.
+  // De ahí que la aserción empiece por la comilla: si `UUID_TO_BIN` no está DENTRO de una
+  // cadena, no es SQL — es una llamada.
+  assert.match(harness, /return "UUID_TO_BIN\('" \+ id \+ "'\)";/);
+  assert.ok(!/return UUID_TO_BIN\(/.test(harness), 'UUID_TO_BIN fuera de la cadena es una llamada a método');
   // La otra que se adivinó mal, documentada junto al helper.
   assert.match(harness, /lock_version/);
 
