@@ -13,13 +13,55 @@
 // suyos comprobaría que los brokers responden, que no es lo mismo que comprobar
 // que el generador acierta.
 //
-// Qué se comparte y qué no: lo de nivel exec (flags, hosts, puertos, rutas) y
-// los cuerpos de petición. La orquestación con estado —la contabilidad de
-// offsets de Kafka, el filtrado por eventType— vive en Java y el runner la
-// reimplementa: es lógica del arnés, no del canal.
+// Qué se comparte y qué no: lo de nivel exec (flags, hosts, puertos, rutas), los
+// cuerpos de petición y —desde una corrida que lo pagó— la POLÍTICA DE LECTURA de
+// un canal: cuántos mensajes admite una llamada y qué campo identifica a uno.
+// Aquello no es lógica del arnés: el tope de diez es de SQS, y que un mensaje
+// leído con `--visibility-timeout 0` pueda volver en la siguiente llamada también.
+// Mientras esa parte vivió solo en Java, el runner leía de UNA vez lo que el arnés
+// leía por lotes, así que el gate en vivo no podía ver —y no vio— que el arnés
+// contaba dos veces un mensaje repescado.
+//
+// Lo que sigue sin compartirse es la orquestación con estado propia del arnés: la
+// contabilidad de offsets de Kafka y el filtrado por eventType. Eso sí es suyo.
 
 /** Los tres brokers soportados por el generador. */
 export const BROKERS = ['kafka', 'rabbitmq', 'snssqs'];
+
+/**
+ * Cuántos mensajes admite UNA llamada de lectura, por broker.
+ *
+ * SQS acota `--max-number-of-messages` a 1..10 y contesta InvalidParameterValue por encima,
+ * así que pedir más exige varias llamadas. RabbitMQ y Kafka aceptan el número de una vez.
+ */
+export const READ_BATCH_LIMIT = { snssqs: 10, rabbitmq: Infinity, kafka: Infinity };
+
+/**
+ * El campo que identifica un mensaje **para deduplicar entre llamadas**, o `null` si en ese
+ * broker una relectura no puede devolver lo ya devuelto.
+ *
+ * Solo SQS lo necesita: con `--visibility-timeout 0` un mensaje vuelve a estar visible al
+ * instante, así que dos llamadas seguidas pueden traer el mismo. RabbitMQ hace un único
+ * `get` con peek —una petición no se repesca a sí misma— y Kafka lee por offset.
+ *
+ * Y es el id del BROKER, no el de aplicación: dos entregas legítimas del mismo evento —la
+ * reentrega que un escenario de idempotencia provoca a propósito— comparten cuerpo y
+ * `metadata.eventId`, y deduplicarlas por ahí dejaría ese escenario en verde sin probar nada.
+ */
+export const READ_DEDUPE_KEY = { snssqs: 'MessageId', rabbitmq: null, kafka: null };
+
+/**
+ * Cuántas llamadas de lectura como mucho para juntar `count` mensajes distintos.
+ *
+ * Las que hacen falta si ninguna repesca, más margen para las que sí. Sin cota, una cola que
+ * solo puede devolver lo ya visto —menos mensajes reales que los pedidos— deja el bucle
+ * sondeando para siempre.
+ */
+export function readAttemptLimit(broker, count) {
+  const limit = READ_BATCH_LIMIT[broker] ?? Infinity;
+  if (!Number.isFinite(limit)) return 1;
+  return Math.ceil(Math.max(count, 1) / limit) + 5;
+}
 
 /**
  * Endpoints tal como los ve el contenedor devtools, que está en la red del

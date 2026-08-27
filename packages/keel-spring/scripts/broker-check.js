@@ -52,6 +52,9 @@ import {
   rabbitProbeBody,
   rabbitPublishBody,
   readParts,
+  readAttemptLimit,
+  READ_BATCH_LIMIT,
+  READ_DEDUPE_KEY,
   sqsAttributesJson,
   UNKNOWN_TOPIC,
   ENDPOINTS,
@@ -217,6 +220,32 @@ function scenarios(broker, context) {
    * distinguiría "el broker deduplicó" —que es lo que BRK-7 juzga— de "aún no ha
    * llegado el segundo".
    */
+  /**
+   * Junta hasta `count` mensajes DISTINTOS, con la misma orquestación que el arnés generado:
+   * lotes del tamaño que el broker admite, dedupe por su clave y la misma cota de intentos.
+   *
+   * Existe porque `readUntil` cuenta dentro de UNA respuesta, y por eso este runner no podía
+   * ver —y no vio— el defecto que una corrida encontró: con más de diez mensajes el arnés
+   * pide dos lotes, el segundo repesca del primero (con `--visibility-timeout 0` un mensaje
+   * leído vuelve a estar visible al instante) y el conteo salía inflado. Leyendo de una sola
+   * vez, ese camino no se recorre.
+   */
+  const readAll = (destination, count) => {
+    const limit = READ_BATCH_LIMIT[broker];
+    const perCall = Number.isFinite(limit) ? limit : count;
+    const seen = new Map();
+    const attempts = readAttemptLimit(broker, count);
+    for (let attempt = 0; attempt < attempts && seen.size < count; attempt++) {
+      const size = Math.min(count - seen.size, perCall);
+      const batch = keyedMessages(broker, read(destination, { count: size }).stdout);
+      if (batch.length === 0) break;
+      for (const message of batch) if (!seen.has(message.key)) seen.set(message.key, message.body);
+      if (batch.length < size) break;
+      sleep(500);
+    }
+    return [...seen.values()];
+  };
+
   const readUntil = (destination, marker, expected, attempts = 8) => {
     let best = [];
     for (let attempt = 0; attempt < attempts; attempt++) {
@@ -413,6 +442,35 @@ function scenarios(broker, context) {
       }
     },
     {
+      id: 'BRK-14',
+      title: 'leer más mensajes de los que cabe en una llamada no los cuenta dos veces',
+      // El escenario que faltaba, y que se echa de menos por lo que dejó pasar: el arnés
+      // pide por lotes cuando el broker acota la llamada, y con `--visibility-timeout 0`
+      // un mensaje leído vuelve a estar visible AL INSTANTE — así que el lote siguiente
+      // puede repescarlo. Durante cuatro corridas el conteo salió inflado con más de diez
+      // mensajes, y el gate en vivo no podía verlo porque leía de UNA vez lo que el arnés
+      // lee por lotes.
+      //
+      // El modo de fallo es el peor: un conteo inflado ACUSA de duplicar eventos a un
+      // servicio que no duplica ninguno, y se arbitra contra código correcto.
+      check: () => {
+        const wanted = (READ_BATCH_LIMIT[broker] === Infinity ? 10 : READ_BATCH_LIMIT[broker]) + 5;
+        purge(topic);
+        const marker = `bulk-${Date.now()}`;
+        for (let n = 0; n < wanted; n++) {
+          const sent = deliver(topic, `${marker}-${n}`, `{"marker":"${marker}","n":${n}}`, outbound);
+          if (sent.status !== 0) return ko(`entrega ${n + 1} falló: ${firstLine(sent.stderr || sent.stdout)}`);
+        }
+        // Se piden MÁS de los publicados a propósito: así el bucle agota sus intentos
+        // repescando, que es justo la condición en la que el conteo se inflaba.
+        const distinct = readAll(topic, wanted + 5).filter((body) => body.includes(marker));
+        if (distinct.length === wanted) return ok();
+        return distinct.length > wanted
+          ? ko(`se contaron ${distinct.length} mensajes habiendo publicado ${wanted}: la lectura repesca`)
+          : ko(`solo llegaron ${distinct.length} de ${wanted} mensajes publicados`);
+      }
+    },
+    {
       id: 'BRK-9',
       title: 'sondear un destino virgen no revienta',
       // Regresión ya documentada en `safeNextOffset`: contra un broker recién
@@ -532,6 +590,24 @@ function firstLine(text) {
  * comparación literal fallaría por la envoltura, no por el contenido. Esto es
  * reimplementar el desenvuelto que hace el arnés — orquestación, no canal.
  */
+/**
+ * Los mensajes de una respuesta con su CLAVE de deduplicación, cuando el broker la tiene.
+ *
+ * Es lo que `payloadsOf` no puede dar: aquel devuelve solo los cuerpos, y dos apariciones del
+ * mismo mensaje son indistinguibles ahí. La clave sale de `READ_DEDUPE_KEY`, la misma tabla de
+ * la que el arnés renderiza su Java.
+ */
+function keyedMessages(broker, output) {
+  const key = READ_DEDUPE_KEY[broker];
+  const text = (output ?? '').trim();
+  if (!key || !text) return payloadsOf(broker, output).map((body, index) => ({ key: String(index), body }));
+  try {
+    return (JSON.parse(text).Messages ?? []).map((message) => ({ key: message[key], body: message.Body }));
+  } catch {
+    return [];
+  }
+}
+
 function payloadsOf(broker, output) {
   const text = (output ?? '').trim();
   if (!text) return [];

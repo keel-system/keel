@@ -8,7 +8,13 @@ import { loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
 import { buildModel } from '../src/lib/model.js';
 import { generate as generateScheduling, scheduledTaskCount } from '../src/scaffold/scheduling.js';
-import { isEmptyRead, emptyReadValue } from '../src/lib/broker-probes.js';
+import {
+  isEmptyRead,
+  emptyReadValue,
+  READ_BATCH_LIMIT,
+  READ_DEDUPE_KEY,
+  readAttemptLimit
+} from '../src/lib/broker-probes.js';
 import { needsReadCommitted, claimTransaction } from '../src/lib/claim-sql.js';
 import { harnessQueueName } from '../src/scaffold/messaging-provisioning.js';
 import { outboxRelayBeanName } from '../src/scaffold/outbox.js';
@@ -670,4 +676,41 @@ test('sin outbox no se espera nada, porque no hay relay', () => {
   const harness = project('product-catalog', { ...SQS, broker: 'rabbitmq' }).file('AbstractFlowIT.java');
 
   assert.ok(!harness.includes('awaitOutboxDrained'), harness.slice(0, 400));
+});
+
+test('la política de lectura es una sola: el arnés y el gate en vivo la comparten', () => {
+  // Por qué esto merece un test propio. El módulo de sondas declaraba que la orquestación
+  // con estado «vive en Java y el runner la reimplementa», y con esa frontera el gate en
+  // vivo leía de UNA vez lo que el arnés lee por lotes — así que no podía ver, y no vio, que
+  // el arnés contaba dos veces un mensaje repescado. Cuatro corridas con el defecto dentro.
+  //
+  // El tope de diez no es del arnés: es de SQS. Y que un mensaje leído con
+  // `--visibility-timeout 0` pueda volver, también. Eso es política del canal, y va donde
+  // van los comandos.
+  const harness = project('stock-reservation', SQS).file('AbstractFlowIT.java');
+
+  // El Java sale de las constantes, no de literales sueltos.
+  assert.ok(harness.includes(`Math.min(wanted - seen.size(), ${READ_BATCH_LIMIT.snssqs})`), 'el tope de lote no sale del catálogo');
+  assert.ok(harness.includes(`message.get("${READ_DEDUPE_KEY.snssqs}")`), 'la clave de dedupe no sale del catálogo');
+
+  // Y la cota de intentos que el Java calcula es la MISMA que aplica el runner. Si divergen,
+  // el gate en vivo mide una orquestación distinta de la que se genera — que es exactamente
+  // el agujero por el que el defecto sobrevivió.
+  const [, offset, divisor, extra] = harness.match(/\(wanted \+ (\d+)\) \/ (\d+) \+ (\d+)/).map(Number);
+  // División ENTERA, como en Java: con Math.round o la división de JS este test daría por
+  // equivalentes dos fórmulas que no lo son.
+  const javaLimit = (count) => Math.floor((Math.max(count, 1) + offset) / divisor) + extra;
+  for (const count of [1, 10, 11, 15, 25]) {
+    assert.equal(javaLimit(count), readAttemptLimit('snssqs', count), `divergen en count=${count}`);
+  }
+});
+
+test('y donde el broker no acota la llamada, no se lee por lotes ni se deduplica', () => {
+  // RabbitMQ y Kafka aceptan el número de una vez, y una sola petición no puede repescarse a
+  // sí misma. Deduplicar ahí sería código muerto que sugiere un problema que no tienen.
+  for (const broker of ['rabbitmq', 'kafka']) {
+    assert.equal(READ_BATCH_LIMIT[broker], Infinity, broker);
+    assert.equal(READ_DEDUPE_KEY[broker], null, broker);
+    assert.equal(readAttemptLimit(broker, 25), 1, broker);
+  }
 });

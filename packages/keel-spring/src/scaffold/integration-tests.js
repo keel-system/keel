@@ -37,6 +37,9 @@ import {
   emptyReadJava,
   emptyReadValue,
   expr,
+  READ_BATCH_LIMIT,
+  READ_DEDUPE_KEY,
+  readAttemptLimit,
   javaArgs,
   offsetsParts,
   prefix,
@@ -3265,6 +3268,10 @@ ${purgeWrapper(model)}${outage}`;
     // así que el nombre del canal tampoco es el destino del que se lee ni el que se purga.
     const physical = expr('physicalDestination(destination)');
     const read = readParts('snssqs', { destination: physical, count: expr('String.valueOf(size)'), base });
+    // La cota de intentos, como EXPRESIÓN Java sobre `count`: la fórmula la fija
+    // `readAttemptLimit` en lib/broker-probes.js, que es la misma que aplica el runner de
+    // conformidad. Escribirla dos veces es como el gate en vivo deja de medir lo que se genera.
+    const readAttemptLimitJava = `(wanted + ${READ_BATCH_LIMIT.snssqs - 1}) / ${READ_BATCH_LIMIT.snssqs} + ${readAttemptLimit('snssqs', 1) - 1}`;
     const purge = purgeParts('snssqs', { destination: physical, base });
     return `
     private static final String QUEUE_URL = "${ENDPOINTS.snssqs.queueUrlPrefix}";
@@ -3298,17 +3305,18 @@ ${physicalDestinationSection(model)}${doc}
         StringBuilder unique = new StringBuilder();
         // Cota de lotes: sin ella, una cola que solo puede repescar lo ya visto —menos
         // mensajes reales que los pedidos— deja el bucle sondeando para siempre.
-        int maxAttempts = (Math.max(count, 1) + 9) / 10 + 5;
+        int wanted = Math.max(count, 1);
+        int maxAttempts = ${readAttemptLimitJava};
         try {
-            for (int attempt = 0; attempt < maxAttempts && seen.size() < Math.max(count, 1); attempt++) {
-                int size = Math.min(Math.max(count, 1) - seen.size(), 10);
+            for (int attempt = 0; attempt < maxAttempts && seen.size() < wanted; attempt++) {
+                int size = Math.min(wanted - seen.size(), ${READ_BATCH_LIMIT.snssqs});
                 String batch = aws(${javaArgs(read)});
                 List<Map<String, Object>> messages = receivedMessages(batch);
                 if (messages.isEmpty()) {
                     break;
                 }
                 for (Map<String, Object> message : messages) {
-                    if (seen.add(String.valueOf(message.get("MessageId")))) {
+                    if (seen.add(String.valueOf(message.get("${READ_DEDUPE_KEY.snssqs}")))) {
                         appendMessage(unique, message);
                     }
                 }

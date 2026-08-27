@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
 import { loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
+import { READ_BATCH_LIMIT } from '../src/lib/broker-probes.js';
 import { cacheFlushCmd } from '../src/scaffold/devtools.js';
 import { CACHES } from '../src/lib/stack-catalog.js';
 import { fixedFrameworkErrors } from 'keel-core';
@@ -1782,7 +1783,9 @@ test('la lectura de SQS pide por lotes: el límite de 10 es del broker, no del e
 
   // `--max-number-of-messages` acepta 1..10 y contesta InvalidParameterValue por encima:
   // pedir de una vez los mensajes de un escenario de clúster reventaba la lectura.
-  assert.match(harness, /int size = Math\.min\(Math\.max\(count, 1\) - seen\.size\(\), 10\);/);
+  // Atado a la constante, no al literal: el tope es del broker y vive en broker-probes.js,
+  // que es de donde también lo toma el runner de conformidad.
+  assert.ok(harness.includes(`int size = Math.min(wanted - seen.size(), ${READ_BATCH_LIMIT.snssqs});`), harness.slice(harness.indexOf('publishedMessages'), harness.indexOf('publishedMessages') + 1400));
   assert.ok(harness.includes('String.valueOf(size)'));
   // Este test afirmaba antes que bastaba con cortar en el primer lote incompleto
   // (`if (receivedCount(batch) < size)`), y **eso congelaba un defecto**: con
