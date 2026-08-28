@@ -15,6 +15,12 @@ entities:
     indexes: [[status], [catalogId, status]]
   Catalog:
     naturalKey: [slug]
+    indexes:
+      # Unicidad CONDICIONADA: como máximo un catálogo publicado por slug, sin
+      # impedir que convivan las versiones retiradas con ese mismo slug.
+      - fields: [slug]
+        unique: true
+        when: { field: status, equals: published }
 
 audit:
   timestamps: all                        # all | declared | none
@@ -27,7 +33,21 @@ consistency:
 
 - Cada clave de `entities` debe existir en `domain` (referencia por nombre, validada por `keel validate`).
 - `naturalKey`: campos que identifican la entidad para el negocio, además del `id` técnico.
-- `indexes`: índices sugeridos por los patrones de consulta de `use-cases`; cada índice es la lista de miembros que lo componen.
+- `indexes`: índices sugeridos por los patrones de consulta de `use-cases`; cada índice es la **lista de miembros** que lo componen (forma corta) o un **objeto** que además declara unicidad y la condición bajo la que aplica (ver «Unicidad condicionada» más abajo).
+- **Unicidad condicionada** (`{ fields, unique: true, when: { field, equals } }`): la segunda forma de un elemento de `indexes`, para el invariante que la forma corta no sabe expresar. «Como máximo **una versión activa** por clave» no es una unicidad de columnas: con `unique` a secas sobre `[application, key, locale]` no podrías tener nunca dos versiones, y sin nada la ventana de dos publicaciones simultáneas queda abierta — la comprobación previa del caso de uso produce el error de negocio en el caso normal, pero no cierra esa ventana.
+
+  ```yaml
+  indexes:
+    - fields: [application, key, locale]
+      unique: true
+      when: { field: status, equals: active }   # solo las filas con status = active
+  ```
+
+  - `unique: true` es **obligatorio** con `when`: un índice condicionado que no restringe nada solo acelera consultas, y para eso la condición sobra. El schema lo exige.
+  - La condición es `campo = valor` y nada más — sin `AND`, sin comparaciones, sin expresiones. Una condición libre sería SQL dentro del diseño, y el diseño es agnóstico del motor. `equals` admite una cadena, un número o un booleano.
+  - Si el campo es un **enum**, `equals` tiene que ser uno de sus valores declarados, escrito **igual que en `domain`** (`active`, no `ACTIVE`: la traducción al valor que guarda el motor es cosa del generador). `keel validate` da **error** si no lo es, y no es celo: un valor que el enum no tiene produce un índice que se crea sin fallar y no casa con ninguna fila, así que el invariante queda sin efecto **en silencio** — no lo delata el arranque, ni las migraciones, ni ningún escenario, porque la ausencia de un rechazo no rompe ninguna prueba.
+  - **No todos los motores lo sostienen**, y eso cambia lo que el invariante vale: PostgreSQL (índice parcial) y SQL Server (índice filtrado) sí; en MySQL, MariaDB y Oracle el generador **avisa** y la garantía se queda entera en el caso de uso, que no cierra la ventana de concurrencia. Declararlo sigue mereciendo la pena —el aviso es lo que hace visible la decisión— pero si esa ventana importa, el motor es parte del diseño y no solo del despliegue.
+  - El objeto admite además `description`, para dejar escrito el invariante en las palabras del negocio.
 - **El barrido de una reconciliación es el patrón de consulta que se escapa de ese criterio**, porque no está en `use-cases` como una operación que alguien invoca: es un `schedule`. Una entidad con `reconciledBy` (ver `dependencies`) se consulta cada N minutos con el mismo predicado —`<campo de lifecycle> = '<espera>' AND <awaitingSince> < <umbral>` —el campo que la activación declara en `awaitingSince`—— y quiere su índice compuesto, en ese orden: **la igualdad primero y el rango después**, que es lo único que un B-tree aprovecha entero. Al revés, o con un índice solo sobre el estado, la base filtra por estado y evalúa la marca fila a fila. Mientras la espera sea corta y poco poblada no se nota; cuando el estado acumula —o cuando no es selectivo, porque la mayoría de las filas está ahí— pasa a ser un recorrido de la tabla de negocio cada N minutos, compitiendo con el tráfico real. Es un fallo que ninguna prueba ve, porque en pruebas la tabla tiene diez filas. Por eso `keel validate` **avisa** cuando ninguno de los `indexes` de una entidad que un barrido barre empieza por su campo de lifecycle: es lo único de este apartado que se puede comprobar mecánicamente, y el único aviso del método que habla de coste y no de corrección.
 - Los miembros de `naturalKey` e `indexes` nombran, en ambos casos: un **campo** (`sku`), una **relación** —indistintamente por su nombre (`category`) o con el sufijo del id (`categoryId`)— o el **subcampo de un value type compuesto** con dot-path (`price.amount`). El generador resuelve la columna real; `keel validate` comprueba que el miembro existe en la entidad de `domain`.
 - Con `default.model: document` hay una forma más: el **campo de una entidad del mismo agregado** con dot-path (`sections.status`). Solo ahí tiene sentido, y es una consecuencia directa del modelo: en el documental la entidad hija va anidada dentro del registro de su raíz, así que es una ruta real de ese registro; en el relacional vive en otra tabla y ningún índice la alcanza. Lo que **no** cambia con el modelo es la frontera del agregado: de un agregado ajeno solo se guarda su id, así que `customer.email` es error en los dos —índexa por `customerId`, o por un campo propio—.
