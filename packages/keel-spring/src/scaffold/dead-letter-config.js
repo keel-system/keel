@@ -42,9 +42,17 @@ function byDestination(model, broker, subs) {
 
 export function generate(model) {
   const subs = deadLetterSubscriptions(model);
+  // RabbitMQ va aparte y ANTES del corte por descarte: ahí no se declara solo la DLQ, se
+  // declara la TOPOLOGÍA de consumo entera (exchange de origen + cola propia + binding), y
+  // eso hace falta la declare o no el diseño su descarte. Cuando dependía de `deadLetter`,
+  // un diseño sin descarte se quedaba sin dueño de la topología: el agente la improvisaba
+  // desde su skill con otro nombre de cola, y la purga y la entrega del arnés —que sí salen
+  // de build— hablaban con un destino inexistente (`corrida-mail-rabbit`).
+  if (model.stack?.broker === 'rabbitmq') {
+    return (model.subscriptions ?? []).length > 0 ? [rabbitConfig(model, subs)] : [];
+  }
   if (subs.length === 0) return [];
   if (model.stack?.broker === 'kafka') return [kafkaConfig(model, subs)];
-  if (model.stack?.broker === 'rabbitmq') return [rabbitConfig(model, subs)];
   // snssqs: la topología la crea infra/init-messaging.sh (RedrivePolicy), porque en
   // SQS el descarte es del BROKER — lo hace él al agotar maxReceiveCount, sin que haya
   // código de reintento que escribir. No hay clase que generar.
@@ -220,60 +228,82 @@ ${backOff.method}
 // y la aplicación hablan del mismo sitio sin un exchange más que declarar.
 function rabbitConfig(model, subs) {
   const imports = new Set([
+    'org.springframework.amqp.core.BindingBuilder',
+    'org.springframework.amqp.core.Declarables',
     'org.springframework.amqp.core.Queue',
     'org.springframework.amqp.core.QueueBuilder',
+    'org.springframework.amqp.core.TopicExchange',
     'org.springframework.context.annotation.Bean',
     'org.springframework.context.annotation.Configuration'
   ]);
 
-  // Un par de beans por COLA, no por suscripción: con RabbitMQ las suscripciones que
-  // comparten destino consumen de la misma cola, así que emitir uno por evento producía
-  // dos beans declarando la misma —y dos más para el mismo descarte—. Aquí no llegaba a
-  // romper (los argumentos coincidían, y RabbitMQ solo rechaza la redeclaración cuando
-  // difieren), pero es la misma cardinalidad mal puesta que en Kafka tumbaba el arranque:
-  // se arregla en los dos lados o el próximo broker la hereda.
-  const beans = byDestination(model, 'rabbitmq', subs)
+  // Un bean por COLA, no por suscripción: con RabbitMQ las suscripciones que comparten
+  // canal de origen consumen de la misma cola, así que emitir uno por evento declararía
+  // dos veces la misma —y RabbitMQ rechaza con PRECONDITION_FAILED la redeclaración con
+  // argumentos distintos, tumbando el arranque—. Es la misma cardinalidad que en Kafka.
+  const deadLettered = new Set(subs.map((sub) => sub.name));
+  const beans = byDestination(model, 'rabbitmq', model.subscriptions ?? [])
     .map(({ destination, subs: sharing }) => {
-      const dlq = deadLetterName('rabbitmq', destination);
       const bean = beanName(destination);
       const who = sharing.map((sub) => sub.name).join(', ');
-      return `    /** Cola de ${who}, con su descarte enlazado por argumentos. */
-    @Bean
-    public Queue ${bean}Queue() {
-        return QueueBuilder.durable("${destination}")
+      const source = sharing[0].topicDefault;
+      // El descarte es propiedad de la COLA, así que basta con que UNA de las suscripciones
+      // que la comparten lo declare: no hay forma de dar DLQ a un evento y no a otro si los
+      // dos llegan por la misma cola.
+      const withDeadLetter = sharing.some((sub) => deadLettered.has(sub.name));
+      const dlq = deadLetterName('rabbitmq', destination);
+      const args = withDeadLetter
+        ? `
                 .withArgument("x-dead-letter-exchange", "")
-                .withArgument("x-dead-letter-routing-key", "${dlq}")
-                .build();
-    }
-
+                .withArgument("x-dead-letter-routing-key", "${dlq}")`
+        : '';
+      const dlqDecl = withDeadLetter ? `
+        Queue deadLetter = QueueBuilder.durable("${dlq}").build();` : '';
+      const declarables = withDeadLetter
+        ? 'source, queue, deadLetter, BindingBuilder.bind(queue).to(source).with("#")'
+        : 'source, queue, BindingBuilder.bind(queue).to(source).with("#")';
+      return `    /**
+     * Topología de consumo de ${who}${withDeadLetter ? ', con su descarte enlazado por argumentos' : ''}.
+     *
+     * <p>El binding usa {@code "#"} porque el canal de origen transporta todo lo que publica
+     * su emisor, no solo lo que este servicio consume: el filtro por {@code eventType} va en
+     * el listener, que descarta sin lanzar lo que no le corresponde.
+     */
     @Bean
-    public Queue ${bean}DeadLetterQueue() {
-        return QueueBuilder.durable("${dlq}").build();
+    public Declarables ${bean}Topology() {
+        TopicExchange source = new TopicExchange("${source}", true, false);
+        Queue queue = QueueBuilder.durable("${destination}")${args}
+                .build();${dlqDecl}
+        return new Declarables(${declarables});
     }`;
     })
     .join('\n\n');
 
-  const listed = subs.map((sub) => `${sub.name} → ${deadLetterName('rabbitmq', sub.topicDefault)}`).join(', ');
+  const listed = (model.subscriptions ?? [])
+    .map((sub) => `${sub.name} → ${subscriptionDestination('rabbitmq', model, sub)}`)
+    .join(', ');
 
   const body = `/**
- * Colas de suscripción con su descarte: ${listed}.
+ * Topología RabbitMQ de las suscripciones: ${listed}.
  *
- * <p>El descarte se enlaza por argumentos de cola ({@code x-dead-letter-exchange} vacío
- * más {@code x-dead-letter-routing-key}), así que lo aplica el broker cuando el consumidor
- * rechaza el mensaje sin reencolar. No hay código de reintento que escribir.
+ * <p>El canal que nombra el diseño es el <b>exchange</b> del emisor, y de un exchange no se
+ * consume: cuelga de él una cola propia de este servicio. Dos servicios suscritos al mismo
+ * canal necesitan colas distintas, o el broker les repartiría los mensajes en vez de
+ * entregárselos a ambos.
  *
- * <p>Estas declaraciones son de <b>build</b>: no las redeclares en el listener. Dos
- * declaraciones de la misma cola con argumentos distintos hacen que RabbitMQ rechace la
- * segunda con PRECONDITION_FAILED, y el contenedor no arranca.
+ * <p>Estas declaraciones son de <b>build</b>: no las redeclares en el listener ni en otra
+ * {@code @Configuration}. Dos declaraciones de la misma cola con argumentos distintos hacen
+ * que RabbitMQ rechace la segunda con PRECONDITION_FAILED, y el contenedor no arranca. El
+ * nombre de la cola está en {@code messaging.subscriptions.<evento>.queue}: léelo de ahí.
  */
 @Configuration
-public class DeadLetterConfig {
+public class RabbitTopologyConfig {
 
 ${beans}
 }`;
 
   return {
-    path: javaPath(model, MESSAGING_PKG, 'DeadLetterConfig'),
+    path: javaPath(model, MESSAGING_PKG, 'RabbitTopologyConfig'),
     content: javaFile(subPackage(model, MESSAGING_PKG), [...imports], body)
   };
 }

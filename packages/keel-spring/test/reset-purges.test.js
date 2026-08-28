@@ -1,13 +1,17 @@
 // `infra/reset-db.sh` purga DESTINOS REALES, no nombres lógicos del diseño.
 //
 // La distinción no se ve hasta que muerde. Para un canal de publicación el nombre lógico y la
-// cola coinciden; para una SUSCRIPCIÓN, no: se consume de la cola de la fuente
-// (`inventory.events`, `any-registered-system.events`) y no del canal que el diseño nombra. El
-// script purgaba el nombre lógico, o sea una cola inexistente — y como la purga es tolerante a
-// fallo a propósito, lo único que se veía era un `AVISO: no se pudo purgar …` en cada reset,
-// mientras la cola de entrada arrastraba mensajes de un flujo al siguiente. Es exactamente lo que
-// este script existe para impedir, y lo que su propio comentario ya argumentaba para el destino
-// de descarte sin ver que valía igual para la cola principal.
+// cola coinciden; para una SUSCRIPCIÓN, no: el canal que el diseño nombra es el del EMISOR, y
+// donde se acumulan los mensajes es en la cola propia de este servicio. El script purgaba el
+// nombre lógico, o sea una cola inexistente — y como la purga es tolerante a fallo a propósito,
+// lo único que se veía era un `AVISO: no se pudo purgar …` en cada reset, mientras la cola de
+// entrada arrastraba mensajes de un flujo al siguiente. Es exactamente lo que este script existe
+// para impedir, y lo que su propio comentario ya argumentaba para el destino de descarte sin ver
+// que valía igual para la cola principal.
+//
+// Y luego una segunda vez, por lo mismo medio arreglado: se pasó a purgar el canal del EMISOR
+// (`inventory.events`), que en RabbitMQ es un exchange y tampoco acumula nada. La cola es la
+// nuestra, colgada de él — igual que en SNS/SQS, que ya lo tenía bien.
 //
 // Kafka no entra: no tiene `cliPurgeCmd` y su aislamiento es la marca de offset de AbstractFlowIT.
 
@@ -35,16 +39,28 @@ function purgedDestinations(broker, fixture = 'stock-reservation') {
   return [...script.matchAll(/echo "Canal purgado \([^:]+: ([^)]+)\)\."/g)].map((match) => match[1]);
 }
 
-test('RabbitMQ: se purga la cola de la suscripción, no el canal lógico', () => {
+test('RabbitMQ: se purga la COLA PROPIA de la suscripción, no el canal del emisor', () => {
   const purged = purgedDestinations('rabbitmq');
 
-  // La fixture tiene tres suscripciones que comparten la cola de su fuente: se purga UNA vez.
-  assert.ok(purged.includes('inventory.events'), `falta la cola de la suscripción: ${purged.join(', ')}`);
-  assert.equal(purged.filter((d) => d === 'inventory.events').length, 1, 'sin duplicar por suscripción');
+  // La fixture tiene tres suscripciones que comparten el mismo `source`, así que comparten
+  // cola: se purga UNA vez. El nombre lleva delante el del servicio porque la cola es NUESTRA —
+  // otro consumidor del mismo canal tiene la suya, y por eso el canal no puede dar el nombre.
+  assert.ok(
+    purged.includes('stock-reservation.inventory'),
+    `falta la cola propia de la suscripción: ${purged.join(', ')}`
+  );
+  assert.equal(
+    purged.filter((d) => d === 'stock-reservation.inventory').length,
+    1,
+    'sin duplicar por suscripción'
+  );
+  // Y el canal del emisor NO se purga: es un exchange, no acumula nada, y pedir su contenido
+  // solo producía el AVISO tolerado que ocultó el defecto durante toda una corrida.
+  assert.ok(!purged.includes('inventory.events'), `se purga un exchange: ${purged.join(', ')}`);
   // El canal de publicación sí es su propio destino y sigue purgándose.
   assert.ok(purged.includes('stockEvents'), 'falta el canal de publicación');
-  // Y el descarte, que ya funcionaba.
-  assert.ok(purged.includes('inventory.events-dlq'), 'falta el destino de descarte');
+  // Y el descarte, que ahora cuelga de nuestra cola y no del exchange ajeno.
+  assert.ok(purged.includes('stock-reservation.inventory-dlq'), 'falta el destino de descarte');
 });
 
 test('SNS/SQS: cada suscripción tiene cola propia y se purgan todas', () => {
@@ -65,7 +81,7 @@ test('SNS/SQS: cada suscripción tiene cola propia y se purgan todas', () => {
 
 test('se purga exactamente la cola que declara la topología generada', () => {
   // El cruce que hace que esto no pueda volver a divergir: el destino no se recalcula aquí, se lee
-  // del OTRO artefacto que build genera con la misma verdad — el `DeadLetterConfig`, que DECLARA
+  // del OTRO artefacto que build genera con la misma verdad — el `RabbitTopologyConfig`, que DECLARA
   // la cola. Son dos proyecciones del mismo dato, y compararlas es lo que impide que una se mueva
   // sin la otra. (El listener no sirve de ancla: lo escribe el agente, no build.)
   //
@@ -83,14 +99,14 @@ test('se purga exactamente la cola que declara la topología generada', () => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) walk(full);
-      else if (entry.name === 'DeadLetterConfig.java') topology = fs.readFileSync(full, 'utf8');
+      else if (entry.name === 'RabbitTopologyConfig.java') topology = fs.readFileSync(full, 'utf8');
     }
   };
   walk(javaRoot);
-  assert.ok(topology, 'build no generó DeadLetterConfig.java: no hay contra qué cruzar');
+  assert.ok(topology, 'build no generó RabbitTopologyConfig.java: no hay contra qué cruzar');
 
   const queues = new Set([...topology.matchAll(/QueueBuilder\.durable\("([^"]+)"\)/g)].map((m) => m[1]));
-  assert.ok(queues.size > 0, 'DeadLetterConfig no declara ninguna cola');
+  assert.ok(queues.size > 0, 'RabbitTopologyConfig no declara ninguna cola');
 
   const purged = purgedDestinations('rabbitmq');
   for (const queue of queues) {

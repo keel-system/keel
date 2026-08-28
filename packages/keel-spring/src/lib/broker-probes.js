@@ -72,8 +72,18 @@ export const ENDPOINTS = {
   rabbitmq: {
     credentials: 'guest:guest',
     queuesApi: 'http://rabbitmq:15672/api/queues/%2F/',
-    // El exchange por defecto enruta por nombre de cola: la routing key ES la cola.
-    publishApi: 'http://rabbitmq:15672/api/exchanges/%2F/amq.default/publish'
+    // Se publica en el EXCHANGE del canal, no en el exchange por defecto. `amq.default`
+    // enruta por nombre de COLA, así que solo entrega si existe una cola llamada igual que
+    // el destino — y el canal de una suscripción es un exchange, no una cola: el mensaje se
+    // descartaba sin llegar a nadie. Y sin ruido, porque RabbitMQ contesta 200 con
+    // `{"routed":false}` y `curl -sf` lo da por bueno; de ahí `routedOk`.
+    exchangeApi: 'http://rabbitmq:15672/api/exchanges/%2F/',
+    // El exchange por defecto enruta por nombre de COLA, y esa es exactamente su función
+    // aquí: alcanzar una cola que no cuelga de ningún exchange. Hoy solo la de descarte —a
+    // una DLQ se llega por el argumento x-dead-letter-routing-key, no por un binding—, así
+    // que no hay exchange con su nombre al que publicar. Para todo lo demás se usa
+    // exchangeApi: publicar aquí saltándose el exchange se saltaría también sus bindings.
+    defaultExchangeApi: 'http://rabbitmq:15672/api/exchanges/%2F/amq.default/publish'
   },
   snssqs: {
     endpoint: 'http://localstack:4566',
@@ -250,9 +260,13 @@ export function purgeParts(broker, { destination, base }) {
 
 export function deliverParts(broker, { destination, bodyFile, attrsFile, base, withAttributes = false }) {
   if (broker === 'rabbitmq') {
+    // La URL lleva el EXCHANGE del canal, y por eso `destination` participa aquí y no solo
+    // en la routing key del cuerpo. Con `amq.default` —que enruta por nombre de cola— un
+    // canal que es un exchange no entregaba a nadie, y el fallo no se veía: la API de
+    // gestión contesta 200 y solo dice `"routed":false` en el cuerpo. De ahí `routedOk`.
     return [
       'curl', '-sf', '-u', ENDPOINTS.rabbitmq.credentials, '-H', 'content-type: application/json',
-      '-XPOST', '-d', concat('@', bodyFile), base ?? ENDPOINTS.rabbitmq.publishApi
+      '-XPOST', '-d', concat('@', bodyFile), concat(base ?? ENDPOINTS.rabbitmq.exchangeApi, destination, '/publish')
     ];
   }
   if (broker === 'snssqs') {
@@ -275,16 +289,25 @@ export function deliverParts(broker, { destination, bodyFile, attrsFile, base, w
 /**
  * Entrega DIRECTA a una cola, sin pasar por el topic.
  *
- * Solo tiene sentido en snssqs y solo para destinos que no cuelgan de ningún topic —
- * hoy, las colas de descarte: una DLQ se alcanza por redrive, no por suscripción, así
- * que no hay ARN de topic con su nombre y `sns publish` falla con NotFound. En Kafka y
- * RabbitMQ el destino se nombra igual se publique donde se publique, y `deliverParts`
- * ya vale.
+ * Tiene sentido en los dos brokers con FAN-OUT, y solo para destinos que no cuelgan de
+ * ningún canal — hoy, las colas de descarte: a una DLQ se llega por redrive (snssqs) o por
+ * el argumento x-dead-letter-routing-key (rabbitmq), nunca por una suscripción, así que no
+ * existe topic ni exchange con su nombre al que publicar. En snssqs `sns publish` fallaría
+ * con NotFound; en rabbitmq, con 404 del exchange. En Kafka no hace falta: el destino se
+ * nombra igual se publique donde se publique, y `deliverParts` ya vale.
  *
  * No lo uses para un destino normal: saltarse el topic se salta también el filtro por
  * `eventType`, que es la mitad del contrato de recepción.
  */
-export function queueDeliverParts({ destination, bodyFile, base }) {
+export function queueDeliverParts(broker, { destination, bodyFile, base }) {
+  if (broker === 'rabbitmq') {
+    // Por el exchange por defecto, que enruta por nombre de cola: la routing key ES la cola.
+    // Es el único sitio donde eso es correcto, y va con el cuerpo que ya lleva la routing key.
+    return [
+      'curl', '-sf', '-u', ENDPOINTS.rabbitmq.credentials, '-H', 'content-type: application/json',
+      '-XPOST', '-d', concat('@', bodyFile), base ?? ENDPOINTS.rabbitmq.defaultExchangeApi
+    ];
+  }
   return [
     'sqs', 'send-message',
     '--queue-url', concat(base ?? ENDPOINTS.snssqs.queueUrlPrefix, destination),
@@ -356,18 +379,34 @@ export function rabbitProbeBodyJava(countExpr = 'count') {
  * un JSON dentro del campo `payload` —que es una cadena JSON— exigiría escaparlo a
  * mano, y ahí es donde se pierde un cuerpo.
  */
-export function rabbitPublishBody({ destination, key, headersJson: headers, payloadBase64 }) {
+export function rabbitPublishBody({ routingKey, key, headersJson: headers, payloadBase64 }) {
   return (
     `{"properties":{"message_id":"${key}","headers":${headers}},` +
-    `"routing_key":"${destination}","payload":"${payloadBase64}","payload_encoding":"base64"}`
+    `"routing_key":"${routingKey}","payload":"${payloadBase64}","payload_encoding":"base64"}`
   );
 }
 
-export function rabbitPublishBodyJava({ key, headers, destination, payload }) {
+export function rabbitPublishBodyJava({ key, headers, routingKey, payload }) {
   return spliceJava(
-    rabbitPublishBody({ key: HOLE(0), headersJson: HOLE(1), destination: HOLE(2), payloadBase64: HOLE(3) }),
-    [key, headers, destination, payload]
+    rabbitPublishBody({ key: HOLE(0), headersJson: HOLE(1), routingKey: HOLE(2), payloadBase64: HOLE(3) }),
+    [key, headers, routingKey, payload]
   );
+}
+
+/**
+ * ¿La publicación por la API de gestión de RabbitMQ ENTREGÓ el mensaje?
+ *
+ * Publicar en un exchange sin ningún binding que case NO es un error para RabbitMQ: responde
+ * 200 y `{"routed":false}`, así que `curl -sf` sale con 0 y quien no mire el cuerpo cree que
+ * ha entregado. Es el modo de fallo más caro que tiene este broker — el mensaje no llega, el
+ * consumidor no hace nada, y el escenario muere en un timeout que habla de otra cosa.
+ *
+ * Vive aquí, junto a los comandos, porque lo comprueban DOS: el arnés generado y el runner de
+ * `broker-check`. Si cada uno decidiera qué es "entregado", el gate en vivo mediría una
+ * entrega distinta de la que se genera.
+ */
+export function routedOk(output) {
+  return (output ?? '').includes('"routed":true');
 }
 
 /** Cabeceras → atributos de mensaje SQS, que es su equivalente en este broker. */

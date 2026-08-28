@@ -11,8 +11,8 @@ el admin de Spring los declara al conectar y la operación es idempotente **si
 los argumentos no cambian** (cambiar args de una cola existente rompe con
 `PRECONDITION_FAILED`; ver troubleshooting).
 
-Hay **dos** topologías que declarar, y olvidar la primera es el fallo silencioso
-más caro de este stack:
+De las **dos** topologías del servicio solo una es tuya —la de publicación—, y
+olvidarla es el fallo silencioso más caro de este stack:
 
 1. **Publicación** — una cola durable por canal de `messaging.keel.yaml` §
    `channels` en el que publique algún evento, **nombrada como el canal**, con un
@@ -20,31 +20,28 @@ más caro de este stack:
    broker). Sin ella el exchange descarta los mensajes sin error visible y las
    pruebas de integración, que leen con `publishedMessages("<canal>", n)`, no
    tienen de dónde leer.
-2. **Suscripción** — una cola por suscripción del diseño, con el nombre y la DLQ
-   de abajo.
+2. **Suscripción** — **no la declares tú**: la genera `build` en
+   `RabbitTopologyConfig` (exchange de origen + cola propia + binding, y la DLQ
+   donde el diseño declare `onFailure.deadLetter`).
 
-```java
-@Bean
-public Declarables subscriptionTopology() {
-    Queue queue = QueueBuilder.durable("<servicio>.<evento-kebab>")
-            .quorum()                                      // colas replicadas (default sano)
-            .deadLetterExchange("<servicio>.dlx")
-            .build();
-    TopicExchange source = new TopicExchange("<fuente>.events", true, false);
-    Queue dlq = QueueBuilder.durable("<servicio>.<evento-kebab>.dlq").build();
-    FanoutExchange dlx = new FanoutExchange("<servicio>.dlx", true, false);
-    return new Declarables(
-            queue, source, dlq, dlx,
-            BindingBuilder.bind(queue).to(source).with("<fuente>.<evento-kebab>"),
-            BindingBuilder.bind(dlq).to(dlx));
-}
-```
+> **El nombre de la cola de una suscripción NO lo eliges tú.** Está en
+> `messaging.subscriptions.<evento>.queue` de `application-*.yaml`, lo declara
+> `RabbitTopologyConfig` y de ahí lo leen también `infra/reset-db.sh` (que la
+> purga entre flujos) y el arnés de integración (que entrega en su exchange). Inventar
+> otro nombre no rompe nada visible: el servicio arranca, declara SU cola, y los
+> mensajes del arnés se quedan en la del otro nombre. Lo que se ve es un escenario de
+> suscripción que muere en un timeout mudo, y un «AVISO: no se pudo purgar» en cada
+> reset que nadie lee. Costó una corrida entera.
+
+Tu trabajo en la suscripción es el **listener**: leer de esa cola
+(`@RabbitListener(queues = "${messaging.subscriptions.<evento>.queue}")`) y enrutar
+por `eventType`. El binding que emite build es `"#"`, así que por esa cola llega
+**todo** lo que publique el emisor: lo que no te corresponde se descarta sin lanzar.
 
 - **Quorum vs classic**: `quorum()` para colas de trabajo durables (tolerantes a
   caída del nodo); classic solo para colas efímeras/exclusivas. Las quorum no
-  soportan `x-max-priority` ni colas exclusivas.
-- Una cola **por suscripción** del diseño, nombrada `<servicio>.<evento-kebab>`;
-  el binding usa la routing key con la que publica la fuente.
+  soportan `x-max-priority` ni colas exclusivas. Aplica a las colas que declares
+  tú (publicación); las de suscripción las emite build.
 
 ## Fiabilidad del publisher
 

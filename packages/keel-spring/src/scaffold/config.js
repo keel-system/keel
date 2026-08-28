@@ -533,9 +533,16 @@ function messagingYaml(model, profile) {
       // mano en los cuatro perfiles — o se la inventaba, y entonces todo escenario de
       // suscripción moría en un timeout mudo. Sale del mismo helper que la siembra, que
       // es lo que impide que las dos mitades se desincronicen.
-      if (model.stack?.broker === 'snssqs') {
+      // Y con RabbitMQ, por lo MISMO: el canal de origen es un exchange, y de un exchange
+      // no se consume — cuelga de él una cola propia de este servicio. Sin declararla aquí
+      // no había nadie que la nombrara, y el agente la inventaba siguiendo su skill: la
+      // topología quedaba con un nombre que ni la purga ni la entrega del arnés conocían
+      // (`corrida-mail-rabbit`). Kafka no entra: ahí se consume del topic directamente.
+      if (model.stack?.broker === 'snssqs' || model.stack?.broker === 'rabbitmq') {
         const queueEnv = `${env.replace(/_TOPIC$/, '')}_QUEUE`;
-        lines.push(`      queue: ${envWithDefault(profile, queueEnv, subscriptionDestination('snssqs', model, sub))}`);
+        lines.push(
+          `      queue: ${envWithDefault(profile, queueEnv, subscriptionDestination(model.stack.broker, model, sub))}`
+        );
       }
     }
   }

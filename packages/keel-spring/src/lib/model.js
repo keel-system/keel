@@ -115,7 +115,7 @@ export function buildModel({ manifest, layers, stack = null }) {
     : null;
   classifyClaims(services, entities, layers, warnings);
   classifyGuardClaims(services, entities, layers);
-  const subscriptions = collectSubscriptions(layers, services, domainTypes, inlineEnumName, warnings, stack);
+  const subscriptions = collectSubscriptions(layers, services, domainTypes, inlineEnumName, warnings, stack, service);
   const pagination = layers.api?.pagination ?? null;
 
   // Base de rutas versionada (estilo del prototipo de referencia): el basePath
@@ -2346,7 +2346,7 @@ function racingOperations(op, opByName) {
   return racing;
 }
 
-function collectSubscriptions(layers, services, domainTypes, inlineEnumName, warnings, stack) {
+function collectSubscriptions(layers, services, domainTypes, inlineEnumName, warnings, stack, service) {
   const subs = layers.messaging?.subscriptions ?? {};
   const domainEntities = layers.domain?.entities ?? {};
 
@@ -2419,6 +2419,20 @@ function collectSubscriptions(layers, services, domainTypes, inlineEnumName, war
       // que los destinos de publicación (naming.js § brokerSafeName).
       topicDefault: brokerSafeName(
         `${def.source ? kebabCase(def.source) : kebabCase(name)}.events`,
+        stack?.broker
+      ),
+      // La cola PROPIA de este servicio sobre ese canal, que es de dónde consume de verdad
+      // en un broker con fan-out. `topicDefault` es el canal del EMISOR —un exchange en
+      // RabbitMQ, un topic en SNS/SQS—, y de un exchange no se consume: cuelga de él una cola
+      // por consumidor, o dos servicios suscritos al mismo canal se robarían los mensajes.
+      //
+      // Va por CANAL DE ORIGEN y no por suscripción a propósito: dos suscripciones que
+      // comparten `source` comparten cola, que es lo que ya asume `sharesQueue()`
+      // (scaffold/idempotency-check.js) para prescribir un solo listener que enruta por
+      // `eventType`. Nombrarla por suscripción obligaría a bindear por routing key, y eso lo
+      // decide el PUBLICADOR — que aquí es ajeno y no promete ninguna.
+      queueDefault: brokerSafeName(
+        `${service.name}.${def.source ? kebabCase(def.source) : kebabCase(name)}`,
         stack?.broker
       ),
       // Contrato de recepción: sin él se asume la envoltura de Keel salvo que el

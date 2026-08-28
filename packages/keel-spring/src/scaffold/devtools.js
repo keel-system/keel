@@ -277,11 +277,13 @@ export function resetDbScript(selected, service, model = null) {
   const cache = selected.find((s) => s.category === 'cache');
   const broker = selected.find((s) => s.category === 'broker' && s.entry.cliPurgeCmd);
   // Lo que se purga son DESTINOS REALES, no nombres lógicos del diseño. Para un canal de
-  // publicación coinciden; para una SUSCRIPCIÓN, no: se consume de la cola de la fuente
-  // (`any-registered-system.events`) y no del canal que el diseño nombra
-  // (`notificationRequests`). Purgando el nombre lógico se purgaba una cola inexistente —y como
-  // la purga es tolerante a fallo, el AVISO se imprimía en cada reset y la cola de entrada
-  // arrastraba mensajes entre flujos, que es justo lo que este script existe para impedir.
+  // publicación coinciden; para una SUSCRIPCIÓN, no: el canal que el diseño nombra
+  // (`notificationRequests`) es el del EMISOR, y donde se acumulan los mensajes es en la cola
+  // propia de este servicio colgada de él (`notification-mailer.any-registered-system`).
+  // Purgando cualquier otro nombre se purga una cola inexistente —y como la purga es tolerante
+  // a fallo, lo único que queda es un AVISO en cada reset mientras la cola de entrada arrastra
+  // mensajes entre flujos, que es justo lo que este script existe para impedir. Pasó dos veces:
+  // con el canal lógico, y luego con el del emisor cuando RabbitMQ todavía se creía una cola.
   // El resolutor es el mismo que ya usa el descarte unas líneas más abajo: componerlo a mano es
   // exactamente el error del que advierte el javadoc de `dead-letter.js`.
   const subscriptionQueues = broker

@@ -284,13 +284,15 @@ test('§1.2: el reset purga los destinos de mensajería declarados', () => {
 
   // El canal propio, que es su propio destino.
   assert.ok(reset.includes('/api/queues/%2F/digests/contents'));
-  // Y la cola de la suscripción, que NO es el canal que el diseño nombra: el diseño declara
-  // `channel: meterTelemetry` y se consume de `metering-gateway.events`. Este test afirmaba antes
-  // el nombre lógico, o sea una cola inexistente — congelando el defecto: la purga es tolerante a
-  // fallo, así que "purgar" algo que no existe se veía como un AVISO y la cola de entrada
+  // Y la cola PROPIA de la suscripción, que no es ninguno de los dos nombres que el diseño usa:
+  // ni el canal lógico (`channel: meterTelemetry`) ni el canal del emisor
+  // (`metering-gateway.events`, que en RabbitMQ es un exchange y no acumula nada). Este test
+  // afirmó sucesivamente los dos, congelando cada vez el defecto: la purga es tolerante a fallo,
+  // así que "purgar" algo que no existe se veía como un AVISO mientras la cola de entrada
   // arrastraba mensajes entre flujos. Ver reset-purges.test.js.
-  assert.ok(reset.includes('/api/queues/%2F/metering-gateway.events/contents'));
+  assert.ok(reset.includes('/api/queues/%2F/metering-digest.metering-gateway/contents'), reset);
   assert.ok(!reset.includes('/api/queues/%2F/meterTelemetry/contents'), 'el canal lógico no es un destino');
+  assert.ok(!reset.includes('/api/queues/%2F/metering-gateway.events/contents'), 'el exchange no es un destino');
   // Que la cola aún no exista no es estado sucio: el reset avisa y sigue.
   assert.ok(reset.includes('AVISO: no se pudo purgar'));
 });
@@ -359,7 +361,7 @@ test('el reset aísla también el destino de descarte: con RabbitMQ, purgando su
 
   // Kafka no llega aquí (sin `cliPurgeCmd`), pero RabbitMQ y SQS sí: su DLQ persiste
   // entre clases de flujo igual que cualquier otra cola.
-  assert.ok(reset().includes('/api/queues/%2F/inventory.events-dlq/contents'));
+  assert.ok(reset().includes('/api/queues/%2F/stock-reservation.inventory-dlq/contents'), reset());
   assert.ok(reset().includes('/api/queues/%2F/stockEvents/contents'));
   // La marca de offset es exclusiva de Kafka: aquí el aislamiento ya lo dio el script.
   assert.ok(!harness().includes('Set.copyOf(DEAD_LETTER_OF.values())'));
@@ -2088,11 +2090,19 @@ test('§1.2: con snssqs cada suscripción declara su COLA, no solo su topic', ()
   assert.ok(script.includes("'catalog-supplier-price-changed'"), script);
 });
 
-test('§1.2: los otros brokers no ganan una clave `queue` que no significa nada', () => {
-  for (const broker of ['kafka', 'rabbitmq']) {
-    const yaml = scaffoldWithBroker(broker)('src/main/resources/parameters/local/messaging.yaml');
-    assert.ok(!yaml.includes('queue:'), `${broker}: cola declarada donde no hay colas por suscripción`);
-  }
+test('§1.2: RabbitMQ también declara su cola, y Kafka no, porque ahí no hay ninguna', () => {
+  // La frontera es tener FAN-OUT, no ser snssqs. En RabbitMQ el canal de origen es un
+  // exchange y de un exchange no se consume: cuelga de él una cola propia, igual que en
+  // SNS/SQS. Este test afirmaba antes que RabbitMQ NO debía declararla — congelando el
+  // modelo que dejaba la cola sin dueño y al agente inventándose el nombre.
+  //
+  // En Kafka sí sobra: cada consumidor tiene su grupo sobre el mismo topic, no hay cola
+  // que nombrar, y emitir la clave sugeriría una decisión que ese broker no tiene.
+  const rabbit = scaffoldWithBroker('rabbitmq')('src/main/resources/parameters/local/messaging.yaml');
+  assert.ok(rabbit.includes('queue:'), 'rabbitmq: la suscripción no declara cola');
+
+  const kafka = scaffoldWithBroker('kafka')('src/main/resources/parameters/local/messaging.yaml');
+  assert.ok(!kafka.includes('queue:'), 'kafka: cola declarada donde no hay colas por suscripción');
 });
 
 test('§1.2: con snssqs el arnés desescapa el campo Body de SQS', () => {

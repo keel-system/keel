@@ -39,10 +39,19 @@ export function deadLetterName(broker, destination) {
 /**
  * De dónde consume una suscripción, que NO es lo mismo en los tres brokers.
  *
- * En SNS/SQS el consumidor tiene cola propia colgada del topic —dos consumidores del
- * mismo topic necesitan colas distintas para recibir ambos el mensaje—, así que el
- * destino es esa cola y no el topic. En Kafka y RabbitMQ se consume del destino
+ * Con fan-out —SNS/SQS y RabbitMQ— el canal del emisor es un TOPIC o un EXCHANGE, y de
+ * ninguno de los dos se consume: cuelga de él una cola por consumidor, porque dos
+ * servicios suscritos al mismo canal tienen que recibir ambos el mensaje y una sola cola
+ * compartida se lo repartiría. El destino es esa cola, no el canal. En Kafka no hay tal
+ * cosa: cada consumidor tiene su grupo sobre el mismo topic y se consume del destino
  * directamente.
+ *
+ * RabbitMQ vivía en el lado equivocado de esa frontera y costó una corrida entera
+ * (`corrida-mail-rabbit`): build daba por hecho que el canal de origen ERA una cola, así
+ * que la declaraba con ese nombre, entregaba por el exchange por defecto —cuya routing
+ * key es el nombre de la cola— y purgaba ese mismo nombre, mientras el agente montaba la
+ * topología que enseña su skill (exchange + cola propia). Nada casaba: la entrega se
+ * perdía en silencio y la purga avisaba en cada reset sin vaciar nada.
  *
  * Está aquí y no en cada emisor porque componer el nombre a mano es exactamente cómo
  * este módulo se rompe: la primera versión del arnés leía el descarte del TOPIC con
@@ -50,7 +59,11 @@ export function deadLetterName(broker, destination) {
  * siempre sin mirar nada.
  */
 export function subscriptionDestination(broker, model, sub) {
-  return broker === 'snssqs' ? `${model.service.artifactId}-${kebabCase(sub.name)}` : sub.topicDefault;
+  if (broker === 'snssqs') return `${model.service.artifactId}-${kebabCase(sub.name)}`;
+  // La cola propia sobre el canal ajeno, agrupada por origen: la deriva el modelo
+  // (lib/model.js § queueDefault), que es donde vive el saneado por broker.
+  if (broker === 'rabbitmq') return sub.queueDefault;
+  return sub.topicDefault;
 }
 
 /**

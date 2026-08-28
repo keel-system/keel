@@ -149,7 +149,20 @@ test('el arnés generado contiene exactamente los comandos del módulo', () => {
 
   const rabbit = harnessFor('rabbitmq');
   assert.ok(rabbit.includes(`private static final String RABBIT_API = "${ENDPOINTS.rabbitmq.queuesApi}"`));
-  assert.ok(rabbit.includes(`private static final String RABBIT_PUBLISH = "${ENDPOINTS.rabbitmq.publishApi}"`));
+  // La publicación va al EXCHANGE del canal, así que la constante llega solo hasta el prefijo
+  // y el destino se le concatena. Con `amq.default` —que enruta por nombre de COLA— publicar
+  // en el canal de una suscripción no entregaba a nadie, y RabbitMQ no se quejaba: 200 con
+  // "routed":false, que `curl -sf` da por bueno.
+  assert.ok(rabbit.includes(`private static final String RABBIT_EXCHANGE_API = "${ENDPOINTS.rabbitmq.exchangeApi}"`));
+  assert.ok(rabbit.includes('RABBIT_EXCHANGE_API + destination + "/publish"'), rabbit);
+  // Sobre el CÓDIGO, no sobre la prosa: el javadoc de la constante explica precisamente por qué
+  // no se usa `amq.default`, así que buscar el término en crudo hacía fallar al test por su
+  // propio comentario. Es el mismo cuidado que se aplica `check-idempotency.sh`, al revés.
+  const rabbitCode = rabbit.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+  assert.ok(!rabbitCode.includes('amq.default'), 'el arnés sigue publicando por el exchange por defecto');
+  // Y el descarte silencioso deja de serlo: sin esta guarda el mensaje no llega, el consumidor
+  // no reacciona, y el escenario muere mucho después en un timeout que habla de otra cosa.
+  assert.ok(rabbit.includes(String.raw`if (!published.contains("\"routed\":true"))`), rabbit);
   assert.ok(rabbit.includes(rabbitProbeBodyJava('count')));
 
   const sqs = harnessFor('snssqs');

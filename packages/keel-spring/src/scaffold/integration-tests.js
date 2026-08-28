@@ -3802,10 +3802,20 @@ function deliverySection(model) {
      */`;
 
   if (broker.id === 'rabbitmq') {
-    const publish = deliverParts('rabbitmq', { bodyFile: expr('DELIVER_BODY'), base: expr('RABBIT_PUBLISH') });
+    const publish = deliverParts('rabbitmq', {
+      bodyFile: expr('DELIVER_BODY'),
+      base: expr('RABBIT_EXCHANGE_API'),
+      destination: expr('destination')
+    });
     return `
-    /** Publicación por el exchange por defecto: la routing key <b>es</b> el nombre de la cola. */
-    private static final String RABBIT_PUBLISH = "${ENDPOINTS.rabbitmq.publishApi}";
+    /**
+     * API de gestión hasta el exchange, sin incluirlo: el destino se le concatena.
+     *
+     * <p>Se publica en el exchange del canal, <b>no</b> en {@code amq.default}: ese enruta por
+     * nombre de COLA, y el canal de una suscripción es un exchange. Publicando ahí el mensaje
+     * no llegaba a ninguna cola y RabbitMQ no se quejaba — 200 y {@code "routed":false}.
+     */
+    private static final String RABBIT_EXCHANGE_API = "${ENDPOINTS.rabbitmq.exchangeApi}";
 ${doc}
     protected static void deliverMessage(String destination, String key, String body, Map<String, String> headers) {
         // El cuerpo va en base64: incrustar un JSON dentro del campo \`payload\` (que es
@@ -3813,11 +3823,20 @@ ${doc}
         String request = ${rabbitPublishBodyJava({
           key: 'key',
           headers: 'headersJson(headers)',
-          destination: 'destination',
+          routingKey: 'key',
           payload: 'Base64.getEncoder().encodeToString(body.getBytes(StandardCharsets.UTF_8))'
         })};
         copyToDevtools(request, DELIVER_BODY);
-        devtools(${javaArgs(publish)});
+        String published = devtools(${javaArgs(publish)});
+        // Publicar donde no hay binding que case NO es un error para RabbitMQ: contesta 200 y
+        // \`"routed":false\`, así que el curl sale con 0 y la entrega parece hecha. El mensaje
+        // no llega, el consumidor no reacciona, y el escenario muere mucho después en un
+        // timeout que habla de otra cosa. Se falla aquí, con el destino delante.
+        if (!published.contains("\\"routed\\":true")) {
+            throw new IllegalStateException(
+                    "RabbitMQ aceptó la publicación en '" + destination + "' pero no la enrutó a ninguna cola"
+                            + " (routed:false): ¿existe el exchange y hay una cola bindeada? Respuesta: " + published);
+        }
     }
 ${headersJsonHelper()}`;
   }

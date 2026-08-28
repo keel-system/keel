@@ -1142,3 +1142,104 @@ test('y con roles declarados, las dos piezas vuelven a aparecer juntas', () => {
   assert.match(project_.file('AbstractFlowIT.java'), /protected String tokenFor\(String role\)/);
   assert.match(project_.file('init-keycloak.sh'), /Usuarios de prueba/);
 });
+
+// ─── Séptima corrida: RabbitMQ, y el canal de origen no era una cola ─────────
+//
+// `corrida-mail-rabbit` cerró 22/22, pero llegó ahí con un parche al arnés y arrastrando un
+// AVISO en cada reset que el informe no recogía. Los dos son el mismo hueco: build y la skill
+// modelaban la topología de una suscripción de forma INCOMPATIBLE. Build daba por hecho que el
+// canal del emisor ERA una cola —la declaraba con ese nombre, entregaba por `amq.default` y
+// purgaba ese nombre—; la skill enseñaba exchange + cola propia, que es lo correcto con
+// fan-out. Y build solo generaba esa topología cuando el diseño declaraba `onFailure.deadLetter`,
+// así que un diseño sin descarte se quedaba sin dueño y el agente improvisaba.
+
+const RABBIT_PG = { group: 'com.test', database: 'postgresql', broker: 'rabbitmq', auth: null, cache: null, storage: null };
+
+test('la entrega entrante publica en el EXCHANGE del canal, no en amq.default', () => {
+  // El defecto, y por qué era mudo: `amq.default` enruta por nombre de COLA, así que publicar
+  // ahí con el nombre de un exchange no entrega a nadie. RabbitMQ no lo trata como error —
+  // responde 200 con `"routed":false`— y `curl -sf` sale con 0. El mensaje no llega, el
+  // consumidor no reacciona, y lo que se ve es un escenario muriendo en un timeout que habla de
+  // otra cosa. Tumbó FL-EVT-001 y FL-EVT-001-B; FL-EVT-001-C pasó por casualidad, porque su
+  // resultado esperado —nada registrado— es indistinguible de que el mensaje no llegara nunca.
+  const harness = project('notification-mailer', { ...RABBIT_PG, auth: 'keycloak' }).file('AbstractFlowIT.java');
+
+  assert.match(harness, /RABBIT_EXCHANGE_API = "http:\/\/rabbitmq:15672\/api\/exchanges\/%2F\/"/);
+  assert.ok(harness.includes('RABBIT_EXCHANGE_API + destination + "/publish"'), harness.slice(0, 200));
+  // Sobre el código, no sobre la prosa: el javadoc explica por qué NO se usa el exchange por
+  // defecto, así que buscarlo en crudo haría fallar el test por su propio comentario.
+  const code = harness.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+  assert.ok(!code.includes('amq.default'), 'sigue publicando por el exchange por defecto');
+});
+
+test('y un mensaje que no se enruta deja de pasar por entregado', () => {
+  // La mitad que convierte esta familia entera en un fallo inmediato. Sin esta guarda el mismo
+  // error vuelve con otra cara: cualquier desajuste entre el exchange y sus bindings se ve como
+  // un consumidor que no hizo su trabajo, y se arbitra `culprit: code` contra código correcto.
+  const harness = project('notification-mailer', { ...RABBIT_PG, auth: 'keycloak' }).file('AbstractFlowIT.java');
+
+  assert.ok(harness.includes(String.raw`if (!published.contains("\"routed\":true"))`), harness.slice(0, 200));
+  assert.match(harness, /throw new IllegalStateException\(\s*\n\s*"RabbitMQ aceptó la publicación en/);
+  // El mensaje nombra el destino: sin él, el diagnóstico empieza por averiguar cuál falló.
+  assert.match(harness, /\+ destination \+ "' pero no la enrutó/);
+});
+
+test('la topología de la suscripción la declara build aunque no haya descarte', () => {
+  // El `return []` por `deadLetter` era el que dejaba la topología huérfana. `notification-mailer`
+  // no declara descarte en su única suscripción, así que build no generaba nada y el agente
+  // montaba la suya con otro nombre de cola — que ni la purga ni la entrega conocían.
+  const generated = project('notification-mailer', { ...RABBIT_PG, auth: 'keycloak' });
+  const topology = generated.file('RabbitTopologyConfig.java');
+
+  assert.match(topology, /class RabbitTopologyConfig/);
+  // El canal del emisor es el EXCHANGE, y la cola es nuestra: lleva delante el nombre del
+  // servicio, porque otro consumidor del mismo canal tiene la suya.
+  assert.match(topology, /new TopicExchange\("any-registered-system\.events", true, false\)/);
+  assert.match(topology, /QueueBuilder\.durable\("notification-mailer\.any-registered-system"\)/);
+  assert.match(topology, /BindingBuilder\.bind\(queue\)\.to\(source\)\.with\("#"\)/);
+  // Sin descarte declarado no se inventa ninguno.
+  assert.ok(!topology.includes('x-dead-letter-exchange'), topology);
+});
+
+test('el nombre de esa cola viaja a config, que es de donde el agente debe leerlo', () => {
+  // La otra mitad del arreglo, y la que evita que vuelva a pasar: si build declara la cola pero
+  // nadie le dice al agente cómo se llama, el listener sigue consumiendo de la que él invente.
+  // Es el mismo reparto que ya regía en SNS/SQS.
+  const generated = project('notification-mailer', { ...RABBIT_PG, auth: 'keycloak' });
+
+  const local = generated.file(path.join('parameters', 'local', 'messaging.yaml'));
+  assert.match(local, /queue: notification-mailer\.any-registered-system/);
+  // Y redirigible por entorno, igual que el topic.
+  const production = generated.file(path.join('parameters', 'production', 'messaging.yaml'));
+  assert.match(production, /\$\{MESSAGING_SUBSCRIPTIONS_NOTIFICATION_REQUESTED_QUEUE:/);
+});
+
+test('el reset purga esa misma cola, y no el exchange del que cuelga', () => {
+  // El segundo síntoma, el que el informe NO recogía: `AVISO: no se pudo purgar` en cada reset,
+  // tolerado por diseño y por tanto invisible salvo leyendo el log línea a línea. La cola de
+  // entrada no se vaciaba entre flujos; la corrida salió al 100% solo porque ningún escenario
+  // dependía de que estuviera limpia.
+  const reset = project('notification-mailer', { ...RABBIT_PG, auth: 'keycloak' }).file('reset-db.sh');
+
+  assert.match(reset, /\/api\/queues\/%2F\/notification-mailer\.any-registered-system\/contents/);
+  assert.ok(
+    !reset.includes('/api/queues/%2F/any-registered-system.events/contents'),
+    'pide el contenido de un exchange: eso es el AVISO que nadie leía'
+  );
+});
+
+test('y Kafka no gana nada de esto, porque ahí no hay ninguna cola', () => {
+  // La simétrica, que es la que impide convertir el arreglo en «todos los brokers igual». En
+  // Kafka cada consumidor tiene su grupo sobre el mismo topic: no hay cola que nombrar, y
+  // declararla sugeriría una decisión que ese broker no tiene.
+  const generated = project('notification-mailer', { ...RABBIT_PG, broker: 'kafka', auth: 'keycloak' });
+
+  assert.ok(!generated.file(path.join('parameters', 'local', 'messaging.yaml')).includes('queue:'));
+  // Y se consume del topic directamente: el reset no purga nada (Kafka no tiene primitiva de
+  // purga; su aislamiento es la marca de offset), y no hay clase de topología que declarar.
+  assert.ok(!generated.file(path.join('parameters', 'local', 'messaging.yaml')).includes('any-registered-system'.concat('-queue')));
+  assert.throws(
+    () => generated.file('RabbitTopologyConfig.java'),
+    'emite la topología de otro broker'
+  );
+});

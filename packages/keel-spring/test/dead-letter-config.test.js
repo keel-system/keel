@@ -70,19 +70,45 @@ test('kafka: el conjunto de topics con descarte no repite el canal compartido', 
   assert.ok(config.includes('WithdrawalRejected'), config);
 });
 
-test('rabbitmq: una sola pareja de beans por cola, aunque dos suscripciones la compartan', () => {
+test('rabbitmq: una sola cola por canal de origen, aunque dos suscripciones lo compartan', () => {
   const config = configFor('rabbitmq');
 
+  // La cola es NUESTRA y cuelga del exchange del emisor: lleva delante el nombre del
+  // servicio, porque otro consumidor del mismo canal tiene la suya. El exchange se declara
+  // pero no se consume de él — declararlo es lo que da al binding a qué engancharse.
   const declared = [...config.matchAll(/QueueBuilder\.durable\("([^"]+)"\)/g)].map((m) => m[1]);
   assert.deepEqual([...new Set(declared)].length, declared.length, `cola declarada dos veces: ${declared.join(', ')}`);
-  assert.ok(declared.includes('compliance.events'));
-  assert.ok(declared.includes('compliance.events-dlq'));
+  assert.ok(declared.includes('catalog.compliance'), declared.join(', '));
+  assert.ok(declared.includes('catalog.compliance-dlq'), declared.join(', '));
+  // Y el canal del emisor NO es una cola: es el exchange del que cuelga la nuestra.
+  assert.ok(!declared.includes('compliance.events'), `declara el exchange como cola: ${declared.join(', ')}`);
+  assert.match(config, /new TopicExchange\("compliance\.events", true, false\)/);
+  assert.match(config, /BindingBuilder\.bind\(queue\)\.to\(source\)\.with\("#"\)/);
 
   // Y los nombres de bean son identificadores Java válidos: el destino trae un punto.
-  const beans = [...config.matchAll(/public Queue ([A-Za-z0-9_]+)\(\)/g)].map((m) => m[1]);
+  const beans = [...config.matchAll(/public Declarables ([A-Za-z0-9_]+)\(\)/g)].map((m) => m[1]);
   assert.deepEqual([...new Set(beans)].length, beans.length, `bean duplicado: ${beans.join(', ')}`);
-  assert.ok(beans.includes('complianceEventsQueue'), beans.join(', '));
-  assert.ok(!config.includes('compliance.eventsQueue()'), config);
+  assert.ok(beans.includes('catalogComplianceTopology'), beans.join(', '));
+  assert.ok(!config.includes('catalog.complianceTopology()'), config);
+});
+
+test('rabbitmq: la topología se declara aunque NINGUNA suscripción pida descarte', () => {
+  // El return temprano por `deadLetter` es lo que dejó la topología sin dueño: el agente la
+  // improvisaba desde su skill con otro nombre de cola, y la purga y la entrega del arnés —que
+  // sí salen de build— hablaban con un destino que no existía. Sin escenario que lo delatara:
+  // el servicio arranca, declara SU cola, y los mensajes se quedan en la otra.
+  const design = sharedChannelDesign();
+  for (const sub of Object.values(design.layers.messaging.subscriptions)) {
+    if (sub.onFailure) delete sub.onFailure.deadLetter;
+  }
+  const config = configFor('rabbitmq', design);
+
+  assert.match(config, /class RabbitTopologyConfig/);
+  assert.match(config, /QueueBuilder\.durable\("catalog\.compliance"\)/);
+  assert.match(config, /new TopicExchange\("compliance\.events", true, false\)/);
+  // Sin descarte declarado no se inventa ninguno: ni cola de descarte ni argumentos.
+  assert.ok(!config.includes('catalog.compliance-dlq'), config);
+  assert.ok(!config.includes('x-dead-letter-exchange'), config);
 });
 
 // El segundo defecto del mismo archivo en la misma corrida, y el más caro de arreglar

@@ -194,7 +194,9 @@ function scenarios(broker, context) {
     if (broker === 'rabbitmq') {
       devtools.copy(
         rabbitPublishBody({
-          destination,
+          // Con el binding en "#" cualquier routing key entrega; se usa la clave del
+          // mensaje, que es lo que significa el parámetro.
+          routingKey: key,
           key,
           headersJson: headersJson(headers),
           payloadBase64: Buffer.from(wire, 'utf8').toString('base64')
@@ -291,17 +293,33 @@ function scenarios(broker, context) {
   };
 
   /**
-   * Entrega a la cola de descarte, que no se alcanza igual en los tres brokers: en
-   * snssqs una DLQ no cuelga de ningún topic —se llega a ella por redrive—, así que
-   * `sns publish` con su nombre falla y hay que enviar DIRECTO a la cola. En kafka y
-   * rabbitmq el destino se nombra igual y vale la entrega normal.
+   * Entrega a la cola de descarte, que no se alcanza igual en los tres brokers: una DLQ no
+   * cuelga de ningún canal —se llega a ella por redrive en snssqs y por el argumento
+   * x-dead-letter-routing-key en rabbitmq—, así que en los dos hay que enviar DIRECTO a la
+   * cola: no existe topic ni exchange con su nombre. En kafka el destino se nombra igual se
+   * publique donde se publique y vale la entrega normal.
    */
   const deliverToDeadLetter = (marker) => {
-    if (broker === 'snssqs') {
-      devtools.copy(JSON.stringify({ marker }), BODY_FILE);
-      return devtools.exec(toArgv(broker, queueDeliverParts({ destination: deadLetterQueue, bodyFile: BODY_FILE })));
+    if (broker === 'kafka') return deliver(deadLetterQueue, marker, JSON.stringify({ marker }));
+    const body = JSON.stringify({ marker });
+    if (broker === 'rabbitmq') {
+      // El sobre de la API de gestión, con la routing key puesta al NOMBRE DE LA COLA: es
+      // así como entrega el exchange por defecto.
+      devtools.copy(
+        rabbitPublishBody({
+          routingKey: deadLetterQueue,
+          key: marker,
+          headersJson: headersJson({}),
+          payloadBase64: Buffer.from(body, 'utf8').toString('base64')
+        }),
+        BODY_FILE
+      );
+    } else {
+      devtools.copy(body, BODY_FILE);
     }
-    return deliver(deadLetterQueue, marker, JSON.stringify({ marker }));
+    return devtools.exec(
+      toArgv(broker, queueDeliverParts(broker, { destination: deadLetterQueue, bodyFile: BODY_FILE }))
+    );
   };
 
   /** Espera a que el marcador sea visible en el descarte: entregar no es haber llegado. */
@@ -701,7 +719,7 @@ function headersOf(broker, devtools, destination, marker) {
 // check no arranca la aplicación. Declarar las colas aquí es preparar el terreno,
 // no sustituir lo que se está probando — en snssqs, en cambio, la topología sí es
 // de `build` (init-messaging.sh) y por eso se ejecuta el script generado.
-function prepare(broker, { devtools, runtime, projectDir, destinations }) {
+function prepare(broker, { devtools, runtime, projectDir, destinations, topology = [] }) {
   if (broker === 'snssqs') {
     // La primera pasada espera: sembrar es lo primero que se hace tras `up` y
     // LocalStack publica su listener bastante después de arrancar el contenedor,
@@ -722,18 +740,47 @@ function prepare(broker, { devtools, runtime, projectDir, destinations }) {
       : `init-messaging.sh no es idempotente: falla al reejecutarse — ${firstLine(again.stderr || again.stdout)}`;
   }
   if (broker === 'rabbitmq') {
-    // La topología de RabbitMQ la declara la APLICACIÓN al arrancar (Spring AMQP),
-    // y este check no arranca la aplicación: declarar las colas aquí es preparar el
-    // terreno, no sustituir lo que se prueba. En snssqs, en cambio, la topología sí
-    // es de `build` y por eso se ejecuta su script.
-    for (const queue of destinations) {
-      const declared = untilOk(() =>
+    // La topología de RabbitMQ la declara la APLICACIÓN al arrancar (Spring AMQP, desde el
+    // `RabbitTopologyConfig` que genera build), y este check no arranca la aplicación:
+    // declararla aquí es preparar el terreno, no sustituir lo que se prueba.
+    //
+    // Pero tiene que ser LA MISMA FORMA. Antes se declaraban colas planas con el nombre del
+    // destino y se entregaba por `amq.default`, que enruta por nombre de cola: contra esa
+    // topología —fabricada por el propio runner— la entrega funcionaba siempre. La real es
+    // un EXCHANGE con una cola bindeada, y ahí `amq.default` no entrega nada. El gate salía
+    // verde sobre un comando que en un servicio de verdad descartaba el mensaje en silencio,
+    // y así sobrevivió hasta que lo destapó una corrida (`corrida-mail-rabbit`).
+    const api = (path) => `http://rabbitmq:15672/api/${path}`;
+    const put = (path, body) =>
+      untilOk(() =>
         devtools.exec([
           'curl', '-sf', '-u', 'guest:guest', '-H', 'content-type: application/json',
-          '-XPUT', '-d', '{"durable":true}', `http://rabbitmq:15672/api/queues/%2F/${queue}`
+          '-XPUT', '-d', body, api(path)
         ])
       );
-      if (!declared.ok) return `no se pudo declarar la cola '${queue}'`;
+    const post = (path, body) =>
+      untilOk(() =>
+        devtools.exec([
+          'curl', '-sf', '-u', 'guest:guest', '-H', 'content-type: application/json',
+          '-XPOST', '-d', body, api(path)
+        ])
+      );
+
+    for (const { exchange, queue } of topology) {
+      if (!put(`exchanges/%2F/${exchange}`, '{"type":"topic","durable":true}').ok) {
+        return `no se pudo declarar el exchange '${exchange}'`;
+      }
+      if (!put(`queues/%2F/${queue}`, '{"durable":true}').ok) return `no se pudo declarar la cola '${queue}'`;
+      // El binding en "#" es el que emite build: el canal transporta todo lo del emisor y
+      // el filtro por eventType va en el listener.
+      if (!post(`bindings/%2F/e/${exchange}/q/${queue}`, '{"routing_key":"#"}').ok) {
+        return `no se pudo bindear '${queue}' a '${exchange}'`;
+      }
+    }
+    // Lo que no cuelga de ningún exchange —el descarte, que se alcanza por argumentos de
+    // cola y no por binding— sigue siendo una cola suelta.
+    for (const queue of destinations) {
+      if (!put(`queues/%2F/${queue}`, '{"durable":true}').ok) return `no se pudo declarar la cola '${queue}'`;
     }
   }
   return null;
@@ -858,11 +905,29 @@ function checkBroker(broker, runtimeInfo) {
     // EXISTAN —es lo que separa "LocalStack responde" de "la topología está
     // sembrada"—, así que sembrarlas después dejaría el gate en rojo por algo que
     // todavía no ha pasado.
+    // En rabbitmq la topología son PARES exchange→cola, y los dos nombres salen de build:
+    // el canal propio se lee de una cola homónima (publishedDestination) y el ajeno de la
+    // cola del consumidor (subscriptionDestination). Componerlos aquí a mano sería volver a
+    // medir una topología distinta de la que se genera.
+    const firstSub = (model.subscriptions ?? [])[0] ?? null;
+    const rabbitTopology =
+      broker === 'rabbitmq'
+        ? [
+            topic ? { exchange: topic, queue: topic } : null,
+            firstSub && subscriptionTopic
+              ? { exchange: subscriptionTopic, queue: subscriptionDestination('rabbitmq', model, firstSub) }
+              : null
+          ].filter(Boolean)
+        : [];
     const prepared = prepare(broker, {
       devtools,
       runtime: runtimeInfo.runtime,
       projectDir,
-      destinations: [topic, subscriptionTopic, deadLetterFor(broker, model)].filter(Boolean)
+      destinations:
+        broker === 'rabbitmq'
+          ? [deadLetterFor(broker, model)].filter(Boolean)
+          : [topic, subscriptionTopic, deadLetterFor(broker, model)].filter(Boolean),
+      topology: rabbitTopology
     });
     if (prepared) return { fatal: prepared, results };
 
@@ -879,8 +944,12 @@ function checkBroker(broker, runtimeInfo) {
     // En snssqs la cola del consumidor la nombra el propio servicio: es lo que
     // siembra `init-messaging.sh`, y leer de ella (y no del topic) es lo que
     // ejercita la suscripción con su filtro.
+    // Y en rabbitmq por lo mismo: el canal de origen es un exchange, y de un exchange no se
+    // lee — se lee de la cola propia que cuelga de él.
     const subscriptionQueue =
-      broker === 'snssqs' && subscription ? subscriptionDestination('snssqs', model, subscription) : null;
+      subscription && (broker === 'snssqs' || broker === 'rabbitmq')
+        ? subscriptionDestination(broker, model, subscription)
+        : null;
 
     // El descarte se busca en LA SUSCRIPCIÓN QUE LO DECLARA, no en la primera del
     // diseño. Mirar `subscriptions[0]` dejó BRK-12 sin ejecutarse en los tres brokers
