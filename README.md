@@ -26,7 +26,16 @@ Este repo es un **monorepo npm workspaces** con dos tipos de paquete:
 ## Instalación
 
 ```bash
-git clone <este-repo> && cd keel
+npm i -g keel-core     # comando `keel`
+npm i -g keel-spring   # comando `keel-spring` (el generador de la tecnología que uses)
+```
+
+Node.js >= 18. El core y cada generador son paquetes independientes: se instala el core más los generadores que se vayan a usar.
+
+Para trabajar sobre **este repo** (desarrollo del propio Keel):
+
+```bash
+git clone https://github.com/keel-system/keel.git && cd keel
 npm install
 npm link --workspace packages/keel-core          # comando `keel`
 npm link --workspace packages/keel-spring        # comando `keel-spring`
@@ -92,10 +101,12 @@ cd services/mi-servicio-spring
 
 ```
 mi-proyecto/
-├── CLAUDE.md                 # el flujo, para el agente
+├── AGENTS.md / CLAUDE.md     # el flujo, para el agente — un archivo de contexto por harness
 ├── README.md                 # índice de servicios diseñados (enlaza cada DESIGN.md) — página de entrada del repo
-├── .claude/skills/           # keel-decompose, keel-design, keel-consume, keel-validate, keel-docs,
-│                             # keel-integrate, keel-handoff, keel-evolve
+├── .claude/skills/           # las ocho skills del flujo de diseño, proyectadas a cada harness
+├── .opencode/skills/         # soportado desde una fuente única: keel-decompose, keel-design,
+│                             # keel-consume, keel-validate, keel-docs, keel-integrate,
+│                             # keel-handoff, keel-evolve
 ├── schema/                   # un JSON Schema por capa + common.schema.json
 ├── system.yaml               # el mapa del sistema, si hay más de un servicio (de /keel-decompose)
 │                             # NO es una capa del DSL: reparte el encargo, no describe un servicio
@@ -147,7 +158,8 @@ Los assets **son** la metodología: el DSL se documenta en `packages/keel-core/a
 
 ## Estado y roadmap
 
-- **DSL Keel 2.3**: diez capas (dos obligatorias, ocho opcionales) con validación en tres niveles — JSON Schema por capa, referencias cruzadas mecánicas y revisión semántica del agente.
+- **DSL Keel 2.13**: diez capas (dos obligatorias, ocho opcionales) con validación en tres niveles — JSON Schema por capa, referencias cruzadas mecánicas y revisión semántica del agente.
 - **CLI `keel` completa**: `init`, `new`, `list`, `validate`, `describe`, `index`, `system` y `registry`, más las ocho skills del flujo de diseño que siembra `keel init`.
 - **Un generador en producción**: `keel-spring` (Spring Boot 3.5 / Java 21), con orquestación de cinco subagentes y puntuación determinista de escenarios. Criterio de terminado: `./gradlew build -x test` en verde más `./gradlew integrationTest` con el 100% de los escenarios `FL-*` en OK contra la infraestructura real.
-- **Pendiente**: publicación en npm (los `bin` ya están configurados); más generadores (`keel-nest`, `keel-fastapi`); detección de drift entre spec y **código generado** —la de spec ↔ documentación ya la cubren los sellos de versión y `keel describe`—; sincronización inversa.
+- **Publicado en npm**: [`keel-core`](https://www.npmjs.com/package/keel-core) y [`keel-spring`](https://www.npmjs.com/package/keel-spring), instalables con `npm i -g`.
+- **Pendiente**: más generadores (`keel-nest`, `keel-fastapi`); detección de drift entre spec y **código generado** —la de spec ↔ documentación ya la cubren los sellos de versión y `keel describe`—; sincronización inversa.

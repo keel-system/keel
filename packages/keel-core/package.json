@@ -29,6 +29,15 @@
   ],
   "author": "asuridev",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/keel-system/keel.git",
+    "directory": "packages/keel-core"
+  },
+  "homepage": "https://github.com/keel-system/keel/tree/main/packages/keel-core#readme",
+  "bugs": {
+    "url": "https://github.com/keel-system/keel/issues"
+  },
   "dependencies": {
     "ajv": "^8.17.1",
     "commander": "^14.0.0",
