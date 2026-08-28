@@ -20,6 +20,7 @@ import {
 import { needsReadCommitted, claimTransaction } from '../src/lib/claim-sql.js';
 import { harnessQueueName } from '../src/scaffold/messaging-provisioning.js';
 import { outboxRelayBeanName } from '../src/scaffold/outbox.js';
+import { storedWhenValue } from '../src/scaffold/persistence-members.js';
 import { tmpDir } from './helpers/tmp.js';
 
 // Los defectos que destapó la corrida en vivo `corrida-claim-mysql` (MySQL + RabbitMQ +
@@ -1242,4 +1243,87 @@ test('y Kafka no gana nada de esto, porque ahí no hay ninguna cola', () => {
     () => generated.file('RabbitTopologyConfig.java'),
     'emite la topología de otro broker'
   );
+});
+
+// ─── El predicado del índice parcial hablaba el idioma equivocado ────────────
+//
+// Lo encontró el pase de calidad al REGENERAR `corrida-mail-rabbit`, no la suite: el
+// invariante «como máximo una versión activa por clave» salía como
+// `WHERE status = 'active'`, tomando el literal de `persistence.keel.yaml`, mientras la
+// columna guarda el `name()` del enum (`ACTIVE`). El índice se crea sin error y no casa con
+// ninguna fila: la garantía de base de datos que el diseño declaró no la sostiene nadie.
+//
+// Lo que lo hace caro es que NO hay síntoma. No falla el arranque, ni el baseline, ni ningún
+// escenario `FL-*` — la ausencia de un rechazo no rompe ninguna aserción. Y el dato correcto
+// existía desde siempre en el modelo (`enums[].values[].constant`) y estaba documentado en
+// `integration-tests.js § persistedEnums`, que cuenta cómo esta misma asimetría ya había
+// tumbado una clase entera con `SET status = 'sending'` contra un `check (… 'SENDING' …)`.
+// El emisor del predicado no lo cruzaba, y el test de al lado congelaba la forma rota.
+
+test('el predicado del índice parcial compara con la CONSTANTE, no con el literal del diseño', () => {
+  const sql = project('notification-mailer', {
+    group: 'com.test', database: 'postgresql', broker: 'rabbitmq', auth: 'keycloak'
+  }).file('partial-indexes.sql');
+
+  assert.match(sql, /WHERE status = 'ACTIVE'/);
+  assert.ok(!sql.includes("WHERE status = 'active'"), 'el literal del diseño no casa con ninguna fila');
+});
+
+test('y la prosa de al lado dice las dos formas, para no contradecir a la sentencia', () => {
+  // El comentario habla el idioma del diseñador porque el invariante es suyo. Pero un
+  // comentario que dijera `status = active` justo encima de un `WHERE status = 'ACTIVE'`
+  // invita a "corregir" la sentencia, que es exactamente el camino de vuelta al defecto.
+  const sql = project('notification-mailer', {
+    group: 'com.test', database: 'postgresql', broker: 'rabbitmq', auth: 'keycloak'
+  }).file('partial-indexes.sql');
+
+  assert.match(sql, /con status = active \(almacenado como 'ACTIVE'\)/);
+});
+
+test('lo que NO es un enum se emite intacto: convertirlo sería el error simétrico', () => {
+  // Para un booleano o un número el literal del diseño ES el valor almacenado. La conversión
+  // se hace por `field.kind === 'enum'`, no por «parece una cadena».
+  const { manifest, layers } = loadService(path.join(fixturesDir, 'notification-mailer'));
+  const model = buildModel({
+    manifest,
+    layers,
+    stack: { group: 'com.test', database: 'postgresql', broker: 'rabbitmq', auth: 'keycloak' }
+  });
+  const template = model.entities.find((entity) => entity.name === 'Template');
+
+  assert.equal(storedWhenValue(model, template, { field: 'status', equals: 'active' }), 'ACTIVE');
+  // Un campo que no existe, o uno no-enum: se devuelve tal cual.
+  assert.equal(storedWhenValue(model, template, { field: 'version', equals: 3 }), 3);
+  assert.equal(storedWhenValue(model, template, { field: 'noExiste', equals: true }), true);
+  // Y un valor que el enum no tiene NO se inventa: lo caza `keel validate`, y taparlo aquí
+  // dejaría el mismo índice inútil con mejor aspecto.
+  assert.equal(storedWhenValue(model, template, { field: 'status', equals: 'activo' }), 'activo');
+});
+
+test('la rama documental convierte igual: Spring Data también guarda el name()', () => {
+  // El gemelo, que no tenía cobertura y fallaba por lo mismo: `Criteria.where("status")
+  // .is("approved")` no casa con un documento que guarda "APPROVED". La fixture documental no
+  // declara ningún índice condicionado, así que se parchea el diseño — lo que hay que cubrir
+  // es la conversión, no una silueta de servicio nueva.
+  const { manifest, layers } = loadService(path.join(fixturesDir, 'inspection-reports'));
+  const patched = structuredClone(layers);
+  patched.persistence.entities.InspectionReport.indexes.push({
+    fields: ['siteCode'],
+    unique: true,
+    when: { field: 'status', equals: 'approved' }
+  });
+
+  const workspace = tmpDir('keel-doc-partial-');
+  scaffoldService({ manifest, layers: patched, workspace, force: true, stack: { group: 'com.example' } });
+  const config = fs.readFileSync(
+    path.join(
+      workspace,
+      'services/inspection-reports-spring/src/main/java/com/example/inspectionreports',
+      'infrastructure/persistence/config/MongoIndexConfig.java'
+    ),
+    'utf8'
+  );
+
+  assert.match(config, /PartialIndexFilter\.of\(Criteria\.where\("status"\)\.is\("APPROVED"\)\)/);
+  assert.ok(!config.includes('.is("approved")'), 'el literal del diseño no casa con ningún documento');
 });

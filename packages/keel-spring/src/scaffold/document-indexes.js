@@ -17,7 +17,7 @@
 
 import { snakeCase } from '../lib/naming.js';
 import { javaFile, javaPath, subPackage } from './render.js';
-import { persistedMembers, uniqueFields, indexName } from './persistence-members.js';
+import { persistedMembers, uniqueFields, indexName, storedWhenValue } from './persistence-members.js';
 import { usesOutbox } from './outbox.js';
 import { usesIdempotency } from './idempotency.js';
 import { usesHttpIdempotency } from './http-idempotency.js';
@@ -95,7 +95,11 @@ export function indexSpecs(model, entity, warnings) {
       partialFilter: index.when
         ? {
             path: documentPathsFor(model, entity, members, index.when.field, warnings)[0],
-            equals: index.when.equals
+            // El valor ALMACENADO, no el literal del diseño: Spring Data serializa un enum
+            // por name(), igual que @Enumerated(EnumType.STRING) en la rama relacional, así
+            // que un filtro con el literal no casaría con ningún documento y el índice
+            // parcial no indexaría nada. Ver persistence-members.js § storedWhenValue.
+            equals: storedWhenValue(model, entity, index.when)
           }
         : null,
       source: 'indexes'

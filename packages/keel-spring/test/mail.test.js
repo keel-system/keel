@@ -227,12 +227,25 @@ test('«como máximo una activa» sale como índice parcial, no como constraint 
   const { read } = scaffoldMailer();
   const sql = read('src/main/resources/db/partial-indexes.sql');
   assert.match(sql, /CREATE UNIQUE INDEX IF NOT EXISTS uk_templates_application_key_locale/);
-  assert.match(sql, /WHERE status = 'active'/);
+  // El predicado compara con el valor ALMACENADO, que no es el que escribió el diseño: el
+  // enum se persiste por `name()` (@Enumerated(EnumType.STRING)), o sea `ACTIVE`, mientras
+  // `specs/`, el JSON y `openapi.yaml` hablan de `active`.
+  //
+  // Este test afirmaba `WHERE status = 'active'` y con eso CONGELÓ el defecto: el índice se
+  // creaba sin error y no casaba con ninguna fila, así que el invariante que debía sostener
+  // en base de datos quedaba sin efecto en silencio — no lo delata el arranque, ni el
+  // baseline, ni ningún escenario, porque la ausencia de un rechazo no falla ninguna
+  // aserción. Lo destapó el pase de calidad de la corrida de RabbitMQ, no la suite.
+  assert.match(sql, /WHERE status = 'ACTIVE'/);
+  assert.ok(!sql.includes("WHERE status = 'active'"), 'el literal del diseño no casa con la columna');
+  // Y la prosa de al lado sigue hablando el idioma del diseñador —es SU invariante— pero
+  // dice la diferencia: un comentario que contradiga a la sentencia invita a "corregir" la
+  // sentencia.
+  assert.match(sql, /con status = active \(almacenado como 'ACTIVE'\)/);
   // Quoting del DIALECTO, no el backtick de Hibernate: este SQL va directo al motor.
   assert.ok(sql.includes('"key"'), 'una palabra reservada tiene que citarse como la cita PostgreSQL');
   assert.ok(!sql.includes('`key`'), 'el backtick solo vale dentro de una anotación que Hibernate traduzca');
 });
-
 test('el índice condicionado NO se anota en la entidad JPA', () => {
   // @Index no tiene predicado: anotarlo crearía un índice único sobre TODAS las
   // filas, que es el invariante contrario al declarado.

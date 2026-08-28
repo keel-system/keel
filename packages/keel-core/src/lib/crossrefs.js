@@ -2330,6 +2330,17 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
       // diseño declaró no la sostendría nada, en silencio.
       if (!Array.isArray(index) && index?.when) {
         checkPersistenceMember(entityName, entity, index.when.field, 'indexes.when');
+        // Y el VALOR, no solo el campo. Si la condición va sobre un enum, un valor que no
+        // está entre los suyos produce un índice que se crea sin error y no casa con ninguna
+        // fila: el mismo silencio que un campo inexistente, y más difícil de ver porque el
+        // nombre del campo sí existe. Es una incoherencia entre dos capas del mismo diseño,
+        // no una decisión pendiente, así que es error y no aviso.
+        const whenValues = enumValuesOf((entity.fields ?? {})[index.when.field]);
+        if (whenValues && !whenValues.includes(index.when.equals)) {
+          errors.push(
+            `persistence: entities.${entityName}.indexes.when: '${index.when.equals}' no es un valor de '${index.when.field}' (${whenValues.join(', ')}); el índice condicionado se crearía y no casaría con ninguna fila`
+          );
+        }
       }
     }
 

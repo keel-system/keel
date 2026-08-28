@@ -4729,3 +4729,66 @@ test('una transición basta para considerarla alcanzada', () => {
   };
   assert.deepEqual(run(layers).obligations.filter((o) => o.id === 'OBL-ENTITY-UNREACHABLE'), []);
 });
+
+// ─── El VALOR de la condición de un índice, no solo su campo ─────────────────
+//
+// La puerta gemela de un fallo silencioso que costó una corrida. `indexes.when` ya
+// comprobaba que el campo existiera, pero no que el valor fuera suyo: un `equals: activo`
+// sobre un enum `[draft, active, retired]` produce un índice que se crea sin error y no casa
+// con ninguna fila, así que la unicidad condicionada que el diseño declaró no la sostiene
+// nadie. Y es más difícil de ver que un campo inexistente, porque el nombre del campo está
+// bien. Es error y no aviso: es una incoherencia entre dos capas del mismo diseño.
+
+const withConditionalIndex = (equals) => ({
+  domain: {
+    types: { TemplateStatus: { values: ['draft', 'active', 'retired'] } },
+    entities: {
+      Template: entity({ status: { type: 'TemplateStatus', required: true }, key: { type: 'string' } })
+    },
+    aggregates: { Template: { root: 'Template', entities: [] } }
+  },
+  'use-cases': {},
+  persistence: {
+    entities: {
+      Template: { persisted: true, indexes: [{ fields: ['key'], unique: true, when: { field: 'status', equals } }] }
+    }
+  }
+});
+
+test('indexes.when: un valor que no está en el enum del campo es error', () => {
+  const { errors } = run(withConditionalIndex('activo'));
+  const error = errors.find((e) => e.includes('indexes.when'));
+
+  assert.ok(error, `esperaba error por el valor fuera del enum: ${errors.join(' | ')}`);
+  // El mensaje enumera los valores reales: sin ellos hay que ir a buscarlos al dominio.
+  assert.match(error, /draft, active, retired/);
+  // Y dice la consecuencia, que es lo que hace entender por qué importa.
+  assert.match(error, /no casaría con ninguna fila/);
+});
+
+test('indexes.when: el valor correcto no produce nada', () => {
+  const { errors } = run(withConditionalIndex('active'));
+  assert.deepEqual(errors.filter((e) => e.includes('indexes.when')), []);
+});
+
+test('indexes.when: sobre un campo que no es enum no se comprueba el valor', () => {
+  // Un booleano o un número no tienen lista de valores contra la que contrastar, y exigir
+  // una convertiría la guarda en un obstáculo para condiciones perfectamente válidas.
+  const layers = {
+    domain: {
+      entities: { Template: entity({ archived: { type: 'boolean' }, key: { type: 'string' } }) },
+      aggregates: { Template: { root: 'Template', entities: [] } }
+    },
+    'use-cases': {},
+    persistence: {
+      entities: {
+        Template: {
+          persisted: true,
+          indexes: [{ fields: ['key'], unique: true, when: { field: 'archived', equals: false } }]
+        }
+      }
+    }
+  };
+
+  assert.deepEqual(run(layers).errors.filter((e) => e.includes('indexes.when')), []);
+});

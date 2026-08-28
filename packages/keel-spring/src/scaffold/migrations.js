@@ -15,6 +15,7 @@
 // Existen para que ni el agente ni el operador tengan que editar YAML a mano.
 
 import { uniqueConstraints, columnsFor, partialUniqueIndexes, indexName } from './persistence-entities.js';
+import { storedWhenValue } from './persistence-members.js';
 import { persistedMembers } from './persistence-members.js';
 import { quoteIdentifierFor } from '../lib/sql-reserved.js';
 
@@ -78,12 +79,18 @@ export function partialIndexSpecs(model) {
         .map(quote)
         .join(', ');
       const [whenColumn] = columnsFor(model, entity, members, index.when.field, model.warnings);
+      // El valor con el que compara la columna, NO el literal del diseño: un enum se guarda
+      // por su constante. Ver persistence-members.js § storedWhenValue.
+      const stored = storedWhenValue(model, entity, index.when);
       specs.push({
         entity: entity.name,
         name: indexName(entity, index),
         table: quote(entity.tableName),
         columns,
-        predicate: `${quote(whenColumn)} = ${sqlLiteral(index.when.equals)}`,
+        predicate: `${quote(whenColumn)} = ${sqlLiteral(stored)}`,
+        // Se conserva junto al literal para que la prosa pueda decir los dos cuando difieren:
+        // el comentario habla el idioma del diseño y la sentencia el del motor.
+        stored,
         fields: index.fields,
         when: index.when
       });
@@ -100,6 +107,13 @@ export function partialIndexSpecs(model) {
 export function usesPartialIndexes(model) {
   if (model.persistenceKind === 'document') return false;
   return partialIndexSpecs(model).length > 0 && Boolean(PARTIAL_INDEX_DIALECTS[model.stack.database]);
+}
+
+// El diseño dice `active` y la columna guarda `ACTIVE`. La prosa habla el idioma del
+// diseñador —es su invariante— pero callar la diferencia deja un comentario que contradice
+// a la sentencia de debajo, y eso invita a "corregir" la sentencia.
+function storedNote(spec) {
+  return String(spec.stored) === String(spec.when.equals) ? '' : ` (almacenado como ${sqlLiteral(spec.stored)})`;
 }
 
 function sqlLiteral(value) {
@@ -157,7 +171,7 @@ ${lines.join('\n')}
   }
 
   return `${header}
-${specs.map((spec) => `-- ${spec.entity}: como máximo una fila por (${spec.fields.join(', ')}) con ${spec.when.field} = ${spec.when.equals}.
+${specs.map((spec) => `-- ${spec.entity}: como máximo una fila por (${spec.fields.join(', ')}) con ${spec.when.field} = ${spec.when.equals}${storedNote(spec)}.
 ${dialect(spec)}`).join('\n\n')}
 `;
 }

@@ -130,6 +130,39 @@ export function partialUniqueIndexes(entity) {
   return (entity.indexes ?? []).filter((index) => index.unique && index.when);
 }
 
+/**
+ * El valor con el que la CONDICIÓN de un índice se compara en el almacén, que no siempre
+ * es el que escribió el diseño.
+ *
+ * Un campo enum se guarda por `name()` —`@Enumerated(EnumType.STRING)` en relacional, la
+ * serialización por defecto de Spring Data en documental—, o sea la CONSTANTE (`ACTIVE`),
+ * mientras el diseño, el JSON y `openapi.yaml` hablan del literal (`active`). Emitir el
+ * literal produce un índice que se crea sin error y no casa con ninguna fila: el invariante
+ * que debía sostener queda sin efecto, y no lo delata ni el arranque ni ningún escenario —la
+ * ausencia de un rechazo no falla ninguna aserción—.
+ *
+ * Vive aquí, y no en cada emisor, porque los emisores son DOS y aplican la misma conversión:
+ * el predicado SQL de `migrations.js` y el `partialFilterExpression` de `document-indexes.js`.
+ * Es la regla de `broker-probes.js`: una fuente, dos proyecciones.
+ *
+ * Lo que NO es enum se devuelve intacto. Para un booleano o un número el literal del diseño
+ * ES el valor almacenado, y convertirlo sería el error simétrico.
+ */
+export function storedWhenValue(model, entity, when) {
+  if (!when) return when;
+  // Solo un campo directo puede ser enum; un dot-path apunta a un value object o a una hija
+  // anidada, y ahí no hay constante que resolver.
+  const field = (entity.fields ?? []).find((candidate) => candidate.name === when.field);
+  if (field?.kind !== 'enum' || !field.javaType) return when.equals;
+
+  const enumDef = (model.enums ?? []).find((candidate) => candidate.name === field.javaType);
+  const value = enumDef?.values?.find((candidate) => candidate.literal === when.equals);
+  // Sin correspondencia se devuelve el literal tal cual: el diseño declara un valor que no
+  // existe en el enum, y eso lo caza `crossrefs` como error de validación. Inventar aquí una
+  // constante taparía esa incoherencia bajo un índice igual de inútil.
+  return value?.constant ?? when.equals;
+}
+
 // Nombre de constraint → entidad y campo que la originan. Lo consume el
 // ApiExceptionHandler para traducir una violación de integridad al error
 // declarado del diseño en vez de a un 409 genérico.
