@@ -486,7 +486,11 @@ require_id() {
 ${blocks.join('\n\n')}
 
 echo "Realm '$REALM' listo. Verifica con:"
-echo "  curl -s -d 'grant_type=password&client_id=$USER_CLIENT&username=${verifyUser}&password=$PASSWORD' ${tokenUrl(model)} | jq -r .access_token"
+${
+  roles.length > 0
+    ? `echo "  curl -s -d 'grant_type=password&client_id=$USER_CLIENT&username=${verifyUser}&password=$PASSWORD' ${tokenUrl(model)} | jq -r .access_token"`
+    : `echo "  curl -s -u '${serviceClients[0]?.name ?? 'CLIENTE'}:<secreto de test-credentials.env>' -d 'grant_type=client_credentials' ${tokenUrl(model)} | jq -r .access_token"`
+}
 `;
 
   return { path: 'infra/init-keycloak.sh', content };

@@ -4625,3 +4625,107 @@ test('un barrido cuyo efecto SÍ está declarado no se avisa: el escenario se es
   const { warnings } = run(layers);
   assert.ok(!warnings.some((w) => w.includes('no declara transitions ni emits')), warnings.join('\n'));
 });
+
+// ─── OBL-ENTITY-UNREACHABLE ──────────────────────────────────────────────────
+//
+// La obligación que salió de la corrida de `notification-mailer`: `Application` era una raíz
+// de agregado persistida, precondición en prosa de casi todo el servicio, y NINGUNA operación
+// la nombraba. El diseño era mecánicamente válido —no hay referencia rota, porque la
+// referencia que falta no existe— y se llevó por delante 16 de 19 escenarios, con un agente
+// derivándola de un claim del JWT por no tener ninguna salida mejor.
+
+const unreachableLayers = ({ withCreator = false } = {}) => ({
+  domain: {
+    entities: {
+      Application: entity({ key: { type: 'string', required: true } }),
+      Note: entity({ text: { type: 'string' } })
+    },
+    aggregates: { Application: { root: 'Application' }, Note: { root: 'Note' } }
+  },
+  'use-cases': {
+    operations: {
+      addNote: {
+        description: 'Registra una nota.',
+        kind: 'command',
+        input: { fields: { text: { type: 'string', required: true } } },
+        output: { entity: 'Note' }
+      },
+      ...(withCreator
+        ? {
+            registerApplication: {
+              description: 'Da de alta un sistema consumidor.',
+              kind: 'command',
+              input: { fields: { key: { type: 'string', required: true } } },
+              output: { entity: 'Application' }
+            }
+          }
+        : {})
+    }
+  },
+  persistence: { entities: { Application: {}, Note: {} } }
+});
+
+test('una raíz de agregado que ninguna operación nombra abre una obligación', () => {
+  const { errors, obligations } = run(unreachableLayers());
+
+  // No es un error de referencias: el diseño es coherente, y ese es justo el problema.
+  assert.deepEqual(errors, []);
+  const found = obligations.filter((o) => o.id === 'OBL-ENTITY-UNREACHABLE');
+  assert.equal(found.length, 1, JSON.stringify(obligations));
+  assert.equal(found[0].scope, 'domain');
+  assert.match(found[0].message, /'Application'/);
+  // El mensaje tiene que decir la consecuencia, no solo el hecho: es lo que separa cerrarla
+  // de exentarla sin leer.
+  assert.match(found[0].message, /nada del servicio puede crearla/);
+});
+
+test('y no la abre en cuanto alguna operación la nombra', () => {
+  const { obligations } = run(unreachableLayers({ withCreator: true }));
+  assert.deepEqual(obligations.filter((o) => o.id === 'OBL-ENTITY-UNREACHABLE'), []);
+});
+
+test('una entidad HIJA del agregado no la abre: se crea por su raíz', () => {
+  // `OrderLine` no es raíz, así que nadie espera una operación que la produzca por su cuenta.
+  const layers = {
+    domain: baseDomain(),
+    'use-cases': {
+      operations: {
+        placeOrder: {
+          description: 'Crea un pedido.',
+          kind: 'command',
+          input: { fields: { ref: { type: 'string' } } },
+          output: { entity: 'Order' }
+        },
+        openCatalog: {
+          description: 'Abre un catálogo.',
+          kind: 'command',
+          input: { fields: { name: { type: 'string' } } },
+          output: { entity: 'Catalog' }
+        }
+      }
+    },
+    persistence: { entities: { Order: {}, Catalog: {} } }
+  };
+  assert.deepEqual(run(layers).obligations.filter((o) => o.id === 'OBL-ENTITY-UNREACHABLE'), []);
+});
+
+test('sin capa persistence no se abre: lo que no se guarda no hace falta crearlo', () => {
+  const layers = unreachableLayers();
+  delete layers.persistence;
+  assert.deepEqual(run(layers).obligations.filter((o) => o.id === 'OBL-ENTITY-UNREACHABLE'), []);
+});
+
+test('una transición basta para considerarla alcanzada', () => {
+  // No hace falta que la CREE: basta con que el diseño la nombre. El criterio es conservador a
+  // propósito — con algo más fino habría que decidir qué cuenta como «crear», y una obligación
+  // con falsos positivos enseña a exentar sin leer.
+  const layers = unreachableLayers();
+  layers['use-cases'].operations.deactivate = {
+    description: 'Da de baja el sistema.',
+    kind: 'command',
+    input: { fields: { id: { type: 'uuid', required: true } } },
+    output: 'void',
+    transitions: [{ entity: 'Application', from: ['active'], to: 'inactive' }]
+  };
+  assert.deepEqual(run(layers).obligations.filter((o) => o.id === 'OBL-ENTITY-UNREACHABLE'), []);
+});

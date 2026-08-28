@@ -649,11 +649,11 @@ test('scheduler: el barrido de una reconciliación se despacha SIN transacción'
   const scheduler = schedulersOf(withReconciledSweep('sweepStaleReservations'));
 
   assert.ok(
-    scheduler.includes('mediator.dispatchWithoutTransaction(new SweepStaleReservationsCommand());'),
+    scheduler.includes('mediator.dispatchWithoutTransaction(new SweepStaleReservationsCommand())'),
     scheduler
   );
   // Y no por el camino transaccional: el reclamo no confirmaría hasta el final del lote.
-  assert.ok(!scheduler.includes('mediator.dispatch(new SweepStaleReservationsCommand());'), scheduler);
+  assert.ok(!scheduler.includes('mediator.dispatch(new SweepStaleReservationsCommand())'), scheduler);
   // El porqué viaja con el método, o la siguiente lectura lo «unifica por limpieza».
   assert.ok(scheduler.includes('sin transacción abarcadora'), scheduler);
 });
@@ -672,11 +672,11 @@ test('scheduler: una operación con schedule que no reconcilia nada sigue en tra
   };
   const scheduler = schedulersOf(layers);
 
-  assert.ok(scheduler.includes('mediator.dispatch(new PurgeOldOrdersCommand());'), scheduler);
-  assert.ok(!scheduler.includes('mediator.dispatchWithoutTransaction(new PurgeOldOrdersCommand());'), scheduler);
+  assert.ok(scheduler.includes('mediator.dispatch(new PurgeOldOrdersCommand())'), scheduler);
+  assert.ok(!scheduler.includes('mediator.dispatchWithoutTransaction(new PurgeOldOrdersCommand())'), scheduler);
   // Y el barrido de la misma clase sigue por el suyo: conviven.
   assert.ok(
-    scheduler.includes('mediator.dispatchWithoutTransaction(new SweepStaleReservationsCommand());'),
+    scheduler.includes('mediator.dispatchWithoutTransaction(new SweepStaleReservationsCommand())'),
     scheduler
   );
 });

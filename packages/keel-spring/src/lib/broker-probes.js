@@ -143,7 +143,43 @@ function concat(...pieces) {
 // (`RABBIT_API`, `QUEUE_URL`) y el runner usa el literal: es el mismo valor
 // escrito una vez.
 
-export function readParts(broker, { destination, offset, count, bodyFile, base }) {
+/**
+ * Los segundos que un BARRIDO oculta cada mensaje que devuelve, y el porqué de que exista.
+ *
+ * SQS acota `receive-message` a 10, así que pedir más obliga a llamar por lotes. Con
+ * `--visibility-timeout 0` —la lectura suelta, que es un peek deliberado: un escenario puede
+ * afirmar dos veces sobre el mismo mensaje— lo devuelto vuelve a estar visible AL INSTANTE, y
+ * la llamada siguiente devuelve OTRA VEZ los mismos diez. El barrido no avanza: hay un techo
+ * duro de 10 mensajes por lectura, se pidan los que se pidan.
+ *
+ * Deduplicar no lo arregla —eso quita el conteo inflado y deja el techo—, y el modo de fallo
+ * que queda es igual de malo: un conteo CORTO acusa de no publicar a un servicio que publicó
+ * los quince. Lo caza `BRK-14`.
+ *
+ * Así que un barrido oculta lo que lee y al terminar lo SUELTA (`releaseParts`), que devuelve
+ * el buzón exactamente como estaba: el peek se conserva para todos los demás. El valor es
+ * corto a propósito — si el proceso muere a mitad del barrido, sin nadie que suelte, el buzón
+ * se cura solo en este plazo en vez de quedarse ciego.
+ */
+export const SQS_SWEEP_VISIBILITY = '10';
+
+/**
+ * Devolver a la cola, YA, un mensaje que un barrido había ocultado.
+ *
+ * Es la otra mitad de `SQS_SWEEP_VISIBILITY` y solo significa algo en snssqs: en rabbitmq la
+ * lectura es un `get` con peek explícito y en kafka se lee por offset, así que ninguno de los
+ * dos esconde nada que haya que devolver.
+ */
+export function releaseParts(broker, { destination, receiptHandle, base }) {
+  if (broker !== 'snssqs') return null;
+  return [
+    'sqs', 'change-message-visibility',
+    '--queue-url', concat(base ?? ENDPOINTS.snssqs.queueUrlPrefix, destination),
+    '--receipt-handle', receiptHandle, '--visibility-timeout', '0'
+  ];
+}
+
+export function readParts(broker, { destination, offset, count, bodyFile, base, hideSeconds }) {
   if (broker === 'rabbitmq') {
     return [
       'curl', '-sf', '-u', ENDPOINTS.rabbitmq.credentials, '-H', 'content-type: application/json',
@@ -153,8 +189,10 @@ export function readParts(broker, { destination, offset, count, bodyFile, base }
   if (broker === 'snssqs') {
     return [
       'sqs', 'receive-message', '--queue-url', concat(base ?? ENDPOINTS.snssqs.queueUrlPrefix, destination),
-      '--max-number-of-messages', count, '--visibility-timeout', '0'
-    ];
+      '--max-number-of-messages', count,
+      // Un barrido OCULTA lo que devuelve; una lectura suelta no. Ver SQS_SWEEP_VISIBILITY.
+      '--visibility-timeout', hideSeconds ?? '0'
+    ].concat(hideSeconds ? ['--wait-time-seconds', '1'] : []);
   }
   return ['kcat', '-C', '-b', ENDPOINTS.kafka.bootstrap, '-t', destination, '-o', offset, '-e', '-q'];
 }

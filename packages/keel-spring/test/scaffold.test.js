@@ -741,7 +741,15 @@ test('AbstractFlowIT con capa security: credenciales por rol contra el proveedor
   const patched = structuredClone(layers);
   patched.security = {
     authentication: { protocol: 'oidc', serviceAuth: { protocol: 'oauth2' } },
-    access: { default: { level: 'required' }, rules: { listProducts: { level: 'public' } } },
+    // Con ROL declarado a propósito: `tokenFor` pide un token de USUARIO por contraseña, y esos
+    // usuarios los crea `init-keycloak.sh` uno por rol. Sin roles no crea ninguno, así que
+    // emitir el método prometía una credencial inexistente — el `invalid_grant` que destapó la
+    // sexta corrida. El arnés promete exactamente lo que el aprovisionamiento siembra.
+    roles: ['catalog-admin'],
+    access: {
+      default: { level: 'required' },
+      rules: { listProducts: { level: 'public' }, createProduct: { level: 'role', roles: ['catalog-admin'] } }
+    },
     serviceClients: { billing: { scopes: ['catalog:read'] } }
   };
   const patchedManifest = structuredClone(manifest);

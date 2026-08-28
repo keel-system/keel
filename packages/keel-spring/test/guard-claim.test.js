@@ -22,14 +22,21 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
 import { loadService } from 'keel-core';
+import { buildModel } from '../src/lib/model.js';
 import { scaffoldService } from '../src/scaffold/index.js';
 
 const fixtureDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'notification-mailer');
 const JAVA = 'src/main/java/com/platform/notificationmailer';
 
 /**
- * La fixture de correo con la silueta que la suya no tiene: un estado EN VUELO entre la
- * aceptación y el desenlace, y una operación interna que lo atraviesa mandando el correo.
+ * La fixture de correo, que YA trae la silueta de la guarda en disco: `sendAcceptedNotification`
+ * atraviesa `accepted → sending → sent|failed` y es la única en `mail.sentBy`.
+ *
+ * Estaba aquí parcheada en memoria, y eso dejaba un hueco que no se veía: ninguna fixture EN
+ * DISCO producía la guarda, así que su Java no pasaba nunca por `java-syntax` ni por
+ * `compile-check` — los dos iteran el directorio de fixtures. Era el único de los seis
+ * mecanismos en esa situación. Lo que se sigue parcheando aquí son solo las VARIANTES que un
+ * diseño no puede declarar a la vez.
  */
 function withGuardedSend({ stamp = true, model = 'relational' } = {}) {
   const { manifest, layers, errors } = loadService(fixtureDir);
@@ -40,36 +47,13 @@ function withGuardedSend({ stamp = true, model = 'relational' } = {}) {
   // el reclamo cambia de forma entera —findAndModify en vez de UPDATE condicional— y esa
   // rama no la cubría ninguna fixture: ninguna combina modelo documental con capa `mail`.
   patched.persistence.default = { ...(patched.persistence.default ?? {}), model };
-
-  patched.domain.types.NotificationStatus.values = ['accepted', 'sending', 'sent', 'failed'];
-  patched.domain.entities.Notification.lifecycle.transitions = {
-    accepted: ['sending'],
-    sending: ['sent', 'failed'],
-    sent: [],
-    failed: []
-  };
-  if (stamp) {
-    patched.domain.entities.Notification.fields.sendingSince = {
-      type: 'timestamp',
-      description: 'Instante en que esta ejecución se llevó el envío.'
-    };
+  // El caso «sin reloj» se construye QUITANDO el campo, no dejando de ponerlo: el diseño en
+  // disco ya lo declara, porque un reclamo sin instante es una fila que el rescate no
+  // encuentra nunca y esa es la forma correcta. Aquí se retira a propósito para comprobar que
+  // build degrada —cambia el estado y no estampa— en vez de inventarse un campo.
+  if (!stamp) {
+    delete patched.domain.entities.Notification.fields.sendingSince;
   }
-
-  patched['use-cases'].operations.sendAcceptedNotification = {
-    description: 'Compone y entrega al relay una notificación aceptada.',
-    kind: 'command',
-    internal: true,
-    input: { fields: { notificationId: { type: 'uuid', required: true } } },
-    output: { entity: 'Notification' },
-    transitions: [
-      { entity: 'Notification', from: ['accepted'], to: 'sending' },
-      { entity: 'Notification', from: ['sending'], to: 'sent' },
-      { entity: 'Notification', from: ['sending'], to: 'failed' }
-    ],
-    rules: ['La transición de accepted a sending es la guarda contra el doble envío.'],
-    errors: [{ code: 'NOTIFICATION_NOT_FOUND', when: 'No existe un envío con ese identificador.', http: 404 }]
-  };
-  patched.mail.sentBy = ['sendAcceptedNotification'];
 
   const workspace = tmpDir('keel-guardclaim-');
   const stack = model === 'document' ? { database: 'mongodb' } : undefined;
@@ -172,7 +156,9 @@ test('documental: la guarda es un findAndModify, atómico y sin transacción pro
   assert.match(method, /mongoTemplate\.findAndModify\(/, 'no se reclama con findAndModify');
   // El filtro es la exclusión: la fila se toma SOLO si sigue en su estado de partida.
   assert.match(method, /Criteria\.where\("_id"\)\.is\(id\)/);
-  assert.match(method, /\.and\("status"\)\.in\(List\.of\(NotificationStatus\.ACCEPTED\)\)/);
+  // El estado de partida es `queued`, no `accepted`: entre los dos hay ahora el reclamo de
+  // LOTE del barrido, que es otro mecanismo. La guarda empieza donde termina aquel.
+  assert.match(method, /\.and\("status"\)\.in\(List\.of\(NotificationStatus\.QUEUED\)\)/);
   assert.match(method, /returnNew\(true\)/, 'sin returnNew se devuelve el documento de ANTES del reclamo');
   // REQUIRES_NEW es la respuesta relacional a un problema que aquí no existe: pedirla
   // obligaría a un replica set solo para esto.
@@ -244,4 +230,31 @@ test('el puerto de despacho entre casos de uso trae las DOS variantes', () => {
   const adapter = read(`${JAVA}/infrastructure/configurations/usecase/CommandDispatcherAdapter.java`);
   assert.match(adapter, /implements CommandDispatcher/);
   assert.match(adapter, /mediator\.dispatchWithoutTransaction\(command\);/);
+});
+
+test('la guarda sale de la fixture EN DISCO, no de un parche del test', () => {
+  // El hueco que este archivo tenía y que no se veía desde dentro: la silueta se construía en
+  // memoria, así que ninguna fixture del directorio la producía. `java-syntax.test.js` y
+  // `compile-check` iteran ESE directorio — de los seis mecanismos de repetición y
+  // compensación, la guarda era el único cuyo Java no pasaba nunca por el linter estructural
+  // ni por javac. Y es además el único que ningún escenario `FL-*` puede ver, porque nadie
+  // mata la aplicación entre el envío y el commit.
+  //
+  // Si alguien vuelve a quitar el estado en vuelo del diseño, esto cae aquí y no en la corrida.
+  const { manifest, layers, errors } = loadService(fixtureDir);
+  assert.deepEqual(errors, []);
+
+  const model = buildModel({ manifest, layers, stack: { group: 'com.test', database: 'postgresql', broker: 'kafka' } });
+  const guarded = (model.services ?? [])
+    .flatMap((service) => service.operations ?? [])
+    .filter((operation) => operation.guardClaim);
+
+  assert.equal(guarded.length, 1, 'la fixture dejó de producir la guarda');
+  assert.equal(guarded[0].name, 'sendAcceptedNotification');
+  assert.equal(guarded[0].guardClaim.method, 'claimForSendAcceptedNotification');
+  // Con su reloj: sin él el reclamo no estampa y el rescate no tiene sobre qué medir.
+  assert.equal(guarded[0].guardClaim.stampField, 'sendingSince');
+  // Y es la ÚNICA que manda correo: registrar por HTTP o por evento ya no envía nada, que es
+  // lo que permite que el envío tenga un estado intermedio propio.
+  assert.deepEqual(layers.mail.sentBy, ['sendAcceptedNotification']);
 });

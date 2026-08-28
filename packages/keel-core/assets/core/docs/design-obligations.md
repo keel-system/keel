@@ -35,6 +35,7 @@ donde «aceptado» significaría dejársela al generador. Están marcadas como t
 | `OBL-IDEM-RACE-CODE` | `use-cases`: alguna operación declara `idempotency` | la carrera de la clave no tiene `code` nombrado | 4 | sí |
 | `OBL-IDEM-REUSE-CODE` | `use-cases`: alguna operación declara `idempotency` | el desenlace «misma clave, otro cuerpo» no tiene `code` nombrado | 4 | sí |
 | `OBL-CONCURRENCY-CODE` | `persistence`: `consistency.optimisticLocking` es `all` o `declared` | el conflicto de escritura concurrente no tiene `code` nombrado | 4 | sí |
+| `OBL-ENTITY-UNREACHABLE` | `domain`: una raíz de agregado a la que ninguna operación se refiere | una raíz de agregado que ninguna operación puede crear | 14 | sí |
 | `OBL-RESOURCE-SCOPE` | `use-cases`: una operación protegida por rol declara un error 403 | un 403 que nada de lo declarado puede producir | 9 | no |
 
 La columna **Clase** es la del análisis de huecos (`gap-analysis.md`), para que el barrido del

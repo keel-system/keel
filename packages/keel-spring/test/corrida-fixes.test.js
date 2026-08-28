@@ -13,7 +13,9 @@ import {
   emptyReadValue,
   READ_BATCH_LIMIT,
   READ_DEDUPE_KEY,
-  readAttemptLimit
+  readAttemptLimit,
+  readParts,
+  releaseParts
 } from '../src/lib/broker-probes.js';
 import { needsReadCommitted, claimTransaction } from '../src/lib/claim-sql.js';
 import { harnessQueueName } from '../src/scaffold/messaging-provisioning.js';
@@ -713,4 +715,379 @@ test('y donde el broker no acota la llamada, no se lee por lotes ni se deduplica
     assert.equal(READ_DEDUPE_KEY[broker], null, broker);
     assert.equal(readAttemptLimit(broker, 25), 1, broker);
   }
+});
+
+// ─── Antes de la quinta corrida: la rama documental y el gate que no medía ────
+//
+// Cuatro corridas sobre MySQL relacional, 19 arreglos. Cada uno tiene un gemelo documental
+// que NUNCA ha corrido — sobre Mongo solo se han visto 2 de los 4 reclamos, y con otro
+// diseño. Al revisar esa rama antes de estrenarla salieron estos defectos.
+
+const DOCUMENT = { group: 'com.test', broker: 'kafka', auth: null, cache: null, storage: null };
+
+test('el raise de cada evento publicado se exige donde build lo dejó como TODO', () => {
+  // El punto ciego que llevaba cinco corridas anotado, y era más ancho de lo que decía la
+  // nota. No es «el gate de compensación no ve una activación publicada»: es que el
+  // `raise(...)` de CUALQUIER evento vive en el AGREGADO —build deja ahí un TODO por evento,
+  // ver scaffold/entities.js § renderDomainEvents— y el `forbid` de la familia `compensation`
+  // mira el HANDLER, que es otra clase.
+  //
+  // Un handler impecable con el raise olvidado salía VERDE, y el evento no existía: el outbox
+  // no tiene qué entregar, ninguna suscripción recibe nada, y el único síntoma es un escenario
+  // esperando un mensaje que nunca sale.
+  const script = project('stock-reservation', { ...DOCUMENT, database: 'postgresql' }).file('check-idempotency.sh');
+
+  assert.match(script, /unit 'domainEvent'/);
+  // La clase es el AGREGADO, no el handler: es donde build dejó el TODO.
+  assert.match(script, /unit 'domainEvent' 'StockReservationRequested' 'Reservation'/);
+  // Y lo que se exige es que exista el raise de ESE evento, sin suponer en qué método.
+  assert.match(script, /raise\\s\*\\\(\\s\*StockReservationRequestedEvent/);
+  // El veredicto sale en la matriz como una familia más.
+  assert.match(script, /domainEvent\s+OK|domainEvent_ko/);
+});
+
+test('el reclamo de cola documental ordena, igual que el relacional', () => {
+  // El comentario del propio código daba el argumento —«con más candidatos que batchSize los
+  // más antiguos podrían no reclamarse nunca»— y lo aplicaba solo al RESCATE, mientras la rama
+  // relacional ordena siempre (`order by e.<campo> asc`). No era una diferencia del motor: era
+  // el mismo razonamiento aplicado a medias, y deja filas viejas al fondo indefinidamente en
+  // cuanto hay más candidatos de los que caben en un lote.
+  const adapter = project('asset-vault', DOCUMENT).file('AssetRepositoryImpl.java');
+
+  const claims = [...adapter.matchAll(/public List<Asset> claimFor\w+\(/g)];
+  assert.ok(claims.length > 0, 'la fixture no genera ningún reclamo documental');
+  // Un Sort por reclamo, tenga cota temporal o no.
+  const sorts = [...adapter.matchAll(/\.with\(Sort\.by\(Sort\.Direction\.ASC/g)];
+  assert.equal(sorts.length, claims.length, `${claims.length} reclamos y solo ${sorts.length} ordenados`);
+  assert.match(adapter, /import org\.springframework\.data\.domain\.Sort;/);
+});
+
+test('los stores documentales capturan también el fallo al confirmar', () => {
+  // El gemelo del arreglo que obligó la corrida de MySQL. No es transportable literal
+  // —`PessimisticLockingFailureException` no es lo que lanza Mongo— pero el hueco funcional es
+  // el mismo, y aquí es MÁS probable: el save() documental es @Transactional REQUIRED sobre
+  // MongoTransactionManager, así que se une a la transacción del caso de uso y un duplicado
+  // puede fallar al CONFIRMAR, no en el insert. Eso llega como TransactionSystemException, que
+  // no es DataAccessException y se escapaba.
+  //
+  // Hay precedente en vivo: `FL-AST-001-D` de la corrida documental de agosto falló
+  // exactamente en el desenlace de esa carrera.
+  const generated = project('asset-vault', DOCUMENT);
+
+  const idempotency = generated.file('MongoIdempotencyStore.java');
+  assert.match(idempotency, /catch \(DataIntegrityViolationException \| TransactionSystemException/);
+  assert.match(idempotency, /import org\.springframework\.transaction\.TransactionSystemException;/);
+
+  const claims = generated.file('ReconciliationClaimStore.java');
+  assert.match(claims, /catch \(DuplicateKeyException \| TransactionSystemException/);
+});
+
+test('y lo que NO aplica en documental sigue sin emitirse', () => {
+  // La simétrica, que es la mitad que evita el arreglo por analogía: `READ_COMMITTED` existe
+  // por los gap locks de InnoDB y en Mongo no hay ninguno; `uuidLiteral` existe porque en
+  // MySQL el id es una columna binaria y aquí es un UUID nativo del driver. Emitirlos aquí
+  // sería sugerir decisiones que este motor no tiene.
+  const generated = project('asset-vault', DOCUMENT);
+
+  assert.ok(!generated.file('AssetRepositoryImpl.java').includes('Isolation'), 'emite un aislamiento que no aplica');
+  assert.ok(!generated.file('AbstractFlowIT.java').includes('uuidLiteral'), 'emite un helper que aquí no significa nada');
+  // Y la espera al drenaje sí se emite, en su forma de mongosh.
+  assert.match(generated.file('AbstractFlowIT.java'), /countDocuments\(\{ destination/);
+});
+
+// ─── Lo que encontró `broker-check` al ejecutarse por primera vez ─────────────
+//
+// `BRK-14` se añadió para cazar la repesca de SQS y nunca se había corrido. Al correrlo cazó
+// algo distinto de lo que buscaba, y peor: no un conteo inflado sino un TECHO. Es exactamente
+// para lo que existe un gate en vivo — el defecto llevaba cuatro corridas pasando por debajo de
+// los tests de cadenas, de `java-syntax` y de `compile-check`, porque los tres juzgan el texto
+// del comando y ninguno lo que el broker contesta.
+
+const SWEEP = { group: 'com.test', database: 'postgresql', broker: 'snssqs', auth: null, cache: null, storage: null };
+
+test('leer más mensajes de los que cabe en una llamada BARRE: oculta y suelta', () => {
+  // El techo: con `--visibility-timeout 0` lo devuelto vuelve a estar visible al instante, así
+  // que la llamada siguiente trae OTRA VEZ los mismos diez. `publishedMessages(x, 15)` no podía
+  // devolver más de 10 jamás, se publicaran los que se publicaran.
+  //
+  // Deduplicar —el arreglo de la cuarta corrida— quitó el conteo inflado y dejó el techo intacto,
+  // y el modo de fallo que queda es igual de malo: un conteo CORTO acusa de no publicar a un
+  // servicio que publicó los quince, y se arbitra `culprit: code` contra código correcto.
+  const harness = project('stock-reservation', SWEEP).file('AbstractFlowIT.java');
+
+  // El barrido solo se activa por encima del lote, que es donde está el techo: por debajo, la
+  // lectura suelta ya era correcta y no hay razón para tocarla.
+  assert.match(harness, /boolean sweeping = wanted > 10;/);
+  assert.match(harness, /sweeping \? aws\(.*"--visibility-timeout", "10".*\) : aws\(.*"--visibility-timeout", "0"\)/);
+  // Y suelta lo oculto, que es lo que conserva el peek para todos los demás.
+  assert.match(harness, /aws\("sqs", "change-message-visibility".*"--visibility-timeout", "0"\)/);
+  assert.match(harness, /hidden\.add\(String\.valueOf\(message\.get\("ReceiptHandle"\)\)\)/);
+});
+
+test('la suelta va en un finally, no al final del camino feliz', () => {
+  // Si la lectura revienta a mitad —y revienta: `emptyIfBrokerStopped` existe porque un escenario
+  // para el broker a propósito— lo ya leído se quedaría oculto los diez segundos, y el escenario
+  // SIGUIENTE fallaría por una cola ciega que no es asunto suyo.
+  const harness = project('stock-reservation', SWEEP).file('AbstractFlowIT.java');
+  const from = harness.indexOf('protected static String publishedMessages');
+  const body = harness.slice(from, harness.indexOf('return decodeBodies', from));
+
+  assert.ok(body.indexOf('} finally {') > body.indexOf('emptyIfBrokerStopped'), body);
+  assert.match(body, /\} finally \{[\s\S]*change-message-visibility/);
+});
+
+test('barriendo, un lote corto ya no corta el bucle', () => {
+  // El corte por lote incompleto era correcto SIN ocultar y es falso barriendo: lo devuelto queda
+  // oculto, así que un lote corto no dice que no quede nada — dice que ese sondeo trajo poco. El
+  // único final fiable barriendo es el lote vacío, y por eso la condición se gatea.
+  const harness = project('stock-reservation', SWEEP).file('AbstractFlowIT.java');
+
+  assert.match(harness, /if \(!sweeping && messages\.size\(\) < size\) \{/);
+});
+
+test('la lectura suelta conserva el peek, que es lo que no se podía romper', () => {
+  // La mitad simétrica: subir el timeout para todos habría arreglado la lectura larga rompiendo
+  // la propiedad de la que dependen los Then que afirman dos veces sobre el mismo mensaje.
+  assert.deepEqual(
+    readParts('snssqs', { destination: 'q', count: '5' }).slice(-2),
+    ['--visibility-timeout', '0']
+  );
+  // Y el barrido no existe en los otros dos: rabbitmq lee con un peek explícito y kafka por
+  // offset, así que ninguno esconde nada que haya que devolver.
+  for (const broker of ['rabbitmq', 'kafka']) {
+    assert.equal(releaseParts(broker, { destination: 'q', receiptHandle: 'h' }), null, broker);
+    const harness = project('stock-reservation', { ...SWEEP, broker }).file('AbstractFlowIT.java');
+    assert.ok(!harness.includes('change-message-visibility'), broker);
+    assert.ok(!harness.includes('sweeping'), broker);
+  }
+});
+
+// ─── Quinta corrida: la documental, cerrada al 100% y con dos defectos del arnés ──
+//
+// `corrida-claim-mongodb` terminó 25/25, pero el agente tuvo que parchear el arnés a mano para
+// llegar. Los dos defectos son de `build`, y los dos comparten algo peor que el fallo: el
+// generador YA SABÍA la regla que incumplía. El primero la tenía implementada al lado
+// (`copyToDevtools`) y aun así emitía la forma rota y la enseñaba en un javadoc; el segundo la
+// tenía resuelta en la rama hermana del mismo archivo.
+
+const MONGO = { group: 'com.test', broker: 'kafka', auth: null, cache: null, storage: null };
+const SQS_PG = { group: 'com.test', database: 'postgresql', broker: 'snssqs', auth: null, cache: null, storage: null };
+
+test('el script de mongosh viaja por archivo, no por --eval', () => {
+  // El argv protege las comillas que ENVUELVEN un argumento, no las de DENTRO. Un script de
+  // mongosh lleva comillas dentro casi siempre, y en Windows el cliente de contenedores las
+  // pierde al reconstruir la línea de comandos: mongosh recibía `db.getCollection(outbox_event)`
+  // y respondía `ReferenceError`. Cayó `HarnessSmokeIT` y con él la suite ENTERA —
+  // `score-scenarios.sh` salió con código 2, ningún flujo llegó a ejercitarse.
+  const harness = project('asset-vault', MONGO).file('AbstractFlowIT.java');
+
+  assert.match(harness, /protected static String mongoEval\(String script\)/);
+  assert.match(harness, /private static void copyIntoContainer\(/);
+  // La consulta que build emite usa el helper: era ella la que fallaba, no código del agente.
+  const from = harness.indexOf('private static int pendingOutboxRows');
+  assert.match(harness.slice(from, harness.indexOf('}', from)), /mongoEval\("db\.getCollection/);
+  // Y la URI va DENTRO del helper: pedirla por parámetro es invitar a que alguien la reescriba
+  // a mano con otro authSource.
+  assert.ok(!/mongoEval\(String uri/.test(harness), harness.slice(from, from + 200));
+});
+
+test('y el javadoc deja de ENSEÑAR la forma que no funciona', () => {
+  // Esta es la mitad que importa. El fallo no fue que el agente inventara nada: fue que copió
+  // el ejemplo del javadoc de `db(...)`, que prometía «la sentencia entra como un elemento más
+  // del argv, con sus comillas intactas». En documental esa promesa es falsa, y un ejemplo que
+  // miente se copia igual de bien que uno que acierta — el repo ya lo aprendió con `tokenFor`.
+  const doc = project('asset-vault', MONGO).file('AbstractFlowIT.java');
+  assert.match(doc, /NO — las comillas de dentro no sobreviven: db\("mongosh"/);
+  assert.match(doc, /Salvo un script de mongosh, que va por \{@link #mongoEval\}/);
+
+  // Y donde la promesa SÍ se sostiene, el ejemplo sigue limpio: marcar de contraejemplo el argv
+  // de psql sería desaconsejar la única forma correcta que tiene ese motor.
+  const rel = project('stock-reservation', SQS_PG).file('AbstractFlowIT.java');
+  assert.ok(!rel.includes('NO — las comillas de dentro no sobreviven'), 'marca un contraejemplo donde no lo hay');
+  assert.ok(!rel.includes('mongoEval'), 'emite un helper de mongo en un proyecto relacional');
+});
+
+test('decodeBodies EMBEBE el cuerpo, que es lo que cumple las dos cosas a la vez', () => {
+  // El informe proponía re-serializar con el mapper. Arregla la validez del JSON y rompe la otra
+  // mitad: la aserción por substring `.contains("\"status\":\"active\"")` dejaría de casar, que
+  // es exactamente la trampa muda que el javadoc de PAYLOAD_FIELD documenta haber costado cuatro
+  // clases de flujo (falso negativo, no error: quien la "arregla" aflojándola pasa de chiripa).
+  //
+  // La forma correcta ya estaba escrita en el mismo archivo para RabbitMQ. Embebido, el
+  // documento es JSON navegable Y el texto del evento aparece literal.
+  const sqs = project('stock-reservation', SQS_PG).file('AbstractFlowIT.java');
+
+  assert.match(sqs, /private static String embeddedBody\(String escaped\)/);
+  assert.match(sqs, /result\.append\("\\"Body\\": "\)\.append\(embeddedBody\(matcher\.group\(1\)\)\)/);
+  // Comprueba que ES JSON antes de embeber, igual que su hermano: un cuerpo que no lo sea
+  // vuelve entrecomillado, o el documento quedaría roto por el camino contrario.
+  const from = sqs.indexOf('private static String embeddedBody');
+  assert.match(sqs.slice(from, sqs.indexOf('\n    }', from)), /JSON\.readTree\(decoded\)/);
+});
+
+test('el disparador del barrido se afirma por lo que hace, no por dónde vive', () => {
+  // El gate daba ROJO sobre código CORRECTO. build emite un scheduler por servicio, y este
+  // diseño produce dos clases que se distinguen por una sola «s» —DispatchOrderScheduler y
+  // DispatchOrdersScheduler—: el agente las leyó como duplicado y las fusionó en una, con los
+  // dos @Scheduled dentro. Funciona; el check, que solo miraba el nombre canónico, no.
+  //
+  // Y el modo de fallo era el peor de los posibles: la reconciliación NO tiene ningún escenario
+  // `FL-*` detrás (un cron no se alcanza en caja negra), así que este gate es su ÚNICA
+  // verificación — y el camino de menor resistencia para apagarlo era recrear la segunda clase,
+  // o sea DOS beans disparando el mismo barrido y el doble de pasadas contra el proveedor.
+  // Es la lección (a) por tercera vez: lo afirmable sin suponer arquitectura es que exista.
+  const script = project('stock-reservation', SQS_PG).file('check-idempotency.sh');
+
+  const line = script.split('\n').find((l) => l.startsWith("unit 'reconciliation'") && l.includes('Scheduler'));
+  assert.ok(line, 'no se emite el check del disparador');
+  // Localizador por CONTENIDO: la operación que dispara, no el nombre del archivo.
+  assert.ok(line.includes(String.raw`\breconcile`), line);
+  // Y confirmador, porque el handler y el mediador también nombran la operación: solo vale
+  // el archivo que además es un disparador.
+  assert.match(line, /'@Scheduled'\s*$/);
+});
+
+test('y sigue pudiendo fallar, que es lo que lo hace valer algo', () => {
+  // Un gate que solo sabe ponerse verde no distingue «correcto» de «no mira». Las dos formas
+  // de romperlo tienen que seguir viéndose: sin disparador en ninguna parte, y con el
+  // disparador presente pero todavía en el stub que build deja.
+  const script = project('stock-reservation', SQS_PG).file('check-idempotency.sh');
+  const line = script.split('\n').find((l) => l.startsWith("unit 'reconciliation'") && l.includes('Scheduler'));
+
+  assert.match(line, /'@Scheduled'/);
+  assert.match(line, /'UnsupportedOperationException'/);
+  // El confirmador es un parámetro del `unit`, no un literal incrustado: antes estaba
+  // hardcodeado a IdempotencyGuard —servía al listener y a nadie más—, y un scheduler no lo
+  // tiene, así que la búsqueda por contenido no podía encontrarlo nunca.
+  assert.match(script, /confirm="\$\{8:-\}"/);
+  assert.ok(!/grep -qE -- 'IdempotencyGuard' "\$candidate"/.test(script), 'el confirmador sigue hardcodeado');
+});
+
+test('un servicio no produce dos clases que se distingan por una sola «s»', () => {
+  // El olor de fondo del arreglo anterior. Las operaciones se agrupan por la ENTIDAD que
+  // tocan, y lo que no se puede atribuir a ninguna cae a un cajón nombrado por el SERVICIO.
+  // Como un servicio se llama casi siempre como el plural de su agregado, ese cajón chocaba:
+  // `inspection-reports` sobre `InspectionReport` daba InspectionReportsService junto a
+  // InspectionReportService.
+  //
+  // Nadie lee eso como dos cosas distintas: se lee como un duplicado, y alguien lo fusiona —
+  // que es exactamente lo que pasó en la quinta corrida con los dos schedulers.
+  const model = modelFor('inspection-reports', { group: 'com.test', database: 'postgresql', broker: 'kafka' });
+  const names = model.services.map((service) => service.className);
+
+  assert.ok(!names.includes('InspectionReportsService'), names.join(', '));
+  assert.ok(names.includes('InspectionReportService'), names.join(', '));
+  // Y no queda ningún par que se diferencie solo por la pluralización.
+  for (const name of names) {
+    assert.ok(!names.includes(name.replace(/Service$/, 'sService')), `gemelas: ${name}`);
+  }
+});
+
+test('pero sin colisión el nombre del servicio se conserva', () => {
+  // La mitad simétrica, que es la que evita convertir el arreglo en «todo al agregado».
+  // `asset-vault` no es el plural de `Asset`, así que su cajón sigue llamándose como el
+  // servicio: renombrarlo también ahí sería perder información por una colisión que no existe.
+  const model = modelFor('asset-vault', { group: 'com.test', broker: 'kafka' });
+  const names = model.services.map((service) => service.className);
+
+  assert.ok(names.includes('AssetVaultService'), names.join(', '));
+  assert.ok(names.includes('AssetService'), names.join(', '));
+});
+
+test('una pasada de barrido abre su propia correlación', () => {
+  // El tercer punto de entrada. La correlación la establecen el filtro HTTP y —a mano— los
+  // listeners del broker; el reloj no la establecía nadie, así que el hilo del @Scheduled no
+  // tenía ninguna abierta y TODO lo que un barrido publica viajaba con correlationId nulo.
+  //
+  // Salió como un fallo arbitrado de la quinta corrida: el agente afirmó que el evento traía
+  // correlación y el escenario cayó. Se leyó como «aserción más estricta que el contrato», y
+  // documentar que ahí puede ser nulo habría fijado el hueco en vez de cerrarlo — el rastro
+  // que no se podía seguir era justo el del trabajo que nadie pidió por HTTP.
+  const scheduler = project('asset-vault', { group: 'com.test', broker: 'kafka' })
+    .file('Scheduler.java');
+
+  assert.match(scheduler, /CorrelationContext\.runWith\(UUID\.randomUUID\(\)\.toString\(\), \(\) -> mediator\./);
+  assert.match(scheduler, /import java\.util\.UUID;/);
+  assert.match(scheduler, /import [\w.]+\.correlation\.CorrelationContext;/);
+});
+
+test('un barrido que alimenta una guarda se despacha SIN transacción abarcadora', () => {
+  // El defecto que sobrevivió a dos pasadas de la corrida de correo porque el agente lo
+  // arreglaba a mano cada vez: build decidía `dispatchWithoutTransaction` solo por `reconciles`,
+  // y un barrido que delega su trabajo por elemento se despachaba transaccional.
+  //
+  // Con la transacción del lote, el reclamo por fila NO confirma hasta el final: ninguna réplica
+  // lo ve, el envío cae DENTRO de la transacción y el estado intermedio no llega a existir para
+  // nadie. Es decir, la guarda deja de guardar — que es todo lo que la corrida existe para
+  // probar.
+  //
+  // El enlace es mecánico y no necesita leer prosa: el reclamo del barrido deja las filas en
+  // `queued` y la guarda las toma de `queued`, sobre la misma entidad.
+  const scheduler = project('notification-mailer', { group: 'com.test', database: 'postgresql', broker: 'snssqs', auth: 'keycloak' })
+    .file('Scheduler.java');
+
+  assert.match(scheduler, /mediator\.dispatchWithoutTransaction\(new QueueAcceptedNotificationsCommand\(\)\)/);
+  assert.ok(!/mediator\.dispatch\(new QueueAcceptedNotificationsCommand/.test(scheduler), scheduler);
+  // Y el porqué viaja con el método, o la siguiente lectura lo «unifica por coherencia».
+  assert.match(scheduler, /sin transacción abarcadora/);
+  assert.match(scheduler, /produce un efecto que no se deshace/);
+});
+
+test('y un barrido que no alimenta ninguna guarda sigue en su transacción única', () => {
+  // La mitad simétrica, que es la que evita convertir el arreglo en «todo sin transacción».
+  // Una purga o un cierre diario no llaman a nadie en medio: la transacción única es lo correcto
+  // para ellos, y quitársela sería pagar un precio sin comprar nada.
+  const scheduler = project('asset-vault', { group: 'com.test', broker: 'kafka', auth: null, cache: null, storage: null })
+    .file('Scheduler.java');
+
+  // asset-vault barre una reconciliación: esa sí va sin transacción, pero por `reconciles`.
+  assert.match(scheduler, /dispatchWithoutTransaction\(new ReconcileScansCommand\(\)\)/);
+  // Lo que no puede es haberse llevado por delante el camino transaccional del resto.
+  const model = modelFor('asset-vault', { group: 'com.test', broker: 'kafka' });
+  const guards = (model.services ?? []).flatMap((s) => s.operations ?? []).filter((o) => o.guardClaim);
+  assert.deepEqual(guards, [], 'la fixture dejó de ser el caso «sin guarda» que este test necesita');
+});
+
+test('la cola de la sonda de topología sale del canal EFECTIVO, no del campo crudo', () => {
+  // El defecto que llegó a bloquear 7 de 22 escenarios en la sexta corrida, y era mío: la sonda
+  // resolvía su cola con `probe.channel`, que es null cuando el evento no declara canal — el
+  // modelo lo deriva del destino del servicio, pero el campo crudo sigue vacío. Interpolarlo
+  // producía la cadena literal "null".
+  //
+  // Y no fallaba en un sitio inocuo: el `receive-message` contra `.../000000000000/null` revienta
+  // ANTES de que startBroker() suelte BROKER_STOPPED, así que el flag se queda en true para toda
+  // la JVM y cada clase posterior muere en su @BeforeAll. Con el flag puesto, además,
+  // `emptyIfBrokerStopped` da por «canal vacío» cualquier fallo de lectura: las aserciones
+  // negativas habrían salido verdes sin mirar nada.
+  const sinCanal = project('notification-mailer', { group: 'com.test', database: 'postgresql', broker: 'snssqs', auth: 'keycloak' })
+    .file('AbstractFlowIT.java');
+
+  assert.match(sinCanal, /TOPOLOGY_PROBE_QUEUE = "notification-mailer-events"/);
+  assert.ok(!/TOPOLOGY_PROBE_QUEUE = "(null|undefined)"/.test(sinCanal), 'la sonda leería de una cola inexistente');
+
+  // Y donde el diseño SÍ declara canal, sigue siendo ese: la cola de arnés lleva su nombre.
+  const conCanal = project('stock-reservation', { group: 'com.test', database: 'postgresql', broker: 'snssqs', auth: null, cache: null, storage: null })
+    .file('AbstractFlowIT.java');
+  assert.match(conCanal, /TOPOLOGY_PROBE_QUEUE = "stockEvents"/);
+});
+
+test('el correo lleva copias: el campo del agregado viaja hasta la cabecera Cc', () => {
+  // `Notification.copyRecipients` se congelaba con el envío y no llegaba a ninguna parte:
+  // `MailMessage` no tenía componente de copia, así que el campo quedaba siempre vacío y el
+  // diseño prometía una capacidad que el servidor no cumplía. Es la misma familia que las dos
+  // defensas del correo —el saneado del asunto y el escapado de variables—: nada falla, y sale
+  // mal.
+  const generated = project('notification-mailer', { group: 'com.test', database: 'postgresql', broker: 'snssqs', auth: 'keycloak' });
+
+  const message = generated.file('MailMessage.java');
+  assert.match(message, /public record MailMessage\(String from, String replyTo, List<String> to, List<String> cc,/);
+  // Normalizada como `to`: copia inmutable y nunca null, o el adaptador revienta con un envío
+  // sin copias, que es el caso normal.
+  assert.match(message, /cc = cc == null \? List\.of\(\) : List\.copyOf\(cc\);/);
+
+  const smtp = generated.file('SmtpMailSender.java');
+  assert.match(smtp, /helper\.setCc\(message\.cc\(\)\.toArray\(String\[\]::new\)\)/);
+  // Vacía no se toca: `setCc` con un array vacío deja una cabecera Cc: vacía en algunos
+  // servidores, que es basura visible en el correo de alguien.
+  assert.match(smtp, /if \(!message\.cc\(\)\.isEmpty\(\)\) \{/);
 });

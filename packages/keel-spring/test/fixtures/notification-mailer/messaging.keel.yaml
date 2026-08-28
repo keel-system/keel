@@ -35,14 +35,27 @@ subscriptions:
       # dos versiones de la verdad y una deja de validarse.
       from: { location: field, name: metadata.source }
       trustedPublishers: >-
-        Nadie publica anónimamente en este canal: el broker autentica a los emisores, y
-        el conjunto de quienes pueden poner un mensaje son los sistemas registrados de la
-        organización. Sobre eso se acepta la segunda mitad, que es política de desarrollo
-        y no control técnico: cada emisor pone su propio nombre en `source` y nada lo
-        comprueba. Queda vivo que un sistema propio con un bug, o comprometido, pida un
-        envío en nombre de otra aplicación y salga desde su remitente verificado; se
-        asume mientras todos los emisores sean nuestros y estén en la misma malla de
-        confianza, y se revisa el día que entre un tercero o alguien pida no-repudio.
+        Nadie publica anónimamente en este canal: el broker autentica a los emisores, y el
+        conjunto de quienes pueden poner un mensaje son los sistemas registrados de la
+        organización. Sobre eso se acepta la segunda mitad, que es política de desarrollo y no
+        control técnico: cada emisor pone su propio nombre en `source` y nada lo comprueba.
+        Queda vivo que un sistema propio con un bug, o comprometido, pida un envío en nombre de
+        otra aplicación y salga desde su remitente verificado.
+        ---
+        Y NO es inercia: se evaluó pasar a `location: header` sobre el principal que estampa el
+        broker, que es la salida que documenta el DSL, y NO es viable con esta topología. Se
+        verificó contra LocalStack con la ruta real (publicar en el topic y leer de la cola
+        suscrita): en SNS→SQS el `SenderId` que llega es el de la CUENTA (`000000000000`), no el
+        del sistema que publicó, así que con fan-out todos los emisores dan el mismo valor —
+        resolverían todos a la misma aplicación, o con `onUnresolved: discard` se descartaría
+        todo. Cambiar a `header` aquí sería declarar una garantía que el transporte no da.
+        ---
+        El disparador de revisión sigue siendo el mismo —un emisor fuera del perímetro (un
+        tercero, otra organización, un cliente integrado) o una obligación de no-repudio del
+        origen— pero la respuesta ya no es `header`: con este transporte es UN DESTINO POR
+        EMISOR con política que solo admita a su principal, y entonces la identidad es el
+        destino de llegada. Eso cuesta el canal genérico: cada consumidor nuevo pasa a exigir
+        cola y permiso propios, que es justo lo que este diseño evita hoy a sabiendas.
       # Fallo PERMANENTE: reintentarlo cinco veces con backoff no va a hacer aparecer
       # una aplicación que no existe, solo retrasa el descubrimiento y llena los logs.
       onUnresolved: discard

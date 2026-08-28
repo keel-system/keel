@@ -106,8 +106,36 @@ test('el reclamo es un UPDATE condicional, no un finder: es lo único que no dep
 test('el puerto expone el reclamo, que es lo que hace que no usarlo cueste más que usarlo', () => {
   const port = fileNamed(generateRepositories(modelFor(queueSweep())), 'JobRepository.java');
 
-  assert.match(port, /List<Job> claimForDrainJobs\(int batchSize\);/);
+  // Sin `int batchSize`: la cota es del ADAPTADOR. Pasarla por la firma obligaba al handler
+  // —que vive en `application` y por constitución no importa Spring— a inventarse un número,
+  // y en la quinta corrida se quedó en un `100` a pelo, imposible de mover por entorno.
+  assert.match(port, /List<Job> claimForDrainJobs\(\);/);
   assert.match(port, /Reclama, no lee/);
+});
+
+test('la cota del lote la lee el adaptador, que es donde Spring está permitido', () => {
+  // Es capacidad, no diseño: la doctrina está escrita en config.js —«batch-size: CUÁNTO
+  // TRABAJO CABE EN UNA PASADA […] se ajusta con datos de producción delante»— y ya la
+  // cumplían el relay del outbox y la reconciliación. El reclamo del barrido era el único
+  // de los tres que la incumplía.
+  const adapter = fileNamed(generateRepositories(modelFor(queueSweep())), 'JobRepositoryImpl.java');
+
+  assert.match(adapter, /@Value\("\$\{sweep\.drain-jobs\.batch-size:100\}"\)/);
+  assert.match(adapter, /private int drainJobsBatchSize;/);
+  assert.match(adapter, /PageRequest\.of\(0, drainJobsBatchSize\)/);
+});
+
+test('los dos reclamos de un mismo barrido comparten cota, y por eso un solo campo', () => {
+  // Una pasada del barrido es UNA unidad de trabajo: la cola y el rescate se la reparten, no
+  // tienen dos presupuestos. Y declarar el campo dos veces en el mismo adaptador ni compilaría.
+  const adapter = fileNamed(generateRepositories(modelFor(queueThenRescue())), 'JobRepositoryImpl.java');
+
+  assert.equal((adapter.match(/private int \w+BatchSize;/g) ?? []).length, 1, adapter);
+  assert.equal((adapter.match(/PageRequest\.of\(0, drainJobsBatchSize\)/g) ?? []).length, 2, adapter);
+  // El plazo del rescate sigue siendo suyo: se mide sobre el reclamo atascado, no sobre la
+  // operación, así que son dos claves distintas a propósito.
+  assert.match(adapter, /sweep\.drain-jobs\.batch-size/);
+  assert.match(adapter, /stalled-after-seconds/);
 });
 
 test('con SKIP LOCKED el select de candidatos lo pide; sin él, se dice en voz alta', () => {
@@ -178,7 +206,7 @@ test('el plazo es del generador y se lee por @Value en el ADAPTADOR, no en el ha
   // Se calcula UNA vez por tanda: recalcularlo por fila movería la cota entre el select
   // y el update de cada una.
   assert.match(adapter, /Instant staleBefore = Instant\.now\(\)\.minusSeconds\(stalledDrainJobsAfterSeconds\);/);
-  assert.match(adapter, /candidatesForStalledDrainJobs\(states, staleBefore, PageRequest\.of\(0, batchSize\)\)/);
+  assert.match(adapter, /candidatesForStalledDrainJobs\(states, staleBefore, PageRequest\.of\(0, drainJobsBatchSize\)\)/);
   assert.match(adapter, /claimForStalledDrainJobs\(id, states, JobStatus\.DONE, staleBefore\) == 1/);
   assert.match(adapter, /@Transactional\(propagation = Propagation\.REQUIRES_NEW\)/);
 });
@@ -378,7 +406,7 @@ test('el instante es uno por tanda, no uno por fila', () => {
 
   // Fuera del bucle: recalcularlo por fila daría relojes distintos a filas que la misma
   // instancia se llevó en la misma pasada.
-  const method = adapter.slice(adapter.indexOf('claimForDrainJobsRunning(int batchSize)'));
+  const method = adapter.slice(adapter.indexOf('claimForDrainJobsRunning()'));
   const body = method.slice(0, method.indexOf('\n    }'));
   assert.match(body, /Instant claimedAt = Instant\.now\(\);[\s\S]*for \(UUID id : candidates\)/);
   assert.match(body, /claimForDrainJobsRunning\(id, states, JobStatus\.RUNNING, claimedAt\) == 1/);
@@ -418,4 +446,19 @@ test('el reclamo de una cola fija READ_COMMITTED donde el motor lo exige', () =>
   const postgres = fileNamed(generateRepositories(modelFor(queueSweep(), 'postgresql')), 'JobRepositoryImpl.java');
   assert.match(postgres, /@Transactional\(propagation = Propagation\.REQUIRES_NEW\)/);
   assert.ok(!postgres.includes('Isolation'), postgres);
+});
+
+test('un barrido se agrupa con el agregado que sus transiciones mueven', () => {
+  // Un barrido no tiene payload, y su nombre no siempre termina en el de la entidad
+  // (`dispatchQueuedOrders` sobre `DispatchOrder`), así que caía al cajón nombrado por el
+  // SERVICIO. Pero sí declara sobre qué agregado actúa: `transitions` es el enlace del DSL
+  // que dice qué fila mueve, y eso no es una heurística.
+  const layers = layersWith({ sweepTransitions: [{ entity: 'Job', from: ['queued'], to: 'running' }] });
+  // Se le cambia el nombre para que NO resuelva por nombre: es el caso real de la corrida.
+  layers['use-cases'].operations.sweepPendingWork = layers['use-cases'].operations.drainJobs;
+  delete layers['use-cases'].operations.drainJobs;
+
+  const model = modelFor(layers);
+  const owner = model.services.find((s) => (s.operations ?? []).some((o) => o.name === 'sweepPendingWork'));
+  assert.equal(owner.className, 'JobService', model.services.map((s) => s.className).join(', '));
 });

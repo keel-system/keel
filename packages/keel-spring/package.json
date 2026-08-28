@@ -8,7 +8,7 @@
   },
   "scripts": {
     "test": "node --test",
-    "compile-check": "node scripts/compile-check.js",
+    "compile-check": "node scripts/compile-check.js && node scripts/compile-check.js asset-vault --broker=snssqs && node scripts/compile-check.js notification-mailer --broker=snssqs",
     "broker-check": "node scripts/broker-check.js",
     "mail-check": "node scripts/mail-check.js"
   },

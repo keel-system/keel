@@ -723,8 +723,14 @@ public class ReconciliationClaimStore {
         try {
             mongoTemplate.upsert(query, update, ReconciliationClaimDocument.class);
             return true;
-        } catch (DuplicateKeyException race) {
+        } catch (DuplicateKeyException | TransactionSystemException race) {
             // La marca sigue viva y es de otra réplica.
+            //
+            // Las DOS familias, igual que en la rama relacional y por lo mismo: el upsert puede
+            // correr dentro de una transacción de Mongo, y ahí un fallo al CONFIRMAR no viaja
+            // como excepción de acceso a datos sino como TransactionSystemException — que no es
+            // DataAccessException y se escapaba. Significa lo mismo: la marca no quedó
+            // confirmada, luego el candidato no es de esta instancia.
             return false;
         }
     }
@@ -738,6 +744,7 @@ public class ReconciliationClaimStore {
         'java.time.Instant',
         'java.util.UUID',
         'org.springframework.dao.DuplicateKeyException',
+        'org.springframework.transaction.TransactionSystemException',
         'org.springframework.data.mongodb.core.MongoTemplate',
         'org.springframework.data.mongodb.core.query.Criteria',
         'org.springframework.data.mongodb.core.query.Query',

@@ -156,7 +156,11 @@ test('en el modelo documental el reclamo es el mismo, sin lock y con upsert ató
   const adapter = fileNamed(generateDocumentRepositories(model), 'AssetRepositoryImpl.java');
 
   assert.match(store, /mongoTemplate\.upsert\(query, update, ReconciliationClaimDocument\.class\)/);
-  assert.match(store, /catch \(DuplicateKeyException race\)/);
+  // Las DOS familias: el upsert puede correr dentro de una transacción de Mongo, y ahí un
+  // fallo al confirmar llega como TransactionSystemException — que no es DataAccessException
+  // y se escapaba del catch. Es el gemelo del arreglo que la corrida de MySQL obligó a hacer
+  // en la rama relacional.
+  assert.match(store, /catch \(DuplicateKeyException \| TransactionSystemException race\)/);
   assert.match(adapter, /public List<Asset> claimForReconcileScansScanAsset\(\)/);
   assert.match(adapter, /private final ReconciliationClaimStore reconciliationClaims;/);
   // El predicado sale del diseño: estado de espera + la marca que declara awaitingSince.

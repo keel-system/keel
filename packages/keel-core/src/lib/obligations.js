@@ -71,6 +71,21 @@ export const OBLIGATIONS = {
     doc: 'dsl/security.md'
   },
 
+  'OBL-ENTITY-UNREACHABLE': {
+    gapClass: 14,
+    when: 'domain: una raíz de agregado a la que ninguna operación se refiere',
+    kind: 'decision',
+    // Exentable, y la razón importa: «se aprovisiona fuera de banda» es una respuesta legítima
+    // —datos de referencia, un seed de despliegue— y aquí SÍ hay un default seguro, porque el
+    // generador no inventa nada: se limita a no generar alta. Lo que no es legítimo es no
+    // haberlo decidido, que es lo que esto persigue.
+    waivable: true,
+    title: 'una raíz de agregado que ninguna operación puede crear',
+    closes:
+      'una operación que la produzca, o la exención razonada diciendo quién la aprovisiona fuera del servicio',
+    doc: 'dsl/use-cases.md'
+  },
+
   'OBL-CONCURRENCY-CODE': {
     gapClass: 4,
     when: 'persistence: `consistency.optimisticLocking` es `all` o `declared`',

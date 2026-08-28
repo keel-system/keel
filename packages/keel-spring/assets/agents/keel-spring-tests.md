@@ -192,6 +192,11 @@ source set `integrationTest`, así que un test que importe un DTO o una entidad 
      pruebas.
    - **No ejecutes las pruebas** en esta fase: ni la infraestructura ni el código están
      listos, y un rojo aquí no significaría nada.
+   - Y con la compilación en verde, `bash infra/check-test-idioms.sh`, que tiene que salir
+     en 0. Mira lo que compilar **no** juzga: una extracción de JSON anidada dentro de una
+     llamada con sobrecargas compila y revienta en runtime con `ClassCastException`, así que
+     sin este gate el defecto aparece a mitad de la puntuación de escenarios y se arbitra como
+     si fuera del código. Lo que señale se corrige aquí, capturando en variable tipada.
 9. **Si te relanzan desde la fase 2** (un fallo clasificado como `culprit: test` o
    `culprit: harness`): entonces la infraestructura está arriba y el código compila, así que
    además de corregir **verifica tu corrección** con

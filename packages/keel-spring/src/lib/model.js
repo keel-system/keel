@@ -873,7 +873,20 @@ function collectOperations(layers, domainTypes, inlineEnumName, service, warning
   for (const [opName, op] of Object.entries(operations)) {
     const targetEntity =
       payloadEntity(op.output) ?? payloadEntity(op.input) ?? entityFromOperationName(opName, domainEntities);
-    const groupName = targetEntity ?? pascalCase(service.name);
+    // El grupo, que NO es lo mismo que `targetEntity`: aquel decide la ruta y la
+    // idempotencia, y este solo con qué otras operaciones comparte clase de servicio.
+    //
+    // Antes de caer al nombre del servicio se miran las TRANSICIONES. Un barrido no tiene
+    // payload ni nombre que resuelva entidad —`dispatchQueuedOrders` no termina en
+    // `DispatchOrder`—, pero sí declara sobre qué agregado actúa, y eso no es una
+    // heurística: es el enlace del DSL que dice qué fila mueve.
+    //
+    // Sin esto salían DOS servicios que se distinguían por una sola «s»
+    // (`DispatchOrderService` y `DispatchOrdersService`, este último del nombre del
+    // servicio `dispatch-orders`). Nadie lee eso como dos cosas distintas: en la quinta
+    // corrida el agente los tomó por un duplicado y fusionó los dos schedulers, dejando
+    // en rojo el único gate que verifica la reconciliación.
+    const groupName = targetEntity ?? sweptEntity(op, domainEntities) ?? serviceGroupName(service, domainEntities);
     const route = resolveRoute(opName, op, api, targetEntity, warnings);
 
     const inputFields = payloadFields(opName, op.input, { direction: 'input', domainEntities, domainTypes, inlineEnumName, relations, warnings });
@@ -1085,6 +1098,11 @@ function classifyClaims(services, entities, layers, warnings) {
         });
       }
 
+      // La cota del lote es de la OPERACIÓN, no del reclamo: una pasada del barrido es una
+      // unidad de trabajo, y sus reclamos —cola y rescate— se la reparten. Se estampa aquí,
+      // junto al resto de lo que decide QUÉ se genera, para que `claim.js` no tenga que
+      // volver a recorrer las operaciones solo para saber de cuál cuelga cada reclamo.
+      for (const claim of claims) claim.sweepKey = kebabCase(operation.name);
       if (claims.length > 0) operation.claim = claims;
     }
   }
@@ -2490,6 +2508,42 @@ function payloadEntity(payload) {
 
 // Operaciones sin entidad en el payload (ej. retireProduct con input { id } y
 // output void): se agrupan por la entidad cuyo nombre cierra el de la operación.
+/**
+ * El nombre del grupo para lo que no se pudo atribuir a ninguna entidad.
+ *
+ * Siempre queda algo así —una suscripción que solo anota, una operación sin payload— y su
+ * cajón se llamaba `pascalCase(service.name)` a secas. Eso colisiona en cuanto el servicio
+ * se llama como el plural de su agregado, que es lo NORMAL: `dispatch-orders` sobre
+ * `DispatchOrder` daba `DispatchOrdersService` junto a `DispatchOrderService`.
+ *
+ * Dos clases que se distinguen por una «s» no se leen como dos cosas: se leen como un
+ * duplicado, y alguien las fusiona. Cuando el nombre del servicio ES el plural (o el
+ * singular) de un agregado, ese agregado es el sujeto del servicio, así que lo no atribuible
+ * va con él y no queda ninguna clase gemela. Sin colisión, el nombre del servicio se
+ * conserva: `billing` con entidades `Invoice` sigue dando `BillingService`, que es correcto.
+ */
+function serviceGroupName(service, domainEntities) {
+  const pascal = pascalCase(service.name);
+  for (const entityName of Object.keys(domainEntities)) {
+    if (pascal === entityName || pascal === pluralize(entityName)) return entityName;
+  }
+  return pascal;
+}
+
+/**
+ * El agregado que una operación mueve, cuando lo dice por sus transiciones y solo por ahí.
+ *
+ * Es la última señal antes de caer al nombre del servicio, y solo se usa para AGRUPAR. Exige
+ * que las transiciones hablen de UNA sola entidad: con dos, «el agregado de esta operación»
+ * deja de estar definido y agrupar por cualquiera de ellas sería elegir a cara o cruz — ahí
+ * el nombre del servicio es la respuesta honesta.
+ */
+function sweptEntity(op, domainEntities) {
+  const entities = [...new Set((op.transitions ?? []).map((transition) => transition.entity).filter(Boolean))];
+  if (entities.length !== 1) return null;
+  return domainEntities[entities[0]] ? entities[0] : null;
+}
+
 function entityFromOperationName(opName, domainEntities) {
   const pascal = pascalCase(opName);
   for (const entityName of Object.keys(domainEntities)) {

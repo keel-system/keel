@@ -17,6 +17,22 @@
 //
 //   node packages/keel-spring/scripts/compile-check.js [fixture] [--broker=<id>]
 //   npm run compile-check --workspace packages/keel-spring
+//
+// **Por qué el npm script invoca esto DOS veces.** El eje del motor no acaba en los seis
+// dialectos relacionales: `persistence.default.model: document` es otra rama entera del
+// scaffolding —espejo, repositorios, reclamos por `findAndModify`, y un arnés que habla
+// `mongosh` en vez de `psql`—, y con la fixture por defecto, que es relacional, no se
+// compilaba nunca. Es el MISMO agujero que tenía el eje del motor antes de la pasada de
+// MySQL, y aquel costó una corrida entera: Java inválido que salía verde aquí porque la
+// combinación que lo producía no se compilaba jamás.
+//
+// Con un broker basta para esa segunda pasada: lo que cambia con el modelo de persistencia
+// no cambia además con el broker, y los tres brokers ya se cruzan en la primera.
+//
+// Y una TERCERA por la capa `mail`, que añade su propio Java al arnés (las aserciones sobre
+// el buzón que emite `mail-harness.js`). Ninguna de las otras dos fixtures la declara, así
+// que ese arnés no se había compilado nunca: `mail-check` comprueba que las rutas del buzón
+// sean las correctas contra un Mailpit real, pero no que el Java que las usa compile.
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -51,14 +67,29 @@ const databaseArg = args.find((arg) => arg.startsWith('--database='))?.split('='
  * multiplican los seis por los tres brokers: eso son minutos por combinación y el código que
  * cambia con el motor no cambia además con el broker.
  */
-const combos = databaseArg
-  ? brokers.map((broker) => ({ broker, database: databaseArg }))
-  : [...brokers.map((broker) => ({ broker, database: null })), { broker: brokers[0], database: 'mysql' }];
-
 if (!fs.existsSync(path.join(fixturesDir, fixture, 'service.keel.yaml'))) {
   console.error(`No existe la fixture '${fixture}' en ${fixturesDir}`);
   process.exit(2);
 }
+
+// El diseño se carga una vez aquí —y no solo dentro del bucle— porque de él depende qué
+// combinaciones tienen sentido.
+const { layers: fixtureLayers } = loadService(path.join(fixturesDir, fixture));
+
+// El motor del cuarto combo depende de lo que la fixture DECLARE. Con un diseño documental,
+// pedir MySQL no compila «lo mismo con otro motor»: produce un híbrido que nadie generaría
+// —documento sobre motor relacional—, porque un `database` explícito gana sobre el default
+// que sale de `persistence.default.model`. La segunda pasada solo tiene sentido donde añade
+// un motor de la MISMA familia.
+const relational = (fixtureLayers?.persistence?.default?.model ?? 'relational') !== 'document';
+const combos = databaseArg
+  ? brokers.map((broker) => ({ broker, database: databaseArg }))
+  : [
+      ...brokers.map((broker) => ({ broker, database: null })),
+      ...(relational ? [{ broker: brokers[0], database: 'mysql' }] : [])
+    ];
+
+
 
 const java = spawnSync('java', ['-version'], { encoding: 'utf8' });
 if (java.error) {

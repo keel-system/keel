@@ -183,13 +183,33 @@ export function checkSupportedFeatures(manifest, layers) {
   const externalIo = orphanInternal.filter(
     (opName) => sentBy.has(opName) || layers?.['http-clients'] !== undefined || layers?.storage !== undefined
   );
+  // …y solo cuando build NO puede enrutarlo solo. El enlace mecánico es el estado: si un
+  // barrido deja las filas en el mismo estado del que parte la guarda, sobre la misma entidad,
+  // build ya despacha a ese barrido sin transacción abarcadora (`feedsGuardedEffect` en
+  // scaffold/services.js). Avisar igual sería avisar de algo que ya está resuelto, y un aviso
+  // que solo se puede ignorar enseña a ignorarlos todos.
+  const ops = layers?.['use-cases']?.operations ?? {};
+  const alimentadoPorUnBarrido = (opName) => {
+    const transitions = ops[opName]?.transitions ?? [];
+    const departures = new Set(transitions.flatMap((t) => t?.from ?? []));
+    const guard = transitions.find((t) => departures.has(t?.to));
+    if (!guard) return false;
+    return Object.values(ops).some(
+      (candidate) =>
+        candidate?.schedule !== undefined &&
+        (candidate.transitions ?? []).some(
+          (t) => t?.entity === guard.entity && (guard.from ?? []).includes(t?.to)
+        )
+    );
+  };
+  const sinEnrutar = externalIo.filter((opName) => !alimentadoPorUnBarrido(opName));
   if (orphanInternal.length > 0) {
     warnings.push(
       `use-cases (${orphanInternal.join(', ')}): operación interna sin ningún disparador generado (ni schedule, ni endpoint, ni subscription). ` +
         `La invoca otro handler, y ese enlace solo existe en la prosa de 'rules': build no lo ve, así que no enruta la transacción del llamante ` +
         `ni sabe dónde vive su reclamo — el gate 'sweepClaim' de infra/check-idempotency.sh lo busca en todo el árbol por eso.` +
-        (externalIo.length > 0
-          ? ` Y con I/O externo de por medio (${externalIo.join(', ')}) eso no es un detalle: si quien la invoca es un barrido, build lo despacha ` +
+        (sinEnrutar.length > 0
+          ? ` Y con I/O externo de por medio (${sinEnrutar.join(', ')}) eso no es un detalle: si quien la invoca es un barrido, build lo despacha ` +
             `con mediator.dispatch(...) —transacción única sobre el lote entero—, y ahí el reclamo NO confirma hasta el final, así que ninguna ` +
             `réplica lo ve, la llamada externa cae dentro de la transacción y el estado intermedio no llega a existir para nadie (con lo que un ` +
             `rescate por marca de tiempo no encuentra nunca a sus candidatos). Si ese barrido llama de verdad a un tercero, el llamante va por ` +

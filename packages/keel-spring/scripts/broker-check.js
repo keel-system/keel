@@ -41,6 +41,8 @@ import { BROKERS as BROKERS_CATALOG, brokerContainer } from '../src/lib/stack-ca
 import {
   BROKERS,
   argv as toArgv,
+  releaseParts,
+  SQS_SWEEP_VISIBILITY,
   deliverParts,
   deliverShell,
   needsSingleLineBody,
@@ -174,7 +176,9 @@ function scenarios(broker, context) {
       devtools.copy(rabbitProbeBody(options.count ?? 10), PROBE_FILE);
       return devtools.exec(toArgv(broker, readParts(broker, { destination, bodyFile: PROBE_FILE })));
     }
-    return devtools.exec(toArgv(broker, readParts(broker, { destination, count: String(options.count ?? 10) })));
+    return devtools.exec(
+      toArgv(broker, readParts(broker, { destination, count: String(options.count ?? 10), hideSeconds: options.hideSeconds }))
+    );
   };
 
   const deliver = (destination, key, body, headers = {}) => {
@@ -230,18 +234,42 @@ function scenarios(broker, context) {
    * leído vuelve a estar visible al instante) y el conteo salía inflado. Leyendo de una sola
    * vez, ese camino no se recorre.
    */
+  /**
+   * Todos los mensajes distintos de un destino, leyendo por lotes donde el broker lo acota.
+   *
+   * Con snssqs esto es un BARRIDO, no una lectura: oculta lo que devuelve para poder avanzar y
+   * lo suelta al terminar. El porqué está en `SQS_SWEEP_VISIBILITY` — sin ocultar hay un techo
+   * duro de 10 y el barrido devuelve siempre los mismos diez primeros.
+   */
   const readAll = (destination, count) => {
     const limit = READ_BATCH_LIMIT[broker];
     const perCall = Number.isFinite(limit) ? limit : count;
+    const sweeping = Number.isFinite(limit) && count > perCall;
     const seen = new Map();
+    const handles = [];
     const attempts = readAttemptLimit(broker, count);
-    for (let attempt = 0; attempt < attempts && seen.size < count; attempt++) {
-      const size = Math.min(count - seen.size, perCall);
-      const batch = keyedMessages(broker, read(destination, { count: size }).stdout);
-      if (batch.length === 0) break;
-      for (const message of batch) if (!seen.has(message.key)) seen.set(message.key, message.body);
-      if (batch.length < size) break;
-      sleep(500);
+    try {
+      for (let attempt = 0; attempt < attempts && seen.size < count; attempt++) {
+        const size = Math.min(count - seen.size, perCall);
+        const options = { count: size, hideSeconds: sweeping ? SQS_SWEEP_VISIBILITY : undefined };
+        const batch = keyedMessages(broker, read(destination, options).stdout);
+        // Barriendo, un lote CORTO no prueba nada: lo devuelto queda oculto, así que el único
+        // final fiable es el lote vacío. Sin ocultar, el lote corto sí es el final.
+        if (batch.length === 0) break;
+        for (const message of batch) {
+          if (message.handle) handles.push(message.handle);
+          if (!seen.has(message.key)) seen.set(message.key, message.body);
+        }
+        if (!sweeping && batch.length < size) break;
+        sleep(500);
+      }
+    } finally {
+      // Se suelta SIEMPRE, también si un escenario revienta a mitad: dejar el buzón ciego
+      // haría fallar a los escenarios siguientes por algo que no es suyo.
+      for (const handle of handles) {
+        const parts = releaseParts(broker, { destination, receiptHandle: handle });
+        if (parts) devtools.exec(toArgv(broker, parts));
+      }
     }
     return [...seen.values()];
   };
@@ -360,14 +388,21 @@ function scenarios(broker, context) {
       // sale de `JSON.stringify`, que escapa cualquier salto, así que por construcción
       // nunca lleva uno de verdad.
       check: () => {
-        const pretty = JSON.stringify({ text: TRICKY, n: 1 }, null, 2);
+        const marker = `multiline-${Date.now()}`;
+        const pretty = JSON.stringify({ marker, text: TRICKY, n: 1 }, null, 2);
         if (!/[\r\n]/.test(pretty)) return ko('el cuerpo de prueba no es multilínea');
         const sent = deliver(topic, 'multiline', pretty, outbound);
         if (sent.status !== 0) return ko(`entrega falló: ${firstLine(sent.stderr || sent.stdout)}`);
-        // Se busca por el marcador que sobrevive al colapso; lo que se juzga es cuántos
-        // mensajes volvieron, no su forma: dos o más significan que se troceó.
-        const back = readUntil(topic, TRICKY, 1);
-        const hits = back.filter((line) => line.includes(TRICKY));
+        // El marcador de búsqueda NO puede ser TRICKY, y esto llevaba fallando por eso en los
+        // TRES brokers: TRICKY lleva comillas y dentro del cuerpo JSON viajan ESCAPADAS, así
+        // que un `includes` literal sobre el cuerpo crudo no casa jamás. El escenario se
+        // estaba suspendiendo a sí mismo por su marcador, no por el canal.
+        //
+        // Se busca por un token sin comillas —lo que se juzga aquí es CUÁNTOS mensajes
+        // volvieron, no su forma— y el contenido se comprueba abajo, ya parseado, que es
+        // donde el escapado deja de estorbar.
+        const back = readUntil(topic, marker, 1);
+        const hits = back.filter((line) => line.includes(marker));
         if (hits.length === 0) return ko('el cuerpo multilínea no vuelve en la lectura');
         if (hits.length > 1) return ko(`el cuerpo se troceó en ${hits.length} mensajes`);
         // Y sigue siendo JSON válido tras el colapso: los saltos estaban fuera de las
@@ -602,7 +637,11 @@ function keyedMessages(broker, output) {
   const text = (output ?? '').trim();
   if (!key || !text) return payloadsOf(broker, output).map((body, index) => ({ key: String(index), body }));
   try {
-    return (JSON.parse(text).Messages ?? []).map((message) => ({ key: message[key], body: message.Body }));
+    return (JSON.parse(text).Messages ?? []).map((message) => ({
+      key: message[key],
+      body: message.Body,
+      handle: message.ReceiptHandle
+    }));
   } catch {
     return [];
   }

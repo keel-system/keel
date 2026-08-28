@@ -5,7 +5,16 @@ auto: false
 # deriva del token, y por eso ningún endpoint es de audiencia humana.
 defaultAudience: services
 endpoints:
-  registerTemplate: { method: PUT, path: "/templates/{templateKey}/{locale}" }
+  registerApplication:
+    method: POST
+    path: "/applications"
+    successStatus: 201
+  registerTemplate:
+    method: PUT
+    path: "/templates/{templateKey}/{locale}"
+    # Declarado, no supuesto: un PUT que CREA una versión nueva responde 201, y build no
+    # puede adivinarlo — sin esto asumía 200 y el escenario que exigía 201 fallaba.
+    successStatus: 201
   publishTemplate: { method: POST, path: "/templates/{templateId}/publish" }
   requestNotification:
     method: POST
@@ -13,4 +22,5 @@ endpoints:
     # Acepta y rastrea: la disponibilidad del proveedor SMTP no entra en la
     # transacción de quien llama. Un proveedor lento no puede hacer que fallen los pedidos.
     successStatus: 202
+  getTemplate: { method: GET, path: "/templates/{templateId}" }
   getNotification: { method: GET, path: "/notifications/{notificationId}" }

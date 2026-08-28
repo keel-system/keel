@@ -83,11 +83,12 @@ function renderMailMessage(model) {
  * @param html    cuerpo HTML${mail.hasHtml ? '' : ' (el diseño no lo declara: siempre null)'}
  * @param text    cuerpo en texto plano${mail.hasText ? '' : ' (el diseño no lo declara: siempre null)'}
  */
-public record MailMessage(String from, String replyTo, List<String> to, String subject, String html,
+public record MailMessage(String from, String replyTo, List<String> to, List<String> cc, String subject, String html,
         String text${attachmentsField}) {
 
     public MailMessage {
         to = to == null ? List.of() : List.copyOf(to);
+        cc = cc == null ? List.of() : List.copyOf(cc);
         subject = sanitizeSubject(subject);${attachmentsNormalize}
     }
 
@@ -293,6 +294,9 @@ ${fromGuard}
             MimeMessageHelper helper = new MimeMessageHelper(mime, ${multipartFlag}, "UTF-8");
             helper.setFrom(from);
             helper.setTo(message.to().toArray(String[]::new));
+            if (!message.cc().isEmpty()) {
+                helper.setCc(message.cc().toArray(String[]::new));
+            }
             helper.setSubject(nullToEmpty(message.subject()));${replyToBlock}
 ${bodyBlock}${attachmentsBlock}
             javaMailSender.send(mime);

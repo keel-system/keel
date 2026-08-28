@@ -47,6 +47,8 @@ import {
   rabbitProbeBodyJava,
   rabbitPublishBodyJava,
   readParts,
+  releaseParts,
+  SQS_SWEEP_VISIBILITY,
   shellQuote,
   UNKNOWN_TOPIC
 } from '../lib/broker-probes.js';
@@ -159,8 +161,71 @@ export function generate(model) {
       path: javaPath(model, 'flows', 'HarnessSmokeIT', 'integrationTest'),
       content: javaFile(pkg, smokeImports(model), smokeBody(model))
     },
-    { path: 'infra/score-scenarios.sh', content: scoreScenariosScript(model) }
+    { path: 'infra/score-scenarios.sh', content: scoreScenariosScript(model) },
+    { path: 'infra/check-test-idioms.sh', content: testIdiomsScript() }
   ];
+}
+
+// ─── check-test-idioms.sh ────────────────────────────────────────────────────
+//
+// El gate de un defecto que COMPILA y revienta en runtime, así que ni `compile-check` ni
+// `compileIntegrationTestJava` lo ven: anidar una extracción de JSON dentro de una llamada
+// con sobrecargas. `javac` elige la sobrecarga por el tipo estático y mete un `checkcast`
+// —`String.valueOf(char[])` gana a `String.valueOf(Object)`— que salta como
+// `ClassCastException: String cannot be cast to [C` cuando el escenario ya está corriendo.
+//
+// Existe porque la prosa ya falló. `conventions/integration-tests.md` documenta este caso
+// EXACTO, con ejemplo MAL y BIEN, y aun así se coló en la quinta corrida y costó un ciclo de
+// arbitraje. Cuando una regla escrita se incumple, lo que falta no es repetirla: es poder
+// comprobarla. Mismo criterio que las familias de `check-idempotency.sh`.
+function testIdiomsScript() {
+  return `#!/usr/bin/env bash
+# check-test-idioms.sh — idiomas de las pruebas de integración que no se ven al compilar.
+#
+# Sale 1 si encuentra algo. Lo ejecuta el agente de pruebas al cerrar, junto a
+# ./gradlew compileIntegrationTestJava: ese compila, y esto mira lo que compilar no juzga.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "\${BASH_SOURCE[0]}")/.." && pwd)"
+SRC="$ROOT/src/integrationTest"
+[ -d "$SRC" ] || { echo "No hay src/integrationTest: nada que revisar."; exit 0; }
+
+found=0
+
+# Los comentarios se borran ANTES de mirar: el propio ejemplo «MAL» de la convención, pegado
+# en un comentario, haría de coartada o de falso positivo según el día.
+strip() { sed -e 's://.*::' "$1"; }
+
+while IFS= read -r -d '' file; do
+  # Extracción anidada dentro de una llamada que tiene sobrecargas. La regla de la convención
+  # es una sola: captura primero en una variable, usa después.
+  hits="$(strip "$file" | grep -nE '(String\\.valueOf|\\.formatted|List\\.of|Map\\.of)\\([^)]*(jsonPath|JsonPath\\.read)\\(' || true)"
+  if [ -n "$hits" ]; then
+    found=1
+    echo "[sobrecarga] \${file#"$ROOT/"}"
+    echo "$hits" | sed 's/^/    /'
+  fi
+done < <(find "$SRC" -name '*.java' -print0)
+
+if [ "$found" -ne 0 ]; then
+  cat <<'AYUDA'
+
+Una extracción de JSON anidada dentro de una llamada con sobrecargas deja que javac resuelva
+la sobrecarga por el tipo estático e inserte un cast que revienta en RUNTIME
+(ClassCastException: String cannot be cast to [C). Compila, así que no lo ve ningún gate de
+compilación — por eso existe este.
+
+  MAL:  String sku = String.valueOf(JsonPath.read(payload, "$.data.sku"));
+  BIEN: Object raw = JsonPath.read(payload, "$.data.sku");
+        String sku = String.valueOf(raw);
+
+La regla y el porqué, en docs/keel/conventions/integration-tests.md.
+AYUDA
+  exit 1
+fi
+
+echo "Idiomas de las pruebas: OK."
+`;
 }
 
 // ─── score-scenarios.sh ──────────────────────────────────────────────────────
@@ -1930,7 +1995,19 @@ function topologyProbeMethods(model) {
   const probeEvent = probe.name;
   // De dónde se LEE, que no es dónde se publica. Sale del resolutor canónico y no de una
   // composición a mano — ver el javadoc de las dos constantes de abajo.
-  const probeQueue = publishedDestination(model.stack?.broker, model, probe.channel);
+  //
+  // El canal se busca por el FILTRO de la cola, no en `probe.channel`: un evento que no declara
+  // canal lo tiene igual —el modelo lo deriva del destino del servicio— y ahí el campo crudo es
+  // null. Interpolarlo daba la cadena literal "null", y el `receive-message` contra
+  // `.../000000000000/null` fallaba ANTES de que startBroker() soltara BROKER_STOPPED: el flag
+  // se quedaba en true para toda la JVM y arrastraba a initializationError a cada clase
+  // posterior. Llegó a bloquear 7 de 22 escenarios. Buscarlo por el eventType es además el
+  // mismo criterio que el comentario de arriba: la cola entrega solo lo que su filtro admite.
+  const probeChannel =
+    Object.entries(model.messaging?.eventTypesByChannel ?? {}).find(([, events]) =>
+      (events ?? []).includes(probe.name)
+    )?.[0] ?? probe.channel;
+  const probeQueue = publishedDestination(model.stack?.broker, model, probeChannel);
   return `
     /**
      * Topic al que se PUBLICA la sonda: el destino único del servicio, que es a lo que
@@ -2439,10 +2516,53 @@ function persistedEnums(model) {
   return (model.enums ?? []).filter((enumDef) => referenced.has(enumDef.name));
 }
 
+// El script de mongosh viaja por ARCHIVO, nunca por `--eval` en el argv.
+//
+// Este generador ya sabía que el cliente de contenedores corrompe las comillas dobles
+// incrustadas en Windows —`copyIntoContainer` existe exactamente por eso, para los cuerpos
+// del broker— y aun así emitía la consulta del outbox como `--eval "db.getCollection(\"x\")..."`,
+// y el javadoc de `db(...)` enseñaba esa forma como la correcta. En la corrida documental el
+// arnés cayó con `ReferenceError: outbox_event is not defined` y `score-scenarios.sh` salió
+// con código 2: la suite entera sin ejercitarse, por el ejemplo que el propio arnés predicaba.
+//
+// La URI va DENTRO del helper, no como parámetro: es la misma para todo el mundo, y pedirla
+// por argumento es una invitación a que alguien la escriba a mano con otro `authSource`.
+function mongoEvalHelper(scriptArgv) {
+  if (!scriptArgv) return '';
+  return `
+    /** Dónde se deja el script dentro del contenedor de la base. */
+    private static final String DB_SCRIPT = "/tmp/keel-eval.js";
+
+    /**
+     * Ejecuta un script de mongosh contra la base de prueba.
+     *
+     * <p><b>Esta es la vía, no {@link #db} con {@code --eval}.</b> Un script de mongosh lleva
+     * comillas dobles casi siempre ({@code db.getCollection("x")}), y esas comillas NO
+     * sobreviven al viaje por el argv en Windows: el cliente de contenedores reconstruye la
+     * línea de comandos y se las come, con lo que mongosh recibe {@code db.getCollection(x)} y
+     * responde {@code ReferenceError}. El script se copia como archivo y se ejecuta desde ahí.
+     *
+     * <pre>String salida = mongoEval("db.getCollection(\\"dispatch_orders\\").countDocuments({ status: \\"QUEUED\\" })");</pre>
+     */
+    protected static String mongoEval(String script) {
+        copyIntoContainer(DB_CONTAINER, script, ".js", DB_SCRIPT);
+        return db(${scriptArgv.map((part) => javaString(part)).join(', ')}, DB_SCRIPT);
+    }
+`;
+}
+
 function dbSection(model) {
   const entry = dbEntry(model);
   if (!entry) return '';
   const dbName = model.service.name.replaceAll('-', '_');
+  // El argv sin `--eval`: mongosh acepta un ARCHIVO de script en su lugar, que es la única
+  // forma de que un script con comillas llegue intacto (ver `copyIntoContainer`).
+  const scriptArgv =
+    entry.kind === 'document' && entry.cliQueryArgv
+      ? entry
+          .cliQueryArgv({ user: entry.user ? entry.user(dbName) : '', pass: entry.password ?? '', db: dbName })
+          .filter((part) => part !== '--eval')
+      : null;
   const queryArgv = entry.cliQueryArgv
     ? entry.cliQueryArgv({ user: entry.user ? entry.user(dbName) : '', pass: entry.password ?? '', db: dbName })
     : null;
@@ -2463,10 +2583,16 @@ function dbSection(model) {
      *
      * <p><b>Toda sentencia va por aquí</b>, y cualquier helper propio que escribas
      * encima también: el motor elegido (${entry.label}) se invoca así, y la sentencia
-     * entra como <b>un elemento más</b> del argv, con sus comillas intactas:${
+     * entra como <b>un elemento más</b> del argv.${scriptArgv ? `
+     *
+     * <p><b>Salvo un script de mongosh, que va por {@link #mongoEval}.</b> La promesa de
+     * «las comillas llegan intactas» NO se sostiene cuando son las comillas de DENTRO del
+     * argumento: en Windows el cliente de contenedores reconstruye la línea de comandos y se
+     * las come. Un script de mongosh lleva comillas casi siempre, así que el ejemplo de abajo
+     * se deja como lo que NO hay que hacer:` : ''}${
        queryArgv
          ? `
-     * <pre>db(${queryArgv.map((part) => javaString(part)).join(', ')},
+     * <pre>${scriptArgv ? '// NO — las comillas de dentro no sobreviven: ' : ''}db(${queryArgv.map((part) => javaString(part)).join(', ')},
      *    ${javaString(exampleStatement(entry))});</pre>`
          : ` sqlplus lee
      * la sentencia por su entrada estándar, así que este motor no tiene forma argv y
@@ -2479,6 +2605,7 @@ function dbSection(model) {
         command.addAll(List.of(argv));
         return runProcess(command);
     }
+${mongoEvalHelper(scriptArgv)}
 ${uuidLiteralHelper(model)}
 
     /**
@@ -2509,6 +2636,27 @@ function containerExecSection(model) {
   if (!usesContainerExec(model)) return '';
   return `
     private static String containerRuntime;
+
+    /**
+     * Copia contenido al contenedor como ARCHIVO, en vez de pasarlo como argumento.
+     *
+     * <p>Es la única forma fiable de que un texto CON COMILLAS llegue intacto: en Windows,
+     * {@code ProcessBuilder} reconstruye una sola línea de comandos a partir de la lista y su
+     * escapado rompe las comillas dobles incrustadas antes de que {@code docker.exe} /
+     * {@code podman.exe} las reciba. El contenido llega sin comillas y el fallo aparece muy
+     * lejos de su causa — un {@code ReferenceError} del intérprete de destino sobre un
+     * fragmento suelto de lo que escribiste.
+     */
+    private static void copyIntoContainer(String container, String content, String suffix, String target) {
+        try {
+            Path temp = Files.createTempFile("keel-", suffix);
+            Files.writeString(temp, content, StandardCharsets.UTF_8);
+            runProcess(List.of(containerRuntime(), "cp", temp.toString(), container + ":" + target));
+            Files.deleteIfExists(temp);
+        } catch (IOException e) {
+            throw new IllegalStateException("No se pudo copiar el contenido al contenedor " + container, e);
+        }
+    }
 
     /**
      * Ejecuta el proceso, <b>exige código de salida 0</b> y deja la evidencia en
@@ -2591,14 +2739,7 @@ function bodyFileHelper(model) {
      * las reciba — el cuerpo llega sin comillas y el fallo aparece lejos de su causa.
      */
     private static void copyToDevtools(String content, String target) {
-        try {
-            Path temp = Files.createTempFile("keel-body", ".json");
-            Files.writeString(temp, content, StandardCharsets.UTF_8);
-            runProcess(List.of(containerRuntime(), "cp", temp.toString(), DEVTOOLS_CONTAINER + ":" + target));
-            Files.deleteIfExists(temp);
-        } catch (IOException e) {
-            throw new IllegalStateException("No se pudo preparar el cuerpo para devtools", e);
-        }
+        copyIntoContainer(DEVTOOLS_CONTAINER, content, ".json", target);
     }
 `;
 }
@@ -2734,18 +2875,32 @@ const SQS_BODY_DECODING = String.raw`
         int last = 0;
         while (matcher.find()) {
             result.append(raw, last, matcher.start());
-            String escaped = matcher.group(1);
-            String decoded;
-            try {
-                decoded = JSON.readValue("\"" + escaped + "\"", String.class);
-            } catch (Exception e) {
-                decoded = escaped;
-            }
-            result.append("\"Body\": \"").append(decoded).append('"');
+            // EMBEBIDO cuando es JSON, igual que su hermano de RabbitMQ, y no re-entrecomillado.
+            // Concatenar el valor decodificado entre comillas —lo que esto hacía— produce un
+            // documento INVÁLIDO en cuanto el cuerpo lleva una comilla, que es siempre: la primera
+            // interna cierra la cadena y el resto quedan tokens sueltos. El síntoma es
+            // InvalidJsonException: Unexpected token al leer lo publicado, y se llevó seis
+            // escenarios por delante en la corrida documental.
+            //
+            // Re-escaparlo con el mapper arregla la validez y rompe lo otro: la aserción por
+            // substring dejaría de casar, que es justo la trampa muda que el javadoc de
+            // PAYLOAD_FIELD documenta haber costado cuatro clases de flujo. Embebido cumple las dos.
+            result.append("\"Body\": ").append(embeddedBody(matcher.group(1)));
             last = matcher.end();
         }
         result.append(raw, last, raw.length());
         return result.toString();
+    }
+
+    /** El cuerpo como valor JSON si lo es; si no, tal cual vino (entrecomillado y escapado). */
+    private static String embeddedBody(String escaped) {
+        try {
+            String decoded = JSON.readValue("\"" + escaped + "\"", String.class);
+            JSON.readTree(decoded);
+            return decoded;
+        } catch (Exception notJson) {
+            return "\"" + escaped + "\"";
+        }
     }`;
 
 // Desescapado del campo `payload` de RabbitMQ, hermano del de SQS.
@@ -2845,9 +3000,12 @@ function outboxDrainSection(model) {
   // destino FÍSICO, `<slug>.events`—, mientras que el canal es la agrupación LÓGICA del
   // diseño (`stockEvents`). Consultar por el canal daba `COUNT(*) = 0` siempre: la espera
   // volvía al instante sin esperar a nada, que es justo lo que su javadoc dice evitar.
+  // El script documental, ya sin las comillas escapadas del `--eval`: viaja por archivo.
+  const documentCount =
+    '"db.getCollection(\\"outbox_event\\").countDocuments({ destination: \\"" + OUTBOX_DESTINATION + "\\", published_at: null })"';
   const statement =
     entry.kind === 'document'
-      ? '"db.getCollection(\\"outbox_event\\").countDocuments({ destination: \\"" + OUTBOX_DESTINATION + "\\", published_at: null })"'
+      ? null // documental: la consulta va por `mongoEval`, no por argv (ver mongoEvalHelper)
       : '"SELECT COUNT(*) FROM outbox_event WHERE destination = \'" + OUTBOX_DESTINATION + "\' AND published_at IS NULL"';
   const published = model.messaging?.publishChannels ?? [];
   return `
@@ -2904,7 +3062,7 @@ function outboxDrainSection(model) {
      */
     private static int pendingOutboxRows() {
         try {
-            String output = db(${argv}, ${statement});
+            String output = ${statement === null ? `mongoEval(${documentCount})` : `db(${argv}, ${statement})`};
             // Solo la ÚLTIMA línea: un cliente puede escribir avisos antes del resultado, y
             // concatenar sus dígitos daría un número enorme que parecería trabajo pendiente.
             String trimmed = output.trim();
@@ -3268,6 +3426,15 @@ ${purgeWrapper(model)}${outage}`;
     // así que el nombre del canal tampoco es el destino del que se lee ni el que se purga.
     const physical = expr('physicalDestination(destination)');
     const read = readParts('snssqs', { destination: physical, count: expr('String.valueOf(size)'), base });
+    // El barrido es OTRO comando, no el mismo con un flag: oculta lo que devuelve para poder
+    // avanzar más allá del primer lote. El porqué, en `SQS_SWEEP_VISIBILITY`.
+    const sweep = readParts('snssqs', {
+      destination: physical,
+      count: expr('String.valueOf(size)'),
+      base,
+      hideSeconds: SQS_SWEEP_VISIBILITY
+    });
+    const release = releaseParts('snssqs', { destination: physical, receiptHandle: expr('handle'), base });
     // La cota de intentos, como EXPRESIÓN Java sobre `count`: la fórmula la fija
     // `readAttemptLimit` en lib/broker-probes.js, que es la misma que aplica el runner de
     // conformidad. Escribirla dos veces es como el gate en vivo deja de medir lo que se genera.
@@ -3298,34 +3465,56 @@ ${physicalDestinationSection(model)}${doc}
         // provoca a propósito— comparten cuerpo y \`metadata.eventId\`, y deduplicarlas
         // dejaría ese escenario pasando en verde sin probar nada.
         //
-        // El timeout NO se sube para arreglar esto: la lectura es un peek deliberado —un
-        // escenario puede afirmar dos veces sobre el mismo mensaje— y subirlo rompería esa
-        // propiedad para todos a cambio de arreglar uno.
+        // Y la ocultación del barrido no contradice el peek: se SUELTA lo oculto al terminar,
+        // así que la cola queda como estaba y un escenario puede seguir afirmando dos veces
+        // sobre el mismo mensaje. Subir el timeout sin soltar sí lo rompería — para todos, y
+        // a cambio de arreglar solo la lectura larga.
         Set<String> seen = new LinkedHashSet<>();
         StringBuilder unique = new StringBuilder();
         // Cota de lotes: sin ella, una cola que solo puede repescar lo ya visto —menos
         // mensajes reales que los pedidos— deja el bucle sondeando para siempre.
         int wanted = Math.max(count, 1);
         int maxAttempts = ${readAttemptLimitJava};
+        // Pedir más de lo que cabe en una llamada es un BARRIDO, y ahí el peek se vuelve en
+        // contra: lo devuelto sigue visible, así que la llamada siguiente trae otra vez los
+        // mismos diez y el conteo se queda corto para siempre. Barriendo se oculta lo leído y
+        // se suelta al final, con lo que la cola queda como estaba.
+        boolean sweeping = wanted > ${READ_BATCH_LIMIT.snssqs};
+        List<String> hidden = new ArrayList<>();
         try {
             for (int attempt = 0; attempt < maxAttempts && seen.size() < wanted; attempt++) {
                 int size = Math.min(wanted - seen.size(), ${READ_BATCH_LIMIT.snssqs});
-                String batch = aws(${javaArgs(read)});
+                String batch = sweeping ? aws(${javaArgs(sweep)}) : aws(${javaArgs(read)});
                 List<Map<String, Object>> messages = receivedMessages(batch);
                 if (messages.isEmpty()) {
                     break;
                 }
                 for (Map<String, Object> message : messages) {
+                    if (sweeping) {
+                        hidden.add(String.valueOf(message.get("ReceiptHandle")));
+                    }
                     if (seen.add(String.valueOf(message.get("${READ_DEDUPE_KEY.snssqs}")))) {
                         appendMessage(unique, message);
                     }
                 }
-                if (messages.size() < size) {
+                // Barriendo, un lote CORTO no prueba nada —lo devuelto quedó oculto—, así que
+                // el único final fiable es el lote vacío. Sin barrer, el lote corto sí lo es.
+                if (!sweeping && messages.size() < size) {
                     break;
                 }
             }
         } catch (RuntimeException e) {
             return emptyIfBrokerStopped(e);
+        } finally {
+            // Se suelta SIEMPRE, también si la lectura revienta: dejar la cola ciega haría
+            // fallar al escenario siguiente por algo que no es suyo.
+            for (String handle : hidden) {
+                try {
+                    aws(${javaArgs(release)});
+                } catch (RuntimeException ignored) {
+                    // Soltar es de mejor esfuerzo: el plazo de ocultación vence solo.
+                }
+            }
         }
         // El desescapado va al final, sobre la lista ya deduplicada: decodeBodies es
         // TEXTUAL y deja de ser JSON navegable, así que deduplicar después sería tarde.
@@ -3346,10 +3535,10 @@ ${physicalDestinationSection(model)}${doc}
 
     /**
      * La lista {@code Messages} de una respuesta cruda de {@code receive-message}, o vacía
-     * si no había ninguno. Deliberadamente <b>no</b> pasa por {@code decodeBodies}: ese
-     * desescapado reinserta el {@code Body} sin volver a escaparlo, y el sobre de SNS que
-     * envuelve un evento real —cuando llega antes de que {@code RawMessageDelivery} esté
-     * activo— tiene comillas anidadas que corromperían el JSON.
+     * si no había ninguno. Deliberadamente <b>no</b> pasa por {@code decodeBodies}: aquí hacen
+     * falta los campos del SOBRE crudo —{@code MessageId} para deduplicar y
+     * {@code ReceiptHandle} para soltar lo que un barrido ocultó—, y el desescapado se aplica
+     * una sola vez al final, sobre la lista ya compuesta.
      */
     @SuppressWarnings("unchecked")
     private static List<Map<String, Object>> receivedMessages(String raw) {
@@ -3961,6 +4150,17 @@ ${clientKeys}        throw new IllegalArgumentException("Cliente de servicio no 
 `
       : ''
   }
+${
+    // `tokenFor` pide un token de USUARIO con `grant_type=password`, y esos usuarios los crea
+    // `init-keycloak.sh` uno por ROL declarado. Un diseño cuyo acceso es todo `level: service`
+    // no declara roles, así que no hay ningún usuario que pedir: el método existía igual y su
+    // javadoc prometía «un usuario por rol cuyo nombre es el rol», que ahí no es cierto. Quien
+    // lo creyera se llevaba un `invalid_grant` que no se parece a su causa.
+    //
+    // No se arregla ajustando el javadoc —es el mismo método cuyo javadoc ya falló dos veces en
+    // este repo—: se arregla no emitiéndolo. Para clientes máquina está `serviceCredential`.
+    (model.security?.roles ?? []).length > 0
+      ? `
     /**
      * Bearer token de un usuario con el rol pedido, cacheado por rol.
      *
@@ -3990,6 +4190,9 @@ ${clientKeys}        throw new IllegalArgumentException("Cliente de servicio no 
                 + "&password=" + env("AUTH_TEST_PASSWORD", "password")));
     }
 
+`
+      : ''
+  }
     /**
      * El token cacheado de esa clave, pedido de nuevo si ya no sirve.
      *

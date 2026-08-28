@@ -585,6 +585,14 @@ Toda afirmación del `Then` se comprueba, por orden de preferencia:
    excepción es Oracle, cuyo `sqlplus` lee la sentencia por la entrada estándar; ahí el javadoc
    generado dice explícitamente que la forma argv no existe.
 
+   **Y con MongoDB la forma argv tampoco basta: el script va por `mongoEval(...)`.** El argv
+   protege las comillas que envuelven un argumento, no las que van DENTRO de él, y un script de
+   mongosh lleva comillas dentro casi siempre (`db.getCollection("x")`). En Windows el cliente
+   de contenedores se las come y mongosh responde `ReferenceError: x is not defined`. `mongoEval`
+   —que build genera— copia el script como archivo y lo ejecuta desde ahí, que es el mismo
+   mecanismo con el que viaja cualquier cuerpo JSON. En la quinta corrida esto tumbó
+   `HarnessSmokeIT` y con él la suite entera antes de ejercitar un solo flujo.
+
    **El nombre de la tabla no se adivina.** Es el error que más ciclos de arbitraje ha
    gastado en las corridas, y siempre con el mismo desenlace: un `culprit: test` por
    `UPDATE reservation …` contra una tabla que se llama `reservations`. La regla es

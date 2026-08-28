@@ -5,9 +5,12 @@ delivery:
   transport: smtp
   parts: [html, text]
 
+# Una sola operación manda correo, y es la que declara el estado EN VUELO. Registrar una
+# petición —por HTTP o por evento— no envía nada: separar las dos cosas es lo que permite que
+# el envío tenga guarda, porque la guarda necesita un estado intermedio que solo tiene sentido
+# en la operación que produce el efecto.
 sentBy:
-  - requestNotification
-  - acceptNotificationRequest
+  - sendAcceptedNotification
 
 sender:
   source: data

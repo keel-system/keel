@@ -57,6 +57,7 @@ function checksOf(model) {
     ...commandChecks(model),
     ...naturalKeyChecks(model),
     ...compensationChecks(model),
+    ...domainEventChecks(model),
     ...reconciliationChecks(model),
     ...sweepClaimChecks(model),
     ...outboxChecks(model),
@@ -213,6 +214,8 @@ function sharedContractCheck(destination, subs) {
     subject: `${destination} (${subs.map((sub) => sub.name).join(', ')})`,
     class: subs[0].listenerClass,
     locate: subs.map((sub) => sub.messageRecord).join('|'),
+    // El confirmador: el host alternativo legítimo es el que usa el guard.
+    confirm: 'IdempotencyGuard',
     require: ['\\.requireContract\\s*\\('],
     forbid: [],
     why:
@@ -263,6 +266,8 @@ function sharedListenerCheck(destination, subs) {
     // El nombre canónico si el agente lo usó; si no, el archivo se busca por contenido.
     class: subs[0].listenerClass,
     locate: subs.map((sub) => sub.messageRecord).join('|'),
+    // El confirmador: el host alternativo legítimo es el que usa el guard.
+    confirm: 'IdempotencyGuard',
     require: [
       'IdempotencyGuard',
       `(if|return|while|&&|\\|\\||!)[^;]*\\.?(alreadyProcessed|tryRecord)\\s*\\(`,
@@ -475,6 +480,45 @@ const allOperations = (model) => (model.services ?? []).flatMap((service) => ser
 
 // 3. Compensación. No hay clase que comprobar porque build no genera ninguna: lo que se
 //    comprueba es que el handler que la ejecuta esté escrito y llegue al proveedor.
+/**
+ * El `raise(...)` de cada evento publicado, que vive en el AGREGADO.
+ *
+ * Es el hueco que llevó cinco corridas anotado como «el gate de compensación no ve una
+ * activación publicada», y resultó ser más ancho de lo que decía esa nota: no es solo de la
+ * compensación, es de CUALQUIER evento que el diseño publique.
+ *
+ * `build` genera el buffer de eventos del agregado y deja un TODO por evento
+ * (scaffold/entities.js § renderDomainEvents) para que el agente escriba el `raise` en el
+ * método de negocio que provoca el cambio. Ese TODO está en el agregado; el `forbid` de la
+ * familia `compensation` mira el HANDLER, que es otra clase. Así que un handler impecable
+ * con el `raise` olvidado sale VERDE, y el evento no existe: el outbox no tiene qué
+ * entregar, ninguna suscripción recibe nada, y el único síntoma es un escenario que espera
+ * un mensaje que nunca sale.
+ *
+ * Lo afirmable es exacto porque todo lo pone build: el nombre de la clase del evento, el
+ * agregado que lo acumula y el texto del TODO. No se supone dónde va el `raise` —solo que
+ * esté—, que es la misma regla que el resto de familias.
+ */
+function domainEventChecks(model) {
+  return (model.events ?? [])
+    .filter((event) => event.aggregate)
+    .map((event) => ({
+      group: 'domainEvent',
+      subject: event.name,
+      class: event.aggregate,
+      require: [String.raw`raise\s*\(\s*` + event.className + String.raw`\.of\s*\(`],
+      // El TODO que build dejó con el nombre de ESTE evento: si sigue ahí, nadie lo escribió.
+      // Sin salto de línea en la clase de caracteres: el patrón viaja dentro de una cadena de
+      // bash y ahí parte el comando. grep ya es línea a línea, así que el punto basta.
+      forbid: [String.raw`TODO.*` + event.name],
+      why:
+        `${event.name} lo publica el diseño, pero quien lo crea es el agregado: el método de negocio de ` +
+        `${(event.emittedBy ?? []).map((e) => e.operation).join(', ') || 'la operación que lo declara'} tiene que hacer ` +
+        `raise(${event.className}.of(...)). Sin eso no hay evento que entregar — el handler puede estar perfecto y ` +
+        `el outbox queda vacío, que es un fallo que solo se ve desde un escenario que espera el mensaje`
+    }));
+}
+
 function compensationChecks(model) {
   const checks = [];
   for (const operation of allOperations(model)) {
@@ -563,13 +607,16 @@ function mailChecks(model) {
 
 function reconciliationChecks(model) {
   const checks = [];
-  const schedulers = new Set();
+  const schedulers = new Map();
   for (const service of model.services ?? []) {
     for (const operation of service.operations ?? []) {
       if (!(operation.reconciles ?? []).length) continue;
       // El @Scheduled que la dispara vive en el scheduler de SU servicio, no en uno
-      // global: dos agregados con barrido son dos clases distintas.
-      schedulers.add(service.className.replace(/Service$/, 'Scheduler'));
+      // global: dos agregados con barrido son dos clases distintas. Pero el NOMBRE del
+      // archivo es organización, no comportamiento — se guarda también qué operación
+      // dispara, que es lo afirmable si el agente reorganizó las clases.
+      const name = service.className.replace(/Service$/, 'Scheduler');
+      schedulers.set(name, [...(schedulers.get(name) ?? []), operation.name]);
     }
   }
   // El reclamo GENERADO. Cuando build lo produce, lo afirmable es exacto —que el handler
@@ -701,16 +748,28 @@ function reconciliationChecks(model) {
       why: 'el umbral de espera del barrido no está parametrizado en ninguna parte (@Value/@ConfigurationProperties sobre un valor que hable de la espera): build ya lo dejó escrito en parameters/<perfil>/reconciliation.yaml con el valor que declara el diseño (unansweredAfterSeconds), así que lo que falta es LEERLO — quemado en el código no se ajusta por entorno sin recompilar, y además deja de ser el número que el diseñador decidió. Ver conventions/dependencies.md'
     });
   }
-  for (const scheduler of schedulers) {
+  // Lo afirmable es que el barrido TENGA disparador y que no siga siendo un stub, no en qué
+  // archivo vive. build emite un scheduler por servicio, y un diseño puede producir dos
+  // clases que se distinguen por una sola «s» (DispatchOrderScheduler /
+  // DispatchOrdersScheduler): eso se lee como duplicado y se fusiona. Pasó en la quinta
+  // corrida, y el check —que solo miraba el nombre canónico— dio ROJO sobre código
+  // correcto. Su camino de menor resistencia para apagarlo era recrear la segunda clase:
+  // DOS beans disparando el mismo barrido, o sea el doble de pasadas. Es la lección (a)
+  // otra vez: no supongas dónde vive una pieza.
+  for (const [scheduler, operations] of schedulers) {
     checks.push({
       group: 'reconciliation',
       subject: scheduler,
       class: scheduler,
+      // Si el nombre canónico no está, se busca el archivo que dispara ESTAS operaciones...
+      locate: operations.map((name) => `\\b${name}\\s*\\(`).join('|'),
+      // ...y que además es un disparador: el handler y el mediador también las nombran.
+      confirm: '@Scheduled',
       require: ['@Scheduled'],
       // build lo deja lanzando cuando el mensaje necesita argumentos. Si sigue ahí, el
       // barrido no corre nunca y nada más lo delata.
       forbid: ['UnsupportedOperationException'],
-      why: 'el disparador del barrido: build lo deja lanzando cuando el mensaje lleva argumentos'
+      why: `el disparador de ${operations.join(', ')}: build lo deja lanzando cuando el mensaje lleva argumentos`
     });
   }
   return checks;
@@ -751,7 +810,7 @@ function script(model, checks) {
     }
     const require = (check.require ?? []).join('\u0001');
     const forbid = (check.forbid ?? []).join('\u0001');
-    return `unit ${shellQuote(check.group)} ${shellQuote(check.subject)} ${shellQuote(check.class)} ${shellQuote(require)} ${shellQuote(forbid)} ${shellQuote(check.locate ?? '')} ${shellQuote(check.why)}`;
+    return `unit ${shellQuote(check.group)} ${shellQuote(check.subject)} ${shellQuote(check.class)} ${shellQuote(require)} ${shellQuote(forbid)} ${shellQuote(check.locate ?? '')} ${shellQuote(check.why)} ${shellQuote(check.confirm ?? '')}`;
   });
 
   const groups = [...new Set(checks.map((check) => check.group))];
@@ -804,20 +863,22 @@ locate() {
 }
 
 # Una unidad de comprobación: un archivo, lo que tiene que aparecer y lo que no.
-unit() {  # familia, sujeto, clase, requeridos (\\001), prohibidos (\\001), localizador, porqué
-  local group="$1" subject="$2" class="$3" required="$4" forbidden="$5" locator="$6" why="$7"
+unit() {  # familia, sujeto, clase, requeridos (\\001), prohibidos (\\001), localizador, porqué, confirmador
+  local group="$1" subject="$2" class="$3" required="$4" forbidden="$5" locator="$6" why="$7" confirm="\${8:-}"
   local file
   file="$(locate "$class")"
   # Cuando el nombre canónico no existe pero el diseño admite otra forma —un listener
-  # único para varias suscripciones de la misma cola—, el archivo se busca por CONTENIDO:
-  # el que maneja esos mensajes y usa el guard. Sin esto, la implementación correcta se
-  # reporta como ausente y el camino de menor resistencia para apagar el hallazgo es
-  # partirla en la incorrecta.
-  if [ -z "$file" ] && [ -n "$locator" ]; then
+  # único para varias suscripciones de la misma cola, o dos schedulers que el agente
+  # fusionó en uno—, el archivo se busca por CONTENIDO: el que maneja esos mensajes y
+  # además pasa el CONFIRMADOR, que es lo que distingue al host legítimo del handler o
+  # del mediador, que también nombran la operación. Sin esto, la implementación correcta
+  # se reporta como ausente y el camino de menor resistencia para apagar el hallazgo es
+  # partirla en la incorrecta — que aquí serían DOS beans disparando el mismo barrido.
+  if [ -z "$file" ] && [ -n "$locator" ] && [ -n "$confirm" ]; then
     local candidate
     while IFS= read -r candidate; do
       [ -n "$candidate" ] || continue
-      if grep -qE -- 'IdempotencyGuard' "$candidate" 2>/dev/null; then
+      if grep -qE -- "$confirm" "$candidate" 2>/dev/null; then
         file="$candidate"
         break
       fi

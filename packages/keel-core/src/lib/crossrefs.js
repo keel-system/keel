@@ -2419,6 +2419,44 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
     }
   }
 
+  // Una raíz de agregado a la que NINGUNA operación se refiere: nada la crea, nada la lee y
+  // nada la cambia, pero el diseño la persiste y normalmente la exige como precondición en
+  // prosa («la aplicación está registrada y activa»).
+  //
+  // Por qué es obligación y no aviso, y por qué se detecta aquí y no en el generador: en `build`
+  // ya es tarde. Un agente que se encuentra la precondición sin manera de satisfacerla no tiene
+  // ninguna salida buena — o inventa el alta desde una fuente que el diseño no declara (pasó: se
+  // derivó de un claim del JWT), o falla y se lleva por delante todo lo que dependa de ella. En
+  // la corrida de `notification-mailer` fueron 16 de 19 escenarios, y el diseño estaba
+  // mecánicamente VÁLIDO: ninguna referencia rota, porque la referencia que falta no existe.
+  //
+  // El criterio es deliberadamente conservador — no se refiere NADIE, ni por `output`, ni por
+  // `input`, ni por una transición—. Con algo más fino (exigir que exista una operación que la
+  // CREE) habría que decidir qué cuenta como crear, y una obligación con falsos positivos
+  // enseña a exentar sin leer, que es justo lo contrario de para lo que existe.
+  if (persistence && domain.aggregates && useCases.operations) {
+    const referenced = new Set();
+    for (const operation of Object.values(useCases.operations)) {
+      if (operation?.output?.entity) referenced.add(operation.output.entity);
+      if (operation?.input?.entity) referenced.add(operation.input.entity);
+      for (const transition of operation?.transitions ?? []) {
+        if (transition?.entity) referenced.add(transition.entity);
+      }
+    }
+    for (const [name, aggregate] of Object.entries(domain.aggregates)) {
+      const root = aggregate?.root ?? name;
+      if (!entities.has(root) || referenced.has(root)) continue;
+      obligation(
+        'OBL-ENTITY-UNREACHABLE',
+        'domain',
+        `la raíz de agregado '${root}' se persiste, pero ninguna operación la nombra —ni como entrada, ni ` +
+          `como salida, ni en una transición—: nada del servicio puede crearla, así que toda precondición ` +
+          `que la exija es insatisfacible y quien genere el código tendrá que inventarse de dónde sale. ` +
+          `Declara la operación que la produce, o acepta por escrito quién la aprovisiona fuera del servicio`
+      );
+    }
+  }
+
   // El conflicto del bloqueo optimista es OBSERVABLE por la API —el cliente recibe un 409—,
   // así que tiene un `code` que forma parte del contrato. Se avisa una vez por diseño y no
   // por operación: la política es del servicio entero, y repetirlo en cada command sería

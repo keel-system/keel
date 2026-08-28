@@ -12,6 +12,7 @@ import { kebabCase } from '../lib/naming.js';
 import { INTERFACES_PKG, ANNOTATIONS_PKG, MEDIATOR_PKG } from './mediator.js';
 import { domainTypeImport } from './entities.js';
 import { refTargetsOf } from './ref-resolvers.js';
+import { usesCorrelation, correlationImport } from './correlation.js';
 
 // Componentes del record mensaje: parámetros de ruta (en el orden del path) +
 // campos del body + paginación (queries). Compartidos con el controller para
@@ -504,7 +505,7 @@ function renderHandler(model, service, operation) {
     notes.push(
       `MULTI-INSTANCIA (no es opcional): este barrido corre en TODAS las réplicas del servicio a la vez — @Scheduled es «una vez por instancia», no «una vez en el clúster». ` +
         (claims.length > 0
-          ? `Toma su lote con ${claims.map((claim) => `${claim.method}(batchSize)`).join(' y ')}, que build ya generó en el puerto del repositorio: reclama con un UPDATE condicional y devuelve SOLO las filas que esta instancia se llevó. `
+          ? `Toma su lote con ${claims.map((claim) => `${claim.method}()`).join(' y ')}, que build ya generó en el puerto del repositorio: reclama con un UPDATE condicional y devuelve SOLO las filas que esta instancia se llevó. El tamaño del lote NO se pasa desde aquí — lo acota el adaptador con sweep.${claims[0].sweepKey}.batch-size, que es donde Spring está permitido. `
           : `El puerto del repositorio NO trae método de reclamo para este barrido, así que lo escribes tú: un UPDATE condicional que marque la fila y devuelva cuántas afectó (1 = es mía, 0 = otra llegó antes). `) +
         `Lo que NO vale es leer con un finder y marcar después: entre la lectura y la marca las N réplicas ya se llevaron las mismas filas, y con un efecto que no se puede retirar —un correo, un cobro— eso son N efectos. ` +
         `El lote va acotado, y actúa sobre lo reclamado FUERA de la transacción del reclamo: sostenerla durante una llamada externa retiene una conexión del pool por la latencia de un tercero. ` +
@@ -733,12 +734,45 @@ function activationNote(depId, activation, sweep = false) {
   return `Activación ${depId}.${activation.name}: ${activation.effect} — invoca ${decap(activation.http.clientClass)}.${activation.http.call}(...). ${awaits} ${failure ?? ''}`.trim();
 }
 
+/**
+ * ¿El lote que este barrido reclama va a parar a una operación con GUARDA de efecto irreversible?
+ *
+ * El enlace es mecánico y no hace falta leer ninguna prosa: el reclamo del barrido deja las filas
+ * en un estado (`accepted → queued`) y la guarda las toma de ESE estado (`queued → sending`),
+ * sobre la MISMA entidad. Eso es el diseño diciendo «el barrido alimenta al que manda el correo».
+ *
+ * Importa porque decide cómo se despacha, y equivocarse aquí anula la guarda entera. Con la
+ * transacción abarcadora del lote, el reclamo por fila NO confirma hasta el final: ninguna otra
+ * réplica lo ve, el envío cae dentro de la transacción, y el estado intermedio no llega a existir
+ * para nadie —con lo que una caída revierte la marca y el ciclo siguiente manda un SEGUNDO correo
+ * real a una persona—. Que es exactamente lo que la guarda existe para impedir.
+ *
+ * Hasta ahora esto solo se derivaba de `reconciles`, y un barrido que delega su trabajo por
+ * elemento en otra operación se despachaba transaccional. Lo arreglaba a mano el agente en cada
+ * corrida, así que volvía a aparecer en cuanto se regeneraba.
+ */
+function feedsGuardedEffect(model, operation) {
+  const guards = (model.services ?? [])
+    .flatMap((service) => service.operations ?? [])
+    .map((candidate) => candidate.guardClaim)
+    .filter(Boolean);
+  if (guards.length === 0) return false;
+
+  return (operation.claim ?? []).some((claim) =>
+    guards.some((guard) => guard.entity === claim.entity && (guard.from ?? []).includes(claim.to))
+  );
+}
+
 function renderScheduler(model, service, scheduled, seconds) {
   const className = service.className.replace(/Service$/, 'Scheduler');
+  // La correlación existe si el servicio tiene por dónde propagarla (api o messaging), que
+  // es la misma condición con la que se genera CorrelationContext.
+  const correlated = usesCorrelation(model);
   const imports = new Set([
     `${subPackage(model, MEDIATOR_PKG)}.UseCaseMediator`,
     'org.springframework.scheduling.annotation.Scheduled',
-    'org.springframework.stereotype.Component'
+    'org.springframework.stereotype.Component',
+    ...(correlated ? [correlationImport(model), 'java.util.UUID'] : [])
   ]);
 
   const methods = scheduled.map((operation) => {
@@ -750,10 +784,11 @@ function renderScheduler(model, service, scheduled, seconds) {
     // conjunto de operaciones que tienen una llamada a un tercero EN MEDIO del trabajo.
     // Las demás (una purga, un cierre diario) siguen con su transacción única, que es lo
     // correcto para ellas: no llaman a nadie en medio.
-    const sweep = (operation.reconciles ?? []).length > 0;
+    const sweep = (operation.reconciles ?? []).length > 0 || feedsGuardedEffect(model, operation);
+    const efectoExterno = (operation.reconciles ?? []).length > 0 ? 'llama al proveedor' : 'produce un efecto que no se deshace';
     const sweepNote = sweep
-      ? `${operation.schedule.description ? '<p>' : ''}Despachado <b>sin transacción abarcadora</b> a propósito: este barrido llama al proveedor
-EN MEDIO de su trabajo, así que su garantía es un orden de commits —reclamar y confirmar, llamar
+      ? `${operation.schedule.description ? '<p>' : ''}Despachado <b>sin transacción abarcadora</b> a propósito: este barrido ${efectoExterno}
+EN MEDIO de su trabajo, así que su garantía es un orden de commits —reclamar y confirmar, actuar
 fuera de toda transacción, confirmar el desenlace— y no una transacción única. Igualarlo a
 {@code mediator.dispatch(...)} «por coherencia» con los demás métodos de esta clase deja el reclamo
 sin confirmar hasta el final del lote: ninguna réplica lo ve y todas actúan sobre los mismos
@@ -766,7 +801,15 @@ candidatos.`
     let call;
     if (components.length === 0) {
       imports.add(`${subPackage(model, messagePackage(operation))}.${operation.messageClass}`);
-      call = `mediator.${sweep ? 'dispatchWithoutTransaction' : 'dispatch'}(new ${operation.messageClass}());`;
+      const dispatch = `mediator.${sweep ? 'dispatchWithoutTransaction' : 'dispatch'}(new ${operation.messageClass}());`;
+      call = correlated
+        ? `// Una pasada del barrido es una TRAZA nueva: no la origina ninguna petición, así que
+        // aquí nace su correlación. Sin esto el hilo del @Scheduled no tiene ninguna abierta
+        // y todo lo que publique viaja con correlationId nulo — el reloj es el único de los
+        // tres puntos de entrada (filtro HTTP, listener del broker, esto) que no la establecía,
+        // y su rastro era justo el que no se podía seguir de punta a punta.
+        CorrelationContext.runWith(UUID.randomUUID().toString(), () -> ${dispatch.replace(/;$/, '')});`
+        : dispatch;
     } else {
       call = `// TODO (agente): el mensaje requiere argumentos; construirlos aquí.
         throw new UnsupportedOperationException("TODO: despachar ${operation.messageClass} desde el scheduler");`;

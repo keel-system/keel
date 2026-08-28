@@ -15,6 +15,7 @@ import { usesOutbox } from './outbox.js';
 import { usesIdempotency } from './idempotency.js';
 import { usesHttpIdempotency } from './http-idempotency.js';
 import { usesCorrelation } from './correlation.js';
+import { SWEEP_BATCH_DEFAULT } from './claim.js';
 
 const PROFILES = ['local', 'develop', 'production'];
 
@@ -136,9 +137,9 @@ export function generate(model) {
     if (reconciledActivations(model).length > 0) {
       fragments.push(fragment(profile, 'reconciliation', reconciliationYaml(model, profile)));
     }
-    // El plazo de cada rescate de un estado en vuelo. Solo si hay alguno: sin barrido que
-    // rescate, el fragmento sería un archivo con parámetros que nadie lee.
-    if (stalledClaims(model).length > 0) {
+    // La cota de cada barrido y el plazo de cada rescate. Basta con que haya UN reclamo: un
+    // barrido sin rescate no tiene plazo que fijar, pero su lote se acota igual.
+    if (sweepBatchKeys(model).length > 0 || stalledClaims(model).length > 0) {
       fragments.push(fragment(profile, 'sweep', sweepYaml(model, profile)));
     }
 
@@ -1282,6 +1283,19 @@ function reconciliationYaml(model, profile) {
  */
 function sweepYaml(model, profile) {
   const lines = ['sweep:'];
+  // La cota del lote va por OPERACIÓN —una pasada es una unidad de trabajo, y sus reclamos se
+  // la reparten—, mientras que el plazo de abandono va por RECLAMO atascado, que es donde se
+  // mide. Por eso son dos claves distintas y no una anidada: mover `stalled-after-seconds`
+  // bajo la operación cambiaría variables de entorno que ya pueden estar desplegadas.
+  for (const key of sweepBatchKeys(model)) {
+    lines.push(
+      `  ${key}:`,
+      '    # Cota del lote por pasada: sin ella, una tanda con 50.000 filas atrasadas se procesa',
+      '    # entera de una vez. Del generador, no del diseño: es capacidad, y se ajusta con datos',
+      '    # de producción delante. Misma familia que outbox.relay.batch-size.',
+      `    batch-size: ${envWithDefault(profile, `SWEEP_${screamingSnake(key)}_BATCH_SIZE`, SWEEP_BATCH_DEFAULT)}`
+    );
+  }
   for (const { operation, claim } of stalledClaims(model)) {
     lines.push(
       `  ${claim.stalled.configKey}:`,
@@ -1300,6 +1314,24 @@ function sweepYaml(model, profile) {
 }
 
 /** Los rescates que build generó, con la operación que los dispara. */
+/**
+ * Las operaciones de barrido que tienen algún reclamo, en orden y sin repetir.
+ *
+ * No coincide con `stalledClaims`: un barrido puede tener solo reclamo de COLA, sin rescate
+ * —no todo estado de trabajo es un estado en vuelo con reloj—, y ese también acota su lote.
+ */
+function sweepBatchKeys(model) {
+  const keys = [];
+  for (const service of model.services ?? []) {
+    for (const operation of service.operations ?? []) {
+      for (const claim of operation.claim ?? []) {
+        if (claim.sweepKey && !keys.includes(claim.sweepKey)) keys.push(claim.sweepKey);
+      }
+    }
+  }
+  return keys;
+}
+
 function stalledClaims(model) {
   const found = [];
   for (const service of model.services ?? []) {

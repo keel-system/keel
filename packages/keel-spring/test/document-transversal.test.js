@@ -412,8 +412,8 @@ test('el barrido documental se despacha sin transacción, y su adaptador no camb
   const { read } = scaffoldVault();
 
   const scheduler = read(`${JAVA}/infrastructure/scheduling/AssetVaultScheduler.java`);
-  assert.ok(scheduler.includes('mediator.dispatchWithoutTransaction(new ReconcileScansCommand());'), scheduler);
-  assert.ok(!scheduler.includes('mediator.dispatch(new ReconcileScansCommand());'), scheduler);
+  assert.ok(scheduler.includes('mediator.dispatchWithoutTransaction(new ReconcileScansCommand())'), scheduler);
+  assert.ok(!scheduler.includes('mediator.dispatch(new ReconcileScansCommand())'), scheduler);
 
   const adapter = read(`${JAVA}/infrastructure/persistence/repositories/AssetRepositoryImpl.java`);
   assert.ok(!adapter.includes('@Transactional(readOnly = true)'), adapter);

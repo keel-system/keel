@@ -53,13 +53,43 @@ function stalledClaimsFor(model, entityName) {
 const stalledValueField = (claim) => `${claim.suffix.charAt(0).toLowerCase()}${claim.suffix.slice(1)}AfterSeconds`;
 
 /**
+ * El campo `@Value` del adaptador con la cota del lote, que es de la OPERACIÓN.
+ *
+ * Por eso lo nombra `claim.sweepKey` y no `claim.suffix`: los dos reclamos de un mismo
+ * barrido —la cola y el rescate— comparten pasada y comparten cota, así que comparten campo.
+ */
+const batchField = (claim) => `${camelCase(claim.sweepKey)}BatchSize`;
+
+/** `dispatch-queued-orders` → `dispatchQueuedOrders`. */
+const camelCase = (kebab) => kebab.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+
+/** Cota por defecto de una pasada de barrido, si nadie la ajusta por entorno. */
+export const SWEEP_BATCH_DEFAULT = 100;
+
+/**
  * El plazo de cada rescate, leído de `parameters/<perfil>/sweep.yaml` que config.js
  * emite. Va en el ADAPTADOR y no en el handler por el mismo reparto de siempre: el
  * handler vive en `application`, que por constitución no importa Spring.
  */
 export function adapterValueFields(model, entity) {
-  return stalledClaimsFor(model, entity.name).map(
-    (claim) => `    /**
+  // La cota del lote, una por operación de barrido: dos reclamos de la misma pasada
+  // comparten campo, y declararlo dos veces no compilaría.
+  const batchKeys = [...new Set(claimsFor(model, entity.name).map((claim) => claim.sweepKey))];
+  const batchFields = batchKeys.map(
+    (key) => `    /**
+     * Cuánto trabajo cabe en UNA pasada del barrido ${camelCase(key)}.
+     *
+     * NO lo declara el diseño: es capacidad, la familia de los backoffs, y se ajusta con datos
+     * de producción delante. Sin cota, una tanda con 50.000 filas atrasadas son 50.000 en una
+     * sola pasada. Misma decisión —y mismo sitio— que outbox.relay.batch-size.
+     */
+    @Value("\${sweep.${key}.batch-size:${SWEEP_BATCH_DEFAULT}}")
+    private int ${camelCase(key)}BatchSize;
+`
+  );
+  return batchFields.concat(
+    stalledClaimsFor(model, entity.name).map(
+      (claim) => `    /**
      * Cuánto puede llevar un ${entity.name} en ${claim.stalled.state} antes de darlo por abandonado.
      * NO lo declara el diseño: es la caducidad de un reclamo —«la réplica que lo tomó murió»—,
      * misma familia que outbox.relay.claim-timeout-ms. Dimensiónalo por encima de lo que tarda
@@ -68,6 +98,7 @@ export function adapterValueFields(model, entity) {
     @Value("\${sweep.${claim.stalled.configKey}.stalled-after-seconds:${claim.stalled.defaultSeconds}}")
     private long ${stalledValueField(claim)};
 `
+    )
   );
 }
 
@@ -200,7 +231,7 @@ export function portMethods(model, entity, imports) {
     (claim) => `    /**
      * ${describe(claim, entity.name)}
      */
-    List<${entity.name}> ${claim.method}(int batchSize);`
+    List<${entity.name}> ${claim.method}();`
   );
 }
 
@@ -301,10 +332,12 @@ export function adapterMethods(model, entity, imports, jpaField) {
   const claimTx = claimTransaction(model.stack?.database);
   for (const imported of claimTx.imports) imports.add(imported);
   imports.add(`${subPackage(model, 'domain.enums')}.${enumType}`);
-  if (claims.some((claim) => claim.stalled)) {
-    imports.add('java.time.Instant');
-    imports.add('org.springframework.beans.factory.annotation.Value');
-  }
+  // El @Value lo pide CUALQUIER reclamo, no solo el rescate: todos leen su cota del
+  // adaptador (`sweep.<op>.batch-size`). Condicionarlo al rescate dejaba un @Value huérfano
+  // en un barrido de COLA sin rescate, y el proyecto no compilaba desde cero — así llegó la
+  // sexta corrida. El plazo del rescate es lo único que añade además el Instant.
+  imports.add('org.springframework.beans.factory.annotation.Value');
+  if (claims.some((claim) => claim.stalled)) imports.add('java.time.Instant');
   if (claims.some((claim) => claim.stamps)) imports.add('java.time.Instant');
 
   return claims.map((claim) => {
@@ -330,9 +363,9 @@ export function adapterMethods(model, entity, imports, jpaField) {
      */
     @Override
 ${claimTx.annotation}
-    public List<${entity.name}> ${claim.method}(int batchSize) {
+    public List<${entity.name}> ${claim.method}() {
 ${staleBefore}${claimedAt}        List<${enumType}> states = List.of(${stateList(claim, enumType)});
-        List<UUID> candidates = ${jpaField}.candidatesFor${claim.suffix}(states${staleArg}, PageRequest.of(0, batchSize));
+        List<UUID> candidates = ${jpaField}.candidatesFor${claim.suffix}(states${staleArg}, PageRequest.of(0, ${batchField(claim)}));
         List<${entity.name}> claimed = new ArrayList<>();
         for (UUID id : candidates) {
             // 1 = la fila era mía; 0 = otra réplica la reclamó entre el select y el update.
@@ -363,11 +396,14 @@ export function documentAdapterMethods(model, entity, imports) {
   imports.add('org.springframework.data.mongodb.core.query.Query');
   imports.add('org.springframework.data.mongodb.core.query.Update');
   imports.add(`${subPackage(model, 'domain.enums')}.${enumType}`);
-  if (claims.some((claim) => claim.stalled)) {
-    imports.add('java.time.Instant');
-    imports.add('org.springframework.beans.factory.annotation.Value');
-    imports.add('org.springframework.data.domain.Sort');
-  }
+  // Sort va SIEMPRE: todo reclamo documental ordena, con cota temporal o sin ella.
+  imports.add('org.springframework.data.domain.Sort');
+  // El @Value lo pide CUALQUIER reclamo, no solo el rescate: todos leen su cota del
+  // adaptador (`sweep.<op>.batch-size`). Condicionarlo al rescate dejaba un @Value huérfano
+  // en un barrido de COLA sin rescate, y el proyecto no compilaba desde cero — así llegó la
+  // sexta corrida. El plazo del rescate es lo único que añade además el Instant.
+  imports.add('org.springframework.beans.factory.annotation.Value');
+  if (claims.some((claim) => claim.stalled)) imports.add('java.time.Instant');
   if (claims.some((claim) => claim.stamps)) imports.add('java.time.Instant');
 
   return claims.map((claim) => {
@@ -393,19 +429,23 @@ export function documentAdapterMethods(model, entity, imports) {
                     .and("${claim.stalled.stampField}").lt(staleBefore)`
       : '';
     // El más viejo primero, y aquí hay que pedirlo: findAndModify sin orden devuelve lo
-    // que el motor tenga a mano, así que con más atascados que batchSize los más
-    // antiguos podrían no rescatarse nunca.
-    const order = claim.stalled
-      ? `.with(Sort.by(Sort.Direction.ASC, "${claim.stalled.stampField}"))`
-      : '';
+    // que el motor tenga a mano, así que con más candidatos que batchSize los más
+    // antiguos podrían no reclamarse nunca.
+    //
+    // Y vale para los DOS sujetos, no solo para el rescate. Esto ordenaba únicamente cuando
+    // había cota temporal, mientras la rama relacional ordena SIEMPRE (`order by e.<campo>
+    // asc`, con el campo que elige `orderFieldOf`). Esa asimetría no era una diferencia del
+    // motor: era el mismo argumento de arriba aplicado a medias — una cola sin orden deja
+    // filas viejas al fondo indefinidamente en cuanto hay más de las que caben en un lote.
+    const order = `.with(Sort.by(Sort.Direction.ASC, "${orderFieldOf(entity, claim)}"))`;
     return `    /**
      * ${describe(claim, entity.name)}
      */
     @Override
-    public List<${entity.name}> ${claim.method}(int batchSize) {
+    public List<${entity.name}> ${claim.method}() {
 ${staleBefore}${claimedAt}        List<${entity.name}> claimed = new ArrayList<>();
         FindAndModifyOptions options = FindAndModifyOptions.options().returnNew(true);
-        for (int i = 0; i < batchSize; i++) {
+        for (int i = 0; i < ${batchField(claim)}; i++) {
             Query query = Query.query(Criteria.where("${field}").in(List.of(${stateList(claim, enumType)}))${staleCriteria})${order};
             Update update = new Update().set("${field}", ${enumType}.${enumConstant(claim.to)})${stampUpdate};
             ${entity.name}Document document = mongoTemplate.findAndModify(query, update, options, ${entity.name}Document.class);

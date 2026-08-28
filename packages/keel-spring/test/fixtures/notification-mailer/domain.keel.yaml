@@ -8,7 +8,11 @@ types:
 
   NotificationStatus:
     description: En qué punto está el envío pedido.
-    values: [accepted, sent, failed]
+    # `sending` no es un estado de adorno: es la GUARDA de un efecto que no se deshace. Un
+    # correo que sale no lo retira ningún rollback, así que la marca de «esta ejecución se
+    # llevó el envío» tiene que existir para todo el mundo ANTES de mandarlo. Sin un estado
+    # intermedio, dos ciclos que se solapen mandan dos correos reales.
+    values: [accepted, queued, sending, sent, failed]
 
   EmailAddress:
     base: string
@@ -26,8 +30,21 @@ entities:
         required: true
         unique: true
         constraints: { maxLength: 64 }
-        description: Identificador estable del sistema; casa con el client_id de su credencial máquina.
+        description: >-
+          Identificador estable del sistema, y la clave de negocio con la que se le atribuyen sus
+          plantillas y sus envíos. NO es un client_id: un mismo sistema puede tener varias
+          credenciales (la que envía y la de su pipeline), y todas apuntan aquí.
       name: { type: string, required: true, constraints: { maxLength: 120 } }
+      credentialKeys:
+        type: string
+        list: true
+        required: true
+        constraints: { maxItems: 5, maxLength: 64 }
+        description: >-
+          Los `client_id` que resuelven a este sistema. Es la relación que faltaba: con una sola
+          credencial por Application, un sistema con dos —una que envía y otra que publica
+          plantillas desde su pipeline, con scopes disjuntos— dejaba a la segunda sin Application
+          activa, y toda operación suya respondía 403 aunque el sistema estuviera dado de alta.
       defaultSender:
         type: string
         required: true
@@ -78,7 +95,9 @@ entities:
     lifecycle:
       field: status
       transitions:
-        accepted: [sent, failed]
+        accepted: [queued]
+        queued:   [sending]
+        sending:  [sent, failed]
         sent:     []
         failed:   []
     fields:
@@ -86,6 +105,12 @@ entities:
       applicationKey: { type: string, required: true, constraints: { maxLength: 64 } }
       templateKey: { type: string, required: true, constraints: { maxLength: 64 } }
       status: { type: NotificationStatus, required: true }
+      sendingSince:
+        type: timestamp
+        description: >-
+          Cuándo esta ejecución se llevó el envío. Lo estampa el propio reclamo, en la misma
+          escritura que pone el estado en sending: una fila marcada sin instante es una fila
+          que el rescate no encuentra nunca.
       templateVersion:
         type: int
         required: true

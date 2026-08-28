@@ -343,18 +343,21 @@ test('el javadoc del mensaje dice de dónde sale la identidad y qué hacer con u
   assert.ok(message.includes('onUnresolved: discard'));
 });
 
-test('la espera de correo sale del contrato: sin barrido de por medio se queda en el suelo', () => {
-  // En esta fixture el correo sale dentro de la operación que atiende la petición, así
-  // que no hay cron que cubrir. El valor importa menos que el hecho de que exista una
-  // constante: el literal repetido era lo que hacía imposible derivarlo.
+test('la espera de correo cubre la cadencia del barrido que hay en medio', () => {
+  // El correo de esta fixture NO sale dentro de la operación que atiende la petición: lo manda
+  // `sendAcceptedNotification`, a quien un cron encola cada minuto. Una espera fija de 15 s
+  // haría que el escenario saliera verde o rojo según el segundo en que arrancara la suite —
+  // intermitente por el reloj, no por el código—, así que se DERIVA del `schedule` declarado:
+  // el periodo del barrido más el margen, con el suelo y el techo del arnés.
   const { read } = scaffoldMailer();
   const harness = read('src/integrationTest/java/com/platform/notificationmailer/flows/AbstractFlowIT.java');
 
-  assert.ok(harness.includes('private static final int MAIL_AWAIT_SECONDS = 15;'));
+  // 60 s de cadencia + 15 de margen. El valor importa menos que de dónde sale.
+  assert.ok(harness.includes('private static final int MAIL_AWAIT_SECONDS = 75;'), harness.slice(0, 0) || 'no deriva del cron');
   assert.ok(harness.includes('Instant.now().plusSeconds(MAIL_AWAIT_SECONDS)'));
   // Y el margen del Then negativo es el MISMO: con uno menor, «no ha llegado» y
   // «todavía no ha llegado» son indistinguibles y el escenario sale verde siempre.
   assert.ok(harness.includes('sleepQuietly(MAIL_AWAIT_SECONDS * 1000L)'));
-  // El literal ya no está en ninguna de las tres copias que tenía.
+  // Sin literales sueltos: el valor repetido era lo que hacía imposible derivarlo.
   assert.ok(!harness.includes('plusSeconds(15)'));
 });

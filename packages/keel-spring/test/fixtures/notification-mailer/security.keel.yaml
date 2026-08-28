@@ -9,6 +9,7 @@ permissions:
   notification:read: { description: Consultar el estado de un envío. }
   template:write: { description: Registrar o modificar una plantilla. }
   template:publish: { description: Poner una versión de plantilla delante de clientes reales. }
+  application:admin: { description: Dar de alta o de baja un sistema consumidor. }
 
 serviceClients:
   orders-service:
@@ -17,10 +18,17 @@ serviceClients:
   orders-service-ci:
     description: Pipeline de despliegue de pedidos; solo escribe plantillas.
     scopes: [template:write, template:publish]
+  platform-admin:
+    description: >-
+      Operación de la plataforma. Es el único que da de alta sistemas consumidores, y por eso
+      es un cliente aparte: quien manda correo no debería poder autorizarse a sí mismo.
+    scopes: [application:admin]
 
 access:
   default: { level: service, scopes: [notification:send] }
   rules:
+    registerApplication: { level: service, scopes: [application:admin] }
     registerTemplate: { level: service, scopes: [template:write] }
     publishTemplate: { level: service, scopes: [template:publish] }
+    getTemplate: { level: service, scopes: [template:write] }
     getNotification: { level: service, scopes: [notification:read] }

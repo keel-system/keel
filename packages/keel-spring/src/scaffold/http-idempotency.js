@@ -1016,7 +1016,12 @@ public class MongoIdempotencyStore implements IdempotencyStore {
                     resourceId,
                     now,
                     now.plusSeconds(ttlSeconds)));
-        } catch (DataIntegrityViolationException concurrent) {
+        } catch (DataIntegrityViolationException | TransactionSystemException concurrent) {
+            // Las dos familias, por el mismo motivo que en la rama relacional y con una razon
+            // de mas: este save() es @Transactional REQUIRED, o sea que se une a la transaccion
+            // del caso de uso sobre MongoTransactionManager. Un insert duplicado ahi dentro
+            // puede no fallar en el insert sino al CONFIRMAR, y eso no es una excepcion de
+            // acceso a datos: es TransactionSystemException, que se escapaba del catch.
             throw new IdempotencyConflictException(scope, idempotencyKey, concurrent);
         }
     }
@@ -1042,6 +1047,7 @@ public class MongoIdempotencyStore implements IdempotencyStore {
         'org.slf4j.Logger',
         'org.slf4j.LoggerFactory',
         'org.springframework.dao.DataIntegrityViolationException',
+        'org.springframework.transaction.TransactionSystemException',
         'org.springframework.scheduling.annotation.Scheduled',
         'org.springframework.stereotype.Component',
         'org.springframework.transaction.annotation.Transactional'
