@@ -83,6 +83,49 @@ cd services/mi-servicio-spring
 #   /keel-generate-spring                    → sin argumentos; completa el proyecto y valida los escenarios
 ```
 
+## Cómo se genera: cinco agentes iterando
+
+Dentro del proyecto generado, `/keel-generate-spring` **no escribe código**: orquesta cinco
+subagentes y decide el avance (*gating*) sobre el bloque estructurado —`status`, `blockers`,
+`failures`— con el que cada uno cierra su reporte. En el diagrama, los nodos **redondeados con
+🤖** son sesiones de agente (cuestan contexto y tiempo) y los **rectos con ⚙** son deterministas
+—un script o una decisión del orquestador— y no cuestan nada: el camino verde va del script a la
+fase 3 **sin invocar a ningún árbitro**.
+
+Criterio de terminado: `./gradlew build -x test` en verde más `./gradlew integrationTest` con el
+**100 %** de los escenarios `FL-*` en OK contra la infraestructura real.
+
+```mermaid
+flowchart TB
+    BUILD["⚙ keel-spring build (en el workspace)<br/>scaffolding transversal + snapshot del diseño"]
+    BUILD --> F1
+
+    subgraph F1["/keel-generate-spring · fase 1 — tres agentes en paralelo"]
+        CODE(["🤖 keel-spring-code<br/>TODOs, negocio, adaptadores del stack"])
+        INFRA(["🤖 keel-spring-infra<br/>compose up + validate-infra.sh"])
+        TESTS(["🤖 keel-spring-tests<br/>escenarios FL-* → JUnit, en caja negra"])
+    end
+
+    F1 --> SCORE["⚙ fase 2a — infra/score-scenarios.sh<br/>matriz FL-* → OK · FALLO · NO_EJERCITADO<br/>determinista, desde el XML de JUnit"]
+
+    SCORE -->|"1 · hay rojo"| VALIDATE(["🤖 fase 2b — keel-spring-validate<br/>arbitra contra el Then original<br/>culprit: code · test · harness · design"])
+    SCORE -->|"0 · matriz al 100%"| QUALITY
+    SCORE -->|"2 · arnés roto · 3 · entorno bloqueado"| TESTS
+
+    VALIDATE -->|"culprit: code"| CODE
+    VALIDATE -->|"culprit: test o harness"| TESTS
+    VALIDATE -->|"culprit: design o blockers"| STOP[/"Detenerse: el arreglo es del diseño,<br/>no se acomoda el código"/]
+
+    CODE -.->|"tras el fix se vuelve SIEMPRE al script"| SCORE
+    TESTS -.-> SCORE
+
+    QUALITY(["🤖 fase 3 — keel-spring-quality<br/>higiene no-conductual + no-regresión<br/>+ baseline del esquema"])
+    QUALITY --> CLOSE["⚙ cierre: INFORME-GENERACION.md<br/>compose down + commit"]
+```
+
+El pipeline completo —gating, handoffs campo a campo, ciclos de fix y su cupo— está en
+[orchestration.md](packages/keel-spring/assets/generators/spring/orchestration.md).
+
 ## Comandos
 
 | Comando | Qué hace |
