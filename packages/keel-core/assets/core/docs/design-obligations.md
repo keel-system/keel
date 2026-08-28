@@ -86,6 +86,11 @@ coverage:
   major** la aceptación **caduca** y hay que reafirmarla: la asunción que la sostenía puede
   haber dejado de ser cierta. Un patch no la caduca — reafirmar por cada errata corregida
   enseña a subir el número sin leer, que es el hábito que este archivo existe para romper.
+- **Viaja con el diseño.** Al publicarlo (`keel index` lo lista en `files`), al adoptarlo
+  (`keel registry get`, donde sigue vigente porque la versión no cambia) y al derivarlo
+  (`keel new --from`, donde llega para reafirmar). Sin él, el diseño llega mecánicamente válido
+  pero con las decisiones otra vez abiertas, y el `keel-<tech> build` del consumidor lo rechaza
+  por preguntas que el autor ya había contestado.
 - `coverage` responde a la exigencia del análisis de huecos: sin la tabla, una clase que se
   recorrió y salió limpia es indistinguible de una que nadie miró.
 

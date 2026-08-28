@@ -375,6 +375,7 @@ function fullDesign(slug = 'catalog') {
       `specs/${slug}/service.keel.yaml`,
       `specs/${slug}/domain.keel.yaml`,
       `specs/${slug}/use-cases.keel.yaml`,
+      `specs/${slug}/decisions.yaml`,
       `specs/${slug}/validation-scenarios.md`,
       `docs/${slug}/DESIGN.md`,
       `docs/${slug}/overview.html`,
@@ -388,6 +389,7 @@ function fullRoutes(base = 'https://example.test/registry/', slug = 'catalog') {
     [`${base}specs/${slug}/service.keel.yaml`]: { body: 'keel: "2.3"\n' },
     [`${base}specs/${slug}/domain.keel.yaml`]: { body: 'entities: {}\n' },
     [`${base}specs/${slug}/use-cases.keel.yaml`]: { body: 'operations: {}\n' },
+    [`${base}specs/${slug}/decisions.yaml`]: { body: 'decisions: []\n' },
     [`${base}specs/${slug}/validation-scenarios.md`]: { body: '# FL-1\n' },
     [`${base}docs/${slug}/DESIGN.md`]: { body: '# Diseño\n' },
     [`${base}docs/${slug}/overview.html`]: { body: '<html></html>' },
@@ -402,6 +404,7 @@ test('la descarga reparte el spec plano y los derivados de docs/, con sus subrut
 
   assert.equal(result.error, undefined);
   assert.deepEqual(fs.readdirSync(result.dir).sort(), [
+    'decisions.yaml',
     'domain.keel.yaml',
     'service.keel.yaml',
     'use-cases.keel.yaml',
@@ -429,7 +432,7 @@ test('con docs: false solo se piden los artefactos del spec', async () => {
   assert.equal(result.error, undefined);
   assert.deepEqual(result.docsFiles, []);
   assert.deepEqual(fs.readdirSync(result.docsDir), []);
-  assert.equal(fetchImpl.calls.length, 4, 'no debe descargar docs/');
+  assert.equal(fetchImpl.calls.length, 5, 'no debe descargar docs/');
   fs.rmSync(result.root, { recursive: true, force: true });
 });
 
@@ -489,6 +492,22 @@ test('registry get trae el diseño tal cual: nombre, versión y description del 
   // El linaje se estampa aunque nombre y versión coincidan: sin él, la primera
   // evolución sería un fork sin marca.
   assert.match(manifest, /basedOn: billing@1\.2\.0/);
+});
+
+test('adoptar trae decisions.yaml: sin él, el build del consumidor rechaza decisiones ya tomadas', async (t) => {
+  const base = makeWorkspace(t, { localOrigin: false });
+  const registry = withRegistry(t, registryFixture({ files: REGISTRY_FILES }));
+
+  await getRegistryDesign('billing', registry);
+
+  assert.notEqual(process.exitCode, 1);
+  // Adoptar conserva la versión del origen, así que las aceptaciones siguen
+  // vigentes tal cual: es la diferencia con derivar, que las deja por reafirmar.
+  const decisions = fs.readFileSync(path.join(base, 'specs', 'billing', 'decisions.yaml'), 'utf8');
+  assert.match(decisions, /OBL-IDEM-REUSE-CODE/);
+  assert.match(decisions, /since: 1\.2\.0/);
+  // El sidecar sí se queda fuera: es metadato de publicación del origen.
+  assert.equal(fs.existsSync(path.join(base, 'specs', 'billing', 'design.yaml')), false);
 });
 
 test('registry get deja los derivados en docs/<slug>/, no en una subcarpeta origin/', async (t) => {

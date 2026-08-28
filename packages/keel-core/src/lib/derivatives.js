@@ -12,6 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadService } from './loader.js';
+import { SCENARIOS_FILE } from './spec-files.js';
 
 // Cuántos bytes se leen de cada archivo: el sello vive siempre en la cabecera.
 const HEAD_BYTES = 4096;
@@ -109,7 +110,7 @@ const CATALOG = [
     id: 'validation-scenarios',
     producer: '/keel-design',
     location: 'service',
-    file: () => 'validation-scenarios.md',
+    file: () => SCENARIOS_FILE,
     stamp: stampFromBlockquote
   },
   {

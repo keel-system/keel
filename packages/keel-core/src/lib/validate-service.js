@@ -5,6 +5,7 @@ import { LAYERS, schemaPathFor } from './assets.js';
 import { MANIFEST_FILE, loadService } from './loader.js';
 import { checkCrossRefs } from './crossrefs.js';
 import { loadDecisions, resolveObligations } from './decisions.js';
+import { SCENARIOS_FILE } from './spec-files.js';
 
 const Ajv2020 = Ajv2020Module.default ?? Ajv2020Module;
 
@@ -61,7 +62,6 @@ function placeholderDescription(manifest) {
 // compensación tenga sus dos escenarios. Su AUSENCIA no se reporta aquí: que el diseño
 // esté cerrado sin escenarios es cosa de /keel-validate, y a mitad de diseño el archivo
 // no existe todavía. null significa «no hay documento que cruzar», no «documento vacío».
-const SCENARIOS_FILE = 'validation-scenarios.md';
 
 function readScenarios(dir) {
   try {

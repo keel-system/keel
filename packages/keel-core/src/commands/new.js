@@ -4,6 +4,7 @@ import pc from 'picocolors';
 import { templatesDir, isKeelWorkspace } from '../lib/assets.js';
 import { MANIFEST_FILE, KEBAB_NAME, resolveServiceRef, loadService } from '../lib/loader.js';
 import { rewriteManifestForDerivation, rewriteScenariosForDerivation } from '../lib/derive.js';
+import { DECISIONS_FILE, SCENARIOS_FILE, sideFilesOf } from '../lib/spec-files.js';
 import {
   downloadDesign,
   dslMismatchMessage,
@@ -14,9 +15,6 @@ import {
 } from '../lib/registry-source.js';
 
 const SEED_FILES = ['service.keel.yaml', 'domain.keel.yaml', 'use-cases.keel.yaml'];
-
-// Único derivado que vive en el directorio del servicio (ver derivatives.js).
-const SCENARIOS_FILE = 'validation-scenarios.md';
 
 export async function createService(name, options = {}) {
   if (!KEBAB_NAME.test(name)) {
@@ -130,6 +128,15 @@ async function deriveFromRegistry(name, remote, { cwd, serviceDir, options }) {
   }
 }
 
+// Qué se dice de cada archivo heredado en la salida de la derivación: el que llega
+// tal cual del origen no está al día del servicio nuevo, y callarlo es lo que hace
+// que alguien lo dé por bueno.
+function noteFor(file, basedOn) {
+  if (file === SCENARIOS_FILE) return pc.dim(` (heredado de ${basedOn}: regenerarlo al cerrar)`);
+  if (file === DECISIONS_FILE) return pc.dim(` (heredado de ${basedOn}: reafirma cada aceptación)`);
+  return '';
+}
+
 // Deriva specs/<name> clonando un diseño existente: copia el manifiesto reescrito
 // (nombre, versión 0.1.0, linaje basedOn, description pendiente), las capas
 // declaradas tal cual y, si existe, validation-scenarios.md con su cabecera
@@ -179,6 +186,16 @@ function deriveService(name, from, { cwd, serviceDir }) {
     written.push(fileName);
   }
 
+  // Lo que acompaña al diseño dentro de specs/<servicio>/ y viaja al derivar sale
+  // de la tabla de spec-files.js: hoy es decisions.yaml, que llega caducado a
+  // propósito (el derivado resetea a 0.1.0 y keel validate obliga a reafirmar
+  // cada aceptación), igual que los escenarios llegan stale.
+  const inheritedSide = sideFilesOf(originDir, 'derive');
+  for (const file of inheritedSide) {
+    fs.copyFileSync(path.join(originDir, file), path.join(serviceDir, file));
+    written.push(file);
+  }
+
   const scenarios = path.join(originDir, SCENARIOS_FILE);
   const inherited = fs.existsSync(scenarios);
   if (inherited) {
@@ -189,16 +206,22 @@ function deriveService(name, from, { cwd, serviceDir }) {
 
   console.log(pc.bold(pc.green(`✔ Servicio derivado: specs/${name}/ (a partir de ${basedOn})`)));
   for (const file of written) {
-    const note = file === SCENARIOS_FILE ? pc.dim(` (heredado de ${basedOn}: regenerarlo al cerrar)`) : '';
+    const note = noteFor(file, basedOn);
     console.log(`  ${pc.dim('•')} specs/${name}/${file}${note}`);
   }
   console.log('\nPróximos pasos:');
   console.log(`  1. Ajusta el diseño con ${pc.cyan(`/keel-design specs/${name}`)} (arrancará en modo derivación: solo lo que cambia)`);
   console.log(`  2. Redacta la description del manifiesto (quedó marcada como pendiente de revisar)`);
   console.log(`  3. Valida con ${pc.cyan(`keel validate --wip specs/${name}`)}`);
+  let step = 4;
   if (inherited) {
     console.log(
-      `  4. Regenera los escenarios al cerrar: los heredados llevan el sello de ${basedOn} y ${pc.cyan('keel describe')} los marca ${pc.yellow('stale')}`
+      `  ${step++}. Regenera los escenarios al cerrar: los heredados llevan el sello de ${basedOn} y ${pc.cyan('keel describe')} los marca ${pc.yellow('stale')}`
+    );
+  }
+  if (inheritedSide.includes(DECISIONS_FILE)) {
+    console.log(
+      `  ${step++}. Reafirma las decisiones heredadas: su ${pc.cyan('since')} apunta a ${basedOn}, así que ${pc.cyan('keel validate')} las dará por caducadas hasta revisarlas`
     );
   }
 }

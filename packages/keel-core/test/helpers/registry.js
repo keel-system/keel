@@ -32,6 +32,13 @@ export const SCENARIOS_ORIGIN = `# Escenarios de validación — billing
 ## FL-1 Emitir factura
 `;
 
+export const DECISIONS_ORIGIN = `decisions:
+  - id: OBL-IDEM-REUSE-CODE
+    scope: use-cases
+    reason: Reutilizar la respuesta guardada es lo que quiere el negocio.
+    since: 1.2.0
+`;
+
 export const SIDECAR_ORIGIN = `family: billing
 summary: Facturación de referencia.
 maturity: stable
@@ -44,6 +51,7 @@ export const REGISTRY_FILES = {
   'specs/billing/domain.keel.yaml': 'entities:\n  Invoice:\n    fields: {}\n',
   'specs/billing/use-cases.keel.yaml': 'operations: {}\n',
   'specs/billing/design.yaml': SIDECAR_ORIGIN,
+  'specs/billing/decisions.yaml': DECISIONS_ORIGIN,
   'specs/billing/validation-scenarios.md': SCENARIOS_ORIGIN,
   'docs/billing/DESIGN.md': '# Diseño de billing\n',
   'docs/billing/overview.html': '<html></html>',
@@ -126,6 +134,7 @@ export function makeWorkspace(t, { localOrigin = true } = {}) {
     fs.writeFileSync(path.join(originDir, 'domain.keel.yaml'), 'entities:\n  Invoice:\n    fields: {}\n');
     fs.writeFileSync(path.join(originDir, 'use-cases.keel.yaml'), 'operations: {}\n');
     fs.writeFileSync(path.join(originDir, 'validation-scenarios.md'), SCENARIOS_ORIGIN);
+    fs.writeFileSync(path.join(originDir, 'decisions.yaml'), DECISIONS_ORIGIN);
   }
 
   process.chdir(base);

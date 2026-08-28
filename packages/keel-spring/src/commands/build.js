@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import pc from 'picocolors';
-import { isKeelWorkspace, resolveServiceDir, loadService, validateService, copyTree } from 'keel-core';
+import { isKeelWorkspace, resolveServiceDir, loadService, validateService, copyTree, DECISIONS_FILE } from 'keel-core';
 import { SKILL, SUPPORTED_DSL } from '../lib/assets.js';
 import { checkSupportedFeatures } from '../lib/supported-features.js';
 import { scaffoldService } from '../scaffold/index.js';
@@ -87,9 +87,15 @@ export async function build(inputPath, { force = false, defaults = false } = {})
   // generación se ejecuta siempre con el cwd en services/<servicio>-spring/.
 
   // Un diseño en progreso no es generable: validación estricta, sin --wip.
-  const { loadErrors: fullLoadErrors, schemaErrors, crossRefErrors, warnings, pending, ok } = validateService(dir, {
-    wip: false
-  });
+  const {
+    loadErrors: fullLoadErrors,
+    schemaErrors,
+    crossRefErrors,
+    warnings,
+    pending,
+    obligations,
+    ok
+  } = validateService(dir, { wip: false });
 
   for (const { file, errors } of schemaErrors) printSchemaErrors(file, errors);
   for (const message of fullLoadErrors) console.error(pc.red(`✘ ${message}`));
@@ -101,6 +107,28 @@ export async function build(inputPath, { force = false, defaults = false } = {})
   if (crossRefErrors.length > 0) {
     console.error(pc.bold(pc.red(`✘ Referencias cruzadas — ${crossRefErrors.length} error(es):`)));
     for (const message of crossRefErrors) console.error(`  ${pc.red('•')} ${message}`);
+  }
+
+  // Las decisiones de diseño sin cerrar bloquean como un error, así que el
+  // veredicto genérico de abajo tiene que decir cuáles: mientras esto no se
+  // imprimía, un diseño rechazado por una obligación abierta era indistinguible
+  // de uno roto, y la causa solo se veía ejecutando `keel validate` a mano.
+  const sinCerrar = [...obligations.open, ...obligations.stale];
+  if (obligations.errors.length > 0) {
+    console.error(pc.bold(pc.red(`✘ ${DECISIONS_FILE} — ${obligations.errors.length} error(es):`)));
+    for (const message of obligations.errors) console.error(`  ${pc.red('•')} ${message}`);
+  }
+  if (sinCerrar.length > 0) {
+    console.error(pc.bold(pc.red(`✘ Decisiones de diseño sin cerrar — ${sinCerrar.length}:`)));
+    for (const item of sinCerrar) {
+      const caducada = item.since ? pc.dim(` (aceptada en v${item.since}: el diseño cambió, reafírmala)`) : '';
+      console.error(`  ${pc.red('•')} ${pc.cyan(item.id)} ${item.scope}: ${item.message}${caducada}`);
+    }
+    console.error(
+      pc.dim(
+        `  Ciérralas en el diseño, o acéptalas por escrito en ${DECISIONS_FILE} con su motivo — ver docs/design-obligations.md`
+      )
+    );
   }
 
   if (!ok || pending.length > 0) {

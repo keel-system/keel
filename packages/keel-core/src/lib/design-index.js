@@ -24,10 +24,11 @@ import { packageVersion, schemaPathFor, supportedDsl } from './assets.js';
 import { MANIFEST_FILE } from './loader.js';
 import { summarizeService } from './summarize-service.js';
 import { listDerivatives } from './derivatives.js';
+import { SIDECAR_FILE, sideFilesOf } from './spec-files.js';
 
 const Ajv2020 = Ajv2020Module.default ?? Ajv2020Module;
 
-export const SIDECAR_FILE = 'design.yaml';
+export { SIDECAR_FILE } from './spec-files.js';
 export const PUBLISH_FILE = 'publish.yaml';
 export const INDEX_FILE = 'index.json';
 export const README_FILE = 'README.md';
@@ -179,12 +180,17 @@ function countsOf(summary) {
  * POSIX. Es lo que permite a un consumidor remoto descargar un diseño suelto
  * sin clonar el repo ni descomprimir un tarball.
  */
-function filesOf({ cwd, slug, serviceName, layers, metadata, derivatives }) {
+function filesOf({ cwd, slug, serviceName, layers, derivatives }) {
+  const specDir = path.join(cwd, 'specs', slug);
   const files = [`specs/${slug}/${MANIFEST_FILE}`];
   for (const layer of layers) files.push(`specs/${slug}/${layer}.keel.yaml`);
-  if (metadata) files.push(`specs/${slug}/${SIDECAR_FILE}`);
+  // El resto de archivos del directorio del servicio sale de una sola tabla
+  // (spec-files.js): enumerarlos aquí a mano fue como decisions.yaml se quedó
+  // sin viajar. validation-scenarios.md no está entre ellos porque lo aporta el
+  // catálogo de derivados, que además le sigue la frescura.
+  for (const file of sideFilesOf(specDir, 'publish')) files.push(`specs/${slug}/${file}`);
   for (const entry of derivatives) {
-    if (entry.exists) files.push(entry.path);
+    if (entry.exists && !files.includes(entry.path)) files.push(entry.path);
   }
   for (const file of postmanFiles(cwd, serviceName)) {
     if (!files.includes(file)) files.push(file);
@@ -309,7 +315,6 @@ export function buildIndex(cwd = process.cwd()) {
         slug,
         serviceName: inventory.service?.name,
         layers: layers.present,
-        metadata,
         derivatives: inventory.derivatives
       })
     });

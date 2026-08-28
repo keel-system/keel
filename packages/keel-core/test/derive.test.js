@@ -126,6 +126,33 @@ test('keel new --from deriva igual si el origen no tiene escenarios', (t) => {
   assert.equal(fs.existsSync(path.join(base, 'specs', 'billing-eu', 'validation-scenarios.md')), false);
 });
 
+test('keel new --from hereda decisions.yaml: las obligaciones aceptadas viajan con el diseño', (t) => {
+  const base = makeWorkspace(t);
+
+  createService('billing-eu', { from: 'billing' });
+
+  assert.notEqual(process.exitCode, 1);
+  // Llega tal cual, con el `since` del origen: el derivado resetea a 0.1.0 y
+  // `keel validate` dará esas aceptaciones por caducadas hasta reafirmarlas.
+  // Punto de partida, igual que los escenarios; lo que no vale es que se pierda
+  // y el derivado vuelva a levantar decisiones que el autor ya había tomado.
+  const decisions = fs.readFileSync(path.join(base, 'specs', 'billing-eu', 'decisions.yaml'), 'utf8');
+  assert.equal(decisions, fs.readFileSync(path.join(base, 'specs', 'billing', 'decisions.yaml'), 'utf8'));
+  assert.match(decisions, /OBL-IDEM-REUSE-CODE/);
+  // El sidecar no: es metadato de publicación del origen.
+  assert.equal(fs.existsSync(path.join(base, 'specs', 'billing-eu', 'design.yaml')), false);
+});
+
+test('keel new --from deriva igual si el origen no acepta ninguna obligación', (t) => {
+  const base = makeWorkspace(t);
+  fs.rmSync(path.join(base, 'specs', 'billing', 'decisions.yaml'));
+
+  createService('billing-eu', { from: 'billing' });
+
+  assert.notEqual(process.exitCode, 1);
+  assert.equal(fs.existsSync(path.join(base, 'specs', 'billing-eu', 'decisions.yaml')), false);
+});
+
 test('keel new --from acepta el origen como ruta (specs/billing)', (t) => {
   const base = makeWorkspace(t);
 
@@ -165,6 +192,10 @@ test('keel new --from registry trae solo el spec: los derivados del origen no se
   // Derivar implica completar el diseño: DESIGN.md, contratos y panel del origen
   // describen al servicio del origen y se regeneran al cerrar. No hay origin/.
   assert.equal(fs.existsSync(path.join(base, 'docs', 'billing-eu')), false);
+
+  // Y las decisiones aceptadas también: sin ellas el derivado volvería a levantar
+  // obligaciones que el autor del origen ya había cerrado por escrito.
+  assert.match(fs.readFileSync(path.join(base, 'specs', 'billing-eu', 'decisions.yaml'), 'utf8'), /OBL-IDEM-REUSE-CODE/);
 
   // Los escenarios sí, porque viven en el spec.
   assert.match(

@@ -29,6 +29,7 @@ Evaluado el diseño, hay **dos formas de traértelo**, y la diferencia no es de 
 | `description` | intacta | marcada `TODO: revisar…` |
 | `basedOn` | `<slug>@<versión>` | `<slug>@<versión>` |
 | `validation-scenarios.md` | del origen, **al día** | heredado, `stale` |
+| `decisions.yaml` | del origen, **vigente** | heredado, **a reafirmar** |
 | Derivados de `docs/` | en `docs/<slug>/`, **al día** | **no se traen** |
 | Siguiente paso | `keel-<tech> build` | `/keel-design` |
 
@@ -49,6 +50,12 @@ Dos cosas que no se copian, a propósito:
   cambies algo y `/keel-evolve` suba la versión habrás forkeado sin marca, y no quedará forma mecánica de
   saber de dónde venía.
 
+Y una que **sí** viaja, porque no es metadato sino diseño: **`decisions.yaml`**, donde viven las
+obligaciones que el autor aceptó por escrito. Adoptar conserva la versión del origen, así que esas
+aceptaciones siguen vigentes tal cual y `keel validate` las cuenta sin pedir nada. Sin ese archivo, el
+diseño llegaría mecánicamente válido pero con decisiones «sin cerrar», y tu `keel-<tech> build` lo
+rechazaría por preguntas que el autor ya había contestado.
+
 Si luego necesitas cambiar el diseño adoptado, no es una derivación: es una **evolución** normal, y entra
 por `/keel-evolve specs/<diseño>`.
 
@@ -66,6 +73,12 @@ También se clona `validation-scenarios.md`, con la ruta de su cabecera reapunta
 son el **punto de partida** —el inventario de obligaciones que ya estaba resuelto—, no el contrato de tu
 servicio; se regeneran al cerrar el diseño derivado.
 
+`decisions.yaml` se clona igual, y por la misma razón: las obligaciones que el origen cerró por escrito
+son el punto de partida del derivado, no ruido. Ahora bien, su `since` apunta a la versión del origen y
+el derivado nace en `0.1.0`, así que `keel validate` las dará por **caducadas** hasta que las reafirmes
+—que es lo correcto: el diseño va a cambiar, y la asunción que sostenía cada aceptación puede dejar de
+ser cierta—.
+
 **Los derivados de `docs/` no se traen.** `DESIGN.md`, los contratos formales, el panel e `INTEGRATION.md`
 describen al servicio del origen, y derivar significa que vas a completar el diseño: se regeneran de todas
 formas al cerrarlo, con `/keel-handoff`, `/keel-docs` y `/keel-integrate`. Si lo que querías era quedártelos,
@@ -80,6 +93,12 @@ En ambos casos, lo que se descarga es lo que el `index.json` del registry lista 
 Si el diseño tenía derivados sin generar cuando se indexó, `keel registry get` lo dice (`el registry publica
 N de M derivados`) en vez de dejar que los eches de menos: adoptando duele más, porque no ibas a regenerar
 nada. El arreglo es del lado del registry —generarlos y reindexar con `keel index`—, no tuyo.
+
+Ese `files` lo compone `keel index` a partir de una sola lista de artefactos: manifiesto, capas
+declaradas, `design.yaml`, `decisions.yaml`, los derivados que existen y las colecciones Postman. Que la
+lista sea única no es limpieza: mientras cada camino enumeraba los archivos por su cuenta, `decisions.yaml`
+se quedó fuera de dos de ellos sin que nada lo notara, y los diseños que aceptaban obligaciones por escrito
+llegaban al consumidor con esas decisiones otra vez abiertas.
 
 ### Red, caché y fuentes alternativas
 

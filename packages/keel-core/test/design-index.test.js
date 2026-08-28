@@ -47,6 +47,7 @@ function workspace(designs, { readme = defaultReadme(), publish = null } = {}) {
       description = `Diseño de referencia de ${slug} para las pruebas.`,
       layers = ['domain', 'use-cases'],
       sidecar = null,
+      decisions = null,
       docs = {},
       manifest = null
     } = spec;
@@ -71,6 +72,7 @@ function workspace(designs, { readme = defaultReadme(), publish = null } = {}) {
     for (const layer of layers) write(path.join(dir, `${layer}.keel.yaml`), content[layer] ?? '{}\n');
 
     if (sidecar) write(path.join(dir, 'design.yaml'), sidecar);
+    if (decisions) write(path.join(dir, 'decisions.yaml'), decisions);
     for (const [file, body] of Object.entries(docs)) write(path.join(cwd, 'docs', name, file), body);
   }
 
@@ -243,6 +245,39 @@ test('files lista el manifiesto, las capas, el sidecar y los derivados que exist
   ]);
   assert.equal(design.docs.design, 'docs/catalog/DESIGN.md');
   assert.equal(design.docs.overview, null);
+});
+
+test('files lleva decisions.yaml: sin él, el consumidor recibe un diseño que su build rechaza', () => {
+  // El agujero que esto cierra: un diseño que acepta obligaciones por escrito se
+  // publicaba sin ese archivo, y `keel-<tech> build` lo rechazaba en destino por
+  // decisiones que el autor ya había tomado.
+  const cwd = workspace({
+    catalog: {
+      sidecar: sidecar({ summary: 'Resumen suficientemente largo.', maturity: 'stable' }),
+      decisions: `decisions:
+  - id: OBL-IDEM-REUSE-CODE
+    scope: use-cases
+    reason: Aceptada a propósito.
+    since: 1.0.0
+`
+    }
+  });
+  const design = bySlug(buildIndex(cwd)).catalog;
+
+  assert.deepEqual(design.files, [
+    'specs/catalog/service.keel.yaml',
+    'specs/catalog/domain.keel.yaml',
+    'specs/catalog/use-cases.keel.yaml',
+    'specs/catalog/design.yaml',
+    'specs/catalog/decisions.yaml'
+  ]);
+});
+
+test('sin decisions.yaml, files no lo inventa', () => {
+  const cwd = workspace({ catalog: {} });
+  const design = bySlug(buildIndex(cwd)).catalog;
+
+  assert.equal(design.files.some((file) => file.endsWith('decisions.yaml')), false);
 });
 
 test('files publica todas las colecciones Postman, no solo la que el catálogo de derivados sella', () => {

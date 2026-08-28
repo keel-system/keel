@@ -4,10 +4,11 @@ import YAML from 'yaml';
 import Ajv2020Module from 'ajv/dist/2020.js';
 import { schemaPathFor } from './assets.js';
 import { obligationFor } from './obligations.js';
+import { DECISIONS_FILE } from './spec-files.js';
 
 const Ajv2020 = Ajv2020Module.default ?? Ajv2020Module;
 
-export const DECISIONS_FILE = 'decisions.yaml';
+export { DECISIONS_FILE } from './spec-files.js';
 
 let validator;
 
