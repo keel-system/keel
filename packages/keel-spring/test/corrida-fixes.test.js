@@ -1091,3 +1091,54 @@ test('el correo lleva copias: el campo del agregado viaja hasta la cabecera Cc',
   // servidores, que es basura visible en el correo de alguien.
   assert.match(smtp, /if \(!message\.cc\(\)\.isEmpty\(\)\) \{/);
 });
+
+// ─── Sexta corrida: notification-mailer, y lo que faltaba era un `tokenFor` que no debía existir ──
+//
+// `corrida-mail-guard` cerró 22/22, pero el informe (`INFORME-INTENTO-3-cerrado-22-22.md` §1)
+// dejó anotado un hallazgo del generador sin test que lo fijara: el diseño es todo `level:
+// service` — `security.roles` sale vacío — y aun así `AbstractFlowIT` prometía en el javadoc de
+// `tokenFor` «un usuario por rol», que `init-keycloak.sh` nunca crea cuando no hay roles. Quien
+// lo invocara se llevaba un `invalid_grant` sin relación aparente con la causa real.
+
+test('sin roles de usuario, tokenFor no se emite: nadie promete un usuario que el aprovisionamiento no siembra', () => {
+  // `init-keycloak.sh` solo abre el bloque "Usuarios de prueba" cuando `roles.length > 0`
+  // (auth-provisioning.js § keycloakScript). Con un diseño todo `level: service` ese bloque no
+  // existe, así que emitir `tokenFor` sería documentar y ofrecer un método que solo puede
+  // fallar. El arreglo no fue corregir el javadoc —el mismo método cuyo javadoc ya falló dos
+  // veces en este repo, ver más arriba «la regla del token está donde se decide guardarlo»—:
+  // fue no emitirlo. `serviceCredential` sigue disponible, porque la superficie M2M no depende
+  // de que haya roles de usuario.
+  const harness = project('notification-mailer', {
+    group: 'com.test', database: 'postgresql', broker: 'snssqs', auth: 'keycloak'
+  }).file('AbstractFlowIT.java');
+
+  assert.ok(!harness.includes('protected String tokenFor(String role)'), harness.slice(0, 200));
+  assert.ok(!harness.includes('un usuario por rol'), 'no debe prometer un usuario que nadie crea');
+  assert.match(harness, /protected String serviceCredential\(String client\)/);
+});
+
+test('y el aprovisionamiento no siembra el bloque de usuarios que ya no se promete', () => {
+  // La otra mitad de la misma verdad: si el arnés dejó de prometer usuarios, el script que
+  // aprovisiona el realm tampoco debería fingir crearlos. `keycloakScript()` ya lo hacía bien
+  // —el bloque va dentro de `if (roles.length > 0)`— pero nada lo ataba al lado del arnés hasta
+  // ahora: los dos podían divergir sin que ningún test lo notara.
+  const initKeycloak = project('notification-mailer', {
+    group: 'com.test', database: 'postgresql', broker: 'snssqs', auth: 'keycloak'
+  }).file('init-keycloak.sh');
+
+  assert.ok(!initKeycloak.includes('Usuarios de prueba'));
+  // Y el aprovisionamiento M2M sí sigue, porque el diseño lo necesita: tres clientes de servicio.
+  assert.match(initKeycloak, /clientId=orders-service/);
+});
+
+test('y con roles declarados, las dos piezas vuelven a aparecer juntas', () => {
+  // La simétrica: `asset-vault` sí declara roles de usuario, así que aquí `tokenFor`
+  // y el bloque de usuarios tienen que estar los dos — si solo apareciera uno, el arnés y
+  // el aprovisionamiento medirían cosas distintas otra vez.
+  const project_ = project('asset-vault', {
+    group: 'com.test', database: 'postgresql', broker: 'snssqs', auth: 'keycloak', cache: null, storage: 'minio'
+  });
+
+  assert.match(project_.file('AbstractFlowIT.java'), /protected String tokenFor\(String role\)/);
+  assert.match(project_.file('init-keycloak.sh'), /Usuarios de prueba/);
+});

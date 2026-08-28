@@ -803,6 +803,41 @@ test('AbstractFlowIT con capa security: credenciales por rol contra el proveedor
   assert.ok(initKeycloak.includes('exit 1'));
 });
 
+test('AbstractFlowIT con capa security toda level:service: sin roles no hay tokenFor que prometa un usuario inexistente', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const patched = structuredClone(layers);
+  patched.security = {
+    authentication: { protocol: 'oidc', serviceAuth: { protocol: 'oauth2', validateAudience: true } },
+    // Sin `roles`: el diseño de la sexta corrida (notification-mailer) era todo `level:
+    // service`, sin ningún acceso de usuario. `init-keycloak.sh` solo crea el bloque de
+    // "usuarios de prueba" cuando `roles.length > 0` (ver auth-provisioning.js § keycloakScript),
+    // así que emitir `tokenFor` aquí prometería un usuario que el aprovisionamiento nunca
+    // siembra — el `invalid_grant` de la sexta corrida. `serviceCredential` sigue haciendo
+    // falta: la superficie M2M no depende de que existan roles de usuario.
+    access: {
+      default: { level: 'service' },
+      rules: { listProducts: { level: 'service', scopes: ['catalog:read'] } }
+    },
+    serviceClients: { billing: { scopes: ['catalog:read'] } }
+  };
+  const patchedManifest = structuredClone(manifest);
+  patchedManifest.layers.security = 'security.keel.yaml';
+
+  scaffoldService({ manifest: patchedManifest, layers: patched, workspace });
+
+  const abstractFlow = read(workspace, 'src/integrationTest/java/com/commerce/productcatalog/flows/AbstractFlowIT.java');
+  assert.ok(!abstractFlow.includes('protected String tokenFor(String role)'));
+  assert.ok(!abstractFlow.includes('un usuario por rol'), 'no debe prometer un usuario que nadie crea');
+  assert.ok(abstractFlow.includes('protected String serviceCredential(String client)'));
+
+  // Y el aprovisionamiento coincide: sin roles, `init-keycloak.sh` no lleva el bloque de
+  // usuarios de prueba (sería sembrar una promesa que ya no existe en el arnés).
+  const initKeycloak = read(workspace, 'infra/init-keycloak.sh');
+  assert.ok(!initKeycloak.includes('Usuarios de prueba'));
+  assert.ok(initKeycloak.includes('clientId=billing'));
+});
+
 test('sin capa security no hay aprovisionamiento de identidad que generar', () => {
   const workspace = makeWorkspace();
   scaffoldService({ ...loadFixture(), workspace });
