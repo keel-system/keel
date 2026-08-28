@@ -1,6 +1,6 @@
 {
   "name": "keel-core",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Diseña servidores como artefactos agnósticos de tecnología y genera implementaciones con agentes. `keel init` siembra un workspace completo.",
   "type": "module",
   "bin": {
