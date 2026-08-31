@@ -2,6 +2,12 @@
   "name": "keel-monorepo",
   "private": true,
   "type": "module",
+  "author": "asuridev",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/keel-system/keel.git"
+  },
   "workspaces": ["packages/*"],
   "scripts": {
     "test": "npm test --workspaces --if-present",

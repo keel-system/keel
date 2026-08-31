@@ -206,3 +206,9 @@ Los assets **son** la metodología: el DSL se documenta en `packages/keel-core/a
 - **Un generador en producción**: `keel-spring` (Spring Boot 3.5 / Java 21), con orquestación de cinco subagentes y puntuación determinista de escenarios. Criterio de terminado: `./gradlew build -x test` en verde más `./gradlew integrationTest` con el 100% de los escenarios `FL-*` en OK contra la infraestructura real.
 - **Publicado en npm**: [`keel-core`](https://www.npmjs.com/package/keel-core) y [`keel-spring`](https://www.npmjs.com/package/keel-spring), instalables con `npm i -g`.
 - **Pendiente**: más generadores (`keel-nest`, `keel-fastapi`); detección de drift entre spec y **código generado** —la de spec ↔ documentación ya la cubren los sellos de versión y `keel describe`—; sincronización inversa.
+
+## Autor y licencia
+
+Keel lo diseña y mantiene **[asuridev](https://github.com/asuridev)** — el DSL, la metodología, la CLI y el generador Spring.
+
+Publicado bajo licencia [MIT](LICENSE). Si lo usas en un proyecto o construyes un generador sobre él, la atribución se agradece; las [issues](https://github.com/keel-system/keel/issues) y las propuestas de generador, más.
