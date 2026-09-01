@@ -312,6 +312,20 @@ test('el relay se pausa mientras se recrea la topología, y solo donde se pierde
 // y se queda ahí —pérdida de datos en el mecanismo cuya única promesa es que no se pierde
 // nada—, y lo único que ocurría era un log.error: nada que alertar en producción, y nada
 // que un escenario pueda afirmar.
+// Salió del cierre de la corrida de customer-refunds: la suite acabó al 100% y en
+// `build/keel-failures/` seguían los cinco volcados de la pasada anterior. Un volcado que
+// sobrevive a una corrida verde se lee igual que uno recién escrito, y la matriz solo cita
+// la ruta de los fallos de ESTA pasada — así que no informa de nada, engaña.
+test('la puntuación borra la evidencia de la corrida anterior antes de empezar', () => {
+  const script = project('stock-reservation', SNSSQS).file('score-scenarios.sh');
+
+  const iPurga = script.indexOf('rm -rf "$EVIDENCE"');
+  assert.ok(iPurga > 0, 'la puntuación no purga los volcados de la pasada anterior');
+  // Antes de correr nada, no después: purgar al final dejaría sin evidencia el fallo que
+  // acaba de ocurrir, que es justo para lo que existe.
+  assert.ok(iPurga < script.indexOf('./gradlew integrationTest'), script.slice(iPurga - 120, iPurga + 120));
+});
+
 test('el outbox publica cuántos eventos se rindió, y el arnés lo lee por HTTP', () => {
   const generated = project('stock-reservation', SNSSQS);
   const relay = generated.file('OutboxRelay.java');

@@ -311,6 +311,13 @@ fi
 
 mkdir -p "$LOG_DIR"
 
+# La evidencia de la corrida ANTERIOR se borra antes de empezar, y no es limpieza: un
+# volcado que sobrevive a una corrida verde se lee igual que uno recién escrito. La matriz
+# solo cita la ruta de los fallos de ESTA pasada, así que un volcado de hace tres
+# horas junto a un 100% no informa de nada — engaña, que es peor. Mismo motivo por el que el
+# log de Gradle se sobrescribe en vez de acumularse.
+rm -rf "$EVIDENCE"
+
 # ¿Lo que tumbó a Gradle fue un lock y no un defecto? Las cuatro formas en que se
 # manifiesta el mismo hecho: el lock propio de Gradle, y el del sistema de archivos
 # en sus dos dialectos (POSIX y Windows). Se mira el LOG y no el código de salida
