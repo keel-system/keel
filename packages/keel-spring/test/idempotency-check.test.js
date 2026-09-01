@@ -80,11 +80,23 @@ function run(project) {
   }
 }
 
-test('un diseño con las seis familias genera el script con las seis', () => {
+test('un diseño con todas sus familias genera el script con todas', () => {
   const project = build('catalog-extended');
   const content = read(project);
 
-  for (const group of ['dedupe', 'payloadContract', 'commandIdempotency', 'compensation', 'reconciliation', 'outboxDelivery']) {
+  // Ocho, no seis: `domainEvent` (el raise en el agregado) y `outboundIdempotency`
+  // (la cabecera que viaja al proveedor) también salen de este diseño. La lista es
+  // literal a propósito — una familia nueva que no se añada aquí queda sin probar.
+  for (const group of [
+    'dedupe',
+    'payloadContract',
+    'commandIdempotency',
+    'compensation',
+    'domainEvent',
+    'reconciliation',
+    'outboundIdempotency',
+    'outboxDelivery'
+  ]) {
     assert.ok(content.includes(`${group}_ko=0`), `falta la familia ${group}`);
   }
 });
@@ -359,6 +371,122 @@ test('con el reclamo generado el gate exige LLAMARLO, y retira los tres checks d
   }
 });
 
+// Un diseño puede tener DOS barridos: uno cuya activación deja esperando a una sola
+// entidad —build le genera el reclamo— y otro que deja esperando a dos, donde «el lote»
+// no está definido y el reclamo lo escribe el agente. Los tres checks genéricos existen
+// para el segundo, pero se buscan en TODO el árbol: el reclamo que build generó para el
+// primero los satisface por su cuenta —lleva su Pageable y habla de candidatos— y deja
+// sin mirar justo el barrido que hay que escribir a mano. Falso verde sobre la mitad
+// más frágil de la reconciliación.
+const dosBarridosUnoReclamable = (layers) => {
+  // `updateProduct` no declara transitions, así que esta activación no deja a nadie
+  // esperando y build no puede reclamarla. La de al lado (recordWithdrawal) sigue
+  // generándose: eso es lo que hace la mezcla.
+  layers.dependencies.dependencies.compliance.activations.notifyRegistryChange = {
+    description: 'Aviso al registro de un cambio de ficha.',
+    triggeredBy: ['updateProduct'],
+    via: { client: 'compliance', call: 'cancelWithdrawal' },
+    effect: 'El registro conoce la ficha nueva.',
+    awaits: 'acknowledgement',
+    reconciledBy: 'reconcileWithdrawals',
+    unansweredAfterSeconds: 3600,
+    awaitingSince: 'recordWithdrawalAwaitingSince',
+    onFailure: { action: 'ignore' }
+  };
+};
+
+// La corrida de customer-refunds sacó este check ROJO sobre un barrido CORRECTO. Con dos
+// barridos, el agente hizo lo que había que hacer: reutilizar el ReconciliationClaimStore
+// que build generó para el reclamable, en vez de escribir un segundo mecanismo. El único
+// @Modifying del store vive en ReconciliationClaimJpaRepository, que la exclude filtra —
+// así que el check pedía la implementación INCORRECTA, y su camino de menor resistencia
+// era duplicar el mecanismo para callarlo.
+test('llamar al store de reclamos que build generó cuenta como marca persistida', (t) => {
+  const project = build('catalog-extended', dosBarridosUnoReclamable);
+  const before = run(project);
+  if (before === null) return t.skip('sin bash en el PATH');
+  assert.ok(reports(before.out, 'reclamo del barrido'));
+
+  const adapter = path.join(project, 'src/main/java/com/commerce/catalog/infrastructure/persistence');
+  fs.mkdirSync(adapter, { recursive: true });
+  const file = path.join(adapter, 'PendingSweepAdapter.java');
+  const usandoElStore = [
+    'package com.commerce.catalog.infrastructure.persistence;',
+    '',
+    'public class PendingSweepAdapter {',
+    '',
+    '    public java.util.List<java.util.UUID> claimForPendingSweep() {',
+    '        java.util.List<java.util.UUID> candidates = repo.candidatesForPendingSweep(states, staleBefore, org.springframework.data.domain.PageRequest.of(0, batchSize));',
+    '        java.util.List<java.util.UUID> claimed = new java.util.ArrayList<>();',
+    '        for (java.util.UUID id : candidates) {',
+    '            if (reconciliationClaims.claim("notifyRegistryChange", id, now, claimExpiredBefore)) {',
+    '                claimed.add(id);',
+    '            }',
+    '        }',
+    '        return claimed;',
+    '    }',
+    '}'
+  ].join(String.fromCharCode(10));
+  fs.writeFileSync(file, usandoElStore);
+
+  const green = run(project).out;
+  assert.ok(!reports(green, 'reclamo del barrido'), green);
+  assert.ok(!reports(green, 'lote del barrido'), green);
+
+  // Y leer en vez de reclamar sigue siendo rojo, que es lo que el check existe para ver.
+  fs.writeFileSync(
+    file,
+    usandoElStore.replace(
+      "if (reconciliationClaims.claim(" + JSON.stringify("notifyRegistryChange") + ", id, now, claimExpiredBefore))",
+      "if (repo.findAllByStatus(states).contains(id))"
+    )
+  );
+  assert.ok(reports(run(project).out, 'reclamo del barrido'));
+});
+
+// Los patrones de un check `claim` viajan por AWK además de por grep: methodBody los usa
+// para recortar el bloque. awk no entiende \s, \. ni \( —se come el escape y deja una
+// regexp desbalanceada que ABORTA el check—, y el efecto es un hallazgo falso que se lee
+// igual que uno real. Pasó al añadir el patrón del store, y por eso hay guarda.
+test('ningún patrón de un check claim usa escapes que awk no entiende', () => {
+  const content = read(build('catalog-extended', dosBarridosUnoReclamable));
+  const filas = content.split(String.fromCharCode(10)).filter((line) => line.startsWith('claim '));
+  assert.ok(filas.length > 0, 'no hay checks claim que revisar');
+  for (const fila of filas) {
+    // Los dos primeros argumentos entrecomillados tras el sujeto son patrón y bound.
+    const patrones = fila.match(/'[^']*'/g) ?? [];
+    for (const patron of patrones.slice(2, 4)) {
+      assert.ok(
+        !/\\[sdwSDW.(){}]/.test(patron),
+        `patrón con escape que awk no soporta: ${patron} — usa clases entre corchetes`
+      );
+    }
+  }
+});
+
+test('el reclamo que build generó no cuenta como el reclamo que el agente debe escribir', () => {
+  const content = read(build('catalog-extended', dosBarridosUnoReclamable));
+
+  // Los tres checks del agente están: hay un barrido sin reclamo generado.
+  for (const subject of ['reclamo del barrido', 'lote del barrido']) {
+    assert.ok(content.includes(`'${subject}'`), `falta el check del agente: ${subject}`);
+  }
+  // Y llevan el descarte de lo que build generó para el OTRO barrido. Se descarta el
+  // BLOQUE y no el archivo: el reclamo del agente cabe en el mismo adaptador, y
+  // prohibírselo sería pedirle la implementación incorrecta.
+  const rows = content.split(String.fromCharCode(10)).filter((line) => line.startsWith('claim '));
+  // Los dos que se buscan POR BLOQUE. El del umbral queda fuera a sabiendas: mira el
+  // archivo entero, así que descartarlo por bloque descartaría el adaptador completo — y
+  // el umbral del barrido que el agente escribe cabe justo ahí. Ese sigue pudiendo salir
+  // verde por el @Value que build generó para el otro barrido, y es una limitación
+  // conocida: cerrarla pidiendo otra ubicación sería pedir la implementación incorrecta.
+  const genericas = rows.filter((line) => /'(reclamo|lote) del barrido'/.test(line));
+  assert.equal(genericas.length, 2, 'no se emitieron los dos checks genéricos con alcance de bloque');
+  for (const row of genericas) {
+    assert.match(row, /ReconcileWithdrawalsRecordWithdrawal/, row);
+  }
+});
+
 test('los comentarios no cuentan como código: el TODO que se caza es el vivo', (t) => {
   const project = build('catalog-extended');
   const handler = execFileSync(
@@ -376,9 +504,74 @@ test('los comentarios no cuentan como código: el TODO que se caza es el vivo', 
     .replace(/throw new UnsupportedOperationException\([^;]*\);/g, 'product.reactivate();');
   fs.writeFileSync(path.join(project, handler), implementado);
 
+  // Y la otra mitad de la compensación, que vive en el AGREGADO: devolver la fila a
+  // su estado. Sin esto la familia sigue roja aunque el handler esté impecable, que
+  // es justo lo que se le añadió al gate.
+  const aggregate = javaFile(project, 'Product.java');
+  if (!aggregate) return t.skip('sin bash en el PATH');
+  fs.writeFileSync(aggregate, conReactivate(fs.readFileSync(aggregate, 'utf8')));
+
   const result = run(project);
   if (result === null) return t.skip('sin bash en el PATH');
   assert.ok(!/\[compensation\]/.test(result.out), result.out);
+});
+
+// El método semántico que la compensación necesita en el agregado. Se escribe aquí una
+// sola vez porque lo usan dos tests: el de los comentarios (donde tiene que callar al
+// gate) y el de abajo (donde su ausencia tiene que ponerlo rojo).
+const conReactivate = (src) =>
+  src.replace(
+    /(private void transitionTo\()/,
+    'public void reactivate() {\n        transitionTo(ProductStatus.ACTIVE);\n    }\n\n    $1'
+  );
+
+// Deshacer a medias es peor que no deshacer: deja al proveedor y al estado propio
+// contando historias distintas. El gate exigía la llamada de vuelta y que no quedaran
+// TODO, pero no que la fila volviera a su sitio — así que un handler que avisa fuera y
+// no toca el lifecycle salía en verde.
+test('compensación: sin la transición de vuelta en el agregado, el gate se pone rojo', (t) => {
+  const project = build('catalog-extended');
+  const aggregate = javaFile(project, 'Product.java');
+  if (!aggregate) return t.skip('sin bash en el PATH');
+
+  const result = run(project);
+  if (result === null) return t.skip('sin bash en el PATH');
+  assert.match(result.out, /\[compensation\][^\n]*estado de Product/, result.out);
+
+  // Y con ella escrita, ese hallazgo concreto desaparece.
+  const conTransicion = mutating(project, aggregate, conReactivate);
+  if (conTransicion === null) return t.skip('sin bash en el PATH');
+  assert.ok(
+    !/\[compensation\][^\n]*estado de Product/.test(conTransicion.out),
+    conTransicion.out
+  );
+});
+
+// La cabecera de idempotencia saliente la cablea build, pero en ESE MISMO método deja
+// los TODO del contract: completarlos es reescribir el RestClient alrededor de la línea
+// de la cabecera. Perderla no rompe nada visible — el retry sigue funcionando y le
+// encarga al proveedor el mismo trabajo otra vez.
+test('outboundIdempotency: sin la cabecera cableada, el gate se pone rojo', (t) => {
+  const project = build('catalog-extended');
+  const adapter = javaFile(project, 'ComplianceHttpAdapter.java');
+  if (!adapter) return t.skip('sin bash en el PATH');
+
+  // Recién generado la cabecera YA está: es la única familia que sale verde sobre el
+  // árbol de build, y esa asimetría es el dato — aquí build cablea también el uso.
+  const limpio = run(project);
+  if (limpio === null) return t.skip('sin bash en el PATH');
+  assert.ok(!/\[outboundIdempotency\]/.test(limpio.out), limpio.out);
+
+  // El defecto real que se reintroduce: una clave nueva en cada intento. No falla,
+  // duplica — que es exactamente lo que la cabecera existe para evitar.
+  const result = mutating(project, adapter, (src) =>
+    src.replace(
+      /OutboundIdempotency\.fromPayload\(\s*"recordWithdrawal"[^)]*\)/,
+      'java.util.UUID.randomUUID().toString()'
+    )
+  );
+  if (result === null) return t.skip('sin bash en el PATH');
+  assert.match(result.out, /\[outboundIdempotency\][^\n]*recordWithdrawal/, result.out);
 });
 
 // La familia `dedupe` comprobaba el ORDEN y el USO del guard —que eran correctos— y

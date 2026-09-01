@@ -42,14 +42,31 @@ export function persistedMembers(model, entity) {
         field,
         vo,
         name: field.name,
-        subs: (vo?.fields ?? []).map((sub) => ({
-          name: `${field.name}${capitalize(sub.name)}`,
-          voAccessor: sub.name,
-          javaType: sub.javaType,
-          imports: sub.imports,
-          subKind: sub.kind,
-          column: quoteIdentifier(`${snakeCase(field.name)}_${snakeCase(sub.name)}`)
-        }))
+        subs: (vo?.fields ?? []).map((sub) => {
+          const column = quoteIdentifier(`${snakeCase(field.name)}_${snakeCase(sub.name)}`);
+          return {
+            name: `${field.name}${capitalize(sub.name)}`,
+            voAccessor: sub.name,
+            javaType: sub.javaType,
+            imports: sub.imports,
+            subKind: sub.kind,
+            column,
+            // El @Column COMPLETO, no solo su nombre. Compuesto a mano en el
+            // renderizador se quedaba en el nombre y perdía todo lo demás —`nullable`,
+            // `length`, `precision/scale`, `columnDefinition`—, que es justo lo único
+            // que llega al DDL: un Money con `scale: 2` salía `numeric(38,2)` por el
+            // DEFAULT de Hibernate y no por el diseño (con `scale: 4` habría seguido
+            // diciendo 2), y su `currency` de tres letras salía `varchar(255)`. Es el
+            // mismo defecto que ya se corrigió para la columna de un `list: true`, y
+            // `embeddables.js` ya lo hacía bien para el VO de una colección: el camino
+            // aplanado era el que quedaba fuera.
+            //
+            // El `nullable = false` se cae si el VO ENTERO es opcional: un Money que el
+            // diseño no exige no puede dejar columnas NOT NULL, o la fila sin importe no
+            // se puede insertar.
+            columns: flattenedColumns(sub, column, field.required)
+          };
+        })
       });
     } else {
       members.push({ kind: 'scalar', field, name: field.name, javaType: field.javaType });
@@ -211,4 +228,20 @@ export function uniqueConstraints(model) {
 // no hay nada que heredar.
 export function usesAuditableEntity(model) {
   return model.audit?.timestamps === 'all' || model.audit?.authorship === 'all';
+}
+
+/**
+ * Las anotaciones de columna de un sub-campo de value object, con el nombre aplanado.
+ *
+ * Se reescribe el `name` en vez de volver a resolver el campo: `columnAnnotations()` ya
+ * corrió sobre el sub-campo (lo hace `collectValueObjects`), así que aquí solo cambia
+ * dónde aterriza, no qué se declaró.
+ */
+function flattenedColumns(sub, column, ownerRequired) {
+  return (sub.columns ?? [])
+    .filter((annotation) => annotation.startsWith('@Column'))
+    .map((annotation) => {
+      const renamed = annotation.replace(/name = "[^"]*"/, `name = "${column}"`);
+      return ownerRequired ? renamed : renamed.replace(', nullable = false', '');
+    });
 }

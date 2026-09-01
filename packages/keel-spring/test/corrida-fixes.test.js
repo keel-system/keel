@@ -297,6 +297,25 @@ test('el relay se pausa mientras se recrea la topología, y solo donde se pierde
   assert.match(harness, /No se canceló ninguna tarea programada/);
 });
 
+// Un escenario cuyo disparador es un mensaje ENTRANTE con el canal de SALIDA caído no se
+// podía escribir: stopBroker() tumba el contenedor entero y tarda en cortar conexiones de
+// verdad, así que el relay publica dentro de esa ventana y el reinicio se lleva el mensaje
+// ya entregado — un fallo de outbox que en realidad es de timing. En la corrida de
+// customer-refunds el agente lo resolvió PARCHEANDO el arnés, que es 100% de build: el
+// siguiente `build --force` se lo habría llevado.
+test('el arnés da la palanca fina para tumbar la salida con la entrada viva', () => {
+  const harness = project('stock-reservation', SNSSQS).file('AbstractFlowIT.java');
+
+  // Los tres, y los tres accesibles desde una clase de flujo: en `protected` no por
+  // gusto, sino porque el escenario que los necesita vive en otra clase.
+  assert.match(harness, /protected static void pauseOutboxRelay\(\)/);
+  assert.match(harness, /protected static void resumeOutboxRelay\(\)/);
+  assert.match(harness, /protected static void awaitBrokerStopped\(\)/);
+  // Y el javadoc enseña el patrón entero, con el resume en un finally: pausar el relay y
+  // no reanudarlo es un servicio que deja de publicar sin que nadie lo note.
+  assert.ok(harness.includes('resumeOutboxRelay();       // SIEMPRE'), harness);
+});
+
 test('los brokers que conservan su topología no llevan nada de eso', () => {
   // Kafka y RabbitMQ no la pierden al reiniciar, así que no hay ventana que cerrar y un
   // mecanismo de más solo añade una forma de romperse.

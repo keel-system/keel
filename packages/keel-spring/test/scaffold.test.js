@@ -2680,6 +2680,46 @@ test('persistencia: relación interna con @JoinColumn (FK en la hija, sin join t
   assert.ok(adapter.includes('jpa.getLines().addAll(linesReconciled);'));
 });
 
+// La columna aplanada de un value object es una columna como cualquier otra, y por eso
+// sus anotaciones salen de columnAnnotations() y no compuestas a mano. Compuesta a mano
+// se quedaba en el NOMBRE y perdía todo lo que llega al DDL: un Money con scale 2 salía
+// numeric(38,2) por el default de Hibernate y no por el diseño —con scale 4 habría
+// seguido diciendo 2—, un código de tres letras salía varchar(255), y un sub-campo
+// required quedaba nullable. Mismo defecto que ya se corrigió para la columna de un
+// `list: true`; el camino aplanado era el que quedaba fuera.
+test('persistencia: la columna aplanada de un value object conserva sus constraints', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const patched = structuredClone(layers);
+  patched.domain.types.Money = {
+    description: 'Importe con su moneda.',
+    fields: {
+      amount: { type: 'decimal', required: true, constraints: { min: 0, scale: 4 } },
+      currency: { type: 'string', required: true, constraints: { maxLength: 3 } }
+    }
+  };
+  patched.domain.entities.Product.fields.price = { type: 'Money', required: true };
+  // El MISMO value object en un campo opcional: sus columnas no pueden salir NOT NULL,
+  // o una fila sin ese importe deja de poder insertarse.
+  patched.domain.entities.Product.fields.discount = { type: 'Money' };
+
+  scaffoldService({ manifest, layers: patched, workspace });
+
+  const productJpa = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/persistence/entities/ProductJpa.java');
+
+  assert.ok(productJpa.includes('@Column(name = "price_amount", nullable = false, precision = 19, scale = 4)'), productJpa);
+  assert.ok(productJpa.includes('@Column(name = "price_currency", nullable = false, length = 3)'), productJpa);
+  // Y el comentario nombra el SUB-campo: antes las dos columnas se anunciaban las dos
+  // como «Money.price aplanado», que no distingue cuál es cuál.
+  assert.ok(productJpa.includes('// Money.currency aplanado.'), productJpa);
+
+  assert.ok(productJpa.includes('@Column(name = "discount_amount", precision = 19, scale = 4)'), productJpa);
+  assert.ok(
+    !productJpa.includes('name = "discount_amount", nullable = false'),
+    'un value object opcional no puede dejar columnas NOT NULL'
+  );
+});
+
 test('persistencia: value object anidado deja TODO en vez de columna/mapa inválidos', () => {
   const workspace = makeWorkspace();
   const { manifest, layers } = loadFixture();

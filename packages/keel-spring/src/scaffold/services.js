@@ -6,7 +6,7 @@
 // dominio (domain/repository) y del mapper de aplicación, nunca del JPA.
 
 import { FRAMEWORK_ERRORS } from 'keel-core';
-import { effectiveErrorCode } from '../lib/declared-errors.js';
+import { effectiveErrorCode, declaredUniquenessErrorFor } from '../lib/declared-errors.js';
 import { javaFile, javaPath, subPackage, javadoc } from './render.js';
 import { kebabCase } from '../lib/naming.js';
 import { INTERFACES_PKG, ANNOTATIONS_PKG, MEDIATOR_PKG } from './mediator.js';
@@ -458,8 +458,7 @@ function renderHandler(model, service, operation) {
         `escrituras ni eventos) — una repetición devuelve la respuesta original, NO un error. La CARRERA la ` +
         `arbitra la constraint: dos peticiones simultáneas fallan las dos la búsqueda y llegan las dos al ` +
         `insert, así que NO captures la DataIntegrityViolationException para "arreglarlo" — reléela y ` +
-        `devuelve el recurso ganador, o déjala subir traducida a ` +
-        `${FRAMEWORK_ERRORS.idempotencyRace.http} ${effectiveErrorCode(model, FRAMEWORK_ERRORS.idempotencyRace)}. ` +
+        `devuelve el recurso ganador, o déjala subir traducida a ${naturalKeyConflict(model, operation)}. ` +
         `Qué NO cubre: nada que ya haya salido del proceso antes del choque`
     );
   }
@@ -866,4 +865,30 @@ ${methods.join('\n\n')}
     path: javaPath(model, 'infrastructure.scheduling', className),
     content: javaFile(subPackage(model, 'infrastructure.scheduling'), [...imports], body)
   };
+}
+
+/**
+ * El código con el que sale el choque de una guarda de CLAVE NATURAL.
+ *
+ * No es `IDEMPOTENCY_KEY_IN_PROGRESS`, y confundirlos no es cosmético: con esta guarda no
+ * hay `IdempotencyStore`, así que no existe ninguna «clave en curso» que reproducir — lo que
+ * hay es una violación de UNICIDAD, que es otra familia del catálogo y otro contrato público.
+ * La nota citaba el de la carrera del almacén, y en un diseño que tiene las dos guardas a la
+ * vez —una operación con clave natural y otra con almacén— eso manda al agente a lanzar el
+ * `code` de OTRA operación.
+ *
+ * Se resuelve como lo resuelve el controller (`declaredUniquenessErrorFor`), que es el único
+ * sitio donde este canónico se sintetiza por entidad y campos. Si el diseño no lo declaró se
+ * nombra la FORMA en vez de inventar un literal: build no elige un `code` público por el
+ * diseñador, y decirlo como hueco es lo que hace que se cierre.
+ */
+function naturalKeyConflict(model, operation) {
+  const { entity, naturalKey } = operation.idempotency;
+  const declared = declaredUniquenessErrorFor(model, FRAMEWORK_ERRORS.uniqueness, entity, naturalKey, {
+    soleConstraint: true
+  });
+  return declared
+    ? `${declared.http ?? FRAMEWORK_ERRORS.uniqueness.http} ${declared.code}`
+    : `${FRAMEWORK_ERRORS.uniqueness.http} el error de UNICIDAD de ${entity} sobre (${naturalKey.join(', ')}), ` +
+        `que el diseño no declara: repórtalo como designGap en vez de reutilizar el de la idempotencia, que es otra familia`;
 }

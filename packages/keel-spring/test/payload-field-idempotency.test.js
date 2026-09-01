@@ -96,6 +96,25 @@ test('y el handler recibe el algoritmo que sí corresponde', () => {
   assert.ok(!/import .*IdempotencyStore/.test(handler), 'importa un puerto que no existe');
 });
 
+// El desenlace del choque NO es de la familia de la idempotencia. Con esta guarda no hay
+// almacén, así que no existe ninguna «clave en curso» que reproducir: lo que hay es una
+// violación de UNICIDAD, que es otra familia del catálogo y otro contrato público. La nota
+// citaba IDEMPOTENCY_KEY_IN_PROGRESS, y en un diseño con las DOS guardas —una operación por
+// clave natural y otra por almacén— eso manda al agente a lanzar el code de OTRA operación.
+test('el conflicto que la nota cita es el de UNICIDAD, no el de la carrera del almacén', () => {
+  const { read } = generate({ inNaturalKey: true });
+  const handler = read(HANDLER);
+
+  assert.ok(
+    !/IDEMPOTENCY_KEY_IN_PROGRESS/.test(handler),
+    'la nota cita el code de la carrera del almacén, que con esta guarda no existe'
+  );
+  // La fixture declara el error de unicidad de Reservation sobre su clave natural, así que
+  // se cita ese. Sin declararlo, la nota nombra la FORMA y lo pide como designGap — build no
+  // elige un code público por el diseñador.
+  assert.match(handler, /déjala subir traducida a 409 /);
+});
+
 test('sin clave natural sí se genera el almacén, pero nunca el camino de la cabecera', () => {
   // La otra mitad: `payload-field` no significa «sin mecanismo», significa «la clave no viaja por
   // cabecera». Si nada más la guarda, hace falta el registro — tecleado por el campo del command.

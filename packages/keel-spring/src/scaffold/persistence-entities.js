@@ -179,8 +179,17 @@ function renderJpaEntity(model, entity) {
         for (const name of sub.imports) imports.add(name);
         if (sub.subKind === 'enum') imports.add(`${subPackage(model, 'domain.enums')}.${sub.javaType}`);
         imports.add('jakarta.persistence.Column');
+        // Las anotaciones salen RESUELTAS del modelo (persistence-members.js), no
+        // compuestas aquí: escrita a mano, la columna se quedaba en el nombre y perdía
+        // `nullable`, `length`, `precision/scale` y `columnDefinition` — lo único que
+        // llega al DDL. Y el comentario nombra el SUB-campo, no el campo: con Money las
+        // dos columnas se anunciaban las dos como "Money.amount aplanado".
         declarations.push(
-          `    // ${member.field.javaType}.${member.field.name} aplanado.\n    @Column(name = "${sub.column}")\n    private ${sub.javaType} ${sub.name};`
+          [
+            `    // ${member.field.javaType}.${sub.voAccessor} aplanado.`,
+            ...sub.columns.map((annotation) => `    ${annotation}`),
+            `    private ${sub.javaType} ${sub.name};`
+          ].join(String.fromCharCode(10))
         );
         pushAccessor(sub.name, sub.javaType);
       }

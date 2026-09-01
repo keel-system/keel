@@ -26,6 +26,7 @@
 import { declaresIdempotency, idempotentOperations, naturalKeyGuardedOperations } from './http-idempotency.js';
 import { naturalKeyFinder } from './repositories.js';
 import { usesOutbox } from './outbox.js';
+import { screamingSnake, camelCase } from '../lib/naming.js';
 
 /**
  * ¿Hay algo de esta familia que comprobar? Sin suscripciones, sin idempotencia HTTP, sin
@@ -60,6 +61,7 @@ function checksOf(model) {
     ...domainEventChecks(model),
     ...reconciliationChecks(model),
     ...sweepClaimChecks(model),
+    ...outboundIdempotencyChecks(model),
     ...outboxChecks(model),
     ...mailChecks(model)
   ];
@@ -523,32 +525,103 @@ function compensationChecks(model) {
   const checks = [];
   for (const operation of allOperations(model)) {
     if (!operation.compensates) continue;
-    const client = returnClientOf(model, operation);
+    const leg = returnLegOf(operation);
     checks.push({
       group: 'compensation',
       subject: operation.name,
       class: operation.handlerClass,
-      require: client ? [client] : [],
+      require: leg?.kind === 'client' ? [leg.clientClass] : [],
       // Deshacer a medias es peor que no deshacer: deja el proveedor y el estado
       // propio contando historias distintas. Un solo patrón, no dos: el stub de build
       // trae las dos marcas a la vez y separarlas contaría dos veces el mismo hecho.
       forbid: ['TODO|UnsupportedOperationException'],
-      why: client
-        ? `compensa ${operation.compensates.dependency}: además de devolver el estado propio tiene que avisar al proveedor por ${client}, que se le inyecta para eso`
-        : `compensa ${operation.compensates.dependency}: el diseño no declara activación de vuelta, así que solo devuelve el estado propio`
+      why: whyOf(operation, leg)
+    });
+    checks.push(...restoredStateChecks(model, operation));
+  }
+  return checks;
+}
+
+/**
+ * El estado propio que la compensación tiene que devolver.
+ *
+ * Es la mitad que el gate no miraba: `forbid: TODO` caza un handler vacío, y el cliente
+ * de vuelta caza que no se avise al proveedor, pero un handler que avisa fuera y deja la
+ * fila donde estaba pasaba en verde — y deshacer a medias deja al proveedor y al estado
+ * propio contando historias distintas, que es peor que no deshacer.
+ *
+ * Lo afirmable es exacto y no supone arquitectura: build ya sabe qué entidades movió el
+ * encargo que se deshace (`compensates.moves`), qué transición declara la operación
+ * compensadora sobre cada una, y que el guard del lifecycle se llama `transitionTo` —lo
+ * genera él en el agregado, privado, y la nota del stub manda llamarlo desde el método
+ * semántico—. Así que el sujeto es el AGREGADO, no el handler: la transición va en el
+ * dominio (`services.js` § compensación lo dice con esas palabras) y exigirla en el
+ * handler obligaría a elegir entre pasar el gate y respetar la frontera hexagonal.
+ */
+function restoredStateChecks(model, operation) {
+  const moved = new Set(operation.compensates.moves ?? []);
+  const checks = [];
+  for (const transition of operation.transitions ?? []) {
+    if (!moved.has(transition.entity)) continue;
+    const entity = (model.entities ?? []).find((e) => e.name === transition.entity);
+    if (!entity?.lifecycle) continue;
+    const state = screamingSnake(transition.to);
+    const enumType = entity.lifecycle.enumType;
+    checks.push({
+      group: 'compensation',
+      subject: `${operation.name} · estado de ${transition.entity}`,
+      class: transition.entity,
+      // Tolerante al import estático y al enum cualificado: lo afirmable es que la
+      // transición al estado de vuelta EXISTE, no cómo se escribe el nombre del enum.
+      require: [String.raw`transitionTo\s*\(\s*(` + enumType + String.raw`\.)?` + state + String.raw`\s*\)`],
+      why:
+        `compensa ${operation.compensates.dependency}: el encargo que deshace movió el lifecycle de ` +
+        `${transition.entity}, así que devolverlo a ${transition.to} es parte de la compensación, no un extra. ` +
+        `El método semántico que lo haga tiene que llamar a transitionTo(${entity.lifecycle.enumType}.${state}), ` +
+        `que build generó como guard privado del agregado`
     });
   }
   return checks;
 }
 
-// El cliente de la activación de vuelta: se inyecta en el handler por el mismo criterio
-// que el resto (`triggeredBy` es el único enlace del DSL), así que si está inyectado y no
-// aparece en el cuerpo, la mitad de la compensación que vive fuera no se hizo.
-function returnClientOf(model, operation) {
-  for (const { activation } of operation.dependencyActivations ?? []) {
-    if (activation.http?.clientClass) return activation.http.clientClass;
+// La vuelta al proveedor: la mitad de la compensación que vive FUERA. El DSL la declara
+// de dos formas y no son intercambiables, así que tampoco lo es lo que se puede afirmar.
+//
+//   · `via: {client}`  — el cliente se inyecta en el handler por el mismo criterio que el
+//     resto (`triggeredBy` es el único enlace del DSL): si está inyectado y no aparece en
+//     el cuerpo, la llamada de vuelta no se hizo. Se exige ahí.
+//   · `via: {publishes}` — el evento NO lo emite el handler: lo emite el agregado con
+//     `raise(...)` (ver el comentario de `model.js` § activations). Pedirlo en el handler
+//     sería pedir la implementación incorrecta, y un check que la exige es peor que no
+//     tenerlo. Lo afirmable —que el `raise` exista— ya lo cubre la familia `domainEvent`
+//     sobre el agregado, y lo que falta a su lado —que la fila vuelva a su sitio— lo cubre
+//     `restoredStateChecks`. Aquí queda `require: []` A PROPÓSITO, y el `why` lo dice:
+//     hasta ahora ese mismo hueco se leía como «el diseño no declara activación de vuelta»,
+//     que es FALSO cuando la vuelta es un evento, y es lo que llevó cinco corridas anotado
+//     como punto ciego.
+function returnLegOf(operation) {
+  const activations = (operation.dependencyActivations ?? []).map((entry) => entry.activation);
+  for (const activation of activations) {
+    if (activation.http?.clientClass) return { kind: 'client', clientClass: activation.http.clientClass };
+  }
+  for (const activation of activations) {
+    if (activation.event?.name) return { kind: 'event', event: activation.event };
   }
   return null;
+}
+
+function whyOf(operation, leg) {
+  const head = `compensa ${operation.compensates.dependency}`;
+  if (leg?.kind === 'client') {
+    return `${head}: además de devolver el estado propio tiene que avisar al proveedor por ${leg.clientClass}, que se le inyecta para eso`;
+  }
+  if (leg?.kind === 'event') {
+    return (
+      `${head}: la vuelta al proveedor va por el evento ${leg.event.name}, que emite el AGREGADO con raise(...), no este handler — ` +
+      `que ese raise exista lo comprueba la familia domainEvent. Aquí lo afirmable es que el handler no quede a medias`
+    );
+  }
+  return `${head}: el diseño no declara activación de vuelta, así que solo devuelve el estado propio`;
 }
 
 // 4. Reconciliación. La pata del silencio, y la única que ningún escenario FL-* puede
@@ -625,12 +698,23 @@ function reconciliationChecks(model) {
   // como camino de menor resistencia un segundo mecanismo en paralelo al generado, que no
   // reclama nada y reparte peor. Es la misma forma que la familia sweepClaim.
   let pendingClaim = false;
+  // Los reclamos que build SÍ generó. Hacen falta más abajo: un diseño puede tener DOS
+  // barridos, uno reclamable y otro no, y entonces el reclamo generado para el primero
+  // satisface por su cuenta los checks genéricos que existen para el segundo. Ese falso
+  // verde es peor que no tener el check — el barrido que de verdad hay que escribir a
+  // mano es justo el que deja de mirarse.
+  const generatedClaims = [];
   for (const operation of allOperations(model)) {
     for (const { dependency, activation, claim } of operation.reconciles ?? []) {
       if (!claim) {
         pendingClaim = true;
         continue;
       }
+      // Todo lo que build nombró para ESTE reclamo, no solo su método: la consulta de
+      // candidatos (`candidatesFor<suffix>`, que es la que lleva el Pageable), la rama de
+      // `parameters/` y los campos del adaptador. Denegar solo `claimFor…` dejaba pasar
+      // justo el bloque que satisfacía el check del lote.
+      generatedClaims.push(claim.suffix, claim.configKey, camelCase(activation.name));
       checks.push({
         group: 'reconciliation',
         subject: `${operation.name} · reclamo de ${dependency}.${activation.name}`,
@@ -683,12 +767,31 @@ function reconciliationChecks(model) {
     checks.push({
       group: 'reconciliation',
       subject: 'reclamo del barrido',
-      claim: '@Modifying|@Update|findAndModify|findOneAndUpdate',
+      // Tres formas de marcar, no una — y la tercera la trajo la corrida de
+      // customer-refunds, donde este check salió ROJO sobre un barrido CORRECTO. Con dos
+      // barridos, uno reclamable y otro no, el agente hizo lo que había que hacer:
+      // reutilizar el `ReconciliationClaimStore` que build generó para el primero, en vez
+      // de escribir un segundo mecanismo en paralelo. El único @Modifying del store vive
+      // en `ReconciliationClaimJpaRepository`, que la `exclude` de abajo filtra — así que
+      // el check pedía exactamente la implementación INCORRECTA, y su camino de menor
+      // resistencia era duplicar el mecanismo para callarlo (lección (b) de CLAUDE.md).
+      // Llamar al store ES una marca persistida: se acepta, y lo que se sigue exigiendo
+      // es que alguien lo llame nombrando el reclamo. Un findAllByStatus sigue fallando.
+      // OJO con la forma del patrón: los de un check `claim` viajan por AWK además de por
+      // grep (methodBody los usa para recortar el bloque), y awk no entiende `\s`,
+      // `\.` ni `\(` — se los come y deja una regexp desbalanceada que aborta el
+      // check entero. De ahí las clases entre corchetes, que valen en los dos.
+      claim:
+        '@Modifying|@Update|findAndModify|findOneAndUpdate' +
+        (generatedClaims.length > 0 ? '|reconciliationClaims[.]claim[(]' : ''),
       // Se busca en el CUERPO DEL MÉTODO, no en el archivo, y lo que tiene que acompañar
       // a la escritura es el VOCABULARIO del reclamo. Con el archivo entero bastaba un
       // `@Modifying` cualquiera del adaptador; con el método, hay que estar marcando algo
       // que se llame reclamo. Un `@Modifying` que ajusta un contador no lo satisface.
       scope: 'method',
+      // Misma razón que en el check del lote: el reclamo que build generó para otro
+      // barrido del mismo diseño no prueba que el agente escribiera el suyo.
+      deny: generatedClaims.length > 0 ? generatedClaims.join('|') : null,
       bound: '[Cc]laim|[Rr]eclam',
       // Las clases del mecanismo que build YA genera con el patrón: encontrarlas
       // probaría lo que build hizo, no lo que el agente tenía que escribir.
@@ -723,6 +826,11 @@ function reconciliationChecks(model) {
       claim: 'Pageable|PageRequest|[Ll]imit|first[0-9]|[Tt]op[0-9]|[Bb]atch[Ss]ize|batch-size',
       bound: '[Cc]andidat|[Rr]econcil|[Cc]laim|[Rr]eclam|[Ss]tale',
       scope: 'method',
+      // Y el bloque del reclamo que build generó para el OTRO barrido no cuenta: lleva
+      // su Pageable y habla de candidatos, así que satisfaría este check por sí solo y
+      // dejaría sin mirar justo el barrido que hay que escribir a mano. Se descarta el
+      // BLOQUE y no el archivo: el reclamo del agente cabe en el mismo adaptador.
+      deny: generatedClaims.length > 0 ? generatedClaims.join('|') : null,
       exclude:
         '/(OutboxEventJpaRepository|OutboxEventMongoRepository|OutboxRelay|OutboxEventJpa|OutboxEventDocument|ProcessedEventJpaRepository|ProcessedEventMongoRepository|IdempotencyRecordJpaRepository|IdempotencyRecordMongoRepository|ReconciliationClaim[A-Za-z]*)\\.java',
       why: 'el reclamo del barrido no acota su lote: ninguna consulta que limite el número de filas (Pageable/limit, o un contador de lote en Mongo) habla de los candidatos que se reconcilian. Puede ir en la misma consulta que reclama o en la que selecciona candidatos —en JPQL un @Modifying no acepta Pageable, así que ahí son dos por obligación—, pero tiene que existir: sin cota, una pasada con 50.000 atascados son 50.000 llamadas al proveedor'
@@ -775,6 +883,41 @@ function reconciliationChecks(model) {
   return checks;
 }
 
+// 4.bis. Idempotencia SALIENTE. La tercera cara del eje de repetición, y la única que
+//    no tenía familia. Es tentador dejarla fuera porque build la cablea entera —la
+//    cabecera sale ya escrita en el adaptador—, pero el reparto no es tan limpio: en ESE
+//    MISMO método build deja los TODO del contract (ajustar el request y la respuesta),
+//    y completarlos es reescribir el `RestClient` alrededor de la línea de la cabecera.
+//    Perderla ahí no rompe nada visible: la llamada sigue funcionando, el retry sigue
+//    reintentando, y lo único que cambia es que cada reintento le encarga al proveedor
+//    otra vez el mismo trabajo. Sin escenario que llame dos veces a esa ruta concreta, no
+//    lo ve nadie.
+function outboundIdempotencyChecks(model) {
+  const checks = [];
+  for (const client of model.httpClients ?? []) {
+    for (const call of client.calls ?? []) {
+      if (!call.idempotency) continue;
+      // El patrón es por LLAMADA, no por cliente: build estampa el nombre de la llamada
+      // como primer argumento de la factoría, así que un cliente con tres llamadas
+      // idempotentes y una cabecera perdida no se esconde detrás de las otras dos.
+      const factory = call.idempotency.keyFrom === 'correlation' ? 'correlated' : 'fromPayload';
+      checks.push({
+        group: 'outboundIdempotency',
+        subject: `${client.id}.${call.name}`,
+        class: client.adapterClass,
+        require: [String.raw`OutboundIdempotency\.` + factory + String.raw`\s*\(\s*"` + call.name + '"'],
+        why:
+          `la llamada declara idempotency.keyFrom: ${call.idempotency.keyFrom}, así que la cabecera ` +
+          `${call.idempotency.header} tiene que viajar con una clave ESTABLE entre reintentos — ` +
+          `OutboundIdempotency.${factory}("${call.name}", …), que build dejó cableada en el mismo método donde ` +
+          `están los TODO del contract. Sin ella el retry le encarga al proveedor el mismo trabajo otra vez, y ` +
+          `eso no falla: duplica`
+      });
+    }
+  }
+  return checks;
+}
+
 // 5. Entrega del outbox. El stub NO lanza a propósito (el relay contaría el intento como
 //    fallo), así que su precio es que marca como publicadas filas que nunca salieron. El
 //    fail-fast del arranque cubre los perfiles de verdad; esto lo cubre antes de arrancar.
@@ -806,7 +949,7 @@ function script(model, checks) {
       return `impl ${shellQuote(check.group)} ${shellQuote(check.subject)} ${shellQuote(check.implementors)} ${shellQuote(check.exclude)} ${shellQuote(check.why)}`;
     }
     if (check.claim) {
-      return `claim ${shellQuote(check.group)} ${shellQuote(check.subject)} ${shellQuote(check.claim)} ${shellQuote(check.bound)} ${shellQuote(check.exclude)} ${shellQuote(check.why)} ${shellQuote(check.scope ?? '')}`;
+      return `claim ${shellQuote(check.group)} ${shellQuote(check.subject)} ${shellQuote(check.claim)} ${shellQuote(check.bound)} ${shellQuote(check.exclude)} ${shellQuote(check.why)} ${shellQuote(check.scope ?? '')} ${shellQuote(check.deny ?? '')}`;
     }
     const require = (check.require ?? []).join('\u0001');
     const forbid = (check.forbid ?? []).join('\u0001');
@@ -979,7 +1122,7 @@ memberBlock() {  # patrón que localiza el reclamo, patrón que lo acompaña
 }
 
 claim() {  # familia, sujeto, patrón principal, patrón que lo acompaña, rutas excluidas, porqué, alcance
-  local group="$1" subject="$2" pattern="$3" bound="$4" excluded="$5" why="$6" scope="\${7:-}"
+  local group="$1" subject="$2" pattern="$3" bound="$4" excluded="$5" why="$6" scope="\${7:-}" deny="\${8:-}"
   local file found="" code window
   while IFS= read -r file; do
     [ -n "$file" ] || continue
@@ -993,6 +1136,13 @@ claim() {  # familia, sujeto, patrón principal, patrón que lo acompaña, rutas
       window="$(printf '%s' "$code" | methodBody "$pattern" "$bound")"
       [ -n "$window" ] || window="$(printf '%s' "$code" | memberBlock "$pattern" "$bound")"
       [ -n "$window" ] || continue
+      # El bloque encontrado es de BUILD, no del agente: sigue buscando. Excluir el
+      # ARCHIVO no valdría —el reclamo que el agente tiene que escribir cabe
+      # perfectamente en el mismo adaptador donde build dejó el suyo, y prohibírselo
+      # sería pedirle la implementación incorrecta—, así que se descarta el BLOQUE.
+      if [ -n "$deny" ] && printf '%s' "$window" | grep -qE -- "$deny"; then
+        continue
+      fi
     else
       window="$code"
     fi

@@ -2159,7 +2159,7 @@ function relayPauseMethods(model) {
      * igual que antes pero con la apariencia de estar arreglado, y su síntoma —un evento
      * perdido cada varias corridas— cuesta un ciclo entero de arbitraje.
      */
-    private static void pauseOutboxRelay() {
+    protected static void pauseOutboxRelay() {
         ApplicationContext context = CONTEXT;
         if (context == null || !context.containsBean(OUTBOX_RELAY_BEAN)) {
             return;
@@ -2180,7 +2180,7 @@ function relayPauseMethods(model) {
     }
 
     /** Vuelve a registrar las tareas del relay. El registrar ya tiene scheduler: se replanifican en el acto. */
-    private static void resumeOutboxRelay() {
+    protected static void resumeOutboxRelay() {
         ApplicationContext context = CONTEXT;
         if (context == null || !OUTBOX_RELAY_PAUSED.compareAndSet(true, false)) {
             return;
@@ -2344,6 +2344,51 @@ ${startBrokerBody(model, reseed)}    }
         if (BROKER_STOPPED.get()) {
             startBroker();
         }
+    }
+
+    /**
+     * Confirma que el broker parado por {@link #stopBroker()} <b>ya no acepta
+     * conexiones</b>, en vez de darlo por hecho porque el comando de parada haya
+     * devuelto el control.
+     *
+     * <p><b>Para qué existe.</b> Un escenario que entrega un evento ENTRANTE —que
+     * necesita el broker arriba— y acto seguido tumba el canal de SALIDA tiene una
+     * ventana de carrera real: el {@code stop} del contenedor tarda en cortar
+     * conexiones de verdad, y lo que publique por su cuenta en esa ventana llega. El
+     * escenario que afirma «el canal sigue vacío con el broker caído» pasaría por
+     * casualidad de timing y no porque el mecanismo lo garantice.
+     *
+     * <p>Se llama <b>después</b> de {@link #stopBroker()}, y solo cuando el escenario
+     * necesita esa certeza antes de soltar algo que publica solo.${pausesRelay(model)
+      ? ` El caso típico es el relay del outbox:
+     * <pre>{@code
+     * pauseOutboxRelay();
+     * try {
+     *     deliverAlgo(...);          // el canal de ENTRADA sigue vivo
+     *     stopBroker();
+     *     awaitBrokerStopped();      // aquí ya no hay ventana
+     * } finally {
+     *     resumeOutboxRelay();       // SIEMPRE, o el servicio deja de publicar
+     * }
+     * }</pre>`
+      : ''}
+     */
+    protected static void awaitBrokerStopped() {
+        Instant deadline = Instant.now().plus(BROKER_READY_TIMEOUT);
+        while (Instant.now().isBefore(deadline)) {
+            if (!brokerAccepts()) {
+                return;
+            }
+            try {
+                Thread.sleep(200L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrumpido esperando a que el broker se detenga", e);
+            }
+        }
+        throw new IllegalStateException(
+                "${broker.label} sigue aceptando conexiones " + BROKER_READY_TIMEOUT
+                        + " después de stopBroker(): la parada no surtió efecto real.");
     }
 
     private static void awaitBrokerReady() {
