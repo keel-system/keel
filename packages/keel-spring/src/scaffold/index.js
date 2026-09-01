@@ -4,8 +4,11 @@
 
 import path from 'node:path';
 import { buildModel } from '../lib/model.js';
+import { classifyGenerated, digestOf } from 'keel-core';
 import { writeFiles } from '../lib/writer.js';
+import { readManifest, nextManifest, writeManifest, REFRESH_DIR } from '../lib/generated-manifest.js';
 import { listKeelDocs } from '../lib/keel-docs.js';
+import { packageVersion } from '../lib/assets.js';
 import { STACK_DEFAULTS, defaultDatabaseFor } from '../lib/stack-catalog.js';
 import { designUsesCache } from '../lib/stack-config.js';
 import { defaultGroup } from '../lib/naming.js';
@@ -151,7 +154,7 @@ export function resolveStack(stack, layers, manifest) {
   };
 }
 
-export function scaffoldService({ manifest, layers, workspace, force = false, stack = null }) {
+export function scaffoldService({ manifest, layers, workspace, force = false, stack = null, mode = null }) {
   const resolved = resolveStack(stack, layers, manifest);
   const model = buildModel({ manifest, layers, stack: resolved });
   model.stack = resolved;
@@ -166,7 +169,60 @@ export function scaffoldService({ manifest, layers, workspace, force = false, st
   const outDir = path.join('services', model.service.projectName);
 
   const files = GENERATORS.flatMap((generator) => generator.generate(model));
-  const { copied, skipped } = writeFiles(files, path.join(workspace, outDir), { force });
+  const projectDir = path.join(workspace, outDir);
+
+  // Clasificar ANTES de escribir: es lo que separa «este archivo es mío y me he
+  // quedado atrás» de «este lo escribió el agente». Con el booleano `force` a solas
+  // las dos cosas se ven igual, y por eso hasta ahora un arreglo del generador no
+  // podía llegar a un proyecto que ya existe sin destruir trabajo.
+  const previous = readManifest(projectDir);
+  const buckets = classifyGenerated(files, projectDir, previous);
+  const alDia = new Set(buckets.alDia);
+  const alDiaDigests = files
+    .filter((entry) => alDia.has(entry.path.split(/[\\/]/).join('/')))
+    .map((entry) => [entry.path.split(/[\\/]/).join('/'), digestOf(entry)]);
+
+  // Qué se escribe en esta pasada, por modo. `check` no escribe nada; `refresh` pone
+  // al día lo que es de build y nadie tocó; sin modo, el comportamiento de siempre.
+  let only = null;
+  if (mode === 'check') only = new Set();
+  else if (mode === 'refresh') only = new Set([...buckets.nuevos, ...buckets.refrescables]);
+
+  const { copied, skipped, digests } = writeFiles(files, projectDir, { force, only });
+
+  // La versión nueva de lo que está en conflicto, para poder compararla con diff. Es
+  // exactamente el trabajo que si no hay que hacer a mano: generar el proyecto en otro
+  // sitio solo para ver qué cambió el generador en ESE archivo.
+  if (mode === 'refresh' && buckets.conflictos.length > 0) {
+    const enConflicto = new Set(buckets.conflictos);
+    writeFiles(
+      files.filter((entry) => enConflicto.has(entry.path.split(/[\\/]/).join('/'))),
+      path.join(projectDir, REFRESH_DIR),
+      { force: true }
+    );
+  }
+
+  // El manifiesto se actualiza incluso en `check`, donde `digests` viene vacío: lo que
+  // hace ahí es ADOPTAR lo que ya estaba, que es lo que da el aviso a los proyectos
+  // anteriores al mecanismo sin tocarles un solo archivo.
+  if (mode !== 'check') {
+    writeManifest(
+      projectDir,
+      nextManifest({
+        previous,
+        generator: `keel-spring@${packageVersion()}`,
+        // Lo escrito en esta pasada, MÁS lo que ya era byte a byte idéntico a lo que el
+        // generador emite. Eso último importa para los proyectos que existían antes del
+        // mecanismo: adoptarlo TODO los dejaba sin poder refrescar nunca —cada archivo
+        // quedaba para siempre «sin registro»—, cuando ser idéntico a la salida del
+        // generador es la prueba más fuerte que puede haber de que es suya. Lo que de
+        // verdad no se puede atribuir es solo lo que ya difiere.
+        escritas: [...digests, ...alDiaDigests],
+        presentes: [...buckets.adoptados, ...buckets.refrescables, ...buckets.tuyos, ...buckets.conflictos]
+      })
+    );
+  }
+
 
   return {
     outDir: outDir.split(path.sep).join('/'),
@@ -174,6 +230,7 @@ export function scaffoldService({ manifest, layers, workspace, force = false, st
     skipped,
     warnings: model.warnings,
     stack: model.stack,
-    docs: model.docs
+    docs: model.docs,
+    buckets
   };
 }

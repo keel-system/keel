@@ -7,6 +7,7 @@ import { checkSupportedFeatures } from '../lib/supported-features.js';
 import { scaffoldService } from '../scaffold/index.js';
 import { writeFiles } from '../lib/writer.js';
 import { STACK_FILE, readStackConfig, writeStackConfig, askStackConfig, describeStack } from '../lib/stack-config.js';
+import { REFRESH_DIR } from '../lib/generated-manifest.js';
 
 function listSpecs(workspace) {
   const specsDir = path.join(workspace, 'specs');
@@ -26,7 +27,11 @@ function printSchemaErrors(file, ajvErrors) {
   }
 }
 
-export async function build(inputPath, { force = false, defaults = false } = {}) {
+export async function build(inputPath, { force = false, defaults = false, check = false, refresh = false } = {}) {
+  // Tres modos y no dos banderas sueltas: `check` gana porque no escribir es la promesa
+  // más fuerte de las dos, y pedir las dos a la vez es una contradicción que vale más
+  // resolver aquí que dejar a medias en el sistema de archivos.
+  const mode = check ? 'check' : refresh ? 'refresh' : null;
   const workspace = process.cwd();
 
   if (!isKeelWorkspace(workspace)) {
@@ -155,7 +160,7 @@ export async function build(inputPath, { force = false, defaults = false } = {})
   // diseño cuyo código no depende de la infra puntual elegida (el resto lo
   // escribe el agente con las skills por tecnología). Regeneración segura: sin --force
   // solo se escriben archivos que no existen.
-  const scaffold = scaffoldService({ manifest, layers, workspace, force, stack });
+  const scaffold = scaffoldService({ manifest, layers, workspace, force, stack, mode });
   if (stackIsNew) {
     writeStackConfig(projectDir, scaffold.stack);
     console.log();
@@ -172,6 +177,12 @@ export async function build(inputPath, { force = false, defaults = false } = {})
         (scaffold.skipped.length > 0 ? ' (usa --force para sobrescribir)' : '')
     )
   );
+
+  reportGeneratorDrift(scaffold, projectDir, workspace, mode);
+  if (mode === 'check') {
+    if (scaffold.buckets.refrescables.length > 0 || scaffold.buckets.conflictos.length > 0) process.exitCode = 1;
+    return;
+  }
 
   // Snapshot del diseño dentro del proyecto: junto con el conocimiento del agente hace el repo
   // autosuficiente (quien lo clone finaliza la generación sin el workspace).
@@ -216,4 +227,69 @@ Siguiente paso — la generación se completa dentro del proyecto:
 
 Orquesta el completado: código + infraestructura en paralelo, validación funcional de los
 escenarios contra el servidor real y pase de calidad al final.`);
+}
+
+/**
+ * Qué se ha quedado atrás respecto al generador instalado, y de quién es cada cosa.
+ *
+ * El vocabulario es el de `keel init --check`, que resuelve el problema hermano en el
+ * workspace de diseño: `~` desfasado, `○` ausente. Se le añade `!` para el conflicto,
+ * que allí no existe porque el payload no lo edita nadie a medias.
+ *
+ * Lo que este reporte hace y `--force` no puede: nombrar los archivos. Un `--force` a
+ * ciegas propaga el arreglo Y destruye el trabajo del agente sin decir cuál era cuál.
+ */
+function reportGeneratorDrift(scaffold, projectDir, workspace, mode) {
+  const { refrescables, conflictos, adoptados, huerfanos } = scaffold.buckets;
+  if (refrescables.length + conflictos.length + huerfanos.length + adoptados.length === 0) {
+    if (mode === 'check') console.log(pc.green('✔ El proyecto está al día con el generador instalado.'));
+    return;
+  }
+
+  const separar = () => console.log();
+  if (refrescables.length > 0) {
+    separar();
+    const puestos = mode === 'refresh';
+    console.log(
+      pc.bold(
+        puestos
+          ? pc.green(`${refrescables.length} archivo(s) del generador puestos al día:`)
+          : pc.yellow(`${refrescables.length} archivo(s) del generador se han quedado atrás:`)
+      )
+    );
+    for (const file of refrescables) console.log(`  ${puestos ? pc.green('+') : pc.yellow('~')} ${file}`);
+  }
+
+  if (conflictos.length > 0) {
+    separar();
+    console.log(pc.bold(pc.yellow(`${conflictos.length} archivo(s) en conflicto — los tocaste Y el generador cambió:`)));
+    for (const file of conflictos) console.log(`  ${pc.yellow('!')} ${file}`);
+    console.log(
+      pc.dim(
+        mode === 'refresh'
+          ? `  La versión nueva queda en ${REFRESH_DIR}/ para compararla con diff. Ninguno se ha tocado.`
+          : '  No se tocan: la decisión es tuya. Con --refresh se deja la versión nueva al lado para compararla.'
+      )
+    );
+  }
+
+  if (huerfanos.length > 0) {
+    separar();
+    console.log(pc.dim(`${huerfanos.length} archivo(s) que el generador ya no emite (no se borran): ${huerfanos.join(', ')}`));
+  }
+
+  if (adoptados.length > 0) {
+    separar();
+    console.log(
+      pc.dim(
+        `${adoptados.length} archivo(s) sin registro de quién los escribió: se avisa de ellos, pero no se refrescan. ` +
+          'Un proyecto generado antes de este mecanismo los adopta enteros; salen de ahí cuando un --force los reescribe.'
+      )
+    );
+  }
+
+  if (refrescables.length > 0 && mode !== 'refresh') {
+    separar();
+    console.log(pc.dim(`Ponlos al día con ${pc.cyan('keel-spring build <ruta> --refresh')}.`));
+  }
 }

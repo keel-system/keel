@@ -94,6 +94,44 @@ Es el corazón del generador: cada construcción del DSL (entidad, campo `unique
 - Define el orden de autoridad: spec > mapping > criterio del agente (documentado).
 - Incluye la política de tests: por operación (feliz + cada error), por invariante, y el comando de verificación que debe pasar antes de dar la generación por terminada.
 
+## Propagar un arreglo a un proyecto que ya existe
+
+Un generador se arregla constantemente, y los proyectos que ya generó **no se enteran**. Las dos
+formas obvias fallan, y conviene saber por qué antes de reinventarlas:
+
+- **Un booleano `force`** solo sabe decir «todo» o «nada», y «todo» incluye el código que escribió
+  el agente. Propagar un arreglo así cuesta el trabajo de otro.
+- **Comparar contenidos** —lo que hace `diffGenerated` para el payload de un workspace— tampoco
+  sirve aquí: en un proyecto generado «diferente del stub» es exactamente lo que se espera en
+  cuanto el agente completa los `TODO`. Un archivo que difiere puede serlo porque cambió el
+  generador o porque lo escribió el agente, y el contenido no distingue las dos cosas.
+- **Una lista de «archivos del agente»** no existe: el generador deja los huecos DENTRO de
+  archivos por lo demás completos, así que la propiedad no es del archivo.
+
+Lo único que desambigua es **el registro de lo que el generador escribió la última vez**.
+`keel-core` expone `classifyGenerated(files, destDir, manifest)`, que con ese registro reparte
+cada archivo en seis cubos: `nuevos`, `refrescables` (es del generador, nadie lo tocó, y el
+generador cambió), `alDia`, `tuyos` (lo tocaron, pero el generador no cambió: no hay nada que
+propagar), `conflictos` (las dos cosas) y `adoptados` (sin registro). Aparte, los huérfanos: rutas
+del registro que el generador ya no emite, que **se reportan y no se borran jamás**.
+
+Un generador nuevo hereda el mecanismo escribiendo su manifiesto y ofreciendo los dos modos:
+
+- `--refresh` escribe `nuevos` + `refrescables` y no toca nada más;
+- `--check` no escribe y sale con 1 si hay algo desfasado — misma puerta de CI que
+  `keel init --check` y `keel index --check`.
+
+Tres decisiones que `keel-spring` ya tomó y conviene copiar:
+
+1. **El manifiesto se versiona con el proyecto** (`keel-generated.json`, junto a
+   `keel-<tech>-stack.json`): quien clone el repo necesita la línea base para refrescar.
+2. **La versión nueva de un conflicto no cae junto al archivo.** Un `<archivo>.keel-new` dentro
+   del árbol de fuentes lo acabaría leyendo cualquier gate que haga `grep -r` sobre él, juzgando
+   código que no compila nadie. Va a un directorio de salida que ya esté ignorado.
+3. **Un proyecto anterior al mecanismo adopta lo que tiene.** No se puede saber qué tocó el
+   agente, así que no se refresca nada de eso — pero sí se avisa, que es la mayor parte del
+   valor. Sale de la adopción cuando un `--force` lo reescribe.
+
 ## Fixtures de diseño: la red contra las regresiones del scaffolding
 
 El scaffolding es una función determinista del diseño más `keel-stack.json`, así que se prueba como tal: una **fixture** es un `specs/<servicio>/` completo bajo `test/fixtures/`, y cada test la carga con `loadService()`, la pasa por `scaffoldService()` a un workspace temporal (`fs.mkdtempSync`) y **afirma sobre el texto emitido**. Ver `packages/keel-spring/test/generation-regressions.test.js` y `test/shape-coverage.test.js`.
