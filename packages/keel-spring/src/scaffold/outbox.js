@@ -246,6 +246,17 @@ ${selection.annotations}
     @Query("select o from OutboxEventJpa o where o.publishedAt is null and o.attempts < :maxAttempts and (o.nextAttemptAt is null or o.nextAttemptAt <= :now) order by o.createdAt asc")
     List<OutboxEventJpa> findPending(@Param("maxAttempts") int maxAttempts, @Param("now") Instant now, Pageable pageable);
 
+    /**
+     * Cuántas filas se rindieron: agotaron los reintentos y siguen sin publicar.
+     *
+     * <p>Es el dato de la única promesa que este mecanismo hace —«ningún evento se
+     * pierde»— justo cuando deja de cumplirse. Era derivable desde siempre y nadie lo
+     * derivaba: al rendirse solo ocurría una línea de log, y una línea de log no
+     * dispara nada. Alimenta la métrica del relay.
+     */
+    @Query("select count(o) from OutboxEventJpa o where o.publishedAt is null and o.attempts >= :maxAttempts")
+    long countDeadLettered(@Param("maxAttempts") int maxAttempts);
+
     @Modifying
     @Query("delete from OutboxEventJpa o where o.publishedAt is not null and o.publishedAt < :cutoff")
     int deletePublishedBefore(@Param("cutoff") Instant cutoff);
@@ -496,6 +507,7 @@ public class OutboxRelay {
     private final OutboxEventMongoRepository outboxRepository;
     private final MongoTemplate mongoTemplate;
     private final OutboxDispatcher dispatcher;
+    private final MeterRegistry meterRegistry;
 
     @Value("\${outbox.relay.batch-size:100}")
     private int batchSize;
@@ -519,10 +531,33 @@ public class OutboxRelay {
     public OutboxRelay(
             OutboxEventMongoRepository outboxRepository,
             MongoTemplate mongoTemplate,
-            OutboxDispatcher dispatcher) {
+            OutboxDispatcher dispatcher,
+            MeterRegistry meterRegistry) {
         this.outboxRepository = outboxRepository;
         this.mongoTemplate = mongoTemplate;
         this.dispatcher = dispatcher;
+        this.meterRegistry = meterRegistry;
+    }
+
+    /**
+     * La señal de que el outbox se rindió. Mismo razonamiento que en la rama relacional:
+     * una fila que agota sus reintentos es pérdida de datos en el mecanismo que promete
+     * que no se pierde nada, y hasta ahora lo único que pasaba era un {@code log.error}.
+     * Gauge y no contador: un contador no ve lo que se rindió antes de arrancar.
+     */
+    @PostConstruct
+    void registerDeadLetterGauge() {
+        Gauge.builder("keel.outbox.dead_lettered", this, relay -> relay.countDeadLettered())
+                .description("Documentos del outbox que agotaron sus reintentos y siguen sin entregarse")
+                .register(meterRegistry);
+    }
+
+    private long countDeadLettered() {
+        return mongoTemplate.count(
+                Query.query(new Criteria().andOperator(
+                        Criteria.where("published_at").is(null),
+                        Criteria.where("attempts").gte(maxAttempts))),
+                OutboxEventDocument.class);
     }
 
     @Scheduled(fixedDelayString = "\${outbox.relay.fixed-delay-ms:1000}")
@@ -624,6 +659,9 @@ public class OutboxRelay {
         'org.slf4j.Logger',
         'org.slf4j.LoggerFactory',
         'org.springframework.beans.factory.annotation.Value',
+        'io.micrometer.core.instrument.Gauge',
+        'io.micrometer.core.instrument.MeterRegistry',
+        'jakarta.annotation.PostConstruct',
         'org.springframework.data.domain.Sort',
         'org.springframework.data.mongodb.core.FindAndModifyOptions',
         'org.springframework.data.mongodb.core.MongoTemplate',
@@ -761,6 +799,7 @@ public class OutboxRelay {
 
     private final OutboxEventJpaRepository outboxRepository;
     private final OutboxDispatcher dispatcher;
+    private final MeterRegistry meterRegistry;
 
     @Value("\${outbox.relay.batch-size:100}")
     private int batchSize;
@@ -777,9 +816,32 @@ public class OutboxRelay {
     @Value("\${outbox.purge.retention-days:7}")
     private int retentionDays;
 
-    public OutboxRelay(OutboxEventJpaRepository outboxRepository, OutboxDispatcher dispatcher) {
+    public OutboxRelay(OutboxEventJpaRepository outboxRepository, OutboxDispatcher dispatcher, MeterRegistry meterRegistry) {
         this.outboxRepository = outboxRepository;
         this.dispatcher = dispatcher;
+        this.meterRegistry = meterRegistry;
+    }
+
+    /**
+     * La señal de que el outbox se rindió.
+     *
+     * <p>Una fila que agota sus reintentos deja de reclamarse y se queda ahí: es pérdida
+     * de datos en el mecanismo cuya ÚNICA promesa es que ningún evento se pierde. Hasta
+     * ahora lo único que ocurría era un {@code log.error}, y un log no dispara nada — el
+     * dato era derivable de la tabla y no lo derivaba nadie.
+     *
+     * <p>Va como GAUGE y no como contador a propósito: un contador se reinicia con el
+     * proceso y no ve las filas que se rindieron antes de arrancar, que son justo las que
+     * llevan más tiempo perdidas. El gauge dice cuántas hay AHORA, que es la pregunta.
+     *
+     * <p>Sale por el endpoint {@code metrics} del actuator, ya expuesto: es lo que permite
+     * alertar en producción, y lo que hace la rendición observable desde fuera.
+     */
+    @PostConstruct
+    void registerDeadLetterGauge() {
+        Gauge.builder("keel.outbox.dead_lettered", outboxRepository, repository -> repository.countDeadLettered(maxAttempts))
+                .description("Filas del outbox que agotaron sus reintentos y siguen sin entregarse")
+                .register(meterRegistry);
     }
 
     @Scheduled(fixedDelayString = "\${outbox.relay.fixed-delay-ms:1000}")
@@ -846,6 +908,9 @@ ${claimTx.annotation}
         'java.util.List',
         'org.slf4j.Logger',
         'org.slf4j.LoggerFactory',
+        'io.micrometer.core.instrument.Gauge',
+        'io.micrometer.core.instrument.MeterRegistry',
+        'jakarta.annotation.PostConstruct',
         'org.springframework.beans.factory.annotation.Value',
         'org.springframework.data.domain.PageRequest',
         'org.springframework.scheduling.annotation.Scheduled',

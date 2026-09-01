@@ -13,7 +13,7 @@
 
 import { javaFile, javaPath } from './render.js';
 import { mailSection, hasMail, MAIL_IMPORTS } from './mail-harness.js';
-import { pascalCase } from '../lib/naming.js';
+import { pascalCase, snakeCase } from '../lib/naming.js';
 import { DATABASES, BROKERS, CACHES, selectedInfra, brokerContainer } from '../lib/stack-catalog.js';
 import { cacheFlushCmd, concreteCmd, needsDevtools } from './devtools.js';
 import { outboxRelayBeanName, usesOutbox } from './outbox.js';
@@ -1697,7 +1697,7 @@ function devtoolsSection(model) {
 ${brokerEntry(model) ? `
     /** Archivo del contenedor por el que viaja el cuerpo de {@link #deliverMessage}. */
     private static final String DELIVER_BODY = "/tmp/keel-deliver.json";
-` : ''}${queryCountSection(model)}${brokerSection(model)}${outboxDrainSection(model)}${deadLetterSection(model)}${deliverySection(model)}${subscriptionDeliverySection(model)}
+` : ''}${queryCountSection(model)}${brokerSection(model)}${outboxDrainSection(model)}${reconciliationAgingSection(model)}${deadLetteredOutboxSection(model)}${deadLetterSection(model)}${deliverySection(model)}${subscriptionDeliverySection(model)}
     /**
      * Ejecuta un comando dentro del contenedor devtools y devuelve su salida.
      *
@@ -3119,6 +3119,151 @@ function outboxDrainSection(model) {
                     "No se pudo leer outbox_event para saber si el relay había drenado. Sin esa lectura la "
                             + "espera del outbox no espera a nada y lo que dependa de ella mide humo.",
                     e);
+        }
+    }
+`;
+}
+
+/**
+ * Lo que se ve desde fuera cuando el outbox se RINDE.
+ *
+ * Una fila que agota `outbox.relay.max-attempts` deja de reclamarse y se queda ahí: es
+ * pérdida de datos en el mecanismo cuya única promesa es que ningún evento se pierde. Hasta
+ * ahora lo único que ocurría era un `log.error`, y un log no lo mira nadie ni lo puede
+ * afirmar ningún escenario. El relay publica ahora un gauge, y esto lo lee por HTTP —el
+ * actuator ya expone `metrics`—, así que la rendición es observable en caja negra, igual
+ * que cualquier otro efecto.
+ *
+ * Es INSTANCIA y no estático a propósito: usa `get(...)`, que también lo es. Mezclarlos es
+ * de los errores que ni comparar cadenas ni `java-syntax` ven, y solo aparece en javac.
+ */
+function deadLetteredOutboxSection(model) {
+  if (!usesOutbox(model)) return '';
+  return `
+    /**
+     * Cuántos eventos se rindió el outbox: agotaron sus reintentos y no salieron nunca.
+     *
+     * <p>El {@code Then} natural de casi cualquier escenario del outbox es que esto siga
+     * valiendo <b>cero</b>: un relay que entrega tarde es correcto, uno que se rinde ha
+     * perdido el evento. La aserción es barata y caza la diferencia, que ninguna otra
+     * afirmación de la suite distingue — con el canal restablecido, el mensaje que nunca
+     * salió y el que salió tarde se parecen mucho hasta que se cuenta.
+     */
+    protected long deadLetteredEvents() {
+        Response response = get("/actuator/metrics/keel.outbox.dead_lettered");
+        if (response.status() == 404) {
+            // La métrica se registra al arrancar el relay: un 404 significa que no hay
+            // outbox corriendo, no que no haya nada rendido. Decirlo evita leer un cero
+            // tranquilizador de un servidor que no está midiendo nada.
+            throw new IllegalStateException(
+                    "El actuator no publica keel.outbox.dead_lettered: o el relay no arrancó, o "
+                            + "'metrics' no está expuesto en el perfil con el que corre la suite.");
+        }
+        try {
+            return JSON.readTree(response.body()).path("measurements").get(0).path("value").asLong();
+        } catch (Exception e) {
+            // Exception y no RuntimeException: readTree declara JsonProcessingException, que es
+            // COMPROBADA. Es de los errores que ni comparar cadenas ni java-syntax ven — solo javac.
+            throw new IllegalStateException("Respuesta inesperada del actuator: " + response.body(), e);
+        }
+    }
+`;
+}
+
+/**
+ * Envejecer la marca de espera: lo que hace ALCANZABLE un barrido de reconciliación.
+ *
+ * El barrido era, de los seis mecanismos, el único con cobertura conductual CERO. La razón
+ * escrita era que su disparador es el reloj y un cron no se llama desde fuera — cierta, pero
+ * incompleta: el criterio que sacó al outbox de esa misma lista no es «¿puedo llamarlo?» sino
+ * «¿hay algo que cambie ahí fuera según esté bien o mal?». Y aquí lo hay, por partida doble: el
+ * barrido mueve el lifecycle y PUBLICA la cancelación al proveedor.
+ *
+ * Lo que faltaba era llegar a su condición de entrada sin esperar el plazo real. Bajarlo por
+ * configuración NO sirve —`unansweredAfterSeconds` es global, y con un plazo corto el barrido
+ * se lleva por delante las filas de todos los demás escenarios que están esperando su desenlace
+ * normal—, así que se envejece LA FILA, que es quirúrgico: solo esa entra en el lote.
+ *
+ * El cron sigue disparando solo. Eso es lo que separa esto de inventarle una puerta al barrido,
+ * que es lo que la doctrina prohíbe: no se invoca la operación, se crea la condición que el
+ * diseño dice que la operación busca.
+ */
+function reconciliationAgingSection(model) {
+  const entry = dbEntry(model);
+  // Mismo criterio que `uuidLiteral`: donde el motor no declara su forma, no se emite el
+  // helper. Inventarla es peor que no tenerlo — un UPDATE que no casa deja el escenario
+  // verde sin haber envejecido nada.
+  if (!entry?.cliQueryArgv || !entry.staleTimestamp || !entry.uuidLiteral) return '';
+
+  const targets = new Map();
+  for (const operation of (model.services ?? []).flatMap((service) => service.operations ?? [])) {
+    for (const { activation, waitingTargets } of operation.reconciles ?? []) {
+      for (const target of waitingTargets ?? []) {
+        if (!target.table || !target.awaitingField) continue;
+        if (!targets.has(activation.name)) targets.set(activation.name, []);
+        targets.get(activation.name).push(target);
+      }
+    }
+  }
+  if (targets.size === 0) return '';
+
+  const dbName = model.service.name.replaceAll('-', '_');
+  const argv = entry
+    .cliQueryArgv({ user: entry.user ? entry.user(dbName) : '', pass: entry.password ?? '', db: dbName })
+    .map((part) => javaString(part))
+    .join(', ');
+
+  const ramas = [...targets]
+    .map(([name, list]) => {
+      const updates = list
+        .map(
+          (target) =>
+            `            statements.add(${javaString(
+              `UPDATE ${target.table} SET ${snakeCase(target.awaitingField)} = ${entry.staleTimestamp} WHERE id = `
+            )} + uuidLiteral(id));`
+        )
+        .join(String.fromCharCode(10));
+      // Varias tablas por activación cuando el mismo encargo deja esperando a más de una
+      // entidad: el id es de UNA de ellas y las demás actualizan cero filas. Es inofensivo,
+      // y la alternativa —que el escenario diga a qué tabla apunta— le pediría al test un
+      // detalle de persistencia que la caja negra no tiene por qué conocer.
+      return `        if (${javaString(name)}.equals(activation)) {
+${updates}
+        }`;
+    })
+    .join(String.fromCharCode(10));
+
+  const conocidas = [...targets.keys()].join(', ');
+  return `
+    /**
+     * Deja la marca de espera de {@code activation} infinitamente rancia para la fila
+     * {@code id}, de modo que el barrido la tome en <b>su próxima pasada</b>.
+     *
+     * <p>No dispara el barrido: lo dispara su cron, como en producción. Lo que esto hace es
+     * crear la condición que el barrido busca —«lleva esperando más de lo tolerado»— sin
+     * esperar el plazo real, y solo para esta fila. Bajar el umbral por configuración sería
+     * global y se llevaría por delante las filas de los demás escenarios, que están
+     * esperando su desenlace normal.
+     *
+     * <p>Después, el {@code Then} es el de siempre: el estado que la API devuelve y el
+     * mensaje que aparece en el canal. Deja margen para un tick del cron.
+     *
+     * <pre>{@code
+     * ageForReconciliation("${[...targets.keys()][0]}", caseId);
+     * await(Duration.ofSeconds(90), () -> "returnLost".equals(statusOf(caseId)));
+     * }</pre>
+     *
+     * <p>Activaciones con barrido en este diseño: ${conocidas}.
+     */
+    protected static void ageForReconciliation(String activation, String id) {
+        List<String> statements = new ArrayList<>();
+${ramas}
+        if (statements.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "No hay barrido para la activación '" + activation + "'. Las que lo tienen: ${conocidas}");
+        }
+        for (String statement : statements) {
+            db(${argv}, statement);
         }
     }
 `;

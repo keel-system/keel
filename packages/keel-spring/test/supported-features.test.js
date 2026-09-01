@@ -79,7 +79,7 @@ test('una compensación avisa de que no genera ninguna clase propia', () => {
   assert.match(warnings[0], /suscripción normal/);
 });
 
-test('reconciledBy avisa de que queda fuera del gate conductual', () => {
+test('reconciledBy avisa de qué escribe el agente, y de cómo se alcanza el barrido', () => {
   const { errors, warnings } = checkSupportedFeatures(manifest, {
     dependencies: {
       dependencies: {
@@ -93,8 +93,11 @@ test('reconciledBy avisa de que queda fuera del gate conductual', () => {
   assert.deepEqual(errors, []);
   assert.equal(warnings.length, 1);
   assert.match(warnings[0], /payments\.chargeBooking → sweepPendingCharges/);
-  // Lo que el aviso tiene que decir en voz alta: ningún FL-* lo ejercita.
-  assert.match(warnings[0], /gate CONDUCTUAL/);
+  // Lo que el aviso tiene que decir en voz alta: cómo se alcanza el barrido desde un
+  // escenario. El cron no se llama desde fuera, pero su condición de entrada se fabrica —y
+  // fabricarla mal, bajando el umbral global, sabotea las filas de los demás escenarios.
+  assert.match(warnings[0], /ageForReconciliation/);
+  assert.match(warnings[0], /Se envejece LA FILA y no el umbral/);
   assert.match(warnings[0], /check-idempotency\.sh/);
 });
 

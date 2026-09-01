@@ -756,7 +756,66 @@ Tres reglas, y saltarse cualquiera convierte el escenario en decorativo o en una
 - **«Exactamente uno» tras la recuperación**, no «al menos uno». Un relay que entrega pero no
   marca la fila reentrega para siempre, y sin ese conteo pasaría igual.
 
-**## Lo que acabó en el descarte
+## Rendirse: `deadLetteredEvents()`
+
+Solo con `reliability: outbox`. Una fila que agota `outbox.relay.max-attempts` deja de
+reclamarse y se queda ahí: es **pérdida de datos** en el mecanismo cuya única promesa es que
+ningún evento se pierde. Antes lo único que ocurría era un `log.error`, así que ni se alertaba
+en producción ni había nada que un escenario pudiera afirmar.
+
+El relay publica ahora el gauge `keel.outbox.dead_lettered` y `deadLetteredEvents()` lo lee por
+el actuator. **Es una aserción de una línea que cabe en cualquier escenario del outbox**, y vale
+la pena ponerla:
+
+```java
+await(Duration.ofSeconds(20), () -> publishedMessages("stockEvents", 5).contains("StockReserved"));
+assertEquals(0, deadLetteredEvents());   // llegó tarde, no se perdió
+```
+
+Lo que caza es la diferencia que ninguna otra afirmación de la suite distingue: con el canal ya
+restablecido, un evento que salió con retraso y otro que el relay abandonó **se parecen mucho**
+hasta que se cuenta. Un escenario que solo espera a que el mensaje aparezca no ve el segundo,
+porque el mensaje que sí aparece es el del flujo siguiente.
+
+Y es instancia, no estático: habla por HTTP como cualquier otra llamada del escenario.
+
+## Reconciliación: el barrido que detecta una ausencia
+
+Solo con `activations.<a>.reconciledBy` en el diseño. Es el **segundo** escenario del arnés que
+toca la infraestructura, y por la misma razón que el del outbox: el mecanismo consiste en
+reaccionar a que no pasa nada, y no hay forma de observarlo sin fabricar ese silencio.
+
+`AbstractFlowIT` genera `ageForReconciliation(<activación>, id)`: deja la marca de espera de esa
+fila infinitamente rancia, de modo que el barrido la tome en su próxima pasada.
+
+```java
+String caseId = openCase();
+post("/api/refund-cases/" + caseId + "/return");         // queda esperando al proveedor
+purgeMessages("returnLogistics");                        // la ventana empieza aquí
+
+ageForReconciliation("requestReturnPickup", caseId);     // …y lleva esperando "demasiado"
+
+await(Duration.ofSeconds(90), () -> "returnLost".equals(statusOf(caseId)));
+assertTrue(publishedMessages("returnLogistics", 5).contains("ReturnPickupCancellationRequested"));
+```
+
+Tres reglas, y saltarse cualquiera lo convierte en decorativo:
+
+- **No se llama a la operación, ni se le inventa un endpoint.** El cron dispara solo, como en
+  producción; lo único que hace el helper es crear la condición que el barrido busca. Un barrido
+  al que se le abre una puerta deja de probar el barrido y pasa a probar un command más.
+- **Se envejece LA FILA, nunca el umbral.** `unansweredAfterSeconds` es global: bajarlo en el
+  perfil se lleva por delante las filas de todos los demás escenarios, que están esperando su
+  desenlace normal, y convierte un escenario en un sabotaje de la suite.
+- **El `Then` incluye lo que sale al proveedor**, no solo el estado propio. Rendirse tiene dos
+  mitades igual que compensar: sin la aserción sobre el canal, un servidor que cierra el caso y
+  deja el encargo vivo ahí fuera pasa en verde.
+
+Y una cota práctica: la espera tiene que cubrir un tick del cron del diseño. Con `* * * * *` son
+~90 s; con un cron poco frecuente el escenario deja de ser puntuable y **eso se declara**
+(`uncovered` con su motivo), en vez de bajarle el cron al diseño para que la prueba quepa.
+
+## Lo que acabó en el descarte
 
 Solo con `onFailure.deadLetter` en la suscripción. `deadLetterMessages(<suscripción>, n)`
 devuelve los últimos `n` mensajes de su cola de descarte, o cadena vacía si no hay ninguno.
@@ -1053,13 +1112,14 @@ test que siempre pasa: se declara en `uncovered` con su motivo. Casos típicos: 
 `onFailure` (exige provocar el fallo del handler desde fuera) y las operaciones con
 `schedule`. Declararlo es información; un test decorativo es ruido que además da falsa seguridad.
 
-Con una salvedad que conviene decir en voz alta, porque es donde esa exención sale más
-cara: la operación de una **reconciliación** (`activations.<a>.reconciledBy`) siempre cae
-aquí —el arnés es caja negra y un cron no se alcanza desde fuera— y es justo la que
-detecta lo que no ha pasado. `uncovered` no significa que nadie la mire: la cubre
-`infra/check-idempotency.sh` en estático (que el `@Scheduled` ya no lance, que el umbral
-salga de `parameters/`), y la prueba en vivo la hace el diseñador. Lo que no vale es
-inventarle un escenario que dispare el barrido por una puerta que el diseño no tiene.
+**La reconciliación estuvo en esta lista y ya no está**, y su salida fija el criterio junto a la
+del outbox. Estaba por una razón cierta pero incompleta —el arnés es caja negra y un cron no se
+alcanza desde fuera—, cuando lo que decide no es si se puede LLAMAR sino si hay algo que cambie
+ahí fuera: el barrido mueve el lifecycle y publica la cancelación al proveedor, así que lo hay.
+Lo que faltaba era llegar a su condición de entrada, y eso lo da `ageForReconciliation(...)` sin
+abrirle ninguna puerta (ver § Reconciliación). Sigue cubriéndola además
+`infra/check-idempotency.sh` en estático, que es quien mira la FORMA del reclamo: el escenario
+mira el efecto, y los dos hacen falta.
 
 **El outbox estuvo en esta lista y ya no está**, y la razón vale como criterio general. Su
 disparador tampoco es alcanzable —el relay corre por el reloj, igual que el barrido—, pero su

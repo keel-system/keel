@@ -303,6 +303,44 @@ test('el relay se pausa mientras se recrea la topología, y solo donde se pierde
 // ya entregado — un fallo de outbox que en realidad es de timing. En la corrida de
 // customer-refunds el agente lo resolvió PARCHEANDO el arnés, que es 100% de build: el
 // siguiente `build --force` se lo habría llevado.
+// El barrido era el único de los seis mecanismos con cobertura conductual CERO, y la razón
+// escrita —un cron no se llama desde fuera— era cierta pero incompleta: lo que decide es si
+// hay algo que cambie ahí fuera, y aquí lo hay por partida doble. Lo que faltaba era llegar a
+// su condición de entrada sin esperar el plazo real ni bajarlo (el umbral es global y se
+// llevaría por delante las filas de los demás escenarios).
+// Rendirse era invisible. Una fila que agota `outbox.relay.max-attempts` deja de reclamarse
+// y se queda ahí —pérdida de datos en el mecanismo cuya única promesa es que no se pierde
+// nada—, y lo único que ocurría era un log.error: nada que alertar en producción, y nada
+// que un escenario pueda afirmar.
+test('el outbox publica cuántos eventos se rindió, y el arnés lo lee por HTTP', () => {
+  const generated = project('stock-reservation', SNSSQS);
+  const relay = generated.file('OutboxRelay.java');
+
+  // Gauge y no contador: un contador se reinicia con el proceso y no ve lo que se rindió
+  // antes de arrancar, que son justo las filas que llevan más tiempo perdidas.
+  assert.ok(relay.includes('Gauge.builder("keel.outbox.dead_lettered"'), relay);
+  assert.ok(relay.includes('countDeadLettered(maxAttempts)'), relay);
+
+  // Y sale por el actuator, que es lo que la hace observable desde fuera: sin esto la
+  // señal existiría en la tabla y seguiría sin mirarla nadie.
+  const harness = generated.file('AbstractFlowIT.java');
+  assert.ok(harness.includes('get("/actuator/metrics/keel.outbox.dead_lettered")'), harness);
+  // Instancia, no estático: usa get(...), que también lo es. Mezclarlos solo lo ve javac.
+  assert.match(harness, /protected long deadLetteredEvents\(\)/);
+});
+
+test('el arnés sabe envejecer la marca de espera de una fila concreta', () => {
+  const harness = project('stock-reservation', SNSSQS).file('AbstractFlowIT.java');
+
+  assert.match(harness, /protected static void ageForReconciliation\(String activation, String id\)/);
+  // El UPDATE nombra la tabla y la columna que el diseño declara, no una convención: el
+  // escenario no tiene por qué conocer ninguna de las dos.
+  assert.ok(harness.includes('reserve_stock_awaiting_since ='), harness);
+  assert.ok(harness.includes("TIMESTAMP '1970-01-01 00:00:00'"), harness);
+  // Y el id entra por el literal del motor, no concatenado a pelo: en MySQL es binario.
+  assert.ok(harness.includes('+ uuidLiteral(id));'), harness);
+});
+
 test('el arnés da la palanca fina para tumbar la salida con la entrada viva', () => {
   const harness = project('stock-reservation', SNSSQS).file('AbstractFlowIT.java');
 

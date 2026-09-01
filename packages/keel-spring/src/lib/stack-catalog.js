@@ -78,6 +78,11 @@ export const DATABASES = {
   postgresql: {
     id: 'postgresql',
     label: 'PostgreSQL',
+    // Instante «infinitamente rancio» para envejecer una marca de espera desde el arnés.
+    // Literal temporal ANSI, que estos motores aceptan tal cual. Se declara por motor y no
+    // se compone en el renderizador por la misma razón que `uuidLiteral`: donde no consta,
+    // no se emite el helper — inventar la forma es peor que no tenerlo.
+    staleTimestamp: "TIMESTAMP '1970-01-01 00:00:00'",
     kind: 'relational',
     gradleDependencies: ["runtimeOnly 'org.postgresql:postgresql'"],
     flywayDependencies: [FLYWAY_CORE, "runtimeOnly 'org.flywaydb:flyway-database-postgresql'"],
@@ -112,6 +117,7 @@ export const DATABASES = {
   mysql: {
     id: 'mysql',
     label: 'MySQL',
+    staleTimestamp: "TIMESTAMP '1970-01-01 00:00:00'",
     kind: 'relational',
     gradleDependencies: ["runtimeOnly 'com.mysql:mysql-connector-j'"],
     // MySQL y MariaDB comparten módulo Flyway (flyway-mysql).
@@ -172,6 +178,7 @@ export const DATABASES = {
   mariadb: {
     id: 'mariadb',
     label: 'MariaDB',
+    staleTimestamp: "TIMESTAMP '1970-01-01 00:00:00'",
     kind: 'relational',
     gradleDependencies: ["runtimeOnly 'org.mariadb.jdbc:mariadb-java-client'"],
     flywayDependencies: [FLYWAY_CORE, "runtimeOnly 'org.flywaydb:flyway-mysql'"],

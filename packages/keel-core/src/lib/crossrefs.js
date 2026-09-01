@@ -1184,6 +1184,34 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
     }
   }
 
+  // Escenario del barrido de reconciliación. Estuvo declarado como no ejercitable —un cron
+  // no se llama desde fuera— y dejó de estarlo por el mismo criterio que sacó al outbox de
+  // esa lista: lo que decide no es si se puede LLAMAR, sino si hay algo que cambie ahí
+  // fuera. Aquí lo hay por partida doble (mueve el lifecycle y publica la cancelación al
+  // proveedor), y su precondición se fabrica envejeciendo la marca de espera de esa fila.
+  //
+  // Lo que se busca es la señal de la ESPERA AGOTADA, no la del efecto: «el pedido acaba en
+  // released» lo cumple igual la compensación, que llega por un evento y no prueba nada del
+  // barrido. Es la misma asimetría que en el outbox.
+  if (scenarios !== null) {
+    const EXPIRED = /(espera|esperando|silencio|sin (respuesta|contestar|desenlace))[^.]{0,80}(demasiado|agotad|caducad|vencid|m[áa]s de|expirad)|(marca|reloj)[^.]{0,40}(rancia|envejec)/i;
+    for (const [depId, dep] of Object.entries(dependencies?.dependencies ?? {})) {
+      for (const [name, spec] of Object.entries(dep?.activations ?? {})) {
+        if (!spec?.reconciledBy) continue;
+        const mentions = scenariosMentioning(spec.reconciledBy);
+        if (mentions.some((block) => EXPIRED.test(block))) continue;
+        warnings.push(
+          `dependencies: ${depId}.activations.${name} declara reconciledBy: ${spec.reconciledBy}, pero no encuentro ` +
+            `en validation-scenarios.md ningún escenario que nombre esa operación y hable de una espera AGOTADA. Es el ` +
+            `único desenlace del encargo que no produce ningún hecho —nadie contesta—, así que el camino feliz y la ` +
+            `compensación no lo cubren: los dos llegan por un evento. Escribe uno cuyo Given fabrique el silencio (no ` +
+            `bajando el umbral, que es global y se lleva por delante las filas de los demás escenarios) y cuyo Then ` +
+            `afirme las DOS mitades de rendirse: el estado propio y el mensaje que sale al proveedor`
+        );
+      }
+    }
+  }
+
   // Escenario de carrera de la clave de idempotencia, uno por operación que la
   // declare. La señal se busca solo entre los escenarios que mencionan la operación:
   // un servicio puede tener carreras de otras cosas, y encontrarlas no dice nada de

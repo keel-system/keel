@@ -3681,6 +3681,52 @@ test('mover el lifecycle de lo que quedó esperando también cierra el barrido',
   assert.ok(!warnings.some((w) => w.includes('corre por el reloj')), warnings.join('\n'));
 });
 
+// El barrido dejó de estar en «lo que no tiene escenario»: su disparador sigue sin ser
+// alcanzable, pero su efecto sí lo es —mueve el lifecycle y publica la cancelación—, y su
+// precondición se fabrica envejeciendo la marca de ESA fila. Como el gate del generador solo
+// puntúa lo que el documento declara, un `reconciledBy` sin escenario no lo echaba de menos
+// nadie: mismo hueco de doble fondo que tuvo la compensación.
+test('un reconciledBy sin escenario de espera agotada es aviso', () => {
+  const scenarios = scenarioDocLate(`### FL-CMP-001: el registro rechaza la retirada
+**Given**: un producto retirado.
+**When**: llega WithdrawalRejected.
+**Then**: el producto vuelve a active.`);
+  const { warnings } = checkCrossRefs({ layers: compLayers(), scenarios });
+  assert.ok(
+    warnings.some((w) => w.includes('reconciledBy: reconcileWithdrawals') && w.includes('espera AGOTADA')),
+    warnings.join(String.fromCharCode(10))
+  );
+});
+
+test('con el escenario del silencio, el aviso del barrido desaparece', () => {
+  const scenarios = scenarioDocLate(`### FL-REC-001: el registro nunca contesta
+**Given**: un producto cuya inscripción se encargó y lleva esperando demasiado.
+**When**: pasa un ciclo de reconcileWithdrawals.
+**Then**: el producto se suelta y sale exactamente un aviso al proveedor.`);
+  const { warnings } = checkCrossRefs({ layers: compLayers(), scenarios });
+  assert.ok(!warnings.some((w) => w.includes('espera AGOTADA')), warnings.join(String.fromCharCode(10)));
+});
+
+// Nombrar la operación no basta, y esa es la mitad que importa: un escenario que la cite de
+// pasada —o el camino feliz, que también acaba en el mismo estado— dejaría el barrido sin
+// probar y el aviso callado.
+test('citar el barrido sin hablar de la espera no cierra el aviso', () => {
+  const scenarios = scenarioDocLate(`### FL-REC-001: el barrido existe
+**Given**: un producto retirado.
+**When**: corre reconcileWithdrawals.
+**Then**: no pasa nada raro.`);
+  const { warnings } = checkCrossRefs({ layers: compLayers(), scenarios });
+  assert.ok(warnings.some((w) => w.includes('espera AGOTADA')), warnings.join(String.fromCharCode(10)));
+});
+
+const scenarioDocLate = (...blocks) =>
+  `# catalog — Escenarios de validación
+
+## Flujos
+
+${blocks.join(String.fromCharCode(10) + String.fromCharCode(10))}
+`;
+
 const scenarioDoc = (...blocks) =>
   `# catalog — Escenarios de validación\n\n## Flujos\n\n${blocks.join('\n\n')}\n`;
 

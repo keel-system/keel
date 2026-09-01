@@ -114,9 +114,30 @@ Lo que cada escenario debe fijar porque dos stacks lo resolverían distinto. Las
   5. su payload es el del pedido creado, y su `correlationId` el de la petición del paso anterior
   ```
 
-  Las dos aserciones que hacen que este escenario no pueda pasar por accidente son la **3** y el «exactamente uno» de la **4**, y conviene saber a qué implementación mata cada una. La 3 separa el outbox de publicar directamente contra el canal dentro de la operación: sin ella, un servicio que publica en línea pasa el escenario entero —el mensaje también acaba llegando— y la garantía queda sin probar. El «exactamente uno» separa un relay que marca lo entregado de uno que no: el segundo reentrega para siempre y sin esa palabra pasaría igual. Un escenario que solo afirme «el evento acaba en el canal» es decorativo: lo cumple cualquier servicio que emita eventos, con outbox y sin él.
+  Las dos aserciones que hacen que este escenario no pueda pasar por accidente son la **3** y el «exactamente uno» de la **4**, y conviene saber a qué implementación mata cada una. La 3 separa el outbox de publicar directamente contra el canal dentro de la operación: sin ella, un servicio que publica en línea pasa el escenario entero —el mensaje también acaba llegando— y la garantía queda sin probar. El «exactamente uno» separa un relay que marca lo entregado de uno que no: el segundo reentrega para siempre y sin esa palabra pasaría igual. Un escenario que solo afirme «el evento acaba en el canal» es decorativo: lo cumple cualquier servicio que emita eventos, con outbox y sin él. Y hay una tercera aserción que cabe en cualquier escenario del outbox y que conviene añadir siempre: que el servidor **no se haya rendido con ningún evento**. Un relay que entrega tarde es correcto; uno que agota sus reintentos ha perdido el evento, y con el canal ya restablecido los dos se parecen mucho — el mensaje que aparece es el del flujo siguiente. En keel-spring esa cuenta sale por el actuator (`keel.outbox.dead_lettered`), y el escenario la nombra como lo que es —«ningún evento abandonado»—, nunca por el nombre de la métrica, que es del generador.
 
-  Es la **única** regla de esta sección que exige tocar la infraestructura, y es deliberado: el mecanismo consiste precisamente en no depender de que esté disponible, así que la única forma de observarlo es quitarla de en medio. El escenario habla del **canal lógico** («indisponible»), nunca del broker concreto ni de cómo se detiene: eso es del generador.
+  Es una de las **dos** reglas de esta sección que exigen tocar la infraestructura —la otra es la del barrido, justo debajo—, y es deliberado: el mecanismo consiste precisamente en no depender de que el canal esté disponible, así que la única forma de observarlo es quitarlo de en medio. El escenario habla del **canal lógico** («indisponible»), nunca del broker concreto ni de cómo se detiene: eso es del generador.
+
+- **Si una activación declara `reconciledBy`**, un escenario ejercita el desenlace que no produce ningún hecho:
+  el encargo sale, **nadie contesta**, y el barrido se rinde. Es la garantía que ese campo compra y ningún otro
+  escenario alcanza — el camino feliz y la compensación cubren los dos desenlaces que SÍ llegan.
+
+  El `Given` no espera el plazo real ni lo baja por configuración: fabrica el silencio **para esa fila**
+  (en keel-spring, `ageForReconciliation(<activación>, id)`). El cron sigue disparando solo.
+
+  ```
+  ### FL-REC-001: el encargo que nadie contesta se suelta
+  **Given** un pedido en `awaitingStock`, con su encargo ya publicado y el canal purgado
+  **When** su marca de espera lleva más de `unansweredAfterSeconds` y pasa un ciclo del barrido
+  **Then**
+  1. el pedido queda en `released` con su motivo, legible por la API
+  2. el canal recibe **exactamente un** `StockReservationCancelled` — rendirse tiene dos mitades, y sin esta
+     el almacén se queda con stock bloqueado para un pedido que ya no existe
+  3. un segundo ciclo del barrido no vuelve a soltarlo ni publica un segundo mensaje
+  ```
+
+  El punto 3 no es adorno: es lo que distingue un barrido que **reclama** de uno que **lee**, y el único que lo
+  ve desde fuera. Un barrido que lee vuelve a encontrar la misma fila en cada pasada.
 - **Si el diseño declara `messaging: subscriptions`**, cada suscripción tiene al menos un escenario que valida su **consumo**: **Given** el estado previo, **When** llega un evento entrante por su `channel`/`source` declarado con un payload de ejemplo, **Then** se ejecuta la operación `triggers` y se producen sus efectos observables. Además, un **caso borde de fallo** ejercita la política `onFailure`: reintentos (`retry`) y, si `deadLetter: true`, el envío del mensaje a la DLQ tras agotarlos. Si la suscripción declara `messageId`, un escenario reentrega el mismo mensaje y verifica que **no** hay segundo efecto.
 - **Si una operación declara `idempotency`**, tiene **dos** escenarios y el segundo no es una variante del primero: (1) el **reintento secuencial** con la misma clave devuelve el mismo status y el mismo cuerpo sin segundo efecto, y con clave distinta y mismo contenido sí produce un segundo recurso; (2) **dos peticiones con la misma clave a la vez**, escrita como carrera (ver § Concurrencia). El `Then` de la segunda es una disyunción cerrada —ambas devuelven la respuesta del recurso, o una la devuelve y la otra falla con el error de clave en curso (`409`)— **más un conteo leído por la API que afirma que existe exactamente un recurso**, sea quien sea el ganador. Sin ese conteo, el escenario enumera desenlaces admisibles y no puede fallar. La razón de separarlos: el reintento secuencial encuentra el registro de la clave ya commiteado y lo resuelve una simple lectura; el simultáneo cae en la ventana en la que todavía no lo está, que es donde vive el fallo real y donde un servicio replicado pasa la mayor parte de su vida. El status y el `code` de esa colisión son **contrato público** y los fija el catálogo de `framework-errors.md` (`409 IDEMPOTENCY_KEY_IN_PROGRESS`), así que se describen, no se inventan — salvo que el diseño declare el suyo, y entonces se usa ese. El mecanismo tiene un tercer desenlace que también se puede afirmar y que casi nunca se escribe: la misma clave con un **contenido distinto**, que es `409 IDEMPOTENCY_KEY_REUSED` y no debe confundirse con la carrera.
 - Las validaciones de input (constraints de value types, campos requeridos) se cubren como casos borde `400`.
@@ -143,13 +164,29 @@ Lo que cada escenario debe fijar porque dos stacks lo resolverían distinto. Las
 
 ## Lo que no tiene escenario, y por qué
 
-Un hueco declarado es honesto; uno tapado con un escenario decorativo es peor que el hueco, porque además apaga la sospecha. Hay dos obligaciones del diseño que **no** producen escenario, y conviene que estén escritas aquí para que nadie se las invente:
+Un hueco declarado es honesto; uno tapado con un escenario decorativo es peor que el hueco, porque además apaga la sospecha. Hay UNA obligación del diseño que **no** produce escenario, y conviene que esté escrita aquí para que nadie se la invente:
 
 - **El barrido cuya condición de entrada es el paso del tiempo** (`purgeMessagePersonalData` y sus parientes: retención, caducidad, archivado a los N meses). No es que no se pueda llamar —eso también le pasa al barrido que despacha una cola, y ese sí se verifica por su efecto—: es que su condición de entrada es *«la fila lleva 18 meses»*, y ninguna suite espera 18 meses ni puede fabricar el pasado sin escribir directamente en el almacén, que es exactamente lo que un ejecutor de caja negra no hace. Un `Given` que lo simulase estaría probando una puerta que el servidor de producción no abre. Lo que sí se declara es la política (qué se purga, cada cuánto, qué se conserva) y su verificación es **estática**. Si el barrido tiene que ser verificable en el pipeline, la salida no es inventarle un escenario: es que el diseño **exponga un disparador** además del `schedule`, y entonces deja de estar en esta lista.
 
-- **La reconciliación de un desenlace silencioso** (`activations.<a>.reconciledBy`, y en general toda operación cuyo único disparador sea el paso del tiempo dentro del servidor). Su disparador no es una petición ni un mensaje, así que no hay puerta por la que un ejecutor de caja negra pueda llamarla, y su condición de entrada —«lleva demasiado tiempo esperando»— es un umbral de configuración, no una entrada del escenario. Inventarle un disparador que el diseño no tiene sería probar una puerta que el servidor de producción no abre. Lo que sí se declara en el diseño es el umbral y qué queda observable **después** de la reconciliación, y su verificación es **estática**: en keel-spring, la familia `reconciliation` de `infra/check-idempotency.sh`.
+Dos mecanismos estuvieron en esta lista y ya no están, y sus salidas fijan el criterio. El **outbox**: su
+disparador tampoco es alcanzable, pero su efecto sí —el evento aparece o no aparece en el canal—, y quitar la
+infraestructura de en medio convierte esa diferencia en observable. Y la **reconciliación**
+(`activations.<a>.reconciledBy`): su efecto también lo es, y por partida doble —mueve el lifecycle y publica la
+cancelación al proveedor—; lo que faltaba era llegar a su condición de entrada, y se llega envejeciendo la marca
+de espera **de esa fila** (en keel-spring, `ageForReconciliation(...)` del arnés). El cron sigue disparando solo:
+no se le abre ninguna puerta, se fabrica el silencio que el diseño dice que el barrido busca.
 
-Nótese la asimetría con el outbox, que hasta hace poco estaba en esta misma lista: allí el disparador tampoco es alcanzable, pero **su efecto sí** —el evento aparece o no aparece en el canal—, y quitar la infraestructura de en medio convierte esa diferencia en observable. Antes de dar por no ejercitable un mecanismo, la pregunta correcta no es «¿puedo llamarlo?» sino «¿hay algo que cambie ahí fuera según esté bien o mal?».
+Dos matices que esa salida deja escritos, porque es donde se tuerce:
+
+- **Se envejece la fila, no el umbral.** `unansweredAfterSeconds` es global: bajarlo en el perfil de prueba se
+  lleva por delante las filas de todos los demás escenarios, que están legítimamente esperando su desenlace. Un
+  escenario que sabotea a los otros no es cobertura.
+- **El escenario tiene que caber en un tick del cron.** Con un `schedule` poco frecuente deja de ser puntuable, y
+  entonces se declara `uncovered` con ese motivo — nunca se le baja el cron al diseño para que la prueba quepa.
+
+Antes de dar por no ejercitable un mecanismo, la pregunta correcta no es «¿puedo llamarlo?» sino «¿hay algo que
+cambie ahí fuera según esté bien o mal?». Y si lo hay, la segunda pregunta es cómo fabricar su precondición sin
+inventarle una puerta.
 
 ## Lo que se comprueba solo
 

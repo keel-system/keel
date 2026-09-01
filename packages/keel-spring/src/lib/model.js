@@ -2103,11 +2103,23 @@ function collectDependencies(layers, entities, httpClients, subscriptions, error
         const waiting = [...waitingByEntity].flatMap(([entity, states]) =>
           [...states].map((state) => `${entity} en ${state}`)
         );
+        // Lo mismo, ESTRUCTURADO. `waiting` es prosa para el stub; esto es el dato con el
+        // que el arnés de integración genera su helper de envejecer la marca — la tabla, la
+        // columna y los estados de los que el barrido saca sus candidatos. Sin él, un
+        // escenario de reconciliación tendría que adivinar los tres, y el barrido es
+        // justamente el mecanismo cuyo disparador no se alcanza de ninguna otra forma.
+        const waitingTargets = [...waitingByEntity].map(([entityName, states]) => ({
+          entity: entityName,
+          table: entityByName.get(entityName)?.tableName ?? null,
+          states: [...states],
+          awaitingField: activation.awaitingSince ?? null
+        }));
         if (sweeper) {
           (sweeper.reconciles ??= []).push({
             dependency: depId,
             activation,
             waiting,
+            waitingTargets,
             // El reclamo que build puede generarle, o null cuando el diseño no da lo
             // que hace falta para generarlo sin inventar nada.
             claim: reconciliationClaim({ depId, activation, sweeper, waitingByEntity, entityByName, warnings })
