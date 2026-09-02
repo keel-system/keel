@@ -1,0 +1,20 @@
+# La única diferencia de fondo con `job-dispatch`, y el motivo entero de que esta fixture
+# exista: aquí el agregado ES el documento, y de eso cuelga otra rama del scaffolding.
+default:
+  model: document
+
+entities:
+  Job:
+    persisted: true
+    naturalKey: [reference]
+    indexes:
+      # El predicado de las dos mitades del barrido: el lote de la cola y, con el reloj,
+      # el del rescate.
+      - [status]
+      - [status, runningSince]
+
+audit:
+  timestamps: declared
+
+consistency:
+  transactionalBoundary: per-operation

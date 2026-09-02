@@ -13,7 +13,7 @@
 
 import { javaFile, javaPath } from './render.js';
 import { mailSection, hasMail, MAIL_IMPORTS } from './mail-harness.js';
-import { pascalCase, snakeCase } from '../lib/naming.js';
+import { pascalCase, snakeCase, screamingSnake } from '../lib/naming.js';
 import { DATABASES, BROKERS, CACHES, selectedInfra, brokerContainer } from '../lib/stack-catalog.js';
 import { cacheFlushCmd, concreteCmd, needsDevtools } from './devtools.js';
 import { outboxRelayBeanName, usesOutbox } from './outbox.js';
@@ -25,6 +25,14 @@ import {
   usesDeadLetter
 } from '../lib/dead-letter.js';
 import { needsMessagingProvisioning } from './messaging-provisioning.js';
+import {
+  setStateScript,
+  missingClockCountScript,
+  outboxPendingScript,
+  abandonOutboxScript,
+  clearAbandonedScript,
+  CLOCK
+} from '../lib/mongo-probes.js';
 import { tokenUrl, userTestClient } from './auth-provisioning.js';
 import { declaresIdempotency } from './http-idempotency.js';
 // Fuente única de los comandos de broker: lo que se emite aquí es lo mismo que
@@ -1704,7 +1712,7 @@ function devtoolsSection(model) {
 ${brokerEntry(model) ? `
     /** Archivo del contenedor por el que viaja el cuerpo de {@link #deliverMessage}. */
     private static final String DELIVER_BODY = "/tmp/keel-deliver.json";
-` : ''}${queryCountSection(model)}${brokerSection(model)}${outboxDrainSection(model)}${reconciliationAgingSection(model)}${deadLetteredOutboxSection(model)}${deadLetterSection(model)}${deliverySection(model)}${subscriptionDeliverySection(model)}
+` : ''}${queryCountSection(model)}${brokerSection(model)}${outboxDrainSection(model)}${reconciliationAgingSection(model)}${deadLetteredOutboxSection(model)}${abandonOutboxSection(model)}${deadLetterSection(model)}${deliverySection(model)}${subscriptionDeliverySection(model)}
     /**
      * Ejecuta un comando dentro del contenedor devtools y devuelve su salida.
      *
@@ -2658,7 +2666,7 @@ function dbSection(model) {
         return runProcess(command);
     }
 ${mongoEvalHelper(scriptArgv)}
-${uuidLiteralHelper(model)}
+${uuidLiteralHelper(model)}${rescueSection(model)}
 
     /**
      * Igual que {@link #db}, pero a través de un shell: <b>solo</b> para lo que es del
@@ -3052,9 +3060,11 @@ function outboxDrainSection(model) {
   // destino FÍSICO, `<slug>.events`—, mientras que el canal es la agrupación LÓGICA del
   // diseño (`stockEvents`). Consultar por el canal daba `COUNT(*) = 0` siempre: la espera
   // volvía al instante sin esperar a nada, que es justo lo que su javadoc dice evitar.
-  // El script documental, ya sin las comillas escapadas del `--eval`: viaja por archivo.
-  const documentCount =
-    '"db.getCollection(\\"outbox_event\\").countDocuments({ destination: \\"" + OUTBOX_DESTINATION + "\\", published_at: null })"';
+  // El script documental sale de `mongo-probes.js`, como todo lo que habla mongosh: aquí
+  // javac no es red —`javaString()` escapa siempre, así que un predicado que no case sale
+  // como Java válido— y lo único que lo juzga es `mongo-check` contra un Mongo de verdad.
+  const pending = outboxPendingScript();
+  const documentCount = `${javaString(pending.prefix)} + OUTBOX_DESTINATION + ${javaString(pending.suffix)}`;
   const statement =
     entry.kind === 'document'
       ? null // documental: la consulta va por `mongoEval`, no por argv (ver mongoEvalHelper)
@@ -3173,6 +3183,224 @@ function deadLetteredOutboxSection(model) {
             // COMPROBADA. Es de los errores que ni comparar cadenas ni java-syntax ven — solo javac.
             throw new IllegalStateException("Respuesta inesperada del actuator: " + response.body(), e);
         }
+    }
+`;
+}
+
+/**
+ * El rescate de una fila EN VUELO: la que otra réplica dejó a medias al morir.
+ *
+ * Es el tercer mecanismo cuya precondición se FABRICA en vez de esperarse, después del barrido
+ * de silencio y del dead-letter del outbox. Y el que más caro salió por no tener palanca: CUATRO
+ * corridas escribieron el mismo escenario a mano con cuatro SQL distintos —ni las tres
+ * relacionales compartían estilo—, una reventó con «Data too long for column 'id'» por componer
+ * el literal del UUID a mano, y el diagnóstico de la de Mongo costó un ciclo entero de arbitraje.
+ *
+ * Todo lo que tuvieron que adivinar ya lo calcula build: 'rescueClaim()' deja en 'claim.stalled'
+ * el estado en vuelo y el campo del reloj, y la entidad lleva su tabla y su columna de lifecycle.
+ *
+ * Se MUEVE una fila creada por la API, no se siembra entera: los valores de negocio son del
+ * diseño y build no los conoce. El estado que queda es el mismo —en vuelo y sin fila de outbox,
+ * porque quien la escribe es el barrido que aún no ha corrido—.
+ */
+function rescueSection(model) {
+  const entry = dbEntry(model);
+  if (!entry?.cliQueryArgv) return '';
+  const document = entry.kind === 'document';
+  // Mismo criterio que 'ageForReconciliation': donde el motor no declara su forma, no se emite
+  // el helper. Un UPDATE que no casa deja el escenario verde sin haber atascado nada.
+  if (!document && (!entry.staleTimestamp || !entry.uuidLiteral)) return '';
+
+  const rescates = [];
+  for (const operation of (model.services ?? []).flatMap((service) => service.operations ?? [])) {
+    for (const claim of operation.claim ?? []) {
+      if (!claim.stalled) continue;
+      const entity = (model.entities ?? []).find((e) => e.name === claim.entity);
+      if (!entity?.tableName || !entity.lifecycle?.field) continue;
+      rescates.push({
+        operation: operation.name,
+        table: entity.tableName,
+        stateColumn: snakeCase(entity.lifecycle.field),
+        state: screamingSnake(claim.stalled.state),
+        clockColumn: snakeCase(claim.stalled.stampField)
+      });
+    }
+  }
+  if (rescates.length === 0) return '';
+
+  const dbName = model.service.name.replaceAll('-', '_');
+  const argv = entry
+    .cliQueryArgv({ user: entry.user ? entry.user(dbName) : '', pass: entry.password ?? '', db: dbName })
+    .map((part) => javaString(part))
+    .join(', ');
+
+  const NL = String.fromCharCode(10);
+
+  // El reloj «a ahora» va en línea y no en el catálogo: CURRENT_TIMESTAMP es ANSI y lo aceptan
+  // los tres motores que declaran 'staleTimestamp', así que declararlo por motor sugeriría una
+  // variabilidad que no existe.
+  const RANCIO = { sql: entry.staleTimestamp, mongo: CLOCK.stale };
+  const AHORA = { sql: 'CURRENT_TIMESTAMP', mongo: CLOCK.now };
+
+  const mover = (r, clock) => {
+    const script = setStateScript({
+      collection: r.table,
+      stateField: r.stateColumn,
+      state: r.state,
+      clockField: r.clockColumn,
+      clock: clock.mongo
+    });
+    const cuerpo = document
+      ? '            mongoEval(' + javaString(script.prefix) + ' + id + ' + javaString(script.suffix) + ');'
+      : '            db(' + argv + ', ' +
+        javaString(
+          'UPDATE ' + r.table + ' SET ' + r.stateColumn + " = '" + r.state + "', " +
+          r.clockColumn + ' = ' + clock.sql + ' WHERE id = '
+        ) +
+        ' + uuidLiteral(id));';
+    return '        if (' + javaString(r.operation) + '.equals(operation)) {' + NL + cuerpo + NL + '            return;' + NL + '        }';
+  };
+
+  const contar = (r) => {
+    const cuerpo = document
+      ? '            return Long.parseLong(mongoEval(' +
+        javaString(
+          missingClockCountScript({
+            collection: r.table,
+            stateField: r.stateColumn,
+            state: r.state,
+            clockField: r.clockColumn
+          })
+        ) +
+        ').trim());'
+      : '            return Long.parseLong(db(' + argv + ', ' +
+        javaString(
+          'SELECT COUNT(*) FROM ' + r.table + ' WHERE ' + r.stateColumn + " = '" + r.state +
+          "' AND " + r.clockColumn + ' IS NULL'
+        ) +
+        ').trim());';
+    return '        if (' + javaString(r.operation) + '.equals(operation)) {' + NL + cuerpo + NL + '        }';
+  };
+
+  const conocidas = rescates.map((r) => r.operation).join(', ');
+
+  return [
+    '',
+    '    /**',
+    '     * Deja la fila {@code id} EN VUELO con el reloj infinitamente rancio: el estado exacto en',
+    '     * el que queda una réplica que murió con ella en la mano, que es lo que el rescate busca.',
+    '     *',
+    '     * <p>No dispara el barrido —lo dispara su cron, como en producción— y no siembra la fila:',
+    '     * mueve una creada por la API, porque los valores de negocio son del diseño.',
+    '     *',
+    '     * <p>Barridos con rescate en este diseño: ' + conocidas + '.',
+    '     */',
+    '    protected static void stallInFlight(String operation, String id) {',
+    rescates.map((r) => mover(r, RANCIO)).join(NL),
+    '        unknownRescue(operation);',
+    '    }',
+    '',
+    '    /**',
+    '     * Lo mismo, pero con el reloj a AHORA: la fila acaba de entrar en vuelo y hay alguien',
+    '     * trabajando en ella.',
+    '     *',
+    '     * <p>Es la mitad que separa <b>rescatar</b> de <b>robarle el trabajo a quien lo está',
+    '     * haciendo</b>. Un rescate sin cota temporal pasa el escenario del rescate sin despeinarse',
+    '     * y falla aquí — y su modo de fallo en producción no es un error: son dos réplicas',
+    '     * encargando el mismo trabajo a la vez.',
+    '     */',
+    '    protected static void putInFlight(String operation, String id) {',
+    rescates.map((r) => mover(r, AHORA)).join(NL),
+    '        unknownRescue(operation);',
+    '    }',
+    '',
+    '    /**',
+    '     * Cuántas filas quedaron EN VUELO con el reloj sin estampar.',
+    '     *',
+    '     * <p>Tiene que valer <b>cero</b> siempre. Si el reclamo mueve el estado sin estampar la',
+    '     * marca en el MISMO update, la fila que caiga en esa ventana queda irrescatable para',
+    '     * siempre: quien la busca filtra por {@code < :staleBefore}, y con la marca a nulo esa',
+    '     * comparación es UNKNOWN. El escenario del rescate no lo ve, porque él coloca la fila con',
+    '     * el reloj ya retrasado — este contador es el único que mira el instante anterior.',
+    '     */',
+    '    protected static long inFlightWithoutClock(String operation) {',
+    rescates.map(contar).join(NL),
+    '        unknownRescue(operation);',
+    '        return 0L;',
+    '    }',
+    '',
+    '    private static void unknownRescue(String operation) {',
+    '        throw new IllegalArgumentException(',
+    '                "No hay rescate para el barrido \'" + operation + "\'. Los que lo tienen: ' + conocidas + '");',
+    '    }',
+    ''
+  ].join(NL);
+}
+
+/**
+ * Rendirse: lo que hace ALCANZABLE el dead-letter del outbox.
+ *
+ * Es el último comportamiento del outbox sin cobertura, y la señal que lo hace observable
+ * —el gauge que lee `deadLetteredEvents()`— solo se afirmaba en la dirección que no importa:
+ * todos los escenarios comprueban que vale CERO. Si la sonda estuviera rota y devolviera
+ * siempre cero, las cinco aserciones pasarían en vacío. Esto es lo que permite verla en la
+ * dirección positiva.
+ *
+ * Se fabrica la precondición, no se espera a que ocurra: `max-attempts` vale 40 en el perfil
+ * local (y el backoff tope 2 s), así que agotarlos de verdad con el canal caído no cabe en
+ * una suite. Y el valor que se escribe va MUY por encima de cualquier umbral a propósito: si
+ * el arnés leyera el parámetro quedaría atado al perfil con el que corre.
+ *
+ * A diferencia de `ageForReconciliation`, esto NO necesita el literal de fecha ni el de uuid:
+ * la fila se localiza por su tipo de evento, que es texto. Por eso alcanza a todos los motores
+ * que declaran una CLI de consulta, y no solo a los dos de aquel.
+ */
+function abandonOutboxSection(model) {
+  const entry = dbEntry(model);
+  if (!usesOutbox(model) || !entry?.cliQueryArgv) return '';
+
+  const dbName = model.service.name.replaceAll('-', '_');
+  const argv = entry
+    .cliQueryArgv({ user: entry.user ? entry.user(dbName) : '', pass: entry.password ?? '', db: dbName })
+    .map((part) => javaString(part))
+    .join(', ');
+  const document = entry.kind === 'document';
+
+  // Muy por encima de cualquier `outbox.relay.max-attempts` (40 en local, 10 en el resto):
+  // el arnés no lee el parámetro para no quedar atado al perfil.
+  const ABANDONED = 1000000;
+
+  const abandon = abandonOutboxScript(ABANDONED);
+  const update = document
+    ? `        mongoEval(${javaString(abandon.prefix)} + eventType + ${javaString(abandon.suffix)});`
+    : `        db(${argv}, "UPDATE outbox_event SET attempts = ${ABANDONED} WHERE event_type = '" + eventType + "' AND published_at IS NULL");`;
+
+  const cleanup = document
+    ? `        mongoEval(${javaString(clearAbandonedScript(ABANDONED))});`
+    : `        db(${argv}, "DELETE FROM outbox_event WHERE published_at IS NULL AND attempts >= ${ABANDONED}");`;
+
+  return `
+    /**
+     * Agota el presupuesto de reintentos de los eventos de ese tipo que siguen pendientes:
+     * el relay los da por perdidos y deja de reclamarlos.
+     *
+     * <p>No espera a que ocurra —el presupuesto del perfil local es de 40 intentos— sino que
+     * crea la condición que el relay dice que mira, igual que {@code ageForReconciliation}
+     * fabrica el silencio de un barrido. El relay sigue corriendo por su cuenta.
+     *
+     * <p><b>Deja el contador sucio</b> hasta el siguiente reset: el cron de purga solo borra
+     * lo publicado, así que la fila abandonada sobrevive dentro de la clase. Emparéjalo con
+     * {@link #clearAbandonedOutboxEvents()} en un {@code finally}, o coloca el escenario el
+     * ÚLTIMO de su clase — si no, los {@code deadLetteredEvents() == 0} de los siguientes
+     * fallarán por culpa de este.
+     */
+    protected static void abandonOutboxEvent(String eventType) {
+${update}
+    }
+
+    /** Retira los eventos abandonados, para que el contador vuelva a cero. */
+    protected static void clearAbandonedOutboxEvents() {
+${cleanup}
     }
 `;
 }

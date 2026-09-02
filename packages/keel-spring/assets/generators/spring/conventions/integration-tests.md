@@ -779,6 +779,89 @@ porque el mensaje que sí aparece es el del flujo siguiente.
 
 Y es instancia, no estático: habla por HTTP como cualquier otra llamada del escenario.
 
+### Y la dirección positiva, que es la que faltaba
+
+Afirmar siempre `== 0` tiene un agujero: **si la sonda estuviera rota y devolviera cero, todas
+esas aserciones pasarían en vacío**. Lo que la ve en la otra dirección es el escenario del evento
+que el relay abandona, y para llegar a su precondición está `abandonOutboxEvent(<tipo>)`: agota el
+presupuesto de reintentos de los eventos de ese tipo que siguen pendientes.
+
+```java
+purgeMessages("paymentTransfers");
+stopBroker();
+try {
+    post("/api/refund-cases/" + caseId + "/approve", "{}");   // su evento queda pendiente
+    abandonOutboxEvent("TransferRequested");                  // …y el relay se rinde con él
+    assertThat(deadLetteredEvents()).isEqualTo(1);
+} finally {
+    startBroker();
+}
+// Restablecido el canal, ese evento NO sale: el relay respeta que se rindió.
+assertTrue(publishedMessages("paymentTransfers", 5).isBlank());
+```
+
+Dos reglas:
+
+- **No se espera a que ocurra, se fabrica.** El presupuesto del perfil local son 40 intentos: 
+  agotarlos de verdad no cabe en una suite. Es lo mismo que hace `ageForReconciliation` con el
+  silencio de un barrido — se crea la condición que el mecanismo dice mirar, y el relay sigue
+  corriendo solo.
+- **El escenario va el ÚLTIMO de su clase, o limpia en un `finally`** con
+  `clearAbandonedOutboxEvents()`. La fila abandonada **no la borra el cron de purga** (solo borra
+  lo publicado), así que sobrevive dentro de la clase y los `deadLetteredEvents() == 0` de los
+  escenarios siguientes fallarían por culpa de este. Es la misma clase de regla que el
+  `startBroker()` en un `finally`.
+
+Y el `Then` que hace que no sea solo una prueba de la señal es el segundo: **ese evento no se
+publica al restablecer el canal**. Sin él, un relay que ignorase su propio presupuesto
+reintentaría para siempre una fila ya dada por perdida y el escenario pasaría igual.
+
+## Rescate: la fila que otra réplica dejó a medias
+
+Solo cuando un barrido saca filas de un estado **EN VUELO** — uno al que alguna transición del
+lifecycle llega, y en el que por tanto puede haber otra réplica trabajando ahora mismo. Es el
+tercer mecanismo cuya precondición se fabrica, junto al barrido de silencio y al dead-letter.
+
+`AbstractFlowIT` genera tres:
+
+| | |
+|---|---|
+| `stallInFlight(<barrido>, id)` | deja la fila en vuelo con el reloj **infinitamente rancio** |
+| `putInFlight(<barrido>, id)` | lo mismo con el reloj **a ahora** |
+| `inFlightWithoutClock(<barrido>)` | cuántas filas quedaron en vuelo **sin reloj** |
+
+```java
+String id = crearPorLaApi();
+purgeMessages("stockEvents");
+
+stallInFlight("dispatchQueuedOrders", id);       // como si su réplica hubiera muerto
+await(Duration.ofSeconds(90), () -> "awaitingStock".equals(statusOf(id)));
+assertThat(countMessagesFor(id)).isEqualTo(1);   // no solo mueve el estado: reencarga
+assertThat(inFlightWithoutClock("dispatchQueuedOrders")).isZero();
+```
+
+Tres reglas:
+
+- **Se mueve una fila creada por la API, no se siembra entera.** El helper solo cambia el estado
+  y el reloj; los valores de negocio son del diseño. El estado que queda es el mismo que deja una
+  réplica muerta: en vuelo y sin fila de outbox, porque quien la escribe es el barrido que aún no
+  ha corrido.
+- **La cota es obligatoria, y es el otro escenario.** Con `putInFlight(...)` se comprueba que lo
+  recién entrado en vuelo **no se toca**. Un rescate sin cota temporal pasa el primero sin
+  despeinarse y falla aquí — y su modo de fallo en producción no es un error: son dos réplicas
+  haciendo el mismo trabajo a la vez.
+- **`inFlightWithoutClock(...)` va en el `Then` del rescate.** Tiene que valer cero siempre. Si el
+  reclamo mueve el estado sin estampar la marca en el MISMO update, la fila que caiga en esa
+  ventana queda irrescatable para siempre: quien la busca filtra por `< :staleBefore`, y con la
+  marca a nulo esa comparación es UNKNOWN. **El escenario del rescate no lo ve**, porque él coloca
+  la fila con el reloj ya retrasado — este contador es lo único que mira el instante anterior. Es
+  un defecto real, encontrado en una corrida y no por sus escenarios.
+
+Y una nota de por qué existen estos helpers: cuatro corridas escribieron este escenario a mano,
+con cuatro SQL distintos. Una reventó con un literal de UUID compuesto a mano que no cabía en la
+columna; el diagnóstico de la de MongoDB costó un ciclo entero de arbitraje. Todo lo que
+tuvieron que adivinar —tabla, columna de estado, valor del enum, columna del reloj— lo sabe build.
+
 ## Reconciliación: el barrido que detecta una ausencia
 
 Solo con `activations.<a>.reconciledBy` en el diseño. Es el **segundo** escenario del arnés que

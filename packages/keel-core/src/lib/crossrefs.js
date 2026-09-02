@@ -1184,6 +1184,81 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
     }
   }
 
+  // El OTRO desenlace del outbox, y el último que no miraba nadie: el relay AGOTA su
+  // presupuesto de reintentos y da el evento por perdido. La fila deja de reclamarse y se
+  // queda ahí — pérdida de datos en el mecanismo cuya única promesa es que no se pierde
+  // nada—, y el cron de purga no la borra nunca porque solo borra lo publicado.
+  //
+  // OJO con la señal que se busca, que es donde esto se tuerce: la palabra «abandonado» NO
+  // sirve. La aserción «ningún evento abandonado» cabe —y conviene— en TODOS los escenarios
+  // del outbox, así que un regex sobre ella lo silenciaría cualquiera de ellos y el aviso no
+  // saltaría jamás. Lo que distingue al escenario que falta es que habla de AGOTAR o de
+  // RENDIRSE, que es justo lo que ninguno de los demás dice.
+  if (scenarios !== null && messaging?.publishing?.reliability === 'outbox' && persistence) {
+    const EXHAUSTED = /(agotad?[oa]?s?|se rinde|rendirse|renuncia)[^.]{0,80}(reintento|intento|relay|outbox)|(reintento|intento)[^.]{0,60}(agotad|exhaust)/i;
+    if (!scenarioBlocks.some((block) => EXHAUSTED.test(block))) {
+      warnings.push(
+        `messaging: publishing.reliability: 'outbox' no tiene escenario del evento que el relay ABANDONA — no ` +
+          `encuentro ninguno en validation-scenarios.md que hable de agotar los reintentos. Es el otro desenlace ` +
+          `del mecanismo y el único que pierde datos: la fila deja de reclamarse, el cron de purga no la borra ` +
+          `(solo borra lo publicado) y el evento no sale nunca. El escenario del canal indisponible no lo cubre ` +
+          `—ahí el evento acaba saliendo—, y afirmar «ningún evento abandonado» en los demás tampoco: eso ` +
+          `comprueba el caso bueno. Escribe uno que agote el presupuesto de reintentos de un evento y afirme que ` +
+          `el servidor lo dice y que, restablecido el canal, ese evento NO se publica`
+      );
+    }
+  }
+
+  // El RESCATE de una fila en vuelo. Un barrido que saca filas de un estado al que alguna
+  // transición del lifecycle LLEGA no está vaciando una cola: está tomando filas en las que
+  // otra réplica puede estar trabajando ahora mismo. Eso solo es correcto con una cota
+  // temporal, y la cota solo se comprueba con dos escenarios — el que rescata lo abandonado y
+  // el que deja en paz lo recién entrado.
+  //
+  // Se emite UN aviso y no dos. La señal del rescate es reconocible; la de la cota («no se
+  // toca», «dentro del plazo») es prosa demasiado libre, y un segundo regex que no salte casi
+  // nunca enseña a ignorar el primero. Que la cota esté escrita lo juzga /keel-validate, que lee.
+  if (scenarios !== null) {
+    const RESCUE = /(rescat|atascad|a medias|abandonad|en vuelo|estancad)/i;
+    // Un barrido que es el reconciledBy de una activación queda fuera: su estado de espera
+    // también es "alcanzado", pero lo que espera es a un TERCERO, no a una réplica nuestra —
+    // otro mecanismo, con su propia regla y su propio escenario. Es la misma exclusión que hace
+    // classifyClaims() antes de plantearse un rescate.
+    const reconcilers = new Set(
+      Object.values(dependencies?.dependencies ?? {}).flatMap((dep) =>
+        Object.values(dep?.activations ?? {})
+          .map((activation) => activation?.reconciledBy)
+          .filter(Boolean)
+      )
+    );
+    for (const [opName, op] of Object.entries(operations)) {
+      if (!op?.schedule || reconcilers.has(opName)) continue;
+      for (const transition of op.transitions ?? []) {
+        const lifecycle = domain?.entities?.[transition.entity]?.lifecycle;
+        if (!lifecycle?.transitions) continue;
+        // «En vuelo» se calcula igual que en el generador: el estado es destino de alguna
+        // transición del lifecycle de su entidad. Una COLA no lo es, y no pide rescate.
+        const reached = new Set(Object.values(lifecycle.transitions).flat());
+        const inFlight = (transition.from ?? []).filter((state) => reached.has(state));
+        if (inFlight.length === 0) continue;
+
+        const mentions = scenariosMentioning(opName);
+        if (mentions.some((block) => RESCUE.test(block))) continue;
+        warnings.push(
+          `use-cases: operations.${opName} saca ${transition.entity} de ${inFlight.join(
+)}, que es un estado ` +
+            `EN VUELO, pero no encuentro en validation-scenarios.md ningún escenario que nombre esa operación y ` +
+            `hable de rescatar lo que otra réplica dejó a medias. Hacen falta DOS: el que rescata una fila ` +
+            `atascada más tiempo del tolerado, y —el que de verdad separa rescatar de robarle el trabajo a quien ` +
+            `lo está haciendo— el que comprueba que lo recién entrado en vuelo NO se toca. Sin el segundo, un ` +
+            `rescate sin cota temporal pasa el primero sin despeinarse, y su modo de fallo en producción no es ` +
+            `un error: son dos réplicas haciendo el mismo trabajo a la vez`
+        );
+        break;
+      }
+    }
+  }
+
   // Escenario del barrido de reconciliación. Estuvo declarado como no ejercitable —un cron
   // no se llama desde fuera— y dejó de estarlo por el mismo criterio que sacó al outbox de
   // esa lista: lo que decide no es si se puede LLAMAR, sino si hay algo que cambie ahí

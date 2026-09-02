@@ -1,0 +1,56 @@
+# La silueta que ninguna otra fixture da: un barrido con las DOS clases de reclamo a la
+# vez. El lifecycle es lo que las separa —`queued` es una COLA porque ninguna transición
+# LLEGA a él, y `running` está EN VUELO porque `queued` sí lleva ahí—, así que la forma
+# de este bloque no es decorativa: es lo que decide qué Java genera `claim.js`.
+
+types:
+  JobPriority:
+    description: Urgencia con la que se atiende el trabajo encolado.
+    values: [normal, high]
+
+  JobStatus:
+    description: En qué punto del ciclo de despacho está el trabajo.
+    values: [queued, running, done]
+
+entities:
+  Job:
+    description: Trabajo encolado que un ciclo del despachador toma, ejecuta y cierra.
+    fields:
+      id:
+        type: uuid
+        id: true
+        generated: true
+      reference:
+        type: string
+        required: true
+        constraints: { maxLength: 64 }
+        description: Referencia con la que el llamante identifica el trabajo.
+      priority:
+        type: JobPriority
+        required: true
+        default: normal
+      payload:
+        type: text
+        description: Cuerpo opaco que el despachador entrega tal cual.
+      status:
+        type: JobStatus
+        required: true
+        default: queued
+      runningSince:
+        type: timestamp
+        description: >-
+          Cuándo tomó este trabajo el ciclo que lo está ejecutando. Lo estampa el propio
+          reclamo al pasar a running, en el mismo UPDATE, y es el reloj sobre el que mide
+          el rescate: sin él, «lleva demasiado en running» no se puede medir y una fila
+          que quedó a medias no la recoge nadie jamás.
+      createdAt:
+        type: timestamp
+        generated: true
+    lifecycle:
+      field: status
+      transitions:
+        queued: [running]
+        running: [done]
+        done: []
+    invariants:
+      - Un trabajo en running tiene siempre runningSince estampado.

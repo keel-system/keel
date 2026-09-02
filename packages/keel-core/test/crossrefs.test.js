@@ -3719,6 +3719,113 @@ test('citar el barrido sin hablar de la espera no cierra el aviso', () => {
   assert.ok(warnings.some((w) => w.includes('espera AGOTADA')), warnings.join(String.fromCharCode(10)));
 });
 
+// El OTRO desenlace del outbox: el relay agota su presupuesto y da el evento por perdido.
+// La fila deja de reclamarse y el barrido de retención no la borra (solo borra lo
+// publicado), así que el evento no sale nunca. El escenario del canal indisponible no lo
+// cubre: allí el evento acaba saliendo.
+test('un outbox sin escenario del evento abandonado es aviso', () => {
+  const layers = compLayers();
+  layers.messaging.publishing = { reliability: 'outbox', events: { ProductRetired: { payload: {} } } };
+  layers.persistence = { default: { model: 'relational' }, entities: { Product: {} } };
+  const scenarios = scenarioDocLate(`### FL-OBX-001: el evento sobrevive a un canal indisponible
+**Given**: el canal de eventos indisponible.
+**When**: se retira el producto.
+**Then**: la API responde igual y el canal sigue vacío; restablecido, llega exactamente uno.`);
+  const { warnings } = checkCrossRefs({ layers, scenarios });
+  assert.ok(
+    warnings.some((w) => w.includes('el evento que el relay ABANDONA')),
+    warnings.join(String.fromCharCode(10))
+  );
+});
+
+// La trampa que este aviso tiene y los otros dos no: la aserción «ningún evento abandonado»
+// cabe —y conviene— en TODOS los escenarios del outbox. Si la señal buscada fuera la palabra
+// «abandonado», cualquiera de ellos silenciaría el aviso y no saltaría jamás. Pasó al
+// escribirlo: el primer regex la incluía.
+test('afirmar «ningún evento abandonado» NO cierra el aviso: eso es el caso bueno', () => {
+  const layers = compLayers();
+  layers.messaging.publishing = { reliability: 'outbox', events: { ProductRetired: { payload: {} } } };
+  layers.persistence = { default: { model: 'relational' }, entities: { Product: {} } };
+  const scenarios = scenarioDocLate(`### FL-OBX-001: el evento sobrevive a un canal indisponible
+**Given**: el canal de eventos indisponible.
+**When**: se retira el producto.
+**Then**: llega exactamente uno, y ningún evento abandonado por el outbox.`);
+  const { warnings } = checkCrossRefs({ layers, scenarios });
+  assert.ok(
+    warnings.some((w) => w.includes('el evento que el relay ABANDONA')),
+    warnings.join(String.fromCharCode(10))
+  );
+});
+
+test('con el escenario del presupuesto agotado, el aviso desaparece', () => {
+  const layers = compLayers();
+  layers.messaging.publishing = { reliability: 'outbox', events: { ProductRetired: { payload: {} } } };
+  layers.persistence = { default: { model: 'relational' }, entities: { Product: {} } };
+  const scenarios = scenarioDocLate(`### FL-OBX-002: el evento que el relay abandona
+**Given**: el canal indisponible y un evento pendiente de salir.
+**When**: se agota el presupuesto de reintentos de ese evento.
+**Then**: el servidor informa de uno abandonado y, restablecido el canal, ese evento no se publica.`);
+  const { warnings } = checkCrossRefs({ layers, scenarios });
+  assert.ok(
+    !warnings.some((w) => w.includes('el evento que el relay ABANDONA')),
+    warnings.join(String.fromCharCode(10))
+  );
+});
+
+// Un barrido que saca filas de un estado al que alguna transición LLEGA no vacía una cola:
+// toma filas en las que otra réplica puede estar trabajando ahora mismo.
+const inFlightSweepLayers = () => {
+  const layers = compLayers();
+  layers.domain.entities.Product.fields.retiredSince = { type: 'timestamp' };
+  layers['use-cases'].operations.sweepRetired = {
+    description: 'Termina las retiradas que quedaron a medias.',
+    kind: 'command',
+    internal: true,
+    input: 'void',
+    output: 'void',
+    schedule: { cron: '* * * * *' },
+    transitions: [{ entity: 'Product', from: ['retired'], to: 'active' }]
+  };
+  return layers;
+};
+
+test('un barrido sobre un estado EN VUELO sin escenario de rescate es aviso', () => {
+  const scenarios = scenarioDocLate(`### FL-SWP-001: el barrido corre
+**Given**: productos retirados.
+**When**: pasa un tick de sweepRetired.
+**Then**: vuelven a active.`);
+  const { warnings } = checkCrossRefs({ layers: inFlightSweepLayers(), scenarios });
+  assert.ok(
+    warnings.some((w) => w.includes('sweepRetired') && w.includes('EN VUELO')),
+    warnings.join(String.fromCharCode(10))
+  );
+});
+
+test('con el escenario del rescate el aviso desaparece', () => {
+  const scenarios = scenarioDocLate(`### FL-RSC-001: se rescata lo que otra réplica dejó a medias
+**Given**: un producto atascado en retired más tiempo del tolerado.
+**When**: pasa un tick de sweepRetired.
+**Then**: vuelve a active.`);
+  const { warnings } = checkCrossRefs({ layers: inFlightSweepLayers(), scenarios });
+  assert.ok(!warnings.some((w) => w.includes('EN VUELO')), warnings.join(String.fromCharCode(10)));
+});
+
+// Una COLA no pide rescate: nadie está trabajando en esas filas, se acumulan esperando.
+test('un barrido sobre una COLA no pide escenario de rescate', () => {
+  const layers = compLayers();
+  layers['use-cases'].operations.sweepDrafts = {
+    description: 'Publica los borradores pendientes.',
+    kind: 'command',
+    internal: true,
+    input: 'void',
+    output: 'void',
+    schedule: { cron: '* * * * *' },
+    transitions: [{ entity: 'Product', from: ['draft'], to: 'active' }]
+  };
+  const { warnings } = checkCrossRefs({ layers, scenarios: scenarioDocLate('### FL-X-001: nada') });
+  assert.ok(!warnings.some((w) => w.includes('EN VUELO')), warnings.join(String.fromCharCode(10)));
+});
+
 const scenarioDocLate = (...blocks) =>
   `# catalog — Escenarios de validación
 
@@ -3838,7 +3945,12 @@ test('con el escenario del canal indisponible el outbox queda cubierto', () => {
     layers: outboxLayers(),
     scenarios: scenarioDoc(OUTBOX_DECORATIVO, OUTBOX_REAL),
   });
-  assert.ok(!warnings.some((w) => w.includes("reliability: 'outbox'")), warnings.join('\n'));
+  // Se afirma sobre ESTE aviso y no sobre todos los del outbox: la fixture sigue sin
+  // escenario del evento abandonado, que es el otro desenlace y tiene su propia regla.
+  assert.ok(
+    !warnings.some((w) => w.includes('no tiene escenario que lo distinga de best-effort')),
+    warnings.join(String.fromCharCode(10))
+  );
 });
 
 test('sin outbox declarado no se pide ningún escenario de canal caído', () => {

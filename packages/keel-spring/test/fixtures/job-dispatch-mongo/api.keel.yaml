@@ -1,0 +1,12 @@
+# Superficie mínima, y no es adorno: el escenario del rescate mueve una fila creada por
+# el camino real en vez de sembrarla entera, porque los valores de negocio son del diseño.
+style: rest
+basePath: /api
+endpoints:
+  enqueueJob:
+    method: POST
+    path: /jobs
+    successStatus: 201
+  getJob:
+    method: GET
+    path: /jobs/{id}

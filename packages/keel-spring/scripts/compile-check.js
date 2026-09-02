@@ -18,21 +18,30 @@
 //   node packages/keel-spring/scripts/compile-check.js [fixture] [--broker=<id>]
 //   npm run compile-check --workspace packages/keel-spring
 //
-// **Por qué el npm script invoca esto DOS veces.** El eje del motor no acaba en los seis
-// dialectos relacionales: `persistence.default.model: document` es otra rama entera del
-// scaffolding —espejo, repositorios, reclamos por `findAndModify`, y un arnés que habla
-// `mongosh` en vez de `psql`—, y con la fixture por defecto, que es relacional, no se
-// compilaba nunca. Es el MISMO agujero que tenía el eje del motor antes de la pasada de
-// MySQL, y aquel costó una corrida entera: Java inválido que salía verde aquí porque la
-// combinación que lo producía no se compilaba jamás.
+// **Por qué el npm script invoca esto varias veces.** Cada pasada añade un eje que ninguna
+// de las anteriores compila, y todas nacieron de un agujero real.
 //
-// Con un broker basta para esa segunda pasada: lo que cambia con el modelo de persistencia
-// no cambia además con el broker, y los tres brokers ya se cruzan en la primera.
+// El eje del MOTOR no acaba en los seis dialectos relacionales: `persistence.default.model:
+// document` es otra rama entera del scaffolding —espejo, repositorios, reclamos por
+// `findAndModify`, y un arnés que habla `mongosh` en vez de `psql`—, y con la fixture por
+// defecto, que es relacional, no se compilaba nunca. Es el MISMO agujero que tenía el eje
+// del motor antes de la pasada de MySQL, y aquel costó una corrida entera: Java inválido
+// que salía verde aquí porque la combinación que lo producía no se compilaba jamás.
 //
-// Y una TERCERA por la capa `mail`, que añade su propio Java al arnés (las aserciones sobre
-// el buzón que emite `mail-harness.js`). Ninguna de las otras dos fixtures la declara, así
-// que ese arnés no se había compilado nunca: `mail-check` comprueba que las rutas del buzón
-// sean las correctas contra un Mailpit real, pero no que el Java que las usa compile.
+// Con un broker basta para esas pasadas: lo que cambia con el modelo de persistencia no
+// cambia además con el broker, y los tres brokers ya se cruzan en la primera.
+//
+// Otra por la capa `mail`, que añade su propio Java al arnés (las aserciones sobre el buzón
+// que emite `mail-harness.js`). Ninguna de las demás fixtures la declara, así que ese arnés
+// no se había compilado nunca: `mail-check` comprueba que las rutas del buzón sean las
+// correctas contra un Mailpit real, pero no que el Java que las usa compile.
+//
+// Y las dos últimas por el RESCATE de un barrido —las filas que otra réplica dejó en vuelo—,
+// que hasta que existió `job-dispatch` no lo generaba ninguna fixture: ni el reclamo con su
+// cota temporal ni los tres helpers del arnés (`stallInFlight`, `putInFlight`,
+// `inFlightWithoutClock`) habían pasado nunca por javac. Van dos porque son el par
+// relacional/documental del mismo diseño, y el `mongoEval` del segundo lleva sus comillas
+// escapadas dentro de un literal Java: tres niveles de plantilla.
 
 import fs from 'node:fs';
 import os from 'node:os';

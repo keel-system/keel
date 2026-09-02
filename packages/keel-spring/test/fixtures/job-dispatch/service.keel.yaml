@@ -1,0 +1,20 @@
+keel: "2.13"
+# La MITAD RELACIONAL del par `job-dispatch` / `job-dispatch-mongo`.
+#
+# La silueta que ninguna otra fixture daba: un barrido con las DOS clases de reclamo a la
+# vez —el lote de una COLA y el RESCATE de las filas que otra réplica dejó en vuelo—. Es el
+# sujeto con el que `java-syntax` tokeniza ese Java y `compile-check` compila su arnés.
+#
+# La hermana documental es el mismo diseño con otro `persistence.default.model`, y
+# `domain`, `use-cases` y `api` van BYTE A BYTE iguales en las dos: hay un test que lo
+# exige (`rescue-shape-coverage.test.js`). Cualquier cambio al diseño va en las dos.
+service:
+  name: job-dispatch
+  version: 1.0.0
+  description: Encola trabajos y los despacha por ciclos, rescatando los que una réplica dejó a medias.
+  domain: operations
+layers:
+  domain: domain.keel.yaml
+  use-cases: use-cases.keel.yaml
+  api: api.keel.yaml
+  persistence: persistence.keel.yaml

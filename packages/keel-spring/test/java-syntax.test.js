@@ -206,7 +206,19 @@ const MATRIX = [
   // La silueta del correo: la ÚNICA que renderiza la sección de buzón de
   // AbstractFlowIT, el adaptador SMTP, el motor de plantillas y el appendix de
   // índices condicionados. Sin esta fila, todo ese Java no lo tokeniza nadie.
-  ['notification-mailer', { broker: 'kafka' }]
+  ['notification-mailer', { broker: 'kafka' }],
+  // La silueta del barrido con las DOS clases de reclamo: `queued` es una COLA y
+  // `running` está EN VUELO, así que la misma operación genera el reclamo del lote y el
+  // RESCATE con su cota temporal. Es la única fila que tokeniza ese Java —el @Modifying
+  // condicional sobre el reloj, su @Value y los tres helpers del arnés—, que hasta ahora
+  // no lo compilaba nadie: lo respaldaban solo comparaciones de cadenas.
+  ['job-dispatch', {}],
+  // Y su hermana documental: el modelo de persistencia es otra rama entera —espejo,
+  // repositorios, reclamo por `findAndModify` y un arnés que habla `mongosh` en vez de
+  // `psql`—, y el `mongoEval` del rescate lleva sus comillas escapadas dentro de un
+  // literal Java. Tres niveles de plantilla es justo donde se pierde un escape, y eso no
+  // lo distingue ningún `includes(...)`.
+  ['job-dispatch-mongo', {}]
 ];
 
 // El comprobador se comprueba a sí mismo. Un linter que solo sale en verde no

@@ -1,0 +1,62 @@
+operations:
+
+  enqueueJob:
+    description: Encola un trabajo para que lo tome el siguiente ciclo del despachador.
+    kind: command
+    input:
+      fields:
+        reference: { type: string, required: true, constraints: { maxLength: 64 } }
+        priority:  { type: JobPriority, required: true }
+        payload:   { type: text }
+    output: { entity: Job }
+    preconditions:
+      - No hay ya un trabajo encolado con esa misma referencia.
+    rules:
+      - "El trabajo nace en queued y sin runningSince: nadie lo ha tomado todavía."
+    errors:
+      - { code: JOB_ALREADY_ENQUEUED, when: Ya existe un trabajo con esa referencia., http: 409 }
+
+  getJob:
+    description: Consulta el estado de un trabajo por su identificador.
+    kind: query
+    input:
+      fields:
+        id: { type: uuid, required: true }
+    output: { entity: Job }
+    errors:
+      - { code: JOB_NOT_FOUND, when: No existe un trabajo con ese identificador., http: 404 }
+
+  # El sujeto de la fixture. Declara las DOS transiciones a propósito, y de ahí salen los
+  # dos reclamos que `classifyClaims` distingue:
+  #
+  #   · queued → running  · `queued` es una COLA (ninguna transición del lifecycle llega
+  #                         ahí), así que se toma el lote entero. Y como su DESTINO es el
+  #                         estado que el rescate vigila, este reclamo estampa además
+  #                         runningSince en el MISMO UPDATE (stampClaimClocks).
+  #   · running → done    · `running` está EN VUELO: puede haber otra réplica trabajando
+  #                         en esas filas ahora mismo, así que el reclamo lleva encima una
+  #                         cota temporal sobre runningSince. Es el RESCATE.
+  #
+  # Y no cae en ninguna de las cuatro condiciones que descalifican un barrido: tiene
+  # schedule, no la dispara ninguna suscripción, no es el reconciledBy de nadie y no
+  # recibe el id de la fila que procesa.
+  dispatchJobs:
+    description: Toma los trabajos encolados, los despacha y cierra los que quedaron a medias.
+    kind: command
+    internal: true
+    input: "void"
+    output: "void"
+    schedule:
+      cron: "* * * * *"
+      description: Cada minuto, sobre el lote que quepa en una pasada.
+    transitions:
+      - entity: Job
+        from: [queued]
+        to: running
+      - entity: Job
+        from: [running]
+        to: done
+    rules:
+      - Un trabajo lo toma un solo ciclo, aunque el despachador corra en varias réplicas.
+      - Un trabajo que lleva en running más de lo que tarda un ciclo se da por abandonado y se cierra.
+      - "Un trabajo recién tomado no se rescata: hay una réplica trabajando en él."

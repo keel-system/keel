@@ -1,0 +1,24 @@
+keel: "2.13"
+# La MITAD DOCUMENTAL del par `job-dispatch` / `job-dispatch-mongo`.
+#
+# Las dos fixtures son el mismo diseño con una única diferencia de fondo —el
+# `persistence.default.model`—, porque el modelo de persistencia es una rama entera del
+# scaffolding: espejo, repositorios, el reclamo por `findAndModify` y un arnés que habla
+# `mongosh` en vez de `psql`. Sin esta mitad, el Java documental del rescate no lo
+# tokenizaba `java-syntax` ni lo compilaba `compile-check` con ninguna fixture, y es justo
+# donde ya mordió dos veces: las comillas de `mongosh` viven en tres niveles de plantilla.
+#
+# `domain`, `use-cases` y `api` van BYTE A BYTE idénticos a los de `job-dispatch`, y hay un
+# test que lo exige (`rescue-shape-coverage.test.js`). Si se desincronizan, las dos siguen
+# validando y los dos comprobadores siguen en verde, pero el par deja de probar «el mismo
+# diseño con otro motor», que es lo único que afirma.
+service:
+  name: job-dispatch-mongo
+  version: 1.0.0
+  description: El mismo despachador de trabajos que job-dispatch, sobre un modelo documental.
+  domain: operations
+layers:
+  domain: domain.keel.yaml
+  use-cases: use-cases.keel.yaml
+  api: api.keel.yaml
+  persistence: persistence.keel.yaml

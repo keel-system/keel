@@ -326,6 +326,34 @@ test('la puntuación borra la evidencia de la corrida anterior antes de empezar'
   assert.ok(iPurga < script.indexOf('./gradlew integrationTest'), script.slice(iPurga - 120, iPurga + 120));
 });
 
+// La señal del outbox solo se afirmaba en la dirección que no importa: todos los escenarios
+// comprueban que vale CERO. Si la sonda estuviera rota y devolviera siempre cero, las cinco
+// aserciones pasarían en vacío. Esto es lo que permite verla en la dirección positiva.
+test('el arnés sabe agotar el presupuesto de reintentos de un evento, y limpiarlo', () => {
+  const harness = project('stock-reservation', SNSSQS).file('AbstractFlowIT.java');
+
+  assert.match(harness, /protected static void abandonOutboxEvent\(String eventType\)/);
+  assert.match(harness, /protected static void clearAbandonedOutboxEvents\(\)/);
+
+  // Se localiza la fila por su TIPO DE EVENTO, que es texto: ni literal de fecha ni de uuid,
+  // así que alcanza a todos los motores con CLI de consulta y no solo a los dos de
+  // ageForReconciliation.
+  assert.ok(harness.includes('WHERE event_type = '), harness);
+  // Y el valor va muy por encima de cualquier max-attempts (40 en local, 10 en el resto):
+  // leer el parámetro ataría el arnés al perfil con el que corre.
+  assert.ok(harness.includes('SET attempts = 1000000'), harness);
+  // La limpieza existe porque el cron de purga NO borra lo abandonado: solo borra lo
+  // publicado, así que la fila sobrevive dentro de la clase y ensucia el contador.
+  assert.ok(harness.includes('DELETE FROM outbox_event WHERE published_at IS NULL'), harness);
+});
+
+test('sin outbox no hay nada que abandonar', () => {
+  // metering-digest publica best-effort: no hay fila que agotar ni contador que ensuciar.
+  const harness = project('metering-digest', { ...SNSSQS, database: 'postgresql' }).file('AbstractFlowIT.java');
+  assert.ok(!harness.includes('abandonOutboxEvent'), 'se emitió el helper sin outbox');
+  assert.ok(!harness.includes('deadLetteredEvents'), 'se emitió la sonda sin outbox');
+});
+
 test('el outbox publica cuántos eventos se rindió, y el arnés lo lee por HTTP', () => {
   const generated = project('stock-reservation', SNSSQS);
   const relay = generated.file('OutboxRelay.java');

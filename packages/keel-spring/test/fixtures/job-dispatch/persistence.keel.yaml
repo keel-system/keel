@@ -1,0 +1,18 @@
+default:
+  model: relational
+
+entities:
+  Job:
+    persisted: true
+    naturalKey: [reference]
+    indexes:
+      # El predicado de las dos mitades del barrido: el lote de la cola y, con el reloj,
+      # el del rescate.
+      - [status]
+      - [status, runningSince]
+
+audit:
+  timestamps: declared
+
+consistency:
+  transactionalBoundary: per-operation

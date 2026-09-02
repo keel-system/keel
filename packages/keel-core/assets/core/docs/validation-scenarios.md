@@ -118,6 +118,58 @@ Lo que cada escenario debe fijar porque dos stacks lo resolverían distinto. Las
 
   Es una de las **dos** reglas de esta sección que exigen tocar la infraestructura —la otra es la del barrido, justo debajo—, y es deliberado: el mecanismo consiste precisamente en no depender de que el canal esté disponible, así que la única forma de observarlo es quitarlo de en medio. El escenario habla del **canal lógico** («indisponible»), nunca del broker concreto ni de cómo se detiene: eso es del generador.
 
+  Y **un segundo escenario**, que es el otro desenlace del mecanismo y el único que pierde datos:
+  **el evento que el relay abandona**. Cuando agota su presupuesto de reintentos, la fila deja de
+  reclamarse y se queda ahí — el barrido de retención no la borra, porque solo borra lo publicado —,
+  así que el evento no sale nunca. El escenario del canal indisponible no lo cubre: allí el evento
+  acaba saliendo. Y afirmar «ningún evento abandonado» en los demás tampoco, porque eso comprueba
+  el caso bueno.
+
+  ```
+  ### FL-OBX-002: el evento que el relay abandona no se pierde en silencio
+  **Given** el canal indisponible y una mutación ya ejecutada, con su evento pendiente de salir
+  **When** se agota el presupuesto de reintentos de ese evento
+  **Then**
+  1. el servidor lo dice: informa de **un** evento abandonado
+  2. restablecido el canal, ese evento **no** se publica — el relay respeta que se rindió
+  3. y el canal no recibe ninguna otra cosa
+  ```
+
+  El punto 2 es el que lo hace algo más que una prueba de la señal: sin él, un relay que ignorase
+  su propio presupuesto reintentaría para siempre una fila ya dada por perdida, y el escenario
+  pasaría igual. El escenario habla del **presupuesto de reintentos**, nunca del número ni del
+  nombre de la métrica: los dos son del generador.
+
+- **Si una operación con `schedule` saca filas de un estado EN VUELO** —uno al que alguna
+  transición del lifecycle llega— no está vaciando una cola: está tomando filas en las que otra
+  réplica puede estar trabajando. Eso solo es correcto con una cota temporal, y la cota exige
+  **dos** escenarios.
+
+  ```
+  ### FL-RSC-001: se rescata lo que otra réplica dejó a medias
+  **Given** una fila en el estado en vuelo, con su reloj más atrás que el plazo tolerado — el
+  estado exacto en que queda una réplica que murió con ella en la mano
+  **When** pasa un ciclo del barrido
+  **Then**
+  1. la fila avanza al estado siguiente;
+  2. el trabajo que se perdió se vuelve a encargar (el mensaje sale **exactamente una vez**);
+  3. **ninguna fila queda en vuelo con el reloj sin estampar**
+
+  ### FL-RSC-002: lo que acaba de entrar en vuelo NO se toca
+  **Given** una fila en el mismo estado, con el reloj a **ahora**
+  **When** pasan dos ciclos del barrido
+  **Then** sigue igual, su reloj no ha cambiado, y no se ha encargado nada
+  ```
+
+  El segundo es el que importa: un rescate sin cota pasa el primero sin despeinarse y falla aquí,
+  y su modo de fallo en producción no es un error — son dos réplicas haciendo el mismo trabajo a
+  la vez. El punto 3 del primero cubre el instante ANTERIOR, que ningún escenario mira: si el
+  reclamo mueve el estado sin estampar el reloj, la fila queda irrescatable para siempre.
+
+  El `Given` no espera el plazo real ni lo baja: pone la fila en ese estado con el reloj que toque
+  (en keel-spring, `stallInFlight(...)` y `putInFlight(...)`). El **plazo** es del generador; el
+  **reloj** lo declara el diseño, y sin él no hay rescate que generar.
+
 - **Si una activación declara `reconciledBy`**, un escenario ejercita el desenlace que no produce ningún hecho:
   el encargo sale, **nadie contesta**, y el barrido se rinde. Es la garantía que ese campo compra y ningún otro
   escenario alcanza — el camino feliz y la compensación cubren los dos desenlaces que SÍ llegan.
@@ -190,7 +242,7 @@ inventarle una puerta.
 
 ## Lo que se comprueba solo
 
-Casi todo lo de § Reglas de cobertura es revisión de `/keel-validate`, que lee y juzga. Siete reglas están además **mecanizadas** en `keel validate`, que busca las señales en el texto de este archivo y **avisa** cuando no las encuentra: los dos escenarios de repetición de cada compensación (reentrega y doble entrega simultánea), el escenario de carrera de cada operación con `idempotency`, el escenario de canal indisponible cuando el diseño declara `reliability: outbox`, los `serviceClient` y los roles que los escenarios nombran y el diseño no declara, y el barrido que no tiene ni puerta ni efecto declarado contra el que afirmar.
+Casi todo lo de § Reglas de cobertura es revisión de `/keel-validate`, que lee y juzga. Siete reglas están además **mecanizadas** en `keel validate`, que busca las señales en el texto de este archivo y **avisa** cuando no las encuentra: los dos escenarios de repetición de cada compensación (reentrega y doble entrega simultánea), el escenario de carrera de cada operación con `idempotency`, los DOS escenarios del outbox cuando el diseño declara `reliability: outbox` —el del canal indisponible y el del evento abandonado—, los `serviceClient` y los roles que los escenarios nombran y el diseño no declara, y el barrido que no tiene ni puerta ni efecto declarado contra el que afirmar.
 
 Son avisos, no errores, y la razón es lo que son: lectura de texto. Puede no reconocer una redacción rara, y el coste de equivocarse por ese lado es una frase de más; por el contrario, un mecanismo roto que nadie echa de menos. Se mecanizaron estas cuatro y no otras porque comparten un rasgo: el gate del generador solo puntúa lo que este documento declara, así que un escenario que faltaba aquí **no lo echaba de menos nadie** — ni el diseño, que no lo exigía, ni el generador, que no lo esperaba —, y las cuatro cubren caminos que solo se ejecutan cuando algo ya salió mal.
 

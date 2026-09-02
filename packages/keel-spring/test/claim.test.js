@@ -10,6 +10,7 @@ import { generate as generateOutbox } from '../src/scaffold/outbox.js';
 import { generate as generateRepositories } from '../src/scaffold/repositories.js';
 import { generate as generateDocumentRepositories } from '../src/scaffold/document-repositories.js';
 import { warnUnsupportedDialect } from '../src/scaffold/claim.js';
+import * as integrationTests from '../src/scaffold/integration-tests.js';
 import { supportsSkipLocked } from '../src/lib/claim-sql.js';
 
 // Un barrido corre en TODAS las réplicas: @Scheduled es «una vez por instancia», no «una
@@ -461,4 +462,60 @@ test('un barrido se agrupa con el agregado que sus transiciones mueven', () => {
   const model = modelFor(layers);
   const owner = model.services.find((s) => (s.operations ?? []).some((o) => o.name === 'sweepPendingWork'));
   assert.equal(owner.className, 'JobService', model.services.map((s) => s.className).join(', '));
+});
+
+// ── La palanca del arnés ─────────────────────────────────────────────────────
+//
+// El rescate era el mecanismo más caro de no tener palanca: CUATRO corridas escribieron el
+// mismo escenario a mano con cuatro SQL distintos, una reventó con «Data too long for column
+// id» por componer el literal del UUID a mano, y el diagnóstico de la de Mongo costó un ciclo
+// entero de arbitraje. Todo lo que adivinaron sale del modelo.
+
+const harnessFor = (layers, database = 'postgresql') => {
+  const model = modelFor(layers, database);
+  const file = integrationTests.generate(model).find((f) => f.path.endsWith('AbstractFlowIT.java'));
+  return file?.content ?? '';
+};
+
+
+test('el arnés sabe atascar una fila en vuelo, con la tabla y el reloj del diseño', () => {
+  const harness = harnessFor(rescueSweep());
+
+  // Tabla, columna de estado, valor SCREAMING y columna del reloj salen todos del diseño:
+  // son las cuatro cosas que las corridas tuvieron que adivinar.
+  assert.match(harness, /UPDATE jobs SET status = .RUNNING., running_since = TIMESTAMP/);
+  assert.ok(harness.includes('+ uuidLiteral(id));'), harness);
+
+  // Y el reloj a AHORA, que es la mitad que separa rescatar de robarle el trabajo a quien lo
+  // está haciendo: un rescate sin cota pasa el primer escenario y falla este.
+  assert.match(harness, /running_since = CURRENT_TIMESTAMP/);
+  assert.match(harness, /protected static void putInFlight\(String operation, String id\)/);
+});
+
+// El defecto que su propio informe llamó «el de más impacto de los siete», y que NINGÚN
+// escenario del rescate caza: si el reclamo mueve el estado sin estampar la marca, la fila
+// queda irrescatable para siempre —quien la busca filtra por `< :staleBefore`, y con la marca
+// a nulo esa comparación es UNKNOWN—. El escenario no lo ve porque él pone el reloj retrasado.
+test('y sabe contar las filas en vuelo con el reloj sin estampar', () => {
+  const harness = harnessFor(rescueSweep());
+  assert.match(harness, /SELECT COUNT\(\*\) FROM jobs WHERE status = .RUNNING. AND running_since IS NULL/);
+  assert.match(harness, /protected static long inFlightWithoutClock\(String operation\)/);
+});
+
+test('la rama documental habla mongosh, con la sintaxis que la corrida de Mongo dejó probada', () => {
+  const harness = harnessFor(rescueSweep(), 'mongodb');
+  assert.ok(harness.includes('db.getCollection(\\"jobs\\").updateOne'), harness);
+  assert.ok(harness.includes('_id: UUID('), harness);
+  assert.ok(harness.includes('new Date(0)'), harness);
+});
+
+// Donde build no pudo generar el reclamo no hay estado ni columna que nombrar, así que
+// tampoco hay palanca: inventarla sería peor que no tenerla.
+test('sin reloj declarado no hay reclamo y tampoco palanca', () => {
+  const harness = harnessFor(layersWith({ sweepTransitions: [{ entity: 'Job', from: ['running'], to: 'done' }] }));
+  assert.ok(!harness.includes('stallInFlight'), harness);
+});
+
+test('un barrido que solo vacía una COLA no recibe palanca de rescate', () => {
+  assert.ok(!harnessFor(queueSweep()).includes('stallInFlight'));
 });

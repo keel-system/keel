@@ -8,9 +8,10 @@
   },
   "scripts": {
     "test": "node --test",
-    "compile-check": "node scripts/compile-check.js && node scripts/compile-check.js asset-vault --broker=snssqs && node scripts/compile-check.js notification-mailer --broker=snssqs",
+    "compile-check": "node scripts/compile-check.js && node scripts/compile-check.js asset-vault --broker=snssqs && node scripts/compile-check.js notification-mailer --broker=snssqs && node scripts/compile-check.js job-dispatch && node scripts/compile-check.js job-dispatch-mongo --broker=kafka",
     "broker-check": "node scripts/broker-check.js",
-    "mail-check": "node scripts/mail-check.js"
+    "mail-check": "node scripts/mail-check.js",
+    "mongo-check": "node scripts/mongo-check.js"
   },
   "files": [
     "src",

@@ -3,3 +3,4 @@ node_modules/
 # Matriz de la última corrida de `npm run broker-check` (artefacto local).
 broker-check.json
 mail-check.json
+mongo-check.json
