@@ -121,6 +121,19 @@ function composeUp(frontends, projectDir) {
   return { frontend: null, log: failures.join('\n') };
 }
 
+// Sello del veredicto: cuándo se emitió y sobre QUÉ árbol. Sin él, un artefacto rojo de un
+// borrador anterior es indistinguible de un veredicto recién emitido — que es exactamente lo que
+// pasó con `mongo-check.json` el 2026-09-01: el rojo era de la versión de hace tres minutos.
+function verdictStamp() {
+  const head = run('git', ['rev-parse', '--short', 'HEAD']);
+  const dirty = run('git', ['status', '--porcelain']);
+  return {
+    generatedAt: new Date().toISOString(),
+    head: head.status === 0 ? head.stdout.trim() : null,
+    dirty: dirty.status === 0 ? dirty.stdout.trim().length > 0 : null
+  };
+}
+
 function composeDown(frontend, projectDir) {
   run(frontend.command, [...frontend.prefix, '-f', 'infra/docker-compose.yaml', 'down', '-v'], { cwd: projectDir });
 }
@@ -1079,7 +1092,7 @@ for (const id of ids) {
 
 fs.writeFileSync(
   path.join(process.cwd(), 'broker-check.json'),
-  JSON.stringify({ fixture, brokers, matrix, fatal }, null, 2),
+  JSON.stringify({ ...verdictStamp(), fixture, brokers, matrix, fatal }, null, 2),
   'utf8'
 );
 

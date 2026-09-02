@@ -34,7 +34,6 @@
 // Salidas: 0 todo OK · 1 hay fallos · 2 la infraestructura no levantó (sin veredicto).
 
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -109,7 +108,9 @@ function composeDown(frontend, projectDir) {
  * cambia la cadena de conexión o los flags, este runner los sigue.
  */
 function makeEval({ runtime, container, argv }) {
-  const local = path.join(os.tmpdir(), `keel-mongo-check-${process.pid}.js`);
+  // El temporal cuelga de `tmpDir()` y no de `os.tmpdir()` a pelo: lo que cuelga de ahí lo
+  // barre el propio proceso al salir, también cuando el runner muere a mitad de un escenario.
+  const local = path.join(tmpDir('keel-mongo-eval-'), 'keel-check.js');
   return (script) => {
     fs.writeFileSync(local, script, 'utf8');
     const copy = run(runtime, ['cp', local, `${container}:/tmp/keel-check.js`]);
@@ -119,6 +120,19 @@ function makeEval({ runtime, container, argv }) {
       throw new Error(`mongosh falló: ${(result.stderr || result.stdout).trim().split('\n').slice(-3).join(' ')}`);
     }
     return result.stdout.trim();
+  };
+}
+
+// Sello del veredicto: cuándo se emitió y sobre QUÉ árbol. Sin él, un artefacto rojo de un
+// borrador anterior es indistinguible de un veredicto recién emitido — que es exactamente lo que
+// pasó con `mongo-check.json` el 2026-09-01: el rojo era de la versión de hace tres minutos.
+function verdictStamp() {
+  const head = run('git', ['rev-parse', '--short', 'HEAD']);
+  const dirty = run('git', ['status', '--porcelain']);
+  return {
+    generatedAt: new Date().toISOString(),
+    head: head.status === 0 ? head.stdout.trim() : null,
+    dirty: dirty.status === 0 ? dirty.stdout.trim().length > 0 : null
   };
 }
 
@@ -385,7 +399,7 @@ for (const result of results) console.log(`  ${result.id}  ${result.ok ? 'OK' : 
 
 fs.writeFileSync(
   path.join(process.cwd(), 'mongo-check.json'),
-  JSON.stringify({ results, fatal }, null, 2),
+  JSON.stringify({ ...verdictStamp(), results, fatal }, null, 2),
   'utf8'
 );
 
