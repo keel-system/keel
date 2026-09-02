@@ -61,7 +61,10 @@ export function generate(model) {
     document ? renderDocumentRepository(model) : renderRepository(model),
     renderDispatcherPort(model),
     renderDispatcherStub(model),
-    document ? renderDocumentRelay(model) : renderRelay(model)
+    document ? renderDocumentRelay(model) : renderRelay(model),
+    // Las dos piezas que sacan la publicación de la transacción, solo en la rama
+    // relacional: la documental nunca la tuvo dentro (ver renderDocumentRelay).
+    ...(document ? [] : [renderClaimedEvent(model), renderRelayStore(model)])
   ];
 }
 
@@ -774,16 +777,34 @@ public class OutboxDispatcherFallbackConfig {
   };
 }
 
+// El relay relacional, en TRES pasos y con la publicación FUERA de toda transacción.
+//
+// Antes era un único método `@Transactional` que envolvía también el `dispatch(...)`: una
+// conexión del pool retenida durante la llamada de red, por todo el lote. Bajo carga normal
+// no se nota; bajo la puntual de un escenario que arranca y mata una réplica entera, el pool
+// acotado de test se queda sin conexiones justo cuando el listener de al lado necesita una, y
+// lo que se ve desde fuera es «un estado no transicionó a tiempo» — tres ciclos de arbitraje
+// en la corrida `refunds-http` para llegar hasta aquí.
+//
+// La rama documental ya no lo hacía y lo decía con todas las letras (ver renderDocumentRelay:
+// «abrir una transacción solo serviría para mantenerla abierta durante la entrega al broker»).
+// Lo que ataba a la relacional era su reclamo: el SKIP LOCKED solo reparte filas disjuntas
+// MIENTRAS la transacción sigue abierta. Por eso el reclamo estampa además un LEASE sobre
+// `next_attempt_at`, que es lo que retira la fila de las siguientes pasadas una vez soltado el
+// lock — la misma marca persistida y caducable que usan los demás reclamos del generador
+// (claim.js, ReconciliationClaimStore), no una invención de aquí.
 function renderRelay(model) {
-  // El aislamiento del relay, y aquí importa más que en ningún otro reclamo: esta
-  // transacción no dura lo que un UPDATE, dura lo que la ENTREGA AL BROKER de todo el lote
-  // —su javadoc explica por qué tiene que sostener el lock hasta el commit—. Con los gap
-  // locks de REPEATABLE READ puestos durante esos segundos, y una pasada cada segundo, las
-  // altas de la API se quedan esperando casi todo el tiempo.
-  const claimTx = claimTransaction(model.stack?.database, { propagation: null });
   const body = `/**
  * Reenvía al broker las filas pendientes del outbox, ya fuera de la transacción
  * que las creó.
+ *
+ * <p><b>Tres pasos, y la publicación no está dentro de ninguna transacción:</b>
+ * (1) {@link OutboxRelayStore#claimBatch} reclama el lote en una transacción corta;
+ * (2) el dispatcher publica, sin conexión de base de datos retenida; (3)
+ * {@code markPublished}/{@code markFailed} escriben el desenlace en otra transacción
+ * corta. Meter (2) dentro de (1) es retener una conexión del pool durante I/O de red:
+ * con el broker lento, el pool se agota y lo que falla es cualquier otra cosa que
+ * necesitara una conexión en ese momento.
  *
  * Un fallo de entrega no revierte nada: incrementa el contador de intentos y la
  * fila se reintenta en la pasada siguiente (entrega at-least-once — el
@@ -798,6 +819,7 @@ public class OutboxRelay {
     private static final Logger log = LoggerFactory.getLogger(OutboxRelay.class);
 
     private final OutboxEventJpaRepository outboxRepository;
+    private final OutboxRelayStore store;
     private final OutboxDispatcher dispatcher;
     private final MeterRegistry meterRegistry;
 
@@ -813,11 +835,23 @@ public class OutboxRelay {
     @Value("\${outbox.relay.backoff.max-ms:60000}")
     private long backoffMaxMs;
 
+    /**
+     * Cuánto retiene el lease una fila reclamada mientras su publicación está en vuelo.
+     * Tiene que cubrir con holgura el timeout de la llamada al broker: si se queda corto,
+     * otra pasada recoge una fila que sigue despachándose y el consumidor recibe el evento
+     * dos veces (lo absorbe su deduplicación, pero es trabajo de más). Si una réplica muere
+     * con la fila en vuelo, el lease caduca y la siguiente pasada la recoge.
+     */
+    @Value("\${outbox.relay.claim-timeout-ms:60000}")
+    private long claimTimeoutMs;
+
     @Value("\${outbox.purge.retention-days:7}")
     private int retentionDays;
 
-    public OutboxRelay(OutboxEventJpaRepository outboxRepository, OutboxDispatcher dispatcher, MeterRegistry meterRegistry) {
+    public OutboxRelay(OutboxEventJpaRepository outboxRepository, OutboxRelayStore store,
+            OutboxDispatcher dispatcher, MeterRegistry meterRegistry) {
         this.outboxRepository = outboxRepository;
+        this.store = store;
         this.dispatcher = dispatcher;
         this.meterRegistry = meterRegistry;
     }
@@ -826,9 +860,8 @@ public class OutboxRelay {
      * La señal de que el outbox se rindió.
      *
      * <p>Una fila que agota sus reintentos deja de reclamarse y se queda ahí: es pérdida
-     * de datos en el mecanismo cuya ÚNICA promesa es que ningún evento se pierde. Hasta
-     * ahora lo único que ocurría era un {@code log.error}, y un log no dispara nada — el
-     * dato era derivable de la tabla y no lo derivaba nadie.
+     * de datos en el mecanismo cuya ÚNICA promesa es que ningún evento se pierde. Sin
+     * esto lo único que ocurre es un {@code log.error}, y un log no dispara nada.
      *
      * <p>Va como GAUGE y no como contador a propósito: un contador se reinicia con el
      * proceso y no ve las filas que se rindieron antes de arrancar, que son justo las que
@@ -845,39 +878,28 @@ public class OutboxRelay {
     }
 
     @Scheduled(fixedDelayString = "\${outbox.relay.fixed-delay-ms:1000}")
-${claimTx.annotation}
     public void relay() {
-        List<OutboxEventJpa> pending = outboxRepository.findPending(maxAttempts, Instant.now(), PageRequest.of(0, batchSize));
-        for (OutboxEventJpa row : pending) {
+        // (1) Reclamo: transacción corta, solo base de datos.
+        List<ClaimedOutboxEvent> claimed = store.claimBatch(maxAttempts, batchSize, claimTimeoutMs);
+        for (ClaimedOutboxEvent row : claimed) {
             try {
-                dispatcher.dispatch(row.getDestination(), row.getRoutingKey(), row.getEventType(), row.getPayload());
-                row.markPublished(Instant.now());
+                // (2) Publicación: FUERA de toda transacción. Ninguna conexión retenida.
+                dispatcher.dispatch(row.destination(), row.routingKey(), row.eventType(), row.payload());
+                // (3) Desenlace, en su propia transacción corta.
+                store.markPublished(row.id());
             } catch (RuntimeException ex) {
-                row.markFailed(truncate(ex.getMessage()));
-                if (row.getAttempts() >= maxAttempts) {
+                OutboxRelayStore.MarkFailedOutcome outcome =
+                        store.markFailed(row.id(), truncate(ex.getMessage()), maxAttempts, backoffInitialMs, backoffMaxMs);
+                if (outcome.deadLettered()) {
                     // Dead-letter: agotó los reintentos. Queda parada (fuera de futuros
                     // polls) para inspección manual; no se borra ni bloquea al resto.
                     log.error("Outbox: {} agotó {} reintentos y queda como dead-letter: {}",
-                            row.getId(), maxAttempts, ex.getMessage());
+                            row.id(), maxAttempts, ex.getMessage());
                 } else {
-                    // Backoff: aplaza el próximo intento crecientemente para no
-                    // reintentar en bucle apretado si el broker está caído.
-                    row.scheduleNextAttempt(Instant.now().plusMillis(backoffDelayMs(row.getAttempts())));
-                    log.warn("Outbox: fallo entregando {} (intento {}): {}", row.getId(), row.getAttempts(), ex.getMessage());
+                    log.warn("Outbox: fallo entregando {} (intento {}): {}", row.id(), outcome.attempts(), ex.getMessage());
                 }
             }
         }
-    }
-
-    // Backoff exponencial (multiplicador 2) con tope: initial * 2^(attempts-1),
-    // saturado en max. En long y con guarda del desplazamiento para no desbordar.
-    private long backoffDelayMs(int attempts) {
-        int shift = Math.min(attempts - 1, 62);
-        long delay = backoffInitialMs << shift;
-        if (delay < 0 || delay > backoffMaxMs) {
-            return backoffMaxMs;
-        }
-        return delay;
     }
 
     @Scheduled(cron = "\${outbox.purge.cron:0 0 3 * * *}")
@@ -912,8 +934,146 @@ ${claimTx.annotation}
         'io.micrometer.core.instrument.MeterRegistry',
         'jakarta.annotation.PostConstruct',
         'org.springframework.beans.factory.annotation.Value',
-        'org.springframework.data.domain.PageRequest',
         'org.springframework.scheduling.annotation.Scheduled',
+        'org.springframework.stereotype.Component',
+        'org.springframework.transaction.annotation.Transactional'
+      ],
+      body
+    )
+  };
+}
+
+/**
+ * La copia inmutable de lo que el relay necesita para despachar, ya fuera de la
+ * transacción de reclamo.
+ */
+function renderClaimedEvent(model) {
+  const body = `/**
+ * Lo que el relay necesita de una fila reclamada del outbox para publicarla.
+ *
+ * <p>Un record y no la entidad JPA a propósito: la entidad queda detached en cuanto la
+ * transacción de reclamo confirma —que es justo antes de publicar—, así que leerla ahí
+ * depende de qué tuviera cargado Hibernate. Esto no depende de nada.
+ */
+record ClaimedOutboxEvent(UUID id, String destination, String routingKey, String eventType, String payload) {
+}`;
+  return {
+    path: javaPath(model, OUTBOX_PKG, 'ClaimedOutboxEvent'),
+    content: javaFile(subPackage(model, OUTBOX_PKG), ['java.util.UUID'], body)
+  };
+}
+
+/**
+ * Las transacciones cortas del relay, en un bean APARTE.
+ *
+ * No son métodos `@Transactional` del propio relay porque un `@Transactional` invocado desde
+ * otro método de la misma clase no pasa por el proxy de Spring y no se aplica: el reclamo se
+ * quedaría sin transacción y la publicación seguiría igual de dentro que antes — el defecto
+ * que esto viene a arreglar, y sin que nada lo delatara. Es el mismo motivo por el que
+ * `ReconciliationClaimWriter` vive separado de su store.
+ */
+function renderRelayStore(model) {
+  // El aislamiento del RECLAMO. Ahora la transacción dura lo que el SELECT y el UPDATE del
+  // lease, no lo que la entrega del lote entero: los gap locks de REPEATABLE READ, que antes
+  // se sostenían durante toda la publicación, se sueltan en milisegundos.
+  const claimTx = claimTransaction(model.stack?.database, { propagation: null });
+  const body = `/**
+ * Las tres transacciones CORTAS del relay, separadas a propósito de la publicación al
+ * broker (I/O de red).
+ *
+ * <ol>
+ *   <li>{@link #claimBatch}: reclamo con SKIP LOCKED más un LEASE sobre
+ *       {@code next_attempt_at}, que retira la fila de {@code findPending} mientras dura el
+ *       despacho. Confirma y suelta el lock en cuanto reclama: ninguna llamada de red ocurre
+ *       dentro.</li>
+ *   <li>{@link #markPublished} / {@link #markFailed}: el desenlace, cada uno en su
+ *       transacción, ya sin ningún lock del paso 1.</li>
+ * </ol>
+ *
+ * <p>El lease sustituye a la garantía que el SKIP LOCKED daba gratis mientras la transacción
+ * seguía abierta: sin él, otra réplica —o esta misma en la pasada siguiente— volvería a
+ * encontrar elegible una fila cuyo despacho sigue en vuelo.
+ */
+@Component
+class OutboxRelayStore {
+
+    private final OutboxEventJpaRepository outboxRepository;
+
+    OutboxRelayStore(OutboxEventJpaRepository outboxRepository) {
+        this.outboxRepository = outboxRepository;
+    }
+
+${claimTx.annotation}
+    List<ClaimedOutboxEvent> claimBatch(int maxAttempts, int batchSize, long claimTimeoutMs) {
+        Instant now = Instant.now();
+        List<OutboxEventJpa> pending = outboxRepository.findPending(maxAttempts, now, PageRequest.of(0, batchSize));
+        Instant leaseUntil = now.plusMillis(claimTimeoutMs);
+        List<ClaimedOutboxEvent> claimed = new ArrayList<>(pending.size());
+        for (OutboxEventJpa row : pending) {
+            claimed.add(new ClaimedOutboxEvent(row.getId(), row.getDestination(), row.getRoutingKey(),
+                    row.getEventType(), row.getPayload()));
+            // El lease. Si el despacho sale bien, markPublished la saca del todo; si falla,
+            // markFailed pisa este valor con el backoff real.
+            row.scheduleNextAttempt(leaseUntil);
+        }
+        return claimed;
+    }
+
+    @Transactional
+    void markPublished(UUID id) {
+        outboxRepository.findById(id).ifPresent(row -> row.markPublished(Instant.now()));
+    }
+
+    /**
+     * Incrementa el intento, decide dead-letter contra backoff con el contador YA
+     * incrementado y aplica el resultado, todo en la misma transacción: el relay nunca
+     * vuelve a preguntar «cuántos intentos lleva» con una consulta aparte que podría leer
+     * otra cosa.
+     */
+    @Transactional
+    MarkFailedOutcome markFailed(UUID id, String truncatedError, int maxAttempts, long backoffInitialMs, long backoffMaxMs) {
+        return outboxRepository.findById(id)
+                .map(row -> {
+                    row.markFailed(truncatedError);
+                    int attempts = row.getAttempts();
+                    boolean deadLettered = attempts >= maxAttempts;
+                    if (!deadLettered) {
+                        // Backoff: aplaza el próximo intento crecientemente para no
+                        // reintentar en bucle apretado si el broker está caído.
+                        row.scheduleNextAttempt(Instant.now().plusMillis(backoffDelayMs(attempts, backoffInitialMs, backoffMaxMs)));
+                    }
+                    return new MarkFailedOutcome(attempts, deadLettered);
+                })
+                // La fila desapareció entre el reclamo y el desenlace: no hay nada que
+                // actualizar, y se reporta agotada para no reintentar sobre un id que ya no está.
+                .orElse(new MarkFailedOutcome(maxAttempts, true));
+    }
+
+    // Backoff exponencial (multiplicador 2) con tope: initial * 2^(attempts-1), saturado en
+    // max. En long y con guarda del desplazamiento para no desbordar.
+    private static long backoffDelayMs(int attempts, long backoffInitialMs, long backoffMaxMs) {
+        int shift = Math.min(attempts - 1, 62);
+        long delay = backoffInitialMs << shift;
+        if (delay < 0 || delay > backoffMaxMs) {
+            return backoffMaxMs;
+        }
+        return delay;
+    }
+
+    record MarkFailedOutcome(int attempts, boolean deadLettered) {
+    }
+}`;
+
+  return {
+    path: javaPath(model, OUTBOX_PKG, 'OutboxRelayStore'),
+    content: javaFile(
+      subPackage(model, OUTBOX_PKG),
+      [
+        'java.time.Instant',
+        'java.util.ArrayList',
+        'java.util.List',
+        'java.util.UUID',
+        'org.springframework.data.domain.PageRequest',
         'org.springframework.stereotype.Component',
         ...claimTx.imports
       ],

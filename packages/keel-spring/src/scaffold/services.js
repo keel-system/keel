@@ -436,8 +436,12 @@ function renderHandler(model, service, operation) {
   }
   for (const eventName of operation.emits) {
     const event = (model.events ?? []).find((e) => e.name === eventName);
+    // El agregado que lo emite DESDE ESTA operación, no el primero de la lista: un mismo
+    // evento puede salir de dos raíces distintas, y nombrar la ajena manda a escribir el
+    // raise() en la clase equivocada.
+    const emisor = (event?.emittedBy ?? []).find((e) => e.operation === operation.name)?.aggregate;
     notes.push(
-      `Emite: ${eventName} — lo hace ${event?.aggregate ?? 'el agregado'} con raise(${event?.className ?? `${eventName}Event`}.of(...)) dentro del método de negocio; el handler no publica nada`
+      `Emite: ${eventName} — lo hace ${emisor ?? 'el agregado'} con raise(${event?.className ?? `${eventName}Event`}.of(...)) dentro del método de negocio; el handler no publica nada`
     );
   }
   // La guarda es la clave natural del agregado: otro esqueleto entero, y por eso su nota va

@@ -1,7 +1,9 @@
 // Los dos puntos donde se hace cumplir el formato que declara un value type.
 //
 // COMPUESTO: record PURO en domain/valueobject (sin JPA; la persistencia lo aplana a
-// columnas en la entidad Jpa), con el `pattern` en su constructor compacto.
+// columnas en la entidad Jpa), con TODO lo que su tipo declara hecho cumplir en el
+// constructor compacto: el `pattern`, las cotas `min`/`max` y —la que no rechaza sino que
+// NORMALIZA— la escala de un decimal.
 // ESCALAR: no tiene clase —se aplana a String—, así que se le da una: `<Tipo>Format`,
 // con la regex del diseño escrita una sola vez y un `validate` que llama quien
 // normaliza. Sin ella la instrucción que build deja en el command ("hazlo cumplir en
@@ -13,7 +15,18 @@ import { javaFile, javaPath, subPackage, javadoc } from './render.js';
 import { escapeJava } from '../lib/type-mapper.js';
 
 /**
- * El formato declarado en el tipo, hecho cumplir en el constructor compacto.
+ * Lo que el tipo declara, hecho cumplir en el constructor compacto: formato, cotas y escala.
+ *
+ * La escala es la que más cuesta echar de menos, porque no rompe nada visible. Un `record`
+ * compara con `BigDecimal.equals`, que es sensible a la escala: `12.5` y `12.50` no son
+ * iguales. El mismo importe leído de la base (escala de la columna) y construido desde el
+ * cuerpo de una petición son objetos distintos — en `equals`, en `hashCode` y en cualquier
+ * clave natural que los use—, y el fallo aparece lejos de aquí y de forma intermitente. La
+ * constitución ya lo exige (conventions/domain-modeling.md § precisión numérica); esto es lo
+ * que lo cumple.
+ *
+ * Antes solo se emitía con un `@Pattern` presente, así que un value object de solo importes
+ * —el caso más común de todos— se quedaba sin constructor y sin ninguna guarda.
  *
  * Los DTO de entrada dejan fuera el @Pattern heredado de un value type a propósito: el
  * formato describe el valor YA normalizado y Bean Validation corre antes de que el handler
@@ -22,38 +35,70 @@ import { escapeJava } from '../lib/type-mapper.js';
  * "después": el único punto por el que pasa cualquier valor de este tipo, venga del cable,
  * de la base de datos o de otro punto del dominio.
  */
-function patternGuards(vo) {
+function valueGuards(vo) {
   const guarded = vo.fields
     .map((field) => ({
       field,
       pattern: (field.validation ?? [])
         .find((annotation) => annotation.startsWith('@Pattern('))
-        ?.match(/regexp\s*=\s*"(.*)"\s*\)$/)?.[1] ?? null
+        ?.match(/regexp\s*=\s*"(.*)"\s*\)$/)?.[1] ?? null,
+      numeric: field.numeric ?? null
     }))
-    .filter(({ pattern }) => pattern);
-  if (guarded.length === 0) return '';
+    .filter(({ pattern, numeric }) => pattern || numeric);
+  if (guarded.length === 0) return { body: '', imports: [] };
+
+  const imports = [];
+  const constants = guarded
+    .filter(({ pattern }) => pattern)
+    .map(({ field, pattern }) => `    private static final Pattern ${formatConstant(field)} = Pattern.compile("${pattern}");`);
+  if (constants.length > 0) imports.push('java.util.regex.Pattern');
+
+  const checks = [];
+  for (const { field, pattern, numeric } of guarded) {
+    if (pattern) {
+      checks.push(`        if (${field.name} != null && !${formatConstant(field)}.matcher(${field.name}).matches()) {
+            throw new IllegalArgumentException("${vo.name}.${field.name} no cumple el formato declarado por su tipo");
+        }`);
+    }
+    if (!numeric) continue;
+    for (const [bound, operator, texto] of [
+      ['min', '<', 'menor que el mínimo'],
+      ['max', '>', 'mayor que el máximo']
+    ]) {
+      if (numeric[bound] == null) continue;
+      // Un BigDecimal se compara con compareTo, nunca con equals ni con los operadores:
+      // equals distingue 12.5 de 12.50 y los operadores no existen para objetos.
+      const condicion = numeric.decimal
+        ? `${field.name}.compareTo(new BigDecimal("${numeric[bound]}")) ${operator} 0`
+        : `${field.name} ${operator} ${numeric[bound]}`;
+      checks.push(`        if (${field.name} != null && ${condicion}) {
+            throw new IllegalArgumentException("${vo.name}.${field.name} es ${texto} declarado por su tipo (${numeric[bound]})");
+        }`);
+      if (numeric.decimal) imports.push('java.math.BigDecimal');
+    }
+    if (numeric.scale == null) continue;
+    // La normalización, que es lo único de aquí que MODIFICA en vez de rechazar. Sin ella
+    // el record compara con BigDecimal.equals, que es sensible a la escala: el mismo importe
+    // leído de la BD (escala de la columna) y construido desde el cuerpo de una petición
+    // (la que trajera el JSON) son objetos distintos, en equals, en hashCode y en cualquier
+    // clave que los use. Falla en silencio y de forma intermitente.
+    checks.push(`        if (${field.name} != null) {
+            ${field.name} = ${field.name}.setScale(${numeric.scale}, RoundingMode.HALF_UP);
+        }`);
+    imports.push('java.math.RoundingMode');
+  }
 
   // Un único constructor compacto, no uno por campo: un record solo admite uno, y
   // emitir dos es Java que no compila.
-  const constants = guarded
-    .map(({ field, pattern }) => `    private static final Pattern ${formatConstant(field)} = Pattern.compile("${pattern}");`)
-    .join('\n');
-  const checks = guarded
-    .map(
-      ({ field }) => `        if (${field.name} != null && !${formatConstant(field)}.matcher(${field.name}).matches()) {
-            throw new IllegalArgumentException("${vo.name}.${field.name} no cumple el formato declarado por su tipo");
-        }`
-    )
-    .join('\n');
-
-  return `
-${constants}
-
+  const body = `
+${constants.join('\n')}${constants.length > 0 ? '\n' : ''}
     public ${vo.name} {
-${checks}
+${checks.join('\n')}
     }
 `;
+  return { body, imports: [...new Set(imports)] };
 }
+
 
 function formatConstant(field) {
   return `${field.name.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toUpperCase()}_FORMAT`;
@@ -116,10 +161,10 @@ export function generate(model) {
       ...(f.kind === 'enum' ? [`${subPackage(model, 'domain.enums')}.${f.javaType}`] : [])
     ]);
     const components = vo.fields.map((f) => `${f.javaType} ${f.name}`).join(', ');
-    const guards = patternGuards(vo);
-    if (guards) imports.push('java.util.regex.Pattern');
+    const guards = valueGuards(vo);
+    imports.push(...guards.imports);
     const body = `${javadoc(vo.description)}public record ${vo.name}(${components}) {
-${guards}}`;
+${guards.body}}`;
 
     return {
       path: javaPath(model, 'domain.valueobject', vo.name),

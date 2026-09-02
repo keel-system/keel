@@ -150,26 +150,62 @@ tiene** backoff por reintento: relanzar la excepción deja que gobierne el
 curva exponencial de 500 ms a 30 s. El código compila, los tests aislados pasan y la
 política del diseño simplemente no existe.
 
-Se aplica extendiendo la visibilidad del mensaje en función de cuántas veces se ha
-recibido ya:
+Se aplica extendiendo la visibilidad del mensaje según cuántas veces lleva recibido
+(`ApproximateReceiveCount`), y **va en un `ErrorHandler<Object>` global, no en cada listener**:
 
 ```java
-@SqsListener("${messaging.subscriptions.withdrawal-rejected.queue:...}")
-public void on(WithdrawalRejectedMessage message,
-               @Header(SqsHeaders.MessageSystemAttributes.SQS_APPROXIMATE_RECEIVE_COUNT) String receiveCount,
-               Visibility visibility) {
-    try {
-        mediator.dispatch(...);
-    } catch (RuntimeException failure) {
-        visibility.extend((int) backoffSeconds(Integer.parseInt(receiveCount)));  // initial·2^(n-1), tope max
-        throw failure;   // sigue siendo un fallo: el reintento y la DLQ los gobierna la cola
+@Component
+public class SqsBackoffErrorHandler implements ErrorHandler<Object> {
+
+    private final SqsAsyncClient sqs;
+
+    @Override
+    public void handle(Message<Object> message, Throwable failure) {
+        extendVisibility(message);
+        rethrow(failure);           // ver abajo: no relanzar es acusar recibo
+    }
+
+    @Override
+    public void handle(Collection<Message<Object>> messages, Throwable failure) {
+        messages.forEach(this::extendVisibility);
+        rethrow(failure);
+    }
+
+    private void extendVisibility(Message<Object> message) {
+        MessageHeaders headers = message.getHeaders();
+        String queueUrl = headers.get(SqsHeaders.SQS_QUEUE_URL_HEADER, String.class);
+        String receipt  = headers.get(SqsHeaders.SQS_RECEIPT_HANDLE_HEADER, String.class);
+        String recibido = headers.get(SqsHeaders.MessageSystemAttributes.SQS_APPROXIMATE_RECEIVE_COUNT, String.class);
+        if (queueUrl == null || receipt == null) return;   // no es un mensaje de SQS
+        new QueueMessageVisibility(sqs, queueUrl, receipt).changeTo(backoffSeconds(recibido));
     }
 }
 ```
 
-El `extend` **no sustituye** al relanzamiento: solo cambia cuándo vuelve a estar visible.
-Y el número de reintentos sigue siendo el `maxReceiveCount` del redrive, que `build` ya
-siembra desde `retry.maxAttempts`.
+Se cablea a la factoría por defecto (`defaultSqsListenerContainerFactory`), así que cubre a
+todos los listeners sin tocar ninguno.
+
+**Por qué global y no un parámetro `Visibility` en la firma del listener.** Es el intento que
+sale solo, y no cubre el caso que más importa: un cuerpo que **no parsea** (un poison pill —un
+importe negativo, un enum desconocido—) falla en la **conversión del payload**, dentro de la
+resolución de argumentos del framework y **antes** de que el cuerpo del método se ejecute. Un
+parámetro de ese método nunca llega a existir en ese camino, así que el mensaje vuelve con el
+`VisibilityTimeout` fijo de la cola y agota su redrive a toda velocidad. El `Message` original
+—con sus headers, `ApproximateReceiveCount` incluido— sí sobrevive a ese fallo, y es lo único
+sobre lo que se puede decidir.
+
+**Relanza siempre.** El contrato de `ErrorHandler` es que si no relanzas, el framework **acusa
+recibo** del mensaje: lo borra de la cola como si hubiera ido bien. Un handler que se comiera la
+excepción convertiría cada fallo en un ack silencioso — ni reintento, ni redrive, ni DLQ. Un
+`Throwable` que no sea `RuntimeException` ni `Error` se envuelve para poder relanzarlo.
+
+El `extend` **no sustituye** al relanzamiento: solo cambia cuándo vuelve a estar visible. Y el
+número de reintentos sigue siendo el `maxReceiveCount` del redrive, que `build` ya siembra desde
+`retry.maxAttempts`.
+
+La curva sale de `initialDelayMs · 2^(recibido-1)`, acotada por `maxDelayMs`, los dos del diseño.
+Va en una clase aparte y no inline en el handler: es aritmética pura, la única parte de esto que
+se puede probar sin AWS delante.
 
 ## FIFO (solo si el diseño exige orden)
 

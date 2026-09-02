@@ -155,7 +155,7 @@ function renderAdapter(model, entity, paginated, batchLookup) {
   // cambio persistido del agregado. Va dentro de la transacción, que aquí es real
   // gracias al MongoTransactionManager: con reliability: outbox, el documento y su
   // outbox_event tienen que entrar en el mismo commit o en ninguno.
-  const emitsEvents = model.events.some((event) => event.aggregate === entity.name);
+  const emitsEvents = model.events.some((event) => event.aggregates.includes(entity.name));
   if (emitsEvents) {
     imports.add('org.springframework.context.ApplicationEventPublisher');
     imports.add('org.springframework.transaction.annotation.Transactional');

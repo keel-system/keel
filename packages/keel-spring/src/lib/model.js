@@ -13,7 +13,7 @@ import {
   basePackage,
   brokerSafeName
 } from './naming.js';
-import { resolveType, beanValidationAnnotations, columnAnnotations, inheritedTypePattern } from './type-mapper.js';
+import { resolveType, beanValidationAnnotations, columnAnnotations, inheritedTypePattern, numericConstraints } from './type-mapper.js';
 import { DATABASES } from './stack-catalog.js';
 
 const CRUD_PREFIXES = ['create', 'get', 'list', 'update', 'delete'];
@@ -380,6 +380,10 @@ function resolveField(ownerName, fieldName, field, domainTypes, inlineEnumName, 
     wireName: field.wireName && field.wireName !== fieldName ? field.wireName : null,
     description: field.description ?? null,
     validation: beanValidationAnnotations(field, resolved),
+    // Escala y cotas del campo, que `validation` no puede llevar: la escala se NORMALIZA
+    // (no se rechaza) y eso no es una anotación. Lo consume el constructor compacto del
+    // value object, que es el único punto por el que pasa cualquier valor de ese tipo.
+    numeric: numericConstraints(field, resolved),
     // La misma lista para un DTO de entrada: sin el formato heredado del value
     // type, que solo se cumple después de normalizar, y sin la anotación de
     // presencia de un campo con `default`, que por definición el cliente puede
@@ -1491,9 +1495,17 @@ function collectEvents(layers, services, service, domainTypes, inlineEnumName, w
       // La routing key NO se sanea: no es el nombre de un recurso, es un atributo
       // del mensaje (clave de enrutado en RabbitMQ, message attribute en SNS).
       routingKeyDefault: `${serviceSlug}.${kebabCase(name)}`,
-      // Quién lo emite: la raíz de agregado del grupo cuya operación lo declara
+      // Quién lo emite: las raíces de agregado de los grupos cuyas operaciones lo declaran
       // en `emits`. Es lo que permite sembrar el raise(...) donde corresponde.
-      aggregate: emitted[0]?.aggregate ?? null,
+      //
+      // Es una LISTA y no un nombre, y esa fue la diferencia entre generar el mecanismo
+      // entero y generar la mitad: un mismo evento puede salir de dos agregados distintos
+      // —un traspaso de dinero que piden tanto un reembolso como un crédito comercial— y
+      // quedarse con `emitted[0]` dejaba al segundo sin buffer de eventos, sin raise(), sin
+      // drenaje en su adaptador de repositorio y, lo peor, sin que el gate lo echara de menos
+      // (comprobaba una sola clase). El agregado que se quedaba fuera dependía del ORDEN en
+      // que el diseño declara las operaciones, que no significa nada.
+      aggregates: [...new Set(emitted.map((entry) => entry.aggregate).filter(Boolean))],
       emittedBy: emitted,
       // messaging declara el payload como fieldMap directo (campo → field), no
       // como el payload de use-cases: se envuelve para reutilizar la resolución

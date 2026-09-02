@@ -120,14 +120,14 @@ function renderEntity(model, entity) {
   const bodyParts = [];
 
   // Buffer de eventos: solo en las raíces que el diseño declara emisoras.
-  const emitted = model.events.filter((event) => event.aggregate === entity.name);
+  const emitted = model.events.filter((event) => event.aggregates.includes(entity.name));
   if (emitted.length > 0) {
     imports.add('java.util.Collections');
     imports.add('java.util.List');
     imports.add('java.util.ArrayList');
     imports.add(`${subPackage(model, 'domain.events')}.DomainEvent`);
     for (const event of emitted) imports.add(`${subPackage(model, 'domain.events')}.${event.className}`);
-    bodyParts.push(renderDomainEvents(emitted));
+    bodyParts.push(renderDomainEvents(emitted, entity.name));
   }
 
   bodyParts.push(declarations.join('\n\n'));
@@ -211,11 +211,17 @@ ${bodyParts.join('\n\n')}
 // provoca el cambio hace raise(...); el adaptador de repositorio drena el
 // buffer al persistir (conventions/domain-modeling.md). El agregado no conoce
 // Spring ni el broker: solo registra lo que ocurrió.
-function renderDomainEvents(emitted) {
+function renderDomainEvents(emitted, entityName) {
   const pending = emitted
     .map((event) => {
       const args = event.fields.map((f) => f.name).join(', ');
-      const origin = event.emittedBy.map((e) => e.operation).join(', ');
+      // Solo las operaciones de ESTE agregado: un evento que emiten dos raíces distintas se
+      // genera en las dos, y citarle a cada una las operaciones de la otra manda a escribir
+      // el raise() donde no va.
+      const origin = event.emittedBy
+        .filter((e) => e.aggregate === entityName)
+        .map((e) => e.operation)
+        .join(', ');
       return `    // TODO (agente): emitir ${event.name} en el método de negocio de ${origin || 'la operación que lo declara'}:
     //   raise(${event.className}.of(${args}));`;
     })

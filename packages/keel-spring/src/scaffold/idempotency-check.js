@@ -502,12 +502,17 @@ const allOperations = (model) => (model.services ?? []).flatMap((service) => ser
  * esté—, que es la misma regla que el resto de familias.
  */
 function domainEventChecks(model) {
+  // Una fila POR AGREGADO EMISOR, no por evento. Con un solo `class` —el primer emisor— un
+  // evento que sale de dos raíces se comprobaba en una y en la otra no: el segundo agregado
+  // podía no emitirlo nunca y el gate salía verde. El `why` ya nombraba las dos operaciones,
+  // así que el mensaje era más correcto que la comprobación; el que se quedaba sin mirar
+  // dependía del orden en que el diseño declara las operaciones.
   return (model.events ?? [])
-    .filter((event) => event.aggregate)
-    .map((event) => ({
+    .flatMap((event) => (event.aggregates ?? []).map((aggregate) => ({ event, aggregate })))
+    .map(({ event, aggregate }) => ({
       group: 'domainEvent',
-      subject: event.name,
-      class: event.aggregate,
+      subject: (event.aggregates ?? []).length > 1 ? `${event.name} · ${aggregate}` : event.name,
+      class: aggregate,
       require: [String.raw`raise\s*\(\s*` + event.className + String.raw`\.of\s*\(`],
       // El TODO que build dejó con el nombre de ESTE evento: si sigue ahí, nadie lo escribió.
       // Sin salto de línea en la clase de caracteres: el patrón viaja dentro de una cadena de
@@ -515,7 +520,7 @@ function domainEventChecks(model) {
       forbid: [String.raw`TODO.*` + event.name],
       why:
         `${event.name} lo publica el diseño, pero quien lo crea es el agregado: el método de negocio de ` +
-        `${(event.emittedBy ?? []).map((e) => e.operation).join(', ') || 'la operación que lo declara'} tiene que hacer ` +
+        `${(event.emittedBy ?? []).filter((e) => e.aggregate === aggregate).map((e) => e.operation).join(', ') || 'la operación que lo declara'} tiene que hacer ` +
         `raise(${event.className}.of(...)). Sin eso no hay evento que entregar — el handler puede estar perfecto y ` +
         `el outbox queda vacío, que es un fallo que solo se ve desde un escenario que espera el mensaje`
     }));
@@ -801,7 +806,7 @@ function reconciliationChecks(model) {
       // Las clases del mecanismo que build YA genera con el patrón: encontrarlas
       // probaría lo que build hizo, no lo que el agente tenía que escribir.
       exclude:
-        '/(OutboxEventJpaRepository|OutboxEventMongoRepository|OutboxRelay|OutboxEventJpa|OutboxEventDocument|ProcessedEventJpaRepository|ProcessedEventMongoRepository|IdempotencyRecordJpaRepository|IdempotencyRecordMongoRepository|ReconciliationClaim[A-Za-z]*)\\.java',
+        '/(OutboxEventJpaRepository|OutboxEventMongoRepository|OutboxRelay|OutboxRelayStore|OutboxEventJpa|OutboxEventDocument|ProcessedEventJpaRepository|ProcessedEventMongoRepository|IdempotencyRecordJpaRepository|IdempotencyRecordMongoRepository|ReconciliationClaim[A-Za-z]*)\\.java',
       why: 'ninguna consulta reclama candidatos con una MARCA PERSISTIDA (UPDATE ... SET <marca> vía @Modifying, o findAndModify en Mongo): el barrido corre en TODAS las réplicas, y un lock pesimista no sirve aquí porque solo aísla mientras dura su transacción y la llamada al proveedor va en medio — ver conventions/dependencies.md § El barrido corre en todas las réplicas'
     });
     // La cota del lote, APARTE del reclamo. Sin cota, el barrido se lleva la tabla entera
@@ -837,7 +842,7 @@ function reconciliationChecks(model) {
       // BLOQUE y no el archivo: el reclamo del agente cabe en el mismo adaptador.
       deny: generatedClaims.length > 0 ? generatedClaims.join('|') : null,
       exclude:
-        '/(OutboxEventJpaRepository|OutboxEventMongoRepository|OutboxRelay|OutboxEventJpa|OutboxEventDocument|ProcessedEventJpaRepository|ProcessedEventMongoRepository|IdempotencyRecordJpaRepository|IdempotencyRecordMongoRepository|ReconciliationClaim[A-Za-z]*)\\.java',
+        '/(OutboxEventJpaRepository|OutboxEventMongoRepository|OutboxRelay|OutboxRelayStore|OutboxEventJpa|OutboxEventDocument|ProcessedEventJpaRepository|ProcessedEventMongoRepository|IdempotencyRecordJpaRepository|IdempotencyRecordMongoRepository|ReconciliationClaim[A-Za-z]*)\\.java',
       why: 'el reclamo del barrido no acota su lote: ninguna consulta que limite el número de filas (Pageable/limit, o un contador de lote en Mongo) habla de los candidatos que se reconcilian. Puede ir en la misma consulta que reclama o en la que selecciona candidatos —en JPQL un @Modifying no acepta Pageable, así que ahí son dos por obligación—, pero tiene que existir: sin cota, una pasada con 50.000 atascados son 50.000 llamadas al proveedor'
     });
     // Y el umbral de «demasiado tiempo», UNO POR BARRIDO PENDIENTE.
@@ -877,7 +882,7 @@ function reconciliationChecks(model) {
           `RECONCILIATION_${screamingSnake(activation.name)}_UNANSWERED_AFTER_SECONDS`,
         // Lo que build ya parametriza por su cuenta: encontrarlo probaría lo que build
         // hizo. El relay del outbox es el caso claro — tiene `@Value` y habla de reclamos.
-        exclude: '/(OutboxRelay|OutboxDispatcher[A-Za-z]*|ProcessedEventPurge[A-Za-z]*|IdempotencyRecordPurge[A-Za-z]*|ReconciliationClaim[A-Za-z]*)\.java',
+        exclude: '/(OutboxRelay|OutboxRelayStore|OutboxDispatcher[A-Za-z]*|ProcessedEventPurge[A-Za-z]*|IdempotencyRecordPurge[A-Za-z]*|ReconciliationClaim[A-Za-z]*)\.java',
         why:
           `el umbral de espera de ${dependency}.${activation.name} no se lee en ninguna parte: build lo dejó ` +
           `escrito en parameters/<perfil>/reconciliation.yaml como reconciliation.${key}.unanswered-after-seconds ` +

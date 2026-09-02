@@ -444,14 +444,15 @@ test('bajo MySQL, todo reclamo que escanea con SKIP LOCKED fija READ_COMMITTED',
   // level, InnoDB disables gap locking for locking reads, UPDATE, and DELETE statements».
   const project_ = project('stock-reservation', MYSQL);
   const adapter = project_.file('ReservationRepositoryImpl.java');
-  const relay = project_.file('OutboxRelay.java');
+  // El reclamo del outbox vive en OutboxRelayStore desde que la publicación salió de la
+  // transacción: la anotación va donde está el SELECT con SKIP LOCKED, no donde está el
+  // @Scheduled. Ya no dura lo que la entrega al broker —esa era la razón por la que aquí
+  // dolía más que en ningún otro sitio—, pero los gap locks siguen siendo reales mientras
+  // la consulta escanea, y sigue corriendo cada segundo.
+  const relayStore = project_.file('OutboxRelayStore.java');
 
-  // Los DOS que esta fixture tiene —el barrido de reconciliación y el relay del outbox—, y no
-  // solo el primero: el relay sostiene su transacción durante TODA la entrega al broker, así
-  // que ahí los gap locks no duran lo que un UPDATE, duran segundos. Y corre cada segundo.
-  // (El reclamo de COLA se cubre en claim.test.js, que es donde hay un diseño con cola.)
   assert.match(adapter, /@Transactional\(isolation = Isolation\.READ_COMMITTED\)/);
-  assert.match(relay, /@Transactional\(isolation = Isolation\.READ_COMMITTED\)/);
+  assert.match(relayStore, /@Transactional\(isolation = Isolation\.READ_COMMITTED\)/);
   assert.match(adapter, /import org\.springframework\.transaction\.annotation\.Isolation;/);
 });
 
@@ -461,7 +462,7 @@ test('y los motores que ya arrancan en READ COMMITTED no se anotan', () => {
   const project_ = project('stock-reservation', { ...MYSQL, database: 'postgresql' });
 
   assert.ok(!project_.file('ReservationRepositoryImpl.java').includes('Isolation.READ_COMMITTED'));
-  assert.ok(!project_.file('OutboxRelay.java').includes('Isolation.READ_COMMITTED'));
+  assert.ok(!project_.file('OutboxRelayStore.java').includes('Isolation.READ_COMMITTED'));
   assert.equal(needsReadCommitted('postgresql'), false);
   assert.equal(needsReadCommitted('mysql'), true);
   assert.equal(needsReadCommitted('mariadb'), true);
@@ -1425,4 +1426,103 @@ test('la rama documental convierte igual: Spring Data también guarda el name()'
 
   assert.match(config, /PartialIndexFilter\.of\(Criteria\.where\("status"\)\.is\("APPROVED"\)\)/);
   assert.ok(!config.includes('.is("approved")'), 'el literal del diseño no casa con ningún documento');
+});
+
+// ─── Lo que destapó la corrida `refunds-http` ────────────────────────────────
+//
+// Los dos defectos que el INFORME-GENERACION.md de esa corrida NO recogía: salieron de
+// comparar los digests de `keel-generated.json` contra el árbol final, o sea de mirar qué
+// archivos tocó el agente y preguntar por qué. Los dos son de plantilla y los dos pasaban
+// la suite de cadenas en verde.
+
+test('el value object hace cumplir la escala y las cotas, no solo el patrón', () => {
+  // `Money` de esta fixture NO declara ningún `pattern`, y hasta aquí eso significaba que no
+  // se generaba constructor compacto NINGUNO: ni escala, ni `min`. Un value object de solo
+  // importes —el caso más común— se quedaba sin una sola guarda.
+  const money = project('product-catalog', RELATIONAL).file('Money.java');
+
+  assert.match(money, /public Money \{/, 'sin patrón no se emitió constructor compacto');
+  // La cota del diseño (min: 0), con compareTo: un BigDecimal no se compara con operadores.
+  assert.match(money, /amount\.compareTo\(new BigDecimal\("0"\)\) < 0/);
+  // Y la normalización, que es la que no rompe nada visible al faltar: un record compara con
+  // BigDecimal.equals, sensible a la escala, así que 12.5 y 12.50 son objetos distintos —el
+  // mismo importe leído de la BD y construido desde el cuerpo de una petición—.
+  assert.match(money, /amount = amount\.setScale\(2, RoundingMode\.HALF_UP\)/);
+  assert.match(money, /import java\.math\.RoundingMode;/);
+});
+
+test('las dos cotas de un value object se emiten, y sobre cada campo', () => {
+  // GeoPoint declara min Y max sobre latitude y longitude, con escala 6. Es la fixture que
+  // distingue "se emite la cota" de "se emiten las dos cotas de los dos campos".
+  const geo = project('inspection-reports', RELATIONAL).file('GeoPoint.java');
+
+  for (const [campo, min, max] of [['latitude', '-90', '90'], ['longitude', '-180', '180']]) {
+    assert.ok(geo.includes(`${campo}.compareTo(new BigDecimal("${min}")) < 0`), `falta el mínimo de ${campo}`);
+    assert.ok(geo.includes(`${campo}.compareTo(new BigDecimal("${max}")) > 0`), `falta el máximo de ${campo}`);
+    assert.ok(geo.includes(`${campo} = ${campo}.setScale(6, RoundingMode.HALF_UP)`), `falta la escala de ${campo}`);
+  }
+});
+
+test('generate_statistics viene con el logger que silencia su volcado, y bajo level', () => {
+  // build enciende `generate_statistics` en local y test para que el arnés pueda leer
+  // `hibernate.statements` por el actuator. Ese flag activa además un listener que escribe
+  // ~15 líneas a INFO por CADA sesión de Hibernate —cada tick del relay, cada petición, cada
+  // mensaje—, y nadie lo apagaba: miles de bloques compitiendo por CPU e IO con el proceso
+  // bajo prueba, en una suite cuyos `await` se miden en segundos.
+  const generado = project('product-catalog', RELATIONAL);
+  const local = generado.file(path.join('parameters', 'local', 'logging.yaml'));
+  const produccion = generado.file(path.join('parameters', 'production', 'logging.yaml'));
+  const LOGGER = 'org.hibernate.engine.internal.StatisticalLoggingSessionEventListener: WARN';
+
+  assert.ok(local.includes(LOGGER), 'el perfil local no silencia el volcado por sesión');
+  // Y va bajo `level:`, no bajo `pattern:`. La primera versión de este arreglo lo emitió
+  // después del bloque de la correlación y el YAML quedaba en logging.pattern.<logger>, que
+  // no configura ningún nivel: la suite pasó en verde igual.
+  const nivel = local.indexOf('  level:');
+  const patron = local.indexOf('  pattern:');
+  assert.ok(nivel >= 0 && local.indexOf(LOGGER) > nivel, 'el logger no está bajo level:');
+  assert.ok(patron === -1 || local.indexOf(LOGGER) < patron, 'el logger cayó bajo pattern:');
+
+  // En producción no hay contador que silenciar: el flag tampoco está.
+  assert.ok(!produccion.includes(LOGGER), 'production silencia un logger cuyo flag no enciende');
+  assert.ok(!generado.file(path.join('parameters', 'production', 'db.yaml')).includes('generate_statistics'));
+});
+
+test('un evento que emiten DOS agregados se genera en los dos, y el gate mira los dos', () => {
+  // El defecto que el informe de la corrida describió como "build solo lo generó en el primer
+  // agregado". La regla real era `emitted[0]`: ganaba el primer EMISOR, así que el agregado
+  // que se quedaba sin buffer, sin raise() y sin drenaje dependía del orden en que el diseño
+  // declara sus operaciones. Y el gate compartía la atribución: comprobaba el raise en una
+  // sola clase, de modo que el segundo agregado podía no emitir nunca y salir verde.
+  const { manifest, layers } = loadService(path.join(fixturesDir, 'catalog-extended'));
+  // `projectSupplierPrice` opera sobre SupplierPrice, que es su propia raíz. Emitiendo un
+  // evento que ya emite una operación de Product, el evento pasa a salir de DOS agregados.
+  layers['use-cases'].operations.projectSupplierPrice.emits = ['ProductUpdated'];
+  const workspace = tmpDir('keel-dos-emisores-');
+  const result = scaffoldService({ manifest, layers, workspace, force: true, stack: RELATIONAL });
+  const root = path.join(workspace, result.outDir);
+  const leer = (sufijo) => {
+    const found = walk(root).find((f) => f.endsWith(sufijo));
+    assert.ok(found, `no se generó ${sufijo}`);
+    return fs.readFileSync(found, 'utf8');
+  };
+
+  // Los dos agregados tienen el buffer y su TODO.
+  for (const clase of ['Product.java', 'SupplierPrice.java']) {
+    const codigo = leer(clase);
+    assert.match(codigo, /private final List<DomainEvent> domainEvents/, `${clase} sin buffer`);
+    assert.match(codigo, /public List<DomainEvent> pullDomainEvents/, `${clase} sin pullDomainEvents`);
+  }
+  // Y cada TODO cita SOLO las operaciones de su propio agregado: citarle a SupplierPrice las
+  // de Product manda a escribir el raise() en la clase equivocada.
+  assert.match(leer('SupplierPrice.java'), /TODO \(agente\): emitir ProductUpdated en el método de negocio de projectSupplierPrice:/);
+  assert.ok(!leer('SupplierPrice.java').includes('updateProduct'), 'el TODO cita operaciones del otro agregado');
+
+  // El adaptador del segundo agregado drena: sin esto el raise() acumula y no sale nada.
+  assert.match(leer('SupplierPriceRepositoryImpl.java'), /pullDomainEvents\(\)/);
+
+  // Y el gate emite una fila POR AGREGADO, no una por evento.
+  const gate = leer(path.join('infra', 'check-idempotency.sh'));
+  assert.match(gate, /unit 'domainEvent' 'ProductUpdated · Product' 'Product'/);
+  assert.match(gate, /unit 'domainEvent' 'ProductUpdated · SupplierPrice' 'SupplierPrice'/);
 });

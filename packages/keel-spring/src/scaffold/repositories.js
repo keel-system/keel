@@ -359,7 +359,7 @@ function renderAdapter(model, entity, paginated, batchLookup) {
   // todo cambio persistido del agregado, así que aquí se publican los eventos
   // que la raíz acumuló. Va dentro de la transacción: el bridge decide después
   // si se escriben al outbox (misma transacción) o se envían tras el commit.
-  const emitsEvents = model.events.some((event) => event.aggregate === entity.name);
+  const emitsEvents = model.events.some((event) => event.aggregates.includes(entity.name));
   if (emitsEvents) {
     imports.add('org.springframework.context.ApplicationEventPublisher');
   }

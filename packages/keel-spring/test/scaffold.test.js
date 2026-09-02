@@ -2323,18 +2323,47 @@ test('outbox: fila en la misma transacción, relay determinista y envío tras el
   // El relay es determinista; lo acoplado al broker sale por el puerto.
   const relay = read(workspace, `${outboxDir}/OutboxRelay.java`);
   assert.ok(relay.includes('@Scheduled(fixedDelayString = "${outbox.relay.fixed-delay-ms:1000}")'));
-  assert.ok(relay.includes('dispatcher.dispatch(row.getDestination()'));
+  assert.ok(relay.includes('dispatcher.dispatch(row.destination()'));
   // Tope de intentos + dead-letter reportado a ERROR.
   assert.ok(relay.includes('@Value("${outbox.relay.max-attempts:10}")'));
-  assert.ok(relay.includes('row.getAttempts() >= maxAttempts'));
+  assert.ok(relay.includes('outcome.deadLettered()'));
   assert.ok(relay.includes('log.error('));
   // Backoff exponencial entre reintentos de una misma fila.
   assert.ok(relay.includes('@Value("${outbox.relay.backoff.initial-ms:1000}")'));
   assert.ok(relay.includes('@Value("${outbox.relay.backoff.max-ms:60000}")'));
-  assert.ok(relay.includes('row.scheduleNextAttempt('));
   for (const ajeno of ['SnsTemplate', 'KafkaTemplate', 'RabbitTemplate']) {
     assert.ok(!relay.includes(ajeno));
   }
+
+  // Y la propiedad que costó tres ciclos de arbitraje en la corrida `refunds-http`: la
+  // publicación NO ocurre dentro de una transacción. El `dispatch` retenía una conexión del
+  // pool durante toda la llamada de red, por todo el lote, y bajo presión el que se queda
+  // sin conexión es cualquier otro que la necesite en ese momento — el fallo aparece
+  // lejísimos de aquí, como «un estado no transicionó a tiempo».
+  // Hasta el @Scheduled de purge(), no hasta su firma: purge() SÍ es transaccional y con
+  // razón —borra filas y no habla con nadie de fuera—, así que su anotación no cuenta.
+  const relayMethod = relay.slice(relay.indexOf('public void relay()'), relay.indexOf('@Scheduled(cron'));
+  assert.ok(!relayMethod.includes('@Transactional'), 'la publicación volvió a quedar dentro de una transacción');
+  assert.ok(relayMethod.includes('store.claimBatch('), 'el reclamo ya no pasa por el store');
+  assert.ok(relayMethod.includes('store.markPublished('));
+  assert.ok(relayMethod.includes('store.markFailed('));
+
+  // Las transacciones cortas viven en un bean APARTE: un @Transactional invocado desde otro
+  // método de la misma clase no pasa por el proxy de Spring y no se aplicaría — el reclamo se
+  // quedaría sin transacción y nada lo delataría.
+  const store = read(workspace, `${outboxDir}/OutboxRelayStore.java`);
+  assert.ok(store.includes('class OutboxRelayStore'));
+  assert.ok(store.includes('@Transactional'));
+  assert.ok(store.includes('findPending(maxAttempts, now, PageRequest.of(0, batchSize))'));
+  // El LEASE, que es lo que sustituye a la garantía que el SKIP LOCKED daba gratis mientras
+  // la transacción seguía abierta: sin él, otra réplica encuentra elegible una fila cuyo
+  // despacho sigue en vuelo y el evento sale dos veces.
+  assert.ok(store.includes('Instant leaseUntil = now.plusMillis(claimTimeoutMs)'), 'el reclamo no estampa lease');
+  assert.ok(store.includes('row.scheduleNextAttempt(leaseUntil)'));
+  assert.ok(relay.includes('@Value("${outbox.relay.claim-timeout-ms:60000}")'));
+  // Lo que viaja fuera de la transacción es un record, no la entidad: queda detached en
+  // cuanto el reclamo confirma.
+  assert.ok(read(workspace, `${outboxDir}/ClaimedOutboxEvent.java`).includes('record ClaimedOutboxEvent('));
   assert.ok(read(workspace, `${outboxDir}/OutboxDispatcher.java`).includes('void dispatch(String destination'));
   // El fallback del puerto: @Bean condicional, no @Component. El dispatcher real del
   // agente lo aparta sin colisionar, así que no hay que borrar el archivo — y por eso

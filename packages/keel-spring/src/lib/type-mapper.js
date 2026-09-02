@@ -148,6 +148,27 @@ export function beanValidationAnnotations(field, resolved, { inheritTypeFormat =
 }
 
 /**
+ * Cotas numéricas y ESCALA de un campo, con la misma mezcla tipo → campo que hace
+ * `beanValidationAnnotations`. Es fuente ÚNICA de un dato que no viaja en `validation`:
+ * no hay anotación de Bean Validation que NORMALICE una escala —solo `@Digits`, que
+ * rechaza—, así que sin esto el único sitio donde vive `scale` es el `precision/scale`
+ * de la columna, que no existe cuando el value object no se persiste.
+ *
+ * Devuelve null cuando no hay nada que hacer cumplir, para que quien lo consuma pueda
+ * decidir sin mirar dentro.
+ */
+export function numericConstraints(field, resolved) {
+  if (field.list) return null;
+  const constraints = { ...resolved.constraints, ...(field.constraints ?? {}) };
+  const decimal = resolved.base === 'decimal';
+  const scale = decimal && constraints.scale != null ? constraints.scale : null;
+  const min = constraints.min ?? null;
+  const max = constraints.max ?? null;
+  if (scale === null && min === null && max === null) return null;
+  return { scale, min, max, decimal };
+}
+
+/**
  * El `pattern` que un campo HEREDA de su value type escalar, que es exactamente el
  * que `beanValidationAnnotations(..., { inheritTypeFormat: false })` deja fuera del
  * DTO de entrada. Null si el campo declara el suyo propio (entonces no se hereda

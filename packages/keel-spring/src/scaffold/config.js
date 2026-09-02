@@ -252,6 +252,21 @@ function loggingYaml(model, profile) {
     `    root: ${envWithDefault(profile, 'LOG_LEVEL_ROOT', root)}`,
     `    ${model.service.basePackage}: ${envWithDefault(profile, 'LOG_LEVEL_APP', app)}`
   ];
+  // Y el contrapeso de `generate_statistics: true`, que dbYaml enciende en estos dos
+  // perfiles para que el arnés pueda leer `hibernate.statements`. Ese flag activa además
+  // StatisticalLoggingSessionEventListener, que escribe un bloque de ~15 líneas a INFO por
+  // CADA sesión de Hibernate: cada tick del relay del outbox (uno por segundo), cada
+  // petición HTTP y cada mensaje consumido, durante toda la suite. Son miles de bloques que
+  // no alimentan ninguna aserción —el contador lo publica Micrometer, no este logger— y que
+  // compiten por CPU e IO con el proceso bajo prueba, en una suite cuyos `await` se miden en
+  // segundos. Van juntos a propósito: quien quite el flag tiene que quitar esto.
+  if (statisticsEnabled(model, profile)) {
+    lines.push(
+      '    # Silencia el volcado por sesión que activa generate_statistics (ver el fragmento',
+      '    # db de este mismo perfil). El contador que lee el arnés lo publica Micrometer.',
+      '    org.hibernate.engine.internal.StatisticalLoggingSessionEventListener: WARN'
+    );
+  }
   // Saca el correlationId que CorrelationContext deja en el MDC a cada línea de
   // log: es lo que permite reconstruir una petición completa (y los eventos que
   // provocó) a partir del identificador que el cliente recibió en la respuesta.
@@ -259,6 +274,19 @@ function loggingYaml(model, profile) {
     lines.push('  pattern:', '    correlation: "[%X{correlationId:-}] "');
   }
   return lines.join('\n') + '\n';
+}
+
+/**
+ * ¿Lleva este perfil el contador de sentencias de Hibernate? Es la MISMA condición con la
+ * que dbYaml emite `generate_statistics`, en un solo sitio para que las dos no se puedan
+ * separar: el logger que se silencia solo existe cuando el flag está puesto.
+ */
+function statisticsEnabled(model, profile) {
+  return (
+    Boolean(model.layersPresent?.persistence) &&
+    model.persistenceKind !== 'document' &&
+    (profile === 'local' || profile === 'test')
+  );
 }
 
 // Actuator: expone health/info/metrics y activa los grupos de probes
@@ -330,7 +358,7 @@ function dbYaml(model, profile, dbName) {
   //
   // Solo en local y test: llevar la cuenta tiene coste, y en producción se paga en cada
   // petición a cambio de un dato que allí nadie consulta.
-  if (profile === 'local' || profile === 'test') {
+  if (statisticsEnabled(model, profile)) {
     lines.push(
       '        # Cuenta las sentencias preparadas. Lo lee el arnés para acotar el coste de',
       '        # una lectura y cazar un N+1: es medición de prueba, no de producción.',
