@@ -66,9 +66,9 @@ runtime). Orden fijo:
 | `Contrato de integración` | `INTEGRATION.md` | si el archivo existe |
 | `Documento de diseño` | `DESIGN.md` | si el archivo existe |
 
-### `capabilities` — las ocho tarjetas, en este orden
+### `capabilities` — las nueve tarjetas, en este orden
 
-Siempre las ocho, en este orden y con estos `id` y `label`. `active: false` pinta la tarjeta como «no
+Siempre las nueve, en este orden y con estos `id` y `label`. `active: false` pinta la tarjeta como «no
 aplica» (atenuada) — ese es el valor informativo: se ve de un vistazo lo que el servicio **no** usa.
 `state` es el texto del badge cuando está activa (default `sí`); `facts` es una lista de pares
 `[etiqueta, valor]`; `note` es una frase corta opcional.
@@ -81,14 +81,33 @@ aplica» (atenuada) — ese es el valor informativo: se ve de un vistazo lo que 
 | `cache` | Caché de respuestas | alguna operación declara `cache` | una fila por query cacheada: `[<operación>, "TTL <n>s · clave: <keyFields>"]` |
 | `storage` | Almacenamiento de archivos | hay capa `storage` | una fila por bucket: `[<bucket>, "<visibility> · <maxSizeMb> MB · <contentTypes>"]` |
 | `httpClients` | Integraciones HTTP salientes | hay capa `http-clients` | Clientes (nº), Llamadas (nº), Con circuit breaker (nº) |
+| `dependencies` | Depende de | hay capa `dependencies` | una fila por proveedor: `[<proveedor>, "contrato <version> · <n> necesidades (<estrategias>) · <n> activaciones (<awaits>) · <n> compensaciones"]` |
 | `mail` | Correo saliente | hay capa `mail` | Transporte, Partes del cuerpo, Remitente (`fixed <dirección>` o `del dato` + si hay respaldo o se falla cerrado), Plantillas (`en la BD`/`en el repositorio` + si se validan las variables declaradas), y una fila por operación de `sentBy` con su guarda de repetición |
 | `security` | Seguridad | hay capa `security` | Protocolo, M2M (`serviceAuth.protocol` o `no`), Roles (nº), Permisos (nº), Clientes máquina (nº) |
 | `schedule` | Trabajos programados | alguna operación declara `schedule` | una fila por operación: `[<operación>, <cron>]` |
 
-> **Seguimiento (pendiente).** La capa `dependencies` (DSL 2.2) aún no tiene tarjeta propia. Cuando se
-> añada, sería `dependencies` — «Depende de» — activa si hay capa `dependencies`, con una fila por
-> servidor: `[<proveedor>, "contrato <version> · <n> necesidades · <estrategias>"]`. Hasta entonces, el
-> panel no refleja de qué otros servidores depende el servicio; está en `DESIGN.md` §Fronteras.
+**La fila de un proveedor** omite los segmentos que valen cero y dice `sin contrato publicado` cuando
+el bloque no declara `contract`: un diseño acoplado a un servidor sin versión de contrato es
+exactamente lo que hay que ver de un vistazo. `<estrategias>` son los valores **distintos** de
+`strategy` de sus `needs` (`on-demand`, `replicated` o los dos) y `<awaits>` los de sus
+`activations`; se listan los valores y no sus recuentos, porque lo que se revisa aquí es la decisión,
+no el volumen.
+
+Esta tarjeta importa más de lo que su tamaño sugiere. Un diseño **derivado** de otro (`keel new
+--from`, `keel registry get`) llega con las decisiones de integración del origen, y son justo las que
+más probablemente quedan incoherentes al ajustarlo: `strategy`, `awaits`, `onMiss`, `exposedAs` y la
+`contract.version` a la que uno se acopla. Sin la tarjeta, esas cinco solo se ven leyendo el YAML o
+el §Fronteras de `DESIGN.md`, que es prosa que nadie cruza con nada.
+
+Su `note` es donde se dice lo que la fila no puede, con las dos reglas siguientes (si aplican las
+dos, van encadenadas en una frase):
+
+- Alguna necesidad `on-demand` → el dato se lee en el momento, así que sin el proveedor las
+  operaciones de `usedBy` no pueden decidir; si esa necesidad declara `onUnavailable`, se dice qué
+  pasa entonces en vez de dejarlo en el aire.
+- Alguna activación con `awaits: nothing` → nómbralas: el trabajo delegado puede fallar **sin que
+  ninguna operación propia se entere**. Es el mismo criterio que el `outbox` inactivo, y por el mismo
+  motivo: es un hecho de diseño que se decidió, no la ausencia de una función.
 
 `headline` resume la tarjeta en una frase; con `active: false`, di por qué no aplica («El servicio no
 declara capa de persistencia: no guarda estado propio.»). Cuando el broker está activo, la `note` debe
@@ -224,7 +243,7 @@ api-key, secret ni token.
 
 - [ ] `overview.html` no contiene `/*__KEEL_DATA__*/` y su JSON parsea.
 - [ ] Los tres archivos llevan `<!-- keel:version <service.version> -->` en su segunda línea.
-- [ ] Las ocho tarjetas están presentes y en orden, con `active` coherente con las capas declaradas.
+- [ ] Las nueve tarjetas están presentes y en orden, con `active` coherente con las capas declaradas.
 - [ ] Toda operación de `use-cases` aparece exactamente una vez, con su audiencia y su regla de acceso.
 - [ ] Los badges *idempotente* / *cacheada* / nivel de seguridad coinciden con el diseño.
 - [ ] §Eventos presente ⇔ hay capa `messaging`; §Clientes HTTP ⇔ hay capa `http-clients`.
