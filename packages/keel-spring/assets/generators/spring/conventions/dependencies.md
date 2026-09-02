@@ -216,6 +216,12 @@ antes de insistir es conocimiento de negocio; cuánto dura un reclamo y cuánto 
 mecánica y capacidad. Una constante en el código para cualquiera de los tres es un hallazgo del pase
 de calidad, no un detalle.
 
+**Las tres claves van anidadas POR ACTIVACIÓN** —`reconciliation.<activación-en-kebab>.<clave>`—, y no
+es decoración: cada proveedor tarda lo suyo, así que dos barridos del mismo servicio tienen dos
+umbrales distintos. Cuando escribas el barrido a mano, el `@Value` tiene que nombrar la clave de **su**
+activación; leer la del barrido de al lado compila, arranca y aplica el número equivocado. El pase de
+calidad lo comprueba por esa clave, no por el nombre de la variable.
+
 **La regla: reclamar, no leer.** La consulta del barrido no pide los candidatos, se los **lleva**, en
 lotes acotados, de modo que cada réplica trabaja sobre un conjunto disjunto y el paralelismo pasa de
 problema a ventaja. No hace falta infraestructura nueva.

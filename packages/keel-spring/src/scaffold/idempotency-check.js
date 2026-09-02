@@ -26,7 +26,7 @@
 import { declaresIdempotency, idempotentOperations, naturalKeyGuardedOperations } from './http-idempotency.js';
 import { naturalKeyFinder } from './repositories.js';
 import { usesOutbox } from './outbox.js';
-import { screamingSnake, camelCase } from '../lib/naming.js';
+import { screamingSnake, camelCase, kebabCase } from '../lib/naming.js';
 
 /**
  * ¿Hay algo de esta familia que comprobar? Sin suscripciones, sin idempotencia HTTP, sin
@@ -698,6 +698,8 @@ function reconciliationChecks(model) {
   // como camino de menor resistencia un segundo mecanismo en paralelo al generado, que no
   // reclama nada y reparte peor. Es la misma forma que la familia sweepClaim.
   let pendingClaim = false;
+  // Y CUÁLES son: el umbral se comprueba por barrido, nombrando su clave de `parameters/`.
+  const pendingActivations = [];
   // Los reclamos que build SÍ generó. Hacen falta más abajo: un diseño puede tener DOS
   // barridos, uno reclamable y otro no, y entonces el reclamo generado para el primero
   // satisface por su cuenta los checks genéricos que existen para el segundo. Ese falso
@@ -708,6 +710,9 @@ function reconciliationChecks(model) {
     for (const { dependency, activation, claim } of operation.reconciles ?? []) {
       if (!claim) {
         pendingClaim = true;
+        if (!pendingActivations.some((entry) => entry.activation.name === activation.name)) {
+          pendingActivations.push({ dependency, activation });
+        }
         continue;
       }
       // Todo lo que build nombró para ESTE reclamo, no solo su método: la consulta de
@@ -835,26 +840,53 @@ function reconciliationChecks(model) {
         '/(OutboxEventJpaRepository|OutboxEventMongoRepository|OutboxRelay|OutboxEventJpa|OutboxEventDocument|ProcessedEventJpaRepository|ProcessedEventMongoRepository|IdempotencyRecordJpaRepository|IdempotencyRecordMongoRepository|ReconciliationClaim[A-Za-z]*)\\.java',
       why: 'el reclamo del barrido no acota su lote: ninguna consulta que limite el número de filas (Pageable/limit, o un contador de lote en Mongo) habla de los candidatos que se reconcilian. Puede ir en la misma consulta que reclama o en la que selecciona candidatos —en JPQL un @Modifying no acepta Pageable, así que ahí son dos por obligación—, pero tiene que existir: sin cota, una pasada con 50.000 atascados son 50.000 llamadas al proveedor'
     });
-    // Y el umbral de «demasiado tiempo», que no lo declara el diseño: sale de
-    // `parameters/`, nunca de una constante.
+    // Y el umbral de «demasiado tiempo», UNO POR BARRIDO PENDIENTE.
     //
     // Aparte del reclamo, y no en su mismo archivo. Dos intentos anteriores fallaron por
     // suponer dónde vive: exigirlo en el handler de `application` pedía importar Spring
     // donde la constitución lo prohíbe, y exigirlo junto al reclamo contradice el mismo
     // reparto —puerto sin framework, adaptador con `@Value`, repositorio con la consulta—
-    // que el scaffold impone. Lo que sí se puede afirmar sin suponer arquitectura es que
-    // en ALGÚN archivo el umbral esté parametrizado Y hable de esperar: un `@Value`
-    // suelto en cualquier configuración no es el umbral de este barrido.
-    checks.push({
-      group: 'reconciliation',
-      subject: 'umbral del barrido',
-      claim: '@Value|@ConfigurationProperties',
-      bound: '[Ss]tale|[Aa]waiting|[Tt]hreshold|[Rr]econcil|[Uu]mbral',
-      // Lo que build ya parametriza por su cuenta: encontrarlo probaría lo que build
-      // hizo. El relay del outbox es el caso claro — tiene `@Value` y habla de reclamos.
-      exclude: '/(OutboxRelay|OutboxDispatcher[A-Za-z]*|ProcessedEventPurge[A-Za-z]*|IdempotencyRecordPurge[A-Za-z]*|ReconciliationClaim[A-Za-z]*)\\.java',
-      why: 'el umbral de espera del barrido no está parametrizado en ninguna parte (@Value/@ConfigurationProperties sobre un valor que hable de la espera): build ya lo dejó escrito en parameters/<perfil>/reconciliation.yaml con el valor que declara el diseño (unansweredAfterSeconds), así que lo que falta es LEERLO — quemado en el código no se ajusta por entorno sin recompilar, y además deja de ser el número que el diseñador decidió. Ver conventions/dependencies.md'
-    });
+    // que el scaffold impone. Lo afirmable sin suponer arquitectura sigue siendo que en
+    // ALGÚN archivo el umbral esté parametrizado.
+    //
+    // Lo que cambia es CON QUÉ se acompaña. Con un `bound` de vocabulario
+    // (`[Ss]tale|[Aa]waiting|…`) y un único check por diseño, el `@Value` que el agente
+    // escribió para el barrido de al lado satisfacía este: dos barridos, uno escrito y
+    // otro no, y el gate en verde sobre justo el que faltaba. Es el mismo falso verde que
+    // ya obligó a blindar el reclamo y el lote con `scope: method` + `deny`, entrando por
+    // la otra puerta. Ahora el acompañante no es vocabulario sino un DATO: la clave de
+    // ESTE barrido. `parameters/<perfil>/reconciliation.yaml` la anida por activación
+    // (`config.js` → `reconciliationYaml`), el adaptador que build genera para un barrido
+    // reclamable la lee tal cual (`reconciliation-claim.js` → `adapterValueFields`) y la
+    // nota que build deja en el stub del pendiente la nombra entera (`services.js`). Así
+    // que exigirla no impone arquitectura: pide el número que el diseñador decidió para
+    // ESTE proveedor, y el `@Value` del barrido vecino nombra otra clave y deja de valer.
+    //
+    // Se acepta además la variable de entorno que `envWithDefault` emite para esa misma
+    // clave: leerla directamente del entorno sigue siendo parametrizar.
+    for (const { dependency, activation } of pendingActivations) {
+      const key = kebabCase(activation.name);
+      checks.push({
+        group: 'reconciliation',
+        subject: `umbral de ${dependency}.${activation.name}`,
+        claim: '@Value|@ConfigurationProperties',
+        // Los puntos como clase entre corchetes: los patrones de un check `claim` viajan
+        // por awk además de por grep, y allí el escape se pierde y rompe la regexp.
+        bound:
+          `reconciliation[.]${key}[.]unanswered-after-seconds|` +
+          `RECONCILIATION_${screamingSnake(activation.name)}_UNANSWERED_AFTER_SECONDS`,
+        // Lo que build ya parametriza por su cuenta: encontrarlo probaría lo que build
+        // hizo. El relay del outbox es el caso claro — tiene `@Value` y habla de reclamos.
+        exclude: '/(OutboxRelay|OutboxDispatcher[A-Za-z]*|ProcessedEventPurge[A-Za-z]*|IdempotencyRecordPurge[A-Za-z]*|ReconciliationClaim[A-Za-z]*)\.java',
+        why:
+          `el umbral de espera de ${dependency}.${activation.name} no se lee en ninguna parte: build lo dejó ` +
+          `escrito en parameters/<perfil>/reconciliation.yaml como reconciliation.${key}.unanswered-after-seconds ` +
+          `—el valor que el diseño declara en unansweredAfterSeconds—, así que lo que falta es LEERLO con @Value. ` +
+          `Quemado en el código no se ajusta por entorno sin recompilar y deja de ser el número que el diseñador ` +
+          `decidió, y el @Value de OTRO barrido no vale: cada proveedor tarda lo suyo, y por eso la clave va por ` +
+          `activación. Ver conventions/dependencies.md`
+      });
+    }
   }
   // Lo afirmable es que el barrido TENGA disparador y que no siga siendo un stub, no en qué
   // archivo vive. build emite un scheduler por servicio, y un diseño puede producir dos
@@ -1122,7 +1154,8 @@ memberBlock() {  # patrón que localiza el reclamo, patrón que lo acompaña
 }
 
 claim() {  # familia, sujeto, patrón principal, patrón que lo acompaña, rutas excluidas, porqué, alcance
-  local group="$1" subject="$2" pattern="$3" bound="$4" excluded="$5" why="$6" scope="\${7:-}" deny="\${8:-}"
+  local group="$1" subject="$2" pattern="$3" bound="$4" excluded="$5" why="$6" scope="\${7:-}"
+ deny="\${8:-}"
   local file found="" code window
   while IFS= read -r file; do
     [ -n "$file" ] || continue

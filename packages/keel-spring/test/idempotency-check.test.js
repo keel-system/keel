@@ -297,11 +297,14 @@ public interface StaleClaimRepository {
 // prohíbe, y exigirlo en el mismo archivo que el reclamo contradice el reparto que el
 // propio scaffold impone (puerto sin framework, adaptador con @Value, repositorio con la
 // consulta). Lo que queda es lo único afirmable sin suponer arquitectura.
+// Y lo que SÍ se afirma es CUÁL: el acompañante es la clave de `parameters/` de ESTE
+// barrido (`reconciliation.<activación>.unanswered-after-seconds`), no vocabulario de
+// espera — ver el test del barrido vecino, más abajo.
 test('el gate exige que el umbral del barrido esté parametrizado, esté donde esté', (t) => {
   const project = build('catalog-extended', sinReclamoGenerado);
   const before = run(project);
   if (before === null) return t.skip('sin bash en el PATH');
-  assert.match(before.out, /umbral del barrido/);
+  assert.match(before.out, /umbral de compliance\.recordWithdrawal/);
 
   const config = path.join(project, 'src/main/java/com/commerce/catalog/infrastructure/configurations');
   fs.mkdirSync(config, { recursive: true });
@@ -314,23 +317,43 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class ReconciliationConfig {
 
-    @Value("\${reconciliation.stale-after-ms:900000}")
-    private long staleAfterMs;
+    @Value("\${reconciliation.record-withdrawal.unanswered-after-seconds:900000}")
+    private long unansweredAfterSeconds;
 }
 `;
   // Un adaptador de configuración aparte lo apaga: es donde el reparto hexagonal lo pone.
   fs.writeFileSync(file, parameterized);
-  assert.ok(!/umbral del barrido/.test(run(project).out), 'el umbral parametrizado aparte sigue reportándose');
+  assert.ok(
+    !/umbral de compliance\.recordWithdrawal/.test(run(project).out),
+    'el umbral parametrizado aparte sigue reportándose'
+  );
 
   // Quemado en el código, vuelve: no se ajusta por entorno sin recompilar.
-  fs.writeFileSync(file, parameterized.replace(/@Value\([^)]*\)\n\s*private long staleAfterMs;/, 'private static final long STALE_AFTER_MS = 900000L;'));
-  assert.match(run(project).out, /umbral del barrido/);
+  fs.writeFileSync(file, parameterized.replace(/@Value\([^)]*\)\n\s*private long unansweredAfterSeconds;/, 'private static final long UNANSWERED_AFTER_SECONDS = 900000L;'));
+  assert.match(run(project).out, /umbral de compliance\.recordWithdrawal/);
 
-  // Y un @Value que no habla de la espera tampoco vale: cualquier configuración tiene
-  // uno, y aceptarlo dejaría el check verde en todo proyecto con Spring.
-  fs.writeFileSync(file, parameterized.replace('reconciliation.stale-after-ms:900000', 'app.page-size:20').replace('staleAfterMs', 'pageSize').replace('ReconciliationConfig', 'PagingConfig'));
-  fs.renameSync(file, path.join(config, 'PagingConfig.java'));
-  assert.match(run(project).out, /umbral del barrido/);
+  // Y un @Value que nombra OTRA clave tampoco vale, aunque hable de reconciliación: el
+  // número es por proveedor —cada uno tarda lo suyo— y el del barrido de al lado no es
+  // el de este. Con el bound de vocabulario anterior, esto pasaba en verde.
+  fs.writeFileSync(
+    file,
+    parameterized.replace('reconciliation.record-withdrawal.', 'reconciliation.otro-barrido.')
+  );
+  assert.match(run(project).out, /umbral de compliance\.recordWithdrawal/);
+
+  // Leerlo por la variable de entorno que build emite para esa misma clave sí cuenta:
+  // parametrizar es parametrizar, y `envWithDefault` la escribe en parameters/.
+  fs.writeFileSync(
+    file,
+    parameterized.replace(
+      'reconciliation.record-withdrawal.unanswered-after-seconds:900000',
+      'RECONCILIATION_RECORD_WITHDRAWAL_UNANSWERED_AFTER_SECONDS:900000'
+    )
+  );
+  assert.ok(
+    !/umbral de compliance\.recordWithdrawal/.test(run(project).out),
+    'leer el umbral por su variable de entorno tendría que contar como parametrizado'
+  );
 });
 
 // El falso negativo que costó una corrida entera: el gate exigía `@Value` DENTRO del
@@ -350,7 +373,7 @@ test('reconciliation no exige @Value en el handler, que es capa sin Spring', () 
   }
   // Pero el umbral no se deja de mirar: se mira en su propia fila, sin decir en qué
   // archivo tiene que estar.
-  assert.match(content, /^claim 'reconciliation' 'umbral del barrido' '@Value\|@ConfigurationProperties'/m);
+  assert.match(content, /^claim 'reconciliation' 'umbral de compliance[.]recordWithdrawal' '@Value\|@ConfigurationProperties'/m);
 });
 
 test('con el reclamo generado el gate exige LLAMARLO, y retira los tres checks del agente', () => {
@@ -361,12 +384,12 @@ test('con el reclamo generado el gate exige LLAMARLO, y retira los tres checks d
   const content = read(build('catalog-extended'));
 
   assert.match(content, /claimForReconcileWithdrawalsRecordWithdrawal/);
-  for (const subject of ['reclamo del barrido', 'lote del barrido', 'umbral del barrido']) {
+  for (const subject of ['reclamo del barrido', 'lote del barrido', 'umbral de compliance.recordWithdrawal']) {
     assert.ok(!content.includes(`'${subject}'`), `sigue emitiéndose el check del agente: ${subject}`);
   }
   // Y sin reclamo generado siguen ahí, que es la otra mitad de la afirmación.
   const fallback = read(build('catalog-extended', sinReclamoGenerado));
-  for (const subject of ['reclamo del barrido', 'lote del barrido', 'umbral del barrido']) {
+  for (const subject of ['reclamo del barrido', 'lote del barrido', 'umbral de compliance.recordWithdrawal']) {
     assert.ok(fallback.includes(`'${subject}'`), `falta el check del agente: ${subject}`);
   }
 });
@@ -475,16 +498,43 @@ test('el reclamo que build generó no cuenta como el reclamo que el agente debe 
   // BLOQUE y no el archivo: el reclamo del agente cabe en el mismo adaptador, y
   // prohibírselo sería pedirle la implementación incorrecta.
   const rows = content.split(String.fromCharCode(10)).filter((line) => line.startsWith('claim '));
-  // Los dos que se buscan POR BLOQUE. El del umbral queda fuera a sabiendas: mira el
-  // archivo entero, así que descartarlo por bloque descartaría el adaptador completo — y
-  // el umbral del barrido que el agente escribe cabe justo ahí. Ese sigue pudiendo salir
-  // verde por el @Value que build generó para el otro barrido, y es una limitación
-  // conocida: cerrarla pidiendo otra ubicación sería pedir la implementación incorrecta.
+  // Los dos que se buscan POR BLOQUE. El del umbral sigue mirando el archivo entero, y
+  // eso no cambia: descartarlo por bloque descartaría el adaptador completo, y el umbral
+  // que el agente escribe cabe justo ahí. Lo que cierra su falso verde no es el alcance
+  // sino el acompañante — ahora es la clave de parameters/ de SU barrido, y la del
+  // vecino no la satisface (test siguiente).
   const genericas = rows.filter((line) => /'(reclamo|lote) del barrido'/.test(line));
   assert.equal(genericas.length, 2, 'no se emitieron los dos checks genéricos con alcance de bloque');
   for (const row of genericas) {
     assert.match(row, /ReconcileWithdrawalsRecordWithdrawal/, row);
   }
+});
+
+// El falso verde que cierra atar el umbral a su clave, y que no necesitaba ni un agente
+// distraído: con dos barridos, build genera el reclamo del reclamable y con él su
+// `@Value("${reconciliation.record-withdrawal.unanswered-after-seconds}")` en el
+// adaptador de persistencia, que NO está en la `exclude`. Con el bound de vocabulario
+// (`[Rr]econcil`), ese @Value de BUILD satisfacía el check del barrido PENDIENTE sobre un
+// árbol recién generado: verde antes de que el agente escribiera una línea, y justo sobre
+// la mitad que hay que escribir a mano.
+test('el umbral del barrido vecino no apaga el del barrido pendiente', (t) => {
+  const project = build('catalog-extended', dosBarridosUnoReclamable);
+  const resultado = run(project);
+  if (resultado === null) return t.skip('sin bash en el PATH');
+
+  // La precondición del falso verde, afirmada y no supuesta: build ya dejó escrito el
+  // @Value del OTRO barrido en algún archivo del árbol que el gate mira.
+  const raiz = path.join(project, 'src/main/java');
+  const vecino = fs
+    .readdirSync(raiz, { recursive: true })
+    .filter((entry) => String(entry).endsWith('.java'))
+    .some((entry) =>
+      fs.readFileSync(path.join(raiz, String(entry)), 'utf8').includes('reconciliation.record-withdrawal.unanswered-after-seconds')
+    );
+  assert.ok(vecino, 'build ya no escribe el @Value del barrido reclamable: el test dejó de probar lo que prueba');
+
+  // Y aun así el pendiente se reporta.
+  assert.match(resultado.out, /umbral de compliance\.notifyRegistryChange/);
 });
 
 test('los comentarios no cuentan como código: el TODO que se caza es el vivo', (t) => {
