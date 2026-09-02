@@ -1970,7 +1970,28 @@ function reconciliationClaim({ depId, activation, sweeper, waitingByEntity, enti
 
   if (waitingByEntity.size === 0) return gap('ninguna operación de triggeredBy declara transitions, así que no se sabe qué entidad queda esperando');
   if (waitingByEntity.size > 1) {
-    return gap(`las operaciones que la disparan dejan esperando a ${[...waitingByEntity.keys()].join(' y ')}, y un reclamo sobre dos entidades no define qué es «el lote»`);
+    // Aquí el aviso dice ADEMÁS qué escribir, y no es un lujo: build se niega porque «el lote»
+    // no está definido sobre dos entidades, pero UNO POR ENTIDAD sí lo está —cada una tiene su
+    // propio reloj y su propio lote—, y esa es la forma correcta. En la corrida `refunds-http`
+    // el agente llegó a ella solo, pero porque tenía delante el otro barrido del mismo diseño
+    // para copiarlo; en un diseño cuyo único barrido sea este no hay ejemplo que mirar, y lo
+    // que sale entonces es una consulta que LEE en vez de reclamar. Medido antes de decidir
+    // generarlo: esta forma aparece en un solo diseño de los que existen, y fabricado a
+    // propósito, así que lo que compensa es decir la forma, no generarla (la lista de
+    // consumidores de `claim` es larga y está en la zona del generador donde equivocarse sale
+    // más caro que no hacer nada).
+    const nombres = [...waitingByEntity.keys()];
+    const suffix = `${pascalCase(sweeper.name)}${pascalCase(activation.name)}`;
+    return gap(
+      `las operaciones que la disparan dejan esperando a ${nombres.join(' y ')}, y un reclamo sobre dos ` +
+        `entidades no define qué es «el lote» —son dos relojes—. Escribe UNO POR ENTIDAD, que sí está ` +
+        `definido: ${nombres.map((name) => `${name}Repository.claimFor${suffix}()`).join(' y ')}, cada uno ` +
+        `eligiendo candidatos por el estado de espera de SU entidad y por su propio ` +
+        `${activation.awaitingSince ?? '<awaitingSince>'}, con la misma forma que el reclamo que build sí ` +
+        `genera (marca persistida y caducable, lote acotado, umbral leído de ` +
+        `reconciliation.${kebabCase(activation.name)}.unanswered-after-seconds). El barrido llama a los dos ` +
+        `y trata cada lote por separado`
+    );
   }
 
   const [entityName, states] = [...waitingByEntity][0];

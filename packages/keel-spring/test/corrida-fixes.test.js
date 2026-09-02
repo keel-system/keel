@@ -1526,3 +1526,32 @@ test('un evento que emiten DOS agregados se genera en los dos, y el gate mira lo
   assert.match(gate, /unit 'domainEvent' 'ProductUpdated · Product' 'Product'/);
   assert.match(gate, /unit 'domainEvent' 'ProductUpdated · SupplierPrice' 'SupplierPrice'/);
 });
+
+test('con dos entidades esperando, el aviso dice QUÉ escribir, no solo que no puede', () => {
+  // build se niega a generar el reclamo con razón: sobre dos entidades «el lote» no está
+  // definido, son dos relojes. Pero UNO POR ENTIDAD sí lo está, y esa es la forma correcta.
+  // En la corrida `refunds-http` el agente llegó a ella solo — porque tenía delante el otro
+  // barrido del mismo diseño para copiarlo. En un diseño cuyo único barrido sea este no hay
+  // ejemplo que mirar, y lo que sale entonces es una consulta que LEE en vez de reclamar.
+  //
+  // Se decidió decir la forma en vez de generarla tras medirlo: aparece en UN solo diseño de
+  // los que existen, y fabricado a propósito para pisar ramas nuevas.
+  const { manifest, layers } = loadService(path.join(fixturesDir, 'catalog-extended'));
+  // `retireProduct` dispara la activación y ya deja esperando a Product; con una transición
+  // más sobre otra entidad, la activación deja esperando a DOS.
+  layers['use-cases'].operations.retireProduct.transitions.push({ entity: 'Category', from: ['active'], to: 'withdrawn' });
+  const model = buildModel({ manifest, layers, stack: RELATIONAL });
+
+  const aviso = model.warnings.find((w) => w.includes('no puede generarle el reclamo'));
+  assert.ok(aviso, 'no se emitió el aviso del reclamo no generable');
+  // Las dos mitades: por qué no puede, y qué escribir en su lugar.
+  assert.match(aviso, /son dos relojes/);
+  assert.match(aviso, /Escribe UNO POR ENTIDAD/);
+  // Con el nombre canónico —el mismo que build usaría— en los DOS puertos: es lo que evita
+  // que cada agregado acabe con un reclamo inventado y distinto.
+  assert.match(aviso, /ProductRepository\.claimForReconcileWithdrawalsRecordWithdrawal\(\)/);
+  assert.match(aviso, /CategoryRepository\.claimForReconcileWithdrawalsRecordWithdrawal\(\)/);
+  // Y el resto de la forma, que es lo que distingue reclamar de leer.
+  assert.match(aviso, /marca persistida y caducable, lote acotado/);
+  assert.match(aviso, /reconciliation\.record-withdrawal\.unanswered-after-seconds/);
+});
