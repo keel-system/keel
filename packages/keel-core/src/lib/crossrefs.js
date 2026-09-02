@@ -1139,6 +1139,25 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
     const mention = new RegExp(`\\b${eventName}\\b`);
     return scenarioBlocks.filter((block) => mention.test(block));
   };
+  // Los escenarios de la FAMILIA de un flujo, no solo el bloque que nombra algo. El formato
+  // es jerárquico —`### FL-SUB-001` es el flujo y `#### FL-SUB-001-B` uno de sus pasos—, y el
+  // `Given`, que es donde se nombra el evento, vive en el padre. Buscar solo en el bloque
+  // propio da por ausente un escenario que está escrito: pasa hoy en la fixture
+  // `catalog-extended`, cuyo `FL-SUB-001-B` ES la reentrega de `SupplierPriceChanged` y no
+  // repite el nombre del evento dentro.
+  //
+  // Estrena aquí y no sustituye a `scenariosMentioning`: las otras cuatro reglas de cobertura
+  // funcionan hoy con la búsqueda estricta, y cambiárselas de paso podría silenciar avisos
+  // legítimos sin que nada lo delate. Si alguna vez se migran, se mide antes.
+  const familyOf = (block) => {
+    const id = block.split(/[:\s]/)[0];
+    return (/^(FL-[A-Za-z0-9]+-\d+)/.exec(id) ?? [null, id])[1];
+  };
+  const scenariosCovering = (name) => {
+    const mention = new RegExp(`\\b${name}\\b`);
+    const families = new Set(scenarioBlocks.filter((block) => mention.test(block)).map(familyOf));
+    return scenarioBlocks.filter((block) => families.has(familyOf(block)));
+  };
   const redeliveryGuardsOf = (eventName) => {
     const sub = messaging?.subscriptions?.[eventName];
     const op = operations[sub?.triggers];
@@ -1304,6 +1323,54 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
             `automáticos golpea de verdad. El 'Then' es disyunción cerrada más un conteo por la API que afirme un solo recurso`
         );
       }
+    }
+  }
+
+  // Escenario de reentrega de una suscripción, que hasta aquí solo se le exigía a las
+  // compensaciones. La asimetría no tenía defensa: el canal es at-least-once para todas, y
+  // una suscripción que declara su guarda —`contract.messageId`, la envoltura `keel` que ya
+  // trae `metadata.eventId`, o una transición irrepetible— está haciendo una promesa que
+  // nada prueba. El gate del generador comprueba la FORMA (familia `dedupe` de
+  // check-idempotency.sh: que el listener llame al guard y en el orden que toca), y eso es
+  // otra cosa que comprobar el EFECTO; y `score-scenarios.sh` solo puntúa lo que este
+  // documento declara, así que el escenario que falta no lo echaba de menos nadie — el mismo
+  // hueco de doble fondo que ya se cerró para las compensaciones.
+  //
+  // Se pide UNA señal, la reentrega, y no la doble entrega simultánea: esa se le sigue
+  // exigiendo solo a la compensación, donde deshacer dos veces cuesta lo que cuesta. Pedirla
+  // aquí también dispara sobre proyecciones de réplica y sobre operaciones que solo anotan,
+  // y el ruido entrena a ignorar el aviso — el mismo recorte deliberado que ya llevó la regla
+  // del command repetible a mirar solo el efecto que sale del proceso.
+  if (scenarios !== null) {
+    const compensated = new Set(
+      Object.values(dependencies?.dependencies ?? {}).flatMap((dep) =>
+        (dep?.compensations ?? []).map((compensation) => compensation?.onEvent).filter(Boolean)
+      )
+    );
+    for (const eventName of Object.keys(messaging?.subscriptions ?? {})) {
+      // La compensación ya tiene su regla, más fuerte (pide tres escenarios). Avisar dos
+      // veces de lo mismo con dos redacciones distintas enseña a saltarse las dos.
+      if (compensated.has(eventName)) continue;
+      // Sin guarda declarada no hay promesa que probar. Y ese caso no queda impune: si
+      // además reintenta, es error más arriba.
+      const guards = redeliveryGuardsOf(eventName);
+      if (guards.length === 0) continue;
+      const covering = scenariosCovering(eventName);
+      if (covering.some((block) => REDELIVERY.test(block))) continue;
+      const declared =
+        guards.includes('messageId') && guards.includes('transitions')
+          ? 'la deduplicación del listener y una transición irrepetible'
+          : guards.includes('messageId')
+            ? 'la deduplicación del listener por el id del mensaje'
+            : 'una transición de lifecycle irrepetible';
+      warnings.push(
+        `messaging: subscriptions.${eventName} declara ${declared} contra la reentrega, pero no encuentro en ` +
+          `validation-scenarios.md ningún escenario suyo que entregue el mismo mensaje otra vez. El canal es ` +
+          `at-least-once para todas las suscripciones, no solo para las compensatorias: sin ese escenario, la guarda ` +
+          `es una promesa que nadie comprueba y el primer duplicado real se ve en producción. Escribe uno que entregue ` +
+          `el MISMO messageId por segunda vez y afirme que no hay segundo efecto observable — con messageId distintos ` +
+          `son dos hechos distintos y el escenario pasa contra un consumidor que no deduplica nada`
+      );
     }
   }
 

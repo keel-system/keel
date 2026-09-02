@@ -218,6 +218,22 @@ la política de reintentos declarada siendo más corta que la caída, y se arbit
 3. Es el desenlace **bueno** del encargo: sin él la reserva no saldría nunca de la espera
    por la vía normal, y el barrido acabaría rindiéndose con todas.
 
+#### FL-RES-003-B: el mismo aviso del almacén se reentrega
+
+**When**: se entrega **otra vez** el mismo `StockReserved`, con idéntico payload y el
+**mismo** `messageId`.
+**Then**:
+1. `GET /api/v1/reservations/{r1}` sigue devolviendo `status` = `"confirmed"`: ningún
+   segundo efecto.
+2. El mensaje se confirma sin volver a procesarse: ni DLQ ni reintentos.
+
+**Qué prueba y qué no**: aquí hay **dos** guardas, y el escenario no distingue cuál actuó —
+la deduplicación del listener por el `messageId`, y la transición `awaitingStock → confirmed`,
+que es irrepetible por construcción y rechaza el segundo intento. Basta con que el efecto no
+se repita: cuál de las dos lo frenó es implementación. Lo que sí importa es que se entregue el
+**mismo** `messageId`: con ids distintos son dos hechos distintos, y el escenario pasaría
+contra un consumidor que no deduplica nada.
+
 ## Compensación: el almacén rechaza a posteriori
 
 ### FL-CMP-001: llega el rechazo y la reserva se libera

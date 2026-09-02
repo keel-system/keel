@@ -3900,6 +3900,115 @@ test('con los tres escenarios no se dice nada', () => {
 });
 
 // ---------------------------------------------------------------------------
+// La reentrega de una suscripción CUALQUIERA. Hasta aquí solo se le exigía a las
+// compensaciones, y la asimetría no tenía defensa: el canal es at-least-once para
+// todas. Una suscripción que declara su guarda hace una promesa, y el gate del
+// generador comprueba su FORMA (que el listener llame al guard), no su EFECTO.
+// ---------------------------------------------------------------------------
+
+// compLayers + una suscripción que NO es compensación. Sin `contract` hereda la
+// envoltura keel, que ya trae `metadata.eventId`: la guarda existe sin declarar nada.
+const plainSubLayers = () => {
+  const layers = compLayers();
+  layers['use-cases'].operations.applySupplierPrice = {
+    description: 'Anota el precio de proveedor que publica el mayorista.',
+    kind: 'command',
+    internal: true,
+    input: { fields: { productId: { type: 'uuid', required: true } } },
+    output: 'void',
+  };
+  layers.messaging.subscriptions.SupplierPriceChanged = {
+    // El proveedor ya declarado: un `source` desconocido tiene su propio aviso y no es
+    // lo que estos tests miran.
+    source: 'compliance',
+    payload: { productId: { type: 'uuid', required: true } },
+    triggers: 'applySupplierPrice',
+  };
+  return layers;
+};
+
+const COMPENSACION_COMPLETA = [EFECTO, REENTREGA, SIMULTANEA];
+
+test('una suscripción con guarda y sin ningún escenario suyo es aviso', () => {
+  const { warnings } = checkCrossRefs({
+    layers: plainSubLayers(),
+    scenarios: scenarioDoc(...COMPENSACION_COMPLETA),
+  });
+  assert.ok(
+    warnings.some((w) => w.includes('subscriptions.SupplierPriceChanged') && w.includes('el mismo mensaje otra vez')),
+    warnings.join(String.fromCharCode(10))
+  );
+});
+
+test('el consumo sin la reentrega es aviso: la guarda sigue sin comprobarse', () => {
+  const consumo = `### FL-SUB-001: llega un precio de proveedor
+**Given**: un producto activo.
+**When**: llega SupplierPriceChanged con el productId.
+**Then**: el precio queda anotado, leído por GET /products/{id}.`;
+  const { warnings } = checkCrossRefs({
+    layers: plainSubLayers(),
+    scenarios: scenarioDoc(...COMPENSACION_COMPLETA, consumo),
+  });
+  assert.ok(
+    warnings.some((w) => w.includes('subscriptions.SupplierPriceChanged') && w.includes('el mismo mensaje otra vez')),
+    warnings.join(String.fromCharCode(10))
+  );
+});
+
+// El falso positivo que obligó a buscar por FAMILIA y no por bloque: el formato de los
+// escenarios es jerárquico y el evento se nombra en el `Given` del flujo, no en cada
+// paso. Con búsqueda estricta, este documento —que TIENE su reentrega escrita— salía
+// avisado, y el camino de menor resistencia habría sido repetir el nombre del evento en
+// cada paso para callar al validador. Es exactamente lo que pasa en la fixture
+// catalog-extended con FL-SUB-001-B.
+test('la reentrega escrita en un PASO cuenta, aunque el evento se nombre en el flujo padre', () => {
+  const flujo = `### FL-SUB-001: llega un precio de proveedor
+**Given**: un producto activo.
+**When**: llega SupplierPriceChanged con el productId.
+**Then**: el precio queda anotado.
+
+#### FL-SUB-001-B: reentrega del mismo mensaje
+**When**: se entrega otra vez el mismo mensaje, con el mismo messageId.
+**Then**: el precio sigue anotado una sola vez y ningún efecto se repite.`;
+  const { warnings } = checkCrossRefs({
+    layers: plainSubLayers(),
+    scenarios: scenarioDoc(...COMPENSACION_COMPLETA, flujo),
+  });
+  assert.ok(
+    !warnings.some((w) => w.includes('subscriptions.SupplierPriceChanged') && w.includes('el mismo mensaje otra vez')),
+    warnings.join(String.fromCharCode(10))
+  );
+});
+
+// Dos avisos distintos sobre el mismo hueco enseñan a saltarse los dos: la compensación
+// tiene su regla, más fuerte, y esta no se superpone.
+test('la compensación no recibe además el aviso de suscripción', () => {
+  const { warnings } = checkCrossRefs({ layers: plainSubLayers(), scenarios: scenarioDoc(EFECTO) });
+  assert.ok(
+    warnings.some((w) => w.includes("no encuentro el de REENTREGA")),
+    'falta el aviso propio de la compensación'
+  );
+  assert.ok(
+    !warnings.some((w) => w.includes('subscriptions.WithdrawalRejected') && w.includes('el mismo mensaje otra vez')),
+    warnings.join(String.fromCharCode(10))
+  );
+});
+
+// Sin guarda declarada no hay promesa que comprobar, y pedir el escenario ahí sería
+// pedirle al diseño que pruebe algo que no dice. Ese caso tiene su propio aviso —y es
+// ERROR— cuando además la suscripción reintenta.
+test('una suscripción sin ninguna guarda de reentrega no recibe el aviso', () => {
+  const layers = plainSubLayers();
+  layers.messaging.subscriptions.SupplierPriceChanged.contract = { envelope: 'none' };
+  const { warnings } = checkCrossRefs({ layers, scenarios: scenarioDoc(...COMPENSACION_COMPLETA) });
+  assert.ok(
+    !warnings.some((w) => w.includes('subscriptions.SupplierPriceChanged') && w.includes('el mismo mensaje otra vez')),
+    warnings.join(String.fromCharCode(10))
+  );
+});
+
+
+// ---------------------------------------------------------------------------
 // Los otros dos mecanismos que el gate del generador no echaba de menos: el
 // outbox —cuyo escenario decorativo es trivial de escribir sin darse cuenta— y
 // la carrera de la clave de idempotencia.
