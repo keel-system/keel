@@ -550,7 +550,21 @@ function renderToDomain(model, entity, imports) {
       }
       imports.add(`${subPackage(model, 'domain.valueobject')}.${vo.name}`);
       const jpaSubs = vo.fields.map((sub) => `jpa.get${capitalize(member.name)}${capitalize(sub.name)}()`);
-      return `new ${vo.name}(${jpaSubs.join(', ')})`;
+      // Un value object OPCIONAL ausente se devuelve como null, no como un objeto con todo a
+      // null. La diferencia no es estética: `producto.precio()` devolviendo un Money vacío
+      // hace que cualquier `!= null` del dominio mienta, y desde que el constructor compacto
+      // exige los campos `required` del tipo, construirlo ahí directamente lanza.
+      //
+      // La marca de presencia es un campo REQUIRED del propio value object: si el objeto
+      // está, ese campo está, porque es su invariante. Sin ninguno no hay marca posible —y
+      // tampoco hace falta: un value object sin campos obligatorios tolera los nulls—.
+      // La rama documental ya lo hacía (`doc == null ? null : ...`); esta era la que faltaba.
+      const marca = vo.fields.find((sub) => sub.required);
+      if (member.field.required || !marca) {
+        return `new ${vo.name}(${jpaSubs.join(', ')})`;
+      }
+      const presente = `jpa.get${capitalize(member.name)}${capitalize(marca.name)}()`;
+      return `${presente} == null ? null : new ${vo.name}(${jpaSubs.join(', ')})`;
     }
     if (member.kind === 'relationMany') {
       return `jpa.get${capitalize(member.name)}().stream().map(this::toDomain).toList()`;

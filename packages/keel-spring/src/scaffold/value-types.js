@@ -44,7 +44,7 @@ function valueGuards(vo) {
         ?.match(/regexp\s*=\s*"(.*)"\s*\)$/)?.[1] ?? null,
       numeric: field.numeric ?? null
     }))
-    .filter(({ pattern, numeric }) => pattern || numeric);
+    .filter(({ field, pattern, numeric }) => pattern || numeric || field.required);
   if (guarded.length === 0) return { body: '', imports: [] };
 
   const imports = [];
@@ -55,8 +55,27 @@ function valueGuards(vo) {
 
   const checks = [];
   for (const { field, pattern, numeric } of guarded) {
+    // La PRESENCIA, y va primero. `required` dentro de un tipo compuesto no habla de un
+    // campo de una entidad —eso lo dice la entidad—: dice que un Money sin importe no es un
+    // Money. El constructor compacto es el único punto por el que pasa cualquier valor de
+    // este tipo, venga del cable, de la base de datos o de otro punto del dominio, así que
+    // es donde el invariante se sostiene. Sin esto se acepta `new Money(null, "EUR")` y el
+    // NPE aparece más tarde y en otro sitio.
+    //
+    // Ojo con lo que NO hace: los campos opcionales del value object siguen tolerando null,
+    // y por eso los checks de abajo conservan su `!= null`. Y exigir presencia aquí obliga a
+    // que quien rehidrata un value object AUSENTE devuelva null en vez de construirlo con
+    // nulls — ver la guarda de repositories.js, que es la otra mitad de este cambio.
+    if (field.required) {
+      checks.push(`        if (${field.name} == null) {
+            throw new IllegalArgumentException("${vo.name}.${field.name} es obligatorio");
+        }`);
+    }
+    // Con la presencia ya exigida, el `!= null` de los checks siguientes es ruido: se omite.
+    // Sin ella hace falta, porque un campo opcional del value object puede venir vacío.
+    const siExiste = field.required ? '' : `${field.name} != null && `;
     if (pattern) {
-      checks.push(`        if (${field.name} != null && !${formatConstant(field)}.matcher(${field.name}).matches()) {
+      checks.push(`        if (${siExiste}!${formatConstant(field)}.matcher(${field.name}).matches()) {
             throw new IllegalArgumentException("${vo.name}.${field.name} no cumple el formato declarado por su tipo");
         }`);
     }
@@ -71,7 +90,7 @@ function valueGuards(vo) {
       const condicion = numeric.decimal
         ? `${field.name}.compareTo(new BigDecimal("${numeric[bound]}")) ${operator} 0`
         : `${field.name} ${operator} ${numeric[bound]}`;
-      checks.push(`        if (${field.name} != null && ${condicion}) {
+      checks.push(`        if (${siExiste}${condicion}) {
             throw new IllegalArgumentException("${vo.name}.${field.name} es ${texto} declarado por su tipo (${numeric[bound]})");
         }`);
       if (numeric.decimal) imports.push('java.math.BigDecimal');
@@ -82,16 +101,22 @@ function valueGuards(vo) {
     // leído de la BD (escala de la columna) y construido desde el cuerpo de una petición
     // (la que trajera el JSON) son objetos distintos, en equals, en hashCode y en cualquier
     // clave que los use. Falla en silencio y de forma intermitente.
-    checks.push(`        if (${field.name} != null) {
+    checks.push(
+      field.required
+        ? `        ${field.name} = ${field.name}.setScale(${numeric.scale}, RoundingMode.HALF_UP);`
+        : `        if (${field.name} != null) {
             ${field.name} = ${field.name}.setScale(${numeric.scale}, RoundingMode.HALF_UP);
-        }`);
+        }`
+    );
     imports.push('java.math.RoundingMode');
   }
 
   // Un único constructor compacto, no uno por campo: un record solo admite uno, y
   // emitir dos es Java que no compila.
-  const body = `
-${constants.join('\n')}${constants.length > 0 ? '\n' : ''}
+  const bloqueConstantes = constants.length > 0 ? `
+${constants.join('\n')}
+` : '';
+  const body = `${bloqueConstantes}
     public ${vo.name} {
 ${checks.join('\n')}
     }

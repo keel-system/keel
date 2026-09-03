@@ -1677,3 +1677,48 @@ test('un script de infra que falla deja su salida, no solo su código', () => {
   assert.match(harness, /runInfraScript\("infra\/reset-db\.sh"/);
   assert.match(harness, /runInfraScript\("infra\/init-messaging\.sh"/);
 });
+
+test('el value object exige los campos que su tipo declara obligatorios', () => {
+  // La discrepancia que destapó el refresh de la corrida: el agente había escrito a mano un
+  // `if (amount == null) throw` que el generador no emitía. No era capricho suyo. `required`
+  // dentro de un tipo COMPUESTO no habla de un campo de una entidad —eso lo dice la entidad—:
+  // dice que un Money sin importe no es un Money, y el constructor compacto es el único punto
+  // por el que pasa cualquier valor de ese tipo, venga del cable, de la BD o del dominio.
+  // Sin esto se aceptaba `new Money(null, "EUR")` y el NPE aparecía en otro sitio.
+  const money = project('product-catalog', RELATIONAL).file('Money.java');
+
+  assert.match(money, /if \(amount == null\) \{[^}]*Money\.amount es obligatorio/s);
+  assert.match(money, /if \(currency == null\) \{[^}]*Money\.currency es obligatorio/s);
+  // Y con la presencia exigida, el `!= null` de los checks siguientes es ruido: se omite.
+  assert.ok(!money.includes('amount != null'), 'guarda de nulidad redundante tras exigir presencia');
+});
+
+test('un value object OPCIONAL ausente se rehidrata como null, no con todo a null', () => {
+  // La otra mitad, y sin ella la primera sería una regresión: la rehidratación relacional
+  // construía `new Money(getPriceAmount(), getPriceCurrency())` SIN guarda, así que una fila
+  // con el value object ausente devolvía un Money vacío en vez de null — cualquier `!= null`
+  // del dominio mentía— y desde que el constructor exige los campos required, lanzaría.
+  //
+  // La rama documental ya lo hacía bien (`doc == null ? null : ...`). Esta era la que faltaba,
+  // que es la misma asimetría relacional/documental del relay del outbox.
+  const { manifest, layers } = loadService(path.join(fixturesDir, 'product-catalog'));
+  delete layers.domain.entities.Product.fields.price.required;
+  const workspace = tmpDir('keel-vo-opcional-');
+  const result = scaffoldService({ manifest, layers, workspace, force: true, stack: RELATIONAL });
+  const root = path.join(workspace, result.outDir);
+  const impl = fs.readFileSync(walk(root).find((f) => f.endsWith('ProductRepositoryImpl.java')), 'utf8');
+
+  // La marca de presencia es un campo REQUIRED del propio value object: si el objeto está,
+  // ese campo está, porque es su invariante.
+  assert.match(impl, /jpa\.getPriceAmount\(\) == null \? null : new Money\(/);
+});
+
+test('con el value object OBLIGATORIO no se emite guarda: no puede faltar', () => {
+  // El recorte importa tanto como la guarda. Un `== null ? null :` sobre un campo que el
+  // diseño declara obligatorio sugiere que puede faltar, y su rama muerta invita a que
+  // alguien la dé por posible más arriba.
+  const impl = project('product-catalog', RELATIONAL).file('ProductRepositoryImpl.java');
+
+  assert.match(impl, /new Money\(jpa\.getPriceAmount\(\), jpa\.getPriceCurrency\(\)\)/);
+  assert.ok(!impl.includes('getPriceAmount() == null ? null'), 'guarda innecesaria sobre un campo obligatorio');
+});
