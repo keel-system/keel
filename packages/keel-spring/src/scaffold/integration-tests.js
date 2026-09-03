@@ -1863,7 +1863,21 @@ ${hasMultipart(model) ? `
                             "-jar",
                             jar.toString(),
                             "--spring.profiles.active=local",
-                            "--server.port=" + REPLICA_PORT)
+                            "--server.port=" + REPLICA_PORT,
+                            // El endpoint de apagado, abierto SOLO para este proceso y por
+                            // línea de comandos: la configuración de la aplicación no lo
+                            // expone y no tiene por qué. Es lo que permite que
+                            // stopReplica() cierre ordenadamente en cualquier sistema
+                            // operativo — ver su javadoc, que explica qué se rompe sin esto.
+                            // Solo 'access', que es la forma de Boot 3.4+ y la que corresponde a
+                            // la versión que fija este generador. NO añadir también el 'enabled'
+                            // de las versiones anteriores «por si acaso»: Boot las trata como
+                            // MUTUAMENTE EXCLUYENTES y aborta el arranque con «Update your
+                            // configuration so that only one of the mutually exclusive properties
+                            // is configured». La réplica no llega a levantar y el escenario de
+                            // clúster falla con «murió durante el arranque».
+                            "--management.endpoints.web.exposure.include=health,shutdown",
+                            "--management.endpoint.shutdown.access=unrestricted")
                     .redirectErrorStream(true)
                     .redirectOutput(log.toFile())
                     .start();
@@ -1874,21 +1888,68 @@ ${hasMultipart(model) ? `
         return REPLICA_PORT;
     }
 
-    /** Para la réplica. Idempotente: sobre una ya parada no hace nada. */
+    /**
+     * Para la réplica, <b>ordenadamente</b>. Idempotente: sobre una ya parada no hace nada.
+     *
+     * <p><b>Por qué el rodeo del actuator y no {@code destroy()} a secas.</b> En Linux
+     * {@code Process.destroy()} manda un SIGTERM y Spring ejecuta su cierre: para los
+     * contenedores de escucha, devuelve al broker lo que tuviera en vuelo y suelta el pool.
+     * En Windows {@code destroy()} es {@code TerminateProcess} — un kill duro, sin hooks de
+     * apagado. La réplica muere consumiendo, y cada mensaje que tuviera recibido se queda
+     * <b>invisible</b> hasta que vence el {@code VisibilityTimeout} de su cola (60 s), muy por
+     * encima del plazo de cualquier {@code await} de un escenario.
+     *
+     * <p>El síntoma no se parece en nada a su causa: el escenario SIGUIENTE entrega un mensaje,
+     * nadie lo procesa dentro de su plazo y lo que se ve es «un estado no transicionó a tiempo»,
+     * sin excepción, sin DLQ y sin pérdida — el mensaje sigue en la cola, invisible. Se diagnosticó
+     * en la corrida {@code refunds-http} deshabilitando el escenario de clúster: sin él, el de al lado
+     * pasaba; con él, fallaba las tres veces.
+     *
+     * <p>El endpoint de apagado lo abre {@link #startReplica()} por línea de comandos y solo para
+     * la réplica: la configuración de la aplicación no lo expone, y este proceso es de usar y
+     * tirar. El {@code destroy()} sigue detrás como red — una réplica que no se puede parar por
+     * las buenas tiene que morir igual.
+     */
     protected static void stopReplica() {
         if (REPLICA == null) {
             return;
         }
-        REPLICA.destroy();
+        requestReplicaShutdown();
         try {
-            if (!REPLICA.waitFor(30, TimeUnit.SECONDS)) {
-                REPLICA.destroyForcibly();
+            // Al apagado ordenado se le da un plazo corto: si no ha muerto, es que el endpoint
+            // no respondió o el cierre se atascó, y entonces vale más matarla que esperarla.
+            if (!REPLICA.waitFor(15, TimeUnit.SECONDS)) {
+                REPLICA.destroy();
+                if (!REPLICA.waitFor(30, TimeUnit.SECONDS)) {
+                    REPLICA.destroyForcibly();
+                }
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             REPLICA.destroyForcibly();
         }
         REPLICA = null;
+    }
+
+    /**
+     * Pide el cierre ordenado por el actuator. No lanza: si el endpoint no está o la réplica ya
+     * no acepta tráfico, el que manda es el {@code destroy()} de quien llama.
+     */
+    private static void requestReplicaShutdown() {
+        try {
+            HttpURLConnection connection = (HttpURLConnection)
+                    URI.create("http://localhost:" + REPLICA_PORT + "/actuator/shutdown").toURL().openConnection();
+            connection.setRequestMethod("POST");
+            connection.setConnectTimeout(2000);
+            connection.setReadTimeout(5000);
+            try {
+                connection.getResponseCode();
+            } finally {
+                connection.disconnect();
+            }
+        } catch (IOException yaNoAtiende) {
+            // La réplica ya no atiende: no hay cierre ordenado que pedir.
+        }
     }
 ${onReplica}
     /** Localiza el jar ejecutable, descartando el -plain que Boot genera al lado. */

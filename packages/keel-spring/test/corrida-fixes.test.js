@@ -1555,3 +1555,41 @@ test('con dos entidades esperando, el aviso dice QUÉ escribir, no solo que no p
   assert.match(aviso, /marca persistida y caducable, lote acotado/);
   assert.match(aviso, /reconciliation\.record-withdrawal\.unanswered-after-seconds/);
 });
+
+test('la réplica se para ORDENADAMENTE, no a golpe de destroy()', () => {
+  // El fallo de arnés que destapó la re-puntuación de `refunds-http`: FL-GWC-005 fallaba las
+  // tres veces que se ejecutó, y pasaba en cuanto se deshabilitaba el escenario de clúster que
+  // corre antes. La causa: `Process.destroy()` es un SIGTERM en Linux —Spring cierra sus
+  // contenedores de escucha y devuelve lo que tenga en vuelo— pero en Windows es
+  // TerminateProcess, un kill duro. La réplica muere consumiendo, y el mensaje que tuviera
+  // recibido queda INVISIBLE hasta que vence el VisibilityTimeout de su cola (60 s), cuatro
+  // veces el plazo de un await. El escenario siguiente entrega, nadie procesa, y lo que se ve
+  // es «un estado no transicionó a tiempo»: sin excepción, sin DLQ y sin pérdida.
+  const harness = project('stock-reservation', SNSSQS).file('AbstractFlowIT.java');
+
+  // El endpoint se abre SOLO para la réplica, por línea de comandos: la configuración de la
+  // aplicación no lo expone y no tiene por qué.
+  assert.match(harness, /--management\.endpoints\.web\.exposure\.include=health,shutdown/);
+  assert.match(harness, /--management\.endpoint\.shutdown\.access=unrestricted/);
+  // Y SOLO esa forma. Añadir además el `enabled` de las versiones anteriores «por
+  // compatibilidad» no es inocuo: Boot las trata como mutuamente excluyentes y aborta el
+  // arranque, así que la réplica no levanta y el escenario de clúster falla con «murió
+  // durante el arranque». Pasó al escribir este mismo arreglo.
+  assert.ok(
+    !harness.includes('management.endpoint.shutdown.enabled'),
+    'las dos formas de la propiedad son mutuamente excluyentes: Boot aborta el arranque'
+  );
+
+  // Y stopReplica lo pide ANTES de recurrir a destroy(), que se queda como red.
+  const stop = harness.slice(harness.indexOf('protected static void stopReplica()'), harness.indexOf('private static void requestReplicaShutdown()'));
+  assert.match(stop, /requestReplicaShutdown\(\)/);
+  assert.ok(
+    stop.indexOf('requestReplicaShutdown()') < stop.indexOf('REPLICA.destroy()'),
+    'destroy() ocurre antes que el cierre ordenado: la réplica volvería a morir consumiendo'
+  );
+  // El fallback no desaparece: una réplica que no se puede parar por las buenas tiene que
+  // morir igual, o contamina todos los flujos siguientes.
+  assert.match(stop, /REPLICA\.destroyForcibly\(\)/);
+  // Y el POST es un POST: el endpoint de apagado no responde a GET.
+  assert.match(harness, /connection\.setRequestMethod\("POST"\)/);
+});
