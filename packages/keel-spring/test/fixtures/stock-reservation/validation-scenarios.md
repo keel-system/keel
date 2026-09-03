@@ -376,7 +376,7 @@ misma cadencia hacen que el solape sea el caso normal, no el afortunado.
 **Given**: la segunda réplica arrancada, y **cinco** reservas en `awaitingStock` cuya espera se
 ha llevado por encima del umbral.
 
-**When**: pasa un tick del barrido, que corre en las **dos** réplicas.
+**When**: pasa un tick de `reconcileReservations`, que corre en las **dos** réplicas.
 **Then**:
 1. Las cinco acaban en `released`.
 2. El proveedor recibió **exactamente cinco** `DELETE /stock/reservations/{orderId}`, uno por
@@ -413,7 +413,7 @@ sola si nadie la prueba.
 
 ## Reconciliación: el desenlace que no llega
 
-### FL-REC-001: el almacén nunca responde y el barrido se rinde
+### FL-REC-001: el almacén nunca responde y `reconcileReservations` se rinde
 
 La pata del **silencio**, y el único mecanismo de los cinco que hasta aquí no tenía forma de
 observarse. No hay excepción que capturar ni evento al que reaccionar: una ausencia no produce
@@ -424,7 +424,8 @@ FL-RES-001 → FL-RES-002, sobre la que **no** se entrega ni `StockReserved` ni 
 El proveedor está programado para responder `200 {cancelled: true}` a
 `DELETE /stock/reservations/{orderId}`.
 
-**When**: se retrasa `reserveStockAwaitingSince` de `<r5>` por encima del umbral de paciencia —el escenario
+**When**: se retrasa `reserveStockAwaitingSince` de `<r5>` por encima del umbral de paciencia, de modo que
+su espera se da por agotada —el escenario
 lo hace directamente sobre la fila, que es la única variable a su alcance: el reloj del
 servicio no se toca y el umbral tampoco— y se espera a que pase un tick del barrido.
 **Then**:

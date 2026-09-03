@@ -1326,6 +1326,56 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
     }
   }
 
+  // Escenario de CLÚSTER de un barrido. `@Scheduled` no es «una vez en el clúster», es «una vez
+  // por instancia»: con N réplicas, un barrido que consulta «los atascados» obtiene en las N las
+  // MISMAS filas y cada una actúa sobre ellas. Por eso el generador emite el reclamo con marca
+  // persistida y caducable, y por eso el gate del generador lo exige y prohíbe `findAllBy…`.
+  //
+  // Pero el gate mira la FORMA, y el modo de fallo más caro de este mecanismo es justo el que más
+  // se parece a estar bien: la marca persistida que nunca commitea. La consulta es correcta —el
+  // `@Modifying`, el lote acotado, el umbral parametrizado— y lo único que falla es dónde cae el
+  // commit, que no se ve leyendo la consulta sino la propagación, tres archivos más allá
+  // (conventions/dependencies.md § La marca persistida que nunca commitea). Ese defecto pasa el
+  // gate entero. Lo caza un escenario con dos instancias vivas, y nada más.
+  //
+  // La forma probada está en la fixture `stock-reservation` (FL-CLU-002) y ha corrido en cuatro
+  // corridas: varias filas candidatas, las dos réplicas vivas, y el Then contando el efecto
+  // externo RECIBIDO. Lo que faltaba era que alguien la exigiera: un diseño nuevo con barrido
+  // simplemente no la llevaba.
+  if (scenarios !== null) {
+    // Dos INSTANCIAS, que no es lo mismo que dos cosas a la vez. `CONCURRENT` lo cumple una doble
+    // entrega dentro de un solo proceso, y esa no prueba nada del reparto entre réplicas: la
+    // señal aquí es la segunda instancia.
+    const CLUSTER = /(dos|2|otra|segunda)\s+(r[ée]plicas?|instancias?|procesos?)|cl[úu]ster|entre r[ée]plicas|entre procesos/i;
+    const activatedBy = new Set(
+      Object.values(dependencies?.dependencies ?? {}).flatMap((dep) =>
+        Object.values(dep?.activations ?? {}).flatMap((activation) => activation?.triggeredBy ?? [])
+      )
+    );
+    for (const [opName, op] of Object.entries(operations)) {
+      if (!op?.schedule) continue;
+      // Solo si ACTÚA sobre lo que encuentra. Un barrido que solo lee no tiene nada que repartir,
+      // y una purga es idempotente por forma —borrar lo caducado dos veces es borrarlo una—; las
+      // que genera el generador ni siquiera son operaciones del diseño.
+      const acts = (op.transitions ?? []).length > 0 || (op.emits ?? []).length > 0 || activatedBy.has(opName);
+      if (!acts) continue;
+      const mentions = scenariosMentioning(opName);
+      if (mentions.some((block) => CLUSTER.test(block))) continue;
+      warnings.push(
+        `use-cases: operations.${opName} tiene 'schedule' y actúa sobre lo que encuentra, pero no encuentro en ` +
+          `validation-scenarios.md ningún escenario que nombre esa operación y la ejercite con DOS INSTANCIAS. ` +
+          `@Scheduled corre en todas las réplicas, así que sin reclamo las N se llevan las mismas filas y cada una ` +
+          `actúa: es la propiedad que el mecanismo existe para dar, y la única que ningún escenario de una sola ` +
+          `instancia distingue —con una réplica, reclamar y leer dan el mismo resultado—. El gate del generador ` +
+          `comprueba la forma del reclamo, no que reparta. Escribe uno con VARIAS filas candidatas (con una sola, ` +
+          `la ventana en que las dos réplicas coinciden es tan estrecha que pasaría por suerte), las dos instancias ` +
+          `vivas, y un Then que cuente el efecto externo RECIBIDO y afirme que ocurrió exactamente una vez por fila ` +
+          `— recibido y no su consecuencia: con idempotencia saliente declarada, el proveedor absorbería los ` +
+          `duplicados y los escondería`
+      );
+    }
+  }
+
   // Escenario de reentrega de una suscripción, que hasta aquí solo se le exigía a las
   // compensaciones. La asimetría no tenía defensa: el canal es at-least-once para todas, y
   // una suscripción que declara su guarda —`contract.messageId`, la envoltura `keel` que ya

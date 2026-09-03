@@ -5059,3 +5059,79 @@ test('indexes.when: sobre un campo que no es enum no se comprueba el valor', () 
 
   assert.deepEqual(run(layers).errors.filter((e) => e.includes('indexes.when')), []);
 });
+
+// ---------------------------------------------------------------------------
+// El escenario de CLÚSTER de un barrido. `@Scheduled` es «una vez por instancia»,
+// así que con N réplicas las N se llevan las mismas filas si el barrido lee en vez
+// de reclamar. El gate del generador mira la FORMA del reclamo; esto mira que
+// alguien lo haya ejercitado con dos instancias vivas, que es lo único que
+// distingue reclamar de leer — con una sola réplica dan el mismo resultado.
+// ---------------------------------------------------------------------------
+
+const BARRIDO_CLUSTER = `### FL-CLU-001: dos réplicas no cancelan el mismo encargo dos veces
+**Given**: la segunda réplica arrancada y cinco retiradas por encima del umbral.
+**When**: pasa un tick de reconcileWithdrawals, que corre en las dos réplicas.
+**Then**: el registro recibió exactamente cinco cancelaciones, una por retirada.`;
+
+test('un barrido que actúa y no se ejercita con dos instancias es aviso', () => {
+  const { warnings } = checkCrossRefs({ layers: compLayers(), scenarios: scenarioDoc(EFECTO, REENTREGA, SIMULTANEA) });
+  assert.ok(
+    warnings.some((w) => w.includes('operations.reconcileWithdrawals') && w.includes('DOS INSTANCIAS')),
+    warnings.join(String.fromCharCode(10))
+  );
+});
+
+test('con el escenario de clúster no se dice nada', () => {
+  const { warnings } = checkCrossRefs({
+    layers: compLayers(),
+    scenarios: scenarioDoc(EFECTO, REENTREGA, SIMULTANEA, BARRIDO_CLUSTER)
+  });
+  assert.ok(!warnings.some((w) => w.includes('DOS INSTANCIAS')), warnings.join(String.fromCharCode(10)));
+});
+
+// El falso verde del barrido vecino, que ya costó arreglar dos veces en el umbral del gate:
+// un escenario de clúster que NO nombra la operación no puede valer por ella. Es además el
+// caso real de la fixture stock-reservation, cuyo FL-CLU-002 decía «el barrido» y por eso
+// hubo que nombrar la operación dentro del bloque en vez de aflojar la regla.
+test('un escenario de clúster que no nombra la operación no la cubre', () => {
+  const anonimo = BARRIDO_CLUSTER.replace('reconcileWithdrawals', 'el barrido');
+  const { warnings } = checkCrossRefs({
+    layers: compLayers(),
+    scenarios: scenarioDoc(EFECTO, REENTREGA, SIMULTANEA, anonimo)
+  });
+  assert.ok(warnings.some((w) => w.includes('DOS INSTANCIAS')), warnings.join(String.fromCharCode(10)));
+});
+
+// Dos cosas a la vez dentro de UN proceso no prueban nada del reparto entre réplicas, así que
+// la señal de la carrera de idempotencia no puede valer aquí. Si valiera, cualquier diseño con
+// una compensación bien cubierta dejaría su barrido sin exigir.
+test('una doble entrega simultánea en un proceso no cuenta como clúster', () => {
+  const simultaneoMismoProceso = `### FL-CLU-009: reconcileWithdrawals y una entrega a la vez
+**When**: se entregan dos copias del mismo mensaje SIMULTÁNEAMENTE mientras corre reconcileWithdrawals.
+**Then**: un solo efecto.`;
+  const { warnings } = checkCrossRefs({
+    layers: compLayers(),
+    scenarios: scenarioDoc(EFECTO, REENTREGA, SIMULTANEA, simultaneoMismoProceso)
+  });
+  assert.ok(warnings.some((w) => w.includes('DOS INSTANCIAS')), warnings.join(String.fromCharCode(10)));
+});
+
+// Un barrido que solo lee no reparte nada, y una purga es idempotente por forma: borrar lo
+// caducado dos veces es borrarlo una. Exigirles el escenario sería ruido, y el ruido enseña a
+// ignorar el aviso.
+test('un schedule que no actúa sobre lo que encuentra no lo necesita', () => {
+  const layers = compLayers();
+  layers['use-cases'].operations.purgeExpiredDrafts = {
+    description: 'Borra los borradores caducados.',
+    kind: 'command',
+    internal: true,
+    input: 'void',
+    output: 'void',
+    schedule: { cron: '0 0 4 * * *' }
+  };
+  const { warnings } = checkCrossRefs({
+    layers,
+    scenarios: scenarioDoc(EFECTO, REENTREGA, SIMULTANEA, BARRIDO_CLUSTER)
+  });
+  assert.ok(!warnings.some((w) => w.includes('purgeExpiredDrafts')), warnings.join(String.fromCharCode(10)));
+});
