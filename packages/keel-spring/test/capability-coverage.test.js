@@ -61,24 +61,6 @@ const EXCEPCIONES = new Map([
     }
   ],
   [
-    'security.authentication.serviceAuth.validateAudience',
-    {
-      motivo: MOTIVOS.hueco,
-      porque:
-        'genera DOS clientes de prueba más (test-m2m-bad-aud, test-m2m-none) y el filtro de audiencia, con su ' +
-        'variante propia en Cognito. Ninguna fixture lo declara, así que ese bash y ese Java no los compila nadie: ' +
-        'solo los miran asserts de cadenas sobre modelos parcheados. Cerrarlo es declararlo en asset-vault, que ya ' +
-        'tiene serviceAuth y ya está en compile-check.'
-    }
-  ],
-  [
-    'security.authentication.serviceAuth.audience',
-    {
-      motivo: MOTIVOS.hueco,
-      porque: 'el valor que compara ese filtro. Va con validateAudience: se cierran juntos o no se cierra ninguno.'
-    }
-  ],
-  [
     'security.cors.maxAgeSeconds',
     {
       motivo: MOTIVOS.conDefault,

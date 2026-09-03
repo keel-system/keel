@@ -6,6 +6,19 @@ authentication:
   serviceAuth:
     protocol: client-credentials
     description: El servicio de renderizado consulta fichas para generar sus miniaturas.
+    # La única fixture que lo declara, y por eso la única que compila el filtro de audiencia,
+    # su cableado en la cadena de seguridad, los dos clientes de prueba que aprovisiona
+    # (test-m2m-bad-aud y test-m2m-none) y la variante propia de Cognito, que mira el scope en
+    # vez del claim `aud`. Sin esto, todo ese Java se generaba a ciegas.
+    #
+    # Y es una decisión de diseño, no de relleno: este servicio convive con otros que comparten
+    # servidor de autenticación, así que sin validar la audiencia un token emitido PARA OTRO
+    # valdría aquí con solo tener el scope.
+    validateAudience: true
+    # Declarada a propósito en vez de dejarla al default (el artifactId): así se compila también
+    # la rama en la que el identificador NO coincide con el nombre del servicio, que es la que
+    # tiene un servicio publicado con otro nombre ante el proveedor.
+    audience: asset-vault-api
   # Alcance por recurso. Es la única fixture que lo declara, y por eso la única que compila
   # el mapper de Keycloak, el atributo por usuario de init-keycloak.sh, su gemelo del
   # realm-export.json de deploy/ y el scopedResource() del arnés: hasta ahora esos veintitrés

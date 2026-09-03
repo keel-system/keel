@@ -68,6 +68,10 @@ const brokerArg = args.find((arg) => arg.startsWith('--broker='))?.split('=')[1]
 // pide uno concreto, se comprueban todos. Es donde más barato sale un fallo de tipos.
 const brokers = brokerArg ? [brokerArg] : ['kafka', 'rabbitmq', 'snssqs'];
 const databaseArg = args.find((arg) => arg.startsWith('--database='))?.split('=')[1];
+// El proveedor de identidad es otro eje con Java propio: con `serviceAuth.validateAudience`,
+// Cognito no comprueba el claim `aud` sino el PREFIJO del scope, así que su filtro de audiencia
+// es otra plantilla. Se tokenizaba en java-syntax y no lo compilaba nadie.
+const authArg = args.find((arg) => arg.startsWith('--auth='))?.split('=')[1];
 
 /**
  * Qué combinaciones se compilan.
@@ -122,7 +126,8 @@ for (const { broker, database } of combos) {
       console.error(`${fixture}: la fixture no carga:\n  ${errors.join('\n  ')}`);
       process.exit(2);
     }
-    scaffoldService({ manifest, layers, workspace, force: true, stack: database ? { broker, database } : { broker } });
+    const stack = { broker, ...(database ? { database } : {}), ...(authArg ? { auth: authArg } : {}) };
+    scaffoldService({ manifest, layers, workspace, force: true, stack });
 
     const project = fs
       .readdirSync(path.join(workspace, 'services'), { withFileTypes: true })
@@ -134,7 +139,8 @@ for (const { broker, database } of combos) {
     const { compilable, motivo } = mainCompilable(layers);
     const tasks = compilable ? ['compileJava', 'compileIntegrationTestJava'] : ['compileIntegrationTestJava'];
     const que = compilable ? 'el arnés y el main' : 'el arnés';
-    process.stdout.write(`${fixture} (${broker}${database ? `, ${database}` : ''}): compilando ${que}… `);
+    const combo = `${broker}${database ? `, ${database}` : ''}${authArg ? ` + ${authArg}` : ''}`;
+    process.stdout.write(`${fixture} (${combo}): compilando ${que}… `);
     // El wrapper vendorizado se invoca por `sh` para que valga igual en Windows.
     const result = spawnSync('sh', ['gradlew', ...tasks, '--console=plain', '--no-daemon'], {
       cwd: projectDir,
