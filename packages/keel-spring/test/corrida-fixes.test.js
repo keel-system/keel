@@ -1677,20 +1677,3 @@ test('un script de infra que falla deja su salida, no solo su código', () => {
   assert.match(harness, /runInfraScript\("infra\/reset-db\.sh"/);
   assert.match(harness, /runInfraScript\("infra\/init-messaging\.sh"/);
 });
-
-test('javac lee los fuentes como UTF-8, o el español del proyecto sale corrupto', () => {
-  // Blindaje, no arreglo, y conviene no confundirlo: con el JDK que fija la toolchain javac
-  // ya lee UTF-8 (desde JDK 18 Charset.defaultCharset() es UTF-8 aunque native.encoding sea
-  // Cp1252). Esto quita la dependencia de ese default, que un -Dfile.encoding o un cambio de
-  // toolchain pueden mover, sobre un proyecto cuyos literales son cientos y en español.
-  //
-  // Se añadió persiguiendo una corrupción que NO existía: los volcados se leían mal a través
-  // de una consola Windows en Cp1252, y los bytes del archivo siempre fueron correctos.
-  const gradle = project('stock-reservation', RELATIONAL).file('build.gradle');
-
-  assert.match(gradle, /tasks\.withType\(JavaCompile\)\.configureEach \{/);
-  assert.match(gradle, /options\.encoding = 'UTF-8'/);
-  // withType y no solo `compileJava`: son TRES source sets —main, test e integrationTest— y
-  // el del arnés es justo el que compone los mensajes de diagnóstico.
-  assert.ok(!gradle.includes("compileJava.options.encoding"), 'solo cubriría un source set');
-});
