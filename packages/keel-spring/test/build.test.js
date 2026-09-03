@@ -84,7 +84,7 @@ test('los assets del generador existen en el paquete', async () => {
     );
   }
   // La skill de BD agrupa los seis dialectos del catálogo en references/dialects/.
-  for (const dialect of ['postgresql', 'mysql', 'mariadb', 'sqlserver', 'oracle', 'h2']) {
+  for (const dialect of ['postgresql', 'mysql', 'mariadb', 'sqlserver', 'oracle']) {
     assert.ok(
       fs.existsSync(path.join(assetsDir, 'generators', 'spring', 'skills', 'keel-spring-database', 'references', 'dialects', `${dialect}.md`)),
       `falta dialects/${dialect}.md`

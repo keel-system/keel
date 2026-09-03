@@ -36,7 +36,7 @@ export function generate(model) {
 
   if (layersPresent.persistence && stack.database) {
     const db = DATABASES[stack.database];
-    // h2 y otras opciones en memoria no levantan contenedor (composeService null).
+    // Las opciones en memoria no levantan contenedor (composeService null).
     if (db?.composeService) {
       services.db = { container_name: `${service.name}-db`, ...db.composeService(service.name.replace(/-/g, '_')) };
       volumes['db-data'] = null;

@@ -44,10 +44,14 @@ export const CLAIM_DIALECTS = {
   // SQL Server no tiene SKIP LOCKED: lo suyo son hints de tabla, y van pegados al FROM,
   // no al final de la consulta. De ahí que el sitio donde se inserta sea distinto.
   sqlserver: { tableHint: 'WITH (UPDLOCK, READPAST, ROWLOCK)', since: null }
-  // h2 no aparece a propósito: acepta la sintaxis y la IGNORA, que es el peor modo de
-  // fallar. Es el motor del perfil `test`, donde no hay réplicas, así que la ausencia
-  // no cuesta nada — pero validar la concurrencia contra H2 no demuestra nada, y eso
-  // hay que decirlo donde se lea.
+  // Los cinco motores del catálogo están aquí, así que hoy NINGUNA combinación real cae en la
+  // rama sin reparto. No la borres: `CLAUDE.md` dice que un motor nuevo del mismo `kind` «no
+  // necesita nada más» que su entrada en `DATABASES`, o sea que el siguiente que alguien añada
+  // llegará sin pasar por esta tabla. La rama es lo que le da un reclamo correcto y un aviso en
+  // voz alta en vez de un lock silencioso; su sujeto vive en claim.test.js, con un id sintético.
+  //
+  // H2 estuvo aquí fuera a propósito —aceptaba la sintaxis y la IGNORABA— y acabó retirándose
+  // del catálogo entero: ver el hueco que dejó en stack-catalog.js.
 };
 
 /** ¿Sabe este motor repartir los candidatos entre réplicas? */

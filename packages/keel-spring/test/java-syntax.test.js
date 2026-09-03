@@ -181,10 +181,11 @@ const MATRIX = [
   // La silueta de la saga: compensación + las tres idempotencias, con la superficie
   // mínima para que un pipeline completo quepa en una corrida.
   ['stock-reservation', { broker: 'kafka' }],
-  // La misma silueta con un motor que NO reparte candidatos: es la rama SIN @Lock del
-  // reclamo (barrido, relay del outbox y reconciliación), que en las demás filas no la
-  // tokeniza nadie — y un import condicional mal puesto ahí no lo ve ningún includes().
-  ['stock-reservation', { broker: 'kafka', database: 'h2' }],
+  // Aquí hubo una fila con H2, el único motor del catálogo que no repartía candidatos, para
+  // tokenizar la rama SIN @Lock del reclamo. H2 se retiró como motor —ver stack-catalog.js— y
+  // los cinco que quedan reparten, así que esa rama ya no la produce ninguna combinación real:
+  // la cubre claim.test.js con un motor sintético, que es su nivel correcto (protege al
+  // SIGUIENTE motor que alguien añada, no a uno del catálogo).
   // Y con RabbitMQ, que es donde `stockEvents` se usa en los DOS sentidos sobre el mismo
   // broker: publicamos en él y nos suscribimos a él. Esa combinación renderiza la tabla
   // PHYSICAL_OF, la espera al drenaje del outbox y el vacío propio del broker — tres

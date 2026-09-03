@@ -150,8 +150,12 @@ test('sin rescate no hay SQL de arnés que medir, y no se inventa', () => {
 test('un motor que no declara su forma no emite el bloque en vez de inventarla', () => {
   // Mismo criterio que el arnés: donde no consta el reloj rancio o el literal de uuid, no se
   // emite el helper. Un UPDATE que no casa deja el escenario verde sin haber atascado nada.
+  //
+  // El sujeto es sqlserver, que es un motor REAL del catálogo al que hoy le faltan los dos
+  // campos: sobre él, un diseño con rescate no puede tener escenario de rescate. Que sea un
+  // motor de verdad y no uno inventado es lo que hace visible el hueco.
   const { scenarios } = scenariosOf('job-dispatch');
-  assert.equal(harnessProbes(scenarios, 'h2'), null);
+  assert.equal(harnessProbes(scenarios, 'sqlserver'), null);
 });
 
 test('el arnés y el check comparten la DERIVACIÓN, no solo la plantilla', () => {

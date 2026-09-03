@@ -78,16 +78,22 @@ test('AbstractFlowIT se adapta a la silueta: sin api no hay ROUTE_BASE, con mess
   assert.ok(!abstractFlow.includes('MULTIPART_FORM_DATA'));
   // Con PostgreSQL (default) el aislamiento por flujo es el script, no @DirtiesContext.
   assert.ok(abstractFlow.includes('infra/reset-db.sh'));
-  assert.ok(!abstractFlow.includes('@DirtiesContext'));
+  assert.ok(!abstractFlow.includes('@DirtiesContext(classMode'), 'la anotación no debe emitirse');
 });
 
-test('AbstractFlowIT con BD en memoria: sin script de reset, aislamiento por @DirtiesContext', () => {
-  // H2 no levanta contenedor y no declara cliResetCmd, así que docker.js no
-  // genera infra/reset-db.sh: la base no puede invocar un script inexistente.
+test('AbstractFlowIT sin BD: ni script de reset ni @DirtiesContext, porque no hay estado que aislar', () => {
+  // Sin motor no hay cliResetCmd, así que docker.js no genera infra/reset-db.sh: el arnés no
+  // puede invocar un script inexistente.
+  //
+  // El sujeto era H2 —el único motor sin contenedor— hasta que se retiró del catálogo. Ahora es
+  // un diseño que no declara capa `persistence`, que llega al mismo sitio y además es una forma
+  // que un diseño real puede tener.
   const { manifest, layers, errors } = loadService(fixtureDir);
   assert.deepEqual(errors, []);
-  const workspace = tmpDir('keel-shape-h2-');
-  scaffoldService({ manifest, layers, workspace, force: true, stack: { database: 'h2' } });
+  const sinPersistencia = structuredClone(layers);
+  delete sinPersistencia.persistence;
+  const workspace = tmpDir('keel-shape-sin-bd-');
+  scaffoldService({ manifest, layers: sinPersistencia, workspace, force: true });
 
   const root = path.join(workspace, PROJECT);
   const abstractFlow = fs.readFileSync(
@@ -95,8 +101,15 @@ test('AbstractFlowIT con BD en memoria: sin script de reset, aislamiento por @Di
     'utf8'
   );
   assert.ok(!fs.existsSync(path.join(root, 'infra/reset-db.sh')));
-  assert.ok(abstractFlow.includes('@DirtiesContext(classMode = DirtiesContext.ClassMode.BEFORE_CLASS)'));
   assert.ok(!abstractFlow.includes('infra/reset-db.sh'));
+  // Y TAMPOCO @DirtiesContext: sin capa de persistencia no hay estado de BD que aislar. Esa
+  // anotación la emite `needsDirtiesContext` para el caso «hay persistencia pero el motor no
+  // sabe vaciarse por CLI», cuyo único sujeto era H2 y hoy no lo tiene ninguno —los seis
+  // declaran `cliResetCmd`—. La rama se conserva por lo mismo que la del reclamo sin SKIP
+  // LOCKED: un motor nuevo llega al catálogo sin declararlo y ese es su aislamiento correcto.
+  // Se mira la ANOTACIÓN y no el nombre: el javadoc del método la cita para explicar por qué
+  // aquí no hace falta, y buscar el nombre a secas casaría con su propia explicación.
+  assert.ok(!abstractFlow.includes('@DirtiesContext(classMode'), 'la anotación no debe emitirse');
   // El método sigue existiendo: toda clase de flujo llama a lo mismo.
   assert.ok(abstractFlow.includes('protected static void resetState()'));
   // Y sin contenedor de BD tampoco hay a quién hablarle por CLI.

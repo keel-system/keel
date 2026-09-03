@@ -4,12 +4,12 @@
 // toque devuelve 500.
 //
 // La lista es la UNIÓN de las reservadas de los seis dialectos soportados
-// (postgresql, mysql, mariadb, oracle, sqlserver, h2), porque el mismo diseño se
+// (postgresql, mysql, mariadb, oracle, sqlserver), porque el mismo diseño se
 // genera para cualquiera de ellos y el nombre de columna no puede depender del
 // que se elija en el cuestionario.
 //
 // El quoting se emite con backticks: Hibernate los traduce al carácter de
-// quoting del dialecto de destino (" en PostgreSQL/Oracle/H2, ` en MySQL,
+// quoting del dialecto de destino (" en PostgreSQL y Oracle, ` en MySQL,
 // [] en SQL Server), así que el identificador del diseño se conserva tal cual y
 // el resultado es portable.
 
@@ -63,7 +63,6 @@ export function quoteIdentifier(name) {
 const QUOTE_CHARS = {
   postgresql: ['"', '"'],
   oracle: ['"', '"'],
-  h2: ['"', '"'],
   mysql: ['`', '`'],
   mariadb: ['`', '`'],
   sqlserver: ['[', ']']

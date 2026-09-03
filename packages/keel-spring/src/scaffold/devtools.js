@@ -270,7 +270,7 @@ function bucketChecks(selected, service, model) {
 // flujo es auto-contenido. Sin el borrado de la caché, una entrada cacheada o
 // una clave de idempotencia (TTL de horas) sobrevive al reset y el flujo
 // siguiente recibe la respuesta del anterior. Solo se genera si la BD declara
-// cliResetCmd (h2 no: reiniciar la app basta), si hay caché o si hay broker con
+// cliResetCmd, si hay caché o si hay broker con
 // primitiva de purga.
 export function resetDbScript(selected, service, model = null) {
   const db = selected.find((s) => s.category === 'database' && s.entry.cliResetCmd);

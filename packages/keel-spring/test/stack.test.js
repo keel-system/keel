@@ -116,7 +116,8 @@ test('el cuestionario solo ofrece motores del modelo que declara el diseño', ()
     ['mongodb']
   );
   const relational = databasesForModel('relational').map((entry) => entry.id);
-  assert.equal(relational.length, 6);
+  // Cinco desde que H2 se retiró: ver el hueco que dejó en stack-catalog.js.
+  assert.equal(relational.length, 5);
   assert.ok(!relational.includes('mongodb'));
   // Sin modelo declarado se asume relacional: es el default del schema del DSL.
   assert.deepEqual(databasesForModel(undefined), databasesForModel('relational'));
@@ -145,20 +146,25 @@ test('cada dialecto RELACIONAL declara su módulo Flyway y protege el historial 
       );
     }
   }
-  // H2 es el único sin módulo propio: su soporte vive dentro de flyway-core.
-  assert.equal(DATABASES.h2.flywayDependencies.length, 1);
+  // Todo motor relacional del catálogo declara AHORA su módulo de dialecto: el único que se
+  // apoyaba solo en flyway-core era H2, y se retiró.
+  for (const [id, entry] of Object.entries(DATABASES)) {
+    if (entry.kind !== 'relational') continue;
+    assert.ok(entry.flywayDependencies.length >= 2, `${id}: sin módulo de dialecto propio`);
+  }
   // MySQL y MariaDB comparten módulo.
   assert.deepEqual(DATABASES.mysql.flywayDependencies, DATABASES.mariadb.flywayDependencies);
 });
 
 test('el catálogo incorpora las técnicas de la referencia', () => {
-  assert.ok(DATABASES.oracle && DATABASES.h2, 'faltan oracle/h2');
+  assert.ok(DATABASES.oracle, 'falta oracle');
   assert.ok(BROKERS.snssqs, 'falta snssqs');
   assert.ok(AUTH.cognito, 'falta cognito');
   assert.ok(CACHES.valkey, 'falta valkey');
-  // Oracle valida dentro de su propio contenedor; h2 no levanta contenedor.
+  // Oracle valida dentro de su propio contenedor.
   assert.equal(DATABASES.oracle.cliVia, 'dbcontainer');
-  assert.equal(DATABASES.h2.serviceKey, undefined);
+  // Y ya no hay ningún motor sin contenedor: H2 era el único, y se retiró.
+  for (const entry of Object.values(DATABASES)) assert.ok(entry.image, `${entry.id}: sin imagen`);
   // snssqs declara BOM + starters SNS/SQS como array.
   assert.ok(Array.isArray(BROKERS.snssqs.gradleDependencies));
   assert.ok(BROKERS.snssqs.gradleDependencies.length >= 3);

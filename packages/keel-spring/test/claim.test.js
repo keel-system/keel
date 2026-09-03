@@ -63,6 +63,21 @@ function layersWith({ sweepTransitions, extraOps = {}, subscriptions = null, sta
 // `model.stack` lo cuelga scaffoldService después de construir el modelo, y de él sale
 // la decisión de dialecto. Aquí se replica ese paso porque los tests llaman al generador
 // de repositorios directamente, sin pasar por el scaffolding completo.
+/**
+ * Un motor RELACIONAL que no está en `CLAIM_DIALECTS`: el sujeto de la rama sin reparto.
+ *
+ * Antes lo era H2, el único del catálogo sin SKIP LOCKED, y se retiró como motor (aceptaba la
+ * sintaxis y la IGNORABA, que es el peor modo de fallar). Los cinco que quedan reparten, así que
+ * esa rama ya no la produce ninguna combinación real — y aun así no es código muerto: `CLAUDE.md`
+ * dice que un motor nuevo del mismo `kind` «no necesita nada más» que su entrada en `DATABASES`,
+ * o sea que el SIGUIENTE que alguien añada llegará aquí sin pasar por `CLAIM_DIALECTS`. Esto es
+ * lo que le garantiza un reclamo correcto y un aviso en voz alta en vez de un lock silencioso.
+ *
+ * Por eso el sujeto es un id sintético y no otro motor del catálogo: lo que se prueba es «no
+ * está en la tabla», no un motor concreto.
+ */
+const MOTOR_SIN_REPARTO = 'motor-que-alguien-anadira';
+
 const modelFor = (layers, database = 'postgresql') => {
   const stack = { database, broker: 'kafka' };
   const model = buildModel({ manifest, layers, stack });
@@ -144,7 +159,7 @@ test('con SKIP LOCKED el select de candidatos lo pide; sin él, se dice en voz a
   assert.match(jpaWith, /@Lock\(LockModeType\.PESSIMISTIC_WRITE\)/);
   assert.match(jpaWith, /jakarta\.persistence\.lock\.timeout/);
 
-  const withoutSkip = modelFor(queueSweep(), 'h2');
+  const withoutSkip = modelFor(queueSweep(), MOTOR_SIN_REPARTO);
   const jpaWithout = fileNamed(generateRepositories(withoutSkip), 'JobJpaRepository.java');
   // Sin reparto el reclamo SIGUE siendo correcto: lo garantiza el UPDATE, no el lock.
   assert.ok(!jpaWithout.includes('PESSIMISTIC_WRITE'));
@@ -152,8 +167,8 @@ test('con SKIP LOCKED el select de candidatos lo pide; sin él, se dice en voz a
   assert.match(jpaWithout, /no tiene SKIP LOCKED/);
 
   warnUnsupportedDialect(withoutSkip);
-  assert.ok(withoutSkip.warnings.some((warning) => warning.includes('h2 no tiene SKIP LOCKED')));
-  assert.equal(supportsSkipLocked('h2'), false);
+  assert.ok(withoutSkip.warnings.some((warning) => warning.includes(`${MOTOR_SIN_REPARTO} no tiene SKIP LOCKED`)));
+  assert.equal(supportsSkipLocked(MOTOR_SIN_REPARTO), false);
   assert.equal(supportsSkipLocked('postgresql'), true);
 });
 
@@ -310,7 +325,7 @@ test('el relay del outbox reclama con SKIP LOCKED solo donde el motor lo tiene',
   assert.match(withSkip, /jakarta\.persistence\.lock\.timeout/);
   assert.match(withSkip, /import jakarta\.persistence\.LockModeType;/);
 
-  const withoutSkip = fileNamed(generateOutbox(outboxModel('h2')), 'OutboxEventJpaRepository.java');
+  const withoutSkip = fileNamed(generateOutbox(outboxModel(MOTOR_SIN_REPARTO)), 'OutboxEventJpaRepository.java');
   assert.ok(!withoutSkip.includes('PESSIMISTIC_WRITE'));
   // Los imports del lock son condicionales, o quedarían sin usar.
   assert.ok(!withoutSkip.includes('import jakarta.persistence.LockModeType;'));
@@ -323,7 +338,7 @@ test('el relay del outbox reclama con SKIP LOCKED solo donde el motor lo tiene',
 });
 
 test('el aviso de dialecto es UNO solo y enumera todos los mecanismos afectados', () => {
-  const model = outboxModel('h2');
+  const model = outboxModel(MOTOR_SIN_REPARTO);
   warnUnsupportedDialect(model);
 
   const warnings = model.warnings.filter((warning) => warning.includes('SKIP LOCKED'));
@@ -342,14 +357,14 @@ test('el aviso de dialecto alcanza también al barrido cuyo reclamo NO generó b
   // reclamo (rescate de filas en vuelo), las dos capas las escribe el agente — y la que
   // depende del motor es justo la que nadie le iba a mencionar. `warnUnsupportedDialect`
   // solo recorría `operation.claim`, que aquí está vacío, así que callaba.
-  const model = modelFor(layersWith({ sweepTransitions: [{ entity: 'Job', from: ['running'], to: 'done' }] }), 'h2');
+  const model = modelFor(layersWith({ sweepTransitions: [{ entity: 'Job', from: ['running'], to: 'done' }] }), MOTOR_SIN_REPARTO);
 
   assert.equal(sweepOf(model).claim, null, 'la premisa del test: build no generó reclamo');
   model.warnings = [];
   warnUnsupportedDialect(model);
 
   assert.equal(model.warnings.length, 1, model.warnings.join('\n'));
-  assert.match(model.warnings[0], /h2 no tiene SKIP LOCKED/);
+  assert.ok(model.warnings[0].includes(`${MOTOR_SIN_REPARTO} no tiene SKIP LOCKED`));
   assert.match(model.warnings[0], /drainJobs/);
 });
 

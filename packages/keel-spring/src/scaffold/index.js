@@ -9,7 +9,7 @@ import { writeFiles } from '../lib/writer.js';
 import { readManifest, nextManifest, writeManifest, REFRESH_DIR } from '../lib/generated-manifest.js';
 import { listKeelDocs } from '../lib/keel-docs.js';
 import { packageVersion } from '../lib/assets.js';
-import { STACK_DEFAULTS, defaultDatabaseFor } from '../lib/stack-catalog.js';
+import { DATABASES, STACK_DEFAULTS, defaultDatabaseFor } from '../lib/stack-catalog.js';
 import { designUsesCache } from '../lib/stack-config.js';
 import { defaultGroup } from '../lib/naming.js';
 import * as gradle from './gradle.js';
@@ -139,6 +139,17 @@ const GENERATORS = [
 // (p. ej. tests o scaffolding sin cuestionario), null para lo que no aplica.
 export function resolveStack(stack, layers, manifest) {
   const protocol = layers.security?.authentication?.protocol;
+  // Un motor que el catálogo no conoce se rechaza en voz alta. El caso real es un
+  // `keel-stack.json` con un motor retirado —H2 lo estuvo hasta que se vio que tres de sus
+  // mecanismos no se podían probar—: sin esto, `DATABASES[...]` sale `undefined`, el modelo
+  // cae al `kind` relacional por defecto y el proyecto se genera a medias con la mitad de la
+  // infraestructura sin resolver. Un fallo así aparece lejísimos de su causa.
+  if (stack?.database && !DATABASES[stack.database]) {
+    throw new Error(
+      `El motor '${stack.database}' no está soportado. Los del catálogo son: ${Object.keys(DATABASES).join(', ')}. ` +
+        `Si viene de un keel-stack.json anterior, elige uno de esos y vuelve a lanzar el build.`
+    );
+  }
   return {
     group: stack?.group ?? defaultGroup(manifest),
     // El default sigue al modelo que declara el diseño: sin esto, un diseño

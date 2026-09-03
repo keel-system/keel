@@ -7,7 +7,7 @@
 //
 // Campos de validación (comunes a todas las categorías):
 //   serviceKey       clave del servicio en el docker-compose (hostname en-red);
-//                    ausente ⇒ la opción no levanta contenedor (h2, s3…).
+//                    ausente ⇒ la opción no levanta contenedor (s3, auth 'none'…).
 //   cliTool          nombre legible de la CLI usada para sondear el servicio.
 //   cliVia           'devtools' (la CLI vive en el toolbox), 'dbcontainer' (se
 //                    ejecuta dentro del propio contenedor) o null (sin sondeo).
@@ -48,7 +48,7 @@ export const LOCAL_AWS_ENV = {
 //   cliResetCmd      (solo BD) comando que VACÍA LOS DATOS preservando el esquema
 //                    (los Given de los flujos FL-* asumen BD limpia); mismos
 //                    placeholders y mismo cliVia que cliValidateCmd. Ausente ⇒
-//                    sin reset-db.sh (h2: reiniciar la app recrea el esquema).
+//                    sin reset-db.sh.
 //                    SIEMPRE excluye flyway_schema_history: es el historial de
 //                    migraciones, no datos del servicio; truncarlo haría que el
 //                    siguiente arranque reaplicase el baseline sobre tablas ya
@@ -279,22 +279,17 @@ export const DATABASES = {
       volumes: ['db-data:/opt/oracle/oradata']
     })
   },
-  h2: {
-    id: 'h2',
-    label: 'H2 (en memoria, sin contenedor)',
-    kind: 'relational',
-    gradleDependencies: ["runtimeOnly 'com.h2database:h2'"],
-    // H2 sigue soportado dentro de flyway-core: no tiene módulo propio.
-    flywayDependencies: [FLYWAY_CORE],
-    image: null,
-    port: null,
-    user: () => 'sa',
-    password: '',
-    url: (db) => `jdbc:h2:mem:${db};MODE=LEGACY;DB_CLOSE_DELAY=-1`,
-    // Sin serviceKey ⇒ no levanta contenedor ni entra en la validación de infra.
-    cliVia: null,
-    composeService: null
-  },
+  // H2 estuvo aquí y se retiró: como motor de un servicio no aporta y contradice al método.
+  // Acepta la sintaxis de SKIP LOCKED y la IGNORA —las réplicas siguen compitiendo y nadie se
+  // entera—, no declara `staleTimestamp` ni `uuidLiteral`, así que el arnés no puede fabricar
+  // la precondición del rescate ni la de la reconciliación… mientras `crossrefs.js` EXIGE esos
+  // escenarios, porque esa exigencia se emite en keel-core antes de elegir stack. Y las
+  // migraciones de db/migration/ se escriben para el dialecto real. Un servicio sobre H2 era uno
+  // en el que tres mecanismos no se pueden probar y el cuarto miente.
+  //
+  // El H2 del perfil `test` NO es este y se queda: vive en config.js y en la dependencia
+  // `testRuntimeOnly` de gradle.js, es la base en memoria de la suite unitaria y vale para
+  // cualquier motor relacional.
   mongodb: {
     id: 'mongodb',
     label: 'MongoDB',
@@ -866,7 +861,7 @@ const CATALOG = {
  * derivadas del modelo. Fuente única para docker.js, devtools.js y readme.js:
  * evita que la lista de infraestructura se desincronice entre generadores.
  * Devuelve `[{ category, id, entry, serviceKey, cliVia }]`; omite las opciones
- * sin contenedor (h2, s3, auth 'none').
+ * sin contenedor (s3, auth 'none').
  */
 export function selectedInfra(model) {
   const { layersPresent, stack } = model;

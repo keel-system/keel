@@ -131,7 +131,9 @@ export function warnUnsupportedDialect(model) {
     // Y los barridos cuyo reclamo NO pudo generar build (rescatan filas EN VUELO, con una
     // cota temporal que vive en la prosa de `rules`). Son los que MÁS necesitan el aviso:
     // ahí el SELECT de candidatos lo escribe el agente, y nadie le va a decir que en SQL
-    // Server el hint es otro ni que H2 acepta la sintaxis y la ignora. Antes quedaban fuera
+    // Server el hint es otro, ni que un motor fuera de CLAIM_DIALECTS puede aceptar la
+    // sintaxis y limitarse a ignorarla —le pasaba a H2, y fue una de las razones de
+    // retirarlo del catálogo—. Antes quedaban fuera
     // porque esta lista solo miraba los reclamos generados, que es justo lo que no hay.
     ...unclaimedSweeps(model).map((operation) => `${operation.name} (barrido cuyo reclamo escribes tú)`)
   ];

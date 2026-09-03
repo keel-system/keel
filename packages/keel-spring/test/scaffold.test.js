@@ -1295,22 +1295,29 @@ test('BD con CLI en su propio contenedor y sin toolbox: el arnés conserva el mo
   assert.ok(harness.includes('import java.nio.charset.StandardCharsets;'));
 });
 
-test('h2 como BD elegida: sin contenedor de BD ni devtools, pero con dependencia Gradle', () => {
+test('un diseño SIN capa de persistencia: sin contenedor de BD ni devtools, pero con deploy/', () => {
+  // El sujeto de esta rama era H2 —el único motor sin contenedor— hasta que se retiró del
+  // catálogo. La rama sigue viva y con un sujeto mejor: un diseño que no declara `persistence`
+  // resuelve `database: null` y llega al mismo sitio, con la ventaja de ser una forma que un
+  // diseño real puede tener en vez de un motor de juguete.
   const workspace = makeWorkspace();
   const { manifest, layers } = loadFixture();
+  const sinPersistencia = structuredClone(layers);
+  delete sinPersistencia.persistence;
 
-  const { copied } = scaffoldService({
+  const { copied, stack } = scaffoldService({
     manifest,
-    layers,
+    layers: sinPersistencia,
     workspace,
-    stack: { database: 'h2', broker: null, auth: null, cache: null, storage: null }
+    stack: { broker: null, auth: null, cache: null, storage: null }
   });
 
-  // H2 es en memoria: el fixture no tiene más infra → no hay compose ni toolbox.
+  assert.equal(stack.database, null, 'sin capa de persistencia no se elige motor');
+  // El fixture no tiene más infra → no hay compose ni toolbox.
   assert.ok(!copied.includes('infra/docker-compose.yaml'));
   assert.ok(!copied.some((f) => f.includes('infra/docker/Dockerfile')));
   assert.ok(!copied.includes('infra/validate-infra.sh'));
-  assert.ok(!copied.includes('infra/reset-db.sh')); // h2: reiniciar la app basta
+  assert.ok(!copied.includes('infra/reset-db.sh')); // sin BD no hay estado que vaciar
 
   // deploy/ SÍ se genera: la asimetría es deliberada. infra/ no existe porque no
   // hay nada que sondear, pero el servicio se contenedoriza igual — es lo que se
@@ -1319,9 +1326,13 @@ test('h2 como BD elegida: sin contenedor de BD ni devtools, pero con dependencia
   assert.ok(copied.includes('deploy/docker-compose.yaml'));
   const compose = read(workspace, 'deploy/docker-compose.yaml');
   assert.ok(compose.includes('dockerfile: deploy/Dockerfile'));
-  assert.ok(!compose.includes('image: postgres')); // h2 va en memoria, dentro de la app
+  assert.ok(!compose.includes('image: postgres')); // no hay BD que levantar
 
-  assert.ok(read(workspace, 'build.gradle').includes("runtimeOnly 'com.h2database:h2'"));
+  // Y sin motor, ninguna dependencia de driver: `runtimeOnly` del dialecto sale del catálogo,
+  // y aquí no hay entrada de la que salga.
+  const gradle = read(workspace, 'build.gradle');
+  assert.ok(!gradle.includes('org.postgresql:postgresql'));
+  assert.ok(!gradle.includes('spring-boot-starter-data-jpa'));
 });
 
 test('capa storage: gradle con SDK S3, compose con MinIO y fragmento de config por perfil', () => {
