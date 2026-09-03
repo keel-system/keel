@@ -391,9 +391,11 @@ test('el arnés da la palanca fina para tumbar la salida con la entrada viva', (
   assert.match(harness, /protected static void pauseOutboxRelay\(\)/);
   assert.match(harness, /protected static void resumeOutboxRelay\(\)/);
   assert.match(harness, /protected static void awaitBrokerStopped\(\)/);
-  // Y el javadoc enseña el patrón entero, con el resume en un finally: pausar el relay y
-  // no reanudarlo es un servicio que deja de publicar sin que nadie lo note.
-  assert.ok(harness.includes('resumeOutboxRelay();       // SIEMPRE'), harness);
+  // Y el patrón entero ya no se enseña en prosa: es código. La propiedad que este test
+  // protegía —pausar el relay y no reanudarlo es un servicio que deja de publicar sin que
+  // nadie lo note— la garantiza ahora el finally de deliverThenTakeBrokerDown, que es una
+  // garantía más fuerte que un javadoc que hay que acordarse de seguir.
+  assert.match(harness, /protected static void deliverThenTakeBrokerDown\(/);
 });
 
 test('los brokers que conservan su topología no llevan nada de eso', () => {
@@ -1592,4 +1594,56 @@ test('la réplica se para ORDENADAMENTE, no a golpe de destroy()', () => {
   assert.match(stop, /REPLICA\.destroyForcibly\(\)/);
   // Y el POST es un POST: el endpoint de apagado no responde a GET.
   assert.match(harness, /connection\.setRequestMethod\("POST"\)/);
+});
+
+test('la secuencia de entregar-y-tumbar-el-canal es un helper, no prosa', () => {
+  // `FL-OBX-005` la escribió a mano con el orden cambiado y falló con un error de fontanería
+  // —«Could not connect to the endpoint URL»—, no con una aserción. La secuencia estaba
+  // documentada en el javadoc de awaitBrokerStopped desde el principio y NINGÚN flujo la
+  // usaba: en el proyecto de la corrida, `awaitBrokerStopped()` no aparecía invocado ni una
+  // vez. Una secuencia que hay que recordar en el orden correcto es un helper que falta.
+  const harness = project('stock-reservation', SNSSQS).file('AbstractFlowIT.java');
+
+  assert.match(harness, /protected static void deliverThenTakeBrokerDown\(Runnable delivery, Runnable whileDown\)/);
+  const cuerpo = harness.slice(
+    harness.indexOf('protected static void deliverThenTakeBrokerDown'),
+    harness.indexOf('private static void awaitBrokerReady')
+  );
+  // El ORDEN es lo único que hace correcta la secuencia: pausar el relay, entregar con el
+  // broker vivo, tumbarlo, confirmar la parada, y solo entonces afirmar.
+  const orden = ['pauseOutboxRelay()', 'delivery.run()', 'stopBroker()', 'awaitBrokerStopped()', 'whileDown.run()'];
+  let previo = -1;
+  for (const paso of orden) {
+    const donde = cuerpo.indexOf(paso);
+    assert.ok(donde > previo, `fuera de orden o ausente: ${paso}`);
+    previo = donde;
+  }
+  // Y restaura en el finally: un escenario que tumba el broker y no lo levanta envenena
+  // todos los flujos siguientes. El resume explícito va aparte a propósito — depender de que
+  // startBroker() reanude por dentro deja el equilibrio de la pausa en manos de otro método.
+  const finallyEn = cuerpo.indexOf('} finally {');
+  assert.ok(finallyEn > 0, 'no restaura en un finally');
+  const restauracion = cuerpo.slice(finallyEn);
+  assert.ok(restauracion.includes('startBroker();'), 'el finally no levanta el broker');
+  assert.ok(
+    restauracion.indexOf('resumeOutboxRelay();') > restauracion.indexOf('startBroker();'),
+    'el resume del relay no va detrás de levantar el broker'
+  );
+
+  // Y el javadoc que la documentaba en prosa ahora manda al helper, en vez de ofrecer una
+  // receta copiable al lado de la función que ya la hace.
+  assert.match(harness, /no se escribe a mano.*deliverThenTakeBrokerDown/s);
+});
+
+test('sin outbox no se genera el helper: no hay relay que adelantarse a la parada', () => {
+  // El gate del helper es el relay, no el broker. Con `reliability` por defecto nadie publica
+  // por su cuenta entre la entrega y la parada, así que la secuencia sobra.
+  const { manifest, layers } = loadService(path.join(fixturesDir, 'stock-reservation'));
+  layers.messaging.publishing.reliability = 'best-effort';
+  const workspace = tmpDir('keel-sin-outbox-');
+  const result = scaffoldService({ manifest, layers, workspace, force: true, stack: SNSSQS });
+  const root = path.join(workspace, result.outDir);
+  const harness = fs.readFileSync(walk(root).find((f) => f.endsWith('AbstractFlowIT.java')), 'utf8');
+
+  assert.ok(!harness.includes('deliverThenTakeBrokerDown'), 'se generó el helper sin relay que pausar');
 });

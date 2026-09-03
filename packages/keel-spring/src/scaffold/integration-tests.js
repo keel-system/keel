@@ -2305,6 +2305,63 @@ ${indent('            ')}
 `;
 }
 
+/**
+ * La secuencia «entregar con el broker vivo y tumbarlo después», como CÓDIGO.
+ *
+ * El javadoc de `awaitBrokerStopped` la documentaba en prosa desde el principio, y ningún flujo
+ * la usaba: en la corrida `refunds-http`, `awaitBrokerStopped()` no estaba invocado en todo el
+ * proyecto y el escenario que la necesitaba (`FL-OBX-005`) la escribió a mano con el orden
+ * cambiado — fallaba con un error de fontanería, no con una aserción. Una secuencia que hay que
+ * recordar en el orden correcto no es documentación: es un helper que falta.
+ *
+ * Solo con relay que pausar: sin outbox no hay nada que adelantarse a la parada, y `stopBroker()`
+ * antes de entregar bastaría.
+ */
+function deliverThenDownHelper(model) {
+  if (!pausesRelay(model)) return '';
+  return `
+    /**
+     * Entrega un evento ENTRANTE con el broker todavía arriba y, acto seguido, lo tumba para
+     * ejercitar la parte del escenario cuyo {@code Then} afirma sobre un canal de SALIDA caído.
+     *
+     * <p><b>Por qué existe.</b> {@link #stopBroker()} es todo-o-nada —para el contenedor
+     * entero—, así que un escenario cuyo {@code When} es un evento entrante (que necesita el
+     * broker vivo para entregarse) y cuyo {@code Then} exige el canal saliente caído no puede
+     * llamar a {@link #stopBroker()} antes de entregar: la entrega tampoco llegaría. El orden
+     * correcto es pausar el relay para que no se adelante, entregar, tumbar DESPUÉS y confirmar
+     * con {@link #awaitBrokerStopped()} que ya no acepta conexiones antes de afirmar nada.
+     *
+     * <p>Va aquí, en un único sitio, para que ningún flujo lo reescriba a mano y se equivoque de
+     * orden — que es exactamente lo que ocurrió la primera vez que un escenario lo necesitó.
+     *
+     * @param delivery   entrega el evento entrante; corre con el broker arriba y el relay en
+     *                   pausa. Normalmente un {@code deliverXxx(...)} más, si el escenario lo
+     *                   pide, el {@code await(...)} sobre el efecto de esa entrega que NO
+     *                   dependa de que el canal saliente publique nada (un estado leído por la
+     *                   propia API, por ejemplo).
+     * @param whileDown  la aserción sobre el canal saliente caído; corre ya con
+     *                   {@link #awaitBrokerStopped()} confirmado.
+     */
+    protected static void deliverThenTakeBrokerDown(Runnable delivery, Runnable whileDown) {
+        pauseOutboxRelay();
+        try {
+            delivery.run();
+            stopBroker();
+            awaitBrokerStopped();
+            whileDown.run();
+        } finally {
+            // Restaurar el broker es obligatorio: un escenario que no lo hace envenena los
+            // flujos siguientes. {@link #startBroker()} reanuda el relay por su cuenta al
+            // final, pero el resume explícito va igual — depender de esa reanudación ajena
+            // deja el equilibrio de la pausa en manos de otro método, y una pausa que no se
+            // deshace es un servicio que deja de publicar sin que nadie lo note. Es idempotente.
+            startBroker();
+            resumeOutboxRelay();
+        }
+    }
+`;
+}
+
 function brokerControlSection(model) {
   if (!usesBrokerControl(model)) return '';
   const broker = brokerEntry(model);
@@ -2436,17 +2493,12 @@ ${startBrokerBody(model, reseed)}    }
      *
      * <p>Se llama <b>después</b> de {@link #stopBroker()}, y solo cuando el escenario
      * necesita esa certeza antes de soltar algo que publica solo.${pausesRelay(model)
-      ? ` El caso típico es el relay del outbox:
-     * <pre>{@code
-     * pauseOutboxRelay();
-     * try {
-     *     deliverAlgo(...);          // el canal de ENTRADA sigue vivo
-     *     stopBroker();
-     *     awaitBrokerStopped();      // aquí ya no hay ventana
-     * } finally {
-     *     resumeOutboxRelay();       // SIEMPRE, o el servicio deja de publicar
-     * }
-     * }</pre>`
+      ? ` El caso típico —entregar
+     * un evento entrante y tumbar el canal de salida— <b>no se escribe a mano</b>: está
+     * resuelto en {@link #deliverThenTakeBrokerDown(Runnable, Runnable)}, que hace la
+     * secuencia entera en el orden correcto y restaura en su {@code finally}. Esta secuencia
+     * estuvo aquí en prosa y ningún flujo la usó: el primero que la necesitó la reescribió con
+     * el orden cambiado.`
       : ''}
      */
     protected static void awaitBrokerStopped() {
@@ -2466,6 +2518,7 @@ ${startBrokerBody(model, reseed)}    }
                 "${broker.label} sigue aceptando conexiones " + BROKER_READY_TIMEOUT
                         + " después de stopBroker(): la parada no surtió efecto real.");
     }
+${deliverThenDownHelper(model)}
 
     private static void awaitBrokerReady() {
         Instant deadline = Instant.now().plus(BROKER_READY_TIMEOUT);
