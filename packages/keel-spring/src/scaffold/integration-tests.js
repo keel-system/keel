@@ -34,6 +34,11 @@ import {
   CLOCK
 } from '../lib/mongo-probes.js';
 import { tokenUrl, userTestClient } from './auth-provisioning.js';
+// La forma de la tabla y el SQL con el que el arnés fabrica la precondición del rescate:
+// fuente única con scripts/claim-check.js, que ejecuta AMBOS contra el motor junto al reclamo
+// que los lee. Copiar la derivación en vez de compartirla hacía que el check midiera su propia
+// copia — se vio rompiendo esto a propósito y viendo el check seguir en verde.
+import { stallSql, missingClockCountSql, rescueShape } from '../lib/claim-probes.js';
 import { declaresIdempotency } from './http-idempotency.js';
 // Fuente única de los comandos de broker: lo que se emite aquí es lo mismo que
 // `scripts/broker-check.js` ejecuta contra los brokers reales.
@@ -3366,13 +3371,7 @@ function rescueSection(model) {
       if (!claim.stalled) continue;
       const entity = (model.entities ?? []).find((e) => e.name === claim.entity);
       if (!entity?.tableName || !entity.lifecycle?.field) continue;
-      rescates.push({
-        operation: operation.name,
-        table: entity.tableName,
-        stateColumn: snakeCase(entity.lifecycle.field),
-        state: screamingSnake(claim.stalled.state),
-        clockColumn: snakeCase(claim.stalled.stampField)
-      });
+      rescates.push({ operation: operation.name, ...rescueShape(entity, claim) });
     }
   }
   if (rescates.length === 0) return '';
@@ -3402,10 +3401,7 @@ function rescueSection(model) {
     const cuerpo = document
       ? '            mongoEval(' + javaString(script.prefix) + ' + id + ' + javaString(script.suffix) + ');'
       : '            db(' + argv + ', ' +
-        javaString(
-          'UPDATE ' + r.table + ' SET ' + r.stateColumn + " = '" + r.state + "', " +
-          r.clockColumn + ' = ' + clock.sql + ' WHERE id = '
-        ) +
+        javaString(stallSql({ ...r, clockSql: clock.sql })) +
         ' + uuidLiteral(id));';
     return '        if (' + javaString(r.operation) + '.equals(operation)) {' + NL + cuerpo + NL + '            return;' + NL + '        }';
   };
@@ -3423,10 +3419,7 @@ function rescueSection(model) {
         ) +
         ').trim());'
       : '            return Long.parseLong(db(' + argv + ', ' +
-        javaString(
-          'SELECT COUNT(*) FROM ' + r.table + ' WHERE ' + r.stateColumn + " = '" + r.state +
-          "' AND " + r.clockColumn + ' IS NULL'
-        ) +
+        javaString(missingClockCountSql(r)) +
         ').trim());';
     return '        if (' + javaString(r.operation) + '.equals(operation)) {' + NL + cuerpo + NL + '        }';
   };

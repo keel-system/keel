@@ -939,3 +939,72 @@ public class SupplierPriceChangedListener {
   );
   assert.ok(!/\[payloadContract\] SupplierPriceChanged/.test(run(project).out), run(project).out);
 });
+
+// ─── mailDelivery ────────────────────────────────────────────────────────────
+//
+// La familia no tenía ni un test. Es la más barata de perder de todas: una operación que
+// no manda el correo COMPILA, responde su 2xx y solo falla el escenario que mire el buzón
+// — si el diseño no llegó a escribirlo, no falla nada en ninguna parte. Y su segunda
+// comprobación, la guarda, no la puede sustituir ningún escenario: ningún arnés de caja
+// negra mata la aplicación entre el envío y el commit.
+
+/** El cuerpo que escribiría el agente. `guarda: false` es el atajo: la transición en memoria. */
+const envioEscrito = ({ guarda }) => (src) =>
+  src.replace(
+    /throw new UnsupportedOperationException\("TODO: sendAcceptedNotification"\);/,
+    [
+      guarda
+        ? '        var notification = notificationRepository.claimForSendAcceptedNotification(command.id()).orElseThrow();'
+        : '        var notification = notificationRepository.findById(command.id()).orElseThrow();\n' +
+          '        notification.transitionTo(NotificationStatus.SENDING);',
+      '        mailSender.send(null);',
+      '        return null;'
+    ].join('\n')
+  );
+
+test('mailDelivery: recién generado, el envío y su guarda salen los DOS como pendientes', (t) => {
+  const project = build('notification-mailer');
+  const result = run(project);
+  if (result === null) return t.skip('sin bash en el PATH');
+
+  assert.equal(result.code, 1, result.out);
+  assert.match(result.out, /\[mailDelivery\] sendAcceptedNotification \(/, result.out);
+  assert.match(result.out, /\[mailDelivery\][^\n]*guarda confirmada antes del envío/, result.out);
+});
+
+test('mailDelivery: con el envío escrito y la guarda en memoria, el gate sigue rojo por la guarda', (t) => {
+  // La mutación que importa, y la que ningún escenario ve: el correo sale, el estado se
+  // mueve, la suite pasa entera — y una caída entre el envío y el commit del mediator
+  // revierte la marca, así que el ciclo siguiente manda un SEGUNDO correo a una persona
+  // real. Lo único que separa esto de la forma correcta es a quién se le pide la
+  // transición, y es exactamente lo que este check afirma.
+  const project = build('notification-mailer');
+  const handler = javaFile(project, 'SendAcceptedNotificationCommandHandler.java');
+  if (!handler) return t.skip('sin bash en el PATH');
+
+  const result = mutating(project, handler, envioEscrito({ guarda: false }));
+  if (result === null) return t.skip('sin bash en el PATH');
+
+  // El envío ya no se reporta: el puerto se usa.
+  assert.ok(!/\[mailDelivery\] sendAcceptedNotification \(/.test(result.out), result.out);
+  // La guarda sí, que es la mitad que no falla en ninguna otra parte.
+  assert.match(result.out, /\[mailDelivery\][^\n]*guarda confirmada antes del envío/, result.out);
+});
+
+test('mailDelivery: con el reclamo llamado, la familia deja de reportar', (t) => {
+  const project = build('notification-mailer');
+  const handler = javaFile(project, 'SendAcceptedNotificationCommandHandler.java');
+  if (!handler) return t.skip('sin bash en el PATH');
+
+  const result = mutating(project, handler, envioEscrito({ guarda: true }));
+  if (result === null) return t.skip('sin bash en el PATH');
+  assert.ok(!/\[mailDelivery\]/.test(result.out), result.out);
+});
+
+test('mailDelivery: el patrón del envío no lleva el punto de comodín', () => {
+  // En una cadena de comillas simples, JavaScript se come el `\` de `\.` y lo que llegaba
+  // al gate era `mailSender.send` con el punto como comodín. La convención de la casa —la
+  // misma que exigen los checks `claim` por culpa de awk— es la clase entre corchetes.
+  const content = read(build('notification-mailer'));
+  assert.match(content, /'mailSender\[[.]\]send'/);
+});

@@ -1,0 +1,139 @@
+# Modelo A: la plantilla nace y vive aquí. La base de datos es el único sitio del
+# mundo donde está, y por eso Template es una entidad del dominio y no un recurso.
+
+types:
+  TemplateStatus:
+    description: Momento del ciclo de vida de una versión de plantilla.
+    values: [draft, active, retired]
+
+  NotificationStatus:
+    description: En qué punto está el envío pedido.
+    # `sending` no es un estado de adorno: es la GUARDA de un efecto que no se deshace. Un
+    # correo que sale no lo retira ningún rollback, así que la marca de «esta ejecución se
+    # llevó el envío» tiene que existir para todo el mundo ANTES de mandarlo. Sin un estado
+    # intermedio, dos ciclos que se solapen mandan dos correos reales.
+    values: [accepted, queued, sending, sent, failed]
+
+  EmailAddress:
+    base: string
+    description: Dirección de correo, con la longitud que admite el estándar.
+    constraints:
+      maxLength: 254
+
+entities:
+  Application:
+    description: Sistema consumidor autorizado a mandar correo. No es un usuario; es un sistema.
+    fields:
+      id: { type: uuid, id: true, generated: true }
+      key:
+        type: string
+        required: true
+        unique: true
+        constraints: { maxLength: 64 }
+        description: >-
+          Identificador estable del sistema, y la clave de negocio con la que se le atribuyen sus
+          plantillas y sus envíos. NO es un client_id: un mismo sistema puede tener varias
+          credenciales (la que envía y la de su pipeline), y todas apuntan aquí.
+      name: { type: string, required: true, constraints: { maxLength: 120 } }
+      credentialKeys:
+        type: string
+        list: true
+        required: true
+        constraints: { maxItems: 5, maxLength: 64 }
+        description: >-
+          Los `client_id` que resuelven a este sistema. Es la relación que faltaba: con una sola
+          credencial por Application, un sistema con dos —una que envía y otra que publica
+          plantillas desde su pipeline, con scopes disjuntos— dejaba a la segunda sin Application
+          activa, y toda operación suya respondía 403 aunque el sistema estuviera dado de alta.
+      defaultSender:
+        type: string
+        required: true
+        constraints: { maxLength: 320 }
+        description: Dirección verificada desde la que salen sus correos.
+      defaultLocale: { type: string, required: true, constraints: { maxLength: 10 } }
+      active:
+        type: boolean
+        required: true
+        description: A false, sus envíos se cortan al instante sin revocar credenciales ni desplegar.
+
+  Template:
+    description: Una versión concreta del contenido de un correo, propiedad de una aplicación.
+    lifecycle:
+      field: status
+      transitions:
+        draft:   [active]
+        active:  [retired]
+        retired: []
+    fields:
+      id: { type: uuid, id: true, generated: true }
+      key: { type: string, required: true, constraints: { maxLength: 64 } }
+      locale: { type: string, required: true, constraints: { maxLength: 10 } }
+      status: { type: TemplateStatus, required: true }
+      version: { type: int, required: true, constraints: { min: 1 } }
+      subject:
+        type: string
+        required: true
+        constraints: { maxLength: 200 }
+        description: Asunto con sus llaves sin procesar, tal cual lo escribió quien lo registró.
+      bodyHtml: { type: text, required: true }
+      bodyText: { type: text, required: true }
+      publishedAt: { type: timestamp }
+    relations:
+      application: { entity: Application, cardinality: many-to-one }
+      variables: { entity: TemplateVariable, cardinality: one-to-many }
+
+  TemplateVariable:
+    description: Variable que la plantilla declara aceptar; es contrato y se consulta en cada envío para validar.
+    fields:
+      id: { type: uuid, id: true, generated: true }
+      name: { type: string, required: true, constraints: { maxLength: 64 } }
+      required: { type: boolean, required: true }
+      description: { type: string, constraints: { maxLength: 255 } }
+
+  Notification:
+    description: Un envío pedido, con lo que se envió de verdad congelado dentro.
+    lifecycle:
+      field: status
+      transitions:
+        accepted: [queued]
+        queued:   [sending]
+        sending:  [sent, failed]
+        sent:     []
+        failed:   []
+    fields:
+      id: { type: uuid, id: true, generated: true }
+      applicationKey: { type: string, required: true, constraints: { maxLength: 64 } }
+      templateKey: { type: string, required: true, constraints: { maxLength: 64 } }
+      status: { type: NotificationStatus, required: true }
+      sendingSince:
+        type: timestamp
+        description: >-
+          Cuándo esta ejecución se llevó el envío. Lo estampa el propio reclamo, en la misma
+          escritura que pone el estado en sending: una fila marcada sin instante es una fila
+          que el rescate no encuentra nunca.
+      templateVersion:
+        type: int
+        required: true
+        description: Congelada. Con la plantilla ya en la v4, la traza sigue diciendo qué se envió.
+      locale: { type: string, required: true, constraints: { maxLength: 10 } }
+      recipient: { type: string, required: true, constraints: { maxLength: 320 } }
+      renderedSubject:
+        type: string
+        required: true
+        constraints: { maxLength: 200 }
+        description: Congelado y ya interpolado — es lo que leyó quien lo recibió.
+      # Colección de valores sin identidad: en el modelo relacional vive en su tabla
+      # de elementos, y la longitud del value type tiene que llegar hasta ALLÍ.
+      copyRecipients:
+        type: EmailAddress
+        list: true
+        description: Direcciones en copia, congeladas con el envío.
+        constraints: { maxItems: 10 }
+      dedupeKey: { type: string, required: true, constraints: { maxLength: 128 } }
+      requestedAt: { type: timestamp, generated: true }
+      sentAt: { type: timestamp }
+
+aggregates:
+  Application: { root: Application }
+  Template: { root: Template, entities: [TemplateVariable] }
+  Notification: { root: Notification }

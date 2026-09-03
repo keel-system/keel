@@ -819,18 +819,25 @@ function mailYaml(model, profile) {
     `          writetimeout: ${envWithDefault(profile, 'MAIL_WRITE_TIMEOUT_MS', 5000)}`
   );
 
-  lines.push('', 'mail:', `  multipart: ${mail.multipart === true}`, `  attachments: ${mail.attachments === true}`);
+  // Bajo `mail:` va SOLO lo que el servidor lee en tiempo de ejecución, y eso son las
+  // direcciones: el adaptador las recibe por constructor con @Value. `multipart` y
+  // `attachments` estaban aquí y no los leía ningún Java —las dos decisiones se hornean al
+  // generar, en el flag de MimeMessageHelper y en la forma del record MailMessage—, así que
+  // lo único que ofrecían era una palanca que no mueve nada: cambiarlas en el fichero de
+  // parámetros no cambia el comportamiento, y descubrirlo cuesta una sesión.
+  const settings = [];
   if (mail.sender?.source === 'fixed') {
-    lines.push(`  sender: ${envValue(profile, 'MAIL_SENDER', mail.sender.address)}`);
+    settings.push(`  sender: ${envValue(profile, 'MAIL_SENDER', mail.sender.address)}`);
   } else if (mail.sender?.fallback) {
-    lines.push(
+    settings.push(
       '  # Remitente de respaldo: se usa cuando el dato del servicio no lo resuelve.',
       `  sender-fallback: ${envValue(profile, 'MAIL_SENDER_FALLBACK', mail.sender.fallback)}`
     );
   }
   if (mail.replyTo?.source === 'fixed') {
-    lines.push(`  reply-to: ${envValue(profile, 'MAIL_REPLY_TO', mail.replyTo.address)}`);
+    settings.push(`  reply-to: ${envValue(profile, 'MAIL_REPLY_TO', mail.replyTo.address)}`);
   }
+  if (settings.length > 0) lines.push('', 'mail:', ...settings);
   return lines.join('\n') + '\n';
 }
 

@@ -649,8 +649,10 @@ function mailChecks(model) {
       group: 'mailDelivery',
       subject: operation.name,
       class: operation.handlerClass,
-      // El puerto está inyectado: si no aparece en el cuerpo, el correo no sale.
-      require: ['mailSender\.send'],
+      // El puerto está inyectado: si no aparece en el cuerpo, el correo no sale. El punto va
+      // entre corchetes y no escapado: en una cadena de comillas simples JavaScript se come
+      // el `\` y lo que llegaba al gate era `mailSender.send`, con el punto de comodín.
+      require: ['mailSender[.]send'],
       forbid: ['TODO|UnsupportedOperationException'],
       why: `el diseño le atribuye la salida por correo (mail.sentBy): tiene que componer el MailMessage y llamar a mailSender.send(...)`
     });

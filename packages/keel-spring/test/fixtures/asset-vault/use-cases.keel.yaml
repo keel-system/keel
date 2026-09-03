@@ -61,6 +61,12 @@ operations:
       - code: ASSET_NOT_FOUND
         when: No existe un archivo con ese id.
         http: 404
+      # El 403 del alcance por recurso. Es producible porque `authentication.scoping` dice de
+      # dónde sale la acotación (el claim `vaults` contra Owner.code); sin ese bloque sería el
+      # 403 que nada puede producir del que avisa crossrefs.
+      - code: ASSET_OUT_OF_SCOPE
+        when: El archivo pertenece a un propietario que no está en el alcance del solicitante.
+        http: 403
     cache:
       ttlSeconds: 300
       keyFields: [id]

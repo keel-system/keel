@@ -8,8 +8,9 @@
   },
   "scripts": {
     "test": "node --test",
-    "compile-check": "node scripts/compile-check.js && node scripts/compile-check.js asset-vault --broker=snssqs && node scripts/compile-check.js notification-mailer --broker=snssqs && node scripts/compile-check.js job-dispatch && node scripts/compile-check.js job-dispatch-mongo --broker=kafka",
+    "compile-check": "node scripts/compile-check.js && node scripts/compile-check.js asset-vault --broker=snssqs && node scripts/compile-check.js notification-mailer --broker=snssqs && node scripts/compile-check.js job-dispatch && node scripts/compile-check.js job-dispatch-mongo --broker=kafka && node scripts/compile-check.js stock-reservation --broker=kafka && node scripts/compile-check.js notification-mailer-mongo --broker=kafka",
     "broker-check": "node scripts/broker-check.js",
+    "claim-check": "node scripts/claim-check.js",
     "mail-check": "node scripts/mail-check.js",
     "mongo-check": "node scripts/mongo-check.js"
   },

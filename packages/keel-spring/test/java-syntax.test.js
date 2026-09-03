@@ -218,7 +218,12 @@ const MATRIX = [
   // `psql`—, y el `mongoEval` del rescate lleva sus comillas escapadas dentro de un
   // literal Java. Tres niveles de plantilla es justo donde se pierde un escape, y eso no
   // lo distingue ningún `includes(...)`.
-  ['job-dispatch-mongo', {}]
+  ['job-dispatch-mongo', {}],
+  // La otra mitad del par de la GUARDA del correo. Con el modelo documental el reclamo cambia
+  // de forma entera —`findAndModify` con su `Criteria` en vez del UPDATE condicional con su
+  // JPQL— y hasta que existió esta fixture esa rama se generaba a ciegas: solo la miraban
+  // asserts de cadenas sobre un modelo parcheado en memoria.
+  ['notification-mailer-mongo', { broker: 'kafka' }]
 ];
 
 // El comprobador se comprueba a sí mismo. Un linter que solo sale en verde no

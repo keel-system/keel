@@ -6,6 +6,21 @@ authentication:
   serviceAuth:
     protocol: client-credentials
     description: El servicio de renderizado consulta fichas para generar sus miniaturas.
+  # Alcance por recurso. Es la única fixture que lo declara, y por eso la única que compila
+  # el mapper de Keycloak, el atributo por usuario de init-keycloak.sh, su gemelo del
+  # realm-export.json de deploy/ y el scopedResource() del arnés: hasta ahora esos veintitrés
+  # sitios del generador solo los miraban asserts de cadenas sobre modelos parcheados.
+  #
+  # Roles y permisos son GLOBALES: `vault-reader` alcanza a todos los archivos custodiados de
+  # todos los propietarios. Lo que acota al propietario concreto es este claim, y sin
+  # declararlo el 403 del contrato no lo produce nada.
+  scoping:
+    claim: vaults
+    over: Owner.code
+    error: ASSET_OUT_OF_SCOPE
+    # La exención va rol a rol porque es la parte peligrosa: quien la tiene ve todo.
+    exemptRoles: [vault-admin]
+    description: Cada custodio opera sobre los archivos de los propietarios que su token enumera.
 
 roles:
   vault-admin:

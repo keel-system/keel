@@ -4,3 +4,4 @@ node_modules/
 broker-check.json
 mail-check.json
 mongo-check.json
+claim-check.json

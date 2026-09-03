@@ -367,6 +367,43 @@ que cerraron bloqueos sistémicos), para que ninguna calificación deje la
 orquestación en bucle. Alcanzado el límite que aplique, el orquestador reporta la
 matriz y se detiene.
 
+## Medición por mutación
+
+Una suite al 100% dice que ningún escenario falla. No dice que alguno pueda fallar. La
+diferencia no se ve mirando el verde, y la única forma barata de medirla es **romper el
+mecanismo a propósito y ver si algo se pone rojo**: si nada se pone rojo, ese mecanismo no lo
+prueba nadie, y llevaba sin probarlo desde que se escribió.
+
+No es teoría. En la corrida `refunds-http` se rompió el reclamo del barrido y **los dos
+escenarios que lo cubrían siguieron verdes**: lo que los hacía pasar era otra cosa. Y midiendo
+la reentrega se descubrió que su guarda no la medía ningún escenario de los que existían.
+
+La mutación tiene que **conservar la forma**: el código sigue compilando y sigue pasando
+`infra/check-idempotency.sh`, porque lo que se está midiendo es el escenario, no el gate
+estático. Borrar el método entero mide otra cosa (mide el compilador).
+
+| Mecanismo | Mutación que conserva la forma | Qué tiene que ponerse rojo |
+|---|---|---|
+| Repetición del llamante | el almacén registra pero devuelve siempre «no visto» | el escenario de dos peticiones con la misma clave |
+| Reentrega del broker | `alreadyProcessed(...)` devuelve siempre `false` | el escenario de doble entrega del mismo `messageId` |
+| Idempotencia saliente | se quita la cabecera de la petición al proveedor | el escenario de reintento contra el proveedor |
+| Compensación | el handler mueve el estado y no encarga la vuelta | el escenario de compensación |
+| Reconciliación | el barrido reclama y no publica el desenlace | el escenario de espera agotada |
+| Reclamo de barrido | el `UPDATE` pierde su condición sobre el estado de partida | el escenario de dos réplicas |
+| Rescate de un barrido | el reclamo pierde su cota temporal | el escenario de la fila en vuelo abandonada |
+| Entrega por outbox | el relay publica dentro de la transacción | el escenario de canal indisponible |
+| Guarda de correo | la transición se hace en memoria, sin llamar al reclamo | `infra/check-idempotency.sh` (aquí ningún escenario puede) |
+
+La última fila es la excepción que explica el resto: ningún arnés de caja negra puede matar la
+aplicación entre el envío y el commit, así que ese mecanismo **solo** lo mide el gate estático.
+Cuando un mecanismo no tiene ni escenario ni gate, eso es el hallazgo — no un fallo de la
+corrida, sino una cobertura que nunca existió.
+
+Cómo se hace, sin gastar la corrida entera: se muta **uno** cada vez, se ejecuta
+`infra/score-scenarios.sh` (o solo la clase del escenario que debería caer, con
+`./gradlew integrationTest --tests '<Clase>'`), se anota el resultado y **se revierte antes de
+mutar el siguiente**. Dos mutaciones a la vez no se pueden atribuir.
+
 ## El cierre devuelve al generador lo que es del generador
 
 Parte de lo que aparece durante una generación **no es de este proyecto**: es un defecto o
@@ -398,6 +435,10 @@ quien mantiene `keel-spring`. Va estructurado así:
    atribuido o una tanda de fallos con una sola causa raíz son las señales.
 4. **Huecos del diseño**: los `designGaps` consolidados de los cinco agentes, con el
    artefacto y la propuesta concreta. Son del **diseñador**, no del generador.
+5. **Medición por mutación**: qué mecanismos se falsaron, cuál se puso rojo con cada uno, y
+   —lo que importa— cuáles resultaron **no medidos por nadie**. La sección siguiente dice qué
+   romper. Un mecanismo sin medir es del generador (le falta gate) o del diseño (le falta
+   escenario), y la entrada tiene que decir cuál de los dos.
 
 Regla de oro del informe: cada entrada dice de quién es. Un hallazgo sin dueño no acciona
 nada, y una incidencia de este proyecto disfrazada de defecto del generador cuesta una

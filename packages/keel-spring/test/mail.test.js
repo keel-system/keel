@@ -72,6 +72,81 @@ test('el asunto se sanea en el CONSTRUCTOR del mensaje, no en el adaptador', () 
   );
 });
 
+// ─── Adjuntos ────────────────────────────────────────────────────────────────
+//
+// `delivery.attachments` cambia el Java en seis sitios —entre ellos la FORMA del value
+// object de dominio— y llegó con cero tests y cero fixtures: nadie lo había compilado nunca.
+// La fixture en disco lo declara para que su rama pase por java-syntax y por compile-check;
+// la rama `false` se cubre aquí quitándolo del modelo, porque un diseño no puede declarar
+// las dos a la vez.
+
+/** La fixture SIN adjuntos: el mismo diseño con la propiedad retirada. */
+function scaffoldSinAdjuntos() {
+  const { manifest, layers, errors } = loadService(fixtureDir);
+  assert.deepEqual(errors, []);
+  const patched = structuredClone(layers);
+  delete patched.mail.delivery.attachments;
+  const workspace = tmpDir('keel-mail-sin-adjuntos-');
+  const result = scaffoldService({ manifest, layers: patched, workspace, force: true });
+  const root = path.join(workspace, result.outDir);
+  return { read: (relative) => fs.readFileSync(path.join(root, relative), 'utf8') };
+}
+
+test('con adjuntos, el mensaje gana su record anidado y un componente más', () => {
+  const { read } = scaffoldMailer();
+  const message = read(`${JAVA}/domain/mail/MailMessage.java`);
+  assert.match(message, /public record Attachment\(String filename, String contentType, byte\[\] content\)/);
+  assert.match(message, /String text, List<Attachment> attachments\)/);
+  // Normalizado en el constructor compacto, como `to` y `cc`: un componente de lista que
+  // puede llegar null obliga a comprobarlo en cada uso, y el que lo olvide revienta al
+  // recorrerlo.
+  assert.match(message, /attachments = attachments == null \? List\.of\(\) : List\.copyOf\(attachments\);/);
+});
+
+test('sin adjuntos, ni el record ni el componente existen: el value object es otro', () => {
+  const { read } = scaffoldSinAdjuntos();
+  const message = read(`${JAVA}/domain/mail/MailMessage.java`);
+  assert.ok(!message.includes('record Attachment'));
+  assert.ok(!message.includes('List<Attachment>'));
+  assert.match(message, /String text\) \{/);
+  // Y el saneado del asunto sigue estando: es la defensa que no depende de esta rama.
+  assert.ok(message.includes('sanitizeSubject(subject)'));
+});
+
+test('el adaptador adjunta por ByteArrayResource, con su import condicional', () => {
+  const { read } = scaffoldMailer();
+  const adapter = read(`${JAVA}/infrastructure/mail/SmtpMailSender.java`);
+  assert.ok(adapter.includes('import org.springframework.core.io.ByteArrayResource;'));
+  assert.match(adapter, /for \(MailMessage\.Attachment attachment : message\.attachments\(\)\)/);
+  assert.match(adapter, /helper\.addAttachment\(attachment\.filename\(\),/);
+
+  const sinAdjuntos = scaffoldSinAdjuntos().read(`${JAVA}/infrastructure/mail/SmtpMailSender.java`);
+  assert.ok(!sinAdjuntos.includes('ByteArrayResource'), 'un import que nadie usa no compila con -Werror y confunde igual');
+  assert.ok(!sinAdjuntos.includes('addAttachment'));
+});
+
+test('los adjuntos fuerzan el multipart del helper aunque el cuerpo sea de una sola parte', () => {
+  // Es la interacción que no se ve leyendo ninguno de los dos campos por separado: sin el
+  // segundo argumento en true, MimeMessageHelper no admite adjuntos y falla en tiempo de
+  // ejecución al añadir el primero, no al construirse.
+  const { manifest, layers } = (() => {
+    const loaded = loadService(fixtureDir);
+    assert.deepEqual(loaded.errors, []);
+    return loaded;
+  })();
+  const patched = structuredClone(layers);
+  patched.mail.delivery.parts = ['html'];
+  const workspace = tmpDir('keel-mail-una-parte-');
+  const result = scaffoldService({ manifest, layers: patched, workspace, force: true });
+  const adapter = fs.readFileSync(
+    path.join(workspace, result.outDir, `${JAVA}/infrastructure/mail/SmtpMailSender.java`),
+    'utf8'
+  );
+  assert.match(adapter, /new MimeMessageHelper\(mime, true, "UTF-8"\)/);
+  // Una sola parte: el cuerpo va como HTML, no como alternativa.
+  assert.match(adapter, /helper\.setText\(nullToEmpty\(message\.html\(\)\), true\);/);
+});
+
 test('el motor de plantillas no evalúa expresiones y cachea por clave', () => {
   // Con templating.source: data el cuerpo lo escribe alguien de fuera del equipo.
   // Un motor con SpEL (Thymeleaf) sería ejecución remota de código.
@@ -118,9 +193,14 @@ test('el gradiente de configuración va de literal en local a variable obligator
 test('la decisión del diseño viaja bajo la clave mail, no bajo spring.mail', () => {
   const { read } = scaffoldMailer();
   const local = read('src/main/resources/parameters/local/mail.yaml');
-  assert.ok(local.includes('multipart: true'), 'delivery.parts: [html, text] ⇒ multipart/alternative');
   assert.ok(local.includes('sender-fallback: no-reply@ejemplo.com'));
   assert.ok(local.includes('reply-to: soporte@ejemplo.com'));
+  // Bajo `mail:` va solo lo que el servidor LEE. `multipart` y `attachments` estuvieron aquí
+  // sin que ningún Java los leyera: las dos se hornean al generar (el flag de
+  // MimeMessageHelper, la forma del record), así que como parámetro solo eran una palanca
+  // que no mueve nada.
+  assert.ok(!local.includes('multipart:'));
+  assert.ok(!local.includes('attachments:'));
 });
 
 test('la infraestructura de prueba levanta el buzón, lo sondea y lo purga', () => {

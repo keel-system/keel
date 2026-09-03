@@ -1,0 +1,42 @@
+# La única diferencia de fondo con `notification-mailer`, y el motivo entero de que esta
+# fixture exista: con el modelo documental la GUARDA del correo cambia de forma —`findAndModify`
+# con su `Criteria` en vez del UPDATE condicional con su JPQL—, y esa rama solo la miraba un
+# test de cadenas sobre un modelo parcheado en memoria. Es la misma razón por la que existe el
+# par `job-dispatch` / `job-dispatch-mongo` para el reclamo del barrido.
+default:
+  model: document
+
+entities:
+  Application:
+    persisted: true
+    naturalKey: [key]
+
+  Template:
+    persisted: true
+    naturalKey: [application, key, locale, version]
+    indexes:
+      # «Como máximo una activa» NO es una unicidad de columnas: es una unicidad
+      # condicionada al estado. Sin la condición habría que elegir entre no poder
+      # tener nunca dos versiones o no garantizar nada.
+      - fields: [application, key, locale]
+        unique: true
+        when: { field: status, equals: active }
+        description: Como máximo una versión activa por aplicación, clave e idioma.
+
+  TemplateVariable:
+    persisted: true
+
+  Notification:
+    persisted: true
+    naturalKey: [applicationKey, dedupeKey]
+    indexes:
+      - [recipient, requestedAt]
+      # Índice sobre un campo de COLECCIÓN. No cabe en la tabla de la entidad —los
+      # elementos viven en la tabla hija—, pero build genera esa hija entera, así que
+      # lo materializa en su @CollectionTable. Sin él, «¿a esta dirección le llegó
+      # algo en copia?» recorre una tabla que crece con cada envío.
+      - [copyRecipients]
+
+consistency:
+  transactionalBoundary: per-operation
+  optimisticLocking: all

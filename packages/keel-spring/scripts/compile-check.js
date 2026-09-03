@@ -7,13 +7,19 @@
 // plantillas; esto cubre el resto —tipos, firmas, genéricos— y es la única verificación
 // que no depende de que alguien haya acertado escribiendo una aserción.
 //
-// **Qué compila y qué no.** Solo el source set `integrationTest`. El `main` recién
-// generado NO compila a propósito: build deja TODOs para el agente, y algunos son
-// llamadas a métodos que el agente debe añadir (el projector de una réplica llama a
-// `projectionOf`/`applySnapshot`, que escribe él en la entidad). Su gate es
-// `./gradlew build -x test` DESPUÉS del agente de código, dentro del pipeline. El
-// arnés, en cambio, es 100% de build —el source set excluye `main` de su classpath a
-// propósito— y por eso sí puede exigirse verde recién generado.
+// **Qué compila y qué no.** Siempre el source set `integrationTest`, que es 100% de build
+// —su classpath excluye `main` a propósito— y por eso puede exigirse verde recién generado.
+// Y TAMBIÉN el `main`, salvo donde el propio diseño dice que no puede: lo decide
+// `mainCompilable()` (src/lib/main-compilable.js) leyendo las capas.
+//
+// Que el `main` quedara fuera venía de dar por hecho que los TODOs lo impiden, y no es
+// cierto: un stub que termina en `throw new UnsupportedOperationException(...)` compila. Lo
+// que lo impide es código generado que LLAMA a un método del agente, y hoy eso es solo la
+// réplica (el projector invoca `projectionOf`/`applySnapshot`). Mientras tanto, TODO el
+// código que solo vive en `main` —el reclamo con su JPQL y su `findAndModify`, los
+// adaptadores de persistencia, el relay— no lo compilaba nadie: los tests comparan cadenas y
+// `java-syntax` solo tokeniza. Su otro gate sigue siendo `./gradlew build -x test` DESPUÉS
+// del agente, dentro del pipeline; esto llega mucho antes y sin agente de por medio.
 //
 //   node packages/keel-spring/scripts/compile-check.js [fixture] [--broker=<id>]
 //   npm run compile-check --workspace packages/keel-spring
@@ -49,6 +55,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadService } from 'keel-core';
+import { mainCompilable } from '../src/lib/main-compilable.js';
 import { scaffoldService } from '../src/scaffold/index.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -122,14 +129,22 @@ for (const { broker, database } of combos) {
       .find((entry) => entry.isDirectory());
     const projectDir = path.join(workspace, 'services', project.name);
 
-    process.stdout.write(`${fixture} (${broker}${database ? `, ${database}` : ''}): compilando el arnés… `);
+    // El `main` va en la MISMA invocación de Gradle: son dos tareas del mismo proyecto y
+    // levantar la JVM otra vez costaría más que compilarlo.
+    const { compilable, motivo } = mainCompilable(layers);
+    const tasks = compilable ? ['compileJava', 'compileIntegrationTestJava'] : ['compileIntegrationTestJava'];
+    const que = compilable ? 'el arnés y el main' : 'el arnés';
+    process.stdout.write(`${fixture} (${broker}${database ? `, ${database}` : ''}): compilando ${que}… `);
     // El wrapper vendorizado se invoca por `sh` para que valga igual en Windows.
-    const result = spawnSync('sh', ['gradlew', 'compileIntegrationTestJava', '--console=plain', '--no-daemon'], {
+    const result = spawnSync('sh', ['gradlew', ...tasks, '--console=plain', '--no-daemon'], {
       cwd: projectDir,
       encoding: 'utf8'
     });
     if (result.status === 0) {
-      console.log('OK');
+      // El motivo se dice SIEMPRE, también en verde: un `main` que deja de compilarse porque
+      // alguien le añadió una réplica a la fixture no se ve de otra forma — la pasada sigue
+      // en OK compilando la mitad que compilaba antes.
+      console.log(compilable ? 'OK' : `OK (main fuera: ${motivo})`);
     } else {
       failed++;
       console.log('FALLA');

@@ -25,28 +25,37 @@ import { loadService } from 'keel-core';
 import { buildModel } from '../src/lib/model.js';
 import { scaffoldService } from '../src/scaffold/index.js';
 
-const fixtureDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'notification-mailer');
-const JAVA = 'src/main/java/com/platform/notificationmailer';
+const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
 /**
- * La fixture de correo, que YA trae la silueta de la guarda en disco: `sendAcceptedNotification`
+ * El PAR de fixtures que trae la silueta de la guarda en disco: `sendAcceptedNotification`
  * atraviesa `accepted → sending → sent|failed` y es la única en `mail.sentBy`.
  *
- * Estaba aquí parcheada en memoria, y eso dejaba un hueco que no se veía: ninguna fixture EN
- * DISCO producía la guarda, así que su Java no pasaba nunca por `java-syntax` ni por
- * `compile-check` — los dos iteran el directorio de fixtures. Era el único de los seis
- * mecanismos en esa situación. Lo que se sigue parcheando aquí son solo las VARIANTES que un
- * diseño no puede declarar a la vez.
+ * Son dos y no una por lo mismo que `job-dispatch` / `job-dispatch-mongo`: con el modelo
+ * documental la guarda cambia de forma entera —`findAndModify` con su `Criteria` en vez del
+ * UPDATE condicional con su JPQL— y eso es otra rama del scaffolding. Mientras el modelo se
+ * parcheaba en memoria, esa rama no pasaba por `java-syntax` ni por `compile-check` —los dos
+ * iteran el DIRECTORIO de fixtures—, así que se generaba a ciegas. Lo que se sigue parcheando
+ * aquí es solo lo que un diseño no puede declarar a la vez que el resto.
  */
-function withGuardedSend({ stamp = true, model = 'relational' } = {}) {
-  const { manifest, layers, errors } = loadService(fixtureDir);
-  assert.deepEqual(errors, []);
-  const patched = structuredClone(layers);
+const FIXTURES = {
+  relational: { dir: 'notification-mailer', java: 'src/main/java/com/platform/notificationmailer' },
+  document: { dir: 'notification-mailer-mongo', java: 'src/main/java/com/platform/notificationmailermongo' }
+};
 
-  // El modelo de persistencia lo declara el DISEÑO, y el motor va detrás. Con `document`
-  // el reclamo cambia de forma entera —findAndModify en vez de UPDATE condicional— y esa
-  // rama no la cubría ninguna fixture: ninguna combina modelo documental con capa `mail`.
-  patched.persistence.default = { ...(patched.persistence.default ?? {}), model };
+const JAVA = FIXTURES.relational.java;
+
+function withGuardedSend({ stamp = true, model = 'relational' } = {}) {
+  const fixture = FIXTURES[model];
+  const { manifest, layers, errors } = loadService(path.join(fixturesDir, fixture.dir));
+  assert.deepEqual(errors, []);
+  assert.equal(
+    layers.persistence?.default?.model ?? 'relational',
+    model,
+    `la fixture ${fixture.dir} dejó de declarar el modelo ${model}`
+  );
+
+  const patched = structuredClone(layers);
   // El caso «sin reloj» se construye QUITANDO el campo, no dejando de ponerlo: el diseño en
   // disco ya lo declara, porque un reclamo sin instante es una fila que el rescate no
   // encuentra nunca y esa es la forma correcta. Aquí se retira a propósito para comprobar que
@@ -59,7 +68,7 @@ function withGuardedSend({ stamp = true, model = 'relational' } = {}) {
   const stack = model === 'document' ? { database: 'mongodb' } : undefined;
   const result = scaffoldService({ manifest, layers: patched, workspace, force: true, stack });
   const read = (relative) => fs.readFileSync(path.join(workspace, result.outDir, relative), 'utf8');
-  return { read, warnings: result?.warnings ?? [] };
+  return { read, java: fixture.java, warnings: result?.warnings ?? [] };
 }
 
 test('el reclamo de la guarda sale en el puerto, y devuelve el agregado o vacío', () => {
@@ -149,8 +158,8 @@ test('y el gate lo exige, porque ningún escenario FL-* puede verlo fallar', () 
 // documental con capa `mail`, así que se generaba a ciegas.
 
 test('documental: la guarda es un findAndModify, atómico y sin transacción propia', () => {
-  const { read } = withGuardedSend({ model: 'document' });
-  const adapter = read(`${JAVA}/infrastructure/persistence/repositories/NotificationRepositoryImpl.java`);
+  const { read, java } = withGuardedSend({ model: 'document' });
+  const adapter = read(`${java}/infrastructure/persistence/repositories/NotificationRepositoryImpl.java`);
   const method = adapter.slice(adapter.indexOf('public Optional<Notification> claimForSendAcceptedNotification'));
 
   assert.match(method, /mongoTemplate\.findAndModify\(/, 'no se reclama con findAndModify');
@@ -169,8 +178,8 @@ test('documental: la guarda es un findAndModify, atómico y sin transacción pro
 });
 
 test('documental: el estado en vuelo se estampa en la misma operación', () => {
-  const { read } = withGuardedSend({ model: 'document' });
-  const adapter = read(`${JAVA}/infrastructure/persistence/repositories/NotificationRepositoryImpl.java`);
+  const { read, java } = withGuardedSend({ model: 'document' });
+  const adapter = read(`${java}/infrastructure/persistence/repositories/NotificationRepositoryImpl.java`);
   assert.match(
     adapter,
     /new Update\(\)\.set\("status", NotificationStatus\.SENDING\)\.set\("sendingSince", Instant\.now\(\)\)/,
@@ -183,8 +192,8 @@ test('documental: el estado en vuelo se estampa en la misma operación', () => {
 });
 
 test('documental: sin marca declarada, el reclamo solo cambia el estado', () => {
-  const { read } = withGuardedSend({ model: 'document', stamp: false });
-  const adapter = read(`${JAVA}/infrastructure/persistence/repositories/NotificationRepositoryImpl.java`);
+  const { read, java } = withGuardedSend({ model: 'document', stamp: false });
+  const adapter = read(`${java}/infrastructure/persistence/repositories/NotificationRepositoryImpl.java`);
   assert.match(adapter, /new Update\(\)\.set\("status", NotificationStatus\.SENDING\);/);
   assert.ok(!adapter.includes('sendingSince'), 'se estampa un campo que el documento no declara');
 });
@@ -193,11 +202,11 @@ test('documental: no se cuela nada de la rama relacional', () => {
   // El puerto es el MISMO en las dos ramas, así que un método declarado allí y no
   // implementado aquí no compila. Y al revés: un @Modifying en un proyecto Mongo sería
   // código muerto que nadie ejecuta.
-  const { read } = withGuardedSend({ model: 'document' });
-  const adapter = read(`${JAVA}/infrastructure/persistence/repositories/NotificationRepositoryImpl.java`);
+  const { read, java } = withGuardedSend({ model: 'document' });
+  const adapter = read(`${java}/infrastructure/persistence/repositories/NotificationRepositoryImpl.java`);
   assert.ok(!adapter.includes('@Modifying'), 'se generó la escritura relacional en el adaptador documental');
   assert.ok(
-    read(`${JAVA}/domain/repository/NotificationRepository.java`).includes(
+    read(`${java}/domain/repository/NotificationRepository.java`).includes(
       'Optional<Notification> claimForSendAcceptedNotification(UUID id);'
     ),
     'el puerto compartido perdió el reclamo en el modelo documental'
@@ -207,7 +216,7 @@ test('documental: no se cuela nada de la rama relacional', () => {
 test('documental: el gate sigue exigiendo la guarda', () => {
   // El reparto build/agente no cambia con el motor: build genera el reclamo, el uso lo
   // escribe el agente, y sin gate ese tramo no lo verifica nadie.
-  const { read } = withGuardedSend({ model: 'document' });
+  const { read, java } = withGuardedSend({ model: 'document' });
   assert.match(
     read('infra/check-idempotency.sh'),
     /unit 'mailDelivery' 'sendAcceptedNotification · guarda confirmada antes del envío'/
@@ -232,7 +241,7 @@ test('el puerto de despacho entre casos de uso trae las DOS variantes', () => {
   assert.match(adapter, /mediator\.dispatchWithoutTransaction\(command\);/);
 });
 
-test('la guarda sale de la fixture EN DISCO, no de un parche del test', () => {
+test('las DOS fixtures del par producen la guarda en disco, cada una en su modelo', () => {
   // El hueco que este archivo tenía y que no se veía desde dentro: la silueta se construía en
   // memoria, así que ninguna fixture del directorio la producía. `java-syntax.test.js` y
   // `compile-check` iteran ESE directorio — de los seis mecanismos de repetición y
@@ -240,21 +249,40 @@ test('la guarda sale de la fixture EN DISCO, no de un parche del test', () => {
   // ni por javac. Y es además el único que ningún escenario `FL-*` puede ver, porque nadie
   // mata la aplicación entre el envío y el commit.
   //
-  // Si alguien vuelve a quitar el estado en vuelo del diseño, esto cae aquí y no en la corrida.
-  const { manifest, layers, errors } = loadService(fixtureDir);
-  assert.deepEqual(errors, []);
+  // Son DOS porque el modelo de persistencia es otra rama entera del scaffolding, igual que en
+  // el par `job-dispatch` / `job-dispatch-mongo` del reclamo del barrido. Si alguien le quita a
+  // una el estado en vuelo, o le cambia el modelo, esto cae aquí y no en la corrida — y sin
+  // esto los dos comprobadores seguirían en verde compilando un proyecto que ya no la lleva.
+  for (const [model, fixture] of Object.entries(FIXTURES)) {
+    const { manifest, layers, errors } = loadService(path.join(fixturesDir, fixture.dir));
+    assert.deepEqual(errors, [], `${fixture.dir} no carga`);
+    assert.equal(layers.persistence?.default?.model ?? 'relational', model, `${fixture.dir} cambió de modelo`);
 
-  const model = buildModel({ manifest, layers, stack: { group: 'com.test', database: 'postgresql', broker: 'kafka' } });
-  const guarded = (model.services ?? [])
-    .flatMap((service) => service.operations ?? [])
-    .filter((operation) => operation.guardClaim);
+    const database = model === 'document' ? 'mongodb' : 'postgresql';
+    const built = buildModel({ manifest, layers, stack: { group: 'com.test', database, broker: 'kafka' } });
+    const guarded = (built.services ?? [])
+      .flatMap((service) => service.operations ?? [])
+      .filter((operation) => operation.guardClaim);
 
-  assert.equal(guarded.length, 1, 'la fixture dejó de producir la guarda');
-  assert.equal(guarded[0].name, 'sendAcceptedNotification');
-  assert.equal(guarded[0].guardClaim.method, 'claimForSendAcceptedNotification');
-  // Con su reloj: sin él el reclamo no estampa y el rescate no tiene sobre qué medir.
-  assert.equal(guarded[0].guardClaim.stampField, 'sendingSince');
-  // Y es la ÚNICA que manda correo: registrar por HTTP o por evento ya no envía nada, que es
-  // lo que permite que el envío tenga un estado intermedio propio.
-  assert.deepEqual(layers.mail.sentBy, ['sendAcceptedNotification']);
+    assert.equal(guarded.length, 1, `${fixture.dir} dejó de producir la guarda`);
+    assert.equal(guarded[0].name, 'sendAcceptedNotification');
+    assert.equal(guarded[0].guardClaim.method, 'claimForSendAcceptedNotification');
+    // Con su reloj: sin él el reclamo no estampa y el rescate no tiene sobre qué medir.
+    assert.equal(guarded[0].guardClaim.stampField, 'sendingSince');
+    // Y es la ÚNICA que manda correo: registrar por HTTP o por evento ya no envía nada, que es
+    // lo que permite que el envío tenga un estado intermedio propio.
+    assert.deepEqual(layers.mail.sentBy, ['sendAcceptedNotification']);
+  }
+});
+
+test('el par no se convierte en dos diseños distintos: solo cambia el modelo', () => {
+  // La otra mitad de la vigilancia, y la que se pierde sola: si alguien arregla o amplía el
+  // diseño en una sola de las dos, dejan de medir lo mismo y la comparación entre ramas ya no
+  // dice nada. Lo único que puede diferir es el manifiesto (el nombre) y la persistencia.
+  const capas = ['domain.keel.yaml', 'use-cases.keel.yaml', 'api.keel.yaml', 'security.keel.yaml', 'messaging.keel.yaml', 'mail.keel.yaml'];
+  for (const capa of capas) {
+    const relacional = fs.readFileSync(path.join(fixturesDir, FIXTURES.relational.dir, capa), 'utf8');
+    const documental = fs.readFileSync(path.join(fixturesDir, FIXTURES.document.dir, capa), 'utf8');
+    assert.equal(documental, relacional, `${capa} difiere entre las dos mitades del par`);
+  }
 });

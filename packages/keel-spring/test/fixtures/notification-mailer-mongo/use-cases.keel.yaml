@@ -1,0 +1,216 @@
+operations:
+
+  registerApplication:
+    description: Da de alta un sistema consumidor autorizado a mandar correo.
+    kind: command
+    input:
+      fields:
+        key:
+          type: string
+          required: true
+          description: Casa con el client_id de la credencial máquina del sistema.
+        name: { type: string, required: true }
+        credentialKeys:
+          type: string
+          list: true
+          required: true
+          description: Los client_id de las credenciales máquina de este sistema; al menos una.
+        defaultSender: { type: string, required: true }
+        defaultLocale: { type: string, required: true }
+    output: { entity: Application }
+    rules:
+      - Nace activa. Darla de baja es otra operación, no un campo de esta.
+      - >-
+        Sin esta operación el servicio no es operable: Application es precondición de todo lo
+        demás y ninguna otra la crea, así que un generador honesto se queda sin manera legítima
+        de satisfacerla y termina derivándola de una fuente que el diseño no declara.
+    errors:
+      - { code: APPLICATION_ALREADY_EXISTS, when: Ya hay un sistema dado de alta con esa clave., http: 409 }
+
+  publishTemplate:
+    description: Publica una versión de plantilla y la deja como la activa de su clave e idioma.
+    kind: command
+    input:
+      fields:
+        templateId: { type: uuid, required: true }
+    output: { entity: Template }
+    transitions:
+      - { entity: Template, from: [draft], to: active }
+      - { entity: Template, from: [active], to: retired, description: La versión que estaba activa se retira en el mismo acto. }
+    preconditions:
+      - La plantilla existe.
+      - Y está en borrador.
+    rules:
+      - Publicar una versión retira la que estuviera activa para esa clave e idioma.
+      - Como máximo hay una versión activa por aplicación, clave e idioma.
+    errors:
+      - { code: TEMPLATE_NOT_FOUND, when: No existe ninguna plantilla con ese identificador., http: 404 }
+      - { code: TEMPLATE_ALREADY_ACTIVE, when: Ya hay otra versión activa para esa clave e idioma., http: 409 }
+      - { code: CONCURRENT_MODIFICATION, when: Otra publicación modificó la misma plantilla a la vez., http: 409 }
+
+  registerTemplate:
+    description: Registra una versión nueva de una plantilla, en borrador.
+    kind: command
+    input:
+      fields:
+        applicationKey:
+          type: string
+          required: true
+          description: >-
+            Sale del token, nunca del cuerpo: es la Application cuya lista de `credentialKeys`
+            contiene el `client_id` del llamante. No es el client_id en sí — un sistema con dos
+            credenciales tiene una sola Application.
+        templateKey: { type: string, required: true }
+        locale: { type: string, required: true }
+        subject: { type: string, required: true }
+        bodyHtml: { type: text, required: true }
+        bodyText: { type: text, required: true }
+    output: { entity: Template }
+    preconditions:
+      - La aplicación del token está registrada y activa.
+    rules:
+      - Nace en borrador — registrar una plantilla no la pone delante de nadie.
+      - La versión es la siguiente de esa aplicación, clave e idioma.
+    errors:
+      - { code: TEMPLATE_VERSION_ALREADY_EXISTS, when: Otra petición registró esa misma versión a la vez., http: 409 }
+      - { code: APPLICATION_INACTIVE, when: La aplicación del token está dada de baja o no existe., http: 403 }
+
+  requestNotification:
+    description: Acepta una petición de envío, la registra y devuelve su identificador.
+    kind: command
+    input:
+      fields:
+        applicationKey:
+          type: string
+          required: true
+          description: >-
+            Sale del token, nunca del cuerpo: es la Application cuya lista de `credentialKeys`
+            contiene el `client_id` del llamante.
+        templateKey: { type: string, required: true }
+        locale: { type: string }
+        recipient: { type: string, required: true }
+        copyRecipients:
+          type: string
+          list: true
+          description: Direcciones en copia. Se congelan con el envío, igual que el destinatario.
+    output:
+      fields:
+        notificationId: { type: uuid }
+        status: { type: NotificationStatus }
+    idempotency:
+      keySource: client-key
+    preconditions:
+      - La aplicación está registrada y activa.
+      - Hay una plantilla activa con esa clave e idioma para esa aplicación.
+    rules:
+      - La versión de plantilla y el asunto ya interpolado se congelan en la notificación.
+      - Si la petición omite el idioma, se usa el `defaultLocale` de la aplicación.
+      - Dos peticiones con la misma clave de idempotencia producen una sola notificación.
+      - >-
+        La `naturalKey` de Notification es el RESPALDO de esa garantía, no su mecanismo: quien
+        arbitra la repetición es el almacén de idempotencia, que reclama la clave antes de tocar
+        negocio. Por eso no se declara un `code` para su violación — si llegara a saltar, sería
+        un fallo del mecanismo, no un desenlace que el cliente deba distinguir.
+    errors:
+      - { code: TEMPLATE_NOT_FOUND, when: No hay plantilla activa con esa clave e idioma para esta aplicación., http: 422 }
+      - { code: APPLICATION_INACTIVE, when: La aplicación está dada de baja., http: 403 }
+      - { code: IDEMPOTENCY_KEY_IN_PROGRESS, when: Otra petición con la misma clave se está atendiendo ahora mismo., http: 409 }
+      - { code: IDEMPOTENCY_KEY_REUSED, when: La misma clave llega con un contenido distinto., http: 409 }
+
+  acceptNotificationRequest:
+    description: Atiende una petición de envío llegada por el canal genérico de eventos.
+    kind: command
+    internal: true
+    input:
+      fields:
+        applicationKey:
+          type: string
+          required: true
+          description: Sale de la envoltura del mensaje, no del payload.
+        templateKey: { type: string, required: true }
+        locale: { type: string }
+        recipient: { type: string, required: true }
+    output: { entity: Notification }
+    preconditions:
+      - La aplicación que publicó el mensaje está registrada y activa.
+    rules:
+      - Un mensaje reentregado no produce una segunda notificación.
+      - Un mensaje de una aplicación desconocida se descarta sin reintentar.
+      - Registrar no es enviar; el correo lo manda sendAcceptedNotification.
+    errors:
+      - { code: TEMPLATE_NOT_FOUND, when: No hay plantilla activa con esa clave e idioma para esta aplicación., http: 422 }
+
+  queueAcceptedNotifications:
+    description: Toma un lote de notificaciones aceptadas y encarga su envío una por una.
+    kind: command
+    internal: true
+    schedule:
+      cron: "* * * * *"
+      description: Cada minuto, para que una petición no espere al siguiente cuarto de hora.
+    input: void
+    output: void
+    # El reclamo del BARRIDO: saca filas de `accepted`, un estado al que no llega ninguna
+    # transición de vuelta, así que es una cola. Es por LOTE, y no es la guarda — la guarda
+    # es por FILA y vive en sendAcceptedNotification, que es quien produce el correo.
+    transitions:
+      - { entity: Notification, from: [accepted], to: queued }
+    rules:
+      - >-
+        El ciclo invoca sendAcceptedNotification con el identificador de cada fila que se
+        llevó. Reclamar el lote y mandar el correo son dos cosas distintas y a propósito: el
+        lote acota cuánto trabajo entra en una pasada, y la guarda por fila es lo que impide
+        que dos ciclos solapados manden el mismo correo dos veces.
+      - Una pasada sin nada que encolar termina sin efectos y sin error.
+
+  sendAcceptedNotification:
+    description: Compone y entrega el correo de una notificación aceptada.
+    kind: command
+    internal: true
+    input:
+      fields:
+        notificationId: { type: uuid, required: true }
+    output: { entity: Notification }
+    # La silueta de la GUARDA: `sending` es destino de una transición y origen de las otras
+    # dos, todo en la MISMA operación. Eso es lo que distingue un estado en vuelo de un
+    # desenlace, y es de donde build deriva el reclamo por fila.
+    transitions:
+      - { entity: Notification, from: [queued], to: sending }
+      - { entity: Notification, from: [sending], to: sent }
+      - { entity: Notification, from: [sending], to: failed }
+    rules:
+      - >-
+        El paso de accepted a sending es la guarda contra el doble envío, y tiene que estar
+        confirmado ANTES de entregar el correo: el handler corre dentro de la transacción del
+        mediator, así que una transición que solo vive en memoria no existe para nadie hasta
+        el commit final — que cae DESPUÉS del envío. Una caída en medio revierte la marca y
+        el ciclo siguiente manda un segundo correo real.
+      - Quien pierde la carrera del reclamo no envía nada y termina sin error.
+      - >-
+        Si el relay RECHAZA el mensaje, el envío queda en failed en esta misma operación: es el
+        único fallo de entrega que este servicio puede observar. Un rebote posterior —el relay
+        acepta y el destino devuelve el correo horas después— llega por un canal que este diseño
+        NO declara, así que queda explícitamente fuera de alcance.
+    errors:
+      - { code: NOTIFICATION_NOT_FOUND, when: No existe un envío con ese identificador., http: 404 }
+      - { code: TEMPLATE_NOT_FOUND, when: La plantilla con la que se congeló el envío ya no está disponible para renderizar su cuerpo., http: 422 }
+    emits: [NotificationSent]
+
+  getTemplate:
+    description: Devuelve una versión de plantilla por su identificador.
+    kind: query
+    input:
+      fields:
+        templateId: { type: uuid, required: true }
+    output: { entity: Template }
+    errors:
+      - { code: TEMPLATE_NOT_FOUND, when: No existe ninguna plantilla con ese identificador., http: 404 }
+
+  getNotification:
+    description: Devuelve el estado de un envío para quien no escucha eventos.
+    kind: query
+    input:
+      fields:
+        notificationId: { type: uuid, required: true }
+    output: { entity: Notification }
+    errors:
+      - { code: NOTIFICATION_NOT_FOUND, when: No existe un envío con ese identificador., http: 404 }
