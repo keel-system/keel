@@ -1328,50 +1328,82 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
 
   // Escenario de CLÚSTER de un barrido. `@Scheduled` no es «una vez en el clúster», es «una vez
   // por instancia»: con N réplicas, un barrido que consulta «los atascados» obtiene en las N las
-  // MISMAS filas y cada una actúa sobre ellas. Por eso el generador emite el reclamo con marca
-  // persistida y caducable, y por eso el gate del generador lo exige y prohíbe `findAllBy…`.
+  // MISMAS filas. Por eso el generador emite el reclamo con marca persistida y caducable, y por
+  // eso el gate del generador lo exige y prohíbe `findAllBy…`.
   //
-  // Pero el gate mira la FORMA, y el modo de fallo más caro de este mecanismo es justo el que más
-  // se parece a estar bien: la marca persistida que nunca commitea. La consulta es correcta —el
-  // `@Modifying`, el lote acotado, el umbral parametrizado— y lo único que falla es dónde cae el
-  // commit, que no se ve leyendo la consulta sino la propagación, tres archivos más allá
-  // (conventions/dependencies.md § La marca persistida que nunca commitea). Ese defecto pasa el
-  // gate entero. Lo caza un escenario con dos instancias vivas, y nada más.
+  // Pero NO se le pide a todo barrido que actúa, y la corrida `refunds-http` es la razón: se
+  // escribieron los dos escenarios, se rompió el reclamo a propósito —`claim()` devolviendo
+  // siempre true, que deja intacta la forma que el gate mira— y los dos siguieron VERDES, con
+  // check-idempotency.sh verde entero. Un escenario que no puede ponerse rojo no es cobertura:
+  // es cobertura aparente, y su camino de menor resistencia es escribirlo y darlo por hecho.
   //
-  // La forma probada está en la fixture `stock-reservation` (FL-CLU-002) y ha corrido en cuatro
-  // corridas: varias filas candidatas, las dos réplicas vivas, y el Then contando el efecto
-  // externo RECIBIDO. Lo que faltaba era que alguien la exigiera: un diseño nuevo con barrido
-  // simplemente no la llevaba.
+  // Lo que decide si el duplicado se puede ver es si el efecto ESCAPA DE LA TRANSACCIÓN:
+  //
+  //   - `via: {client, call}` (o correo): la llamada sale por el cable antes del commit, así que
+  //     el proveedor cuenta también la del perdedor aunque su transacción haga rollback después.
+  //     Es la forma que `stock-reservation` (FL-CLU-002) ejercita contando `stubCallCount`.
+  //   - `via: {publishes}`: el evento se escribe en el outbox DENTRO de la transacción que mueve
+  //     el estado, así que el guard del agregado y su `@Version` ya arbitran la fila — el perdedor
+  //     hace rollback y su evento no sale nunca. El reclamo sigue haciendo falta (evita el trabajo
+  //     tirado y la contención), y su FORMA la sigue mirando el gate; lo que no hay es efecto
+  //     duplicado que un Then pueda contar.
+  //
+  // Con una excepción que devuelve el caso al primer grupo: si la raíz NO lleva bloqueo optimista
+  // (`persistence.consistency.optimisticLocking: none`, o `declared` sin el campo), nada arbitra
+  // la fila y las dos transacciones commitean su evento. Ahí el duplicado vuelve a ser observable.
   if (scenarios !== null) {
     // Dos INSTANCIAS, que no es lo mismo que dos cosas a la vez. `CONCURRENT` lo cumple una doble
     // entrega dentro de un solo proceso, y esa no prueba nada del reparto entre réplicas: la
     // señal aquí es la segunda instancia.
     const CLUSTER = /(dos|2|otra|segunda)\s+(r[ée]plicas?|instancias?|procesos?)|cl[úu]ster|entre r[ée]plicas|entre procesos/i;
-    const activatedBy = new Set(
+    const lockingPolicy = persistence?.consistency?.optimisticLocking ?? 'all';
+    const declaresLockVersion = (entityName) =>
+      Object.prototype.hasOwnProperty.call(domain.entities?.[entityName]?.fields ?? {}, 'lockVersion');
+    // La raíz que el barrido mueve, ¿está arbitrada? Con 'all' lo están todas las raíces.
+    const arbitratedRow = (op) => {
+      const touched = (op.transitions ?? []).map((transition) => transition?.entity).filter(Boolean);
+      if (lockingPolicy === 'none') return false;
+      if (lockingPolicy === 'declared') return touched.length > 0 && touched.every(declaresLockVersion);
+      return touched.length > 0;
+    };
+    // Las activaciones que dispara este barrido, y por qué canal salen.
+    const activationsOf = (opName) =>
       Object.values(dependencies?.dependencies ?? {}).flatMap((dep) =>
-        Object.values(dep?.activations ?? {}).flatMap((activation) => activation?.triggeredBy ?? [])
-      )
-    );
+        Object.entries(dep?.activations ?? {})
+          .filter(([, activation]) => (activation?.triggeredBy ?? []).includes(opName))
+          .map(([name, activation]) => ({ name, ...activation }))
+      );
+    const sendsMail = new Set(mail?.sentBy ?? []);
     for (const [opName, op] of Object.entries(operations)) {
       if (!op?.schedule) continue;
       // Solo si ACTÚA sobre lo que encuentra. Un barrido que solo lee no tiene nada que repartir,
       // y una purga es idempotente por forma —borrar lo caducado dos veces es borrarlo una—; las
       // que genera el generador ni siquiera son operaciones del diseño.
-      const acts = (op.transitions ?? []).length > 0 || (op.emits ?? []).length > 0 || activatedBy.has(opName);
+      const activations = activationsOf(opName);
+      const acts = (op.transitions ?? []).length > 0 || (op.emits ?? []).length > 0 || activations.length > 0;
       if (!acts) continue;
+      // El efecto que escapa de la transacción: una llamada saliente o un correo.
+      const outbound = activations.filter((activation) => activation?.via && !('publishes' in activation.via));
+      const escapes = outbound.length > 0 || sendsMail.has(opName);
+      if (!escapes && arbitratedRow(op)) continue;
       const mentions = scenariosMentioning(opName);
       if (mentions.some((block) => CLUSTER.test(block))) continue;
+      const why = escapes
+        ? `dispara ${outbound.length > 0 ? `la activación '${outbound[0].name}'` : 'un correo'} por un canal que ` +
+          `SALE de la transacción, así que la llamada del perdedor llega al proveedor aunque su transacción haga ` +
+          `rollback después: el duplicado es observable`
+        : `mueve una fila que NADIE arbitra (persistence.consistency.optimisticLocking deja esa raíz sin ` +
+          `'@Version'), así que las dos réplicas commitean su efecto y el duplicado es observable`;
       warnings.push(
-        `use-cases: operations.${opName} tiene 'schedule' y actúa sobre lo que encuentra, pero no encuentro en ` +
-          `validation-scenarios.md ningún escenario que nombre esa operación y la ejercite con DOS INSTANCIAS. ` +
-          `@Scheduled corre en todas las réplicas, así que sin reclamo las N se llevan las mismas filas y cada una ` +
-          `actúa: es la propiedad que el mecanismo existe para dar, y la única que ningún escenario de una sola ` +
-          `instancia distingue —con una réplica, reclamar y leer dan el mismo resultado—. El gate del generador ` +
-          `comprueba la forma del reclamo, no que reparta. Escribe uno con VARIAS filas candidatas (con una sola, ` +
-          `la ventana en que las dos réplicas coinciden es tan estrecha que pasaría por suerte), las dos instancias ` +
-          `vivas, y un Then que cuente el efecto externo RECIBIDO y afirme que ocurrió exactamente una vez por fila ` +
-          `— recibido y no su consecuencia: con idempotencia saliente declarada, el proveedor absorbería los ` +
-          `duplicados y los escondería`
+        `use-cases: operations.${opName} tiene 'schedule', ${why}, pero no encuentro en validation-scenarios.md ` +
+          `ningún escenario que nombre esa operación y la ejercite con DOS INSTANCIAS. @Scheduled corre en todas ` +
+          `las réplicas, así que sin reclamo las N se llevan las mismas filas y cada una actúa: es la propiedad que ` +
+          `el mecanismo existe para dar, y la única que ningún escenario de una sola instancia distingue —con una ` +
+          `réplica, reclamar y leer dan el mismo resultado—. El gate del generador comprueba la forma del reclamo, ` +
+          `no que reparta. Escribe uno con VARIAS filas candidatas (con una sola, la ventana en que las dos réplicas ` +
+          `coinciden es tan estrecha que pasaría por suerte), las dos instancias vivas, y un Then que cuente el ` +
+          `efecto externo RECIBIDO y afirme que ocurrió exactamente una vez por fila — recibido y no su ` +
+          `consecuencia: con idempotencia saliente declarada, el proveedor absorbería los duplicados y los escondería`
       );
     }
   }

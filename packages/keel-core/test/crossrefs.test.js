@@ -5135,3 +5135,60 @@ test('un schedule que no actúa sobre lo que encuentra no lo necesita', () => {
   });
   assert.ok(!warnings.some((w) => w.includes('purgeExpiredDrafts')), warnings.join(String.fromCharCode(10)));
 });
+
+// La frontera que la corrida `refunds-http` midió: el escenario de clúster solo se exige
+// cuando el duplicado se PUEDE VER. Allí se escribieron los dos, se rompió el reclamo a
+// propósito (`claim()` devolviendo siempre true, que deja intacta la forma que el gate mira)
+// y los dos siguieron verdes — con check-idempotency.sh verde entero. La razón: su efecto es
+// un evento publicado por el outbox, que va DENTRO de la transacción que mueve el estado, así
+// que el guard del agregado y su @Version arbitran la fila y el perdedor hace rollback.
+// Exigir ahí un escenario es exigir uno que no puede ponerse rojo.
+const barridoQuePublica = () => {
+  const layers = compLayers();
+  // El barrido deja de encargar la inscripción por HTTP y pasa a mover la fila él mismo.
+  layers.dependencies.dependencies.compliance.activations.recordWithdrawal.triggeredBy = ['retireProduct'];
+  layers['use-cases'].operations.reconcileWithdrawals.transitions = [
+    { entity: 'Product', from: ['retired'], to: 'active' }
+  ];
+  return layers;
+};
+
+test('un barrido cuyo efecto no sale de la transacción no necesita escenario de clúster', () => {
+  const { warnings } = checkCrossRefs({
+    layers: barridoQuePublica(),
+    scenarios: scenarioDoc(EFECTO, REENTREGA, SIMULTANEA)
+  });
+  assert.ok(!warnings.some((w) => w.includes('DOS INSTANCIAS')), warnings.join(String.fromCharCode(10)));
+});
+
+// Y la excepción que devuelve el caso al primer grupo: sin bloqueo optimista nadie arbitra la
+// fila, así que las dos réplicas commitean su efecto y el duplicado vuelve a ser observable.
+test('sin bloqueo optimista, el mismo barrido sí lo necesita', () => {
+  const layers = barridoQuePublica();
+  layers.persistence = { ...(layers.persistence ?? {}), consistency: { optimisticLocking: 'none' } };
+  const { warnings } = checkCrossRefs({ layers, scenarios: scenarioDoc(EFECTO, REENTREGA, SIMULTANEA) });
+  assert.ok(
+    warnings.some((w) => w.includes('operations.reconcileWithdrawals') && w.includes('DOS INSTANCIAS')),
+    warnings.join(String.fromCharCode(10))
+  );
+});
+
+// Con 'declared' la política no basta: lo que arbitra es que ESA raíz nombre el campo.
+test("con optimisticLocking 'declared' decide si la raíz declara lockVersion", () => {
+  const sinCampo = barridoQuePublica();
+  sinCampo.persistence = { ...(sinCampo.persistence ?? {}), consistency: { optimisticLocking: 'declared' } };
+  assert.ok(
+    checkCrossRefs({ layers: sinCampo, scenarios: scenarioDoc(EFECTO, REENTREGA, SIMULTANEA) }).warnings.some((w) =>
+      w.includes('DOS INSTANCIAS')
+    )
+  );
+
+  const conCampo = barridoQuePublica();
+  conCampo.persistence = { ...(conCampo.persistence ?? {}), consistency: { optimisticLocking: 'declared' } };
+  conCampo.domain.entities.Product.fields.lockVersion = { type: 'integer' };
+  assert.ok(
+    !checkCrossRefs({ layers: conCampo, scenarios: scenarioDoc(EFECTO, REENTREGA, SIMULTANEA) }).warnings.some((w) =>
+      w.includes('DOS INSTANCIAS')
+    )
+  );
+});
