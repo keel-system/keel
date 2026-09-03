@@ -637,10 +637,14 @@ function abstractImports(model) {
     'org.skyscreamer.jsonassert.JSONCompareMode'
   ];
   const containerExec = usesContainerExec(model);
-  if (reset || containerExec || oidc) imports.push('java.io.IOException');
+  if (reset || needsBrokerReseed(model) || containerExec || oidc) imports.push('java.io.IOException');
   // Resolución explícita del bash con el que se invocan los scripts de infra/: la
   // usan el reset de estado y la resiembra de topología de startBroker().
-  if (reset || needsBrokerReseed(model)) imports.push('java.io.File', 'java.util.Locale');
+  // StandardCharsets y Arrays son de `runInfraScript`, que vive en esa misma sección: lee la
+  // salida del script (la evidencia) y recorta sus últimas líneas para el mensaje del fallo.
+  if (reset || needsBrokerReseed(model)) {
+    imports.push('java.io.File', 'java.util.Locale', 'java.nio.charset.StandardCharsets', 'java.util.Arrays');
+  }
   // Motor de ejecución en contenedor (runProcess) y las dos vías que lo usan:
   // `devtools(...)` y `db(...)` construyen su lista de argumentos igual.
   if (containerExec) imports.push('java.nio.charset.StandardCharsets', 'java.util.ArrayList');
@@ -1644,18 +1648,7 @@ function resetSection(model) {
      * lista <b>no</b> se puede dar por limpio.
      */
     protected static void resetState() {${inMemoryResetCalls(model)}${restore}${stopReplicaLine}
-        try {
-            Process process = new ProcessBuilder(bashExecutable(), "infra/reset-db.sh").inheritIO().start();
-            int exit = process.waitFor();
-            if (exit != 0) {
-                throw new IllegalStateException("infra/reset-db.sh falló (código " + exit + "). ¿Está la infraestructura arriba?");
-            }${marks}
-        } catch (IOException e) {
-            throw new IllegalStateException("No se pudo ejecutar infra/reset-db.sh", e);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("Interrumpido reseteando el estado", e);
-        }
+        runInfraScript("infra/reset-db.sh", "¿Está la infraestructura arriba?");${marks}
     }
 `;
 }
@@ -1697,6 +1690,57 @@ function bashExecutableSection(model) {
             }
         }
         return "bash";
+    }
+
+    /**
+     * Ejecuta un script de {@code infra/} y <b>captura su salida</b>, que es la evidencia.
+     *
+     * <p><b>Por qué no {@code inheritIO()}</b>, que es lo que había aquí: esa salida va a los
+     * descriptores del worker de Gradle, no a {@code System.out}, así que no la recoge ni
+     * {@code build/keel-scenarios/run.log} ni el {@code system-out} del XML de JUnit. El fallo
+     * llegaba como «falló (código 1)» y nada más — imposible de diagnosticar sin reproducirlo, que
+     * es justo lo que la regla de {@code score-scenarios.sh} evita: la causa de un rojo tiene que
+     * llegar por stdout.
+     *
+     * <p><b>El probe se registra SIEMPRE</b>, no solo al fallar, y esa es la otra mitad. Un
+     * {@code @BeforeAll} que revienta deja {@code build/keel-failures/&lt;Clase&gt;-init.json}, y ese
+     * volcado resuelve el sondeo cayendo a un campo estático compartido por toda la JVM: sin
+     * registrar el reset, el volcado de esta clase podía mostrar el comando de OTRA, presentado
+     * como «el último comando ejecutado». Evidencia ajena con aspecto de propia es peor que
+     * ninguna.
+     *
+     * <p>El mensaje lleva el final de la salida y no toda: el error está al final, y el caso bueno
+     * de {@code reset-db.sh} imprime una línea por canal purgado. La salida completa viaja en el
+     * probe hasta el volcado.
+     */
+    private static void runInfraScript(String script, String hint) {
+        List<String> command = List.of(bashExecutable(), script);
+        try {
+            Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
+            String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+            int exit = process.waitFor();
+            FailureCapture.recordProbe(command, exit, output);
+            if (exit != 0) {
+                throw new IllegalStateException(
+                        script + " falló (código " + exit + "). " + hint + System.lineSeparator()
+                                + lastLines(output));
+            }
+        } catch (IOException e) {
+            throw new IllegalStateException("No se pudo ejecutar " + script, e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrumpido ejecutando " + script, e);
+        }
+    }
+
+    /** Las últimas líneas de una salida: donde está el error, sin arrastrar el resto. */
+    private static String lastLines(String output) {
+        if (output == null || output.isBlank()) {
+            return "(el script no escribió nada)";
+        }
+        String[] lines = output.strip().split("\\\\R");
+        int from = Math.max(0, lines.length - 12);
+        return String.join(System.lineSeparator(), Arrays.copyOfRange(lines, from, lines.length));
     }
 `;
 }
@@ -2388,17 +2432,8 @@ function brokerControlSection(model) {
      * idempotente a propósito.
      */
     private static void reseedTopology() {
-        try {
-            Process process = new ProcessBuilder(bashExecutable(), "infra/init-messaging.sh").inheritIO().start();
-            if (process.waitFor() != 0) {
-                throw new IllegalStateException("infra/init-messaging.sh falló al resembrar la topología tras levantar el broker");
-            }
-        } catch (IOException e) {
-            throw new IllegalStateException("No se pudo ejecutar infra/init-messaging.sh", e);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("Interrumpido resembrando la topología", e);
-        }
+        runInfraScript("infra/init-messaging.sh", "La topología no quedó sembrada tras levantar el broker, "
+                + "así que el escenario siguiente fallará por «destino inexistente» y no por lo que prueba.");
     }
 ${topologyProbeMethods(model)}${relayPauseMethods(model)}`
     : '';

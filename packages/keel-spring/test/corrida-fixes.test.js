@@ -1647,3 +1647,33 @@ test('sin outbox no se genera el helper: no hay relay que adelantarse a la parad
 
   assert.ok(!harness.includes('deliverThenTakeBrokerDown'), 'se generó el helper sin relay que pausar');
 });
+
+test('un script de infra que falla deja su salida, no solo su código', () => {
+  // La suite se paró una vez en el humo del arnés con «infra/reset-db.sh falló (código 1)» y
+  // NADA más: la salida iba por inheritIO(), o sea a los descriptores del worker de Gradle, así
+  // que no la recogía ni run.log ni el system-out del XML. Hubo que ejecutar el script a mano
+  // para saber por qué, y para entonces ya funcionaba. Es la regla de score-scenarios.sh —la
+  // causa de un rojo llega por stdout— sin aplicar aquí.
+  const harness = project('stock-reservation', SNSSQS).file('AbstractFlowIT.java');
+
+  // La aserción que de verdad protege esto: inheritIO() es lo que se vuelve a escribir por
+  // comodidad, y su única aparición legítima es el javadoc que explica por qué no.
+  const codigo = harness.split(String.fromCharCode(10)).filter((l) => !l.trim().startsWith('*'));
+  assert.ok(!codigo.join(String.fromCharCode(10)).includes('inheritIO()'), 'un script de infra volvió a tirar su salida');
+
+  const runner = harness.slice(harness.indexOf('private static void runInfraScript'), harness.indexOf('private static String lastLines'));
+  assert.match(runner, /redirectErrorStream\(true\)/);
+  assert.match(runner, /readAllBytes\(\)/);
+  // El probe se registra SIEMPRE, no solo al fallar: un @BeforeAll que revienta vuelca
+  // <Clase>-init.json, y ese volcado cae a un campo estático compartido por toda la JVM — sin
+  // registrar el reset, podía mostrar el comando de OTRA clase como «el último ejecutado».
+  const registro = runner.indexOf('FailureCapture.recordProbe(');
+  const fallo = runner.indexOf('if (exit != 0)');
+  assert.ok(registro > 0 && registro < fallo, 'el probe solo se registra al fallar');
+  // Y el mensaje lleva la salida, no solo el código.
+  assert.match(runner, /lastLines\(output\)/);
+
+  // Los dos consumidores de la sección pasan por él.
+  assert.match(harness, /runInfraScript\("infra\/reset-db\.sh"/);
+  assert.match(harness, /runInfraScript\("infra\/init-messaging\.sh"/);
+});
