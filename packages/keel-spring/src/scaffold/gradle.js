@@ -154,13 +154,18 @@ java {
     }
 }
 
-// javac lee los fuentes con el charset por DEFECTO de la plataforma, no con el del
-// archivo: en Windows eso es windows-1252, así que cada literal con acento de este
-// proyecto —que los tiene a cientos, porque los mensajes son en español— se compila
-// corrupto. No falla nada: compila, arranca y responde, y lo que sale mal es el texto
-// que un humano lee justo cuando algo ya fue mal. Se veía en los volcados de
-// build/keel-failures como «La condici?n no se cumpli?», y ahí el JSON ya se escribe
-// en UTF-8: la corrupción venía de antes, del compilador.
+// Fija el charset de los fuentes en vez de heredar el de la plataforma. Con el JDK que
+// este proyecto fija por toolchain NO hace falta —desde JDK 18, Charset.defaultCharset()
+// es UTF-8 aunque native.encoding sea Cp1252, y javac usa esa—, así que esto es blindaje
+// y no un arreglo: quita la dependencia de un default que un -Dfile.encoding, una imagen
+// de CI o un cambio de toolchain pueden mover. Los literales de este proyecto van a
+// cientos y en español, y su corrupción no rompería nada visible: compila, arranca y
+// responde, y lo que sale mal es el texto que alguien lee cuando algo ya fue mal.
+//
+// Lo que motivó añadirlo era un falso positivo, y merece quedar escrito: los volcados de
+// build/keel-failures se leían como «La condici?n no se cumpli?» a través de una consola
+// Windows en Cp1252. Los bytes del archivo siempre fueron UTF-8 correctos; el que
+// manglaba era el lector.
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
 }

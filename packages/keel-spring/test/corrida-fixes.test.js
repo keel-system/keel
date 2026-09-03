@@ -1679,12 +1679,13 @@ test('un script de infra que falla deja su salida, no solo su código', () => {
 });
 
 test('javac lee los fuentes como UTF-8, o el español del proyecto sale corrupto', () => {
-  // javac usa el charset por DEFECTO de la plataforma para leer los fuentes, no el del
-  // archivo: en Windows es windows-1252, así que cada literal con acento se compila
-  // corrupto. No falla nada —compila, arranca y responde—; lo que sale mal es el texto que
-  // un humano lee justo cuando algo ya fue mal. Se veía en los volcados de
-  // build/keel-failures como «La condici?n no se cumpli?», y el JSON ya se escribe en UTF-8:
-  // la corrupción venía del compilador.
+  // Blindaje, no arreglo, y conviene no confundirlo: con el JDK que fija la toolchain javac
+  // ya lee UTF-8 (desde JDK 18 Charset.defaultCharset() es UTF-8 aunque native.encoding sea
+  // Cp1252). Esto quita la dependencia de ese default, que un -Dfile.encoding o un cambio de
+  // toolchain pueden mover, sobre un proyecto cuyos literales son cientos y en español.
+  //
+  // Se añadió persiguiendo una corrupción que NO existía: los volcados se leían mal a través
+  // de una consola Windows en Cp1252, y los bytes del archivo siempre fueron correctos.
   const gradle = project('stock-reservation', RELATIONAL).file('build.gradle');
 
   assert.match(gradle, /tasks\.withType\(JavaCompile\)\.configureEach \{/);
