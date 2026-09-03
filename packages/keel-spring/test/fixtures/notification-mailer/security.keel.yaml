@@ -4,6 +4,14 @@ authentication:
     protocol: client-credentials
     description: Cada sistema consumidor es un cliente máquina; la aplicación se deriva del token, nunca del cuerpo.
 
+  # La identidad por la puerta HTTP, hermana de la que ya declara
+  # messaging.subscriptions.NotificationRequested.identity: el MISMO campo por las dos puertas, o
+  # la operación decidiría con una u otra sin saberlo. Con serviceClient, el cliente máquina de la
+  # credencial es quien identifica al sistema — build le pone @JsonIgnore al campo (ni se acepta
+  # del cuerpo ni sale en el OpenAPI) y lo estampa el controller.
+  callerIdentity:
+    field: applicationKey
+    from: { source: serviceClient }
 permissions:
   notification:send: { description: Pedir el envío de un correo. }
   notification:read: { description: Consultar el estado de un envío. }

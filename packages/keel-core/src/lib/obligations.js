@@ -55,6 +55,25 @@ export const OBLIGATIONS = {
     doc: 'framework-errors.md'
   },
 
+  'OBL-CALLER-IDENTITY': {
+    gapClass: 9,
+    when: 'security: se declara `serviceAuth` (clientes máquina) y alguna operación recibe campos de entrada',
+    kind: 'decision',
+    // Es exentable, y la exención es legítima: hay servicios donde quién llama no participa en el
+    // trabajo (un conversor, un validador de formato). Lo que no es legítimo es no haberlo
+    // decidido, porque el default de no decidir NO es neutro: el campo que atribuye el trabajo a
+    // un sistema se queda en el cuerpo de la petición, y entonces cualquier cliente autenticado
+    // puede escribir la clave de OTRO y operar sobre sus datos. El mecanismo existe entero
+    // —`callerIdentity` marca el campo, build le pone @JsonIgnore y lo estampa el controller
+    // desde la credencial— y ningún diseño lo había declarado jamás: 9 con `serviceAuth`, 0 con
+    // `callerIdentity`. Un mecanismo que nadie usa porque nadie lo pide.
+    waivable: true,
+    title: 'con clientes máquina, no está decidido si la identidad del llamante entra en el trabajo',
+    closes:
+      '`authentication.callerIdentity` nombrando el campo del input que la recibe y de dónde sale (el cliente máquina o un claim), o exención razonada si quién llama no participa en el trabajo',
+    doc: 'dsl/security.md'
+  },
+
   'OBL-RESOURCE-SCOPE': {
     gapClass: 9,
     when: 'use-cases: una operación protegida por rol declara un error 403',

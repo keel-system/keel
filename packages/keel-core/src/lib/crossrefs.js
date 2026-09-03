@@ -1077,6 +1077,41 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
     }
   }
 
+  // La identidad del llamante, con clientes máquina. El mecanismo existe entero
+  // (`authentication.callerIdentity`: build marca el campo con @JsonIgnore —ni bindeable ni
+  // visible en el OpenAPI— y lo estampa el controller desde la credencial), y hasta esta regla
+  // NINGÚN diseño lo había declarado: nueve con `serviceAuth`, cero con `callerIdentity`. Un
+  // mecanismo que nadie usa porque nadie lo pide.
+  //
+  // Y no decidirlo no es neutro. El campo que atribuye el trabajo a un sistema —el que dice de
+  // quién es la plantilla, el envío, el documento— se queda en el CUERPO de la petición, así que
+  // cualquier cliente autenticado puede escribir la clave de otro y operar sobre sus datos. Se
+  // detectó a mano en la corrida `mail-guard`, leyendo el controller generado; no lo cazaba nada.
+  //
+  // El disparador es deliberadamente simple: hay clientes máquina y hay entrada. Afinarlo
+  // —adivinar QUÉ campo es el que atribuye— exigiría leer prosa, y una regla que adivina se
+  // equivoca en los dos sentidos. La pregunta se contesta una vez por diseño, en una línea.
+  if (security?.authentication?.serviceAuth && !security?.authentication?.callerIdentity) {
+    const conEntrada = Object.entries(operations).filter(
+      ([, op]) => Object.keys(op?.input?.fields ?? {}).length > 0
+    );
+    if (conEntrada.length > 0) {
+      const nombres = conEntrada.map(([name]) => name);
+      const listado = nombres.length > 3 ? `${nombres.slice(0, 3).join(', ')} y ${nombres.length - 3} más` : nombres.join(', ');
+      obligation(
+        'OBL-CALLER-IDENTITY',
+        'security',
+        `el diseño declara clientes máquina ('serviceAuth') y ${nombres.length === 1 ? 'la operación' : 'las operaciones'} ` +
+          `${listado} reciben campos de entrada, pero no se declara 'authentication.callerIdentity': no está dicho si la ` +
+          `identidad de QUIÉN llama entra en el trabajo. No decidirlo no es neutro — el campo que atribuye el trabajo a un ` +
+          `sistema se queda en el cuerpo de la petición, y entonces un cliente autenticado puede escribir la clave de OTRO y ` +
+          `operar sobre sus datos. Si participa, nómbralo: 'callerIdentity' con el campo del input que la recibe y de dónde ` +
+          `sale (el propio cliente máquina, o un claim), y build deja de aceptarlo del cuerpo y lo estampa desde la ` +
+          `credencial. Si no participa —quién llama no cambia el trabajo—, acéptalo por escrito`
+      );
+    }
+  }
+
   // messaging: canales, payloads y triggers
   const checkChannel = (channel, where) => {
     if (!channel) return;

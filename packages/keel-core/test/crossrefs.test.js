@@ -5192,3 +5192,74 @@ test("con optimisticLocking 'declared' decide si la raíz declara lockVersion", 
     )
   );
 });
+
+// ---------------------------------------------------------------------------
+// La identidad del llamante con clientes máquina. El mecanismo (`callerIdentity`)
+// existía entero —build le pone @JsonIgnore al campo y lo estampa el controller
+// desde la credencial— y NINGÚN diseño lo había declarado nunca: nueve con
+// `serviceAuth`, cero con `callerIdentity`. Nadie lo pedía.
+// ---------------------------------------------------------------------------
+
+const conClientesMaquina = (security = {}, operations = null) => ({
+  domain: {
+    entities: { Doc: entity({ owner: { type: 'string', required: true } }) },
+    aggregates: { Doc: { root: 'Doc', entities: [] } }
+  },
+  'use-cases': {
+    operations: operations ?? {
+      submitDoc: {
+        description: 'Registra un documento del sistema que llama.',
+        kind: 'command',
+        input: { fields: { owner: { type: 'string', required: true }, title: { type: 'string', required: true } } },
+        output: { entity: 'Doc' }
+      }
+    }
+  },
+  security: {
+    authentication: {
+      protocol: 'oidc',
+      serviceAuth: { protocol: 'client-credentials' },
+      ...security
+    },
+    permissions: { 'doc:write': { description: 'Escribir documentos.' } },
+    serviceClients: { 'orders-service': { description: 'Pedidos.', scopes: ['doc:write'] } },
+    access: { default: { level: 'service', scopes: ['doc:write'] } }
+  }
+});
+
+test('con clientes máquina y sin callerIdentity se levanta la obligación', () => {
+  const { obligations } = run(conClientesMaquina());
+  assert.ok(
+    obligations.some(
+      (item) => item.id === 'OBL-CALLER-IDENTITY' && item.message.includes('submitDoc') && item.message.includes('cuerpo de la petición')
+    ),
+    JSON.stringify(obligations)
+  );
+});
+
+test('declarar callerIdentity la cierra', () => {
+  const { obligations } = run(
+    conClientesMaquina({ callerIdentity: { field: 'owner', from: { source: 'serviceClient' } } })
+  );
+  assert.ok(!obligations.some((item) => item.id === 'OBL-CALLER-IDENTITY'), JSON.stringify(obligations));
+});
+
+// Sin entrada no hay campo que estampar, así que no hay decisión que tomar: un servicio de
+// solo lectura no tiene dónde colarse una clave ajena.
+test('sin operaciones con input.fields no se pide nada', () => {
+  const { obligations } = run(
+    conClientesMaquina({}, {
+      listDocs: { description: 'Lista los documentos.', kind: 'query', input: 'void', output: { entity: 'Doc' } }
+    })
+  );
+  assert.ok(!obligations.some((item) => item.id === 'OBL-CALLER-IDENTITY'), JSON.stringify(obligations));
+});
+
+// Sin clientes máquina la pregunta no aplica: la identidad de un USUARIO es otro eje, y el
+// disparador tiene que ser el que el DSL declara, no una intuición.
+test('sin serviceAuth no aplica', () => {
+  const layers = conClientesMaquina();
+  delete layers.security.authentication.serviceAuth;
+  const { obligations } = run(layers);
+  assert.ok(!obligations.some((item) => item.id === 'OBL-CALLER-IDENTITY'), JSON.stringify(obligations));
+});

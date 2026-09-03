@@ -13,6 +13,15 @@ decisions:
       Misma clave con otro cuerpo devuelve el canónico 409 IDEMPOTENCY_KEY_REUSED.
       El bucket no distingue ese caso de ningún otro conflicto de negocio.
     since: 1.0.0
+  - id: OBL-CALLER-IDENTITY
+    scope: security
+    reason: >
+      Quien llama no participa en el trabajo. El único cliente máquina declarado
+      (rendering-service) solo LEE: no sube ni publica nada, así que no hay campo que el
+      servidor deba estampar desde su credencial. El ownerId de uploadAsset es un dato de
+      negocio —de quién es el archivo—, no la identidad de quien hace la petición, y
+      confundirlos habría atado la propiedad del activo a la credencial que lo subió.
+    since: 1.0.0
 
 coverage:
   - gapClass: 4

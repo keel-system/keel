@@ -237,6 +237,11 @@ El hueco más caro y el que ninguna regla mecánica puede ver. **Ningún hallazg
 
 Esta clase y la 8 son **simétricas**: aquí se examina la superficie que **ofrecemos** a otros servidores; la clase 8 examina la que **consumimos** (capa `dependencies`). Recórrelas juntas — un mismo servicio suele estar a los dos lados, y los criterios de calidad se reflejan (un endpoint de lote que le falta a nuestro proveedor es el mismo hueco que un `need` nuestro que obligaría a N llamadas).
 
+- **¿La identidad de quién llama entra en el trabajo?** Si el sistema que llama determina sobre QUÉ datos se opera —sus
+  plantillas, sus envíos, sus documentos—, eso se declara con `authentication.callerIdentity`, y entonces el campo deja de
+  viajar en el cuerpo: lo estampa el servidor desde la credencial. No decidirlo **no es neutro**: el campo se queda en la
+  petición y cualquier cliente autenticado puede escribir la clave de otro y operar sobre sus datos. Es la obligación
+  `OBL-CALLER-IDENTITY`, y se cierra en una línea o se acepta por escrito (hay servicios donde quién llama da igual).
 - ¿Cada endpoint de máquina tiene un `serviceClient` que lo consuma? Y al revés: ¿cada scope concedido lo exige alguien?
 - ¿El contrato está pensado **para servidores**, o es el de usuarios reutilizado? Señales de hueco: el consumidor tendría que llamar N veces (falta un endpoint de lote), o recibe un DTO de pantalla en vez de datos.
 - ¿Qué garantías de **estabilidad** tiene ese contrato? Es el que otro equipo va a acoplarse.

@@ -235,7 +235,12 @@ function renderMessage(model, operation) {
 
     const annotations = [];
     const notes = [];
-    if (!fromPath.has(component.name)) {
+    // La identidad del llamante no se valida como si viniera del cuerpo, porque NO viene: con
+    // `@JsonIgnore` Jackson no la bindea, así que llega nula y un `@NotBlank` la rechazaría con un
+    // 400 ANTES de que el controller pueda estamparla — toda petición legítima, incluida la del
+    // camino feliz. El valor lo pone el servidor desde la credencial, y su presencia la garantiza
+    // la cadena de seguridad: sin token no se llega hasta aquí.
+    if (!fromPath.has(component.name) && !component.resolvedIdentity) {
       // Entrada: sin el formato heredado del value type, que el diseño puede estar
       // normalizando en el handler (mapping.md § Normalización antes que validación
       // de formato). Presencia, tamaño y rango sí se quedan: no compiten con

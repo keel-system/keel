@@ -1722,3 +1722,28 @@ test('con el value object OBLIGATORIO no se emite guarda: no puede faltar', () =
   assert.match(impl, /new Money\(jpa\.getPriceAmount\(\), jpa\.getPriceCurrency\(\)\)/);
   assert.ok(!impl.includes('getPriceAmount() == null ? null'), 'guarda innecesaria sobre un campo obligatorio');
 });
+
+// ---------------------------------------------------------------------------
+// La identidad del llamante no lleva validación de CUERPO. Con @JsonIgnore, Jackson no
+// bindea el campo, así que llega nulo: un @NotBlank lo rechazaría con 400 antes de que el
+// controller pudiera estamparlo — toda petición legítima, incluida la del camino feliz.
+// Se destapó declarando por fin `callerIdentity` en notification-mailer, un mecanismo que
+// el DSL tenía desde hacía versiones y que ningún diseño había usado nunca.
+// ---------------------------------------------------------------------------
+const MAILER_STACK = { group: 'com.platform', database: 'postgresql', broker: 'snssqs', auth: 'keycloak', cache: null, storage: null };
+
+test('el campo de callerIdentity sale con @JsonIgnore y SIN validación de cuerpo', () => {
+  const command = project('notification-mailer', MAILER_STACK).file('RequestNotificationCommand.java');
+  const linea = command.split('\n').find((l) => l.includes('String applicationKey'));
+  assert.ok(linea.includes('@JsonIgnore'), linea);
+  assert.ok(!linea.includes('@NotBlank'), `la identidad no puede exigirse en el cuerpo: ${linea}`);
+  // Y el otro campo del mismo record sí la conserva: el arreglo no puede llevarse por delante
+  // la validación de los campos que SÍ vienen del cliente.
+  const vecino = command.split('\n').find((l) => l.includes('String templateKey'));
+  assert.ok(vecino.includes('@NotBlank'), vecino);
+});
+
+test('el controller estampa la identidad desde la credencial', () => {
+  const controller = project('notification-mailer', MAILER_STACK).file('NotificationV1Controller.java');
+  assert.ok(controller.includes('CallerIdentity.resolve()'), controller);
+});
