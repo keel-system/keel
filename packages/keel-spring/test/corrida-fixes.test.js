@@ -1677,3 +1677,19 @@ test('un script de infra que falla deja su salida, no solo su código', () => {
   assert.match(harness, /runInfraScript\("infra\/reset-db\.sh"/);
   assert.match(harness, /runInfraScript\("infra\/init-messaging\.sh"/);
 });
+
+test('javac lee los fuentes como UTF-8, o el español del proyecto sale corrupto', () => {
+  // javac usa el charset por DEFECTO de la plataforma para leer los fuentes, no el del
+  // archivo: en Windows es windows-1252, así que cada literal con acento se compila
+  // corrupto. No falla nada —compila, arranca y responde—; lo que sale mal es el texto que
+  // un humano lee justo cuando algo ya fue mal. Se veía en los volcados de
+  // build/keel-failures como «La condici?n no se cumpli?», y el JSON ya se escribe en UTF-8:
+  // la corrupción venía del compilador.
+  const gradle = project('stock-reservation', RELATIONAL).file('build.gradle');
+
+  assert.match(gradle, /tasks\.withType\(JavaCompile\)\.configureEach \{/);
+  assert.match(gradle, /options\.encoding = 'UTF-8'/);
+  // withType y no solo `compileJava`: son TRES source sets —main, test e integrationTest— y
+  // el del arnés es justo el que compone los mensajes de diagnóstico.
+  assert.ok(!gradle.includes("compileJava.options.encoding"), 'solo cubriría un source set');
+});

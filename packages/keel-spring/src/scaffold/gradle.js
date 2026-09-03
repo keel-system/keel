@@ -154,6 +154,17 @@ java {
     }
 }
 
+// javac lee los fuentes con el charset por DEFECTO de la plataforma, no con el del
+// archivo: en Windows eso es windows-1252, así que cada literal con acento de este
+// proyecto —que los tiene a cientos, porque los mensajes son en español— se compila
+// corrupto. No falla nada: compila, arranca y responde, y lo que sale mal es el texto
+// que un humano lee justo cuando algo ya fue mal. Se veía en los volcados de
+// build/keel-failures como «La condici?n no se cumpli?», y ahí el JSON ya se escribe
+// en UTF-8: la corrupción venía de antes, del compilador.
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
 repositories {
     mavenCentral()
 }
