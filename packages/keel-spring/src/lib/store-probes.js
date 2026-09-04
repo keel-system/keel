@@ -27,7 +27,11 @@
 
 import { outboxNames, usesOutbox } from '../scaffold/outbox.js';
 import { processedEventNames, usesIdempotency } from '../scaffold/idempotency.js';
-import { declaresIdempotency, idempotentOperations } from '../scaffold/http-idempotency.js';
+import {
+  declaresIdempotency,
+  idempotentOperations,
+  idempotencyRecordNames
+} from '../scaffold/http-idempotency.js';
 import { reconciliationClaims } from '../scaffold/reconciliation-claim.js';
 // La MISMA derivación que usa claim-check para sembrar una fila: los NOT NULL de la entidad, no
 // una lista escrita a mano. Una segunda copia se separa, y el día que se separe el síntoma será
@@ -611,6 +615,7 @@ ${midiendoElContenedor(model)}
 
 function relationalIdempotencyClass(model, subjects, { datasource, packages }) {
   const { entity: processedClass, repository: processedRepo } = processedEventNames(model);
+  const registro = idempotencyRecordNames(model);
   const properties = [
     `"spring.datasource.url=${datasource.url}"`,
     `"spring.datasource.username=${datasource.username}"`,
@@ -642,7 +647,7 @@ class ${CLASS_IDEMPOTENCY} {
     void transacciones(PlatformTransactionManager manager) {
         this.tx = new TransactionTemplate(manager);
     }
-${commandMembers(subjects)}${dedupeMembers(subjects, processedRepo)}${
+${commandMembers(subjects, registro)}${registroDeHelper(subjects, registro)}${dedupeMembers(subjects, processedRepo)}${
     subjects.commandIdempotency ? commandTests('La clave primaria de la tabla') : ''
   }${subjects.dedupe ? dedupeTests(processedClass, processedRepo, true) : ''}
 }`;
@@ -652,7 +657,11 @@ ${commandMembers(subjects)}${dedupeMembers(subjects, processedRepo)}${
     [
       ...(subjects.commandIdempotency
         ? [
-            `${packages.commandStore}.JpaIdempotencyStore`,
+            // El almacén, su repositorio y su espejo viven los tres en el mismo paquete, así que
+            // `packages.commandStore` sirve para los tres. Los nombres salen del generador.
+            `${packages.commandStore}.${registro.store}`,
+            `${packages.commandStore}.${registro.repository}`,
+            `${packages.commandStore}.${registro.entity}`,
             `${packages.storePort}.IdempotencyStore`,
             `${packages.conflict}.IdempotencyConflictException`
           ]
@@ -682,6 +691,7 @@ ${commandMembers(subjects)}${dedupeMembers(subjects, processedRepo)}${
 
 function documentIdempotencyClass(model, subjects, { datasource, packages }) {
   const { entity: processedClass, repository: processedRepo } = processedEventNames(model);
+  const registro = idempotencyRecordNames(model);
   const properties = [`"spring.data.mongodb.uri=${datasource.uri}"`, '"spring.profiles.active="'];
 
   const importados = [
@@ -707,7 +717,7 @@ class ${CLASS_IDEMPOTENCY} {
 
     @Autowired
     private MongoTemplate mongo;
-${commandMembers(subjects)}${dedupeMembers(subjects, processedRepo)}${midiendoElContenedor(model)}${
+${commandMembers(subjects, registro)}${registroDeHelper(subjects, registro)}${dedupeMembers(subjects, processedRepo)}${midiendoElContenedor(model)}${
     subjects.commandIdempotency ? commandTests('El _id de la colección') : ''
   }${subjects.dedupe ? dedupeTests(processedClass, processedRepo, false) : ''}
 }`;
@@ -717,7 +727,9 @@ ${commandMembers(subjects)}${dedupeMembers(subjects, processedRepo)}${midiendoEl
     [
       ...(subjects.commandIdempotency
         ? [
-            `${packages.commandStore}.MongoIdempotencyStore`,
+            `${packages.commandStore}.${registro.store}`,
+            `${packages.commandStore}.${registro.repository}`,
+            `${packages.commandStore}.${registro.entity}`,
             `${packages.storePort}.IdempotencyStore`,
             `${packages.conflict}.IdempotencyConflictException`
           ]
@@ -745,11 +757,37 @@ ${commandMembers(subjects)}${dedupeMembers(subjects, processedRepo)}${midiendoEl
 
 // ─── Piezas compartidas por las dos ramas ────────────────────────────────────
 
-function commandMembers(subjects) {
+function commandMembers(subjects, nombres) {
   if (!subjects.commandIdempotency) return '';
   return `
     @Autowired
     private IdempotencyStore claves;
+
+    // El almacén CONCRETO, no el puerto: \`purge()\` no está en la interfaz —su único llamante es
+    // el @Scheduled— y es justo la mitad que no ejercitaba nadie.
+    @Autowired
+    private ${nombres.store} almacen;
+
+    // Y el repositorio, porque es lo único que VE el efecto de la purga: \`find\` filtra por
+    // caducidad, así que devuelve vacío tanto si la fila se borró como si sigue ahí.
+    @Autowired
+    private ${nombres.repository} registros;
+`;
+}
+
+/**
+ * ¿Sigue existiendo la fila de esa clave?
+ *
+ * Es el mismo papel que `marcaDe(...)` en la clase de reconciliación, y existe por lo mismo: el
+ * efecto de la purga no se puede observar por la API del almacén. Las dos ramas comparten el texto
+ * porque el id compuesto se construye igual; lo único que cambia es la clase del espejo.
+ */
+function registroDeHelper(subjects, registro) {
+  if (!subjects.commandIdempotency) return '';
+  return `
+    private boolean registroDe(String scope, String clave) {
+        return registros.findById(new ${registro.entity}.IdempotencyRecordId(scope, clave)).isPresent();
+    }
 `;
 }
 
@@ -817,6 +855,29 @@ function commandTests(arbitro) {
 
         assertEquals("recurso-2", claves.find(SCOPE + "-otra", clave).orElseThrow().resourceId(),
                 "el scope no participa en la clave");
+    }
+
+    @Test
+    void laPurgaSeLlevaLasClavesCADUCADASYSOLOEsas() {
+        // El cron diario, que era la última consulta de estos mecanismos sin ejecutar. Sus dos
+        // desenlaces malos son asimétricos y el segundo es el caro: si no borra nada, la tabla
+        // crece sin tope; si borra de más, se lleva las claves VIVAS, la ventana de deduplicación
+        // se colapsa a la cadencia del cron y un reintento del cliente ejecuta el comando DOS
+        // VECES — un cobro repetido, un pedido duplicado. Y no hay señal de ninguna de las dos:
+        // ni excepción, ni log, y \`find\` devuelve vacío igual que si la clave fuera nueva.
+        String caducada = UUID.randomUUID().toString();
+        String viva = UUID.randomUUID().toString();
+        // TTL negativo, no cero: con cero la fila caduca en el mismo instante en que se escribe y
+        // el Instant.now() de la purga cae milisegundos después — si la columna redondeara al
+        // segundo, el corte podría quedar por debajo y el caso sería intermitente.
+        claves.save(SCOPE, caducada, "firma-1", "recurso-1", -60L);
+        claves.save(SCOPE, viva, "firma-2", "recurso-2", 3600L);
+
+        almacen.purge();
+
+        assertFalse(registroDe(SCOPE, caducada), "la purga no se llevó la clave caducada: la tabla crece sin tope");
+        assertTrue(registroDe(SCOPE, viva),
+                "la purga borró una clave VIVA: la ventana de deduplicación se colapsa y un reintento ejecuta el comando dos veces");
     }
 
     @Test

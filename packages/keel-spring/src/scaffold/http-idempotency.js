@@ -27,6 +27,28 @@ const ADAPTER_PKG = 'infrastructure.persistence.idempotency';
 const WEB_PKG = 'infrastructure.web';
 
 /**
+ * Nombres del espejo persistido del registro de claves, que cambian con el modelo pero no su
+ * papel. Mismo helper que `outboxNames()` y `processedEventNames()`, y por el mismo motivo: son
+ * la superficie que consume `src/lib/store-probes.js` para ejercitar este almacén contra el motor
+ * real, y componerlos allí a mano dejaría tres nombres duplicados que un rename separa en
+ * silencio — el JUnit dejaría de compilar y el runner solo sabría decir «la suite no llegó a
+ * ejecutarse», que no distingue un generador roto de un check desincronizado.
+ */
+export function idempotencyRecordNames(model) {
+  return model.persistenceKind === 'document'
+    ? {
+        entity: 'IdempotencyRecordDocument',
+        repository: 'IdempotencyRecordMongoRepository',
+        store: 'MongoIdempotencyStore'
+      }
+    : {
+        entity: 'IdempotencyRecordJpa',
+        repository: 'IdempotencyRecordJpaRepository',
+        store: 'JpaIdempotencyStore'
+      };
+}
+
+/**
  * ¿Alguna operación necesita el REGISTRO de claves? (independiente del stack)
  *
  * No basta con que declare `idempotency`: una operación cuya guarda es la clave natural del

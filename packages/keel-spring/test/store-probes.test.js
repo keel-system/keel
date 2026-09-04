@@ -20,6 +20,9 @@ import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
 import { loadService } from 'keel-core';
 import { buildModel } from '../src/lib/model.js';
+// Los nombres del espejo del registro de claves salen del generador, no de este test: es la
+// misma fuente que consume store-probes.js para emitir el JUnit.
+import { idempotencyRecordNames } from '../src/scaffold/http-idempotency.js';
 import { scaffoldService } from '../src/scaffold/index.js';
 import {
   storeSubjects,
@@ -113,7 +116,7 @@ for (const caso of PAR) {
   });
 
   test(`${etiqueta}: el JUnit nombra métodos que el generador emite de verdad`, () => {
-    const { clases, subjects, fuenteDe } = prepara(caso);
+    const { model, clases, subjects, fuenteDe } = prepara(caso);
     const outbox = claseDe(clases, CLASS_OUTBOX).content;
     const idem = claseDe(clases, CLASS_IDEMPOTENCY).content;
 
@@ -148,7 +151,28 @@ for (const caso of PAR) {
       assert.ok(puerto.includes(`${metodo}(String scope`), `IdempotencyStore ya no expone ${metodo}`);
       assert.ok(idem.includes(`claves.${metodo}(`), `el JUnit no ejercita ${metodo}`);
     }
-    // Y la purga, que cambia de nombre con el modelo y es otra cadena que nadie ejecuta.
+    // La purga del almacén de CLAVES: el método vive en la clase concreta, no en el puerto, y su
+    // consulta cambia de nombre con el modelo. Era la última consulta de estos mecanismos sin
+    // ejecutar, y su fallo caro es borrar de MÁS: se lleva las claves vivas y un reintento del
+    // cliente ejecuta el comando dos veces.
+    const registro = idempotencyRecordNames(model);
+    const almacenSrc = fuenteDe(`${registro.store}.java`);
+    assert.ok(almacenSrc.includes('public void purge()'), `${registro.store} ya no expone purge()`);
+    assert.ok(idem.includes('almacen.purge();'), 'el JUnit no ejercita la purga del almacén de claves');
+
+    const consultaPurga = subjects.document ? 'deleteByExpiresAtBefore' : 'deleteExpiredBefore';
+    assert.ok(
+      fuenteDe(`${registro.repository}.java`).includes(`${consultaPurga}(`),
+      `${registro.repository} ya no expone ${consultaPurga}`
+    );
+    // Y se observa por el repositorio, que es lo único que ve el efecto: `find` filtra por
+    // caducidad y devolvería vacío tanto si la fila se borró como si sigue ahí.
+    assert.ok(
+      idem.includes(`registros.findById(new ${registro.entity}.IdempotencyRecordId(`),
+      'el JUnit no observa la fila: no podría distinguir una purga que borra de una que no'
+    );
+
+    // Y la purga de PROCESADOS, que cambia de nombre con el modelo y es otra cadena que nadie ejecuta.
     const purga = subjects.document ? 'deleteByProcessedAtBefore' : 'deleteProcessedBefore';
     assert.ok(fuenteDe(subjects.document ? 'ProcessedEventMongoRepository.java' : 'ProcessedEventJpaRepository.java')
       .includes(`${purga}(`), `el repositorio de procesados ya no expone ${purga}`);
