@@ -743,7 +743,12 @@ function abstractImports(model) {
       'java.net.http.HttpResponse',
       'java.io.IOException',
       // Log de peticiones del stub: las cabeceras llegan como objeto (stubRequestHeader).
-      'java.util.Map'
+      'java.util.Map',
+      // El registro de rutas ya secuenciadas (stubSequence): programar dos veces la misma
+      // encadenaría desde un estado que la primera dejó atrás, y el segundo escenario mediría
+      // el mapping de otro. Se falla en el sitio en vez de dejarlo pasar.
+      'java.util.HashSet',
+      'java.util.Set'
     );
   }
   // Estado en memoria de la aplicación que el reset por CLI no alcanza.
@@ -1449,11 +1454,7 @@ function httpStubSection(model) {
      * estado global y hace que el orden de ejecución decida el resultado.
      */
     protected static void stubFor(String method, String pathPattern, int status, String jsonBody) {
-        String mapping = """
-                {"request": {"method": "%s", "urlPathPattern": "%s"},
-                 "response": {"status": %d, "headers": {"Content-Type": "application/json"}, "body": %s}}"""
-                .formatted(method, pathPattern, status, jsonBody == null ? "\\"\\"" : quote(jsonBody));
-        stubAdmin("/mappings", mapping);
+        stubMapping(method, pathPattern, stubOkBody(status, jsonBody), null, null, null);
     }
 
     /**
@@ -1477,11 +1478,7 @@ function httpStubSection(model) {
      * que el generador lista en {@code retry-exceptions} para {@code connection}.
      */
     protected static void stubConnectionFault(String method, String pathPattern) {
-        String mapping = """
-                {"request": {"method": "%s", "urlPathPattern": "%s"},
-                 "response": {"fault": "CONNECTION_RESET_BY_PEER"}}"""
-                .formatted(method, pathPattern);
-        stubAdmin("/mappings", mapping);
+        stubMapping(method, pathPattern, stubFaultBody(), null, null, null);
     }
 
     /**
@@ -1493,13 +1490,141 @@ function httpStubSection(model) {
      * {@code ResourceAccessException}, igual que el corte de conexión.
      */
     protected static void stubTimeout(String method, String pathPattern, int delayMs) {
-        String mapping = """
-                {"request": {"method": "%s", "urlPathPattern": "%s"},
-                 "response": {"status": 200, "fixedDelayMilliseconds": %d,
-                              "headers": {"Content-Type": "application/json"}, "body": "{}"}}"""
-                .formatted(method, pathPattern, delayMs);
-        stubAdmin("/mappings", mapping);
+        stubMapping(method, pathPattern, stubSlowBody(delayMs), null, null, null);
     }
+
+    /** Rutas con secuencia ya programada. {@link #resetStubs()} lo vacía entre clases. */
+    private static final Set<String> SEQUENCED = new HashSet<>();
+
+    /**
+     * Una respuesta programada del proveedor, para {@link #stubSequence}.
+     *
+     * <p>Las cuatro formas son las mismas que ya tienen helper de un disparo y comparten con
+     * ellos el renderizado. Escribirlas dos veces se separa a la primera que alguien cambie una
+     * cabecera o el nombre del fault, y el síntoma sería un escenario que mide otra cosa.
+     */
+    protected record StubResponse(String json) {
+
+        /** Respuesta normal, con su cuerpo. */
+        public static StubResponse ok(int status, String jsonBody) {
+            return new StubResponse(stubOkBody(status, jsonBody));
+        }
+
+        /** Fallo sin cuerpo útil: un 5xx es reintentable, un 4xx no. */
+        public static StubResponse failure(int status) {
+            return new StubResponse(stubOkBody(status, "{}"));
+        }
+
+        /**
+         * No contesta a tiempo. {@code delayMs} tiene que superar el {@code timeoutMs} declarado
+         * para esa llamada, o el escenario mide una respuesta lenta y no un timeout.
+         */
+        public static StubResponse timeout(int delayMs) {
+            return new StubResponse(stubSlowBody(delayMs));
+        }
+
+        /** Corta la conexión antes de responder. */
+        public static StubResponse connectionFault() {
+            return new StubResponse(stubFaultBody());
+        }
+    }
+
+    /**
+     * Programa respuestas DISTINTAS para llamadas sucesivas a la misma ruta.
+     *
+     * <p>Es lo que hace escribible un escenario de REINTENTO: «falla la primera, responde bien la
+     * segunda, y comprueba que la segunda petición repite la misma cabecera de idempotencia». Con
+     * un solo mapping por ruta eso no se puede expresar —la respuesta es fija— y un escenario así
+     * se queda sin traducir. Pasó: en la corrida refunds-rabbit el escenario del reintento contra
+     * el libro mayor se reportó NO_EJERCITADO por esto, y con él la idempotencia SALIENTE se
+     * quedó sin medir en toda la corrida.
+     *
+     * <p><b>La última respuesta se queda pegada.</b> Una tercera llamada vuelve a recibirla en vez
+     * de no casar con nada: si el estado avanzara más allá del último mapping el proveedor
+     * devolvería 404, y el escenario fallaría por el stub en vez de por lo que mide — que es
+     * indistinguible de un defecto del servicio hasta que alguien lee el log de WireMock.
+     *
+     * <p>Una ruta admite UNA secuencia por escenario. Programarla dos veces encadenaría desde un
+     * estado que la primera ya dejó atrás, así que se falla en el sitio y con el nombre delante.
+     *
+     * <pre>{@code
+     * stubSequence("POST", "/entries",
+     *         StubResponse.timeout(3000),
+     *         StubResponse.ok(201, "{}"));
+     * // …la acción que dispara la llamada…
+     * List<String> peticiones = stubRequests("POST", "/entries");
+     * assertEquals(2, peticiones.size());
+     * assertEquals(stubRequestHeader(peticiones.get(0), "Idempotency-Key"),
+     *              stubRequestHeader(peticiones.get(1), "Idempotency-Key"));
+     * }</pre>
+     */
+    protected static void stubSequence(String method, String pathPattern, StubResponse... responses) {
+        if (responses.length < 2) {
+            throw new IllegalArgumentException(
+                    "stubSequence con menos de dos respuestas no es una secuencia: para una sola usa"
+                            + " stubFor, stubFailure, stubTimeout o stubConnectionFault");
+        }
+        String key = method + " " + pathPattern;
+        if (!SEQUENCED.add(key)) {
+            throw new IllegalStateException(
+                    "ya hay una secuencia programada para " + key + " en este escenario: la segunda"
+                            + " encadenaría desde un estado que la primera dejó atrás. Programa una sola.");
+        }
+        String scenario = "seq-" + Integer.toHexString(key.hashCode());
+        String state = "Started";
+        for (int i = 0; i < responses.length; i++) {
+            String next = i == responses.length - 1 ? null : scenario + "-" + (i + 1);
+            stubMapping(method, pathPattern, responses[i].json(), scenario, state, next);
+            state = next;
+        }
+    }
+
+    /** El cuerpo de una respuesta normal del stub. Fuente única de su forma. */
+    private static String stubOkBody(int status, String jsonBody) {
+        return """
+                {"status": %d, "headers": {"Content-Type": "application/json"}, "body": %s}"""
+                .formatted(status, jsonBody == null ? "\\"\\"" : quote(jsonBody));
+    }
+
+    /** El cuerpo de una respuesta que tarda más de lo tolerado. */
+    private static String stubSlowBody(int delayMs) {
+        return """
+                {"status": 200, "fixedDelayMilliseconds": %d,
+                 "headers": {"Content-Type": "application/json"}, "body": "{}"}"""
+                .formatted(delayMs);
+    }
+
+    /** El cuerpo de un corte de conexión, que no es una respuesta HTTP. */
+    private static String stubFaultBody() {
+        return """
+                {"fault": "CONNECTION_RESET_BY_PEER"}""";
+    }
+
+    /**
+     * Registra un mapping en el proveedor. Con {@code scenario} no nulo el mapping solo responde
+     * en ese estado de la máquina y deja el siguiente, que es lo que encadena una secuencia.
+     *
+     * <p>El JSON se compone con {@link #quote}, no con comillas a mano: el patrón de ruta es una
+     * REGEX y puede traer barras o comillas, que interpoladas en crudo rompen el mapping — y el
+     * stub lo rechaza con un 400 que no dice de qué escenario venía.
+     */
+    private static void stubMapping(String method, String pathPattern, String responseJson,
+            String scenario, String requiredState, String nextState) {
+        StringBuilder mapping = new StringBuilder("{");
+        if (scenario != null) {
+            mapping.append(quote("scenarioName")).append(": ").append(quote(scenario)).append(", ")
+                    .append(quote("requiredScenarioState")).append(": ").append(quote(requiredState)).append(", ");
+            if (nextState != null) {
+                mapping.append(quote("newScenarioState")).append(": ").append(quote(nextState)).append(", ");
+            }
+        }
+        mapping.append(quote("request")).append(": {")
+                .append(quote("method")).append(": ").append(quote(method)).append(", ")
+                .append(quote("urlPathPattern")).append(": ").append(quote(pathPattern)).append("}, ")
+                .append(quote("response")).append(": ").append(responseJson).append("}");
+        stubAdmin("/mappings", mapping.toString());
+    }
+
 
     /**
      * Cuántas veces llamó el servidor al proveedor. Es la única forma de afirmar
@@ -1546,8 +1671,11 @@ function httpStubSection(model) {
         return null;
     }
 
-    /** Borra los mappings y el log de peticiones. Lo llama {@link #resetState()}. */
+    /** Borra los mappings, el log de peticiones y las secuencias. Lo llama {@link #resetState()}. */
     protected static void resetStubs() {
+        // El registro de secuencias va con los mappings: si sobreviviera al reset, la clase
+        // siguiente no podría programar la misma ruta y fallaría por el guard, no por su escenario.
+        SEQUENCED.clear();
         stubAdmin("/reset", "");
     }
 

@@ -32,7 +32,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadService } from 'keel-core';
-import { deadLetterDestination, subscriptionDestination } from '../src/lib/dead-letter.js';
+import { deadLetterDestination, subscriptionDestination, publishedDestination } from '../src/lib/dead-letter.js';
 import { resolveStack, scaffoldService } from '../src/scaffold/index.js';
 import { buildModel } from '../src/lib/model.js';
 // El catálogo, no la lista de ids que exporta broker-probes con el mismo nombre: de
@@ -922,11 +922,21 @@ function checkBroker(broker, runtimeInfo) {
     // el canal propio se lee de una cola homónima (publishedDestination) y el ajeno de la
     // cola del consumidor (subscriptionDestination). Componerlos aquí a mano sería volver a
     // medir una topología distinta de la que se genera.
+    //
+    // Y eso es exactamente lo que pasaba: el comentario decía `publishedDestination` y la
+    // línea de abajo escribía `{ exchange: topic, queue: topic }` —la cola nombrada como el
+    // EXCHANGE—. El binding va en "#", así que el nombre daba igual para que el check pasara,
+    // y por eso nadie lo vio: el runner medía una topología que ningún proyecto generado tiene.
+    // Es el mismo defecto que destapó la corrida `refunds-rabbit` en `publishedDestination`,
+    // visto desde el otro lado — allí build resolvía al exchange, aquí el runner lo confirmaba.
     const firstSub = (model.subscriptions ?? [])[0] ?? null;
+    // El canal propio del que se lee. Sin ninguno publicado no hay nada que derivar y el
+    // destino único es lo único que queda.
+    const publishedChannel = (model.messaging?.publishChannels ?? [])[0] ?? topic;
     const rabbitTopology =
       broker === 'rabbitmq'
         ? [
-            topic ? { exchange: topic, queue: topic } : null,
+            topic ? { exchange: topic, queue: publishedDestination('rabbitmq', model, publishedChannel) } : null,
             firstSub && subscriptionTopic
               ? { exchange: subscriptionTopic, queue: subscriptionDestination('rabbitmq', model, firstSub) }
               : null

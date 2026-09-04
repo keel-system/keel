@@ -70,20 +70,39 @@ export function subscriptionDestination(broker, model, sub) {
  * De dónde LEE el arnés lo que este servicio publica en un canal, que tampoco es lo mismo
  * en los tres brokers — y es el gemelo de `subscriptionDestination`, con la misma trampa.
  *
- * En RabbitMQ se publica al destino único del servicio (`<slug>.events`) y de esa cola se
- * lee. En SNS/SQS eso es un TOPIC, y de un topic no se lee: el aprovisionamiento crea una
- * cola de arnés colgada de él cuyo nombre ES el del canal (`harnessQueueName`), así que ahí
- * resolver es la identidad. Confundirlos compone una URL de cola que no existe, y la
- * lectura muere con NonExistentQueue — o, peor, un `publishedMessages` que nunca encuentra
- * nada y deja pasar en verde toda aserción negativa.
+ * Solo en KAFKA el destino de lectura es el de publicación: allí se produce a un topic y se
+ * consume de ese mismo topic, que es el único del servicio (`<slug>.events`).
+ *
+ * En los otros dos, publicar y leer no ocurren en el mismo sitio y resolver es la IDENTIDAD:
+ *
+ *   · SNS/SQS — `<slug>-events` es un TOPIC, y de un topic no se lee. El aprovisionamiento
+ *     cuelga de él una cola de arnés cuyo nombre ES el del canal (`harnessQueueName`).
+ *   · RabbitMQ — `<slug>.events` es un EXCHANGE, y de un exchange tampoco se lee. Hay una
+ *     cola durable POR CANAL publicado, nombrada exactamente como el canal, con un binding
+ *     por routing key; lo declara el agente siguiendo la skill del broker, que lo dice sin
+ *     margen: «las pruebas de integración leen los eventos con `publishedMessages("<canal>")`,
+ *     que en RabbitMQ consulta la cola cuyo nombre es el del canal».
+ *
+ * Devolver el exchange en RabbitMQ es el defecto que destapó la corrida `refunds-rabbit`: la
+ * API de colas no acepta un nombre de exchange, así que toda lectura de un canal propio daba
+ * 404 y el humo del arnés moría en `initializationError` antes de ejercitar un solo `FL-*`.
+ * Era además una REGRESIÓN — la precedencia de canales publicados se añadió durante la corrida
+ * de SNS/SQS y la rama de RabbitMQ no se volvió a derivar, así que heredó el valor de Kafka.
+ *
+ * Y su modo de fallo tiene una mitad silenciosa que es la peor: donde no revienta con 404, un
+ * `publishedMessages` que no encuentra nada nunca deja pasar en verde toda aserción negativa
+ * —«no se publicó ningún evento»— sin haber mirado.
  *
  * Vive aquí por la misma razón que su gemelo: componerlo a mano en cada emisor es
  * exactamente cómo se rompe.
  */
 export function publishedDestination(broker, model, channel) {
-  // En SNS/SQS, la cola de arnés se llama como el canal (messaging-provisioning.js
-  // § harnessQueueName): resolver es la identidad y no hay entrada que emitir.
-  if (broker === 'snssqs') return channel;
+  // Los dos brokers en los que se publica a un sitio y se lee de otro, y en los dos el sitio
+  // de lectura se llama como el canal: la cola de arnés de SNS/SQS
+  // (messaging-provisioning.js § harnessQueueName) y la cola por canal de RabbitMQ (skill
+  // keel-spring-rabbitmq § «Configuración del broker»). Resolver es la identidad y no hay
+  // entrada que emitir.
+  if (broker === 'snssqs' || broker === 'rabbitmq') return channel;
   return model.messaging?.destinationDefault ?? channel;
 }
 

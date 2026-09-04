@@ -19,6 +19,7 @@ import { tmpDir } from './helpers/tmp.js';
 import { loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
 import { harnessQueueName } from '../src/scaffold/messaging-provisioning.js';
+import { publishedDestination } from '../src/lib/dead-letter.js';
 
 const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
@@ -51,15 +52,25 @@ function bodyOf(source, method) {
   return source.slice(from, source.indexOf('\n    }', from));
 }
 
-test('en RabbitMQ un canal que PUBLICAMOS se traduce a nuestro destino, no al del proveedor', () => {
-  // `stockEvents` se usa en los dos sentidos: publicamos en él y nos suscribimos a él. Antes
-  // este mapa se construía SOLO desde las suscripciones, así que ganaba la cola del proveedor
-  // (`inventory.events`) y `publishedMessages("stockEvents")` leía el buzón equivocado: un
-  // Then sobre lo que publicamos se afirmaba contra mensajes que no eran nuestros.
+test('en RabbitMQ lo publicado se lee de la cola HOMÓNIMA del canal, no del exchange', () => {
+  // `stockEvents` se usa en los dos sentidos: publicamos en él y nos suscribimos a él. Este
+  // caso ha corregido DOS veces el mismo mapa, y la segunda es la que enseña algo.
+  //
+  // Primero mapeaba a la cola del PROVEEDOR (`inventory.events`), porque el mapa se construía
+  // solo desde las suscripciones: un Then sobre lo que publicamos se afirmaba contra mensajes
+  // que no eran nuestros. Al arreglarlo se pasó al otro extremo —el destino único del servicio,
+  // `stock-reservation.events`—, y eso en RabbitMQ es un EXCHANGE: la API de colas no lo
+  // acepta, así que toda lectura de un canal propio daba 404. Lo destapó la corrida
+  // `refunds-rabbit`, con el humo del arnés muriendo antes de ejercitar un solo `FL-*`.
+  //
+  // Lo correcto es la identidad, igual que en SNS/SQS y por el mismo motivo: se publica al
+  // exchange y se lee de la cola por canal que declara el agente, nombrada como el canal
+  // (skill keel-spring-rabbitmq). Ninguno de los dos extremos anteriores era esa cola.
   const source = harness('stock-reservation', 'rabbitmq');
 
-  assert.match(source, /Map\.entry\("stockEvents", "stock-reservation\.events"\)/);
+  assert.ok(!source.includes('Map.entry("stockEvents", "stock-reservation.events")'), 'traduce al exchange, del que no se lee');
   assert.ok(!source.includes('Map.entry("stockEvents", "inventory.events")'), source);
+  assert.ok(!source.includes('Map.entry("stockEvents"'), 'traduce un canal cuyo destino de lectura ya es él mismo');
   // Las DOS puertas, no solo la purga: la lectura tenía el mismo defecto sin haberse
   // manifestado todavía, y su fallo es el que no se ve.
   assert.match(bodyOf(source, 'publishedMessages'), /physicalDestination\(destination\)/);
@@ -67,6 +78,44 @@ test('en RabbitMQ un canal que PUBLICAMOS se traduce a nuestro destino, no al de
   // envoltorio que espera al relay antes): lo que importa es el método que habla con el broker.
   const purge = source.includes('purgeDestination(String') ? 'purgeDestination' : 'purgeMessages';
   assert.match(bodyOf(source, purge), /physicalDestination\(destination\)/);
+});
+
+test('y ese nombre es el MISMO que la skill le manda declarar al agente', () => {
+  // Las dos mitades del mismo hecho, atadas.
+  //
+  // La cola de un canal publicado en RabbitMQ no la declara build: la declara el AGENTE, en
+  // `RabbitMqConfig`, siguiendo la skill del broker. Build solo tiene que saber cómo se llama
+  // para poder leerla. Son dos proyecciones de una decisión que vive en un tercer sitio, y
+  // mientras nadie las cruzara podían separarse sin que nada se pusiera rojo — que es
+  // exactamente lo que pasó: build resolvía al exchange, el agente declaraba la cola por canal,
+  // y el desacuerdo se vio en una corrida en vivo con el humo del arnés muriendo.
+  //
+  // Y NO lo caza `broker-check`: ese runner SIEMBRA su propia topología antes de leerla, así
+  // que con el valor equivocado sería igual de autoconsistente y saldría verde. Lo único que
+  // discrimina es contrastar el resolutor con lo que la skill prescribe.
+  const skill = fs.readFileSync(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'assets', 'generators', 'spring',
+      'skills', 'keel-spring-rabbitmq', 'SKILL.md'),
+    'utf8'
+  );
+
+  assert.match(
+    skill,
+    /consulta \*\*la cola cuyo nombre es el del canal\*\*/,
+    'la skill dejó de mandar declarar la cola con el nombre del canal: si cambió la topología, publishedDestination tiene que cambiar con ella'
+  );
+  assert.match(skill, /nombrada exactamente como el canal/, 'la skill dejó de nombrar la cola como el canal');
+
+  // Y el resolutor de build dice lo mismo: la identidad.
+  const model = { messaging: { destinationDefault: 'stock-reservation.events' } };
+  assert.equal(
+    publishedDestination('rabbitmq', model, 'stockEvents'),
+    'stockEvents',
+    'build leería de un sitio distinto del que el agente declara'
+  );
+  // La simétrica, que es la que evita «arreglarlo» devolviendo siempre el canal: en Kafka se
+  // consume del MISMO topic al que se produce, y ahí el destino único sí es la respuesta.
+  assert.equal(publishedDestination('kafka', model, 'stockEvents'), 'stock-reservation.events');
 });
 
 test('en SNS/SQS lo publicado se lee de la cola de arnés, que se llama como el canal', () => {

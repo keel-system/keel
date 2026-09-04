@@ -211,6 +211,46 @@ comprueba que **efectivamente** deja ese estado observable por la API:
 | `p1 sin imágenes` | crear `p1` | nada más, pero **decláralo**: es la precondición que hace determinista el `Then` |
 | `la caché de X poblada` | mutar `X` | una lectura previa que la puebla |
 
+### El escenario de reintento necesita `stubSequence`
+
+Los cuatro helpers de arriba fijan **una** respuesta por ruta. Con eso no se puede escribir el
+escenario que de verdad mide un `retry` —«falla la primera, responde bien la segunda, y la
+segunda petición repite la misma cabecera de idempotencia»—, porque la segunda llamada recibiría
+lo mismo que la primera. Un escenario así se queda sin traducir, y con él el mecanismo que venía a
+probar: en la corrida `refunds-rabbit` fue exactamente lo que pasó con la idempotencia SALIENTE.
+
+```java
+stubSequence("POST", "/entries",
+        StubResponse.timeout(3000),          // el primer intento no llega a tiempo
+        StubResponse.ok(201, "{}"));         // el reintento sí
+
+// …la acción que dispara la llamada…
+
+List<String> peticiones = stubRequests("POST", "/entries");
+assertEquals(2, peticiones.size(), "no reintentó");
+assertEquals(stubRequestHeader(peticiones.get(0), "Idempotency-Key"),
+             stubRequestHeader(peticiones.get(1), "Idempotency-Key"),
+             "el reintento estrenó clave: para el proveedor son dos encargos distintos");
+```
+
+Las respuestas son las mismas cuatro formas que ya conoces: `StubResponse.ok(status, cuerpo)`,
+`.failure(status)`, `.timeout(ms)` y `.connectionFault()`.
+
+Dos cosas que conviene saber antes de usarlo:
+
+- **La última respuesta se queda pegada.** Una tercera llamada vuelve a recibirla. Es a propósito:
+  si el estado avanzara más allá del último mapping, el proveedor devolvería 404 y el escenario
+  fallaría por el stub en vez de por lo que mide — indistinguible de un defecto del servicio
+  hasta que alguien lee el log de WireMock.
+- **Una ruta admite UNA secuencia por escenario.** Programarla dos veces lanza, con el nombre
+  delante: la segunda encadenaría desde un estado que la primera ya dejó atrás, sus mappings no
+  responderían nunca y el Then mediría los de la otra.
+
+Y la aserción que no puede faltar: **contar las llamadas no basta**. Un escenario que solo afirme
+`stubCallCount(...) == 2` pasa igual con la clave de idempotencia rota — el proveedor recibe dos
+peticiones en los dos casos. Lo que distingue reintentar de encargar dos veces es la cabecera, y
+para eso está `stubRequestHeader` sobre las dos peticiones.
+
 Reglas:
 
 1. **El estado del lifecycle es explícito.** Un agregado con `lifecycle` nace en su estado
@@ -1091,6 +1131,7 @@ Helpers de `AbstractFlowIT`:
 | `stubFailure(método, patrónRuta, status)` | Ejercitar `onFailure`/`onMiss` y el circuit breaker (5xx reintenta, 4xx no) |
 | `stubConnectionFault(método, patrónRuta)` | El proveedor **no contesta**: corta la conexión. Lo que ejercita `retryOn: [connection]` |
 | `stubTimeout(método, patrónRuta, msDeRetraso)` | El proveedor tarda más de lo que la llamada tolera. Lo que ejercita `retryOn: [timeout]`; el retraso tiene que superar el `timeoutMs` declarado |
+| `stubSequence(método, patrónRuta, respuestas…)` | Respuestas **distintas en llamadas sucesivas** a la misma ruta. Es lo que hace escribible un escenario de REINTENTO; ver abajo |
 | `stubCallCount(método, patrónRuta)` | El Then: cuántas veces se llamó al proveedor — la única forma en caja negra de afirmar que un dato se cacheó, o que algo no se reintentó |
 | `stubRequests(método, patrónRuta)` | El Then que no se conforma con cuántas veces, sino con **qué** se envió: devuelve el log de peticiones recibidas, cada una como el JSON del stub |
 | `stubRequestBody(peticiónJson)` | El cuerpo saliente de una de esas peticiones, para compararlo con `assertJson(...)` |
