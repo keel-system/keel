@@ -46,6 +46,7 @@ import {
   CLOCK,
   fill,
   setStateScript,
+  ageClockScript,
   missingClockCountScript,
   outboxPendingScript,
   abandonOutboxScript,
@@ -339,6 +340,65 @@ async function outboxScenarios(evaluate) {
   });
 }
 
+/**
+ * Envejecer la marca de espera de un barrido de reconciliación.
+ *
+ * Es la última de las precondiciones que el arnés FABRICA en vez de esperar, y la que llegó
+ * tarde: mientras el gate de `reconciliationAgingSection` fue el del eje relacional
+ * (`staleTimestamp` + `uuidLiteral`, dos literales SQL que Mongo no declara), un diseño
+ * documental con `reconciledBy` se quedaba sin el helper EN SILENCIO y no podía tener el
+ * escenario que `crossrefs.js` le exige.
+ *
+ * Lo que se mide aquí es lo que javac no puede: que el `$set` CASE. Un nombre de campo
+ * equivocado no falla —crea otro campo—, y entonces el barrido no ve candidato, el `Then`
+ * espera su tick y el escenario pasa en verde sin haber envejecido nada.
+ */
+async function agingScenarios(evaluate) {
+  // Colección y campo del diseño de asset-vault: `scanAsset.awaitingSince = lastScannedAt`
+  // sobre el agregado Asset, que se almacena en `assets` con `@Field(name = "last_scanned_at")`.
+  const assets = { collection: 'assets', clockField: 'last_scanned_at' };
+  const seed = () =>
+    evaluate(`
+      db.getCollection("assets").deleteMany({});
+      db.getCollection("assets").insertMany([
+        { _id: UUID("${ID}"), slug: "envejecido", status: "PUBLISHED", last_scanned_at: new Date() },
+        { _id: UUID("${OTHER_ID}"), slug: "intacto", status: "PUBLISHED", last_scanned_at: new Date() }
+      ]);
+      print("ok");
+    `);
+  const readAsset = (id) =>
+    jsonOf(evaluate(`print(JSON.stringify(db.getCollection("assets").findOne({ _id: UUID("${id}") })))`));
+  const millis = (value) => new Date(value?.$date ?? value).getTime();
+
+  await check('MONGO-9', 'envejecer la marca de espera CASA con el documento y discrimina', () => {
+    if (seed() !== 'ok') throw new Error('la siembra no confirmó');
+    evaluate(fill(ageClockScript(assets), ID));
+
+    const aged = readAsset(ID);
+    // Se lee el campo POR SU NOMBRE, igual que en MONGO-3: un $set sobre un nombre que no
+    // existe no falla, crea otro campo y deja el original donde estaba.
+    if (aged.last_scanned_at === undefined) {
+      throw new Error(`no hay last_scanned_at; el documento quedó: ${JSON.stringify(aged)}`);
+    }
+    if (millis(aged.last_scanned_at) !== 0) {
+      throw new Error(`la marca vale ${JSON.stringify(aged.last_scanned_at)}, esperaba la época`);
+    }
+    // Y que no haya nacido un campo nuevo al lado del que se quería tocar, que es exactamente
+    // el modo de fallo silencioso: el barrido seguiría sin candidato y nadie se enteraría.
+    const extra = Object.keys(aged).filter((key) => /scanned/i.test(key) && key !== 'last_scanned_at');
+    if (extra.length > 0) {
+      throw new Error(`el $set creó campos nuevos en vez de tocar el existente: ${extra.join(', ')}`);
+    }
+
+    // La discriminación: envejecer UNA fila es lo que hace quirúrgico al escenario. Bajar el
+    // umbral por configuración es global y se lleva por delante las filas de los demás.
+    const untouched = readAsset(OTHER_ID);
+    if (millis(untouched.last_scanned_at) === 0) {
+      throw new Error('envejecer una fila envejeció también la vecina: el filtro por _id no discrimina');
+    }
+  });
+}
+
 // ─── Entrada ─────────────────────────────────────────────────────────────────
 
 const runtimeInfo = resolveRuntime();
@@ -349,7 +409,15 @@ if (!runtimeInfo) {
 
 const PLAN = [
   { fixture: 'job-dispatch-mongo', scenarios: rescueScenarios },
-  { fixture: 'asset-vault', scenarios: outboxScenarios }
+  {
+    fixture: 'asset-vault',
+    // Dos tandas sobre el mismo Mongo: levantar el contenedor es lo caro, y las dos miran
+    // scripts que el arnés de esta misma fixture emite.
+    scenarios: async (evaluate) => {
+      await outboxScenarios(evaluate);
+      await agingScenarios(evaluate);
+    }
+  }
 ];
 
 let fatal = null;

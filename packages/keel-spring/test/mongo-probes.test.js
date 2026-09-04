@@ -24,6 +24,7 @@ import {
   CLOCK,
   fill,
   setStateScript,
+  ageClockScript,
   missingClockCountScript,
   outboxPendingScript,
   abandonOutboxScript,
@@ -98,6 +99,50 @@ test('el outbox cuenta lo pendiente y abandona por los scripts del módulo', () 
   assert.ok(harness.includes(enJava(abandon.prefix)), 'abandonar no sale del módulo');
   assert.ok(harness.includes(enJava(abandon.suffix)), 'abandonar no sale del módulo');
   assert.ok(harness.includes(enJava(clearAbandonedScript(attempts))), 'limpiar no sale del módulo');
+});
+
+/**
+ * El helper del barrido de reconciliación, en la rama documental.
+ *
+ * Este caso no vigila un script: vigila que la SECCIÓN exista. Mientras el gate de
+ * `reconciliationAgingSection` pidió `staleTimestamp` y `uuidLiteral` —dos literales SQL— a
+ * todos los motores por igual, un diseño documental con `reconciledBy` se quedaba sin
+ * `ageForReconciliation` EN SILENCIO: build generaba la tabla del reclamo, su store y su purga,
+ * y el arnés no daba forma alguna de alcanzar el barrido. Y `crossrefs.js` exige ese escenario,
+ * así que el diseño quedaba en una posición imposible.
+ *
+ * Es el equivalente documental de `engine-claim-coverage.test.js`: no protege al asset-vault de
+ * hoy, protege al siguiente helper del arnés, que nacerá relacional si nadie mira.
+ */
+test('un diseño documental con reconciledBy PUEDE envejecer su marca de espera', () => {
+  const harness = harnessOf('asset-vault');
+
+  // La DECLARACIÓN, no la mención: `ageForReconciliation` aparece hoy en el javadoc de
+  // `abandonOutboxEvent` como comparación, así que buscar la cadena a secas daría verde sobre
+  // un arnés que no emite el helper. Se comprobó: daba verde.
+  assert.ok(
+    harness.includes('protected static void ageForReconciliation(String activation, String id)'),
+    'el arnés documental no declara ageForReconciliation: el barrido de reconciliación es inalcanzable'
+  );
+
+  // Y lo que ejecuta es el script del módulo, no uno compuesto aquí. La colección y el campo
+  // salen del diseño: Asset se almacena en `assets` y su `awaitingSince` es `lastScannedAt`,
+  // que el documento lleva como `@Field(name = "last_scanned_at")`.
+  const { prefix, suffix } = ageClockScript({ collection: 'assets', clockField: 'last_scanned_at' });
+  assert.ok(harness.includes(enJava(prefix)), 'envejecer no sale del módulo');
+  assert.ok(harness.includes(enJava(suffix)), 'envejecer no sale del módulo');
+
+  // Y va por `mongoEval`, no por `db(...)`: las comillas de dentro de un argumento no
+  // sobreviven al argv en Windows.
+  assert.ok(
+    harness.includes(`for (String statement : statements) {` + String.fromCharCode(10) + `            mongoEval(statement);`),
+    'el lote de envejecidos no se ejecuta por mongoEval'
+  );
+
+  // Y NO estampa estado: envejecer una marca de espera solo toca el reloj. Forzar el estado
+  // sacaría la fila del lote que el barrido busca — es la razón de que `ageClockScript` no sea
+  // `setStateScript`.
+  assert.ok(!suffix.includes('status:'), 'envejecer la marca no puede tocar el estado del agregado');
 });
 
 test('ningún script de mongosh del ARNÉS se escribe a mano', () => {

@@ -253,7 +253,7 @@ export function claimScenarios(model) {
 }
 
 /** El nombre del getter/setter de un campo, como los emite el scaffold de entidades. */
-const accessor = (prefix, field) => `${prefix}${field.charAt(0).toUpperCase()}${field.slice(1)}`;
+export const accessor = (prefix, field) => `${prefix}${field.charAt(0).toUpperCase()}${field.slice(1)}`;
 
 /**
  * Los campos que hay que rellenar para que la fila entre en la tabla, con su literal.
@@ -261,8 +261,14 @@ const accessor = (prefix, field) => `${prefix}${field.charAt(0).toUpperCase()}${
  * Se derivan de los NOT NULL de la entidad —no de una lista escrita a mano— porque una fixture
  * con un campo obligatorio más produciría un INSERT que el motor rechaza, y el fallo aparecería
  * como «el reclamo no se llevó nada», que es indistinguible del defecto que se persigue.
+ *
+ * <p>Exportada porque `store-probes.js` siembra las mismas filas para el reclamo de
+ * reconciliación y necesita la MISMA derivación: una segunda copia de esta regla es una copia que
+ * se separa, y el día que se separe el síntoma será otra vez «no se llevó nada». Solo lee
+ * `entity` y `statusField` del objeto que recibe, así que le sirve cualquiera que traiga esos
+ * dos — no hace falta un `scenarios` de claim-check.
  */
-function requiredLiterals(scenarios, clockField, orderField) {
+export function requiredLiterals(scenarios, clockField, orderField) {
   // El campo por el que se ordena el lote lo pone la siembra con su instante escalonado, así que
   // aquí se excluye: ponerlo dos veces daría a todas las filas el mismo instante y el caso del
   // orden dejaría de poder fallar.

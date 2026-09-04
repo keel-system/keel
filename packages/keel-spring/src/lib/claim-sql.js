@@ -143,6 +143,18 @@ export function unsupportedClaimWarning(database, mechanisms) {
 // necesita lecturas repetibles: selecciona candidatos, los marca uno a uno con un UPDATE
 // condicional —que es quien garantiza la exclusión mutua, no el nivel— y commitea. Ninguna
 // llamada externa ocurre dentro.
+//
+// **Y no es solo rendimiento: en el reclamo de RECONCILIACIÓN es portante.** Lo destapó
+// `store-check` llamando al store con el aislamiento por defecto, y el resultado no fue lento
+// sino roto. Ahí el reclamo son dos pasos —UPDATE condicional y, si no casó, INSERT de la marca
+// en una transacción REQUIRES_NEW, o sea en OTRA conexión—. Con la marca todavía sin existir el
+// UPDATE no casa ninguna fila, pero bajo REPEATABLE READ toma igualmente los gap locks del rango
+// que escaneó; y entonces el INSERT se queda esperando un hueco que bloquea su propia transacción
+// padre, que no puede soltarlo hasta que el hijo termine. Muere en `Lock wait timeout exceeded`,
+// `claim()` lo interpreta como «otra réplica lo tiene» y devuelve false — así que el barrido
+// **no reclama nada, nunca, y sin decir una palabra**. Con READ_COMMITTED, InnoDB desactiva los
+// gap locks y el reclamo funciona. Medido: cinco casos de store-check caen en MySQL sin esto y
+// ninguno en PostgreSQL.
 
 /**
  * Los motores cuyo default de aislamiento rompe el reclamo, y por tanto los únicos donde se

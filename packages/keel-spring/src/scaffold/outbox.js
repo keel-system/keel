@@ -470,15 +470,34 @@ function renderDocumentRepository(model) {
     /**
      * Purga de lo ya entregado. El reclamo del lote pendiente NO está aquí: necesita
      * findAndModify (atómico por documento) y lo hace el relay con MongoTemplate.
+     *
+     * <p><b>No puede ser un método derivado.</b> El nombre que lo describiría —
+     * {@code deleteByPublishedAtNotNullAndPublishedAtBefore} — pone DOS criterios sobre el
+     * MISMO campo, y {@code org.bson.Document} no admite dos expresiones para la misma clave:
+     * Spring Data lo rechaza en ejecución con {@code InvalidMongoDbApiUsageException}. Como el
+     * único que lo llamaba era un {@code @Scheduled}, el cron de purga moría en cada pasada, el
+     * scheduler se tragaba la excepción y la colección crecía sin tope. Compilaba, arrancaba y
+     * no hacía nada — lo destapó {@code store-check}, y ninguna otra red podía verlo porque un nombre
+     * de método derivado es Java válido diga lo que diga.
+     *
+     * <p>El filtro va en JSON y con el nombre de ALMACENAMIENTO del campo, como el resto de este
+     * paquete. {@code $ne: null} deja fuera lo pendiente, que es la mitad cuya pérdida sería
+     * pérdida de datos.
      */
-    long deleteByPublishedAtNotNullAndPublishedAtBefore(Instant cutoff);
+    @Query(value = "{ 'published_at': { $ne: null, $lt: ?0 } }", delete = true)
+    long deletePublishedBefore(Instant cutoff);
 }`;
 
   return {
     path: javaPath(model, OUTBOX_PKG, 'OutboxEventMongoRepository'),
     content: javaFile(
       subPackage(model, OUTBOX_PKG),
-      ['java.time.Instant', 'java.util.UUID', 'org.springframework.data.mongodb.repository.MongoRepository'],
+      [
+        'java.time.Instant',
+        'java.util.UUID',
+        'org.springframework.data.mongodb.repository.MongoRepository',
+        'org.springframework.data.mongodb.repository.Query'
+      ],
       body
     )
   };
@@ -594,8 +613,15 @@ public class OutboxRelay {
      * atómico: con varias réplicas del relay, cada una se lleva un lote disjunto en
      * vez de entregar todas el mismo evento. Es el equivalente del SKIP LOCKED de la
      * rama relacional.
+     *
+     * <p><b>Package-private, no privado.</b> Es la mitad MEDIBLE del relay: el reclamo se
+     * puede ejercitar contra el motor real sin arrastrar la publicación al broker, que es
+     * I/O de red y no cabe en una aserción. La rama relacional ya lo tiene por otra vía
+     * —{@code OutboxRelayStore} es un bean aparte, también package-private— y por el mismo
+     * motivo. Sin esto, lo único ejercitable sería {@code relay()} entero, con un
+     * dispatcher de prueba y dos hilos: mide lo mismo y falla de forma intermitente.
      */
-    private List<OutboxEventDocument> claimPending() {
+    List<OutboxEventDocument> claimPending() {
         Instant now = Instant.now();
         Instant claimCutoff = now.minusMillis(claimTimeoutMs);
         Query query = new Query(new Criteria().andOperator(
@@ -636,7 +662,7 @@ public class OutboxRelay {
     @Scheduled(cron = "\${outbox.purge.cron:0 0 3 * * *}")
     public void purge() {
         Instant cutoff = Instant.now().minus(retentionDays, ChronoUnit.DAYS);
-        long deleted = outboxRepository.deleteByPublishedAtNotNullAndPublishedAtBefore(cutoff);
+        long deleted = outboxRepository.deletePublishedBefore(cutoff);
         if (deleted > 0) {
             log.info("Outbox: purgados {} documentos publicados antes de {}", deleted, cutoff);
         }

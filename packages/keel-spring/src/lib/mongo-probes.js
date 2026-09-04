@@ -80,6 +80,28 @@ export function setStateScript({ collection, stateField, state, clockField, cloc
 }
 
 /**
+ * Envejece SOLO el reloj de un documento: lo deja infinitamente rancio, que es la condición de
+ * entrada de un barrido de reconciliación.
+ *
+ * No se reutiliza `setStateScript` y la diferencia no es cosmética: aquélla estampa estado Y
+ * reloj porque la precondición de un RESCATE es «la fila está en vuelo y lleva ahí demasiado».
+ * Aquí la fila ya está donde el barrido la busca —esperando el desenlace de un tercero— y lo
+ * único que sobra es la paciencia. Forzarle un estado la sacaría del lote que se quiere medir.
+ *
+ * El campo del reloj es el `awaitingSince` que declara la activación, en su forma de
+ * almacenamiento (los documentos llevan `@Field(name = snake_case)`). Un `$set` sobre un nombre
+ * que no existe **no falla**: crea otro campo, deja el barrido sin candidato y el escenario en
+ * verde sin haber envejecido nada. De ahí que el nombre se derive y no se escriba a mano, y de
+ * ahí MONGO-9.
+ */
+export function ageClockScript({ collection, clockField }) {
+  return split(
+    `db.getCollection("${collection}").updateOne({ _id: UUID("`,
+    `") }, { $set: { ${clockField}: ${CLOCK.stale} } })`
+  );
+}
+
+/**
  * Cuántos documentos quedaron en un estado con el reloj SIN estampar.
  *
  * Tiene que discriminar de verdad: un predicado que devolviera siempre cero pasaría el

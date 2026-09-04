@@ -27,6 +27,7 @@ import {
 import { needsMessagingProvisioning } from './messaging-provisioning.js';
 import {
   setStateScript,
+  ageClockScript,
   missingClockCountScript,
   outboxPendingScript,
   abandonOutboxScript,
@@ -3641,10 +3642,19 @@ ${cleanup}
  */
 function reconciliationAgingSection(model) {
   const entry = dbEntry(model);
+  if (!entry?.cliQueryArgv) return '';
+  const document = entry.kind === 'document';
   // Mismo criterio que `uuidLiteral`: donde el motor no declara su forma, no se emite el
   // helper. Inventarla es peor que no tenerlo — un UPDATE que no casa deja el escenario
   // verde sin haber envejecido nada.
-  if (!entry?.cliQueryArgv || !entry.staleTimestamp || !entry.uuidLiteral) return '';
+  //
+  // Y ese criterio es del eje RELACIONAL, no de todos: `staleTimestamp` y `uuidLiteral` son
+  // literales SQL, y Mongo no declara ninguno de los dos porque no los necesita —su reloj es
+  // `new Date(0)` y su id viaja como `UUID("…")` dentro del script—. Mientras la condición
+  // fue única, un diseño documental con `reconciledBy` se quedaba sin este helper EN SILENCIO
+  // y no podía tener el escenario que `crossrefs.js` le exige. Es la misma partición que
+  // `rescueSection` ya hace una función más arriba.
+  if (!document && (!entry.staleTimestamp || !entry.uuidLiteral)) return '';
 
   const targets = new Map();
   for (const operation of (model.services ?? []).flatMap((service) => service.operations ?? [])) {
@@ -3667,12 +3677,21 @@ function reconciliationAgingSection(model) {
   const ramas = [...targets]
     .map(([name, list]) => {
       const updates = list
-        .map(
-          (target) =>
-            `            statements.add(${javaString(
-              `UPDATE ${target.table} SET ${snakeCase(target.awaitingField)} = ${entry.staleTimestamp} WHERE id = `
-            )} + uuidLiteral(id));`
-        )
+        .map((target) => {
+          if (document) {
+            // El script sale de mongo-probes.js CRUDO y lo escapa javaString(), que es la
+            // regla del módulo: pre-escaparlo aquí produce el doble escape que ya se coló una
+            // vez y que solo se ve leyendo el Java generado.
+            const script = ageClockScript({
+              collection: target.table,
+              clockField: snakeCase(target.awaitingField)
+            });
+            return `            statements.add(${javaString(script.prefix)} + id + ${javaString(script.suffix)});`;
+          }
+          return `            statements.add(${javaString(
+            `UPDATE ${target.table} SET ${snakeCase(target.awaitingField)} = ${entry.staleTimestamp} WHERE id = `
+          )} + uuidLiteral(id));`;
+        })
         .join(String.fromCharCode(10));
       // Varias tablas por activación cuando el mismo encargo deja esperando a más de una
       // entidad: el id es de UNA de ellas y las demás actualizan cero filas. Es inofensivo,
@@ -3714,7 +3733,7 @@ ${ramas}
                     "No hay barrido para la activación '" + activation + "'. Las que lo tienen: ${conocidas}");
         }
         for (String statement : statements) {
-            ${statementCall(entry, argv, 'statement')};
+            ${document ? 'mongoEval(statement)' : statementCall(entry, argv, 'statement')};
         }
     }
 `;
