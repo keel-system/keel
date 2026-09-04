@@ -2765,6 +2765,57 @@ function mongoEvalHelper(scriptArgv) {
 `;
 }
 
+// La sentencia SQL viaja por ARCHIVO cuando el motor no tiene forma argv.
+//
+// Es el mismo mecanismo que `mongoEval`, y por el mismo motivo: `sqlplus` no tiene un flag que
+// tome la sentencia (la lee por stdin o de un fichero), y la salida obvia —`sh -c 'echo … |
+// sqlplus'`— muere en Windows, donde el cliente de contenedores reconstruye la línea de comandos
+// y se come las comillas de dentro. Mientras Oracle no declaró forma alguna, las cuatro secciones
+// que componen SQL se apagaban EN SILENCIO y el motor se quedaba sin poder fabricar la
+// precondición de ningún escenario de rescate, reconciliación u outbox.
+function dbScriptHelper(entry, queryArgv) {
+  if (entry.cliQueryForm !== 'scriptFile' || !queryArgv) return '';
+  // El envoltorio lo pone el CATÁLOGO (directivas de formato y terminador): compuesto aquí sería
+  // la segunda copia de un dato que solo el motor conoce.
+  const wrapped = entry.cliScript('__STATEMENT__');
+  const [prefix, suffix] = wrapped.split('__STATEMENT__');
+  // El envoltorio es MULTILÍNEA y `javaString` no escapa saltos de línea (nada se los había
+  // pasado hasta ahora): sin esto sale un literal Java sin cerrar, y el archivo entero deja de
+  // compilar. Se escapan DESPUÉS de `javaString`, que solo toca `\` y `"`.
+  const literal = (text) => javaString(text).replaceAll('\n', '\\n');
+  return `
+    /** Dónde se deja la sentencia dentro del contenedor de la base. */
+    private static final String DB_SCRIPT = "/tmp/keel-eval${entry.cliScriptExtension}";
+
+    /**
+     * Ejecuta UNA sentencia contra la base de prueba.
+     *
+     * <p><b>Esta es la vía en ${entry.label}, no {@link #db} con la sentencia en el argv.</b>
+     * {@code sqlplus} no tiene un flag que la tome: la lee de un fichero, así que la sentencia se
+     * copia y solo su ruta viaja por el argv. Las directivas de formato y el {@code EXIT} los
+     * pone este helper — sin ellas la salida trae cabecera y un «N rows selected» que ningún
+     * {@code parseLong} sabe leer, y sin el {@code EXIT} el proceso no termina.
+     *
+     * <pre>String salida = dbSql("SELECT COUNT(*) FROM jobs WHERE status = 'QUEUED'");</pre>
+     */
+    protected static String dbSql(String statement) {
+        copyIntoContainer(DB_CONTAINER, ${literal(prefix)} + statement + ${literal(suffix)}, ${javaString(entry.cliScriptExtension)}, DB_SCRIPT);
+        return db(${queryArgv}, "@" + DB_SCRIPT);
+    }
+`;
+}
+
+/**
+ * La llamada con la que el arnés ejecuta una sentencia, según la forma que declare el motor.
+ *
+ * Las cuatro secciones que componen SQL (`rescueSection`, `reconciliationAgingSection`,
+ * `abandonOutboxSection`, `outboxDrainSection`) pasan por aquí en vez de escribir `db(argv…, …)`
+ * cada una: así añadir un motor con otra forma de invocación no obliga a acordarse de las cuatro.
+ */
+function statementCall(entry, queryArgv, expression) {
+  return entry.cliQueryForm === 'scriptFile' ? `dbSql(${expression})` : `db(${queryArgv}, ${expression})`;
+}
+
 function dbSection(model) {
   const entry = dbEntry(model);
   if (!entry) return '';
@@ -2797,20 +2848,33 @@ function dbSection(model) {
      *
      * <p><b>Toda sentencia va por aquí</b>, y cualquier helper propio que escribas
      * encima también: el motor elegido (${entry.label}) se invoca así, y la sentencia
-     * entra como <b>un elemento más</b> del argv.${scriptArgv ? `
+     * entra como <b>un elemento más</b> del argv.${
+       entry.cliQueryForm === 'scriptFile'
+         ? `
+     *
+     * <p><b>Salvo la sentencia misma, que en ${entry.label} va por {@link #dbSql}.</b> Su
+     * cliente no tiene un flag que la tome —la lee de un fichero—, así que este método se usa
+     * para invocarlo, pero la sentencia la pone {@code dbSql} en un archivo del contenedor.
+     * Armarla aquí a mano no falla en tu máquina y sí en Windows, donde el cliente de
+     * contenedores reconstruye la línea de comandos y se come las comillas de dentro.`
+         : ''
+     }${scriptArgv ? `
      *
      * <p><b>Salvo un script de mongosh, que va por {@link #mongoEval}.</b> La promesa de
      * «las comillas llegan intactas» NO se sostiene cuando son las comillas de DENTRO del
      * argumento: en Windows el cliente de contenedores reconstruye la línea de comandos y se
      * las come. Un script de mongosh lleva comillas casi siempre, así que el ejemplo de abajo
      * se deja como lo que NO hay que hacer:` : ''}${
-       queryArgv
+       entry.cliQueryForm === 'scriptFile'
          ? `
+     * <pre>dbSql(${javaString(exampleStatement(entry))});</pre>`
+         : queryArgv
+           ? `
      * <pre>${scriptArgv ? '// NO — las comillas de dentro no sobreviven: ' : ''}db(${queryArgv.map((part) => javaString(part)).join(', ')},
      *    ${javaString(exampleStatement(entry))});</pre>`
-         : ` sqlplus lee
-     * la sentencia por su entrada estándar, así que este motor no tiene forma argv y
-     * la excepción es suya, no la norma:
+           : ` este motor no declara
+     * ninguna forma de invocación por CLI en el catálogo, así que lo único que queda es el
+     * shell, con la sentencia armada por tu cuenta y su riesgo:
      * <pre>dbShell(${javaString(concreteCmd(entry, dbName))});</pre>`
      }${enumValuesDoc(model)}
      */
@@ -2819,7 +2883,7 @@ function dbSection(model) {
         command.addAll(List.of(argv));
         return runProcess(command);
     }
-${mongoEvalHelper(scriptArgv)}
+${mongoEvalHelper(scriptArgv)}${dbScriptHelper(entry, queryArgv ? queryArgv.map((part) => javaString(part)).join(', ') : null)}
 ${uuidLiteralHelper(model)}${rescueSection(model)}
 
     /**
@@ -3278,7 +3342,7 @@ function outboxDrainSection(model) {
      */
     private static int pendingOutboxRows() {
         try {
-            String output = ${statement === null ? `mongoEval(${documentCount})` : `db(${argv}, ${statement})`};
+            String output = ${statement === null ? `mongoEval(${documentCount})` : statementCall(entry, argv, statement)};
             // Solo la ÚLTIMA línea: un cliente puede escribir avisos antes del resultado, y
             // concatenar sus dígitos daría un número enorme que parecería trabajo pendiente.
             String trimmed = output.trim();
@@ -3384,11 +3448,13 @@ function rescueSection(model) {
 
   const NL = String.fromCharCode(10);
 
-  // El reloj «a ahora» va en línea y no en el catálogo: CURRENT_TIMESTAMP es ANSI y lo aceptan
-  // los tres motores que declaran 'staleTimestamp', así que declararlo por motor sugeriría una
-  // variabilidad que no existe.
+  // El reloj «a ahora» era una constante en línea mientras solo lo declaraban motores donde
+  // CURRENT_TIMESTAMP es ANSI y significa lo mismo. Dejó de serlo con SQL Server, donde devuelve
+  // la hora LOCAL del servidor y no UTC, mientras el rescate compara contra un `Instant`: con el
+  // contenedor en UTC coincide, pero por coincidencia. De ahí `nowTimestamp`, que solo declara
+  // quien se aparta del ANSI.
   const RANCIO = { sql: entry.staleTimestamp, mongo: CLOCK.stale };
-  const AHORA = { sql: 'CURRENT_TIMESTAMP', mongo: CLOCK.now };
+  const AHORA = { sql: entry.nowTimestamp ?? 'CURRENT_TIMESTAMP', mongo: CLOCK.now };
 
   const mover = (r, clock) => {
     const script = setStateScript({
@@ -3400,9 +3466,9 @@ function rescueSection(model) {
     });
     const cuerpo = document
       ? '            mongoEval(' + javaString(script.prefix) + ' + id + ' + javaString(script.suffix) + ');'
-      : '            db(' + argv + ', ' +
-        javaString(stallSql({ ...r, clockSql: clock.sql })) +
-        ' + uuidLiteral(id));';
+      : '            ' +
+        statementCall(entry, argv, javaString(stallSql({ ...r, clockSql: clock.sql })) + ' + uuidLiteral(id)') +
+        ';';
     return '        if (' + javaString(r.operation) + '.equals(operation)) {' + NL + cuerpo + NL + '            return;' + NL + '        }';
   };
 
@@ -3418,9 +3484,9 @@ function rescueSection(model) {
           })
         ) +
         ').trim());'
-      : '            return Long.parseLong(db(' + argv + ', ' +
-        javaString(missingClockCountSql(r)) +
-        ').trim());';
+      : '            return Long.parseLong(' +
+        statementCall(entry, argv, javaString(missingClockCountSql(r))) +
+        '.trim());';
     return '        if (' + javaString(r.operation) + '.equals(operation)) {' + NL + cuerpo + NL + '        }';
   };
 
@@ -3515,11 +3581,19 @@ function abandonOutboxSection(model) {
   const abandon = abandonOutboxScript(ABANDONED);
   const update = document
     ? `        mongoEval(${javaString(abandon.prefix)} + eventType + ${javaString(abandon.suffix)});`
-    : `        db(${argv}, "UPDATE outbox_event SET attempts = ${ABANDONED} WHERE event_type = '" + eventType + "' AND published_at IS NULL");`;
+    : `        ${statementCall(
+        entry,
+        argv,
+        `"UPDATE outbox_event SET attempts = ${ABANDONED} WHERE event_type = '" + eventType + "' AND published_at IS NULL"`
+      )};`;
 
   const cleanup = document
     ? `        mongoEval(${javaString(clearAbandonedScript(ABANDONED))});`
-    : `        db(${argv}, "DELETE FROM outbox_event WHERE published_at IS NULL AND attempts >= ${ABANDONED}");`;
+    : `        ${statementCall(
+        entry,
+        argv,
+        `"DELETE FROM outbox_event WHERE published_at IS NULL AND attempts >= ${ABANDONED}"`
+      )};`;
 
   return `
     /**
@@ -3640,7 +3714,7 @@ ${ramas}
                     "No hay barrido para la activación '" + activation + "'. Las que lo tienen: ${conocidas}");
         }
         for (String statement : statements) {
-            db(${argv}, statement);
+            ${statementCall(entry, argv, 'statement')};
         }
     }
 `;

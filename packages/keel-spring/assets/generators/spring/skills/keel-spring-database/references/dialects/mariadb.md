@@ -67,3 +67,25 @@ escenarios no deben asumir ids de ejecuciones previas.
 El perfil test corre H2 en `MODE=PostgreSQL` (no MariaDB): collations,
 funciones y el comportamiento de identidad difieren. Toda query no trivial se
 confirma con escenarios `FL-*` contra el MariaDB real.
+
+## Escribir un UUID y una fecha en una sentencia a mano
+
+Lo que el arnés usa —y lo que hay que usar en cualquier SQL que se escriba a mano contra la
+base de prueba—:
+
+```sql
+-- el id de una fila: TEXTO ENTRECOMILLADO, no UUID_TO_BIN
+SELECT * FROM jobs WHERE id = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+-- un instante infinitamente rancio
+UPDATE jobs SET running_since = TIMESTAMP '1970-01-01 00:00:00' WHERE ...;
+```
+
+**MariaDB no es MySQL aquí**, y es la trampa: `UUID_TO_BIN` es una función de MySQL 8 que MariaDB
+no tiene, y el tipo tampoco coincide. Contra `mariadb:11` la columna sale como `uuid` NATIVO (el
+tipo que MariaDB tiene desde 10.7 y que el dialecto usa), no como `binary(16)`. Medido con
+`SHOW COLUMNS`, no deducido.
+
+Y por qué importa el detalle: un literal que no casa con el tipo **no falla**. El `WHERE` devuelve
+vacío, el `UPDATE` afecta a cero filas, y un escenario que fabrica su precondición así pasa en
+verde sin haber preparado nada. Si alguien baja la imagen por debajo de 10.7 (sin tipo nativo, el
+mapeo cae a binario), esto cambia — y lo dice `npm run claim-check --database=mariadb`.

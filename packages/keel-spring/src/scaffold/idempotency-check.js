@@ -100,7 +100,16 @@ function sweepClaimChecks(model) {
     .filter((operation) => operation.sweep && (operation.reconciles ?? []).length === 0);
   if (sweeps.length === 0) return [];
 
-  const CLAIM_WRITE = String.raw`@Modifying|@Query\s*\(\s*"\s*update|findAndModify|findOneAndUpdate|[Cc]laim|[Rr]eclam`;
+  // Sin escapes que awk no entienda (`\s`, `\.`, `\(`): estos patrones viajan por awk además de
+  // por grep en cuanto el check lleva `scope: method` —`methodBody` los usa para recortar el
+  // bloque—, y allí un escape que no reconoce deja una regexp desbalanceada que ABORTA el check.
+  // El efecto es un hallazgo falso indistinguible de uno real.
+  const CLAIM_WRITE =
+    '@Modifying|@Query[[:space:]]*[(][^)]*[Uu]pdate|findAndModify|findOneAndUpdate|[Cc]laim|[Rr]eclam';
+
+  // Los reclamos que build SÍ generó, de cualquier barrido del diseño. Son lo que hay que
+  // descartar al mirar un barrido pendiente: ver el `deny` de abajo.
+  const generados = sweeps.flatMap((operation) => (operation.claim ?? []).map((claim) => claim.method));
 
   return sweeps.map((operation) => {
     const claims = operation.claim ?? [];
@@ -129,6 +138,19 @@ function sweepClaimChecks(model) {
       subject: operation.name,
       claim: CLAIM_WRITE,
       bound: entities.join('|'),
+      // Se mira el BLOQUE del método, no el archivo, y se descarta el reclamo que build generó
+      // para OTRO barrido del mismo diseño. Sin las dos cosas el check salía VERDE sobre el
+      // árbol recién generado —medido con la fixture `payout-runs`, donde el agente no ha
+      // escrito nada—: el `@Modifying` de `claimForSendPayouts` vive en el repositorio del mismo
+      // agregado, así que satisfacía por su cuenta el check del barrido que hay que escribir a
+      // mano. Es el mismo falso verde que ya obligó a blindar la familia `reconciliation`,
+      // entrando por la otra puerta.
+      //
+      // Se descarta el BLOQUE y no el ARCHIVO a propósito: el reclamo del agente cabe —y
+      // normalmente vive— en ese mismo adaptador, y prohibírselo sería pedirle la
+      // implementación incorrecta, que es la peor clase de gate.
+      scope: 'method',
+      deny: generados.length > 0 ? generados.join('|') : null,
       exclude: '(^$)',
       why:
         `el barrido corre en TODAS las réplicas, así que el trabajo que toma tiene que RECLAMARSE con una ` +

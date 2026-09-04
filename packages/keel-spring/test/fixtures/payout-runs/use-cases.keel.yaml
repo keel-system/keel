@@ -1,0 +1,70 @@
+operations:
+
+  requestPayout:
+    description: Registra una orden de pago para que la tome el siguiente ciclo.
+    kind: command
+    input:
+      fields:
+        reference: { type: string, required: true, constraints: { maxLength: 64 } }
+        amount:    { type: decimal, required: true, constraints: { min: 0.01, scale: 2 } }
+    output: { entity: Payout }
+    preconditions:
+      - No hay ya una orden con esa misma referencia.
+    rules:
+      - "La orden nace en requested y sin relojes: nadie la ha tomado todavía."
+    errors:
+      - { code: PAYOUT_ALREADY_REQUESTED, when: Ya existe una orden con esa referencia., http: 409 }
+
+  getPayout:
+    description: Consulta el estado de una orden de pago por su identificador.
+    kind: query
+    input:
+      fields:
+        id: { type: uuid, required: true }
+    output: { entity: Payout }
+    errors:
+      - { code: PAYOUT_NOT_FOUND, when: No existe una orden con ese identificador., http: 404 }
+
+  # BARRIDO RECLAMABLE. `requested` es una cola, así que build genera `claimForSendPayouts`
+  # y el gate exige que el handler lo LLAME (familia sweepClaim, rama «con reclamo
+  # generado»). Está aquí para que el pendiente de abajo tenga de qué distinguirse: sin un
+  # reclamo generado en el mismo proyecto, el `deny` de sus checks no descarta nada.
+  sendPayouts:
+    description: Toma las órdenes registradas y las envía al proveedor.
+    kind: command
+    internal: true
+    input: "void"
+    output: "void"
+    schedule:
+      cron: "* * * * *"
+      description: Cada minuto, sobre el lote que quepa en una pasada.
+    transitions:
+      - entity: Payout
+        from: [requested]
+        to: sending
+    rules:
+      - Una orden la toma un solo ciclo, aunque el enviador corra en varias réplicas.
+
+  # BARRIDO PENDIENTE, y el motivo de esta fixture. Sale de DOS estados en vuelo a la vez:
+  # `sending` y `retrying` son ambos alcanzables, y cada uno tiene su propio reloj
+  # (`sendingSince`, `retryingSince`). No hay una sola cota que mida «lleva demasiado» para
+  # el lote, así que build no genera el reclamo y avisa de por qué. Las dos capas —el SELECT
+  # de candidatos y la escritura condicional— las escribe el agente, y lo único que queda
+  # vigilándolo es el gate.
+  closePayoutRuns:
+    description: Cierra las órdenes que llevan demasiado tiempo en vuelo, vengan de envío o de reintento.
+    kind: command
+    internal: true
+    input: "void"
+    output: "void"
+    schedule:
+      cron: "*/5 * * * *"
+      description: Cada cinco minutos, sobre lo que lleve atascado más de un ciclo.
+    transitions:
+      - entity: Payout
+        from: [sending, retrying]
+        to: failed
+    rules:
+      - Una orden que lleva en sending más de lo que tarda un ciclo se da por perdida y se cierra.
+      - Una orden que lleva en retrying más de lo que tarda un ciclo se cierra igual, midiendo SU propio reloj.
+      - "Una orden recién puesta en vuelo no se cierra: hay una réplica trabajando en ella."

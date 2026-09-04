@@ -39,6 +39,8 @@ import { subPackage } from './render.js';
 import { screamingSnake } from '../lib/naming.js';
 import { claimSelectionSnippet, claimTransaction, supportsSkipLocked, unsupportedClaimWarning } from '../lib/claim-sql.js';
 import { usesOutbox } from './outbox.js';
+// La derivación del orden se comparte con `claim-check`: ver el porqué en su definición.
+import { orderFieldOf } from '../lib/claim-probes.js';
 
 /**
  * Los reclamos de RESCATE de esta entidad: los que sacan filas de un estado en vuelo con
@@ -235,22 +237,6 @@ export function portMethods(model, entity, imports) {
      */
     List<${entity.name}> ${claim.method}();`
   );
-}
-
-/**
- * El orden del barrido. Lo que no puede es quedarse sin ORDER BY: sin él el motor
- * devuelve las filas como le convenga y «el más antiguo primero», que es lo que casi
- * todo barrido promete, deja de cumplirse sin que nada falle.
- */
-function orderFieldOf(entity, claim) {
-  // En un rescate el orden sale del propio reloj de la cota: el que más lleva atascado,
-  // primero. Cualquier otro campo haría que una tanda con más atascados que batchSize
-  // volviera a mirar siempre las mismas filas y las más viejas no se rescataran nunca.
-  if (claim?.stalled) return claim.stalled.stampField;
-  for (const candidate of ['createdAt', 'requestedAt', 'updatedAt']) {
-    if (entity.fields.some((field) => field.name === candidate)) return candidate;
-  }
-  return 'id';
 }
 
 /** Métodos de la interfaz Spring Data <E>JpaRepository (modelo relacional). */

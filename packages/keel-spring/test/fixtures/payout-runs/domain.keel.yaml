@@ -1,0 +1,61 @@
+# El lifecycle es lo que decide qué reclamo puede generar build, y aquí está escrito para
+# producir los DOS casos a la vez:
+#
+#   · `requested` es una COLA —ninguna transición LLEGA a él—, así que el barrido que lo
+#     vacía se lleva el lote entero y build le genera su reclamo.
+#   · `sending` y `retrying` están los dos EN VUELO —se llega a ambos—, y el barrido que
+#     cierra lo atascado sale de los dos a la vez. Dos estados en vuelo son dos relojes, y
+#     «lleva demasiado» deja de estar definido para el lote: build NO genera ese reclamo y
+#     lo dice en voz alta.
+
+types:
+  PayoutStatus:
+    description: En qué punto del ciclo de pago está la orden.
+    values: [requested, sending, retrying, settled, failed]
+
+entities:
+  Payout:
+    description: Orden de pago que un ciclo toma, envía al proveedor y cierra.
+    fields:
+      id:
+        type: uuid
+        id: true
+        generated: true
+      reference:
+        type: string
+        required: true
+        constraints: { maxLength: 64 }
+        description: Referencia con la que el llamante identifica el pago.
+      amount:
+        type: decimal
+        required: true
+        constraints: { min: 0.01, scale: 2 }
+        description: Importe a pagar.
+      status:
+        type: PayoutStatus
+        required: true
+        default: requested
+      sendingSince:
+        type: timestamp
+        description: >-
+          Cuándo tomó esta orden el ciclo que la está enviando. Es el reloj del primer
+          estado en vuelo.
+      retryingSince:
+        type: timestamp
+        description: >-
+          Cuándo entró la orden en reintento. Es el reloj del SEGUNDO estado en vuelo, y su
+          existencia es la razón de que «lleva demasiado» no esté definido para un lote que
+          sale de los dos: son dos marcas distintas y no hay una sola cota que las mida.
+      createdAt:
+        type: timestamp
+        generated: true
+    lifecycle:
+      field: status
+      transitions:
+        requested: [sending]
+        sending: [settled, retrying, failed]
+        retrying: [sending, failed]
+        settled: []
+        failed: []
+    invariants:
+      - Una orden en sending tiene siempre sendingSince estampado, y una en retrying, retryingSince.

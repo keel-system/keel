@@ -213,7 +213,21 @@ const MATRIX = [
   // RESCATE con su cota temporal. Es la única fila que tokeniza ese Java —el @Modifying
   // condicional sobre el reloj, su @Value y los tres helpers del arnés—, que hasta ahora
   // no lo compilaba nadie: lo respaldaban solo comparaciones de cadenas.
+  // El barrido cuyo reclamo build NO puede generar: dos estados en vuelo a la vez. Es la única
+  // fixture que emite la nota del stub sin reclamo y el check pendiente del gate, y la que
+  // destapó que ese check salía verde sobre el árbol recién generado.
+  ['payout-runs', {}],
   ['job-dispatch', {}],
+  // Y el mismo diseño sobre los tres motores que hasta ahora no declaraban su forma del reloj
+  // ni la del uuid. Cada uno cambia el TEXTO que viaja dentro de los literales del arnés
+  // —`CAST(… AS datetimeoffset)`, `HEXTORAW(REPLACE(…`, `SYSUTCDATETIME()`—, y oracle cambia
+  // además la ESTRUCTURA: su sentencia no va por el argv sino por un archivo, así que emite un
+  // `dbSql(...)` con el envoltorio multilínea dentro de un literal Java. Ahí es donde se pierde
+  // un escape —pasó: el envoltorio salió con saltos de línea crudos y el literal sin cerrar—, y
+  // estas tres filas son lo único que lo tokeniza sin JDK.
+  ['job-dispatch', { database: 'mariadb' }],
+  ['job-dispatch', { database: 'sqlserver' }],
+  ['job-dispatch', { database: 'oracle' }],
   // Y su hermana documental: el modelo de persistencia es otra rama entera —espejo,
   // repositorios, reclamo por `findAndModify` y un arnés que habla `mongosh` en vez de
   // `psql`—, y el `mongoEval` del rescate lleva sus comillas escapadas dentro de un

@@ -64,3 +64,24 @@ El perfil test corre H2 en `MODE=PostgreSQL` (no SQL Server): collation
 (sensible en H2, insensible aquí), `TOP`/`FETCH`, funciones de fecha y el
 comportamiento de bloqueos difieren por completo. Queries no triviales →
 escenarios `FL-*` contra el SQL Server real.
+
+## Escribir un UUID y una fecha en una sentencia a mano
+
+```sql
+-- el id de una fila: uniqueidentifier acepta el texto entrecomillado
+SELECT * FROM jobs WHERE id = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+-- un instante infinitamente rancio
+UPDATE jobs SET running_since = CAST('1970-01-01T00:00:00Z' AS datetimeoffset) WHERE ...;
+```
+
+Dos avisos propios de T-SQL, los dos con forma de sorpresa:
+
+- **`TIMESTAMP '…'` no existe aquí.** En T-SQL `TIMESTAMP` es sinónimo de `ROWVERSION` —un
+  contador binario, no una fecha— y el dialecto no admite literales tipados ANSI. Copiar la forma
+  de PostgreSQL da un error de tipo, en el mejor caso.
+- **`CURRENT_TIMESTAMP` devuelve hora LOCAL del servidor**, no UTC, mientras el código compara
+  contra un `Instant`. Para «ahora» en UTC: `SYSUTCDATETIME()`.
+
+⚠ Estos dos literales están **declarados y no ejecutados**: el catálogo los razona, pero nadie ha
+corrido `claim-check --database=sqlserver`. Si escribes un SQL a mano y no casa, no fallará: dará
+vacío. Confírmalo con una lectura antes de fiarte de una precondición fabricada así.

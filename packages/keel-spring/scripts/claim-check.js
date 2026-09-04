@@ -25,6 +25,13 @@
 // error de sintaxis tumba el arranque antes de llegar a ninguna aserción. Eso es gratis y viene
 // incluido.
 //
+// **Dos ejes.** Por MOTOR (`--database=`), porque el literal con el que se nombra una fila y el
+// instante rancio con el que se fabrica una precondición cambian con el dialecto —y un literal
+// que no casa no falla: se lleva cero filas por delante—. Y por MODELO DE PERSISTENCIA, que lo
+// decide el DISEÑO: con una fixture documental lo que se ejercita es la otra rama entera
+// (`findAndModify` con su `Criteria`), que no comparte una línea con la relacional y que hasta
+// ahora no ejecutaba nadie — `mongo-check` mira los scripts del ARNÉS, no el reclamo.
+//
 //   node packages/keel-spring/scripts/claim-check.js [fixture] [--database=<motor>] [--keep]
 //   npm run claim-check --workspace packages/keel-spring
 //
@@ -41,6 +48,7 @@ import { tmpDir } from '../test/helpers/tmp.js';
 import { buildModel } from '../src/lib/model.js';
 import { scaffoldService } from '../src/scaffold/index.js';
 import { claimScenarios, claimTestClass, CLASS_NAME, PACKAGE_LEAF } from '../src/lib/claim-probes.js';
+import { databaseHealthProbe } from '../src/lib/stack-catalog.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixturesDir = path.join(here, '..', 'test', 'fixtures');
@@ -106,13 +114,17 @@ function verdictStamp() {
 function prepare() {
   const service = loadService(path.join(fixturesDir, fixture));
   if (service.errors.length > 0) throw new Error(`la fixture '${fixture}' no carga: ${service.errors.join(' | ')}`);
-  if ((service.layers.persistence?.default?.model ?? 'relational') === 'document') {
-    throw new Error(`la fixture '${fixture}' es documental: esta pasada ejercita la rama relacional del reclamo`);
-  }
 
-  const model = buildModel({ manifest: service.manifest, layers: service.layers, stack: { database } });
+  // El modelo de persistencia lo declara el DISEÑO, así que el motor sale de él y no del
+  // argumento: pedir `--database=postgresql` sobre una fixture documental no significa nada.
+  const document = (service.layers.persistence?.default?.model ?? 'relational') === 'document';
+  const engine = document ? 'mongodb' : database;
+
+  const model = buildModel({ manifest: service.manifest, layers: service.layers, stack: { database: engine } });
   const scenarios = claimScenarios(model);
-  if (scenarios.claims.length === 0) {
+  // La guarda cuenta como sujeto por sí sola: un diseño puede no tener barridos y tener un
+  // efecto externo irreversible que reclamar, y ahí también hay algo que ejercitar.
+  if (scenarios.claims.length === 0 && !scenarios.guard) {
     throw new Error(`la fixture '${fixture}' no genera ningún reclamo: no hay nada que ejercitar`);
   }
 
@@ -121,7 +133,7 @@ function prepare() {
   // así que ahí no puede colgar de un directorio autolimpiable — una bandera que borra lo que
   // dice conservar es peor que no tenerla.
   const workspace = keep ? fs.mkdtempSync(path.join(os.tmpdir(), 'keel-claim-keep-')) : tmpDir('keel-claim-check-');
-  scaffoldService({ manifest: service.manifest, layers: service.layers, workspace, force: true, stack: { database } });
+  scaffoldService({ manifest: service.manifest, layers: service.layers, workspace, force: true, stack: { database: engine } });
   const projectName = fs
     .readdirSync(path.join(workspace, 'services'), { withFileTypes: true })
     .find((entry) => entry.isDirectory()).name;
@@ -131,15 +143,19 @@ function prepare() {
   // es la misma que usa el proyecto contra su propia infraestructura, y si build la cambia
   // este runner la sigue.
   const db = YAML.parse(fs.readFileSync(path.join(projectDir, 'src/main/resources/parameters/local/db.yaml'), 'utf8'));
-  const datasource = db?.spring?.datasource ?? {};
+  const datasource = document ? { uri: db?.spring?.data?.mongodb?.uri } : (db?.spring?.datasource ?? {});
 
   // El paquete de cada clase se LEE del proyecto generado en vez de suponerse: si el scaffold
   // reorganiza el layout, este runner lo sigue en vez de escribir un import que no existe.
   const packages = resolvePackages(projectDir, {
     enums: `${scenarios.enumType}.java`,
     port: `${scenarios.entity.name}Repository.java`,
-    entities: `${scenarios.entity.name}Jpa.java`,
-    repositories: `${scenarios.entity.name}JpaRepository.java`
+    // El espejo y su repositorio cambian de nombre con el modelo: son dos ramas del
+    // scaffolding que no comparten una línea.
+    entities: document ? `${scenarios.entity.name}Document.java` : `${scenarios.entity.name}Jpa.java`,
+    repositories: document
+      ? `${scenarios.entity.name}RepositoryImpl.java`
+      : `${scenarios.entity.name}JpaRepository.java`
   });
 
   const testFile = path.join(
@@ -150,9 +166,17 @@ function prepare() {
     `${CLASS_NAME}.java`
   );
   fs.mkdirSync(path.dirname(testFile), { recursive: true });
-  fs.writeFileSync(testFile, claimTestClass(model, scenarios, { datasource, packages, database }), 'utf8');
+  fs.writeFileSync(testFile, claimTestClass(model, scenarios, { datasource, packages, database: engine }), 'utf8');
 
-  return { projectDir, model, scenarios, container: `${service.manifest.service.name}-db` };
+  // El sondeo se resuelve AQUÍ y no en el bucle de espera: si el motor elegido no declara
+  // ninguno, la pasada tiene que morir diciendo eso —y no agotando un plazo contra un motor
+  // sano, que es un rojo indistinguible de «la base no arranca».
+  const probe = databaseHealthProbe(engine, model.service.name.replaceAll('-', '_'));
+  if (!probe) {
+    throw new Error(`el motor '${engine}' no declara sondeo en el catálogo: no hay a qué esperar`);
+  }
+
+  return { projectDir, model, scenarios, probe, engine, container: `${service.manifest.service.name}-db` };
 }
 
 /** Busca cada clase en el árbol generado y devuelve su paquete, leído de su propia cabecera. */
@@ -175,16 +199,27 @@ function resolvePackages(projectDir, wanted) {
   return packages;
 }
 
-/** El motor tarda en aceptar conexiones; se sondea con su propio cliente dentro del contenedor. */
-function waitForDatabase(runtime, container) {
-  const deadline = Date.now() + 90000;
+/**
+ * El motor tarda en aceptar conexiones; se sondea con el comando que declara el CATÁLOGO.
+ *
+ * Aquí había el sondeo de PostgreSQL escrito a mano, y eso ataba el runner entero a ese motor:
+ * con cualquier otro, el sondeo no daba 0 nunca y la pasada moría a los 90 s en «el motor no
+ * aceptó conexiones a tiempo» sin haber ejecutado ni una aserción. Ese rojo no distingue «el
+ * motor no arrancó» de «este runner no sabe preguntárselo», que es la peor forma de fallar.
+ *
+ * El comando y el plazo salen los dos de `databaseHealthProbe` —la misma tabla que usa el
+ * compose de `deploy/`—: escribirlos aquí mediría que el motor responde, no que el generador
+ * acierta, que es justo la regla que ya motivó `broker-probes.js` y `mongo-probes.js`.
+ */
+function waitForDatabase(runtime, container, probe) {
+  const deadline = Date.now() + probe.budgetSeconds * 1000;
   let last = '';
   while (Date.now() < deadline) {
-    const probe = run(runtime, ['exec', container, 'pg_isready', '-q']);
-    if (probe.status === 0) return true;
-    last = (probe.stderr || probe.stdout).trim();
+    const result = run(runtime, ['exec', container, ...probe.argv]);
+    if (result.status === 0) return true;
+    last = (result.stderr || result.stdout).trim().split('\n').at(-1) ?? '';
     // Espera SÍNCRONA sin lanzar un proceso: el runner es secuencial de arriba abajo.
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2000);
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, probe.intervalSeconds * 1000);
   }
   if (last) console.error(`  último error del sondeo: ${last}`);
   return false;
@@ -243,10 +278,15 @@ try {
   console.error(error.message);
   process.exit(2);
 }
-const { projectDir, model, scenarios, container } = prepared;
+const { projectDir, model, scenarios, probe, engine, container } = prepared;
 
-console.log(`claim-check · ${fixture} (${database}) · ${runtimeInfo.runtime}`);
-console.log(`  reclamos ejercitados: ${scenarios.claims.map((claim) => claim.method).join(', ')}`);
+console.log(`claim-check · ${fixture} (${engine}) · ${runtimeInfo.runtime}`);
+console.log(
+  `  reclamos ejercitados: ${[
+    ...scenarios.claims.map((claim) => claim.method),
+    ...(scenarios.guard ? [`${scenarios.guard.method} (guarda)`] : [])
+  ].join(', ')}`
+);
 
 const { frontend, log } = composeUp(runtimeInfo.frontends, projectDir);
 if (!frontend) {
@@ -256,7 +296,7 @@ if (!frontend) {
 
 let exitCode = 2;
 try {
-  if (!waitForDatabase(runtimeInfo.runtime, container)) {
+  if (!waitForDatabase(runtimeInfo.runtime, container, probe)) {
     console.error('El motor no aceptó conexiones a tiempo.');
   } else {
     const gradle = run('sh', [
@@ -284,7 +324,7 @@ try {
       exitCode = failed > 0 ? 1 : 0;
       fs.writeFileSync(
         path.join(here, '..', 'claim-check.json'),
-        `${JSON.stringify({ ...verdictStamp(), fixture, database, cases }, null, 2)}\n`,
+        `${JSON.stringify({ ...verdictStamp(), fixture, database: engine, cases }, null, 2)}\n`,
         'utf8'
       );
     }

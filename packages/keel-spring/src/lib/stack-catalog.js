@@ -179,6 +179,18 @@ export const DATABASES = {
     id: 'mariadb',
     label: 'MariaDB',
     staleTimestamp: "TIMESTAMP '1970-01-01 00:00:00'",
+    // MEDIDO, no deducido, y el resultado contradice a la deducción: pese a ser el primo de
+    // MySQL, aquí el literal NO es `UUID_TO_BIN(...)` —MariaDB ni siquiera tiene esa función, es
+    // de MySQL 8— sino el texto entrecomillado, como en PostgreSQL. La razón es el tipo: contra
+    // `mariadb:11`, `SHOW COLUMNS FROM jobs` da `id uuid`, el tipo NATIVO que MariaDB tiene desde
+    // 10.7 y que el dialecto usa; no `binary(16)` como en MySQL. Verificado ejecutando
+    // `node scripts/claim-check.js job-dispatch --database=mariadb`.
+    //
+    // De qué depende: de la IMAGEN, que este mismo catálogo fija abajo. Por debajo de 10.7 no hay
+    // tipo nativo y el mapeo cae a binario, con lo que este literal dejaría de casar —y no
+    // fallaría: devolvería vacío—. Cambiar la imagen obliga a volver a medir, y ese comando es
+    // exactamente lo que lo dice.
+    uuidLiteral: { prefix: "'", suffix: "'" },
     kind: 'relational',
     gradleDependencies: ["runtimeOnly 'org.mariadb.jdbc:mariadb-java-client'"],
     flywayDependencies: [FLYWAY_CORE, "runtimeOnly 'org.flywaydb:flyway-mysql'"],
@@ -212,6 +224,24 @@ export const DATABASES = {
   sqlserver: {
     id: 'sqlserver',
     label: 'SQL Server',
+    // NO lleva el literal ANSI `TIMESTAMP '…'` de los otros: en T-SQL `TIMESTAMP` es sinónimo de
+    // ROWVERSION —un contador binario, no una fecha— y el dialecto no admite literales tipados.
+    // Escribirlo como en los demás no daría una fecha rancia: daría un error de tipo, o algo peor.
+    // Va como cadena ISO convertida, que es asignable tanto a `datetime2` como al
+    // `datetimeoffset` al que Hibernate 6 mapea un `Instant` en este dialecto.
+    //
+    // ⚠ DECLARADO, NO MEDIDO. Ninguna red lo mira: `java-syntax` borra los literales antes de
+    // tokenizar y `compile-check` lo mete dentro de un `javaString()` que escapa siempre, así
+    // que un literal incorrecto sale como Java válido. Se mide con
+    // `node scripts/claim-check.js job-dispatch --database=sqlserver`.
+    staleTimestamp: "CAST('1970-01-01T00:00:00Z' AS datetimeoffset)",
+    // `CURRENT_TIMESTAMP` aquí devuelve `datetime` en hora LOCAL del servidor, no UTC, y el
+    // rescate compara contra un `Instant`. Con el contenedor en UTC coincidiría, pero por
+    // coincidencia: el reloj «a ahora» de este motor se nombra aparte.
+    nowTimestamp: 'SYSUTCDATETIME()',
+    // `uniqueidentifier` acepta el literal en texto con conversión implícita, igual que el
+    // `uuid` de PostgreSQL y por el mismo motivo: es un tipo nativo, no bytes.
+    uuidLiteral: { prefix: "'", suffix: "'" },
     kind: 'relational',
     gradleDependencies: ["runtimeOnly 'com.microsoft.sqlserver:mssql-jdbc'"],
     flywayDependencies: [FLYWAY_CORE, "runtimeOnly 'org.flywaydb:flyway-sqlserver'"],
@@ -250,6 +280,16 @@ export const DATABASES = {
   oracle: {
     id: 'oracle',
     label: 'Oracle Database Free',
+    // El literal ANSI sí lo acepta (sintaxis estándar documentada), igual que los tres primeros.
+    staleTimestamp: "TIMESTAMP '1970-01-01 00:00:00'",
+    // Sin tipo nativo: `OracleDialect` mapea `java.util.UUID` a `RAW(16)`, así que el literal en
+    // texto NO casa con ninguna fila —y, como en MySQL, tampoco falla: el WHERE devuelve vacío—.
+    // `HEXTORAW` sobre los 32 hex sin guiones produce esos mismos 16 bytes.
+    //
+    // ⚠ DECLARADO, NO MEDIDO, igual que el de sqlserver y con el mismo motivo: la única red que
+    // ve un literal que no casa es ejecutarlo. Se mide con
+    // `node scripts/claim-check.js job-dispatch --database=oracle`.
+    uuidLiteral: { prefix: "HEXTORAW(REPLACE('", suffix: "','-',''))" },
     kind: 'relational',
     gradleDependencies: ["runtimeOnly 'com.oracle.database.jdbc:ojdbc11'"],
     flywayDependencies: [FLYWAY_CORE, "runtimeOnly 'org.flywaydb:flyway-database-oracle'"],
@@ -264,6 +304,31 @@ export const DATABASES = {
     // Oracle Instant Client es demasiado pesado para devtools: sqlplus ya viene
     // dentro del propio contenedor de Oracle, así que se valida ejecutando ahí.
     cliVia: 'dbcontainer',
+    // La OTRA forma de invocación, y la razón de que exista este campo.
+    //
+    // El contrato normal de `cliQueryArgv` es «argv terminado en el flag que toma la sentencia,
+    // y el llamante la añade como un elemento más» (`-c`, `-e`, `-Q`, `--eval`). sqlplus no
+    // tiene ese flag: lee por la entrada estándar o de un FICHERO. Mientras Oracle no declaró
+    // ninguna forma, el arnés se quedaba sin `stallInFlight`, sin `ageForReconciliation` y sin
+    // `abandonOutboxEvent` —en silencio—, así que sobre este motor un diseño con rescate, con
+    // `reconciledBy` o con outbox no podía tener los escenarios que `crossrefs.js` le exige.
+    //
+    // Y la salida obvia —`sh -c 'echo … | sqlplus'`— está vetada por la misma razón que
+    // `copyIntoContainer` existe: en Windows el cliente de contenedores reconstruye la línea de
+    // comandos y se come las comillas de dentro. La vía es la de mongosh: el texto viaja como
+    // ARCHIVO y el argv solo lleva su ruta.
+    cliQueryForm: 'scriptFile',
+    cliScriptExtension: '.sql',
+    // Sin las directivas, la salida trae cabecera, líneas en blanco y el «N rows selected» que
+    // ningún `parseLong` del arnés sabe leer; sin el `EXIT`, sqlplus se queda esperando otra
+    // sentencia y el proceso no termina nunca.
+    cliScript: (statement) =>
+      ['SET HEADING OFF', 'SET FEEDBACK OFF', 'SET PAGESIZE 0', 'SET VERIFY OFF', 'SET ECHO OFF', 'SET TRIMSPOOL ON', `${statement};`, 'EXIT;', ''].join(
+        '\n'
+      ),
+    // La conexión va con el nombre del PDB escrito, igual que en `url`: el `{service}` de los
+    // comandos de arriba lo sustituye devtools, y aquí no hay quien lo sustituya.
+    cliQueryArgv: ({ user, pass }) => ['sqlplus', '-s', `${user}/${pass}@//localhost:1521/FREEPDB1`],
     cliValidateCmd: "echo 'SELECT 1 FROM dual;' | sqlplus -s {user}/{pass}@//localhost:1521/{service}",
     cliResetCmd:
       // UPPER(): en Oracle el historial puede quedar como identificador citado en
@@ -991,6 +1056,56 @@ export const HEALTHCHECKS = {
     retries: 20
   })
 };
+
+/**
+ * El sondeo de «esta base ya acepta conexiones», resuelto de las DOS fuentes que hay.
+ *
+ * La regla ya existía, pero vivía suelta dentro de `deploy.js` en forma de comentario
+ * («sqlserver y mongodb ya traen el suyo en composeService»), así que el segundo consumidor
+ * —`scripts/claim-check.js`, que tiene que ESPERAR al motor antes de correr su JUnit— no
+ * tenía de dónde leerla y acabó con `pg_isready` cableado: el runner solo servía para
+ * PostgreSQL, y con cualquier otro motor moría en «no aceptó conexiones a tiempo» sin haber
+ * ejecutado nada. Un rojo así no distingue «el motor no arrancó» de «este runner no sabe
+ * preguntárselo».
+ *
+ * Devuelve las dos caras del mismo dato, y no son intercambiables:
+ *
+ *   · `healthcheck` — tal cual va al compose, con el escape `$$` que compose espera.
+ *   · `argv` — para ejecutarlo A MANO con `<runtime> exec <contenedor> …`, y ahí `$$` tiene
+ *     que volver a ser `$`: fuera de compose, el healthcheck de sqlserver buscaría una
+ *     variable llamada `$MSSQL_SA_PASSWORD` que no existe, fallaría siempre y el sondeo
+ *     agotaría el plazo contra un motor sano.
+ *
+ * Y devuelve también los TIEMPOS, para que quien espera no invente un plazo: Oracle declara
+ * un minuto de gracia más 30 intentos de 10 s porque tarda minutos en su primera pasada, y
+ * un deadline fijo de 90 s se rendiría siempre — culpando al motor de la impaciencia de
+ * quien pregunta.
+ */
+export function databaseHealthProbe(database, dbName) {
+  const entry = DATABASES[database];
+  // El del propio servicio manda: lo traen sqlserver y mongodb, y el de Mongo además INICIA
+  // el replica set, sin el cual no hay `findAndModify` transaccional. Sustituirlo por el
+  // genérico dejaría la base respondiendo y el reclamo documental sin poder ejecutarse.
+  const healthcheck = entry?.composeService?.(dbName)?.healthcheck ?? HEALTHCHECKS[database]?.(dbName) ?? null;
+  if (!healthcheck?.test) return null;
+
+  const [form, ...rest] = healthcheck.test;
+  const unescape = (part) => part.replaceAll('$$', '$');
+  const argv = form === 'CMD-SHELL' ? ['sh', '-c', unescape(rest.join(' '))] : rest.map(unescape);
+
+  const seconds = (value, fallback) => {
+    const match = /^(\d+)s$/.exec(value ?? '');
+    return match ? Number(match[1]) : fallback;
+  };
+  const intervalSeconds = seconds(healthcheck.interval, 5);
+
+  return {
+    healthcheck,
+    argv,
+    intervalSeconds,
+    budgetSeconds: seconds(healthcheck.start_period, 0) + intervalSeconds * (healthcheck.retries ?? 20)
+  };
+}
 
 /**
  * UIs de inspección que se añaden SOLO al compose de pruebas manuales, para que el

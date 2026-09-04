@@ -1,0 +1,28 @@
+keel: "2.13"
+# El sujeto del barrido cuyo reclamo build NO puede generar.
+#
+# Hasta que existió esta fixture, esa rama —`unclaimedSweeps` en `claim.js`, y la mitad
+# «pendiente» de `sweepClaimChecks` en `idempotency-check.js`— no tenía ningún sujeto real:
+# se probaba inyectando una operación a mano sobre `stock-reservation`, así que lo que el
+# gate dice sobre un proyecto de verdad no lo había visto nadie.
+#
+# La forma es deliberada y no es un diseño roto: `closePayoutRuns` saca filas de DOS
+# estados EN VUELO a la vez, y ahí no hay un solo reloj que medir —cada estado tiene el
+# suyo—, así que `rescueClaim` se niega a inventarlo y lo dice. Nadie va a «arreglarlo»
+# añadiendo un campo, que es lo que le pasaría a un rescate sin reloj: por eso el sujeto es
+# este y no aquel.
+#
+# Y declara DOS barridos sobre la misma entidad a propósito. Con uno solo, el reclamo que
+# build genera para el otro no existe, y los checks del pendiente no tienen de qué
+# distinguirse: es exactamente el falso verde que ya obligó a blindar la familia
+# `reconciliation` con `scope: method` + `deny`, entrando por la otra puerta.
+service:
+  name: payout-runs
+  version: 1.0.0
+  description: Ejecuta pagos por ciclos y cierra los que quedaron a medias en cualquiera de sus dos estados en vuelo.
+  domain: payments
+layers:
+  domain: domain.keel.yaml
+  use-cases: use-cases.keel.yaml
+  api: api.keel.yaml
+  persistence: persistence.keel.yaml

@@ -59,3 +59,21 @@ deben asumir ids concretos. El contenedor tarda en arrancar la primera vez
 El perfil test corre H2 en `MODE=PostgreSQL` (no Oracle): la semántica
 `'' = NULL`, `NUMBER`, `dual`, funciones y secuencias difieren. Todo lo que
 toque esas áreas se confirma con escenarios `FL-*` contra el Oracle real.
+
+## Escribir un UUID y una fecha en una sentencia a mano
+
+```sql
+-- el id de una fila: RAW(16), así que el texto NO casa
+SELECT * FROM jobs WHERE id = HEXTORAW(REPLACE('3f2504e0-4f89-41d3-9a0c-0305e82c3301','-',''));
+-- un instante infinitamente rancio (el literal ANSI sí vale aquí)
+UPDATE jobs SET running_since = TIMESTAMP '1970-01-01 00:00:00' WHERE ...;
+```
+
+Y una diferencia de forma, no de sintaxis: **la sentencia no viaja por el argv**. `sqlplus` no
+tiene un flag que la tome (la lee de un fichero), así que el arnés la escribe en un archivo dentro
+del contenedor y ejecuta `@ruta`. En `AbstractFlowIT` eso es `dbSql("...")`, no `db(...)` con la
+sentencia dentro: armarla a mano para el argv no falla en Linux y sí en Windows, donde el cliente
+de contenedores se come las comillas.
+
+⚠ El literal del UUID está **declarado y no ejecutado**: nadie ha corrido
+`claim-check --database=oracle`. Un literal que no casa devuelve vacío en vez de fallar.

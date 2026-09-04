@@ -1,0 +1,12 @@
+# Superficie mínima, igual que en `job-dispatch`: lo justo para que una fila nazca por el
+# camino real en vez de sembrarse entera.
+style: rest
+basePath: /api
+endpoints:
+  requestPayout:
+    method: POST
+    path: /payouts
+    successStatus: 201
+  getPayout:
+    method: GET
+    path: /payouts/{id}

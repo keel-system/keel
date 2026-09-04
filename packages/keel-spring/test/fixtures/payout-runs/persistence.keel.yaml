@@ -1,0 +1,20 @@
+default:
+  model: relational
+
+entities:
+  Payout:
+    persisted: true
+    naturalKey: [reference]
+    indexes:
+      # El predicado del barrido reclamable, y los dos relojes que el barrido PENDIENTE
+      # tendría que mirar —uno por estado en vuelo, que es justo lo que impide que haya
+      # una sola cota y que build genere su reclamo—.
+      - [status]
+      - [status, sendingSince]
+      - [status, retryingSince]
+
+audit:
+  timestamps: declared
+
+consistency:
+  transactionalBoundary: per-operation

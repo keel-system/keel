@@ -90,14 +90,46 @@ test('con un motor documental el ejemplo es su shell de consulta, no SQL', () =>
   assert.ok(!doc.includes('SELECT id FROM'), 'el ejemplo relacional se coló en la rama documental');
 });
 
-test('Oracle declara que no tiene forma argv en vez de inventarse una', () => {
-  // sqlplus lee la sentencia por la entrada estándar, y `db(...)` no alimenta stdin.
-  // Callarlo dejaría al agente buscando una forma que no existe; decirlo lo manda a
-  // `dbShell` con la excepción explicada, que es la respuesta correcta AQUÍ.
-  assert.equal(DATABASES.oracle.cliQueryArgv, undefined);
-  const doc = javadocOf(harnessFor('oracle'), 'protected static String db(String... argv)');
-  assert.match(doc, /entrada estándar/);
-  assert.match(doc, /<pre>dbShell\(/);
+test('Oracle declara su forma propia —por ARCHIVO— en vez de no declarar ninguna', () => {
+  // Aquí se afirmaba lo contrario: que Oracle no tenía forma argv y el javadoc mandaba a
+  // `dbShell`. Era cierto y era el problema. `sqlplus` no tiene un flag que tome la sentencia,
+  // así que mientras no declaró nada, `rescueSection`, `reconciliationAgingSection` y
+  // `abandonOutboxSection` se apagaban EN SILENCIO: sobre Oracle no se podía fabricar la
+  // precondición de ningún escenario de rescate, reconciliación u outbox, mientras
+  // `crossrefs.js` seguía exigiéndolos —esa exigencia se emite antes de elegir stack—.
+  //
+  // La forma es la de mongosh, y por el mismo motivo: el texto viaja como ARCHIVO porque en
+  // Windows el cliente de contenedores se come las comillas de dentro de un argumento.
+  assert.equal(DATABASES.oracle.cliQueryForm, 'scriptFile');
+  assert.equal(DATABASES.oracle.cliScriptExtension, '.sql');
+
+  const harness = harnessFor('oracle');
+  // El envoltorio lo pone el catálogo, no el arnés: directivas de formato —sin ellas la salida
+  // trae cabecera y un «N rows selected» que ningún parseLong lee— y el EXIT, sin el cual
+  // sqlplus se queda esperando otra sentencia y el proceso no termina.
+  assert.match(harness, /protected static String dbSql\(String statement\)/);
+  assert.match(harness, /SET HEADING OFF\\nSET FEEDBACK OFF/);
+  assert.match(harness, /statement \+ ";\\nEXIT;\\n"/);
+  // Y el argv lleva la RUTA, no la sentencia.
+  assert.match(harness, /db\("sqlplus", "-s", "[^"]+", "@" \+ DB_SCRIPT\)/);
+
+  // El javadoc de db(...) ya no manda a dbShell: manda a dbSql, que es donde está la respuesta.
+  const doc = javadocOf(harness, 'protected static String db(String... argv)');
+  assert.match(doc, /\{@link #dbSql\}/);
+});
+
+test('las cuatro secciones que componen SQL respetan la forma del motor', () => {
+  // La razón de que exista `statementCall`: eran cuatro sitios escribiendo `db(argv…, sql)` a
+  // mano, así que un motor con otra forma de invocación obligaba a acordarse de los cuatro —y
+  // olvidar uno no rompe nada visible: emite Java que compila y falla contra el motor.
+  // Con `job-dispatch`, que es la fixture con rescate: en `catalog-extended` no hay barrido y
+  // la sección no se emitiría por falta de sujeto, no por la forma del motor.
+  const harness = harnessFor('oracle', 'job-dispatch');
+  for (const helper of ['stallInFlight', 'putInFlight', 'inFlightWithoutClock']) {
+    assert.ok(harness.includes(helper), `el arnés de Oracle perdió ${helper}`);
+  }
+  // Ninguna sentencia se cuela por el argv: en Oracle todas van por el archivo.
+  assert.ok(!/db\("sqlplus"[^)]*"(SELECT|UPDATE|DELETE)/.test(harness), 'una sentencia viaja por el argv');
 });
 
 test('los marcadores del ejemplo no llevan <…>: doclint los leería como etiquetas', () => {

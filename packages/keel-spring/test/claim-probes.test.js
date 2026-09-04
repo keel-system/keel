@@ -118,7 +118,10 @@ test('el runner no escribe a mano ningún nombre del reclamo: los renderiza de e
   // La misma vigilancia que test/mongo-probes.test.js hace sobre integration-tests.js. Un
   // literal suelto en el script vuelve a partir la fuente en dos.
   const runner = fs.readFileSync(path.join(here, '..', 'scripts', 'claim-check.js'), 'utf8');
-  for (const literal of ['claimFor', '@DataJpaTest', 'JobStatus', 'saveAndFlush', 'stalled-after-seconds', 'UPDATE ']) {
+  // `pg_isready` está en la lista por lo mismo, y no es hipotético: el runner lo tuvo cableado y
+  // eso lo ató a PostgreSQL — con cualquier otro motor moría a los 90 s en «no aceptó conexiones
+  // a tiempo» sin haber ejecutado una sola aserción. El sondeo sale ahora de `databaseHealthProbe`.
+  for (const literal of ['claimFor', '@DataJpaTest', 'JobStatus', 'saveAndFlush', 'stalled-after-seconds', 'UPDATE ', 'pg_isready']) {
     assert.ok(!runner.includes(literal), `scripts/claim-check.js cita '${literal}': tiene que salir de claim-probes.js`);
   }
   assert.ok(runner.includes(CLASS_NAME) === false || runner.includes('CLASS_NAME'), 'el nombre de la clase se importa');
@@ -151,11 +154,15 @@ test('un motor que no declara su forma no emite el bloque en vez de inventarla',
   // Mismo criterio que el arnés: donde no consta el reloj rancio o el literal de uuid, no se
   // emite el helper. Un UPDATE que no casa deja el escenario verde sin haber atascado nada.
   //
-  // El sujeto es sqlserver, que es un motor REAL del catálogo al que hoy le faltan los dos
-  // campos: sobre él, un diseño con rescate no puede tener escenario de rescate. Que sea un
-  // motor de verdad y no uno inventado es lo que hace visible el hueco.
+  // El sujeto era sqlserver, un motor REAL al que le faltaban los dos campos. Ya no: los cinco
+  // relacionales los declaran, y `engine-claim-coverage.test.js` es lo que lo mantiene así. Así
+  // que la rama se prueba con un motor sintético —el nivel correcto, igual que la rama sin
+  // reparto de `claim.test.js`—: protege al SIGUIENTE que alguien añada, no a uno del catálogo.
   const { scenarios } = scenariosOf('job-dispatch');
-  assert.equal(harnessProbes(scenarios, 'sqlserver'), null);
+  assert.equal(harnessProbes(scenarios, 'motor-que-alguien-anadira'), null);
+  // Y la comprobación afirmativa, sin la cual la de arriba no distingue «no lo emite» de «este
+  // diseño no tiene rescate»: con un motor del catálogo, el bloque sí sale.
+  assert.ok(harnessProbes(scenarios, 'sqlserver'));
 });
 
 test('el arnés y el check comparten la DERIVACIÓN, no solo la plantilla', () => {
@@ -166,4 +173,57 @@ test('el arnés y el check comparten la DERIVACIÓN, no solo la plantilla', () =
   assert.ok(harness.includes('rescueShape(entity, claim)'), 'el arnés dejó de compartir la forma del rescate');
   assert.ok(harness.includes('stallSql('), 'el arnés dejó de renderizar su UPDATE del módulo');
   assert.ok(harness.includes('missingClockCountSql('), 'el arnés dejó de renderizar su contador del módulo');
+});
+
+// ── La guarda de un efecto externo irreversible ──────────────────────────────
+
+test('la guarda entra como sujeto aunque no viva en operation.claim', () => {
+  // Vive en `operation.guardClaim`, que es otro campo y otro mecanismo: uno reclama el LOTE que
+  // un barrido elige, la otra UNA fila cuyo id ya le dieron. Mirar solo `claim` la dejaba fuera,
+  // y es la que peor se puede permitir estarlo: al otro lado hay un correo que sale.
+  const { scenarios } = scenariosOf('notification-mailer');
+  assert.ok(scenarios.guard, 'la guarda dejó de ser sujeto de claim-check');
+  assert.equal(scenarios.guard.method, 'claimForSendAcceptedNotification');
+  assert.equal(scenarios.guard.entity, scenarios.entity.name, 'la guarda es de otro agregado que el barrido');
+  assert.equal(scenarios.guard.stampField, 'sendingSince');
+});
+
+test('y sus casos afirman lo que la guarda promete: que la SEGUNDA no se la lleve', () => {
+  const { java } = render('notification-mailer');
+  assert.match(java, /void laSegundaEjecucionDeLaMismaFilaNoSeLaLleva\(\)/);
+  // Las dos llamadas con el mismo id, que es lo único que mide la exclusión.
+  assert.match(java, /var primera = adaptador\.claimForSendAcceptedNotification\(id\);/);
+  assert.match(java, /var segunda = adaptador\.claimForSendAcceptedNotification\(id\);/);
+  assert.match(java, /assertFalse\(segunda\.isPresent\(\)/);
+});
+
+test('la marca de la guarda se afirma aparte de la del barrido', () => {
+  // Son campos distintos. Colar el de la guarda en el reloj de la cola haría que el caso del
+  // barrido afirmara un estampado que ese reclamo no hace, y saldría rojo sobre código correcto.
+  const { java } = render('notification-mailer');
+  assert.match(java, /assertNotNull\(jpa\.findById\(id\)\.orElseThrow\(\)\.getSendingSince\(\)/);
+  // El reclamo de la cola de esta fixture no estampa nada, así que su caso no lo exige.
+  const cola = java.slice(java.indexOf('void elReclamoDeLaColaSeLlevaLaFilaYEstampaElReloj'), java.indexOf('void elReclamoNoTocaFilasEnOtroEstado'));
+  assert.ok(!cola.includes('getSendingSince'), 'el caso de la cola afirma un estampado que ese reclamo no hace');
+});
+
+test('la rama documental ejercita la MISMA guarda con su findAndModify', () => {
+  const { manifest, layers } = (() => {
+    const service = loadService(path.join(fixturesDir, 'notification-mailer-mongo'));
+    assert.deepEqual(service.errors, []);
+    return service;
+  })();
+  const model = buildModel({ manifest, layers, stack: { database: 'mongodb' } });
+  const scenarios = claimScenarios(model);
+  assert.ok(scenarios.guard, 'la mitad documental del par perdió la guarda');
+
+  const java = claimTestClass(model, scenarios, {
+    datasource: { uri: 'mongodb://x/y' },
+    packages: { ...PACKAGES, entities: 'com.test.infrastructure.persistence.documents' },
+    database: 'mongodb'
+  });
+  assert.match(java, /void laSegundaEjecucionDeLaMismaFilaNoSeLaLleva\(\)/);
+  // Se relee por el template, no por un repositorio JPA que aquí no existe.
+  assert.match(java, /mongo\.findById\(id, NotificationDocument\.class\)/);
+  assert.ok(!java.includes('jpa.findById'), 'la rama documental cita el repositorio relacional');
 });

@@ -28,6 +28,7 @@ import {
   CACHES,
   STORAGE,
   HEALTHCHECKS,
+  databaseHealthProbe,
   UI_SERVICES,
   HTTP_STUB,
   MAIL_SINK
@@ -195,9 +196,12 @@ function composeServices(model) {
     const db = DATABASES[stack.database];
     if (db?.composeService) {
       services.db = { ...db.composeService(dbName) };
-      const health = HEALTHCHECKS[stack.database];
-      // sqlserver y mongodb ya traen el suyo en composeService.
-      if (health && !services.db.healthcheck) services.db.healthcheck = health(dbName);
+      // La regla —el healthcheck del propio servicio manda; si no lo trae, el genérico— vive
+      // en `databaseHealthProbe` y no aquí: `scripts/claim-check.js` necesita la MISMA para
+      // saber a qué preguntarle al motor antes de correr su JUnit, y mientras estuvo escrita
+      // solo en este archivo el runner acabó con `pg_isready` cableado.
+      const probe = databaseHealthProbe(stack.database, dbName);
+      if (probe && !services.db.healthcheck) services.db.healthcheck = probe.healthcheck;
       volumes['db-data'] = null;
     }
   }
