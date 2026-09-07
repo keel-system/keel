@@ -623,6 +623,7 @@ function abstractImports(model) {
     'org.springframework.web.util.UriComponentsBuilder',
     'org.junit.jupiter.api.BeforeAll',
     'org.junit.jupiter.api.MethodOrderer',
+    'org.junit.jupiter.api.AfterAll',
     'org.junit.jupiter.api.TestInstance',
     'org.junit.jupiter.api.TestMethodOrder',
     'org.junit.jupiter.api.extension.ExtendWith',
@@ -708,6 +709,8 @@ function abstractImports(model) {
       'java.nio.file.Path',
       'java.time.Duration',
       'java.time.Instant',
+      'java.util.ArrayList',
+      'java.util.List',
       'java.util.concurrent.TimeUnit',
       'java.util.stream.Stream'
     );
@@ -971,7 +974,21 @@ ${security && tokenProtocol(model) ? `
         CONTEXT = applicationContext;` : ''
     }${inMemoryStateCapture(model)}
     }
-
+${usesReplica(model) ? `
+    /**
+     * Red de CIERRE para la réplica. La otra —{@code resetState()}— es de APERTURA, y por eso no
+     * basta: para la réplica al empezar la clase SIGUIENTE, así que no llega nunca si la clase de
+     * clúster es la última de la suite, ni si la siguiente corre en otro fork de Gradle.
+     *
+     * <p>Es idempotente: sobre una réplica ya parada no hace nada, así que ponerla en TODAS las
+     * clases no cuesta nada y cierra el hueco sin que ningún escenario tenga que acordarse de su
+     * {@code finally}.
+     */
+    @AfterAll
+    void pararLaReplicaAlCerrarLaClase() {
+        stopReplica();
+    }
+` : ''}
     /** Intercambio HTTP completo: lo que se asserta y lo que se vuelca al fallar. */
     public record Response(int status, HttpHeaders headers, String body) {
         public String header(String name) {
@@ -2007,6 +2024,9 @@ ${hasMultipart(model) ? `
     /** Espera máxima a que la réplica acepte tráfico. Arrancar Spring no es instantáneo. */
     private static final Duration REPLICA_READY_TIMEOUT = Duration.ofSeconds(120);
 
+    /** Espera máxima a que el árbol de la réplica termine de morir tras el kill. */
+    private static final Duration REPLICA_DEATH_TIMEOUT = Duration.ofSeconds(30);
+
     /**
      * Arranca una segunda instancia del servicio contra la MISMA infraestructura y
      * devuelve su puerto.
@@ -2093,6 +2113,13 @@ ${hasMultipart(model) ? `
         if (REPLICA == null) {
             return;
         }
+        // El ÁRBOL, capturado antes de matar: después de morir el padre, sus descendientes ya no
+        // se pueden enumerar desde él. En Windows un proceso Java puede dejar hijos, y esos hijos
+        // siguen hablando con la misma base de datos.
+        ProcessHandle raiz = REPLICA.toHandle();
+        List<ProcessHandle> arbol = new ArrayList<>(raiz.descendants().toList());
+        arbol.add(raiz);
+
         requestReplicaShutdown();
         try {
             // Al apagado ordenado se le da un plazo corto: si no ha muerto, es que el endpoint
@@ -2107,7 +2134,60 @@ ${hasMultipart(model) ? `
             Thread.currentThread().interrupt();
             REPLICA.destroyForcibly();
         }
+        for (ProcessHandle vivo : arbol) {
+            if (vivo.isAlive()) {
+                vivo.destroyForcibly();
+            }
+        }
+        awaitReplicaDead(arbol);
         REPLICA = null;
+    }
+
+    /**
+     * Comprueba que el árbol de la réplica murió DE VERDAD, y si no, lo dice.
+     *
+     * <p>{@code destroyForcibly()} es asíncrono por contrato de la API: devuelve el control sin
+     * garantizar que el proceso haya terminado. Sin esta comprobación, {@code stopReplica()}
+     * devolvía y ponía {@code REPLICA = null} incondicionalmente — con lo que una réplica
+     * superviviente quedaba <b>huérfana</b>: la guarda de arriba hace que cualquier
+     * {@code stopReplica()} posterior devuelva de inmediato, y ya no hay quien la pare.
+     *
+     * <p>Lo que eso produce no es un error, es peor. La réplica sigue viva contra la MISMA base,
+     * reclamando filas con {@code SKIP LOCKED} y barriendo, mientras corren los flujos siguientes.
+     * Ocurrió: sobrevivió más de hora y media y tumbó ocho escenarios de cinco clases sin relación
+     * funcional entre sí, todos con el mismo síntoma —«no llegó nada dentro del plazo»— y ninguno
+     * apuntando a su causa.
+     *
+     * <p>Por eso <b>lanza</b> en vez de devolver en silencio: una réplica que no se puede matar
+     * invalida todo lo que venga después, y es mejor un rojo que nombra el PID y el log que treinta
+     * rojos que no se parecen a nada. Morir es correcto; morir callado no.
+     *
+     * <p><b>Lo que esto NO garantiza</b>, dicho para que no se dé por hecho: que en Windows el
+     * árbol de descendientes que devuelve {@code ProcessHandle} sea completo. Se ha razonado, no
+     * medido — nadie ha arrancado y matado una réplica de verdad para comprobarlo.
+     */
+    private static void awaitReplicaDead(List<ProcessHandle> arbol) {
+        Instant deadline = Instant.now().plus(REPLICA_DEATH_TIMEOUT);
+        while (Instant.now().isBefore(deadline)) {
+            List<ProcessHandle> vivos = arbol.stream().filter(ProcessHandle::isAlive).toList();
+            if (vivos.isEmpty()) {
+                return;
+            }
+            try {
+                Thread.sleep(200L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrumpido esperando la muerte de la réplica", e);
+            }
+        }
+        String pids = arbol.stream()
+                .filter(ProcessHandle::isAlive)
+                .map(handle -> String.valueOf(handle.pid()))
+                .collect(java.util.stream.Collectors.joining(", "));
+        throw new IllegalStateException(
+                "La réplica sigue viva tras pedirle el cierre y matarla (PID " + pids + "). Comparte base con el "
+                        + "resto de la suite y seguirá reclamando filas: mátala a mano antes de volver a ejecutar. "
+                        + "Revisa build/keel-replica.log");
     }
 
     /**
@@ -2163,6 +2243,9 @@ ${onReplica}
         Instant deadline = Instant.now().plus(REPLICA_READY_TIMEOUT);
         while (Instant.now().isBefore(deadline)) {
             if (!REPLICA.isAlive()) {
+                // Ya está muerta: la referencia sobra, y dejarla haría que el siguiente
+                // stopReplica() creyera que hay algo que parar.
+                REPLICA = null;
                 throw new IllegalStateException(
                         "La réplica murió durante el arranque. Revisa " + log.toAbsolutePath());
             }

@@ -977,6 +977,35 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
           `security: authentication.callerIdentity.from: 'serviceClient' pero el diseño no declara ningún serviceClient — no hay credencial de la que sacar la identidad`
         );
       }
+      // La resolución 1:N, cuando se declara. `resolvedBy` existe porque la relación «varias
+      // credenciales, un recurso» solo vivía en la prosa de una `description`, que no es
+      // estructura: el generador emitía la búsqueda por la clave natural y toda credencial que no
+      // coincidiera con ella acababa en un 403 en el camino feliz.
+      //
+      // Se comprueban las dos mitades. Que la entidad y el campo EXISTAN —igual que `scoping.over`
+      // un poco más abajo—, y que el campo sea una LISTA: sobre un escalar esto es la forma 1:1
+      // escrita de otra manera, y aceptarlo haría que el generador emitiera una búsqueda por
+      // colección sobre algo que no lo es.
+      const resolvedBy = callerIdentity.from?.resolvedBy;
+      if (resolvedBy) {
+        const [entityName, fieldName] = String(resolvedBy).split('.');
+        const entity = domain.entities?.[entityName];
+        const field = entity?.fields?.[fieldName];
+        if (!entity) {
+          errors.push(
+            `security: authentication.callerIdentity.from.resolvedBy: la entidad '${entityName}' no existe en domain — la identidad se resolvería contra un recurso que el servicio no modela`
+          );
+        } else if (!field) {
+          errors.push(
+            `security: authentication.callerIdentity.from.resolvedBy: '${entityName}' no declara el campo '${fieldName}' — la credencial se compararía contra algo que no existe`
+          );
+        } else if (field.list !== true) {
+          errors.push(
+            `security: authentication.callerIdentity.from.resolvedBy: '${resolvedBy}' no es una lista — resolvedBy declara que un recurso tiene VARIAS credenciales; sobre un campo escalar es la correspondencia 1:1, que es la de por defecto y no hace falta declarar`
+          );
+        }
+      }
+
       // Dos puertas, dos campos: el servicio tendría dos verdades sobre quién pide el trabajo, y
       // la operación decidiría con una u otra según por dónde entrara. Es el hueco que hace que
       // alguien acabe reconciliando dos campos a mano.

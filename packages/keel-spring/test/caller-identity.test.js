@@ -88,6 +88,111 @@ test('hay un único punto de resolución, y lo usa el controller', () => {
   assert.match(controller, /import .*configurations\.security\.CallerIdentity;/);
 });
 
+// ─── La operación que además tiene parámetros de ruta ────────────────────────
+//
+// El caso de arriba afirma sobre el PRIMER *V1Controller.java que encuentra, y por ahí se coló el
+// defecto: en `catalog-extended` esa operación no tiene ruta, así que la rama que estampa la
+// identidad era la que se ejercitaba. Con cuerpo Y parámetros de ruta gana la rama que fusiona la
+// ruta, y esa leía el campo del comando — donde SIEMPRE es null, porque lleva @JsonIgnore. El
+// servicio se quedaba sin saber quién llama y respondía 403 en el camino feliz.
+//
+// El sujeto es `notification-mailer` sin parchear: ya declara `callerIdentity`, y su
+// `registerTemplate` es PUT /v1/templates/{templateKey}/{locale} — cuerpo y dos parámetros de
+// ruta. Su gemelo `requestNotification` (POST, sin ruta) sirve de control: si algún día fallaran
+// los dos, el defecto sería otro.
+
+function generateMailer() {
+  const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'notification-mailer');
+  const { manifest, layers, errors } = loadService(dir);
+  assert.deepEqual(errors, []);
+  const workspace = tmpDir('keel-calleridentity-ruta-');
+  const result = scaffoldService({ manifest, layers, workspace, force: true });
+  const root = path.join(workspace, result.outDir, 'src/main/java');
+  const files = new Map();
+  const walk = (d) => {
+    for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
+      const full = path.join(d, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else files.set(entry.name, fs.readFileSync(full, 'utf8'));
+    }
+  };
+  walk(root);
+  return files;
+}
+
+// ─── Una credencial o varias (`resolvedBy`) ─────────────────────────────────
+//
+// Por defecto la correspondencia credencial↔recurso es 1:1 y el DSL lo dice: la entrada de
+// `serviceClients` ES el identificador del recurso. Cuando NO lo es —un sistema con su
+// credencial de envío y la de su pipeline, las dos hacia la misma Application—, la relación
+// vivía solo en la `description` de un campo, que no es estructura y nadie puede leer.
+//
+// Lo que producía: el puerto solo ofrecía el finder de la clave natural, el agente buscaba por
+// ahí, y toda credencial que no coincidiera con ella no resolvía a ningún recurso. 403 en el
+// camino feliz, en la puerta de entrada. Costó nueve escenarios y cinco clases enteras.
+
+test('con resolvedBy, build da el finder por colección y lo dice en el stub', () => {
+  const files = generateMailer();
+
+  const port = files.get('ApplicationRepository.java');
+  assert.match(port, /Optional<Application> findByCredentialKeysContaining\(/, 
+    'el puerto no ofrece cómo resolver una credencial que no es la clave natural');
+  assert.match(files.get('ApplicationJpaRepository.java'), /findByCredentialKeysContaining\(/);
+  assert.match(files.get('ApplicationRepositoryImpl.java'), /findByCredentialKeysContaining\(/);
+
+  // Y la nota, que es la mitad que cierra el círculo: sin ella el método existe y nadie sabe
+  // que hace falta, porque el valor que llega PARECE una clave natural.
+  const command = files.get('RequestNotificationCommand.java');
+  assert.match(command, /client_id, NO la clave natural de Application/);
+  assert.match(command, /findByCredentialKeysContaining/);
+});
+
+test('y la rama DOCUMENTAL lo implementa igual: el puerto es el mismo', () => {
+  // Lo cazó `compile-check` y no esta suite: el puerto es compartido por los dos modelos, así
+  // que declarar el método y no implementarlo en una rama deja ese adaptador SIN COMPILAR. La
+  // regla ya estaba escrita en document-repositories.js —«lo que se declare allí hay que
+  // implementarlo aquí»— y aun así se me pasó, que es justo el argumento para tener el caso.
+  const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'notification-mailer-mongo');
+  const { manifest, layers, errors } = loadService(dir);
+  assert.deepEqual(errors, []);
+  const workspace = tmpDir('keel-calleridentity-doc-');
+  const result = scaffoldService({ manifest, layers, workspace, stack: { database: 'mongodb' }, force: true });
+  const root = path.join(workspace, result.outDir, 'src/main/java/com/platform/notificationmailermongo');
+  const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8');
+
+  assert.match(read('domain/repository/ApplicationRepository.java'), /findByCredentialKeysContaining\(/);
+  assert.match(read('infrastructure/persistence/repositories/ApplicationMongoRepository.java'), /findByCredentialKeysContaining\(/);
+  assert.match(read('infrastructure/persistence/repositories/ApplicationRepositoryImpl.java'), /findByCredentialKeysContaining\(/);
+});
+
+test('y sin resolvedBy no se emite nada de eso', () => {
+  // La mitad negativa. Un finder por colección en todos los agregados deja de significar algo, y
+  // la nota sobre un diseño 1:1 sería una instrucción falsa.
+  const port = generate().get('ProductRepository.java');
+  assert.ok(port && !port.includes('Containing('), 'se emitió el finder sin que el diseño lo pidiera');
+});
+
+test('con parámetros de ruta la identidad SIGUE saliendo del token', () => {
+  const controller = generateMailer().get('TemplateV1Controller.java');
+  assert.ok(controller, 'no se generó el controller de la operación con ruta');
+
+  // El registro de plantilla fusiona {templateKey} y {locale} con el cuerpo. La identidad no es
+  // ninguno de los dos: la pone el servidor.
+  assert.match(controller, /CallerIdentity.resolve()/, 'la identidad se lee del cuerpo, donde es null');
+  assert.match(controller, /import .*configurations.security.CallerIdentity;/);
+
+  // Y no se lee del comando: es la mitad que distingue el arreglo de un import decorativo.
+  assert.ok(
+    !controller.includes('command.applicationKey()'),
+    'el controller sigue leyendo la identidad del comando, que lleva @JsonIgnore y es null'
+  );
+});
+
+test('y el control sin ruta sigue igual', () => {
+  const controller = generateMailer().get('NotificationV1Controller.java');
+  assert.match(controller, /CallerIdentity.resolve()/);
+});
+
 test('con source serviceClient la identidad sale del cliente de la credencial', () => {
   const resolver = generate().get('CallerIdentity.java');
   // `azp` es el de Keycloak y `client_id` el de otros proveedores: mirar solo uno deja el resolutor
@@ -115,5 +220,12 @@ test('sin callerIdentity nada cambia', () => {
 test('el modelo expone la política ya resuelta', () => {
   const { manifest, layers } = layersWith();
   const model = buildModel({ manifest, layers, stack: resolveStack({}, layers, manifest) });
-  assert.deepEqual(model.security.callerIdentity, { field: FIELD, source: 'serviceClient', claim: null });
+  // `resolvedBy` en null es la correspondencia 1:1, que es la de por defecto: una credencial, un
+  // recurso. Se afirma explícitamente porque su ausencia y su presencia generan cosas distintas.
+  assert.deepEqual(model.security.callerIdentity, {
+    field: FIELD,
+    source: 'serviceClient',
+    claim: null,
+    resolvedBy: null
+  });
 });

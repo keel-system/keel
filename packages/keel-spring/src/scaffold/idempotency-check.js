@@ -24,6 +24,7 @@
 // leer el árbol a mano.
 
 import { declaresIdempotency, idempotentOperations, naturalKeyGuardedOperations } from './http-idempotency.js';
+import { relievingOperations, portMethodName } from './conditional-uniqueness.js';
 import { naturalKeyFinder } from './repositories.js';
 import { usesOutbox } from './outbox.js';
 import { screamingSnake, camelCase, kebabCase } from '../lib/naming.js';
@@ -63,7 +64,8 @@ function checksOf(model) {
     ...sweepClaimChecks(model),
     ...outboundIdempotencyChecks(model),
     ...outboxChecks(model),
-    ...mailChecks(model)
+    ...mailChecks(model),
+    ...conditionalUniquenessChecks(model)
   ];
 }
 
@@ -942,6 +944,41 @@ function reconciliationChecks(model) {
     });
   }
   return checks;
+}
+
+// 4.ter. El ORDEN que impone un índice único condicionado.
+//
+//    La familia más joven, y la que existe porque su mecanismo estuvo roto sin que se notara.
+//    Un índice único parcial se comprueba por FILA y no se puede diferir, así que la operación
+//    que RELEVA —saca una fila del estado condicionado y mete otra en el mismo acto— tiene que
+//    confirmar la salida antes de la entrada. Con JPA las dos escrituras se vuelcan al commit en
+//    el orden que decide Hibernate: si la activación sale primero, la transición LEGÍTIMA muere
+//    con el error de unicidad del diseño.
+//
+//    Lo que hace a esta familia distinta de las demás: el código correcto y el roto se PARECEN.
+//    Los dos hacen `save(retirada)` y luego `save(nueva)`, en ese orden, y solo uno funciona —
+//    porque el orden del código no es el orden de las escrituras. Ningún escenario lo distingue
+//    mientras el índice esté mal (así estuvo meses: con el predicado en minúsculas no indexaba
+//    nada), y en cuanto está bien lo que falla es el CAMINO FELIZ, que es el peor sitio.
+//
+//    Se afirma que la llamada EXISTE, no dónde va: pedir una posición concreta dentro del método
+//    sería suponer una forma de handler, y el camino de menor resistencia de esa petición es
+//    mover código para callar el gate. Dónde va lo dice la nota del stub.
+function conditionalUniquenessChecks(model) {
+  return relievingOperations(model).map(({ operation, entity, state }) => ({
+    group: 'conditionalUniqueness',
+    subject: `${operation.name} (${entity.name}.${state})`,
+    class: operation.handlerClass,
+    // String.raw y no un template normal: `\s` dentro de una plantilla corriente se evalúa a `s`,
+    // y el patrón buscaría `flushPendingWritess*[(]`, que no casa con nada. Un check que no casa
+    // con nada sale ROJO siempre, y su camino de menor resistencia es borrarlo.
+    require: [String.raw`[.]?${portMethodName(entity)}\s*[(]`],
+    why:
+      `releva sobre el índice único condicionado de ${entity.name}.${state}: retira la fila que lo ocupaba y ` +
+      `mete otra en el mismo acto. El índice se comprueba por FILA y no se puede diferir, así que entre las dos ` +
+      `escrituras tiene que llamar a ${portMethodName(entity)}() del puerto — si no, las dos se vuelcan al commit ` +
+      `en el orden que decide Hibernate y la transición legítima muere con un 409 en el camino feliz`
+  }));
 }
 
 // 4.bis. Idempotencia SALIENTE. La tercera cara del eje de repetición, y la única que

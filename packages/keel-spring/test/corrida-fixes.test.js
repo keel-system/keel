@@ -1594,6 +1594,36 @@ test('la réplica se para ORDENADAMENTE, no a golpe de destroy()', () => {
   assert.match(stop, /REPLICA\.destroyForcibly\(\)/);
   // Y el POST es un POST: el endpoint de apagado no responde a GET.
   assert.match(harness, /connection\.setRequestMethod\("POST"\)/);
+
+  // ── Y COMPRUEBA QUE MURIÓ ────────────────────────────────────────────────
+  //
+  // `destroyForcibly()` es asíncrono por contrato de la API: devolvía el control sin garantizar
+  // nada, y `REPLICA = null` corría a continuación de forma INCONDICIONAL. Una réplica que
+  // sobrevivía quedaba huérfana —la guarda del principio hace que todo `stopReplica()` posterior
+  // devuelva de inmediato— y seguía viva contra la misma base, reclamando filas con SKIP LOCKED.
+  // Ocurrió: más de hora y media, ocho escenarios de cinco clases sin relación funcional entre
+  // sí, todos con el mismo síntoma y ninguno apuntando a su causa.
+  assert.match(stop, /toHandle\(\)/, 'no se captura el árbol de procesos antes de matar');
+  assert.match(stop, /descendants\(\)/, 'en Windows los hijos del proceso Java se quedan vivos');
+  assert.match(stop, /awaitReplicaDead\(/, 'nadie comprueba que el árbol muriera');
+  assert.ok(
+    stop.indexOf('awaitReplicaDead(') < stop.indexOf('REPLICA = null'),
+    'REPLICA = null antes de confirmar la muerte: la réplica superviviente queda huérfana'
+  );
+  // Y si no muere, se dice. Morir es correcto; morir callado no.
+  const espera = harness.slice(harness.indexOf('private static void awaitReplicaDead('));
+  assert.match(espera, /throw new IllegalStateException/, 'una réplica que no muere devuelve en silencio');
+  assert.match(espera, /pid\(\)/, 'el mensaje no nombra el PID, que es lo único accionable');
+});
+
+test('y hay una red de CIERRE, no solo de apertura', () => {
+  // `resetState()` para la réplica al abrir la clase SIGUIENTE. Eso no llega nunca si la clase de
+  // clúster es la última de la suite, ni si la siguiente corre en otro fork de Gradle — que es
+  // exactamente cómo sobrevivió hora y media. El @AfterAll cierra ese hueco, y es idempotente.
+  const harness = project('stock-reservation', SNSSQS).file('AbstractFlowIT.java');
+  assert.match(harness, /@AfterAll/, 'el arnés no tiene red de cierre');
+  const cierre = harness.slice(harness.indexOf('@AfterAll'));
+  assert.match(cierre.slice(0, 400), /stopReplica\(\);/, 'el @AfterAll no para la réplica');
 });
 
 test('la secuencia de entregar-y-tumbar-el-canal es un helper, no prosa', () => {

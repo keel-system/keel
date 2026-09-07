@@ -627,6 +627,7 @@ un diseño `document` no puede acabar sobre PostgreSQL por descuido, ni al revé
 | `default.model: key-value` | **No soportado**: `keel-spring build` falla con un error explícito en vez de emitir algo por defecto. Ese diseño necesita otro generador |
 | `entities.X.naturalKey` | Constraint/índice único compuesto (`uk_<colección>_natural`) + método de búsqueda por clave natural en el repository |
 | `entities.X.indexes` | Un índice por cada lista de campos (`idx_<tabla|colección>_<campos>`). En relacional es un `@Index` de la entidad, que pasa al baseline al exportarlo; en documental lo crea `MongoIndexConfig` |
+| `entities.X.indexes` con `when` | Unicidad **condicionada al estado**. En relacional sale como índice único parcial en `db/partial-indexes.sql`, en documental como `partialFilterExpression`. **Impone un contrato de orden** a la operación que releva: ver *El ORDEN que impone un índice único condicionado*, abajo. Hay motores que no pueden sostenerla y lo dicen en `docs/keel/engine-limits.md` |
 | `consistency.transactionalBoundary: per-operation` | La transacción por mensaje que abre `UseCaseMediator` ya lo cumple: la operación completa es la transacción. Salvo el barrido de una reconciliación, que corre sin transacción abarcadora a propósito |
 | `consistency.transactionalBoundary: per-aggregate` | El command debe tocar una sola raíz de agregado dentro de la transacción del mediator; nunca dos agregados en la misma transacción. Si necesitas semántica transaccional especial, se resuelve en el **adaptador** de repositorio (infraestructura) y se documenta ahí — **nunca** anotando el handler con `@Transactional`, que `constitution.md` prohíbe |
 | `audit.timestamps` / `audit.authorship` | **Lo gobierna el diseño** (`all` \| `declared` \| `none`) y build lo aplica entero. Con `all`: las columnas viven en `AuditableEntity` (`@MappedSuperclass` + `@EntityListeners`), el dominio no las nombra y no salen en ningún contrato. Con `declared`: los campos son del **dominio** (el diseño los declara con `generated: true` para poder proyectarlos en un `output`) y build los anota en su `XxxJpa` con `@CreatedDate`/`@LastModifiedDate`/`@CreatedBy`/`@LastModifiedBy` + `@EntityListeners` en la clase. Con `none`: no se genera nada, ni `@EnableJpaAuditing`. **No lo reintroduzcas por criterio propio**: una columna de auditoría que el diseño no pidió acaba en el baseline de migraciones |
@@ -658,6 +659,51 @@ Esto es específico de JPA. En el modelo documental no hay flush diferido: la
 auditoría corre en un callback **antes** de convertir el documento, así que el objeto
 que devuelve `save(...)` ya trae los valores nuevos — y `saveAndFlush` ni siquiera
 existe en `MongoRepository`.
+
+### El ORDEN que impone un índice único condicionado
+
+Un `index` con `when` declara una unicidad **condicionada al estado** («como máximo una versión
+activa por clave»). En relacional eso sale como índice único **parcial**, y ese índice trae una
+exigencia que no se ve leyéndolo: se comprueba **por fila** y **no se puede diferir** —`DEFERRABLE`
+es de constraints, y una constraint única parcial no existe en PostgreSQL.
+
+La consecuencia le cae a la operación que **releva**: la que saca una fila del estado condicionado
+y mete otra en el mismo acto (el diseño las declara juntas — `draft → active` y `active → retired`
+en la misma operación). Son dos escrituras sobre la misma clave, y con JPA las dos son entidades
+gestionadas cuyos `UPDATE` se vuelcan **al commit**, en el orden que decide Hibernate. Si el que
+activa sale primero, hay un instante con dos filas en el estado condicionado y la escritura se
+rechaza: **la transición legítima muere con el error de unicidad del diseño**, un 409 en el camino
+feliz.
+
+Lo que hace este fallo especialmente malo es que el código correcto y el roto **se parecen**:
+
+```java
+// MAL: el orden del CÓDIGO no es el orden de las ESCRITURAS.
+currentlyActive.ifPresent(active -> { active.retire(); repository.save(active); });
+template.publish();
+repository.save(template);          // las dos UPDATE se vuelcan juntas, al commit
+```
+
+```java
+// BIEN: la salida se confirma antes que la entrada.
+currentlyActive.ifPresent(active -> { active.retire(); repository.save(active); });
+repository.flushPendingWrites();    // build lo genera en el puerto justo por esto
+template.publish();
+repository.save(template);
+```
+
+`flushPendingWrites()` lo genera build en el puerto del agregado —y solo en las entidades que
+tienen un índice condicionado— precisamente para que la solución no sea bajarse a JPA desde
+`application`, que `constitution.md` prohíbe. **No quites el índice para que pase el escenario**:
+es el invariante que el diseño declaró, y sin él dos publicaciones simultáneas dejan dos filas
+activas.
+
+Lo verifica `infra/check-idempotency.sh`, familia `conditionalUniqueness`, que solo comprueba que
+la llamada **exista** — dónde va lo dice la nota del stub, y exigir una posición concreta invitaría
+a mover código para callar el gate.
+
+En el modelo **documental** nada de esto aplica y no se genera: cada `save` es su propia escritura,
+así que el orden del código sí es el orden en la base.
 
 ### El agregado es un documento (`default.model: document`)
 

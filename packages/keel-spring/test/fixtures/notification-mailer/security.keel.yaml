@@ -11,7 +11,13 @@ authentication:
   # del cuerpo ni sale en el OpenAPI) y lo estampa el controller.
   callerIdentity:
     field: applicationKey
-    from: { source: serviceClient }
+    from:
+      source: serviceClient
+      # La correspondencia NO es 1:1: un mismo sistema tiene su credencial de envío y la de su
+      # pipeline, y las dos resuelven a la misma Application. Sin declararlo, el generador emite la
+      # búsqueda por la clave natural y toda credencial que no coincida con ella acaba en un 403 en
+      # el camino feliz — que es lo que pasó en la corrida sobre PostgreSQL.
+      resolvedBy: Application.credentialKeys
 permissions:
   notification:send: { description: Pedir el envío de un correo. }
   notification:read: { description: Consultar el estado de un envío. }

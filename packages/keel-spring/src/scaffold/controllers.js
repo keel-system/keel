@@ -262,6 +262,22 @@ function renderMethod(model, operation, imports) {
     imports.add('io.swagger.v3.oas.annotations.Operation');
     annotations.push(`    @Operation(summary = ${JSON.stringify(operation.description)})`);
   }
+  // La identidad del llamante gana a cualquier otra fuente, esté donde esté el campo.
+  //
+  // Esto era un `else if` de la rama sin parámetros de ruta, y por eso no se alcanzaba nunca en
+  // una operación que tuviera cuerpo Y ruta: ganaba la rama que fusiona la ruta, que lee el campo
+  // del comando… donde SIEMPRE es null, porque `services.js` le pone @JsonIgnore a propósito. El
+  // servicio se quedaba sin saber quién llama y respondía 403 en el camino feliz. Lo destapó la
+  // corrida notification-mailer sobre PostgreSQL: `requestNotification` (sin ruta) salía bien y
+  // `registerTemplate` (PUT /v1/templates/{templateKey}/{locale}) salía con la identidad a null.
+  //
+  // Gana también a `fromPath`: si el diseño pusiera ese campo en la URL, la identidad la elegiría
+  // quien hace la petición — que es exactamente lo que este mecanismo existe para impedir.
+  const identityArg = () => {
+    imports.add(`${model.service.basePackage}.infrastructure.configurations.security.CallerIdentity`);
+    return 'CallerIdentity.resolve()';
+  };
+
   if (operation.multipart) {
     // Subida binaria: el endpoint es multipart/form-data, no JSON.
     imports.add('org.springframework.http.MediaType');
@@ -305,6 +321,7 @@ function renderMethod(model, operation, imports) {
   if (operation.multipart) {
     // Partes del formulario: el binario como @RequestPart, el resto como campos.
     const args = components.map((component) => {
+      if (component.resolvedIdentity) return identityArg();
       if (fromPath.has(component.name)) return component.name;
       if (component.file) {
         imports.add('org.springframework.web.bind.annotation.RequestPart');
@@ -357,7 +374,9 @@ function renderMethod(model, operation, imports) {
         }
         return `(command == null ? ${absent} : command.${component.name}())`;
       };
-      const args = components.map((c) => (fromPath.has(c.name) ? c.name : read(c)));
+      const args = components.map((c) =>
+        c.resolvedIdentity ? identityArg() : fromPath.has(c.name) ? c.name : read(c)
+      );
       // Un argumento por línea cuando la fusión es larga (cuerpo opcional con
       // muchos campos): en una sola línea el método es ilegible.
       const inline = `new ${operation.messageClass}(${args.join(', ')})`;
@@ -370,9 +389,8 @@ function renderMethod(model, operation, imports) {
       // valor que resuelve el servidor. Sin esto, el campo llegaría de quien hace la petición —que
       // es exactamente quien no debería elegirlo—, y la alternativa era un segundo campo sintético
       // que alguien tenía que reconciliar a mano.
-      imports.add(`${model.service.basePackage}.infrastructure.configurations.security.CallerIdentity`);
       const args = components.map((component) =>
-        component.resolvedIdentity ? 'CallerIdentity.resolve()' : `command.${component.name}()`
+        component.resolvedIdentity ? identityArg() : `command.${component.name}()`
       );
       const inline = `new ${operation.messageClass}(${args.join(', ')})`;
       dispatchArg =

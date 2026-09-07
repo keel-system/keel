@@ -38,12 +38,17 @@
                 "source": {
                   "type": "string",
                   "enum": ["serviceClient", "claim"],
-                  "description": "'serviceClient': el cliente máquina de la credencial ES el recurso (la entrada de security.serviceClients se corresponde con el identificador del recurso). 'claim': el recurso viaja en un claim del token que puebla el proveedor de identidad."
+                  "description": "'serviceClient': el cliente máquina de la credencial identifica al recurso. Por defecto la correspondencia es 1:1 —la entrada de security.serviceClients ES el identificador del recurso—; si un mismo recurso tiene VARIAS credenciales, declárala con 'resolvedBy'. 'claim': el recurso viaja en un claim del token que puebla el proveedor de identidad."
                 },
                 "name": {
                   "type": "string",
                   "minLength": 1,
                   "description": "Nombre del claim. Obligatorio con source 'claim' y prohibido con 'serviceClient', donde el identificador es el propio cliente."
+                },
+                "resolvedBy": {
+                  "type": "string",
+                  "pattern": "^[A-Z][A-Za-z0-9]*\\.[a-z][A-Za-z0-9]*$",
+                  "description": "Solo con source 'serviceClient', y solo cuando la correspondencia NO es 1:1. Por defecto se asume que la entrada de serviceClients ES el identificador del recurso; declara aquí Entidad.campo cuando un mismo recurso tiene VARIAS credenciales (ej. Application.credentialKeys), y ese campo tiene que ser una LISTA del dominio. Sin esto la relación solo existe en la prosa de una description: el generador emite una búsqueda por la clave natural, toda credencial que no coincida con ella no resuelve a ningún recurso, y el servicio responde 403 en el camino feliz."
                 }
               },
               "allOf": [
@@ -54,6 +59,10 @@
                 {
                   "if": { "properties": { "source": { "const": "serviceClient" } }, "required": ["source"] },
                   "then": { "not": { "required": ["name"] } }
+                },
+                {
+                  "if": { "properties": { "source": { "const": "claim" } }, "required": ["source"] },
+                  "then": { "not": { "required": ["resolvedBy"] } }
                 }
               ]
             },

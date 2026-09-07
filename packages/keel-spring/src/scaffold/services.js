@@ -14,6 +14,7 @@ import { domainTypeImport } from './entities.js';
 import { refTargetsOf } from './ref-resolvers.js';
 import { usesCorrelation, correlationImport } from './correlation.js';
 import { claimMechanism } from './claim.js';
+import { stubNote as conditionalUniquenessNote } from './conditional-uniqueness.js';
 
 // Componentes del record mensaje: parámetros de ruta (en el orden del path) +
 // campos del body + paginación (queries). Compartidos con el controller para
@@ -299,6 +300,23 @@ function renderMessage(model, operation) {
         '// La resuelve el servidor desde la credencial (security.authentication.callerIdentity):',
         '// no llega del cuerpo, la estampa el controller. Por el canal de eventos la estampa el listener.'
       );
+      // Y CON QUÉ se resuelve al agregado, cuando el diseño dice que no es 1:1.
+      //
+      // Sin esta nota, el valor que llega es un client_id y el único método del puerto es el de la
+      // clave natural: el camino de menor resistencia es buscar por ahí, y toda credencial que no
+      // coincida con la clave no encuentra nada — un 403 en el camino feliz, en la puerta de
+      // entrada del servicio. Ocurrió: nueve escenarios y cinco clases enteras.
+      const resolvedBy = model.security?.callerIdentity?.resolvedBy;
+      if (resolvedBy) {
+        const finder = `findBy${resolvedBy.field.charAt(0).toUpperCase()}${resolvedBy.field.slice(1)}Containing`;
+        notes.push(
+          `// OJO: el valor es un client_id, NO la clave natural de ${resolvedBy.entity}. El diseño declara`,
+          `// que un mismo recurso tiene varias credenciales (resolvedBy: ${resolvedBy.entity}.${resolvedBy.field}),`,
+          `// así que se resuelve con ${resolvedBy.entity}Repository.${finder}(...) — que build ya generó.`,
+          '// Buscar por la clave natural resuelve solo la credencial que coincide con ella y deja a las'
+            + ' demás sin recurso.'
+        );
+      }
     }
     const noteBlock = notes.length > 0 ? notes.map((line) => `        ${line}\n`).join('') : '';
     return `${noteBlock}        ${renderComponentType(operation, component, fromPath, imports, annotations)} ${component.name}`;
@@ -504,6 +522,12 @@ function renderHandler(model, service, operation) {
       `Idempotencia: keySource=${operation.idempotency.keySource}, ttlSeconds=${ttl}. El puerto IdempotencyStore, su adaptador y CommandSignature ya están generados — NO escribas otro registro (ni tabla propia, ni SET NX en la caché) ni otra forma de firmar. ${source}${common}`
     );
   }
+  // El orden que impone un índice único condicionado. Va aquí y no en una convention porque es
+  // de ESTA operación: el código correcto y el roto se parecen demasiado —los dos guardan la
+  // retirada y luego la nueva— y solo uno de los dos ordena las escrituras.
+  const ordenNota = conditionalUniquenessNote(model, operation);
+  if (ordenNota) notes.push(ordenNota);
+
   // Todo barrido corre replicado, declare `reconciles` o no. La nota de reconciliación
   // de abajo dice esto mismo con mucho más detalle, pero SOLO llega si la operación está
   // enlazada a una activación — y el barrido que despacha una cola normalmente no lo

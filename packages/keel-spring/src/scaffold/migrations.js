@@ -18,6 +18,7 @@ import { uniqueConstraints, columnsFor, partialUniqueIndexes, indexName } from '
 import { storedWhenValue } from './persistence-members.js';
 import { persistedMembers } from './persistence-members.js';
 import { quoteIdentifierFor } from '../lib/sql-reserved.js';
+import { sqlContract } from './conditional-uniqueness.js';
 
 const MIGRATIONS_DIR = 'src/main/resources/db/migration';
 const BASELINE_SQL = 'build/schema/baseline.sql';
@@ -168,7 +169,7 @@ ${lines.join('\n')}
 `;
   }
 
-  return `${header}
+  return `${header}${sqlContract(model)}
 ${specs.map((spec) => `-- ${spec.entity}: como máximo una fila por (${spec.fields.join(', ')}) con ${spec.when.field} = ${spec.when.equals}${storedNote(spec)}.
 ${dialect(spec)}`).join('\n\n')}
 `;

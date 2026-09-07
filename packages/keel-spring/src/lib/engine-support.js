@@ -73,6 +73,7 @@ export const NETS = {
   'store-check': 'npm run store-check — relay del outbox, almacenes de idempotencia y reclamo de reconciliación',
   'claim-check': 'npm run claim-check — reclamos de barrido y guarda de fila, contra el motor',
   'mongo-check': 'npm run mongo-check — los scripts de mongosh del arnés, por la vía del arnés',
+  'mapping-check': 'npm run mapping-check — el ESPEJO de persistencia: que la columna que el diseño pidió sea la que el motor creó',
   corrida: 'una corrida en vivo: no es determinista ni repetible en CI, así que nombra cuál',
   ninguna: 'nadie lo ejecuta'
 };
@@ -274,7 +275,13 @@ export const MECHANISMS = {
       }
     },
     coverage: {
-      relational: { state: 'verificado', net: 'claim-check', engines: ['postgresql'], falsified: true, why: 'quitarle la condición de estado cae en los dos casos que existen para eso' },
+      relational: {
+        state: 'verificado',
+        net: 'claim-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why: 'quitarle la condición de estado al @Modifying cae en los dos casos que existen para eso, y cae en LOS DOS motores: era la única celda de rama que le faltaba a MySQL por ejecutar'
+      },
       document: { state: 'verificado', net: 'claim-check', engines: ['mongodb'], falsified: true, why: 'idem sobre el findAndModify; par notification-mailer / -mongo, vigilado por guard-claim.test.js' }
     }
   },
@@ -360,7 +367,12 @@ export const MECHANISMS = {
     axis: 'engine',
     why: 'No es una unicidad de columnas: sin la condición hay que elegir entre no poder tener dos versiones o no garantizar nada. Y es el único sitio donde el mismo diseño obtiene una garantía DISTINTA según el motor.',
     coverage: {
-      postgresql: { state: 'verificado', net: 'corrida', falsified: false, why: 'índice parcial nativo; sale en db/partial-indexes.sql y lo ejercitan las corridas de notification-mailer, pero nadie ha roto el .partial en la rama relacional' },
+      postgresql: {
+        state: 'verificado',
+        net: 'corrida',
+        falsified: true,
+        why: "ejercitado el 2026-09-07 sobre la corrida mail-rabbit, y por primera vez con el indice DE VERDAD en vigor: hasta entonces su predicado iba en minusculas (= active contra una columna que guarda ACTIVE), asi que indexaba cero filas y tapaba debajo un segundo defecto. Verificado en las dos direcciones: con el contrato de orden puesto (flushPendingWrites entre las dos escrituras) FL-TPL-001-B/-C/-D en verde y como maximo una fila ACTIVE por clave en la base; quitando SOLO esa llamada, los tres en rojo con 409 en el camino feliz. Y el gate acompana: la familia conditionalUniqueness sale OK con la llamada y KO sin ella, con el mismo sujeto. Y CON UN AGENTE DELANTE el 2026-09-07 (corrida-mail-postgres, 29 OK / 0 fallos): el agente leyo la nota del stub y puso flushPendingWrites() ENTRE las dos escrituras, el gate paso de KO a OK por el camino correcto, el indice quedo intacto con su predicado, y la base cerro con cero claves con mas de una fila ACTIVA. Es la primera vez que FL-TPL-001-B/-C/-D salen verdes con el indice EN VIGOR"
+      },
       mongodb: { state: 'verificado', net: 'corrida', falsified: true, why: 'partialFilterExpression; falsado en la corrida notification-mailer-mongo' },
       sqlserver: { state: 'razonado', net: 'ninguna', falsified: false, why: 'tiene índice filtrado y se emite, pero ninguna corrida ha usado SQL Server' },
       mysql: {
@@ -419,7 +431,7 @@ export const MECHANISMS = {
     coverage: {
       postgresql: { state: 'verificado', net: 'claim-check', falsified: true, why: 'la carrera perdida (segundo reclamo devuelve 0) es un caso propio' },
       mysql: { state: 'verificado', net: 'claim-check', falsified: true, why: 'y aquí el READ_COMMITTED resultó PORTANTE, no una optimización: bajo REPEATABLE READ el reclamo de reconciliación muere en Lock wait timeout y el barrido no reclama nada, nunca' },
-      mariadb: { state: 'verificado', net: 'claim-check', falsified: false, why: 'ejecutado (de ahí que su uuidLiteral se corrigiera), pero sin mutación propia' },
+      mariadb: { state: 'verificado', net: 'claim-check', falsified: true, why: 'ejecutado —de ahí que su uuidLiteral se corrigiera— y falsado el 2026-09-07: rompiendo el UPDATE condicional del reclamo cae elSegundoReclamoDeLaMismaFilaDevuelveCero, que es el caso donde vive toda la exclusión mutua' },
       sqlserver: { state: 'razonado', net: 'ninguna', falsified: false, why: 'usa hints de tabla en vez de SKIP LOCKED, y van en otro sitio de la consulta. Declarado y no ejecutado: se cierra con claim-check --database=sqlserver' },
       oracle: { state: 'razonado', net: 'ninguna', falsified: false, why: 'declarado y no ejecutado. Su arnés además cambia de ESTRUCTURA (la sentencia viaja por archivo), y eso sí lo compila compile-check' },
       mongodb: { state: 'no-aplica', net: 'ninguna', falsified: false, why: 'findAndModify es atómico por documento: no hay página de candidatos que repartir' }
@@ -461,22 +473,48 @@ export const MECHANISMS = {
     },
     coverage: {
       relational: {
-        state: 'razonado',
-        net: 'corrida',
+        state: 'verificado',
+        net: 'mapping-check',
         engines: ['postgresql', 'mysql'],
-        falsified: false,
-        why: 'compile-check lo compila y las corridas lo ejercitan de refilón, pero ninguna red EJECUTA el mapeo con intención: no hay mutación que compruebe que el desempate por id o el @Column de una columna aplanada están donde deben. Es la fila más grande que sigue sin red propia'
+        falsified: true,
+        why: "la COTA de una columna esta medida desde el 2026-09-07 con mapping-check, sobre postgresql y mysql: un valor en el limite entra y uno de un caracter mas lo rechaza el motor. Falsado quitandole al @Column su length — el caso del exceso cae con «un valor de 33 caracteres entro en una columna declarada de 32», que es exactamente el defecto documentado (una columna compuesta a mano pierde length, nullable, precision/scale). Lo que sigue SIN medir es el resto del espejo: la escala del decimal, el value object aplanado, la tabla hija de una coleccion y el desempate de la paginacion — este ultimo se descarto a proposito como sujeto de ejecucion, porque sin desempate el orden que devuelve el motor es ARBITRARIO y no incorrecto, asi que el caso saldria verde por suerte mas veces de las que saldria rojo"
       },
       document: {
-        state: 'razonado',
-        net: 'corrida',
+        state: 'verificado',
+        net: 'mapping-check',
         engines: ['mongodb'],
-        falsified: false,
-        why: 'igual, y con una asimetría propia: aquí el agregado ES el documento, así que las hijas anidadas no tienen tabla que verificar y el modo de fallo es un campo paralelo con otro nombre — exactamente lo que destapó la sonda de FL-SND-001-B'
+        falsified: true,
+        why: "el NOMBRE con el que se guarda un campo esta medido desde el 2026-09-07 con mapping-check. El sujeto es otro que en la rama relacional y no por gusto: en Mongo la cota de un texto no la impone el almacen, asi que medirla seria medir Bean Validation. Lo que si es del mapeo es que el Update del reclamo —que nombra la PROPIEDAD JAVA— acabe escribiendo el @Field. Se ejecuta el reclamo GENERADO y se lee el documento CRUDO: leerlo por el mapeo no serviria, porque Spring Data usa la misma anotacion para escribir y leer y un @Field equivocado pero consistente daria la vuelta entera sin que se note. Falsado haciendo que el Update nombre un campo que el mapeo no conoce: el caso cae y ensena el campo PARALELO al lado del que falta. Es la sonda que la corrida notification-mailer-mongo tuvo que anadir a mano (FL-SND-001-B), hecha repetible. Sigue SIN medir el resto del espejo documental: el subdocumento anidado de un value object y la hija de una coleccion"
       }
     }
   }
 };
+
+// ─── La deuda del índice parcial relacional ─────────────────────────────────
+//
+// Encontrada al intentar falsar `partial-unique-index/postgresql`, que era una de las dos celdas
+// «sin falsar» y resultó ser algo peor que eso.
+//
+// El generador emite hoy el índice correcto. Lo que nunca se comprobó es si el FLUJO puede vivir
+// con él. Con el índice en vigor, publicar una versión nueva —retirar la activa y activar la
+// nueva, en la misma transacción— choca contra él: un índice único parcial de PostgreSQL se
+// comprueba por FILA y no se puede diferir (`DEFERRABLE` es de constraints, y una constraint
+// única parcial no existe), así que si el UPDATE que activa la nueva se vuelca antes que el que
+// retira la vieja, hay un instante con dos filas ACTIVE y la escritura se rechaza.
+//
+// Eso convierte el índice en un CONTRATO que el generador impone y no dice en ninguna parte: el
+// caso de uso que publica tiene que forzar el orden (retirar y hacer `flush` antes de activar).
+// No está en el .sql, ni en las conventions, ni en la nota del stub, y ningún gate lo comprueba.
+// La rama documental no lo sufre —cada `save` es su propia escritura— y por eso pasó verde en la
+// corrida `notification-mailer-mongo`.
+//
+// CERRADO el 2026-09-07. El contrato está escrito donde el agente lo lee (el puerto
+// `flushPendingWrites()`, la nota del stub, la cabecera del `.sql` y `conventions/mapping.md`), lo
+// verifica el gate (familia `conditionalUniqueness`) y se ha medido en vivo en las dos direcciones.
+// Lo que sigue debajo es el porqué, que conviene no perder:
+//
+// [histórico] Mientras eso no se cerró, esta celda fue `razonado` y no `verificado`: lo honesto era decir que
+// el mecanismo relacional está generado, sin ejercitar, y con una sospecha fundada en contra.
 
 /** Los ids, en orden estable. */
 export const mechanismIds = () => Object.keys(MECHANISMS);

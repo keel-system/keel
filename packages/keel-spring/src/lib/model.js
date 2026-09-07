@@ -1630,8 +1630,18 @@ function collectSecurity(layers, services, routeBase, warnings) {
   // Sin esto, el campo llegaba del cuerpo —que lo elige el llamante— y la resolución acababa en un
   // segundo campo sintético que alguien tenía que reconciliar a mano.
   const rawCallerIdentity = sec.authentication?.callerIdentity ?? null;
+  // `resolvedBy` (Entidad.campo) se transporta ya PARTIDO: es lo que necesitan los dos consumidores
+  // —el finder del repositorio y la nota del stub—, y partirlo en cada uno sería la misma regla
+  // escrita dos veces. Null cuando la correspondencia es 1:1, que es la de por defecto.
+  const resolvedBy = rawCallerIdentity?.from?.resolvedBy ?? null;
+  const [resolvedEntity, resolvedField] = resolvedBy ? String(resolvedBy).split('.') : [null, null];
   const callerIdentity = rawCallerIdentity
-    ? { field: rawCallerIdentity.field, source: rawCallerIdentity.from.source, claim: rawCallerIdentity.from.name ?? null }
+    ? {
+        field: rawCallerIdentity.field,
+        source: rawCallerIdentity.from.source,
+        claim: rawCallerIdentity.from.name ?? null,
+        resolvedBy: resolvedBy ? { entity: resolvedEntity, field: resolvedField } : null
+      }
     : null;
 
   const rawScoping = sec.authentication?.scoping ?? null;

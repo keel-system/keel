@@ -12,6 +12,7 @@ import { isBaseType } from '../lib/type-mapper.js';
 import { pluralize } from '../lib/naming.js';
 import * as claim from './claim.js';
 import * as reconciliationClaim from './reconciliation-claim.js';
+import * as conditionalUniqueness from './conditional-uniqueness.js';
 
 export const PORT_PKG = 'domain.repository';
 export const REPO_PKG = 'infrastructure.persistence.repositories';
@@ -121,6 +122,33 @@ export function naturalKeyBatchFinder(model, entity) {
   };
 }
 
+/**
+ * El finder por ELEMENTO de una colección, cuando el diseño declara que un recurso tiene varias
+ * credenciales (`security.authentication.callerIdentity.from.resolvedBy`).
+ *
+ * Por defecto la correspondencia credencial↔recurso es 1:1 y basta el finder de la clave natural.
+ * Cuando no lo es, ese finder resuelve solo la credencial que casualmente coincide con la clave, y
+ * las demás acaban en un 403 en el camino feliz — sin excepción, sin log, en la puerta de entrada
+ * del servicio. Lo destapó la corrida notification-mailer sobre PostgreSQL: bloqueó nueve
+ * escenarios y cinco clases enteras.
+ *
+ * Devuelve null salvo para la entidad que el diseño nombra: es un método que existe por una
+ * declaración concreta, no una capacidad que se le da a todos los agregados.
+ */
+export function credentialFinder(model, entity) {
+  const resolved = model.security?.callerIdentity?.resolvedBy;
+  if (!resolved || resolved.entity !== entity.name) return null;
+  const field = entity.fields.find((candidate) => candidate.name === resolved.field);
+  // `crossrefs` ya rechaza que no exista o que no sea lista; aquí solo se comprueba para no
+  // emitir un método contra un campo que el modelo no trae.
+  if (!field || !field.list) return null;
+  return {
+    name: `findBy${capitalize(resolved.field)}Containing`,
+    field: resolved.field,
+    javaType: field.elementJavaType ?? 'String'
+  };
+}
+
 export function naturalKeyFinder(model, entity) {
   const params = naturalKeyParams(model, entity);
   if (params.length === 0) return null;
@@ -161,6 +189,18 @@ export function renderPort(model, entity, paginated, batchLookup) {
     for (const param of finder.params) for (const name of param.imports) imports.add(name);
     methods.push(`    Optional<${entity.name}> ${finder.name}(${finder.signature});`);
   }
+  const credential = credentialFinder(model, entity);
+  if (credential) {
+    methods.push(`    /**
+     * Resuelve el agregado a partir de UNA de sus credenciales.
+     *
+     * <p>Existe porque el diseño declara que un mismo ${entity.name} tiene varias
+     * ({@code callerIdentity.from.resolvedBy}), así que la que trae el token no tiene por qué ser
+     * clave natural. Buscar por la clave natural resolvería solo una de ellas y las demás no
+     * encontrarían nada — un 403 en el camino feliz.
+     */
+    Optional<${entity.name}> ${credential.name}(${credential.javaType} ${credential.field.replace(/s$/, '')});`);
+  }
   const batchFinder = naturalKeyBatchFinder(model, entity);
   if (batchFinder) {
     imports.add('java.util.Collection');
@@ -191,6 +231,10 @@ export function renderPort(model, entity, paginated, batchLookup) {
   // El del barrido de reconciliación es otro reclamo distinto —marca persistida con
   // caducidad, no transición del lifecycle— y por eso vive en su propio módulo.
   methods.push(...reconciliationClaim.portMethods(model, entity, imports));
+  // Y el drenaje explícito que exige un índice único condicionado: no es una consulta, es la
+  // única forma de ORDENAR dos escrituras sobre la misma clave desde `application`, que no puede
+  // importar Spring. Ver conditional-uniqueness.js.
+  methods.push(...conditionalUniqueness.portMethods(model, entity));
   methods.push(`    ${entity.name} save(${entity.name} entity);`, '    void deleteById(UUID id);');
 
   const body = `/**
@@ -239,6 +283,15 @@ function renderJpaRepository(model, entity) {
     for (const param of finder.params) for (const name of param.imports) imports.add(name);
     // La clave natural es la otra lectura de UN agregado: mismo grafo, misma razón.
     methods = `\n\n${graph}    Optional<${entity.name}Jpa> ${finder.name}(${finder.signature});`;
+  }
+  const credential = credentialFinder(model, entity);
+  if (credential) {
+    imports.add('java.util.Optional');
+    // `Containing` sobre una colección: Spring Data lo deriva como «la colección contiene este
+    // elemento». Es la consulta que la clave natural no puede hacer.
+    methods += `
+
+${graph}    Optional<${entity.name}Jpa> ${credential.name}(${credential.javaType} ${credential.field.replace(/s$/, '')});`;
   }
   const batchFinder = naturalKeyBatchFinder(model, entity);
   if (batchFinder) {
@@ -317,6 +370,14 @@ function renderAdapter(model, entity, paginated, batchLookup) {
         return ${jpaField}.${finder.name}(${finder.args}).map(this::toDomain);
     }`);
   }
+  const credential = credentialFinder(model, entity);
+  if (credential) {
+    const arg = credential.field.replace(/s$/, '');
+    methods.push(`    @Override
+    public Optional<${entity.name}> ${credential.name}(${credential.javaType} ${arg}) {
+        return ${jpaField}.${credential.name}(${arg}).map(this::toDomain);
+    }`);
+  }
   const batchFinder = naturalKeyBatchFinder(model, entity);
   if (batchFinder) {
     imports.add('java.util.Collection');
@@ -355,6 +416,7 @@ function renderAdapter(model, entity, paginated, batchLookup) {
   methods.push(...claim.adapterMethods(model, entity, imports, jpaField));
   methods.push(...claim.guardAdapterMethods(model, entity, imports, jpaField));
   methods.push(...reconciliationClaim.adapterMethods(model, entity, imports, jpaField));
+  methods.push(...conditionalUniqueness.adapterMethods(model, entity, jpaField));
   // Drenaje de eventos de dominio: save() es el único punto por el que pasa
   // todo cambio persistido del agregado, así que aquí se publican los eventos
   // que la raíz acumuló. Va dentro de la transacción: el bridge decide después

@@ -26,6 +26,9 @@ const IMPLICIT = new Set([
   'Character', 'Number', 'Void', 'Class', 'Enum', 'Record', 'Math', 'System', 'Thread',
   'ThreadLocal', 'StringBuilder', 'StringBuffer', 'CharSequence', 'Comparable', 'Iterable',
   'Runnable', 'Throwable', 'AutoCloseable', 'Cloneable', 'Process', 'ProcessBuilder',
+  // ProcessHandle es de java.lang desde Java 9, igual que Process: sin él, el arnés que comprueba
+  // que la réplica murió de verdad se lee como un tipo sin import.
+  'ProcessHandle',
   'StackTraceElement', 'Package', 'Module', 'Exception', 'Error', 'AssertionError',
   'RuntimeException', 'IllegalStateException', 'IllegalArgumentException',
   'UnsupportedOperationException', 'NullPointerException', 'ClassCastException',

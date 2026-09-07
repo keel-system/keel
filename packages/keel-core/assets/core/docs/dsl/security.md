@@ -46,9 +46,32 @@ authentication:
   protocol: oidc
   callerIdentity:
     field: applicationCode          # el campo del input que la recibe, YA resuelta
-    from: { source: serviceClient } # el cliente máquina de la credencial ES el recurso
+    from: { source: serviceClient } # el cliente máquina de la credencial identifica al recurso
     # from: { source: claim, name: tenant }   # o un claim que puebla el proveedor
 ```
+
+**Una credencial o varias.** Con `serviceClient`, la correspondencia por defecto es **1:1**: la
+entrada de `serviceClients` *es* el identificador del recurso. Cuando un mismo recurso tiene
+**varias** credenciales —el sistema que pide envíos y su pipeline de despliegue, por ejemplo— hay
+que decirlo, porque el generador no lo puede adivinar:
+
+```yaml
+callerIdentity:
+  field: applicationKey
+  from:
+    source: serviceClient
+    resolvedBy: Application.credentialKeys   # Entidad.campo, y el campo es una LISTA
+```
+
+`resolvedBy` apunta a un campo del dominio que **tiene que ser una lista**; sobre un escalar sería
+la forma 1:1 escrita de otra manera, y `keel validate` lo da en rojo. Con él, el generador emite
+la búsqueda por elemento de la colección y se lo dice al implementador; sin él emite la búsqueda
+por la clave natural, que es lo correcto en el caso 1:1.
+
+> **Lo que pasa si la relación es 1:N y no se declara.** Nada, hasta que llega una credencial que
+> no coincide con la clave natural: entonces no resuelve a ningún recurso y el servicio responde
+> **403 en el camino feliz**. La relación queda escrita solo en la `description` de un campo, que
+> no es estructura y nadie puede leer. Ocurrió, y costó nueve escenarios y cinco clases enteras.
 
 - Es el **hermano** de `messaging.subscriptions.<E>.identity`: el mismo hecho por la otra puerta. Si una operación entra por las dos, **las dos tienen que nombrar el mismo `field`** — dos campos son dos verdades, y la operación decidiría con uno u otro sin saberlo. `keel validate` lo da en rojo.
 - El campo **deja de viajar en el cuerpo** de la petición: lo estampa el servidor, igual que un campo `generated`. Quien hace la petición es justamente quien no debería poder elegir en nombre de quién actúa, así que no hay nada que comprobar ni ningún error de inconsistencia que declarar.

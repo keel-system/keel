@@ -4730,6 +4730,60 @@ test('from serviceClient exige que el diseño declare alguno', () => {
   );
 });
 
+// ─── `resolvedBy`: una credencial o varias ───────────────────────────────────
+//
+// Por defecto la correspondencia credencial↔recurso es 1:1, y el schema lo dice: la entrada de
+// `serviceClients` ES el identificador del recurso. Cuando no lo es, la relación vivía solo en la
+// `description` de un campo del dominio — prosa, no estructura—, así que el generador emitía la
+// búsqueda por la clave natural y toda credencial que no coincidiera con ella acababa en un 403
+// en el camino feliz. Costó nueve escenarios y cinco clases enteras en una corrida.
+
+test('resolvedBy tiene que apuntar a una entidad y un campo que existan', () => {
+  const sinEntidad = withCallerIdentity();
+  sinEntidad.security.authentication.callerIdentity.from.resolvedBy = 'NoExiste.credenciales';
+  assert.ok(
+    run(sinEntidad).errors.some((e) => e.includes("la entidad 'NoExiste' no existe en domain")),
+    run(sinEntidad).errors.join('\n')
+  );
+
+  const sinCampo = withCallerIdentity();
+  sinCampo.security.authentication.callerIdentity.from.resolvedBy = 'Product.noExiste';
+  assert.ok(
+    run(sinCampo).errors.some((e) => e.includes("no declara el campo 'noExiste'")),
+    run(sinCampo).errors.join('\n')
+  );
+});
+
+test('y ese campo tiene que ser una LISTA', () => {
+  // Es la mitad que distingue lo que resolvedBy declara. Sobre un escalar esto es la
+  // correspondencia 1:1 escrita de otra manera —la de por defecto, que no hace falta declarar—, y
+  // aceptarlo haría que el generador emitiera una búsqueda por colección sobre algo que no lo es.
+  const layers = withCallerIdentity();
+  // Un campo escalar de verdad: apuntar a uno que no existe daría el OTRO error y este caso
+  // pasaría sin haber mirado nunca si es lista.
+  layers.domain.entities.Product.fields.sku = { type: 'string' };
+  layers.security.authentication.callerIdentity.from.resolvedBy = 'Product.sku';
+  const { errors } = run(layers);
+  assert.ok(
+    errors.some((e) => e.includes('no es una lista')),
+    errors.join('\n')
+  );
+});
+
+test('declarado bien, no dice nada', () => {
+  // La otra dirección: sin ella, un validador que rechazara SIEMPRE pasaría los dos casos de
+  // arriba con nota.
+  const layers = withCallerIdentity();
+  layers.domain.entities.Product.fields.credentialKeys = { type: 'string', list: true };
+  layers.security.authentication.callerIdentity.from.resolvedBy = 'Product.credentialKeys';
+  const { errors } = run(layers);
+  assert.deepEqual(
+    errors.filter((e) => e.includes('resolvedBy')),
+    [],
+    errors.join('\n')
+  );
+});
+
 test('las dos puertas tienen que dejar la identidad en el MISMO campo', () => {
   // Es la regla que más rinde de las tres, y ninguna otra la cubría: con dos campos el servicio
   // tiene dos verdades sobre quién pide el trabajo y la operación decide con una u otra según por
