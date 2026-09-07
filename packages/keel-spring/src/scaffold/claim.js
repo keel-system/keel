@@ -168,6 +168,26 @@ function reconciliationClaims(model) {
 
 const enumConstant = (state) => screamingSnake(state);
 
+/**
+ * Cómo se llama el mecanismo del reclamo en el modelo que se está generando.
+ *
+ * El PUERTO es el mismo en las dos ramas —`List<E> claimForXxx()`—, pero lo que hay debajo no:
+ * un UPDATE condicional con su JPQL en el relacional, un findAndModify con su Criteria en el
+ * documental. El javadoc del puerto y la nota del stub son lo que el AGENTE lee, así que
+ * nombrar ahí el mecanismo del otro motor no es un detalle de redacción: manda a buscar un
+ * @Modifying donde hay un findAndModify, y el camino de menor resistencia de esa búsqueda es
+ * escribir un segundo mecanismo en paralelo al que build ya generó.
+ *
+ * Vive aquí y lo importa services.js —que redacta la nota del stub— por la regla de siempre:
+ * una forma se redacta en UN solo sitio, o la primera que cambie deja a la otra nombrando la
+ * anterior.
+ */
+export function claimMechanism(model) {
+  return model.persistenceKind === 'document'
+    ? { conditional: 'un findAndModify condicional', write: 'findAndModify' }
+    : { conditional: 'un UPDATE condicional', write: 'UPDATE' };
+}
+
 const stateList = (claim, enumType) =>
   claim.from.map((state) => `${enumType}.${enumConstant(state)}`).join(', ');
 
@@ -176,30 +196,30 @@ const stateList = (claim, enumType) =>
  * la marca ya viene puesta, porque el camino de menor resistencia —estamparla en el
  * handler, después— es justo el que abre la ventana que este reclamo cerró.
  */
-function describeStamp(claim) {
+function describeStamp(model, claim) {
   if (!claim.stamps) return '';
   return `
      *
      * <p><b>Devuelve las filas con {@code ${claim.stamps.field}} ya estampado</b>: va dentro del propio
-     * UPDATE, porque ${claim.stamps.reason} consulta esa marca. NO la vuelvas a poner desde el
+     * ${claimMechanism(model).write}, porque ${claim.stamps.reason} consulta esa marca. NO la vuelvas a poner desde el
      * handler — hacerlo ahí es una segunda escritura, y una caída entre las dos deja la fila con la
      * marca a NULL, invisible para siempre a quien la buscaba por {@code < :staleBefore}.`;
 }
 
-function describe(claim, entityName) {
-  if (claim.stalled) return describeStalled(claim, entityName);
+function describe(model, claim, entityName) {
+  if (claim.stalled) return describeStalled(model, claim, entityName);
   return `Reclama hasta {@code batchSize} ${entityName} en estado ${claim.from.join(' o ')} y los pasa a ${claim.to}.
      *
      * <p><b>Reclama, no lee.</b> Corre en TODAS las réplicas del servicio a la vez
      * ({@code @Scheduled} es «una vez por instancia», no «una vez en el clúster»). La lista
      * que devuelve son SOLO las filas que ESTA instancia se llevó: el paso a ${claim.to} va
-     * en un UPDATE condicional, así que la fila que otra réplica reclamó antes no aparece
+     * en ${claimMechanism(model).conditional}, así que la fila que otra réplica reclamó antes no aparece
      * aquí. Leer el lote con un finder normal y marcarlo después se lo daría entero a todas.
      *
      * <p>El reclamo se COMMITEA antes de volver (transacción propia): eso es lo que lo hace
      * visible a las demás. Actúa sobre lo que devuelve FUERA de esta llamada — sostener una
      * transacción durante un envío o una llamada a un proveedor es justo lo que este método
-     * existe para evitar.${describeStamp(claim)}`;
+     * existe para evitar.${describeStamp(model, claim)}`;
 }
 
 /**
@@ -207,12 +227,12 @@ function describe(claim, entityName) {
  * hay una cota temporal y de dónde sale, y que lo que devuelve es trabajo ABANDONADO —
  * porque tratarlo como trabajo nuevo es exactamente lo que produce el efecto doble.
  */
-function describeStalled(claim, entityName) {
+function describeStalled(model, claim, entityName) {
   return `Rescata hasta {@code batchSize} ${entityName} ATASCADOS en ${claim.stalled.state} y los pasa a ${claim.to}.
      *
      * <p><b>Reclama, no lee.</b> Corre en TODAS las réplicas del servicio a la vez
      * ({@code @Scheduled} es «una vez por instancia», no «una vez en el clúster»). El paso a
-     * ${claim.to} va en un UPDATE condicional, así que la fila que otra réplica rescató antes no
+     * ${claim.to} va en ${claimMechanism(model).conditional}, así que la fila que otra réplica rescató antes no
      * aparece aquí, y el reclamo se COMMITEA antes de volver (transacción propia).
      *
      * <p><b>Y solo se lleva lo ABANDONADO.</b> ${claim.stalled.state} es un estado EN VUELO: hay
@@ -223,7 +243,7 @@ function describeStalled(claim, entityName) {
      * Ese plazo tiene que quedar por encima de lo que tarda un ciclo completo.
      *
      * <p>Lo que devuelve es trabajo que alguien dejó a medias, no trabajo nuevo: si el ciclo que
-     * murió ya produjo un efecto externo irreversible, repetirlo lo duplica. Actúa en consecuencia.${describeStamp(claim)}`;
+     * murió ya produjo un efecto externo irreversible, repetirlo lo duplica. Actúa en consecuencia.${describeStamp(model, claim)}`;
 }
 
 /** Métodos del puerto <E>Repository. */
@@ -233,7 +253,7 @@ export function portMethods(model, entity, imports) {
   imports.add('java.util.List');
   return claims.map(
     (claim) => `    /**
-     * ${describe(claim, entity.name)}
+     * ${describe(model, claim, entity.name)}
      */
     List<${entity.name}> ${claim.method}();`
   );
@@ -347,7 +367,7 @@ export function adapterMethods(model, entity, imports, jpaField) {
       : '';
     const stampArg = claim.stamps ? ', claimedAt' : '';
     return `    /**
-     * ${describe(claim, entity.name)}
+     * ${describe(model, claim, entity.name)}
      */
     @Override
 ${claimTx.annotation}
@@ -427,7 +447,7 @@ export function documentAdapterMethods(model, entity, imports) {
     // filas viejas al fondo indefinidamente en cuanto hay más de las que caben en un lote.
     const order = `.with(Sort.by(Sort.Direction.ASC, "${orderFieldOf(entity, claim)}"))`;
     return `    /**
-     * ${describe(claim, entity.name)}
+     * ${describe(model, claim, entity.name)}
      */
     @Override
     public List<${entity.name}> ${claim.method}() {

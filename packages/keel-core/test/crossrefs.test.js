@@ -5263,3 +5263,69 @@ test('sin serviceAuth no aplica', () => {
   const { obligations } = run(layers);
   assert.ok(!obligations.some((item) => item.id === 'OBL-CALLER-IDENTITY'), JSON.stringify(obligations));
 });
+
+// ─── La guarda que nada puede observar (OBL-GUARD-UNOBSERVABLE) ──────────────
+//
+// Medido en la corrida `notification-mailer-mongo`: una operación de `sentBy` con estado EN
+// VUELO y SIN puerta propia tiene su guarda por fila, pero quien impide el segundo efecto en
+// cualquier escenario de caja negra es el reclamo de QUIEN LA LLAMA. Romper la guarda dejó la
+// suite entera en verde; romper el reclamo del llamante dio tres correos al mismo destinatario.
+//
+// Las dos direcciones importan y por eso hay dos casos. Sin el segundo, un emisor que la
+// levantara SIEMPRE pasaría el primero y convertiría la obligación en ruido — que es justo lo
+// que hace que se acepten sin leer.
+
+const enVuelo = {
+  transitions: [
+    { entity: 'Notification', from: ['queued'], to: 'sending' },
+    { entity: 'Notification', from: ['sending'], to: 'sent' },
+    { entity: 'Notification', from: ['sending'], to: 'failed' }
+  ]
+};
+
+test('mail: la guarda de una operación SIN puerta propia no la mide ningún escenario', () => {
+  const { obligations } = run({
+    domain: baseDomain(),
+    // Sin capa api: a `requestNotification` no la alcanza ningún endpoint, ni schedule, ni
+    // suscripción. Solo la puede invocar otra operación del servicio.
+    'use-cases': mailUseCases({ internal: true, ...enVuelo }),
+    mail: mailLayer()
+  });
+  const raised = (obligations ?? []).find((o) => o.id === 'OBL-GUARD-UNOBSERVABLE');
+  assert.ok(raised, `no se levantó: ${JSON.stringify(obligations)}`);
+  assert.equal(raised.scope, 'mail.requestNotification');
+  assert.match(raised.message, /el reclamo de QUIEN LA LLAMA/);
+});
+
+test('mail: y con puerta propia NO se levanta — el escenario sí puede llamarla', () => {
+  // La misma silueta de guarda, con endpoint. Aquí un escenario puede invocar la operación dos
+  // veces por HTTP, así que la guarda SÍ es lo que arbitra y sí se puede medir.
+  const { obligations } = run({
+    domain: baseDomain(),
+    'use-cases': mailUseCases({ ...guarded, ...enVuelo }),
+    api: mailApi,
+    security: securityLayer,
+    mail: mailLayer()
+  });
+  assert.ok(
+    !(obligations ?? []).some((o) => o.id === 'OBL-GUARD-UNOBSERVABLE'),
+    `se levantó con endpoint: ${JSON.stringify(obligations)}`
+  );
+});
+
+test('mail: sin estado EN VUELO tampoco — no hay guarda por fila que medir', () => {
+  // Transiciones que no pasan por un estado intermedio: no hay marca que confirmar antes del
+  // efecto, así que la obligación no aplica y levantarla sería ruido.
+  const { obligations } = run({
+    domain: baseDomain(),
+    'use-cases': mailUseCases({
+      internal: true,
+      transitions: [{ entity: 'Notification', from: ['queued'], to: 'sent' }]
+    }),
+    mail: mailLayer()
+  });
+  assert.ok(
+    !(obligations ?? []).some((o) => o.id === 'OBL-GUARD-UNOBSERVABLE'),
+    `se levantó sin estado en vuelo: ${JSON.stringify(obligations)}`
+  );
+});

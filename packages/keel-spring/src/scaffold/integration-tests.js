@@ -32,7 +32,8 @@ import {
   outboxPendingScript,
   abandonOutboxScript,
   clearAbandonedScript,
-  CLOCK
+  CLOCK,
+  PRINT_WRAPPER
 } from '../lib/mongo-probes.js';
 import { tokenUrl, userTestClient } from './auth-provisioning.js';
 // La forma de la tabla y el SQL con el que el arnés fabrica la precondición del rescate:
@@ -2886,9 +2887,16 @@ function mongoEvalHelper(scriptArgv) {
      * responde {@code ReferenceError}. El script se copia como archivo y se ejecuta desde ahí.
      *
      * <pre>String salida = mongoEval("db.getCollection(\\"dispatch_orders\\").countDocuments({ status: \\"QUEUED\\" })");</pre>
+     *
+     * <p><b>Y el script se envuelve en un {@code print(...)} explícito.</b> Ejecutado como
+     * ARCHIVO, mongosh no autoimprime el valor de la última expresión —{@code --eval} y la REPL
+     * sí, de ahí que probarlo a mano no lo destape—, así que sin el envoltorio un
+     * {@code countDocuments(...)} devuelve cadena vacía. Y la cadena vacía no se parece a un
+     * error: se parece a un cero.
      */
     protected static String mongoEval(String script) {
-        copyIntoContainer(DB_CONTAINER, script, ".js", DB_SCRIPT);
+        String printed = ${javaString(PRINT_WRAPPER.prefix)} + script + ${javaString(PRINT_WRAPPER.suffix)};
+        copyIntoContainer(DB_CONTAINER, printed, ".js", DB_SCRIPT);
         return db(${scriptArgv.map((part) => javaString(part)).join(', ')}, DB_SCRIPT);
     }
 `;
@@ -3477,7 +3485,21 @@ function outboxDrainSection(model) {
             String trimmed = output.trim();
             int lastBreak = Math.max(trimmed.lastIndexOf('\\n'), trimmed.lastIndexOf('\\r'));
             String digits = trimmed.substring(lastBreak + 1).replaceAll("[^0-9]", "");
-            return digits.isEmpty() ? 0 : Integer.parseInt(digits);
+            // Sin dígitos NO se devuelve cero. Cero significa «drenado», así que traducir una
+            // lectura vacía a cero es exactamente lo que el javadoc de arriba prohíbe — y es lo
+            // que estuvo pasando en la rama documental durante tres corridas: mongosh ejecutado
+            // como archivo no autoimprimía, la salida venía vacía, y esta línea la leía como un
+            // outbox drenado. La espera volvía al instante sin esperar a nada.
+            if (digits.isEmpty()) {
+                throw new IllegalStateException(
+                        "La consulta de outbox_event no devolvió ningún número (salida: '" + trimmed + "'). "
+                                + "Vacío NO es cero: si se tradujera a cero, la espera al drenaje volvería al "
+                                + "instante y todo lo que dependa de ella mediría humo.");
+            }
+            return Integer.parseInt(digits);
+        } catch (IllegalStateException loud) {
+            // Ya trae su diagnóstico: reenvolverla con el mensaje genérico lo escondería.
+            throw loud;
         } catch (RuntimeException e) {
             throw new IllegalStateException(
                     "No se pudo leer outbox_event para saber si el relay había drenado. Sin esa lectura la "

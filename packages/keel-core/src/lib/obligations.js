@@ -34,6 +34,8 @@
  * hay clases que no admiten «aceptado» porque ahí no existe default seguro, y aceptarlas
  * significaría dejárselo al generador.
  */
+import { SCENARIOS_FILE } from './spec-files.js';
+
 export const OBLIGATIONS = {
   'OBL-IDEM-RACE-CODE': {
     gapClass: 4,
@@ -53,6 +55,16 @@ export const OBLIGATIONS = {
     title: 'el desenlace «misma clave, otro cuerpo» no tiene `code` nombrado',
     closes: 'un `code` de la familia KEY_REUSED en `errors`, con status 409, o exención razonada',
     doc: 'framework-errors.md'
+  },
+
+  'OBL-GUARD-UNOBSERVABLE': {
+    gapClass: 12,
+    when: 'mail: una operación de `sentBy` con estado EN VUELO no tiene puerta propia (ni endpoint, ni schedule, ni subscription)',
+    kind: 'decision',
+    waivable: true,
+    title: 'la guarda del efecto irreversible no la puede observar ningún escenario',
+    closes: 'una puerta propia para la operación, o exención razonada que diga que su única verificación es el gate estático',
+    doc: SCENARIOS_FILE
   },
 
   'OBL-CALLER-IDENTITY': {

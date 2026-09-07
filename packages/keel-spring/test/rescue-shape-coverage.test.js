@@ -126,6 +126,43 @@ test('documental: el mismo reclamo es un findAndModify con su Criteria', () => {
   assert.match(adapter, /mongoTemplate\.findAndModify\(/);
 });
 
+// ── Lo que el AGENTE lee, que también cambia con el modelo ───────────────────
+//
+// El puerto es idéntico en las dos ramas (`List<Job> claimForXxx()`), así que su javadoc y la
+// nota del stub son texto COMPARTIDO — y durante mucho tiempo ese texto nombraba solo el
+// mecanismo relacional: «reclama con un UPDATE condicional», también sobre Mongo, donde lo que
+// build genera es un `findAndModify`. El código estaba bien; la instrucción que acompaña al
+// hueco mandaba a buscar un @Modifying donde no lo hay, y el camino de menor resistencia de esa
+// búsqueda es escribir un segundo mecanismo en paralelo al generado.
+//
+// No lo cazaba nadie: ningún test afirmaba sobre esa prosa, y no puede cazarlo javac ni
+// `java-syntax` —es un comentario—. Lo destapó montar la corrida `notification-mailer-mongo`.
+// De ahí que se afirme en las dos direcciones: que cada rama nombre el suyo Y que NO nombre el
+// de la otra. Solo la primera mitad la pasaría un texto que los nombrara los dos.
+
+const MECANISMO = {
+  'job-dispatch': { propio: 'un UPDATE condicional', ajeno: 'findAndModify' },
+  'job-dispatch-mongo': { propio: 'un findAndModify condicional', ajeno: 'UPDATE condicional' }
+};
+
+for (const caso of AMBAS) {
+  const { propio, ajeno } = MECANISMO[caso.fixture];
+
+  test(`${caso.fixture}: el javadoc del puerto nombra el mecanismo de SU modelo`, () => {
+    const puerto = generate(caso)('JobRepository.java');
+    assert.ok(puerto.includes(propio), `el puerto no dice «${propio}»`);
+    assert.ok(!puerto.includes(ajeno), `el puerto nombra el mecanismo del otro modelo: «${ajeno}»`);
+  });
+
+  // Esta es la que importa de verdad: el javadoc del puerto se lee al implementarlo, pero la
+  // nota del stub es la instrucción que el agente tiene delante mientras escribe el handler.
+  test(`${caso.fixture}: y la nota del stub del barrido, también`, () => {
+    const handler = generate(caso)('DispatchJobsCommandHandler.java');
+    assert.ok(handler.includes(`reclama con ${propio}`), `la nota del stub no dice «${propio}»`);
+    assert.ok(!handler.includes(ajeno), `la nota del stub nombra el mecanismo del otro modelo: «${ajeno}»`);
+  });
+}
+
 // ── La palanca del arnés, que es lo que compila `compile-check` ───────────────
 
 test('relacional: el arnés atasca, pone a ahora y cuenta, hablando SQL', () => {

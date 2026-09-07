@@ -1,0 +1,17 @@
+decisions:
+  - id: OBL-GUARD-UNOBSERVABLE
+    scope: mail.sendAcceptedNotification
+    reason: >-
+      Aceptada a sabiendas y MEDIDA. sendAcceptedNotification no tiene puerta propia a
+      propósito: separar «registrar la petición» de «mandar el correo» es lo que le da a la
+      guarda un estado intermedio donde apoyarse, y darle un endpoint expondría un efecto
+      irreversible a cualquiera que sepa el id. La consecuencia se comprobó rompiendo el
+      mecanismo en la corrida notification-mailer-mongo: con la guarda rota la suite entera
+      sigue en verde, porque quien impide el segundo envío en caja negra es el reclamo de lote
+      de queueAcceptedNotifications; rompiendo ese, tres correos al mismo destinatario. Lo que
+      la guarda sostiene —la caída entre el correo aceptado por el relay y el commit de la
+      transición— no lo puede provocar ningún arnés de caja negra, así que su verificación es
+      estática: infra/check-idempotency.sh, familia mailDelivery, que exige la llamada al
+      reclamo ANTES del envío. Queda dicho en validation-scenarios.md, para que el contrato no
+      prometa medir lo que no mide.
+    since: 1.0.0

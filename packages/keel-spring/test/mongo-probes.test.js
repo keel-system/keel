@@ -28,7 +28,9 @@ import {
   missingClockCountScript,
   outboxPendingScript,
   abandonOutboxScript,
-  clearAbandonedScript
+  clearAbandonedScript,
+  PRINT_WRAPPER,
+  printed
 } from '../src/lib/mongo-probes.js';
 
 const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
@@ -143,6 +145,52 @@ test('un diseño documental con reconciledBy PUEDE envejecer su marca de espera'
   // sacaría la fila del lote que el barrido busca — es la razón de que `ageClockScript` no sea
   // `setStateScript`.
   assert.ok(!suffix.includes('status:'), 'envejecer la marca no puede tocar el estado del agregado');
+});
+
+// ── El TRANSPORTE, que es la mitad que no miraba nadie ───────────────────────
+//
+// Todo lo de arriba comprueba el PREDICADO: que el arnés emita el script del módulo. Ninguno
+// comprobaba que el VALOR vuelva, y por ahí se coló el defecto que destapó la corrida
+// `notification-mailer-mongo`: `mongosh <archivo>` no autoimprime la última expresión —`--eval`
+// y la REPL sí, de ahí que probarlo a mano no lo destape—, así que un `countDocuments` volvía
+// como cadena VACÍA. Y la cadena vacía no se parecía a un error: `pendingOutboxRows()` la leía
+// como cero, o sea «outbox drenado», y `awaitOutboxDrained` volvía al instante. Tres corridas
+// documentales corrieron sin ese aislamiento.
+//
+// `mongo-check` tampoco podía verlo: envolvía cada consulta en su PROPIO `print(...)`, con lo
+// que medía el script y no el camino. Estos dos casos son la red que faltaba.
+
+test('el arnés envuelve el script para que el valor VUELVA, con el envoltorio del módulo', () => {
+  const harness = harnessOf('job-dispatch-mongo');
+
+  // Se afirma sobre las dos mitades tal y como viajan en el Java, no sobre el nombre del
+  // helper: `mongoEval` seguiría llamándose igual con el envoltorio quitado.
+  assert.ok(
+    harness.includes(enJava(PRINT_WRAPPER.prefix)),
+    'el arnés no antepone el print(...) del módulo: sin él, mongosh por ARCHIVO no imprime nada'
+  );
+  assert.ok(harness.includes(enJava(PRINT_WRAPPER.suffix)), 'el arnés no cierra el envoltorio del módulo');
+
+  // Y que sea una expresión envuelta, no un print suelto: el valor tiene que RETORNARSE.
+  assert.equal(printed('db.x.countDocuments({})'), `${PRINT_WRAPPER.prefix}db.x.countDocuments({})${PRINT_WRAPPER.suffix}`);
+  assert.ok(PRINT_WRAPPER.prefix.includes('return ('), 'el envoltorio no RETORNA el valor: imprimiría undefined');
+});
+
+test('y una lectura vacía del outbox NO se traduce a cero', () => {
+  // asset-vault y no job-dispatch-mongo: pendingOutboxRows solo se emite con capa messaging.
+  const harness = harnessOf('asset-vault');
+
+  // Cero significa «drenado». Traducir ahí una lectura vacía convierte una consulta rota en una
+  // espera que siempre pasa — que es exactamente lo que el javadoc de pendingOutboxRows prohíbe
+  // y lo que estuvo haciendo. La ausencia del ternario es la afirmación.
+  assert.ok(
+    !harness.includes('digits.isEmpty() ? 0'),
+    'pendingOutboxRows vuelve a traducir la lectura vacía a cero: la espera al drenaje no esperaría'
+  );
+  assert.ok(
+    harness.includes('if (digits.isEmpty()) {'),
+    'pendingOutboxRows no distingue una lectura vacía de un cero'
+  );
 });
 
 test('ningún script de mongosh del ARNÉS se escribe a mano', () => {

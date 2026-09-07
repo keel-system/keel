@@ -509,6 +509,42 @@ y el caso negativo usa cualquier otro.
 tienen su propio parámetro y su propia semántica (`tokenFor(...)` cachea por rol, la clave se
 repite solo donde se prueba la deduplicación). Colarlos por el mapa salta esas garantías.
 
+## Ver el efecto no es ver el estado
+
+Haber observado el **efecto externo** de una operación no ordena el **estado del agregado** que lo
+produjo. Con una guarda por delante el orden es justo el contrario del que sugiere la intuición, y
+esto es una carrera, no una lentitud:
+
+```java
+// MAL: el correo ya está en el buzón, y el agregado puede seguir en `sending`.
+awaitMailTo(recipient, 1);
+Response body = get(ROUTE_BASE + "/notifications/" + id, token);
+assertThat(jsonPath(body, "$.status")).isEqualTo("sent");
+```
+
+Una operación con guarda de fila hace tres cosas **en este orden**: reclama (transacción propia,
+commiteada), produce el efecto, y solo entonces confirma el desenlace. Así que entre el correo
+—o el mensaje, o la llamada saliente— y el commit de `sent` hay una ventana real. `awaitMailTo`
+vuelve en cuanto el buzón tiene el mensaje, que es **antes**; leer el estado acto seguido lo pilla
+a veces en el estado intermedio, y el rojo es intermitente y no se parece a su causa
+(`expected "sent" but was "sending"`).
+
+```java
+// BIEN: se espera el ESTADO, que es lo que el `Then` afirma.
+awaitMailTo(recipient, 1);
+await(Duration.ofSeconds(90),
+        () -> "sent".equals(jsonPath(get(ROUTE_BASE + "/notifications/" + id, token), "$.status")));
+```
+
+La regla general: **cada aserción espera a lo que ella misma afirma**. Esperar a otra cosa —aunque
+«venga después» en la cabeza de quien lo escribe— es apoyarse en un orden que el servicio no
+promete. Aplica igual a un evento publicado, a una llamada al proveedor de prueba y a una fila de
+la base: si el `Then` habla del agregado, el sondeo es sobre el agregado.
+
+Y ojo con el recuento: donde el flujo crea N recursos, la carrera se pierde N veces más a menudo.
+Un bucle que espera los N efectos y **luego** lee los N estados de una tirada es el mismo defecto
+multiplicado.
+
 ## Lo que no se ve por HTTP
 
 Toda afirmación del `Then` se comprueba, por orden de preferencia:

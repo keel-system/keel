@@ -13,6 +13,7 @@ import { INTERFACES_PKG, ANNOTATIONS_PKG, MEDIATOR_PKG } from './mediator.js';
 import { domainTypeImport } from './entities.js';
 import { refTargetsOf } from './ref-resolvers.js';
 import { usesCorrelation, correlationImport } from './correlation.js';
+import { claimMechanism } from './claim.js';
 
 // Componentes del record mensaje: parámetros de ruta (en el orden del path) +
 // campos del body + paginación (queries). Compartidos con el controller para
@@ -513,8 +514,8 @@ function renderHandler(model, service, operation) {
     notes.push(
       `MULTI-INSTANCIA (no es opcional): este barrido corre en TODAS las réplicas del servicio a la vez — @Scheduled es «una vez por instancia», no «una vez en el clúster». ` +
         (claims.length > 0
-          ? `Toma su lote con ${claims.map((claim) => `${claim.method}()`).join(' y ')}, que build ya generó en el puerto del repositorio: reclama con un UPDATE condicional y devuelve SOLO las filas que esta instancia se llevó. El tamaño del lote NO se pasa desde aquí — lo acota el adaptador con sweep.${claims[0].sweepKey}.batch-size, que es donde Spring está permitido. `
-          : `El puerto del repositorio NO trae método de reclamo para este barrido, así que lo escribes tú: un UPDATE condicional que marque la fila y devuelva cuántas afectó (1 = es mía, 0 = otra llegó antes). `) +
+          ? `Toma su lote con ${claims.map((claim) => `${claim.method}()`).join(' y ')}, que build ya generó en el puerto del repositorio: reclama con ${claimMechanism(model).conditional} y devuelve SOLO las filas que esta instancia se llevó. El tamaño del lote NO se pasa desde aquí — lo acota el adaptador con sweep.${claims[0].sweepKey}.batch-size, que es donde Spring está permitido. `
+          : `El puerto del repositorio NO trae método de reclamo para este barrido, así que lo escribes tú: ${claimMechanism(model).conditional} que marque la fila y devuelva cuántas afectó (1 = es mía, 0 = otra llegó antes). `) +
         `Lo que NO vale es leer con un finder y marcar después: entre la lectura y la marca las N réplicas ya se llevaron las mismas filas, y con un efecto que no se puede retirar —un correo, un cobro— eso son N efectos. ` +
         `El lote va acotado, y actúa sobre lo reclamado FUERA de la transacción del reclamo: sostenerla durante una llamada externa retiene una conexión del pool por la latencia de un tercero. ` +
         `Lo verifica infra/check-idempotency.sh, familia sweepClaim`

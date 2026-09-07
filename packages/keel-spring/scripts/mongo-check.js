@@ -50,7 +50,8 @@ import {
   missingClockCountScript,
   outboxPendingScript,
   abandonOutboxScript,
-  clearAbandonedScript
+  clearAbandonedScript,
+  printed
 } from '../src/lib/mongo-probes.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -107,12 +108,25 @@ function composeDown(frontend, projectDir) {
  * Ejecuta un script copiándolo como FICHERO al contenedor, igual que `mongoEval` en
  * AbstractFlowIT. El argv sale del catálogo (`cliQueryArgv` sin `--eval`), así que si alguien
  * cambia la cadena de conexión o los flags, este runner los sigue.
+ *
+ * Devuelve DOS funciones, y la distinción es la que le faltaba a este runner:
+ *
+ *   `raw(script)`    ejecuta tal cual. Para SEMBRAR (scripts de varias sentencias).
+ *   `probe(script)`  ejecuta la expresión **por el mismo envoltorio que el arnés**
+ *                    (`PRINT_WRAPPER` de mongo-probes.js). Para MEDIR.
+ *
+ * Sin esa segunda, el runner ponía su propio `print(...)` alrededor de cada consulta y con eso
+ * medía el PREDICADO pero nunca el TRANSPORTE — que es la mitad por la que se coló que
+ * `mongosh <archivo>` no autoimprime: un `countDocuments` devolvía cadena vacía, el arnés la
+ * leía como cero, y este check seguía en verde porque él sí imprimía. Es el mismo error de
+ * método que ya está escrito para los brokers: un runner con lo suyo comprueba que Mongo
+ * responde, no que el generador acierta.
  */
 function makeEval({ runtime, container, argv }) {
   // El temporal cuelga de `tmpDir()` y no de `os.tmpdir()` a pelo: lo que cuelga de ahí lo
   // barre el propio proceso al salir, también cuando el runner muere a mitad de un escenario.
   const local = path.join(tmpDir('keel-mongo-eval-'), 'keel-check.js');
-  return (script) => {
+  const raw = (script) => {
     fs.writeFileSync(local, script, 'utf8');
     const copy = run(runtime, ['cp', local, `${container}:/tmp/keel-check.js`]);
     if (copy.status !== 0) throw new Error(`no se pudo copiar el script al contenedor: ${copy.stderr.trim()}`);
@@ -122,6 +136,7 @@ function makeEval({ runtime, container, argv }) {
     }
     return result.stdout.trim();
   };
+  return { raw, probe: (script) => raw(printed(script)) };
 }
 
 // Sello del veredicto: cuándo se emitió y sobre QUÉ árbol. Sin él, un artefacto rojo de un
@@ -164,7 +179,7 @@ function prepare(fixture, runtimeInfo) {
   return { projectDir, container: `${service.manifest.service.name}-db`, argv, dbName };
 }
 
-async function waitForMongo(evaluate) {
+async function waitForMongo({ probe }) {
   const deadline = Date.now() + 90000;
   let last = '';
   while (Date.now() < deadline) {
@@ -172,7 +187,7 @@ async function waitForMongo(evaluate) {
       // El mismo sondeo que `validate-infra.sh`: rs.status(), no un ping. Una base que
       // responde al ping pero cuyo replica set no ha arrancado falla en la primera
       // transacción, que es el falso positivo que este sondeo existe para evitar.
-      if (evaluate('print(rs.status().ok)') === '1') return true;
+      if (probe('rs.status().ok') === '1') return true;
     } catch (error) {
       last = error.message;
     }
@@ -201,10 +216,10 @@ async function check(id, title, fn) {
 const ID = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
 const OTHER_ID = '9c858901-8a57-4791-81fe-4c455b099bc9';
 
-async function rescueScenarios(evaluate) {
+async function rescueScenarios({ raw, probe }) {
   const jobs = { collection: 'jobs', stateField: 'status', state: 'RUNNING', clockField: 'running_since' };
   const seed = () =>
-    evaluate(`
+    raw(`
       db.getCollection("jobs").deleteMany({});
       db.getCollection("jobs").insertMany([
         { _id: UUID("${ID}"), reference: "a", status: "QUEUED" },
@@ -213,13 +228,13 @@ async function rescueScenarios(evaluate) {
       print("ok");
     `);
   const readJob = (id) =>
-    jsonOf(evaluate(`print(JSON.stringify(db.getCollection("jobs").findOne({ _id: UUID("${id}") })))`));
+    jsonOf(probe(`JSON.stringify(db.getCollection("jobs").findOne({ _id: UUID("${id}") }))`));
 
   // El transporte, primero: si esto cae, todo lo demás miente. Un script con comillas dobles
   // que llegara mutilado daría `ReferenceError`, no un resultado incorrecto — pero el arnés
   // solo vería una excepción sin relación con el servicio.
   await check('MONGO-1', 'un script con comillas dobles llega intacto y devuelve lo que debe', () => {
-    const out = evaluate('print(db.getCollection("una_coleccion_que_no_existe").countDocuments({ x: "y" }))');
+    const out = probe('db.getCollection("una_coleccion_que_no_existe").countDocuments({ x: "y" })');
     if (out !== '0') throw new Error(`salida inesperada: ${JSON.stringify(out)} (¿se comieron las comillas?)`);
   });
 
@@ -233,7 +248,7 @@ async function rescueScenarios(evaluate) {
 
   await check('MONGO-3', 'atascar deja el estado Y el reloj que el rescate busca', () => {
     seed();
-    evaluate(fill(setStateScript({ ...jobs, clock: CLOCK.stale }), ID));
+    probe(fill(setStateScript({ ...jobs, clock: CLOCK.stale }), ID));
     const found = readJob(ID);
     if (found.status !== 'RUNNING') throw new Error(`estado ${JSON.stringify(found.status)}, esperaba RUNNING`);
     // Se lee el campo POR SU NOMBRE: un $set sobre un nombre equivocado no falla, crea otro.
@@ -246,7 +261,7 @@ async function rescueScenarios(evaluate) {
 
   await check('MONGO-4', 'y el reloj a AHORA es distinto del rancio', () => {
     seed();
-    evaluate(fill(setStateScript({ ...jobs, clock: CLOCK.now }), ID));
+    probe(fill(setStateScript({ ...jobs, clock: CLOCK.now }), ID));
     const found = readJob(ID);
     const stamped = new Date(found.running_since.$date ?? found.running_since).getTime();
     if (stamped === 0) throw new Error('putInFlight estampó la época: sería el mismo helper que stallInFlight');
@@ -259,7 +274,7 @@ async function rescueScenarios(evaluate) {
   // sin ver el defecto para el que existe — la fila que se quedó en vuelo SIN reloj, que es
   // irrescatable para siempre.
   await check('MONGO-5', 'el conteo de las que quedaron sin reloj discrimina', () => {
-    evaluate(`
+    raw(`
       db.getCollection("jobs").deleteMany({});
       db.getCollection("jobs").insertMany([
         { _id: UUID("${ID}"), reference: "sin-reloj", status: "RUNNING", running_since: null },
@@ -268,19 +283,19 @@ async function rescueScenarios(evaluate) {
       ]);
       print("ok");
     `);
-    const count = evaluate(`print(${missingClockCountScript(jobs)})`);
+    const count = probe(missingClockCountScript(jobs));
     if (count !== '1') {
       throw new Error(`cuenta ${JSON.stringify(count)} con 1 sin reloj, 1 con reloj y 1 en cola: el predicado no discrimina`);
     }
   });
 }
 
-async function outboxScenarios(evaluate) {
+async function outboxScenarios({ raw, probe }) {
   const pending = outboxPendingScript();
   const DEST = 'asset-vault.events';
   const OTHER_DEST = 'otro.events';
   const seed = () =>
-    evaluate(`
+    raw(`
       db.getCollection("${OUTBOX.collection}").deleteMany({});
       db.getCollection("${OUTBOX.collection}").insertMany([
         { ${OUTBOX.eventType}: "AssetPublished", ${OUTBOX.destination}: "${DEST}", ${OUTBOX.publishedAt}: null, ${OUTBOX.attempts}: 0 },
@@ -290,7 +305,7 @@ async function outboxScenarios(evaluate) {
       ]);
       print("ok");
     `);
-  const pendingOf = (destination) => evaluate(`print(${fill(pending, destination)})`);
+  const pendingOf = (destination) => probe(fill(pending, destination));
 
   // Si esto contara de más, la espera al drenaje no terminaría nunca; si contara de menos
   // —o cero—, volvería al instante sin esperar a nada, que es lo que ya pasó consultando por
@@ -305,34 +320,34 @@ async function outboxScenarios(evaluate) {
 
   await check('MONGO-7', 'abandonar saca del pendiente, y limpiar borra SOLO lo abandonado', () => {
     seed();
-    evaluate(fill(abandonOutboxScript(ABANDONED), 'AssetPublished'));
+    probe(fill(abandonOutboxScript(ABANDONED), 'AssetPublished'));
     // El relay deja de reclamarlas, pero siguen sin publicar: el conteo de pendientes no las
     // ve porque el gauge las cuenta aparte, y ese es justo el desenlace que el escenario del
     // dead-letter afirma.
-    const abandoned = evaluate(
-      `print(db.getCollection("${OUTBOX.collection}").countDocuments({ ${OUTBOX.attempts}: { $gte: ${ABANDONED} } }))`
+    const abandoned = probe(
+      `db.getCollection("${OUTBOX.collection}").countDocuments({ ${OUTBOX.attempts}: { $gte: ${ABANDONED} } })`
     );
     if (abandoned !== '2') throw new Error(`abandonó ${JSON.stringify(abandoned)} de 2 pendientes de ese tipo`);
     const otherStill = pendingOf(OTHER_DEST);
     if (otherStill !== '1') throw new Error('abandonar se llevó por delante eventos de otro tipo');
 
-    evaluate(clearAbandonedScript(ABANDONED));
-    const left = evaluate(`print(db.getCollection("${OUTBOX.collection}").countDocuments({}))`);
+    probe(clearAbandonedScript(ABANDONED));
+    const left = probe(`db.getCollection("${OUTBOX.collection}").countDocuments({})`);
     // Quedan el publicado y el pendiente del otro destino: limpiar solo retira lo abandonado.
     if (left !== '2') throw new Error(`tras limpiar quedan ${JSON.stringify(left)} documentos, esperaba 2`);
   });
 
   await check('MONGO-8', 'la purga del catálogo vacía los documentos y PRESERVA los índices', () => {
     seed();
-    evaluate(`db.getCollection("${OUTBOX.collection}").createIndex({ ${OUTBOX.destination}: 1 }, { name: "ix_check" });print("ok")`);
+    raw(`db.getCollection("${OUTBOX.collection}").createIndex({ ${OUTBOX.destination}: 1 }, { name: "ix_check" });print("ok")`);
     const reset = DATABASES.mongodb.cliResetCmd;
     const script = reset.slice(reset.indexOf("--eval '") + 8, reset.lastIndexOf("'"));
-    evaluate(`${script};print("ok")`);
+    raw(`${script};print("ok")`);
 
-    const left = evaluate(`print(db.getCollection("${OUTBOX.collection}").countDocuments({}))`);
+    const left = probe(`db.getCollection("${OUTBOX.collection}").countDocuments({})`);
     if (left !== '0') throw new Error(`quedan ${JSON.stringify(left)} documentos tras la purga`);
-    const indexes = evaluate(
-      `print(db.getCollection("${OUTBOX.collection}").getIndexes().map(function (ix) { return ix.name; }).join(","))`
+    const indexes = probe(
+      `db.getCollection("${OUTBOX.collection}").getIndexes().map(function (ix) { return ix.name; }).join(",")`
     );
     if (!indexes.includes('ix_check')) {
       throw new Error(`la purga se llevó los índices (quedan: ${indexes}): sería un dropDatabase, no un reset`);
@@ -353,12 +368,12 @@ async function outboxScenarios(evaluate) {
  * equivocado no falla —crea otro campo—, y entonces el barrido no ve candidato, el `Then`
  * espera su tick y el escenario pasa en verde sin haber envejecido nada.
  */
-async function agingScenarios(evaluate) {
+async function agingScenarios({ raw, probe }) {
   // Colección y campo del diseño de asset-vault: `scanAsset.awaitingSince = lastScannedAt`
   // sobre el agregado Asset, que se almacena en `assets` con `@Field(name = "last_scanned_at")`.
   const assets = { collection: 'assets', clockField: 'last_scanned_at' };
   const seed = () =>
-    evaluate(`
+    raw(`
       db.getCollection("assets").deleteMany({});
       db.getCollection("assets").insertMany([
         { _id: UUID("${ID}"), slug: "envejecido", status: "PUBLISHED", last_scanned_at: new Date() },
@@ -367,12 +382,12 @@ async function agingScenarios(evaluate) {
       print("ok");
     `);
   const readAsset = (id) =>
-    jsonOf(evaluate(`print(JSON.stringify(db.getCollection("assets").findOne({ _id: UUID("${id}") })))`));
+    jsonOf(probe(`JSON.stringify(db.getCollection("assets").findOne({ _id: UUID("${id}") }))`));
   const millis = (value) => new Date(value?.$date ?? value).getTime();
 
   await check('MONGO-9', 'envejecer la marca de espera CASA con el documento y discrimina', () => {
     if (seed() !== 'ok') throw new Error('la siembra no confirmó');
-    evaluate(fill(ageClockScript(assets), ID));
+    probe(fill(ageClockScript(assets), ID));
 
     const aged = readAsset(ID);
     // Se lee el campo POR SU NOMBRE, igual que en MONGO-3: un $set sobre un nombre que no

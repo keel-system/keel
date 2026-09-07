@@ -30,6 +30,37 @@
 // doble escape que ya se coló una vez y que solo se ve leyendo el Java generado.
 
 /**
+ * El envoltorio con el que TODO script de aquí se ejecuta, y sin el cual no vuelve nada.
+ *
+ * `mongosh <archivo>` **no autoimprime** el valor de la última expresión. `--eval` sí, y la REPL
+ * también, así que la intuición de cualquiera que pruebe el script a mano es la contraria — y esa
+ * es justo la trampa. El arnés no puede usar `--eval` (las comillas no sobreviven al argv en
+ * Windows: ver `mongoEvalHelper`), así que va por archivo, y por archivo un
+ * `countDocuments(...)` devuelve **cadena vacía**.
+ *
+ * Lo que eso produce no es un error. En `pendingOutboxRows()` la cadena vacía se leía como CERO
+ * —«el outbox está drenado»— y la espera al drenaje volvía al instante: durante tres corridas
+ * documentales `awaitOutboxDrained` no esperó a nada, y el aislamiento entre flujos que promete
+ * quedó sin existir. Es exactamente el fallo que la cabecera de este módulo describe, colado por
+ * la mitad que nadie miraba: no el predicado, el TRANSPORTE.
+ *
+ * Se usa `print` y no `printjson` a propósito: sobre una cadena `print` la devuelve cruda —que es
+ * lo que necesita quien luego hace `JSON.parse`— y sobre un documento imprime su forma de shell,
+ * que es lo que afirma un `contains(...)`. `printjson` entrecomillaría la cadena y rompería al
+ * primero.
+ *
+ * Va en dos trozos porque el arnés lo compone en JAVA, alrededor de una variable: es el mismo
+ * motivo por el que `uuidLiteral` del catálogo es un par y no una función.
+ */
+export const PRINT_WRAPPER = {
+  prefix: 'print((function () { return (',
+  suffix: '); })());'
+};
+
+/** El envoltorio aplicado, para quien compone el script entero en JavaScript. */
+export const printed = (script) => `${PRINT_WRAPPER.prefix}${script}${PRINT_WRAPPER.suffix}`;
+
+/**
  * Nombres de almacenamiento del outbox, los mismos en los dos modelos de persistencia
  * (los escribe `outbox.js`). Van aquí porque son la mitad del predicado: un script correcto
  * sobre un campo que se llama de otra forma no falla, cuenta cero.

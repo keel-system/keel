@@ -2974,6 +2974,28 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
     if (!subscriptionsTriggering.has(sub.triggers)) subscriptionsTriggering.set(sub.triggers, []);
     subscriptionsTriggering.get(sub.triggers).push({ name: subName, sub });
   }
+  // Las operaciones a las que el diseño atribuye un efecto externo que no se deshace.
+  // Hoy solo el correo; cualquier otro efecto irreversible que el DSL llegue a declarar entra
+  // por aquí sin tocar la regla.
+  const sendsMailIrreversibly = new Set(mail?.sentBy ?? []);
+
+  /**
+   * El estado EN VUELO de una operación: el que es destino de una de sus transiciones y origen
+   * de las demás. Es la silueta de la que se deriva una guarda por fila —`queued → sending` y
+   * `sending → sent|failed`—, y lo que la distingue de un desenlace.
+   */
+  const inFlightStateOf = (op) => {
+    const transitions = op?.transitions ?? [];
+    if (transitions.length < 2) return null;
+    const destinos = new Set(transitions.map((t) => t.to));
+    const origenes = new Set(transitions.flatMap((t) => t.from ?? []));
+    return [...destinos].find((estado) => origenes.has(estado)) ?? null;
+  };
+
+  /** ¿La alcanza algo desde fuera del servicio, o solo otra operación? */
+  const hasOwnDoor = (opName, op, reachableByHttp) =>
+    reachableByHttp || op?.schedule !== undefined || triggeredBySubscription.has(opName);
+
   for (const [opName, op] of Object.entries(operations)) {
     const reachableByHttp = Boolean(api && (autoCoversOp(opName) || apiEndpoints.has(opName)));
     const exposed =
@@ -2981,6 +3003,37 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
     if (!exposed) {
       warnings.push(
         `use-cases: ${opName}: operación huérfana — sin endpoint, sin subscription, sin schedule y sin internal: true`
+      );
+    }
+
+    // La guarda que nada puede observar.
+    //
+    // Una operación que produce un efecto externo IRREVERSIBLE y lo protege con un estado EN
+    // VUELO —destino de una transición y origen de las demás, todo en ella misma— tiene su
+    // guarda por FILA: reclamar antes de producir el efecto. Pero si a esa operación no la
+    // alcanza ninguna puerta propia (ni endpoint, ni schedule, ni suscripción), el único que
+    // la invoca es otra operación del servicio, y entonces **quien serializa es el reclamo de
+    // quien la llama**, no la guarda.
+    //
+    // La consecuencia es sutil y cara: el escenario de no-duplicación que se escribe para ella
+    // —«pasadas repetidas no mandan un segundo correo»— pasa en verde con la guarda ROTA,
+    // porque el llamante ya no vuelve a ofrecer la fila. Medido en la corrida
+    // notification-mailer-mongo: romper la guarda deja la suite entera en verde; romper el
+    // reclamo del llamante da tres correos a la misma persona.
+    //
+    // No es un defecto del diseño —la guarda sigue haciendo falta para la caída entre el
+    // efecto y el commit, que ningún arnés de caja negra puede provocar—, así que es una
+    // DECISIÓN: o se le da puerta propia, o se acepta por escrito que su única verificación
+    // es el gate estático. Lo que no puede pasar es que el contrato prometa medirla.
+    if (sendsMailIrreversibly.has(opName) && inFlightStateOf(op) && !hasOwnDoor(opName, op, reachableByHttp)) {
+      obligation(
+        'OBL-GUARD-UNOBSERVABLE',
+        `mail.${opName}`,
+        `la operación '${opName}' manda correo y se guarda con el estado en vuelo '${inFlightStateOf(op)}', pero no ` +
+          `tiene puerta propia: solo la alcanza otra operación, así que quien impide el segundo envío en cualquier ` +
+          `escenario de caja negra es el reclamo de QUIEN LA LLAMA, no esta guarda — el escenario de no-duplicación ` +
+          `pasaría en verde con la guarda rota. Dale una puerta propia, o acepta por escrito que su única ` +
+          `verificación es infra/check-idempotency.sh y dilo en validation-scenarios.md § Lo que no tiene escenario`
       );
     }
 
