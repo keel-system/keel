@@ -13,7 +13,8 @@
     "claim-check": "node scripts/claim-check.js && node scripts/claim-check.js job-dispatch --database=mysql && node scripts/claim-check.js job-dispatch --database=mariadb && node scripts/claim-check.js job-dispatch-mongo && node scripts/claim-check.js notification-mailer && node scripts/claim-check.js notification-mailer-mongo",
     "store-check": "node scripts/store-check.js notification-mailer && node scripts/store-check.js notification-mailer --database=mysql && node scripts/store-check.js notification-mailer-mongo && node scripts/store-check.js stock-reservation && node scripts/store-check.js stock-reservation --database=mysql && node scripts/store-check.js asset-vault",
     "mail-check": "node scripts/mail-check.js",
-    "mongo-check": "node scripts/mongo-check.js"
+    "mongo-check": "node scripts/mongo-check.js",
+    "matrix": "node scripts/support-matrix.js"
   },
   "files": [
     "src",

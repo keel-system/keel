@@ -365,8 +365,12 @@ test('el export del esquema añade el appendix al baseline', () => {
 
 test('un motor sin índices parciales lo dice en voz alta en vez de generar el índice equivocado', () => {
   const { result, read } = scaffoldMailer({ database: 'mysql', broker: 'kafka', auth: 'keycloak' });
+  // El aviso ya no se escribe a mano en `migrations.js`: lo deriva `engine-limits.js` de la matriz
+  // de paridad, que es donde vive el dato de qué motor sostiene qué. Se afirma sobre el id del
+  // mecanismo y sobre el motor —lo estable— y no sobre la redacción, que es de la matriz y tiene
+  // su propio test (`engine-limits.test.js`).
   assert.ok(
-    result.warnings.some((warning) => warning.includes('no tiene índices parciales')),
+    result.warnings.some((warning) => warning.includes('partial-unique-index') && warning.includes('mysql')),
     `esperaba el aviso del motor: ${result.warnings.join(' | ')}`
   );
   const sql = read('src/main/resources/db/partial-indexes.sql');

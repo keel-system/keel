@@ -243,17 +243,35 @@ export function generate(model) {
     '   pruebas unitarias nuevas aquí: la suite unitaria es un proceso posterior.'
   );
 
-  // Gate de migraciones: se comprueba al final, cuando las entidades ya no cambian.
+  // Gate del esquema: se comprueba al final, cuando las entidades ya no cambian. Y cambia ENTERO
+  // con el modelo, igual que el bullet de la capa `persistence` de más arriba —que sí se
+  // bifurcaba—. Mientras esto colgó solo de `layersPresent.persistence`, un proyecto documental
+  // recibía el paso relacional palabra por palabra: correr un `infra/export-schema.sh` que no
+  // existe, escribir un baseline en un `db/migration/` que no existe y contrastarlo con unas
+  // entidades `Jpa` que no existen — en el PRIMER archivo que lee el agente. Es la misma familia
+  // que la nota del barrido diciendo «UPDATE condicional» sobre Mongo, y la destapó el test de
+  // paridad.
   if (layersPresent.persistence) {
     const step = contextStep + 1;
-    lines.push(
-      `${step}. Migraciones: con las entidades ya finales, \`bash infra/export-schema.sh\`, revisa el DDL y cópialo como`,
-      '   `src/main/resources/db/migration/V1__baseline_schema.sql`; verifícalo con el **doble check estático** (`diff`',
-      '   contra el DDL exportado + contraste con las entidades `Jpa` y el diseño). Sin baseline el servicio no puede',
-      '   desplegarse: en `production` Hibernate no crea nada. La prueba en vivo —arrancar con `PROFILE=local,migrations`',
-      '   sobre una BD **sin esquema**— es una verificación **manual del diseñador**, posterior a la generación: exige',
-      '   borrar el volumen de la BD, que es la misma sobre la que corren los escenarios.'
-    );
+    if (model.persistenceKind === 'document') {
+      lines.push(
+        `${step}. Índices: con los documentos ya finales, \`bash infra/export-indexes.sh\`, y contrasta lo que hay VIVO`,
+        '   en la base contra `MongoIndexConfig` y contra `specs/persistence.keel.yaml`: mismas claves, mismo `unique`,',
+        '   mismo filtro parcial. Aquí **no hay baseline que redactar** —los índices salen enteros del diseño y los crea',
+        '   `MongoIndexConfig` en cada arranque—, así que lo que se hace no es escribirlos sino **verificarlos**. Y se',
+        '   ejecuta dentro del pipeline porque solo LEE: a diferencia del baseline relacional, no destruye la base sobre',
+        '   la que corren los escenarios.'
+      );
+    } else {
+      lines.push(
+        `${step}. Migraciones: con las entidades ya finales, \`bash infra/export-schema.sh\`, revisa el DDL y cópialo como`,
+        '   `src/main/resources/db/migration/V1__baseline_schema.sql`; verifícalo con el **doble check estático** (`diff`',
+        '   contra el DDL exportado + contraste con las entidades `Jpa` y el diseño). Sin baseline el servicio no puede',
+        '   desplegarse: en `production` Hibernate no crea nada. La prueba en vivo —arrancar con `PROFILE=local,migrations`',
+        '   sobre una BD **sin esquema**— es una verificación **manual del diseñador**, posterior a la generación: exige',
+        '   borrar el volumen de la BD, que es la misma sobre la que corren los escenarios.'
+      );
+    }
   }
 
   // Descriptivo a propósito ("quién ejecuta qué"), no imperativo: este párrafo lo
@@ -270,7 +288,11 @@ export function generate(model) {
     'que corre la suite y compone la matriz desde el XML de JUnit: eso es determinista y no gasta un agente. Solo si la',
     'matriz trae algo en rojo se invoca `keel-spring-validate`, que **solo arbitra** de quién es la culpa de cada fallo.',
     'Al final, `keel-spring-quality` (pase de calidad no-conductual con la compilación en verde' +
-      (layersPresent.persistence ? ', más el baseline de migraciones del punto 4' : '') +
+      (layersPresent.persistence
+        ? model.persistenceKind === 'document'
+          ? ', más la verificación de los índices del punto 4'
+          : ', más el baseline de migraciones del punto 4'
+        : '') +
       ', y los escenarios al 100% como no-regresión propia). El pipeline completo —fases, gating y handoffs— está en',
     '`{{keel:docs}}/orchestration.md`.'
   );

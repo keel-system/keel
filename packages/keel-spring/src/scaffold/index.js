@@ -19,6 +19,7 @@ import * as appTests from './app-tests.js';
 import * as integrationTests from './integration-tests.js';
 import * as config from './config.js';
 import * as migrations from './migrations.js';
+import * as engineLimits from './engine-limits.js';
 import * as docker from './docker.js';
 import * as deploy from './deploy.js';
 import * as authProvisioning from './auth-provisioning.js';
@@ -132,7 +133,8 @@ const GENERATORS = [
   domainGuardsCheck,
   readme,
   contextMd,
-  generatorDocs
+  generatorDocs,
+  engineLimits
 ];
 
 // Normaliza el stack: defaults para lo que el diseño necesita y no fue elegido

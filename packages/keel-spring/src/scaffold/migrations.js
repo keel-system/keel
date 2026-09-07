@@ -146,12 +146,10 @@ function partialIndexesSql(model) {
     // El diseño declaró un invariante que este motor no puede sostener. Es aviso y
     // no error porque la mayoría de los diseños toleran la ventana de dos peticiones
     // simultáneas; lo que no se tolera es no saber que existe.
-    model.warnings.push(
-      `persistence.indexes con 'when' (${specs.map((spec) => `${spec.entity}.[${spec.fields.join(', ')}]`).join(', ')}): ` +
-        `${model.stack.database} no tiene índices parciales, así que esos índices NO se crean y la unicidad ` +
-        `condicionada queda entera en el caso de uso, que no cierra la ventana de dos peticiones simultáneas. ` +
-        `db/partial-indexes.sql lo dice en voz alta y enumera las salidas del motor. Con PostgreSQL o SQL Server sí se generan.`
-    );
+    // El AVISO no se escribe aquí: lo deriva `engine-limits.js` de la matriz de paridad, que es
+    // donde vive el dato de qué motor sostiene qué. Dos copias del mismo aviso divergen a la
+    // primera, y la que se queda atrás es siempre la que alguien lee. Lo que sí es de este
+    // archivo es el texto del .sql de abajo: ahí el aviso está EN el artefacto que lo sufre.
     const lines = specs.map(
       (spec) =>
         `--   ${spec.name}: UNIQUE (${spec.fields.join(', ')}) donde ${spec.when.field} = ${spec.when.equals}` +
