@@ -14,7 +14,7 @@ import { loadService } from 'keel-core';
 import { buildModel } from '../src/lib/model.js';
 import { resolveStack } from '../src/scaffold/index.js';
 import { generate } from '../src/scaffold/migrations.js';
-import { indexSubject, substrateSql, assertions, statementsOf, outsideValue } from '../src/lib/index-probes.js';
+import { indexSubject, substrateSql, assertions, statementsOf, outsideValue, opacityQuery } from '../src/lib/index-probes.js';
 
 const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
@@ -115,12 +115,13 @@ test('el valor de fuera de la condición es del mismo tipo y distinto del de den
 
 // ─── El appendix, tal como lo va a ejecutar el servicio ──────────────────────
 
-test('el appendix de PostgreSQL es una sola sentencia; el de MySQL, cuatro planas', () => {
+test('el appendix de PostgreSQL es una sola sentencia; el de MySQL, dos guardas planas', () => {
   assert.equal(statementsOf(appendixDe(modeloDe('notification-mailer', 'postgresql'))).length, 1);
-  // Cinco «sentencias» según el separador de spring.sql.init: los dos SET, PREPARE, EXECUTE y
-  // DEALLOCATE. Ninguna puede llevar un `;` dentro, o el script se ejecutaría a trozos.
+  // Diez «sentencias» según el separador de spring.sql.init: DOS guardas (la columna generada y
+  // el índice) de cinco cada una —los dos SET, PREPARE, EXECUTE y DEALLOCATE—. Ninguna puede
+  // llevar un `;` dentro, o el script se ejecutaría a trozos.
   const mysql = statementsOf(appendixDe(modeloDe('notification-mailer', 'mysql')));
-  assert.equal(mysql.length, 5);
+  assert.equal(mysql.length, 10);
   for (const statement of mysql) {
     assert.ok(!statement.includes(';'), `un ; dentro de una sentencia parte el script: ${statement}`);
   }
@@ -136,4 +137,29 @@ test('sobre un motor que no lo sostiene el appendix no trae ninguna sentencia', 
   // Es lo que hace que el runner pueda decir «esto es una degradación anunciada, no un fallo» en
   // vez de morir con un error del motor que nadie sabría leer.
   assert.equal(statementsOf(appendixDe(modeloDe('notification-mailer', 'mariadb'))).length, 0);
+});
+
+// ─── La opacidad a la introspección JDBC ─────────────────────────────────────
+
+test('cada motor sabe preguntarse si su índice es opaco, en su propio idioma', () => {
+  // No hay forma portable de preguntarlo, y componerla a ojo daría siempre cero — que es
+  // indistinguible de «no es opaco» y por tanto un verde que no mide nada.
+  const spec = indexSubject(modeloDe('notification-mailer', 'mysql'));
+  const mysql = opacityQuery('mysql', spec);
+  assert.match(mysql, /information_schema\.STATISTICS/);
+  assert.match(mysql, /COLUMN_NAME IS NULL/);
+  assert.ok(mysql.includes("INDEX_NAME = 'uk_templates_application_key_locale'"), 'pregunta por SU índice');
+
+  // En PostgreSQL lo que haría opaco al índice sería una key part por EXPRESIÓN (`indexprs`), no
+  // el predicado (`indpred`): preguntar por el predicado daría siempre «opaco» y obligaría a una
+  // mitigación que ahí no hace falta.
+  const postgres = opacityQuery('postgresql', indexSubject(modeloDe('notification-mailer', 'postgresql')));
+  assert.match(postgres, /pg_index/);
+  assert.match(postgres, /indexprs IS NOT NULL/);
+  assert.ok(!postgres.includes('indpred'), 'el predicado no es lo que hace opaco a un índice');
+});
+
+test('un motor sin consulta de opacidad lo dice, en vez de responder que no lo es', () => {
+  const spec = indexSubject(modeloDe('notification-mailer', 'mysql'));
+  assert.equal(opacityQuery('sqlserver', spec), null);
 });

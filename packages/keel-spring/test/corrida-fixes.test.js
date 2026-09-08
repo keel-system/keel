@@ -1857,3 +1857,65 @@ test('la firma del joinPoint se captura fuera del catch, no dentro', () => {
   // mete de vuelta en el catch para no pagar un getSignature() por llamada.
   assert.ok(aspect.includes('MITIGACIÓN DE UNA HIPÓTESIS'), 'el aspecto no dice que esto no está reproducido');
 });
+
+// ─── Corrida `notification-mailer` sobre MySQL: el precio del índice funcional ───
+//
+// La primera corrida con la unicidad condicionada ya sostenida en MySQL destapó lo que costaba
+// sostenerla con una key part FUNCIONAL: esa key part no tiene nombre de columna, y con
+// `ddl-auto: update` Hibernate la introspecciona al reconciliar sus `@UniqueConstraint` y aborta
+// la carga entera del ApplicationContext (`null was passed as an object name`), no en el primer
+// arranque sino en el SEGUNDO y en cada réplica nueva.
+//
+// El primer arreglo fue el ajuste que Hibernate ofrece para eso
+// (`schema_update.unique_constraint_strategy: SKIP`) y **fue un error**: en MySQL los
+// `@UniqueConstraint` no salen inline en el `CREATE TABLE`, los añade un `ALTER TABLE` dentro de
+// esa misma reconciliación. Saltársela no los conserva: impide que existan. Medido sobre un
+// volumen recién creado — con `SKIP`, `uk_templates_natural` no aparece en la base—, y lo destapó
+// `FL-TPL-001-E` (dos altas de la misma versión a la vez: esperaba 1 fila, encontró 2).
+//
+// La permuta era la mala en las dos direcciones: un fallo RUIDOSO por uno SILENCIOSO, y encima
+// tapando lo que había que cambiar, que era la FORMA del índice. Hoy el discriminador es una
+// columna generada DECLARADA: el driver devuelve su nombre, la introspección funciona y no hace
+// falta ningún ajuste global.
+
+test('en MySQL el discriminador es una columna generada, no una key part funcional', () => {
+  const sql = project('notification-mailer', MYSQL).file('partial-indexes.sql');
+  assert.match(sql, /ADD COLUMN `uk_templates_application_key_locale_flag` TINYINT/);
+  assert.ok(
+    sql.includes("GENERATED ALWAYS AS (CASE WHEN status = ''ACTIVE'' THEN 1 END) STORED"),
+    'el discriminador vale 1 dentro de la condición y NULL fuera'
+  );
+  // La columna entra en el índice POR SU NOMBRE: eso es lo que lo hace legible para
+  // DatabaseMetaData#getIndexInfo, y por tanto para la reconciliación de Hibernate.
+  assert.ok(sql.includes('(application_id, `key`, locale, `uk_templates_application_key_locale_flag`)'));
+  // El CASE puede (y debe) estar en la definición de la COLUMNA; lo que no puede es estar en el
+  // índice, que es donde lo dejaría sin nombre para la introspección. Se afirma sobre la sentencia
+  // del índice a solas: buscarlo en todo el archivo daría positivo por la columna.
+  const crea = sql.split('\n').find((line) => line.includes('CREATE UNIQUE INDEX'));
+  assert.ok(crea, 'no se emite el índice');
+  assert.ok(!crea.includes('CASE'), 'ninguna key part del índice puede ir sin nombre de columna');
+});
+
+test('y por eso NO se emite ningún ajuste de unique constraints', () => {
+  // Es la mitad que costó un escenario: `SKIP` no conserva los @UniqueConstraint en MySQL,
+  // impide que existan. Si alguien lo devuelve, se pierde la clave natural del agregado en
+  // silencio.
+  const local = project('notification-mailer', MYSQL).file(path.join('parameters', 'local', 'db.yaml'));
+  assert.match(local, /ddl-auto: update/);
+  assert.ok(!local.includes('unique_constraint_strategy'), 'ese ajuste se lleva por delante uk_<tabla>_natural');
+});
+
+test('las dos mitades del appendix van guardadas, y ninguna sentencia lleva un ; dentro', () => {
+  // El appendix corre en CADA arranque con continue-on-error: false, y ni ADD COLUMN ni
+  // CREATE INDEX admiten IF NOT EXISTS. Y `spring.sql.init` parte el script por `;`, así que un
+  // bloque procedural se ejecutaría a trozos.
+  const sql = project('notification-mailer', MYSQL).file('partial-indexes.sql');
+  assert.match(sql, /information_schema\.COLUMNS/);
+  assert.match(sql, /information_schema\.STATISTICS/);
+  const cuerpo = sql.split('\n').filter((l) => l.trim() && !l.trim().startsWith('--'));
+  for (const line of cuerpo) {
+    assert.ok(line.indexOf(';') === -1 || line.trim().endsWith(';'), `un ; a media línea parte el script: ${line}`);
+  }
+  assert.equal(cuerpo.filter((l) => l.startsWith('PREPARE ')).length, 2, 'una guarda por mitad');
+});
+

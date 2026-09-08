@@ -392,10 +392,22 @@ estático. Borrar el método entero mide otra cosa (mide el compilador).
 | Reclamo de barrido | el `UPDATE` pierde su condición sobre el estado de partida | el escenario de dos réplicas |
 | Rescate de un barrido | el reclamo pierde su cota temporal | el escenario de la fila en vuelo abandonada |
 | Entrega por outbox | el relay publica dentro de la transacción | el escenario de canal indisponible |
+| Unicidad condicionada | se quita `flushPendingWrites()` de entre las dos escrituras de la operación que releva | los escenarios de relevo **y** `infra/check-idempotency.sh` (familia `conditionalUniqueness`) |
 | Guarda de correo | la transición se hace en memoria, sin llamar al reclamo | `infra/check-idempotency.sh` (aquí ningún escenario puede) |
 
-La última fila es la excepción que explica el resto: ningún arnés de caja negra puede matar la
-aplicación entre el envío y el commit, así que ese mecanismo **solo** lo mide el gate estático.
+Las dos últimas filas son las que explican el resto, y por motivos opuestos.
+
+La **unicidad condicionada** es la única con escenario *y* gate, y merece la pena saber por qué:
+el índice único condicionado se comprueba por FILA y no se puede diferir, así que una operación
+que releva —saca una fila del estado condicionado y mete otra en el mismo acto— tiene que
+confirmar la salida antes de la entrada. Con JPA las dos escrituras se vuelcan al commit en el
+orden que decide Hibernate, y si la entrada sale primero **muere la transición legítima**: un 409
+en el camino feliz, con el `code` del propio diseño. Eso hace que el fallo se parezca a un
+escenario mal escrito, que es justo por lo que conviene mutarlo a propósito una vez.
+
+La **guarda de correo** es la contraria: ningún arnés de caja negra puede matar la aplicación
+entre el envío y el commit, así que ese mecanismo **solo** lo mide el gate estático.
+
 Cuando un mecanismo no tiene ni escenario ni gate, eso es el hallazgo — no un fallo de la
 corrida, sino una cobertura que nunca existió.
 

@@ -86,11 +86,28 @@ const PARTIAL_INDEX_DIALECTS = {
 // del índice parcial de PostgreSQL, contrato de ORDEN incluido: también se comprueba por fila y
 // tampoco se puede diferir (ver sqlContract).
 //
-// Se hace con una parte funcional y NO con una columna generada declarada, aunque las dos
-// funcionen, por una razón concreta: el nombre del índice es un contrato con el mapa del
-// ApiExceptionHandler, y una columna generada añadiría además superficie al esquema que el
-// baseline exporta y que el diseñador tendría que entender. La parte funcional no deja nada
-// visible fuera del propio índice.
+// El discriminador se materializa como **columna generada declarada**, y no como key part
+// funcional (`... , (CASE WHEN … THEN 1 END)`) aunque las dos den el mismo índice. La forma
+// funcional es más limpia de leer y no añade superficie al esquema, y por eso se eligió primero;
+// la corrida `notification-mailer` sobre MySQL del 2026-09-08 midió lo que cuesta, y es demasiado:
+//
+//   · una key part funcional no tiene nombre de columna, y el driver la reporta con `COLUMN_NAME`
+//     nulo. Con `ddl-auto: update`, Hibernate introspecciona TODOS los índices de la tabla al
+//     reconciliar sus `@UniqueConstraint`, se encuentra ese nulo y **aborta la carga entera del
+//     ApplicationContext** («null was passed as an object name») — no en el primer arranque, sino
+//     en el segundo y en cada réplica nueva;
+//   · y la única mitigación disponible, `hibernate.schema_update.unique_constraint_strategy: SKIP`,
+//     es **peor que el fallo**: en MySQL los `@UniqueConstraint` NO se crean en el `CREATE TABLE`
+//     sino por `ALTER TABLE` dentro de esa misma reconciliación, así que saltársela no los
+//     conserva — impide que existan. Medido: con `SKIP`, `uk_<tabla>_natural` no aparece en la
+//     base ni sobre un volumen recién creado. Se cambia un arranque que muere a gritos por la
+//     pérdida SILENCIOSA de la unicidad de la clave natural del agregado, que es justo la clase de
+//     defecto que este generador existe para no producir. Lo destapó `FL-TPL-001-E` (dos altas de
+//     la misma versión a la vez: esperaba 1 fila, encontró 2).
+//
+// Con una columna declarada el índice deja de ser opaco: el driver devuelve su nombre, la
+// introspección de Hibernate funciona, y no hace falta ningún ajuste global. El precio es la
+// columna, que sí se ve en el esquema y en el baseline — y es un precio que se paga a la vista.
 //
 // El guardia es lo que cuesta. `CREATE INDEX` de MySQL no admite `IF NOT EXISTS`, y este
 // appendix se ejecuta en CADA arranque con `continue-on-error: false` — o sea que sin guardia
@@ -98,20 +115,58 @@ const PARTIAL_INDEX_DIALECTS = {
 // parte el script por `;`, así que lo que se emita no puede llevar un `;` dentro. La salida son
 // cuatro sentencias planas —consultar, componer, preparar, ejecutar— que MySQL corre sobre la
 // MISMA conexión, que es lo que hace que la variable de usuario sobreviva de una a la siguiente.
-function mysqlPartialIndex(spec) {
-  const ddl =
-    `CREATE UNIQUE INDEX ${spec.name} ON ${spec.table} ` +
-    `(${spec.columns}, (CASE WHEN ${spec.predicate} THEN 1 END))`;
+/** La columna generada que discrimina. Cuelga del nombre del índice, que ya es único por tabla. */
+export const discriminatorColumn = (spec) => `${spec.name}_flag`;
+
+/**
+ * Una sentencia condicionada a que algo NO exista, en el único idioma que le sirve a MySQL.
+ *
+ * `ADD COLUMN` y `CREATE INDEX` no admiten `IF NOT EXISTS`, y este appendix se ejecuta en CADA
+ * arranque con `continue-on-error: false` — sin guardia, el segundo arranque del servicio muere.
+ * Un bloque procedural tampoco vale: `spring.sql.init` parte el script por `;`, así que nada de lo
+ * que se emita puede llevar uno dentro. Quedan cuatro sentencias planas —consultar, componer,
+ * preparar, ejecutar— que MySQL corre sobre la MISMA conexión, que es lo que hace que la variable
+ * de usuario sobreviva de una a la siguiente.
+ */
+function guarded(existsQuery, ddl, tag) {
   return (
-    `SET @keel_index_exists = (SELECT COUNT(*) FROM information_schema.STATISTICS\n` +
-    `    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${sqlLiteral(spec.tableName)}\n` +
-    `      AND INDEX_NAME = ${sqlLiteral(spec.name)});\n` +
+    `SET @keel_${tag}_exists = (${existsQuery});\n` +
     // DO 0 es el no-op de MySQL: PREPARE exige una sentencia, y no hay forma de no preparar nada.
-    `SET @keel_index_ddl = IF(@keel_index_exists > 0, 'DO 0', ${mysqlStringLiteral(ddl)});\n` +
-    `PREPARE keel_index_stmt FROM @keel_index_ddl;\n` +
-    `EXECUTE keel_index_stmt;\n` +
-    `DEALLOCATE PREPARE keel_index_stmt;`
+    `SET @keel_${tag}_ddl = IF(@keel_${tag}_exists > 0, 'DO 0', ${mysqlStringLiteral(ddl)});\n` +
+    `PREPARE keel_${tag}_stmt FROM @keel_${tag}_ddl;\n` +
+    `EXECUTE keel_${tag}_stmt;\n` +
+    `DEALLOCATE PREPARE keel_${tag}_stmt;`
   );
+}
+
+function mysqlPartialIndex(spec) {
+  const flag = discriminatorColumn(spec);
+  const tabla = sqlLiteral(spec.tableName);
+
+  // STORED y no VIRTUAL: se comporta como una columna normal para todo el que la lea —el DDL
+  // exportado, el driver, una consulta a mano— y la tabla está vacía cuando se añade, así que la
+  // reconstrucción que exige no cuesta nada.
+  const columna =
+    `ALTER TABLE ${spec.table} ADD COLUMN \`${flag}\` TINYINT ` +
+    `GENERATED ALWAYS AS (CASE WHEN ${spec.predicate} THEN 1 END) STORED`;
+  const indice = `CREATE UNIQUE INDEX ${spec.name} ON ${spec.table} (${spec.columns}, \`${flag}\`)`;
+
+  return [
+    guarded(
+      `SELECT COUNT(*) FROM information_schema.COLUMNS\n` +
+        `    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${tabla}\n` +
+        `      AND COLUMN_NAME = ${sqlLiteral(flag)}`,
+      columna,
+      'flag'
+    ),
+    guarded(
+      `SELECT COUNT(*) FROM information_schema.STATISTICS\n` +
+        `    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${tabla}\n` +
+        `      AND INDEX_NAME = ${sqlLiteral(spec.name)}`,
+      indice,
+      'index'
+    )
+  ].join('\n\n');
 }
 
 /**
@@ -123,6 +178,32 @@ function mysqlPartialIndex(spec) {
 function mysqlStringLiteral(sql) {
   return `'${sql.replace(/\\/g, '\\\\').replace(/'/g, "''")}'`;
 }
+
+// ─── Por qué NO hay ningún ajuste de Hibernate que acompañe a este índice ────
+//
+// Lo hubo, durante unas horas del 2026-09-08, y fue un error que conviene dejar escrito porque el
+// razonamiento que lo justificaba parecía sólido.
+//
+// Con la forma anterior del índice (una key part FUNCIONAL) el índice era OPACO a
+// `DatabaseMetaData#getIndexInfo` —esa key part no tiene nombre de columna—, y con
+// `ddl-auto: update` Hibernate lo introspecciona al reconciliar sus `@UniqueConstraint` y aborta
+// la carga del ApplicationContext. La mitigación disponible es
+// `hibernate.schema_update.unique_constraint_strategy: SKIP`, y se emitió con este argumento: «la
+// constraint se sigue creando en el CREATE TABLE inicial; ese camino no pasa por aquí».
+//
+// **Es falso en MySQL, y se midió.** Ahí los `@UniqueConstraint` no salen inline en el
+// `CREATE TABLE`: los añade un `ALTER TABLE` dentro de esa misma reconciliación. Saltársela no los
+// conserva — impide que existan, también sobre un volumen recién creado. Con `SKIP`,
+// `uk_<tabla>_natural` no aparece en la base, y la unicidad de la clave natural del agregado deja
+// de existir sin que nada lo diga.
+//
+// La lección no es sobre Hibernate: es que la mitigación cambiaba un fallo RUIDOSO (un arranque
+// que muere nombrando su excepción) por uno SILENCIOSO (una garantía que ya no está). Esa permuta
+// es siempre mala, y aquí además tapaba lo que había que arreglar, que era la FORMA del índice.
+//
+// Lo destapó `FL-TPL-001-E` —dos altas de la misma versión a la vez: esperaba una fila, encontró
+// dos—, y no lo habría destapado sobre el volumen de una corrida anterior, donde la constraint ya
+// estaba creada de antes. Por eso el escenario de carrera vale y la lectura del YAML no.
 
 /** Los índices condicionados del diseño, ya resueltos a tabla, columnas y predicado. */
 export function partialIndexSpecs(model) {

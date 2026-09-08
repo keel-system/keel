@@ -128,6 +128,38 @@ export function assertions(spec) {
   ];
 }
 
+// ─── La opacidad del índice a la introspección JDBC ─────────────────────────
+//
+// La pregunta que le faltaba a este check, y que costó una corrida entera de diagnóstico: **¿este
+// índice tiene alguna key part sin nombre de columna?**
+//
+// Importa porque con `ddl-auto: update` Hibernate introspecciona TODOS los índices de la tabla
+// —también los que no declaró— para reconciliar sus `@UniqueConstraint`, y una key part sin
+// nombre le llega como null y aborta la carga entera del ApplicationContext. No en el primer
+// arranque, sino en el segundo. El generador lo mitiga con
+// `hibernate.schema_update.unique_constraint_strategy: SKIP` (ver `migrations.js` § El precio de
+// la parte funcional), y lo que esta sonda mide es que las **dos mitades concuerden**: que la
+// mitigación esté donde el índice es opaco, y que NO esté donde no lo es —apagarla sin causa
+// desactiva una reconciliación que sí funciona—.
+//
+// La pregunta se hace en el idioma de cada motor a propósito. No hay forma portable de
+// preguntarla, y componerla a ojo daría siempre cero —que es indistinguible de «no es opaco»—.
+const OPACITY_QUERY = {
+  // COLUMN_NAME null es literalmente lo que el motor responde para una key part funcional; es lo
+  // mismo que ve `DatabaseMetaData#getIndexInfo`, que es quien se lo pasa a Hibernate.
+  mysql: (spec) =>
+    'SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE()' +
+    ` AND TABLE_NAME = ${sqlLiteral(spec.tableName)} AND INDEX_NAME = ${sqlLiteral(spec.name)}` +
+    ' AND COLUMN_NAME IS NULL',
+  // En PostgreSQL el índice se condiciona con un predicado (`indpred`) sobre columnas REALES: lo
+  // que haría opaco al índice sería una key part por expresión (`indexprs`), y no la hay.
+  postgresql: (spec) =>
+    `SELECT COUNT(*) FROM pg_index WHERE indexrelid = ${sqlLiteral(spec.name)}::regclass AND indexprs IS NOT NULL`
+};
+
+/** La consulta con la que se le pregunta a ESTE motor si el índice es opaco, o null si no se sabe. */
+export const opacityQuery = (database, spec) => OPACITY_QUERY[database]?.(spec) ?? null;
+
 /**
  * Las sentencias del appendix, contadas. Sirve para dos cosas —saber si el motor emitió algo, y
  * poder decirlo por pantalla— y para NINGUNA más: el runner manda el archivo ENTERO en una sola

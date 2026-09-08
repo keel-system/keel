@@ -113,6 +113,34 @@ No lo busques en el código ni en una anotación `@Check`: comprueba la constrai
 con el enum. La salida es recrear el esquema —`bash infra/reset-db.sh --schema`—, no
 editar la constraint a mano, que dejaría la BD distinta del DDL que Hibernate generaría.
 
+## `null was passed as an object name` al arrancar (MySQL, segundo arranque)
+
+Stack: `IllegalArgumentException` desde `NormalizingIdentifierHelperImpl.toMetaDataObjectName`,
+por debajo de `AbstractSchemaMigrator.applyUniqueKeys`. Aborta la carga entera del
+`ApplicationContext`, y **no menciona ni la tabla ni el índice**.
+
+No es un problema del esquema: es de LEERLO. Si el diseño declara unicidad condicionada
+(`indexes` con `when`), `db/partial-indexes.sql` crea en MySQL un índice con una key part
+**funcional** —`(CASE WHEN status = 'ACTIVE' THEN 1 END)`, la única forma que tiene este motor
+de condicionar—. Esa key part no tiene nombre de columna, y el driver la reporta con
+`COLUMN_NAME` nulo. Con `ddl-auto: update`, Hibernate introspecciona **todos** los índices de la
+tabla —también los que él no declaró— para decidir si recrea sus `@UniqueConstraint`, se
+encuentra ese nulo y muere.
+
+Lo que lo hace difícil de reconocer es **cuándo** aparece: nunca en el primer arranque contra una
+base vacía (ese camino es `CREATE TABLE` y no pasa por ahí), sino en el **segundo** — al
+reiniciar con el volumen ya poblado, y en cuanto un escenario de clúster levanta su segunda
+réplica. El mismo síntoma llega por dos caminos que no se parecen entre sí.
+
+`build` ya lo evita: el perfil `local` de un diseño con índice condicionado sobre MySQL lleva
+`spring.jpa.properties.hibernate.schema_update.unique_constraint_strategy: SKIP`. **Si te lo
+encuentras, mira primero que esa línea siga ahí** antes de tocar nada más; el
+`partial-indexes.sql` no se edita, y quitar el índice no es la salida —es el invariante que el
+diseño declaró—.
+
+Lo que `SKIP` cuesta: un `@UniqueConstraint` que **cambie** deja de propagarse en local. La
+salida es la de siempre, `bash infra/reset-db.sh --schema`.
+
 ## `ddl-auto: validate` falla al arrancar en production
 
 El esquema real no coincide con las entidades (columna/tipo/nullable). Es un

@@ -52,7 +52,7 @@ import { loadService } from 'keel-core';
 import { tmpDir } from '../test/helpers/tmp.js';
 import { buildModel } from '../src/lib/model.js';
 import { scaffoldService, resolveStack } from '../src/scaffold/index.js';
-import { indexSubject, substrateSql, assertions, statementsOf } from '../src/lib/index-probes.js';
+import { indexSubject, substrateSql, assertions, statementsOf, opacityQuery } from '../src/lib/index-probes.js';
 import { DATABASES, databaseHealthProbe } from '../src/lib/stack-catalog.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -129,14 +129,31 @@ function waitForDatabase(runtime, container, probe) {
  * que salen el sondeo de `validate-infra.sh` y las secciones SQL del arnés. Un runner con su
  * propio cliente comprobaría que el motor responde, no que el generador acierta.
  *
- * Devuelve `{ ok, detail }` en vez de lanzar: aquí un fallo del motor no siempre es un fallo del
- * check — la mitad de las aserciones esperan justamente que la sentencia sea RECHAZADA.
+ * Devuelve `{ ok, detail, value }` en vez de lanzar: aquí un fallo del motor no siempre es un
+ * fallo del check — la mitad de las aserciones esperan justamente que la sentencia sea RECHAZADA.
+ *
+ * `value` es lo que RESPONDIÓ, y sale de stdout a solas. Mezclarlo con stderr es el error que ya
+ * costó una pasada en rojo: el cliente de MySQL escribe «Using a password on the command line
+ * interface can be insecure» por stderr en CADA invocación, así que la última línea del texto
+ * concatenado es el aviso y no el número — y `Number(aviso)` es NaN, que se lee como «cero» y da
+ * un verde (o un rojo) que no dice nada del motor. Es el mismo modo de fallo que `mongoEval`
+ * leyendo cadena vacía como cero. `detail` sí los junta: ahí lo que se quiere es el diagnóstico.
  */
 function makeSql({ runtime, container, argv }) {
+  const lastLine = (text) =>
+    text
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .at(-1) ?? '';
   return (statement) => {
     const result = run(runtime, ['exec', '-i', container, ...argv, statement]);
     const output = `${result.stdout}${result.stderr}`.trim();
-    return { ok: result.status === 0 && !/^ERROR/m.test(output), detail: output.split('\n').at(-1) ?? '' };
+    return {
+      ok: result.status === 0 && !/^ERROR/m.test(output),
+      detail: lastLine(output),
+      value: lastLine(result.stdout)
+    };
   };
 }
 
@@ -200,6 +217,7 @@ function prepare() {
     projectDir,
     spec,
     appendix,
+    opacity: opacityQuery(database, spec),
     statements,
     argv,
     container: `${service.manifest.service.name}-db`,
@@ -270,6 +288,42 @@ try {
               ? `la sentencia tenía que entrar y el motor la rechazó: ${wrong.result.detail}`
               : 'la sentencia tenía que ser RECHAZADA y el motor la aceptó: el invariante no lo sostiene nadie'
             : ''
+        });
+      }
+
+      // 3) LA OPACIDAD. Se le pregunta al MOTOR si alguna key part del índice que acaba de crear
+      //    no tiene nombre de columna, y la respuesta tiene que ser NO.
+      //
+      //    No es una preferencia de estilo. Un índice opaco a `DatabaseMetaData#getIndexInfo`
+      //    hace que Hibernate, con `ddl-auto: update`, aborte la carga del ApplicationContext al
+      //    reconciliar sus @UniqueConstraint — y no en el primer arranque, sino en el segundo y en
+      //    cada réplica nueva. La única mitigación disponible
+      //    (`hibernate.schema_update.unique_constraint_strategy: SKIP`) resultó ser PEOR: en MySQL
+      //    los @UniqueConstraint se crean por ALTER TABLE dentro de esa misma reconciliación, así
+      //    que saltársela no los conserva, impide que existan. Cambiar un arranque que muere a
+      //    gritos por la pérdida silenciosa de la clave natural del agregado no es un arreglo.
+      //    Por eso aquí no se admite ni «opaco pero mitigado»: se exige que no sea opaco.
+      if (!prepared.opacity) {
+        cases.push({
+          name: `opacidad · ${database} no sabe decir si el índice es opaco a la introspección JDBC`,
+          ok: false,
+          detail: 'sin consulta de opacidad en index-probes.js, este motor no puede contrastar nada'
+        });
+      } else {
+        const answer = sql(prepared.opacity);
+        // Se exige un NÚMERO: una respuesta que no lo sea (o vacía) no es «cero opacas», es que la
+        // consulta no midió nada — y eso tiene que ser rojo, no un verde por omisión.
+        const contadas = Number(answer.value);
+        const medido = answer.ok && answer.value !== '' && Number.isInteger(contadas);
+        cases.push({
+          name: 'opacidad · ninguna key part del índice es opaca a la introspección JDBC',
+          ok: medido && contadas === 0,
+          detail: !medido
+            ? `el motor no respondió un número a la consulta de opacidad: ${answer.detail}`
+            : contadas === 0
+              ? ''
+              : `${contadas} key part(s) sin nombre de columna: con ddl-auto: update el servicio no ` +
+                'arranca dos veces, y la mitigación conocida se lleva por delante los @UniqueConstraint'
         });
       }
     }
