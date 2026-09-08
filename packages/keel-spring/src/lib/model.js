@@ -456,9 +456,15 @@ function collectFormatTypes(domainTypes) {
     // aplanan a String no llegan aquí ni aunque el diseño declare uno.
     if (!TEXT_BASES.has(def.base)) continue;
     const pattern = def.constraints?.pattern ?? null;
-    // Sin `pattern` no hay nada que comprobar aquí: `minLength`/`maxLength` sí
-    // sobreviven en el DTO de entrada, así que una clase para ellos no distinguiría
-    // «cumple» de «no mira».
+    // Sin `pattern` no hay nada que comprobar aquí: `minLength`/`maxLength` los emite
+    // Bean Validation como @Size en el DTO de entrada, así que una clase para ellos no
+    // distinguiría «cumple» de «no mira».
+    //
+    // OJO con lo que esto NO dice. Es cierto del MECANISMO —una cota declarada sobre el campo
+    // del input llega al DTO— y falso de una forma concreta del DSL: un `input: { fields: … }`
+    // que redeclara el campo sin repetir la cota no hereda nada del dominio, así que ahí no hay
+    // @Size que emitir. Eso no se arregla aquí (heredar por nombre sería inventar un enlace que
+    // el diseño no declara): lo avisa `crossrefs.js` en el workspace, antes de generar.
     if (!pattern) continue;
     formatTypes.push({
       name,

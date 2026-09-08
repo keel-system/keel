@@ -505,8 +505,51 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
     }
   }
 
+  // ─── Las cotas del dominio no llegan al input, y nada lo decía ─────────────────
+  //
+  // `payload: { entity: X }` HEREDA las constraints de la entidad; `payload: { fields: … }`
+  // toma el nodo tal cual. Redeclarar `subject: { type: string, required: true }` cuando
+  // `Template.subject` declara `maxLength: 200` no es un error —el input y el almacén son
+  // contratos distintos, y un input puede aceptar a propósito otra cosa—, pero hoy la diferencia
+  // es INVISIBLE: el DTO sale sin @Size, la violación se descubre como 409 de integridad en el
+  // INSERT en vez de 400 en el borde, y el code que el cliente recibe no es el del diseño.
+  //
+  // Por eso avisa y no obliga: se cierra actuando (declarando la cota en el input), no
+  // aceptándolo por escrito. Y no se hereda por nombre: eso sería inventar un enlace que el
+  // diseño no declara.
+
+  // Constraints efectivas de un campo: las suyas más las que le llegan por su value type.
+  const constraintsOf = (field) => {
+    const propias = Object.keys(field?.constraints ?? {});
+    const delTipo = Object.keys(domain.types?.[field?.type]?.constraints ?? {});
+    return [...new Set([...propias, ...delTipo])];
+  };
+
+  const acotadosDelDominio = new Map();
+  for (const [entityName, entity] of Object.entries(domain.entities ?? {})) {
+    for (const [name, field] of Object.entries(entity.fields ?? {})) {
+      const cotas = constraintsOf(field);
+      if (cotas.length === 0) continue;
+      if (!acotadosDelDominio.has(name)) acotadosDelDominio.set(name, []);
+      acotadosDelDominio.get(name).push({ entityName, cotas });
+    }
+  }
+
+  const checkInputConstraints = (op, opName) => {
+    for (const [name, field] of Object.entries(op?.input?.fields ?? {})) {
+      if (constraintsOf(field).length > 0) continue;
+      const enElDominio = acotadosDelDominio.get(name);
+      if (!enElDominio) continue;
+      const donde = enElDominio.map((d) => `${d.entityName}.${name} (${d.cotas.join(', ')})`).join(', ');
+      warnings.push(
+        `use-cases: ${opName}.input.fields.${name}: el dominio acota este campo (${donde}) y el input no. Un input con fields NO hereda del dominio: el DTO saldrá sin la validación, así que la violación se descubrirá como conflicto de integridad al escribir —no como 400 en el borde— y con un code que no es el del diseño. Declara aquí la cota, o el value type que ya la lleva`
+      );
+    }
+  };
+
   // use-cases: payloads, emits, cache
   for (const [opName, op] of Object.entries(operations)) {
+    checkInputConstraints(op, opName);
     checkPayload(op.input, `use-cases: ${opName}.input`, { direction: 'input' });
     checkPayload(op.output, `use-cases: ${opName}.output`);
     for (const event of op.emits ?? []) {

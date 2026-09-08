@@ -8,15 +8,17 @@ operations:
         key:
           type: string
           required: true
+          constraints: { maxLength: 64 }
           description: Casa con el client_id de la credencial máquina del sistema.
-        name: { type: string, required: true }
+        name: { type: string, required: true, constraints: { maxLength: 120 } }
         credentialKeys:
           type: string
           list: true
           required: true
+          constraints: { maxItems: 5, maxLength: 64 }
           description: Los client_id de las credenciales máquina de este sistema; al menos una.
-        defaultSender: { type: string, required: true }
-        defaultLocale: { type: string, required: true }
+        defaultSender: { type: string, required: true, constraints: { maxLength: 320 } }
+        defaultLocale: { type: string, required: true, constraints: { maxLength: 10 } }
     output: { entity: Application }
     rules:
       - Nace activa. Darla de baja es otra operación, no un campo de esta.
@@ -56,13 +58,14 @@ operations:
         applicationKey:
           type: string
           required: true
+          constraints: { maxLength: 64 }
           description: >-
             Sale del token, nunca del cuerpo: es la Application cuya lista de `credentialKeys`
             contiene el `client_id` del llamante. No es el client_id en sí — un sistema con dos
             credenciales tiene una sola Application.
-        templateKey: { type: string, required: true }
-        locale: { type: string, required: true }
-        subject: { type: string, required: true }
+        templateKey: { type: string, required: true, constraints: { maxLength: 64 } }
+        locale: { type: string, required: true, constraints: { maxLength: 10 } }
+        subject: { type: string, required: true, constraints: { maxLength: 200 } }
         bodyHtml: { type: text, required: true }
         bodyText: { type: text, required: true }
     output: { entity: Template }
@@ -83,15 +86,17 @@ operations:
         applicationKey:
           type: string
           required: true
+          constraints: { maxLength: 64 }
           description: >-
             Sale del token, nunca del cuerpo: es la Application cuya lista de `credentialKeys`
             contiene el `client_id` del llamante.
-        templateKey: { type: string, required: true }
-        locale: { type: string }
-        recipient: { type: string, required: true }
+        templateKey: { type: string, required: true, constraints: { maxLength: 64 } }
+        locale: { type: string, constraints: { maxLength: 10 } }
+        recipient: { type: string, required: true, constraints: { maxLength: 320 } }
         copyRecipients:
-          type: string
+          type: EmailAddress
           list: true
+          constraints: { maxItems: 10 }
           description: Direcciones en copia. Se congelan con el envío, igual que el destinatario.
     output:
       fields:
@@ -126,10 +131,11 @@ operations:
         applicationKey:
           type: string
           required: true
+          constraints: { maxLength: 64 }
           description: Sale de la envoltura del mensaje, no del payload.
-        templateKey: { type: string, required: true }
-        locale: { type: string }
-        recipient: { type: string, required: true }
+        templateKey: { type: string, required: true, constraints: { maxLength: 64 } }
+        locale: { type: string, constraints: { maxLength: 10 } }
+        recipient: { type: string, required: true, constraints: { maxLength: 320 } }
     output: { entity: Notification }
     preconditions:
       - La aplicación que publicó el mensaje está registrada y activa.

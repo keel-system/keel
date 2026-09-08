@@ -47,6 +47,12 @@ function withListedInput({ namedType = true, listedInput = true } = {}) {
       constraints: { maxItems: 10 },
       description: 'Direcciones en copia, comprobadas contra la lista de supresión.'
     };
+  } else {
+    // La fixture YA trae una entrada listada de EmailAddress: `requestNotification.copyRecipients`
+    // lo declara desde que los inputs dejaron de dejar caer las cotas del dominio. Para medir «sin
+    // lista en NINGUNA entrada» hay que quitarla también, o el caso negativo lo satisface ella y
+    // deja de decir nada.
+    delete patched['use-cases'].operations.requestNotification.input.fields.copyRecipients;
   }
 
   const workspace = tmpDir('keel-batchfinder-');

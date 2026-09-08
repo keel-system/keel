@@ -5383,3 +5383,67 @@ test('mail: sin estado EN VUELO tampoco — no hay guarda por fila que medir', (
     `se levantó sin estado en vuelo: ${JSON.stringify(obligations)}`
   );
 });
+
+
+// ─── Las cotas del dominio y el input que no las hereda ───────────────────────
+//
+// `input: { entity: X }` hereda; `input: { fields: … }` no. Redeclarar un campo acotado sin su
+// cota es legítimo —el input y el almacén son contratos distintos— pero era INVISIBLE: el DTO
+// salía sin @Size y la violación se descubría como conflicto de integridad al escribir, con un
+// code que no es el del diseño. Se reportó dos corridas seguidas antes de tener aviso.
+
+const acotado = () => ({
+  domain: {
+    ...baseDomain(),
+    entities: {
+      ...baseDomain().entities,
+      Template: entity({ subject: { type: 'string', required: true, constraints: { maxLength: 200 } } }),
+    },
+  },
+  'use-cases': {
+    operations: {
+      registerTemplate: { kind: 'command', input: { fields: { subject: { type: 'string', required: true } } } },
+    },
+  },
+});
+
+test('un input que redeclara un campo acotado del dominio sin su cota avisa', () => {
+  const { errors, warnings } = run(acotado());
+  assert.deepEqual(errors, []);
+  const aviso = warnings.find((w) => w.includes("registerTemplate.input.fields.subject"));
+  assert.ok(aviso, warnings.join('\n'));
+  // El mensaje tiene que decir DÓNDE está la cota y QUÉ se pierde: sin eso, el que lo lea no
+  // sabe si declarar la cota o si el input acepta otra cosa a propósito.
+  assert.ok(aviso.includes('Template.subject (maxLength)'), aviso);
+  assert.ok(aviso.includes('NO hereda'), aviso);
+});
+
+test('y no avisa si el input declara la cota, ni si la lleva su value type', () => {
+  // La otra dirección: sin ella, un aviso que se emitiera SIEMPRE pasaría el caso de arriba.
+  const propia = acotado();
+  propia['use-cases'].operations.registerTemplate.input.fields.subject.constraints = { maxLength: 200 };
+  assert.deepEqual(
+    run(propia).warnings.filter((w) => w.includes("input.fields.subject")),
+    []
+  );
+
+  // Y por el tipo: un value type que ya acota es la cota declarada, escrita una sola vez.
+  const porTipo = acotado();
+  porTipo.domain.types = { Subject: { base: 'string', constraints: { maxLength: 200 } } };
+  porTipo['use-cases'].operations.registerTemplate.input.fields.subject = { type: 'Subject', required: true };
+  assert.deepEqual(
+    run(porTipo).warnings.filter((w) => w.includes("input.fields.subject")),
+    []
+  );
+});
+
+test('un campo del input que el dominio no acota no dice nada', () => {
+  // El aviso se enciende por la COTA, no por el nombre compartido: si la entidad no acota,
+  // no hay nada que el input esté dejando caer.
+  const layers = acotado();
+  delete layers.domain.entities.Template.fields.subject.constraints;
+  assert.deepEqual(
+    run(layers).warnings.filter((w) => w.includes("input.fields.subject")),
+    []
+  );
+});

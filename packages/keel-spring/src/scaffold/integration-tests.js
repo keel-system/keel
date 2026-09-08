@@ -3600,8 +3600,9 @@ function outboxDrainSection(model) {
  * pérdida de datos en el mecanismo cuya única promesa es que ningún evento se pierde. Hasta
  * ahora lo único que ocurría era un `log.error`, y un log no lo mira nadie ni lo puede
  * afirmar ningún escenario. El relay publica ahora un gauge, y esto lo lee por HTTP —el
- * actuator ya expone `metrics`—, así que la rendición es observable en caja negra, igual
- * que cualquier otro efecto.
+ * actuator lo expone en local y develop—, así que la rendición es observable en caja negra,
+ * igual que cualquier otro efecto. La métrica NO es pública: se pide por `actuatorMetric`, que
+ * pone el token cuando el diseño tiene capa security.
  *
  * Es INSTANCIA y no estático a propósito: usa `get(...)`, que también lo es. Mezclarlos es
  * de los errores que ni comparar cadenas ni `java-syntax` ven, y solo aparece en javac.
@@ -3619,7 +3620,15 @@ function deadLetteredOutboxSection(model) {
      * salió y el que salió tarde se parecen mucho hasta que se cuenta.
      */
     protected long deadLetteredEvents() {
-        Response response = get("/actuator/metrics/keel.outbox.dead_lettered");
+        Response response = ${actuatorMetric(model, '/actuator/metrics/keel.outbox.dead_lettered')};
+        if (response.status() == 401 || response.status() == 403) {
+            // El actuator no es público: si el diseño no dio con qué autenticarse, decirlo aquí
+            // ahorra buscar el fallo en el relay, que es donde no está.
+            throw new IllegalStateException(
+                    "El actuator rechazó la lectura de keel.outbox.dead_lettered (" + response.status()
+                            + "): la métrica exige credencial y este diseño no declara ni rol ni cliente máquina "
+                            + "con el que pedirla.");
+        }
         if (response.status() == 404) {
             // La métrica se registra al arrancar el relay: un 404 significa que no hay
             // outbox corriendo, no que no haya nada rendido. Decirlo evita leer un cero
@@ -4038,19 +4047,43 @@ function purgeWrapper(model) {
 // La fuente es `hibernate.statements{status=prepared}`, que publica Micrometer desde
 // las estadísticas de Hibernate (activadas solo en local y test). No hay dependencia
 // nueva del arnés: es una lectura HTTP más.
+/**
+ * Cómo se pide una métrica del actuator, que NO es una lectura pública.
+ *
+ * `management.yaml` expone `metrics` (en local y develop) pero `SecurityConfig` no lo abre: sus
+ * nombres son nombres de negocio, así que se queda detrás de `anyRequest().authenticated()` y quien
+ * la necesite pide token — vale el de cualquier rol.
+ *
+ * Vive aquí y no en cada helper porque ya divergió una vez: `queryCount()` lo hacía bien y lo
+ * documentaba, y `deadLetteredEvents()` pedía la métrica a pelo. En un diseño con capa security la
+ * respuesta es 401/403, así que ni siquiera caía en su mensaje de diagnóstico de 404: reventaba en
+ * `readTree` con «respuesta inesperada del actuator», que no habla de lo que pasa. Con dos copias,
+ * la primera que cambie deja a la otra rota.
+ */
+function actuatorMetric(model, path) {
+  if (!model.layersPresent.security || !tokenProtocol(model)) return `get("${path}")`;
+  // Cualquier credencial vale: la regla de cierre es `authenticated()`, no un scope concreto. Se
+  // mira primero el rol y luego el cliente máquina —el mismo orden que el humo del arnés— porque un
+  // diseño puede declarar solo uno de los dos: `notification-mailer` no tiene `roles`, solo
+  // `serviceClients`, y quedarse en el rol dejaba la llamada SIN token contra un actuator cerrado.
+  const role = model.security?.roles?.[0];
+  if (role) return `get("${path}", tokenFor("${role}"))`;
+  const client = model.security?.serviceClients?.[0]?.name;
+  if (client && model.security?.serviceAuth) return `get("${path}", serviceCredential("${client}"))`;
+  // Ni rol ni cliente máquina: no hay con qué autenticarse, así que se pide a pelo y el helper
+  // dirá lo que devolvió. Callarlo aquí produciría un 401 disfrazado de «respuesta inesperada».
+  return `get("${path}")`;
+}
+
 function queryCountSection(model) {
   // Sin `api` no hay petición que medir, y tampoco existe el `get()` con el que se
   // mediría: el contador sería una llamada a un helper que no está.
   if (!model.layersPresent.api) return '';
   if (!model.layersPresent.persistence || model.persistenceKind !== 'relational') return '';
+  // El javadoc del helper enseña la llamada con y sin credencial, así que sigue necesitando
+  // saber si el diseño la lleva; QUIÉN la pone ya no es asunto suyo.
   const security = model.layersPresent.security && tokenProtocol(model);
-  // El actuator no está entre las rutas públicas: con seguridad, la métrica se pide
-  // con un token cualquiera —vale el de cualquier rol— porque la regla de cierre es
-  // `authenticated()`.
-  const role = model.security?.roles?.[0] ?? null;
-  const call = security && role
-    ? `get("/actuator/metrics/hibernate.statements?tag=status:prepared", tokenFor("${role}"))`
-    : 'get("/actuator/metrics/hibernate.statements?tag=status:prepared")';
+  const call = actuatorMetric(model, '/actuator/metrics/hibernate.statements?tag=status:prepared');
   return `
     /**
      * Sentencias SQL preparadas desde que arrancó la aplicación.

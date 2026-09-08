@@ -1616,6 +1616,54 @@ test('la réplica se para ORDENADAMENTE, no a golpe de destroy()', () => {
   assert.match(espera, /pid\(\)/, 'el mensaje no nombra el PID, que es lo único accionable');
 });
 
+// Con auth de verdad: sin proveedor de identidad no se genera SecurityConfig y el cruce que
+// viene abajo no tendría los dos lados que compara.
+const RABBIT_SEGURO = { group: 'com.test', database: 'postgresql', broker: 'rabbitmq', auth: 'keycloak', cache: null, storage: null };
+
+// ─── El actuator: lo que se expone y lo que se permite, cruzados ─────────────
+//
+// Dos artefactos que genera el MISMO build se contradecían: `management.yaml` exponía
+// `health,info,metrics` en los tres perfiles y `SecurityConfig` solo abría `/actuator/health/**`,
+// con `anyRequest().authenticated()` de cierre. Nadie los cruzaba.
+//
+// Lo que producía: `deadLetteredEvents()` pedía la métrica SIN token mientras `queryCount()`
+// —en el mismo archivo— sí lo ponía y hasta documentaba por qué. En un diseño con capa security
+// la respuesta es 401/403, así que ni caía en su diagnóstico de 404: reventaba en `readTree` con
+// «respuesta inesperada del actuator», que no habla de lo que pasa.
+
+test('lo que el actuator expone y lo que la seguridad permite dicen lo mismo', () => {
+  const project_ = project('notification-mailer', RABBIT_SEGURO);
+
+  // En production, `metrics` NO se expone: sus nombres son nombres de negocio.
+  const production = project_.file(path.join('production', 'management.yaml'));
+  assert.match(production, /include: \$\{MANAGEMENT_ENDPOINTS:health,info\}/, production);
+
+  // En local sí, porque es donde el arnés lee el gauge del dead-letter.
+  assert.match(project_.file(path.join('local', 'management.yaml')), /include: health,info,metrics/);
+
+  // Y lo público es exactamente lo que se expone en production: health e info, nada más.
+  const security = project_.file('SecurityConfig.java');
+  assert.match(security, /requestMatchers\("\/actuator\/health\/\*\*", "\/actuator\/info"/);
+  assert.ok(
+    !security.includes('"/actuator/metrics'),
+    'metrics abierto con permitAll: sus nombres cuentan cómo funciona el servicio por dentro'
+  );
+});
+
+test('y el arnés pide la métrica con credencial, no a pelo', () => {
+  // La mitad que faltaba. `queryCount()` ya lo hacía bien; `deadLetteredEvents()` no, y por eso
+  // ninguna suite con capa security podía usar el helper del dead-letter.
+  const harness = project('notification-mailer', RABBIT_SEGURO).file('AbstractFlowIT.java');
+  const linea = harness.split('\n').find((l) => l.includes('keel.outbox.dead_lettered') && l.includes('get('));
+  assert.ok(linea, 'el helper del dead-letter no pide la métrica');
+  assert.ok(
+    /tokenFor\(|serviceCredential\(/.test(linea),
+    'la métrica se pide sin credencial contra un actuator cerrado: 401 disfrazado de respuesta inesperada'
+  );
+  // Y un 401 tiene que decir lo que es, no acabar en «respuesta inesperada».
+  assert.match(harness, /rechazó la lectura de keel[.]outbox[.]dead_lettered/);
+});
+
 test('y hay una red de CIERRE, no solo de apertura', () => {
   // `resetState()` para la réplica al abrir la clase SIGUIENTE. Eso no llega nunca si la clase de
   // clúster es la última de la suite, ni si la siguiente corre en otro fork de Gradle — que es
@@ -1776,4 +1824,36 @@ test('el campo de callerIdentity sale con @JsonIgnore y SIN validación de cuerp
 test('el controller estampa la identidad desde la credencial', () => {
   const controller = project('notification-mailer', MAILER_STACK).file('NotificationV1Controller.java');
   assert.ok(controller.includes('CallerIdentity.resolve()'), controller);
+});
+
+
+// ---------------------------------------------------------------------------
+// El aspecto de @LogExceptions captura la firma ANTES del proceed(), no dentro del catch.
+// Dentro del catch, la clase MethodInvocationProceedingJoinPoint$MethodSignatureImpl se carga la
+// primera vez que el aspecto ve una excepción; si esa primera vez cae durante el apagado, el
+// LaunchedURLClassLoader ya cerró los jars anidados y el logging del error muere con un
+// NoClassDefFoundError — llevándose por delante justo el diagnóstico que se estaba escribiendo.
+//
+// Es una MITIGACIÓN DE UNA HIPÓTESIS, no un fallo reproducido: se observó una vez, se descartó el
+// empaquetado y el drenaje de @Scheduled, y no se ha podido reproducir. Por eso ningún escenario
+// FL-* lo ve y no hay mutación que lo mida: lo único afirmable es DÓNDE está la llamada.
+// ---------------------------------------------------------------------------
+
+test('la firma del joinPoint se captura fuera del catch, no dentro', () => {
+  const aspect = project('notification-mailer', MAILER_STACK).file('LogExceptionsAspect.java');
+
+  const firma = aspect.indexOf('joinPoint.getSignature()');
+  const intento = aspect.indexOf('try {');
+  const captura = aspect.indexOf('} catch (Throwable exception)');
+
+  assert.ok(firma > 0 && intento > 0 && captura > 0, aspect);
+  assert.ok(firma < intento, `la firma se captura dentro del try/catch:${String.fromCharCode(10)}${aspect}`);
+
+  // Y sigue habiendo un catch que relanza: sacar la firma no puede llevarse por delante el
+  // trabajo del aspecto, que es loguear y RELANZAR.
+  assert.ok(aspect.includes('throw exception;'), aspect);
+
+  // La razón, por escrito y en el archivo generado: sin ella, el siguiente que pase por aquí la
+  // mete de vuelta en el catch para no pagar un getSignature() por llamada.
+  assert.ok(aspect.includes('MITIGACIÓN DE UNA HIPÓTESIS'), 'el aspecto no dice que esto no está reproducido');
 });

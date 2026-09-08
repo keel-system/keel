@@ -121,7 +121,12 @@ function authorizeBlock(matchers, { defaultAuthority, permitTechnical = true }) 
   const lines = ['            .authorizeHttpRequests(auth -> auth'];
   if (permitTechnical) {
     lines.push(
-      '                    .requestMatchers("/actuator/health/**", "/swagger-ui/**", "/swagger-ui.html", "/v3/api-docs/**").permitAll()'
+      // Lo público del actuator es exactamente lo que `management.yaml` expone y no cuenta nada
+      // del negocio: health (que los sondeos de infra y el HEALTHCHECK del Dockerfile piden sin
+      // credencial) e info. `metrics` NO entra: sus nombres SON nombres de negocio, así que se
+      // queda detrás de `anyRequest().authenticated()` y quien la necesite —el arnés— pide token.
+      // Los dos artefactos tienen que decir lo mismo, y hay un test que los cruza.
+      '                    .requestMatchers("/actuator/health/**", "/actuator/info", "/swagger-ui/**", "/swagger-ui.html", "/v3/api-docs/**").permitAll()'
     );
   }
   for (const m of matchers) {

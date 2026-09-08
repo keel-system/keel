@@ -289,17 +289,29 @@ function statisticsEnabled(model, profile) {
   );
 }
 
-// Actuator: expone health/info/metrics y activa los grupos de probes
+// Actuator: expone los endpoints técnicos y activa los grupos de probes
 // (liveness/readiness) que consume Kubernetes. El health detalla componentes
 // (BD, broker, disco…) salvo en production, donde solo publica el status.
+//
+// **`metrics` NO se expone en production**, y no es una precaución genérica: los nombres de las
+// métricas son nombres de NEGOCIO —`keel.outbox.dead_lettered`, las cachés del diseño, las colas—,
+// así que publicarlos cuenta cómo funciona el servicio por dentro a quien pregunte. En local y
+// develop se queda porque ahí sí hace falta: el arnés lee de ahí el gauge del dead-letter.
+//
+// Lo que se expone y lo que `SecurityConfig` permite tienen que decir lo MISMO. Durante un tiempo
+// no lo dijeron —esto exponía `metrics` en los tres perfiles y aquél solo abría `health/**`—, y el
+// resultado fue un helper del arnés que pedía la métrica sin token y moría con «respuesta
+// inesperada del actuator» en cualquier diseño con capa security. Los cruza un test.
 function managementYaml(profile) {
   const showDetails = profile === 'production' ? 'never' : 'always';
+  // Ver arriba: en production, sin `metrics`.
+  const endpoints = profile === 'production' ? 'health,info' : 'health,info,metrics';
   const lines = [
     'management:',
     '  endpoints:',
     '    web:',
     '      exposure:',
-    `        include: ${envWithDefault(profile, 'MANAGEMENT_ENDPOINTS', 'health,info,metrics')}`,
+    `        include: ${envWithDefault(profile, 'MANAGEMENT_ENDPOINTS', endpoints)}`,
     '  endpoint:',
     '    health:',
     '      probes:',
