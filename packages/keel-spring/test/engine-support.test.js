@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { MECHANISMS, MODELS, STATES, NETS, cells, unverified, unfalsified } from '../src/lib/engine-support.js';
+import { MECHANISMS, MODELS, STATES, NETS, cells, unverified, unfalsified, degraded } from '../src/lib/engine-support.js';
 import { DATABASES } from '../src/lib/stack-catalog.js';
 
 const pkgRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -130,10 +130,10 @@ test('una celda de MODELO verificada por una red mecánica nombra sobre qué mot
   }
 });
 
-// ─── Las dos listas con las que se decide qué hacer después ──────────────────
+// ─── Las tres listas con las que se decide qué hacer después ─────────────────
 
-test('lo no ejecutado y lo no falsado salen ordenados y con su porqué', () => {
-  for (const lista of [unverified(), unfalsified()]) {
+test('lo no ejecutado, lo no falsado y lo degradado salen ordenados y con su porqué', () => {
+  for (const lista of [unverified(), unfalsified(), degraded()]) {
     const ids = lista.map((row) => `${row.id}/${row.key}`);
     assert.deepEqual(ids, [...ids].sort(), 'la lista no es determinista: no sirve para comparar entre ejecuciones');
     for (const row of lista) assert.ok(row.why, `${row.id}/${row.key} sin porqué`);
@@ -147,4 +147,62 @@ test('la matriz reconoce que todavía queda trabajo', () => {
     unverified().length + unfalsified().length > 0,
     'la matriz dice que no queda nada sin ejecutar ni sin falsar: compruébalo antes de celebrarlo'
   );
+});
+
+test('la lista de degradadas trae las tres piezas que la hacen una decisión', () => {
+  // Sin la garantía y la consecuencia es una mala noticia; sin las salidas, ni siquiera eso.
+  // Y son las salidas las que hay que releer al volver por aquí: la de MySQL enumeró durante
+  // meses la salida cara (una columna generada declarada) mientras existía una barata —una parte
+  // funcional de índice— que nadie había buscado, y esa lectura mantuvo la celda degradada.
+  const esperadas = cells().filter(({ cell }) => cell.state === 'degradado').map(({ id, key }) => `${id}/${key}`);
+  assert.deepEqual(degraded().map((row) => `${row.id}/${row.key}`), esperadas.sort());
+  for (const row of degraded()) {
+    assert.ok(row.guarantee, `${row.id}/${row.key}: no dice qué garantía se pierde`);
+    assert.ok(row.consequence, `${row.id}/${row.key}: no dice qué pasa en su lugar`);
+    assert.ok(row.ways.length > 0, `${row.id}/${row.key}: sin salidas es una mala noticia, no una decisión`);
+  }
+});
+
+test('los cuatro estados PARTICIONAN las celdas: ninguna puede quedarse sin contar', () => {
+  // Este es el caso que faltaba, y el que explica por qué las degradadas pasaron desapercibidas:
+  // `unverified` filtra por 'razonado' y `unfalsified' por 'verificado', así que una celda
+  // 'degradado' no salía en ninguna lista NI se contaba en el RESUMEN —que sumaba verificadas,
+  // falsadas y sin ejecutar, tres cifras que no particionan nada—. El resultado es que
+  // `npm run matrix` podía cerrar con «SIN FALSAR: (ninguna)» y parecer terminado teniendo una
+  // garantía del diseño que nada sostiene en un motor que el catálogo ofrece.
+  //
+  // Se afirma sobre `STATES` y no sobre una lista escrita a mano: así, un estado NUEVO rompe este
+  // caso en vez de abrir el mismo agujero otra vez.
+  const porEstado = Object.fromEntries(
+    Object.keys(STATES).map((state) => [state, cells().filter(({ cell }) => cell.state === state).length])
+  );
+  const suma = Object.values(porEstado).reduce((a, b) => a + b, 0);
+  assert.equal(suma, cells().length, `los estados no particionan las celdas: ${JSON.stringify(porEstado)}`);
+
+  // Y las dos listas que proyectan un estado tienen que coincidir con su recuento: si divergen,
+  // el RESUMEN cuenta una cosa y la lista enseña otra.
+  assert.equal(unverified().length, porEstado.razonado);
+  assert.equal(degraded().length, porEstado.degradado);
+});
+
+test('mover una celda de estado la cambia de lista, y ninguna se evapora por el camino', () => {
+  // La falsación del caso de arriba: sin ella, «los estados particionan» podría ser cierto por
+  // casualidad sobre la tabla de hoy. Se toca una celda de verdad y se devuelve en el finally.
+  const [muestra] = cells().filter(({ cell }) => cell.state === 'degradado');
+  assert.ok(muestra, 'sin ninguna celda degradada este caso no mide nada');
+
+  const antes = { razonado: unverified().length, degradado: degraded().length };
+  const original = MECHANISMS[muestra.id].coverage[muestra.key].state;
+  MECHANISMS[muestra.id].coverage[muestra.key].state = 'razonado';
+  try {
+    assert.equal(degraded().length, antes.degradado - 1, 'la celda no salió de las degradadas');
+    assert.equal(unverified().length, antes.razonado + 1, 'la celda no apareció en las sin ejecutar');
+    assert.equal(
+      degraded().length + unverified().length,
+      antes.degradado + antes.razonado,
+      'la celda se evaporó: es el modo de fallo que este caso existe para cazar'
+    );
+  } finally {
+    MECHANISMS[muestra.id].coverage[muestra.key].state = original;
+  }
 });

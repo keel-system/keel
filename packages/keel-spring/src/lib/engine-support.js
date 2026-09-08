@@ -544,3 +544,40 @@ export function unfalsified() {
     .map(({ id, key, cell }) => ({ id, key, net: cell.net, why: cell.why }))
     .sort((a, b) => (a.id === b.id ? a.key.localeCompare(b.key) : a.id.localeCompare(b.id)));
 }
+
+/**
+ * Las garantías que el generador NO sostiene en ese motor, y lo que hace en su lugar.
+ *
+ * No es una cola de trabajo como las dos de arriba: es una declaración de ALCANCE. Un `degradado`
+ * puede ser la respuesta correcta y definitiva —el motor no tiene la primitiva y la salida es una
+ * decisión con coste que el generador no toma sola—, así que lo que se pide de esta lista no es
+ * vaciarla sino LEERLA.
+ *
+ * Existe porque durante un tiempo no se leía, y no por descuido: no se podía. `unverified` filtra
+ * por `razonado` y `unfalsified` por `verificado`, así que una celda `degradado` no aparecía en
+ * ninguna de las dos, y el RESUMEN tampoco la contaba —sumaba verificadas, falsadas y sin
+ * ejecutar, tres cifras que no particionan nada—. El resultado es que `npm run matrix` podía
+ * cerrar con «SIN FALSAR: (ninguna)» y parecer terminado teniendo una garantía del diseño que
+ * nada sostiene en un motor que el catálogo ofrece. Pasó exactamente eso con MySQL y la unicidad
+ * condicionada: la celda llevaba meses declarando que la salida era una columna generada —«una
+ * decisión con coste»— y esa lectura tapaba la que no lo era (una parte funcional de índice, que
+ * no añade superficie ninguna). Nadie la revisó porque nada la ponía delante.
+ *
+ * Lo que la mantiene fallable, y no decorativa, es el RESUMEN: los cuatro estados PARTICIONAN las
+ * celdas, así que una celda nueva no puede quedarse fuera de las cuatro cifras sin que la suma
+ * deje de cuadrar. `falsadas` no entra en esa suma a propósito — es un corte transversal de las
+ * verificadas, no un estado.
+ */
+export function degraded() {
+  return cells()
+    .filter(({ cell }) => cell.state === 'degradado')
+    .map(({ id, key, cell }) => ({
+      id,
+      key,
+      why: cell.why,
+      guarantee: cell.degraded?.guarantee ?? null,
+      consequence: cell.degraded?.consequence ?? null,
+      ways: cell.degraded?.ways ?? []
+    }))
+    .sort((a, b) => (a.id === b.id ? a.key.localeCompare(b.key) : a.id.localeCompare(b.id)));
+}
