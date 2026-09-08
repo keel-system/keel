@@ -15,7 +15,8 @@
     "mail-check": "node scripts/mail-check.js",
     "mongo-check": "node scripts/mongo-check.js",
     "matrix": "node scripts/support-matrix.js",
-    "mapping-check": "node scripts/mapping-check.js stock-reservation && node scripts/mapping-check.js stock-reservation --database=mysql && node scripts/mapping-check.js job-dispatch-mongo"
+    "mapping-check": "node scripts/mapping-check.js stock-reservation && node scripts/mapping-check.js stock-reservation --database=mysql && node scripts/mapping-check.js job-dispatch-mongo",
+    "index-check": "node scripts/index-check.js notification-mailer && node scripts/index-check.js notification-mailer --database=mysql"
   },
   "files": [
     "src",

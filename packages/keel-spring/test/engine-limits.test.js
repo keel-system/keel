@@ -34,8 +34,12 @@ function modeloDe(fixture, database) {
 
 // ── El motor que no puede, sobre un diseño que sí lo pide ────────────────────
 
-test('mysql no sostiene la unicidad condicionada, y lo dice', () => {
-  const model = modeloDe('notification-mailer', 'mysql');
+test('mariadb no sostiene la unicidad condicionada, y lo dice', () => {
+  // El sujeto era MySQL hasta el 2026-09-08, cuando dejó de ser una degradación: tiene partes
+  // funcionales de índice, y con ellas sostiene el invariante entero. MariaDB no las tiene —solo
+  // columnas generadas declaradas, que son una decisión con coste—, así que es quien queda para
+  // medir el otro lado: que lo que el motor NO puede se diga en vez de emitirse a medias.
+  const model = modeloDe('notification-mailer', 'mariadb');
   const found = degradations(model);
   assert.equal(found.length, 1, `esperaba una degradación, encontré ${found.map((d) => d.id)}`);
   assert.equal(found[0].id, 'partial-unique-index');
@@ -43,7 +47,7 @@ test('mysql no sostiene la unicidad condicionada, y lo dice', () => {
   // El aviso llega por donde el diseñador ya mira, y trae las tres piezas: qué pidió, qué pasa y
   // por dónde se sale. Sin la tercera, un aviso solo es una mala noticia.
   const [aviso] = warnings(model);
-  assert.match(aviso, /mysql no sostiene/);
+  assert.match(aviso, /mariadb no sostiene/);
   assert.match(aviso, /queda ENTERA en el caso de uso/);
   assert.match(aviso, /columna generada/);
   assert.ok(aviso.includes(DOC), 'el aviso no dice dónde queda escrito');
@@ -102,7 +106,7 @@ test('toda celda degradada trae su texto, y todo appliesWhen tiene predicado', (
 test('una degradación con appliesWhen desconocido falla en el sitio, no en silencio', () => {
   // El emisor lanza a propósito: sin predicado, la degradación se emitiría siempre o nunca, y las
   // dos cosas son mentira. Se comprueba con una matriz falsa para no tocar la de verdad.
-  const model = modeloDe('notification-mailer', 'mysql');
+  const model = modeloDe('notification-mailer', 'mariadb');
   const original = MECHANISMS['partial-unique-index'].appliesWhen;
   MECHANISMS['partial-unique-index'].appliesWhen = 'unPredicadoQueNadieEscribio';
   try {

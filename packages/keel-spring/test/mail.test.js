@@ -364,18 +364,56 @@ test('el export del esquema añade el appendix al baseline', () => {
 });
 
 test('un motor sin índices parciales lo dice en voz alta en vez de generar el índice equivocado', () => {
-  const { result, read } = scaffoldMailer({ database: 'mysql', broker: 'kafka', auth: 'keycloak' });
+  // MariaDB, y ya no MySQL: aquel dejó de ser una degradación el 2026-09-08 (tiene partes
+  // funcionales de índice, y con ellas sostiene el invariante entero — su caso está debajo).
+  const { result, read } = scaffoldMailer({ database: 'mariadb', broker: 'kafka', auth: 'keycloak' });
   // El aviso ya no se escribe a mano en `migrations.js`: lo deriva `engine-limits.js` de la matriz
   // de paridad, que es donde vive el dato de qué motor sostiene qué. Se afirma sobre el id del
   // mecanismo y sobre el motor —lo estable— y no sobre la redacción, que es de la matriz y tiene
   // su propio test (`engine-limits.test.js`).
   assert.ok(
-    result.warnings.some((warning) => warning.includes('partial-unique-index') && warning.includes('mysql')),
+    result.warnings.some((warning) => warning.includes('partial-unique-index') && warning.includes('mariadb')),
     `esperaba el aviso del motor: ${result.warnings.join(' | ')}`
   );
   const sql = read('src/main/resources/db/partial-indexes.sql');
   assert.ok(sql.includes('ATENCIÓN'));
   assert.ok(!sql.includes('CREATE UNIQUE INDEX'), 'no se genera un índice que el motor no puede condicionar');
+});
+
+test('MySQL sostiene el mismo invariante con una parte funcional de índice', () => {
+  // MySQL no tiene índices parciales, pero sí partes funcionales (8.0.13+) y la regla de que un
+  // índice único no restringe las filas con NULL en ninguna de sus partes. Con las dos, el
+  // discriminador `(CASE WHEN <cond> THEN 1 END)` deja fuera del índice exactamente las filas que
+  // la condición no nombra, o sea las versiones históricas.
+  const { result, read } = scaffoldMailer({ database: 'mysql', broker: 'kafka', auth: 'keycloak' });
+  assert.ok(
+    !result.warnings.some((warning) => warning.includes('partial-unique-index')),
+    `MySQL ya no degrada esta garantía: ${result.warnings.join(' | ')}`
+  );
+
+  const sql = read('src/main/resources/db/partial-indexes.sql');
+  assert.ok(!sql.includes('ATENCIÓN'), 'no hay nada que degradar');
+  assert.match(sql, /CREATE UNIQUE INDEX uk_templates_application_key_locale/);
+  // La parte funcional, y con el valor ALMACENADO (el enum se persiste por su constante). Sin
+  // ella el índice es la constraint única normal: prohibiría también las versiones históricas,
+  // que es el invariante CONTRARIO al declarado.
+  assert.ok(sql.includes("(CASE WHEN status = ''ACTIVE'' THEN 1 END)"), 'sin el discriminador no hay condición');
+
+  // El guardia. `CREATE INDEX` de MySQL no admite IF NOT EXISTS, y este appendix se ejecuta en
+  // CADA arranque con continue-on-error: false — sin él, el SEGUNDO arranque del servicio muere.
+  assert.match(sql, /information_schema\.STATISTICS/);
+  assert.ok(sql.includes("AND INDEX_NAME = 'uk_templates_application_key_locale'"), 'el guardia tiene que preguntar por SU índice');
+  // Y por la TABLA cruda: information_schema guarda el identificador, no su forma citada.
+  assert.ok(sql.includes("TABLE_NAME = 'templates'"));
+
+  // Ninguna sentencia puede llevar un `;` dentro: `spring.sql.init` parte el script por ahí, así
+  // que un bloque procedural se ejecutaría a trozos. De ahí las cuatro sentencias planas.
+  const cuerpo = sql.split('\n').filter((line) => line.trim() && !line.trim().startsWith('--'));
+  assert.ok(cuerpo.length > 0);
+  for (const line of cuerpo) {
+    assert.ok(line.indexOf(';') === -1 || line.trim().endsWith(';'), `un ; a media línea parte el script: ${line}`);
+  }
+  assert.ok(cuerpo.some((line) => line.startsWith('PREPARE ')), 'el DDL se compone y se prepara');
 });
 
 // ─── La violación se traduce al error del diseño ─────────────────────────────

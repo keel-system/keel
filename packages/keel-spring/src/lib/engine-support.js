@@ -74,6 +74,8 @@ export const NETS = {
   'claim-check': 'npm run claim-check — reclamos de barrido y guarda de fila, contra el motor',
   'mongo-check': 'npm run mongo-check — los scripts de mongosh del arnés, por la vía del arnés',
   'mapping-check': 'npm run mapping-check — el ESPEJO de persistencia: que la columna que el diseño pidió sea la que el motor creó',
+  'index-check':
+    'npm run index-check — el appendix de índices condicionados, ejecutado DOS veces contra el motor: que sea idempotente y que sostenga el invariante sin prohibir las versiones históricas',
   corrida: 'una corrida en vivo: no es determinista ni repetible en CI, así que nombra cuál',
   ninguna: 'nadie lo ejecuta'
 };
@@ -369,26 +371,17 @@ export const MECHANISMS = {
     coverage: {
       postgresql: {
         state: 'verificado',
-        net: 'corrida',
+        net: 'index-check',
         falsified: true,
-        why: "ejercitado el 2026-09-07 sobre la corrida mail-rabbit, y por primera vez con el indice DE VERDAD en vigor: hasta entonces su predicado iba en minusculas (= active contra una columna que guarda ACTIVE), asi que indexaba cero filas y tapaba debajo un segundo defecto. Verificado en las dos direcciones: con el contrato de orden puesto (flushPendingWrites entre las dos escrituras) FL-TPL-001-B/-C/-D en verde y como maximo una fila ACTIVE por clave en la base; quitando SOLO esa llamada, los tres en rojo con 409 en el camino feliz. Y el gate acompana: la familia conditionalUniqueness sale OK con la llamada y KO sin ella, con el mismo sujeto. Y CON UN AGENTE DELANTE el 2026-09-07 (corrida-mail-postgres, 29 OK / 0 fallos): el agente leyo la nota del stub y puso flushPendingWrites() ENTRE las dos escrituras, el gate paso de KO a OK por el camino correcto, el indice quedo intacto con su predicado, y la base cerro con cero claves con mas de una fila ACTIVA. Es la primera vez que FL-TPL-001-B/-C/-D salen verdes con el indice EN VIGOR"
+        why: "falsado el 2026-09-08 por `index-check`, que es lo que lo saca de depender de una corrida: quitandole al indice su clausula WHERE —o sea emitiendo la constraint unica normal, que se crea igual de bien— cae el caso `historia`, que es el que separa el invariante declarado de su CONTRARIO. [historico] ejercitado el 2026-09-07 sobre la corrida mail-rabbit, y por primera vez con el indice DE VERDAD en vigor: hasta entonces su predicado iba en minusculas (= active contra una columna que guarda ACTIVE), asi que indexaba cero filas y tapaba debajo un segundo defecto. Verificado en las dos direcciones: con el contrato de orden puesto (flushPendingWrites entre las dos escrituras) FL-TPL-001-B/-C/-D en verde y como maximo una fila ACTIVE por clave en la base; quitando SOLO esa llamada, los tres en rojo con 409 en el camino feliz. Y el gate acompana: la familia conditionalUniqueness sale OK con la llamada y KO sin ella, con el mismo sujeto. Y CON UN AGENTE DELANTE el 2026-09-07 (corrida-mail-postgres, 29 OK / 0 fallos): el agente leyo la nota del stub y puso flushPendingWrites() ENTRE las dos escrituras, el gate paso de KO a OK por el camino correcto, el indice quedo intacto con su predicado, y la base cerro con cero claves con mas de una fila ACTIVA. Es la primera vez que FL-TPL-001-B/-C/-D salen verdes con el indice EN VIGOR"
       },
       mongodb: { state: 'verificado', net: 'corrida', falsified: true, why: 'partialFilterExpression; falsado en la corrida notification-mailer-mongo' },
       sqlserver: { state: 'razonado', net: 'ninguna', falsified: false, why: 'tiene índice filtrado y se emite, pero ninguna corrida ha usado SQL Server' },
       mysql: {
-        state: 'degradado',
-        degraded: {
-          guarantee: "como máximo una fila por la clave declarada mientras esté en el estado que la condición nombra (persistence.entities.<E>.indexes con `when`)",
-          consequence: "el índice NO se crea, así que la unicidad condicionada se queda ENTERA en el caso de uso — y la comprobación previa de un handler no cierra la ventana de dos peticiones simultáneas: dos publicaciones a la vez dejan dos filas activas y el invariante que el diseño declaró no lo sostiene nadie",
-          ways: [
-            "una columna generada que valga NULL fuera de la condición, con una constraint única encima (un índice único ignora los NULL)",
-            "un bloqueo explícito en el caso de uso que publica",
-            "aceptar la ventana: si el flujo real no tiene concurrencia sobre esa clave puede ser la decisión correcta, pero tomada y no heredada",
-          ]
-        },
-        net: 'ninguna',
-        falsified: false,
-        why: "no tiene índices parciales: build NO los crea y avisa de que la garantía se queda entera en el caso de uso. La salida sería una columna generada que valga NULL fuera de la condición, y es una decisión con coste que el generador no toma sola"
+        state: 'verificado',
+        net: 'index-check',
+        falsified: true,
+        why: "no tiene indices parciales, pero SI la parte funcional de indice (8.0.13+) y la regla de que un indice unico no restringe las filas con NULL: juntas dan el mismo efecto con `(CASE WHEN <cond> THEN 1 END)` como ultima key part, y sin anadir superficie al esquema. Estuvo `degradado` hasta el 2026-09-08 dando por hecho que la salida era una columna generada declarada —una decision con coste que el generador no toma sola—, y esa lectura tapaba la que no lo es. Verificado contra mysql:8.0.46 y falsado TRES veces: sin la parte funcional cae `historia` con el 1062 del propio indice (es la constraint unica normal, o sea el invariante CONTRARIO al declarado); con el guardia preguntando por otro nombre cae `idempotencia` en la SEGUNDA pasada con «Duplicate key name» —la primera sigue verde, que es por lo que hay que ejecutarlo dos veces: el defecto no existe hasta el segundo arranque del servicio—; y el mismo sabotaje del predicado cae igual en PostgreSQL, o sea que la red no es de un motor"
       },
       mariadb: {
         state: 'degradado',

@@ -663,9 +663,13 @@ existe en `MongoRepository`.
 ### El ORDEN que impone un índice único condicionado
 
 Un `index` con `when` declara una unicidad **condicionada al estado** («como máximo una versión
-activa por clave»). En relacional eso sale como índice único **parcial**, y ese índice trae una
-exigencia que no se ve leyéndolo: se comprueba **por fila** y **no se puede diferir** —`DEFERRABLE`
-es de constraints, y una constraint única parcial no existe en PostgreSQL.
+activa por clave»). En relacional eso sale a `db/partial-indexes.sql`, y cada motor lo dice a su
+manera: PostgreSQL y SQL Server con un índice **parcial** (`WHERE <condición>`), MySQL con una
+**parte funcional** —`(CASE WHEN <condición> THEN 1 END)` como última columna del índice, que vale
+`NULL` fuera de la condición, y un índice único no restringe las filas con `NULL`—. El efecto es
+el mismo en los tres, **y también la exigencia** que no se ve leyéndolo: se comprueba **por fila**
+y **no se puede diferir** —`DEFERRABLE` es de constraints, y una constraint única parcial no
+existe—.
 
 La consecuencia le cae a la operación que **releva**: la que saca una fila del estado condicionado
 y mete otra en el mismo acto (el diseño las declara juntas — `draft → active` y `active → retired`

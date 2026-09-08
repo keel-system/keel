@@ -52,10 +52,10 @@ export function generate(model) {
 // simultáneas dejan dos activas y el invariante que el diseño declaró no lo
 // sostiene nadie — la comprobación previa del handler no cierra esa ventana.
 //
-// JPA no lo expresa (`@Index` no tiene predicado), así que sale por SQL. Y solo
-// dos de los seis dialectos lo tienen de verdad; en los demás el archivo dice en
-// voz alta que la garantía se queda en el caso de uso, en vez de generar un
-// índice que prohibiría también las versiones históricas.
+// JPA no lo expresa (`@Index` no tiene predicado), así que sale por SQL. Y cada
+// motor lo dice de una forma distinta; el que no tiene ninguna deja el archivo
+// diciendo en voz alta que la garantía se queda en el caso de uso, en vez de
+// generar un índice que prohibiría también las versiones históricas.
 const PARTIAL_INDEX_DIALECTS = {
   postgresql: (spec) =>
     `CREATE UNIQUE INDEX IF NOT EXISTS ${spec.name} ON ${spec.table} (${spec.columns}) WHERE ${spec.predicate};`,
@@ -63,8 +63,66 @@ const PARTIAL_INDEX_DIALECTS = {
   // va por sys.indexes, que es el idioma del motor.
   sqlserver: (spec) =>
     `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = '${spec.name}')\n` +
-    `    CREATE UNIQUE INDEX ${spec.name} ON ${spec.table} (${spec.columns}) WHERE ${spec.predicate};`
+    `    CREATE UNIQUE INDEX ${spec.name} ON ${spec.table} (${spec.columns}) WHERE ${spec.predicate};`,
+  mysql: mysqlPartialIndex
 };
+
+// ─── MySQL: el índice condicionado sin predicado ─────────────────────────────
+//
+// MySQL no tiene índices parciales, y durante mucho tiempo eso se tradujo aquí en una
+// degradación anunciada: el índice no se creaba y el invariante se quedaba entero en el caso
+// de uso, que no cierra la ventana de dos peticiones simultáneas.
+//
+// Sí tiene, en cambio, las dos piezas con las que se compone el mismo efecto:
+//
+//   1. una **parte funcional** de índice (8.0.13+): una key part puede ser una expresión entre
+//      paréntesis, no solo una columna;
+//   2. la regla de siempre de los índices únicos, que **no restringen las filas con NULL** en
+//      cualquiera de sus partes.
+//
+// Juntas dan el discriminador: `(CASE WHEN status = 'ACTIVE' THEN 1 END)` vale 1 dentro de la
+// condición y NULL fuera, así que el índice restringe exactamente las filas que la condición
+// nombra y deja pasar todas las versiones históricas. La garantía resultante es la misma que la
+// del índice parcial de PostgreSQL, contrato de ORDEN incluido: también se comprueba por fila y
+// tampoco se puede diferir (ver sqlContract).
+//
+// Se hace con una parte funcional y NO con una columna generada declarada, aunque las dos
+// funcionen, por una razón concreta: el nombre del índice es un contrato con el mapa del
+// ApiExceptionHandler, y una columna generada añadiría además superficie al esquema que el
+// baseline exporta y que el diseñador tendría que entender. La parte funcional no deja nada
+// visible fuera del propio índice.
+//
+// El guardia es lo que cuesta. `CREATE INDEX` de MySQL no admite `IF NOT EXISTS`, y este
+// appendix se ejecuta en CADA arranque con `continue-on-error: false` — o sea que sin guardia
+// el segundo arranque del servicio muere. Y un bloque procedural tampoco vale: `spring.sql.init`
+// parte el script por `;`, así que lo que se emita no puede llevar un `;` dentro. La salida son
+// cuatro sentencias planas —consultar, componer, preparar, ejecutar— que MySQL corre sobre la
+// MISMA conexión, que es lo que hace que la variable de usuario sobreviva de una a la siguiente.
+function mysqlPartialIndex(spec) {
+  const ddl =
+    `CREATE UNIQUE INDEX ${spec.name} ON ${spec.table} ` +
+    `(${spec.columns}, (CASE WHEN ${spec.predicate} THEN 1 END))`;
+  return (
+    `SET @keel_index_exists = (SELECT COUNT(*) FROM information_schema.STATISTICS\n` +
+    `    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${sqlLiteral(spec.tableName)}\n` +
+    `      AND INDEX_NAME = ${sqlLiteral(spec.name)});\n` +
+    // DO 0 es el no-op de MySQL: PREPARE exige una sentencia, y no hay forma de no preparar nada.
+    `SET @keel_index_ddl = IF(@keel_index_exists > 0, 'DO 0', ${mysqlStringLiteral(ddl)});\n` +
+    `PREPARE keel_index_stmt FROM @keel_index_ddl;\n` +
+    `EXECUTE keel_index_stmt;\n` +
+    `DEALLOCATE PREPARE keel_index_stmt;`
+  );
+}
+
+/**
+ * El DDL viaja DENTRO de una cadena de MySQL, así que sus comillas y sus barras se escapan una
+ * vez más. La barra importa aunque hoy no aparezca: MySQL la trata como escape en las cadenas
+ * (a diferencia del SQL estándar), y dejarla pasar convertiría un identificador con barra en
+ * otra cosa sin que nada fallara al crearse.
+ */
+function mysqlStringLiteral(sql) {
+  return `'${sql.replace(/\\/g, '\\\\').replace(/'/g, "''")}'`;
+}
 
 /** Los índices condicionados del diseño, ya resueltos a tabla, columnas y predicado. */
 export function partialIndexSpecs(model) {
@@ -75,10 +133,10 @@ export function partialIndexSpecs(model) {
   for (const entity of model.entities.filter((e) => e.persisted)) {
     const members = persistedMembers(model, entity);
     for (const index of partialUniqueIndexes(entity)) {
-      const columns = index.fields
+      const columnList = index.fields
         .flatMap((field) => columnsFor(model, entity, members, field, model.warnings))
-        .map(quote)
-        .join(', ');
+        .map(quote);
+      const columns = columnList.join(', ');
       const [whenColumn] = columnsFor(model, entity, members, index.when.field, model.warnings);
       // El valor con el que compara la columna, NO el literal del diseño: un enum se guarda
       // por su constante. Ver persistence-members.js § storedWhenValue.
@@ -87,7 +145,15 @@ export function partialIndexSpecs(model) {
         entity: entity.name,
         name: indexName(entity, index),
         table: quote(entity.tableName),
+        // El nombre CRUDO, además del citado: `information_schema` guarda el identificador, no
+        // su forma citada, así que un guardia que preguntara por `` `key` `` no encontraría nunca
+        // la tabla `key` — y su índice se intentaría crear en cada arranque.
+        tableName: entity.tableName,
         columns,
+        // Las mismas columnas sueltas. Las consume `index-probes.js` para levantar el sustrato
+        // sobre el que mide el índice: derivarlas por su cuenta sería medir una copia de sí mismo.
+        columnList,
+        whenColumn: quote(whenColumn),
         predicate: `${quote(whenColumn)} = ${sqlLiteral(stored)}`,
         // Se conserva junto al literal para que la prosa pueda decir los dos cuando difieren:
         // el comentario habla el idioma del diseño y la sentencia el del motor.
@@ -117,7 +183,7 @@ function storedNote(spec) {
   return String(spec.stored) === String(spec.when.equals) ? '' : ` (almacenado como ${sqlLiteral(spec.stored)})`;
 }
 
-function sqlLiteral(value) {
+export function sqlLiteral(value) {
   if (typeof value === 'string') return `'${value.replace(/'/g, "''")}'`;
   if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
   return String(value);
