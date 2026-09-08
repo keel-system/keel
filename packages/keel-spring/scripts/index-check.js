@@ -52,7 +52,7 @@ import { loadService } from 'keel-core';
 import { tmpDir } from '../test/helpers/tmp.js';
 import { buildModel } from '../src/lib/model.js';
 import { scaffoldService, resolveStack } from '../src/scaffold/index.js';
-import { indexSubject, substrateSql, assertions, statementsOf, opacityQuery } from '../src/lib/index-probes.js';
+import { indexSubject, substrateSql, assertions, statementsOf, opacityOf } from '../src/lib/index-probes.js';
 import { DATABASES, databaseHealthProbe } from '../src/lib/stack-catalog.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -217,7 +217,7 @@ function prepare() {
     projectDir,
     spec,
     appendix,
-    opacity: opacityQuery(database, spec),
+    opacity: opacityOf(database, spec),
     statements,
     argv,
     container: `${service.manifest.service.name}-db`,
@@ -303,16 +303,27 @@ try {
       //    que saltársela no los conserva, impide que existan. Cambiar un arranque que muere a
       //    gritos por la pérdida silenciosa de la clave natural del agregado no es un arreglo.
       //    Por eso aquí no se admite ni «opaco pero mitigado»: se exige que no sea opaco.
+      //
+      //    Y tres desenlaces, no dos — ver `opacityOf` en index-probes.js.
       if (!prepared.opacity) {
         cases.push({
-          name: `opacidad · ${database} no sabe decir si el índice es opaco a la introspección JDBC`,
+          name: `opacidad · ${database} no declara si su índice puede ser opaco a la introspección JDBC`,
           ok: false,
-          detail: 'sin consulta de opacidad en index-probes.js, este motor no puede contrastar nada'
+          detail: 'sin declaración en index-probes.js no se sabe, y no saberlo no es lo mismo que estar bien'
+        });
+      } else if (prepared.opacity.cannotBeOpaque) {
+        // Ni verde ni rojo: aquí no hay nada que medir, y contarlo como verde inflaría el marcador
+        // con una comprobación que no se hizo. Es el `no-aplica` de la matriz de paridad.
+        cases.push({
+          name: `opacidad · no aplica en ${database}: ${prepared.opacity.cannotBeOpaque}`,
+          ok: true,
+          skipped: true,
+          detail: ''
         });
       } else {
-        const answer = sql(prepared.opacity);
-        // Se exige un NÚMERO: una respuesta que no lo sea (o vacía) no es «cero opacas», es que la
-        // consulta no midió nada — y eso tiene que ser rojo, no un verde por omisión.
+        const answer = sql(prepared.opacity.query);
+        // Se exige un NÚMERO: una respuesta que no lo sea (o vacía) no es «cero opacas», es que
+        // la consulta no midió nada — y eso tiene que ser rojo, no un verde por omisión.
         const contadas = Number(answer.value);
         const medido = answer.ok && answer.value !== '' && Number.isInteger(contadas);
         cases.push({
@@ -336,12 +347,20 @@ try {
 
 console.log();
 for (const c of cases) {
-  console.log(`  ${c.ok ? 'OK  ' : 'KO  '}${c.name}`);
+  console.log(`  ${c.skipped ? '--  ' : c.ok ? 'OK  ' : 'KO  '}${c.name}`);
   if (!c.ok && c.detail) console.log(`        ${c.detail}`);
 }
 
-const failures = cases.filter((c) => !c.ok).length;
-console.log(`\n  ${cases.length - failures}/${cases.length} en verde${fatal ? ` · ${fatal}` : ''}`);
+// Lo omitido no entra NI en el numerador ni en el denominador: contarlo como verde diría que se
+// midió algo que no se midió, que es la forma más barata de inflar un marcador.
+const medidos = cases.filter((c) => !c.skipped);
+const omitidos = cases.length - medidos.length;
+const failures = medidos.filter((c) => !c.ok).length;
+console.log(
+  `\n  ${medidos.length - failures}/${medidos.length} en verde` +
+    (omitidos > 0 ? ` · ${omitidos} no aplica(n)` : '') +
+    (fatal ? ` · ${fatal}` : '')
+);
 
 fs.writeFileSync(
   path.join(here, '..', 'index-check.json'),

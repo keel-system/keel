@@ -205,6 +205,14 @@ function mysqlStringLiteral(sql) {
 // dos—, y no lo habría destapado sobre el volumen de una corrida anterior, donde la constraint ya
 // estaba creada de antes. Por eso el escenario de carrera vale y la lectura del YAML no.
 
+/**
+ * Los motores que saben emitir un índice condicionado, o sea los que llegan a tener uno que
+ * INTROSPECCIONAR. Lo consume `index-probes.js` para exigir que cada uno declare si su forma puede
+ * ser opaca a `DatabaseMetaData#getIndexInfo` — se exporta el derivado y no la tabla entera para no
+ * abrir el emisor de SQL a quien solo necesita saber quiénes son.
+ */
+export const enginesWithPartialIndex = () => Object.keys(PARTIAL_INDEX_DIALECTS);
+
 /** Los índices condicionados del diseño, ya resueltos a tabla, columnas y predicado. */
 export function partialIndexSpecs(model) {
   const specs = [];

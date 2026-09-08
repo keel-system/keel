@@ -411,6 +411,30 @@ entre el envío y el commit, así que ese mecanismo **solo** lo mide el gate est
 Cuando un mecanismo no tiene ni escenario ni gate, eso es el hallazgo — no un fallo de la
 corrida, sino una cobertura que nunca existió.
 
+**La columna de la derecha dice qué DEBERÍA ponerse rojo, no qué se pone.** Es una expectativa, y
+puede estar equivocada para tu diseño — por eso se mide en vez de darla por buena. Ocurrió el
+2026-09-08 en `notification-mailer` sobre MySQL: con el reclamo del barrido saboteado, **el
+escenario de dos réplicas siguió verde**. Lo que lo hacía pasar era la **guarda de envío**, un
+segundo mecanismo independiente que está aguas abajo: aunque las dos réplicas se lleven la misma
+fila, solo una gana la guarda y sale un correo, así que la aserción sobre el buzón no distingue.
+
+De ahí la regla al leer un verde: **pregúntate por dónde pasa la aserción**. Si entre el mecanismo
+que mutaste y lo que el `Then` mira hay otro mecanismo capaz de absorber el defecto, el verde no
+dice que esté cubierto — dice que lo cubre otro.
+
+Y entonces viene la pregunta que decide qué hacer, que **no** es «qué aserción falta»: es **si el
+mecanismo deja algún rastro fuera**. En el caso medido no lo deja, y no por descuido — el barrido
+solo despacha el comando de envío, y ese comando **empieza por su propia guarda**, así que un
+reclamo duplicado acaba en el mismo estado, el mismo correo y los mismos eventos. Es
+**inobservable en caja negra**, y pedir una aserción para él sería pedir una que no puede existir.
+
+Ese es el mismo sitio en el que está la **guarda de correo**, por un motivo distinto: hay
+mecanismos a los que **ningún escenario puede llegar**, y para ellos la red es el gate estático
+(`infra/check-idempotency.sh`) más la que ejecuta el generador contra el motor. Antes de escribir
+una aserción nueva, comprueba que haya algo que afirmar; si no lo hay, el hallazgo es que ese
+mecanismo **no lo cubre ningún escenario**, y eso se reporta tal cual en vez de fabricar una
+prueba que mida otra cosa.
+
 Cómo se hace, sin gastar la corrida entera: se muta **uno** cada vez, se ejecuta
 `infra/score-scenarios.sh` (o solo la clase del escenario que debería caer, con
 `./gradlew integrationTest --tests '<Clase>'`), se anota el resultado y **se revierte antes de

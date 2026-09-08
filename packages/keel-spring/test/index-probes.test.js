@@ -14,7 +14,8 @@ import { loadService } from 'keel-core';
 import { buildModel } from '../src/lib/model.js';
 import { resolveStack } from '../src/scaffold/index.js';
 import { generate } from '../src/scaffold/migrations.js';
-import { indexSubject, substrateSql, assertions, statementsOf, outsideValue, opacityQuery } from '../src/lib/index-probes.js';
+import { indexSubject, substrateSql, assertions, statementsOf, outsideValue, opacityOf } from '../src/lib/index-probes.js';
+import { enginesWithPartialIndex } from '../src/scaffold/migrations.js';
 
 const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
@@ -141,11 +142,11 @@ test('sobre un motor que no lo sostiene el appendix no trae ninguna sentencia', 
 
 // ─── La opacidad a la introspección JDBC ─────────────────────────────────────
 
-test('cada motor sabe preguntarse si su índice es opaco, en su propio idioma', () => {
-  // No hay forma portable de preguntarlo, y componerla a ojo daría siempre cero — que es
+test('cada motor que PUEDE ser opaco sabe preguntárselo, en su propio idioma', () => {
+  // No hay forma portable de hacerlo, y componerla a ojo daría siempre cero — que es
   // indistinguible de «no es opaco» y por tanto un verde que no mide nada.
   const spec = indexSubject(modeloDe('notification-mailer', 'mysql'));
-  const mysql = opacityQuery('mysql', spec);
+  const mysql = opacityOf('mysql', spec).query;
   assert.match(mysql, /information_schema\.STATISTICS/);
   assert.match(mysql, /COLUMN_NAME IS NULL/);
   assert.ok(mysql.includes("INDEX_NAME = 'uk_templates_application_key_locale'"), 'pregunta por SU índice');
@@ -153,13 +154,44 @@ test('cada motor sabe preguntarse si su índice es opaco, en su propio idioma', 
   // En PostgreSQL lo que haría opaco al índice sería una key part por EXPRESIÓN (`indexprs`), no
   // el predicado (`indpred`): preguntar por el predicado daría siempre «opaco» y obligaría a una
   // mitigación que ahí no hace falta.
-  const postgres = opacityQuery('postgresql', indexSubject(modeloDe('notification-mailer', 'postgresql')));
+  const postgres = opacityOf('postgresql', indexSubject(modeloDe('notification-mailer', 'postgresql'))).query;
   assert.match(postgres, /pg_index/);
   assert.match(postgres, /indexprs IS NOT NULL/);
   assert.ok(!postgres.includes('indpred'), 'el predicado no es lo que hace opaco a un índice');
 });
 
-test('un motor sin consulta de opacidad lo dice, en vez de responder que no lo es', () => {
+test('SQL Server no puede ser opaco, y se DECLARA en vez de fingir una consulta', () => {
+  // Sus índices son siempre sobre columnas: no admite key parts por expresión, así que la
+  // respuesta sería cero POR CONSTRUCCIÓN. Una consulta ahí no podría ponerse roja nunca, y una
+  // red que no puede ponerse roja no mide nada.
+  const spec = indexSubject(modeloDe('notification-mailer', 'sqlserver'));
+  const opacidad = opacityOf('sqlserver', spec);
+  assert.ok(!opacidad.query, 'no se emite consulta: su respuesta no podría ser distinta de cero');
+  assert.ok(opacidad.cannotBeOpaque, 'una afirmación sobre el motor exige su porqué escrito');
+  assert.match(opacidad.cannotBeOpaque, /expresión/);
+});
+
+test('un motor que no lo declara devuelve nada, para que el runner lo ponga en KO', () => {
+  // Es la tercera situación, y la que impide que un motor nuevo se cuele sin decidir. MariaDB no
+  // se declara a propósito: hoy es degradación anunciada y el runner aborta antes de llegar, pero
+  // el día que alguien le escriba un dialecto tendrá que decidir. No saberlo no es estar bien.
   const spec = indexSubject(modeloDe('notification-mailer', 'mysql'));
-  assert.equal(opacityQuery('sqlserver', spec), null);
+  assert.equal(opacityOf('mariadb', spec), null);
+  assert.equal(opacityOf('un-motor-que-no-existe', spec), null);
+});
+
+test('todo motor que emite índice condicionado declara su opacidad', () => {
+  // El cruce que hace portante lo anterior: quien tiene dialecto llega a tener un índice que
+  // INTROSPECCIONAR, así que tiene que haber decidido si esa forma puede quedarse sin nombre de
+  // columna. Falla el día que alguien añada un dialecto sin decidirlo — que es justo el hueco que
+  // este archivo tenía con SQL Server.
+  const spec = indexSubject(modeloDe('notification-mailer', 'mysql'));
+  for (const engine of enginesWithPartialIndex()) {
+    const opacidad = opacityOf(engine, spec);
+    assert.ok(opacidad, `${engine} emite índice condicionado y no declara su opacidad`);
+    assert.ok(
+      opacidad.query || opacidad.cannotBeOpaque,
+      `${engine}: una declaración vacía no es una decisión`
+    );
+  }
 });

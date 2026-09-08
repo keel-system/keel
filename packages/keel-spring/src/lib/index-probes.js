@@ -149,21 +149,66 @@ export function assertions(spec) {
 //
 // La pregunta se hace en el idioma de cada motor a propósito. No hay forma portable de
 // preguntarla, y componerla a ojo daría siempre cero —que es indistinguible de «no es opaco»—.
-const OPACITY_QUERY = {
-  // COLUMN_NAME null es literalmente lo que el motor responde para una key part funcional; es lo
-  // mismo que ve `DatabaseMetaData#getIndexInfo`, que es quien se lo pasa a Hibernate.
-  mysql: (spec) =>
-    'SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE()' +
-    ` AND TABLE_NAME = ${sqlLiteral(spec.tableName)} AND INDEX_NAME = ${sqlLiteral(spec.name)}` +
-    ' AND COLUMN_NAME IS NULL',
-  // En PostgreSQL el índice se condiciona con un predicado (`indpred`) sobre columnas REALES: lo
-  // que haría opaco al índice sería una key part por expresión (`indexprs`), y no la hay.
-  postgresql: (spec) =>
-    `SELECT COUNT(*) FROM pg_index WHERE indexrelid = ${sqlLiteral(spec.name)}::regclass AND indexprs IS NOT NULL`
+// La pregunta se le hace a cada motor en SU idioma a propósito. No hay forma portable de hacerla, y
+// componerla a ojo daría siempre cero —que es indistinguible de «no es opaco»—.
+//
+// Y hay TRES situaciones, no dos. La tercera es la que impide que un motor nuevo se cuele sin
+// decidir, igual que la matriz de paridad impide que se cuele sin fila:
+//
+//   consulta        el motor PUEDE tener key parts sin nombre: se le pregunta y se exige cero.
+//   no puede serlo  declarado, con su porqué. El caso no se mide: ni verde ni rojo.
+//   sin declarar    nada. El runner lo pone en KO, que es lo correcto — no se sabe.
+const OPACITY = {
+  // COLUMN_NAME null es literalmente lo que responde MySQL para una key part funcional; es lo mismo
+  // que ve `DatabaseMetaData#getIndexInfo`, que es quien se lo pasa a Hibernate.
+  mysql: {
+    query: (spec) =>
+      'SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE()' +
+      ` AND TABLE_NAME = ${sqlLiteral(spec.tableName)} AND INDEX_NAME = ${sqlLiteral(spec.name)}` +
+      ' AND COLUMN_NAME IS NULL'
+  },
+  // En PostgreSQL el índice se condiciona con un predicado (`indpred`) sobre columnas REALES: lo que
+  // haría opaco al índice sería una key part por expresión (`indexprs`), y no la hay. Preguntar por
+  // el predicado daría siempre «opaco» y exigiría una mitigación que aquí no hace falta.
+  postgresql: {
+    query: (spec) =>
+      `SELECT COUNT(*) FROM pg_index WHERE indexrelid = ${sqlLiteral(spec.name)}::regclass AND indexprs IS NOT NULL`
+  },
+  // SQL Server condiciona con un índice FILTRADO (`WHERE …`) sobre columnas reales, y no admite key
+  // parts por expresión: sus índices son siempre sobre columnas, así que ninguna puede llegar sin
+  // nombre a `getIndexInfo`. Se declara en vez de emitir una consulta porque su respuesta sería
+  // cero POR CONSTRUCCIÓN, y una red que no puede ponerse roja no mide nada — fingirla sería peor
+  // que no tenerla.
+  //
+  // El riesgo, dicho en voz alta: si el motor ganara índices por expresión y algún dialecto los
+  // usara, esto dejaría de ser cierto y nadie se enteraría. Es una afirmación sobre el motor, no
+  // una medición, y por eso lleva su porqué escrito.
+  //
+  // Ojo con lo que NO sirve aquí: contar columnas COMPUTADAS (`sys.columns.is_computed`) fue la
+  // primera idea y es un falso positivo — una columna computada de SQL Server tiene nombre, así
+  // que el driver lo devuelve y el índice no es opaco.
+  sqlserver: {
+    cannotBeOpaque:
+      'sus índices son siempre sobre columnas —no admite key parts por expresión—, así que ninguna ' +
+      'puede llegar sin nombre a DatabaseMetaData#getIndexInfo'
+  }
+  // mariadb y oracle NO se declaran a propósito: hoy son degradaciones anunciadas (no se emite
+  // índice condicionado) y el runner aborta antes de llegar aquí. El día que alguien les escriba un
+  // dialecto, caerán en «sin declarar» y tendrá que decidir — que es exactamente lo que se quiere.
 };
 
-/** La consulta con la que se le pregunta a ESTE motor si el índice es opaco, o null si no se sabe. */
-export const opacityQuery = (database, spec) => OPACITY_QUERY[database]?.(spec) ?? null;
+/**
+ * Qué se puede decir de la opacidad del índice en ESTE motor:
+ *
+ *   `{ query }`          la consulta con la que preguntárselo.
+ *   `{ cannotBeOpaque }` el motivo por el que no puede serlo.
+ *   `null`               no se sabe: el motor no lo declara.
+ */
+export const opacityOf = (database, spec) => {
+  const entry = OPACITY[database];
+  if (!entry) return null;
+  return entry.query ? { query: entry.query(spec) } : { cannotBeOpaque: entry.cannotBeOpaque };
+};
 
 /**
  * Las sentencias del appendix, contadas. Sirve para dos cosas —saber si el motor emitió algo, y
