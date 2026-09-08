@@ -136,11 +136,16 @@ export function assertions(spec) {
 // Importa porque con `ddl-auto: update` Hibernate introspecciona TODOS los índices de la tabla
 // —también los que no declaró— para reconciliar sus `@UniqueConstraint`, y una key part sin
 // nombre le llega como null y aborta la carga entera del ApplicationContext. No en el primer
-// arranque, sino en el segundo. El generador lo mitiga con
-// `hibernate.schema_update.unique_constraint_strategy: SKIP` (ver `migrations.js` § El precio de
-// la parte funcional), y lo que esta sonda mide es que las **dos mitades concuerden**: que la
-// mitigación esté donde el índice es opaco, y que NO esté donde no lo es —apagarla sin causa
-// desactiva una reconciliación que sí funciona—.
+// arranque, sino en el segundo.
+//
+// La respuesta que se exige es CERO, sin excepción. Hubo una versión de esta sonda que admitía
+// «opaco pero mitigado» —contrastaba la opacidad contra
+// `hibernate.schema_update.unique_constraint_strategy: SKIP` en el perfil `local`— y se endureció
+// al medir esa mitigación: en MySQL los `@UniqueConstraint` se crean por `ALTER TABLE` dentro de
+// esa misma reconciliación, así que saltársela no los conserva, IMPIDE QUE EXISTAN (ver
+// `migrations.js` § Por qué NO hay ningún ajuste de Hibernate). O sea que la mitigación cambiaba
+// un fallo ruidoso por uno silencioso, y una sonda que la aceptara estaría bendiciendo la pérdida
+// de la clave natural del agregado. Un índice opaco no se mitiga: no se emite.
 //
 // La pregunta se hace en el idioma de cada motor a propósito. No hay forma portable de
 // preguntarla, y componerla a ojo daría siempre cero —que es indistinguible de «no es opaco»—.

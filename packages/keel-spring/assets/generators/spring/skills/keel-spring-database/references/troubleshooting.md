@@ -113,33 +113,51 @@ No lo busques en el código ni en una anotación `@Check`: comprueba la constrai
 con el enum. La salida es recrear el esquema —`bash infra/reset-db.sh --schema`—, no
 editar la constraint a mano, que dejaría la BD distinta del DDL que Hibernate generaría.
 
-## `null was passed as an object name` al arrancar (MySQL, segundo arranque)
+## `null was passed as an object name` al arrancar (MySQL)
 
 Stack: `IllegalArgumentException` desde `NormalizingIdentifierHelperImpl.toMetaDataObjectName`,
 por debajo de `AbstractSchemaMigrator.applyUniqueKeys`. Aborta la carga entera del
 `ApplicationContext`, y **no menciona ni la tabla ni el índice**.
 
-No es un problema del esquema: es de LEERLO. Si el diseño declara unicidad condicionada
-(`indexes` con `when`), `db/partial-indexes.sql` crea en MySQL un índice con una key part
-**funcional** —`(CASE WHEN status = 'ACTIVE' THEN 1 END)`, la única forma que tiene este motor
-de condicionar—. Esa key part no tiene nombre de columna, y el driver la reporta con
-`COLUMN_NAME` nulo. Con `ddl-auto: update`, Hibernate introspecciona **todos** los índices de la
-tabla —también los que él no declaró— para decidir si recrea sus `@UniqueConstraint`, se
-encuentra ese nulo y muere.
+**Si ves esto, es una REGRESIÓN del generador, y lo que hay que arreglar no está en este
+proyecto.** Con `keel-spring` al día no puede ocurrir: si el diseño declara unicidad condicionada
+(`indexes` con `when`), `db/partial-indexes.sql` materializa el discriminador como **columna
+generada declarada** —`ADD COLUMN <índice>_flag TINYINT GENERATED ALWAYS AS (CASE WHEN … THEN 1
+END) STORED`— y la mete en el índice **por su nombre**. Verlo significa que alguien devolvió la
+forma anterior, una *key part funcional* (`…, (CASE WHEN … THEN 1 END)`), que no tiene nombre de
+columna: el driver la reporta con `COLUMN_NAME` nulo, y con `ddl-auto: update` Hibernate
+introspecciona **todos** los índices de la tabla —también los que él no declaró— para decidir si
+recrea sus `@UniqueConstraint`, se encuentra ese nulo y muere.
 
-Lo que lo hace difícil de reconocer es **cuándo** aparece: nunca en el primer arranque contra una
-base vacía (ese camino es `CREATE TABLE` y no pasa por ahí), sino en el **segundo** — al
-reiniciar con el volumen ya poblado, y en cuanto un escenario de clúster levanta su segunda
-réplica. El mismo síntoma llega por dos caminos que no se parecen entre sí.
+Cuesta reconocerlo por **cuándo** aparece: nunca en el primer arranque contra una base vacía (ese
+camino es `CREATE TABLE` y no pasa por ahí), sino en el **segundo** — al reiniciar con el volumen
+ya poblado, y en cuanto un escenario de clúster levanta su segunda réplica. El mismo síntoma llega
+por dos caminos que no se parecen entre sí, y eso ya hizo que se diagnosticara dos veces como si
+fueran cosas distintas.
 
-`build` ya lo evita: el perfil `local` de un diseño con índice condicionado sobre MySQL lleva
-`spring.jpa.properties.hibernate.schema_update.unique_constraint_strategy: SKIP`. **Si te lo
-encuentras, mira primero que esa línea siga ahí** antes de tocar nada más; el
-`partial-indexes.sql` no se edita, y quitar el índice no es la salida —es el invariante que el
-diseño declaró—.
+### NO lo arregles con `unique_constraint_strategy`
 
-Lo que `SKIP` cuesta: un `@UniqueConstraint` que **cambie** deja de propagarse en local. La
-salida es la de siempre, `bash infra/reset-db.sh --schema`.
+Hibernate ofrece `spring.jpa.properties.hibernate.schema_update.unique_constraint_strategy: SKIP`,
+que se salta esa reconciliación y hace desaparecer el síntoma. **Es peor que el fallo, y está
+medido**: en MySQL los `@UniqueConstraint` no salen inline en el `CREATE TABLE`, los añade un
+`ALTER TABLE` dentro de esa misma reconciliación. Saltársela no los conserva: **impide que
+existan**. Con `SKIP`, `uk_<tabla>_natural` no aparece en la base ni sobre un volumen recién
+creado, y la unicidad de la clave natural del agregado deja de restringir sin que nada lo diga.
+
+Se destapó el 2026-09-08 con `FL-TPL-001-E` —dos altas de la misma versión a la vez: esperaba una
+fila, encontró dos—, y solo porque la corrida arrancó sobre un **volumen limpio**: sobre uno de una
+corrida anterior la constraint ya estaba creada de antes y todo salía verde.
+
+La regla general, que vale más allá de este caso: **no cambies un fallo ruidoso por uno
+silencioso**. Un arranque que muere nombrando su excepción se ve; una garantía que ya no está, no.
+
+### Qué hacer
+
+Repórtalo como defecto del generador (`INFORME-GENERACION.md`). `db/partial-indexes.sql` no se
+edita a mano —se regenera en cada build— y quitar el índice tampoco es la salida: es el invariante
+que el diseño declaró. La corrección va en `keel-spring`, y su red es `npm run index-check`, que le
+pregunta al motor si alguna key part del índice quedó sin nombre de columna y **prohíbe** que la
+haya.
 
 ## `ddl-auto: validate` falla al arrancar en production
 

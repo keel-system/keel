@@ -664,12 +664,18 @@ existe en `MongoRepository`.
 
 Un `index` con `when` declara una unicidad **condicionada al estado** («como máximo una versión
 activa por clave»). En relacional eso sale a `db/partial-indexes.sql`, y cada motor lo dice a su
-manera: PostgreSQL y SQL Server con un índice **parcial** (`WHERE <condición>`), MySQL con una
-**parte funcional** —`(CASE WHEN <condición> THEN 1 END)` como última columna del índice, que vale
-`NULL` fuera de la condición, y un índice único no restringe las filas con `NULL`—. El efecto es
-el mismo en los tres, **y también la exigencia** que no se ve leyéndolo: se comprueba **por fila**
-y **no se puede diferir** —`DEFERRABLE` es de constraints, y una constraint única parcial no
-existe—.
+manera: PostgreSQL y SQL Server con un índice **parcial** (`WHERE <condición>`), y MySQL —que no
+los tiene— con una **columna generada** que vale `NULL` fuera de la condición
+(`ADD COLUMN <índice>_flag TINYINT GENERATED ALWAYS AS (CASE WHEN <condición> THEN 1 END) STORED`)
+metida en el índice como última columna, porque un índice único no restringe las filas con `NULL`.
+El efecto es el mismo en los tres, **y también la exigencia** que no se ve leyéndolo: se comprueba
+**por fila** y **no se puede diferir** —`DEFERRABLE` es de constraints, y una constraint única
+parcial no existe—.
+
+La columna se declara, y no se deja como expresión anónima dentro del índice, por una razón que
+costó una corrida: una key part sin nombre de columna es opaca a `DatabaseMetaData#getIndexInfo`, y
+con `ddl-auto: update` tumba el arranque del servicio. Está contado en la skill
+`keel-spring-database` (`references/troubleshooting.md`).
 
 La consecuencia le cae a la operación que **releva**: la que saca una fila del estado condicionado
 y mete otra en el mismo acto (el diseño las declara juntas — `draft → active` y `active → retired`
