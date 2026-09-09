@@ -43,6 +43,7 @@
 // nombre de la columna lo mide `mapping-check`, que es de quien es esa pregunta.
 
 import { partialIndexSpecs, sqlLiteral } from '../scaffold/migrations.js';
+import { partialDocumentIndexSpecs } from '../scaffold/document-indexes.js';
 
 /** Los valores con los que se pueblan las columnas de la clave. Dos juegos: la misma y otra. */
 const KEY_A = (n) => `keel_a${n}`;
@@ -237,4 +238,108 @@ export function statementsOf(appendix) {
     }
   }
   return out;
+}
+
+// ─── La rama documental ─────────────────────────────────────────────────────
+//
+// El mismo mecanismo, otro almacén y —esto es lo que cambia la forma del check— otro ARTEFACTO.
+// En relacional el índice condicionado vive en un `.sql` que el motor sabe ejecutar solo, así que
+// la rama entera se mide sin JDK. En Mongo vive en `MongoIndexConfig.java`, y renderizar aquí una
+// copia en mongosh de sus `createIndex` sería exactamente el defecto que tuvo `mongo-check` meses
+// en verde: medir una copia de sí mismo. Por eso lo que se ejecuta es la CLASE GENERADA, y por eso
+// esta rama sí necesita JDK.
+//
+// Las cuatro preguntas se conservan con sus ids —una que existiera en una rama y no en la otra es
+// una asimetría silenciosa, que es la forma exacta que tenían los ocho defectos que motivaron la
+// matriz de paridad—, pero dos cosas cambian y ninguna es cosmética:
+//
+//   El SUSTRATO desaparece. No hay DDL que montar: la colección se vacía y ya. Eso es una VENTAJA
+//   sobre la rama relacional, donde la tabla mínima no puede llevar la clave natural completa —
+//   aquí conviven los dos índices, así que `independencia` mide de verdad que el condicionado no
+//   desplazó al natural.
+//
+//   Un rechazo tiene que decir QUÉ índice lo produjo. Con los dos índices vivos sobre la misma
+//   colección, un `E11000` no distingue por sí solo al condicionado del natural, y `exclusividad`
+//   podría salir verde porque rechazó el natural —o sea sin haber medido nada—. De ahí que cada
+//   paso `reject` nombre el índice que le toca, y que los documentos varíen la clave natural
+//   donde el caso lo exige.
+
+/** Relleno de las columnas de la clave natural que el índice condicionado NO nombra. */
+const VERSION = (n) => `keel_v${n}`;
+
+/**
+ * El índice condicionado documental que esta corrida mide. Uno solo y el primero, por lo mismo
+ * que en la rama relacional: el check juzga el MECANISMO.
+ */
+export function documentIndexSubject(model) {
+  const [spec] = partialDocumentIndexSpecs(model);
+  return spec ?? null;
+}
+
+/**
+ * Un documento CRUDO —sin pasar por el mapeo— con la clave del índice condicionado, el valor de
+ * la condición y, si el caso lo pide, una clave natural propia.
+ *
+ * Que sea crudo es deliberado y es lo mismo que hace el sustrato relacional al montar su tabla
+ * mínima: deja los casos de efecto independientes de los campos obligatorios de la entidad. El
+ * único caso que SÍ pasa por el mapeo es el del literal, y va aparte porque mide otra cosa.
+ */
+function documentOf(spec, keyOf, whenValue, versionOf) {
+  const pairs = spec.paths.map((path, n) => [path, keyOf(n)]);
+  for (const path of spec.naturalKeyPaths) {
+    if (!spec.paths.includes(path)) pairs.push([path, versionOf]);
+  }
+  pairs.push([spec.partialFilter.path, whenValue]);
+  return pairs;
+}
+
+/**
+ * Las aserciones documentales, con los mismos ids que las relacionales. `expect: 'reject'` trae
+ * además el índice que tiene que producir el rechazo: sin eso, el natural podría estar contestando
+ * por el condicionado.
+ *
+ * Cada aserción empieza con la colección VACÍA —el runner la limpia entre una y otra, preservando
+ * los índices—, y eso no es higiene sino corrección: aquí la clave natural está viva, así que un
+ * documento que `exclusividad` dejó puesto haría que `historia` muriera por el índice natural. En
+ * la rama relacional el sustrato es una tabla desnuda y el problema no existe.
+ */
+export function documentAssertions(spec) {
+  const inside = spec.partialFilter.equals;
+  const outside = outsideValue(inside);
+  const natural = spec.naturalKeyName;
+  return [
+    {
+      id: 'exclusividad',
+      title: `dos documentos con la misma clave con ${spec.when.field} dentro de la condición: el segundo muere`,
+      steps: [
+        // Versiones DISTINTAS a propósito: con la misma, quien rechazaría es la clave natural y
+        // el caso saldría verde sin haber ejercitado el índice condicionado.
+        { doc: documentOf(spec, KEY_A, inside, VERSION(0)), expect: 'ok' },
+        { doc: documentOf(spec, KEY_A, inside, VERSION(1)), expect: 'reject', index: spec.name }
+      ]
+    },
+    {
+      id: 'historia',
+      title: 'tres versiones históricas con esa misma clave entran las tres',
+      // Tres y no dos, igual que en la rama relacional: con dos, un índice que restringiera las
+      // de fuera de dos en dos pasaría.
+      steps: [
+        { doc: documentOf(spec, KEY_A, outside, VERSION(0)), expect: 'ok' },
+        { doc: documentOf(spec, KEY_A, outside, VERSION(1)), expect: 'ok' },
+        { doc: documentOf(spec, KEY_A, outside, VERSION(2)), expect: 'ok' }
+      ]
+    },
+    {
+      id: 'independencia',
+      title: 'otra clave tiene la suya dentro de la condición, y la clave natural sigue restringiendo',
+      steps: [
+        { doc: documentOf(spec, KEY_B, inside, VERSION(0)), expect: 'ok' },
+        // La otra mitad, y la que se perdería sola: un índice condicionado que hubiera DESPLAZADO
+        // al natural pasaría los tres casos anteriores. Versión propia, porque lo que tiene que
+        // rechazar el paso siguiente es la clave natural REPETIDA y no la del paso de arriba.
+        ...(natural ? [{ doc: documentOf(spec, KEY_B, outside, VERSION(1)), expect: 'ok' }] : []),
+        ...(natural ? [{ doc: documentOf(spec, KEY_B, outside, VERSION(1)), expect: 'reject', index: natural }] : [])
+      ]
+    }
+  ];
 }

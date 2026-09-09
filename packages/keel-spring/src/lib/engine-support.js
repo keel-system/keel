@@ -75,7 +75,7 @@ export const NETS = {
   'mongo-check': 'npm run mongo-check — los scripts de mongosh del arnés, por la vía del arnés',
   'mapping-check': 'npm run mapping-check — el ESPEJO de persistencia: que la columna que el diseño pidió sea la que el motor creó',
   'index-check':
-    'npm run index-check — el appendix de índices condicionados, ejecutado DOS veces contra el motor: que sea idempotente y que sostenga el invariante sin prohibir las versiones históricas',
+    'npm run index-check — la unicidad CONDICIONADA, contra el motor y en sus dos ramas: en relacional el appendix .sql ejecutado dos veces; en documental el MongoIndexConfig generado, invocado dos veces desde un JUnit. Las mismas preguntas: que sea idempotente y que sostenga el invariante sin prohibir las versiones históricas',
   corrida: 'una corrida en vivo: no es determinista ni repetible en CI, así que nombra cuál',
   ninguna: 'nadie lo ejecuta'
 };
@@ -354,10 +354,17 @@ export const MECHANISMS = {
       relational: { state: 'no-aplica', net: 'ninguna', engines: [], falsified: false, why: 'su equivalente es el baseline' },
       document: {
         state: 'verificado',
-        net: 'corrida',
+        net: 'index-check',
         engines: ['mongodb'],
         falsified: true,
-        why: 'corrida notification-mailer-mongo: quitarle el .partial(...) al índice condicionado tumba cuatro escenarios de plantilla. Además el agente de calidad los verifica EN VIVO con export-indexes.sh, y su indexesTested nunca sale PENDING'
+        why:
+          'la rama documental de `index-check` ejecuta el ApplicationRunner que build escribió y comprueba que los índices QUEDEN creados, ' +
+          'dos veces —que es lo que ocurre en cada arranque— y una tercera con el índice ya presente con otra forma, donde lo que se mide no ' +
+          'es Mongo sino que el generador deje LLEGAR el fallo: un try/catch alrededor del bloque cambiaría un arranque que muere a gritos por ' +
+          'una aplicación que levanta con el invariante sin sostener, y esa permuta ya costó una corrida en la rama relacional. Antes de esto su ' +
+          'única evidencia era una corrida, no repetible en CI. Además el agente de calidad los verifica EN VIVO con export-indexes.sh dentro del ' +
+          'pipeline, y su indexesTested nunca sale PENDING. [historico] corrida notification-mailer-mongo: quitarle el .partial(...) al índice ' +
+          'condicionado tumba cuatro escenarios de plantilla'
       }
     }
   },
@@ -375,7 +382,34 @@ export const MECHANISMS = {
         falsified: true,
         why: "falsado el 2026-09-08 por `index-check`, que es lo que lo saca de depender de una corrida: quitandole al indice su clausula WHERE —o sea emitiendo la constraint unica normal, que se crea igual de bien— cae el caso `historia`, que es el que separa el invariante declarado de su CONTRARIO. [historico] ejercitado el 2026-09-07 sobre la corrida mail-rabbit, y por primera vez con el indice DE VERDAD en vigor: hasta entonces su predicado iba en minusculas (= active contra una columna que guarda ACTIVE), asi que indexaba cero filas y tapaba debajo un segundo defecto. Verificado en las dos direcciones: con el contrato de orden puesto (flushPendingWrites entre las dos escrituras) FL-TPL-001-B/-C/-D en verde y como maximo una fila ACTIVE por clave en la base; quitando SOLO esa llamada, los tres en rojo con 409 en el camino feliz. Y el gate acompana: la familia conditionalUniqueness sale OK con la llamada y KO sin ella, con el mismo sujeto. Y CON UN AGENTE DELANTE el 2026-09-07 (corrida-mail-postgres, 29 OK / 0 fallos): el agente leyo la nota del stub y puso flushPendingWrites() ENTRE las dos escrituras, el gate paso de KO a OK por el camino correcto, el indice quedo intacto con su predicado, y la base cerro con cero claves con mas de una fila ACTIVA. Es la primera vez que FL-TPL-001-B/-C/-D salen verdes con el indice EN VIGOR"
       },
-      mongodb: { state: 'verificado', net: 'corrida', falsified: true, why: 'partialFilterExpression; falsado en la corrida notification-mailer-mongo' },
+      mongodb: {
+        state: 'verificado',
+        net: 'index-check',
+        falsified: true,
+        why:
+          'partialFilterExpression, y desde el 2026-09-09 con red repetible en vez de una corrida: la rama documental de `index-check` ' +
+          'ejecuta el MongoIndexConfig GENERADO —no una redaccion suya en mongosh, que mediria una copia de si mismo— desde un JUnit ' +
+          'dentro del proyecto, sobre notification-mailer-mongo, en 8 casos medidos y 1 que no aplica (la opacidad: sin Hibernate ni ' +
+          'introspeccion JDBC no hay getIndexInfo que pueda quedarse ciego, y se dice en voz alta en vez de omitirse). Contesta las mismas ' +
+          'preguntas que la rama relacional con los MISMOS ids, y dos diferencias que no son cosmeticas: aqui la clave natural esta VIVA ' +
+          'sobre la misma coleccion, asi que cada rechazo tiene que NOMBRAR el indice que lo produjo (un E11000 a secas no distingue al ' +
+          'condicionado del natural, y exclusividad saldria verde sin medir nada), y por eso `independencia` puede ademas comprobar que el ' +
+          'condicionado no desplazo al natural, que en el sustrato desnudo de la rama relacional no se puede. ' +
+          'FALSADO TRES VECES el 2026-09-09, cada una conservando la forma: (a) quitandole el .partial(...) al indice —o sea emitiendo la ' +
+          'constraint unica normal, que se crea igual de bien— cae `historia` con el E11000 del PROPIO indice condicionado, que es el ' +
+          'invariante CONTRARIO al declarado, y arrastra `independencia` y el caso del redespliegue; (b) haciendo que storedWhenValue ' +
+          'devuelva el literal del diseno en minusculas cae el caso del LITERAL, y SOLO ese; (c) envolviendo el bloque de createIndex en un ' +
+          'try/catch que traga cae el caso del REDESPLIEGUE, y solo ese. ' +
+          'DOS lecciones de esa medicion, y las dos son sobre el check: (1) la prediccion decia que (b) tumbaria tambien `exclusividad`, y ' +
+          'es FALSO y esta bien que lo sea — los casos de efecto insertan BSON crudo con el valor que el propio filtro nombra, asi que miden ' +
+          'el EFECTO del indice en sus propios terminos; que esos terminos sean los del almacen es otra pregunta y tiene su caso. Es el mismo ' +
+          'reparto que en relacional, donde el sustrato usa las columnas del spec y el nombre de la columna lo mide mapping-check. (2) en su ' +
+          'primera version el caso del literal construia el documento con `spec.partialFilter.equals`, o sea con la mitad que tenia que ' +
+          'verificar: se media a si mismo. Lo destapo el sabotaje (b), que en vez de poner el caso en rojo dejo la CLASE sin compilar y mato ' +
+          'el runner con exit 2 —«el check no pudo correr», que no es lo mismo que «el generador esta mal»—. Hoy la constante Java sale del ' +
+          'ENUM del diseno, que es la via independiente: es literalmente lo que name() devuelve, o sea lo que Spring Data escribe. ' +
+          '[historico] falsado antes en la corrida notification-mailer-mongo quitandole el .partial(...)'
+      },
       sqlserver: { state: 'razonado', net: 'ninguna', falsified: false, why: 'tiene índice filtrado y se emite, pero ninguna corrida ha usado SQL Server' },
       mysql: {
         state: 'verificado',

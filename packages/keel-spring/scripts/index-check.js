@@ -42,17 +42,31 @@
 //   node packages/keel-spring/scripts/index-check.js [fixture] [--database=<motor>] [--keep]
 //   npm run index-check --workspace packages/keel-spring
 //
-// Necesita podman o docker. No necesita JDK.
+// Necesita podman o docker. La rama RELACIONAL no necesita JDK: el appendix es un `.sql` que el
+// motor sabe ejecutar solo. La DOCUMENTAL sí, y no es un descuido — ahí el índice no vive en un
+// fichero de datos sino en `MongoIndexConfig.java`, y la única forma de no medir una copia de sí
+// mismo es ejecutar la clase generada. Ver src/lib/document-index-probes.js.
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import YAML from 'yaml';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadService } from 'keel-core';
 import { tmpDir } from '../test/helpers/tmp.js';
 import { buildModel } from '../src/lib/model.js';
 import { scaffoldService, resolveStack } from '../src/scaffold/index.js';
-import { indexSubject, substrateSql, assertions, statementsOf, opacityOf } from '../src/lib/index-probes.js';
+import {
+  indexSubject,
+  substrateSql,
+  assertions,
+  statementsOf,
+  opacityOf,
+  documentIndexSubject,
+  documentAssertions
+} from '../src/lib/index-probes.js';
+import { documentIndexTestClass, CLASS_NAME, LITERAL_CASE } from '../src/lib/document-index-probes.js';
 import { DATABASES, databaseHealthProbe } from '../src/lib/stack-catalog.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -174,11 +188,9 @@ function verdictStamp() {
 function prepare() {
   const service = loadService(path.join(fixturesDir, fixture));
   if (service.errors.length > 0) throw new Error(`la fixture '${fixture}' no carga: ${service.errors.join(' | ')}`);
-  if (service.layers.persistence?.default?.model === 'document') {
-    // La rama documental tiene su propio mecanismo (`partialFilterExpression` en
-    // MongoIndexConfig) y su propia red: no hay appendix de SQL que ejecutar aquí.
-    throw new Error(`la fixture '${fixture}' es documental: su índice condicionado lo mide mongo-check`);
-  }
+  // El modelo de persistencia lo declara el DISEÑO, así que el motor sale de él y no del
+  // argumento: pedir `--database=postgresql` sobre una fixture documental no significa nada.
+  if ((service.layers.persistence?.default?.model ?? 'relational') === 'document') return prepareDocument(service);
 
   const stack = resolveStack({ database }, service.layers, service.manifest);
   const model = buildModel({ manifest: service.manifest, layers: service.layers, stack });
@@ -214,6 +226,8 @@ function prepare() {
   const argv = entry.cliQueryArgv({ user: entry.user ? entry.user(dbName) : '', pass: entry.password ?? '', db: dbName });
 
   return {
+    kind: 'relational',
+    engine: database,
     projectDir,
     spec,
     appendix,
@@ -221,8 +235,167 @@ function prepare() {
     statements,
     argv,
     container: `${service.manifest.service.name}-db`,
-    probe: databaseHealthProbe(database, dbName)
+    probe: databaseHealthProbe(database, dbName),
+    headline: `${statements.length} sentencia(s) en el appendix`
   };
+}
+
+/**
+ * La rama DOCUMENTAL. Cambia el artefacto —una clase Java en vez de un `.sql`— y con él cambia
+ * todo lo demás: hay que compilar, así que hace falta JDK, y lo que se ejecuta es el
+ * `ApplicationRunner` que build escribió, no una redacción suya en mongosh.
+ *
+ * El motor NO sale del argumento: lo declara el diseño. `--database=` se ignora aquí.
+ */
+function prepareDocument(service) {
+  if (run('java', ['-version']).status !== 0) {
+    throw new Error(
+      'la rama documental compila y ejecuta un JUnit dentro del proyecto generado, y no hay java en el PATH'
+    );
+  }
+
+  const stack = resolveStack({ database: 'mongodb' }, service.layers, service.manifest);
+  const model = buildModel({ manifest: service.manifest, layers: service.layers, stack });
+  model.stack = stack;
+  const spec = documentIndexSubject(model);
+  if (!spec) {
+    throw new Error(
+      `la fixture '${fixture}' no declara ninguna unicidad condicionada (indexes con 'when'): no hay índice que medir`
+    );
+  }
+
+  // Con `--keep` la promesa es que el proyecto SIGA ahí, así que no puede colgar de un directorio
+  // que el propio proceso barre al salir.
+  const workspace = keep ? fs.mkdtempSync(path.join(os.tmpdir(), 'keel-index-keep-')) : tmpDir('keel-index-check-');
+  scaffoldService({ manifest: service.manifest, layers: service.layers, workspace, force: true, stack });
+  const projectName = fs
+    .readdirSync(path.join(workspace, 'services'), { withFileTypes: true })
+    .find((entry) => entry.isDirectory()).name;
+  const projectDir = path.join(workspace, 'services', projectName);
+
+  // La conexión sale del fichero que build EMITIÓ, no de constantes de aquí: es la misma que usa
+  // el proyecto contra su propia infraestructura, y si build la cambia este runner la sigue.
+  const db = YAML.parse(fs.readFileSync(path.join(projectDir, 'src/main/resources/parameters/local/db.yaml'), 'utf8'));
+  const datasource = { uri: db?.spring?.data?.mongodb?.uri };
+
+  const packages = resolvePackages(projectDir, {
+    config: 'MongoIndexConfig.java',
+    entities: `${spec.documentClass}.java`,
+    ...(spec.whenField?.kind === 'enum' ? { enums: `${spec.whenField.javaType}.java` } : {})
+  });
+
+  const clase = documentIndexTestClass(model, spec, { datasource, packages });
+  const testFile = path.join(projectDir, 'src/test/java', ...clase.package.split('.'), `${clase.className}.java`);
+  fs.mkdirSync(path.dirname(testFile), { recursive: true });
+  fs.writeFileSync(testFile, clase.content, 'utf8');
+
+  const dbName = service.manifest.service.name.replaceAll('-', '_');
+  return {
+    kind: 'document',
+    engine: 'mongodb',
+    projectDir,
+    spec,
+    clase,
+    container: `${service.manifest.service.name}-db`,
+    probe: databaseHealthProbe('mongodb', dbName),
+    headline: `${spec.collection} · MongoIndexConfig con partialFilterExpression`
+  };
+}
+
+/** Busca cada clase en el árbol generado y devuelve su paquete, leído de su propia cabecera. */
+function resolvePackages(projectDir, wanted) {
+  const root = path.join(projectDir, 'src/main/java');
+  const walk = (dir) =>
+    fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const full = path.join(dir, entry.name);
+      return entry.isDirectory() ? walk(full) : [full];
+    });
+  const files = walk(root);
+  const packages = {};
+  for (const [key, basename] of Object.entries(wanted)) {
+    const file = files.find((candidate) => path.basename(candidate) === basename);
+    if (!file) throw new Error(`index-check: no encuentro ${basename} en el proyecto generado`);
+    const declared = /^package\s+([\w.]+);/m.exec(fs.readFileSync(file, 'utf8'));
+    if (!declared) throw new Error(`index-check: ${basename} no declara paquete`);
+    packages[key] = declared[1];
+  }
+  return packages;
+}
+
+const decodeEntities = (text) =>
+  text
+    .replaceAll('&lt;', '<')
+    .replaceAll('&gt;', '>')
+    .replaceAll('&quot;', '"')
+    .replaceAll('&#10;', ' ')
+    .replaceAll('&apos;', "'")
+    .replaceAll('&amp;', '&');
+
+/**
+ * Los nombres con los que se imprime cada caso documental.
+ *
+ * Los ids de EFECTO son los mismos que en la rama relacional y salen de la misma función: uno que
+ * existiera en una rama y no en la otra sería una asimetría silenciosa, que es la forma exacta que
+ * tenían los ocho defectos que motivaron la matriz de paridad.
+ */
+function documentCaseNames(spec) {
+  const names = {
+    seMideLaBaseDelContenedorYNoUnMongodEmbebido: 'sustrato · se mide la base del contenedor, no un mongod embebido',
+    idempotenciaPasada1: 'idempotencia · pasada 1',
+    idempotenciaPasada2: 'idempotencia · pasada 2',
+    idempotenciaRedespliegue: 'idempotencia · con otra forma ya creada, el fallo llega y nombra el índice',
+    [LITERAL_CASE]: `literal · el filtro compara ${spec.partialFilter.path} con ${JSON.stringify(
+      spec.partialFilter.equals
+    )} y eso es lo que el mapeo guarda`
+  };
+  for (const assertion of documentAssertions(spec)) names[assertion.id] = `${assertion.id} · ${assertion.title}`;
+  return names;
+}
+
+/**
+ * Ejecuta el JUnit dentro del proyecto generado y traduce su XML a los `cases` del veredicto.
+ *
+ * Sin XML no hay medición: eso es fatal (exit 2) y no «cero fallos», que es como se cuela una
+ * suite que no llegó a compilar.
+ */
+function measureDocument(prepared) {
+  const gradle = run('sh', ['gradlew', 'test', '--tests', `*${CLASS_NAME}`, '--console=plain', '--no-daemon'], {
+    cwd: prepared.projectDir
+  });
+  const dir = path.join(prepared.projectDir, 'build/test-results/test');
+  const file = fs.existsSync(dir)
+    ? fs.readdirSync(dir).find((name) => name.includes(CLASS_NAME) && name.endsWith('.xml'))
+    : null;
+  if (!file) {
+    const log = `${gradle.stdout}${gradle.stderr}`.trim().split('\n').slice(-40).join('\n');
+    throw new Error(`la suite no llegó a ejecutarse:\n${log}`);
+  }
+
+  const names = documentCaseNames(prepared.spec);
+  const xml = fs.readFileSync(path.join(dir, file), 'utf8');
+  const re = /<testcase[^>]*\bname="([^"]+)"[^>]*?(\/>|>([\s\S]*?)<\/testcase>)/g;
+  const cases = [];
+  let match;
+  while ((match = re.exec(xml)) !== null) {
+    const method = match[1].replace(/\(\)$/, '');
+    const failure = /<(failure|error)[^>]*message="([^"]*)"/.exec(match[3] ?? '');
+    cases.push({
+      name: names[method] ?? method,
+      ok: !failure,
+      detail: failure ? decodeEntities(failure[2]).split('\n')[0].slice(0, 240) : ''
+    });
+  }
+
+  // La opacidad no tiene gemelo aquí y se dice en voz alta en vez de omitirse: un caso ausente no
+  // distingue «no aplica» de «nadie lo miró». Sin Hibernate ni introspección JDBC no hay
+  // `DatabaseMetaData#getIndexInfo` que pueda quedarse ciego ante una key part sin nombre.
+  cases.push({
+    name: 'opacidad · no aplica en mongodb: no hay Hibernate ni introspección JDBC que pueda quedarse ciega',
+    ok: true,
+    skipped: true,
+    detail: ''
+  });
+  return cases;
 }
 
 // ─── Entrada ─────────────────────────────────────────────────────────────────
@@ -241,8 +414,8 @@ try {
   process.exit(2);
 }
 
-console.log(`index-check · ${fixture} (${database}) · ${runtimeInfo.runtime}`);
-console.log(`  índice: ${prepared.spec.name} · ${prepared.statements.length} sentencia(s) en el appendix\n`);
+console.log(`index-check · ${fixture} (${prepared.engine}) · ${runtimeInfo.runtime}`);
+console.log(`  índice: ${prepared.spec.name} · ${prepared.headline}\n`);
 
 process.stdout.write('  levantando el motor… ');
 const up = composeUp(runtimeInfo.frontends, prepared.projectDir);
@@ -257,7 +430,14 @@ let fatal = null;
 
 try {
   if (!waitForDatabase(runtimeInfo.runtime, prepared.container, prepared.probe)) {
-    fatal = `${database} no aceptó conexiones en ${prepared.probe.budgetSeconds} s`;
+    fatal = `${prepared.engine} no aceptó conexiones en ${prepared.probe.budgetSeconds} s`;
+  } else if (prepared.kind === 'document') {
+    // La rama documental no manda sentencias: compila y ejecuta el JUnit que ejercita la clase
+    // generada. Las preguntas son las mismas y los ids de efecto también; lo que cambia es quién
+    // las contesta.
+    process.stdout.write('  compilando y ejecutando el JUnit… ');
+    cases.push(...measureDocument(prepared));
+    console.log('OK');
   } else {
     const sql = makeSql({ runtime: runtimeInfo.runtime, container: prepared.container, argv: prepared.argv });
 
@@ -364,7 +544,11 @@ console.log(
 
 fs.writeFileSync(
   path.join(here, '..', 'index-check.json'),
-  `${JSON.stringify({ ...verdictStamp(), fixture, database, index: prepared.spec.name, fatal, cases }, null, 2)}\n`
+  `${JSON.stringify(
+    { ...verdictStamp(), fixture, database: prepared.engine, model: prepared.kind, index: prepared.spec.name, fatal, cases },
+    null,
+    2
+  )}\n`
 );
 
 if (fatal) process.exit(2);

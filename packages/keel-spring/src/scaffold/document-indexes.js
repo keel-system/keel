@@ -17,7 +17,13 @@
 
 import { snakeCase } from '../lib/naming.js';
 import { javaFile, javaPath, subPackage } from './render.js';
-import { persistedMembers, uniqueFields, indexName, storedWhenValue } from './persistence-members.js';
+import {
+  persistedMembers,
+  uniqueFields,
+  indexName,
+  storedWhenValue,
+  partialUniqueIndexes
+} from './persistence-members.js';
 import { usesOutbox } from './outbox.js';
 import { usesIdempotency } from './idempotency.js';
 import { usesHttpIdempotency } from './http-idempotency.js';
@@ -104,6 +110,54 @@ export function indexSpecs(model, entity, warnings) {
         : null,
       source: 'indexes'
     });
+  }
+  return specs;
+}
+
+/**
+ * Los índices condicionados del diseño, ya resueltos a colección, rutas y filtro parcial.
+ *
+ * Es el gemelo de `partialIndexSpecs()` de migrations.js, y existe por lo mismo: lo consume
+ * `index-probes.js` para levantar el sustrato sobre el que mide el índice. Derivar las rutas
+ * por su cuenta sería medir una copia de sí mismo — el defecto que tuvo `mongo-check` meses en
+ * verde, envolviendo cada consulta en su propio `print(` y comprobando así el predicado pero
+ * jamás el transporte.
+ *
+ * La forma se mantiene ALINEADA con la del spec relacional (`entity`, `name`, y el valor
+ * almacenado aparte del literal del diseño) para que las dos ramas puedan compartir los casos
+ * de efecto: un id que exista en una rama y no en la otra es una asimetría silenciosa.
+ */
+export function partialDocumentIndexSpecs(model) {
+  const specs = [];
+  for (const entity of model.entities.filter((e) => e.persisted)) {
+    const members = persistedMembers(model, entity);
+    for (const index of partialUniqueIndexes(entity)) {
+      const paths = index.fields.flatMap((field) => documentPathsFor(model, entity, members, field, model.warnings));
+      const [whenPath] = documentPathsFor(model, entity, members, index.when.field, model.warnings);
+      specs.push({
+        entity: entity.name,
+        // La clase del espejo, que necesita el caso que SÍ pasa por el mapeo: los demás
+        // insertan BSON crudo y no la tocan.
+        documentClass: `${entity.name}Document`,
+        collection: entity.collectionName,
+        name: indexName(entity, index),
+        unique: index.unique,
+        paths,
+        // La clave natural completa, que es contra la que se mide `independencia`: el índice
+        // condicionado no puede haberla desplazado.
+        naturalKeyPaths: (entity.naturalKey ?? []).flatMap((field) =>
+          documentPathsFor(model, entity, members, field, model.warnings)
+        ),
+        naturalKeyName: entity.naturalKey?.length > 0 ? `uk_${entity.collectionName}_natural` : null,
+        partialFilter: { path: whenPath, equals: storedWhenValue(model, entity, index.when) },
+        // El campo de la condición tal y como lo conoce el modelo. Lo necesita el único caso que
+        // pasa por el MAPEO —el que comprueba que el literal del filtro casa con lo que Spring
+        // Data guarda—: sin saber si es un enum no se puede construir el documento real.
+        whenField: (entity.fields ?? []).find((field) => field.name === index.when.field) ?? null,
+        fields: index.fields,
+        when: index.when
+      });
+    }
   }
   return specs;
 }
