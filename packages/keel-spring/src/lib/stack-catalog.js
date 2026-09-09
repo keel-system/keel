@@ -163,6 +163,9 @@ export const DATABASES = {
     // llamada a un método que no existe y tumba la compilación del source set entero. Pasó.
     // Con dos trozos de texto no hay forma de confundir los dos lenguajes.
     uuidLiteral: { prefix: "UUID_TO_BIN('", suffix: "')" },
+    // Su collation por defecto (`utf8mb4_0900_ai_ci`) PLIEGA mayúsculas: medido, un índice
+    // único rechaza 'acme-1' como duplicado de 'ACME-1'. Ver § Collation de las columnas únicas.
+    caseSensitiveCollation: 'utf8mb4_bin',
     composeService: (db) => ({
       image: 'mysql:8.0',
       environment: {
@@ -191,6 +194,10 @@ export const DATABASES = {
     // fallaría: devolvería vacío—. Cambiar la imagen obliga a volver a medir, y ese comando es
     // exactamente lo que lo dice.
     uuidLiteral: { prefix: "'", suffix: "'" },
+    // Misma familia que MySQL: su default también pliega mayúsculas. RAZONADO, no medido —nadie
+    // ha arrancado MariaDB en este repo—. Se elige `utf8mb4_bin` y no una `uca1400_..._cs` porque
+    // aquella existe en las dos familias y estas solo desde 10.10.
+    caseSensitiveCollation: 'utf8mb4_bin',
     kind: 'relational',
     gradleDependencies: ["runtimeOnly 'org.mariadb.jdbc:mariadb-java-client'"],
     flywayDependencies: [FLYWAY_CORE, "runtimeOnly 'org.flywaydb:flyway-mysql'"],
@@ -242,6 +249,10 @@ export const DATABASES = {
     // `uniqueidentifier` acepta el literal en texto con conversión implícita, igual que el
     // `uuid` de PostgreSQL y por el mismo motivo: es un tipo nativo, no bytes.
     uuidLiteral: { prefix: "'", suffix: "'" },
+    // Su collation por defecto de servidor (`SQL_Latin1_General_CP1_CI_AS`) también pliega —el
+    // `CI` es literalmente «case-insensitive»—. RAZONADO, no medido: nadie ha arrancado SQL Server
+    // en este repo. `_CS_AS` es su forma de decir sensible a caja y a acentos.
+    caseSensitiveCollation: 'Latin1_General_100_CS_AS',
     kind: 'relational',
     gradleDependencies: ["runtimeOnly 'com.microsoft.sqlserver:mssql-jdbc'"],
     flywayDependencies: [FLYWAY_CORE, "runtimeOnly 'org.flywaydb:flyway-sqlserver'"],
@@ -1081,6 +1092,37 @@ export const HEALTHCHECKS = {
  * un deadline fijo de 90 s se rendiría siempre — culpando al motor de la impaciencia de
  * quien pregunta.
  */
+// ─── Collation de las columnas únicas ───────────────────────────────────────
+//
+// La unicidad de una columna de texto **no significa lo mismo en todos los motores**, y el diseño
+// no tiene forma de decir cuál quiere. Medido el 2026-09-09 con las dos bases en pie:
+//
+//   MySQL 8   `utf8mb4_0900_ai_ci` por defecto → un índice único RECHAZA 'acme-1' como duplicado
+//             de 'ACME-1'. Pliega.
+//   PostgreSQL `en_US.utf8` → las dos filas conviven. No pliega.
+//
+// O sea que el mismo diseño produce dos garantías distintas, y en silencio: nada falla, nada se
+// registra, y la fila que el diseño consideraba nueva simplemente no entra. Lo destapó la corrida
+// `catalog` sobre MySQL, donde el agente tuvo que escribir la collation a mano.
+//
+// Se resuelve forzando una collation sensible donde el motor pliega, y no avisando: la promesa del
+// MVP es que el mismo diseño produzca un servidor equivalente en los tres, y hoy el diseño
+// **tampoco puede pedir lo contrario**, así que forzar no le quita ninguna opción expresable.
+//
+// **Lo que NO se promete es el ORDEN.** La collation decide también cómo ordena `ORDER BY`, y ahí
+// no hay paridad que prometer: medido, `utf8mb4_bin` ordena por codepoint (`ACME-1, Bravo, acme-1`)
+// y `utf8mb4_0900_as_cs` lingüísticamente (`acme-1, ACME-1, alfa, Bravo`), mientras que del lado de
+// PostgreSQL depende del locale de la base, que elige quien despliega. Se elige `_bin` porque lo
+// que está en juego es la IGUALDAD —que es la garantía que el diseño declaró al pedir unicidad—,
+// no la ordenación.
+/**
+ * La cláusula de collation con la que ESTE motor hace sensible a mayúsculas una columna, o `null`
+ * si ya lo es por defecto (PostgreSQL, Oracle) o si no aplica (Mongo).
+ */
+export function caseSensitiveCollationFor(database) {
+  return DATABASES[database]?.caseSensitiveCollation ?? null;
+}
+
 export function databaseHealthProbe(database, dbName) {
   const entry = DATABASES[database];
   // El del propio servicio manda: lo traen sqlserver y mongodb, y el de Mongo además INICIA

@@ -122,7 +122,15 @@ flujo.
 
 ### FL-PRD-002: consulta pública por slug de categoría, caché e invalidación
 
-**Given**: la categoría `c1` existe (slug `tools`) y la categoría `c2` existe (slug `garden`).
+**Given**: la categoría `c1` existe (slug `tools`) y la categoría `c2` existe (slug `garden`);
+`pricing` y `legacy-erp` contestan `200` con un cuerpo válido
+(`stubFor("GET", "/prices/.*", 200, …)` y `stubFor("GET", "/costs/.*", 200, …)`).
+
+> El stub de `pricing` **no es decorado**: `getProductBySlug` declara el need on-demand
+> `currentPrice`, cuyo `onUnavailable` es `lastKnown` con una ventana de 900 s y `PRICE_UNAVAILABLE`
+> como desenlace. Con la caché fría y el proveedor mudo, `503` es la conducta que el diseño pide —
+> así que sin este stub estos escenarios miden el precio, no la lectura. Lo destapó la corrida
+> `catalog` sobre MySQL, donde bloqueó cinco flujos.
 
 #### FL-PRD-002-A: preparación
 
@@ -460,7 +468,10 @@ hacer— aunque no cuente para la ventana del circuito: que nos rechacen no es q
 ### FL-IMG-001: subida y borrado de imágenes en el bucket público
 
 **Given**: la categoría `c1` existe; el bucket `productImages` es público, admite `image/png` e
-`image/jpeg` y tiene un máximo de 5 MB.
+`image/jpeg` y tiene un máximo de 5 MB; `pricing` y `legacy-erp` contestan `200` con un cuerpo
+válido (`stubFor("GET", "/prices/.*", 200, …)` y `stubFor("GET", "/costs/.*", 200, …)`), porque los
+`Then` de este flujo comprueban el estado por `getProductBySlug` y esa lectura depende de los dos
+`need` on-demand (ver la nota de FL-PRD-002).
 
 #### FL-IMG-001-A: preparación
 

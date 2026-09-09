@@ -191,7 +191,16 @@ export function inheritedTypePattern(field, resolved) {
  * Anotaciones JPA de columna para un campo de entidad persistida.
  * Devuelve una lista (puede incluir @Enumerated además de @Column).
  */
-export function columnAnnotations(fieldName, field, resolved) {
+/**
+ * @param {object} [opts]
+ * @param {string|null} [opts.collation] Cláusula de collation con la que este motor hace la columna
+ *   sensible a mayúsculas. Solo llega con valor cuando el campo participa en una constraint ÚNICA y
+ *   el motor pliega por defecto (ver `caseSensitiveCollationFor` en stack-catalog.js). Va aquí y no
+ *   en el renderizador porque `columnDefinition` SUSTITUYE al tipo entero de la columna: compuesto
+ *   fuera, la `length` del diseño se quedaría fuera del DDL — el mismo defecto que ya costó un
+ *   `numeric(38,2)` en vez de la escala declarada.
+ */
+export function columnAnnotations(fieldName, field, resolved, { collation = null } = {}) {
   const annotations = [];
   const attrs = [`name = "${quoteIdentifier(snakeCase(fieldName))}"`];
   const constraints = { ...resolved.constraints, ...(field.constraints ?? {}) };
@@ -206,8 +215,19 @@ export function columnAnnotations(fieldName, field, resolved) {
   // reconoce el conflicto: un `409 CODE_ALREADY_EXISTS` degradado a error genérico, que es
   // justo el caso que más importa porque solo aparece en la carrera.
   if (field.id) attrs.push('updatable = false');
-  if (resolved.base === 'text') attrs.push('columnDefinition = "text"');
-  if (constraints.maxLength != null && resolved.javaType === 'String' && resolved.base !== 'text') {
+
+  // La collation solo tiene sentido sobre texto, y se emite DENTRO del columnDefinition porque
+  // este sustituye al tipo: emitirlo junto a `length = N` dejaría la cota del diseño fuera del
+  // DDL y la columna saldría con el ancho por defecto del dialecto. De ahí que las tres ramas
+  // —texto largo, texto acotado y texto sin cota— compongan el tipo entero cuando hay collation.
+  const collatedText = collation && (resolved.javaType === 'String' || resolved.base === 'text');
+  if (resolved.base === 'text') {
+    attrs.push(collatedText ? `columnDefinition = "text collate ${collation}"` : 'columnDefinition = "text"');
+  } else if (collatedText) {
+    // Sin `maxLength` el diseño no acotó, así que se conserva el ancho que Hibernate habría
+    // puesto (255): la collation no es excusa para estrechar una columna que nadie acotó.
+    attrs.push(`columnDefinition = "varchar(${constraints.maxLength ?? 255}) collate ${collation}"`);
+  } else if (constraints.maxLength != null && resolved.javaType === 'String') {
     attrs.push(`length = ${constraints.maxLength}`);
   }
   if (resolved.base === 'decimal' && constraints.scale != null) {

@@ -90,6 +90,28 @@ Antes de tocar tipos de columna del dialecto, lee `references/dialects/<database
 - **Texto/binario grande**: `@Lob` (o el `columnDefinition` del dialecto) más allá
   del `text` que build ya cubre con `columnDefinition = "text"`.
 
+### La unicidad de una columna de texto ya la resuelve `build` — no la toques
+
+Esto es lo contrario de la sección de abajo, y conviene no confundirlas: allí el diseño **pide**
+ignorar mayúsculas; aquí no ha pedido nada y el motor decide por su cuenta.
+
+La collation por defecto de MySQL y MariaDB (`utf8mb4_0900_ai_ci`) y la de servidor de SQL Server
+(`SQL_Latin1_General_CP1_CI_AS`) **pliegan la caja**: un índice único rechaza `acme-1` como
+duplicado de `ACME-1`. PostgreSQL y Oracle no. O sea que el mismo diseño produciría dos garantías
+distintas según el motor, y en silencio — nada falla, nada se registra, y la fila que el diseño
+consideraba nueva no entra.
+
+**`build` ya lo cierra**: toda columna de texto que participa en una constraint única sale con su
+collation sensible dentro del `columnDefinition`, con la cota del diseño incluida. Si te encuentras
+una `@Column` así, **no es una rareza que haya que limpiar** — quitarla cambia la garantía.
+
+Y al revés: **no la escribas tú**. Si crees que falta, es un defecto del generador y va al
+`INFORME-GENERACION.md`; añadirla a mano deja el proyecto distinto de lo que `build` regenera.
+
+Ojo con `columnDefinition`: **sustituye al tipo entero**, así que lleva dentro el `varchar(N)` con
+la cota del diseño. Nunca lo acompañes de un `length = N` — serían dos fuentes para el mismo dato y
+la que gana es la del `columnDefinition`.
+
 ### Búsqueda que ignora mayúsculas y acentos
 
 Cuando el diseño declara que una búsqueda "ignora mayúsculas y acentos", **es

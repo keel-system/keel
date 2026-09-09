@@ -289,6 +289,33 @@ La regla completa, entonces:
 - Cualquier otra cosa que no esté en ninguno de los dos sitios → `designGap`. El catálogo es una
   lista **cerrada**; no se amplía sobre la marcha.
 
+### Qué significa «único» en una columna de texto, según el motor
+
+Una constraint única sobre texto **no da la misma garantía en todos los motores**, y el diseño no
+tiene forma de decir cuál quiere: MySQL y MariaDB (`utf8mb4_0900_ai_ci`) y SQL Server
+(`..._CP1_CI_AS`) **pliegan la caja** —un índice único rechaza `acme-1` como duplicado de
+`ACME-1`—, mientras que PostgreSQL y Oracle la distinguen.
+
+`build` lo iguala: toda columna de texto que participa en una constraint única sale, en los motores
+que pliegan, con su collation sensible **dentro del `columnDefinition`**, con la cota del diseño
+incluida:
+
+```java
+@Column(name = "sku", nullable = false, columnDefinition = "varchar(20) collate utf8mb4_bin")
+```
+
+Dos consecuencias para quien escribe código sobre esto:
+
+- **No la quites ni la añadas a mano.** Quitarla cambia la garantía; añadirla donde build no la puso
+  deja el proyecto distinto de lo que `build` regenera. Si crees que falta, es del generador y va al
+  `INFORME-GENERACION.md`.
+- **`columnDefinition` sustituye al tipo entero**, así que nunca lo acompañes de un `length = N`:
+  serían dos fuentes para el mismo dato, y la que llega al DDL es la del `columnDefinition`.
+
+Lo que esto **no** promete es el ORDEN: la collation decide también cómo ordena `ORDER BY`, y del
+lado de PostgreSQL eso depende del locale de la base, que elige quien despliega. Lo que se iguala
+es la IGUALDAD, que es la garantía que el diseño declaró al pedir unicidad.
+
 ### Ordenar por un campo con columna normalizada
 
 Cuando el diseño dice que un texto se compara o se ordena **ignorando mayúsculas y

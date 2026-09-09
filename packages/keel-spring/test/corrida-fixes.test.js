@@ -1919,3 +1919,49 @@ test('las dos mitades del appendix van guardadas, y ninguna sentencia lleva un ;
   assert.equal(cuerpo.filter((l) => l.startsWith('PREPARE ')).length, 2, 'una guarda por mitad');
 });
 
+
+// ─── Corrida `catalog` sobre MySQL: la unicidad que el motor pliega ──────────
+//
+// La unicidad de una columna de texto NO significa lo mismo en todos los motores, y el diseño no
+// tiene forma de decir cuál quiere. Medido el 2026-09-09 con las dos bases en pie: MySQL 8
+// (`utf8mb4_0900_ai_ci`) RECHAZA 'acme-1' como duplicado de 'ACME-1'; PostgreSQL (`en_US.utf8`)
+// deja convivir las dos filas. O sea que el mismo diseño produce dos garantías distintas, y en
+// silencio — nada falla, nada se registra, y la fila que el diseño consideraba nueva no entra.
+//
+// Lo destapó la corrida `catalog`, donde el agente tuvo que escribir la collation a mano.
+
+test('en un motor que pliega mayúsculas, la columna ÚNICA sale con collation sensible', () => {
+  const mysql = project('product-catalog', { ...MYSQL, broker: null }).file('ProductJpa.java');
+  // Se afirma sobre la LÍNEA de la columna y no con un `[^)]*`: el tipo lleva paréntesis
+  // (`varchar(8)`), así que esa clase negada corta antes de llegar a la collation.
+  const sku = mysql.split('\n').find((line) => line.includes('name = "sku"'));
+  assert.ok(sku, 'no se emite la columna sku');
+  assert.match(sku, /collate utf8mb4_bin/);
+});
+
+test('y la cota del diseño viaja DENTRO del columnDefinition, que sustituye al tipo', () => {
+  // La trampa que ya costó un `numeric(38,2)` en vez de la escala declarada: `columnDefinition`
+  // reemplaza el tipo entero, así que emitirlo junto a `length = N` deja la cota fuera del DDL y
+  // la columna sale con el ancho por defecto del dialecto.
+  const mysql = project('product-catalog', { ...MYSQL, broker: null }).file('ProductJpa.java');
+  assert.match(mysql, /columnDefinition = "varchar\(8\) collate utf8mb4_bin"/);
+  assert.ok(!/varchar\(255\) collate/.test(mysql), 'la columna se ensanchó: la cota del diseño se perdió');
+  // Y no puede quedar el `length` al lado: serían dos fuentes para el mismo dato.
+  const sku = mysql.split('\n').find((line) => line.includes('name = "sku"'));
+  assert.ok(!/length =/.test(sku), 'length y columnDefinition juntos: uno de los dos miente');
+});
+
+test('solo las columnas ÚNICAS la reciben, no toda columna de texto', () => {
+  // Forzar collation binaria en un campo descriptivo no cambia ninguna garantía y ensancharía el
+  // diff sin motivo. `name` no participa en ninguna constraint única.
+  const mysql = project('product-catalog', { ...MYSQL, broker: null }).file('ProductJpa.java');
+  assert.match(mysql, /name = "name", nullable = false, length = 120/);
+});
+
+test('y el motor que ya distingue no recibe nada', () => {
+  // PostgreSQL y Oracle son sensibles por defecto: emitirles collation sería ruido, y encima
+  // cambiaría su ordenación sin que nadie lo haya pedido.
+  const postgres = project('product-catalog', { ...MYSQL, database: 'postgresql', broker: null }).file('ProductJpa.java');
+  assert.match(postgres, /name = "sku", nullable = false, length = 8/);
+  assert.ok(!postgres.includes('collate'), 'PostgreSQL no necesita collation: ya distingue');
+});

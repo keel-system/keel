@@ -86,6 +86,23 @@ export function mappingSubject(model) {
 }
 
 /**
+ * El campo de TEXTO que participa en una constraint única de esta entidad, o `null`.
+ *
+ * Es el sujeto del segundo caso relacional —la SENSIBILIDAD a mayúsculas—, que no es el mismo que
+ * el de la cota: aquél mide el ancho de la columna y este mide qué significa «único» en ella. Puede
+ * coincidir (en `product-catalog` los dos son `sku`) y puede no haberlo: si la clave única de la
+ * entidad es un UUID —`stock-reservation`—, no hay caja que distinguir y el caso no se emite.
+ */
+export function uniqueTextField(entity) {
+  const enClave = new Set(entity.naturalKey ?? []);
+  return (
+    (entity.fields ?? []).find(
+      (field) => field.javaType === 'String' && !field.list && !field.isId && (field.unique || enClave.has(field.name))
+    ) ?? null
+  );
+}
+
+/**
  * Los tipos que la siembra compartida sabe fabricar. La lista es la de `literalFor` en
  * claim-probes.js, y se comprueba aquí en vez de dejar que falle el compilador porque el mensaje
  * de javac ("cannot find symbol: Money") no dice lo que pasa: que esta fixture no sirve de sujeto.
@@ -130,6 +147,25 @@ const seedable = (model, entity) => {
  * La expectativa (el nombre almacenado) sale del mapeo; lo que se MIDE es el `Update` del reclamo.
  * Son dos caminos distintos, que es lo que hace que la comparación signifique algo.
  */
+/**
+ * El sujeto del caso de SENSIBILIDAD: una raíz sembrable con un campo de texto en constraint única.
+ *
+ * Va por su cuenta y no colgado del sujeto de la cota, porque medido no coinciden: en
+ * `product-catalog` la única raíz con `sku` único lleva un `Money` obligatorio y `seedable` la
+ * descarta; en `stock-reservation` la cota está en `Reservation.sku` pero su clave única es un
+ * UUID. Acoplarlos habría dejado el caso sin emitirse en las dos fixtures que la red ya corre.
+ */
+export function collationSubject(model) {
+  if (model.persistenceKind === 'document') return null;
+  for (const entity of model.entities ?? []) {
+    if (!entity.persisted || !entity.isAggregateRoot) continue;
+    if (!seedable(model, entity)) continue;
+    const field = uniqueTextField(entity);
+    if (field) return { entity, field };
+  }
+  return null;
+}
+
 function documentSubject(model) {
   const scenarios = claimScenarios(model);
   const claim = (scenarios?.claims ?? []).find((candidate) => candidate.stamps?.field);
@@ -165,6 +201,11 @@ export function mappingTestClass(model, subject, options) {
 function relationalClass(model, subject, { datasource, packages, requiredLiterals }) {
   const base = model.service.basePackage;
   const { entity, field, maxLength } = subject;
+  // El segundo sujeto, solo si vive en la MISMA entidad: la clase se construye alrededor de un
+  // repositorio, y traer otro sería otra clase. Donde no lo haya —`stock-reservation`, cuya clave
+  // única es un UUID— el caso sencillamente no se emite.
+  const unico = collationSubject(model);
+  const mideCaja = unico && unico.entity.name === entity.name ? unico.field : null;
   const espejo = `${entity.name}Jpa`;
   const repo = `${entity.name}JpaRepository`;
   const idField = entity.idField?.name ?? 'id';
@@ -232,7 +273,34 @@ ${requiredLiterals.join('\n')}
     private static String texto(int largo) {
         return "x".repeat(largo);
     }
+${
+  mideCaja
+    ? `
+    /** La misma fila, con el campo ÚNICO puesto a un valor que solo cambia de caja entre casos. */
+    private ${espejo} filaUnica(String valor) {
+        ${espejo} row = fila(texto(1));
+        row.${accessor('set', mideCaja.name)}(valor);
+        return row;
+    }
 
+    @Test
+    void laUnicidadDistingueMayusculas() {
+        // Qué significa «único» en una columna de texto NO es lo mismo en todos los motores: el
+        // default de MySQL (utf8mb4_0900_ai_ci) PLIEGA la caja y rechaza 'a' como duplicado de 'A',
+        // mientras que PostgreSQL las distingue. El mismo diseño daría dos garantías distintas, y
+        // en silencio — la fila que el diseño consideraba nueva simplemente no entra.
+        //
+        // La aserción es la MISMA para los dos motores a propósito: es el generador quien tiene que
+        // emitir la collation que hace a MySQL comportarse como PostgreSQL. Un solo valor de una
+        // letra porque el campo puede llevar cota propia y tiene que caber bajo cualquiera.
+        repository.saveAndFlush(filaUnica("a"));
+        assertDoesNotThrow(() -> repository.saveAndFlush(filaUnica("A")),
+                "el motor plegó la caja: '${'A'}' se rechazó como duplicado de 'a', así que la unicidad de "
+                        + "${entity.name}.${mideCaja.name} no es la que el diseño declaró");
+    }
+`
+    : ''
+}
     @Test
     void elValorEnElLimiteEntra() {
         // La mitad positiva. Sin ella, una columna que rechazara CUALQUIER valor —o un motor que

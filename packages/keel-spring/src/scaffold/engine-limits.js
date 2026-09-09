@@ -33,7 +33,22 @@ const DOC = 'docs/keel/engine-limits.md';
  * lo que hace que se dejen de leer los avisos que sí importan.
  */
 const APPLIES = {
-  partialUniqueIndexes: (model) => partialIndexSpecs(model).length > 0
+  partialUniqueIndexes: (model) => partialIndexSpecs(model).length > 0,
+  // Hoy ninguna celda de `unique-collation` es `degradado` —los tres motores que pliegan reciben
+  // su collation—, así que este predicado no se evalúa. Se declara igual porque la alternativa es
+  // dejar el id sin dueño: el día que alguien marque una celda como degradada, `degradations()`
+  // lanzaría en vez de decidir, y el error aparecería en `build` lejos de su causa.
+  uniqueTextColumns: (model) =>
+    (model.entities ?? []).some(
+      (entity) =>
+        entity.persisted &&
+        (entity.fields ?? []).some(
+          (field) =>
+            field.javaType === 'String' &&
+            !field.list &&
+            (field.unique || (entity.naturalKey ?? []).includes(field.name))
+        )
+    )
 };
 
 /**

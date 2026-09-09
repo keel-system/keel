@@ -14,7 +14,7 @@ import {
   brokerSafeName
 } from './naming.js';
 import { resolveType, beanValidationAnnotations, columnAnnotations, inheritedTypePattern, numericConstraints } from './type-mapper.js';
-import { DATABASES } from './stack-catalog.js';
+import { DATABASES, caseSensitiveCollationFor } from './stack-catalog.js';
 
 const CRUD_PREFIXES = ['create', 'get', 'list', 'update', 'delete'];
 
@@ -73,7 +73,7 @@ export function buildModel({ manifest, layers, stack = null }) {
   const inlineEnumName = buildInlineEnumIndex(enums);
   const valueObjects = collectValueObjects(domainTypes, domainTypes, inlineEnumName, hasPersistence);
   const formatTypes = collectFormatTypes(domainTypes);
-  const entities = collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPersistence, warnings);
+  const entities = collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPersistence, warnings, stack);
   attachTransitionExecutors(entities, layers['use-cases']?.operations ?? {});
 
   // Un VO usado en un campo colección (list) de una entidad persistida necesita
@@ -338,7 +338,7 @@ function buildInlineEnumIndex(enums) {
 
 // Resuelve un campo del diseño al contexto que necesitan los renders:
 // tipo Java, imports, anotaciones de validación y de columna, e inicialización.
-function resolveField(ownerName, fieldName, field, domainTypes, inlineEnumName, { persisted }) {
+function resolveField(ownerName, fieldName, field, domainTypes, inlineEnumName, { persisted, collation = null }) {
   let resolved;
   if (field.type === 'enum') {
     resolved = { kind: 'enum', javaType: inlineEnumName(ownerName, fieldName), imports: [], constraints: {} };
@@ -404,7 +404,7 @@ function resolveField(ownerName, fieldName, field, domainTypes, inlineEnumName, 
         : null,
     // Una colección no es una columna: su mapeo (@ElementCollection) lo pone la Jpa,
     // no columnAnnotations. Sin persistence o sin list, comportamiento previo.
-    columns: persisted && !isList ? columnAnnotations(fieldName, field, resolved) : [],
+    columns: persisted && !isList ? columnAnnotations(fieldName, field, resolved, { collation }) : [],
     // Pero cada ELEMENTO de esa colección sí es una columna: vive en la tabla hija
     // que genera @CollectionTable, y ahí es donde tienen que aterrizar las
     // constraints de su value type. Sin esto, un `EmailAddress` con maxLength 254
@@ -582,7 +582,10 @@ function auditsEntity(policy, persisted, fieldNames, axis) {
   return 'all';
 }
 
-function collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPersistence, warnings) {
+function collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPersistence, warnings, stack = null) {
+  // La collation solo la necesita el motor que PLIEGA mayúsculas; en los demás es null y las
+  // columnas salen exactamente como antes (ver stack-catalog.js § Collation de las columnas únicas).
+  const collation = caseSensitiveCollationFor(stack?.database);
   const aggregates = domain.aggregates ?? {};
   const internalOf = aggregateIndex(domain);
   const lockingPolicy = persistence?.consistency?.optimisticLocking ?? 'all';
@@ -592,8 +595,21 @@ function collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPe
   for (const [name, def] of Object.entries(domain.entities ?? {})) {
     const persisted = hasPersistence && (persistence?.entities?.[name]?.persisted ?? true);
     const persistenceMeta = persistence?.entities?.[name] ?? {};
+    // Qué campos participan en una constraint ÚNICA: la clave natural entera —cada una de sus
+    // columnas— más los `unique` sueltos. Se calcula ANTES de resolver los campos porque decide
+    // cómo sale su `@Column`: en un motor que pliega mayúsculas, una columna única sin collation
+    // sensible da una garantía DISTINTA de la que el diseño declaró, y en silencio.
+    const uniqueNames = new Set([
+      ...(def.naturalKey ?? persistence?.entities?.[name]?.naturalKey ?? []),
+      ...Object.entries(def.fields ?? {})
+        .filter(([, field]) => field?.unique)
+        .map(([fieldName]) => fieldName)
+    ]);
     const fields = Object.entries(def.fields ?? {}).map(([fieldName, field]) =>
-      resolveField(name, fieldName, field, domainTypes, inlineEnumName, { persisted })
+      resolveField(name, fieldName, field, domainTypes, inlineEnumName, {
+        persisted,
+        collation: persisted && uniqueNames.has(fieldName) ? collation : null
+      })
     );
     const fieldNames = new Set(fields.map((field) => field.name));
 

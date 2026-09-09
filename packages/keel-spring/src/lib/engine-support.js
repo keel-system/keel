@@ -416,6 +416,51 @@ export const MECHANISMS = {
     }
   },
 
+  'unique-collation': {
+    title: 'Sensibilidad a mayúsculas de una columna ÚNICA',
+    appliesWhen: 'uniqueTextColumns',
+    emitter: 'src/lib/type-mapper.js · src/lib/stack-catalog.js',
+    axis: 'engine',
+    why: "La unicidad de una columna de texto NO significa lo mismo en todos los motores y el diseno no puede decir cual quiere. Medido el 2026-09-09 con las dos bases en pie: MySQL 8 (`utf8mb4_0900_ai_ci`) RECHAZA 'acme-1' como duplicado de 'ACME-1'; PostgreSQL (`en_US.utf8`) deja convivir las dos filas. El mismo diseno produce dos garantias distintas y en SILENCIO: nada falla, nada se registra, y la fila que el diseno consideraba nueva no entra. Se fuerza la collation sensible donde el motor pliega en vez de degradar, porque la promesa del MVP es equivalencia entre motores y el diseno tampoco puede pedir lo contrario. Lo que NO se promete es el ORDEN: la collation tambien decide el ORDER BY, y del lado de PostgreSQL depende del locale de la base, que elige quien despliega.",
+    coverage: {
+      postgresql: {
+        state: 'verificado',
+        // SIN falsar, y dicho como lo que es. La red corre aqui y pasa, pero ninguna mutacion del
+        // GENERADOR la pone roja: a PostgreSQL no se le emite nada, asi que no hay nada que romper.
+        // Lo unico que la volveria roja es que el motor empezara a plegar la caja, que no esta en
+        // nuestra mano. La rama que si se falsa es la de MySQL, y es la que importa.
+        falsified: false,
+        net: 'mapping-check',
+        why: 'sensible por defecto: no se le emite nada. Es la rama NEGATIVA de la red y se corre igual —`mapping-check job-dispatch` en 3/3—: la misma asercion que sobre MySQL, que ahi pasa sin ayuda de nadie. Eso es lo que la convierte en referencia en vez de en suposicion, pero no en una red falsada: no hay mutacion del generador que la ponga roja'
+      },
+      mysql: {
+        state: 'verificado',
+        net: 'mapping-check',
+        falsified: true,
+        why: "medido contra mysql:8.0 (`utf8mb4_0900_ai_ci` rechaza 'acme-1' como duplicado de 'ACME-1') y falsado en tres direcciones sobre el generador: quitandole al motor su collation declarada, perdiendo la cota del diseno dentro del columnDefinition —que la ensancharia a varchar(255) en silencio, el mismo defecto que ya costo un numeric(38,2)— y emitiendola a toda columna de texto en vez de solo a las unicas. Y falsado EN VIVO el 2026-09-09 sobre `job-dispatch` (Job.reference): quitandole a MySQL su collation declarada, `laUnicidadDistingueMayusculas` cae con «el motor plego la caja: 'A' se rechazo como duplicado de 'a'», y PostgreSQL sigue en 3/3 porque a el no se le emite nada. La ASERCION es la misma para los dos motores a proposito: es el generador quien tiene que hacer que MySQL se comporte como PostgreSQL, asi que un solo caso mide las dos ramas"
+      },
+      mariadb: {
+        state: 'razonado',
+        net: 'ninguna',
+        falsified: false,
+        why: 'misma familia que MySQL y misma collation declarada (`utf8mb4_bin`, que existe en las dos a diferencia de las `uca1400_*`, solo desde 10.10), pero nadie ha arrancado MariaDB en este repo: declarado sin ejecutar'
+      },
+      sqlserver: {
+        state: 'razonado',
+        net: 'ninguna',
+        falsified: false,
+        why: 'su collation de servidor por defecto (`SQL_Latin1_General_CP1_CI_AS`) tambien pliega —el CI es literalmente case-insensitive— y se le emite `Latin1_General_100_CS_AS`, pero nadie ha arrancado SQL Server: declarado sin ejecutar'
+      },
+      oracle: {
+        state: 'razonado',
+        net: 'ninguna',
+        falsified: false,
+        why: 'sensible por defecto como PostgreSQL, asi que no se le emite nada; razonado y no verificado porque nadie lo ha arrancado y esa afirmacion sobre el motor no la ha comprobado ninguna red'
+      },
+      mongodb: { state: 'no-aplica', net: 'ninguna', falsified: false, why: 'no hay DDL ni collation de columna que emitir' }
+    }
+  },
+
   'claim-dialect': {
     title: 'Reparto de candidatos entre réplicas (SKIP LOCKED o su ausencia)',
     emitter: 'src/lib/claim-sql.js',
