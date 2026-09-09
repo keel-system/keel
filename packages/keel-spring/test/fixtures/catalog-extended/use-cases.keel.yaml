@@ -54,7 +54,12 @@ operations:
     cache:
       ttlSeconds: 300
       keyFields: [slug]
-      invalidatedBy: [ProductUpdated]
+      # Los TRES eventos que cambian lo que esta lectura devuelve. Listar solo `ProductUpdated`
+      # dejaba dos agujeros de hasta 300 s: crear un producto en la categoría (la lectura es por
+      # slug de CATEGORÍA, así que un alta cambia su resultado) y mutar sus imágenes, que son
+      # parte de la ficha. El segundo lo destapó FL-IMG-001-C; el primero lo avisaba `keel
+      # validate` desde antes. Un `invalidatedBy` incompleto no falla: sirve datos viejos.
+      invalidatedBy: [ProductCreated, ProductUpdated, ProductImagesChanged]
 
   updateProduct:
     description: Actualiza parcialmente los datos comerciales de un producto.
@@ -168,6 +173,7 @@ operations:
       - code: PRODUCT_NOT_FOUND
         when: No existe un producto con ese id.
         http: 404
+    emits: [ProductImagesChanged]
 
   removeProductImage:
     description: Elimina una imagen concreta de un producto del catálogo.
@@ -192,6 +198,7 @@ operations:
     # —borra una imagen concreta—, pero el mismo par (producto, imagen) es la misma
     # intención. Es el caso que distingue `payload-hash` de `client-key`: no hay cabecera
     # que pueda faltar, así que no hay camino "sin clave".
+    emits: [ProductImagesChanged]
     idempotency:
       keySource: payload-hash
       ttlSeconds: 600

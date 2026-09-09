@@ -22,6 +22,17 @@ publishing:
         status:
           type: ProductStatus
           required: true
+    # Las imágenes son parte de la ficha pública, así que cambiarlas cambia lo que
+    # `getProductBySlug` devuelve — y esa lectura está cacheada 300 s. Sin un evento que
+    # lo diga, la caché no tiene por dónde enterarse: el borrado responde 204 y la lectura
+    # sigue sirviendo la imagen durante cinco minutos. Lo destapó FL-IMG-001-C en la corrida
+    # `catalog` sobre MySQL, que es el único sitio donde se ve — el 204 es correcto.
+    ProductImagesChanged:
+      description: Se añadió o se quitó una imagen de un producto.
+      payload:
+        productId:
+          type: uuid
+          required: true
 
 subscriptions:
   # Alimenta la copia local del precio de proveedor (dependencies: pricing.supplierPrice).
