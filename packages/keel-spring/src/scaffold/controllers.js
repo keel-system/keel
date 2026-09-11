@@ -402,6 +402,13 @@ function renderMethod(model, operation, imports) {
     }
   } else {
     for (const component of components) {
+      // La identidad del llamante tampoco se acepta por la QUERY STRING. Esta rama es la de
+      // los verbos sin cuerpo, y era la única que no lo miraba: la de multipart y la del cuerpo
+      // ya lo hacían. El resultado era un `@RequestParam` con el campo de la identidad, o sea la
+      // identidad elegida por quien hace la petición — en una lectura, leer los datos de otro
+      // inquilino con solo poner su clave en la URL. Lo destapó la corrida de evolución de
+      // notification-mailer: `listTemplateVersions` fue la primera query con `callerIdentity`.
+      if (component.resolvedIdentity) continue;
       if (fromPath.has(component.name)) continue;
       for (const name of component.imports) imports.add(name);
       const typeImport = domainTypeImport(model, component);
@@ -423,9 +430,10 @@ function renderMethod(model, operation, imports) {
       }
     }
     const withOrder = translatableSort(operation).length > 0;
-    const args = components.map((c) =>
-      c.name === 'pageable' && withOrder ? `withDefaultOrder(pageable, ${orderConstantName(operation)})` : c.name
-    );
+    const args = components.map((c) => {
+      if (c.resolvedIdentity) return identityArg();
+      return c.name === 'pageable' && withOrder ? `withDefaultOrder(pageable, ${orderConstantName(operation)})` : c.name;
+    });
     dispatchArg = `new ${operation.messageClass}(${args.join(', ')})`;
   }
 

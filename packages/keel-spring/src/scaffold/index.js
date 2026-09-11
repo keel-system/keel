@@ -2,6 +2,7 @@
 // diseño validado y renderiza todos los artefactos en services/<name>-spring/.
 // Regeneración segura: sin force solo se escriben archivos que no existen.
 
+import fs from 'node:fs';
 import path from 'node:path';
 import { buildModel } from '../lib/model.js';
 import { classifyGenerated, digestOf, pruneOrphans } from 'keel-core';
@@ -207,6 +208,13 @@ export function scaffoldService({ manifest, layers, workspace, force = false, st
   // con --prune; los tocados se quedan y pasan al agente vía EVOLUTION.md.
   const pruned = mode === 'refresh' && prune ? pruneOrphans(buckets.huerfanos, projectDir, previous) : null;
 
+  // Un huérfano que ya NO está en disco no es trabajo de nadie: lo retiró el agente, o un
+  // `--prune` anterior. Se olvida en cualquier pasada de escritura, no solo con --prune;
+  // si no, el manifiesto lo arrastra para siempre y `--check` lo reporta como «el generador
+  // ya no lo emite (no se borran)» sobre un archivo que no existe.
+  const huerfanosVivos = buckets.huerfanos.filter((relative) => fs.existsSync(path.join(projectDir, relative)));
+  const huerfanosAusentes = buckets.huerfanos.filter((relative) => !fs.existsSync(path.join(projectDir, relative)));
+
   // La versión nueva de lo que está en conflicto, para poder compararla con diff. Es
   // exactamente el trabajo que si no hay que hacer a mano: generar el proyecto en otro
   // sitio solo para ver qué cambió el generador en ESE archivo. Entran también las
@@ -245,7 +253,7 @@ export function scaffoldService({ manifest, layers, workspace, force = false, st
           mode === 'refresh'
             ? buckets.conflictos.map((relative) => [relative, digestOf(digestByPath.get(relative))])
             : [],
-        olvidar: pruned ? [...pruned.borrados, ...pruned.ausentes] : [],
+        olvidar: [...(pruned ? [...pruned.borrados, ...pruned.ausentes] : []), ...huerfanosAusentes],
         resueltos: buckets.alDia,
         generator: `keel-spring@${packageVersion()}`,
         // Lo escrito en esta pasada, MÁS lo que ya era byte a byte idéntico a lo que el
@@ -269,6 +277,7 @@ export function scaffoldService({ manifest, layers, workspace, force = false, st
     stack: model.stack,
     docs: model.docs,
     buckets,
+    huerfanosVivos,
     pruned,
     pendingMerge: pendingMerge.sort((a, b) => a.localeCompare(b)),
     nuevosConTodo

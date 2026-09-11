@@ -193,6 +193,67 @@ test('y el control sin ruta sigue igual', () => {
   assert.match(controller, /CallerIdentity.resolve()/);
 });
 
+// ─── La operación de LECTURA ────────────────────────────────────────────────
+//
+// La tercera rama del controller, y la última que no lo miraba: los verbos SIN cuerpo. Ahí los
+// campos del input salen como `@RequestParam`, y el de la identidad salía con ellos — o sea, la
+// identidad elegida por quien hace la petición. En una lectura eso no es un 403 en el camino
+// feliz como en los comandos: es leer los datos de OTRO inquilino poniendo su clave en la URL, y
+// el servidor responde 200.
+//
+// No lo vio ninguna suite porque ninguna fixture tenía una query cuyo input llevara el campo de
+// la identidad. Lo destapó la corrida de evolución de `notification-mailer`, donde
+// `listTemplateVersions` estrenó esa combinación; el sujeto de aquí es sintético por lo mismo que
+// en los demás casos de este archivo: el diseño se parchea en memoria.
+
+function generateWithQuery({ field = FIELD } = {}) {
+  const { manifest, layers } = layersWith();
+  const patched = structuredClone(layers);
+  patched['use-cases'].operations.listTenantProducts = {
+    description: 'Lista los productos del inquilino del token.',
+    kind: 'query',
+    input: { fields: { [field]: { type: 'string', required: true }, category: { type: 'string', required: true } } },
+    output: { entity: 'Product', list: true }
+  };
+  patched.api.endpoints.listTenantProducts = { method: 'GET', path: '/products/by-tenant' };
+  patched.security.access.rules.listTenantProducts = { level: 'service', scopes: ['catalog:write'] };
+
+  const workspace = tmpDir('keel-calleridentity-query-');
+  const result = scaffoldService({ manifest, layers: patched, workspace, force: true });
+  const root = path.join(workspace, result.outDir, 'src/main/java');
+  const files = new Map();
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else files.set(entry.name, fs.readFileSync(full, 'utf8'));
+    }
+  };
+  walk(root);
+  return files;
+}
+
+test('en una QUERY la identidad tampoco se acepta de la query string', () => {
+  const files = generateWithQuery();
+  const controller = [...files.entries()].find(([name]) => name.endsWith('V1Controller.java'))?.[1];
+  const method = /listTenantProducts\([^)]*\)/.exec(controller)?.[0];
+  assert.ok(method, 'no se generó el endpoint de lectura');
+
+  assert.ok(
+    !new RegExp(`@RequestParam[^)]*\\b${FIELD}\\b`).test(method),
+    `la identidad viaja como @RequestParam: quien llama elegiría de qué inquilino lee (${method})`
+  );
+  // Y se afirma sobre el DESPACHO de esta operación, no sobre el controller entero: ahí hay otra
+  // que ya estampa la identidad, así que un `includes` a secas saldría verde con la lectura rota.
+  const dispatch = /new ListTenantProductsQuery\([^)]*\)/.exec(controller)?.[0];
+  assert.ok(dispatch, 'no se despacha la query');
+  assert.ok(dispatch.includes('CallerIdentity.resolve()'), `la lectura no recibe la identidad del token (${dispatch})`);
+
+  // El control: un filtro normal SÍ sigue siendo un @RequestParam. Sin esta mitad, quitar todos
+  // los parámetros de la query pasaría el caso de arriba y rompería el endpoint entero.
+  assert.match(method, /@RequestParam\b[^,)]*\bcategory\b/, 'el filtro normal dejó de viajar en la query');
+});
+
 test('con source serviceClient la identidad sale del cliente de la credencial', () => {
   const resolver = generate().get('CallerIdentity.java');
   // `azp` es el de Keycloak y `client_id` el de otros proveedores: mirar solo uno deja el resolutor

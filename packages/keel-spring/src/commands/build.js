@@ -267,9 +267,7 @@ export async function build(
           pendingMerge: scaffold.pendingMerge,
           // Con --prune lo intacto ya se fue: queda lo tocado. Sin él, todo huérfano que
           // siga en disco es algo que el diseño ya no tiene.
-          toRetire: (scaffold.pruned ? scaffold.pruned.modificados : scaffold.buckets.huerfanos).filter((relative) =>
-            fs.existsSync(path.join(projectDir, relative))
-          ),
+          toRetire: scaffold.pruned ? scaffold.pruned.modificados : scaffold.huerfanosVivos,
           pruned: scaffold.pruned?.borrados ?? [],
           newWithTodo: scaffold.nuevosConTodo,
           stack: stackChanges,
@@ -409,7 +407,7 @@ function reportEvolution(evolution, outDir, mode) {
 function reportGeneratorDrift(scaffold, projectDir, workspace, mode) {
   const { refrescables, conflictos, adoptados } = scaffold.buckets;
   // Con --prune lo intacto ya se fue: solo queda por decir lo que alguien tocó.
-  const huerfanos = scaffold.pruned ? scaffold.pruned.modificados : scaffold.buckets.huerfanos;
+  const huerfanos = scaffold.pruned ? scaffold.pruned.modificados : scaffold.huerfanosVivos;
   if (refrescables.length + conflictos.length + huerfanos.length + adoptados.length === 0) {
     if (mode === 'check') console.log(pc.green('✔ El proyecto está al día con el generador instalado.'));
     return;

@@ -182,6 +182,9 @@ test('cerrada la evolución por el orquestador, --check vuelve a verde', async (
   // El conflicto fusionado es ahora «tuyo»: un refresco no lo vuelve a sacar.
   assert.equal(await runBuild(workspace, { refresh: true }), undefined);
   assert.equal(exists(workspace, `build/keel-refresh/${CREATE_HANDLER}`), false, 'el conflicto se reabrió');
+  // Y el huérfano que el agente retiró se olvida: si no, el manifiesto lo arrastra para
+  // siempre y cada build lo reporta como «el generador ya no lo emite» sobre algo que no está.
+  assert.ok(!(GET_HANDLER in manifest(workspace).files), 'el manifiesto sigue registrando un huérfano que ya no existe');
 });
 
 test('stack: lo que el diseño empieza a pedir se pregunta (solo eso) y lo que deja de pedir se anula', async () => {
