@@ -45,11 +45,14 @@ services/<servicio>-<tech>/
     ├── <agentes>        # los subagentes del completado
     └── <skills>         # keel-generate-<tech> (la ÚNICA de generación, sin argumentos)
                          # + keel-<tech>-<infra> solo las del stack elegido (según keel-stack.json)
+                         # opencode descubre además .claude/skills/ por compatibilidad: cada skill
+                         # aparece dos veces (mismo contenido). Se silencia, si molesta, con
+                         # OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1
 ```
 
 Con eso el proyecto es un **repo autosuficiente**: quien lo clone, sin el workspace Keel, puede finalizar la generación. La skill del proyecto conviene **sintetizarla** (parametrizada por servicio, stack y capas presentes) en vez de copiar un asset estático: así solo existe una definición del pipeline y no puede divergir.
 
-**Dos destinos, y la frontera importa.** Lo que un harness *carga* —skills, comandos, agentes, archivo de contexto— cambia de sitio y de frontmatter según la herramienta, así que se emite con `emitHarnessFiles()` de `keel-core`: los assets son la fuente **neutral** (frontmatter con `tools: [read, bash…]` y `spawns: false`; rutas citadas como `{{keel:skills}}`, `{{keel:agents}}`, `{{keel:context}}`, `{{keel:docs}}`) y cada descriptor de `HARNESSES` la traduce. Se emiten **todos** los harnesses: el proyecto sirve para cualquiera sin decidir nada al generarlo. Lo que solo es markdown que un agente lee por ruta va a `docs/keel/`, **una sola copia**, y por eso **no puede citar rutas de harness**: ahí un `.claude/…` mentiría a quien use el otro — se nombra la skill o el agente, no su ruta.
+**Dos destinos, y la frontera importa.** Lo que un harness *carga* —skills, agentes, archivo de contexto— cambia de sitio y de frontmatter según la herramienta, así que se emite con `emitHarnessFiles()` de `keel-core`: los assets son la fuente **neutral** (frontmatter con `tools: [read, bash…]` y `spawns: false`; rutas citadas como `{{keel:skills}}`, `{{keel:agents}}`, `{{keel:context}}`, `{{keel:docs}}`) y cada descriptor de `HARNESSES` la traduce. Se emiten **todos** los harnesses: el proyecto sirve para cualquiera sin decidir nada al generarlo. Lo que solo es markdown que un agente lee por ruta va a `docs/keel/`, **una sola copia**, y por eso **no puede citar rutas de harness**: ahí un `.claude/…` mentiría a quien use el otro — se nombra la skill o el agente, no su ruta.
 
 Si el generador orquesta el completado con subagentes (patrón de `keel-spring`: agente de código en paralelo con agente de infraestructura, agente de validación funcional después y un pase de calidad no-conductual al final), sus definiciones viven en `assets/agents/` con frontmatter neutral. Patrón recomendado de **handoff estructurado**: cada subagente cierra su reporte con un bloque parseable (`status`, `blockers[]`, `failures[]`…) y la skill orquestadora decide avances y relanzamientos sobre esos campos, nunca sobre prosa.
 

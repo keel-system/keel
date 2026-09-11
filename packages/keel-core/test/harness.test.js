@@ -110,23 +110,17 @@ test('los assets neutrales no citan rutas de harness: para eso están los tokens
   }
 });
 
-test('un comando por skill, solo en los harnesses que separan comando y skill', () => {
-  const withCommands = emitAll();
-  const withoutCommands = emitAll({ commands: false });
-
+test('ningún harness emite un comando homónimo de una skill: la eclipsaría', () => {
+  // Los dos registran ya la skill como `/<nombre>`. Y en opencode un comando de
+  // config se registra ANTES que las skills, cuyo paso lleva una guarda que no
+  // sobrescribe lo ya registrado: un stub homónimo impide que la skill entre.
   for (const harness of HARNESSES) {
-    if (!harness.commandPath) continue;
-    for (const name of skillNames) {
-      const command = harness.commandPath(name);
-      assert.ok(withCommands.some((f) => f.path === command), `falta el comando ${command}`);
-      assert.ok(!withoutCommands.some((f) => f.path === command), `${command} no debería existir con commands: false`);
-    }
+    assert.equal(harness.commandPath, null, `${harness.id}: emite comandos homónimos de sus skills`);
   }
 
-  // El stub invoca la skill por su nombre: es un disparador, no una copia del contenido.
-  const stub = withCommands.find((f) => f.path === harnessById('opencode').commandPath('keel-design'));
-  assert.match(stub.content, /keel-design/);
-  assert.match(stub.content, /\$ARGUMENTS/);
+  for (const file of emitAll()) {
+    assert.equal(file.path.includes('/command/'), false, `${file.path} es un stub de comando`);
+  }
 });
 
 test('un agente hoja no puede lanzar agentes en ningún harness', () => {
@@ -155,6 +149,26 @@ test('un agente hoja no puede lanzar agentes en ningún harness', () => {
 
   // El cuerpo es el mismo: la fuente es única.
   assert.equal(splitFrontmatter(claude.content).body, splitFrontmatter(opencode.content).body);
+});
+
+test('lo que un agente no concede queda denegado en opencode, bash incluido', () => {
+  // El `tools` de opencode se MEZCLA con los defaults, así que la única forma de que
+  // los dos harnesses concedan lo mismo es denegar TODO lo no concedido. Mientras la
+  // lista de denegables se mantuvo a mano se quedó sin `bash`: un agente de solo
+  // lectura habría quedado sin bash en un harness y con bash en el otro.
+  const dir = tmpDir('keel-agent-readonly-');
+  const agent = path.join(dir, 'solo-lectura.md');
+  fs.writeFileSync(agent, '---\nname: solo-lectura\ndescription: Solo lee.\ntools: [read, grep, glob]\nspawns: false\n---\n\nCuerpo.\n');
+
+  const file = emitHarnessFiles({ agents: [agent] }).find((f) => f.path === harnessById('opencode').agentPath('solo-lectura'));
+  const { tools } = splitFrontmatter(file.content).meta;
+
+  assert.equal(tools.read, true);
+  assert.equal(tools.bash, false, 'bash no concedido pero tampoco denegado: el default lo concede');
+  assert.equal(tools.write, false);
+  assert.equal(tools.edit, false);
+  assert.equal(tools.patch, false, 'patch es la edición por diff de opencode: no tiene nombre neutral');
+  assert.equal(tools.webfetch, false);
 });
 
 test('el contexto compartido se emite una vez, y los demás harnesses lo importan', () => {

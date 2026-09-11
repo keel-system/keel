@@ -52,6 +52,9 @@ system.yaml          # el mapa del sistema, si el workspace tiene más de un ser
 .claude/ .opencode/  # las skills del flujo de diseño, sembradas para los dos harnesses de agente
                      # soportados (mismo contenido, la convención de cada uno); las de los
                      # generadores no están aquí: viven en cada services/<x>/
+                     # En opencode, .claude/skills/ también se descubre (compatibilidad), así que cada
+                     # skill aparece dos veces. Es el mismo contenido y no rompe nada, pero si prefieres
+                     # verlas una sola vez: export OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1
 schema/              # un JSON Schema por capa + common.schema.json ($defs compartidos)
 specs/<servicio>/    # el diseño de cada servicio, un artefacto por capa — la fuente de verdad
                      # (+ validation-scenarios.md: escenarios de validación derivados, al cerrar el diseño;

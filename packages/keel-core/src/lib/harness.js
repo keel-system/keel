@@ -8,6 +8,12 @@
 // sirve para cualquiera de los dos sin decidir nada al sembrarlo. Como la fuente
 // es única, no hay dos copias que puedan divergir — solo dos proyecciones.
 //
+// Consecuencia conocida y aceptada: opencode descubre también `.claude/skills/`
+// (compatibilidad con Claude Code), así que ve cada skill dos veces. Es el mismo
+// contenido, y quien quiera verlas una sola vez tiene
+// `OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1`. Sembrar un solo harness para evitarlo
+// costaría la propiedad que da valor a este módulo: que el destino sirva para los dos.
+//
 // Añadir un tercer harness es añadir una entrada a HARNESSES.
 
 import fs from 'node:fs';
@@ -42,11 +48,19 @@ const CLAUDE_TOOL = {
   webfetch: 'WebFetch'
 };
 
-// Herramientas que hay que denegar explícitamente en opencode cuando el agente no
-// las declara: su `tools` es un mapa que se MEZCLA con los valores por defecto, así
-// que omitir `write` no lo desactiva — al contrario que el `tools:` de Claude Code,
-// que es la lista completa. Sin esto, un agente de solo lectura podría escribir.
-const OPENCODE_DENYABLE = ['write', 'edit', 'patch', 'webfetch'];
+// Herramientas de opencode que no tienen nombre neutral porque Claude Code no las
+// tiene: `patch` es su edición por diff. Hay que conocerlas para poder DENEGARLAS —
+// lo que no se nombra, se concede.
+const OPENCODE_EXTRA_TOOLS = ['patch'];
+
+// El `tools` de opencode es un mapa que se MEZCLA con los valores por defecto, así
+// que omitir una herramienta no la desactiva — al contrario que el `tools:` de
+// Claude Code, que es la lista completa. Por eso se deniega TODA la que el agente no
+// concede, y la lista se DERIVA del vocabulario neutral en vez de mantenerse aparte:
+// mientras fue una lista propia se quedó sin `bash`, así que un agente de solo
+// lectura habría quedado sin bash en un harness y con bash en el otro — justo la
+// divergencia silenciosa que este módulo existe para impedir.
+const OPENCODE_DENYABLE = [...Object.keys(CLAUDE_TOOL), ...OPENCODE_EXTRA_TOOLS];
 
 const claude = {
   id: 'claude',
@@ -87,14 +101,18 @@ const opencode = {
   contextFile: 'AGENTS.md',
   skillPath: (name, rel) => `.opencode/skills/${name}/${rel}`,
   agentPath: (name) => `.opencode/agent/${name}.md`,
-  // Las skills de opencode las invoca el modelo por su descripción; el `/` son los
-  // comandos, que son archivos planos y no admiten references/. De ahí las dos
-  // piezas: la skill lleva el contenido, el comando es el disparador del usuario.
-  commandPath: (name) => `.opencode/command/${name}.md`,
+  // opencode registra hoy cada skill como comando `/` por su propio nombre, así que
+  // un stub en `.opencode/command/` no añade nada — y además ESTORBA: su registro de
+  // comandos es secuencial (built-in → config → MCP → skills) y el paso de las
+  // skills lleva la guarda `if (commands[item.name]) continue`, de modo que un
+  // comando homónimo se registra ANTES y la skill no llega a entrar. El `/keel-design`
+  // del usuario disparaba entonces una indirección («usa la skill keel-design») en
+  // vez de la skill. Ninguno de los dos harnesses separa ya comando y skill.
+  commandPath: null,
   tokens: {
     skills: '.opencode/skills',
     agents: '.opencode/agent',
-    commands: '.opencode/command',
+    commands: '.opencode/skills',
     context: 'AGENTS.md'
   },
 
@@ -120,15 +138,6 @@ const opencode = {
     // omita de una lista, es un permiso que hay que denegar.
     if (meta.spawns === false) out.permission = { task: { '*': 'deny' } };
     return out;
-  },
-
-  commandFrontmatter(meta) {
-    return { description: meta.description };
-  },
-
-  commandBody(meta) {
-    const hint = meta['argument-hint'] ? ` Argumentos esperados: \`${meta['argument-hint']}\`.` : '';
-    return `Usa la skill \`${meta.name}\` y sigue sus instrucciones al pie de la letra.${hint}\n\nArgumentos recibidos: $ARGUMENTS\n`;
   }
 };
 
@@ -183,34 +192,26 @@ const MARKDOWN = /\.md$/;
 /**
  * Proyecta una skill (directorio con SKILL.md + references/) sobre un harness.
  * El SKILL.md se re-escribe con el frontmatter del harness; el resto solo recibe
- * la sustitución de tokens. Con `commandPath`, añade además el stub de comando.
+ * la sustitución de tokens.
  */
-function emitSkill(skillDir, harness, tokens, withCommand) {
+function emitSkill(skillDir, harness, tokens) {
   const name = path.basename(skillDir);
   const files = [];
-  let meta = null;
 
   for (const rel of skillEntries(skillDir)) {
     const source = fs.readFileSync(path.join(skillDir, rel), 'utf8');
     if (rel === 'SKILL.md') {
       const split = splitFrontmatter(source);
       if (!split.meta) throw new Error(`${skillDir}/SKILL.md no tiene frontmatter.`);
-      meta = split.meta;
       files.push({
         path: harness.skillPath(name, rel),
-        content: applyTokens(withFrontmatter(harness.skillFrontmatter(meta), split.body), tokens)
+        content: applyTokens(withFrontmatter(harness.skillFrontmatter(split.meta), split.body), tokens)
       });
     } else {
       files.push({ path: harness.skillPath(name, rel), content: applyTokens(source, tokens) });
     }
   }
 
-  if (withCommand && harness.commandPath && meta) {
-    files.push({
-      path: harness.commandPath(name),
-      content: withFrontmatter(harness.commandFrontmatter(meta), harness.commandBody(meta))
-    });
-  }
   return files;
 }
 
@@ -228,11 +229,9 @@ function emitAgent(file, harness, tokens) {
 /**
  * Emite los artefactos de agente de todos los harnesses (o de los indicados).
  *
- * - `skills`: rutas a directorios de skill (SKILL.md + references/).
- * - `commands`: si esas skills se exponen además como comando `/` en los
- *   harnesses que los separan. Las del flujo de diseño sí (el usuario escribe
- *   `/keel-design`); las de tecnología no — son conocimiento que el agente
- *   consulta cuando toca el broker, no algo que nadie invoque a mano.
+ * - `skills`: rutas a directorios de skill (SKILL.md + references/). Los dos
+ *   harnesses las exponen ya con `/` por su nombre, así que no hay nada que
+ *   declarar sobre si una skill es invocable a mano.
  * - `agents`: rutas a archivos .md de subagente con frontmatter neutral.
  * - `context`: `{ content, shared }` del texto de contexto del repo.
  *   Con `shared: true` el texto no cita rutas de harness y se emite **una sola
@@ -249,7 +248,6 @@ export function emitHarnessFiles({
   skills = [],
   agents = [],
   context = null,
-  commands = true,
   extraTokens = {},
   harnesses = HARNESSES
 } = {}) {
@@ -257,7 +255,7 @@ export function emitHarnessFiles({
 
   for (const harness of harnesses) {
     const tokens = { ...harness.tokens, ...extraTokens };
-    for (const skillDir of skills) files.push(...emitSkill(skillDir, harness, tokens, commands));
+    for (const skillDir of skills) files.push(...emitSkill(skillDir, harness, tokens));
     for (const agentFile of agents) files.push(emitAgent(agentFile, harness, tokens));
   }
 

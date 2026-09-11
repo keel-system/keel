@@ -149,33 +149,18 @@ function harnessArtifacts(model, harness) {
   // La orquestadora se sintetiza (depende del servicio, del stack y de las capas),
   // así que no pasa por emitHarnessFiles: no hay asset del que proyectarla.
   files.push({ path: harness.skillPath(SKILL, 'SKILL.md'), content: skillMd(model, harness) });
-  if (harness.commandPath) {
-    files.push({
-      path: harness.commandPath(SKILL),
-      content: orchestratorCommand(model)
-    });
-  }
 
-  // Las de tecnología y los agentes sí son assets neutrales. `commands: false`:
-  // una skill de tecnología es conocimiento que el agente consulta al tocar el
-  // broker o la BD, no algo que nadie invoque con `/`.
+  // Las de tecnología y los agentes sí son assets neutrales.
   files.push(
     ...emitHarnessFiles({
       harnesses: [harness],
       skills: stackSkills(model).map((name) => path.join(generatorDir, 'skills', name)),
       agents: AGENTS.map((name) => path.join(agentsSourceDir, name)),
-      commands: false,
       extraTokens: { docs: DOCS_DIR }
     })
   );
 
   return files.map((file) => ({ ...file, content: applyTokens(file.content, tokens) }));
-}
-
-/** Stub de comando de la orquestadora, para los harnesses que separan comando y skill. */
-function orchestratorCommand(model) {
-  const description = `Completa la generación de ${model.service.projectName} a partir del diseño Keel de specs/, orquestando los subagentes de código, infraestructura, pruebas de integración, validación funcional y calidad.`;
-  return `---\ndescription: ${JSON.stringify(description)}\n---\n\nUsa la skill \`${SKILL}\` y sigue su proceso al pie de la letra, de la fase 0 a la 7. No admite argumentos: el cwd ya es la raíz del proyecto.\n`;
 }
 
 // Skill del proyecto: la única del generador, y delgada a propósito. El proceso
