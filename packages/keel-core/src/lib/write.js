@@ -115,9 +115,9 @@ function digestOfFile(target) {
  *                      decisión humana, y el que hay que enseñar con nombre y apellidos.
  *   · `adoptados`    — sin registro de quién lo escribió.
  *
- * Aparte, `huerfanos`: rutas del manifiesto que el generador ya no emite. Se reportan y
- * **no se borran jamás** — borrar código generado a partir de una lista es la clase de
- * automatismo que un día se lleva por delante algo que alguien seguía usando.
+ * Aparte, `huerfanos`: rutas del manifiesto que el generador ya no emite. Aquí solo se
+ * reportan. Borrarlos lo decide `pruneOrphans`, y solo cuando se puede demostrar que
+ * nadie los tocó.
  */
 export function classifyGenerated(files, destDir, manifest = null) {
   const registrado = new Map(Object.entries(manifest?.files ?? {}));
@@ -160,4 +160,52 @@ export function classifyGenerated(files, destDir, manifest = null) {
   }
 
   return buckets;
+}
+
+/**
+ * Retira los huérfanos que se puede DEMOSTRAR que son del generador.
+ *
+ * Un huérfano es lo que el generador escribió y ya no emite: el controller de una
+ * operación que el diseño quitó, su command, su handler. Dejarlo en su sitio no es
+ * neutral, porque el endpoint sigue expuesto aunque el diseño ya no lo tenga. Pero
+ * borrarlo a partir de una lista es lo que un día se lleva por delante trabajo ajeno.
+ * La línea que separa las dos cosas es la misma que usa `classifyGenerated`:
+ *
+ *   · `borrados`    — su huella en disco es la que registró el manifiesto: nadie lo
+ *                     tocó, es tan del generador como un refrescable. Se borra, y con él
+ *                     los directorios que queden vacíos.
+ *   · `ausentes`    — ya no está en disco: solo hay que olvidarlo.
+ *   · `modificados` — alguien lo tocó. **No se borra nunca**: retirarlo es trabajo de
+ *                     quien lo escribió, que sabe qué más depende de él.
+ *
+ * `orphans` son rutas POSIX relativas a destDir (el cubo `huerfanos`).
+ */
+export function pruneOrphans(orphans, destDir, manifest = null) {
+  const registrado = manifest?.files ?? {};
+  const result = { borrados: [], ausentes: [], modificados: [] };
+  const root = path.resolve(destDir);
+
+  for (const relative of [...orphans].map(toPosix).sort((a, b) => a.localeCompare(b))) {
+    const target = path.join(destDir, relative);
+    if (!fs.existsSync(target)) {
+      result.ausentes.push(relative);
+      continue;
+    }
+    if (registrado[relative] === undefined || digestOfFile(target) !== registrado[relative]) {
+      result.modificados.push(relative);
+      continue;
+    }
+    fs.rmSync(target);
+    result.borrados.push(relative);
+
+    // Los directorios que el borrado deja vacíos, hacia arriba y sin salir de destDir:
+    // un paquete Java vacío no rompe nada, pero sí dice que ahí hubo algo.
+    let dir = path.dirname(path.resolve(target));
+    while (dir.startsWith(root) && dir !== root && fs.readdirSync(dir).length === 0) {
+      fs.rmdirSync(dir);
+      dir = path.dirname(dir);
+    }
+  }
+
+  return result;
 }

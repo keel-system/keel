@@ -158,9 +158,14 @@ Reglas de la cascada:
      que conozcas (los que aparezcan en `security.serviceClients` o en el `README.md` del workspace);
      esta es la mitad del ciclo publicar↔ingerir que nadie dispara solo.
    - **Servidores ya generados.** Si existe algún `services/<servicio>-<tech>/`, hay que re-ejecutar
-     `keel-<tech> build specs/<servicio>` y volver a entrar al proyecto con `/keel-generate-<tech>`:
-     el build refresca el snapshot del diseño y de los docs, y el agente reimplementa lo que cambió.
-     **Tú no lo ejecutas**: el workspace de diseño no invoca generadores. Dilo como siguiente paso.
+     su build **en modo refresco** (en `keel-spring`: `keel-spring build specs/<servicio> --refresh
+     --prune`) y volver a entrar al proyecto con `/keel-generate-<tech>`. El refresco pone al día lo
+     que es del generador sin pisar el código del agente, retira lo que el diseño quitó y nadie
+     tocó, y deja en el proyecto un `EVOLUTION.md` con el delta: fusiones pendientes, huérfanos a
+     retirar, cambios del diseño y escenarios. Con él la skill entra en modo evolución, trabaja
+     sobre lo que cambió y puntúa la suite completa como no-regresión. `--force` no: pisa el código
+     del agente. **Tú no lo ejecutas**: el workspace de diseño no invoca generadores. Dilo como
+     siguiente paso.
 4. Un commit por evolución sobre `specs/<servicio>/` + `docs/<servicio>/`: el diseño vive en git y el
    diff completo —spec y derivados juntos— es lo que hace revisable el cambio de contrato.
 

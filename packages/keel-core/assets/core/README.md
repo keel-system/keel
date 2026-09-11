@@ -45,7 +45,12 @@ Este directorio es un **workspace Keel** (ver `CLAUDE.md` para el flujo completo
    **otro servidor** pueda consumir este.
 7. `/keel-evolve specs/<servicio>` — cuando haya que **cambiar un diseño ya cerrado**: versiona el
    contrato y regenera en cascada todos sus derivados. `keel describe <servicio>` dice en cualquier
-   momento cuáles están al día y cuáles quedaron atrás.
+   momento cuáles están al día y cuáles quedaron atrás. Si el servicio ya tiene un servidor generado,
+   el cambio llega a él **desde el diseño**, sin regenerarlo desde cero:
+   `keel-<tech> build specs/<servicio> --refresh --prune` y, dentro del proyecto, `/keel-generate-<tech>`,
+   que entra en modo evolución y completa solo lo que cambió. `keel-<tech> build --check` sale en rojo
+   mientras el servidor no esté al día con su diseño. Detalle en
+   `docs/methodology.md § El servidor también evoluciona desde el diseño`.
 
 ## Diseñar un sistema completo
 

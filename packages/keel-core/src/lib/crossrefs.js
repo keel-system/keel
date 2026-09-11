@@ -1,5 +1,6 @@
 import { FRAMEWORK_ERRORS, overrideFor } from './framework-errors.js';
 import { obligationFor } from './obligations.js';
+import { splitScenarioBlocks, scenarioFamilyOf } from './scenario-blocks.js';
 
 const BASE_TYPES = new Set(['string', 'text', 'int', 'long', 'decimal', 'boolean', 'uuid', 'date', 'timestamp', 'json', 'file']);
 
@@ -1238,10 +1239,8 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
   // describe igual de bien las dos, y admitirla dejaría pasar el secuencial como si
   // fuera el simultáneo — que es exactamente el escenario que falta.
   const CONCURRENT = /simult[áa]ne|a la vez|al mismo tiempo|en paralelo|concurrent|carrera/i;
-  const scenarioBlocks = (scenarios ?? '')
-    .split(/^#{2,4}\s+(?=FL-)/m)
-    .slice(1)
-    .filter((block) => /^FL-[A-Za-z0-9-]+/.test(block));
+  // El troceado vive en scenario-blocks.js: también lo usa design-delta.js.
+  const scenarioBlocks = splitScenarioBlocks(scenarios);
   const scenariosMentioning = (eventName) => {
     const mention = new RegExp(`\\b${eventName}\\b`);
     return scenarioBlocks.filter((block) => mention.test(block));
@@ -1256,10 +1255,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
   // Estrena aquí y no sustituye a `scenariosMentioning`: las otras cuatro reglas de cobertura
   // funcionan hoy con la búsqueda estricta, y cambiárselas de paso podría silenciar avisos
   // legítimos sin que nada lo delate. Si alguna vez se migran, se mide antes.
-  const familyOf = (block) => {
-    const id = block.split(/[:\s]/)[0];
-    return (/^(FL-[A-Za-z0-9]+-\d+)/.exec(id) ?? [null, id])[1];
-  };
+  const familyOf = scenarioFamilyOf;
   const scenariosCovering = (name) => {
     const mention = new RegExp(`\\b${name}\\b`);
     const families = new Set(scenarioBlocks.filter((block) => mention.test(block)).map(familyOf));

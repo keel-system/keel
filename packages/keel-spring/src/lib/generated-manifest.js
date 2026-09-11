@@ -30,7 +30,12 @@ export function readManifest(projectDir) {
   if (!fs.existsSync(file)) return null;
   try {
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return { generator: parsed.generator ?? null, files: parsed.files ?? {}, adopted: parsed.adopted ?? [] };
+    return {
+      generator: parsed.generator ?? null,
+      files: parsed.files ?? {},
+      adopted: parsed.adopted ?? [],
+      pendingMerge: parsed.pendingMerge ?? {}
+    };
   } catch {
     // Un manifiesto ilegible no puede tumbar un build: lo que se pierde es la capacidad
     // de refrescar, y eso ya lo dice el reporte al no encontrar registro de nada.
@@ -46,6 +51,12 @@ export function writeManifest(projectDir, manifest) {
     files: Object.fromEntries(Object.entries(manifest.files).sort(([a], [b]) => a.localeCompare(b))),
     adopted: [...manifest.adopted].sort((a, b) => a.localeCompare(b))
   };
+  // Solo cuando hay algo: un proyecto sin fusiones pendientes conserva el manifiesto de
+  // siempre, byte a byte, y no ensucia su diff al actualizar el generador.
+  const pendientes = Object.entries(manifest.pendingMerge ?? {});
+  if (pendientes.length > 0) {
+    ordenado.pendingMerge = Object.fromEntries(pendientes.sort(([a], [b]) => a.localeCompare(b)));
+  }
   fs.writeFileSync(path.join(projectDir, MANIFEST_FILE), JSON.stringify(ordenado, null, 2) + '\n');
 }
 
@@ -57,18 +68,44 @@ export function writeManifest(projectDir, manifest) {
  * mecanismo—, así que se registra para poder REPORTAR que se ha quedado atrás, y nunca
  * para refrescarlo. Una ruta sale de `adopted` solo cuando un `--force` la reescribe, que
  * es el único momento en que build puede afirmar que el archivo es suyo.
+ *
+ * `rebase` son los CONFLICTOS cuya versión nueva se acaba de dejar en REFRESH_DIR
+ * (`[ruta, huella]`). Su línea base pasa a ser la del generador de HOY y entran en
+ * `pendingMerge`. Sin eso, el conflicto era perpetuo: el manifiesto seguía con la huella
+ * vieja, así que aunque el agente fusionara, el build siguiente volvía a verlo como
+ * «lo tocaste Y el generador cambió» y no había forma de cerrarlo. Con la base movida, el
+ * siguiente lo ve como `tuyos`, y `pendingMerge` es lo que impide que ese `tuyos` se lea
+ * como «ya fusionado» cuando nadie ha fusionado nada: `--check` sale en rojo mientras
+ * quede una entrada, y quien la retira es el orquestador al cerrar la evolución.
+ *
+ * `olvidar` son rutas que salen del registro (huérfanos podados o que ya no están).
+ * `resueltos` son rutas que ya están byte a byte como las emite el generador: una fusión
+ * pendiente sobre ellas está cerrada por construcción.
  */
-export function nextManifest({ previous, generator, escritas, presentes }) {
+export function nextManifest({ previous, generator, escritas, presentes, rebase = [], olvidar = [], resueltos = [] }) {
   const files = { ...(previous?.files ?? {}) };
   const adopted = new Set(previous?.adopted ?? []);
+  const pendingMerge = { ...(previous?.pendingMerge ?? {}) };
 
   for (const [relative, digest] of escritas) {
     files[relative] = digest;
+    adopted.delete(relative);
+    // Build lo acaba de escribir entero: no queda nada que fusionar.
+    delete pendingMerge[relative];
+  }
+  for (const [relative, digest] of rebase) {
+    files[relative] = digest;
+    pendingMerge[relative] = digest;
+  }
+  for (const relative of resueltos) delete pendingMerge[relative];
+  for (const relative of olvidar) {
+    delete files[relative];
+    delete pendingMerge[relative];
     adopted.delete(relative);
   }
   for (const relative of presentes) {
     if (files[relative] === undefined && !adopted.has(relative)) adopted.add(relative);
   }
 
-  return { generator, files, adopted: [...adopted] };
+  return { generator, files, adopted: [...adopted], pendingMerge };
 }

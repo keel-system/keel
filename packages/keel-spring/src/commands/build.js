@@ -1,13 +1,37 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import pc from 'picocolors';
-import { isKeelWorkspace, resolveServiceDir, loadService, validateService, copyTree, DECISIONS_FILE } from 'keel-core';
+import {
+  isKeelWorkspace,
+  resolveServiceDir,
+  loadService,
+  validateService,
+  copyTree,
+  diffDesigns,
+  DECISIONS_FILE,
+  MANIFEST_FILE as DESIGN_MANIFEST
+} from 'keel-core';
 import { SKILL, SUPPORTED_DSL } from '../lib/assets.js';
 import { checkSupportedFeatures } from '../lib/supported-features.js';
 import { scaffoldService } from '../scaffold/index.js';
 import { writeFiles } from '../lib/writer.js';
-import { STACK_FILE, readStackConfig, writeStackConfig, askStackConfig, describeStack } from '../lib/stack-config.js';
+import {
+  STACK_FILE,
+  readStackConfig,
+  writeStackConfig,
+  askStackConfig,
+  describeStack,
+  stackDrift
+} from '../lib/stack-config.js';
 import { REFRESH_DIR } from '../lib/generated-manifest.js';
+import {
+  BASE_SPECS_DIR,
+  EVOLUTION_MD,
+  evolutionState,
+  mergePrevious,
+  readPreviousEvolution,
+  writeEvolution
+} from '../scaffold/evolution.js';
 
 function listSpecs(workspace) {
   const specsDir = path.join(workspace, 'specs');
@@ -27,12 +51,23 @@ function printSchemaErrors(file, ajvErrors) {
   }
 }
 
-export async function build(inputPath, { force = false, defaults = false, check = false, refresh = false } = {}) {
+export async function build(
+  inputPath,
+  { force = false, defaults = false, check = false, refresh = false, prune = false } = {}
+) {
   // Tres modos y no dos banderas sueltas: `check` gana porque no escribir es la promesa
   // más fuerte de las dos, y pedir las dos a la vez es una contradicción que vale más
   // resolver aquí que dejar a medias en el sistema de archivos.
   const mode = check ? 'check' : refresh ? 'refresh' : null;
   const workspace = process.cwd();
+
+  // Podar es refrescar en la otra dirección: solo tiene sentido donde build ya decide
+  // archivo a archivo de quién es cada cosa.
+  if (prune && mode !== 'refresh') {
+    console.error(pc.red('--prune solo se admite junto a --refresh (y nunca con --check, que no escribe).'));
+    process.exitCode = 1;
+    return;
+  }
 
   if (!isKeelWorkspace(workspace)) {
     console.error(pc.red('Este directorio no es un workspace Keel (falta schema/service.schema.json).'));
@@ -148,20 +183,62 @@ export async function build(inputPath, { force = false, defaults = false, check 
   const projectDir = path.join(workspace, 'services', `${manifest.service?.name}-spring`);
   let stack = readStackConfig(projectDir);
   let stackIsNew = false;
+  let stackChanges = { added: [], removed: [] };
   if (stack) {
+    // El stack persistido se reutiliza, pero el diseño pudo EVOLUCIONAR bajo él: una capa
+    // nueva que pide tecnología se pregunta (solo ella), y la que dejó de aplicar se anula.
+    const drift = stackDrift(stack, layers);
+    if (drift.missing.length + drift.stale.length > 0) {
+      const before = stack;
+      if (mode !== 'check') {
+        const answers =
+          drift.missing.length > 0 ? await askStackConfig(manifest, layers, { defaults, only: drift.missing }) : {};
+        stack = { ...stack };
+        for (const category of drift.missing) stack[category] = answers[category] ?? null;
+        for (const category of drift.stale) stack[category] = null;
+      }
+      stackChanges = {
+        added: drift.missing.map((category) => ({ category, value: stack[category] ?? null })),
+        removed: drift.stale.map((category) => ({ category, value: before[category] }))
+      };
+    }
     console.log();
     console.log(pc.dim(`Stack (${STACK_FILE}): ${describeStack(stack)}`));
+    for (const { category, value } of stackChanges.added) {
+      console.log(`  ${pc.yellow('+')} ${category}: ${value ?? pc.dim('(sin elegir: --check no pregunta)')}`);
+    }
+    for (const { category, value } of stackChanges.removed) {
+      console.log(`  ${pc.yellow('-')} ${category}: ${value} ${pc.dim('(el diseño ya no lo pide)')}`);
+    }
   } else {
     stack = await askStackConfig(manifest, layers, { defaults });
     stackIsNew = true;
+  }
+
+  // El delta de diseño se calcula ANTES de refrescar el snapshot, contra la base congelada
+  // si una evolución anterior sigue sin cerrar, o si no contra el snapshot: es el diseño
+  // desde el que se completó el proyecto por última vez.
+  const snapshotDir = path.join(projectDir, 'specs');
+  const baseDir = path.join(projectDir, REFRESH_DIR, BASE_SPECS_DIR);
+  const hasDesign = (candidate) => fs.existsSync(path.join(candidate, DESIGN_MANIFEST));
+  const projectExisted = hasDesign(snapshotDir);
+  const deltaBase = hasDesign(baseDir) ? baseDir : projectExisted ? snapshotDir : null;
+  let delta = null;
+  if (deltaBase) {
+    delta = diffDesigns(deltaBase, dir);
+    if (delta.error) {
+      console.warn(`${pc.yellow('⚠')} No se pudo comparar con el diseño anterior del proyecto: ${delta.error}`);
+      delta = null;
+    }
   }
 
   // Scaffolding transversal al stack: todo lo derivable mecánicamente del
   // diseño cuyo código no depende de la infra puntual elegida (el resto lo
   // escribe el agente con las skills por tecnología). Regeneración segura: sin --force
   // solo se escriben archivos que no existen.
-  const scaffold = scaffoldService({ manifest, layers, workspace, force, stack, mode });
-  if (stackIsNew) {
+  const scaffold = scaffoldService({ manifest, layers, workspace, force, stack, mode, prune });
+  const stackChanged = stackChanges.added.length + stackChanges.removed.length > 0;
+  if (stackIsNew || (stackChanged && mode !== 'check')) {
     writeStackConfig(projectDir, scaffold.stack);
     console.log();
     console.log(pc.dim(`Stack elegido: ${describeStack(scaffold.stack)} → ${STACK_FILE}`));
@@ -179,15 +256,48 @@ export async function build(inputPath, { force = false, defaults = false, check 
   );
 
   reportGeneratorDrift(scaffold, projectDir, workspace, mode);
+
+  // El traspaso al pipeline cuando el proyecto ya existía y algo cambió. En la primera
+  // generación no hay nada que evolucionar: todo es nuevo y el pipeline lo sabe.
+  const evolution = projectExisted
+    ? mergePrevious(
+        evolutionState({
+          service: { name: manifest.service?.name, version: manifest.service?.version },
+          delta,
+          pendingMerge: scaffold.pendingMerge,
+          // Con --prune lo intacto ya se fue: queda lo tocado. Sin él, todo huérfano que
+          // siga en disco es algo que el diseño ya no tiene.
+          toRetire: (scaffold.pruned ? scaffold.pruned.modificados : scaffold.buckets.huerfanos).filter((relative) =>
+            fs.existsSync(path.join(projectDir, relative))
+          ),
+          pruned: scaffold.pruned?.borrados ?? [],
+          newWithTodo: scaffold.nuevosConTodo,
+          stack: stackChanges,
+          notes: evolutionNotes(mode, prune, scaffold.buckets)
+        }),
+        readPreviousEvolution(projectDir),
+        projectDir
+      )
+    : null;
+  reportEvolution(evolution, scaffold.outDir, mode);
+
   if (mode === 'check') {
-    if (scaffold.buckets.refrescables.length > 0 || scaffold.buckets.conflictos.length > 0) process.exitCode = 1;
+    if (scaffold.buckets.refrescables.length > 0 || scaffold.buckets.conflictos.length > 0 || evolution?.pending) {
+      process.exitCode = 1;
+    }
     return;
+  }
+
+  if (evolution) {
+    // La base se congela la primera vez que el diseño cambia, ANTES de refrescar el
+    // snapshot: si no, un segundo build compararía el diseño consigo mismo.
+    if (evolution.delta && deltaBase === snapshotDir) copyTree(snapshotDir, baseDir, { force: true });
+    writeEvolution(projectDir, evolution);
   }
 
   // Snapshot del diseño dentro del proyecto: junto con el conocimiento del agente hace el repo
   // autosuficiente (quien lo clone finaliza la generación sin el workspace).
   // Siempre se refresca: el canónico es specs/<servicio> del workspace.
-  const snapshotDir = path.join(projectDir, 'specs');
   const snapshot = copyTree(dir, snapshotDir, { force: true });
   console.log(
     pc.dim(
@@ -227,6 +337,63 @@ Siguiente paso — la generación se completa dentro del proyecto:
 
 Orquesta el completado: código + infraestructura en paralelo, validación funcional de los
 escenarios contra el servidor real y pase de calidad al final.`);
+  if (evolution?.pending) {
+    console.log(
+      pc.dim(
+        `Como hay ${REFRESH_DIR}/${EVOLUTION_MD}, la skill entra en modo evolución: trabaja sobre lo que cambió y ` +
+          'puntúa la suite completa como no-regresión.'
+      )
+    );
+  }
+}
+
+/** Lo que el diseñador tiene que saber de esta pasada y no es trabajo del agente. */
+function evolutionNotes(mode, prune, buckets) {
+  const notes = [];
+  if (mode !== 'refresh' && buckets.conflictos.length > 0) {
+    notes.push(
+      `${buckets.conflictos.length} conflicto(s) sin materializar: con \`--refresh\` su versión nueva queda en ` +
+        `\`${REFRESH_DIR}/\` y pasan a la sección 1.`
+    );
+  }
+  if (mode !== 'refresh' && buckets.refrescables.length > 0) {
+    notes.push(`${buckets.refrescables.length} archivo(s) de build sin poner al día: vuelve a lanzar con \`--refresh\`.`);
+  }
+  if (!prune && buckets.huerfanos.length > 0) {
+    notes.push('Con `--refresh --prune`, build retira él mismo los huérfanos que nadie tocó.');
+  }
+  return notes;
+}
+
+function reportEvolution(evolution, outDir, mode) {
+  if (!evolution?.pending) return;
+  console.log();
+  const version =
+    evolution.from && evolution.from !== evolution.to ? ` — diseño v${evolution.from} → v${evolution.to}` : '';
+  console.log(
+    pc.bold(
+      pc.yellow(
+        mode === 'check'
+          ? `Evolución pendiente${version} (no se escribe nada con --check):`
+          : `Evolución pendiente${version} → ${outDir}/${REFRESH_DIR}/${EVOLUTION_MD}`
+      )
+    )
+  );
+  const scenarios = evolution.delta?.scenarios;
+  const lines = [
+    ['fusión(es) pendiente(s)', evolution.pendingMerge.length],
+    ['huérfano(s) a retirar por el agente', evolution.toRetire.length],
+    ['sección(es) del diseño cambiada(s)', evolution.delta?.sections.length ?? 0],
+    [
+      'escenario(s) añadido(s), cambiado(s) o quitado(s)',
+      scenarios ? scenarios.added.length + scenarios.changed.length + scenarios.removed.length : 0
+    ],
+    ['archivo(s) nuevo(s) con TODO', evolution.newWithTodo.length],
+    ['cambio(s) de stack', evolution.stack.added.length + evolution.stack.removed.length],
+    ['archivo(s) retirado(s) por --prune', evolution.pruned.length]
+  ];
+  for (const [label, count] of lines) if (count > 0) console.log(`  ${pc.yellow('•')} ${count} ${label}`);
+  for (const note of evolution.notes) console.log(pc.dim(`  ${note.replace(/`/g, '')}`));
 }
 
 /**
@@ -240,7 +407,9 @@ escenarios contra el servidor real y pase de calidad al final.`);
  * ciegas propaga el arreglo Y destruye el trabajo del agente sin decir cuál era cuál.
  */
 function reportGeneratorDrift(scaffold, projectDir, workspace, mode) {
-  const { refrescables, conflictos, adoptados, huerfanos } = scaffold.buckets;
+  const { refrescables, conflictos, adoptados } = scaffold.buckets;
+  // Con --prune lo intacto ya se fue: solo queda por decir lo que alguien tocó.
+  const huerfanos = scaffold.pruned ? scaffold.pruned.modificados : scaffold.buckets.huerfanos;
   if (refrescables.length + conflictos.length + huerfanos.length + adoptados.length === 0) {
     if (mode === 'check') console.log(pc.green('✔ El proyecto está al día con el generador instalado.'));
     return;
@@ -275,7 +444,13 @@ function reportGeneratorDrift(scaffold, projectDir, workspace, mode) {
 
   if (huerfanos.length > 0) {
     separar();
-    console.log(pc.dim(`${huerfanos.length} archivo(s) que el generador ya no emite (no se borran): ${huerfanos.join(', ')}`));
+    console.log(
+      pc.dim(
+        scaffold.pruned
+          ? `${huerfanos.length} archivo(s) que el generador ya no emite y alguien tocó: no se borran, pasan al agente vía ${EVOLUTION_MD}: ${huerfanos.join(', ')}`
+          : `${huerfanos.length} archivo(s) que el generador ya no emite (no se borran; --refresh --prune retira los que nadie tocó): ${huerfanos.join(', ')}`
+      )
+    );
   }
 
   if (adoptados.length > 0) {

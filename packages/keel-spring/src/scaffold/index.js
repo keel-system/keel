@@ -4,7 +4,7 @@
 
 import path from 'node:path';
 import { buildModel } from '../lib/model.js';
-import { classifyGenerated, digestOf } from 'keel-core';
+import { classifyGenerated, digestOf, pruneOrphans } from 'keel-core';
 import { writeFiles } from '../lib/writer.js';
 import { readManifest, nextManifest, writeManifest, REFRESH_DIR } from '../lib/generated-manifest.js';
 import { listKeelDocs } from '../lib/keel-docs.js';
@@ -167,7 +167,7 @@ export function resolveStack(stack, layers, manifest) {
   };
 }
 
-export function scaffoldService({ manifest, layers, workspace, force = false, stack = null, mode = null }) {
+export function scaffoldService({ manifest, layers, workspace, force = false, stack = null, mode = null, prune = false }) {
   const resolved = resolveStack(stack, layers, manifest);
   const model = buildModel({ manifest, layers, stack: resolved });
   model.stack = resolved;
@@ -203,26 +203,50 @@ export function scaffoldService({ manifest, layers, workspace, force = false, st
 
   const { copied, skipped, digests } = writeFiles(files, projectDir, { force, only });
 
+  // Los huérfanos que se puede demostrar que son de build (nadie los tocó) se retiran
+  // con --prune; los tocados se quedan y pasan al agente vía EVOLUTION.md.
+  const pruned = mode === 'refresh' && prune ? pruneOrphans(buckets.huerfanos, projectDir, previous) : null;
+
   // La versión nueva de lo que está en conflicto, para poder compararla con diff. Es
   // exactamente el trabajo que si no hay que hacer a mano: generar el proyecto en otro
-  // sitio solo para ver qué cambió el generador en ESE archivo.
-  if (mode === 'refresh' && buckets.conflictos.length > 0) {
-    const enConflicto = new Set(buckets.conflictos);
+  // sitio solo para ver qué cambió el generador en ESE archivo. Entran también las
+  // fusiones que siguen pendientes de una pasada anterior: si alguien limpió `build/`,
+  // su versión nueva se vuelve a dejar donde EVOLUTION.md dice que está.
+  const posixOf = (entry) => entry.path.split(/[\\/]/).join('/');
+  const enConflicto = new Set([...buckets.conflictos, ...Object.keys(previous?.pendingMerge ?? {})]);
+  if (mode === 'refresh' && enConflicto.size > 0) {
     writeFiles(
-      files.filter((entry) => enConflicto.has(entry.path.split(/[\\/]/).join('/'))),
+      files.filter((entry) => enConflicto.has(posixOf(entry))),
       path.join(projectDir, REFRESH_DIR),
       { force: true }
     );
   }
 
+  // Los stubs que build acaba de crear y traen trabajo para el agente.
+  const nuevos = new Set(buckets.nuevos);
+  const escritos = new Set(copied);
+  const nuevosConTodo = files
+    .filter((entry) => nuevos.has(posixOf(entry)) && escritos.has(posixOf(entry)))
+    .filter((entry) => typeof entry.content === 'string' && entry.content.includes('TODO'))
+    .map(posixOf)
+    .sort((a, b) => a.localeCompare(b));
+
   // El manifiesto se actualiza incluso en `check`, donde `digests` viene vacío: lo que
   // hace ahí es ADOPTAR lo que ya estaba, que es lo que da el aviso a los proyectos
   // anteriores al mecanismo sin tocarles un solo archivo.
+  let pendingMerge = Object.keys(previous?.pendingMerge ?? {});
   if (mode !== 'check') {
-    writeManifest(
-      projectDir,
-      nextManifest({
+    const digestByPath = new Map(files.map((entry) => [posixOf(entry), entry]));
+    const next = nextManifest({
         previous,
+        // Solo en --refresh: es cuando la versión nueva del conflicto se ha dejado en
+        // REFRESH_DIR y la fusión pasa a ser trabajo de alguien con nombre.
+        rebase:
+          mode === 'refresh'
+            ? buckets.conflictos.map((relative) => [relative, digestOf(digestByPath.get(relative))])
+            : [],
+        olvidar: pruned ? [...pruned.borrados, ...pruned.ausentes] : [],
+        resueltos: buckets.alDia,
         generator: `keel-spring@${packageVersion()}`,
         // Lo escrito en esta pasada, MÁS lo que ya era byte a byte idéntico a lo que el
         // generador emite. Eso último importa para los proyectos que existían antes del
@@ -232,10 +256,10 @@ export function scaffoldService({ manifest, layers, workspace, force = false, st
         // verdad no se puede atribuir es solo lo que ya difiere.
         escritas: [...digests, ...alDiaDigests],
         presentes: [...buckets.adoptados, ...buckets.refrescables, ...buckets.tuyos, ...buckets.conflictos]
-      })
-    );
+      });
+    writeManifest(projectDir, next);
+    pendingMerge = Object.keys(next.pendingMerge);
   }
-
 
   return {
     outDir: outDir.split(path.sep).join('/'),
@@ -244,6 +268,9 @@ export function scaffoldService({ manifest, layers, workspace, force = false, st
     warnings: model.warnings,
     stack: model.stack,
     docs: model.docs,
-    buckets
+    buckets,
+    pruned,
+    pendingMerge: pendingMerge.sort((a, b) => a.localeCompare(b)),
+    nuevosConTodo
   };
 }

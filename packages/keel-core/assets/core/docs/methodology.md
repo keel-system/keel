@@ -34,7 +34,10 @@ El corazón del método es una **fase de diseño iterativa** que se cierra una s
                      └───────────────────┬───────────────────┘
                                          │
         /keel-evolve: cambia el spec     └──> vuelve al diseño, versiona y regenera
-                                                (spec + TODOS sus derivados)
+                                                (spec + TODOS sus derivados);
+                                                y el servidor ya generado lo sigue:
+                                                keel-<tech> build --refresh --prune
+                                                + /keel-generate-<tech> (modo evolución)
 ```
 
 **Antes del ciclo, si el encargo es un sistema y no un servicio: descomponerlo** (`/keel-decompose`). Todo el ciclo que sigue tiene grano de **un servicio** — `/keel-design` parte de un servicio ya nombrado. Cuando lo que llega es un encargo completo (un TDR: "una plataforma de venta de billetes"), falta decidir antes cuántos servicios hay, dónde está la frontera de cada uno, quién consume a quién y **en qué orden se construyen**; y esa decisión no cabe en el DSL, que describe un servicio. `/keel-decompose` entrevista el documento de requisitos y dibuja las fronteras aplicando el mismo reparto de la palabra que el diseño —una frontera la **recomienda** el agente y la **decide** el humano, porque cambia qué puede prometer cada servicio y quién puede desplegar sin pedir permiso—, y produce tres cosas: `system.yaml` (el mapa, declarativo y verificable), `docs/system/SYSTEM.md` (la decisión y su porqué, incluidos los cortes descartados y lo que queda fuera de alcance) y un `docs/system/briefs/<servicio>.md` por servicio, que es el **encargo** con el que otra persona entra al ciclo sin releer el TDR (`/keel-design` lo detecta y arranca desde él, confirmando en vez de asumir). El orden lo calcula `keel system` como orden topológico de las aristas **bloqueantes** de los dos tipos —`consumes`, quien lee un dato, e `invokes`, quien encarga trabajo—: quien publica contrato va antes que quien lo necesita, porque el paso 1 del ciclo pide el `INTEGRATION.md` del proveedor y `/keel-consume` degrada sin él. Y `keel system check` es la **única comprobación cross-servicio** del método —`keel validate` no ve más allá de un servicio— porque llega a cruzar dos specs: que el proveedor publique de verdad, en su capa `messaging`, el evento que el mapa promete a su consumidor, y que quien recibe un encargo lo consuma de verdad y como encargo (`nature: request`) y no como un hecho ajeno al que reacciona por su cuenta. Un encargo con una sola fuente de verdad no necesita esta fase. Detalle en [system-decomposition.md](system-decomposition.md).
@@ -153,9 +156,82 @@ Por eso la evolución es una skill propia y no una nota al pie. **`/keel-evolve`
 
 Lo que hace verificable esa cascada es que **cada derivado lleva estampado el `service.version` del que nació** (`info.version` en los contratos formales, la variable `keelVersion` en Postman, un comentario `keel:version` en el panel y los visores, la línea `> specs/<servicio> v<versión>` en los dos markdown derivados, el front-matter en `INTEGRATION.md`). `keel describe <servicio>` compara cada sello con el manifiesto y reporta los que quedaron atrás, los que nunca se generaron y los que **sobran** (un `asyncapi.yaml` que sobrevivió a la retirada de la capa `messaging`). Es la única comprobación mecánica de frescura del método: el resto —qué regenerar y en qué orden— lo decide la skill.
 
+### El servidor también evoluciona desde el diseño
+
+Un servidor ya generado y validado **no se regenera desde cero** cuando cambia su diseño, y tampoco se
+cambia tocando su código. Las dos cosas fallan por lo mismo. Regenerar desde cero (o con `--force`) tira
+el trabajo del agente, que es la mayor parte del servidor. Tocar el código primero hace que el spec
+mienta: el siguiente build, los escenarios y cualquier otro generador seguirían describiendo el servicio
+anterior. El orden es siempre el mismo, y **empieza en el diseño**:
+
+```bash
+/keel-evolve specs/<servicio>                            # 1. workspace: el spec cambia, se versiona y sus derivados se regeneran
+keel-<tech> build specs/<servicio> --refresh --prune     # 2. workspace: el proyecto se pone al día con el diseño nuevo
+cd services/<servicio>-<tech>
+/keel-generate-<tech>                                    # 3. proyecto: el agente completa solo lo que cambió
+```
+
+**Paso 2: qué hace el build con cada archivo del proyecto.** El generador guarda en el proyecto un
+registro de lo que escribió la última vez (`keel-generated.json`). Con él puede distinguir lo suyo de lo
+que escribió el agente, archivo a archivo, algo que comparando contenidos no se puede hacer: en un
+proyecto completado, que un archivo difiera del stub es lo esperado.
+
+| Situación del archivo | Qué hace `build --refresh --prune` |
+|---|---|
+| Nuevo (p. ej. el stub de una operación añadida) | Lo escribe |
+| Es del generador, nadie lo tocó y el generador cambió | Lo pone al día |
+| El agente lo tocó y el generador **no** cambió | No lo toca: no hay nada que propagar |
+| El agente lo tocó **y** el generador cambió (conflicto) | No lo toca. Deja la versión nueva aparte y lo apunta como **fusión pendiente** |
+| El generador ya no lo emite (el diseño quitó lo que lo justificaba) y nadie lo tocó | Lo borra: dejarlo expondría algo que el diseño ya no tiene |
+| El generador ya no lo emite y el agente lo tocó | No lo borra: pasa al agente como tarea «retirar» |
+
+Además, si el diseño empieza a pedir una tecnología que el stack persistido no tiene (una capa
+`messaging` nueva pide un broker), el build pregunta **solo esa**. Lo ya elegido no se vuelve a
+preguntar.
+
+**El traspaso al agente.** El build compara el diseño nuevo con el diseño desde el que se completó el
+servidor por última vez: capas, operaciones, entidades y eventos añadidos, quitados y cambiados, y los
+escenarios `FL-*` afectados. Deja todo en un documento de evolución dentro del proyecto (en
+`keel-spring`, `build/keel-refresh/EVOLUTION.md`), junto con las fusiones pendientes, los archivos a
+retirar y los stubs nuevos. La base de esa comparación se congela la primera vez que el diseño cambia,
+así que dos builds seguidos antes de entrar al proyecto no pierden nada.
+
+**Paso 3: el pipeline en modo evolución.** Es el mismo pipeline de la primera generación, con el trabajo
+acotado:
+- el agente de código fusiona, retira, revisa los handlers de lo que cambió y completa los stubs nuevos;
+- el de pruebas solo crea, reescribe o borra las pruebas de los escenarios afectados.
+
+La puntuación **no se acota**: corre la suite completa. Las pruebas de los flujos que no cambiaron son la
+no-regresión de lo que ya funcionaba, y es justo lo que una evolución que solo puntuara lo cambiado no
+vería. Al cerrar, el orquestador da por resueltas las fusiones pendientes, retira el documento de
+evolución y hace el commit.
+
+**La puerta de CI.** `keel-<tech> build specs/<servicio> --check` no escribe nada y sale en rojo mientras
+el servidor no esté al día con su diseño: por un cambio de diseño sin aplicar, por una fusión sin cerrar,
+por un archivo que el diseño retiró o por un arreglo del generador sin propagar.
+
+Tres límites que conviene saber:
+- **Una fusión no tiene versión de referencia.** Nadie guarda la versión del generador anterior a los
+  cambios del agente, así que el agente parte de su código y porta lo que cambió en la versión nueva,
+  guiándose por el delta del diseño.
+- **Cambiar una operación caduca las obligaciones aceptadas sobre ella** en `decisions.yaml`. El build se
+  niega hasta reafirmarlas, y es deliberado: aceptar algo sobre la versión anterior no lo acepta sobre la
+  nueva.
+- **Una evolución a medio aplicar se pierde con una limpieza del directorio de salida** (en
+  `keel-spring`, `./gradlew clean`). Hasta cerrarla, no se limpia.
+
 ## Código generado y ediciones manuales
 
-El flujo asume regeneración completa: el proyecto generado se puede borrar y volver a producir desde el spec. Re-ejecutar `keel-<tech> build` sobre un proyecto ya existente es **seguro**: solo añade archivos nuevos y nunca pisa lo que el agente implementó; sobrescribir todo lo generado exige `--force` explícito. Regla práctica: lo funcional al spec, lo puramente operativo (Dockerfile, CI, config de despliegue) puede vivir solo en el proyecto generado — y sobrevive porque el generador no lo produce.
+El proyecto generado se puede borrar y volver a producir desde el spec, pero lo normal es no hacerlo:
+re-ejecutar `keel-<tech> build` sobre un proyecto existente es **seguro**. Sin banderas, solo añade lo
+nuevo. Con `--refresh` pone al día lo que es del generador sin pisar lo del agente, y con `--prune`
+retira lo que el diseño quitó y nadie tocó (ver [El servidor también evoluciona desde el
+diseño](#el-servidor-también-evoluciona-desde-el-diseño)). Sobrescribir todo, incluido el trabajo del
+agente, exige `--force` explícito, y casi nunca es lo que se quiere.
+
+Regla práctica: lo funcional va al spec, y lo puramente operativo (Dockerfile, CI, config de
+despliegue) puede vivir solo en el proyecto generado; sobrevive porque el generador no lo produce. Un
+cambio funcional hecho directamente en el código es deuda: el spec deja de describir el servidor.
 
 ## Añadir una tecnología nueva
 

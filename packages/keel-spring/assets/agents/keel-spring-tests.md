@@ -35,6 +35,20 @@ El build lo respalda: `build.gradle` deja `src/main/java` fuera del `compileClas
 source set `integrationTest`, así que un test que importe un DTO o una entidad generada
 **no compila**.
 
+## Modo evolución
+
+Si el orquestador te pasa la sección 4 de `build/keel-refresh/EVOLUTION.md`, las pruebas ya existen
+y solo cambian las de esos flujos:
+
+- **Añadidos**: clase nueva, como siempre.
+- **Cambiados**: localiza su clase con `grep -rl '<FL-id>' src/integrationTest/` y reescribe el caso
+  (o la clase entera, si cambió la familia entera) contra el `Then` NUEVO.
+- **Quitados**: borra su caso, o la clase si era toda suya. Un test de un flujo que el diseño retiró
+  falla contra un servidor correcto.
+
+El resto de clases **no se reescriben**: son la no-regresión de lo que ya funcionaba, y la
+puntuación las ejecuta todas. La independencia no cambia: sigues sin leer `src/main/java`.
+
 ## Proceso
 
 1. Lee, **en este orden**:

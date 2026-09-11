@@ -53,7 +53,7 @@ Con eso el proyecto es un **repo autosuficiente**: quien lo clone, sin el worksp
 
 Si el generador orquesta el completado con subagentes (patrón de `keel-spring`: agente de código en paralelo con agente de infraestructura, agente de validación funcional después y un pase de calidad no-conductual al final), sus definiciones viven en `assets/agents/` con frontmatter neutral. Patrón recomendado de **handoff estructurado**: cada subagente cierra su reporte con un bloque parseable (`status`, `blockers[]`, `failures[]`…) y la skill orquestadora decide avances y relanzamientos sobre esos campos, nunca sobre prosa.
 
-**Regeneración segura**: re-ejecutar `build` solo añade archivos nuevos y nunca pisa lo que el agente implementó; `--force` sobrescribe todo lo generado (avisando de qué se perdería). Los snapshots de `specs/` y `docs/` son la excepción: se refrescan siempre.
+**Regeneración segura**: re-ejecutar `build` sin banderas solo añade archivos nuevos y nunca pisa lo que el agente implementó; `--refresh` pone al día lo que es del generador y nadie tocó, y `--prune` retira lo que el generador ya no emite y nadie tocó (ver [Evolucionar el proyecto cuando cambia el diseño](#evolucionar-el-proyecto-cuando-cambia-el-diseño)); `--force` sobrescribe todo lo generado (avisando de qué se perdería). Los snapshots de `specs/` y `docs/` son la excepción: se refrescan siempre.
 
 ## Anatomía del paquete
 
@@ -113,13 +113,42 @@ Lo único que desambigua es **el registro de lo que el generador escribió la ú
 cada archivo en seis cubos: `nuevos`, `refrescables` (es del generador, nadie lo tocó, y el
 generador cambió), `alDia`, `tuyos` (lo tocaron, pero el generador no cambió: no hay nada que
 propagar), `conflictos` (las dos cosas) y `adoptados` (sin registro). Aparte, los huérfanos: rutas
-del registro que el generador ya no emite, que **se reportan y no se borran jamás**.
+del registro que el generador ya no emite. `classifyGenerated` solo los reporta; `pruneOrphans`
+borra los que se puede demostrar que son del generador (su huella casa con el registro) y devuelve
+aparte los que alguien tocó, que **no se borran nunca**.
 
-Un generador nuevo hereda el mecanismo escribiendo su manifiesto y ofreciendo los dos modos:
+Un generador nuevo hereda el mecanismo escribiendo su manifiesto y ofreciendo los tres modos:
 
 - `--refresh` escribe `nuevos` + `refrescables` y no toca nada más;
+- `--prune`, solo junto a `--refresh`, retira los huérfanos intactos;
 - `--check` no escribe y sale con 1 si hay algo desfasado — misma puerta de CI que
   `keel init --check` y `keel index --check`.
+
+### Evolucionar el proyecto cuando cambia el diseño
+
+El mismo registro sirve para el otro motivo por el que un proyecto ya generado se queda atrás: que
+cambie **su diseño** (`/keel-evolve`). La metodología exige que la evolución entre siempre por el diseño
+y llegue al servidor sin regenerarlo desde cero (`methodology.md § El servidor también evoluciona desde
+el diseño`), y eso obliga al generador a cuatro cosas más:
+
+1. **Calcular el delta de diseño** con `diffDesigns(prevDir, nextDir)` de `keel-core`: capas; por
+   sección de cada capa, las claves añadidas, quitadas y cambiadas; y los escenarios `FL-*` añadidos,
+   cambiados y quitados, con sus familias. Es agnóstico del generador: compara diseños, no código.
+2. **Congelar la base del delta.** La base es el diseño desde el que se completó el proyecto por
+   última vez, no el snapshot de `specs/` que el build refresca en cada pasada. Si no, un segundo build
+   antes de entrar al proyecto compararía el diseño consigo mismo y borraría la evolución pendiente.
+3. **Cerrar el ciclo del conflicto.** Al dejar aparte la versión nueva de un conflicto, su línea base
+   pasa a esa versión y la ruta se apunta como **fusión pendiente**. Sin lo primero, el conflicto es
+   perpetuo. Sin lo segundo, el siguiente build lo vería como «tocado, generador sin cambios» y lo
+   daría por fusionado. `--check` sale en rojo mientras quede una fusión pendiente, y la da por cerrada
+   el orquestador del pipeline cuando la suite está en verde.
+4. **Dejar el traspaso escrito para el pipeline**: un documento dentro del proyecto con el delta, las
+   fusiones pendientes, los huérfanos que el agente tiene que retirar, los stubs nuevos y los cambios de
+   stack (si el diseño empieza a pedir una tecnología, se pregunta solo esa). La skill del generador lo
+   detecta y acota la fase de implementación a él, pero **no** acota la puntuación: la suite completa es
+   la no-regresión de lo que no cambió.
+
+`keel-spring` es la implementación de referencia (`src/scaffold/evolution.js`, `test/design-evolution.test.js`).
 
 Tres decisiones que `keel-spring` ya tomó y conviene copiar:
 

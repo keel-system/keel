@@ -16,6 +16,7 @@ program
   .argument('[ruta]', 'directorio del servicio o su manifiesto (ej. specs/mi-servicio)')
   .option('--check', 'no escribe: falla si el proyecto se quedó atrás respecto al generador instalado', false)
   .option('--refresh', 'pone al día los archivos que generó build y nadie ha tocado; nunca pisa el código del agente', false)
+  .option('--prune', 'con --refresh: borra lo que build generó, ya no emite y nadie ha tocado; lo tocado se deja al agente', false)
   .option('-f, --force', 'sobrescribe TODO el scaffolding, incluido el código implementado por el agente (para propagar un arreglo usa --refresh)', false)
   .option('-y, --defaults', 'usa los defaults del stack sin cuestionario (PostgreSQL, Kafka, Keycloak, Redis)', false)
   .action((ruta, options) => build(ruta, options));

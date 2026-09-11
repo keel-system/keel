@@ -28,6 +28,18 @@ Para arrancarlo a mano en cualquier momento: `docker compose -f infra/docker-com
 
 `build --defaults` (o sin terminal interactiva) omite el cuestionario con los defaults (PostgreSQL, Kafka, Keycloak, Redis). `build` es idempotente y de regeneración segura: no sobrescribe el código ya implementado por el agente salvo con `--force`; el stack persistido en `keel-stack.json` se reutiliza sin repreguntar, y los snapshots de `specs/` y `docs/` se refrescan siempre.
 
+### Evolucionar un proyecto ya generado
+
+Si el diseño cambia después de terminar la generación (`/keel-evolve` en el workspace), no se regenera desde cero:
+
+```bash
+keel-spring build specs/<servicio> --refresh --prune   # desde el workspace
+cd services/<servicio>-spring
+/keel-generate-spring                                  # entra en modo evolución
+```
+
+`--refresh` pone al día lo que build generó y nadie tocó. Lo que el agente tocó y el generador cambió (un conflicto) no se pisa: su versión nueva queda en `build/keel-refresh/` y la ruta entra en `pendingMerge` de `keel-generated.json`. `--prune` borra lo que build ya no emite, solo si nadie lo tocó. Si el diseño empieza a pedir una categoría nueva del stack (p. ej. un broker), build la pregunta, y solo esa. El resultado es `build/keel-refresh/EVOLUTION.md`, con el delta del diseño, los escenarios afectados, las fusiones y los huérfanos que el agente tiene que retirar; con él la skill trabaja sobre lo que cambió y puntúa la suite completa como no-regresión. `--check` sale en rojo mientras quede una evolución o una fusión pendiente.
+
 ## Compatibilidad
 
 | Paquete | DSL Keel |

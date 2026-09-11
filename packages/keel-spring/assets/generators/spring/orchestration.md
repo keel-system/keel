@@ -480,6 +480,42 @@ Regla de oro del informe: cada entrada dice de quién es. Un hallazgo sin dueño
 nada, y una incidencia de este proyecto disfrazada de defecto del generador cuesta una
 investigación inútil aguas arriba.
 
+## Modo evolución: el proyecto ya existía
+
+Un proyecto completado no se regenera desde cero cuando cambia su diseño. El diseñador ejecuta
+`keel-spring build specs/<servicio> --refresh --prune` en el workspace, y build deja en
+`build/keel-refresh/EVOLUTION.md` (más `evolution.json`, su forma estructurada) lo que cambió desde
+la última vez que se completó:
+
+| Sección | Qué es | Para quién |
+|---|---|---|
+| 1. Fusiones pendientes | Archivos que el agente completó y el generador volvió a cambiar; la versión nueva está en `build/keel-refresh/<ruta>` | `keel-spring-code` |
+| 2. Huérfanos a retirar | Lo que build ya no emite y alguien tocó (lo intacto ya lo borró `--prune`) | `keel-spring-code` |
+| 3. Cambios del diseño | Delta por capa y sección: añadido, quitado, cambiado | `keel-spring-code` |
+| 4. Escenarios | `FL-*` añadidos, cambiados y quitados, y sus familias | `keel-spring-tests`, y solo esto |
+| 5. Archivos nuevos con TODO | Los stubs nuevos | `keel-spring-code` |
+| 6. Stack | Categorías que el diseño empezó o dejó de pedir | `keel-spring-infra` y `keel-spring-code` |
+
+El pipeline es el mismo; lo que cambia es el alcance de la fase 1. La fase 2a no se acota nunca:
+`score-scenarios.sh` corre la suite **completa**, y las clases de los flujos que no se tocaron son la
+no-regresión de lo que ya funcionaba. Una evolución que solo puntuara lo cambiado no vería el
+escenario viejo que el cambio rompió, que es justo lo que más cuesta ver.
+
+**La base del delta** es el diseño desde el que se completó el proyecto, no el snapshot de
+`specs/`: build lo refresca en cada pasada, así que se congela una copia en
+`build/keel-refresh/base-specs/` la primera vez que el diseño cambia. Dos builds seguidos antes de
+entrar al proyecto no pierden la evolución.
+
+**Cierre, y es del orquestador**:
+1. Quitar de `pendingMerge` (en `keel-generated.json`) las rutas fusionadas. Build movió la línea
+   base de un conflicto a la versión nueva al dejarla en `build/keel-refresh/`: sin eso el
+   conflicto era perpetuo. `pendingMerge` es lo que impide que ese cambio de base se lea como «ya
+   fusionado»: mientras quede una entrada, `keel-spring build --check` sale en rojo.
+2. Borrar `build/keel-refresh/`.
+3. Hacer el commit.
+
+Hasta entonces nadie ejecuta `./gradlew clean`.
+
 ## Autosuficiencia del proyecto generado
 
 `build` deja en este proyecto todo lo que el pipeline necesita: la skill orquestadora
@@ -491,5 +527,6 @@ raíz, y funciona idéntico desde un clon del repo, sin el workspace.
 
 El canónico del diseño sigue siendo `specs/<servicio>/` del workspace: el snapshot de
 `specs/` se refresca en cada `keel-spring build`. Si el diseño cambió, se re-ejecuta
-`keel-spring build specs/<servicio>` allí (solo añade archivos nuevos; con `--force`
-sobrescribe) y se vuelve a entrar aquí.
+`keel-spring build specs/<servicio> --refresh --prune` allí y se vuelve a entrar aquí, en modo
+evolución (ver [Modo evolución](#modo-evolución-el-proyecto-ya-existía)). Nunca se cambia primero el
+código: el diseño es la única fuente de verdad funcional.
