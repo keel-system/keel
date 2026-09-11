@@ -2,17 +2,65 @@
 
 **Diseña un servidor una vez. Genéralo en cualquier tecnología.**
 
-Keel es una CLI de Node.js + una metodología para agentes que separa el *qué* hace un servicio del *cómo* está implementado:
+## El problema
 
-1. **Diseño agnóstico por capas** — la funcionalidad del servidor se condensa en un directorio de **artefactos declarativos relacionados** (`specs/<servicio>/`): un manifiesto más una capa por preocupación — dominio, casos de uso, API, seguridad, mensajería, clientes HTTP, persistencia. Cada capa se itera con el humano por separado y ninguna menciona framework, ORM, broker ni lenguaje.
-2. **Generación dirigida por agentes** — un agente (Claude Code) lee el spec validado y genera un proyecto completo para una tecnología concreta (Spring Boot, NestJS, FastAPI…), guiado por el generador de esa tecnología.
-3. **Documentación automática del diseño** — al cerrar el diseño se derivan, sin intervención extra, el documento de diseño reutilizable (`DESIGN.md`) y un índice `README.md` del workspace que lista los servicios; y, cuando se necesita integrar, la guía de integración + OpenAPI para que otros sistemas se conecten con mínima fricción.
+Encargarle un servidor a un agente funciona hasta que hay que operarlo. Lo que falla no es la sintaxis del código: son cuatro cosas que no se ven al leer el diff.
 
-El mismo spec puede regenerarse tantas veces como se quiera, en tecnologías distintas, sin re-diseñar nada.
+- **Las decisiones estructurales se toman en silencio.** Outbox o publicación en línea, qué operación se puede repetir sin cobrar dos veces, cuánto puede llegar rancio de una caché, qué transacción envuelve qué, qué pasa cuando el proveedor del que dependemos no responde. Nadie las escribe, así que las decide el agente en el momento de teclear —y un valor decidido y uno asumido se escriben igual—. En Keel son **obligaciones con id estable** que `keel validate` deja en rojo hasta que se declaran en el DSL o se aceptan por escrito, con su motivo, en `specs/<servicio>/decisions.yaml`. Ver [design-obligations.md](packages/keel-core/assets/core/docs/design-obligations.md).
 
-Y cuando el encargo no es un servicio sino un **sistema** (un documento de requisitos con varios dominios dentro), hay una fase previa: `/keel-decompose` decide con el humano qué servicios hay y dónde está la frontera de cada uno, y `keel system` calcula **en qué orden se construyen** —quien publica contrato va antes que quien lo consume— y contrasta ese mapa contra los diseños reales. Cada servicio sale con su propio *brief*, así que varias personas diseñan en paralelo sin releer el encargo. Ver [system-decomposition.md](packages/keel-core/assets/core/docs/system-decomposition.md).
+- **Una especificación en prosa no se puede comprobar.** Un Markdown que dice «devuelve 409 si ya existe» no sabe si ese conflicto está en el catálogo de errores del servicio, si el rol que alcanza ese endpoint existe, ni si el evento que promete publicar lo consume alguien. El diseño Keel es un directorio de YAML tipado —una capa por preocupación— y `keel validate` lo comprueba offline y con exit code: **JSON Schema por capa + referencias cruzadas entre capas**.
 
-Y porque un diseño agnóstico de tecnología es reutilizable **entre organizaciones**, no solo entre stacks, los diseños se publican en **registries**: repositorios con la forma de un workspace Keel de los que se descubre y deriva un diseño existente en vez de empezar en blanco. El oficial es [keel-system/keel-registry](https://github.com/keel-system/keel-registry); crear uno privado es `keel init` + `keel index`. Ver [design-registry.md](packages/keel-core/assets/core/docs/design-registry.md).
+- **La especificación nace atada al stack.** En cuanto el plan dice «PostgreSQL y Redis», deja de ser reutilizable: cambiar de motor, de broker o de lenguaje es reescribirla. En Keel el stack **no entra al diseño**; se pregunta al generar y se persiste en `keel-stack.json` del proyecto generado. El mismo diseño se regenera en otra tecnología sin tocar una línea.
+
+- **«Terminado» es la palabra del agente.** El criterio aquí es ejecutable: `./gradlew build -x test` en verde **más** `./gradlew integrationTest` con el **100 %** de los escenarios `FL-*` del diseño pasando contra la infraestructura real (base de datos, broker, proveedor de identidad, todo en contenedores), puntuado por un script determinista y no por un juicio.
+
+## Qué lo hace distinto de la SDD tradicional
+
+[spec-kit](https://github.com/github/spec-kit) y [OpenSpec](https://github.com/fission-ai/openspec) especifican **un cambio sobre un repositorio que ya existe**: en prosa, y su salida es un parche sobre ese código. Keel especifica **un servicio entero**, tipado y sin tecnología dentro, y su salida es el servidor. No compiten por el mismo hueco —de hecho, para lo que ellas hacen, Keel no sirve (ver la sección siguiente)—, pero la diferencia de objeto arrastra casi todo lo demás:
+
+| | spec-kit / OpenSpec | Keel |
+|---|---|---|
+| Objeto de la spec | un cambio o feature sobre un repo vivo | un servicio completo, o un sistema de servicios |
+| Formato | Markdown en prosa | YAML tipado, una capa por preocupación |
+| Validación | estructura del documento + juicio del agente | JSON Schema + referencias cruzadas + obligaciones abiertas, con exit code |
+| Tecnología | entra en el plan (el stack se pasa a `/plan`) | fuera del diseño; se elige al generar |
+| Salida | tareas que el agente implementa | proyecto generado: scaffolding determinista + el código que depende de la infra |
+| Terminado | la checklist de tareas | suite de integración al 100 % contra infraestructura real |
+| Reutilización | dentro del repo | entre stacks **y entre organizaciones** (registry de diseños) |
+| Alcance | una feature | un sistema: descomposición, olas de construcción y validación cross-servicio |
+
+Y tres cosas que la tabla no dice:
+
+**El diseño sigue siendo la fuente de verdad después de generar.** Un cambio funcional se hace en el diseño y se regenera; nunca en el código generado. Eso es sostenible porque el proyecto lleva un manifiesto (`keel-generated.json`) que distingue lo que escribió el generador de lo que escribió el agente: un arreglo del generador se propaga con `--refresh --prune` sin pisar la lógica de negocio, y `--check` falla en CI si quedó atrás. En la SDD clásica el código se edita a mano y la especificación se sincroniza después —o se archiva—.
+
+**Nadie aprende el DSL.** El YAML es interlingua entre agentes (uno diseña, otro genera, otro valida); su ventaja sobre un prompt es que es legible, versionable y revisable en un diff pequeño. El humano conversa con `/keel-design` capa a capa y revisa el resultado en el panel `overview.html` y en `DESIGN.md`, no en el YAML.
+
+**Las puertas son ejecutables, no convenciones escritas.** `keel validate`, `keel index --check`, `keel system check`, `infra/check-idempotency.sh`, la suite `FL-*`: lo que sostiene la calidad no es que el agente haya leído una guía, es que algo se pone rojo si no está.
+
+## Cuándo usar Keel — y cuándo no
+
+**Sí:**
+- un servicio de backend **nuevo**, que aún no tiene código;
+- un encargo con **varios servicios** dentro y fronteras por decidir;
+- el mismo dominio en **más de un stack** (o migrando de uno a otro);
+- un diseño que alguien tiene que **aprobar antes** de que exista código.
+
+**No** (y ahí spec-kit u OpenSpec encajan mejor):
+- evolucionar un repositorio existente que no salió de Keel;
+- frontend, scripts, trabajo exploratorio;
+- un cambio de una tarde sobre algo que ya funciona.
+
+## Cómo funciona, en un minuto
+
+1. **Diseño agnóstico por capas** — la funcionalidad del servicio se condensa en un directorio de **artefactos declarativos relacionados** (`specs/<servicio>/`): un manifiesto más una capa por preocupación —dominio, casos de uso, API, seguridad, mensajería, clientes HTTP, persistencia…—. Cada capa se itera con el humano por separado y ninguna menciona framework, ORM, broker ni lenguaje.
+2. **Generación dirigida por agentes** — el generador de una tecnología valida el diseño, pregunta el stack y genera de forma determinista todo lo que no depende de la infra elegida; un agente completa el resto y lo verifica contra los escenarios del diseño.
+3. **Documentación derivada** — al cerrar el diseño salen solos el documento reutilizable (`DESIGN.md`), el índice del workspace y, cuando hace falta integrar, la guía de integración, OpenAPI/AsyncAPI y el panel visual.
+
+El mismo diseño se regenera tantas veces como se quiera, en tecnologías distintas, sin re-diseñar nada.
+
+Cuando el encargo no es un servicio sino un **sistema**, hay una fase previa: `/keel-decompose` decide con el humano qué servicios hay y dónde está la frontera de cada uno, `keel system` calcula **en qué orden se construyen** —quien publica contrato va antes que quien lo consume— y contrasta el mapa contra los diseños reales. Cada servicio sale con su propio *brief*, así que varias personas diseñan en paralelo. Ver [system-decomposition.md](packages/keel-core/assets/core/docs/system-decomposition.md).
+
+Y como un diseño sin tecnología dentro es reutilizable **entre organizaciones**, no solo entre stacks, los diseños se publican en **registries**: repositorios con la forma de un workspace Keel de los que se descubre y deriva un diseño existente en vez de empezar en blanco. El oficial es [keel-system/keel-registry](https://github.com/keel-system/keel-registry); crear uno privado es `keel init` + `keel index`. Ver [design-registry.md](packages/keel-core/assets/core/docs/design-registry.md).
 
 ## Paquetes
 
@@ -172,7 +220,23 @@ mi-proyecto/
 
 El workspace es **solo diseño**: no aloja skills ni convenciones de generadores. Todo el conocimiento de generación vive dentro de cada proyecto generado.
 
-## Estructura de este repo
+## Principios
+
+- **El diseño es la fuente de verdad.** Todo lo que un generador necesita saber está en los artefactos; ninguna decisión de negocio queda implícita.
+- **Ninguna decisión estructural sin respuesta.** Outbox, idempotencia, caché, superficie M2M, frontera transaccional, política de fallo: el agente recomienda con su porqué, el humano decide, y lo que queda sin decidir bloquea la validación hasta que se declara o se acepta por escrito en `decisions.yaml`.
+- **Cero tecnología en el diseño.** ORM, framework, broker, proveedor de auth o base de datos concreta se deciden al generar, nunca al diseñar.
+- **Iterable por humanos y agentes, capa a capa.** Cada artefacto es YAML legible y pequeño: un humano revisa una capa en un diff, un agente la produce y la consume; las capas se relacionan por nombre y `keel validate` comprueba las referencias.
+- **Regenerable.** Cambiar de stack es re-ejecutar la generación, no reescribir el diseño.
+
+## Estado y roadmap
+
+- **DSL Keel 2.13**: diez capas (dos obligatorias, ocho opcionales) con validación en tres niveles — JSON Schema por capa, referencias cruzadas mecánicas y revisión semántica del agente.
+- **CLI `keel` completa**: `init`, `new`, `list`, `validate`, `describe`, `index`, `system` y `registry`, más las ocho skills del flujo de diseño que siembra `keel init`.
+- **Un generador en producción**: `keel-spring` (Spring Boot 3.5 / Java 21), con orquestación de cinco subagentes y puntuación determinista de escenarios. Criterio de terminado: `./gradlew build -x test` en verde más `./gradlew integrationTest` con el 100% de los escenarios `FL-*` en OK contra la infraestructura real.
+- **Publicado en npm**: [`keel-core`](https://www.npmjs.com/package/keel-core) y [`keel-spring`](https://www.npmjs.com/package/keel-spring), instalables con `npm i -g`.
+- **Pendiente**: más generadores (`keel-nest`, `keel-fastapi`); detección de drift entre spec y **código generado** —la de spec ↔ documentación ya la cubren los sellos de versión y `keel describe`—; sincronización inversa.
+
+## Contribuir: estructura de este repo
 
 ```
 keel/
@@ -190,22 +254,7 @@ keel/
         └── assets/               # lo que `keel-spring build` instala (skill + agentes + conventions + skills por tecnología)
 ```
 
-Los assets **son** la metodología: el DSL se documenta en `packages/keel-core/assets/core/docs/dsl-reference.md`, el schema vive en `packages/keel-core/assets/core/schema/`, y cada generador en su propio paquete `packages/keel-<tech>/`. Para crear un generador nuevo: `packages/keel-core/assets/core/docs/building-a-generator.md`.
-
-## Principios
-
-- **El diseño es la fuente de verdad.** Todo lo que un generador necesita saber está en los artefactos; ninguna decisión de negocio queda implícita.
-- **Cero tecnología en el diseño.** ORM, framework, broker, proveedor de auth o base de datos concreta se deciden al generar, nunca al diseñar.
-- **Iterable por humanos y agentes, capa a capa.** Cada artefacto es YAML legible y pequeño: un humano revisa una capa en un diff, un agente la produce y la consume; las capas se relacionan por nombre y `keel validate` comprueba las referencias.
-- **Regenerable.** Cambiar de stack es re-ejecutar la generación, no reescribir el diseño.
-
-## Estado y roadmap
-
-- **DSL Keel 2.13**: diez capas (dos obligatorias, ocho opcionales) con validación en tres niveles — JSON Schema por capa, referencias cruzadas mecánicas y revisión semántica del agente.
-- **CLI `keel` completa**: `init`, `new`, `list`, `validate`, `describe`, `index`, `system` y `registry`, más las ocho skills del flujo de diseño que siembra `keel init`.
-- **Un generador en producción**: `keel-spring` (Spring Boot 3.5 / Java 21), con orquestación de cinco subagentes y puntuación determinista de escenarios. Criterio de terminado: `./gradlew build -x test` en verde más `./gradlew integrationTest` con el 100% de los escenarios `FL-*` en OK contra la infraestructura real.
-- **Publicado en npm**: [`keel-core`](https://www.npmjs.com/package/keel-core) y [`keel-spring`](https://www.npmjs.com/package/keel-spring), instalables con `npm i -g`.
-- **Pendiente**: más generadores (`keel-nest`, `keel-fastapi`); detección de drift entre spec y **código generado** —la de spec ↔ documentación ya la cubren los sellos de versión y `keel describe`—; sincronización inversa.
+Los assets **son** la metodología: el DSL se documenta en `packages/keel-core/assets/core/docs/dsl-reference.md`, el schema vive en `packages/keel-core/assets/core/schema/`, y cada generador en su propio paquete `packages/keel-<tech>/`. Para crear un generador nuevo: [building-a-generator.md](packages/keel-core/assets/core/docs/building-a-generator.md). La metodología completa, en [methodology.md](packages/keel-core/assets/core/docs/methodology.md).
 
 ## Autor y licencia
 
