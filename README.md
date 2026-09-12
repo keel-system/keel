@@ -37,6 +37,132 @@ Y tres cosas que la tabla no dice:
 
 **Las puertas son ejecutables, no convenciones escritas.** `keel validate`, `keel index --check`, `keel system check`, `infra/check-idempotency.sh`, la suite `FL-*`: lo que sostiene la calidad no es que el agente haya leído una guía, es que algo se pone rojo si no está.
 
+## Qué ganas con Keel
+
+Cuatro cosas, y las cuatro son comprobables con un comando desde este repo.
+
+### Lo derivable no lo escribe un agente
+
+Casi todo lo que hay en un servicio de backend **se deduce del diseño**: si el dominio declara un
+agregado con sus invariantes y la capa de casos de uso declara la operación que lo toca, entonces el
+controller, el DTO, el comando, el handler, el puerto, el espejo de persistencia, el mapeo de
+columnas, la jerarquía de errores, la config por perfiles y la infraestructura de prueba **no son
+decisiones**: son consecuencias. Pedírselas a un agente es pagar tokens, tiempo y varianza por
+recalcular cada vez lo que una función calcula igual siempre.
+
+Así que no se piden. `keel-spring build` genera de forma determinista **todo lo transversal al
+stack** —63 módulos de scaffolding en `packages/keel-spring/src/scaffold/`— y el proyecto compila y
+arranca antes de que ningún agente lo haya visto. Al agente le queda solo lo que el diseño
+genuinamente no determina: la frontera que depende de la infraestructura elegida (publishers y
+listeners del broker, adaptador de storage) y la lógica de negocio con sus invariantes. El reparto
+está escrito en [orchestration.md](packages/keel-spring/assets/generators/spring/orchestration.md).
+
+Qué forma tiene eso en la práctica: en la corrida `customer-refunds`, el manifiesto
+`keel-generated.json` registró **232 archivos escritos por `build`** frente a **33 tocados por el
+agente** — y esos 33 son exactamente la huella de lo no derivable.
+
+**Los árbitros tampoco son agentes.** Quien puntúa los escenarios es un script
+(`infra/score-scenarios.sh`, matriz determinista desde el XML de JUnit), y con la suite al 100 % el
+pipeline pasa a la fase de calidad **sin invocar a ningún árbitro**. Lo mismo `keel validate`,
+`keel index --check`, `keel system check`, `infra/check-idempotency.sh` y
+`infra/check-domain-guards.sh`: puertas ejecutables con exit code, no juicios. Un agente solo se
+convoca cuando algo está en rojo y hay que decidir de quién es.
+
+Y el corolario: lo determinista es reproducible y **gratis de repetir**. Regenerar el mismo diseño
+en otro motor, con otro broker o —cuando haya más generadores— en otro lenguaje no vuelve a costar
+ni el diseño ni el andamiaje.
+
+### El diseño se reutiliza, no se repite
+
+El diseño Keel no lleva tecnología dentro: ni ORM, ni framework, ni broker, ni base de datos. Eso lo
+hace reutilizable en tres direcciones, y cada una ahorra un trabajo distinto.
+
+- **Entre stacks.** El mismo `specs/<servicio>/` se vuelve a generar eligiendo otro stack. Hoy: 5
+  motores relacionales (PostgreSQL, MySQL, MariaDB, SQL Server, Oracle) más MongoDB, 3 brokers
+  (Kafka, RabbitMQ, SNS/SQS), 2 proveedores de identidad, 2 cachés y 2 backends de storage.
+- **Entre organizaciones.** Los diseños se publican en **registries** —repos con forma de workspace
+  Keel—, y hay dos puertas con dos intenciones: `keel registry get <x>` **adopta** el diseño tal
+  cual, con sus derivados al día y listo para generar; `keel new <mío> --from registry:<x>` lo
+  **deriva**, renombrando y reseteando a `0.1.0` con el linaje estampado en `service.basedOn`. Ver
+  [design-registry.md](packages/keel-core/assets/core/docs/design-registry.md).
+- **Hacia los proyectos que ya generaste.** Un arreglo del generador no se queda en la versión
+  nueva: el manifiesto `keel-generated.json` distingue lo que escribió `build` de lo que escribió el
+  agente, así que `build --refresh --prune` propaga el arreglo **sin pisar la lógica de negocio**, y
+  `--check` falla en CI si un proyecto quedó atrás. Cuando lo que cambia es el **diseño**, `build`
+  calcula el delta y escribe `EVOLUTION.md`: el pipeline entra en modo evolución y trabaja solo
+  sobre lo que cambió, no sobre el servicio entero.
+
+Un nivel por encima está el reparto del encargo: `/keel-decompose` decide con el humano qué
+servicios hay y dónde está cada frontera, y `keel system` calcula **en qué orden se construyen**
+—orden topológico de las dependencias bloqueantes, no declarado a mano—, así que varias personas
+diseñan en paralelo sin pisarse. Ver
+[system-decomposition.md](packages/keel-core/assets/core/docs/system-decomposition.md).
+
+### Todos los servicios salen iguales
+
+La arquitectura del proyecto generado no es negociable y no la elige el agente: hexagonal + CQRS,
+los mismos paquetes, los mismos nombres (`<Agregado>V1Controller`, `<Evento>IntegrationEvent`,
+`<Raíz>RefResolver`…), la misma `infra/` de prueba, el mismo `deploy/`, el mismo `docs/keel/`. Está
+escrita y viaja **dentro de cada proyecto generado**:
+[constitution.md](packages/keel-spring/assets/generators/spring/constitution.md) con las reglas
+inviolables, `architecture.md` con la función de cada paquete y **11 conventions** con el detalle
+—mapeo, composición de lecturas, modelado de dominio, concurrencia, pruebas de integración…—.
+
+Lo que eso compra:
+
+- **Leer el servicio número N cuesta lo que costó leer el primero.** No hay estilo personal de quien
+  lo generó: no aparece un servicio con `shared/`, otro con Modulith y otro con el repositorio
+  llamando al controller.
+- **La rotación es barata.** Quien sabe moverse por un servicio Keel sabe moverse por todos, y una
+  revisión de seguridad o de arquitectura sabe de antemano en qué archivo mirar.
+- **Cambiar de motor o de broker no cambia la forma del proyecto** — cambian los adaptadores, no la
+  disposición ni los nombres.
+- **El proyecto es autosuficiente**: se clona y se termina sin el workspace de diseño, porque lleva
+  dentro el snapshot del diseño, los contratos, la skill del generador, sus agentes y las
+  conventions.
+
+### Los patrones difíciles vienen puestos — y medidos
+
+Esta es la parte que no se arregla escribiendo mejores prompts. Los mecanismos de fiabilidad
+distribuida comparten un rasgo: **cuando están mal, no falla nada visible**. Un relay de outbox cuyo
+predicado no casa se comporta exactamente igual que un outbox vacío. Una clave de deduplicación a la
+que le falta un campo descarta en silencio mensajes que nadie procesó. Una guarda que confirma
+después del efecto manda un segundo correo a una persona real y responde 2xx las dos veces. No hay
+excepción, ni log, ni métrica — y no hay escenario de caja negra que lo vea.
+
+Por eso en Keel se **derivan del diseño**, los genera `build` enteros, y cada uno tiene detrás una
+red que se ha roto a propósito para comprobar que se pone roja.
+
+| Mecanismo | Qué evita | Quién lo escribe | Qué lo verifica |
+|---|---|---|---|
+| **Outbox** + relay con lease, backoff, purga y rendición (gauge `keel.outbox.dead_lettered`) | publicar un evento que la transacción acabó revirtiendo — o perderlo y no enterarse | `build` entero; el envío al broker, el agente | `store-check` · escenario de canal indisponible · familia `outboxDelivery` |
+| **Idempotencia de petición** (`idempotency_record` + `CommandSignature`) | que el reintento del cliente ejecute el cobro dos veces | `build` entero | `store-check` · familia `commandIdempotency` |
+| **Deduplicación de reentrega** del broker (`processed_event` + `IdempotencyGuard`, con sus dos órdenes) | que la segunda entrega del mismo mensaje vuelva a aplicar el efecto | `build` entero | `store-check` · familia `dedupe` |
+| **Idempotencia saliente** (`OutboundIdempotency`) | que *nuestro* reintento duplique el cargo en el proveedor | `build`, incluido su uso | familia `outboundIdempotency` |
+| **Compensación** (`dependencies.*.compensations`) | trabajo ya encargado a un tercero que se queda hecho cuando el flujo se cae | el agente, en handler y agregado | familia `compensation` |
+| **Reconciliación** (`activations.*.reconciledBy`) | la fila que espera para siempre un desenlace que nunca llegó | `build` genera el reclamo | `store-check` · familia `reconciliation` · escenario de espera agotada |
+| **Reclamo de barrido** y **rescate** de filas en vuelo con cota temporal | dos réplicas procesando la misma fila; y la fila que una réplica muerta dejó a medias | `build` entero | `claim-check` · familia `sweepClaim` |
+| **Guarda de efecto externo irreversible** sobre una fila | el segundo correo real, el segundo envío: el efecto que no se puede deshacer | `build` entero | `claim-check` · familia `mailDelivery` |
+| **Unicidad condicionada al estado** (índice parcial, columna generada o `partialFilterExpression`) | dos filas activas a la vez por una carrera que la comprobación previa del handler no cierra | `build` entero | `index-check` · familia `conditionalUniqueness` |
+| **Eventos de dominio** con buffer `raise`/`pull`, `EventEnvelope` y correlación end-to-end | el evento que se publica sin que el hecho haya ocurrido, y la traza que se corta al salir del proceso | `build` entero | familia `domainEvent` |
+| **Circuit breaker + retry** con fallback tipado y la política `onFailure` del diseño | que un proveedor caído se lleve por delante el servicio entero | `build` entero | escenarios `FL-*` contra un proveedor de prueba (WireMock) |
+| **Caché** con TTL por caché y degradación a miss | servir datos rancios sin que nadie haya dicho cuánto es demasiado | `build` entero | escenarios `FL-*` |
+| **Seguridad**: realm aprovisionado, matriz M2M, identidad del llamante, alcance por recurso | que el llamante elija de qué inquilino lee | `build` entero | `compile-check --auth=` · tests que **ejecutan** el script de aprovisionamiento |
+
+El gate `infra/check-idempotency.sh` que el proyecto generado lleva dentro cubre **11 familias** y
+cierra el tramo donde `build` pone el mecanismo y el agente escribe el uso: sale rojo sobre el árbol
+recién generado y tiene que estar verde para cerrar.
+
+**Y la disciplina que lo sostiene: medición por mutación.** Una red que nadie ha roto nunca no
+distingue «no hay errores» de «no mira» — algo que aquí ya ha pasado, y por eso se mide.
+`npm run matrix` imprime la matriz de paridad del generador: hoy **46 celdas, 31 verificadas
+ejecutándolas contra un motor real, y 30 de esas 31 falsadas** rompiendo el mecanismo a propósito y
+comprobando que su red se pone roja. Las 9 que nadie ha ejecutado aún salen listadas como tales, y
+lo que un motor **no** sostiene —la unicidad condicionada en MariaDB y en Oracle— se declara
+`degradado`, con la garantía que se pierde y las salidas disponibles, en vez de fingirse. El
+catálogo de mutaciones canónicas está en
+[orchestration.md § Medición por mutación](packages/keel-spring/assets/generators/spring/orchestration.md).
+
 ## Cuándo usar Keel — y cuándo no
 
 **Sí:**
@@ -232,7 +358,8 @@ El workspace es **solo diseño**: no aloja skills ni convenciones de generadores
 
 - **DSL Keel 2.13**: diez capas (dos obligatorias, ocho opcionales) con validación en tres niveles — JSON Schema por capa, referencias cruzadas mecánicas y revisión semántica del agente.
 - **CLI `keel` completa**: `init`, `new`, `list`, `validate`, `describe`, `index`, `system` y `registry`, más las ocho skills del flujo de diseño que siembra `keel init`.
-- **Un generador en producción**: `keel-spring` (Spring Boot 3.5 / Java 21), con orquestación de cinco subagentes y puntuación determinista de escenarios. Criterio de terminado: `./gradlew build -x test` en verde más `./gradlew integrationTest` con el 100% de los escenarios `FL-*` en OK contra la infraestructura real.
+- **Un generador en producción**: `keel-spring` (Spring Boot 3.5 / Java 21) — **63 módulos de scaffolding determinista**, 6 motores de base de datos (5 relacionales + MongoDB), 3 brokers, 2 proveedores de identidad, 2 cachés y 2 backends de storage, con **11 skills por tecnología** y orquestación de cinco subagentes con puntuación determinista de escenarios. Criterio de terminado: `./gradlew build -x test` en verde más `./gradlew integrationTest` con el 100% de los escenarios `FL-*` en OK contra la infraestructura real.
+- **Verificación del propio generador**: **87 suites de test** (`npm test`), **11 fixtures de diseño** —4 de modelo documental y 7 relacional, dos de ellas **pares byte a byte** que solo se diferencian en el modelo de persistencia, que es lo que impide que una rama se quede atrás en silencio— y **8 redes que ejecutan de verdad** contra motores, brokers y buzones en contenedores (`compile-check`, `claim-check`, `store-check`, `index-check`, `mapping-check`, `broker-check`, `mail-check`, `mongo-check`). Su estado, celda a celda, lo imprime `npm run matrix`: **46 celdas · 31 verificadas · 30 falsadas · 9 sin ejecutar · 2 degradadas**.
 - **Publicado en npm**: [`keel-core`](https://www.npmjs.com/package/keel-core) y [`keel-spring`](https://www.npmjs.com/package/keel-spring), instalables con `npm i -g`.
 - **Pendiente**: más generadores (`keel-nest`, `keel-fastapi`); detección de drift entre spec y **código generado** —la de spec ↔ documentación ya la cubren los sellos de versión y `keel describe`—; sincronización inversa.
 
