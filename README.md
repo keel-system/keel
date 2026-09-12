@@ -153,6 +153,12 @@ El gate `infra/check-idempotency.sh` que el proyecto generado lleva dentro cubre
 cierra el tramo donde `build` pone el mecanismo y el agente escribe el uso: sale rojo sobre el árbol
 recién generado y tiene que estar verde para cerrar.
 
+Nada de esto se comprueba leyendo código: **se ejecuta**. Un JPQL que no casa con ninguna fila es
+JPQL válido y `javac` lo da por bueno; un `updateOne` con el nombre de campo equivocado no falla,
+modifica cero documentos. La única red que ve eso es un motor de verdad respondiendo, así que tanto
+la validación del servicio generado como las 8 redes del propio generador **necesitan Docker o
+Podman** —y eso es una dependencia real de Keel, no un detalle de CI—.
+
 **Y la disciplina que lo sostiene: medición por mutación.** Una red que nadie ha roto nunca no
 distingue «no hay errores» de «no mira» — algo que aquí ya ha pasado, y por eso se mide.
 `npm run matrix` imprime la matriz de paridad del generador: hoy **46 celdas, 31 verificadas
@@ -204,7 +210,27 @@ npm i -g keel-core     # comando `keel`
 npm i -g keel-spring   # comando `keel-spring` (el generador de la tecnología que uses)
 ```
 
-Node.js >= 18. El core y cada generador son paquetes independientes: se instala el core más los generadores que se vayan a usar.
+El core y cada generador son paquetes independientes: se instala el core más los generadores que se vayan a usar.
+
+**Requisitos, y son dos listas distintas** — porque diseñar y generar no cuestan lo mismo que validar:
+
+| Para… | Hace falta |
+|---|---|
+| Diseñar (`keel init`, `/keel-design`, `keel validate`, `keel system`, `keel registry`) y **generar** (`keel-spring build`) | **Node.js >= 18** y nada más. Todo es offline y determinista; el registry es lo único que toca la red. |
+| **Completar y validar** el proyecto generado (`/keel-generate-spring`) | Lo anterior más **JDK 21** y un **runtime de contenedores: Docker o Podman**. |
+
+Ese segundo requisito no es accidental ni evitable: **es el precio de que «terminado» signifique
+algo**. La validación de Keel no se hace con dobles ni con mocks de la fontanería — levanta la
+infraestructura de verdad (`infra/docker-compose.yaml`: base de datos, broker, proveedor de
+identidad, caché, storage y el proveedor HTTP de prueba) y ejecuta contra ella los escenarios `FL-*`
+del diseño. Sin contenedores, el pipeline puede generar y compilar el proyecto, pero **no puede
+puntuar un solo escenario**, y el agente de infraestructura lo reporta como `PENDIENTE` en vez de
+fingir un verde.
+
+Detalles: el runtime se detecta solo —`docker` primero, `podman` si no— y se fuerza con
+`CONTAINER_RUNTIME=podman`; `infra/up.sh` resuelve además el *frontend* de compose (`podman compose`,
+con `podman-compose` de respaldo). Con Podman rootless todos los puertos publicados van por encima de
+1024. **Gradle no hace falta instalarlo**: el wrapper viaja vendorizado dentro del proyecto generado.
 
 Para trabajar sobre **este repo** (desarrollo del propio Keel):
 
@@ -267,7 +293,9 @@ subagentes y decide el avance (*gating*) sobre el bloque estructurado —`status
 fase 3 **sin invocar a ningún árbitro**.
 
 Criterio de terminado: `./gradlew build -x test` en verde más `./gradlew integrationTest` con el
-**100 %** de los escenarios `FL-*` en OK contra la infraestructura real.
+**100 %** de los escenarios `FL-*` en OK contra la infraestructura real. Esa fase **requiere JDK 21 y
+Docker o Podman**: el agente `keel-spring-infra` levanta `infra/` en contenedores y sin eso no hay
+escenario que puntuar (ver [Instalación](#instalación)).
 
 ```mermaid
 flowchart TB
@@ -359,7 +387,7 @@ El workspace es **solo diseño**: no aloja skills ni convenciones de generadores
 - **DSL Keel 2.13**: diez capas (dos obligatorias, ocho opcionales) con validación en tres niveles — JSON Schema por capa, referencias cruzadas mecánicas y revisión semántica del agente.
 - **CLI `keel` completa**: `init`, `new`, `list`, `validate`, `describe`, `index`, `system` y `registry`, más las ocho skills del flujo de diseño que siembra `keel init`.
 - **Un generador en producción**: `keel-spring` (Spring Boot 3.5 / Java 21) — **63 módulos de scaffolding determinista**, 6 motores de base de datos (5 relacionales + MongoDB), 3 brokers, 2 proveedores de identidad, 2 cachés y 2 backends de storage, con **11 skills por tecnología** y orquestación de cinco subagentes con puntuación determinista de escenarios. Criterio de terminado: `./gradlew build -x test` en verde más `./gradlew integrationTest` con el 100% de los escenarios `FL-*` en OK contra la infraestructura real.
-- **Verificación del propio generador**: **87 suites de test** (`npm test`), **11 fixtures de diseño** —4 de modelo documental y 7 relacional, dos de ellas **pares byte a byte** que solo se diferencian en el modelo de persistencia, que es lo que impide que una rama se quede atrás en silencio— y **8 redes que ejecutan de verdad** contra motores, brokers y buzones en contenedores (`compile-check`, `claim-check`, `store-check`, `index-check`, `mapping-check`, `broker-check`, `mail-check`, `mongo-check`). Su estado, celda a celda, lo imprime `npm run matrix`: **46 celdas · 31 verificadas · 30 falsadas · 9 sin ejecutar · 2 degradadas**.
+- **Verificación del propio generador**: **87 suites de test** (`npm test`), **11 fixtures de diseño** —4 de modelo documental y 7 relacional, dos de ellas **pares byte a byte** que solo se diferencian en el modelo de persistencia, que es lo que impide que una rama se quede atrás en silencio— y **8 redes que ejecutan de verdad** contra motores, brokers y buzones en contenedores —requieren Docker o Podman, y `compile-check` además JDK— (`compile-check`, `claim-check`, `store-check`, `index-check`, `mapping-check`, `broker-check`, `mail-check`, `mongo-check`). Su estado, celda a celda, lo imprime `npm run matrix`: **46 celdas · 31 verificadas · 30 falsadas · 9 sin ejecutar · 2 degradadas**.
 - **Publicado en npm**: [`keel-core`](https://www.npmjs.com/package/keel-core) y [`keel-spring`](https://www.npmjs.com/package/keel-spring), instalables con `npm i -g`.
 - **Pendiente**: más generadores (`keel-nest`, `keel-fastapi`); detección de drift entre spec y **código generado** —la de spec ↔ documentación ya la cubren los sellos de versión y `keel describe`—; sincronización inversa.
 
