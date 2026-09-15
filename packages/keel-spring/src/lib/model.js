@@ -1496,7 +1496,8 @@ function collectChannels(layers, service, stack) {
 function collectEvents(layers, services, service, domainTypes, inlineEnumName, warnings, stack) {
   const events = layers.messaging?.publishing?.events ?? {};
   const domainEntities = layers.domain?.entities ?? {};
-  const emitters = emittersByEvent(services);
+  const internalOf = aggregateIndex(layers.domain ?? {});
+  const emitters = emittersByEvent(services, (name) => internalOf.get(name)?.root ?? name);
   const serviceSlug = kebabCase(service.name);
   const safe = (name) => brokerSafeName(name, stack?.broker);
 
@@ -1518,7 +1519,8 @@ function collectEvents(layers, services, service, domainTypes, inlineEnumName, w
       // del mensaje (clave de enrutado en RabbitMQ, message attribute en SNS).
       routingKeyDefault: `${serviceSlug}.${kebabCase(name)}`,
       // Quién lo emite: las raíces de agregado de los grupos cuyas operaciones lo declaran
-      // en `emits`. Es lo que permite sembrar el raise(...) donde corresponde.
+      // en `emits` — RAÍCES, resueltas por emittersByEvent, y no la entidad que la operación
+      // devuelve. Es lo que permite sembrar el raise(...) donde corresponde.
       //
       // Es una LISTA y no un nombre, y esa fue la diferencia entre generar el mecanismo
       // entero y generar la mitad: un mismo evento puede salir de dos agregados distintos
@@ -1543,14 +1545,29 @@ function collectEvents(layers, services, service, domainTypes, inlineEnumName, w
   });
 }
 
-// Índice evento → operaciones que lo declaran en `emits` (con su agregado).
-function emittersByEvent(services) {
+/**
+ * Índice evento → operaciones que lo declaran en `emits`, con la RAÍZ de su agregado.
+ *
+ * La raíz y no `group.entity`, que es lo que este índice registraba: aquel sale del
+ * `output.entity` de la operación, y una operación puede devolver una entidad HIJA
+ * (`addProductImage` → `output: { entity: ProductImage }`) sin dejar de actuar sobre el
+ * agregado entero. Registrar la hija no dejaba el evento a medias de forma visible, que
+ * es lo que lo mantuvo escondido: `build` sembraba el buffer de eventos DENTRO de la
+ * hija, y una hija no tiene adaptador de repositorio, así que nadie lo drena — el
+ * `raise` se acumula y el evento no sale del servicio. El gate de `domainEvent` además
+ * pedía el `raise` en una clase que no puede publicarlo, y su camino de menor
+ * resistencia era escribirlo ahí.
+ *
+ * `rootOf` viene de `domain.aggregates`, que es donde el diseño dice quién es la raíz:
+ * no es una heurística sobre el nombre.
+ */
+function emittersByEvent(services, rootOf) {
   const index = new Map();
   for (const group of services) {
     for (const operation of group.operations) {
       for (const eventName of operation.emits) {
         if (!index.has(eventName)) index.set(eventName, []);
-        index.get(eventName).push({ aggregate: group.entity, operation: operation.name });
+        index.get(eventName).push({ aggregate: rootOf(group.entity), operation: operation.name });
       }
     }
   }

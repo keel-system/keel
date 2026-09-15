@@ -8,7 +8,7 @@
 import { createHash } from 'node:crypto';
 import { declaredBuckets } from '../lib/buckets.js';
 import { deadLetterDestination, deadLetterSubscriptions, subscriptionDestination } from '../lib/dead-letter.js';
-import { LOCAL_AWS_ENV } from '../lib/stack-catalog.js';
+import { LOCAL_AWS_ENV, MC_BINARY_URL } from '../lib/stack-catalog.js';
 import { messagingTopologyChecks } from './messaging-provisioning.js';
 
 // Paquetes base del toolbox: shell + utilidades de red/JSON comunes a todos los checks.
@@ -86,9 +86,17 @@ export function dockerfileDevtools(selected) {
     );
   }
   if (ids.has('minio')) {
-    // mc (MinIO client): binario oficial; no hay paquete apk.
+    // mc (MinIO client): binario estático de la release; no hay paquete apk. La URL
+    // sale de stack-catalog.js —misma versión que la imagen del sidecar minio-init— y
+    // NO de dl.min.io, que devuelve 410 desde que MinIO archivó esa distribución.
+    //
+    // El `-f` no es cosmético: sin él curl escribe el cuerpo de la respuesta de error
+    // y sale 0, así que la imagen se horneaba con una página HTML marcada como
+    // ejecutable y el fallo aparecía dentro de validate-infra.sh, sin mencionar la
+    // descarga. Con `-f`, un origen roto mata el build de la imagen, que es donde se
+    // puede leer.
     lines.push(
-      'RUN curl -sSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc \\',
+      `RUN curl -fsSL ${MC_BINARY_URL} -o /usr/local/bin/mc \\`,
       ' && chmod +x /usr/local/bin/mc'
     );
   }

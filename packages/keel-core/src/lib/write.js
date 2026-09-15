@@ -105,7 +105,9 @@ function digestOfFile(target) {
  *
  * Los seis cubos, y lo que significa cada uno para quien refresca:
  *
- *   · `nuevos`       — no existe: se escribe sin más.
+ *   · `nuevos`       — no existe y no consta que haya existido: se escribe sin más.
+ *   · `retirados`    — no existe, pero el manifiesto dice que build lo escribió: alguien
+ *                      lo BORRÓ. No se reescribe (ver abajo).
  *   · `refrescables` — existe, su huella coincide con la del manifiesto y el generador
  *                      cambió: es suyo y nadie lo tocó, así que se puede poner al día.
  *   · `alDia`        — lo que hay ya es lo que se generaría.
@@ -114,6 +116,17 @@ function digestOfFile(target) {
  *   · `conflictos`   — lo tocaron Y el generador cambió. Es el único caso que pide una
  *                      decisión humana, y el que hay que enseñar con nombre y apellidos.
  *   · `adoptados`    — sin registro de quién lo escribió.
+ *
+ * `retirados` existe porque «no está en disco» son dos cosas opuestas y hasta ahora
+ * caían en el mismo cubo. Un archivo que nunca existió se escribe; uno que build escribió
+ * y alguien borró después se borró A PROPÓSITO, y recrearlo deshace ese trabajo sin
+ * decirlo. El caso que lo destapó: las skills de los tres brokers ordenan sustituir cada
+ * `<Evento>PublisherStub` por el publisher real y BORRAR el stub —dos `@Component` del
+ * mismo puerto tumban el arranque—, y el siguiente `--refresh` los devolvía a su sitio
+ * catalogados como «archivos nuevos con TODO». El síntoma es una
+ * NoUniqueBeanDefinitionException al arrancar el contexto, que no menciona ni a build ni
+ * al refresco. La distinción no se puede sacar del disco: solo el manifiesto sabe que esa
+ * ruta existió. Recuperarlo es `--force`, que es la escotilla de siempre.
  *
  * Aparte, `huerfanos`: rutas del manifiesto que el generador ya no emite. Aquí solo se
  * reportan. Borrarlos lo decide `pruneOrphans`, y solo cuando se puede demostrar que
@@ -124,7 +137,16 @@ export function classifyGenerated(files, destDir, manifest = null) {
   const adoptado = new Set((manifest?.adopted ?? []).map(toPosix));
   const emitidas = new Set();
 
-  const buckets = { nuevos: [], refrescables: [], alDia: [], tuyos: [], conflictos: [], adoptados: [], huerfanos: [] };
+  const buckets = {
+    nuevos: [],
+    retirados: [],
+    refrescables: [],
+    alDia: [],
+    tuyos: [],
+    conflictos: [],
+    adoptados: [],
+    huerfanos: []
+  };
 
   for (const entry of files) {
     const relative = toPosix(entry.path);
@@ -132,7 +154,10 @@ export function classifyGenerated(files, destDir, manifest = null) {
     const target = path.join(destDir, entry.path);
 
     if (!fs.existsSync(target)) {
-      buckets.nuevos.push(relative);
+      // `adoptado` no cuenta como registro: de una ruta adoptada no se sabe quién la
+      // escribió, así que tampoco se puede afirmar que su ausencia sea un borrado.
+      const constaba = registrado.has(relative) && !adoptado.has(relative);
+      buckets[constaba ? 'retirados' : 'nuevos'].push(relative);
       continue;
     }
 

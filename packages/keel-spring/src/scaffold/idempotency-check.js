@@ -26,6 +26,7 @@
 import { declaresIdempotency, idempotentOperations, naturalKeyGuardedOperations } from './http-idempotency.js';
 import { relievingOperations, portMethodName } from './conditional-uniqueness.js';
 import { naturalKeyFinder } from './repositories.js';
+import { capitalize } from './entities.js';
 import { usesOutbox } from './outbox.js';
 import { screamingSnake, camelCase, kebabCase } from '../lib/naming.js';
 
@@ -473,20 +474,39 @@ function commandChecks(model) {
 //     constraint del agregado ya es la guarda—, así que exigir `IdempotencyStore` sería pedir una
 //     clase que no existe: el camino de menor resistencia para callar ese check sería escribir un
 //     registro paralelo, que es exactamente lo que no queremos. Lo afirmable es lo otro: que el
-//     handler BUSQUE por la clave natural antes de insertar, porque el contrato de la idempotencia
-//     no es rechazar la repetición sino devolver la respuesta original. Sin esa búsqueda el
-//     servidor contesta un 409 donde prometía el recurso, y eso solo lo delata un escenario.
+//     handler CONSULTE por la clave natural antes de insertar. Sin esa búsqueda, la repetición no
+//     la resuelve nadie: llega a la constraint y sale como el conflicto crudo del motor, con un
+//     `code` que no es el del diseño, y eso solo lo delata un escenario.
+//
+//     Lo que el handler hace con lo que encuentra es del DISEÑO y aquí no se juzga: devolver el
+//     recurso original es lo habitual, pero un diseño puede declarar —y `catalog` lo declara— que
+//     la repetición se rechaza con su propio 409. Las dos formas pasan por la misma consulta.
+//
+//     El patrón NO fija la ortografía del finder, y esa es la corrección que costó una corrida: se
+//     exigía el nombre exacto que emite `naturalKeyFinder` (`findByName(`), pero cuando el diseño
+//     declara la unicidad ignorando mayúsculas y acentos el handler correcto consulta por el campo
+//     NORMALIZADO (`findByNormalizedName(TextNormalizer.fold(...))`). El gate salía KO sobre código
+//     correcto, y su camino de menor resistencia era llamar al finder literal —que build también
+//     generó— solo para callarlo, cambiando por el camino la semántica por la que ese diseño
+//     existe. Un check que exige la implementación incorrecta es peor que no tenerlo. Se conserva
+//     lo que discrimina: que la consulta sea POR ESE CAMPO, y que no haya un almacén paralelo.
 function naturalKeyChecks(model) {
   return naturalKeyGuardedOperations(model)
     .map((operation) => {
       const entity = (model.entities ?? []).find((candidate) => candidate.name === operation.idempotency.entity);
       const finder = entity ? naturalKeyFinder(model, entity) : null;
       if (!finder) return null;
+      // findBy<lo que sea><Campo><lo que sea>( — admite la variante normalizada del MISMO
+      // campo sin admitir cualquier consulta: un handler que inserta a ciegas sigue en rojo.
+      const lookup =
+        'findBy[A-Za-z]*' +
+        finder.params.map((param) => capitalize(param.name)).join('[A-Za-z]*And') +
+        '[A-Za-z]*\\s*\\(';
       return {
         group: 'commandIdempotency',
         subject: operation.name,
         class: operation.handlerClass,
-        require: [`${finder.name}\\s*\\(`],
+        require: [lookup],
         forbid: [
           // Un registro paralelo al que la constraint ya cubre: dos verdades sobre lo mismo, y la
           // del almacén además caduca.
@@ -494,7 +514,9 @@ function naturalKeyChecks(model) {
         ],
         why:
           `keySource: payload-field con guarda en la clave natural (${operation.idempotency.naturalKey.join(', ')}) — ` +
-          `la repetición se resuelve buscando con ${finder.name}(...) y devolviendo el recurso existente, no con un almacén`
+          `la repetición se resuelve consultando por ${finder.params.map((param) => param.name).join(' + ')} ` +
+          `(${finder.name}(...) o la variante normalizada que el diseño pida) y actuando sobre lo que exista: ` +
+          `devolver el recurso original, o rechazarla con el code del diseño. Nunca con un almacén de claves`
       };
     })
     .filter(Boolean);

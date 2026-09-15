@@ -1354,6 +1354,23 @@ test('capa storage: gradle con SDK S3, compose con MinIO y fragmento de config p
   assert.ok(compose.includes('minio/minio'));
   assert.ok(compose.includes('minio-data')); // volumen persistente registrado
 
+  // MinIO ya no se sirve desde donde se servía, y las dos mitades fallan en SILENCIO:
+  // Docker Hub deniega el pull anónimo de `minio/minio` y `minio/mc` enteros (también
+  // `latest`), y `dl.min.io` devuelve 410 — pero un `curl` sin `-f` descarga la página de
+  // error y la marca ejecutable, así que el toolbox se hornea con HTML dentro y el rojo
+  // aparece dentro de validate-infra.sh, hablando de un MinIO que funciona perfectamente.
+  assert.ok(compose.includes('quay.io/minio/minio'), 'el compose apunta a un registro que deniega el pull');
+  assert.ok(compose.includes('quay.io/minio/mc'), 'el sidecar apunta a un registro que deniega el pull');
+
+  const dockerfile = read(workspace, 'infra/docker/Dockerfile');
+  assert.ok(!dockerfile.includes('dl.min.io'), 'el binario mc se descarga de una URL muerta');
+  assert.ok(dockerfile.includes('curl -fsSL'), 'sin -f, un origen roto se hornea como binario');
+  // Una sola versión: el mc del toolbox y el del sidecar hablan con el mismo MinIO, y dos
+  // números que tienen que coincidir escritos en dos sitios coinciden hasta que alguien
+  // toca uno.
+  const [, releaseCompose] = compose.match(/quay[.]io[/]minio[/]mc:(\S+)/);
+  assert.ok(dockerfile.includes(releaseCompose), 'el mc del toolbox no es la versión del sidecar');
+
   const localStorage = read(workspace, 'src/main/resources/parameters/local/storage.yaml');
   assert.ok(localStorage.includes('provider: minio'));
   assert.ok(localStorage.includes('endpoint: http://localhost:9000')); // coincide con el compose

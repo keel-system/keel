@@ -706,6 +706,38 @@ export const CACHES = {
   }
 };
 
+// ─── MinIO: de dónde sale cada pieza ─────────────────────────────────────────
+//
+// Ni el binario ni las imágenes salen ya de donde salían, y las dos cosas dejaron
+// de funcionar para todo el mundo a la vez:
+//
+//   · `dl.min.io` devuelve **410 Gone** desde que MinIO archivó la distribución
+//     pública de `mc`. El `curl` del toolbox no falla por eso: descarga la página
+//     de error y la marca ejecutable, así que el síntoma aparece mucho después y
+//     muy lejos —los dos checks de MinIO de `validate-infra.sh` en rojo con un
+//     MinIO que funciona perfectamente—.
+//   · Docker Hub deniega el pull anónimo de `minio/minio` y `minio/mc` **enteros**,
+//     no de estos tags: `latest` contesta el mismo 401. No es una máquina, es
+//     cualquier entorno sin credenciales.
+//
+// quay.io sirve los dos repositorios con los MISMOS tags, y las releases de GitHub
+// siguen publicando el binario estático. La VERSIÓN de `mc` es una sola constante:
+// el del toolbox y el del sidecar hablan con el mismo MinIO, y dos números que
+// tienen que coincidir escritos en dos sitios coinciden hasta que alguien toca uno.
+
+export const MC_RELEASE = 'RELEASE.2024-10-08T09-37-26Z';
+export const MC_IMAGE = `quay.io/minio/mc:${MC_RELEASE}`;
+export const MINIO_IMAGE = 'quay.io/minio/minio:RELEASE.2024-10-13T13-34-11Z';
+
+/**
+ * El mismo `mc`, como binario para el toolbox alpine (no hay paquete apk).
+ *
+ * Se descarga de la release en vez de copiarse de `MC_IMAGE` con un
+ * `COPY --from=…` porque es la forma que ya usa `sqlcmd` en esa misma función y
+ * porque no depende de adivinar en qué ruta guarda el binario una imagen ajena.
+ */
+export const MC_BINARY_URL = `https://github.com/minio/mc/releases/download/${MC_RELEASE}/mc.linux-amd64.${MC_RELEASE}`;
+
 // Sidecar que deja el MinIO de prueba con los buckets del diseño ya creados y
 // con su policy aplicada, antes de que arranque el servicio.
 //
@@ -744,7 +776,7 @@ function minioInitService(buckets) {
   // podman como runtime de primera clase (conventions/infra-validation.md), así que
   // el compose generado no puede depender de una extensión de docker-compose.
   return {
-    image: 'minio/mc:RELEASE.2024-10-08T09-37-26Z',
+    image: MC_IMAGE,
     depends_on: ['minio'],
     entrypoint: ['sh', '-c', script + '\n']
   };
@@ -756,7 +788,7 @@ export const STORAGE = {
     label: 'MinIO (compatible S3, contenedor de prueba)',
     // MinIO habla protocolo S3: el mismo SDK sirve para dev (MinIO) y prod (S3).
     gradleDependencies: ["implementation 'software.amazon.awssdk:s3:2.31.6'"],
-    image: 'minio/minio:RELEASE.2024-10-13T13-34-11Z',
+    image: MINIO_IMAGE,
     port: '9000 / 9001 (consola)',
     serviceKey: 'minio',
     cliTool: 'mc',
@@ -767,7 +799,7 @@ export const STORAGE = {
     composeServices: (model) => {
       const services = {
         minio: {
-          image: 'minio/minio:RELEASE.2024-10-13T13-34-11Z',
+          image: MINIO_IMAGE,
           command: 'server /data --console-address ":9001"',
           environment: { MINIO_ROOT_USER: 'minioadmin', MINIO_ROOT_PASSWORD: 'minioadmin' },
           ports: ['9000:9000', '9001:9001'],

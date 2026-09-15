@@ -1401,6 +1401,20 @@ ${hasIdempotency(model) ? `
      * desenlaces admisibles, enumerados) más al menos una afirmación que no dependa de
      * quién ganó — normalmente un conteo leído por la API. Ver
      * conventions/integration-tests.md.
+     *
+     * <p><b>Lo que el latch NO garantiza, y por qué la disyunción cerrada no es un
+     * formalismo.</b> El latch sincroniza la SALIDA de los hilos cliente; lo que pase
+     * después es del planificador. Medido en la corrida {@code catalog} (2026-09): dos
+     * peticiones salieron con ~74 µs de diferencia —concurrencia real— y aun así uno de
+     * los dos hilos se comió una pausa de ~10 ms entre dos {@code SELECT} consecutivos,
+     * sin lógica de negocio entre medias, con el daemon de Gradle recién arrancado
+     * (JIT/GC/antivirus). Las mismas clases pasaron 27/27 en caliente. Un {@code Then}
+     * que exija que la carrera se solape de verdad falla ahí, y el rojo no habla del
+     * servicio. No se persigue con una barrera más fina: sincronizar las dos peticiones
+     * DENTRO del servidor pide un gancho en el código de producción, y este arnés es de
+     * caja negra —su source set ni siquiera compila contra {@code main}—. Lo que hace
+     * que el escenario siga probando algo es el Then: enumerar los desenlaces admisibles
+     * (incluido «se serializaron») y afirmar aparte lo que no depende de quién ganó.
      */
     protected <T> List<T> race(List<Callable<T>> tasks) {
         ExecutorService pool = Executors.newFixedThreadPool(tasks.size());

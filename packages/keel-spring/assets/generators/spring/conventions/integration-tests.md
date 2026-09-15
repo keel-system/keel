@@ -1138,6 +1138,16 @@ Tres reglas al usarlos:
   normalmente un conteo leído por la API («la lista contiene exactamente un recurso»). Un escenario que
   solo enumera desenlaces admisibles no puede fallar.
 
+El latch sincroniza la **salida** de los hilos cliente, no lo que pasa después: eso es del planificador, y
+por eso la disyunción cerrada no es un formalismo. Medido en la corrida `catalog`: dos peticiones salieron
+con ~74 µs de diferencia —concurrencia real— y aun así uno de los hilos se comió una pausa de ~10 ms entre
+dos `SELECT` consecutivos, sin lógica de negocio entre medias, con el daemon de Gradle recién arrancado
+(JIT/GC/antivirus); las mismas clases pasaron 27/27 en caliente. Un `Then` que dé por hecho que las dos
+peticiones se solapan **de verdad** falla en frío, y ese rojo no habla del servicio. La forma de que el
+escenario siga probando algo es enumerar también el desenlace «se serializaron» y dejar la afirmación
+independiente del ganador como la que mide. No se arregla con una barrera más fina: sincronizarlas dentro
+del servidor pediría un gancho en el código de producción, y este arnés es de caja negra.
+
 Estas carreras se ejercitan **dentro de una instancia**, y basta: el servidor es multihilo y el árbitro de
 la carrera —la clave primaria, el lock de fila— es el mismo que arbitraría entre réplicas. Lo que no se
 puede ejercitar así son las carreras entre `@Scheduled` de réplicas distintas; ver

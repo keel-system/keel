@@ -36,6 +36,35 @@ test('lo que no existe es nuevo', () => {
   assert.deepEqual(classifyGenerated(generado('v2'), dir, manifest).nuevos, ['src/Relay.java']);
 });
 
+// La otra mitad de «no está en disco», y la que costó un arranque roto: las skills de los
+// tres brokers ordenan borrar el <Evento>PublisherStub al escribir el publisher real —dos
+// @Component del mismo puerto tumban el contexto—, y el refresco lo devolvía a su sitio
+// como si fuera un archivo nuevo. El disco no distingue las dos cosas; el manifiesto sí.
+test('lo que build escribió y ya no está lo borró alguien: es retirado, no nuevo', () => {
+  const { dir, manifest } = proyecto({ enDisco: null, registrado: 'v1' });
+  const buckets = classifyGenerated(generado('v2'), dir, manifest);
+  assert.deepEqual(buckets.retirados, ['src/Relay.java']);
+  assert.deepEqual(buckets.nuevos, [], 'un borrado no puede leerse como un archivo nuevo');
+});
+
+// Sin esto, la regla nueva se comería el caso normal: en la primera generación NADA está en
+// disco y todo tiene que escribirse.
+test('lo que no existe y tampoco consta sigue siendo nuevo', () => {
+  const { dir, manifest } = proyecto({ enDisco: null, registrado: undefined });
+  const buckets = classifyGenerated(generado('v2'), dir, manifest);
+  assert.deepEqual(buckets.nuevos, ['src/Relay.java']);
+  assert.deepEqual(buckets.retirados, []);
+});
+
+// De una ruta ADOPTADA no se sabe quién la escribió, así que tampoco se puede afirmar que su
+// ausencia sea un borrado deliberado: se trata como nueva y se escribe.
+test('una ruta adoptada que no está en disco no cuenta como retirada', () => {
+  const { dir, manifest } = proyecto({ enDisco: null, registrado: 'v1', adopted: ['src/Relay.java'] });
+  const buckets = classifyGenerated(generado('v2'), dir, manifest);
+  assert.deepEqual(buckets.retirados, []);
+  assert.deepEqual(buckets.nuevos, ['src/Relay.java']);
+});
+
 test('lo que ya coincide está al día, aunque nadie lo haya registrado', () => {
   const { dir, manifest } = proyecto({ enDisco: 'v2', registrado: undefined });
   const buckets = classifyGenerated(generado('v2'), dir, manifest);

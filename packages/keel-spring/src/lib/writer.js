@@ -19,7 +19,7 @@ import { digestOf } from 'keel-core';
  * Devuelve también la huella de lo escrito: es lo que alimenta el manifiesto, y
  * calcularla aquí evita volver a leer del disco lo que se acaba de poner.
  */
-export function writeFiles(files, destDir, { force = false, only = null } = {}) {
+export function writeFiles(files, destDir, { force = false, only = null, skip = null } = {}) {
   const copied = [];
   const skipped = [];
   const digests = [];
@@ -28,7 +28,12 @@ export function writeFiles(files, destDir, { force = false, only = null } = {}) 
     const { path: relative, content, sourceFile, executable } = entry;
     const target = path.join(destDir, relative);
     const display = relative.split(/[\\/]/).join('/');
-    const decided = only ? only.has(display) : force || !fs.existsSync(target);
+    // `skip` son rutas que build escribió y alguien BORRÓ después. No se recrean: el
+    // borrado es trabajo de alguien, igual que una edición, y deshacerlo en silencio es
+    // lo que devolvía los *PublisherStub a un proyecto donde el publisher real ya vivía.
+    // `force` sí las recupera — es la escotilla para el borrado que fue un error.
+    const decided =
+      (only ? only.has(display) : force || !fs.existsSync(target)) && (force || !skip?.has(display));
     if (!decided) {
       skipped.push(display);
       continue;

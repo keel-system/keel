@@ -269,6 +269,10 @@ export async function build(
           // siga en disco es algo que el diseño ya no tiene.
           toRetire: scaffold.pruned ? scaffold.pruned.modificados : scaffold.huerfanosVivos,
           pruned: scaffold.pruned?.borrados ?? [],
+          // Informativo, como `pruned`: no es trabajo del agente, es constancia de que build
+          // vio el borrado y lo respetó. Sin decirlo, un stub que no vuelve se lee como un
+          // archivo que build dejó de emitir.
+          notRecreated: scaffold.buckets.retirados,
           newWithTodo: scaffold.nuevosConTodo,
           stack: stackChanges,
           notes: evolutionNotes(mode, prune, scaffold.buckets)
@@ -405,10 +409,10 @@ function reportEvolution(evolution, outDir, mode) {
  * ciegas propaga el arreglo Y destruye el trabajo del agente sin decir cuál era cuál.
  */
 function reportGeneratorDrift(scaffold, projectDir, workspace, mode) {
-  const { refrescables, conflictos, adoptados } = scaffold.buckets;
+  const { refrescables, conflictos, adoptados, retirados } = scaffold.buckets;
   // Con --prune lo intacto ya se fue: solo queda por decir lo que alguien tocó.
   const huerfanos = scaffold.pruned ? scaffold.pruned.modificados : scaffold.huerfanosVivos;
-  if (refrescables.length + conflictos.length + huerfanos.length + adoptados.length === 0) {
+  if (refrescables.length + conflictos.length + huerfanos.length + adoptados.length + retirados.length === 0) {
     if (mode === 'check') console.log(pc.green('✔ El proyecto está al día con el generador instalado.'));
     return;
   }
@@ -447,6 +451,17 @@ function reportGeneratorDrift(scaffold, projectDir, workspace, mode) {
         scaffold.pruned
           ? `${huerfanos.length} archivo(s) que el generador ya no emite y alguien tocó: no se borran, pasan al agente vía ${EVOLUTION_MD}: ${huerfanos.join(', ')}`
           : `${huerfanos.length} archivo(s) que el generador ya no emite (no se borran; --refresh --prune retira los que nadie tocó): ${huerfanos.join(', ')}`
+      )
+    );
+  }
+
+  if (retirados.length > 0) {
+    separar();
+    console.log(
+      pc.dim(
+        `${retirados.length} archivo(s) que build escribió y ya no están: NO se recrean —borrarlos fue una decisión, ` +
+          `y el caso normal es un stub sustituido por su implementación real—. Si el borrado fue un error, --force los ` +
+          `devuelve: ${retirados.join(', ')}`
       )
     );
   }

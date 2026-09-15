@@ -113,7 +113,8 @@ formas obvias fallan, y conviene saber por qué antes de reinventarlas:
 
 Lo único que desambigua es **el registro de lo que el generador escribió la última vez**.
 `keel-core` expone `classifyGenerated(files, destDir, manifest)`, que con ese registro reparte
-cada archivo en seis cubos: `nuevos`, `refrescables` (es del generador, nadie lo tocó, y el
+cada archivo en siete cubos: `nuevos`, `retirados` (el registro dice que el generador lo escribió
+y ya no está en disco: alguien lo BORRÓ), `refrescables` (es del generador, nadie lo tocó, y el
 generador cambió), `alDia`, `tuyos` (lo tocaron, pero el generador no cambió: no hay nada que
 propagar), `conflictos` (las dos cosas) y `adoptados` (sin registro). Aparte, los huérfanos: rutas
 del registro que el generador ya no emite. `classifyGenerated` solo los reporta; `pruneOrphans`
@@ -123,6 +124,11 @@ aparte los que alguien tocó, que **no se borran nunca**.
 Un generador nuevo hereda el mecanismo escribiendo su manifiesto y ofreciendo los tres modos:
 
 - `--refresh` escribe `nuevos` + `refrescables` y no toca nada más;
+- **un `retirado` no se reescribe en ningún modo**, tampoco en una pasada sin modo, donde la regla
+  es «escribe lo que no exista» y un archivo borrado es justo eso. Borrar es una decisión igual que
+  editar: el caso normal es un stub que el agente sustituyó por su implementación real, y recrearlo
+  devuelve dos implementaciones del mismo puerto. Se reporta, y `--force` lo recupera si el borrado
+  fue un error;
 - `--prune`, solo junto a `--refresh`, retira los huérfanos intactos;
 - `--check` no escribe y sale con 1 si hay algo desfasado — misma puerta de CI que
   `keel init --check` y `keel index --check`.

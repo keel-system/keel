@@ -202,7 +202,14 @@ export function scaffoldService({ manifest, layers, workspace, force = false, st
   if (mode === 'check') only = new Set();
   else if (mode === 'refresh') only = new Set([...buckets.nuevos, ...buckets.refrescables]);
 
-  const { copied, skipped, digests } = writeFiles(files, projectDir, { force, only });
+  // Lo que alguien borró NO vuelve, en ningún modo. En `refresh` ya queda fuera por no
+  // estar en `only`; sin modo hace falta decirlo, porque ahí la regla es «escribe lo que
+  // no exista» y un archivo borrado es, justamente, uno que no existe.
+  const { copied, skipped, digests } = writeFiles(files, projectDir, {
+    force,
+    only,
+    skip: new Set(buckets.retirados)
+  });
 
   // Los huérfanos que se puede demostrar que son de build (nadie los tocó) se retiran
   // con --prune; los tocados se quedan y pasan al agente vía EVOLUTION.md.

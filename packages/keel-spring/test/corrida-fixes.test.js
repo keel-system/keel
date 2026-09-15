@@ -1965,3 +1965,58 @@ test('y el motor que ya distingue no recibe nada', () => {
   assert.match(postgres, /name = "sku", nullable = false, length = 8/);
   assert.ok(!postgres.includes('collate'), 'PostgreSQL no necesita collation: ya distingue');
 });
+
+// ─── El emisor de un evento es la RAÍZ del agregado, no lo que la operación devuelve ─────
+
+/**
+ * `catalog-extended` con `addProductImage` devolviendo la entidad HIJA, que es lo que hacía la
+ * corrida `catalog` de verdad (`output: { entity: ProductImage }`) y lo que ninguna fixture tenía.
+ */
+function emisorHija() {
+  const { manifest, layers, errors } = loadService(path.join(fixturesDir, 'catalog-extended'));
+  assert.deepEqual(errors, []);
+  const patched = structuredClone(layers);
+  patched['use-cases'].operations.addProductImage.output = { entity: 'ProductImage' };
+  const workspace = tmpDir('keel-emisor-hija-');
+  const model = buildModel({ manifest, layers: patched, stack: RELATIONAL });
+  const result = scaffoldService({ manifest, layers: patched, workspace, force: true, stack: RELATIONAL });
+  const root = path.join(workspace, result.outDir);
+  return {
+    model,
+    file: (suffix) => {
+      const found = walk(root).find((f) => f.endsWith(suffix));
+      assert.ok(found, `no se generó ${suffix}`);
+      return fs.readFileSync(found, 'utf8');
+    }
+  };
+}
+
+test('una operación que devuelve la entidad hija emite igual por la raíz del agregado', () => {
+  // `aggregates` salía de `group.entity`, que es el `output.entity` de la operación. Una
+  // operación puede devolver una entidad HIJA sin dejar de actuar sobre el agregado entero, y
+  // entonces el evento quedaba atribuido a la hija. El comentario del modelo ya decía «las
+  // raíces de agregado»; el código no las resolvía.
+  const { model } = emisorHija();
+  const evento = model.events.find((event) => event.name === 'ProductImagesChanged');
+  assert.deepEqual(evento.aggregates, ['Product'], 'el evento quedó atribuido a una entidad hija');
+  // El `why` del gate se compone de `emittedBy`: si la operación no cuelga de la raíz, el gate
+  // pide el raise en una clase que no puede publicarlo.
+  assert.ok(
+    evento.emittedBy.every((entry) => entry.aggregate === 'Product'),
+    'emittedBy sigue atribuyendo operaciones a la hija'
+  );
+});
+
+test('y la hija NO recibe buffer de eventos, que es donde el fallo era silencioso', () => {
+  // La mitad que de verdad duele: build sembraba el buffer `raise`/`pullDomainEvents` dentro de
+  // la hija, y una hija no tiene adaptador de repositorio — nadie lo drena. El evento se acumula
+  // en memoria y no sale del servicio: ni el outbox recibe nada, ni ninguna suscripción, y lo
+  // único que se ve es un escenario esperando un mensaje que nunca llega.
+  const { file } = emisorHija();
+  const hija = file(path.join('domain', 'entity', 'ProductImage.java'));
+  assert.ok(!/pullDomainEvents/.test(hija), 'la hija acumula eventos que nadie drena');
+  assert.ok(!/void raise\(/.test(hija), 'la hija tiene buffer de eventos');
+  // Y la raíz sí lo tiene: sin esta mitad, borrar el buffer de todo el mundo pasaría el caso.
+  const raiz = file(path.join('domain', 'aggregate', 'Product.java'));
+  assert.match(raiz, /pullDomainEvents/);
+});

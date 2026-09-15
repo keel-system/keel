@@ -131,10 +131,46 @@ test('el gate exige la búsqueda por clave natural, y NO el almacén', () => {
   const { read } = generate({ inNaturalKey: true });
   const gate = read('infra/check-idempotency.sh');
 
-  assert.match(gate, /findByOrderIdAndRequestKey/, 'no exige la búsqueda por la clave natural');
+  assert.match(gate, /findByOrderIdAndRequestKey/, 'no nombra la búsqueda por la clave natural');
   assert.match(gate, /commandIdempotency/);
   // El `forbid` sí lo nombra (para prohibirlo); lo que no puede es exigirlo.
   assert.ok(!/require=.*IdempotencyStore/.test(gate), 'exige un puerto que no existe');
+});
+
+// El patrón NO fija la ortografía del finder, y esa mitad costó una corrida: con la unicidad
+// declarada «ignorando mayúsculas y acentos», el handler correcto consulta por el campo
+// NORMALIZADO y el gate salía KO sobre código correcto. Su camino de menor resistencia era
+// llamar al finder literal —que build también generó— solo para callarlo, cambiando por el
+// camino la semántica por la que ese diseño existe.
+test('el patrón admite la variante normalizada del MISMO campo', () => {
+  const { read } = generate({ inNaturalKey: true });
+  // El patrón que de verdad se ejecuta, sacado del script y no reescrito aquí: derivarlo por
+  // nuestra cuenta sería medir una copia de sí mismo.
+  const linea = read('infra/check-idempotency.sh')
+    .split('\n')
+    .find((l) => l.startsWith("unit 'commandIdempotency' 'createReservation'"));
+  assert.ok(linea, 'no hay check de commandIdempotency para la operación');
+  const patron = new RegExp(linea.split("'")[7]);
+
+  assert.ok(patron.test('reservationRepository.findByOrderIdAndRequestKey(orderId, key)'), 'no admite el finder literal');
+  assert.ok(
+    patron.test('reservationRepository.findByNormalizedOrderIdAndRequestKeyNormalized(a, b)'),
+    'no admite la variante normalizada: el gate exigiría la consulta equivocada'
+  );
+});
+
+test('y sigue en rojo cuando el handler no consulta nada', () => {
+  // La otra mitad, o relajar el patrón hasta lo inútil pasaría igual: lo que se conserva es que
+  // haya una consulta POR ESE CAMPO. Sin ella la repetición llega a la constraint y sale como el
+  // conflicto crudo del motor, con un code que no es el del diseño.
+  const { read } = generate({ inNaturalKey: true });
+  const linea = read('infra/check-idempotency.sh')
+    .split('\n')
+    .find((l) => l.startsWith("unit 'commandIdempotency' 'createReservation'"));
+  const patron = new RegExp(linea.split("'")[7]);
+
+  assert.ok(!patron.test('reservationRepository.save(reservation);'), 'un handler que inserta a ciegas pasa el gate');
+  assert.ok(!patron.test('reservationRepository.findById(id);'), 'cualquier consulta lo satisface');
 });
 
 

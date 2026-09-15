@@ -38,6 +38,7 @@ export function evolutionState({
   pendingMerge = [],
   toRetire = [],
   pruned = [],
+  notRecreated = [],
   newWithTodo = [],
   stack = { added: [], removed: [] },
   notes = []
@@ -52,11 +53,12 @@ export function evolutionState({
     pendingMerge: [...pendingMerge].sort(byName),
     toRetire: [...toRetire].sort(byName),
     pruned: [...pruned].sort(byName),
+    notRecreated: [...notRecreated].sort(byName),
     newWithTodo: [...newWithTodo].sort(byName),
     stack,
     notes
   };
-  // `pruned` y `notes` no son trabajo para nadie: son informativos.
+  // `pruned`, `notRecreated` y `notes` no son trabajo para nadie: son informativos.
   state.pending =
     designChanged ||
     state.pendingMerge.length > 0 ||
@@ -99,6 +101,8 @@ export function mergePrevious(state, previous, projectDir) {
     pendingMerge: state.pendingMerge,
     toRetire: state.toRetire,
     pruned: union(state.pruned, (previous.pruned ?? []).filter((relative) => !exists(relative))),
+    // Lo que sigue sin estar: si alguien lo restauró con --force, deja de ser noticia.
+    notRecreated: union(state.notRecreated, (previous.notRecreated ?? []).filter((relative) => !exists(relative))),
     newWithTodo: union(state.newWithTodo, (previous.newWithTodo ?? []).filter(stillTodo)),
     stack: {
       added: mergeByCategory(addedBefore, state.stack.added),
@@ -217,6 +221,19 @@ export function renderEvolutionMarkdown(state) {
       stackLines
     )
   );
+
+  if (state.notRecreated.length > 0) {
+    out.push(
+      '## No recreado (lo borraste tú)',
+      '',
+      'Archivos que build escribió en su día y que ya no están. **No se recrean**: el caso normal es un stub ' +
+        'sustituido por su implementación real —dos `@Component` del mismo puerto tumban el arranque—, y devolverlo ' +
+        'deshace ese trabajo. Si el borrado fue un error, `--force` los vuelve a escribir. Informativo.',
+      '',
+      ...state.notRecreated.map((relative) => `- ${code(relative)}`),
+      ''
+    );
+  }
 
   if (state.pruned.length > 0) {
     out.push(

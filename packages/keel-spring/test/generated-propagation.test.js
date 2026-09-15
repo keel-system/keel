@@ -113,6 +113,42 @@ test('--refresh pone al día lo de build y NO toca lo que escribió el agente', 
   );
 });
 
+// El borrado es una decisión igual que una edición, y hasta que hubo cubo propio build la
+// deshacía en silencio: las skills de los tres brokers ordenan retirar el <Evento>PublisherStub
+// al escribir el publisher real, y el refresco siguiente lo devolvía catalogado como «archivo
+// nuevo con TODO». El síntoma llega lejísimos —NoUniqueBeanDefinitionException al arrancar el
+// contexto, dos @Component del mismo puerto— y no menciona ni a build ni al refresco.
+test('lo que alguien borró NO vuelve, ni con --refresh ni en un build normal', async () => {
+  const workspace = withFixture();
+  await runBuild(workspace);
+
+  fs.rmSync(skillPath(workspace));
+  await runBuild(workspace, { refresh: true });
+  assert.ok(!fs.existsSync(skillPath(workspace)), '--refresh recreó un archivo que alguien borró');
+
+  await runBuild(workspace);
+  assert.ok(!fs.existsSync(skillPath(workspace)), 'un build normal lo recreó: ahí la regla es «escribe lo que no exista»');
+
+  // La otra mitad, o la regla nueva se comería el caso normal: un archivo que build NO ha
+  // escrito nunca tiene que seguir apareciendo.
+  const manifest = readManifest(workspace);
+  const readme = path.join(projectOf(workspace), 'README.md');
+  fs.rmSync(readme);
+  delete manifest.files['README.md'];
+  saveManifest(workspace, manifest);
+  await runBuild(workspace);
+  assert.ok(fs.existsSync(readme), 'lo que no consta como escrito por build tiene que escribirse');
+});
+
+test('--force devuelve lo borrado: es la escotilla para el borrado que fue un error', async () => {
+  const workspace = withFixture();
+  await runBuild(workspace);
+
+  fs.rmSync(skillPath(workspace));
+  await runBuild(workspace, { force: true });
+  assert.ok(fs.existsSync(skillPath(workspace)), '--force tiene que poder recuperarlo');
+});
+
 test('un conflicto no se toca, y su versión nueva cae fuera de src/', async () => {
   const workspace = withFixture();
   await runBuild(workspace);
