@@ -530,6 +530,33 @@ export const MECHANISMS = {
     }
   },
 
+  'telemetry-store-spans': {
+    title: 'Telemetría: spans del almacén (solo con telemetry: otel)',
+    emitter: 'src/scaffold/gradle.js · src/scaffold/telemetry.js',
+    axis: 'model',
+    why: 'La instrumentación del almacén es la única pieza de la telemetría que bifurca por modelo: en relacional la aporta datasource-micrometer por autoconfiguración, sin clase; en documental la registra TelemetryConfig con MongoObservationCommandListener. Perder una no rompe nada: la traza sigue llegando, con un hueco justo donde está el tiempo.',
+    parity: {
+      skip: 'la telemetría es una elección de STACK (telemetry: otel) y el par se genera sin ella, así que los marcadores no aparecerían en ninguna de las dos ramas; lo cubre un test que genera las dos ramas con la opción',
+      test: 'test/telemetry.test.js'
+    },
+    coverage: {
+      relational: {
+        state: 'razonado',
+        net: 'ninguna',
+        engines: [],
+        falsified: false,
+        why: 'lo compila compile-check (stock-reservation con --telemetry=otel) y se midió UNA vez a mano, el 2026-09-19, arrancando el servidor con bootTestRun contra un colector real: llegaron los spans connection/query/result-set colgando del caso de uso. Pero fue sobre el H2 del perfil test, no sobre el motor real, y no hay red que lo repita. Dueño: una corrida con --telemetry otel sobre postgresql'
+      },
+      document: {
+        state: 'razonado',
+        net: 'ninguna',
+        engines: [],
+        falsified: false,
+        why: 'lo compila compile-check (asset-vault con --telemetry=otel): javac confirma que ContextProviderFactory y MongoObservationCommandListener tienen la firma que la plantilla supone. Nadie lo ha arrancado contra Mongo. Dueño: una corrida con --telemetry otel sobre mongodb'
+      }
+    }
+  },
+
   'persistence-adapter': {
     title: 'Espejo de persistencia y repositorios (mapeo, embebidos, colecciones, orden y desempate)',
     emitter:

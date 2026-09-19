@@ -9,6 +9,7 @@
 // (sus handlers seguían importando @Transactional).
 
 import { javaFile, javaPath, subPackage } from './render.js';
+import { usesTelemetry, OBSERVATIONS } from './telemetry.js';
 
 export const INTERFACES_PKG = 'application.interfaces';
 export const ANNOTATIONS_PKG = 'application.annotations';
@@ -202,7 +203,7 @@ public class UseCaseContainer {
 // hasta el final del lote —así que no aísla a ninguna réplica— y la llamada al
 // proveedor retiene una conexión del pool por la latencia de un tercero. Ver
 // conventions/dependencies.md § El orden dentro del barrido.
-const DISPATCH_WITHOUT_TRANSACTION = `    /**
+const dispatchWithoutTransaction = ({ call, run }) => `    /**
      * Despacha un Command <b>sin abrir transacción</b>: las abre el adaptador de repositorio
      * en cada llamada, así que el barrido controla dónde cae cada commit.
      *
@@ -226,15 +227,105 @@ const DISPATCH_WITHOUT_TRANSACTION = `    /**
     @SuppressWarnings("unchecked")
     public <C extends Command> void dispatchWithoutTransaction(C command) {
         CommandHandler<C> instance = (CommandHandler<C>) useCaseContainer.resolve(command.getClass());
-        instance.handle(command);
+        ${run('command', 'instance.handle(command)')};
     }
 
     /** Igual que el anterior, para un barrido cuya operación declara \`output\`. */
     @SuppressWarnings("unchecked")
     public <R, C extends ReturningCommand<R>> R dispatchWithoutTransaction(C command) {
         ReturningCommandHandler<C, R> instance = (ReturningCommandHandler<C, R>) useCaseContainer.resolve(command.getClass());
-        return instance.handle(command);
+        return ${call('command', 'instance.handle(command)')};
     }`;
+
+// Todo despacho pasa por UNO de dos envoltorios, y es el único punto por el que pasan todas las
+// operaciones —también los barridos programados y los mensajes consumidos—: por eso es aquí donde
+// se fija el LOG DE FRONTERA de cada caso de uso (operación, resultado y duración), con y sin
+// telemetría. Con ella, además, cada despacho es una observación `keel.use-case` (span + timer) y
+// el log va DENTRO de ella, así que su línea lleva el traceId del caso de uso.
+//
+// Dos envoltorios con nombre distinto y no una sobrecarga: una lambda cuyo cuerpo es una llamada
+// encaja a la vez en Supplier y en Runnable, y javac lo rechazaría por ambiguo.
+function observation() {
+  return {
+    call: (message, expr) => `callUseCase(${message}, () -> ${expr})`,
+    run: (message, stmt) => `runUseCase(${message}, () -> ${stmt})`
+  };
+}
+
+// La PILA de un fallo inesperado no la imprime el mediator: la imprime el adaptador por el que
+// entró (ApiExceptionHandler en HTTP, el contenedor del listener en un mensaje, el scheduler en un
+// barrido). Si la imprimiera también aquí, cada fallo saldría con dos pilas idénticas —la prueba
+// de humo lo vio—. El mediator deja la línea de frontera: qué operación, qué resultado, cuánto.
+function useCaseHelpers(telemetry) {
+  const body = telemetry
+    ? 'return observationOf(operation).observe(() -> logged(operation, action));'
+    : 'return logged(operation, action);';
+  const observationOf = telemetry
+    ? `
+
+    /** Baja cardinalidad a propósito: el nombre de la clase del mensaje, nunca sus valores. */
+    private Observation observationOf(String operation) {
+        return Observation.createNotStarted("${OBSERVATIONS.useCase}", observationRegistry)
+                .contextualName(operation)
+                .lowCardinalityKeyValue("keel.operation", operation);
+    }`
+    : '';
+  return `
+
+    private <T> T callUseCase(Object message, Supplier<T> action) {
+        String operation = message.getClass().getSimpleName();
+        ${body}
+    }
+
+    private void runUseCase(Object message, Runnable action) {
+        callUseCase(message, () -> {
+            action.run();
+            return null;
+        });
+    }
+
+    /**
+     * El log de frontera del caso de uso. Solo nombres y códigos, nunca los valores del mensaje:
+     * un Command lleva datos de quien llama, y lo que se loguea se queda en el backend de logs.
+     *
+     * <p>Niveles fijos: DEBUG si salió bien (en producción no se imprime), INFO si el dominio lo
+     * rechazó —un 4xx es un resultado esperado, no un fallo del servicio— y ERROR si falló. La pila
+     * de un fallo NO va aquí: la imprime el adaptador por el que entró (ApiExceptionHandler, el
+     * contenedor del listener o el scheduler), y con las dos cada fallo saldría duplicado.
+     */
+    private static <T> T logged(String operation, Supplier<T> action) {
+        long start = System.nanoTime();
+        try {
+            T result = action.get();
+            log.atDebug()
+                    .addKeyValue("keel.operation", operation)
+                    .addKeyValue("keel.outcome", "ok")
+                    .addKeyValue("keel.duration_ms", elapsedMillis(start))
+                    .log("Caso de uso {}: ok", operation);
+            return result;
+        } catch (DomainException ex) {
+            log.atInfo()
+                    .addKeyValue("keel.operation", operation)
+                    .addKeyValue("keel.outcome", "rejected")
+                    .addKeyValue("keel.error_code", ex.getCode())
+                    .addKeyValue("keel.duration_ms", elapsedMillis(start))
+                    .log("Caso de uso {}: rechazado ({})", operation, ex.getCode());
+            throw ex;
+        } catch (RuntimeException | Error ex) {
+            log.atError()
+                    .addKeyValue("keel.operation", operation)
+                    .addKeyValue("keel.outcome", "error")
+                    .addKeyValue("keel.error_type", ex.getClass().getName())
+                    .addKeyValue("keel.duration_ms", elapsedMillis(start))
+                    .log("Caso de uso {}: falló con {}", operation, ex.getClass().getSimpleName());
+            throw ex;
+        }
+    }
+
+    private static long elapsedMillis(long startNanos) {
+        return (System.nanoTime() - startNanos) / 1_000_000;
+    }${observationOf}`;
+}
 
 function renderMediator(model) {
   const transactional = model.layersPresent.persistence;
@@ -257,68 +348,78 @@ function renderMediator(model) {
  * Spring. El handler no: no importa Spring (constitution.md).` : ''}
  */`;
 
+  const telemetry = usesTelemetry(model);
+  const obs = observation();
+  const { call, run } = obs;
+  const registryField = telemetry ? '\n    private final ObservationRegistry observationRegistry;' : '';
+  const registryParam = telemetry ? ', ObservationRegistry observationRegistry' : '';
+  const registryAssign = telemetry ? '\n        this.observationRegistry = observationRegistry;' : '';
+  const helpers = useCaseHelpers(telemetry);
+
   let members;
   let dispatchers;
   if (transactional) {
     members = `    private final UseCaseContainer useCaseContainer;
     private final TransactionTemplate writeTransaction;
-    private final TransactionTemplate readTransaction;
+    private final TransactionTemplate readTransaction;${registryField}
 
-    public UseCaseMediator(UseCaseContainer useCaseContainer, PlatformTransactionManager transactionManager) {
+    public UseCaseMediator(UseCaseContainer useCaseContainer, PlatformTransactionManager transactionManager${registryParam}) {
         this.useCaseContainer = useCaseContainer;
         this.writeTransaction = new TransactionTemplate(transactionManager);
         this.readTransaction = new TransactionTemplate(transactionManager);
-        this.readTransaction.setReadOnly(true);
+        this.readTransaction.setReadOnly(true);${registryAssign}
     }`;
     dispatchers = `    @SuppressWarnings("unchecked")
     public <R, Q extends Query<R>> R dispatch(Q query) {
         QueryHandler<Q, R> instance = (QueryHandler<Q, R>) useCaseContainer.resolve(query.getClass());
-        return readTransaction.execute(status -> instance.handle(query));
+        return ${call('query', 'readTransaction.execute(status -> instance.handle(query))')};
     }
 
     @SuppressWarnings("unchecked")
     public <C extends Command> void dispatch(C command) {
         CommandHandler<C> instance = (CommandHandler<C>) useCaseContainer.resolve(command.getClass());
-        writeTransaction.executeWithoutResult(status -> instance.handle(command));
+        ${run('command', 'writeTransaction.executeWithoutResult(status -> instance.handle(command))')};
     }
 
     @SuppressWarnings("unchecked")
     public <R, C extends ReturningCommand<R>> R dispatch(C command) {
         ReturningCommandHandler<C, R> instance = (ReturningCommandHandler<C, R>) useCaseContainer.resolve(command.getClass());
-        return writeTransaction.execute(status -> instance.handle(command));
+        return ${call('command', 'writeTransaction.execute(status -> instance.handle(command))')};
     }
 
-${DISPATCH_WITHOUT_TRANSACTION}`;
+${dispatchWithoutTransaction(obs)}${helpers}`;
   } else {
-    members = `    private final UseCaseContainer useCaseContainer;
+    members = `    private final UseCaseContainer useCaseContainer;${registryField}
 
-    public UseCaseMediator(UseCaseContainer useCaseContainer) {
-        this.useCaseContainer = useCaseContainer;
+    public UseCaseMediator(UseCaseContainer useCaseContainer${registryParam}) {
+        this.useCaseContainer = useCaseContainer;${registryAssign}
     }`;
     dispatchers = `    @SuppressWarnings("unchecked")
     public <R, Q extends Query<R>> R dispatch(Q query) {
         QueryHandler<Q, R> instance = (QueryHandler<Q, R>) useCaseContainer.resolve(query.getClass());
-        return instance.handle(query);
+        return ${call('query', 'instance.handle(query)')};
     }
 
     @SuppressWarnings("unchecked")
     public <C extends Command> void dispatch(C command) {
         CommandHandler<C> instance = (CommandHandler<C>) useCaseContainer.resolve(command.getClass());
-        instance.handle(command);
+        ${run('command', 'instance.handle(command)')};
     }
 
     @SuppressWarnings("unchecked")
     public <R, C extends ReturningCommand<R>> R dispatch(C command) {
         ReturningCommandHandler<C, R> instance = (ReturningCommandHandler<C, R>) useCaseContainer.resolve(command.getClass());
-        return instance.handle(command);
+        return ${call('command', 'instance.handle(command)')};
     }
 
-${DISPATCH_WITHOUT_TRANSACTION}`;
+${dispatchWithoutTransaction(obs)}${helpers}`;
   }
 
   const body = `${javadocHeader}
 @Component
 public class UseCaseMediator {
+
+    private static final Logger log = LoggerFactory.getLogger(UseCaseMediator.class);
 
 ${members}
 
@@ -333,10 +434,17 @@ ${dispatchers}
     `${interfacesPkg}.QueryHandler`,
     `${interfacesPkg}.ReturningCommand`,
     `${interfacesPkg}.ReturningCommandHandler`,
+    `${subPackage(model, 'domain.errors')}.DomainException`,
+    'java.util.function.Supplier',
+    'org.slf4j.Logger',
+    'org.slf4j.LoggerFactory',
     'org.springframework.stereotype.Component'
   ];
   if (transactional) {
     imports.push('org.springframework.transaction.PlatformTransactionManager', 'org.springframework.transaction.support.TransactionTemplate');
+  }
+  if (telemetry) {
+    imports.push('io.micrometer.observation.Observation', 'io.micrometer.observation.ObservationRegistry');
   }
 
   return {

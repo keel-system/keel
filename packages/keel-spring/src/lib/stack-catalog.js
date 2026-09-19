@@ -924,7 +924,71 @@ export const MAIL_SINK = {
   })
 };
 
+// ─── Telemetría (patrón colector) ───────────────────────────────────────────
+//
+// Una elección de STACK, no del diseño: el DSL no dice nada de observabilidad y el mismo diseño
+// se genera con o sin ella. Por eso no entra en CATEGORY_APPLIES (stack-config.js): no hay capa
+// que la pida, y un keel-stack.json anterior sin la clave se lee como `none` sin repreguntar.
+//
+// Con `otel` el servidor emite trazas, métricas y logs por OTLP a UN colector, y solo conoce su
+// endpoint. Cambiar de backend es cambiar el bloque `exporters` de deploy/otel/collector.yaml,
+// nunca el código ni la config de la app: esa es toda la razón de poner un colector en medio.
+export const TELEMETRY = {
+  none: { id: 'none', label: 'Sin telemetría' },
+  otel: { id: 'otel', label: 'OpenTelemetry (trazas, métricas y logs por OTLP a un colector)' }
+};
+
+/**
+ * La infraestructura de telemetría de deploy/ y el endpoint al que habla la app. Fuente ÚNICA:
+ * el receptor del colector, la variable que la app lee y los puertos publicados salen de aquí,
+ * y un test cruza las tres proyecciones. Con dos copias, basta que una cambie de puerto para que
+ * la app exporte a un sitio donde no escucha nadie —y los exportadores fallan en silencio: un
+ * WARN cada pocos segundos y ninguna traza—.
+ *
+ * Solo deploy/: infra/ es la infraestructura de los escenarios FL-*, y la telemetría no tiene
+ * escenarios. En el perfil `local` (el de la suite) la exportación va apagada por defecto.
+ */
+export const TELEMETRY_INFRA = {
+  collector: {
+    serviceKey: 'otel-collector',
+    // contrib y no core: `resourcedetection` y `transform`, que usa la config generada, solo
+    // existen en la distribución contrib.
+    image: 'otel/opentelemetry-collector-contrib:0.161.0',
+    grpcPort: 4317,
+    httpPort: 4318,
+    healthPort: 13133
+  },
+  // Backend de PRUEBA para mirar las tres señales en local: Tempo + Loki + Mimir + Grafana en un
+  // solo contenedor. No es parte del patrón —el colector le exporta por OTLP igual que le
+  // exportaría a cualquier otro—, es lo que hay detrás mientras nadie elija otro.
+  backend: {
+    serviceKey: 'lgtm',
+    image: 'grafana/otel-lgtm:0.33.1',
+    otlpHttpPort: 4318,
+    grafanaPort: 3000,
+    // 3001 y no 3000 en el host: el 3000 es el origen CORS del perfil local (LOCAL_CORS_ORIGINS),
+    // el de una SPA en desarrollo.
+    grafanaPublishedPort: 3001
+  },
+  // La ÚNICA variable que la app lee para saber dónde exportar; las tres rutas OTLP se componen
+  // a partir de ella en parameters/<perfil>/telemetry.yaml.
+  endpointVar: 'OTEL_EXPORTER_OTLP_ENDPOINT'
+};
+
+/** Endpoint OTLP/HTTP del colector visto desde DENTRO de la red de deploy/. */
+export function collectorEndpoint() {
+  const { collector } = TELEMETRY_INFRA;
+  return `http://${collector.serviceKey}:${collector.httpPort}`;
+}
+
+/** Endpoint OTLP/HTTP del colector visto desde el HOST (una app arrancada con bootRun). */
+export function collectorHostEndpoint() {
+  return `http://localhost:${TELEMETRY_INFRA.collector.httpPort}`;
+}
+
 export const STACK_DEFAULTS = {
+  // Sin telemetría por defecto: añadirla es una elección explícita.
+  telemetry: 'none',
   database: 'postgresql',
   // Default de la rama documental. No es una segunda pregunta: el diseño elige el
   // modelo (persistence.default.model) y el cuestionario solo ofrece las opciones

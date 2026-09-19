@@ -28,6 +28,7 @@ import { relievingOperations, portMethodName } from './conditional-uniqueness.js
 import { naturalKeyFinder } from './repositories.js';
 import { capitalize } from './entities.js';
 import { usesOutbox } from './outbox.js';
+import { usesTelemetry, consumesKeelEnvelope } from './telemetry.js';
 import { screamingSnake, camelCase, kebabCase } from '../lib/naming.js';
 
 /**
@@ -66,8 +67,57 @@ function checksOf(model) {
     ...outboundIdempotencyChecks(model),
     ...outboxChecks(model),
     ...mailChecks(model),
-    ...conditionalUniquenessChecks(model)
+    ...conditionalUniquenessChecks(model),
+    ...inboundContextChecks(model)
   ];
+}
+
+/**
+ * Que el listener continúe la traza del mensaje (solo con telemetría).
+ *
+ * Es la única pieza de la telemetría que escribe el agente: todo lo demás lo genera build. Y su
+ * fallo es de los caros: `runWith(envelope.metadata().correlationId(), …)` compila, abre la
+ * correlación, pasa todos los escenarios… y corta la traza en cada consumo. Con Kafka y RabbitMQ
+ * la cabecera nativa lo tapa a medias; con SNS/SQS el `traceparent` del sobre es la única vía y
+ * la traza muere en el broker, sin un solo síntoma en el servidor.
+ *
+ * Por eso lo que se prohíbe es exactamente esa forma, y lo que se exige es poco: que el contexto
+ * se abra con `CorrelationContext.runWith(`. Exigir el literal `envelope.metadata()` como
+ * argumento daría ROJO a quien lo guarda antes en una variable, y el camino de menor resistencia
+ * para callarlo sería reescribir código correcto.
+ */
+function inboundContextChecks(model) {
+  if (!usesTelemetry(model) || !consumesKeelEnvelope(model)) return [];
+  const subscriptions = (model.subscriptions ?? []).filter((sub) => sub.envelope === 'keel');
+  const check = (subject, sub, extra = {}) => ({
+    group: 'inboundContext',
+    subject,
+    class: sub.listenerClass,
+    ...extra,
+    require: ['CorrelationContext[.]runWith[[:space:]]*[(]'],
+    forbid: ['runWith[[:space:]]*[(][^;]*[.]correlationId[(][)][[:space:]]*,'],
+    why:
+      'el listener abre el contexto con CorrelationContext.runWith(envelope.metadata(), …): es la sobrecarga que, además de ' +
+      'la correlación, continúa la traza W3C que el emisor dejó en metadata.traceparent. La de String (…correlationId(), …) ' +
+      'compila y funciona, pero corta la traza en cada consumo — y con SNS/SQS no hay cabecera nativa que la salve'
+  });
+
+  if (sharesQueue(model)) {
+    const byDestination = new Map();
+    for (const sub of subscriptions) {
+      if (!byDestination.has(sub.topicDefault)) byDestination.set(sub.topicDefault, []);
+      byDestination.get(sub.topicDefault).push(sub);
+    }
+    return [...byDestination.entries()].map(([destination, subs]) =>
+      subs.length > 1
+        ? check(`${destination} (${subs.map((sub) => sub.name).join(', ')})`, subs[0], {
+            locate: subs.map((sub) => sub.messageRecord).join('|'),
+            confirm: 'CorrelationContext'
+          })
+        : check(subs[0].name, subs[0])
+    );
+  }
+  return subscriptions.map((sub) => check(sub.name, sub));
 }
 
 /**

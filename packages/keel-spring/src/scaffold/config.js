@@ -4,7 +4,7 @@
 // (local literal → develop ${VAR:default} → production ${VAR} obligatoria).
 // El perfil activo se elige con la variable de entorno PROFILE (default local).
 
-import { AUTH, DATABASES, HTTP_STUB } from '../lib/stack-catalog.js';
+import { AUTH, DATABASES, HTTP_STUB, TELEMETRY_INFRA, collectorHostEndpoint } from '../lib/stack-catalog.js';
 import { usesPartialIndexes } from './migrations.js';
 import { EMBEDDED_MONGO_VERSION } from '../lib/assets.js';
 import { physicalBucketName } from '../lib/buckets.js';
@@ -15,6 +15,7 @@ import { usesOutbox } from './outbox.js';
 import { usesIdempotency } from './idempotency.js';
 import { usesHttpIdempotency } from './http-idempotency.js';
 import { usesCorrelation } from './correlation.js';
+import { usesTelemetry } from './telemetry.js';
 import { SWEEP_BATCH_DEFAULT } from './claim.js';
 
 const PROFILES = ['local', 'develop', 'production'];
@@ -91,6 +92,10 @@ export function generate(model) {
     // liveness/readiness para Kubernetes; el detalle del health solo se muestra
     // fuera de production.
     fragments.push(fragment(profile, 'management', managementYaml(profile)));
+    // Solo con `telemetry: otel`: a dónde van las tres señales (un colector) y cuánto se muestrea.
+    if (usesTelemetry(model)) {
+      fragments.push(fragment(profile, 'telemetry', telemetryYaml(model, profile)));
+    }
     if (layersPresent.persistence) {
       fragments.push(fragment(profile, 'db', dbYaml(model, profile, dbName)));
     }
@@ -270,10 +275,158 @@ function loggingYaml(model, profile) {
   // Saca el correlationId que CorrelationContext deja en el MDC a cada línea de
   // log: es lo que permite reconstruir una petición completa (y los eventos que
   // provocó) a partir del identificador que el cliente recibió en la respuesta.
-  if (usesCorrelation(model)) {
-    lines.push('  pattern:', '    correlation: "[%X{correlationId:-}] "');
+  //
+  // Con telemetría van además el traceId y el spanId que Micrometer Tracing deja en el MDC: es
+  // el enlace entre una línea de la consola y su traza en el backend. Y fuera de local la consola
+  // pasa a JSON (ECS), con esos mismos campos como atributos: lo que un colector o un agregador
+  // de logs sabe leer sin expresiones regulares. Local sigue en texto porque lo lee una persona.
+  const telemetry = usesTelemetry(model);
+  if (usesCorrelation(model) || telemetry) {
+    const correlation = usesCorrelation(model) ? '[%X{correlationId:-}] ' : '';
+    const trace = telemetry ? '[%X{traceId:-},%X{spanId:-}] ' : '';
+    lines.push('  pattern:', `    correlation: "${correlation}${trace}"`);
+  }
+  if (telemetry && (profile === 'develop' || profile === 'production')) {
+    // El formato ECS de Boot vuelca el MDC tal cual: sin esto la línea lleva `traceId` y `spanId`,
+    // y un backend ECS no la enlaza con su traza porque busca `trace.id` y `span.id`.
+    lines.push(
+      '  structured:',
+      '    format:',
+      `      console: ${envWithDefault(profile, 'LOG_FORMAT', 'ecs')}`,
+      '    json:',
+      '      rename:',
+      '        traceId: trace.id',
+      '        spanId: span.id'
+    );
   }
   return lines.join('\n') + '\n';
+}
+
+/**
+ * parameters/<perfil>/telemetry.yaml: el destino de las tres señales y cuánto se muestrea.
+ *
+ * El servicio solo conoce UN endpoint, el del colector (`OTEL_EXPORTER_OTLP_ENDPOINT`), y de él
+ * cuelgan las tres rutas OTLP/HTTP. El backend lo decide el colector: por eso aquí no aparece el
+ * nombre de ningún proveedor.
+ *
+ * El gradiente es el de siempre con una excepción deliberada: en `local` la exportación va
+ * APAGADA por defecto. `local` es el perfil de la suite de escenarios, que no tiene colector, y
+ * un exportador sin destino no falla —escribe un WARN cada pocos segundos durante toda la
+ * suite—. El traceId sigue en los logs; exportar es `TELEMETRY_EXPORT_ENABLED=true` con
+ * `deploy/` levantado. En `production` el endpoint es obligatorio: exportar a un default
+ * inventado es no exportar, y en silencio.
+ */
+function telemetryYaml(model, profile) {
+  const endpointVar = TELEMETRY_INFRA.endpointVar;
+  const endpoint =
+    profile === 'production' ? `\${${endpointVar}}` : `\${${endpointVar}:${collectorHostEndpoint()}}`;
+  const exportEnabled = `\${TELEMETRY_EXPORT_ENABLED:${profile === 'local' ? 'false' : 'true'}}`;
+  // Parent-based: el servicio respeta la decisión de quien lo llama y solo decide en las raíces.
+  // En production una de cada diez raíces: el volumen real no cabe entero, y el muestreo por
+  // cola (quedarse con los errores y los lentos) es trabajo del colector, que sí ve la traza
+  // completa.
+  const sampling = profile === 'production' ? '0.1' : '1.0';
+  const step = profile === 'production' ? '60s' : '30s';
+
+  const lines = [
+    '# Telemetría: trazas, métricas y logs por OTLP/HTTP a un colector OpenTelemetry.',
+    '# Cambiar de backend es cambiar la configuración del COLECTOR, no este archivo.',
+    'management:',
+    '  tracing:',
+    '    sampling:',
+    ...(profile === 'production'
+      ? [
+          '      # 0.1 es seguro sin nada detrás. Con el gateway de deploy/otel/collector-gateway.example.yaml',
+          '      # haciendo muestreo por cola, súbelo a 1.0: si no, se muestrea dos veces.'
+        ]
+      : []),
+    `      probability: ${envWithDefault(profile, 'TRACING_SAMPLING_PROBABILITY', sampling)}`,
+    '  opentelemetry:',
+    '    resource-attributes:',
+    // service.name lo pone Boot desde spring.application.name. Las claves llevan corchetes: con
+    // un punto dentro, sin ellos el binder de Boot las leería como mapas anidados.
+    `      "[service.version]": "${model.service.version}"`,
+    `      "[deployment.environment]": ${envWithDefault(profile, 'DEPLOYMENT_ENVIRONMENT', profile)}`,
+    '  otlp:',
+    '    tracing:',
+    `      endpoint: ${endpoint}/v1/traces`,
+    '      compression: gzip',
+    '      export:',
+    `        enabled: ${exportEnabled}`,
+    // Los logs tienen su PROPIO interruptor y va apagado: el canal primario de los logs es la
+    // consola (JSON fuera de local), que la plataforma recoge —en Kubernetes, el colector con
+    // `filelog`—. Encenderlo aquí además duplicaría cada línea en el backend, y un colector caído
+    // más de lo que aguanta su cola los perdería; los de stdout se quedan en el nodo.
+    '    logging:',
+    `      endpoint: ${endpoint}/v1/logs`,
+    '      compression: gzip',
+    '      export:',
+    '        enabled: ${LOG_EXPORT_OTLP:false}',
+    '    metrics:',
+    '      export:',
+    `        url: ${endpoint}/v1/metrics`,
+    `        step: ${envWithDefault(profile, 'METRICS_EXPORT_STEP', step)}`,
+    // Histogramas exponenciales: el backend calcula cualquier percentil (p95, p99) sin fijar los
+    // cubos de antemano, y con un tamaño acotado.
+    '        histogram-flavor: base2_exponential_bucket_histogram',
+    `        enabled: ${exportEnabled}`,
+    // Latencias con histograma: sin esto las métricas de tiempo solo dan media y máximo, y la
+    // pregunta de producción —¿cuánto tarda el 1 % más lento?— no tiene respuesta.
+    '  metrics:',
+    '    distribution:',
+    '      percentiles-histogram:',
+    '        "[http.server.requests]": true',
+    '        "[http.client.requests]": true',
+    '        "[keel.use-case]": true',
+    ...brokerObservationLines(model)
+  ];
+  return lines.join('\n') + '\n';
+}
+
+/**
+ * Productor y consumidor del broker como observaciones: spans con la cabecera W3C nativa y sus
+ * timers. Donde el cliente no ofrece observación (SNS/SQS: Spring Cloud AWS 3.3 no la trae), la
+ * traza cruza igual por `metadata.traceparent` de la envoltura (ver MessageTracing).
+ */
+function brokerObservationLines(model) {
+  if (!model.layersPresent.messaging || !model.stack.broker) return [];
+  if (model.stack.broker === 'kafka') {
+    return ['spring:', '  kafka:', '    template:', '      observation-enabled: true', '    listener:', '      observation-enabled: true'];
+  }
+  if (model.stack.broker === 'rabbitmq') {
+    return [
+      'spring:',
+      '  rabbitmq:',
+      '    template:',
+      '      observation-enabled: true',
+      '    listener:',
+      '      simple:',
+      '        observation-enabled: true'
+    ];
+  }
+  return [
+    '# SNS/SQS: Spring Cloud AWS no ofrece observación nativa; la traza viaja en',
+    '# metadata.traceparent de la envoltura keel y la restaura CorrelationContext.runWith(metadata, ...).'
+  ];
+}
+
+// Perfil `test`: la suite unitaria no abre trazas ni exporta nada.
+function testTelemetryYaml() {
+  return [
+    'management:',
+    '  tracing:',
+    '    enabled: false',
+    '  otlp:',
+    '    tracing:',
+    '      export:',
+    '        enabled: false',
+    '    logging:',
+    '      export:',
+    '        enabled: false',
+    '    metrics:',
+    '      export:',
+    '        enabled: false'
+  ].join('\n') + '\n';
 }
 
 /**
@@ -1186,6 +1339,10 @@ function testProfileFiles(model) {
 
   if (usesHttpIdempotency(model)) {
     fragments.push(fragment('test', 'idempotency', idempotencyYaml('test')));
+  }
+
+  if (usesTelemetry(model)) {
+    fragments.push(fragment('test', 'telemetry', testTelemetryYaml()));
   }
 
   // Correo: el binding de las propiedades `mail.*` y el JavaMailSender que

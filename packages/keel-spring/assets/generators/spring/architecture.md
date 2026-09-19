@@ -32,6 +32,7 @@ src/main/java/<base>/
     ├── configurations/usecase/  # UseCaseMediator (frontera transaccional) + Container + AutoRegister
     ├── scheduling/      # <X>Scheduler (@Scheduled), despacha vía mediator (el barrido, sin transacción)
     ├── configurations/logging/  # LogExceptionsAspect
+    ├── telemetry/       # (solo con telemetry: otel) TelemetryConfig + MessageTracing — YA GENERADOS
     ├── messaging/       # EventEnvelope + <Servicio>DomainEventBridge (domain → integración)
     │   ├── events/      # <Evento>IntegrationEvent (gemelos de wire)
     │   └── outbox/      # (solo reliability: outbox) OutboxEventJpa + relay + PUERTO OutboxDispatcher
@@ -74,7 +75,8 @@ Lo que sale al broker no es el evento de dominio ni el payload a secas: es la **
     "eventVersion": 1,
     "occurredAt": "2026-03-14T09:21:07.482Z",
     "source": "product-service",
-    "correlationId": "1f7b0a52-33c9-4a1e-9a44-6c0f2b8d55e1"
+    "correlationId": "1f7b0a52-33c9-4a1e-9a44-6c0f2b8d55e1",
+    "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
   },
   "data": {
     "productId": "3d2e1f00-8a44-4c9b-9f01-77b6c2d4e5a9",
@@ -91,9 +93,10 @@ Lo que sale al broker no es el evento de dominio ni el payload a secas: es la **
 | `metadata.occurredAt` | `Instant` | `Instant.now()` en el `raise` | Instante en que **ocurrió el hecho** en el dominio, no el del envío: con `reliability: outbox` el relay entrega después y los dos instantes difieren. |
 | `metadata.source` | `String` | `service.name` del diseño, horneado en `EventMetadata.now(...)` | Servicio emisor. Es **procedencia declarada**, no identidad verificada: el emisor lo escribe en el cuerpo y nadie lo comprueba, así que no se resuelve con él ningún inquilino, permiso ni autorización — para eso está el destino del que se consume o el principal que estampa el broker, ambos configuración de despliegue. Vale para trazar y diagnosticar. |
 | `metadata.correlationId` | `String` (nullable) | `CorrelationContext.get()` en el `<Servicio>DomainEventBridge`, vía `EventEnvelope.of(...)` | Correlación del request que originó el hecho — la misma que estampa `CorrelationFilter` (`X-Correlation-Id`), el `ErrorResponse` y cada línea de log. `null` si el hecho no nació de una petición (un `@Scheduled`, por ejemplo). |
+| `metadata.traceparent` | `String` (nullable) | `EventEnvelope.of(...)`, del span activo, **solo con telemetría** (`telemetry: otel` en `keel-stack.json`) | Contexto de traza W3C del hecho. Es lo que hace que la traza cruce el evento aunque el broker no propague cabeceras (SNS/SQS) y aunque el outbox lo publique después, desde otro hilo. Está en el contrato con o sin telemetría: sin ella viaja a `null`. Lo continúa `CorrelationContext.runWith(envelope.metadata(), …)` al consumir. |
 | `data` | `<Evento>IntegrationEvent` | El bridge, desde el evento de dominio | Gemelo de wire del evento: los campos del `payload` declarado en `messaging.keel.yaml`. Su componente `metadata` es `@JsonIgnore` — la metadata autoritativa es la del envelope y no se duplica en el cable. |
 
-La metadata **no se regenera** en ningún punto de la cadena: nace en el `raise` dentro del agregado y el bridge solo le añade el `correlationId`, que el dominio no puede conocer (regla en `constitution.md`). Por eso el `eventId` sirve de clave de deduplicación extremo a extremo, y por eso el `IdempotencyGuard` del lado consumidor cae por defecto en `envelope.metadata().eventId()`.
+La metadata **no se regenera** en ningún punto de la cadena: nace en el `raise` dentro del agregado y la publicación solo le añade el `correlationId` y el `traceparent`, que el dominio no puede conocer (regla en `constitution.md`). Por eso el `eventId` sirve de clave de deduplicación extremo a extremo, y por eso el `IdempotencyGuard` del lado consumidor cae por defecto en `envelope.metadata().eventId()`.
 
 Fuera del cuerpo del mensaje viajan los **atributos de transporte**, que no forman parte del contrato de datos: el destino y la routing key (`@Value` sobre `parameters/<perfil>/messaging.yaml`, nunca hardcodeados) y el header de tipo que cada broker añade al publicar. Cómo se materializan depende del stack: lo cubre la skill `keel-spring-<broker>` del proyecto.
 

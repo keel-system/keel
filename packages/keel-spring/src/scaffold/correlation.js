@@ -9,6 +9,7 @@
 // siguiendo la skill keel-spring-<broker>.
 
 import { javaFile, javaPath, subPackage } from './render.js';
+import { usesTelemetry, consumesKeelEnvelope, messageTracingImport } from './telemetry.js';
 
 const CORRELATION_PKG = 'infrastructure.correlation';
 const WEB_PKG = 'infrastructure.web';
@@ -31,7 +32,41 @@ export function correlationImport(model) {
   return `${subPackage(model, CORRELATION_PKG)}.CorrelationContext`;
 }
 
+// La sobrecarga que usa un listener de una suscripción con envoltura keel. Se emite con o sin
+// telemetría, y es a propósito: el código del listener es del AGENTE, y así su forma no depende
+// de una elección de stack que se puede cambiar después con `build --telemetry`. Lo que cambia
+// es lo que hace dentro, y eso es de build.
+function metadataOverload(model) {
+  if (!consumesKeelEnvelope(model)) return '';
+  const body = usesTelemetry(model)
+    ? `runWith(metadata.correlationId(), () -> MessageTracing.continueFrom(
+                metadata.traceparent(), MessageTracing.MESSAGE_CONSUME, Kind.CONSUMER, metadata.eventType(), action));`
+    : 'runWith(metadata.correlationId(), action);';
+  return `
+
+    /**
+     * La forma que deben usar los listeners de mensajes con envoltura keel: abre la
+     * correlación del mensaje de origen.
+     * Con telemetría también continúa la traza W3C que el emisor estampó en la
+     * envoltura; sin ella solo abre la correlación. Usarla siempre, en vez de la de
+     * String, es lo que hace que activar la telemetría no exija tocar el listener.
+     */
+    public static void runWith(EventMetadata metadata, Runnable action) {
+        if (metadata == null) {
+            action.run();
+            return;
+        }
+        ${body}
+    }`;
+}
+
 function renderContext(model) {
+  const overload = metadataOverload(model);
+  const imports = ['org.slf4j.MDC'];
+  if (overload) imports.push(`${subPackage(model, 'domain.events')}.EventMetadata`);
+  if (overload && usesTelemetry(model)) {
+    imports.push(messageTracingImport(model), 'io.micrometer.observation.transport.Kind');
+  }
   const body = `/**
  * Contexto de correlación del hilo actual.
  *
@@ -89,12 +124,12 @@ public final class CorrelationContext {
         } finally {
             clear();
         }
-    }
+    }${overload}
 }`;
 
   return {
     path: javaPath(model, CORRELATION_PKG, 'CorrelationContext'),
-    content: javaFile(subPackage(model, CORRELATION_PKG), ['org.slf4j.MDC'], body)
+    content: javaFile(subPackage(model, CORRELATION_PKG), imports, body)
   };
 }
 

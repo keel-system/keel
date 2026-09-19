@@ -18,6 +18,7 @@ import { domainTypeImport } from './entities.js';
 import { outboundIdempotentCalls } from './http-idempotency.js';
 import { providerFailures } from '../lib/outbound-failures.js';
 import { callPolicy, clientRemembers } from './last-known.js';
+import { usesTelemetry } from './telemetry.js';
 
 const PORT_PKG = 'domain.clients';
 const HTTP_PKG = 'infrastructure.http';
@@ -112,6 +113,17 @@ function renderConfig(model, client) {
       `        oauth2.setClientRegistrationIdResolver(request -> "${auth.registrationId}");`
     );
     builderSteps.push('.requestInterceptor(oauth2)');
+  }
+
+  // Con telemetría, el cliente es una observación: span CLIENT por llamada, su timer y —lo que
+  // más importa— la cabecera `traceparent` hacia el proveedor, que es lo que une su traza a la
+  // nuestra. `RestClient.builder()` a secas no está instrumentado (el que sí lo está es el
+  // Builder que inyecta Boot), así que el registro se pasa explícito.
+  if (usesTelemetry(model)) {
+    imports.add('io.micrometer.observation.ObservationRegistry');
+    imports.add('org.springframework.beans.factory.ObjectProvider');
+    beanParams.push('ObjectProvider<ObservationRegistry> observationRegistry');
+    builderSteps.push('.observationRegistry(observationRegistry.getIfAvailable(() -> ObservationRegistry.NOOP))');
   }
 
   const body = `@Configuration

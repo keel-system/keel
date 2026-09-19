@@ -177,6 +177,14 @@ function generatedJava(fixture, stack) {
 // porque cada uno tiene su rama de `deliverMessage`, y la base documental porque
 // tiene su propia rama de espejo y repositorios.
 const MATRIX = [
+  // Telemetría (`telemetry: otel`): el paquete infrastructure/telemetry, el mediator con sus
+  // observaciones, el relay que publica dentro de la traza y la sobrecarga de CorrelationContext.
+  // Tres filas porque son tres ramas del mismo Java: el relay RELACIONAL con Kafka; el
+  // DOCUMENTAL con SNS/SQS —donde el sobre es la única vía de la traza— y los clientes HTTP
+  // observados; y RabbitMQ, donde varias suscripciones comparten listener.
+  ['stock-reservation', { broker: 'kafka', telemetry: 'otel' }],
+  ['asset-vault', { broker: 'snssqs', telemetry: 'otel' }],
+  ['stock-reservation', { broker: 'rabbitmq', telemetry: 'otel' }],
   ['catalog-extended', { broker: 'kafka' }],
   ['catalog-extended', { broker: 'rabbitmq' }],
   ['catalog-extended', { broker: 'snssqs' }],

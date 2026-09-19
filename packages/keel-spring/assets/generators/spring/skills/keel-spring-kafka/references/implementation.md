@@ -125,7 +125,12 @@ Todo listener sigue el mismo esqueleto, y **ambas piezas ya están generadas**:
 no escribas un mecanismo propio.
 
 1. **Abre la correlación** con
-   `CorrelationContext.runWith(envelope.metadata().correlationId(), () -> { ... })`.
+   `CorrelationContext.runWith(envelope.metadata(), () -> { ... })`.
+   Con la envoltura keel usa **siempre** la sobrecarga de la metadata, no la del
+   `correlationId`: abre la misma correlación y además continúa la traza W3C de
+   `metadata.traceparent` si el proyecto tiene telemetría (y no hace nada más si
+   no la tiene, así que activarla después no obliga a tocar el listener). La de
+   `String` queda para las fuentes ajenas sin envoltura keel.
    Así los eventos que provoque este consumo salen con la correlación del
    mensaje de origen y el flujo completo se sigue en los logs. `runWith` cierra
    el contexto pase lo que pase, que es lo que evita que el siguiente mensaje
@@ -196,7 +201,7 @@ carrera; que no lo anote no significa que no exista, significa que el diseño no
 - [ ] `ErrorHandlingDeserializer` configurado (poison pills al DLT, no en bucle).
 - [ ] Un cuerpo propio que no parsea **lanza** (y su tipo está en `addNotRetryableExceptions`), nunca `log.error` + `return`; descartar lo ajeno sí es `return` sin excepción.
 - [ ] La rama «carrera resuelta» captura `InvalidStateTransitionException` **y** `OptimisticLockingFailureException` (la base de `org.springframework.dao`), y con el orden `record` llama a `record(...)` igualmente.
-- [ ] Listener envuelto en `CorrelationContext.runWith(...)` y deduplicado con el `IdempotencyGuard` en el orden que prescribe el javadoc del `<Evento>Message` (sin mecanismo propio).
+- [ ] Listener envuelto en `CorrelationContext.runWith(envelope.metadata(), ...)` (la sobrecarga de la metadata, no la del `correlationId`) y deduplicado con el `IdempotencyGuard` en el orden que prescribe el javadoc del `<Evento>Message` (sin mecanismo propio).
 
 ## Si la suscripción alimenta una proyección
 

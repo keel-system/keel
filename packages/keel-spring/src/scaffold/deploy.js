@@ -31,8 +31,11 @@ import {
   databaseHealthProbe,
   UI_SERVICES,
   HTTP_STUB,
-  MAIL_SINK
+  MAIL_SINK,
+  TELEMETRY_INFRA,
+  collectorEndpoint
 } from '../lib/stack-catalog.js';
+import { usesTelemetry } from './telemetry.js';
 import { cognitoMockConfig, realmSpec } from './auth-provisioning.js';
 import { RUNTIME_RESOLUTION, composeResolution } from './devtools.js';
 import { LOCAL_API_KEY, LOCAL_CORS_ORIGINS, localClientApiKey } from './config.js';
@@ -57,7 +60,10 @@ const PORT_VARS = {
   'minio:9000': 'MINIO_PORT',
   'minio:9001': 'MINIO_CONSOLE_PORT',
   'mailpit:1025': 'MAILPIT_SMTP_PORT',
-  'mailpit:8025': 'MAILPIT_UI_PORT'
+  'mailpit:8025': 'MAILPIT_UI_PORT',
+  [`${TELEMETRY_INFRA.collector.serviceKey}:${TELEMETRY_INFRA.collector.grpcPort}`]: 'OTEL_GRPC_PORT',
+  [`${TELEMETRY_INFRA.collector.serviceKey}:${TELEMETRY_INFRA.collector.httpPort}`]: 'OTEL_HTTP_PORT',
+  [`${TELEMETRY_INFRA.backend.serviceKey}:${TELEMETRY_INFRA.backend.grafanaPort}`]: 'GRAFANA_PORT'
 };
 
 export function generate(model) {
@@ -105,6 +111,11 @@ export function generate(model) {
   const realm = model.stack.auth === 'keycloak' ? realmSpec(model) : null;
   if (realm) {
     files.push({ path: 'deploy/keycloak/realm-export.json', content: realmExport(realm) });
+  }
+  if (usesTelemetry(model)) {
+    files.push({ path: 'deploy/otel/collector.yaml', content: collectorConfig(model) });
+    files.push({ path: 'deploy/otel/collector-agent.example.yaml', content: collectorAgentConfig(model) });
+    files.push({ path: 'deploy/otel/collector-gateway.example.yaml', content: collectorGatewayConfig(model) });
   }
 
   return files;
@@ -248,6 +259,29 @@ function composeServices(model) {
     ];
   }
 
+  // Telemetría: el colector, y detrás el backend de prueba donde mirar las tres señales. La app
+  // solo conoce al colector (OTEL_EXPORTER_OTLP_ENDPOINT); el backend es un detalle de
+  // deploy/otel/collector.yaml. Ninguno lleva healthcheck, así que la app no espera por ellos
+  // (dependsOn solo encadena los que lo tienen), y es lo correcto: los exportadores reintentan
+  // y encolan, y un colector caído no puede impedir arrancar el servicio. La imagen del
+  // colector es distroless, sin shell con el que sondearlo.
+  if (usesTelemetry(model)) {
+    const { collector, backend } = TELEMETRY_INFRA;
+    services[backend.serviceKey] = {
+      image: backend.image,
+      ports: [`${backend.grafanaPublishedPort}:${backend.grafanaPort}`]
+    };
+    services[collector.serviceKey] = {
+      image: collector.image,
+      command: ['--config=/etc/otelcol-contrib/config.yaml'],
+      volumes: ['./otel/collector.yaml:/etc/otelcol-contrib/config.yaml:ro'],
+      // Publicados también en el host: así una app arrancada con bootRun (perfil local con
+      // TELEMETRY_EXPORT_ENABLED=true) exporta al mismo colector.
+      ports: [`${collector.grpcPort}:${collector.grpcPort}`, `${collector.httpPort}:${collector.httpPort}`],
+      depends_on: [backend.serviceKey]
+    };
+  }
+
   // Puertos publicados por variable: el diseñador casi siempre tiene ya algo
   // escuchando en 5432 o en 8080.
   for (const [key, definition] of Object.entries(services)) {
@@ -375,6 +409,16 @@ function appEnvironment(model) {
   }
 
   if (stack.cache) environment.REDIS_HOST = stack.cache === 'valkey' ? 'valkey' : 'redis';
+  // Dentro de la red el colector es su nombre de servicio; la ruta de cada señal la compone
+  // parameters/develop/telemetry.yaml.
+  if (usesTelemetry(model)) {
+    environment[TELEMETRY_INFRA.endpointVar] = collectorEndpoint();
+    // Aquí sí se exportan los logs por OTLP, y es la excepción a la regla: en deploy/ no hay
+    // nada que recoja el stdout de los contenedores, así que sin esto Loki se quedaría vacío.
+    // En un despliegue real la consola es el canal y esto se deja apagado (ver
+    // collector-production.example.yaml, que la recoge con filelog).
+    environment.LOG_EXPORT_OTLP = 'true';
+  }
   if (layersPresent.storage && stack.storage === 'minio') {
     environment.STORAGE_ENDPOINT = 'http://minio:9000';
   }
@@ -599,6 +643,10 @@ export function publishedUrls(model) {
   if (stack.auth === 'keycloak') {
     urls.push({ label: 'Keycloak (admin/admin)', url: 'http://localhost:${KEYCLOAK_PORT:-8180}' });
   }
+  if (usesTelemetry(model)) {
+    const port = TELEMETRY_INFRA.backend.grafanaPublishedPort;
+    urls.push({ label: 'Grafana (telemetría)', url: `http://localhost:\${GRAFANA_PORT:-${port}}` });
+  }
   return urls;
 }
 
@@ -765,4 +813,356 @@ function defaultScopesOf(client, spec) {
   if (audience === 'ok') scopes.push(`aud-${spec.audience}`);
   if (audience === 'wrong') scopes.push('aud-wrong');
   return [...scopes, ...client.scopes];
+}
+
+// ─── deploy/otel/collector.yaml ──────────────────────────────────────────────
+
+/**
+ * La configuración del colector OpenTelemetry: el ÚNICO sitio donde se decide a qué backend van
+ * las trazas, las métricas y los logs. El servicio no lo sabe ni lo necesita.
+ *
+ * Robusta en el sentido que recomienda el propio proyecto del colector, y cada pieza por algo:
+ *   · memory_limiter PRIMERO en cada pipeline: si el backend se atasca, el colector rechaza en
+ *     vez de morir por falta de memoria —y el SDK de la app reintenta—.
+ *   · attributes/redact antes de exportar: ninguna cabecera de credenciales sale de aquí aunque
+ *     una instrumentación la capture.
+ *   · batch al final: agrupa y comprime; exportar span a span es lo que satura un backend.
+ *   · retry_on_failure + sending_queue en el exportador: un backend caído unos minutos no
+ *     pierde datos, los encola.
+ */
+function collectorConfig(model) {
+  const { collector, backend } = TELEMETRY_INFRA;
+  const backendEndpoint = `http://${backend.serviceKey}:${backend.otlpHttpPort}`;
+  return `# Colector OpenTelemetry de ${model.service.name} (pruebas manuales en deploy/).
+# Generado por keel-spring build.
+#
+# El servicio exporta TODO aquí por OTLP y no sabe a qué backend va a parar: esa decisión vive
+# SOLO en este archivo. Cambiar de backend es cambiar el bloque \`exporters\` (y la lista de cada
+# pipeline) y reiniciar el colector; la aplicación no se toca. Ejemplos al final.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:${collector.grpcPort}
+      http:
+        endpoint: 0.0.0.0:${collector.httpPort}
+
+processors:
+  # Primero en cada pipeline: con el backend atascado el colector rechaza en vez de caerse por
+  # memoria, y el SDK de la aplicación reintenta.
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+  # Completa el recurso con lo que declare el entorno (OTEL_RESOURCE_ATTRIBUTES) sin pisar lo
+  # que ya trae la aplicación (service.name, service.version, deployment.environment).
+  resourcedetection:
+    detectors: [env]
+    override: false
+  # Defensa en profundidad: ninguna credencial sale del colector aunque una instrumentación la
+  # capture como atributo.
+  attributes/redact:
+    actions:
+      - key: http.request.header.authorization
+        action: delete
+      - key: http.request.header.cookie
+        action: delete
+      - key: http.response.header.set-cookie
+        action: delete
+      - key: http.request.header.x-api-key
+        action: delete
+  batch:
+    send_batch_size: 1024
+    timeout: 5s
+
+exporters:
+  # Backend de PRUEBA: Grafana LGTM (Tempo + Loki + Mimir), en el contenedor '${backend.serviceKey}'.
+  otlphttp/backend:
+    endpoint: ${backendEndpoint}
+    compression: gzip
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+    sending_queue:
+      enabled: true
+      num_consumers: 4
+      queue_size: 5000
+  # Un resumen por lote en los logs del colector: lo primero que se mira cuando «no llega nada».
+  debug:
+    verbosity: basic
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:${collector.healthPort}
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection, attributes/redact, batch]
+      exporters: [otlphttp/backend, debug]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection, attributes/redact, batch]
+      exporters: [otlphttp/backend, debug]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection, attributes/redact, batch]
+      exporters: [otlphttp/backend, debug]
+
+# ── Otros backends ──────────────────────────────────────────────────────────────────────────
+# Se cambia el exportador y su referencia en los pipelines; nada más. Por ejemplo:
+#
+#   Jaeger o Tempo (trazas por OTLP):
+#     otlp/jaeger:
+#       endpoint: jaeger:4317
+#       tls: { insecure: true }
+#
+#   Prometheus (métricas por remote-write):
+#     prometheusremotewrite:
+#       endpoint: http://prometheus:9090/api/v1/write
+#
+#   Un proveedor SaaS por OTLP (la clave, desde el entorno del colector, nunca en este archivo):
+#     otlphttp/vendor:
+#       endpoint: https://otlp.example.com
+#       headers: { api-key: \${env:VENDOR_API_KEY} }
+`;
+}
+
+// ─── deploy/otel/collector-{agent,gateway}.example.yaml ──────────────────────
+//
+// La referencia de PRODUCCIÓN, que la plataforma adapta y despliega; build no la levanta. Son
+// dos piezas y no una, y no es gusto: el muestreo por COLA (quedarse con todas las trazas con
+// error y con las lentas) solo funciona si todos los spans de una traza llegan al MISMO colector,
+// y recoger el stdout de los contenedores exige un colector en CADA nodo. Un solo despliegue no
+// puede ser las dos cosas: el agente de nodo reparte las trazas por traceID entre los gateways
+// (exportador `loadbalancing`) y el gateway decide qué se queda.
+
+function collectorAgentConfig(model) {
+  const { collector } = TELEMETRY_INFRA;
+  return `# Colector AGENTE (uno por nodo: DaemonSet) — referencia de producción para ${model.service.name}.
+# Generado por keel-spring build. NO lo despliega build: es la plantilla que adapta la plataforma.
+#
+# Qué hace:
+#   · Recoge los LOGS del stdout de los contenedores (filelog). La consola JSON (ECS) es el canal
+#     primario de los logs del servicio; por eso LOG_EXPORT_OTLP va apagado en la app.
+#   · Recibe trazas y métricas por OTLP de los pods de su nodo (la app exporta a
+#     OTEL_EXPORTER_OTLP_ENDPOINT=http://<ip-del-nodo>:${collector.httpPort}).
+#   · Añade los metadatos de Kubernetes (pod, deployment, namespace, nodo).
+#   · Reparte las trazas por traceID entre los gateways, para que el muestreo por cola vea cada
+#     traza entera en un solo sitio (collector-gateway.example.yaml).
+#
+# Muestreo: con el gateway haciendo muestreo por cola, sube TRACING_SAMPLING_PROBABILITY a 1.0 en
+# la app — si no, se muestrea dos veces y el gateway decide sobre una décima parte.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:${collector.grpcPort}
+      http:
+        endpoint: 0.0.0.0:${collector.httpPort}
+  filelog:
+    include: [/var/log/pods/*/*/*.log]
+    # Los logs del propio colector fuera: si no, cada línea que escribe al procesar un log vuelve
+    # a entrar como log.
+    exclude: [/var/log/pods/*/otel-*/*.log]
+    start_at: end
+    include_file_path: true
+    operators:
+      # Quita la envoltura del runtime (containerd/CRI-O/docker) y deja la línea de la app.
+      - type: container
+        id: container-parser
+      # La línea es ECS: se parsea a atributos, con su instante y su nivel.
+      - type: json_parser
+        id: ecs-parser
+        if: 'body matches "^\\\\{"'
+        parse_from: body
+        parse_to: attributes
+        timestamp:
+          parse_from: attributes["@timestamp"]
+          layout_type: gotime
+          layout: '2006-01-02T15:04:05.999999999Z07:00'
+        severity:
+          parse_from: attributes["log.level"]
+      # trace.id / span.id (los renombra la app desde el MDC) pasan a ser el CONTEXTO del
+      # registro: es lo que permite saltar del log a su traza en el backend.
+      - type: trace_parser
+        if: 'attributes["trace.id"] != nil'
+        trace_id:
+          parse_from: attributes["trace.id"]
+        span_id:
+          parse_from: attributes["span.id"]
+      - type: move
+        if: 'attributes["message"] != nil'
+        from: attributes["message"]
+        to: body
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+  k8sattributes:
+    auth_type: serviceAccount
+    passthrough: false
+    extract:
+      metadata: [k8s.namespace.name, k8s.deployment.name, k8s.pod.name, k8s.node.name]
+    pod_association:
+      - sources:
+          - from: resource_attribute
+            name: k8s.pod.ip
+      - sources:
+          - from: connection
+  resourcedetection:
+    detectors: [env, system]
+    override: false
+  batch:
+    send_batch_size: 1024
+    timeout: 5s
+
+exporters:
+  # Trazas: por traceID a los gateways (servicio headless), para el muestreo por cola.
+  loadbalancing:
+    routing_key: traceID
+    protocol:
+      otlp:
+        compression: gzip
+        tls:
+          insecure: true
+    resolver:
+      dns:
+        hostname: otel-gateway-headless.observability.svc.cluster.local
+  # Métricas y logs no necesitan afinidad: van al gateway tal cual.
+  otlp/gateway:
+    endpoint: otel-gateway.observability.svc.cluster.local:${collector.grpcPort}
+    compression: gzip
+    tls:
+      insecure: true
+    retry_on_failure:
+      enabled: true
+    sending_queue:
+      enabled: true
+      queue_size: 5000
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:${collector.healthPort}
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, k8sattributes, resourcedetection, batch]
+      exporters: [loadbalancing]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, k8sattributes, resourcedetection, batch]
+      exporters: [otlp/gateway]
+    logs:
+      receivers: [filelog]
+      processors: [memory_limiter, k8sattributes, resourcedetection, batch]
+      exporters: [otlp/gateway]
+`;
+}
+
+function collectorGatewayConfig(model) {
+  const { collector } = TELEMETRY_INFRA;
+  return `# Colector GATEWAY (Deployment con servicio headless) — referencia de producción para ${model.service.name}.
+# Generado por keel-spring build. NO lo despliega build: es la plantilla que adapta la plataforma.
+#
+# Es el ÚNICO sitio que conoce el backend: cambiarlo es cambiar el bloque \`exporters\` de este
+# archivo. Aquí se decide también qué trazas se quedan (muestreo por cola), porque el agente de
+# nodo le manda cada traza entera por traceID.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:${collector.grpcPort}
+      http:
+        endpoint: 0.0.0.0:${collector.httpPort}
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+  # Defensa en profundidad: ninguna credencial sale hacia el backend.
+  attributes/redact:
+    actions:
+      - key: http.request.header.authorization
+        action: delete
+      - key: http.request.header.cookie
+        action: delete
+      - key: http.response.header.set-cookie
+        action: delete
+      - key: http.request.header.x-api-key
+        action: delete
+  # Muestreo por COLA: se decide con la traza entera delante. Se queda con TODAS las que tienen
+  # un error y con todas las lentas, y con una parte del resto. Ajusta el umbral al SLO del
+  # servicio y el porcentaje al volumen que el backend puede pagar.
+  tail_sampling:
+    decision_wait: 10s
+    num_traces: 50000
+    policies:
+      - name: errores
+        type: status_code
+        status_code:
+          status_codes: [ERROR]
+      - name: lentas
+        type: latency
+        latency:
+          threshold_ms: 1000
+      - name: resto
+        type: probabilistic
+        probabilistic:
+          sampling_percentage: 10
+  batch:
+    send_batch_size: 2048
+    timeout: 5s
+
+exporters:
+  # El backend. Placeholder: un proveedor por OTLP con su credencial DESDE EL ENTORNO del
+  # colector, nunca en este archivo ni en la aplicación.
+  otlphttp/backend:
+    endpoint: \${env:OTEL_BACKEND_ENDPOINT}
+    headers:
+      authorization: \${env:OTEL_BACKEND_AUTH}
+    compression: gzip
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+    sending_queue:
+      enabled: true
+      num_consumers: 8
+      queue_size: 10000
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:${collector.healthPort}
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, attributes/redact, tail_sampling, batch]
+      exporters: [otlphttp/backend]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, attributes/redact, batch]
+      exporters: [otlphttp/backend]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, attributes/redact, batch]
+      exporters: [otlphttp/backend]
+`;
 }

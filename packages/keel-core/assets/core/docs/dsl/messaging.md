@@ -76,7 +76,8 @@ Ningún evento viaja desnudo: todo mensaje que publica un servicio Keel sale env
     "eventVersion": 1,
     "occurredAt": "2026-03-14T09:21:07.482Z",
     "source": "product-service",
-    "correlationId": "1f7b0a52-33c9-4a1e-9a44-6c0f2b8d55e1"
+    "correlationId": "1f7b0a52-33c9-4a1e-9a44-6c0f2b8d55e1",
+    "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
   },
   "data": {
     "productId": "3d2e1f00-8a44-4c9b-9f01-77b6c2d4e5a9",
@@ -93,6 +94,7 @@ Ningún evento viaja desnudo: todo mensaje que publica un servicio Keel sale env
 | `occurredAt` | `timestamp` | Instante ISO-8601 en UTC en que **ocurrió el hecho** en el dominio, no el del envío (con `reliability: outbox` pueden distar). |
 | `source` | `string` | Nombre del servicio emisor (`service.name` del manifiesto). Es **procedencia declarada**, no identidad verificada: sirve para trazar, nunca para autorizar (ver abajo). |
 | `correlationId` | `string` \| `null` | Correlación de la petición que originó el hecho; es lo que hila la traza end-to-end entre servicios. `null` si no hubo contexto de petición (p. ej. un job programado). |
+| `traceparent` | `string` | `null` | Contexto de traza [W3C Trace Context](https://www.w3.org/TR/trace-context/) del hecho: lo que hace que una traza distribuida cruce el evento aunque el broker no propague cabeceras y aunque la entrega ocurra después (`reliability: outbox`). Lo estampa el emisor **si tiene telemetría** (es una elección de stack del generador, no del diseño); si no, `null`. Un consumidor con telemetría lo continúa; uno sin ella lo ignora. |
 | `data` | objeto | El `payload` declarado en `publishing.events.<Evento>.payload`, con sus campos tal cual. |
 
 Esta forma es **parte del contrato público**: `/keel-docs` la publica en el `asyncapi.yaml` del servicio

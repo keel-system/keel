@@ -72,6 +72,12 @@ const databaseArg = args.find((arg) => arg.startsWith('--database='))?.split('='
 // Cognito no comprueba el claim `aud` sino el PREFIJO del scope, así que su filtro de audiencia
 // es otra plantilla. Se tokenizaba en java-syntax y no lo compilaba nadie.
 const authArg = args.find((arg) => arg.startsWith('--auth='))?.split('=')[1];
+// La telemetría es el cuarto eje con Java propio: con `--telemetry=otel` build emite el paquete
+// infrastructure/telemetry, el mediator con observaciones, el relay que publica dentro de la traza
+// y los clientes HTTP observados. Todo eso vive en `main` y nadie más lo compila: java-syntax
+// solo tokeniza, y javac es lo único que sabe si `MongoObservationCommandListener` o
+// `ReceiverContext` tienen la firma que la plantilla supone.
+const telemetryArg = args.find((arg) => arg.startsWith('--telemetry='))?.split('=')[1];
 
 /**
  * Qué combinaciones se compilan.
@@ -126,7 +132,12 @@ for (const { broker, database } of combos) {
       console.error(`${fixture}: la fixture no carga:\n  ${errors.join('\n  ')}`);
       process.exit(2);
     }
-    const stack = { broker, ...(database ? { database } : {}), ...(authArg ? { auth: authArg } : {}) };
+    const stack = {
+      broker,
+      ...(database ? { database } : {}),
+      ...(authArg ? { auth: authArg } : {}),
+      ...(telemetryArg ? { telemetry: telemetryArg } : {})
+    };
     scaffoldService({ manifest, layers, workspace, force: true, stack });
 
     const project = fs
@@ -139,7 +150,7 @@ for (const { broker, database } of combos) {
     const { compilable, motivo } = mainCompilable(layers);
     const tasks = compilable ? ['compileJava', 'compileIntegrationTestJava'] : ['compileIntegrationTestJava'];
     const que = compilable ? 'el arnés y el main' : 'el arnés';
-    const combo = `${broker}${database ? `, ${database}` : ''}${authArg ? ` + ${authArg}` : ''}`;
+    const combo = `${broker}${database ? `, ${database}` : ''}${authArg ? ` + ${authArg}` : ''}${telemetryArg ? ` + telemetry=${telemetryArg}` : ''}`;
     process.stdout.write(`${fixture} (${combo}): compilando ${que}… `);
     // El wrapper vendorizado se invoca por `sh` para que valga igual en Windows.
     const result = spawnSync('sh', ['gradlew', ...tasks, '--console=plain', '--no-daemon'], {

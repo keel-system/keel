@@ -34,7 +34,7 @@ secuenciales.
 @Override
 @LogExceptions
 public ValidateProductsResponseDto handle(ValidateProductsQuery query) {
-    try (ExecutorService exec = Executors.newVirtualThreadPerTaskExecutor()) {
+    try (ExecutorService exec = ContextPropagatingExecutors.newVirtualThreadPerTaskExecutor()) {
 
         // Todos los submit() ANTES de cualquier get(): si no, es secuencial disfrazado
         Future<List<Product>> productsFuture =
@@ -60,6 +60,14 @@ public ValidateProductsResponseDto handle(ValidateProductsQuery query) {
 ```
 
 ## Reglas del patrón
+
+- **El executor, siempre el de `ContextPropagatingExecutors`** (`application/support`, lo genera
+  build), nunca `Executors.newVirtualThreadPerTaskExecutor()` a secas: el MDC —el
+  `correlationId`, y con telemetría el `traceId`/`spanId`— y la observación activa son
+  ThreadLocal, y un executor normal no los copia al hilo de la tarea. Con el de siempre, los
+  logs de cada tarea salen sin correlación y sus spans quedan huérfanos, separados de la traza
+  de la petición justo donde está el tiempo. `infra/check-logging.sh` (regla `context`) lo
+  veta fuera del helper.
 
 - **Todos los `submit()` antes de cualquier `get()`**: un `get()` intermedio serializa
   las tareas y anula el paralelismo.

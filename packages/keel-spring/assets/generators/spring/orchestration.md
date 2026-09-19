@@ -394,6 +394,7 @@ estático. Borrar el método entero mide otra cosa (mide el compilador).
 | Entrega por outbox | el relay publica dentro de la transacción | el escenario de canal indisponible |
 | Unicidad condicionada | se quita `flushPendingWrites()` de entre las dos escrituras de la operación que releva | los escenarios de relevo **y** `infra/check-idempotency.sh` (familia `conditionalUniqueness`) |
 | Guarda de correo | la transición se hace en memoria, sin llamar al reclamo | `infra/check-idempotency.sh` (aquí ningún escenario puede) |
+| Traza en el consumo (solo con telemetría) | el listener abre el contexto con `runWith(envelope.metadata().correlationId(), …)` en vez de con la metadata | `infra/check-idempotency.sh` (familia `inboundContext`): la telemetría no tiene escenarios, y la traza cortada no produce ningún síntoma en el servidor |
 
 Las dos últimas filas son las que explican el resto, y por motivos opuestos.
 

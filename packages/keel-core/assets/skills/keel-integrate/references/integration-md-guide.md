@@ -202,7 +202,8 @@ del evento es el contenido de `data`; `metadata` es la misma para todos.
     "eventVersion": 1,
     "occurredAt": "2026-03-14T09:21:07.482Z",
     "source": "product-service",
-    "correlationId": "1f7b0a52-33c9-4a1e-9a44-6c0f2b8d55e1"
+    "correlationId": "1f7b0a52-33c9-4a1e-9a44-6c0f2b8d55e1",
+    "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
   },
   "data": { "productId": "3d2e1f00-8a44-4c9b-9f01-77b6c2d4e5a9", "sku": "SKU-10493" }
 }
@@ -216,6 +217,7 @@ del evento es el contenido de `data`; `metadata` es la misma para todos.
 | metadata.occurredAt | timestamp | ISO-8601 UTC del instante en que ocurrió el hecho, no el del envío. |
 | metadata.source | string | Servicio emisor: `product-service`. |
 | metadata.correlationId | string \| null | Correlación de la petición que originó el hecho; propágala para conservar la traza end-to-end. `null` si no hubo contexto de petición. |
+| metadata.traceparent | string | null | Contexto de traza W3C del hecho. Si tu servicio tiene trazas distribuidas, continúalo al consumir para que la traza no se corte en el broker. `null` si el emisor no tiene telemetría. |
 | data | objeto | Payload del evento; su forma depende del `eventType` (ver cada evento abajo). |
 ```
 

@@ -19,6 +19,7 @@ import { javaFile, javaPath, subPackage } from './render.js';
 import { domainTypeImport } from './entities.js';
 import { usesOutbox, outboxNames } from './outbox.js';
 import { correlationImport } from './correlation.js';
+import { usesTelemetry, messageTracingImport } from './telemetry.js';
 import { deadLetterDestination } from '../lib/dead-letter.js';
 
 const MESSAGING_PKG = 'infrastructure.messaging';
@@ -51,23 +52,33 @@ export function generate(model) {
 }
 
 function renderEnvelope(model) {
+  // Con telemetría, el contexto de traza se estampa AQUÍ y no en el bridge: por aquí pasan las
+  // dos vías de publicación —el bridge en modo outbox y el <Evento>Publisher que escribe el
+  // agente en best-effort—, así que el agente no tiene que acordarse de nada y la firma no
+  // cambia. Se lee del span activo, que en los dos casos es todavía el de la petición.
+  const telemetry = usesTelemetry(model);
+  const traceparent = telemetry ? 'MessageTracing.currentTraceparent()' : 'null';
   const body = `/**
  * Envoltura estándar de los eventos publicados: metadata + payload.
  *
  * La metadata es la MISMA que el agregado estampó al emitir el evento de
  * dominio (ver domain/events/EventMetadata): conserva el eventId, que es la
- * clave de idempotencia del consumidor. Aquí solo se le añade la correlación
- * del request, que el dominio no conoce.
+ * clave de idempotencia del consumidor. Aquí solo se le añaden la correlación
+ * y el contexto de traza del request, que el dominio no conoce${
+   telemetry ? '' : ' (este servicio\n * no tiene telemetría: el traceparent viaja a null)'
+ }.
  */
 public record EventEnvelope<T>(EventMetadata metadata, T data) {
 
     public static <T> EventEnvelope<T> of(EventMetadata metadata, T data, String correlationId) {
-        return new EventEnvelope<>(metadata.withCorrelationId(correlationId), data);
+        return new EventEnvelope<>(metadata.withContext(correlationId, ${traceparent}), data);
     }
 }`;
+  const imports = [`${subPackage(model, EVENTS_PKG)}.EventMetadata`];
+  if (telemetry) imports.push(messageTracingImport(model));
   return {
     path: javaPath(model, MESSAGING_PKG, 'EventEnvelope'),
-    content: javaFile(subPackage(model, MESSAGING_PKG), [`${subPackage(model, EVENTS_PKG)}.EventMetadata`], body)
+    content: javaFile(subPackage(model, MESSAGING_PKG), imports, body)
   };
 }
 

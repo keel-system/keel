@@ -21,7 +21,8 @@ import {
   writeStackConfig,
   askStackConfig,
   describeStack,
-  stackDrift
+  stackDrift,
+  normalizeTelemetry
 } from '../lib/stack-config.js';
 import { REFRESH_DIR } from '../lib/generated-manifest.js';
 import {
@@ -53,13 +54,25 @@ function printSchemaErrors(file, ajvErrors) {
 
 export async function build(
   inputPath,
-  { force = false, defaults = false, check = false, refresh = false, prune = false } = {}
+  { force = false, defaults = false, check = false, refresh = false, prune = false, telemetry = null } = {}
 ) {
   // Tres modos y no dos banderas sueltas: `check` gana porque no escribir es la promesa
   // más fuerte de las dos, y pedir las dos a la vez es una contradicción que vale más
   // resolver aquí que dejar a medias en el sistema de archivos.
   const mode = check ? 'check' : refresh ? 'refresh' : null;
   const workspace = process.cwd();
+
+  // La telemetría se elige por flag o en el cuestionario; un valor desconocido se rechaza aquí,
+  // antes de validar nada, porque no hay nada que el diseño pueda hacer para arreglarlo.
+  if (telemetry != null) {
+    try {
+      normalizeTelemetry(telemetry);
+    } catch (error) {
+      console.error(pc.red(error.message));
+      process.exitCode = 1;
+      return;
+    }
+  }
 
   // Podar es refrescar en la otra dirección: solo tiene sentido donde build ya decide
   // archivo a archivo de quién es cada cosa.
@@ -202,16 +215,26 @@ export async function build(
         removed: drift.stale.map((category) => ({ category, value: before[category] }))
       };
     }
+    // `--telemetry` sobre un stack ya persistido: es el único modo de cambiarla, porque no hay
+    // capa del diseño cuya aparición la pida. Se reporta como cualquier otro cambio de stack,
+    // así EVOLUTION.md lo recoge y el agente sabe que la config y el relay cambiaron.
+    const currentTelemetry = normalizeTelemetry(stack.telemetry);
+    if (telemetry != null && telemetry !== currentTelemetry) {
+      if (mode !== 'check') stack = { ...stack, telemetry };
+      if (currentTelemetry !== 'none') stackChanges.removed.push({ category: 'telemetry', value: currentTelemetry });
+      if (telemetry !== 'none') stackChanges.added.push({ category: 'telemetry', value: telemetry });
+    }
     console.log();
     console.log(pc.dim(`Stack (${STACK_FILE}): ${describeStack(stack)}`));
     for (const { category, value } of stackChanges.added) {
       console.log(`  ${pc.yellow('+')} ${category}: ${value ?? pc.dim('(sin elegir: --check no pregunta)')}`);
     }
     for (const { category, value } of stackChanges.removed) {
-      console.log(`  ${pc.yellow('-')} ${category}: ${value} ${pc.dim('(el diseño ya no lo pide)')}`);
+      const why = category === 'telemetry' ? '(retirada con --telemetry none)' : '(el diseño ya no lo pide)';
+      console.log(`  ${pc.yellow('-')} ${category}: ${value} ${pc.dim(why)}`);
     }
   } else {
-    stack = await askStackConfig(manifest, layers, { defaults });
+    stack = await askStackConfig(manifest, layers, { defaults, telemetry });
     stackIsNew = true;
   }
 

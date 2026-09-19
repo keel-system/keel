@@ -152,7 +152,7 @@ components:
           data:     { $ref: '#/components/schemas/ProductCreatedPayload' }
 ```
 
-`KeelEventMetadata` se emite **una sola vez** y con esta forma exacta (los seis campos de la
+`KeelEventMetadata` se emite **una sola vez** y con esta forma exacta (los siete campos de la
 envoltura; `eventType` con el `const` del evento no aplica aquí porque el schema es compartido):
 
 ```yaml
@@ -183,6 +183,9 @@ envoltura; `eventType` con el `const` del evento no aplica aquí porque el schem
         correlationId:
           type: [string, "null"]
           description: Correlación de la petición que originó el hecho; null si no hubo contexto.
+        traceparent:
+          type: [string, "null"]
+          description: Contexto de traza W3C (traceparent) del hecho; null si el emisor no tiene telemetría.
 
   correlationIds:
     keelCorrelationId:

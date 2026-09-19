@@ -12,6 +12,7 @@ import {
   AUTH,
   CACHES,
   STORAGE,
+  TELEMETRY,
   STACK_DEFAULTS,
   databasesForModel,
   defaultDatabaseFor
@@ -83,8 +84,8 @@ export function stackDrift(stack, layers) {
  * Con `only` pregunta SOLO esas categorías (y no el grupo, que ya está elegido): es el
  * cuestionario de un diseño que evolucionó, y lo ya elegido no se vuelve a preguntar.
  */
-export async function askStackConfig(manifest, layers, { defaults = false, only = null } = {}) {
-  const stack = { group: null, database: null, broker: null, auth: null, cache: null, storage: null };
+export async function askStackConfig(manifest, layers, { defaults = false, only = null, telemetry = null } = {}) {
+  const stack = { group: null, database: null, broker: null, auth: null, cache: null, storage: null, telemetry: null };
   const asks = (category) => (only ? only.includes(category) : CATEGORY_APPLIES[category](layers));
 
   if (!only) {
@@ -143,8 +144,37 @@ export async function askStackConfig(manifest, layers, { defaults = false, only 
       { defaults }
     );
   }
+  // La telemetría no la pide ninguna capa: se pregunta siempre en el cuestionario inicial y
+  // nunca en el de un diseño que evolucionó (`only`), porque no hay deriva posible — ver
+  // `normalizeTelemetry`. Cambiarla después es `build --telemetry <otel|none>`.
+  if (!only && telemetry != null) {
+    // Ya elegida por flag (`--telemetry`): no se pregunta.
+    stack.telemetry = normalizeTelemetry(telemetry);
+  } else if (!only) {
+    stack.telemetry = await select(
+      '¿Añadir telemetría al servidor (OpenTelemetry vía colector)?',
+      Object.values(TELEMETRY),
+      STACK_DEFAULTS.telemetry,
+      { defaults }
+    );
+  }
 
   return stack;
+}
+
+/**
+ * La telemetría elegida, con un keel-stack.json anterior a la opción leído como `none`.
+ *
+ * No es deriva y no se repregunta: ninguna capa del diseño la pide, así que su ausencia no es un
+ * hueco sino la elección por defecto. Un valor que el catálogo no conoce se rechaza en voz alta
+ * —aceptarlo en silencio generaría un servidor sin telemetría con un stack que dice tenerla—.
+ */
+export function normalizeTelemetry(value) {
+  if (value == null) return STACK_DEFAULTS.telemetry;
+  if (!TELEMETRY[value]) {
+    throw new Error(`Telemetría '${value}' no soportada. Opciones: ${Object.keys(TELEMETRY).join(', ')}.`);
+  }
+  return value;
 }
 
 // Resumen legible del stack para consola/README.
@@ -155,6 +185,7 @@ export function describeStack(stack) {
   if (stack.auth && stack.auth !== 'none') parts.push(AUTH[stack.auth]?.label ?? stack.auth);
   if (stack.cache) parts.push(CACHES[stack.cache]?.label ?? stack.cache);
   if (stack.storage) parts.push(STORAGE[stack.storage]?.label ?? stack.storage);
+  if (stack.telemetry && stack.telemetry !== 'none') parts.push(TELEMETRY[stack.telemetry]?.label ?? stack.telemetry);
   const infra = parts.length > 0 ? parts.join(' + ') : 'sin infraestructura externa';
   return stack.group ? `${stack.group} · ${infra}` : infra;
 }

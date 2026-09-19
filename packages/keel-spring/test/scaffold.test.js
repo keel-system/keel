@@ -8,6 +8,7 @@ import { HARNESSES, loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
 import { isEmptyRead } from '../src/lib/broker-probes.js';
 import { hasScheduledOperations } from '../src/scaffold/services.js';
+import { TELEMETRY_CONVENTIONS } from '../src/scaffold/generator-docs.js';
 import { generate as applicationFiles } from '../src/scaffold/application.js';
 import { assetsDir, wrapperDir, GRADLE_VERSION } from '../src/lib/assets.js';
 
@@ -443,10 +444,17 @@ test('CLAUDE.md contextual: specs, solo capas declaradas y skill local con conve
   // Derivado del disco, no de una lista aquí: una convention nueva que nadie añada a
   // CONVENTIONS (generator-docs.js) rompe este test en vez de quedarse sin instalar.
   const conventionsDir = path.join(assetsDir, 'generators', 'spring', 'conventions');
+  // Menos las que dependen de una elección de stack (la telemetría): esas se instalan solo con
+  // ella, y este fixture no la elige — que NO aparezcan también se afirma.
   const conventions = fs.readdirSync(conventionsDir).filter((f) => f.endsWith('.md'));
   assert.ok(conventions.length >= 9);
   for (const convention of conventions) {
-    assert.ok(exists(workspace, `docs/keel/conventions/${convention}`), `falta docs/keel/conventions/${convention}`);
+    const conditional = TELEMETRY_CONVENTIONS.includes(convention);
+    assert.equal(
+      exists(workspace, `docs/keel/conventions/${convention}`),
+      !conditional,
+      `docs/keel/conventions/${convention}: ${conditional ? 'sin telemetría no se instala' : 'falta'}`
+    );
   }
   // La derivación del contrato de cable: lo único que permite escribir las pruebas
   // en caja negra sin adivinar la forma de la respuesta.

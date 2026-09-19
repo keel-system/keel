@@ -368,6 +368,22 @@ vivir la llamada: eso es del agente de código mientras respete la frontera hexa
 Vuelca cada hallazgo a `remaining` y pon `valueTypeFormat` en `KO`. Si el diseño no
 declara ningún value type escalar con `pattern` el script no existe y la familia es `N/A`.
 
+**Ejecuta `bash infra/check-logging.sh`.** Se genera siempre y tiene cuatro reglas:
+
+- `concat`: concatenar dentro de un `log.*(`.
+- `wholeObject`: pasar un objeto de entrada entero (`command`, `dto`, `request`, `payload`…) como
+  argumento, porque su `toString()` lleva al backend de logs los datos de quien llama.
+- `context`: crear un executor que no propaga el contexto.
+- `errorLevel`: un `log.error` en `domain/` o `application/`.
+
+Nace verde —build no escribe ninguna de esas formas—, así que un hallazgo es siempre código nuevo
+del agente de código. `concat`, `wholeObject` y `context` son correcciones **no conductuales**
+(parámetros `{}` en vez de `+`, un id en vez del objeto, el executor de
+`ContextPropagatingExecutors`) y las aplicas tú. `errorLevel` **no**: un `log.error` en un handler
+suele acompañar a un fallo que se traga, y arreglarlo es lanzar la excepción, que cambia el
+comportamiento. Vuélcalo a `remaining` con su archivo y su línea, para el agente de código. Resultado en la familia `logging`. Qué
+loguea ya build y qué no se loguea nunca: `{{keel:docs}}/conventions/logging.md`.
+
 ## El doble check (y qué NO haces)
 
 **No pruebas el baseline contra la base de datos.** No arrancas la app con
@@ -506,6 +522,10 @@ valueTypeFormat: OK | KO | N/A     # Sale de `infra/check-domain-guards.sh`. N/A
                           # no declara ningún value type escalar con `pattern` (el script no
                           # se genera); OK = todo campo con formato declarado tiene quien lo
                           # haga cumplir tras normalizar
+# --- la higiene de los logs ---
+logging: OK | KO                  # Sale de `infra/check-logging.sh` (siempre existe). KO = queda
+                          # concatenación en un log, un objeto de entrada entero logueado, un
+                          # ERROR desde domain/application o un executor sin propagación
 issuesFixed: [...]        # ajustes no-conductuales aplicados
 remaining: [...]          # hallazgos conductuales sin hueco de diseño detrás
 designGaps:               # huecos del diseño que encontraste, como propuesta accionable

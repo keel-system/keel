@@ -89,8 +89,8 @@ El documento tiene, en orden:
    recomendada* clasifica cada error: `5xx`/timeout → reintentable; `4xx` de validación → corregir
    input; `409`/`403`/`404` → no reintentar. Ejemplos coherentes a lo largo del documento.
 3. **`## Eventos`** — de `messaging`. `### Publicados` abre con la **forma del mensaje** (la envoltura
-   estándar de Keel: `metadata` + `data`, con la tabla de los seis campos de metadata — `eventId` como
-   clave de deduplicación, `eventType`, `eventVersion`, `occurredAt`, `source`, `correlationId`),
+   estándar de Keel: `metadata` + `data`, con la tabla de los siete campos de metadata — `eventId` como
+   clave de deduplicación, `eventType`, `eventVersion`, `occurredAt`, `source`, `correlationId`, `traceparent`),
    documentada **una sola vez** y copiada de `docs/dsl/messaging.md § La envoltura Keel`; luego, por
    evento: canal lógico, garantía de entrega si `reliability: outbox`, qué operaciones los emiten y el
    payload de ejemplo, que es el contenido de `data` y no el mensaje completo. `### Suscripciones` (lo que

@@ -75,6 +75,13 @@ corto a romper un escenario que ya estaba en verde.
    Al crear un servicio de dominio sigue `{{keel:docs}}/conventions/domain-services.md`; antes de
    paralelizar I/O en un handler consulta `{{keel:docs}}/conventions/virtual-threads.md` (solo
    query handlers con 2+ operaciones independientes).
+   **Antes de añadir cualquier `log.*`** lee `{{keel:docs}}/conventions/logging.md`. Build ya
+   registra cada frontera: el resultado de cada caso de uso con su duración, el mensaje
+   duplicado, el evento publicado, la llamada saliente fallida y la pila de lo no controlado.
+   Tú solo añades decisiones de negocio que no son el resultado de un caso de uso, con
+   parámetros `{}` y campos `keel.*`. Nunca un `ERROR` desde dominio o handlers (se lanza la
+   excepción y la frontera lo registra), nunca un objeto de entrada entero y nunca datos
+   personales ni secretos.
    Si el diseño declara la capa `dependencies`, lee `{{keel:docs}}/conventions/dependencies.md`
    antes de tocar `application/projection/`: el `<Entidad>Projector` y el `<Entidad>Reader`
    ya están generados y el cableado es listener → guard → mediator → handler → Projector.
@@ -104,6 +111,13 @@ corto a romper un escenario que ya estaba en verde.
    corre en paralelo con la infraestructura y con las pruebas: ni los contenedores están
    arriba ni tendría sentido ejecutar un escenario. Si te relanzan desde la fase 2, la
    situación es otra: ver el paso 8.
+   Con la compilación en verde, ejecuta también `bash infra/check-logging.sh`. No necesita
+   infraestructura ni compilar, y nace verde: build no escribe ninguna de las formas que
+   veta. Si sale `KO`, el hallazgo es código tuyo (concatenación en un log, un objeto de
+   entrada entero logueado, un `ERROR` desde `domain/` o `application/`, o un executor que no
+   propaga el contexto), y lo corriges antes de entregar en vez de dejárselo al pase de
+   calidad. El `ERROR` se corrige lanzando la excepción del catálogo, no bajando el nivel: un
+   `log.error` en un handler suele acompañar a un fallo que se traga.
 5. Con la compilación en verde, haz la **revisión mecánica final** de
    `{{keel:docs}}/conventions/flow-fidelity.md` (binding contra la ruta declarada, ciclos
    en los mappers, un solo `ObjectMapper` por comportamiento, claims y credenciales
@@ -189,7 +203,9 @@ corto a romper un escenario que ya estaba en verde.
   el relay y el mapeo domain→integración ya vienen generados: de `messaging` solo escribes el
   puerto de envío del broker (`OutboxDispatcher` o `<Evento>Publisher`) y los listeners.
 - Los listeners **usan** las piezas ya generadas, no las reinventan: abren la correlación con
-  `CorrelationContext.runWith(...)` y deduplican con el `IdempotencyGuard`
+  `CorrelationContext.runWith(envelope.metadata(), ...)` —la sobrecarga de la metadata, que con
+  telemetría continúa también la traza; la de `String` solo para fuentes sin envoltura keel— y
+  deduplican con el `IdempotencyGuard`
   (`infrastructure/messaging/idempotency`). Escribir otra tabla de procesados o un `SET NX`
   propio para esto es generación incorrecta.
   **Es el único eslabón de la idempotencia de consumo que no está garantizado por
@@ -259,6 +275,7 @@ bloque estructurado que consume el orquestador:
 ```yaml
 status: OK | KO          # OK solo con la compilación en verde y sin bloqueos
 compiles: true | false
+logging: OK | KO         # resultado de `bash infra/check-logging.sh` al entregar
 layersCompleted: [...]
 failures: [...]          # errores de compilación/empaquetado: archivo:línea y causa.
                          # Si te relanzaron con escenarios en FALLO, qué corregiste de cada uno

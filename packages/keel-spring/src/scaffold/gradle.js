@@ -9,10 +9,15 @@ import {
   RESILIENCE4J_VERSION,
   HANDLEBARS_VERSION,
   JACKSON_NULLABLE_VERSION,
-  FLAPDOODLE_SPRING_VERSION
+  FLAPDOODLE_SPRING_VERSION,
+  OTEL_LOGBACK_APPENDER_VERSION,
+  DATASOURCE_MICROMETER_VERSION,
+  CONTEXT_PROPAGATION_VERSION
 } from '../lib/assets.js';
 import { DATABASES, BROKERS, CACHES, STORAGE } from '../lib/stack-catalog.js';
 import { usesPartialUpdate } from './services.js';
+import { usesTelemetry } from './telemetry.js';
+import { usesContextExecutors } from './concurrency.js';
 
 export function generate(model) {
   const { service, layersPresent, stack } = model;
@@ -100,6 +105,30 @@ export function generate(model) {
     dependencies.push(`implementation 'io.github.resilience4j:resilience4j-spring-boot3:${RESILIENCE4J_VERSION}'`);
     if (model.httpClients?.some((client) => client.auth?.type === 'oauth2-client-credentials')) {
       dependencies.push("implementation 'org.springframework.boot:spring-boot-starter-oauth2-client'");
+    }
+  }
+  if (usesContextExecutors(model)) {
+    // ContextPropagatingExecutors: el MDC y la observación activa viajan al hilo de una tarea
+    // paralela. Ver concurrency.js.
+    dependencies.push(`implementation 'io.micrometer:context-propagation:${CONTEXT_PROPAGATION_VERSION}'`);
+  }
+  if (usesTelemetry(model)) {
+    dependencies.push(
+      // Las tres señales por OTLP a un colector, con la instrumentación nativa de Boot
+      // (Micrometer Observation): el puente de Micrometer Tracing al SDK de OpenTelemetry, el
+      // exportador de trazas y el registro de métricas OTLP. Versiones del BOM de Boot.
+      "implementation 'io.micrometer:micrometer-tracing-bridge-otel'",
+      "implementation 'io.opentelemetry:opentelemetry-exporter-otlp'",
+      "implementation 'io.micrometer:micrometer-registry-otlp'",
+      // Logs por OTLP. Boot exporta el SDK de logs pero no trae el appender de logback: lo
+      // instala TelemetryConfig por código (ver por qué ahí). Alineado con el SDK de Boot.
+      `implementation 'io.opentelemetry.instrumentation:opentelemetry-logback-appender-1.0:${OTEL_LOGBACK_APPENDER_VERSION}'`
+    );
+    // Spans de JDBC (conexión, consulta, result set) sin tocar el código de persistencia: se
+    // engancha al DataSource por autoconfiguración. La rama documental lo cubre con el
+    // MongoObservationCommandListener de TelemetryConfig.
+    if (layersPresent.persistence && model.persistenceKind !== 'document') {
+      dependencies.push(`implementation 'net.ttddyy.observation:datasource-micrometer-spring-boot:${DATASOURCE_MICROMETER_VERSION}'`);
     }
   }
   if (usesPartialUpdate(model)) {

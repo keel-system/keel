@@ -10,6 +10,7 @@
 
 import { javaFile, javaPath, subPackage } from './render.js';
 import { claimSelectionSnippet, claimTransaction, supportsSkipLocked } from '../lib/claim-sql.js';
+import { usesTelemetry, tracedDispatch, messageTracingImport, TRACED_DISPATCH_IMPORTS } from './telemetry.js';
 
 const OUTBOX_PKG = 'infrastructure.messaging.outbox';
 
@@ -51,6 +52,26 @@ export function outboxNames(model) {
   return model.persistenceKind === 'document'
     ? { entity: 'OutboxEventDocument', repository: 'OutboxEventMongoRepository' }
     : { entity: 'OutboxEventJpa', repository: 'OutboxEventJpaRepository' };
+}
+
+/**
+ * Con telemetría, la publicación de cada evento se hace DENTRO de la traza que lo originó: el
+ * relay corre en su propio hilo, un segundo o una hora después de la petición, y lo único que
+ * conserva aquel contexto es el `metadata.traceparent` que `EventEnvelope.of` dejó en la fila.
+ * Con el contexto restaurado, el template del broker (con observación activa) propaga además la
+ * cabecera nativa. Sin telemetría el relay queda byte a byte como estaba.
+ *
+ * Reemplaza la línea exacta y falla si no la encuentra: una plantilla que cambia la llamada sin
+ * cambiar esto dejaría el relay sin trazar y en silencio.
+ */
+function withTracedDispatch(model, body, dispatchCall, payloadExpr, eventTypeExpr) {
+  if (!usesTelemetry(model)) return { body, imports: [] };
+  const line = `${dispatchCall};`;
+  if (!body.includes(line)) throw new Error(`outbox.js: no encuentro la llamada al dispatcher (${dispatchCall}) para trazarla.`);
+  return {
+    body: body.replace(line, tracedDispatch(payloadExpr, eventTypeExpr, dispatchCall)),
+    imports: [messageTracingImport(model), ...TRACED_DISPATCH_IMPORTS]
+  };
 }
 
 export function generate(model) {
@@ -589,6 +610,11 @@ public class OutboxRelay {
                 dispatcher.dispatch(row.getDestination(), row.getRoutingKey(), row.getEventType(), row.getPayload());
                 row.markPublished(Instant.now());
                 row.releaseClaim();
+                log.atDebug()
+                        .addKeyValue("keel.outbox.id", row.getId())
+                        .addKeyValue("keel.event_type", row.getEventType())
+                        .addKeyValue("keel.outcome", "published")
+                        .log("Outbox: {} publicado", row.getEventType());
             } catch (RuntimeException ex) {
                 row.markFailed(truncate(ex.getMessage()));
                 row.releaseClaim();
@@ -676,6 +702,7 @@ public class OutboxRelay {
     }
 }`;
 
+  const traced = withTracedDispatch(model, body, 'dispatcher.dispatch(row.getDestination(), row.getRoutingKey(), row.getEventType(), row.getPayload())', 'row.getPayload()', 'row.getEventType()');
   return {
     path: javaPath(model, OUTBOX_PKG, OUTBOX_RELAY_CLASS),
     content: javaFile(
@@ -698,9 +725,10 @@ public class OutboxRelay {
         'org.springframework.data.mongodb.core.query.Query',
         'org.springframework.data.mongodb.core.query.Update',
         'org.springframework.scheduling.annotation.Scheduled',
-        'org.springframework.stereotype.Component'
+        'org.springframework.stereotype.Component',
+        ...traced.imports
       ],
-      body
+      traced.body
     )
   };
 }
@@ -913,6 +941,11 @@ public class OutboxRelay {
                 dispatcher.dispatch(row.destination(), row.routingKey(), row.eventType(), row.payload());
                 // (3) Desenlace, en su propia transacción corta.
                 store.markPublished(row.id());
+                log.atDebug()
+                        .addKeyValue("keel.outbox.id", row.id())
+                        .addKeyValue("keel.event_type", row.eventType())
+                        .addKeyValue("keel.outcome", "published")
+                        .log("Outbox: {} publicado", row.eventType());
             } catch (RuntimeException ex) {
                 OutboxRelayStore.MarkFailedOutcome outcome =
                         store.markFailed(row.id(), truncate(ex.getMessage()), maxAttempts, backoffInitialMs, backoffMaxMs);
@@ -946,6 +979,7 @@ public class OutboxRelay {
     }
 }`;
 
+  const traced = withTracedDispatch(model, body, 'dispatcher.dispatch(row.destination(), row.routingKey(), row.eventType(), row.payload())', 'row.payload()', 'row.eventType()');
   return {
     path: javaPath(model, OUTBOX_PKG, OUTBOX_RELAY_CLASS),
     content: javaFile(
@@ -962,9 +996,10 @@ public class OutboxRelay {
         'org.springframework.beans.factory.annotation.Value',
         'org.springframework.scheduling.annotation.Scheduled',
         'org.springframework.stereotype.Component',
-        'org.springframework.transaction.annotation.Transactional'
+        'org.springframework.transaction.annotation.Transactional',
+        ...traced.imports
       ],
-      body
+      traced.body
     )
   };
 }

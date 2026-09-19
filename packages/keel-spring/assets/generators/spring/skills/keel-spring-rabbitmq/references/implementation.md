@@ -123,7 +123,12 @@ entrada de tu cola, no el tamaño de la lista.
 - **Correlación e idempotencia**: RabbitMQ garantiza at-least-once (un `nack`
   con requeue o una reconexión reentregan). Ambas piezas ya están generadas; el
   listener solo las usa, en este orden:
-  1. `CorrelationContext.runWith(envelope.metadata().correlationId(), () -> { ... })`,
+  1. `CorrelationContext.runWith(envelope.metadata(), () -> { ... })`,
+     Con la envoltura keel usa **siempre** la sobrecarga de la metadata, no la del
+     `correlationId`: abre la misma correlación y además continúa la traza W3C de
+     `metadata.traceparent` si el proyecto tiene telemetría (y no hace nada más si
+     no la tiene, así que activarla después no obliga a tocar el listener). La de
+     `String` queda para las fuentes ajenas sin envoltura keel.
      para que los eventos que provoque el consumo hereden la correlación de
      origen y el contexto se cierre pase lo que pase (los hilos del pool se
      reutilizan).
@@ -193,7 +198,7 @@ carrera; que no lo anote no significa que no exista, significa que el diseño no
 - [ ] El `recovery-interval` del contenedor se fija a mano (`factory.setRecoveryInterval`, clave propia `rabbitmq.listener.recovery-interval-ms`: la propiedad de Boot no existe) y el `DISPATCH_DEADLINE` del dispatcher queda por encima.
 - [ ] `onFailure` implementado con reintentos acotados y DLQ si `deadLetter: true`.
 - [ ] Un cuerpo propio que no parsea lanza `AmqpRejectAndDontRequeueException`, nunca `log.error` + `return`.
-- [ ] Listener envuelto en `CorrelationContext.runWith(...)` y deduplicado con el `IdempotencyGuard` en el orden que prescribe el javadoc del `<Evento>Message` (sin mecanismo propio).
+- [ ] Listener envuelto en `CorrelationContext.runWith(envelope.metadata(), ...)` (la sobrecarga de la metadata, no la del `correlationId`) y deduplicado con el `IdempotencyGuard` en el orden que prescribe el javadoc del `<Evento>Message` (sin mecanismo propio).
 
 ## Si la suscripción alimenta una proyección
 

@@ -82,10 +82,13 @@ public class LogExceptionsAspect {
             return joinPoint.proceed();
         } catch (Throwable exception) {
             switch (logExceptions.level()) {
-                case TRACE -> log.trace("Excepción en {}: {}", method, exception.getMessage(), exception);
-                case DEBUG -> log.debug("Excepción en {}: {}", method, exception.getMessage(), exception);
-                case INFO -> log.info("Excepción en {}: {}", method, exception.getMessage(), exception);
-                case WARN -> log.warn("Excepción en {}: {}", method, exception.getMessage(), exception);
+                // Sin la pila, a propósito: la imprime UNA vez el adaptador por el que entró el
+                // fallo (ApiExceptionHandler, el contenedor del listener, el scheduler). Con ella
+                // aquí cada fallo salía con dos pilas idénticas en el mismo log.
+                case TRACE -> log.trace("Excepción en {}: {} ({})", method, exception.getMessage(), exception.getClass().getSimpleName());
+                case DEBUG -> log.debug("Excepción en {}: {} ({})", method, exception.getMessage(), exception.getClass().getSimpleName());
+                case INFO -> log.info("Excepción en {}: {} ({})", method, exception.getMessage(), exception.getClass().getSimpleName());
+                case WARN -> log.warn("Excepción en {}: {} ({})", method, exception.getMessage(), exception.getClass().getSimpleName());
             }
             throw exception;
         }

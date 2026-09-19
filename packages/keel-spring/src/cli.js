@@ -18,6 +18,7 @@ program
   .option('--refresh', 'pone al día los archivos que generó build y nadie ha tocado; nunca pisa el código del agente', false)
   .option('--prune', 'con --refresh: borra lo que build generó, ya no emite y nadie ha tocado; lo tocado se deja al agente', false)
   .option('-f, --force', 'sobrescribe TODO el scaffolding, incluido el código implementado por el agente (para propagar un arreglo usa --refresh)', false)
+  .option('--telemetry <otel|none>', 'añade (otel) o retira (none) la telemetría OpenTelemetry vía colector; se persiste en keel-stack.json (por defecto, sin telemetría)')
   .option('-y, --defaults', 'usa los defaults del stack sin cuestionario (PostgreSQL, Kafka, Keycloak, Redis)', false)
   .action((ruta, options) => build(ruta, options));
 

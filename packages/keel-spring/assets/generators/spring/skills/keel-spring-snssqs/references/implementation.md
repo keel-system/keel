@@ -219,7 +219,14 @@ throughput por group — no lo uses «por si acaso».
 At-least-once siempre (visibility timeout vencido, redrives). Ambas piezas ya
 están generadas; el listener solo las usa, en este orden:
 
-1. `CorrelationContext.runWith(envelope.metadata().correlationId(), () -> { ... })`,
+1. `CorrelationContext.runWith(envelope.metadata(), () -> { ... })`,
+   Con la envoltura keel usa **siempre** la sobrecarga de la metadata, no la del
+   `correlationId`: abre la misma correlación y además continúa la traza W3C de
+   `metadata.traceparent` si el proyecto tiene telemetría (y no hace nada más si
+   no la tiene, así que activarla después no obliga a tocar el listener). La de
+   `String` queda para las fuentes ajenas sin envoltura keel.
+   Aquí importa más que en ningún otro broker: Spring Cloud AWS no propaga
+   cabeceras de traza, así que `metadata.traceparent` es la única vía.
    para que los eventos que provoque el consumo hereden la correlación del
    mensaje de origen y el contexto se cierre pase lo que pase: los hilos del
    pool se reutilizan.
@@ -308,7 +315,7 @@ excepción; *es mío y está roto* → excepción.
 - [ ] Visibility timeout ≥ 6× el tiempo de proceso del handler.
 - [ ] Un cuerpo propio que no parsea **lanza** (el `maxReceiveCount` lo lleva a la DLQ), nunca `log.error` + `return`.
 - [ ] La rama «carrera resuelta» captura `InvalidStateTransitionException` **y** `OptimisticLockingFailureException` (la base de `org.springframework.dao`), y con el orden `record` llama a `record(...)` igualmente.
-- [ ] Listener envuelto en `CorrelationContext.runWith(...)` y deduplicado con el `IdempotencyGuard` en el orden que prescribe el javadoc del `<Evento>Message` (sin mecanismo propio).
+- [ ] Listener envuelto en `CorrelationContext.runWith(envelope.metadata(), ...)` (la sobrecarga de la metadata, no la del `correlationId`) y deduplicado con el `IdempotencyGuard` en el orden que prescribe el javadoc del `<Evento>Message` (sin mecanismo propio).
 
 ## Si la suscripción alimenta una proyección
 

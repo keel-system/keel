@@ -526,7 +526,11 @@ public class IdempotencyGuard {
      * @return true si ya está registrado y hay que confirmarlo (ack) sin ejecutarlo
      */
     public boolean alreadyProcessed(String handlerId, String eventId) {
-        return writer.exists(new ${entity}.ProcessedEventId(handlerId, eventId));
+        boolean seen = writer.exists(new ${entity}.ProcessedEventId(handlerId, eventId));
+        if (seen) {
+            logDuplicate(handlerId, eventId, "ya procesado");
+        }
+        return seen;
     }
 
     /**
@@ -545,9 +549,22 @@ public class IdempotencyGuard {
             // Dos entregas del mismo mensaje procesándose a la vez, normalmente en dos
             // réplicas distintas: ${arbiter} La transacción que revirtió es la del
             // writer, no la de quien llama: aquí no hay nada roto que arrastrar.
-            log.debug("Idempotencia: {} ya registrado por {} (carrera resuelta en la clave)", eventId, handlerId);
+            logDuplicate(handlerId, eventId, "carrera resuelta en la clave");
             return false;
         }
+    }
+
+    /**
+     * El log de frontera del descarte: una reentrega absorbida es un hecho normal (la entrega es
+     * at-least-once) pero es lo primero que se busca cuando «el evento llegó y no pasó nada».
+     * Solo ids, nunca el cuerpo del mensaje.
+     */
+    private static void logDuplicate(String handlerId, String eventId, String reason) {
+        log.atInfo()
+                .addKeyValue("keel.handler", handlerId)
+                .addKeyValue("keel.event_id", eventId)
+                .addKeyValue("keel.outcome", "duplicate")
+                .log("Mensaje duplicado descartado por {} ({}): {}", handlerId, reason, eventId);
     }
 
     /**

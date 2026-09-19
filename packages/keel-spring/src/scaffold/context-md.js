@@ -10,6 +10,7 @@ import { selectedInfra } from '../lib/stack-catalog.js';
 import { describeStack } from '../lib/stack-config.js';
 import { needsDevtools } from './devtools.js';
 import { DOCS_DIR, stackSkills } from './generator-docs.js';
+import { usesTelemetry } from './telemetry.js';
 
 const SKILL_HINTS = {
   'keel-spring-database': 'tuning de datasource/Hikari, particularidades del dialecto y validación de la BD (el código JPA ya lo genera build)',
@@ -82,7 +83,16 @@ export function generate(model) {
         `\`${brokerRef}\`, implementas solo el envío al broker (\`OutboxDispatcher\` con \`reliability: outbox\`, ` +
         '`<Evento>Publisher` con `best-effort` — sustituye y elimina su stub), la configuración del broker si aplica y el ' +
         '`<Evento>Listener` por suscripción (binding, política `onFailure`, apertura de la correlación con ' +
-        '`CorrelationContext.runWith(...)`, deduplicación con el `IdempotencyGuard` ya generado y despacho vía `UseCaseMediator`).'
+        '`CorrelationContext.runWith(envelope.metadata(), ...)` —la sobrecarga de la metadata, no la del `correlationId`—, ' +
+        'deduplicación con el `IdempotencyGuard` ya generado y despacho vía `UseCaseMediator`).'
+    );
+  }
+  if (usesTelemetry(model)) {
+    steps.push(
+      '**telemetría** (`telemetry: otel` en `keel-stack.json`): trazas, métricas y logs por OTLP a un colector, ' +
+        '**ya generados enteros** por build (`infrastructure/telemetry`, el mediator, el relay y los clientes HTTP). No abras spans ' +
+        'a mano ni metas datos personales en atributos o logs; la única pieza tuya es abrir el contexto del listener con la ' +
+        'metadata. Todo en `{{keel:docs}}/conventions/observability.md`.'
     );
   }
   if (layersPresent.httpClients) {

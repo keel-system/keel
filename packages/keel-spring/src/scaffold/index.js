@@ -11,7 +11,7 @@ import { readManifest, nextManifest, writeManifest, REFRESH_DIR } from '../lib/g
 import { listKeelDocs } from '../lib/keel-docs.js';
 import { packageVersion } from '../lib/assets.js';
 import { DATABASES, STACK_DEFAULTS, defaultDatabaseFor } from '../lib/stack-catalog.js';
-import { designUsesCache } from '../lib/stack-config.js';
+import { designUsesCache, normalizeTelemetry } from '../lib/stack-config.js';
 import { defaultGroup } from '../lib/naming.js';
 import * as gradle from './gradle.js';
 import * as wrapper from './wrapper.js';
@@ -40,6 +40,8 @@ import * as mappers from './mappers.js';
 import * as refResolvers from './ref-resolvers.js';
 import * as events from './events.js';
 import * as correlation from './correlation.js';
+import * as telemetry from './telemetry.js';
+import * as concurrency from './concurrency.js';
 import * as messaging from './messaging.js';
 import * as deadLetterConfig from './dead-letter-config.js';
 import * as outbox from './outbox.js';
@@ -48,6 +50,7 @@ import * as reconciliationClaim from './reconciliation-claim.js';
 import * as httpIdempotency from './http-idempotency.js';
 import * as idempotencyCheck from './idempotency-check.js';
 import * as domainGuardsCheck from './domain-guards-check.js';
+import * as loggingCheck from './logging-check.js';
 import * as cache from './cache.js';
 import * as scheduling from './scheduling.js';
 import * as jackson from './jackson.js';
@@ -102,6 +105,10 @@ const GENERATORS = [
   refResolvers,
   events,
   correlation,
+  // Solo con `telemetry: otel`: se gatea a sí mismo, como los documentales.
+  telemetry,
+  // El executor que propaga el contexto a las tareas paralelas: con y sin telemetría.
+  concurrency,
   messaging,
   deadLetterConfig,
   outbox,
@@ -132,6 +139,7 @@ const GENERATORS = [
   // aunque el script solo las busque en tiempo de ejecución.
   idempotencyCheck,
   domainGuardsCheck,
+  loggingCheck,
   readme,
   contextMd,
   generatorDocs,
@@ -164,7 +172,9 @@ export function resolveStack(stack, layers, manifest) {
     broker: layers.messaging ? (stack?.broker ?? STACK_DEFAULTS.broker) : null,
     auth: protocol === 'oidc' || protocol === 'jwt' ? (stack?.auth ?? STACK_DEFAULTS.auth) : null,
     cache: designUsesCache(layers) ? (stack?.cache ?? STACK_DEFAULTS.cache) : null,
-    storage: layers.storage ? (stack?.storage ?? STACK_DEFAULTS.storage) : null
+    storage: layers.storage ? (stack?.storage ?? STACK_DEFAULTS.storage) : null,
+    // No depende del diseño: siempre tiene valor, y un stack anterior a la opción es `none`.
+    telemetry: normalizeTelemetry(stack?.telemetry)
   };
 }
 
