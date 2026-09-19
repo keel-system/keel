@@ -1111,7 +1111,23 @@ test('deploy: el servicio empaquetado para pruebas manuales, distinto de la infr
   const compose = read(workspace, 'deploy/docker-compose.yaml');
   // La app corre DENTRO, con el único perfil redirigible por entorno: `local` fija
   // literales con localhost y quedaría clavado fuera de la red de contenedores.
-  assert.ok(compose.includes('dockerfile: deploy/Dockerfile'));
+  // La imagen se nombra y la construye up.sh: un bloque `build` exigiría la clave `dockerfile`
+  // (el contexto es la raíz del proyecto y el archivo vive en deploy/), y podman-compose no la
+  // honra — aborta con «no Containerfile or Dockerfile specified or found».
+  assert.ok(compose.includes('image: product-catalog-spring-deploy:latest'));
+  assert.ok(!compose.includes('dockerfile:'));
+  const upScript = read(workspace, 'deploy/up.sh');
+  assert.ok(upScript.includes('build -f "$(hostpath "$HERE/Dockerfile")"'));
+  // El puerto publicado sale de una variable: rango con docker (que es lo que permite replicar) y
+  // puerto único con podman, que no admite un rango contra un puerto único del contenedor.
+  assert.ok(compose.includes('${APP_PORTS:-8080}:8080'));
+  assert.ok(!compose.includes('8080-8089:8080'));
+  assert.ok(upScript.includes('export APP_PORTS="${APP_PORT:-8080}-${APP_PORT_MAX:-8089}"'));
+  assert.ok(upScript.includes('podman no publica rangos de puertos'));
+  // Las rutas que van al frontend de compose se traducen: podman-compose es un programa de
+  // Windows y no sabe abrir /c/Users/... (medido: up.sh no levantaba nada con podman en Git Bash).
+  assert.ok(upScript.includes('hostpath() {'));
+  assert.ok(upScript.includes('-f "$(hostpath "$COMPOSE_FILE")"'));
   assert.ok(compose.includes('PROFILE: develop'));
   assert.ok(compose.includes('DB_URL: jdbc:postgresql://db:5432/product_catalog'));
   assert.ok(compose.includes('KAFKA_BOOTSTRAP_SERVERS: kafka:29092'));
@@ -1333,7 +1349,7 @@ test('un diseño SIN capa de persistencia: sin contenedor de BD ni devtools, per
   assert.ok(copied.includes('deploy/Dockerfile'));
   assert.ok(copied.includes('deploy/docker-compose.yaml'));
   const compose = read(workspace, 'deploy/docker-compose.yaml');
-  assert.ok(compose.includes('dockerfile: deploy/Dockerfile'));
+  assert.ok(compose.includes('image: product-catalog-spring-deploy:latest'));
   assert.ok(!compose.includes('image: postgres')); // no hay BD que levantar
 
   // Y sin motor, ninguna dependencia de driver: `runtimeOnly` del dialecto sale del catálogo,

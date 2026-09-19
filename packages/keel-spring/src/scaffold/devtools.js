@@ -37,6 +37,25 @@ fi`;
  *
  * @param {string[]} args argumentos comunes (`-f <archivo>`, `--env-file`…).
  */
+/**
+ * La ruta tal y como la entiende el binario que la va a abrir, no el shell que la escribe.
+ *
+ * En Git Bash sobre Windows una ruta absoluta es `/c/Users/…`, y el frontend de compose puede ser
+ * un programa de WINDOWS: `podman-compose` es Python, y abre el archivo él mismo —no se lo pasa al
+ * motor—, así que con la ruta POSIX aborta con «missing files». Medido en una corrida: `up.sh` no
+ * levantaba nada con podman en Windows, y el mensaje no mencionaba ni las rutas ni el shell.
+ *
+ * `MSYS_NO_PATHCONV=1` (que estos scripts ponen, y tienen que poner: sin él MSYS destroza los
+ * argumentos que SÍ son rutas del contenedor) desactiva la traducción automática, así que se hace
+ * aquí y solo para lo que va como argumento. Las variables siguen en POSIX para que el propio
+ * bash pueda leerlas (`[ -f ]`, `.`).
+ *
+ * Fuera de Git Bash no hay `cygpath` y la ruta se deja igual, que es lo correcto en Linux y macOS.
+ */
+export const HOSTPATH_HELPER = `hostpath() {
+  if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf '%s' "$1"; fi
+}`;
+
 export function composeResolution(args) {
   const rendered = args.join(' ');
   return `COMPOSE=()

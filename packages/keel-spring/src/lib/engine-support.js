@@ -541,18 +541,18 @@ export const MECHANISMS = {
     },
     coverage: {
       relational: {
-        state: 'razonado',
-        net: 'ninguna',
-        engines: [],
+        state: 'verificado',
+        net: 'corrida',
+        engines: ['postgresql'],
         falsified: false,
-        why: 'lo compila compile-check (stock-reservation con --telemetry=otel) y se midió UNA vez a mano, el 2026-09-19, arrancando el servidor con bootTestRun contra un colector real: llegaron los spans connection/query/result-set colgando del caso de uso. Pero fue sobre el H2 del perfil test, no sobre el motor real, y no hay red que lo repita. Dueño: una corrida con --telemetry otel sobre postgresql'
+        why: 'MEDIDO el 2026-09-19 en la corrida e2e de stock-reservation con --telemetry otel: la app en contenedor (deploy/), PostgreSQL real y el colector con Grafana LGTM detrás. La traza de una confirmación llegó a Tempo con 22 spans y los de JDBC (connection/query/result-set) colgando del span del caso de uso. SIN FALSAR: no se probó ninguna mutación y no hay script que lo repita — es una corrida, no una red de CI'
       },
       document: {
-        state: 'razonado',
-        net: 'ninguna',
-        engines: [],
+        state: 'verificado',
+        net: 'corrida',
+        engines: ['mongodb'],
         falsified: false,
-        why: 'lo compila compile-check (asset-vault con --telemetry=otel): javac confirma que ContextProviderFactory y MongoObservationCommandListener tienen la firma que la plantilla supone. Nadie lo ha arrancado contra Mongo. Dueño: una corrida con --telemetry otel sobre mongodb'
+        why: 'MEDIDO el 2026-09-19 sobre notification-mailer-mongo con --telemetry otel, contra el Mongo de infra/ (replica set) y el mismo colector: el barrido programado dejó en Tempo el span notifications.findAndModify con db.system=mongodb colgando del span de su caso de uso, que es lo que registra MongoObservationCommandListener. SIN FALSAR, por lo mismo que la rama relacional: es una corrida'
       }
     }
   },

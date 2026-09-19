@@ -24,7 +24,8 @@ import {
   validateInfraScript,
   resetDbScript,
   RUNTIME_RESOLUTION,
-  composeResolution
+  composeResolution,
+  HOSTPATH_HELPER
 } from './devtools.js';
 import { messagingProvisioning } from './messaging-provisioning.js';
 
@@ -179,7 +180,9 @@ COMPOSE_FILE="$HERE/docker-compose.yaml"
 
 ${RUNTIME_RESOLUTION}
 
-${composeResolution(['-f', '"$COMPOSE_FILE"'])}`;
+${HOSTPATH_HELPER}
+
+${composeResolution(['-f', '"$(hostpath "$COMPOSE_FILE")"'])}`;
 
 function infraUpScript(service) {
   return `#!/usr/bin/env bash

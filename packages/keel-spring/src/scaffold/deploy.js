@@ -37,7 +37,7 @@ import {
 } from '../lib/stack-catalog.js';
 import { usesTelemetry } from './telemetry.js';
 import { cognitoMockConfig, realmSpec } from './auth-provisioning.js';
-import { RUNTIME_RESOLUTION, composeResolution } from './devtools.js';
+import { RUNTIME_RESOLUTION, composeResolution, HOSTPATH_HELPER } from './devtools.js';
 import { LOCAL_API_KEY, LOCAL_CORS_ORIGINS, localClientApiKey } from './config.js';
 
 // Nombre de la variable de .env que publica cada puerto en el host. Explícito y no
@@ -314,24 +314,42 @@ function composeServices(model) {
   const { environment, extraEnv } = appEnvironment(model);
   env.push(...extraEnv);
   services.app = {
-    build: { context: '..', dockerfile: 'deploy/Dockerfile' },
+    // La imagen, no un bloque `build:`, y la construye up.sh con el runtime directamente.
+    //
+    // El bloque `build` exige la clave `dockerfile` —el contexto es la RAÍZ del proyecto (hacen
+    // falta src/ y el wrapper) y el archivo vive en deploy/—, y **podman-compose no la honra**:
+    // busca un Dockerfile en el contexto y aborta con «no Containerfile or Dockerfile specified
+    // or found». Es el mismo motivo por el que el toolbox de infra/ tiene su Dockerfile en un
+    // subdirectorio propio, pero aquí esa salida no existe. Medido: con podman en Windows,
+    // `deploy/up.sh` no podía construir la imagen de la app.
+    image: appImage(service),
     // Sin container_name: el proyecto ya prefija los nombres, y fijarlo sería la
     // única forma de colisionar con el stack de infra/.
     //
-    // El puerto se publica por RANGO, no fijo, y esa es la diferencia entre poder
-    // probar la premisa y no poder: el servidor generado se despliega replicado —los
-    // barridos reclaman su lote justo porque corren en todas las réplicas— y con un
-    // puerto de host fijo `--scale app=2` falla por colisión, así que no había forma
-    // de levantar dos instancias ni de ver si el reclamo funciona. Con el rango, cada
-    // réplica toma el siguiente puerto libre y la primera sigue estando en APP_PORT,
-    // que es lo que sondea up.sh.
-    ports: ['${APP_PORT:-8080}-${APP_PORT_MAX:-8089}:8080'],
+    // El puerto publicado lo decide up.sh en `APP_PORTS`, y no es un rodeo.
+    //
+    // Replicar es lo único que ejercita lo que el servidor asume siempre (los barridos reclaman
+    // su lote porque corren en todas las instancias), y con un puerto de host FIJO `--scale app=2`
+    // colisiona. La solución de docker es publicar un RANGO (`8080-8089:8080`: cada réplica toma
+    // el siguiente libre), pero **podman no admite rangos contra un puerto único** y aborta con
+    // «host and container port ranges have different lengths: 10 vs 1» — o sea que con podman no
+    // arrancaba ni UNA instancia. Medido en una corrida.
+    //
+    // Así que el valor sale de una variable: up.sh pone el rango con docker y un puerto único con
+    // podman, y quien invoque compose a mano sin pasar nada obtiene el puerto único, que es lo que
+    // funciona en los dos.
+    ports: ['${APP_PORTS:-8080}:8080'],
     environment,
     ...dependsOn(services)
   };
   env.unshift(
-    { name: 'APP_PORT', value: '8080' },
-    { name: 'APP_PORT_MAX', value: '8089' },
+    { name: 'APP_PORT', value: '8080', comment: 'Puerto de la app en tu maquina' },
+    {
+      name: 'APP_PORT_MAX',
+      value: '8089',
+      comment:
+        'Ultimo puerto del rango que up.sh publica al replicar. SOLO con docker: podman no admite rangos de puertos, asi que con el se publica APP_PORT y una sola instancia'
+    },
     // Cuántas instancias levanta up.sh. Por defecto una —probar a mano no necesita
     // más— pero subirlo a 2 es la única forma de ejercitar lo que el servidor asume
     // siempre: que hay otra réplica haciendo lo mismo al mismo tiempo.
@@ -535,7 +553,9 @@ if [ -f "$ENV_FILE" ]; then
   set +a
 fi
 
-${composeResolution(['-f', '"$COMPOSE_FILE"', '--env-file', '"$ENV_FILE"'])}`;
+${HOSTPATH_HELPER}
+
+${composeResolution(['-f', '"$(hostpath "$COMPOSE_FILE")"', '--env-file', '"$(hostpath "$ENV_FILE")"'])}`;
 
 function upScript(model) {
   const urls = publishedUrls(model)
@@ -561,8 +581,31 @@ export MSYS_NO_PATHCONV=1
 
 ${RUNTIME_PREAMBLE}
 
-echo "== Levantando (\${COMPOSE[0]}, \${APP_REPLICAS:-1} instancia(s) de la app) =="
-"\${COMPOSE[@]}" up -d --build --scale app="\${APP_REPLICAS:-1}"
+# La imagen de la app se construye AQUI y no con 'compose up --build': el contexto es la raiz
+# del proyecto y el Dockerfile vive en deploy/, y esa combinacion necesita la clave 'dockerfile',
+# que podman-compose ignora (aborta con "no Containerfile or Dockerfile specified or found").
+echo "== Construyendo la imagen de la app (\$RUNTIME) =="
+"\$RUNTIME" build -f "\$(hostpath "\$HERE/Dockerfile")" -t "${appImage(model.service)}" "\$(hostpath "\$HERE/..")"
+
+# Cuantos puertos publica la app, y por que depende del runtime: replicar exige un RANGO de
+# puertos de host (cada replica toma el siguiente libre) y podman no los admite contra un puerto
+# unico del contenedor. Con docker se usa el rango; con podman, un puerto y una sola instancia.
+REPLICAS="\${APP_REPLICAS:-1}"
+if [ "\$RUNTIME" = "docker" ]; then
+  export APP_PORTS="\${APP_PORT:-8080}-\${APP_PORT_MAX:-8089}"
+else
+  export APP_PORTS="\${APP_PORT:-8080}"
+  if [ "\$REPLICAS" -gt 1 ]; then
+    echo "podman no publica rangos de puertos, asi que no puede levantar \$REPLICAS replicas con el" >&2
+    echo "puerto publicado. Opciones: usar docker (CONTAINER_RUNTIME=docker), o levantar una sola" >&2
+    echo "instancia aqui y arrancar las demas sin publicar puerto:" >&2
+    echo "  podman run -d --network <red-del-proyecto> --env-file deploy/.env ${appImage(model.service)}" >&2
+    exit 2
+  fi
+fi
+
+echo "== Levantando (\${COMPOSE[0]}, \$REPLICAS instancia(s) de la app) =="
+"\${COMPOSE[@]}" up -d --scale app="\$REPLICAS"
 
 # Espera activa a que la app responda. 'Up' no es 'listo': la JVM tarda, y con
 # persistencia ademas hay que aplicar las migraciones antes de aceptar trafico.
@@ -1165,4 +1208,14 @@ service:
       processors: [memory_limiter, attributes/redact, batch]
       exporters: [otlphttp/backend]
 `;
+}
+
+/**
+ * La imagen de la app en deploy/. Se nombra aquí una vez porque la citan tres sitios —el servicio
+ * del compose, el `build` de up.sh y el mensaje que explica cómo levantar una réplica sin puerto—
+ * y un nombre distinto en cualquiera de ellos deja a compose buscando una imagen que nadie
+ * construyó, con un error que habla de registries y no del nombre.
+ */
+function appImage(service) {
+  return `${service.projectName}-deploy:latest`;
 }
