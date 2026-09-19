@@ -411,6 +411,8 @@ keel/
 
 Los assets **son** la metodología: el DSL se documenta en `packages/keel-core/assets/core/docs/dsl-reference.md`, el schema vive en `packages/keel-core/assets/core/schema/`, y cada generador en su propio paquete `packages/keel-<tech>/`. Para crear un generador nuevo: [building-a-generator.md](packages/keel-core/assets/core/docs/building-a-generator.md). La metodología completa, en [methodology.md](packages/keel-core/assets/core/docs/methodology.md).
 
+Y una guía aparte para lo que se opera en vez de leerse: [OBSERVABILIDAD.md](OBSERVABILIDAD.md) explica la telemetría opcional de un servicio generado —cómo se activa, dónde se miran las trazas, las métricas y los logs, cómo se cambia de backend tocando solo el colector y cómo se opera—. Es la misma guía que build instala en `docs/keel/observabilidad.md` de cada proyecto que la lleva.
+
 ## Autor y licencia
 
 Keel lo diseña y mantiene **[asuridev](https://github.com/asuridev)** — el DSL, la metodología, la CLI y el generador Spring.

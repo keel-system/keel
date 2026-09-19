@@ -39,6 +39,7 @@ cd services/<servicio>-spring
 | `conventions/concurrency.md` | El servicio corre replicado: quién arbitra cada mecanismo de repetición, la ventana del `409 IDEMPOTENCY_KEY_IN_PROGRESS`, los `@Scheduled` que corren en todas las instancias y qué no cubre ningún gate |
 | `conventions/virtual-threads.md` | I/O paralela con hilos virtuales en query handlers |
 | `conventions/logging.md` | Dónde se loguea: las fronteras que fija build (caso de uso, duplicado descartado, outbox, llamada saliente, excepción no controlada), lo que puede añadir el agente, lo que no se loguea nunca y a qué canal va cada cosa. Lo vigila `infra/check-logging.sh` |
+| `observabilidad.md` | **Solo con telemetría**: la guía de USO y operación, para personas — qué se activa, dónde se miran las UIs (Grafana, Tempo, Loki, Prometheus), cómo cambiar o añadir un backend en el colector, perfiles y variables, y el día a día (qué mirar cuando no llega nada, muestreo, coste, alertas). Misma fuente que el `OBSERVABILIDAD.md` de la raíz del repo |
 | `conventions/observability.md` | **Solo con telemetría** (`telemetry: otel`): el patrón colector, qué instrumenta build, perfiles y muestreo, la traza a través de los eventos y las reglas para no romperla ni filtrar datos |
 | `skills/` | Skills por tecnología del stack (`keel-spring-<tech>/` — database, kafka, rabbitmq, snssqs, s3, redis, keycloak, cognito; SKILL.md + `references/` bajo demanda), instaladas condicionalmente en el `el directorio de skills/` del proyecto generado según `keel-stack.json` |
 

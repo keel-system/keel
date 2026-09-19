@@ -1,5 +1,7 @@
 # Observabilidad (telemetría OpenTelemetry vía colector)
 
+> **¿Buscas cómo usarla?** Esta convention son las reglas que el CÓDIGO tiene que respetar. Para levantar la telemetría, mirar las trazas en Grafana, cambiar de backend u operarla, la guía es `docs/keel/observabilidad.md`.
+
 Este documento solo existe si el proyecto se generó con telemetría (`telemetry: otel` en `keel-stack.json`, elegido en el cuestionario de `keel-spring build` o con `--telemetry otel`). Sin ella, el servidor no emite telemetría y nada de esto aplica.
 
 ## El patrón: un colector en medio

@@ -53,6 +53,12 @@ export const TELEMETRY_CONVENTIONS = ['observability.md'];
 // Docs de primer nivel del generador, junto a conventions/ bajo DOCS_DIR.
 const GUIDES = ['architecture.md', 'constitution.md', 'orchestration.md'];
 
+// Guías que solo se instalan con una elección de stack. La de observabilidad es para PERSONAS
+// —qué se activa, dónde se miran las UIs, cómo se cambia de backend, cómo se opera— y sin
+// telemetría describiría una infraestructura que el proyecto no tiene. Su gemela para el código es
+// conventions/observability.md. La copia de la raíz del repo la ata test/observability-doc.test.js.
+export const TELEMETRY_GUIDES = ['observabilidad.md'];
+
 // Subagentes de la orquestación. Son **hojas**: ninguno puede lanzar agentes
 // (`spawns: false` en su frontmatter neutral, que cada harness traduce a su
 // forma), porque el único orquestador es la skill — ver orchestration.md § Los
@@ -96,7 +102,7 @@ export function generate(model) {
   const files = [];
 
   // Docs de apoyo: una sola copia, agnósticas del harness.
-  for (const name of GUIDES) {
+  for (const name of [...GUIDES, ...(usesTelemetry(model) ? TELEMETRY_GUIDES : [])]) {
     files.push({ path: `${DOCS_DIR}/${name}`, content: docContent(path.join(generatorDir, name)) });
   }
   for (const name of [...CONVENTIONS, ...(usesTelemetry(model) ? TELEMETRY_CONVENTIONS : [])]) {
