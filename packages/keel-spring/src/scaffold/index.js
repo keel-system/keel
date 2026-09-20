@@ -52,6 +52,7 @@ import * as httpIdempotency from './http-idempotency.js';
 import * as idempotencyCheck from './idempotency-check.js';
 import * as domainGuardsCheck from './domain-guards-check.js';
 import * as loggingCheck from './logging-check.js';
+import * as telemetryGate from './telemetry-gate.js';
 import * as cache from './cache.js';
 import * as scheduling from './scheduling.js';
 import * as jackson from './jackson.js';
@@ -143,6 +144,7 @@ const GENERATORS = [
   idempotencyCheck,
   domainGuardsCheck,
   loggingCheck,
+  telemetryGate,
   readme,
   contextMd,
   generatorDocs,

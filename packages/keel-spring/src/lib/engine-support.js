@@ -76,6 +76,8 @@ export const NETS = {
   'mapping-check': 'npm run mapping-check — el ESPEJO de persistencia: que la columna que el diseño pidió sea la que el motor creó',
   'index-check':
     'npm run index-check — la unicidad CONDICIONADA, contra el motor y en sus dos ramas: en relacional el appendix .sql ejecutado dos veces; en documental el MongoIndexConfig generado, invocado dos veces desde un JUnit. Las mismas preguntas: que sea idempotente y que sostenga el invariante sin prohibir las versiones históricas',
+  'telemetry-check':
+    'npm run telemetry-check — la telemetría con la APLICACIÓN ARRANCADA: que la serie que el panel consulta exista de verdad en la exposición, con sus etiquetas',
   corrida: 'una corrida en vivo: no es determinista ni repetible en CI, así que nombra cuál',
   ninguna: 'nadie lo ejecuta'
 };
@@ -137,6 +139,49 @@ export const PAIRS = {
  * garantiza gratis allí la garantiza un test dedicado.
  */
 export const MECHANISMS = {
+  'runtime-panel': {
+    title: 'Fila de runtime del panel y alerta de saturación del pool',
+    emitter: 'src/scaffold/observability-assets.js',
+    axis: 'model',
+    why:
+      'El pool NO es el mismo en las dos ramas —Hikari frente al del driver de Mongo— y el modo de fallo es el ' +
+      'de siempre, pero en el sitio donde más duele: una consulta a una serie que ese modelo no publica no da ' +
+      'error, deja el panel VACÍO justo donde se mira cuando algo va lento, y su alerta no dispara nunca.',
+    parity: {
+      pair: 'notification-mailer',
+      // El panel y las alertas solo existen con telemetría; sin el stack, esta fila no tendría
+      // nada que mirar y el test pasaría sin medir.
+      stack: { telemetry: 'otel' },
+      markers: {
+        relational: ['hikaricp_connections_pending', 'KeelConnectionPoolSaturated'],
+        document: ['mongodb_driver_pool_waitqueuesize', 'KeelConnectionPoolSaturated']
+      }
+    },
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'telemetry-check',
+        engines: ['postgresql'],
+        falsified: true,
+        why:
+          'renombrada la serie de saturación de Hikari conservando la forma —en el vocabulario Y en el marcador de ' +
+          'paridad, que es la mutación realista: la que ocurre cuando cambia el registro de métricas—, los tres ' +
+          'tests estáticos siguen VERDES y TEL-11 cae, él solo. Ese contraste es la medición: el cruce de ' +
+          '`npm test` compara el panel con el vocabulario, o sea el vocabulario consigo mismo'
+      },
+      document: {
+        state: 'verificado',
+        net: 'telemetry-check',
+        engines: ['mongodb'],
+        falsified: true,
+        why:
+          'la misma mutación sobre la serie de cola de espera del driver de Mongo: estáticos en verde y TEL-11 en ' +
+          'rojo, él solo. Las dos ramas se falsaron por separado a propósito — una sola habría dejado a la otra ' +
+          'con una red que nadie ha comprobado que pueda ponerse roja'
+      }
+    }
+  },
+
   'outbox-relay': {
     title: 'Relay del outbox: reclamo con lease, backoff, purga y rendición',
     emitter: 'src/scaffold/outbox.js',

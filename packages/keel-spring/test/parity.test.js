@@ -41,14 +41,18 @@ const TEXTO = new Set(['.java', '.sh', '.yaml', '.yml', '.md', '.gradle', '.json
  * archivo fue justo eso: el árbol documental no trae `infra/export-schema.sh`, pero siete
  * documentos suyos lo mencionan.
  */
+// Un mecanismo puede necesitar un STACK concreto para existir —el panel y las alertas solo se
+// emiten con `telemetry: otel`—, así que el árbol se cachea por fixture Y por stack. Con una sola
+// caché, el primero en pedir la fixture decidía con qué stack la veían todos los demás.
 const arboles = new Map();
-function arbolDe(fixture) {
-  if (arboles.has(fixture)) return arboles.get(fixture);
+function arbolDe(fixture, stack = null) {
+  const clave = `${fixture}::${JSON.stringify(stack ?? {})}`;
+  if (arboles.has(clave)) return arboles.get(clave);
 
   const { manifest, layers, errors } = loadService(path.join(fixturesDir, fixture));
   assert.deepEqual(errors, [], `${fixture} no valida`);
   const workspace = tmpDir('keel-parity-');
-  const result = scaffoldService({ manifest, layers, workspace, force: true });
+  const result = scaffoldService({ manifest, layers, workspace, force: true, stack });
   const root = path.join(workspace, result.outDir);
 
   const walk = (dir) =>
@@ -64,7 +68,7 @@ function arbolDe(fixture) {
     if (TEXTO.has(path.extname(file))) partes.push(fs.readFileSync(file, 'utf8'));
   }
   const arbol = { rutas, texto: partes.join('\n'), root };
-  arboles.set(fixture, arbol);
+  arboles.set(clave, arbol);
   return arbol;
 }
 
@@ -134,7 +138,7 @@ for (const [id, mechanism] of porModelo) {
 
     test(`${id}/${modelo}: el árbol generado lo trae`, () => {
       const fixture = PAIRS[mechanism.parity.pair][modelo];
-      const arbol = arbolDe(fixture);
+      const arbol = arbolDe(fixture, mechanism.parity.stack ?? null);
       for (const marker of mechanism.parity.markers[modelo]) {
         assert.ok(
           trae(arbol, marker),

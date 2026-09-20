@@ -363,28 +363,53 @@ La aplicación no se toca. Si la editas mientras hay tráfico, lo que estuviera 
 
 ## 7 bis. El panel y las alertas que vienen puestos
 
-`build` genera un panel y tres alertas **derivados de tu diseño**, y `deploy/up.sh` los provisiona en el Grafana de prueba. Al levantarlo, el script imprime el enlace directo al panel: si da 404, el provisionado no entró (es la forma más rápida de comprobarlo).
+`build` genera un panel y las alertas **derivados de tu diseño**, y `deploy/up.sh` los provisiona en el Grafana de prueba. Al levantarlo, el script imprime el enlace directo al panel: si da 404, el provisionado no entró (es la forma más rápida de comprobarlo).
 
 | Archivo | Qué es |
 |---|---|
-| `deploy/observability/dashboards/<servicio>.json` | El panel. Una fila por superficie que tu diseño tiene: casos de uso, HTTP, outbox, mensajes, caché, almacenamiento, correo |
+| `deploy/observability/dashboards/<servicio>.json` | El panel. Una fila por superficie que tu diseño tiene: casos de uso, HTTP, outbox, mensajes, caché, almacenamiento, correo, y siempre la de **runtime** |
 | `deploy/observability/dashboards-provisioning.yaml` | Le dice a Grafana dónde buscar el panel |
-| `deploy/observability/alerting/keel-alerts.yaml` | Las tres alertas, en el formato de provisioning de Grafana |
-| `deploy/observability/prometheus-rules.example.yaml` | Las mismas tres reglas en formato Prometheus, para llevártelas a otro sitio. Nadie las monta: son una referencia |
+| `deploy/observability/alerting/keel-alerts.yaml` | Las alertas, el **contacto** al que salen y la política que enruta a él, en el formato de provisioning de Grafana |
+| `deploy/observability/prometheus-rules.example.yaml` | Las mismas reglas en formato Prometheus, para llevártelas a otro sitio. Nadie las monta: son una referencia |
+| `deploy/observability/alertmanager.example.yaml` | La otra mitad de esa referencia: a quién se le cuenta. Una regla sin receptor no avisa a nadie |
 
 **Las filas del panel solo aparecen si su subsistema existe.** Un panel con paneles vacíos diría «falta señal» donde lo que falta es el subsistema, y eso manda a buscar un problema que no hay.
 
 Los paneles de percentiles llevan **exemplars activados**: cada punto enseña un diamante con el id de una traza de ejemplo. Es el salto que este panel existe para dar.
 
-### Las tres alertas
+### La fila de runtime
+
+Va siempre y va la última, porque no es lo que se mira primero: es a donde se baja cuando lo de arriba dice que algo va lento y no se sabe por qué. Enseña el **heap** sobre su máximo, el tiempo que se va en **pausas de GC** y las **conexiones del pool**.
+
+El pool depende del modelo de persistencia de tu diseño: con `relational` es Hikari (en uso, libres, máximo y **esperando**), con `document` es el del driver de Mongo (en uso, tamaño y **cola de espera**). Son series distintas y por eso cada rama enseña la suya: una consulta a la serie de la otra no falla, deja media fila vacía justo donde vas a mirar.
+
+### Las alertas
 
 | Alerta | Cuándo dispara | Por qué esa |
 |---|---|---|
 | Eventos del outbox rendidos | `keel.outbox.dead_lettered > 0` durante 5 min | Es **pérdida de datos** en el mecanismo cuya única promesa es que no se pierde nada. Solo se emite si tu diseño usa `reliability: outbox` |
 | Tasa de error de los casos de uso | más del 5 % con desenlace `error` durante 10 min | Cuenta solo `error`: un rechazo del dominio (`rejected`) es un 4xx esperado, no un fallo del servicio |
 | p95 de los casos de uso | alguna operación pasa de 1 s durante 10 min | Degradación antes de que alguien se queje |
+| Saturación del pool de conexiones | hay peticiones **esperando** una conexión durante 5 min | A partir de ahí la latencia la pone la cola, no el trabajo. Solo si tu diseño persiste algo |
+| Presión de memoria en el heap | por encima del 90 % durante 10 min | Lo que viene después es GC continuo y, al final, un `OutOfMemoryError` — que sí se ve, pero cuando ya no hay nada que hacer |
+| Retraso del consumidor | más de 1.000 mensajes por detrás durante 10 min | No lo dice ninguna otra: un consumidor que se queda atrás procesa igual de rápido, solo que cada vez más tarde. Solo con Kafka (§ 10) |
 
-En `deploy/` **no hay contacto configurado**: las alertas se ven en la interfaz de Grafana y no salen a ninguna parte. Para un entorno de verdad, lleva `prometheus-rules.example.yaml` a tu sistema de reglas y conéctalo a tu canal.
+Las tres primeras dicen que algo ya va mal; las tres siguientes dicen **por qué**, y llegan antes. Los umbrales (5 %, 1 s, 1.000 mensajes) son un punto de partida: dependen del volumen de cada servicio y se ajustan con los primeros días de tráfico real.
+
+**Sin datos no disparan.** Todas se provisionan con `noDataState: OK`, y no es un detalle: el valor por defecto de Grafana es notificar, así que un servicio recién desplegado —o de madrugada, sin tráfico— avisaría de todo a la vez sin que pase nada. Se midió en vivo, y era exactamente lo que hacía. Si lo que falta es el servicio entero, eso lo dice la plataforma (liveness), no una alerta de negocio. Un error de evaluación sí se ve, pero con nombre propio (`execErrState: Error`) para que no se confunda con «el p95 subió».
+
+### A dónde salen
+
+En `deploy/` las alertas **sí salen**: el mismo archivo provisiona un contacto de tipo webhook y la política que enruta a él. La URL sale de la variable `ALERT_WEBHOOK_URL`, que por defecto apunta a un **sumidero** —un contenedor que registra lo que recibe— para que «la alerta salió» se pueda leer en vez de suponerse:
+
+```bash
+# lo que el contacto ha recibido, con su cuerpo
+curl -s http://localhost:${ALERT_SINK_PORT:-8091}/__admin/requests
+```
+
+Para recibirlas de verdad, cambia `ALERT_WEBHOOK_URL` en `deploy/.env` por la URL de tu canal (o la del puente que hable con él) y vuelve a levantar. Y si no usas Grafana, las dos mitades portables están en `prometheus-rules.example.yaml` (cuándo disparar) y `alertmanager.example.yaml` (a quién contárselo).
+
+> **Ojo con llevarte `keel-alerts.yaml` a un Grafana compartido.** Provisionar `policies` **sustituye** el árbol de notificación por defecto de esa organización, y el árbol provisionado deja de ser editable desde la interfaz. En el Grafana de `deploy/` da igual; en uno de verdad, mira antes qué árbol tiene.
 
 > **`build` REGENERA el panel.** Si lo editas en la interfaz de Grafana, el siguiente `keel-spring build` lo pisa. Para conservar un cambio: exporta el JSON desde Grafana y sustituye el archivo de `deploy/observability/dashboards/`, sabiendo que el próximo build también lo pisará — el camino sostenible es que el cambio valga para todos los servicios y entre en el generador.
 
@@ -409,6 +434,8 @@ Son dos y no uno por dos razones que no se pueden cumplir a la vez en el mismo s
 | **Push por OTLP** (pierde los exemplars) | si tu plataforma no deja exponer el endpoint | `METRICS_EXPORT_OTLP=true` y `METRICS_EXPORT_PROMETHEUS=false` |
 
 Cambiar de una a otra **no exige recompilar**: las dos dependencias van en la imagen justo por eso.
+
+**Y las alertas, ¿a quién avisan allí?** El contacto que viene provisionado lee su URL de `ALERT_WEBHOOK_URL`, así que en un entorno de verdad basta con darle esa variable al proceso de Grafana —no hay que editar ningún archivo generado—. Si tu alerta la evalúa Prometheus y no Grafana, las dos mitades están en `prometheus-rules.example.yaml` y `alertmanager.example.yaml`, y conviene llevarse las dos: una regla sin receptor no avisa a nadie, que es justo el estado en el que suele quedarse esto.
 
 El **muestreo por cola** del gateway se queda con todas las trazas que tienen un error, todas las lentas y una parte del resto. Es mucho mejor que muestrear a ciegas en el servicio: las trazas que te interesan son justo las raras. Si lo usas, pon `TRACING_SAMPLING_PROBABILITY=1.0` en la aplicación, o estarás muestreando dos veces.
 
@@ -461,6 +488,8 @@ Lo que hace cara —y lenta— una plataforma de observabilidad es casi siempre 
 
 Palancas para ajustar volumen, de menos a más invasivas: `METRICS_EXPORT_STEP`, el muestreo por cola en el gateway, `TRACING_SAMPLING_PROBABILITY` y, para los logs, el nivel (`LOG_LEVEL_ROOT`, `LOG_LEVEL_APP`).
 
+Y desde ahora esa frontera **no es solo una convención**: `infra/check-telemetry.sh` (lo ejecuta el agente de calidad, y tú también puedes) veta una etiqueta de métrica cuya clave no esté en el vocabulario que estampa build. Es el único gate cuyo hallazgo no produce ningún síntoma —nada falla, nada se loguea, ningún escenario se pone rojo—, y la corrección no es quitar el dato sino moverlo: al span, con `addHighCardinalityKeyValue`, donde un identificador sirve para lo que sirve sin multiplicar ninguna serie.
+
 ### Las alertas
 
 Ya vienen puestas y provisionadas: § 7 bis.
@@ -477,6 +506,7 @@ Ni datos personales, ni secretos, ni cuerpos de peticiones o mensajes. Se identi
 - **Los exemplars no van por OTLP**, y de ahí que las métricas se scrapeen: el registro OTLP de Micrometer no sabe emitirlos hasta la versión 1.17, que llega con Spring Boot 4.1. Cuando el generador suba de Boot, el push por OTLP podrá llevarlos y el scrape dejará de ser necesario.
 - **Un adaptador de un puerto instrumentado no puede ser `final`**: con el aspecto puesto, Spring lo proxya por CGLIB y el contexto no arranca. El mensaje de error habla de CGLIB, no de telemetría.
 - **SNS/SQS no propaga cabeceras de traza** (su cliente no lo soporta todavía): ahí la traza viaja solo en el sobre del evento, y por eso la línea del listener es obligatoria.
+- **El retraso del consumidor solo sale con Kafka.** Su cliente conoce el final de la partición, así que Micrometer puede restar y el panel lo enseña. Con RabbitMQ el consumidor no sabe cuántos mensajes quedan por detrás —no hay offset que restar—: eso se mira en el broker, por la profundidad de la cola (plugin de management o `rabbitmq_exporter`). Con SNS/SQS el dato es de CloudWatch (`ApproximateAgeOfOldestMessage`). En los dos casos el panel **no emite** ni la fila ni la alerta a propósito: una consulta a una serie que nadie publica no falla, se queda vacía, y su alerta no dispara nunca.
 - **Los logs del arranque no salen por OTLP**: el appender se instala cuando el contexto de Spring ya existe. Sí están en la consola.
 - **El muestreo por cola necesita** que todos los spans de una traza lleguen al mismo colector; por eso el agente de nodo los reparte por `traceID`.
 - **`local` no exporta por defecto**, para no ensuciar la suite de escenarios.
@@ -491,7 +521,13 @@ Y hay una parte que, además, es **repetible**: `npm run telemetry-check` (en el
 
 Lo que **no** se ha ejercitado en vivo y se documenta por diseño: las dos plantillas de producción (`collector-agent`/`collector-gateway`), que dependen de un clúster de Kubernetes, y los exportadores de proveedores concretos, que dependen de sus credenciales. Están escritas siguiendo la configuración de referencia del proyecto OpenTelemetry y validadas con `otelcol validate`, que comprueba la forma, no el destino.
 
-Y una mitad concreta que **tampoco** está medida por ninguna red y conviene saberlo: el **scrape en sí** —que el colector alcance a la aplicación por la red del compose— y el viaje del exemplar hasta el backend. `telemetry-check` mide lo que el servicio PUBLICA, no quién viene a buscarlo; eso se prueba a mano con `deploy/up.sh`.
+Esa red cubre además la fila de **runtime** —que la JVM publique el heap y las pausas de GC que el panel consulta, y que el **pool de tu modelo** publique las suyas, Hikari o el del driver de Mongo, incluida la serie sobre la que alerta— y el **retraso del consumidor** con Kafka, creando el consumidor a partir de la `ConsumerFactory` de la propia aplicación: quien publica esa serie no es Kafka, es el listener de Micrometer que Boot instala sobre esa factoría, así que un consumidor con propiedades propias habría medido una copia de sí mismo.
+
+Y la otra mitad —la que hasta ahora no medía nadie— la cubre `npm run deploy-check`: levanta `deploy/` entero, con la **aplicación en un contenedor**, manda tráfico y le pregunta **al backend**. Ahí se comprueba lo que `telemetry-check` no puede: que el colector **alcance** a la aplicación por la red del compose y se traiga sus métricas, que el **exemplar sobreviva** el viaje, que con él se llegue a la **traza**, que los logs lleguen, que el **panel y las reglas provisionadas hayan entrado** —hasta ahora eso solo se veía mirando la interfaz— y que el **contacto entregue de verdad**, disparando su notificación de prueba y leyéndola en el sumidero. Esta última es la que más barata salía de perder: la URL del contacto viene de `$__env{ALERT_WEBHOOK_URL}`, y si esa variable no llega al proceso de Grafana el contacto se provisiona con el literal dentro, la entrega falla y **no hay ningún síntoma** — las alertas se siguen viendo en la interfaz.
+
+Esa pasada ya se ha corrido, y cerró **8 de 8** sobre `job-dispatch` con PostgreSQL. Encontró dos cosas que nadie sabía: que las alertas generadas **disparaban sin datos** (arreglado arriba) y que un proyecto recién generado **no arranca en `deploy/`** —el perfil `develop` valida el esquema contra `db/migration/`, y el baseline lo exporta el agente de calidad—, así que el propio check le da esa precondición y lo dice en voz alta. `deploy-check` mide la ruta de la telemetría; no es una prueba de que un árbol sin agente se despliegue.
+
+Lo que sigue **sin ejercitarse** son las dos plantillas de Kubernetes, por la razón de siempre: hacen falta un clúster y unas credenciales.
 
 ## 12. Dónde seguir
 

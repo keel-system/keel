@@ -395,6 +395,7 @@ estático. Borrar el método entero mide otra cosa (mide el compilador).
 | Unicidad condicionada | se quita `flushPendingWrites()` de entre las dos escrituras de la operación que releva | los escenarios de relevo **y** `infra/check-idempotency.sh` (familia `conditionalUniqueness`) |
 | Guarda de correo | la transición se hace en memoria, sin llamar al reclamo | `infra/check-idempotency.sh` (aquí ningún escenario puede) |
 | Traza en el consumo (solo con telemetría) | el listener abre el contexto con `runWith(envelope.metadata().correlationId(), …)` en vez de con la metadata | `infra/check-idempotency.sh` (familia `inboundContext`): la telemetría no tiene escenarios, y la traza cortada no produce ningún síntoma en el servidor |
+| Cardinalidad de las métricas (solo con telemetría) | se estampa una etiqueta de métrica con un id dentro (`lowCardinalityKeyValue("orderId", …)`) | `infra/check-telemetry.sh` (familia `cardinality`): ningún escenario puede verlo —nada falla— y el coste aparece en la factura del backend |
 
 Las dos últimas filas son las que explican el resto, y por motivos opuestos.
 

@@ -18,6 +18,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   CASES,
+  CONSUMER_LAG,
   DOUBLES_CLASS,
   METRICS_TRANSPORT,
   OBSERVATIONS,
@@ -26,6 +27,7 @@ import {
   doublesClass,
   probeClass,
   promMetric,
+  runtimePool,
   switchClass
 } from '../src/lib/telemetry-probes.js';
 
@@ -77,7 +79,9 @@ test('cada caso del runner tiene id único y su método está en la clase que lo
     basePackage: 'com.ejemplo.servicio',
     appClass: 'ServicioApplication',
     commandFqn: 'com.ejemplo.servicio.application.commands.HacerAlgoCommand',
-    subsystems: ['storage', 'mail', 'cache'],
+    subsystems: ['storage', 'mail', 'cache', 'pool', 'consumerLag'],
+    persistenceKind: 'relational',
+    broker: 'kafka',
     storageBucket: 'assetBinaries',
     mailFrom: 'de@keel.test',
     mailTo: 'para@keel.test',
@@ -100,6 +104,57 @@ test('cada caso del runner tiene id único y su método está en la clase que lo
   }
   assert.ok(probe.includes(`class ${PROBE_CLASS}`));
   assert.ok(switched.includes(`class ${SWITCH_CLASS}`));
+});
+
+// El pool es la asimetría del runtime: si el caso preguntara por Hikari en un proyecto documental
+// saldría rojo hablando de un pool que ahí no existe, y al revés se quedaría sin medir nada.
+test('el caso del pool pregunta por el pool del MODELO, no por uno fijo', () => {
+  const base = {
+    basePackage: 'com.ejemplo.servicio',
+    appClass: 'ServicioApplication',
+    commandFqn: 'com.ejemplo.servicio.application.commands.HacerAlgoCommand',
+    subsystems: ['pool'],
+    imports: [],
+    fields: ''
+  };
+  const relacional = probeClass({ ...base, persistenceKind: 'relational' });
+  const documental = probeClass({ ...base, persistenceKind: 'document' });
+
+  assert.ok(relacional.includes(runtimePool('relational').saturation));
+  assert.ok(!relacional.includes('mongodb_driver'), 'la rama relacional no tiene driver de Mongo');
+  assert.ok(documental.includes(runtimePool('document').saturation));
+  assert.ok(!documental.includes('hikaricp'), 'la rama documental no tiene Hikari');
+
+  // Y cada una provoca la creación del pool por su vía: las series no existen hasta que alguien
+  // pide una conexión, así que sin esto el caso mediría que nadie tocó la base todavía.
+  assert.ok(relacional.includes('dataSource.getConnection()'));
+  assert.ok(documental.includes('runCommand'));
+
+  // Sin persistencia no hay pool que medir y el caso no se emite: un caso que no puede pasar es
+  // peor que uno ausente.
+  const sinPersistencia = probeClass({ ...base, subsystems: [], persistenceKind: null });
+  assert.ok(!sinPersistencia.includes('void connectionPoolSeriesExist()'));
+});
+
+// El retraso solo lo publica el listener de Micrometer que Boot instala sobre la ConsumerFactory
+// DE LA APLICACIÓN. Un consumidor con propiedades propias mediría a Kafka, no al generador.
+test('el caso del retraso usa la factoría de la aplicación y solo existe con el broker que lo publica', () => {
+  const base = {
+    basePackage: 'com.ejemplo.servicio',
+    appClass: 'ServicioApplication',
+    commandFqn: 'com.ejemplo.servicio.application.commands.HacerAlgoCommand',
+    subsystems: ['consumerLag'],
+    imports: [],
+    fields: ''
+  };
+  const conKafka = probeClass({ ...base, broker: 'kafka' });
+  assert.ok(conKafka.includes(CONSUMER_LAG.kafka.series));
+  assert.ok(conKafka.includes('consumerFactory.createConsumer('));
+
+  for (const broker of ['rabbitmq', 'snssqs']) {
+    const sinLag = probeClass({ ...base, broker });
+    assert.ok(!sinLag.includes('void consumerLagSeriesExists()'), `${broker} no publica retraso: el caso no puede existir`);
+  }
 });
 
 test('la sonda no puede medir un no-op: exige observabilidad y la exposición OpenMetrics', () => {

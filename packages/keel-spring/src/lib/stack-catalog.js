@@ -979,6 +979,41 @@ export const TELEMETRY_INFRA = {
 export const OBSERVABILITY_DIR = 'observability';
 
 /**
+ * A dónde SALEN las alertas, que es lo que separa «tres alertas generadas» de «te avisan».
+ *
+ * <p>Hasta aquí las alertas se provisionaban sin contacto: se veían en la interfaz de Grafana y
+ * no llegaban a ninguna parte. Una alerta que nadie recibe tiene el mismo valor operativo que una
+ * que no dispara, y cuesta lo mismo de mantener.
+ *
+ * <p>La URL va por variable (`$__env{…}` es la interpolación de los archivos de provisioning de
+ * Grafana), así que el destino real lo pone quien despliega sin tocar ningún archivo generado. Y
+ * en `deploy/` esa variable apunta por defecto a un SUMIDERO —WireMock, la misma imagen que ya
+ * usa el proveedor de prueba de las integraciones salientes: no entra ninguna imagen nueva—, que
+ * registra lo que recibe. Con él, «la alerta salió» deja de ser una afirmación y pasa a poder
+ * leerse: sin destino, lo único comprobable es que el archivo existe.
+ */
+export const ALERTING = {
+  webhookVar: 'ALERT_WEBHOOK_URL',
+  contactPoint: 'keel-webhook',
+  sink: {
+    serviceKey: 'alert-sink',
+    image: HTTP_STUB.image,
+    port: HTTP_STUB.port,
+    publishedPort: 8091,
+    portVar: 'ALERT_SINK_PORT',
+    // La ruta a la que Grafana hace POST. Cualquiera vale: WireMock responde 404 a lo que no
+    // tiene mapping y lo REGISTRA igualmente, que es lo único que hace falta para leerlo.
+    path: '/alerts'
+  }
+};
+
+/** La URL del sumidero vista desde DENTRO de la red de deploy/ (que es quien la llama: Grafana). */
+export function alertSinkEndpoint() {
+  const { sink } = ALERTING;
+  return `http://${sink.serviceKey}:${sink.port}${sink.path}`;
+}
+
+/**
  * Dónde espera la imagen del backend de prueba encontrar lo que se provisiona.
  *
  * <p>Estas rutas son de DENTRO del contenedor y aparecen en dos sitios —el montaje del compose y

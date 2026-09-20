@@ -384,6 +384,22 @@ suele acompañar a un fallo que se traga, y arreglarlo es lanzar la excepción, 
 comportamiento. Vuélcalo a `remaining` con su archivo y su línea, para el agente de código. Resultado en la familia `logging`. Qué
 loguea ya build y qué no se loguea nunca: `{{keel:docs}}/conventions/logging.md`.
 
+**Ejecuta `bash infra/check-telemetry.sh`** (solo existe con telemetría; si no está, la familia
+`cardinality` es `N/A`). Una regla sola: una etiqueta de métrica cuya clave no esté en el
+vocabulario que estampa build.
+
+Es el gate cuyo hallazgo **no produce ningún síntoma**. Nada falla, nada se loguea, ningún
+escenario se pone rojo: cada valor distinto de una etiqueta crea una serie nueva, así que una
+etiqueta con el id del pedido dentro multiplica las series por el número de pedidos. Eso se ve en
+la factura del backend de métricas —o cuando deja de responder—, y para entonces ya está en el
+histórico.
+
+La corrección es **no conductual** y la aplicas tú: lo que identifica algo (un id, una clave, un
+correo) va al span con `addHighCardinalityKeyValue`, no a la métrica. La observación sigue siendo
+la misma y el dato no se pierde: cambia de sitio. Nace verde, así que un hallazgo es siempre
+código nuevo. Resultado en la familia `cardinality`; la regla, en
+`{{keel:docs}}/conventions/observability.md`.
+
 ## El doble check (y qué NO haces)
 
 **No pruebas el baseline contra la base de datos.** No arrancas la app con
@@ -526,6 +542,10 @@ valueTypeFormat: OK | KO | N/A     # Sale de `infra/check-domain-guards.sh`. N/A
 logging: OK | KO                  # Sale de `infra/check-logging.sh` (siempre existe). KO = queda
                           # concatenación en un log, un objeto de entrada entero logueado, un
                           # ERROR desde domain/application o un executor sin propagación
+# --- la cardinalidad de las métricas ---
+cardinality: OK | KO | N/A        # Sale de `infra/check-telemetry.sh`. N/A sin telemetría (el
+                          # script no se genera); KO = hay una etiqueta de métrica con una clave
+                          # fuera del vocabulario, o sea series sin techo que nadie echará de menos
 issuesFixed: [...]        # ajustes no-conductuales aplicados
 remaining: [...]          # hallazgos conductuales sin hueco de diseño detrás
 designGaps:               # huecos del diseño que encontraste, como propuesta accionable

@@ -35,7 +35,9 @@ import {
   TELEMETRY_INFRA,
   collectorEndpoint,
   GRAFANA_PROVISIONING,
-  OBSERVABILITY_DIR
+  OBSERVABILITY_DIR,
+  ALERTING,
+  alertSinkEndpoint
 } from '../lib/stack-catalog.js';
 import { METRICS_TRANSPORT } from '../lib/telemetry-probes.js';
 import { dashboardUid } from './observability-assets.js';
@@ -271,10 +273,35 @@ function composeServices(model) {
   // colector es distroless, sin shell con el que sondearlo.
   if (usesTelemetry(model)) {
     const { collector, backend } = TELEMETRY_INFRA;
+    // El sumidero de alertas: el destino por defecto del contacto que se provisiona con ellas.
+    // Sin un destino, lo único comprobable es que el archivo de alertas existe; con él, lo que
+    // Grafana envía queda REGISTRADO y se puede leer (`/__admin/requests`). Es la misma imagen
+    // que el proveedor de prueba de las integraciones salientes: no entra ninguna nueva.
+    services[ALERTING.sink.serviceKey] = {
+      image: ALERTING.sink.image,
+      command: ['--verbose'],
+      ports: [`\${${ALERTING.sink.portVar}:-${ALERTING.sink.publishedPort}}:${ALERTING.sink.port}`]
+    };
+    env.push({
+      name: ALERTING.sink.portVar,
+      value: String(ALERTING.sink.publishedPort),
+      comment: 'Sumidero de alertas: aquí se lee lo que Grafana envía (/__admin/requests).'
+    });
+    env.push({
+      name: ALERTING.webhookVar,
+      value: alertSinkEndpoint(),
+      comment:
+        'A dónde van las alertas. Por defecto, al sumidero de arriba; apunta a tu canal ' +
+        '(o al puente que hable con él) para recibirlas de verdad.'
+    });
     services[backend.serviceKey] = {
       image: backend.image,
       ports: [`${backend.grafanaPublishedPort}:${backend.grafanaPort}`],
+      // La variable la lee el PROCESO de Grafana, no el compose: `$__env{…}` del archivo de
+      // provisioning se resuelve dentro del contenedor. Sin pasarla aquí, el contacto se
+      // provisiona con una URL vacía y la alerta no sale — sin error visible en ningún sitio.
       environment: {
+        [ALERTING.webhookVar]: `\${${ALERTING.webhookVar}:-${alertSinkEndpoint()}}`,
         // Sin esto, el Prometheus de la imagen ACEPTA los exemplars y los tira: no hay error, no
         // hay log, y el panel sale con los puntos de latencia pero sin el salto a la traza. Es el
         // último eslabón del camino del exemplar, y el único que falla en silencio.
@@ -709,6 +736,12 @@ export function publishedUrls(model) {
     // forma más rápida de ver si el provisioning funcionó —si el enlace da 404, no entraron—.
     urls.push({ label: 'Panel del servicio', url: `${grafana}/d/${dashboardUid(model)}` });
     urls.push({ label: 'Alertas', url: `${grafana}/alerting/list` });
+    // Lo que el contacto RECIBE. Es la diferencia entre «la alerta está configurada» y «la
+    // alerta salió»: aquí queda registrada cada entrega, con su cuerpo.
+    urls.push({
+      label: 'Alertas recibidas (sumidero)',
+      url: `http://localhost:\${${ALERTING.sink.portVar}:-${ALERTING.sink.publishedPort}}/__admin/requests`
+    });
   }
   return urls;
 }

@@ -129,6 +129,123 @@ export const METRICS_TRANSPORT = {
   otlp: { property: 'management.otlp.metrics.export.enabled', envVar: 'METRICS_EXPORT_OTLP' }
 };
 
+// ─── Las series del RUNTIME, que no son nuestras pero las consulta el panel ──
+//
+// Boot las publica ya en el mismo scrape y el panel no las enseñaba. Son la causa de buena parte
+// de los incidentes reales —un pool agotado, un heap que no baja—, y el equipo se enteraba por
+// una queja: las tres alertas que había son de NEGOCIO.
+//
+// Viven aquí por lo mismo que todo lo demás de este módulo: el nombre lo compone Micrometer, no
+// lo escribe nadie. Y el modo de fallo es el conocido — un panel con el nombre equivocado dentro
+// no falla, se queda VACÍO, y una alerta sobre una serie que nadie publica no dispara nunca.
+//
+// El POOL bifurca por modelo de persistencia, y es la asimetría de siempre: con `relational` lo
+// publica Hikari, con `document` el driver de Mongo. Emitir las celdas de Hikari en un proyecto
+// documental deja media fila vacía en el sitio donde se mira cuando algo va lento.
+
+/** Series de la JVM: las publica Boot en cualquier proyecto, con o sin persistencia. */
+export const RUNTIME_JVM = {
+  memoryUsed: 'jvm_memory_used_bytes',
+  memoryMax: 'jvm_memory_max_bytes',
+  // Histograma: se consulta por sus derivadas `_sum` y `_count`, nunca por el nombre pelado.
+  gcPause: 'jvm_gc_pause_seconds',
+  threads: 'jvm_threads_live_threads',
+  cpu: 'process_cpu_usage'
+};
+
+/**
+ * El pool de conexiones, por modelo de persistencia.
+ *
+ * <p>`saturation` es la serie sobre la que se alerta y no es la misma pregunta en las dos ramas,
+ * aunque se parezca: en Hikari es cuántos hilos están ESPERANDO una conexión, y en el driver de
+ * Mongo cuántos hay en la cola de espera del pool. Las dos contestan «alguien se quedó sin
+ * conexión», que es lo que precede a una caída por saturación.
+ */
+export const RUNTIME_POOL = {
+  relational: {
+    label: 'Hikari',
+    active: 'hikaricp_connections_active',
+    idle: 'hikaricp_connections_idle',
+    max: 'hikaricp_connections_max',
+    saturation: 'hikaricp_connections_pending'
+  },
+  document: {
+    label: 'driver de Mongo',
+    active: 'mongodb_driver_pool_checkedout',
+    idle: null,
+    max: 'mongodb_driver_pool_size',
+    saturation: 'mongodb_driver_pool_waitqueuesize'
+  }
+};
+
+/** El pool de ESTE modelo. Un modelo desconocido no cae en la rama relacional: no hay pool. */
+export function runtimePool(persistenceKind) {
+  return RUNTIME_POOL[persistenceKind] ?? null;
+}
+
+/**
+ * Todas las series de runtime que este proyecto puede publicar, con sus derivadas de histograma.
+ * De aquí salen el test de cruce y los casos de la sonda: una lista escrita a mano en cualquiera
+ * de los dos mediría una copia de sí misma.
+ */
+export function runtimeSeries(persistenceKind) {
+  const gc = promMetric(RUNTIME_JVM.gcPause.replace(/_seconds$/, ''));
+  const series = [
+    RUNTIME_JVM.memoryUsed,
+    RUNTIME_JVM.memoryMax,
+    RUNTIME_JVM.gcPause,
+    gc.bucket,
+    gc.sum,
+    gc.count,
+    `${RUNTIME_JVM.gcPause}_max`,
+    RUNTIME_JVM.threads,
+    RUNTIME_JVM.cpu
+  ];
+  const pool = runtimePool(persistenceKind);
+  if (pool) series.push(...[pool.active, pool.idle, pool.max, pool.saturation].filter(Boolean));
+  return series;
+}
+
+// ─── El RETRASO del consumidor, que solo un broker publica desde la aplicación ─
+//
+// `keel.message.consume` da ritmo y duración: cuántos mensajes se procesan y cuánto tardan. No da
+// RETRASO, y un consumidor que se queda atrás no mueve ninguna de las dos — procesa igual de
+// rápido, solo que cada vez más tarde. Nada dispara.
+//
+// Solo Kafka lo publica desde dentro de la aplicación: su cliente conoce el offset del final de
+// la partición, así que Micrometer puede restar. RabbitMQ y SNS/SQS no — el dato existe, pero en
+// el BROKER, y quien lo consulta no es el servicio.
+//
+// Por eso la tabla dice también qué mirar en su lugar. Un hueco sin explicación se lee como un
+// olvido y el siguiente que pase escribirá una consulta sobre una serie inexistente, que es el
+// único fallo que este vocabulario existe para no cometer.
+export const CONSUMER_LAG = {
+  kafka: {
+    // La aporta el MicrometerConsumerListener que instala Boot sobre la ConsumerFactory.
+    series: 'kafka_consumer_fetch_manager_records_lag',
+    // El lag se publica tras la ASIGNACIÓN de particiones, no al arrancar el listener.
+    tags: ['client_id', 'topic', 'partition'],
+    why: null,
+    instead: null
+  },
+  rabbitmq: {
+    series: null,
+    why: 'el consumidor de AMQP no sabe cuántos mensajes quedan por detrás: no hay offset que restar',
+    instead: 'la profundidad de la cola, que la publica el broker (plugin de management o rabbitmq_exporter)'
+  },
+  snssqs: {
+    series: null,
+    why: 'el retraso de una cola SQS vive en CloudWatch, no en el cliente',
+    instead: 'la métrica ApproximateAgeOfOldestMessage de CloudWatch sobre la cola'
+  }
+};
+
+/** ¿Publica este broker el retraso del consumidor desde la aplicación? */
+export function consumerLagFor(broker) {
+  const entry = CONSUMER_LAG[broker];
+  return entry?.series ? entry : null;
+}
+
 /**
  * El nombre de serie con el que se ve una observación en un motor de métricas, y sus derivadas de
  * histograma.
@@ -192,7 +309,23 @@ export const CASES = [
   { id: 'TEL-6', method: 'storageKeyIsNotALabel', subsystem: 'storage', title: 'la clave del objeto no sale como etiqueta' },
   { id: 'TEL-7', method: 'mailSpanExists', subsystem: 'mail', title: 'una entrega de correo deja su serie con su desenlace y sin el destinatario' },
   { id: 'TEL-8', method: 'cacheStatisticsExist', subsystem: 'cache', title: 'la caché publica su ratio de acierto (miss y luego hit)' },
-  { id: 'TEL-9', method: 'switchedOff', subsystem: 'storage', title: 'con el interruptor apagado la serie desaparece y la subida sigue funcionando' }
+  { id: 'TEL-9', method: 'switchedOff', subsystem: 'storage', title: 'con el interruptor apagado la serie desaparece y la subida sigue funcionando' },
+  // Las del RUNTIME. Las publica Boot y las consulta el panel, así que el vocabulario y el panel
+  // se comprueban entre ellos en `npm test` — o sea, el vocabulario contra sí mismo. Esto es lo
+  // único que lo compara contra el SERVIDOR.
+  { id: 'TEL-10', method: 'jvmSeriesExist', title: 'la JVM publica el heap y las pausas de GC que consulta la fila de runtime' },
+  {
+    id: 'TEL-11',
+    method: 'connectionPoolSeriesExist',
+    subsystem: 'pool',
+    title: 'el pool de ESTE modelo publica las series del panel y la de su alerta'
+  },
+  {
+    id: 'TEL-12',
+    method: 'consumerLagSeriesExists',
+    subsystem: 'consumerLag',
+    title: 'el consumidor publica su retraso, que es lo que ninguna otra serie dice'
+  }
 ];
 
 /** El `@DisplayName` de un caso: mismo id con el que se reporta. */
@@ -276,6 +409,82 @@ export function probeClass(spec) {
     }
 `
     : '';
+
+  // Las series del RUNTIME. La JVM las publica siempre; el pool, solo si el diseño persiste algo,
+  // y NO son las mismas en las dos ramas: Hikari en la relacional, el driver de Mongo en la
+  // documental. Por eso el caso se escribe desde `runtimePool()` y no con los nombres a mano.
+  const pool = runtimePool(spec.persistenceKind);
+  const poolCase =
+    subsystems.includes('pool') && pool
+      ? `
+    @Test
+    @DisplayName("${display('connectionPoolSeriesExist')}")
+    void connectionPoolSeriesExist() ${spec.persistenceKind === 'relational' ? 'throws java.sql.SQLException ' : ''}{
+        // Las series del pool no existen hasta que alguien PIDE una conexión: se registran al
+        // crearse el pool, no al arrancar el contexto. Sin esto, el caso mediría que todavía
+        // nadie tocó la base de datos y saldría rojo hablando del panel.
+        ${
+          spec.persistenceKind === 'relational'
+            ? `try (java.sql.Connection connection = dataSource.getConnection()) {
+            assertThat(connection.isValid(2)).isTrue();
+        }`
+            : `mongoTemplate.getDb().runCommand(new org.bson.Document("ping", 1));`
+        }
+        String exposition = scrape();
+        assertThat(exposition)
+                .as("el panel enseña las conexiones en uso del pool (${pool.label})")
+                .contains("${pool.active}");
+        assertThat(exposition)
+                .as("la alerta de saturación consulta esta serie: sin ella no dispara nunca")
+                .contains("${pool.saturation}");
+    }
+`
+      : '';
+
+  const lagSeries = consumerLagFor(spec.broker)?.series;
+  const lagCase =
+    subsystems.includes('consumerLag') && lagSeries
+      ? `
+    /**
+     * El retraso del consumidor, que es la serie que el panel y su alerta consultan.
+     *
+     * <p>El consumidor lo crea aquí la sonda a partir de la {@code ConsumerFactory} DE LA
+     * APLICACIÓN, y eso es lo que hace que el caso mida algo: quien publica la serie no es Kafka
+     * sino el listener de Micrometer que Boot instala sobre esa factoría, así que si esa
+     * instrumentación no estuviera activa en el contexto generado, el caso caería. Un consumidor
+     * construido con propiedades propias mediría una copia de sí mismo.
+     *
+     * <p>Lo que NO mide, y conviene que esté escrito: que el listener que escriba el agente use
+     * esa misma factoría. Eso lo dice la convención, y build no puede comprobarlo — en un
+     * proyecto recién generado no hay ningún listener todavía.
+     *
+     * <p>El topic es de la sonda y da igual cuál sea: la serie es por partición asignada, no por
+     * negocio. Se crea solo al suscribirse.
+     */
+    @Test
+    @DisplayName("${display('consumerLagSeriesExists')}")
+    void consumerLagSeriesExists() {
+        String exposition = "";
+        try (org.apache.kafka.clients.consumer.Consumer<?, ?> consumer =
+                consumerFactory.createConsumer("keel-telemetry-probe", "-probe")) {
+            consumer.subscribe(List.of("keel-telemetry-probe-topic"));
+            for (int intento = 0; intento < 60; intento++) {
+                // El poll es lo que provoca la asignación y la primera búsqueda: sin él no hay
+                // partición asignada y, por tanto, no hay retraso que publicar.
+                consumer.poll(java.time.Duration.ofSeconds(1));
+                exposition = scrape();
+                if (exposition != null && exposition.contains("${lagSeries}")) {
+                    break;
+                }
+            }
+        }
+        assertThat(exposition)
+                .as("sin esta serie el panel de retraso y su alerta consultan lo que nadie publica; "
+                        + "si el consumidor no llegó a asignarse, el rojo no habla del generador")
+                .contains("${lagSeries}");
+    }
+`
+      : '';
 
   return `package ${basePackage};
 
@@ -403,7 +612,24 @@ ${spec.fields}
         dispatchOne();
         assertThat(scrape()).doesNotContain("${promTag(ATTRIBUTES.correlationId)}=");
     }
-${storageCase}${mailCase}${cacheCase}
+    @Test
+    @DisplayName("${display('jvmSeriesExist')}")
+    void jvmSeriesExist() {
+        // La serie de pausas no existe hasta que ha ocurrido una recolección: sin provocarla, un
+        // contexto recién arrancado puede no haber tenido ninguna y el caso mediría la falta de
+        // tráfico, no la del panel.
+        System.gc();
+        String exposition = scrape();
+        assertThat(exposition).contains("${RUNTIME_JVM.memoryUsed}");
+        // El panel filtra por el área: sin la etiqueta, la consulta se queda vacía aunque la
+        // serie exista.
+        assertThat(exposition).contains("area=\\"heap\\"");
+        assertThat(exposition)
+                .as("sin las pausas de GC, media fila de runtime se queda vacía")
+                .contains("${promMetric(RUNTIME_JVM.gcPause.replace(/_seconds$/, '')).sum}");
+        assertThat(exposition).contains("${RUNTIME_JVM.threads}");
+    }
+${storageCase}${mailCase}${cacheCase}${poolCase}${lagCase}
     /**
      * Despacha un caso de uso REAL del diseño. El handler es un stub que lanza, y da igual: la
      * observación se abre antes de llamarlo y se cierra con su desenlace, que es justo lo que hay

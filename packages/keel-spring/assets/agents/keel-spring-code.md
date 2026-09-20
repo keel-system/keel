@@ -118,6 +118,10 @@ corto a romper un escenario que ya estaba en verde.
    propaga el contexto), y lo corriges antes de entregar en vez de dejárselo al pase de
    calidad. El `ERROR` se corrige lanzando la excepción del catálogo, no bajando el nivel: un
    `log.error` en un handler suele acompañar a un fallo que se traga.
+   Si el proyecto tiene telemetría, ejecuta también `bash infra/check-telemetry.sh`: veta una
+   etiqueta de métrica con una clave fuera del vocabulario. Es el hallazgo más fácil de dejar
+   pasar porque no produce ningún síntoma —nada falla y ningún escenario se pone rojo—, y la
+   corrección es mover el dato al span con `addHighCardinalityKeyValue`.
 5. Con la compilación en verde, haz la **revisión mecánica final** de
    `{{keel:docs}}/conventions/flow-fidelity.md` (binding contra la ruta declarada, ciclos
    en los mappers, un solo `ObjectMapper` por comportamiento, claims y credenciales
@@ -276,6 +280,7 @@ bloque estructurado que consume el orquestador:
 status: OK | KO          # OK solo con la compilación en verde y sin bloqueos
 compiles: true | false
 logging: OK | KO         # resultado de `bash infra/check-logging.sh` al entregar
+cardinality: OK | KO | N/A  # resultado de `bash infra/check-telemetry.sh`; N/A sin telemetría
 layersCompleted: [...]
 failures: [...]          # errores de compilación/empaquetado: archivo:línea y causa.
                          # Si te relanzaron con escenarios en FALLO, qué corregiste de cada uno

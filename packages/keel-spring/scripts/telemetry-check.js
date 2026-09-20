@@ -44,17 +44,19 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadService } from 'keel-core';
-import { scaffoldService } from '../src/scaffold/index.js';
+import { resolveStack, scaffoldService } from '../src/scaffold/index.js';
 import { tmpDir } from '../test/helpers/tmp.js';
 import {
   CASES,
   DOUBLES_CLASS,
   PROBE_CLASS,
   SWITCH_CLASS,
+  consumerLagFor,
   doublesClass,
   probeClass,
   switchClass
 } from '../src/lib/telemetry-probes.js';
+import { OBSERVABILITY_DIR } from '../src/lib/stack-catalog.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixturesDir = path.join(here, '..', 'test', 'fixtures');
@@ -132,7 +134,7 @@ function walk(dir, found = []) {
   return found;
 }
 
-function readProjectSpec(projectDir) {
+function readProjectSpec(projectDir, stack) {
   const mainDir = path.join(projectDir, 'src', 'main', 'java');
   const files = walk(mainDir);
   const byName = (suffix) => files.filter((file) => file.endsWith(suffix));
@@ -162,9 +164,34 @@ function readProjectSpec(projectDir) {
   // DOCUMENTAL el source set de pruebas trae flapdoodle para el perfil `test`, y su
   // autoconfiguración levanta un mongod embebido. Sin excluirla, la sonda mediría una base en
   // memoria —y saldría en VERDE sin haber tocado el contenedor que acabamos de levantar—.
-  if (byName('MongoTransactionConfig.java').length > 0 || files.some((file) => file.endsWith('MongoRepository.java'))) {
+  const documental =
+    byName('MongoTransactionConfig.java').length > 0 || files.some((file) => file.endsWith('MongoRepository.java'));
+  if (documental) {
     spec.excludeAutoConfig = 'de.flapdoodle.embed.mongo.spring.autoconfigure.EmbeddedMongoAutoConfiguration';
   }
+
+  // El modelo de persistencia decide QUÉ pool publica series: Hikari o el del driver de Mongo.
+  // Se lee del árbol, como todo lo demás: una lista de fixtures por modelo caduca en silencio.
+  spec.persistenceKind = documental ? 'document' : files.some((file) => file.endsWith('Jpa.java')) ? 'relational' : null;
+  if (spec.persistenceKind) spec.subsystems.push('pool');
+
+  // El broker sale del stack YA RESUELTO (con sus defaults), no de uno escrito aquí: quien lo
+  // resuelve es el mismo `resolveStack` con el que se generó el árbol.
+  spec.broker = stack?.broker ?? null;
+
+  // Y la aplicabilidad del retraso se pregunta AL PANEL: si el panel generado no consulta la
+  // serie, no hay nada que medir — y si la consulta, medirla es obligatorio. Con dos criterios
+  // (uno aquí y otro en observability-assets.js) el día que diverjan el panel pediría una serie
+  // que la sonda ya no mira.
+  const lagSeries = consumerLagFor(spec.broker)?.series;
+  const dashboards = path.join(projectDir, 'deploy', OBSERVABILITY_DIR, 'dashboards');
+  const panelQueries = fs.existsSync(dashboards)
+    ? fs
+        .readdirSync(dashboards)
+        .map((name) => fs.readFileSync(path.join(dashboards, name), 'utf8'))
+        .join('\n')
+    : '';
+  if (lagSeries && panelQueries.includes(lagSeries)) spec.subsystems.push('consumerLag');
 
   const policies = byName('StoragePolicies.java')[0];
   if (policies) {
@@ -198,6 +225,21 @@ function readProjectSpec(projectDir) {
 
   spec.imports = [];
   spec.fields = '';
+  if (spec.subsystems.includes('pool')) {
+    if (spec.persistenceKind === 'relational') {
+      spec.imports.push('javax.sql.DataSource');
+      spec.fields += '\n\n    @Autowired\n    private DataSource dataSource;';
+    } else {
+      spec.imports.push('org.springframework.data.mongodb.core.MongoTemplate');
+      spec.fields += '\n\n    @Autowired\n    private MongoTemplate mongoTemplate;';
+    }
+  }
+  if (spec.subsystems.includes('consumerLag')) {
+    // La factoría DE LA APLICACIÓN: es la que lleva puesto el listener de Micrometer, y por eso
+    // el caso mide el contexto generado y no a Kafka.
+    spec.imports.push('org.springframework.kafka.core.ConsumerFactory');
+    spec.fields += '\n\n    @Autowired\n    private ConsumerFactory<?, ?> consumerFactory;';
+  }
   if (spec.subsystems.includes('storage')) {
     spec.imports.push(`${basePackage}.domain.storage.FileStorage`);
     spec.fields += '\n\n    @Autowired\n    private FileStorage fileStorage;';
@@ -353,19 +395,22 @@ let results = [];
 let fatal = null;
 
 try {
+  // El stack se resuelve UNA vez y se pasa tal cual: así el árbol generado y la sonda hablan del
+  // mismo broker y del mismo motor, sin que ninguno de los dos vuelva a aplicar defaults.
+  const stack = resolveStack({ telemetry: 'otel' }, service.layers, service.manifest);
   scaffoldService({
     manifest: service.manifest,
     layers: service.layers,
     workspace,
     force: true,
-    stack: { telemetry: 'otel' }
+    stack
   });
   const projectName = fs
     .readdirSync(path.join(workspace, 'services'), { withFileTypes: true })
     .find((entry) => entry.isDirectory()).name;
   projectDir = path.join(workspace, 'services', projectName);
 
-  const spec = readProjectSpec(projectDir);
+  const spec = readProjectSpec(projectDir, stack);
   console.log(`sonda sobre ${fixture}: subsistemas ${spec.subsystems.join(', ') || '(ninguno)'}`);
   writeProbes(projectDir, spec);
 
