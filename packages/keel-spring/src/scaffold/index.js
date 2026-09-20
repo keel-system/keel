@@ -183,7 +183,22 @@ export function resolveStack(stack, layers, manifest) {
   };
 }
 
-export function scaffoldService({ manifest, layers, workspace, force = false, stack = null, mode = null, prune = false }) {
+/**
+ * Todo lo que hay que resolver para generar, SIN tocar disco: el stack normalizado, el
+ * modelo con sus avisos y el árbol de archivos ya renderizado en memoria.
+ *
+ * Existe aparte porque hay dos consumidores con intenciones distintas. `scaffoldService`
+ * lo usa para escribir; `keel-spring check` lo usa para no escribir — y el valor de esa
+ * segunda pasada es justo lo que esta función incluye: `buildModel` cosecha en
+ * `model.warnings` las familias cuya causa raíz está en el DISEÑO (el rescate sin reloj,
+ * la reconciliación con dos entidades esperando, la llamada sin method/path), y
+ * `generate()` revienta si una plantilla no cuadra. Las dos cosas se descubrían solo al
+ * generar, o sea con el diseño ya dado por cerrado y el stack ya elegido.
+ *
+ * No lee nada del proyecto generado —ni manifiesto, ni digests— a propósito: eso es
+ * estado del destino, y aquí todavía no hay destino.
+ */
+export function planService({ manifest, layers, workspace, stack = null }) {
   const resolved = resolveStack(stack, layers, manifest);
   const model = buildModel({ manifest, layers, stack: resolved });
   model.stack = resolved;
@@ -195,9 +210,12 @@ export function scaffoldService({ manifest, layers, workspace, force = false, st
   // —el reclamo sigue siendo correcto— pero el diseñador tiene que saberlo antes de
   // desplegar replicado, que es lo único que hace un barrido.
   warnUnsupportedDialect(model);
-  const outDir = path.join('services', model.service.projectName);
+  return { model, stack: resolved, files: GENERATORS.flatMap((generator) => generator.generate(model)) };
+}
 
-  const files = GENERATORS.flatMap((generator) => generator.generate(model));
+export function scaffoldService({ manifest, layers, workspace, force = false, stack = null, mode = null, prune = false }) {
+  const { model, stack: resolved, files } = planService({ manifest, layers, workspace, stack });
+  const outDir = path.join('services', model.service.projectName);
   const projectDir = path.join(workspace, outDir);
 
   // Clasificar ANTES de escribir: es lo que separa «este archivo es mío y me he

@@ -4,7 +4,7 @@ import YAML from 'yaml';
 import Ajv2020Module from 'ajv/dist/2020.js';
 import { schemaPathFor } from './assets.js';
 import { obligationFor } from './obligations.js';
-import { DECISIONS_FILE } from './spec-files.js';
+import { DECISIONS_FILE, REVIEW_FILE } from './spec-files.js';
 
 const Ajv2020 = Ajv2020Module.default ?? Ajv2020Module;
 
@@ -37,6 +37,19 @@ export function loadDecisions(dir) {
     return { doc: null, errors: [`${DECISIONS_FILE}: YAML inválido — ${error.message}`] };
   }
   if (doc == null) return { doc: null, errors: [] };
+
+  // `coverage` se mudó a `review.yaml`. Como el schema cierra `additionalProperties`, un
+  // archivo anterior a la mudanza falla con un Ajv opaco («must NOT have additional
+  // properties») que no dice ni qué propiedad ni a dónde se fue. Se contesta antes.
+  if (Object.hasOwn(doc, 'coverage')) {
+    return {
+      doc: null,
+      errors: [
+        `${DECISIONS_FILE}: 'coverage' se mudó a ${REVIEW_FILE} — «qué se miró» pertenece al archivo de la ` +
+          `revisión, no al de lo que se aceptó. Mueve el bloque tal cual; el formato no cambia`
+      ]
+    };
+  }
 
   const schemaErrors = checkSchema(doc);
   if (schemaErrors.length > 0) {

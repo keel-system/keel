@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schema/2.0/design-gaps.schema.json",
+  "title": "Keel Design Gaps",
+  "description": "Los huecos del diseño que encontró la generación, escritos por el cierre del pipeline en la raíz del proyecto generado (design-gaps.yaml). No forma parte del DSL y no describe el servicio: es lo que los agentes no pudieron resolver sin cambiar el diseño, en un formato que el workspace pueda leer. Existe porque hasta ahora esos hallazgos se consolidaban en un informe en prosa dentro del proyecto y volvían al diseñador a mano — o no volvían: el mismo hueco reportado cuatro corridas seguidas es lo que motivó el catálogo de obligaciones.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["service", "version", "gaps"],
+  "properties": {
+    "service": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Nombre del servicio, tal como lo declara su manifiesto."
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "service.version del snapshot desde el que se generó. Es el sello: cuando el diseño avanza de minor o major, estos huecos describen un diseño que ya no existe y hay que releerlos antes de darlos por vigentes."
+    },
+    "generator": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Qué generador los encontró (ej. 'keel-spring'). Un hueco puede ser específico de lo que un stack necesita, y saber cuál lo dijo es parte del hallazgo."
+    },
+    "gaps": {
+      "type": "array",
+      "description": "Un hueco por entrada. Solo lo irresoluble sin cambiar el diseño o la infraestructura: un hueco con fallback disponible se implementa, no se reporta.",
+      "items": {
+        "type": "object",
+        "required": ["layer", "kind", "proposal"],
+        "additionalProperties": false,
+        "properties": {
+          "layer": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Capa del DSL donde se corrige (ej. 'use-cases')."
+          },
+          "unit": {
+            "type": "string",
+            "minLength": 1,
+            "description": "La unidad concreta: la operación, la entidad, la dependencia."
+          },
+          "kind": {
+            "enum": ["missing", "contradiction", "undeclared"],
+            "description": "missing: el diseño no dice algo que hace falta. contradiction: dos artefactos dicen cosas distintas. undeclared: un desenlace observable que el diseño no nombra (el caso de framework-errors.md)."
+          },
+          "proposal": {
+            "type": "string",
+            "minLength": 20,
+            "description": "El cambio concreto propuesto al artefacto. No «falta idempotencia» sino qué declarar y dónde: un hallazgo sin propuesta deja al diseñador el mismo trabajo de diagnóstico que ya hizo el agente."
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Qué agente lo encontró."
+          },
+          "scenario": {
+            "type": "string",
+            "pattern": "^FL-[A-Za-z0-9-]+$",
+            "description": "El escenario que lo destapó, si lo hubo."
+          }
+        }
+      }
+    }
+  }
+}

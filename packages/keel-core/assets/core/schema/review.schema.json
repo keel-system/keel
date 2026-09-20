@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schema/2.0/review.schema.json",
+  "title": "Keel Design Review",
+  "description": "El veredicto de la revisión semántica de este servicio, por id (review.yaml, junto a las capas). No forma parte del DSL: no describe lo que el servicio hace, sino qué se miró al revisarlo y con qué resultado. Es lo que distingue un diseño revisado de uno del que nadie miró la mitad — sin él, las dos cosas se escriben igual, y la revisión se pierde con la conversación en la que se hizo.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["reviewedAt"],
+  "properties": {
+    "reviewedAt": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "service.version que se revisó. Cuando el diseño cambia de minor o de major, la revisión caduca y hay que rehacerla: lo que se juzgó puede haber dejado de ser cierto. Misma regla que las aceptaciones de decisions.yaml."
+    },
+    "findings": {
+      "type": "array",
+      "description": "Un veredicto por id aplicable. Lo que no está aquí no es «limpio»: es «nadie lo miró», y la CLI lo reporta como cobertura incompleta.",
+      "items": {
+        "type": "object",
+        "required": ["id", "verdict"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^REV-[A-Z0-9-]+$",
+            "description": "Id del catálogo de revisión. Uno que el catálogo no tenga es un error: sin entrada no hay pregunta que contestar."
+          },
+          "scope": {
+            "type": "string",
+            "minLength": 1,
+            "description": "A qué parte del diseño se refiere el veredicto, si no es a toda la capa (ej. 'domain.entities.Invoice'). Opcional: el id ya trae su ámbito."
+          },
+          "verdict": {
+            "enum": ["ok", "fixed", "accepted", "open"],
+            "description": "ok: se miró y no hay hallazgo. fixed: había hallazgo y se corrigió en el diseño. accepted: hay hallazgo y se acepta a sabiendas, con su motivo. open: hay hallazgo sin resolver — bloquea. NO existe 'n/a': la aplicabilidad la decide el catálogo, y si el lector cree que no aplica, eso es 'accepted' con su motivo. Es lo que impide que «no aplica» se convierta en la salida barata."
+          },
+          "note": {
+            "type": "string",
+            "minLength": 20,
+            "description": "Qué se miró y qué se concluyó. Obligatoria salvo en 'ok'. Es lo único que distingue una revisión de una casilla marcada, así que una frase que no diga nada no vale de nada."
+          }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "verdict": { "enum": ["accepted", "open", "fixed"] } }, "required": ["verdict"] },
+            "then": { "required": ["note"] }
+          }
+        ]
+      }
+    },
+    "coverage": {
+      "type": "array",
+      "description": "Qué clases del análisis de huecos se recorrieron y sobre qué unidades. Sin esta tabla, una clase que se recorrió y salió limpia es indistinguible de una que nadie miró. Vivía en decisions.schema.json, donde nadie la leía: está aquí porque «qué se miró» pertenece al archivo de la revisión, no al de lo que se aceptó.",
+      "items": {
+        "type": "object",
+        "required": ["gapClass", "units", "result"],
+        "additionalProperties": false,
+        "properties": {
+          "gapClass": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 17,
+            "description": "Clase de gap-analysis.md (1..17)."
+          },
+          "units": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "minLength": 1 },
+            "description": "Unidades del diseño sobre las que se aplicó la clase (entidades, operaciones, dependencias)."
+          },
+          "result": {
+            "enum": ["clean", "findings"],
+            "description": "clean: se recorrió y no encontró nada. findings: encontró, y lo encontrado está en findings, en decisions.yaml o cerrado en el DSL."
+          }
+        }
+      }
+    }
+  }
+}

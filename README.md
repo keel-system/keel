@@ -276,6 +276,9 @@ keel validate specs/mi-servicio              # schemas por capa + referencias cr
 #   /keel-docs specs/mi-servicio             → openapi.yaml, asyncapi.yaml, Postman y overview.html
 #   /keel-handoff specs/mi-servicio          → regenera DESIGN.md + índice si el spec cambió
 
+# Antes de cerrar: preguntarle al generador si puede con el diseño (no escribe nada).
+keel-spring check specs/mi-servicio   # qué no materializa, y qué deja como trabajo del agente
+
 # Generar: dos pasos, con un cd en medio.
 keel-spring build specs/mi-servicio   # valida, pregunta el stack y genera services/mi-servicio-spring/
 cd services/mi-servicio-spring

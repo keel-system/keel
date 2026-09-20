@@ -23,8 +23,3 @@ decisions:
       El conflicto de escritura concurrente se contesta con el canónico
       409 CONCURRENT_MODIFICATION; ninguna operación necesita un code propio para él.
     since: 1.0.0
-
-coverage:
-  - gapClass: 4
-    units: [createReservation, cancelReservation, noteStockCount]
-    result: findings

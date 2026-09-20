@@ -17,6 +17,7 @@ import path from 'node:path';
 export const SIDECAR_FILE = 'design.yaml';
 export const DECISIONS_FILE = 'decisions.yaml';
 export const SCENARIOS_FILE = 'validation-scenarios.md';
+export const REVIEW_FILE = 'review.yaml';
 
 /**
  * - `publish` — entra en el `files[]` del índice, que es exactamente lo que
@@ -33,6 +34,11 @@ export const SCENARIOS_FILE = 'validation-scenarios.md';
 export const SPEC_SIDE_FILES = [
   { file: SIDECAR_FILE, publish: true, derive: false },
   { file: DECISIONS_FILE, publish: true, derive: true },
+  // `review.yaml` viaja por lo mismo que `decisions.yaml` y con el mismo desenlace: llega
+  // CADUCADO. Al derivar, el manifiesto se resetea a 0.1.0, así que la revisión del origen
+  // queda de otra versión y hay que rehacerla — que es lo correcto, porque un diseño
+  // derivado es otro diseño y lo que se juzgó del original no vale automáticamente aquí.
+  { file: REVIEW_FILE, publish: true, derive: true },
   { file: SCENARIOS_FILE, publish: 'derivative', derive: 'rewrite' }
 ];
 

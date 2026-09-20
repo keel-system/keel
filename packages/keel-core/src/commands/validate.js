@@ -4,6 +4,7 @@ import YAML from 'yaml';
 import pc from 'picocolors';
 import { MANIFEST_FILE, resolveServiceDir } from '../lib/loader.js';
 import { validateService } from '../lib/validate-service.js';
+import { REVIEW_FILE } from '../lib/spec-files.js';
 import { DECISIONS_FILE } from '../lib/decisions.js';
 
 function printSchemaErrors(file, ajvErrors) {
@@ -59,7 +60,7 @@ export function validate(inputPath, options = {}) {
     return;
   }
 
-  const { manifest, layers, loadErrors, schemaErrors, crossRefErrors, warnings, pending, obligations } =
+  const { manifest, layers, loadErrors, schemaErrors, crossRefErrors, warnings, pending, obligations, reviews } =
     validateService(dir, { wip });
 
   if (loadErrors.length > 0 && !manifest) {
@@ -125,6 +126,52 @@ export function validate(inputPath, options = {}) {
     if (obligations.errors.length > 0 || sinCerrar.length > 0) {
       process.exitCode = 1;
       return;
+    }
+  }
+
+  // La revisión semántica. Mismo reparto tipográfico que las decisiones, y por el mismo
+  // motivo: tampoco es un error del diseño, es lo que alguien miró y lo que no.
+  if (!wip) {
+    if (reviews.errors.length > 0) {
+      console.error(pc.bold(pc.red(`✘ ${REVIEW_FILE} — ${reviews.errors.length} error(es):`)));
+      for (const message of reviews.errors) console.error(`  ${pc.red('•')} ${message}`);
+    }
+    if (reviews.open.length > 0) {
+      console.error(pc.bold(pc.red(`✘ Revisión con hallazgos abiertos — ${reviews.open.length}:`)));
+      for (const item of reviews.open) {
+        console.error(`  ${pc.red('•')} ${pc.cyan(item.id)} ${item.title}`);
+        if (item.note) console.error(pc.dim(`    ${item.note}`));
+      }
+    }
+    if (reviews.errors.length > 0 || reviews.open.length > 0) {
+      process.exitCode = 1;
+      return;
+    }
+    // Lo que falta por revisar NO bloquea todavía, pero se dice en voz alta y con el
+    // número delante: un diseño revisado a medias y uno revisado entero se escriben
+    // igual, y esta línea es lo único que los distingue.
+    if (reviews.missing.length > 0) {
+      const total = reviews.missing.length + reviews.covered.length;
+      console.warn(
+        `${pc.yellow('⚠')} Revisión semántica incompleta: ${reviews.covered.length}/${total} ids con veredicto en ${REVIEW_FILE}. ` +
+          `Ejecuta /keel-validate para recorrer los ${reviews.missing.length} que faltan`
+      );
+      for (const item of reviews.missing.slice(0, 5)) {
+        console.warn(pc.dim(`    ${item.id} — ${item.title}`));
+      }
+      if (reviews.missing.length > 5) console.warn(pc.dim(`    …y ${reviews.missing.length - 5} más`));
+    }
+    if (reviews.stale) {
+      console.warn(
+        `${pc.yellow('⚠')} ${REVIEW_FILE}: la revisión es de la v${reviews.reviewedAt} y el diseño va por ` +
+          `v${manifest?.service?.version} — lo que se juzgó puede haber dejado de ser cierto; rehazla`
+      );
+    }
+    for (const entry of reviews.orphans) {
+      console.warn(
+        `${pc.yellow('⚠')} ${REVIEW_FILE}: '${entry.id}' ya no aplica a este diseño — el veredicto describe una ` +
+          'pregunta que este servicio no se hace; bórralo'
+      );
     }
   }
 

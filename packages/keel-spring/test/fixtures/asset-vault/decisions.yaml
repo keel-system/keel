@@ -22,8 +22,3 @@ decisions:
       negocio —de quién es el archivo—, no la identidad de quien hace la petición, y
       confundirlos habría atado la propiedad del activo a la credencial que lo subió.
     since: 1.0.0
-
-coverage:
-  - gapClass: 4
-    units: [uploadAsset]
-    result: findings

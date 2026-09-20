@@ -44,6 +44,24 @@ atrás en una versión anterior y cuáles sobran. Ese inventario es el mapa de l
 regenerar al final; léelo **antes** de tocar nada, porque un derivado que ya estaba desactualizado
 antes de tu cambio también entra en la cascada.
 
+**Y mira qué encontró la generación sobre este diseño.** Si el servicio ya tiene un servidor
+generado, su raíz trae un `design-gaps.yaml` con los huecos que los agentes no pudieron
+resolver sin cambiar el diseño — cada uno con la capa, la unidad y el cambio propuesto.
+Léelos aquí: son hallazgos que costaron una corrida entera de agentes contra infraestructura
+real, y es la única oportunidad de cerrarlos donde se corrigen. `keel-<tech> check
+specs/<servicio>` los imprime desde el workspace sin abrir el proyecto.
+
+Cada hueco vigente —los que llevan la `version` actual del diseño— acaba en uno de tres
+sitios, y la sesión no cierra dejando ninguno sin tocar:
+
+- **cambia el DSL**, y entonces la versión sube y el sello del archivo lo deja atrás solo;
+- **se acepta por escrito** en `decisions.yaml`, si corresponde a una obligación del catálogo;
+- **se contesta como revisión** en `review.yaml`, con su veredicto y su nota.
+
+Es aviso y no obligación: la autoridad para juzgarlos es del diseñador, no del generador que
+los reportó. Lo que no vale es dejarlos donde están — el mismo hueco reportado cuatro
+corridas seguidas es lo que motivó el catálogo de obligaciones.
+
 Pregunta qué cambia y **tradúcelo a capas afectadas antes de editar**, siguiendo el grafo de
 dependencias entre capas (`docs/methodology.md § Diseño por capas`):
 

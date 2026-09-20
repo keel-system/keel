@@ -14,7 +14,7 @@ Distinción operativa:
 
 | | Qué busca | Quién |
 |---|---|---|
-| `keel validate` | referencias rotas, schema incumplido | CLI (mecánico) |
+| `keel validate` | referencias rotas, schema incumplido, y la calidad de lo declarado que se deriva del YAML | CLI (mecánico) |
 | `/keel-validate` nivel 3 | calidad y coherencia de lo que **está** declarado | checklist semántica |
 | **Análisis de huecos** | lo que **falta** decidir, y nadie echa de menos | este documento |
 

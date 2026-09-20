@@ -107,7 +107,7 @@ test('per-aggregate sin aggregates declarados es error, incluso con --wip', () =
   const layers = {
     domain,
     'use-cases': {},
-    persistence: { default: { model: 'relational' }, entities: { Order: {} }, consistency: { transactionalBoundary: 'per-aggregate' } },
+    persistence: { default: { model: 'relational' }, entities: { Order: {}, Catalog: {} }, consistency: { transactionalBoundary: 'per-aggregate' } },
   };
   for (const wip of [false, true]) {
     const { errors } = run(layers, wip);
@@ -119,7 +119,7 @@ test('per-aggregate con aggregates declarados es válido', () => {
   const layers = {
     domain: baseDomain(),
     'use-cases': {},
-    persistence: { default: { model: 'relational' }, entities: { Order: {} }, consistency: { transactionalBoundary: 'per-aggregate' } },
+    persistence: { default: { model: 'relational' }, entities: { Order: {}, Catalog: {} }, consistency: { transactionalBoundary: 'per-aggregate' } },
   };
   const { errors } = run(layers);
   assert.deepEqual(errors, []);
@@ -130,7 +130,7 @@ test('per-aggregate con aggregates declarados es válido', () => {
 const withLocking = (policy, domain = baseDomain()) => ({
   domain,
   'use-cases': {},
-  persistence: { default: { model: 'relational' }, entities: { Order: {} }, consistency: { optimisticLocking: policy } },
+  persistence: { default: { model: 'relational' }, entities: { Order: {}, Catalog: {} }, consistency: { optimisticLocking: policy, transactionalBoundary: 'per-aggregate' } },
 });
 
 test("optimisticLocking 'declared' sin ninguna raíz que declare lockVersion avisa: equivale a none", () => {
@@ -160,7 +160,7 @@ test("optimisticLocking 'all' y 'none' no exigen nada del dominio", () => {
 const withAudit = (audit, domain = baseDomain(), extra = {}) => ({
   domain,
   'use-cases': {},
-  persistence: { default: { model: 'relational' }, entities: { Order: {} }, audit },
+  persistence: { default: { model: 'relational' }, entities: { Order: {}, Catalog: {} }, audit, consistency: { transactionalBoundary: 'per-aggregate' } },
   ...extra,
 });
 
@@ -603,9 +603,13 @@ const domainWithFile = (bucket = 'productImages') => ({
 const storageLayer = (...bucketNames) => ({
   // `signedUrlTtlSeconds` porque estos buckets son privados por default: sin él, el
   // aviso de «la URL firmada caduca y el diseño no dice cuándo» ensucia toda fixture
-  // que solo quiera hablar de otra cosa.
+  // que solo quiera hablar de otra cosa. `maxSizeMb`, por lo mismo desde que el tope
+  // de subida también se echa de menos.
   buckets: Object.fromEntries(
-    bucketNames.map((name) => [name, { allowedContentTypes: ['image/png'], signedUrlTtlSeconds: 900 }])
+    bucketNames.map((name) => [
+      name,
+      { allowedContentTypes: ['image/png'], signedUrlTtlSeconds: 900, maxSizeMb: 10 }
+    ])
   ),
 });
 
@@ -671,7 +675,7 @@ test('bucket declarado sin ningún campo file que lo referencie es warning', () 
 
 const domainForMessaging = () => ({ entities: { Product: entity() } });
 const useCasesForMessaging = () => ({
-  operations: { retireProduct: { kind: 'command', emits: ['ProductRetired'] } },
+  operations: { retireProduct: { kind: 'command', emits: ['ProductRetired'], errors: [{ code: 'PRODUCT_NOT_FOUND', when: 'No existe el producto.', http: 404 }] } },
 });
 
 test('evento y suscripción cuyo canal existe en channels no produce errores ni warnings', () => {
@@ -682,7 +686,7 @@ test('evento y suscripción cuyo canal existe en channels no produce errores ni 
       channels: { productEvents: {}, inventoryEvents: {} },
       publishing: { events: { ProductRetired: { channel: 'productEvents', payload: {} } } },
       subscriptions: {
-        StockDepleted: { source: 'inventory-service', channel: 'inventoryEvents', payload: {}, triggers: 'retireProduct' },
+        StockDepleted: { source: 'inventory-service', channel: 'inventoryEvents', payload: {}, triggers: 'retireProduct', onFailure: { retry: { maxAttempts: 3 } } },
       },
     },
   };
@@ -752,6 +756,7 @@ const useCasesForContract = () => ({
     retireProduct: {
       kind: 'command',
       input: { fields: { productId: { type: 'uuid', required: true }, reason: { type: 'string' } } },
+      errors: [{ code: 'PRODUCT_NOT_FOUND', when: 'No existe el producto.', http: 404 }],
     },
   },
 });
@@ -773,6 +778,7 @@ const contractLayers = (subOverrides = {}, channelOverrides = {}) => ({
         },
         payload: { productId: { type: 'uuid', required: true, wireName: 'product_id' } },
         triggers: 'retireProduct',
+        onFailure: { retry: { maxAttempts: 1 } },
         ...subOverrides,
       },
     },
@@ -1254,12 +1260,18 @@ const domainForHttp = () => ({
   entities: { Product: entity() },
 });
 
+// `timeoutMs` se inyecta por defecto: desde que existe el aviso de llamada sin tope, una
+// fixture que no lo declare emite uno legítimo y ajeno a lo que el caso mide. Se pone
+// aquí y no en cada caso para que los que SÍ quieran medirlo puedan pasarlo a null.
 const httpLayers = (call) => ({
   domain: domainForHttp(),
   'use-cases': {},
   'http-clients': {
     clients: {
-      'pricing-service': { purpose: 'Precios vigentes por SKU', calls: { getPrice: call } },
+      'pricing-service': {
+        purpose: 'Precios vigentes por SKU',
+        calls: { getPrice: { timeoutMs: 2000, ...call } },
+      },
     },
   },
 });
@@ -1405,7 +1417,7 @@ test('messaging sin channels ni channel sigue validando limpio (retrocompatibili
     messaging: {
       publishing: { events: { ProductRetired: { payload: {} } } },
       subscriptions: {
-        StockDepleted: { source: 'inventory-service', payload: {}, triggers: 'retireProduct' },
+        StockDepleted: { source: 'inventory-service', payload: {}, triggers: 'retireProduct', onFailure: { retry: { maxAttempts: 3 } } },
       },
     },
   };
@@ -1587,6 +1599,7 @@ const depsLayers = () => ({
         source: 'catalog',
         payload: { productId: { type: 'uuid', required: true }, price: { type: 'decimal', required: true } },
         triggers: 'applyProductSnapshot',
+        onFailure: { retry: { maxAttempts: 3 } },
       },
     },
   },
@@ -1594,7 +1607,7 @@ const depsLayers = () => ({
     clients: {
       catalog: {
         purpose: 'Resolver la información de productos al construir pedidos.',
-        calls: { getProductsByIds: { contract: 'POST /internal/products/batch-get -> lista de productos.' } },
+        calls: { getProductsByIds: { timeoutMs: 2000, contract: 'POST /internal/products/batch-get -> lista de productos.' } },
       },
     },
   },
@@ -1814,7 +1827,7 @@ test('cliente http que ningún need usa es warning', () => {
   const layers = depsLayers();
   layers['http-clients'].clients.shipping = {
     purpose: 'Calcular los gastos de envío del pedido.',
-    calls: { quote: { contract: 'POST /quotes -> coste de envío.' } },
+    calls: { quote: { timeoutMs: 2000, contract: 'POST /quotes -> coste de envío.' } },
   };
   const { warnings } = run(layers);
   assert.ok(warnings.some((w) => w.includes('clients.shipping: ningún need ni activación de dependencies lo usa')));
@@ -1867,7 +1880,7 @@ const activationLayers = () => ({
     clients: {
       notifications: {
         purpose: 'Encargar el envío de avisos al comprador.',
-        calls: { sendEmail: { contract: 'POST /emails -> acuse del encargo.' } },
+        calls: { sendEmail: { timeoutMs: 2000, contract: 'POST /emails -> acuse del encargo.' } },
       },
     },
   },
@@ -2023,7 +2036,7 @@ const fileReadLayers = (errors = []) => ({
       },
     },
   },
-  storage: { buckets: { images: { visibility: 'private', signedUrlTtlSeconds: 900 } } },
+  storage: { buckets: { images: { visibility: 'private', signedUrlTtlSeconds: 900, maxSizeMb: 10 } } },
 });
 
 test('operación que devuelve un archivo sin error de ausencia es warning', () => {
@@ -2071,6 +2084,9 @@ const apiLayers = (endpoint, opOverrides = {}) => ({
         kind: 'query',
         input: { fields: { sku: { type: 'string' } } },
         output: { entity: 'Product' },
+        // Por si opOverrides lo convierte en command: un command expuesto sin ningún
+        // error declarado emite su propio aviso, ajeno a lo que estos casos miden.
+        errors: [{ code: 'PRODUCT_NOT_FOUND', when: 'No existe el producto.', http: 404 }],
         ...opOverrides,
       },
     },
@@ -2272,7 +2288,7 @@ test('un output sin paginated no dispara nada', () => {
 test('evento publicado que ninguna operación emite es warning', () => {
   const layers = {
     domain: { entities: { Product: entity() } },
-    'use-cases': { operations: { retireProduct: { kind: 'command', input: 'void', output: 'void' } } },
+    'use-cases': { operations: { retireProduct: { kind: 'command', input: 'void', output: 'void', errors: [{ code: 'PRODUCT_NOT_FOUND', when: 'No existe el producto.', http: 404 }] } } },
     messaging: { publishing: { events: { ProductRetired: { payload: {} } } } },
   };
   const { errors, warnings } = run(layers);
@@ -2723,6 +2739,7 @@ const compLayers = () => ({
         input: { fields: { productId: { type: 'uuid', required: true } } },
         output: 'void',
         transitions: [{ entity: 'Product', from: ['draft'], to: 'active' }],
+        errors: [{ code: 'PRODUCT_NOT_FOUND', when: 'No existe el producto.', http: 404 }],
       },
       retireProduct: {
         description: 'Retira un producto del catálogo.',
@@ -2730,6 +2747,7 @@ const compLayers = () => ({
         input: { fields: { productId: { type: 'uuid', required: true } } },
         output: 'void',
         transitions: [{ entity: 'Product', from: ['active'], to: 'retired' }],
+        errors: [{ code: 'PRODUCT_NOT_FOUND', when: 'No existe el producto.', http: 404 }],
       },
       reactivateProduct: {
         description: 'Devuelve a activo un producto cuya retirada rechazó el registro.',
@@ -2774,7 +2792,7 @@ const compLayers = () => ({
     clients: {
       compliance: {
         purpose: 'Inscribir las retiradas en el registro regulatorio.',
-        calls: { recordWithdrawal: { contract: 'POST /withdrawals -> inscripción de la retirada.' } },
+        calls: { recordWithdrawal: { timeoutMs: 2000, contract: 'POST /withdrawals -> inscripción de la retirada.' } },
       },
     },
   },
@@ -2903,7 +2921,7 @@ const dosProveedores = () => {
   const layers = compLayers();
   layers['http-clients'].clients.warehouse = {
     purpose: 'Reservar el hueco de almacén de la retirada.',
-    calls: { bookSlot: { contract: 'POST /slots reserva el hueco de retirada.' } },
+    calls: { bookSlot: { timeoutMs: 2000, contract: 'POST /slots reserva el hueco de retirada.' } },
   };
   layers.dependencies.dependencies.warehouse = {
     description: 'Almacén, que reserva el hueco físico de la retirada.',
@@ -4193,7 +4211,7 @@ test('encargar a OTRO proveedor no cuenta: no reconcilia este encargo', () => {
   compliance.activations.recordWithdrawal.triggeredBy = ['retireProduct'];
   layers['http-clients'].clients.audit = {
     purpose: 'Registrar incidencias de reconciliación.',
-    calls: { logIncident: { contract: 'POST /incidents -> incidencia registrada.' } },
+    calls: { logIncident: { timeoutMs: 2000, contract: 'POST /incidents -> incidencia registrada.' } },
   };
   layers.dependencies.dependencies.audit = {
     description: 'Registro de incidencias operativas.',
@@ -4324,7 +4342,7 @@ const lockingLayers = (optimisticLocking, errors = []) => ({
       }
     }
   },
-  persistence: { entities: { Order: {} }, consistency: { optimisticLocking } }
+  persistence: { entities: { Order: {}, Catalog: {} }, consistency: { optimisticLocking, transactionalBoundary: 'per-aggregate' } }
 });
 
 test('optimisticLocking declarado sin error de concurrencia levanta su obligación', () => {
@@ -5025,7 +5043,7 @@ test('una entidad HIJA del agregado no la abre: se crea por su raíz', () => {
         }
       }
     },
-    persistence: { entities: { Order: {}, Catalog: {} } }
+    persistence: { entities: { Order: {}, Catalog: {} }, consistency: { transactionalBoundary: 'per-aggregate' } }
   };
   assert.deepEqual(run(layers).obligations.filter((o) => o.id === 'OBL-ENTITY-UNREACHABLE'), []);
 });
@@ -5446,4 +5464,378 @@ test('un campo del input que el dominio no acota no dice nada', () => {
     run(layers).warnings.filter((w) => w.includes("input.fields.subject")),
     []
   );
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Consistencia del modelo: las tres reglas que la checklist semántica de
+// /keel-validate declaraba `(error)` y entregaba al juicio del agente. Bajan aquí
+// porque la respuesta sale entera de los YAML: ninguna exige leer prosa.
+//
+// Cada una va con sus DOS direcciones. La positiva sola no distingue una regla que
+// mira de una que dispara siempre.
+
+test('una entidad sin ningún campo id: true es error', () => {
+  const domain = baseDomain();
+  delete domain.entities.Order.fields.id.id;
+  const { errors } = run({ domain, 'use-cases': {} });
+  assert.ok(errors.some((e) => e.includes('domain: Order.fields: ningún campo declara')));
+});
+
+test('una entidad con dos campos id: true es error, y los nombra', () => {
+  const domain = baseDomain();
+  domain.entities.Order.fields.reference = { type: 'string', id: true };
+  const { errors } = run({ domain, 'use-cases': {} });
+  const found = errors.find((e) => e.includes('domain: Order.fields: varios campos declaran'));
+  assert.ok(found, 'no se emitió el error de identidad doble');
+  assert.ok(found.includes('id, reference'), `el error no nombra los dos campos: ${found}`);
+});
+
+test('una entidad con un solo id no dice nada', () => {
+  // La dirección negativa: baseDomain() es un diseño sano y ninguna de las dos ramas
+  // puede dispararse sobre él.
+  const { errors } = run({ domain: baseDomain(), 'use-cases': {} });
+  assert.deepEqual(errors.filter((e) => e.includes('.fields: ningún campo declara') || e.includes('.fields: varios campos declaran')), []);
+});
+
+test('una query que publica eventos es error', () => {
+  const layers = {
+    domain: baseDomain(),
+    'use-cases': { operations: { listOrders: { kind: 'query', emits: ['OrderListed'] } } },
+    messaging: { publishing: { events: { OrderListed: { payload: {} } } } },
+  };
+  const { errors } = run(layers);
+  assert.ok(errors.some((e) => e.includes('use-cases: listOrders.emits: una operación kind: query no publica eventos')));
+});
+
+test('un command que publica el mismo evento no dice nada', () => {
+  const layers = {
+    domain: baseDomain(),
+    'use-cases': { operations: { placeOrder: { kind: 'command', emits: ['OrderListed'] } } },
+    messaging: { publishing: { events: { OrderListed: { payload: {} } } } },
+  };
+  assert.deepEqual(run(layers).errors.filter((e) => e.includes('no publica eventos')), []);
+});
+
+test('un campo generated o computed en el input de una operación es error', () => {
+  const layers = {
+    domain: baseDomain(),
+    'use-cases': {
+      operations: {
+        placeOrder: {
+          kind: 'command',
+          input: {
+            fields: {
+              total: { type: 'decimal', computed: 'sum(lines.amount)' },
+              createdAt: { type: 'timestamp', generated: true },
+              note: { type: 'string' },
+            },
+          },
+        },
+      },
+    },
+  };
+  const { errors } = run(layers);
+  assert.ok(errors.some((e) => e.includes('input.fields.total') && e.includes('se deriva de otros campos')));
+  assert.ok(errors.some((e) => e.includes('input.fields.createdAt') && e.includes('lo asigna la infraestructura')));
+  // Y el campo normal de al lado no se lleva nada por delante: sin este control, una
+  // regla que marcara TODO el input pasaría las dos aserciones de arriba.
+  assert.deepEqual(errors.filter((e) => e.includes('input.fields.note')), []);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Segunda tanda de la mecanización: lo que la checklist semántica pedía juzgar al
+// agente capa por capa y sale entero de los YAML. Severidad la que la skill les daba
+// (aviso): mecanizar cambia QUIÉN contesta, no el veredicto.
+
+test('una llamada saliente sin timeoutMs avisa, y con él no', () => {
+  const sin = run(httpLayers({ contract: 'GET /prices/{sku} -> { amount: decimal }', timeoutMs: undefined }));
+  assert.ok(sin.warnings.some((w) => w.includes("no declara 'timeoutMs'")));
+
+  const con = run(httpLayers({ contract: 'GET /prices/{sku} -> { amount: decimal }' }));
+  assert.deepEqual(con.warnings.filter((w) => w.includes('timeoutMs')), []);
+});
+
+test('una suscripción sin onFailure avisa: el default lo pondría el broker', () => {
+  const sin = contractLayers({ onFailure: undefined });
+  assert.ok(
+    run(sin).warnings.some((w) => w.includes("subscriptions.StockDepleted: no declara 'onFailure'")),
+    'no se avisó de la suscripción sin política de fallo'
+  );
+  // Y con la política declarada, nada: la dirección que distingue mirar de avisar siempre.
+  assert.deepEqual(run(contractLayers()).warnings.filter((w) => w.includes("no declara 'onFailure'")), []);
+});
+
+test('un formato con schema registrado sin schemaRef avisa', () => {
+  const { warnings } = run(contractLayers({ contract: { envelope: 'none', format: 'avro' } }));
+  assert.ok(warnings.some((w) => w.includes("formato 'avro' sin 'schemaRef'")));
+  const conRef = run(contractLayers({ contract: { envelope: 'none', format: 'avro', schemaRef: 'stock.depleted-v1' } }));
+  assert.deepEqual(conRef.warnings.filter((w) => w.includes('schemaRef')), []);
+});
+
+test('envelope keel sobre un canal externo avisa: esa envoltura la escribe un emisor Keel', () => {
+  const { warnings } = run(contractLayers({ contract: { envelope: 'keel' } }));
+  assert.ok(warnings.some((w) => w.includes("envelope: 'keel' sobre el canal externo")));
+  // Sobre un canal propio, la envoltura Keel es exactamente lo que toca.
+  const propio = run(contractLayers({ contract: { envelope: 'keel' } }, { external: false }));
+  assert.deepEqual(propio.warnings.filter((w) => w.includes('sobre el canal externo')), []);
+});
+
+test('un rol que ninguna regla exige y un permiso que nadie concede se avisan por separado', () => {
+  const layers = {
+    domain: baseDomain(),
+    'use-cases': { operations: { getOrder: { kind: 'query' } } },
+    api: { endpoints: { getOrder: { method: 'GET', path: '/orders/{id}' } } },
+    security: {
+      authentication: { protocol: 'jwt' },
+      roles: { admin: {}, auditor: {} },
+      permissions: { 'orders:read': {}, 'orders:purge': {} },
+      roleGrants: { admin: ['orders:read'] },
+      access: { default: { level: 'authenticated' }, rules: { getOrder: { roles: ['admin'] } } },
+    },
+  };
+  const { warnings } = run(layers);
+  assert.ok(warnings.some((w) => w.includes('security: roles.auditor: ninguna regla de acceso lo exige')));
+  assert.ok(warnings.some((w) => w.includes("security: permissions.orders:purge")));
+  // Los que sí se usan no aparecen: sin este control, una regla que avisara de TODOS
+  // pasaría las dos aserciones de arriba.
+  assert.deepEqual(warnings.filter((w) => w.includes('roles.admin') || w.includes('permissions.orders:read')), []);
+});
+
+test('una escritura con level public avisa; una lectura pública no', () => {
+  const build = (kind) => ({
+    domain: baseDomain(),
+    'use-cases': { operations: { doThing: { kind } } },
+    api: { endpoints: { doThing: { method: kind === 'query' ? 'GET' : 'POST', path: '/things' } } },
+    security: {
+      authentication: { protocol: 'jwt' },
+      access: { default: { level: 'authenticated' }, rules: { doThing: { level: 'public' } } },
+    },
+  });
+  assert.ok(run(build('command')).warnings.some((w) => w.includes('es una escritura con level: public')));
+  assert.deepEqual(run(build('query')).warnings.filter((w) => w.includes('level: public')), []);
+});
+
+test('una raíz de agregado que persistence no menciona avisa; una entidad interna no', () => {
+  // La distinción es la que define un agregado: la hija se persiste con su raíz, así
+  // que su ausencia aquí no es un hueco. Sin esta excepción el aviso sonaría en todos
+  // los diseños que usan agregados bien.
+  const layers = {
+    domain: baseDomain(),
+    'use-cases': {},
+    persistence: { default: { model: 'relational' }, entities: { Order: {} } },
+  };
+  const { warnings } = run(layers);
+  assert.ok(warnings.some((w) => w.includes("la entidad 'Catalog' de domain no aparece")));
+  assert.deepEqual(warnings.filter((w) => w.includes("'OrderLine'") || w.includes("'Product'")), []);
+});
+
+test('un bucket sin maxSizeMb avisa', () => {
+  const layers = {
+    domain: domainWithFile(),
+    'use-cases': {},
+    storage: { buckets: { productImages: { allowedContentTypes: ['image/png'], signedUrlTtlSeconds: 900 } } },
+  };
+  assert.ok(run(layers).warnings.some((w) => w.includes("buckets.productImages: no declara 'maxSizeMb'")));
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tercera tanda: las de domain y use-cases, que son las de más criterio. Todas salen
+// de los YAML — lo que las hacía parecer semánticas era que había que cruzar DOS capas
+// (el agregado y la transición, la entidad y su proyección), no que hiciera falta leer.
+
+test('una colección hacia la raíz de otro agregado avisa: es composición encubierta', () => {
+  const domain = baseDomain();
+  domain.entities.Catalog.relations.orders = { entity: 'Order', cardinality: 'one-to-many' };
+  const { warnings } = run({ domain, 'use-cases': {} });
+  assert.ok(warnings.some((w) => w.includes('es una colección') && w.includes("raíz de OTRO agregado")));
+  // Dentro del mismo agregado, una colección es exactamente lo que toca.
+  assert.deepEqual(run({ domain: baseDomain(), 'use-cases': {} }).warnings.filter((w) => w.includes('OTRO agregado')), []);
+});
+
+test('una entidad interna con lifecycle propio avisa; la raíz con el suyo no', () => {
+  const domain = baseDomain();
+  domain.entities.OrderLine.fields.status = { type: 'enum', values: ['open', 'closed'] };
+  domain.entities.OrderLine.lifecycle = { field: 'status', transitions: { open: ['closed'] } };
+  const { warnings } = run({ domain, 'use-cases': {} });
+  assert.ok(warnings.some((w) => w.includes('OrderLine.lifecycle') && w.includes('entidad interna del agregado')));
+
+  const conRaiz = baseDomain();
+  conRaiz.entities.Order.fields.status = { type: 'enum', values: ['open', 'closed'] };
+  conRaiz.entities.Order.lifecycle = { field: 'status', transitions: { open: ['closed'] } };
+  assert.deepEqual(
+    run({ domain: conRaiz, 'use-cases': {} }).warnings.filter((w) => w.includes('entidad interna del agregado')),
+    []
+  );
+});
+
+test('un command expuesto sin errores avisa; un barrido programado no', () => {
+  const op = (extra) => ({
+    domain: baseDomain(),
+    'use-cases': { operations: { doThing: { kind: 'command', ...extra } } },
+  });
+  assert.ok(run(op({})).warnings.some((w) => w.includes('es un command expuesto y no declara ningún')));
+  // La exclusión que se descubrió midiendo: un barrido no le contesta a nadie, así que
+  // exigirle catálogo de errores es pedir un contrato con un llamante que no existe.
+  assert.deepEqual(
+    run(op({ schedule: { cron: '0 * * * *' }, internal: true })).warnings.filter((w) => w.includes('no declara ningún')),
+    []
+  );
+});
+
+test('una operación que mueve dos agregados a la vez avisa', () => {
+  const domain = baseDomain();
+  for (const name of ['Order', 'Catalog']) {
+    domain.entities[name].fields.status = { type: 'enum', values: ['open', 'closed'] };
+    domain.entities[name].lifecycle = { field: 'status', transitions: { open: ['closed'] } };
+  }
+  const layers = {
+    domain,
+    'use-cases': {
+      operations: {
+        closeBoth: {
+          kind: 'command',
+          errors: [{ code: 'NOPE', when: 'no', http: 409 }],
+          transitions: [
+            { entity: 'Order', from: ['open'], to: 'closed' },
+            { entity: 'Catalog', from: ['open'], to: 'closed' },
+          ],
+        },
+      },
+    },
+  };
+  assert.ok(run(layers).warnings.some((w) => w.includes('mueve el estado de 2 agregados a la vez')));
+
+  // Y dos transiciones DENTRO del mismo agregado no dicen nada: la frontera se respeta.
+  layers['use-cases'].operations.closeBoth.transitions[1] = { entity: 'Order', from: ['closed'], to: 'open' };
+  assert.deepEqual(run(layers).warnings.filter((w) => w.includes('agregados a la vez')), []);
+});
+
+test('un canal cuyo nombre filtra la tecnología avisa', () => {
+  const layers = (channel) => ({
+    domain: domainForMessaging(),
+    'use-cases': {},
+    messaging: { channels: { [channel]: {} } },
+  });
+  for (const name of ['orderKafkaTopic', 'orders-queue', 'sns_events']) {
+    assert.ok(run(layers(name)).warnings.some((w) => w.includes('nombra la tecnología')), `no avisó de '${name}'`);
+  }
+  // Un nombre lógico no dice nada, y 'orderEvents' contiene 'events', que NO está en la
+  // lista: sin este caso, ampliar la lista con una palabra común pasaría inadvertido.
+  for (const name of ['orderEvents', 'inventory']) {
+    assert.deepEqual(run(layers(name)).warnings.filter((w) => w.includes('nombra la tecnología')), [], name);
+  }
+});
+
+test('per-operation habiendo agregados declarados avisa', () => {
+  const layers = {
+    domain: baseDomain(),
+    'use-cases': {},
+    persistence: { default: { model: 'relational' }, entities: { Order: {}, Catalog: {} } },
+  };
+  assert.ok(run(layers).warnings.some((w) => w.includes("es 'per-operation' y domain declara 2 agregado(s)")));
+
+  layers.persistence.consistency = { transactionalBoundary: 'per-aggregate' };
+  assert.deepEqual(run(layers).warnings.filter((w) => w.includes("'per-operation'")), []);
+});
+
+test('un campo sensitive proyectado en una salida avisa, y excluirlo lo calla', () => {
+  const domain = baseDomain();
+  domain.entities.Order.fields.taxId = { type: 'string', sensitive: true };
+  const layers = (exclude) => ({
+    domain,
+    'use-cases': { operations: { getOrder: { kind: 'query', output: { entity: 'Order', ...(exclude ? { exclude } : {}) } } } },
+  });
+  assert.ok(run(layers()).warnings.some((w) => w.includes("proyecta 'taxId'") && w.includes('sensitive')));
+  assert.deepEqual(run(layers(['taxId'])).warnings.filter((w) => w.includes('sensitive')), []);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cobertura de los escenarios, DERIVADA del diseño en vez de leída.
+//
+// La matriz de `validation-scenarios.md` la escribía el agente y la verificaba el mismo
+// agente. Estas reglas la cruzan con los artefactos. Siguen siendo lectura de texto —por
+// eso son avisos, como las nueve que ya leían el documento— pero la pregunta ya no la
+// contesta quien escribió la respuesta.
+
+const conEscenarios = (texto, extra = {}) => ({
+  domain: baseDomain(),
+  'use-cases': {
+    operations: {
+      placeOrder: { kind: 'command', errors: [{ code: 'ORDER_REJECTED', when: 'no', http: 409 }] },
+      ...extra
+    }
+  },
+  __scenarios: texto
+});
+
+const runScenarios = (layers) => {
+  const { __scenarios, ...rest } = layers;
+  return checkCrossRefs({ layers: rest, scenarios: __scenarios });
+};
+
+const MATRIZ = (filas) => `## Matriz de cobertura\n\n| Operación | Flujos | Superficie |\n|---|---|---|\n${filas}\n\n## Flujos\n`;
+
+test('una operación sin fila en la matriz de cobertura avisa', () => {
+  const sin = conEscenarios(MATRIZ('| otraCosa | FL-X-001 | usuarios |') + '### FL-X-001: algo\n');
+  assert.ok(runScenarios(sin).warnings.some((w) => w.includes("la operación 'placeOrder' no tiene fila")));
+
+  const con = conEscenarios(MATRIZ('| placeOrder | FL-X-001 | usuarios |') + '### FL-X-001: algo\nORDER_REJECTED\n');
+  assert.deepEqual(runScenarios(con).warnings.filter((w) => w.includes('no tiene fila en la matriz')), []);
+});
+
+test('la matriz que nombra una operación inexistente avisa', () => {
+  const layers = conEscenarios(
+    MATRIZ('| placeOrder | FL-X-001 | usuarios |\n| cancelOrder | FL-X-002 | usuarios |') +
+      '### FL-X-001: algo\n### FL-X-002: otra\nORDER_REJECTED\n'
+  );
+  assert.ok(runScenarios(layers).warnings.some((w) => w.includes("nombra 'cancelOrder'")));
+});
+
+test('la matriz que cita un flujo inexistente avisa', () => {
+  const layers = conEscenarios(
+    MATRIZ('| placeOrder | FL-X-001, FL-X-999 | usuarios |') + '### FL-X-001: algo\nORDER_REJECTED\n'
+  );
+  assert.ok(runScenarios(layers).warnings.some((w) => w.includes('FL-X-999')));
+});
+
+test('una fila transversal de la matriz no se lee como operación inexistente', () => {
+  // El formato admite agrupar por mecanismo (`**clúster (2 réplicas)**`), y tratarlo como
+  // una operación convertiría una tabla bien escrita en un falso hallazgo.
+  const layers = conEscenarios(
+    MATRIZ('| placeOrder | FL-X-001 | usuarios |\n| **clúster (2 réplicas)** | FL-X-001 | outbox |') +
+      '### FL-X-001: algo\nORDER_REJECTED\n'
+  );
+  assert.deepEqual(runScenarios(layers).warnings.filter((w) => w.includes('nombra')), []);
+});
+
+test('un code declarado que ningún escenario provoca avisa una sola vez', () => {
+  const layers = conEscenarios(MATRIZ('| placeOrder | FL-X-001 | usuarios |') + '### FL-X-001: algo\n', {
+    cancelOrder: { kind: 'command', errors: [{ code: 'ORDER_REJECTED', when: 'no', http: 409 }] }
+  });
+  // Dos operaciones declaran el MISMO code: es un hueco, no dos.
+  const avisos = runScenarios(layers).warnings.filter((w) => w.includes('ORDER_REJECTED'));
+  assert.equal(avisos.length, 1);
+  assert.ok(avisos[0].includes('2 operaciones'));
+});
+
+test('un estado del lifecycle que ningún escenario nombra avisa — y el que sí, no', () => {
+  // La dirección negativa importa aquí más que en ninguna: la primera versión de esta
+  // regla usaba `\b` dentro de un template literal, que es el carácter BACKSPACE, así que
+  // no casaba nunca y avisaba de TODOS los estados, incluidos los nombrados en cada línea.
+  const domain = baseDomain();
+  domain.entities.Order.fields.status = { type: 'enum', values: ['open', 'closed'] };
+  domain.entities.Order.lifecycle = { field: 'status', transitions: { open: ['closed'] } };
+
+  const texto = MATRIZ('| placeOrder | FL-X-001 | usuarios |') + '### FL-X-001: algo\nORDER_REJECTED\nla reserva queda open.\n';
+  const { warnings } = checkCrossRefs({
+    layers: { domain, 'use-cases': { operations: { placeOrder: { kind: 'command', errors: [{ code: 'ORDER_REJECTED', when: 'x', http: 409 }] } } } },
+    scenarios: texto
+  });
+  assert.ok(warnings.some((w) => w.includes("el estado 'closed'")), 'no avisó del estado ausente');
+  assert.deepEqual(warnings.filter((w) => w.includes("el estado 'open'")), [], 'avisó de un estado que el texto SÍ nombra');
+});
+
+test('sin documento de escenarios no se dice nada de cobertura', () => {
+  const { warnings } = checkCrossRefs({ layers: { domain: baseDomain(), 'use-cases': {} } });
+  assert.deepEqual(warnings.filter((w) => w.includes('validation-scenarios.md')), []);
 });

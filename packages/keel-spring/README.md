@@ -7,6 +7,13 @@ Generador **Spring Boot** para diseños [Keel](https://github.com/keel-system/ke
 ```bash
 npm i -g keel-spring
 
+# 0) antes de cerrar el diseño — no escribe nada, y contesta lo que hasta ahora
+#    solo se veía al generar: qué del diseño no materializa keel-spring, y qué va a
+#    quedar como trabajo del agente porque el diseño no lo decide
+keel-spring check specs/<servicio>
+keel-spring check specs/<servicio> --database mysql   # contra el motor que vayas a usar
+keel-spring check specs/<servicio> --strict           # cualquier aviso es rojo: puerta de CI
+
 # 1) en un workspace Keel (keel init), con el diseño terminado:
 keel-spring build specs/<servicio>
 # → comprueba la compatibilidad DSL y ejecuta la validación (schemas + referencias cruzadas)

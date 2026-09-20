@@ -48,3 +48,40 @@ export function scenarioBody(block) {
     .join('\n')
     .trim();
 }
+
+/**
+ * La tabla de `## Matriz de cobertura` como datos: `[{ operation, flows, surface }]`.
+ *
+ * Existe porque esa matriz es lo ÚNICO estructurado del documento —el resto es prosa
+ * Given/When/Then— y hasta ahora no la cruzaba nadie con el diseño. La primera regla de
+ * cobertura de `docs/validation-scenarios.md` dice que toda operación tiene que estar en
+ * ella, y quien lo comprobaba era el mismo agente que la había escrito.
+ *
+ * Solo se reconocen como fila de operación las que nombran un identificador del DSL
+ * (`createReservation`). Las filas transversales que el formato admite —`**clúster (2
+ * réplicas)**`, que agrupa escenarios por mecanismo y no por operación— se ignoran a
+ * propósito: tratarlas como operaciones inexistentes convertiría una tabla bien escrita
+ * en una lista de falsos hallazgos.
+ */
+export function parseCoverageMatrix(text) {
+  const lines = (text ?? '').split(/\r?\n/);
+  const start = lines.findIndex((line) => /^#{2,3}\s+Matriz de cobertura/i.test(line));
+  if (start === -1) return [];
+
+  const rows = [];
+  for (const line of lines.slice(start + 1)) {
+    if (/^#{1,3}\s/.test(line)) break; // la sección siguiente
+    if (!line.trim().startsWith('|')) continue;
+    const cells = line.split('|').slice(1, -1).map((cell) => cell.trim());
+    if (cells.length < 2) continue;
+    if (/^-{3,}/.test(cells[0])) continue; // separador
+    const operation = cells[0].replace(/\*\*/g, '').trim();
+    if (!/^[a-z][A-Za-z0-9]*$/.test(operation)) continue; // cabecera o fila transversal
+    rows.push({
+      operation,
+      flows: [...cells[1].matchAll(/FL-[A-Za-z0-9-]+/g)].map((match) => match[0]),
+      surface: cells[2] ?? ''
+    });
+  }
+  return rows;
+}

@@ -1,0 +1,8 @@
+# La revision semantica de este diseno: que se miro y con que resultado.
+# La cobertura del analisis de huecos vivia en decisions.yaml, donde no la leia nadie.
+reviewedAt: 1.0.0
+
+coverage:
+  - gapClass: 4
+    units: [createProduct]
+    result: findings

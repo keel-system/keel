@@ -2,6 +2,7 @@
 import { Command } from 'commander';
 import { packageVersion } from './lib/assets.js';
 import { build } from './commands/build.js';
+import { check } from './commands/check.js';
 
 const program = new Command();
 
@@ -21,5 +22,13 @@ program
   .option('--telemetry <otel|none>', 'añade (otel) o retira (none) la telemetría OpenTelemetry vía colector; se persiste en keel-stack.json (por defecto, sin telemetría)')
   .option('-y, --defaults', 'usa los defaults del stack sin cuestionario (PostgreSQL, Kafka, Keycloak, Redis)', false)
   .action((ruta, options) => build(ruta, options));
+
+program
+  .command('check')
+  .description('No escribe nada: dice si el diseño es generable y qué avisos traería, desde el workspace de diseño y antes de sembrar el proyecto (distinto de build --check, que opina sobre un proyecto ya generado)')
+  .argument('[ruta]', 'directorio del servicio o su manifiesto (ej. specs/mi-servicio)')
+  .option('--database <motor>', 'comprueba contra el motor que vayas a usar; sin él se asume el default del modelo que declara el diseño')
+  .option('--strict', 'trata cualquier aviso como bloqueo (puerta de CI)', false)
+  .action((ruta, options) => check(ruta, options));
 
 program.parse();

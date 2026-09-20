@@ -44,7 +44,17 @@ export { FRAMEWORK_ERRORS, fixedFrameworkErrors, overrideFor } from './lib/frame
 // Las decisiones que el diseño abre al declarar algo. Un generador las lee para poder decir
 // «esto es un hueco de diseño, y tiene id» en vez de reportarlo como frontera suya.
 export { OBLIGATIONS, obligationFor, obligationIds } from './lib/obligations.js';
+
+// El catálogo de las comprobaciones mecánicas, con id. Lo consumen los generadores para
+// citar un hallazgo sin depender de su redacción, y el corpus de mutación para afirmar
+// que una mutación dispara ESE hallazgo y solo ese.
+export { CHECKS, checkFor, checkIds } from './lib/checks.js';
 export { DECISIONS_FILE, loadDecisions, resolveObligations } from './lib/decisions.js';
+
+// La revisión semántica: el catálogo de lo que solo un lector puede juzgar, su
+// aplicabilidad derivada del diseño y el veredicto escrito en review.yaml.
+export { REVIEWS, reviewFor, reviewIds, applicableReviews } from './lib/reviews.js';
+export { REVIEW_FILE, loadReviews, resolveReviews } from './lib/review-state.js';
 export { copyTree, diffTree } from './lib/copy.js';
 // Harnesses de agente: un generador no debe saber si escribe .claude/ o .opencode/,
 // solo pedir la proyección de sus skills y sus agentes.

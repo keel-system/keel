@@ -4,7 +4,7 @@ import pc from 'picocolors';
 import { templatesDir, isKeelWorkspace } from '../lib/assets.js';
 import { MANIFEST_FILE, KEBAB_NAME, resolveServiceRef, loadService } from '../lib/loader.js';
 import { rewriteManifestForDerivation, rewriteScenariosForDerivation } from '../lib/derive.js';
-import { DECISIONS_FILE, SCENARIOS_FILE, sideFilesOf } from '../lib/spec-files.js';
+import { DECISIONS_FILE, REVIEW_FILE, SCENARIOS_FILE, sideFilesOf } from '../lib/spec-files.js';
 import {
   downloadDesign,
   dslMismatchMessage,
@@ -134,6 +134,7 @@ async function deriveFromRegistry(name, remote, { cwd, serviceDir, options }) {
 function noteFor(file, basedOn) {
   if (file === SCENARIOS_FILE) return pc.dim(` (heredado de ${basedOn}: regenerarlo al cerrar)`);
   if (file === DECISIONS_FILE) return pc.dim(` (heredado de ${basedOn}: reafirma cada aceptación)`);
+  if (file === REVIEW_FILE) return pc.dim(` (heredado de ${basedOn}: la revisión es de ese diseño, rehazla)`);
   return '';
 }
 
@@ -222,6 +223,11 @@ function deriveService(name, from, { cwd, serviceDir }) {
   if (inheritedSide.includes(DECISIONS_FILE)) {
     console.log(
       `  ${step++}. Reafirma las decisiones heredadas: su ${pc.cyan('since')} apunta a ${basedOn}, así que ${pc.cyan('keel validate')} las dará por caducadas hasta revisarlas`
+    );
+  }
+  if (inheritedSide.includes(REVIEW_FILE)) {
+    console.log(
+      `  ${step++}. Rehaz la revisión: la heredada juzgó el diseño de ${basedOn}, y lo que aquí cambie puede invalidar lo que allí salió limpio`
     );
   }
 }

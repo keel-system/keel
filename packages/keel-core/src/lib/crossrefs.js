@@ -1,6 +1,7 @@
 import { FRAMEWORK_ERRORS, overrideFor } from './framework-errors.js';
 import { obligationFor } from './obligations.js';
-import { splitScenarioBlocks, scenarioFamilyOf } from './scenario-blocks.js';
+import { checkFor } from './checks.js';
+import { splitScenarioBlocks, scenarioFamilyOf, scenarioIdOf, parseCoverageMatrix } from './scenario-blocks.js';
 
 const BASE_TYPES = new Set(['string', 'text', 'int', 'long', 'decimal', 'boolean', 'uuid', 'date', 'timestamp', 'json', 'file']);
 
@@ -40,6 +41,24 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
     if (!obligationFor(id)) throw new Error(`crossrefs emite la obligación '${id}', que no está en el catálogo`);
     obligations.push({ id, scope, message });
   };
+
+  // Los hallazgos CON id. `errors` y `warnings` siguen siendo las listas de cadenas de
+  // siempre —lo que imprime la CLI y lo que consumen los generadores no cambia— y
+  // `findings` los acompaña con el id, que es lo único sobre lo que se puede afirmar sin
+  // depender de la redacción. Un id que no esté en el catálogo lanza, igual que con las
+  // obligaciones: emitirlo sería tener una comprobación que nadie puede citar ni contar.
+  const findings = [];
+  const record = (id, severity, message) => {
+    const entry = checkFor(id);
+    if (!entry) throw new Error(`crossrefs emite el hallazgo '${id}', que no está en el catálogo de checks`);
+    if (entry.severity !== severity) {
+      throw new Error(`crossrefs emite '${id}' como ${severity} y el catálogo lo declara ${entry.severity}`);
+    }
+    findings.push({ id, severity, message });
+    (severity === 'error' ? errors : warnings).push(message);
+  };
+  const error = (id, message) => record(id, 'error', message);
+  const warn = (id, message) => record(id, 'warning', message);
 
   const domain = layers['domain'] ?? {};
   const useCases = layers['use-cases'] ?? {};
@@ -372,6 +391,22 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
         }
         checkEmbed(payload.entity, relName, where);
       }
+      // Un campo marcado `sensitive` en el dominio y proyectado tal cual en una salida o
+      // en el payload de un evento sale del servicio. Con `{ entity: X }` la proyección
+      // es TODA la entidad, así que basta con no acordarse de excluirlo: no hay nada que
+      // falle, y el dato aparece en la respuesta HTTP, en el cuerpo del evento y en el
+      // log de quien lo consuma. Es aviso porque exponerlo puede ser deliberado (un
+      // endpoint de administración), pero entonces se dice.
+      if (direction === 'output') {
+        const excluded = new Set(payload.exclude ?? []);
+        for (const [fieldName, field] of Object.entries(domain.entities[payload.entity]?.fields ?? {})) {
+          if (field?.sensitive !== true || excluded.has(fieldName)) continue;
+          warn(
+            'CHK-MODEL-SENSITIVE-PROJECTED',
+            `${where}: proyecta '${fieldName}', que domain marca 'sensitive: true' — sale del servicio en la respuesta y en cualquier log que la registre. Sácalo con 'exclude', o di en la descripción por qué este consumidor sí debe verlo`
+          );
+        }
+      }
       if ((payload.sort ?? []).length > 0) {
         if (direction === 'input') {
           errors.push(`${where}.sort: el orden es una decisión de la salida; en la entrada no tiene efecto`);
@@ -419,6 +454,25 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
   // domain: tipos en fields, entidades en relations y lifecycle
   for (const [entityName, entity] of Object.entries(domain.entities ?? {})) {
     checkFieldMap(entity.fields, `domain: ${entityName}.fields`);
+    // La identidad de la entidad: ni cero ni dos. Sin ninguna, el generador no tiene
+    // clave primaria ni sabe por qué campo resolver un `{id}` de ruta; con dos, elige
+    // una y la otra queda como un campo normal, así que la unicidad que el diseño creía
+    // declarar no la sostiene nadie. El schema no puede expresarlo: `id` es un booleano
+    // por campo y ningún `required` cuenta cuántos lo traen.
+    const idFields = Object.entries(entity.fields ?? {})
+      .filter(([, field]) => field?.id === true)
+      .map(([name]) => name);
+    if (idFields.length === 0) {
+      error(
+        'CHK-DOMAIN-SINGLE-ID',
+        `domain: ${entityName}.fields: ningún campo declara 'id: true' — la entidad no tiene identidad y el generador no sabe por qué campo resolverla`
+      );
+    } else if (idFields.length > 1) {
+      error(
+        'CHK-DOMAIN-SINGLE-ID',
+        `domain: ${entityName}.fields: varios campos declaran 'id: true' (${idFields.join(', ')}) — la identidad de una entidad es un solo campo; para una clave compuesta usa 'persistence: entities.${entityName}.naturalKey'`
+      );
+    }
     for (const [relName, rel] of Object.entries(entity.relations ?? {})) {
       if (!entities.has(rel.entity)) {
         errors.push(`domain: ${entityName}.relations.${relName}: la entidad '${rel.entity}' no existe`);
@@ -502,7 +556,35 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
             `domain: ${entityName}.relations.${relName}: apunta a '${rel.entity}', entidad interna del agregado '${targetAgg}' — referencia la raíz '${aggregates[targetAgg].root}' por id`
           );
         }
+        // Una colección hacia la RAÍZ de otro agregado es composición encubierta: dice
+        // «estas otras raíces son mías», y no lo son —cada una tiene su propia frontera
+        // transaccional y su propio ciclo de vida—. Lo que el generador materializa a
+        // partir de ahí es una relación navegable entre agregados, que es justo lo que la
+        // arquitectura prohíbe: la lectura conjunta se resuelve proyectando, no navegando.
+        if (
+          targetAgg !== undefined &&
+          roots.has(rel.entity) &&
+          aggregateOf.get(entityName) !== targetAgg &&
+          (rel.cardinality === 'one-to-many' || rel.cardinality === 'many-to-many')
+        ) {
+          warn(
+            'CHK-DOMAIN-COLLECTION-CROSSES-AGGREGATE',
+            `domain: ${entityName}.relations.${relName}: es una colección '${rel.cardinality}' hacia '${rel.entity}', que es la raíz de OTRO agregado ('${targetAgg}') — eso es composición encubierta: cada raíz tiene su propia frontera. Si de verdad son suyas, están en el mismo agregado; si no, la relación va por id y la lectura conjunta se proyecta`
+          );
+        }
       }
+    }
+    // Una entidad interna con máquina de estados propia compite con su raíz: la raíz
+    // gobierna el agregado, y si la hija cambia de estado por su cuenta hay dos dueños
+    // de la misma consistencia. El generador le dará su propio guard de transición, y
+    // entonces el invariante que la raíz creía sostener depende de quién escriba antes.
+    for (const [entityName, entity] of Object.entries(domain.entities ?? {})) {
+      const agg = aggregateOf.get(entityName);
+      if (!entity.lifecycle || agg === undefined || roots.has(entityName)) continue;
+      warn(
+        'CHK-DOMAIN-INNER-LIFECYCLE',
+        `domain: ${entityName}.lifecycle: es una entidad interna del agregado '${agg}' y declara su propia máquina de estados — la consistencia del agregado la gobierna su raíz '${aggregates[agg].root}'. Si el estado de '${entityName}' cambia por su cuenta, hay dos dueños; si lo dirige la raíz, dilo en las transiciones de la raíz`
+      );
     }
   }
 
@@ -589,6 +671,69 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
     }
     if (op.cache && op.kind !== 'query') {
       warnings.push(`use-cases: ${opName}: tiene cache pero no es kind: query`);
+    }
+    // Gemela de la anterior, por el otro lado: una lectura no produce hechos. Si los
+    // produce, una de las dos declaraciones miente, y el generador no tiene forma de
+    // saber cuál: emitiría el evento desde un handler de consulta, que es donde nadie
+    // lo busca cuando aparezca publicado dos veces.
+    if (op.kind === 'query' && (op.emits ?? []).length > 0) {
+      error(
+        'CHK-USECASES-QUERY-EMITS',
+        `use-cases: ${opName}.emits: una operación kind: query no publica eventos (emite ${op.emits.join(', ')}) — si de verdad produce un hecho, es un command`
+      );
+    }
+    // Los campos que la infraestructura asigna no vienen de fuera. Declararlos en el
+    // input los convierte en parámetros que el cliente elige: un `generated` deja de
+    // ser generado y un `computed` deja de ser derivado, sin que nada falle — el
+    // servidor acepta el valor que le manden. El resto del módulo ya da por hecho lo
+    // contrario (los salta al cruzar payloads de suscripción), así que sin esta regla
+    // las dos mitades del validador suponen cosas distintas del mismo campo.
+    // Una escritura que no puede fallar no existe: hay precondiciones, hay conflictos de
+    // estado, hay unicidad. Un command sin ningún `error` declarado no dice que no falle
+    // — dice que nadie escribió qué pasa cuando falla, y entonces el generador contesta
+    // con el 500 genérico o inventa un code, y el escenario que debería cubrirlo no se
+    // puede escribir porque no hay nada contra lo que afirmar.
+    // Una operación que mueve el estado de dos agregados a la vez pide una transacción
+    // que los abarque, y eso contradice la frontera que define un agregado: cada uno es
+    // su propia unidad de consistencia. El generador puede materializarlo —con
+    // `per-operation` cabe todo en una transacción— y entonces la frontera existe en el
+    // diseño y no en el código. La salida es la de siempre: uno de los dos se entera por
+    // un evento.
+    const touchedAggregates = new Set(
+      (op.transitions ?? [])
+        .map((transition) => aggregateOf.get(transition.entity))
+        .filter((name) => name !== undefined)
+    );
+    if (touchedAggregates.size > 1) {
+      warn(
+        'CHK-USECASES-MULTI-AGGREGATE',
+        `use-cases: ${opName}.transitions: mueve el estado de ${touchedAggregates.size} agregados a la vez (${[...touchedAggregates].join(', ')}) — cada agregado es una unidad de consistencia propia. Si de verdad tienen que cambiar juntos, están mal separados; si no, uno se entera por un evento`
+      );
+    }
+    // Se excluye lo que no tiene a quién contestar. Un barrido programado no responde a
+    // nadie: su desenlace es una transición o un evento, y exigirle un catálogo de
+    // errores sería pedir un contrato con un llamante que no existe. La exclusión es
+    // deliberada y se descubrió midiendo: sin ella, los tres únicos casos que la regla
+    // encuentra en los diseños reales son barridos, o sea ruido en el 100%.
+    const answersToSomeone = op.schedule === undefined && op.internal !== true;
+    if (op.kind === 'command' && answersToSomeone && (op.errors ?? []).length === 0) {
+      warn(
+        'CHK-USECASES-COMMAND-NO-ERRORS',
+        `use-cases: ${opName}: es un command expuesto y no declara ningún 'error' — qué contesta el servicio cuando la operación no se puede aplicar no está en el diseño, así que lo elegiría el generador y ningún escenario podría afirmarlo`
+      );
+    }
+    for (const [fieldName, field] of Object.entries(op.input?.fields ?? {})) {
+      const why =
+        field?.generated === true
+          ? "'generated: true' lo asigna la infraestructura"
+          : field?.computed !== undefined
+            ? "'computed' se deriva de otros campos"
+            : null;
+      if (!why) continue;
+      error(
+        'CHK-USECASES-INPUT-GENERATED',
+        `use-cases: ${opName}.input.fields.${fieldName}: ${why} y no puede venir del cliente — quítalo del input, o quítale la marca si de verdad es un dato de entrada`
+      );
     }
   }
 
@@ -861,6 +1006,56 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
         if (!permissions.has(scope)) {
           errors.push(`security: serviceClients.${client}: el scope '${scope}' no existe en security: permissions`);
         }
+      }
+    }
+    // Inversa de las tres comprobaciones de arriba, que solo miran que lo citado exista.
+    // Un rol o un permiso que nadie usa no rompe nada, y por eso sobrevive: es privilegio
+    // declarado que el servicio concede sin que ninguna operación lo pida. En una revisión
+    // de seguridad se lee como capacidad real, y en un token emitido por el proveedor de
+    // identidad, también.
+    const usedRoles = new Set();
+    const usedPermissions = new Set();
+    const collectUse = (rule) => {
+      for (const role of rule?.roles ?? []) usedRoles.add(role);
+      for (const perm of rule?.permissions ?? []) usedPermissions.add(perm);
+      for (const scope of rule?.scopes ?? []) usedPermissions.add(scope);
+    };
+    collectUse(security.access?.default);
+    for (const rule of Object.values(security.access?.rules ?? {})) collectUse(rule);
+    for (const grants of Object.values(security.roleGrants ?? {})) {
+      for (const perm of grants ?? []) usedPermissions.add(perm);
+    }
+    for (const def of Object.values(security.serviceClients ?? {})) {
+      for (const scope of def?.scopes ?? []) usedPermissions.add(scope);
+    }
+    for (const role of roles) {
+      // Un rol que ninguna regla exige pero que sí concede permisos sigue siendo
+      // privilegio vivo: quien lo tenga los tendrá. Se avisa igual.
+      if (!usedRoles.has(role)) {
+        warn(
+          'CHK-SEC-UNUSED-ROLE',
+          `security: roles.${role}: ninguna regla de acceso lo exige — es privilegio declarado que nada del diseño pide; quítalo, o di qué operación debería pedirlo`
+        );
+      }
+    }
+    for (const permission of permissions) {
+      if (!usedPermissions.has(permission)) {
+        warn(
+          'CHK-SEC-ORPHAN-PERMISSION',
+          `security: permissions.${permission}: ningún rol lo concede, ningún serviceClient lo pide y ninguna regla lo exige — es un permiso huérfano`
+        );
+      }
+    }
+    // Una escritura abierta a cualquiera es una decisión legítima (un alta pública, un
+    // webhook), pero casi nunca es la que se quería: el default del template y el olvido
+    // se escriben igual que la decisión. Aviso, para que sea lo segundo.
+    for (const [opName, rule] of Object.entries(security.access?.rules ?? {})) {
+      const op = operations[opName];
+      if (rule?.level === 'public' && op?.kind === 'command') {
+        warn(
+          'CHK-SEC-PUBLIC-COMMAND',
+          `security: access.rules.${opName}: es una escritura con level: public — cualquiera puede ejecutarla sin identidad. Si es a propósito, dilo en la descripción de la operación; si no, es el default que nadie cambió`
+        );
       }
     }
     // protocol: none declara que el servicio no autentica a nadie. Una regla que exija
@@ -1186,6 +1381,27 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
   }
 
   // messaging: canales, payloads y triggers
+  // El nombre de un canal es contrato de integración y tiene que sobrevivir a un cambio
+  // de broker: es lo único que un consumidor de otro servicio conoce. Un nombre que
+  // nombra la tecnología convierte una migración de infraestructura en un cambio de
+  // contrato para todo el que escuche. La lista es corta y literal a propósito: lo que
+  // busca son nombres copiados del stack, no una opinión sobre el estilo.
+  const TECH_WORDS = ['kafka', 'rabbit', 'rabbitmq', 'sqs', 'sns', 'topic', 'queue', 'exchange', 'stream', 'pubsub'];
+  const checkChannelName = (channel, where) => {
+    const words = String(channel)
+      .split(/[-_.]|(?=[A-Z])/)
+      .map((word) => word.toLowerCase())
+      .filter(Boolean);
+    const leaked = words.filter((word) => TECH_WORDS.includes(word));
+    if (leaked.length > 0) {
+      warn(
+        'CHK-MSG-CHANNEL-TECH-NAME',
+        `${where}: el nombre del canal '${channel}' nombra la tecnología ('${leaked.join("', '")}') — el canal es el contrato que conoce quien te escucha, y tiene que sobrevivir a un cambio de broker. Nómbralo por lo que transporta`
+      );
+    }
+  };
+  for (const channel of channels) checkChannelName(channel, `messaging: channels.${channel}`);
+
   const checkChannel = (channel, where) => {
     if (!channel) return;
     referencedChannels.add(channel);
@@ -1663,6 +1879,36 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
         `${where}: consume del canal externo '${sub.channel}' sin contract — el generador tendría que suponer la forma del mensaje (envoltura, formato, discriminador, id de deduplicación)`
       );
     }
+    // Qué se hace cuando el handler falla no es un detalle de infraestructura: decide si
+    // el mensaje se reintenta, se descarta o va a parar a un destino de descarte, y el
+    // generador tiene que elegir uno si el diseño no elige. Sin declararlo, el default
+    // del broker manda —y no es el mismo en los tres—, así que el mismo diseño se
+    // comporta distinto según el stack, que es justo lo que el método promete evitar.
+    if (!sub.onFailure) {
+      warn(
+        'CHK-MSG-SUB-NO-ONFAILURE',
+        `${where}: no declara 'onFailure' — qué pasa cuando el handler falla (reintentos y destino de descarte) lo decidiría el default del broker elegido, y no es el mismo en todos`
+      );
+    }
+    // Un formato binario con schema registrado necesita saber DÓNDE está el schema: sin
+    // esa referencia, el generador no puede deserializar y el diseño describe un
+    // contrato que nadie puede resolver.
+    const format = sub.contract?.format;
+    if ((format === 'avro' || format === 'protobuf') && !sub.contract?.schemaRef) {
+      warn(
+        'CHK-MSG-NO-SCHEMAREF',
+        `${where}.contract: formato '${format}' sin 'schemaRef' — un formato con schema registrado no se puede deserializar sin saber dónde está el schema`
+      );
+    }
+    // La envoltura Keel la escribe un emisor Keel. Declararla sobre un canal que otro
+    // sistema posee afirma algo sobre un tercero, y si ese tercero no es un servicio
+    // Keel el listener leerá una envoltura que nadie escribe.
+    if (externalChannel && sub.contract?.envelope === 'keel') {
+      warn(
+        'CHK-MSG-KEEL-ENVELOPE-EXTERNAL',
+        `${where}.contract.envelope: 'keel' sobre el canal externo '${sub.channel}' — la envoltura Keel la estampa un emisor Keel; si la fuente no lo es, el listener buscará metadatos que nadie escribe`
+      );
+    }
     const wrapped = sub.contract?.envelope === 'wrapped';
     // Con la envoltura Keel la identidad del mensaje YA existe: `metadata.eventId`, que el
     // emisor estampa una vez en el `raise` y viaja intacta hasta el cable. Un `messageId`
@@ -1815,6 +2061,17 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
         );
       }
 
+      // Sin presupuesto de latencia declarado, el que manda es el del cliente HTTP del
+      // generador, que es infinito o arbitrario según la librería. No hay diseño
+      // legítimo que lo quiera así: una llamada saliente sin tope convierte la lentitud
+      // del proveedor en lentitud nuestra, y con una transacción abierta delante, en
+      // conexiones retenidas. Es además el dato del que cuelgan el retry y el breaker.
+      if (call.timeoutMs === undefined) {
+        warn(
+          'CHK-HTTP-NO-TIMEOUT',
+          `${where}: no declara 'timeoutMs' — sin tope, la llamada espera lo que el proveedor tarde y el generador no tiene presupuesto del que derivar el retry ni el circuit breaker. Aviso y no error porque el valor sale del negocio (cuánto puede esperar quien llama), no de una regla`
+        );
+      }
       if (call.circuitBreaker && !call.fallback) {
         warnings.push(`${where}: circuitBreaker sin fallback — define qué hace el servicio con el circuito abierto`);
       }
@@ -2502,7 +2759,8 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
             if (!movedEntities.has(transition.entity)) continue;
             const outgoing = domain.entities?.[transition.entity]?.lifecycle?.transitions?.[transition.to];
             if (Array.isArray(outgoing) && outgoing.length === 0) {
-              warnings.push(
+              warn(
+                'CHK-DEPS-COMPENSATION-DEAD-END',
                 `${where}: '${undoOpName}' devuelve '${transition.entity}' a '${transition.to}', que es un estado terminal ` +
                   `de su lifecycle — de ahí no sale ninguna transición, así que el trabajo que se acaba de deshacer no se ` +
                   `puede volver a encargar. Si '${transition.to}' es el desenlace definitivo, correcto; si se esperaba ` +
@@ -2661,6 +2919,28 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
     return new Set([entityName]);
   };
 
+  // La inversa del bucle de abajo, que solo comprueba que lo citado exista: una entidad
+  // del dominio que persistence no menciona no tiene almacén, y el diseño no dice si es
+  // a propósito (un value object elevado a entidad, algo que solo vive en memoria) o si
+  // es un olvido. El generador tiene que elegir, y elige no persistirla: el servicio
+  // arranca, la operación que la escribe compila, y el dato se pierde al terminar la
+  // petición sin que nada falle.
+  if (persistence) {
+    for (const entityName of entities) {
+      if (Object.hasOwn(persistence.entities ?? {}, entityName)) continue;
+      // Una entidad INTERNA de un agregado no se declara aquí y no falta: se persiste
+      // con su raíz, que es lo que significa ser un agregado. Sin esta excepción el
+      // aviso sonaría en todos los diseños que usan agregados bien, que son justo los
+      // que más cuidado han puesto.
+      const aggregate = aggregateOf.get(entityName);
+      if (aggregate && aggregates[aggregate]?.root !== entityName) continue;
+      warn(
+        'CHK-PERSIST-ROOT-UNMAPPED',
+        `persistence: la entidad '${entityName}' de domain no aparece en 'entities' — no tendrá almacén. Si es deliberado dilo en su descripción; si no, lo que se pierde son sus datos, y en silencio`
+      );
+    }
+  }
+
   // persistence: entidades → domain
   for (const [entityName, spec] of Object.entries(persistence?.entities ?? {})) {
     if (!entities.has(entityName)) {
@@ -2728,6 +3008,21 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
     // persistence se diseña después de domain: error también con --wip
     errors.push(
       `persistence: consistency.transactionalBoundary: 'per-aggregate' exige que domain declare aggregates`
+    );
+  }
+  // La inversa: el diseño se tomó el trabajo de declarar fronteras de agregado y luego
+  // pide una transacción por OPERACIÓN, que puede abarcar varias. No es un error —hay
+  // operaciones que legítimamente tocan dos cosas— pero casi nunca es una elección: es
+  // el default de la plantilla, y entonces la frontera que el dominio declara no la
+  // sostiene la transacción.
+  if (
+    persistence &&
+    (persistence.consistency?.transactionalBoundary ?? 'per-operation') === 'per-operation' &&
+    Object.keys(aggregates).length > 0
+  ) {
+    warn(
+      'CHK-PERSIST-BOUNDARY-DEFAULT',
+      `persistence: consistency.transactionalBoundary: es 'per-operation' y domain declara ${Object.keys(aggregates).length} agregado(s) — una transacción por operación puede abarcar varios, y entonces la frontera que el dominio declara no la sostiene nadie. Si es elección, dilo; si es el default de la plantilla, mírala`
     );
   }
   // 'declared' delega el bloqueo optimista a las raíces que declaran el campo
@@ -2935,6 +3230,16 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
     // en ninguna parte del diseño — que es como un enlace pensado para minutos acaba
     // durando días sin que nadie lo haya decidido.
     const bucket = storage?.buckets?.[bucketName] ?? {};
+    // Una subida sin tope de tamaño la decide entonces el servidor de aplicaciones, que
+    // trae el suyo y no es el mismo en todos. El diseño declara `allowedContentTypes`
+    // —qué se acepta— y se queda a medias sin declarar cuánto: son las dos mitades del
+    // mismo contrato de subida, y la que falta es la que se convierte en incidente.
+    if (bucket.maxSizeMb == null) {
+      warn(
+        'CHK-STORAGE-NO-MAXSIZE',
+        `storage: buckets.${bucketName}: no declara 'maxSizeMb' — el tope de tamaño lo pondría el servidor elegido, y el error de subida que el diseño promete no tendría umbral que lo dispare`
+      );
+    }
     if ((bucket.visibility ?? 'private') === 'private' && bucket.signedUrlTtlSeconds == null) {
       warnings.push(
         `storage: buckets.${bucketName}: es private y no declara 'signedUrlTtlSeconds': la URL firmada con la ` +
@@ -3241,7 +3546,8 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
       !hasIrrepeatableTransition(op)
     ) {
       const efecto = (op.emits ?? []).length > 0 ? `publica ${op.emits.join(', ')}` : 'encarga trabajo a otro servidor';
-      warnings.push(
+      warn(
+        'CHK-USECASES-REPEATABLE-ESCAPES',
         `use-cases: ${opName}: es un command ${endpointMethod ?? 'POST'} que ${efecto}, y no declara ni 'idempotency' ni ` +
           `una transición de lifecycle irrepetible — un reenvío del llamante (timeout, reintento del cliente, doble ` +
           `pulsación) lo hace dos veces, y eso ya salió del servicio: ninguna clave natural lo desanda. Declara ` +
@@ -3250,5 +3556,90 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
     }
   }
 
-  return { errors, warnings, pending, obligations };
+  // ─── Cobertura de los escenarios, DERIVADA en vez de leída ─────────────────
+  //
+  // `validation-scenarios.md` es el contrato de equivalencia y el único gate funcional de
+  // la generación: lo que no fija, cada generador lo decide por su cuenta. Hasta aquí su
+  // matriz de cobertura la escribía el agente y la verificaba el mismo agente, y de las
+  // reglas de cobertura solo estaban mecanizadas las nueve que buscan la señal de un
+  // mecanismo (la reentrega, el canal caído, la carrera).
+  //
+  // Lo de abajo cruza el DISEÑO contra el documento: qué operaciones hay, qué errores se
+  // declararon, qué estados existen. Sigue siendo lectura de texto —por eso todo es
+  // aviso— pero la pregunta ya no la contesta quien escribió la respuesta.
+  if (scenarios !== null) {
+    const definedFlows = new Set(scenarioBlocks.map((block) => scenarioIdOf(block)));
+    const matrix = parseCoverageMatrix(scenarios);
+
+    if (matrix.length > 0) {
+      const listed = new Set(matrix.map((row) => row.operation));
+      for (const opName of Object.keys(operations)) {
+        if (!listed.has(opName)) {
+          warn(
+            'CHK-SCEN-MATRIX-MISSING-OP',
+            `validation-scenarios.md: la operación '${opName}' no tiene fila en la matriz de cobertura — una matriz incompleta significa diseño sin cerrar, y el gate del generador solo puntúa lo que este documento declara`
+          );
+        }
+      }
+      for (const row of matrix) {
+        if (!operationNames.has(row.operation)) {
+          warn(
+            'CHK-SCEN-MATRIX-UNKNOWN-OP',
+            `validation-scenarios.md: la matriz de cobertura nombra '${row.operation}', que no es una operación de use-cases — o se renombró en el diseño y el documento se quedó atrás, o es un typo que hace parecer cubierto algo que no existe`
+          );
+          continue;
+        }
+        for (const flow of row.flows) {
+          if (!definedFlows.has(flow)) {
+            warn(
+              'CHK-SCEN-MATRIX-DANGLING-FL',
+              `validation-scenarios.md: la matriz dice que '${row.operation}' lo cubre ${flow}, y no encuentro ningún escenario con ese id — la fila parece cobertura y no la hay`
+            );
+          }
+        }
+      }
+    }
+
+    // Un `code` declarado que ningún escenario provoca es un desenlace que nadie va a
+    // ejercitar: el servidor puede no emitirlo nunca y la suite seguiría en verde.
+    // Por CODE y no por operación: el mismo `code` lo declaran varias operaciones a
+    // propósito (un NOT_FOUND compartido), y avisar una vez por cada una convierte un
+    // hueco en cinco líneas que dicen lo mismo — y el resto de la salida en ruido.
+    const texto = scenarios;
+    const codeOwners = new Map();
+    for (const [opName, op] of Object.entries(operations)) {
+      for (const error of op.errors ?? []) {
+        if (!error?.code) continue;
+        if (!codeOwners.has(error.code)) codeOwners.set(error.code, []);
+        codeOwners.get(error.code).push(opName);
+      }
+    }
+    for (const [code, owners] of codeOwners) {
+      if (texto.includes(code)) continue;
+      const donde = owners.length === 1 ? owners[0] : `${owners.length} operaciones: ${owners.join(', ')}`;
+      warn(
+        'CHK-SCEN-ERROR-UNCOVERED',
+        `validation-scenarios.md: no encuentro el code '${code}' (${donde}) en ningún escenario — un error declarado que ningún caso provoca no lo comprueba nadie`
+      );
+    }
+
+    // Un estado que ningún escenario nombra puede ser inalcanzable de verdad, y entonces
+    // es diseño muerto; o alcanzable y sin cubrir, y entonces el primero que llegue ahí
+    // es un usuario. Las dos cosas se ven igual desde el YAML.
+    for (const [entityName, entity] of Object.entries(domain.entities ?? {})) {
+      const values = entity.lifecycle ? enumValuesOf(entity.fields?.[entity.lifecycle.field]) : null;
+      for (const state of values ?? []) {
+        // `\\b` y no `\b`: dentro de un template literal, `\b` es el carácter BACKSPACE y
+        // la expresión no casa con nada — el aviso salía sobre TODOS los estados, incluidos
+        // los que el documento nombra en cada línea.
+        if (new RegExp(`\\b${state}\\b`).test(texto)) continue;
+        warn(
+          'CHK-SCEN-STATE-UNREACHED',
+          `validation-scenarios.md: ningún escenario nombra el estado '${state}' de ${entityName} — o no lo alcanza nada (y sobra en el lifecycle), o lo alcanza el servicio y no lo comprueba nadie`
+        );
+      }
+    }
+  }
+
+  return { errors, warnings, pending, obligations, findings };
 }

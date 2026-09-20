@@ -473,6 +473,37 @@ quien mantiene `keel-spring`. Va estructurado así:
    atribuido o una tanda de fallos con una sola causa raíz son las señales.
 4. **Huecos del diseño**: los `designGaps` consolidados de los cinco agentes, con el
    artefacto y la propuesta concreta. Son del **diseñador**, no del generador.
+
+   Y además del informe en prosa, **se escriben en `design-gaps.yaml`** en la raíz de este
+   proyecto, con el `service` y la `version` del snapshot de `specs/` desde el que se
+   generó (schema: `design-gaps.schema.json` de keel-core). Una entrada por hueco:
+   `layer`, `unit`, `kind` (`missing` | `contradiction` | `undeclared`), `proposal` y
+   `source`, más el `scenario` que lo destapó si lo hubo.
+
+   ```yaml
+   service: billing
+   version: 1.2.0
+   generator: keel-spring
+   gaps:
+     - layer: use-cases
+       unit: createInvoice
+       kind: undeclared
+       proposal: Declara el code del conflicto de unicidad de la referencia, con su status 409.
+       source: keel-spring-code
+       scenario: FL-INV-002
+   ```
+
+   El archivo existe porque el informe en prosa **no vuelve solo**: alguien tenía que
+   acordarse de abrirlo y de traer cada hueco al YAML, y el mismo hueco reportado cuatro
+   corridas seguidas es lo que acabó motivando el catálogo de obligaciones. Con el archivo,
+   `keel-<tech> check specs/<servicio>` los imprime desde el workspace —donde se corrige el
+   diseño— y `/keel-evolve` los recoge en su inventario. La `version` es el sello: cuando el
+   diseño avanza, esos huecos describen un diseño que ya no existe y se releen antes de
+   darlos por vigentes.
+
+   La regla de qué entra: solo lo **irresoluble sin cambiar el diseño o la infraestructura**.
+   Un hueco con fallback disponible se implementa, no se reporta — eso ya lo dice
+   `keel-spring-code.md`, y este archivo no lo relaja.
 5. **Medición por mutación**: qué mecanismos se falsaron, cuál se puso rojo con cada uno, y
    —lo que importa— cuáles resultaron **no medidos por nadie**. La sección siguiente dice qué
    romper. Un mecanismo sin medir es del generador (le falta gate) o del diseño (le falta

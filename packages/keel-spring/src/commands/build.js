@@ -9,6 +9,7 @@ import {
   copyTree,
   diffDesigns,
   DECISIONS_FILE,
+  REVIEW_FILE,
   MANIFEST_FILE as DESIGN_MANIFEST
 } from 'keel-core';
 import { SKILL, SUPPORTED_DSL } from '../lib/assets.js';
@@ -147,6 +148,7 @@ export async function build(
     warnings,
     pending,
     obligations,
+    reviews,
     ok
   } = validateService(dir, { wip: false });
 
@@ -182,6 +184,22 @@ export async function build(
         `  Ciérralas en el diseño, o acéptalas por escrito en ${DECISIONS_FILE} con su motivo — ver docs/design-obligations.md`
       )
     );
+  }
+
+  // La revisión semántica bloquea a través del `ok` de validateService, así que sin este
+  // bloque un diseño rechazado por un hallazgo abierto sería indistinguible de uno roto.
+  // Es el mismo fallo que ya ocurrió con las obligaciones, doce líneas más arriba.
+  if (reviews.errors.length > 0) {
+    console.error(pc.bold(pc.red(`✘ ${REVIEW_FILE} — ${reviews.errors.length} error(es):`)));
+    for (const message of reviews.errors) console.error(`  ${pc.red('•')} ${message}`);
+  }
+  if (reviews.open.length > 0) {
+    console.error(pc.bold(pc.red(`✘ Revisión con hallazgos abiertos — ${reviews.open.length}:`)));
+    for (const item of reviews.open) {
+      console.error(`  ${pc.red('•')} ${pc.cyan(item.id)} ${item.title}`);
+      if (item.note) console.error(pc.dim(`    ${item.note}`));
+    }
+    console.error(pc.dim(`  Ciérralos en el diseño y vuelve a ejecutar /keel-validate — ver docs/design-obligations.md`));
   }
 
   if (!ok || pending.length > 0) {

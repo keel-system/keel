@@ -5,6 +5,8 @@ import { LAYERS, schemaPathFor } from './assets.js';
 import { MANIFEST_FILE, loadService } from './loader.js';
 import { checkCrossRefs } from './crossrefs.js';
 import { loadDecisions, resolveObligations } from './decisions.js';
+import { loadReviews, resolveReviews } from './review-state.js';
+import { applicableReviews } from './reviews.js';
 import { SCENARIOS_FILE } from './spec-files.js';
 
 const Ajv2020 = Ajv2020Module.default ?? Ajv2020Module;
@@ -101,7 +103,8 @@ export function validateService(dir, { wip = false } = {}) {
     crossRefErrors: [],
     warnings: [],
     pending: [],
-    obligations: { open: [], accepted: [], stale: [], orphans: [], errors: [] }
+    obligations: { open: [], accepted: [], stale: [], orphans: [], errors: [] },
+    reviews: { covered: [], missing: [], open: [], accepted: [], stale: false, reviewedAt: null, orphans: [], errors: [] }
   };
 
   const { manifest, layers, errors: loadErrors } = loadService(dir);
@@ -173,6 +176,23 @@ export function validateService(dir, { wip = false } = {}) {
     result.obligations.stale.length > 0 ||
     result.obligations.errors.length > 0;
 
-  result.ok = errors.length === 0 && (wip || !obligationsBlock);
+  // Capa 4: la revisión semántica, cruzada con el catálogo de lo que le toca a este
+  // diseño. Es lo que distingue un diseño revisado de uno del que nadie miró la mitad:
+  // sin veredicto escrito, las dos cosas se escriben igual.
+  //
+  // Bloquea SOLO por un veredicto `open` o por un error de formato. Lo que falta por
+  // revisar (`missing`) y la revisión caducada (`stale`) se reportan y no bloquean —
+  // todavía. Poner eso en rojo el primer día dejaría en rojo todos los diseños que ya
+  // existen, incluidas las fixtures que son sujeto de las redes en vivo del generador, y
+  // un gate que aparece ya roto se aprende a ignorar. Se aprieta cuando los diseños
+  // tengan su `review.yaml`; un hallazgo ABIERTO, en cambio, es un hallazgo abierto desde
+  // el primer minuto.
+  const { doc: reviewDoc, errors: reviewErrors } = loadReviews(dir);
+  result.reviews = resolveReviews(applicableReviews(effectiveLayers), reviewDoc, manifest?.service?.version);
+  result.reviews.errors.unshift(...reviewErrors);
+
+  const reviewsBlock = result.reviews.open.length > 0 || result.reviews.errors.length > 0;
+
+  result.ok = errors.length === 0 && (wip || (!obligationsBlock && !reviewsBlock));
   return result;
 }
