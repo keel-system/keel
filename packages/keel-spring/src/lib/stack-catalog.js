@@ -975,6 +975,23 @@ export const TELEMETRY_INFRA = {
   endpointVar: 'OTEL_EXPORTER_OTLP_ENDPOINT'
 };
 
+/** Directorio del proyecto generado donde viven el panel y las alertas. */
+export const OBSERVABILITY_DIR = 'observability';
+
+/**
+ * Dónde espera la imagen del backend de prueba encontrar lo que se provisiona.
+ *
+ * <p>Estas rutas son de DENTRO del contenedor y aparecen en dos sitios —el montaje del compose y
+ * el archivo del proveedor, que apunta al directorio de los paneles—, así que viven aquí y no
+ * escritas a mano en cada uno. Con dos copias, la que se quede atrás deja a Grafana arrancando
+ * sin decir nada y con el panel ausente: el fallo se ve en la UI y no en ningún log.
+ */
+export const GRAFANA_PROVISIONING = {
+  dashboardsDir: '/otel-lgtm/grafana/conf/provisioning/dashboards/custom',
+  provider: '/otel-lgtm/grafana/conf/provisioning/dashboards/custom.yaml',
+  alerting: '/otel-lgtm/grafana/conf/provisioning/alerting/keel-alerts.yaml'
+};
+
 /** Endpoint OTLP/HTTP del colector visto desde DENTRO de la red de deploy/. */
 export function collectorEndpoint() {
   const { collector } = TELEMETRY_INFRA;

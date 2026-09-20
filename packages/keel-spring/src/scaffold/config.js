@@ -15,7 +15,8 @@ import { usesOutbox } from './outbox.js';
 import { usesIdempotency } from './idempotency.js';
 import { usesHttpIdempotency } from './http-idempotency.js';
 import { usesCorrelation } from './correlation.js';
-import { usesTelemetry } from './telemetry.js';
+import { instrumentationFor, usesTelemetry } from './telemetry.js';
+import { METRICS_TRANSPORT, OBSERVATIONS } from '../lib/telemetry-probes.js';
 import { SWEEP_BATCH_DEFAULT } from './claim.js';
 
 const PROFILES = ['local', 'develop', 'production'];
@@ -91,7 +92,7 @@ export function generate(model) {
     // Actuator: transversal al stack, siempre presente. Health con probes de
     // liveness/readiness para Kubernetes; el detalle del health solo se muestra
     // fuera de production.
-    fragments.push(fragment(profile, 'management', managementYaml(profile)));
+    fragments.push(fragment(profile, 'management', managementYaml(model, profile)));
     // Solo con `telemetry: otel`: a dónde van las tres señales (un colector) y cuánto se muestrea.
     if (usesTelemetry(model)) {
       fragments.push(fragment(profile, 'telemetry', telemetryYaml(model, profile)));
@@ -362,14 +363,24 @@ function telemetryYaml(model, profile) {
     '      compression: gzip',
     '      export:',
     '        enabled: ${LOG_EXPORT_OTLP:false}',
+    // Las métricas NO salen por aquí por defecto: las viene a buscar el colector a
+    // /actuator/prometheus. El motivo es único y es el de los EXEMPLARS —el registro OTLP de
+    // Micrometer no sabe de ellos hasta la 1.17 y Boot 3.5 gestiona la 1.15—, así que el push se
+    // queda como salida para quien no pueda scrapear. Es el simétrico de LOG_EXPORT_OTLP y por la
+    // misma razón: los dos caminos a la vez duplican cada serie en el backend.
     '    metrics:',
     '      export:',
     `        url: ${endpoint}/v1/metrics`,
     `        step: ${envWithDefault(profile, 'METRICS_EXPORT_STEP', step)}`,
     // Histogramas exponenciales: el backend calcula cualquier percentil (p95, p99) sin fijar los
-    // cubos de antemano, y con un tamaño acotado.
+    // cubos de antemano, y con un tamaño acotado. Solo aplica a esta salida: la exposición de
+    // Prometheus publica los cubos clásicos, que son los que llevan pegados los exemplars.
     '        histogram-flavor: base2_exponential_bucket_histogram',
-    `        enabled: ${exportEnabled}`,
+    `        enabled: ${envWithDefault(profile, METRICS_TRANSPORT.otlp.envVar, 'false')}`,
+    '  prometheus:',
+    '    metrics:',
+    '      export:',
+    `        enabled: ${envWithDefault(profile, METRICS_TRANSPORT.prometheus.envVar, 'true')}`,
     // Latencias con histograma: sin esto las métricas de tiempo solo dan media y máximo, y la
     // pregunta de producción —¿cuánto tarda el 1 % más lento?— no tiene respuesta.
     '  metrics:',
@@ -378,9 +389,48 @@ function telemetryYaml(model, profile) {
     '        "[http.server.requests]": true',
     '        "[http.client.requests]": true',
     '        "[keel.use-case]": true',
-    ...brokerObservationLines(model)
+    ...histogramLines(model),
+    ...brokerObservationLines(model),
+    ...instrumentationLines(model, profile)
   ];
   return lines.join('\n') + '\n';
+}
+
+/**
+ * Los histogramas de los subsistemas instrumentables. Son los MISMOS que llevan los exemplars:
+ * un exemplar viaja pegado a un cubo del histograma, así que una métrica sin histograma se ve en
+ * el panel pero no se puede saltar desde ella a una traza.
+ */
+function histogramLines(model) {
+  return instrumentationFor(model)
+    .filter((entry) => entry.id !== 'cache')
+    .map((entry) => `        "[${entry.id === 'storage' ? OBSERVATIONS.storage : OBSERVATIONS.mailSend}]": true`);
+}
+
+/**
+ * Los interruptores de la instrumentación opcional, uno por subsistema que el diseño declara.
+ *
+ * <p>Solo se emite el del subsistema que existe: declarar `TELEMETRY_INSTRUMENT_STORAGE` en un
+ * servicio sin buckets sería una palanca que no mueve nada, y eso es peor que no tenerla —quien la
+ * ponga creerá que hizo algo—.
+ *
+ * <p>Van encendidos fuera de `test`: con la telemetría elegida, la señal es lo que se espera. Lo
+ * que el interruptor sirve es para APAGARLA sin recompilar ni desplegar otro código, que es la
+ * pregunta real de un operador con un entorno caro o ruidoso.
+ */
+function instrumentationLines(model, profile) {
+  const entries = instrumentationFor(model);
+  if (entries.length === 0) return [];
+  const lines = ['keel:', '  telemetry:'];
+  lines.push('    # Instrumentación opcional: se apaga por ENTORNO, sin recompilar ni desplegar');
+  lines.push('    # otro código. Cambia al reiniciar el proceso, nunca en caliente.');
+  lines.push('    instrumentation:');
+  for (const entry of entries) {
+    lines.push(`      # ${entry.label}`);
+    lines.push(`      ${entry.id}:`);
+    lines.push(`        enabled: ${envWithDefault(profile, entry.envVar, 'true')}`);
+  }
+  return lines;
 }
 
 /**
@@ -410,8 +460,15 @@ function brokerObservationLines(model) {
   ];
 }
 
-// Perfil `test`: la suite unitaria no abre trazas ni exporta nada.
-function testTelemetryYaml() {
+// Perfil `test`: la suite unitaria no abre trazas ni exporta nada, y no instrumenta nada.
+//
+// La instrumentación se apaga AQUÍ y no se deja al default por una razón concreta: los aspectos
+// de puerto y la observación de Lettuce meten un objeto en medio de cada llamada, y el perfil
+// `test` arranca contra H2 o contra un mongod embebido. Medir ahí no dice nada de producción, y
+// la lista de subsistemas sale de la misma función que la de los otros perfiles —no hay dos
+// listas que se puedan desincronizar—.
+function testTelemetryYaml(model) {
+  const off = instrumentationFor(model).flatMap((entry) => [`      ${entry.id}:`, '        enabled: false']);
   return [
     'management:',
     '  tracing:',
@@ -425,7 +482,12 @@ function testTelemetryYaml() {
     '        enabled: false',
     '    metrics:',
     '      export:',
-    '        enabled: false'
+    '        enabled: false',
+    '  prometheus:',
+    '    metrics:',
+    '      export:',
+    '        enabled: false',
+    ...(off.length > 0 ? ['keel:', '  telemetry:', '    instrumentation:', ...off] : [])
   ].join('\n') + '\n';
 }
 
@@ -455,10 +517,15 @@ function statisticsEnabled(model, profile) {
 // no lo dijeron —esto exponía `metrics` en los tres perfiles y aquél solo abría `health/**`—, y el
 // resultado fue un helper del arnés que pedía la métrica sin token y moría con «respuesta
 // inesperada del actuator» en cualquier diseño con capa security. Los cruza un test.
-function managementYaml(profile) {
+function managementYaml(model, profile) {
   const showDetails = profile === 'production' ? 'never' : 'always';
-  // Ver arriba: en production, sin `metrics`.
-  const endpoints = profile === 'production' ? 'health,info' : 'health,info,metrics';
+  // Ver arriba: en production, sin `metrics`. Y por lo mismo, sin `prometheus`: la exposición del
+  // scrape publica esos mismos nombres, así que lo que la protege NO es la autorización —que ahí
+  // es `permitAll`, porque quien scrapea es un colector sin token— sino no estar expuesta. Quien
+  // quiera scrapear en producción lo expone a conciencia con MANAGEMENT_ENDPOINTS y lo cierra en
+  // la red, o se queda con el push por OTLP (METRICS_EXPORT_OTLP=true) y pierde los exemplars.
+  const scrape = usesTelemetry(model) && profile !== 'production' ? `,${METRICS_TRANSPORT.actuatorEndpointId}` : '';
+  const endpoints = profile === 'production' ? 'health,info' : `health,info,metrics${scrape}`;
   const lines = [
     'management:',
     '  endpoints:',
@@ -1342,7 +1409,7 @@ function testProfileFiles(model) {
   }
 
   if (usesTelemetry(model)) {
-    fragments.push(fragment('test', 'telemetry', testTelemetryYaml()));
+    fragments.push(fragment('test', 'telemetry', testTelemetryYaml(model)));
   }
 
   // Correo: el binding de las propiedades `mail.*` y el JavaMailSender que

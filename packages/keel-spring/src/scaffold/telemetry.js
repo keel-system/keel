@@ -19,24 +19,54 @@
 //     no spans sueltos del Tracer: así el SQL que ejecuta el handler tiene una observación padre,
 //     y el predicado que tira las consultas sin padre (el ruido del reclamo del relay) no se
 //     lleva también las del consumo.
+//   · Los EXEMPLARS no tienen clase aquí, y no es un olvido: Boot los autoconfigura él solo
+//     (`PrometheusExemplarsAutoConfiguration` aporta el `SpanContext` con el que el registro de
+//     Prometheus los rellena) en cuanto coexisten ese registro y un `Tracer`. Hubo una clase propia
+//     que hacía exactamente eso, y la falsación por mutación demostró que era código muerto:
+//     quitándola, los exemplars seguían saliendo. La de Boot además carga el tracer de forma
+//     PEREZOSA a propósito, para romper el ciclo registro ↔ tracer.
 //   · El predicado anti-ruido es la mitad de la robustez. El relay dispara cada segundo: sin él,
 //     cada tick es una traza raíz, y las probes de Kubernetes otras tantas — el backend se llena
 //     de trazas vacías y el muestreo en producción descarta las que importan.
 
 import { javaFile, javaPath, subPackage } from './render.js';
+import { cachedOperations } from './cache.js';
+import {
+  ATTRIBUTES,
+  INSTRUMENTATION,
+  OBSERVATIONS,
+  REDIS_OBSERVATION,
+  usesTelemetry
+} from '../lib/telemetry-probes.js';
 
 export const TELEMETRY_PKG = 'infrastructure.telemetry';
 
-// Nombres de las observaciones propias. Son también el nombre de sus métricas (timers), así
-// que van en el vocabulario `keel.*` que ya usa el gauge del outbox.
-export const OBSERVATIONS = {
-  useCase: 'keel.use-case',
-  outboxPublish: 'keel.outbox.publish',
-  messageConsume: 'keel.message.consume'
-};
+// El vocabulario (nombres de observación, atributos, interruptores) y el predicado de si hay
+// telemetría viven en `src/lib/telemetry-probes.js`, que es de donde lo lee también el runner. Se
+// reexportan porque quien ya los consumía los pedía aquí, y dos definiciones del mismo nombre
+// divergen a la primera.
+export { OBSERVATIONS, usesTelemetry };
 
-export function usesTelemetry(model) {
-  return model.stack?.telemetry === 'otel';
+/**
+ * Los subsistemas cuya instrumentación este diseño puede encender y apagar por entorno.
+ *
+ * <p>El predicado vive aquí y no en el vocabulario porque la caché no es una capa: es la clave
+ * `cache:` de una operación, y quién la declara ya lo sabe `cachedOperations()`. Preguntárselo a
+ * él es lo que impide que «usa caché» acabe teniendo dos definiciones.
+ */
+export function instrumentationFor(model) {
+  if (!usesTelemetry(model)) return [];
+  const applies = {
+    cache: cachedOperations(model).length > 0,
+    storage: Boolean(model.layersPresent?.storage),
+    mail: Boolean(model.layersPresent?.mail)
+  };
+  return Object.values(INSTRUMENTATION).filter((entry) => applies[entry.id]);
+}
+
+/** ¿Declara este diseño el interruptor de `<id>`? */
+export function instruments(model, id) {
+  return instrumentationFor(model).some((entry) => entry.id === id);
 }
 
 /** ¿Hay suscripciones con la envoltura keel, es decir, un `metadata.traceparent` que leer? */
@@ -64,7 +94,11 @@ export const TRACED_DISPATCH_IMPORTS = ['io.micrometer.observation.transport.Kin
 
 export function generate(model) {
   if (!usesTelemetry(model)) return [];
-  return [renderConfig(model), renderMessageTracing(model), renderInstaller(model)];
+  const files = [renderConfig(model), renderMessageTracing(model), renderInstaller(model)];
+  if (instruments(model, 'storage')) files.push(renderStorageAspect(model));
+  if (instruments(model, 'mail')) files.push(renderMailAspect(model));
+  if (instruments(model, 'cache')) files.push(renderCacheObservation(model));
+  return files;
 }
 
 function renderConfig(model) {
@@ -241,6 +275,201 @@ public class TelemetryConfig {
   return {
     path: javaPath(model, TELEMETRY_PKG, 'TelemetryConfig'),
     content: javaFile(subPackage(model, TELEMETRY_PKG), [...imports], body)
+  };
+}
+
+/**
+ * Spans de las operaciones sobre los buckets.
+ *
+ * <p>Va como ASPECTO SOBRE EL PUERTO y no dentro de un adaptador porque el adaptador de storage
+ * **lo escribe el agente**: build solo emite `FileStorage`. Un aspecto sobre la interfaz
+ * instrumenta cualquier implementación, la escriba quien la escriba y cambie de proveedor cuando
+ * cambie, y no crea un segundo bean del mismo tipo —no hay `@Primary` que coordinar con nadie—.
+ */
+function renderStorageAspect(model) {
+  const bucketAttribute = `
+                .lowCardinalityKeyValue("${ATTRIBUTES.storageBucket}", bucketOf(joinPoint))`;
+  return renderPortAspect(model, {
+    className: 'StorageObservationAspect',
+    portFqn: `${subPackage(model, 'domain.storage')}.FileStorage`,
+    portName: 'FileStorage',
+    observation: OBSERVATIONS.storage,
+    property: INSTRUMENTATION.storage.property,
+    envVar: INSTRUMENTATION.storage.envVar,
+    subject: 'cada operación sobre un bucket',
+    operationAttribute: ATTRIBUTES.storageOperation,
+    extraAttributes: bucketAttribute,
+    extraMembers: `
+
+    /**
+     * El bucket LÓGICO del diseño, que es el primer parámetro de todos los métodos del puerto.
+     * Es un nombre de un conjunto cerrado —las constantes de {@code StoragePolicies}—, así que
+     * cabe como etiqueta; la {@code key} del objeto NO sale nunca: es un nombre de archivo, y los
+     * nombres de archivo llevan datos de personas.
+     */
+    private static String bucketOf(ProceedingJoinPoint joinPoint) {
+        Object[] args = joinPoint.getArgs();
+        return args.length > 0 && args[0] instanceof String bucket ? bucket : "unknown";
+    }`
+  });
+}
+
+/**
+ * Spans de los envíos de correo. Mismo patrón que el de storage aunque aquí el adaptador sí lo
+ * genera build: una técnica, dos puertos, un solo sitio que mantener.
+ *
+ * <p>No lleva más etiqueta que el desenlace, y es deliberado: en el puerto no hay nada de baja
+ * cardinalidad que el span padre no diga ya, y lo que sí hay —el destinatario y el asunto— es
+ * dato. Un correo identificado por su destinatario en el backend de trazas es una lista de
+ * direcciones que nadie decidió publicar.
+ */
+function renderMailAspect(model) {
+  return renderPortAspect(model, {
+    className: 'MailObservationAspect',
+    portFqn: `${subPackage(model, 'application.port.out')}.MailSender`,
+    portName: 'MailSender',
+    observation: OBSERVATIONS.mailSend,
+    property: INSTRUMENTATION.mail.property,
+    envVar: INSTRUMENTATION.mail.envVar,
+    subject: 'cada entrega de correo al proveedor',
+    operationAttribute: null,
+    extraAttributes: '',
+    extraMembers: ''
+  });
+}
+
+/**
+ * El aspecto que observa un PUERTO entero, parametrizado. Es una sola forma renderizada en un
+ * solo sitio: con dos copias, la primera que cambie deja a la otra emitiendo la anterior y el
+ * síntoma es un span que mide otra cosa.
+ */
+function renderPortAspect(model, spec) {
+  const operationLines = spec.operationAttribute
+    ? `
+                .lowCardinalityKeyValue("${spec.operationAttribute}", operation)`
+    : '';
+  const contextual = spec.operationAttribute ? '"${observation} " + operation'.replace('${observation}', spec.observation) : `"${spec.observation}"`;
+
+  const body = `/**
+ * Observa ${spec.subject}: un span con su duración dentro de la traza que la provocó, y su timer.
+ *
+ * <p>Sin esto, una petición cuyo tiempo se va aquí enseña un HUECO en la cascada de spans —el
+ * caso de uso tarda y nada explica por qué—, que es peor que no tener traza: lleva a buscar el
+ * tiempo donde no está.
+ *
+ * <p>Se enciende y se apaga por ENTORNO ({@code ${spec.envVar}}). El interruptor se resuelve al
+ * construir el contexto, así que cambia con un reinicio y nunca en caliente; apagado, este bean
+ * no existe y el puerto se invoca sin nada en medio.
+ */
+@Aspect
+@Component
+@ConditionalOnProperty(name = "${spec.property}", havingValue = "true", matchIfMissing = true)
+public class ${spec.className} {
+
+    private final ObservationRegistry observationRegistry;
+
+    ${spec.className}(ObjectProvider<ObservationRegistry> observationRegistry) {
+        this.observationRegistry = observationRegistry.getIfAvailable(() -> ObservationRegistry.NOOP);
+    }
+
+    /**
+     * <p>La firma se lee ANTES del {@code proceed()}, nunca dentro del {@code catch}: es la misma
+     * lección que dejó escrita {@code LogExceptionsAspect}. Ahí es donde carga por primera vez la
+     * implementación de la firma, y si esa primera vez cae durante el apagado, el diagnóstico que
+     * se estaba escribiendo se lo lleva un {@code NoClassDefFoundError}.
+     */
+    @Around("execution(* ${spec.portFqn}+.*(..))")
+    public Object observe(ProceedingJoinPoint joinPoint) throws Throwable {
+        String operation = joinPoint.getSignature().getName();
+        Observation observation = Observation.createNotStarted("${spec.observation}", observationRegistry)
+                .contextualName(${contextual})${operationLines}${spec.extraAttributes}
+                .start();
+        try (Observation.Scope scope = observation.openScope()) {
+            Object result = joinPoint.proceed();
+            observation.lowCardinalityKeyValue("${ATTRIBUTES.outcome}", "ok");
+            return result;
+        } catch (Throwable error) {
+            observation.lowCardinalityKeyValue("${ATTRIBUTES.outcome}", "error");
+            observation.error(error);
+            throw error;
+        } finally {
+            observation.stop();
+        }
+    }${spec.extraMembers}
+}`;
+
+  return {
+    path: javaPath(model, TELEMETRY_PKG, spec.className),
+    content: javaFile(
+      subPackage(model, TELEMETRY_PKG),
+      [
+        'io.micrometer.observation.Observation',
+        'io.micrometer.observation.ObservationRegistry',
+        'org.aspectj.lang.ProceedingJoinPoint',
+        'org.aspectj.lang.annotation.Around',
+        'org.aspectj.lang.annotation.Aspect',
+        'org.springframework.beans.factory.ObjectProvider',
+        'org.springframework.boot.autoconfigure.condition.ConditionalOnProperty',
+        'org.springframework.stereotype.Component'
+      ],
+      body
+    )
+  };
+}
+
+/**
+ * Observación de los comandos de Redis, y las estadísticas de la caché.
+ *
+ * <p>Aquí solo están los SPANS, que es lo que Boot no autoconfigura —igual que no autoconfiguraba
+ * la observación de Mongo—. Las MÉTRICAS de acierto no caben en este bean y no es un detalle de
+ * organización: se piden al CONSTRUIR el gestor de cachés, y ese lo construye `CacheConfig`, así
+ * que un `RedisCacheManagerBuilderCustomizer` aquí no lo aplicaría nadie —la autoconfiguración de
+ * Boot que los consume se retira en cuanto la aplicación declara su propio `CacheManager`—. Sería
+ * un bean que existe, no falla y no hace nada.
+ */
+function renderCacheObservation(model) {
+  const body = `/**
+ * La caché en la telemetría: un span por comando de Redis y el ratio de acierto por caché.
+ *
+ * <p>Aparte de {@code CacheConfig} y no dentro: aquella existe sin telemetría y no puede crecer
+ * condicionales. Esta solo se genera con {@code telemetry: otel} y se apaga por entorno con
+ * {@code ${INSTRUMENTATION.cache.envVar}}.
+ *
+ * <p>La clave de caché NO viaja a ninguna parte: lleva el id del recurso y a veces el de la
+ * persona. La etiqueta de las métricas es el NOMBRE de la caché, que es del diseño y por tanto un
+ * conjunto cerrado.
+ */
+@Configuration
+@ConditionalOnProperty(name = "${INSTRUMENTATION.cache.property}", havingValue = "true", matchIfMissing = true)
+public class CacheObservationConfig {
+
+    /**
+     * Spans de cada comando de Redis (observación {@code ${REDIS_OBSERVATION}}). El predicado
+     * anti-ruido de {@code TelemetryConfig} solo deja pasar los que cuelgan de algo, que es lo
+     * correcto: un GET de caché siempre nace dentro de un caso de uso.
+     */
+    @Bean
+    public ClientResourcesBuilderCustomizer redisObservation(ObjectProvider<ObservationRegistry> observationRegistry) {
+        ObservationRegistry registry = observationRegistry.getIfAvailable(() -> ObservationRegistry.NOOP);
+        return builder -> builder.tracing(new MicrometerTracing(registry, "redis"));
+    }
+}`;
+
+  return {
+    path: javaPath(model, TELEMETRY_PKG, 'CacheObservationConfig'),
+    content: javaFile(
+      subPackage(model, TELEMETRY_PKG),
+      [
+        'io.lettuce.core.tracing.MicrometerTracing',
+        'io.micrometer.observation.ObservationRegistry',
+        'org.springframework.beans.factory.ObjectProvider',
+        'org.springframework.boot.autoconfigure.condition.ConditionalOnProperty',
+        'org.springframework.boot.autoconfigure.data.redis.ClientResourcesBuilderCustomizer',
+        'org.springframework.context.annotation.Bean',
+        'org.springframework.context.annotation.Configuration'
+      ],
+      body
+    )
   };
 }
 

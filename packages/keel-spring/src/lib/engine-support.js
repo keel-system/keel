@@ -545,14 +545,14 @@ export const MECHANISMS = {
         net: 'corrida',
         engines: ['postgresql'],
         falsified: false,
-        why: 'MEDIDO el 2026-09-19 en la corrida e2e de stock-reservation con --telemetry otel: la app en contenedor (deploy/), PostgreSQL real y el colector con Grafana LGTM detrás. La traza de una confirmación llegó a Tempo con 22 spans y los de JDBC (connection/query/result-set) colgando del span del caso de uso. SIN FALSAR: no se probó ninguna mutación y no hay script que lo repita — es una corrida, no una red de CI'
+        why: 'MEDIDO el 2026-09-19 en la corrida e2e de stock-reservation con --telemetry otel: la app en contenedor (deploy/), PostgreSQL real y el colector con Grafana LGTM detrás. La traza de una confirmación llegó a Tempo con 22 spans y los de JDBC (connection/query/result-set) colgando del span del caso de uso. SIN FALSAR: no se probó ninguna mutación y no hay script que lo repita — es una corrida, no una red de CI. `npm run telemetry-check` NO cierra este hueco y conviene saberlo: arranca la app y mide lo que PUBLICA (las series del caso de uso, de storage y de correo, sus etiquetas, los exemplars y los interruptores), pero el span del almacén necesita una consulta DENTRO de un caso de uso, y el handler recién generado lanza antes de tocar la base'
       },
       document: {
         state: 'verificado',
         net: 'corrida',
         engines: ['mongodb'],
         falsified: false,
-        why: 'MEDIDO el 2026-09-19 sobre notification-mailer-mongo con --telemetry otel, contra el Mongo de infra/ (replica set) y el mismo colector: el barrido programado dejó en Tempo el span notifications.findAndModify con db.system=mongodb colgando del span de su caso de uso, que es lo que registra MongoObservationCommandListener. SIN FALSAR, por lo mismo que la rama relacional: es una corrida'
+        why: 'MEDIDO el 2026-09-19 sobre notification-mailer-mongo con --telemetry otel, contra el Mongo de infra/ (replica set) y el mismo colector: el barrido programado dejó en Tempo el span notifications.findAndModify con db.system=mongodb colgando del span de su caso de uso, que es lo que registra MongoObservationCommandListener. SIN FALSAR, por lo mismo que la rama relacional: es una corrida, y `telemetry-check` tampoco llega aquí por el mismo motivo que en la relacional'
       }
     }
   },

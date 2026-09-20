@@ -120,6 +120,13 @@ export function generate(model) {
       "implementation 'io.micrometer:micrometer-tracing-bridge-otel'",
       "implementation 'io.opentelemetry:opentelemetry-exporter-otlp'",
       "implementation 'io.micrometer:micrometer-registry-otlp'",
+      // El registro de PROMETHEUS, que es por donde salen las métricas por defecto: el colector
+      // viene a buscarlas a /actuator/prometheus. Está aquí por una sola razón, los EXEMPLARS —el
+      // enlace de un punto de una métrica a una traza de ejemplo—, que el registro OTLP de
+      // Micrometer no sabe emitir hasta la 1.17 y Boot 3.5 gestiona la 1.15. El de OTLP se queda
+      // al lado a propósito: volver al push tiene que ser una variable de entorno
+      // (METRICS_EXPORT_OTLP=true), nunca recompilar.
+      "implementation 'io.micrometer:micrometer-registry-prometheus'",
       // Logs por OTLP. Boot exporta el SDK de logs pero no trae el appender de logback: lo
       // instala TelemetryConfig por código (ver por qué ahí). Alineado con el SDK de Boot.
       `implementation 'io.opentelemetry.instrumentation:opentelemetry-logback-appender-1.0:${OTEL_LOGBACK_APPENDER_VERSION}'`

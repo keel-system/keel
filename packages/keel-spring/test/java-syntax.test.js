@@ -185,6 +185,10 @@ const MATRIX = [
   ['stock-reservation', { broker: 'kafka', telemetry: 'otel' }],
   ['asset-vault', { broker: 'snssqs', telemetry: 'otel' }],
   ['stock-reservation', { broker: 'rabbitmq', telemetry: 'otel' }],
+  // Cuarta fila, y la única que trae el aspecto del CORREO: `asset-vault` cubre los de storage y
+  // caché, pero la capa `mail` solo la declara esta. Sin ella, MailObservationAspect no lo
+  // tokenizaría nadie.
+  ['notification-mailer', { broker: 'kafka', telemetry: 'otel' }],
   ['catalog-extended', { broker: 'kafka' }],
   ['catalog-extended', { broker: 'rabbitmq' }],
   ['catalog-extended', { broker: 'snssqs' }],

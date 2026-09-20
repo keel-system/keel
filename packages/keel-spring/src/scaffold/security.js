@@ -9,6 +9,7 @@
 
 import { camelCase } from '../lib/naming.js';
 import { javaFile, javaPath, subPackage } from './render.js';
+import { METRICS_TRANSPORT, usesTelemetry } from '../lib/telemetry-probes.js';
 
 const SECURITY_PKG = 'infrastructure.configurations.security';
 
@@ -117,7 +118,7 @@ function audienceOf(model, sec) {
 // Bloque authorizeHttpRequests: endpoints técnicos permitidos (solo en la cadena
 // que cubre todo), un matcher por regla de operación (antes del anyRequest) y la
 // autoridad de cierre como anyRequest.
-function authorizeBlock(matchers, { defaultAuthority, permitTechnical = true }) {
+function authorizeBlock(matchers, { defaultAuthority, permitTechnical = true, permitScrape = false }) {
   const lines = ['            .authorizeHttpRequests(auth -> auth'];
   if (permitTechnical) {
     lines.push(
@@ -128,6 +129,17 @@ function authorizeBlock(matchers, { defaultAuthority, permitTechnical = true }) 
       // Los dos artefactos tienen que decir lo mismo, y hay un test que los cruza.
       '                    .requestMatchers("/actuator/health/**", "/actuator/info", "/swagger-ui/**", "/swagger-ui.html", "/v3/api-docs/**").permitAll()'
     );
+    if (permitScrape) {
+      lines.push(
+        // El scrape de métricas, y es la excepción que hay que entender: quien viene a buscarlas
+        // es un COLECTOR, un proceso sin identidad ni forma de renovar un token, así que o entra
+        // sin credencial o no hay métricas. Lo que impide que esos nombres salgan al borde no es
+        // esta regla sino la EXPOSICIÓN: `management.yaml` no publica el endpoint en production,
+        // y sin exposición Boot responde 404 haya la regla que haya. Los dos artefactos tienen
+        // que seguir diciendo lo mismo, y el mismo test que cruza `metrics` cruza esto.
+        `                    .requestMatchers("${METRICS_TRANSPORT.scrapePath}").permitAll()`
+      );
+    }
   }
   for (const m of matchers) {
     lines.push(`                    .requestMatchers(HttpMethod.${m.method}, "${m.path}").${m.authority}`);
@@ -208,7 +220,7 @@ ${corsLine}            .authorizeHttpRequests(auth -> auth.anyRequest().permitAl
     ...(sec.cors ? [corsCall] : []),
     '            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))',
     exceptionHandling,
-    authorizeBlock(mainMatchers, { defaultAuthority: sec.defaultAuthority })
+    authorizeBlock(mainMatchers, { defaultAuthority: sec.defaultAuthority, permitScrape: usesTelemetry(model) })
   ];
 
   let converterBean = '';

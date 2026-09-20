@@ -6,7 +6,9 @@ Este documento solo existe si el proyecto se generó con telemetría (`telemetry
 
 ## El patrón: un colector en medio
 
-El servicio emite **trazas, métricas y logs por OTLP/HTTP a un colector OpenTelemetry**, y lo único que sabe de él es su dirección: la variable `OTEL_EXPORTER_OTLP_ENDPOINT`. A qué backend va cada señal (Tempo, Jaeger, Loki, Prometheus, un proveedor SaaS) lo decide **la configuración del colector**, no el servicio.
+El servicio emite **trazas y logs por OTLP/HTTP a un colector OpenTelemetry**, y lo único que sabe de él es su dirección: la variable `OTEL_EXPORTER_OTLP_ENDPOINT`. Las **métricas van al revés**: no se empujan, las viene a buscar el colector a `/actuator/prometheus`. A qué backend va cada señal (Tempo, Jaeger, Loki, Prometheus, un proveedor SaaS) lo decide **la configuración del colector**, no el servicio.
+
+El motivo del scrape es único y son los **exemplars** —el enlace de un punto de una métrica a una traza de ejemplo—: viajan pegados a los cubos del histograma en el formato de exposición de Prometheus, y el registro OTLP de Micrometer no sabe emitirlos con la versión que gestiona Boot 3.5. El push por OTLP sigue disponible con `METRICS_EXPORT_OTLP=true` para quien no pueda scrapear; los dos a la vez duplican cada serie.
 
 Consecuencia práctica, y es la razón de todo el diseño: **cambiar de backend no toca el código ni la configuración de la aplicación**. Se edita el bloque `exporters` del colector (en pruebas manuales, `deploy/otel/collector.yaml`) y se reinicia el colector.
 
@@ -14,7 +16,7 @@ Consecuencia práctica, y es la razón de todo el diseño: **cambiar de backend 
 
 | Pieza | Dónde | Qué hace |
 |---|---|---|
-| Dependencias | `build.gradle` | Puente de Micrometer Tracing a OpenTelemetry, exportadores OTLP de trazas y métricas, appender OTLP de logback y, en el modelo relacional, `datasource-micrometer` (spans de JDBC). |
+| Dependencias | `build.gradle` | Puente de Micrometer Tracing a OpenTelemetry, exportadores OTLP, el registro de **Prometheus** (por donde salen las métricas y con ellas los exemplars), appender OTLP de logback y, en el modelo relacional, `datasource-micrometer` (spans de JDBC). |
 | Configuración | `parameters/<perfil>/telemetry.yaml` | Endpoint del colector, muestreo, atributos de recurso y la observación del broker (Kafka/RabbitMQ). |
 | `TelemetryConfig` | `infrastructure/telemetry` | Instala el appender OTLP de logs, descarta el ruido (probes del actuator, ticks de las tareas programadas, consultas sin padre) y, en el modelo documental, instrumenta Mongo. |
 | `MessageTracing` | `infrastructure/telemetry` | Lleva el contexto de traza W3C a través de los mensajes (`metadata.traceparent`). |
@@ -24,6 +26,28 @@ Consecuencia práctica, y es la razón de todo el diseño: **cambiar de backend 
 | Logs | `parameters/<perfil>/logging.yaml` | `traceId`/`spanId` en cada línea de texto; JSON (ECS) en consola fuera de `local`, con los ids renombrados a `trace.id`/`span.id`. |
 | Paralelo | `application/support/ContextPropagatingExecutors` | Las tareas lanzadas a otro hilo conservan el MDC y la traza. |
 | Colector de producción | `deploy/otel/collector-agent.example.yaml` + `collector-gateway.example.yaml` | Referencia: agente por nodo (logs de stdout, metadatos de Kubernetes) y gateway (muestreo por cola, único que conoce el backend). |
+| `StorageObservationAspect` / `MailObservationAspect` | `infrastructure/telemetry` | Un span y su timer por operación sobre un bucket (`keel.storage`) y por entrega de correo (`keel.mail.send`). Van sobre el PUERTO, así que instrumentan cualquier adaptador, lo escriba quien lo escriba. |
+| `CacheObservationConfig` | `infrastructure/telemetry` | Un span por comando de Redis (`spring.data.redis`), que Boot no autoconfigura. Las métricas de acierto las pide `CacheConfig` al construir el gestor de cachés. |
+| Panel y alertas | `deploy/observability/` | Un panel de Grafana derivado del diseño y tres alertas, provisionados en el backend de prueba. |
+
+Y lo que **no** tiene clase, para que nadie la escriba: los **exemplars**. Los autoconfigura Boot (`PrometheusExemplarsAutoConfiguration` aporta el `SpanContext` con el que el registro de Prometheus los rellena) en cuanto coexisten ese registro y un `Tracer`. Hubo un bean propio que hacía eso mismo y la falsación por mutación demostró que era código muerto: quitándolo, los exemplars seguían saliendo.
+
+## Instrumentación opcional por subsistema
+
+Tres subsistemas se instrumentan y se DESINSTRUMENTAN por entorno, sin recompilar ni desplegar otro código:
+
+| Subsistema | Variable | Qué desaparece al apagarlo |
+|---|---|---|
+| Caché | `TELEMETRY_INSTRUMENT_CACHE` | El bean que registra la observación de Lettuce. Los comandos de Redis siguen ejecutándose igual. |
+| Almacenamiento | `TELEMETRY_INSTRUMENT_STORAGE` | El aspecto sobre `FileStorage`. El adaptador se invoca directamente, sin nada en medio. |
+| Correo | `TELEMETRY_INSTRUMENT_MAIL` | El aspecto sobre `MailSender`. El correo sale igual. |
+
+Son propiedades leídas con `@ConditionalOnProperty`, así que **se resuelven al construir el contexto**: cambian con un reinicio del proceso y nunca en caliente. Vienen encendidas fuera del perfil `test`, y solo se declaran las de los subsistemas que el diseño trae.
+
+## Dos reglas para quien escribe un adaptador de un puerto instrumentado
+
+- **No lo declares `final`.** Con el aspecto puesto, Spring proxya ese bean y lo hace por CGLIB (Boot pone `proxyTargetClass`), que necesita poder heredar de la clase. Con `final` el contexto **no arranca**, y el mensaje de error habla de CGLIB y no de telemetría: es de los diagnósticos más caros que se pueden dejar puestos.
+- **No lo instrumentes tú.** El aspecto ya abre la observación del puerto entero, con su desenlace. Una observación propia dentro del adaptador duplica el span y el timer, y una serie duplicada no se ve en el panel: se ve en la factura del backend.
 
 ## Perfiles
 
@@ -67,7 +91,8 @@ El contexto de traza viaja en `metadata.traceparent` de la envoltura keel, que e
 
 ## Reglas para quien escribe código
 
-- **No abras spans a mano.** Lo que importa ya es una observación: la petición HTTP, el caso de uso, el SQL, las llamadas salientes, la publicación y el consumo. Un span manual suele duplicar uno existente o quedar huérfano.
+- **No abras spans a mano.** Lo que importa ya es una observación: la petición HTTP, el caso de uso, el SQL, las llamadas salientes, la publicación, el consumo, el bucket, el correo y los comandos de la caché. Un span manual suele duplicar uno existente o quedar huérfano.
+- **Si añades una métrica, añade también dónde se mira.** Una serie que no está en el panel ni en una alerta no la mira nadie; y una alerta que nombra una serie que nadie publica no falla: **no dispara nunca**. Las consultas del panel salen de los mismos nombres que el código, y hay un test que las cruza.
 - **Ni datos personales ni secretos en atributos ni en logs.** Un log con un email, un token o un número de documento viaja al backend de logs y se queda allí. Identifica por id, nunca por el dato. El colector borra por si acaso las cabeceras de credenciales, pero es la última línea, no la primera.
 - **Cardinalidad baja en las etiquetas de métricas.** Nombres de operación o de evento, sí; ids, emails o importes, nunca: cada valor distinto es una serie nueva.
 - **Loguea con SLF4J y parámetros** (`log.info("... {}", id)`), sin concatenar: el appender OTLP conserva los argumentos y el contexto de traza se añade solo.

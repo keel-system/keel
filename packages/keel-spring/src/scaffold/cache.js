@@ -9,6 +9,7 @@
 import { kebabCase, screamingSnake } from '../lib/naming.js';
 import { javaFile, javaPath, subPackage } from './render.js';
 import { timestampModuleImport } from './jackson.js';
+import { usesTelemetry } from '../lib/telemetry-probes.js';
 
 const CACHE_PKG = 'infrastructure.configurations.cache';
 
@@ -75,6 +76,26 @@ function imports(model) {
   ];
 }
 
+/**
+ * Las estadísticas de acierto de la caché, que solo se piden con telemetría.
+ *
+ * Van AQUÍ y no en un `RedisCacheManagerBuilderCustomizer` de la configuración de telemetría
+ * porque esos los aplica la autoconfiguración de Boot, y esa se retira en cuanto la aplicación
+ * declara su propio `CacheManager` —que es justo lo que hace esta clase—: el bean existiría, no
+ * fallaría y no haría nada.
+ *
+ * Sin ellas no hay error: hay AUSENCIA. `cache.gets{result=hit|miss}` no se publica, y el ratio
+ * de acierto —lo único que dice si la caché sirve para algo— no se puede calcular ni en el panel
+ * ni a mano.
+ */
+function statisticsLine(model) {
+  if (!usesTelemetry(model)) return '';
+  return `
+                // Publica cache.gets{result=hit|miss}, cache.puts y cache.removals, etiquetadas
+                // por el NOMBRE de la caché (del diseño: conjunto cerrado, cardinalidad baja).
+                .enableStatistics()`;
+}
+
 function body(model, caches) {
   const constants = caches
     .map(
@@ -133,7 +154,7 @@ ${constants}
 
         return RedisCacheManager.builder(connectionFactory)
                 .cacheDefaults(defaults)
-                .withInitialCacheConfigurations(configurations)
+                .withInitialCacheConfigurations(configurations)${statisticsLine(model)}
                 .build();
     }
 

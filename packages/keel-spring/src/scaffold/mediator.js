@@ -10,6 +10,7 @@
 
 import { javaFile, javaPath, subPackage } from './render.js';
 import { usesTelemetry, OBSERVATIONS } from './telemetry.js';
+import { ATTRIBUTES } from '../lib/telemetry-probes.js';
 
 export const INTERFACES_PKG = 'application.interfaces';
 export const ANNOTATIONS_PKG = 'application.annotations';
@@ -257,8 +258,27 @@ function observation() {
 // barrido). Si la imprimiera también aquí, cada fallo saldría con dos pilas idénticas —la prueba
 // de humo lo vio—. El mediator deja la línea de frontera: qué operación, qué resultado, cuánto.
 function useCaseHelpers(telemetry) {
+  // El desenlace va en la OBSERVACIÓN y no solo en el log, y no es simetría: sin la etiqueta
+  // `keel.outcome` no hay PromQL que separe los fallos del resto, así que la alerta de tasa de
+  // error consultaría una etiqueta inexistente — no dispararía nunca y nadie se enteraría.
   const body = telemetry
-    ? 'return observationOf(operation).observe(() -> logged(operation, action));'
+    ? `Observation observation = observationOf(operation).start();
+        try (Observation.Scope scope = observation.openScope()) {
+            T result = logged(operation, action);
+            observation.lowCardinalityKeyValue("${ATTRIBUTES.outcome}", "ok");
+            return result;
+        } catch (DomainException ex) {
+            // Un rechazo del dominio NO es un error del span: es un desenlace esperado (un 4xx).
+            // Marcarlo como error llenaría de rojo el muestreo por cola justo con lo que funciona.
+            observation.lowCardinalityKeyValue("${ATTRIBUTES.outcome}", "rejected");
+            throw ex;
+        } catch (RuntimeException | Error ex) {
+            observation.lowCardinalityKeyValue("${ATTRIBUTES.outcome}", "error");
+            observation.error(ex);
+            throw ex;
+        } finally {
+            observation.stop();
+        }`
     : 'return logged(operation, action);';
   const observationOf = telemetry
     ? `
@@ -267,7 +287,7 @@ function useCaseHelpers(telemetry) {
     private Observation observationOf(String operation) {
         return Observation.createNotStarted("${OBSERVATIONS.useCase}", observationRegistry)
                 .contextualName(operation)
-                .lowCardinalityKeyValue("keel.operation", operation);
+                .lowCardinalityKeyValue("${ATTRIBUTES.operation}", operation);
     }`
     : '';
   return `

@@ -15,6 +15,7 @@ import { loadService } from 'keel-core';
 import { scaffoldService, resolveStack } from '../src/scaffold/index.js';
 import { askStackConfig, normalizeTelemetry, stackDrift, describeStack } from '../src/lib/stack-config.js';
 import { TELEMETRY_INFRA, collectorEndpoint, collectorHostEndpoint } from '../src/lib/stack-catalog.js';
+import { ATTRIBUTES, INSTRUMENTATION, METRICS_TRANSPORT, OBSERVATIONS } from '../src/lib/telemetry-probes.js';
 
 const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
@@ -295,4 +296,146 @@ test('telemetría: colector de producción de referencia — agente por nodo y g
   // La credencial del backend, desde el entorno del colector.
   assert.ok(project.read('deploy/otel/collector-gateway.example.yaml').includes('${env:OTEL_BACKEND_AUTH}'));
   assert.ok(project.read('src/main/resources/parameters/production/telemetry.yaml').includes('collector-gateway.example.yaml'));
+});
+
+// ─── Instrumentación opcional por subsistema ─────────────────────────────────
+//
+// Lo que se fija aquí son las dos mitades del interruptor: que la propiedad EXISTA con su variable
+// y su default por perfil, y que la clase que la lee exista solo cuando el diseño trae ese
+// subsistema. Una palanca declarada que no mueve nada es peor que no tenerla, y una clase de
+// instrumentación en un servicio sin ese subsistema no falla: no hace nada.
+
+test('instrumentación opcional: los interruptores solo existen para los subsistemas del diseño', () => {
+  const conStorage = generate('asset-vault', { telemetry: 'otel' });
+  const local = conStorage.read('src/main/resources/parameters/local/telemetry.yaml');
+  const develop = conStorage.read('src/main/resources/parameters/develop/telemetry.yaml');
+  const production = conStorage.read('src/main/resources/parameters/production/telemetry.yaml');
+
+  for (const entry of [INSTRUMENTATION.storage, INSTRUMENTATION.cache]) {
+    const key = YAML.parse(local.replace(/\$\{[^}]*\}/g, 'X')).keel.telemetry.instrumentation[entry.id];
+    assert.equal(key.enabled, true, `${entry.id}: encendido en local`);
+    // Fuera de local, por variable de entorno y con default encendido: lo que el interruptor sirve
+    // es para APAGAR sin recompilar, no para tener que acordarse de encenderlo.
+    assert.ok(develop.includes(`\${${entry.envVar}:true}`), `${entry.id} en develop`);
+    assert.ok(production.includes(`\${${entry.envVar}:true}`), `${entry.id} en production`);
+  }
+  // asset-vault no declara mail: su palanca no se emite.
+  assert.ok(!develop.includes(INSTRUMENTATION.mail.envVar));
+
+  const conCorreo = generate('notification-mailer', { telemetry: 'otel' });
+  const mailDevelop = conCorreo.read('src/main/resources/parameters/develop/telemetry.yaml');
+  assert.ok(mailDevelop.includes(`\${${INSTRUMENTATION.mail.envVar}:true}`));
+  assert.ok(!mailDevelop.includes(INSTRUMENTATION.storage.envVar));
+  assert.ok(!mailDevelop.includes(INSTRUMENTATION.cache.envVar));
+});
+
+test('instrumentación opcional: el perfil test la apaga, y la lista sale de la misma función', () => {
+  const project = generate('asset-vault', { telemetry: 'otel' });
+  const parsed = YAML.parse(project.read('src/main/resources/parameters/test/telemetry.yaml'));
+  assert.equal(parsed.keel.telemetry.instrumentation.storage.enabled, false);
+  assert.equal(parsed.keel.telemetry.instrumentation.cache.enabled, false);
+  assert.equal(parsed.management.prometheus.metrics.export.enabled, false);
+});
+
+test('instrumentación opcional: los aspectos de puerto y la observación de Redis, solo con su subsistema', () => {
+  const conStorage = generate('asset-vault', { telemetry: 'otel' });
+  const aspect = conStorage.find('/StorageObservationAspect.java');
+  // Sobre el PUERTO: el adaptador lo escribe el agente, así que no hay dónde meterla dentro.
+  assert.ok(aspect.includes('domain.storage.FileStorage+.*(..)'));
+  assert.ok(aspect.includes(`@ConditionalOnProperty(name = "${INSTRUMENTATION.storage.property}"`));
+  assert.ok(aspect.includes(`"${OBSERVATIONS.storage}"`));
+  assert.ok(aspect.includes(`"${ATTRIBUTES.storageBucket}"`));
+  // La firma ANTES del proceed, misma lección que LogExceptionsAspect.
+  assert.ok(aspect.indexOf('getSignature()') < aspect.indexOf('joinPoint.proceed()'));
+  // La clave del objeto no sale nunca: ni como etiqueta ni como atributo.
+  assert.ok(!aspect.includes('args[1]'));
+
+  const cache = conStorage.find('/CacheObservationConfig.java');
+  assert.ok(cache.includes('io.lettuce.core.tracing.MicrometerTracing'));
+  assert.ok(cache.includes(`@ConditionalOnProperty(name = "${INSTRUMENTATION.cache.property}"`));
+  assert.ok(!conStorage.files.some((file) => file.endsWith('MailObservationAspect.java')));
+  // Las métricas de acierto se piden al CONSTRUIR el gestor de cachés: un customizer de Boot no lo
+  // aplicaría nadie, porque su autoconfiguración se retira en cuanto la app declara su CacheManager.
+  assert.ok(conStorage.find('/CacheConfig.java').includes('.enableStatistics()'));
+
+  const conCorreo = generate('notification-mailer', { telemetry: 'otel' });
+  const mail = conCorreo.find('/MailObservationAspect.java');
+  assert.ok(mail.includes('application.port.out.MailSender+.*(..)'));
+  assert.ok(mail.includes(`"${OBSERVATIONS.mailSend}"`));
+  assert.ok(!conCorreo.files.some((file) => file.endsWith('StorageObservationAspect.java')));
+  assert.ok(!conCorreo.files.some((file) => file.endsWith('CacheObservationConfig.java')));
+
+  // Sin telemetría no hay ninguno de los tres.
+  const sin = generate('asset-vault', {});
+  for (const name of ['StorageObservationAspect.java', 'CacheObservationConfig.java', 'MailObservationAspect.java']) {
+    assert.ok(!sin.files.some((file) => file.endsWith(name)), name);
+  }
+  assert.ok(!sin.find('/CacheConfig.java').includes('.enableStatistics()'));
+});
+
+test('métricas: el transporte es SCRAPE, con el push por OTLP apagado y su propio interruptor', () => {
+  const project = generate('asset-vault', { telemetry: 'otel' });
+  const develop = project.read('src/main/resources/parameters/develop/telemetry.yaml');
+  // Simétrico de LOG_EXPORT_OTLP y por la misma razón: los dos caminos duplican cada serie.
+  assert.ok(develop.includes(`\${${METRICS_TRANSPORT.otlp.envVar}:false}`));
+  assert.ok(develop.includes(`\${${METRICS_TRANSPORT.prometheus.envVar}:true}`));
+  // El registro de Prometheus está en el classpath: es lo único que trae los exemplars en Boot 3.5.
+  assert.ok(project.read('build.gradle').includes('micrometer-registry-prometheus'));
+  // Y no hay clase de exemplars: los autoconfigura Boot. Un bean propio sería código muerto, y la
+  // falsación por mutación lo demostró — quitándolo, los exemplars seguían saliendo.
+  assert.ok(!project.files.some((file) => file.endsWith('ExemplarsConfig.java')));
+});
+
+test('métricas: lo que se EXPONE y lo que se PERMITE dicen lo mismo, y production no publica el scrape', () => {
+  const project = generate('asset-vault', { telemetry: 'otel' });
+  const exposure = (profile) => project.read(`src/main/resources/parameters/${profile}/management.yaml`);
+  for (const profile of ['local', 'develop']) {
+    assert.ok(exposure(profile).includes(`,${METRICS_TRANSPORT.actuatorEndpointId}`), profile);
+  }
+  // En production NO: los nombres de las métricas son nombres de negocio. Lo que protege el
+  // endpoint es la EXPOSICIÓN, porque la autorización ahí es permitAll — quien scrapea es un
+  // colector sin token. Sin exposición, Boot responde 404 haya la regla que haya.
+  assert.ok(!exposure('production').includes(METRICS_TRANSPORT.actuatorEndpointId));
+
+  const security = project.find('/SecurityConfig.java');
+  assert.ok(security.includes(`.requestMatchers("${METRICS_TRANSPORT.scrapePath}").permitAll()`));
+
+  // Sin telemetría no se expone ni se permite: no hay nada que scrapear.
+  const sin = generate('asset-vault', {});
+  assert.ok(!sin.read('src/main/resources/parameters/local/management.yaml').includes(METRICS_TRANSPORT.actuatorEndpointId));
+  assert.ok(!sin.find('/SecurityConfig.java').includes(METRICS_TRANSPORT.scrapePath));
+});
+
+test('métricas: el colector las va a BUSCAR, y el scrape llega con el nombre del servicio', () => {
+  const project = generate('asset-vault', { telemetry: 'otel' });
+  const collector = YAML.parse(project.read('deploy/otel/collector.yaml'));
+  const job = collector.receivers.prometheus.config.scrape_configs[0];
+  assert.equal(job.metrics_path, METRICS_TRANSPORT.scrapePath);
+  assert.deepEqual(job.static_configs[0].targets, ['app:8080']);
+  assert.ok(collector.service.pipelines.metrics.receivers.includes('prometheus'));
+  // Un scrape NO trae los atributos de recurso que sí trae OTLP: sin esto las series llegan sin
+  // service.name y el panel no puede filtrar por servicio.
+  assert.ok(collector.service.pipelines.metrics.processors.includes('resource/scrape'));
+  assert.ok(collector.processors['resource/scrape'].attributes.some((attr) => attr.key === 'service.name'));
+  // Y todo pipeline sigue citando componentes definidos, exportadores a fichero incluidos.
+  for (const [signal, pipeline] of Object.entries(collector.service.pipelines)) {
+    for (const kind of ['receivers', 'processors', 'exporters']) {
+      for (const component of pipeline[kind]) assert.ok(component in collector[kind], `${signal}: ${component}`);
+    }
+  }
+});
+
+test('el desenlace del caso de uso va en la OBSERVACIÓN: sin él, la alerta de errores no dispara nunca', () => {
+  const project = generate('asset-vault', { telemetry: 'otel' });
+  const mediator = project.find('/UseCaseMediator.java');
+  assert.ok(mediator.includes(`lowCardinalityKeyValue("${ATTRIBUTES.outcome}", "ok")`));
+  assert.ok(mediator.includes(`lowCardinalityKeyValue("${ATTRIBUTES.outcome}", "rejected")`));
+  assert.ok(mediator.includes(`lowCardinalityKeyValue("${ATTRIBUTES.outcome}", "error")`));
+  // Un rechazo del dominio NO es un error del span: es un 4xx esperado.
+  const rejected = mediator.indexOf('"rejected"');
+  const error = mediator.indexOf('observation.error(ex)');
+  assert.ok(rejected < error && !mediator.slice(rejected, error).includes('observation.error'));
+
+  // Sin telemetría, el mediator no menciona ninguna observación.
+  assert.ok(!generate('asset-vault', {}).find('/UseCaseMediator.java').includes('Observation'));
 });

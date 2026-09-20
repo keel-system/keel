@@ -23,6 +23,7 @@ import * as migrations from './migrations.js';
 import * as engineLimits from './engine-limits.js';
 import * as docker from './docker.js';
 import * as deploy from './deploy.js';
+import * as observabilityAssets from './observability-assets.js';
 import * as authProvisioning from './auth-provisioning.js';
 import * as mediator from './mediator.js';
 import * as logging from './logging.js';
@@ -82,6 +83,8 @@ const GENERATORS = [
   migrations,
   docker,
   deploy,
+  // El panel y las alertas del backend de prueba: se gatea a si mismo por telemetria.
+  observabilityAssets,
   authProvisioning,
   mediator,
   logging,

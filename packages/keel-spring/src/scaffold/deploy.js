@@ -33,8 +33,12 @@ import {
   HTTP_STUB,
   MAIL_SINK,
   TELEMETRY_INFRA,
-  collectorEndpoint
+  collectorEndpoint,
+  GRAFANA_PROVISIONING,
+  OBSERVABILITY_DIR
 } from '../lib/stack-catalog.js';
+import { METRICS_TRANSPORT } from '../lib/telemetry-probes.js';
+import { dashboardUid } from './observability-assets.js';
 import { usesTelemetry } from './telemetry.js';
 import { cognitoMockConfig, realmSpec } from './auth-provisioning.js';
 import { RUNTIME_RESOLUTION, composeResolution, HOSTPATH_HELPER } from './devtools.js';
@@ -269,12 +273,23 @@ function composeServices(model) {
     const { collector, backend } = TELEMETRY_INFRA;
     services[backend.serviceKey] = {
       image: backend.image,
-      ports: [`${backend.grafanaPublishedPort}:${backend.grafanaPort}`]
+      ports: [`${backend.grafanaPublishedPort}:${backend.grafanaPort}`],
+      environment: {
+        // Sin esto, el Prometheus de la imagen ACEPTA los exemplars y los tira: no hay error, no
+        // hay log, y el panel sale con los puntos de latencia pero sin el salto a la traza. Es el
+        // último eslabón del camino del exemplar, y el único que falla en silencio.
+        PROMETHEUS_EXTRA_ARGS: '--enable-feature=exemplar-storage'
+      },
+      volumes: [
+        `./${OBSERVABILITY_DIR}/dashboards:${GRAFANA_PROVISIONING.dashboardsDir}:ro`,
+        `./${OBSERVABILITY_DIR}/dashboards-provisioning.yaml:${GRAFANA_PROVISIONING.provider}:ro`,
+        `./${OBSERVABILITY_DIR}/alerting/keel-alerts.yaml:${GRAFANA_PROVISIONING.alerting}:ro`
+      ]
     };
     services[collector.serviceKey] = {
       image: collector.image,
       command: ['--config=/etc/otelcol-contrib/config.yaml'],
-      volumes: ['./otel/collector.yaml:/etc/otelcol-contrib/config.yaml:ro'],
+      volumes: ['./otel/collector.yaml:/etc/otelcol-contrib/config.yaml:ro', './otel/out:/var/otel-out'],
       // Publicados también en el host: así una app arrancada con bootRun (perfil local con
       // TELEMETRY_EXPORT_ENABLED=true) exporta al mismo colector.
       ports: [`${collector.grpcPort}:${collector.grpcPort}`, `${collector.httpPort}:${collector.httpPort}`],
@@ -688,7 +703,12 @@ export function publishedUrls(model) {
   }
   if (usesTelemetry(model)) {
     const port = TELEMETRY_INFRA.backend.grafanaPublishedPort;
-    urls.push({ label: 'Grafana (telemetría)', url: `http://localhost:\${GRAFANA_PORT:-${port}}` });
+    const grafana = `http://localhost:\${GRAFANA_PORT:-${port}}`;
+    urls.push({ label: 'Grafana (telemetría)', url: grafana });
+    // El panel y las alertas se provisionan solos: el enlace directo ahorra buscarlos, y es la
+    // forma más rápida de ver si el provisioning funcionó —si el enlace da 404, no entraron—.
+    urls.push({ label: 'Panel del servicio', url: `${grafana}/d/${dashboardUid(model)}` });
+    urls.push({ label: 'Alertas', url: `${grafana}/alerting/list` });
   }
   return urls;
 }
@@ -890,8 +910,32 @@ receivers:
         endpoint: 0.0.0.0:${collector.grpcPort}
       http:
         endpoint: 0.0.0.0:${collector.httpPort}
+  # Las MÉTRICAS no llegan: se van a buscar. El motivo es único y son los EXEMPLARS —el enlace de
+  # un punto de una métrica a una traza de ejemplo—, que viajan pegados a los cubos del histograma
+  # en el formato de exposición de Prometheus y que el registro OTLP de Micrometer no sabe emitir
+  # con la versión que gestiona Boot 3.5. Quien no pueda scrapear vuelve al push con
+  # METRICS_EXPORT_OTLP=true en la aplicación y quita este receptor del pipeline.
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: ${model.service.artifactId}
+          scrape_interval: 15s
+          metrics_path: ${METRICS_TRANSPORT.scrapePath}
+          static_configs:
+            - targets: ['app:8080']
 
 processors:
+  # Un scrape NO trae los atributos de recurso que sí trae OTLP: las series llegarían sin
+  # service.name y el panel no podría filtrar por servicio. Va antes de resourcedetection y con
+  # upsert para que el valor sea el mismo venga la métrica por donde venga.
+  resource/scrape:
+    attributes:
+      - key: service.name
+        value: ${model.service.artifactId}
+        action: upsert
+      - key: deployment.environment
+        value: develop
+        action: upsert
   # Primero en cada pipeline: con el backend atascado el colector rechaza en vez de caerse por
   # memoria, y el SDK de la aplicación reintenta.
   memory_limiter:
@@ -936,6 +980,15 @@ exporters:
   # Un resumen por lote en los logs del colector: lo primero que se mira cuando «no llega nada».
   debug:
     verbosity: basic
+  # Lo que SALIÓ del colector, en crudo y en disco (deploy/otel/out/). Es el segundo paso del
+  # diagnóstico de «no llega nada»: si aquí hay datos, el problema está entre el colector y el
+  # backend; si no los hay, está antes. Rota solo, y se borra con el resto de deploy/.
+  file/traces:
+    path: /var/otel-out/traces.json
+  file/metrics:
+    path: /var/otel-out/metrics.json
+  file/logs:
+    path: /var/otel-out/logs.json
 
 extensions:
   health_check:
@@ -947,15 +1000,15 @@ service:
     traces:
       receivers: [otlp]
       processors: [memory_limiter, resourcedetection, attributes/redact, batch]
-      exporters: [otlphttp/backend, debug]
+      exporters: [otlphttp/backend, debug, file/traces]
     metrics:
-      receivers: [otlp]
-      processors: [memory_limiter, resourcedetection, attributes/redact, batch]
-      exporters: [otlphttp/backend, debug]
+      receivers: [otlp, prometheus]
+      processors: [memory_limiter, resource/scrape, resourcedetection, attributes/redact, batch]
+      exporters: [otlphttp/backend, debug, file/metrics]
     logs:
       receivers: [otlp]
       processors: [memory_limiter, resourcedetection, attributes/redact, batch]
-      exporters: [otlphttp/backend, debug]
+      exporters: [otlphttp/backend, debug, file/logs]
 
 # ── Otros backends ──────────────────────────────────────────────────────────────────────────
 # Se cambia el exportador y su referencia en los pipelines; nada más. Por ejemplo:
