@@ -100,7 +100,9 @@ curl -X POST http://localhost:8080/<ruta-de-tu-operación> \
   -d '{ … }'
 ```
 
-**2. Busca la traza.** Abre `http://localhost:3001` → **Explore** (la brújula del menú lateral) → origen de datos **Tempo** → pestaña **Search**: filtra por `Service Name` = el nombre de tu servicio y pulsa *Run query*. Verás la lista de trazas recientes; la última es la tuya.
+**2. Busca la traza.** Abre `http://localhost:3001` — **no pide usuario ni contraseña**: el backend de pruebas viene con acceso anónimo, porque es de usar y tirar. Ve a **Explore** (la brújula del menú lateral) → origen de datos **Tempo** → pestaña **Search**: filtra por `Service Name` = el nombre de tu servicio y pulsa *Run query*. Verás la lista de trazas recientes; la última es la tuya.
+
+> Los tres orígenes de datos ya están configurados y se llaman **Tempo** (trazas), **Loki** (logs) y **Prometheus** (métricas). No hay que dar de alta nada.
 
 Si prefieres escribirlo, la pestaña **TraceQL** acepta:
 
@@ -116,21 +118,31 @@ y para encontrar exactamente la tuya, por la correlación que enviaste:
 
 **3. Léela.** Al abrir una traza se ve la cascada de spans: arriba la petición HTTP y, debajo y anidado, todo lo que provocó. Cada barra es tiempo real. Ahí se ve de un vistazo si el tiempo se fue en la base de datos, en una llamada saliente o en el propio código.
 
-**4. Salta de la traza a los logs.** En el panel de un span, Grafana ofrece ir a los logs de esa traza (botón *Logs for this span*). Si prefieres buscarlos a mano: Explore → origen **Loki** →
+**4. Salta de la traza a los logs.** Los dos saltos vienen ya cableados en Grafana: desde un span hay un enlace a sus logs, y cada línea de log enseña un botón *Trace: …* que abre la traza. Si prefieres escribir la consulta: Explore → origen **Loki** →
 
 ```
-{service_name="<nombre-del-servicio>"} | json | trace_id="<el trace id>"
+{service_name="<nombre-del-servicio>"} | trace_id="<el trace id>"
 ```
 
-Y al revés, de un log a su traza: cada registro lleva `trace_id`, así que desde el log puedes abrir la traza completa.
-
-**5. Mira las métricas.** Explore → origen **Prometheus** (o Mimir). Escribe `keel_` y el autocompletado enseña las métricas propias del servicio. Por ejemplo, el percentil 95 por operación:
+o, si lo que tienes a mano es la correlación que enviaste:
 
 ```
-histogram_quantile(0.95, sum by (le, keel_operation) (rate(keel_use_case_milliseconds_bucket[5m])))
+{service_name="<nombre-del-servicio>"} | correlationId="mi-prueba-1"
 ```
 
-> Los nombres en Prometheus llevan `_` donde OpenTelemetry usa `.`: `keel.use-case` se consulta como `keel_use_case_milliseconds…`.
+> Ojo con un error fácil: **no** hace falta `| json`. Los logs llegan por OTLP con los campos ya separados (`trace_id`, `span_id`, `correlationId`, `severity_text`…), no como texto JSON que haya que parsear; añadir `| json` da un error de parseo.
+
+**5. Mira las métricas.** Explore → origen **Prometheus**. Escribe `keel_` y el autocompletado enseña las métricas propias del servicio. El percentil 95 por operación, por ejemplo:
+
+```
+histogram_quantile(0.95, sum by (keel_operation) (rate(keel_use_case_milliseconds[10m])))
+```
+
+Dos detalles que ahorran un rato de desconcierto:
+
+- **Los nombres cambian de puntuación**: lo que OpenTelemetry llama `keel.use-case` aquí es `keel_use_case_milliseconds`.
+- **Son histogramas nativos**, así que no verás series `..._bucket` ni hace falta agrupar por `le`. Si tu backend no soporta histogramas nativos, la misma consulta se escribe en la forma clásica `histogram_quantile(0.95, sum by (le, …) (rate(..._bucket[10m])))`.
+- Con poco tráfico el resultado es `NaN`: `rate` necesita varias muestras en la ventana. Lanza unas cuantas peticiones o amplía la ventana.
 
 Cuando termines: `bash deploy/down.sh` (con `-v` borra también los datos).
 
@@ -312,6 +324,8 @@ podman restart <proyecto>_otel-collector_1     # o el nombre que muestre `podman
 
 La aplicación no se toca. Si la editas mientras hay tráfico, lo que estuviera en la cola del colector se pierde; con `retry_on_failure` y `sending_queue` puestos (ya vienen), lo que ya había entrado se reintenta.
 
+**Y si el backend está caído, el servicio no se entera.** Es fácil de comprobar y conviene haberlo visto una vez: apunta el exportador a un host que no existe, reinicia el colector y sigue llamando a la API. El servicio responde igual; quien acumula reintentos y avisa en sus logs es el colector. Al devolver el endpoint bueno, los datos vuelven a aparecer en el backend. Esa es, en una frase, la razón de tener un colector en medio.
+
 **Las credenciales del backend van en el entorno del colector** (`${env:…}`), nunca dentro del archivo ni en la aplicación. La aplicación no tiene credenciales de observabilidad: esa es otra ventaja de tener un colector en medio.
 
 ---
@@ -389,7 +403,13 @@ Ni datos personales, ni secretos, ni cuerpos de peticiones o mensajes. Se identi
 
 ---
 
-## 11. Dónde seguir
+## 11. Qué de esta guía está medido
+
+Casi todo lo de aquí se ejecutó sobre una pila real (un servicio generado con `telemetry: otel`, PostgreSQL, Kafka, el colector y Grafana LGTM, con podman): el recorrido de Grafana, las consultas de ejemplo de las tres señales, el salto entre traza y logs, la traza que cruza el outbox y el consumo, el filtro de ruido, la validación del colector y la prueba del backend caído.
+
+Lo que **no** se ha ejercitado en vivo y se documenta por diseño: las dos plantillas de producción (`collector-agent`/`collector-gateway`), que dependen de un clúster de Kubernetes, y los exportadores de proveedores concretos, que dependen de sus credenciales. Están escritas siguiendo la configuración de referencia del proyecto OpenTelemetry y validadas con `otelcol validate`, que comprueba la forma, no el destino.
+
+## 12. Dónde seguir
 
 - `conventions/logging.md` — qué loguea build en cada frontera, qué puede añadir el agente y qué está prohibido.
 - `conventions/observability.md` — las reglas que el código tiene que respetar para no romper nada de esto.
