@@ -34,6 +34,7 @@ donde «aceptado» significaría dejársela al generador. Están marcadas como t
 |---|---|---|---|---|
 | `OBL-IDEM-RACE-CODE` | `use-cases`: alguna operación declara `idempotency` | la carrera de la clave no tiene `code` nombrado | 4 | sí |
 | `OBL-IDEM-REUSE-CODE` | `use-cases`: alguna operación declara `idempotency` | el desenlace «misma clave, otro cuerpo» no tiene `code` nombrado | 4 | sí |
+| `OBL-IDEM-KEY-REQUIRED` | `use-cases`: alguna operación declara `idempotency` con `keySource: client-key` | no está decidido qué pasa si el cliente NO manda la cabecera | 4 | sí |
 | `OBL-CONCURRENCY-CODE` | `persistence`: `consistency.optimisticLocking` es `all` o `declared` | el conflicto de escritura concurrente no tiene `code` nombrado | 4 | sí |
 | `OBL-ENTITY-UNREACHABLE` | `domain`: una raíz de agregado a la que ninguna operación se refiere | una raíz de agregado que ninguna operación puede crear | 14 | sí |
 | `OBL-CALLER-IDENTITY` | `security`: se declara `serviceAuth` (clientes máquina) y alguna operación recibe campos de entrada | con clientes máquina, no está decidido si la identidad del llamante entra en el trabajo | 9 | sí |

@@ -102,6 +102,7 @@ export function validateService(dir, { wip = false } = {}) {
     schemaErrors: [],
     crossRefErrors: [],
     warnings: [],
+    findings: [],
     pending: [],
     obligations: { open: [], accepted: [], stale: [], orphans: [], errors: [] },
     reviews: { covered: [], missing: [], open: [], accepted: [], stale: false, reviewedAt: null, orphans: [], errors: [] }
@@ -155,6 +156,7 @@ export function validateService(dir, { wip = false } = {}) {
   const {
     errors,
     warnings,
+    findings,
     pending: crossRefPending,
     obligations: raised
   } = checkCrossRefs({
@@ -164,6 +166,9 @@ export function validateService(dir, { wip = false } = {}) {
   });
   result.crossRefErrors = errors;
   result.warnings = warnings;
+  // Los hallazgos CON id: lo que permite citar una comprobación sin depender de su
+  // redacción. Lo consume el cruce diseño↔generación de keel-spring.
+  result.findings = findings;
   result.pending.push(...crossRefPending);
 
   // Capa 3: las decisiones que el diseño abrió, cruzadas con el registro que las acepta.

@@ -1591,7 +1591,7 @@ const depsLayers = () => ({
       },
     },
   },
-  api: { endpoints: { createOrder: { method: 'POST', path: '/orders' } } },
+  api: { endpoints: { createOrder: { method: 'POST', path: '/orders', successStatus: 201 } } },
   security: { authentication: { protocol: 'oidc' }, access: { default: { level: 'required' } } },
   messaging: {
     subscriptions: {
@@ -1874,7 +1874,7 @@ const activationLayers = () => ({
       },
     },
   },
-  api: { endpoints: { confirmOrder: { method: 'POST', path: '/orders/{orderId}/confirm' } } },
+  api: { endpoints: { confirmOrder: { method: 'POST', path: '/orders/{orderId}/confirm', successStatus: 200 } } },
   security: { authentication: { protocol: 'oidc' }, access: { default: { level: 'required' } } },
   'http-clients': {
     clients: {
@@ -2462,7 +2462,9 @@ const cacheEmbedLayers = ({
         description: 'Cambia un pedido.',
         kind: 'command',
         internal: true,
-        input: { entity: 'Order' },
+        // `exclude` de la colección de hijas: esta operación no las recibe anidadas, y
+        // desde que existe el aviso hay que decirlo en vez de dejarlo implícito.
+        input: { entity: 'Order', exclude: ['lines'] },
         // Misma proyección que getOrder: si no, salta el aviso de asimetría, que
         // es de otra regla y ensucia las aserciones de esta.
         output: { entity: 'Order', embed },
@@ -2749,6 +2751,16 @@ const compLayers = () => ({
         transitions: [{ entity: 'Product', from: ['active'], to: 'retired' }],
         errors: [{ code: 'PRODUCT_NOT_FOUND', when: 'No existe el producto.', http: 404 }],
       },
+      // Expone la marca de la espera: sin una salida que la proyecte, ningún escenario de
+      // caja negra puede afirmar que se estampó, y el aviso correspondiente ensuciaría las
+      // aserciones de esta fixture, que mide la compensación.
+      getProduct: {
+        description: 'Consulta un producto.',
+        kind: 'query',
+        internal: true,
+        input: { fields: { productId: { type: 'uuid', required: true } } },
+        output: { entity: 'Product' },
+      },
       reactivateProduct: {
         description: 'Devuelve a activo un producto cuya retirada rechazó el registro.',
         kind: 'command',
@@ -2771,8 +2783,8 @@ const compLayers = () => ({
   },
   api: {
     endpoints: {
-      publishProduct: { method: 'POST', path: '/products/{productId}/publish' },
-      retireProduct: { method: 'POST', path: '/products/{productId}/retire' },
+      publishProduct: { method: 'POST', path: '/products/{productId}/publish', successStatus: 204 },
+      retireProduct: { method: 'POST', path: '/products/{productId}/retire', successStatus: 204 },
     },
   },
   security: { authentication: { protocol: 'oidc' }, access: { default: { level: 'required' } } },
@@ -3255,7 +3267,7 @@ function twoDoorLayers() {
   delete op.transitions;
   layers.api = layers.api ?? { endpoints: {} };
   layers.api.endpoints = layers.api.endpoints ?? {};
-  layers.api.endpoints.reactivateProduct = { method: 'POST', path: '/products/{id}/reactivate' };
+  layers.api.endpoints.reactivateProduct = { method: 'POST', path: '/products/{id}/reactivate', successStatus: 200 };
   return layers;
 }
 
@@ -3417,7 +3429,7 @@ const exposedCompensation = () => {
   const layers = compLayers();
   const op = layers['use-cases'].operations.reactivateProduct;
   delete op.internal;
-  layers.api.endpoints.reactivateProduct = { method: 'POST', path: '/products/{productId}/reactivate' };
+  layers.api.endpoints.reactivateProduct = { method: 'POST', path: '/products/{productId}/reactivate', successStatus: 200 };
   return layers;
 };
 
@@ -4272,7 +4284,7 @@ const conflictLayers = (errors = []) => ({
       }
     }
   },
-  api: { endpoints: { placeOrder: { method: 'POST', path: '/orders' } } }
+  api: { endpoints: { placeOrder: { method: 'POST', path: '/orders', successStatus: 201 } } }
 });
 
 // El canal cambió: estos conflictos ya no son un aviso que se lee sino una OBLIGACIÓN que se
@@ -4285,14 +4297,19 @@ const conflictIds = (layers) => conflictObligations(layers).map((item) => item.i
 
 test('idempotency sin nombrar sus desenlaces levanta una obligación por desenlace', () => {
   const found = conflictObligations(conflictLayers());
-  // Dos, y no una que enumere los dos: son dos contratos públicos distintos, y un diseño puede
-  // tener motivos para cerrar uno y aceptar el otro.
+  // Una por desenlace, y no una que los enumere: son contratos públicos distintos, y un diseño
+  // puede tener motivos para cerrar uno y aceptar otro. Con `client-key` son TRES: las dos de
+  // conflicto más la de la cabecera ausente, que salió de la corrida de stock-reservation.
   assert.deepEqual(
-    found.map((item) => item.id),
-    ['OBL-IDEM-RACE-CODE', 'OBL-IDEM-REUSE-CODE']
+    found.map((item) => item.id).sort(),
+    ['OBL-IDEM-KEY-REQUIRED', 'OBL-IDEM-RACE-CODE', 'OBL-IDEM-REUSE-CODE']
   );
-  assert.match(found[0].message, /IDEMPOTENCY_KEY_IN_PROGRESS/);
-  assert.match(found[1].message, /IDEMPOTENCY_KEY_REUSED/);
+  // Por id y no por posición: el orden de emisión no es contrato, y asertar por índice
+  // convierte cualquier obligación nueva de la familia en un rojo que no dice nada.
+  const byId = new Map(found.map((item) => [item.id, item]));
+  assert.match(byId.get('OBL-IDEM-RACE-CODE').message, /IDEMPOTENCY_KEY_IN_PROGRESS/);
+  assert.match(byId.get('OBL-IDEM-REUSE-CODE').message, /IDEMPOTENCY_KEY_REUSED/);
+  assert.match(byId.get('OBL-IDEM-KEY-REQUIRED').message, /cabecera/);
   // Cada una nombra la operación: con varias idempotentes hay que saber cuál falta.
   for (const item of found) assert.match(item.message, /placeOrder/);
 });
@@ -4302,10 +4319,11 @@ test('declarar uno de los dos cierra esa obligación, no las dos', () => {
     conflictLayers([{ code: 'ORDER_KEY_IN_PROGRESS', when: 'Otra petición con la misma clave.', http: 409 }])
   );
   assert.deepEqual(
-    found.map((item) => item.id),
-    ['OBL-IDEM-REUSE-CODE']
+    found.map((item) => item.id).sort(),
+    ['OBL-IDEM-KEY-REQUIRED', 'OBL-IDEM-REUSE-CODE']
   );
-  assert.ok(!found[0].message.includes('IDEMPOTENCY_KEY_IN_PROGRESS'), found[0].message);
+  const reuse = found.find((item) => item.id === 'OBL-IDEM-REUSE-CODE');
+  assert.ok(!reuse.message.includes('IDEMPOTENCY_KEY_IN_PROGRESS'), reuse.message);
 });
 
 test('nombrar los dos desenlaces cierra las dos obligaciones', () => {
@@ -4313,7 +4331,8 @@ test('nombrar los dos desenlaces cierra las dos obligaciones', () => {
     conflictIds(
       conflictLayers([
         { code: 'ORDER_KEY_IN_PROGRESS', when: 'Otra petición con la misma clave.', http: 409 },
-        { code: 'ORDER_KEY_REUSED', when: 'La misma clave con otro contenido.', http: 409 }
+        { code: 'ORDER_KEY_REUSED', when: 'La misma clave con otro contenido.', http: 409 },
+        { code: 'IDEMPOTENCY_KEY_REQUIRED', when: 'La petición no trae la cabecera.', http: 400 }
       ])
     ),
     []
@@ -4498,7 +4517,7 @@ const mailLayer = (overrides = {}) => ({
 // del correo, que es legítimo pero ajeno a lo que cada fixture mide. Y la idempotencia
 // por cabecera exige endpoint HTTP que la reciba, de ahí la capa api que la acompaña.
 const guarded = { idempotency: { keyFrom: 'header', scope: 'client' } };
-const mailApi = { endpoints: { requestNotification: { method: 'POST', path: '/notifications' } } };
+const mailApi = { endpoints: { requestNotification: { method: 'POST', path: '/notifications', successStatus: 202 } } };
 
 test('capa mail bien formada no produce errores ni warnings', () => {
   const { errors, warnings } = run({
@@ -5838,4 +5857,177 @@ test('un estado del lifecycle que ningún escenario nombra avisa — y el que s�
 test('sin documento de escenarios no se dice nada de cobertura', () => {
   const { warnings } = checkCrossRefs({ layers: { domain: baseDomain(), 'use-cases': {} } });
   assert.deepEqual(warnings.filter((w) => w.includes('validation-scenarios.md')), []);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Las cuatro que salieron de MEDIR el delta diseño↔generación, no de leer la checklist.
+// Las once fixtures pasaban `keel validate` y el generador seguía avisando quince veces
+// al traducirlas; doce de esos quince se decidían mirando solo el YAML.
+
+test('un POST sin successStatus avisa — el hermano del de DELETE, que faltaba', () => {
+  const layers = (endpoint) => ({
+    domain: baseDomain(),
+    'use-cases': { operations: { createOrder: { kind: 'command', errors: [{ code: 'X', when: 'y', http: 400 }] } } },
+    api: { endpoints: { createOrder: endpoint } }
+  });
+  const sin = run(layers({ method: 'POST', path: '/orders' }));
+  assert.ok(sin.warnings.some((w) => w.includes("POST sin 'successStatus'")));
+
+  const con = run(layers({ method: 'POST', path: '/orders', successStatus: 201 }));
+  assert.deepEqual(con.warnings.filter((w) => w.includes("POST sin 'successStatus'")), []);
+
+  // Y un GET no dice nada: la heurística del generador solo elige status en POST.
+  const get = run(layers({ method: 'GET', path: '/orders' }));
+  assert.deepEqual(get.warnings.filter((w) => w.includes("sin 'successStatus'")), []);
+});
+
+test('un command cuyo input deriva de una entidad con hijas avisa; una query no', () => {
+  const build = (kind) => ({
+    domain: baseDomain(),
+    'use-cases': {
+      operations: {
+        doThing: { kind, input: { entity: 'Order' }, ...(kind === 'command' ? { errors: [{ code: 'X', when: 'y', http: 400 }] } : {}) }
+      }
+    }
+  });
+  assert.ok(run(build('command')).warnings.some((w) => w.includes("la colección 'lines'")));
+  // El input de una query es criterio de búsqueda, no carga: ahí el aviso sería ruido.
+  assert.deepEqual(run(build('query')).warnings.filter((w) => w.includes("la colección 'lines'")), []);
+
+  // Y excluirla es la forma de decir que la decisión está tomada.
+  const excluida = build('command');
+  excluida['use-cases'].operations.doThing.input.exclude = ['lines'];
+  assert.deepEqual(run(excluida).warnings.filter((w) => w.includes("la colección 'lines'")), []);
+});
+
+test('el mismo code con dos status avisa una vez, nombrando los dos', () => {
+  const layers = {
+    domain: baseDomain(),
+    'use-cases': {
+      operations: {
+        a: { kind: 'command', errors: [{ code: 'NOT_FOUND', when: 'x', http: 404 }] },
+        b: { kind: 'command', errors: [{ code: 'NOT_FOUND', when: 'x', http: 422 }] },
+        c: { kind: 'command', errors: [{ code: 'OTHER', when: 'x', http: 409 }] }
+      }
+    }
+  };
+  const avisos = run(layers).warnings.filter((w) => w.includes('status distintos'));
+  assert.equal(avisos.length, 1);
+  assert.ok(avisos[0].includes('404 en a') && avisos[0].includes('422 en b'));
+  // El code con un solo status no dice nada: sin este control, una regla que avisara de
+  // todo code compartido pasaría la aserción de arriba.
+  assert.ok(!avisos[0].includes('OTHER'));
+});
+
+test('audit sobre una entidad anidada avisa solo en el modelo documental', () => {
+  const build = (model, audit) => ({
+    domain: baseDomain(),
+    'use-cases': {},
+    persistence: {
+      default: { model },
+      entities: { Order: {}, Catalog: {} },
+      consistency: { transactionalBoundary: 'per-aggregate' },
+      ...(audit ? { audit } : {})
+    }
+  });
+  // Sin declarar `audit`: el default del SCHEMA es 'all', así que la política está pedida.
+  assert.ok(run(build('document')).warnings.some((w) => w.includes("audit 'all' con modelo documental")));
+  assert.ok(run(build('document', { timestamps: 'all' })).warnings.some((w) => w.includes("audit 'all'")));
+  // En relacional cada hija tiene su tabla y sí recibe las columnas.
+  assert.deepEqual(run(build('relational')).warnings.filter((w) => w.includes("audit 'all'")), []);
+  // Y con la política apagada no hay nada que prometer.
+  assert.deepEqual(run(build('document', { timestamps: 'declared' })).warnings.filter((w) => w.includes("audit 'all'")), []);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Las dos que salieron de la CORRIDA de `stock-reservation`: huecos que los agentes
+// tuvieron que decidir por su cuenta con el diseño en verde. Es la regla de la fase 5 —
+// un hueco que aparece en una corrida es candidato a id— ejecutada por primera vez.
+
+test('la marca de la espera que ninguna salida proyecta avisa', () => {
+  // El agente de pruebas no pudo afirmar que `reserveStockAwaitingSince` se estampaba:
+  // estaba en el `output.exclude` de las tres operaciones, así que la única red que
+  // quedaba para el estampado era estática.
+  const domain = {
+    entities: {
+      Order: entity(
+        {
+          status: { type: 'enum', values: ['pending', 'awaiting', 'done'] },
+          shipAwaitingSince: { type: 'timestamp' }
+        },
+        { lifecycle: { field: 'status', transitions: { pending: ['awaiting'], awaiting: ['done'] } } }
+      )
+    }
+  };
+  const build = (output) => ({
+    domain,
+    'use-cases': {
+      operations: {
+        ship: {
+          kind: 'command',
+          errors: [{ code: 'X', when: 'y', http: 409 }],
+          transitions: [{ entity: 'Order', from: ['pending'], to: 'awaiting' }]
+        },
+        sweepShips: { kind: 'command', internal: true, schedule: { cron: '0 * * * *' } },
+        getOrder: { kind: 'query', internal: true, output }
+      }
+    },
+    dependencies: {
+      dependencies: {
+        carrier: {
+          purpose: 'Transporte',
+          activations: {
+            shipOrder: {
+              triggeredBy: ['ship'],
+              via: { event: 'ShipRequested' },
+              effect: 'El transportista recoge el paquete.',
+              reconciledBy: 'sweepShips',
+              awaitingSince: 'shipAwaitingSince',
+              unansweredAfterSeconds: 3600
+            }
+          }
+        }
+      }
+    },
+    messaging: { publishing: { events: { ShipRequested: { payload: {} } } } }
+  });
+
+  const oculta = run(build({ entity: 'Order', exclude: ['shipAwaitingSince'] }));
+  assert.ok(oculta.warnings.some((w) => w.includes("'shipAwaitingSince' es la marca de la que depende el barrido")));
+
+  // Proyectada, nada: exponerla es justo lo que la hace comprobable desde fuera.
+  const visible = run(build({ entity: 'Order' }));
+  assert.deepEqual(visible.warnings.filter((w) => w.includes('marca de la que depende el barrido')), []);
+});
+
+test('idempotency con client-key levanta la obligación de la cabecera ausente', () => {
+  const build = (errors) => ({
+    domain: baseDomain(),
+    'use-cases': {
+      operations: {
+        placeOrder: {
+          kind: 'command',
+          input: { fields: { sku: { type: 'string', required: true } } },
+          idempotency: { keySource: 'client-key', ttlSeconds: 3600 },
+          errors
+        }
+      }
+    },
+    api: { endpoints: { placeOrder: { method: 'POST', path: '/orders', successStatus: 201 } } }
+  });
+
+  const abierta = run(build([{ code: 'X', when: 'y', http: 400 }])).obligations;
+  assert.ok(abierta.some((item) => item.id === 'OBL-IDEM-KEY-REQUIRED'));
+
+  // Declarar el code la cierra, por familia y no por el nombre canónico exacto.
+  for (const code of ['IDEMPOTENCY_KEY_REQUIRED', 'ORDER_KEY_REQUIRED', 'MISSING_IDEMPOTENCY_KEY']) {
+    const cerrada = run(build([{ code, when: 'Falta la cabecera.', http: 400 }])).obligations;
+    assert.ok(!cerrada.some((item) => item.id === 'OBL-IDEM-KEY-REQUIRED'), code);
+  }
+
+  // Y con payload-field no aplica: ahí la clave es parte del contrato, no una cabecera
+  // opcional. Sin este control, una regla que la levantara siempre pasaría lo de arriba.
+  const porCampo = build([{ code: 'X', when: 'y', http: 400 }]);
+  porCampo['use-cases'].operations.placeOrder.idempotency = { keySource: 'payload-field', keyField: 'sku' };
+  assert.ok(!run(porCampo).obligations.some((item) => item.id === 'OBL-IDEM-KEY-REQUIRED'));
 });

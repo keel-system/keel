@@ -57,6 +57,17 @@ export const OBLIGATIONS = {
     doc: 'framework-errors.md'
   },
 
+  'OBL-IDEM-KEY-REQUIRED': {
+    gapClass: 4,
+    when: 'use-cases: alguna operación declara `idempotency` con `keySource: client-key`',
+    kind: 'decision',
+    waivable: true,
+    title: 'no está decidido qué pasa si el cliente NO manda la cabecera',
+    closes:
+      'un `code` con status 400 que exija la cabecera, o exención razonada de que sin ella se ejecuta sin deduplicar',
+    doc: 'framework-errors.md'
+  },
+
   'OBL-GUARD-UNOBSERVABLE': {
     gapClass: 12,
     when: 'mail: una operación de `sentBy` con estado EN VUELO no tiene puerta propia (ni endpoint, ni schedule, ni subscription)',

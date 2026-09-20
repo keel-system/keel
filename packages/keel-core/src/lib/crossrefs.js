@@ -959,6 +959,17 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
         `${where}.successStatus: ${endpoint.successStatus} admite cuerpo y la operación declara output: "void" — la respuesta irá vacía; 204 describe mejor ese contrato`
       );
     }
+    // El hermano del de abajo, que faltaba. Un POST sin `successStatus` deja que el
+    // generador elija: 201 si el nombre empieza por `create`, 200 en cualquier otro caso.
+    // Eso es CONTRATO PÚBLICO —lo que ve un integrador y lo que afirma un escenario—
+    // decidido por una heurística sobre el nombre de la operación, y el diseño se escribe
+    // igual lo haya decidido alguien o no. De once fixtures, seis caían aquí.
+    if (endpoint.successStatus === undefined && endpoint.method === 'POST') {
+      warn(
+        'CHK-API-POST-NO-STATUS',
+        `${where}: POST sin 'successStatus' — el generador tendrá que elegir uno (201 al crear, 200 si no), y eso es contrato público: lo ve el integrador y lo afirma el escenario. Declara el que quieres`
+      );
+    }
     // DELETE sin successStatus: el generador asume 204 (no hay dónde declararlo si no).
     if (endpoint.successStatus === undefined && endpoint.method === 'DELETE' && !voidOutput) {
       warnings.push(
@@ -2445,7 +2456,34 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
               // no puede comprobar es que el campo exista, que sea una marca de tiempo y
               // que la estampe la operación que encarga y no otra cosa. Las dos primeras se
               // comprueban aquí; la tercera es semántica y se queda en /keel-validate.
+              // Y una tercera, que ninguna corrida había echado de menos: que la marca
+              // sea OBSERVABLE. El barrido depende de ella, pero si ninguna salida la
+              // proyecta, ningún escenario de caja negra puede afirmar que se estampó —y
+              // estamparla mal es el fallo que el propio schema describe como «el que pasa
+              // las pruebas y no se acaba nunca en producción»—. Lo destapó la corrida de
+              // `stock-reservation`: su `reserveStockAwaitingSince` está en el
+              // `output.exclude` de las tres operaciones, así que FL-RES-002 no podía
+              // afirmar el estampado y la única red que quedaba era estática.
+              //
+              // Aviso y no error: no exponer una marca interna es una decisión legítima —el
+              // contrato público no tiene por qué enseñarla—. Lo que no es legítimo es no
+              // saber que, al ocultarla, se renuncia a comprobarla desde fuera.
               for (const waitingEntity of waiting) {
+                const proyectada = Object.entries(operations).some(([, op]) => {
+                  const output = op.output;
+                  if (!output || output === 'void' || output.entity !== waitingEntity) return false;
+                  return !(output.exclude ?? []).includes(spec.awaitingSince);
+                });
+                if (!proyectada) {
+                  warn(
+                    'CHK-DEPS-CLOCK-NOT-OBSERVABLE',
+                    `${where}.awaitingSince: '${spec.awaitingSince}' es la marca de la que depende el barrido, y ninguna ` +
+                      `salida de ${waitingEntity} la proyecta —o no hay ninguna, o todas la excluyen—. Ningún escenario de ` +
+                      `caja negra podrá afirmar que se estampó al encargar, así que un estampado incorrecto (la marca que ` +
+                      `rejuvenece, la que se pone antes de tiempo) no lo caza nadie más que un gate estático. Proyéctala en ` +
+                      `alguna operación, o cuenta con que esa mitad queda sin comprobar`
+                  );
+                }
                 const field = domain.entities?.[waitingEntity]?.fields?.[spec.awaitingSince];
                 if (!field) {
                   errors.push(
@@ -3066,6 +3104,35 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
         { id: 'OBL-IDEM-RACE-CODE', entry: FRAMEWORK_ERRORS.idempotencyRace },
         { id: 'OBL-IDEM-REUSE-CODE', entry: FRAMEWORK_ERRORS.idempotencyReuse }
       ];
+      // La tercera, y la que ninguna corrida había echado de menos: con `client-key` la
+      // clave viaja en una cabecera HTTP, que es OPCIONAL. El diseño declara qué pasa
+      // cuando dos peticiones traen la misma y cuando una la reutiliza con otro cuerpo,
+      // pero no qué pasa cuando NO VIENE — y entonces la operación se ejecuta sin
+      // deduplicar, que es justo lo contrario de lo que `idempotency` promete.
+      //
+      // Nada falla: el servidor responde 2xx, el efecto ocurre, y si el cliente reintenta
+      // ocurre otra vez. Ningún `Then` lo observa porque ningún escenario omite la
+      // cabecera a propósito. Lo destapó la corrida de `stock-reservation`, donde el
+      // agente de código tuvo que decidirlo por su cuenta.
+      //
+      // Es obligación y no aviso porque no hay default seguro que el generador pueda
+      // elegir: exigirla rompe a los clientes que no la mandan, y no exigirla deja la
+      // garantía a medias. La decisión es del diseño, y aceptarla por escrito vale.
+      const clientKeyOps = Object.entries(useCases.operations ?? {})
+        .filter(([, op]) => op?.idempotency?.keySource === 'client-key')
+        .map(([name]) => name);
+      if (clientKeyOps.length > 0 && !declared.some((error) => /(^|_)(IDEMPOTENCY_KEY_REQUIRED|KEY_REQUIRED|MISSING_IDEMPOTENCY_KEY)$/.test(error.code ?? ''))) {
+        obligation(
+          'OBL-IDEM-KEY-REQUIRED',
+          'use-cases',
+          `${clientKeyOps.join(', ')} declara${clientKeyOps.length > 1 ? 'n' : ''} idempotency con keySource: client-key, ` +
+            `así que la clave llega en una cabecera HTTP — que es opcional. El diseño no dice qué pasa cuando NO viene: ` +
+            `tal cual, la operación se ejecuta SIN deduplicar y un reintento del cliente repite el efecto, sin que nada ` +
+            `falle ni ningún escenario lo note. Declara un code con status 400 que la exija, o acepta por escrito que ` +
+            `sin cabecera no hay garantía — ver docs/framework-errors.md`
+        );
+      }
+
       for (const { id, entry } of desenlaces) {
         if (overrideFor(declared, entry)) continue;
         obligation(
@@ -3552,6 +3619,76 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
           `una transición de lifecycle irrepetible — un reenvío del llamante (timeout, reintento del cliente, doble ` +
           `pulsación) lo hace dos veces, y eso ya salió del servicio: ninguna clave natural lo desanda. Declara ` +
           `idempotency para deduplicar en la puerta, o la transición que lo hace irrepetible en el dominio`
+      );
+    }
+  }
+
+  // Un `input: { entity: X }` proyecta los campos de X, pero una COLECCIÓN de entidades
+  // hijas no cabe en esa proyección: el generador la deja fuera y se la pasa al agente.
+  // Si el flujo las recibe anidadas —un alta con sus líneas—, el contrato de entrada que
+  // el diseño declara no es el que el servicio va a aceptar, y eso no se descubre hasta
+  // que alguien escribe el escenario.
+  for (const [opName, op] of Object.entries(operations)) {
+    // Solo las ESCRITURAS. El input de una query es criterio de búsqueda, no carga: nadie
+    // espera mandarle las hijas, así que ahí el aviso sería ruido en todos los diseños que
+    // filtran por una entidad con colecciones. Medido: sin este recorte saltaba en quince
+    // fixtures de test y en solo dos diseños reales, que son ambos commands.
+    if (op.kind !== 'command') continue;
+    const inputEntity = op.input?.entity;
+    if (!inputEntity) continue;
+    const excluded = new Set(op.input?.exclude ?? []);
+    for (const [relName, rel] of Object.entries(domain.entities?.[inputEntity]?.relations ?? {})) {
+      if (excluded.has(relName)) continue;
+      const toMany = rel.cardinality === 'one-to-many' || rel.cardinality === 'many-to-many';
+      // Solo las hijas del MISMO agregado: una referencia a otra raíz viaja por id y eso
+      // sí cabe en la proyección.
+      if (!toMany || aggregateOf.get(rel.entity) !== aggregateOf.get(inputEntity)) continue;
+      warn(
+        'CHK-USECASES-CHILD-NOT-IN-INPUT',
+        `use-cases: ${opName}.input: deriva de '${inputEntity}', que tiene la colección '${relName}' de '${rel.entity}' — una colección de entidades hijas no entra en la proyección del input. Si la operación las recibe anidadas, declara el input con 'fields'; si no, sácala con 'input.exclude' para que se vea que es deliberado`
+      );
+    }
+  }
+
+  // El mismo `code` con dos status distintos es diseño válido —una misma condición puede
+  // ser 404 en una lectura y 422 en una escritura— pero es contrato público y casi nunca
+  // está decidido: sale de haber copiado el code de otra operación sin mirar su status.
+  const statusesByCode = new Map();
+  for (const [opName, op] of Object.entries(operations)) {
+    for (const error of op.errors ?? []) {
+      if (!error?.code || error.http === undefined) continue;
+      if (!statusesByCode.has(error.code)) statusesByCode.set(error.code, new Map());
+      const porStatus = statusesByCode.get(error.code);
+      if (!porStatus.has(error.http)) porStatus.set(error.http, []);
+      porStatus.get(error.http).push(opName);
+    }
+  }
+  for (const [code, porStatus] of statusesByCode) {
+    if (porStatus.size < 2) continue;
+    const detalle = [...porStatus]
+      .map(([http, ops]) => `${http} en ${ops.join(', ')}`)
+      .join('; ');
+    warn(
+      'CHK-USECASES-CODE-MULTI-STATUS',
+      `use-cases: el code '${code}' se declara con status distintos (${detalle}) — el mismo nombre significa dos cosas para quien integra. Es válido si es deliberado; dilo en la descripción del error, porque se escribe igual que una copia sin mirar`
+    );
+  }
+
+  // En el modelo documental una entidad interna del agregado NO es una colección propia:
+  // va anidada dentro del documento de su raíz, y la auditoría automática puebla el objeto
+  // que se guarda, no lo anidado. `audit: all` promete entonces algo que solo se cumple
+  // para las raíces, y la diferencia no se ve en ninguna parte.
+  // `?? 'all'` porque ESE es el default que declara el schema del DSL (persistence:
+  // audit.timestamps), no una suposición sobre el generador: un diseño que no declara
+  // `audit` está pidiendo la política 'all' igual que si la escribiera. Sin el default,
+  // la regla solo veía los diseños que la declaran a mano — y el que la destapó,
+  // notification-mailer-mongo, no la declara.
+  if (persistence?.default?.model === 'document' && (persistence.audit?.timestamps ?? 'all') === 'all') {
+    for (const [entityName, aggName] of aggregateOf) {
+      if (aggregates[aggName]?.root === entityName) continue;
+      warn(
+        'CHK-PERSIST-AUDIT-NESTED',
+        `persistence: audit 'all' con modelo documental, pero '${entityName}' va anidada dentro de '${aggregates[aggName].root}' y la auditoría automática no la alcanza — si hace falta saber cuándo cambió, sus marcas son campos del dominio (audit: declared), no política`
       );
     }
   }

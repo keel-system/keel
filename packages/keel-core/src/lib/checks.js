@@ -106,6 +106,31 @@ export const CHECKS = {
     closes: 'elegir el estado del que sí se pueda volver a encargar el trabajo, si eso es lo que el negocio quiere'
   },
 
+  'CHK-API-POST-NO-STATUS': {
+    layer: 'api',
+    severity: 'warning',
+    title: 'un endpoint POST no declara successStatus',
+    closes: 'declarar 201 si crea un recurso, 200 si devuelve un resultado, 202 si responde antes de terminar'
+  },
+  'CHK-USECASES-CHILD-NOT-IN-INPUT': {
+    layer: 'use-cases',
+    severity: 'warning',
+    title: 'el input deriva de una entidad con hijas, y las hijas no viajan en él',
+    closes: 'declarar el input con `fields` si la operación recibe las hijas anidadas, o decir que no las recibe'
+  },
+  'CHK-USECASES-CODE-MULTI-STATUS': {
+    layer: 'use-cases',
+    severity: 'warning',
+    title: 'el mismo code se declara con status HTTP distintos según la operación',
+    closes: 'un status por code, o dejar escrito que el mismo nombre cubre dos situaciones distintas a propósito'
+  },
+  'CHK-PERSIST-AUDIT-NESTED': {
+    layer: 'persistence',
+    severity: 'warning',
+    title: 'audit: all sobre un modelo documental, donde las entidades anidadas no lo reciben',
+    closes: 'declarar los campos de auditoría de la hija en domain (audit: declared), o aceptar que solo se audita la raíz'
+  },
+
   // ─── security ──────────────────────────────────────────────────────────────
   'CHK-SEC-UNUSED-ROLE': {
     layer: 'security',
@@ -172,6 +197,13 @@ export const CHECKS = {
     severity: 'warning',
     title: 'per-operation habiendo agregados declarados',
     closes: 'elegir per-aggregate, o dejar escrito que la transacción abarca varios a propósito'
+  },
+
+  'CHK-DEPS-CLOCK-NOT-OBSERVABLE': {
+    layer: 'dependencies',
+    severity: 'warning',
+    title: 'la marca de la espera que el barrido lee no la proyecta ninguna salida',
+    closes: 'sacarla de `output.exclude` en alguna operación, o aceptar que su único gate es estático'
   },
 
   // ─── escenarios de validación ──────────────────────────────────────────────

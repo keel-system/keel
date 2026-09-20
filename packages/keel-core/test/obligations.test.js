@@ -160,7 +160,8 @@ test('un diseño con una obligación abierta NO es generable', (t) => {
   assert.deepEqual(result.crossRefErrors, [], 'el diseño es coherente: lo que falla es la decisión sin tomar');
   assert.deepEqual(
     result.obligations.open.map((item) => item.id).sort(),
-    ['OBL-IDEM-RACE-CODE', 'OBL-IDEM-REUSE-CODE']
+    // Tres con `keySource: client-key`: los dos conflictos mas la cabecera ausente.
+    ['OBL-IDEM-KEY-REQUIRED', 'OBL-IDEM-RACE-CODE', 'OBL-IDEM-REUSE-CODE']
   );
   assert.equal(result.ok, false, 'una decisión sin cerrar tiene que bloquear igual que un error');
 });
@@ -180,12 +181,16 @@ test('la misma obligación aceptada por escrito deja el diseño generable', (t) 
       '  - id: OBL-IDEM-REUSE-CODE\n' +
       '    scope: use-cases\n' +
       '    reason: El canónico 409 IDEMPOTENCY_KEY_REUSED es el contrato público del servicio.\n' +
+      '    since: 1.0.0\n' +
+      '  - id: OBL-IDEM-KEY-REQUIRED\n' +
+      '    scope: use-cases\n' +
+      '    reason: Sin cabecera no se deduplica, y este servicio admite clientes que no la mandan.\n' +
       '    since: 1.0.0\n'
   });
   const result = validateService(dir);
 
   assert.deepEqual(result.obligations.open, []);
-  assert.equal(result.obligations.accepted.length, 2);
+  assert.equal(result.obligations.accepted.length, 3);
   assert.equal(result.ok, true);
   // Aceptada no es escondida: la CLI la sigue listando, con su motivo.
   for (const item of result.obligations.accepted) assert.ok(item.reason.length > 20, item.id);
@@ -201,6 +206,6 @@ test('con --wip una obligación abierta no bloquea', (t) => {
     'api.keel.yaml': API
   });
   const result = validateService(dir, { wip: true });
-  assert.equal(result.obligations.open.length, 2);
+  assert.equal(result.obligations.open.length, 3);
   assert.equal(result.ok, true);
 });
