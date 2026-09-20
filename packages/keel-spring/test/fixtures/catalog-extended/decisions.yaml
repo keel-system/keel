@@ -1,0 +1,9 @@
+# Obligaciones de diseño que este servicio deja abiertas a sabiendas.
+decisions:
+  - id: OBL-IDEM-KEY-REQUIRED
+    scope: use-cases
+    reason: >
+      El alta de producto admite clientes que no mandan la cabecera. Sin ella la
+      petición se ejecuta sin deduplicar, y lo que frena el duplicado es la clave
+      natural del SKU.
+    since: 1.0.0

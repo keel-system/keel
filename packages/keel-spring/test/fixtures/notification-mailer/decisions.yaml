@@ -15,3 +15,7 @@ decisions:
       reclamo ANTES del envío. Queda dicho en validation-scenarios.md, para que el contrato no
       prometa medir lo que no mide.
     since: 1.0.0
+  - id: OBL-IDEM-KEY-REQUIRED
+    scope: use-cases
+    reason: La cabecera es opcional para los integradores actuales; sin ella la peticion se ejecuta sin deduplicar y se acepta a sabiendas.
+    since: 1.0.0

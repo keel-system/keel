@@ -64,6 +64,10 @@ const DECISIONS = `decisions:
     scope: use-cases
     reason: El canónico 409 IDEMPOTENCY_KEY_REUSED es el contrato público del servicio.
     since: 1.0.0
+  - id: OBL-IDEM-KEY-REQUIRED
+    scope: use-cases
+    reason: Sin la cabecera la petición se ejecuta sin deduplicar, y este servicio lo acepta.
+    since: 1.0.0
 `;
 
 function makeWorkspace({ decisions = null } = {}) {
@@ -107,9 +111,11 @@ test('build nombra las decisiones sin cerrar en vez de rechazar el diseño en si
   const { exitCode, salida } = await runBuild(workspace, path.join('specs', 'billing'));
 
   assert.equal(exitCode, 1);
-  assert.match(salida, /Decisiones de diseño sin cerrar — 2/);
+  // Tres con `keySource: client-key`: los dos conflictos más la cabecera ausente.
+  assert.match(salida, /Decisiones de diseño sin cerrar — 3/);
   assert.match(salida, /OBL-IDEM-RACE-CODE/);
   assert.match(salida, /OBL-IDEM-REUSE-CODE/);
+  assert.match(salida, /OBL-IDEM-KEY-REQUIRED/);
   // Y dice cómo se cierran: sin esto, el mensaje nombra el problema y deja al lector
   // igual de parado que el genérico.
   assert.match(salida, /decisions\.yaml/);

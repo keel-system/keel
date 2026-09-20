@@ -22,3 +22,7 @@ decisions:
       negocio —de quién es el archivo—, no la identidad de quien hace la petición, y
       confundirlos habría atado la propiedad del activo a la credencial que lo subió.
     since: 1.0.0
+  - id: OBL-IDEM-KEY-REQUIRED
+    scope: use-cases
+    reason: El cliente de subida es un servicio propio que siempre manda la cabecera; sin ella la subida se ejecuta sin deduplicar y se acepta.
+    since: 1.0.0

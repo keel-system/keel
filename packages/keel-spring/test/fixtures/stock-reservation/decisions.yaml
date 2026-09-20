@@ -23,3 +23,7 @@ decisions:
       El conflicto de escritura concurrente se contesta con el canónico
       409 CONCURRENT_MODIFICATION; ninguna operación necesita un code propio para él.
     since: 1.0.0
+  - id: OBL-IDEM-KEY-REQUIRED
+    scope: use-cases
+    reason: El llamante actual siempre manda la cabecera; sin ella la reserva se ejecuta sin deduplicar y la clave natural del pedido frena el duplicado.
+    since: 1.0.0
