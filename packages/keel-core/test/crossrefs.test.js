@@ -6031,3 +6031,70 @@ test('idempotency con client-key levanta la obligación de la cabecera ausente',
   porCampo['use-cases'].operations.placeOrder.idempotency = { keySource: 'payload-field', keyField: 'sku' };
   assert.ok(!run(porCampo).obligations.some((item) => item.id === 'OBL-IDEM-KEY-REQUIRED'));
 });
+
+test('awaits: outcome con un booleano de vuelta levanta la obligación del caso negativo', () => {
+  // El hueco 2 de la corrida de `stock-reservation` (2026-09-20). `onFailure` gobierna que la
+  // llamada FALLE; un 200 con `{ cancelled: false }` no es un fallo, así que quien construye
+  // tiene que inventar la regla — y la inventó: «liberar igualmente, por analogía con el
+  // fallback».
+  const build = ({ tipo = 'boolean', awaits = 'outcome' } = {}) => ({
+    domain: baseDomain(),
+    'use-cases': {
+      operations: {
+        cancelOrder: {
+          kind: 'command',
+          input: { fields: { sku: { type: 'string', required: true } } },
+          errors: [{ code: 'X', when: 'y', http: 400 }]
+        }
+      }
+    },
+    api: { endpoints: { cancelOrder: { method: 'POST', path: '/orders/cancel', successStatus: 200 } } },
+    dependencies: {
+      dependencies: {
+        warehouse: {
+          description: 'Almacén.',
+          contract: { version: '1.0.0' },
+          activations: {
+            cancelStock: {
+              description: 'Anula el bloqueo.',
+              triggeredBy: ['cancelOrder'],
+              via: { client: 'warehouse', call: 'cancelStock' },
+              effect: 'El bloqueo queda anulado.',
+              awaits,
+              onFailure: { action: 'ignore' }
+            }
+          }
+        }
+      }
+    },
+    'http-clients': {
+      clients: {
+        warehouse: {
+          purpose: 'Anular bloqueos de stock.',
+          calls: {
+            cancelStock: {
+              contract: 'POST /cancel anula el bloqueo y devuelve { cancelled }.',
+              method: 'POST',
+              path: '/cancel',
+              response: { fields: { cancelled: { type: tipo, required: true } } }
+            }
+          }
+        }
+      }
+    }
+  });
+
+  const ID = 'OBL-OUTCOME-NEGATIVE-UNDECIDED';
+  assert.ok(run(build()).obligations.some((item) => item.id === ID));
+
+  // Y las dos mitades que la acotan. Sin ellas, una regla que la levantara SIEMPRE pasaría
+  // lo de arriba sin haber mirado nada.
+  assert.ok(
+    !run(build({ awaits: 'acknowledgement' })).obligations.some((item) => item.id === ID),
+    'sin awaits: outcome no hay desenlace que decidir: el resultado llega por otro canal'
+  );
+  assert.ok(
+    !run(build({ tipo: 'uuid' })).obligations.some((item) => item.id === ID),
+    'un identificador de vuelta es un VALOR, no un desenlace: pedir que se decida su caso negativo no tiene sentido'
+  );
+});

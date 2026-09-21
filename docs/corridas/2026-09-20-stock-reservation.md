@@ -7,7 +7,7 @@ Primera corrida hecha para **medir huecos de diseño**, no para validar el gener
 | Diseño | `stock-reservation` v1.0.0 (relacional, 7 capas) |
 | Matriz final | **17/17 OK** |
 | Huecos reportados | 10 (4 del agente de código, 7 del de pruebas; uno repetido entre ambos) |
-| Convertidos en id | 2 |
+| Convertidos en id | 3 (`OBL-IDEM-KEY-REQUIRED`, `CHK-DEPS-CLOCK-NOT-OBSERVABLE`, `OBL-OUTCOME-NEGATIVE-UNDECIDED`) |
 
 > **Los huecos de esta corrida estuvieron perdidos.** El proyecto generado se borró con su
 > `design-gaps.yaml` dentro y no quedó copia en ningún sitio: se recuperaron del transcript de
@@ -51,7 +51,19 @@ analogía con el fallback — decisión del agente, no del diseño.
 `dependencies.inventory.activations.cancelStock`, o un `error` con su `code` en
 `http-clients.inventory.calls.cancelStock.response`.
 
-*Destino*: el candidato a **`CHK-*`** más claro de la tanda.
+*Destino*: **cerrado como `OBL-OUTCOME-NEGATIVE-UNDECIDED`**. Se clasificó primero como
+`CHK-*` y al implementarlo falló la **cuarta pregunta** de `checks.js` —«¿puede el mensaje
+nombrar el campo concreto que lo cierra?»—: el DSL **no tiene dónde** declarar el desenlace de
+una respuesta negativa (`httpCall.response` solo admite `fields`, y `fallback` gobierna que la
+llamada falle, no que el proveedor conteste que no). Eso es exactamente la frontera con
+`obligations.js`: el diseño no lo decidió y no hay default seguro —tratarlo como éxito da por
+hecho un efecto que el proveedor niega, y como fallo bloquea un flujo que debía seguir—.
+
+El disparador se acota al **booleano** a propósito: ahí el campo es el desenlace por
+construcción. Un `recordId` de vuelta es un valor, no un desenlace. Queda fuera el caso del
+`verdict` de `asset-vault` —un `string` libre—, que es la misma forma con otro tipo: si la
+segunda corrida lo vuelve a levantar, ahí estará la evidencia para ensanchar el disparador en
+vez de adivinarlo desde un solo ejemplo.
 
 ### 3 — la cabecera de idempotencia es opcional y nada la exige ✔
 *Capa*: `use-cases` · *Unidad*: `createReservation` · `idempotency.keySource: client-key`
@@ -118,8 +130,12 @@ primera.
 de error, y el diseño no declara `code` para violar `quantity.min` o `sku.maxLength`. Los tres
 casos borde asumieron 400.
 
-*Destino*: **dos cosas distintas**. La contradicción interna de `mapping.md` es un defecto del
-generador y se arregla; el `code` ausente es candidato a `OBL-*`/`CHK-*`.
+*Destino*: **dos cosas distintas**. La contradicción interna es un defecto del generador y
+**queda arreglada**: el canónico es 400 (`FRAMEWORK_ERRORS.validation`), y el 422 estaba en
+`mapping.md` § Normalización y copiado en un comentario de `type-mapper.js`. Lo impide ahora
+`conventions-status-coverage.test.js`, que cruza toda atribución explícita de status a un
+`code` canónico en los documentos del generador contra el catálogo. El `code` ausente para
+violar una constraint sigue abierto como candidato a `OBL-*`/`CHK-*`.
 
 ### 10 — no existían los contratos formales
 *Transversal*
@@ -139,10 +155,12 @@ ejecuta `/keel-docs` antes de generar.
    sobre EXIT + modo `--kill-workers`, con su test ejecutado y falsado.
 2. **El script mandaba a arbitrar la nada**: dos caminos salían con `1` sin ningún `FL-*` en
    rojo. *Arreglado*: el `1` exige que la matriz tenga algo.
-3. **`AbstractFlowIT` no tiene `holdsFor(Duration, BooleanSupplier)`** — la ventana de
+3. **`mapping.md` se contradecía con el catálogo de errores** (422 frente a 400 para
+   `VALIDATION_ERROR`). *Arreglado*, con test que lo impide.
+4. **`AbstractFlowIT` no tiene `holdsFor(Duration, BooleanSupplier)`** — la ventana de
    asentamiento para una aserción **negativa** sobre un efecto asíncrono (la reentrega que no
    debe producir un segundo efecto, el «exactamente uno» tras recuperar el canal). El agente lo
    resolvió con un helper privado duplicado **en seis clases**. Sin él, cada clase reinventa la
    espera negativa o la escribe como lectura seca, que sale verde siempre. *Pendiente*.
-4. Los casos borde de constraints llevan id `BORDE-RES-001-*` y **no** `FL-*` a propósito, así
+5. Los casos borde de constraints llevan id `BORDE-RES-001-*` y **no** `FL-*` a propósito, así
    que el script los trata como «rojo que no es escenario» — que es exactamente lo que son.

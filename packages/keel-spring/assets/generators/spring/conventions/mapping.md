@@ -245,7 +245,7 @@ de que el handler llegue a normalizar nada.
 > `sku` es de tipo `SKU` (`^[A-Z0-9][A-Z0-9-]{2,31}$`) y `use-cases` declara
 > "normalizar el sku a mayúsculas" antes de "validar que no exista otro producto
 > con ese sku". Con `@Pattern` en el DTO, un `sku` en minúsculas se rechaza con
-> `422 VALIDATION_ERROR` y nunca llega a la regla de negocio, que debía devolver
+> `400 VALIDATION_ERROR` y nunca llega a la regla de negocio, que debía devolver
 > `409 SKU_ALREADY_EXISTS`. El escenario falla por el error equivocado.
 
 Regla: si el orden de `rules` pone una normalización por delante de la validación

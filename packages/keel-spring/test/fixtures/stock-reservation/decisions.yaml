@@ -27,3 +27,11 @@ decisions:
     scope: use-cases
     reason: El llamante actual siempre manda la cabecera; sin ella la reserva se ejecuta sin deduplicar y la clave natural del pedido frena el duplicado.
     since: 1.0.0
+  - id: OBL-OUTCOME-NEGATIVE-UNDECIDED
+    scope: dependencies
+    reason: >
+      Un `cancelled: false` del almacén se trata igual que el fallback declarado: la reserva
+      se libera de todos modos y el bloqueo huérfano lo resuelve el almacén. Se acepta a
+      sabiendas de que no es lo mismo que un fallo de la llamada — ahí el proveedor no
+      contestó, y aquí contesta que NO.
+    since: 1.0.0

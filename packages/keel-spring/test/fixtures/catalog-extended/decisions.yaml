@@ -7,3 +7,9 @@ decisions:
       petición se ejecuta sin deduplicar, y lo que frena el duplicado es la clave
       natural del SKU.
     since: 1.0.0
+  - id: OBL-OUTCOME-NEGATIVE-UNDECIDED
+    scope: dependencies
+    reason: >
+      Un `cancelled: false` de compliance se trata como el fallback: la retirada queda
+      cancelada en el catálogo igualmente y el registro descuadrado lo concilia compliance.
+    since: 1.0.0

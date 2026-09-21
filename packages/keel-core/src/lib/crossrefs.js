@@ -2376,6 +2376,39 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
 
         checkDeclaredError(spec.onFailure?.error, `${where}.onFailure.error`, spec.triggeredBy, 'triggeredBy');
 
+        // `awaits: outcome` dice que la operación espera el RESULTADO del trabajo, no solo que
+        // la llamada salga. Cuando la respuesta trae un booleano, ese booleano ES el resultado
+        // —y el diseño no dice qué significa el `false`—. `onFailure` no lo cubre: gobierna que
+        // la llamada FALLE, y una respuesta 200 con `{ cancelled: false }` no es un fallo.
+        //
+        // Sin esa decisión, quien construya elige: en la corrida de `stock-reservation` del
+        // 2026-09-20 el agente liberó la reserva igualmente y dejó un WARN «por analogía con el
+        // fallback», que es una regla de negocio inventada en tiempo de generación. Y no hay
+        // default seguro: tratarlo como éxito da por hecho un efecto que el proveedor niega, y
+        // tratarlo como fallo puede bloquear un flujo que debía seguir.
+        //
+        // Obligación y no aviso, por eso mismo. Se acota al BOOLEANO a propósito: ahí el campo
+        // es el desenlace por construcción. Un `recordId` es un valor de vuelta, no un
+        // desenlace, y acusar a esa forma sería pedir que el diseño decida algo que no tiene.
+        if (spec.awaits === 'outcome' && via.client) {
+          const call = httpClients?.clients?.[via.client]?.calls?.[via.call];
+          const banderas = Object.entries(call?.response?.fields ?? {})
+            .filter(([, field]) => field?.type === 'boolean')
+            .map(([fieldName]) => fieldName);
+          if (banderas.length > 0) {
+            obligation(
+              'OBL-OUTCOME-NEGATIVE-UNDECIDED',
+              'dependencies',
+              `${depName}.activations.${action} declara awaits: outcome y ${via.client}.${via.call} devuelve ` +
+                `${banderas.join(', ')} — un booleano que ES el desenlace. El diseño no dice qué pasa cuando vale ` +
+                `false: no es un fallo de la llamada (responde 200), así que onFailure no lo gobierna y quien ` +
+                `construya tiene que inventar la regla. Declara un code en los errors de ` +
+                `${(spec.triggeredBy ?? []).join(', ') || 'la operación que la dispara'}, o acepta por escrito que el ` +
+                `caso negativo se trata como el fallback`
+            );
+          }
+        }
+
         // La reconciliación es un barrido, no una reacción: si no corre sola, no
         // corre. Una operación sin `schedule` que se declare aquí es una promesa
         // que nadie cumple — y justo la que se cumple sola cuando todo va bien.

@@ -68,6 +68,17 @@ export const OBLIGATIONS = {
     doc: 'framework-errors.md'
   },
 
+  'OBL-OUTCOME-NEGATIVE-UNDECIDED': {
+    gapClass: 13,
+    when: 'dependencies: una activación con `awaits: outcome` cuya llamada devuelve un campo booleano',
+    kind: 'decision',
+    waivable: true,
+    title: 'el desenlace NEGATIVO de la llamada no está decidido',
+    closes:
+      'un `code` en los `errors` de la operación que la dispara, o exención razonada de que el caso negativo se trata como el `fallback`',
+    doc: 'design-obligations.md'
+  },
+
   'OBL-GUARD-UNOBSERVABLE': {
     gapClass: 12,
     when: 'mail: una operación de `sentBy` con estado EN VUELO no tiene puerta propia (ni endpoint, ni schedule, ni subscription)',

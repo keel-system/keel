@@ -98,7 +98,7 @@ export function beanValidationAnnotations(field, resolved, { inheritTypeFormat =
   // necesita un DTO de ENTRADA: el formato del value type describe el valor ya
   // normalizado (`SKU` es `^[A-Z0-9]…`, y el diseño normaliza a mayúsculas antes
   // de validar), pero Bean Validation corre sobre el DTO antes de que el handler
-  // normalice nada — un sku en minúsculas moría con 422 VALIDATION_ERROR sin
+  // normalice nada — un sku en minúsculas moría con 400 VALIDATION_ERROR sin
   // llegar nunca a la regla de negocio. Ese formato lo hace cumplir el constructor
   // del value object del dominio, que es donde el modelo rico lo quiere de todos
   // modos (conventions/mapping.md § Normalización antes que validación de formato
