@@ -173,6 +173,22 @@ export const REVIEWS = {
       'relee la asunción de trustedPublishers, no la des por vigente: se sostiene sobre que todos los emisores sean ' +
       'sistemas propios. ¿Hay ya alguno fuera del perímetro, o consecuencias que no se pueden retirar?'
   },
+  'REV-MSG-DEDUPE-WINDOW': {
+    scope: 'messaging',
+    gapClass: 4,
+    severity: 'warning',
+    appliesTo: (layers) =>
+      hasAny(layers.messaging?.subscriptions, (sub) => {
+        const handler = layers['use-cases']?.operations?.[sub.triggers];
+        if (!handler) return false;
+        return (handler.transitions ?? []).length === 0 && !handler.idempotency;
+      }),
+    title: 'la ventana de deduplicación de una suscripción la fija un parámetro operativo',
+    asks:
+      '¿el efecto del handler es ACUMULABLE? Sin `transitions` ni `idempotency` no hay guarda de dominio detrás, y lo ' +
+      'único que frena la reentrega es la tabla de procesados, cuya retención no está en el diseño: pasada, una ' +
+      'reentrega vuelve a sumar. Si el efecto se puede repetir sin daño, no hay hallazgo'
+  },
 
   // ─── dependencies ──────────────────────────────────────────────────────────
   'REV-DEPS-REPLICA-NO-RETIREMENT': {

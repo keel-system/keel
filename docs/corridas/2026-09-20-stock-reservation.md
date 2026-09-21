@@ -7,7 +7,7 @@ Primera corrida hecha para **medir huecos de diseño**, no para validar el gener
 | Diseño | `stock-reservation` v1.0.0 (relacional, 7 capas) |
 | Matriz final | **17/17 OK** |
 | Huecos reportados | 10 (4 del agente de código, 7 del de pruebas; uno repetido entre ambos) |
-| Convertidos en id | 3 (`OBL-IDEM-KEY-REQUIRED`, `CHK-DEPS-CLOCK-NOT-OBSERVABLE`, `OBL-OUTCOME-NEGATIVE-UNDECIDED`) |
+| Convertidos en id | 4 (`OBL-IDEM-KEY-REQUIRED`, `CHK-DEPS-CLOCK-NOT-OBSERVABLE`, `OBL-OUTCOME-NEGATIVE-UNDECIDED`, `REV-MSG-DEDUPE-WINDOW`) |
 
 > **Los huecos de esta corrida estuvieron perdidos.** El proyecto generado se borró con su
 > `design-gaps.yaml` dentro y no quedó copia en ningún sitio: se recuperaron del transcript de
@@ -84,8 +84,12 @@ reentrega es `processed_event`, cuya ventana la fija `processed-event.purge.rete
 *Cambio propuesto*: darle guarda de dominio (un `idempotency` con `keySource: payload-field`
 sobre un identificador del recuento) o declarar la ventana de deduplicación en el diseño.
 
-*Destino*: candidato a **`CHK-*`** (aviso): suscripción cuyo handler no declara ni
-`transitions` ni `idempotency`.
+*Destino*: **cerrado como `REV-MSG-DEDUPE-WINDOW`**, y no como `CHK-*`. El disparador
+mecánico —suscripción cuyo handler no declara ni `transitions` ni `idempotency`— alcanza a
+**7 de las 11 fixtures**, porque es el camino normal y documentado del generador (la rama
+`tryRecord`). Lo que decide si hay hallazgo es si el efecto del handler es **acumulable**, y
+eso no está en ningún YAML: un contador que suma y una bandera que se fija se declaran igual.
+Un aviso que sale casi siempre deja de leerse; la pregunta la contesta un lector.
 
 ### 5 — la marca que el barrido lee no es observable ✔
 *Escenario*: `FL-RES-002` (y `FL-REC-001` solo la toca vía `ageForReconciliation`)

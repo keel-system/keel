@@ -188,3 +188,42 @@ test('lo que la revisión pregunta, la CLI no lo puede contestar', () => {
     'si la CLI avisara de esto, la revisión sobra y la regla debería estar en crossrefs.js'
   );
 });
+
+test('REV-MSG-DEDUPE-WINDOW aplica donde no hay guarda, y NO donde la hay', () => {
+  // Hueco 4 de la corrida de `stock-reservation` (2026-09-20). Es revisión y no aviso porque
+  // lo que decide si hay hallazgo —si el efecto del handler es ACUMULABLE— no está en ningún
+  // YAML: un contador que suma y una bandera que se fija se declaran igual. Avisar de las dos
+  // pondría el hallazgo sobre 7 de las 11 fixtures, que es el camino normal y documentado del
+  // generador (la rama `tryRecord`), y un aviso que sale casi siempre deja de leerse.
+  const ID = 'REV-MSG-DEDUPE-WINDOW';
+  const build = (handler) => ({
+    messaging: {
+      subscriptions: {
+        MeterRead: { source: 'meters', triggers: 'recordReading', payload: {}, contract: { envelope: 'keel' } }
+      }
+    },
+    'use-cases': { operations: { recordReading: handler } }
+  });
+
+  assert.ok(applicableReviews(build({ kind: 'command' })).includes(ID));
+
+  // Las dos guardas que la retiran, y son las dos que el `asks` ofrece como salida.
+  assert.ok(
+    !applicableReviews(build({ kind: 'command', transitions: [{ from: 'open', to: 'closed' }] })).includes(ID),
+    'con transiciones la guarda es el lifecycle: el generador usa alreadyProcessed+record'
+  );
+  assert.ok(
+    !applicableReviews(build({ kind: 'command', idempotency: { keySource: 'payload-field', keyField: 'readingId' } })).includes(ID),
+    'con idempotency declarada la ventana la fija el diseño, que es justo lo que se pedía'
+  );
+
+  // Y la frontera con crossrefs.js: el diseño que la viola sale LIMPIO de la CLI. Si saliera
+  // en rojo, la pregunta era mecanizable y su sitio no es este catálogo.
+  const { errors, warnings } = checkCrossRefs({ layers: build({ kind: 'command' }) });
+  assert.deepEqual(
+    warnings.filter((warning) => /acumulab|retenci[óo]n|deduplicaci[óo]n/i.test(warning)),
+    [],
+    'si la CLI avisara de esto, la revisión sobra'
+  );
+  assert.ok(!errors.some((error) => /recordReading/.test(error) && /idempot/i.test(error)));
+});
