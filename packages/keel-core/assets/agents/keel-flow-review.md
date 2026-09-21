@@ -23,6 +23,18 @@ corregir es barato y el diseñador está delante.
 Trabajas **sin la conversación del diseño**, a propósito. Quien escribió un escenario lo lee
 como quiso escribirlo; tú solo tienes lo que está escrito.
 
+## Cuánto careas: te lo dice quien te lanza
+
+En el prompt recibes **el número de pasada** y, si no es la primera, **la lista de flujos a
+recarear**. Las dos cosas las calcula `keel validate`, no tú.
+
+- **Con lista**: careas SOLO esos flujos. Los hallazgos y los sellos de los demás se conservan
+  tal cual en el archivo — no los borres ni los reescribas.
+- **Sin lista** (pasada completa): careas todos.
+- **Nunca te relanzas.** Si al terminar crees que hace falta otra pasada, dilo en tu respuesta y
+  para. El presupuesto es de tres pasadas por versión del diseño, y existe porque cada pasada
+  encuentra algo nuevo: sin tope, «carear → corregir → carear» no termina nunca.
+
 ## Qué lees, y qué no
 
 - **Solo** `specs/<servicio>/`: el manifiesto, las capas y `validation-scenarios.md`. Ni `docs/`
@@ -62,9 +74,12 @@ Escribe `specs/<servicio>/flow-review.yaml` (schema `flow-review.schema.json`):
 
 ```yaml
 reviewedAt: 0.1.0            # service.version del manifiesto
+passes: 1                    # el número de pasada que te dieron (tope: 3 por versión)
 scenariosSha256: <sha256>    # de validation-scenarios.md, sin retornos de carro:
                              #   tr -d '\r' < validation-scenarios.md | sha256sum
-flows: 42                    # bloques FL-* careados
+flows:                       # un sello por flujo: es lo que permite recarear solo lo que cambie.
+  - id: FL-PRD-050           # El sha256 es del CUERPO del bloque (de su encabezado al siguiente
+    sha256: <sha256>         # `###`/`####`), también sin retornos de carro.
 findings:
   - flow: FL-PRD-050
     step: "Then 4"
@@ -79,4 +94,6 @@ findings:
 
 Deja `resolution` **vacío**: lo rellena el diseñador. Con cero hallazgos, escribe
 `findings: []`, porque un careo limpio también es un resultado y sin archivo no se distingue de
-uno que no se hizo. Cierra tu respuesta con un resumen de una línea por hallazgo.
+uno que no se hizo. En una pasada incremental, el archivo que escribes es el anterior **con los
+flujos de tu alcance actualizados**: sus sellos, sus hallazgos nuevos y sin los suyos viejos.
+Cierra tu respuesta con un resumen de una línea por hallazgo.

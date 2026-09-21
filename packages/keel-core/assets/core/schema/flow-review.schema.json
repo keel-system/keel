@@ -5,7 +5,7 @@
   "description": "El careo de flujos de este servicio (flow-review.yaml, junto a las capas): cada escenario FL-* ejecutado paso a paso contra el diseño por un agente de contexto limpio (keel-flow-review), y lo que el diseñador decidió de cada contradicción. No forma parte del DSL: no describe lo que el servicio hace, sino qué se encontró al simularlo. Existe porque, en las corridas, la mayoría de los huecos entre escenarios y diseño los encontraba el agente de pruebas en la generación, que es donde el diseño ya no se puede tocar.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["reviewedAt", "scenariosSha256", "findings"],
+  "required": ["reviewedAt", "passes", "scenariosSha256", "findings"],
   "properties": {
     "reviewedAt": {
       "type": "string",
@@ -17,10 +17,23 @@
       "pattern": "^[0-9a-f]{64}$",
       "description": "sha256 de validation-scenarios.md SIN retornos de carro en el momento del careo. Si el documento cambia, el careo deja de hablar de él y keel validate lo avisa (CHK-SCEN-FLOW-REVIEW-STALE)."
     },
-    "flows": {
+    "passes": {
       "type": "integer",
-      "minimum": 0,
-      "description": "Cuántos bloques FL-* se carearon. Un careo que se salta flujos no se distingue, sin este número, de uno que los miró todos."
+      "minimum": 1,
+      "description": "Cuántas pasadas de careo se han hecho sobre ESTA versión del diseño. Hay presupuesto (3): al agotarlo no se carea más y lo que quede abierto se decide. Sin este número, el bucle «carear → corregir → carear» no termina solo — cada pasada encuentra algo nuevo, medido. Sube de versión el diseño y el presupuesto vuelve a empezar, que es la misma caducidad de review.yaml."
+    },
+    "flows": {
+      "type": "array",
+      "description": "Un sello por flujo careado: es lo que permite recarear SOLO lo que cambió. Sin él, corregir un escenario caduca el careo entero y obliga a repetir los 26 — cuatro minutos y 185k tokens medidos por pasada. Un flujo que no está aquí no se careó, y eso no se distingue de uno limpio si no se enumeran.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "sha256"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^FL-[A-Za-z0-9-]+$" },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "sha256 del CUERPO del bloque (sin retornos de carro), no del documento entero." }
+        }
+      }
     },
     "findings": {
       "type": "array",

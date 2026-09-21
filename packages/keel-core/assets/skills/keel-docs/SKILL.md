@@ -168,6 +168,8 @@ sobrescribe todo por completo (no edites incrementalmente) — con la única exc
 (`CHK-DOCS-OPENAPI-DRIFT`, `CHK-DOCS-ASYNCAPI-DRIFT`, `CHK-DOCS-POSTMAN-DRIFT`): rutas y métodos,
 status de éxito y de error, canales, campos y obligatoriedad de cada payload, una carpeta por
 flujo `FL-*`, y que cada request afirme un status que SU endpoint puede dar. No des la
-documentación por terminada con uno de esos avisos abierto. El fallo más frecuente, medido sobre
+documentación por terminada con uno de esos avisos abierto — pero **no regeneres más de dos
+veces**: si a la tercera sigue habiendo desviación, párate y repórtasela al usuario con el aviso
+literal, porque entonces lo que no encaja no es la documentación sino el diseño o el comprobador. El fallo más frecuente, medido sobre
 el catalog del registry (18 requests): copiar a cada request del flujo el status del PRIMER paso
 —un GET de la ficha esperando el `201` del alta—. Cada request lleva el status de su paso.

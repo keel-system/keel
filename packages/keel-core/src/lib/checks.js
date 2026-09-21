@@ -298,6 +298,12 @@ export const CHECKS = {
     closes: 'declararla en la propiedad del DSL que la sostiene, para que el generador la vea'
   },
 
+  'CHK-SCEN-FLOW-REVIEW-EXHAUSTED': {
+    layer: 'validation-scenarios',
+    severity: 'warning',
+    title: 'el careo agotó su presupuesto de pasadas y sigue habiendo hallazgos abiertos',
+    closes: 'decidir cada hallazgo (scenario, design o accepted con su motivo) — no lanzar otra pasada: si siguen saliendo clases nuevas, el diseño no está listo para cerrarse'
+  },
   'CHK-SCEN-FLOW-REVIEW-STALE': {
     layer: 'validation-scenarios',
     severity: 'warning',

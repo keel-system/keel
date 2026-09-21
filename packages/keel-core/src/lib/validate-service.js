@@ -10,7 +10,7 @@ import { applicableReviews } from './reviews.js';
 import { SCENARIOS_FILE } from './spec-files.js';
 import { checkFor } from './checks.js';
 import { checkDerivedCoherence } from './derived-coherence.js';
-import { FLOW_REVIEW_FILE, flowReviewStatus } from './flow-review.js';
+import { FLOW_REVIEW_FILE, MAX_PASSES, flowReviewPlan } from './flow-review.js';
 
 const Ajv2020 = Ajv2020Module.default ?? Ajv2020Module;
 
@@ -237,14 +237,23 @@ function workspaceDocsDir(dir, manifest) {
 function flowReviewFinding(dir) {
   const scenariosPath = path.join(dir, SCENARIOS_FILE);
   if (!fs.existsSync(scenariosPath)) return null;
-  const { status, detail } = flowReviewStatus(dir, fs.readFileSync(scenariosPath));
-  if (status === 'ok') return null;
-  const message =
-    status === 'missing'
-      ? `${FLOW_REVIEW_FILE}: no hay careo de flujos — ningún agente de contexto limpio ha ejecutado los escenarios contra el diseño; lánzalo con keel-flow-review (paso 5b de /keel-design)`
-      : status === 'stale'
-        ? `${FLOW_REVIEW_FILE}: el careo se hizo sobre otra versión de validation-scenarios.md — sus hallazgos no dicen nada de los escenarios actuales; vuelve a lanzar keel-flow-review`
-        : `${FLOW_REVIEW_FILE}: ${detail}`;
-  const entry = checkFor('CHK-SCEN-FLOW-REVIEW-STALE');
-  return { id: 'CHK-SCEN-FLOW-REVIEW-STALE', severity: entry.severity, message };
+  const plan = flowReviewPlan(dir, fs.readFileSync(scenariosPath));
+  if (plan.status === 'ok') return null;
+
+  // El mensaje dice QUÉ hacer, y son dos cosas distintas: carear (y cuánto) o decidir. Con una
+  // sola redacción, el careo se relanza entero cada vez que alguien toca una coma — que es el
+  // bucle que este presupuesto existe para cortar.
+  const alcance = plan.full ? 'todos los flujos' : plan.scope.join(', ');
+  const message = {
+    missing: `${FLOW_REVIEW_FILE}: no hay careo de flujos — ningún agente de contexto limpio ha ejecutado los escenarios contra el diseño; lánzalo con keel-flow-review (paso 5b de /keel-design), pasada 1 de ${MAX_PASSES}`,
+    invalid: `${FLOW_REVIEW_FILE}: ${plan.detail}`,
+    stale: `${FLOW_REVIEW_FILE}: el careo no describe los escenarios de ahora — recarea ${alcance} con keel-flow-review (pasada ${plan.nextPass} de ${MAX_PASSES}). ${plan.detail}`,
+    open: `${FLOW_REVIEW_FILE}: ${plan.detail} — cada uno se cierra en el escenario, en el diseño o aceptándolo con su motivo`,
+    exhausted:
+      `${FLOW_REVIEW_FILE}: ${plan.detail}. NO lances otra pasada: decide lo que queda (scenario, design o accepted con su motivo). ` +
+      `Si siguen apareciendo contradicciones de clases nuevas, lo que dice el careo es que el diseño no está listo para cerrarse`
+  }[plan.status];
+
+  const id = plan.status === 'exhausted' ? 'CHK-SCEN-FLOW-REVIEW-EXHAUSTED' : 'CHK-SCEN-FLOW-REVIEW-STALE';
+  return { id, severity: checkFor(id).severity, message };
 }
