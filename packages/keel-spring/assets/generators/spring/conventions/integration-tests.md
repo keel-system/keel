@@ -758,6 +758,21 @@ Dos consecuencias prácticas:
 
 - **El efecto es asíncrono.** Se afirma con `await(...)` sobre una lectura por la API, nunca
   en la línea siguiente a la entrega.
+- **Y una AUSENCIA asíncrona se afirma con `holdsFor(...)`, nunca con una lectura seca.** Es
+  el gemelo negativo de `await`: comprueba que la condición se mantiene durante toda una
+  ventana. Un `assertThat(contador).isEqualTo(1)` en la línea siguiente a la reentrega **sale
+  verde siempre** —mide el instante en que el segundo efecto aún no ha llegado, no que no
+  vaya a llegar—, y un escenario que no puede fallar ocupa una fila de la matriz sin probar
+  nada. La ventana se dimensiona por el mecanismo que produciría el efecto (el backoff del
+  reintento del listener, el tick del cron), igual que las de `await`.
+
+  ```java
+  redeliver(evento);
+  holdsFor(Duration.ofSeconds(10), () -> adjustmentCountOf(orderId) == 1);
+  ```
+
+  **No lo reimplementes**: `AbstractFlowIT` ya lo trae. Un helper privado por clase es lo que
+  produjo seis copias del mismo sondeo en la corrida de `stock-reservation`.
 - **Una compensación siempre lleva los tres escenarios** —el efecto completo, la reentrega y
   la doble entrega simultánea—, porque deshacer dos veces el mismo trabajo no es deshacerlo.
   Es el camino que menos se ejercita a mano y el que más cuesta cuando está roto: solo se

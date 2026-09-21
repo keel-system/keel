@@ -1438,6 +1438,46 @@ ${hasIdempotency(model) ? `
         throw new AssertionError("La condición no se cumplió en " + timeout);
     }
 
+    /**
+     * El gemelo NEGATIVO de {@link #await}: comprueba que algo <b>sigue sin pasar</b> durante
+     * toda una ventana. Para un {@code Then} que afirma una ausencia sobre un efecto
+     * asíncrono —la reentrega que no debe producir un segundo efecto, el «exactamente uno»
+     * tras recuperar el canal, las cinco cancelaciones que no deben volverse diez—.
+     *
+     * <p>Existe porque la alternativa natural es una <b>lectura seca</b> justo después de
+     * provocar el estímulo, y esa lectura <b>sale verde siempre</b>: mide el instante en que
+     * el efecto duplicado todavía no ha tenido tiempo de llegar, no que no vaya a llegar.
+     * Un escenario así no puede fallar, que es la peor clase de escenario —ocupa una fila de
+     * la matriz y no prueba nada—.
+     *
+     * <p>La ventana se dimensiona por el mecanismo que produciría el efecto, igual que las de
+     * {@code await}: el backoff del reintento del listener, el tick del cron, el timeout del
+     * cliente del broker. Corta en cuanto la condición deja de cumplirse, así que el caso
+     * bueno paga la ventana entera y el malo falla enseguida.
+     *
+     * <pre>{@code
+     * redeliver(evento);
+     * holdsFor(Duration.ofSeconds(10), () -> adjustmentCountOf(orderId) == 1);
+     * }</pre>
+     */
+    protected void holdsFor(Duration window, BooleanSupplier condition) {
+        Instant deadline = Instant.now().plus(window);
+        while (Instant.now().isBefore(deadline)) {
+            if (!condition.getAsBoolean()) {
+                throw new AssertionError("La condición dejó de cumplirse antes de " + window);
+            }
+            try {
+                Thread.sleep(200L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError("Espera interrumpida", e);
+            }
+        }
+        if (!condition.getAsBoolean()) {
+            throw new AssertionError("La condición dejó de cumplirse antes de " + window);
+        }
+    }
+
     private boolean preconditionsDone;
     private AssertionError preconditionsFailure;
 

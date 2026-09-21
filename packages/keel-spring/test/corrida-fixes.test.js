@@ -2020,3 +2020,31 @@ test('y la hija NO recibe buffer de eventos, que es donde el fallo era silencios
   const raiz = file(path.join('domain', 'aggregate', 'Product.java'));
   assert.match(raiz, /pullDomainEvents/);
 });
+
+test('el arnés trae la espera NEGATIVA, y las conventions mandan usarla', () => {
+  // Corrida de `stock-reservation` (2026-09-20): el agente necesitó afirmar ausencias sobre
+  // efectos asíncronos —la reentrega que no produce un segundo efecto, el «exactamente uno»
+  // tras recuperar el canal— y `AbstractFlowIT` solo tenía `await`, su gemelo afirmativo. Lo
+  // resolvió con un helper privado DUPLICADO EN SEIS CLASES que sondeaba la negación con
+  // `await` y trataba su AssertionError como éxito.
+  //
+  // Lo que se juega no es la duplicación: sin un helper, el camino de menor resistencia es la
+  // lectura seca justo después del estímulo, que sale verde SIEMPRE porque mide el instante en
+  // que el efecto duplicado todavía no ha llegado.
+  const abstracto = project('stock-reservation', RELATIONAL).file('AbstractFlowIT.java');
+  assert.match(abstracto, /protected void holdsFor\(Duration window, BooleanSupplier condition\)/);
+  // Corta en cuanto deja de cumplirse: si solo mirara al final, una violación transitoria
+  // —justo lo que un duplicado produce— pasaría desapercibida.
+  assert.match(abstracto, /if \(!condition\.getAsBoolean\(\)\) \{\s*\n\s*throw new AssertionError/);
+
+  // Y tiene que estar donde el agente lo lee: un helper que no se documenta se reinventa.
+  const conventions = fs.readFileSync(
+    path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      '..', 'assets', 'generators', 'spring', 'conventions', 'integration-tests.md'
+    ),
+    'utf8'
+  );
+  assert.match(conventions, /holdsFor\(/);
+  assert.match(conventions, /lectura seca/);
+});

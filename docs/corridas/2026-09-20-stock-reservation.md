@@ -165,6 +165,8 @@ ejecuta `/keel-docs` antes de generar.
    asentamiento para una aserción **negativa** sobre un efecto asíncrono (la reentrega que no
    debe producir un segundo efecto, el «exactamente uno» tras recuperar el canal). El agente lo
    resolvió con un helper privado duplicado **en seis clases**. Sin él, cada clase reinventa la
-   espera negativa o la escribe como lectura seca, que sale verde siempre. *Pendiente*.
+   espera negativa o la escribe como lectura seca, que sale verde siempre. *Arreglado*:
+   `holdsFor(Duration, BooleanSupplier)` vive en `AbstractFlowIT` y las conventions del agente
+   de pruebas mandan usarlo en vez de reimplementarlo.
 5. Los casos borde de constraints llevan id `BORDE-RES-001-*` y **no** `FL-*` a propósito, así
    que el script los trata como «rojo que no es escenario» — que es exactamente lo que son.
