@@ -706,9 +706,20 @@ test('puntuación de escenarios: el entorno bloqueado no se disfraza de arnés r
   }
 
   // Una salida que no dice qué hacer obliga al mismo diagnóstico manual que costó el
-  // ciclo: el remedio va en el propio mensaje.
+  // ciclo: el remedio va en el propio mensaje. Y tiene que ser un remedio que FUNCIONE —
+  // este test fijaba `jps -l`, que no lista los workers: pinchaba en hueso y el orquestador
+  // seguía sin poder desbloquearse. Hoy el script sabe encontrarlos y ofrece hacerlo él.
   assert.ok(script.includes('./gradlew --stop'), script);
-  assert.ok(script.includes('jps -l'), script);
+  assert.ok(script.includes('--kill-workers'), script);
+  assert.ok(!script.includes('jps -l'), 'el remedio vuelve a recomendar jps');
+
+  // El remedio se escribe una vez: dos copias divergen y la que se queda atrás es la que
+  // alguien lee. Estuvo duplicado literalmente entre report_locked y la rama del rm.
+  assert.equal(
+    script.split('bash infra/score-scenarios.sh --kill-workers   # los workers').length - 1,
+    1,
+    'el remedio vuelve a estar duplicado'
+  );
 });
 
 test('constraints del diseño en una query: Bean Validation en el @RequestParam y en el record', () => {

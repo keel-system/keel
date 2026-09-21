@@ -126,9 +126,16 @@ directorio**. Casi siempre es una corrida anterior que se interrumpió —un tim
 herramienta que la lanzó— y dejó vivos su proceso de Gradle y su Test Executor, que siguen
 sosteniendo el lock sobre `build/`.
 
-No hay agente que relanzar y no consume cupo: se paran los procesos (`./gradlew --stop`, y
-`jps -l | grep -i gradle` para los workers, que no siempre caen con eso) y se vuelve a lanzar
-el script tal cual.
+No hay agente que relanzar y no consume cupo: se paran los procesos y se vuelve a lanzar el
+script tal cual. El comando es `bash infra/score-scenarios.sh --kill-workers`, y después
+`./gradlew --stop` si sigue. **No sirve listar con `jps`**: los workers son JVMs aparte del
+daemon y no aparecen ahí —lo único que los identifica es
+`-Dorg.gradle.internal.worker.tmpdir` apuntando a este directorio, que es justo por lo que el
+script sabe encontrarlos—.
+
+Desde que el script limpia sus propios workers al salir (un `trap` sobre EXIT), este desenlace
+debería ser raro: la causa se corta donde se produce en vez de aparecer en la corrida
+siguiente, que es lo que la hacía cara de diagnosticar.
 
 Tiene código propio porque su síntoma es indistinguible del `exit 2` si nadie lo separa: el
 humo del arnés muere igual, y leído como «arnés roto» manda a revisar un andamiaje que está
@@ -141,8 +148,12 @@ al `killed` que tú ves, y el siguiente intento se encuentra el lock.
 
 ## Un exit 2 no siempre es del agente de pruebas
 
-Con `exit 2` la suite **no se ejecutó**: el humo del arnés está rojo y no hay matriz que
-arbitrar. El relanzamiento por defecto es a `keel-spring-tests`, pero **antes hay que mirar
+Con `exit 2` **no hay nada que arbitrar**, y eso incluye tres situaciones y no una: el humo
+del arnés está rojo y no hay matriz; la matriz está **vacía** (la suite corrió y no ejercitó
+ni un `FL-*`); o la matriz está limpia pero **la suite falló** por pruebas que no son
+escenarios. Las tres comparten lo que importa: no hay ningún `Then` que contrastar, así que
+mandarlas al árbitro le pide un veredicto sobre un conjunto vacío —y su `culprit` no puede
+relanzar a nadie—. El relanzamiento por defecto es a `keel-spring-tests`, pero **antes hay que mirar
 dónde está el defecto**, porque el humo cae por dos causas de dueños distintos:
 
 - **Dentro de `src/integrationTest/`** — el arnés Java o una clase de flujo. Es del agente de
@@ -255,7 +266,7 @@ candado y la regla escrita en cada agente, el porqué.
 | `identity` | `keel-spring-infra` | Orquestador, `keel-spring-validate` | Que el aprovisionamiento corrió y que el token se pidió **de verdad**. Sin `tokenChecked: OK`, todo escenario autenticado va a fallar en bloque y no por su contrato. |
 | `classes` / `uncovered` | `keel-spring-tests` | Orquestador, resumen final | Qué flujos quedaron traducidos y qué escenarios **no** se ejercitan (y por qué): dejan de darse por probados en silencio. |
 | `assumptions` | `keel-spring-tests` | `keel-spring-validate` | Apuestas sobre infraestructura que la fase 1 no puede verificar (nombre de cola, cliente M2M, secreto, bucket). La parte mecánica la cubre el humo del arnés que el script ejecuta antes de la suite; lo que quede sin cubrir y explique una tanda de fallos es un bloqueo `systemic`, no una colección de fallos de negocio. |
-| matriz + `exit code` | ⚙ `infra/score-scenarios.sh` | Orquestador | La matriz `FL-* → OK \| FALLO \| NO_EJERCITADO`, determinista desde el XML. `0` → fase 3 sin invocar árbitro · `1` → invocar `keel-spring-validate` con los fallos · `2` → humo del arnés roto, la suite **no** se ejecutó: el ciclo es de arnés, no de negocio, y **antes de relanzar hay que mirar dónde está el defecto** — ver «Un exit 2 no siempre es del agente de pruebas» · `3` → entorno bloqueado (un Gradle de una corrida anterior sigue vivo): no se relanza a nadie, se paran los procesos y se repite el script — ver «Un `exit 3` no es de nadie». |
+| matriz + `exit code` | ⚙ `infra/score-scenarios.sh` | Orquestador | La matriz `FL-* → OK \| FALLO \| NO_EJERCITADO`, determinista desde el XML. `0` → fase 3 sin invocar árbitro · `1` → hay `FL-*` en FALLO, OMITIDO o NO_EJERCITADO: invocar `keel-spring-validate` con ellos · `2` → **nada que arbitrar** (humo del arnés roto, matriz vacía, o suite en rojo por pruebas que no son escenarios): el ciclo es de arnés, no de negocio, y **antes de relanzar hay que mirar dónde está el defecto** — ver «Un exit 2 no siempre es del agente de pruebas» · `3` → entorno bloqueado (un Gradle de una corrida anterior sigue vivo): no se relanza a nadie, se paran los procesos y se repite el script — ver «Un `exit 3` no es de nadie». |
 | `failures[].culprit` | `keel-spring-validate` | Orquestador | A quién relanzar: `code` → `keel-spring-code`; `test` y `harness` → `keel-spring-tests`; `design` → detenerse. |
 | `harnessPatches` | `keel-spring-tests` (relanzado) | Orquestador, `INFORME-GENERACION.md` | Parches al andamiaje generado (`AbstractFlowIT` y compañía). Van al informe de cierre para portarlos al generador: un defecto del arnés que se queda en el proyecto lo vuelve a pagar entero la siguiente generación. |
 | `failures` (escenario, `evidence`, `class`, request, response, esperado) | `keel-spring-validate` | `keel-spring-code` / `keel-spring-tests` (relanzado) | Evidencia **exacta** para el ciclo de fix. `evidence` es la ruta del volcado de `build/keel-failures/`: el relanzado abre el JSON crudo —antes de ejecutar nada, porque una pasada nueva lo sobrescribe—, no el extracto. `class` le dice qué clase re-ejecutar para verificarse. |
@@ -479,6 +490,13 @@ quien mantiene `keel-spring`. Va estructurado así:
    generó (schema: `design-gaps.schema.json` de keel-core). Una entrada por hueco:
    `layer`, `unit`, `kind` (`missing` | `contradiction` | `undeclared`), `proposal` y
    `source`, más el `scenario` que lo destapó si lo hubo.
+
+   **Y ese archivo se copia FUERA del proyecto antes de tirarlo.** Un proyecto generado es
+   desechable y el `design-gaps.yaml` se va con él: los diez huecos de la primera corrida de
+   medición estuvieron perdidos por esto, y solo se recuperaron del transcript de la sesión.
+   Lo que da valor a un hueco no es leerlo una vez sino **compararlo con el de otra corrida**
+   —un hueco que sale dos veces es candidato obligatorio a id—, y esa comparación no existe
+   sin registro.
 
    ```yaml
    service: billing

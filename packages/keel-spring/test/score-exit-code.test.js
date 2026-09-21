@@ -59,6 +59,29 @@ function decide({ ok, ko, sk, nc, broken }) {
   return { code: result.status, out: result.stdout };
 }
 
+/**
+ * Como `decide`, pero desde el desenlace VERDE: es el único sitio donde se mira el veredicto
+ * de Gradle (`suite_failed`), y el bloque que decide el «falso 100%» no lo cubría nadie.
+ */
+function decideDesdeElVerde({ ok, ko, sk, nc, broken, suiteFailed }) {
+  const script = scoreScript();
+  const start = script.indexOf('if [ "$ko" -eq 0 ] && [ "$sk" -eq 0 ] && [ "$nc" -eq 0 ] && [ "$ok" -gt 0 ]');
+  assert.notEqual(start, -1, 'el script generado ya no tiene el desenlace verde reconocible');
+  const block = script.slice(start);
+
+  const dir = tmpDir('keel-score-exit-run-');
+  const runner = path.join(dir, 'run.sh');
+  fs.writeFileSync(
+    runner,
+    ['set -u', `ok=${ok}`, `ko=${ko}`, `sk=${sk}`, `nc=${nc}`, `suite_failed=${suiteFailed}`,
+      'EVIDENCE=build/keel-failures', 'LOG=build/keel-scenarios/run.log',
+      `broken=${JSON.stringify(broken)}`, block].join('\n')
+  );
+
+  const result = spawnSync('bash', [runner], { encoding: 'utf8' });
+  return { code: result.status, out: result.stdout };
+}
+
 const BROKEN = '    initializationError  (MessageListingFlowIT)\n      Se esperaban 1 correo(s) y llegaron 0 en 75 s';
 
 test('clases muertas y NINGÚN escenario en FALLO → 2: no hay nada que arbitrar', () => {
@@ -80,6 +103,35 @@ test('clases muertas PERO con escenarios en FALLO → 1: eso se arbitra', () => 
 test('sin clases muertas y con escenarios en FALLO → 1', () => {
   const { code } = decide({ ok: 20, ko: 15, sk: 0, nc: 0, broken: '' });
   assert.equal(code, 1);
+});
+
+// ─── Lo que NO se arbitra ────────────────────────────────────────────────────
+//
+// El `1` es lo único que invoca a `keel-spring-validate`, y arbitrar es contrastar un `Then`
+// con su evidencia. Sin ningún FL-* en FALLO, OMITIDO o NO_EJERCITADO no hay ningún `Then`
+// que leer: el árbitro opina sobre un conjunto vacío y su veredicto no relanza a nadie, así
+// que la corrida se queda sin siguiente paso. Esos dos caminos salían con `1`.
+
+test('matriz VACÍA → 2: la suite no ejercitó ni un escenario, eso es el arnés', () => {
+  const { code, out } = decide({ ok: 0, ko: 0, sk: 0, nc: 0, broken: '' });
+  assert.equal(code, 2, `debía salir 2 (nada que arbitrar):\n${out}`);
+  assert.match(out, /VAC[ÍI]A/i, 'no dice por qué: un 2 sin causa manda a buscarla al log');
+});
+
+test('falso 100%: matriz limpia pero la suite en rojo → 2, no 1', () => {
+  // Los rojos que no son escenarios son del agente de pruebas. Mandarlos al árbitro le pide
+  // un veredicto sobre algo que no tiene `Then`, y su `culprit` no puede relanzar a nadie.
+  const { code, out } = decideDesdeElVerde({ ok: 12, ko: 0, sk: 0, nc: 0, broken: BROKEN, suiteFailed: 1 });
+  assert.equal(code, 2, `debía salir 2 (vuelve al agente de pruebas):\n${out}`);
+  assert.match(out, /pero la suite falló/);
+  assert.match(out, /agente de pruebas/);
+});
+
+test('el 100% de verdad sigue saliendo 0', () => {
+  // El control: sin él, un arreglo que devolviera 2 SIEMPRE desde este bloque pasaría el caso
+  // de arriba sin que nadie lo notara.
+  const { code } = decideDesdeElVerde({ ok: 12, ko: 0, sk: 0, nc: 0, broken: '', suiteFailed: 0 });
+  assert.equal(code, 0);
 });
 
 test('AUTOCOMPROBACIÓN: la condición está escrita sobre $ko, no sobre $broken a secas', () => {

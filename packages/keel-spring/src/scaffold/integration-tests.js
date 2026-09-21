@@ -305,6 +305,16 @@ function scoreScenariosScript(model) {
 #   3  ENTORNO bloqueado: otro proceso sostiene este directorio. No es un defecto de
 #      nadie y no hay agente que relanzar — se resuelve y se reintenta.
 #
+# El 1 y el 2 se reparten por lo que hay que HACER, no por dónde está el defecto.
+# Arbitrar es contrastar un \`Then\` con su evidencia, así que sin ningún FL-* en FALLO,
+# OMITIDO o NO_EJERCITADO no hay ningún \`Then\` que leer: el 1 mandaría al árbitro a
+# opinar sobre un conjunto vacío, y su veredicto no puede relanzar a nadie. Por eso el
+# 1 EXIGE que la matriz tenga algo, y todo lo demás vuelve al agente de pruebas.
+#
+# Y este script limpia sus propios workers al salir (ver kill_workers), así que el 3
+# debería ser raro: la causa se corta donde se produce y no en la corrida siguiente.
+#   bash infra/score-scenarios.sh --kill-workers   # solo esa limpieza, sin ejecutar nada
+#
 # El 3 existe porque su síntoma se disfraza del 2. Una corrida anterior interrumpida
 # (un timeout de la herramienta que la lanzó) deja vivos el proceso de Gradle y su
 # Test Executor, que siguen sosteniendo un lock sobre build/. El siguiente intento
@@ -333,6 +343,85 @@ mkdir -p "$LOG_DIR"
 # log de Gradle se sobrescribe en vez de acumularse.
 rm -rf "$EVIDENCE"
 
+PROJECT_DIR="$(pwd -P)"
+
+# Las formas en que este directorio puede aparecer escrito en la línea de comando de un
+# proceso. Son DOS porque en Windows el java de Gradle es un proceso NATIVO: su argv lleva
+# C:\\\\Users\\\\... aunque este script se vea a sí mismo en /c/Users/..., y buscar una sola
+# forma no encuentra nada justo en el sistema donde el defecto muerde.
+project_path_forms() {
+  printf '%s\\n' "$PROJECT_DIR"
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -w "$PROJECT_DIR" 2>/dev/null || true
+  fi
+}
+
+# Todos los procesos, como "<pid> <línea de comando>". Dos frentes y ninguno sobra: el ps de
+# Git Bash no ve los procesos nativos de Windows, y Get-CimInstance no existe fuera de ahí.
+# Si no responde ninguno se dice en voz alta: no encontrar workers porque no se pudo MIRAR se
+# lee igual que no haberlos, y esa confusión es la que cuesta la corrida siguiente.
+#
+# Cuesta ~4 s en Windows, y es arrancar PowerShell: acotar la consulta a java.exe no lo baja
+# (medido) y además dejaría las dos ramas mirando cosas distintas. Se paga una vez por
+# invocación de un script que dura minutos.
+list_processes() {
+  salida=""
+  if command -v powershell.exe >/dev/null 2>&1; then
+    salida="$(powershell.exe -NoProfile -NonInteractive -Command 'Get-CimInstance Win32_Process | ForEach-Object { [string]$_.ProcessId + " " + [string]$_.CommandLine }' 2>/dev/null || true)"
+  fi
+  [ -n "$salida" ] || salida="$(ps ax -o pid=,args= 2>/dev/null || true)"
+  [ -n "$salida" ] || salida="$(ps -ef 2>/dev/null || true)"
+  if [ -z "$salida" ]; then
+    echo "AVISO: no se pudo listar procesos (ni powershell ni ps): los workers de Gradle de" >&2
+    echo "  esta corrida quedan sin limpiar. Si la siguiente sale con 3, la causa es esta." >&2
+    return 1
+  fi
+  printf '%s\\n' "$salida"
+}
+
+# Los workers de Gradle —los "Gradle Test Executor"— son JVMs APARTE del daemon: no caen con
+# ./gradlew --stop y jps NO los lista. Lo único que los identifica es la propiedad
+# -Dorg.gradle.internal.worker.tmpdir=<build de este proyecto> de su línea de comando, y de
+# ahí sale también el alcance: se terminan SOLO los de este directorio. El daemon no se toca
+# (es reutilizable y no sostiene el lock) y los de otro proyecto tampoco.
+worker_pids() {
+  procesos="$(list_processes)" || return 0
+  candidatos="$(printf '%s\\n' "$procesos" | grep -F 'org.gradle.internal.worker.tmpdir' || true)"
+  [ -n "$candidatos" ] || return 0
+  project_path_forms | while IFS= read -r ruta; do
+    [ -n "$ruta" ] || continue
+    printf '%s\\n' "$candidatos" | grep -F "$ruta" || true
+  done | awk '{ print $1 }' | grep -E '^[0-9]+$' | sort -u || true
+}
+
+# Se invoca al SALIR, pase lo que pase. Un worker que sobrevive a esta corrida sostiene el
+# lock de build/test-results/integrationTest/binary/output.bin y envenena TODA invocación
+# posterior: el síntoma no aparece en la corrida que lo causa sino en la siguiente, que es lo
+# que lo hace caro de diagnosticar. Cortarlo donde se produce cuesta esta función.
+kill_workers() {
+  pids="$(worker_pids)"
+  [ -n "$pids" ] || return 0
+  echo "" >&2
+  echo "Limpieza: quedan workers de Gradle de este directorio; se terminan." >&2
+  for pid in $pids; do
+    echo "  pid $pid" >&2
+    kill "$pid" 2>/dev/null || true
+  done
+  sleep 2
+  for pid in $(worker_pids); do
+    kill -9 "$pid" 2>/dev/null || true
+  done
+}
+
+trap kill_workers EXIT
+
+if [ "\${1:-}" = "--kill-workers" ]; then
+  # Modo suelto: es lo que manda ejecutar el mensaje de un entorno bloqueado. No arranca nada.
+  kill_workers
+  echo "Workers de Gradle de este directorio: terminados (si quedaba alguno)."
+  exit 0
+fi
+
 # ¿Lo que tumbó a Gradle fue un lock y no un defecto? Las cuatro formas en que se
 # manifiesta el mismo hecho: el lock propio de Gradle, y el del sistema de archivos
 # en sus dos dialectos (POSIX y Windows). Se mira el LOG y no el código de salida
@@ -341,15 +430,24 @@ blocked_by_lock() {
   grep -qiE "Timeout waiting to lock|Device or resource busy|being used by another process|Could not delete|Unable to delete" "$LOG" 2>/dev/null
 }
 
+# El remedio se escribe UNA vez. Estuvo duplicado entre este mensaje y el del rm fallido, y
+# dos copias del mismo remedio divergen a la primera: la que se queda atrás es la que alguien
+# lee. Y lo que decían —listar con jps y filtrar por gradle— no funciona: jps NO los ve.
+print_remedy() {
+  echo ""
+  echo "  Para resolverlo:"
+  echo "    bash infra/score-scenarios.sh --kill-workers   # los workers de ESTE directorio"
+  echo "    ./gradlew --stop                               # y los daemons, si sigue"
+  echo ""
+  echo "  Los workers son JVMs aparte: --stop no se las lleva y jps no las lista. Lo único"
+  echo "  que las identifica es -Dorg.gradle.internal.worker.tmpdir apuntando aquí."
+}
+
 report_locked() {  # $1 = qué paso se quedó bloqueado
   echo ""
   echo "ENTORNO: $1 no pudo continuar — otro proceso tiene bloqueado este directorio."
   echo "  La suite NO se ejecutó, y esto NO es un defecto del arnés ni del código."
-  echo ""
-  echo "  Para resolverlo:"
-  echo "    ./gradlew --stop            # para los daemons de este proyecto"
-  echo "    jps -l | grep -i gradle     # los workers no siempre caen con --stop"
-  echo "    # y termina a mano los que queden antes de reintentar"
+  print_remedy
   echo ""
   echo "  log: $LOG"
   exit 3
@@ -372,11 +470,7 @@ if [ "$score_only" -eq 0 ]; then
     echo "  La suite NO se ejecutó, y esto NO es un defecto del arnés ni del código:"
     echo "  casi siempre es una corrida anterior que se interrumpió sin terminar y dejó"
     echo "  vivos su proceso de Gradle y su Test Executor."
-    echo ""
-    echo "  Para resolverlo:"
-    echo "    ./gradlew --stop            # para los daemons de este proyecto"
-    echo "    jps -l | grep -i gradle     # los workers no siempre caen con --stop"
-    echo "    # y termina a mano los que queden antes de reintentar"
+    print_remedy
     echo ""
     echo "  Cuando no quede ninguno, vuelve a lanzar este script tal cual."
     exit 3
@@ -552,7 +646,9 @@ if [ "$ko" -eq 0 ] && [ "$sk" -eq 0 ] && [ "$nc" -eq 0 ] && [ "$ok" -gt 0 ]; the
     printf '%s\\n' "$broken"
     echo "  log completo de Gradle: $LOG"
     echo "  Son del agente de pruebas, no del diseño: o las arregla o las retira."
-    exit 1
+    echo "  Sale con 2 y NO con 1: no hay ningún FL-* en FALLO, así que no hay ningún Then"
+    echo "  que arbitrar — el árbitro opinaría sobre un conjunto vacío y no relanza a nadie."
+    exit 2
   fi
   echo "RESULTADO: OK — $ok escenario(s) al 100%."
   exit 0
@@ -580,6 +676,17 @@ if [ -n "$broken" ]; then
   echo "  transita) es el MISMO rojo que los FL-* de arriba, visto antes: no es del arnés."
   echo "  Salir con 2 aquí devolvería la corrida al agente de pruebas, que no puede leer"
   echo "  src/main/java — es exactamente el bucle que esta condición cierra."
+fi
+
+# La matriz VACÍA no es un rojo que arbitrar. Aquí solo se llega con ok=0 —con ok>0 y nada
+# en rojo manda el desenlace verde de arriba—, o sea: la suite corrió y no ejercitó ni un
+# FL-*. Eso es el arnés y no el diseño, y salir con 1 mandaba al árbitro a leer una matriz
+# sin filas: el único desenlace del que no se sale, porque su veredicto no relanza a nadie.
+if [ "$ko" -eq 0 ] && [ "$sk" -eq 0 ] && [ "$nc" -eq 0 ]; then
+  echo ""
+  echo "  ARNÉS: la matriz está VACÍA — la suite no ejercitó ni un escenario FL-*."
+  echo "  No hay nada que arbitrar: sale con 2 y vuelve al agente de pruebas."
+  exit 2
 fi
 exit 1
 `;
