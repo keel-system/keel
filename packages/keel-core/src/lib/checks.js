@@ -298,6 +298,34 @@ export const CHECKS = {
     closes: 'declararla en la propiedad del DSL que la sostiene, para que el generador la vea'
   },
 
+  'CHK-SCEN-FLOW-REVIEW-STALE': {
+    layer: 'validation-scenarios',
+    severity: 'warning',
+    title: 'el careo de flujos falta, se hizo sobre otros escenarios o tiene hallazgos sin resolver',
+    closes: 'lanzar el agente keel-flow-review y decidir cada hallazgo en flow-review.yaml (scenario, design o accepted con su motivo)'
+  },
+
+  // ─── contratos derivados (/keel-docs) ──────────────────────────────────────
+  // AVISO: un derivado desviado se regenera, no bloquea el diseño del que salió.
+  'CHK-DOCS-OPENAPI-DRIFT': {
+    layer: 'docs',
+    severity: 'warning',
+    title: 'openapi.yaml no dice lo mismo que api y use-cases (rutas, métodos, status)',
+    closes: 'regenerarlo con /keel-docs; si la desviación es deliberada, el que cambia es el diseño'
+  },
+  'CHK-DOCS-ASYNCAPI-DRIFT': {
+    layer: 'docs',
+    severity: 'warning',
+    title: 'asyncapi.yaml no dice lo mismo que messaging (canales, eventos, campos del payload)',
+    closes: 'regenerarlo con /keel-docs'
+  },
+  'CHK-DOCS-POSTMAN-DRIFT': {
+    layer: 'docs',
+    severity: 'warning',
+    title: 'la colección Postman no casa con los flujos o afirma un status que el endpoint no puede dar',
+    closes: 'regenerarla con /keel-docs: una carpeta por flujo, y cada request con el status de SU paso'
+  },
+
   // ─── storage ───────────────────────────────────────────────────────────────
   'CHK-STORAGE-NO-MAXSIZE': {
     layer: 'storage',

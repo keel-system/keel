@@ -18,6 +18,7 @@ export const SIDECAR_FILE = 'design.yaml';
 export const DECISIONS_FILE = 'decisions.yaml';
 export const SCENARIOS_FILE = 'validation-scenarios.md';
 export const REVIEW_FILE = 'review.yaml';
+export const FLOW_REVIEW_FILE = 'flow-review.yaml';
 
 /**
  * - `publish` — entra en el `files[]` del índice, que es exactamente lo que
@@ -39,6 +40,10 @@ export const SPEC_SIDE_FILES = [
   // queda de otra versión y hay que rehacerla — que es lo correcto, porque un diseño
   // derivado es otro diseño y lo que se juzgó del original no vale automáticamente aquí.
   { file: REVIEW_FILE, publish: true, derive: true },
+  // `flow-review.yaml` viaja al publicar —quien adopta el diseño ve qué se careó y qué se
+  // aceptó— y NO al derivar: el careo está sellado con el texto de los escenarios, y un
+  // derivado los reescribe, así que llegaría caducado sin nada que reafirmar.
+  { file: FLOW_REVIEW_FILE, publish: true, derive: false },
   { file: SCENARIOS_FILE, publish: 'derivative', derive: 'rewrite' }
 ];
 

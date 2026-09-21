@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import pc from 'picocolors';
-import { CUSTOMIZABLE_PAYLOAD, coreDir, packageVersion, skillsSourceDir } from '../lib/assets.js';
+import { CUSTOMIZABLE_PAYLOAD, agentsSourceDir, coreDir, packageVersion, skillsSourceDir } from '../lib/assets.js';
 import { copyTree, diffTree } from '../lib/copy.js';
 import { HARNESSES, emitHarnessFiles, harnessLabels } from '../lib/harness.js';
 import { diffGenerated, writeFiles } from '../lib/write.js';
@@ -9,20 +9,28 @@ import { diffGenerated, writeFiles } from '../lib/write.js';
 const RENAMES = { gitignore: '.gitignore', gitattributes: '.gitattributes' };
 
 /**
- * Artefactos de agente del workspace: las skills del flujo de diseño, proyectadas
+ * Artefactos de agente del workspace: las skills del flujo de diseño y sus subagentes, proyectados
  * a la convención de cada harness soportado, más el alias del archivo de contexto
  * (el texto vive en AGENTS.md, que sí es payload copiado).
  *
  * No son copias sino proyecciones, así que quedan fuera de copyTree/diffTree: de
  * ahí que init y checkPayload los traten aparte con writeFiles/diffGenerated.
  */
-function harnessFiles() {
+export function harnessFiles() {
   const skills = fs
     .readdirSync(skillsSourceDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => path.join(skillsSourceDir, entry.name));
 
-  return emitHarnessFiles({ skills, context: { canonical: 'AGENTS.md' }, extraTokens: { docs: 'docs' } });
+  const agents = fs.existsSync(agentsSourceDir)
+    ? fs
+        .readdirSync(agentsSourceDir)
+        .filter((name) => name.endsWith('.md'))
+        .sort()
+        .map((name) => path.join(agentsSourceDir, name))
+    : [];
+
+  return emitHarnessFiles({ skills, agents, context: { canonical: 'AGENTS.md' }, extraTokens: { docs: 'docs' } });
 }
 
 /**

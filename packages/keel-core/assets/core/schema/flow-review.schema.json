@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schema/2.0/flow-review.schema.json",
+  "title": "Keel Flow Review",
+  "description": "El careo de flujos de este servicio (flow-review.yaml, junto a las capas): cada escenario FL-* ejecutado paso a paso contra el diseño por un agente de contexto limpio (keel-flow-review), y lo que el diseñador decidió de cada contradicción. No forma parte del DSL: no describe lo que el servicio hace, sino qué se encontró al simularlo. Existe porque, en las corridas, la mayoría de los huecos entre escenarios y diseño los encontraba el agente de pruebas en la generación, que es donde el diseño ya no se puede tocar.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["reviewedAt", "scenariosSha256", "findings"],
+  "properties": {
+    "reviewedAt": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "service.version del diseño careado."
+    },
+    "scenariosSha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "sha256 de validation-scenarios.md SIN retornos de carro en el momento del careo. Si el documento cambia, el careo deja de hablar de él y keel validate lo avisa (CHK-SCEN-FLOW-REVIEW-STALE)."
+    },
+    "flows": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Cuántos bloques FL-* se carearon. Un careo que se salta flujos no se distingue, sin este número, de uno que los miró todos."
+    },
+    "findings": {
+      "type": "array",
+      "description": "Una entrada por contradicción. Una lista vacía es un resultado legítimo: se careó y no había nada.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["flow", "kind", "evidence", "proposal"],
+        "properties": {
+          "flow": { "type": "string", "pattern": "^FL-[A-Za-z0-9-]+$", "description": "El bloque donde aparece la contradicción." },
+          "step": { "type": "string", "description": "El paso (número de aserción del Then, o 'Given')." },
+          "kind": {
+            "enum": [
+              "carried-state",
+              "event-payload",
+              "count",
+              "evaluation-order",
+              "unreachable-given",
+              "cross-flow",
+              "unobservable",
+              "other"
+            ],
+            "description": "Qué clase de contradicción es, de la lista cerrada de flow-walkthrough.md."
+          },
+          "artifact": { "type": "string", "description": "La capa o el documento con el que choca (ej. 'messaging.publishing.events.ProductCreated')." },
+          "evidence": { "type": "string", "minLength": 20, "description": "Lo que dice el escenario y lo que se deduce del YAML, con las dos citas." },
+          "proposal": { "type": "string", "minLength": 10, "description": "El cambio propuesto: en el escenario o en el diseño." },
+          "resolution": {
+            "enum": ["scenario", "design", "accepted"],
+            "description": "La decisión del diseñador: se corrigió el escenario, se corrigió el diseño, o se acepta a sabiendas (con reason). Sin ella el hallazgo sigue abierto."
+          },
+          "reason": { "type": "string", "minLength": 20, "description": "Obligatoria con 'accepted'." }
+        },
+        "allOf": [
+          { "if": { "properties": { "resolution": { "const": "accepted" } }, "required": ["resolution"] }, "then": { "required": ["reason"] } }
+        ]
+      }
+    }
+  }
+}

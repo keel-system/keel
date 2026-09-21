@@ -144,6 +144,8 @@ Dos pasadas, en este orden. No enseñes el archivo al usuario sin haberlas hecho
 
 **Pasada de campos.** Por cada entidad que algún `Then` enumera, deriva su proyección del artefacto (la regla del paso 1) y compárala contra **todas** las enumeraciones de esa entidad en el documento. Tienen que coincidir entre sí y con el YAML. Basta un campo con `default` que aparezca en un flujo y falte en otro para que el documento se contradiga.
 
+Estas pasadas son **del autor** y miran en estático. Lo que solo aparece al **ejecutar** los flujos —el estado que un paso deja al siguiente— lo busca el careo del paso 5b (`references/flow-walkthrough.md`), que hace otro agente precisamente porque tú no puedes leer tus escenarios sin tu intención delante.
+
 Errores frecuentes que estas pasadas deben cazar:
 
 - `Then` que solo comprueba el status.

@@ -8,6 +8,9 @@ import { loadDecisions, resolveObligations } from './decisions.js';
 import { loadReviews, resolveReviews } from './review-state.js';
 import { applicableReviews } from './reviews.js';
 import { SCENARIOS_FILE } from './spec-files.js';
+import { checkFor } from './checks.js';
+import { checkDerivedCoherence } from './derived-coherence.js';
+import { FLOW_REVIEW_FILE, flowReviewStatus } from './flow-review.js';
 
 const Ajv2020 = Ajv2020Module.default ?? Ajv2020Module;
 
@@ -172,6 +175,26 @@ export function validateService(dir, { wip = false } = {}) {
   result.findings = findings;
   result.pending.push(...crossRefPending);
 
+  // Contratos derivados (`docs/<servicio>/` del workspace): su CONTENIDO contra el diseño.
+  // Solo si el servicio vive en `specs/<servicio>` de un workspace — fuera de ahí no hay docs
+  // que buscar y adivinar la raíz sería inventarla.
+  const docsDir = workspaceDocsDir(dir, manifest);
+  if (docsDir) {
+    const derived = checkDerivedCoherence({ layers: effectiveLayers, manifest, docsDir, scenarios: readScenarios(dir) });
+    for (const finding of derived.findings) {
+      result.findings.push(finding);
+      result.warnings.push(finding.message);
+    }
+  }
+
+  // El careo de flujos (keel-flow-review): que exista, que sea de ESTOS escenarios y que no
+  // deje hallazgos sin decidir. Solo cuando hay escenarios que carear.
+  const flowReview = flowReviewFinding(dir);
+  if (flowReview) {
+    result.findings.push(flowReview);
+    result.warnings.push(flowReview.message);
+  }
+
   // Capa 3: las decisiones que el diseño abrió, cruzadas con el registro que las acepta.
   const { doc, errors: decisionErrors } = loadDecisions(dir);
   result.obligations = resolveObligations(raised, doc, manifest?.service?.version);
@@ -201,4 +224,27 @@ export function validateService(dir, { wip = false } = {}) {
 
   result.ok = errors.length === 0 && (wip || (!obligationsBlock && !reviewsBlock));
   return result;
+}
+
+/** `docs/<servicio>/` del workspace cuando el diseño vive en `specs/<servicio>/`; null si no. */
+function workspaceDocsDir(dir, manifest) {
+  const absolute = path.resolve(dir);
+  if (path.basename(path.dirname(absolute)) !== 'specs') return null;
+  const name = manifest?.service?.name ?? path.basename(absolute);
+  return path.join(path.dirname(path.dirname(absolute)), 'docs', name);
+}
+
+function flowReviewFinding(dir) {
+  const scenariosPath = path.join(dir, SCENARIOS_FILE);
+  if (!fs.existsSync(scenariosPath)) return null;
+  const { status, detail } = flowReviewStatus(dir, fs.readFileSync(scenariosPath));
+  if (status === 'ok') return null;
+  const message =
+    status === 'missing'
+      ? `${FLOW_REVIEW_FILE}: no hay careo de flujos — ningún agente de contexto limpio ha ejecutado los escenarios contra el diseño; lánzalo con keel-flow-review (paso 5b de /keel-design)`
+      : status === 'stale'
+        ? `${FLOW_REVIEW_FILE}: el careo se hizo sobre otra versión de validation-scenarios.md — sus hallazgos no dicen nada de los escenarios actuales; vuelve a lanzar keel-flow-review`
+        : `${FLOW_REVIEW_FILE}: ${detail}`;
+  const entry = checkFor('CHK-SCEN-FLOW-REVIEW-STALE');
+  return { id: 'CHK-SCEN-FLOW-REVIEW-STALE', severity: entry.severity, message };
 }

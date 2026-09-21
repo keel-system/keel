@@ -9,6 +9,9 @@ export const coreDir = path.join(packageRoot, 'assets', 'core');
 // propósito, porque no se copia — se proyecta a la convención de cada harness
 // (ver lib/harness.js). Si estuviera dentro, copyTree la sembraría tal cual.
 export const skillsSourceDir = path.join(packageRoot, 'assets', 'skills');
+// Subagentes del flujo de diseño (hoy, el careo de flujos): fuente neutral, proyectada por
+// harness igual que las skills. No son payload editable: se regeneran con `keel init --force`.
+export const agentsSourceDir = path.join(packageRoot, 'assets', 'agents');
 export const schemaDir = path.join(coreDir, 'schema');
 export const templatesDir = path.join(coreDir, 'templates', 'service');
 

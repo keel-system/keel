@@ -137,7 +137,7 @@ Ninguno queda `abierto`.
 
 En **este orden** (cada uno alimenta al siguiente) y **solo sobre lo que procede**:
 
-1. **`validation-scenarios.md`** — regenéralo con `keel-design/references/scenario-authoring.md` y sus
+1. **`validation-scenarios.md`** — (y después, **el careo**: vuelve a lanzar `keel-flow-review` sobre el diseño evolucionado, porque su sello es el texto de los escenarios y el cambio lo deja caducado; sus hallazgos se deciden con el usuario antes de seguir con los demás derivados). Regenéralo con `keel-design/references/scenario-authoring.md` y sus
    dos pasadas de auto-revisión (cobertura en recorrido inverso + equivalencia). Toda operación con
    al menos un flujo, todo error declarado cubierto. Refresca su sello `> specs/<servicio> v<versión>`.
 2. **`/keel-handoff`** (skill `keel-handoff`) — `DESIGN.md` + índice del `README.md`. Re-deriva lo

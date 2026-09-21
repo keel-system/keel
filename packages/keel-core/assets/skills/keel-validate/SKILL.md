@@ -26,6 +26,8 @@ Fallback si el comando `keel` no está disponible: valida cada `<capa>.keel.yaml
 
 Lee los artefactos y verifica esta checklist. Reporta cada hallazgo con severidad **error** (bloquea generación) o **aviso** (mejorable):
 
+> **Lo que esta checklist NO hace es ejecutar los flujos.** Si `keel validate` avisa con `CHK-SCEN-FLOW-REVIEW-STALE` (falta el careo, se hizo sobre otros escenarios o tiene hallazgos sin decidir), lanza el subagente `keel-flow-review` (`{{keel:agents}}/keel-flow-review.md`) sobre `specs/<servicio>/` antes de dar el diseño por validado, y repasa sus hallazgos con el usuario. Lo que el careo busca —un `Then` que no se deduce del YAML cuando se lleva el estado paso a paso— no lo ve una lectura estática, y es lo que en las corridas encontraba el agente de pruebas ya en la generación.
+
 **Consistencia del modelo (error):**
 
 Seis de las siete comprobaciones que aquí había las hace ya `keel validate` en el nivel 2, y por eso no las repite esta lista: la identidad única por entidad, el `generated`/`computed` en el input, el `default` de enum fuera de sus `values`, la `query` con `emits`, la `cache` fuera de una query y la variable de ruta ausente del input. Salieron de aquí al mecanizarse; si vuelven a aparecer en esta lista, el agente estará juzgando dos veces lo mismo y la prosa acabará diciendo algo distinto del código. Lo que queda es lo que ningún YAML contesta:

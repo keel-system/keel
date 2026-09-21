@@ -9,24 +9,16 @@ import { supportedDsl } from '../src/lib/assets.js';
 // aquí volvería a romper estos tests en el siguiente cambio de versión.
 const DSL = supportedDsl()[0];
 import { copyTree, diffTree } from '../src/lib/copy.js';
-import { CUSTOMIZABLE_PAYLOAD, coreDir, skillsSourceDir } from '../src/lib/assets.js';
-import { emitHarnessFiles } from '../src/lib/harness.js';
+import { CUSTOMIZABLE_PAYLOAD, coreDir } from '../src/lib/assets.js';
+import { harnessFiles } from '../src/commands/init.js';
 import { diffGenerated, writeFiles } from '../src/lib/write.js';
 
 const RENAMES = { gitignore: '.gitignore', gitattributes: '.gitattributes' };
 
 // El payload tiene dos mitades y `keel init` escribe ambas: lo que se COPIA de
-// assets/core/ y lo que se PROYECTA por harness desde assets/skills/. Los tests de
-// deriva tienen que ver las dos, o las skills dejarían de estar cubiertas justo
-// cuando pasaron a generarse.
-function harnessFiles() {
-  const skills = fs
-    .readdirSync(skillsSourceDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => path.join(skillsSourceDir, entry.name));
-  return emitHarnessFiles({ skills, context: { canonical: 'AGENTS.md' }, extraTokens: { docs: 'docs' } });
-}
-
+// assets/core/ y lo que se PROYECTA por harness desde assets/skills/ y assets/agents/.
+// La proyección se toma de init.js y no de una copia aquí: con una copia, el subagente del
+// careo de flujos (assets/agents/) quedó fuera de estos tests el día que entró.
 /** Un workspace recién sembrado desde los assets reales de la CLI. */
 function seeded() {
   const dir = tmpDir('keel-drift-');
