@@ -66,6 +66,11 @@
         "maxLength": { "type": "integer", "minimum": 1 },
         "pattern": { "type": "string" },
         "scale": { "type": "integer", "minimum": 0, "description": "Decimales para tipos decimal." },
+        "scalePolicy": {
+          "type": "string",
+          "enum": ["reject", "round"],
+          "description": "Qué pasa con un valor de ENTRADA que trae más decimales que scale: reject lo rechaza con 400 (se valida, no se ajusta); round lo redondea (HALF_UP) a la escala. Solo junto a scale. Sin él, keel validate abre OBL-DECIMAL-SCALE-POLICY en cuanto el decimal llega a un input."
+        },
         "minItems": {
           "type": "integer",
           "minimum": 0,
@@ -132,6 +137,16 @@
           "description": "Excluido por defecto de todo output y payload de evento; solo se expone si un payload lo pide explícitamente vía fields."
         },
         "default": {},
+        "compare": {
+          "type": "string",
+          "enum": ["exact", "ignore-case", "ignore-case-accents"],
+          "description": "Cómo se comparan dos valores de TEXTO de este campo. En domain gobierna la unicidad y la igualdad (`ACME` y `Acmé` son el mismo nombre con ignore-case-accents); en el input de una query, cómo casa el filtro. Por defecto exact."
+        },
+        "match": {
+          "type": "string",
+          "enum": ["exact", "contains", "prefix"],
+          "description": "Cómo casa un filtro de TEXTO: el valor entero, una parte o el principio. Solo en el input de una query. Por defecto exact."
+        },
         "constraints": { "$ref": "#/$defs/constraints" }
       },
       "allOf": [

@@ -262,7 +262,11 @@ function buildService(manifest, stack) {
     projectName: `${kebabCase(name)}-spring`,
     className: pascalCase(name),
     applicationClass: `${pascalCase(name)}Application`,
-    basePath: null // se rellena desde la capa api
+    basePath: null, // se rellena desde la capa api
+    // `conventions.nulls: omit` (DSL 2.14): un campo sin valor no viaja en respuestas ni en
+    // payloads de evento. Por CLASE y no en el ObjectMapper: el global movería también el
+    // cuerpo de error, que tiene forma fija (ver config.js).
+    omitNulls: manifest?.conventions?.nulls === 'omit'
   };
 }
 
@@ -353,11 +357,24 @@ function resolveField(ownerName, fieldName, field, domainTypes, inlineEnumName, 
   const imports = [...resolved.imports];
   if (isList) imports.push('java.util.List');
 
+  // `compare` (DSL 2.14): cómo se comparan dos textos de este campo. Un campo que pliega
+  // mayúsculas (y acentos) lleva una columna SOMBRA con el valor plegado, que es donde vive
+  // su unicidad y contra la que se filtra (persistence-members.js § folded).
+  const compare = field.compare ?? 'exact';
+  const fold =
+    compare !== 'exact' && !isList && resolved.javaType === 'String'
+      ? { accents: compare === 'ignore-case-accents', maxLength: { ...resolved.constraints, ...(field.constraints ?? {}) }.maxLength ?? null }
+      : null;
+
   return {
     name: fieldName,
     javaType,
     imports,
     list: isList,
+    compare,
+    fold,
+    // Cómo casa un filtro de texto (solo en el input de una query; crossrefs lo exige).
+    match: field.match ?? 'exact',
     elementJavaType: resolved.javaType,
     kind: resolved.kind,
     base: resolved.base ?? null,
@@ -608,7 +625,10 @@ function collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPe
     const fields = Object.entries(def.fields ?? {}).map(([fieldName, field]) =>
       resolveField(name, fieldName, field, domainTypes, inlineEnumName, {
         persisted,
-        collation: persisted && uniqueNames.has(fieldName) ? collation : null
+        // Un campo que PLIEGA (compare: ignore-case…) no lleva la collation sensible: su
+        // unicidad no vive en esta columna sino en la sombra plegada, y forzarla aquí sería
+        // decir con la columna lo contrario de lo que el diseño declaró.
+        collation: persisted && uniqueNames.has(fieldName) && (field?.compare ?? 'exact') === 'exact' ? collation : null
       })
     );
     const fieldNames = new Set(fields.map((field) => field.name));
@@ -718,7 +738,7 @@ export function normalizeIndexes(declared) {
   return (declared ?? []).map((index) =>
     Array.isArray(index)
       ? { fields: index, unique: false, when: null }
-      : { fields: index.fields, unique: index.unique === true, when: index.when ?? null }
+      : { fields: index.fields, unique: index.unique === true, when: index.when ?? null, description: index.description ?? null }
   );
 }
 

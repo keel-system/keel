@@ -17,6 +17,7 @@
 
 import { javaFile, javaPath, subPackage } from './render.js';
 import { domainTypeImport } from './entities.js';
+import { nullInclusion } from './dtos.js';
 import { usesOutbox, outboxNames } from './outbox.js';
 import { correlationImport } from './correlation.js';
 import { usesTelemetry, messageTracingImport } from './telemetry.js';
@@ -108,7 +109,7 @@ function renderIntegrationEvent(model, event) {
  * la EventEnvelope) pero NO se serializa: la metadata autoritativa del mensaje
  * es la del envelope, y duplicarla en 'data' confundiría al consumidor.
  */
-public record ${event.integrationClass}(@JsonIgnore EventMetadata metadata${payloadParams ? `, ${payloadParams}` : ''}) {
+${nullInclusion(model, imports)}public record ${event.integrationClass}(@JsonIgnore EventMetadata metadata${payloadParams ? `, ${payloadParams}` : ''}) {
 }`;
   return {
     path: javaPath(model, INTEGRATION_PKG, event.integrationClass),

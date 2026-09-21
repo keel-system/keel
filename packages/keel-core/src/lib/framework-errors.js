@@ -52,6 +52,12 @@ export const FRAMEWORK_ERRORS = {
     http: 409,
     overridable: true,
     familyFor: (fields) => new RegExp(`(^|_)${fields}_ALREADY_EXISTS$`),
+    // Un índice único CONDICIONADO (`indexes[].when`) no dice «ya existe uno con esos campos»:
+    // dice «ya hay uno EN ESE ESTADO» —varias imágenes por producto, una sola principal—, así
+    // que su familia no sale de los campos sino de la condición (`conditionalUniquenessToken`).
+    // Con la de los campos, el diseño tendría que llamar PRODUCT_ID_ALREADY_EXISTS a «ya hay
+    // una imagen principal», que es falso para cualquiera que lo lea.
+    conditionalFamilyFor: (token) => new RegExp(`(^|_)${token}(_|$)`),
     mechanism: 'persistence: entities.<E>.naturalKey / campos `unique`',
     when: 'Una escritura choca con una clave natural o un campo único ya existente.'
   },
@@ -136,4 +142,20 @@ export function overrideFor(declared, entry, family = entry.family) {
     (error) => error.http === entry.http && !error.dynamicStatus && family.test(String(error.code))
   );
   return candidates.length === 1 ? candidates[0] : null;
+}
+
+/**
+ * El token con el que se nombra el conflicto de un índice único condicionado: el ESTADO si la
+ * condición compara con un literal (`status equals active` → `ACTIVE`), el CAMPO si es un
+ * booleano (`primary equals true` → `PRIMARY`). Es lo que distingue ese índice de cualquier
+ * otra unicidad de la misma entidad, y lo que un diseñador escribe sin pensarlo cuando nombra
+ * el error (`PRIMARY_IMAGE_ALREADY_SET`, `ACTIVE_VERSION_ALREADY_EXISTS`).
+ */
+export function conditionalUniquenessToken(when) {
+  const raw = typeof when?.equals === 'string' ? when.equals : String(when?.field ?? '').split('.').pop();
+  return raw
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[^A-Za-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .toUpperCase();
 }

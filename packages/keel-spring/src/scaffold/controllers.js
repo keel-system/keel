@@ -8,7 +8,7 @@
 // vía UseCaseMediator. Incluye @Tag/@Operation (springdoc) y el
 // @RestControllerAdvice central en infrastructure/rest.
 
-import { FRAMEWORK_ERRORS } from 'keel-core';
+import { FRAMEWORK_ERRORS, conditionalUniquenessToken } from 'keel-core';
 import { declaredErrorFor, declaredUniquenessErrorFor } from '../lib/declared-errors.js';
 import { javaFile, javaPath, subPackage, javadoc } from './render.js';
 import {
@@ -23,6 +23,7 @@ import { MEDIATOR_PKG } from './mediator.js';
 import { domainTypeImport } from './entities.js';
 import { uniqueConstraints } from './persistence-entities.js';
 import { screamingSnake } from '../lib/naming.js';
+import { escapeJava } from '../lib/type-mapper.js';
 
 const MAPPING_BY_METHOD = {
   GET: 'GetMapping',
@@ -489,6 +490,18 @@ function renderDataIntegrityHandler(model, imports, constantsOut) {
   imports.add('java.util.function.Supplier');
   const errorsPkg = subPackage(model, 'domain.errors');
   const resolved = constraints.map((constraint) => {
+    // Unicidad CONDICIONADA (`indexes[].when`): no dice «ya existe uno con esos campos» sino
+    // «ya hay uno en ese estado» —una imagen principal, una versión activa—, así que ni su
+    // familia ni su mensaje salen de los campos. El code lo busca por la CONDICIÓN
+    // (framework-errors § uniqueness.conditionalFamilyFor) y, si el diseño no lo nombró, el
+    // choque solo puede venir de una carrera: la regla del caso de uso resuelve el caso normal
+    // y el índice es el respaldo concurrente. Antes salía PRODUCT_IMAGE_PRODUCT_ID_ALREADY_EXISTS
+    // con «Ya existe un ProductImage con ese productId», que es falso: hay muchas por producto.
+    if (constraint.when) {
+      const family = FRAMEWORK_ERRORS.uniqueness.conditionalFamilyFor(conditionalUniquenessToken(constraint.when));
+      const declared = declaredErrorFor(model, FRAMEWORK_ERRORS.uniqueness, family);
+      return { ...constraint, conditional: true, raceOnly: !declared, declared: declared ?? declaredConcurrencyError(model) };
+    }
     const raceOnly = raceOnlyConstraint(model, constraint);
     return {
       ...constraint,
@@ -578,12 +591,20 @@ function declaredUniquenessError(model, entity, fields, soleConstraint) {
 
 function constraintMapConstant(constraints) {
   const entries = constraints
-    .map(({ constraint, entity, fields, declared, raceOnly }) => {
+    .map(({ constraint, entity, fields, declared, raceOnly, conditional, when, description }) => {
       const label = fields.join(', ');
-      const message = raceOnly
-        ? `Otra operación registró ${entity}.${label} a la vez; reintenta`
-        : `Ya existe un ${entity} con ese ${label}`;
-      const why = raceOnly
+      const condition = conditional ? `${when.field} = ${JSON.stringify(when.equals)}` : null;
+      const message = conditional
+        ? escapeJava((description ?? `Solo puede haber un ${entity} por ${label} con ${condition}`).replace(/\.\s*$/, '')) +
+          (raceOnly ? '; otra operación lo cambió a la vez, reintenta' : '')
+        : raceOnly
+          ? `Otra operación registró ${entity}.${label} a la vez; reintenta`
+          : `Ya existe un ${entity} con ese ${label}`;
+      const why = conditional
+        ? `            // Unicidad CONDICIONADA de ${entity}.${label} (${condition}): «como mucho uno en ese
+            // estado», no «ya existe». ${raceOnly ? `El diseño no la nombra (keel validate: CHK-PERSIST-CONDITIONAL-UNIQUE-CODE):
+            // la regla del caso de uso resuelve el caso normal, así que chocar aquí es una carrera.` : 'Es el error que el diseño declara para ella.'}`
+        : raceOnly
         ? `            // ${entity}.${label} incluye un campo calculado por el servicio, y el agregado
             // lleva bloqueo optimista: nadie PIDIÓ este valor, así que romper la constraint
             // solo puede ser una carrera. Por eso es conflicto de concurrencia y no un "ya

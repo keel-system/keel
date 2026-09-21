@@ -30,6 +30,8 @@ entities:
         type: string
         required: true
         unique: true
+        # `Laptops` y `laptops` son la misma categoría: la unicidad no distingue la caja.
+        compare: ignore-case
       name:
         type: string
         required: true

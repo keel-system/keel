@@ -42,6 +42,7 @@ import { tokenUrl, userTestClient } from './auth-provisioning.js';
 // copia — se vio rompiendo esto a propósito y viendo el check seguir en verde.
 import { stallSql, missingClockCountSql, rescueShape } from '../lib/claim-probes.js';
 import { declaresIdempotency } from './http-idempotency.js';
+import { SPECS_SEAL_FILE } from '../lib/specs-seal.js';
 // Fuente única de los comandos de broker: lo que se emite aquí es lo mismo que
 // `scripts/broker-check.js` ejecuta contra los brokers reales.
 import {
@@ -452,6 +453,31 @@ report_locked() {  # $1 = qué paso se quedó bloqueado
   echo "  log: $LOG"
   exit 3
 }
+
+# El snapshot del diseño tiene que ser el que build escribió. \`${SPECS_SEAL_FILE}\` es su sello: una
+# línea «<sha256>  <ruta>» por archivo de specs/, calculada SIN retornos de carro para que un
+# checkout con autocrlf no la rompa. Si no casa, alguien editó el diseño desde aquí, y un
+# escenario corregido por quien tiene la suite delante deja de medir lo que el diseño dijo:
+# eso es un culpable 'design' que se PROPONE (design-gaps.yaml), no se aplica. En la corrida
+# \`catalog\` (2026-09-21) se aplicó, la suite cerró en verde y el hueco no volvió al método.
+if [ -f "${SPECS_SEAL_FILE}" ]; then
+  if command -v sha256sum >/dev/null 2>&1; then sha_cmd="sha256sum"; else sha_cmd="shasum -a 256"; fi
+  seal_broken=""
+  while read -r expected file; do
+    [ -n "$file" ] || continue
+    if [ ! -f "$file" ]; then seal_broken="$seal_broken $file(falta)"; continue; fi
+    actual="$(tr -d '\\r' < "$file" | $sha_cmd | cut -d' ' -f1)"
+    [ "$actual" = "$expected" ] || seal_broken="$seal_broken $file"
+  done < "${SPECS_SEAL_FILE}"
+  if [ -n "$seal_broken" ]; then
+    echo "DISEÑO: el snapshot specs/ no es el que escribió keel-spring build:$seal_broken"
+    echo "  La suite NO se ejecuta contra un diseño editado desde el proyecto generado."
+    echo "  Si un escenario contradice al diseño, es un hueco del DISEÑO: va a design-gaps.yaml y al"
+    echo "  informe, y lo corrige el diseñador en el workspace re-ejecutando keel-spring build."
+    echo "  Para deshacer la edición: git checkout -- specs/"
+    exit 2
+  fi
+fi
 
 score_only=0
 [ "\${1:-}" = "--score" ] && score_only=1
@@ -1162,6 +1188,17 @@ ${hasIdempotency(model) ? `
     protected Response exchangeWithKey(HttpMethod method, String path, String jsonBody, String token, String idempotencyKey) {
         return exchange(method, path, jsonBody, token, idempotencyKey);
     }
+
+    /**
+     * Variante SIN \`Idempotency-Key\`: el escenario «falta la cabecera», que el diseño
+     * cierra con un code 400 cuando la exige (OBL-IDEM-KEY-REQUIRED). Ninguna otra llamada
+     * del arnés puede omitirla —todas inyectan una uuid fresca, y pasar un mapa de cabeceras
+     * vacío no la quita—, así que sin este método ese escenario no se puede escribir. Lo
+     * añadió a mano el agente de pruebas en la corrida \`catalog\` (2026-09-21).
+     */
+    protected Response exchangeWithoutIdempotencyKey(HttpMethod method, String path, String jsonBody, String token) {
+        return exchange(method, path, jsonBody, token, null);
+    }
 ` : ''}${hasCors(model) ? `
     /**
      * Variante con cabeceras de petición propias del escenario. Existe por la política
@@ -1171,7 +1208,9 @@ ${hasIdempotency(model) ? `
      * <p><b>No es la vía para \`Authorization\` ni para \`Idempotency-Key\`.</b> Los dos
      * tienen su propio parámetro y su propia semántica (\`tokenFor(...)\` cachea por rol,
      * la clave se repite solo donde se prueba la deduplicación); colarlos por el mapa
-     * salta esas garantías y hace que el escenario mida otra cosa.
+     * salta esas garantías y hace que el escenario mida otra cosa.${hasIdempotency(model) ? ` Este método SIEMPRE
+     * lleva una clave fresca: para el escenario sin cabecera está
+     * {@link #exchangeWithoutIdempotencyKey}.` : ''}
      */
     protected Response exchangeWithHeaders(HttpMethod method, String path, String jsonBody, String token,
             Map<String, String> extraHeaders) {
@@ -1266,6 +1305,11 @@ ${hasIdempotency(model) ? `
      */
     protected Response multipartWithKey(String path, String partName, String filename, String contentType, byte[] content, Map<String, String> fields${security ? ', String token' : ''}, String idempotencyKey) {
         return multipartTo(path, partName, filename, contentType, content, fields${security ? ', token' : ''}, idempotencyKey);
+    }
+
+    /** Subida SIN \`Idempotency-Key\`, simétrica a {@link #exchangeWithoutIdempotencyKey}. */
+    protected Response multipartWithoutIdempotencyKey(String path, String partName, String filename, String contentType, byte[] content, Map<String, String> fields${security ? ', String token' : ''}) {
+        return multipartTo(path, partName, filename, contentType, content, fields${security ? ', token' : ''}, null);
     }
 ` : ''}
     /**

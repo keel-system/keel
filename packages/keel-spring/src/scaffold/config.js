@@ -714,6 +714,14 @@ function brokerYaml(model, profile) {
       `    port: ${envValue(profile, 'RABBITMQ_PORT', 5672)}`,
       `    username: ${envValue(profile, 'RABBITMQ_USERNAME', 'guest')}`,
       `    password: ${envValue(profile, 'RABBITMQ_PASSWORD', 'guest')}`,
+      // Con `reliability: outbox` el dispatcher tiene que saber si el broker CONFIRMÓ cada
+      // envío (confirms correlados) y si el mensaje se quedó sin cola (mandatory + returns):
+      // sin eso marca como publicado lo que el broker descartó, que es justo lo que el outbox
+      // existe para impedir. No depende de nada que el agente elija, así que no es suyo: en la
+      // corrida `catalog` lo añadió a mano en los tres perfiles siguiendo la skill.
+      ...(usesOutbox(model)
+        ? ['    publisher-confirm-type: correlated', '    publisher-returns: true', '    template:', '      mandatory: true']
+        : []),
       // Clave PROPIA, no `spring.*`: `spring.rabbitmq.listener.simple.recovery-interval`
       // NO existe —RabbitProperties no la expone—, así que declararla ahí no tendría
       // ningún efecto y el contenedor se quedaría con el default INVISIBLE de

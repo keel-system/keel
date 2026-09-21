@@ -162,7 +162,8 @@ export function validateService(dir, { wip = false } = {}) {
   } = checkCrossRefs({
     layers: effectiveLayers,
     wip,
-    scenarios: readScenarios(dir)
+    scenarios: readScenarios(dir),
+    manifest
   });
   result.crossRefErrors = errors;
   result.warnings = warnings;

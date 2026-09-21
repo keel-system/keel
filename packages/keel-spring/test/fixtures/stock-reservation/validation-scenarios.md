@@ -101,8 +101,9 @@ que verifica lo que el `Then` no puede ver (que el barrido *reclame* con cota en
 
 **When**: se repite **exactamente** el mismo `POST` con el **mismo** `Idempotency-Key` `<k1>`.
 **Then**:
-1. La respuesta es la **misma** que la primera vez, con el **mismo** `id`: la repetición
-   reproduce el resultado, no ejecuta de nuevo.
+1. La respuesta es la **misma** que la primera vez: **`201`**, el **mismo** `id` y el mismo
+   cuerpo, y la cabecera `Location` **repetida** con esa misma ruta. La repetición reproduce
+   el resultado, no ejecuta de nuevo.
 2. No se crea una segunda reserva: el `orderId` sigue teniendo una sola, y un `POST` con
    `<o1>` y **otra** clave devuelve `409 RESERVATION_ALREADY_EXISTS`.
 
@@ -284,8 +285,11 @@ payload `{orderId: <o4>, reason: "stock retirado por caducidad"}` y el **mismo**
    motivo — el efecto ocurre, una vez. Que ninguna de las dos llegue a aplicarse es un fallo
    tan grave como que se apliquen las dos: una guarda que se traga el efecto completo
    convierte una compensación en un mensaje descartado.
-2. El efecto es **único** en las dos superficies: el estado es `released` (y no volvió a pasar
-   por ninguna transición) y el proveedor no recibió ninguna llamada de vuelta duplicada.
+2. El efecto es **único**: el estado es `released` y no volvió a pasar por ninguna transición.
+   Aquí **no hay llamada de vuelta que afirmar** —el bloqueo se encargó publicando
+   `StockReservationRequested`, y `releaseReservation` no llama a `inventory`: la cancelación
+   solo la dispara `reconcileReservations`—, así que un conteo a cero sobre ese cliente no
+   probaría nada.
 3. El servicio no acaba con el mensaje en la DLQ. Que la copia perdedora falle por dentro es
    correcto y esperable —es exactamente lo que hace la guarda—, pero el resultado observable
    de la perdedora es una entrega **confirmada sin efecto**, no un error propagado: una

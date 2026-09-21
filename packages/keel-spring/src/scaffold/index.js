@@ -73,6 +73,7 @@ import * as documentEmbeddables from './document-embeddables.js';
 import * as documentRepositories from './document-repositories.js';
 import * as documentIndexes from './document-indexes.js';
 import * as documentConfig from './document-config.js';
+import * as textFold from './text-fold.js';
 
 const GENERATORS = [
   gradle,
@@ -100,6 +101,9 @@ const GENERATORS = [
   documentEntities,
   documentIndexes,
   documentConfig,
+  // La función de plegado de la sombra de un campo con `compare` (DSL 2.14): la usan
+  // los adaptadores de las DOS ramas, así que se gatea por el diseño y no por el modelo.
+  textFold,
   auditing,
   exceptions,
   repositories,

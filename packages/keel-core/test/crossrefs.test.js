@@ -6098,3 +6098,300 @@ test('awaits: outcome con un booleano de vuelta levanta la obligación del caso 
     'un identificador de vuelta es un VALOR, no un desenlace: pedir que se decida su caso negativo no tiene sentido'
   );
 });
+
+test('un Then que afirma que NO hubo reintentos avisa, y uno que solo habla del descarte no', () => {
+  // Hueco 7 de la corrida de stock-reservation. «Ni DLQ ni reintentos» tiene dos mitades y
+  // solo una se ve desde fuera: el descarte deja el mensaje en un destino legible, y los
+  // reintentos del listener no los expone nada. Quien traduce afirma la mitad que puede y da
+  // la otra por cubierta — el Then promete una garantía que su fila verde no sostiene.
+  //
+  // Es regla y no anotación de una corrida porque la frase viaja entre diseños: aparece con
+  // las MISMAS palabras en `stock-reservation` (dos veces) y en `asset-vault`.
+  const layers = { domain: baseDomain(), 'use-cases': { operations: {} } };
+  const con = `### FL-SUB-001-B: reentrega
+**Then**:
+1. El mensaje se confirma sin volver a procesarse: ni DLQ ni reintentos.
+`;
+  const sin = `### FL-SUB-001-B: reentrega
+**Then**:
+1. El mensaje se confirma sin volver a procesarse y no aparece en el destino de descarte.
+`;
+
+  const avisos = (scenarios) =>
+    checkCrossRefs({ layers, scenarios }).warnings.filter((w) => /reintentos del listener/.test(w));
+
+  assert.equal(avisos(con).length, 1);
+  assert.match(avisos(con)[0], /FL-SUB-001-B/, 'el aviso tiene que nombrar el escenario, no el documento');
+
+  // EL CASO QUE IMPORTA. La primera versión de esta regla llevaba un BACKSPACE donde debía ir
+  // `\b` —el espejo del fallo que ya documenta el estado del lifecycle— y no casaba con nada:
+  // salía en verde sobre las tres fixtures que la tienen escrita. Sin un negativo, un detector
+  // que no casa con nada es indistinguible de uno que no tiene nada que decir.
+  assert.deepEqual(avisos(sin), [], 'la mitad observable, sola, no es un hallazgo');
+});
+
+// ─── Corrida `catalog` (2026-09-21): lo que el Then afirma contra lo que el YAML declara ───
+//
+// Cuatro huecos del diseño que encontró un agente con la suite ya escrita y ninguno
+// `keel validate`. Cada detector lleva su negativo: sin él, uno que no casa con nada es
+// indistinguible de uno que no tiene nada que decir.
+
+const idsOf = (result, id) => result.findings.filter((f) => f.id === id);
+
+test('CHK-SCEN-OP-COUNT: contar operaciones bajo una ruta se contrasta con api', () => {
+  const layers = {
+    domain: baseDomain(),
+    'use-cases': {
+      operations: {
+        listOrders: { kind: 'query', input: 'void', output: 'void' },
+        getOrder: { kind: 'query', input: 'void', output: 'void' },
+        getPublic: { kind: 'query', input: 'void', output: 'void' }
+      }
+    },
+    api: {
+      basePath: '/api/v1',
+      endpoints: {
+        listOrders: { method: 'GET', path: '/management/orders' },
+        getOrder: { method: 'GET', path: '/management/orders/{id}' },
+        getPublic: { method: 'GET', path: '/orders' }
+      }
+    }
+  };
+  const doc = (n) => `### FL-SEC-001: quién llama
+**When**: sin credencial
+**Then**:
+1. Las ${n} operaciones de \`/api/v1/management/**\` responden \`401\`.
+`;
+  const mal = idsOf(checkCrossRefs({ layers, scenarios: doc(3) }), 'CHK-SCEN-OP-COUNT');
+  assert.equal(mal.length, 1);
+  assert.match(mal[0].message, /FL-SEC-001 cuenta 3 .* api declara 2/);
+  // `/orders` no está bajo `/management`: un prefijo que casara por subcadena contaría 3.
+  assert.deepEqual(idsOf(checkCrossRefs({ layers, scenarios: doc(2) }), 'CHK-SCEN-OP-COUNT'), []);
+});
+
+test('CHK-SCEN-EVENT-PAYLOAD-PARTIAL: un payload enumerado a medias avisa, uno completo o que declara la ausencia no', () => {
+  const layers = {
+    domain: baseDomain(),
+    'use-cases': { operations: {} },
+    messaging: {
+      channels: { productEvents: {} },
+      publishing: {
+        events: {
+          ProductCreated: {
+            channel: 'productEvents',
+            payload: {
+              productId: { type: 'uuid', required: true },
+              sku: { type: 'string', required: true },
+              name: { type: 'string', required: true },
+              description: { type: 'text' },
+              primaryImageUrl: { type: 'string' }
+            }
+          }
+        }
+      }
+    }
+  };
+  const doc = (item) => `### FL-PRD-001: alta
+**Then**:
+${item}
+`;
+  const aMedias = doc('9. Se publica un `ProductCreated` con `productId`, `sku: "S-1"`, `name: "X"`. No trae `primaryImageUrl`.');
+  const avisos = idsOf(checkCrossRefs({ layers, scenarios: aMedias }), 'CHK-SCEN-EVENT-PAYLOAD-PARTIAL');
+  assert.equal(avisos.length, 1);
+  assert.match(avisos[0].message, /'description'/);
+  assert.doesNotMatch(avisos[0].message, /primaryImageUrl/, 'lo que el Then declara ausente ya está dicho');
+
+  const completo = doc(
+    '9. Se publica un `ProductCreated` con `productId`, `sku`, `name`, `description: "d"`. No trae `primaryImageUrl`.'
+  );
+  assert.deepEqual(idsOf(checkCrossRefs({ layers, scenarios: completo }), 'CHK-SCEN-EVENT-PAYLOAD-PARTIAL'), []);
+  // Nombrar el evento y uno de sus campos no es enumerar el payload.
+  const mencion = doc('11. Se publica un `ProductCreated` cuyo `primaryImageUrl` es la imagen.');
+  assert.deepEqual(idsOf(checkCrossRefs({ layers, scenarios: mencion }), 'CHK-SCEN-EVENT-PAYLOAD-PARTIAL'), []);
+});
+
+test('CHK-SCEN-ORDER-BY-MUTATED: afirmar el primero de un listado por updatedAt con filas movidas de estado', () => {
+  const domain = {
+    entities: {
+      Product: {
+        fields: {
+          id: { type: 'uuid', id: true, generated: true },
+          status: { type: 'enum', values: ['draft', 'active'], default: 'draft' },
+          updatedAt: { type: 'timestamp', generated: true }
+        },
+        lifecycle: { field: 'status', transitions: { draft: ['active'], active: ['draft'] } }
+      }
+    }
+  };
+  const layers = {
+    domain,
+    'use-cases': {
+      operations: {
+        listProducts: { kind: 'query', input: 'void', output: { entity: 'Product', paginated: true, sort: ['updatedAt:desc'] } }
+      }
+    }
+  };
+  const doc = (given) => `### FL-PRD-050: listado
+**Given**: ${given}
+**When**: \`listProducts\`
+**Then**:
+1. El primer elemento es \`p25\`.
+`;
+  const mutado = doc('se crean `p1..p25` en orden y `p1..p5` se publican (`active`).');
+  const avisos = idsOf(checkCrossRefs({ layers, scenarios: mutado }), 'CHK-SCEN-ORDER-BY-MUTATED');
+  assert.equal(avisos.length, 1);
+  assert.match(avisos[0].message, /'active'/);
+
+  // Solo creaciones: el orden de creación ES el de la última escritura.
+  const creado = doc('se crean `p1..p25` en orden, en `draft`.');
+  assert.deepEqual(idsOf(checkCrossRefs({ layers, scenarios: creado }), 'CHK-SCEN-ORDER-BY-MUTATED'), []);
+  // El Given que dice cuál fue la última escritura ya cerró la ambigüedad.
+  const dicho = doc('se crean `p1..p25` y después, en este orden, `p1..p5` se publican (`active`).');
+  assert.deepEqual(idsOf(checkCrossRefs({ layers, scenarios: dicho }), 'CHK-SCEN-ORDER-BY-MUTATED'), []);
+});
+
+test('CHK-SCEN-CONVENTION-UNBACKED: una convención de determinación en prosa sin su propiedad del DSL', () => {
+  const domain = {
+    types: { Price: { base: 'decimal', constraints: { min: 0, scale: 2 } } },
+    entities: {
+      Brand: {
+        fields: {
+          id: { type: 'uuid', id: true, generated: true },
+          name: { type: 'string', unique: true },
+          price: { type: 'Price' }
+        }
+      }
+    }
+  };
+  const doc = `# x
+
+## Convenciones de determinación
+
+**Números.** La escala se **valida, no se ajusta**: \`19.999\` se rechaza con \`400\`.
+
+**Ausencia.** Un campo sin valor **no aparece** en la respuesta; nunca viaja como \`null\`.
+
+**Mayúsculas y acentos.** La unicidad de \`name\` ignora mayúsculas y acentos.
+
+## Brands
+`;
+  const sinRespaldo = idsOf(
+    checkCrossRefs({ layers: { domain, 'use-cases': { operations: {} } }, scenarios: doc }),
+    'CHK-SCEN-CONVENTION-UNBACKED'
+  );
+  assert.equal(sinRespaldo.length, 3, 'nulos, escala y comparación de texto');
+
+  const respaldado = {
+    types: { Price: { base: 'decimal', constraints: { min: 0, scale: 2, scalePolicy: 'reject' } } },
+    entities: {
+      Brand: {
+        fields: {
+          id: { type: 'uuid', id: true, generated: true },
+          name: { type: 'string', unique: true, compare: 'ignore-case-accents' },
+          price: { type: 'Price' }
+        }
+      }
+    }
+  };
+  const cerrado = checkCrossRefs({
+    layers: { domain: respaldado, 'use-cases': { operations: {} } },
+    scenarios: doc,
+    manifest: { conventions: { nulls: 'omit' } }
+  });
+  assert.deepEqual(idsOf(cerrado, 'CHK-SCEN-CONVENTION-UNBACKED'), []);
+  assert.deepEqual(cerrado.errors, []);
+});
+
+test('OBL-DECIMAL-SCALE-POLICY: un decimal con escala en la entrada exige decidir qué pasa con los decimales de más', () => {
+  const domain = (constraints) => ({
+    types: { Price: { base: 'decimal', constraints } },
+    entities: { Product: { fields: { id: { type: 'uuid', id: true, generated: true }, price: { type: 'Price' } } } }
+  });
+  const useCases = {
+    operations: {
+      createProduct: { input: { fields: { price: { type: 'Price', required: true } } }, output: 'void' },
+      listProducts: { kind: 'query', input: 'void', output: 'void' }
+    }
+  };
+  const abierta = checkCrossRefs({ layers: { domain: domain({ scale: 2 }), 'use-cases': useCases } });
+  const obl = abierta.obligations.filter((o) => o.id === 'OBL-DECIMAL-SCALE-POLICY');
+  assert.equal(obl.length, 1);
+  assert.match(obl[0].message, /createProduct\.price \(Price\)/);
+
+  const cerrada = checkCrossRefs({ layers: { domain: domain({ scale: 2, scalePolicy: 'round' }), 'use-cases': useCases } });
+  assert.deepEqual(cerrada.obligations.filter((o) => o.id === 'OBL-DECIMAL-SCALE-POLICY'), []);
+  // Un decimal con escala que NO llega por la entrada no abre nada: lo calcula el servicio.
+  const soloSalida = checkCrossRefs({
+    layers: { domain: domain({ scale: 2 }), 'use-cases': { operations: { listProducts: useCases.operations.listProducts } } }
+  });
+  assert.deepEqual(soloSalida.obligations.filter((o) => o.id === 'OBL-DECIMAL-SCALE-POLICY'), []);
+});
+
+test('compare, match y scalePolicy: su coherencia es error', () => {
+  const layers = {
+    domain: {
+      types: { Qty: { base: 'int', constraints: { scalePolicy: 'reject' } } },
+      entities: {
+        Product: {
+          fields: {
+            id: { type: 'uuid', id: true, generated: true },
+            stock: { type: 'int', compare: 'ignore-case' },
+            name: { type: 'string', match: 'contains' }
+          }
+        }
+      }
+    },
+    'use-cases': {
+      operations: {
+        createProduct: { input: { fields: { name: { type: 'string', match: 'prefix' } } }, output: 'void' },
+        listProducts: {
+          kind: 'query',
+          input: { fields: { name: { type: 'string', match: 'contains', compare: 'ignore-case-accents' } } },
+          output: 'void'
+        }
+      }
+    }
+  };
+  const result = checkCrossRefs({ layers });
+  assert.equal(idsOf(result, 'CHK-FIELD-COMPARE-NOT-TEXT').length, 1, 'stock es int');
+  assert.equal(idsOf(result, 'CHK-USECASES-MATCH-OUTSIDE-QUERY').length, 2, 'el dominio y el comando no filtran');
+  assert.equal(idsOf(result, 'CHK-DOMAIN-SCALE-POLICY-WITHOUT-SCALE').length, 1);
+  assert.ok(
+    !result.errors.some((e) => e.includes('listProducts.input.fields.name')),
+    'el filtro de la query es justo donde match y compare valen'
+  );
+});
+
+test('CHK-PERSIST-CONDITIONAL-UNIQUE-CODE: el índice único condicionado pide un code que nombre la condición', () => {
+  const domain = {
+    entities: {
+      ProductImage: {
+        fields: {
+          id: { type: 'uuid', id: true, generated: true },
+          productId: { type: 'uuid', required: true },
+          primary: { type: 'boolean' }
+        }
+      }
+    }
+  };
+  const persistence = {
+    entities: { ProductImage: { indexes: [{ fields: ['productId'], unique: true, when: { field: 'primary', equals: true } }] } }
+  };
+  const ops = (errors) => ({ operations: { addImage: { input: 'void', output: { entity: 'ProductImage' }, errors } } });
+
+  const sinCode = checkCrossRefs({ layers: { domain, 'use-cases': ops([]), persistence } });
+  const avisos = idsOf(sinCode, 'CHK-PERSIST-CONDITIONAL-UNIQUE-CODE');
+  assert.equal(avisos.length, 1);
+  assert.match(avisos[0].message, /'PRIMARY'/);
+
+  // El code de los CAMPOS no vale: es justo el que dice «ya existe» de algo repetible.
+  const deCampos = checkCrossRefs({
+    layers: { domain, 'use-cases': ops([{ code: 'PRODUCT_ID_ALREADY_EXISTS', when: 'x', http: 409 }]), persistence }
+  });
+  assert.equal(idsOf(deCampos, 'CHK-PERSIST-CONDITIONAL-UNIQUE-CODE').length, 1);
+
+  const nombrado = checkCrossRefs({
+    layers: { domain, 'use-cases': ops([{ code: 'PRIMARY_IMAGE_ALREADY_SET', when: 'x', http: 409 }]), persistence }
+  });
+  assert.deepEqual(idsOf(nombrado, 'CHK-PERSIST-CONDITIONAL-UNIQUE-CODE'), []);
+});

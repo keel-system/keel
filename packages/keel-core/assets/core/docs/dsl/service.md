@@ -14,6 +14,9 @@ service:
   domain: commerce
   # basedOn: billing@1.2.0    # linaje: servicio@versión del que se derivó (opcional)
 
+# conventions:              # convenciones de determinación de todo el servicio (opcional)
+#   nulls: omit             # un campo sin valor no viaja; `include` (default) lo pone a null
+
 layers:
   domain: domain.keel.yaml
   use-cases: use-cases.keel.yaml
@@ -34,3 +37,4 @@ Reglas:
 - La versión del diseño sube según semver del contrato: ver [methodology.md](../methodology.md).
 - La plantilla siembra `description` con el prefijo `TODO:`; `keel validate` lo trata como placeholder pendiente (error sin `--wip`, aviso con `--wip`) hasta que se redacte la frase real.
 - `basedOn` (opcional, formato `<servicio>@<versión>`) registra de qué diseño viene el servicio. Lo escriben los dos comandos que traen un diseño de fuera: `keel new <nuevo> --from <origen>`, que **deriva** (renombra y resetea la versión), y `keel registry get <diseño>`, que **adopta** sin cambios. En el segundo caso el `basedOn` coincide con el propio servicio (`catalog@0.3.0` en un servicio llamado `catalog` v0.3.0), y se lee literalmente: «esto *es* `catalog@0.3.0`» — sin ese sello, la primera evolución sería un fork sin rastro de su procedencia. Es linaje histórico, no acoplamiento: el servicio evoluciona libre. Cuando además hay renombrado (derivación), `/keel-design` lo usa para arrancar en modo derivación y entrevistar solo sobre lo que cambia.
+- `conventions` (opcional) recoge las **convenciones de determinación** que valen para todo el servicio y cambian el código: hoy, `nulls` (`omit` \| `include`, default `include`) — si un campo sin valor aparece en las respuestas y en los payloads de evento. Antes solo podía decirse en la sección «Convenciones de determinación» de `validation-scenarios.md`, que es prosa y el generador no lee; `keel validate` avisa (`CHK-SCEN-CONVENTION-UNBACKED`) cuando esa prosa la declara y el manifiesto no. No toca el cuerpo de error, que tiene forma fija.

@@ -28,6 +28,7 @@ import * as reconciliationClaim from './reconciliation-claim.js';
 import { DOC_PKG } from './document-entities.js';
 import { documentValueObjects } from './document-embeddables.js';
 import { isRefTarget } from './ref-resolvers.js';
+import { textFoldImport } from './text-fold.js';
 
 export function generate(model) {
   if (!model.layersPresent.persistence || model.persistenceKind !== 'document') return [];
@@ -383,6 +384,12 @@ function renderToDocument(model, entity, imports) {
       lines.push(`        ${setter}(${getter} != null ? toDocument(${getter}) : null);`);
     } else {
       lines.push(`        ${setter}(${getter});`);
+      if (member.folded) {
+        imports.add(textFoldImport(model));
+        lines.push(
+          `        doc.set${capitalize(member.folded.name)}(TextFold.${member.folded.accents ? 'foldCaseAndAccents' : 'foldCase'}(${getter}));`
+        );
+      }
     }
   }
   if (entity.usesOptimisticLocking && !entity.declaresLockVersion) {

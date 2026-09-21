@@ -57,7 +57,7 @@ function renderRecord(model, dto) {
     return `    ${field.javaType} ${field.name}`;
   });
 
-  const body = `public record ${dto.name}(
+  const body = `${nullInclusion(model, imports)}public record ${dto.name}(
 ${components.join(',\n')}
 ) {
 }`;
@@ -94,4 +94,18 @@ public record PagedResponse<T>(List<T> items, int page, int size, long totalElem
     path: javaPath(model, DTO_PKG, 'PagedResponse'),
     content: javaFile(subPackage(model, DTO_PKG), imports, body)
   };
+}
+
+/**
+ * `@JsonInclude(NON_NULL)` cuando el diseño declara `conventions.nulls: omit`. Lo comparten
+ * los DTOs de respuesta y los eventos de integración (`messaging.js`), que son las dos caras
+ * del contrato que la convención gobierna. Por clase, nunca en el ObjectMapper: el global
+ * movería también el cuerpo de error, que tiene forma fija.
+ */
+export function nullInclusion(model, imports) {
+  if (!model.service?.omitNulls) return '';
+  imports.add('com.fasterxml.jackson.annotation.JsonInclude');
+  return `// conventions.nulls: omit — un campo sin valor no viaja (service.keel.yaml).
+@JsonInclude(JsonInclude.Include.NON_NULL)
+`;
 }

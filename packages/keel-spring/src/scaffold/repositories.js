@@ -13,6 +13,7 @@ import { pluralize } from '../lib/naming.js';
 import * as claim from './claim.js';
 import * as reconciliationClaim from './reconciliation-claim.js';
 import * as conditionalUniqueness from './conditional-uniqueness.js';
+import { textFoldImport } from './text-fold.js';
 
 export const PORT_PKG = 'domain.repository';
 export const REPO_PKG = 'infrastructure.persistence.repositories';
@@ -737,6 +738,12 @@ function renderToJpa(model, entity, imports, needsFactory = false) {
       lines.push(`        jpa.set${capitalize(member.name)}(${getter} != null ? toJpa(${getter}) : null);`);
     } else {
       lines.push(`        jpa.set${capitalize(member.name)}(domain.get${capitalize(member.name)}());`);
+      if (member.folded) {
+        imports.add(textFoldImport(model));
+        lines.push(
+          `        jpa.set${capitalize(member.folded.name)}(TextFold.${member.folded.accents ? 'foldCaseAndAccents' : 'foldCase'}(domain.get${capitalize(member.name)}()));`
+        );
+      }
     }
   }
   // Devuelve la versión al espejo JPA para que Hibernate compruebe la concurrencia

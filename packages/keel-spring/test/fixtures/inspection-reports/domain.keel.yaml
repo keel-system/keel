@@ -16,11 +16,11 @@ types:
       latitude:
         type: decimal
         required: true
-        constraints: { min: -90, max: 90, scale: 6 }
+        constraints: { min: -90, max: 90, scale: 6, scalePolicy: round }
       longitude:
         type: decimal
         required: true
-        constraints: { min: -180, max: 180, scale: 6 }
+        constraints: { min: -180, max: 180, scale: 6, scalePolicy: round }
 
   Location:
     description: Emplazamiento inspeccionado, con sus coordenadas y su etiqueta.

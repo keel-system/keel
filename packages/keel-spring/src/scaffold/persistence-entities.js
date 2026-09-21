@@ -162,6 +162,21 @@ function renderJpaEntity(model, entity) {
       lines.push(`    private ${field.javaType} ${field.name};`);
       declarations.push(lines.join('\n'));
       pushAccessor(member.name, field.javaType);
+      if (member.folded) {
+        const shadow = member.folded;
+        imports.add('jakarta.persistence.Column');
+        const attrs = [`name = "${shadow.column}"`];
+        if (shadow.required) attrs.push('nullable = false');
+        if (shadow.maxLength != null) attrs.push(`length = ${shadow.maxLength}`);
+        declarations.push(
+          [
+            `    // ${field.name} plegado (compare: ${field.compare}): lo estampa el adaptador con TextFold al guardar.`,
+            `    @Column(${attrs.join(', ')})`,
+            `    private String ${shadow.name};`
+          ].join('\n')
+        );
+        pushAccessor(shadow.name, 'String');
+      }
     } else if (member.kind === 'vo') {
       if (member.subs.length === 0) {
         declarations.push(`    // TODO (agente): mapear el value object ${member.field.javaType} a columnas.`);
@@ -440,8 +455,12 @@ function renderTableAnnotation(model, entity, members, imports) {
   const column = (name) => quoteIdentifier(name);
 
   if (entity.naturalKey && entity.naturalKey.length > 0) {
+    // Un miembro de la clave que pliega (`compare`, DSL 2.14) entra por su SOMBRA: la clave
+    // natural es una unicidad como cualquier otra, y solo la columna plegada sabe que `ACME`
+    // y `acme` son la misma.
+    const shadowOf = (f) => members.find((m) => m.kind === 'scalar' && m.name === f)?.folded;
     const columns = entity.naturalKey
-      .flatMap((f) => columnsFor(model, entity, members, f, model.warnings))
+      .flatMap((f) => (shadowOf(f) ? [shadowOf(f).column.replace(/`/g, '')] : columnsFor(model, entity, members, f, model.warnings)))
       .map((c) => `"${column(c)}"`)
       .join(', ');
     uniqueConstraints.push(`@UniqueConstraint(name = "uk_${entity.tableName}_natural", columnNames = { ${columns} })`);
@@ -451,9 +470,15 @@ function renderTableAnnotation(model, entity, members, imports) {
   // comprobación previa en el handler produce el error de negocio en el caso
   // normal, pero solo la constraint impide que dos peticiones simultáneas la
   // sorteen. Su violación la traduce al mismo error el ApiExceptionHandler.
+  //
+  // Con `compare` distinto de exact la constraint va sobre la SOMBRA plegada: `ACME` y `acme`
+  // son el mismo nombre para el diseño, y solo la columna plegada lo sabe. El nombre de la
+  // constraint no cambia —el ApiExceptionHandler la traduce por nombre—.
   for (const field of uniqueFields(entity)) {
+    const shadow = members.find((m) => m.kind === 'scalar' && m.name === field.name)?.folded;
+    const target = shadow ? shadow.column.replace(/`/g, '') : snakeCase(field.name);
     uniqueConstraints.push(
-      `@UniqueConstraint(name = "uk_${entity.tableName}_${snakeCase(field.name)}", columnNames = { "${column(snakeCase(field.name))}" })`
+      `@UniqueConstraint(name = "uk_${entity.tableName}_${snakeCase(field.name)}", columnNames = { "${column(target)}" })`
     );
   }
 

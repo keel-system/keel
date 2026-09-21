@@ -192,6 +192,18 @@ function renderDocument(model, entity) {
       lines.push(`    private ${field.javaType} ${field.name};`);
       declarations.push(lines.join('\n'));
       pushAccessor(member.name, field.javaType);
+      // La sombra plegada de un campo con `compare` (DSL 2.14): mismo papel que la columna
+      // de la rama relacional, y es donde MongoIndexConfig pone su índice único.
+      if (member.folded) {
+        declarations.push(
+          [
+            `    // ${field.name} plegado (compare: ${field.compare}): lo estampa el adaptador con TextFold al guardar.`,
+            ...documentAnnotations(member.folded.name, 'string').map((annotation) => `    ${annotation}`),
+            `    private String ${member.folded.name};`
+          ].join('\n')
+        );
+        pushAccessor(member.folded.name, 'String');
+      }
     } else if (member.kind === 'vo') {
       // Value object: subdocumento anidado, no columnas con prefijo. Y como es un
       // objeto de verdad, un value object DENTRO de otro no tiene nada de especial:

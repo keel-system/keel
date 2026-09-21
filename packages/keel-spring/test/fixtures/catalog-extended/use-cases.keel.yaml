@@ -92,7 +92,10 @@ operations:
   listProducts:
     description: Lista los productos del catálogo de forma paginada.
     kind: query
-    input: "void"
+    input:
+      fields:
+        # Coincidencia parcial ignorando mayúsculas y acentos: `portatil` encuentra `Portátil Pro`.
+        name: { type: string, constraints: { maxLength: 120 }, match: contains, compare: ignore-case-accents }
     output:
       entity: Product
       paginated: true

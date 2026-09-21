@@ -68,6 +68,16 @@ export const OBLIGATIONS = {
     doc: 'framework-errors.md'
   },
 
+  'OBL-DECIMAL-SCALE-POLICY': {
+    gapClass: 12,
+    when: 'domain/use-cases: un decimal con `scale` llega al `input` de alguna operación',
+    kind: 'decision',
+    waivable: true,
+    title: 'no está decidido qué pasa con un importe de entrada con más decimales que su escala',
+    closes: '`constraints.scalePolicy: reject | round` donde vive la escala, o exención razonada (el generador redondea)',
+    doc: 'dsl/domain.md'
+  },
+
   'OBL-OUTCOME-NEGATIVE-UNDECIDED': {
     gapClass: 13,
     when: 'dependencies: una activación con `awaits: outcome` cuya llamada devuelve un campo booleano',

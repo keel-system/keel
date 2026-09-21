@@ -26,6 +26,7 @@ import {
   normalizeTelemetry
 } from '../lib/stack-config.js';
 import { REFRESH_DIR } from '../lib/generated-manifest.js';
+import { writeSpecsSeal } from '../lib/specs-seal.js';
 import {
   BASE_SPECS_DIR,
   EVOLUTION_MD,
@@ -342,6 +343,9 @@ export async function build(
   // autosuficiente (quien lo clone finaliza la generación sin el workspace).
   // Siempre se refresca: el canónico es specs/<servicio> del workspace.
   const snapshot = copyTree(dir, snapshotDir, { force: true });
+  // Y su sello: infra/score-scenarios.sh se niega a puntuar contra un snapshot editado desde el
+  // proyecto (lib/specs-seal.js).
+  writeSpecsSeal(projectDir);
   console.log(
     pc.dim(
       `Snapshot del diseño → ${path.relative(workspace, snapshotDir).split(path.sep).join('/')}/ ` +

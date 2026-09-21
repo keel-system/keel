@@ -12,7 +12,7 @@ import { splitScenarioBlocks, scenarioBody, scenarioFamilyOf } from '../src/lib/
 function design({ version = '1.0.0', layers = {}, scenarios = null }) {
   const dir = tmpDir('keel-delta-');
   const manifest = [
-    'keel: "2.13"',
+    'keel: "2.14"',
     'service:',
     '  name: demo',
     `  version: ${version}`,

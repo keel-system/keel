@@ -10,7 +10,7 @@
     "keel": {
       "type": "string",
       "description": "Versión del DSL Keel usada por este servicio. Se soporta UNA sola: los schemas no gatean primitivos por versión, así que aceptar versiones anteriores haría que este campo declarase una intención que nada comprueba. Ver docs/dsl-reference.md § Historial de versiones.",
-      "enum": ["2.13"]
+      "enum": ["2.14"]
     },
     "service": {
       "type": "object",
@@ -34,6 +34,18 @@
           "type": "string",
           "pattern": "^[a-z][a-z0-9-]*@\\d+\\.\\d+\\.\\d+$",
           "description": "Linaje: servicio y versión de diseño del que se derivó (ej. billing@1.2.0)."
+        }
+      }
+    },
+    "conventions": {
+      "type": "object",
+      "description": "Convenciones de determinación que valen para TODO el servicio y cambian el código generado. Lo que se declare aquí el generador lo traduce; lo que solo se diga en la prosa de validation-scenarios.md tiene que implementarlo un agente leyéndola.",
+      "additionalProperties": false,
+      "properties": {
+        "nulls": {
+          "type": "string",
+          "enum": ["omit", "include"],
+          "description": "Cómo viaja un campo sin valor en las respuestas y en los payloads de evento: omit no lo pone; include lo pone a null. Por defecto include. No afecta al cuerpo de error, que tiene forma fija."
         }
       }
     },

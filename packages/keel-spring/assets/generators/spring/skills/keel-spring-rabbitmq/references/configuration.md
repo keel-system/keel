@@ -8,7 +8,8 @@ con el gradiente por perfil (local literal, develop `${VAR:default}`, production
 ## Fiabilidad de publicación
 
 Si el diseño declara `reliability: after-commit` u `outbox`, activa confirms para
-detectar publicaciones perdidas:
+detectar publicaciones perdidas. Con `outbox` **build ya los emite** en
+`parameters/<perfil>/rabbitmq.yaml`; lo de abajo es lo que tiene que aparecer ahí:
 
 ```yaml
 spring:

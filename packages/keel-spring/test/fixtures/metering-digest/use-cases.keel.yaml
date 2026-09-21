@@ -11,7 +11,7 @@ operations:
       fields:
         meterId:        { type: uuid, required: true }
         readAt:         { type: timestamp, required: true }
-        consumptionKwh: { type: decimal, required: true, constraints: { min: 0, scale: 3 } }
+        consumptionKwh: { type: decimal, required: true, constraints: { min: 0, scale: 3, scalePolicy: reject } }
         source:         { type: ReadingSource, required: true }
     output: { entity: MeterReading }
     # Sin `idempotency`: la clave de ese bloque llega por la cabecera Idempotency-Key y

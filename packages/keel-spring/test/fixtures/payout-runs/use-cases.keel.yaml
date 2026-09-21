@@ -6,7 +6,7 @@ operations:
     input:
       fields:
         reference: { type: string, required: true, constraints: { maxLength: 64 } }
-        amount:    { type: decimal, required: true, constraints: { min: 0.01, scale: 2 } }
+        amount:    { type: decimal, required: true, constraints: { min: 0.01, scale: 2, scalePolicy: reject } }
     output: { entity: Payout }
     preconditions:
       - No hay ya una orden con esa misma referencia.

@@ -81,7 +81,10 @@ Atributos de campo:
 | `sensitive` | Nunca sale en outputs ni eventos por defecto; solo si un payload lo pide explícitamente vía `fields` |
 | `default` | Valor si el cliente no lo provee. Sobre un campo `enum` debe ser uno de sus `values` — `keel validate` lo comprueba |
 | `list` | El campo es una **colección** de valores del tipo declarado (`{ type: Discount, list: true }`). Excluyente con `id`, `unique`, `generated` y `type: file` |
-| `constraints` | `min`, `max`, `minLength`, `maxLength`, `pattern`, `scale`; con `list`, además `minItems` y `maxItems` |
+| `compare` | Solo sobre texto: cómo se comparan dos valores — `exact` (por defecto), `ignore-case` o `ignore-case-accents`. En un campo `unique` decide qué es un duplicado (`ACME`, `acme` y `Acmé` lo son con `ignore-case-accents`). Es contrato observable: dilo aquí y no en la prosa de los escenarios, que el generador no lee |
+| `constraints` | `min`, `max`, `minLength`, `maxLength`, `pattern`, `scale` (con `scalePolicy`: `reject` o `round`); con `list`, además `minItems` y `maxItems` |
+
+**La escala se decide, no se supone.** `scale` dice cuántos decimales tiene un importe; `scalePolicy` dice qué pasa con uno de **entrada** que trae más: `reject` responde `400` (se valida, no se ajusta), `round` lo redondea a la escala. Las dos son legítimas y ninguna es un default seguro —rechazar rompe al cliente que manda `19.999`, redondear le cambia el importe sin decírselo—, así que un decimal con `scale` que llega a un `input` sin `scalePolicy` abre la obligación `OBL-DECIMAL-SCALE-POLICY`. Se declara donde vive la escala: en el value type (`Price: { base: decimal, constraints: { scale: 2, scalePolicy: reject } }`) o en el campo.
 
 ### Nombres reservados
 

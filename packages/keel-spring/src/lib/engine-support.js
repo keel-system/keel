@@ -602,6 +602,35 @@ export const MECHANISMS = {
     }
   },
 
+  'folded-text': {
+    title: 'Sombra plegada de un campo con `compare` (DSL 2.14): unicidad y filtro sin mayúsculas ni acentos',
+    emitter:
+      'src/scaffold/persistence-members.js · src/scaffold/persistence-entities.js · src/scaffold/repositories.js · src/scaffold/document-entities.js · src/scaffold/document-repositories.js · src/scaffold/document-indexes.js · src/scaffold/text-fold.js',
+    axis: 'model',
+    why:
+      'La unicidad de un campo que pliega vive en la SOMBRA y no en el campo: si una rama deja de estamparla o de indexarla, `ACME` y `acme` vuelven a ser dos filas, sin error y sin que ningún escenario lo note salvo el que pruebe justo esa colisión.',
+    parity: {
+      skip: 'ningún par declara `compare` todavía —meterlo en uno movería la clave natural que miden index-check y store-check—, así que las dos ramas las cubre un test que genera las dos con la opción',
+      test: 'test/catalog-run.test.js'
+    },
+    coverage: {
+      relational: {
+        state: 'razonado',
+        net: 'ninguna',
+        engines: ['postgresql'],
+        falsified: false,
+        why: 'generado y compilado por la forma, sin ejecutar contra un motor: la corrida `catalog` (2026-09-21) sostuvo en verde el MISMO patrón escrito a mano por el agente (name_normalized + constraint + plegado en toJpa) sobre postgresql, pero no el que emite build. Dueño: la siguiente corrida de catalog con DSL 2.14, o un caso de mapping-check que inserte `ACME` y `acme`'
+      },
+      document: {
+        state: 'razonado',
+        net: 'ninguna',
+        engines: [],
+        falsified: false,
+        why: 'generado sin ejecutar: ninguna corrida documental ha declarado `compare`. Dueño: el mismo caso de mapping-check en su rama Mongo'
+      }
+    }
+  },
+
   'persistence-adapter': {
     title: 'Espejo de persistencia y repositorios (mapeo, embebidos, colecciones, orden y desempate)',
     emitter:

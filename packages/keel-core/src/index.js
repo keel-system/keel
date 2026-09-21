@@ -40,7 +40,7 @@ export {
 export { checkCrossRefs } from './lib/crossrefs.js';
 // Los códigos que pone el framework cuando el diseño no nombra el conflicto de un mecanismo.
 // Un generador los toma de aquí: escritos a mano en cada uno, cada generación elige el suyo.
-export { FRAMEWORK_ERRORS, fixedFrameworkErrors, overrideFor } from './lib/framework-errors.js';
+export { FRAMEWORK_ERRORS, fixedFrameworkErrors, overrideFor, conditionalUniquenessToken } from './lib/framework-errors.js';
 // Las decisiones que el diseño abre al declarar algo. Un generador las lee para poder decir
 // «esto es un hueco de diseño, y tiene id» en vez de reportarlo como frontera suya.
 export { OBLIGATIONS, obligationFor, obligationIds } from './lib/obligations.js';

@@ -144,8 +144,21 @@ export function beanValidationAnnotations(field, resolved, { inheritTypeFormat =
   if (constraints.max != null) {
     annotations.push(resolved.base === 'decimal' ? `@DecimalMax("${constraints.max}")` : `@Max(${constraints.max})`);
   }
+  // `scalePolicy: reject` (DSL 2.14): un decimal de ENTRADA con más decimales que su escala
+  // es un 400, no un redondeo. Solo en la entrada (`inheritTypeFormat: false`): el valor ya
+  // formado —columna, respuesta— tiene la escala por construcción. La parte entera sale de la
+  // misma precisión que la columna, o el borde aceptaría importes que el INSERT rechaza.
+  if (!inheritTypeFormat && resolved.base === 'decimal' && constraints.scale != null && constraints.scalePolicy === 'reject') {
+    annotations.push(`@Digits(integer = ${DECIMAL_PRECISION - constraints.scale}, fraction = ${constraints.scale})`);
+  }
   return annotations;
 }
+
+/**
+ * Precisión de toda columna decimal con escala. Fuente única: la usan el `@Column` y la
+ * parte entera del `@Digits` de entrada, que tienen que decir lo mismo.
+ */
+export const DECIMAL_PRECISION = 19;
 
 /**
  * Cotas numéricas y ESCALA de un campo, con la misma mezcla tipo → campo que hace
@@ -165,7 +178,10 @@ export function numericConstraints(field, resolved) {
   const min = constraints.min ?? null;
   const max = constraints.max ?? null;
   if (scale === null && min === null && max === null) return null;
-  return { scale, min, max, decimal };
+  // `reject` | `round` | null. Null es «el diseño no lo decidió» (y keel validate lo exigió como
+  // obligación, o se aceptó por escrito): se redondea, que es lo que build hacía siempre.
+  const scalePolicy = scale === null ? null : constraints.scalePolicy ?? null;
+  return { scale, min, max, decimal, scalePolicy };
 }
 
 /**
@@ -231,7 +247,7 @@ export function columnAnnotations(fieldName, field, resolved, { collation = null
     attrs.push(`length = ${constraints.maxLength}`);
   }
   if (resolved.base === 'decimal' && constraints.scale != null) {
-    attrs.push(`precision = 19, scale = ${constraints.scale}`);
+    attrs.push(`precision = ${DECIMAL_PRECISION}, scale = ${constraints.scale}`);
   }
 
   if (resolved.kind === 'enum' || field.type === 'enum') {

@@ -124,6 +124,24 @@ export const CHECKS = {
     title: 'el mismo code se declara con status HTTP distintos según la operación',
     closes: 'un status por code, o dejar escrito que el mismo nombre cubre dos situaciones distintas a propósito'
   },
+  'CHK-FIELD-COMPARE-NOT-TEXT': {
+    layer: 'domain',
+    severity: 'error',
+    title: '`compare` o `match` sobre un campo que no es texto',
+    closes: 'quitarlo: plegar mayúsculas o casar por partes solo tiene sentido en un string o text'
+  },
+  'CHK-USECASES-MATCH-OUTSIDE-QUERY': {
+    layer: 'use-cases',
+    severity: 'error',
+    title: '`match` fuera del input de una query',
+    closes: 'moverlo al filtro de la query: es cómo casa un filtro, y un campo del dominio o de un comando no filtra nada'
+  },
+  'CHK-DOMAIN-SCALE-POLICY-WITHOUT-SCALE': {
+    layer: 'domain',
+    severity: 'error',
+    title: '`scalePolicy` sin `scale` al lado',
+    closes: 'declarar la escala a la que se rechaza o se redondea, o quitar la política'
+  },
   'CHK-PERSIST-AUDIT-NESTED': {
     layer: 'persistence',
     severity: 'warning',
@@ -198,6 +216,12 @@ export const CHECKS = {
     title: 'per-operation habiendo agregados declarados',
     closes: 'elegir per-aggregate, o dejar escrito que la transacción abarca varios a propósito'
   },
+  'CHK-PERSIST-CONDITIONAL-UNIQUE-CODE': {
+    layer: 'persistence',
+    severity: 'warning',
+    title: 'un índice único condicionado sin un `code` que diga qué significa violarlo',
+    closes: 'declarar en la operación que escribe esa entidad un error 409 cuyo code nombre la condición (su familia la da el estado o el campo de `when`)'
+  },
 
   'CHK-DEPS-CLOCK-NOT-OBSERVABLE': {
     layer: 'dependencies',
@@ -237,11 +261,41 @@ export const CHECKS = {
     title: 'un `error` declarado no aparece en ningún escenario',
     closes: 'un caso borde que lo provoque, con su code y su status'
   },
+  'CHK-SCEN-UNOBSERVABLE-RETRY': {
+    layer: 'validation-scenarios',
+    severity: 'warning',
+    title: 'un `Then` afirma que NO hubo reintentos, que desde fuera no se ve',
+    closes: 'dejar la mitad observable (que no hay descarte) y quitar la que no lo es'
+  },
   'CHK-SCEN-STATE-UNREACHED': {
     layer: 'validation-scenarios',
     severity: 'warning',
     title: 'un estado del lifecycle que ningún escenario alcanza',
     closes: 'el escenario que lleva la entidad a ese estado, o revisar si el estado sobra'
+  },
+  'CHK-SCEN-OP-COUNT': {
+    layer: 'validation-scenarios',
+    severity: 'warning',
+    title: 'un `Then` cuenta las operaciones bajo una ruta y la cuenta no casa con `api`',
+    closes: 'corregir el número, o nombrar las operaciones en vez de contarlas'
+  },
+  'CHK-SCEN-EVENT-PAYLOAD-PARTIAL': {
+    layer: 'validation-scenarios',
+    severity: 'warning',
+    title: 'un `Then` enumera el payload de un evento y se deja campos que `messaging` declara',
+    closes: 'nombrar los que faltan con su valor, o decir expresamente que no viajan'
+  },
+  'CHK-SCEN-ORDER-BY-MUTATED': {
+    layer: 'validation-scenarios',
+    severity: 'warning',
+    title: 'un `Then` afirma una posición en un listado ordenado por un campo que cambia con cada escritura',
+    closes: 'que el Given diga en qué orden ocurre la ÚLTIMA escritura de cada fila, no solo en qué orden se crearon'
+  },
+  'CHK-SCEN-CONVENTION-UNBACKED': {
+    layer: 'validation-scenarios',
+    severity: 'warning',
+    title: 'una convención de determinación dicha en prosa que el YAML no declara (o contradice)',
+    closes: 'declararla en la propiedad del DSL que la sostiene, para que el generador la vea'
   },
 
   // ─── storage ───────────────────────────────────────────────────────────────

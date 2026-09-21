@@ -101,6 +101,15 @@ function valueGuards(vo) {
     // leído de la BD (escala de la columna) y construido desde el cuerpo de una petición
     // (la que trajera el JSON) son objetos distintos, en equals, en hashCode y en cualquier
     // clave que los use. Falla en silencio y de forma intermitente.
+    //
+    // Con `scalePolicy: reject` (DSL 2.14) los decimales DE MÁS se rechazan antes de normalizar:
+    // el diseño dijo que la escala se valida, no se ajusta. `stripTrailingZeros` es lo que hace
+    // que `19.90` y `19.9` pasen y `19.999` no — la escala del literal no es la del valor.
+    if (numeric.scalePolicy === 'reject') {
+      checks.push(`        if (${siExiste}${field.name}.stripTrailingZeros().scale() > ${numeric.scale}) {
+            throw new IllegalArgumentException("${vo.name}.${field.name} admite como mucho ${numeric.scale} decimales (scalePolicy: reject)");
+        }`);
+    }
     checks.push(
       field.required
         ? `        ${field.name} = ${field.name}.setScale(${numeric.scale}, RoundingMode.HALF_UP);`

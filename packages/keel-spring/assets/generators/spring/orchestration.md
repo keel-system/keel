@@ -187,6 +187,16 @@ Se arbitra igual que un fallo y con las mismas salidas:
   qué» del documento, que existe exactamente para eso. Dejarlo declarado y sin prueba deja al
   gate diciendo «sin cobertura» sobre una decisión que ya se tomó.
 
+**Y detenerse significa no tocar el diseño, ni aquí ni en el workspace.** Un `culprit: design`
+se propone —en `design-gaps.yaml` y en el informe—; no se aplica. En la corrida `catalog`
+(2026-09-21) el orquestador corrigió dos escenarios **en el workspace de diseño**, que estaba a
+dos directorios, y la suite cerró en verde: el hueco desapareció sin volver nunca al método, el
+diseño quedó modificado sin commit ni versión, y el `design-gaps.yaml` no se escribió. Quien
+tiene la suite delante es justo quien no puede decidir que el escenario estaba mal — es la misma
+razón por la que el árbitro no escribe código. Por eso `infra/score-scenarios.sh` compara el
+snapshot `specs/` con el digest que build dejó en `keel-generated.json` (`specsDigest`) y sale con
+`2` si cambió.
+
 Lo que no es una salida: cerrar la generación con la fila puesta. En una corrida real
 `FL-SND-030` se quedó sin traducir, el script lo cantó, y el informe de cierre no lo mencionó
 — ni el escenario ni el código de salida con el que terminó la suite.

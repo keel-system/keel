@@ -93,6 +93,31 @@ export const REVIEWS = {
       '«queda marcada como retirada»), señala el campo o la transición que lo sostiene; si no existe, falta'
   },
 
+  'REV-DOMAIN-PARTIAL-WRITER': {
+    scope: 'domain',
+    gapClass: 1,
+    severity: 'warning',
+    appliesTo: (layers) => {
+      const destinos = new Map();
+      for (const op of Object.values(layers['use-cases']?.operations ?? {})) {
+        for (const transition of op?.transitions ?? []) {
+          if (!transition?.to) continue;
+          destinos.set(transition.to, (destinos.get(transition.to) ?? 0) + 1);
+        }
+      }
+      if (![...destinos.values()].some((veces) => veces > 1)) return false;
+      // Y que haya algo que se pueda quedar sin escribir: sin campos opcionales no hay
+      // pregunta que hacer.
+      return hasAny(layers.domain?.entities, (entity) =>
+        hasField(entity, (field) => field?.required !== true)
+      );
+    },
+    title: 'dos vías al mismo estado, y solo una escribe el porqué',
+    asks:
+      '¿las dos dejan la fila igual de informativa? Un campo que una vía rellena y la otra deja a null hace ' +
+      'indistinguibles en la API dos filas que llegaron por caminos distintos — y quién lo escribe suele estar ' +
+      'dicho solo en la description del campo, que es prosa'
+  },
   // ─── use-cases ─────────────────────────────────────────────────────────────
   'REV-USECASES-INTERNAL-REPEAT': {
     scope: 'use-cases',

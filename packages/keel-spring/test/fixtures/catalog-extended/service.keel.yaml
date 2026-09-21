@@ -1,9 +1,12 @@
-keel: "2.13"
+keel: "2.14"
 service:
   name: catalog
   version: 1.0.0
   description: Catálogo con agregado compuesto, imágenes y eventos de integración.
   domain: commerce
+# Un campo sin valor no viaja: ni en las respuestas ni en los payloads de evento.
+conventions:
+  nulls: omit
 layers:
   domain: domain.keel.yaml
   use-cases: use-cases.keel.yaml

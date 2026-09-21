@@ -1,7 +1,7 @@
-import { FRAMEWORK_ERRORS, overrideFor } from './framework-errors.js';
+import { FRAMEWORK_ERRORS, overrideFor, conditionalUniquenessToken } from './framework-errors.js';
 import { obligationFor } from './obligations.js';
 import { checkFor } from './checks.js';
-import { splitScenarioBlocks, scenarioFamilyOf, scenarioIdOf, parseCoverageMatrix } from './scenario-blocks.js';
+import { splitScenarioBlocks, scenarioFamilyOf, scenarioIdOf, scenarioBody, parseCoverageMatrix } from './scenario-blocks.js';
 
 const BASE_TYPES = new Set(['string', 'text', 'int', 'long', 'decimal', 'boolean', 'uuid', 'date', 'timestamp', 'json', 'file']);
 
@@ -26,7 +26,7 @@ const STATUSES_WITHOUT_BODY = new Set([204, 205, 304]);
  *
  * La calidad semántica (invariantes ambiguas, mínimo privilegio...) es de la skill /keel-validate.
  */
-export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
+export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest = null }) {
   const errors = [];
   const warnings = [];
   const pending = [];
@@ -629,6 +629,125 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
       );
     }
   };
+
+  // ─── Convenciones de determinación, declaradas (DSL 2.14) ──────────────────────
+  //
+  // `compare`, `match` y `constraints.scalePolicy` existen porque tres decisiones de contrato
+  // —qué es el mismo texto, cómo casa un filtro, qué pasa con un decimal de más— solo podían
+  // escribirse en la prosa de `validation-scenarios.md`, y el generador no la lee. Lo de aquí
+  // es su coherencia mecánica; la obligación de decidir la escala va más abajo.
+  const baseOf = (field) => {
+    const type = field?.type;
+    return domain.types?.[type]?.base ?? type ?? null;
+  };
+  const isText = (field) => ['string', 'text'].includes(baseOf(field));
+  const typeConstraints = (field) => domain.types?.[field?.type]?.constraints ?? {};
+  const scaleOf = (field) => field?.constraints?.scale ?? typeConstraints(field).scale ?? null;
+  const scalePolicyOf = (field) => field?.constraints?.scalePolicy ?? typeConstraints(field).scalePolicy ?? null;
+
+  for (const [typeName, type] of Object.entries(domain.types ?? {})) {
+    if (type?.constraints?.scalePolicy && type.constraints.scale == null) {
+      error(
+        'CHK-DOMAIN-SCALE-POLICY-WITHOUT-SCALE',
+        `domain: types.${typeName}.constraints.scalePolicy: no hay scale al lado — la política dice qué hacer con los decimales DE MÁS, y sin escala no hay «de más»`
+      );
+    }
+  }
+
+  // Todos los nodos de campo que se pueden declarar, con lo que cada sitio admite.
+  const fieldSites = [];
+  for (const [entityName, entity] of Object.entries(domain.entities ?? {})) {
+    for (const [name, field] of Object.entries(entity.fields ?? {})) {
+      fieldSites.push({ where: `domain: ${entityName}.fields.${name}`, field, filter: false });
+    }
+  }
+  for (const [opName, op] of Object.entries(operations)) {
+    for (const [name, field] of Object.entries(op?.input?.fields ?? {})) {
+      fieldSites.push({ where: `use-cases: ${opName}.input.fields.${name}`, field, filter: op.kind === 'query' });
+    }
+    for (const [name, field] of Object.entries(op?.output?.fields ?? {})) {
+      fieldSites.push({ where: `use-cases: ${opName}.output.fields.${name}`, field, filter: false });
+    }
+  }
+  for (const [eventName, event] of Object.entries(messaging?.publishing?.events ?? {})) {
+    for (const [name, field] of Object.entries(event?.payload ?? {})) {
+      fieldSites.push({ where: `messaging: publishing.events.${eventName}.payload.${name}`, field, filter: false });
+    }
+  }
+  for (const { where, field, filter } of fieldSites) {
+    if (!field || typeof field !== 'object') continue;
+    for (const prop of ['compare', 'match']) {
+      if (field[prop] !== undefined && !isText(field)) {
+        error(
+          'CHK-FIELD-COMPARE-NOT-TEXT',
+          `${where}.${prop}: el campo es '${field.type}', no texto — plegar mayúsculas y acentos o casar por partes solo tiene sentido en un string o text`
+        );
+      }
+    }
+    if (field.match !== undefined && !filter) {
+      error(
+        'CHK-USECASES-MATCH-OUTSIDE-QUERY',
+        `${where}.match: match dice cómo casa un FILTRO, y aquí no hay ninguno — solo vale en el input de una query (kind: query)`
+      );
+    }
+    if (field.constraints?.scalePolicy && scaleOf(field) == null) {
+      error(
+        'CHK-DOMAIN-SCALE-POLICY-WITHOUT-SCALE',
+        `${where}.constraints.scalePolicy: ni el campo ni su tipo declaran scale — la política dice qué hacer con los decimales DE MÁS, y sin escala no hay «de más»`
+      );
+    }
+  }
+
+  // La escala de un decimal de ENTRADA no tiene default seguro. Rechazar rompe al cliente que
+  // manda `19.999`; redondear le cambia el importe sin decírselo. Hasta 2.14 el diseño solo podía
+  // decirlo en prosa —«la escala se valida, no se ajusta»— y el generador hacía lo único que el
+  // YAML le dejaba ver: nada en el borde, y el redondeo silencioso de la columna al escribir. La
+  // corrida `catalog` lo pagó con `@Digits` escritos a mano en cada comando y parámetro de query.
+  const unscaled = [];
+  const decimalsNeedingPolicy = (field, label) => {
+    if (!field || typeof field !== 'object' || field.generated || field.computed) return;
+    const composite = domain.types?.[field.type]?.fields;
+    if (composite) {
+      for (const [sub, subField] of Object.entries(composite)) {
+        decimalsNeedingPolicy(subField, `${label}.${sub}`);
+      }
+      return;
+    }
+    if (baseOf(field) === 'decimal' && scaleOf(field) != null && !scalePolicyOf(field)) {
+      unscaled.push(`${label}${domain.types?.[field.type] ? ` (${field.type})` : ''}`);
+    }
+  };
+  for (const [opName, op] of Object.entries(operations)) {
+    for (const [name, field] of Object.entries(op?.input?.fields ?? {})) {
+      decimalsNeedingPolicy(field, `${opName}.${name}`);
+    }
+    const inputEntity = op?.input?.entity;
+    for (const [name, field] of Object.entries(domain.entities?.[inputEntity]?.fields ?? {})) {
+      decimalsNeedingPolicy(field, `${opName}.${name}`);
+    }
+  }
+  // La política de cada decimal con escala del diseño (tipos y campos), para contrastarla
+  // con la prosa de convenciones: null donde no se declaró.
+  const scaledDecimalPolicies = () => {
+    const out = [];
+    for (const type of Object.values(domain.types ?? {})) {
+      if (type?.base === 'decimal' && type.constraints?.scale != null) out.push(type.constraints.scalePolicy ?? null);
+    }
+    for (const { field } of fieldSites) {
+      if (field?.constraints?.scale != null && baseOf(field) === 'decimal') out.push(scalePolicyOf(field));
+    }
+    return out;
+  };
+
+  if (unscaled.length > 0) {
+    obligation(
+      'OBL-DECIMAL-SCALE-POLICY',
+      'domain',
+      `${[...new Set(unscaled)].join(', ')}: un decimal con escala llega por la entrada y el diseño no dice qué pasa ` +
+        `si trae más decimales. Rechazarlo (400) y redondearlo son las dos legítimas y ninguna es un default seguro; ` +
+        `declara constraints.scalePolicy (reject | round) donde vive la escala, o acepta por escrito que el generador redondee`
+    );
+  }
 
   // use-cases: payloads, emits, cache
   for (const [opName, op] of Object.entries(operations)) {
@@ -3793,6 +3912,30 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
       );
     }
 
+    // Una aserción que ningún arnés de caja negra puede escribir. «Ni DLQ ni reintentos» tiene
+    // dos mitades y solo una se ve desde fuera: el descarte deja el mensaje en un destino que
+    // se puede leer, pero los reintentos del listener no los expone nada —ni la API, ni el
+    // broker, ni el actuator—. Quien traduzca el escenario afirmará la mitad que puede y
+    // dará la otra por cubierta, que es peor que no haberla escrito: el `Then` promete una
+    // garantía que la fila verde de la matriz no sostiene.
+    //
+    // Es la forma que más viaja entre diseños —una frase de plantilla—: apareció en
+    // `stock-reservation` (dos veces) y en `asset-vault` con las MISMAS palabras, que es lo
+    // que la convierte en regla en vez de en la anotación de una corrida.
+    for (const bloque of scenarioBlocks) {
+      // `\\b` y no `\b`: el segundo es el carácter BACKSPACE, y aquí el fallo es el ESPEJO
+      // del que ya documenta el estado del lifecycle — allí la expresión casaba con todo y
+      // el aviso salía siempre; aquí no casa con nada y NO SALE NUNCA. El segundo es peor:
+      // un aviso que grita se arregla, uno que calla se confunde con no tener hallazgos.
+      if (!/(sin|ni)\s+reintentos?\b/i.test(bloque)) continue;
+      warn(
+        'CHK-SCEN-UNOBSERVABLE-RETRY',
+        `validation-scenarios.md: ${scenarioIdOf(bloque)} afirma que no hubo reintentos, y eso no se ve desde fuera: ` +
+          `nada expone los reintentos del listener. La mitad observable es que no hay descarte —ese destino sí se ` +
+          `lee—; déjala sola, o el Then promete una garantía que su fila verde no sostiene`
+      );
+    }
+
     // Un estado que ningún escenario nombra puede ser inalcanzable de verdad, y entonces
     // es diseño muerto; o alcanzable y sin cubrir, y entonces el primero que llegue ahí
     // es un usuario. Las dos cosas se ven igual desde el YAML.
@@ -3809,7 +3952,189 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null }) {
         );
       }
     }
+
+    // ─── Lo que un escenario AFIRMA contra lo que el YAML DECLARA ────────────────
+    //
+    // Las cuatro de abajo salieron de la misma corrida (`catalog`, 2026-09-21), y las cuatro
+    // son la misma forma: el `Then` dice algo que el diseño permite comprobar y nadie lo
+    // comprobaba. Ninguna la vio `keel validate`; las encontró un agente con la suite ya
+    // escrita, que es el sitio más caro para encontrarlas — y el único desde el que la
+    // tentación es corregir el escenario para que pase.
+    const sections = scenarioBlocks.map((block) => ({ id: scenarioIdOf(block), ...givenWhenThen(scenarioBody(block)) }));
+
+    // (1) Contar operaciones es la aserción más fácil de dejar vieja: se escribe una vez y
+    // el diseño sigue añadiendo o quitando endpoints. Se contrasta solo con `api.endpoints`
+    // explícitos; con `auto`, las rutas no son del diseño y contar sería adivinar.
+    if (api && api.auto !== true) {
+      const basePath = String(api.basePath ?? '').replace(/\/$/, '');
+      const paths = Object.values(api.endpoints ?? {}).map((endpoint) => `${basePath}${endpoint?.path ?? ''}`);
+      for (const { id, then } of sections) {
+        for (const match of then.matchAll(/\b(\d+)\s+operaciones\s+(?:de|bajo|en)\s+`([^`]+)`/gi)) {
+          const prefix = match[2].replace(/\/\*{1,2}$/, '').replace(/\/$/, '');
+          const count = paths.filter((p) => p === prefix || p.startsWith(`${prefix}/`)).length;
+          if (count === Number(match[1])) continue;
+          warn(
+            'CHK-SCEN-OP-COUNT',
+            `validation-scenarios.md: ${id} cuenta ${match[1]} operaciones bajo '${match[2]}' y api declara ${count} — ` +
+              `quien traduzca el escenario tendrá que elegir entre el número y el diseño, y cualquiera de las dos deja una aserción que no mide lo que dice`
+          );
+        }
+      }
+    }
+
+    // (2) Un `Then` que enumera un payload se lee como EXHAUSTIVO en cuanto el documento
+    // tiene la convención «un Then que enumera el cuerpo da por ausentes los campos que no
+    // nombra». Dejarse uno es afirmar que no viaja, y el servidor —que sigue a `messaging`—
+    // lo manda: el escenario sale rojo contra un servidor correcto. Solo se mira el ítem que
+    // nombra el evento Y enumera al menos la mitad de sus campos: nombrar dos no es
+    // enumerar, y avisar ahí sería ruido.
+    const payloads = Object.entries(messaging?.publishing?.events ?? {}).map(([name, event]) => ({
+      name,
+      fields: Object.keys(event?.payload ?? {})
+    }));
+    for (const { id, then } of sections) {
+      for (const item of numberedItems(then)) {
+        const named = new Set([...item.matchAll(/`([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]));
+        for (const { name, fields } of payloads) {
+          if (!named.has(name) || fields.length === 0) continue;
+          const hits = fields.filter((field) => named.has(field));
+          if (hits.length < 3 || hits.length * 2 < fields.length) continue;
+          const missing = fields.filter((field) => !named.has(field));
+          if (missing.length === 0) continue;
+          const plural = missing.length > 1;
+          warn(
+            'CHK-SCEN-EVENT-PAYLOAD-PARTIAL',
+            `validation-scenarios.md: ${id} enumera el payload de ${name} y no nombra ${missing.map((f) => `'${f}'`).join(', ')}, ` +
+              `que messaging declara — con la convención de ausencia eso es afirmar que no viaja${plural ? 'n' : ''}. ` +
+              `Nómbra${plural ? 'los' : 'lo'} con su valor, o di expresamente que no viaja${plural ? 'n' : ''} y por qué`
+          );
+        }
+      }
+    }
+
+    // (3) Ordenar por un campo que estampa cada escritura (`updatedAt`) hace que la posición
+    // dependa de la ÚLTIMA escritura de cada fila, no de cuándo se creó. Un Given que crea
+    // filas y luego mueve algunas de estado —y un Then que afirma quién va primero— depende de
+    // un orden que el Given no dice. Se calla cuando el Given habla de la última escritura.
+    for (const { id, given, when, then } of sections) {
+      const opName = [...when.matchAll(/`([a-z][A-Za-z0-9]*)`/g)].map((m) => m[1]).find((n) => operationNames.has(n));
+      const op = operations[opName];
+      const firstSort = String(op?.output?.sort?.[0] ?? '').split(':')[0];
+      if (!/^(updatedAt|lastModifiedAt|modifiedAt)$/.test(firstSort)) continue;
+      if (!/\b(primer|primera|último|última)\b[^.\n]{0,40}\b(elemento|item|resultado|fila)\b|\bel primero\b/i.test(then)) continue;
+      if (/(últim[oa]s?\s+(mutaci[oó]n|escritura|transici[oó]n|cambio)|en este orden)/i.test(given)) continue;
+      const entity = domain.entities?.[op.output.entity];
+      const states = entity?.lifecycle ? enumValuesOf(entity.fields?.[entity.lifecycle.field]) ?? [] : [];
+      const initial = entity?.lifecycle ? entity.fields?.[entity.lifecycle.field]?.default ?? states[0] : null;
+      const moved = states.filter((state) => state !== initial && given.includes(`\`${state}\``));
+      if (moved.length === 0) continue;
+      warn(
+        'CHK-SCEN-ORDER-BY-MUTATED',
+        `validation-scenarios.md: ${id} afirma una posición en ${opName}, que ordena por '${firstSort}', y su Given lleva filas a ` +
+          `${moved.map((state) => `'${state}'`).join(', ')} después de crearlas — cada transición reescribe '${firstSort}', así que el orden ` +
+          `depende de cuál fue la ÚLTIMA escritura, no la creación. Di en el Given en qué orden ocurren las transiciones`
+      );
+    }
+
+    // (4) Las convenciones de determinación que el generador puede traducir desde 2.14. Una
+    // dicha solo en la prosa es una decisión que el diseño ya tomó y que el código generado
+    // no va a respetar hasta que un agente la lea — o que respetará distinto cada corrida.
+    const conventions = conventionsSection(scenarios);
+    if (conventions) {
+      const nulls = manifest?.conventions?.nulls ?? 'include';
+      if (conventions.ausencia && /(no\s+aparece|nunca\s+viaja|se\s+omite|no\s+viaja)/i.test(conventions.ausencia) && nulls !== 'omit') {
+        warn(
+          'CHK-SCEN-CONVENTION-UNBACKED',
+          `validation-scenarios.md: la convención de ausencia dice que un campo sin valor no viaja, y el manifiesto no lo declara ` +
+            `(conventions.nulls: omit) — el generador serializará los nulos y el agente tendrá que corregirlo clase a clase`
+        );
+      }
+      if (conventions.numeros && /(no\s+se\s+(ajusta|redondea)|se\s+rechaza)/i.test(conventions.numeros)) {
+        const policies = scaledDecimalPolicies();
+        if (policies.length === 0 || policies.some((policy) => policy !== 'reject')) {
+          warn(
+            'CHK-SCEN-CONVENTION-UNBACKED',
+            `validation-scenarios.md: la convención de números dice que la escala se valida y no se ajusta, y ` +
+              (policies.length === 0 ? 'ningún decimal con escala declara' : 'no todos los decimales con escala declaran') +
+              ` constraints.scalePolicy: reject — sin eso el generador no rechaza los decimales de más`
+          );
+        }
+      }
+      if (conventions.texto && /acentos?|may[uú]sculas/i.test(conventions.texto)) {
+        if (!fieldSites.some(({ field }) => field?.compare && field.compare !== 'exact')) {
+          warn(
+            'CHK-SCEN-CONVENTION-UNBACKED',
+            `validation-scenarios.md: la convención de texto dice que se ignoran mayúsculas o acentos, y ningún campo declara ` +
+              `compare (ignore-case | ignore-case-accents) — la unicidad y los filtros saldrán sensibles a la caja`
+          );
+        }
+      }
+    }
+  }
+
+  // ─── Unicidad CONDICIONADA sin nombre ─────────────────────────────────────────
+  //
+  // Un índice `unique` con `when` dice «como mucho uno en ese estado», no «ya existe uno con
+  // esos campos». Sin un code propio, el generador solo puede derivar el de los campos
+  // (`PRODUCT_IMAGE_PRODUCT_ID_ALREADY_EXISTS`), cuyo mensaje es falso para cualquiera que lo
+  // lea: un producto tiene muchas imágenes. La familia sale de la condición.
+  for (const [entityName, spec] of Object.entries(persistence?.entities ?? {})) {
+    for (const index of spec?.indexes ?? []) {
+      if (Array.isArray(index) || !index?.unique || !index.when) continue;
+      const token = conditionalUniquenessToken(index.when);
+      const family = FRAMEWORK_ERRORS.uniqueness.conditionalFamilyFor(token);
+      const declared = Object.values(operations).some((op) =>
+        (op?.errors ?? []).some((e) => (e?.http ?? 409) === 409 && family.test(String(e?.code ?? '')))
+      );
+      if (declared) continue;
+      const entitySnake = String(entityName).replace(/([a-z0-9])([A-Z])/g, '$1_$2').toUpperCase();
+      warn(
+        'CHK-PERSIST-CONDITIONAL-UNIQUE-CODE',
+        `persistence: entities.${entityName}.indexes: el índice único sobre [${(index.fields ?? []).join(', ')}] cuando ` +
+          `${index.when.field} = ${JSON.stringify(index.when.equals)} no tiene un error 409 que lo nombre — declara en la operación ` +
+          `que escribe ${entityName} un code con '${token}' (p. ej. ${token}_${entitySnake}_ALREADY_EXISTS); si no, el generador ` +
+          `solo puede tratar el choque como una carrera (CONCURRENT_MODIFICATION), y el cliente que de verdad pidió un segundo ` +
+          `'${index.when.field} = ${JSON.stringify(index.when.equals)}' recibirá un «reintenta» que no se arregla reintentando`
+      );
+    }
   }
 
   return { errors, warnings, pending, obligations, findings };
+}
+
+// ─── Lectura de un escenario por secciones ──────────────────────────────────
+//
+// Un bloque `FL-*` puede tener varios When/Then encadenados: se concatenan por clase, porque
+// las comprobaciones que los usan preguntan «¿dice esto el Given?», no «¿en qué paso?».
+function givenWhenThen(body) {
+  const out = { given: '', when: '', then: '' };
+  const marks = [...body.matchAll(/\*\*(Given|When|Then)\*\*/g)];
+  marks.forEach((mark, index) => {
+    const end = index + 1 < marks.length ? marks[index + 1].index : body.length;
+    out[mark[1].toLowerCase()] += `${body.slice(mark.index + mark[0].length, end)}\n`;
+  });
+  return out;
+}
+
+// Los ítems numerados de un Then, cada uno con sus líneas de continuación.
+function numberedItems(text) {
+  return text.split(/^\s*(?=\d+\.\s)/m).filter((item) => /^\d+\.\s/.test(item));
+}
+
+// La sección «Convenciones de determinación» troceada por sus párrafos en negrita
+// (**Ausencia.**, **Números.**, **Mayúsculas y acentos.**). Null si el documento no la tiene.
+function conventionsSection(text) {
+  const lines = (text ?? '').split(/\r?\n/);
+  const start = lines.findIndex((line) => /^#{2,3}\s+Convenciones de determinaci[oó]n/i.test(line));
+  if (start === -1) return null;
+  const end = lines.findIndex((line, index) => index > start && /^#{1,3}\s/.test(line));
+  const body = lines.slice(start + 1, end === -1 ? undefined : end).join('\n');
+  const out = {};
+  for (const para of body.split(/\n\s*\n/)) {
+    const head = (/^\*\*([^*]+)\*\*/.exec(para.trim()) ?? [])[1] ?? '';
+    if (/ausencia|nulos?/i.test(head)) out.ausencia = para;
+    else if (/n[uú]meros|decimal|escala/i.test(head)) out.numeros = para;
+    else if (/may[uú]sculas|acentos|texto|colaci[oó]n/i.test(head)) out.texto = para;
+  }
+  return out;
 }

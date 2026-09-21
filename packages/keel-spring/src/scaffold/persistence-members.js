@@ -69,7 +69,7 @@ export function persistedMembers(model, entity) {
         })
       });
     } else {
-      members.push({ kind: 'scalar', field, name: field.name, javaType: field.javaType });
+      members.push({ kind: 'scalar', field, name: field.name, javaType: field.javaType, folded: foldedShadow(field) });
     }
   }
   for (const relation of entity.relations) {
@@ -81,6 +81,31 @@ export function persistedMembers(model, entity) {
     }
   }
   return members;
+}
+
+/**
+ * La SOMBRA plegada de un campo de texto con `compare: ignore-case | ignore-case-accents`
+ * (DSL 2.14): una columna (o campo del documento) con el valor sin mayúsculas —y sin
+ * acentos, si lo pide— que el adaptador estampa al guardar. Es donde vive la unicidad del
+ * campo y contra la que se filtra.
+ *
+ * Por qué una sombra y no una collation insensible: la collation cambia con el motor
+ * (`und-x-icu`, `utf8mb4_0900_ai_ci`, `_CI_AI`), no existe en todos y en MongoDB es una
+ * opción del índice; la sombra es la misma en los dos modelos y en los seis motores, y es lo
+ * que la corrida `catalog` acabó escribiendo a mano en tres entidades. El campo original
+ * conserva el valor tal como llegó, que es el que se devuelve.
+ */
+export function foldedShadow(field) {
+  if (!field?.fold) return null;
+  const name = `${field.name}Normalized`;
+  return {
+    name,
+    source: field.name,
+    column: quoteIdentifier(snakeCase(name)),
+    accents: field.fold.accents,
+    required: Boolean(field.required),
+    maxLength: field.fold.maxLength
+  };
 }
 
 // Campos por los que una colección hija tiene un orden PROPIO del diseño: un
@@ -215,7 +240,8 @@ export function uniqueConstraints(model) {
         constraint: indexName(entity, index),
         entity: entity.name,
         fields: index.fields,
-        when: index.when ?? null
+        when: index.when ?? null,
+        description: index.description ?? null
       });
     }
   }

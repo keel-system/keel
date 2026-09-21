@@ -242,7 +242,8 @@ routing key sin binding se pierden con el outbox en verde. Kafka tiene esa garan
 
 Requiere los tres ajustes de `parameters/<perfil>/rabbitmq.yaml` que documenta
 `references/configuration.md` —`publisher-confirm-type: correlated`, `publisher-returns: true` y
-`template.mandatory: true`—: **sin `mandatory` no hay `getReturned()`**, y el caso «publicado en un
+`template.mandatory: true`—, que con `reliability: outbox` **ya vienen escritos por build** en los
+tres perfiles: compruébalos, no los dupliques. **Sin `mandatory` no hay `getReturned()`**, y el caso «publicado en un
 exchange que no tiene a quién dárselo» se cuela como éxito. Los callbacks globales
 (`setConfirmCallback`/`setReturnsCallback`) siguen valiendo para **observar**, no para decidir:
 loguean después de que este método ya haya vuelto.

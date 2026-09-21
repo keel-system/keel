@@ -57,7 +57,7 @@ test('sort declarado: constante por operación en el controller, aplicada solo s
       'private static final Sort LIST_PRODUCTS_ORDER = Sort.by(Sort.Order.asc("name"), Sort.Order.desc("createdAt"));'
     )
   );
-  assert.ok(controller.includes('new ListProductsQuery(withDefaultOrder(pageable, LIST_PRODUCTS_ORDER))'));
+  assert.ok(controller.includes('new ListProductsQuery(name, withDefaultOrder(pageable, LIST_PRODUCTS_ORDER))'));
   // El orden del cliente manda sobre el del diseño; el desempate del adaptador, sobre ambos.
   assert.ok(controller.includes('if (pageable.getSort().isSorted()) {'));
   // @PageableDefault sigue llevando solo el tamaño: un único `direction` no puede

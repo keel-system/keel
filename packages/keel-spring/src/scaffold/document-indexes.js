@@ -77,15 +77,22 @@ export function indexSpecs(model, entity, warnings) {
     specs.push({
       name: `uk_${entity.collectionName}_natural`,
       unique: true,
-      paths: entity.naturalKey.flatMap((field) => documentPathsFor(model, entity, members, field, warnings)),
+      // Un miembro de la clave que pliega (`compare`) entra por su sombra, como en relacional.
+      paths: entity.naturalKey.flatMap((field) => {
+        const shadow = members.find((m) => m.kind === 'scalar' && m.name === field)?.folded;
+        return shadow ? [snakeCase(shadow.name)] : documentPathsFor(model, entity, members, field, warnings);
+      }),
       source: 'naturalKey'
     });
   }
   for (const field of uniqueFields(entity)) {
+    // Con `compare` distinto de exact el índice va sobre la SOMBRA plegada (DSL 2.14), igual
+    // que la constraint de la rama relacional: solo ella sabe que `ACME` y `acme` son iguales.
+    const shadow = members.find((m) => m.kind === 'scalar' && m.name === field.name)?.folded;
     specs.push({
       name: `uk_${entity.collectionName}_${snakeCase(field.name)}`,
       unique: true,
-      paths: documentPathsFor(model, entity, members, field.name, warnings),
+      paths: shadow ? [snakeCase(shadow.name)] : documentPathsFor(model, entity, members, field.name, warnings),
       source: 'unique'
     });
   }
