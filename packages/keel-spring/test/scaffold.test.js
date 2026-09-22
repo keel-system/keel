@@ -1292,9 +1292,110 @@ test('deploy: con Keycloak el realm se importa al arrancar, sin ejecutar nada', 
   assert.equal(byId.billing.secret, 'billing-secret');
   // Audiencia y permisos en client scopes separados: si viajaran juntos, el cliente
   // «sin scope» perdería también la audiencia y dejaría de probar nada del scope.
-  assert.deepEqual(byId['test-m2m-no-scope'].defaultClientScopes, ['aud-catalog-api']);
-  assert.deepEqual(byId['test-m2m-bad-aud'].defaultClientScopes, ['aud-wrong', 'catalog:write']);
-  assert.deepEqual(byId['test-m2m-none'].defaultClientScopes, []);
+  // Los integrados (`basic`, `roles`, `profile`) van en todos: no son audiencia ni permiso.
+  const builtins = ['basic', 'roles', 'profile'];
+  assert.deepEqual(byId['test-m2m-no-scope'].defaultClientScopes, [...builtins, 'aud-catalog-api']);
+  assert.deepEqual(byId['test-m2m-bad-aud'].defaultClientScopes, [...builtins, 'aud-wrong', 'catalog:write']);
+  assert.deepEqual(byId['test-m2m-none'].defaultClientScopes, builtins);
+});
+
+// Con scopes propios, el import de Keycloak NO siembra los client scopes integrados, y son
+// ellos los que ponen en el token los claims que lee el `JwtAuthConverter`. Sin este cruce, la
+// prueba manual de `deploy/` veía 403 con un token válido y la suite de integración —cuyo realm
+// crea kcadm, que sí los siembra— seguía en verde. Se afirma sobre lo que LEE el converter
+// generado, no sobre una lista escrita aquí.
+test('deploy: el token del realm importado lleva los claims que lee el JwtAuthConverter', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  const patched = structuredClone(layers);
+  patched.security = {
+    authentication: {
+      protocol: 'oidc',
+      serviceAuth: { protocol: 'oauth2', audience: 'catalog-api', validateAudience: true }
+    },
+    roles: { admin: { description: 'Administra el catálogo.' } },
+    access: { default: { level: 'required' }, rules: { createProduct: { roles: ['admin'], scopes: ['catalog:write'] } } },
+    serviceClients: { billing: { scopes: ['catalog:write'] } }
+  };
+  const patchedManifest = structuredClone(manifest);
+  patchedManifest.layers.security = 'security.keel.yaml';
+  scaffoldService({ manifest: patchedManifest, layers: patched, workspace });
+
+  const converterPath = fs
+    .readdirSync(path.join(workspace, 'services/product-catalog-spring'), { recursive: true })
+    .find((file) => String(file).replace(/\\/g, '/').endsWith('/JwtAuthConverter.java'));
+  assert.ok(converterPath, 'el diseño usa roles: tiene que haber JwtAuthConverter');
+  const converter = read(workspace, String(converterPath));
+  const parent = /getClaimAsMap\("([^"]+)"\)/.exec(converter)?.[1];
+  const field = /parent\.get\("([^"]+)"\)/.exec(converter)?.[1];
+  const principal = /setPrincipalClaimName\("([^"]+)"\)/.exec(converter)?.[1];
+  assert.ok(parent && field && principal, 'el converter de Keycloak lee los roles de un claim anidado');
+
+  const realm = JSON.parse(read(workspace, 'deploy/keycloak/realm-export.json'));
+  const userClient = realm.clients.find((client) => client.publicClient);
+  const scopeNames = new Set(userClient.defaultClientScopes ?? realm.defaultDefaultClientScopes ?? []);
+  const mappers = [
+    ...(userClient.protocolMappers ?? []),
+    ...(realm.clientScopes ?? []).filter((scope) => scopeNames.has(scope.name)).flatMap((scope) => scope.protocolMappers ?? [])
+  ];
+  const emits = (claim) => mappers.some((mapper) => mapper.config?.['claim.name'] === claim);
+
+  assert.ok(
+    mappers.some((mapper) => mapper.protocolMapper === 'oidc-usermodel-realm-role-mapper' && mapper.config['claim.name'] === `${parent}.${field}`),
+    `ningún scope del cliente de usuario emite ${parent}.${field}: todo endpoint con rol respondería 403`
+  );
+  assert.ok(emits(principal), `el principal (${principal}) no llega al token`);
+  assert.ok(mappers.some((mapper) => mapper.protocolMapper === 'oidc-sub-mapper'), 'el token sale sin sub');
+});
+
+// Las colecciones de `/keel-docs` dejan vacías la URL del token y las credenciales (el diseño
+// no sabe de proveedores), y nadie emitía el environment que las rellena: la prueba manual
+// empezaba escribiéndolo a mano. Se cruza contra el REALM importado, no contra una lista escrita
+// aquí: cada usuario y cada secreto del environment tiene que abrir sesión de verdad.
+test('deploy: el environment de Postman trae las credenciales del realm importado', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers, errors } = loadService(path.join(path.dirname(fixtureDir), 'asset-vault'));
+  assert.deepEqual(errors, []);
+  const { outDir } = scaffoldService({ manifest, layers, workspace });
+  const readOut = (relative) => fs.readFileSync(path.join(workspace, outDir, relative), 'utf8');
+
+  const envPath = `deploy/postman/${manifest.service.name}-local.postman_environment.json`;
+  const environment = JSON.parse(readOut(envPath));
+  const vars = Object.fromEntries(environment.values.map((entry) => [entry.key, entry]));
+  const realm = JSON.parse(readOut('deploy/keycloak/realm-export.json'));
+
+  assert.equal(vars.baseUrl.value, 'http://localhost:8080');
+  assert.equal(vars.tokenUrl.value, `http://localhost:8180/realms/${realm.realm}/protocol/openid-connect/token`);
+  assert.ok(vars.webOrigin, 'asset-vault declara CORS');
+  const userClient = realm.clients.find((client) => client.publicClient);
+  assert.equal(vars.clientId.value, userClient.clientId);
+
+  for (const user of realm.users) {
+    assert.equal(vars[`username_${user.username}`]?.value, user.username, `falta el usuario ${user.username}`);
+    assert.equal(vars[`password_${user.username}`]?.value, user.credentials[0].value);
+    assert.equal(vars[`password_${user.username}`].type, 'secret');
+  }
+  const byId = Object.fromEntries(realm.clients.map((client) => [client.clientId, client]));
+  for (const client of Object.keys(layers.security.serviceClients ?? {})) {
+    assert.equal(vars[`clientId_${client}`]?.value, client);
+    assert.equal(vars[`clientSecret_${client}`]?.value, byId[client].secret);
+  }
+  // El rechazo por audiencia lo nombra la colección con un nombre FIJO de la guía, y tiene que
+  // apuntar a un cliente cuya audiencia sea de verdad la equivocada.
+  const other = byId[vars['clientId_other-audience']?.value];
+  assert.ok(other?.defaultClientScopes.includes('aud-wrong'), 'other-audience no apunta al cliente de audiencia ajena');
+  assert.equal(vars['clientSecret_other-audience'].value, other.secret);
+
+  // Y lo anuncian quienes lo tienen que anunciar.
+  assert.ok(readOut('deploy/up.sh').includes(envPath));
+  assert.ok(readOut('README.md').includes(envPath));
+});
+
+test('deploy: sin seguridad, el environment de Postman solo lleva baseUrl', () => {
+  const workspace = makeWorkspace();
+  scaffoldService({ ...loadFixture(), workspace });
+  const environment = JSON.parse(read(workspace, 'deploy/postman/product-catalog-local.postman_environment.json'));
+  assert.deepEqual(environment.values.map((entry) => entry.key), ['baseUrl']);
 });
 
 test('deploy: sin capa security no hay realm que importar', () => {

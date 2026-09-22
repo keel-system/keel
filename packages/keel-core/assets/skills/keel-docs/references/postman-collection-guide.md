@@ -7,7 +7,12 @@ del diseño: repórtalo, no lo inventes.
 
 Ambos archivos usan **Postman Collection v2.1.0** y comparten tokens vía globals de
 Postman (`pm.globals.set` en la auth, `{{token_<rol>}}` en la de negocio). No generes
-archivos de environment: las globals bastan. Verifica que cada JSON emitido es válido.
+archivos de environment: los valores de un environment (URL del token, clientes,
+secretos) dependen del proveedor de identidad que elige el **generador**, y es él quien
+lo emite junto a su infraestructura de prueba (keel-spring lo deja en
+`deploy/postman/<servicio>-local.postman_environment.json`). Por eso los nombres de
+variable de la tabla de abajo son contrato: el generador los rellena tal cual. Verifica
+que cada JSON emitido es válido.
 
 ## Convenciones compartidas
 
@@ -57,6 +62,10 @@ stack-específico va en variables de colección** que quien importa rellena:
 | `tokenUrl` | Endpoint de token OAuth2/OIDC | Keycloak: `http://localhost:8180/realms/<realm>/protocol/openid-connect/token` |
 | `clientId` / `clientSecret` | Credenciales del client | según el realm/pool de prueba |
 | `username_<rol>` / `password_<rol>` | Usuario de prueba por rol (solo password grant) | según los usuarios sembrados |
+| `clientId_<cliente>` / `clientSecret_<cliente>` / `scope_<cliente>` | Cliente máquina de `serviceClients` (client_credentials), en kebab-case | según el realm/pool de prueba |
+| `clientId_other-audience` / `clientSecret_other-audience` | Cliente con **audiencia ajena**, para el caso de rechazo cuando `serviceAuth.validateAudience` | el cliente de prueba con audiencia equivocada |
+| `apiKey` / `apiKey_<cliente>` | Clave de API (`protocol: api-key`) del servicio o de cada cliente máquina | la clave local del generador |
+| `webOrigin` | Origen de un front permitido por CORS | primer origen local |
 
 Una request por rol usado por los flujos. Plantilla (password grant):
 

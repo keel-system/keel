@@ -4,7 +4,7 @@
 import { JAVA_VERSION, packageVersion } from '../lib/assets.js';
 import { selectedInfra } from '../lib/stack-catalog.js';
 import { needsDevtools } from './devtools.js';
-import { publishedUrls } from './deploy.js';
+import { postmanEnvironmentPath, publishedUrls } from './deploy.js';
 import { realmSpec } from './auth-provisioning.js';
 import { generate as generateConfig } from './config.js';
 
@@ -259,6 +259,11 @@ function manualTestingSection(model) {
     '',
     'Los puertos publicados salen de `deploy/.env`: si ya tienes algo ocupando el 8080 o el 5432,',
     'cámbialo ahí y vuelve a ejecutar `up.sh`.',
+    '',
+    `Para Postman, importa \`${postmanEnvironmentPath(model)}\` junto con las colecciones de \`docs/postman/\`,`,
+    'selecciona el environment y ejecuta primero la colección de auth: guarda los tokens que usa la de negocio.',
+    'El environment trae la URL del token, los clientes y las credenciales de prueba; si cambias `APP_PORT` o el',
+    'puerto del proveedor de identidad en `.env`, cambia también `baseUrl`/`tokenUrl` en él.',
     ''
   ];
 

@@ -15,6 +15,7 @@ import { scaffoldService } from '../src/scaffold/index.js';
 import { READ_BATCH_LIMIT } from '../src/lib/broker-probes.js';
 import { cacheFlushCmd } from '../src/scaffold/devtools.js';
 import { CACHES } from '../src/lib/stack-catalog.js';
+import { builtinScopes } from '../src/scaffold/deploy.js';
 import { fixedFrameworkErrors } from 'keel-core';
 import { emptyReadJava, collapseToSingleLineJava } from '../src/lib/broker-probes.js';
 import { providerFailures } from '../src/lib/outbound-failures.js';
@@ -1356,8 +1357,13 @@ test('identidad: el script de kcadm y el realm importado declaran exactamente lo
 
   // Client scopes: los de permiso más los de audiencia (aud-<audiencia>, y
   // aud-wrong solo si el diseño valida audiencia).
+  // Los integrados de Keycloak (basic, roles, profile) el script no los crea: kcadm crea el
+  // realm vacío y Keycloak los siembra solo. El import con clientScopes propios NO los siembra,
+  // así que el export tiene que declararlos — y son los que llevan los roles al token.
+  const builtins = builtinScopes().map((scope) => scope.name);
   const scriptScopes = collect(/create client-scopes -r \$REALM -s name=(\S+?) /g)
     .map((name) => name.replace('aud-$SVC', `aud-${script.match(/^SVC=(\S+)/m)[1]}`))
+    .concat(builtins)
     .sort();
   assert.deepEqual(scriptScopes, realm.clientScopes.map((scope) => scope.name).sort());
 
@@ -1374,7 +1380,7 @@ test('identidad: el script de kcadm y el realm importado declaran exactamente lo
   for (const client of realm.clients.filter((c) => c.secret)) {
     assert.deepEqual(
       (client.defaultClientScopes ?? []).slice().sort(),
-      (assignedByClient[client.clientId] ?? []).sort(),
+      [...builtins, ...(assignedByClient[client.clientId] ?? [])].sort(),
       `client scopes desalineados para ${client.clientId}`
     );
   }

@@ -42,7 +42,9 @@ import {
 import { METRICS_TRANSPORT } from '../lib/telemetry-probes.js';
 import { dashboardUid } from './observability-assets.js';
 import { usesTelemetry } from './telemetry.js';
-import { cognitoMockConfig, realmSpec } from './auth-provisioning.js';
+import { cognitoMockConfig, realmSpec, tokenUrl } from './auth-provisioning.js';
+import { kebabCase } from '../lib/naming.js';
+import { AUTH_PROVIDERS } from './security.js';
 import { RUNTIME_RESOLUTION, composeResolution, HOSTPATH_HELPER } from './devtools.js';
 import { LOCAL_API_KEY, LOCAL_CORS_ORIGINS, localClientApiKey } from './config.js';
 
@@ -107,6 +109,7 @@ export function generate(model) {
   files.push({ path: 'deploy/.env', content: envFile(model, env) });
   files.push({ path: 'deploy/up.sh', content: upScript(model), executable: true });
   files.push({ path: 'deploy/down.sh', content: downScript(), executable: true });
+  files.push({ path: postmanEnvironmentPath(model), content: postmanEnvironment(model) });
 
   // El emulador de Cognito lee su config del mismo archivo que en infra/, pero
   // relativo a deploy/: son dos composes distintos y cada uno monta el suyo.
@@ -496,6 +499,21 @@ function appEnvironment(model) {
   if (layersPresent.storage && stack.storage === 'minio') {
     environment.STORAGE_ENDPOINT = 'http://minio:9000';
   }
+  // La base de las URLs públicas: `develop` la declara sin default a propósito (una base vacía
+  // compone URLs rotas en vez de fallar), así que sin ella la app NO ARRANCA en este compose. No
+  // es el `STORAGE_ENDPOINT` de arriba: `minio:9000` es un nombre de la red de contenedores que
+  // el consumidor —Postman, un navegador— no resuelve. Va por .env porque es contrato operativo:
+  // en un despliegue real es el borde o la CDN.
+  if (layersPresent.storage && model.storage?.hasPublicBucket) {
+    environment.STORAGE_PUBLIC_BASE_URL = '${STORAGE_PUBLIC_BASE_URL}';
+    extraEnv.push({
+      name: 'STORAGE_PUBLIC_BASE_URL',
+      value: 'http://localhost:9000',
+      comment:
+        'URL con la que el CONSUMIDOR lee los objetos públicos (en producción, el borde o la CDN). ' +
+        'No es el endpoint interno del almacén; si cambias MINIO_PORT, cámbiala con él'
+    });
+  }
 
   if (layersPresent.security && security) {
     const jwt = security.protocol === 'oidc' || security.protocol === 'jwt';
@@ -587,6 +605,78 @@ function envFile(model, env) {
     lines.push(`${name}=${value}`);
   }
   return `${lines.join('\n')}\n`;
+}
+
+// ─── deploy/postman/<servicio>-local.postman_environment.json ────────────────
+
+/** Ruta del environment de Postman: la lee también el README. */
+export function postmanEnvironmentPath(model) {
+  return `deploy/postman/${model.service.name}-local.postman_environment.json`;
+}
+
+/**
+ * El environment de Postman con el que las colecciones de `docs/postman/` funcionan contra
+ * este stack sin rellenar nada a mano.
+ *
+ * Lo escribe build y no `/keel-docs` por la misma razón que el realm: las colecciones son
+ * del DISEÑO, que es agnóstico del proveedor, así que dejan vacías la URL del token, los
+ * clientes y las credenciales; quien sabe esos valores es el generador, que acaba de elegir
+ * el proveedor y de sembrar el realm. Salen de `realmSpec()` —la misma fuente que el realm
+ * importado y que `infra/test-credentials.env`—, así que un rol nuevo en el diseño aparece
+ * a la vez en los tres. Los nombres de variable son los de la guía de `/keel-docs`
+ * (`postman-collection-guide.md`); en Postman el environment tiene prioridad sobre las
+ * variables de colección, así que basta con importarlo y seleccionarlo.
+ *
+ * Los puertos son los de fábrica de `.env`: si cambias `APP_PORT` o el del proveedor de
+ * identidad, cambia también `baseUrl`/`tokenUrl` aquí.
+ */
+function postmanEnvironment(model) {
+  const { security } = model;
+  const values = [];
+  const add = (key, value, secret = false) =>
+    values.push({ key, value: String(value), type: secret ? 'secret' : 'default', enabled: true });
+
+  add('baseUrl', 'http://localhost:8080');
+  if (model.layersPresent.security && security?.cors) add('webOrigin', LOCAL_CORS_ORIGINS.split(',')[0]);
+
+  const spec = model.layersPresent.security && ['keycloak', 'cognito'].includes(model.stack.auth) ? realmSpec(model) : null;
+  if (spec) {
+    add('tokenUrl', tokenUrl(model));
+    // Cliente público con direct access grants: sin secreto, pero la colección lo manda.
+    add('clientId', spec.userClient);
+    add('clientSecret', '');
+    for (const user of spec.users) {
+      add(`username_${kebabCase(user.username)}`, user.username);
+      add(`password_${kebabCase(user.username)}`, spec.password, true);
+    }
+    for (const client of spec.serviceClients) {
+      add(`clientId_${kebabCase(client.name)}`, client.name);
+      add(`clientSecret_${kebabCase(client.name)}`, client.secret, true);
+      add(`scope_${kebabCase(client.name)}`, client.scopes.join(' '));
+    }
+    // El caso de rechazo por audiencia: la colección no puede nombrar un cliente de la matriz
+    // de prueba (es del generador, no del diseño), así que la guía fija `other-audience` y
+    // aquí se le da el que tiene la audiencia equivocada.
+    const otherAudience = spec.m2mClients.find((client) => client.audience === 'wrong');
+    if (otherAudience) {
+      add('clientId_other-audience', otherAudience.name);
+      add('clientSecret_other-audience', otherAudience.secret, true);
+      add('scope_other-audience', otherAudience.scopes.join(' '));
+    }
+  }
+  if (model.layersPresent.security && security?.protocol === 'api-key') add('apiKey', LOCAL_API_KEY, true);
+  if (model.layersPresent.security && security?.serviceAuth?.protocol === 'api-key') {
+    for (const client of security.serviceClients ?? []) {
+      add(`apiKey_${kebabCase(client.name)}`, localClientApiKey(client.name), true);
+    }
+  }
+
+  const environment = {
+    name: `${model.service.name} — local (deploy)`,
+    values,
+    _postman_variable_scope: 'environment'
+  };
+  return `${JSON.stringify(environment, null, 2)}\n`;
 }
 
 // ─── deploy/up.sh y deploy/down.sh ───────────────────────────────────────────
@@ -702,6 +792,9 @@ echo "Servicio listo."
 ${urls}
 ${credentials}
 echo ""
+echo "Postman: importa deploy/postman/${model.service.name}-local.postman_environment.json y las colecciones de docs/postman/,"
+echo "selecciona el environment y ejecuta primero la coleccion de auth."
+echo ""
 echo "Para apagarlo: bash deploy/down.sh   (con -v ademas borra los datos)"
 `;
 }
@@ -766,10 +859,20 @@ export function publishedUrls(model) {
  * El realm en el formato de import de Keycloak. Misma estructura que levanta
  * `infra/init-keycloak.sh` —las dos salen de realmSpec()—, pero declarativa: la
  * importa Keycloak al arrancar y no hace falta que nadie ejecute nada después.
+ *
+ * Con `clientScopes` declarados, el import NO crea los scopes integrados de Keycloak
+ * (`basic`, `roles`, `profile`…): solo los crea cuando el JSON no trae ninguno. Y son
+ * los que ponen en el token `realm_access.roles`, `preferred_username` y `sub`, o sea
+ * de donde el `JwtAuthConverter` generado saca los roles. El realm de `infra/` los
+ * tiene porque kcadm crea el realm vacío y Keycloak siembra los suyos; este no, y la
+ * prueba manual veía 403 con un token válido mientras la suite estaba en verde. Por
+ * eso, en cuanto hay scopes propios, se declaran también los integrados.
  */
 function realmExport(spec) {
   const clientScopes = [];
+  const builtins = spec.scopes.length > 0 ? builtinScopes() : [];
   if (spec.scopes.length > 0) {
+    clientScopes.push(...builtins);
     clientScopes.push(audienceScope(`aud-${spec.audience}`, spec.audience));
     if (spec.validateAudience) clientScopes.push(audienceScope('aud-wrong', 'audiencia-ajena'));
     for (const scope of spec.scopes) {
@@ -788,6 +891,7 @@ function realmExport(spec) {
       publicClient: true,
       directAccessGrantsEnabled: true,
       standardFlowEnabled: true,
+      ...(builtins.length > 0 ? { defaultClientScopes: builtins.map((scope) => scope.name) } : {}),
       // El mapper del claim de alcance por recurso, en paridad con el que
       // `infra/init-keycloak.sh` crea sobre este mismo cliente. Sin él, el realm importado
       // tiene los atributos de usuario pero ningún token los lleva, y la prueba manual del
@@ -800,7 +904,7 @@ function realmExport(spec) {
       publicClient: false,
       serviceAccountsEnabled: true,
       secret: client.secret,
-      defaultClientScopes: defaultScopesOf(client, spec)
+      defaultClientScopes: [...builtins.map((scope) => scope.name), ...defaultScopesOf(client, spec)]
     }))
   ];
 
@@ -832,6 +936,9 @@ function realmExport(spec) {
       ...(Object.keys(user.attributes ?? {}).length > 0 ? { attributes: user.attributes } : {})
     })),
     ...(clientScopes.length > 0 ? { clientScopes } : {}),
+    // Lo que hereda un cliente que alguien cree a mano desde la consola: los mismos
+    // integrados que tendría en el realm de `infra/`.
+    ...(builtins.length > 0 ? { defaultDefaultClientScopes: builtins.map((scope) => scope.name) } : {}),
     clients
   };
 
@@ -869,6 +976,63 @@ function userProfileComponent() {
       ]
     }
   };
+}
+
+/**
+ * Los tres scopes integrados de Keycloak de los que depende el servidor generado, con
+ * sus nombres y mappers de fábrica. Los nombres de claim no se escriben aquí: salen de
+ * `AUTH_PROVIDERS.keycloak`, que es lo que lee el `JwtAuthConverter`; si uno cambia,
+ * el otro lo sigue.
+ *
+ * `basic` y `roles` no entran en el claim `scope`; `profile` sí, como en Keycloak (da un
+ * `SCOPE_profile` que ninguna regla pide). La matriz de prueba varía los scopes del
+ * diseño y la audiencia, y estos no tocan ninguno de los dos.
+ */
+export function builtinScopes() {
+  const { rolesParent, rolesField, principalClaim } = AUTH_PROVIDERS.keycloak;
+  const claims = { 'access.token.claim': 'true', 'id.token.claim': 'true', 'introspection.token.claim': 'true' };
+  return [
+    {
+      name: 'basic',
+      protocol: 'openid-connect',
+      attributes: { 'include.in.token.scope': 'false' },
+      protocolMappers: [
+        { name: 'sub', protocol: 'openid-connect', protocolMapper: 'oidc-sub-mapper', config: { ...claims } }
+      ]
+    },
+    {
+      name: 'roles',
+      protocol: 'openid-connect',
+      attributes: { 'include.in.token.scope': 'false' },
+      protocolMappers: [
+        {
+          name: 'realm roles',
+          protocol: 'openid-connect',
+          protocolMapper: 'oidc-usermodel-realm-role-mapper',
+          config: {
+            ...claims,
+            'id.token.claim': 'false',
+            'claim.name': `${rolesParent}.${rolesField}`,
+            'jsonType.label': 'String',
+            multivalued: 'true'
+          }
+        }
+      ]
+    },
+    {
+      name: 'profile',
+      protocol: 'openid-connect',
+      attributes: { 'include.in.token.scope': 'true' },
+      protocolMappers: [
+        {
+          name: 'username',
+          protocol: 'openid-connect',
+          protocolMapper: 'oidc-usermodel-attribute-mapper',
+          config: { ...claims, 'user.attribute': 'username', 'claim.name': principalClaim, 'jsonType.label': 'String' }
+        }
+      ]
+    }
+  ];
 }
 
 /**

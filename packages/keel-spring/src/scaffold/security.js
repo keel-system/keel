@@ -15,7 +15,7 @@ const SECURITY_PKG = 'infrastructure.configurations.security';
 
 // Claims por proveedor del stack; el default (proveedor genérico) usa claims
 // planos habituales. keycloak anida los roles en realm_access.roles.
-const AUTH_PROVIDERS = {
+export const AUTH_PROVIDERS = {
   keycloak: { type: 'nested', rolesParent: 'realm_access', rolesField: 'roles', permissionsClaim: 'permissions', principalClaim: 'preferred_username' },
   cognito: { type: 'flat', rolesClaim: 'cognito:groups', permissionsClaim: 'permissions', principalClaim: 'username' }
 };
