@@ -83,9 +83,17 @@ inyecta `StoragePolicies` y pregunta.
 
 ```java
 BucketPolicy policy = policies.forBucket(StoragePolicies.PRODUCT_IMAGES);
-if (!policy.allowsContentType(contentType)) throw new UnsupportedContentTypeError(...);
+// allowsContent, NO allowsContentType: comprueba el tipo declarado Y la firma del binario.
+if (!policy.allowsContent(content, contentType)) throw new UnsupportedContentTypeError(...);
 if (!policy.allowsSize(content.length)) throw new FileTooLargeError(...);
 ```
+
+**Usa `allowsContent(content, contentType)`, no `allowsContentType(contentType)`.** El
+`Content-Type` de un multipart lo elige quien sube: con solo el tipo declarado, un
+ejecutable renombrado a `.png` y enviado como `image/png` se guarda y —en un bucket
+público— se sirve. `allowsContent` mira además los primeros bytes (`ContentSignature`, que
+genera build) para los formatos que tienen firma. No hace falta que hagas nada más: la
+tabla y la promesa acotada —un MIME sin firma conocida se acepta— están en su javadoc.
 
 Que la aplicación pueda hacer esto sin `@Value` es justo el motivo de que el puerto
 exista: `maxSizeMb` y `allowedContentTypes` viven en `storage.keel.yaml`, y copiarlos

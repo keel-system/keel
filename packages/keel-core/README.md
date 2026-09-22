@@ -83,7 +83,7 @@ if (!result.ok) {
 
 | Paquete | DSL Keel |
 |---------|----------|
-| keel-core 0.3.x | `keel: "2.14"` |
+| keel-core 0.3.x | `keel: "2.15"` |
 
 Se soporta **una sola versión** del DSL. Los schemas no gatean primitivos por versión, así que aceptar las anteriores haría que el campo `keel` de un manifiesto declarase una intención que nada comprueba. El razonamiento completo está en `docs/dsl-reference.md § Historial de versiones` del workspace sembrado.
 

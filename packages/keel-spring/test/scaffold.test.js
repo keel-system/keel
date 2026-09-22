@@ -2751,7 +2751,12 @@ test('persistencia: relación interna con @JoinColumn (FK en la hija, sin join t
 
   const orderJpa = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/persistence/entities/OrderJpa.java');
   assert.ok(orderJpa.includes('@OneToMany(cascade = CascadeType.ALL, orphanRemoval = true)'));
-  assert.ok(orderJpa.includes('@JoinColumn(name = "order_id")')); // FK en la tabla hija
+  // FK en la tabla hija, con nombre EXPLÍCITO: sin él Hibernate emite FK<hash>, que cambia al
+  // renombrar una columna y no puede mapearse en CONSTRAINT_TO_ERROR.
+  assert.ok(
+    orderJpa.includes('@JoinColumn(name = "order_id", foreignKey = @ForeignKey(name = "fk_order_lines_order"))'),
+    orderJpa
+  );
   assert.ok(orderJpa.includes('import jakarta.persistence.JoinColumn;'));
   assert.ok(orderJpa.includes('private List<OrderLineJpa> lines = new ArrayList<>();'));
 
@@ -3434,7 +3439,7 @@ test('colecciones del dominio (DSL 2.1 list): @ElementCollection, @Embeddable y 
 
   // Jpa: @ElementCollection + @CollectionTable por campo; enum con @Enumerated; VO como XxxJpa.
   const productJpa = read(workspace, `${base}/infrastructure/persistence/entities/ProductJpa.java`);
-  assert.ok(productJpa.includes('@CollectionTable(name = "product_tags", joinColumns = @JoinColumn(name = "product_id"))'));
+  assert.ok(productJpa.includes('@CollectionTable(name = "product_tags", joinColumns = @JoinColumn(name = "product_id", foreignKey = @ForeignKey(name = "fk_product_tags_product")))'));
   assert.ok(productJpa.includes('@CollectionTable(name = "product_channels"'));
   assert.ok(productJpa.includes('@Enumerated(EnumType.STRING)'));
   assert.ok(productJpa.includes('private List<DiscountJpa> discounts = new ArrayList<>();'));

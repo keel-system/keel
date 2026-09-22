@@ -97,7 +97,7 @@ export function persistedMembers(model, entity) {
  */
 export function foldedShadow(field) {
   if (!field?.fold) return null;
-  const name = `${field.name}Normalized`;
+  const name = field.fold.shadow;
   return {
     name,
     source: field.name,
@@ -167,6 +167,21 @@ export function indexName(entity, index) {
   return `${index.unique ? 'uk' : 'idx'}_${entity.tableName ?? entity.collectionName}_${suffix}`;
 }
 
+/**
+ * Nombre de una FOREIGN KEY, y es un contrato por la misma razón que `indexName`: el
+ * ApiExceptionHandler traduce una violación de integridad buscando el nombre de la
+ * constraint dentro del mensaje del motor.
+ *
+ * Sin él, Hibernate emite `FK<hash>` —un hash de tabla y columnas—, y eso tiene dos
+ * precios: ninguna entrada del mapa puede casar con él (la violación cae en el 409
+ * genérico, perdiendo el error que el diseño declara) y el nombre CAMBIA al renombrar una
+ * columna, así que dos exportaciones del baseline difieren en constraints que nadie tocó
+ * y el diff deja de poder revisarse.
+ */
+export function foreignKeyName(table, reference) {
+  return `fk_${table}_${snakeCase(String(reference))}`;
+}
+
 /** Índices únicos condicionados: los que ningún motor expresa con una constraint de columnas. */
 export function partialUniqueIndexes(entity) {
   return (entity.indexes ?? []).filter((index) => index.unique && index.when);
@@ -203,6 +218,45 @@ export function storedWhenValue(model, entity, when) {
   // existe en el enum, y eso lo caza `crossrefs` como error de validación. Inventar aquí una
   // constante taparía esa incoherencia bajo un índice igual de inútil.
   return value?.constant ?? when.equals;
+}
+
+/**
+ * Las FK entre AGREGADOS, que tampoco están en el DDL exportado y por la misma razón que los
+ * índices condicionados: Hibernate no las conoce.
+ *
+ * Una referencia a otra raíz se mapea como **columna UUID plana, sin asociación**
+ * (`persistence-members.js` § externalRef) porque una asociación navegable entre raíces rompe
+ * la frontera del agregado. Y sin asociación no hay `@JoinColumn` donde poner `foreignKey`,
+ * así que la integridad referencial entre agregados solo puede existir en el baseline.
+ *
+ * Hasta la corrida `catalog` eso era prosa: `conventions/mapping.md` le pedía al agente que
+ * escribiera los `ALTER TABLE` a mano tras exportar. Tres precios. No lo comprobaba nada —no
+ * hay test ni gate, solo un lector—; en el perfil `local` la FK no existe, así que **ningún
+ * escenario la ejerce** y su ausencia en el baseline no la nota nadie; y sin nombre estable
+ * `CONSTRAINT_TO_ERROR` no podía mapear su violación, de modo que el 409 que el diseño declara
+ * para «la marca tiene productos» se degradaba a un 409 genérico. Lo que build sabe, lo emite.
+ */
+export function crossAggregateForeignKeys(model) {
+  const byName = new Map(model.entities.map((entity) => [entity.name, entity]));
+  const fks = [];
+  for (const entity of model.entities.filter((candidate) => candidate.persisted)) {
+    for (const member of persistedMembers(model, entity).filter((m) => m.kind === 'externalRef')) {
+      const target = byName.get(member.relation.entity);
+      // Sin entidad persistida al otro lado no hay tabla que referenciar: eso ya lo avisa
+      // `crossrefs` (CHK-PERSIST-ROOT-UNMAPPED) y aquí solo se omite.
+      if (!target?.persisted) continue;
+      const table = entity.tableName;
+      fks.push({
+        name: foreignKeyName(table, member.relation.name),
+        table,
+        column: `${snakeCase(member.relation.name)}_id`,
+        refEntity: target.name,
+        refTable: target.tableName,
+        refColumn: snakeCase(target.idField?.name ?? 'id')
+      });
+    }
+  }
+  return fks.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 // Nombre de constraint → entidad y campo que la originan. Lo consume el

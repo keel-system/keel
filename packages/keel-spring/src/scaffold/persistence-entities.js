@@ -17,7 +17,8 @@ import {
   uniqueConstraints,
   usesAuditableEntity,
   indexName,
-  partialUniqueIndexes
+  partialUniqueIndexes,
+  foreignKeyName
 } from './persistence-members.js';
 
 export const JPA_PKG = 'infrastructure.persistence.entities';
@@ -25,7 +26,7 @@ export const JPA_PKG = 'infrastructure.persistence.entities';
 // La taxonomía de miembros y las utilidades de clave/índice viven en
 // persistence-members.js, compartidas con la rama documental. Se reexportan aquí
 // porque este módulo era su origen y sigue siendo por donde entran sus consumidores.
-export { orderingFieldOf, backReferenceTo, uniqueFields, uniqueConstraints, usesAuditableEntity, indexName, partialUniqueIndexes };
+export { orderingFieldOf, backReferenceTo, uniqueFields, uniqueConstraints, usesAuditableEntity, indexName, partialUniqueIndexes, foreignKeyName };
 export const jpaMembers = persistedMembers;
 
 export function generate(model) {
@@ -225,7 +226,13 @@ function renderJpaEntity(model, entity) {
       imports.add('java.util.ArrayList');
       const table = `${snakeCase(entity.name)}_${snakeCase(member.name)}`;
       const joinColumn = `${snakeCase(entity.name)}_id`;
-      const collTableAttrs = [`name = "${table}"`, `joinColumns = @JoinColumn(name = "${joinColumn}")`];
+      imports.add('jakarta.persistence.ForeignKey');
+      // El nombre de la FK, explícito: ver foreignKeyName (persistence-members.js).
+      const collFk = foreignKeyName(table, entity.name);
+      const collTableAttrs = [
+        `name = "${table}"`,
+        `joinColumns = @JoinColumn(name = "${joinColumn}", foreignKey = @ForeignKey(name = "${collFk}"))`
+      ];
       // El índice que el diseño declara sobre esta lista. La columna del ELEMENTO va
       // primero: el filtro es una igualdad sobre el valor («¿a esta dirección le llegó
       // algo?»), y la FK detrás para que el salto a la raíz no vuelva a la tabla.
@@ -285,7 +292,11 @@ function renderJpaEntity(model, entity) {
         } else {
           imports.add('jakarta.persistence.JoinColumn');
           // FK en la tabla hija (unidireccional CON @JoinColumn: sin join table).
-          annotation = `@OneToMany(cascade = CascadeType.ALL, orphanRemoval = true)\n    @JoinColumn(name = "${snakeCase(entity.name)}_id")`;
+          imports.add('jakarta.persistence.ForeignKey');
+          annotation =
+            `@OneToMany(cascade = CascadeType.ALL, orphanRemoval = true)\n` +
+            `    @JoinColumn(name = "${snakeCase(entity.name)}_id", ` +
+            `foreignKey = @ForeignKey(name = "${foreignKeyName(tableOf(model, member.relation.entity), entity.name)}"))`;
         }
       }
       // Orden declarado por el diseño: lo aplica la propia consulta, no el mapeo.
@@ -315,7 +326,11 @@ function renderJpaEntity(model, entity) {
       // FK en esta tabla (lado dueño): columna <relación>_id.
       imports.add('jakarta.persistence.JoinColumn');
       const joinNullable = member.relation.required ? ', nullable = false' : '';
-      const joinColumn = `\n    @JoinColumn(name = "${quoteIdentifier(`${snakeCase(member.relation.name)}_id`)}"${joinNullable})`;
+      imports.add('jakarta.persistence.ForeignKey');
+      const ownFk = foreignKeyName(entity.tableName ?? snakeCase(entity.name), member.relation.name);
+      const joinColumn =
+        `\n    @JoinColumn(name = "${quoteIdentifier(`${snakeCase(member.relation.name)}_id`)}"${joinNullable}` +
+        `, foreignKey = @ForeignKey(name = "${ownFk}"))`;
       let annotation;
       if (member.relation.cardinality === 'many-to-one') {
         imports.add('jakarta.persistence.ManyToOne');
@@ -391,6 +406,13 @@ ${accessors.join('\n\n')}
  * de si la relación cruza frontera de agregado (externalRef vs. relationOne), y
  * esa es una decisión del generador que el diseño no tiene por qué conocer.
  */
+// El nombre REAL de la tabla de una entidad, que es el pluralizado de su modelo y no el
+// snake de su nombre: la FK tiene que nombrar la tabla que existe.
+function tableOf(model, entityName) {
+  const found = (model.entities ?? []).find((candidate) => candidate.name === entityName);
+  return found?.tableName ?? snakeCase(entityName);
+}
+
 export function columnsFor(model, entity, members, logicalName, warnings) {
   const [head, ...rest] = String(logicalName).split('.');
   const member = members.find(

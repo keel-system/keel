@@ -93,18 +93,23 @@ no la garantía. La garantía es una **FK real en el esquema, sin asociación JP
 `UUID` plano en el dominio y en la entidad, y solo la BD sabe que apunta a otra tabla.
 
 No se declara con anotaciones: el atributo `foreignKey` vive en `@JoinColumn`, que exige una
-asociación, y sobre un `UUID` básico Hibernate no emite ninguna FK. Va en el **baseline de
-migraciones**, escrito a mano tras exportarlo (`infra/export-schema.sh` parte de las entidades,
-así que tampoco la incluye):
+asociación, y sobre un `UUID` básico Hibernate no emite ninguna FK. **Desde la corrida
+`catalog` no la escribes tú**: `infra/export-schema.sh` añade al DDL exportado un apéndice con
+un `ALTER TABLE` por referencia entre agregados, con nombre `fk_<tabla>_<relación>`, y el
+`CONSTRAINT_TO_ERROR` del `ApiExceptionHandler` ya trae su entrada cuando el diseño declara el
+error (`BRAND_HAS_PRODUCTS` y compañía):
 
 ```sql
-ALTER TABLE product ADD CONSTRAINT fk_product_brand
-    FOREIGN KEY (brand_id) REFERENCES brand (id);
+-- lo emite el apéndice de export-schema.sh, no se teclea
+ALTER TABLE products ADD CONSTRAINT fk_products_brand
+  FOREIGN KEY (brand_id) REFERENCES brands (id);
 ```
 
-El borrado concurrente falla entonces en la BD, y su violación se traduce por
-`CONSTRAINT_TO_ERROR` (`ApiExceptionHandler`) al error declarado: el cliente ve el mismo 409
-que en el camino no concurrente, con el mismo `code` — registra ahí el nombre de la constraint.
+Lo tuyo sigue siendo **revisar** el baseline antes de copiarlo, y no quitar ese apéndice. El
+borrado concurrente falla en la BD y el cliente ve el mismo 409 que en el camino no concurrente,
+con el mismo `code`. El sentido **inverso** —un alta contra un padre recién borrado— llega a la
+misma constraint y su error honesto sería otro (`*_NOT_FOUND`): lo impide el bloqueo compartido
+del handler, y por eso el mapa traduce el desenlace de negocio y no el de la carrera inversa.
 
 Consecuencia a asumir: en `local` (esquema por `ddl-auto`, sin Flyway hasta el cierre) la FK
 no existe, así que un escenario `FL-*` que ejercite la carrera no la verá cerrada hasta que se
@@ -318,12 +323,16 @@ es la IGUALDAD, que es la garantía que el diseño declaró al pedir unicidad.
 
 ### Ordenar por un campo con columna normalizada
 
-Cuando el diseño dice que un texto se compara o se ordena **ignorando mayúsculas y
-acentos**, la columna normalizada del campo (`nameNormalized`) y el repositorio que la
-consulta **los escribes tú** — es el fallback portable de
-`skills/keel-spring-database/references/jpa-mapping.md` § Búsqueda que ignora mayúsculas y
-acentos; build no la deriva porque el DSL no declara esa normalización como tal. El `Sort`
-del listado tiene que usar **esa misma columna**, no la cruda:
+Cuando el diseño declara `compare: ignore-case` o `ignore-case-accents` en un campo de
+texto (DSL 2.14), la columna sombra (`nameNormalized`) **la genera build**: la emite en la
+entidad, la estampa en el adaptador con `TextFold`, pone la unicidad sobre ella y —desde la
+corrida `catalog`— también **el orden por defecto del listado** (`<OPERACION>_ORDER`).
+No la reintroduzcas ni cambies el `Sort`: ya apunta a la sombra.
+
+Lo que sigue siendo tuyo es la **consulta del filtro** contra esa columna (el fallback
+portable de `skills/keel-spring-database/references/jpa-mapping.md` § Búsqueda que ignora
+mayúsculas y acentos). Y la regla que la gobierna es que el filtro y el orden del mismo
+listado salen de la MISMA columna:
 
 ```java
 // mal: ordena por bytes, y 'Ácme' cae después de 'Zeta'
@@ -337,9 +346,10 @@ ella". Tratarlas como independientes hace que el filtro y el orden del mismo
 listado discrepen, y el escenario falla en un elemento del medio de la página —
 el fallo más caro de diagnosticar de todos.
 
-**Al introducir la columna normalizada, actualiza la constante `<OPERACION>_ORDER` que
-build generó en el controller**: apunta al campo crudo, que es el único que el diseño
-nombra. Es el mismo cambio, y olvidarlo deja el orden por defecto discrepando del filtro.
+Si un campo se compara plegado y el DISEÑO no lo declara con `compare` —lo dice solo en
+prosa—, no hay sombra que usar y tampoco la inventes en el código: es `designGap`, porque
+la unicidad, el filtro y el orden quedarían decididos en tres sitios distintos. El detector
+`CHK-SCEN-CONVENTION-UNBACKED` de `keel validate` lo caza aguas arriba.
 
 **Alcance de la normalización**: la columna normalizada se genera para campos
 escalares. Una colección (`list: true`, que se persiste como `@ElementCollection`)

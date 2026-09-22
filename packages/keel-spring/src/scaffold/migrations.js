@@ -15,9 +15,10 @@
 // Existen para que ni el agente ni el operador tengan que editar YAML a mano.
 
 import { uniqueConstraints, columnsFor, partialUniqueIndexes, indexName } from './persistence-entities.js';
-import { storedWhenValue } from './persistence-members.js';
+import { storedWhenValue, crossAggregateForeignKeys } from './persistence-members.js';
 import { persistedMembers } from './persistence-members.js';
 import { quoteIdentifierFor } from '../lib/sql-reserved.js';
+import { snakeCase } from '../lib/naming.js';
 import { sqlContract } from './conditional-uniqueness.js';
 
 const MIGRATIONS_DIR = 'src/main/resources/db/migration';
@@ -483,12 +484,33 @@ kill "$pid" 2>/dev/null
 wait "$pid" 2>/dev/null
 
 echo "Esquema exportado en $TARGET."
-${partialIndexAppend(model)}${constraintCheck(model)}
+${partialIndexAppend(model)}${crossAggregateFkAppend(model)}${constraintCheck(model)}
 echo "Revísalo (constraints, índices, tipos del dialecto) y cópialo como:"
 echo "  src/main/resources/db/migration/${BASELINE_MIGRATION}"
 echo "Después, doble check estático: diff contra este archivo y contraste con las entidades y el diseño."
 echo "La prueba en vivo (PROFILE=local,migrations sobre una BD sin esquema) la hace el diseñador:"
 echo "  borra el volumen de la BD, que es la misma sobre la que corren los escenarios."
+`;
+}
+
+function crossAggregateFkAppend(model) {
+  const fks = crossAggregateForeignKeys(model);
+  if (fks.length === 0) return '';
+  const statements = fks
+    .map(
+      (fk) =>
+        `ALTER TABLE ${fk.table} ADD CONSTRAINT ${fk.name}\n  FOREIGN KEY (${fk.column}) REFERENCES ${fk.refTable} (${fk.refColumn});`
+    )
+    .join('\n');
+  return `
+cat >> "$TARGET" <<'KEEL_CROSS_AGGREGATE_FK'
+
+-- Referencias entre AGREGADOS. No salen del exportador: este servicio las mapea como
+-- columna plana (una asociación navegable entre raíces rompe la frontera del agregado),
+-- así que Hibernate no las ve. El nombre es el que ApiExceptionHandler traduce.
+${statements}
+KEEL_CROSS_AGGREGATE_FK
+echo "Añadidas al DDL ${fks.length} FK entre agregados (el exportador no las infiere)."
 `;
 }
 

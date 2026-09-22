@@ -6395,3 +6395,92 @@ test('CHK-PERSIST-CONDITIONAL-UNIQUE-CODE: el índice único condicionado pide u
   });
   assert.deepEqual(idsOf(nombrado, 'CHK-PERSIST-CONDITIONAL-UNIQUE-CODE'), []);
 });
+
+test('CHK-PERSIST-CONDITIONAL-UNIQUE-CODE: el code de la familia tiene que nombrar las DOS mitades', () => {
+  const domain = {
+    entities: {
+      ProductImage: {
+        fields: {
+          id: { type: 'uuid', id: true, generated: true },
+          productId: { type: 'uuid', required: true },
+          main: { type: 'boolean' }
+        }
+      }
+    }
+  };
+  const persistence = {
+    entities: { ProductImage: { indexes: [{ fields: ['productId'], unique: true, when: { field: 'main', equals: true } }] } }
+  };
+  const ops = (errors) => ({ operations: { addImage: { input: 'void', output: { entity: 'ProductImage' }, errors } } });
+
+  // El caso de la corrida `catalog`: MAIN_IMAGE_REQUIRED lleva el token pero significa lo
+  // CONTRARIO —no puedes dejar sin principal a un producto que tiene imágenes—, así que no
+  // cierra el aviso; si lo cerrara, el generador mandaría ese error al violarse el índice.
+  const contrario = checkCrossRefs({
+    layers: { domain, 'use-cases': ops([{ code: 'MAIN_IMAGE_REQUIRED', when: 'x', http: 409 }]), persistence }
+  });
+  assert.equal(idsOf(contrario, 'CHK-PERSIST-CONDITIONAL-UNIQUE-CODE').length, 1);
+
+  const nombrado = checkCrossRefs({
+    layers: { domain, 'use-cases': ops([{ code: 'MAIN_IMAGE_ALREADY_SET', when: 'x', http: 409 }]), persistence }
+  });
+  assert.deepEqual(idsOf(nombrado, 'CHK-PERSIST-CONDITIONAL-UNIQUE-CODE'), []);
+});
+
+test('CHK-PERSIST-CHILD-UNIQUE-CODE: la unicidad acotada a la colección de la raíz pide su code', () => {
+  const domain = {
+    entities: {
+      Product: { fields: { id: { type: 'uuid', id: true, generated: true } } },
+      ProductImage: {
+        fields: {
+          id: { type: 'uuid', id: true, generated: true },
+          position: { type: 'int', required: true }
+        },
+        relations: { product: { entity: 'Product', cardinality: 'many-to-one', required: true } }
+      }
+    },
+    aggregates: { Product: { root: 'Product', entities: ['Product', 'ProductImage'] } }
+  };
+  const index = (extra = {}) => ({ fields: ['product', 'position'], unique: true, ...extra });
+  const ops = (errors) => ({
+    operations: { addImage: { input: 'void', output: { entity: 'Product' }, errors } }
+  });
+  const run = (persistence, errors = []) =>
+    idsOf(checkCrossRefs({ layers: { domain, 'use-cases': ops(errors), persistence } }), 'CHK-PERSIST-CHILD-UNIQUE-CODE');
+
+  const avisos = run({ entities: { Product: {}, ProductImage: { indexes: [index()] } } });
+  assert.equal(avisos.length, 1);
+  assert.match(avisos[0].message, /PRODUCT_IMAGE_PRODUCT_POSITION_ALREADY_EXISTS/);
+  assert.match(avisos[0].message, /colección de Product/);
+
+  // Declararlo lo cierra: dentro del padre el choque sí puede ser un error del cliente.
+  assert.deepEqual(
+    run({ entities: { Product: {}, ProductImage: { indexes: [index()] } } }, [
+      { code: 'PRODUCT_POSITION_ALREADY_EXISTS', when: 'x', http: 409 }
+    ]),
+    []
+  );
+
+  // El condicionado NO entra aquí: tiene su propio id, con familia derivada de la condición.
+  assert.deepEqual(
+    run({
+      entities: {
+        Product: {},
+        ProductImage: { indexes: [index({ when: { field: 'position', equals: 0 } })] }
+      }
+    }),
+    []
+  );
+
+  // Un índice único que NO incluye la relación al padre es unicidad de servicio, no de colección.
+  assert.deepEqual(
+    run({ entities: { Product: {}, ProductImage: { indexes: [{ fields: ['position'], unique: true }] } } }),
+    []
+  );
+
+  // Y el mismo índice sobre la RAÍZ tampoco: ahí `*_ALREADY_EXISTS` sí es verdad.
+  assert.deepEqual(
+    run({ entities: { Product: { indexes: [{ fields: ['id'], unique: true }] }, ProductImage: {} } }),
+    []
+  );
+});

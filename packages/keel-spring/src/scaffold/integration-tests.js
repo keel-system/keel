@@ -1284,8 +1284,21 @@ ${hasIdempotency(model) ? `
         return UriComponentsBuilder.fromUriString(path).build(true).toUri();
     }
 
+    /**
+     * Los verbos que MUTAN, y por tanto los que llevan la {@code Idempotency-Key}.
+     *
+     * <p>DELETE está dentro, y su ausencia costó una corrida: el filtro de idempotencia del
+     * servicio no discrimina por verbo, así que un {@code DELETE} con
+     * {@code idempotency: client-key} está soportado por el servidor — pero el arnés le
+     * quitaba la cabecera, y con ella se quedaban sin poder escribirse los DOS escenarios que
+     * el mecanismo exige: el reintento deduplicado y el «falta la cabecera → error».
+     * Vacuamente en verde, que es peor que en rojo.
+     */
     private static boolean isMutation(HttpMethod method) {
-        return HttpMethod.POST.equals(method) || HttpMethod.PUT.equals(method) || HttpMethod.PATCH.equals(method);
+        return HttpMethod.POST.equals(method)
+                || HttpMethod.PUT.equals(method)
+                || HttpMethod.PATCH.equals(method)
+                || HttpMethod.DELETE.equals(method);
     }
 
 ${hasIdempotency(model) ? `

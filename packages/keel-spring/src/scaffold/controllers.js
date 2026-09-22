@@ -9,7 +9,7 @@
 // @RestControllerAdvice central en infrastructure/rest.
 
 import { FRAMEWORK_ERRORS, conditionalUniquenessToken } from 'keel-core';
-import { declaredErrorFor, declaredUniquenessErrorFor } from '../lib/declared-errors.js';
+import { declaredErrorFor, declaredUniquenessErrorFor, declaredReferenceError } from '../lib/declared-errors.js';
 import { javaFile, javaPath, subPackage, javadoc } from './render.js';
 import {
   messageComponents,
@@ -22,6 +22,7 @@ import {
 import { MEDIATOR_PKG } from './mediator.js';
 import { domainTypeImport } from './entities.js';
 import { uniqueConstraints } from './persistence-entities.js';
+import { crossAggregateForeignKeys } from './persistence-members.js';
 import { screamingSnake } from '../lib/naming.js';
 import { escapeJava } from '../lib/type-mapper.js';
 
@@ -503,6 +504,15 @@ function renderDataIntegrityHandler(model, imports, constantsOut) {
       return { ...constraint, conditional: true, raceOnly: !declared, declared: declared ?? declaredConcurrencyError(model) };
     }
     const raceOnly = raceOnlyConstraint(model, constraint);
+    const soleConstraint = constraints.filter((other) => other.entity === constraint.entity).length === 1;
+    // Acotada a la colección, el diseño SÍ puede nombrarla —es lo que pide
+    // CHK-PERSIST-CHILD-UNIQUE-CODE—, y si lo hace manda él: dentro del padre ese choque puede
+    // ser de verdad un error del cliente. La carrera es el default, no el veredicto.
+    const nombrada =
+      raceOnly === 'collection'
+        ? declaredUniquenessError(model, constraint.entity, constraint.fields, soleConstraint)
+        : null;
+    if (nombrada) return { ...constraint, raceOnly: null, declared: nombrada };
     return {
       ...constraint,
       raceOnly,
@@ -511,18 +521,22 @@ function renderDataIntegrityHandler(model, imports, constantsOut) {
       // override del diseño se sigue respetando, solo que sobre la otra familia.
       declared: raceOnly
         ? declaredConcurrencyError(model)
-        : declaredUniquenessError(
-            model,
-            constraint.entity,
-            constraint.fields,
-            constraints.filter((other) => other.entity === constraint.entity).length === 1
-          )
+        : declaredUniquenessError(model, constraint.entity, constraint.fields, soleConstraint)
     };
   });
-  for (const { declared } of resolved) {
+  // FK entre agregados: su violación llega por el mismo camino (una constraint con nombre
+  // dentro del mensaje del driver) y, hasta la corrida `catalog`, no la mapeaba nadie — así
+  // que el 409 que el diseño declara para «la marca tiene productos» se degradaba a genérico.
+  // Solo entra si el diseño DECLARA el error: aquí no se inventa ningún code.
+  const references = crossAggregateForeignKeys(model)
+    .map((fk) => ({ ...fk, declared: declaredReferenceError(model, fk.refEntity) }))
+    .filter((fk) => fk.declared)
+    .map((fk) => ({ constraint: fk.name, entity: fk.refEntity, fields: [fk.column], reference: fk, declared: fk.declared }));
+
+  for (const { declared } of [...resolved, ...references]) {
     if (declared) imports.add(`${errorsPkg}.${declared.exceptionClass}`);
   }
-  constantsOut.push(constraintMapConstant(resolved));
+  constantsOut.push(constraintMapConstant([...resolved, ...references]));
 
   return `
     @ExceptionHandler(DataIntegrityViolationException.class)
@@ -557,7 +571,9 @@ function renderDataIntegrityHandler(model, imports, constantsOut) {
 }
 
 /**
- * ¿Esta constraint solo puede romperla una carrera?
+ * ¿Esta constraint solo puede romperla una carrera? Y si sí, POR QUÉ — el motivo decide el
+ * mensaje y el comentario que se emiten, así que se devuelve él y no un booleano
+ * (`'computed'` | `'collection'`, o `null` si el conflicto sí es «ya existe uno así»).
  *
  * Un campo `computed` no lo manda nunca el cliente: lo calcula el servicio. Si además el
  * agregado que lo contiene lleva bloqueo optimista, violar su unicidad no es «ya existe
@@ -568,19 +584,48 @@ function renderDataIntegrityHandler(model, imports, constantsOut) {
  */
 function raceOnlyConstraint(model, constraint) {
   const entity = model.entities.find((e) => e.name === constraint.entity);
-  if (!entity) return false;
+  if (!entity) return null;
 
   // El bloqueo se mira en la RAÍZ del agregado, no en la entidad: una entidad interna
   // nunca lleva @Version propia (solo las raíces), y sin embargo está protegida por la
   // de su raíz. Preguntárselo a ella misma daría siempre que no.
   const root = model.entities.find((e) => e.name === entity.rootEntity) ?? entity;
-  if (!root.usesOptimisticLocking) return false;
+  if (!root.usesOptimisticLocking) return null;
+
+  // Unicidad ACOTADA A LA COLECCIÓN. Un índice único de una entidad interna que incluye la
+  // relación a su raíz —«dos imágenes del mismo producto no comparten posición»— no dice «ya
+  // existe un X con ese Y». La raíz es implícita en la petición (viaja en la ruta), y el otro
+  // miembro lo REPARTE el servicio entre toda la colección: al insertar elige la primera libre
+  // y al reordenar desplaza las demás. El cliente puede pedir una posición y pedirla es legal
+  // —siempre hay una imagen ocupándola—, así que lo único que rompe la constraint es el estado
+  // intermedio del reparto o una carrera. Un `*_ALREADY_EXISTS` lo mandaría a corregir una
+  // entrada correcta; aguas arriba lo avisa CHK-PERSIST-CHILD-UNIQUE-CODE.
+  if (!entity.isAggregateRoot && collectionScopedConstraint(entity, constraint)) return 'collection';
 
   // Basta con que UNO de los campos sea computed. Los demás pueden salir del cliente
   // —en una clave (plantilla, versión) la plantilla la elige él—, pero si el que colisiona
   // es el calculado, las dos filas tuvieron que calcularlo por separado. Lo que el cliente
   // mandó no distingue este caso de ningún otro: no hay nada que pueda corregir.
-  return constraint.fields.some((name) => entity.fields.find((f) => f.name === name)?.computed);
+  return constraint.fields.some((name) => entity.fields.find((f) => f.name === name)?.computed)
+    ? 'computed'
+    : null;
+}
+
+/**
+ * ¿La constraint acota la unicidad a la COLECCIÓN de una raíz, en vez de al servicio entero?
+ *
+ * Lo dice la back-reference: si entre los miembros del índice está la relación de la hija
+ * hacia su raíz, «único» significa «único DENTRO de ese padre». Se pregunta por el miembro
+ * con los dos nombres con los que el diseño puede escribirlo (`product` y `productId`), igual
+ * que hace `columnsFor`: cuál de los dos nombra al miembro Java es decisión del generador.
+ */
+function collectionScopedConstraint(entity, constraint) {
+  const toRoot = (entity.relations ?? []).filter((relation) => relation.backReference);
+  if (toRoot.length === 0) return false;
+  return (constraint.fields ?? []).some((member) => {
+    const head = String(member).split('.')[0];
+    return toRoot.some((relation) => head === relation.name || head === `${relation.name}Id`);
+  });
 }
 
 // La unicidad es el único canónico DERIVADO: su familia depende de los campos de la clave,
@@ -591,19 +636,38 @@ function declaredUniquenessError(model, entity, fields, soleConstraint) {
 
 function constraintMapConstant(constraints) {
   const entries = constraints
-    .map(({ constraint, entity, fields, declared, raceOnly, conditional, when, description }) => {
+    .map(({ constraint, entity, fields, declared, raceOnly, conditional, when, description, reference }) => {
       const label = fields.join(', ');
+      if (reference) {
+        return `            // Referencia entre AGREGADOS (${reference.table}.${reference.column} → ${reference.refTable}):
+            // la FK existe solo en el baseline de migraciones (una asociación navegable entre
+            // raíces rompería la frontera del agregado), y la cierra en el borrado del padre.
+            // El sentido inverso —alta contra un padre recién borrado— llega a esta MISMA
+            // constraint y su error honesto sería otro; lo impide aguas arriba el bloqueo
+            // compartido del handler, así que aquí se traduce el desenlace que sí es de negocio.
+            Map.entry("${constraint}", () -> new ${declared.exceptionClass}(
+                    "${escapeJava(String(declared.when ?? `No se puede borrar: hay ${reference.table} que lo referencian`).replace(/\.\s*$/, ''))}"))`;
+      }
       const condition = conditional ? `${when.field} = ${JSON.stringify(when.equals)}` : null;
       const message = conditional
         ? escapeJava((description ?? `Solo puede haber un ${entity} por ${label} con ${condition}`).replace(/\.\s*$/, '')) +
           (raceOnly ? '; otra operación lo cambió a la vez, reintenta' : '')
-        : raceOnly
-          ? `Otra operación registró ${entity}.${label} a la vez; reintenta`
-          : `Ya existe un ${entity} con ese ${label}`;
+        : raceOnly === 'collection'
+          ? `Otra operación cambió ${label} de ${entity} a la vez; reintenta con el estado actual`
+          : raceOnly
+            ? `Otra operación registró ${entity}.${label} a la vez; reintenta`
+            : `Ya existe un ${entity} con ese ${label}`;
       const why = conditional
         ? `            // Unicidad CONDICIONADA de ${entity}.${label} (${condition}): «como mucho uno en ese
             // estado», no «ya existe». ${raceOnly ? `El diseño no la nombra (keel validate: CHK-PERSIST-CONDITIONAL-UNIQUE-CODE):
             // la regla del caso de uso resuelve el caso normal, así que chocar aquí es una carrera.` : 'Es el error que el diseño declara para ella.'}`
+        : raceOnly === 'collection'
+        ? `            // Unicidad de ${entity}.${label} ACOTADA A LA COLECCIÓN de su raíz: el índice
+            // incluye la relación al padre, así que "único" es "único dentro de ese padre". El
+            // padre es implícito en la petición y el resto lo reparte el servicio entre toda la
+            // colección, así que romperlo no es "ya existe uno así" —pedir esa posición es
+            // legal— sino el estado intermedio del reparto o una carrera. El diseño no la
+            // nombra (keel validate: CHK-PERSIST-CHILD-UNIQUE-CODE).`
         : raceOnly
         ? `            // ${entity}.${label} incluye un campo calculado por el servicio, y el agregado
             // lleva bloqueo optimista: nadie PIDIÓ este valor, así que romper la constraint

@@ -183,6 +183,16 @@ misma BD, la tabla conserva la lista vieja. Toda escritura del valor nuevo cae c
 declara** — y no hay migración que lo corrija, porque en `local` no hay Flyway hasta el
 baseline del cierre. Misma salida: recrear el esquema.
 
+Y un tercer síntoma, el más desconcertante porque **la app no llega ni a arrancar**: un
+`column "<algo>" does not exist` al ejecutar los scripts de esquema (`db/partial-indexes.sql`)
+o al construir el EntityManagerFactory. No es un defecto del proyecto: es un **volumen
+reutilizado** de una generación anterior de OTRA versión del diseño, donde la columna se
+llamaba de otra forma. `update` no renombra ni elimina, así que la tabla arrastra el esquema
+viejo. Le costó una pasada de puntuación entera a la corrida `catalog` (el humo del arnés
+salió con `HARNESS: KO` y la suite no llegó a correr). Antes de buscar nada, comprueba si el
+volumen viene de otra generación: si es así, la salida es la misma de abajo —y si además
+sospechas de los datos, `bash infra/down.sh --volumes` y a empezar.
+
 La salida es recrear el esquema, sin tocar el volumen ni los contenedores:
 
 ```bash

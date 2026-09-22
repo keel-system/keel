@@ -89,7 +89,7 @@ export function buildModel({ manifest, layers, stack = null }) {
     }
     for (const vo of valueObjects) vo.usedInCollection = collectionVoNames.has(vo.name);
   }
-  const { services, errors } = collectOperations(layers, domainTypes, inlineEnumName, service, warnings, persistenceKind);
+  const { services, errors } = collectOperations(layers, domainTypes, inlineEnumName, service, warnings, persistenceKind, entities);
   // DTOs de las entidades hijas proyectadas en algún payload de salida.
   const childDtos = collectChildDtos(layers, services, domainTypes, inlineEnumName, warnings);
   // DTOs de referencia de las relaciones que el diseño marca con embed.
@@ -266,9 +266,35 @@ function buildService(manifest, stack) {
     // `conventions.nulls: omit` (DSL 2.14): un campo sin valor no viaja en respuestas ni en
     // payloads de evento. Por CLASE y no en el ObjectMapper: el global movería también el
     // cuerpo de error, que tiene forma fija (ver config.js).
-    omitNulls: manifest?.conventions?.nulls === 'omit'
+    omitNulls: manifest?.conventions?.nulls === 'omit',
+    // `parameters` del manifiesto: los parámetros de DESPLIEGUE del servicio. Se resuelven
+    // aquí y no en el emisor porque de ellos cuelgan cuatro artefactos que tienen que decir lo
+    // mismo (el fragmento de cada perfil, el record de configuración, el `.env` de deploy/ y la
+    // nota del stub), y el gradiente por perfil —literal en prueba, variable con default en
+    // develop, variable pelada en producción— es una sola decisión.
+    parameters: Object.entries(manifest?.parameters ?? {}).map(([key, spec]) => ({
+      name: key,
+      key: kebabCase(key),
+      envVar: `${screamingSnake(name)}_${screamingSnake(key)}`,
+      type: spec.type,
+      javaType: PARAM_JAVA_TYPES[spec.type] ?? 'String',
+      description: spec.description ?? '',
+      constraints: spec.constraints ?? {},
+      testValue: spec.testValue ?? spec.default ?? null,
+      default: spec.default ?? null,
+      requiredInProduction: spec.requiredInProduction !== false
+    }))
   };
 }
+
+// Un parámetro de despliegue es un escalar: lo que necesita estructura es diseño.
+const PARAM_JAVA_TYPES = {
+  string: 'String',
+  int: 'Integer',
+  long: 'Long',
+  decimal: 'BigDecimal',
+  boolean: 'Boolean'
+};
 
 // ─── Enums ───────────────────────────────────────────────────────────────────
 
@@ -363,7 +389,14 @@ function resolveField(ownerName, fieldName, field, domainTypes, inlineEnumName, 
   const compare = field.compare ?? 'exact';
   const fold =
     compare !== 'exact' && !isList && resolved.javaType === 'String'
-      ? { accents: compare === 'ignore-case-accents', maxLength: { ...resolved.constraints, ...(field.constraints ?? {}) }.maxLength ?? null }
+      ? {
+          accents: compare === 'ignore-case-accents',
+          maxLength: { ...resolved.constraints, ...(field.constraints ?? {}) }.maxLength ?? null,
+          // El nombre de la sombra vive AQUÍ y en ningún otro sitio: lo leen el emisor de la
+          // columna (`foldedShadow`) y el orden por defecto de los listados, que tienen que
+          // ordenar por la misma fuente contra la que filtran.
+          shadow: `${fieldName}Normalized`
+        }
       : null;
 
   return {
@@ -867,7 +900,7 @@ function addImplicitAggregateRelations(entities, aggregates, warnings) {
 // del ajeno es su id, no una referencia navegable —una columna UUID en relacional,
 // un campo UUID en el documento—. Se marca `embedded` para que build avise y el
 // agente lo resuelva con un join proyectado (conventions/read-composition.md).
-function resolveSort(opName, op, domainEntities, warnings, persistenceKind = 'relational') {
+function resolveSort(opName, op, domainEntities, entities, warnings, persistenceKind = 'relational') {
   const output = typeof op.output === 'object' ? op.output : null;
   const declared = output?.sort ?? [];
   if (declared.length === 0) return [];
@@ -901,11 +934,22 @@ function resolveSort(opName, op, domainEntities, warnings, persistenceKind = 're
       : persistenceKind === 'document'
         ? `${head}.${nested}`
         : `${head}${nested[0].toUpperCase()}${nested.slice(1)}`;
-    return { path, direction, embedded: false, relation: null, field: nested ?? head, property };
+
+    // `compare` (DSL 2.14): si el campo por el que se ordena tiene columna SOMBRA, se ordena
+    // por ella y no por el valor crudo. No es cosmética — ordenar por el crudo ordena por
+    // bytes, así que 'Ácme' cae detrás de 'Zeta', y el mismo listado FILTRA por la sombra: el
+    // orden y el filtro discrepan, y el escenario falla en un elemento del medio de la página,
+    // que es el fallo más caro de diagnosticar. La corrida `catalog` lo pagó en tres
+    // controllers, y la convención se lo pedía al agente en vez de emitirlo.
+    const folded = nested ? null : entities?.find((e) => e.name === entityName)?.fields?.find((f) => f.name === head)?.fold;
+    if (folded) {
+      return { path, direction, embedded: false, relation: null, field: head, property: folded.shadow, folded: true };
+    }
+    return { path, direction, embedded: false, relation: null, field: nested ?? head, property, folded: false };
   });
 }
 
-function collectOperations(layers, domainTypes, inlineEnumName, service, warnings, persistenceKind) {
+function collectOperations(layers, domainTypes, inlineEnumName, service, warnings, persistenceKind, entities = []) {
   const operations = layers['use-cases']?.operations ?? {};
   const api = layers.api ?? null;
   const domainEntities = layers.domain?.entities ?? {};
@@ -1002,7 +1046,7 @@ function collectOperations(layers, domainTypes, inlineEnumName, service, warning
           : null,
       returnsList: Boolean(typeof op.output === 'object' && op.output?.list),
       paginated: Boolean(typeof op.output === 'object' && op.output?.paginated),
-      sort: resolveSort(opName, op, domainEntities, warnings, persistenceKind),
+      sort: resolveSort(opName, op, domainEntities, entities, warnings, persistenceKind),
       preconditions: op.preconditions ?? [],
       rules: op.rules ?? [],
       errors: (op.errors ?? []).map((e) => e.code),
@@ -2905,6 +2949,15 @@ function nestedExcludeWarning(opName, entityName, path, entity, domainTypes) {
   const prefix = `Operación '${opName}': exclude '${path}' de ${entityName}`;
 
   if (entity.relations?.[head]) {
+    // El id de la RAÍZ es el único campo del DTO de una hija que no se recorta nunca: es
+    // convención escrita (`dsl/use-cases.md § output`), porque el record es el mismo cuando la
+    // hija se devuelve suelta —donde el id del padre es imprescindible— que cuando va anidada.
+    // Decirle al agente que lo quite es lo que le hizo poner un @JsonIgnore a mano en la
+    // corrida `catalog`, y con él el DTO suelto se queda sin el id de su padre.
+    const parentId = `${entityName.charAt(0).toLowerCase()}${entityName.slice(1)}Id`;
+    if (nested === parentId) {
+      return `${prefix}: el id de la raíz viaja SIEMPRE en el DTO de una hija (dsl/use-cases.md § output) — no se recorta, y anidado es redundante, no una fuga. Quita el exclude del diseño o acepta la redundancia; no toques el DTO.`;
+    }
     return `${prefix}: el DTO anidado de la relación '${head}' se genera completo — el agente debe quitarle '${nested}' (conventions/mapping.md).`;
   }
   const type = entity.fields?.[head]?.type;

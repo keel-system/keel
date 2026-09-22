@@ -563,6 +563,29 @@ test('la violación de unicidad usa el error declarado del diseño cuando lo hay
   assert.ok(handler.includes('TODO (agente)'));
 });
 
+test('storage: el formato se comprueba por la FIRMA del binario, no solo por el tipo declarado', () => {
+  // El Content-Type de un multipart lo elige quien sube: con solo el tipo declarado, un
+  // ejecutable renombrado a .png se guarda y —en un bucket público— se sirve, y ninguna
+  // prueba lo nota porque la respuesta es la de una subida correcta. Lo reportó la corrida
+  // `catalog` como hueco del diseño; es una defensa que emite build (como las de mail.js).
+  const { read } = scaffoldExtended();
+  const policy = read(`${JAVA}/domain/storage/BucketPolicy.java`);
+  const signature = read(`${JAVA}/domain/storage/ContentSignature.java`);
+
+  assert.ok(policy.includes('public boolean allowsContent(byte[] content, String declaredContentType)'), policy);
+  assert.ok(policy.includes('ContentSignature.matches(content, declaredContentType)'), policy);
+
+  // La tabla cubre los formatos con firma reconocible, y el WebP necesita sus DOS trozos.
+  for (const mime of ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'application/pdf']) {
+    assert.ok(signature.includes(`"${mime}"`), mime);
+  }
+  assert.ok(signature.includes('new Magic(8, "WEBP"'), signature);
+  // Y la promesa acotada queda escrita: lo que no tiene firma no se rechaza.
+  assert.ok(signature.includes('se acepta'), signature);
+  // Es dominio: nada de Spring ni del SDK.
+  assert.ok(!/org\.springframework|software\.amazon/.test(signature), signature);
+});
+
 test('storage: la política declarada llega a la aplicación por un puerto, no por @Value', () => {
   // maxSizeMb y allowedContentTypes viajaban solo al YAML, y la capa application
   // no puede leer @Value sin romper la frontera hexagonal: acababan como

@@ -57,7 +57,23 @@ export const FRAMEWORK_ERRORS = {
     // que su familia no sale de los campos sino de la condición (`conditionalUniquenessToken`).
     // Con la de los campos, el diseño tendría que llamar PRODUCT_ID_ALREADY_EXISTS a «ya hay
     // una imagen principal», que es falso para cualquiera que lo lea.
-    conditionalFamilyFor: (token) => new RegExp(`(^|_)${token}(_|$)`),
+    //
+    // Pero el token NO basta por sí solo, y esto costó una corrida: `(^|_)MAIN(_|$)` casaba con
+    // MAIN_IMAGE_REQUIRED —«no puedes dejar sin principal a un producto que tiene imágenes»—,
+    // que significa exactamente lo CONTRARIO de «ya hay una principal», y el generador mandaba
+    // ese error por el cable al violarse el índice. Un error de la familia tiene que nombrar
+    // las DOS mitades: la condición y el hecho de que ya hay uno. De ahí el sufijo exigido, que
+    // son los que un diseñador escribe sin pensarlo (PRIMARY_IMAGE_ALREADY_SET,
+    // ACTIVE_VERSION_ALREADY_EXISTS). El token, además, se exige en frontera de palabra: sin
+    // eso MAINTENANCE_WINDOW_CONFLICT entraría en la familia de `main`.
+    conditionalFamilyFor: (token) =>
+      new RegExp(
+        // (a) el token, en frontera de palabra;
+        `^(?=(?:[A-Z0-9]+_)*${token}(?:_|$))` +
+          // (b) y una palabra que diga que YA HAY uno. El orden entre las dos es libre, porque
+          // el diseñador escribe las dos formas (TEMPLATE_ALREADY_ACTIVE, ACTIVE_ALREADY_EXISTS).
+          `(?=(?:[A-Z0-9]+_)*(?:ALREADY|DUPLICATE|DUPLICATED|CONFLICT|TAKEN|EXISTS)(?:_|$))[A-Z0-9_]+$`
+      ),
     mechanism: 'persistence: entities.<E>.naturalKey / campos `unique`',
     when: 'Una escritura choca con una clave natural o un campo único ya existente.'
   },

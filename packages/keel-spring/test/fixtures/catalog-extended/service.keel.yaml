@@ -1,4 +1,4 @@
-keel: "2.14"
+keel: "2.15"
 service:
   name: catalog
   version: 1.0.0
@@ -7,6 +7,14 @@ service:
 # Un campo sin valor no viaja: ni en las respuestas ni en los payloads de evento.
 conventions:
   nulls: omit
+# Parametro de DESPLIEGUE: un valor unico para todo el servicio, que no es dato de negocio
+# ni entrada de ninguna operacion y del que si depende el comportamiento.
+parameters:
+  currency:
+    type: string
+    description: "Moneda en la que opera el catalogo (ISO 4217)."
+    constraints: { pattern: "^[A-Z]{3}$" }
+    testValue: EUR
 layers:
   domain: domain.keel.yaml
   use-cases: use-cases.keel.yaml

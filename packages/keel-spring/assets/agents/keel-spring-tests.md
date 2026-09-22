@@ -306,7 +306,14 @@ puntuación las ejecuta todas. La independencia no cambia: sigues sin leer `src/
 ## Reporte final
 
 Clases escritas, escenarios cubiertos y lo que quedó fuera con su motivo. Cierra siempre
-con el bloque estructurado que consume el orquestador:
+con el bloque estructurado que consume el orquestador.
+
+**Los conteos no se suman a mano**: `scenarios` por clase sale de contar los `@Test` del
+archivo, y el total tiene que coincidir con lo que `infra/score-scenarios.sh` compone desde el
+XML de JUnit (`build/test-results/`). En la corrida `catalog` el reporte dijo 203 y la matriz
+dio 200 —un descuento sin efecto en la cobertura, pero que obliga a comprobar a mano si falta
+algún `FL-*`—. Si tus números y la matriz discrepan, el que manda es el XML: es el mismo que
+decide el gate.
 
 ```yaml
 status: OK | KO | PENDIENTE   # OK solo con compileIntegrationTestJava en verde

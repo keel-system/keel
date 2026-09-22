@@ -1,4 +1,4 @@
-keel: "2.14"
+keel: "2.15"
 # La MITAD DOCUMENTAL del par `job-dispatch` / `job-dispatch-mongo`.
 #
 # Las dos fixtures son el mismo diseño con una única diferencia de fondo —el

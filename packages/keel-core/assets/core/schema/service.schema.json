@@ -10,7 +10,7 @@
     "keel": {
       "type": "string",
       "description": "Versión del DSL Keel usada por este servicio. Se soporta UNA sola: los schemas no gatean primitivos por versión, así que aceptar versiones anteriores haría que este campo declarase una intención que nada comprueba. Ver docs/dsl-reference.md § Historial de versiones.",
-      "enum": ["2.14"]
+      "enum": ["2.15"]
     },
     "service": {
       "type": "object",
@@ -46,6 +46,41 @@
           "type": "string",
           "enum": ["omit", "include"],
           "description": "Cómo viaja un campo sin valor en las respuestas y en los payloads de evento: omit no lo pone; include lo pone a null. Por defecto include. No afecta al cuerpo de error, que tiene forma fija."
+        }
+      }
+    },
+    "parameters": {
+      "type": "object",
+      "description": "Parámetros de DESPLIEGUE del servicio: un valor único para todo el servicio que no es dato de negocio ni entrada de ninguna operación, y del que sí depende el comportamiento (la moneda en la que opera el catálogo, la zona horaria con la que se corta un día). Sin declararlos aquí, un agente tiene que inventarse la clave de configuración, la variable de entorno y en qué perfiles aparece, y el contrato operativo —«esto hay que dárselo al arrancar o el servicio no arranca»— no queda escrito en ninguna parte.",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[a-z][a-zA-Z0-9]*$": {
+          "type": "object",
+          "required": ["type", "description"],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["string", "int", "long", "decimal", "boolean"],
+              "description": "Tipo del valor. Un parámetro de despliegue es un escalar: lo que necesita estructura es diseño, no configuración."
+            },
+            "description": { "type": "string", "minLength": 10 },
+            "constraints": {
+              "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/constraints",
+              "description": "Cotas del valor, comprobadas al arrancar. Un parámetro mal puesto tiene que fallar en el arranque, no en la primera petición que lo use."
+            },
+            "testValue": {
+              "description": "El valor con el que corren los perfiles de prueba (`local`, `test`). Es lo que hace ejercitables los escenarios: sin él, el documento de validación tiene que decirlo en prosa y cada agente elige el suyo."
+            },
+            "default": {
+              "description": "Valor por omisión en TODOS los perfiles, produccción incluida. Decláralo solo si arrancar sin el parámetro es correcto."
+            },
+            "requiredInProduction": {
+              "type": "boolean",
+              "default": true,
+              "description": "Si en `production` el valor tiene que venir del entorno sin default. `true` (lo normal) hace que un despliegue que lo olvide falle al arrancar, que es donde se ve; con un default silencioso el servicio opera con un valor que nadie eligió."
+            }
+          }
         }
       }
     },

@@ -3,7 +3,7 @@
 // La corrida cerró 27/27, pero el diff de una regeneración limpia contra su árbol final dio 85
 // archivos de build reescritos por el agente. Casi todos venían de tres convenciones de
 // determinación que el diseño solo podía decir en prosa —omitir nulos, rechazar decimales de
-// más, ignorar mayúsculas y acentos— y que el DSL 2.14 hace declarables. El resto eran huecos
+// más, ignorar mayúsculas y acentos— y que el DSL 2.14 hizo declarables. El resto eran huecos
 // del generador: el arnés sin forma de omitir la `Idempotency-Key`, los confirms de RabbitMQ
 // que el outbox necesita y la unicidad condicionada con un mensaje falso. Y uno de proceso: el
 // orquestador editó el diseño, que el sello del snapshot impide ahora sin depender de la prosa.
@@ -157,6 +157,54 @@ test('unicidad condicionada: el code se busca por la condición y, sin él, es u
   assert.doesNotMatch(entry.slice(0, 300), /Ya existe un Template/);
 });
 
+test('la familia de la condición exige nombrar las dos mitades: un code con el token y sentido contrario no vale', () => {
+  // El caso de la corrida `catalog`: el índice «como máximo una imagen principal» se mapeaba a
+  // MAIN_IMAGE_REQUIRED —que significa lo contrario— solo porque llevaba el token MAIN.
+  const handler = scaffold('notification-mailer', {
+    patch: (layers) => {
+      for (const op of Object.values(layers['use-cases'].operations)) {
+        op.errors = (op.errors ?? []).map((error) =>
+          error.code === 'TEMPLATE_ALREADY_ACTIVE' ? { ...error, code: 'ACTIVE_TEMPLATE_REQUIRED' } : error
+        );
+      }
+    }
+  }).find('/ApiExceptionHandler.java');
+  const entry = handler.slice(handler.indexOf('"uk_templates_application_key_locale"'), 0);
+  const scoped = handler.slice(handler.indexOf('"uk_templates_application_key_locale"'));
+  assert.doesNotMatch(scoped.slice(0, 300), /ActiveTemplateRequiredError/);
+  assert.match(scoped.slice(0, 300), /new ConcurrentModificationError\(|"CONCURRENT_MODIFICATION", 409/);
+  assert.equal(entry, '');
+});
+
+// ─── unicidad acotada a la colección ───────────────────────────────────────────
+
+test('unicidad de una hija que incluye la relación al padre: es carrera, no «ya existe»', () => {
+  const patch = (layers) => {
+    layers.persistence.entities.ProductImage = {
+      ...(layers.persistence.entities.ProductImage ?? { persisted: true }),
+      indexes: [
+        { fields: ['product', 'position'], unique: true, description: 'Dos imágenes del mismo producto no comparten posición.' }
+      ]
+    };
+  };
+  const handler = scaffold('catalog-extended', { patch }).find('/ApiExceptionHandler.java');
+  const entry = handler.slice(handler.indexOf('"uk_product_images_product_position"'), handler.indexOf('"uk_product_images_product_position"') + 300);
+  assert.match(entry, /"CONCURRENT_MODIFICATION", 409/);
+  assert.match(entry, /Otra operación cambió product, position de ProductImage a la vez/);
+  // Lo que NO puede salir: el code derivado de los campos, que manda a corregir una entrada correcta.
+  assert.doesNotMatch(handler, /PRODUCT_IMAGE_PRODUCT_POSITION_ALREADY_EXISTS/);
+
+  // Declarado, manda el diseño.
+  const declarado = scaffold('catalog-extended', {
+    patch: (layers) => {
+      patch(layers);
+      const op = Object.values(layers['use-cases'].operations).find((o) => (o.output?.entity ?? '') === 'Product');
+      op.errors = [...(op.errors ?? []), { code: 'PRODUCT_POSITION_ALREADY_EXISTS', when: 'x', http: 409 }];
+    }
+  }).find('/ApiExceptionHandler.java');
+  assert.match(declarado, /"uk_product_images_product_position", \(\) -> new ProductPositionAlreadyExistsError\(/);
+});
+
 // ─── arnés y broker ────────────────────────────────────────────────────────────
 
 test('el arnés trae la llamada SIN Idempotency-Key cuando una operación usa client-key', () => {
@@ -187,7 +235,7 @@ function runSeal(mutate) {
 
   fs.mkdirSync(path.join(root, 'specs'), { recursive: true });
   fs.writeFileSync(path.join(root, 'specs', 'validation-scenarios.md'), '# x\n\nEl primero es `p25`.\n');
-  fs.writeFileSync(path.join(root, 'specs', 'service.keel.yaml'), 'keel: "2.14"\n');
+  fs.writeFileSync(path.join(root, 'specs', 'service.keel.yaml'), 'keel: "2.15"\n');
   writeSpecsSeal(root);
   mutate?.(root);
   const runner = path.join(root, 'seal.sh');
@@ -212,4 +260,60 @@ test('score-scenarios.sh se niega a puntuar contra un snapshot editado, y un CRL
     fs.writeFileSync(path.join(root, 'specs', 'validation-scenarios.md'), '# x\r\n\r\nEl primero es `p25`.\r\n')
   );
   assert.equal(crlf.status, 0, crlf.stdout);
+});
+
+const CIERRE = String.fromCharCode(10) + '    }';
+
+test('el arnés manda la Idempotency-Key también en DELETE', () => {
+  const harness = scaffold('catalog-extended').find('/AbstractFlowIT.java');
+  const from = harness.indexOf('private static boolean isMutation(');
+  const body = harness.slice(from, harness.indexOf(CIERRE, from));
+  // El conjunto entero, no solo el que faltaba: es lo que fija el contrato del arnés.
+  for (const verb of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+    assert.ok(body.includes(`HttpMethod.${verb}.equals(method)`), verb);
+  }
+  // Y los que NO mutan siguen fuera: una lectura con Idempotency-Key no es el contrato.
+  for (const verb of ['GET', 'HEAD', 'OPTIONS']) {
+    assert.ok(!body.includes(`HttpMethod.${verb}.equals(method)`), verb);
+  }
+});
+
+// ─── FK entre agregados ────────────────────────────────────────────────────────
+
+test('las FK entre agregados salen del apéndice de export-schema.sh, con nombre estable', () => {
+  const { find } = scaffold('catalog-extended');
+  const script = find('/infra/export-schema.sh');
+  assert.ok(script.includes('ALTER TABLE products ADD CONSTRAINT fk_products_category'), script);
+  assert.ok(script.includes('FOREIGN KEY (category_id) REFERENCES categories (id);'), script);
+  // La auto-referencia también es entre agregados: una categoría padre es otra instancia.
+  assert.ok(script.includes('ALTER TABLE categories ADD CONSTRAINT fk_categories_parent'), script);
+
+  // Sin error declarado NO se mapea: la lista de code que el generador pone por su cuenta
+  // es cerrada, y «no puedes borrar el padre» no está en ella.
+  assert.ok(!find('/ApiExceptionHandler.java').includes('fk_products_category'));
+
+  // Declarado, la violación traduce a él.
+  const declarado = scaffold('catalog-extended', {
+    patch: (layers) => {
+      layers['use-cases'].operations.deleteCategory = {
+        description: 'Borra una categoría.',
+        kind: 'command',
+        input: { fields: { id: { type: 'uuid', required: true } } },
+        output: 'void',
+        errors: [
+          { code: 'CATEGORY_HAS_PRODUCTS', when: 'La categoría tiene productos asociados.', http: 409 }
+        ]
+      };
+    }
+  }).find('/ApiExceptionHandler.java');
+  assert.ok(
+    declarado.includes('Map.entry("fk_products_category", () -> new CategoryHasProductsError('),
+    declarado
+  );
+});
+
+test('las FK de las asociaciones que sí existen llevan nombre explícito, no el hash de Hibernate', () => {
+  const child = scaffold('catalog-extended').find('/ProductImageJpa.java');
+  assert.ok(child.includes('foreignKey = @ForeignKey(name = "fk_product_images_product")'), child);
+  assert.ok(child.includes('import jakarta.persistence.ForeignKey;'), child);
 });

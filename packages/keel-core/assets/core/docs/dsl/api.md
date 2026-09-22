@@ -36,6 +36,12 @@ pagination: { style: offset, defaultSize: 20, maxSize: 100 }
   Los nombres no se declaran en el DSL porque son los mismos para todo servicio y todo generador —
   **los escenarios de validación deben escribirse contra estos**.
 
+  Y la **página vacía** también es contrato, porque `validation-scenarios.md` exige un escenario
+  para ella: `items: []`, `totalElements: 0` y **`totalPages: 0`** (no 1: cero elementos son cero
+  páginas), con `page` y `size` los que se pidieron. Vale igual para una página fuera de rango.
+  Mientras el valor no estuvo escrito aquí, el escenario se exigía y nadie sabía qué asertar: la
+  corrida `catalog` lo reportó como hueco del diseño cuando era un hueco de este documento.
+
   Ese sobre es el de `style: offset`, que es el default y el único que hoy materializa algún generador.
   `style: cursor` existe en el schema pero **ningún generador lo implementa**: quien lo declare recibirá
   paginación por offset, y el generador debe decirlo en su build en vez de ignorarlo en silencio

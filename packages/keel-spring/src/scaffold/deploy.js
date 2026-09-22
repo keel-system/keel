@@ -441,6 +441,20 @@ function appEnvironment(model) {
   const environment = { PROFILE: 'develop' };
   const extraEnv = [];
 
+  // Parámetros de DESPLIEGUE del servicio: aquí es donde se ven. El perfil `develop` los lee
+  // con default, así que deploy/ levanta igual sin tocar nada; pero el `.env` los enumera con
+  // su valor de prueba para que el diseñador sepa QUÉ hay que darle al servicio al desplegarlo
+  // de verdad — que es justo el contrato operativo que, mientras esto lo decidió un agente,
+  // no quedaba escrito en ninguna parte.
+  for (const parameter of service.parameters ?? []) {
+    environment[parameter.envVar] = `\${${parameter.envVar}}`;
+    extraEnv.push({
+      name: parameter.envVar,
+      value: String(parameter.testValue ?? parameter.default ?? ''),
+      comment: `${parameter.description}${parameter.requiredInProduction ? ' (en producción es obligatorio)' : ''}`
+    });
+  }
+
   if (layersPresent.persistence && DATABASES[stack.database]?.serviceKey) {
     const db = DATABASES[stack.database];
     // Dentro de la red de compose el host es `db`. Los motores relacionales solo

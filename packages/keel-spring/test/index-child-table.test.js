@@ -66,7 +66,7 @@ test('se materializa en la tabla de elementos, que build genera entera', () => {
 
   assert.match(
     entity,
-    /@CollectionTable\(name = "reservation_tags", joinColumns = @JoinColumn\(name = "reservation_id"\), indexes = @Index\(name = "idx_reservations_tags", columnList = "tags, reservation_id"\)\)/,
+    /@CollectionTable\(name = "reservation_tags", joinColumns = @JoinColumn\(name = "reservation_id", foreignKey = @ForeignKey\(name = "fk_reservation_tags_reservation"\)\), indexes = @Index\(name = "idx_reservations_tags", columnList = "tags, reservation_id"\)\)/,
     'el índice declarado sobre la lista no aparece en su @CollectionTable'
   );
   // La columna del ELEMENTO va primero: el filtro es una igualdad sobre el valor, y la FK

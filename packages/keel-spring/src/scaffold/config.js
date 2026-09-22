@@ -149,6 +149,13 @@ export function generate(model) {
       fragments.push(fragment(profile, 'sweep', sweepYaml(model, profile)));
     }
 
+    // Parámetros de DESPLIEGUE del servicio (`service.keel.yaml § parameters`). El fragmento
+    // lleva el nombre del servicio porque su prefijo de configuración es ese: no es
+    // infraestructura, es el valor único con el que este servicio opera.
+    if (model.service.parameters.length > 0) {
+      fragments.push(fragment(profile, model.service.artifactId, serviceParametersYaml(model, profile)));
+    }
+
     files.push({
       path: `src/main/resources/application-${profile}.yaml`,
       content: profileYaml(profile, fragments)
@@ -1081,6 +1088,30 @@ function mailYaml(model, profile) {
   return lines.join('\n') + '\n';
 }
 
+/**
+ * El fragmento de los parámetros de despliegue, con el mismo GRADIENTE por perfil que el resto
+ * de la configuración y por la misma razón: en prueba el valor tiene que estar puesto (los
+ * escenarios lo asumen), en `develop` tiene que poder cambiarse sin reconstruir la imagen, y
+ * en `production` un parámetro obligatorio **no lleva default** — un despliegue que lo olvide
+ * tiene que fallar al arrancar, porque con un default silencioso el servicio opera con un
+ * valor que nadie eligió y eso no se nota hasta que importa.
+ */
+function serviceParametersYaml(model, profile) {
+  const lines = [`${model.service.artifactId}:`];
+  for (const parameter of model.service.parameters) {
+    const literal = parameter.testValue ?? parameter.default;
+    const value =
+      profile === 'local' || profile === 'test'
+        ? String(literal ?? `\${${parameter.envVar}}`)
+        : profile === 'production' && parameter.requiredInProduction && parameter.default === null
+          ? `\${${parameter.envVar}}`
+          : `\${${parameter.envVar}:${literal ?? ''}}`;
+    lines.push(`  # ${parameter.description}`);
+    lines.push(`  ${parameter.key}: ${value}`);
+  }
+  return [...lines, ''].join('\n');
+}
+
 function storageYaml(model, profile) {
   const { stack } = model;
   const isMinio = stack.storage === 'minio';
@@ -1391,6 +1422,13 @@ function testProfileFiles(model) {
 
   if (model.layersPresent.persistence) {
     fragments.push(fragment('test', 'db', testDbYaml(model)));
+  }
+
+  // El perfil test también: sin el fragmento, el binding del record de parámetros muere con
+  // PlaceholderResolutionException al arrancar el contexto de @SpringBootTest, que es un fallo
+  // lejísimos de su causa.
+  if (model.service.parameters.length > 0) {
+    fragments.push(fragment('test', model.service.artifactId, serviceParametersYaml(model, 'test')));
   }
 
   // Storage: mismo generador que el resto de perfiles (endpoint local,

@@ -61,6 +61,14 @@ export const CHECKS = {
     closes: 'gobernar el estado desde las transiciones de la raíz, o sacar la entidad a su propio agregado'
   },
 
+  // ─── service ───────────────────────────────────────────────────────────────
+  'CHK-SERVICE-PARAM-UNBACKED': {
+    layer: 'service',
+    severity: 'warning',
+    title: 'la prosa nombra un parámetro de despliegue que el manifiesto no declara',
+    closes: 'declararlo en service.parameters (con su testValue), o reescribir la regla si el valor no es configuración'
+  },
+
   // ─── use-cases ─────────────────────────────────────────────────────────────
   'CHK-USECASES-QUERY-EMITS': {
     layer: 'use-cases',
@@ -221,6 +229,12 @@ export const CHECKS = {
     severity: 'warning',
     title: 'un índice único condicionado sin un `code` que diga qué significa violarlo',
     closes: 'declarar en la operación que escribe esa entidad un error 409 cuyo code nombre la condición (su familia la da el estado o el campo de `when`)'
+  },
+  'CHK-PERSIST-CHILD-UNIQUE-CODE': {
+    layer: 'persistence',
+    severity: 'warning',
+    title: 'un índice único acotado a la colección de una raíz sin un `code` que diga qué significa violarlo',
+    closes: 'declarar en la operación que escribe esa entidad un error 409 que nombre el conflicto dentro del padre, o dejarlo y asumir que el choque se trata como carrera'
   },
 
   'CHK-DEPS-CLOCK-NOT-OBSERVABLE': {

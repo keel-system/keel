@@ -59,15 +59,57 @@ export function declaredUniquenessErrorFor(model, entry, entity, fields, { soleC
   const scoped = errorsWrittenBy(model, entity);
   if (scoped.length === 0) return null;
   const byFields = pickOne(scoped, entry, entry.familyFor(screamingSnake(fields.join('_'))));
-  if (byFields || !soleConstraint) return byFields;
+  if (byFields) return byFields;
+  // La segunda pasada («cualquier 409 de esta entidad que diga ya existe») NO se puede correr
+  // sobre una entidad interna: su acotado incluye las operaciones de la raíz, así que el
+  // SKU_ALREADY_EXISTS del producto acabaría siendo el error de la unicidad de su imagen. Con
+  // el acotado ensanchado, la única pasada admisible es la que nombra los CAMPOS.
+  if (!soleConstraint || isInternal(model, entity)) return null;
   return pickOne(scoped, entry, /(^|_)ALREADY_EXISTS$/);
 }
 
-/** Los errores declarados por las operaciones cuyo grupo es esa entidad. */
+/**
+ * Los errores declarados por las operaciones cuyo grupo es esa entidad.
+ *
+ * Y las de su RAÍZ si la entidad es interna, que no es un ensanchamiento del acotado sino la
+ * única forma de que exista: una entidad hija no tiene operaciones propias —se escribe a través
+ * de su agregado, así que sus casos de uso viven en el grupo de la raíz—, de modo que preguntar
+ * solo por su nombre devolvía SIEMPRE cero y el error que el diseño declarase para la unicidad
+ * de una hija no se podía encontrar nunca. Lo destapó la corrida `catalog`: el aviso aguas
+ * arriba (CHK-PERSIST-CHILD-UNIQUE-CODE) pedía declarar un code que el generador era incapaz
+ * de recoger. Sigue estando acotado: son las operaciones que de verdad la escriben.
+ */
+/**
+ * El error que el diseño declara para «no puedes borrar este padre: tiene hijos».
+ *
+ * Es el desenlace de una FK entre agregados, y se busca entre las operaciones que escriben la
+ * entidad REFERENCIADA —quien borra la marca es una operación de Brand— con la familia de los
+ * `*_HAS_*` en 409. Si el diseño no lo declara no se inventa nada: la violación cae en el 409
+ * genérico, que es lo que había. La lista de `code` que este generador puede poner por su
+ * cuenta es cerrada (`framework-errors.md`) y esto no está en ella.
+ */
+export function declaredReferenceError(model, referencedEntity) {
+  const scoped = errorsWrittenBy(model, referencedEntity).filter(
+    (error) => (error.httpStatus ?? error.http ?? 409) === 409 && /(^|_)HAS_/.test(screamingSnake(error.code))
+  );
+  // Con dos no se elige, igual que en `overrideFor`: una raíz con `BRAND_HAS_PRODUCTS` y
+  // `BRAND_HAS_CAMPAIGNS` no dice cuál de las dos FK es cuál, y adivinar mandaría por el cable
+  // el conflicto de otra tabla. Sin entrada en el mapa, la violación cae en el 409 genérico.
+  return scoped.length === 1 ? scoped[0] : null;
+}
+
+/** ¿Es una entidad interna de un agregado? (su raíz es otra). */
+function isInternal(model, entity) {
+  const found = (model.entities ?? []).find((candidate) => candidate.name === entity);
+  return Boolean(found?.rootEntity && found.rootEntity !== entity);
+}
+
 function errorsWrittenBy(model, entity) {
+  const root = (model.entities ?? []).find((candidate) => candidate.name === entity)?.rootEntity;
+  const scope = new Set([entity, ...(root ? [root] : [])]);
   const codes = new Set(
     (model.services ?? [])
-      .filter((service) => service.entity === entity)
+      .filter((service) => scope.has(service.entity))
       .flatMap((service) => service.operations.flatMap((operation) => operation.errors ?? []))
       .map((code) => screamingSnake(code))
   );

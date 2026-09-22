@@ -123,6 +123,26 @@ así que recórrelos antes de reportar `status`, aunque nada esté marcado con u
   relación. Procedimiento completo en `mapping.md`, § Auditoría de consistencia del
   contrato.
 
+## Un `Then` con PLAZO es una aserción, no una orientación
+
+Cuando el `Then` acota el tiempo —«el evento llega en menos de 10 s», «el barrido lo recoge
+antes de un minuto»—, ese número es parte de lo que el escenario afirma. La tentación es
+ajustar la espera de la prueba al presupuesto del arnés (`await(Duration.ofSeconds(90), …)`)
+porque así pasa; y pasa, pero entonces la prueba ya no comprueba lo que el escenario dice.
+
+La regla: **la espera de la prueba no puede ser mayor que el plazo del `Then`**. Si la
+convención de recuperación de la infraestructura necesita más —el cliente de un broker que
+tarda en restablecer el canal, un reintento con backoff largo—, eso es un **hallazgo**, no un
+motivo para relajar la aserción: o el plazo del diseño es irreal para el mecanismo que pidió
+(`culprit: design`, y va a `design-gaps.yaml`), o el mecanismo no cumple lo que el diseño pidió
+(`culprit: code`). Las dos cosas hay que decirlas. Lo que no vale es un verde que solo existe
+porque la prueba esperó nueve veces más de lo que el escenario permite: la corrida `catalog`
+cerró en verde con exactamente eso en `FL-OBX-001-B` y solo se vio leyendo la prueba al lado
+de su `Then`.
+
+Al revés sí: esperar MENOS que el plazo es legítimo y además es lo deseable cuando el efecto
+es inmediato; lo que no se puede es pasarse.
+
 ## Cierre del paso
 
 Tras implementar el handler, repasa la checklist de nuevo: ningún caso borde de los

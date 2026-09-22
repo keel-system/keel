@@ -4099,6 +4099,92 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     }
   }
 
+  // ─── Unicidad ACOTADA A LA COLECCIÓN sin nombre ───────────────────────────────
+  //
+  // El hermano del anterior por el otro lado: un índice único de una entidad INTERNA que
+  // incluye la relación a su raíz («dos imágenes del mismo producto no comparten posición»)
+  // no dice «ya existe un X con esos campos». La raíz es implícita en la petición —viaja en
+  // la ruta— y el otro miembro lo reparte el servicio entre toda la colección, así que pedir
+  // un valor ocupado es legal y lo único que rompe la constraint es el estado intermedio del
+  // reparto o una carrera. Sin un code propio el generador solo puede derivar el de los
+  // campos (`PRODUCT_IMAGE_PRODUCT_POSITION_ALREADY_EXISTS`), que manda al cliente a corregir
+  // una entrada correcta; por eso lo trata como carrera, y eso hay que decidirlo, no heredarlo.
+  for (const [entityName, spec] of Object.entries(persistence?.entities ?? {})) {
+    const aggregate = aggregateOf.get(entityName);
+    if (aggregate === undefined || aggregates[aggregate]?.root === entityName) continue;
+    const root = aggregates[aggregate].root;
+    const backRefs = Object.entries(domain.entities?.[entityName]?.relations ?? {})
+      .filter(([, relation]) => relation?.entity === root)
+      .map(([relName]) => relName);
+    if (backRefs.length === 0) continue;
+
+    for (const index of spec?.indexes ?? []) {
+      // El condicionado tiene su propio id: su familia sale de la condición, no de los campos.
+      if (Array.isArray(index) || !index?.unique || index.when) continue;
+      const fields = index.fields ?? [];
+      const scoped = fields.some((member) => {
+        const head = String(member).split('.')[0];
+        return backRefs.some((relName) => head === relName || head === `${relName}Id`);
+      });
+      if (!scoped) continue;
+      const snake = (value) =>
+        String(value).replace(/([a-z0-9])([A-Z])/g, '$1_$2').replace(/[^A-Za-z0-9]+/g, '_').toUpperCase();
+      const derived = `${snake(entityName)}_${fields.map(snake).join('_')}_ALREADY_EXISTS`;
+      const family = FRAMEWORK_ERRORS.uniqueness.familyFor(fields.map(snake).join('_'));
+      const declared = Object.values(operations).some((op) =>
+        (op?.errors ?? []).some((e) => (e?.http ?? 409) === 409 && family.test(String(e?.code ?? '')))
+      );
+      if (declared) continue;
+      warn(
+        'CHK-PERSIST-CHILD-UNIQUE-CODE',
+        `persistence: entities.${entityName}.indexes: el índice único sobre [${fields.join(', ')}] acota la unicidad a la ` +
+          `colección de ${root} (incluye la relación al padre), y ninguna operación declara un error 409 que nombre ese ` +
+          `conflicto — el generador no puede llamarlo ${derived}, porque pedir un valor ya ocupado es legal y el servicio ` +
+          `reparte el resto de la colección: lo tratará como carrera (CONCURRENT_MODIFICATION). Si dentro del padre ese ` +
+          `choque SÍ es un error del cliente, decláralo; si no, esto confirma la carrera`
+      );
+    }
+  }
+
+  // ─── Parámetro de DESPLIEGUE dicho solo en prosa ──────────────────────────────
+  //
+  // La corrida `catalog` no lo reportó como hueco y solo lo delató el diff: una `rule` del
+  // dominio decía «la currency de price es la moneda del catálogo, un parámetro de despliegue
+  // único para todo el servicio», el YAML no tenía dónde escribirlo, y el agente se inventó
+  // el fragmento de configuración, la clave, la variable de entorno y su presencia en los
+  // cuatro perfiles — en producción sin default, o sea un despliegue que la olvide no arranca,
+  // y eso no quedaba escrito en ninguna parte. Es el mismo patrón que las convenciones de
+  // determinación del DSL 2.14: una decisión tomada en prosa que el generador no puede leer.
+  {
+    const declarados = Object.keys(manifest?.parameters ?? {});
+    const prosa = [];
+    for (const [entityName, entity] of Object.entries(domain.entities ?? {})) {
+      for (const rule of [...(entity?.rules ?? []), ...(entity?.invariants ?? [])]) {
+        prosa.push([`domain: entities.${entityName}`, String(rule)]);
+      }
+    }
+    for (const [opName, op] of Object.entries(operations)) {
+      for (const rule of [...(op?.rules ?? []), ...(op?.preconditions ?? [])]) {
+        prosa.push([`use-cases: operations.${opName}`, String(rule)]);
+      }
+    }
+    const SENAL = /par[áa]metro\s+(?:de\s+(?:despliegue|configuraci[óo]n)|del\s+servicio)/i;
+    for (const [where, texto] of prosa) {
+      if (!SENAL.test(texto)) continue;
+      // Con alguno declarado se da por cubierto: emparejar la frase con el parámetro concreto
+      // exigiría leer la prosa, y eso es trabajo de un lector, no de una regexp.
+      if (declarados.length > 0) break;
+      warn(
+        'CHK-SERVICE-PARAM-UNBACKED',
+        `${where}: la regla habla de un parámetro de despliegue del servicio y el manifiesto no declara ninguno ` +
+          `(service.keel.yaml § parameters) — sin él, quien genere elige la clave de configuración, la variable de ` +
+          `entorno, los perfiles en los que aparece y si el arranque falla cuando falta, y ninguna de esas cuatro ` +
+          `cosas queda escrita en el diseño: «${texto.slice(0, 90)}${texto.length > 90 ? '…' : ''}»`
+      );
+      break;
+    }
+  }
+
   return { errors, warnings, pending, obligations, findings };
 }
 

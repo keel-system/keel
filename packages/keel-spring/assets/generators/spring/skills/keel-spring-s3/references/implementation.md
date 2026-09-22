@@ -275,6 +275,7 @@ tocar nada: un rojo con la lectura en verde es un defecto del sondeo del generad
 - [ ] Presigned con expiración del diseño y host alcanzable por el consumidor.
 - [ ] Nombre de bucket leído del puerto `StoragePolicies` (`forBucket(...).bucket()`), nunca literal en el código ni por `@Value("${storage.bucket}")`, que ya no existe.
 - [ ] `maxSizeMb` y `allowedContentTypes` consultados con `BucketPolicy`, no copiados como constantes en el caso de uso.
+- [ ] El formato se comprueba con `policy.allowsContent(content, contentType)` — que mira la FIRMA del binario además del tipo declarado —, nunca con `allowsContentType(...)` a secas: el tipo lo elige el cliente.
 - [ ] En local, el bucket lo prepara `minio-init` (compose); la app lo asegura igualmente para entornos reales.
 - [ ] El aprovisionamiento de la app va tras la guarda `@Value("${storage.ensure-buckets-on-startup:false}")` y en un `@PostConstruct`, nunca en el constructor de un bean. Verificable: `PROFILE=test` (o `./gradlew test`) debe arrancar el contexto sin tocar la red.
 - [ ] Cada bucket `visibility: public` con su bucket policy de lectura anónima aplicada (idempotente, también sobre buckets ya existentes).

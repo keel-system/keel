@@ -16,6 +16,7 @@ export function generate(model) {
     renderStoredObject(model),
     renderPort(model),
     renderBucketPolicy(model),
+    renderContentSignature(model),
     renderPolicyPort(model),
     renderProperties(model),
     renderPolicyConfig(model)
@@ -47,7 +48,32 @@ public record BucketPolicy(String name, String bucket, boolean publicRead, Integ
         allowedContentTypes = allowedContentTypes == null ? List.of() : List.copyOf(allowedContentTypes);
     }
 
-    /** ¿El MIME está admitido? Sin tipos declarados no hay restricción que aplicar. */
+    /**
+     * ¿El binario es admisible en este bucket? Dos preguntas, y las dos son del contrato:
+     * el tipo DECLARADO está entre los admitidos, y el contenido es de verdad de ese tipo.
+     *
+     * <p><b>Es el método que usa el caso de uso</b>, no {@link #allowsContentType(String)}.
+     * El {@code Content-Type} de una subida multipart lo elige el CLIENTE: un ejecutable
+     * renombrado a {@code .png} y enviado como {@code image/png} pasa la comprobación del
+     * tipo declarado, se guarda y —en un bucket público— se sirve. Ninguna prueba lo nota,
+     * porque la subida responde exactamente lo mismo que una correcta; por eso la defensa la
+     * emite build y no se deja al criterio de quien escriba el handler.
+     *
+     * <p>Devuelve el mismo {@code false} en los dos casos a propósito: para el cliente el
+     * error es el que el diseño declara para un formato no admitido, y distinguir «el tipo no
+     * vale» de «mentiste sobre el tipo» solo le diría a quien prueba con qué renombrar.
+     */
+    public boolean allowsContent(byte[] content, String declaredContentType) {
+        return allowsContentType(declaredContentType)
+                && ContentSignature.matches(content, declaredContentType);
+    }
+
+    /**
+     * ¿El MIME DECLARADO está admitido? Sin tipos declarados no hay restricción que aplicar.
+     *
+     * <p>Comprobar solo esto es confiar en lo que dice el cliente: usa
+     * {@link #allowsContent(byte[], String)} siempre que tengas los bytes delante.
+     */
     public boolean allowsContentType(String contentType) {
         return allowedContentTypes.isEmpty()
                 || (contentType != null && allowedContentTypes.contains(contentType.toLowerCase(Locale.ROOT)));
@@ -79,6 +105,107 @@ public record BucketPolicy(String name, String bucket, boolean publicRead, Integ
   return {
     path: javaPath(model, DOMAIN_PKG, 'BucketPolicy'),
     content: javaFile(subPackage(model, DOMAIN_PKG), ['java.time.Duration', 'java.util.List', 'java.util.Locale'], body)
+  };
+}
+
+/**
+ * La FIRMA del contenido: los primeros bytes que identifican un formato, para que
+ * `allowedContentTypes` compruebe el binario y no la palabra del cliente.
+ *
+ * Por qué la emite build y no la skill. Un `Content-Type` de multipart es un dato de
+ * entrada: lo pone quien sube. La comprobación del tipo declarado deja pasar cualquier
+ * binario con la etiqueta correcta, y el resultado es indistinguible de una subida buena
+ * —mismo status, mismo cuerpo, misma fila—, así que **ningún escenario la echa de menos**.
+ * Es el mismo argumento por el que `mail.js` genera el adaptador SMTP con sus dos defensas
+ * dentro (constitution.md § Contenido de origen externo): una defensa que no aparece en el
+ * camino de menor resistencia de nadie y cuya ausencia no rompe ninguna prueba no se le pide
+ * al agente, se emite.
+ *
+ * Los formatos con firma conocida se enumeran aquí; **un MIME que no esté en la tabla pasa**,
+ * y eso se dice en el javadoc del Java generado: prometer una verificación que no se puede
+ * hacer (un SVG o un CSV son texto, no tienen firma) sería peor que no prometer nada.
+ */
+function renderContentSignature(model) {
+  const body = `/**
+ * ¿El contenido de un binario se corresponde con el tipo que dice tener?
+ *
+ * <p>Un {@code Content-Type} de multipart lo elige el cliente, así que por sí solo no
+ * distingue una imagen de un ejecutable renombrado. Esta tabla mira los primeros bytes —la
+ * firma, o "magic bytes"— de los formatos que se pueden reconocer así.
+ *
+ * <p><b>Alcance, y es una promesa acotada a propósito:</b> un MIME que no esté en la tabla
+ * —texto, SVG, CSV, JSON— <b>se acepta</b>, porque no tiene firma que comprobar. Para esos
+ * formatos la única comprobación posible es la del tipo declarado, y decirlo aquí es lo que
+ * evita que alguien lea este archivo y dé por verificado lo que no lo está.
+ */
+public final class ContentSignature {
+
+    /** Un trozo de firma: los bytes esperados a partir de un desplazamiento. */
+    private record Magic(int offset, byte[] bytes) {
+    }
+
+    /**
+     * Firmas por MIME. Cada elemento de la lista exterior es una ALTERNATIVA (un GIF vale
+     * con 'GIF87a' o con 'GIF89a'); dentro de una alternativa, todos los trozos tienen que
+     * casar (un WebP es 'RIFF' al principio y 'WEBP' en el byte 8).
+     */
+    private static final Map<String, List<List<Magic>>> SIGNATURES = Map.of(
+            "image/jpeg", List.of(List.of(new Magic(0, new byte[] { (byte) 0xFF, (byte) 0xD8, (byte) 0xFF }))),
+            "image/png", List.of(List.of(new Magic(0, new byte[] {
+                (byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A }))),
+            "image/gif", List.of(
+                    List.of(new Magic(0, "GIF87a".getBytes(StandardCharsets.US_ASCII))),
+                    List.of(new Magic(0, "GIF89a".getBytes(StandardCharsets.US_ASCII)))),
+            "image/webp", List.of(List.of(
+                    new Magic(0, "RIFF".getBytes(StandardCharsets.US_ASCII)),
+                    new Magic(8, "WEBP".getBytes(StandardCharsets.US_ASCII)))),
+            "image/bmp", List.of(List.of(new Magic(0, "BM".getBytes(StandardCharsets.US_ASCII)))),
+            "image/tiff", List.of(
+                    List.of(new Magic(0, new byte[] { 0x49, 0x49, 0x2A, 0x00 })),
+                    List.of(new Magic(0, new byte[] { 0x4D, 0x4D, 0x00, 0x2A }))),
+            "application/pdf", List.of(List.of(new Magic(0, "%PDF-".getBytes(StandardCharsets.US_ASCII)))));
+
+    private ContentSignature() {
+    }
+
+    /**
+     * ¿El contenido casa con el tipo declarado? {@code true} también cuando el tipo no tiene
+     * firma conocida: lo que no se puede comprobar no se rechaza.
+     *
+     * <p>Un contenido {@code null} o vacío tampoco se juzga aquí: eso es una subida rota, y
+     * su error es el del framework ({@code FILE_UNREADABLE}), no el del formato.
+     */
+    public static boolean matches(byte[] content, String declaredContentType) {
+        if (declaredContentType == null) {
+            return true;
+        }
+        List<List<Magic>> alternatives = SIGNATURES.get(declaredContentType.toLowerCase(Locale.ROOT));
+        if (alternatives == null) {
+            return true;
+        }
+        if (content == null || content.length == 0) {
+            return true;
+        }
+        return alternatives.stream().anyMatch(parts -> parts.stream().allMatch(part -> startsWith(content, part)));
+    }
+
+    private static boolean startsWith(byte[] content, Magic part) {
+        if (content.length < part.offset() + part.bytes().length) {
+            return false;
+        }
+        return Arrays.equals(content, part.offset(), part.offset() + part.bytes().length,
+                part.bytes(), 0, part.bytes().length);
+    }
+}`;
+  return {
+    path: javaPath(model, DOMAIN_PKG, 'ContentSignature'),
+    content: javaFile(subPackage(model, DOMAIN_PKG), [
+      'java.nio.charset.StandardCharsets',
+      'java.util.Arrays',
+      'java.util.List',
+      'java.util.Locale',
+      'java.util.Map'
+    ], body)
   };
 }
 
