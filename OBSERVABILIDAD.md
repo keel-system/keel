@@ -417,7 +417,23 @@ Para recibirlas de verdad, cambia `ALERT_WEBHOOK_URL` en `deploy/.env` por la UR
 
 ## 8. Producción
 
-`deploy/` es para probar a mano. En un clúster, el patrón recomendado son **dos colectores**, y vienen como plantillas comentadas:
+`deploy/` es para probar a mano. Para producción, antes que nada: **el colector que necesitas depende de la infraestructura donde despliegues**, no del servicio.
+
+Lo que no cambia es el servicio. Solo conoce la dirección de un colector (`OTEL_EXPORTER_OTLP_ENDPOINT`) y unas pocas variables: muestreo, qué expone el actuator y si envía logs por OTLP. El mismo jar sirve igual en Kubernetes, en máquinas virtuales, en ECS o con docker compose. Lo que sí cambia de una plataforma a otra es **cuántos colectores hacen falta, dónde van y cómo se configuran**, y eso lo deciden dos preguntas:
+
+1. **¿Alguien tiene que leer la consola de los contenedores en cada máquina?** Si la plataforma ya recoge los logs (CloudWatch, un Fluent Bit o un Vector que ya tengas…), no. Si nadie los recoge, hace falta un colector en cada máquina.
+2. **¿Vas a hacer muestreo por cola con más de un colector?** Si es así, todos los fragmentos de una traza tienen que llegar al mismo colector, y hay que repartirlos por `traceID`. Con un solo colector, o sin muestreo por cola, no hace falta.
+
+| Infraestructura | Qué colector | De dónde partir |
+|---|---|---|
+| **Un servidor o pocas instancias** (docker compose, una VM) | **Uno solo**, que lo hace todo | `deploy/otel/collector.yaml`, cambiando el bloque `exporters` al backend real |
+| **VMs o hosts con Docker, en varias máquinas** | Uno por host (servicio de systemd o contenedor) que lee los logs de Docker o de journald, y un gateway si hay muestreo por cola | Las dos plantillas de abajo, sustituyendo lo propio de Kubernetes: las rutas de logs, `k8sattributes` por `resourcedetection` y la lista de gateways por una estática o por DNS |
+| **AWS ECS / Fargate** | Normalmente uno como sidecar en cada tarea (la distribución de AWS, ADOT). Los logs de consola los recoge la plataforma | La plantilla del gateway, si hay muestreo por cola; la del agente no hace falta |
+| **Kubernetes** | Los dos: agente por nodo y gateway central | Las dos plantillas, tal cual están |
+
+Las dos plantillas que genera `build` están escritas **para Kubernetes**: leen los logs de `/var/log/pods/`, añaden los metadatos con `k8sattributes` y localizan los gateways por el DNS de un servicio headless. Son la referencia más completa porque cubren las dos preguntas a la vez; en otra plataforma se adaptan, no se copian.
+
+En Kubernetes:
 
 | Archivo | Dónde va | Qué hace |
 |---|---|---|
@@ -426,11 +442,11 @@ Para recibirlas de verdad, cambia `ALERT_WEBHOOK_URL` en `deploy/.env` por la UR
 
 Son dos y no uno por dos razones que no se pueden cumplir a la vez en el mismo sitio: recoger la consola exige estar **en cada nodo**, y decidir con la traza entera delante exige que **todos sus spans lleguen al mismo colector**.
 
-**Y las métricas, ¿quién las scrapea allí?** No hay colector de `deploy/`, así que hay dos rutas soportadas y conviene elegir antes de desplegar:
+**Y las métricas, ¿quién las scrapea en producción?** Sea cual sea la plataforma, no hay colector de `deploy/`, así que hay dos rutas soportadas y conviene elegir antes de desplegar:
 
 | Ruta | Cómo | Qué poner |
 |---|---|---|
-| **Scrape** (recomendada: conserva los exemplars) | el colector agente del nodo scrapea el pod | `MANAGEMENT_ENDPOINTS=health,info,prometheus` en el pod, y una política de red que solo deje entrar al colector. En `production` el endpoint **no va expuesto por defecto** a propósito: los nombres de las métricas son nombres de negocio |
+| **Scrape** (recomendada: conserva los exemplars) | el colector más cercano al servicio lo scrapea (en Kubernetes, el agente del nodo; en una VM, el del host) | `MANAGEMENT_ENDPOINTS=health,info,prometheus` en el servicio, y una política de red que solo deje entrar al colector. En `production` el endpoint **no va expuesto por defecto** a propósito: los nombres de las métricas son nombres de negocio |
 | **Push por OTLP** (pierde los exemplars) | si tu plataforma no deja exponer el endpoint | `METRICS_EXPORT_OTLP=true` y `METRICS_EXPORT_PROMETHEUS=false` |
 
 Cambiar de una a otra **no exige recompilar**: las dos dependencias van en la imagen justo por eso.
