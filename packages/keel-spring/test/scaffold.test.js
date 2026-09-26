@@ -1111,7 +1111,7 @@ test('deploy: el servicio empaquetado para pruebas manuales, distinto de la infr
   // wget de BusyBox: la base alpine no trae curl, y el healthcheck lo honran los
   // dos runtimes. Es lo que consume el bucle de espera de up.sh.
   assert.ok(dockerfile.includes('HEALTHCHECK'));
-  assert.ok(dockerfile.includes('wget -q -O - http://localhost:8080/actuator/health/readiness'));
+  assert.ok(dockerfile.includes('wget -q -O - http://localhost:8080/readyz'));
 
   // El contexto de build es la raíz (necesita src/ y el wrapper), así que el
   // .dockerignore va allí y no en deploy/.
@@ -3126,7 +3126,8 @@ test('correlación: contexto + filtro HTTP, y el bridge la lee de ahí (no de un
   const contextPath = 'src/main/java/com/commerce/productcatalog/infrastructure/correlation/CorrelationContext.java';
   const context = read(workspace, contextPath);
   assert.ok(context.includes('public static void runWith(String correlationId, Runnable action)'));
-  assert.ok(context.includes('MDC.put(MDC_KEY, correlationId);'));
+  // Al MDC va el valor ACEPTADO, no el recibido: uno con formato no válido se sustituye.
+  assert.ok(context.includes('MDC.put(MDC_KEY, accepted);'));
 
   const filter = read(workspace, 'src/main/java/com/commerce/productcatalog/infrastructure/web/CorrelationFilter.java');
   assert.ok(filter.includes('extends OncePerRequestFilter'));

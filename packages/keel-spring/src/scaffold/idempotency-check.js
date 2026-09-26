@@ -95,7 +95,15 @@ function inboundContextChecks(model) {
     class: sub.listenerClass,
     ...extra,
     require: ['CorrelationContext[.]runWith[[:space:]]*[(]'],
-    forbid: ['runWith[[:space:]]*[(][^;]*[.]correlationId[(][)][[:space:]]*,'],
+    // Dos formas de caer en la sobrecarga de String: pasar `…correlationId()` directamente, o
+    // sacarlo antes a una variable y pasar la variable. La segunda pasaba el gate —la sentencia
+    // del runWith ya no nombra correlationId()— y corta la traza exactamente igual. En un listener
+    // de envoltura keel no hay motivo para extraer el correlationId de la metadata: ya viaja en
+    // el MDC y lo restaura la propia sobrecarga de la metadata.
+    forbid: [
+      'runWith[[:space:]]*[(][^;]*[.]correlationId[(][)][[:space:]]*,',
+      '=[[:space:]]*[^;=]*metadata[(][)][.]correlationId[(][)]'
+    ],
     why:
       'el listener abre el contexto con CorrelationContext.runWith(envelope.metadata(), …): es la sobrecarga que, además de ' +
       'la correlación, continúa la traza W3C que el emisor dejó en metadata.traceparent. La de String (…correlationId(), …) ' +

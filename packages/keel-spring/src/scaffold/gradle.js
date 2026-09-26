@@ -119,6 +119,10 @@ export function generate(model) {
       // exportador de trazas y el registro de métricas OTLP. Versiones del BOM de Boot.
       "implementation 'io.micrometer:micrometer-tracing-bridge-otel'",
       "implementation 'io.opentelemetry:opentelemetry-exporter-otlp'",
+      // El propagador B3: el servicio EMITE W3C pero ACEPTA también B3 al recibir, que es lo que
+      // hablan muchas mallas de servicio y los sistemas de la familia Zipkin. Sin la librería, B3
+      // en `management.tracing.propagation.consume` no tiene quién lo lea. Versión del BOM de Boot.
+      "implementation 'io.opentelemetry:opentelemetry-extension-trace-propagators'",
       "implementation 'io.micrometer:micrometer-registry-otlp'",
       // El registro de PROMETHEUS, que es por donde salen las métricas por defecto: el colector
       // viene a buscarlas a /actuator/prometheus. Está aquí por una sola razón, los EXEMPLARS —el

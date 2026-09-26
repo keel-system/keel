@@ -34,6 +34,7 @@ import { cachedOperations } from './cache.js';
 import {
   ATTRIBUTES,
   INSTRUMENTATION,
+  METRICS_TRANSPORT,
   OBSERVATIONS,
   REDIS_OBSERVATION,
   usesTelemetry
@@ -116,7 +117,11 @@ function renderConfig(model) {
     'org.springframework.boot.autoconfigure.condition.ConditionalOnProperty',
     'org.springframework.context.annotation.Bean',
     'org.springframework.context.annotation.Configuration',
-    'org.springframework.http.server.observation.ServerRequestObservationContext'
+    'org.springframework.http.server.observation.ServerRequestObservationContext',
+    'org.springframework.boot.context.event.ApplicationReadyEvent',
+    'org.springframework.context.ApplicationListener',
+    'org.springframework.context.annotation.Profile',
+    'org.springframework.core.env.Environment'
   ]);
   if (document) {
     imports.add('org.springframework.boot.autoconfigure.mongo.MongoClientSettingsBuilderCustomizer');
@@ -229,14 +234,18 @@ public class TelemetryConfig {
     }
 
     /**
-     * Fuera las peticiones al actuator: las probes de liveness/readiness llegan cada pocos
-     * segundos y cada una sería una traza raíz sin nada dentro.
+     * Fuera las peticiones al actuator y a las sondas del puerto principal (/livez, /readyz): llegan
+     * cada pocos segundos y cada una sería una traza raíz sin nada dentro.
      */
     @Bean
     public ObservationPredicate ignoreActuator() {
         return (name, context) -> !(context instanceof ServerRequestObservationContext server
                 && server.getCarrier() != null
-                && server.getCarrier().getRequestURI().startsWith("/actuator"));
+                && isProbe(server.getCarrier().getRequestURI()));
+    }
+
+    private static boolean isProbe(String uri) {
+        return uri.startsWith("/actuator") || uri.equals("/livez") || uri.equals("/readyz");
     }
 
     /**
@@ -269,6 +278,33 @@ public class TelemetryConfig {
      */
     private static boolean hasRealParent(Observation.Context context) {
         return context.getParentObservation() instanceof Observation parent && !parent.isNoop();
+    }
+
+    /**
+     * Avisa al ARRANCAR si las métricas no tienen por dónde salir.
+     *
+     * <p>Hay dos caminos y los dos se deciden por entorno: que un colector venga a leer
+     * {@code ${METRICS_TRANSPORT.scrapePath}} (exposición + registro de Prometheus activos) o que el
+     * servicio las empuje por OTLP ({@code ${METRICS_TRANSPORT.otlp.envVar}}). Si quien despliega
+     * apaga los dos, no falla nada: el panel se queda vacío y las alertas, sin datos, no disparan.
+     * Este aviso es lo único que hace visible ese estado, y lo hace en el primer minuto de vida del
+     * proceso. Fuera del perfil {@code test}, donde las métricas se apagan a propósito.
+     */
+    @Bean
+    @Profile("!test")
+    public ApplicationListener<ApplicationReadyEvent> metricsPathCheck(Environment environment) {
+        return event -> {
+            String exposed = environment.getProperty("management.endpoints.web.exposure.include", "");
+            boolean scrape = environment.getProperty("${METRICS_TRANSPORT.prometheus.property}", Boolean.class, true)
+                    && (exposed.contains("${METRICS_TRANSPORT.actuatorEndpointId}") || exposed.contains("*"));
+            boolean push = environment.getProperty("${METRICS_TRANSPORT.otlp.property}", Boolean.class, false);
+            if (!scrape && !push) {
+                LoggerFactory.getLogger(TelemetryConfig.class).warn(
+                        "Las métricas no tienen por dónde salir: ni ${METRICS_TRANSPORT.scrapePath} está expuesto "
+                                + "(MANAGEMENT_ENDPOINTS, ${METRICS_TRANSPORT.prometheus.envVar}) ni el envío por OTLP "
+                                + "está encendido (${METRICS_TRANSPORT.otlp.envVar}). El panel quedará vacío y las alertas no dispararán.");
+            }
+        };
     }${correlationFilter}${mongo}
 }`;
 

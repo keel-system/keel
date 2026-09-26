@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
 import { HARNESSES, loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
+import { CONTEXT_FORMS } from '../src/scaffold/logging-check.js';
 
 const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
@@ -66,6 +67,17 @@ test('trabajo en paralelo: el executor que propaga el contexto existe con y sin 
   assert.ok(helper.includes('ContextExecutorService.wrap(Executors.newVirtualThreadPerTaskExecutor()'));
   assert.ok(helper.includes('new Slf4jThreadLocalAccessor()'));
   assert.ok(project.read('build.gradle').includes("io.micrometer:context-propagation:"));
+  // El registro vive en infraestructura y se hace AL ARRANCAR: así vale también para @Async, que
+  // no pasa nunca por el helper, y puede incluir el ThreadLocal de CorrelationContext, que
+  // application no puede importar.
+  const config = project.find('/infrastructure/configurations/concurrency/ContextPropagationConfig.java');
+  assert.ok(config.includes('public TaskDecorator contextPropagatingTaskDecorator()'));
+  assert.ok(config.includes('return new ContextPropagatingTaskDecorator();'));
+  assert.ok(config.includes('registry.registerThreadLocalAccessor(new Slf4jThreadLocalAccessor());'));
+  assert.ok(
+    config.includes('CorrelationContext::get, CorrelationContext::set, CorrelationContext::clear'),
+    'el correlationId de CorrelationContext no se propaga: un evento publicado desde una tarea saldría sin él'
+  );
   const convention = project.read('docs/keel/conventions/virtual-threads.md');
   assert.ok(convention.includes('ContextPropagatingExecutors.newVirtualThreadPerTaskExecutor()'));
   assert.ok(!convention.includes('try (ExecutorService exec = Executors.newVirtualThreadPerTaskExecutor())'));
@@ -136,6 +148,38 @@ test('check-logging.sh: falsado — rojo con cada forma vetada, verde con la cor
   assert.equal(runGate(root).status, 0, 'WARN y el ERROR comentado no pueden dar rojo');
 });
 
+// Con hilos virtuales, lanzar trabajo a otro hilo es barato y hay muchas formas de hacerlo, y cada
+// una pierde el contexto igual. Mientras el gate solo miraba el executor de hilos virtuales, un
+// CompletableFuture o un parallelStream cortaban la traza en silencio. La lista es la MISMA que
+// usa el script (CONTEXT_FORMS): una forma nueva no puede entrar sin que este test la falsee.
+test('check-logging.sh: la regla context caza TODAS las formas de lanzar trabajo sin contexto', () => {
+  const { root } = generate('stock-reservation', { broker: 'kafka' });
+  const dir = path.join(root, 'src', 'main', 'java', 'x');
+  fs.mkdirSync(dir, { recursive: true });
+  const write = (body) =>
+    fs.writeFileSync(path.join(dir, 'Probe.java'), `package x;\nclass Probe {\n    void a(java.util.List<String> ids, String id) {\n${body}\n    }\n}\n`);
+
+  for (const form of CONTEXT_FORMS) {
+    write(`        ${form.sample}`);
+    const result = runGate(root);
+    assert.equal(result.status, 1, `${form.id}: tenía que salir rojo\n${result.stdout}`);
+    assert.ok(result.stdout.includes('[context]'), `${form.id}: el hallazgo no nombra su regla\n${result.stdout}`);
+    // Comentada, la misma forma no cuenta: la convención la cita para explicarla.
+    write(`        // ${form.sample}`);
+    assert.equal(runGate(root).status, 0, `${form.id}: comentada no puede dar rojo`);
+  }
+
+  // La forma correcta, verde: el helper del proyecto y un stream secuencial.
+  write(
+    '        try (var exec = ContextPropagatingExecutors.newVirtualThreadPerTaskExecutor()) {\n' +
+      '            exec.submit(() -> id.length());\n' +
+      '        }\n' +
+      '        ids.stream().map(String::length).toList();'
+  );
+  assert.equal(runGate(root).status, 0, 'el uso correcto del helper no puede dar rojo');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 // Quien escribe los logs de negocio es el agente de código, así que es a él a quien hay que
 // mandar a la convención ANTES de escribir, y no solo al de calidad después. Mientras solo lo
 // citaba el de calidad, el agente de código logueaba sin haber leído las reglas y el gate las
@@ -155,4 +199,21 @@ test('el agente de código lee la convención de logs antes de loguear y ejecuta
     assert.ok(/^logging: OK \| KO/m.test(agent), `${file}: el reporte no lleva la familia logging`);
     assert.ok(!agent.includes('{{keel:'), `${file}: queda un token sin resolver`);
   }
+});
+
+// El correlationId llega de FUERA (una cabecera, la metadata de un mensaje ajeno) y acaba en
+// cada línea de log, en la respuesta, en el span y en los eventos que salen. Sin cota, un cliente
+// podía meter saltos de línea en los logs de texto o un valor de kilobytes en cada registro.
+test('correlación: un correlationId con formato no aceptado se sustituye, y la respuesta lleva el efectivo', () => {
+  const project = generate('stock-reservation', { broker: 'kafka' });
+  const context = project.find('/infrastructure/correlation/CorrelationContext.java');
+  assert.ok(context.includes('Pattern.compile("[A-Za-z0-9._-]{1,64}")'));
+  // La validación vive en set(): cubre la cabecera HTTP y cualquier otra entrada.
+  const set = context.slice(context.indexOf('public static void set('));
+  assert.match(set.slice(0, 400), /ACCEPTED\.matcher\(correlationId\)\.matches\(\) \? correlationId : UUID\.randomUUID\(\)\.toString\(\)/);
+  // El filtro devuelve lo que quedó, no lo que llegó: devolver lo recibido reflejaría la entrada
+  // sin validar en la cabecera de respuesta.
+  const filter = project.find('/infrastructure/web/CorrelationFilter.java');
+  assert.ok(filter.includes('response.setHeader(HEADER, CorrelationContext.get());'));
+  assert.ok(!filter.includes('response.setHeader(HEADER, correlationId);'));
 });

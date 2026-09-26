@@ -233,7 +233,7 @@ Puedes ver lo mismo que ve el colector en el paso 4:
 curl -s http://localhost:8080/actuator/prometheus | grep keel_use_case
 ```
 
-Si la serie está aquí y no en el backend, el problema está en los pasos 4 a 6 (§ 9, «No llega nada»). **En `production` el paso 3 no ocurre por defecto**: `/actuator/prometheus` no se expone y hay que elegir cómo llegan las métricas antes de desplegar (§ 8). Con el push por OTLP (`METRICS_EXPORT_OTLP=true`), los pasos 3 y 4 se sustituyen por un envío del servicio al colector cada `METRICS_EXPORT_STEP`, sin exemplars.
+Si la serie está aquí y no en el backend, el problema está en los pasos 4 a 6 (§ 9, «No llega nada»). **En `production` el paso 3 ocurre en otro puerto**: el actuator vive en un **puerto de gestión** aparte (`MANAGEMENT_PORT`, 8081 por defecto) que no se publica fuera del pod o del host, así que el colector lee `http://<servicio>:8081/actuator/prometheus` y por el puerto de negocio no sale ningún nombre interno (§ 8). Si al arrancar el servicio escribe el aviso «Las métricas no tienen por dónde salir», alguien desactivó los dos caminos por variables. Con el push por OTLP (`METRICS_EXPORT_OTLP=true`), los pasos 3 y 4 se sustituyen por un envío del servicio al colector cada `METRICS_EXPORT_STEP`, sin exemplars.
 
 ### Cómo se ve una métrica en el backend
 
@@ -324,7 +324,7 @@ Aquí «servidor» es el **servidor de trazas** (el backend: Tempo en `deploy/`)
 
 ### El recorrido
 
-1. **Llega una petición y nace la traza.** Spring Boot abre el primer span, el de la petición HTTP. Si la petición trae la cabecera W3C `traceparent` (porque quien llama ya tenía una traza, por ejemplo un API gateway u otro servicio), **no nace una traza nueva**: el span se cuelga de la de quien llama.
+1. **Llega una petición y nace la traza.** Spring Boot abre el primer span, el de la petición HTTP. Si la petición trae la cabecera W3C `traceparent` (porque quien llama ya tenía una traza, por ejemplo un API gateway u otro servicio), **no nace una traza nueva**: el span se cuelga de la de quien llama. También se aceptan las cabeceras **B3** (`b3` o `X-B3-TraceId`…), que hablan muchas mallas de servicio y los sistemas tipo Zipkin; al llamar a otros, el servicio emite siempre W3C.
 2. **Se decide si esta traza se guarda (muestreo).** Solo cuando la traza nace aquí; si viene de fuera, se respeta lo que decidió quien llama (muestreo *parent-based*). La proporción la fija `TRACING_SAMPLING_PROBABILITY`: 100 % en `local` y `develop`, 10 % en `production`. Una traza no muestreada se sigue ejecutando igual, pero no se envía.
 3. **Cada trabajo dentro de la petición añade su span**, colgado del anterior: el caso de uso (con `keel.operation`, `keel.outcome` y el `keel.correlation_id`), cada consulta a la base de datos, cada llamada HTTP saliente, cada comando de Redis, cada operación sobre un bucket o envío de correo. Todos salen de *observaciones* (§ 4 bis).
 4. **La traza sigue al salir del servicio.** En una llamada HTTP saliente, el cliente pone la cabecera `traceparent` y el servicio de destino continúa la misma traza. En un evento, el contexto viaja dentro del sobre del mensaje (§ 5).
@@ -425,7 +425,10 @@ Las dos compilan y las dos abren la correlación; solo la primera continúa la t
 | `TELEMETRY_EXPORT_ENABLED` | Enciende o apaga la exportación de trazas | Para mirar telemetría en `local`, o para silenciar un entorno |
 | `METRICS_EXPORT_PROMETHEUS` | Publica `/actuator/prometheus`, que es de donde el colector scrapea las métricas | Apagarlo solo si vuelves al push por OTLP |
 | `METRICS_EXPORT_OTLP` | Vuelve al push de métricas por OTLP (pierde los exemplars) | Si tu plataforma no puede scrapear el endpoint |
-| `MANAGEMENT_ENDPOINTS` | Qué endpoints del actuator se publican | Para exponer el scrape en `production`, donde no va expuesto por defecto |
+| `MANAGEMENT_ENDPOINTS` | Qué endpoints del actuator se publican | Rara vez: con telemetría, `production` ya publica `health,info,prometheus` en el puerto de gestión |
+| `MANAGEMENT_PORT` | Puerto del actuator en `production` (8081). Las sondas siguen también en el 8080 como `/livez` y `/readyz` | Si el 8081 choca con algo; **nunca** lo publiques fuera del pod o del host |
+| `METRICS_OTLP_HISTOGRAM_FLAVOR` | Tipo de histograma del envío por OTLP (`base2_exponential_bucket_histogram`) | Si tu backend no acepta histogramas exponenciales: `explicit_bucket_histogram` |
+| `SERVICE_INSTANCE_ID` | Identifica la réplica en trazas y logs (por defecto, `HOSTNAME`) | Donde `HOSTNAME` no sea el nombre de la instancia |
 | `TELEMETRY_INSTRUMENT_STORAGE` | Instrumenta —o no— las operaciones sobre los buckets | Para quitar esa señal de un entorno sin recompilar |
 | `TELEMETRY_INSTRUMENT_CACHE` | Instrumenta —o no— los comandos de Redis de la caché | Ídem |
 | `TELEMETRY_INSTRUMENT_MAIL` | Instrumenta —o no— los envíos de correo | Ídem |
@@ -436,6 +439,8 @@ Las dos compilan y las dos abren la correlación; solo la primera continúa la t
 | `DEPLOYMENT_ENVIRONMENT` | Etiqueta el entorno en todas las señales | Para distinguir varios entornos en el mismo backend |
 
 El **muestreo** es *parent-based*: si quien llama ya decidió que su traza se conserva, este servicio la respeta. Solo decide cuando la traza nace aquí.
+
+El **`X-Correlation-Id`** que manda el cliente se acepta si tiene entre 1 y 64 caracteres de `A-Z`, `a-z`, `0-9`, `.`, `_` o `-` (un UUID lo cumple). Si no, el servicio lo sustituye por uno nuevo y devuelve ese en la respuesta: el valor acaba en cada línea de log, en las trazas y en los eventos, y no puede traer saltos de línea ni kilobytes.
 
 ### ¿Puedo decidir por variable de entorno si el bucket se instrumenta?
 
@@ -631,7 +636,7 @@ Son dos y no uno por dos razones que no se pueden cumplir a la vez en el mismo s
 
 | Ruta | Cómo | Qué poner |
 |---|---|---|
-| **Scrape** (recomendada: conserva los exemplars) | el colector más cercano al servicio lo scrapea (en Kubernetes, el agente del nodo; en una VM, el del host) | `MANAGEMENT_ENDPOINTS=health,info,prometheus` en el servicio, y una política de red que solo deje entrar al colector. En `production` el endpoint **no va expuesto por defecto** a propósito: los nombres de las métricas son nombres de negocio |
+| **Scrape** (por defecto: conserva los exemplars) | el colector más cercano al servicio lee `:8081/actuator/prometheus` (en Kubernetes, el agente del nodo; en una VM, el del host) | Nada en el servicio: en `production` el actuator ya vive en el **puerto de gestión** (`MANAGEMENT_PORT`, 8081). Lo que hay que cuidar es **no publicar ese puerto** fuera del pod o del host: los nombres de las métricas son nombres de negocio. Las plantillas de colector de `deploy/otel/` todavía no traen esa lectura: hay que añadir un receptor `prometheus` que apunte al 8081 |
 | **Push por OTLP** (pierde los exemplars) | si tu plataforma no deja exponer el endpoint | `METRICS_EXPORT_OTLP=true` y `METRICS_EXPORT_PROMETHEUS=false` |
 
 Cambiar de una a otra **no exige recompilar**: las dos dependencias van en la imagen justo por eso.
@@ -655,7 +660,7 @@ En orden, que es de lo más común a lo más raro:
 5. **¿Es el muestreo?** En `production` solo se conserva una de cada diez trazas por defecto. Sube `TRACING_SAMPLING_PROBABILITY` para una prueba.
 6. **¿Es el ruido lo que esperabas ver?** Las peticiones al *actuator* y los ciclos de las tareas programadas se descartan a propósito (ver más abajo).
 7. **¿Y los logs?** Si esperas verlos en el backend pero no los recoge nadie, te falta `LOG_EXPORT_OTLP=true` o un recolector de la consola.
-8. **¿Faltan solo las MÉTRICAS?** Ahí el camino es otro: no salen, las viene a buscar el colector. Pregúntale al servicio directamente —`curl http://localhost:8080/actuator/prometheus`— y mira si la serie está. Si responde 404, no está expuesto (`MANAGEMENT_ENDPOINTS`); si está y no llega al backend, el problema es el scrape del colector, no la aplicación.
+8. **¿Faltan solo las MÉTRICAS?** Ahí el camino es otro: no salen, las viene a buscar el colector. Pregúntale al servicio directamente —`curl http://localhost:8080/actuator/prometheus` en `local` y `develop`, `curl http://localhost:8081/actuator/prometheus` en `production`, que usa el puerto de gestión— y mira si la serie está. Si responde 404, no está expuesto (`MANAGEMENT_ENDPOINTS`); si está y no llega al backend, el problema es el scrape del colector, no la aplicación.
 9. **¿Y qué salió del colector?** `deploy/otel/out/` tiene, en crudo y en disco, lo que reexportó: `traces.json`, `metrics.json`, `logs.json`. Si ahí hay datos, el problema está entre el colector y el backend.
 
 ### «No veo los exemplars»
@@ -673,7 +678,7 @@ Con el `Accept` por defecto la respuesta trae las mismas series y las mismas eti
 
 - Si el corte está entre **publicar y consumir**, casi siempre es el listener: tiene que usar `runWith(envelope.metadata(), …)` (§ 5).
 - Si el corte está entre **dos servicios por HTTP**, quien llama tiene que propagar la cabecera `traceparent`. Los clientes que genera build lo hacen; un cliente escrito a mano puede no hacerlo.
-- Si aparecen **spans sueltos sin padre**, suele ser trabajo lanzado a otro hilo sin propagar el contexto. Para eso está `ContextPropagatingExecutors` (`application/support`).
+- Si aparecen **spans sueltos sin padre**, suele ser trabajo lanzado a otro hilo sin propagar el contexto. Un hilo nuevo, virtual o no, empieza sin traza, sin MDC y sin `correlationId`. Los dos caminos que sí lo llevan son `ContextPropagatingExecutors` (`application/support`) y los métodos `@Async`, a cuyo executor build le aplica un `ContextPropagatingTaskDecorator`. Cualquier otra forma —`CompletableFuture.supplyAsync` sin executor, `parallelStream`, un `Thread` a mano, un executor de `Executors`— la marca `infra/check-logging.sh`.
 
 ### Ruido, y por qué no lo hay
 

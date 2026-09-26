@@ -291,6 +291,7 @@ function mangle(name) {
 
 export const PROBE_CLASS = 'KeelTelemetryProbeIT';
 export const SWITCH_CLASS = 'KeelTelemetrySwitchIT';
+export const DOWN_CLASS = 'KeelTelemetryCollectorDownIT';
 
 /**
  * Los casos de la sonda, con su id y el subsistema que los hace aplicables.
@@ -325,6 +326,29 @@ export const CASES = [
     method: 'consumerLagSeriesExists',
     subsystem: 'consumerLag',
     title: 'el consumidor publica su retraso, que es lo que ninguna otra serie dice'
+  },
+  // El CONTEXTO al saltar de hilo. Con hilos virtuales lanzar trabajo es barato, y un hilo nuevo
+  // empieza sin traza, sin MDC y sin correlación: la traza se corta justo donde está el tiempo.
+  // Los tests del generador solo comprueban que el helper EXISTE; esto comprueba que funciona.
+  {
+    id: 'TEL-13',
+    method: 'contextCrossesToParallelTask',
+    subsystem: 'context',
+    title: 'una tarea lanzada con ContextPropagatingExecutors sigue en la misma traza, con el MDC y la correlación'
+  },
+  {
+    id: 'TEL-14',
+    method: 'contextCrossesToAsyncExecutor',
+    subsystem: 'context',
+    title: 'una tarea del executor de @Async de Boot sigue en la misma traza, con el MDC y la correlación'
+  },
+  // El colector CAÍDO. Es la promesa que hace el patrón —el servicio no depende de a dónde
+  // exporta— y hasta aquí solo se había medido una vez, a mano. Vive en su propia clase porque
+  // necesita un contexto con los tres exportadores encendidos contra un puerto cerrado.
+  {
+    id: 'TEL-15',
+    method: 'survivesCollectorDown',
+    title: 'con el colector caído el servicio arranca, atiende sin bloquearse y sigue publicando el scrape'
   }
 ];
 
@@ -486,6 +510,69 @@ export function probeClass(spec) {
 `
       : '';
 
+  // El contexto al saltar de hilo, por los DOS caminos que el proyecto ofrece: el helper para
+  // paralelizar en un handler y el executor de @Async de Boot (al que se le aplica el
+  // TaskDecorator de ContextPropagationConfig). En cada uno, la tarea tiene que ver el MISMO span
+  // que tenía abierto quien la lanzó —no solo la misma traza: un span nuevo sin padre compartiría
+  // traceId solo por casualidad nunca—, el correlationId en el MDC, y el de CorrelationContext
+  // si el diseño lo genera (capa api o messaging).
+  const correlated = Boolean(spec.correlationFqn);
+  const contextCase = subsystems.includes('context')
+    ? `
+    @Test
+    @DisplayName("${display('contextCrossesToParallelTask')}")
+    void contextCrossesToParallelTask() throws Exception {
+        assertContextCrosses(task -> {
+            try (java.util.concurrent.ExecutorService exec = ${spec.executorsFqn}.newVirtualThreadPerTaskExecutor()) {
+                return exec.submit(task).get();
+            }
+        });
+    }
+
+    @Test
+    @DisplayName("${display('contextCrossesToAsyncExecutor')}")
+    void contextCrossesToAsyncExecutor() throws Exception {
+        assertContextCrosses(task -> applicationTaskExecutor.submit(task).get());
+    }
+
+    @FunctionalInterface
+    private interface Launcher {
+        String[] launch(java.util.concurrent.Callable<String[]> task) throws Exception;
+    }
+
+    private void assertContextCrosses(Launcher launcher) throws Exception {
+        io.micrometer.observation.Observation parent =
+                io.micrometer.observation.Observation.start("keel.telemetry.probe", observationRegistry);
+        try (io.micrometer.observation.Observation.Scope scope = parent.openScope()) {
+            org.slf4j.MDC.put("correlationId", "sonda-contexto");${correlated ? `
+            ${spec.correlationFqn}.set("sonda-contexto");` : ''}
+            io.micrometer.tracing.Span expected = tracer.currentSpan();
+            assertThat(expected).as("la sonda no abrió ningún span: ¿trazas activas?").isNotNull();
+            String[] seen = launcher.launch(() -> {
+                io.micrometer.tracing.Span current = tracer.currentSpan();
+                return new String[] {
+                    current == null ? null : current.context().traceId(),
+                    current == null ? null : current.context().spanId(),
+                    org.slf4j.MDC.get("correlationId"),
+                    ${correlated ? `${spec.correlationFqn}.get()` : 'null'}
+                };
+            });
+            assertThat(seen[0]).as("la tarea empezó otra traza (o ninguna): el contexto no cruzó de hilo")
+                    .isEqualTo(expected.context().traceId());
+            assertThat(seen[1]).as("la tarea no ve el span de quien la lanzó").isEqualTo(expected.context().spanId());
+            assertThat(seen[2]).as("el MDC no cruzó de hilo: los logs de la tarea saldrían sin correlación")
+                    .isEqualTo("sonda-contexto");${correlated ? `
+            assertThat(seen[3]).as("CorrelationContext no cruzó de hilo: un evento publicado desde la tarea "
+                    + "saldría sin correlationId").isEqualTo("sonda-contexto");` : ''}
+        } finally {
+            org.slf4j.MDC.remove("correlationId");${correlated ? `
+            ${spec.correlationFqn}.clear();` : ''}
+            parent.stop();
+        }
+    }
+`
+    : '';
+
   return `package ${basePackage};
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -543,7 +630,22 @@ class ${PROBE_CLASS} {
 
     @Autowired
     private UseCaseMediator mediator;
-${spec.fields}
+${spec.fields}${
+    subsystems.includes('context')
+      ? `
+    @Autowired
+    private io.micrometer.observation.ObservationRegistry observationRegistry;
+
+    @Autowired
+    private io.micrometer.tracing.Tracer tracer;
+
+    /** El executor de @Async de Boot: el que recibe el TaskDecorator de ContextPropagationConfig. */
+    @Autowired
+    @org.springframework.beans.factory.annotation.Qualifier("applicationTaskExecutor")
+    private org.springframework.core.task.AsyncTaskExecutor applicationTaskExecutor;
+`
+      : ''
+  }
 
     /**
      * La exposición de Prometheus, que es donde se ve QUÉ publica el servicio y con qué etiquetas.
@@ -629,7 +731,7 @@ ${spec.fields}
                 .contains("${promMetric(RUNTIME_JVM.gcPause.replace(/_seconds$/, '')).sum}");
         assertThat(exposition).contains("${RUNTIME_JVM.threads}");
     }
-${storageCase}${mailCase}${cacheCase}${poolCase}${lagCase}
+${storageCase}${mailCase}${cacheCase}${poolCase}${lagCase}${contextCase}
     /**
      * Despacha un caso de uso REAL del diseño. El handler es un stub que lanza, y da igual: la
      * observación se abre antes de llamarlo y se cierra con su desenlace, que es justo lo que hay
@@ -846,6 +948,132 @@ class ${SWITCH_CLASS} {
         assertThat(exposition)
                 .as("la instrumentación de storage está apagada: su serie no puede existir")
                 .doesNotContain("${storage.count}");
+    }
+}
+`;
+}
+
+/**
+ * El colector CAÍDO: los tres exportadores OTLP encendidos contra un puerto donde no escucha
+ * nadie.
+ *
+ * <p>Es la promesa del patrón del colector —el servicio no depende de a dónde exporta—, y su
+ * modo de fallo sería de los caros: un exportador que bloqueara el hilo de la petición haría que
+ * una caída del colector se convirtiera en una caída del SERVICIO. Se mide lo que un despliegue
+ * ve: que el contexto arranca, que despachar casos de uso no se queda esperando al colector y que
+ * el scrape (que no pasa por el colector) sigue respondiendo.
+ *
+ * @param {object} spec lo mismo que {@link probeClass}
+ */
+export function downClass(spec) {
+  const useCase = promMetric(OBSERVATIONS.useCase);
+  // El puerto 9 (discard) no escucha en ninguna máquina de desarrollo ni de CI: la conexión se
+  // rechaza enseguida, que es el caso más común de colector caído (reiniciándose, mal apuntado).
+  const dead = 'http://127.0.0.1:9';
+  return `package ${spec.basePackage};
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import ${spec.basePackage}.application.interfaces.Command;
+import ${spec.basePackage}.infrastructure.configurations.usecase.UseCaseMediator;
+import java.lang.reflect.Constructor;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.actuate.observability.AutoConfigureObservability;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.web.client.TestRestTemplate;
+import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.test.context.ActiveProfiles;
+
+/**
+ * El colector CAÍDO: si esto falla, una caída del colector se convierte en una caída del servicio.
+ */
+@SpringBootTest(
+        webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+        classes = { ${spec.appClass}.class${spec.doublesClass ? `, ${spec.doublesClass}.class` : ''} },
+        properties = {
+            "management.tracing.sampling.probability=1.0",
+            "management.otlp.tracing.export.enabled=true",
+            "management.otlp.tracing.endpoint=${dead}/v1/traces",
+            "management.otlp.logging.export.enabled=true",
+            "management.otlp.logging.endpoint=${dead}/v1/logs",
+            "${METRICS_TRANSPORT.otlp.property}=true",
+            "management.otlp.metrics.export.url=${dead}/v1/metrics",
+            "management.otlp.metrics.export.step=1s"${spec.excludeAutoConfig ? `,
+            "spring.autoconfigure.exclude=${spec.excludeAutoConfig}"` : ''}
+        })
+@AutoConfigureObservability
+@ActiveProfiles("local")
+class ${DOWN_CLASS} {
+
+    @LocalServerPort
+    private int port;
+
+    @Autowired
+    private TestRestTemplate rest;
+
+    @Autowired
+    private UseCaseMediator mediator;
+
+    @Test
+    @DisplayName("${display('survivesCollectorDown')}")
+    void survivesCollectorDown() throws Exception {
+        // Calentar: la primera ejecución paga la carga de clases, y eso no es del colector.
+        for (int i = 0; i < 5; i++) {
+            dispatchOne();
+        }
+        long start = System.nanoTime();
+        for (int i = 0; i < 50; i++) {
+            dispatchOne();
+        }
+        long elapsedMillis = (System.nanoTime() - start) / 1_000_000;
+        // Holgado a propósito: sin colector de por medio son unos pocos milisegundos por caso de
+        // uso. Lo que se busca es un exportador que bloquee el hilo (segundos por llamada), no
+        // medir el rendimiento.
+        assertThat(elapsedMillis)
+                .as("50 casos de uso tardaron %d ms con el colector caído: algo espera al exportador", elapsedMillis)
+                .isLessThan(10_000L);
+        // Y las métricas, que no pasan por el colector, se siguen pudiendo leer.
+        String exposition = rest.getForObject("http://localhost:" + port + "${METRICS_TRANSPORT.scrapePath}", String.class);
+        assertThat(exposition).as("el scrape dejó de responder con el colector caído").contains("${useCase.count}");
+    }
+
+    private void dispatchOne() {
+        try {
+            Class<?> type = Class.forName("${spec.commandFqn}");
+            Constructor<?> constructor = type.getDeclaredConstructors()[0];
+            constructor.setAccessible(true);
+            Class<?>[] parameters = constructor.getParameterTypes();
+            Object[] arguments = new Object[parameters.length];
+            for (int index = 0; index < parameters.length; index++) {
+                arguments[index] = parameters[index].isPrimitive() ? defaultPrimitive(parameters[index]) : null;
+            }
+            mediator.dispatch((Command) constructor.newInstance(arguments));
+        } catch (ReflectiveOperationException ex) {
+            throw new IllegalStateException("La sonda no pudo construir ${spec.commandFqn}", ex);
+        } catch (RuntimeException | Error expected) {
+            // El stub del agente todavía no está escrito: da igual, la observación ya se cerró.
+        }
+    }
+
+    private static Object defaultPrimitive(Class<?> type) {
+        if (type == boolean.class) {
+            return Boolean.FALSE;
+        }
+        if (type == char.class) {
+            return (char) 0;
+        }
+        if (type == long.class) {
+            return 0L;
+        }
+        if (type == double.class) {
+            return 0d;
+        }
+        if (type == float.class) {
+            return 0f;
+        }
+        return 0;
     }
 }
 `;

@@ -9,14 +9,24 @@
 // handlers, y la capa application no puede importar infrastructure; context-propagation es de
 // Micrometer, no de Spring, así que no rompe la regla de «application sin Spring».
 //
-// Lo que NO propaga, y se dice: el ThreadLocal propio de CorrelationContext (infrastructure). Una
-// tarea paralela lee el correlationId del MDC —que es lo que usa el log— pero no lo estampa en
-// un evento; publicar desde una tarea paralela no es un patrón del generador.
+// Y el registro de lo que se propaga vive en INFRAESTRUCTURA (`ContextPropagationConfig`), porque
+// incluye el ThreadLocal propio de CorrelationContext, que application no puede importar. Se
+// registra al ARRANCAR y no al cargar el helper: así vale también para el executor de `@Async` de
+// Boot —al que se le aplica `ContextPropagatingTaskDecorator`—, que no pasa nunca por el helper.
+// Hasta aquí el correlationId de CorrelationContext NO viajaba a las tareas: el log lo llevaba
+// (va en el MDC) pero un evento publicado desde una tarea salía sin él. Con hilos virtuales,
+// lanzar trabajo a otro hilo es barato y tentador, así que cada forma de perder el contexto
+// acaba apareciendo; el gate de `check-logging.sh` (regla `context`) veta las demás.
 
 import { javaFile, javaPath, subPackage } from './render.js';
+import { correlationImport, usesCorrelation } from './correlation.js';
 
 export const CONCURRENCY_PKG = 'application.support';
 export const CONTEXT_EXECUTORS_CLASS = 'ContextPropagatingExecutors';
+export const PROPAGATION_CONFIG_PKG = 'infrastructure.configurations.concurrency';
+export const PROPAGATION_CONFIG_CLASS = 'ContextPropagationConfig';
+/** Clave con la que el correlationId de CorrelationContext se registra en el ContextRegistry. */
+export const CORRELATION_ACCESSOR_KEY = 'keel.correlation-id';
 
 export function usesContextExecutors(model) {
   return Boolean(model.services?.some((service) => service.operations.length > 0));
@@ -24,6 +34,73 @@ export function usesContextExecutors(model) {
 
 export function generate(model) {
   if (!usesContextExecutors(model)) return [];
+  return [renderExecutors(model), renderPropagationConfig(model)];
+}
+
+/**
+ * El registro de propagación y el decorador de `@Async`. Una sola clase porque las dos cosas
+ * dicen lo mismo —qué viaja de un hilo a otro— y separarlas es la forma de que una se quede atrás.
+ */
+function renderPropagationConfig(model) {
+  const correlated = usesCorrelation(model);
+  const imports = [
+    'io.micrometer.context.ContextRegistry',
+    'io.micrometer.context.integration.Slf4jThreadLocalAccessor',
+    'org.springframework.context.annotation.Bean',
+    'org.springframework.context.annotation.Configuration',
+    'org.springframework.core.task.TaskDecorator',
+    'org.springframework.core.task.support.ContextPropagatingTaskDecorator'
+  ];
+  if (correlated) imports.push(correlationImport(model));
+  const correlationAccessor = correlated
+    ? `
+        // El correlationId de CorrelationContext, que no es el del MDC: es el que estampa un evento
+        // al publicarse. Restaurarlo con set() también lo pone en el MDC; limpiarlo con clear()
+        // lo quita de los dos.
+        registry.registerThreadLocalAccessor("${CORRELATION_ACCESSOR_KEY}",
+                CorrelationContext::get, CorrelationContext::set, CorrelationContext::clear);`
+    : '';
+  const body = `/**
+ * Qué viaja del hilo que lanza un trabajo al hilo que lo ejecuta.
+ *
+ * <p>El MDC (correlationId, y con telemetría traceId/spanId), la observación activa —que es la
+ * traza— y el correlationId de CorrelationContext son ThreadLocal: un hilo nuevo, virtual o no,
+ * empieza sin ellos. Aquí se registran en el {@code ContextRegistry} de Micrometer AL ARRANCAR
+ * (la observación la registra micrometer-observation por ServiceLoader), y de ese registro leen
+ * los dos caminos por los que el código lanza trabajo a otro hilo:
+ *
+ * <ul>
+ *   <li>{@code ContextPropagatingExecutors} ({@code application/support}), para paralelizar dentro
+ *       de un handler;</li>
+ *   <li>el executor de {@code @Async} de Boot, al que Boot aplica el {@link TaskDecorator} de abajo.</li>
+ * </ul>
+ */
+@Configuration(proxyBeanMethods = false)
+public class ${PROPAGATION_CONFIG_CLASS} {
+
+    static {
+        ContextRegistry registry = ContextRegistry.getInstance();
+        // El MDC entero, no una lista de claves: así viajan también las que añada la telemetría.
+        registry.registerThreadLocalAccessor(new Slf4jThreadLocalAccessor());${correlationAccessor}
+    }
+
+    /**
+     * Captura el contexto al ENCOLAR la tarea y lo restaura al ejecutarla. Boot lo aplica a su
+     * executor de tareas, así que un {@code @Async} hereda traza, MDC y correlación sin que el
+     * código haga nada.
+     */
+    @Bean
+    public TaskDecorator contextPropagatingTaskDecorator() {
+        return new ContextPropagatingTaskDecorator();
+    }
+}`;
+  return {
+    path: javaPath(model, PROPAGATION_CONFIG_PKG, PROPAGATION_CONFIG_CLASS),
+    content: javaFile(subPackage(model, PROPAGATION_CONFIG_PKG), imports, body)
+  };
+}
+
+function renderExecutors(model) {
   const body = `/**
  * Executors que llevan el contexto del hilo que lanza la tarea al hilo que la ejecuta.
  *
@@ -45,7 +122,10 @@ public final class ${CONTEXT_EXECUTORS_CLASS} {
 
     static {
         // El MDC entero, no una lista de claves: así viajan también las que añada la telemetría.
-        // La observación activa ya la registra micrometer-observation por ServiceLoader.
+        // La observación activa ya la registra micrometer-observation por ServiceLoader, y el
+        // correlationId de CorrelationContext lo registra ContextPropagationConfig al arrancar
+        // (vive en infrastructure, que esta capa no puede importar). Registrar el MDC también
+        // aquí deja el helper usable fuera de un contexto de Spring; repetirlo no duplica nada.
         ContextRegistry.getInstance().registerThreadLocalAccessor(new Slf4jThreadLocalAccessor());
     }
 
@@ -60,8 +140,7 @@ public final class ${CONTEXT_EXECUTORS_CLASS} {
         return ContextExecutorService.wrap(Executors.newVirtualThreadPerTaskExecutor(), () -> SNAPSHOTS.captureAll());
     }
 }`;
-  return [
-    {
+  return {
       path: javaPath(model, CONCURRENCY_PKG, CONTEXT_EXECUTORS_CLASS),
       content: javaFile(
         subPackage(model, CONCURRENCY_PKG),
@@ -75,6 +154,5 @@ public final class ${CONTEXT_EXECUTORS_CLASS} {
         ],
         body
       )
-    }
-  ];
+  };
 }

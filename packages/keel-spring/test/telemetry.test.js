@@ -16,6 +16,7 @@ import { scaffoldService, resolveStack } from '../src/scaffold/index.js';
 import { askStackConfig, normalizeTelemetry, stackDrift, describeStack } from '../src/lib/stack-config.js';
 import { TELEMETRY_INFRA, collectorEndpoint, collectorHostEndpoint } from '../src/lib/stack-catalog.js';
 import { ATTRIBUTES, INSTRUMENTATION, METRICS_TRANSPORT, OBSERVATIONS } from '../src/lib/telemetry-probes.js';
+import { MANAGEMENT_PORT } from '../src/scaffold/config.js';
 
 const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
@@ -262,8 +263,14 @@ test('telemetría: en JSON los ids de traza salen con su nombre ECS (medido: Boo
 
 test('telemetría: histogramas exponenciales de latencia y correlationId en los spans', () => {
   const project = generate('stock-reservation', { broker: 'kafka', telemetry: 'otel' });
-  const yaml = YAML.parse(project.read('src/main/resources/parameters/production/telemetry.yaml').replace(/\$\{[^}]*\}/g, 'X'));
-  assert.equal(yaml.management.otlp.metrics.export['histogram-flavor'], 'base2_exponential_bucket_histogram');
+  const raw = project.read('src/main/resources/parameters/production/telemetry.yaml');
+  const yaml = YAML.parse(raw.replace(/\$\{[^}]*\}\}?/g, 'X'));
+  // Exponencial por defecto, y configurable: no todo backend los acepta por OTLP.
+  assert.ok(raw.includes('histogram-flavor: ${METRICS_OTLP_HISTOGRAM_FLAVOR:base2_exponential_bucket_histogram}'));
+  assert.equal(
+    project.read('src/main/resources/parameters/local/telemetry.yaml').includes('histogram-flavor: base2_exponential_bucket_histogram'),
+    true
+  );
   const histograms = yaml.management.metrics.distribution['percentiles-histogram'];
   for (const meter of ['[http.server.requests]', '[http.client.requests]', '[keel.use-case]']) assert.equal(histograms[meter], true, meter);
 
@@ -386,16 +393,28 @@ test('métricas: el transporte es SCRAPE, con el push por OTLP apagado y su prop
   assert.ok(!project.files.some((file) => file.endsWith('ExemplarsConfig.java')));
 });
 
-test('métricas: lo que se EXPONE y lo que se PERMITE dicen lo mismo, y production no publica el scrape', () => {
+test('métricas: lo que se EXPONE y lo que se PERMITE dicen lo mismo, y production publica el scrape en un puerto de gestión', () => {
   const project = generate('asset-vault', { telemetry: 'otel' });
   const exposure = (profile) => project.read(`src/main/resources/parameters/${profile}/management.yaml`);
-  for (const profile of ['local', 'develop']) {
+  for (const profile of ['local', 'develop', 'production']) {
     assert.ok(exposure(profile).includes(`,${METRICS_TRANSPORT.actuatorEndpointId}`), profile);
   }
-  // En production NO: los nombres de las métricas son nombres de negocio. Lo que protege el
-  // endpoint es la EXPOSICIÓN, porque la autorización ahí es permitAll — quien scrapea es un
-  // colector sin token. Sin exposición, Boot responde 404 haya la regla que haya.
-  assert.ok(!exposure('production').includes(METRICS_TRANSPORT.actuatorEndpointId));
+  // En production el scrape se expone, pero en un PUERTO DE GESTIÓN que no se publica: lo que
+  // protege esos nombres de negocio es dónde vive el endpoint, porque la autorización ahí es
+  // permitAll (quien scrapea es un colector sin token). Sin ese puerto, production no publicaba
+  // el scrape y el push venía apagado: por defecto no salía ninguna métrica.
+  const production = YAML.parse(exposure('production').replace(/\$\{([A-Z_]+):([^}]*)\}/g, '$2'));
+  assert.equal(production.management.server.port, MANAGEMENT_PORT);
+  assert.ok(!exposure('production').includes('metrics,'), 'metrics sigue sin exponerse en production');
+  // local y develop no mueven el actuator: el arnés y deploy/ lo leen en el puerto de la app.
+  for (const profile of ['local', 'develop']) {
+    assert.ok(!exposure(profile).includes('server:'), `${profile} no debería mover el actuator de puerto`);
+  }
+  // Y las sondas siguen en el puerto PRINCIPAL en todos los perfiles: el HEALTHCHECK las pide ahí.
+  for (const profile of ['local', 'develop', 'production']) {
+    assert.ok(exposure(profile).includes('add-additional-paths: true'), profile);
+  }
+  assert.ok(project.read('deploy/Dockerfile').includes('http://localhost:8080/readyz'));
 
   const security = project.find('/SecurityConfig.java');
   assert.ok(security.includes(`.requestMatchers("${METRICS_TRANSPORT.scrapePath}").permitAll()`));
@@ -438,4 +457,62 @@ test('el desenlace del caso de uso va en la OBSERVACIÓN: sin él, la alerta de 
 
   // Sin telemetría, el mediator no menciona ninguna observación.
   assert.ok(!generate('asset-vault', {}).find('/UseCaseMediator.java').includes('Observation'));
+});
+
+test('métricas: el servicio AVISA al arrancar si no tienen por dónde salir', () => {
+  // Los dos caminos se deciden por entorno, y apagarlos no rompe nada: el panel se queda vacío y
+  // las alertas, sin datos, no disparan. El aviso es lo único que lo hace visible, y en el arranque.
+  const config = generate('asset-vault', { telemetry: 'otel' }).find('/TelemetryConfig.java');
+  assert.match(config, /public ApplicationListener<ApplicationReadyEvent> metricsPathCheck\(Environment environment\)/);
+  // Lee exactamente las dos palancas del vocabulario, no unas escritas a mano.
+  assert.ok(config.includes(`"${METRICS_TRANSPORT.prometheus.property}"`));
+  assert.ok(config.includes(`"${METRICS_TRANSPORT.otlp.property}"`));
+  assert.ok(config.includes(`exposed.contains("${METRICS_TRANSPORT.actuatorEndpointId}")`));
+  // Y fuera del perfil test, donde las métricas se apagan a propósito.
+  assert.match(config, /@Profile\("!test"\)\s+public ApplicationListener<ApplicationReadyEvent> metricsPathCheck/);
+});
+
+
+test('trazas: el servicio emite W3C y acepta también B3, con la librería que lo lee', () => {
+  // Quien llama puede ser una malla de servicio o un sistema de la familia Zipkin, que hablan B3:
+  // si el servicio solo leyera W3C, la traza nacería de nuevo al llegar aquí, sin error ninguno.
+  const project = generate('asset-vault', { telemetry: 'otel' });
+  for (const profile of ['local', 'develop', 'production']) {
+    const yaml = YAML.parse(project.read(`src/main/resources/parameters/${profile}/telemetry.yaml`).replace(/\$\{[^}]*\}/g, 'X'));
+    assert.equal(yaml.management.tracing.propagation.produce, 'w3c', profile);
+    assert.equal(yaml.management.tracing.propagation.consume, 'w3c, b3, b3_multi', profile);
+  }
+  // Sin la librería de propagadores, B3 en consume no tiene quién lo lea.
+  assert.ok(project.read('build.gradle').includes("io.opentelemetry:opentelemetry-extension-trace-propagators"));
+});
+
+test('trazas: cada réplica se identifica con service.instance.id fuera de local', () => {
+  // Dos instancias del mismo servicio eran indistinguibles en el backend.
+  const project = generate('asset-vault', { telemetry: 'otel' });
+  for (const profile of ['develop', 'production']) {
+    const yaml = project.read(`src/main/resources/parameters/${profile}/telemetry.yaml`);
+    assert.ok(yaml.includes('"[service.instance.id]": ${SERVICE_INSTANCE_ID:${HOSTNAME:unknown}}'), profile);
+  }
+  assert.ok(!project.read('src/main/resources/parameters/local/telemetry.yaml').includes('service.instance.id'));
+});
+
+test('logs: JSON ECS fuera de local también SIN telemetría, con versión, entorno y réplica del servicio', () => {
+  // La consola es el canal primario de los logs en cualquier plataforma, y quien la recoge solo
+  // separa campos sin expresiones regulares si la línea es JSON. Antes dependía de la telemetría.
+  for (const telemetry of ['none', 'otel']) {
+    const project = generate('asset-vault', { telemetry });
+    for (const profile of ['develop', 'production']) {
+      const raw = project.read(`src/main/resources/parameters/${profile}/logging.yaml`);
+      const yaml = YAML.parse(raw.replace(/\$\{[^}]*\}\}?/g, 'X'));
+      const structured = yaml.logging.structured;
+      assert.equal(structured.format.console, 'X', `${telemetry}/${profile}: falta el formato estructurado`);
+      assert.ok(raw.includes('console: ${LOG_FORMAT:ecs}'), `${telemetry}/${profile}`);
+      assert.ok(structured.ecs.service.version, `${telemetry}/${profile}: la línea no dice qué versión la escribió`);
+      assert.ok(raw.includes('environment: ${DEPLOYMENT_ENVIRONMENT:'), `${telemetry}/${profile}`);
+      assert.ok(raw.includes('node-name: ${SERVICE_INSTANCE_ID:${HOSTNAME:unknown}}'), `${telemetry}/${profile}`);
+      // El renombrado de los ids de traza solo tiene sentido si hay traza.
+      assert.equal(Boolean(structured.json), telemetry === 'otel', `${telemetry}/${profile}: rename`);
+    }
+    assert.ok(!project.read('src/main/resources/parameters/local/logging.yaml').includes('structured'), 'local sigue en texto');
+  }
 });

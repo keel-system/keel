@@ -124,18 +124,18 @@ function authorizeBlock(matchers, { defaultAuthority, permitTechnical = true, pe
     lines.push(
       // Lo público del actuator es exactamente lo que `management.yaml` expone y no cuenta nada
       // del negocio: health (que los sondeos de infra y el HEALTHCHECK del Dockerfile piden sin
-      // credencial) e info. `metrics` NO entra: sus nombres SON nombres de negocio, así que se
+      // credencial, en el puerto de gestión y en /livez y /readyz del principal) e info. `metrics` NO entra: sus nombres SON nombres de negocio, así que se
       // queda detrás de `anyRequest().authenticated()` y quien la necesite —el arnés— pide token.
       // Los dos artefactos tienen que decir lo mismo, y hay un test que los cruza.
-      '                    .requestMatchers("/actuator/health/**", "/actuator/info", "/swagger-ui/**", "/swagger-ui.html", "/v3/api-docs/**").permitAll()'
+      '                    .requestMatchers("/actuator/health/**", "/livez", "/readyz", "/actuator/info", "/swagger-ui/**", "/swagger-ui.html", "/v3/api-docs/**").permitAll()'
     );
     if (permitScrape) {
       lines.push(
         // El scrape de métricas, y es la excepción que hay que entender: quien viene a buscarlas
         // es un COLECTOR, un proceso sin identidad ni forma de renovar un token, así que o entra
         // sin credencial o no hay métricas. Lo que impide que esos nombres salgan al borde no es
-        // esta regla sino la EXPOSICIÓN: `management.yaml` no publica el endpoint en production,
-        // y sin exposición Boot responde 404 haya la regla que haya. Los dos artefactos tienen
+        // esta regla sino DÓNDE se expone: en production el actuator vive en un puerto de gestión
+        // aparte (MANAGEMENT_PORT) que no se publica fuera del pod o del host. Los dos artefactos tienen
         // que seguir diciendo lo mismo, y el mismo test que cruza `metrics` cruza esto.
         `                    .requestMatchers("${METRICS_TRANSPORT.scrapePath}").permitAll()`
       );

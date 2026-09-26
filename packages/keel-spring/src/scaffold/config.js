@@ -294,18 +294,30 @@ function loggingYaml(model, profile) {
     const trace = telemetry ? '[%X{traceId:-},%X{spanId:-}] ' : '';
     lines.push('  pattern:', `    correlation: "${correlation}${trace}"`);
   }
-  if (telemetry && (profile === 'develop' || profile === 'production')) {
-    // El formato ECS de Boot vuelca el MDC tal cual: sin esto la línea lleva `traceId` y `spanId`,
-    // y un backend ECS no la enlaza con su traza porque busca `trace.id` y `span.id`.
+  // Fuera de local la consola es JSON (ECS) con y SIN telemetría: la consola es el canal primario
+  // de los logs en cualquier plataforma, y lo que la recoge —un agente de nodo, CloudWatch, Fluent
+  // Bit— separa los campos sin expresiones regulares solo si la línea es JSON. Hasta aquí dependía
+  // de haber elegido telemetría, así que un servicio sin ella entregaba texto plano en producción.
+  if (profile === 'develop' || profile === 'production') {
     lines.push(
       '  structured:',
       '    format:',
       `      console: ${envWithDefault(profile, 'LOG_FORMAT', 'ecs')}`,
-      '    json:',
-      '      rename:',
-      '        traceId: trace.id',
-      '        spanId: span.id'
+      // Quién escribió la línea. Boot pone el nombre (spring.application.name); la versión, el
+      // entorno y la réplica no los pone, y sin ellos dos despliegues o dos instancias del mismo
+      // servicio escriben líneas indistinguibles. Mismas fuentes que los atributos de recurso de
+      // las trazas (telemetry.yaml), para que log y traza digan lo mismo.
+      '    ecs:',
+      '      service:',
+      `        version: "${model.service.version}"`,
+      `        environment: ${envWithDefault(profile, 'DEPLOYMENT_ENVIRONMENT', profile)}`,
+      '        node-name: ${SERVICE_INSTANCE_ID:${HOSTNAME:unknown}}'
     );
+    if (telemetry) {
+      // El formato ECS de Boot vuelca el MDC tal cual: sin esto la línea lleva `traceId` y
+      // `spanId`, y un backend ECS no la enlaza con su traza porque busca `trace.id` y `span.id`.
+      lines.push('    json:', '      rename:', '        traceId: trace.id', '        spanId: span.id');
+    }
   }
   return lines.join('\n') + '\n';
 }
@@ -341,6 +353,12 @@ function telemetryYaml(model, profile) {
     '# Cambiar de backend es cambiar la configuración del COLECTOR, no este archivo.',
     'management:',
     '  tracing:',
+    // Emite W3C (el estándar) y acepta también B3 de quien lo llame: una malla de servicio o un
+    // sistema de la familia Zipkin no corta la traza al llegar aquí. Emitir B3 además no aporta
+    // nada a quien ya entiende W3C y duplica cabeceras.
+    '    propagation:',
+    '      produce: w3c',
+    '      consume: w3c, b3, b3_multi',
     '    sampling:',
     ...(profile === 'production'
       ? [
@@ -355,6 +373,11 @@ function telemetryYaml(model, profile) {
     // un punto dentro, sin ellos el binder de Boot las leería como mapas anidados.
     `      "[service.version]": "${model.service.version}"`,
     `      "[deployment.environment]": ${envWithDefault(profile, 'DEPLOYMENT_ENVIRONMENT', profile)}`,
+    // Qué RÉPLICA emitió cada señal. Sin esto, dos instancias del mismo servicio son
+    // indistinguibles en el backend: sus trazas y sus logs se mezclan bajo el mismo nombre.
+    // HOSTNAME es el nombre del pod o del contenedor en cualquier plataforma de contenedores;
+    // SERVICE_INSTANCE_ID lo fija a mano donde no lo sea. En local hay una sola instancia.
+    ...(profile === 'local' ? [] : ['      "[service.instance.id]": ${SERVICE_INSTANCE_ID:${HOSTNAME:unknown}}']),
     '  otlp:',
     '    tracing:',
     `      endpoint: ${endpoint}/v1/traces`,
@@ -382,7 +405,10 @@ function telemetryYaml(model, profile) {
     // Histogramas exponenciales: el backend calcula cualquier percentil (p95, p99) sin fijar los
     // cubos de antemano, y con un tamaño acotado. Solo aplica a esta salida: la exposición de
     // Prometheus publica los cubos clásicos, que son los que llevan pegados los exemplars.
-    '        histogram-flavor: base2_exponential_bucket_histogram',
+    // Configurable porque no todo backend acepta histogramas exponenciales por OTLP: con uno que
+    // no los entienda, METRICS_OTLP_HISTOGRAM_FLAVOR=explicit_bucket_histogram vuelve a los cubos
+    // fijos sin recompilar.
+    `        histogram-flavor: ${envWithDefault(profile, 'METRICS_OTLP_HISTOGRAM_FLAVOR', 'base2_exponential_bucket_histogram')}`,
     `        enabled: ${envWithDefault(profile, METRICS_TRANSPORT.otlp.envVar, 'false')}`,
     '  prometheus:',
     '    metrics:',
@@ -526,15 +552,25 @@ function statisticsEnabled(model, profile) {
 // inesperada del actuator» en cualquier diseño con capa security. Los cruza un test.
 function managementYaml(model, profile) {
   const showDetails = profile === 'production' ? 'never' : 'always';
-  // Ver arriba: en production, sin `metrics`. Y por lo mismo, sin `prometheus`: la exposición del
-  // scrape publica esos mismos nombres, así que lo que la protege NO es la autorización —que ahí
-  // es `permitAll`, porque quien scrapea es un colector sin token— sino no estar expuesta. Quien
-  // quiera scrapear en producción lo expone a conciencia con MANAGEMENT_ENDPOINTS y lo cierra en
-  // la red, o se queda con el push por OTLP (METRICS_EXPORT_OTLP=true) y pierde los exemplars.
-  const scrape = usesTelemetry(model) && profile !== 'production' ? `,${METRICS_TRANSPORT.actuatorEndpointId}` : '';
-  const endpoints = profile === 'production' ? 'health,info' : `health,info,metrics${scrape}`;
-  const lines = [
-    'management:',
+  // Ver arriba: en production, sin `metrics`. El scrape (`prometheus`) sí va, pero en un PUERTO
+  // DE GESTIÓN APARTE (MANAGEMENT_PORT): lo que protege esos nombres de negocio no es la
+  // autorización —el scrape es `permitAll`, porque quien lo lee es un colector sin token— sino que
+  // ese puerto no se publica fuera del pod o del host. Así cualquier colector puede venir a buscar
+  // las métricas sin decisión previa de quien despliega, y se conservan los exemplars. Hasta aquí
+  // production no exponía el scrape y el push venía apagado: por defecto no salía ninguna métrica.
+  const separatePort = usesTelemetry(model) && profile === 'production';
+  const scrape = usesTelemetry(model) ? `,${METRICS_TRANSPORT.actuatorEndpointId}` : '';
+  const endpoints = profile === 'production' ? `health,info${scrape}` : `health,info,metrics${scrape}`;
+  const lines = ['management:'];
+  if (separatePort) {
+    lines.push(
+      '  server:',
+      '    # Puerto del actuator, distinto del de negocio. NO se publica fuera del pod/host: solo lo',
+      `    # alcanza el colector que viene a leer ${METRICS_TRANSPORT.scrapePath}.`,
+      `    port: ${envWithDefault(profile, 'MANAGEMENT_PORT', MANAGEMENT_PORT)}`
+    );
+  }
+  lines.push(
     '  endpoints:',
     '    web:',
     '      exposure:',
@@ -544,10 +580,16 @@ function managementYaml(model, profile) {
     '      probes:',
     '        # Habilita /actuator/health/liveness y /actuator/health/readiness.',
     '        enabled: true',
+    '        # Y además /livez y /readyz en el puerto PRINCIPAL: son las que consultan el HEALTHCHECK',
+    '        # de la imagen y el orquestador, y tienen que responder aunque el actuator viva en otro.',
+    '        add-additional-paths: true',
     `      show-details: ${envWithDefault(profile, 'MANAGEMENT_HEALTH_SHOW_DETAILS', showDetails)}`
-  ];
+  );
   return lines.join('\n') + '\n';
 }
+
+/** Puerto de gestión por defecto en production (solo con telemetría). */
+export const MANAGEMENT_PORT = 8081;
 
 function dbYaml(model, profile, dbName) {
   const db = DATABASES[model.stack.database] ?? DATABASES.postgresql;

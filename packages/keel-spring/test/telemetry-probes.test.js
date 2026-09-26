@@ -24,6 +24,8 @@ import {
   OBSERVATIONS,
   PROBE_CLASS,
   SWITCH_CLASS,
+  DOWN_CLASS,
+  downClass,
   doublesClass,
   probeClass,
   promMetric,
@@ -79,7 +81,9 @@ test('cada caso del runner tiene id único y su método está en la clase que lo
     basePackage: 'com.ejemplo.servicio',
     appClass: 'ServicioApplication',
     commandFqn: 'com.ejemplo.servicio.application.commands.HacerAlgoCommand',
-    subsystems: ['storage', 'mail', 'cache', 'pool', 'consumerLag'],
+    subsystems: ['storage', 'mail', 'cache', 'pool', 'consumerLag', 'context'],
+    executorsFqn: 'com.ejemplo.servicio.application.support.ContextPropagatingExecutors',
+    correlationFqn: 'com.ejemplo.servicio.infrastructure.correlation.CorrelationContext',
     persistenceKind: 'relational',
     broker: 'kafka',
     storageBucket: 'assetBinaries',
@@ -95,15 +99,22 @@ test('cada caso del runner tiene id único y su método está en la clase que lo
   };
   const probe = probeClass(spec);
   const switched = switchClass(spec);
+  const down = downClass(spec);
 
   for (const item of CASES) {
-    const clase = item.method === 'switchedOff' ? switched : probe;
+    const clase = item.method === 'switchedOff' ? switched : item.method === 'survivesCollectorDown' ? down : probe;
     assert.ok(clase.includes(`void ${item.method}()`), `${item.id}: falta el método ${item.method}`);
     // El @DisplayName EMPIEZA por el id porque es por ahí por donde el runner cruza el XML.
     assert.ok(clase.includes(`@DisplayName("${item.id} ·`), `${item.id}: su @DisplayName no empieza por el id`);
   }
   assert.ok(probe.includes(`class ${PROBE_CLASS}`));
   assert.ok(switched.includes(`class ${SWITCH_CLASS}`));
+  assert.ok(down.includes(`class ${DOWN_CLASS}`));
+  // El colector caído: los TRES exportadores encendidos contra un puerto cerrado. Con uno solo, el
+  // caso diría que el servicio sobrevive a perder las trazas, no al colector.
+  for (const signal of ['tracing.export.enabled=true', 'logging.export.enabled=true', 'metrics.export.enabled=true']) {
+    assert.ok(down.includes(`management.otlp.${signal}`), signal);
+  }
 });
 
 // El pool es la asimetría del runtime: si el caso preguntara por Hikari en un proyecto documental
@@ -194,4 +205,34 @@ test('el doble del puerto de almacenamiento sale del DISEÑO y no puede ser fina
   // Con el aspecto puesto, Spring proxya este bean por CGLIB: una clase `final` deja el contexto
   // sin arrancar, con un mensaje que habla de CGLIB y no de telemetría.
   assert.ok(!/static final class InMemoryFileStorage/.test(minimo));
+});
+
+// El contexto al saltar de hilo se mide por los DOS caminos que ofrece el proyecto, y la mitad de
+// CorrelationContext solo cuando el diseño lo genera: pedírsela a un proyecto sin capa api ni
+// messaging no compilaría, y quitarla siempre dejaría sin medir justo lo que se añadió.
+test('los casos del contexto miden los dos caminos, y la correlación solo si existe', () => {
+  const base = {
+    basePackage: 'com.ejemplo.servicio',
+    appClass: 'ServicioApplication',
+    commandFqn: 'com.ejemplo.servicio.application.commands.HacerAlgoCommand',
+    subsystems: ['context'],
+    persistenceKind: null,
+    imports: [],
+    fields: '',
+    executorsFqn: 'com.ejemplo.servicio.application.support.ContextPropagatingExecutors'
+  };
+  const sin = probeClass(base);
+  assert.ok(sin.includes('com.ejemplo.servicio.application.support.ContextPropagatingExecutors.newVirtualThreadPerTaskExecutor()'));
+  assert.ok(sin.includes('applicationTaskExecutor.submit(task).get()'));
+  assert.ok(sin.includes('Qualifier("applicationTaskExecutor")'));
+  // El span y no solo la traza: un span nuevo sin padre no compartiría el spanId de quien lanzó.
+  assert.ok(sin.includes('.isEqualTo(expected.context().spanId())'));
+  assert.ok(!sin.includes('CorrelationContext'), 'sin CorrelationContext en el proyecto, la sonda no puede nombrarlo');
+
+  const con = probeClass({ ...base, correlationFqn: 'com.ejemplo.servicio.infrastructure.correlation.CorrelationContext' });
+  assert.ok(con.includes('com.ejemplo.servicio.infrastructure.correlation.CorrelationContext.get()'));
+  assert.ok(con.includes('CorrelationContext no cruzó de hilo'));
+
+  // Y fuera del subsistema, ni rastro: un proyecto sin operaciones no tiene helper.
+  assert.ok(!probeClass({ ...base, subsystems: [] }).includes('contextCrossesToParallelTask'));
 });

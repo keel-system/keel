@@ -80,6 +80,37 @@ public ValidateProductsResponseDto handle(ValidateProductsQuery query) {
   cual (el `code` del diseño debe llegar intacto al `ApiExceptionHandler`). Ante
   `InterruptedException`, re-interrumpe el hilo (`Thread.currentThread().interrupt()`).
 
+## El contexto al saltar de hilo: qué viaja y qué formas están vetadas
+
+Un hilo nuevo, virtual o no, empieza **vacío**: sin la traza, sin el MDC de los logs y sin el
+`correlationId`. Con hilos virtuales crear hilos es barato y tentador, así que la regla es simple:
+**solo hay dos caminos para lanzar trabajo a otro hilo, y los dos llevan el contexto.**
+
+- **`ContextPropagatingExecutors.newVirtualThreadPerTaskExecutor()`**, para paralelizar dentro de
+  un handler (el patrón de arriba).
+- **`@Async`**, si algún día hace falta: `build` genera `ContextPropagationConfig`
+  (`infrastructure/configurations/concurrency/`) con un `ContextPropagatingTaskDecorator` que
+  Spring Boot aplica a su executor de `@Async`. La tarea hereda traza, MDC y correlación sin
+  hacer nada.
+
+Por los dos caminos viajan **la observación activa** (la traza: los spans de la tarea cuelgan del
+de la petición), **el MDC entero** (el `correlationId` y, con telemetría, `traceId`/`spanId` en
+cada log) y **el `correlationId` de `CorrelationContext`**, que es el que estampa un evento al
+publicarse. Los registra `ContextPropagationConfig` al arrancar.
+
+`infra/check-logging.sh` (regla `context`) veta **todas** las demás formas, porque todas pierden
+el contexto igual:
+
+| Forma vetada | Por qué pierde el contexto |
+|---|---|
+| `Executors.newVirtualThreadPerTaskExecutor()`, `newFixedThreadPool(…)`, `newCachedThreadPool()`… | Un executor normal no copia nada al hilo de la tarea |
+| `Thread.ofVirtual()…`, `Thread.startVirtualThread(…)`, `new Thread(…)` | Un hilo lanzado a mano empieza sin contexto |
+| `CompletableFuture.supplyAsync(…)` / `runAsync(…)` | Sin executor corre en el pool común de Java; usa `exec.submit(…)` |
+| `parallelStream()` / `.parallel()` | Reparte el trabajo en el pool común de Java; usa un stream secuencial |
+
+Y **`@Scheduled` empieza sin contexto a propósito**: no lo lanza ninguna petición. Cada ejecución
+que hace trabajo pasa por el mediator y abre su propia traza.
+
 ## Dónde NO llegan los hilos virtuales: lo que corre por reloj
 
 El servicio arranca con `spring.threads.virtual.enabled: true`, y para atender peticiones es

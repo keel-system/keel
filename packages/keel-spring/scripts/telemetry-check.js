@@ -49,10 +49,12 @@ import { tmpDir } from '../test/helpers/tmp.js';
 import {
   CASES,
   DOUBLES_CLASS,
+  DOWN_CLASS,
   PROBE_CLASS,
   SWITCH_CLASS,
   consumerLagFor,
   doublesClass,
+  downClass,
   probeClass,
   switchClass
 } from '../src/lib/telemetry-probes.js';
@@ -214,6 +216,17 @@ function readProjectSpec(projectDir, stack) {
     spec.mailAttachments = fs.readFileSync(byName('MailMessage.java')[0], 'utf8').includes('List<Attachment> attachments');
   }
 
+  // El contexto al saltar de hilo: aplica si build generó el helper. El CorrelationContext solo
+  // existe con capa api o messaging, y entonces también se comprueba que cruza.
+  const fqnOf = (file) => `${/package\s+([\w.]+);/.exec(fs.readFileSync(file, 'utf8'))[1]}.${path.basename(file, '.java')}`;
+  const executors = byName(`${path.sep}ContextPropagatingExecutors.java`)[0];
+  if (executors) {
+    spec.subsystems.push('context');
+    spec.executorsFqn = fqnOf(executors);
+    const correlation = byName(`${path.sep}CorrelationContext.java`)[0];
+    if (correlation) spec.correlationFqn = fqnOf(correlation);
+  }
+
   const cacheConfig = byName('CacheConfig.java')[0];
   if (cacheConfig) {
     spec.subsystems.push('cache');
@@ -260,6 +273,7 @@ function writeProbes(projectDir, spec) {
   const dir = path.join(projectDir, 'src', 'test', 'java', ...spec.basePackage.split('.'));
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, `${PROBE_CLASS}.java`), probeClass(spec), 'utf8');
+  fs.writeFileSync(path.join(dir, `${DOWN_CLASS}.java`), downClass(spec), 'utf8');
   if (spec.subsystems.includes('storage')) {
     fs.writeFileSync(path.join(dir, `${DOUBLES_CLASS}.java`), doublesClass(spec), 'utf8');
     fs.writeFileSync(path.join(dir, `${SWITCH_CLASS}.java`), switchClass(spec), 'utf8');
@@ -314,7 +328,8 @@ async function waitForInfra(ports, seconds = 180) {
  * salida vacía y no dice nada de lo que se estaba midiendo.
  */
 function runProbe(projectDir, spec) {
-  const classes = [PROBE_CLASS, ...(spec.subsystems.includes('storage') ? [SWITCH_CLASS] : [])];
+  // DOWN_CLASS va siempre: el colector caído no depende de ningún subsistema del diseño.
+  const classes = [PROBE_CLASS, DOWN_CLASS, ...(spec.subsystems.includes('storage') ? [SWITCH_CLASS] : [])];
   const testArgs = classes.flatMap((name) => ['--tests', `${spec.basePackage}.${name}`]);
   return run('sh', ['gradlew', 'test', ...testArgs, '--console=plain', '--no-daemon'], { cwd: projectDir });
 }

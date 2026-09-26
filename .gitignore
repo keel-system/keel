@@ -8,3 +8,5 @@ claim-check.json
 store-check.json
 mapping-check.json
 index-check.json
+telemetry-check.json
+deploy-check.json

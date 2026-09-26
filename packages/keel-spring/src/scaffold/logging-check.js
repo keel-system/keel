@@ -31,6 +31,43 @@ const LOG_CALL = '(log|LOG|logger|LOGGER)[.](trace|debug|info|warn|error)[[:spac
 const CONCAT = `${LOG_CALL}[^;]*("[[:space:]]*[+]|[+][[:space:]]*")`;
 const WHOLE_OBJECT = `${LOG_CALL}[^;]*,[[:space:]]*(command|query|dto|request|payload|body|message)[[:space:]]*[,)]`;
 
+/**
+ * Las formas de lanzar trabajo a otro hilo que PIERDEN el contexto (MDC, observación activa y
+ * correlationId). Exportada: el test recorre esta misma lista y la falsa forma por forma, así que
+ * una forma nueva no puede entrar sin su caso. Patrones con clases entre corchetes y sin `\s`:
+ * viajan por `grep -E`, y un escape mal puesto no falla, aborta el check.
+ */
+export const CONTEXT_FORMS = [
+  {
+    id: 'executors',
+    // `Executors` SIN nada pegado delante: `ContextPropagatingExecutors.newVirtual…(` —el uso
+    // correcto que enseña la convención— contiene la forma prohibida como subcadena, y mientras
+    // el patrón no lo exigía el gate daba rojo justo al código que la convención pide escribir.
+    pattern:
+      '(^|[^A-Za-z0-9_])Executors[.]new(VirtualThreadPerTaskExecutor|ThreadPerTaskExecutor|FixedThreadPool|CachedThreadPool|SingleThreadExecutor|WorkStealingPool|ScheduledThreadPool|SingleThreadScheduledExecutor)[[:space:]]*[(]',
+    sample: 'var exec = Executors.newFixedThreadPool(4);',
+    why: `crea un executor que no propaga el contexto (MDC, traza y correlación): usa ${CONTEXT_EXECUTORS_CLASS}.newVirtualThreadPerTaskExecutor()`
+  },
+  {
+    id: 'thread',
+    pattern: '(Thread[.](ofVirtual|ofPlatform|startVirtualThread)[[:space:]]*[(]|new[[:space:]]+Thread[[:space:]]*[(])',
+    sample: 'Thread.startVirtualThread(() -> port.findA(id));',
+    why: `lanza un hilo a mano, que empieza sin contexto: usa ${CONTEXT_EXECUTORS_CLASS}.newVirtualThreadPerTaskExecutor() y submit()`
+  },
+  {
+    id: 'completableFuture',
+    pattern: 'CompletableFuture[.](supplyAsync|runAsync)[[:space:]]*[(]',
+    sample: 'var a = CompletableFuture.supplyAsync(() -> port.findA(id));',
+    why: `CompletableFuture sin executor corre en el pool común de Java, sin contexto: usa ${CONTEXT_EXECUTORS_CLASS}.newVirtualThreadPerTaskExecutor() y submit()`
+  },
+  {
+    id: 'parallelStream',
+    pattern: '[.](parallelStream|parallel)[[:space:]]*[(][[:space:]]*[)]',
+    sample: 'ids.parallelStream().map(port::find).toList();',
+    why: 'un stream paralelo reparte el trabajo en el pool común de Java, sin contexto: usa un stream secuencial o el executor del proyecto'
+  }
+];
+
 const SCRIPT = (model) => `#!/usr/bin/env bash
 # check-logging.sh — higiene de los logs de ${model.service.name}.
 #
@@ -98,20 +135,23 @@ done <<EOF
 $(grep -rlE -- '[.](error|atError)[[:space:]]*[(]' "$SRC" 2>/dev/null)
 EOF
 
-# Un executor que no propaga el contexto: las tareas que lanza escriben logs sin correlationId
-# y, con telemetría, abren spans huérfanos. El único sitio donde puede aparecer es el propio
-# helper, que lo envuelve.
-while IFS= read -r file; do
+# Trabajo lanzado a otro hilo sin propagar el contexto: las tareas escriben logs sin correlationId
+# y, con telemetría, abren spans huérfanos, separados de la traza de la petición. Con hilos
+# virtuales lanzar trabajo es barato, así que se vetan TODAS las formas de hacerlo a pelo, no solo
+# el executor de hilos virtuales. El único sitio donde puede aparecer es el propio helper.
+${CONTEXT_FORMS.map(
+  (form) => `while IFS= read -r file; do
   [ -n "$file" ] || continue
   case "$file" in */${CONTEXT_EXECUTORS_CLASS}.java) continue ;; esac
-  hits="$(sed -e 's://.*::' -e '/^[[:space:]]*\\*/d' -e '/^[[:space:]]*\\/\\*/d' "$file" | grep -nE -- 'Executors[.]newVirtualThreadPerTaskExecutor[[:space:]]*[(]' || true)"
+  hits="$(sed -e 's://.*::' -e '/^[[:space:]]*\\*/d' -e '/^[[:space:]]*\\/\\*/d' "$file" | grep -nE -- '${form.pattern}' || true)"
   if [ -n "$hits" ]; then
     findings=$((findings + 1))
-    detail="$detail  [context] \${file#./}: crea un executor que no propaga el contexto (MDC y traza): usa ${CONTEXT_EXECUTORS_CLASS}.newVirtualThreadPerTaskExecutor()\\n$(printf '%s\\n' "$hits" | sed 's/^/      /')\\n"
+    detail="$detail  [context] \${file#./}: ${form.why}\\n$(printf '%s\\n' "$hits" | sed 's/^/      /')\\n"
   fi
 done <<EOF
-$(grep -rlE -- 'newVirtualThreadPerTaskExecutor' "$SRC" 2>/dev/null)
-EOF
+$(grep -rlE -- '${form.pattern}' "$SRC" 2>/dev/null)
+EOF`
+).join('\n\n')}
 
 echo ""
 echo "HIGIENE DE LOGS Y CONTEXTO"

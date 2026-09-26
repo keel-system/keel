@@ -52,6 +52,14 @@ const literal = (value) => value.replace(/\./g, '[.]');
 const TAG_CALL =
   '([.](lowCardinalityKeyValue|tag|tags)[[:space:]]*[(]|(Tag|Tags)[.]of[[:space:]]*[(])[[:space:]]*"';
 
+// La otra forma de poner etiquetas, la de los atajos del registro:
+// `registry.counter("nombre", "clave", valor)`. Ahí la clave es el SEGUNDO literal —el primero es
+// el nombre de la métrica—, así que el patrón de arriba no la veía y un id metido por esta vía
+// pasaba el gate. Como arriba, se comprueba la primera clave de la llamada.
+const VARARGS_CALL =
+  '[.](counter|timer|summary|gauge)[[:space:]]*[(][[:space:]]*"[^"]*"[[:space:]]*,[[:space:]]*"';
+export { TAG_CALL, VARARGS_CALL };
+
 const SCRIPT = (model) => {
   const allowed = allowedTagKeys();
   const allowedPattern = `(${allowed.map(literal).join('|')})`;
@@ -95,6 +103,19 @@ while IFS= read -r file; do
   fi
 done <<EOF
 $(grep -rlE -- '${TAG_CALL}' "$SRC" 2>/dev/null)
+EOF
+
+while IFS= read -r file; do
+  [ -n "$file" ] || continue
+  hits="$(sed -e 's://.*::' -e '/^[[:space:]]*\\*/d' -e '/^[[:space:]]*\\/\\*/d' "$file" \\
+    | grep -nE -- '${VARARGS_CALL}' \\
+    | grep -vE -- '${VARARGS_CALL.slice(0, -1)}"${allowedPattern}"' || true)"
+  if [ -n "$hits" ]; then
+    findings=$((findings + 1))
+    detail="$detail  [cardinality] \${file#./}: etiqueta de métrica (en la forma counter/timer/summary/gauge con pares clave-valor) con una clave fuera del vocabulario (${allowed.join(', ')}). Si el valor identifica algo, va al span con addHighCardinalityKeyValue, no a la métrica\\n$(printf '%s\\n' "$hits" | sed 's/^/      /')\\n"
+  fi
+done <<EOF
+$(grep -rlE -- '${VARARGS_CALL}' "$SRC" 2>/dev/null)
 EOF
 
 echo ""

@@ -1008,3 +1008,51 @@ test('mailDelivery: el patrón del envío no lleva el punto de comodín', () => 
   const content = read(build('notification-mailer'));
   assert.match(content, /'mailSender\[[.]\]send'/);
 });
+
+// La única pieza de la telemetría que escribe el agente es la línea del listener que continúa la
+// traza. La sobrecarga de String la corta, y había DOS formas de llegar a ella: pasar
+// `…correlationId()` directamente —la que el gate ya vetaba— y sacarlo antes a una variable, que
+// pasaba el gate porque la sentencia del runWith ya no nombra correlationId(). Se ejecuta el
+// script con las tres formas; la correcta tiene que dar verde, o el caso no probaría nada.
+test('inboundContext: veta la sobrecarga de String también con el id en una variable', (t) => {
+  const service = loadService(fixture('stock-reservation'));
+  const workspace = tmpDir('keel-idem-check-');
+  const result = scaffoldService({
+    manifest: service.manifest,
+    layers: service.layers,
+    workspace,
+    force: true,
+    stack: { broker: 'kafka', telemetry: 'otel' }
+  });
+  const project = path.join(workspace, result.outDir);
+  const dir = path.join(project, 'src/main/java/com/fulfillment/stockreservation/infrastructure/messaging/subscriptions');
+  fs.mkdirSync(dir, { recursive: true });
+  const listener = (body) =>
+    fs.writeFileSync(
+      path.join(dir, 'StockReservedListener.java'),
+      `package com.fulfillment.stockreservation.infrastructure.messaging.subscriptions;
+
+public class StockReservedListener {
+
+    public void onMessage(EventEnvelope<StockReservedMessage> envelope) {
+${body}
+    }
+}
+`
+    );
+  const flagged = (out) => /\[inboundContext\] StockReserved \(StockReservedListener\)/.test(out);
+
+  listener('        CorrelationContext.runWith(envelope.metadata(), () -> dispatch(envelope.data()));');
+  const correct = run(project);
+  if (correct === null) return t.skip('sin bash en el PATH');
+  assert.ok(!flagged(correct.out), `la forma correcta no puede dar rojo\n${correct.out}`);
+
+  listener('        CorrelationContext.runWith(envelope.metadata().correlationId(), () -> dispatch(envelope.data()));');
+  assert.ok(flagged(run(project).out), 'la sobrecarga de String en línea tenía que dar rojo');
+
+  listener(
+    '        String correlationId = envelope.metadata().correlationId();\n' +
+      '        CorrelationContext.runWith(correlationId, () -> dispatch(envelope.data()));'
+  );
+  assert.ok(flagged(run(project).out), 'la sobrecarga de String con el id en una variable tenía que dar rojo');
+});

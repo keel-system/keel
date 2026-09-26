@@ -99,3 +99,21 @@ test('check-telemetry.sh: un comentario que cita la forma prohibida no es un hal
   writeJava(root, 'Comentada', '    // Nunca: observation.lowCardinalityKeyValue("orderId", orderId);\n    void medir() {}');
   assert.equal(run(root).status, 0, 'el gate se pondría rojo por su propia prosa y por la de build');
 });
+
+// Los atajos del registro ponen la etiqueta como SEGUNDO literal (el primero es el nombre de la
+// métrica), y el patrón de `.tag("…"` no la veía: un id metido por esta vía pasaba el gate.
+test('check-telemetry.sh: también caza la forma counter/timer/summary/gauge con pares clave-valor', () => {
+  for (const metodo of ['counter', 'timer', 'summary', 'gauge']) {
+    const root = generate('asset-vault', { telemetry: 'otel' });
+    writeJava(root, 'Atajo', `    void medir(String orderId) {\n        registry.${metodo}("keel.pedidos", "orderId", orderId);\n    }`);
+    const resultado = run(root);
+    assert.equal(resultado.status, 1, `${metodo}: el gate no vio la etiqueta prohibida:\n${resultado.stdout}`);
+    assert.equal(resultado.stderr.trim(), '', `${metodo}: el gate abortó:\n${resultado.stderr}`);
+    assert.match(resultado.stdout, /Atajo\.java/);
+
+    // Con una clave del vocabulario, la misma forma pasa: sin esta mitad, un patrón que vetara
+    // todo atajo pasaría el caso de arriba.
+    writeJava(root, 'Atajo', `    void medir(String op) {\n        registry.${metodo}("keel.pedidos", "${allowedTagKeys()[0]}", op);\n    }`);
+    assert.equal(run(root).status, 0, `${metodo}: una clave del vocabulario tiene que pasar`);
+  }
+});

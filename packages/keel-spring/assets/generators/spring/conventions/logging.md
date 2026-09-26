@@ -49,7 +49,7 @@ Lo verifica en estático `infra/check-logging.sh`, con cuatro reglas:
 - `concat`: concatenación dentro de un `log.*(`.
 - `wholeObject`: un objeto de entrada entero (`command`, `dto`, `request`, `payload`…) como argumento.
 - `errorLevel`: un `log.error` o `log.atError()` en `domain/` o `application/`.
-- `context`: un executor que no propaga el contexto.
+- `context`: trabajo lanzado a otro hilo sin propagar el contexto (executors de `Executors`, hilos a mano, `CompletableFuture` sin executor, streams paralelos). Las formas permitidas y el porqué, en `conventions/virtual-threads.md`.
 
 Lo que no puede ver —repetir una línea que ya escribe una frontera, o un `INFO` que debería ser `DEBUG`— depende de seguir esta convención.
 

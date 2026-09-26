@@ -62,7 +62,7 @@ function metadataOverload(model) {
 
 function renderContext(model) {
   const overload = metadataOverload(model);
-  const imports = ['org.slf4j.MDC'];
+  const imports = ['java.util.UUID', 'java.util.regex.Pattern', 'org.slf4j.MDC'];
   if (overload) imports.push(`${subPackage(model, 'domain.events')}.EventMetadata`);
   if (overload && usesTelemetry(model)) {
     imports.push(messageTracingImport(model), 'io.micrometer.observation.transport.Kind');
@@ -93,13 +93,26 @@ public final class CorrelationContext {
         // Clase de utilidad.
     }
 
-    /** Fija la correlación del hilo actual; no hace nada si viene nula o en blanco. */
+    /**
+     * Lo que se acepta como correlationId. El valor llega de FUERA (una cabecera HTTP, la
+     * metadata de un mensaje ajeno) y acaba en cada línea de log, en la cabecera de respuesta,
+     * en el atributo del span y en los eventos que salen: sin cota, un cliente podía meter
+     * saltos de línea en los logs de texto o un valor de kilobytes en cada registro.
+     */
+    private static final Pattern ACCEPTED = Pattern.compile("[A-Za-z0-9._-]{1,64}");
+
+    /**
+     * Fija la correlación del hilo actual; no hace nada si viene nula o en blanco. Un valor que no
+     * cumple el formato no se rechaza ni se trunca: se sustituye por uno nuevo, igual que si no
+     * hubiera llegado, porque truncar produciría ids que se confunden entre sí.
+     */
     public static void set(String correlationId) {
         if (correlationId == null || correlationId.isBlank()) {
             return;
         }
-        CURRENT.set(correlationId);
-        MDC.put(MDC_KEY, correlationId);
+        String accepted = ACCEPTED.matcher(correlationId).matches() ? correlationId : UUID.randomUUID().toString();
+        CURRENT.set(accepted);
+        MDC.put(MDC_KEY, accepted);
     }
 
     /** @return la correlación del hilo actual, o null si no hay ninguna abierta. */
@@ -137,8 +150,9 @@ function renderFilter(model) {
   const body = `/**
  * Abre el contexto de correlación en cada petición HTTP.
  *
- * Toma el header X-Correlation-Id; si el cliente no lo envía, genera uno. El
- * valor se devuelve en la respuesta para que quien llamó pueda registrarlo y
+ * Toma el header X-Correlation-Id; si el cliente no lo envía, genera uno. Si lo envía
+ * con un formato que no se acepta, CorrelationContext lo sustituye por uno nuevo. El valor
+ * EFECTIVO se devuelve en la respuesta para que quien llamó pueda registrarlo y
  * rastrear después la petición en los logs y en los eventos que haya provocado.
  *
  * Se ordena casi al principio de la cadena para que hasta los fallos de
@@ -159,7 +173,8 @@ public class CorrelationFilter extends OncePerRequestFilter {
         }
         try {
             CorrelationContext.set(correlationId);
-            response.setHeader(HEADER, correlationId);
+            // El efectivo, no el recibido: si no cumplía el formato, CorrelationContext puso otro.
+            response.setHeader(HEADER, CorrelationContext.get());
             chain.doFilter(request, response);
         } finally {
             CorrelationContext.clear();

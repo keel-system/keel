@@ -626,6 +626,43 @@ quede atrás respecto a lo que se genera. El resto son endurecimientos locales.
 
 ---
 
+## 6 bis. Endurecimiento del lado del servicio (2026-09-26)
+
+Primera ronda de las propuestas, limitada a lo que vive **en el servicio** y funciona con
+cualquier colector o plataforma. Las plantillas de colector, el panel y las alertas quedan fuera.
+Estado de cada fragilidad de §5 tras la ronda:
+
+| Fragilidad | Estado | Qué se hizo |
+|---|---|---|
+| **F1** métricas de producción | **Cerrada del lado del servicio** | En `production` (con telemetría) el actuator vive en un **puerto de gestión** (`MANAGEMENT_PORT`, 8081) con `health,info,prometheus`; las sondas siguen en el 8080 como `/livez` y `/readyz` (`add-additional-paths`), el `HEALTHCHECK` las usa y van en el `permitAll` y en el predicado anti-ruido. `TelemetryConfig.metricsPathCheck` avisa al arrancar si no hay camino de métricas. **Pendiente del lado del colector**: las plantillas aún no leen el 8081 |
+| **F3** traza a través del broker | Abierta | No se tocó (P3) |
+| **F4** hueco del gate del listener | **Cerrada** | `inboundContext` veta también sacar el `correlationId` de la metadata a una variable. Caso ejecutado y falsado |
+| **F5** gate de cardinalidad | **Reducida** | Cubre la forma `counter/timer/summary/gauge("nombre", "clave", v)`. Sigue sin ver claves en constantes ni valores dinámicos en claves permitidas |
+| **F7** `X-Correlation-Id` sin validar | **Cerrada** | `CorrelationContext.set()` acepta `[A-Za-z0-9._-]{1,64}` y sustituye lo demás por un UUID; el filtro devuelve el valor efectivo |
+| **F12** gauge de rendidos por scrape | Abierta | Queda pendiente de medir antes de cambiar nada |
+
+Además, cosas nuevas que no estaban en §5:
+
+- **Contexto entre hilos (hilos virtuales).** `ContextPropagationConfig` registra al arrancar el MDC
+  y el `CorrelationContext` en el `ContextRegistry` y declara un `ContextPropagatingTaskDecorator`
+  para `@Async`. El gate `context` veta todas las formas de lanzar trabajo sin contexto
+  (`CONTEXT_FORMS`). Y apareció un **defecto previo**: el patrón del gate daba rojo al uso correcto
+  del helper, porque `ContextPropagatingExecutors.newVirtual…` contiene `Executors.newVirtual…`.
+  TEL-13 y TEL-14 comprueban en ejecución que la traza, el MDC y la correlación cruzan de hilo por
+  los dos caminos.
+- **B3 al recibir** (`management.tracing.propagation.consume: w3c, b3, b3_multi`, con la librería
+  `opentelemetry-extension-trace-propagators`); se sigue emitiendo W3C.
+- **`service.instance.id`** en trazas y **`service.version`/`environment`/`node-name`** en cada log
+  ECS, para distinguir réplicas y despliegues.
+- **Logs JSON ECS fuera de `local` también sin telemetría**, porque la consola es el canal de logs
+  en cualquier plataforma.
+- **Histograma OTLP configurable** (`METRICS_OTLP_HISTOGRAM_FLAVOR`) para backends sin histogramas
+  exponenciales.
+- **TEL-15, colector caído**: los tres exportadores contra un puerto cerrado; el servicio arranca,
+  atiende sin bloquearse y sigue publicando el scrape.
+
+---
+
 ## 7. Referencias
 
 | Tema | Archivo |

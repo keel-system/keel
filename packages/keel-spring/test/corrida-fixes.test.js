@@ -1641,9 +1641,11 @@ test('lo que el actuator expone y lo que la seguridad permite dicen lo mismo', (
   // En local sí, porque es donde el arnés lee el gauge del dead-letter.
   assert.match(project_.file(path.join('local', 'management.yaml')), /include: health,info,metrics/);
 
-  // Y lo público es exactamente lo que se expone en production: health e info, nada más.
+  // Y lo público es exactamente lo que se expone en production: health e info, más las sondas que
+  // `add-additional-paths` sirve en el puerto principal (el HEALTHCHECK las pide sin credencial).
   const security = project_.file('SecurityConfig.java');
-  assert.match(security, /requestMatchers\("\/actuator\/health\/\*\*", "\/actuator\/info"/);
+  assert.match(security, /requestMatchers\("\/actuator\/health\/\*\*", "\/livez", "\/readyz", "\/actuator\/info"/);
+  assert.match(production, /add-additional-paths: true/, 'las sondas del puerto principal no están habilitadas');
   assert.ok(
     !security.includes('"/actuator/metrics'),
     'metrics abierto con permitAll: sus nombres cuentan cómo funciona el servicio por dentro'

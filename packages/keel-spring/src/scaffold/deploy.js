@@ -185,8 +185,10 @@ EXPOSE 8080
 # wget de BusyBox (viene en la base alpine): la imagen no trae curl, y este
 # healthcheck lo honran igual docker y podman. Es lo que consume el
 # \`depends_on: service_healthy\` de quien dependa de la app y el bucle de up.sh.
+# /readyz y no /actuator/health/readiness: es la misma sonda, pero servida en el puerto
+# PRINCIPAL en todos los perfiles, y en production el actuator vive en otro puerto.
 HEALTHCHECK --interval=10s --timeout=5s --start-period=45s --retries=18 \\
-  CMD wget -q -O - http://localhost:8080/actuator/health/readiness | grep -q '"status":"UP"' || exit 1
+  CMD wget -q -O - http://localhost:8080/readyz | grep -q '"status":"UP"' || exit 1
 
 # Forma shell para que \$JAVA_OPTS se expanda; exec para que la JVM sea el PID 1 y
 # reciba el SIGTERM que dispara el apagado ordenado (server.shutdown: graceful).
