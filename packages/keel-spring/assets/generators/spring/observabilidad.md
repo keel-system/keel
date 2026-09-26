@@ -70,10 +70,21 @@ Esto es lo que hace que **cambiar de backend no toque el servicio**: se edita la
 
 **¿Por qué las métricas se scrapean y no se empujan?** Por los **exemplars**: el enlace que lleva de un punto de una métrica («el p95 subió») a una traza de ejemplo («esta petición concreta tardó eso»). Viajan pegados a los cubos del histograma en el formato de exposición de Prometheus, y el exportador OTLP de métricas de esta versión de Spring Boot no sabe emitirlos. Si tu plataforma no puede scrapear, `METRICS_EXPORT_OTLP=true` vuelve al push y lo único que se pierde son los exemplars — encender los dos a la vez duplica cada serie.
 
-Los **logs tienen dos caminos** y conviene entenderlo desde el principio:
+Los **logs tienen dos caminos** para llegar al backend, y conviene entenderlo desde el principio:
 
-- **La consola es el canal principal.** En `develop` y `production` cada línea es JSON (formato ECS), que es lo que recoge la plataforma (en Kubernetes, el agente de logs del clúster o el propio colector leyendo el fichero del contenedor).
-- **El envío por OTLP es opcional** y va **apagado** (`LOG_EXPORT_OTLP=false`). Si lo enciendes y además alguien recoge la consola, cada línea llega **dos veces** al backend. En `deploy/` va encendido a propósito, porque allí no hay nada que recoja la consola.
+- **Camino A, la consola (el principal, siempre activo).** El servicio escribe cada línea en su salida estándar y **otro programa** la lee de ahí y la envía al backend: en Kubernetes, el agente de logs del clúster o el propio colector leyendo el fichero del contenedor; en AWS, CloudWatch; en otras plataformas, Fluent Bit o similares. El servicio no sabe adónde va el log. En `develop` y `production` cada línea es **JSON en formato ECS** (Elastic Common Schema: una convención abierta de nombres de campo, como `@timestamp`, `log.level` o `trace.id`, que no depende de ningún proveedor), para que quien la recoja pueda separar los campos sin expresiones regulares.
+- **Camino B, OTLP (opcional, apagado por defecto).** El propio servicio envía cada línea **directamente al colector** por la red, igual que las trazas. Se enciende con `LOG_EXPORT_OTLP=true`.
+
+**No enciendas los dos a la vez si la plataforma ya recoge la consola**: cada línea llegaría **dos veces** al backend, con el doble de almacenamiento y búsquedas confusas. Por eso el camino B viene apagado: lo normal en producción es que la plataforma recoja la consola.
+
+**`deploy/` sí lo enciende**, a propósito: en el entorno de pruebas con compose **nadie lee la consola** de los contenedores, así que sin el camino B no llegaría ningún log a Loki y Grafana saldría vacío.
+
+| Entorno | Camino A (consola) | Camino B (OTLP) | Por qué |
+|---|---|---|---|
+| `production`, `develop` | activo | apagado | la plataforma recoge la consola; con los dos, cada log saldría duplicado |
+| `deploy/` | activo, pero nadie lo lee | **encendido** | es la única forma de que los logs lleguen a Loki |
+
+> **No añadas un `logback-spring.xml` al proyecto.** Es la forma habitual de configurar los logs en Spring, pero aquí rompe el camino A **sin que nada falle**: cuando ese archivo existe, Spring Boot deja de configurar la consola por su cuenta, y el formato JSON ECS lo configura justo Boot. Los logs volverían a texto plano, el servicio arrancaría con normalidad y la plataforma recibiría texto donde espera JSON: no podría separar los campos y se perdería el enlace de cada log con su traza. Nadie se enteraría hasta buscar un log. Por eso el camino B no se configura con XML: su *appender* (el componente de la librería de logs que envía cada línea a un destino) lo añade **desde código** la clase generada `TelemetryConfig` al arrancar, sin tocar la consola, y solo si `LOG_EXPORT_OTLP` está encendido. Con el interruptor apagado, ni siquiera existe.
 
 ---
 
@@ -197,6 +208,180 @@ Cuando termines: `bash deploy/down.sh` (con `-v` borra también los datos).
 Los tres identificadores son los que permiten cruzar señales: `trace.id` lleva a la traza, `correlationId` es el que recibió el cliente (viaja en la cabecera `X-Correlation-Id` de la respuesta) y `keel.operation` es el nombre de la operación del diseño.
 
 En `local` el log es texto plano para leerlo en la terminal, con los mismos identificadores entre corchetes.
+
+Las etiquetas de cada métrica, y cómo llega al backend, están en § 4 bis.
+
+---
+
+## 4 bis. Cómo llega una métrica al backend, y con qué etiquetas
+
+### El recorrido
+
+Una métrica **no sale sola del servicio**: el servicio la acumula y es el colector quien viene a buscarla. Paso a paso, con la configuración de `develop` (la de `deploy/`):
+
+1. **El código registra un valor.** Por ejemplo, el mediator mide cuánto tardó `ConfirmReservationCommand` y si acabó bien. Lo hace con una *observación* de Micrometer, que produce a la vez el span de la traza y la métrica.
+2. **Micrometer lo acumula en memoria**, dentro del servicio: cuántas ejecuciones, cuánto sumaron, en qué franja de duración cayó cada una.
+3. **El servicio lo publica en `/actuator/prometheus`** como texto en formato Prometheus. Ahí no se envía nada: es una página que muestra el estado acumulado en ese momento.
+4. **El colector la lee cada 15 segundos** (*scrape*). Al leerla añade dos etiquetas propias del scrape, `job` (el nombre del servicio) e `instance` (la dirección de la que la leyó).
+5. **El colector la enriquece** con `service.name` y `deployment.environment` (procesador `resource/scrape` de `deploy/otel/collector.yaml`), porque un scrape no los trae, y la agrupa en lotes.
+6. **El colector la envía al backend** por OTLP (en `deploy/`, al Prometheus del contenedor `lgtm`).
+7. **El panel y las alertas la consultan** en el backend, filtrando por sus etiquetas.
+
+Puedes ver lo mismo que ve el colector en el paso 4:
+
+```bash
+curl -s http://localhost:8080/actuator/prometheus | grep keel_use_case
+```
+
+Si la serie está aquí y no en el backend, el problema está en los pasos 4 a 6 (§ 9, «No llega nada»). **En `production` el paso 3 no ocurre por defecto**: `/actuator/prometheus` no se expone y hay que elegir cómo llegan las métricas antes de desplegar (§ 8). Con el push por OTLP (`METRICS_EXPORT_OTLP=true`), los pasos 3 y 4 se sustituyen por un envío del servicio al colector cada `METRICS_EXPORT_STEP`, sin exemplars.
+
+### Cómo se ve una métrica en el backend
+
+Los nombres cambian por el camino: los puntos y guiones pasan a `_`, y a las duraciones se les añade la unidad (`_seconds`). Además, **una métrica de duración son varias series**:
+
+| Serie | Qué es |
+|---|---|
+| `keel_use_case_seconds_count` | Cuántas ejecuciones hubo |
+| `keel_use_case_seconds_sum` | Cuánto tiempo sumaron (con `_count`, da la media) |
+| `keel_use_case_seconds_max` | La más lenta del último intervalo |
+| `keel_use_case_seconds_bucket{le="…"}` | Cuántas duraron **menos de** `le` segundos: es el histograma del que salen el p95 y el p99, y donde viajan los exemplars |
+| `keel_use_case_active_seconds_*` | Las ejecuciones **en curso** en este momento y cuánto llevan |
+
+El histograma (`_bucket`) solo se publica para las métricas en las que interesa un percentil: `http.server.requests`, `http.client.requests`, `keel.use-case` y, si tu diseño los trae, `keel.storage` y `keel.mail.send` (`parameters/<perfil>/telemetry.yaml`, bloque `percentiles-histogram`). Las demás tienen `_count`, `_sum` y `_max`, pero no p95.
+
+### Qué métricas se envían y con qué etiquetas
+
+**Las propias del proyecto.** Las etiquetas son exactamente las que pone el código generado. Solo existen las de los subsistemas que trae tu diseño.
+
+| Métrica (nombre en el backend) | Etiquetas | De dónde sale el valor de cada etiqueta |
+|---|---|---|
+| `keel_use_case_seconds_*` | `keel_operation`, `keel_outcome` | `keel_operation`: el nombre de la operación del diseño (p. ej. `ConfirmReservationCommand`). `keel_outcome`: `ok`, `rejected` (el dominio la rechazó, un 4xx esperado) o `error` (fallo) |
+| `keel_outbox_publish_seconds_*` | `keel_event_type` | El nombre del evento del diseño |
+| `keel_message_consume_seconds_*` | `keel_event_type` | Ídem, para los eventos consumidos |
+| `keel_outbox_dead_lettered` | *(ninguna)* | Es un único número: los eventos que agotaron sus reintentos |
+| `keel_storage_seconds_*` | `keel_storage_operation`, `keel_storage_bucket`, `keel_outcome` | La operación (`upload`, `download`, `delete`…), el nombre **lógico** del bucket en el diseño y `ok`/`error` |
+| `keel_mail_send_seconds_*` | `keel_outcome` | `ok`/`error`. El destinatario **no** es etiqueta |
+
+A todas las métricas de duración que salen de una observación, Micrometer les añade además la etiqueta `error`, con el nombre de la excepción o `none` si no la hubo.
+
+**Las de Spring Boot y sus librerías.** Estas etiquetas no las decide el proyecto sino Spring Boot, así que conviene confirmarlas en tu versión con el `curl` de arriba:
+
+| Métrica | Etiquetas principales |
+|---|---|
+| `http_server_requests_seconds_*` | `method`, `uri` (la **plantilla** de la ruta, `/products/{id}`, no la ruta con el id), `status`, `outcome` (`SUCCESS`, `CLIENT_ERROR`…), `exception` |
+| `http_client_requests_seconds_*` | Las mismas, más `client_name` (a quién se llama) |
+| `cache_gets_total` | `cache` (el nombre de la caché del diseño), `result` (`hit`/`miss`) |
+| `jvm_memory_used_bytes`, `jvm_gc_pause_seconds_*`… | `area` (`heap`/`nonheap`), `id` (la zona de memoria), `gc`, `action`, `cause` |
+| `hikaricp_connections_*` (relacional) | `pool` |
+| `mongodb_driver_pool_*` (documental) | `cluster_id`, `server_address` |
+| `kafka_consumer_fetch_manager_records_lag` (solo Kafka) | `client_id`, `topic`, `partition` |
+
+**Las que se añaden por el camino**, en todas las series: `job` e `instance` (las pone el scrape), `service.name` y `deployment.environment` (las pone el colector). Cómo se muestran estas dos últimas depende del backend: unos las convierten en etiquetas de cada serie y otros las guardan aparte, como información del servicio.
+
+**Lo que nunca es etiqueta**: el `correlationId`, los ids de negocio, emails, importes… Cada valor distinto de una etiqueta crea una serie nueva, así que un id como etiqueta multiplicaría las series por el número de ids. Esos datos van en el **span** de la traza, donde sirven para encontrar la petición concreta. Tampoco confundas las etiquetas con los campos de los logs: el log de frontera lleva `keel.error_code`, `keel.duration_ms` o `keel.event_id`, pero son campos del log y no etiquetas de ninguna métrica.
+
+### ¿Se pueden añadir o quitar etiquetas?
+
+Depende de qué se quiera cambiar y de quién lo haga.
+
+**Desde el diseño: no hay dónde declarar etiquetas.** El DSL no tiene ningún campo de telemetría, y la telemetría es una elección de stack (§ 1). Lo que el diseño sí decide son los **valores**: al añadir una operación aparece un valor nuevo de `keel_operation`; un evento, de `keel_event_type`; un bucket, de `keel_storage_bucket`; una caché, de `cache`. Las **claves** (qué etiquetas existen) las fija el generador.
+
+**Al desplegar, sin tocar código** (quien opera el servicio, con variables de entorno o en el colector):
+
+| Qué quieres | Cómo | Ejemplo |
+|---|---|---|
+| **Añadir una etiqueta fija a todas las métricas** (equipo, región, *tenant* del despliegue…) | Propiedad `management.metrics.tags.<clave>` de Spring Boot, en el YAML del perfil o por variable de entorno (la clave queda en minúsculas; para una clave compuesta, mejor el YAML) | `MANAGEMENT_METRICS_TAGS_TEAM=pagos` → todas las series llevan `team="pagos"` |
+| **Apagar una familia de métricas entera** | Propiedad `management.metrics.enable.<prefijo>=false` | `management.metrics.enable.jvm.gc=false` |
+| **Apagar la instrumentación de caché, buckets o correo** | Los interruptores de § 6 | `TELEMETRY_INSTRUMENT_STORAGE=false` |
+| **Quitar o renombrar una etiqueta concreta** | En el **colector**, con el procesador `transform` (viene en la imagen contrib que usa `deploy/`), añadido al pipeline de `metrics` | ver abajo |
+
+```yaml
+# deploy/otel/collector.yaml — quitar la etiqueta `exception` de todas las métricas
+processors:
+  transform/labels:
+    metric_statements:
+      - context: datapoint
+        statements:
+          - delete_key(attributes, "exception")
+service:
+  pipelines:
+    metrics:
+      processors: [memory_limiter, resource/scrape, resourcedetection, attributes/redact, transform/labels, batch]
+```
+
+> **Ojo al quitar etiquetas que usa el panel.** `keel_operation`, `keel_outcome`, `keel_event_type`, `le`, `result` o `area` aparecen en las consultas del panel y de las alertas. Si las quitas, **nada falla**: el panel se queda vacío y la alerta de tasa de error deja de poder dispararse. Quita solo lo que ninguna consulta de `deploy/observability/` nombre.
+
+**Con código** (una clase nueva en el proyecto):
+
+- **Quitar o renombrar una etiqueta dentro del servicio**, en vez de en el colector: un bean `MeterFilter` de Micrometer (`MeterFilter.ignoreTags(...)`, `MeterFilter.renameTag(...)`). Sirve para cualquier backend, sin depender de cómo esté configurado el colector.
+- **Añadir una etiqueta nueva con un dato de negocio** (por ejemplo, el país del pedido en `keel_use_case`): **no está permitido en el proyecto generado**. `infra/check-telemetry.sh` solo acepta como claves de etiqueta las del vocabulario del generador (las de la primera tabla), y cualquier otra la marca como error. Es a propósito: es la forma más fácil de multiplicar las series sin que nada lo avise. Si hace falta una etiqueta nueva para **todos** los servicios, el cambio va en el generador (`keel-spring`), no en un proyecto. Para un dato de un solo servicio, lo correcto es ponerlo en el span con `addHighCardinalityKeyValue`, donde se puede buscar sin crear series.
+
+---
+
+## 4 ter. Cómo llega una traza al servidor
+
+Aquí «servidor» es el **servidor de trazas** (el backend: Tempo en `deploy/`). Al contrario que las métricas, las trazas **sí salen del servicio**: el servicio las envía al colector, nadie viene a buscarlas.
+
+### El recorrido
+
+1. **Llega una petición y nace la traza.** Spring Boot abre el primer span, el de la petición HTTP. Si la petición trae la cabecera W3C `traceparent` (porque quien llama ya tenía una traza, por ejemplo un API gateway u otro servicio), **no nace una traza nueva**: el span se cuelga de la de quien llama.
+2. **Se decide si esta traza se guarda (muestreo).** Solo cuando la traza nace aquí; si viene de fuera, se respeta lo que decidió quien llama (muestreo *parent-based*). La proporción la fija `TRACING_SAMPLING_PROBABILITY`: 100 % en `local` y `develop`, 10 % en `production`. Una traza no muestreada se sigue ejecutando igual, pero no se envía.
+3. **Cada trabajo dentro de la petición añade su span**, colgado del anterior: el caso de uso (con `keel.operation`, `keel.outcome` y el `keel.correlation_id`), cada consulta a la base de datos, cada llamada HTTP saliente, cada comando de Redis, cada operación sobre un bucket o envío de correo. Todos salen de *observaciones* (§ 4 bis).
+4. **La traza sigue al salir del servicio.** En una llamada HTTP saliente, el cliente pone la cabecera `traceparent` y el servicio de destino continúa la misma traza. En un evento, el contexto viaja dentro del sobre del mensaje (§ 5).
+5. **Se descarta el ruido.** Antes de enviar nada se descartan las peticiones al *actuator* (las sondas de salud), los ciclos de las tareas programadas y las consultas a la base de datos que no cuelgan de ningún trabajo (§ 9, «Ruido»).
+6. **El servicio envía los spans terminados al colector.** No los envía uno a uno: los agrupa en memoria y los manda por lotes, comprimidos, por OTLP/HTTP a `${OTEL_EXPORTER_OTLP_ENDPOINT}/v1/traces`. Cada lote lleva los datos del servicio: `service.name`, `service.version` y `deployment.environment`. Si el colector no responde, el servicio **no falla**: reintenta, escribe un aviso en el log y, si la espera se alarga, descarta.
+7. **El colector los procesa**: limita memoria, **borra las cabeceras de credenciales** que una instrumentación pudiera haber capturado, agrupa por lotes y reenvía al backend, con reintentos y cola si el backend está caído. El colector de `deploy/` borra `authorization`, `cookie`, `set-cookie` y `x-api-key`; la plantilla del gateway de producción, de momento, solo `authorization`: si tu servicio recibe credenciales en otras cabeceras, añádelas ahí.
+8. **El backend reconstruye la traza** uniendo los spans por su `traceID`, aunque hayan llegado en momentos distintos, desde servicios distintos e incluso con horas de diferencia (la publicación desde el outbox).
+
+En producción con Kubernetes, entre los pasos 6 y 8 hay dos colectores en lugar de uno: el agente del nodo recibe los spans y los reparte por `traceID` a un gateway, que decide qué trazas se guardan viéndolas enteras (muestreo por cola, § 8).
+
+Para comprobar que llegan: en Grafana, **Explore → Tempo**, buscando por el nombre del servicio o por `{ span.keel.correlation_id = "…" }` (§ 3).
+
+### ¿Qué se puede ajustar de una traza?
+
+**Desde el diseño: la forma, no la configuración.** El DSL no tiene ningún campo de trazas, pero el diseño decide **qué spans existen y cómo se llaman**: cada operación da un span con su nombre, cada evento da un span de publicación y otro de consumo, cada bucket, cliente HTTP o correo declarado da los suyos. Y `reliability: outbox` decide que la publicación de un evento aparezca **más tarde pero dentro de la misma traza**.
+
+**Al desplegar, sin tocar código** (variables de entorno o YAML del perfil):
+
+| Qué quieres | Cómo | Ejemplo |
+|---|---|---|
+| **Guardar más o menos trazas** | `TRACING_SAMPLING_PROBABILITY` (de 0.0 a 1.0) | `TRACING_SAMPLING_PROBABILITY=1.0` para investigar un problema en producción; bájalo después |
+| **No enviar ninguna traza** | `TELEMETRY_EXPORT_ENABLED=false` | Para silenciar un entorno sin quitar la telemetría |
+| **Quitar los spans de un subsistema** (caché, buckets, correo) | Los interruptores de § 6 | `TELEMETRY_INSTRUMENT_CACHE=false` |
+| **Quitar una familia de spans de Spring Boot o sus librerías** | Propiedad `management.observations.enable.<prefijo>=false`. Quita a la vez el span y la métrica de esa observación. Para prefijos con puntos, mejor en el YAML del perfil que por variable de entorno | `management.observations.enable.spring.security: false` quita los spans del filtro de seguridad |
+| **Añadir un dato fijo a todas las trazas** (equipo, región…) | Atributos de recurso: `management.opentelemetry.resource-attributes.<clave>` en `parameters/<perfil>/telemetry.yaml`, o la variable estándar `OTEL_RESOURCE_ATTRIBUTES`, que no toca ningún archivo generado | `OTEL_RESOURCE_ATTRIBUTES=team=pagos,region=eu-west-1` |
+
+Los atributos de recurso describen **al servicio**, no a cada span, y viajan con las trazas y los logs que salen por OTLP. A las métricas no llegan, porque esas las lee el colector (§ 4 bis); para ellas se usa `management.metrics.tags`.
+
+**En el colector** (sin tocar el servicio, para todo lo que pase por él):
+
+- **Decidir qué trazas se guardan en producción.** En el gateway (`collector-gateway.example.yaml`), el muestreo por cola guarda todas las que tienen error, todas las que tardan más de 1 s y un 10 % del resto. Se ajustan el umbral de lentitud, el porcentaje, o se añaden reglas; por ejemplo, guardar siempre las de una operación crítica:
+
+  ```yaml
+  # collector-gateway.example.yaml, dentro de tail_sampling.policies
+  - name: operaciones-criticas
+    type: string_attribute
+    string_attribute:
+      key: keel.operation
+      values: [ConfirmReservationCommand, CancelReservationCommand]
+  ```
+
+  Recuerda que el gateway solo decide sobre lo que la aplicación dejó pasar: con muestreo por cola, pon `TRACING_SAMPLING_PROBABILITY=1.0` en la aplicación (§ 8).
+- **Quitar, renombrar o anonimizar atributos** con los procesadores `attributes` o `transform`, igual que ya se hace con las cabeceras de credenciales.
+- **Descartar spans concretos** con el procesador `filter`, por ejemplo los de una ruta que no interesa.
+
+**Con código** (en el proyecto, respetando `conventions/observability.md`):
+
+- **Añadir un dato de negocio al span del caso de uso** (el país de un pedido, un id): dentro del handler, sobre la observación en curso, **nunca abriendo un span nuevo**:
+
+  ```java
+  observationRegistry.getCurrentObservation()
+          .highCardinalityKeyValue("keel.order.country", command.country());
+  ```
+
+  Al ser `highCardinality`, va **solo al span** y no crea series de métricas, así que no lo bloquea `check-telemetry.sh`. Nada de datos personales ni secretos: lo que entra en una traza se queda en el backend.
+- **Añadir un atributo a todas las observaciones** del servicio: un bean `ObservationFilter`, que es como el proyecto pone el `keel.correlation_id` en cada span (`TelemetryConfig`).
+- **Lo que no se debe hacer**: abrir spans a mano con el `Tracer`. Lo importante ya es una observación, y un span manual suele duplicar uno existente o quedar suelto, sin padre.
 
 ---
 

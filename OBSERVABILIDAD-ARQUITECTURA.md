@@ -191,11 +191,28 @@ por el id que recibió el cliente **[generado]**.
 - **Función.** Las trazas son el hilo que une una petición con todo lo que provoca, incluidos
   los eventos que salen y los consumos que llegan a otros servicios. Son también el destino del
   salto desde una métrica (vía exemplar) y desde un log (vía `trace.id`).
-- **Verificación.** `test/telemetry.test.js` compara cadenas (21 casos); `telemetry-check`
-  ejecuta los puertos y el mediator **dentro del proceso**; `deploy-check` (DEP-3/DEP-4) comprueba
-  que el exemplar lleva a una traza que existe en Tempo, **pero sobre `job-dispatch`, que no tiene
-  mensajería** **[código]**. La continuidad de la traza **a través del broker** no la ejecuta
-  ninguna red (§5, F3).
+- **Verificación.** Hay tres comprobaciones automáticas («redes») que miran las trazas, de menos a
+  más realistas (detalle completo en §3.13) **[código]**:
+
+  | Red | Qué hace | Qué demuestra |
+  |---|---|---|
+  | `test/telemetry.test.js` (21 pruebas) | Genera un proyecto y **busca texto** en los archivos generados | Que el generador escribe lo esperado. No ejecuta nada: un código que compila pero no funciona pasaría |
+  | `telemetry-check` | **Arranca el servicio** bajo JUnit en la máquina y llama directamente a sus piezas internas (los puertos y el mediator) | Que el servicio en marcha **produce** las trazas y métricas correctas. No mira si llegan a ningún sitio |
+  | `deploy-check` | **Levanta `deploy/` entero** en contenedores, manda peticiones y **pregunta al backend** qué recibió | Que el recorrido completo funciona de punta a punta |
+
+  `deploy-check` ejecuta ocho comprobaciones, **DEP-1 a DEP-8**, definidas en
+  `scripts/deploy-check.js`. Las dos que tocan a las trazas son **DEP-3**, que exige que la
+  métrica de latencia llegue al Prometheus del backend con un **exemplar** (el enlace a una traza),
+  y **DEP-4**, que exige que esa traza **exista de verdad en Tempo**. Juntas prueban el salto de
+  «el p95 subió» a «esta petición concreta».
+
+  **Lo que ninguna de las tres cubre es la traza que cruza el broker**: petición → caso de uso →
+  evento guardado en el outbox → el relay lo publica → el listener lo consume → **la misma traza**
+  continúa. `deploy-check` corre sobre **`job-dispatch`**, un diseño de prueba de `test/fixtures/`
+  elegido porque arranca sin código del agente y que, por eso mismo, **no tiene mensajería**. Las
+  otras dos redes no ejecutan un broker real. Ese recorrido **se comprobó una vez, a mano**, sobre
+  una pila con Kafka **[guía §11]**, pero no tiene ninguna comprobación automática y repetible: si
+  un cambio lo rompiera, nada lo detectaría (§5, F3).
 - **Si falla.** Una traza cortada en el broker no produce ningún síntoma en el servidor: cada
   mitad sigue siendo una traza válida, solo que ya no están unidas.
 
