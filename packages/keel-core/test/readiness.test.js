@@ -14,8 +14,9 @@ import { tmpDir } from './helpers/tmp.js';
 import { LAYERS, supportedDsl } from '../src/lib/assets.js';
 import { READINESS_CRITERIA, assessReadiness } from '../src/lib/readiness.js';
 import { applicableReviews } from '../src/lib/reviews.js';
+import { gapInventory } from '../src/lib/gap-classes.js';
 import { flowDigests, scenariosDigest } from '../src/lib/flow-review.js';
-import { DECISIONS_FILE, FLOW_REVIEW_FILE, REVIEW_FILE, SCENARIOS_FILE } from '../src/lib/spec-files.js';
+import { DECISIONS_FILE, FLOW_REVIEW_FILE, GAPS_FILE, REVIEW_FILE, SCENARIOS_FILE } from '../src/lib/spec-files.js';
 import { validateService } from '../src/lib/validate-service.js';
 import { validate } from '../src/commands/validate.js';
 
@@ -75,6 +76,8 @@ function workspace({
   scenarios = true,
   flowReview = true,
   review = 'full',
+  gaps = 'full',
+  gapsStamp = VERSION,
   designStamp = VERSION,
   decisions = null,
   underSpecs = true
@@ -120,6 +123,25 @@ function workspace({
     write(path.join(dir, REVIEW_FILE), YAML.stringify({ reviewedAt: VERSION, findings }));
   }
 
+  // El barrido se deriva del MISMO inventario que usa la CLI, sobre las capas de este workspace:
+  // escrito a mano se desincronizaría al primer cambio de gap-classes.js y mediría eso.
+  if (gaps) {
+    const layers = { domain: YAML.parse(DOMAIN), 'use-cases': YAML.parse(useCases) };
+    const inventory = gapInventory(layers);
+    const coverage = inventory.map((entry) => ({ class: entry.class, units: [...entry.units], result: 'clean' }));
+    const findings = [];
+    if (gaps === 'partial') {
+      // Una unidad sin recorrer; si era la única de su clase, la clase entera queda sin recorrer.
+      coverage[0].units.pop();
+      if (coverage[0].units.length === 0) coverage.shift();
+    }
+    if (gaps === 'open') {
+      coverage[0].result = 'findings';
+      findings.push({ class: coverage[0].class, unit: coverage[0].units[0], what: 'Algo que el diseño no dice todavía', severity: 'gap', state: 'open' });
+    }
+    write(path.join(dir, GAPS_FILE), YAML.stringify({ reviewedAt: gapsStamp, coverage, findings }));
+  }
+
   if (decisions !== null) write(path.join(dir, DECISIONS_FILE), decisions);
 
   if (designStamp) {
@@ -149,11 +171,11 @@ test('el diseño de partida está listo: si no lo estuviera, los demás casos no
 });
 
 test('un diseño válido sin nada del cierre: generable, pero no listo', () => {
-  const dir = workspace({ scenarios: false, review: null, designStamp: null });
+  const dir = workspace({ scenarios: false, review: null, gaps: null, designStamp: null });
   assert.equal(validateService(dir).ok, true, 'build lo aceptaría');
   const result = assessReadiness(dir);
   assert.equal(result.ready, false);
-  assert.deepEqual(failing(result), ['coverage-matrix', 'design-doc', 'flow-review', 'review', 'scenarios']);
+  assert.deepEqual(failing(result), ['coverage-matrix', 'design-doc', 'flow-review', 'gaps', 'review', 'scenarios']);
 });
 
 // Cada rotura apaga SU criterio y ningún otro.
@@ -166,6 +188,10 @@ const ROTURAS = [
   ['obligations', { decisions: 'esto: no es un registro de decisiones\n' }],
   ['review', { review: 'partial' }],
   ['review', { review: null }],
+  ['gaps', { gaps: null }],
+  ['gaps', { gaps: 'partial' }],
+  ['gaps', { gaps: 'open' }],
+  ['gaps', { gapsStamp: '0.9.0' }],
   ['scenarios', { scenarioStamp: '0.9.0' }],
   ['coverage-matrix', { matrix: false }],
   ['flow-review', { flowReview: false }],
@@ -256,13 +282,22 @@ test('keel validate --ready: checklist entera, exit 1 mientras falte algo y 0 cu
   const noListo = runValidate(workspace({ flowReview: false }), { ready: true });
   assert.equal(noListo.exitCode, 1);
   assert.match(noListo.salida, /\[flow-review\]/);
-  assert.match(noListo.salida, /1 de 8 criterio\(s\) sin cumplir/);
+  assert.ok(noListo.salida.includes(`1 de ${READINESS_CRITERIA.length} criterio(s) sin cumplir`), noListo.salida);
   // La checklist dice también lo que SÍ está: es lo que permite retomar una sesión.
   for (const { id } of READINESS_CRITERIA) assert.ok(noListo.salida.includes(`[${id}]`), id);
 
   const listo = runValidate(workspace(), { ready: true });
   assert.equal(listo.exitCode, undefined);
   assert.match(listo.salida, /Diseño listo para generar\./);
+});
+
+test('keel validate --ready lista ENTERAS las unidades sin recorrer: es el inventario para retomar el barrido', () => {
+  const inventory = gapInventory({ domain: YAML.parse(DOMAIN), 'use-cases': YAML.parse(USE_CASES) });
+  assert.ok(inventory.length > 0);
+  const { salida } = runValidate(workspace({ gaps: null }), { ready: true });
+  for (const entry of inventory) {
+    assert.ok(salida.includes(`${entry.class}. ${entry.title}: ${entry.units.join(', ')}`), `clase ${entry.class}`);
+  }
 });
 
 test('keel validate --ready --wip es una contradicción y se rechaza', () => {

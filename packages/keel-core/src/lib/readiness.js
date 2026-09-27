@@ -10,9 +10,9 @@
 // criterio lleva un id estable porque se estampa en el proyecto generado y se cuenta entre
 // corridas: citarlo por su redacción en español lo rompería al primer retoque.
 //
-// Lo que todavía NO está aquí, a propósito: las decisiones no tomadas de los avisos (R2) y
-// el análisis de huecos (R3). No tienen artefacto que leer, y un criterio que no se puede
-// evaluar no se pinta ni en verde ni en rojo — se añade cuando exista.
+// Regla para añadir un criterio: que tenga artefacto que leer. Uno que no se puede evaluar no se
+// pinta ni en verde ni en rojo. Así entraron las decisiones no tomadas de los avisos (R2, con
+// decisions.yaml) y el análisis de huecos (R3, con gaps.yaml).
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -20,7 +20,8 @@ import { validateService, workspaceRootOf } from './validate-service.js';
 import { listDerivatives } from './derivatives.js';
 import { flowReviewPlan, FLOW_REVIEW_FILE } from './flow-review.js';
 import { parseCoverageMatrix } from './scenario-blocks.js';
-import { SCENARIOS_FILE, REVIEW_FILE, DECISIONS_FILE } from './spec-files.js';
+import { SCENARIOS_FILE, REVIEW_FILE, DECISIONS_FILE, GAPS_FILE } from './spec-files.js';
+import { unwalkedCount } from './gaps-state.js';
 
 /** Los hallazgos con id que dicen que la matriz de cobertura no cubre el diseño. */
 const MATRIX_FINDINGS = [
@@ -36,6 +37,7 @@ export const READINESS_CRITERIA = [
   { id: 'obligations', title: 'obligaciones de diseño cerradas o aceptadas y vigentes' },
   { id: 'undecided', title: 'decisiones de los avisos tomadas en el DSL o aceptadas y vigentes' },
   { id: 'review', title: 'revisión semántica completa y vigente' },
+  { id: 'gaps', title: 'análisis de huecos completo, vigente y sin hallazgos abiertos' },
   { id: 'scenarios', title: 'escenarios de validación de esta versión' },
   { id: 'coverage-matrix', title: 'matriz de cobertura completa' },
   { id: 'flow-review', title: 'careo de flujos al día y decidido' },
@@ -159,6 +161,31 @@ export function assessReadiness(dir, { validation = null } = {}) {
     reviews.errors.length > 0 ? `${reviews.errors.length} error(es) de formato` : null
   ].filter(Boolean);
   criteria.push(criterion('review', reviewProblems.length === 0, reviewProblems.join(', '), `/keel-validate ${spec}`));
+
+  // 3b — El análisis de huecos: que exista, que recorra TODAS las unidades que la máquina deriva
+  // (gap-classes.js), que sea de esta versión y que no deje nada abierto. Sin esta pregunta la
+  // tabla de cobertura no la rellenaba nadie: se intentó persistir dos veces sin lector.
+  const { gaps } = result;
+  const applicableClasses = gaps.inventory.length;
+  const unwalked = unwalkedCount(gaps);
+  const gapProblems = !evaluated ? [notEvaluated] : [
+    !gaps.reviewedAt ? `no hay ${GAPS_FILE}` : null,
+    gaps.reviewedAt && gaps.missingClasses.length > 0
+      ? `${applicableClasses - gaps.missingClasses.length}/${applicableClasses} clases recorridas`
+      : null,
+    gaps.reviewedAt && unwalked > 0 ? `${unwalked} unidad(es) sin recorrer` : null,
+    gaps.stale ? `es de la v${gaps.reviewedAt} y el diseño va por v${version}` : null,
+    gaps.open.length > 0 ? `${gaps.open.length} hallazgo(s) abierto(s)` : null,
+    gaps.errors.length > 0 ? `${gaps.errors.length} error(es) de formato` : null
+  ].filter(Boolean);
+  criteria.push(
+    criterion(
+      'gaps',
+      gapProblems.length === 0,
+      gapProblems.join(', '),
+      `/keel-design ${spec} (paso 4b: análisis de huecos) — keel validate --ready ${spec} lista las unidades`
+    )
+  );
 
   // 4 y 7 — Los derivados, buscados desde la raíz del workspace que se deduce del diseño.
   const root = workspaceRootOf(dir);

@@ -40,6 +40,13 @@ Vale igual para las doce entradas:
 5. **Si no puede decidir ahora, márcalo pendiente explícito** y enumera esos pendientes en el cierre
    de sesión. Un default tácito no es una decisión: es una decisión tomada por ti sin decirlo.
 
+Las entradas cuyo campo tiene default en el schema (§3.1, §3.9, §3.9b, §3.10) tienen además un
+rastro mecánico: si el campo **no está escrito**, `keel validate` emite `CHK-MODEL-IMPLICIT-DEFAULT`
+con la unidad concreta, y cuenta como decisión abierta en `keel validate --ready`. Se cierra
+escribiendo el campo, aunque sea con el mismo valor que el default. Lo que el aviso **no** puede
+comprobar es que la pregunta se hiciera: escribir el default para callarlo es exactamente el default
+tácito que este protocolo prohíbe, solo que ahora con apariencia de decisión.
+
 La consecuencia observable es la parte que no puedes saltarte. «¿Quieres outbox?» no es una pregunta
 que un diseñador pueda responder; «si el broker está caído cuando confirmamos el pedido, ¿es
 aceptable que ese pedido nunca llegue a facturación?» sí lo es.
@@ -298,8 +305,9 @@ el día que un cliente tiene mil registros en vez de diez.
 
 La decisión se **materializa en `persistence`**, así que se toma en el paso 3.2 (con las operaciones
 delante, que es donde se ve la contención) y se escribe en el 3.8. `optimisticLocking` tiene default
-en el schema (`all`): es de los campos que se escriben solos si nadie los pregunta, y su elección es
-observable — cambia el status que ve el cliente. Declararlo en prosa dentro de `rules` no vale:
+en el schema (`all`): sin escribirlo sale `CHK-MODEL-IMPLICIT-DEFAULT`, y su elección es
+observable — cambia el status que ve el cliente. Escribir `all` o `declared` abre a su vez
+`OBL-CONCURRENCY-CODE`: decidido el bloqueo, el `code` del 409 es la pregunta siguiente. Declararlo en prosa dentro de `rules` no vale:
 ningún generador lee prosa.
 
 ---
@@ -317,8 +325,9 @@ escribe es un consumidor de eventos, donde no hay usuario. La autoría responde 
 escritura asíncrona la respuesta honesta es "nadie": si lo que se necesita es rastrear el origen,
 el correlation id ya lo da sin declarar nada.
 
-`timestamps` tiene default (`all`) y `authorship` también (`none`): los dos se escriben solos si
-nadie pregunta, y el segundo silencia una necesidad de cumplimiento que aparece tarde.
+`timestamps` tiene default (`all`) y `authorship` también (`none`): sin escribirlos, cada eje sale
+como `CHK-MODEL-IMPLICIT-DEFAULT`, y el segundo es el que más se queda sin preguntar (faltaba en 10
+de las 11 fixtures al medirlo) — silencia una necesidad de cumplimiento que aparece tarde.
 
 ---
 
@@ -388,5 +397,6 @@ compensación es qué hacemos con el encargo que **sí salió** y luego dejó de
 - [ ] Todo consumo M2M tiene operación propia, o `audience: both` con rationale escrito.
 - [ ] `optimisticLocking` se eligió con la contención de las escrituras delante, no se heredó del default.
 - [ ] `audit.timestamps` y `audit.authorship` se preguntaron: si el rastro es parte del contrato es `declared` (campos en `domain`), no `all`.
+- [ ] Ningún `CHK-MODEL-IMPLICIT-DEFAULT` abierto, y cada campo que lo cerró se escribió **tras** preguntar, no para callar el aviso.
 - [ ] Cada capa cerró con su **registro de decisiones estructurales** (elección, porqué, alternativa descartada): es lo que la clase 16 del análisis de huecos audita, y sin él ese barrido se hace contra la memoria.
 - [ ] Los pendientes estructurales están enumerados en el cierre de sesión, con nombre de operación o capa.

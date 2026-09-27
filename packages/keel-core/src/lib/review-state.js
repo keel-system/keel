@@ -50,6 +50,19 @@ export function loadReviews(dir) {
   }
   if (doc == null) return { doc: null, errors: [] };
 
+  // `coverage` vivió aquí (y antes en decisions.yaml) sin que nada la leyera. Se movió a
+  // gaps.yaml, donde la exige `keel validate --ready`. El error genérico de Ajv
+  // («must NOT have additional properties») no diría a dónde moverla.
+  if (doc && typeof doc === 'object' && Object.hasOwn(doc, 'coverage')) {
+    return {
+      doc: null,
+      errors: [
+        `${REVIEW_FILE}: 'coverage' se movió a gaps.yaml (clase del análisis de huecos × unidades recorridas) — ` +
+          'muévela allí con su reviewedAt; keel validate --ready lista las clases y unidades que tocan'
+      ]
+    };
+  }
+
   const schemaErrors = checkSchema(doc);
   if (schemaErrors.length > 0) {
     return {

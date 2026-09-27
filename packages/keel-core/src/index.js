@@ -52,6 +52,7 @@ export { OBLIGATIONS, obligationFor, obligationIds } from './lib/obligations.js'
 // citar un hallazgo sin depender de su redacción, y el corpus de mutación para afirmar
 // que una mutación dispara ESE hallazgo y solo ese.
 export { CHECKS, checkFor, checkIds } from './lib/checks.js';
+export { STRUCTURAL_DEFAULTS, COVERED_ELSEWHERE, DISCARDED, implicitDefaults } from './lib/structural-defaults.js';
 export { DECISIONS_FILE, loadDecisions, resolveObligations, resolveUndecided } from './lib/decisions.js';
 
 // La revisión semántica: el catálogo de lo que solo un lector puede juzgar, su

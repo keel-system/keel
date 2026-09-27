@@ -145,6 +145,17 @@ export const CHECKS = {
     title: 'una operación mueve el estado de varios agregados a la vez',
     closes: 'dejar que uno se entere por un evento, o revisar la frontera de los agregados'
   },
+  // Transversal: la tabla de campos vive en `structural-defaults.js` y el scope nombra el campo,
+  // así que se acepta por unidad (`persistence.audit.authorship`, `storage.buckets.<b>.visibility`).
+  // Aceptable porque el default está documentado en el schema y es seguro; lo que se pierde sin
+  // escribirlo es el rastro de que alguien lo decidió.
+  'CHK-MODEL-IMPLICIT-DEFAULT': {
+    layer: 'persistence / messaging / storage',
+    severity: 'warning',
+    nature: 'undecided',
+    title: 'un campo del catálogo estructural con default no está escrito: nadie consta que lo decidiera',
+    closes: 'escribir el campo explícitamente, aunque sea con el valor por defecto'
+  },
   'CHK-MODEL-SENSITIVE-PROJECTED': {
     layer: 'use-cases',
     severity: 'warning',

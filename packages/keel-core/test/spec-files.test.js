@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
-import { DECISIONS_FILE, SCENARIOS_FILE, SIDECAR_FILE, SPEC_SIDE_FILES, sideFilesOf } from '../src/lib/spec-files.js';
+import { DECISIONS_FILE, GAPS_FILE, SCENARIOS_FILE, SIDECAR_FILE, SPEC_SIDE_FILES, sideFilesOf } from '../src/lib/spec-files.js';
 
 const srcDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src');
 
@@ -54,4 +54,13 @@ test('los nombres de los archivos del spec solo se escriben en spec-files.js', (
   }
 
   assert.deepEqual(culpables, [], 'importa la constante de spec-files.js en vez de escribir el nombre');
+});
+
+// El análisis de huecos viaja al publicar —quien adopta ve qué huecos se buscaron y cómo se
+// cerraron— y no al derivar: no se hereda, porque el derivado abre huecos que el origen no tenía.
+test('gaps.yaml se publica y no se deriva', () => {
+  const dir = tmpDir('keel-spec-files-gaps-');
+  fs.writeFileSync(path.join(dir, GAPS_FILE), 'reviewedAt: 1.0.0\n');
+  assert.deepEqual(sideFilesOf(dir, 'publish'), [GAPS_FILE]);
+  assert.deepEqual(sideFilesOf(dir, 'derive'), []);
 });

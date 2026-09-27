@@ -4,7 +4,7 @@ import YAML from 'yaml';
 import pc from 'picocolors';
 import { MANIFEST_FILE, resolveServiceDir } from '../lib/loader.js';
 import { validateService } from '../lib/validate-service.js';
-import { REVIEW_FILE } from '../lib/spec-files.js';
+import { REVIEW_FILE, GAPS_FILE } from '../lib/spec-files.js';
 import { DECISIONS_FILE } from '../lib/decisions.js';
 import { READINESS_CRITERIA, assessReadiness } from '../lib/readiness.js';
 
@@ -75,7 +75,7 @@ export function validate(inputPath, options = {}) {
     return;
   }
 
-  const { manifest, layers, loadErrors, schemaErrors, crossRefErrors, warnings, pending, obligations, undecided, reviews } =
+  const { manifest, layers, loadErrors, schemaErrors, crossRefErrors, warnings, pending, obligations, undecided, reviews, gaps } =
     validateService(dir, { wip });
 
   if (loadErrors.length > 0 && !manifest) {
@@ -188,6 +188,10 @@ export function validate(inputPath, options = {}) {
           'pregunta que este servicio no se hace; bórralo'
       );
     }
+    // El análisis de huecos no bloquea: es un criterio de --ready. Sin gaps.yaml no se dice nada
+    // aquí (--ready lo cuenta); con él, lo que esté mal escrito o caducado se dice ya, que es
+    // cuando el diseñador lo tiene delante.
+    if (gaps.reviewedAt || gaps.errors.length > 0) printGapProblems(gaps, manifest?.service?.version);
   }
 
   const name = manifest?.service?.name ?? '(sin nombre)';
@@ -257,10 +261,10 @@ function printWarnings(warnings, undecided) {
  * del agente, y la misma respuesta que `keel-<tech> build` estampa en el proyecto generado.
  */
 function printReadiness(dir) {
-  const { service, ready, criteria } = assessReadiness(dir);
+  const validation = validateService(dir, { wip: false });
+  const { service, ready, criteria } = assessReadiness(dir, { validation });
   if (!service) {
-    const { loadErrors } = validateService(dir, { wip: false });
-    for (const message of loadErrors) console.error(pc.red(`✘ ${message}`));
+    for (const message of validation.loadErrors) console.error(pc.red(`✘ ${message}`));
     process.exitCode = 1;
     return;
   }
@@ -274,6 +278,7 @@ function printReadiness(dir) {
     console.log(`  ${pc.red('✘')} ${entry.title} ${pc.dim(`[${entry.id}]`)}`);
     if (entry.detail) console.log(`      ${entry.detail}`);
     if (entry.fix) console.log(pc.dim(`      → ${entry.fix}`));
+    if (entry.id === 'gaps') printGapInventory(validation.gaps);
   }
 
   console.log();
@@ -283,6 +288,46 @@ function printReadiness(dir) {
     return;
   }
   console.log(pc.bold(pc.red(`✘ ${missing} de ${READINESS_CRITERIA.length} criterio(s) sin cumplir.`)));
-  console.log(pc.dim('  El análisis de huecos (/keel-design § 4b) todavía no tiene criterio mecánico: sigue siendo tuyo.'));
   process.exitCode = 1;
+}
+
+/**
+ * Los problemas de un gaps.yaml que existe: formato, caducidad y hallazgos abiertos. Avisos, no
+ * errores — el análisis de huecos cuenta en --ready, no en la puerta de build.
+ */
+function printGapProblems(gaps, version) {
+  for (const message of gaps.errors) console.warn(`${pc.yellow('⚠')} ${message}`);
+  if (gaps.stale) {
+    console.warn(
+      `${pc.yellow('⚠')} ${GAPS_FILE}: el análisis de huecos es de la v${gaps.reviewedAt} y el diseño va por ` +
+        `v${version} — recorre lo que cambió y vuelve a sellarlo`
+    );
+  }
+  if (gaps.open.length > 0) {
+    console.warn(`${pc.yellow('⚠')} ${GAPS_FILE}: ${gaps.open.length} hallazgo(s) abierto(s) — el análisis no está cerrado`);
+  }
+  for (const entry of gaps.orphans) {
+    console.warn(
+      `${pc.yellow('⚠')} ${GAPS_FILE}: clase ${entry.class}: [${entry.units.join(', ')}] ya no existe en el diseño; bórralo`
+    );
+  }
+}
+
+/**
+ * Lo que falta por recorrer, ENTERO: es el inventario con el que el agente retoma el barrido tras
+ * un /clear, y recortarlo como la lista de la revisión lo dejaría a medias justo donde se usa.
+ */
+function printGapInventory(gaps) {
+  const pending = new Map();
+  for (const entry of gaps.missingClasses) pending.set(entry.class, { title: entry.title, units: [...entry.units] });
+  for (const entry of gaps.missingUnits) {
+    if (!pending.has(entry.class)) pending.set(entry.class, { title: entry.title, units: [] });
+    pending.get(entry.class).units.push(entry.unit);
+  }
+  for (const [number, entry] of [...pending].sort(([a], [b]) => a - b)) {
+    console.log(pc.dim(`        ${number}. ${entry.title}: ${entry.units.join(', ')}`));
+  }
+  for (const finding of gaps.open) {
+    console.log(pc.dim(`        abierto — clase ${finding.class}, ${finding.unit}: ${finding.what}`));
+  }
 }

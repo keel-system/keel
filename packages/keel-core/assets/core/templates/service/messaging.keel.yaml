@@ -13,8 +13,12 @@
 #     external: true                      # el canal lo posee otro sistema
 
 publishing:
+  # Decisión estructural (structural-decisions.md § 3.1), comentada a propósito: si la plantilla
+  # la trajera escrita, constaría como decidida sin que nadie la hubiera preguntado. Sin escribir,
+  # se aplicaría best-effort y keel validate lo señala (CHK-MODEL-IMPLICIT-DEFAULT).
   # outbox: ningún evento se pierde si la transacción confirma (el generador implementa el mecanismo).
-  reliability: outbox     # outbox | best-effort
+  # best-effort: con el broker caído al confirmar, el evento se pierde sin error ni reintento.
+  # reliability: outbox     # outbox | best-effort
   events:
     # ProductCreated:
     #   description: Se publica al dar de alta un producto.

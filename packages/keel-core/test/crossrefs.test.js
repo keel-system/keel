@@ -130,7 +130,7 @@ test('per-aggregate con aggregates declarados es válido', () => {
 const withLocking = (policy, domain = baseDomain()) => ({
   domain,
   'use-cases': {},
-  persistence: { default: { model: 'relational' }, entities: { Order: {}, Catalog: {} }, consistency: { optimisticLocking: policy, transactionalBoundary: 'per-aggregate' } },
+  persistence: { default: { model: 'relational' }, entities: { Order: {}, Catalog: {} }, consistency: { optimisticLocking: policy, transactionalBoundary: 'per-aggregate' }, audit: { timestamps: 'all', authorship: 'none' } },
 });
 
 test("optimisticLocking 'declared' sin ninguna raíz que declare lockVersion avisa: equivale a none", () => {
@@ -157,19 +157,32 @@ test("optimisticLocking 'all' y 'none' no exigen nada del dominio", () => {
 
 // --- persistence: audit ---
 
+// Los ejes que el test no nombra se escriben con su default: ausentes serían un default tácito
+// (CHK-MODEL-IMPLICIT-DEFAULT), que es otra regla. `undefined` deja el bloque entero fuera.
 const withAudit = (audit, domain = baseDomain(), extra = {}) => ({
   domain,
   'use-cases': {},
-  persistence: { default: { model: 'relational' }, entities: { Order: {}, Catalog: {} }, audit, consistency: { transactionalBoundary: 'per-aggregate' } },
+  persistence: {
+    default: { model: 'relational' },
+    entities: { Order: {}, Catalog: {} },
+    audit: audit === undefined ? undefined : { timestamps: 'all', authorship: 'none', ...audit },
+    consistency: { transactionalBoundary: 'per-aggregate', optimisticLocking: 'all' }
+  },
   ...extra,
 });
 
 const securityLayer = { authentication: { protocol: 'oidc' }, access: { default: { level: 'authenticated' } } };
 
-test('sin bloque audit los defectos (timestamps all, authorship none) validan limpio', () => {
-  const { errors, warnings } = run(withAudit(undefined));
+test('sin bloque audit los defectos no son error, pero cada eje es un default tácito', () => {
+  const { errors, findings } = run(withAudit(undefined));
   assert.deepEqual(errors, []);
-  assert.deepEqual(warnings, []);
+  assert.deepEqual(
+    findings.map((f) => [f.id, f.scope]),
+    [
+      ['CHK-MODEL-IMPLICIT-DEFAULT', 'persistence.audit.timestamps'],
+      ['CHK-MODEL-IMPLICIT-DEFAULT', 'persistence.audit.authorship']
+    ]
+  );
 });
 
 test("audit.timestamps 'declared' con los campos reservados en domain valida limpio", () => {
@@ -601,14 +614,15 @@ const domainWithFile = (bucket = 'productImages') => ({
 });
 
 const storageLayer = (...bucketNames) => ({
-  // `signedUrlTtlSeconds` porque estos buckets son privados por default: sin él, el
+  // `visibility` escrita porque ausente es un default tácito (CHK-MODEL-IMPLICIT-DEFAULT).
+  // `signedUrlTtlSeconds` porque estos buckets son privados: sin él, el
   // aviso de «la URL firmada caduca y el diseño no dice cuándo» ensucia toda fixture
   // que solo quiera hablar de otra cosa. `maxSizeMb`, por lo mismo desde que el tope
   // de subida también se echa de menos.
   buckets: Object.fromEntries(
     bucketNames.map((name) => [
       name,
-      { allowedContentTypes: ['image/png'], signedUrlTtlSeconds: 900, maxSizeMb: 10 }
+      { visibility: 'private', allowedContentTypes: ['image/png'], signedUrlTtlSeconds: 900, maxSizeMb: 10 }
     ])
   ),
 });
@@ -684,7 +698,7 @@ test('evento y suscripción cuyo canal existe en channels no produce errores ni 
     'use-cases': useCasesForMessaging(),
     messaging: {
       channels: { productEvents: {}, inventoryEvents: {} },
-      publishing: { events: { ProductRetired: { channel: 'productEvents', payload: {} } } },
+      publishing: { reliability: 'best-effort', events: { ProductRetired: { channel: 'productEvents', payload: {} } } },
       subscriptions: {
         StockDepleted: { source: 'inventory-service', channel: 'inventoryEvents', payload: {}, triggers: 'retireProduct', onFailure: { retry: { maxAttempts: 3 } } },
       },
@@ -1415,7 +1429,7 @@ test('messaging sin channels ni channel sigue validando limpio (retrocompatibili
     domain: domainForMessaging(),
     'use-cases': useCasesForMessaging(),
     messaging: {
-      publishing: { events: { ProductRetired: { payload: {} } } },
+      publishing: { reliability: 'best-effort', events: { ProductRetired: { payload: {} } } },
       subscriptions: {
         StockDepleted: { source: 'inventory-service', payload: {}, triggers: 'retireProduct', onFailure: { retry: { maxAttempts: 3 } } },
       },
@@ -1634,7 +1648,7 @@ const depsLayers = () => ({
       },
     },
   },
-  persistence: { default: { model: 'relational' }, entities: { Order: {}, ProductSnapshot: {} } },
+  persistence: { default: { model: 'relational' }, entities: { Order: {}, ProductSnapshot: {} }, consistency: { optimisticLocking: 'all' }, audit: { timestamps: 'all', authorship: 'none' } },
 });
 
 const need = (layers) => layers.dependencies.dependencies.catalog.needs.productPricing;
@@ -1900,7 +1914,7 @@ const activationLayers = () => ({
       },
     },
   },
-  persistence: { default: { model: 'relational' }, entities: { Order: {} } },
+  persistence: { default: { model: 'relational' }, entities: { Order: {} }, consistency: { optimisticLocking: 'all' }, audit: { timestamps: 'all', authorship: 'none' } },
 });
 
 const activation = (layers) => layers.dependencies.dependencies.notifications.activations.sendOrderConfirmation;
@@ -2487,6 +2501,7 @@ const cacheEmbedLayers = ({
   messaging: {
     channels: { main: {} },
     publishing: {
+      reliability: 'best-effort',
       events: Object.fromEntries(events.map((name) => [name, { channel: 'main', payload: {} }])),
     },
   },

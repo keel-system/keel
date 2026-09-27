@@ -129,9 +129,11 @@ deshace. Recorre la clase 8 del barrido para cada compensación cuya activación
 haya tocado el cambio, y vuelve a responder las dos preguntas de §3.11: cómo no se aplica dos veces
 y a qué estado vuelve.
 
-Reporta la **tabla de cobertura** además de los hallazgos —es lo que distingue una clase que se
-recorrió y salió limpia de una que nadie miró— y cierra cada hallazgo con una decisión del usuario.
-Ninguno queda `abierto`.
+El barrido va a `gaps.yaml`, no al chat. Con la versión subida, `keel validate --ready` lo da por
+caducado y lista como **sin recorrer** las unidades que el cambio añadió: esas, más las clases de lo
+tocado, son el alcance. Actualiza su `coverage` y sus `findings`, cierra cada hallazgo con una
+decisión del usuario —ninguno queda `open`— y vuelve a sellar `reviewedAt` con la versión nueva.
+Lo que quede en el archivo de una unidad que ya no existe, la CLI lo marca como huérfano: bórralo.
 
 ### 6. Cascada de regeneración
 
@@ -192,6 +194,6 @@ Reglas de la cascada:
 - El cambio se tradujo a capas **antes** de editar, y el usuario aprobó el impacto.
 - Ninguna decisión estructural reabierta se resolvió por herencia silenciosa de la versión anterior.
 - `service.version` subió, y la clase (patch/minor/major) la eligió el usuario viendo qué rompe.
-- El análisis de huecos se ejecutó sobre lo tocado, con su tabla de cobertura, y no quedó nada abierto.
+- El análisis de huecos se ejecutó sobre lo tocado y `gaps.yaml` está resellado: el criterio `gaps` de `keel validate --ready` en verde.
 - Todos los derivados que existían se regeneraron; los huérfanos se borraron; ninguno se editó a mano.
 - Los consumidores conocidos quedaron avisados con nombre, no con un «avisa a quien corresponda».

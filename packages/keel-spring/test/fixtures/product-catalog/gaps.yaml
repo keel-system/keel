@@ -1,0 +1,9 @@
+# El análisis de huecos de este diseño (gap-analysis.md): qué clases se recorrieron, sobre qué
+# unidades y qué se encontró. Migrado desde review.yaml, donde no lo leía nadie: es una fixture
+# del generador, así que el barrido está a medias a propósito y keel validate --ready lo cuenta.
+reviewedAt: 1.0.0
+
+coverage:
+  - class: 4
+    units: [createProduct]
+    result: findings

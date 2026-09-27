@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schema/2.0/gaps.schema.json",
+  "title": "Keel Gap Analysis",
+  "description": "El análisis de huecos de este servicio (gaps.yaml, junto a las capas): qué clases de gap-analysis.md se recorrieron, sobre qué unidades y qué se encontró. No forma parte del DSL: no describe lo que el servicio hace, sino lo que se buscó que el diseño NO dice. Qué clases aplican y cuáles son sus unidades lo decide la CLI (keel validate --ready las lista); aquí solo va el veredicto. Sin este archivo el barrido se hacía en la conversación y moría con ella: una clase recorrida y limpia era indistinguible de una saltada.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["reviewedAt"],
+  "properties": {
+    "reviewedAt": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "service.version sobre la que se hizo el barrido. Caduca con el minor o el major, como review.yaml: un cambio de forma puede abrir huecos en lo que ya se había recorrido limpio. Re-sellarlo exige recorrer al menos lo que la versión nueva tocó."
+    },
+    "coverage": {
+      "type": "array",
+      "description": "Una entrada por clase aplicable. Una clase que falta aquí no es «limpia»: es «nadie la miró», y la CLI la reporta como cobertura incompleta.",
+      "items": {
+        "type": "object",
+        "required": ["class", "units", "result"],
+        "additionalProperties": false,
+        "properties": {
+          "class": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 17,
+            "description": "Clase de gap-analysis.md (1..17)."
+          },
+          "units": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1 },
+            "description": "Unidades recorridas, escritas como las lista keel validate --ready (una operación, una entidad, 'publishing.OrderPlaced', '3.1'…). Tienen que estar TODAS las que la CLI deriva para la clase: la que falta es una unidad sin recorrer."
+          },
+          "result": {
+            "enum": ["clean", "findings"],
+            "description": "clean: se recorrió y no se encontró nada. findings: lo encontrado está en findings, con su estado."
+          }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "description": "Los huecos y riesgos encontrados, cada uno con su estado. Lo resuelto sin hallazgo no va aquí: va como 'clean' en coverage, que es donde se ve que se miró.",
+      "items": {
+        "type": "object",
+        "required": ["class", "unit", "what", "severity", "state"],
+        "additionalProperties": false,
+        "properties": {
+          "class": { "type": "integer", "minimum": 1, "maximum": 17 },
+          "unit": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Dónde: la operación, entidad o campo concreto. Un hallazgo sin sitio no se puede cerrar ni comprobar."
+          },
+          "what": {
+            "type": "string",
+            "minLength": 10,
+            "description": "Qué no dice el diseño, en una frase."
+          },
+          "severity": {
+            "enum": ["gap", "risk"],
+            "description": "gap: hay que decidir algo. risk: decidible por un default razonable, pero conviene explicitarlo."
+          },
+          "state": {
+            "enum": ["decided", "accepted", "open"],
+            "description": "decided: la decisión está materializada en el diseño. accepted: el diseñador vio la consecuencia observable y eligió no actuar (exige reason; las clases 9 y 12 no lo admiten). open: sin cerrar — el análisis no está terminado."
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 20,
+            "description": "El porqué de un 'accepted', o la decisión tomada en un 'decided'. Es rationale para /keel-handoff: sin él, «aceptado» y «no lo miramos» se escriben igual."
+          }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "state": { "const": "accepted" } }, "required": ["state"] },
+            "then": { "required": ["reason"] }
+          }
+        ]
+      }
+    }
+  }
+}

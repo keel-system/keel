@@ -7,6 +7,8 @@ import { checkCrossRefs } from './crossrefs.js';
 import { loadDecisions, resolveObligations, resolveUndecided } from './decisions.js';
 import { loadReviews, resolveReviews } from './review-state.js';
 import { applicableReviews } from './reviews.js';
+import { gapInventory } from './gap-classes.js';
+import { loadGaps, resolveGaps, emptyGaps } from './gaps-state.js';
 import { SCENARIOS_FILE } from './spec-files.js';
 import { checkFor } from './checks.js';
 import { checkDerivedCoherence } from './derived-coherence.js';
@@ -110,7 +112,8 @@ export function validateService(dir, { wip = false } = {}) {
     pending: [],
     obligations: { open: [], accepted: [], stale: [], orphans: [], errors: [] },
     undecided: { open: [], accepted: [], stale: [], orphans: [], errors: [] },
-    reviews: { covered: [], missing: [], open: [], accepted: [], stale: false, reviewedAt: null, orphans: [], errors: [] }
+    reviews: { covered: [], missing: [], open: [], accepted: [], stale: false, reviewedAt: null, orphans: [], errors: [] },
+    gaps: emptyGaps()
   };
 
   const { manifest, layers, errors: loadErrors } = loadService(dir);
@@ -230,6 +233,14 @@ export function validateService(dir, { wip = false } = {}) {
   result.reviews.errors.unshift(...reviewErrors);
 
   const reviewsBlock = result.reviews.open.length > 0 || result.reviews.errors.length > 0;
+
+  // Capa 5: el análisis de huecos (gaps.yaml), cruzado con el inventario que deriva la máquina.
+  // NO toca `ok`, ni siquiera con un hallazgo abierto o un error de formato: es un criterio de
+  // `keel validate --ready`, como las decisiones no tomadas de los avisos, y ningún diseño lo
+  // tiene todavía. Ponerlo en la puerta de build el primer día la dejaría roja para todos.
+  const { doc: gapsDoc, errors: gapsErrors } = loadGaps(dir);
+  result.gaps = resolveGaps(gapInventory(effectiveLayers), gapsDoc, manifest?.service?.version);
+  result.gaps.errors.unshift(...gapsErrors);
 
   result.ok = errors.length === 0 && (wip || (!obligationsBlock && !reviewsBlock));
   return result;

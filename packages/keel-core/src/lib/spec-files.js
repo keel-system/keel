@@ -19,6 +19,7 @@ export const DECISIONS_FILE = 'decisions.yaml';
 export const SCENARIOS_FILE = 'validation-scenarios.md';
 export const REVIEW_FILE = 'review.yaml';
 export const FLOW_REVIEW_FILE = 'flow-review.yaml';
+export const GAPS_FILE = 'gaps.yaml';
 
 /**
  * - `publish` — entra en el `files[]` del índice, que es exactamente lo que
@@ -44,6 +45,10 @@ export const SPEC_SIDE_FILES = [
   // aceptó— y NO al derivar: el careo está sellado con el texto de los escenarios, y un
   // derivado los reescribe, así que llegaría caducado sin nada que reafirmar.
   { file: FLOW_REVIEW_FILE, publish: true, derive: false },
+  // `gaps.yaml` viaja al publicar —quien adopta el diseño ve qué huecos se buscaron y cómo se
+  // cerraron— y NO al derivar: el análisis de huecos no se hereda (/keel-design § derivación),
+  // porque un cambio pequeño sobre un diseño heredado abre huecos que el origen no tenía.
+  { file: GAPS_FILE, publish: true, derive: false },
   { file: SCENARIOS_FILE, publish: 'derivative', derive: 'rewrite' }
 ];
 

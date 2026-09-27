@@ -76,6 +76,8 @@ Los artefactos son **declarativos**: guardan el *qué*, no el *por qué*. El rat
    - decisiones de `security` (por qué un rol tiene un permiso, por qué algo es público);
    - **supuestos estructurales del diseño** (escala, tenancy, moneda, modelo de consistencia) y limitaciones deliberadas — alimentan la subsección «Supuestos y limitaciones» de la ficha de reutilización.
 
+   **Antes de preguntar, lee lo que ya está escrito**: los hallazgos de `specs/<servicio>/gaps.yaml` en estado `accepted` o `decided` llevan su `reason`, que es rationale capturado cuando el diseñador tenía el hueco delante. Úsalo tal cual y no lo vuelvas a preguntar; tampoco lo reconstruyas de memoria, que es justo lo que ese archivo existe para evitar.
+
    Pregunta con `AskUserQuestion` cuando haya opciones claras, en texto libre cuando no. **Nunca inventes el rationale**: si el humano no lo aporta, deja la entrada marcada como `> rationale pendiente` para completar después.
 3. **Regeneración segura.** Al re-ejecutar sobre un `DESIGN.md` existente, refresca el sello de versión y **re-deriva las secciones mecánicas** (1-5 y las subsecciones mecánicas de la 7) pero **preserva la sección "Decisiones de diseño" y la subsección `### Supuestos y limitaciones`** ya redactadas (esta última se localiza por su encabezado literal): solo pregunta por decisiones o supuestos nuevos (elecciones notables que aparecieron desde la última vez) o por los que quedaron `pendiente`. A diferencia de `INTEGRATION.md`, que se sobrescribe entero, aquí el conocimiento humano capturado no se pierde en la regeneración.
 

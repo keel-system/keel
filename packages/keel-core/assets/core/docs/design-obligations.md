@@ -121,6 +121,14 @@ imprime debajo del aviso. El scope es por unidad (`api.endpoints.createOrder`,
 demás. Caduca con el minor, se queda huérfana si el diseño deja de levantarla y viaja con el
 diseño, como cualquier otra entrada.
 
+Un caso particular es `CHK-MODEL-IMPLICIT-DEFAULT`: un campo del catálogo de decisiones
+estructurales que tiene default en el schema (`publishing.reliability`,
+`consistency.optimisticLocking`, `audit.timestamps`, `audit.authorship`, la `visibility` de un
+bucket) y que el diseño no escribió. Se puede aceptar, porque el default está documentado y es
+seguro, pero lo natural es cerrarlo escribiendo el campo, aunque sea con el mismo valor: cuesta
+lo mismo y el YAML dice ya que se decidió. El scope es el propio campo
+(`persistence.audit.authorship`, `storage.buckets.invoices.visibility`).
+
 La diferencia con una obligación está en **qué bloquea**. Una obligación abierta bloquea la
 generación. Una decisión no tomada no bloquea `keel-<tech> build`; lo que bloquea es
 `keel validate --ready`, el criterio `undecided` del diseño listo. Lo que sí bloquea desde el

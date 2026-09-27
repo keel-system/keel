@@ -1,6 +1,7 @@
 import { FRAMEWORK_ERRORS, overrideFor, conditionalUniquenessToken } from './framework-errors.js';
 import { obligationFor } from './obligations.js';
 import { checkFor } from './checks.js';
+import { implicitDefaults } from './structural-defaults.js';
 import { splitScenarioBlocks, scenarioFamilyOf, scenarioIdOf, scenarioBody, parseCoverageMatrix } from './scenario-blocks.js';
 
 const BASE_TYPES = new Set(['string', 'text', 'int', 'long', 'decimal', 'boolean', 'uuid', 'date', 'timestamp', 'json', 'file']);
@@ -4222,6 +4223,20 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       );
       break;
     }
+  }
+
+  // Los campos del catálogo estructural con default que el diseño no escribió. Ausente y
+  // escrito con el mismo valor generan el mismo código, pero no el mismo diseño: solo el
+  // segundo dice que alguien lo decidió. Solo mira la AUSENCIA — nunca el valor — y la lista
+  // de campos es la de structural-defaults.js, atada a structural-decisions.md por su test.
+  for (const { scope, entry } of implicitDefaults(layers)) {
+    warnIn(
+      scope,
+      'CHK-MODEL-IMPLICIT-DEFAULT',
+      `${scope}: no está escrito y se aplicaría '${entry.default}' sin que conste que nadie lo decidiera — ` +
+        `${entry.question} Escríbelo explícitamente, aunque sea con ese mismo valor ` +
+        `(structural-decisions.md § ${entry.section})`
+    );
   }
 
   return { errors, warnings, pending, obligations, findings };

@@ -19,8 +19,12 @@ entities:
 audit:
   # MeterReading declara createdAt en domain: la ingesta lo devuelve al cliente.
   timestamps: declared
+  # Nadie pregunta quién registró una lectura: las escribe la ingesta de contadores.
+  authorship: none
 
 consistency:
   # Cada operación toca una sola raíz y no hay agregados compuestos: la frontera es
   # la operación, no el agregado.
   transactionalBoundary: per-operation
+  # Dos escrituras sobre el mismo resumen diario no pueden pisarse en silencio: 409.
+  optimisticLocking: all

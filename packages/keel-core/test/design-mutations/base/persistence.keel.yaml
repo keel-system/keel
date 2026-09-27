@@ -10,3 +10,6 @@ entities:
 consistency:
   transactionalBoundary: per-aggregate
   optimisticLocking: none
+audit:
+  timestamps: all
+  authorship: none

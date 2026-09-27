@@ -133,6 +133,17 @@ Hoy el cierre se define en tres sitios que no dicen lo mismo: la skill `/keel-de
 - `assessReadiness` exige cobertura completa y ningún hallazgo `abierto`.
 - Efecto lateral valioso: los hallazgos de `gaps.yaml` de varios diseños son **el corpus** para detectar qué clases se repiten y deberían mecanizarse en `CHK-*`/`OBL-*`. Es el mismo movimiento que ya se hace con los `designGaps` de las corridas, pero en la fase de diseño, que es donde sale más barato.
 
+> **Estado (2026-09-27): hecho.** Piezas nuevas en keel-core:
+> - `src/lib/gap-classes.js`: las 17 clases, con su aplicabilidad y sus **unidades derivadas** de las capas.
+> - `gaps.schema.json` y `src/lib/gaps-state.js`: el archivo y su lector, espejo de `review-state.js`.
+> - Una fila en `SPEC_SIDE_FILES`: se publica y no se deriva.
+> - Criterio `gaps` en `keel validate --ready`, que imprime **entero** el inventario de lo que queda sin recorrer. Es lo que permite retomar tras un `/clear`.
+>
+> No toca `ok` ni `build`. Tres desviaciones sobre lo escrito arriba:
+> - **El inventario no se guarda**: se deriva. Guardado caducaría con cada cambio del diseño, y derivado le da a `/keel-evolve` su alcance gratis, porque una operación nueva aparece sola como unidad sin recorrer.
+> - **Solo las clases 9 y 12 vetan `accepted` enteras.** El `http` de los errores (clase 2) y el orden (clase 5) son una pregunta dentro de su clase. El orden ya lo vigila `CHK-USECASES-COLLECTION-NO-SORT`. El error sin `http` **no lo vigila ningún CHK**, y queda como seguimiento.
+> - **La tabla de cobertura ya existía**, en `review.yaml`, y antes en `decisions.yaml`. Era el **tercer intento** de persistirla, y los dos anteriores murieron por la misma causa: nadie la leía. Las tres fixtures que la usaban cubrían una clase de diecisiete, y la de `stock-reservation` citaba una operación que ya no existía. Se sacó de `review.yaml` (con un error que dice a dónde moverla) y se migró a `gaps.yaml`. La lección que ordena R3: **el artefacto no vale nada sin el criterio que lo exige**.
+
 ---
 
 ### R4. Hacer visible el default tácito · cierra D4
@@ -141,6 +152,18 @@ Dos piezas, de menor a mayor:
 
 1. **Un `CHK-MODEL-IMPLICIT-DEFAULT` de naturaleza `undecided` (R2).** Salta cuando un campo del catálogo estructural con default en el schema está **ausente** del YAML (`reliability`, `consistency.optimisticLocking`, `transactionalBoundary`, `audit.timestamps`, `audit.authorship`, `visibility`, `onFailure`…). Se cierra escribiéndolo explícitamente, aunque sea con el mismo valor que el default. El YAML pasa a distinguir «lo decidí» de «nadie preguntó». La lista de campos sale de una tabla única (un `STRUCTURAL_DEFAULTS` junto a `checks.js`) enlazada con las entradas §3.x de `structural-decisions.md`, con un test que ate las dos piezas.
 2. **Persistir el registro de decisiones estructurales**: una sección `structural:` en `decisions.yaml` (id §3.x, ámbito, valor elegido, descartado, porqué). `/keel-handoff` pasa a **leerla** en vez de reconstruir el porqué de memoria. Cuando se derive, viaja con el resto de `decisions.yaml`.
+
+> **Estado de R4.1 (2026-09-27): hecho.** La tabla `STRUCTURAL_DEFAULTS` vive en `keel-core/src/lib/structural-defaults.js` y tiene cinco filas: `publishing.reliability` (solo si hay eventos publicados), `consistency.optimisticLocking`, `audit.timestamps`, `audit.authorship` y la `visibility` de cada bucket. El aviso es `undecided` y aceptable, y su scope es por campo. `test/structural-defaults.test.js` ata la tabla a las entradas §3.x de `structural-decisions.md` y al `default` de cada schema. Además obliga a clasificar toda entrada del catálogo: vigilada aquí, cubierta por otra regla, descartada o sin default. Cinco mutaciones, una por fila: `design-matrix` da 138 ids, 132 falsados, 0 co-disparados nuevos.
+>
+> Al verificar la recomendación salieron cuatro matices:
+> - **`transactionalBoundary` no tiene default en el schema**, y ya lo vigila `CHK-PERSIST-BOUNDARY-DEFAULT` (su mutación consiste justo en borrar el campo). Si el check nuevo lo incluyera, saltarían los dos a la vez, así que queda en `COVERED_ELSEWHERE`.
+> - **`onFailure` ya es `CHK-MSG-SUB-NO-ONFAILURE`**, y ese check no admite aceptación.
+> - **La plantilla de messaging traía `reliability: outbox` sin comentar**: cualquier diseño sembrado lo llevaba «decidido» sin que nadie lo hubiera preguntado. Ahora va comentada, igual que `audit` y `consistency`.
+> - **El resultado prometido estaba exagerado.** El aviso obliga a que el campo *esté escrito*, no a que alguien lo haya preguntado, así que cierra «ningún default estructural **por omisión**». El porqué sigue siendo R4.2.
+>
+> Una interacción que conviene saber: escribir `optimisticLocking: all` o `declared` abre `OBL-CONCURRENCY-CODE`, que bloquea build. Esa obligación solo se exige cuando el diseño se ha pronunciado, así que cerrar este aviso con el valor por defecto no sale gratis. Es coherente: decidido el bloqueo, el `code` del 409 es la pregunta siguiente. Por eso `metering-digest`, la fixture sin avisos que usa `check.test.js`, escribe los dos campos y acepta el código canónico en su `decisions.yaml`.
+>
+> Medición sobre las 11 fixtures: **17 decisiones abiertas nuevas en `--ready`**. `authorship` falta en 9, `optimisticLocking` en 5 y `timestamps` en 3. Antes de cerrar `metering-digest` eran 19, con `authorship` en 10 de 11: es el default que más se queda sin preguntar. `ok` no cambia en ninguna.
 
 ---
 
@@ -201,8 +224,8 @@ La misma disciplina que ya funciona en keel-spring, aplicada al diseño:
 | 2 | R2: campo `nature` + aceptación de `undecided` en `decisions.yaml` | D2 | días | 1 | avisos `undecided` cerrados o aceptados como criterio de «listo» |
 | 3 | R6: corpus de mutaciones sobre el diseño base — **hecho** | D6 | 1 semana | — (mejor con 9) | `design-matrix` con ids falsados: 55/60, 5 fuera de alcance |
 | 4 | R5: migrar los 80 avisos anónimos — **hecho** (eran 77) | D5 | 1–2 semanas | 2, 3 | `ANONIMOS_MAXIMOS.warnings = 0` |
-| 5 | R4.1: `CHK-MODEL-IMPLICIT-DEFAULT` | D4 | días | 2 | ningún default estructural escrito en silencio |
-| 6 | R3: `gaps.yaml` | D3 | 1–2 semanas | 1 | análisis auditable, retomable y con caducidad |
+| 5 | R4.1: `CHK-MODEL-IMPLICIT-DEFAULT` — **hecho** | D4 | días | 2 | ningún default estructural por omisión (17 abiertos en las fixtures) |
+| 6 | R3: `gaps.yaml` — **hecho** | D3 | 1–2 semanas | 1 | análisis auditable, retomable y con caducidad: criterio `gaps` de `--ready` |
 | 7 | R7: matriz de escenarios en `--ready` | D7 | días | 1 | ningún `code` sin escenario llega a build |
 | 8 | R4.2: `structural:` en `decisions.yaml` + `/keel-handoff` que lo lee | D4 | días | 5 | `DESIGN.md` sin reconstrucción de memoria |
 | 9 | R9: par del MVP en `--ready` | validación | días | 1–7 | ejemplo canónico cerrado de punta a punta |

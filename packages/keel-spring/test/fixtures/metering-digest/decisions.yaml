@@ -1,0 +1,10 @@
+# Obligaciones de diseño que esta fixture deja abiertas a sabiendas.
+# Ver docs/design-obligations.md — el «aceptado» del análisis de huecos, por escrito.
+decisions:
+  - id: OBL-CONCURRENCY-CODE
+    scope: persistence
+    reason: >
+      El conflicto de dos escrituras concurrentes sobre la misma raíz es el canónico
+      409 CONCURRENT_MODIFICATION. Ninguna operación tiene un code de dominio que lo
+      describa mejor.
+    since: 1.0.0

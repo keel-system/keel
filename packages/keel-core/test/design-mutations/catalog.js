@@ -684,6 +684,47 @@ export const MUTATIONS = [
     },
     expect: ['CHK-PERSIST-BOUNDARY-DEFAULT']
   },
+  // ── defaults tácitos del catálogo estructural (una por fila de STRUCTURAL_DEFAULTS) ──
+  {
+    id: 'M-MODEL-IMPLICIT-DEFAULT-LOCKING',
+    title: 'optimisticLocking sin escribir: se aplicaría all sin que nadie lo decidiera',
+    mutate: (d) => {
+      delete d.layers.persistence.consistency.optimisticLocking;
+    },
+    expect: ['CHK-MODEL-IMPLICIT-DEFAULT']
+  },
+  {
+    id: 'M-MODEL-IMPLICIT-DEFAULT-TIMESTAMPS',
+    title: 'audit.timestamps sin escribir',
+    mutate: (d) => {
+      delete d.layers.persistence.audit.timestamps;
+    },
+    expect: ['CHK-MODEL-IMPLICIT-DEFAULT']
+  },
+  {
+    id: 'M-MODEL-IMPLICIT-DEFAULT-AUTHORSHIP',
+    title: 'audit.authorship sin escribir',
+    mutate: (d) => {
+      delete d.layers.persistence.audit.authorship;
+    },
+    expect: ['CHK-MODEL-IMPLICIT-DEFAULT']
+  },
+  {
+    id: 'M-MODEL-IMPLICIT-DEFAULT-RELIABILITY',
+    title: 'publishing.reliability sin escribir',
+    mutate: (d) => {
+      delete d.layers.messaging.publishing.reliability;
+    },
+    expect: ['CHK-MODEL-IMPLICIT-DEFAULT']
+  },
+  {
+    id: 'M-MODEL-IMPLICIT-DEFAULT-VISIBILITY',
+    title: 'la visibility de un bucket sin escribir',
+    mutate: (d) => {
+      delete d.layers.storage.buckets.ticketAttachments.visibility;
+    },
+    expect: ['CHK-MODEL-IMPLICIT-DEFAULT']
+  },
   {
     id: 'M-PERSIST-AUDIT-NESTED',
     title: 'auditoría automática con modelo documental y una entidad anidada',
@@ -838,7 +879,7 @@ export const MUTATIONS = [
     title: 'un Then que afirma posición en un listado ordenado por updatedAt tras mover filas',
     mutate: (d) => {
       entity(d, 'Ticket').fields.updatedAt = { type: 'timestamp', generated: true };
-      d.layers.persistence.audit = { timestamps: 'declared' };
+      d.layers.persistence.audit.timestamps = 'declared';
       ops(d).listTickets.output.sort = ['updatedAt:desc'];
       replaceIn(d, '**Given** tres tickets con asuntos distintos.', '**Given** tres tickets, y el segundo ya en `closed`.');
       replaceIn(d, '**Then** llegan ordenados por asunto.', '**Then** el primero de la lista es el que se cerró.');
@@ -1507,7 +1548,7 @@ export const MUTATIONS = [
     extends: 'escalation',
     mutate: (d) => {
       entity(d, 'Ticket').fields.createdAt = { type: 'timestamp', generated: true };
-      d.layers.persistence.audit = { timestamps: 'declared' };
+      d.layers.persistence.audit.timestamps = 'declared';
       d.layers.dependencies.dependencies.pager.activations.pageOncall.awaitingSince = 'createdAt';
     },
     expect: ['CHK-DEPS-AWAITING-CREATEDAT']
