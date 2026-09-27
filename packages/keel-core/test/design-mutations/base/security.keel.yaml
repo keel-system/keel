@@ -1,0 +1,19 @@
+authentication:
+  protocol: oidc
+  tokenLocation: header
+
+roles:
+  agent:
+    description: Atiende y cierra tickets.
+
+permissions:
+  ticket:write:
+    description: Registrar y cerrar tickets.
+  ticket:read:
+    description: Consultar tickets.
+
+roleGrants:
+  agent: [ticket:write, ticket:read]
+
+access:
+  default: { level: required, roles: [agent] }

@@ -1,0 +1,23 @@
+keel: "2.15"
+# Diseño BASE del corpus de mutaciones (test/design-mutations.test.js). No es un diseño real:
+# es un diseño pequeño que toca las diez capas y sobre el que la puerta mecánica está en
+# SILENCIO —ningún error, ningún aviso, ninguna obligación—. Cada mutación del catálogo le
+# hace un cambio mínimo y afirma el conjunto EXACTO de ids que ese cambio dispara, así que
+# cualquier ruido de fondo aquí lo pagan todas. Si una edición lo saca del silencio, el
+# primer test del corpus lo dice antes que ningún otro.
+service:
+  name: ticket-desk
+  version: 1.0.0
+  description: Recoge tickets de soporte, los cierra y avisa al solicitante por correo.
+  domain: support
+layers:
+  domain: domain.keel.yaml
+  use-cases: use-cases.keel.yaml
+  api: api.keel.yaml
+  security: security.keel.yaml
+  messaging: messaging.keel.yaml
+  http-clients: http-clients.keel.yaml
+  dependencies: dependencies.keel.yaml
+  persistence: persistence.keel.yaml
+  storage: storage.keel.yaml
+  mail: mail.keel.yaml

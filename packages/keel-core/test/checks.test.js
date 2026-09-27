@@ -7,9 +7,10 @@
 //   - Coherencia hallazgo ↔ catálogo: la severidad la decide el catálogo, no el sitio
 //     donde se emite. Con dos fuentes, la que se lee al inventariar y la que bloquea la
 //     generación acaban diciendo cosas distintas.
-//   - El RATCHET: `crossrefs.js` tiene 216 hallazgos heredados sin id. Migrarlos de golpe
-//     sería un diff imposible de revisar, así que migran por oportunidad — y lo único que
-//     impide que ese número vuelva a subir es este test.
+//   - El RATCHET: `crossrefs.js` llegó a tener 216 hallazgos heredados sin id. Los avisos
+//     migraron en una tanda dedicada (R5 de recomendaciones-diseno.md) y ya no queda ninguno;
+//     los 134 errores migran por oportunidad, porque ya bloquean — y lo único que impide que
+//     los dos números vuelvan a subir es este test.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -113,8 +114,8 @@ test('la severidad la decide el catálogo, no el sitio donde se emite', () => {
 // entonces no se puede citar desde la skill, ni contar, ni falsar por mutación.
 //
 // Si has migrado reglas y el test falla por lo bajo, baja el número: es el ratchet
-// haciendo su trabajo.
-const ANONIMOS_MAXIMOS = { errors: 134, warnings: 77 };
+// haciendo su trabajo. Los avisos están a cero: un `warnings.push` nuevo pone esto en rojo.
+const ANONIMOS_MAXIMOS = { errors: 134, warnings: 0 };
 
 test('ninguna comprobación nueva se añade sin id (ratchet)', () => {
   const source = fs.readFileSync(crossrefsPath, 'utf8');

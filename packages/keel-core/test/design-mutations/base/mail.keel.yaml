@@ -1,0 +1,15 @@
+description: Aviso al solicitante cuando su ticket se cierra.
+
+delivery:
+  transport: smtp
+  parts: [text]
+
+sentBy:
+  - closeTicket
+
+sender:
+  source: fixed
+  address: soporte@ejemplo.com
+
+templating:
+  source: bundled

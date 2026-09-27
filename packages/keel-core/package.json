@@ -11,7 +11,8 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "design-matrix": "node scripts/design-matrix.js"
   },
   "files": [
     "src",

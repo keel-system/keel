@@ -1,0 +1,12 @@
+default:
+  model: relational
+entities:
+  Ticket:
+    indexes:
+      - [status]
+  Queue:
+    indexes:
+      - [name]
+consistency:
+  transactionalBoundary: per-aggregate
+  optimisticLocking: none

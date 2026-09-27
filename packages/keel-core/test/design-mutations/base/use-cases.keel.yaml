@@ -1,0 +1,102 @@
+operations:
+  createTicket:
+    description: Registra un ticket nuevo.
+    kind: command
+    input:
+      fields:
+        subject:
+          type: string
+          required: true
+          constraints: { maxLength: 120 }
+        requesterEmail:
+          type: string
+          required: true
+    output:
+      entity: Ticket
+    errors:
+      - code: REQUESTER_BLOCKED
+        when: El solicitante tiene bloqueado el alta de tickets.
+        http: 422
+
+  getTicket:
+    description: Consulta un ticket con el perfil de su solicitante.
+    kind: query
+    input:
+      fields:
+        id:
+          type: uuid
+          required: true
+    output:
+      entity: Ticket
+    errors:
+      - code: TICKET_NOT_FOUND
+        when: No existe un ticket con ese id.
+        http: 404
+      - code: DIRECTORY_UNAVAILABLE
+        when: El directorio de solicitantes no contesta.
+        http: 503
+
+  listTickets:
+    description: Lista los tickets por asunto.
+    kind: query
+    input: "void"
+    output:
+      entity: Ticket
+      list: true
+      sort: [subject]
+
+  closeTicket:
+    description: Cierra un ticket y avisa al solicitante.
+    kind: command
+    input:
+      fields:
+        id:
+          type: uuid
+          required: true
+    output:
+      entity: Ticket
+    errors:
+      - code: TICKET_NOT_FOUND
+        when: No existe un ticket con ese id.
+        http: 404
+    emits: [TicketClosed]
+    transitions:
+      - entity: Ticket
+        from: [open]
+        to: closed
+
+  archiveQueue:
+    description: Archiva una cola que ya no recibe tickets.
+    kind: command
+    input:
+      fields:
+        id:
+          type: uuid
+          required: true
+    output: "void"
+    errors:
+      - code: QUEUE_NOT_FOUND
+        when: No existe una cola con ese id.
+        http: 404
+    transitions:
+      - entity: Queue
+        from: [active]
+        to: archived
+
+  noteEscalation:
+    description: Anota que el ticket se escaló en el equipo de guardia.
+    kind: command
+    internal: true
+    input:
+      fields:
+        ticketId:
+          type: uuid
+          required: true
+        level:
+          type: int
+          required: true
+    output: "void"
+    errors:
+      - code: TICKET_NOT_FOUND
+        when: No existe un ticket con ese id.
+        http: 404

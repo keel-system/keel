@@ -1,0 +1,7 @@
+buckets:
+  ticketAttachments:
+    visibility: private
+    allowedContentTypes: [application/pdf, image/png]
+    maxSizeMb: 10
+    signedUrlTtlSeconds: 300
+    description: Adjuntos de los tickets; solo accesibles por el servicio.

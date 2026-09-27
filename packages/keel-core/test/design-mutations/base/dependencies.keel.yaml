@@ -1,0 +1,16 @@
+dependencies:
+  directory:
+    description: Directorio corporativo, dueño de los perfiles de los solicitantes.
+    contract:
+      version: 1.0.0
+    needs:
+      requesterProfile:
+        description: Nombre visible del solicitante.
+        usedBy: [getTicket]
+        strategy: on-demand
+        fetchedFrom:
+          client: directory
+          call: getProfile
+        onUnavailable:
+          action: fail
+          error: DIRECTORY_UNAVAILABLE

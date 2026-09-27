@@ -1,0 +1,31 @@
+channels:
+  ticketEvents:
+    description: Hechos del ciclo de vida de los tickets.
+
+publishing:
+  reliability: best-effort
+  events:
+    TicketClosed:
+      channel: ticketEvents
+      description: Un ticket se cerró.
+      payload:
+        ticketId: { type: uuid, required: true }
+
+subscriptions:
+  TicketEscalated:
+    description: El equipo de guardia pide que se anote la escalada de un ticket.
+    source: oncall
+    nature: request
+    channel: ticketEvents
+    payload:
+      ticketId: { type: uuid, required: true }
+      level: { type: int, required: true }
+    contract:
+      envelope: keel
+    triggers: noteEscalation
+    input:
+      ticketId: ticketId
+      level: level
+    onFailure:
+      retry: { maxAttempts: 3, backoff: exponential, initialDelayMs: 500, maxDelayMs: 5000 }
+      deadLetter: true

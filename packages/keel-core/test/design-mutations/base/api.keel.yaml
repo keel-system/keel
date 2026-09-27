@@ -1,0 +1,21 @@
+style: rest
+basePath: /api
+endpoints:
+  createTicket:
+    method: POST
+    path: /tickets
+    successStatus: 201
+  getTicket:
+    method: GET
+    path: /tickets/{id}
+  listTickets:
+    method: GET
+    path: /tickets
+  closeTicket:
+    method: POST
+    path: /tickets/{id}/close
+    successStatus: 200
+  archiveQueue:
+    method: POST
+    path: /queues/{id}/archive
+    successStatus: 204

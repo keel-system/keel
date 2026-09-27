@@ -150,6 +150,8 @@ Dos piezas, de menor a mayor:
 - Criterio de «hecho» por aviso migrado: id + entrada en `CHECKS` con `nature` y `closes` + caso en `crossrefs.test.js` que dispare **ese id y solo ese**.
 - Meta medible: `ANONIMOS_MAXIMOS.warnings` a 0.
 
+> **Estado (2026-09-27): hecho.** Eran 77, no 80 (R2 había migrado tres). Migrados en cinco tandas por capa, **sin cambiar el texto de ningún mensaje** (comprobado ejecutando el `crossrefs.js` anterior y el nuevo sobre las 11 fixtures: listas idénticas). 34 son `undecided` (3 con `waivable: false`: el `DELETE` sin status, el canal compartido sin discriminador y el canal externo sin `contract`) y 43 `incoherence`. El criterio de hecho cambió respecto a lo escrito arriba: en vez de un caso en `crossrefs.test.js`, **cada id tiene su mutación** en el corpus de R6, que exige la lista exacta. `npm run design-matrix`: 137 ids, 131 falsados, 1 co-disparado (`CHK-DEPS-REPLICA-UNPERSISTED`, inseparable de `CHK-PERSIST-ROOT-UNMAPPED`), 5 fuera de alcance, **0 avisos anónimos**. Efecto sobre R1: las fixtures pasan de 42 a 46 decisiones no tomadas visibles para `--ready`; las cuatro nuevas ya existían y se escapaban. Hallazgo colateral: el escenario del outbox que agota los reintentos, escrito de forma natural, calla por sí solo el aviso del canal indisponible.
+
 ---
 
 ### R6. Medir la puerta de diseño por mutación · cierra D6
@@ -160,6 +162,8 @@ La misma disciplina que ya funciona en keel-spring, aplicada al diseño:
 - `test/design-mutations.test.js` recorre el catálogo. Una regla que no detecta su mutación, o que detecta la de otra, queda en rojo.
 - `npm run design-matrix`, hermano de `npm run matrix`: por id, si está **falsado** (hay una mutación que lo dispara solo) o no. Así hay inventario de la cobertura real de la puerta.
 - Es la precondición para migrar con confianza en R5 y para cambiar severidades en R2.
+
+> **Estado (2026-09-27): hecho.** El base no pasa `--ready` —ninguna fixture lo hace todavía (R9)— ni lo necesita: lo que exige el corpus es **silencio mecánico**, y el base es propio de keel-core (`test/design-mutations/base/`, el servicio sintético `ticket-desk`, las diez capas más escenarios con matriz) para no depender de las fixtures de keel-spring. 57 mutaciones; `npm run design-matrix` da **55 de 60 ids falsados** (cada uno por una mutación que lo dispara solo), **0 co-disparados**, **0 sin mutación** y **5 fuera de alcance** (los tres `CHK-DOCS-*` y los dos del careo, que emite `validateService` fuera de `crossrefs.js` y falsan sus propios tests). El test prohíbe que entre un id sin mutación. Hallazgo colateral: la regla de `CHK-SERVICE-PARAM-UNBACKED` lee `entity.rules`, que el schema de `domain` no admite; esa rama es inalcanzable. Los 211 hallazgos anónimos (134 + 77) siguen sin poder falsarse por id: son R5.
 
 ---
 
@@ -195,8 +199,8 @@ La misma disciplina que ya funciona en keel-spring, aplicada al diseño:
 |---|---|---|---|---|---|
 | 1 | R1 fase 1: `assessReadiness` + `keel validate --ready` + estampado en build | D1 | días | — | checklist por diseño; `keel-generated.json` dice qué faltaba |
 | 2 | R2: campo `nature` + aceptación de `undecided` en `decisions.yaml` | D2 | días | 1 | avisos `undecided` cerrados o aceptados como criterio de «listo» |
-| 3 | R6: corpus de mutaciones sobre el diseño base | D6 | 1 semana | — (mejor con 9) | `design-matrix` con ids falsados |
-| 4 | R5: migrar los 80 avisos anónimos | D5 | 1–2 semanas | 2, 3 | `ANONIMOS_MAXIMOS.warnings = 0` |
+| 3 | R6: corpus de mutaciones sobre el diseño base — **hecho** | D6 | 1 semana | — (mejor con 9) | `design-matrix` con ids falsados: 55/60, 5 fuera de alcance |
+| 4 | R5: migrar los 80 avisos anónimos — **hecho** (eran 77) | D5 | 1–2 semanas | 2, 3 | `ANONIMOS_MAXIMOS.warnings = 0` |
 | 5 | R4.1: `CHK-MODEL-IMPLICIT-DEFAULT` | D4 | días | 2 | ningún default estructural escrito en silencio |
 | 6 | R3: `gaps.yaml` | D3 | 1–2 semanas | 1 | análisis auditable, retomable y con caducidad |
 | 7 | R7: matriz de escenarios en `--ready` | D7 | días | 1 | ningún `code` sin escenario llega a build |

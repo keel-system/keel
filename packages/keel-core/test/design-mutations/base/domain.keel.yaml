@@ -1,0 +1,85 @@
+types:
+  TicketStatus:
+    description: Estados por los que pasa un ticket de soporte.
+    values: [open, closed]
+  QueueStatus:
+    description: Estados de una cola de atención.
+    values: [active, archived]
+
+entities:
+  Ticket:
+    description: Petición de soporte de un solicitante.
+    fields:
+      id:
+        type: uuid
+        id: true
+        generated: true
+      subject:
+        type: string
+        required: true
+        constraints: { maxLength: 120 }
+      requesterEmail:
+        type: string
+        required: true
+      status:
+        type: TicketStatus
+        required: true
+        default: open
+      escalationLevel:
+        type: int
+        required: true
+        default: 0
+        description: Cuántas veces se ha escalado el ticket; lo escribe la suscripción.
+      attachment:
+        type: file
+        bucket: ticketAttachments
+        description: Captura o documento que acompaña al ticket.
+    relations:
+      notes:
+        entity: TicketNote
+        cardinality: one-to-many
+    lifecycle:
+      field: status
+      transitions:
+        open: [closed]
+        closed: []
+
+  TicketNote:
+    description: Nota interna de un agente sobre el ticket.
+    fields:
+      id:
+        type: uuid
+        id: true
+        generated: true
+      body:
+        type: text
+        required: true
+
+  # El segundo agregado existe para las reglas que cruzan fronteras de agregado (una
+  # colección hacia otra raíz, una operación que mueve dos): sin él no tendrían sujeto.
+  Queue:
+    description: Cola de atención a la que se asignan los tickets.
+    fields:
+      id:
+        type: uuid
+        id: true
+        generated: true
+      name:
+        type: string
+        required: true
+      status:
+        type: QueueStatus
+        required: true
+        default: active
+    lifecycle:
+      field: status
+      transitions:
+        active: [archived]
+        archived: []
+
+aggregates:
+  Ticket:
+    root: Ticket
+    entities: [TicketNote]
+  Queue:
+    root: Queue

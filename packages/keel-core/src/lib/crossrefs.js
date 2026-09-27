@@ -236,7 +236,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
           const from = aggregateOf.get(ctx.name);
           const to = aggregateOf.get(relation.entity);
           if (from !== undefined && to !== undefined && from !== to) {
-            warnings.push(
+            warn('CHK-USECASES-EXCLUDE-CROSSES-AGGREGATE',
               `${where}.exclude '${rawPath}': la relación '${seg}' apunta al agregado '${to}', que se serializa por id — no hay campos anidados que excluir`
             );
             crossedAggregate = true;
@@ -388,7 +388,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     // paginated ya implica la colección (el sobre { items, page, size, … } la envuelve),
     // pero sin la política de pagination de api el generador no tiene tamaño de página ni tope.
     if (direction === 'output' && payload.paginated === true && !api?.pagination) {
-      warnings.push(
+      warnIn(scopeOf(where), 'CHK-USECASES-PAGINATED-NO-POLICY',
         `${where}: paginated: true pero api no declara pagination (style/defaultSize/maxSize) — el generador no tiene tamaño de página ni tope`
       );
     }
@@ -517,7 +517,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
           }
           for (const value of values) {
             if (!(value in (entity.lifecycle.transitions ?? {}))) {
-              warnings.push(`${where}.transitions: el estado '${value}' no declara transiciones (¿terminal? decláralo con [])`);
+              warn('CHK-DOMAIN-STATE-NO-TRANSITIONS', `${where}.transitions: el estado '${value}' no declara transiciones (¿terminal? decláralo con [])`);
             }
           }
         }
@@ -554,7 +554,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     const roots = new Set(Object.values(aggregates).map((agg) => agg.root));
     for (const entityName of entities) {
       if (!aggregateOf.has(entityName)) {
-        warnings.push(
+        warn('CHK-DOMAIN-ENTITY-NO-AGGREGATE',
           `domain: la entidad '${entityName}' no pertenece a ningún agregado (¿es un agregado propio de una sola entidad?)`
         );
       }
@@ -568,7 +568,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
           !roots.has(rel.entity) &&
           aggregateOf.get(entityName) !== targetAgg
         ) {
-          warnings.push(
+          warn('CHK-DOMAIN-RELATION-TO-INNER',
             `domain: ${entityName}.relations.${relName}: apunta a '${rel.entity}', entidad interna del agregado '${targetAgg}' — referencia la raíz '${aggregates[targetAgg].root}' por id`
           );
         }
@@ -640,7 +640,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       const enElDominio = acotadosDelDominio.get(name);
       if (!enElDominio) continue;
       const donde = enElDominio.map((d) => `${d.entityName}.${name} (${d.cotas.join(', ')})`).join(', ');
-      warnings.push(
+      warn('CHK-USECASES-INPUT-UNBOUNDED',
         `use-cases: ${opName}.input.fields.${name}: el dominio acota este campo (${donde}) y el input no. Un input con fields NO hereda del dominio: el DTO saldrá sin la validación, así que la violación se descubrirá como conflicto de integridad al escribir —no como 400 en el borde— y con un code que no es el del diseño. Declara aquí la cota, o el value type que ya la lleva`
       );
     }
@@ -805,7 +805,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       }
     }
     if (op.cache && op.kind !== 'query') {
-      warnings.push(`use-cases: ${opName}: tiene cache pero no es kind: query`);
+      warn('CHK-USECASES-CACHE-ON-COMMAND', `use-cases: ${opName}: tiene cache pero no es kind: query`);
     }
     // Gemela de la anterior, por el otro lado: una lectura no produce hechos. Si los
     // produce, una de las dos declaraciones miente, y el generador no tiene forma de
@@ -933,7 +933,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     for (const [from, targets] of Object.entries(entity.lifecycle?.transitions ?? {})) {
       for (const to of targets ?? []) {
         if (!executedTransitions.has(`${entityName}|${from}|${to}`)) {
-          warnings.push(
+          warn('CHK-DOMAIN-TRANSITION-UNEXECUTED',
             `domain: ${entityName}.lifecycle.transitions.${from}: ninguna operación de use-cases declara ejecutar '${from}' → '${to}'`
           );
         }
@@ -993,7 +993,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     const own = mutationEvents.get(output.entity) ?? new Set();
     const uncovered = [...own].filter((event) => !invalidatedBy.has(event)).sort();
     if (!ownReported && uncovered.length > 0) {
-      warnings.push(
+      warnIn(scopeOf(where), 'CHK-USECASES-CACHE-STALE-OWN',
         `${where}: '${output.entity}' cambia con [${uncovered.join(', ')}], que invalidatedBy no lista — ` +
           'si el staleness hasta el TTL es deliberado, ignóralo; si no, la lectura sirve datos viejos'
       );
@@ -1034,7 +1034,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       if (embedders.length === 0) continue;
       const plain = payloads.filter((payload) => !payload.embed.has(relName) && !payload.exclude.has(relName));
       if (plain.length === 0) continue;
-      warnings.push(
+      warnIn(`use-cases.${entityName}.embed.${relName}`, 'CHK-USECASES-EMBED-ASYMMETRY',
         `use-cases: ${plain.map((payload) => payload.opName).join(', ')}: ` +
           `devuelve${plain.length > 1 ? 'n' : ''} '${entityName}' con '${relName}Id' plano, ` +
           `mientras ${embedders.map((payload) => payload.opName).join(', ')} ` +
@@ -1071,12 +1071,12 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     }
     // Aviso, no error: una búsqueda con criterios extensos por POST es legítima.
     if (op.kind === 'query' && endpoint.method !== undefined && endpoint.method !== 'GET') {
-      warnings.push(
+      warnIn(`${scopeOf(where)}.method`, 'CHK-API-QUERY-NOT-GET',
         `${where}.method: la operación es kind: query y se expone con ${endpoint.method} — una lectura se expone con GET salvo que la entrada no quepa en la URL`
       );
     }
     if (op.kind === 'command' && endpoint.method === 'GET') {
-      warnings.push(
+      warn('CHK-API-COMMAND-GET',
         `${where}.method: la operación es kind: command y se expone con GET — una escritura no debe viajar en un método idempotente y cacheable`
       );
     }
@@ -1091,7 +1091,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       );
     }
     if (endpoint.successStatus !== undefined && !STATUSES_WITHOUT_BODY.has(endpoint.successStatus) && voidOutput) {
-      warnings.push(
+      warn('CHK-API-BODY-STATUS-ON-VOID',
         `${where}.successStatus: ${endpoint.successStatus} admite cuerpo y la operación declara output: "void" — la respuesta irá vacía; 204 describe mejor ese contrato`
       );
     }
@@ -1109,7 +1109,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     }
     // DELETE sin successStatus: el generador asume 204 (no hay dónde declararlo si no).
     if (endpoint.successStatus === undefined && endpoint.method === 'DELETE' && !voidOutput) {
-      warnings.push(
+      warnIn(scopeOf(where), 'CHK-API-DELETE-NO-STATUS',
         `${where}: DELETE sin successStatus se genera como 204 (sin cuerpo) y la operación declara output — declara el successStatus que quieres o pon output: "void"`
       );
     }
@@ -1131,7 +1131,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
         errors.push(`${where}: level 'service' no admite roles (los roles son de usuarios humanos)`);
       }
       if (rule?.level === 'service' && !rule?.scopes) {
-        warnings.push(`${where}: level 'service' sin scopes — cualquier cliente autenticado podrá invocar la operación`);
+        warnIn(scopeOf(where), 'CHK-SEC-SERVICE-NO-SCOPES', `${where}: level 'service' sin scopes — cualquier cliente autenticado podrá invocar la operación`);
       }
     };
     checkAccessRule(security.access?.default, 'security: access.default');
@@ -1285,7 +1285,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
         );
       }
       if (aud === 'services' && rule.level === 'public') {
-        warnings.push(
+        warnIn(`api.endpoints.${opName}`, 'CHK-SEC-SERVICES-PUBLIC',
           `api: endpoints.${opName}: audience 'services' con level 'public' — ¿de verdad no requiere credencial de máquina?`
         );
       }
@@ -1305,7 +1305,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       errors.push('security: serviceClients declarado sin authentication.serviceAuth');
     }
     if (Object.keys(serviceClients).length > 0 && !hasMachineEndpoint) {
-      warnings.push(
+      warn('CHK-SEC-CLIENTS-NO-MACHINE-ENDPOINT',
         `security: serviceClients declarado pero ningún endpoint es audience 'services' ni 'both'`
       );
     }
@@ -1325,7 +1325,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
         for (const scope of def?.scopes ?? []) {
           grantedScopes.add(scope);
           if (!requiredScopes.has(scope)) {
-            warnings.push(
+            warn('CHK-SEC-CLIENT-SCOPE-UNUSED',
               `security: serviceClients.${client}: el scope '${scope}' no lo exige ninguna regla de acceso`
             );
           }
@@ -1333,7 +1333,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       }
       for (const scope of requiredScopes) {
         if (!grantedScopes.has(scope)) {
-          warnings.push(
+          warn('CHK-SEC-SCOPE-UNGRANTED',
             `security: el scope '${scope}' exigido por las reglas de acceso no está concedido a ningún serviceClient — ningún cliente podría invocar esas operaciones`
           );
         }
@@ -1661,7 +1661,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
   if (scenarios !== null && messaging?.publishing?.reliability === 'outbox' && persistence) {
     const UNAVAILABLE = /(canal|broker|mensajer[íi]a)[^.]{0,60}(indisponible|no disponible|ca[íi]d|detenid|apagad|parad|fuera de servicio)/i;
     if (!scenarioBlocks.some((block) => UNAVAILABLE.test(block))) {
-      warnings.push(
+      warn('CHK-SCEN-OUTBOX-UNAVAILABLE',
         `messaging: publishing.reliability: 'outbox' no tiene escenario que lo distinga de best-effort — no encuentro ` +
           `ninguno en validation-scenarios.md con el canal INDISPONIBLE. Un escenario que solo afirme que el evento ` +
           `acaba publicado lo pasa igual un servidor que publica en línea dentro de la operación, así que la garantía ` +
@@ -1684,7 +1684,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
   if (scenarios !== null && messaging?.publishing?.reliability === 'outbox' && persistence) {
     const EXHAUSTED = /(agotad?[oa]?s?|se rinde|rendirse|renuncia)[^.]{0,80}(reintento|intento|relay|outbox)|(reintento|intento)[^.]{0,60}(agotad|exhaust)/i;
     if (!scenarioBlocks.some((block) => EXHAUSTED.test(block))) {
-      warnings.push(
+      warn('CHK-SCEN-OUTBOX-EXHAUSTED',
         `messaging: publishing.reliability: 'outbox' no tiene escenario del evento que el relay ABANDONA — no ` +
           `encuentro ninguno en validation-scenarios.md que hable de agotar los reintentos. Es el otro desenlace ` +
           `del mecanismo y el único que pierde datos: la fila deja de reclamarse, el cron de purga no la borra ` +
@@ -1731,7 +1731,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
 
         const mentions = scenariosMentioning(opName);
         if (mentions.some((block) => RESCUE.test(block))) continue;
-        warnings.push(
+        warn('CHK-SCEN-RESCUE-UNCOVERED',
           `use-cases: operations.${opName} saca ${transition.entity} de ${inFlight.join(
 )}, que es un estado ` +
             `EN VUELO, pero no encuentro en validation-scenarios.md ningún escenario que nombre esa operación y ` +
@@ -1762,7 +1762,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
         if (!spec?.reconciledBy) continue;
         const mentions = scenariosMentioning(spec.reconciledBy);
         if (mentions.some((block) => EXPIRED.test(block))) continue;
-        warnings.push(
+        warn('CHK-SCEN-RECONCILE-EXPIRED',
           `dependencies: ${depId}.activations.${name} declara reconciledBy: ${spec.reconciledBy}, pero no encuentro ` +
             `en validation-scenarios.md ningún escenario que nombre esa operación y hable de una espera AGOTADA. Es el ` +
             `único desenlace del encargo que no produce ningún hecho —nadie contesta—, así que el camino feliz y la ` +
@@ -1784,7 +1784,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       if (!op?.idempotency) continue;
       const mentions = scenariosMentioning(opName);
       if (mentions.length > 0 && !mentions.some((block) => CONCURRENT.test(block))) {
-        warnings.push(
+        warn('CHK-SCEN-IDEM-RACE',
           `use-cases: operations.${opName} declara idempotency pero sus escenarios no cubren la CARRERA — dos peticiones ` +
             `con la misma clave a la vez. El reintento secuencial encuentra el registro de la clave ya escrito, así que ` +
             `pasa aunque no haya nada que arbitre la ventana previa al commit, que es la que un cliente con reintentos ` +
@@ -1862,7 +1862,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
           `rollback después: el duplicado es observable`
         : `mueve una fila que NADIE arbitra (persistence.consistency.optimisticLocking deja esa raíz sin ` +
           `'@Version'), así que las dos réplicas commitean su efecto y el duplicado es observable`;
-      warnings.push(
+      warn('CHK-SCEN-CLUSTER-UNCOVERED',
         `use-cases: operations.${opName} tiene 'schedule', ${why}, pero no encuentro en validation-scenarios.md ` +
           `ningún escenario que nombre esa operación y la ejercite con DOS INSTANCIAS. @Scheduled corre en todas ` +
           `las réplicas, así que sin reclamo las N se llevan las mismas filas y cada una actúa: es la propiedad que ` +
@@ -1913,7 +1913,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
           : guards.includes('messageId')
             ? 'la deduplicación del listener por el id del mensaje'
             : 'una transición de lifecycle irrepetible';
-      warnings.push(
+      warn('CHK-SCEN-REDELIVERY-UNCOVERED',
         `messaging: subscriptions.${eventName} declara ${declared} contra la reentrega, pero no encuentro en ` +
           `validation-scenarios.md ningún escenario suyo que entregue el mismo mensaje otra vez. El canal es ` +
           `at-least-once para todas las suscripciones, no solo para las compensatorias: sin ese escenario, la guarda ` +
@@ -1959,7 +1959,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     );
     if (clients.length > 0) {
       const one = clients.length === 1;
-      warnings.push(
+      warn('CHK-SCEN-UNDECLARED-CLIENT',
         `security: los escenarios nombran ${one ? 'el cliente máquina' : 'los clientes máquina'} ` +
           `${clients.map((name) => `'${name}'`).join(', ')}, que serviceClients no declara — no hay credencial que ` +
           `aprovisionar, así que ${one ? 'ese escenario no es ejercitable' : 'esos escenarios no son ejercitables'} ` +
@@ -1971,7 +1971,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     const roles = undeclared(/\brol(?:es)?[\s*_]*`([^`]+)`/gi, new Set(Object.keys(security.roles ?? {})));
     if (roles.length > 0) {
       const one = roles.length === 1;
-      warnings.push(
+      warn('CHK-SCEN-UNDECLARED-ROLE',
         `security: los escenarios nombran ${one ? 'el rol' : 'los roles'} ` +
           `${roles.map((name) => `'${name}'`).join(', ')}, que roles no declara — no hay token que emitir para ` +
           `${one ? 'ese escenario' : 'esos escenarios'}. Declara ${one ? 'el rol' : 'los roles'}, o corrige la prosa`
@@ -1983,7 +1983,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     checkFieldMap(event.payload, `messaging: publishing.events.${eventName}.payload`);
     checkChannel(event.channel, `messaging: publishing.events.${eventName}.channel`);
     if (event.channel && messaging?.channels?.[event.channel]?.external === true) {
-      warnings.push(
+      warnIn(`messaging.publishing.events.${eventName}.channel`, 'CHK-MSG-PUBLISH-EXTERNAL',
         `messaging: publishing.events.${eventName}.channel: '${event.channel}' está marcado external (lo posee otro sistema) — publicar ahí exige acuerdo con su dueño`
       );
     }
@@ -2007,7 +2007,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       ([, sub]) => envelopeOf(sub) !== 'keel' && !sub.contract?.discriminator
     );
     for (const [eventName] of undiscriminated) {
-      warnings.push(
+      warnIn(`messaging.subscriptions.${eventName}.contract.discriminator`, 'CHK-MSG-SHARED-CHANNEL-NO-DISCRIMINATOR',
         `messaging: subscriptions.${eventName}.contract.discriminator: el canal '${channel}' lo comparten ${subs.length} suscripciones y esta no declara ` +
           `con qué distinguir sus mensajes de los demás. Sin envoltura Keel no hay 'metadata.eventType' que lo resuelva solo, así que el listener recibirá ` +
           `también los ajenos y los deserializará como propios`
@@ -2024,7 +2024,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
 
     // Contrato de recepción: sin él, el generador tiene que suponer la forma del mensaje.
     if (externalChannel && !sub.contract) {
-      warnings.push(
+      warnIn(scopeOf(where), 'CHK-MSG-EXTERNAL-NO-CONTRACT',
         `${where}: consume del canal externo '${sub.channel}' sin contract — el generador tendría que suponer la forma del mensaje (envoltura, formato, discriminador, id de deduplicación)`
       );
     }
@@ -2067,7 +2067,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     // broker —la envoltura entera va en el cuerpo—, así que el listener leería vacío el
     // dato que el diseño le manda usar para deduplicar.
     if (envelopeOf(sub) === 'keel' && sub.contract?.messageId) {
-      warnings.push(
+      warn('CHK-MSG-KEEL-MESSAGEID',
         `${where}.contract.messageId: con envelope keel la identidad del mensaje ya es metadata.eventId (lo estampa el emisor en el raise y viaja intacto) — ` +
           `declararlo aparte apunta a un dato que ningún emisor Keel escribe y el listener lo leería vacío. Este campo es para envelope none/wrapped, canales external ` +
           `o fuentes que usan una propiedad nativa del broker`
@@ -2079,7 +2079,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       const root = ref.name.split('.')[0];
       if (payloadFields.has(root)) continue;
       if (wrapped) {
-        warnings.push(`${where}.contract.${key}: el campo '${ref.name}' no está en payload — se asume que vive en la envoltura de la fuente`);
+        warnIn(`${scopeOf(where)}.contract.${key}`, 'CHK-MSG-CONTRACT-FIELD-ASSUMED', `${where}.contract.${key}: el campo '${ref.name}' no está en payload — se asume que vive en la envoltura de la fuente`);
       } else {
         errors.push(`${where}.contract.${key}: el campo '${ref.name}' no existe en el payload de la suscripción`);
       }
@@ -2166,7 +2166,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     }
     for (const field of payloadFields) {
       if (!usedPayloadFields.has(field)) {
-        warnings.push(`${where}.payload.${field}: no alimenta ningún campo del input de '${sub.triggers}'`);
+        warn('CHK-MSG-PAYLOAD-FIELD-UNUSED', `${where}.payload.${field}: no alimenta ningún campo del input de '${sub.triggers}'`);
       }
     }
   }
@@ -2197,7 +2197,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
             }
           }
         } else if (pathVars.length > 0) {
-          warnings.push(
+          warn('CHK-HTTP-PATH-NO-PARAMS',
             `${where}: path con variables {…} sin request.pathParams — el generador no podrá tipar los parámetros`
           );
         }
@@ -2207,7 +2207,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
           }
         }
       } else if (call.request || call.response) {
-        warnings.push(
+        warn('CHK-HTTP-TYPED-NO-ROUTE',
           `${where}: declara request/response tipados pero no method+path — el generador seguirá parseando la prosa del contract`
         );
       }
@@ -2225,7 +2225,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
         );
       }
       if (call.circuitBreaker && !call.fallback) {
-        warnings.push(`${where}: circuitBreaker sin fallback — define qué hace el servicio con el circuito abierto`);
+        warnIn(scopeOf(where), 'CHK-HTTP-BREAKER-NO-FALLBACK', `${where}: circuitBreaker sin fallback — define qué hace el servicio con el circuito abierto`);
       }
 
       // Reintentar una escritura ajena la ejecuta dos veces al otro lado. Nuestra
@@ -2235,7 +2235,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       // arreglar después, cuando ya hay dos cobros. GET es seguro por definición.
       const unsafe = call.method && !['GET'].includes(call.method);
       if (call.retry && (call.retry.maxAttempts ?? 1) > 1 && unsafe && !call.idempotency) {
-        warnings.push(
+        warnIn(scopeOf(where), 'CHK-HTTP-RETRY-UNSAFE',
           `${where}: reintenta un ${call.method} sin declarar 'idempotency' — cada reintento vuelve a ejecutar el ` +
             `trabajo en el proveedor, y un timeout no distingue "no llegó" de "llegó y se hizo". Declara la clave que ` +
             `le mandas (idempotency.keyFrom) o, si el proveedor no la honra, deja escrito en 'contract' que reintentar ` +
@@ -2246,7 +2246,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       // schema; prometerla sin reintentos ni circuito no es un error, pero sí un
       // dato del contrato del proveedor que conviene que se lea.
       if (call.idempotency && call.method === 'GET') {
-        warnings.push(
+        warn('CHK-HTTP-IDEMPOTENCY-ON-GET',
           `${where}: 'idempotency' en un GET no aporta nada — una lectura repetida no duplica ningún efecto`
         );
       }
@@ -2305,7 +2305,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
         // proyección de `embed`: no hace falta un escenario para verla, basta con
         // cruzar dos declaraciones del diseño.
         if (spec.strategy === 'on-demand' && (op.output.list || op.output.paginated)) {
-          warnings.push(
+          warnIn(`${scopeOf(where)}.exposedAs`, 'CHK-DEPS-EXPOSED-ON-DEMAND-LIST',
             `${where}.exposedAs: '${opName}' devuelve varios elementos y la estrategia es on-demand, así que el proveedor recibe una llamada por elemento — si el dato se expone en un listado, la estrategia que lo evita es 'replicated'`
           );
         }
@@ -2324,7 +2324,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
           `${where}.replica.keyField: el campo '${replica.keyField}' no existe en la entidad '${entityName}'`
         );
       } else if (entity.fields[replica.keyField]?.unique !== true) {
-        warnings.push(
+        warn('CHK-DEPS-REPLICA-KEY-NOT-UNIQUE',
           `${where}.replica.keyField: '${replica.keyField}' no es unique en '${entityName}' — la copia podría duplicarse ante reentregas`
         );
       }
@@ -2332,14 +2332,14 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       if (!persistence) {
         errors.push(`${where}.replica: una copia local exige capa persistence (no hay dónde guardarla)`);
       } else if (entity && !(entityName in (persistence.entities ?? {}))) {
-        warnings.push(
+        warn('CHK-DEPS-REPLICA-UNPERSISTED',
           `${where}.replica.entity: '${entityName}' no aparece en persistence: entities — la copia local no se persistiría`
         );
       }
 
       if (entityName) {
         if (replicaEntities.has(entityName)) {
-          warnings.push(
+          warn('CHK-DEPS-REPLICA-DUPLICATED',
             `${where}.replica.entity: '${entityName}' ya la replica el need '${replicaEntities.get(entityName)}'`
           );
         } else {
@@ -2373,7 +2373,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       if (!declaredErrorCodes.has(code)) {
         errors.push(`${where}: el código '${code}' no lo declara ninguna operación de use-cases`);
       } else if (!(ops ?? []).some((opName) => errorCodesByOp.get(opName)?.has(code))) {
-        warnings.push(`${where}: '${code}' no lo declara ninguna de las operaciones de ${opsField}`);
+        warn('CHK-DEPS-ERROR-NOT-IN-OPS', `${where}: '${code}' no lo declara ninguna de las operaciones de ${opsField}`);
       }
     };
 
@@ -2406,7 +2406,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       }
       const source = subscriptions[event]?.source;
       if (!anySource && source && source !== depName) {
-        warnings.push(
+        warn('CHK-DEPS-SOURCE-MISMATCH',
           `${where}: la ${label} '${event}' declara source '${source}', distinto de la dependencia '${depName}'`
         );
       }
@@ -2500,7 +2500,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
           // nadie que publique el fallo. Es el único sitio donde `reliability` deja de ser una
           // preferencia de entrega y pasa a sostener una dependencia.
           if (publishedEvents.has(via.publishes) && (messaging?.publishing?.reliability ?? 'best-effort') !== 'outbox') {
-            warnings.push(
+            warnIn(`${scopeOf(where)}.via`, 'CHK-DEPS-PUBLISH-WITHOUT-OUTBOX',
               `${where}.via: el encargo a '${depName}' viaja publicando '${via.publishes}', pero messaging declara ` +
                 `reliability: ${messaging?.publishing?.reliability ?? 'best-effort'} — si el broker no está en ese instante ` +
                 `el encargo se pierde en silencio, y no hay compensación posible de un trabajo que nunca se pidió. ` +
@@ -2564,7 +2564,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
           // de más en detectarse— y cuál es el correcto depende del proveedor, que es justo
           // lo que el diseñador sabe y el generador no.
           if (spec.unansweredAfterSeconds == null) {
-            warnings.push(
+            warnIn(`${scopeOf(where)}.reconciledBy`, 'CHK-DEPS-NO-UNANSWERED-AFTER',
               `${where}.reconciledBy: no declara 'unansweredAfterSeconds', así que el diseño no dice cuánto ` +
                 `silencio de ${depName} se tolera antes de volver a insistir. El barrido necesita ese umbral para ` +
                 `elegir candidatos: sin declararlo lo fija quien construya, y deja de ser una decisión revisable`
@@ -2619,7 +2619,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
             // barrido que reencarga lo enmascara: cumpliría esa comprobación y seguiría
             // sin tener qué barrer.
             if (waiting.size === 0) {
-              warnings.push(
+              warn('CHK-DEPS-RECONCILE-NO-WAIT-STATE',
                 `${where}.reconciledBy: ninguna de las operaciones que encargan '${action}' mueve el lifecycle de nada, ` +
                   `así que no hay un estado que signifique «esperando» y el barrido no tiene qué buscar. Reconciliar es ` +
                   `sacar de la espera lo que se quedó ahí: o la operación que encarga deja la entidad en ese estado ` +
@@ -2704,7 +2704,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
                 // correcta solo si entra en la espera al crearse, y eso el diseñador lo
                 // sabe y esta validación no. Aviso, con el caso que lo rompe.
                 if (spec.awaitingSince === 'createdAt') {
-                  warnings.push(
+                  warnIn(`${scopeOf(where)}.awaitingSince`, 'CHK-DEPS-AWAITING-CREATEDAT',
                     `${where}.awaitingSince: 'createdAt' es cuándo nació ${waitingEntity}, no cuándo entró en la espera. ` +
                       `Solo vale si las dos cosas ocurren a la vez; si la entidad se crea antes y el encargo se hace ` +
                       `después —minutos u horas—, el barrido mide desde el nacimiento y da por atascado un encargo ` +
@@ -2720,7 +2720,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
                 (activation.triggeredBy ?? []).includes(spec.reconciledBy)
               );
               if (!movesWaiting && !encargaAlProveedor) {
-                warnings.push(
+                warn('CHK-DEPS-RECONCILE-UNLINKED',
                   `${where}.reconciledBy: '${spec.reconciledBy}' corre por el reloj, pero nada en el diseño lo enlaza con ` +
                     `lo que tiene que reconciliar: no declara ninguna transición sobre ${[...waiting].join(', ')} —las ` +
                     `entidades que este encargo dejó esperando— ni aparece en el triggeredBy de ninguna activación de ` +
@@ -2750,7 +2750,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
                 const stateField = domain.entities?.[waitingEntity]?.lifecycle?.field;
                 if (!stored || stored.persisted === false || !stateField) continue;
                 if ((stored.indexes ?? []).some((index) => index[0] === stateField)) continue;
-                warnings.push(
+                warnIn(`persistence.entities.${waitingEntity}.indexes`, 'CHK-DEPS-RECONCILE-NO-INDEX',
                   `${where}.reconciledBy: el barrido '${spec.reconciledBy}' busca ${waitingEntity} por su estado de espera, ` +
                     `pero ningún índice de persistence.entities.${waitingEntity} empieza por '${stateField}' — esa consulta ` +
                     `recorre la tabla entera cada vez que corre el schedule, y en cada réplica. Nada más lo va a señalar: ` +
@@ -2806,7 +2806,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
         if (scenarios !== null) {
           const mentions = scenariosMentioning(compensation.onEvent);
           if (mentions.length === 0) {
-            warnings.push(
+            warn('CHK-SCEN-COMPENSATION-UNCOVERED',
               `${where}: no encuentro ningún escenario de validation-scenarios.md que mencione '${compensation.onEvent}' — ` +
                 `una compensación necesita tres: el efecto completo (llega el evento, el trabajo se deshace y el estado ` +
                 `propio vuelve, leído por la API), la reentrega del mismo evento sin segundo efecto, y la entrega del ` +
@@ -2814,7 +2814,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
             );
           } else {
             if (!mentions.some((block) => REDELIVERY.test(block))) {
-              warnings.push(
+              warn('CHK-SCEN-COMPENSATION-NO-REDELIVERY',
                 `${where}: los escenarios de '${compensation.onEvent}' cubren el efecto pero no encuentro el de REENTREGA — ` +
                   `deshacer dos veces el mismo trabajo no es deshacerlo, y es lo único que prueba que la guarda declarada ` +
                   `funciona de verdad. Añade un escenario que entregue el mismo mensaje otra vez y afirme que no hay ` +
@@ -2827,7 +2827,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
             // que con varias réplicas es el caso frecuente. Se pide por separado
             // porque prueba algo distinto, no porque sea más exhaustivo.
             if (!mentions.some((block) => CONCURRENT.test(block))) {
-              warnings.push(
+              warn('CHK-SCEN-COMPENSATION-NO-CONCURRENT',
                 `${where}: los escenarios de '${compensation.onEvent}' no cubren la DOBLE ENTREGA SIMULTÁNEA — la ` +
                   `reentrega secuencial encuentra la marca de procesado ya escrita, así que pasa aunque la guarda no ` +
                   `cubra la ventana en la que aún no lo está, que es donde el fallo ocurre de verdad. Añade un escenario ` +
@@ -2866,7 +2866,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
           // Sin envoltura Keel el consumidor no tiene un id de mensaje por defecto con el
           // que deduplicar antes: la reentrega llega al dominio y sale rechazada por el
           // guard. Es correcto, pero cada reentrega normal acaba en la cola de descartes.
-          warnings.push(
+          warnIn(scopeOf(where), 'CHK-DEPS-COMPENSATION-EXTERNAL-NO-MESSAGEID',
             `${where}: sobre el canal externo '${sub.channel}' la reentrega solo la frena el guard de lifecycle de '${undoOpName}' — ` +
               `declara contract.messageId para deduplicar antes de llegar al dominio y no mandar a la DLQ una reentrega normal`
           );
@@ -2888,7 +2888,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
               `trabajo que nadie deshará. Declara onFailure.retry (absorbe la carrera sin intervención) o, como mínimo, deadLetter`
           );
         } else if (attempts <= 1) {
-          warnings.push(
+          warnIn(scopeOf(where), 'CHK-DEPS-COMPENSATION-NO-RETRY',
             `${where}: la suscripción a '${compensation.onEvent}' no reintenta, así que una llegada fuera de orden ` +
               `acaba en la DLQ al primer intento — se salva el mensaje, pero exige intervención manual para una carrera ` +
               `que unos reintentos con backoff resolverían solos`
@@ -2914,7 +2914,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
         // hecho que dispare nada — el sistema no está roto, está callado, que es
         // peor. Lo único que detecta lo que NO pasa es un barrido.
         if (undone && !undone.reconciledBy) {
-          warnings.push(
+          warnIn(scopeOf(where), 'CHK-DEPS-COMPENSATION-SILENCE',
             `${where}: la compensación solo se dispara si llega '${compensation.onEvent}'. Si ese evento no llega nunca ` +
               `—el proveedor cae, el mensaje se pierde, o el fallo ni se publica— el encargo de '${compensation.undoes}' ` +
               `queda hecho y nadie lo deshace. Declara ${depName}.activations.${compensation.undoes}.reconciledBy con una ` +
@@ -2927,7 +2927,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
         // lo mire. Si el diseño no dice por dónde se reejecuta —ni endpoint ni
         // barrido— ese alguien tendrá que abrir la base de datos a mano.
         if (sub.onFailure?.deadLetter && !reachableByHttp && !undone?.reconciledBy) {
-          warnings.push(
+          warnIn(scopeOf(where), 'CHK-DEPS-COMPENSATION-DLQ-NO-RERUN',
             `${where}: la suscripción manda a la DLQ lo que no logra procesar, y lo que caiga ahí no tiene forma declarada ` +
               `de reejecutarse: '${undoOpName}' no se expone por HTTP ni hay reconciliación que lo barra. Un mensaje en la ` +
               `DLQ es trabajo sin deshacer esperando a que alguien lo note`
@@ -2956,7 +2956,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
           const restoredEntities = new Set((undoOp.transitions ?? []).map((transition) => transition.entity));
           for (const entityName of movedEntities) {
             if (!restoredEntities.has(entityName)) {
-              warnings.push(
+              warnIn(`${scopeOf(where)}.${entityName}`, 'CHK-DEPS-COMPENSATION-NO-RESTORE',
                 `${where}: la activación '${compensation.undoes}' se dispara desde operaciones que mueven el lifecycle de ` +
                   `'${entityName}', y '${undoOpName}' no declara ninguna transición sobre esa entidad — ¿a qué estado vuelve?`
               );
@@ -3005,7 +3005,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
             Object.values(dep.activations ?? {}).some((spec) => (spec.triggeredBy ?? []).includes(undoOpName)) ||
             Object.values(dep.needs ?? {}).some((spec) => (spec.usedBy ?? []).includes(undoOpName));
           if (undone.via?.client && !fromProvider && !reachesProvider) {
-            warnings.push(
+            warnIn(scopeOf(where), 'CHK-DEPS-COMPENSATION-PROVIDER-UNTOLD',
               `${where}: '${undoOpName}' devuelve el estado propio, pero '${compensation.onEvent}' lo publica '${sub.source}' ` +
                 `y no '${depName}' — para '${depName}' el trabajo de '${compensation.undoes}' sigue en pie, y nada en el diseño ` +
                 `se lo desmiente: '${undoOpName}' no aparece en ningún 'triggeredBy' ni 'usedBy' suyo, así que tampoco recibe su ` +
@@ -3043,7 +3043,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       // Sin ninguna compensación no hay contradicción que señalar: el diseño no ha
       // admitido todavía que el encargo pueda tener que deshacerse.
       if (conVuelta.length === 0 || sinVuelta.length === 0) continue;
-      warnings.push(
+      warnIn(`dependencies.sagas.${opName}`, 'CHK-DEPS-SAGA-INCOMPLETE',
         `dependencies: la operación '${opName}' encarga trabajo a varios proveedores y solo declara cómo deshacer el de ` +
           `${conVuelta.map((e) => `${e.depName}.${e.action}`).join(', ')} — si falla después de haber encargado los dos, ` +
           `${sinVuelta.map((e) => `${e.depName}.${e.action}`).join(', ')} queda hecho y nadie lo deshace. Declara su ` +
@@ -3055,7 +3055,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     const declaredDependencies = new Set(Object.keys(dependencies.dependencies ?? {}));
     for (const clientId of Object.keys(httpClients?.clients ?? {})) {
       if (!usedHttpCalls.has(clientId)) {
-        warnings.push(
+        warn('CHK-HTTP-CLIENT-UNUSED',
           `http-clients: clients.${clientId}: ningún need ni activación de dependencies lo usa — ¿de qué dependencia forma parte?`
         );
       }
@@ -3066,7 +3066,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       // invertiría el sentido del acoplamiento.
       if (sub.nature === 'request') continue;
       if (sub.source && !declaredDependencies.has(sub.source)) {
-        warnings.push(
+        warn('CHK-MSG-SOURCE-UNDECLARED',
           `messaging: subscriptions.${event}: su source '${sub.source}' no está declarado en dependencies`
         );
       }
@@ -3211,7 +3211,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
         (member) => entity.fields?.[String(member).split('.')[0]]?.computed
       );
       for (const member of computed) {
-        warnings.push(
+        warnIn(`persistence.entities.${entityName}.naturalKey.${member}`, 'CHK-PERSIST-COMPUTED-NATURAL-KEY',
           `persistence: entities.${entityName}.naturalKey: '${member}' es un campo computed de una entidad interna del agregado '${aggregate}', y la natural key es una constraint UNIQUE — ` +
             'al recalcularlo para toda la colección el guardado debe evitar el estado intermedio en que dos filas comparten valor; si el recálculo no es masivo, ignóralo'
         );
@@ -3254,7 +3254,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       Object.hasOwn(domain.entities?.[root]?.fields ?? {}, 'lockVersion')
     );
     if (withVersion.length === 0) {
-      warnings.push(
+      warn('CHK-PERSIST-DECLARED-NO-LOCKVERSION',
         `persistence: consistency.optimisticLocking: 'declared' pero ninguna raíz de agregado declara el campo reservado 'lockVersion' en domain (p. ej. 'lockVersion: { type: int, generated: true }' en la raíz, ver docs/dsl/persistence.md) — tal como está equivale a 'none' (último escritor gana). Declara el campo donde el conflicto deba observarse, o usa 'all'/'none' explícitamente`
       );
     }
@@ -3457,7 +3457,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       (error) => error?.http === 404 || /NOT_FOUND$/.test(error?.code ?? '')
     );
     if (!coversAbsence) {
-      warnings.push(
+      warnIn(`use-cases.${opName}`, 'CHK-USECASES-FILE-NO-NOT-FOUND',
         `use-cases: operations.${opName}: devuelve un archivo pero no declara ningún error para la clave inexistente (p. ej. FILE_NOT_FOUND con http: 404) — una lectura cuyo objeto ya no está en el bucket saldría como 500`
       );
     }
@@ -3466,7 +3466,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
   // storage: buckets declarados pero sin ningún campo file que los referencie
   for (const bucketName of buckets) {
     if (!referencedBuckets.has(bucketName)) {
-      warnings.push(
+      warn('CHK-STORAGE-BUCKET-UNUSED',
         `storage: buckets.${bucketName}: bucket declarado pero sin ningún campo file que lo referencie`
       );
     }
@@ -3489,7 +3489,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       );
     }
     if ((bucket.visibility ?? 'private') === 'private' && bucket.signedUrlTtlSeconds == null) {
-      warnings.push(
+      warnIn(`storage.buckets.${bucketName}`, 'CHK-STORAGE-NO-SIGNED-TTL',
         `storage: buckets.${bucketName}: es private y no declara 'signedUrlTtlSeconds': la URL firmada con la ` +
           `que se lee su contenido caduca, pero el diseño no dice cuándo`
       );
@@ -3518,7 +3518,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       if (!op) continue;
       const guarded = op.idempotency != null || (op.transitions ?? []).length > 0;
       if (!guarded) {
-        warnings.push(
+        warnIn(`mail.sentBy.${opName}`, 'CHK-MAIL-OP-UNGUARDED',
           `mail: sentBy: la operación '${opName}' manda correo y no declara 'idempotency' ni ninguna ` +
             `transición: si se repite, el destinatario recibe el mensaje dos veces y eso no lo deshace ` +
             `ninguna transacción`
@@ -3531,7 +3531,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     // cerrado antes que enviar desde una dirección que nadie verificó ante el proveedor),
     // pero es una decisión, y el diseño tiene que haberla tomado a sabiendas.
     if (mail.sender?.source === 'data' && !mail.sender.fallback) {
-      warnings.push(
+      warnIn('mail.sender', 'CHK-MAIL-SENDER-NO-FALLBACK',
         "mail: sender: es 'data' y no declara 'fallback': un envío cuyo dato no resuelva el remitente no " +
           'sale (falla cerrado). Si eso es lo que se quiere, dilo en su description; si no, declara la dirección de respaldo'
       );
@@ -3542,7 +3542,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     // descubre en ninguna prueba local: se descubre en la carpeta de spam del cliente.
     const parts = mail.delivery?.parts ?? [];
     if (parts.includes('html') && !parts.includes('text')) {
-      warnings.push(
+      warnIn('mail.delivery.parts', 'CHK-MAIL-HTML-NO-TEXT',
         "mail: delivery.parts: declara 'html' sin 'text': un correo HTML sin alternativa textual lo penalizan " +
           'los filtros antispam, y eso no falla en ninguna prueba — se ve en la carpeta de spam de quien lo recibe'
       );
@@ -3552,7 +3552,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     // un correo que dice «Tu pedido por  € está confirmado». Sin la declaración, una
     // variable que falta se interpola vacía y el fallo se descubre por la reclamación.
     if (mail.templating?.source === 'data' && !mail.templating.declaredVariables) {
-      warnings.push(
+      warnIn('mail.templating', 'CHK-MAIL-NO-DECLARED-VARIABLES',
         "mail: templating: el cuerpo es 'data' y no declara 'declaredVariables': una variable que falte se " +
           'interpolará como vacío y el correo saldrá con un hueco donde iba el dato, sin que nada falle'
       );
@@ -3564,7 +3564,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
   // Con use-cases aún en plantilla no hay nada que contrastar (el pending ya lo dice).
   for (const eventName of operationNames.size > 0 ? publishedEvents : []) {
     if (!emittedEvents.has(eventName)) {
-      warnings.push(
+      warn('CHK-MSG-EVENT-NOT-EMITTED',
         `messaging: publishing.events.${eventName}: evento declarado pero ninguna operación lo emite (use-cases: emits) — nada lo publicaría`
       );
     }
@@ -3573,7 +3573,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
   // messaging: canales declarados pero sin ningún evento/suscripción que los referencie
   for (const channelName of channels) {
     if (!referencedChannels.has(channelName)) {
-      warnings.push(
+      warn('CHK-MSG-CHANNEL-UNUSED',
         `messaging: channels.${channelName}: canal declarado pero sin ningún evento o suscripción que lo referencie`
       );
     }
@@ -3626,7 +3626,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     const exposed =
       op.internal === true || op.schedule !== undefined || reachableByHttp || triggeredBySubscription.has(opName);
     if (!exposed) {
-      warnings.push(
+      warn('CHK-USECASES-ORPHAN-OP',
         `use-cases: ${opName}: operación huérfana — sin endpoint, sin subscription, sin schedule y sin internal: true`
       );
     }
@@ -3684,7 +3684,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       op.internal !== true &&
       !sweepEffect
     ) {
-      warnings.push(
+      warnIn(`use-cases.${opName}`, 'CHK-USECASES-SCHEDULE-NO-EFFECT',
         `use-cases: ${opName}: su único disparador es el schedule (${op.schedule.cron}) y no declara transitions ni ` +
           `emits — no hay puerta por la que un ejecutor de caja negra la alcance NI efecto declarado contra el que ` +
           `afirmar, así que cualquier escenario que se le escriba será decorativo. Si su efecto sí se observa, ` +
@@ -3761,7 +3761,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     // hacer. Void no entra: no devolver nada se reproduce solo.
     const output = op.output;
     if (op.idempotency && output && typeof output === 'object' && (output.list || output.paginated)) {
-      warnings.push(
+      warnIn(`use-cases.${opName}.idempotency`, 'CHK-USECASES-IDEMPOTENT-LIST',
         `use-cases: ${opName}.idempotency: la respuesta es ${output.paginated ? 'paginada' : 'una lista'} y de la primera ` +
           `ejecución solo se guarda el id del recurso — una repetición no puede devolver la MISMA respuesta, que es lo que ` +
           `la idempotencia promete. O la operación devuelve el recurso creado, o lo que hace falta declarar es que la ` +

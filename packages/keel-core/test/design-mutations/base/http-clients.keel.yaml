@@ -1,0 +1,19 @@
+clients:
+  directory:
+    purpose: Resolver el perfil del solicitante de un ticket.
+    calls:
+      getProfile:
+        contract: GET /profiles/{email} devuelve { displayName }.
+        method: GET
+        path: /profiles/{email}
+        request:
+          pathParams:
+            email:
+              type: string
+              required: true
+        response:
+          fields:
+            displayName:
+              type: string
+              required: true
+        timeoutMs: 2000
