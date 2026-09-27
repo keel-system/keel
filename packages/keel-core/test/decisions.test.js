@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { tmpDir } from './helpers/tmp.js';
 import { OBLIGATIONS } from '../src/lib/obligations.js';
-import { loadDecisions, resolveObligations, DECISIONS_FILE } from '../src/lib/decisions.js';
+import { loadDecisions, resolveObligations, resolveUndecided, DECISIONS_FILE } from '../src/lib/decisions.js';
 
 const raised = (id = 'OBL-IDEM-REUSE-CODE', scope = 'use-cases') => [{ id, scope, message: 'sin nombrar el code' }];
 
@@ -142,4 +142,102 @@ test('una obligación que no admite aceptación no se puede aceptar', (t) => {
   assert.equal(result.errors.length, 1);
   assert.match(result.errors[0], /no admite aceptación/);
   assert.equal(result.open.length, 1, 'y sigue abierta: la entrada no la cierra');
+});
+
+// --- los avisos que son decisiones no tomadas (CHK-* con nature: undecided) ---
+// Mismo registro y mismas tres formas de mentir, más una propia: aceptar una INCOHERENCIA,
+// que no es una pregunta sino un diseño roto.
+
+const finding = (id = 'CHK-USECASES-CODE-MULTI-STATUS', scope = 'use-cases.errors.NOT_FOUND') => ({
+  id,
+  scope,
+  severity: 'warning',
+  message: 'el mismo code con dos status'
+});
+const accepted = (extra = {}) => ({
+  id: 'CHK-USECASES-CODE-MULTI-STATUS',
+  scope: 'use-cases.errors.NOT_FOUND',
+  reason: 'Deliberado: el 404 y el 410 son la misma ausencia vista desde dos operaciones.',
+  since: '1.0.0',
+  ...extra
+});
+
+test('un aviso undecided aceptado con su id y su scope queda aceptado', () => {
+  const result = resolveUndecided([finding()], { decisions: [accepted()] }, '1.0.0');
+  assert.deepEqual(result.open, []);
+  assert.equal(result.accepted.length, 1);
+  assert.equal(result.accepted[0].reason, accepted().reason);
+  assert.deepEqual(result.errors, []);
+});
+
+test('sin aceptación, un aviso undecided queda abierto y dice si se puede aceptar', () => {
+  const result = resolveUndecided(
+    [finding(), finding('CHK-API-POST-NO-STATUS', 'api.endpoints.createOrder')],
+    null,
+    '1.0.0'
+  );
+  assert.deepEqual(
+    result.open.map((item) => [item.id, item.waivable]),
+    [
+      ['CHK-USECASES-CODE-MULTI-STATUS', true],
+      ['CHK-API-POST-NO-STATUS', false]
+    ]
+  );
+});
+
+test('los avisos que son incoherencias no entran en la cuenta', () => {
+  const result = resolveUndecided([finding('CHK-SEC-UNUSED-ROLE', undefined)], null, '1.0.0');
+  assert.deepEqual(result.open, []);
+});
+
+test('la aceptación de un aviso caduca con el minor y queda huérfana si el diseño ya no lo levanta', () => {
+  assert.equal(resolveUndecided([finding()], { decisions: [accepted()] }, '1.1.0').stale.length, 1);
+  assert.equal(resolveUndecided([finding()], { decisions: [accepted()] }, '1.0.7').accepted.length, 1);
+  assert.equal(resolveUndecided([], { decisions: [accepted()] }, '1.0.0').orphans.length, 1);
+});
+
+test('aceptar una incoherencia, lo no aceptable o un id que no existe es error', () => {
+  const casos = [
+    [accepted({ id: 'CHK-SEC-UNUSED-ROLE' }), /es una incoherencia/],
+    [accepted({ id: 'CHK-API-POST-NO-STATUS', scope: 'api.endpoints.createOrder' }), /no admite aceptación/],
+    [accepted({ id: 'CHK-USECASES-COLLECTION-NO-SORT' }), /no admite aceptación/],
+    [accepted({ id: 'CHK-NO-EXISTE' }), /no está en el catálogo de comprobaciones/]
+  ];
+  for (const [entry, pattern] of casos) {
+    const { errors, accepted: ok } = resolveUndecided([finding(entry.id, entry.scope)], { decisions: [entry] }, '1.0.0');
+    assert.equal(errors.length, 1, entry.id);
+    assert.match(errors[0], pattern);
+    assert.deepEqual(ok, []);
+  }
+  const dos = resolveUndecided([finding()], { decisions: [accepted(), accepted()] }, '1.0.0');
+  assert.match(dos.errors[0], /dos veces/);
+});
+
+test('las dos resoluciones leen el mismo archivo sin pisarse', () => {
+  // Una entrada CHK-* no es una obligación desconocida para resolveObligations, ni una OBL-*
+  // un aviso desconocido para resolveUndecided: cada una mira lo suyo.
+  const doc = { decisions: [entry(), accepted()] };
+  const obligations = resolveObligations(raised(), doc, '1.0.0');
+  assert.deepEqual(obligations.errors, []);
+  assert.equal(obligations.accepted.length, 1);
+  const undecided = resolveUndecided([finding()], doc, '1.0.0');
+  assert.deepEqual(undecided.errors, []);
+  assert.equal(undecided.accepted.length, 1);
+});
+
+test('el schema de decisions.yaml admite CHK-* además de OBL-*', (t) => {
+  const dir = withDecisions(
+    t,
+    [
+      'decisions:',
+      '  - id: CHK-USECASES-CODE-MULTI-STATUS',
+      '    scope: use-cases.errors.NOT_FOUND',
+      '    reason: Deliberado, la misma ausencia vista desde dos operaciones.',
+      '    since: 1.0.0',
+      ''
+    ].join('\n')
+  );
+  const { doc, errors } = loadDecisions(dir);
+  assert.deepEqual(errors, []);
+  assert.equal(doc.decisions[0].id, 'CHK-USECASES-CODE-MULTI-STATUS');
 });

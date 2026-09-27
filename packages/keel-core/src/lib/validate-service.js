@@ -4,7 +4,7 @@ import Ajv2020Module from 'ajv/dist/2020.js';
 import { LAYERS, schemaPathFor } from './assets.js';
 import { MANIFEST_FILE, loadService } from './loader.js';
 import { checkCrossRefs } from './crossrefs.js';
-import { loadDecisions, resolveObligations } from './decisions.js';
+import { loadDecisions, resolveObligations, resolveUndecided } from './decisions.js';
 import { loadReviews, resolveReviews } from './review-state.js';
 import { applicableReviews } from './reviews.js';
 import { SCENARIOS_FILE } from './spec-files.js';
@@ -88,6 +88,7 @@ function readScenarios(dir) {
  *     warnings,          // strings
  *     pending,           // strings: plantillas/placeholders (+ pendientes cross-ref en wip)
  *     obligations        // { open, accepted, stale, orphans, errors } — decisiones con id
+ *     undecided          // { open, accepted, stale, orphans, errors } — avisos que son decisiones
  *   }
  *
  * Las obligaciones son el canal que separa «esto está roto» de «esto está sin decidir». Una
@@ -108,6 +109,7 @@ export function validateService(dir, { wip = false } = {}) {
     findings: [],
     pending: [],
     obligations: { open: [], accepted: [], stale: [], orphans: [], errors: [] },
+    undecided: { open: [], accepted: [], stale: [], orphans: [], errors: [] },
     reviews: { covered: [], missing: [], open: [], accepted: [], stale: false, reviewedAt: null, orphans: [], errors: [] }
   };
 
@@ -200,6 +202,13 @@ export function validateService(dir, { wip = false } = {}) {
   result.obligations = resolveObligations(raised, doc, manifest?.service?.version);
   result.obligations.errors.unshift(...decisionErrors);
 
+  // Los avisos que son decisiones no tomadas (`nature: 'undecided'`), cruzados con sus
+  // aceptaciones CHK-*. Abiertas NO bloquean aquí —las fixtures del generador tienen decenas y
+  // son sujeto de sus redes en vivo—: las cuenta `keel validate --ready`. Lo que sí bloquea es
+  // una aceptación mal escrita, por el mismo canal que cualquier otro error de decisions.yaml.
+  result.undecided = resolveUndecided(result.findings, doc, manifest?.service?.version);
+  result.obligations.errors.push(...result.undecided.errors);
+
   const obligationsBlock =
     result.obligations.open.length > 0 ||
     result.obligations.stale.length > 0 ||
@@ -226,12 +235,25 @@ export function validateService(dir, { wip = false } = {}) {
   return result;
 }
 
-/** `docs/<servicio>/` del workspace cuando el diseño vive en `specs/<servicio>/`; null si no. */
-function workspaceDocsDir(dir, manifest) {
+/**
+ * La raíz del workspace cuando el diseño vive en `specs/<servicio>/`; null si no.
+ *
+ * Se deriva del DISEÑO y no del cwd: quien pregunte por los derivados de `docs/` tiene que
+ * obtener la misma respuesta lance el comando desde donde lo lance. Fuera de `specs/` no
+ * hay raíz que adivinar, y adivinarla sería inventarla.
+ */
+export function workspaceRootOf(dir) {
   const absolute = path.resolve(dir);
   if (path.basename(path.dirname(absolute)) !== 'specs') return null;
-  const name = manifest?.service?.name ?? path.basename(absolute);
-  return path.join(path.dirname(path.dirname(absolute)), 'docs', name);
+  return path.dirname(path.dirname(absolute));
+}
+
+/** `docs/<servicio>/` del workspace cuando el diseño vive en `specs/<servicio>/`; null si no. */
+function workspaceDocsDir(dir, manifest) {
+  const root = workspaceRootOf(dir);
+  if (!root) return null;
+  const name = manifest?.service?.name ?? path.basename(path.resolve(dir));
+  return path.join(root, 'docs', name);
 }
 
 function flowReviewFinding(dir) {

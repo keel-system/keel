@@ -20,6 +20,8 @@ Durante una sesión de diseño usa `keel validate --wip specs/<servicio>`: los p
 
 Si falla, traduce cada error a lenguaje del DSL (ej. "`use-cases: createProduct.emits`: el evento 'ProductCreated' no está en messaging" → "la operación emite un evento que aún no definiste en la capa messaging") y propón la corrección.
 
+Algunos avisos no señalan un error sino una **decisión que el diseño no tomó**. La CLI los distingue: debajo de cada uno imprime «decisión sin tomar» con su `id` y su `scope`. No los corrijas por tu cuenta ni los despaches como mejorables: si nadie los decide, los decide el generador. **Pregúntale al usuario** y materializa su respuesta, o en el DSL o, si el aviso lo admite, aceptándolo en `specs/<servicio>/decisions.yaml` con ese `id`, ese `scope`, su motivo y el `since` de la versión actual. Los que dicen «no admite aceptación» solo se cierran en el DSL. Mientras quede alguno abierto, `keel validate --ready` no está en verde (ver `docs/design-obligations.md § Decisiones no tomadas en los avisos`).
+
 Fallback si el comando `keel` no está disponible: valida cada `<capa>.keel.yaml` con ajv-cli (`--spec=draft2020 -r schema/common.schema.json -s schema/<capa>.schema.json`) y haz las cross-refs leyendo los artefactos.
 
 ## Nivel 3 — Semántica (lo que ni el schema ni las cross-refs pueden expresar)

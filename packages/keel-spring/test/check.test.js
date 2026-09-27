@@ -222,3 +222,40 @@ test('sin proyecto generado, check no habla de huecos', () => {
   const { salida } = runCheck(workspace, path.join('specs', 'notification-mailer'));
   assert.ok(!salida.includes('Huecos que reportó la generación'));
 });
+
+// «Diseño listo para generar», fase 1: la misma checklist que `keel validate --ready`,
+// impresa y SIN contar como aviso. Si contara, --strict apretaría en silencio sobre todo
+// diseño que ya existe — la fase 2 es la que aprieta, y lo hace a la vista.
+test('check imprime qué le falta al diseño para estar listo, sin que cuente para --strict', () => {
+  const workspace = makeWorkspace(['metering-digest']);
+  const antes = fingerprint(workspace);
+
+  const normal = runCheck(workspace, path.join('specs', 'metering-digest'));
+  assert.match(normal.salida, /Diseño listo para generar/);
+  assert.match(normal.salida, /\[flow-review\]/);
+  assert.match(normal.salida, /no bloquea ni cuenta para --strict/);
+
+  // metering-digest es la fixture sin un solo aviso: con --strict sale en verde aunque no
+  // esté lista. Si la sección contara como aviso, esto saldría 1.
+  const estricto = runCheck(workspace, path.join('specs', 'metering-digest'), { strict: true });
+  assert.equal(estricto.exitCode, undefined, estricto.salida);
+  assert.match(estricto.salida, /Factible, sin avisos/);
+
+  assert.equal(fingerprint(workspace), antes, 'check escribió en el workspace');
+});
+
+test('los huecos de un build sobre un diseño no listo lo dicen', () => {
+  const workspace = makeWorkspace(['notification-mailer']);
+  writeGaps(
+    workspace,
+    'notification-mailer',
+    ['service: notification-mailer', 'version: 1.0.0', 'gaps:', '  - layer: domain', '    kind: missing', '    proposal: Algo que la generación tuvo que decidir.', ''].join('\n')
+  );
+  const manifest = { generator: 'keel-spring@0.0.0', design: { version: '1.0.0', ready: false, missing: ['flow-review', 'review'] }, files: {}, adopted: [] };
+  fs.writeFileSync(path.join(workspace, 'services', 'notification-mailer-spring', 'keel-generated.json'), JSON.stringify(manifest));
+
+  const { salida } = runCheck(workspace, path.join('specs', 'notification-mailer'));
+
+  assert.match(salida, /diseño no listo \(v1\.0\.0, faltaban: flow-review, review\)/);
+  assert.match(salida, /pueden ser del diseño y no del método/);
+});

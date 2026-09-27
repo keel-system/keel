@@ -6,6 +6,7 @@ import {
   resolveServiceDir,
   loadService,
   validateService,
+  assessReadiness,
   copyTree,
   diffDesigns,
   DECISIONS_FILE,
@@ -142,6 +143,7 @@ export async function build(
   // generación se ejecuta siempre con el cwd en services/<servicio>-spring/.
 
   // Un diseño en progreso no es generable: validación estricta, sin --wip.
+  const validation = validateService(dir, { wip: false });
   const {
     loadErrors: fullLoadErrors,
     schemaErrors,
@@ -151,7 +153,7 @@ export async function build(
     obligations,
     reviews,
     ok
-  } = validateService(dir, { wip: false });
+  } = validation;
 
   for (const { file, errors } of schemaErrors) printSchemaErrors(file, errors);
   for (const message of fullLoadErrors) console.error(pc.red(`✘ ${message}`));
@@ -209,6 +211,14 @@ export async function build(
     process.exitCode = 1;
     return;
   }
+
+  // Generable no es lo mismo que LISTO: el cierre del diseño también pide revisión completa,
+  // escenarios, careo y DESIGN.md de esta versión. Fase 1 del despliegue: se avisa y se
+  // ESTAMPA en keel-generated.json, sin bloquear — una puerta que nace roja sobre todos los
+  // diseños que ya existen se aprende a ignorar. Lo que el estampado compra es que una
+  // corrida sobre un diseño a medio cerrar quede marcada como tal.
+  const readiness = assessReadiness(dir, { validation });
+  reportReadiness(readiness, path.relative(workspace, dir).split(path.sep).join('/'));
 
   // Stack tecnológico: keel-stack.json del proyecto generado manda; si no
   // existe, cuestionario condicionado por las capas del diseño (o defaults).
@@ -278,7 +288,7 @@ export async function build(
   // diseño cuyo código no depende de la infra puntual elegida (el resto lo
   // escribe el agente con las skills por tecnología). Regeneración segura: sin --force
   // solo se escriben archivos que no existen.
-  const scaffold = scaffoldService({ manifest, layers, workspace, force, stack, mode, prune });
+  const scaffold = scaffoldService({ manifest, layers, workspace, force, stack, mode, prune, readiness });
   const stackChanged = stackChanges.added.length + stackChanges.removed.length > 0;
   if (stackIsNew || (stackChanged && mode !== 'check')) {
     writeStackConfig(projectDir, scaffold.stack);
@@ -392,6 +402,25 @@ escenarios contra el servidor real y pase de calidad al final.`);
       )
     );
   }
+}
+
+/** Los criterios del cierre que faltan, sin bloquear (fase 1). */
+function reportReadiness(readiness, spec) {
+  if (readiness.ready) return;
+  const missing = readiness.criteria.filter((entry) => !entry.ok);
+  console.warn();
+  console.warn(
+    pc.bold(pc.yellow(`⚠ Diseño no listo para generar — faltan ${missing.length} criterio(s) del cierre (de momento no bloquea):`))
+  );
+  for (const entry of missing) {
+    console.warn(`  ${pc.yellow('•')} ${entry.title} ${pc.dim(`[${entry.id}]`)}${entry.detail ? pc.dim(` — ${entry.detail}`) : ''}`);
+  }
+  console.warn(
+    pc.dim(
+      `  Queda estampado en keel-generated.json: lo que la generación reporte puede ser del diseño y no del método. ` +
+        `Detalle con keel validate --ready ${spec}`
+    )
+  );
 }
 
 /** Lo que el diseñador tiene que saber de esta pasada y no es trabajo del agente. */

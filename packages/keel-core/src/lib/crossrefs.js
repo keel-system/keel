@@ -48,17 +48,29 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
   // depender de la redacción. Un id que no esté en el catálogo lanza, igual que con las
   // obligaciones: emitirlo sería tener una comprobación que nadie puede citar ni contar.
   const findings = [];
-  const record = (id, severity, message) => {
+  const record = (id, severity, message, scope = null) => {
     const entry = checkFor(id);
     if (!entry) throw new Error(`crossrefs emite el hallazgo '${id}', que no está en el catálogo de checks`);
     if (entry.severity !== severity) {
       throw new Error(`crossrefs emite '${id}' como ${severity} y el catálogo lo declara ${entry.severity}`);
     }
-    findings.push({ id, severity, message });
+    // Una decisión no tomada se acepta en decisions.yaml por `id` + `scope`, así que sin
+    // scope no habría clave: aceptar un POST sin status aceptaría todos los del diseño.
+    if (entry.nature === 'undecided' && !scope) {
+      throw new Error(`crossrefs emite '${id}' (undecided) sin scope: no se podría aceptar por unidad`);
+    }
+    findings.push(scope ? { id, severity, message, scope } : { id, severity, message });
     (severity === 'error' ? errors : warnings).push(message);
   };
   const error = (id, message) => record(id, 'error', message);
   const warn = (id, message) => record(id, 'warning', message);
+  // Un aviso de una decisión no tomada, con la unidad a la que se refiere: es la clave con la
+  // que se acepta en decisions.yaml, así que tiene que ser estable y distinguir una unidad de
+  // otra (dos POST sin status son dos decisiones, no una).
+  const warnIn = (scope, id, message) => record(id, 'warning', message, scope);
+  // `messaging: subscriptions.X` → `messaging.subscriptions.X`: el mismo lugar que ya nombra
+  // el mensaje, escrito como se escribe en decisions.yaml.
+  const scopeOf = (where) => String(where).replace(/^([\w-]+): /, '$1.');
 
   const domain = layers['domain'] ?? {};
   const useCases = layers['use-cases'] ?? {};
@@ -401,7 +413,8 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
         const excluded = new Set(payload.exclude ?? []);
         for (const [fieldName, field] of Object.entries(domain.entities[payload.entity]?.fields ?? {})) {
           if (field?.sensitive !== true || excluded.has(fieldName)) continue;
-          warn(
+          warnIn(
+            `${scopeOf(where)}.${fieldName}`,
             'CHK-MODEL-SENSITIVE-PROJECTED',
             `${where}: proyecta '${fieldName}', que domain marca 'sensitive: true' — sale del servicio en la respuesta y en cualquier log que la registre. Sácalo con 'exclude', o di en la descripción por qué este consumidor sí debe verlo`
           );
@@ -426,9 +439,12 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
         // validation-scenarios.md, que ningún schema contrasta, o en el adaptador que
         // el agente improvisa porque tiene que escribir algo. Las dos veces el
         // artefacto promete una cosa y el servicio hace otra, sin que nada lo cruce.
-        // Por eso es aviso y no error: aceptar el orden por id es una decisión legítima
-        // — lo que no es legítimo es no haberla tomado.
-        warnings.push(
+        // Por eso es aviso y no error: el orden por id es una decisión legítima — lo que
+        // no es legítimo es no haberla tomado. Y se toma ESCRIBIÉNDOLA (`sort: [id]`), no
+        // aceptándola en decisions.yaml: es de las clases sin default seguro.
+        warnIn(
+          scopeOf(where),
+          'CHK-USECASES-COLLECTION-NO-SORT',
           `${where}: devuelve varios elementos y no declara 'sort' — el orden será por id del agregado. ` +
             (payload.paginated === true
               ? `Es contrato: es lo que recibe quien no pide un '?sort='. `
@@ -836,7 +852,8 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     // encuentra en los diseños reales son barridos, o sea ruido en el 100%.
     const answersToSomeone = op.schedule === undefined && op.internal !== true;
     if (op.kind === 'command' && answersToSomeone && (op.errors ?? []).length === 0) {
-      warn(
+      warnIn(
+        `use-cases.${opName}`,
         'CHK-USECASES-COMMAND-NO-ERRORS',
         `use-cases: ${opName}: es un command expuesto y no declara ningún 'error' — qué contesta el servicio cuando la operación no se puede aplicar no está en el diseño, así que lo elegiría el generador y ningún escenario podría afirmarlo`
       );
@@ -1084,7 +1101,8 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     // decidido por una heurística sobre el nombre de la operación, y el diseño se escribe
     // igual lo haya decidido alguien o no. De once fixtures, seis caían aquí.
     if (endpoint.successStatus === undefined && endpoint.method === 'POST') {
-      warn(
+      warnIn(
+        scopeOf(where),
         'CHK-API-POST-NO-STATUS',
         `${where}: POST sin 'successStatus' — el generador tendrá que elegir uno (201 al crear, 200 si no), y eso es contrato público: lo ve el integrador y lo afirma el escenario. Declara el que quieres`
       );
@@ -1182,7 +1200,8 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     for (const [opName, rule] of Object.entries(security.access?.rules ?? {})) {
       const op = operations[opName];
       if (rule?.level === 'public' && op?.kind === 'command') {
-        warn(
+        warnIn(
+          `security.access.rules.${opName}`,
           'CHK-SEC-PUBLIC-COMMAND',
           `security: access.rules.${opName}: es una escritura con level: public — cualquiera puede ejecutarla sin identidad. Si es a propósito, dilo en la descripción de la operación; si no, es el default que nadie cambió`
         );
@@ -2015,7 +2034,8 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     // del broker manda —y no es el mismo en los tres—, así que el mismo diseño se
     // comporta distinto según el stack, que es justo lo que el método promete evitar.
     if (!sub.onFailure) {
-      warn(
+      warnIn(
+        scopeOf(where),
         'CHK-MSG-SUB-NO-ONFAILURE',
         `${where}: no declara 'onFailure' — qué pasa cuando el handler falla (reintentos y destino de descarte) lo decidiría el default del broker elegido, y no es el mismo en todos`
       );
@@ -2025,7 +2045,8 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     // contrato que nadie puede resolver.
     const format = sub.contract?.format;
     if ((format === 'avro' || format === 'protobuf') && !sub.contract?.schemaRef) {
-      warn(
+      warnIn(
+        `${scopeOf(where)}.contract`,
         'CHK-MSG-NO-SCHEMAREF',
         `${where}.contract: formato '${format}' sin 'schemaRef' — un formato con schema registrado no se puede deserializar sin saber dónde está el schema`
       );
@@ -2197,7 +2218,8 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       // del proveedor en lentitud nuestra, y con una transacción abierta delante, en
       // conexiones retenidas. Es además el dato del que cuelgan el retry y el breaker.
       if (call.timeoutMs === undefined) {
-        warn(
+        warnIn(
+          scopeOf(where),
           'CHK-HTTP-NO-TIMEOUT',
           `${where}: no declara 'timeoutMs' — sin tope, la llamada espera lo que el proveedor tarde y el generador no tiene presupuesto del que derivar el retry ni el circuit breaker. Aviso y no error porque el valor sale del negocio (cuánto puede esperar quien llama), no de una regla`
         );
@@ -2416,7 +2438,9 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
           // construible sin que alguien invente la política.
           if (!spec.onUnavailable) {
             const call = `${spec.fetchedFrom.client}.${spec.fetchedFrom.call}`;
-            warnings.push(
+            warnIn(
+              scopeOf(where),
+              'CHK-DEPS-NEED-NO-ONUNAVAILABLE',
               `${where}: no declara 'onUnavailable': si ${call} falla, el diseño no dice qué ve el cliente ` +
                 `—fallar con un error propio, degradar, o servir el último valor conocido con su edad máxima—. ` +
                 `El 'fallback' de la llamada es prosa en la capa técnica: describe el mecanismo, no la política, ` +
@@ -2627,7 +2651,8 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
                   return !(output.exclude ?? []).includes(spec.awaitingSince);
                 });
                 if (!proyectada) {
-                  warn(
+                  warnIn(
+                    `${scopeOf(where)}.awaitingSince`,
                     'CHK-DEPS-CLOCK-NOT-OBSERVABLE',
                     `${where}.awaitingSince: '${spec.awaitingSince}' es la marca de la que depende el barrido, y ninguna ` +
                       `salida de ${waitingEntity} la proyecta —o no hay ninguna, o todas la excluyen—. Ningún escenario de ` +
@@ -2949,7 +2974,8 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
             if (!movedEntities.has(transition.entity)) continue;
             const outgoing = domain.entities?.[transition.entity]?.lifecycle?.transitions?.[transition.to];
             if (Array.isArray(outgoing) && outgoing.length === 0) {
-              warn(
+              warnIn(
+                scopeOf(where),
                 'CHK-DEPS-COMPENSATION-DEAD-END',
                 `${where}: '${undoOpName}' devuelve '${transition.entity}' a '${transition.to}', que es un estado terminal ` +
                   `de su lifecycle — de ahí no sale ninguna transición, así que el trabajo que se acaba de deshacer no se ` +
@@ -3124,7 +3150,8 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       // que más cuidado han puesto.
       const aggregate = aggregateOf.get(entityName);
       if (aggregate && aggregates[aggregate]?.root !== entityName) continue;
-      warn(
+      warnIn(
+        `persistence.entities.${entityName}`,
         'CHK-PERSIST-ROOT-UNMAPPED',
         `persistence: la entidad '${entityName}' de domain no aparece en 'entities' — no tendrá almacén. Si es deliberado dilo en su descripción; si no, lo que se pierde son sus datos, y en silencio`
       );
@@ -3210,7 +3237,8 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     (persistence.consistency?.transactionalBoundary ?? 'per-operation') === 'per-operation' &&
     Object.keys(aggregates).length > 0
   ) {
-    warn(
+    warnIn(
+      'persistence.consistency.transactionalBoundary',
       'CHK-PERSIST-BOUNDARY-DEFAULT',
       `persistence: consistency.transactionalBoundary: es 'per-operation' y domain declara ${Object.keys(aggregates).length} agregado(s) — una transacción por operación puede abarcar varios, y entonces la frontera que el dominio declara no la sostiene nadie. Si es elección, dilo; si es el default de la plantilla, mírala`
     );
@@ -3454,7 +3482,8 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     // —qué se acepta— y se queda a medias sin declarar cuánto: son las dos mitades del
     // mismo contrato de subida, y la que falta es la que se convierte en incidente.
     if (bucket.maxSizeMb == null) {
-      warn(
+      warnIn(
+        `storage.buckets.${bucketName}`,
         'CHK-STORAGE-NO-MAXSIZE',
         `storage: buckets.${bucketName}: no declara 'maxSizeMb' — el tope de tamaño lo pondría el servidor elegido, y el error de subida que el diseño promete no tendría umbral que lo dispare`
       );
@@ -3552,7 +3581,11 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
 
   // warnings de cobertura
   if (api && !security) {
-    warnings.push('Hay capa api pero no capa security: todos los endpoints quedarían sin regla de acceso explícita');
+    warnIn(
+      'api',
+      'CHK-API-NO-SECURITY',
+      'Hay capa api pero no capa security: todos los endpoints quedarían sin regla de acceso explícita'
+    );
   }
 
   const triggeredBySubscription = new Set(
@@ -3765,7 +3798,8 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       !hasIrrepeatableTransition(op)
     ) {
       const efecto = (op.emits ?? []).length > 0 ? `publica ${op.emits.join(', ')}` : 'encarga trabajo a otro servidor';
-      warn(
+      warnIn(
+        `use-cases.${opName}`,
         'CHK-USECASES-REPEATABLE-ESCAPES',
         `use-cases: ${opName}: es un command ${endpointMethod ?? 'POST'} que ${efecto}, y no declara ni 'idempotency' ni ` +
           `una transición de lifecycle irrepetible — un reenvío del llamante (timeout, reintento del cliente, doble ` +
@@ -3795,7 +3829,8 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       // Solo las hijas del MISMO agregado: una referencia a otra raíz viaja por id y eso
       // sí cabe en la proyección.
       if (!toMany || aggregateOf.get(rel.entity) !== aggregateOf.get(inputEntity)) continue;
-      warn(
+      warnIn(
+        `use-cases.${opName}.input.${relName}`,
         'CHK-USECASES-CHILD-NOT-IN-INPUT',
         `use-cases: ${opName}.input: deriva de '${inputEntity}', que tiene la colección '${relName}' de '${rel.entity}' — una colección de entidades hijas no entra en la proyección del input. Si la operación las recibe anidadas, declara el input con 'fields'; si no, sácala con 'input.exclude' para que se vea que es deliberado`
       );
@@ -3820,7 +3855,8 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     const detalle = [...porStatus]
       .map(([http, ops]) => `${http} en ${ops.join(', ')}`)
       .join('; ');
-    warn(
+    warnIn(
+      `use-cases.errors.${code}`,
       'CHK-USECASES-CODE-MULTI-STATUS',
       `use-cases: el code '${code}' se declara con status distintos (${detalle}) — el mismo nombre significa dos cosas para quien integra. Es válido si es deliberado; dilo en la descripción del error, porque se escribe igual que una copia sin mirar`
     );
@@ -3838,7 +3874,8 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
   if (persistence?.default?.model === 'document' && (persistence.audit?.timestamps ?? 'all') === 'all') {
     for (const [entityName, aggName] of aggregateOf) {
       if (aggregates[aggName]?.root === entityName) continue;
-      warn(
+      warnIn(
+        `persistence.audit.${entityName}`,
         'CHK-PERSIST-AUDIT-NESTED',
         `persistence: audit 'all' con modelo documental, pero '${entityName}' va anidada dentro de '${aggregates[aggName].root}' y la auditoría automática no la alcanza — si hace falta saber cuándo cambió, sus marcas son campos del dominio (audit: declared), no política`
       );
@@ -4088,7 +4125,8 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       );
       if (declared) continue;
       const entitySnake = String(entityName).replace(/([a-z0-9])([A-Z])/g, '$1_$2').toUpperCase();
-      warn(
+      warnIn(
+        `persistence.entities.${entityName}.indexes.${(index.fields ?? []).join('+')}`,
         'CHK-PERSIST-CONDITIONAL-UNIQUE-CODE',
         `persistence: entities.${entityName}.indexes: el índice único sobre [${(index.fields ?? []).join(', ')}] cuando ` +
           `${index.when.field} = ${JSON.stringify(index.when.equals)} no tiene un error 409 que lo nombre — declara en la operación ` +
@@ -4135,7 +4173,8 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
         (op?.errors ?? []).some((e) => (e?.http ?? 409) === 409 && family.test(String(e?.code ?? '')))
       );
       if (declared) continue;
-      warn(
+      warnIn(
+        `persistence.entities.${entityName}.indexes.${fields.join('+')}`,
         'CHK-PERSIST-CHILD-UNIQUE-CODE',
         `persistence: entities.${entityName}.indexes: el índice único sobre [${fields.join(', ')}] acota la unicidad a la ` +
           `colección de ${root} (incluye la relación al padre), y ninguna operación declara un error 409 que nombre ese ` +

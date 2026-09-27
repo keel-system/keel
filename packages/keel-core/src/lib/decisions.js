@@ -4,6 +4,7 @@ import YAML from 'yaml';
 import Ajv2020Module from 'ajv/dist/2020.js';
 import { schemaPathFor } from './assets.js';
 import { obligationFor } from './obligations.js';
+import { checkFor } from './checks.js';
 import { DECISIONS_FILE, REVIEW_FILE } from './spec-files.js';
 
 const Ajv2020 = Ajv2020Module.default ?? Ajv2020Module;
@@ -88,7 +89,8 @@ function keyOf(id, scope) {
  */
 export function resolveObligations(raised, doc, serviceVersion) {
   const result = { open: [], accepted: [], stale: [], orphans: [], errors: [] };
-  const entries = doc?.decisions ?? [];
+  // Las entradas CHK-* son avisos aceptados, y las resuelve `resolveUndecided`.
+  const entries = (doc?.decisions ?? []).filter((entry) => !isCheckId(entry.id));
   const byKey = new Map();
 
   for (const entry of entries) {
@@ -139,5 +141,81 @@ export function resolveObligations(raised, doc, serviceVersion) {
     if (!raisedKeys.has(key)) result.orphans.push(entry);
   }
 
+  return result;
+}
+
+const isCheckId = (id) => String(id ?? '').startsWith('CHK-');
+
+/**
+ * Cruza los avisos que son DECISIONES NO TOMADAS (`nature: 'undecided'` en checks.js) con las
+ * aceptaciones CHK-* de decisions.yaml.
+ *
+ * Es el mismo movimiento que las obligaciones, aplicado a los avisos: un `POST` sin
+ * `successStatus` no es un error del diseño, es una pregunta sin contestar, y hasta aquí no
+ * había forma de contestarla por escrito — solo de dejar el aviso ahí, que es lo mismo que
+ * dejársela al generador. La diferencia con una obligación está en quién la mira: esto no
+ * bloquea la generación (`validateService().ok` no lo cuenta), bloquea `keel validate --ready`.
+ *
+ * La clave es `id` + `scope`, y el scope es por UNIDAD (`api.endpoints.createOrder`): aceptar
+ * una decisión sobre un endpoint no la acepta sobre los demás.
+ *
+ * @param {Array<{id: string, scope?: string, message: string}>} findings los de crossrefs
+ * @param {object|null} doc contenido de decisions.yaml ya validado
+ * @param {string} serviceVersion service.version del manifiesto
+ * @returns {{ open: object[], accepted: object[], stale: object[], orphans: object[], errors: string[] }}
+ */
+export function resolveUndecided(findings, doc, serviceVersion) {
+  const result = { open: [], accepted: [], stale: [], orphans: [], errors: [] };
+  const byKey = new Map();
+
+  for (const entry of (doc?.decisions ?? []).filter((item) => isCheckId(item.id))) {
+    const catalogued = checkFor(entry.id);
+    if (!catalogued) {
+      result.errors.push(`${DECISIONS_FILE}: '${entry.id}' no está en el catálogo de comprobaciones (checks.js)`);
+      continue;
+    }
+    if (catalogued.nature !== 'undecided') {
+      // Una incoherencia no es una pregunta: aceptarla sería dejar el diseño roto con permiso.
+      result.errors.push(
+        `${DECISIONS_FILE}: '${entry.id}' (${catalogued.title}) es una incoherencia: se corrige en el diseño, no se acepta`
+      );
+      continue;
+    }
+    if (catalogued.waivable === false) {
+      result.errors.push(
+        `${DECISIONS_FILE}: '${entry.id}' (${catalogued.title}) no admite aceptación: ahí no hay default seguro, ` +
+          `así que aceptarla sería dejársela al generador. Decídela en el diseño — ${catalogued.closes}`
+      );
+      continue;
+    }
+    const key = keyOf(entry.id, entry.scope);
+    if (byKey.has(key)) {
+      result.errors.push(`${DECISIONS_FILE}: '${entry.id}' sobre '${entry.scope}' está declarada dos veces`);
+      continue;
+    }
+    byKey.set(key, entry);
+  }
+
+  const raisedKeys = new Set();
+  for (const finding of findings ?? []) {
+    if (checkFor(finding.id)?.nature !== 'undecided') continue;
+    const item = { id: finding.id, scope: finding.scope, message: finding.message, waivable: checkFor(finding.id).waivable !== false };
+    const key = keyOf(item.id, item.scope);
+    raisedKeys.add(key);
+    const entry = byKey.get(key);
+    if (!entry) {
+      result.open.push(item);
+      continue;
+    }
+    if (shape(entry.since) !== shape(serviceVersion)) {
+      result.stale.push({ ...item, since: entry.since, reason: entry.reason });
+      continue;
+    }
+    result.accepted.push({ ...item, since: entry.since, reason: entry.reason });
+  }
+
+  for (const [key, entry] of byKey) {
+    if (!raisedKeys.has(key)) result.orphans.push(entry);
+  }
   return result;
 }

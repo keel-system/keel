@@ -32,6 +32,7 @@ export function readManifest(projectDir) {
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
     return {
       generator: parsed.generator ?? null,
+      design: parsed.design ?? null,
       files: parsed.files ?? {},
       adopted: parsed.adopted ?? [],
       pendingMerge: parsed.pendingMerge ?? {}
@@ -44,13 +45,18 @@ export function readManifest(projectDir) {
 }
 
 export function writeManifest(projectDir, manifest) {
-  const ordenado = {
-    generator: manifest.generator,
+  const ordenado = { generator: manifest.generator };
+  // Si el diseño estaba LISTO cuando build lo generó (assessReadiness de keel-core). Sin
+  // esto, una corrida sobre un diseño a medio cerrar y una sobre uno cerrado dejan el mismo
+  // rastro, y sus designGaps se leen igual: como huecos del método, cuando pueden ser solo
+  // de ese diseño. Sin timestamps, como todo el manifiesto.
+  if (manifest.design) ordenado.design = manifest.design;
+  Object.assign(ordenado, {
     // Ordenadas para que dos builds seguidos den el mismo archivo: un manifiesto que
     // cambia de orden ensucia cada diff del proyecto generado sin decir nada.
     files: Object.fromEntries(Object.entries(manifest.files).sort(([a], [b]) => a.localeCompare(b))),
     adopted: [...manifest.adopted].sort((a, b) => a.localeCompare(b))
-  };
+  });
   // Solo cuando hay algo: un proyecto sin fusiones pendientes conserva el manifiesto de
   // siempre, byte a byte, y no ensucia su diff al actualizar el generador.
   const pendientes = Object.entries(manifest.pendingMerge ?? {});
@@ -81,8 +87,19 @@ export function writeManifest(projectDir, manifest) {
  * `olvidar` son rutas que salen del registro (huérfanos podados o que ya no están).
  * `resueltos` son rutas que ya están byte a byte como las emite el generador: una fusión
  * pendiente sobre ellas está cerrada por construcción.
+ *
+ * `design` es el estampado de readiness de esta pasada (`designStamp`), o null.
  */
-export function nextManifest({ previous, generator, escritas, presentes, rebase = [], olvidar = [], resueltos = [] }) {
+export function nextManifest({
+  previous,
+  generator,
+  design = null,
+  escritas,
+  presentes,
+  rebase = [],
+  olvidar = [],
+  resueltos = []
+}) {
   const files = { ...(previous?.files ?? {}) };
   const adopted = new Set(previous?.adopted ?? []);
   const pendingMerge = { ...(previous?.pendingMerge ?? {}) };
@@ -107,5 +124,23 @@ export function nextManifest({ previous, generator, escritas, presentes, rebase 
     if (files[relative] === undefined && !adopted.has(relative)) adopted.add(relative);
   }
 
-  return { generator, files, adopted: [...adopted], pendingMerge };
+  // El estado del diseño NO se hereda del build anterior: describe ESTE build.
+  return { generator, design, files, adopted: [...adopted], pendingMerge };
+}
+
+/**
+ * Lo que se estampa del veredicto de keel-core: la versión, si estaba listo y los ids de los
+ * criterios que faltaban, ordenados. Solo ids —no la redacción— porque se cuentan entre
+ * corridas, y una frase retocada no puede partir la serie en dos.
+ */
+export function designStamp(readiness) {
+  if (!readiness?.service) return null;
+  return {
+    version: readiness.service.version,
+    ready: readiness.ready,
+    missing: readiness.criteria
+      .filter((entry) => !entry.ok)
+      .map((entry) => entry.id)
+      .sort((a, b) => a.localeCompare(b))
+  };
 }

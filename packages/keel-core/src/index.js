@@ -11,7 +11,10 @@ export {
   supportedDsl
 } from './lib/assets.js';
 export { MANIFEST_FILE, resolveServiceDir, resolveServiceRef, loadService } from './lib/loader.js';
-export { validateService } from './lib/validate-service.js';
+export { validateService, workspaceRootOf } from './lib/validate-service.js';
+// «Diseño listo para generar»: el veredicto que compone validación, obligaciones, revisión,
+// escenarios, careo y DESIGN.md. Un generador lo estampa en lo que produce.
+export { READINESS_CRITERIA, assessReadiness } from './lib/readiness.js';
 export { summarizeService } from './lib/summarize-service.js';
 export { listDerivatives } from './lib/derivatives.js';
 export {
@@ -49,7 +52,7 @@ export { OBLIGATIONS, obligationFor, obligationIds } from './lib/obligations.js'
 // citar un hallazgo sin depender de su redacción, y el corpus de mutación para afirmar
 // que una mutación dispara ESE hallazgo y solo ese.
 export { CHECKS, checkFor, checkIds } from './lib/checks.js';
-export { DECISIONS_FILE, loadDecisions, resolveObligations } from './lib/decisions.js';
+export { DECISIONS_FILE, loadDecisions, resolveObligations, resolveUndecided } from './lib/decisions.js';
 
 // La revisión semántica: el catálogo de lo que solo un lector puede juzgar, su
 // aplicabilidad derivada del diseño y el veredicto escrito en review.yaml.

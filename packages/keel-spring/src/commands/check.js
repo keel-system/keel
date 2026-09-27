@@ -19,11 +19,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
 import pc from 'picocolors';
-import { isKeelWorkspace, resolveServiceDir, loadService, validateService } from 'keel-core';
+import { isKeelWorkspace, resolveServiceDir, loadService, validateService, assessReadiness } from 'keel-core';
 import { SUPPORTED_DSL } from '../lib/assets.js';
 import { checkSupportedFeatures } from '../lib/supported-features.js';
 import { planService } from '../scaffold/index.js';
 import { DATABASES } from '../lib/stack-catalog.js';
+import { readManifest } from '../lib/generated-manifest.js';
 
 // El archivo que el cierre del pipeline escribe en la raíz del proyecto generado.
 const DESIGN_GAPS_FILE = 'design-gaps.yaml';
@@ -119,6 +120,24 @@ export function check(inputPath, { database = null, strict = false } = {}) {
     notices += 1;
   }
 
+  // 2b — Si el diseño está LISTO, no solo si es generable: la misma checklist que
+  // `keel validate --ready` y que build estampa. Se imprime y NO suma a los avisos: en la
+  // fase 1 del despliegue no bloquea, y contarla haría que --strict apretara sin decirlo.
+  const readiness = assessReadiness(dir, { validation });
+  heading('Diseño listo para generar');
+  if (readiness.ready) {
+    console.log(pc.dim('  Todos los criterios del cierre se cumplen.'));
+  } else {
+    for (const entry of readiness.criteria.filter((item) => !item.ok)) {
+      bullet('yellow', `${entry.title} ${pc.dim(`[${entry.id}]`)}${entry.detail ? pc.dim(` — ${entry.detail}`) : ''}`);
+    }
+    console.log(
+      pc.dim(
+        `  De momento no bloquea ni cuenta para --strict. Detalle: keel validate --ready ${path.relative(workspace, dir).split(path.sep).join('/')}`
+      )
+    );
+  }
+
   // 3 — El modelo: lo que solo se ve al traducir el diseño a código. Aquí viven las
   // familias que han costado una corrida cada una (el rescate sin reloj, la
   // reconciliación con dos entidades en espera, la llamada sin method/path, la clave
@@ -180,6 +199,17 @@ export function check(inputPath, { database = null, strict = false } = {}) {
         )
       );
     }
+    // El estampado de build: si el proyecto salió de un diseño que no estaba listo, sus
+    // huecos pueden ser de ESE diseño y no del método. Es exactamente la confusión que el
+    // estampado existe para evitar.
+    if (gaps.design && gaps.design.ready === false) {
+      console.log(
+        pc.dim(
+          `  El build que los produjo partió de un diseño no listo (v${gaps.design.version}, faltaban: ` +
+            `${gaps.design.missing.join(', ')}): pueden ser del diseño y no del método.`
+        )
+      );
+    }
     for (const gap of gaps.entries) {
       const donde = gap.unit ? `${gap.layer}.${gap.unit}` : gap.layer;
       bullet('yellow', `${pc.cyan(donde)} [${gap.kind}] ${gap.proposal}`);
@@ -217,11 +247,12 @@ export function check(inputPath, { database = null, strict = false } = {}) {
  * generación no encontró nada.
  */
 function readDesignGaps(workspace, manifest, layers) {
-  const empty = { entries: [], stale: false, version: null, error: null };
+  const empty = { entries: [], stale: false, version: null, error: null, design: null };
   const service = manifest?.service?.name;
   if (!service) return empty;
 
-  const file = path.join(workspace, 'services', `${service}-spring`, DESIGN_GAPS_FILE);
+  const projectDir = path.join(workspace, 'services', `${service}-spring`);
+  const file = path.join(projectDir, DESIGN_GAPS_FILE);
   if (!fs.existsSync(file)) return empty;
 
   let doc;
@@ -236,6 +267,7 @@ function readDesignGaps(workspace, manifest, layers) {
     entries: doc.gaps,
     version: doc.version ?? null,
     stale: Boolean(doc.version) && doc.version !== manifest.service?.version,
-    error: null
+    error: null,
+    design: readManifest(projectDir)?.design ?? null
   };
 }

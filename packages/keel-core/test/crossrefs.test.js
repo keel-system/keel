@@ -6484,3 +6484,36 @@ test('CHK-PERSIST-CHILD-UNIQUE-CODE: la unicidad acotada a la colección de la r
     []
   );
 });
+
+// --- los tres avisos que eran anónimos y ahora son decisiones con id (R2) ------
+// Eran `warnings.push` sueltos: no se podían citar, contar ni aceptar. Como son decisiones
+// no tomadas, necesitan id Y scope — el scope es la clave con la que se aceptan (o, para
+// los no aceptables, con la que el mensaje nombra la unidad que hay que decidir).
+
+
+test('CHK-USECASES-COLLECTION-NO-SORT: una colección sin sort, con el scope de su salida', () => {
+  const hits = idsOf(run(sortLayers({ entity: 'Order', list: true })), 'CHK-USECASES-COLLECTION-NO-SORT');
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].scope, 'use-cases.listOrders.output');
+  assert.equal(idsOf(run(sortLayers({ entity: 'Order', list: true, sort: ['id'] })), 'CHK-USECASES-COLLECTION-NO-SORT').length, 0);
+});
+
+test('CHK-DEPS-NEED-NO-ONUNAVAILABLE: una necesidad sin política, con el scope de la necesidad', () => {
+  const layers = depsLayers();
+  delete need(layers).onUnavailable;
+  const hits = idsOf(run(layers), 'CHK-DEPS-NEED-NO-ONUNAVAILABLE');
+  assert.equal(hits.length, 1);
+  assert.match(hits[0].scope, /^dependencies\.[\w-]+\.needs\.productPricing$/);
+  assert.equal(idsOf(run(depsLayers()), 'CHK-DEPS-NEED-NO-ONUNAVAILABLE').length, 0);
+});
+
+test('CHK-API-NO-SECURITY: api sin security, una vez y sobre la capa', () => {
+  const layers = {
+    domain: baseDomain(),
+    'use-cases': {},
+    api: { endpoints: {} }
+  };
+  const hits = idsOf(run(layers), 'CHK-API-NO-SECURITY');
+  assert.deepEqual(hits.map((hit) => hit.scope), ['api']);
+  assert.equal(idsOf(run({ ...layers, security: { access: { default: 'public' } } }), 'CHK-API-NO-SECURITY').length, 0);
+});

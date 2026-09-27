@@ -7,7 +7,7 @@ import path from 'node:path';
 import { buildModel } from '../lib/model.js';
 import { classifyGenerated, digestOf, pruneOrphans } from 'keel-core';
 import { writeFiles } from '../lib/writer.js';
-import { readManifest, nextManifest, writeManifest, REFRESH_DIR } from '../lib/generated-manifest.js';
+import { readManifest, nextManifest, writeManifest, designStamp, REFRESH_DIR } from '../lib/generated-manifest.js';
 import { listKeelDocs } from '../lib/keel-docs.js';
 import { packageVersion } from '../lib/assets.js';
 import { DATABASES, STACK_DEFAULTS, defaultDatabaseFor } from '../lib/stack-catalog.js';
@@ -219,7 +219,16 @@ export function planService({ manifest, layers, workspace, stack = null }) {
   return { model, stack: resolved, files: GENERATORS.flatMap((generator) => generator.generate(model)) };
 }
 
-export function scaffoldService({ manifest, layers, workspace, force = false, stack = null, mode = null, prune = false }) {
+export function scaffoldService({
+  manifest,
+  layers,
+  workspace,
+  force = false,
+  stack = null,
+  mode = null,
+  prune = false,
+  readiness = null
+}) {
   const { model, stack: resolved, files } = planService({ manifest, layers, workspace, stack });
   const outDir = path.join('services', model.service.projectName);
   const projectDir = path.join(workspace, outDir);
@@ -302,6 +311,7 @@ export function scaffoldService({ manifest, layers, workspace, force = false, st
         olvidar: [...(pruned ? [...pruned.borrados, ...pruned.ausentes] : []), ...huerfanosAusentes],
         resueltos: buckets.alDia,
         generator: `keel-spring@${packageVersion()}`,
+        design: designStamp(readiness),
         // Lo escrito en esta pasada, MÁS lo que ya era byte a byte idéntico a lo que el
         // generador emite. Eso último importa para los proyectos que existían antes del
         // mecanismo: adoptarlo TODO los dejaba sin poder refrescar nunca —cada archivo

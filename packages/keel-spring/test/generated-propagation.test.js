@@ -212,3 +212,31 @@ test('--force reescribe todo y devuelve lo adoptado al registro de build', async
   assert.deepEqual(manifest.adopted, [], 'tras un --force todo es de build otra vez');
   assert.ok(Object.keys(manifest.files).length > 100);
 });
+
+// Fase 1 de «diseño listo»: build no se niega, pero deja escrito si el diseño estaba listo.
+// Sin esto, una corrida sobre un diseño a medio cerrar y una sobre uno cerrado dejan el
+// mismo rastro, y sus designGaps se leen igual: como huecos del método.
+test('build estampa si el diseño estaba listo, por id y sin timestamps', async () => {
+  const workspace = withFixture();
+  await runBuild(workspace);
+
+  const { design } = readManifest(workspace);
+  assert.equal(design.ready, false, 'la fixture no tiene careo ni DESIGN.md: no está lista');
+  assert.ok(design.version, 'la versión del diseño que se generó');
+  assert.ok(design.missing.includes('flow-review'));
+  assert.ok(design.missing.includes('design-doc'));
+  // product-catalog lista sin `sort` y tiene api sin security: dos decisiones que el
+  // generador tomaría por su cuenta, y el estampado lo dice.
+  assert.ok(design.missing.includes('undecided'));
+  assert.deepEqual(design.missing, [...design.missing].sort(), 'ordenados: dos builds, mismo archivo');
+
+  // Determinista: un segundo build sobre el mismo diseño deja el manifiesto byte a byte igual.
+  const antes = fs.readFileSync(manifestPath(workspace), 'utf8');
+  await runBuild(workspace);
+  assert.equal(fs.readFileSync(manifestPath(workspace), 'utf8'), antes);
+
+  // Y --check no lo reescribe aunque el estado del diseño haya cambiado.
+  fs.writeFileSync(path.join(workspace, 'specs', SPEC, 'flow-review.yaml'), 'no: es un careo\n');
+  await runBuild(workspace, { check: true });
+  assert.equal(fs.readFileSync(manifestPath(workspace), 'utf8'), antes, '--check escribió el estampado');
+});

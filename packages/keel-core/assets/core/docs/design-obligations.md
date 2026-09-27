@@ -77,10 +77,12 @@ decisions:
       Se acepta IDEMPOTENCY_KEY_REUSED como contrato público del servicio.
     since: 1.4.0
 
-coverage:
-  - gapClass: 4
-    units: [createOrder, cancelOrder]
-    result: findings
+  - id: CHK-USECASES-CODE-MULTI-STATUS
+    scope: use-cases.errors.ORDER_NOT_FOUND
+    reason: >
+      Deliberado: 404 al leer un pedido que no existe y 422 al referenciarlo desde otra
+      operación, donde es un dato de entrada inválido y no un recurso ausente.
+    since: 1.4.0
 ```
 
 - `scope` es el que la obligación nombra al levantarse. Una decisión sobre un `scope` que el
@@ -96,8 +98,42 @@ coverage:
   (`keel new --from`, donde llega para reafirmar). Sin él, el diseño llega mecánicamente válido
   pero con las decisiones otra vez abiertas, y el `keel-<tech> build` del consumidor lo rechaza
   por preguntas que el autor ya había contestado.
-- `coverage` responde a la exigencia del análisis de huecos: sin la tabla, una clase que se
-  recorrió y salió limpia es indistinguible de una que nadie miró.
+- `coverage` ya no vive aquí: «qué se miró» pertenece a `review.yaml`, y un `decisions.yaml` que
+  todavía la lleve se rechaza con un mensaje que dice a dónde moverla.
+
+## Decisiones no tomadas en los avisos (`nature: undecided`)
+
+`keel validate` imprime avisos de dos naturalezas distintas, y cada comprobación del catálogo
+(`src/lib/checks.js`) declara cuál es la suya con una pregunta: **¿el diseño se arregla
+corrigiendo algo, o respondiendo a una pregunta?**
+
+- Una **incoherencia** (`incoherence`) se corrige. Un rol que ninguna regla exige, un canal con
+  el nombre del broker: no hay nada que decidir, hay algo mal escrito.
+- Una **decisión no tomada** (`undecided`) se contesta. Un `POST` sin `successStatus`, una
+  suscripción sin `onFailure`, un `code` con dos status: el diseño es coherente, pero calla algo
+  que el generador tendrá que decidir por su cuenta, y lo decidirá con un default que cambia de
+  un stack a otro.
+
+Una decisión no tomada se cierra igual que una obligación: **declarándola en el DSL** o
+**aceptándola por escrito aquí**, con un `CHK-*` como `id` y el `scope` que `keel validate`
+imprime debajo del aviso. El scope es por unidad (`api.endpoints.createOrder`,
+`use-cases.errors.ORDER_NOT_FOUND`), así que una aceptación vale para esa unidad y no para las
+demás. Caduca con el minor, se queda huérfana si el diseño deja de levantarla y viaja con el
+diseño, como cualquier otra entrada.
+
+La diferencia con una obligación está en **qué bloquea**. Una obligación abierta bloquea la
+generación. Una decisión no tomada no bloquea `keel-<tech> build`; lo que bloquea es
+`keel validate --ready`, el criterio `undecided` del diseño listo. Lo que sí bloquea desde el
+primer momento es una aceptación mal escrita:
+
+- aceptar una **incoherencia**: se corrige, no se acepta;
+- aceptar una decisión que **no admite aceptación** (`waivable: false`): son las que la doctrina
+  del análisis de huecos ya fija —el orden de las colecciones (`CHK-USECASES-COLLECTION-NO-SORT`)
+  y la autorización (`CHK-API-NO-SECURITY`)— y aquellas en las que el generador elegiría con una
+  heurística sobre un nombre o con el default del stack (`CHK-API-POST-NO-STATUS`,
+  `CHK-MSG-SUB-NO-ONFAILURE`, `CHK-MSG-NO-SCHEMAREF`, `CHK-HTTP-NO-TIMEOUT`,
+  `CHK-STORAGE-NO-MAXSIZE`). Todas se cierran con una línea de YAML;
+- un `CHK-*` que el catálogo no tiene.
 
 ## Añadir una obligación
 

@@ -8,7 +8,7 @@
   "properties": {
     "decisions": {
       "type": "array",
-      "description": "Una entrada por obligación aceptada. Su presencia no la esconde: `keel validate` las sigue listando, con su motivo.",
+      "description": "Una entrada por decisión aceptada —una obligación OBL-* o un aviso CHK-* de naturaleza 'undecided'—. Su presencia no la esconde: `keel validate` las sigue listando, con su motivo.",
       "items": {
         "type": "object",
         "required": ["id", "scope", "reason", "since"],
@@ -16,13 +16,13 @@
         "properties": {
           "id": {
             "type": "string",
-            "pattern": "^OBL-[A-Z0-9-]+$",
-            "description": "Id del catálogo de obligaciones (docs/design-obligations.md). Uno que el catálogo no tenga es un error: sin entrada no hay doc que leer ni nada que contar."
+            "pattern": "^(OBL|CHK)-[A-Z0-9-]+$",
+            "description": "Id del catálogo de obligaciones (OBL-*, docs/design-obligations.md) o de una comprobación mecánica de naturaleza 'undecided' (CHK-*): un aviso que no señala un error sino una decisión que el diseño no tomó. Un id que ningún catálogo tenga es un error: sin entrada no hay doc que leer ni nada que contar. Una incoherencia (CHK-* 'incoherence') tampoco se acepta: se corrige."
           },
           "scope": {
             "type": "string",
             "minLength": 1,
-            "description": "A qué parte del diseño aplica, tal como la nombra la obligación (ej. 'use-cases', 'use-cases.createOrder')."
+            "description": "A qué parte del diseño aplica, tal como la nombra la obligación o el aviso (ej. 'use-cases', 'api.endpoints.createOrder'). En un CHK-* es la unidad que `keel validate` imprime junto al aviso: una aceptación vale para esa unidad y no para las demás."
           },
           "reason": {
             "type": "string",

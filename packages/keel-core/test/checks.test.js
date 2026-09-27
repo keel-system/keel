@@ -114,7 +114,7 @@ test('la severidad la decide el catálogo, no el sitio donde se emite', () => {
 //
 // Si has migrado reglas y el test falla por lo bajo, baja el número: es el ratchet
 // haciendo su trabajo.
-const ANONIMOS_MAXIMOS = { errors: 134, warnings: 80 };
+const ANONIMOS_MAXIMOS = { errors: 134, warnings: 77 };
 
 test('ninguna comprobación nueva se añade sin id (ratchet)', () => {
   const source = fs.readFileSync(crossrefsPath, 'utf8');
@@ -127,5 +127,89 @@ test('ninguna comprobación nueva se añade sin id (ratchet)', () => {
       `${canal}.push sin id: ${actual[canal]}, y el tope es ${ANONIMOS_MAXIMOS[canal]}. ` +
         `Una comprobación nueva se emite con error(id, …) o warn(id, …) y su entrada en checks.js`
     );
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// La naturaleza: incoherencia (se corrige) o decisión no tomada (se contesta).
+//
+// La distinción existe porque las dos llegaban igual al generador —un aviso que nadie
+// cerraba—, y la segunda la acaba decidiendo él, con un default que cambia de stack a stack.
+
+test('toda comprobación declara su naturaleza, y lo que bloquea nunca es una decisión aceptable', () => {
+  for (const [id, entry] of Object.entries(CHECKS)) {
+    assert.ok(['incoherence', 'undecided'].includes(entry.nature), `${id}: sin nature válida`);
+    // Un error bloquea: si fuera `undecided` se podría aceptar por escrito y dejaría de
+    // bloquear, y entonces no era un error.
+    if (entry.severity === 'error') assert.equal(entry.nature, 'incoherence', `${id}: un error no se acepta`);
+    // `waivable` solo tiene sentido en lo que se acepta, y solo para negarlo.
+    if ('waivable' in entry) {
+      assert.equal(entry.nature, 'undecided', `${id}: waivable en una incoherencia`);
+      assert.equal(entry.waivable, false, `${id}: waivable solo se escribe para decir false`);
+    }
+  }
+});
+
+test('el catálogo dice lo mismo que la doctrina sobre lo que no admite «aceptado»', () => {
+  // gap-analysis.md § severidades: el orden de las colecciones (clase 5) y la autorización
+  // (clase 9) no admiten aceptado. Si el catálogo los dejara aceptar, decisions.yaml sería
+  // la puerta para dejárselos al generador.
+  for (const id of ['CHK-USECASES-COLLECTION-NO-SORT', 'CHK-API-NO-SECURITY']) {
+    assert.equal(CHECKS[id].nature, 'undecided', id);
+    assert.equal(CHECKS[id].waivable, false, id);
+  }
+  // Y lo que el generador decidiría con una heurística sobre un nombre, o con el default
+  // del broker: tampoco hay default seguro.
+  for (const id of ['CHK-API-POST-NO-STATUS', 'CHK-MSG-SUB-NO-ONFAILURE']) assert.equal(CHECKS[id].waivable, false, id);
+});
+
+test('toda decisión no tomada llega con su scope, y dos unidades dan dos scopes', () => {
+  const layers = {
+    domain: { entities: { Product: { fields: { id: { type: 'uuid', id: true } } } } },
+    'use-cases': {
+      operations: {
+        createProduct: { description: 'Alta.', kind: 'command', input: { entity: 'Product' }, output: { entity: 'Product' } },
+        importProduct: { description: 'Importa.', kind: 'command', input: { entity: 'Product' }, output: { entity: 'Product' } }
+      }
+    },
+    api: {
+      endpoints: {
+        createProduct: { method: 'POST', path: '/products' },
+        importProduct: { method: 'POST', path: '/products/import' }
+      }
+    }
+  };
+  const { findings } = checkCrossRefs({ layers });
+  for (const finding of findings) {
+    if (CHECKS[finding.id].nature === 'undecided') assert.ok(finding.scope, `${finding.id} sin scope`);
+    else assert.equal(finding.scope, undefined, `${finding.id}: una incoherencia no se acepta, no lleva scope`);
+  }
+  const posts = findings.filter((finding) => finding.id === 'CHK-API-POST-NO-STATUS').map((finding) => finding.scope);
+  assert.deepEqual(posts.sort(), ['api.endpoints.createProduct', 'api.endpoints.importProduct']);
+  assert.deepEqual(
+    findings.filter((finding) => finding.id === 'CHK-API-NO-SECURITY').map((finding) => finding.scope),
+    ['api']
+  );
+});
+
+test('emitir una decisión no tomada sin scope lanza', () => {
+  // La garantía, desde fuera: se reclasifica en caliente una incoherencia (que se emite sin
+  // scope) como `undecided`, y `record` tiene que negarse a emitirla.
+  const entry = CHECKS['CHK-SEC-UNUSED-ROLE'];
+  CHECKS['CHK-SEC-UNUSED-ROLE'] = { ...entry, nature: 'undecided' };
+  try {
+    assert.throws(
+      () =>
+        checkCrossRefs({
+          layers: {
+            domain: { entities: { Product: { fields: { id: { type: 'uuid', id: true } } } } },
+            'use-cases': {},
+            security: { roles: { admin: { description: 'Administra.' } } }
+          }
+        }),
+      /sin scope/
+    );
+  } finally {
+    CHECKS['CHK-SEC-UNUSED-ROLE'] = entry;
   }
 });

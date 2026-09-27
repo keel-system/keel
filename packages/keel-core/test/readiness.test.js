@@ -1,0 +1,300 @@
+// «Diseño listo para generar»: el veredicto que compone lo que otros módulos ya calculan.
+//
+// Lo que importa probar no es cada fuente —esas tienen sus tests— sino la COMPOSICIÓN: que
+// romper una sola pieza del cierre apague su criterio y solo el suyo. Un criterio que se
+// enciende con la pieza de otro dice cosas falsas en la checklist, que es justo el documento
+// con el que el diseñador retoma una sesión.
+
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import YAML from 'yaml';
+import { tmpDir } from './helpers/tmp.js';
+import { LAYERS, supportedDsl } from '../src/lib/assets.js';
+import { READINESS_CRITERIA, assessReadiness } from '../src/lib/readiness.js';
+import { applicableReviews } from '../src/lib/reviews.js';
+import { flowDigests, scenariosDigest } from '../src/lib/flow-review.js';
+import { DECISIONS_FILE, FLOW_REVIEW_FILE, REVIEW_FILE, SCENARIOS_FILE } from '../src/lib/spec-files.js';
+import { validateService } from '../src/lib/validate-service.js';
+import { validate } from '../src/commands/validate.js';
+
+const DSL = supportedDsl()[0];
+const VERSION = '1.0.0';
+
+const DOMAIN = `
+entities:
+  Invoice:
+    fields:
+      id:    { type: uuid, id: true, generated: true }
+      total: { type: decimal, required: true }
+`;
+
+const USE_CASES = `
+operations:
+  createInvoice:
+    description: Da de alta una factura.
+    kind: command
+    internal: true
+    input:
+      fields:
+        total: { type: decimal, required: true }
+    output: { entity: Invoice }
+`;
+
+const MATRIX = `## Matriz de cobertura
+
+| Operación | Flujos | Superficie |
+|---|---|---|
+| createInvoice | FL-INV-001 | interna |
+`;
+
+function scenariosText({ stamp = VERSION, matrix = true } = {}) {
+  return (
+    `# Escenarios de validación — billing\n\n> specs/billing v${stamp}. Contrato de equivalencia.\n\n` +
+    (matrix ? `${MATRIX}\n` : '') +
+    '## Flujos\n\n### FL-INV-001: alta de una factura\n**Given**: nada.\n**When**: `createInvoice`\n**Then**:\n1. Se crea la factura.\n'
+  );
+}
+
+function write(file, content) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, content);
+}
+
+/**
+ * Un workspace con `specs/billing` LISTO, salvo lo que se rompa por opción. Cada opción
+ * rompe una sola pieza del cierre, y los derivados se calculan sobre el texto FINAL de los
+ * escenarios: si no, cambiar el sello de los escenarios caducaría también el careo y el
+ * test no sabría qué criterio mide.
+ */
+function workspace({
+  useCases = USE_CASES,
+  scenarioStamp = VERSION,
+  matrix = true,
+  scenarios = true,
+  flowReview = true,
+  review = 'full',
+  designStamp = VERSION,
+  decisions = null,
+  underSpecs = true
+} = {}) {
+  const root = tmpDir('keel-readiness-');
+  const dir = underSpecs ? path.join(root, 'specs', 'billing') : path.join(root, 'billing');
+
+  write(
+    path.join(dir, 'service.keel.yaml'),
+    [
+      `keel: "${DSL}"`,
+      'service:',
+      '  name: billing',
+      `  version: ${VERSION}`,
+      '  description: Gestiona la facturación de pedidos.',
+      'layers:',
+      '  domain: domain.keel.yaml',
+      '  use-cases: use-cases.keel.yaml'
+    ].join('\n') + '\n'
+  );
+  write(path.join(dir, 'domain.keel.yaml'), DOMAIN);
+  write(path.join(dir, 'use-cases.keel.yaml'), useCases);
+
+  const text = scenariosText({ stamp: scenarioStamp, matrix });
+  if (scenarios) write(path.join(dir, SCENARIOS_FILE), text);
+  if (scenarios && flowReview) {
+    write(
+      path.join(dir, FLOW_REVIEW_FILE),
+      YAML.stringify({
+        reviewedAt: VERSION,
+        passes: 1,
+        scenariosSha256: scenariosDigest(text),
+        flows: flowDigests(text).map((entry) => ({ id: entry.id, sha256: entry.digest })),
+        findings: []
+      })
+    );
+  }
+
+  if (review) {
+    const layers = { domain: YAML.parse(DOMAIN), 'use-cases': YAML.parse(useCases) };
+    const ids = applicableReviews(layers);
+    const findings = (review === 'partial' ? ids.slice(1) : ids).map((id) => ({ id, verdict: 'ok' }));
+    write(path.join(dir, REVIEW_FILE), YAML.stringify({ reviewedAt: VERSION, findings }));
+  }
+
+  if (decisions !== null) write(path.join(dir, DECISIONS_FILE), decisions);
+
+  if (designStamp) {
+    write(path.join(root, 'docs', 'billing', 'DESIGN.md'), `# billing\n\n> specs/billing v${designStamp}. Documento de diseño.\n`);
+  }
+  return dir;
+}
+
+const failing = (result) =>
+  result.criteria
+    .filter((entry) => !entry.ok)
+    .map((entry) => entry.id)
+    .sort();
+
+test('el diseño de partida está listo: si no lo estuviera, los demás casos no medirían nada', () => {
+  const result = assessReadiness(workspace());
+  assert.deepEqual(failing(result), [], JSON.stringify(result.criteria, null, 2));
+  assert.equal(result.ready, true);
+  assert.deepEqual(result.service, { name: 'billing', version: VERSION });
+  assert.deepEqual(
+    result.criteria.map((entry) => entry.id),
+    READINESS_CRITERIA.map((entry) => entry.id),
+    'todos los criterios, en el orden del catálogo'
+  );
+  // Un criterio cumplido no arrastra detalle ni comando: la checklist no dice qué hacer con lo hecho.
+  assert.ok(result.criteria.every((entry) => entry.detail === null && entry.fix === null));
+});
+
+test('un diseño válido sin nada del cierre: generable, pero no listo', () => {
+  const dir = workspace({ scenarios: false, review: null, designStamp: null });
+  assert.equal(validateService(dir).ok, true, 'build lo aceptaría');
+  const result = assessReadiness(dir);
+  assert.equal(result.ready, false);
+  assert.deepEqual(failing(result), ['coverage-matrix', 'design-doc', 'flow-review', 'review', 'scenarios']);
+});
+
+// Cada rotura apaga SU criterio y ningún otro.
+// Sin `internal: true`, el command queda expuesto y sin errores declarados: qué contesta cuando
+// no se puede aplicar lo decidiría el generador (CHK-USECASES-COMMAND-NO-ERRORS, `undecided`).
+const EXPOSED_USE_CASES = USE_CASES.replace('    internal: true\n', '');
+
+const ROTURAS = [
+  ['validation', { useCases: USE_CASES.replace('output: { entity: Invoice }', 'output: { entity: Missing }') }],
+  ['obligations', { decisions: 'esto: no es un registro de decisiones\n' }],
+  ['review', { review: 'partial' }],
+  ['review', { review: null }],
+  ['scenarios', { scenarioStamp: '0.9.0' }],
+  ['coverage-matrix', { matrix: false }],
+  ['flow-review', { flowReview: false }],
+  ['design-doc', { designStamp: '0.9.0' }],
+  ['design-doc', { designStamp: null }],
+  // Un command expuesto sin errores declarados: CHK-USECASES-COMMAND-NO-ERRORS, una decisión no tomada.
+  ['undecided', { useCases: EXPOSED_USE_CASES }]
+];
+
+for (const [id, options] of ROTURAS) {
+  test(`romper ${JSON.stringify(options)} apaga '${id}' y solo ese`, () => {
+    const result = assessReadiness(workspace(options));
+    assert.deepEqual(failing(result), [id], JSON.stringify(result.criteria, null, 2));
+    const entry = result.criteria.find((item) => item.id === id);
+    assert.ok(entry.detail, 'un criterio en rojo dice por qué');
+    assert.ok(entry.fix, 'y con qué se cierra');
+  });
+}
+
+test('un code declarado que ningún escenario provoca deja la matriz incompleta', () => {
+  const conError = USE_CASES.replace(
+    '    output: { entity: Invoice }\n',
+    '    output: { entity: Invoice }\n    errors:\n      - { code: INVOICE_TOTAL_INVALID, http: 422, when: el total es negativo }\n'
+  );
+  const result = assessReadiness(workspace({ useCases: conError, review: null }));
+  const matrix = result.criteria.find((entry) => entry.id === 'coverage-matrix');
+  assert.equal(matrix.ok, false);
+  assert.match(matrix.detail, /CHK-SCEN-ERROR-UNCOVERED/);
+});
+
+test('sin sección de matriz: ninguna comprobación con id lo ve, y el criterio sí', () => {
+  // El hueco que justifica leer la matriz aquí: CHK-SCEN-MATRIX-MISSING-OP cruza las filas,
+  // así que un documento sin tabla no tiene filas que cruzar y pasa en silencio.
+  const dir = workspace({ matrix: false });
+  assert.ok(!validateService(dir).findings.some((finding) => finding.id.startsWith('CHK-SCEN-MATRIX')));
+  assert.match(assessReadiness(dir).criteria.find((entry) => entry.id === 'coverage-matrix').detail, /Matriz de cobertura/);
+});
+
+test('fuera de specs/ no hay raíz de workspace, y DESIGN.md no se busca en el cwd', () => {
+  const result = assessReadiness(workspace({ underSpecs: false }));
+  const design = result.criteria.find((entry) => entry.id === 'design-doc');
+  assert.equal(design.ok, false);
+  assert.match(design.detail, /no vive en specs\//);
+});
+
+test('con la validación cortada antes de las referencias, lo que no se evaluó no sale en verde', () => {
+  const dir = workspace();
+  fs.writeFileSync(path.join(dir, 'use-cases.keel.yaml'), 'operations: {}\n'); // vuelve a ser plantilla
+  const result = assessReadiness(dir);
+  for (const id of ['validation', 'obligations', 'review', 'coverage-matrix']) {
+    assert.equal(result.criteria.find((entry) => entry.id === id).ok, false, id);
+  }
+  assert.match(result.criteria.find((entry) => entry.id === 'obligations').detail, /sin evaluar/);
+});
+
+test('reutiliza la validación que se le pasa y es determinista', () => {
+  const dir = workspace({ review: 'partial' });
+  const validation = validateService(dir, { wip: false });
+  assert.deepEqual(assessReadiness(dir, { validation }), assessReadiness(dir));
+  assert.deepEqual(assessReadiness(dir), assessReadiness(dir));
+});
+
+test('los criterios tienen id único y título', () => {
+  const ids = READINESS_CRITERIA.map((entry) => entry.id);
+  assert.equal(new Set(ids).size, ids.length);
+  assert.ok(READINESS_CRITERIA.every((entry) => /^[a-z][a-z-]*$/.test(entry.id) && entry.title));
+  // Ningún id colisiona con una capa: el estampado los mezcla en listas planas.
+  assert.ok(ids.every((id) => !LAYERS.includes(id)));
+});
+
+/** Ejecuta `keel validate` en proceso, capturando la salida y el código de salida. */
+function runValidate(dir, options) {
+  const exitCode = process.exitCode;
+  const previous = { log: console.log, warn: console.warn, error: console.error };
+  const salida = [];
+  console.log = console.warn = console.error = (...args) => salida.push(args.map(String).join(' '));
+  process.exitCode = undefined;
+  try {
+    validate(dir, options);
+    return { exitCode: process.exitCode, salida: salida.join('\n') };
+  } finally {
+    Object.assign(console, previous);
+    process.exitCode = exitCode;
+  }
+}
+
+test('keel validate --ready: checklist entera, exit 1 mientras falte algo y 0 cuando no', () => {
+  const noListo = runValidate(workspace({ flowReview: false }), { ready: true });
+  assert.equal(noListo.exitCode, 1);
+  assert.match(noListo.salida, /\[flow-review\]/);
+  assert.match(noListo.salida, /1 de 8 criterio\(s\) sin cumplir/);
+  // La checklist dice también lo que SÍ está: es lo que permite retomar una sesión.
+  for (const { id } of READINESS_CRITERIA) assert.ok(noListo.salida.includes(`[${id}]`), id);
+
+  const listo = runValidate(workspace(), { ready: true });
+  assert.equal(listo.exitCode, undefined);
+  assert.match(listo.salida, /Diseño listo para generar\./);
+});
+
+test('keel validate --ready --wip es una contradicción y se rechaza', () => {
+  const { exitCode, salida } = runValidate(workspace(), { ready: true, wip: true });
+  assert.equal(exitCode, 1);
+  assert.match(salida, /contradictorios/);
+});
+
+test('keel validate sin --ready no cambia: un diseño no listo sigue siendo válido', () => {
+  const { exitCode, salida } = runValidate(workspace({ scenarios: false, review: null, designStamp: null }), {});
+  assert.equal(exitCode, undefined);
+  assert.match(salida, /Servicio válido/);
+});
+
+test('una decisión de un aviso aceptada con su scope deja de faltar; con otro scope, no', () => {
+  const aceptar = (scope) =>
+    YAML.stringify({
+      decisions: [
+        {
+          id: 'CHK-USECASES-COMMAND-NO-ERRORS',
+          scope,
+          reason: 'El alta no puede fallar: el total ya llega validado por el borde.',
+          since: VERSION
+        }
+      ]
+    });
+  const aceptada = assessReadiness(workspace({ useCases: EXPOSED_USE_CASES, decisions: aceptar('use-cases.createInvoice') }));
+  assert.deepEqual(failing(aceptada), [], JSON.stringify(aceptada.criteria, null, 2));
+
+  // La aceptación es por UNIDAD: sobre otra operación no dice nada de esta, y además es
+  // una decisión sobre algo que el diseño no levanta (huérfana), no un error.
+  const otra = assessReadiness(workspace({ useCases: EXPOSED_USE_CASES, decisions: aceptar('use-cases.otherOp') }));
+  assert.deepEqual(failing(otra), ['undecided']);
+  assert.match(otra.criteria.find((entry) => entry.id === 'undecided').detail, /CHK-USECASES-COMMAND-NO-ERRORS/);
+});

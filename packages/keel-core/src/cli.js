@@ -56,6 +56,7 @@ program
   .description('Valida un servicio multi-artefacto: schema por capa + referencias cruzadas')
   .argument('<ruta>', 'directorio del servicio o su manifiesto (ej. specs/mi-servicio)')
   .option('--wip', 'diseño en progreso: capas en plantilla y referencias pendientes son avisos, no errores', false)
+  .option('--ready', 'diseño listo para generar: imprime la checklist completa del cierre y falla si falta algo', false)
   .action((ruta, options) => validate(ruta, options));
 
 program

@@ -6,6 +6,7 @@ import { MANIFEST_FILE, resolveServiceDir } from '../lib/loader.js';
 import { validateService } from '../lib/validate-service.js';
 import { REVIEW_FILE } from '../lib/spec-files.js';
 import { DECISIONS_FILE } from '../lib/decisions.js';
+import { READINESS_CRITERIA, assessReadiness } from '../lib/readiness.js';
 
 function printSchemaErrors(file, ajvErrors) {
   console.error(pc.bold(pc.red(`✘ ${file}`)));
@@ -30,6 +31,15 @@ function legacySpecMessage(specPath, doc) {
 
 export function validate(inputPath, options = {}) {
   const wip = options.wip === true;
+  const ready = options.ready === true;
+
+  // Son las dos puntas opuestas del mismo camino: --wip rebaja la exigencia a mitad de
+  // diseño, --ready la sube hasta el cierre. Pedir las dos es no pedir ninguna.
+  if (wip && ready) {
+    console.error(pc.red('--wip y --ready son contradictorios: uno es diseño en progreso y el otro, diseño cerrado.'));
+    process.exitCode = 1;
+    return;
+  }
   const resolvedInput = path.resolve(process.cwd(), inputPath);
 
   // Ruta a un *.keel.yaml suelto: puede ser un spec 1.0 antiguo — mensaje de migración.
@@ -60,7 +70,12 @@ export function validate(inputPath, options = {}) {
     return;
   }
 
-  const { manifest, layers, loadErrors, schemaErrors, crossRefErrors, warnings, pending, obligations, reviews } =
+  if (ready) {
+    printReadiness(dir);
+    return;
+  }
+
+  const { manifest, layers, loadErrors, schemaErrors, crossRefErrors, warnings, pending, obligations, undecided, reviews } =
     validateService(dir, { wip });
 
   if (loadErrors.length > 0 && !manifest) {
@@ -85,7 +100,7 @@ export function validate(inputPath, options = {}) {
   }
 
   for (const message of pending) console.warn(`${pc.yellow('⚠')} ${message}`);
-  for (const message of warnings) console.warn(`${pc.yellow('⚠')} ${message}`);
+  printWarnings(warnings, undecided);
 
   if (crossRefErrors.length > 0) {
     console.error(pc.bold(pc.red(`✘ Referencias cruzadas — ${crossRefErrors.length} error(es):`)));
@@ -94,7 +109,7 @@ export function validate(inputPath, options = {}) {
     return;
   }
 
-  for (const entry of obligations.orphans) {
+  for (const entry of [...obligations.orphans, ...undecided.orphans]) {
     console.warn(
       `${pc.yellow('⚠')} ${DECISIONS_FILE}: '${entry.id}' sobre '${entry.scope}' ya no la levanta el diseño — ` +
         'la decisión describe un hueco que no existe; bórrala'
@@ -178,10 +193,9 @@ export function validate(inputPath, options = {}) {
   const name = manifest?.service?.name ?? '(sin nombre)';
   const version = manifest?.service?.version ?? '?';
   const layerList = Object.keys(layers).join(', ');
+  const totalAceptadas = obligations.accepted.length + undecided.accepted.length;
   const aceptadas =
-    obligations.accepted.length > 0
-      ? pc.dim(` — ${obligations.accepted.length} decisión(es) aceptada(s) en ${DECISIONS_FILE}`)
-      : '';
+    totalAceptadas > 0 ? pc.dim(` — ${totalAceptadas} decisión(es) aceptada(s) en ${DECISIONS_FILE}`) : '';
   if (wip && pending.length > 0) {
     console.log(
       pc.bold(pc.yellow('✔ Diseño en progreso')) +
@@ -197,5 +211,78 @@ export function validate(inputPath, options = {}) {
     pc.bold(pc.green('✔ Servicio válido')) + pc.dim(` — ${name} v${version} (DSL keel ${manifest?.keel})`) + aceptadas
   );
   console.log(pc.dim(`  Capas: ${layerList}`));
+  const sinDecidir = undecided.open.length + undecided.stale.length;
+  if (sinDecidir > 0) {
+    console.log(
+      pc.dim(`  ${sinDecidir} aviso(s) son decisiones sin tomar: no impiden generar, pero sí keel validate --ready.`)
+    );
+  }
   console.log(pc.dim('Recuerda la capa semántica: /keel-validate en tu agente revisa la calidad del diseño.'));
+}
+
+/**
+ * Los avisos, separando los que son decisiones no tomadas.
+ *
+ * Una decisión ACEPTADA en decisions.yaml ya no se imprime como aviso: se contestó, y
+ * repetirla en amarillo enseñaría a no leer los avisos. Una ABIERTA lleva debajo lo que hay
+ * que escribir para cerrarla —su id y su scope, que es la clave de la aceptación— o, si no
+ * admite aceptación, que se decide en el DSL. Sin eso, el scope que exige decisions.yaml
+ * habría que adivinarlo.
+ */
+function printWarnings(warnings, undecided) {
+  const byMessage = new Map();
+  for (const item of undecided.accepted) byMessage.set(item.message, { item, state: 'accepted' });
+  for (const item of undecided.stale) byMessage.set(item.message, { item, state: 'stale' });
+  for (const item of undecided.open) byMessage.set(item.message, { item, state: 'open' });
+
+  for (const message of warnings) {
+    const decision = byMessage.get(message);
+    if (decision?.state === 'accepted') continue;
+    console.warn(`${pc.yellow('⚠')} ${message}`);
+    if (!decision) continue;
+    const { item, state } = decision;
+    if (state === 'stale') {
+      console.warn(pc.dim(`    aceptada en v${item.since}: el diseño cambió, reafírmala en ${DECISIONS_FILE}`));
+    } else if (item.waivable) {
+      console.warn(pc.dim(`    decisión sin tomar: ciérrala en el DSL o acéptala en ${DECISIONS_FILE} — id: ${item.id}, scope: ${item.scope}`));
+    } else {
+      console.warn(pc.dim(`    decisión sin tomar (${item.id}): no admite aceptación, decídela en el DSL`));
+    }
+  }
+}
+
+/**
+ * `keel validate --ready`: la checklist del cierre, criterio a criterio y con el comando que
+ * cierra cada uno. Es lo que permite retomar una sesión de diseño sin depender de la memoria
+ * del agente, y la misma respuesta que `keel-<tech> build` estampa en el proyecto generado.
+ */
+function printReadiness(dir) {
+  const { service, ready, criteria } = assessReadiness(dir);
+  if (!service) {
+    const { loadErrors } = validateService(dir, { wip: false });
+    for (const message of loadErrors) console.error(pc.red(`✘ ${message}`));
+    process.exitCode = 1;
+    return;
+  }
+
+  console.log(pc.bold(`Diseño listo para generar — ${service.name} v${service.version}`));
+  for (const entry of criteria) {
+    if (entry.ok) {
+      console.log(`  ${pc.green('✔')} ${entry.title} ${pc.dim(`[${entry.id}]`)}`);
+      continue;
+    }
+    console.log(`  ${pc.red('✘')} ${entry.title} ${pc.dim(`[${entry.id}]`)}`);
+    if (entry.detail) console.log(`      ${entry.detail}`);
+    if (entry.fix) console.log(pc.dim(`      → ${entry.fix}`));
+  }
+
+  console.log();
+  const missing = criteria.filter((entry) => !entry.ok).length;
+  if (ready) {
+    console.log(pc.bold(pc.green('✔ Diseño listo para generar.')));
+    return;
+  }
+  console.log(pc.bold(pc.red(`✘ ${missing} de ${READINESS_CRITERIA.length} criterio(s) sin cumplir.`)));
+  console.log(pc.dim('  El análisis de huecos (/keel-design § 4b) todavía no tiene criterio mecánico: sigue siendo tuyo.'));
+  process.exitCode = 1;
 }
