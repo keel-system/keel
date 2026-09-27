@@ -97,6 +97,13 @@ Hoy el cierre se define en tres sitios que no dicen lo mismo: la skill `/keel-de
 
 **Por qué primero:** es el cambio que más reproceso evita por unidad de esfuerzo. Casi todo ya está calculado y solo falta componerlo y ponerlo en la puerta.
 
+> **Estado de la fase 2 (2026-09-27): hecha**, tras R9. `keel-spring build` se niega sobre un diseño no listo **antes de escribir nada** y dice los ids que faltan y la salida. `--accept-unready` genera igualmente y lo estampa (`design.acceptedUnready` en `keel-generated.json`). Tres precisiones sobre lo escrito arriba:
+> - **La puerta cubre todo lo que escribe**, `--refresh` incluido: el snapshot que refresca es el del diseño de ahora. `--check` no escribe y solo informa.
+> - **`keel-spring check` predice el veredicto**: un diseño no listo sale en rojo con o sin `--strict`, porque decir «factible» sobre algo que build no generará sería mentir. No se suma a los bloqueos, así que la traducción a código se sigue intentando.
+> - **`/keel-evolve` cierra con `--ready`**, no con `keel validate` a secas. Si no, el `build --refresh` al que manda tras una evolución se negaría.
+>
+> Las nueve fixtures parciales las generan sus tests con `acceptUnready: true`, y la frontera es `READY_FIXTURES`. Los cinco casos de la puerta en `test/build.test.js` están falsados: anulando la negación, salen en rojo los dos que la miden.
+
 ---
 
 ### R2. Separar «incoherencia» de «decisión no tomada» en los avisos · cierra D2
@@ -224,6 +231,44 @@ La misma disciplina que ya funciona en keel-spring, aplicada al diseño:
 - Sirve de ejemplo canónico en `docs/` y de diseño base para las mutaciones de R6. Además, pone a prueba R1–R4 antes de exigírselas a nadie.
 - Las demás fixtures se marcan como sujetos parciales (un campo en `design.yaml` o una lista en el test) para que `--ready` no las evalúe.
 
+> **Estado (2026-09-27): hecho.** El par sale en verde en los diez criterios de `--ready`, y lo fija `keel-spring/test/mvp-ready.test.js`. Tres desviaciones sobre lo escrito arriba:
+> - **No sirve de base de R6.** R6 ya tenía su propio base (`ticket-desk`), desacoplado a propósito de las fixtures de keel-spring.
+> - **Los sujetos parciales se marcan con una lista**, `READY_FIXTURES` en el test, y no con un campo de `design.yaml`, que es metadato de registry. Es la lista que leerá el paso 10.
+> - **`design-doc` no se puede cumplir donde vive una fixture.** El criterio busca `docs/<n>/DESIGN.md` desde la raíz que deduce de `specs/<n>`. El documento vive en `test/fixture-docs/<n>/` (fuera de `fixtures/`, porque todo lo que hay en la carpeta de un diseño viaja al snapshot del proyecto generado) y el test monta el workspace. El test también afirma que, sin montarlo, **solo** falla `design-doc`.
+>
+> **Lo que el ejercicio encontró, que es su razón de ser.** Pasar por el método entero cambió el diseño bastante más de lo que cerró las casillas:
+> - **Huecos del diseño**, cerrados en el YAML:
+>   - las variables del correo no llegaban por ningún sitio: `TemplateRenderer` interpolaba «las del envío», y ni la petición ni el evento las traían;
+>   - `registerTemplate` no dejaba declarar las `TemplateVariable`;
+>   - `publishTemplate`, `getTemplate` y `getNotification` no estaban acotados al inquilino. Era clase 9, que no admite `accepted`;
+>   - `dedupeKey` no tenía origen sin `Idempotency-Key`;
+>   - una plantilla que no compila se registraba;
+>   - `sendAcceptedNotification` declaraba un error inalcanzable;
+>   - faltaban dos índices que se consultan en cada petición y cada minuto;
+>   - los dos eventos no tenían canal;
+>   - la suscripción no tenía `onFailure`, y ahora lleva DLQ;
+>   - el orden de `errors` no casaba con la precedencia que afirmaban los escenarios.
+> - **Aceptados con motivo**, en `gaps.yaml` y `review.yaml`:
+>   - un envío parado en `queued` o `sending` no se rescata, porque rescatar `sending` arriesga un segundo correo real;
+>   - un fallo de envío no se anuncia por evento;
+>   - no hay retención;
+>   - no hay baja de sistemas.
+> - **El careo** necesitó las tres pasadas del presupuesto: 13 hallazgos en la primera, 6 en la segunda y ninguno en la tercera. La gemela mongo tuvo su propio careo.
+>
+> **Hallazgos del método**, anotados para su propio seguimiento y no resueltos aquí:
+> 1. La identidad por evento (`messaging.subscriptions.<E>.identity`) no tiene `resolvedBy`, aunque la de HTTP sí. Que `metadata.source` se resuelva contra `credentialKeys` queda en una `rule` en prosa.
+> 2. La regla de proyección de `scenario-authoring.md` («campos de la entidad − exclude + embed») no dice lo que hace el generador con las relaciones sin `embed` (`<relación>Id` y las hijas anidadas). El careo lo marcó y se aceptó.
+> 3. La cabecera `Location` de un `201` apunta a rutas que ninguna operación sirve cuando no hay GET por id (`registerApplication`) o cuando el GET no comparte ruta con el alta (`registerTemplate`).
+> 4. El `channel` de una **suscripción** no cambia de dónde se consume, que se deriva del `source`. Pasa en todas las fixtures.
+> 5. El arnés no tiene primitiva para que el relay SMTP de prueba rechace un destinatario, así que el estado `failed` no se alcanza en caja negra (FL-DSP-001 queda `uncovered` con ese motivo).
+> 6. `build` imprime como avisos los `undecided` que `decisions.yaml` ya acepta; `keel validate` los oculta.
+> 7. **Modelo documental**: dentro de una transacción, dos escrituras concurrentes sobre el mismo documento hacen que el perdedor reciba un *write conflict* transitorio de MongoDB (error 112). Ningún handler de keel-spring lo traduce al 409 declarado ni reintenta la transacción, así que sale un 500. Lo encontró el careo de la gemela mongo en FL-TPL-003 y FL-TPL-011. Es el hallazgo con más consecuencias de los ocho.
+> 8. **`flowReviewPlan` caduca el careo por el sello del documento entero, pero el alcance lo calcula por flujo.** Un cambio fuera de los bloques `FL-` (las convenciones) deja el careo `stale` con **alcance vacío**. Con presupuesto no hay nada que recarear; sin él (`exhausted`) el diseño no vuelve a verde en esa versión. Las convenciones afectan a todos los flujos, así que lo coherente es probablemente una pasada completa. En R9 se deshizo la edición y lo que pedía se aceptó en el careo.
+>
+> Las dos cosas que el DSL no puede decir y el careo pidió, que una colección vacía viaja como `[]` y la proyección de las relaciones sin `embed`, están aceptadas en `flow-review.yaml` con su motivo.
+>
+> Tres tests de keel-spring usaban este par como el caso «sin canal» o «sin descarte» y se movieron a `inspection-reports`, que lo sigue siendo, con las mismas aserciones. `compile-check` en verde sobre el par en SNS/SQS, Kafka con otel, RabbitMQ con MySQL y Mongo.
+
 ## 4. Orden sugerido y dependencias
 
 | Paso | Qué | Cierra | Esfuerzo | Depende de | Resultado medible |
@@ -236,8 +281,8 @@ La misma disciplina que ya funciona en keel-spring, aplicada al diseño:
 | 6 | R3: `gaps.yaml` — **hecho** | D3 | 1–2 semanas | 1 | análisis auditable, retomable y con caducidad: criterio `gaps` de `--ready` |
 | 7 | R7: matriz de escenarios en `--ready` — **hecho** (el criterio nació con R1; R7 cerró su fidelidad) | D7 | días | 1 | ningún `code` sin escenario llega a build **sin quedar estampado**; el veto es el paso 10 |
 | 8 | R4.2: `structural:` en `decisions.yaml` + `/keel-handoff` que lo lee — **hecho** (más el criterio `structural` de `--ready`) | D4 | días | 5 | `DESIGN.md` sin reconstrucción de memoria; el registro se exige en `--ready` |
-| 9 | R9: par del MVP en `--ready` | validación | días | 1–7 | ejemplo canónico cerrado de punta a punta |
-| 10 | R1 fase 2: `build` se niega sin `--accept-unready` | D1 | horas | 9 | la puerta aprieta |
+| 9 | R9: par del MVP en `--ready` — **hecho** | validación | días | 1–7 | 10/10 en los dos, fijado por `mvp-ready.test.js`; 8 hallazgos del método |
+| 10 | R1 fase 2: `build` se niega sin `--accept-unready` — **hecho** | D1 | horas | 9 | la puerta aprieta: también con `--refresh`, `check` en rojo |
 | — | R8: métrica de reproceso | transversal | continuo | 1 | tendencia medible entre corridas |
 
 **La idea que ordena todo:** hoy el método *sabe* qué es un diseño terminado, pero lo sabe en prosa. Los pasos 1 y 2 hacen que la máquina lo sepa. Los pasos 3 y 4 garantizan que lo que la máquina dice es verdad. Del 5 al 8 persisten lo que hoy muere con la conversación, el 9 lo demuestra sobre un caso real y el 10 cierra la puerta.

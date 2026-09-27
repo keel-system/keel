@@ -41,7 +41,9 @@ async function runBuild(workspace, options) {
   process.chdir(workspace);
   process.exitCode = undefined;
   try {
-    await build(`specs/${SPEC}`, options);
+    // Diseños parciales a propósito (fixtures y esqueletos): desde la fase 2 de la puerta de
+    // «diseño listo», build solo los genera a sabiendas. La puerta en sí la prueba su propio test.
+    await build(`specs/${SPEC}`, { acceptUnready: true, ...options });
     return process.exitCode;
   } finally {
     process.chdir(cwd);
@@ -213,15 +215,16 @@ test('--force reescribe todo y devuelve lo adoptado al registro de build', async
   assert.ok(Object.keys(manifest.files).length > 100);
 });
 
-// Fase 1 de «diseño listo»: build no se niega, pero deja escrito si el diseño estaba listo.
-// Sin esto, una corrida sobre un diseño a medio cerrar y una sobre uno cerrado dejan el
-// mismo rastro, y sus designGaps se leen igual: como huecos del método.
+// Build deja escrito si el diseño estaba listo y, si no lo estaba, que se generó a sabiendas
+// (--accept-unready, fase 2). Sin esto, una corrida sobre un diseño a medio cerrar y una sobre
+// uno cerrado dejan el mismo rastro, y sus designGaps se leen igual: como huecos del método.
 test('build estampa si el diseño estaba listo, por id y sin timestamps', async () => {
   const workspace = withFixture();
   await runBuild(workspace);
 
   const { design } = readManifest(workspace);
   assert.equal(design.ready, false, 'la fixture no tiene careo ni DESIGN.md: no está lista');
+  assert.equal(design.acceptedUnready, true, 'solo se generó porque se pidió a sabiendas, y tiene que constar');
   assert.ok(design.version, 'la versión del diseño que se generó');
   assert.ok(design.missing.includes('flow-review'));
   assert.ok(design.missing.includes('design-doc'));

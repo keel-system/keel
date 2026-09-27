@@ -124,7 +124,7 @@ El diseño solo está terminado cuando **`keel validate --ready specs/<servicio>
 5. **Los avisos que la CLI marca como «decisión sin tomar» son preguntas para el usuario, no correcciones tuyas**: plantéaselos, y materializa la respuesta en el DSL o, si el aviso lo admite, en `decisions.yaml` con el `id` y el `scope` que imprime. Son un criterio de `--ready`.
 6. **Enumera las decisiones estructurales que quedaron pendientes** — las secciones que `keel validate --ready` lista bajo el criterio `structural` —, con nombre de operación o capa. Son pendientes reales, no cosmética: un hueco estructural sin decidir lo acabará resolviendo por su cuenta el agente que genere el código, y dos generadores lo resolverán distinto.
 7. Si el bloque de integración se resolvió en **modo degradado** (sin `INTEGRATION.md` del proveedor), **enumera los huecos de contrato que quedaron abiertos** y a quién hay que pedírselos. Son pendientes reales: el diseño es válido, pero la generación producirá clientes y listeners a partir de un contrato incompleto.
-8. No sugieras `keel-<tech> build` ni `/keel-docs` mientras `keel validate --ready` no esté en verde. Si el usuario quiere generar igualmente, dile qué criterios faltan: build lo dejará estampado y lo que devuelva la corrida podrá ser del diseño y no del método.
+8. No sugieras `keel-<tech> build` ni `/keel-docs` mientras `keel validate --ready` no esté en verde. Si el usuario quiere generar igualmente, dile qué criterios faltan: `build` **se niega** sobre un diseño no listo, y la única forma de generar sin cerrarlo es pedirlo a sabiendas con `--accept-unready`, que queda estampado en el proyecto. Lo que devuelva esa corrida podrá ser del diseño y no del método.
 
 ## Criterios de calidad
 

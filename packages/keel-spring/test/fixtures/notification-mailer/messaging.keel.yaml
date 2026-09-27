@@ -1,7 +1,17 @@
+# Los canales son el contrato de integración: sin nombrarlos, un sistema que quiere pedir un
+# correo no tiene dónde publicar, y el nombre físico que derive cada generador no es estable
+# entre stacks. Uno para lo que sale y otro, genérico, para lo que entra.
+channels:
+  notificationEvents:
+    description: Canal por el que este servicio anuncia los envíos que salieron.
+  notificationRequests:
+    description: Canal genérico por el que cualquier sistema registrado pide un envío.
+
 publishing:
   reliability: outbox
   events:
     NotificationSent:
+      channel: notificationEvents
       description: Salió el correo que se había pedido.
       payload:
         notificationId: { type: uuid, required: true }
@@ -17,6 +27,7 @@ subscriptions:
   NotificationRequested:
     description: Un sistema consumidor pide un envío por el canal genérico.
     source: any-registered-system
+    channel: notificationRequests
     nature: request
     contract:
       # Con envoltura Keel la identidad del mensaje YA es metadata.eventId: el
@@ -61,7 +72,23 @@ subscriptions:
       onUnresolved: discard
       description: El servicio emisor que nombra la envoltura del mensaje.
     payload:
-      templateKey: { type: string, required: true }
-      locale:      { type: string }
-      recipient:   { type: string, required: true }
+      # Las mismas cotas que el input de acceptNotificationRequest: el payload es el contrato que
+      # leen los emisores, y sin ellas un mensaje válido para el canal llegaría a la cola de descarte.
+      templateKey: { type: string, required: true, constraints: { maxLength: 64 } }
+      locale:      { type: string, constraints: { maxLength: 10 } }
+      recipient:   { type: string, required: true, constraints: { maxLength: 320 } }
+      variables:   { type: TemplateVariableValue, list: true, constraints: { maxItems: 50 } }
     triggers: acceptNotificationRequest
+    # Dos clases de fallo y un solo destino. El PASAJERO (la base no responde) se reintenta con
+    # backoff; el PERMANENTE de negocio (plantilla inexistente, variable requerida sin valor) no
+    # mejora en un segundo y no se reintenta. Los dos acaban en la cola de descarte, que vigila
+    # quien opera la plataforma: una petición de correo tragada en silencio es un cliente que
+    # nunca recibe su correo y un consumidor que cree que lo pidió. La aplicación desconocida no
+    # llega aquí: la descarta antes onUnresolved. Reintentar no duplica: la clave es metadata.eventId.
+    onFailure:
+      retry:
+        maxAttempts: 5
+        backoff: exponential
+        initialDelayMs: 1000
+        maxDelayMs: 30000
+      deadLetter: true

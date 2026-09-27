@@ -5,6 +5,10 @@ entities:
   Application:
     persisted: true
     naturalKey: [key]
+    indexes:
+      # Cada petición resuelve su aplicación buscando el client_id ENTRE los credentialKeys: sin
+      # índice sobre la colección, esa búsqueda recorre todas las credenciales de todos los sistemas.
+      - [credentialKeys]
 
   Template:
     persisted: true
@@ -26,11 +30,25 @@ entities:
     naturalKey: [applicationKey, dedupeKey]
     indexes:
       - [recipient, requestedAt]
+      # El barrido reclama por estado cada minuto: sin índice, el lote de «aceptados» se busca
+      # recorriendo todos los envíos que ya salieron, que es casi toda la tabla.
+      - [status, requestedAt]
       # Índice sobre un campo de COLECCIÓN. No cabe en la tabla de la entidad —los
       # elementos viven en la tabla hija—, pero build genera esa hija entera, así que
       # lo materializa en su @CollectionTable. Sin él, «¿a esta dirección le llegó
       # algo en copia?» recorre una tabla que crece con cada envío.
       - [copyRecipients]
+
+# Tiempos, sí: saber cuándo se escribió cada fila es lo primero que pregunta quien opera un
+# envío que no llegó. Pero no los lee ningún cliente —las marcas que importan al contrato
+# (requestedAt, sentAt, publishedAt) ya son campos del dominio—, así que van invisibles.
+# Autoría, no: todos los autores son sistemas, y la atribución que tiene valor de negocio ya es
+# un dato del dominio (applicationKey en Notification, la relación a Application en Template).
+# Un createdBy con el client_id repetiría eso con peor nombre, y en el camino por evento sería
+# el centinela 'system' en todas las filas.
+audit:
+  timestamps: all
+  authorship: none
 
 consistency:
   transactionalBoundary: per-operation

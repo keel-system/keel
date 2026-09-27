@@ -1,0 +1,135 @@
+# Careo de flujos (keel-flow-review) de la gemela documental. Pasada 1, completa.
+reviewedAt: 1.0.0
+passes: 1
+scenariosSha256: f9f2aa888db09f1364831898a7e64d7bb64dec0f5234f478904b9cc9d0d24a8a
+flows:
+  - id: FL-APP-001
+    sha256: 123df37709bc6b897dd6377acbdf07170dd577bbe99c2b66faa6135c516d0422
+  - id: FL-APP-001-B
+    sha256: b65bf3aa68be8515e5318f6724d92942910af45989845ad0312e4d66f42652c6
+  - id: FL-TPL-001
+    sha256: ca6b4bec65532a12f89f2a8b0a449d2745c27e5b6981f41d787a024bb2c1c89b
+  - id: FL-TPL-002
+    sha256: 820d5eea9280703e7b0f48118ce0119a9645709ca839a7d7a15278d734034f8c
+  - id: FL-TPL-003
+    sha256: d5f42a387f3a73d04db88edd7d3f8c6399d27c759248936e0d44069c34ff6912
+  - id: FL-TPL-010
+    sha256: 211b68bca16d9d1ba08d6b0acd71217bf3b690c835a1c7f615564aedf4b07833
+  - id: FL-TPL-010-B
+    sha256: 70346c8df0b545375b29d2dc54ff531e076c29f67fe09f71164747f530f3ac45
+  - id: FL-TPL-011
+    sha256: a0444b89e0298b06aec8e57c3513bbc065515f0684401c359653a29ca3c31c0a
+  - id: FL-TPL-012
+    sha256: d6cb389820456b648873f74646bf73c2c1140f5e1dbf6b662b3942317b9e56c7
+  - id: FL-NTF-001
+    sha256: 5637f57849fd940bcb4506c7ee9395a9844a32852b3f320c80bad5b7529ec42c
+  - id: FL-NTF-001-B
+    sha256: 0e3a13e94f6eb4622c004fe3f62ba5a9e8c739690a0f767e4c1c8d4ba809aac1
+  - id: FL-NTF-001-C
+    sha256: 06f1b0a12e318a98691153258a302f93887449778955fe800c2275f6c7dbf7e1
+  - id: FL-NTF-002
+    sha256: ec2dc015f7bef8045a0a88e37ea37ece8897bc264c08d5ae2d22b2ae030c8c7f
+  - id: FL-NTF-003
+    sha256: 5463eef96acfcbc974bd8d2c9d7edfcfeae0105f34e32f60cf98135aa47b5e33
+  - id: FL-NTF-004
+    sha256: 44834f4466819cb8523488cb6105535753ac2b71986179237eb9836661a2ca3b
+  - id: FL-EVT-001
+    sha256: e60303e2df1f7e1b116a0dbf31cefabb7bf5b0f59d7e46b3cffc782460b0b00a
+  - id: FL-EVT-001-B
+    sha256: 9106130c1feef3a71240ee079efe8adc31ed96e2dacf0578953fdb55babceb33
+  - id: FL-EVT-002
+    sha256: 88560edc14032b50502b17cec3ff5cb3009a2e022ccc48897c116a47a7fb22af
+  - id: FL-EVT-003
+    sha256: f0d816f5c16df08c50116055a6f40159f5629e667e0b63fab0c710afc9ac8651
+  - id: FL-DSP-001
+    sha256: 4700b1ef7c08c8a990f00a5baa7174a91bd5a8133a79f112268b426f4154f82c
+  - id: FL-CLU-001
+    sha256: 9f6f32bcb7e43128b4d43e18b8ab62916cf8fb357ff9fa6744dca8cdee3d96f8
+  - id: FL-OBX-001
+    sha256: dadf6c345559cdb7e09eed6cc1da54db6f4119f7c182d3560e2df2125fc8342e
+  - id: FL-OBX-002
+    sha256: b0e2e2c572725c01388821a4026ef1494e5d327ce01711852cd966715a92a85b
+findings:
+  - flow: FL-TPL-011
+    step: "Then 1"
+    kind: other
+    artifact: use-cases.publishTemplate.errors
+    evidence: >-
+      El Then (a) dice que el perdedor recibe 409 CONCURRENT_MODIFICATION o TEMPLATE_ALREADY_ACTIVE,
+      y que «cuál de los dos depende de qué escritura del perdedor llegue antes a la base». Esa
+      explicación es la del modelo relacional: allí el perdedor espera el bloqueo de fila de <t1> y
+      después falla el control de versión (CONCURRENT_MODIFICATION) o el índice parcial
+      (TEMPLATE_ALREADY_ACTIVE). Con `default.model: document` y `consistency.transactionalBoundary:
+      per-operation`, publishTemplate es una transacción multidocumento (retirar <t1> y activar
+      <t2>/<t3>), y en ese motor dos transacciones que escriben el mismo documento, o la misma
+      entrada de un índice único con escrituras sin confirmar, no esperan: el perdedor aborta al
+      momento con un conflicto de escritura del motor (transitorio). Ese conflicto no lo produce ni
+      el control de versión que declara `optimisticLocking: all` (la versión que leyó el perdedor
+      coincide en su instantánea) ni el índice parcial, que son los dos mecanismos a los que el
+      diseño ata los dos codes. Nada en el diseño dice qué code sale de ese tercer camino, así que
+      el 409 con uno de los dos codes no se deduce en esta gemela: sale un 5xx si nadie lo traduce,
+      o el desenlace (b) si alguien lo reintenta.
+    proposal: >-
+      En el diseño: ampliar el `when` de CONCURRENT_MODIFICATION para que cubra cualquier conflicto
+      de escritura concurrente sobre la misma plantilla, venga del control de versión o del motor,
+      lo que fija el code en las dos gemelas. En el escenario (que tiene que valer igual para las
+      dos): quitar la explicación de «qué escritura llega antes», que solo es verdad en relacional,
+      y dejar la disyunción de codes.
+    resolution: accepted
+    reason: "El diseño declara el conflicto (409 CONCURRENT_MODIFICATION y la unicidad con su code), y el
+      escenario afirma ese contrato. Con el modelo documental y una transacción por operación, el
+      perdedor recibe del motor un write conflict transitorio (error 112, TransientTransactionError)
+      que ni el bloqueo optimista ni el índice traducen solos. Traducirlo al 409 declarado, o
+      reintentar la transacción, es del generador: hoy ningún handler de keel-spring lo trata, y
+      queda anotado como hallazgo del método. Un servidor que responda 500 falla este escenario, que
+      es lo que tiene que pasar."
+  - flow: FL-TPL-003
+    step: "Then 1"
+    kind: other
+    artifact: use-cases.registerTemplate.errors.TEMPLATE_VERSION_ALREADY_EXISTS
+    evidence: >-
+      El Then admite que el segundo registro simultáneo responda 409
+      TEMPLATE_VERSION_ALREADY_EXISTS, que el diseño ata a la `naturalKey` [application, key,
+      locale, version] de Template. En el modelo documental, con la transacción por operación, la
+      segunda inserción que choca con la entrada del índice único que la primera aún no ha
+      confirmado no recibe una violación de clave duplicada sino el mismo conflicto de escritura
+      transitorio que en FL-TPL-011. Solo es clave duplicada si la primera ya confirmó. Nada en el
+      diseño asigna un code a ese conflicto, así que el 409 con TEMPLATE_VERSION_ALREADY_EXISTS solo
+      se deduce en parte de las carreras. Es la misma causa que el hallazgo de FL-TPL-011, en la
+      unicidad no condicionada.
+    proposal: >-
+      En el diseño: que el `when` de TEMPLATE_VERSION_ALREADY_EXISTS («otra petición registró esa
+      misma versión a la vez») cubra también el conflicto del motor sobre esa misma clave. O
+      aceptarlo a sabiendas y hacerlo junto con FL-TPL-011, porque la decisión es la misma.
+    resolution: accepted
+    reason: "El diseño declara el conflicto (409 CONCURRENT_MODIFICATION y la unicidad con su code), y el
+      escenario afirma ese contrato. Con el modelo documental y una transacción por operación, el
+      perdedor recibe del motor un write conflict transitorio (error 112, TransientTransactionError)
+      que ni el bloqueo optimista ni el índice traducen solos. Traducirlo al 409 declarado, o
+      reintentar la transacción, es del generador: hoy ningún handler de keel-spring lo trata, y
+      queda anotado como hallazgo del método. Un servidor que responda 500 falla este escenario, que
+      es lo que tiene que pasar."
+  - flow: FL-TPL-001
+    step: "Casos borde 1"
+    kind: other
+    artifact: domain.entities.Template.relations.variables
+    evidence: >-
+      El caso borde dice «Sin `variables` → `201` con `variables: []`». El diseño declara
+      `conventions.nulls: include` («un campo sin valor viaja como null»), y el propio documento de
+      escenarios lo repite. Nada fija que una relación one-to-many sin hijas sea una lista vacía y
+      no un campo sin valor. En relacional la diferencia no se ve: las hijas son otra tabla y la
+      colección sale de una consulta, que sin filas da []. En la gemela documental TemplateVariable
+      va anidada en el documento de Template, así que `variables` es un campo de ese documento, y
+      una petición que lo omite puede guardarlo ausente o nulo, y proyectarlo como `variables: null`
+      cumpliendo la convención al pie de la letra.
+    proposal: >-
+      En el escenario: añadir a las Convenciones de determinación que una colección (relación o
+      `list: true`) sin elementos viaja como `[]` y nunca como null, si eso es lo que se quiere. O
+      fijarlo en el diseño, junto a `conventions.nulls`. Las dos opciones cubren también
+      `copyRecipients` y `variables` de Notification.
+    resolution: accepted
+    reason: "Una lista sin elementos es un valor, no una ausencia: conventions.nulls rige la ausencia de
+      los escalares, y el caso borde afirma []. Que el mapeo documental rehidrate un array ausente
+      como [] y no como null es del generador. Si devuelve null, este escenario falla, que es lo que
+      se busca. El DSL no tiene dónde declarar la forma de una colección vacía, y queda anotado como
+      hallazgo del método."

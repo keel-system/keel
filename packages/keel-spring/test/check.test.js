@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
+import { READY_FIXTURES, mountDesign } from './helpers/workspace.js';
 import { check } from '../src/commands/check.js';
 
 const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
@@ -25,9 +26,8 @@ function makeWorkspace(fixtures) {
   fs.mkdirSync(path.join(dir, 'schema'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'schema', 'service.schema.json'), '{}'); // isKeelWorkspace
   fs.mkdirSync(path.join(dir, 'specs'), { recursive: true });
-  for (const name of fixtures) {
-    fs.cpSync(path.join(fixturesDir, name), path.join(dir, 'specs', name), { recursive: true });
-  }
+  // Con su DESIGN.md si lo tienen: el par del MVP solo está LISTO dentro de un workspace.
+  for (const name of fixtures) mountDesign(dir, name);
   return dir;
 }
 
@@ -94,14 +94,23 @@ test('check adelanta el aviso que hasta ahora solo aparecía al generar', () => 
 
   assert.match(salida, /estado EN VUELO/);
   assert.match(salida, /build NO puede generarlo/);
-  // Es un aviso, no un bloqueo: el diseño es legítimo y el reclamo lo escribe el agente.
-  assert.equal(exitCode, undefined);
+  // Es un aviso, no un bloqueo: el diseño es legítimo y el reclamo lo escribe el agente. Sale
+  // en rojo por OTRA razón —payout-runs no está cerrado—, y el veredicto lo distingue.
+  assert.doesNotMatch(salida, /no es generable/);
+  assert.match(salida, /Generable, pero no listo/);
+  assert.equal(exitCode, 1);
 });
 
 test('--strict convierte los avisos en bloqueo, para usarlo de puerta de CI', () => {
-  const workspace = makeWorkspace(['payout-runs']);
+  // Sobre un diseño LISTO y con avisos del modelo, que es donde --strict decide algo: en uno
+  // no listo, el rojo ya lo pone la puerta de «diseño listo».
+  const workspace = makeWorkspace(['notification-mailer']);
 
-  const { exitCode, salida } = runCheck(workspace, path.join('specs', 'payout-runs'), { strict: true });
+  const normal = runCheck(workspace, path.join('specs', 'notification-mailer'));
+  assert.equal(normal.exitCode, undefined, normal.salida);
+  assert.match(normal.salida, /Factible con \d+ aviso/);
+
+  const { exitCode, salida } = runCheck(workspace, path.join('specs', 'notification-mailer'), { strict: true });
 
   assert.equal(exitCode, 1);
   assert.match(salida, /--strict los trata como bloqueo/);
@@ -139,6 +148,9 @@ test('las 11 fixtures del generador son factibles', () => {
   // Regresión barata y con dueño: las fixtures son el sujeto de compile-check,
   // claim-check y el resto de redes en vivo. Si una deja de ser generable, esas redes
   // dejan de poder correr, y hasta ahora eso solo se veía ejecutando build sobre ella.
+  //
+  // Factible es «sin bloqueos». Solo el par del MVP está además LISTO; las demás son sujetos
+  // parciales a propósito y salen en rojo por la puerta de «diseño listo», no por un bloqueo.
   const names = fs
     .readdirSync(fixturesDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
@@ -148,7 +160,9 @@ test('las 11 fixtures del generador son factibles', () => {
   const workspace = makeWorkspace(names);
   for (const name of names) {
     const { exitCode, salida } = runCheck(workspace, path.join('specs', name));
-    assert.equal(exitCode, undefined, `${name} no es factible:\n${salida}`);
+    assert.doesNotMatch(salida, /no es generable/, `${name} no es factible:\n${salida}`);
+    if (READY_FIXTURES.includes(name)) assert.equal(exitCode, undefined, `${name} está listo:\n${salida}`);
+    else assert.match(salida, /Generable, pero no listo/, name);
   }
 });
 
@@ -223,23 +237,23 @@ test('sin proyecto generado, check no habla de huecos', () => {
   assert.ok(!salida.includes('Huecos que reportó la generación'));
 });
 
-// «Diseño listo para generar», fase 1: la misma checklist que `keel validate --ready`,
-// impresa y SIN contar como aviso. Si contara, --strict apretaría en silencio sobre todo
-// diseño que ya existe — la fase 2 es la que aprieta, y lo hace a la vista.
-test('check imprime qué le falta al diseño para estar listo, sin que cuente para --strict', () => {
+// «Diseño listo para generar», fase 2: la misma checklist que `keel validate --ready`, y ahora
+// build se niega sin --accept-unready. check predice lo que hará build, así que sale en ROJO
+// con o sin --strict — y no por sus avisos, que no cambian de naturaleza.
+test('un diseño no listo sale en rojo aunque no tenga un solo aviso, y dice la salida', () => {
   const workspace = makeWorkspace(['metering-digest']);
   const antes = fingerprint(workspace);
 
+  // metering-digest es la fixture sin un solo aviso: lo único que la pone en rojo es la puerta.
   const normal = runCheck(workspace, path.join('specs', 'metering-digest'));
+  assert.equal(normal.exitCode, 1, normal.salida);
   assert.match(normal.salida, /Diseño listo para generar/);
   assert.match(normal.salida, /\[flow-review\]/);
-  assert.match(normal.salida, /no bloquea ni cuenta para --strict/);
+  assert.match(normal.salida, /build se negará a generarlo salvo con --accept-unready/);
+  assert.match(normal.salida, /Generable, pero no listo: faltan \d+ criterio\(s\) del cierre y 0 aviso\(s\)/);
 
-  // metering-digest es la fixture sin un solo aviso: con --strict sale en verde aunque no
-  // esté lista. Si la sección contara como aviso, esto saldría 1.
   const estricto = runCheck(workspace, path.join('specs', 'metering-digest'), { strict: true });
-  assert.equal(estricto.exitCode, undefined, estricto.salida);
-  assert.match(estricto.salida, /Factible, sin avisos/);
+  assert.equal(estricto.exitCode, 1, estricto.salida);
 
   assert.equal(fingerprint(workspace), antes, 'check escribió en el workspace');
 });

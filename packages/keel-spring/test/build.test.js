@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
+import { READY_FIXTURES, mountDesign } from './helpers/workspace.js';
 import { HARNESSES } from 'keel-core';
 import { build } from '../src/commands/build.js';
 import { assetsDir, SUPPORTED_DSL } from '../src/lib/assets.js';
@@ -50,7 +51,9 @@ async function runBuild(workspace, inputPath, options) {
   process.chdir(workspace);
   process.exitCode = undefined;
   try {
-    await build(inputPath, options);
+    // Diseños parciales a propósito (fixtures y esqueletos): desde la fase 2 de la puerta de
+    // «diseño listo», build solo los genera a sabiendas. La puerta en sí la prueba su propio test.
+    await build(inputPath, { acceptUnready: true, ...options });
     return process.exitCode;
   } finally {
     process.chdir(cwd);
@@ -333,4 +336,106 @@ test('build es idempotente: la segunda pasada no reescribe el conocimiento del p
 
   await runBuild(workspace, 'specs/product-catalog', { force: true });
   assert.notEqual(fs.readFileSync(skillPath, 'utf8'), 'modificado localmente');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// La puerta de «diseño listo», fase 2 (paso 10 de recomendaciones-diseno.md): build se niega a
+// generar sobre un diseño que no pasa `keel validate --ready`, salvo con --accept-unready, y lo que
+// se genera a sabiendas queda estampado. Estos casos NO pasan el flag por defecto, a diferencia de
+// `runBuild` de arriba: la puerta es justo lo que miden.
+
+async function runGate(workspace, inputPath, options = {}) {
+  const cwd = process.cwd();
+  const exitCode = process.exitCode;
+  const previous = { log: console.log, warn: console.warn, error: console.error };
+  const salida = [];
+  console.log = console.warn = console.error = (...args) => salida.push(args.map(String).join(' '));
+  process.chdir(workspace);
+  process.exitCode = undefined;
+  try {
+    await build(inputPath, { defaults: true, ...options });
+    return { exitCode: process.exitCode, salida: salida.join('\n') };
+  } finally {
+    process.chdir(cwd);
+    process.exitCode = exitCode;
+    Object.assign(console, previous);
+  }
+}
+
+/** Huella del árbol: rutas y contenido. Lo que detecta cualquier escritura. */
+function treeOf(dir) {
+  const walk = (current) =>
+    fs
+      .readdirSync(current, { withFileTypes: true })
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .flatMap((entry) => {
+        const full = path.join(current, entry.name);
+        return entry.isDirectory() ? walk(full) : [`${path.relative(dir, full)}:${fs.readFileSync(full, 'utf8')}`];
+      });
+  return walk(dir).join('\n');
+}
+
+const stampOf = (workspace, name) =>
+  JSON.parse(fs.readFileSync(path.join(workspace, 'services', `${name}-spring`, 'keel-generated.json'), 'utf8')).design;
+
+test('fase 2: un diseño no listo no se genera, y la salida nombra lo que falta y el escape', async () => {
+  const workspace = makeWorkspace();
+  mountDesign(workspace, 'payout-runs');
+  const antes = treeOf(workspace);
+
+  const { exitCode, salida } = await runGate(workspace, 'specs/payout-runs');
+
+  assert.equal(exitCode, 1, salida);
+  assert.equal(treeOf(workspace), antes, 'se negó, pero después de escribir algo');
+  assert.ok(!fs.existsSync(path.join(workspace, 'services')));
+  assert.match(salida, /Diseño no listo para generar/);
+  assert.match(salida, /\[flow-review\]/);
+  assert.match(salida, /--accept-unready/);
+});
+
+test('fase 2: con --accept-unready se genera, y el estampado lo dice', async () => {
+  const workspace = makeWorkspace();
+  mountDesign(workspace, 'payout-runs');
+
+  const { exitCode, salida } = await runGate(workspace, 'specs/payout-runs', { acceptUnready: true });
+
+  assert.equal(exitCode, undefined, salida);
+  assert.match(salida, /se genera igualmente \(--accept-unready\)/);
+  const design = stampOf(workspace, 'payout-runs');
+  assert.equal(design.ready, false);
+  assert.equal(design.acceptedUnready, true);
+  assert.ok(design.missing.includes('flow-review'));
+});
+
+for (const name of READY_FIXTURES) {
+  test(`fase 2: ${name}, que está listo, se genera sin el escape y no estampa ninguna aceptación`, async () => {
+    const workspace = makeWorkspace();
+    mountDesign(workspace, name);
+
+    const { exitCode, salida } = await runGate(workspace, `specs/${name}`);
+
+    assert.equal(exitCode, undefined, salida);
+    assert.doesNotMatch(salida, /Diseño no listo/);
+    assert.deepEqual(stampOf(workspace, name), { version: '1.0.0', ready: true, missing: [] });
+  });
+}
+
+test('fase 2: --refresh también se niega sobre un diseño que dejó de estar listo; --check solo informa', async () => {
+  // El snapshot que refresca --refresh es el del diseño de AHORA: refrescar un proyecto desde un
+  // diseño a medio cerrar es generar desde él. --check no escribe, así que no tiene nada que negar.
+  const workspace = makeWorkspace();
+  mountDesign(workspace, 'payout-runs');
+  assert.equal((await runGate(workspace, 'specs/payout-runs', { acceptUnready: true })).exitCode, undefined);
+  const project = path.join(workspace, 'services', 'payout-runs-spring');
+  const antes = treeOf(project);
+
+  const refresh = await runGate(workspace, 'specs/payout-runs', { refresh: true });
+  assert.equal(refresh.exitCode, 1, refresh.salida);
+  assert.match(refresh.salida, /--accept-unready/);
+  assert.equal(treeOf(project), antes, '--refresh se negó, pero después de tocar el proyecto');
+
+  const check = await runGate(workspace, 'specs/payout-runs', { check: true });
+  assert.doesNotMatch(check.salida, /✘ Diseño no listo/);
+  assert.match(check.salida, /Un build que escriba se negará salvo con --accept-unready/);
+  assert.equal(check.exitCode, undefined, check.salida);
 });

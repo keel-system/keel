@@ -223,13 +223,12 @@ export function validateService(dir, { wip = false } = {}) {
   // diseño. Es lo que distingue un diseño revisado de uno del que nadie miró la mitad:
   // sin veredicto escrito, las dos cosas se escriben igual.
   //
-  // Bloquea SOLO por un veredicto `open` o por un error de formato. Lo que falta por
-  // revisar (`missing`) y la revisión caducada (`stale`) se reportan y no bloquean —
-  // todavía. Poner eso en rojo el primer día dejaría en rojo todos los diseños que ya
-  // existen, incluidas las fixtures que son sujeto de las redes en vivo del generador, y
-  // un gate que aparece ya roto se aprende a ignorar. Se aprieta cuando los diseños
-  // tengan su `review.yaml`; un hallazgo ABIERTO, en cambio, es un hallazgo abierto desde
-  // el primer minuto.
+  // `ok` lo tumba SOLO un veredicto `open` o un error de formato. Lo que falta por revisar
+  // (`missing`) y la revisión caducada (`stale`) no tocan `ok`: los cuenta el criterio `review`
+  // de `keel validate --ready`, y desde la fase 2 de esa puerta build se niega igualmente sin
+  // --accept-unready. Se separan porque `ok` es «el diseño es coherente» y las fixtures del
+  // generador, que son sujeto de sus redes en vivo, lo tienen que seguir siendo sin estar
+  // cerradas. Un hallazgo ABIERTO, en cambio, es un hallazgo abierto desde el primer minuto.
   const { doc: reviewDoc, errors: reviewErrors } = loadReviews(dir);
   result.reviews = resolveReviews(applicableReviews(effectiveLayers), reviewDoc, manifest?.service?.version);
   result.reviews.errors.unshift(...reviewErrors);
@@ -238,8 +237,8 @@ export function validateService(dir, { wip = false } = {}) {
 
   // Capa 5: el análisis de huecos (gaps.yaml), cruzado con el inventario que deriva la máquina.
   // NO toca `ok`, ni siquiera con un hallazgo abierto o un error de formato: es un criterio de
-  // `keel validate --ready`, como las decisiones no tomadas de los avisos, y ningún diseño lo
-  // tiene todavía. Ponerlo en la puerta de build el primer día la dejaría roja para todos.
+  // `keel validate --ready`, como las decisiones no tomadas de los avisos, y por esa puerta
+  // —no por `ok`— es por donde build se niega (fase 2, salvo --accept-unready).
   const { doc: gapsDoc, errors: gapsErrors } = loadGaps(dir);
   result.gaps = resolveGaps(gapInventory(effectiveLayers), gapsDoc, manifest?.service?.version);
   result.gaps.errors.unshift(...gapsErrors);

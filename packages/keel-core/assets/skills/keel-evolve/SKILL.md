@@ -174,7 +174,10 @@ Reglas de la cascada:
 
 ### 7. Cierre (definition of done)
 
-1. `keel validate specs/<servicio>` en verde, sin `--wip`.
+1. `keel validate --ready specs/<servicio>` en verde: no basta con que valide. La versión nueva caduca
+   la revisión, el análisis de huecos, el registro estructural, el careo y `DESIGN.md`, y el build de
+   refresco del punto 3 **se niega** sobre un diseño que no está listo (salvo `--accept-unready`, que
+   deja constancia de que se generó a sabiendas).
 2. `keel describe <servicio>` **sin ningún derivado desactualizado ni huérfano**. Este es el gate real
    de la skill: si algo sigue en `⚠` o `✘`, la evolución no ha terminado.
 3. Si la evolución fue **minor o major**, avisa explícitamente a quién afecta hacia fuera:

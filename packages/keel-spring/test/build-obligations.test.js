@@ -96,7 +96,9 @@ async function runBuild(workspace, inputPath) {
   process.chdir(workspace);
   process.exitCode = undefined;
   try {
-    await build(inputPath, { defaults: true });
+    // Diseños parciales a propósito (fixtures y esqueletos): desde la fase 2 de la puerta de
+    // «diseño listo», build solo los genera a sabiendas. La puerta en sí la prueba su propio test.
+    await build(inputPath, { defaults: true, acceptUnready: true });
     return { exitCode: process.exitCode, salida: salida.join('\n') };
   } finally {
     process.chdir(cwd);

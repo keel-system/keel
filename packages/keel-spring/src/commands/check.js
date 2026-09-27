@@ -121,8 +121,10 @@ export function check(inputPath, { database = null, strict = false } = {}) {
   }
 
   // 2b — Si el diseño está LISTO, no solo si es generable: la misma checklist que
-  // `keel validate --ready` y que build estampa. Se imprime y NO suma a los avisos: en la
-  // fase 1 del despliegue no bloquea, y contarla haría que --strict apretara sin decirlo.
+  // `keel validate --ready` y que build exige. Desde la fase 2 build se niega sin
+  // --accept-unready, así que check —que predice lo que hará build— sale en ROJO, con o sin
+  // --strict. No suma a `blocking`: la traducción a código de abajo se sigue intentando, porque
+  // sus avisos son justo lo que ayuda a cerrar el diseño.
   const readiness = assessReadiness(dir, { validation });
   heading('Diseño listo para generar');
   if (readiness.ready) {
@@ -133,7 +135,7 @@ export function check(inputPath, { database = null, strict = false } = {}) {
     }
     console.log(
       pc.dim(
-        `  De momento no bloquea ni cuenta para --strict. Detalle: keel validate --ready ${path.relative(workspace, dir).split(path.sep).join('/')}`
+        `  build se negará a generarlo salvo con --accept-unready. Detalle: keel validate --ready ${path.relative(workspace, dir).split(path.sep).join('/')}`
       )
     );
   }
@@ -206,7 +208,9 @@ export function check(inputPath, { database = null, strict = false } = {}) {
       console.log(
         pc.dim(
           `  El build que los produjo partió de un diseño no listo (v${gaps.design.version}, faltaban: ` +
-            `${gaps.design.missing.join(', ')}): pueden ser del diseño y no del método.`
+            `${gaps.design.missing.join(', ')}` +
+            `${gaps.design.acceptedUnready ? '; generado a sabiendas con --accept-unready' : ''}` +
+            `): pueden ser del diseño y no del método.`
         )
       );
     }
@@ -221,6 +225,17 @@ export function check(inputPath, { database = null, strict = false } = {}) {
   heading('Resumen');
   if (blocking > 0) {
     console.log(pc.red(`  ${blocking} bloqueo(s) y ${notices} aviso(s). El diseño todavía no es generable.`));
+    process.exitCode = 1;
+    return;
+  }
+  if (!readiness.ready) {
+    const missing = readiness.criteria.filter((item) => !item.ok).length;
+    console.log(
+      pc.red(
+        `  Generable, pero no listo: faltan ${missing} criterio(s) del cierre y ${notices} aviso(s). ` +
+          'build se negará salvo con --accept-unready.'
+      )
+    );
     process.exitCode = 1;
     return;
   }

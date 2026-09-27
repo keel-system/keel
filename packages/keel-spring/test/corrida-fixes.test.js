@@ -1162,10 +1162,13 @@ test('la cola de la sonda de topología sale del canal EFECTIVO, no del campo cr
   // la JVM y cada clase posterior muere en su @BeforeAll. Con el flag puesto, además,
   // `emptyIfBrokerStopped` da por «canal vacío» cualquier fallo de lectura: las aserciones
   // negativas habrían salido verdes sin mirar nada.
-  const sinCanal = project('notification-mailer', { group: 'com.test', database: 'postgresql', broker: 'snssqs', auth: 'keycloak' })
+  //
+  // El caso lo ponía `notification-mailer` hasta que R9 le declaró canales (el canal es su
+  // contrato de integración); `inspection-reports` publica sin canal y sigue siéndolo.
+  const sinCanal = project('inspection-reports', { group: 'com.test', database: 'mongodb', broker: 'snssqs', auth: null, cache: null, storage: null })
     .file('AbstractFlowIT.java');
 
-  assert.match(sinCanal, /TOPOLOGY_PROBE_QUEUE = "notification-mailer-events"/);
+  assert.match(sinCanal, /TOPOLOGY_PROBE_QUEUE = "inspection-reports-events"/);
   assert.ok(!/TOPOLOGY_PROBE_QUEUE = "(null|undefined)"/.test(sinCanal), 'la sonda leería de una cola inexistente');
 
   // Y donde el diseño SÍ declara canal, sigue siendo ese: la cola de arnés lleva su nombre.
@@ -1289,16 +1292,18 @@ test('y un mensaje que no se enruta deja de pasar por entregado', () => {
 
 test('la topología de la suscripción la declara build aunque no haya descarte', () => {
   // El `return []` por `deadLetter` era el que dejaba la topología huérfana. `notification-mailer`
-  // no declara descarte en su única suscripción, así que build no generaba nada y el agente
-  // montaba la suya con otro nombre de cola — que ni la purga ni la entrega conocían.
-  const generated = project('notification-mailer', { ...RABBIT_PG, auth: 'keycloak' });
+  // no declaraba descarte en su única suscripción, así que build no generaba nada y el agente
+  // montaba la suya con otro nombre de cola — que ni la purga ni la entrega conocían. Desde R9
+  // esa suscripción SÍ tiene descarte, así que el caso lo pone `inspection-reports`, cuya
+  // suscripción no lo declara.
+  const generated = project('inspection-reports', { ...RABBIT_PG, database: 'mongodb' });
   const topology = generated.file('RabbitTopologyConfig.java');
 
   assert.match(topology, /class RabbitTopologyConfig/);
   // El canal del emisor es el EXCHANGE, y la cola es nuestra: lleva delante el nombre del
   // servicio, porque otro consumidor del mismo canal tiene la suya.
-  assert.match(topology, /new TopicExchange\("any-registered-system\.events", true, false\)/);
-  assert.match(topology, /QueueBuilder\.durable\("notification-mailer\.any-registered-system"\)/);
+  assert.match(topology, /new TopicExchange\("staffing\.events", true, false\)/);
+  assert.match(topology, /QueueBuilder\.durable\("inspection-reports\.staffing"\)/);
   assert.match(topology, /BindingBuilder\.bind\(queue\)\.to\(source\)\.with\("#"\)/);
   // Sin descarte declarado no se inventa ninguno.
   assert.ok(!topology.includes('x-dead-letter-exchange'), topology);

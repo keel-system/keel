@@ -14,6 +14,22 @@ types:
     # intermedio, dos ciclos que se solapen mandan dos correos reales.
     values: [accepted, queued, sending, sent, failed]
 
+  # Las variables de un envío, cerradas en el diseño (R9): hasta aquí el correo se renderizaba
+  # con «las variables del envío» y ni la petición ni el evento las traían, y registerTemplate
+  # no dejaba declarar las TemplateVariable — declaredVariables era un contrato sin datos.
+  TemplateVariableDeclaration:
+    description: Una variable que la plantilla declara aceptar, tal como la escribe quien la registra.
+    fields:
+      name: { type: string, required: true, constraints: { maxLength: 64 } }
+      required: { type: boolean, required: true }
+      description: { type: string, constraints: { maxLength: 255 } }
+
+  TemplateVariableValue:
+    description: El valor de una variable de plantilla para un envío concreto.
+    fields:
+      name: { type: string, required: true, constraints: { maxLength: 64 } }
+      value: { type: string, required: true, constraints: { maxLength: 1000 } }
+
   EmailAddress:
     base: string
     description: Dirección de correo, con la longitud que admite el estándar.
@@ -54,7 +70,10 @@ entities:
       active:
         type: boolean
         required: true
-        description: A false, sus envíos se cortan al instante sin revocar credenciales ni desplegar.
+        description: >-
+          A false, sus envíos se cortan al instante sin revocar credenciales ni desplegar. Ninguna
+          operación de esta versión lo pone a false: nace activa y la baja no tiene operación todavía,
+          así que hoy APPLICATION_INACTIVE solo lo ve una credencial que no resuelve a ninguna aplicación.
 
   Template:
     description: Una versión concreta del contenido de un correo, propiedad de una aplicación.
@@ -75,8 +94,10 @@ entities:
         required: true
         constraints: { maxLength: 200 }
         description: Asunto con sus llaves sin procesar, tal cual lo escribió quien lo registró.
-      bodyHtml: { type: text, required: true }
-      bodyText: { type: text, required: true }
+      # Cota de contrato, no de almacén: un correo de más de 100 000 caracteres no lo muestra
+      # bien ningún cliente, y sin ella cada generador elegiría la suya (o ninguna).
+      bodyHtml: { type: text, required: true, constraints: { maxLength: 100000 } }
+      bodyText: { type: text, required: true, constraints: { maxLength: 100000 } }
       publishedAt: { type: timestamp }
     relations:
       application: { entity: Application, cardinality: many-to-one }
@@ -109,8 +130,9 @@ entities:
         type: timestamp
         description: >-
           Cuándo esta ejecución se llevó el envío. Lo estampa el propio reclamo, en la misma
-          escritura que pone el estado en sending: una fila marcada sin instante es una fila
-          que el rescate no encuentra nunca.
+          escritura que pone el estado en sending. Es lo que le dice a quien consulta un envío parado
+          en sending desde cuándo lo está: ningún barrido lo rescata, porque reintentarlo podría
+          mandar dos veces un correo real (aceptado en gaps.yaml, clase 13).
       templateVersion:
         type: int
         required: true
@@ -129,6 +151,13 @@ entities:
         list: true
         description: Direcciones en copia, congeladas con el envío.
         constraints: { maxItems: 10 }
+      variables:
+        type: TemplateVariableValue
+        list: true
+        constraints: { maxItems: 50 }
+        description: >-
+          Congeladas con el envío: el asunto se renderiza al aceptar y el cuerpo al enviar, y los
+          dos tienen que salir de los MISMOS valores aunque pase un ciclo entre medias.
       dedupeKey: { type: string, required: true, constraints: { maxLength: 128 } }
       requestedAt: { type: timestamp, generated: true }
       sentAt: { type: timestamp }

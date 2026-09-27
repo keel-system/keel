@@ -57,7 +57,15 @@ function printSchemaErrors(file, ajvErrors) {
 
 export async function build(
   inputPath,
-  { force = false, defaults = false, check = false, refresh = false, prune = false, telemetry = null } = {}
+  {
+    force = false,
+    defaults = false,
+    check = false,
+    refresh = false,
+    prune = false,
+    telemetry = null,
+    acceptUnready = false
+  } = {}
 ) {
   // Tres modos y no dos banderas sueltas: `check` gana porque no escribir es la promesa
   // más fuerte de las dos, y pedir las dos a la vez es una contradicción que vale más
@@ -213,12 +221,23 @@ export async function build(
   }
 
   // Generable no es lo mismo que LISTO: el cierre del diseño también pide revisión completa,
-  // escenarios, careo y DESIGN.md de esta versión. Fase 1 del despliegue: se avisa y se
-  // ESTAMPA en keel-generated.json, sin bloquear — una puerta que nace roja sobre todos los
-  // diseños que ya existen se aprende a ignorar. Lo que el estampado compra es que una
-  // corrida sobre un diseño a medio cerrar quede marcada como tal.
+  // escenarios, careo y DESIGN.md de esta versión. Fase 2 del despliegue (la 1 solo avisaba y
+  // estampaba): un diseño no listo NO se genera, y la única salida sin cerrarlo es decirlo a
+  // sabiendas con --accept-unready, que queda estampado en keel-generated.json. La fase 2 esperó
+  // a que hubiera un diseño que cruzara la puerta (el par del MVP, test/mvp-ready.test.js):
+  // una puerta que nace roja sobre todos los diseños se aprende a ignorar.
+  //
+  // Vale para todo lo que escribe —también --refresh, porque el snapshot que refresca es el del
+  // diseño de ahora—; --check no escribe y solo informa. Se niega ANTES de tocar nada: ni el
+  // stack, ni el snapshot, ni el proyecto.
   const readiness = assessReadiness(dir, { validation });
-  reportReadiness(readiness, path.relative(workspace, dir).split(path.sep).join('/'));
+  const spec = path.relative(workspace, dir).split(path.sep).join('/');
+  if (!readiness.ready && !acceptUnready && mode !== 'check') {
+    reportReadiness(readiness, spec, 'refuse');
+    process.exitCode = 1;
+    return;
+  }
+  reportReadiness(readiness, spec, mode === 'check' ? 'inform' : 'accepted');
 
   // Stack tecnológico: keel-stack.json del proyecto generado manda; si no
   // existe, cuestionario condicionado por las capas del diseño (o defaults).
@@ -288,7 +307,9 @@ export async function build(
   // diseño cuyo código no depende de la infra puntual elegida (el resto lo
   // escribe el agente con las skills por tecnología). Regeneración segura: sin --force
   // solo se escriben archivos que no existen.
-  const scaffold = scaffoldService({ manifest, layers, workspace, force, stack, mode, prune, readiness });
+  // Solo cuenta como aceptado si de verdad faltaba algo: el flag sobre un diseño listo no dice nada.
+  const acceptedUnready = acceptUnready && !readiness.ready;
+  const scaffold = scaffoldService({ manifest, layers, workspace, force, stack, mode, prune, readiness, acceptedUnready });
   const stackChanged = stackChanges.added.length + stackChanges.removed.length > 0;
   if (stackIsNew || (stackChanged && mode !== 'check')) {
     writeStackConfig(projectDir, scaffold.stack);
@@ -404,23 +425,37 @@ escenarios contra el servidor real y pase de calidad al final.`);
   }
 }
 
-/** Los criterios del cierre que faltan, sin bloquear (fase 1). */
-function reportReadiness(readiness, spec) {
+/**
+ * Los criterios del cierre que faltan. `refuse`: build se niega (fase 2). `accepted`: se genera
+ * igualmente porque se pidió con --accept-unready, y queda estampado. `inform`: --check, que no
+ * escribe y por tanto no tiene nada que negar.
+ */
+function reportReadiness(readiness, spec, how) {
   if (readiness.ready) return;
   const missing = readiness.criteria.filter((entry) => !entry.ok);
-  console.warn();
-  console.warn(
-    pc.bold(pc.yellow(`⚠ Diseño no listo para generar — faltan ${missing.length} criterio(s) del cierre (de momento no bloquea):`))
-  );
+  const refuse = how === 'refuse';
+  const color = refuse ? pc.red : pc.yellow;
+  const print = refuse ? console.error : console.warn;
+  const headline = {
+    refuse: `✘ Diseño no listo para generar — faltan ${missing.length} criterio(s) del cierre:`,
+    accepted: `⚠ Diseño no listo para generar — faltan ${missing.length} criterio(s) del cierre; se genera igualmente (--accept-unready):`,
+    inform: `⚠ Diseño no listo para generar — faltan ${missing.length} criterio(s) del cierre:`
+  }[how];
+  print();
+  print(pc.bold(color(headline)));
   for (const entry of missing) {
-    console.warn(`  ${pc.yellow('•')} ${entry.title} ${pc.dim(`[${entry.id}]`)}${entry.detail ? pc.dim(` — ${entry.detail}`) : ''}`);
+    print(`  ${color('•')} ${entry.title} ${pc.dim(`[${entry.id}]`)}${entry.detail ? pc.dim(` — ${entry.detail}`) : ''}`);
   }
-  console.warn(
-    pc.dim(
-      `  Queda estampado en keel-generated.json: lo que la generación reporte puede ser del diseño y no del método. ` +
-        `Detalle con keel validate --ready ${spec}`
-    )
-  );
+  const closing = {
+    refuse:
+      `  Cierra el diseño (detalle con keel validate --ready ${spec}), o genera a sabiendas con ` +
+      `--accept-unready: quedará estampado en keel-generated.json.`,
+    accepted:
+      `  Queda estampado en keel-generated.json (design.acceptedUnready): lo que la generación reporte puede ser ` +
+      `del diseño y no del método. Detalle con keel validate --ready ${spec}`,
+    inform: `  Un build que escriba se negará salvo con --accept-unready. Detalle con keel validate --ready ${spec}`
+  }[how];
+  print(pc.dim(closing));
 }
 
 /** Lo que el diseñador tiene que saber de esta pasada y no es trabajo del agente. */

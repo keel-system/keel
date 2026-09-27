@@ -32,6 +32,15 @@ serviceClients:
   orders-service-ci:
     description: Pipeline de despliegue de pedidos; solo escribe plantillas.
     scopes: [template:write, template:publish]
+  # El segundo inquilino. No es decorado: es lo único que permite probar que un sistema no ve
+  # ni publica las plantillas y los envíos de otro (autorización a nivel de dato), y que la
+  # identidad sale de la credencial y no del cuerpo.
+  billing-service:
+    description: Facturación; pide envíos de sus facturas y consulta su estado.
+    scopes: [notification:send, notification:read]
+  billing-service-ci:
+    description: Pipeline de despliegue de facturación; solo escribe plantillas.
+    scopes: [template:write, template:publish]
   platform-admin:
     description: >-
       Operación de la plataforma. Es el único que da de alta sistemas consumidores, y por eso

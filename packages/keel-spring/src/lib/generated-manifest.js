@@ -132,8 +132,12 @@ export function nextManifest({
  * Lo que se estampa del veredicto de keel-core: la versión, si estaba listo y los ids de los
  * criterios que faltaban, ordenados. Solo ids —no la redacción— porque se cuentan entre
  * corridas, y una frase retocada no puede partir la serie en dos.
+ *
+ * `acceptedUnready` solo aparece cuando build generó un diseño no listo porque se le pidió con
+ * --accept-unready (fase 2 de la puerta). Es aditivo: un manifiesto anterior sin la clave se sigue
+ * leyendo, y un build normal no la escribe, porque sin el flag un diseño no listo no se genera.
  */
-export function designStamp(readiness) {
+export function designStamp(readiness, { acceptedUnready = false } = {}) {
   if (!readiness?.service) return null;
   return {
     version: readiness.service.version,
@@ -141,6 +145,7 @@ export function designStamp(readiness) {
     missing: readiness.criteria
       .filter((entry) => !entry.ok)
       .map((entry) => entry.id)
-      .sort((a, b) => a.localeCompare(b))
+      .sort((a, b) => a.localeCompare(b)),
+    ...(acceptedUnready && !readiness.ready ? { acceptedUnready: true } : {})
   };
 }

@@ -227,7 +227,8 @@ export function scaffoldService({
   stack = null,
   mode = null,
   prune = false,
-  readiness = null
+  readiness = null,
+  acceptedUnready = false
 }) {
   const { model, stack: resolved, files } = planService({ manifest, layers, workspace, stack });
   const outDir = path.join('services', model.service.projectName);
@@ -311,7 +312,7 @@ export function scaffoldService({
         olvidar: [...(pruned ? [...pruned.borrados, ...pruned.ausentes] : []), ...huerfanosAusentes],
         resueltos: buckets.alDia,
         generator: `keel-spring@${packageVersion()}`,
-        design: designStamp(readiness),
+        design: designStamp(readiness, { acceptedUnready }),
         // Lo escrito en esta pasada, MÁS lo que ya era byte a byte idéntico a lo que el
         // generador emite. Eso último importa para los proyectos que existían antes del
         // mecanismo: adoptarlo TODO los dejaba sin poder refrescar nunca —cada archivo

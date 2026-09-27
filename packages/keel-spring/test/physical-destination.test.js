@@ -29,7 +29,7 @@ const walk = (dir) =>
     .flatMap((entry) => (entry.isDirectory() ? walk(path.join(dir, entry.name)) : [path.join(dir, entry.name)]));
 
 /** El AbstractFlowIT de la fixture, generado para el broker pedido. */
-function harness(fixture, broker) {
+function harness(fixture, broker, database = 'postgresql') {
   const { manifest, layers, errors } = loadService(path.join(fixturesDir, fixture));
   assert.deepEqual(errors, []);
   const workspace = tmpDir('keel-physical-dest-');
@@ -38,7 +38,7 @@ function harness(fixture, broker) {
     layers,
     workspace,
     force: true,
-    stack: { broker, database: 'postgresql' }
+    stack: { broker, database }
   });
   const file = walk(path.join(workspace, result.outDir)).find((f) => f.endsWith('AbstractFlowIT.java'));
   assert.ok(file, 'no se generó el arnés');
@@ -143,9 +143,10 @@ test('en SNS/SQS lo publicado se lee de la cola de arnés, que se llama como el 
 test('sin ninguna suscripción con destino propio, resolver es la identidad y no se emite tabla', () => {
   // La simétrica: donde canal y destino coinciden, una tabla vacía sería ruido — y el
   // punto de resolución tiene que seguir existiendo, o los helpers vuelven a saber de esto.
-  // `notification-mailer` tiene suscripción, pero sin `channel` declarado: el canal ES su
-  // destino y no hay nada que traducir.
-  const source = harness('notification-mailer', 'rabbitmq');
+  // `inspection-reports` tiene suscripción, pero sin `channel` declarado: el canal ES su
+  // destino y no hay nada que traducir. (Lo ponía `notification-mailer` hasta que R9 le declaró
+  // canales, que son su contrato de integración.)
+  const source = harness('inspection-reports', 'rabbitmq', 'mongodb');
 
   assert.ok(!source.includes('PHYSICAL_OF'), 'emite una tabla que no traduce nada');
   assert.match(source, /protected static String physicalDestination\(String destination\) \{\s*return destination;/);

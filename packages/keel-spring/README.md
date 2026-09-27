@@ -14,9 +14,11 @@ keel-spring check specs/<servicio>
 keel-spring check specs/<servicio> --database mysql   # contra el motor que vayas a usar
 keel-spring check specs/<servicio> --strict           # cualquier aviso es rojo: puerta de CI
 
-# 1) en un workspace Keel (keel init), con el diseño terminado:
+# 1) en un workspace Keel (keel init), con el diseño terminado (keel validate --ready en verde):
 keel-spring build specs/<servicio>
 # → comprueba la compatibilidad DSL y ejecuta la validación (schemas + referencias cruzadas)
+# → exige el diseño LISTO: si keel validate --ready sale en rojo, se niega sin escribir nada
+#   (--accept-unready genera igualmente, y queda estampado en keel-generated.json)
 # → cuestionario de stack (BD/broker/auth/cache/storage, solo lo que el diseño necesita) → keel-stack.json
 # → genera services/<servicio>-spring/: scaffolding transversal al stack estilo Spring Initializr
 #   (wrapper de Gradle incluido + infraestructura de prueba en infra/; compila y arranca tal cual),
@@ -32,6 +34,8 @@ cd services/<servicio>-spring
 ```
 
 Para arrancarlo a mano en cualquier momento: `docker compose -f infra/docker-compose.yaml up -d && ./gradlew bootRun`.
+
+**La puerta de «diseño listo».** `build` se niega a generar, **y también a refrescar**, un diseño que no pasa `keel validate --ready`: le falta revisión, análisis de huecos, registro estructural, escenarios con su matriz, careo o `DESIGN.md` de su versión. Si hay que generar igualmente, `--accept-unready` lo permite y lo deja escrito en `keel-generated.json` (`design.acceptedUnready`, junto a los ids que faltaban): lo que reporte esa corrida puede ser del diseño y no del método. `build --check` no escribe, así que solo informa. `keel-spring check` predice ese mismo veredicto: un diseño no listo sale en rojo, con o sin `--strict`.
 
 `build --defaults` (o sin terminal interactiva) omite el cuestionario con los defaults (PostgreSQL, Kafka, Keycloak, Redis). `build` es idempotente y de regeneración segura: no sobrescribe el código ya implementado por el agente salvo con `--force`; el stack persistido en `keel-stack.json` se reutiliza sin repreguntar, y los snapshots de `specs/` y `docs/` se refrescan siempre.
 

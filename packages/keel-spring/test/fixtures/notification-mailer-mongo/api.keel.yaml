@@ -15,7 +15,13 @@ endpoints:
     # Declarado, no supuesto: un PUT que CREA una versión nueva responde 201, y build no
     # puede adivinarlo — sin esto asumía 200 y el escenario que exigía 201 fallaba.
     successStatus: 201
-  publishTemplate: { method: POST, path: "/templates/{templateId}/publish" }
+  publishTemplate:
+    method: POST
+    path: "/templates/{templateId}/publish"
+    # Decidido, no heredado de la heurística del nombre: publicar es una TRANSICIÓN de una
+    # plantilla que ya existe, no el alta de un recurso — no hay Location que devolver. 200 con
+    # la versión ya activa en el cuerpo.
+    successStatus: 200
   requestNotification:
     method: POST
     path: "/notifications"

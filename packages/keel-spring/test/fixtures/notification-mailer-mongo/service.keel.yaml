@@ -4,6 +4,10 @@ service:
   version: 1.0.0
   description: Envía correo transaccional por cuenta de los sistemas consumidores, a partir de plantillas que viven en su propia base de datos.
   domain: platform
+# Un campo sin valor VIAJA como null, en las respuestas y en los eventos: el cliente distingue
+# «no hay» de «no lo mandaron» sin conocer el esquema. Es el default, escrito para que conste.
+conventions:
+  nulls: include
 layers:
   domain: domain.keel.yaml
   use-cases: use-cases.keel.yaml

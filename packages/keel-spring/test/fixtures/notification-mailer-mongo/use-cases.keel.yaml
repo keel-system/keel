@@ -34,19 +34,29 @@ operations:
     kind: command
     input:
       fields:
+        applicationKey:
+          type: string
+          required: true
+          constraints: { maxLength: 64 }
+          description: >-
+            Sale del token, nunca de la petición: acota la plantilla a la aplicación que la publica.
         templateId: { type: uuid, required: true }
     output: { entity: Template }
     transitions:
       - { entity: Template, from: [draft], to: active }
       - { entity: Template, from: [active], to: retired, description: La versión que estaba activa se retira en el mismo acto. }
     preconditions:
-      - La plantilla existe.
+      - La plantilla existe y es de la aplicación del llamante.
       - Y está en borrador.
     rules:
       - Publicar una versión retira la que estuviera activa para esa clave e idioma.
+      - La fecha de publicación (publishedAt) se estampa al pasar a active y no cambia al retirarse, porque dice cuándo empezó a usarse.
       - Como máximo hay una versión activa por aplicación, clave e idioma.
+      - >-
+        Una plantilla de otra aplicación responde igual que una que no existe: decir que existe
+        pero no es tuya le cuenta a un inquilino qué identificadores tiene otro.
     errors:
-      - { code: TEMPLATE_NOT_FOUND, when: No existe ninguna plantilla con ese identificador., http: 404 }
+      - { code: TEMPLATE_NOT_FOUND, when: No existe ninguna plantilla con ese identificador para la aplicación del llamante., http: 404 }
       - { code: TEMPLATE_ALREADY_ACTIVE, when: Ya hay otra versión activa para esa clave e idioma., http: 409 }
       - { code: CONCURRENT_MODIFICATION, when: Otra publicación modificó la misma plantilla a la vez., http: 409 }
 
@@ -66,17 +76,35 @@ operations:
         templateKey: { type: string, required: true, constraints: { maxLength: 64 } }
         locale: { type: string, required: true, constraints: { maxLength: 10 } }
         subject: { type: string, required: true, constraints: { maxLength: 200 } }
-        bodyHtml: { type: text, required: true }
-        bodyText: { type: text, required: true }
+        bodyHtml: { type: text, required: true, constraints: { maxLength: 100000 } }
+        bodyText: { type: text, required: true, constraints: { maxLength: 100000 } }
+        variables:
+          type: TemplateVariableDeclaration
+          list: true
+          constraints: { maxItems: 50 }
+          description: Las variables que el asunto y los cuerpos usan; una plantilla sin variables las omite.
     output: { entity: Template }
     preconditions:
       - La aplicación del token está registrada y activa.
     rules:
       - Nace en borrador — registrar una plantilla no la pone delante de nadie.
       - La versión es la siguiente de esa aplicación, clave e idioma.
+      - Cada variable declarada se guarda como TemplateVariable de esta versión.
+      - Dos variables de la misma versión no pueden llamarse igual.
+      - >-
+        El asunto y los dos cuerpos se compilan al registrar: una plantilla que no compila no se
+        guarda. Descubrirlo al enviar sería tarde y por un camino sin error declarado, con el envío
+        ya aceptado.
+      - >-
+        No se contrasta que las llaves del asunto y de los cuerpos coincidan con las variables
+        declaradas: el motor es Handlebars sin expresiones y una llave sin variable se renderiza
+        vacía. La defensa contra «Tu pedido por  € está confirmado» es declarar la variable como
+        requerida, que sí se valida en cada envío.
     errors:
-      - { code: TEMPLATE_VERSION_ALREADY_EXISTS, when: Otra petición registró esa misma versión a la vez., http: 409 }
       - { code: APPLICATION_INACTIVE, when: La aplicación del token está dada de baja o no existe., http: 403 }
+      - { code: TEMPLATE_SYNTAX_INVALID, when: El asunto o alguno de los cuerpos no compila como plantilla., http: 422 }
+      - { code: TEMPLATE_VARIABLE_DUPLICATED, when: Dos variables declaradas en la misma versión tienen el mismo nombre., http: 422 }
+      - { code: TEMPLATE_VERSION_ALREADY_EXISTS, when: Otra petición registró esa misma versión a la vez., http: 409 }
 
   requestNotification:
     description: Acepta una petición de envío, la registra y devuelve su identificador.
@@ -98,6 +126,11 @@ operations:
           list: true
           constraints: { maxItems: 10 }
           description: Direcciones en copia. Se congelan con el envío, igual que el destinatario.
+        variables:
+          type: TemplateVariableValue
+          list: true
+          constraints: { maxItems: 50 }
+          description: Los valores de las variables de la plantilla para este envío.
     output:
       fields:
         notificationId: { type: uuid }
@@ -110,6 +143,12 @@ operations:
     rules:
       - La versión de plantilla y el asunto ya interpolado se congelan en la notificación.
       - Si la petición omite el idioma, se usa el `defaultLocale` de la aplicación.
+      - Toda variable que la plantilla declara como requerida llega con valor.
+      - Las variables que la plantilla no declara se ignoran y no se congelan.
+      - >-
+        `dedupeKey` es la `Idempotency-Key` de la petición. Sin cabecera es el propio id del envío:
+        cada petición sin clave es un envío distinto, que es justo lo que se aceptó en
+        OBL-IDEM-KEY-REQUIRED.
       - Dos peticiones con la misma clave de idempotencia producen una sola notificación.
       - >-
         La `naturalKey` de Notification es el RESPALDO de esa garantía, no su mecanismo: quien
@@ -117,10 +156,11 @@ operations:
         negocio. Por eso no se declara un `code` para su violación — si llegara a saltar, sería
         un fallo del mecanismo, no un desenlace que el cliente deba distinguir.
     errors:
-      - { code: TEMPLATE_NOT_FOUND, when: No hay plantilla activa con esa clave e idioma para esta aplicación., http: 422 }
-      - { code: APPLICATION_INACTIVE, when: La aplicación está dada de baja., http: 403 }
       - { code: IDEMPOTENCY_KEY_IN_PROGRESS, when: Otra petición con la misma clave se está atendiendo ahora mismo., http: 409 }
       - { code: IDEMPOTENCY_KEY_REUSED, when: La misma clave llega con un contenido distinto., http: 409 }
+      - { code: APPLICATION_INACTIVE, when: La aplicación está dada de baja o no existe., http: 403 }
+      - { code: TEMPLATE_NOT_FOUND, when: No hay plantilla activa con esa clave e idioma para esta aplicación., http: 422 }
+      - { code: TEMPLATE_VARIABLE_MISSING, when: Falta el valor de una variable que la plantilla declara como requerida., http: 422 }
 
   acceptNotificationRequest:
     description: Atiende una petición de envío llegada por el canal genérico de eventos.
@@ -136,15 +176,28 @@ operations:
         templateKey: { type: string, required: true, constraints: { maxLength: 64 } }
         locale: { type: string, constraints: { maxLength: 10 } }
         recipient: { type: string, required: true, constraints: { maxLength: 320 } }
+        variables:
+          type: TemplateVariableValue
+          list: true
+          constraints: { maxItems: 50 }
+          description: Los valores de las variables, tal como llegan en el payload del mensaje.
     output: { entity: Notification }
     preconditions:
       - La aplicación que publicó el mensaje está registrada y activa.
     rules:
       - Un mensaje reentregado no produce una segunda notificación.
+      - '`dedupeKey` es el `metadata.eventId` de la envoltura: el que se repite intacto en cada reentrega.'
       - Un mensaje de una aplicación desconocida se descarta sin reintentar.
+      - >-
+        El emisor que nombra la envoltura (metadata.source) es el nombre del servicio que publica, y
+        se resuelve IGUAL que la credencial por HTTP: es uno de los `credentialKeys` de la
+        aplicación. Resolverlo contra `key` haría que el mismo sistema fuera una aplicación por una
+        puerta y ninguna por la otra.
       - Registrar no es enviar; el correo lo manda sendAcceptedNotification.
+      - Las variables se validan igual que por HTTP; un mensaje rechazado no se reintenta y va a la cola de descarte.
     errors:
       - { code: TEMPLATE_NOT_FOUND, when: No hay plantilla activa con esa clave e idioma para esta aplicación., http: 422 }
+      - { code: TEMPLATE_VARIABLE_MISSING, when: Falta el valor de una variable que la plantilla declara como requerida., http: 422 }
 
   queueAcceptedNotifications:
     description: Toma un lote de notificaciones aceptadas y encarga su envío una por una.
@@ -191,14 +244,19 @@ operations:
         el commit final — que cae DESPUÉS del envío. Una caída en medio revierte la marca y
         el ciclo siguiente manda un segundo correo real.
       - Quien pierde la carrera del reclamo no envía nada y termina sin error.
+      - La fecha de envío (sentAt) se estampa al pasar a sent; en failed queda nulo.
+      - NotificationSent se emite solo al pasar a sent. Un envío failed no emite nada.
       - >-
         Si el relay RECHAZA el mensaje, el envío queda en failed en esta misma operación: es el
         único fallo de entrega que este servicio puede observar. Un rebote posterior —el relay
         acepta y el destino devuelve el correo horas después— llega por un canal que este diseño
         NO declara, así que queda explícitamente fuera de alcance.
+      - >-
+        El cuerpo se renderiza con la versión CONGELADA en el envío aunque ya esté retirada: ninguna
+        operación borra versiones, así que siempre está. Por eso no hay error de «plantilla no
+        disponible» aquí: declararlo sería prometer un desenlace que ningún camino produce.
     errors:
       - { code: NOTIFICATION_NOT_FOUND, when: No existe un envío con ese identificador., http: 404 }
-      - { code: TEMPLATE_NOT_FOUND, when: La plantilla con la que se congeló el envío ya no está disponible para renderizar su cuerpo., http: 422 }
     emits: [NotificationSent]
 
   getTemplate:
@@ -206,17 +264,33 @@ operations:
     kind: query
     input:
       fields:
+        applicationKey:
+          type: string
+          required: true
+          constraints: { maxLength: 64 }
+          description: >-
+            Sale del token, nunca de la petición: solo se ven las plantillas propias.
         templateId: { type: uuid, required: true }
     output: { entity: Template }
+    rules:
+      - Una plantilla de otra aplicación responde igual que una que no existe.
     errors:
-      - { code: TEMPLATE_NOT_FOUND, when: No existe ninguna plantilla con ese identificador., http: 404 }
+      - { code: TEMPLATE_NOT_FOUND, when: No existe ninguna plantilla con ese identificador para la aplicación del llamante., http: 404 }
 
   getNotification:
     description: Devuelve el estado de un envío para quien no escucha eventos.
     kind: query
     input:
       fields:
+        applicationKey:
+          type: string
+          required: true
+          constraints: { maxLength: 64 }
+          description: >-
+            Sale del token, nunca de la petición: solo se ven los envíos propios.
         notificationId: { type: uuid, required: true }
     output: { entity: Notification }
+    rules:
+      - Un envío de otra aplicación responde igual que uno que no existe.
     errors:
-      - { code: NOTIFICATION_NOT_FOUND, when: No existe un envío con ese identificador., http: 404 }
+      - { code: NOTIFICATION_NOT_FOUND, when: No existe un envío con ese identificador para la aplicación del llamante., http: 404 }

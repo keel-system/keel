@@ -26,7 +26,7 @@ El paso 1 existe porque **el stack lo elige el diseñador a mano** (BD, broker, 
 
 ## Qué genera `keel-<tech> build`
 
-`build` se ejecuta desde el workspace (verifica que lo es), comprueba la compatibilidad de versión DSL del manifiesto, aplica su chequeo de frontera (ver `supported-features.js` más abajo), ejecuta la validación mecánica (`keel validate`, sin `--wip`) — si el diseño no es generable, lo reporta y se detiene —, pregunta el stack y escribe **todo** en `services/<servicio>-<tech>/`:
+`build` se ejecuta desde el workspace (verifica que lo es), comprueba la compatibilidad de versión DSL del manifiesto, aplica su chequeo de frontera (ver `supported-features.js` más abajo), ejecuta la validación mecánica (`keel validate`, sin `--wip`) — si el diseño no es generable, lo reporta y se detiene —, exige que el diseño esté **listo** (`assessReadiness` de keel-core, el mismo veredicto que `keel validate --ready`: si no lo está, se niega **antes de escribir nada**, salvo que se le pida a sabiendas con `--accept-unready`, y en ese caso lo estampa en el manifiesto del proyecto junto a los ids de los criterios que faltaban; `--check` no escribe y solo informa), pregunta el stack y escribe **todo** en `services/<servicio>-<tech>/`:
 
 ```
 services/<servicio>-<tech>/
