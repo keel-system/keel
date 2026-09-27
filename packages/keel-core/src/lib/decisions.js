@@ -70,7 +70,7 @@ export function loadDecisions(dir) {
 // número sin leer, que es exactamente el hábito que este archivo existe para romper. Un cambio
 // de minor sí toca la forma del diseño, y entonces la asunción que sostenía la aceptación puede
 // haber dejado de ser cierta.
-function shape(version) {
+export function versionShape(version) {
   const [major, minor] = String(version ?? '').split('.');
   return `${major}.${minor}`;
 }
@@ -127,7 +127,7 @@ export function resolveObligations(raised, doc, serviceVersion) {
       result.open.push(item);
       continue;
     }
-    if (shape(entry.since) !== shape(serviceVersion)) {
+    if (versionShape(entry.since) !== versionShape(serviceVersion)) {
       result.stale.push({ ...item, since: entry.since, reason: entry.reason });
       continue;
     }
@@ -207,7 +207,7 @@ export function resolveUndecided(findings, doc, serviceVersion) {
       result.open.push(item);
       continue;
     }
-    if (shape(entry.since) !== shape(serviceVersion)) {
+    if (versionShape(entry.since) !== versionShape(serviceVersion)) {
       result.stale.push({ ...item, since: entry.since, reason: entry.reason });
       continue;
     }

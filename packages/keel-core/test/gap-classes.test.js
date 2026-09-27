@@ -72,7 +72,16 @@ test('las unidades salen del diseño, con la forma con la que se escriben en gap
   assert.deepEqual(unitsOf(inventory, 13), ['purgeOrders']);
   assert.deepEqual(unitsOf(inventory, 14), ['Order']);
   assert.deepEqual(unitsOf(inventory, 15), ['placeOrder', 'listOrders'], 'las internas no tienen superficie HTTP');
-  assert.deepEqual(unitsOf(inventory, 16), ['3.1', '3.2', '3.3', '3.4', '3.5', '3.7', '3.8', '3.9']);
+  assert.deepEqual(unitsOf(inventory, 16), ['3.1', '3.2', '3.3', '3.4', '3.5', '3.7', '3.8', '3.9', '3.9b']);
+});
+
+test('la clase 16 incluye la auditoría y la compensación, que también son entradas del catálogo', () => {
+  // Faltaban en el inventario: la clase 16 no preguntaba quién decidió el rastro de auditoría ni la
+  // compensación, y el registro estructural (decisions.yaml → structural) hereda este inventario.
+  const conCompensacion = { ...layers(), dependencies: { dependencies: { ledger: { compensations: [{ onEvent: 'X' }] } } } };
+  assert.ok(unitsOf(gapInventory(conCompensacion), 16).includes('3.11'));
+  const sinPersistencia = { ...layers(), persistence: undefined };
+  assert.ok(!unitsOf(gapInventory(sinPersistencia), 16).includes('3.9b'));
 });
 
 test('una clase sin unidades no aplica: el disparador y el inventario son la misma pregunta', () => {

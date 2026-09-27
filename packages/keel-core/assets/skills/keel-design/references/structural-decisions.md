@@ -36,9 +36,12 @@ Vale igual para las doce entradas:
 3. **Nunca escribas la decisión en silencio**, ni siquiera cuando el diseñador vaya a decir que sí.
    Escribir primero y contarlo después no es preguntar.
 4. **Si elige lo contrario a tu recomendación, acata sin insistir.** Una réplica está bien; dos son
-   presión. Anota la elección y la alternativa descartada como rationale para `/keel-handoff`.
-5. **Si no puede decidir ahora, márcalo pendiente explícito** y enumera esos pendientes en el cierre
-   de sesión. Un default tácito no es una decisión: es una decisión tomada por ti sin decirlo.
+   presión. Anota la elección, la alternativa descartada y el porqué en `decisions.yaml` → `structural:`
+   (formato en `/keel-design` paso 3): es lo que lee `/keel-handoff`, lo que audita la clase 16 y lo
+   que exige el criterio `structural` de `keel validate --ready`.
+5. **Si no puede decidir ahora, déjalo pendiente explícito**: sin entrada en `structural:`, que es
+   como `--ready` lo sigue listando, y enuméralo en el cierre de sesión. Un default tácito no es una
+   decisión: es una decisión tomada por ti sin decirlo.
 
 Las entradas cuyo campo tiene default en el schema (§3.1, §3.9, §3.9b, §3.10) tienen además un
 rastro mecánico: si el campo **no está escrito**, `keel validate` emite `CHK-MODEL-IMPLICIT-DEFAULT`
@@ -398,5 +401,5 @@ compensación es qué hacemos con el encargo que **sí salió** y luego dejó de
 - [ ] `optimisticLocking` se eligió con la contención de las escrituras delante, no se heredó del default.
 - [ ] `audit.timestamps` y `audit.authorship` se preguntaron: si el rastro es parte del contrato es `declared` (campos en `domain`), no `all`.
 - [ ] Ningún `CHK-MODEL-IMPLICIT-DEFAULT` abierto, y cada campo que lo cerró se escribió **tras** preguntar, no para callar el aviso.
-- [ ] Cada capa cerró con su **registro de decisiones estructurales** (elección, porqué, alternativa descartada): es lo que la clase 16 del análisis de huecos audita, y sin él ese barrido se hace contra la memoria.
+- [ ] Cada capa cerró con su **registro de decisiones estructurales** escrito en `decisions.yaml` → `structural:` (elección, alternativa descartada, porqué): es lo que la clase 16 del análisis de huecos audita y lo que lee `/keel-handoff`. El criterio `structural` de `keel validate --ready` está en verde, o lo que falta son pendientes reales.
 - [ ] Los pendientes estructurales están enumerados en el cierre de sesión, con nombre de operación o capa.

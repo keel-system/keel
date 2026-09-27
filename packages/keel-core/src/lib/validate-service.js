@@ -9,6 +9,7 @@ import { loadReviews, resolveReviews } from './review-state.js';
 import { applicableReviews } from './reviews.js';
 import { gapInventory } from './gap-classes.js';
 import { loadGaps, resolveGaps, emptyGaps } from './gaps-state.js';
+import { resolveStructural, emptyStructural } from './structural-register.js';
 import { SCENARIOS_FILE } from './spec-files.js';
 import { checkFor } from './checks.js';
 import { checkDerivedCoherence } from './derived-coherence.js';
@@ -113,7 +114,8 @@ export function validateService(dir, { wip = false } = {}) {
     obligations: { open: [], accepted: [], stale: [], orphans: [], errors: [] },
     undecided: { open: [], accepted: [], stale: [], orphans: [], errors: [] },
     reviews: { covered: [], missing: [], open: [], accepted: [], stale: false, reviewedAt: null, orphans: [], errors: [] },
-    gaps: emptyGaps()
+    gaps: emptyGaps(),
+    structural: emptyStructural()
   };
 
   const { manifest, layers, errors: loadErrors } = loadService(dir);
@@ -241,6 +243,10 @@ export function validateService(dir, { wip = false } = {}) {
   const { doc: gapsDoc, errors: gapsErrors } = loadGaps(dir);
   result.gaps = resolveGaps(gapInventory(effectiveLayers), gapsDoc, manifest?.service?.version);
   result.gaps.errors.unshift(...gapsErrors);
+
+  // Capa 6: el registro de decisiones estructurales (decisions.yaml → structural), cruzado con las
+  // secciones del catálogo que aplican. Tampoco toca `ok`: es el criterio `structural` de --ready.
+  result.structural = resolveStructural(doc, effectiveLayers, manifest?.service?.version);
 
   result.ok = errors.length === 0 && (wip || (!obligationsBlock && !reviewsBlock));
   return result;

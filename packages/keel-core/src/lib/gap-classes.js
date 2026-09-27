@@ -90,7 +90,9 @@ function structuralEntries(layers) {
     ['3.7', () => Boolean(layers.persistence)],
     ['3.8', () => opsWhere(layers, (op) => op.kind === 'query' && (op.output?.list || op.output?.paginated)).length > 0],
     ['3.9', () => Boolean(layers.persistence) && commands(layers).length > 0],
-    ['3.10', () => Boolean(layers.storage)]
+    ['3.9b', () => Boolean(layers.persistence)],
+    ['3.10', () => Boolean(layers.storage)],
+    ['3.11', () => values(layers.dependencies?.dependencies).some((dep) => (dep.compensations ?? []).length > 0)]
   ];
   return entries.filter(([, condition]) => has(condition)).map(([section]) => section);
 }

@@ -12,8 +12,8 @@ Recorre los artefactos y construye la lista de obligaciones. Es un borrador de t
 
 | Fuente | Obligación |
 |---|---|
-| `use-cases.operations` | una fila de matriz por operación |
-| `operations[].errors[]` | una aserción por `code`, con su status |
+| `use-cases.operations` | una fila de matriz por operación, que cita los `FL-` que la ejercitan (nunca `todos` ni la celda vacía) |
+| `operations[].errors[]` | una aserción por `code`, con su status, **dentro de un escenario `FL-`** (nombrarlo en una nota o en la matriz no lo provoca) |
 | `operations[].preconditions/rules` | un orden de evaluación por command, más un escenario de precedencia si hay ≥2 errores |
 | `operations[].emits[]` | una aserción de evento (nombre + payload + canal) |
 | `operations[].idempotency` | **dos**: el reintento secuencial con la misma clave (mismo status, mismo cuerpo, sin segundo efecto) + una **carrera** de dos peticiones con la misma clave a la vez, cuyo `Then` es disyunción cerrada (respuesta reproducida o `409` de clave en curso) **más un conteo por la API que afirma un solo recurso** |

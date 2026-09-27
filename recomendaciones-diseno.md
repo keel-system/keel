@@ -164,6 +164,12 @@ Dos piezas, de menor a mayor:
 > Una interacción que conviene saber: escribir `optimisticLocking: all` o `declared` abre `OBL-CONCURRENCY-CODE`, que bloquea build. Esa obligación solo se exige cuando el diseño se ha pronunciado, así que cerrar este aviso con el valor por defecto no sale gratis. Es coherente: decidido el bloqueo, el `code` del 409 es la pregunta siguiente. Por eso `metering-digest`, la fixture sin avisos que usa `check.test.js`, escribe los dos campos y acepta el código canónico en su `decisions.yaml`.
 >
 > Medición sobre las 11 fixtures: **17 decisiones abiertas nuevas en `--ready`**. `authorship` falta en 9, `optimisticLocking` en 5 y `timestamps` en 3. Antes de cerrar `metering-digest` eran 19, con `authorship` en 10 de 11: es el default que más se queda sin preguntar. `ok` no cambia en ninguna.
+>
+> **Estado de R4.2 (2026-09-27): hecho**, con un lector mecánico que la recomendación no pedía. `decisions.yaml` admite una sección `structural:`: por cada entrada, `section` (§3.x), `scope` opcional, `chosen`, `discarded`, `reason` y `since`. `/keel-design` la escribe al cerrar cada capa, en lugar del bloque del chat, y `/keel-handoff` la lee: solo pregunta por lo que falta y confirma lo caducado. La auditoría de la clase 16 se hace contra ella y no contra la memoria de la sesión. El lector es el criterio nuevo `structural` de `--ready` (`src/lib/structural-register.js`). Exige una entrada vigente por cada sección que aplica, con el mismo inventario que la clase 16, y cuando `scope` nombra un campo del catálogo compara `chosen` con el YAML; si el campo no está escrito, lo compara con el default del schema. Sin ese lector, el registro corría el riesgo de acabar como la cobertura del análisis de huecos, que se persistió dos veces sin que nadie la leyera. El grano es por sección §3.x (6–9 entradas en un diseño típico), no por unidad, para que cerrar el criterio no cueste más que tomar la decisión. Verificado de punta a punta: sobre una copia de `stock-reservation`, el criterio sale en rojo con 0/9 secciones, en verde con el registro y otra vez en rojo al contradecir `reliability: outbox`; un `keel new --from` deja las 9 entradas caducadas.
+>
+> Al verificar la recomendación salieron dos matices:
+> - **El inventario de la clase 16 no incluía §3.9b (auditoría) ni §3.11 (compensación)**, aunque los dos están en el catálogo. Se añadieron a `gap-classes.js` y a la tabla de `gap-analysis.md`. Ninguna fixture tenía la clase 16 en `gaps.yaml`, así que el cambio no deja barridos huérfanos.
+> - **`decisions.yaml` cambia de naturaleza**: hasta ahora era «lo que se decidió **no** declarar» y ahora guarda también el porqué de lo que **sí** se declaró. Lo recoge la `description` del schema. Viaja al derivar y llega caducado, que es lo correcto: el derivado reafirma, pero parte del porqué del origen.
 
 ---
 
@@ -196,6 +202,8 @@ La misma disciplina que ya funciona en keel-spring, aplicada al diseño:
 - Pero `assessReadiness` exige lo **estructural**: toda operación con fila en la matriz y todo `code` declarado provocado por algún escenario. Sale de `parseCoverageMatrix` y del troceador de `scenario-blocks.js`, que ya son la fuente única.
 - Lo que se valida es la matriz, no la prosa, así que no viola la regla de «no subir a error lo que lee prosa»: la matriz es la parte que la regla ya reconoce como markdown estructurado. Y como `--ready` es un nivel nuevo, no rompe nada existente.
 
+> **Estado (2026-09-27): hecho.** El criterio `coverage-matrix` ya había entrado con R1, así que lo que hizo R7 fue que **midiera lo que dice medir**. Dos mutaciones sobre el base del corpus salían en silencio: (1) una fila con la operación y **sin ningún `FL-`** (`| listTickets | todos |`) pasaba por `MISSING-OP` —la fila existe— y por `DANGLING-FL` —no hay flujo que pueda colgar—; y (2) `CHK-SCEN-ERROR-UNCOVERED` buscaba el code con `includes` en **todo** el documento, así que lo daba por provocado si aparecía en una nota de pendientes, en la matriz o dentro de otro code más largo. Ahora hay un id nuevo, `CHK-SCEN-MATRIX-EMPTY-ROW`, que entra en el criterio, y el code se busca como token entero en el cuerpo de los escenarios (`scenarioBody`, que no arrastra la prosa de la sección siguiente). Los dos siguen siendo aviso. Cada uno tiene su mutación (`M-SCEN-MATRIX-EMPTY-ROW`, `M-SCEN-ERROR-ONLY-IN-NOTE`) y `design-matrix` da 133 falsados, 1 co-disparado (el de siempre) y 5 fuera de alcance. En las fixtures destapó un hueco real: la fila `getReservation | todos` de `stock-reservation`, operación que no nombra ningún flujo. Queda fuera, a propósito, comprobar que el `FL-` citado ejercita de verdad su operación: eso es prosa y le toca al careo.
+
 ---
 
 ### R8. Cerrar el ciclo corrida → diseño con una métrica · transversal
@@ -226,8 +234,8 @@ La misma disciplina que ya funciona en keel-spring, aplicada al diseño:
 | 4 | R5: migrar los 80 avisos anónimos — **hecho** (eran 77) | D5 | 1–2 semanas | 2, 3 | `ANONIMOS_MAXIMOS.warnings = 0` |
 | 5 | R4.1: `CHK-MODEL-IMPLICIT-DEFAULT` — **hecho** | D4 | días | 2 | ningún default estructural por omisión (17 abiertos en las fixtures) |
 | 6 | R3: `gaps.yaml` — **hecho** | D3 | 1–2 semanas | 1 | análisis auditable, retomable y con caducidad: criterio `gaps` de `--ready` |
-| 7 | R7: matriz de escenarios en `--ready` | D7 | días | 1 | ningún `code` sin escenario llega a build |
-| 8 | R4.2: `structural:` en `decisions.yaml` + `/keel-handoff` que lo lee | D4 | días | 5 | `DESIGN.md` sin reconstrucción de memoria |
+| 7 | R7: matriz de escenarios en `--ready` — **hecho** (el criterio nació con R1; R7 cerró su fidelidad) | D7 | días | 1 | ningún `code` sin escenario llega a build **sin quedar estampado**; el veto es el paso 10 |
+| 8 | R4.2: `structural:` en `decisions.yaml` + `/keel-handoff` que lo lee — **hecho** (más el criterio `structural` de `--ready`) | D4 | días | 5 | `DESIGN.md` sin reconstrucción de memoria; el registro se exige en `--ready` |
 | 9 | R9: par del MVP en `--ready` | validación | días | 1–7 | ejemplo canónico cerrado de punta a punta |
 | 10 | R1 fase 2: `build` se niega sin `--accept-unready` | D1 | horas | 9 | la puerta aprieta |
 | — | R8: métrica de reproceso | transversal | continuo | 1 | tendencia medible entre corridas |

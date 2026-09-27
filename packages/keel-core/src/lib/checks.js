@@ -781,11 +781,18 @@ export const CHECKS = {
     title: 'la matriz cita un flujo que ningún escenario define',
     closes: 'escribir el escenario, o corregir el id en la matriz'
   },
+  'CHK-SCEN-MATRIX-EMPTY-ROW': {
+    layer: 'validation-scenarios',
+    severity: 'warning',
+    nature: 'incoherence',
+    title: 'una fila de la matriz no cita ningún flujo',
+    closes: 'citar los FL- que la ejercitan, o escribir el flujo que falta'
+  },
   'CHK-SCEN-ERROR-UNCOVERED': {
     layer: 'validation-scenarios',
     severity: 'warning',
     nature: 'incoherence',
-    title: 'un `error` declarado no aparece en ningún escenario',
+    title: 'un `error` declarado no aparece en ningún escenario `FL-`',
     closes: 'un caso borde que lo provoque, con su code y su status'
   },
   'CHK-SCEN-UNOBSERVABLE-RETRY': {

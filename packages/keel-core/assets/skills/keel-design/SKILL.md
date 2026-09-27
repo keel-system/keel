@@ -59,17 +59,29 @@ El catálogo completo —doce entradas, con sus ejes de decisión, sus consecuen
 
    En cada capa opcional pregunta explícitamente si aplica; si no, **no crees el artefacto** ni lo declares en `layers`. Al crear una capa opcional: copia `templates/service/<capa>.keel.yaml` y declárala en el manifiesto.
 
-   **Registro de decisiones estructurales.** Al cerrar cada capa, junto a la aprobación, emite un bloque con las entradas del catálogo que se resolvieron en ella — una línea por decisión, con este formato:
+   **Registro de decisiones estructurales.** Al cerrar cada capa, junto a la aprobación, **escribe** en `specs/<servicio>/decisions.yaml`, bajo `structural:`, las entradas del catálogo que se resolvieron en ella — una por decisión, con la sección, lo elegido, lo descartado y el porqué:
 
-   ```
-   Decisiones estructurales — messaging
-   - §3.1 fiabilidad de publicación: `outbox`. Se preguntó qué pasa si la transacción
-     confirma con el broker caído; el diseñador no acepta perder el evento de facturación.
-     Descartado: `best-effort` (reconciliación nocturna, no la hay).
-   - §3.5 política de fallo de `PriceChanged`: `retry` 3 + `deadLetter`. Descartado: solo retry.
+   ```yaml
+   structural:
+     - section: '3.1'                          # entre comillas: 3.10 sin ellas es el número 3.1
+       scope: messaging.publishing.reliability # opcional: la unidad, si la decisión cambia por unidad
+       chosen: outbox                          # si es un campo, tal como está escrito en el DSL
+       discarded: best-effort
+       reason: >-
+         Se preguntó qué pasa si la transacción confirma con el broker caído; el diseñador no
+         acepta perder el evento de facturación, y no hay reconciliación nocturna que lo recupere.
+       since: 1.0.0                            # la service.version en la que se decidió
+     - section: '3.5'
+       scope: messaging.subscriptions.PriceChanged
+       chosen: retry 3 + deadLetter
+       discarded: solo retry
+       reason: Un precio perdido deja el catálogo desalineado sin que nadie lo vea; hay que poder reinyectarlo.
+       since: 1.0.0
    ```
 
-   No es trabajo nuevo: es el mismo rationale que `/keel-handoff` pedirá en el paso 6, capturado cuando está fresco en vez de reconstruido al final. Y es el sustrato contra el que la clase 16 del análisis de huecos comprueba **quién** decidió cada cosa: sin él, ese barrido se hace contra la memoria de una sesión larga, que no es evidencia. Si una decisión quedó sin cerrar, la línea lo dice (`pendiente:`) y se arrastra al cierre de sesión.
+   Al usuario muéstrale el resumen de lo que escribiste, no un bloque aparte: el archivo **sustituye** al bloque del chat, no lo duplica. Como mínimo hace falta una entrada por cada sección § 3.x que aplica al diseño; `keel validate --ready` las deriva, lista las que faltan (criterio `structural`) y compara `chosen` con el YAML cuando `scope` nombra un campo del catálogo, así que un registro que contradice al diseño sale en rojo.
+
+   No es trabajo nuevo: es el mismo rationale que `/keel-handoff` pedirá en el paso 6, capturado cuando está fresco en vez de reconstruido al final — y ahora `/keel-handoff` lo **lee** de aquí. Es también el sustrato contra el que la clase 16 del análisis de huecos comprueba **quién** decidió cada cosa: escrito en disco sobrevive a un `/clear` y a una compactación, que la memoria de una sesión larga no. Si una decisión quedó sin cerrar, **no la escribas**: la sección seguirá saliendo como pendiente en `--ready` y se arrastra al cierre de sesión.
 
 4. **Cierre en dos partes.** Cuando el usuario apruebe el diseño completo:
 
@@ -110,7 +122,7 @@ El diseño solo está terminado cuando **`keel validate --ready specs/<servicio>
 3. Genera (o regenera, si el spec cambió en la sesión) `specs/<servicio>/validation-scenarios.md` siguiendo `references/scenario-authoring.md`, y haz sus dos pasadas de auto-revisión (cobertura en recorrido inverso + equivalencia) antes de mostrarlo.
 4. Con la validación en verde y los escenarios al día, ejecuta el flujo de `/keel-handoff` para producir `docs/<servicio>/DESIGN.md` (con la entrevista inline de rationale) y actualizar el índice del `README.md`. Si la sesión se corta antes de este paso, deja `DESIGN.md`/`README.md` explícitamente como pendientes.
 5. **Los avisos que la CLI marca como «decisión sin tomar» son preguntas para el usuario, no correcciones tuyas**: plantéaselos, y materializa la respuesta en el DSL o, si el aviso lo admite, en `decisions.yaml` con el `id` y el `scope` que imprime. Son un criterio de `--ready`.
-6. **Enumera las decisiones estructurales que quedaron pendientes** — las líneas `pendiente:` de los registros por capa del paso 3 —, con nombre de operación o capa. Son pendientes reales, no cosmética: un hueco estructural sin decidir lo acabará resolviendo por su cuenta el agente que genere el código, y dos generadores lo resolverán distinto.
+6. **Enumera las decisiones estructurales que quedaron pendientes** — las secciones que `keel validate --ready` lista bajo el criterio `structural` —, con nombre de operación o capa. Son pendientes reales, no cosmética: un hueco estructural sin decidir lo acabará resolviendo por su cuenta el agente que genere el código, y dos generadores lo resolverán distinto.
 7. Si el bloque de integración se resolvió en **modo degradado** (sin `INTEGRATION.md` del proveedor), **enumera los huecos de contrato que quedaron abiertos** y a quién hay que pedírselos. Son pendientes reales: el diseño es válido, pero la generación producirá clientes y listeners a partir de un contrato incompleto.
 8. No sugieras `keel-<tech> build` ni `/keel-docs` mientras `keel validate --ready` no esté en verde. Si el usuario quiere generar igualmente, dile qué criterios faltan: build lo dejará estampado y lo que devuelva la corrida podrá ser del diseño y no del método.
 

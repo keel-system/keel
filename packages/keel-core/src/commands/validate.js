@@ -279,6 +279,7 @@ function printReadiness(dir) {
     if (entry.detail) console.log(`      ${entry.detail}`);
     if (entry.fix) console.log(pc.dim(`      → ${entry.fix}`));
     if (entry.id === 'gaps') printGapInventory(validation.gaps);
+    if (entry.id === 'structural') printStructuralPending(validation.structural);
   }
 
   console.log();
@@ -330,4 +331,16 @@ function printGapInventory(gaps) {
   for (const finding of gaps.open) {
     console.log(pc.dim(`        abierto — clase ${finding.class}, ${finding.unit}: ${finding.what}`));
   }
+}
+
+/**
+ * Lo que falta del registro estructural, con el título de cada sección: es la lista con la que se
+ * retoma tras un /clear sin reconstruir de memoria qué capas cerraron con su bloque y cuáles no.
+ */
+function printStructuralPending(structural) {
+  for (const item of structural.missing) console.log(pc.dim(`        §${item.section} ${item.title}: sin registrar`));
+  for (const entry of structural.stale) {
+    console.log(pc.dim(`        §${entry.section}${entry.scope ? ` ${entry.scope}` : ''}: de la v${entry.since}, reafírmala`));
+  }
+  for (const message of structural.errors) console.log(pc.dim(`        ${message}`));
 }

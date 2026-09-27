@@ -91,6 +91,12 @@ fallo, una `activation` nueva su compensación—, **se vuelve a preguntar al di
 meses no se hereda en silencio: heredarla es exactamente el default tácito que la metodología
 prohíbe.
 
+El registro vive en `decisions.yaml` → `structural:`. Con la versión subida de minor o de major,
+`keel validate --ready` da por **caducadas** todas sus entradas (criterio `structural`): reafirma con
+el diseñador las que el cambio no toca —basta con subir su `since` cuando él confirma que el porqué
+sigue siendo cierto— y vuelve a preguntar las que sí. Una sección nueva (el primer bucket, la primera
+compensación) aparece sola como pendiente.
+
 Termina esta fase con `keel validate specs/<servicio>` en verde, sin `--wip`.
 
 ### 4. Versionado del contrato

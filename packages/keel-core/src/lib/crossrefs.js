@@ -3916,6 +3916,14 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
           );
           continue;
         }
+        // Una fila sin ningún `FL-` pasa por las otras dos: la operación está listada y no
+        // hay flujo citado que pueda estar colgando. Parece cobertura y es una fila vacía.
+        if (row.flows.length === 0) {
+          warn(
+            'CHK-SCEN-MATRIX-EMPTY-ROW',
+            `validation-scenarios.md: la matriz lista '${row.operation}' sin ningún flujo FL- que la ejercite — la fila parece cobertura y no la hay`
+          );
+        }
         for (const flow of row.flows) {
           if (!definedFlows.has(flow)) {
             warn(
@@ -3932,7 +3940,17 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     // Por CODE y no por operación: el mismo `code` lo declaran varias operaciones a
     // propósito (un NOT_FOUND compartido), y avisar una vez por cada una convierte un
     // hueco en cinco líneas que dicen lo mismo — y el resto de la salida en ruido.
-    const texto = scenarios;
+    //
+    // «Provocado» es DENTRO de un escenario `FL-`, y como token entero. Buscarlo en el
+    // documento completo daba por cubierto un code nombrado en la matriz, en una nota de
+    // pendientes o dentro de otro más largo (`NOT_FOUND` en `TICKET_NOT_FOUND`).
+    // `scenarioBody` y no el bloque crudo: el último de cada sección arrastra la prosa de
+    // la siguiente.
+    const bodies = scenarioBlocks.map(scenarioBody);
+    const provoked = (code) => {
+      const token = new RegExp('(?<![A-Z0-9_])' + code + '(?![A-Z0-9_])');
+      return bodies.some((body) => token.test(body));
+    };
     const codeOwners = new Map();
     for (const [opName, op] of Object.entries(operations)) {
       for (const error of op.errors ?? []) {
@@ -3942,11 +3960,11 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       }
     }
     for (const [code, owners] of codeOwners) {
-      if (texto.includes(code)) continue;
+      if (provoked(code)) continue;
       const donde = owners.length === 1 ? owners[0] : `${owners.length} operaciones: ${owners.join(', ')}`;
       warn(
         'CHK-SCEN-ERROR-UNCOVERED',
-        `validation-scenarios.md: no encuentro el code '${code}' (${donde}) en ningún escenario — un error declarado que ningún caso provoca no lo comprueba nadie`
+        `validation-scenarios.md: no encuentro el code '${code}' (${donde}) en ningún escenario FL- — un error declarado que ningún caso provoca no lo comprueba nadie`
       );
     }
 
@@ -3983,7 +4001,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
         // `\\b` y no `\b`: dentro de un template literal, `\b` es el carácter BACKSPACE y
         // la expresión no casa con nada — el aviso salía sobre TODOS los estados, incluidos
         // los que el documento nombra en cada línea.
-        if (new RegExp(`\\b${state}\\b`).test(texto)) continue;
+        if (new RegExp(`\\b${state}\\b`).test(scenarios)) continue;
         warn(
           'CHK-SCEN-STATE-UNREACHED',
           `validation-scenarios.md: ningún escenario nombra el estado '${state}' de ${entityName} — o no lo alcanza nada (y sobra en el lifecycle), o lo alcanza el servicio y no lo comprueba nadie`

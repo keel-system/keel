@@ -834,6 +834,22 @@ export const MUTATIONS = [
     expect: ['CHK-SCEN-ERROR-UNCOVERED']
   },
   {
+    // «Provocado» es dentro de un FL-: nombrarlo en una nota fuera de los flujos no cuenta.
+    id: 'M-SCEN-ERROR-ONLY-IN-NOTE',
+    title: 'un code que solo se nombra en una nota, fuera de los escenarios',
+    mutate: (d) => {
+      replaceIn(d, 'responde 422 con `REQUESTER_BLOCKED`.', 'responde 422.');
+      replaceIn(d, '## Flujos\n', '> Pendiente: el caso de `REQUESTER_BLOCKED`.\n\n## Flujos\n');
+    },
+    expect: ['CHK-SCEN-ERROR-UNCOVERED']
+  },
+  {
+    id: 'M-SCEN-MATRIX-EMPTY-ROW',
+    title: 'una fila de la matriz que no cita ningún flujo',
+    mutate: (d) => replaceIn(d, '| listTickets | FL-TCK-003 |', '| listTickets | todos |'),
+    expect: ['CHK-SCEN-MATRIX-EMPTY-ROW']
+  },
+  {
     id: 'M-SCEN-UNOBSERVABLE-RETRY',
     title: 'un Then que afirma que no hubo reintentos',
     mutate: (d) =>

@@ -54,6 +54,7 @@ export { OBLIGATIONS, obligationFor, obligationIds } from './lib/obligations.js'
 export { CHECKS, checkFor, checkIds } from './lib/checks.js';
 export { STRUCTURAL_DEFAULTS, COVERED_ELSEWHERE, DISCARDED, implicitDefaults } from './lib/structural-defaults.js';
 export { DECISIONS_FILE, loadDecisions, resolveObligations, resolveUndecided } from './lib/decisions.js';
+export { STRUCTURAL_SECTIONS, resolveStructural } from './lib/structural-register.js';
 
 // La revisión semántica: el catálogo de lo que solo un lector puede juzgar, su
 // aplicabilidad derivada del diseño y el veredicto escrito en review.yaml.

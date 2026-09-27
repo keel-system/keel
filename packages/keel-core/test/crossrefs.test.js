@@ -5852,6 +5852,32 @@ test('un code declarado que ningún escenario provoca avisa una sola vez', () =>
   assert.ok(avisos[0].includes('2 operaciones'));
 });
 
+test('una fila de la matriz sin ningún flujo avisa — y una con flujo, no', () => {
+  // Las otras dos reglas de la matriz no la ven: la operación está listada y no hay flujo
+  // citado que pueda estar colgando. `todos` es la forma en que apareció en una fixture.
+  const vacia = conEscenarios(MATRIZ('| placeOrder | todos | usuarios |') + '### FL-X-001: algo\nORDER_REJECTED\n');
+  const hits = runScenarios(vacia).findings.filter((f) => f.id === 'CHK-SCEN-MATRIX-EMPTY-ROW');
+  assert.equal(hits.length, 1);
+  assert.match(hits[0].message, /'placeOrder'/);
+
+  const con = conEscenarios(MATRIZ('| placeOrder | FL-X-001 | usuarios |') + '### FL-X-001: algo\nORDER_REJECTED\n');
+  assert.deepEqual(runScenarios(con).findings.filter((f) => f.id === 'CHK-SCEN-MATRIX-EMPTY-ROW'), []);
+});
+
+test('un code solo NOMBRADO fuera de los escenarios no cuenta como provocado', () => {
+  const uncovered = (texto) =>
+    runScenarios(conEscenarios(texto)).findings.filter((f) => f.id === 'CHK-SCEN-ERROR-UNCOVERED').length;
+
+  // En una nota de pendientes, antes de los flujos.
+  assert.equal(uncovered(`> Pendiente: el caso de ORDER_REJECTED.\n\n${MATRIZ('| placeOrder | FL-X-001 | usuarios |')}### FL-X-001: algo\n`), 1);
+  // En la prosa de la sección que sigue al último flujo: el bloque crudo la arrastra, el cuerpo no.
+  assert.equal(uncovered(`${MATRIZ('| placeOrder | FL-X-001 | usuarios |')}### FL-X-001: algo\n\n## Fuera de alcance\n\nORDER_REJECTED\n`), 1);
+  // Dentro de otro code más largo.
+  assert.equal(uncovered(`${MATRIZ('| placeOrder | FL-X-001 | usuarios |')}### FL-X-001: algo\nresponde 409 con BULK_ORDER_REJECTED_TWICE\n`), 1);
+  // Dentro de un escenario, entre comillas de código: cubierto.
+  assert.equal(uncovered(`${MATRIZ('| placeOrder | FL-X-001 | usuarios |')}### FL-X-001: algo\n**Then** responde 409 con \`ORDER_REJECTED\`.\n`), 0);
+});
+
 test('un estado del lifecycle que ningún escenario nombra avisa — y el que sí, no', () => {
   // La dirección negativa importa aquí más que en ninguna: la primera versión de esta
   // regla usaba `\b` dentro de un template literal, que es el carácter BACKSPACE, así que

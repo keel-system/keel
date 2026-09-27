@@ -14,7 +14,7 @@ import { tmpDir } from './helpers/tmp.js';
 import { LAYERS, supportedDsl } from '../src/lib/assets.js';
 import { READINESS_CRITERIA, assessReadiness } from '../src/lib/readiness.js';
 import { applicableReviews } from '../src/lib/reviews.js';
-import { gapInventory } from '../src/lib/gap-classes.js';
+import { GAP_CLASSES, gapInventory } from '../src/lib/gap-classes.js';
 import { flowDigests, scenariosDigest } from '../src/lib/flow-review.js';
 import { DECISIONS_FILE, FLOW_REVIEW_FILE, GAPS_FILE, REVIEW_FILE, SCENARIOS_FILE } from '../src/lib/spec-files.js';
 import { validateService } from '../src/lib/validate-service.js';
@@ -50,10 +50,11 @@ const MATRIX = `## Matriz de cobertura
 | createInvoice | FL-INV-001 | interna |
 `;
 
-function scenariosText({ stamp = VERSION, matrix = true } = {}) {
+function scenariosText({ stamp = VERSION, matrix = true, emptyRow = false } = {}) {
+  const table = emptyRow ? MATRIX.replace('| createInvoice | FL-INV-001 |', '| createInvoice | todos |') : MATRIX;
   return (
     `# Escenarios de validación — billing\n\n> specs/billing v${stamp}. Contrato de equivalencia.\n\n` +
-    (matrix ? `${MATRIX}\n` : '') +
+    (matrix ? `${table}\n` : '') +
     '## Flujos\n\n### FL-INV-001: alta de una factura\n**Given**: nada.\n**When**: `createInvoice`\n**Then**:\n1. Se crea la factura.\n'
   );
 }
@@ -73,6 +74,7 @@ function workspace({
   useCases = USE_CASES,
   scenarioStamp = VERSION,
   matrix = true,
+  emptyRow = false,
   scenarios = true,
   flowReview = true,
   review = 'full',
@@ -80,6 +82,8 @@ function workspace({
   gapsStamp = VERSION,
   designStamp = VERSION,
   decisions = null,
+  structural = true,
+  structuralStamp = VERSION,
   underSpecs = true
 } = {}) {
   const root = tmpDir('keel-readiness-');
@@ -101,7 +105,7 @@ function workspace({
   write(path.join(dir, 'domain.keel.yaml'), DOMAIN);
   write(path.join(dir, 'use-cases.keel.yaml'), useCases);
 
-  const text = scenariosText({ stamp: scenarioStamp, matrix });
+  const text = scenariosText({ stamp: scenarioStamp, matrix, emptyRow });
   if (scenarios) write(path.join(dir, SCENARIOS_FILE), text);
   if (scenarios && flowReview) {
     write(
@@ -142,7 +146,20 @@ function workspace({
     write(path.join(dir, GAPS_FILE), YAML.stringify({ reviewedAt: gapsStamp, coverage, findings }));
   }
 
-  if (decisions !== null) write(path.join(dir, DECISIONS_FILE), decisions);
+  // El registro estructural se deriva del MISMO inventario que la clase 16, como el barrido de arriba.
+  // Vive dentro de decisions.yaml, así que se funde con lo que el caso quiera escribir ahí.
+  const decisionsDoc = decisions === null ? {} : YAML.parse(decisions);
+  if (structural) {
+    const sections = GAP_CLASSES[16].units({ domain: YAML.parse(DOMAIN), 'use-cases': YAML.parse(useCases) });
+    decisionsDoc.structural = sections.map((section) => ({
+      section,
+      chosen: 'lo que se eligió',
+      discarded: 'la alternativa',
+      reason: 'Se preguntó con la consecuencia observable delante.',
+      since: structuralStamp
+    }));
+  }
+  if (Object.keys(decisionsDoc).length > 0) write(path.join(dir, DECISIONS_FILE), YAML.stringify(decisionsDoc));
 
   if (designStamp) {
     write(path.join(root, 'docs', 'billing', 'DESIGN.md'), `# billing\n\n> specs/billing v${designStamp}. Documento de diseño.\n`);
@@ -185,7 +202,14 @@ const EXPOSED_USE_CASES = USE_CASES.replace('    internal: true\n', '');
 
 const ROTURAS = [
   ['validation', { useCases: USE_CASES.replace('output: { entity: Invoice }', 'output: { entity: Missing }') }],
-  ['obligations', { decisions: 'esto: no es un registro de decisiones\n' }],
+  // Una aceptación de una obligación que el catálogo no tiene: el archivo es válido y se lee (el
+  // registro estructural sigue ahí), pero la aceptación no. Un archivo ilegible apagaría los dos.
+  [
+    'obligations',
+    { decisions: 'decisions:\n  - { id: OBL-NO-EXISTE, scope: use-cases, reason: una obligación inventada para el test, since: 1.0.0 }\n' }
+  ],
+  ['structural', { structural: false }],
+  ['structural', { structuralStamp: '0.9.0' }],
   ['review', { review: 'partial' }],
   ['review', { review: null }],
   ['gaps', { gaps: null }],
@@ -194,6 +218,8 @@ const ROTURAS = [
   ['gaps', { gapsStamp: '0.9.0' }],
   ['scenarios', { scenarioStamp: '0.9.0' }],
   ['coverage-matrix', { matrix: false }],
+  // La operación tiene fila, pero la fila no cita ningún flujo (CHK-SCEN-MATRIX-EMPTY-ROW).
+  ['coverage-matrix', { emptyRow: true }],
   ['flow-review', { flowReview: false }],
   ['design-doc', { designStamp: '0.9.0' }],
   ['design-doc', { designStamp: null }],

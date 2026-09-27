@@ -326,9 +326,9 @@ ya lo ha leído. Eso cambia el peso de cada hueco de esta clase.
 
 Las quince clases anteriores preguntan **qué** dice o no dice el diseño. Esta pregunta **quién lo decidió**.
 
-Recorre el catálogo de `structural-decisions.md § 3` entrada por entrada y, por cada una que **aplique** a este servicio, comprueba que la eligió el diseñador y no tú. Lo que buscas no deja rastro en el YAML: un `reliability: best-effort` decidido y uno asumido se escriben igual. Por eso el barrido **no se hace contra tu memoria de la sesión** —que en un diseño real ha pasado por horas de conversación y probablemente por una compactación de contexto— sino contra los **bloques de decisiones estructurales** que cerraron cada capa en el paso 3 de `/keel-design`.
+Recorre el catálogo de `structural-decisions.md § 3` entrada por entrada y, por cada una que **aplique** a este servicio, comprueba que la eligió el diseñador y no tú. Lo que buscas no deja rastro en el YAML: un `reliability: best-effort` decidido y uno asumido se escriben igual. Por eso el barrido **no se hace contra tu memoria de la sesión** —que en un diseño real ha pasado por horas de conversación y probablemente por una compactación de contexto— sino contra el **registro de decisiones estructurales** que cada capa escribió en `decisions.yaml` → `structural:` en el paso 3 de `/keel-design`. Qué secciones aplican no lo decides tú: es el inventario de esta clase, el mismo que lista `keel validate --ready`.
 
-**Si esos bloques no están disponibles** (sesión reanudada, contexto compactado, diseño heredado con `--from`), no supongas que se decidió: clasifica como **hueco** toda entrada aplicable del catálogo y vuelve a preguntarla. La asimetría es deliberada — re-preguntar cuesta una pregunta; asumir cuesta un default tácito con apariencia de decisión de negocio, que es exactamente lo que esta clase existe para cazar.
+**Si una entrada aplicable no está en el registro, o está caducada** (su `since` es de otra versión: diseño evolucionado o heredado con `--from`), no supongas que se decidió: clasifícala como **hueco** y vuelve a preguntarla. La caducada trae el porqué de entonces, que es un buen punto de partida para la pregunta, no una respuesta. La asimetría es deliberada — re-preguntar cuesta una pregunta; asumir cuesta un default tácito con apariencia de decisión de negocio, que es exactamente lo que esta clase existe para cazar.
 
 | Aplica si… | Entrada del catálogo | Qué comprobar |
 |---|---|---|
@@ -341,7 +341,9 @@ Recorre el catálogo de `structural-decisions.md § 3` entrada por entrada y, po
 | hay `persistence` | 3.7 frontera transaccional | `per-operation`/`per-aggregate` es elección, no default del template |
 | hay queries de colección | 3.8 paginación | paginar o no paginar se decidió con la cota esperada delante |
 | hay commands que escriben la misma entidad | 3.9 concurrencia | "último gana" está dicho en voz alta, o hay conflicto declarado; el `optimisticLocking` que lo materializa se eligió, no se heredó del default |
+| hay `persistence` | 3.9b auditoría | `timestamps` y `authorship` se preguntaron con quién lee el rastro delante, no se heredaron del default |
 | hay `storage` | 3.10 visibilidad | cada bucket, con su vía de acceso si es `private` |
+| hay `compensations` en `dependencies` | 3.11 compensación | la transición de vuelta y qué ve el cliente mientras tanto las eligió el diseñador |
 
 Severidades de esta clase:
 

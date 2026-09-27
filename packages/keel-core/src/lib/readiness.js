@@ -12,7 +12,8 @@
 //
 // Regla para añadir un criterio: que tenga artefacto que leer. Uno que no se puede evaluar no se
 // pinta ni en verde ni en rojo. Así entraron las decisiones no tomadas de los avisos (R2, con
-// decisions.yaml) y el análisis de huecos (R3, con gaps.yaml).
+// decisions.yaml), el análisis de huecos (R3, con gaps.yaml) y el registro de decisiones
+// estructurales (R4.2, con `structural:` en decisions.yaml).
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -28,6 +29,7 @@ const MATRIX_FINDINGS = [
   'CHK-SCEN-MATRIX-MISSING-OP',
   'CHK-SCEN-MATRIX-UNKNOWN-OP',
   'CHK-SCEN-MATRIX-DANGLING-FL',
+  'CHK-SCEN-MATRIX-EMPTY-ROW',
   'CHK-SCEN-ERROR-UNCOVERED'
 ];
 
@@ -36,6 +38,7 @@ export const READINESS_CRITERIA = [
   { id: 'validation', title: 'validación estricta en verde' },
   { id: 'obligations', title: 'obligaciones de diseño cerradas o aceptadas y vigentes' },
   { id: 'undecided', title: 'decisiones de los avisos tomadas en el DSL o aceptadas y vigentes' },
+  { id: 'structural', title: 'registro de decisiones estructurales completo, vigente y coherente con el diseño' },
   { id: 'review', title: 'revisión semántica completa y vigente' },
   { id: 'gaps', title: 'análisis de huecos completo, vigente y sin hallazgos abiertos' },
   { id: 'scenarios', title: 'escenarios de validación de esta versión' },
@@ -148,6 +151,29 @@ export function assessReadiness(dir, { validation = null } = {}) {
     )
   );
 
+  // 2c — El registro de decisiones estructurales (decisions.yaml → structural). Toda sección del
+  // catálogo que aplica tiene que decir qué se eligió, qué se descartó y por qué; y donde nombra un
+  // campo, decir lo mismo que el YAML. Se escribe al cerrar cada capa, por eso va antes que la revisión.
+  const { structural } = result;
+  const structuralProblems = !evaluated ? [notEvaluated] : [
+    structural.missing.length > 0
+      ? `${structural.inventory.length - structural.missing.length}/${structural.inventory.length} secciones registradas (faltan ${structural.missing.map((item) => `§${item.section}`).join(', ')})`
+      : null,
+    structural.stale.length > 0 ? `${structural.stale.length} de otra versión` : null,
+    ...structural.mismatched.map(
+      (entry) => `§${entry.section} dice '${entry.chosen}' y ${entry.scope} es '${entry.actual}'`
+    ),
+    structural.errors.length > 0 ? `${structural.errors.length} error(es) en ${DECISIONS_FILE}` : null
+  ].filter(Boolean);
+  criteria.push(
+    criterion(
+      'structural',
+      structuralProblems.length === 0,
+      structuralProblems.join(', '),
+      `/keel-design ${spec}: cada § 3.x aplicable, con elegido, descartado y porqué, en ${DECISIONS_FILE} (structural:)`
+    )
+  );
+
   // 3 — La revisión: que exista, que cubra todo lo aplicable, que sea de esta versión y
   // que no deje nada abierto. `missing` y `stale` no bloquean en validateService; aquí sí
   // cuentan, porque un diseño revisado a medias y uno revisado entero no están igual de listos.
@@ -202,7 +228,7 @@ export function assessReadiness(dir, { validation = null } = {}) {
     )
   );
 
-  // 5 — La matriz. Las cuatro comprobaciones ya existen con id y se reutilizan; lo que
+  // 5 — La matriz. Las cinco comprobaciones ya existen con id y se reutilizan; lo que
   // ninguna ve es un documento SIN sección de matriz, porque todas cruzan sus filas.
   const scenarios = readText(path.join(dir, SCENARIOS_FILE));
   const matrixFindings = (result.findings ?? []).filter((finding) => MATRIX_FINDINGS.includes(finding.id));
