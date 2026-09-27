@@ -77,6 +77,9 @@ reviewedAt: 0.1.0            # service.version del manifiesto
 passes: 1                    # el número de pasada que te dieron (tope: 3 por versión)
 scenariosSha256: <sha256>    # de validation-scenarios.md, sin retornos de carro:
                              #   tr -d '\r' < validation-scenarios.md | sha256sum
+conventionsSha256: <sha256>  # de la sección «Convenciones de determinación»: si cambia, la
+                             # siguiente pasada es completa (rigen todos los Then). El resto de
+                             # la prosa fuera de los flujos no caduca el careo.
 flows:                       # un sello por flujo: es lo que permite recarear solo lo que cambie.
   - id: FL-PRD-050           # El sha256 es del CUERPO del bloque (de su encabezado al siguiente
     sha256: <sha256>         # `###`/`####`), también sin retornos de carro.

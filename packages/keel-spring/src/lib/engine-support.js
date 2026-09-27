@@ -383,6 +383,43 @@ export const MECHANISMS = {
     }
   },
 
+  'transient-write-conflict': {
+    title: 'Reintento del conflicto de escritura transitorio (UseCaseMediator)',
+    emitter: 'src/scaffold/mediator.js',
+    axis: 'model',
+    why:
+      'En una transacción de MongoDB el perdedor de dos escrituras sobre el mismo documento no espera: aborta con un ' +
+      'WriteConflict transitorio que llegaba al catch-all como 500, donde el relacional da el error DECLARADO. Lo encontró ' +
+      'el careo de notification-mailer-mongo (FL-TPL-003 y FL-TPL-011, hallazgo 7 de R9).',
+    parity: {
+      pair: 'notification-mailer',
+      markers: {
+        relational: [],
+        document: ['retryingWriteConflicts(', 'TRANSIENT_TRANSACTION_ERROR_LABEL', 'WRITE_CONFLICT_ATTEMPTS']
+      }
+    },
+    coverage: {
+      relational: {
+        state: 'no-aplica',
+        net: 'ninguna',
+        engines: [],
+        falsified: false,
+        why: 'el motor serializa: el perdedor espera al bloqueo y falla con el error declarado, no hay nada que reintentar'
+      },
+      document: {
+        state: 'razonado',
+        net: 'mongo-check',
+        engines: ['mongodb'],
+        falsified: false,
+        why:
+          'la PREMISA sí se ejecuta: MONGO-10 provoca el conflicto entre dos sesiones de un mongod real y afirma el código 112 con ' +
+          'la etiqueta TransientTransactionError, y que reintentar pasa sobre lo confirmado (falsado cambiando la etiqueta). El ' +
+          'Java del reintento lo compila compile-check y no lo ejecuta nadie: el main recién generado no arranca sin el agente. ' +
+          'Se cierra con una corrida sobre Mongo que pise FL-TPL-003 o FL-TPL-011'
+      }
+    }
+  },
+
   'document-indexes': {
     title: 'Índices del modelo documental (MongoIndexConfig)',
     emitter: 'src/scaffold/document-indexes.js',

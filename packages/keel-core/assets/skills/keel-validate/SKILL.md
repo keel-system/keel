@@ -39,13 +39,9 @@ Seis de las siete comprobaciones que aquí había las hace ya `keel validate` en
 
 **Calidad por capa — recorrido por id.**
 
-La CLI lista los ids de revisión que le tocan a ESTE diseño (`REV-*`, derivados de las capas que declara) y cuántos tienen ya veredicto. Recórrelos **en el orden en que los lista**, uno a uno:
+La CLI lista los ids de revisión que le tocan a ESTE diseño (`REV-*`, derivados de las capas que declara) y cuántos tienen ya veredicto. **El recorrido no lo haces tú**: lanza el subagente `keel-design-review` (`{{keel:agents}}/keel-design-review.md`) con la ruta `specs/<servicio>/` y **nada más**. Tiene que ser otro contexto: quien escribió el diseño —tú, casi siempre, en la misma sesión— lee sus decisiones como quiso tomarlas, y en el cierre del par del MVP la lectura independiente fue la que más encontró. El agente contesta cada id con evidencia y escribe `specs/<servicio>/review.yaml` con `reviewedBy: keel-design-review`; `keel validate --ready` exige esa autoría.
 
-1. Lee la pregunta del id y, si necesitas el porqué, su sección en `references/review-checklist.md` — solo la de la capa que estés mirando.
-2. Contesta con evidencia del diseño: nombra la entidad, la operación o el campo.
-3. Escribe el veredicto en `specs/<servicio>/review.yaml` (`ok` / `fixed` / `accepted` / `open`), con nota salvo en `ok`.
-
-Vuelve a ejecutar `keel validate` al terminar: la cobertura tiene que quedar completa, y un veredicto `open` deja el diseño sin generar, que es lo correcto.
+Después, repasa **con el usuario** cada veredicto que no sea `ok`. El agente propone `open` para todo hallazgo, y el usuario decide: se corrige el diseño (el veredicto pasa a `fixed`, con nota de qué se cambió) o se acepta (`accepted`, con su porqué). Tú escribes la decisión en `review.yaml`, sin tocar `reviewedBy`: la revisión la hizo el agente, y la decisión es del diseñador. Vuelve a ejecutar `keel validate` al terminar: la cobertura tiene que quedar completa, y un veredicto `open` deja el diseño sin generar, que es lo correcto.
 
 **No repitas lo que la CLI ya contestó.** Sus hallazgos vienen con id `CHK-*`: se leen y se incorporan al informe, no se vuelven a juzgar.
 

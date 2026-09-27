@@ -113,7 +113,7 @@ export function validateService(dir, { wip = false } = {}) {
     pending: [],
     obligations: { open: [], accepted: [], stale: [], orphans: [], errors: [] },
     undecided: { open: [], accepted: [], stale: [], orphans: [], errors: [] },
-    reviews: { covered: [], missing: [], open: [], accepted: [], stale: false, reviewedAt: null, orphans: [], errors: [] },
+    reviews: { covered: [], missing: [], open: [], accepted: [], stale: false, reviewedAt: null, reviewedBy: null, orphans: [], errors: [] },
     gaps: emptyGaps(),
     structural: emptyStructural()
   };
@@ -196,7 +196,7 @@ export function validateService(dir, { wip = false } = {}) {
 
   // El careo de flujos (keel-flow-review): que exista, que sea de ESTOS escenarios y que no
   // deje hallazgos sin decidir. Solo cuando hay escenarios que carear.
-  const flowReview = flowReviewFinding(dir);
+  const flowReview = flowReviewFinding(dir, manifest?.service?.version ?? null);
   if (flowReview) {
     result.findings.push(flowReview);
     result.warnings.push(flowReview.message);
@@ -272,10 +272,10 @@ function workspaceDocsDir(dir, manifest) {
   return path.join(root, 'docs', name);
 }
 
-function flowReviewFinding(dir) {
+function flowReviewFinding(dir, serviceVersion) {
   const scenariosPath = path.join(dir, SCENARIOS_FILE);
   if (!fs.existsSync(scenariosPath)) return null;
-  const plan = flowReviewPlan(dir, fs.readFileSync(scenariosPath));
+  const plan = flowReviewPlan(dir, fs.readFileSync(scenariosPath), { serviceVersion });
   if (plan.status === 'ok') return null;
 
   // El mensaje dice QUÉ hacer, y son dos cosas distintas: carear (y cuánto) o decidir. Con una

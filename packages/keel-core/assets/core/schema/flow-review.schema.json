@@ -17,6 +17,11 @@
       "pattern": "^[0-9a-f]{64}$",
       "description": "sha256 de validation-scenarios.md SIN retornos de carro en el momento del careo. Si el documento cambia, el careo deja de hablar de él y keel validate lo avisa (CHK-SCEN-FLOW-REVIEW-STALE)."
     },
+    "conventionsSha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "sha256 de la sección «Convenciones de determinación» (conventionsDigest), sin retornos de carro. Si cambia, el careo pide pasada completa: las convenciones rigen todos los Then. Con este sello, un cambio en el resto de la prosa (cabecera, matriz, notas) ya no caduca el careo; sin él (careos anteriores), cualquier cambio fuera de los flujos pide pasada completa."
+    },
     "passes": {
       "type": "integer",
       "minimum": 1,

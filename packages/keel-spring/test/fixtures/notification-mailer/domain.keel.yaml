@@ -32,9 +32,22 @@ types:
 
   EmailAddress:
     base: string
-    description: Dirección de correo, con la longitud que admite el estándar.
+    description: Dirección de correo, con la longitud que admite el estándar. Se compara exacta.
     constraints:
       maxLength: 254
+      # Deliberadamente laxo: comprueba que HAY una dirección, no que exista. La validación de
+      # verdad es la entrega; un patrón estricto rechaza direcciones legítimas.
+      pattern: "^[^@\\s]+@[^@\\s]+$"
+
+  Locale:
+    base: string
+    description: >-
+      Idioma de una plantilla o de un envío: dos letras de idioma y, opcionalmente, región
+      (`es`, `es-ES`). Se compara exacto: `es` y `es-ES` son idiomas distintos, y una petición en
+      `es-ES` no cae en la plantilla `es`.
+    constraints:
+      maxLength: 10
+      pattern: "^[a-z]{2}(-[A-Z]{2})?$"
 
 entities:
   Application:
@@ -55,18 +68,18 @@ entities:
         type: string
         list: true
         required: true
-        constraints: { maxItems: 5, maxLength: 64 }
+        constraints: { minItems: 1, maxItems: 5, maxLength: 64 }
         description: >-
-          Los `client_id` que resuelven a este sistema. Es la relación que faltaba: con una sola
+          Los `client_id` que resuelven a este sistema. Ninguno puede ser de otra aplicación: si lo
+          fuera, el mismo token resolvería a dos sistemas y el que lo dio de alta vería los datos del otro. Es la relación que faltaba: con una sola
           credencial por Application, un sistema con dos —una que envía y otra que publica
           plantillas desde su pipeline, con scopes disjuntos— dejaba a la segunda sin Application
           activa, y toda operación suya respondía 403 aunque el sistema estuviera dado de alta.
       defaultSender:
-        type: string
+        type: EmailAddress
         required: true
-        constraints: { maxLength: 320 }
         description: Dirección verificada desde la que salen sus correos.
-      defaultLocale: { type: string, required: true, constraints: { maxLength: 10 } }
+      defaultLocale: { type: Locale, required: true }
       active:
         type: boolean
         required: true
@@ -86,7 +99,7 @@ entities:
     fields:
       id: { type: uuid, id: true, generated: true }
       key: { type: string, required: true, constraints: { maxLength: 64 } }
-      locale: { type: string, required: true, constraints: { maxLength: 10 } }
+      locale: { type: Locale, required: true }
       status: { type: TemplateStatus, required: true }
       version: { type: int, required: true, constraints: { min: 1 } }
       subject:
@@ -125,7 +138,7 @@ entities:
       id: { type: uuid, id: true, generated: true }
       applicationKey: { type: string, required: true, constraints: { maxLength: 64 } }
       templateKey: { type: string, required: true, constraints: { maxLength: 64 } }
-      status: { type: NotificationStatus, required: true }
+      status: { type: NotificationStatus, required: true, default: accepted }
       sendingSince:
         type: timestamp
         description: >-
@@ -137,8 +150,8 @@ entities:
         type: int
         required: true
         description: Congelada. Con la plantilla ya en la v4, la traza sigue diciendo qué se envió.
-      locale: { type: string, required: true, constraints: { maxLength: 10 } }
-      recipient: { type: string, required: true, constraints: { maxLength: 320 } }
+      locale: { type: Locale, required: true }
+      recipient: { type: EmailAddress, required: true }
       renderedSubject:
         type: string
         required: true

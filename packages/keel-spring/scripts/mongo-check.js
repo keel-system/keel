@@ -414,6 +414,52 @@ async function agingScenarios({ raw, probe }) {
   });
 }
 
+// El conflicto de escritura TRANSITORIO, que el UseCaseMediator del modelo documental reintenta
+// (hallazgo 7 de R9). Aquí no hay script del generador que probar: lo que se comprueba es la
+// PREMISA de la que depende ese Java, contra un mongod real y no contra la documentación, que no la
+// fija. (1) El perdedor de dos transacciones sobre el mismo documento recibe el código 112 con la
+// etiqueta TransientTransactionError, que es lo que busca `isTransientWriteConflict`. (2) Reintentar
+// su transacción después de que la otra confirme la hace pasar sobre lo confirmado: el reintento
+// convierte el conflicto en el desenlace que tendría en un motor que serializa.
+// El Java del reintento no lo ejecuta nadie desde aquí: el main recién generado no compila
+// (build deja TODOs). Lo compila compile-check, y ejecutarlo es de una corrida sobre Mongo.
+async function writeConflictScenarios({ probe }) {
+  await check('MONGO-10', 'el perdedor de dos transacciones recibe 112 + TransientTransactionError, y reintentar pasa', () => {
+    const out = jsonOf(
+      probe(`(() => {
+        const coll = db.getCollection("jobs");
+        coll.deleteMany({});
+        coll.insertOne({ _id: UUID("${ID}"), reference: "a", status: "QUEUED" });
+        const first = db.getMongo().startSession();
+        const second = db.getMongo().startSession();
+        const inFirst = first.getDatabase(db.getName()).getCollection("jobs");
+        const inSecond = second.getDatabase(db.getName()).getCollection("jobs");
+        first.startTransaction();
+        inFirst.updateOne({ _id: UUID("${ID}") }, { $set: { status: "FIRST" } });
+        second.startTransaction();
+        let loser = { conflict: false };
+        try {
+          inSecond.updateOne({ _id: UUID("${ID}") }, { $set: { status: "SECOND" } });
+        } catch (error) {
+          loser = { conflict: true, code: error.code, transient: typeof error.hasErrorLabel === "function" && error.hasErrorLabel("TransientTransactionError") };
+        }
+        try { second.abortTransaction(); } catch (ignored) {}
+        first.commitTransaction();
+        const afterConflict = coll.findOne({ _id: UUID("${ID}") }).status;
+        second.startTransaction();
+        inSecond.updateOne({ _id: UUID("${ID}"), status: "FIRST" }, { $set: { status: "SECOND" } });
+        second.commitTransaction();
+        return JSON.stringify({ ...loser, afterConflict, afterRetry: coll.findOne({ _id: UUID("${ID}") }).status });
+      })()`)
+    );
+    if (!out.conflict) throw new Error('la segunda transacción escribió sin conflicto: no hay nada que reintentar');
+    if (out.code !== 112) throw new Error(`el conflicto llegó con el código ${out.code}, no con 112 (WriteConflict)`);
+    if (!out.transient) throw new Error('el conflicto no lleva la etiqueta TransientTransactionError que busca el reintento');
+    if (out.afterConflict !== 'FIRST') throw new Error(`tras el conflicto se leyó ${out.afterConflict}, no lo que confirmó la primera`);
+    if (out.afterRetry !== 'SECOND') throw new Error(`el reintento no pasó sobre lo confirmado: ${out.afterRetry}`);
+  });
+}
+
 // ─── Entrada ─────────────────────────────────────────────────────────────────
 
 const runtimeInfo = resolveRuntime();
@@ -423,7 +469,13 @@ if (!runtimeInfo) {
 }
 
 const PLAN = [
-  { fixture: 'job-dispatch-mongo', scenarios: rescueScenarios },
+  {
+    fixture: 'job-dispatch-mongo',
+    scenarios: async (evaluate) => {
+      await rescueScenarios(evaluate);
+      await writeConflictScenarios(evaluate);
+    }
+  },
   {
     fixture: 'asset-vault',
     // Dos tandas sobre el mismo Mongo: levantar el contenedor es lo caro, y las dos miran

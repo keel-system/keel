@@ -1,6 +1,6 @@
 # notification-mailer-mongo — Documento de diseño
 
-> specs/notification-mailer-mongo v1.0.0. Diseño cerrado; el porqué de las decisiones se entrevistó al cerrarlo.
+> specs/notification-mailer-mongo v2.0.0. Diseño cerrado; el porqué de las decisiones se entrevistó al cerrarlo.
 
 ## 1. Propósito y alcance
 
@@ -23,11 +23,13 @@ y la retención de los envíos. Cada una tiene su motivo en § 7, «Supuestos y 
 | `TemplateVariable` | interna de `Template` | Una variable que esa versión declara aceptar, con si es requerida. Solo se crea con su versión. |
 | `Notification` | raíz propia | Un envío pedido, con lo enviado **congelado** dentro: versión de plantilla, asunto ya interpolado, destinatarios y variables. |
 
-Value types: `EmailAddress` (dirección con la cota del estándar, 254), `TemplateVariableDeclaration`
+Value types: `EmailAddress` (una `@` en medio y la cota del estándar, 254; toda dirección del servicio lo es),
+`Locale` (dos letras y región opcional: `es`, `es-ES`), `TemplateVariableDeclaration`
 (`name`, `required`, `description`: lo que registra quien escribe la plantilla) y
 `TemplateVariableValue` (`name`, `value`: lo que manda quien pide el envío).
 
-Campos generados: los `id` y `Notification.requestedAt`. Estampados por una transición:
+Campos generados: los `id` y `Notification.requestedAt`. `Notification.status` nace en `accepted`
+(su `default`). Estampados por una transición:
 `Template.publishedAt` (al pasar a `active`; no cambia al retirarse), `Notification.sendingSince`
 (en el reclamo que pasa a `sending`) y `Notification.sentAt` (al pasar a `sent`; nulo en `failed`).
 
@@ -48,12 +50,18 @@ Campos generados: los `id` y `Notification.requestedAt`. Estampados por una tran
   resuelto igual.
 - Un sistema no ve ni publica lo de otro: una plantilla o un envío ajeno responde **igual que uno
   que no existe** (404).
+- Un `client_id` resuelve a **una sola** aplicación (índice único sobre `credentialKeys`): nadie se
+  da de alta con la credencial de otro para ver sus datos.
+- La `Idempotency-Key` se acota a la aplicación del llamante. Por evento, `dedupeKey` es
+  `event:<eventId>`, que no comparte espacio con las claves HTTP.
 - Toda variable declarada como requerida llega con valor; las no declaradas se ignoran y no se
-  congelan.
+  congelan, y dos con el mismo nombre se rechazan. Por HTTP y por evento, igual.
+- Los valores se escapan como HTML en la parte html; en la de texto van tal cual.
 - El asunto se renderiza al aceptar y el cuerpo al enviar, siempre con la versión y los valores
   congelados.
 - Una plantilla que no compila no se registra.
-- `NotificationSent` se emite solo al pasar a `sent`.
+- `NotificationSent` se emite solo al pasar a `sent`. Un relay que rechaza, no se alcanza o no
+  contesta a tiempo deja el envío en `failed`, sin reintentar: no se sabe si el correo salió.
 
 ## 4. Qué hace
 
@@ -68,17 +76,19 @@ Campos generados: los `id` y `Notification.requestedAt`. Estampados por una tran
 | `requestNotification` | `POST /v1/notifications` → 202 | Acepta y registra un envío; responde antes de enviar. Idempotente con `Idempotency-Key` (opcional). | `notification:send` |
 | `getNotification` | `GET /v1/notifications/{notificationId}` | El estado de un envío propio, para quien no escucha eventos. | `notification:read` |
 
-Errores de contrato: `APPLICATION_ALREADY_EXISTS` (409), `APPLICATION_INACTIVE` (403),
+Errores de contrato: `APPLICATION_ALREADY_EXISTS` y `CREDENTIAL_ALREADY_ASSIGNED` (409),
+`APPLICATION_INACTIVE` (403),
 `TEMPLATE_NOT_FOUND` (404 si lo nombra la ruta, 422 si lo nombra el cuerpo o el mensaje),
 `TEMPLATE_ALREADY_ACTIVE` y `CONCURRENT_MODIFICATION` (409, publicaciones simultáneas),
-`TEMPLATE_SYNTAX_INVALID` y `TEMPLATE_VARIABLE_DUPLICATED` (422), `TEMPLATE_VERSION_ALREADY_EXISTS`
+`TEMPLATE_SYNTAX_INVALID` y `TEMPLATE_VARIABLE_DUPLICATED` (422; el segundo también en la petición de
+envío), `TEMPLATE_VERSION_ALREADY_EXISTS`
 (409, registros simultáneos), `TEMPLATE_VARIABLE_MISSING` (422), `IDEMPOTENCY_KEY_IN_PROGRESS` e
 `IDEMPOTENCY_KEY_REUSED` (409) y `NOTIFICATION_NOT_FOUND` (404).
 
 ### Internas
 
 - `acceptNotificationRequest` — la dispara `NotificationRequested`. Hace lo mismo que
-  `requestNotification`, deduplicando por `metadata.eventId`.
+  `requestNotification`, copias incluidas, deduplicando por `metadata.eventId`.
 - `queueAcceptedNotifications` — **cada minuto**: reclama un lote de envíos aceptados y encarga cada
   uno.
 - `sendAcceptedNotification` — la invoca el barrido por fila: reclama el envío (`queued → sending`),
@@ -87,7 +97,9 @@ Errores de contrato: `APPLICATION_ALREADY_EXISTS` (409), `APPLICATION_INACTIVE` 
 ## 5. Fronteras e integraciones
 
 - **Mensajería.**
-  - Publica `NotificationSent` en `notificationEvents`, con outbox, y consume
+  - Publica `NotificationSent` en `notificationEvents`, con outbox, **sin el destinatario**: el canal
+    lo leen todos los inquilinos. Lleva `dedupeKey`, con el que cada sistema reconoce su petición.
+    Consume
     `NotificationRequested` de `notificationRequests`, un canal **genérico**: el sistema número doce
     entra sin tocar el diseño.
   - La identidad del emisor sale de `metadata.source`, y su asunción está escrita en
@@ -107,7 +119,8 @@ Errores de contrato: `APPLICATION_ALREADY_EXISTS` (409), `APPLICATION_INACTIVE` 
   - Hay índices sobre la unicidad condicionada, sobre `credentialKeys` (se consulta en cada
     petición) y sobre `[status, requestedAt]` (el barrido).
 - **Seguridad.**
-  - OIDC con clientes máquina (`client-credentials`), uno por sistema y propósito, con mínimo
+  - OIDC con clientes máquina (`client-credentials`) y **la audiencia del token validada**, uno por
+    sistema y propósito, con mínimo
     privilegio: el que envía no escribe plantillas, el pipeline no envía y ninguno se da de alta a
     sí mismo (`platform-admin`).
 
@@ -118,7 +131,7 @@ Del registro estructural (`decisions.yaml` → `structural:`):
 | § | Decisión | Descartado | Por qué |
 |---|---|---|---|
 | 3.1 | `reliability: outbox` | `best-effort` | El consumidor marca su propio estado con `NotificationSent`; si se perdiera, podría volver a pedirlo y salir un segundo correo real. |
-| 3.2 | `client-key` en `requestNotification`; por evento, `metadata.eventId` | `payload-hash` | Dos cuerpos iguales pueden ser dos intenciones legítimas (dos restablecimientos de contraseña): solo el llamante sabe si reintenta. |
+| 3.2 | `client-key` en `requestNotification`, acotada a la aplicación; por evento, `metadata.eventId`. Los demás commands sin idempotencia | `payload-hash`; idempotencia en `registerTemplate` | Dos cuerpos iguales pueden ser dos intenciones legítimas (dos restablecimientos de contraseña): solo el llamante sabe si reintenta. `registerApplication` y `publishTemplate` ya los frena su clave o su transición, y un `registerTemplate` repetido deja un borrador más, que nadie usa hasta publicarlo. |
 | 3.3 | Sin caché | `cache` con TTL | `getNotification` se sondea para ver el envío avanzar; una respuesta vieja mentiría. Las dos son lecturas por clave primaria. |
 | 3.4 | Todo `services`, sin operaciones de usuario | `both` | Todos los consumidores son sistemas; una consola humana tendrá sus operaciones. |
 | 3.5 | 5 reintentos exponenciales (1 s → 30 s) y `deadLetter` | fallar a la primera, o descartar | Una petición de correo perdida es un cliente sin su correo y un consumidor que cree haberlo pedido. |
@@ -177,14 +190,14 @@ Otras decisiones notables:
   del perímetro, la salida es un destino por emisor.
 - **Un envío parado no se rescata.** Si una réplica cae con un envío en `queued` o `sending`, ahí se
   queda, visible por `getNotification`. Rescatar `sending` arriesgaría un segundo correo real.
-- **Un fallo de envío no se anuncia**: se consulta.
+- **Un fallo de envío no se anuncia**: se consulta con `getNotification`.
+- **Sin consulta por clave e idioma ni listado de versiones**: el pipeline guarda el `templateId`.
+- **Los envíos no se pueden reenviar** ni una publicación deshacer: se pide otro envío, o se publica otra versión.
 - **Los envíos se guardan para siempre**, con variables que pueden llevar datos personales. Hace
   falta una operación de purga antes de producción.
 - **Sin baja de sistemas, sin lista de supresión y sin adjuntos del llamante** en esta versión. Los
   adjuntos están habilitados en la capa `mail` para que el generador compile esa rama, y ningún
   correo de esta versión los lleva.
-- **La audiencia del token no se valida**: los scopes son propios del servicio. Hay que revisarlo si
-  otro servicio del realm adopta uno con el mismo nombre.
 - **La cabecera `Location`** de las altas apunta a rutas que ninguna operación sirve (no hay
   `getApplication`, y la de una plantilla no es la ruta de `getTemplate`). La emite el generador.
 

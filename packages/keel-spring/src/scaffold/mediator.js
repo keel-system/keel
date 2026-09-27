@@ -347,8 +347,84 @@ function useCaseHelpers(telemetry) {
     }${observationOf}`;
 }
 
+// El conflicto de escritura TRANSITORIO del modelo documental (hallazgo 7 de R9). En una
+// transacción de MongoDB, dos escrituras concurrentes sobre el mismo documento no esperan: el
+// perdedor aborta al momento con un WriteConflict (código 112, etiqueta TransientTransactionError).
+// En relacional ese mismo perdedor habría esperado al bloqueo y fallado con el error DECLARADO —la
+// unicidad con su code, o el @Version con CONCURRENT_MODIFICATION—; aquí llegaba al catch-all como
+// 500. Traducirlo a un 409 fijo tampoco iguala los dos motores: el code sería otro. Lo que los
+// iguala es REINTENTAR la transacción, que es lo que recomienda MongoDB para esa etiqueta: en el
+// reintento el perdedor ya ve lo confirmado y falla con el error declarado. Agotado el reintento,
+// sale como conflicto de concurrencia optimista, que el ApiExceptionHandler ya traduce a 409.
+function writeConflictRetry() {
+  return `
+
+    /** Intentos de una transacción de escritura que pierde un conflicto transitorio de MongoDB. */
+    private static final int WRITE_CONFLICT_ATTEMPTS = 3;
+
+    /**
+     * Reintenta la transacción de escritura cuando pierde un conflicto de escritura TRANSITORIO de
+     * MongoDB: dos transacciones que tocan el mismo documento a la vez, y el motor aborta a la que
+     * llega segunda en vez de hacerla esperar. En el reintento esa transacción ve lo que la otra
+     * confirmó y falla con el error que el diseño declara (la unicidad, el bloqueo optimista), que es
+     * lo mismo que ve el perdedor en un motor relacional. Agotados los intentos, sale como conflicto
+     * de concurrencia optimista (409).
+     *
+     * <p>El reintento repite el handler ENTERO, así que dentro de la transacción no puede haber
+     * efectos que salgan del proceso (llamar a un proveedor, mandar un correo): la constitución ya lo
+     * prohíbe, y aquí se vería como un efecto duplicado.
+     */
+    private <T> T retryingWriteConflicts(Supplier<T> transaction) {
+        for (int attempt = 1; ; attempt++) {
+            try {
+                return transaction.get();
+            } catch (RuntimeException ex) {
+                if (!isTransientWriteConflict(ex)) {
+                    throw ex;
+                }
+                if (attempt >= WRITE_CONFLICT_ATTEMPTS) {
+                    throw new OptimisticLockingFailureException(
+                            "Conflicto de escritura concurrente tras " + attempt + " intentos", ex);
+                }
+                log.atDebug().addKeyValue("keel.attempt", attempt)
+                        .log("Conflicto de escritura transitorio: se reintenta la transacción");
+                pause(attempt);
+            }
+        }
+    }
+
+    /**
+     * Se busca en la CADENA de causas y no por la clase de Spring que la envuelve: el traductor de
+     * excepciones de Spring Data MongoDB no fija a qué DataAccessException va un WriteConflict.
+     */
+    private static boolean isTransientWriteConflict(Throwable ex) {
+        for (Throwable cause = ex; cause != null; cause = cause.getCause() == cause ? null : cause.getCause()) {
+            if (cause instanceof MongoException mongo
+                    && (mongo.hasErrorLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL) || mongo.getCode() == 112)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void pause(int attempt) {
+        try {
+            Thread.sleep(10L * attempt + ThreadLocalRandom.current().nextLong(10));
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrumpido mientras se reintentaba una transacción", interrupted);
+        }
+    }`;
+}
+
 function renderMediator(model) {
   const transactional = model.layersPresent.persistence;
+  const retriesConflicts = transactional && model.persistenceKind === 'document';
+  // Con el modelo documental, la transacción de escritura pasa por el reintento del conflicto
+  // transitorio; con el relacional el motor serializa y no hay nada que reintentar.
+  const write = (expression) => (retriesConflicts ? `retryingWriteConflicts(() -> ${expression})` : expression);
+  const writeVoid = (statement) =>
+    retriesConflicts ? `retryingWriteConflicts(() -> { ${statement}; return null; })` : statement;
 
   const javadocHeader = `/**
  * Fachada única de despacho de casos de uso: resuelve el handler registrado
@@ -398,16 +474,16 @@ function renderMediator(model) {
     @SuppressWarnings("unchecked")
     public <C extends Command> void dispatch(C command) {
         CommandHandler<C> instance = (CommandHandler<C>) useCaseContainer.resolve(command.getClass());
-        ${run('command', 'writeTransaction.executeWithoutResult(status -> instance.handle(command))')};
+        ${run('command', writeVoid('writeTransaction.executeWithoutResult(status -> instance.handle(command))'))};
     }
 
     @SuppressWarnings("unchecked")
     public <R, C extends ReturningCommand<R>> R dispatch(C command) {
         ReturningCommandHandler<C, R> instance = (ReturningCommandHandler<C, R>) useCaseContainer.resolve(command.getClass());
-        return ${call('command', 'writeTransaction.execute(status -> instance.handle(command))')};
+        return ${call('command', write('writeTransaction.execute(status -> instance.handle(command))'))};
     }
 
-${dispatchWithoutTransaction(obs)}${helpers}`;
+${dispatchWithoutTransaction(obs)}${helpers}${retriesConflicts ? writeConflictRetry() : ''}`;
   } else {
     members = `    private final UseCaseContainer useCaseContainer;${registryField}
 
@@ -465,6 +541,13 @@ ${dispatchers}
   }
   if (telemetry) {
     imports.push('io.micrometer.observation.Observation', 'io.micrometer.observation.ObservationRegistry');
+  }
+  if (retriesConflicts) {
+    imports.push(
+      'com.mongodb.MongoException',
+      'java.util.concurrent.ThreadLocalRandom',
+      'org.springframework.dao.OptimisticLockingFailureException'
+    );
   }
 
   return {

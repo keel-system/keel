@@ -22,7 +22,8 @@ import { listDerivatives } from './derivatives.js';
 import { flowReviewPlan, FLOW_REVIEW_FILE } from './flow-review.js';
 import { parseCoverageMatrix } from './scenario-blocks.js';
 import { SCENARIOS_FILE, REVIEW_FILE, DECISIONS_FILE, GAPS_FILE } from './spec-files.js';
-import { unwalkedCount } from './gaps-state.js';
+import { unwalkedCount, GAPS_AGENT } from './gaps-state.js';
+import { REVIEW_AGENT } from './review-state.js';
 
 /** Los hallazgos con id que dicen que la matriz de cobertura no cubre el diseño. */
 const MATRIX_FINDINGS = [
@@ -181,12 +182,22 @@ export function assessReadiness(dir, { validation = null } = {}) {
   const total = reviews.covered.length + reviews.missing.length;
   const reviewProblems = !evaluated ? [notEvaluated] : [
     !reviews.reviewedAt ? `no hay ${REVIEW_FILE}` : null,
+    // La revisión la hace un contexto limpio: quien escribió el diseño lee sus decisiones como quiso
+    // tomarlas. Sin `reviewedBy`, la hizo el autor.
+    reviews.reviewedAt && reviews.reviewedBy !== REVIEW_AGENT ? `no la hizo ${REVIEW_AGENT} (sin reviewedBy)` : null,
     reviews.reviewedAt && reviews.missing.length > 0 ? `${reviews.covered.length}/${total} ids con veredicto` : null,
     reviews.stale ? `es de la v${reviews.reviewedAt} y el diseño va por v${version}` : null,
     reviews.open.length > 0 ? `${reviews.open.length} hallazgo(s) abierto(s)` : null,
     reviews.errors.length > 0 ? `${reviews.errors.length} error(es) de formato` : null
   ].filter(Boolean);
-  criteria.push(criterion('review', reviewProblems.length === 0, reviewProblems.join(', '), `/keel-validate ${spec}`));
+  criteria.push(
+    criterion(
+      'review',
+      reviewProblems.length === 0,
+      reviewProblems.join(', '),
+      `/keel-validate ${spec}, que lanza el agente ${REVIEW_AGENT} y repasa sus veredictos contigo`
+    )
+  );
 
   // 3b — El análisis de huecos: que exista, que recorra TODAS las unidades que la máquina deriva
   // (gap-classes.js), que sea de esta versión y que no deje nada abierto. Sin esta pregunta la
@@ -196,6 +207,7 @@ export function assessReadiness(dir, { validation = null } = {}) {
   const unwalked = unwalkedCount(gaps);
   const gapProblems = !evaluated ? [notEvaluated] : [
     !gaps.reviewedAt ? `no hay ${GAPS_FILE}` : null,
+    gaps.reviewedAt && gaps.reviewedBy !== GAPS_AGENT ? `no lo hizo ${GAPS_AGENT} (sin reviewedBy)` : null,
     gaps.reviewedAt && gaps.missingClasses.length > 0
       ? `${applicableClasses - gaps.missingClasses.length}/${applicableClasses} clases recorridas`
       : null,
@@ -209,7 +221,7 @@ export function assessReadiness(dir, { validation = null } = {}) {
       'gaps',
       gapProblems.length === 0,
       gapProblems.join(', '),
-      `/keel-design ${spec} (paso 4b: análisis de huecos) — keel validate --ready ${spec} lista las unidades`
+      `/keel-design ${spec} (paso 4b: lanza el agente ${GAPS_AGENT} y repasa sus hallazgos contigo) — keel validate --ready ${spec} lista las unidades`
     )
   );
 
@@ -252,7 +264,7 @@ export function assessReadiness(dir, { validation = null } = {}) {
   );
 
   // 6 — El careo: sin escenarios no hay nada careado, y eso no es «al día».
-  const plan = scenarios === null ? null : flowReviewPlan(dir, scenarios);
+  const plan = scenarios === null ? null : flowReviewPlan(dir, scenarios, { serviceVersion: version });
   const flowDetail =
     plan === null
       ? 'sin escenarios que carear'

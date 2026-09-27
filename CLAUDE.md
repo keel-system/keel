@@ -101,6 +101,8 @@ npm run claim-check --workspace packages/keel-spring      # ejercita los RECLAMO
 npm run design-matrix --workspace packages/keel-core      # imprime la MATRIZ DE LA PUERTA DE DISEÑO: qué id falsa cada mutación (puro)
 node packages/keel-spring/scripts/claim-check.js <fixture> [--database=<motor>] [--keep]   # una sola pasada
 npm run clean                                    # raíz: barre raíces `keel-tests-*` que dejó un test muerto a la fuerza
+node packages/keel-spring/scripts/corrida-metrics.js footprint <proyecto>   # huella del agente sobre un proyecto terminado (R8)
+node packages/keel-spring/scripts/corrida-metrics.js series                 # serie de docs/corridas: huella, --accept-unready y designGap repetidos
 ```
 
 Qué mide cada check, qué encontró y con qué mutaciones está falsado: en `arnés`. Ahí está también por qué el Java generado no lo compila `npm test` y cuáles son sus dos redes (`java-syntax.test.js` siempre y sin JDK, `compile-check` opt-in con javac).
@@ -165,6 +167,7 @@ La columna «detalle» nombra el archivo de `.claude/rules/` que lleva el razona
 | Una convención de determinación que cambia el código (DSL 2.14: `conventions.nulls`, `constraints.scalePolicy`, `compare`/`match`) | El schema + `crossrefs.js` + el detector `CHK-SCEN-CONVENTION-UNBACKED` + su traducción en keel-spring + `keel-spring/test/catalog-run.test.js` | `core` |
 | Cambio en el careo de flujos o en la coherencia de los derivados | `keel-core/assets/agents/keel-flow-review.md` + `assets/skills/keel-design/references/flow-walkthrough.md` + `src/lib/flow-review.js` + `derived-coherence.js` + `test/flow-review.test.js` y `test/derived-coherence.test.js` | `core` |
 | Un aviso NUEVO del generador sobre el diseño | Fila en `FAMILIAS` de `keel-spring/test/design-generation-delta.test.js`, con `anticipa: '<CHK-ID>'` o `soloGenerador` con el motivo escrito | `core` |
+| Registrar una corrida | `docs/corridas/<fecha>-<servicio>.md` con la tabla de etiquetas fijas de `docs/corridas/README.md`: la fila `Huella del agente` la imprime `corrida-metrics.js footprint`, y la sección `## designGaps` lleva una clave estable por hueco, que es lo que `series` agrupa entre corridas | `core` |
 | Un `designGap` que vuelve de una corrida | `design-gaps.yaml` del proyecto generado → `keel-spring check` lo imprime → `/keel-evolve` lo cierra. Copiarlo a `docs/corridas/<fecha>-<servicio>.md` **antes** de tirar el proyecto | `core` |
 | Cambio en el diseño del par del MVP (`notification-mailer` / `-mongo`) | Las DOS fixtures a la vez (capas idénticas salvo `persistence` y `service`) + sus laterales (`decisions.yaml`, `review.yaml`, `gaps.yaml`, `validation-scenarios.md`, `flow-review.yaml`) + `keel-spring/test/fixture-docs/<n>/DESIGN.md`. Tiene que seguir en 10/10 de `--ready`: lo fija `test/mvp-ready.test.js`; `READY_FIXTURES` (`test/helpers/workspace.js`) es la frontera con las fixtures parciales, que `build` solo genera con `--accept-unready`. Tocar un escenario recarea su flujo, y tocar el YAML, el careo entero | `core` |
 | Nuevo criterio de «diseño listo» (`keel validate --ready`) | `keel-core/src/lib/readiness.js` (fila en `READINESS_CRITERIA` + su evaluación, **componiendo** lo que ya calcula otro módulo) + `test/readiness.test.js`, donde romper su pieza apaga ese id **y solo ese** + la lista de `methodology.md` § Validar | `core` |

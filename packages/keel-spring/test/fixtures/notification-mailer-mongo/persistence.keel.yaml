@@ -13,7 +13,9 @@ entities:
     indexes:
       # Cada petición resuelve su aplicación buscando el client_id ENTRE los credentialKeys: sin
       # índice sobre la colección, esa búsqueda recorre todas las credenciales de todos los sistemas.
-      - [credentialKeys]
+      - fields: [credentialKeys]
+        unique: true
+        description: Un client_id resuelve a una sola aplicación.
 
   Template:
     persisted: true

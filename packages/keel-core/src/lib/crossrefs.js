@@ -2,7 +2,7 @@ import { FRAMEWORK_ERRORS, overrideFor, conditionalUniquenessToken } from './fra
 import { obligationFor } from './obligations.js';
 import { checkFor } from './checks.js';
 import { implicitDefaults } from './structural-defaults.js';
-import { splitScenarioBlocks, scenarioFamilyOf, scenarioIdOf, scenarioBody, parseCoverageMatrix } from './scenario-blocks.js';
+import { splitScenarioBlocks, scenarioFamilyOf, scenarioIdOf, scenarioBody, parseCoverageMatrix, conventionsText } from './scenario-blocks.js';
 
 const BASE_TYPES = new Set(['string', 'text', 'int', 'long', 'decimal', 'boolean', 'uuid', 'date', 'timestamp', 'json', 'file']);
 
@@ -4282,11 +4282,8 @@ function numberedItems(text) {
 // La sección «Convenciones de determinación» troceada por sus párrafos en negrita
 // (**Ausencia.**, **Números.**, **Mayúsculas y acentos.**). Null si el documento no la tiene.
 function conventionsSection(text) {
-  const lines = (text ?? '').split(/\r?\n/);
-  const start = lines.findIndex((line) => /^#{2,3}\s+Convenciones de determinaci[oó]n/i.test(line));
-  if (start === -1) return null;
-  const end = lines.findIndex((line, index) => index > start && /^#{1,3}\s/.test(line));
-  const body = lines.slice(start + 1, end === -1 ? undefined : end).join('\n');
+  const body = conventionsText(text);
+  if (body === null) return null;
   const out = {};
   for (const para of body.split(/\n\s*\n/)) {
     const head = (/^\*\*([^*]+)\*\*/.exec(para.trim()) ?? [])[1] ?? '';

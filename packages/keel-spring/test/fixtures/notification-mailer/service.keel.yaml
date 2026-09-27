@@ -1,7 +1,7 @@
 keel: "2.15"
 service:
   name: notification-mailer
-  version: 1.0.0
+  version: 2.0.0
   description: Envía correo transaccional por cuenta de los sistemas consumidores, a partir de plantillas que viven en su propia base de datos.
   domain: platform
 # Un campo sin valor VIAJA como null, en las respuestas y en los eventos: el cliente distingue

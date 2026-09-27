@@ -835,9 +835,13 @@ function renderExceptionHandler(model) {
     : '';
   // Solo si alguna raíz porta control de versión. Con
   // consistency.optimisticLocking: none no hay de dónde salga la excepción, y
-  // generar el handler documentaría un 409 que el contrato niega.
+  // generar el handler documentaría un 409 que el contrato niega. Salvo en el modelo
+  // DOCUMENTAL: ahí el UseCaseMediator relanza como OptimisticLockingFailureException el
+  // conflicto de escritura transitorio que agota sus reintentos, con o sin @Version, y sin
+  // este handler ese conflicto acabaría en 500.
   const optimisticLock =
-    model.layersPresent.persistence && model.entities.some((entity) => entity.usesOptimisticLocking)
+    model.layersPresent.persistence &&
+    (model.entities.some((entity) => entity.usesOptimisticLocking) || model.persistenceKind === 'document')
       ? renderOptimisticLockHandler(model, imports)
       : '';
   const multipart = model.layersPresent.storage ? renderMultipartHandlers(imports, model) : '';

@@ -87,8 +87,9 @@ de cada flujo:
 
 | Pasada | Cuándo | Qué carea |
 |---|---|---|
-| Completa | no hay careo previo, o un hallazgo se cerró con `resolution: design` (cambió el YAML, así que lo careado de los demás flujos salía de un diseño que ya no existe) | todos los `FL-*` |
+| Completa | no hay careo previo; un hallazgo se cerró con `resolution: design` (cambió el YAML, así que lo careado de los demás flujos salía de un diseño que ya no existe); o cambiaron las **convenciones de determinación**, que rigen todos los `Then` (sello `conventionsSha256`) | todos los `FL-*` |
 | Incremental | solo cambió el texto de algunos flujos | esos flujos, más los que tengan un hallazgo `cross-flow`: dicen que dependen de otro flujo, y el otro pudo cambiar |
+| Ninguna | solo cambió prosa fuera de los flujos y de las convenciones (cabecera, matriz, notas) | nada: la matriz ya la cruza `keel validate`, y esa prosa no cambia lo que un `Then` afirma |
 
 Subir la versión del diseño devuelve presupuesto, porque es otro diseño y le toca su careo. Es la
 misma caducidad que ya gobierna `review.yaml` y `decisions.yaml`.

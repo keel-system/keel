@@ -80,6 +80,9 @@ function workspace({
   review = 'full',
   gaps = 'full',
   gapsStamp = VERSION,
+  // Quién firma la revisión y el barrido. `null` = el autor (sin reviewedBy): --ready lo rechaza.
+  reviewedBy = 'keel-design-review',
+  sweptBy = 'keel-gap-sweep',
   designStamp = VERSION,
   decisions = null,
   structural = true,
@@ -124,7 +127,7 @@ function workspace({
     const layers = { domain: YAML.parse(DOMAIN), 'use-cases': YAML.parse(useCases) };
     const ids = applicableReviews(layers);
     const findings = (review === 'partial' ? ids.slice(1) : ids).map((id) => ({ id, verdict: 'ok' }));
-    write(path.join(dir, REVIEW_FILE), YAML.stringify({ reviewedAt: VERSION, findings }));
+    write(path.join(dir, REVIEW_FILE), YAML.stringify({ ...(reviewedBy ? { reviewedBy } : {}), reviewedAt: VERSION, findings }));
   }
 
   // El barrido se deriva del MISMO inventario que usa la CLI, sobre las capas de este workspace:
@@ -143,7 +146,7 @@ function workspace({
       coverage[0].result = 'findings';
       findings.push({ class: coverage[0].class, unit: coverage[0].units[0], what: 'Algo que el diseño no dice todavía', severity: 'gap', state: 'open' });
     }
-    write(path.join(dir, GAPS_FILE), YAML.stringify({ reviewedAt: gapsStamp, coverage, findings }));
+    write(path.join(dir, GAPS_FILE), YAML.stringify({ ...(sweptBy ? { reviewedBy: sweptBy } : {}), reviewedAt: gapsStamp, coverage, findings }));
   }
 
   // El registro estructural se deriva del MISMO inventario que la clase 16, como el barrido de arriba.
@@ -212,10 +215,13 @@ const ROTURAS = [
   ['structural', { structuralStamp: '0.9.0' }],
   ['review', { review: 'partial' }],
   ['review', { review: null }],
+  // Completa y vigente, pero escrita por el autor: sin la firma del agente de contexto limpio.
+  ['review', { reviewedBy: null }],
   ['gaps', { gaps: null }],
   ['gaps', { gaps: 'partial' }],
   ['gaps', { gaps: 'open' }],
   ['gaps', { gapsStamp: '0.9.0' }],
+  ['gaps', { sweptBy: null }],
   ['scenarios', { scenarioStamp: '0.9.0' }],
   ['coverage-matrix', { matrix: false }],
   // La operación tiene fila, pero la fila no cita ningún flujo (CHK-SCEN-MATRIX-EMPTY-ROW).

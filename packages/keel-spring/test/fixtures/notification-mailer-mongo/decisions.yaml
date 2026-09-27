@@ -18,11 +18,11 @@ decisions:
       estática: infra/check-idempotency.sh, familia mailDelivery, que exige la llamada al
       reclamo ANTES del envío. Queda dicho en validation-scenarios.md, para que el contrato no
       prometa medir lo que no mide.
-    since: 1.0.0
+    since: 2.0.0
   - id: OBL-IDEM-KEY-REQUIRED
     scope: use-cases
     reason: La cabecera es opcional para los integradores actuales; sin ella la peticion se ejecuta sin deduplicar y se acepta a sabiendas.
-    since: 1.0.0
+    since: 2.0.0
   - id: CHK-PERSIST-BOUNDARY-DEFAULT
     scope: persistence.consistency.transactionalBoundary
     reason: >-
@@ -33,7 +33,7 @@ decisions:
       agregados de TIPO distinto (requestNotification lee Application y Template y solo
       escribe Notification), así que la transacción por operación no ensancha la frontera
       que el dominio declara: solo la hace atómica donde el negocio lo necesita.
-    since: 1.0.0
+    since: 2.0.0
   - id: CHK-USECASES-CODE-MULTI-STATUS
     scope: use-cases.errors.TEMPLATE_NOT_FOUND
     reason: >-
@@ -45,7 +45,7 @@ decisions:
       activa que no hay. Partirlo en dos codes
       cambiaría el contrato público sin darle al integrador un hecho nuevo: el status ya le
       dice qué parte de su llamada corregir, y el `when` de cada operación lo describe.
-    since: 1.0.0
+    since: 2.0.0
   - id: CHK-PERSIST-AUDIT-NESTED
     scope: persistence.audit.TemplateVariable
     reason: >-
@@ -53,7 +53,7 @@ decisions:
       auditoría automática solo estampa la raíz. Basta: una variable no cambia nunca por su cuenta
       (se declara al registrar la versión y la versión no se edita), así que sus marcas serían
       siempre las de su Template. Declararlas en el dominio repetiría un dato que ya está.
-    since: 1.0.0
+    since: 2.0.0
 
 structural:
   - section: '3.1'
@@ -66,20 +66,22 @@ structural:
       consumidor creería que no salió y podría volver a pedirlo: un segundo correo real al
       mismo destinatario. El outbox cuesta una tabla y un relay, y el servicio ya tiene
       persistencia propia.
-    since: 1.0.0
+    since: 2.0.0
   - section: '3.2'
     chosen: >-
       requestNotification con keySource client-key (cabecera Idempotency-Key, opcional:
-      OBL-IDEM-KEY-REQUIRED aceptada); la suscripción deduplica por metadata.eventId de la
-      envoltura keel
-    discarded: payload-hash en requestNotification
+      OBL-IDEM-KEY-REQUIRED aceptada, y acotada a la aplicación del llamante); la suscripción
+      deduplica por metadata.eventId de la envoltura keel. Los demás commands no la declaran:
+      registerApplication la frena la clave natural (409), publishTemplate su transición (409), y
+      registerTemplate crea una versión más en borrador, que nadie usa hasta publicarla por id
+    discarded: payload-hash en requestNotification, e idempotencia en registerTemplate
     reason: >-
       Dos peticiones con el mismo cuerpo pueden ser dos intenciones legítimas (dos
       restablecimientos de contraseña seguidos al mismo destinatario): un hash del cuerpo se
       tragaría el segundo correo. Solo el llamante sabe si está reintentando, así que la
       clave la pone él. En el canal de eventos quien repite es el broker, y ahí la clave ya
       existe sin declarar nada.
-    since: 1.0.0
+    since: 2.0.0
   - section: '3.3'
     chosen: sin caché en getTemplate ni en getNotification
     discarded: cache con ttlSeconds en las dos queries
@@ -88,7 +90,7 @@ structural:
       respuesta de hace N segundos le mentiría a quien no escucha eventos, que es para quien
       existe. getTemplate lo lee el pipeline justo después de publicar para comprobarlo. Las
       dos son lecturas por clave primaria: la caché no ahorraría nada que valga su invalidación.
-    since: 1.0.0
+    since: 2.0.0
   - section: '3.4'
     chosen: defaultAudience services en todos los endpoints; ninguna operación de usuario
     discarded: audience both, u operaciones separadas para una consola humana
@@ -96,7 +98,7 @@ structural:
       Todos los consumidores son sistemas con credencial máquina (orders-service,
       orders-service-ci, platform-admin) y la aplicación se deriva del token. No hay pantalla
       que servir: el día que la haya, tendrá sus operaciones propias, no estas con otro público.
-    since: 1.0.0
+    since: 2.0.0
   - section: '3.5'
     scope: messaging.subscriptions.NotificationRequested.onFailure
     chosen: retry exponencial de 5 intentos (1 s a 30 s) y deadLetter true
@@ -108,7 +110,7 @@ structural:
       quien opera la plataforma: una petición de correo perdida en silencio es un cliente sin su
       correo y un consumidor que cree haberlo pedido. La aplicación desconocida no llega al
       handler (onUnresolved: discard). Reintentar no duplica: la guarda es metadata.eventId.
-    since: 1.0.0
+    since: 2.0.0
   - section: '3.7'
     scope: persistence.consistency.transactionalBoundary
     chosen: per-operation
@@ -117,7 +119,7 @@ structural:
       publishTemplate toca dos raíces de Template (la que se retira y la que se activa) y
       tienen que confirmar juntas: con per-aggregate habría una ventana sin versión activa, o
       dos activas si la segunda escritura fallara. El evento del outbox comparte esta frontera.
-    since: 1.0.0
+    since: 2.0.0
   - section: '3.9'
     scope: persistence.consistency.optimisticLocking
     chosen: all
@@ -127,7 +129,7 @@ structural:
       la segunda recibe 409 CONCURRENT_MODIFICATION, declarado en publishTemplate. En
       Notification, el reclamo del barrido y el envío transicionan la misma fila y el último
       que gana podría deshacer un sent. Ningún agregado del servicio tolera perder una escritura.
-    since: 1.0.0
+    since: 2.0.0
   - section: '3.9b'
     scope: persistence.audit.timestamps
     chosen: all
@@ -136,7 +138,7 @@ structural:
       Quien opera un envío que no llegó pregunta primero cuándo se escribió cada fila, así que
       las marcas existen. Ningún cliente las lee: las que importan al contrato (requestedAt,
       sentAt, publishedAt) ya son campos del dominio, y por eso van invisibles y no declared.
-    since: 1.0.0
+    since: 2.0.0
   - section: '3.9b'
     scope: persistence.audit.authorship
     chosen: none
@@ -146,4 +148,4 @@ structural:
       dominio: applicationKey en Notification y la relación a Application en Template. Un
       createdBy con el client_id repetiría eso con peor nombre, y en el camino por evento sería
       el centinela system en todas las filas.
-    since: 1.0.0
+    since: 2.0.0

@@ -8,6 +8,7 @@ vez que alguien la hace entera sobre un diseño con scopes, bucket público y se
 | | |
 |---|---|
 | Diseño | `catalog` v0.1.0 (DSL 2.14, relacional, 7 capas) |
+| Diseño listo al generar | anterior a la puerta (paso 10) |
 | Stack | postgresql · rabbitmq · keycloak · minio · otel |
 | Generador | `keel-spring@0.1.5` |
 | Huecos | **3, los tres del generador**; ninguno del diseño |

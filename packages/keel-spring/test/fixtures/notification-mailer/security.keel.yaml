@@ -2,6 +2,10 @@ authentication:
   protocol: oidc
   serviceAuth:
     protocol: client-credentials
+    # El realm lo comparten otros servicios, y los sistemas que piden correo lo usan también para
+    # ellos: sin validar la audiencia, un token emitido para otro servicio valdría aquí para mandar
+    # correo en nombre de su sistema.
+    validateAudience: true
     description: Cada sistema consumidor es un cliente máquina; la aplicación se deriva del token, nunca del cuerpo.
 
   # La identidad por la puerta HTTP, hermana de la que ya declara

@@ -14,7 +14,7 @@ import YAML from 'yaml';
 import { tmpDir } from './helpers/tmp.js';
 import { harnessFiles } from '../src/commands/init.js';
 import { HARNESSES } from '../src/lib/harness.js';
-import { FLOW_REVIEW_FILE, MAX_PASSES, flowDigests, flowReviewPlan, scenariosDigest } from '../src/lib/flow-review.js';
+import { FLOW_REVIEW_FILE, MAX_PASSES, conventionsDigest, flowDigests, flowReviewPlan, scenariosDigest } from '../src/lib/flow-review.js';
 import { SPEC_SIDE_FILES } from '../src/lib/spec-files.js';
 import { validateService } from '../src/lib/validate-service.js';
 
@@ -163,4 +163,66 @@ test('keel validate dice qué hacer: carear lo que cambió, o decidir', () => {
   const agotado = avisos()[0];
   assert.equal(agotado.id, 'CHK-SCEN-FLOW-REVIEW-EXHAUSTED');
   assert.match(agotado.message, /NO lances otra pasada: decide lo que queda/);
+});
+
+// ─── Lo que hay FUERA de los flujos ────────────────────────────────────────────
+// El careo caducaba por el sha del documento entero y calculaba el alcance por flujo. Un cambio
+// fuera de los `FL-` (las convenciones) lo dejaba `stale` con alcance VACÍO —nada que recarear— o
+// `exhausted` sin salida. Lo destapó el cierre del par del MVP (R9, hallazgo 8 del método).
+
+const WITH_CONVENTIONS = (extra = '') =>
+  `# x\n\n> sello v1.0.0\n\n## Convenciones de determinación\n\n- **Ausencia**: viaja como nulo.${extra}\n\n` +
+  `## Matriz de cobertura\n\n| Operación | Flujos |\n|---|---|\n| op | FL-PRD-001 |\n\n## Flujos\n\n` +
+  `${flow('FL-PRD-001', 201)}${flow('FL-PRD-010', 200)}`;
+
+const sealed = (scenarios, options) => ({ ...reviewOf(scenarios, options), conventionsSha256: conventionsDigest(scenarios) });
+
+test('cambiar las convenciones pide pasada completa: rigen todos los Then', () => {
+  const before = WITH_CONVENTIONS();
+  const after = WITH_CONVENTIONS('\n- **Listas**: vacía viaja como `[]`.');
+  const plan = flowReviewPlan(dirWith(sealed(before), after), after);
+  assert.equal(plan.status, 'stale');
+  assert.equal(plan.full, true);
+  assert.deepEqual(plan.scope, ['FL-PRD-001', 'FL-PRD-010']);
+  assert.match(plan.detail, /convenciones de determinación/);
+});
+
+test('cambiar la prosa que no son convenciones no caduca el careo', () => {
+  const before = WITH_CONVENTIONS();
+  const after = before.replace('> sello v1.0.0', '> sello v1.0.0, con una nota nueva en la cabecera');
+  assert.notEqual(scenariosDigest(before), scenariosDigest(after), 'el documento entero sí cambió');
+  const plan = flowReviewPlan(dirWith(sealed(before), after), after);
+  assert.equal(plan.status, 'ok', plan.detail);
+});
+
+test('un careo anterior al sello de convenciones: un cambio fuera de los flujos pide pasada completa, nunca alcance vacío', () => {
+  const before = WITH_CONVENTIONS();
+  const after = before.replace('> sello v1.0.0', '> sello v1.0.0 retocado');
+  const plan = flowReviewPlan(dirWith(reviewOf(before), after), after);
+  assert.equal(plan.status, 'stale');
+  assert.equal(plan.full, true);
+  assert.deepEqual(plan.scope, ['FL-PRD-001', 'FL-PRD-010']);
+});
+
+test('con el presupuesto agotado, cambiar las convenciones se dice como pasada completa y no se recarea', () => {
+  const before = WITH_CONVENTIONS();
+  const after = WITH_CONVENTIONS('\n- **Listas**: vacía viaja como `[]`.');
+  const plan = flowReviewPlan(dirWith(sealed(before, { passes: MAX_PASSES }), after), after);
+  assert.equal(plan.status, 'exhausted');
+  assert.equal(plan.full, true);
+  assert.equal(plan.nextPass, null);
+});
+
+test('el careo caduca con el minor o el major aunque los escenarios no cambien, y la versión nueva empieza con presupuesto', () => {
+  // Hasta aquí flowReviewPlan no miraba la versión del diseño. Un careo de la v1 seguía valiendo para
+  // la v2 si nadie tocaba los escenarios, y si la v1 había gastado sus tres pasadas, la v2 nacía
+  // agotada sin salida. Lo destapó el paso a v2.0.0 del par del MVP.
+  const agotado = reviewOf(SCENARIOS, { passes: MAX_PASSES });
+  const dir = dirWith(agotado);
+  assert.equal(flowReviewPlan(dir, SCENARIOS, { serviceVersion: '1.0.3' }).status, 'ok', 'un patch no caduca el careo');
+  const plan = flowReviewPlan(dir, SCENARIOS, { serviceVersion: '2.0.0' });
+  assert.equal(plan.status, 'stale');
+  assert.equal(plan.nextPass, 1);
+  assert.equal(plan.full, true);
+  assert.deepEqual(plan.scope, ['FL-PRD-001', 'FL-PRD-010', 'FL-SEC-001']);
 });

@@ -1,7 +1,7 @@
 # notification-mailer-mongo — Escenarios de validación
 
 > Escenarios de aceptación ejecutables (Given/When/Then) derivados de
-> specs/notification-mailer-mongo v1.0.0. Contrato de validación para la fase de generación.
+> specs/notification-mailer-mongo v2.0.0. Contrato de validación para la fase de generación.
 
 > **El par del MVP, cerrado de punta a punta.** Es la fixture sobre la que el método se ejerce
 > entero —escenarios, careo, revisión, análisis de huecos y registro estructural— y la que fija
@@ -19,6 +19,10 @@
   payloads de evento; nunca se omite (`conventions.nulls: include`). `publishedAt` es nulo
   mientras la plantilla está en borrador; `sentAt` y `sendingSince`, mientras el envío no ha
   salido.
+- **Direcciones e idiomas**: una dirección es algo con una `@` en medio y hasta 254
+  caracteres; un idioma, dos letras y región opcional (`es`, `es-ES`). Los dos se comparan
+  **exactos**: `es` y `es-ES` son idiomas distintos, y una petición en `es-ES` no cae en la
+  plantilla `es`.
 - **Colecciones**: el orden de `credentialKeys`, `copyRecipients` y las `variables` (de una
   plantilla o de un envío) es **indiferente**: ninguna relación ni campo de lista del diseño
   declara posición. Se afirman como conjunto: los mismos elementos, en cualquier orden.
@@ -108,6 +112,8 @@ cliente `platform-admin`:
 
 **Orden de evaluación**:
 1. La clave no está dada de alta → `APPLICATION_ALREADY_EXISTS` (`409`).
+2. Ninguna credencial es ya de otro sistema → `CREDENTIAL_ALREADY_ASSIGNED` (`409`), ver
+   FL-APP-001-B.
 
 **Casos borde**:
 - Sin `name` → `400`.
@@ -126,10 +132,21 @@ cliente `platform-admin`:
    `orders-service-ci` sigue resolviendo a la aplicación de FL-APP-001 (su `applicationId` es
    `<a1>`).
 
+**When**: `POST /v1/applications` con `key: "billing"` y `credentialKeys: ["billing-service",
+"orders-service"]`: una de las credenciales ya es de `orders`.
+
+**Then**:
+3. Status `409` con code `CREDENTIAL_ALREADY_ASSIGNED`.
+4. `billing` no existe, y `orders-service` sigue resolviendo a `orders`: un `registerTemplate`
+   con la credencial de máquina del cliente `orders-service-ci` responde con `applicationId: <a1>`.
+   Un sistema no puede darse de alta con la credencial de otro para ver sus datos.
+
 **Casos borde**:
 - Sin credencial → `401`.
 - Con la credencial de máquina del cliente `orders-service`, que no tiene `application:admin` →
   `403`. Quien manda correo no puede darse de alta a sí mismo.
+- `credentialKeys: []` → `400` (`minItems: 1`).
+- `defaultSender: "no-es-una-direccion"` → `400`.
 
 ## Plantillas
 
@@ -175,6 +192,7 @@ del cliente `orders-service-ci` y el cuerpo de la plantilla de prueba:
 - Sin `variables` → `201` con `variables: []`: una plantilla puede no tener ninguna.
 - Con 51 variables → `400` (`maxItems: 50`).
 - `subject` de 201 caracteres → `400`. `bodyHtml` de 100 001 caracteres → `400`.
+- `PUT /v1/templates/order-shipped/ES_es` → `400`: el idioma no tiene forma de idioma.
 - Sin credencial → `401`. Con la credencial de máquina del cliente `orders-service`, que no
   tiene `template:write` → `403`.
 
@@ -370,7 +388,8 @@ por cada envío que reclama.
    forma de instante y el resto del cuerpo igual que en el paso 3.
 6. El canal `notificationEvents` recibe **exactamente un** `NotificationSent` con
    `{notificationId: <n1>, applicationKey: "orders", templateKey: "order-shipped",
-   recipient: "ana@cliente.example", occurredAt: <instante>}`, y nada más.
+   dedupeKey: "<k1>", occurredAt: <instante>}`, y nada más: el destinatario **no** viaja, porque
+   el canal lo leen todos los sistemas.
 
 **Orden de evaluación**:
 1. La misma clave no se está atendiendo ya → `IDEMPOTENCY_KEY_IN_PROGRESS` (`409`); ni llega
@@ -378,7 +397,8 @@ por cada envío que reclama.
 2. La aplicación está registrada y activa → `APPLICATION_INACTIVE` (`403`).
 3. Hay plantilla activa con esa clave e idioma para esa aplicación → `TEMPLATE_NOT_FOUND`
    (`422`).
-4. Toda variable requerida llega con valor → `TEMPLATE_VARIABLE_MISSING` (`422`).
+4. Ninguna variable llega repetida → `TEMPLATE_VARIABLE_DUPLICATED` (`422`).
+5. Toda variable requerida llega con valor → `TEMPLATE_VARIABLE_MISSING` (`422`).
 
 **Ramas condicionales**:
 - Sin `locale`, el envío usa el `defaultLocale` de la aplicación: la misma petición sin `locale`
@@ -389,8 +409,12 @@ por cada envío que reclama.
 **Casos borde**:
 - Sin `recipient` → `400`. `copyRecipients` con 11 direcciones → `400` (`maxItems: 10`).
 - `variables` con 51 elementos → `400`. Un valor de 1001 caracteres → `400`.
+- `recipient: "no-es-una-direccion"` → `400`. `locale: "ES"` → `400`.
+- `customerName: "<b>Ana</b>"` → la parte html lleva `&lt;b&gt;Ana&lt;/b&gt;` y la de texto
+  `<b>Ana</b>` tal cual: los valores se escapan en el html y solo ahí.
 - Sin credencial → `401`. Con la credencial de máquina del cliente `orders-service-ci`, que no
-  tiene `notification:send` → `403`.
+  tiene `notification:send` → `403`. Con un token de `orders-service` emitido para **otra
+  audiencia** → `403`.
 
 #### FL-NTF-001-B: el cliente reintenta con la misma clave
 
@@ -449,15 +473,22 @@ alta.
 **Then**:
 2. Status `422` con code `TEMPLATE_VARIABLE_MISSING`.
 
+**When**: `POST /v1/notifications` con `templateKey: "welcome"`, `recipient:
+"a4@cliente.example"` y `variables: [{name: "customerName", value: "Ana"}, {name:
+"customerName", value: "Eva"}]`.
+**Then**:
+3. Status `422` con code `TEMPLATE_VARIABLE_DUPLICATED`.
+
 **When**: `POST /v1/notifications` con la credencial de máquina del cliente `billing-service`,
 `templateKey: "no-existe"` y `recipient: "a3@cliente.example"`.
 **Then**:
-3. Status `403` con code `APPLICATION_INACTIVE` — la precedencia: la aplicación se comprueba
+4. Status `403` con code `APPLICATION_INACTIVE` — la precedencia: la aplicación se comprueba
    antes que la plantilla, y un sistema sin dar de alta no llega a saber qué plantillas hay.
 
 **Then**:
-4. Pasado un ciclo del barrido, el buzón **no** tiene ningún correo para `a1@cliente.example`,
-   `a2@cliente.example` ni `a3@cliente.example`: el rechazo llegó antes del envío.
+5. Pasado un ciclo del barrido, el buzón **no** tiene ningún correo para `a1@cliente.example`,
+   `a2@cliente.example`, `a3@cliente.example` ni `a4@cliente.example`: el rechazo llegó antes
+   del envío.
 
 ### FL-NTF-004: un sistema no ve los envíos de otro
 
@@ -487,6 +518,7 @@ cliente `billing-service`.
 `metadata.source: "orders-service"`, `metadata.eventId: <e1>` y el payload
 ```json
 { "templateKey": "order-shipped", "locale": "es", "recipient": "eva@cliente.example",
+  "copyRecipients": ["archivo@tienda.example"],
   "variables": [ { "name": "orderNumber", "value": "A-2002" },
                  { "name": "customerName", "value": "Eva" } ] }
 ```
@@ -494,11 +526,13 @@ y se ejecuta `acceptNotificationRequest`.
 
 **Then**:
 1. En ≤ 70 s el buzón de prueba recibe **exactamente un** correo para `eva@cliente.example`, con
-   remitente `pedidos@tienda.example` y asunto `"Pedido A-2002 enviado"`: la aplicación salió de
+   copia a `archivo@tienda.example`, remitente `pedidos@tienda.example` y asunto
+   `"Pedido A-2002 enviado"`: la aplicación salió de
    la envoltura, resuelta por los `credentialKeys` igual que por HTTP.
 2. El canal `notificationEvents` recibe **exactamente un** `NotificationSent` con
    `{notificationId: <uuid>, applicationKey: "orders", templateKey: "order-shipped",
-   recipient: "eva@cliente.example", occurredAt: <instante>}`.
+   dedupeKey: "event:<e1>", occurredAt: <instante>}`: con ese `dedupeKey` el sistema que pidió por
+   evento reconoce su petición.
 3. La cola de descarte de la suscripción sigue vacía.
 
 **Orden de evaluación**:
@@ -520,7 +554,7 @@ El canal es at-least-once: el broker puede entregar otra vez un mensaje que ya s
 **Then**:
 1. Pasado un ciclo del barrido, el buzón sigue teniendo **un solo** correo para
    `eva@cliente.example`.
-2. `notificationEvents` no recibe un segundo `NotificationSent` para ese destinatario.
+2. `notificationEvents` no recibe un segundo `NotificationSent` con `dedupeKey: "event:<e1>"`.
 3. La cola de descarte sigue vacía: una reentrega no es un fallo.
 
 **Casos borde**:
@@ -579,7 +613,8 @@ de `queueAcceptedNotifications`.
 2. `notificationEvents` no recibe ningún `NotificationSent` para ese envío.
 3. Un segundo ciclo del barrido no lo vuelve a intentar: `failed` es terminal.
 
-**Notas de determinación**: es el único fallo de entrega que este servicio puede observar. Un
+**Notas de determinación**: es el único fallo de entrega que este servicio puede observar, y un
+relay que no se alcanza o no contesta a tiempo acaba igual, en `failed`. Un
 rebote posterior —el relay acepta y el destino lo devuelve horas después— queda fuera del
 diseño. El `Given` necesita que el relay de prueba sepa rechazar un destinatario; si el
 generador no ofrece esa primitiva, el flujo se puntúa `uncovered` con ese motivo, nunca se
@@ -601,10 +636,12 @@ instancia puede sustituir.
 para que cada envío complete su desenlace, sea cual sea el tamaño de lote.
 
 **Then**:
-1. El buzón recibe **exactamente un** correo para cada uno de `r1` … `r5`: cinco en total, ni
-   uno más.
+1. El buzón recibe **exactamente un** correo para cada uno de `r1` … `r5`: cinco para esas
+   direcciones, ni uno más. (El del control ya estaba en el buzón y no cuenta.)
 2. Los cinco envíos están en `sent`, leídos con `getNotification`.
-3. `notificationEvents` recibe **exactamente cinco** `NotificationSent`, uno por envío.
+3. `notificationEvents` recibe **exactamente un** `NotificationSent` por cada uno de los cinco
+   `notificationId`: cinco para esos envíos, ni uno más. (El del control se publicó antes y no
+   cuenta.)
 4. El envío de control no vuelve a salir: el buzón sigue teniendo un solo correo para
    `control@cliente.example`.
 
@@ -627,8 +664,8 @@ mensajes y el canal de eventos **indisponible**.
 
 **Then**:
 4. En ≤ 10 s `notificationEvents` recibe **exactamente un** `NotificationSent` para ese envío,
-   con `{notificationId, applicationKey: "orders", templateKey: "order-shipped",
-   recipient: "obx@cliente.example", occurredAt}`.
+   con `{notificationId, applicationKey: "orders", templateKey: "order-shipped", dedupeKey,
+   occurredAt}`, donde `dedupeKey` es la clave de la petición del paso anterior.
 5. El servidor no se ha rendido con ningún evento: ningún evento abandonado.
 
 ### FL-OBX-002: el evento que el relay abandona no se pierde en silencio

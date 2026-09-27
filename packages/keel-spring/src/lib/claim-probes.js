@@ -277,18 +277,60 @@ export function requiredLiterals(scenarios, clockField, orderField) {
   for (const field of scenarios.entity.fields ?? []) {
     if (field.isId || reservados.has(field.name) || !field.required) continue;
     if (field.list) throw new Error(`claim-check: el campo obligatorio '${field.name}' es una lista y no sé sembrarlo`);
-    // Un formato declarado no se puede satisfacer con un valor fabricado, y Hibernate aplica la
-    // validación al persistir: el INSERT lo rechazaría en la siembra y todos los casos caerían a
-    // la vez con un error que no habla del reclamo. Mejor decirlo aquí, nombrando el campo.
-    if (field.inheritedPattern || (field.validation ?? []).some((rule) => rule.startsWith('@Pattern'))) {
-      throw new Error(
-        `claim-check: el campo obligatorio '${field.name}' declara un formato y no sé fabricar un valor que lo cumpla`
-      );
+    // Un formato declarado no se satisface con cualquier valor, y Hibernate aplica la validación al
+    // persistir: el INSERT lo rechazaría en la siembra y todos los casos caerían a la vez con un
+    // error que no habla del reclamo. Se prueba una lista corta de candidatos contra el PROPIO
+    // patrón y la cota de la columna; si ninguno casa, se dice aquí, nombrando el campo.
+    const pattern = patternOf(field);
+    if (pattern !== null) {
+      const literal = patternedLiteral(field, pattern);
+      if (literal === null) {
+        throw new Error(
+          `claim-check: el campo obligatorio '${field.name}' declara un formato y no sé fabricar un valor que lo cumpla`
+        );
+      }
+      literals.push(`        row.${accessor('set', field.name)}(${literal});`);
+      continue;
     }
     const literal = literalFor(field);
     literals.push(`        row.${accessor('set', field.name)}(${literal});`);
   }
   return literals;
+}
+
+/** El formato que el campo declara o hereda de su value type, como expresión regular; null si no hay. */
+function patternOf(field) {
+  if (field.inheritedPattern) return field.inheritedPattern;
+  const annotation = (field.validation ?? []).find((rule) => rule.startsWith('@Pattern'));
+  if (!annotation) return null;
+  const regexp = /regexp = "((?:[^"\\]|\\.)*)"/.exec(annotation);
+  // El literal viene escapado para Java: `\\s` en el fuente es `\s` en la expresión.
+  return regexp ? regexp[1].replace(/\\\\/g, '\\') : '';
+}
+
+/**
+ * Candidatos para un campo con formato, primero los que varían por fila (un campo obligatorio suele
+ * formar parte de una clave). Cada uno lleva su expresión Java y una muestra con la que se contrasta
+ * el patrón aquí mismo, antes de emitir nada.
+ */
+const PATTERNED_CANDIDATES = [
+  { java: 'java.util.UUID.randomUUID() + "@claim-check.example"', sample: '3f2504e0-4f89-41d3-9a0c-0305e82c3301@claim-check.example' },
+  { java: '"es"', sample: 'es' },
+  { java: '"es-ES"', sample: 'es-ES' },
+  { java: '"claim-check"', sample: 'claim-check' }
+];
+
+/** El primer candidato que cumple el patrón y cabe en la columna, o null si ninguno. */
+function patternedLiteral(field, pattern) {
+  let regex;
+  try {
+    regex = new RegExp(pattern);
+  } catch {
+    return null;
+  }
+  const max = maxLengthOf(field);
+  const fits = (candidate) => regex.test(candidate.sample) && (max === null || candidate.sample.length <= max);
+  return PATTERNED_CANDIDATES.find(fits)?.java ?? null;
 }
 
 /**

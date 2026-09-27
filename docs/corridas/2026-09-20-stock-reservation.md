@@ -5,6 +5,7 @@ Primera corrida hecha para **medir huecos de diseño**, no para validar el gener
 | | |
 |---|---|
 | Diseño | `stock-reservation` v1.0.0 (relacional, 7 capas) |
+| Diseño listo al generar | anterior a la puerta (paso 10) |
 | Matriz final | **17/17 OK** |
 | Huecos reportados | 10 (4 del agente de código, 7 del de pruebas; uno repetido entre ambos) |
 | Convertidos en id | 4 (`OBL-IDEM-KEY-REQUIRED`, `CHK-DEPS-CLOCK-NOT-OBSERVABLE`, `OBL-OUTCOME-NEGATIVE-UNDECIDED`, `REV-MSG-DEDUPE-WINDOW`) |

@@ -135,9 +135,11 @@ deshace. Recorre la clase 8 del barrido para cada compensación cuya activación
 haya tocado el cambio, y vuelve a responder las dos preguntas de §3.11: cómo no se aplica dos veces
 y a qué estado vuelve.
 
-El barrido va a `gaps.yaml`, no al chat. Con la versión subida, `keel validate --ready` lo da por
-caducado y lista como **sin recorrer** las unidades que el cambio añadió: esas, más las clases de lo
-tocado, son el alcance. Actualiza su `coverage` y sus `findings`, cierra cada hallazgo con una
+El barrido va a `gaps.yaml`, no al chat, y **no lo haces tú**: lánzalo con el subagente `keel-gap-sweep`
+(`{{keel:agents}}/keel-gap-sweep.md`) y pásale el alcance. Lo mismo con la revisión de lo tocado, que
+es del subagente `keel-design-review`. Los dos firman su archivo con `reviewedBy`, y `--ready` lo exige.
+Con la versión subida, `keel validate --ready` da el barrido por caducado y lista como **sin recorrer**
+las unidades que el cambio añadió: esas, más las clases de lo tocado, son el alcance. Actualiza su `coverage` y sus `findings`, cierra cada hallazgo con una
 decisión del usuario —ninguno queda `open`— y vuelve a sellar `reviewedAt` con la versión nueva.
 Lo que quede en el archivo de una unidad que ya no existe, la CLI lo marca como huérfano: bórralo.
 

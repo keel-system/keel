@@ -14,7 +14,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadService } from 'keel-core';
 import { buildModel } from '../src/lib/model.js';
-import { claimScenarios, claimTestClass, harnessProbes, BATCH_SIZE, CLASS_NAME } from '../src/lib/claim-probes.js';
+import { claimScenarios, claimTestClass, harnessProbes, requiredLiterals, BATCH_SIZE, CLASS_NAME } from '../src/lib/claim-probes.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixturesDir = path.join(here, 'fixtures');
@@ -226,4 +226,22 @@ test('la rama documental ejercita la MISMA guarda con su findAndModify', () => {
   // Se relee por el template, no por un repositorio JPA que aquí no existe.
   assert.match(java, /mongo\.findById\(id, NotificationDocument\.class\)/);
   assert.ok(!java.includes('jpa.findById'), 'la rama documental cita el repositorio relacional');
+});
+
+// Un campo obligatorio con formato (un `Locale`, un `EmailAddress`) se siembra con un candidato que
+// cumpla su PROPIO patrón y quepa en su columna. Si ninguno lo cumple, se falla nombrando el campo:
+// sembrar un valor que el INSERT rechazaría tumbaría todos los casos con un error que no habla del
+// reclamo. Nació con la v2.0.0 del par del MVP, la primera fixture con un campo así.
+const withField = (field) => ({ statusField: 'status', entity: { fields: [{ name: 'x', javaType: 'String', required: true, ...field }] } });
+
+test('un campo con formato se siembra con un candidato que cumple su patrón y cabe en la columna', () => {
+  assert.deepEqual(requiredLiterals(withField({ inheritedPattern: '^[a-z]{2}(-[A-Z]{2})?$', columns: ['@Column(name = "x", length = 10)'] })), [
+    '        row.setX("es");'
+  ]);
+  const email = requiredLiterals(withField({ validation: ['@Pattern(regexp = "^[^@\\s]+@[^@\\s]+$")'] }));
+  assert.match(email[0], /UUID\.randomUUID\(\) \+ "@claim-check\.example"/, 'el que varía por fila va primero');
+});
+
+test('un formato que ningún candidato cumple se dice nombrando el campo', () => {
+  assert.throws(() => requiredLiterals(withField({ inheritedPattern: '^[0-9]{9}$' })), /campo obligatorio 'x' declara un formato/);
 });

@@ -17,7 +17,10 @@ publishing:
         notificationId: { type: uuid, required: true }
         applicationKey: { type: string, required: true }
         templateKey:    { type: string, required: true }
-        recipient:      { type: string, required: true }
+        # El canal lo leen TODOS los inquilinos, así que el destinatario no viaja: cada sistema
+        # vería las direcciones de los demás. Para correlacionar con su petición, dedupeKey: la
+        # Idempotency-Key que mandó por HTTP, o event:<eventId> si pidió por evento.
+        dedupeKey:      { type: string, required: true }
         occurredAt:     { type: timestamp, required: true }
 
 subscriptions:
@@ -75,8 +78,9 @@ subscriptions:
       # Las mismas cotas que el input de acceptNotificationRequest: el payload es el contrato que
       # leen los emisores, y sin ellas un mensaje válido para el canal llegaría a la cola de descarte.
       templateKey: { type: string, required: true, constraints: { maxLength: 64 } }
-      locale:      { type: string, constraints: { maxLength: 10 } }
-      recipient:   { type: string, required: true, constraints: { maxLength: 320 } }
+      locale:      { type: Locale }
+      recipient:   { type: EmailAddress, required: true }
+      copyRecipients: { type: EmailAddress, list: true, constraints: { maxItems: 10 } }
       variables:   { type: TemplateVariableValue, list: true, constraints: { maxItems: 50 } }
     triggers: acceptNotificationRequest
     # Dos clases de fallo y un solo destino. El PASAJERO (la base no responde) se reintenta con

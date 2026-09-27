@@ -50,6 +50,27 @@ export function scenarioBody(block) {
 }
 
 /**
+ * El cuerpo de la sección `## Convenciones de determinación`, sin su encabezado y hasta el
+ * siguiente, con los espacios finales normalizados. Null si el documento no la tiene.
+ *
+ * Es lo único fuera de los bloques `FL-` que cambia el significado de TODOS los `Then` (el
+ * formato temporal, ausencia frente a nulo, el orden de las listas…). De ahí que la lean dos:
+ * `crossrefs.js`, que contrasta lo que dice con el YAML, y `flow-review.js`, que la sella para que
+ * cambiarla pida recarear el documento entero.
+ */
+export function conventionsText(text) {
+  const lines = (text ?? '').split(/\r?\n/);
+  const start = lines.findIndex((line) => /^#{2,3}\s+Convenciones de determinaci[oó]n/i.test(line));
+  if (start === -1) return null;
+  const end = lines.findIndex((line, index) => index > start && /^#{1,3}\s/.test(line));
+  return lines
+    .slice(start + 1, end === -1 ? undefined : end)
+    .map((line) => line.trimEnd())
+    .join('\n')
+    .trim();
+}
+
+/**
  * La tabla de `## Matriz de cobertura` como datos: `[{ operation, flows, surface }]`.
  *
  * Existe porque esa matriz es lo ÚNICO estructurado del documento —el resto es prosa

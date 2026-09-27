@@ -66,6 +66,9 @@ function shape(version) {
   return `${major}.${minor}`;
 }
 
+/** El agente de contexto limpio que hace el barrido de huecos; ver REVIEW_AGENT en review-state.js. */
+export const GAPS_AGENT = 'keel-gap-sweep';
+
 export function emptyGaps() {
   return {
     inventory: [],
@@ -75,6 +78,7 @@ export function emptyGaps() {
     accepted: [],
     stale: false,
     reviewedAt: null,
+    reviewedBy: null,
     orphans: [],
     errors: []
   };
@@ -88,7 +92,12 @@ export function emptyGaps() {
  * @param {string} serviceVersion service.version del manifiesto
  */
 export function resolveGaps(inventory, doc, serviceVersion) {
-  const result = { ...emptyGaps(), inventory: inventory ?? [], reviewedAt: doc?.reviewedAt ?? null };
+  const result = {
+    ...emptyGaps(),
+    inventory: inventory ?? [],
+    reviewedAt: doc?.reviewedAt ?? null,
+    reviewedBy: doc?.reviewedBy ?? null
+  };
   const applicable = new Map((inventory ?? []).map((entry) => [entry.class, entry]));
 
   const coverage = new Map();

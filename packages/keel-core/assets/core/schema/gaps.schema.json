@@ -7,6 +7,10 @@
   "additionalProperties": false,
   "required": ["reviewedAt"],
   "properties": {
+    "reviewedBy": {
+      "const": "keel-gap-sweep",
+      "description": "Quién hizo el barrido: el agente de contexto limpio keel-gap-sweep, lanzado sobre specs/<servicio>/ sin la conversación del diseño. keel validate --ready lo exige. Quien escribió el diseño lee sus decisiones como quiso tomarlas, y en el cierre del par del MVP (R9) la lectura independiente fue la que más encontró. La máquina no puede comprobar que sea verdad, pero sí obliga a declararlo."
+    },
     "reviewedAt": {
       "type": "string",
       "pattern": "^\\d+\\.\\d+\\.\\d+$",

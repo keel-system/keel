@@ -93,6 +93,14 @@ function shape(version) {
  * @returns {{ covered: object[], missing: object[], open: object[], accepted: object[],
  *            stale: boolean, reviewedAt: string|null, orphans: object[], errors: string[] }}
  */
+/**
+ * El agente de contexto limpio que hace la revisión. `reviewedBy` lo declara, y el criterio `review`
+ * de `keel validate --ready` lo exige: quien escribió el diseño lee sus decisiones como quiso
+ * tomarlas, igual que con los escenarios, y en R9 la lectura independiente fue la que más encontró.
+ * No se puede verificar que sea verdad; sí obliga a decirlo, y a mentir a sabiendas.
+ */
+export const REVIEW_AGENT = 'keel-design-review';
+
 export function resolveReviews(applicable, doc, serviceVersion) {
   const result = {
     covered: [],
@@ -101,6 +109,7 @@ export function resolveReviews(applicable, doc, serviceVersion) {
     accepted: [],
     stale: false,
     reviewedAt: doc?.reviewedAt ?? null,
+    reviewedBy: doc?.reviewedBy ?? null,
     orphans: [],
     errors: []
   };

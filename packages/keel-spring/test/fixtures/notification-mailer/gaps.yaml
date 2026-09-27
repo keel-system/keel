@@ -1,328 +1,412 @@
-# El análisis de huecos de este diseño (gap-analysis.md), recorrido entero durante el cierre de R9:
-# las 16 clases que aplican, con todas sus unidades. Los `decided` se materializaron en el diseño
-# en esa misma sesión; los `accepted` se dejan a sabiendas, con su porqué.
-reviewedAt: 1.0.0
+reviewedBy: keel-gap-sweep
+reviewedAt: 2.0.0
 
 coverage:
   - class: 1
-    units: [Template, Notification]
+    units: [ Template, Notification ]
     result: findings
   - class: 2
-    units: [registerApplication, publishTemplate, registerTemplate, requestNotification, acceptNotificationRequest, queueAcceptedNotifications, sendAcceptedNotification]
+    units:
+      [
+        registerApplication,
+        publishTemplate,
+        registerTemplate,
+        requestNotification,
+        acceptNotificationRequest,
+        queueAcceptedNotifications,
+        sendAcceptedNotification
+      ]
     result: findings
   - class: 3
-    units: [Application, Template, TemplateVariable, Notification]
+    units: [ Application, Template, TemplateVariable, Notification ]
     result: findings
   - class: 4
-    units: [registerApplication, publishTemplate, registerTemplate, requestNotification, acceptNotificationRequest, queueAcceptedNotifications, sendAcceptedNotification]
+    units:
+      [
+        registerApplication,
+        publishTemplate,
+        registerTemplate,
+        requestNotification,
+        acceptNotificationRequest,
+        queueAcceptedNotifications,
+        sendAcceptedNotification
+      ]
     result: findings
   - class: 5
-    units: [getTemplate, getNotification]
+    units: [ getTemplate, getNotification ]
     result: clean
   - class: 6
-    units: [Application, Template, TemplateVariable, Notification]
-    result: clean
+    units: [ Application, Template, TemplateVariable, Notification ]
+    result: findings
   - class: 7
-    units: [publishing.NotificationSent, subscriptions.NotificationRequested]
+    units: [ publishing.NotificationSent, subscriptions.NotificationRequested ]
     result: findings
   - class: 8
-    units: [subscriptions.NotificationRequested]
-    result: findings
+    units: [ subscriptions.NotificationRequested ]
+    result: clean
   - class: 9
-    units: [registerApplication, publishTemplate, registerTemplate, requestNotification, acceptNotificationRequest, queueAcceptedNotifications, sendAcceptedNotification, getTemplate, getNotification]
+    units:
+      [
+        registerApplication,
+        publishTemplate,
+        registerTemplate,
+        requestNotification,
+        acceptNotificationRequest,
+        queueAcceptedNotifications,
+        sendAcceptedNotification,
+        getTemplate,
+        getNotification
+      ]
     result: findings
   - class: 11
-    units: [registerApplication, publishTemplate, registerTemplate, requestNotification, getTemplate, getNotification, serviceClients.orders-service, serviceClients.orders-service-ci, serviceClients.billing-service, serviceClients.billing-service-ci, serviceClients.platform-admin]
+    units:
+      [
+        registerApplication,
+        publishTemplate,
+        registerTemplate,
+        requestNotification,
+        getTemplate,
+        getNotification,
+        serviceClients.orders-service,
+        serviceClients.orders-service-ci,
+        serviceClients.billing-service,
+        serviceClients.billing-service-ci,
+        serviceClients.platform-admin
+      ]
     result: findings
   - class: 12
-    units: [service]
+    units: [ service ]
     result: findings
   - class: 13
-    units: [queueAcceptedNotifications]
+    units: [ queueAcceptedNotifications ]
     result: findings
   - class: 14
-    units: [Application, Template, TemplateVariable, Notification]
+    units: [ Application, Template, TemplateVariable, Notification ]
     result: findings
   - class: 15
-    units: [registerApplication, publishTemplate, registerTemplate, requestNotification, getTemplate, getNotification]
+    units:
+      [
+        registerApplication,
+        publishTemplate,
+        registerTemplate,
+        requestNotification,
+        getTemplate,
+        getNotification
+      ]
     result: findings
   - class: 16
-    units: ['3.1', '3.2', '3.3', '3.4', '3.5', '3.7', '3.9', '3.9b']
-    result: clean
+    units: [ '3.1', '3.2', '3.3', '3.4', '3.5', '3.7', '3.9', '3.9b' ]
+    result: findings
   - class: 17
-    units: [sendAcceptedNotification]
+    units: [ sendAcceptedNotification ]
     result: findings
 
 findings:
-  # 1. Alcanzabilidad del ciclo de vida
+  # --- Clase 1 ---
   - class: 1
-    unit: Notification
-    what: El estado failed solo se alcanza si el relay rechaza el mensaje, y el arnés de prueba no sabe provocarlo.
+    unit: Template
+    what: >-
+      Una versión activa solo sale de active publicando otra que la sustituya, y un borrador no
+      tiene salida: el diseño no dice si una aplicación puede retirar su plantilla sin reemplazo ni
+      descartar un borrador que no va a publicar.
     severity: risk
     state: accepted
-    reason: >-
-      El estado es alcanzable en el diseño: sendAcceptedNotification transita a failed cuando el
-      relay rechaza. Lo que falta es del generador, una primitiva para que el relay de prueba
-      rechace un destinatario. FL-DSP-001 lo escribe igualmente y dice que se puntúa uncovered
-      mientras no exista, en vez de fabricar el failed escribiendo en el almacén.
+    reason: "Aceptado en v2.0.0: una versión activa solo se sustituye publicando otra y un borrador se
+      queda en borrador. Deshacer una publicación es publicar la anterior como versión nueva; no
+      hace falta una transición de vuelta para eso."
 
-  # 2. Guardas ↔ errores
+  # --- Clase 2 ---
   - class: 2
-    unit: sendAcceptedNotification
-    what: Declaraba TEMPLATE_NOT_FOUND para una plantilla congelada que ya no está, y ninguna operación borra versiones.
+    unit: publishTemplate
+    what: >-
+      La precondición «está en borrador» no tiene error en `errors`: el code y el http de publicar
+      una versión active o retired (INVALID_STATE_TRANSITION, 409) solo existen en los escenarios.
     severity: gap
-    state: decided
-    reason: >-
-      Se quitó el error, que era inalcanzable, y una regla dice por qué: se renderiza la versión
-      congelada aunque esté retirada.
-  - class: 2
-    unit: registerTemplate
-    what: Una plantilla que no compila se registraba y fallaba al enviar, sin error declarado.
-    severity: gap
-    state: decided
-    reason: Se compila al registrar, con TEMPLATE_SYNTAX_INVALID (422).
+    state: accepted
+    reason: "Aceptado: publicar algo que no está en borrador responde 409 INVALID_STATE_TRANSITION, que es
+      el code de framework del lifecycle (framework-errors.md) y no se declara en errors.
+      FL-TPL-010-B lo afirma."
   - class: 2
     unit: requestNotification
-    what: El orden del array de errors no era el que los escenarios de precedencia afirmaban (lo encontró el careo).
+    what: >-
+      No hay guarda ni error para dos valores con el mismo `name` en `variables` (tampoco en
+      acceptNotificationRequest): el diseño no dice si se rechaza o cuál de los dos se congela.
     severity: gap
     state: decided
-    reason: >-
-      Se reordenaron los errors de requestNotification y de registerTemplate. En los dos, la
-      aplicación se resuelve antes que la plantilla, que depende de ella; en requestNotification,
-      la idempotencia arbitra antes que el negocio.
-
-  # 3. Determinación del estado
-  - class: 3
-    unit: Notification
-    what: dedupeKey es obligatorio y forma la clave natural, y nada decía qué valía sin Idempotency-Key ni por la vía del evento.
-    severity: gap
-    state: decided
-    reason: >-
-      Por HTTP es la Idempotency-Key, o el propio id del envío si no llega (cada petición sin clave
-      es un envío distinto). Por evento es metadata.eventId. Las dos cosas están escritas como reglas.
-  - class: 3
-    unit: Notification
-    what: El correo se renderizaba con «las variables del envío», y ni la petición ni el evento las traían.
-    severity: gap
-    state: decided
-    reason: >-
-      Las variables viajan en requestNotification y en el payload de NotificationRequested y se
-      congelan en Notification (TemplateVariableValue), para que el asunto y el cuerpo salgan de
-      los mismos valores. Las declara registerTemplate (TemplateVariableDeclaration), y una
-      requerida sin valor es TEMPLATE_VARIABLE_MISSING.
-  - class: 3
-    unit: Notification
-    what: Cuándo se estampan sentAt y publishedAt solo se deducía de su nombre (lo encontró el careo).
+    reason: "Corregido en v2.0.0: dos variables con el mismo nombre en la petición se rechazan con
+      TEMPLATE_VARIABLE_DUPLICATED (422), por HTTP y por evento."
+  - class: 2
+    unit: registerApplication
+    what: >-
+      La descripción de `credentialKeys` dice «al menos una», pero no hay `minItems` ni error: una
+      aplicación con la lista vacía se da de alta y no la resuelve ninguna credencial.
     severity: risk
     state: decided
-    reason: Reglas explícitas en sendAcceptedNotification y en publishTemplate.
-  - class: 3
-    unit: Application
-    what: active se describe como el interruptor que corta los envíos, y ninguna operación lo pone a false.
-    severity: risk
-    state: accepted
-    reason: >-
-      La baja no tiene operación en esta versión y la descripción ya lo dice. Hoy
-      APPLICATION_INACTIVE solo lo ve una credencial que no resuelve a ninguna aplicación. El
-      disparador para añadir deactivateApplication es la primera baja real.
+    reason: "Corregido en v2.0.0: credentialKeys con minItems 1, en el dominio y en la entrada."
 
-  # 4. Concurrencia y unicidad
+  # --- Clase 3 ---
+  - class: 3
+    unit: Notification
+    what: >-
+      El estado con el que nace una notificación (accepted) no lo fija ni un `default` del campo
+      `status` ni una regla de requestNotification o acceptNotificationRequest: solo lo dicen los
+      escenarios.
+    severity: risk
+    state: decided
+    reason: "Corregido en v2.0.0: status con default accepted."
+  - class: 3
+    unit: Notification
+    what: >-
+      En el camino por evento (acceptNotificationRequest) no se declara que el `locale` omitido tome
+      el defaultLocale de la aplicación, ni que se congelen templateVersion y renderedSubject, ni
+      que las variables no declaradas se ignoren: esas reglas solo las tiene requestNotification.
+    severity: risk
+    state: decided
+    reason: "Corregido en v2.0.0: acceptNotificationRequest tiene las mismas reglas que la vía HTTP
+      (idioma por defecto, congelación, variables no declaradas y repetidas)."
+
+  # --- Clase 4 ---
+  - class: 4
+    unit: registerApplication
+    what: >-
+      `credentialKeys` no es único entre aplicaciones (su índice no es `unique` y no hay error): dos
+      aplicaciones pueden reclamar el mismo client_id y la resolución de identidad queda ambigua.
+    severity: gap
+    state: decided
+    reason: "Corregido en v2.0.0: índice único sobre credentialKeys y 409 CREDENTIAL_ALREADY_ASSIGNED en
+      registerApplication (FL-APP-001-B). Un client_id resuelve a un solo sistema."
   - class: 4
     unit: publishTemplate
-    what: «Como máximo una versión activa» sobre dos publicaciones simultáneas.
-    severity: gap
-    state: decided
-    reason: >-
-      Unicidad condicionada al estado en persistence (when status = active) más bloqueo optimista.
-      FL-TPL-011 afirma los dos desenlaces admisibles y que siempre queda exactamente una activa.
+    what: >-
+      La carrera de dos publicaciones termina en CONCURRENT_MODIFICATION o en
+      TEMPLATE_ALREADY_ACTIVE según qué escritura llegue antes, y el `when` de
+      TEMPLATE_ALREADY_ACTIVE describe una condición secuencial que la regla «publicar retira la
+      activa» hace inalcanzable: dos codes para un mismo desenlace.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: los dos codes son 409 y los dos dicen que otra publicación ganó la carrera.
+      FL-TPL-011 admite los dos desenlaces y afirma lo que importa: queda exactamente una versión
+      activa."
   - class: 4
-    unit: registerTemplate
-    what: Un reintento del pipeline tras un timeout registra una versión más.
+    unit: acceptNotificationRequest
+    what: >-
+      El `dedupeKey` comparte espacio (naturalKey [applicationKey, dedupeKey]) entre la
+      Idempotency-Key HTTP y el metadata.eventId del evento: el diseño no dice qué pasa si coinciden
+      entre las dos puertas de la misma aplicación.
+    severity: risk
+    state: decided
+    reason: "Corregido en v2.0.0: por evento, dedupeKey es event: seguido del eventId, así que no comparte
+      espacio con las Idempotency-Key de la vía HTTP."
+
+  # --- Clase 6 ---
+  - class: 6
+    unit: Application
+    what: >-
+      Ninguna operación da de baja ni borra una aplicación: `active` nunca pasa a false y sus
+      plantillas y envíos no tienen política de baja.
     severity: risk
     state: accepted
     reason: >-
-      Es un borrador que nada usa hasta que publishTemplate lo publica, por id, así que no llega a
-      nadie. La carrera de dos registros sí está cerrada con TEMPLATE_VERSION_ALREADY_EXISTS
-      (FL-TPL-003).
+      Lo dice el propio diseño en la descripción de Application.active («nace activa y la baja no
+      tiene operación todavía») y en la regla de registerApplication («Darla de baja es otra
+      operación»).
 
-  # 7. Contrato de eventos
-  - class: 7
-    unit: subscriptions.NotificationRequested
-    what: Ni la suscripción ni el evento publicado tenían canal, así que un emisor no sabía dónde pedir un correo.
-    severity: gap
-    state: decided
-    reason: Canales notificationRequests y notificationEvents declarados.
-  - class: 7
-    unit: subscriptions.NotificationRequested
-    what: Nada decía si metadata.source se resuelve contra Application.key o contra credentialKeys.
-    severity: gap
-    state: decided
-    reason: >-
-      Una regla de acceptNotificationRequest lo fija contra credentialKeys, igual que por HTTP. El
-      DSL no tiene resolvedBy para la identidad por evento (la de HTTP sí), así que la decisión
-      vive en prosa. Es un hueco del método, anotado para su seguimiento.
-  - class: 7
-    unit: subscriptions.NotificationRequested
-    what: El payload del canal no llevaba las cotas del input de la operación que dispara.
-    severity: risk
-    state: decided
-    reason: Las mismas cotas en el payload (maxLength y maxItems).
+  # --- Clase 7 ---
   - class: 7
     unit: publishing.NotificationSent
-    what: Un envío que falla no se anuncia por ningún evento.
-    severity: risk
-    state: accepted
-    reason: >-
-      Hoy ningún consumidor reacciona a un fallo, y getNotification lo muestra. La salida, el día
-      que alguno lo necesite, es un NotificationFailed en notificationEvents (REV-MAIL-ASYNC-OUTCOME).
-
-  # 8. Fallo de dependencias externas
-  - class: 8
+    what: >-
+      Quien pide por el canal de eventos nunca recibe el notificationId, y NotificationSent no lleva
+      nada que lo correlacione con su petición (ni el eventId de origen ni una referencia del
+      cliente); como failed no emite nada, ese consumidor tampoco puede saber que su envío falló.
+    severity: gap
+    state: decided
+    reason: "Corregido en v2.0.0: NotificationSent lleva dedupeKey (la Idempotency-Key, o
+      event:<eventId>), con el que quien pidió por evento reconoce su petición (FL-EVT-001)."
+  - class: 7
     unit: subscriptions.NotificationRequested
-    what: Qué se hace con un mensaje que no se puede atender.
-    severity: gap
+    what: >-
+      El payload de NotificationRequested y el input de acceptNotificationRequest no traen
+      `copyRecipients`: por evento no se puede pedir copia, y el diseño no dice si es deliberado.
+    severity: risk
     state: decided
-    reason: >-
-      onFailure con reintentos exponenciales para lo pasajero y deadLetter para todo lo que no sale.
-      El rechazo de negocio va a la cola a la primera (FL-EVT-002) y el emisor desconocido se
-      descarta sin pasar por ella (FL-EVT-003).
+    reason: "Corregido en v2.0.0: copyRecipients en el payload de NotificationRequested y en el input de
+      acceptNotificationRequest."
 
-  # 9. Autorización a nivel de dato
+  # --- Clase 9 ---
   - class: 9
-    unit: getNotification
-    what: Cualquier sistema con notification:read leía los envíos de cualquier otro por id.
+    unit: acceptNotificationRequest
+    what: >-
+      Por el canal de eventos la aplicación sale de metadata.source, que nada comprueba: un emisor
+      del perímetro puede pedir un envío en nombre de otra aplicación y desde su remitente.
     severity: gap
     state: decided
     reason: >-
-      applicationKey se resuelve desde el token (callerIdentity) y un envío de otra aplicación
-      responde 404 NOTIFICATION_NOT_FOUND, igual que uno que no existe (FL-NTF-004).
-  - class: 9
+      Decidido y materializado en
+      messaging.subscriptions.NotificationRequested.identity.trustedPublishers, con la alternativa
+      `location: header` evaluada y descartada para SNS→SQS y el disparador de revisión escrito.
+
+  # --- Clase 11 ---
+  - class: 11
     unit: getTemplate
-    what: Cualquier sistema con template:write leía las plantillas de cualquier otro por id.
-    severity: gap
-    state: decided
-    reason: Igual que getNotification, con 404 TEMPLATE_NOT_FOUND (FL-TPL-012).
-  - class: 9
-    unit: publishTemplate
-    what: Cualquier sistema con template:publish publicaba las plantillas de cualquier otro.
-    severity: gap
-    state: decided
-    reason: Igual que getTemplate, y la plantilla ajena no cambia de estado (FL-TPL-012).
-  - class: 9
+    what: >-
+      No hay consulta por clave e idioma ni listado: un pipeline que perdió el templateId no puede
+      saber qué versión está activa ni cuáles existen.
+    severity: risk
+    state: accepted
+    reason: "Aceptado en v2.0.0: el pipeline guarda el templateId que devuelve registerTemplate. Consultar
+      por clave e idioma, o listar versiones, es una operación nueva que ningún consumidor ha pedido
+      todavía."
+  - class: 11
     unit: registerApplication
-    what: El alta de sistemas no es de ningún inquilino.
+    what: >-
+      Los serviceClients están enumerados en el diseño, así que dar de alta un sistema nuevo exige
+      editar security.keel.yaml, aunque el comentario de messaging promete que «el sistema número
+      doce entra sin tocar nada».
     severity: risk
-    state: decided
-    reason: >-
-      Es una operación de plataforma: solo platform-admin tiene application:admin, y quien manda
-      correo no puede darse de alta a sí mismo (FL-APP-001-B).
+    state: accepted
+    reason: "Aceptado, y es un límite del DSL: security.serviceClients enumera las credenciales para que
+      build las aprovisione en el proveedor de identidad. Un sistema nuevo es una edición del
+      diseño, a diferencia del canal de peticiones, que es genérico."
 
-  # 11. Superficie servidor-a-servidor
-  - class: 11
-    unit: serviceClients.billing-service
-    what: Con un solo inquilino declarado, el aislamiento entre sistemas no se podía probar.
+  # --- Clase 12 ---
+  - class: 12
+    unit: service
+    what: >-
+      Las direcciones de correo no tienen formato validado ni cota común: `recipient` y
+      `defaultSender` admiten 320 caracteres y `copyRecipients` (EmailAddress) 254, y ninguna
+      comprueba que sea una dirección.
     severity: gap
     state: decided
-    reason: Segundo inquilino declarado (billing-service y billing-service-ci), que usan FL-TPL-012 y FL-NTF-004.
-  - class: 11
-    unit: requestNotification
-    what: serviceAuth no valida la audiencia del token.
+    reason: "Corregido en v2.0.0: el value type EmailAddress, con patrón y cota de 254, en todas las
+      direcciones (recipient, copias y defaultSender)."
+  - class: 12
+    unit: service
+    what: >-
+      No se fija la forma de `locale` (es, es-ES, es_ES) ni si `locale`, `templateKey` y la `key` de
+      la aplicación distinguen mayúsculas al buscar la plantilla activa o comprobar unicidad.
+    severity: gap
+    state: decided
+    reason: "Corregido en v2.0.0: el value type Locale (dos letras y región opcional). Las claves, el
+      idioma y las direcciones se comparan exactos (el compare por defecto), y lo fijan las
+      convenciones de los escenarios."
+
+  # --- Clase 13 ---
+  - class: 13
+    unit: queueAcceptedNotifications
+    what: >-
+      Si el ciclo confirma el paso a queued y cae antes de invocar sendAcceptedNotification, la fila
+      se queda en queued para siempre: el barrido solo reclama accepted y nada rescata queued.
+    severity: gap
+    state: accepted
+    reason: "Aceptado: una fila en queued no ha mandado ningún correo, así que rescatarla sería seguro,
+      pero exige su propio reloj y un barrido más. Se queda visible por getNotification. El
+      disparador para cerrarlo es el primer envío que se quede ahí en producción."
+  - class: 13
+    unit: queueAcceptedNotifications
+    what: >-
+      Un envío parado en sending (caída entre el reclamo y el desenlace) no lo rescata ningún
+      barrido.
     severity: risk
     state: accepted
     reason: >-
-      Los scopes que se exigen son todos de este servicio y ningún otro los concede, así que un
-      token emitido para otro servicio no pasa ninguna regla de acceso (REV-SEC-M2M-AUDIENCE).
+      Aceptado en la prosa del diseño: la descripción de Notification.sendingSince dice que ningún
+      barrido lo rescata porque reintentarlo podría mandar dos veces un correo real, y la obligación
+      OBL-GUARD-UNOBSERVABLE está aceptada en decisions.yaml.
 
-  # 12. Zonas grises de la equivalencia
-  - class: 12
-    unit: service
-    what: Ausencia frente a nulo, formato temporal y orden de las listas.
-    severity: gap
-    state: decided
-    reason: >-
-      conventions.nulls include en el manifiesto; instantes UTC ISO-8601 con milisegundos,
-      afirmados por forma; ninguna lista declara posición, así que su orden es indiferente y se
-      afirma como conjunto. Todo fijado en las convenciones de validation-scenarios.md.
-  - class: 12
-    unit: service
-    what: Textos sin cota superior (los cuerpos de la plantilla y el payload del canal).
-    severity: gap
-    state: decided
-    reason: maxLength 100 000 en bodyHtml y bodyText; el payload lleva las cotas del input.
-  - class: 12
-    unit: service
-    what: Si las claves (key de aplicación, templateKey, locale) distinguen mayúsculas.
-    severity: risk
-    state: decided
-    reason: >-
-      Comparación exacta, el default del DSL: son identificadores que escriben sistemas, no
-      personas, y `Orders` y `orders` son claves distintas.
-
-  # 13. Ejecuciones programadas
-  - class: 13
-    unit: queueAcceptedNotifications
-    what: Un envío que se queda en queued o en sending porque la réplica cayó a mitad no lo rescata ningún barrido.
-    severity: risk
-    state: accepted
-    reason: >-
-      Rescatar sending es arriesgar un segundo correo real: la caída pudo ser después de que el
-      relay lo aceptara, que es justo la ventana de OBL-GUARD-UNOBSERVABLE. Rescatar queued
-      exigiría su propio reloj. Se prefiere un envío parado y visible (getNotification lo da en
-      su estado, y sendingSince dice desde cuándo) a uno duplicado. El disparador para revisarlo
-      es el primer envío parado en producción; la salida es un barrido de sending a failed pasado
-      un plazo, que no duplica.
-  - class: 13
-    unit: queueAcceptedNotifications
-    what: Dos réplicas disparan el mismo ciclo y el efecto (el correo) sale de la transacción.
-    severity: gap
-    state: decided
-    reason: >-
-      Reclamo por lote en el barrido y guarda por fila en el envío. FL-CLU-001 lo afirma con dos
-      réplicas y varias filas. El tamaño de lote es capacidad del generador.
-
-  # 14. Estado persistido
-  - class: 14
-    unit: Application
-    what: Consultas que corren en cada petición y cada minuto no tenían índice.
-    severity: gap
-    state: decided
-    reason: Índices sobre Application.credentialKeys y Notification [status, requestedAt] (REV-PERSIST-MISSING-INDEX).
+  # --- Clase 14 ---
   - class: 14
     unit: Notification
-    what: Los envíos, con sus variables congeladas, se guardan para siempre.
-    severity: risk
+    what: >-
+      Las notificaciones guardan destinatario, copias y variables (datos personales) para siempre:
+      no hay retención ni purga declarada.
+    severity: gap
     state: accepted
-    reason: >-
-      Las variables pueden llevar datos personales (un nombre, un número de pedido). El DSL no
-      tiene dónde declarar retención, así que haría falta una operación explícita de purga.
-      Queda como seguimiento antes de producción; en esta versión no se purga nada.
+    reason: "Aceptado en v2.0.0, como seguimiento antes de producción: el DSL no tiene dónde declarar
+      retención y hace falta una operación explícita de purga. Las variables pueden llevar datos
+      personales."
 
-  # 15. Superficie HTTP
+  # --- Clase 15 ---
+  - class: 15
+    unit: registerTemplate
+    what: >-
+      Es un PUT que crea una versión nueva en cada llamada (no idempotente), y su Location
+      (/v1/templates/{key}/{locale}/{id}) apunta a una ruta que ningún endpoint sirve.
+    severity: gap
+    state: accepted
+    reason: "Aceptado: el PUT versiona a propósito, porque registrar nunca pisa una versión que alguien
+      pudo publicar. Un reintento tras un timeout deja un borrador más, que nadie usa hasta
+      publicarlo por id. Aceptado: la Location la emite el generador (URI de la petición más el id)
+      y el diseño no puede declararla ni negarla. No hay getApplication, y la de una plantilla no es
+      la ruta de getTemplate. Anotado como hallazgo del método."
   - class: 15
     unit: registerApplication
-    what: La cabecera Location de las altas 201 apunta a rutas que ninguna operación sirve.
+    what: >-
+      Responde 201 con Location /v1/applications/{id}, pero no hay ninguna operación que lea una
+      aplicación.
     severity: risk
     state: accepted
-    reason: >-
-      No hay getApplication, y la Location de registerTemplate
-      (/templates/{key}/{locale}/{id}) no es la ruta de getTemplate (/templates/{id}). La emite el
-      generador con la ruta de la petición más el id, y el diseño no puede declararla ni negarla.
-      Queda anotado como hallazgo del método.
+    reason: "Aceptado: la Location la emite el generador (URI de la petición más el id) y el diseño no
+      puede declararla ni negarla. No hay getApplication, y la de una plantilla no es la ruta de
+      getTemplate. Anotado como hallazgo del método."
 
-  # 17. Correo saliente
+  # --- Clase 16 ---
+  - class: 16
+    unit: '3.2'
+    what: >-
+      La entrada 3.2 solo razona requestNotification y la suscripción: no consta que se preguntara
+      por registerTemplate (un reintento del pipeline crea otra versión), registerApplication ni
+      publishTemplate (un reintento tras perder la respuesta ve un 409 de un éxito).
+    severity: gap
+    state: decided
+    reason: "Corregido en v2.0.0: la entrada 3.2 de decisions.yaml razona ahora también
+      registerApplication, publishTemplate y registerTemplate."
+
+  # --- Clase 17 ---
   - class: 17
     unit: sendAcceptedNotification
-    what: Nada impide volver a enviar a una dirección que rebotó.
+    what: >-
+      mail.delivery.attachments es true, pero ningún input, payload ni campo de Notification trae
+      adjuntos: el diseño no dice de dónde salen.
+    severity: gap
+    state: accepted
+    reason: "Aceptado: attachments está a true para que el generador compile esa rama, porque es la única
+      capa mail del corpus. Ningún correo de esta versión lleva adjuntos, y DESIGN.md lo dice."
+  - class: 17
+    unit: sendAcceptedNotification
+    what: >-
+      Solo se declara el desenlace del relay que RECHAZA (failed); con el relay caído o un timeout
+      —que no distingue «no llegó» de «llegó»— no se dice si el envío pasa a failed, se reintenta o
+      queda en sending.
+    severity: gap
+    state: decided
+    reason: "Corregido en v2.0.0: un relay que no se alcanza o no contesta a tiempo deja el envío en
+      failed, sin reintentar dentro de la operación, porque no se sabe si el correo salió."
+  - class: 17
+    unit: sendAcceptedNotification
+    what: >-
+      El rebote tardío (el relay acepta y el destino devuelve el correo después) no tiene canal por
+      el que llegue.
     severity: risk
     state: accepted
     reason: >-
-      Sin canal de rebotes declarado no hay de dónde saberlo, y el diseño deja el rebote diferido
-      fuera de alcance a propósito. La lista de supresión llegará con ese canal.
+      Aceptado en una regla de sendAcceptedNotification: ese rebote «llega por un canal que este
+      diseño NO declara, así que queda explícitamente fuera de alcance», repetido en la nota de
+      FL-DSP-001.
   - class: 17
     unit: sendAcceptedNotification
-    what: delivery.attachments está a true, y ninguna operación ni ningún dato aporta adjuntos.
+    what: >-
+      Nada impide volver a enviar a una dirección que rebotó o se quejó, y la reputación del
+      remitente es compartida por todos los consumidores.
     severity: risk
     state: accepted
-    reason: >-
-      Es una capacidad que la fixture declara para que el generador compile esa rama: es la única
-      capa mail del corpus. Los correos de esta versión salen sin adjuntos.
+    reason: "Aceptado: sin canal de rebotes no hay de dónde saber qué dirección rebotó, y el rebote
+      diferido está fuera de alcance a propósito. La lista de supresión llegará con ese canal."
+  - class: 17
+    unit: sendAcceptedNotification
+    what: >-
+      No se declara si los valores de las variables se escapan al interpolarlos en bodyHtml: un
+      valor con marcado puede inyectar HTML en el correo.
+    severity: risk
+    state: decided
+    reason: "Corregido en v2.0.0: los valores se escapan como HTML en la parte html y van tal cual en la
+      de texto (regla, y caso borde en FL-NTF-001)."

@@ -22,7 +22,8 @@ import YAML from 'yaml';
 import Ajv2020Module from 'ajv/dist/2020.js';
 import { schemaPathFor } from './assets.js';
 import { FLOW_REVIEW_FILE } from './spec-files.js';
-import { splitScenarioBlocks, scenarioFamilyOf, scenarioIdOf, scenarioBody } from './scenario-blocks.js';
+import { versionShape } from './decisions.js';
+import { splitScenarioBlocks, scenarioFamilyOf, scenarioIdOf, scenarioBody, conventionsText } from './scenario-blocks.js';
 
 export { FLOW_REVIEW_FILE } from './spec-files.js';
 
@@ -44,6 +45,17 @@ export function scenariosDigest(content) {
   return crypto.createHash('sha256').update(Buffer.from(text.replace(/\r/g, ''), 'latin1')).digest('hex');
 }
 
+/**
+ * El sello de la sección «Convenciones de determinación» (vacía si el documento no la tiene).
+ * Es el tercer sello del careo, junto al de cada flujo: las convenciones cambian el significado de
+ * todos los `Then` a la vez, así que tocarlas pide recarear el documento entero. El resto de la
+ * prosa (cabecera, matriz, notas) no lo pide: la matriz ya la cruza `keel validate`.
+ */
+export function conventionsDigest(scenariosContent) {
+  const text = Buffer.isBuffer(scenariosContent) ? scenariosContent.toString('utf8') : String(scenariosContent ?? '');
+  return scenariosDigest(conventionsText(text) ?? '');
+}
+
 /** Los bloques del documento como `{ id, digest }`: el id es el del BLOQUE (`FL-A-001-B` incluido). */
 export function flowDigests(scenariosContent) {
   const text = Buffer.isBuffer(scenariosContent) ? scenariosContent.toString('utf8') : String(scenariosContent ?? '');
@@ -63,7 +75,7 @@ export function flowDigests(scenariosContent) {
  *
  * `scope` son los flujos a recarear (vacío = todos, cuando no hay careo previo).
  */
-export function flowReviewPlan(dir, scenariosContent) {
+export function flowReviewPlan(dir, scenariosContent, { serviceVersion = null } = {}) {
   const file = path.join(dir, FLOW_REVIEW_FILE);
   const blocks = flowDigests(scenariosContent);
   if (!fs.existsSync(file)) {
@@ -91,6 +103,21 @@ export function flowReviewPlan(dir, scenariosContent) {
     };
   }
 
+  // El careo caduca con el minor o el major, como review.yaml: otra versión es otro diseño, aunque
+  // sus escenarios no hayan cambiado, y le toca su careo, con el presupuesto entero. Sin esta
+  // comparación, un careo de la v1 seguía valiendo para la v2, y si la v1 había gastado sus pasadas
+  // la v2 nacía agotada, sin salida salvo reescribir `passes` a mano.
+  if (serviceVersion && versionShape(doc.reviewedAt) !== versionShape(serviceVersion)) {
+    return {
+      status: 'stale',
+      detail: `el careo es de la v${doc.reviewedAt} y el diseño va por la v${serviceVersion}: otra versión, careo nuevo con presupuesto entero`,
+      passes: 0,
+      nextPass: 1,
+      scope: blocks.map((b) => b.id),
+      full: true
+    };
+  }
+
   const passes = doc.passes;
   const findings = doc.findings ?? [];
   const open = findings.filter((finding) => !finding.resolution);
@@ -108,13 +135,23 @@ export function flowReviewPlan(dir, scenariosContent) {
   const dependent = new Set(
     findings.filter((f) => f.kind === 'cross-flow').map((f) => scenarioFamilyOf(String(f.flow ?? '')))
   );
-  const scope = designChanged
+  // Las convenciones rigen todos los flujos: si cambian, lo careado de cualquiera puede haber
+  // dejado de deducirse, y la pasada es completa. Un careo anterior a este sello solo tiene el del
+  // documento entero; si ese cambió sin que cambiara ningún flujo, lo que cambió está fuera de los
+  // flujos, y no se sabe si fueron las convenciones: también pasada completa. Lo que NO puede
+  // salir nunca es «caducado» con alcance vacío, que dejaba el careo sin forma de volver a verde.
+  const conventionsChanged =
+    doc.conventionsSha256 != null
+      ? doc.conventionsSha256 !== conventionsDigest(scenariosContent)
+      : doc.scenariosSha256 !== scenariosDigest(scenariosContent) && changed.length === 0;
+  const fullPass = designChanged || conventionsChanged;
+  const scope = fullPass
     ? blocks.map((b) => b.id)
     : changed.length === 0
       ? []
       : [...new Set([...changed, ...blocks.map((b) => b.id).filter((id) => dependent.has(scenarioFamilyOf(id)))])];
 
-  const stale = doc.scenariosSha256 !== scenariosDigest(scenariosContent) || scope.length > 0;
+  const stale = scope.length > 0;
   if (stale && !budgetLeft) {
     return {
       status: 'exhausted',
@@ -122,7 +159,7 @@ export function flowReviewPlan(dir, scenariosContent) {
       passes,
       nextPass: null,
       scope,
-      full: designChanged
+      full: fullPass
     };
   }
   if (stale) {
@@ -130,11 +167,13 @@ export function flowReviewPlan(dir, scenariosContent) {
       status: 'stale',
       detail: designChanged
         ? 'un hallazgo se cerró cambiando el YAML, así que lo careado sobre el diseño anterior deja de valer: toca pasada completa'
-        : `flujos por recarear: ${scope.join(', ')}`,
+        : conventionsChanged
+          ? 'cambiaron las convenciones de determinación, que rigen todos los flujos: toca pasada completa'
+          : `flujos por recarear: ${scope.join(', ')}`,
       passes,
       nextPass: passes + 1,
       scope,
-      full: designChanged || scope.length === blocks.length
+      full: fullPass || scope.length === blocks.length
     };
   }
   if (open.length === 0) return { status: 'ok', detail: null, passes, nextPass: null, scope: [], full: false };

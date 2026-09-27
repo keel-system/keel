@@ -15,10 +15,10 @@ operations:
           type: string
           list: true
           required: true
-          constraints: { maxItems: 5, maxLength: 64 }
+          constraints: { minItems: 1, maxItems: 5, maxLength: 64 }
           description: Los client_id de las credenciales máquina de este sistema; al menos una.
-        defaultSender: { type: string, required: true, constraints: { maxLength: 320 } }
-        defaultLocale: { type: string, required: true, constraints: { maxLength: 10 } }
+        defaultSender: { type: EmailAddress, required: true }
+        defaultLocale: { type: Locale, required: true }
     output: { entity: Application }
     rules:
       - Nace activa. Darla de baja es otra operación, no un campo de esta.
@@ -28,6 +28,7 @@ operations:
         de satisfacerla y termina derivándola de una fuente que el diseño no declara.
     errors:
       - { code: APPLICATION_ALREADY_EXISTS, when: Ya hay un sistema dado de alta con esa clave., http: 409 }
+      - { code: CREDENTIAL_ALREADY_ASSIGNED, when: Alguna de las credenciales ya resuelve a otro sistema dado de alta., http: 409 }
 
   publishTemplate:
     description: Publica una versión de plantilla y la deja como la activa de su clave e idioma.
@@ -74,7 +75,7 @@ operations:
             contiene el `client_id` del llamante. No es el client_id en sí — un sistema con dos
             credenciales tiene una sola Application.
         templateKey: { type: string, required: true, constraints: { maxLength: 64 } }
-        locale: { type: string, required: true, constraints: { maxLength: 10 } }
+        locale: { type: Locale, required: true }
         subject: { type: string, required: true, constraints: { maxLength: 200 } }
         bodyHtml: { type: text, required: true, constraints: { maxLength: 100000 } }
         bodyText: { type: text, required: true, constraints: { maxLength: 100000 } }
@@ -119,8 +120,8 @@ operations:
             Sale del token, nunca del cuerpo: es la Application cuya lista de `credentialKeys`
             contiene el `client_id` del llamante.
         templateKey: { type: string, required: true, constraints: { maxLength: 64 } }
-        locale: { type: string, constraints: { maxLength: 10 } }
-        recipient: { type: string, required: true, constraints: { maxLength: 320 } }
+        locale: { type: Locale }
+        recipient: { type: EmailAddress, required: true }
         copyRecipients:
           type: EmailAddress
           list: true
@@ -151,6 +152,10 @@ operations:
         OBL-IDEM-KEY-REQUIRED.
       - Dos peticiones con la misma clave de idempotencia producen una sola notificación.
       - >-
+        La clave se acota a la aplicación del llamante: dos sistemas pueden usar la misma
+        Idempotency-Key sin verse ni pisarse. El DSL no tiene dónde declararlo; es una regla.
+      - Dos variables con el mismo nombre en la misma petición se rechazan.
+      - >-
         La `naturalKey` de Notification es el RESPALDO de esa garantía, no su mecanismo: quien
         arbitra la repetición es el almacén de idempotencia, que reclama la clave antes de tocar
         negocio. Por eso no se declara un `code` para su violación — si llegara a saltar, sería
@@ -160,6 +165,7 @@ operations:
       - { code: IDEMPOTENCY_KEY_REUSED, when: La misma clave llega con un contenido distinto., http: 409 }
       - { code: APPLICATION_INACTIVE, when: La aplicación está dada de baja o no existe., http: 403 }
       - { code: TEMPLATE_NOT_FOUND, when: No hay plantilla activa con esa clave e idioma para esta aplicación., http: 422 }
+      - { code: TEMPLATE_VARIABLE_DUPLICATED, when: Dos variables de la petición tienen el mismo nombre., http: 422 }
       - { code: TEMPLATE_VARIABLE_MISSING, when: Falta el valor de una variable que la plantilla declara como requerida., http: 422 }
 
   acceptNotificationRequest:
@@ -174,8 +180,13 @@ operations:
           constraints: { maxLength: 64 }
           description: Sale de la envoltura del mensaje, no del payload.
         templateKey: { type: string, required: true, constraints: { maxLength: 64 } }
-        locale: { type: string, constraints: { maxLength: 10 } }
-        recipient: { type: string, required: true, constraints: { maxLength: 320 } }
+        locale: { type: Locale }
+        recipient: { type: EmailAddress, required: true }
+        copyRecipients:
+          type: EmailAddress
+          list: true
+          constraints: { maxItems: 10 }
+          description: Direcciones en copia, igual que por HTTP.
         variables:
           type: TemplateVariableValue
           list: true
@@ -186,8 +197,14 @@ operations:
       - La aplicación que publicó el mensaje está registrada y activa.
     rules:
       - Un mensaje reentregado no produce una segunda notificación.
-      - '`dedupeKey` es el `metadata.eventId` de la envoltura: el que se repite intacto en cada reentrega.'
-      - Un mensaje de una aplicación desconocida se descarta sin reintentar.
+      - >-
+        `dedupeKey` es `event:` seguido del `metadata.eventId` de la envoltura, que se repite intacto en
+        cada reentrega. El prefijo separa su espacio del de las Idempotency-Key de la vía HTTP.
+      - Un mensaje de una aplicación desconocida, o dada de baja, se descarta sin reintentar.
+      - >-
+        Lo mismo que por HTTP: sin idioma se usa el `defaultLocale` de la aplicación, la versión y
+        el asunto interpolado se congelan, las variables no declaradas se ignoran y dos con el mismo
+        nombre se rechazan.
       - >-
         El emisor que nombra la envoltura (metadata.source) es el nombre del servicio que publica, y
         se resuelve IGUAL que la credencial por HTTP: es uno de los `credentialKeys` de la
@@ -197,6 +214,7 @@ operations:
       - Las variables se validan igual que por HTTP; un mensaje rechazado no se reintenta y va a la cola de descarte.
     errors:
       - { code: TEMPLATE_NOT_FOUND, when: No hay plantilla activa con esa clave e idioma para esta aplicación., http: 422 }
+      - { code: TEMPLATE_VARIABLE_DUPLICATED, when: Dos variables del mensaje tienen el mismo nombre., http: 422 }
       - { code: TEMPLATE_VARIABLE_MISSING, when: Falta el valor de una variable que la plantilla declara como requerida., http: 422 }
 
   queueAcceptedNotifications:
@@ -238,7 +256,7 @@ operations:
       - { entity: Notification, from: [sending], to: failed }
     rules:
       - >-
-        El paso de accepted a sending es la guarda contra el doble envío, y tiene que estar
+        El paso de queued a sending es la guarda contra el doble envío, y tiene que estar
         confirmado ANTES de entregar el correo: el handler corre dentro de la transacción del
         mediator, así que una transición que solo vive en memoria no existe para nadie hasta
         el commit final — que cae DESPUÉS del envío. Una caída en medio revierte la marca y
@@ -246,6 +264,10 @@ operations:
       - Quien pierde la carrera del reclamo no envía nada y termina sin error.
       - La fecha de envío (sentAt) se estampa al pasar a sent; en failed queda nulo.
       - NotificationSent se emite solo al pasar a sent. Un envío failed no emite nada.
+      - Los valores de las variables se escapan como HTML en la parte html; en la de texto van tal cual.
+      - >-
+        Un relay que no se alcanza o no contesta a tiempo se trata como un rechazo: el envío queda en
+        failed. No se reintenta dentro de la operación, porque no se sabe si el correo llegó a salir.
       - >-
         Si el relay RECHAZA el mensaje, el envío queda en failed en esta misma operación: es el
         único fallo de entrega que este servicio puede observar. Un rebote posterior —el relay

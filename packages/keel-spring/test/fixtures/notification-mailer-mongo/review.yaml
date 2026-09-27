@@ -1,108 +1,109 @@
-# La revisión semántica de este diseño (/keel-validate): qué se miró y con qué resultado. Los
-# `fixed` se corrigieron en el diseño durante el cierre de R9; los `accepted` son hallazgos que se
-# dejan a sabiendas, con su porqué.
-reviewedAt: 1.0.0
+reviewedBy: keel-design-review
+reviewedAt: 2.0.0
 findings:
   - id: REV-DOMAIN-PROMISED-STATE
     scope: domain.entities
-    verdict: fixed
+    verdict: ok
     note: >-
-      Dos promesas sin nada que las sostuviera. `sendingSince` decía que sin él «el rescate» no
-      encontraba la fila, y ningún barrido rescata envíos: ahora dice para qué sirve de verdad
-      (saber desde cuándo está parado un envío) y remite al riesgo aceptado en gaps.yaml.
-      `Application.active` prometía cortar los envíos al ponerlo a false, y ninguna operación lo
-      pone: ahora lo dice, y dice por qué hoy APPLICATION_INACTIVE solo lo ve una credencial sin
-      aplicación. Template (retired, publishedAt) y Notification (failed, sentAt) sí sostienen lo
-      que su prosa promete.
+      Cada promesa de la prosa tiene campo o transición detrás: «retirada» es Template.status
+      retired (lifecycle active → retired); «publishedAt no cambia al retirarse» es un campo propio;
+      «sus envíos se cortan» es Application.active; lo «congelado» de Notification son
+      templateVersion, renderedSubject, variables y copyRecipients; «desde cuándo está en sending»
+      es sendingSince. Las dos vías a Notification.accepted (requestNotification y
+      acceptNotificationRequest) rellenan igual dedupeKey y lo congelado; copyRecipients solo lo
+      trae la vía HTTP porque el payload del evento no lo tiene. Nota al margen: la description de
+      sendingSince cita «aceptado en gaps.yaml, clase 13», y en este directorio no hay gaps.yaml.
   - id: REV-USECASES-INTERNAL-REPEAT
     scope: use-cases.operations.registerTemplate
     verdict: accepted
     note: >-
-      registerTemplate no declara idempotencia y un pipeline que reintenta tras un timeout crea
-      una versión más, en borrador. Se acepta: el efecto no sale del proceso ni llega a nadie,
-      porque un borrador no se usa hasta que publishTemplate lo publica, y eso va por id. El resto
-      de los commands expuestos tiene guarda: registerApplication la clave natural (409),
-      publishTemplate su transición (409 INVALID_STATE_TRANSITION) y requestNotification su
-      Idempotency-Key.
+      Aceptado: el PUT versiona a propósito, porque registrar nunca pisa una versión que alguien
+      pudo publicar. Un reintento tras un timeout deja un borrador más, que nadie usa hasta
+      publicarlo por id.
   - id: REV-USECASES-GUARD-ORDER
+    scope: use-cases
     verdict: ok
     note: >-
-      Los órdenes que fijan los escenarios son implementables. En registerTemplate y
-      requestNotification la aplicación se resuelve antes que todo lo demás, y es de lo que
-      dependen la búsqueda de la plantilla activa y la de sus variables. En publishTemplate, el
-      404 por plantilla ajena necesita la aplicación del token, que llega resuelta en el input.
+      Los órdenes de evaluación de validation-scenarios.md son implementables: registerTemplate
+      resuelve la aplicación del token antes de compilar y de mirar variables; publishTemplate y
+      getTemplate acotan por la aplicación, que sale del token; requestNotification comprueba la
+      clave de idempotencia antes que la aplicación, lo que solo exige que el almacén se acote por
+      el principal del token (disponible antes de resolver Application), no por applicationKey;
+      acceptNotificationRequest resuelve el emisor por metadata.source antes de buscar plantilla.
   - id: REV-SEC-M2M-AUDIENCE
-    verdict: accepted
-    note: >-
-      serviceAuth no valida la audiencia. Se acepta porque todos los scopes que este servicio
-      exige (notification:*, template:*, application:admin) son suyos: ningún otro servicio del
-      realm los concede, así que un token emitido para otro servicio no pasa ninguna regla de
-      acceso de aquí. El disparador para revisarlo es que otro servicio adopte un scope con el
-      mismo nombre.
-  - id: REV-MSG-MISSING-CHANNEL
-    scope: messaging
+    scope: security.authentication.serviceAuth
     verdict: fixed
     note: >-
-      Ni NotificationSent ni NotificationRequested tenían canal, y el servicio vive de
-      integrarse: un sistema que quería pedir un correo no tenía dónde publicar. Se declararon
-      notificationEvents (lo que sale) y notificationRequests (lo que entra, genérico), y los
-      escenarios los nombran.
+      Corregido en v2.0.0: serviceAuth.validateAudience true, y FL-NTF-001 lo afirma con un token de
+      otra audiencia (403).
+  - id: REV-MSG-MISSING-CHANNEL
+    scope: messaging
+    verdict: ok
+    note: >-
+      NotificationSent va por notificationEvents y NotificationRequested por notificationRequests,
+      los dos declarados en channels con nombre lógico y sin tecnología.
   - id: REV-MSG-IDENTITY-FROM-FIELD
-    scope: messaging.subscriptions.NotificationRequested
+    scope: messaging.subscriptions.NotificationRequested.identity
     verdict: accepted
     note: >-
-      Releída la asunción de trustedPublishers, con el agravante que marca la checklist: el
-      trabajo pedido es un correo, que no se puede retirar. Sigue en pie, porque todos los
-      emisores son sistemas propios y el broker los autentica, y lo que queda vivo (un sistema
-      propio pidiendo en nombre de otro) está escrito ahí mismo. Se verificó que `header` no es
-      viable en SNS→SQS, así que la salida el día que un emisor quede fuera del perímetro es un
-      destino por emisor. El alcance por inquilino que añadió R9 cierra la otra mitad: por HTTP,
-      un sistema ya no ve ni publica lo de otro.
+      La identidad sale de metadata.source y el trabajo que se pide es irreversible (un correo real
+      desde el remitente verificado de otra aplicación), que es justo el caso en que la checklist
+      pide cuestionarlo. Releída la asunción de trustedPublishers: todos los emisores son sistemas
+      propios, el broker autentica quién publica, el riesgo residual (un emisor propio con bug o
+      comprometido suplanta a otro) está nombrado, la salida location: header se evaluó y se
+      descartó con motivo, y el disparador de revisión está escrito. Ningún serviceClient declarado
+      está fuera del perímetro. Se acepta por la prosa del propio diseño. Ojo: el descarte de header
+      se argumenta con la topología SNS → SQS (SenderId de cuenta), que es elección de stack y no de
+      diseño; con otro broker esa razón habría que volver a comprobarla.
   - id: REV-MSG-DEDUPE-WINDOW
     scope: messaging.subscriptions.NotificationRequested
     verdict: ok
     note: >-
-      El efecto del handler se acumula (otro correo), pero no depende de la retención de
-      procesados. dedupeKey es el metadata.eventId y forma la naturalKey con applicationKey, así
-      que una reentrega posterior a la retención choca con esa unicidad y no inserta un segundo
-      envío.
+      acceptNotificationRequest no declara transitions ni idempotency y su efecto sí es acumulable
+      (cada ejecución crea una Notification, es decir, un correo). Pero hay freno de dominio más
+      allá de la tabla de procesados: dedupeKey es metadata.eventId y la naturalKey de Notification
+      es [applicationKey, dedupeKey], así que una reentrega pasada la retención choca con la
+      unicidad y no produce un segundo correo. Lo único que queda sin decidir es el desenlace de ese
+      choque: sin code declarado, reintenta y acaba en la cola de descarte como falsa alarma. No
+      duplica.
   - id: REV-PERSIST-MISSING-INDEX
     scope: persistence.entities
-    verdict: fixed
-    note: >-
-      Faltaban dos índices en consultas que corren siempre. Cada petición resuelve su aplicación
-      buscando el client_id entre los credentialKeys: se añadió un índice sobre esa colección. El
-      barrido reclama por estado cada minuto: se añadió [status, requestedAt]. La plantilla
-      activa ya la cubría el índice condicionado, y las dos queries van por clave primaria.
-  - id: REV-MAIL-SENTBY-NO-GUARD
-    scope: mail.sentBy
     verdict: ok
     note: >-
-      sendAcceptedNotification tiene guarda: la transición queued → sending, confirmada antes de
-      entregar. Su límite en caja negra está aceptado aparte, en OBL-GUARD-UNOBSERVABLE.
-  - id: REV-MAIL-TEMPLATE-ERRORS
-    scope: use-cases.operations.registerTemplate
+      Las búsquedas que hace el diseño tienen índice: Application por credentialKeys (índice propio)
+      y por key (naturalKey); la plantilla activa por aplicación, clave e idioma (índice parcial
+      when status active); la siguiente versión (prefijo de la naturalKey de Template); el barrido
+      por [status, requestedAt]; la deduplicación por [applicationKey, dedupeKey]; getTemplate y
+      getNotification van por id. Sobran más bien que faltan: [recipient, requestedAt] y
+      [copyRecipients] no los usa ninguna operación, y el comentario de este último habla de
+      @CollectionTable y tabla hija, que en el modelo documental es un índice multikey.
+  - id: REV-MAIL-SENTBY-NO-GUARD
+    scope: use-cases.operations.sendAcceptedNotification.rules
     verdict: fixed
     note: >-
-      «No hay plantilla» y «falta una variable» están declarados donde se aceptan los envíos
-      (TEMPLATE_NOT_FOUND y TEMPLATE_VARIABLE_MISSING), y la versión y los valores se congelan,
-      así que al enviar no pueden faltar. Lo que quedaba sin error era una plantilla que no
-      compila: se registraba y reventaba al renderizar, con el envío ya aceptado. Se añadió
-      TEMPLATE_SYNTAX_INVALID (422) al registrar. Se quitó el TEMPLATE_NOT_FOUND de
-      sendAcceptedNotification, que ningún camino podía producir.
+      Corregido en v2.0.0: la regla decía «de accepted a sending», una arista que el lifecycle no
+      tiene. Ahora dice queued → sending, que es la guarda que declaran las transitions.
+  - id: REV-MAIL-TEMPLATE-ERRORS
+    scope: use-cases
+    verdict: ok
+    note: >-
+      Donde puede faltar la plantilla o una variable requerida, el error está declarado:
+      requestNotification y acceptNotificationRequest con TEMPLATE_NOT_FOUND y
+      TEMPLATE_VARIABLE_MISSING. sendAcceptedNotification no los declara y lo justifica: renderiza
+      con la versión congelada, que ninguna operación borra, y con las variables congeladas y ya
+      validadas al aceptar; la plantilla compila porque registerTemplate la rechaza si no
+      (TEMPLATE_SYNTAX_INVALID).
   - id: REV-MAIL-ASYNC-OUTCOME
-    scope: use-cases.operations.requestNotification
+    scope: use-cases.operations.sendAcceptedNotification
     verdict: accepted
     note: >-
-      requestNotification responde 202 antes de enviar, y el envío que falla después queda en
-      failed, sin evento. Quien sondea getNotification lo ve; quien solo escucha
-      NotificationSent no se entera nunca. Se acepta porque hoy ningún consumidor reacciona a un
-      fallo de envío. El disparador para revisarlo es el primero que lo haga, y la salida es un
-      NotificationFailed en notificationEvents.
+      Aceptado en parte y corregido en parte (v2.0.0). El relay caído o sin respuesta deja el envío
+      en failed (regla), y NotificationSent lleva dedupeKey para correlacionar. Que failed no emita
+      evento se acepta: hoy ningún consumidor reacciona a un fallo.
   - id: REV-MAIL-BOUNCE-CHANNEL
     scope: use-cases.operations.sendAcceptedNotification
     verdict: ok
     note: >-
-      Ninguna regla depende de un rebote posterior. El diseño dice expresamente que el único
-      fallo observable es el rechazo del relay, y que el rebote diferido llega por un canal no
-      declarado y queda fuera de alcance. Es el hueco declarado que pide la checklist.
+      Ninguna regla depende de un fallo posterior a la aceptación del relay: la regla de
+      sendAcceptedNotification y las notas de FL-DSP-001 dejan el rebote diferido explícitamente
+      fuera de alcance, y no hay supresión de direcciones ni conteo de quejas.
