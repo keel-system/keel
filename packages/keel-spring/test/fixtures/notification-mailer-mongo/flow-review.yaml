@@ -1,15 +1,16 @@
-# Careo de flujos (keel-flow-review) de la gemela documental, v2.0.0. Pasada 1 completa; pasada 2 incremental sobre FL-CLU-001.
-reviewedAt: 2.0.0
-passes: 2
-scenariosSha256: 4e1ad807463ab63d6ff8e8cd20577fd3818f0c7d8f115f36d01ee3d417ca1073
+# Careo de flujos (keel-flow-review) de la gemela documental. Pasada 1 completa (v2.0.0); pasada 2 incremental sobre
+# FL-CLU-001; pasada 3 incremental (v2.0.2) sobre FL-APP-001, FL-TPL-001 y FL-DSP-001.
+reviewedAt: 2.0.2
+passes: 3
+scenariosSha256: 8a0910f33fb812ba8c27f105b870432026437b47838914772ddfb109da195167
 conventionsSha256: cc90dc94206bddf5e4445da623a2ed0464f10ab98e814dbc088b227e032ef8a1
 flows:
   - id: FL-APP-001
-    sha256: 5bb0326ab329d02627f3dc752e4c9ecb68bc62acf3c76488bd7ef29d23c5837a
+    sha256: fdd7bc028c1c41a79cd4d6aa8af9b6c150bb278514dbf8ba1f0d15bc14e2a445
   - id: FL-APP-001-B
     sha256: ebe3b82a12b56f470001f47e899142bb98a48c43fe3d474a39280fac8e8943ae
   - id: FL-TPL-001
-    sha256: 02ef09cadac31250748404c3dd9fdd9370b9b356cfffb76a45f725afb8d0ed5b
+    sha256: 4356aad96136c13f11bd7bd415d8d52febf6c634a99d4418a8d2e8d7817a3eb9
   - id: FL-TPL-002
     sha256: 820d5eea9280703e7b0f48118ce0119a9645709ca839a7d7a15278d734034f8c
   - id: FL-TPL-003
@@ -43,7 +44,7 @@ flows:
   - id: FL-EVT-003
     sha256: f0d816f5c16df08c50116055a6f40159f5629e667e0b63fab0c710afc9ac8651
   - id: FL-DSP-001
-    sha256: dd072dad152c1e0b6e834d2375bcb1d4cdd1e690fda99e651647dd9af808ae2d
+    sha256: 18ca0c738ba6f228372b7c53424b28364975e97d8f4c7dcad2ae16e848d74f8d
   - id: FL-CLU-001
     sha256: 31dec2eb544b06791cad17ec3b6c7adaed8dda0ba6594f5d253e7d296e4c9218
   - id: FL-OBX-001
@@ -51,32 +52,6 @@ flows:
   - id: FL-OBX-002
     sha256: b0e2e2c572725c01388821a4026ef1494e5d327ce01711852cd966715a92a85b
 findings:
-  # Conservado de la v1.0.0: sigue aplicando, porque TemplateVariable sigue anidada en el
-  # documento de Template con `default.model: document`.
-  - flow: FL-TPL-001
-    step: "Casos borde 1"
-    kind: other
-    artifact: domain.entities.Template.relations.variables
-    evidence: >-
-      El caso borde dice «Sin `variables` → `201` con `variables: []`». El diseño declara
-      `conventions.nulls: include` («un campo sin valor viaja como null»), y el propio documento de
-      escenarios lo repite. Nada fija que una relación one-to-many sin hijas sea una lista vacía y
-      no un campo sin valor. En relacional la diferencia no se ve: las hijas son otra tabla y la
-      colección sale de una consulta, que sin filas da []. En la gemela documental TemplateVariable
-      va anidada en el documento de Template, así que `variables` es un campo de ese documento, y
-      una petición que lo omite puede guardarlo ausente o nulo, y proyectarlo como `variables: null`
-      cumpliendo la convención al pie de la letra.
-    proposal: >-
-      En el escenario: añadir a las Convenciones de determinación que una colección (relación o
-      `list: true`) sin elementos viaja como `[]` y nunca como null, si eso es lo que se quiere. O
-      fijarlo en el diseño, junto a `conventions.nulls`. Las dos opciones cubren también
-      `copyRecipients` y `variables` de Notification.
-    resolution: accepted
-    reason: "Una lista sin elementos es un valor, no una ausencia: conventions.nulls rige la ausencia de
-      los escalares, y el caso borde afirma []. Que el mapeo documental rehidrate un array ausente
-      como [] y no como null es del generador. Si devuelve null, este escenario falla, que es lo que
-      se busca. El DSL no tiene dónde declarar la forma de una colección vacía, y queda anotado como
-      hallazgo del método."
   - flow: FL-TPL-003
     step: "Then 1"
     kind: other
@@ -105,3 +80,28 @@ findings:
       declarado (MONGO-10 lo mide contra un mongod real). Si llegara a pasar, saldría como 409
       CONCURRENT_MODIFICATION, el code de framework. El escenario es común a las dos gemelas y no
       nombra motores."
+  - flow: FL-DSP-001
+    step: "Then 3"
+    kind: unobservable
+    artifact: domain.entities.Notification.lifecycle
+    evidence: >-
+      El Then dice «Un segundo ciclo del barrido no lo vuelve a intentar: failed es terminal». El
+      YAML ya lo garantiza por construcción: failed no tiene transiciones de salida en el lifecycle
+      de Notification y queueAcceptedNotifications solo reclama filas en accepted. Pero como prueba
+      de caja negra no discrimina nada: el Given deja el relay rechazando con un 550 y las notas
+      dicen que ese rechazo es global mientras está activo, y ningún paso lo levanta antes del
+      segundo ciclo. Un reintento sería rechazado igual, no llegaría nada al buzón y el estado
+      seguiría en failed (la transición de vuelta no existe), así que el Then pasa tanto si se
+      reintenta como si no.
+    proposal: >-
+      En el escenario: devolver el relay a su comportamiento normal antes del segundo ciclo y
+      afirmar que, pasado ese ciclo, el buzón no tiene ningún correo para rebota@cliente.example y
+      el envío sigue en failed. O reducir el Then a lo que se observa («sigue en failed tras otro
+      ciclo») y dejar el «no se reintenta» a la terminalidad del lifecycle.
+    resolution: accepted
+    reason: >-
+      Cierto, y sin presupuesto de careo en la v2.0.x: reescribir el Then ahora dejaría el careo
+      caducado y agotado. Se decide la prueba, no el escenario: antes del segundo ciclo el agente de
+      pruebas llama a relayAccepts(), y entonces «no lo vuelve a intentar» sí es observable (el buzón
+      sigue sin correo para rebota@cliente.example y el envío sigue en failed con el mismo
+      sendingSince). Reescribir el Given/Then en ese sentido queda para la próxima minor.

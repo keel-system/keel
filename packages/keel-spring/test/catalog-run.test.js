@@ -235,7 +235,7 @@ function runSeal(mutate) {
 
   fs.mkdirSync(path.join(root, 'specs'), { recursive: true });
   fs.writeFileSync(path.join(root, 'specs', 'validation-scenarios.md'), '# x\n\nEl primero es `p25`.\n');
-  fs.writeFileSync(path.join(root, 'specs', 'service.keel.yaml'), 'keel: "2.16"\n');
+  fs.writeFileSync(path.join(root, 'specs', 'service.keel.yaml'), 'keel: "2.17"\n');
   writeSpecsSeal(root);
   mutate?.(root);
   const runner = path.join(root, 'seal.sh');

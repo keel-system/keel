@@ -1,6 +1,6 @@
 # notification-mailer-mongo — Documento de diseño
 
-> specs/notification-mailer-mongo v2.0.1. Diseño cerrado; el porqué de las decisiones se entrevistó al cerrarlo.
+> specs/notification-mailer-mongo v2.0.2. Diseño cerrado; el porqué de las decisiones se entrevistó al cerrarlo.
 
 ## 1. Propósito y alcance
 
@@ -200,8 +200,8 @@ Otras decisiones notables:
 - **Sin baja de sistemas, sin lista de supresión y sin adjuntos del llamante** en esta versión. Los
   adjuntos están habilitados en la capa `mail` para que el generador compile esa rama, y ningún
   correo de esta versión los lleva.
-- **La cabecera `Location`** de las altas apunta a rutas que ninguna operación sirve (no hay
-  `getApplication`, y la de una plantilla no es la ruta de `getTemplate`). La emite el generador.
+- **El alta de una aplicación no tiene dirección**: responde `201` sin `Location`, porque nadie ha
+  pedido leer una aplicación después de registrarla. La de una plantilla apunta a `getTemplate`.
 
 ### Cómo reutilizarlo
 

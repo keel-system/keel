@@ -5,7 +5,7 @@ import pc from 'picocolors';
 import { MANIFEST_FILE, resolveServiceDir } from '../lib/loader.js';
 import { validateService } from '../lib/validate-service.js';
 import { REVIEW_FILE, GAPS_FILE } from '../lib/spec-files.js';
-import { DECISIONS_FILE } from '../lib/decisions.js';
+import { DECISIONS_FILE, classifyWarnings } from '../lib/decisions.js';
 import { READINESS_CRITERIA, assessReadiness } from '../lib/readiness.js';
 
 function printSchemaErrors(file, ajvErrors) {
@@ -234,24 +234,9 @@ export function validate(inputPath, options = {}) {
  * habría que adivinarlo.
  */
 function printWarnings(warnings, undecided) {
-  const byMessage = new Map();
-  for (const item of undecided.accepted) byMessage.set(item.message, { item, state: 'accepted' });
-  for (const item of undecided.stale) byMessage.set(item.message, { item, state: 'stale' });
-  for (const item of undecided.open) byMessage.set(item.message, { item, state: 'open' });
-
-  for (const message of warnings) {
-    const decision = byMessage.get(message);
-    if (decision?.state === 'accepted') continue;
+  for (const { message, hint } of classifyWarnings(warnings, undecided).shown) {
     console.warn(`${pc.yellow('⚠')} ${message}`);
-    if (!decision) continue;
-    const { item, state } = decision;
-    if (state === 'stale') {
-      console.warn(pc.dim(`    aceptada en v${item.since}: el diseño cambió, reafírmala en ${DECISIONS_FILE}`));
-    } else if (item.waivable) {
-      console.warn(pc.dim(`    decisión sin tomar: ciérrala en el DSL o acéptala en ${DECISIONS_FILE} — id: ${item.id}, scope: ${item.scope}`));
-    } else {
-      console.warn(pc.dim(`    decisión sin tomar (${item.id}): no admite aceptación, decídela en el DSL`));
-    }
+    if (hint) console.warn(pc.dim(`    ${hint}`));
   }
 }
 

@@ -41,7 +41,10 @@ import {
   SEARCH_LIMIT,
   searchSuffix,
   ROUTES,
-  FIELDS
+  FIELDS,
+  CHAOS_REJECT_CODE,
+  CHAOS_REJECT_RECIPIENTS,
+  CHAOS_OFF
 } from '../src/lib/mail-probes.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -208,6 +211,17 @@ function read(json, jsonPath) {
   return current;
 }
 
+/** El mismo PUT que hacen relayRejectsRecipients()/relayAccepts() del arnés. */
+async function chaos(json) {
+  const response = await fetch(API + ROUTES.chaos(), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: json
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status} en ${ROUTES.chaos()}: ${await response.text()}`);
+  return response.json();
+}
+
 async function purge() {
   const response = await fetch(API + ROUTES.messages(), { method: 'DELETE' });
   if (!response.ok) throw new Error(`No se pudo purgar el buzón: HTTP ${response.status}`);
@@ -239,6 +253,7 @@ const ADDRESS = 'cliente+etiqueta@ejemplo.com';
 const VOLUME_ADDRESS = 'volumen@ejemplo.com';
 const OTHER_ADDRESS = 'otro@ejemplo.com';
 const SENDER = 'pedidos@tutienda.com';
+const REJECTED_ADDRESS = 'rebota@cliente.example';
 
 async function scenarios() {
   const results = [];
@@ -366,6 +381,38 @@ async function scenarios() {
     if (SEARCH_LIMIT < 200) {
       throw new Error(`SEARCH_LIMIT=${SEARCH_LIMIT}: el techo por defecto quedó por debajo de una tanda de despacho`);
     }
+  });
+
+  await check('MAIL-10', `con el rechazo activo, el relay responde ${CHAOS_REJECT_CODE} al destinatario y no guarda nada`, async () => {
+    // La primitiva del estado `failed` (hallazgo 5 de R9). Si la imagen no arrancó con chaos,
+    // el PUT responde 400 y este caso lo dice; si el cuerpo no tiene la forma que la imagen
+    // entiende, el relay sigue aceptando y el caso cae por el diálogo SMTP.
+    await purge();
+    await chaos(CHAOS_REJECT_RECIPIENTS);
+    try {
+      const log = await sendMail({ from: SENDER, to: REJECTED_ADDRESS, subject: 'rechazado', html: '<p>x</p>', text: 'x' });
+      if (!new RegExp(`^${CHAOS_REJECT_CODE} `, 'm').test(log)) {
+        throw new Error(`el RCPT no se rechazó con ${CHAOS_REJECT_CODE}. Diálogo:\n${log}`);
+      }
+      const ids = read(await search(REJECTED_ADDRESS), FIELDS.searchIds) ?? [];
+      if (ids.length !== 0) throw new Error(`el relay rechazó pero guardó ${ids.length} mensaje(s)`);
+    } finally {
+      await chaos(CHAOS_OFF);
+    }
+  });
+
+  await check('MAIL-11', 'apagado el rechazo, el relay vuelve a aceptar', async () => {
+    // Sin esto, un flujo que activó el rechazo contaminaría a todos los siguientes: es lo que
+    // hacen relayAccepts() y la purga de reset-db.sh, con el mismo cuerpo.
+    await chaos(CHAOS_OFF);
+    await sendMail({ from: SENDER, to: REJECTED_ADDRESS, subject: 'aceptado', html: '<p>y</p>', text: 'y' });
+    const deadline = Date.now() + 10000;
+    let ids = [];
+    while (Date.now() < deadline && ids.length === 0) {
+      ids = read(await search(REJECTED_ADDRESS), FIELDS.searchIds) ?? [];
+      if (ids.length === 0) await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    if (ids.length !== 1) throw new Error(`esperaba 1 mensaje tras apagar el rechazo y hay ${ids.length}`);
   });
 
   await check('MAIL-7', 'la purga deja el buzón vacío entre flujos', async () => {

@@ -23,9 +23,21 @@ import { providerFailures } from '../src/lib/outbound-failures.js';
 const fixtureDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'catalog-extended');
 const JAVA = 'src/main/java/com/commerce/catalog';
 
-function scaffoldExtended() {
+function scaffoldExtended({ withRead = false } = {}) {
   const { manifest, layers, errors } = loadService(fixtureDir);
   assert.deepEqual(errors, []);
+  // catalog-extended no lee un producto por id (solo por slug), así que sus altas no
+  // tienen a dónde apuntar `Location`. La variante le añade esa lectura.
+  if (withRead) {
+    layers['use-cases'].operations.getProduct = {
+      description: 'Recupera un producto por su id.',
+      kind: 'query',
+      input: { fields: { id: { type: 'uuid', required: true } } },
+      output: { entity: 'Product' },
+      errors: [{ code: 'PRODUCT_NOT_FOUND', when: 'No existe.', http: 404 }]
+    };
+    layers.api.endpoints.getProduct = { method: 'GET', path: '/products/{id}' };
+  }
   const workspace = tmpDir('keel-regression-');
   const result = scaffoldService({ manifest, layers, workspace, force: true });
   const read = (relative) =>
@@ -56,7 +68,7 @@ test('binding HTTP: un POST con cuerpo usa @RequestBody aunque sea una query', (
 });
 
 test('status de éxito: 201 solo al crear; un POST de transición responde 200', () => {
-  const { read, result } = scaffoldExtended();
+  const { read, result } = scaffoldExtended({ withRead: true });
   const product = read(controllerPath('product'));
   const createBlock = product.slice(product.indexOf('@PostMapping("/products")'), product.indexOf('getProductBySlug'));
   const retireBlock = product.slice(product.indexOf('@PostMapping("/products/{id}/retire")'));
@@ -69,26 +81,30 @@ test('status de éxito: 201 solo al crear; un POST de transición responde 200',
   assert.ok(result.warnings.some((w) => w.includes("'retireProduct'") && w.includes('sin successStatus')));
 });
 
-test('§1.3: toda creación con id en la salida devuelve la cabecera Location', () => {
-  const { read } = scaffoldExtended();
+test('§1.3: una creación con id en la salida y lectura por id devuelve la cabecera Location', () => {
+  const { read } = scaffoldExtended({ withRead: true });
   const product = read(controllerPath('product'));
   const image = read(controllerPath('productimage'));
 
   assert.ok(product.includes('public ResponseEntity<CreateProductResponseDto> createProduct('));
+  // Location apunta a la ruta de la operación que LEE el producto (getProduct,
+  // GET /products/{id}), no a "la de la petición + id", que solo coincide por casualidad.
   assert.ok(
     product.includes(
-      'ServletUriComponentsBuilder.fromCurrentRequest().path("/{id}").buildAndExpand(response.id()).toUri()'
-    )
+      'ServletUriComponentsBuilder.fromCurrentContextPath()\n                    .path("/api/v1/products/{id}").buildAndExpand(response.id()).toUri()'
+    ),
+    product
   );
   assert.ok(product.includes('import org.springframework.web.servlet.support.ServletUriComponentsBuilder;'));
 
   // addProductImage crea un SUB-RECURSO y devuelve el agregado padre: el `id` de la
   // respuesta es el del producto, no el de la imagen. La regla general (URI de la
   // petición + id del output) daba `/products/{productId}/images/{productId}`, que
-  // no es la ruta de nada. Location apunta al agregado devuelto.
+  // no es la ruta de nada. Location apunta al agregado devuelto, por la ruta de su
+  // lectura (GET /products/{id}) expandida con el parámetro de la petición.
   assert.ok(
     product.includes(
-      'ServletUriComponentsBuilder.fromCurrentContextPath()\n                    .path("/api/v1/products/{productId}").buildAndExpand(productId).toUri()'
+      'ServletUriComponentsBuilder.fromCurrentContextPath()\n                    .path("/api/v1/products/{id}").buildAndExpand(productId).toUri()'
     ),
     product
   );
@@ -99,6 +115,36 @@ test('§1.3: toda creación con id en la salida devuelve la cabecera Location', 
   assert.ok(!image.includes('ResponseEntity.created('));
   // Nunca se envuelve un retorno vacío solo por el status.
   assert.ok(!product.includes('ResponseEntity<Void>'));
+});
+
+test('§1.3: sin operación que lea el recurso no hay Location, que sería un 404 prometido', () => {
+  // Hallazgo 3 de R9: la cabecera era "URI de la petición + id" aunque nadie sirviera esa
+  // ruta. catalog-extended solo lee productos por slug: el 201 sigue, la cabecera no.
+  const { read } = scaffoldExtended();
+  const product = read(controllerPath('product'));
+  const createBlock = product.slice(product.indexOf('@PostMapping("/products")'), product.indexOf('getProductBySlug'));
+
+  assert.ok(!product.includes('ServletUriComponentsBuilder'), product);
+  assert.ok(!product.includes('ResponseEntity.created('));
+  assert.ok(createBlock.includes('@ResponseStatus(HttpStatus.CREATED)'), createBlock);
+});
+
+test('§1.3: Location apunta a la ruta de la lectura, no a la de la petición (par del MVP)', () => {
+  // registerTemplate es PUT /templates/{templateKey}/{locale}: "petición + id" daba
+  // /templates/{key}/{locale}/{id}, y la plantilla se lee en GET /templates/{templateId}.
+  // registerApplication no tiene lectura: sin Location.
+  const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'notification-mailer');
+  const { manifest, layers, errors } = loadService(dir);
+  assert.deepEqual(errors, []);
+  const workspace = tmpDir('keel-regression-');
+  scaffoldService({ manifest, layers, workspace, force: true });
+  const rest = path.join(workspace, 'services', 'notification-mailer-spring', 'src/main/java/com/platform/notificationmailer/infrastructure/rest/controllers');
+  const template = fs.readFileSync(path.join(rest, 'template/v1/TemplateV1Controller.java'), 'utf8');
+  const application = fs.readFileSync(path.join(rest, 'application/v1/ApplicationV1Controller.java'), 'utf8');
+
+  assert.ok(template.includes('.path("/v1/templates/{templateId}").buildAndExpand(response.id()).toUri()'), template);
+  assert.ok(!template.includes('fromCurrentRequest'));
+  assert.ok(!application.includes('ServletUriComponentsBuilder'), application);
 });
 
 test('paginación: PagedResponse<Dto> sin lista anidada', () => {

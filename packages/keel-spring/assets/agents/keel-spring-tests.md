@@ -121,6 +121,8 @@ puntuación las ejecuta todas. La independencia no cambia: sigues sin leer `src/
      se quería medir, y sale verde siempre. Para un rechazo, `assertNoMailTo` — es lo
      único que afirma que el rechazo llegó ANTES del envío y no después. Un escenario
      cuyo `Then` menciona el correo y solo comprueba el status **no** está cubierto.
+     Si el Given pide que el proveedor RECHACE el envío, `relayRejectsRecipients()`
+     justo antes del When: nunca se siembra `failed` escribiendo en el almacén.
    - Fíjate en **qué deja limpio `resetState()`** (BD, caché y los canales declarados) antes
      de escribir cualquier aserción que dependa de un estado inicial vacío. Lo que no esté
      en esa lista no se asume limpio: se purga en el test o se declara en `assumptions`.

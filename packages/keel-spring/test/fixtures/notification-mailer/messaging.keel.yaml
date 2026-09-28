@@ -48,6 +48,10 @@ subscriptions:
       # emisor. No va en el payload —el dato de identidad está en un solo sitio, o hay
       # dos versiones de la verdad y una deja de validarse.
       from: { location: field, name: metadata.source }
+      # El emisor se nombra con una de sus credenciales, igual que por HTTP: se resuelve contra
+      # el mismo campo, o el mismo sistema sería una aplicación por una puerta y ninguna por la
+      # otra. Era una rule en prosa hasta DSL 2.17.
+      resolvedBy: Application.credentialKeys
       trustedPublishers: >-
         Nadie publica anónimamente en este canal: el broker autentica a los emisores, y el
         conjunto de quienes pueden poner un mensaje son los sistemas registrados de la

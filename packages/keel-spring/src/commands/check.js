@@ -19,7 +19,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
 import pc from 'picocolors';
-import { isKeelWorkspace, resolveServiceDir, loadService, validateService, assessReadiness } from 'keel-core';
+import { isKeelWorkspace, resolveServiceDir, loadService, validateService, assessReadiness, classifyWarnings } from 'keel-core';
 import { SUPPORTED_DSL } from '../lib/assets.js';
 import { checkSupportedFeatures } from '../lib/supported-features.js';
 import { planService } from '../scaffold/index.js';
@@ -115,7 +115,8 @@ export function check(inputPath, { database = null, strict = false } = {}) {
     bullet('red', message);
     blocking += 1;
   }
-  for (const message of validation.warnings) {
+  // Lo que decisions.yaml ya acepta no es un aviso: se contestó (misma vara que keel validate).
+  for (const { message } of classifyWarnings(validation.warnings, validation.undecided).shown) {
     bullet('yellow', message);
     notices += 1;
   }

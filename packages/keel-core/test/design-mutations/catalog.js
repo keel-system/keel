@@ -506,6 +506,15 @@ export const MUTATIONS = [
     expect: ['CHK-API-POST-NO-STATUS']
   },
   {
+    id: 'M-API-CREATED-NO-READ',
+    title: 'un alta 201 cuyo recurso ya no se lee por id',
+    mutate: (d) => {
+      d.layers.api.endpoints.getTicket.path = '/tickets/{id}/as/{format}';
+      d.layers['use-cases'].operations.getTicket.input.fields.format = { type: 'string', required: true };
+    },
+    expect: ['CHK-API-CREATED-NO-READ']
+  },
+  {
     id: 'M-API-NO-SECURITY',
     title: 'capa api sin capa security',
     mutate: (d) => {
@@ -1030,8 +1039,10 @@ export const MUTATIONS = [
     id: 'M-API-QUERY-NOT-GET',
     title: 'una query expuesta por POST',
     mutate: (d) => {
-      // Con su successStatus, para no disparar además el POST sin status.
-      Object.assign(d.layers.api.endpoints.getTicket, { method: 'POST', successStatus: 200 });
+      // Con su successStatus, para no disparar además el POST sin status. Sobre el listado y no
+      // sobre getTicket: sin la lectura por id, el alta de createTicket se queda sin Location y
+      // dispararía también CHK-API-CREATED-NO-READ.
+      Object.assign(d.layers.api.endpoints.listTickets, { method: 'POST', successStatus: 200 });
     },
     expect: ['CHK-API-QUERY-NOT-GET']
   },
@@ -1105,6 +1116,41 @@ export const MUTATIONS = [
   // ─── R5, tanda B: security ──────────────────────────────────────────────────
   // Las tres primeras le quitan además el scope al bot: si no, el scope concedido que ninguna
   // regla exige dispararía su propio aviso (CHK-SEC-CLIENT-SCOPE-UNUSED), que se mide aparte.
+  {
+    id: 'M-USECASES-IDEM-SCOPE-UNDECIDED',
+    title: 'una clave client-key en un servicio que distingue llamantes, sin ámbito',
+    extends: 'm2m',
+    mutate: (d) => withClientKey(d, ['required', 'race', 'reuse']),
+    expect: ['CHK-USECASES-IDEM-SCOPE-UNDECIDED']
+  },
+  {
+    id: 'M-USECASES-IDEM-PARTITION-UNKNOWN',
+    title: 'el ámbito de la clave nombra un campo que la operación no recibe',
+    mutate: (d) => {
+      withClientKey(d, ['required', 'race', 'reuse']);
+      ops(d).createTicket.idempotency.partitionBy = ['tenantId'];
+    },
+    expect: ['CHK-USECASES-IDEM-PARTITION-UNKNOWN']
+  },
+  {
+    id: 'M-MSG-IDENTITY-RESOLVEDBY-UNDECIDED',
+    title: 'HTTP resuelve la identidad 1:N y la suscripción no dice contra qué',
+    extends: 'm2m',
+    mutate: (d) => {
+      // La credencial de un bot es una de varias de su cola: resolvedBy por HTTP.
+      entity(d, 'Queue').fields.botKeys = { type: 'string', list: true, description: 'Credenciales de los bots de la cola.' };
+      d.layers.security.authentication.callerIdentity.from.resolvedBy = 'Queue.botKeys';
+      // Y la misma identidad llega por el broker, leída de la envoltura, sin resolvedBy.
+      ops(d).noteEscalation.input.fields.requestedBy = { type: 'string' };
+      d.layers.messaging.subscriptions.TicketEscalated.identity = {
+        field: 'requestedBy',
+        from: { location: 'field', name: 'metadata.source' },
+        onUnresolved: 'deadLetter',
+        trustedPublishers: 'Solo publica el equipo de guardia, autenticado ante el broker.'
+      };
+    },
+    expect: ['CHK-MSG-IDENTITY-RESOLVEDBY-UNDECIDED']
+  },
   {
     id: 'M-SEC-SERVICE-NO-SCOPES',
     title: 'una regla level: service sin scopes',

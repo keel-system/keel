@@ -18,6 +18,13 @@
 //   * reset-db.sh corre dentro del contenedor devtools y habla por el nombre de
 //     servicio de la red del compose (mailpit:8025).
 
+/**
+ * La imagen. Va aquí y no en el catálogo porque las rutas de este módulo son contrato con
+ * ELLA: chaos (`ROUTES.chaos`) no existe antes de la 1.22, y la forma de sus disparadores
+ * se verificó contra la 1.31.
+ */
+export const IMAGE = 'axllent/mailpit:v1.31';
+
 /** Puerto HTTP de la API y de la interfaz web; el 1025 es el SMTP al que apunta la app. */
 export const HTTP_PORT = 8025;
 export const SMTP_PORT = 1025;
@@ -50,8 +57,36 @@ export const ROUTES = {
   /** Un mensaje completo por su id. */
   message: (id) => `/message/${id}`,
   /** Vacía el buzón entero (DELETE). */
-  messages: () => '/messages'
+  messages: () => '/messages',
+  /** Disparadores de fallo del SMTP (PUT). Solo responde si la imagen arrancó con chaos. */
+  chaos: () => '/chaos'
 };
+
+/**
+ * La primitiva que le faltaba al arnés: que el relay de prueba RECHACE un envío.
+ *
+ * Sin ella, un estado al que solo se llega porque el proveedor dice «no» (`failed`)
+ * era inalcanzable en caja negra, y su escenario se puntuaba `uncovered` (hallazgo 5
+ * de R9). Mailpit lo trae como *chaos*: responde con un código de error al `RCPT TO`
+ * con la probabilidad que se le diga. Tres cosas que conviene saber:
+ *
+ * - Es **global**, no por destinatario: mientras está activo, rechaza a todo el mundo.
+ *   Un escenario que lo use afirma sobre el envío que hace él, no sobre una dirección.
+ * - Con probabilidad 100 es determinista; nada por debajo lo es, y un Then que dependa
+ *   del azar no mide nada.
+ * - Se APAGA con un cuerpo vacío (los disparadores omitidos vuelven a probabilidad 0),
+ *   y el reset entre flujos lo apaga siempre: un rechazo que sobrevive al flujo que lo
+ *   pidió hace fallar al siguiente por un motivo que no tiene que ver con él.
+ *
+ * El código es 550 (rechazo PERMANENTE del destinatario): es el que un adaptador SMTP
+ * correcto no reintenta, y por tanto el que lleva a `failed` y no a otro reintento.
+ */
+export const CHAOS_REJECT_CODE = 550;
+export const CHAOS_REJECT_RECIPIENTS = JSON.stringify({ Recipient: { ErrorCode: CHAOS_REJECT_CODE, Probability: 100 } });
+export const CHAOS_OFF = '{}';
+
+/** Variable de entorno de la imagen que habilita chaos (sin ella, la API responde 400). */
+export const CHAOS_ENV = { MP_ENABLE_CHAOS: 'true' };
 
 /** Término de búsqueda por destinatario, tal como lo entiende Mailpit. */
 export function toQuery(address) {
@@ -84,9 +119,18 @@ export function validateCommand() {
   return `curl -sf -o /dev/null ${NETWORK_BASE}${ROUTES.info()}`;
 }
 
-/** Comando de purga desde devtools: deja el buzón como recién arrancado. */
+/**
+ * Comando de purga desde devtools: deja el buzón como recién arrancado — vacío y
+ * aceptando todo, que es la otra mitad de «recién arrancado» desde que el arnés puede
+ * pedir que el relay rechace. Sin comillas simples: viaja dentro de un `sh -c '…'`.
+ * Apagar el rechazo es tolerante a fallo: un proyecto generado antes de la 1.31 no
+ * arrancó con chaos, su API responde 400 y ahí no hay rechazo que apagar.
+ */
 export function resetCommand() {
-  return `curl -sf -o /dev/null -XDELETE ${NETWORK_BASE}${ROUTES.messages()}`;
+  return (
+    `curl -sf -o /dev/null -XDELETE ${NETWORK_BASE}${ROUTES.messages()} && ` +
+    `{ curl -sf -o /dev/null -XPUT -H "Content-Type: application/json" -d "${CHAOS_OFF}" ${NETWORK_BASE}${ROUTES.chaos()} || true; }`
+  );
 }
 
 /**

@@ -3341,7 +3341,9 @@ test('idempotencia de comando: store transaccional, contexto y filtro de la cabe
   // Y el stub del handler dice qué usar, para que el agente no reinvente el registro.
   const handler = read(workspace, `${base}/application/usecases/CreateProductCommandHandler.java`);
   assert.ok(handler.includes('IdempotencyContext.get()'));
-  assert.ok(handler.includes('scope="createProduct"'));
+  // El ámbito lo compone build en el comando (DSL 2.17): sin partitionBy es la operación.
+  assert.ok(handler.includes('command.idempotencyScope()'));
+  assert.ok(command.includes('return "createProduct";'), command);
 
   // Y dice qué NO hacer con la carrera. El `find` no la ve —las dos peticiones lo
   // fallan— así que quien la arbitra es la clave primaria del registro, vía la

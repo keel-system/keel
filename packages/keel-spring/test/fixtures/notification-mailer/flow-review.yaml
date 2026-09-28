@@ -1,11 +1,11 @@
-reviewedAt: 2.0.0
-passes: 2
-scenariosSha256: 24bedff5eba394213e891dcd523766384af0447c5686d07cf6f475feb012abc6
+reviewedAt: 2.0.2
+passes: 3
+scenariosSha256: c1854b97a6858c9d2ecae394d608371999f2b08a085ebc1e34d10ec52281f8cb
 conventionsSha256: cc90dc94206bddf5e4445da623a2ed0464f10ab98e814dbc088b227e032ef8a1
 flows:
-  - { id: FL-APP-001, sha256: 5bb0326ab329d02627f3dc752e4c9ecb68bc62acf3c76488bd7ef29d23c5837a }
+  - { id: FL-APP-001, sha256: fdd7bc028c1c41a79cd4d6aa8af9b6c150bb278514dbf8ba1f0d15bc14e2a445 }
   - { id: FL-APP-001-B, sha256: ebe3b82a12b56f470001f47e899142bb98a48c43fe3d474a39280fac8e8943ae }
-  - { id: FL-TPL-001, sha256: 02ef09cadac31250748404c3dd9fdd9370b9b356cfffb76a45f725afb8d0ed5b }
+  - { id: FL-TPL-001, sha256: 4356aad96136c13f11bd7bd415d8d52febf6c634a99d4418a8d2e8d7817a3eb9 }
   - { id: FL-TPL-002, sha256: 820d5eea9280703e7b0f48118ce0119a9645709ca839a7d7a15278d734034f8c }
   - { id: FL-TPL-003, sha256: d5f42a387f3a73d04db88edd7d3f8c6399d27c759248936e0d44069c34ff6912 }
   - { id: FL-TPL-010, sha256: 211b68bca16d9d1ba08d6b0acd71217bf3b690c835a1c7f615564aedf4b07833 }
@@ -22,7 +22,7 @@ flows:
   - { id: FL-EVT-001-B, sha256: c1a2f65c2174f378b2c60d8bf9875a485dc0d114085ec9e97d671a1b059c491e }
   - { id: FL-EVT-002, sha256: 88560edc14032b50502b17cec3ff5cb3009a2e022ccc48897c116a47a7fb22af }
   - { id: FL-EVT-003, sha256: f0d816f5c16df08c50116055a6f40159f5629e667e0b63fab0c710afc9ac8651 }
-  - { id: FL-DSP-001, sha256: dd072dad152c1e0b6e834d2375bcb1d4cdd1e690fda99e651647dd9af808ae2d }
+  - { id: FL-DSP-001, sha256: 18ca0c738ba6f228372b7c53424b28364975e97d8f4c7dcad2ae16e848d74f8d }
   - { id: FL-CLU-001, sha256: 31dec2eb544b06791cad17ec3b6c7adaed8dda0ba6594f5d253e7d296e4c9218 }
   - { id: FL-OBX-001, sha256: f7989a1c3f960c1b6d0f63baefdafc6ff766d71b190fc16fda7ced9eae48d668 }
   - { id: FL-OBX-002, sha256: b0e2e2c572725c01388821a4026ef1494e5d327ce01711852cd966715a92a85b }
@@ -47,8 +47,9 @@ findings:
     resolution: accepted
     reason: "Es la proyección canónica del generador para una salida `entity` sin embed: la relación
       many-to-one sale como `<relación>Id` y las hijas del agregado, anidadas con su id. El
-      escenario afirma lo que produce un servidor correcto. Que el DSL no escriba esa regla es un
-      hallazgo del método, no de este diseño: queda anotado para su propio seguimiento."
+      escenario afirma lo que produce un servidor correcto, y es la regla escrita: docs/dsl/use-cases.md
+      (embed y entidades hijas) y la regla de proyección de scenario-authoring.md, que desde el
+      hallazgo 2 de R9 enumera también las relaciones sin embed y las hijas."
 
   - flow: FL-TPL-001
     step: "Then 2"
@@ -133,3 +134,29 @@ findings:
       de reintentos y del evento abandonado sin nombrar el número ni la métrica: los dos son del
       generador, que da la primitiva para provocarlo y la señal para observarlo (en keel-spring, la
       cuenta de eventos abandonados por el actuator). El diseño no declara capacidad a propósito."
+
+  # --- Pasada 3 (v2.0.2), incremental sobre FL-APP-001, FL-TPL-001 y FL-DSP-001 ---
+  - flow: FL-DSP-001
+    step: "Then 3"
+    kind: unobservable
+    artifact: use-cases.sendAcceptedNotification
+    evidence: >-
+      El Then 3 afirma que «un segundo ciclo del barrido no lo vuelve a intentar». El Given deja el
+      rechazo del relay activo y global («es global mientras está activo»), y nada en el flujo lo
+      retira antes del segundo ciclo. Con el relay rechazando, un reintento sería indistinguible
+      desde fuera: el buzón seguiría vacío para rebota@cliente.example, no saldría ningún
+      NotificationSent y el estado seguiría en failed. Que no se reintente sí se deduce del YAML
+      (Notification.lifecycle: failed: [], y queueAcceptedNotifications solo reclama from:
+      [accepted]); lo que no se puede es OBSERVARLO tal como está escrito el paso.
+    proposal: >-
+      En el escenario, retirar el rechazo del relay antes del segundo ciclo y afirmar que, pasado
+      ese ciclo, el buzón sigue sin correo para rebota@cliente.example y el envío sigue en failed
+      con el mismo sendingSince; o quitar el Then 3 y dejarlo como consecuencia del lifecycle, sin
+      prometer una medición que la prueba no hace.
+    resolution: accepted
+    reason: >-
+      Cierto, y sin presupuesto de careo en la v2.0.x: reescribir el Then ahora dejaría el careo
+      caducado y agotado. Se decide la prueba, no el escenario: antes del segundo ciclo el agente de
+      pruebas llama a relayAccepts(), y entonces «no lo vuelve a intentar» sí es observable (el buzón
+      sigue sin correo para rebota@cliente.example y el envío sigue en failed con el mismo
+      sendingSince). Reescribir el Given/Then en ese sentido queda para la próxima minor.

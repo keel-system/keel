@@ -82,7 +82,7 @@
           "channel": {
             "type": "string",
             "pattern": "^[a-z][A-Za-z0-9]*$",
-            "description": "Canal lógico del que se consume (debe existir en channels)."
+            "description": "Canal lógico al que pertenece el evento consumido (debe existir en channels). Es agrupación y contrato (external, contract), no dirección: el destino físico del que se consume sale de source (<source>.events por convención, el mismo en el que el emisor publica), o de un parámetro de despliegue si el canal es external."
           },
           "contract": {
             "type": "object",
@@ -159,6 +159,11 @@
                 "type": "string",
                 "enum": ["discard", "deadLetter"],
                 "description": "Qué se hace con un mensaje cuya identidad no resuelve a nada conocido. Es un fallo PERMANENTE, no transitorio: reintentarlo cinco veces con backoff no va a hacer aparecer lo que no existe, solo retrasa el descubrimiento y llena los logs. Por eso no hay opción de reintentar, y por eso se declara aparte de onFailure — que trata todo fallo como transitorio."
+              },
+              "resolvedBy": {
+                "type": "string",
+                "pattern": "^[A-Z][A-Za-z0-9]*\\.[a-z][A-Za-z0-9]*$",
+                "description": "Contra qué se resuelve el valor leído, cuando la correspondencia NO es 1:1: Entidad.campo, y ese campo tiene que ser una LISTA del dominio. Es el gemelo de security.authentication.callerIdentity.from.resolvedBy: si un recurso tiene varias credenciales y el emisor se nombra con una de ellas (metadata.source = client_id), aquí va el mismo Entidad.campo. Sin él, el valor se busca por la clave natural del recurso, y un emisor registrado con cualquier otra credencial no resuelve a nada. DSL 2.17."
               },
               "trustedPublishers": {
                 "type": "string",

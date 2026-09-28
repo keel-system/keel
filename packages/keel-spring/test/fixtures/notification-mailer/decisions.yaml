@@ -47,6 +47,15 @@ decisions:
       dice qué parte de su llamada corregir, y el `when` de cada operación lo describe.
     since: 2.0.0
 
+  - id: CHK-API-CREATED-NO-READ
+    scope: api.endpoints.registerApplication
+    reason: >-
+      El alta de una aplicación la hace el equipo de plataforma una vez por sistema, y nadie ha
+      pedido leerla después: quien la registra ya tiene en la respuesta todo lo que hay (id, key,
+      credenciales). Una lectura por id sería una operación nueva sin consumidor, así que el 201
+      sale sin Location, que es lo honrado: antes apuntaba a /v1/applications/{id}, que no sirve
+      nadie.
+    since: 2.0.1
 structural:
   - section: '3.1'
     scope: messaging.publishing.reliability

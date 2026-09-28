@@ -109,7 +109,9 @@ pero **no elige por ti** quién invoca a quién. Detalle completo en
 Tres cosas que solo se prueban contra un proveedor real, y conviene no descubrirlas
 tarde:
 
-- **Rebotes y quejas.** Mailpit no rebota nada. Si el diseño tiene lista de
+- **Rebotes y quejas.** Mailpit no rebota nada: rechaza en el `RCPT` cuando el arnés se lo
+  pide (`relayRejectsRecipients()`), que es el fallo síncrono con el que se llega a `failed`,
+  pero un rebote que llega DESPUÉS de aceptar no existe. Si el diseño tiene lista de
   supresión alimentada por un webhook del proveedor, ese camino se ejercita
   invocando el endpoint con un payload de ejemplo, nunca provocando un rebote.
 - **Entregabilidad.** Que el correo salga no es que llegue a la bandeja de entrada.

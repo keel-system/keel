@@ -21,7 +21,10 @@ import {
   ROUTES,
   FIELDS,
   validateCommand,
-  resetCommand
+  resetCommand,
+  IMAGE,
+  CHAOS_ENV,
+  CHAOS_REJECT_RECIPIENTS
 } from '../src/lib/mail-probes.js';
 
 const fixtureDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'notification-mailer');
@@ -236,6 +239,26 @@ test('el arnés sabe leer el buzón por las rutas compartidas', () => {
   assert.ok(harness.includes(`"${SEARCH_PREFIX}"`), 'la búsqueda no usa el prefijo compartido');
   assert.ok(harness.includes(`"${ROUTES.message('')}"`), 'el detalle no usa la ruta compartida');
   assert.ok(harness.includes(FIELDS.searchIds), 'los ids no se leen por la ruta compartida');
+});
+
+// Hallazgo 5 de R9: sin una forma de que el relay diga «no», el estado `failed` de un envío
+// no se alcanzaba en caja negra y su escenario quedaba `uncovered`. La primitiva es chaos de
+// Mailpit, y tiene tres piezas que deben decir lo mismo: la imagen arranca con él, el arnés lo
+// activa y lo apaga por la ruta compartida, y el reset entre flujos lo apaga siempre.
+test('el arnés puede hacer que el relay rechace, y el reset lo apaga', () => {
+  const { read } = scaffoldMailer();
+  const compose = read('infra/docker-compose.yaml');
+  assert.ok(compose.includes(IMAGE), 'la imagen no es la que tiene chaos');
+  for (const [key, value] of Object.entries(CHAOS_ENV)) assert.ok(compose.includes(`${key}: "${value}"`), compose);
+
+  const harness = read('src/integrationTest/java/com/platform/notificationmailer/flows/AbstractFlowIT.java');
+  assert.ok(harness.includes('protected static void relayRejectsRecipients()'));
+  assert.ok(harness.includes('protected static void relayAccepts()'));
+  assert.ok(harness.includes(`mailPut("${ROUTES.chaos()}"`), 'el rechazo no usa la ruta compartida');
+  assert.ok(harness.includes(CHAOS_REJECT_RECIPIENTS.replaceAll('"', '\\"')), 'el cuerpo del rechazo no es el compartido');
+
+  assert.ok(resetCommand().includes(ROUTES.chaos()), 'la purga no apaga el rechazo');
+  assert.ok(read('infra/reset-db.sh').includes(resetCommand()));
 });
 
 // El techo de la búsqueda no es una preferencia: `limit` recorta la lista de mensajes,

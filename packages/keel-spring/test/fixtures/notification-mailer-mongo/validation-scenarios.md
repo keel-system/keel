@@ -1,7 +1,7 @@
 # notification-mailer-mongo — Escenarios de validación
 
 > Escenarios de aceptación ejecutables (Given/When/Then) derivados de
-> specs/notification-mailer-mongo v2.0.1. Contrato de validación para la fase de generación.
+> specs/notification-mailer-mongo v2.0.2. Contrato de validación para la fase de generación.
 
 > **El par del MVP, cerrado de punta a punta.** Es la fixture sobre la que el método se ejerce
 > entero —escenarios, careo, revisión, análisis de huecos y registro estructural— y la que fija
@@ -100,8 +100,8 @@ cliente `platform-admin`:
 ```
 **Then**:
 1. Status `201`.
-2. Cabecera `Location` con la ruta de la petición seguida del `id` devuelto
-   (`/v1/applications/<a1>`).
+2. **Sin** cabecera `Location`: ninguna operación lee una aplicación por id, así que el alta
+   no tiene dirección a la que apuntar (aceptado en `decisions.yaml`, `CHK-API-CREATED-NO-READ`).
 3. El cuerpo es exactamente `{id: <a1>, key: "orders", name: "Pedidos",
    credentialKeys: ["orders-service", "orders-service-ci"],
    defaultSender: "pedidos@tienda.example", defaultLocale: "es", active: true}` — `active`
@@ -165,8 +165,8 @@ del cliente `orders-service-ci` y el cuerpo de la plantilla de prueba:
     { "name": "customerName", "required": true, "description": null } ] }
 ```
 **Then**:
-1. Status `201`, con cabecera `Location` con la ruta de la petición seguida del `id` devuelto
-   (`/v1/templates/order-shipped/es/<t1>`).
+1. Status `201`, con cabecera `Location` hacia la lectura de la plantilla —la ruta de
+   `getTemplate` con el `id` devuelto—, no hacia la de la petición: `/v1/templates/<t1>`.
 2. El cuerpo es exactamente `{id: <t1>, key: "order-shipped", locale: "es", status: "draft",
    version: 1, subject: "Pedido {{orderNumber}} enviado", bodyHtml: <el enviado>,
    bodyText: <el enviado>, publishedAt: null, applicationId: <a1>, variables: [...]}`, con
@@ -602,7 +602,8 @@ rechazo de negocio llega a la cola a la primera.
 ### FL-DSP-001: el relay rechaza el mensaje y el envío queda fallido
 
 **Given**: `orders` dada de alta, `order-shipped` publicada y el relay de salida de prueba
-configurado para **rechazar** el destinatario `rebota@cliente.example`.
+configurado para **rechazar** los destinatarios con un 550 permanente —en el arnés,
+`relayRejectsRecipients()` justo antes del `When`—.
 
 **When**: la petición de prueba para `rebota@cliente.example` (responde `202`), y pasa un ciclo
 de `queueAcceptedNotifications`.
@@ -616,9 +617,9 @@ de `queueAcceptedNotifications`.
 **Notas de determinación**: es el único fallo de entrega que este servicio puede observar, y un
 relay que no se alcanza o no contesta a tiempo acaba igual, en `failed`. Un
 rebote posterior —el relay acepta y el destino lo devuelve horas después— queda fuera del
-diseño. El `Given` necesita que el relay de prueba sepa rechazar un destinatario; si el
-generador no ofrece esa primitiva, el flujo se puntúa `uncovered` con ese motivo, nunca se
-fabrica el `failed` escribiendo en el almacén.
+diseño. El rechazo del relay de prueba es global mientras está activo: el `Then` afirma sobre
+el envío de este flujo, y el `failed` se provoca con el 550 real, nunca se fabrica escribiendo en
+el almacén.
 
 ### FL-CLU-001: con dos réplicas, cada envío sale una vez
 

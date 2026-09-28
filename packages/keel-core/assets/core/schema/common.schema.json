@@ -382,12 +382,19 @@
           "type": "integer",
           "minimum": 1,
           "description": "Ventana durante la que una repetición devuelve el resultado original. Sin él la guarda es permanente."
+        },
+        "partitionBy": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$" },
+          "description": "Ámbito de la clave: campos del input que, junto al nombre de la operación, la acotan. Sin él la clave es GLOBAL por operación, y dos llamantes que elijan la misma se ven. Con la identidad del llamante (callerIdentity.field) cada sistema tiene su propio espacio de claves. Solo con client-key y payload-hash: con payload-field la guarda es la clave natural o el almacén por ese campo. DSL 2.17."
         }
       },
       "allOf": [
         {
           "if": { "properties": { "keySource": { "const": "payload-field" } }, "required": ["keySource"] },
-          "then": { "required": ["keyField"] }
+          "then": { "required": ["keyField"], "not": { "required": ["partitionBy"] } }
         },
         {
           "if": {

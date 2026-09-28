@@ -265,8 +265,10 @@ function renderPort(model) {
 public interface IdempotencyStore {
 
     /**
-     * @param scope clave de agrupación: el nombre de la operación del diseño, para
-     *              que la misma cabecera en dos operaciones distintas no colisione
+     * @param scope clave de agrupación: {@code command.idempotencyScope()}, que build compone
+     *              desde el diseño — la operación, para que la misma cabecera en dos operaciones
+     *              no colisione, y los campos de {@code idempotency.partitionBy}, para que dos
+     *              llamantes con la misma clave no se vean
      * @param idempotencyKey la clave: el valor de la cabecera Idempotency-Key con
      *                       {@code keySource: client-key}, o CommandSignature.of(command)
      *                       con {@code payload-hash} — ahí no hay cabecera
@@ -588,7 +590,7 @@ public class IdempotencyRecordJpa implements Persistable<IdempotencyRecordJpa.Id
     @Embeddable
     public static class IdempotencyRecordId implements Serializable {
 
-        /** Nombre de la operación del diseño. La columna no se llama "scope": lo es en SQL estándar. */
+        /** El ámbito de la clave (idempotencyScope() del comando). La columna no se llama "scope": lo es en SQL estándar. */
         @Column(name = "operation_scope", nullable = false, length = 128)
         private String scope;
 
@@ -892,7 +894,7 @@ public class IdempotencyRecordDocument {
     /** Clave compuesta (operación, clave de idempotencia): subdocumento del _id. */
     public static class IdempotencyRecordId implements Serializable {
 
-        /** Nombre de la operación del diseño. */
+        /** El ámbito de la clave (idempotencyScope() del comando). */
         @Field(name = "operation_scope")
         private String scope;
 

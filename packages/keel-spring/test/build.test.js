@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
 import { READY_FIXTURES, mountDesign } from './helpers/workspace.js';
-import { HARNESSES } from 'keel-core';
+import { HARNESSES, validateService } from 'keel-core';
 import { build } from '../src/commands/build.js';
 import { assetsDir, SUPPORTED_DSL } from '../src/lib/assets.js';
 
@@ -416,9 +416,35 @@ for (const name of READY_FIXTURES) {
 
     assert.equal(exitCode, undefined, salida);
     assert.doesNotMatch(salida, /Diseño no listo/);
-    assert.deepEqual(stampOf(workspace, name), { version: '2.0.1', ready: true, missing: [] });
+    assert.deepEqual(stampOf(workspace, name), { version: '2.0.2', ready: true, missing: [] });
   });
 }
+
+test('build no repite como aviso lo que decisions.yaml ya acepta, y sí lo abierto', async () => {
+  // Hallazgo 6 de R9: build imprimía las decisiones aceptadas en amarillo mientras keel validate
+  // las daba por contestadas. La vara es la misma (classifyWarnings de keel-core).
+  const workspace = makeWorkspace();
+  mountDesign(workspace, 'notification-mailer');
+  const { undecided } = validateService(path.join(workspace, 'specs', 'notification-mailer'), { wip: false });
+  assert.ok(undecided.accepted.length > 0, 'la fixture tiene que aceptar alguna decisión para medir esto');
+
+  const { exitCode, salida } = await runGate(workspace, 'specs/notification-mailer');
+
+  assert.equal(exitCode, undefined, salida);
+  for (const { message } of undecided.accepted) assert.ok(!salida.includes(message), `repite una aceptada: ${message}`);
+  assert.ok(salida.includes(`${undecided.accepted.length} decisión(es) aceptada(s)`), salida);
+
+  // Y lo abierto sí sale: quitando la aceptación, el mismo aviso vuelve con su pista.
+  const decisions = path.join(workspace, 'specs', 'notification-mailer', 'decisions.yaml');
+  const [primera] = undecided.accepted;
+  const texto = fs.readFileSync(decisions, 'utf8');
+  fs.writeFileSync(decisions, texto.replace(`- id: ${primera.id}
+    scope: ${primera.scope}`, `- id: ${primera.id}
+    scope: otra.cosa`));
+  const abierta = await runGate(workspace, 'specs/notification-mailer', { acceptUnready: true, check: true });
+  assert.ok(abierta.salida.includes(primera.message), abierta.salida);
+  assert.ok(abierta.salida.includes(`id: ${primera.id}, scope: ${primera.scope}`), abierta.salida);
+});
 
 test('fase 2: --refresh también se niega sobre un diseño que dejó de estar listo; --check solo informa', async () => {
   // El snapshot que refresca --refresh es el del diseño de AHORA: refrescar un proyecto desde un

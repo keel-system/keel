@@ -219,3 +219,43 @@ export function resolveUndecided(findings, doc, serviceVersion) {
   }
   return result;
 }
+
+/**
+ * Los avisos tal como se enseñan al diseñador: sin los que decisions.yaml ya acepta, y con la
+ * pista que cierra cada decisión abierta o caducada.
+ *
+ * Es fuente única para `keel validate` y para los generadores (`build`, `check`). Mientras
+ * cada uno los imprimía a su manera, `build` enseñaba en amarillo decisiones que `keel
+ * validate` daba por contestadas, y un aviso que se repite después de contestarlo enseña a no
+ * leer los avisos.
+ *
+ * @param {string[]} warnings los de validateService
+ * @param {{ open: object[], accepted: object[], stale: object[] }} undecided los de resolveUndecided
+ * @returns {{ shown: Array<{ message: string, hint: string|null }>, accepted: number }}
+ */
+export function classifyWarnings(warnings, undecided) {
+  const byMessage = new Map();
+  for (const item of undecided?.accepted ?? []) byMessage.set(item.message, { item, state: 'accepted' });
+  for (const item of undecided?.stale ?? []) byMessage.set(item.message, { item, state: 'stale' });
+  for (const item of undecided?.open ?? []) byMessage.set(item.message, { item, state: 'open' });
+
+  const shown = [];
+  let accepted = 0;
+  for (const message of warnings ?? []) {
+    const decision = byMessage.get(message);
+    if (decision?.state === 'accepted') {
+      accepted += 1;
+      continue;
+    }
+    shown.push({ message, hint: decision ? hintFor(decision) : null });
+  }
+  return { shown, accepted };
+}
+
+function hintFor({ item, state }) {
+  if (state === 'stale') return `aceptada en v${item.since}: el diseño cambió, reafírmala en ${DECISIONS_FILE}`;
+  if (item.waivable) {
+    return `decisión sin tomar: ciérrala en el DSL o acéptala en ${DECISIONS_FILE} — id: ${item.id}, scope: ${item.scope}`;
+  }
+  return `decisión sin tomar (${item.id}): no admite aceptación, decídela en el DSL`;
+}

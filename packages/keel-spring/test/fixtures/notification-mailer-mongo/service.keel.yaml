@@ -1,7 +1,7 @@
-keel: "2.16"
+keel: "2.17"
 service:
   name: notification-mailer-mongo
-  version: 2.0.1
+  version: 2.0.2
   description: Envía correo transaccional por cuenta de los sistemas consumidores, a partir de plantillas que viven en su propia base de datos.
   domain: platform
 # Un campo sin valor VIAJA como null, en las respuestas y en los eventos: el cliente distingue

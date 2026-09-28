@@ -117,6 +117,20 @@ export const CHECKS = {
   },
 
   // ─── use-cases ─────────────────────────────────────────────────────────────
+  'CHK-USECASES-IDEM-PARTITION-UNKNOWN': {
+    layer: 'use-cases',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'el ámbito de una clave de idempotencia nombra un campo que la operación no recibe',
+    closes: 'nombrar en partitionBy campos del input (la identidad del llamante lo es)'
+  },
+  'CHK-USECASES-IDEM-SCOPE-UNDECIDED': {
+    layer: 'use-cases',
+    severity: 'warning',
+    nature: 'undecided',
+    title: 'una clave de idempotencia elegida por el cliente no dice si es global o por llamante',
+    closes: 'declarar idempotency.partitionBy con el campo del llamante, o aceptar que la clave sea global'
+  },
   'CHK-USECASES-QUERY-EMITS': {
     layer: 'use-cases',
     severity: 'error',
@@ -186,6 +200,13 @@ export const CHECKS = {
     waivable: false,
     title: 'un endpoint POST no declara successStatus',
     closes: 'declarar 201 si crea un recurso, 200 si devuelve un resultado, 202 si responde antes de terminar'
+  },
+  'CHK-API-CREATED-NO-READ': {
+    layer: 'api',
+    severity: 'warning',
+    nature: 'undecided',
+    title: 'un alta responde 201 y ninguna operación lee el recurso por id',
+    closes: 'añadir la lectura por id (GET con {id}) si alguien va a seguir el Location, o aceptar en decisions.yaml que el alta no lo lleva'
   },
   'CHK-API-NO-SECURITY': {
     layer: 'api',
@@ -412,6 +433,13 @@ export const CHECKS = {
   },
 
   // ─── messaging ─────────────────────────────────────────────────────────────
+  'CHK-MSG-IDENTITY-RESOLVEDBY-UNDECIDED': {
+    layer: 'messaging',
+    severity: 'warning',
+    nature: 'undecided',
+    title: 'la identidad de una suscripción no dice contra qué se resuelve, y la de HTTP sí',
+    closes: 'declarar identity.resolvedBy (el mismo Entidad.campo que callerIdentity si el emisor se nombra como la credencial), o aceptar la resolución 1:1'
+  },
   'CHK-MSG-SUB-NO-ONFAILURE': {
     layer: 'messaging',
     severity: 'warning',

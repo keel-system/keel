@@ -23,9 +23,15 @@ import {
   SEARCH_PREFIX,
   SEARCH_LIMIT,
   SEARCH_LIMIT_PARAM,
-  searchSuffix
+  searchSuffix,
+  CHAOS_REJECT_CODE,
+  CHAOS_REJECT_RECIPIENTS,
+  CHAOS_OFF
 } from '../lib/mail-probes.js';
 import { fastestSchedulePeriod } from '../lib/cron-period.js';
+
+// Un literal de cadena Java: los cuerpos JSON de chaos llevan comillas dobles.
+const javaString = (value) => `"${String(value).replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;
 
 export function hasMail(model) {
   return Boolean(model.layersPresent.mail);
@@ -188,6 +194,46 @@ export function mailSection(model) {
         int count = mailCount(address);
         if (count > 0) {
             throw new AssertionError("No debía salir ningún correo para " + address + " y salieron " + count);
+        }
+    }
+
+    /**
+     * A partir de aquí el relay de prueba RECHAZA todo destinatario con un
+     * ${CHAOS_REJECT_CODE} (rechazo permanente), hasta {@link #relayAccepts()} o hasta el
+     * reset del siguiente flujo. Es la primitiva con la que se alcanza en caja negra lo que
+     * solo ocurre cuando el proveedor dice «no» —el envío que acaba {@code failed}— sin
+     * fabricarlo escribiendo en el almacén.
+     *
+     * <p>Es <b>global</b>: rechaza a cualquier dirección mientras está activo. El Given lo
+     * activa justo antes del When que envía, y el Then afirma sobre ese envío.
+     */
+    protected static void relayRejectsRecipients() {
+        mailPut("${ROUTES.chaos()}", ${javaString(CHAOS_REJECT_RECIPIENTS)});
+    }
+
+    /** El relay vuelve a aceptarlo todo. El reset entre flujos lo hace siempre. */
+    protected static void relayAccepts() {
+        mailPut("${ROUTES.chaos()}", ${javaString(CHAOS_OFF)});
+    }
+
+    private static void mailPut(String path, String json) {
+        try {
+            HttpResponse<String> response = MAIL_HTTP.send(
+                    HttpRequest.newBuilder(URI.create(MAIL_API + path))
+                            .header("Content-Type", "application/json")
+                            .PUT(HttpRequest.BodyPublishers.ofString(json))
+                            .build(),
+                    HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() >= 300) {
+                throw new AssertionError("El buzón de prueba rechazó " + path + " (HTTP "
+                        + response.statusCode() + "): " + response.body()
+                        + ". ¿Arrancó con MP_ENABLE_CHAOS? (infra/docker-compose.yaml)");
+            }
+        } catch (IOException | InterruptedException e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            throw new AssertionError("No se pudo hablar con el buzón de prueba en " + MAIL_API, e);
         }
     }
 

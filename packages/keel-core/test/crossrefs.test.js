@@ -1605,7 +1605,9 @@ const depsLayers = () => ({
       },
     },
   },
-  api: { endpoints: { createOrder: { method: 'POST', path: '/orders', successStatus: 201 } } },
+  // 200 y no 201: sin lectura del pedido por id, un 201 abriría CHK-API-CREATED-NO-READ, que
+  // no es lo que miden estos casos (todos afirman silencio).
+  api: { endpoints: { createOrder: { method: 'POST', path: '/orders', successStatus: 200 } } },
   security: { authentication: { protocol: 'oidc' }, access: { default: { level: 'required' } } },
   messaging: {
     subscriptions: {
@@ -6654,4 +6656,57 @@ test('CHK-API-NO-SECURITY: api sin security, una vez y sobre la capa', () => {
   const hits = idsOf(run(layers), 'CHK-API-NO-SECURITY');
   assert.deepEqual(hits.map((hit) => hit.scope), ['api']);
   assert.equal(idsOf(run({ ...layers, security: { access: { default: 'public' } } }), 'CHK-API-NO-SECURITY').length, 0);
+});
+
+// ── CHK-API-CREATED-NO-READ (hallazgo 3 de R9) ─────────────────────────────────
+// Un 201 lleva Location solo si alguna operación lee el recurso por id. La regla es la de
+// `readingPath` del generador; estos casos fijan las dos formas de «leer» que no son un
+// endpoint GET /x/{id} literal.
+
+const createdLayers = ({ read, auto = false } = {}) => ({
+  domain: { entities: { Order: entity() } },
+  'use-cases': {
+    operations: {
+      placeOrder: {
+        description: 'Registra un pedido.',
+        kind: 'command',
+        input: { fields: { sku: { type: 'string', required: true } } },
+        output: { entity: 'Order' }
+      },
+      ...(read
+        ? {
+            getOrder: {
+              description: 'Lee un pedido.',
+              kind: 'query',
+              input: { fields: { [read]: { type: 'uuid', required: true } } },
+              output: { entity: 'Order' }
+            }
+          }
+        : {})
+    }
+  },
+  api: {
+    auto,
+    endpoints: {
+      placeOrder: { method: 'POST', path: '/orders', successStatus: 201 },
+      ...(read && !auto ? { getOrder: { method: 'GET', path: `/orders/{${read}}` } } : {})
+    }
+  }
+});
+
+const createdNoRead = (layers) => run(layers).findings.filter((f) => f.id === 'CHK-API-CREATED-NO-READ');
+
+test('CHK-API-CREATED-NO-READ: sin lectura por id avisa, con scope por endpoint', () => {
+  const hits = createdNoRead(createdLayers());
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].scope, 'api.endpoints.placeOrder');
+});
+
+test('CHK-API-CREATED-NO-READ: la lectura con {orderId} o con {id} cierra la pregunta', () => {
+  assert.deepEqual(createdNoRead(createdLayers({ read: 'orderId' })), []);
+  assert.deepEqual(createdNoRead(createdLayers({ read: 'id' })), []);
+});
+
+test('CHK-API-CREATED-NO-READ: con auto, un get<X> sin endpoint cuenta como lectura', () => {
+  assert.deepEqual(createdNoRead(createdLayers({ read: 'id', auto: true })), []);
 });

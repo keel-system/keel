@@ -512,7 +512,9 @@ function commandChecks(model) {
     group: 'commandIdempotency',
     subject: operation.name,
     class: operation.handlerClass,
-    require: ['IdempotencyStore', 'CommandSignature\\.of\\s*\\('],
+    // El ámbito lo compone build (`idempotencyScope()`, DSL 2.17): un literal con el nombre de la
+    // operación compila, deduplica y deja la clave GLOBAL entre llamantes aunque el diseño la acote.
+    require: ['IdempotencyStore', 'CommandSignature\\.of\\s*\\(', 'idempotencyScope\\s*\\('],
     forbid: [
       // Una firma escrita a mano se compara contra firmas guardadas en otro
       // despliegue, y hashCode() ni siquiera es estable entre arranques.
@@ -524,7 +526,7 @@ function commandChecks(model) {
     why:
       operation.idempotency.keySource === 'payload-hash'
         ? 'keySource: payload-hash — la clave es CommandSignature.of(command), sin IdempotencyContext ni rama «sin clave»'
-        : 'keySource: client-key — la clave llega por IdempotencyContext.get() y la firma por CommandSignature.of(command)'
+        : 'keySource: client-key — la clave llega por IdempotencyContext.get(), la firma por CommandSignature.of(command) y el ámbito por command.idempotencyScope()'
   }));
 }
 

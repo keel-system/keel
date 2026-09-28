@@ -323,13 +323,43 @@ function renderMessage(model, operation) {
   });
 
   const componentBlock = rendered.length > 0 ? `\n${rendered.join(',\n')}\n` : '';
-  const body = `${javadoc(operation.description, '')}public record ${operation.messageClass}(${componentBlock}) implements ${contracts.message} {${scaleRounding(operation.messageClass, components, imports)}
+  const body = `${javadoc(operation.description, '')}public record ${operation.messageClass}(${componentBlock}) implements ${contracts.message} {${scaleRounding(operation.messageClass, components, imports)}${idempotencyScopeMethod(operation)}
 }`;
 
   return {
     path: javaPath(model, messagePackage(operation), operation.messageClass),
     content: javaFile(subPackage(model, messagePackage(operation)), [...imports], body)
   };
+}
+
+/**
+ * El ÁMBITO de la clave de idempotencia, ya compuesto (DSL 2.17, `idempotency.partitionBy`).
+ *
+ * La clave del almacén es (ámbito, clave). Hasta aquí el ámbito era el nombre de la operación y lo
+ * escribía el agente a partir de una nota, así que una clave elegida por el cliente era GLOBAL entre
+ * llamantes: dos sistemas con la misma Idempotency-Key se veían, y el segundo recibía el 409 de
+ * reutilización —la firma incluye la identidad que estampa el servidor— o, con la misma firma, la
+ * respuesta del primero (hallazgo 9 de R9). Generarlo aquí hace que el ámbito lo decida el diseño
+ * y no la lectura de una nota; sin `partitionBy` devuelve el nombre de la operación, que es
+ * exactamente lo de antes.
+ */
+function idempotencyScopeMethod(operation) {
+  const idempotency = operation.idempotency;
+  if (!idempotency || idempotency.guard === 'natural-key') return '';
+  const partition = idempotency.partitionBy ?? [];
+  const value = [`"${operation.name}"`, ...partition.map((field) => `String.valueOf(${field})`)].join(' + ":" + ');
+  const what = partition.length > 0
+    ? `la operación y ${partition.map((field) => `{@code ${field}}`).join(', ')} (idempotency.partitionBy): dos llamantes con la misma clave no se ven`
+    : 'la operación: sin idempotency.partitionBy la clave es GLOBAL entre llamantes, y eso lo decidió el diseño';
+  return `
+
+    /**
+     * Ámbito de la clave de idempotencia: ${what}.
+     * Es el primer argumento de IdempotencyStore.find/save; no lo compongas a mano.
+     */
+    public String idempotencyScope() {
+        return ${value};
+    }`;
 }
 
 // Handler de la operación: stub con las notas del diseño; lo implementa el
@@ -494,7 +524,7 @@ function renderHandler(model, service, operation) {
   if (operation.idempotency && operation.idempotency.guard !== 'natural-key') {
     const ttl = operation.idempotency.ttlSeconds ?? 86400;
     const common =
-      `find(scope, clave) con scope="${operation.name}"; si hay registro con la MISMA firma, reconstruye la respuesta desde su resourceId sin re-ejecutar nada (ni escrituras ni eventos); si la firma difiere, lanza IdempotencyReuseException (${FRAMEWORK_ERRORS.idempotencyReuse.http} ${effectiveErrorCode(model, FRAMEWORK_ERRORS.idempotencyReuse)}), que build genera para eso — no inventes un code ni reutilices el de la carrera, que es otro desenlace; si no hay registro, RECLAMA PRIMERO: decide el identificador del recurso, llama a save(scope, clave, firma, resourceId, ttl) y SOLO DESPUÉS ejecuta el negocio, todo dentro de la misma transacción del comando. ` +
+      `find(scope, clave) con scope = command.idempotencyScope() (build lo genera desde el diseño: no lo compongas a mano); si hay registro con la MISMA firma, reconstruye la respuesta desde su resourceId sin re-ejecutar nada (ni escrituras ni eventos); si la firma difiere, lanza IdempotencyReuseException (${FRAMEWORK_ERRORS.idempotencyReuse.http} ${effectiveErrorCode(model, FRAMEWORK_ERRORS.idempotencyReuse)}), que build genera para eso — no inventes un code ni reutilices el de la carrera, que es otro desenlace; si no hay registro, RECLAMA PRIMERO: decide el identificador del recurso, llama a save(scope, clave, firma, resourceId, ttl) y SOLO DESPUÉS ejecuta el negocio, todo dentro de la misma transacción del comando. ` +
       // La CARRERA no la resuelve el find: dos peticiones simultáneas lo fallan las dos
       // —ninguna ha commiteado— y llegan las dos a save. Quien arbitra es la clave
       // primaria del registro, y el adaptador ya traduce esa violación al 409 del

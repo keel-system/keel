@@ -30,7 +30,7 @@ publishing:
 # subscriptions:
 #   StockDepleted:
 #     source: inventory-service
-#     channel: inventoryEvents          # canal lógico del que se consume
+#     channel: inventoryEvents          # canal lógico (el destino físico sale de source)
 #     contract:                         # forma real del mensaje que emite la fuente
 #       envelope: wrapped               # keel | wrapped | none
 #       payloadPath: data               # dónde vive el payload (solo con wrapped)

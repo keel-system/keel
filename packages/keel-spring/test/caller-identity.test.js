@@ -314,3 +314,63 @@ test('el modelo expone la política ya resuelta', () => {
     resolvedBy: null
   });
 });
+
+// ─── DSL 2.17: los dos ámbitos que eran prosa (hallazgos 1 y 9 de R9) ──────────────
+//
+// Sobre el par del MVP, que es quien los declara: el emisor por el broker se resuelve contra
+// Application.credentialKeys como la credencial por HTTP, y la Idempotency-Key se acota a la
+// aplicación del llamante.
+
+function scaffoldMailer() {
+  const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'notification-mailer');
+  const { manifest, layers, errors } = loadService(dir);
+  assert.deepEqual(errors, []);
+  const workspace = tmpDir('keel-scope-');
+  scaffoldService({ manifest, layers, workspace, force: true });
+  const root = path.join(workspace, 'services', 'notification-mailer-spring');
+  const walk = (current) =>
+    fs.readdirSync(current, { withFileTypes: true }).flatMap((entry) =>
+      entry.isDirectory() ? walk(path.join(current, entry.name)) : [path.join(current, entry.name)]
+    );
+  const files = walk(root);
+  const find = (suffix) => fs.readFileSync(files.find((file) => file.endsWith(suffix)), 'utf8');
+  return { layers, find };
+}
+
+test('DSL 2.17: el listener nombra contra qué se resuelve el emisor, con el finder de la puerta HTTP', () => {
+  const { find } = scaffoldMailer();
+  const listener = find('NotificationRequestedMessage.java');
+  assert.match(listener, /resolvedBy: Application\.credentialKeys/);
+  assert.match(listener, /ApplicationRepository\.findByCredentialKeysContaining\(\.\.\.\)/);
+  // El finder existe, y uno solo aunque lo pidan las dos puertas.
+  const port = find('ApplicationRepository.java');
+  assert.equal(port.match(/findByCredentialKeysContaining\(/g).length, 1, port);
+});
+
+test('DSL 2.17: sin resolvedBy en el broker, el listener dice que la resolución es 1:1', () => {
+  const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'notification-mailer');
+  const { manifest, layers } = loadService(dir);
+  const patched = structuredClone(layers);
+  delete patched.messaging.subscriptions.NotificationRequested.identity.resolvedBy;
+  const workspace = tmpDir('keel-scope-');
+  scaffoldService({ manifest, layers: patched, workspace, force: true });
+  const root = path.join(workspace, 'services', 'notification-mailer-spring');
+  const walk = (current) =>
+    fs.readdirSync(current, { withFileTypes: true }).flatMap((entry) =>
+      entry.isDirectory() ? walk(path.join(current, entry.name)) : [path.join(current, entry.name)]
+    );
+  const listener = fs.readFileSync(walk(root).find((file) => file.endsWith('NotificationRequestedMessage.java')), 'utf8');
+  assert.match(listener, /Se resuelve 1:1/);
+  assert.doesNotMatch(listener, /findByCredentialKeysContaining/);
+});
+
+test('DSL 2.17: el comando trae su ámbito de idempotencia ya compuesto con partitionBy', () => {
+  const { find } = scaffoldMailer();
+  const command = find('RequestNotificationCommand.java');
+  assert.ok(command.includes('public String idempotencyScope() {'), command);
+  assert.ok(command.includes('return "requestNotification" + ":" + String.valueOf(applicationKey);'), command);
+  // Y la nota del handler lo usa en vez de un literal con el nombre de la operación.
+  const handler = find('RequestNotificationCommandHandler.java');
+  assert.ok(handler.includes('command.idempotencyScope()'), handler);
+  assert.ok(!handler.includes('scope="requestNotification"'));
+});

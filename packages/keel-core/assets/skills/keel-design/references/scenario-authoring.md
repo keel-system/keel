@@ -47,7 +47,14 @@ Cuando el inventario esté completo, la **matriz de cobertura** sale de él, no 
 
 El formato exige que el `Then` fije el **cuerpo completo**. De dónde sale ese cuerpo no es opinión: para un `output: { entity: X, … }`, es
 
-> los campos de `domain.entities.X` — menos las rutas de `exclude` — más un objeto anidado por cada relación de `embed` — más los campos con `default`, que viajan **siempre** aunque la petición no los mande.
+> los campos de `domain.entities.X` — menos los `sensitive` y las rutas de `exclude` — más los campos con `default`, que viajan **siempre** aunque la petición no los mande — más, por cada **relación**:
+> - hacia **otro agregado** sin `embed`: un `<relación>Id` con su id, y nada más;
+> - hacia otro agregado **con** `embed`: un objeto anidado con los campos propios de ese agregado, sin sus relaciones;
+> - hacia una **entidad hija** del agregado: anidada siempre, con su `id` —una lista si la relación es a-muchos— y, dentro, la misma regla aplicada a la hija, que además lleva **siempre** el `<raíz>Id` de su padre.
+>
+> Una colección sin elementos viaja como `[]`, no como `null` ni ausente, salvo que el manifiesto declare `conventions.nulls: omit`.
+
+Es la misma regla que `docs/dsl/use-cases.md` fija para `exclude`, `embed` y las entidades hijas, y la que el generador aplica: no hay una proyección «que decida el generador».
 
 Enumerarlo de memoria es el error que más contradicciones internas produce, y son caras: un escenario dice que la creación devuelve seis campos, otro del mismo documento asume un séptimo que el primero negó, y el desacuerdo no aflora hasta que un agente tiene que elegir a cuál obedecer. El caso típico es un `status` con `default: active`: no aparece en la petición, así que se olvida en la respuesta, mientras el flujo de transición de estado que viene después lo da por descontado.
 

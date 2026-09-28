@@ -138,6 +138,9 @@ operations:
         status: { type: NotificationStatus }
     idempotency:
       keySource: client-key
+      # La clave se acota a la aplicación del llamante: dos sistemas pueden usar la misma
+      # Idempotency-Key sin verse ni pisarse. Era una rule en prosa hasta DSL 2.17.
+      partitionBy: [applicationKey]
     preconditions:
       - La aplicación está registrada y activa.
       - Hay una plantilla activa con esa clave e idioma para esa aplicación.
@@ -151,9 +154,6 @@ operations:
         cada petición sin clave es un envío distinto, que es justo lo que se aceptó en
         OBL-IDEM-KEY-REQUIRED.
       - Dos peticiones con la misma clave de idempotencia producen una sola notificación.
-      - >-
-        La clave se acota a la aplicación del llamante: dos sistemas pueden usar la misma
-        Idempotency-Key sin verse ni pisarse. El DSL no tiene dónde declararlo; es una regla.
       - Dos variables con el mismo nombre en la misma petición se rechazan.
       - >-
         La `naturalKey` de Notification es el RESPALDO de esa garantía, no su mecanismo: quien
@@ -210,11 +210,6 @@ operations:
         Lo mismo que por HTTP: sin idioma se usa el `defaultLocale` de la aplicación, la versión y
         el asunto interpolado se congelan, las variables no declaradas se ignoran y dos con el mismo
         nombre se rechazan.
-      - >-
-        El emisor que nombra la envoltura (metadata.source) es el nombre del servicio que publica, y
-        se resuelve IGUAL que la credencial por HTTP: es uno de los `credentialKeys` de la
-        aplicación. Resolverlo contra `key` haría que el mismo sistema fuera una aplicación por una
-        puerta y ninguna por la otra.
       - Registrar no es enviar; el correo lo manda sendAcceptedNotification.
       - Las variables se validan igual que por HTTP; un mensaje rechazado no se reintenta y va a la cola de descarte.
     errors:

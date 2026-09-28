@@ -124,30 +124,54 @@ export function naturalKeyBatchFinder(model, entity) {
 }
 
 /**
- * El finder por ELEMENTO de una colección, cuando el diseño declara que un recurso tiene varias
- * credenciales (`security.authentication.callerIdentity.from.resolvedBy`).
+ * Los finders por ELEMENTO de una colección, cuando el diseño declara que un recurso tiene varias
+ * credenciales: por HTTP (`security.authentication.callerIdentity.from.resolvedBy`) o por el
+ * broker (`messaging.subscriptions.<E>.identity.resolvedBy`, DSL 2.17).
  *
  * Por defecto la correspondencia credencial↔recurso es 1:1 y basta el finder de la clave natural.
  * Cuando no lo es, ese finder resuelve solo la credencial que casualmente coincide con la clave, y
  * las demás acaban en un 403 en el camino feliz — sin excepción, sin log, en la puerta de entrada
  * del servicio. Lo destapó la corrida notification-mailer sobre PostgreSQL: bloqueó nueve
- * escenarios y cinco clases enteras.
+ * escenarios y cinco clases enteras. Por el broker el hueco era el mismo con otro síntoma: el
+ * emisor iba a la cola de descartes (hallazgo 1 de R9).
  *
- * Devuelve null salvo para la entidad que el diseño nombra: es un método que existe por una
- * declaración concreta, no una capacidad que se le da a todos los agregados.
+ * Uno por `Entidad.campo` distinto que el diseño nombre para ESTA entidad, y ninguno si no nombra
+ * ninguno: es un método que existe por una declaración concreta, no una capacidad que se le da a
+ * todos los agregados. Lo normal es uno solo, compartido por las dos puertas.
  */
-export function credentialFinder(model, entity) {
-  const resolved = model.security?.callerIdentity?.resolvedBy;
-  if (!resolved || resolved.entity !== entity.name) return null;
-  const field = entity.fields.find((candidate) => candidate.name === resolved.field);
-  // `crossrefs` ya rechaza que no exista o que no sea lista; aquí solo se comprueba para no
-  // emitir un método contra un campo que el modelo no trae.
-  if (!field || !field.list) return null;
-  return {
-    name: `findBy${capitalize(resolved.field)}Containing`,
-    field: resolved.field,
-    javaType: field.elementJavaType ?? 'String'
-  };
+export function credentialFinders(model, entity) {
+  const declared = [
+    model.security?.callerIdentity?.resolvedBy,
+    ...(model.subscriptions ?? []).map((sub) => resolvedByOf(sub.identity?.resolvedBy))
+  ].filter((resolved) => resolved && resolved.entity === entity.name);
+  const seen = new Set();
+  const finders = [];
+  for (const resolved of declared) {
+    if (seen.has(resolved.field)) continue;
+    seen.add(resolved.field);
+    const field = entity.fields.find((candidate) => candidate.name === resolved.field);
+    // `crossrefs` ya rechaza que no exista o que no sea lista; aquí solo se comprueba para no
+    // emitir un método contra un campo que el modelo no trae.
+    if (!field || !field.list) continue;
+    finders.push({
+      name: credentialFinderName(resolved.field),
+      field: resolved.field,
+      javaType: field.elementJavaType ?? 'String'
+    });
+  }
+  return finders;
+}
+
+/** El nombre del finder de `Entidad.campo`: lo usan también las notas al agente. */
+export function credentialFinderName(field) {
+  return `findBy${capitalize(field)}Containing`;
+}
+
+// `Entidad.campo` de una suscripción, partido como el de callerIdentity (model.js lo parte allí).
+function resolvedByOf(raw) {
+  if (!raw) return null;
+  const [entity, field] = String(raw).split('.');
+  return { entity, field };
 }
 
 export function naturalKeyFinder(model, entity) {
@@ -190,13 +214,12 @@ export function renderPort(model, entity, paginated, batchLookup) {
     for (const param of finder.params) for (const name of param.imports) imports.add(name);
     methods.push(`    Optional<${entity.name}> ${finder.name}(${finder.signature});`);
   }
-  const credential = credentialFinder(model, entity);
-  if (credential) {
+  for (const credential of credentialFinders(model, entity)) {
     methods.push(`    /**
      * Resuelve el agregado a partir de UNA de sus credenciales.
      *
      * <p>Existe porque el diseño declara que un mismo ${entity.name} tiene varias
-     * ({@code callerIdentity.from.resolvedBy}), así que la que trae el token no tiene por qué ser
+     * ({@code resolvedBy: ${entity.name}.${credential.field}}), así que la que trae el token o el mensaje no tiene por qué ser
      * clave natural. Buscar por la clave natural resolvería solo una de ellas y las demás no
      * encontrarían nada — un 403 en el camino feliz.
      */
@@ -285,8 +308,7 @@ function renderJpaRepository(model, entity) {
     // La clave natural es la otra lectura de UN agregado: mismo grafo, misma razón.
     methods = `\n\n${graph}    Optional<${entity.name}Jpa> ${finder.name}(${finder.signature});`;
   }
-  const credential = credentialFinder(model, entity);
-  if (credential) {
+  for (const credential of credentialFinders(model, entity)) {
     imports.add('java.util.Optional');
     // `Containing` sobre una colección: Spring Data lo deriva como «la colección contiene este
     // elemento». Es la consulta que la clave natural no puede hacer.
@@ -371,8 +393,7 @@ function renderAdapter(model, entity, paginated, batchLookup) {
         return ${jpaField}.${finder.name}(${finder.args}).map(this::toDomain);
     }`);
   }
-  const credential = credentialFinder(model, entity);
-  if (credential) {
+  for (const credential of credentialFinders(model, entity)) {
     const arg = credential.field.replace(/s$/, '');
     methods.push(`    @Override
     public Optional<${entity.name}> ${credential.name}(${credential.javaType} ${arg}) {

@@ -17,7 +17,7 @@ import { persistedMembers, orderingFieldOf, usesAuditableEntity } from './persis
 import {
   renderPort,
   naturalKeyFinder,
-  credentialFinder,
+  credentialFinders,
   naturalKeyBatchFinder,
   collectInternalEntities,
   PORT_PKG,
@@ -62,8 +62,7 @@ function renderMongoRepository(model, entity) {
   }
   // El puerto es el MISMO en las dos ramas (lo reexporta repositories.js), así que lo que
   // se declare allí hay que implementarlo aquí o el adaptador no compila.
-  const credential = credentialFinder(model, entity);
-  if (credential) {
+  for (const credential of credentialFinders(model, entity)) {
     imports.add('java.util.Optional');
     // `Containing` sobre un array: Spring Data MongoDB lo deriva como un match de elemento, igual
     // que la rama relacional lo deriva sobre su @ElementCollection.
@@ -126,8 +125,7 @@ function renderAdapter(model, entity, paginated, batchLookup) {
         return ${repoField}.${finder.name}(${finder.args}).map(this::toDomain);
     }`);
   }
-  const credentialAdapter = credentialFinder(model, entity);
-  if (credentialAdapter) {
+  for (const credentialAdapter of credentialFinders(model, entity)) {
     const arg = credentialAdapter.field.replace(/s$/, '');
     methods.push(`    @Override
     public Optional<${entity.name}> ${credentialAdapter.name}(${credentialAdapter.javaType} ${arg}) {

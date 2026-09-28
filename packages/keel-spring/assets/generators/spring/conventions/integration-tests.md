@@ -1251,6 +1251,7 @@ verificación del correo es siempre manual.
 | `mailFrom(mensaje)` | El remitente desde el que salió |
 | `mailCount(dirección)` | Cuántos hay **ahora**, sin esperar. Para el segundo correo que NO debe existir |
 | `assertNoMailTo(dirección)` | Que no salió ninguno. El Then de los rechazos |
+| `relayRejectsRecipients()` / `relayAccepts()` | El relay de prueba **rechaza** todo destinatario con un 550 permanente, o vuelve a aceptar. Es el Given de un envío que el proveedor dice que no —el que acaba en `failed`—. Global mientras está activo; `resetState()` lo apaga siempre |
 
 Reglas, y las tres primeras son la misma idea:
 
@@ -1280,11 +1281,16 @@ Reglas, y las tres primeras son la misma idea:
   tarda el cron de despacho—, así que para cuando responde el correo ya salió y el escenario falla
   midiendo un instante que no era el suyo. `assertNoMailTo` es para los rechazos **permanentes**:
   el correo que no va a salir nunca.
-- `resetState()` vacía el buzón entre clases. Un correo del flujo anterior haría que el primer
+- **El envío que el proveedor rechaza se provoca, no se fabrica.** Con `relayRejectsRecipients()`
+  en el Given, el adaptador SMTP recibe el 550 de verdad y el servicio recorre el camino que lleva
+  a `failed`. Escribir `failed` en el almacén para sembrarlo no prueba nada de ese camino. El
+  rechazo es global: actívalo justo antes del When y afirma sobre ese envío.
+- `resetState()` vacía el buzón entre clases, y apaga el rechazo si un flujo lo dejó activo. Un correo del flujo anterior haría que el primer
   `awaitMailTo` devolviera el mensaje equivocado — el mismo fallo que la purga de los canales evita
   en el broker.
 
-Lo que **no** se puede probar aquí, y por eso no se intenta: Mailpit no rebota nada (una lista de
+Lo que **no** se puede probar aquí, y por eso no se intenta: Mailpit no rebota nada por su cuenta —el
+rechazo en el `RCPT` lo pide el arnés, pero un rebote asíncrono no existe— (una lista de
 supresión alimentada por el webhook del proveedor se ejercita invocando el endpoint con un payload
 de ejemplo, nunca provocando un rebote), no dice nada sobre entregabilidad (SPF, DKIM, DMARC y
 reputación son trabajo de DNS y de proveedor) y no aplica los límites del proveedor: lo acepta todo.

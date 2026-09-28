@@ -32,7 +32,7 @@
 // el resto lo ignora.
 
 import { declaredBuckets } from './buckets.js';
-import { validateCommand as mailValidateCmd, resetCommand as mailResetCmd, HTTP_PORT as MAIL_HTTP_PORT, SMTP_PORT as MAIL_SMTP_PORT, SERVICE as MAIL_SERVICE } from './mail-probes.js';
+import { validateCommand as mailValidateCmd, resetCommand as mailResetCmd, HTTP_PORT as MAIL_HTTP_PORT, SMTP_PORT as MAIL_SMTP_PORT, SERVICE as MAIL_SERVICE, IMAGE as MAIL_IMAGE, CHAOS_ENV as MAIL_CHAOS_ENV } from './mail-probes.js';
 
 // Credenciales de la infraestructura de prueba local (LocalStack y MinIO las
 // ignoran; el SDK y la AWS CLI exigen que EXISTAN). Van al contenedor devtools
@@ -884,15 +884,16 @@ export const HTTP_STUB = {
 // No es una elección de stack: no entra en CATALOG como categoría elegible ni en
 // STACK_DEFAULTS ni en el cuestionario. Se gatea por diseño (capa mail).
 //
-// Lo que NO cubre, y por eso la skill lo dice en voz alta: no rebota nada (la
-// lista de supresión y el webhook de rebotes hay que simularlos invocando el
-// endpoint), no dice nada sobre entregabilidad (SPF, DKIM, DMARC y reputación son
+// Lo que NO cubre, y por eso la skill lo dice en voz alta: no rebota nada por su
+// cuenta (el rechazo de un destinatario lo PIDE el arnés con chaos —ver
+// mail-probes.js § CHAOS_REJECT_RECIPIENTS—, y la lista de supresión y el webhook de
+// rebotes hay que simularlos invocando el endpoint), no dice nada sobre entregabilidad (SPF, DKIM, DMARC y reputación son
 // trabajo de DNS y de proveedor) y no aplica los límites del proveedor (tamaño
 // máximo del mensaje, envíos por segundo): lo acepta todo.
 export const MAIL_SINK = {
   id: 'mailpit',
   label: 'Mailpit (destino SMTP de prueba)',
-  image: 'axllent/mailpit:v1.21',
+  image: MAIL_IMAGE,
   // El puerto que sondea y consulta todo el mundo es el HTTP; el SMTP es al que
   // apunta la aplicación y no se sondea con curl.
   port: MAIL_HTTP_PORT,
@@ -909,7 +910,7 @@ export const MAIL_SINK = {
   cliResetCmd: mailResetCmd(),
   composeServices: () => ({
     mailpit: {
-      image: 'axllent/mailpit:v1.21',
+      image: MAIL_IMAGE,
       environment: {
         // Buzón acotado: la infraestructura de prueba se levanta y se tira, y un
         // buzón sin tope crece durante toda una corrida del pipeline.
@@ -917,7 +918,11 @@ export const MAIL_SINK = {
         // Sin autenticación SMTP en local, que es lo que hace que el fragmento
         // `local` de la app no necesite credenciales (ver parameters/local/mail.yaml).
         MP_SMTP_AUTH_ACCEPT_ANY: 'true',
-        MP_SMTP_AUTH_ALLOW_INSECURE: 'true'
+        MP_SMTP_AUTH_ALLOW_INSECURE: 'true',
+        // Habilita la API de chaos, que arranca con todo a probabilidad 0: sin esto el
+        // arnés no puede pedir que el relay rechace, y el estado `failed` de un envío no
+        // se alcanza en caja negra.
+        ...MAIL_CHAOS_ENV
       },
       ports: [`${MAIL_SMTP_PORT}:${MAIL_SMTP_PORT}`, `${MAIL_HTTP_PORT}:${MAIL_HTTP_PORT}`]
     }

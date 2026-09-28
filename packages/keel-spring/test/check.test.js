@@ -17,6 +17,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
 import { READY_FIXTURES, mountDesign } from './helpers/workspace.js';
+import { validateService } from 'keel-core';
 import { check } from '../src/commands/check.js';
 
 const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
@@ -272,4 +273,15 @@ test('los huecos de un build sobre un diseño no listo lo dicen', () => {
 
   assert.match(salida, /diseño no listo \(v1\.0\.0, faltaban: flow-review, review\)/);
   assert.match(salida, /pueden ser del diseño y no del método/);
+});
+
+test('check no cuenta como aviso lo que decisions.yaml ya acepta', () => {
+  // Hallazgo 6 de R9: la misma vara que keel validate y build (classifyWarnings de keel-core).
+  const workspace = makeWorkspace(['notification-mailer']);
+  const { undecided } = validateService(path.join(workspace, 'specs', 'notification-mailer'), { wip: false });
+  assert.ok(undecided.accepted.length > 0, 'la fixture tiene que aceptar alguna decisión para medir esto');
+
+  const { salida } = runCheck(workspace, path.join('specs', 'notification-mailer'));
+
+  for (const { message } of undecided.accepted) assert.ok(!salida.includes(message), `repite una aceptada: ${message}`);
 });

@@ -1,4 +1,4 @@
-keel: "2.16"
+keel: "2.17"
 service:
   name: inspection-reports
   version: 1.0.0

@@ -22,6 +22,7 @@ import { usesOutbox, outboxNames } from './outbox.js';
 import { correlationImport } from './correlation.js';
 import { usesTelemetry, messageTracingImport } from './telemetry.js';
 import { deadLetterDestination } from '../lib/dead-letter.js';
+import { credentialFinderName } from './repositories.js';
 
 const MESSAGING_PKG = 'infrastructure.messaging';
 const INTEGRATION_PKG = 'infrastructure.messaging.events';
@@ -525,7 +526,8 @@ function contractJavadoc(sub, model) {
   // el inquilino se toma del payload, que lo elige el llamante.
   if (sub.identity) {
     lines.push(
-      `Identidad del emisor: resuelve ${sub.identity.field} desde ${sub.identity.from.location === 'header' ? `el header '${sub.identity.from.name}'` : `el campo '${sub.identity.from.name}' del mensaje`}, y pásala YA RESUELTA a la operación. No la leas del payload: el DSL prohíbe que viaje ahí precisamente para que no haya dos versiones de la verdad.`
+      `Identidad del emisor: resuelve ${sub.identity.field} desde ${sub.identity.from.location === 'header' ? `el header '${sub.identity.from.name}'` : `el campo '${sub.identity.from.name}' del mensaje`}, y pásala YA RESUELTA a la operación. No la leas del payload: el DSL prohíbe que viaje ahí precisamente para que no haya dos versiones de la verdad.` +
+        resolutionNote(sub.identity)
     );
     lines.push(
       sub.identity.onUnresolved === 'deadLetter'
@@ -601,3 +603,17 @@ function contractJavadoc(sub, model) {
   }
   return lines.map((line) => ` * ${line}\n`).join('');
 }
+
+// Contra QUÉ se resuelve el valor leído (DSL 2.17). Sin `resolvedBy` es 1:1 contra la clave natural
+// del recurso; con él, el valor es UNA de varias credenciales y se resuelve con el finder que build
+// ya generó en el puerto. Sin nombrarlo aquí, el camino de menor resistencia era buscar por la clave
+// natural, y un emisor registrado con otra credencial acababa en la cola de descartes (hallazgo 1 de
+// R9).
+function resolutionNote(identity) {
+  if (!identity.resolvedBy) {
+    return ' Se resuelve 1:1: el valor leído ES la clave natural del recurso que identifica.';
+  }
+  const [entity, field] = String(identity.resolvedBy).split('.');
+  return ` El valor es UNA de las credenciales de ${entity} (resolvedBy: ${identity.resolvedBy}), no su clave natural: se resuelve con ${entity}Repository.${credentialFinderName(field)}(...), que build ya generó — el mismo finder que usa la puerta HTTP, así que a la operación le llega lo mismo entre por donde entre. Si no encuentra ningún ${entity}, el emisor no está registrado: es el caso de onUnresolved, no un error que reintentar.`;
+}
+

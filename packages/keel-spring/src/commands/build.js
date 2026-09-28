@@ -10,6 +10,7 @@ import {
   copyTree,
   diffDesigns,
   DECISIONS_FILE,
+  classifyWarnings,
   REVIEW_FILE,
   MANIFEST_FILE as DESIGN_MANIFEST
 } from 'keel-core';
@@ -159,6 +160,7 @@ export async function build(
     warnings,
     pending,
     obligations,
+    undecided,
     reviews,
     ok
   } = validation;
@@ -169,7 +171,15 @@ export async function build(
     console.error(pc.bold(pc.red(`✘ Diseño incompleto — ${pending.length} pendiente(s):`)));
     for (const message of pending) console.error(`  ${pc.red('•')} ${message}`);
   }
-  for (const message of warnings) console.warn(`${pc.yellow('⚠')} ${message}`);
+  // Lo que decisions.yaml ya acepta no se repite: es lo mismo que enseña `keel validate`.
+  const avisos = classifyWarnings(warnings, undecided);
+  for (const { message, hint } of avisos.shown) {
+    console.warn(`${pc.yellow('⚠')} ${message}`);
+    if (hint) console.warn(pc.dim(`    ${hint}`));
+  }
+  if (avisos.accepted > 0) {
+    console.log(pc.dim(`  ${avisos.accepted} decisión(es) aceptada(s) en ${DECISIONS_FILE}: no se repiten como aviso.`));
+  }
   if (crossRefErrors.length > 0) {
     console.error(pc.bold(pc.red(`✘ Referencias cruzadas — ${crossRefErrors.length} error(es):`)));
     for (const message of crossRefErrors) console.error(`  ${pc.red('•')} ${message}`);

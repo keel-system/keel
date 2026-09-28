@@ -468,16 +468,22 @@ contrato.
 
 ### `Location`: la ruta del recurso que la respuesta describe
 
-La regla general de un `201` es "URI de la petición + el `id` del `output`", y `build` la emite ya
-resuelta. Tiene una excepción que **también genera `build`**, y conviene conocerla para no
-"corregirla": cuando la operación añade algo a la colección de un agregado y devuelve **el
-agregado** (`POST /products/{productId}/images` con `output: { entity: Product }`), el `id` de la
-respuesta es el del **padre**, no el del sub-recurso creado. Aplicar la regla general daría
-`/products/{productId}/images/{productId}`, que no es la ruta de nada. En ese caso `Location`
-apunta al agregado devuelto: `/api/v1/products/{productId}`.
+`build` la emite ya resuelta, y la regla es una: **la ruta de la operación que lee ese recurso
+por id** (un `GET` sin lista con un solo parámetro de ruta, `{id}` o `{<entidad>Id}`), expandida
+con el `id` de la respuesta. No es "URI de la petición + id": esa forma solo coincide con la
+lectura por casualidad, y un `PUT /templates/{templateKey}/{locale}` que se lee en
+`GET /templates/{templateId}` apuntaba a una ruta que nadie sirve.
 
-Es genérico de cualquier "añadir X a la colección de Y devolviendo Y". Si un escenario espera otra
-cosa, es discrepancia de diseño (`designGap`), no algo que se ajuste en el controller.
+Dos casos que **también genera `build`**, y conviene conocerlos para no "corregirlos":
+
+- **Añadir a la colección de un agregado devolviendo el agregado** (`POST /products/{productId}/images`
+  con `output: { entity: Product }`): el `id` de la respuesta es el del **padre**, así que la
+  lectura del agregado se expande con `productId`: `/api/v1/products/{productId}`.
+- **Sin lectura por id, no hay `Location`**: el `201` sale con `@ResponseStatus(HttpStatus.CREATED)` y
+  sin cabecera. El diseño ya lo sabía: `keel validate` lo pregunta con `CHK-API-CREATED-NO-READ`.
+
+Si un escenario espera otra cosa, es discrepancia de diseño (`designGap`), no algo que se ajuste en
+el controller.
 
 ### Formato de los instantes
 

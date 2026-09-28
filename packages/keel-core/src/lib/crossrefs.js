@@ -1045,6 +1045,48 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     }
   }
 
+  // `resolvedBy` (Entidad.campo lista) en cualquiera de las dos puertas por las que llega una
+  // identidad: la credencial por HTTP (callerIdentity) y el emisor por el broker
+  // (subscriptions.<E>.identity, DSL 2.17). Mismas tres preguntas en los dos lados, o una puerta
+  // aceptaría lo que la otra rechaza.
+  const checkResolvedBy = (resolvedBy, where) => {
+    if (!resolvedBy) return;
+    const [entityName, fieldName] = String(resolvedBy).split('.');
+    const entity = domain.entities?.[entityName];
+    const field = entity?.fields?.[fieldName];
+    if (!entity) {
+      errors.push(`${where}: la entidad '${entityName}' no existe en domain — la identidad se resolvería contra un recurso que el servicio no modela`);
+    } else if (!field) {
+      errors.push(`${where}: '${entityName}' no declara el campo '${fieldName}' — la credencial se compararía contra algo que no existe`);
+    } else if (field.list !== true) {
+      errors.push(
+        `${where}: '${resolvedBy}' no es una lista — resolvedBy declara que un recurso tiene VARIAS credenciales; sobre un campo escalar es la correspondencia 1:1, que es la de por defecto y no hace falta declarar`
+      );
+    }
+  };
+
+  // ¿Hay un GET que lea la entidad por id? Es la ruta a la que puede apuntar un Location:
+  // salida de esa entidad sin lista, y un único parámetro de ruta que sea su id. Misma
+  // regla que `readingPath` del generador (keel-spring/src/scaffold/controllers.js).
+  const lowerFirst = (name) => `${name[0].toLowerCase()}${name.slice(1)}`;
+  const readsEntity = (output, entity) =>
+    Boolean(output) && typeof output === 'object' && output.entity === entity && !output.list && !output.paginated;
+  // Con `api.auto`, un `get<X>` sin endpoint explícito se expone por convención en GET …/{id}.
+  const autoReads = (entity) =>
+    api?.auto === true &&
+    Object.entries(operations).some(
+      ([name, op]) => !api.endpoints?.[name] && /^get[A-Z]/.test(name) && !op.schedule && readsEntity(op.output, entity)
+    );
+  const readsById = (entity) =>
+    autoReads(entity) ||
+    Object.entries(api?.endpoints ?? {}).some(([name, candidate]) => {
+      const output = operations[name]?.output;
+      if (candidate.method !== 'GET' || !output || typeof output !== 'object') return false;
+      if (output.entity !== entity || output.list || output.paginated) return false;
+      const variables = [...(candidate.path ?? '').matchAll(/{([A-Za-z][A-Za-z0-9]*)}/g)].map((m) => m[1]);
+      return variables.length === 1 && (variables[0] === 'id' || variables[0] === `${lowerFirst(entity)}Id`);
+    });
+
   // api: endpoints → operaciones, variables de ruta ↔ input, y coherencia con la operación
   for (const [opName, endpoint] of Object.entries(api?.endpoints ?? {})) {
     const where = `api: endpoints.${opName}`;
@@ -1106,6 +1148,19 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
         scopeOf(where),
         'CHK-API-POST-NO-STATUS',
         `${where}: POST sin 'successStatus' — el generador tendrá que elegir uno (201 al crear, 200 si no), y eso es contrato público: lo ve el integrador y lo afirma el escenario. Declara el que quieres`
+      );
+    }
+    // Un 201 promete un recurso con dirección: la cabecera `Location`. El generador la
+    // construye con la ruta de la operación que LEE esa entidad por id; sin ella no la
+    // emite, porque "ruta de la petición + id" apuntaba a rutas que nadie sirve (hallazgo 3
+    // de R9: un PUT /templates/{key}/{locale} que se lee en GET /templates/{templateId}, un
+    // alta de aplicación sin ninguna lectura). Es pregunta, no incoherencia: dejar el alta
+    // sin dirección es legítimo si nadie la va a leer, pero tiene que decirlo alguien.
+    const created = op.output && typeof op.output === 'object' ? op.output : null;
+    if (endpoint.successStatus === 201 && created?.entity && !created.list && !created.paginated &&
+        !readsById(created.entity)) {
+      warnIn(scopeOf(where), 'CHK-API-CREATED-NO-READ',
+        `${where}: responde 201 con '${created.entity}' y ninguna operación la lee por id (GET con {id} o {${lowerFirst(created.entity)}Id}) — el alta saldrá sin cabecera Location. Añade la lectura si alguien va a seguir ese enlace, o acéptalo`
       );
     }
     // DELETE sin successStatus: el generador asume 204 (no hay dónde declararlo si no).
@@ -1375,25 +1430,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
       // un poco más abajo—, y que el campo sea una LISTA: sobre un escalar esto es la forma 1:1
       // escrita de otra manera, y aceptarlo haría que el generador emitiera una búsqueda por
       // colección sobre algo que no lo es.
-      const resolvedBy = callerIdentity.from?.resolvedBy;
-      if (resolvedBy) {
-        const [entityName, fieldName] = String(resolvedBy).split('.');
-        const entity = domain.entities?.[entityName];
-        const field = entity?.fields?.[fieldName];
-        if (!entity) {
-          errors.push(
-            `security: authentication.callerIdentity.from.resolvedBy: la entidad '${entityName}' no existe en domain — la identidad se resolvería contra un recurso que el servicio no modela`
-          );
-        } else if (!field) {
-          errors.push(
-            `security: authentication.callerIdentity.from.resolvedBy: '${entityName}' no declara el campo '${fieldName}' — la credencial se compararía contra algo que no existe`
-          );
-        } else if (field.list !== true) {
-          errors.push(
-            `security: authentication.callerIdentity.from.resolvedBy: '${resolvedBy}' no es una lista — resolvedBy declara que un recurso tiene VARIAS credenciales; sobre un campo escalar es la correspondencia 1:1, que es la de por defecto y no hace falta declarar`
-          );
-        }
-      }
+      checkResolvedBy(callerIdentity.from?.resolvedBy, 'security: authentication.callerIdentity.from.resolvedBy');
 
       // Dos puertas, dos campos: el servicio tendría dos verdades sobre quién pide el trabajo, y
       // la operación decidiría con una u otra según por dónde entrara. Es el hueco que hace que
@@ -2130,6 +2167,17 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
         errors.push(
           `${where}.identity.from: lee '${identity.from.name}' pero contract.envelope es 'none' (el mensaje ES el ` +
             `payload): no hay envoltura de la que sacar la identidad`
+        );
+      }
+      // DSL 2.17: contra qué se resuelve el emisor. Por HTTP ya se podía decir (callerIdentity
+      // .from.resolvedBy) y por el broker no, así que «el emisor se resuelve IGUAL que la
+      // credencial» quedaba en una rule en prosa y el generador solo sabía decirle al agente
+      // «resuélvelo» (hallazgo 1 de R9).
+      checkResolvedBy(identity.resolvedBy, `${where}.identity.resolvedBy`);
+      const httpResolvedBy = security?.authentication?.callerIdentity?.from?.resolvedBy;
+      if (httpResolvedBy && !identity.resolvedBy && identity.field === security.authentication.callerIdentity.field) {
+        warnIn(`${scopeOf(where)}.identity`, 'CHK-MSG-IDENTITY-RESOLVEDBY-UNDECIDED',
+          `${where}.identity: por HTTP la misma identidad se resuelve contra '${httpResolvedBy}' (varias credenciales por recurso), y por el broker no se dice contra qué — el generador la resolverá 1:1 contra la clave natural, y un emisor registrado con cualquier otra credencial no resolverá a nada. Declara identity.resolvedBy (el mismo, si el emisor se nombra igual que la credencial), o acepta el 1:1`
         );
       }
     }
@@ -3760,6 +3808,30 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
           `use-cases: ${opName}.idempotency.keyField: '${keyField}' no es un campo del input de la operación — la clave tiene que viajar en el contrato para poder deduplicar por ella`
         );
       }
+    }
+
+    // DSL 2.17: el ÁMBITO de la clave. Sin él, la clave es global por operación: dos llamantes
+    // que eligen la misma Idempotency-Key se ven —el segundo recibe la respuesta del primero, o
+    // un 409 de reutilización si la firma difiere—, y en un servicio con varios inquilinos eso
+    // es un dato de uno llegando a otro. Que se acote al llamante vivía en una rule en prosa
+    // (hallazgo 9 de R9). Los campos tienen que llegar a la operación: del input, o la
+    // identidad del llamante, que el servidor estampa en el input.
+    for (const field of op.idempotency?.partitionBy ?? []) {
+      if (!inputAcceptsName(op, field)) {
+        error('CHK-USECASES-IDEM-PARTITION-UNKNOWN',
+          `use-cases: ${opName}.idempotency.partitionBy: '${field}' no está en el input de la operación — el ámbito de la clave se compone con lo que la operación recibe`
+        );
+      }
+    }
+    // La pregunta, cuando hay a quién acotar: con una identidad del llamante (o un alcance por
+    // recurso) el servicio distingue quién pide, y una clave que viaja en la cabecera la elige el
+    // cliente — nada impide que dos elijan la misma. Con payload-hash la clave ya incluye todo el
+    // input (la identidad estampada también), y con payload-field la guarda es otra.
+    const auth = security?.authentication;
+    if (op.idempotency?.keySource === 'client-key' && !op.idempotency.partitionBy && (auth?.callerIdentity || auth?.scoping)) {
+      warnIn(`use-cases.${opName}.idempotency`, 'CHK-USECASES-IDEM-SCOPE-UNDECIDED',
+        `use-cases: ${opName}.idempotency: la clave la elige el cliente (client-key) y el servicio distingue llamantes${auth.callerIdentity ? ` ('${auth.callerIdentity.field}')` : ''}, pero no se dice si la clave es GLOBAL o por llamante — sin partitionBy es global: dos llamantes con la misma clave se ven. Declara idempotency.partitionBy (p. ej. [${auth.callerIdentity?.field ?? '<campo>'}]) o acepta que sea global`
+      );
     }
 
     // `idempotency` con `client-key` deduplica el reintento de un llamante que reenvía su clave
