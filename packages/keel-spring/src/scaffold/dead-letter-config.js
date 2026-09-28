@@ -283,6 +283,56 @@ function rabbitConfig(model, subs) {
     .map((sub) => `${sub.name} → ${subscriptionDestination('rabbitmq', model, sub)}`)
     .join(', ');
 
+  const retry = rabbitListenerRetry(model);
+  if (retry) {
+    for (const name of [
+      'java.util.Map',
+      'org.springframework.amqp.AmqpRejectAndDontRequeueException',
+      'org.springframework.beans.factory.annotation.Value',
+      'org.springframework.boot.autoconfigure.amqp.RabbitRetryTemplateCustomizer',
+      'org.springframework.retry.policy.SimpleRetryPolicy',
+      `${subPackage(model, 'domain.errors')}.DomainException`
+    ]) {
+      imports.add(name);
+    }
+  }
+  const retryBean = retry
+    ? `
+
+    /**
+     * Lo que NO se reintenta: el rechazo de negocio. El reintento de
+     * {@code spring.rabbitmq.listener.simple.retry} (en {@code parameters/}, derivado de
+     * {@code onFailure.retry} de ${retry.subscriptions.join(', ')}) trata por defecto CUALQUIER
+     * excepción como transitoria, y un {@code DomainException} no se resuelve mejor dentro de un
+     * segundo. Peor: el reintento en memoria reinvoca el listener dentro de la MISMA entrega, así
+     * que un guard que reclama antes de despachar ({@code tryRecord}) encuentra el evento ya
+     * marcado, retorna sin lanzar y el contenedor confirma — el mensaje nunca llega al descarte.
+     *
+     * <p>Se marcan las dos formas del rechazo: la excepción de dominio tal cual y la
+     * {@code AmqpRejectAndDontRequeueException} con la que el listener la envuelve.
+     * {@code traverseCauses} hace falta porque el contenedor lo entrega todo dentro de un
+     * {@code ListenerExecutionFailedException}. Agotado (o no reintentable), el recuperador de Boot
+     * rechaza sin reencolar y la cola lo lleva a su DLQ si la declara.
+     *
+     * <p>Sustituye la política que Boot montó desde las propiedades, así que reutiliza su
+     * {@code max-attempts}; el backoff sigue saliendo de ellas. Solo toca el reintento del
+     * LISTENER, no el del {@code RabbitTemplate}.
+     */
+    @Bean
+    public RabbitRetryTemplateCustomizer businessRejectionIsNotRetried(
+            @Value("\${spring.rabbitmq.listener.simple.retry.max-attempts:${retry.attempts}}") int maxAttempts) {
+        return (target, retryTemplate) -> {
+            if (target != RabbitRetryTemplateCustomizer.Target.LISTENER) {
+                return;
+            }
+            Map<Class<? extends Throwable>, Boolean> retryable = Map.of(
+                    DomainException.class, false,
+                    AmqpRejectAndDontRequeueException.class, false);
+            retryTemplate.setRetryPolicy(new SimpleRetryPolicy(maxAttempts, retryable, true, true));
+        };
+    }`
+    : '';
+
   const body = `/**
  * Topología RabbitMQ de las suscripciones: ${listed}.
  *
@@ -299,7 +349,7 @@ function rabbitConfig(model, subs) {
 @Configuration
 public class RabbitTopologyConfig {
 
-${beans}
+${beans}${retryBean}
 }`;
 
   return {
@@ -320,6 +370,37 @@ const backoffMs = (subs) => Math.max(...subs.map((sub) => sub.retry?.initialDela
 function maxDelayMs(subs) {
   const declared = subs.map((sub) => sub.retry?.maxDelayMs).filter((value) => typeof value === 'number');
   return declared.length > 0 ? Math.max(...declared) : null;
+}
+
+/**
+ * El reintento del listener de RabbitMQ, derivado de `onFailure.retry`, o `null` si ninguna
+ * suscripción lo declara.
+ *
+ * Es la misma reconciliación que la de Kafka —un contenedor compartido, gana el más paciente—,
+ * pero sobre TODAS las suscripciones y no solo las que tienen descarte: en RabbitMQ el reintento
+ * no depende de la DLQ, y una suscripción sin descarte que pide reintentos también los necesita.
+ * Lo consumen dos sitios que tienen que decir lo mismo: `spring.rabbitmq.listener.simple.retry`
+ * en `parameters/` (config.js) y el customizer de `RabbitTopologyConfig`, que marca lo que no se
+ * reintenta. Hasta la corrida `notification-mailer` v2.0.0 las dos piezas las escribía el agente,
+ * y la primera vez reintentó también los rechazos de negocio.
+ *
+ * El multiplicador no está en el DSL: con `exponential` se toma 1.5, el mismo que la rama de
+ * Kafka hereda de `ExponentialBackOff`, para que la curva no dependa del broker. Con `fixed`, 1.0.
+ */
+export function rabbitListenerRetry(model) {
+  const subs = (model.subscriptions ?? []).filter((sub) => sub.retry);
+  if (subs.length === 0) return null;
+  const exponential = subs.some((sub) => (sub.retry.backoff ?? 'exponential') === 'exponential');
+  return {
+    attempts: maxAttempts(subs),
+    initialMs: backoffMs(subs),
+    multiplier: exponential ? 1.5 : 1.0,
+    // Sin `maxDelayMs` declarado, el techo es 30 s: el de `ExponentialBackOff` en la rama de
+    // Kafka. El default de Boot para el listener de RabbitMQ es 10 s, y dejarlo haría que el
+    // mismo diseño esperase distinto según el broker.
+    maxDelayMs: exponential ? maxDelayMs(subs) ?? 30000 : null,
+    subscriptions: subs.map((sub) => sub.name)
+  };
 }
 
 /**

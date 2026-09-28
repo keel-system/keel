@@ -584,9 +584,15 @@ function contractJavadoc(sub, model) {
     );
   }
   if (sub.trigger) {
-    const args = sub.triggerArguments
-      .map((a) => `${a.component} = ${a.source ? `payload.${a.source}()` : 'TODO (agente)'}`)
-      .join(', ');
+    const argument = (a) =>
+      a.from === 'envelope'
+        ? `envelope.metadata().${a.source}()`
+        : a.from === 'identity'
+          ? 'la identidad resuelta'
+          : a.source
+            ? `payload.${a.source}()`
+            : 'TODO (agente)';
+    const args = sub.triggerArguments.map((a) => `${a.component} = ${argument(a)}`).join(', ');
     lines.push(
       `Lo consume ${sub.listenerClass} (listener del broker del stack; lo escribe el agente) despachando ${sub.triggerMessageClass ?? sub.trigger}${args ? `(${args})` : ''} vía UseCaseMediator.`
     );

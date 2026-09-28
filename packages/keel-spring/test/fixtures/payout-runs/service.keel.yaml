@@ -1,4 +1,4 @@
-keel: "2.15"
+keel: "2.16"
 # El sujeto del barrido cuyo reclamo build NO puede generar.
 #
 # Hasta que existió esta fixture, esa rama —`unclaimedSweeps` en `claim.js`, y la mitad

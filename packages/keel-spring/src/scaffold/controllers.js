@@ -9,7 +9,7 @@
 // @RestControllerAdvice central en infrastructure/rest.
 
 import { FRAMEWORK_ERRORS, conditionalUniquenessToken } from 'keel-core';
-import { declaredErrorFor, declaredUniquenessErrorFor, declaredReferenceError } from '../lib/declared-errors.js';
+import { declaredErrorFor, declaredUniquenessErrorFor, declaredReferenceError, errorByCode } from '../lib/declared-errors.js';
 import { javaFile, javaPath, subPackage, javadoc } from './render.js';
 import {
   messageComponents,
@@ -305,8 +305,12 @@ function renderMethod(model, operation, imports) {
   const pathParams = operation.pathParams ?? [];
   const fromPath = new Set(pathParams.map((param) => param.name));
   // El cuerpo solo existe si el verbo lo admite: un POST de consulta en lote
-  // lleva su lote en el body, no en query params.
-  const asBody = BODY_METHODS.has(route.method) && operation.bodyFields.length > 0;
+  // lleva su lote en el body, no en query params. Y solo si queda algo que leer
+  // de él: la identidad del llamante la resuelve el servidor, así que un POST cuyo
+  // único campo fuera de la ruta es ella no tiene cuerpo — con `@RequestBody`
+  // obligatorio, la petición correcta según el diseño respondía 400
+  // (`publishTemplate`, corrida notification-mailer v2.0.0).
+  const asBody = BODY_METHODS.has(route.method) && operation.bodyFields.some((field) => !field.resolvedIdentity);
   const params = [];
   let dispatchArg;
 
@@ -491,6 +495,11 @@ function renderDataIntegrityHandler(model, imports, constantsOut) {
   imports.add('java.util.function.Supplier');
   const errorsPkg = subPackage(model, 'domain.errors');
   const resolved = constraints.map((constraint) => {
+    // Si el diseño NOMBRA el error (DSL 2.16: `naturalKeyError`, `indexes[].error`), manda él
+    // sobre toda deducción —por los campos, por la condición o por la colección—, y deja de ser
+    // una carrera: decir qué significa el choque es justo decidir que es un error del cliente.
+    const named = constraint.error ? errorByCode(model, constraint.error) : null;
+    if (named) return { ...constraint, conditional: Boolean(constraint.when), raceOnly: null, declared: named, named: true };
     // Unicidad CONDICIONADA (`indexes[].when`): no dice «ya existe uno con esos campos» sino
     // «ya hay uno en ese estado» —una imagen principal, una versión activa—, así que ni su
     // familia ni su mensaje salen de los campos. El code lo busca por la CONDICIÓN
@@ -636,7 +645,7 @@ function declaredUniquenessError(model, entity, fields, soleConstraint) {
 
 function constraintMapConstant(constraints) {
   const entries = constraints
-    .map(({ constraint, entity, fields, declared, raceOnly, conditional, when, description, reference }) => {
+    .map(({ constraint, entity, fields, declared, raceOnly, conditional, when, description, reference, named }) => {
       const label = fields.join(', ');
       if (reference) {
         return `            // Referencia entre AGREGADOS (${reference.table}.${reference.column} → ${reference.refTable}):
@@ -649,7 +658,10 @@ function constraintMapConstant(constraints) {
                     "${escapeJava(String(declared.when ?? `No se puede borrar: hay ${reference.table} que lo referencian`).replace(/\.\s*$/, ''))}"))`;
       }
       const condition = conditional ? `${when.field} = ${JSON.stringify(when.equals)}` : null;
-      const message = conditional
+      // Nombrada, habla el diseño: el `when` del error es lo que el cliente tiene que leer.
+      const message = named && declared?.when
+        ? escapeJava(String(declared.when).replace(/\.\s*$/, ''))
+        : conditional
         ? escapeJava((description ?? `Solo puede haber un ${entity} por ${label} con ${condition}`).replace(/\.\s*$/, '')) +
           (raceOnly ? '; otra operación lo cambió a la vez, reintenta' : '')
         : raceOnly === 'collection'
@@ -657,7 +669,10 @@ function constraintMapConstant(constraints) {
           : raceOnly
             ? `Otra operación registró ${entity}.${label} a la vez; reintenta`
             : `Ya existe un ${entity} con ese ${label}`;
-      const why = conditional
+      const why = named
+        ? `            // Unicidad de ${entity}.${label}${condition ? ` (${condition})` : ''} → el error que el diseño NOMBRA para ella
+            // (naturalKeyError / indexes[].error). No se deduce: lo dijo el diseño.`
+        : conditional
         ? `            // Unicidad CONDICIONADA de ${entity}.${label} (${condition}): «como mucho uno en ese
             // estado», no «ya existe». ${raceOnly ? `El diseño no la nombra (keel validate: CHK-PERSIST-CONDITIONAL-UNIQUE-CODE):
             // la regla del caso de uso resuelve el caso normal, así que chocar aquí es una carrera.` : 'Es el error que el diseño declara para ella.'}`

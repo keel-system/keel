@@ -35,6 +35,21 @@ import { escapeJava } from '../lib/type-mapper.js';
  * "después": el único punto por el que pasa cualquier valor de este tipo, venga del cable,
  * de la base de datos o de otro punto del dominio.
  */
+/**
+ * Las cotas de longitud de un campo de TEXTO, leídas de su `@Size`. Una lista también lleva
+ * `@Size`, pero ahí acota la cardinalidad y se comprueba con `size()`, no con `length()`.
+ */
+function lengthBounds(field) {
+  if (field.list || field.javaType !== 'String') return null;
+  const size = (field.validation ?? []).find((annotation) => annotation.startsWith('@Size('));
+  if (!size) return null;
+  const min = /\bmin\s*=\s*(\d+)/.exec(size)?.[1];
+  const max = /\bmax\s*=\s*(\d+)/.exec(size)?.[1];
+  // `min = 0` no rechaza nada: una guarda que no puede dispararse solo es ruido.
+  const bounds = { min: min && Number(min) > 0 ? Number(min) : null, max: max ? Number(max) : null };
+  return bounds.min == null && bounds.max == null ? null : bounds;
+}
+
 function valueGuards(vo) {
   const guarded = vo.fields
     .map((field) => ({
@@ -42,9 +57,10 @@ function valueGuards(vo) {
       pattern: (field.validation ?? [])
         .find((annotation) => annotation.startsWith('@Pattern('))
         ?.match(/regexp\s*=\s*"(.*)"\s*\)$/)?.[1] ?? null,
-      numeric: field.numeric ?? null
+      numeric: field.numeric ?? null,
+      length: lengthBounds(field)
     }))
-    .filter(({ field, pattern, numeric }) => pattern || numeric || field.required);
+    .filter(({ field, pattern, numeric, length }) => pattern || numeric || length || field.required);
   if (guarded.length === 0) return { body: '', imports: [] };
 
   const imports = [];
@@ -54,7 +70,7 @@ function valueGuards(vo) {
   if (constants.length > 0) imports.push('java.util.regex.Pattern');
 
   const checks = [];
-  for (const { field, pattern, numeric } of guarded) {
+  for (const { field, pattern, numeric, length } of guarded) {
     // La PRESENCIA, y va primero. `required` dentro de un tipo compuesto no habla de un
     // campo de una entidad —eso lo dice la entidad—: dice que un Money sin importe no es un
     // Money. El constructor compacto es el único punto por el que pasa cualquier valor de
@@ -77,6 +93,21 @@ function valueGuards(vo) {
     if (pattern) {
       checks.push(`        if (${siExiste}!${formatConstant(field)}.matcher(${field.name}).matches()) {
             throw new IllegalArgumentException("${vo.name}.${field.name} no cumple el formato declarado por su tipo");
+        }`);
+    }
+    // La LONGITUD. El `@Size` del campo no lo aplica nadie cuando el value object viaja
+    // dentro de una lista de entrada (`List<TemplateVariableValue>`): Bean Validation no
+    // cascadea sin `@Valid` en el elemento, y el valor largo llegaba a la columna y salía
+    // como violación de la base — un 409 donde el diseño decía 400. Aquí, la
+    // IllegalArgumentException del constructor la traduce el handler a 400 por la misma vía
+    // que un JSON malformado (corrida notification-mailer v2.0.0).
+    for (const [bound, operator, texto] of [
+      ['min', '<', 'más corto que el mínimo'],
+      ['max', '>', 'más largo que el máximo']
+    ]) {
+      if (length?.[bound] == null) continue;
+      checks.push(`        if (${siExiste}${field.name}.length() ${operator} ${length[bound]}) {
+            throw new IllegalArgumentException("${vo.name}.${field.name} es ${texto} declarado por su tipo (${length[bound]})");
         }`);
     }
     if (!numeric) continue;

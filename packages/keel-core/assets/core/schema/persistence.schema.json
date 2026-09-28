@@ -35,6 +35,10 @@
             "items": { "type": "string" },
             "minItems": 1
           },
+          "naturalKeyError": {
+            "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/errorCode",
+            "description": "El error 409 que significa violar la naturalKey (DSL 2.16). Opcional: sin él, el generador lo deduce por el nombre de los campos (<CAMPOS>_ALREADY_EXISTS) o, si es la única unicidad de la entidad, por el único 409 de «ya existe». Con dos o más unicidades en la entidad y un code que no sigue esa forma, la deducción no es posible y hay que nombrarlo (CHK-PERSIST-UNIQUE-ERROR-UNDECLARED). Tiene que declararlo alguna operación con http 409."
+          },
           "indexes": {
             "type": "array",
             "description": "Índices sugeridos. Cada entrada es la lista de campos que lo componen (forma corta) o un objeto que además declara unicidad y la condición bajo la que se aplica.",
@@ -79,9 +83,21 @@
                         }
                       }
                     },
+                    "error": {
+                      "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/errorCode",
+                      "description": "El error 409 que significa violar este índice único (DSL 2.16). Opcional, y solo con unique: true. Manda sobre toda deducción del generador —por los campos, por la condición de `when` o por la colección de la raíz—. Tiene que declararlo alguna operación con http 409."
+                    },
                     "description": { "type": "string" }
                   },
                   "allOf": [
+                    {
+                      "$comment": "Un índice que no es único no se viola: no tiene error que nombrar.",
+                      "if": { "type": "object", "required": ["error"] },
+                      "then": {
+                        "properties": { "unique": { "const": true } },
+                        "required": ["unique"]
+                      }
+                    },
                     {
                       "$comment": "Un índice condicionado que no es único no restringe nada: solo acelera consultas, y para eso no hace falta la condición.",
                       "if": { "type": "object", "required": ["when"] },

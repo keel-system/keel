@@ -188,9 +188,12 @@
           "input": {
             "type": "object",
             "minProperties": 1,
-            "description": "Mapeo campo del input de la operación disparada → campo del payload de la suscripción. Si se omite, se asume identidad por nombre.",
+            "description": "Mapeo campo del input de la operación disparada → campo del payload de la suscripción. Si se omite, se asume identidad por nombre. Desde DSL 2.16 el valor puede ser también un campo de la envoltura Keel (metadata.eventId, metadata.occurredAt, metadata.source), solo con contract.envelope keel: es lo que da forma estructural a una regla que deriva algo del mensaje en sí, como una clave de deduplicación 'event:<eventId>'.",
             "propertyNames": { "pattern": "^[a-z][A-Za-z0-9]*$" },
-            "additionalProperties": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$" }
+            "additionalProperties": {
+              "type": "string",
+              "pattern": "^([a-z][A-Za-z0-9]*|metadata\\.(eventId|occurredAt|source))$"
+            }
           },
           "onFailure": {
             "type": "object",

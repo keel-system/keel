@@ -10,16 +10,21 @@ entities:
   Application:
     persisted: true
     naturalKey: [key]
+    # Dos unicidades con codes que no siguen la forma de sus campos: sin nombrarlos, el generador
+    # no puede saber cuál de los dos 409 es de cuál (CHK-PERSIST-UNIQUE-ERROR-UNDECLARED).
+    naturalKeyError: APPLICATION_ALREADY_EXISTS
     indexes:
       # Cada petición resuelve su aplicación buscando el client_id ENTRE los credentialKeys: sin
       # índice sobre la colección, esa búsqueda recorre todas las credenciales de todos los sistemas.
       - fields: [credentialKeys]
         unique: true
+        error: CREDENTIAL_ALREADY_ASSIGNED
         description: Un client_id resuelve a una sola aplicación.
 
   Template:
     persisted: true
     naturalKey: [application, key, locale, version]
+    naturalKeyError: TEMPLATE_VERSION_ALREADY_EXISTS
     indexes:
       # «Como máximo una activa» NO es una unicidad de columnas: es una unicidad
       # condicionada al estado. Sin la condición habría que elegir entre no poder
@@ -27,6 +32,7 @@ entities:
       - fields: [application, key, locale]
         unique: true
         when: { field: status, equals: active }
+        error: TEMPLATE_ALREADY_ACTIVE
         description: Como máximo una versión activa por aplicación, clave e idioma.
 
   TemplateVariable:

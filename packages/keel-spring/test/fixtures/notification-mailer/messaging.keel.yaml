@@ -83,6 +83,10 @@ subscriptions:
       copyRecipients: { type: EmailAddress, list: true, constraints: { maxItems: 10 } }
       variables:   { type: TemplateVariableValue, list: true, constraints: { maxItems: 50 } }
     triggers: acceptNotificationRequest
+    # El resto del input llega por nombre desde el payload. El eventId no está en él: es de la
+    # envoltura, y la regla de dedupeKey lo necesita dentro del comando (DSL 2.16).
+    input:
+      eventId: metadata.eventId
     # Dos clases de fallo y un solo destino. El PASAJERO (la base no responde) se reintenta con
     # backoff; el PERMANENTE de negocio (plantilla inexistente, variable requerida sin valor) no
     # mejora en un segundo y no se reintenta. Los dos acaban en la cola de descarte, que vigila

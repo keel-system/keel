@@ -2135,7 +2135,33 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     }
 
     const mapping = sub.input ?? {};
+    // DSL 2.16: un campo de la envoltura. Solo existe si la envoltura es la Keel —con `none` o
+    // `wrapped` no hay metadata que estampe un emisor Keel—, y su tipo lo fija ella: el id y el
+    // emisor son texto (el `eventId` viaja como cadena aunque su contenido sea un UUID) y el
+    // instante un timestamp.
+    const ENVELOPE_TYPES = { eventId: ['string'], source: ['string'], occurredAt: ['timestamp'] };
     for (const [inputField, payloadField] of Object.entries(mapping)) {
+      if (String(payloadField).startsWith('metadata.')) {
+        const metaField = payloadField.slice('metadata.'.length);
+        if (envelopeOf(sub) !== 'keel') {
+          error(
+            'CHK-MSG-INPUT-ENVELOPE-FIELD',
+            `${where}.input.${inputField}: lee '${payloadField}' y la envoltura del mensaje no es la Keel ` +
+              `(contract.envelope: ${envelopeOf(sub)}) — no hay metadata de la que sacarlo; mapea un campo del payload`
+          );
+          continue;
+        }
+        const declared = inputFieldsOf(operations[sub.triggers]?.input)?.[inputField];
+        const declaredType = domain.types?.[declared?.type]?.base ?? declared?.type;
+        if (declared && !declared.list && declaredType && !ENVELOPE_TYPES[metaField].includes(declaredType)) {
+          error(
+            'CHK-MSG-INPUT-ENVELOPE-FIELD',
+            `${where}.input.${inputField}: '${payloadField}' es de tipo ${ENVELOPE_TYPES[metaField][0]} en la envoltura y ` +
+              `'${sub.triggers}' declara '${inputField}' como ${declared.type}`
+          );
+        }
+        continue;
+      }
       if (!payloadFields.has(payloadField)) {
         errors.push(`${where}.input.${inputField}: el campo '${payloadField}' no existe en el payload de la suscripción`);
       }
@@ -4136,7 +4162,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
   // lea: un producto tiene muchas imágenes. La familia sale de la condición.
   for (const [entityName, spec] of Object.entries(persistence?.entities ?? {})) {
     for (const index of spec?.indexes ?? []) {
-      if (Array.isArray(index) || !index?.unique || !index.when) continue;
+      if (Array.isArray(index) || !index?.unique || !index.when || index.error) continue;
       const token = conditionalUniquenessToken(index.when);
       const family = FRAMEWORK_ERRORS.uniqueness.conditionalFamilyFor(token);
       const declared = Object.values(operations).some((op) =>
@@ -4177,7 +4203,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
 
     for (const index of spec?.indexes ?? []) {
       // El condicionado tiene su propio id: su familia sale de la condición, no de los campos.
-      if (Array.isArray(index) || !index?.unique || index.when) continue;
+      if (Array.isArray(index) || !index?.unique || index.when || index.error) continue;
       const fields = index.fields ?? [];
       const scoped = fields.some((member) => {
         const head = String(member).split('.')[0];
@@ -4201,6 +4227,92 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
           `reparte el resto de la colección: lo tratará como carrera (CONCURRENT_MODIFICATION). Si dentro del padre ese ` +
           `choque SÍ es un error del cliente, decláralo; si no, esto confirma la carrera`
       );
+    }
+  }
+
+  // ─── La unicidad que NOMBRA su error (DSL 2.16) ───────────────────────────────
+  //
+  // `naturalKeyError` y `indexes[].error` dicen qué 409 significa violar cada unicidad. Sin
+  // ellos el generador deduce: por los campos (`<CAMPOS>_ALREADY_EXISTS`) o, con una sola
+  // unicidad en la entidad, por su único 409 de «ya existe». Con dos o más y un code con otra
+  // forma —`APPLICATION_ALREADY_EXISTS` para la clave, `CREDENTIAL_ALREADY_ASSIGNED` para las
+  // credenciales— no hay deducción posible, y el choque salía como TODO en el handler: las dos
+  // corridas de notification-mailer lo mapearon a mano.
+  {
+    const conflictCodes = new Set(
+      Object.values(operations).flatMap((op) =>
+        (op?.errors ?? []).filter((e) => (e?.http ?? 409) === 409).map((e) => String(e?.code ?? ''))
+      )
+    );
+    const snake = (value) =>
+      String(value).replace(/([a-z0-9])([A-Z])/g, '$1_$2').replace(/[^A-Za-z0-9]+/g, '_').toUpperCase();
+
+    for (const [entityName, spec] of Object.entries(persistence?.entities ?? {})) {
+      const named = [
+        ...(spec?.naturalKeyError ? [[`naturalKeyError`, spec.naturalKeyError]] : []),
+        ...(spec?.indexes ?? [])
+          .filter((index) => !Array.isArray(index) && index?.error)
+          .map((index) => [`indexes [${(index.fields ?? []).join(', ')}] error`, index.error])
+      ];
+      for (const [where, code] of named) {
+        if (conflictCodes.has(code)) continue;
+        error(
+          'CHK-PERSIST-UNIQUE-ERROR-UNKNOWN',
+          `persistence: entities.${entityName}.${where}: '${code}' no lo declara ninguna operación con http 409 — ` +
+            `el error que significa violar una unicidad tiene que existir en el catálogo de errores de quien escribe ${entityName}`
+        );
+      }
+
+      // Las unicidades de la entidad, contadas como las cuenta el generador: la naturalKey, los
+      // campos `unique` del dominio y todos los índices únicos, condicionados incluidos.
+      const naturalKey = spec?.naturalKey ?? [];
+      const uniqueIndexes = (spec?.indexes ?? []).filter((index) => !Array.isArray(index) && index?.unique);
+      const uniqueFields = Object.entries(domain.entities?.[entityName]?.fields ?? {}).filter(
+        ([fieldName, field]) => field?.unique && !(naturalKey.length === 1 && naturalKey[0] === fieldName)
+      );
+      const total = (naturalKey.length > 0 ? 1 : 0) + uniqueIndexes.length + uniqueFields.length;
+      if (total < 2) continue;
+
+      // Solo las que el generador tiene que deducir por los CAMPOS: la condicionada y la acotada
+      // a la colección tienen su propio aviso y su propia familia.
+      const aggregate = aggregateOf.get(entityName);
+      const root = aggregate === undefined ? null : aggregates[aggregate]?.root;
+      const backRefs =
+        root && root !== entityName
+          ? Object.entries(domain.entities?.[entityName]?.relations ?? {})
+              .filter(([, relation]) => relation?.entity === root)
+              .map(([relName]) => relName)
+          : [];
+      const collectionScoped = (fields) =>
+        fields.some((member) => {
+          const head = String(member).split('.')[0];
+          return backRefs.some((relName) => head === relName || head === `${relName}Id`);
+        });
+      const candidates = [
+        ...(naturalKey.length > 0 && !spec.naturalKeyError
+          ? [{ scope: `persistence.entities.${entityName}.naturalKey`, label: 'la naturalKey', fields: naturalKey, fix: 'naturalKeyError' }]
+          : []),
+        ...uniqueIndexes
+          .filter((index) => !index.when && !index.error && !collectionScoped(index.fields ?? []))
+          .map((index) => ({
+            scope: `persistence.entities.${entityName}.indexes.${(index.fields ?? []).join('+')}`,
+            label: `el índice único [${(index.fields ?? []).join(', ')}]`,
+            fields: index.fields ?? [],
+            fix: 'error en el índice'
+          }))
+      ];
+      for (const { scope, label, fields, fix } of candidates) {
+        const family = FRAMEWORK_ERRORS.uniqueness.familyFor(fields.map(snake).join('_'));
+        if ([...conflictCodes].filter((code) => family.test(code)).length === 1) continue;
+        warnIn(
+          scope,
+          'CHK-PERSIST-UNIQUE-ERROR-UNDECLARED',
+          `persistence: entities.${entityName}: ${label} no nombra su error, y ${entityName} tiene ${total} unicidades — el ` +
+            `generador no puede deducir cuál de los 409 declarados es el suyo (ninguno se llama ` +
+            `${snake(entityName)}_${fields.map(snake).join('_')}_ALREADY_EXISTS ni sigue esa forma). Declara ${fix}; si no, ` +
+            `el choque sale con el code canónico del framework y el handler queda con un TODO`
+        );
+      }
     }
   }
 

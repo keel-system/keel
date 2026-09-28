@@ -416,7 +416,7 @@ for (const name of READY_FIXTURES) {
 
     assert.equal(exitCode, undefined, salida);
     assert.doesNotMatch(salida, /Diseño no listo/);
-    assert.deepEqual(stampOf(workspace, name), { version: '2.0.0', ready: true, missing: [] });
+    assert.deepEqual(stampOf(workspace, name), { version: '2.0.1', ready: true, missing: [] });
   });
 }
 

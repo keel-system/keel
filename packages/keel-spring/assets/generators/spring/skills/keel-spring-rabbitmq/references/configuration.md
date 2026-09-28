@@ -65,20 +65,26 @@ sin el configurer, `retry.*` no llega al contenedor y el mensaje que falla se re
 intento. El síntoma es que el escenario de descarte pasa «demasiado pronto» — cae a la DLQ sin
 haber reintentado.
 
-Para `onFailure` con reintentos en memoria (bloquean el consumidor mientras
-esperan; válido para backoffs cortos):
+**Este bloque ya lo escribe build** en `parameters/<perfil>/rabbitmq.yaml`, con los números de
+`onFailure.retry` del diseño (y `default-requeue-rejected: false` con cualquier suscripción). No lo
+dupliques ni cambies los números: salen del diseño. Lo que no se reintenta —`DomainException` y
+`AmqpRejectAndDontRequeueException`, recorriendo causas— lo marca el `RabbitRetryTemplateCustomizer`
+que build emite en `RabbitTopologyConfig`: no escribas otro, porque dos customizers se aplican en
+orden y el segundo pisa la política del primero. Tu parte es que el factory pase por el configurer
+(arriba), sin eso nada de esto llega al contenedor.
 
 ```yaml
 spring:
   rabbitmq:
     listener:
       simple:
+        default-requeue-rejected: false
         retry:
           enabled: true
-          max-attempts: 5          # attempts del diseño
-          initial-interval: 1s
-          multiplier: 2.0
-          max-interval: 10s
+          max-attempts: 5          # onFailure.retry.maxAttempts
+          initial-interval: 1000ms # initialDelayMs
+          multiplier: 1.5          # exponential (1.0 con fixed)
+          max-interval: 30000ms    # maxDelayMs, o 30 s si no lo declara
 ```
 
 ### El retry en memoria NO es una reentrega del broker

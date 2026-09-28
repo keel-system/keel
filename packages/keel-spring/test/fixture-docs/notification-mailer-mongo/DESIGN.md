@@ -1,6 +1,6 @@
 # notification-mailer-mongo — Documento de diseño
 
-> specs/notification-mailer-mongo v2.0.0. Diseño cerrado; el porqué de las decisiones se entrevistó al cerrarlo.
+> specs/notification-mailer-mongo v2.0.1. Diseño cerrado; el porqué de las decisiones se entrevistó al cerrarlo.
 
 ## 1. Propósito y alcance
 
@@ -53,7 +53,8 @@ Campos generados: los `id` y `Notification.requestedAt`. `Notification.status` n
 - Un `client_id` resuelve a **una sola** aplicación (índice único sobre `credentialKeys`): nadie se
   da de alta con la credencial de otro para ver sus datos.
 - La `Idempotency-Key` se acota a la aplicación del llamante. Por evento, `dedupeKey` es
-  `event:<eventId>`, que no comparte espacio con las claves HTTP.
+  `event:<eventId>`, que no comparte espacio con las claves HTTP. El `eventId` es el de la envoltura
+  del mensaje y llega al comando declarado en el diseño, no por convención del listener.
 - Toda variable declarada como requerida llega con valor; las no declaradas se ignoran y no se
   congelan, y dos con el mismo nombre se rechazan. Por HTTP y por evento, igual.
 - Los valores se escapan como HTML en la parte html; en la de texto van tal cual.
@@ -76,7 +77,8 @@ Campos generados: los `id` y `Notification.requestedAt`. `Notification.status` n
 | `requestNotification` | `POST /v1/notifications` → 202 | Acepta y registra un envío; responde antes de enviar. Idempotente con `Idempotency-Key` (opcional). | `notification:send` |
 | `getNotification` | `GET /v1/notifications/{notificationId}` | El estado de un envío propio, para quien no escucha eventos. | `notification:read` |
 
-Errores de contrato: `APPLICATION_ALREADY_EXISTS` y `CREDENTIAL_ALREADY_ASSIGNED` (409),
+Errores de contrato: `APPLICATION_ALREADY_EXISTS` y `CREDENTIAL_ALREADY_ASSIGNED` (409, cada uno
+nombrado en la unicidad que lo produce: la clave y las credenciales),
 `APPLICATION_INACTIVE` (403),
 `TEMPLATE_NOT_FOUND` (404 si lo nombra la ruta, 422 si lo nombra el cuerpo o el mensaje),
 `TEMPLATE_ALREADY_ACTIVE` y `CONCURRENT_MODIFICATION` (409, publicaciones simultáneas),

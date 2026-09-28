@@ -247,6 +247,19 @@ La consecuencia práctica: un `request` **no obliga a declarar su `source` como 
 - las claves de `input` existan en el input de la operación y sus valores en el payload;
 - todo campo del payload alimente algo (si no, **aviso**: o sobra en el contrato o falta en la operación).
 
+**Un campo de la envoltura** (DSL 2.16). El valor de `input` puede ser también `metadata.eventId`, `metadata.occurredAt` o `metadata.source`: un dato del mensaje en sí, no de su payload. Es lo que da forma estructural a una regla como «`dedupeKey` es `event:` seguido del id del mensaje», que antes solo podía decirse en prosa y dejaba el comando sin el dato:
+
+```yaml
+subscriptions:
+  NotificationRequested:
+    contract: { envelope: keel }
+    triggers: acceptNotificationRequest
+    input:
+      eventId: metadata.eventId   # el resto llega por nombre desde el payload
+```
+
+Solo con [envoltura Keel](#la-envoltura-keel) —con `none` o `wrapped` no hay `metadata` que estampe un emisor Keel— y sobre un campo del input del tipo que tiene en la envoltura: `eventId` y `source` son `string` (el id viaja como cadena aunque su contenido sea un UUID) y `occurredAt` es `timestamp`. Si no, **error** (`CHK-MSG-INPUT-ENVELOPE-FIELD`). La identidad del emisor no se mapea así: tiene su propio bloque, `identity`, y declararla también en `input` es error.
+
 ## Qué NO va aquí
 
 - Qué operación emite cada evento → `use-cases` (`emits`).

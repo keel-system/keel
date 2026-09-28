@@ -192,14 +192,19 @@ operations:
           list: true
           constraints: { maxItems: 50 }
           description: Los valores de las variables, tal como llegan en el payload del mensaje.
+        eventId:
+          type: string
+          required: true
+          constraints: { maxLength: 64 }
+          description: El metadata.eventId de la envoltura, del que sale el dedupeKey. No viaja en el payload.
     output: { entity: Notification }
     preconditions:
       - La aplicación que publicó el mensaje está registrada y activa.
     rules:
       - Un mensaje reentregado no produce una segunda notificación.
       - >-
-        `dedupeKey` es `event:` seguido del `metadata.eventId` de la envoltura, que se repite intacto en
-        cada reentrega. El prefijo separa su espacio del de las Idempotency-Key de la vía HTTP.
+        `dedupeKey` es `event:` seguido de `eventId` —el `metadata.eventId` de la envoltura—, que se
+        repite intacto en cada reentrega. El prefijo separa su espacio del de las Idempotency-Key de la vía HTTP.
       - Un mensaje de una aplicación desconocida, o dada de baja, se descarta sin reintentar.
       - >-
         Lo mismo que por HTTP: sin idioma se usa el `defaultLocale` de la aplicación, la versión y

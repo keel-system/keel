@@ -1,7 +1,7 @@
 # notification-mailer-mongo — Escenarios de validación
 
 > Escenarios de aceptación ejecutables (Given/When/Then) derivados de
-> specs/notification-mailer-mongo v2.0.0. Contrato de validación para la fase de generación.
+> specs/notification-mailer-mongo v2.0.1. Contrato de validación para la fase de generación.
 
 > **El par del MVP, cerrado de punta a punta.** Es la fixture sobre la que el método se ejerce
 > entero —escenarios, careo, revisión, análisis de huecos y registro estructural— y la que fija

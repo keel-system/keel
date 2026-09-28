@@ -12,6 +12,7 @@ import { kebabCase, screamingSnake } from '../lib/naming.js';
 import { subscriptionDestination } from '../lib/dead-letter.js';
 import { recordedFailures } from '../lib/outbound-failures.js';
 import { usesOutbox } from './outbox.js';
+import { rabbitListenerRetry } from './dead-letter-config.js';
 import { usesIdempotency } from './idempotency.js';
 import { usesHttpIdempotency } from './http-idempotency.js';
 import { usesCorrelation } from './correlation.js';
@@ -730,6 +731,34 @@ function flywayLines(profile) {
   return lines;
 }
 
+/**
+ * El contenedor de listeners de RabbitMQ: lo que sale del diseño, no del tuning.
+ *
+ * `default-requeue-rejected: false` con cualquier suscripción: el default de Spring (true)
+ * reentrega en bucle todo mensaje que falle, y con él la DLQ que declara `RabbitTopologyConfig`
+ * no recibe nunca nada. Y el reintento, solo si alguna suscripción declara `onFailure.retry`,
+ * con los números del diseño (`rabbitListenerRetry`). Lo que no se reintenta —el rechazo de
+ * negocio— lo marca el customizer de `RabbitTopologyConfig`, que lee de aquí `max-attempts`.
+ * `prefetch` y la concurrencia no están: son tuning y los decide el agente.
+ */
+function rabbitListenerLines(model) {
+  if ((model.subscriptions ?? []).length === 0) return [];
+  const retry = rabbitListenerRetry(model);
+  const lines = ['    listener:', '      simple:', '        default-requeue-rejected: false'];
+  if (!retry) return lines;
+  lines.push(
+    `        # onFailure.retry de ${retry.subscriptions.join(', ')}. Reintento EN MEMORIA: reinvoca el`,
+    '        # listener dentro de la misma entrega; agotado, se rechaza sin reencolar (-> DLQ).',
+    '        retry:',
+    '          enabled: true',
+    `          max-attempts: ${retry.attempts}`,
+    `          initial-interval: ${retry.initialMs}ms`,
+    `          multiplier: ${retry.multiplier.toFixed(1)}`
+  );
+  if (retry.maxDelayMs != null) lines.push(`          max-interval: ${retry.maxDelayMs}ms`);
+  return lines;
+}
+
 function brokerYaml(model, profile) {
   const { service, stack } = model;
   if (stack.broker === 'snssqs') {
@@ -771,6 +800,7 @@ function brokerYaml(model, profile) {
       ...(usesOutbox(model)
         ? ['    publisher-confirm-type: correlated', '    publisher-returns: true', '    template:', '      mandatory: true']
         : []),
+      ...rabbitListenerLines(model),
       // Clave PROPIA, no `spring.*`: `spring.rabbitmq.listener.simple.recovery-interval`
       // NO existe —RabbitProperties no la expone—, así que declararla ahí no tendría
       // ningún efecto y el contenedor se quedaría con el default INVISIBLE de

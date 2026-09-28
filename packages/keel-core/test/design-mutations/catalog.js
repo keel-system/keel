@@ -600,6 +600,15 @@ export const MUTATIONS = [
     },
     expect: ['CHK-MSG-KEEL-ENVELOPE-EXTERNAL']
   },
+  {
+    id: 'M-MSG-INPUT-ENVELOPE-FIELD',
+    title: 'el input de una suscripción lee metadata.eventId sobre un campo que no es texto',
+    mutate: (d) => {
+      ops(d).noteEscalation.input.fields.escalationRef = { type: 'int' };
+      d.layers.messaging.subscriptions.TicketEscalated.input.escalationRef = 'metadata.eventId';
+    },
+    expect: ['CHK-MSG-INPUT-ENVELOPE-FIELD']
+  },
 
   // ── http-clients ──
   {
@@ -755,6 +764,24 @@ export const MUTATIONS = [
       d.layers.persistence.entities.TicketNote = { indexes: [{ fields: ['ticketId', 'position'], unique: true }] };
     },
     expect: ['CHK-PERSIST-CHILD-UNIQUE-CODE']
+  },
+  {
+    id: 'M-PERSIST-UNIQUE-ERROR-UNDECLARED',
+    title: 'dos unicidades en la misma entidad y ninguna nombra su error',
+    mutate: (d) => {
+      d.layers.persistence.entities.Queue.naturalKey = ['name'];
+      d.layers.persistence.entities.Queue.indexes.push({ fields: ['status'], unique: true });
+    },
+    // Una por unicidad: con dos, ninguna de las dos se deja deducir.
+    expect: ['CHK-PERSIST-UNIQUE-ERROR-UNDECLARED', 'CHK-PERSIST-UNIQUE-ERROR-UNDECLARED']
+  },
+  {
+    id: 'M-PERSIST-UNIQUE-ERROR-UNKNOWN',
+    title: 'un índice único que nombra un error que ninguna operación declara',
+    mutate: (d) => {
+      d.layers.persistence.entities.Queue.indexes.push({ fields: ['name'], unique: true, error: 'QUEUE_NAME_TAKEN' });
+    },
+    expect: ['CHK-PERSIST-UNIQUE-ERROR-UNKNOWN']
   },
   {
     id: 'M-OBL-CONCURRENCY-CODE',

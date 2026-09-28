@@ -284,7 +284,7 @@ esa cola no hay nada ajeno, todo es tuyo y va a una rama distinta.
 Esto es propio de RabbitMQ y no se traslada: en Kafka cada listener tiene su grupo y
 recibe el topic entero, y en SNS/SQS cada suscripción tiene cola propia colgada del topic.
 En los dos, un listener por suscripción es lo correcto.
-**La cola de la suscripción y su descarte los declara build**, en `DeadLetterConfig`:
+**La cola de la suscripción y su descarte los declara build**, en `RabbitTopologyConfig`:
 `QueueBuilder.durable(<destino>)` con `x-dead-letter-exchange` vacío y
 `x-dead-letter-routing-key` apuntando a `<destino>-dlq`, más la propia `-dlq`.
 
@@ -294,10 +294,14 @@ y el contenedor de listeners **no arranca**. Si además la declaras sin los argu
 descarte, el mensaje agotado se pierde en silencio y `deadLetterMessages(...)` lee una
 cola vacía: el escenario daría por bueno un descarte que sí ocurrió.
 
-Lo que sí te toca: acotar los reintentos (contador en el header `x-death`, o un
-`RetryOperationsInterceptor` en la container factory) y **rechazar sin reencolar**
-(`basicNack` con `requeue=false`) al agotarlos — es lo que hace que el broker aplique el
-descarte que la cola ya tiene configurado.
+**El reintento también es de build**: `spring.rabbitmq.listener.simple.retry` en
+`parameters/<perfil>/rabbitmq.yaml` con los números de `onFailure.retry`, más
+`default-requeue-rejected: false`, y en `RabbitTopologyConfig` el `RabbitRetryTemplateCustomizer`
+que marca como no reintentables `DomainException` y `AmqpRejectAndDontRequeueException`.
+Agotado, el recuperador de Boot rechaza sin reencolar y la cola aplica su descarte. Lo que sí te
+toca: que el factory pase por `SimpleRabbitListenerContainerFactoryConfigurer` (sin él nada de
+eso llega al contenedor) y que el listener convierta el rechazo de negocio en
+`AmqpRejectAndDontRequeueException`. No escribas otro customizer ni otra política.
 
 ### El `contract` de la suscripción manda
 

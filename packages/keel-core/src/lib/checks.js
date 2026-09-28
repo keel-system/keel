@@ -590,6 +590,27 @@ export const CHECKS = {
     title: 'un índice único acotado a la colección de una raíz sin un `code` que diga qué significa violarlo',
     closes: 'declarar en la operación que escribe esa entidad un error 409 que nombre el conflicto dentro del padre, o dejarlo y asumir que el choque se trata como carrera'
   },
+  'CHK-MSG-INPUT-ENVELOPE-FIELD': {
+    layer: 'messaging',
+    severity: 'error',
+    nature: 'incoherence',
+    title: '`subscriptions.<E>.input` lee un campo de la envoltura que no existe o con otro tipo',
+    closes: 'usar `metadata.*` solo con envoltura Keel y sobre un campo del input del tipo de la envoltura (eventId y source string, occurredAt timestamp)'
+  },
+  'CHK-PERSIST-UNIQUE-ERROR-UNDECLARED': {
+    layer: 'persistence',
+    severity: 'warning',
+    nature: 'undecided',
+    title: 'una unicidad de una entidad con varias que no nombra su error ni se deja deducir por sus campos',
+    closes: 'declarar `naturalKeyError` o `error` en el índice, o aceptar por escrito el code canónico del framework'
+  },
+  'CHK-PERSIST-UNIQUE-ERROR-UNKNOWN': {
+    layer: 'persistence',
+    severity: 'error',
+    nature: 'incoherence',
+    title: '`naturalKeyError` o `indexes[].error` nombra un code que ninguna operación declara con http 409',
+    closes: 'declarar ese code en la operación que escribe la entidad, con http 409, o corregir el nombre'
+  },
 
   'CHK-PERSIST-COMPUTED-NATURAL-KEY': {
     layer: 'persistence',

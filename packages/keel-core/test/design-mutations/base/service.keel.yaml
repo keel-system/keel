@@ -1,4 +1,4 @@
-keel: "2.15"
+keel: "2.16"
 # Diseño BASE del corpus de mutaciones (test/design-mutations.test.js). No es un diseño real:
 # es un diseño pequeño que toca las diez capas y sobre el que la puerta mecánica está en
 # SILENCIO —ningún error, ningún aviso, ninguna obligación—. Cada mutación del catálogo le

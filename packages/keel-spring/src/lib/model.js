@@ -750,6 +750,8 @@ function collectEntities(domain, persistence, domainTypes, inlineEnumName, hasPe
       auditAuthorship,
       projectsManagedAudit: auditTimestamps === 'declared' || auditAuthorship === 'declared',
       naturalKey: persistenceMeta.naturalKey ?? null,
+      // DSL 2.16: el 409 que significa violar la clave, si el diseño lo nombra.
+      naturalKeyError: persistenceMeta.naturalKeyError ?? null,
       indexes: normalizeIndexes(persistenceMeta.indexes)
     });
   }
@@ -771,7 +773,13 @@ export function normalizeIndexes(declared) {
   return (declared ?? []).map((index) =>
     Array.isArray(index)
       ? { fields: index, unique: false, when: null }
-      : { fields: index.fields, unique: index.unique === true, when: index.when ?? null, description: index.description ?? null }
+      : {
+          fields: index.fields,
+          unique: index.unique === true,
+          when: index.when ?? null,
+          description: index.description ?? null,
+          error: index.error ?? null
+        }
   );
 }
 
@@ -2670,7 +2678,17 @@ function triggerArguments(def, triggerOp, fields) {
   const components = triggerOp.hasIdParam ? ['id', ...triggerOp.bodyFields.map((f) => f.name)] : triggerOp.bodyFields.map((f) => f.name);
   return components.map((component) => {
     const source = mapping[component] ?? (payloadNames.has(component) ? component : null);
-    return { component, source };
+    // DSL 2.16: un campo de la ENVOLTURA Keel (`metadata.eventId`, `metadata.occurredAt`,
+    // `metadata.source`). El caso que lo trajo: una regla derivaba `dedupeKey` del eventId del
+    // mensaje, el comando solo llevaba campos del payload y las dos corridas del servicio
+    // añadieron el campo a mano. `crossrefs` ya garantizó que la envoltura es la Keel.
+    if (typeof source === 'string' && source.startsWith('metadata.')) {
+      return { component, source: source.slice('metadata.'.length), from: 'envelope' };
+    }
+    // La identidad del emisor no viene del payload ni se mapea: la resuelve el listener con la
+    // política de `identity`, que el javadoc del mensaje ya describe en su propia línea.
+    if (source === null && def.identity?.field === component) return { component, source: null, from: 'identity' };
+    return { component, source, from: source ? 'payload' : null };
   });
 }
 

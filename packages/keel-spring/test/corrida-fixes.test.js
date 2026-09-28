@@ -1470,6 +1470,81 @@ test('las dos cotas de un value object se emiten, y sobre cada campo', () => {
   }
 });
 
+// ─── Lo que destapó la corrida `notification-mailer` v2.0.0 ─────────────────
+
+test('el value object hace cumplir la LONGITUD de sus campos de texto', () => {
+  // `TemplateVariableValue` viaja en `List<TemplateVariableValue>` dentro del comando, y Bean
+  // Validation no cascadea al elemento: el `@Size(max = 1000)` de `value` no lo aplicaba nadie.
+  // El valor de 1001 caracteres llegaba a la columna y la violación salía como 409, donde el
+  // diseño dice 400 (FL-NTF-001-EDGE-4).
+  const vo = project('notification-mailer', { ...RELATIONAL, database: 'mysql' }).file('TemplateVariableValue.java');
+  assert.match(vo, /public TemplateVariableValue \{/, 'sin guardas no hay constructor compacto');
+  assert.match(vo, /value\.length\(\) > 1000/, 'la cota de `value` no se hace cumplir');
+  assert.match(vo, /name\.length\(\) > 64/, 'la cota de `name` no se hace cumplir');
+});
+
+test('la unicidad que el diseño NOMBRA va a su code, sin TODO (DSL 2.16)', () => {
+  // Application tiene dos unicidades —la clave y las credenciales— y sus codes no siguen la forma
+  // de los campos (APPLICATION_ALREADY_EXISTS, CREDENTIAL_ALREADY_ASSIGNED): sin nombrarlos no
+  // había deducción posible y las dos corridas del servicio los mapearon a mano.
+  const handler = project('notification-mailer', { ...RELATIONAL, database: 'mysql' }).file('ApiExceptionHandler.java');
+  for (const [constraint, exception] of [
+    ['uk_applications_natural', 'ApplicationAlreadyExistsError'],
+    ['uk_applications_credential_keys', 'CredentialAlreadyAssignedError'],
+    ['uk_templates_natural', 'TemplateVersionAlreadyExistsError'],
+    ['uk_templates_application_key_locale', 'TemplateAlreadyActiveError']
+  ]) {
+    assert.match(
+      handler,
+      new RegExp(`Map\\.entry\\("${constraint}", \\(\\) -> new ${exception}\\(`),
+      `la constraint ${constraint} no va a ${exception}`
+    );
+    assert.ok(
+      !new RegExp(`TODO \\(agente\\)[^\\n]*\\n[^\\n]*\\n[^\\n]*\\n\\s*Map\\.entry\\("${constraint}"`).test(handler),
+      `la constraint ${constraint} sigue con TODO`
+    );
+  }
+  // Y el mensaje es el del diseño, no el genérico «Ya existe un…».
+  assert.match(handler, /Alguna de las credenciales ya resuelve a otro sistema dado de alta"/);
+});
+
+test('el eventId de la envoltura llega al comando cuando el diseño lo mapea (DSL 2.16)', () => {
+  // La regla `dedupeKey = event:<eventId>` necesitaba el metadata.eventId dentro del comando, y el
+  // comando solo llevaba campos del payload: las dos corridas del servicio lo añadieron a mano.
+  const generado = project('notification-mailer', { ...RELATIONAL, database: 'mysql' });
+  assert.match(generado.file('AcceptNotificationRequestCommand.java'), /String eventId\b/, 'el comando no lleva el eventId');
+
+  const message = generado.file('NotificationRequestedMessage.java');
+  const dispatch = /despachando AcceptNotificationRequestCommand\((.*)\) vía UseCaseMediator/.exec(message)?.[1] ?? '';
+  assert.match(dispatch, /eventId = envelope\.metadata\(\)\.eventId\(\)/, `el listener no sabe de dónde sale (${dispatch})`);
+  // La identidad ya tiene su propia línea: en el despacho no es un TODO.
+  assert.match(dispatch, /applicationKey = la identidad resuelta/);
+  assert.ok(!dispatch.includes('TODO'), `queda un argumento sin fuente (${dispatch})`);
+});
+
+test('RabbitMQ: onFailure.retry llega al listener, y el rechazo de negocio no se reintenta', () => {
+  // El diseño declara 5 intentos, exponencial, 1 s → 30 s. Hasta aquí build solo declaraba la
+  // topología, y el agente escribió el reintento: la primera vez reintentaba también el rechazo de
+  // negocio, la reentrega chocaba con su propio registro de deduplicación y el mensaje no llegaba
+  // nunca a la DLQ (FL-EVT-002).
+  const generado = project('notification-mailer', { ...RELATIONAL, database: 'mysql' });
+  for (const perfil of ['local', 'develop', 'production']) {
+    const yaml = generado.file(path.join('parameters', perfil, 'rabbitmq.yaml'));
+    assert.match(yaml, /default-requeue-rejected: false/, `${perfil}: sin él, la DLQ no recibe nada`);
+    assert.match(yaml, /retry:\s+enabled: true\s+max-attempts: 5\s+initial-interval: 1000ms\s+multiplier: 1\.5\s+max-interval: 30000ms/,
+      `${perfil}: el reintento no es el del diseño`);
+  }
+
+  const topology = generado.file('RabbitTopologyConfig.java');
+  assert.match(topology, /RabbitRetryTemplateCustomizer businessRejectionIsNotRetried\(/);
+  // Las dos mitades: la excepción de dominio y la envoltura con la que el listener la rechaza.
+  assert.match(topology, /DomainException\.class, false/);
+  assert.match(topology, /AmqpRejectAndDontRequeueException\.class, false/);
+  // traverseCauses: el contenedor lo entrega todo dentro de ListenerExecutionFailedException.
+  assert.match(topology, /new SimpleRetryPolicy\(maxAttempts, retryable, true, true\)/);
+  assert.match(topology, /Target\.LISTENER/);
+});
+
 test('generate_statistics viene con el logger que silencia su volcado, y bajo level', () => {
   // build enciende `generate_statistics` en local y test para que el arnés pueda leer
   // `hibernate.statements` por el actuator. Ese flag activa además un listener que escribe

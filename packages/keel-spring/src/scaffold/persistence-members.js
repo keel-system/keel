@@ -274,7 +274,8 @@ export function uniqueConstraints(model) {
       entries.push({
         constraint: `uk_${entity.tableName}_natural`,
         entity: entity.name,
-        fields: entity.naturalKey
+        fields: entity.naturalKey,
+        error: entity.naturalKeyError ?? null
       });
     }
     for (const field of uniqueFields(entity)) {
@@ -295,7 +296,8 @@ export function uniqueConstraints(model) {
         entity: entity.name,
         fields: index.fields,
         when: index.when ?? null,
-        description: index.description ?? null
+        description: index.description ?? null,
+        error: index.error ?? null
       });
     }
   }

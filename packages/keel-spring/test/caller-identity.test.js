@@ -193,6 +193,30 @@ test('y el control sin ruta sigue igual', () => {
   assert.match(controller, /CallerIdentity.resolve()/);
 });
 
+// ─── Un POST cuyo único campo fuera de la ruta es la identidad ──────────────
+//
+// `publishTemplate` es POST /v1/templates/{templateId}/publish: su entrada es `templateId` (ruta) y
+// `applicationKey` (la identidad). No queda nada que leer del cuerpo, y el controller declaraba igual
+// `@Valid @RequestBody`: la petición correcta según el diseño —sin cuerpo— respondía 400 antes de
+// llegar al mediator. Tumbó 3 escenarios y dejó 14 sin ejercitar en la corrida de la v2.0.0.
+
+test('sin nada que leer del cuerpo, un POST no declara @RequestBody', () => {
+  const controller = generateMailer().get('TemplateV1Controller.java');
+  // La firma hasta la llave: los `@Size(max = 64)` de los parámetros cierran paréntesis antes.
+  const signature = (name) => new RegExp(`${name}\\([\\s\\S]*?\\)\\s*\\{`).exec(controller)?.[0];
+  const method = signature('publishTemplate');
+  assert.ok(method, 'no se generó el endpoint de publicación');
+  assert.ok(!method.includes('@RequestBody'), `el POST sin cuerpo exige uno (${method})`);
+
+  const dispatch = /new PublishTemplateCommand\([^)]*\)/.exec(controller)?.[0];
+  assert.ok(dispatch, 'no se construye el comando desde la ruta');
+  assert.ok(dispatch.includes('CallerIdentity.resolve()'), `la publicación no recibe la identidad (${dispatch})`);
+  assert.ok(dispatch.includes('templateId'), `la publicación no recibe la ruta (${dispatch})`);
+
+  // El control: el registro de plantilla (PUT con cuerpo y ruta) sigue leyendo su cuerpo.
+  assert.match(signature('registerTemplate') ?? '', /@RequestBody/);
+});
+
 // ─── La operación de LECTURA ────────────────────────────────────────────────
 //
 // La tercera rama del controller, y la última que no lo miraba: los verbos SIN cuerpo. Ahí los

@@ -56,6 +56,11 @@ export function effectiveErrorCode(model, entry, family) {
  * cuando el diseño no lo dijo o dijo algo ambiguo.
  */
 export function declaredUniquenessErrorFor(model, entry, entity, fields, { soleConstraint = false } = {}) {
+  // Lo que el diseño NOMBRA (DSL 2.16) va antes que cualquier deducción: las dos pasadas de
+  // abajo existen porque el diseño no podía decirlo, y con dos unicidades y codes que no siguen
+  // la forma de los campos no deducían nada — el handler salía con un TODO.
+  const named = namedUniquenessError(model, entity, fields);
+  if (named) return named;
   const scoped = errorsWrittenBy(model, entity);
   if (scoped.length === 0) return null;
   const byFields = pickOne(scoped, entry, entry.familyFor(screamingSnake(fields.join('_'))));
@@ -96,6 +101,26 @@ export function declaredReferenceError(model, referencedEntity) {
   // `BRAND_HAS_CAMPAIGNS` no dice cuál de las dos FK es cuál, y adivinar mandaría por el cable
   // el conflicto de otra tabla. Sin entrada en el mapa, la violación cae en el 409 genérico.
   return scoped.length === 1 ? scoped[0] : null;
+}
+
+/**
+ * El error que el diseño nombra para ESA unicidad: `naturalKeyError` si los campos son la
+ * naturalKey, o el `error` del índice único con esos mismos campos. `crossrefs` ya garantizó que
+ * el code lo declara alguna operación con 409 (CHK-PERSIST-UNIQUE-ERROR-UNKNOWN).
+ */
+export function namedUniquenessError(model, entity, fields) {
+  const found = (model.entities ?? []).find((candidate) => candidate.name === entity);
+  if (!found) return null;
+  const same = (a) => Array.isArray(a) && a.length === fields.length && a.every((f, i) => f === fields[i]);
+  const code = same(found.naturalKey)
+    ? found.naturalKeyError
+    : (found.indexes ?? []).find((index) => index.unique && index.error && same(index.fields))?.error;
+  return code ? errorByCode(model, code) : null;
+}
+
+/** El error del modelo con ese code, normalizando la caja como el resto de este módulo. */
+export function errorByCode(model, code) {
+  return (model.errors ?? []).find((error) => screamingSnake(error.code) === screamingSnake(code)) ?? null;
 }
 
 /** ¿Es una entidad interna de un agregado? (su raíz es otra). */

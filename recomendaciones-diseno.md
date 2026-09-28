@@ -223,6 +223,12 @@ La misma disciplina que ya funciona en keel-spring, aplicada al diseño:
 - La regla que ya existe («un `designGap` que aparece en dos corridas es candidato obligatorio a id») se mecaniza: un script que lea `docs/corridas/*` y liste las repeticiones.
 
 > **Estado (2026-09-27): herramienta hecha, primer punto de datos pendiente.** `keel-spring/scripts/corrida-metrics.js` mide la huella de un proyecto (`footprint`: registrados, adoptados, intactos, reescritos y borrados, más el estampado de «diseño listo») y la serie (`series`: una fila por corrida, cuántas con `--accept-unready` y los `designGap` que se repiten, por la clave de la sección `## designGaps`). El formato fijo está en `docs/corridas/README.md`. Las cuatro corridas registradas son anteriores a la puerta y solo `catalog 2` midió la huella (53 reescritos). El primer punto de datos sobre un diseño listo es la corrida `notification-mailer` v2.0.0 sobre MySQL + RabbitMQ.
+>
+> **Primer punto de datos (2026-09-27, `docs/corridas/2026-09-27-notification-mailer-mysql.md`):**
+> - Resultado: 56/57 escenarios OK, **0 huecos del diseño** y 23 reescritos de 312.
+> - La corrida anterior del mismo servicio, sin la puerta, reescribió **casi los mismos archivos** (21 de 293), así que el número no baja. Lo que cambia es el origen: 16 de los 23 son TODO legítimos o consultas de negocio, y los 7 restantes son huecos del **generador**, con el diseño declarando lo necesario.
+> - Tres de esos huecos se repiten entre las dos corridas: el mapeo de constraints únicas a los codes declarados, el `eventId` que no llega al comando y los TODO de siempre.
+> - Conclusión provisional: el diseño cerrado elimina los huecos del diseño, y el reproceso que queda en este servicio es del generador. Con un solo punto no hay serie: hace falta repetirlo con otro servicio.
 
 ---
 

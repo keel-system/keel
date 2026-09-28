@@ -6437,6 +6437,103 @@ test('CHK-PERSIST-CONDITIONAL-UNIQUE-CODE: el índice único condicionado pide u
   assert.deepEqual(idsOf(nombrado, 'CHK-PERSIST-CONDITIONAL-UNIQUE-CODE'), []);
 });
 
+test('CHK-MSG-INPUT-ENVELOPE-FIELD: metadata.* solo con envoltura Keel y con el tipo de la envoltura', () => {
+  const run = ({ envelope = 'keel', type = 'string', source = 'metadata.eventId' } = {}) =>
+    checkCrossRefs({
+      layers: {
+        domain: { entities: { Note: { fields: { id: { type: 'uuid', id: true, generated: true } } } } },
+        'use-cases': {
+          operations: {
+            acceptNote: {
+              kind: 'command',
+              internal: true,
+              input: { fields: { text: { type: 'string', required: true }, eventId: { type: type, required: true } } },
+              output: 'void'
+            }
+          }
+        },
+        messaging: {
+          channels: { notes: { description: 'x' } },
+          subscriptions: {
+            NoteRequested: {
+              source: 'other',
+              channel: 'notes',
+              payload: { text: { type: 'string', required: true } },
+              contract: { envelope, ...(envelope === 'keel' ? {} : { messageId: { location: 'field', name: 'text' } }) },
+              triggers: 'acceptNote',
+              input: { text: 'text', eventId: source }
+            }
+          }
+        }
+      }
+    });
+
+  // El uso correcto no dice nada — y no cuenta como campo del payload inexistente.
+  const ok = run();
+  assert.deepEqual(idsOf(ok, 'CHK-MSG-INPUT-ENVELOPE-FIELD'), []);
+  assert.ok(!ok.errors.some((e) => e.includes('metadata.eventId')), ok.errors.join('\n'));
+
+  assert.equal(idsOf(run({ envelope: 'none' }), 'CHK-MSG-INPUT-ENVELOPE-FIELD').length, 1);
+  assert.equal(idsOf(run({ type: 'uuid' }), 'CHK-MSG-INPUT-ENVELOPE-FIELD').length, 1);
+  assert.deepEqual(idsOf(run({ type: 'timestamp', source: 'metadata.occurredAt' }), 'CHK-MSG-INPUT-ENVELOPE-FIELD'), []);
+});
+
+test('CHK-PERSIST-UNIQUE-ERROR-*: con dos unicidades hay que nombrar el error, y nombrarlo cierra los avisos', () => {
+  // La forma de Application en notification-mailer: la clave y las credenciales, con codes que
+  // no siguen la forma de sus campos.
+  const domain = {
+    entities: {
+      Application: {
+        fields: {
+          id: { type: 'uuid', id: true, generated: true },
+          key: { type: 'string', required: true },
+          credentialKeys: { type: 'string', list: true },
+          status: { type: 'string' }
+        }
+      }
+    }
+  };
+  const errors = [
+    { code: 'APPLICATION_ALREADY_EXISTS', when: 'x', http: 409 },
+    { code: 'CREDENTIAL_ALREADY_ASSIGNED', when: 'x', http: 409 }
+  ];
+  const run = (entitySpec, errs = errors) =>
+    checkCrossRefs({
+      layers: {
+        domain,
+        'use-cases': { operations: { registerApplication: { input: 'void', output: { entity: 'Application' }, errors: errs } } },
+        persistence: { entities: { Application: entitySpec } }
+      }
+    });
+  const base = () => ({ naturalKey: ['key'], indexes: [{ fields: ['credentialKeys'], unique: true }] });
+
+  assert.deepEqual(
+    idsOf(run(base()), 'CHK-PERSIST-UNIQUE-ERROR-UNDECLARED').map((f) => f.scope),
+    ['persistence.entities.Application.naturalKey', 'persistence.entities.Application.indexes.credentialKeys']
+  );
+
+  const nombrado = base();
+  nombrado.naturalKeyError = 'APPLICATION_ALREADY_EXISTS';
+  nombrado.indexes[0].error = 'CREDENTIAL_ALREADY_ASSIGNED';
+  assert.deepEqual(idsOf(run(nombrado), 'CHK-PERSIST-UNIQUE-ERROR-UNDECLARED'), []);
+  assert.deepEqual(idsOf(run(nombrado), 'CHK-PERSIST-UNIQUE-ERROR-UNKNOWN'), []);
+
+  // Con UNA sola unicidad no se exige: el generador tiene su segunda pasada.
+  assert.deepEqual(idsOf(run({ naturalKey: ['key'] }), 'CHK-PERSIST-UNIQUE-ERROR-UNDECLARED'), []);
+
+  // El nombrado tiene que existir como 409: con otro status no es el error de una unicidad.
+  const otroStatus = run(nombrado, [errors[0], { ...errors[1], http: 422 }]);
+  assert.equal(idsOf(otroStatus, 'CHK-PERSIST-UNIQUE-ERROR-UNKNOWN').length, 1);
+
+  // Y el `error` de un índice condicionado cierra también su aviso propio.
+  const condicionado = {
+    indexes: [{ fields: ['key'], unique: true, when: { field: 'status', equals: 'ACTIVE' }, error: 'APPLICATION_ALREADY_EXISTS' }]
+  };
+  assert.deepEqual(idsOf(run(condicionado), 'CHK-PERSIST-CONDITIONAL-UNIQUE-CODE'), []);
+  delete condicionado.indexes[0].error;
+  assert.equal(idsOf(run(condicionado), 'CHK-PERSIST-CONDITIONAL-UNIQUE-CODE').length, 1);
+});
+
 test('CHK-PERSIST-CONDITIONAL-UNIQUE-CODE: el code de la familia tiene que nombrar las DOS mitades', () => {
   const domain = {
     entities: {

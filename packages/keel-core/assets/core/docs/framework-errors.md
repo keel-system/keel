@@ -93,6 +93,13 @@ entra en la familia de concurrencia.
 dos, dijo algo ambiguo y elegir uno sería adivinar — también manda el canónico. Eso es lo que
 hace que el contrato exista siempre, diga lo que diga el diseño.
 
+**La unicidad se puede nombrar en vez de dejarla a la familia** (DSL 2.16): `naturalKeyError` en
+la entidad y `error` en un índice único de `persistence` dicen qué code significa violarla, y
+mandan sobre toda deducción. Es la salida cuando el code no sigue la forma de los campos y la
+entidad tiene más de una unicidad —ahí la familia no encuentra nada y el canónico sale con un
+TODO—; `keel validate` lo avisa con `CHK-PERSIST-UNIQUE-ERROR-UNDECLARED`. Ver
+[`dsl/persistence.md`](dsl/persistence.md).
+
 ## Qué avisa `keel validate`
 
 Cuando un mecanismo con conflicto observable está encendido y ninguna operación declara su
