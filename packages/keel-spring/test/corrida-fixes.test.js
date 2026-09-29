@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { loadService } from 'keel-core';
-import { scaffoldService } from '../src/scaffold/index.js';
+import { planService, scaffoldService } from '../src/scaffold/index.js';
 import { buildModel } from '../src/lib/model.js';
 import { generate as generateScheduling, scheduledTaskCount } from '../src/scaffold/scheduling.js';
 import {
@@ -2172,4 +2172,27 @@ test('con Kafka, el group-id sale de config y el arnés espera a esos grupos', (
   const sqs = project('stock-reservation', SNSSQS);
   assert.ok(!sqs.file('AbstractFlowIT.java').includes('awaitConsumerGroupsStable'));
   assert.ok(!sqs.file(path.join('local', 'messaging.yaml')).includes('group-id'));
+});
+
+// Corrida `catalog` (2026-09-29): el diseño fija `maxSize: 100` y afirma que una página no
+// cuesta más trabajo de almacén que otra más pequeña, pero build ponía `@BatchSize(size = 50)`
+// en cada colección: una página de 100 cargaba sus imágenes en DOS lotes, y el agente lo subió a
+// mano. El lote y `default_batch_fetch_size` salen ahora de la misma función y no bajan del tope.
+test('el lote de carga de colecciones nunca queda por debajo del tope de página del diseño', () => {
+  const { manifest, layers, errors } = loadService(path.join(fixturesDir, 'catalog-extended'));
+  assert.deepEqual(errors, []);
+  const render = (maxSize) => {
+    const patched = structuredClone(layers);
+    patched.api.pagination = { ...patched.api.pagination, maxSize };
+    const { files } = planService({ manifest, layers: patched, workspace: fixturesDir });
+    const find = (suffix) => files.find((f) => f.path.split(path.sep).join('/').endsWith(suffix)).content;
+    return { jpa: find('/ProductJpa.java'), db: find('parameters/production/db.yaml') };
+  };
+  const big = render(100);
+  assert.ok(big.jpa.includes('@BatchSize(size = 100)'), big.jpa.match(/@BatchSize.*/)?.[0]);
+  assert.ok(big.db.includes('default_batch_fetch_size: 100'));
+  // Por debajo de 50 manda el mínimo: un tope pequeño no empeora el lote.
+  const small = render(20);
+  assert.ok(small.jpa.includes('@BatchSize(size = 50)'));
+  assert.ok(small.db.includes('default_batch_fetch_size: 50'));
 });

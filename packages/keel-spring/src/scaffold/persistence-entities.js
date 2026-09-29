@@ -314,8 +314,11 @@ function renderJpaEntity(model, entity) {
       // Va en el mapeo además de en la propiedad global porque el tamaño es una decisión
       // POR COLECCIÓN —se elige por encima de cualquier page.size() razonable— y porque
       // aquí se lee junto al modelo, no en un YAML que nadie abre al revisar entidades.
+      // Nunca por debajo del tope de página del diseño (api.pagination.maxSize): con un
+      // lote de 50 y páginas de 100, el coste vuelve a crecer con el tamaño de la página,
+      // que es justo lo que este lote existe para evitar (corrida catalog, 2026-09-29).
       imports.add('org.hibernate.annotations.BatchSize');
-      annotation += '\n    @BatchSize(size = 50)';
+      annotation += `\n    @BatchSize(size = ${collectionBatchSize(model)})`;
       imports.add('java.util.List');
       imports.add('java.util.ArrayList');
       declarations.push(`    ${annotation}\n    private List<${childJpa}> ${member.name} = new ArrayList<>();`);
@@ -408,6 +411,14 @@ ${accessors.join('\n\n')}
  */
 // El nombre REAL de la tabla de una entidad, que es el pluralizado de su modelo y no el
 // snake de su nombre: la FK tiene que nombrar la tabla que existe.
+/**
+ * Tamaño del lote de carga de colecciones: 50, o el tope de página del diseño si es mayor.
+ * Fuente única: lo usan el @BatchSize de cada colección y default_batch_fetch_size (config.js).
+ */
+export function collectionBatchSize(model) {
+  return Math.max(50, Number(model.pagination?.maxSize ?? 0) || 0);
+}
+
 function tableOf(model, entityName) {
   const found = (model.entities ?? []).find((candidate) => candidate.name === entityName);
   return found?.tableName ?? snakeCase(entityName);

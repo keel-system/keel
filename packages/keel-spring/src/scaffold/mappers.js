@@ -125,8 +125,14 @@ function renderMethod(model, entity, dto, imports) {
   // Referencias embebidas (embed): el agregado solo guarda el id del ajeno, así
   // que el objeto no se puede derivar aquí. Entra como parámetro del mapper: es
   // el handler quien lo resuelve, y así el compilador no deja olvidarlo.
+  // Con recorte (`exclude: [brand.createdAt]`) el campo es una variante <E>SummaryDto, pero el
+  // parámetro sigue siendo el <E>RefDto completo que da el resolver: el recorte se hace aquí.
   const refFields = dto.fields.filter((field) => field.kind === 'refDto');
-  for (const ref of refFields) imports.add(`${subPackage(model, 'application.dtos')}.${ref.javaType}`);
+  const refParamType = (ref) => ref.refSource ?? ref.javaType;
+  for (const ref of refFields) {
+    imports.add(`${subPackage(model, 'application.dtos')}.${ref.javaType}`);
+    imports.add(`${subPackage(model, 'application.dtos')}.${refParamType(ref)}`);
+  }
 
   // Y el dato de OTRO servicio que el diseño expone (needs.<n>.exposedAs): por la
   // misma razón y con más motivo — no está en esta base ni siquiera por su id. Que
@@ -145,7 +151,7 @@ function renderMethod(model, entity, dto, imports) {
 
   const params = [
     `${entity.name} entity`,
-    ...refFields.map((ref) => `${ref.javaType} ${ref.name}`),
+    ...refFields.map((ref) => `${refParamType(ref)} ${ref.name}`),
     ...needFields.map((need) => `${need.javaType} ${need.name}`),
     ...parentFields.map((parent) => `UUID ${parent.name}`)
   ].join(', ');
@@ -154,6 +160,7 @@ function renderMethod(model, entity, dto, imports) {
   // no corresponda (p. ej. subcampo de value object o derivado) lo completa el agente.
   const gettable = new Set(domainMembers(model, entity).map((m) => m.name));
   const args = dto.fields.map((field) => {
+    if (field.kind === 'refDto' && field.refSource) return `${field.javaType}.from(${field.name})`;
     if (field.kind === 'refDto' || field.kind === 'needDto' || field.kind === 'parentId') return field.name;
     if (!gettable.has(field.name)) {
       return `null /* TODO (agente): ${field.name} no es getter directo de ${entity.name}; mapéalo (¿subcampo de value object?) */`;

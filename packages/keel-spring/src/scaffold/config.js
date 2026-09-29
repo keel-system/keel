@@ -20,6 +20,7 @@ import { instrumentationFor, usesTelemetry } from './telemetry.js';
 import { METRICS_TRANSPORT, OBSERVATIONS } from '../lib/telemetry-probes.js';
 import { SWEEP_BATCH_DEFAULT } from './claim.js';
 import { reconciliationClaimTimeoutMs, RECONCILIATION_BATCH_SIZE } from '../lib/model.js';
+import { collectionBatchSize } from './persistence-entities.js';
 
 const PROFILES = ['local', 'develop', 'production'];
 
@@ -632,7 +633,7 @@ function dbYaml(model, profile, dbName) {
     '        # Agrupa las cargas LAZY pendientes en un WHERE ... IN (...) en vez de una',
     '        # consulta por elemento. Sin esto, recorrer una colección de una página de N',
     '        # elementos son N consultas que ninguna aserción funcional distingue.',
-    '        default_batch_fetch_size: 50'
+    `        default_batch_fetch_size: ${collectionBatchSize(model)}`
   );
   // Contador de sentencias, que es lo que hace OBSERVABLE un N+1: sin él, «esta página
   // cuesta una consulta o veintiuna» es una opinión sobre el código, no un hecho que un

@@ -132,8 +132,11 @@ public class RabbitOutboxDispatcher implements OutboxDispatcher {
     private final RabbitTemplate rabbitTemplate;
     private final long recoveryIntervalMillis;
     private final AtomicLong lastConnectionResetAt = new AtomicLong(0L);
+    // El executor del proyecto (application/support), no uno de `Executors`: el intento
+    // corre en otro hilo y, sin propagar el contexto, su log y su span salen sin traza
+    // ni correlationId. `infra/check-logging.sh` veta la otra forma.
     private final ExecutorService dispatchExecutor =
-            Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("outbox-dispatch-", 0).factory());
+            ContextPropagatingExecutors.newVirtualThreadPerTaskExecutor();
 
     // ... constructor: @Value("${rabbitmq.listener.recovery-interval-ms:5000}") ...
 

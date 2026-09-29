@@ -33,8 +33,9 @@ spring:
 ## Hibernate: batching y fetch
 
 **El lote de colecciones YA está puesto y no se toca**: build emite
-`default_batch_fetch_size: 50` en todos los perfiles y un `@BatchSize(size = 50)` en cada
-colección del agregado. Añadir otra vez la propiedad —y menos con otro valor— deja dos
+`default_batch_fetch_size` en todos los perfiles y un `@BatchSize` en cada colección del
+agregado, los dos con el mismo tamaño: 50, o el tope de página del diseño
+(`api.pagination.maxSize`) si es mayor, para que una página llena siga cargándose en un solo lote. Añadir otra vez la propiedad —y menos con otro valor— deja dos
 números que dicen lo mismo y que se desincronizan a la primera.
 
 Lo de abajo es lo que **sí** decides tú, y solo con escritura masiva o un N+1 medido:

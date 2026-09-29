@@ -94,7 +94,8 @@ export function buildModel({ manifest, layers, stack = null }) {
   // DTOs de las entidades hijas proyectadas en algún payload de salida.
   const childDtos = collectChildDtos(layers, services, domainTypes, inlineEnumName, warnings);
   // DTOs de referencia de las relaciones que el diseño marca con embed.
-  const refDtos = collectRefDtos(layers, services, domainTypes, inlineEnumName, childDtos, warnings);
+  // Y las variantes recortadas cuando las operaciones embeben la misma raíz con recortes distintos.
+  const { refDtos, refVariants } = collectRefDtos(layers, services, domainTypes, inlineEnumName, childDtos, warnings);
   const events = collectEvents(layers, services, service, domainTypes, inlineEnumName, warnings, stack);
   // Garantía de entrega declarada en el diseño: decide cómo se materializa la
   // publicación (outbox transaccional vs. envío directo tras commit).
@@ -168,7 +169,7 @@ export function buildModel({ manifest, layers, stack = null }) {
   // porque necesita el reclamo de RECONCILIACIÓN, que lo resuelve `collectDependencies`.
   stampClaimClocks(services);
 
-  return { service, layersPresent, persistenceKind, enums, valueObjects, formatTypes, entities, services, errors, childDtos, refDtos, needDtos, hasFileUploads, events, messaging, subscriptions, pagination, api, audit, security, httpClients, dependencies, storage, mail, warnings };
+  return { service, layersPresent, persistenceKind, enums, valueObjects, formatTypes, entities, services, errors, childDtos, refDtos, refVariants, needDtos, hasFileUploads, events, messaging, subscriptions, pagination, api, audit, security, httpClients, dependencies, storage, mail, warnings };
 }
 
 // El DTO de un dato ajeno expuesto, y su campo en la respuesta.
@@ -1571,13 +1572,28 @@ function collectChildDtos(layers, services, domainTypes, inlineEnumName, warning
 // DTOs de referencia de los payloads con embed: los campos propios del agregado
 // referenciado, SIN sus relaciones (relations: null) — la proyección se corta a
 // profundidad 1 para que embebir una categoría no arrastre su árbol entero.
+//
+// El recorte por operación (`exclude: [brand.createdAt]`, en `field.refExclude`) lo aplica
+// build y no el agente. Si todas las proyecciones de una entidad piden el mismo recorte, se
+// recorta el propio <E>RefDto. Si difieren —la gestión ve la auditoría de la marca y la tienda
+// no—, un único record compartido no admite «quítale X»: el <E>RefDto se queda completo (es lo
+// que produce el resolver, un lote por raíz) y cada recorte distinto es una VARIANTE
+// <E>SummaryDto (<E>Summary2Dto…, por orden de aparición), con un `from(<E>RefDto)` que el
+// mapper llama. Hasta la corrida `catalog` (2026-09-29) esto eran 40 avisos que pedían al
+// agente quitar campos a un DTO que otras operaciones necesitaban enteros.
 function collectRefDtos(layers, services, domainTypes, inlineEnumName, childDtos, warnings) {
   const domainEntities = layers.domain?.entities ?? {};
-  const referenced = new Set();
+  // entidad → { fields: [campos refDto que la embeben], keys: [recortes distintos en orden] }
+  const referenced = new Map();
 
   const scan = (fields) => {
     for (const field of fields ?? []) {
-      if (field.kind === 'refDto') referenced.add(field.refEntity);
+      if (field.kind !== 'refDto') continue;
+      if (!referenced.has(field.refEntity)) referenced.set(field.refEntity, { fields: [], keys: [] });
+      const entry = referenced.get(field.refEntity);
+      entry.fields.push(field);
+      const key = (field.refExclude ?? []).join(',');
+      if (!entry.keys.includes(key)) entry.keys.push(key);
     }
   };
   for (const group of services) {
@@ -1586,9 +1602,10 @@ function collectRefDtos(layers, services, domainTypes, inlineEnumName, childDtos
   for (const child of childDtos) scan(child.fields);
 
   const built = [];
-  for (const entityName of referenced) {
+  const variants = [];
+  for (const [entityName, { fields: embeds, keys }] of referenced) {
     if (!domainEntities[entityName]) continue;
-    const fields = payloadFields(entityName, { entity: entityName }, {
+    const full = payloadFields(entityName, { entity: entityName }, {
       direction: 'output',
       domainEntities,
       domainTypes,
@@ -1596,9 +1613,32 @@ function collectRefDtos(layers, services, domainTypes, inlineEnumName, childDtos
       relations: null,
       warnings
     });
-    built.push({ name: `${entityName}RefDto`, entity: entityName, fields });
+    const refName = `${entityName}RefDto`;
+    const trim = (key) => {
+      const drop = new Set(key ? key.split(',') : []);
+      return full.filter((field) => !drop.has(field.name));
+    };
+
+    if (keys.length === 1) {
+      built.push({ name: refName, entity: entityName, fields: trim(keys[0]) });
+      continue;
+    }
+    built.push({ name: refName, entity: entityName, fields: full });
+    const variantByKey = new Map();
+    for (const key of keys.filter(Boolean)) {
+      const name = `${entityName}Summary${variantByKey.size === 0 ? '' : variantByKey.size + 1}Dto`;
+      variantByKey.set(key, name);
+      variants.push({ name, entity: entityName, source: refName, fields: trim(key) });
+    }
+    for (const field of embeds) {
+      const variant = variantByKey.get((field.refExclude ?? []).join(','));
+      if (!variant) continue;
+      field.javaType = variant;
+      field.elementJavaType = variant;
+      field.refSource = refName;
+    }
   }
-  return built;
+  return { refDtos: built, refVariants: variants };
 }
 
 // ─── Eventos de dominio (messaging.publishing.events) ────────────────────────
@@ -2907,16 +2947,15 @@ function payloadFields(opName, payload, { direction, domainEntities, domainTypes
   const entity = domainEntities[payload.entity];
   if (!entity) return [];
 
-  // exclude admite dot-paths hacia una entidad hija o un value object. El scaffolding solo
-  // puede aplicar los planos: su DTO es un record plano de los campos de la entidad (las
-  // relaciones no entran, y un value object entra como su record completo). Los anidados se
-  // avisan para que el agente los recorte al escribir el DTO — nunca se ignoran en silencio.
-  // La ruta ya viene validada por `keel validate` (crossrefs), aquí no se revalida.
+  // exclude admite dot-paths hacia una relación, una entidad hija o un value object. Los que
+  // recortan un campo de un agregado EMBEBIDO (`brand.createdAt`) los aplica build: el recorte
+  // viaja con el campo `refDto` y collectRefDtos saca de ahí la proyección (el <E>RefDto
+  // recortado, o una variante si otras operaciones lo piden entero). El resto —hija, value
+  // object— no cabe en un DTO plano y se avisa para que el agente lo recorte al escribir el
+  // DTO: nunca se ignora en silencio. La ruta ya viene validada por `keel validate`.
   const excludePaths = payload.exclude ?? [];
   const exclude = new Set(excludePaths.filter((path) => !path.includes('.')));
-  for (const path of excludePaths) {
-    if (path.includes('.')) warnings.push(nestedExcludeWarning(opName, payload.entity, path, entity, domainTypes));
-  }
+  const nestedPaths = excludePaths.filter((path) => path.includes('.'));
 
   // El campo de estado del `lifecycle` NO entra en una entrada derivada, aunque no esté
   // marcado `generated`: quien lo mueve es la máquina de estados que el propio dominio
@@ -2956,14 +2995,18 @@ function payloadFields(opName, payload, { direction, domainEntities, domainTypes
   // referencia a otro agregado se proyecta como su id y una entidad hija como su
   // propio DTO. Omitirlas por defecto dejaba payloads incompletos (sin categoryId,
   // sin images) sin que el diseño hubiera declarado ningún exclude.
+  const consumed = new Set();
   fields.push(
-    ...relationPayloadFields(opName, payload, entity, { direction, relations: relationCtx, exclude, warnings })
+    ...relationPayloadFields(opName, payload, entity, { direction, relations: relationCtx, exclude, nestedPaths, consumed, warnings })
   );
+  for (const path of nestedPaths) {
+    if (!consumed.has(path)) warnings.push(nestedExcludeWarning(opName, payload.entity, path, entity, domainTypes));
+  }
   return fields;
 }
 
 // Proyección de las relaciones de la entidad sobre el payload.
-function relationPayloadFields(opName, payload, entity, { direction, relations: relationCtx, exclude, warnings }) {
+function relationPayloadFields(opName, payload, entity, { direction, relations: relationCtx, exclude, nestedPaths = [], consumed = new Set(), warnings }) {
   if (!relationCtx) return [];
   const { internalOf, hasPersistence } = relationCtx;
   const embed = new Set(payload.embed ?? []);
@@ -3010,8 +3053,19 @@ function relationPayloadFields(opName, payload, entity, { direction, relations: 
       // para que la proyección no encadene agregado tras agregado.
       if (embed.has(relName) && direction === 'output') {
         const dtoName = `${rel.entity}RefDto`;
-        projected.push(
-          relationField({
+        // `brand.createdAt`: un campo del agregado embebido que esta operación no deja ver.
+        // Solo un nivel —un value object dentro del embebido (`brand.price.currency`) sigue
+        // siendo del agente—, y ordenado para que dos operaciones con el mismo recorte
+        // compartan proyección.
+        const refExclude = [];
+        for (const path of nestedPaths) {
+          const [head, ...rest] = path.split('.');
+          if (head !== relName || rest.length !== 1) continue;
+          refExclude.push(rest[0]);
+          consumed.add(path);
+        }
+        projected.push({
+          ...relationField({
             name: relName,
             javaType: dtoName,
             elementJavaType: dtoName,
@@ -3020,8 +3074,9 @@ function relationPayloadFields(opName, payload, entity, { direction, relations: 
             refEntity: rel.entity,
             required: Boolean(rel.required),
             description: rel.description
-          })
-        );
+          }),
+          refExclude: [...new Set(refExclude)].sort()
+        });
         continue;
       }
       const name = `${relName}Id`;

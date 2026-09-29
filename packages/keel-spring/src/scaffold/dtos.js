@@ -22,6 +22,9 @@ export function generate(model) {
   for (const childDto of model.childDtos ?? []) files.push(renderRecord(model, childDto));
   // Referencias embebidas (embed): el agregado ajeno proyectado en este payload.
   for (const refDto of model.refDtos ?? []) files.push(renderRecord(model, refDto));
+  // Y sus variantes recortadas: la proyección de una operación que no deja ver todos los campos
+  // del agregado embebido. Se construyen DESDE el <E>RefDto que da el resolver.
+  for (const variant of model.refVariants ?? []) files.push(renderRecord(model, variant));
   // Datos de OTRO servicio que el diseño expone (dependencies: needs.<n>.exposedAs).
   // Mismo papel que el RefDto, con la frontera un paso más allá: el RefDto es otro
   // agregado de esta base, este es un dato que no es nuestro.
@@ -57,10 +60,26 @@ function renderRecord(model, dto) {
     return `    ${field.javaType} ${field.name}`;
   });
 
-  const body = `${nullInclusion(model, imports)}public record ${dto.name}(
+  // Una variante recortada se construye desde el <E>RefDto completo: el mapper la pide así y
+  // el resolver sigue siendo uno por raíz. Nulo entra, nulo sale (una relación opcional).
+  const from = dto.source
+    ? `
+    public static ${dto.name} from(${dto.source} ref) {
+        return ref == null ? null : new ${dto.name}(${dto.fields.map((field) => `ref.${field.name}()`).join(', ')});
+    }
+`
+    : '\n';
+  const javadoc = dto.source
+    ? `/**
+ * ${dto.entity} embebido con el recorte que el diseño pide en esta proyección (exclude con
+ * dot-path): solo los campos que la operación deja ver.
+ */
+`
+    : '';
+
+  const body = `${javadoc}${nullInclusion(model, imports)}public record ${dto.name}(
 ${components.join(',\n')}
-) {
-}`;
+) {${from}}`;
 
   return {
     path: javaPath(model, DTO_PKG, dto.name),

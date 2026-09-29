@@ -175,7 +175,8 @@ Por orden de preferencia:
   acabarían en el baseline de migraciones sin que nadie las haya decidido.
 - **El actor de la autoría** lo resuelve `AuditorAwareConfig`
   (`infrastructure/configurations/audit/`), que build genera siempre que
-  `audit.authorship` no sea `none`: lee el principal del `SecurityContext` y, en las
+  `audit.authorship` no sea `none`: lee el principal del `SecurityContext` —con JWT, el
+  `sub` de la credencial, no `getName()`, que es el `preferred_username` mutable— y, en las
   escrituras sin petición detrás (relay del outbox, listeners, `@Scheduled`), devuelve
   el centinela `system`/`system:<correlationId>` en vez de vacío — por eso las columnas
   pueden ser `NOT NULL`. Spring Data autodetecta el bean; `auditorAwareRef` no hace

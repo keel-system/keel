@@ -180,6 +180,49 @@ test('check-logging.sh: la regla context caza TODAS las formas de lanzar trabajo
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+// Lo que el agente copia de una skill o de una convención no puede ser lo que el gate le veta: el
+// snippet del dispatcher de keel-spring-rabbitmq enseñaba `Executors.newThreadPerTaskExecutor(
+// Thread.ofVirtual()…)`, y en la corrida `catalog` (2026-09-29) check-logging.sh lo dio en rojo en
+// la primera entrega. Se recorren los bloques ```java de los assets con la MISMA lista que usa el
+// script; las líneas comentadas no cuentan, igual que en el gate.
+const ASSETS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'assets');
+
+function javaBlocksViolatingContext(markdown) {
+  const hits = [];
+  const regexes = CONTEXT_FORMS.map((form) => ({ id: form.id, re: new RegExp(form.pattern.replaceAll('[[:space:]]', '\\s')) }));
+  for (const block of markdown.matchAll(/```java\r?\n([\s\S]*?)```/g)) {
+    for (const line of block[1].split(/\r?\n/)) {
+      if (/^\s*(\/\/|\*|\/\*)/.test(line)) continue;
+      for (const { id, re } of regexes) if (re.test(line)) hits.push(`[${id}] ${line.trim()}`);
+    }
+  }
+  return hits;
+}
+
+test('los snippets java de skills y convenciones no enseñan ninguna forma que veta check-logging.sh', () => {
+  const walk = (dir) =>
+    fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const full = path.join(dir, entry.name);
+      return entry.isDirectory() ? walk(full) : entry.name.endsWith('.md') ? [full] : [];
+    });
+  const offenders = walk(ASSETS_DIR).flatMap((file) =>
+    javaBlocksViolatingContext(fs.readFileSync(file, 'utf8')).map((hit) => `${path.relative(ASSETS_DIR, file)}: ${hit}`)
+  );
+  assert.deepEqual(offenders, []);
+});
+
+test('la red de snippets está falsada: el snippet viejo del dispatcher de RabbitMQ sale en rojo', () => {
+  const old = '```java\nprivate final ExecutorService dispatchExecutor =\n        Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("outbox-dispatch-", 0).factory());\n```\n';
+  const hits = javaBlocksViolatingContext(old);
+  assert.ok(hits.some((hit) => hit.startsWith('[executors]')), hits.join('\n'));
+  assert.ok(hits.some((hit) => hit.startsWith('[thread]')), hits.join('\n'));
+  // La forma correcta y la comentada, verdes.
+  assert.deepEqual(
+    javaBlocksViolatingContext('```java\n// Executors.newFixedThreadPool(4);\nvar e = ContextPropagatingExecutors.newVirtualThreadPerTaskExecutor();\n```\n'),
+    []
+  );
+});
+
 // Quien escribe los logs de negocio es el agente de código, así que es a él a quien hay que
 // mandar a la convención ANTES de escribir, y no solo al de calidad después. Mientras solo lo
 // citaba el de calidad, el agente de código logueaba sin haber leído las reglas y el gate las

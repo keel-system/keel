@@ -170,8 +170,11 @@ operations:
     output:
       entity: Product
       embed: [category]
-      # Marcador operativo del barrido, no algo que el cliente necesite.
-      exclude: [recordWithdrawalAwaitingSince]
+      # Marcador operativo del barrido, no algo que el cliente necesite. El de la categoría
+      # embebida también se recorta aquí y NO en updateProduct: dos proyecciones del mismo
+      # agregado con recortes distintos son la forma que hace a build emitir una variante
+      # <E>SummaryDto (es el sujeto que compila esa rama).
+      exclude: [recordWithdrawalAwaitingSince, category.recordWithdrawalAwaitingSince]
     errors:
       - code: PRODUCT_NOT_FOUND
         when: No existe un producto con ese id.

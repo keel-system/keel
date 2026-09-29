@@ -3036,9 +3036,13 @@ test('autoría: el AuditorAware se genera y nunca devuelve vacío', () => {
 
   const config = read(workspace, AUDITOR_CONFIG);
   assert.ok(config.includes('AuditorAware<String> auditorProvider()'));
-  // El principal del JWT es getName(): el claim que fijó JwtAuthConverter.
+  // El autor es el `sub` del JWT, no getName(): este devuelve el principalClaim del
+  // converter (preferred_username en Keycloak), que es mutable. Corrida catalog
+  // 2026-09-29: 47 escenarios en rojo por esta diferencia.
   assert.ok(config.includes('instanceof JwtAuthenticationToken token'));
-  assert.ok(config.includes('Optional.of(token.getName())'));
+  assert.ok(config.includes('token.getToken().getSubject()'));
+  assert.ok(config.includes('Optional.of(subject != null ? subject : token.getName())'));
+  assert.ok(!config.includes('Optional.of(token.getName())'));
   // Sin petición detrás hay centinela, no Optional.empty(): las columnas de
   // autoría son NOT NULL y el relay del outbox también escribe.
   assert.ok(!config.includes('Optional.empty()'));

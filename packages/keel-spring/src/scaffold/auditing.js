@@ -40,10 +40,13 @@ function renderAuditorAware(model) {
     'org.springframework.security.core.context.SecurityContextHolder'
   ];
 
-  // Con protocolo de token el principal es el JWT: getName() devuelve el claim que
-  // JwtAuthConverter fijó como principalClaim (preferred_username en Keycloak,
-  // username en Cognito, sub en el proveedor genérico). Con api-key el principal
-  // es el cliente máquina que autenticó el filtro, y getName() ya lo da.
+  // Con protocolo de token el autor es el SUJETO (`sub`) del JWT, no getName(): este
+  // devuelve el principalClaim que fijó JwtAuthConverter (preferred_username en
+  // Keycloak, username en Cognito), que es un nombre para mostrar y se puede cambiar.
+  // La autoría se guarda en cada fila y tiene que seguir señalando a la misma persona,
+  // así que va el identificador estable (dsl/persistence.md § audit). getName() solo
+  // queda de respaldo si el token no trae `sub`. Con api-key el principal es el
+  // cliente máquina que autenticó el filtro, y getName() ya lo da.
   const jwt = model.security?.protocol === 'oidc' || model.security?.protocol === 'jwt';
   if (jwt) imports.push('org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken');
 
@@ -53,7 +56,10 @@ function renderAuditorAware(model) {
   const principal = jwt
     ? `            Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
             if (authentication instanceof JwtAuthenticationToken token) {
-                return Optional.of(token.getName());
+                // El sujeto de la credencial, no el principalClaim del converter: es el
+                // identificador que no cambia aunque el usuario cambie de nombre.
+                String subject = token.getToken().getSubject();
+                return Optional.of(subject != null ? subject : token.getName());
             }`
     : `            Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
             if (authentication != null && authentication.isAuthenticated() && authentication.getName() != null) {
