@@ -21,15 +21,15 @@
 ## Convenciones de determinación
 
 - **Formato temporal**: instante en UTC ISO-8601 con milisegundos
-  (`2026-01-15T10:30:00.000Z`). `createdAt`/`updatedAt` se verifican **por forma**, nunca
-  por valor.
+  (`2026-01-15T10:30:00.000Z`). Los instantes que estampa el servicio se verifican **por
+  forma**, nunca por valor.
 - **Identificadores**: `uuid` v4 canónico, verificados por forma y por reutilización
   simbólica dentro del flujo (el `id` que devuelve un escenario es el que usa el siguiente).
 - **Ausencia vs nulo**: un campo sin valor **viaja como nulo** en el cuerpo JSON; nunca se
   omite. `labels` vacío viaja como `[]`, no como nulo.
-- **Autoría**: `audit.authorship: all`, así que `createdBy`/`updatedBy` los estampa la
-  infraestructura desde el principal del token. Se verifican **por forma** (no nulos), no
-  por valor: el sujeto depende del usuario con el que el arnés pida el token.
+- **Auditoría**: `audit.timestamps: all` y `audit.authorship: all`, así que el rastro lo
+  estampa la infraestructura para operar y auditar, y **no viaja en ningún contrato**: ningún
+  `Then` lo afirma en una respuesta (`docs/dsl/persistence.md`).
 - **Forma del cuerpo de error**: la que impone keel-spring —
   `{timestamp, status, error, code, message, details}` más `correlationId`. Los escenarios
   fijan solo el `code` y el status HTTP.
@@ -109,8 +109,8 @@ cubriéndolo en estático, que es lo que verifica lo que el `Then` no puede ver 
 **Then**:
 1. Status `201`.
 2. El cuerpo trae `id` (uuid), `slug` = `"informe-q1"`, `status` = `"draft"`,
-   `labels` con los dos valores en el orden enviado, `owner` resuelto con su `code`, y
-   `createdAt`/`createdBy` con forma válida.
+   `labels` con los dos valores en el orden enviado, y `owner` resuelto con su
+   `code`.
 3. `thumbnailDeliveryCount` = `0` y `lastDeliveredAt` = `null`: nadie ha servido todavía su
    miniatura.
 4. `GET /api/v1/assets/{id}` devuelve el mismo archivo con `ownerId` = `<o1>`.

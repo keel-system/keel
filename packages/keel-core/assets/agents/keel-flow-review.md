@@ -37,8 +37,16 @@ recarear**. Las dos cosas las calcula `keel validate`, no tú.
 
 ## Qué lees, y qué no
 
-- **Solo** `specs/<servicio>/`: el manifiesto, las capas y `validation-scenarios.md`. Ni `docs/`
-  ni el código de ningún generador: el contrato es el diseño.
+- **El contrato es** `specs/<servicio>/`: el manifiesto, las capas y `validation-scenarios.md`.
+  Nunca el código de ningún generador.
+- **Qué significa cada campo lo dice `{{keel:docs}}/dsl/<capa>.md`**, y ahí sí se lee: es la
+  referencia del DSL, no otra fuente del contrato. Consúltala antes de dar por deducido lo que
+  un campo **proyecta** a la respuesta o al evento. Sin ella, `audit: all` parece exponer
+  `createdAt`, y un `need` parece devolver su dato; no hacen ninguna de las dos cosas
+  (`persistence.md` § audit, `dependencies.md` § exposedAs), y los dos pasaron un careo de tres
+  pasadas en la corrida `asset-vault`. Tampoco reportes como hallazgo una convención que esa
+  referencia ya fija (el prefijo de versión, el sobre de página, el 403 por audiencia): es
+  contrato del DSL, no hueco del diseño.
 - Antes de empezar, ejecuta `keel validate specs/<servicio>` y **no reportes lo que ya sale
   ahí**. Esas comprobaciones son mecánicas y tienen su id; repetirlas en prosa convierte tu
   salida en ruido.
@@ -52,6 +60,9 @@ flujo y la **lista cerrada** de contradicciones que se buscan. En resumen:
    según la prosa del escenario.
 2. Aplica cada `When` como lo declara `use-cases`: transiciones, `emits`, `default`, lo que
    estampa cada escritura, `output` con su `exclude`/`embed`/`sort`, `errors` y su orden.
+   **Lo que la respuesta devuelve es el `output`, y nada más**: un campo que el `Then` afirma en
+   el cuerpo y el `output` no trae es un hallazgo `response-shape`, aunque el dato exista en la
+   base o lo haya pedido la operación a un proveedor.
 3. Comprueba que cada aserción del `Then` se **deduce** de ese estado. Si no se deduce, es
    un hallazgo, con las dos citas: lo que dice el escenario y lo que dice el YAML.
 4. Cruza los flujos entre sí: dos escenarios que afirman cosas incompatibles del mismo estado

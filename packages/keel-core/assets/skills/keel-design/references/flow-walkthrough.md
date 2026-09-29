@@ -30,6 +30,7 @@ verdadero porque suena bien.
 |---|---|---|
 | `carried-state` | Un paso anterior cambió algo que el `Then` da por intacto: `updatedAt`, un estado, un contador, una posición | catalog `FL-PRD-050`: «el primero es `p25`» con transiciones después de crear |
 | `event-payload` | El `Then` enumera un evento con campos que no casan con su payload en `messaging` (de más, de menos, o presentes cuando el `Given` no los rellena) | catalog `FL-PRD-001`: `ProductCreated` sin `description` |
+| `response-shape` | El `Then` afirma en la **respuesta** de una operación un campo que su `output` no devuelve: la auditoría con `audit` en `all` o `none`, el dato de un `need` sin `exposedAs`, un campo en el `exclude`. Es el gemelo de `event-payload` para el cuerpo HTTP: lo que no está en el contrato no viaja, por mucho que el escenario lo nombre | asset-vault `FL-AST-001` y `FL-AST-003`: `createdAt`/`createdBy` con `audit: all`, y la miniatura de un `need` sin `exposedAs` |
 | `count` | Un número del `Then` (operaciones, elementos, eventos) que el diseño no da | catalog `FL-SEC-001`: 21 operaciones donde hay 19 |
 | `evaluation-order` | Con dos guardas que fallan a la vez, el `Then` espera el error que el orden declarado no produce | — |
 | `unreachable-given` | El `Given` exige un estado al que ninguna operación o evento declarado lleva, o una identidad que `security` no declara | — |
@@ -74,7 +75,16 @@ El careo tiene **presupuesto: tres pasadas por versión del diseño** (`passes` 
 
 1. **No quedan hallazgos abiertos**: cada uno tiene su `resolution`.
 2. **Se agotó el presupuesto**: lo que queda **se decide**, no se recarea. El aviso cambia de id
-   (`CHK-SCEN-FLOW-REVIEW-EXHAUSTED`) y lo dice con esas palabras.
+   (`CHK-SCEN-FLOW-REVIEW-EXHAUSTED`) y lo dice con esas palabras. Decidir `scenario` es editar
+   el flujo, y eso rompe su sello. Para esa edición hay **resello acotado**: el hallazgo lleva
+   `sealAfter` con el sello nuevo del flujo, que `keel validate --ready` imprime.
+   - Solo vale sin presupuesto y solo para el flujo exacto del hallazgo.
+   - Cualquier otra edición vuelve a bloquear.
+   - Sin él, la única salida era aceptar un escenario que se sabe incorrecto, o subir de minor y
+     repetir revisión y barrido. En el par del MVP se aceptó así un `Then` de FL-DSP-001, y
+     `asset-vault` v1.2.0 se atascó aquí (corrida R8).
+   - El resello lo escribe el diseñador, no el agente.
+   - Un escenario resellado no lo ha careado nadie: corrige lo que dijo el hallazgo, y nada más.
 
 El motivo es que el careo no converge solo: cada pasada encuentra algo nuevo —sobre `catalog`
 0.1.1, ya corregido, salieron 24 hallazgos—, así que «carear hasta que no salga nada» es un gate

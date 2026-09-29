@@ -221,6 +221,63 @@ export function resolveUndecided(findings, doc, serviceVersion) {
 }
 
 /**
+ * Cruza los avisos que son INCOHERENCIAS (`nature: 'incoherence'` en checks.js) con los falsos
+ * positivos que decisions.yaml declara (`falsePositives`).
+ *
+ * Una incoherencia no se acepta: se corrige. Pero los detectores leen prosa y heurísticas, y un
+ * detector se equivoca; sin salida, un falso positivo bloquearía `keel validate --ready` hasta que
+ * alguien arreglase el detector. Esta es esa salida, y no es una aceptación: declara que el
+ * DETECTOR se equivocó, con el motivo, y cada entrada es deuda de keel-core. Hasta el
+ * 2026-09-28 las incoherencias no contaban en ninguna puerta, y un diseño en 10/10 cruzó a
+ * generación con tres a la vista que lo dejaron en rojo (`asset-vault`, corrida R8).
+ *
+ * La clave es `id` + `match`: el aviso casa si su mensaje contiene `match` (la unidad que nombra,
+ * `roles.vault-custodian`, `FL-AST-003`). Caduca con el minor, como las aceptaciones.
+ *
+ * @param {Array<{id: string, severity: string, message: string}>} findings los de crossrefs
+ * @param {object|null} doc contenido de decisions.yaml ya validado
+ * @param {string} serviceVersion service.version del manifiesto
+ * @returns {{ open: object[], excused: object[], stale: object[], orphans: object[], errors: string[] }}
+ */
+export function resolveIncoherences(findings, doc, serviceVersion) {
+  const result = { open: [], excused: [], stale: [], orphans: [], errors: [] };
+  const entries = [];
+  for (const entry of doc?.falsePositives ?? []) {
+    const catalogued = checkFor(entry.id);
+    if (!catalogued) {
+      result.errors.push(`${DECISIONS_FILE}: falsePositives '${entry.id}' no está en el catálogo de comprobaciones (checks.js)`);
+      continue;
+    }
+    if (catalogued.nature !== 'incoherence' || catalogued.severity !== 'warning') {
+      result.errors.push(
+        `${DECISIONS_FILE}: falsePositives '${entry.id}' no es un aviso de incoherencia — ` +
+          (catalogued.nature === 'undecided' ? `es una decisión: se acepta en 'decisions' con su scope` : 'un error no admite excusa')
+      );
+      continue;
+    }
+    entries.push({ entry, used: false });
+  }
+
+  for (const finding of findings ?? []) {
+    const catalogued = checkFor(finding.id);
+    if (finding.severity !== 'warning' || catalogued?.nature !== 'incoherence') continue;
+    const item = { id: finding.id, message: finding.message };
+    const hit = entries.find(({ entry }) => entry.id === finding.id && finding.message.includes(entry.match));
+    if (!hit) {
+      result.open.push(item);
+      continue;
+    }
+    hit.used = true;
+    const excuse = { ...item, match: hit.entry.match, since: hit.entry.since, reason: hit.entry.reason };
+    if (versionShape(hit.entry.since) !== versionShape(serviceVersion)) result.stale.push(excuse);
+    else result.excused.push(excuse);
+  }
+
+  for (const { entry, used } of entries) if (!used) result.orphans.push(entry);
+  return result;
+}
+
+/**
  * Los avisos tal como se enseñan al diseñador: sin los que decisions.yaml ya acepta, y con la
  * pista que cierra cada decisión abierta o caducada.
  *
@@ -231,28 +288,41 @@ export function resolveUndecided(findings, doc, serviceVersion) {
  *
  * @param {string[]} warnings los de validateService
  * @param {{ open: object[], accepted: object[], stale: object[] }} undecided los de resolveUndecided
- * @returns {{ shown: Array<{ message: string, hint: string|null }>, accepted: number }}
+ * @param {{ open: object[], excused: object[], stale: object[] }} [incoherences] los de resolveIncoherences
+ * @returns {{ shown: Array<{ message: string, hint: string|null }>, accepted: number, excused: number }}
  */
-export function classifyWarnings(warnings, undecided) {
+export function classifyWarnings(warnings, undecided, incoherences = null) {
   const byMessage = new Map();
+  for (const item of incoherences?.excused ?? []) byMessage.set(item.message, { item, state: 'excused' });
+  for (const item of incoherences?.stale ?? []) byMessage.set(item.message, { item, state: 'excused-stale' });
+  for (const item of incoherences?.open ?? []) byMessage.set(item.message, { item, state: 'incoherent' });
   for (const item of undecided?.accepted ?? []) byMessage.set(item.message, { item, state: 'accepted' });
   for (const item of undecided?.stale ?? []) byMessage.set(item.message, { item, state: 'stale' });
   for (const item of undecided?.open ?? []) byMessage.set(item.message, { item, state: 'open' });
 
   const shown = [];
   let accepted = 0;
+  let excused = 0;
   for (const message of warnings ?? []) {
     const decision = byMessage.get(message);
     if (decision?.state === 'accepted') {
       accepted += 1;
       continue;
     }
+    if (decision?.state === 'excused') {
+      excused += 1;
+      continue;
+    }
     shown.push({ message, hint: decision ? hintFor(decision) : null });
   }
-  return { shown, accepted };
+  return { shown, accepted, excused };
 }
 
 function hintFor({ item, state }) {
+  if (state === 'incoherent') {
+    return `incoherencia (${item.id}): corrígela en el diseño; si el que se equivoca es el detector, decláralo en ${DECISIONS_FILE} → falsePositives`;
+  }
+  if (state === 'excused-stale') return `falso positivo declarado en v${item.since}: el diseño cambió, reafírmalo en ${DECISIONS_FILE}`;
   if (state === 'stale') return `aceptada en v${item.since}: el diseño cambió, reafírmala en ${DECISIONS_FILE}`;
   if (item.waivable) {
     return `decisión sin tomar: ciérrala en el DSL o acéptala en ${DECISIONS_FILE} — id: ${item.id}, scope: ${item.scope}`;

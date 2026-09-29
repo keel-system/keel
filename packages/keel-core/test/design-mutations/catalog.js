@@ -949,6 +949,30 @@ export const MUTATIONS = [
       ),
     expect: ['CHK-SCEN-CONVENTION-UNBACKED']
   },
+  {
+    id: 'M-SCEN-AUDIT-NOT-EXPOSED',
+    title: 'un Then que afirma createdAt en la respuesta con audit.timestamps: all',
+    mutate: (d) =>
+      replaceIn(
+        d,
+        '**Then** responde 201 y el ticket nace en `open`.',
+        '**Then** responde 201 con `createdAt` con forma de instante, y el ticket nace en `open`.'
+      ),
+    expect: ['CHK-SCEN-AUDIT-NOT-EXPOSED']
+  },
+  {
+    id: 'M-SCEN-NEED-NOT-EXPOSED',
+    title: 'un Then que repite en la respuesta lo que devolvió el proveedor de un need sin exposedAs',
+    mutate: (d) => {
+      replaceIn(
+        d,
+        '**Given** un ticket existente y el directorio contestando.',
+        '**Given** un ticket existente y `directory.getProfile` responde `{displayName: "Ana Ruiz"}`.'
+      );
+      replaceIn(d, '**Then** responde 200 con el ticket.', '**Then** responde 200 con el ticket y el solicitante "Ana Ruiz".');
+    },
+    expect: ['CHK-SCEN-NEED-NOT-EXPOSED']
+  },
 
   // ─── R5, tanda A: los avisos de domain, use-cases y api que eran anónimos ────
   {

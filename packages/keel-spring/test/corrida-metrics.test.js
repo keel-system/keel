@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
-import { footprint, byDirectory, parseCorrida, series } from '../src/lib/corrida-metrics.js';
+import { footprint, byDirectory, parseCorrida, series, verdict } from '../src/lib/corrida-metrics.js';
 import { tmpDir } from './helpers/tmp.js';
 import { FIXTURES_DIR } from './helpers/workspace.js';
 
@@ -45,7 +45,7 @@ test('lo que el agente reescribe y lo que borra se cuenta aparte, y lo añadido 
   assert.deepEqual(byDirectory(result.rewritten), [[path.posix.dirname(touched), [path.posix.basename(touched)]]]);
 });
 
-const corrida = ({ listo, huella, huecos, gaps = [] }) =>
+const corrida = ({ listo, huella, huecos, gaps = [], extra = {} }) =>
   [
     '# Corrida',
     '',
@@ -55,6 +55,7 @@ const corrida = ({ listo, huella, huecos, gaps = [] }) =>
     ...(listo ? [`| Diseño listo al generar | ${listo} |`] : []),
     ...(huella ? [`| Huella del agente | ${huella} |`] : []),
     ...(huecos ? [`| Huecos del diseño | ${huecos} |`] : []),
+    ...Object.entries(extra).map(([label, value]) => `| ${label} | ${value} |`),
     '',
     ...(gaps.length ? ['## designGaps', '', ...gaps.map((key) => `- \`${key}\` — algo que el diseño no dijo`), ''] : []),
     '## Otra sección',
@@ -90,4 +91,81 @@ test('la serie cuenta el uso de --accept-unready y encuentra los designGap repet
   assert.deepEqual(result.corridas.map((entry) => entry.name), ['2026-01-01-a', '2026-01-02-b'], 'el README no es una corrida');
   assert.equal(result.acceptedUnready, 1);
   assert.deepEqual(result.repeated, [['orden-callback', ['2026-01-01-a', '2026-01-02-b']]]);
+});
+
+// ─── El plan de validación de R8: etiquetas nuevas y el veredicto de H1 ─────────────
+//
+// Los criterios se fijaron antes de correr (recomendaciones-diseno.md § R8). Estos casos atan el
+// veredicto a ellos: si alguien los afloja en el código, cae aquí y no en la lectura de la serie.
+
+const medida = (name, { huecos = '0', agujeros = '0', careo = '9→3→0', listo = 'sí', gaps = [], papel } = {}) =>
+  parseCorrida(
+    name,
+    corrida({
+      listo,
+      huecos,
+      gaps,
+      extra: {
+        'Agujeros de la puerta': agujeros,
+        'Huecos del generador': '2',
+        'Coste del diseño': `careo ${careo}; barrido 12; revisión 3`,
+        ...(papel ? { Papel: papel } : {})
+      }
+    })
+  );
+
+test('las etiquetas nuevas se leen, y en una corrida vieja salen null', () => {
+  const nueva = medida('2026-10-01-x-r8', { careo: '13→6→0', papel: 'Control' });
+  assert.equal(nueva.gateHoles, 0);
+  assert.equal(nueva.generatorGaps, 2);
+  assert.deepEqual(nueva.careoPasses, [13, 6, 0]);
+  assert.equal(nueva.role, 'control');
+
+  const vieja = parseCorrida('2026-09-01-y', corrida({ listo: 'sí' }));
+  assert.equal(vieja.gateHoles, null);
+  assert.equal(vieja.careoPasses, null);
+  assert.equal(vieja.role, null);
+});
+
+test('H1: robusta con tres corridas de medición limpias; el control y las antiguas no cuentan', () => {
+  const corridas = [
+    parseCorrida('2026-09-20-antigua', corrida({ listo: 'anterior a la puerta', huecos: '10' })),
+    medida('2026-10-01-mailer-r8', { huecos: '5', papel: 'control' }),
+    medida('2026-10-02-a-r8'),
+    medida('2026-10-03-b-r8', { huecos: '1', gaps: ['uno'] }),
+    medida('2026-10-04-c-r8')
+  ];
+  assert.deepEqual(verdict(corridas), { status: 'robusta', measured: 3, reasons: [] });
+  // Con dos, todavía no hay veredicto.
+  assert.equal(verdict(corridas.slice(0, 4)).status, 'en-curso');
+});
+
+test('H1: no robusta por un agujero de la puerta, por un repetido o por --accept-unready', () => {
+  const base = [medida('2026-10-02-a-r8'), medida('2026-10-03-b-r8'), medida('2026-10-04-c-r8')];
+  const conAgujero = [...base.slice(0, 2), medida('2026-10-04-c-r8', { huecos: '1', agujeros: '1' })];
+  assert.equal(verdict(conAgujero).status, 'no-robusta');
+  assert.match(verdict(conAgujero).reasons.join('\n'), /agujero/);
+
+  const repetido = [medida('2026-10-02-a-r8', { huecos: '1', gaps: ['k'] }), medida('2026-10-03-b-r8', { huecos: '1', gaps: ['k'] }), base[2]];
+  assert.match(verdict(repetido).reasons.join('\n'), /repetido 'k'/);
+
+  const rodeada = [...base.slice(0, 2), medida('2026-10-04-c-r8', { listo: 'no, con --accept-unready (gaps)' })];
+  assert.equal(verdict(rodeada).status, 'no-robusta');
+});
+
+test('H1: no robusta si hay huecos en dos corridas o el careo no converge; en curso si falta medir', () => {
+  const dosConHuecos = [medida('2026-10-02-a-r8', { huecos: '1', gaps: ['a'] }), medida('2026-10-03-b-r8', { huecos: '1', gaps: ['b'] }), medida('2026-10-04-c-r8')];
+  assert.equal(verdict(dosConHuecos).status, 'no-robusta');
+
+  const sinConverger = [medida('2026-10-02-a-r8', { careo: '5→8→2' }), medida('2026-10-03-b-r8'), medida('2026-10-04-c-r8')];
+  assert.match(verdict(sinConverger).reasons.join('\n'), /no convergió/);
+
+  const sinClasificar = [
+    parseCorrida('2026-10-02-a-r8', corrida({ listo: 'sí', huecos: '0' })),
+    medida('2026-10-03-b-r8'),
+    medida('2026-10-04-c-r8')
+  ];
+  const pendiente = verdict(sinClasificar);
+  assert.equal(pendiente.status, 'en-curso');
+  assert.match(pendiente.reasons.join('\n'), /sin clasificar/);
 });

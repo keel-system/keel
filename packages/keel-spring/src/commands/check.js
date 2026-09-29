@@ -116,7 +116,7 @@ export function check(inputPath, { database = null, strict = false } = {}) {
     blocking += 1;
   }
   // Lo que decisions.yaml ya acepta no es un aviso: se contestó (misma vara que keel validate).
-  for (const { message } of classifyWarnings(validation.warnings, validation.undecided).shown) {
+  for (const { message } of classifyWarnings(validation.warnings, validation.undecided, validation.incoherences).shown) {
     bullet('yellow', message);
     notices += 1;
   }

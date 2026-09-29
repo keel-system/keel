@@ -75,7 +75,7 @@ export function validate(inputPath, options = {}) {
     return;
   }
 
-  const { manifest, layers, loadErrors, schemaErrors, crossRefErrors, warnings, pending, obligations, undecided, reviews, gaps } =
+  const { manifest, layers, loadErrors, schemaErrors, crossRefErrors, warnings, pending, obligations, undecided, incoherences, reviews, gaps } =
     validateService(dir, { wip });
 
   if (loadErrors.length > 0 && !manifest) {
@@ -100,7 +100,7 @@ export function validate(inputPath, options = {}) {
   }
 
   for (const message of pending) console.warn(`${pc.yellow('⚠')} ${message}`);
-  printWarnings(warnings, undecided);
+  printWarnings(warnings, undecided, incoherences);
 
   if (crossRefErrors.length > 0) {
     console.error(pc.bold(pc.red(`✘ Referencias cruzadas — ${crossRefErrors.length} error(es):`)));
@@ -113,6 +113,12 @@ export function validate(inputPath, options = {}) {
     console.warn(
       `${pc.yellow('⚠')} ${DECISIONS_FILE}: '${entry.id}' sobre '${entry.scope}' ya no la levanta el diseño — ` +
         'la decisión describe un hueco que no existe; bórrala'
+    );
+  }
+  for (const entry of incoherences.orphans) {
+    console.warn(
+      `${pc.yellow('⚠')} ${DECISIONS_FILE}: el falso positivo '${entry.id}' («${entry.match}») ya no sale — ` +
+        'el detector o el diseño cambiaron; bórralo'
     );
   }
 
@@ -199,7 +205,10 @@ export function validate(inputPath, options = {}) {
   const layerList = Object.keys(layers).join(', ');
   const totalAceptadas = obligations.accepted.length + undecided.accepted.length;
   const aceptadas =
-    totalAceptadas > 0 ? pc.dim(` — ${totalAceptadas} decisión(es) aceptada(s) en ${DECISIONS_FILE}`) : '';
+    (totalAceptadas > 0 ? pc.dim(` — ${totalAceptadas} decisión(es) aceptada(s) en ${DECISIONS_FILE}`) : '') +
+    (incoherences.excused.length > 0
+      ? pc.dim(` — ${incoherences.excused.length} falso(s) positivo(s) declarado(s): deuda de los detectores`)
+      : '');
   if (wip && pending.length > 0) {
     console.log(
       pc.bold(pc.yellow('✔ Diseño en progreso')) +
@@ -221,6 +230,10 @@ export function validate(inputPath, options = {}) {
       pc.dim(`  ${sinDecidir} aviso(s) son decisiones sin tomar: no impiden generar, pero sí keel validate --ready.`)
     );
   }
+  const incoherentes = incoherences.open.length + incoherences.stale.length;
+  if (incoherentes > 0) {
+    console.log(pc.dim(`  ${incoherentes} aviso(s) son incoherencias: no impiden generar, pero sí keel validate --ready.`));
+  }
   console.log(pc.dim('Recuerda la capa semántica: /keel-validate en tu agente revisa la calidad del diseño.'));
 }
 
@@ -233,8 +246,8 @@ export function validate(inputPath, options = {}) {
  * admite aceptación, que se decide en el DSL. Sin eso, el scope que exige decisions.yaml
  * habría que adivinarlo.
  */
-function printWarnings(warnings, undecided) {
-  for (const { message, hint } of classifyWarnings(warnings, undecided).shown) {
+function printWarnings(warnings, undecided, incoherences) {
+  for (const { message, hint } of classifyWarnings(warnings, undecided, incoherences).shown) {
     console.warn(`${pc.yellow('⚠')} ${message}`);
     if (hint) console.warn(pc.dim(`    ${hint}`));
   }

@@ -51,16 +51,24 @@ function printFootprint(dir) {
 }
 
 function printSeries(dir) {
-  const { corridas, repeated, acceptedUnready } = series(dir);
+  const { corridas, repeated, acceptedUnready, verdict } = series(dir);
   const cell = (value) => (value == null ? '—' : String(value));
+  // Las columnas del plan de validación solo salen cuando alguna corrida las midió: la serie
+  // anterior se sigue leyendo exactamente igual.
+  const extended = corridas.some((corrida) => corrida.gateHoles != null || corrida.generatorGaps != null);
   console.log(`Serie de corridas — ${dir}\n`);
-  console.log('| corrida | listo al generar | reescritos | borrados | registrados | huecos del diseño |');
-  console.log('|---|---|---|---|---|---|');
+  console.log(
+    `| corrida | listo al generar | reescritos | borrados | registrados | huecos del diseño |${extended ? ' huecos del generador | agujeros de la puerta | careo |' : ''}`
+  );
+  console.log(`|---|---|---|---|---|---|${extended ? '---|---|---|' : ''}`);
   for (const corrida of corridas) {
     const listo =
       corrida.ready === true ? 'sí' : corrida.ready === false ? `no${corrida.acceptedUnready ? ' (--accept-unready)' : ''}` : '—';
+    const extra = extended
+      ? ` ${cell(corrida.generatorGaps)} | ${cell(corrida.gateHoles)} | ${corrida.careoPasses ? corrida.careoPasses.join('→') : '—'} |`
+      : '';
     console.log(
-      `| ${corrida.name} | ${listo} | ${cell(corrida.rewritten)} | ${cell(corrida.deleted)} | ${cell(corrida.registered)} | ${cell(corrida.designGaps)} |`
+      `| ${corrida.name}${corrida.role === 'control' ? ' (control)' : ''} | ${listo} | ${cell(corrida.rewritten)} | ${cell(corrida.deleted)} | ${cell(corrida.registered)} | ${cell(corrida.designGaps)} |${extra}`
     );
   }
   console.log(`\nGeneradas con --accept-unready: ${acceptedUnready} de ${corridas.length}`);
@@ -69,6 +77,8 @@ function printSeries(dir) {
     console.log('designGap repetidos entre corridas (candidatos obligatorios a id):');
     for (const [key, names] of repeated) console.log(`  ${key}: ${names.join(', ')}`);
   }
+  console.log(`\nVeredicto H1 (plan de validación de R8): ${verdict.status.toUpperCase()} — ${verdict.measured} corrida(s) de medición`);
+  for (const reason of verdict.reasons) console.log(`  - ${reason}`);
 }
 
 try {

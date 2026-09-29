@@ -161,6 +161,7 @@ export async function build(
     pending,
     obligations,
     undecided,
+    incoherences,
     reviews,
     ok
   } = validation;
@@ -172,7 +173,7 @@ export async function build(
     for (const message of pending) console.error(`  ${pc.red('•')} ${message}`);
   }
   // Lo que decisions.yaml ya acepta no se repite: es lo mismo que enseña `keel validate`.
-  const avisos = classifyWarnings(warnings, undecided);
+  const avisos = classifyWarnings(warnings, undecided, incoherences);
   for (const { message, hint } of avisos.shown) {
     console.warn(`${pc.yellow('⚠')} ${message}`);
     if (hint) console.warn(pc.dim(`    ${hint}`));

@@ -229,7 +229,78 @@ La misma disciplina que ya funciona en keel-spring, aplicada al diseño:
 > - La corrida anterior del mismo servicio, sin la puerta, reescribió **casi los mismos archivos** (21 de 293), así que el número no baja. Lo que cambia es el origen: 16 de los 23 son TODO legítimos o consultas de negocio, y los 7 restantes son huecos del **generador**, con el diseño declarando lo necesario.
 > - Tres de esos huecos se repiten entre las dos corridas: el mapeo de constraints únicas a los codes declarados, el `eventId` que no llega al comando y los TODO de siempre.
 > - Conclusión provisional: el diseño cerrado elimina los huecos del diseño, y el reproceso que queda en este servicio es del generador. Con un solo punto no hay serie: hace falta repetirlo con otro servicio.
+>
+> **Plan de validación (fijado el 2026-09-28, antes de correr).** La pregunta es si un diseño que cruza `--ready` deja decisiones al agente generador. **H1**: no le deja ninguna. Los criterios los fija `verdict()` (`keel-spring/src/lib/corrida-metrics.js`), `corrida-metrics.js series` imprime el veredicto, y la rúbrica de atribución está en `docs/corridas/README.md` § Clasificar un reescrito.
+> - **Robusta** si se cumplen todas estas condiciones:
+>   - al menos tres corridas de medición (`-r8`, sin papel `control`);
+>   - como mucho un hueco del diseño en toda la serie, convertido en id antes de la siguiente;
+>   - ningún `designGap` repetido;
+>   - ninguna corrida con `--accept-unready`;
+>   - un careo que cierra en tres pasadas o menos, con hallazgos que no crecen.
+> - **No robusta** si aparece cualquier agujero de la puerta, es decir, un hueco que `--ready` o `gap-analysis.md` debía haber cazado.
+> - **Secuencia**:
+>   0. `notification-mailer` v2.0.2 como **control** del generador, con el mismo stack que la del 27-09.
+>   1. `stock-reservation`, con línea base de 10 huecos sin la puerta.
+>   2. `asset-vault`, documental, con storage y caché.
+>   3. Un **diseño nuevo desde un brief**: reservas de salas con solapes (recomendado), facturación prorrateada o incidencias con SLA.
+>
+>   Cada diseño se lleva a `--ready` en un workspace fresco. La generación va en otra sesión, y la clasificación la hace un agente de contexto limpio.
+>
+> **Resultado (2026-09-28): `corrida-metrics.js series` → «Veredicto H1: NO-ROBUSTA — 3 corrida(s) de medición».** Motivos, literales:
+> - `2026-09-28-asset-vault-r8: 2 agujero(s) de la puerta`
+> - `huecos del diseño en 2026-09-28-asset-vault-r8 (2): el criterio admite uno solo, en una sola corrida`
+>
+> | Corrida | Matriz | Reescritos | Diseño | Generador | Puerta | Careo |
+> |---|---|---|---|---|---|---|
+> | 0 · control `notification-mailer` | 58/58 | 18 (antes 23) | 0 | 5 | 0 | — |
+> | 1 · `stock-reservation` | 27/27 | 14 | **0** (antes 10) | 4 | 0 | 11→1 |
+> | 2 · `asset-vault` | 27/29 | 27 | **2** | 9 | **2** | 23→9→2 |
+> | 3 · `room-booking` (nuevo) | 44/44 | 27 | 0 | 6 | 0 | 5 |
+>
+> Lectura:
+> - **La puerta funciona en tres de tres dimensiones medibles y falla en una forma concreta.**
+>   - `stock-reservation` pasa de 10 huecos del diseño a 0.
+>   - El diseño nuevo converge antes (careo en una pasada) y genera sin dejar decisiones.
+>   - El control confirma los arreglos del generador: los siete archivos que el 27-09 eran huecos del generador ya no aparecen.
+> - **El agujero es uno, visto dos veces**: un `Then` que afirma en el cuerpo de la respuesta un campo que el YAML no pone en el `output`.
+>   - Con `audit: all`, `createdAt`/`createdBy`.
+>   - Con un `need` sin `exposedAs`, la miniatura.
+>   - El agente eligió al revés en cada caso, y la corrida quedó en rojo por el primero.
+>   - Ni el careo (tiene `event-payload`, pero ningún kind para las respuestas) ni las clases 8 y 14 del análisis de huecos lo preguntan.
+> - **El residuo del generador es ahora la fuente principal del reproceso**: 24 huecos distintos entre las cuatro corridas, ninguno repetido.
+>   - El más grave es el barrido de `room-booking`: sus reclamos sin predicado habrían caducado ofertas vigentes.
+>   - Ahí asoma un límite del DSL: no hay dónde declarar el predicado de selección de un barrido.
+>
+> Por la regla de parada temprana: se arregla el método (un `CHK-SCEN-*` para campos de respuesta fuera del `output`, un kind `response-shape` en el careo y las preguntas de las clases 8 y 14), y `asset-vault` se repite sobre una versión nueva del diseño. H1 se vuelve a evaluar con esa corrida.
+>
+> **Método arreglado (2026-09-28).**
+> - Dos ids nuevos, avisos de naturaleza `incoherence`, cada uno con su mutación: `CHK-SCEN-AUDIT-NOT-EXPOSED` y `CHK-SCEN-NEED-NOT-EXPOSED`. La matriz de la puerta sube a 142 ids falsados.
+> - La operación de un `When` se resuelve también por método y ruta.
+> - El careo gana el kind `response-shape` y lee `docs/dsl/` para la semántica de los campos (hallazgo del método 4).
+> - Las clases 8 y 14 cruzan su pregunta con los escenarios.
+> - Sobre el diseño de la corrida, las dos comprobaciones cazan los tres sitios. Sobre las otras fixtures y los diseños r8 no hay falsos positivos. La fixture `asset-vault` de keel-spring tenía la misma contradicción de auditoría y se corrigió.
 
+>
+> **La puerta tenía un tercer agujero (2026-09-28).** Los avisos de naturaleza `incoherence` (69 ids) no contaban en ningún criterio de `--ready`: asset-vault v1.1.0 cruzó en 10/10 con sus tres contradicciones a la vista.
+> - Entra el criterio `incoherences`, y `--ready` pasa a tener 11 criterios.
+> - El escape es `falsePositives` en `decisions.yaml`, con id, fragmento, motivo y caducidad por minor. Se cuenta como deuda de los detectores.
+> - Queda arreglado el falso positivo de `CHK-SEC-UNUSED-ROLE` con reglas por permiso (hallazgo del método 1).
+> - `CHK-USECASES-MULTI-AGGREGATE` no se toca, por doctrina: **room-booking v1.0.0 sale ahora en rojo** por 6 de esos avisos.
+>
+> **Y un punto muerto en el careo**: tras la pasada 3, corregir un escenario (`resolution: scenario`) rompía su sello, sin salida. Entra el **resello acotado** (`sealAfter`): sin presupuesto, solo el flujo exacto del hallazgo y solo con ese texto.
+>
+> **asset-vault v1.2.0, listo en 11/11.** El coste fue alto:
+> - Revisión: `7→1`.
+> - Barrido: `12→7→4`.
+> - Careo: `6→4→4`.
+>
+> Casi todo estaba en partes que la v1.2.0 no tocó y que en la v1.1.0 habían salido limpias. Varios hallazgos eran serios: un veredicto `infected` síncrono que nunca ponía en cuarentena, la clave de `scanAsset` compartida en el tick, y la ficha cacheada que sobrevivía a la cuarentena. **El veredicto de los agentes de contexto limpio no es estable entre pasadas, y un 10/10 depende de qué encontró cada una.** Eso cuestiona H1 por un lado que la serie no mide: la puerta es sólida en lo mecánico, pero en lo que juzga un lector depende de su recall.
+>
+> Quedan dos huecos del DSL aceptados como prosa, para el método:
+> - un campo `file` privado que la respuesta entrega como URL firmada;
+> - la exención de alcance de un cliente máquina (hallazgo 2).
+>
+> Y uno de documentación: qué cuenta como fallo del circuito y desde cuántas llamadas se evalúa. Falta repetir la corrida de asset-vault sobre la v1.2.0.
 ---
 
 ### R9. Llevar el par del MVP a «listo» · validación del propio método

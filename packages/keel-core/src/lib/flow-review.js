@@ -127,7 +127,23 @@ export function flowReviewPlan(dir, scenariosContent, { serviceVersion = null } 
   // simuló de los demás salía de un diseño que ya no es este.
   const designChanged = findings.some((finding) => finding.resolution === 'design');
   const sealed = new Map((doc.flows ?? []).map((entry) => [entry.id, entry.sha256]));
-  const changed = blocks.filter((block) => sealed.get(block.id) !== block.digest).map((block) => block.id);
+  // El resello acotado. Agotado el presupuesto, lo abierto se DECIDE, y decidir `scenario` es
+  // editar el flujo: su sello deja de casar y, sin esto, el careo quedaba `exhausted` sin salida
+  // salvo aceptar un escenario que se sabe incorrecto o subir de minor, que caduca todo lo demás.
+  // Así se aceptó FL-DSP-001 en el par del MVP, y así se atascó asset-vault v1.2.0 (corrida R8).
+  // Solo vale sin presupuesto, solo para el flujo exacto del hallazgo, y solo mientras su texto
+  // sea el que `sealAfter` dice: una edición más lo devuelve a bloquear.
+  const resealed = new Set(
+    budgetLeft
+      ? []
+      : findings
+          .filter((finding) => finding.resolution === 'scenario' && finding.sealAfter)
+          .filter((finding) => blocks.some((block) => block.id === finding.flow && block.digest === finding.sealAfter))
+          .map((finding) => finding.flow)
+  );
+  const changed = blocks
+    .filter((block) => sealed.get(block.id) !== block.digest && !resealed.has(block.id))
+    .map((block) => block.id);
   // Un flujo con un hallazgo `cross-flow` vuelve a entrar aunque su propio texto no haya
   // cambiado: ESE hallazgo dice que depende de otro flujo, así que corregir el otro puede
   // haberlo movido. Los demás hallazgos no arrastran a nadie — meter todo flujo que alguna vez
@@ -143,7 +159,7 @@ export function flowReviewPlan(dir, scenariosContent, { serviceVersion = null } 
   const conventionsChanged =
     doc.conventionsSha256 != null
       ? doc.conventionsSha256 !== conventionsDigest(scenariosContent)
-      : doc.scenariosSha256 !== scenariosDigest(scenariosContent) && changed.length === 0;
+      : doc.scenariosSha256 !== scenariosDigest(scenariosContent) && changed.length === 0 && resealed.size === 0;
   const fullPass = designChanged || conventionsChanged;
   const scope = fullPass
     ? blocks.map((b) => b.id)
@@ -153,9 +169,19 @@ export function flowReviewPlan(dir, scenariosContent, { serviceVersion = null } 
 
   const stale = scope.length > 0;
   if (stale && !budgetLeft) {
+    // Lo que se puede resellar: los flujos del alcance con un hallazgo resuelto `scenario`. Se
+    // imprime el sello a escribir, porque sin él la salida no se puede tomar a mano.
+    const resellable = fullPass
+      ? []
+      : scope.filter((id) => findings.some((finding) => finding.flow === id && finding.resolution === 'scenario'));
+    const hint = resellable.length
+      ? `; resella los corregidos con sealAfter en su hallazgo: ${resellable
+          .map((id) => `${id} → ${blocks.find((block) => block.id === id).digest}`)
+          .join(', ')}`
+      : '';
     return {
       status: 'exhausted',
-      detail: `el careo no describe los escenarios de ahora y ya se han hecho ${passes} pasadas sobre esta versión (tope ${MAX_PASSES})`,
+      detail: `el careo no describe los escenarios de ahora y ya se han hecho ${passes} pasadas sobre esta versión (tope ${MAX_PASSES})${hint}`,
       passes,
       nextPass: null,
       scope,

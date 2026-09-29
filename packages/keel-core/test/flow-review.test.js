@@ -118,6 +118,35 @@ test('el presupuesto se agota: con hallazgos abiertos se DECIDE, no se recarea',
   assert.equal(plan.status, 'exhausted');
 });
 
+test('agotado el presupuesto, el flujo corregido por un hallazgo `scenario` se resella con sealAfter, y solo ese', () => {
+  // El punto muerto que destapó asset-vault v1.2.0 (corrida R8): decidir `scenario` tras la última
+  // pasada es editar el flujo, y su sello deja de casar. Sin resello, la única salida era aceptar
+  // un escenario incorrecto o subir de minor.
+  const corregido = SCENARIOS.replace('Status `201`', 'Status `200`');
+  const digest = flowDigests(corregido).find((entry) => entry.id === 'FL-PRD-001').digest;
+  const conHallazgo = (extra, passes = MAX_PASSES) =>
+    reviewOf(SCENARIOS, { passes, findings: [finding({ resolution: 'scenario', ...extra })] });
+
+  const sinResello = flowReviewPlan(dirWith(conHallazgo({}), corregido), corregido);
+  assert.equal(sinResello.status, 'exhausted');
+  assert.match(sinResello.detail, new RegExp(`FL-PRD-001 → ${digest}`), 'el detalle dice qué sello escribir');
+
+  assert.equal(flowReviewPlan(dirWith(conHallazgo({ sealAfter: digest }), corregido), corregido).status, 'ok');
+
+  // Un sello que no es el del texto actual —se volvió a editar— no resella.
+  const otraVez = corregido.replace('Status `200`', 'Status `202`');
+  assert.equal(flowReviewPlan(dirWith(conHallazgo({ sealAfter: digest }), otraVez), otraVez).status, 'exhausted');
+
+  // Otro flujo cambiado sin hallazgo detrás sigue bloqueando.
+  const yOtro = corregido.replace('Status `401`', 'Status `403`');
+  assert.equal(flowReviewPlan(dirWith(conHallazgo({ sealAfter: digest }), yOtro), yOtro).status, 'exhausted');
+
+  // Con presupuesto, el camino es recarear: el resello no se aplica.
+  const conMargen = flowReviewPlan(dirWith(conHallazgo({ sealAfter: digest }, 1), corregido), corregido);
+  assert.equal(conMargen.status, 'stale');
+  assert.deepEqual(conMargen.scope, ['FL-PRD-001']);
+});
+
 test('subir la versión del diseño devuelve presupuesto', () => {
   // El careo va sellado con `reviewedAt`: otra versión es otro diseño, y le toca su careo. No es
   // una escotilla — es la misma caducidad que ya gobierna review.yaml y decisions.yaml.

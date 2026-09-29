@@ -4,7 +4,7 @@ import Ajv2020Module from 'ajv/dist/2020.js';
 import { LAYERS, schemaPathFor } from './assets.js';
 import { MANIFEST_FILE, loadService } from './loader.js';
 import { checkCrossRefs } from './crossrefs.js';
-import { loadDecisions, resolveObligations, resolveUndecided } from './decisions.js';
+import { loadDecisions, resolveObligations, resolveUndecided, resolveIncoherences } from './decisions.js';
 import { loadReviews, resolveReviews } from './review-state.js';
 import { applicableReviews } from './reviews.js';
 import { gapInventory } from './gap-classes.js';
@@ -92,6 +92,7 @@ function readScenarios(dir) {
  *     pending,           // strings: plantillas/placeholders (+ pendientes cross-ref en wip)
  *     obligations        // { open, accepted, stale, orphans, errors } — decisiones con id
  *     undecided          // { open, accepted, stale, orphans, errors } — avisos que son decisiones
+ *     incoherences       // { open, excused, stale, orphans, errors } — avisos que son contradicciones
  *   }
  *
  * Las obligaciones son el canal que separa «esto está roto» de «esto está sin decidir». Una
@@ -113,6 +114,7 @@ export function validateService(dir, { wip = false } = {}) {
     pending: [],
     obligations: { open: [], accepted: [], stale: [], orphans: [], errors: [] },
     undecided: { open: [], accepted: [], stale: [], orphans: [], errors: [] },
+    incoherences: { open: [], excused: [], stale: [], orphans: [], errors: [] },
     reviews: { covered: [], missing: [], open: [], accepted: [], stale: false, reviewedAt: null, reviewedBy: null, orphans: [], errors: [] },
     gaps: emptyGaps(),
     structural: emptyStructural()
@@ -213,6 +215,11 @@ export function validateService(dir, { wip = false } = {}) {
   // una aceptación mal escrita, por el mismo canal que cualquier otro error de decisions.yaml.
   result.undecided = resolveUndecided(result.findings, doc, manifest?.service?.version);
   result.obligations.errors.push(...result.undecided.errors);
+
+  // Los avisos que son contradicciones (`nature: 'incoherence'`), con los falsos positivos que
+  // decisions.yaml declara. Tampoco bloquean aquí: los cuenta `keel validate --ready`.
+  result.incoherences = resolveIncoherences(result.findings, doc, manifest?.service?.version);
+  result.obligations.errors.push(...result.incoherences.errors);
 
   const obligationsBlock =
     result.obligations.open.length > 0 ||

@@ -71,6 +71,7 @@ function write(file, content) {
  * test no sabría qué criterio mide.
  */
 function workspace({
+  domain = DOMAIN,
   useCases = USE_CASES,
   scenarioStamp = VERSION,
   matrix = true,
@@ -105,7 +106,7 @@ function workspace({
       '  use-cases: use-cases.keel.yaml'
     ].join('\n') + '\n'
   );
-  write(path.join(dir, 'domain.keel.yaml'), DOMAIN);
+  write(path.join(dir, 'domain.keel.yaml'), domain);
   write(path.join(dir, 'use-cases.keel.yaml'), useCases);
 
   const text = scenariosText({ stamp: scenarioStamp, matrix, emptyRow });
@@ -124,7 +125,7 @@ function workspace({
   }
 
   if (review) {
-    const layers = { domain: YAML.parse(DOMAIN), 'use-cases': YAML.parse(useCases) };
+    const layers = { domain: YAML.parse(domain), 'use-cases': YAML.parse(useCases) };
     const ids = applicableReviews(layers);
     const findings = (review === 'partial' ? ids.slice(1) : ids).map((id) => ({ id, verdict: 'ok' }));
     write(path.join(dir, REVIEW_FILE), YAML.stringify({ ...(reviewedBy ? { reviewedBy } : {}), reviewedAt: VERSION, findings }));
@@ -133,7 +134,7 @@ function workspace({
   // El barrido se deriva del MISMO inventario que usa la CLI, sobre las capas de este workspace:
   // escrito a mano se desincronizaría al primer cambio de gap-classes.js y mediría eso.
   if (gaps) {
-    const layers = { domain: YAML.parse(DOMAIN), 'use-cases': YAML.parse(useCases) };
+    const layers = { domain: YAML.parse(domain), 'use-cases': YAML.parse(useCases) };
     const inventory = gapInventory(layers);
     const coverage = inventory.map((entry) => ({ class: entry.class, units: [...entry.units], result: 'clean' }));
     const findings = [];
@@ -202,6 +203,11 @@ test('un diseño válido sin nada del cierre: generable, pero no listo', () => {
 // Sin `internal: true`, el command queda expuesto y sin errores declarados: qué contesta cuando
 // no se puede aplicar lo decidiría el generador (CHK-USECASES-COMMAND-NO-ERRORS, `undecided`).
 const EXPOSED_USE_CASES = USE_CASES.replace('    internal: true\n', '');
+const ORPHAN_QUERY = EXPOSED_USE_CASES.replace('    kind: command\n', '    kind: query\n');
+const SENSITIVE_DOMAIN = DOMAIN.replace(
+  'total: { type: decimal, required: true }',
+  'total: { type: decimal, required: true, sensitive: true }'
+);
 
 const ROTURAS = [
   ['validation', { useCases: USE_CASES.replace('output: { entity: Invoice }', 'output: { entity: Missing }') }],
@@ -229,8 +235,13 @@ const ROTURAS = [
   ['flow-review', { flowReview: false }],
   ['design-doc', { designStamp: '0.9.0' }],
   ['design-doc', { designStamp: null }],
-  // Un command expuesto sin errores declarados: CHK-USECASES-COMMAND-NO-ERRORS, una decisión no tomada.
-  ['undecided', { useCases: EXPOSED_USE_CASES }]
+  // Una salida que proyecta un campo sensitive: CHK-MODEL-SENSITIVE-PROJECTED, una decisión no tomada.
+  // Antes se rompía quitando `internal`, y eso dejaba además la operación huérfana: una
+  // incoherencia que ningún criterio contaba hasta que entró `incoherences`.
+  ['undecided', { domain: SENSITIVE_DOMAIN }],
+  // Una operación sin endpoint, sin schedule y sin internal: CHK-USECASES-ORPHAN-OP, una
+  // incoherencia. Una query y no un command, para que no salte además CHK-USECASES-COMMAND-NO-ERRORS.
+  ['incoherences', { useCases: ORPHAN_QUERY }]
 ];
 
 for (const [id, options] of ROTURAS) {
@@ -349,19 +360,47 @@ test('una decisión de un aviso aceptada con su scope deja de faltar; con otro s
     YAML.stringify({
       decisions: [
         {
-          id: 'CHK-USECASES-COMMAND-NO-ERRORS',
+          id: 'CHK-MODEL-SENSITIVE-PROJECTED',
           scope,
-          reason: 'El alta no puede fallar: el total ya llega validado por el borde.',
+          reason: 'El total solo lo lee el proceso interno que da de alta la factura.',
           since: VERSION
         }
       ]
     });
-  const aceptada = assessReadiness(workspace({ useCases: EXPOSED_USE_CASES, decisions: aceptar('use-cases.createInvoice') }));
+  const aceptada = assessReadiness(
+    workspace({ domain: SENSITIVE_DOMAIN, decisions: aceptar('use-cases.createInvoice.output.total') })
+  );
   assert.deepEqual(failing(aceptada), [], JSON.stringify(aceptada.criteria, null, 2));
 
   // La aceptación es por UNIDAD: sobre otra operación no dice nada de esta, y además es
   // una decisión sobre algo que el diseño no levanta (huérfana), no un error.
-  const otra = assessReadiness(workspace({ useCases: EXPOSED_USE_CASES, decisions: aceptar('use-cases.otherOp') }));
+  const otra = assessReadiness(workspace({ domain: SENSITIVE_DOMAIN, decisions: aceptar('use-cases.otherOp.output.total') }));
   assert.deepEqual(failing(otra), ['undecided']);
-  assert.match(otra.criteria.find((entry) => entry.id === 'undecided').detail, /CHK-USECASES-COMMAND-NO-ERRORS/);
+  assert.match(otra.criteria.find((entry) => entry.id === 'undecided').detail, /CHK-MODEL-SENSITIVE-PROJECTED/);
+});
+
+test('una incoherencia declarada falso positivo deja de faltar; con otro match o de otra versión, no', () => {
+  const declarar = (match, since = VERSION) =>
+    YAML.stringify({
+      falsePositives: [
+        { id: 'CHK-USECASES-ORPHAN-OP', match, reason: 'La invoca un proceso por lotes que el diseño no modela.', since }
+      ]
+    });
+  const excusada = assessReadiness(workspace({ useCases: ORPHAN_QUERY, decisions: declarar('createInvoice') }));
+  assert.deepEqual(failing(excusada), [], JSON.stringify(excusada.criteria, null, 2));
+
+  const otra = assessReadiness(workspace({ useCases: ORPHAN_QUERY, decisions: declarar('otherOp') }));
+  assert.deepEqual(failing(otra), ['incoherences']);
+  assert.match(otra.criteria.find((entry) => entry.id === 'incoherences').detail, /1× CHK-USECASES-ORPHAN-OP/);
+
+  const caducada = assessReadiness(workspace({ useCases: ORPHAN_QUERY, decisions: declarar('createInvoice', '0.9.0') }));
+  assert.deepEqual(failing(caducada), ['incoherences']);
+
+  // Una decisión no tomada no se declara falso positivo: se acepta en `decisions`.
+  const malPuesta = YAML.stringify({
+    falsePositives: [
+      { id: 'CHK-MODEL-SENSITIVE-PROJECTED', match: 'createInvoice', reason: 'No es un aviso de incoherencia, es una decisión.', since: VERSION }
+    ]
+  });
+  assert.ok(failing(assessReadiness(workspace({ domain: SENSITIVE_DOMAIN, decisions: malPuesta }))).includes('obligations'));
 });

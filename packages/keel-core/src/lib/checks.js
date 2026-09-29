@@ -872,6 +872,20 @@ export const CHECKS = {
     title: 'un `Then` enumera el payload de un evento y se deja campos que `messaging` declara',
     closes: 'nombrar los que faltan con su valor, o decir expresamente que no viajan'
   },
+  'CHK-SCEN-AUDIT-NOT-EXPOSED': {
+    layer: 'validation-scenarios',
+    severity: 'warning',
+    nature: 'incoherence',
+    title: 'un `Then` afirma en la respuesta un campo de auditoría (`createdAt`, `createdBy`…) cuya política no es `declared`',
+    closes: "pasar el eje de `audit` a 'declared' con los campos reservados en domain, o quitar el campo del Then"
+  },
+  'CHK-SCEN-NEED-NOT-EXPOSED': {
+    layer: 'validation-scenarios',
+    severity: 'warning',
+    nature: 'incoherence',
+    title: 'un `Then` afirma en la respuesta el dato de un `need` que no declara `exposedAs`',
+    closes: 'declarar `exposedAs` en el need, o quitar del Then lo que devolvió el proveedor'
+  },
   'CHK-SCEN-ORDER-BY-MUTATED': {
     layer: 'validation-scenarios',
     severity: 'warning',

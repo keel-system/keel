@@ -30,6 +30,34 @@ Un archivo `<AAAA-MM-DD>-<servicio>[-<variante>].md`. Empieza con una tabla de d
 | `Huecos del diseño` | cuántos y de dónde (`design-gaps.yaml`, y los que no reportó nadie) | `4 en design-gaps.yaml + 2 que no reportó nadie` |
 | `Convertidos en id` | los `CHK-*`/`OBL-*`/`REV-*` que salieron de esta corrida | |
 
+Desde el plan de validación de R8, las corridas de medición (sufijo `-r8` en el nombre del archivo) llevan además estas etiquetas. Son opcionales: una corrida anterior no las tiene y la serie la sigue leyendo igual.
+
+| Etiqueta | Qué va | Ejemplo |
+|---|---|---|
+| `Papel` | `control` si la corrida mide el residuo del generador y no el diseño; sin la fila, es de medición | `control` |
+| `Clasificación de la huella` | la cuenta por clase de la rúbrica de abajo | `13 TODO · 3 consulta · 7 generador · 0 diseño · 0 puerta` |
+| `Huecos del generador` | cuántos, con su arreglo en `keel-spring` | `5 (ver § Arreglos)` |
+| `Agujeros de la puerta` | cuántos huecos del diseño debía haber cazado `--ready` o una clase de `gap-analysis.md` | `0` |
+| `Coste del diseño` | hallazgos por pasada de careo (`careo 13→6→0`, forma fija: es lo que lee `series`), del barrido y de la revisión, y decisiones aceptadas frente a cerradas | `careo 13→6→0; barrido 24; revisión 5; 9 aceptadas / 31 cerradas` |
+
+`series` termina con el **veredicto de H1**: `robusta`, `no-robusta` o `en-curso`, con el motivo. Los criterios los fija `verdict()` en `packages/keel-spring/src/lib/corrida-metrics.js` y se escribieron antes de correr. No se ajustan después de ver un resultado.
+
+## Clasificar un reescrito
+
+Cada archivo que la huella da por reescrito, y cada hueco reportado, cae en **una** clase:
+
+| Clase | Criterio | Cuenta contra |
+|---|---|---|
+| TODO legítimo | build dejó un stub de negocio para el agente | nada |
+| Consulta de negocio | regla en prosa que el DSL no estructura y el diseño sí dice | nada, pero se anota |
+| Hueco del generador | el YAML declara lo necesario y build lo hizo mal o no lo hizo | `keel-spring`: arreglo con test falsado |
+| **Hueco del diseño** | el agente tuvo que decidir algo que ni el YAML ni sus docs fijan | H1: va a `## designGaps` con su clave |
+| **Agujero de la puerta** | un hueco del diseño que un criterio de `--ready` o una clase de `gap-analysis.md` debía haber cazado | H1, grave: se cuenta además en `Agujeros de la puerta` |
+
+La pregunta que separa las dos últimas de las demás: **¿el agente tuvo que elegir?** Si la respuesta está escrita en el diseño, aunque sea en prosa, no es un hueco del diseño. Y si build no la usó, el hueco es del generador.
+
+La primera clasificación la hace un **agente de contexto limpio**, con esta rúbrica, el diseño (`specs/`) y el diff de cada reescrito contra lo que registró build, y **sin** la conversación de diseño: quien diseñó tiende a leer como resuelto lo que quiso resolver. El diseñador arbitra los desacuerdos y anota cuáles fueron.
+
 La huella no es el informe del agente, y es lo que manda. El informe cuenta lo que el agente creyó
 que eran huecos; la huella cuenta lo que tuvo que decidir, y la mayor parte de eso no lo reporta nadie
 porque para él era su trabajo. Los reescritos se leen uno a uno y cada uno se clasifica: TODO legítimo,

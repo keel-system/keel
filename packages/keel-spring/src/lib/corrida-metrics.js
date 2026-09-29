@@ -104,8 +104,77 @@ export function parseCorrida(name, text) {
     rewritten: number(huella, /(\d+)\s+reescritos?/),
     deleted: number(huella, /(\d+)\s+borrados?/),
     designGaps: number(huecos, /(\d+)/),
-    gapKeys
+    gapKeys,
+    // Desde el plan de validación de R8 (etiquetas opcionales: una corrida anterior sale null).
+    role: (row(table, 'Papel') ?? '').trim().toLowerCase() || null,
+    generatorGaps: number(row(table, 'Huecos del generador'), /(\d+)/),
+    gateHoles: number(row(table, 'Agujeros de la puerta'), /(\d+)/),
+    classification: row(table, 'Clasificación de la huella'),
+    designCost: row(table, 'Coste del diseño'),
+    careoPasses: careoPasses(row(table, 'Coste del diseño'))
   };
+}
+
+// «careo 13→6→0» (o con '->'): los hallazgos de cada pasada, en orden. null si no se midió.
+function careoPasses(text) {
+  const match = /careo\s+(\d+(?:\s*(?:→|->)\s*\d+)*)/i.exec(text ?? '');
+  return match ? match[1].split(/\s*(?:→|->)\s*/).map(Number) : null;
+}
+
+/** Cuántas corridas de medición hacen falta para poder declarar la fase de diseño robusta. */
+export const H1_MIN_CORRIDAS = 3;
+
+/**
+ * El veredicto de H1 del plan de validación (recomendaciones-diseno.md § R8): un diseño que cruza
+ * `--ready` no deja decisiones al agente generador. Los criterios se fijaron ANTES de correr, y
+ * viven aquí para que el resultado no se interprete a posteriori.
+ *
+ * Solo cuentan las corridas de MEDICIÓN: las que llevan el sufijo `-r8` y no tienen el papel
+ * `control` (la de control mide el residuo del generador, no el diseño).
+ *
+ * - no-robusta: un agujero de la puerta, un designGap repetido entre corridas de medición, una
+ *   corrida generada con --accept-unready, más de un hueco del diseño en toda la serie, o un
+ *   careo que no convergió (más de 3 pasadas, o hallazgos que crecen);
+ * - robusta: al menos H1_MIN_CORRIDAS corridas medidas y nada de lo anterior;
+ * - en-curso: todo lo demás (pocas corridas o algo sin medir), con el motivo.
+ */
+export function verdict(corridas) {
+  const measured = corridas.filter((corrida) => /-r8$/.test(corrida.name) && corrida.role !== 'control');
+  const reasons = [];
+  const pending = [];
+
+  for (const corrida of measured) {
+    if (corrida.acceptedUnready) reasons.push(`${corrida.name}: generada con --accept-unready`);
+    if ((corrida.gateHoles ?? 0) > 0) reasons.push(`${corrida.name}: ${corrida.gateHoles} agujero(s) de la puerta`);
+    if (corrida.designGaps == null) pending.push(`${corrida.name}: huecos del diseño sin medir`);
+    if (corrida.gateHoles == null) pending.push(`${corrida.name}: agujeros de la puerta sin clasificar`);
+    const passes = corrida.careoPasses;
+    if (passes == null) pending.push(`${corrida.name}: coste del careo sin anotar`);
+    else if (passes.length > 3 || passes.some((value, i) => i > 0 && value > passes[i - 1])) {
+      reasons.push(`${corrida.name}: el careo no convergió (${passes.join('→')})`);
+    }
+  }
+
+  const seen = new Map();
+  for (const corrida of measured) {
+    for (const key of new Set(corrida.gapKeys)) seen.set(key, [...(seen.get(key) ?? []), corrida.name]);
+  }
+  for (const [key, names] of seen) {
+    if (names.length > 1) reasons.push(`designGap repetido '${key}': ${names.join(', ')}`);
+  }
+
+  const withGaps = measured.filter((corrida) => (corrida.designGaps ?? 0) > 0);
+  if (withGaps.length > 1 || withGaps.some((corrida) => corrida.designGaps > 1)) {
+    reasons.push(
+      `huecos del diseño en ${withGaps.map((corrida) => `${corrida.name} (${corrida.designGaps})`).join(', ')}: ` +
+        'el criterio admite uno solo, en una sola corrida'
+    );
+  }
+
+  if (reasons.length > 0) return { status: 'no-robusta', measured: measured.length, reasons };
+  if (measured.length < H1_MIN_CORRIDAS) pending.push(`${measured.length} de ${H1_MIN_CORRIDAS} corridas de medición`);
+  if (pending.length > 0) return { status: 'en-curso', measured: measured.length, reasons: pending };
+  return { status: 'robusta', measured: measured.length, reasons: [] };
 }
 
 /** La serie: una fila por corrida, más las claves de designGap que aparecen en dos o más. */
@@ -123,6 +192,7 @@ export function series(dir) {
   return {
     corridas,
     repeated,
-    acceptedUnready: corridas.filter((corrida) => corrida.acceptedUnready === true).length
+    acceptedUnready: corridas.filter((corrida) => corrida.acceptedUnready === true).length,
+    verdict: verdict(corridas)
   };
 }

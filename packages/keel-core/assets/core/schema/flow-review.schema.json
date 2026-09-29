@@ -54,6 +54,7 @@
             "enum": [
               "carried-state",
               "event-payload",
+              "response-shape",
               "count",
               "evaluation-order",
               "unreachable-given",
@@ -70,10 +71,16 @@
             "enum": ["scenario", "design", "accepted"],
             "description": "La decisión del diseñador: se corrigió el escenario, se corrigió el diseño, o se acepta a sabiendas (con reason). Sin ella el hallazgo sigue abierto."
           },
-          "reason": { "type": "string", "minLength": 20, "description": "Obligatoria con 'accepted'." }
+          "reason": { "type": "string", "minLength": 20, "description": "Obligatoria con 'accepted'." },
+          "sealAfter": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Solo con 'scenario' y el presupuesto agotado: el sello del flujo DESPUÉS de corregirlo, que `keel validate --ready` imprime. Resella ese flujo sin pasada nueva, porque agotado el presupuesto lo abierto se decide y decidir 'scenario' es editarlo. Si el flujo vuelve a cambiar, el sello deja de casar y el flujo vuelve a bloquear."
+          }
         },
         "allOf": [
-          { "if": { "properties": { "resolution": { "const": "accepted" } }, "required": ["resolution"] }, "then": { "required": ["reason"] } }
+          { "if": { "properties": { "resolution": { "const": "accepted" } }, "required": ["resolution"] }, "then": { "required": ["reason"] } },
+          { "if": { "required": ["sealAfter"] }, "then": { "properties": { "resolution": { "const": "scenario" } }, "required": ["resolution"] } }
         ]
       }
     }

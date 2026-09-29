@@ -1232,10 +1232,19 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     for (const def of Object.values(security.serviceClients ?? {})) {
       for (const scope of def?.scopes ?? []) usedPermissions.add(scope);
     }
+    // Los permisos que alguna regla EXIGE. Un rol que concede uno de ellos lo usa el diseño
+    // aunque ninguna regla lo nombre: es como se escribe el control por permisos, y el rol es
+    // la vía por la que un usuario llega a esa operación. Avisar ahí era un falso positivo,
+    // medido en `asset-vault` (2026-09-28): los dos roles de su día a día, marcados sin uso.
+    const requiredPermissions = new Set();
+    for (const rule of [security.access?.default, ...Object.values(security.access?.rules ?? {})]) {
+      for (const perm of rule?.permissions ?? []) requiredPermissions.add(perm);
+    }
     for (const role of roles) {
-      // Un rol que ninguna regla exige pero que sí concede permisos sigue siendo
-      // privilegio vivo: quien lo tenga los tendrá. Se avisa igual.
-      if (!usedRoles.has(role)) {
+      // Un rol que ninguna regla exige y que solo concede permisos que nadie exige sigue
+      // siendo privilegio declarado sin uso: quien lo tenga no gana ninguna operación.
+      const grantsRequired = (security.roleGrants?.[role] ?? []).some((perm) => requiredPermissions.has(perm));
+      if (!usedRoles.has(role) && !grantsRequired) {
         warn(
           'CHK-SEC-UNUSED-ROLE',
           `security: roles.${role}: ninguna regla de acceso lo exige — es privilegio declarado que nada del diseño pide; quítalo, o di qué operación debería pedirlo`
@@ -4116,6 +4125,33 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     // tentación es corregir el escenario para que pase.
     const sections = scenarioBlocks.map((block) => ({ id: scenarioIdOf(block), ...givenWhenThen(scenarioBody(block)) }));
 
+    // La operación que ejercita un When: por su nombre entre comillas invertidas, o por el
+    // método y la ruta. La ruta del escenario lleva el prefijo real (`/api/v1`) y la de api
+    // no, así que se compara por el FINAL; gana la plantilla más larga que case.
+    const endpointRoutes =
+      api && api.auto !== true
+        ? Object.entries(api.endpoints ?? {}).map(([opName, endpoint]) => {
+            const path = String(endpoint?.path ?? '').replace(/^\//, '').replace(/\/$/, '');
+            const pattern = path.replace(/[.*+?^$()|[\]\\]/g, '\\$&').replace(/\{[^}]+\}/g, '[^/]+');
+            return {
+              opName,
+              method: String(endpoint?.method ?? '').toUpperCase(),
+              length: path.length,
+              re: new RegExp('(^|/)' + pattern + '$')
+            };
+          })
+        : [];
+    const whenOperation = (when) => {
+      const byName = [...when.matchAll(/`([a-z][A-Za-z0-9]*)`/g)].map((m) => m[1]).find((n) => operationNames.has(n));
+      if (byName) return byName;
+      const call = /\b(GET|POST|PUT|PATCH|DELETE)\s+`?(\/[^\s`?]*)/.exec(when);
+      if (!call) return null;
+      const target = call[2].replace(/\/$/, '');
+      const hits = endpointRoutes.filter((route) => route.method === call[1] && route.re.test(target));
+      hits.sort((a, b) => b.length - a.length);
+      return hits[0]?.opName ?? null;
+    };
+
     // (1) Contar operaciones es la aserción más fácil de dejar vieja: se escribe una vez y
     // el diseño sigue añadiendo o quitando endpoints. Se contrasta solo con `api.endpoints`
     // explícitos; con `auto`, las rutas no son del diseño y contar sería adivinar.
@@ -4220,6 +4256,96 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
             'CHK-SCEN-CONVENTION-UNBACKED',
             `validation-scenarios.md: la convención de texto dice que se ignoran mayúsculas o acentos, y ningún campo declara ` +
               `compare (ignore-case | ignore-case-accents) — la unicidad y los filtros saldrán sensibles a la caja`
+          );
+        }
+      }
+    }
+
+    // (5) Un Then que afirma en la RESPUESTA un dato que el YAML no pone en ningún contrato.
+    // Salió dos veces en la misma corrida (`asset-vault`, 2026-09-28) y el agente eligió al
+    // revés cada vez: con la auditoría siguió al YAML y el escenario salió rojo; con la
+    // miniatura siguió al escenario y añadió un campo que el diseño no expone. Las dos son la
+    // misma contradicción, y ni el careo ni el barrido de huecos la preguntaban.
+    const thenItems = (then) => {
+      const items = numberedItems(then);
+      return items.length > 0 ? items : [then];
+    };
+    // Lo que el Then dice de la base o de un evento no es la respuesta: ahí el campo puede
+    // existir aunque ningún contrato HTTP lo devuelva.
+    const notResponse = (item) =>
+      /\b(fila|documento|registro|base de datos|colecci[oó]n|tabla|payload)\b/i.test(item) ||
+      [...publishedEvents].some((event) => new RegExp(`\\b${event}\\b`).test(item));
+
+    // (5a) Los campos reservados de la auditoría solo viajan con la política `declared`: con
+    // `all` las columnas existen para operar, no para que las lea un cliente, y con `none` no
+    // existen. Un Then que los afirma pide lo que el generador, con razón, no va a devolver.
+    const audit = persistence?.audit ?? {};
+    const auditAxes = [
+      { axis: 'timestamps', policy: audit.timestamps ?? 'all', names: ['createdAt', 'updatedAt'] },
+      { axis: 'authorship', policy: audit.authorship ?? 'none', names: ['createdBy', 'updatedBy'] }
+    ];
+    for (const { id, when, then } of sections) {
+      const opName = whenOperation(when);
+      for (const { axis, policy, names } of auditAxes) {
+        if (policy === 'declared') continue;
+        const hits = new Set();
+        for (const item of thenItems(then)) {
+          if (notResponse(item)) continue;
+          for (const name of names) {
+            if (!new RegExp('`' + name + '`').test(item)) continue;
+            if (operations[opName]?.output?.fields?.[name]) continue;
+            hits.add(name);
+          }
+        }
+        if (hits.size === 0) continue;
+        const list = [...hits].map((name) => `'${name}'`).join(', ');
+        warn(
+          'CHK-SCEN-AUDIT-NOT-EXPOSED',
+          `validation-scenarios.md: ${id} afirma ${list} en la respuesta${opName ? ` de ${opName}` : ''} y persistence declara ` +
+            `audit.${axis}: ${policy} — con esa política el rastro no aparece en ningún contrato. Si el cliente lo lee, la ` +
+            `política es 'declared' con los campos reservados en domain; si no, el Then no lo nombra`
+        );
+      }
+    }
+
+    // (5b) El dato de un `need` sin `exposedAs` sirve para decidir y no sale del servicio. Se
+    // delata de dos formas: el Then nombra un campo de la respuesta del proveedor que la salida
+    // de la operación no tiene, o repite un literal que el Given puso en boca del proveedor.
+    const opOutputFields = (op) => {
+      const output = op?.output;
+      if (!output || typeof output !== 'object') return new Set();
+      const own = Object.keys(output.fields ?? {});
+      const fromEntity = Object.keys(domain.entities?.[output.entity]?.fields ?? {});
+      return new Set([...own, ...fromEntity]);
+    };
+    for (const [depName, dep] of Object.entries(dependencies?.dependencies ?? {})) {
+      for (const [need, spec] of Object.entries(dep?.needs ?? {})) {
+        if (spec?.exposedAs || !spec?.fetchedFrom?.client || !spec?.fetchedFrom?.call) continue;
+        const { client, call } = spec.fetchedFrom;
+        const callSpec = httpClients?.clients?.[client]?.calls?.[call];
+        const providerFields = Object.keys(callSpec?.response?.fields ?? {});
+        for (const { id, given, when, then } of sections) {
+          const opName = whenOperation(when);
+          if (!opName || !(spec.usedBy ?? []).includes(opName)) continue;
+          const own = opOutputFields(operations[opName]);
+          const response = thenItems(then).filter((item) => !notResponse(item)).join('\n');
+          const named = [need, ...providerFields].filter(
+            (field) => !own.has(field) && new RegExp('`' + field + '(?![A-Za-z0-9_])').test(response)
+          );
+          const mention = given.indexOf(`${client}.${call}`);
+          const echoed =
+            mention < 0
+              ? []
+              : [...given.slice(mention, mention + 240).matchAll(/"([^"\n]{4,})"/g)]
+                  .map((m) => m[1])
+                  .filter((literal) => response.includes(`"${literal}"`));
+          if (named.length === 0 && echoed.length === 0) continue;
+          const evidence = named.length > 0 ? `nombra ${named.map((f) => `'${f}'`).join(', ')}` : `repite "${echoed[0]}", que devolvió ${client}.${call}`;
+          warn(
+            'CHK-SCEN-NEED-NOT-EXPOSED',
+            `validation-scenarios.md: ${id} afirma en la respuesta de ${opName} el dato del need '${need}' (${depName}) — ${evidence} — ` +
+              `y el need no declara exposedAs: sin él el dato solo sirve para decidir y no sale del servicio. Declara exposedAs ` +
+              `si es parte del contrato, o quita del Then lo que devolvió el proveedor`
           );
         }
       }

@@ -5637,6 +5637,26 @@ test('un rol que ninguna regla exige y un permiso que nadie concede se avisan po
   assert.deepEqual(warnings.filter((w) => w.includes('roles.admin') || w.includes('permissions.orders:read')), []);
 });
 
+test('un rol que concede un permiso que alguna regla exige está en uso aunque ninguna regla lo nombre', () => {
+  // La forma del control por permisos (asset-vault, 2026-09-28): las reglas piden permisos y
+  // los roles los conceden. El que solo concede permisos que nadie exige sigue avisando.
+  const layers = {
+    domain: baseDomain(),
+    'use-cases': { operations: { getOrder: { kind: 'query' } } },
+    api: { endpoints: { getOrder: { method: 'GET', path: '/orders/{id}' } } },
+    security: {
+      authentication: { protocol: 'jwt' },
+      roles: { reader: {}, archivist: {} },
+      permissions: { 'orders:read': {}, 'orders:archive': {} },
+      roleGrants: { reader: ['orders:read'], archivist: ['orders:archive'] },
+      access: { default: { level: 'authenticated' }, rules: { getOrder: { permissions: ['orders:read'] } } },
+    },
+  };
+  const { warnings } = run(layers);
+  assert.deepEqual(warnings.filter((w) => w.includes('roles.reader')), []);
+  assert.ok(warnings.some((w) => w.includes('security: roles.archivist: ninguna regla de acceso lo exige')));
+});
+
 test('una escritura con level public avisa; una lectura pública no', () => {
   const build = (kind) => ({
     domain: baseDomain(),
@@ -6251,6 +6271,89 @@ ${item}
   // Nombrar el evento y uno de sus campos no es enumerar el payload.
   const mencion = doc('11. Se publica un `ProductCreated` cuyo `primaryImageUrl` es la imagen.');
   assert.deepEqual(idsOf(checkCrossRefs({ layers, scenarios: mencion }), 'CHK-SCEN-EVENT-PAYLOAD-PARTIAL'), []);
+});
+
+test('CHK-SCEN-AUDIT-NOT-EXPOSED: la auditoría afirmada en una respuesta solo cabe con la política declared', () => {
+  const layers = (audit) => ({
+    domain: baseDomain(),
+    'use-cases': { operations: { uploadAsset: { kind: 'command', input: 'void', output: 'void' } } },
+    api: { style: 'rest', basePath: '/api', endpoints: { uploadAsset: { method: 'POST', path: '/assets', successStatus: 201 } } },
+    persistence: { audit },
+    messaging: { channels: { assetEvents: {} }, publishing: { events: { AssetUploaded: { channel: 'assetEvents', payload: {} } } } }
+  });
+  // El caso de la corrida asset-vault: la operación sale por método y ruta, con el prefijo de versión.
+  const doc = (item) => `### FL-AST-001: se custodia un archivo
+**When**: \`POST /api/v1/assets\` (multipart).
+**Then**:
+1. Status \`201\`.
+${item}
+`;
+  const afirma = doc('2. El cuerpo trae `id` y `createdAt`/`createdBy` con forma válida.');
+  const avisos = idsOf(checkCrossRefs({ layers: layers({ timestamps: 'all', authorship: 'all' }), scenarios: afirma }), 'CHK-SCEN-AUDIT-NOT-EXPOSED');
+  assert.equal(avisos.length, 2, 'un aviso por eje');
+  assert.match(avisos[0].message, /FL-AST-001 afirma 'createdAt' en la respuesta de uploadAsset .* audit\.timestamps: all/);
+  assert.match(avisos[1].message, /'createdBy'.*audit\.authorship: all/);
+
+  // Con `declared` la auditoría es contrato; con `none` en autoría, el aviso solo nombra ese eje si se afirma.
+  assert.deepEqual(
+    idsOf(checkCrossRefs({ layers: layers({ timestamps: 'declared', authorship: 'declared' }), scenarios: afirma }), 'CHK-SCEN-AUDIT-NOT-EXPOSED'),
+    []
+  );
+  // Lo que se dice de la base o de un evento no es la respuesta.
+  const enLaFila = doc('2. La fila guarda `createdBy` = `"system"`.');
+  const enElEvento = doc('2. Se publica `AssetUploaded` con su `createdAt`.');
+  for (const scenarios of [enLaFila, enElEvento]) {
+    assert.deepEqual(idsOf(checkCrossRefs({ layers: layers({ timestamps: 'all', authorship: 'all' }), scenarios }), 'CHK-SCEN-AUDIT-NOT-EXPOSED'), []);
+  }
+});
+
+test('CHK-SCEN-NEED-NOT-EXPOSED: el dato de un need sin exposedAs no puede aparecer en la respuesta', () => {
+  const layers = (exposedAs) => ({
+    domain: baseDomain(),
+    'use-cases': { operations: { getAsset: { kind: 'query', input: 'void', output: 'void' } } },
+    api: { style: 'rest', basePath: '/api', endpoints: { getAsset: { method: 'GET', path: '/assets/{id}' } } },
+    'http-clients': {
+      clients: {
+        rendering: {
+          calls: {
+            getThumbnail: { method: 'GET', path: '/thumbnails/{id}', response: { fields: { url: { type: 'string' }, width: { type: 'integer' } } } }
+          }
+        }
+      }
+    },
+    dependencies: {
+      dependencies: {
+        rendering: {
+          needs: {
+            thumbnail: {
+              strategy: 'on-demand',
+              usedBy: ['getAsset'],
+              fetchedFrom: { client: 'rendering', call: 'getThumbnail' },
+              ...(exposedAs ? { exposedAs } : {})
+            }
+          }
+        }
+      }
+    }
+  });
+  const doc = (then) => `### FL-AST-003: la ficha se pide al servicio de renderizado
+**Given**: \`rendering.getThumbnail\` responde \`200 {url: "https://cdn/t/a8.png", width: 320}\`.
+**When**: \`GET /api/v1/assets/{a8}\`.
+**Then**:
+${then}
+`;
+  // Las dos señales: el literal del proveedor repetido, y un campo suyo nombrado.
+  const repite = doc('1. Status `200` con la miniatura `{url: "https://cdn/t/a8.png", width: 320}`.');
+  const nombra = doc('1. Status `200` y su `width` es 320.');
+  for (const scenarios of [repite, nombra]) {
+    const avisos = idsOf(checkCrossRefs({ layers: layers(null), scenarios }), 'CHK-SCEN-NEED-NOT-EXPOSED');
+    assert.equal(avisos.length, 1);
+    assert.match(avisos[0].message, /FL-AST-003 afirma en la respuesta de getAsset el dato del need 'thumbnail' \(rendering\)/);
+  }
+  assert.deepEqual(idsOf(checkCrossRefs({ layers: layers('thumbnail'), scenarios: repite }), 'CHK-SCEN-NEED-NOT-EXPOSED'), []);
+  // Usar el dato para decidir, sin devolverlo, es lo que el need declara.
+  const decide = doc('1. Status `200` con el archivo.\n2. El proveedor recibió una llamada a `GET /thumbnails/{a8}`.');
+  assert.deepEqual(idsOf(checkCrossRefs({ layers: layers(null), scenarios: decide }), 'CHK-SCEN-NEED-NOT-EXPOSED'), []);
 });
 
 test('CHK-SCEN-ORDER-BY-MUTATED: afirmar el primero de un listado por updatedAt con filas movidas de estado', () => {

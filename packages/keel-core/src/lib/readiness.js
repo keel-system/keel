@@ -34,11 +34,20 @@ const MATRIX_FINDINGS = [
   'CHK-SCEN-ERROR-UNCOVERED'
 ];
 
+/**
+ * Las incoherencias que ya tienen DUEÑO en otro criterio: la matriz, el careo y los derivados
+ * (`CHK-DOCS-*`, que comparan un contrato generado con el diseño y se arreglan regenerándolo).
+ * Contarlas también en `incoherences` haría que una sola rotura apagara dos criterios.
+ */
+const OWNED_ELSEWHERE = (id) =>
+  MATRIX_FINDINGS.includes(id) || id.startsWith('CHK-SCEN-FLOW-REVIEW-') || id.startsWith('CHK-DOCS-');
+
 /** Los criterios, en el orden en que se cierran durante una sesión de diseño. */
 export const READINESS_CRITERIA = [
   { id: 'validation', title: 'validación estricta en verde' },
   { id: 'obligations', title: 'obligaciones de diseño cerradas o aceptadas y vigentes' },
   { id: 'undecided', title: 'decisiones de los avisos tomadas en el DSL o aceptadas y vigentes' },
+  { id: 'incoherences', title: 'sin incoherencias en los avisos, o declaradas falso positivo y vigentes' },
   { id: 'structural', title: 'registro de decisiones estructurales completo, vigente y coherente con el diseño' },
   { id: 'review', title: 'revisión semántica completa y vigente' },
   { id: 'gaps', title: 'análisis de huecos completo, vigente y sin hallazgos abiertos' },
@@ -149,6 +158,29 @@ export function assessReadiness(dir, { validation = null } = {}) {
             .map(([id, count]) => `${count}× ${id}`)
             .join(', '),
       `decídelas en el DSL, o acepta en ${DECISIONS_FILE} las que lo admitan (id + scope + motivo) — keel validate ${spec} las lista`
+    )
+  );
+
+  // 2b' — Las incoherencias. Un aviso de naturaleza `incoherence` dice que el diseño se
+  // contradice: se corrige. Hasta el 2026-09-28 no contaban en ningún criterio, y `asset-vault`
+  // cruzó a generación en 10/10 con tres a la vista (un Then que afirmaba en la respuesta lo que
+  // el output no devuelve); el agente eligió al revés en cada una y la corrida salió en rojo. La
+  // única salida que no es corregir es declarar que el DETECTOR se equivocó (`falsePositives`).
+  const { incoherences } = result;
+  const openIncoherences = [...incoherences.open, ...incoherences.stale].filter((item) => !OWNED_ELSEWHERE(item.id));
+  const incoherenceById = new Map();
+  for (const item of openIncoherences) incoherenceById.set(item.id, (incoherenceById.get(item.id) ?? 0) + 1);
+  criteria.push(
+    criterion(
+      'incoherences',
+      evaluated && openIncoherences.length === 0,
+      !evaluated
+        ? notEvaluated
+        : [...incoherenceById]
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([id, count]) => `${count}× ${id}`)
+            .join(', '),
+      `corrígelas en el diseño; si el detector se equivoca, decláralo en ${DECISIONS_FILE} → falsePositives (id + match + motivo) — keel validate ${spec} las lista`
     )
   );
 

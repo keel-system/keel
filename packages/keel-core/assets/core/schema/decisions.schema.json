@@ -77,6 +77,37 @@
           }
         }
       }
+    },
+    "falsePositives": {
+      "type": "array",
+      "description": "Los avisos de naturaleza 'incoherence' que el DETECTOR dio mal: el diseño no se contradice y la heurística se equivocó. No es una aceptación —una incoherencia se corrige, no se acepta—, sino la salida para que un falso positivo no bloquee `keel validate --ready`, y cada entrada es deuda de keel-core: el detector hay que arreglarlo. `keel validate` las cuenta aparte.",
+      "items": {
+        "type": "object",
+        "required": ["id", "match", "reason", "since"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^CHK-[A-Z0-9-]+$",
+            "description": "Id de un aviso CHK-* de naturaleza 'incoherence'. Un error o una decisión 'undecided' no caben aquí."
+          },
+          "match": {
+            "type": "string",
+            "minLength": 3,
+            "description": "Un fragmento del mensaje del aviso que lo identifica: la unidad que nombra ('roles.vault-custodian', 'FL-AST-003'). Casa con todo aviso de ese id cuyo mensaje lo contenga."
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 20,
+            "description": "Por qué el detector se equivoca aquí: qué dice el diseño que la heurística no ve."
+          },
+          "since": {
+            "type": "string",
+            "pattern": "^\\d+\\.\\d+\\.\\d+$",
+            "description": "service.version en el que se declaró. Caduca con el minor o el major, como las aceptaciones."
+          }
+        }
+      }
     }
   }
 }

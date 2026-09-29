@@ -143,6 +143,41 @@ primer momento es una aceptación mal escrita:
   `CHK-STORAGE-NO-MAXSIZE`). Todas se cierran con una línea de YAML;
 - un `CHK-*` que el catálogo no tiene.
 
+## Incoherencias y falsos positivos (`nature: incoherence`)
+
+Una incoherencia no se acepta: se corrige. Tampoco bloquea `keel-<tech> build`, pero sí
+`keel validate --ready`, en el criterio `incoherences`. Hasta el 2026-09-28 no contaba en ningún
+criterio. `asset-vault` cruzó a generación en 10/10 con tres a la vista: dos escenarios
+afirmaban en la respuesta lo que el `output` no devuelve. El agente generador eligió al revés en
+cada uno, y la corrida salió en rojo.
+
+Quedan fuera del criterio las que ya tienen dueño en otro: la matriz de cobertura
+(`coverage-matrix`), el careo (`flow-review`) y los contratos derivados (`CHK-DOCS-*`, que se
+arreglan regenerándolos).
+
+Los detectores leen prosa y aplican heurísticas, y se equivocan. Para eso existe una salida, y no
+es una aceptación: es declarar que **el detector** se equivocó, en `falsePositives`:
+
+```yaml
+falsePositives:
+  - id: CHK-SEC-UNUSED-ROLE
+    match: roles.auditor              # un fragmento del mensaje: la unidad que nombra
+    reason: >-
+      El rol lo asigna el proveedor de identidad a los auditores externos, y la regla que lo
+      exige vive en el gateway, fuera de este diseño.
+    since: 1.2.0
+```
+
+- Casa con todo aviso de ese `id` cuyo mensaje contenga `match`.
+- Caduca con el minor, como las aceptaciones.
+- Se queda huérfana si el aviso deja de salir.
+- Solo admite avisos de naturaleza `incoherence`. Un error no tiene excusa, y una decisión se
+  acepta en `decisions` con su `scope`.
+
+`keel validate` cuenta las declaradas aparte, como **deuda de los detectores**: cada una es un
+detector que hay que arreglar en keel-core, y el sitio de ese arreglo es `crossrefs.js`, no el
+diseño.
+
 ## Añadir una obligación
 
 1. Fila en `src/lib/obligations.js`, con su `gapClass`, su `kind` y su `waivable`.
