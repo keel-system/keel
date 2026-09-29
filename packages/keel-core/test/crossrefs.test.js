@@ -5761,6 +5761,12 @@ test('una operación que mueve dos agregados a la vez avisa', () => {
   };
   assert.ok(run(layers).warnings.some((w) => w.includes('mueve el estado de 2 agregados a la vez')));
 
+  // Con la frontera por operación es una DECISIÓN de esa operación, no una contradicción: otro
+  // id, `undecided`, con scope por operación para poder aceptarla en decisions.yaml.
+  const porOperacion = { ...layers, persistence: { consistency: { transactionalBoundary: 'per-operation' } } };
+  const findings = checkCrossRefs({ layers: porOperacion }).findings.filter((f) => /MULTI-AGGREGATE/.test(f.id));
+  assert.deepEqual(findings.map((f) => [f.id, f.scope]), [['CHK-USECASES-MULTI-AGGREGATE-TX', 'use-cases.closeBoth.transitions']]);
+
   // Y dos transiciones DENTRO del mismo agregado no dicen nada: la frontera se respeta.
   layers['use-cases'].operations.closeBoth.transitions[1] = { entity: 'Order', from: ['closed'], to: 'open' };
   assert.deepEqual(run(layers).warnings.filter((w) => w.includes('agregados a la vez')), []);
@@ -6812,4 +6818,28 @@ test('CHK-API-CREATED-NO-READ: la lectura con {orderId} o con {id} cierra la pre
 
 test('CHK-API-CREATED-NO-READ: con auto, un get<X> sin endpoint cuenta como lectura', () => {
   assert.deepEqual(createdNoRead(createdLayers({ read: 'id', auto: true })), []);
+});
+
+test('CHK-SCEN-RESCUE-UNCOVERED: una espera que saca una operación expuesta no es un estado en vuelo', () => {
+  // La oferta de room-booking (R8): `offered` es destino de una transición, pero lo que la
+  // tiene ahí es la decisión de un empleado (`acceptOffer`), no una réplica a medias.
+  const domain = baseDomain();
+  domain.entities.Order.fields.status = { type: 'enum', values: ['waiting', 'offered', 'done'] };
+  domain.entities.Order.lifecycle = { field: 'status', transitions: { waiting: ['offered'], offered: ['done'], done: [] } };
+  const layers = (exposed) => ({
+    domain,
+    'use-cases': {
+      operations: {
+        offerOrder: { kind: 'command', internal: true, transitions: [{ entity: 'Order', from: ['waiting'], to: 'offered' }] },
+        ...(exposed
+          ? { acceptOrder: { kind: 'command', errors: [{ code: 'NOPE', when: 'no', http: 409 }], transitions: [{ entity: 'Order', from: ['offered'], to: 'done' }] } }
+          : {}),
+        expireOrders: { kind: 'command', schedule: { cron: '* * * * *' }, transitions: [{ entity: 'Order', from: ['offered'], to: 'done' }] }
+      }
+    }
+  });
+  const scenarios = '## Flujos\n\n### FL-ORD-001: caduca\n**When** corre `expireOrders`.\n**Then** pasa a `done`.\n';
+  const ids = (l) => checkCrossRefs({ layers: l, scenarios }).findings.filter((f) => f.id === 'CHK-SCEN-RESCUE-UNCOVERED');
+  assert.equal(ids(layers(false)).length, 1, 'sin operación expuesta, offered es un estado en vuelo');
+  assert.deepEqual(ids(layers(true)), [], 'con acceptOrder expuesta, offered es una espera con plazo');
 });

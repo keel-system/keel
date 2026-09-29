@@ -35,6 +35,7 @@ import { loadService } from 'keel-core';
 import { deadLetterDestination, subscriptionDestination, publishedDestination } from '../src/lib/dead-letter.js';
 import { resolveStack, scaffoldService } from '../src/scaffold/index.js';
 import { buildModel } from '../src/lib/model.js';
+import { subscriptionQueues } from '../src/scaffold/messaging-provisioning.js';
 // El catálogo, no la lista de ids que exporta broker-probes con el mismo nombre: de
 // aquí salen el comando de sondeo y el nombre del contenedor que estampa el compose.
 import { BROKERS as BROKERS_CATALOG, brokerContainer } from '../src/lib/stack-catalog.js';
@@ -168,7 +169,7 @@ const ATTRS_FILE = '/tmp/keel-check-attrs.json';
 const TRICKY = 'acentós, "comillas" y $HOME sin interpolar';
 
 function scenarios(broker, context) {
-  const { devtools, topic, subscriptionTopic, subscriptionQueue, subscriptionName, publishEventType, deadLetterQueue, deadLetterSource, resetDb } = context;
+  const { devtools, topic, subscriptionTopic, subscriptionQueue, subscriptionName, publishEventType, deadLetterQueue, deadLetterSource, deadLetterMaxReceive, resetDb } = context;
   // Todo lo que se publica en el canal propio viaja con su `eventType`: es lo que
   // discrimina dentro del destino único (filtro de la suscripción en SNS, filtrado
   // por canal en Kafka). Sin él, el broker descarta el mensaje con toda la razón y
@@ -595,9 +596,18 @@ function scenarios(broker, context) {
         if (attributes.status !== 0) {
           return ko(`no se pueden leer los atributos de '${deadLetterSource}': ${firstLine(attributes.stderr)}`);
         }
-        return attributes.stdout.includes(deadLetterQueue)
+        if (!attributes.stdout.includes(deadLetterQueue)) {
+          return ko(`la RedrivePolicy de '${deadLetterSource}' no apunta a '${deadLetterQueue}': ${firstLine(attributes.stdout)}`);
+        }
+        // Y con el número de recepciones que el DISEÑO declara: sin `onFailure.retry` es UNA.
+        // Durante meses fue 5 por un default del script, así que un mensaje que el diseño
+        // mandaba al descarte a la primera se reentregaba cinco veces (serie R8). El valor
+        // esperado sale del mismo módulo que siembra la cola, no de una copia aquí.
+        const expected = deadLetterMaxReceive;
+        const actual = /maxReceiveCount[^0-9]{1,8}(\d+)/.exec(attributes.stdout)?.[1];
+        return String(actual) === String(expected)
           ? ok()
-          : ko(`la RedrivePolicy de '${deadLetterSource}' no apunta a '${deadLetterQueue}': ${firstLine(attributes.stdout)}`);
+          : ko(`maxReceiveCount de '${deadLetterSource}' es ${actual ?? '?'} y el diseño pide ${expected}`);
       }
     }] : []),
     ...(deadLetterQueue && broker !== 'kafka' ? [{
@@ -1008,6 +1018,9 @@ function checkBroker(broker, runtimeInfo) {
       subscriptionName: subscription?.name ?? null,
       deadLetterQueue,
       deadLetterSource,
+      deadLetterMaxReceive: deadLetterSource
+        ? subscriptionQueues(model).find((queue) => queue.name === deadLetterSource)?.maxReceive
+        : null,
       resetDb,
       publishEventType: (model.messaging?.eventTypesByChannel?.[topic] ?? [])[0] ?? null
     })) {

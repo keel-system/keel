@@ -140,6 +140,16 @@ test('H1: robusta con tres corridas de medición limpias; el control y las antig
   assert.equal(verdict(corridas.slice(0, 4)).status, 'en-curso');
 });
 
+test('H1: una corrida superada no cuenta, ni para bien ni para mal', () => {
+  // La regla de parada temprana: el agujero de la corrida repetida no refuta H1 si la repetición,
+  // hecha con el método corregido, sale limpia. Y una superada sin sustituta deja la cuenta corta.
+  const conAgujero = medida('2026-10-02-a-r8', { huecos: '2', agujeros: '2', gaps: ['x', 'y'], papel: 'superada — repetida en 2026-10-05-a-r8' });
+  assert.equal(conAgujero.role, 'superada');
+  const limpias = [medida('2026-10-03-b-r8'), medida('2026-10-04-c-r8')];
+  assert.equal(verdict([conAgujero, ...limpias]).status, 'en-curso');
+  assert.deepEqual(verdict([conAgujero, ...limpias, medida('2026-10-05-a-r8')]), { status: 'robusta', measured: 3, reasons: [] });
+});
+
 test('H1: no robusta por un agujero de la puerta, por un repetido o por --accept-unready', () => {
   const base = [medida('2026-10-02-a-r8'), medida('2026-10-03-b-r8'), medida('2026-10-04-c-r8')];
   const conAgujero = [...base.slice(0, 2), medida('2026-10-04-c-r8', { huecos: '1', agujeros: '1' })];

@@ -59,6 +59,10 @@ generador:
 - **La espera al tick de `expireOffers`.** Lo fijan el cron `* * * * *` y la convención de escenarios
   («espera a su siguiente tick», ~90 s según `integration-tests.md`).
 
+## Revalidación con la puerta de 11 criterios (2026-09-29)
+
+Al entrar el criterio `incoherences`, este diseño salió en rojo por 6 avisos `CHK-USECASES-MULTI-AGGREGATE`, y la corrida se marcó superada. Ese aviso se separó después por frontera. Con `per-operation` es la decisión `CHK-USECASES-MULTI-AGGREGATE-TX`, por operación, y room-booking la acepta en `decisions.yaml` citando §3.7, que ya la registraba. Con eso cruza 11/11 **sin cambiar el diseño**. La salida de `build` es idéntica byte a byte a la de esta corrida (318 archivos, 0 distintos), así que la corrida sigue midiendo un diseño que la puerta actual deja pasar, y se rehabilita. Regenerar habría medido la variación del agente ante la misma entrada, no el diseño.
+
 ## designGaps
 
 Ninguno.

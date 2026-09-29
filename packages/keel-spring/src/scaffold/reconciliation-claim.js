@@ -66,7 +66,7 @@ export function adapterValueFields(model, entity) {
     @Value("\${reconciliation.${claim.configKey}.unanswered-after-seconds:${claim.unansweredAfterSeconds}}")
     private long ${claim.activation}UnansweredAfterSeconds;`,
     `    /** Caducidad del reclamo: lo que retiene un candidato la réplica que muera con él en vuelo. */
-    @Value("\${reconciliation.${claim.configKey}.claim-timeout-ms:60000}")
+    @Value("\${reconciliation.${claim.configKey}.claim-timeout-ms:${claim.claimTimeoutMs}}")
     private long ${claim.activation}ClaimTimeoutMs;`,
     `    /** Cota del lote: sin ella, una tanda con 50.000 atascados son 50.000 llamadas al proveedor. */
     @Value("\${reconciliation.${claim.configKey}.batch-size:50}")

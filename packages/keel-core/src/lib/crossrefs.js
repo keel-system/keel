@@ -840,11 +840,25 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
         .map((transition) => aggregateOf.get(transition.entity))
         .filter((name) => name !== undefined)
     );
+    // Con `per-aggregate` no se puede materializar: es una contradicción y se corrige. Con
+    // `per-operation` sí cabe en una transacción, y entonces es una DECISIÓN por operación —la
+    // de room-booking (corrida R8): liberar franjas y re-ocuparlas para quien espera tiene que ser
+    // atómico—, que se toma a sabiendas y se acepta por escrito, o se deshace con un evento.
     if (touchedAggregates.size > 1) {
-      warn(
-        'CHK-USECASES-MULTI-AGGREGATE',
-        `use-cases: ${opName}.transitions: mueve el estado de ${touchedAggregates.size} agregados a la vez (${[...touchedAggregates].join(', ')}) — cada agregado es una unidad de consistencia propia. Si de verdad tienen que cambiar juntos, están mal separados; si no, uno se entera por un evento`
-      );
+      const list = `${touchedAggregates.size} agregados a la vez (${[...touchedAggregates].join(', ')})`;
+      if (persistence?.consistency?.transactionalBoundary === 'per-operation') {
+        warnIn(
+          `use-cases.${opName}.transitions`,
+          'CHK-USECASES-MULTI-AGGREGATE-TX',
+          `use-cases: ${opName}.transitions: mueve el estado de ${list} en una sola transacción, que la frontera por operación permite — ` +
+            `pero la frontera de los agregados existe entonces en el diseño y no en el código. Acéptalo por escrito para esta operación, o que uno se entere por un evento`
+        );
+      } else {
+        warn(
+          'CHK-USECASES-MULTI-AGGREGATE',
+          `use-cases: ${opName}.transitions: mueve el estado de ${list} — cada agregado es una unidad de consistencia propia. Si de verdad tienen que cambiar juntos, están mal separados; si no, uno se entera por un evento`
+        );
+      }
     }
     // Se excluye lo que no tiene a quién contestar. Un barrido programado no responde a
     // nadie: su desenlace es una transición o un evento, y exigirle un catálogo de
@@ -1765,6 +1779,17 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
           .filter(Boolean)
       )
     );
+    // Una ESPERA con plazo no es trabajo a medias: si una operación expuesta (ni programada ni
+    // interna) saca la entidad de ese estado, lo que la tiene ahí es la decisión de alguien de
+    // fuera, no una réplica nuestra. Pedir un rescate ahí era un falso positivo (la oferta de
+    // room-booking, R8), y el generador aplica la misma regla en classifyClaims().
+    const exposedExits = new Set();
+    for (const op of Object.values(operations)) {
+      if (op?.schedule || op?.internal) continue;
+      for (const transition of op?.transitions ?? []) {
+        for (const state of transition.from ?? []) exposedExits.add(`${transition.entity}::${state}`);
+      }
+    }
     for (const [opName, op] of Object.entries(operations)) {
       if (!op?.schedule || reconcilers.has(opName)) continue;
       for (const transition of op.transitions ?? []) {
@@ -1773,7 +1798,9 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
         // «En vuelo» se calcula igual que en el generador: el estado es destino de alguna
         // transición del lifecycle de su entidad. Una COLA no lo es, y no pide rescate.
         const reached = new Set(Object.values(lifecycle.transitions).flat());
-        const inFlight = (transition.from ?? []).filter((state) => reached.has(state));
+        const inFlight = (transition.from ?? []).filter(
+          (state) => reached.has(state) && !exposedExits.has(`${transition.entity}::${state}`)
+        );
         if (inFlight.length === 0) continue;
 
         const mentions = scenariosMentioning(opName);

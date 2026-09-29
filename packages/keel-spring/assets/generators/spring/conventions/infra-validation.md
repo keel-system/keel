@@ -247,7 +247,7 @@ regeneran con el proyecto, y los dos lados leen los mismos valores.
 |---|---|---|
 | Realm / user pool | el **nombre del servicio** (`issuer-uri` que ya generó build) | `AUTH_TOKEN_URL` |
 | Cliente de prueba | `<artifactId>-test` (el artifact del proyecto Gradle: `<servicio>-spring`), público, con *direct access grants* | `AUTH_TEST_CLIENT` |
-| Usuarios | **uno por rol** del diseño, con el nombre del rol como username, más `no-role` | — |
+| Usuarios | **dos por rol** del diseño (`<rol>` y `<rol>-2`; `tokenFor(rol, 2)` pide el segundo), más `no-role`. Sin roles, ninguno: ni usuarios, ni cliente público, ni `AUTH_TEST_*` | — |
 | Contraseña | `password` para todos | `AUTH_TEST_PASSWORD` |
 | Secreto de un cliente máquina del diseño | `<cliente>-secret` | `AUTH_CLIENT_SECRET_<CLIENTE>` |
 | Secreto de los clientes `test-m2m-*` | `test-secret` | `AUTH_CLIENT_SECRET` |

@@ -154,7 +154,9 @@ public class DeadLetterConfig {
         // que ya se resolvió al primer intento. El reintento existe para el fallo
         // TRANSITORIO (la base que no responde, el broker que se cae), que en esta
         // jerarquía es cualquier RuntimeException que no sea DomainException.
-        handler.addNotRetryableExceptions(DomainException.class);
+        // Y el payload que incumple el contrato (requireContract lanza IllegalArgumentException):
+        // un campo que falta o fuera de cota no se vuelve válido reintentándolo.
+        handler.addNotRetryableExceptions(DomainException.class, IllegalArgumentException.class);
 
         return handler;
     }
@@ -327,6 +329,7 @@ function rabbitConfig(model, subs) {
             }
             Map<Class<? extends Throwable>, Boolean> retryable = Map.of(
                     DomainException.class, false,
+                    IllegalArgumentException.class, false,
                     AmqpRejectAndDontRequeueException.class, false);
             retryTemplate.setRetryPolicy(new SimpleRetryPolicy(maxAttempts, retryable, true, true));
         };
@@ -361,7 +364,8 @@ ${beans}${retryBean}
 // El backoff y los intentos son del diseño (`onFailure.retry`). Si varias suscripciones
 // declaran distintos, gana el mayor: el error handler es uno solo para el factory, y
 // quedarse corto pierde mensajes de la que más paciencia pedía.
-const maxAttempts = (subs) => Math.max(...subs.map((sub) => sub.retry?.maxAttempts ?? 3));
+// Sin `retry` declarado, un solo intento: el diseño dice «sin reintentos» (antes eran 3).
+const maxAttempts = (subs) => Math.max(...subs.map((sub) => sub.retry?.maxAttempts ?? 1));
 const backoffMs = (subs) => Math.max(...subs.map((sub) => sub.retry?.initialDelayMs ?? 1000));
 
 // `maxDelayMs` solo tiene sentido con curva: con `fixed` no hay nada que acotar. Se toma

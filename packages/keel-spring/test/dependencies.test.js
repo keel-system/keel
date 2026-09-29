@@ -823,6 +823,22 @@ test('cuerpo de respuesta ausente: sin campos declarados no se emite guarda', ()
   assert.ok(!adapter.includes('respondió sin cuerpo'), adapter);
 });
 
+test('una llamada tipada sin response es void: sin Result, sin mapper con TODO y sin .body(...)', () => {
+  // La forma de purgeThumbnail en asset-vault: build emitía Result y Response vacíos, un
+  // mapper con TODO y `.body(XResponse.class)` sobre un DELETE sin cuerpo. La corrida R8 lo
+  // reescribió dos veces seguidas. Con `ignore` el fallback tampoco devuelve nada.
+  const layers = withActivation(withBreaker(baseLayers()));
+  delete layers['http-clients'].clients.catalog.calls.getProductsByIds.response;
+  const model = modelFrom(layers);
+  const adapter = adapterOf(model);
+
+  assert.match(adapter, /public void getProductsByIds\(/);
+  assert.ok(adapter.includes('.toBodilessEntity();'), adapter);
+  assert.ok(!adapter.includes('GetProductsByIdsResult'), adapter);
+  assert.ok(!adapter.includes('GetProductsByIdsResponse'), adapter);
+  assert.ok(!/return getProductsByIdsUnavailable\(/.test(adapter), 'un return sobre una delegación void no compila');
+});
+
 test('fallback: onFailure ignore devuelve resultado neutro y lo registra', () => {
   const adapter = adapterOf(modelFrom(withActivation(withBreaker(baseLayers()))));
 

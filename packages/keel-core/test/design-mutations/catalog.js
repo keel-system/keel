@@ -423,6 +423,17 @@ export const MUTATIONS = [
     expect: ['CHK-USECASES-MULTI-AGGREGATE']
   },
   {
+    id: 'M-USECASES-MULTI-AGGREGATE-TX',
+    title: 'una operación mueve dos agregados con la frontera por operación',
+    mutate: (d) => {
+      d.layers.persistence.consistency.transactionalBoundary = 'per-operation';
+      ops(d).closeTicket.transitions.push({ entity: 'Queue', from: ['active'], to: 'archived' });
+    },
+    // Co-disparado a propósito: la frontera por operación con agregados declarados ES la
+    // decisión que pregunta CHK-PERSIST-BOUNDARY-DEFAULT, así que las dos salen siempre juntas.
+    expect: ['CHK-PERSIST-BOUNDARY-DEFAULT', 'CHK-USECASES-MULTI-AGGREGATE-TX']
+  },
+  {
     id: 'M-MODEL-SENSITIVE-PROJECTED',
     title: 'un campo sensitive que proyectan las cuatro salidas de la entidad',
     mutate: (d) => {

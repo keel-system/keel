@@ -34,6 +34,18 @@ const SCOPED_FALLBACK = 'keel-scoped-resource';
 function scopedValue(model) {
   return model.security?.scoping?.testResource ?? SCOPED_FALLBACK;
 }
+/** El segundo usuario de un rol: `tokenFor(rol, 2)` en el arnés. */
+export function secondUserOf(role) {
+  return `${role}-2`;
+}
+
+/** Los roles de un usuario de prueba: el suyo si es `<rol>` o `<rol>-2`, ninguno si es `no-role`. */
+function roleOfUser(username, roles) {
+  if (roles.includes(username)) return [username];
+  const base = roles.find((role) => secondUserOf(role) === username);
+  return base ? [base] : [];
+}
+
 /** Protocolos de identidad basados en token: son los que necesitan aprovisionamiento. */
 function usesTokens(model) {
   const protocol = model.security?.protocol ?? 'none';
@@ -128,21 +140,28 @@ export function realmSpec(model) {
     audience: security?.serviceAuth?.audience ?? model.service.name,
     validateAudience: security?.serviceAuth?.validateAudience === true,
     password: PASSWORD,
-    userClient: userTestClient(model),
+    // Sin roles no hay a quién pedirle un token de usuario —el arnés ni emite `tokenFor`—, así que
+    // tampoco hay cliente público ni usuarios. Antes el script los prometía en su cabecera y en
+    // `test-credentials.env` sin crear ninguno (corrida notification-mailer R8).
+    userClient: roles.length > 0 ? userTestClient(model) : null,
     roles,
-    // Un usuario por rol (username = rol) más uno sin ninguno: el 403 por rol
-    // insuficiente necesita un sujeto autenticado.
-    users: [...roles, NO_ROLE_USER].map((username) => ({
+    // DOS usuarios por rol (`<rol>` y `<rol>-2`) más uno sin ninguno: el 403 por rol
+    // insuficiente necesita un sujeto autenticado, y la titularidad («solo el que lo creó»)
+    // necesita dos sujetos distintos con el MISMO rol. Con uno solo, el agente creaba el segundo
+    // a mano en el arnés (corrida room-booking R8).
+    users: (roles.length > 0 ? [...roles, ...roles.map(secondUserOf), NO_ROLE_USER] : []).map((username) => ({
       username,
-      roles: roles.includes(username) ? [username] : [],
+      roles: roleOfUser(username, roles),
       // Alcance por recurso: el claim se proyecta desde un atributo de usuario del mismo
       // nombre, y solo lo llevan los roles que NO están exentos. Un usuario exento sin el
       // atributo es justamente lo que hace observable la exención — si todos lo llevaran,
       // el escenario que prueba que el administrador alcanza cualquier recurso no probaría
       // nada. El valor sale del DISEÑO (ver scopedValue) y viaja a test-credentials.env, de
       // donde lo lee el arnés: el escenario nombra la variable, nunca el literal.
+      // El segundo usuario de un rol lleva el MISMO recurso: dos titulares del mismo alcance,
+      // que es lo que separa «es de otro usuario» de «es de otro recurso».
       attributes:
-        scoping && !scoping.exemptRoles.includes(username) && username !== NO_ROLE_USER
+        scoping && roleOfUser(username, roles).length > 0 && !scoping.exemptRoles.includes(roleOfUser(username, roles)[0])
           ? { [scoping.claim]: [scopedValue(model)] }
           : {}
     })),
@@ -197,11 +216,10 @@ function credentialsEnv(model) {
       ''
     );
   }
-  lines.push(
-    `AUTH_TOKEN_URL=${tokenUrl(model)}`,
-    `AUTH_TEST_CLIENT=${userTestClient(model)}`,
-    `AUTH_TEST_PASSWORD=${PASSWORD}`
-  );
+  lines.push(`AUTH_TOKEN_URL=${tokenUrl(model)}`);
+  if (security?.roles?.length) {
+    lines.push(`AUTH_TEST_CLIENT=${userTestClient(model)}`, `AUTH_TEST_PASSWORD=${PASSWORD}`);
+  }
 
   const clients = security?.serviceClients ?? [];
   const m2m = testM2mClients(model);
@@ -217,7 +235,8 @@ function credentialsEnv(model) {
     }
   }
   if (security?.roles?.length) {
-    lines.push('', `# Usuarios de prueba (username = rol): ${security.roles.join(', ')}, ${NO_ROLE_USER}`);
+    const users = realmSpec(model)?.users.map((user) => user.username) ?? [];
+    lines.push('', `# Usuarios de prueba (<rol> y <rol>-2, más uno sin roles): ${users.join(', ')}`);
   }
   if (security?.scoping) {
     const exempt = security.scoping.exemptRoles;
@@ -271,12 +290,11 @@ while :; do
 done
 
 echo "== Realm =="
-run "create realms -s realm=$REALM -s enabled=true"
-
-echo "== Cliente publico para tokens de usuario (password grant) =="
-run "create clients -r $REALM -s clientId=$USER_CLIENT -s enabled=true -s publicClient=true -s directAccessGrantsEnabled=true"`);
+run "create realms -s realm=$REALM -s enabled=true"`);
 
   if (roles.length > 0) {
+    blocks.push(`echo "== Cliente publico para tokens de usuario (password grant) =="
+run "create clients -r $REALM -s clientId=$USER_CLIENT -s enabled=true -s publicClient=true -s directAccessGrantsEnabled=true"`);
     blocks.push(`echo "== Roles del diseno (security.keel.yaml) =="
 ${roles.map((role) => `run "create roles -r $REALM -s name=${role}"`).join('\n')}
 
@@ -291,12 +309,15 @@ echo "== User Profile: atributos no gestionados =="
 # que el paso va SIEMPRE: no cuesta nada y quita la trampa a quien anada el atributo.
 run "update users/profile -r $REALM -s unmanagedAttributePolicy=ENABLED"
 
-echo "== Usuarios de prueba: uno por rol (username = rol) + uno sin roles =="
+echo "== Usuarios de prueba: dos por rol (<rol> y <rol>-2) + uno sin roles =="
 for USER in ${spec.users.map((user) => user.username).join(' ')}; do
   run "create users -r $REALM -s username=$USER -s enabled=true -s email=$USER@example.com -s emailVerified=true -s firstName=Test -s lastName=User"
   run "set-password -r $REALM --username $USER --new-password $PASSWORD"
 done
-${roles.map((role) => `run "add-roles -r $REALM --uusername ${role} --rolename ${role}"`).join('\n')}`);
+${spec.users
+  .filter((user) => user.roles.length > 0)
+  .map((user) => `run "add-roles -r $REALM --uusername ${user.username} --rolename ${user.roles[0]}"`)
+  .join('\n')}`);
 
     // Alcance por recurso (security.authentication.scoping): el claim que acota qué recursos
     // alcanza el titular. Son DOS piezas y las dos son imprescindibles — el atributo en cada
@@ -405,7 +426,7 @@ ${assignments.join('\n')}`);
   const verifyUser = roles[0] ?? NO_ROLE_USER;
   const content = `#!/usr/bin/env bash
 # Prepara el realm de prueba "${realm}" en el Keycloak de infra/docker-compose.yaml:
-# realm + roles + usuarios de prueba (grant password) + clientes maquina. Generado
+# ${roles.length > 0 ? 'realm + roles + usuarios de prueba (grant password) + clientes maquina' : 'realm + clientes maquina (el diseno no declara roles: no hay usuarios de prueba)'}. Generado
 # por keel-spring build a partir de specs/security.keel.yaml: los nombres y secretos
 # son los mismos que infra/test-credentials.env entrega a AbstractFlowIT, y por eso
 # no se editan aqui a mano — si algo tiene que cambiar, cambia en el diseno.
@@ -436,8 +457,8 @@ ${composeResolution(['-f', 'infra/docker-compose.yaml'])}
 KC="\${COMPOSE[*]} exec -T keycloak /opt/keycloak/bin/kcadm.sh"
 REALM=${realm}
 SVC=${audience}                     # audiencia del servicio (security.serviceAuth.audience)
-USER_CLIENT=${userTestClient(model)} # cliente publico para tokens de usuario
-PASSWORD=${PASSWORD}
+${roles.length > 0 ? `USER_CLIENT=${userTestClient(model)} # cliente publico para tokens de usuario
+` : ''}PASSWORD=${PASSWORD}
 
 # El script es IDEMPOTENTE: re-ejecutarlo sobre un realm ya sembrado devuelve 409 en
 # cada \`create\`, y eso es normal. Lo que NO es normal es cualquier otro fallo de kcadm,

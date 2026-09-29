@@ -501,6 +501,16 @@ export function brokerContainer(serviceName, broker) {
   return `${serviceName}-${broker.serviceKey}`;
 }
 
+/**
+ * Nombre fijo del contenedor del almacenamiento, por lo mismo que el del broker: el arnés
+ * lo detiene y lo levanta en el escenario de «bucket caído», y docker.js lo estampa como
+ * `container_name`. Fuente única de los dos. Solo existe con un almacenamiento que
+ * levanta contenedor (minio).
+ */
+export function storageContainer(serviceName, storage) {
+  return `${serviceName}-${storage.serviceKey}`;
+}
+
 export const BROKERS = {
   kafka: {
     id: 'kafka',

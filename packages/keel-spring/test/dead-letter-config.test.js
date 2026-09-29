@@ -21,6 +21,7 @@ import { loadService } from 'keel-core';
 import { buildModel } from '../src/lib/model.js';
 import { resolveStack } from '../src/scaffold/index.js';
 import { generate as generateDeadLetter } from '../src/scaffold/dead-letter-config.js';
+import { messagingProvisioning } from '../src/scaffold/messaging-provisioning.js';
 
 const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
@@ -219,4 +220,31 @@ test('sin canal compartido el resultado no cambia: la deduplicación no altera e
   const declaration = config.split('\n').find((line) => line.includes('DEAD_LETTERED = Set.of('));
 
   assert.match(declaration, /Set\.of\("compliance\.events"\);/);
+});
+
+// Una suscripción con descarte y SIN `onFailure.retry` dice «sin reintentos». Build ponía un
+// número inventado —5 recepciones en SQS, 3 entregas en Kafka— y la corrida asset-vault (R8)
+// lo vio dos veces seguidas: el mensaje que el diseño mandaba a la DLQ al primer fallo se
+// reentregaba varias veces antes. RabbitMQ ya lo hacía bien (sin retry no hay bloque).
+function withoutRetry() {
+  const { manifest, layers } = sharedChannelDesign();
+  const messaging = structuredClone(layers.messaging);
+  for (const sub of Object.values(messaging.subscriptions)) {
+    if (sub.onFailure?.deadLetter) delete sub.onFailure.retry;
+  }
+  return { manifest, layers: { ...layers, messaging } };
+}
+
+test('kafka y snssqs: con descarte y sin retry, un solo intento', () => {
+  const kafka = configFor('kafka', withoutRetry());
+  assert.ok(kafka.includes('backOff.setMaxAttempts(0);'), kafka);
+
+  const { manifest, layers } = withoutRetry();
+  const stack = resolveStack({ database: 'postgresql', broker: 'snssqs' }, layers, manifest);
+  const model = buildModel({ manifest, layers, stack });
+  model.stack = stack;
+  const script = messagingProvisioning(model).content;
+  const withDlq = script.split('\n').filter((line) => line.startsWith('create_queue_with_dlq '));
+  assert.ok(withDlq.length > 0, script);
+  for (const line of withDlq) assert.match(line, /^create_queue_with_dlq '[^']+' 1 '/);
 });

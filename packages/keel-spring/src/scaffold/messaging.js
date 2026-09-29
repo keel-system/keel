@@ -355,12 +355,27 @@ public class ${stubClass} implements ${event.publisherClass} {
  */
 function requireContractMethod(sub) {
   const required = (sub.fields ?? []).filter((field) => field.required);
-  if (required.length === 0) return '';
+  const bounded = (sub.fields ?? []).some((field) => (field.validation ?? []).length > 0);
+  if (required.length === 0 && !bounded) return '';
+
+  // Las COTAS del payload (longitudes, patrones, tamaños de lista) viajan como anotaciones en
+  // los componentes del record y se comprueban aquí. Antes solo se miraba la presencia: un
+  // payload fuera de cota entraba y reventaba después, o se reintentaba hasta la DLQ
+  // (stock-reservation, R8). Es IllegalArgumentException, que build excluye de los reintentos.
+  const bounds = bounded
+    ? `
+        var violations = VALIDATOR.validate(this);
+        if (!violations.isEmpty()) {
+            var first = violations.iterator().next();
+            throw new IllegalArgumentException(
+                    "${sub.name}: el mensaje incumple el contrato en '" + first.getPropertyPath() + "': " + first.getMessage());
+        }`
+    : '';
 
   const checks = required
     .map(
       (field) => `        if (${field.name} == null) {
-            throw new IllegalStateException(
+            throw new IllegalArgumentException(
                     "${sub.name}: el mensaje no trae '${field.name}', que el contrato declara obligatorio");
         }`
     )
@@ -371,11 +386,13 @@ function requireContractMethod(sub) {
      * Contrato de la fuente: los campos que el diseño declara obligatorios tienen que
      * venir. Llámalo DESPUÉS de filtrar por {@code metadata.eventType} — un mensaje
      * ajeno del canal compartido se descarta SIN lanzar, y lanzar aquí lo mandaría al
-     * descarte. Un payload que incumple el contrato sí agota sus reintentos y acaba
-     * en el descarte: es lo correcto, no se va a volver válido reintentándolo.
+     * descarte. Un payload que incumple el contrato (un campo que falta o fuera de cota)
+     * lanza {@code IllegalArgumentException}, que va al descarte SIN reintentos: no se va a
+     * volver válido reintentándolo. En SQS no hay exclusión por tipo: ahí manda el
+     * maxReceiveCount de la cola.
      */
     public void requireContract() {
-${checks}
+${[checks, bounds].filter(Boolean).join('\n')}
     }
 `;
 }
@@ -390,13 +407,26 @@ function renderSubscriptionMessage(model, sub) {
     if (typeImport) imports.add(typeImport);
   }
   // wireName: la fuente externa nombra el campo distinto que el diseño.
+  // Las cotas del diseño como anotaciones de los componentes: las lee requireContract(). La
+  // presencia la comprueba él mismo, con su mensaje propio, así que las de nulidad no van.
+  const bounded = sub.fields.some((f) => (f.validation ?? []).length > 0);
   const components = sub.fields
     .map((f) => {
-      if (!f.wireName) return `${f.javaType} ${f.name}`;
+      const checks = (f.validation ?? []).filter((a) => !/^@(NotNull|NotBlank|NotEmpty)\b/.test(a));
+      for (const annotation of checks) {
+        const name = /^@(\w+)/.exec(annotation)[1];
+        imports.add(name === 'Valid' ? 'jakarta.validation.Valid' : `jakarta.validation.constraints.${name}`);
+      }
+      const prefix = checks.length > 0 ? `${checks.join(' ')} ` : '';
+      if (!f.wireName) return `${prefix}${f.javaType} ${f.name}`;
       imports.add('com.fasterxml.jackson.annotation.JsonProperty');
-      return `@JsonProperty("${f.wireName}") ${f.javaType} ${f.name}`;
+      return `@JsonProperty("${f.wireName}") ${prefix}${f.javaType} ${f.name}`;
     })
     .join(', ');
+  if (bounded) {
+    imports.add('jakarta.validation.Validation');
+    imports.add('jakarta.validation.Validator');
+  }
 
   const annotations = [];
   if (sub.unknownFields !== 'fail') {
@@ -408,7 +438,7 @@ function renderSubscriptionMessage(model, sub) {
  * Payload del evento ${sub.name}${sub.source ? ` (fuente: ${sub.source})` : ''}.
 ${contractJavadoc(sub, model)} */
 ${annotations.map((a) => `${a}\n`).join('')}public record ${sub.messageRecord}(${components}) {
-${requireContractMethod(sub)}}`;
+${bounded ? '\n    private static final Validator VALIDATOR = Validation.buildDefaultValidatorFactory().getValidator();\n' : ''}${requireContractMethod(sub)}}`;
   return {
     path: javaPath(model, SUBSCRIPTIONS_PKG, sub.messageRecord),
     content: javaFile(subPackage(model, SUBSCRIPTIONS_PKG), [...imports], body)
@@ -614,6 +644,6 @@ function resolutionNote(identity) {
     return ' Se resuelve 1:1: el valor leído ES la clave natural del recurso que identifica.';
   }
   const [entity, field] = String(identity.resolvedBy).split('.');
-  return ` El valor es UNA de las credenciales de ${entity} (resolvedBy: ${identity.resolvedBy}), no su clave natural: se resuelve con ${entity}Repository.${credentialFinderName(field)}(...), que build ya generó — el mismo finder que usa la puerta HTTP, así que a la operación le llega lo mismo entre por donde entre. Si no encuentra ningún ${entity}, el emisor no está registrado: es el caso de onUnresolved, no un error que reintentar.`;
+  return ` El valor es UNA de las credenciales de ${entity} (resolvedBy: ${identity.resolvedBy}), no su clave natural: se resuelve con ${entity}Repository.${credentialFinderName(field)}(...), que build ya generó — el mismo finder que usa CallerIdentity en la puerta HTTP. Al comando se le pasa la CLAVE NATURAL del ${entity} encontrado, no la credencial: es lo que el campo significa en el diseño y lo que la puerta HTTP le pasa, así que a la operación le llega lo mismo entre por donde entre. Si no encuentra ningún ${entity}, el emisor no está registrado: es el caso de onUnresolved, no un error que reintentar.`;
 }
 

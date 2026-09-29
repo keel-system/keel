@@ -15,6 +15,7 @@ import { refTargetsOf } from './ref-resolvers.js';
 import { usesCorrelation, correlationImport } from './correlation.js';
 import { claimMechanism } from './claim.js';
 import { stubNote as conditionalUniquenessNote } from './conditional-uniqueness.js';
+import { callerResolution } from './security.js';
 
 // Componentes del record mensaje: parámetros de ruta (en el orden del path) +
 // campos del body + paginación (queries). Compartidos con el controller para
@@ -307,7 +308,17 @@ function renderMessage(model, operation) {
       // coincida con la clave no encuentra nada — un 403 en el camino feliz, en la puerta de
       // entrada del servicio. Ocurrió: nueve escenarios y cinco clases enteras.
       const resolvedBy = model.security?.callerIdentity?.resolvedBy;
-      if (resolvedBy) {
+      const resolution = callerResolution(model);
+      if (resolution) {
+        // Resuelto ya en la puerta: las dos (controller y listener) pasan la clave natural, así que
+        // el handler no vuelve a mirar credenciales. Lo único que decide es qué hacer con el null.
+        notes.push(
+          `// Llega YA resuelta a la clave natural de ${resolution.entity} (${resolution.keyField}): por HTTP la`,
+          `// resuelve CallerIdentity con ${resolution.port}.${resolution.finder}(...), y por eventos el listener`,
+          '// con el mismo finder. null = la credencial no pertenece a ningún ' + resolution.entity + ': es la',
+          '// precondición de la operación y responde con el error que el diseño declare para ella.'
+        );
+      } else if (resolvedBy) {
         const finder = `findBy${resolvedBy.field.charAt(0).toUpperCase()}${resolvedBy.field.slice(1)}Containing`;
         notes.push(
           `// OJO: el valor es un client_id, NO la clave natural de ${resolvedBy.entity}. El diseño declara`,
@@ -489,12 +500,27 @@ function renderHandler(model, service, operation) {
     const error = model.errors.find((e) => e.code === code);
     notes.push(`Error: lanzar ${error?.exceptionClass ?? code} (${code}, HTTP ${error?.http ?? 400})${error?.when ? ` cuando: ${error.when}` : ''}`);
   }
+  // El alcance por recurso: el puerto y su adaptador JWT ya los generó build. Lo que queda es
+  // USARLO, en el punto que dicen las reglas, y los finders acotados de los listados.
+  const scoping = model.security?.scoping;
+  if (scoping && operation.errors.includes(scoping.error)) {
+    notes.push(
+      `Alcance (security.authentication.scoping): inyecta CallerScope (application.support), que build ya ` +
+        `generó con su adaptador JWT, y comprueba callerScope.covers(<${scoping.over} del recurso>) donde lo ` +
+        `digan las reglas; fuera del alcance, ${scoping.error}. Exentos: ${scoping.exemptRoles.join(', ') || 'ninguno'}. ` +
+        `En un listado, filtra por callerScope.scopedValues() con un finder acotado que escribes tú`
+    );
+  }
   for (const eventName of operation.emits) {
     const event = (model.events ?? []).find((e) => e.name === eventName);
     // El agregado que lo emite DESDE ESTA operación, no el primero de la lista: un mismo
     // evento puede salir de dos raíces distintas, y nombrar la ajena manda a escribir el
     // raise() en la clase equivocada.
-    const emisor = (event?.emittedBy ?? []).find((e) => e.operation === operation.name)?.aggregate;
+    // Un barrido que mueve varias raíces las nombra todas: el DSL no dice cuál emite qué.
+    const emisores = [
+      ...new Set((event?.emittedBy ?? []).filter((e) => e.operation === operation.name && e.aggregate).map((e) => e.aggregate))
+    ];
+    const emisor = emisores.length > 0 ? emisores.join(' o ') : null;
     notes.push(
       `Emite: ${eventName} — lo hace ${emisor ?? 'el agregado'} con raise(${event?.className ?? `${eventName}Event`}.of(...)) dentro del método de negocio; el handler no publica nada`
     );
@@ -592,7 +618,7 @@ function renderHandler(model, service, operation) {
           `EL RECLAMO YA ESTÁ GENERADO: toma el lote con ${claim.method}() del puerto ${claim.entity}Repository. Devuelve SOLO los candidatos que ESTA réplica se llevó —el barrido corre en todas a la vez— y ya trae dentro las tres decisiones: el umbral de espera que declara el diseño, la cota del lote y la caducidad de la marca, leídos de parameters/<perfil>/reconciliation.yaml. NO escribas otro reclamo (ni un finder por estado, ni un lock, ni una marca propia en ${claim.entity}): un segundo mecanismo en paralelo al generado no reclama nada, solo reparte peor. ` +
           `Y decide qué hace con cada uno según el efecto declarado ("${activation.effect}"): reintentar el encargo o disparar la compensación. Si el diseño no lo dice, es designGap. ` +
           `SIN TRANSACCIÓN ABARCADORA: a diferencia de los demás casos de uso, este NO corre dentro de una transacción — el scheduler lo despacha con mediator.dispatchWithoutTransaction() justo para que puedas colocar los commits donde toca. Cada llamada al adaptador abre y confirma la suya, y la del reclamo ya está confirmada cuando ${claim.method}() te devuelve la lista. ` +
-          `ORDEN: son DOS commits y no se confunden — (1) el reclamo, que ya está hecho y confirmado; (2) llamar al proveedor, FUERA de toda transacción; (3) transición al estado final y confirmar. Si actúas contra el proveedor y mueres antes de (3), la marca caduca y la siguiente pasada repite la llamada, que es lo que absorbe la idempotencia saliente: tiene red. Al revés —confirmar el desenlace y luego actuar— si mueres en medio dejas la entidad resuelta y el trabajo vivo en el proveedor: un huérfano que no detecta nadie. ` +
+          reconciliationOrder(operation, activation, true) +
           `La transición del agregado NO sustituye al reclamo, y el reclamo no sustituye a la idempotencia saliente: lo que absorbe una llamada repetida al proveedor —tras una caducidad, o tras un reintento— es solo esa. ` +
           `Y si lo que haces es reencargar publicando un evento, no lo absorbe nada: cada réplica hace su propio raise y estampa un metadata.eventId distinto, así que para el consumidor son N hechos y su processed_event no los deduplica. ` +
           `CARRERA CON EL CAMINO FELIZ: mientras barres puede llegar el evento de desenlace. Si al mover el candidato lo encuentras ya fuera del estado de espera, ganó el otro camino: es la carrera resuelta, no un fallo — no lo registres como error ni lo reintentes. ` +
@@ -617,7 +643,7 @@ function renderHandler(model, service, operation) {
         `La transición del agregado NO basta: las réplicas leen antes de que ninguna confirme, así que todas pasan el guard y todas actúan; lo único que absorbe las llamadas repetidas al proveedor es la idempotencia saliente. ` +
         `Y si lo que haces es reencargar publicando un evento, no lo absorbe nada: cada réplica hace su propio raise y estampa un metadata.eventId distinto, así que para el consumidor son N hechos y su processed_event no los deduplica. ` +
         `SIN TRANSACCIÓN ABARCADORA: a diferencia de los demás casos de uso, este NO corre dentro de una transacción — el scheduler lo despacha con mediator.dispatchWithoutTransaction() justo para que puedas colocar los commits donde toca. La consecuencia práctica: cada llamada al adaptador de repositorio abre y confirma la SUYA, así que el commit del reclamo sale de que el método del adaptador esté anotado @Transactional (a secas: no hace falta REQUIRES_NEW, porque no hay ninguna transacción externa a la que unirse), y la llamada al proveedor cae fuera de todas. A cambio, el adaptador tiene que bastarse solo: la clase lleva @Transactional(readOnly = true) y toda consulta que añadas hereda esa transacción de lectura; si añades una ESCRITURA, anótala @Transactional o fallará por transacción de solo lectura. ` +
-        `ORDEN: son DOS commits y no se confunden — (1) marcar el reclamo y confirmar, que es lo que lo hace visible a las demás réplicas; (2) llamar al proveedor, fuera de toda transacción; (3) transición al estado final y confirmar. Si actúas contra el proveedor y mueres antes de (3), la entidad sigue reclamada y al caducar la marca la siguiente pasada repite la llamada, que es lo que absorbe la idempotencia saliente: tiene red. Al revés —confirmar el desenlace y luego actuar— si mueres en medio dejas la entidad resuelta y el trabajo vivo en el proveedor: un huérfano que no detecta nadie. ` +
+        reconciliationOrder(operation, activation, false) +
         `CARRERA CON EL CAMINO FELIZ: mientras barres puede llegar el evento de desenlace. Si al mover el candidato lo encuentras ya fuera del estado de espera, ganó el otro camino: es la carrera resuelta, no un fallo — no lo registres como error ni lo reintentes`
     );
   }
@@ -690,7 +716,27 @@ function renderHandler(model, service, operation) {
   // si el proveedor aceptó — el orden que deja el trabajo vivo y a nadie buscándolo. Dos
   // órdenes opuestos en el mismo stub no son dos consejos: son uno que el agente va a
   // elegir al azar.
-  const outgoing = (operation.dependencyActivations ?? []).filter(({ activation }) => activation.http);
+  const calls = (operation.dependencyActivations ?? []).filter(({ activation }) => activation.http);
+  // Con `awaits: outcome` el orden es el contrario: el veredicto del proveedor DECIDE qué
+  // transición aplicar (publicar o poner en cuarentena), así que no se puede aplicar antes.
+  // La nota general decía «transición primero» también aquí, y contradecía la regla del
+  // diseño; el agente siguió al diseño (asset-vault, R8).
+  // La señal no es solo `awaits: outcome`: es que la operación RAMIFICA —dos transiciones
+  // desde el mismo estado de la misma entidad (draft → published | quarantined)—. Con una
+  // sola transición a un estado de espera, el desenlace llega después y la nota general vale.
+  const fromKeys = (operation.transitions ?? []).flatMap((t) => (t.from ?? []).map((state) => `${t.entity}::${state}`));
+  const branches = fromKeys.some((key, index) => fromKeys.indexOf(key) !== index);
+  const decided = branches ? calls.filter(({ activation }) => activation.awaits === 'outcome') : [];
+  const decidedNames = new Set(decided.map(({ activation }) => activation.name));
+  if ((operation.transitions ?? []).length > 0 && decided.length > 0 && !(operation.reconciles ?? []).length) {
+    const names = decided.map(({ dependency, activation }) => `${dependency}.${activation.name}`).join(', ');
+    notes.push(
+      `ORDEN de los efectos: ${names} es awaits: outcome y su resultado DECIDE la transición. Comprueba primero la ` +
+        `precondición de estado SIN escribir nada, llama después y aplica la transición que corresponda al veredicto. ` +
+        `Si una regla del diseño fija el orden, manda la regla`
+    );
+  }
+  const outgoing = calls.filter(({ activation }) => !decidedNames.has(activation.name));
   if ((operation.transitions ?? []).length > 0 && outgoing.length > 0 && !(operation.reconciles ?? []).length) {
     const names = outgoing.map(({ dependency, activation }) => `${dependency}.${activation.name}`).join(', ');
     const guards = operation.transitions
@@ -771,6 +817,38 @@ function needNote(depId, need, operation) {
 // se despacha SIN transacción abarcadora (ver renderScheduler), así que decirle ahí que la
 // llamada «ocurre dentro de la transacción que abrió el UseCaseMediator» sería contradecir,
 // en el mismo comentario, la nota de reconciliación que le dice lo contrario.
+/**
+ * El ORDEN de un barrido de reconciliación, que depende de QUÉ llama. Si reintenta la misma
+ * activación que reconcilia, el desenlace es el resultado de la llamada: proveedor primero,
+ * transición después. Si llama a OTRA activación que DESHACE el encargo (cancelar lo reservado),
+ * la entidad se resuelve primero y la llamada va después: es lo que declaró stock-reservation
+ * (R8), y el orden genérico de la nota le mandaba lo contrario. En los dos casos, una regla del
+ * diseño que fije el orden manda sobre esto.
+ */
+function reconciliationOrder(operation, activation, claimGenerated) {
+  const calls = (operation.dependencyActivations ?? []).filter(({ activation: called }) => called.http);
+  const retries = calls.some(({ activation: called }) => called.name === activation.name);
+  const undoes = calls.filter(({ activation: called }) => called.name !== activation.name);
+  const first = claimGenerated
+    ? '(1) el reclamo, que ya está hecho y confirmado'
+    : '(1) marcar el reclamo y confirmar, que es lo que lo hace visible a las demás réplicas';
+  if (undoes.length > 0 && !retries) {
+    const names = undoes.map(({ dependency, activation: called }) => `${dependency}.${called.name}`).join(', ');
+    return (
+      `ORDEN: aquí el barrido no reintenta el encargo, lo DESHACE con ${names}, así que va al revés que un reintento — ` +
+      `${first}; (2) transición al estado final y confirmar; (3) después, fuera de toda transacción, llamar a ${names}. ` +
+      `Llamar antes y morir antes de confirmar dejaría deshecho el trabajo del proveedor y la entidad todavía en espera. ` +
+      `Si una regla del diseño fija el orden, manda la regla. `
+    );
+  }
+  return (
+    `ORDEN: son DOS commits y no se confunden — ${first}; (2) llamar al proveedor, FUERA de toda transacción; (3) transición al estado final y confirmar. ` +
+    `Si actúas contra el proveedor y mueres antes de (3), la marca caduca y la siguiente pasada repite la llamada, que es lo que absorbe la idempotencia saliente: tiene red. ` +
+    `Al revés —confirmar el desenlace y luego actuar— si mueres en medio dejas la entidad resuelta y el trabajo vivo en el proveedor: un huérfano que no detecta nadie. ` +
+    `Si una regla del diseño fija el orden, manda la regla. `
+  );
+}
+
 function activationNote(depId, activation, sweep = false) {
   if (activation.event) {
     const raise = activation.event.className ? `raise(${activation.event.className}.of(...))` : 'raise(...)';
@@ -781,7 +859,7 @@ function activationNote(depId, activation, sweep = false) {
   }
 
   const awaits = {
-    outcome: `awaits: outcome — el resultado que devuelve ${depId} condiciona el desenlace de esta operación: usa el cuerpo de la respuesta, no basta con que la llamada no falle.`,
+    outcome: `awaits: outcome — el resultado que devuelve ${depId} condiciona el desenlace de esta operación: no basta con que la llamada no falle. Qué significa un desenlace negativo lo dice el diseño: si specs/decisions.yaml acepta OBL-OUTCOME-NEGATIVE-UNDECIDED, manda esa decisión (y puede que el cuerpo no importe).`,
     acknowledgement: `awaits: acknowledgement — basta con que ${depId} acuse recibo; no interpretes el cuerpo como parte del desenlace.`,
     nothing: sweep
       ? `awaits: nothing — no se espera nada de vuelta, pero la llamada sigue siendo síncrona y su timeout bloquea la pasada del barrido. Aquí NO hay transacción abarcadora que mantener abierta (este barrido se despacha sin ella), así que lo que se retiene es el turno, no una conexión del pool.`
@@ -848,8 +926,18 @@ function renderScheduler(model, service, scheduled, seconds) {
     // conjunto de operaciones que tienen una llamada a un tercero EN MEDIO del trabajo.
     // Las demás (una purga, un cierre diario) siguen con su transacción única, que es lo
     // correcto para ellas: no llaman a nadie en medio.
-    const sweep = (operation.reconciles ?? []).length > 0 || feedsGuardedEffect(model, operation);
-    const efectoExterno = (operation.reconciles ?? []).length > 0 ? 'llama al proveedor' : 'produce un efecto que no se deshace';
+    // Y todo barrido con un reclamo GENERADO: el reclamo confirma en su propia transacción
+    // (REQUIRES_NEW) antes de devolver el lote, así que envolver el lote entero en una
+    // transacción única hace que un conflicto en una fila revierta el trabajo de todas y
+    // las deje reclamadas a medias. La corrida room-booking (R8) lo tuvo que cambiar a mano.
+    const claimed = (operation.claim ?? []).length > 0;
+    const sweep = (operation.reconciles ?? []).length > 0 || feedsGuardedEffect(model, operation) || claimed;
+    const efectoExterno =
+      (operation.reconciles ?? []).length > 0
+        ? 'llama al proveedor'
+        : feedsGuardedEffect(model, operation)
+          ? 'produce un efecto que no se deshace'
+          : 'confirma cada reclamo en su propia transacción y actúa sobre las filas una a una';
     const sweepNote = sweep
       ? `${operation.schedule.description ? '<p>' : ''}Despachado <b>sin transacción abarcadora</b> a propósito: este barrido ${efectoExterno}
 EN MEDIO de su trabajo, así que su garantía es un orden de commits —reclamar y confirmar, actuar
@@ -901,8 +989,9 @@ candidatos.`
  * <p><strong>No todos los métodos despachan igual, y no es un descuido.</strong> Un barrido
  * que reconcilia una activación saliente va por {@code dispatchWithoutTransaction}: su
  * garantía es un ORDEN de commits (reclamar y confirmar, llamar al proveedor fuera de toda
- * transacción, confirmar el desenlace), y una transacción abarcadora la rompe entera. El
- * resto —purgas, cierres— va por {@code dispatch} y corre en una transacción única, que es
+ * transacción, confirmar el desenlace), y una transacción abarcadora la rompe entera. Lo
+ * mismo todo barrido con un reclamo generado: sus filas ya están confirmadas como tomadas, y
+ * un fallo en una no puede revertir las demás. El resto —purgas, cierres— va por {@code dispatch} y corre en una transacción única, que es
  * lo correcto cuando no hay ninguna llamada a un tercero en medio. Quién usa cuál lo decide
  * el diseño (\`dependencies.activations.<a>.reconciledBy\`), no esta clase.
  *

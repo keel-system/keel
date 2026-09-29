@@ -30,7 +30,7 @@ export function generate(model) {
     './gradlew bootRun',
     './gradlew build -x test        # compilación y empaquetado (no ejecuta pruebas)',
     './gradlew integrationTest      # escenarios FL-* contra la infraestructura de arriba',
-    './gradlew test                 # contextLoads(): el contexto arranca con perfil test (H2, sin infra)',
+    `./gradlew test                 # contextLoads(): el contexto arranca con perfil test (${model.persistenceKind === 'document' ? 'Mongo embebido' : 'H2'}, sin infra)`,
     '```',
     '',
     `Requiere Java ${JAVA_VERSION} (el wrapper de Gradle va incluido; en Windows usa \`gradlew.bat\`).`,
@@ -54,7 +54,10 @@ export function generate(model) {
     lines.push('');
   }
   if (layersPresent.persistence) {
-    lines.push('El perfil `test` usa H2 en memoria (no necesita contenedores): queda listo para la suite de pruebas unitarias, que es un proceso posterior a la validación funcional.', '');
+    lines.push(
+      `El perfil \`test\` usa ${model.persistenceKind === 'document' ? 'un Mongo embebido (flapdoodle)' : 'H2 en memoria'} (no necesita contenedores): queda listo para la suite de pruebas unitarias, que es un proceso posterior a la validación funcional.`,
+      ''
+    );
   }
 
   if (infra.length > 0) {
@@ -93,7 +96,7 @@ export function generate(model) {
     'con default (`${VAR:default}`) y production env vars obligatorias sin default (`${VAR}`).',
     '',
     '```bash',
-    'PROFILE=production DB_URL=... DB_USERNAME=... DB_PASSWORD=... java -jar build/libs/*.jar',
+    productionExampleLine(model),
     '```',
     '',
     ...(layersPresent.persistence && model.persistenceKind !== 'document'
@@ -267,10 +270,17 @@ function manualTestingSection(model) {
     ''
   ];
 
-  if (realm) {
+  if (realm && realm.users.length === 0) {
+    lines.push(
+      `El realm \`${realm.realm}\` se importa al arrancar Keycloak con los clientes máquina del diseño y sus`,
+      'secretos. El diseño no declara roles, así que no hay usuarios de prueba: los tokens son de cliente',
+      '(`grant_type=client_credentials`). No hay que ejecutar nada para provisionarlo.',
+      ''
+    );
+  } else if (realm) {
     lines.push(
       `El realm \`${realm.realm}\` se importa al arrancar Keycloak, ya poblado con lo que declara el diseño:`,
-      `un usuario por rol (username = rol: ${realm.users.map((user) => user.username).join(', ')}), todos con contraseña`,
+      `dos usuarios por rol (<rol> y <rol>-2) y uno sin roles (${realm.users.map((user) => user.username).join(', ')}), todos con contraseña`,
       `\`${realm.password}\`, y los clientes máquina con sus secretos. No hay que ejecutar nada para provisionarlo.`,
       '',
       '```bash',
@@ -421,6 +431,18 @@ function productionSection(model) {
 // gradiente de config.js, y se desincronizaba en cuanto una variable pasaba a
 // depender del diseño (un `STORAGE_BUCKET_<NOMBRE>` por bucket declarado no
 // aparecía nunca). Derivarla del YAML hace imposible esa divergencia.
+/**
+ * La línea de arranque en production del README, con las variables que ese perfil EXIGE. Solo
+ * las de la base (`DB_*`), que son las que cualquier despliegue tiene que dar; la tabla completa
+ * va más abajo. Sin base, la línea no inventa ninguna.
+ */
+function productionExampleLine(model) {
+  const vars = productionParameters(model)
+    .required.map((param) => param.name)
+    .filter((name) => name.startsWith('DB_'));
+  return ['PROFILE=production', ...vars.map((name) => `${name}=...`), 'java -jar build/libs/*.jar'].join(' ');
+}
+
 function productionParameters(model) {
   const required = new Map();
   const optional = new Map();
@@ -482,7 +504,12 @@ const PARAMETER_PATTERNS = [
   [/_PASSWORD$/, () => 'Contraseña de autenticación básica de un cliente HTTP saliente.']
 ];
 
-function purposeOf(name, fragment) {
+function purposeOf(name, fragment, model) {
+  // La misma variable dice cosas distintas según el modelo: en documental DB_URL es la URI de
+  // Mongo (config.js la emite como `spring.data.mongodb.uri`), no una URL JDBC.
+  if (name === 'DB_URL' && model?.persistenceKind === 'document') {
+    return 'URI de conexión de MongoDB (`mongodb://…`, con credenciales y base incluidas).';
+  }
   if (PARAMETER_PURPOSES[name]) return PARAMETER_PURPOSES[name];
   for (const [pattern, describe] of PARAMETER_PATTERNS) {
     const match = name.match(pattern);

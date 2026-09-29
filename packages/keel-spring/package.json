@@ -1,6 +1,6 @@
 {
   "name": "keel-spring",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Generador Spring Boot para diseños Keel: valida el diseño agnóstico y genera services/<servicio>-spring/ con el scaffolding transversal al stack más el conocimiento del agente; los adaptadores de infraestructura y la lógica de negocio los completa el agente con /keel-generate-spring dentro del proyecto.",
   "type": "module",
   "bin": {
@@ -8,7 +8,7 @@
   },
   "scripts": {
     "test": "node --test",
-    "compile-check": "node scripts/compile-check.js && node scripts/compile-check.js asset-vault --broker=snssqs && node scripts/compile-check.js asset-vault --broker=kafka --auth=cognito && node scripts/compile-check.js notification-mailer --broker=snssqs && node scripts/compile-check.js job-dispatch && node scripts/compile-check.js job-dispatch-mongo --broker=kafka && node scripts/compile-check.js stock-reservation --broker=kafka && node scripts/compile-check.js notification-mailer-mongo --broker=kafka && node scripts/compile-check.js payout-runs && node scripts/compile-check.js job-dispatch --database=oracle && node scripts/compile-check.js stock-reservation --broker=kafka --telemetry=otel && node scripts/compile-check.js asset-vault --broker=snssqs --telemetry=otel && node scripts/compile-check.js notification-mailer --broker=kafka --telemetry=otel",
+    "compile-check": "node scripts/compile-check.js && node scripts/compile-check.js asset-vault --broker=snssqs && node scripts/compile-check.js asset-vault --broker=kafka --auth=cognito && node scripts/compile-check.js notification-mailer --broker=snssqs && node scripts/compile-check.js notification-mailer --broker=kafka --auth=cognito && node scripts/compile-check.js job-dispatch && node scripts/compile-check.js job-dispatch-mongo --broker=kafka && node scripts/compile-check.js stock-reservation --broker=kafka && node scripts/compile-check.js notification-mailer-mongo --broker=kafka && node scripts/compile-check.js payout-runs && node scripts/compile-check.js job-dispatch --database=oracle && node scripts/compile-check.js stock-reservation --broker=kafka --telemetry=otel && node scripts/compile-check.js asset-vault --broker=snssqs --telemetry=otel && node scripts/compile-check.js notification-mailer --broker=kafka --telemetry=otel",
     "broker-check": "node scripts/broker-check.js",
     "claim-check": "node scripts/claim-check.js && node scripts/claim-check.js job-dispatch --database=mysql && node scripts/claim-check.js job-dispatch --database=mariadb && node scripts/claim-check.js job-dispatch-mongo && node scripts/claim-check.js notification-mailer && node scripts/claim-check.js notification-mailer --database=mysql && node scripts/claim-check.js notification-mailer-mongo",
     "store-check": "node scripts/store-check.js notification-mailer && node scripts/store-check.js notification-mailer --database=mysql && node scripts/store-check.js notification-mailer-mongo && node scripts/store-check.js stock-reservation && node scripts/store-check.js stock-reservation --database=mysql && node scripts/store-check.js asset-vault",

@@ -37,8 +37,10 @@ export function generate(model) {
     files.push(renderMapper(model, client));
     files.push(renderAdapter(model, client));
     for (const call of client.calls) {
-      files.push(renderResult(model, client, call));
-      files.push(renderResponse(model, client, call));
+      if (!call.bodiless) {
+        files.push(renderResult(model, client, call));
+        files.push(renderResponse(model, client, call));
+      }
       if (call.requestType) files.push(renderRequest(model, client, call));
     }
   }
@@ -254,16 +256,19 @@ function renderMapper(model, client) {
   const methods = [];
 
   for (const call of client.calls) {
-    imports.add(`${portPkg}.${call.resultType}`);
-    addFieldImports(model, imports, call.responseFields);
-    const pascal = call.resultType.replace(/Result$/, '');
-    if (call.responseFields.length > 0) {
+    const pascal = call.pascal;
+    if (call.bodiless) {
+      // Nada que traducir: la llamada no devuelve cuerpo.
+    } else if (call.responseFields.length > 0) {
+      imports.add(`${portPkg}.${call.resultType}`);
+      addFieldImports(model, imports, call.responseFields);
       const args = call.responseFields.map((f) => `response.${f.name}()`).join(', ');
       methods.push(`    /** Traduce la respuesta wire de ${call.name} al resultado del dominio. */
     public ${call.resultType} to${pascal}Result(${call.responseType} response) {
         return new ${call.resultType}(${args});
     }`);
     } else {
+      imports.add(`${portPkg}.${call.resultType}`);
       methods.push(`    /** Traduce la respuesta wire de ${call.name} al resultado del dominio. */
     public ${call.resultType} to${pascal}Result(${call.responseType} response) {
         // TODO (agente): mapea la respuesta del contract "${call.contract}" al resultado del dominio.
@@ -307,7 +312,7 @@ function renderAdapter(model, client) {
     `${subPackage(model, PORT_PKG)}.${client.clientClass}`
   ]);
   for (const call of client.calls) {
-    imports.add(`${subPackage(model, PORT_PKG)}.${call.resultType}`);
+    if (!call.bodiless) imports.add(`${subPackage(model, PORT_PKG)}.${call.resultType}`);
   }
 
   const methods = client.calls.map((call) => renderCallMethod(model, client, call, imports)).join('\n\n');
@@ -451,7 +456,10 @@ function renderCallMethod(model, client, call, imports) {
     (call.fallback || call.circuitBreaker || (call.needs ?? []).some(({ need }) => need.onUnavailable)) &&
       (call.retry || call.circuitBreaker)
   );
-  const pascal = call.resultType.replace(/Result$/, '');
+  const pascal = call.pascal;
+  // `return` delante de la delegación solo si hay algo que devolver: en Java un
+  // `return f()` con f void no compila.
+  const ret = call.bodiless ? '' : 'return ';
 
   // El fallbackMethod va en el aspecto MÁS EXTERNO, que es `@Retry`: el orden de
   // resilience4j es Retry(CircuitBreaker(llamada)). Ponerlo en el circuito teniendo
@@ -551,6 +559,12 @@ function renderCallMethod(model, client, call, imports) {
     // almacén se alimenta del camino feliz por definición: lo que sirve cuando el
     // proveedor cae es lo último que contestó cuando no lo estaba.
     const policy = callPolicy(model, client, call);
+    if (call.bodiless) {
+      callBody = `${preamble}        restClient.${verb}()
+                ${uriStep}${headerSteps}${idempotencyStep}${bodyStep}
+                .retrieve()
+                .toBodilessEntity();`;
+    }
     const rememberStep = policy
       ? `
         ${call.resultType} result = mapper.to${pascal}Result(response);
@@ -558,7 +572,7 @@ function renderCallMethod(model, client, call, imports) {
         return result;`
       : `
         return mapper.to${pascal}Result(response);`;
-    callBody = `${todo}${preamble}        ${call.responseType} response = restClient.${verb}()
+    if (!call.bodiless) callBody = `${todo}${preamble}        ${call.responseType} response = restClient.${verb}()
                 ${uriStep}${headerSteps}${idempotencyStep}${bodyStep}
                 .retrieve()
                 .body(${call.responseType}.class);${emptyBodyGuard}${rememberStep}`;
@@ -606,7 +620,7 @@ ${callBody}
       : '';
     return `    /** ${failure.reason} */
     private ${call.resultType} ${call.fallbackMethod}(${[...params, `${failure.simple} throwable`].join(', ')}) {
-${rejection}        return ${call.unavailableMethod}(${args});
+${rejection}        ${ret}${call.unavailableMethod}(${args});
     }`;
   });
 
@@ -707,14 +721,15 @@ function fallbackBody(model, client, call, imports) {
     imports.add('org.slf4j.LoggerFactory');
     // Resultado neutro: el diseño dice que el fallo no interrumpe al llamante,
     // así que no puede propagar la excepción ni inventarse datos del proveedor.
-    const empty = neutralResultArgs(call, imports);
+    const empty = call.bodiless ? '' : neutralResultArgs(call, imports);
     // Una sola línea, no el trace genérico MÁS esta: son el mismo evento, y el mensaje
     // de aquí dice más (que el llamante sigue adelante). El throwable va como argumento
     // —no `toString()`— para conservar la traza: sin ella, diagnosticar un fallo de
     // integración disfrazado de proveedor caído obliga a instrumentar a mano.
-    return `${prose}${origin}        // El llamante sigue adelante: no propagues la excepción ni inventes datos del proveedor.
-        log.warn("${client.id}.${call.name} no disponible; se continúa sin él", throwable);
+    const tail = call.bodiless ? '' : `
         return new ${call.resultType}(${empty});`;
+    return `${prose}${origin}        // El llamante sigue adelante: no propagues la excepción ni inventes datos del proveedor.
+        log.warn("${client.id}.${call.name} no disponible; se continúa sin él", throwable);${tail}`;
   }
 
   if (onFailure?.action === 'fail') {

@@ -106,7 +106,8 @@ export function parseCorrida(name, text) {
     designGaps: number(huecos, /(\d+)/),
     gapKeys,
     // Desde el plan de validación de R8 (etiquetas opcionales: una corrida anterior sale null).
-    role: (row(table, 'Papel') ?? '').trim().toLowerCase() || null,
+    // La primera palabra es el papel; lo que sigue es el motivo («superada — por …»).
+    role: (row(table, 'Papel') ?? '').trim().toLowerCase().split(/[\s—–-]+/)[0] || null,
     generatorGaps: number(row(table, 'Huecos del generador'), /(\d+)/),
     gateHoles: number(row(table, 'Agujeros de la puerta'), /(\d+)/),
     classification: row(table, 'Clasificación de la huella'),
@@ -130,7 +131,11 @@ export const H1_MIN_CORRIDAS = 3;
  * viven aquí para que el resultado no se interprete a posteriori.
  *
  * Solo cuentan las corridas de MEDICIÓN: las que llevan el sufijo `-r8` y no tienen el papel
- * `control` (la de control mide el residuo del generador, no el diseño).
+ * `control` (la de control mide el residuo del generador, no el diseño) ni `superada`. Una
+ * corrida queda superada por la regla de parada temprana del plan, fijada también antes de
+ * correr: tras un agujero de la puerta se arregla el método y la corrida se REPITE, porque la
+ * cuenta de «0 huecos» tiene que salir de corridas hechas con el método corregido. También la
+ * que se generó con una puerta que ya no la dejaría pasar. Sigue en la serie como histórico.
  *
  * - no-robusta: un agujero de la puerta, un designGap repetido entre corridas de medición, una
  *   corrida generada con --accept-unready, más de un hueco del diseño en toda la serie, o un
@@ -139,7 +144,9 @@ export const H1_MIN_CORRIDAS = 3;
  * - en-curso: todo lo demás (pocas corridas o algo sin medir), con el motivo.
  */
 export function verdict(corridas) {
-  const measured = corridas.filter((corrida) => /-r8$/.test(corrida.name) && corrida.role !== 'control');
+  const measured = corridas.filter(
+    (corrida) => /-r8$/.test(corrida.name) && corrida.role !== 'control' && corrida.role !== 'superada'
+  );
   const reasons = [];
   const pending = [];
 

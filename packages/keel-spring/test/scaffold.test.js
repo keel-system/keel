@@ -1284,7 +1284,7 @@ test('deploy: con Keycloak el realm se importa al arrancar, sin ejecutar nada', 
   assert.deepEqual(realm.roles.realm.map((r) => r.name), ['admin']);
   // Un usuario por rol (username = rol) + uno sin ninguno: el 403 por rol
   // insuficiente necesita un sujeto autenticado.
-  assert.deepEqual(realm.users.map((u) => u.username), ['admin', 'no-role']);
+  assert.deepEqual(realm.users.map((u) => u.username), ['admin', 'admin-2', 'no-role']);
   assert.equal(realm.users[0].credentials[0].value, 'password');
 
   const byId = Object.fromEntries(realm.clients.map((c) => [c.clientId, c]));
@@ -3644,6 +3644,12 @@ test('SecurityConfig: dos filter chains cuando conviven endpoints de usuario y M
   assert.ok(handlers.includes('implements AuthenticationEntryPoint, AccessDeniedHandler'));
   assert.ok(handlers.includes('HttpStatus.UNAUTHORIZED'));
   assert.ok(handlers.includes('HttpStatus.FORBIDDEN'));
+  // Con su `code` canónico: con el constructor de tres argumentos salía null y un escenario
+  // solo podía afirmar el status (asset-vault, R8).
+  assert.ok(handlers.includes('"UNAUTHORIZED"') === false);
+  assert.match(handlers, /HttpStatus.UNAUTHORIZED, "Unauthorized", "UNAUTHENTICATED"/);
+  assert.match(handlers, /HttpStatus.FORBIDDEN, "Forbidden", "ACCESS_DENIED"/);
+  assert.ok(handlers.includes('new ErrorResponse(status.value(), error, code, message, null)'));
 });
 
 test('SecurityConfig: con cors, todas las cadenas la activan (también la M2M y la de protocolo none)', () => {
@@ -3693,6 +3699,22 @@ test('SecurityConfig: sin rutas de usuario, se conserva la cadena única con aud
   assert.ok(!config.includes('@Order(1)'));
   assert.ok(!config.includes('securityMatcher'));
   assert.ok(config.includes('.addFilterBefore(new AudienceAuthorizationFilter(audience), AuthorizationFilter.class)'));
+});
+
+test('SecurityConfig: sin ninguna ruta services, no hay comprobación de audiencia', () => {
+  // La forma de asset-vault: rutas de usuario y una `both`, ninguna `services`. Colgar el
+  // filtro de la cadena única rechazaba con 403 todo token de usuario (`aud: account`);
+  // lo vio dos veces seguidas la corrida asset-vault (R8).
+  const { manifest, layers } = loadService(path.join(path.dirname(fixtureDir), 'asset-vault'));
+  const workspace = tmpDir('keel-audience-');
+  scaffoldService({ manifest, layers, workspace, force: true });
+  const files = fs.readdirSync(path.join(workspace, 'services/asset-vault-spring/src/main/java'), { recursive: true }).map(String);
+  const securityConfig = files.find((file) => file.endsWith('SecurityConfig.java'));
+  assert.ok(securityConfig, 'no se generó SecurityConfig');
+  const config = fs.readFileSync(path.join(workspace, 'services/asset-vault-spring/src/main/java', securityConfig), 'utf8');
+  assert.ok(!config.includes('AudienceAuthorizationFilter'), config);
+  assert.ok(!config.includes('security.audience'), config);
+  assert.ok(!files.some((file) => file.endsWith('AudienceAuthorizationFilter.java')));
 });
 
 test('JwtAuthConverter: roleGrants materializado como mapa estático', () => {

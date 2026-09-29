@@ -9,6 +9,7 @@
 // @RestControllerAdvice central en infrastructure/rest.
 
 import { FRAMEWORK_ERRORS, conditionalUniquenessToken } from 'keel-core';
+import { callerResolution } from './security.js';
 import { declaredErrorFor, declaredUniquenessErrorFor, declaredReferenceError, errorByCode } from '../lib/declared-errors.js';
 import { javaFile, javaPath, subPackage, javadoc } from './render.js';
 import {
@@ -126,16 +127,26 @@ function renderController(model, service) {
   const validatesParams = [...imports].some((name) => name.startsWith('jakarta.validation.constraints.'));
   if (validatesParams) imports.add('org.springframework.validation.annotation.Validated');
 
+  const injectsIdentity = methods.some((method) => method.includes('callerIdentity.resolve()'));
+
   const body = `@RestController
 ${validatesParams ? '@Validated\n' : ''}@RequestMapping("${model.api.routeBase}")
 @Tag(name = "${groupName}"${tagDescription})
 public class ${service.controllerClass} {
 ${constants.length > 0 ? '\n' + constants.join('\n') + '\n' : ''}
-    private final UseCaseMediator mediator;
+${injectsIdentity
+    ? `    private final UseCaseMediator mediator;
+    private final CallerIdentity callerIdentity;
+
+    public ${service.controllerClass}(UseCaseMediator mediator, CallerIdentity callerIdentity) {
+        this.mediator = mediator;
+        this.callerIdentity = callerIdentity;
+    }`
+    : `    private final UseCaseMediator mediator;
 
     public ${service.controllerClass}(UseCaseMediator mediator) {
         this.mediator = mediator;
-    }
+    }`}
 
 ${methods.join('\n\n')}
 }`;
@@ -304,9 +315,10 @@ function renderMethod(model, operation, imports) {
   //
   // Gana también a `fromPath`: si el diseño pusiera ese campo en la URL, la identidad la elegiría
   // quien hace la petición — que es exactamente lo que este mecanismo existe para impedir.
+  // Con `resolvedBy` es un bean (busca al recurso por su credencial) y el controller lo inyecta.
   const identityArg = () => {
     imports.add(`${model.service.basePackage}.infrastructure.configurations.security.CallerIdentity`);
-    return 'CallerIdentity.resolve()';
+    return callerResolution(model) ? 'callerIdentity.resolve()' : 'CallerIdentity.resolve()';
   };
 
   if (operation.multipart) {

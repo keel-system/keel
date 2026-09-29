@@ -443,3 +443,44 @@ test('la caducidad de la URL firmada sale del diseño, no del adaptador', () => 
   // hueco de diseño, no un default que rellenar en silencio.
   assert.ok(policy.includes('no declara signedUrlTtlSeconds'), policy);
 });
+
+test('perfil test: importa el fragmento del broker y no habla de H2 en un proyecto Mongo', () => {
+  // La corrida asset-vault (R8) tuvo que escribir a mano parameters/test/snssqs.yaml dos
+  // veces seguidas: sin región ni credenciales los clientes de AWS no se construyen y el
+  // contexto de @SpringBootTest no arranca. Y la cabecera decía «H2» en un proyecto Mongo.
+  const { read } = scaffoldVault({ broker: 'snssqs' });
+  const testYaml = read('src/main/resources/application-test.yaml');
+  assert.ok(testYaml.includes('classpath:parameters/test/snssqs.yaml'), testYaml);
+  const broker = read('src/main/resources/parameters/test/snssqs.yaml');
+  assert.ok(broker.includes('region:'), broker);
+  assert.ok(!/\$\{[^:}]+\}/.test(broker), 'placeholder sin default en el perfil test');
+  assert.ok(!/\bH2\b/.test(testYaml), testYaml);
+  assert.ok(!/\bH2\b/.test(read('README.md')), 'el README de un proyecto Mongo no puede hablar de H2');
+});
+
+test('arnés: con minio se puede parar y levantar el almacenamiento, con su contenedor por nombre', () => {
+  // FL-AST-001-H (bucket caído → 503) necesitó parar el almacenamiento, y el arnés no sabía:
+  // el agente escribió sus propios helpers en la clase de prueba (asset-vault, R8). Calcado
+  // de la palanca del broker, con el nombre del contenedor de una sola fuente.
+  const { read } = scaffoldVault({ broker: 'snssqs', storage: 'minio' });
+  const compose = read('infra/docker-compose.yaml');
+  assert.match(compose, /container_name: asset-vault-minio/);
+  const harness = read('src/integrationTest/java/com/content/assetvault/flows/AbstractFlowIT.java');
+  assert.ok(harness.includes('private static final String STORAGE_CONTAINER = "asset-vault-minio";'), harness);
+  assert.ok(harness.includes('protected static void stopStorage()'), harness);
+  assert.ok(harness.includes('protected static void startStorage()'), harness);
+  // La red del reset: un escenario que muera antes de su finally no deja el bucket caído.
+  assert.ok(harness.includes('restoreStorage();'), harness);
+  assert.ok(harness.includes('mc ready local'), 'el sondeo tiene que ser el mismo que el de validate-infra');
+});
+
+test('el README de un proyecto documental pide las variables que su production declara', () => {
+  // asset-vault R8: el README de un proyecto Mongo pedía DB_USERNAME y una URL JDBC.
+  const readme = scaffoldVault().read('README.md');
+  const line = readme.split('\n').find((l) => l.startsWith('PROFILE=production'));
+  assert.ok(line, 'no hay línea de arranque en production');
+  assert.ok(line.includes('DB_URL=...'), line);
+  assert.ok(!line.includes('DB_USERNAME'), `pide una variable que production no declara: ${line}`);
+  assert.ok(!/URL JDBC/.test(readme), 'describe DB_URL como JDBC en un proyecto Mongo');
+  assert.match(readme, /URI de conexión de MongoDB/);
+});

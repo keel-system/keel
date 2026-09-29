@@ -57,13 +57,15 @@ lo redeclares ni lo sustituyas.
   partición es justo lo que se conserva con el error handler in-situ.
 
 La exclusión de lo no reintentable **ya la hace `build`**: el `DefaultErrorHandler` que
-genera `DeadLetterConfig` sale con `addNotRetryableExceptions(DomainException.class)`
-puesto, porque un error de negocio declarado en el diseño no mejora repitiéndolo y
+genera `DeadLetterConfig` sale con `addNotRetryableExceptions(DomainException.class,
+IllegalArgumentException.class)` puesto —la segunda es la que lanza `requireContract()` con un
+campo que falta o fuera de cota, y la que lanzas tú con un cuerpo que no parsea—, porque un error de negocio declarado en el diseño no mejora repitiéndolo y
 reintentarlo hasta agotar acaba mandando a la DLQ un mensaje perfectamente válido. **No
 lo redeclares** ni construyas otro error handler para añadirlo.
 
-Lo único que te toca es **ampliar** esa lista con los tipos que lances tú y que tampoco
-sean transitorios — ver el caso del cuerpo no parseable, más abajo.
+Lo único que te toca es **ampliar** esa lista con OTROS tipos que lances tú y que tampoco
+sean transitorios. El cuerpo no parseable (más abajo) ya está cubierto si lanzas
+`IllegalArgumentException`.
 
 Y si inyectas un `KafkaTemplate` en tu configuración, **decláralo con los mismos
 genéricos que ya usa `DeadLetterConfig`** (`KafkaTemplate<Object, Object>`). Hoy un
@@ -99,10 +101,8 @@ un JSON roto da el mismo JSON roto— y llegará al DLT en el primer intento:
 }
 ```
 
-```java
-// Ampliando la exclusión que DeadLetterConfig ya trae para DomainException:
-errorHandler.addNotRetryableExceptions(IllegalArgumentException.class);
-```
+`IllegalArgumentException` **ya viene excluida** en el `DeadLetterConfig` que genera build: no
+la añadas.
 
 El tipo que lances y el que excluyas son **el mismo contrato repartido en dos archivos**:
 si cambias uno sin el otro, el cuerpo roto pasa a reintentarse cinco veces antes de acabar
@@ -197,7 +197,7 @@ carrera; que no lo anote no significa que no exista, significa que el diseño no
 - [ ] Stub del publisher eliminado (dos beans del puerto rompen la inyección).
 - [ ] Key elegida según la garantía de orden que exige el diseño.
 - [ ] Puerto de envío implementado según `reliability` (`OutboxDispatcher` u `<Evento>Publisher`), con su stub eliminado y el fallo propagado (outbox) o registrado (best-effort).
-- [ ] `onFailure` → NO redeclarado (build genera DeadLetterConfig, ya con `addNotRetryableExceptions(DomainException.class)`); solo se AMPLÍA la lista con tipos propios no transitorios.
+- [ ] `onFailure` → NO redeclarado (build genera DeadLetterConfig, ya con `addNotRetryableExceptions(DomainException.class, IllegalArgumentException.class)`); solo se AMPLÍA la lista con OTROS tipos propios no transitorios.
 - [ ] `ErrorHandlingDeserializer` configurado (poison pills al DLT, no en bucle).
 - [ ] Un cuerpo propio que no parsea **lanza** (y su tipo está en `addNotRetryableExceptions`), nunca `log.error` + `return`; descartar lo ajeno sí es `return` sin excepción.
 - [ ] La rama «carrera resuelta» captura `InvalidStateTransitionException` **y** `OptimisticLockingFailureException` (la base de `org.springframework.dao`), y con el orden `record` llama a `record(...)` igualmente.

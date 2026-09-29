@@ -301,6 +301,49 @@ La misma disciplina que ya funciona en keel-spring, aplicada al diseño:
 > - la exención de alcance de un cliente máquina (hallazgo 2).
 >
 > Y uno de documentación: qué cuenta como fallo del circuito y desde cuántas llamadas se evalúa. Falta repetir la corrida de asset-vault sobre la v1.2.0.
+>
+> **Veredicto final (2026-09-29): `corrida-metrics.js series` → «Veredicto H1 (plan de validación de R8): ROBUSTA — 3 corrida(s) de medición».**
+>
+> | Corrida | Matriz | Reescritos | Diseño | Generador | Puerta | Careo |
+> |---|---|---|---|---|---|---|
+> | `stock-reservation` v1.1.0 | 27/27 | 14 | 0 (antes 10) | 4 | 0 | 11→1 |
+> | `room-booking` v1.0.0 (diseño nuevo) | 44/44 | 27 | 0 | 6 | 0 | 5 |
+> | `asset-vault` v1.2.0 (repetición) | 31/31 | 30 | 0 | 11 | 0 | 6→4→4 |
+> | control `notification-mailer` | 58/58 | 18 | 0 | 5 | 0 | — |
+> | `asset-vault` v1.1.0 (**superada**) | 27/29 | 27 | 2 | 9 | 2 | 23→9→2 |
+>
+> - **Cómo se llegó.**
+>   - La corrida de la v1.1.0 queda como histórico con `Papel: superada`, por la regla de parada temprana que el plan fijó antes de correr: tras un agujero, se arregla el método y la corrida se repite.
+>   - La repetición sobre la v1.2.0 salió limpia a la primera (31/31).
+>   - room-booking se marcó superada al endurecer la puerta y después se rehabilitó. Su aviso `CHK-USECASES-MULTI-AGGREGATE` se separó por frontera: con `per-operation` es la decisión `CHK-USECASES-MULTI-AGGREGATE-TX`, aceptada por operación citando §3.7. Con eso cruza 11/11 sin cambiar el diseño, y `build` produce lo mismo byte a byte.
+>   - Los cuatro diseños cruzan la puerta actual de 11 criterios.
+> - **Qué dice y qué no.**
+>   - Sobre tres formas distintas (relacional con Kafka, documental con storage y caché, y un diseño nuevo), un diseño que cruza la puerta no dejó decisiones al agente generador, y el control confirma que los arreglos del generador se sostienen.
+>   - Llegar ahí no es barato ni estable. El 10/10 de asset-vault v1.1.0 dejó pasar dos agujeros y varios fallos serios que solo salieron repitiendo revisión, barrido y careo. La puerta es sólida en lo mecánico, pero lo que juzgan los agentes lectores depende de lo que encuentre cada pasada.
+> - **El residuo es del generador, y ya pesa más que el diseño**: 26 huecos distintos en la serie, 6 de ellos repetidos entre las dos corridas de asset-vault. Son candidatos obligatorios a arreglo, empezando por `sqs-default-max-receive`, `audience-filter-single-chain` y el barrido sin predicado de room-booking.
+> - **Para el método quedan**:
+>   - `private-binary-signed-url`, en su segunda corrida, así que es candidato obligatorio a una forma en el DSL;
+>   - la exención de alcance de un cliente máquina;
+>   - qué cuenta como fallo del circuito;
+>   - la heurística «en vuelo» (en parte cerrada abajo: una espera con plazo ya no se toma por trabajo a medias);
+>   - los `REV-*` sin `--ready`;
+>   - el barrido incremental.
+>
+> **Los huecos del generador, arreglados (2026-09-29, `keel-spring` 0.1.6).** Plan en cuatro tandas: los repetidos; barridos y reconciliación; mensajería, errores e identidad; arnés y scaffolding. Cada arreglo lleva un test que sale rojo al revertirlo, y todo lo que toca Java pasa `compile-check` sobre la matriz entera.
+>
+> - **Medición sin corrida.** Se rehízo el build de las cuatro corridas con el generador viejo (el commit, 0.1.5: reproduce el manifiesto de cada corrida byte a byte salvo 16 markdown que solo difieren en fin de línea) y con el nuevo, y se buscó en cada árbol la evidencia de cada hueco.
+>   - De las 31 claves de los registros, **los 26 huecos del generador salen cerrados**: ausentes en el build viejo y presentes en el nuevo.
+>   - Las otras cinco: dos eran huecos del diseño, ya cerrados en asset-vault v1.2.0; dos son del método (arriba); y `compose-fixed-host-ports` se pospuso.
+>   - La distancia en líneas al árbol del agente **no sirve como métrica**: cuando build deja de emitir un archivo que el agente tuvo que parchear (el filtro de audiencia, el `Result` de una llamada sin cuerpo), cuenta como alejarse justo cuando es el arreglo.
+> - **Red en vivo, en verde**: `claim-check`, `store-check`, `index-check`, `broker-check` (13 escenarios × 3 brokers) y `telemetry-check`.
+>   - BRK-12 compara ahora el `maxReceiveCount` vivo de la cola SQS con lo que declara el diseño. El valor esperado sale de `subscriptionQueues()`, el mismo módulo que siembra la cola.
+>   - Falsado con un valor fijo de 7: sale rojo nombrando los dos números. La primera mutación, con 5, salió **verde**, porque la fixture declara `maxAttempts: 5`: una mutación que coincide con el diseño no mide nada.
+>   - La rama «sin `retry` → 1» no la ejerce ninguna fixture en vivo; la cubre el test de `dead-letter-config`.
+> - **Desviaciones del plan, razonadas en el código**:
+>   - La credencial que no resuelve a ningún recurso no da un 403 genérico: `CallerIdentity.resolve()` devuelve null y responde la operación con su error declarado, porque notification-mailer exige `APPLICATION_INACTIVE` con su precedencia.
+>   - El segundo usuario de cada rol lleva el mismo recurso acotado que el primero.
+>   - La guía de `compile(source)` → 422 va en el puerto y en la skill de correo, porque el diseño no dice qué operación da de alta las plantillas.
+> - **Falta la medición con corrida**: regenerar asset-vault v1.2.0 con 0.1.6 y el mismo stack, como corrida de control del generador. Hipótesis: la huella baja de 30 reescritos a unos 20, y la columna «generador» de 11 a 3 o menos.
 ---
 
 ### R9. Llevar el par del MVP a «listo» · validación del propio método

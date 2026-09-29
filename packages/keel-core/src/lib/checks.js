@@ -156,8 +156,16 @@ export const CHECKS = {
     layer: 'use-cases',
     severity: 'warning',
     nature: 'incoherence',
-    title: 'una operación mueve el estado de varios agregados a la vez',
+    title: 'una operación mueve el estado de varios agregados a la vez con frontera por agregado',
     closes: 'dejar que uno se entere por un evento, o revisar la frontera de los agregados'
+  },
+  'CHK-USECASES-MULTI-AGGREGATE-TX': {
+    layer: 'use-cases',
+    severity: 'warning',
+    nature: 'undecided',
+    title: 'una operación mueve varios agregados en una sola transacción (frontera por operación)',
+    closes:
+      'dejar que uno se entere por un evento, revisar la frontera de los agregados, o aceptar por escrito la transacción conjunta de esa operación'
   },
   // Transversal: la tabla de campos vive en `structural-defaults.js` y el scope nombra el campo,
   // así que se acepta por unidad (`persistence.audit.authorship`, `storage.buckets.<b>.visibility`).

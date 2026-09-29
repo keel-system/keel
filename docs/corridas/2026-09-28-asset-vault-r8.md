@@ -6,6 +6,7 @@ atribuidos a `culprit: design`.
 
 | | |
 |---|---|
+| Papel | superada — por la regla de parada temprana, repetida sobre la v1.2.0 en `2026-09-29-asset-vault-r8.md` |
 | Diseño | `asset-vault` v1.1.0 (DSL 2.17, documental) |
 | Stack | mongodb · snssqs · keycloak · redis · minio |
 | Generador | `keel-spring@0.1.5` |

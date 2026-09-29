@@ -5,7 +5,7 @@
 // derivado campo a campo de los mismos miembros que usan dominio y Jpa.
 
 import { javaFile, javaPath, subPackage } from './render.js';
-import { domainMembers, domainSubPackage, capitalize } from './entities.js';
+import { domainMembers, domainSubPackage, domainTypeImport, capitalize } from './entities.js';
 import { jpaMembers, backReferenceTo, JPA_PKG } from './persistence-entities.js';
 import { isRefTarget } from './ref-resolvers.js';
 import { isBaseType } from '../lib/type-mapper.js';
@@ -14,6 +14,7 @@ import * as claim from './claim.js';
 import * as reconciliationClaim from './reconciliation-claim.js';
 import * as conditionalUniqueness from './conditional-uniqueness.js';
 import { textFoldImport } from './text-fold.js';
+import { partialUniqueIndexes } from './persistence-members.js';
 
 export const PORT_PKG = 'domain.repository';
 export const REPO_PKG = 'infrastructure.persistence.repositories';
@@ -174,6 +175,44 @@ function resolvedByOf(raw) {
   return { entity, field };
 }
 
+/**
+ * El finder de la fila que OCUPA cada índice único condicionado: `findBy<Campos>And<Campo del
+ * when>(…, estado)`.
+ *
+ * build ya generaba `flushPendingWrites()` y la nota de ORDEN de la operación que releva, y las
+ * dos presuponen encontrar primero la fila que está en el estado condicionado para retirarla. El
+ * puerto no tenía cómo: el agente escribía el finder en el puerto, en Spring Data y en el
+ * adaptador (corrida notification-mailer R8). Se emite en las DOS ramas porque el puerto es uno.
+ *
+ * Solo con un `when` sobre un campo directo: un dot-path no tiene propiedad que derivar. Y no
+ * se duplica el de la clave natural si coincidieran.
+ */
+export function occupantFinders(model, entity) {
+  const seen = new Set([naturalKeyFinder(model, entity)?.name].filter(Boolean));
+  const finders = [];
+  for (const index of partialUniqueIndexes(entity)) {
+    if (!index.when?.field || index.when.field.includes('.')) continue;
+    // El campo del `when` es casi siempre un enum de estado, y el miembro no trae su import
+    // (compile-check: «cannot find symbol TemplateStatus» en puerto, Spring Data y adaptador).
+    const params = naturalKeyParams(model, { ...entity, naturalKey: [...index.fields, index.when.field] }).map((param) => {
+      const field = entity.fields.find((candidate) => candidate.name === param.name);
+      const typeImport = field ? domainTypeImport(model, field) : null;
+      return typeImport && !param.imports.includes(typeImport) ? { ...param, imports: [...param.imports, typeImport] } : param;
+    });
+    const name = 'findBy' + params.map((p) => capitalize(p.name)).join('And');
+    if (seen.has(name)) continue;
+    seen.add(name);
+    finders.push({
+      params,
+      name,
+      state: index.when.equals,
+      signature: params.map((p) => `${p.javaType} ${p.name}`).join(', '),
+      args: params.map((p) => p.name).join(', ')
+    });
+  }
+  return finders;
+}
+
 export function naturalKeyFinder(model, entity) {
   const params = naturalKeyParams(model, entity);
   if (params.length === 0) return null;
@@ -213,6 +252,15 @@ export function renderPort(model, entity, paginated, batchLookup) {
   if (finder) {
     for (const param of finder.params) for (const name of param.imports) imports.add(name);
     methods.push(`    Optional<${entity.name}> ${finder.name}(${finder.signature});`);
+  }
+  for (const occupant of occupantFinders(model, entity)) {
+    for (const param of occupant.params) for (const name of param.imports) imports.add(name);
+    methods.push(`    /**
+     * La fila que OCUPA el índice único condicionado sobre '${occupant.state}': como mucho una por
+     * clave, que es justo lo que el índice garantiza. La operación que releva la busca aquí para
+     * retirarla antes de activar la nueva.
+     */
+    Optional<${entity.name}> ${occupant.name}(${occupant.signature});`);
   }
   for (const credential of credentialFinders(model, entity)) {
     methods.push(`    /**
@@ -308,6 +356,11 @@ function renderJpaRepository(model, entity) {
     // La clave natural es la otra lectura de UN agregado: mismo grafo, misma razón.
     methods = `\n\n${graph}    Optional<${entity.name}Jpa> ${finder.name}(${finder.signature});`;
   }
+  for (const occupant of occupantFinders(model, entity)) {
+    imports.add('java.util.Optional');
+    for (const param of occupant.params) for (const name of param.imports) imports.add(name);
+    methods += `\n\n${graph}    Optional<${entity.name}Jpa> ${occupant.name}(${occupant.signature});`;
+  }
   for (const credential of credentialFinders(model, entity)) {
     imports.add('java.util.Optional');
     // `Containing` sobre una colección: Spring Data lo deriva como «la colección contiene este
@@ -391,6 +444,13 @@ function renderAdapter(model, entity, paginated, batchLookup) {
     methods.push(`    @Override
     public Optional<${entity.name}> ${finder.name}(${finder.signature}) {
         return ${jpaField}.${finder.name}(${finder.args}).map(this::toDomain);
+    }`);
+  }
+  for (const occupant of occupantFinders(model, entity)) {
+    for (const param of occupant.params) for (const name of param.imports) imports.add(name);
+    methods.push(`    @Override
+    public Optional<${entity.name}> ${occupant.name}(${occupant.signature}) {
+        return ${jpaField}.${occupant.name}(${occupant.args}).map(this::toDomain);
     }`);
   }
   for (const credential of credentialFinders(model, entity)) {

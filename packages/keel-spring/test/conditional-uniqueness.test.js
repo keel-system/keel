@@ -177,3 +177,33 @@ test('el gate no aparece en la rama documental', () => {
     'la familia se emitió donde no hay nada que ordenar'
   );
 });
+
+// ─── El finder de la fila que OCUPA el índice (notification-mailer R8) ───────
+//
+// build generaba flushPendingWrites() y la nota de ORDEN, que presuponen encontrar primero la fila
+// activa para retirarla, y el puerto no tenía cómo: el agente escribía el finder en tres archivos.
+
+test('el puerto trae el finder de la fila que ocupa el índice condicionado, en las dos ramas', () => {
+  const finder = 'findByApplicationIdAndKeyAndLocaleAndStatus(UUID applicationId, String key, String locale, TemplateStatus status)';
+  for (const [fixture, stack, files] of [
+    ['notification-mailer', {}, ['TemplateRepository.java', 'TemplateJpaRepository.java', 'TemplateRepositoryImpl.java']],
+    ['notification-mailer-mongo', { database: 'mongodb' }, ['TemplateRepository.java', 'TemplateMongoRepository.java', 'TemplateRepositoryImpl.java']]
+  ]) {
+    const { read, pkg } = generar(fixture, stack.database ?? 'postgresql');
+    const at = (name) =>
+      read(`src/main/java/com/platform/${pkg}/${name === 'TemplateRepository.java' ? 'domain/repository' : 'infrastructure/persistence/repositories'}/${name}`);
+    for (const name of files) {
+      const content = at(name);
+      assert.ok(content.includes(finder.replace(/\(.*$/, '(')), `${fixture}/${name} sin el finder de la fila activa`);
+    }
+    assert.ok(at('TemplateRepository.java').includes(finder), `${fixture}: la firma del puerto no es la esperada`);
+    // El enum del `when` con su import: sin él, compile-check caía con «cannot find symbol».
+    for (const name of files) assert.match(at(name), /^import .*.domain.enums.TemplateStatus;$/m, `${fixture}/${name} sin el import del enum`);
+  }
+});
+
+test('y la nota de ORDEN lo nombra', () => {
+  const { read, pkg } = generar('notification-mailer', 'postgresql');
+  const handler = read(`src/main/java/com/platform/${pkg}/application/usecases/PublishTemplateCommandHandler.java`);
+  assert.match(handler, /la encuentras con TemplateRepository\.findByApplicationIdAndKeyAndLocaleAndStatus/);
+});

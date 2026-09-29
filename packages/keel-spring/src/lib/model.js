@@ -15,6 +15,7 @@ import {
 } from './naming.js';
 import { resolveType, beanValidationAnnotations, columnAnnotations, inheritedTypePattern, numericConstraints } from './type-mapper.js';
 import { DATABASES, caseSensitiveCollationFor } from './stack-catalog.js';
+import { cronPeriodSeconds } from './cron-period.js';
 
 const CRUD_PREFIXES = ['create', 'get', 'list', 'update', 'delete'];
 
@@ -1147,6 +1148,27 @@ function classifyClaims(services, entities, layers, warnings) {
       .filter(Boolean)
   );
 
+  // Estados de los que SALE una operación expuesta (ni programada ni interna): ahí la fila
+  // espera una decisión de fuera, no a una réplica nuestra.
+  const exposedExits = new Set();
+  for (const [, op] of Object.entries(layers['use-cases']?.operations ?? {})) {
+    if (op?.schedule || op?.internal) continue;
+    for (const transition of op?.transitions ?? []) {
+      for (const state of transition.from ?? []) exposedExits.add(`${transition.entity}::${state}`);
+    }
+  }
+  // El timestamp de un índice [<campo del lifecycle>, <timestamp>] de persistence.
+  const dueFieldOf = (entity) => {
+    const lifecycleField = entity?.lifecycle?.field;
+    for (const index of entity?.indexes ?? []) {
+      const fields = index.fields ?? [];
+      if (fields.length !== 2 || fields[0] !== lifecycleField) continue;
+      const stamp = (entity.fields ?? []).find((field) => field.name === fields[1] && field.base === 'timestamp');
+      if (stamp) return stamp.name;
+    }
+    return null;
+  };
+
   for (const service of services) {
     for (const operation of service.operations) {
       if (!operation.schedule) continue;
@@ -1163,6 +1185,30 @@ function classifyClaims(services, entities, layers, warnings) {
       operation.sweep = true;
 
       const claims = [];
+      // Un `from` que se repite en varias transiciones del MISMO barrido y la misma entidad
+      // hace ambigua la selección: `waiting → offered` y `waiting → lapsed` salen del mismo
+      // estado, y cuál toca a cada fila lo decide una regla, no el estado. Uno de los dos
+      // suele ser EFECTO de otra cosa (la promoción), no selección. Build reclamaba por
+      // transición y generaba los dos, sin predicado: habría pasado a `lapsed` —o a
+      // `offered`— todas las esperas vivas (room-booking, R8).
+      const fromCount = new Map();
+      for (const transition of transitions) {
+        for (const state of transition.from ?? []) {
+          const key = `${transition.entity}::${state}`;
+          fromCount.set(key, (fromCount.get(key) ?? 0) + 1);
+        }
+      }
+      // «Varias» cuenta solo las transiciones que SELECCIONAN filas (cola o espera), no los
+      // rescates: job-dispatch tiene cola y rescate en el mismo barrido y su cola no es ambigua.
+      const selecting = transitions.filter((transition) => {
+        const lifecycle = byName.get(transition.entity)?.lifecycle;
+        if (!lifecycle) return false;
+        const reachedHere = new Set((lifecycle.transitions ?? []).flatMap((t) => t.to ?? []));
+        return (transition.from ?? []).some(
+          (state) => !reachedHere.has(screamingSnake(state)) || exposedExits.has(`${transition.entity}::${state}`)
+        );
+      });
+      const several = selecting.length > 1;
       for (const transition of transitions) {
         const entity = byName.get(transition.entity);
         const lifecycle = entity?.lifecycle;
@@ -1175,8 +1221,19 @@ function classifyClaims(services, entities, layers, warnings) {
         // trabajando en esas filas ahora mismo, y reclamarlas a secas le arrancaría el
         // trabajo de las manos. Por eso el rescate lleva una cota temporal encima —ver
         // `rescueClaim`—, y sin ella no se genera nada.
+        //
+        // Salvo que sea una ESPERA CON PLAZO: si una operación expuesta (ni programada ni
+        // interna) saca la entidad de ese estado, lo que la tiene ahí es la decisión de
+        // alguien de fuera, no una réplica nuestra a medias. Pedirle un reloj de rescate la
+        // confundía con trabajo abandonado (WaitlistEntry.offered, room-booking R8): lo que
+        // necesita es el predicado de su plazo, igual que una cola.
+        const waits = (transition.from ?? []).filter(
+          (state) => reached.has(screamingSnake(state)) && exposedExits.has(`${transition.entity}::${state}`)
+        );
         const queues = (transition.from ?? []).filter((state) => !reached.has(screamingSnake(state)));
-        const inFlight = (transition.from ?? []).filter((state) => reached.has(screamingSnake(state)));
+        const inFlight = (transition.from ?? []).filter(
+          (state) => reached.has(screamingSnake(state)) && !waits.includes(state)
+        );
 
         const base = `${pascalCase(operation.name)}${transitions.length > 1 ? pascalCase(transition.to) : ''}`;
 
@@ -1184,15 +1241,46 @@ function classifyClaims(services, entities, layers, warnings) {
           const rescue = rescueClaim({ operation, transition, entity, inFlight, base, warnings });
           if (rescue) claims.push(rescue);
         }
-        if (queues.length === 0) continue;
+
+        const selectable = [...queues, ...waits];
+        if (selectable.length === 0) continue;
+
+        const ambiguous = selectable.filter((state) => fromCount.get(`${transition.entity}::${state}`) > 1);
+        if (ambiguous.length > 0) {
+          warnings.push(
+            `use-cases: ${operation.name} saca ${transition.entity} de ${ambiguous.join(', ')} por más de una ` +
+              `transición (una de ellas va a ${transition.to}), así que el estado no dice qué fila toca a cada una: ` +
+              `lo decide una regla. build NO genera ese reclamo — lo escribes tú con el predicado de la regla, y ` +
+              `la transición que sea efecto de otra cosa (una promoción) no se reclama.`
+          );
+          continue;
+        }
+
+        // El predicado de selección, cuando el diseño lo deja derivar: un índice de
+        // persistence sobre [<campo del lifecycle>, <timestamp>] es el índice del barrido
+        // («estado + plazo»), y su timestamp es lo que marca que la fila ya toca.
+        // Solo hace falta cuando el estado no basta: varias transiciones que seleccionan, o
+        // una espera con plazo. Una cola simple se vacía entera, como siempre.
+        const due = several || waits.length > 0 ? dueFieldOf(entity) : null;
+        if (!due && (several || waits.length > 0)) {
+          warnings.push(
+            `use-cases: ${operation.name} saca ${transition.entity} de ${selectable.join(', ')} y el diseño no deja ` +
+              `derivar QUÉ filas tocan: con ${several ? 'varias transiciones en el barrido' : 'una espera con plazo'} ` +
+              `hace falta un predicado (un plazo vencido, un intervalo empezado) y persistence no declara un índice ` +
+              `[${lifecycle.field}, <timestamp>] del que sacarlo. build NO genera el reclamo —uno sin predicado se ` +
+              `llevaría también las filas vigentes—: lo escribes tú con el predicado de la regla.`
+          );
+          continue;
+        }
 
         const suffix = base;
         claims.push({
           entity: transition.entity,
-          from: queues,
+          from: selectable,
           to: transition.to,
           suffix,
-          method: `claimFor${suffix}`
+          method: `claimFor${suffix}`,
+          ...(due ? { due: { field: due } } : {})
         });
       }
 
@@ -1637,9 +1725,18 @@ function emittersByEvent(services, rootOf) {
   const index = new Map();
   for (const group of services) {
     for (const operation of group.operations) {
+      // Sin entidad de grupo —un barrido sin payload que mueve varias entidades cae en el
+      // cajón del servicio—, los emisores son las raíces que sus transiciones mueven. Antes
+      // quedaba `aggregate: null`, se descartaba, y la raíz se generaba sin buffer de eventos
+      // ni drenaje: el agente tuvo que añadirlos a mano (room-booking, R8). El DSL no dice
+      // cuál de ellas emite cada evento, así que todas llevan el buffer.
+      const roots = group.entity
+        ? [rootOf(group.entity)]
+        : [...new Set((operation.transitions ?? []).map((transition) => rootOf(transition.entity)))];
       for (const eventName of operation.emits) {
         if (!index.has(eventName)) index.set(eventName, []);
-        index.get(eventName).push({ aggregate: rootOf(group.entity), operation: operation.name });
+        if (roots.length === 0) index.get(eventName).push({ aggregate: rootOf(group.entity), operation: operation.name });
+        for (const aggregate of roots) index.get(eventName).push({ aggregate, operation: operation.name });
       }
     }
   }
@@ -1968,6 +2065,11 @@ function collectHttpClients(layers, domainTypes, inlineEnumName, warnings) {
       const responseFields = resolveMap(`${callPascal}Response`, call.response?.fields);
 
       const typed = Boolean(call.request || call.response);
+      // Sin `response` declarada, en una llamada tipada o un DELETE, no hay nada que
+      // devolver: el método es `void` y no se emiten Result, Response ni mapper con TODO.
+      // Build los emitía vacíos, con TODO de campos y un `.body(...)` sobre una respuesta
+      // sin cuerpo; la corrida asset-vault (R8) los reescribió dos veces (purgeThumbnail).
+      const bodiless = Boolean(method) && !call.response && (Boolean(call.request) || method === 'DELETE');
       const hasBody = bodyFields.length > 0 || (!call.request && (method === 'POST' || method === 'PUT' || method === 'PATCH'));
       return {
         name: callName,
@@ -1977,8 +2079,10 @@ function collectHttpClients(layers, domainTypes, inlineEnumName, warnings) {
         hasBody,
         typed,
         requestType: bodyFields.length > 0 ? requestOwner : null,
-        responseType: `${callPascal}Response`,
-        resultType: `${callPascal}Result`,
+        pascal: callPascal,
+        bodiless,
+        responseType: bodiless ? null : `${callPascal}Response`,
+        resultType: bodiless ? 'void' : `${callPascal}Result`,
         pathParams,
         queryParams,
         headerParams,
@@ -2149,8 +2253,27 @@ function reconciliationClaim({ depId, activation, sweeper, waitingByEntity, enti
     method: `claimFor${suffix}`,
     // La rama de `parameters/<perfil>/reconciliation.yaml` que config.js ya emite para
     // esta activación: umbral del diseño, caducidad del reclamo y cota del lote.
-    configKey: kebabCase(activation.name)
+    configKey: kebabCase(activation.name),
+    claimTimeoutMs: reconciliationClaimTimeoutMs(activation, sweeper)
   };
+}
+
+// Lote por pasada del barrido de reconciliación: el mismo default que emite config.js.
+export const RECONCILIATION_BATCH_SIZE = 50;
+
+/**
+ * Cuánto retiene un candidato la réplica que lo reclamó. Tiene que cubrir la pasada ENTERA
+ * —el lote por lo que tarda cada llamada con sus reintentos— o una réplica viva ve caducar su
+ * propio reclamo a mitad de lote y otra repite la llamada; y al menos dos ticks del cron, para
+ * que el siguiente no lo recoja mientras la primera sigue. Era un 60000 fijo, igual a la
+ * cadencia de un barrido por minuto (asset-vault, R8). Una sola fuente para el YAML y el @Value.
+ */
+export function reconciliationClaimTimeoutMs(activation, sweeper) {
+  const call = activation?.http?.callRef;
+  const attempts = call?.retry?.maxAttempts ?? 1;
+  const perCallMs = (call?.timeoutMs ?? 5000) * attempts;
+  const cadenceMs = (cronPeriodSeconds(sweeper?.schedule?.cron) ?? 60) * 1000;
+  return Math.max(2 * cadenceMs, RECONCILIATION_BATCH_SIZE * perCallMs + 10000);
 }
 
 function collectDependencies(layers, entities, httpClients, subscriptions, errors, events, services, warnings) {
@@ -2247,11 +2370,36 @@ function collectDependencies(layers, entities, httpClients, subscriptions, error
         const sweeper = opByName.get(activation.reconciledBy);
         // Qué queda esperando: el estado en el que dejaron la entidad las
         // operaciones que encargaron el trabajo. Es por dónde empieza el barrido.
+        //
+        // Si el propio barrido declara transiciones, sus `from` SON los estados que reclama: es
+        // lo que dice el diseño. Si no, se infieren de los `to` de `triggeredBy`, pero sin los
+        // terminales (de ahí no se sale: no hay nada que reconciliar) ni los del propio barrido
+        // cuando está en su triggeredBy. Antes se tomaba la unión de todos los `to` y el reclamo
+        // de asset-vault (R8) incluía QUARANTINED, un estado terminal: el agente lo quitó a mano.
         const waitingByEntity = new Map();
-        for (const opName of activation.triggeredBy ?? []) {
-          for (const transition of opByName.get(opName)?.transitions ?? []) {
-            if (!waitingByEntity.has(transition.entity)) waitingByEntity.set(transition.entity, new Set());
-            waitingByEntity.get(transition.entity).add(transition.to);
+        const add = (entity, state) => {
+          if (!waitingByEntity.has(entity)) waitingByEntity.set(entity, new Set());
+          waitingByEntity.get(entity).add(state);
+        };
+        const ownTransitions = sweeper?.transitions ?? [];
+        if (ownTransitions.length > 0) {
+          for (const transition of ownTransitions) {
+            for (const state of transition.from ?? []) add(transition.entity, state);
+          }
+        } else {
+          const terminal = (entity, state) => {
+            const next = layers.domain?.entities?.[entity]?.lifecycle?.transitions?.[state];
+            return Array.isArray(next) && next.length === 0;
+          };
+          for (const opName of activation.triggeredBy ?? []) {
+            if (opName === activation.reconciledBy) continue;
+            for (const transition of opByName.get(opName)?.transitions ?? []) add(transition.entity, transition.to);
+          }
+          // Un terminal se descarta solo si la entidad conserva otro estado de espera: un
+          // diseño cuya única espera está declarada sin salida sigue teniendo esa espera.
+          for (const [entity, states] of waitingByEntity) {
+            const alive = [...states].filter((state) => !terminal(entity, state));
+            if (alive.length > 0 && alive.length < states.size) waitingByEntity.set(entity, new Set(alive));
           }
         }
         const waiting = [...waitingByEntity].flatMap(([entity, states]) =>

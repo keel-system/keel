@@ -68,7 +68,7 @@ function printSeries(dir) {
       ? ` ${cell(corrida.generatorGaps)} | ${cell(corrida.gateHoles)} | ${corrida.careoPasses ? corrida.careoPasses.join('→') : '—'} |`
       : '';
     console.log(
-      `| ${corrida.name}${corrida.role === 'control' ? ' (control)' : ''} | ${listo} | ${cell(corrida.rewritten)} | ${cell(corrida.deleted)} | ${cell(corrida.registered)} | ${cell(corrida.designGaps)} |${extra}`
+      `| ${corrida.name}${corrida.role === 'control' || corrida.role === 'superada' ? ` (${corrida.role})` : ''} | ${listo} | ${cell(corrida.rewritten)} | ${cell(corrida.deleted)} | ${cell(corrida.registered)} | ${cell(corrida.designGaps)} |${extra}`
     );
   }
   console.log(`\nGeneradas con --accept-unready: ${acceptedUnready} de ${corridas.length}`);

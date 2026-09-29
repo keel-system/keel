@@ -493,7 +493,11 @@ test('el arnés permite fijar la Idempotency-Key también en una subida multipar
   assert.ok(harness.includes('String idempotencyKey) {'));
   // La firma corta sigue existiendo y delega: los escenarios que no ejercitan
   // deduplicación no cambian.
-  assert.ok(harness.includes('Map<String, String> fields) {\n        return multipartTo('));
+  assert.ok(harness.includes('Map<String, ?> fields) {\n        return multipartTo('));
+  // Un campo `list` viaja como parte repetida, una por elemento: el helper con
+  // Map<String, String> no podía mandarlo y el agente lo unía con comas (asset-vault, R8).
+  assert.ok(harness.includes('if (value instanceof java.util.Collection<?> values) {'), harness);
+  assert.ok(harness.includes('values.forEach(item -> form.add(name, String.valueOf(item)));'), harness);
   // El header ya no se estampa incondicionalmente: sale de la clave recibida.
   assert.ok(!harness.includes('headers.set("Idempotency-Key", idempotencyKey());'));
   assert.ok(harness.includes('headers.set("Idempotency-Key", idempotencyKey);'));
@@ -1561,7 +1565,9 @@ test('§2 informe: el error handler de Kafka no reintenta un error de negocio', 
 
   // Sin esto, una violación de regla de negocio se reintenta hasta agotar la política y
   // acaba en la DLT — un mensaje perfectamente válido, leído en operación como incidente.
-  assert.ok(config.includes('handler.addNotRetryableExceptions(DomainException.class);'));
+  // Y el payload que incumple el contrato: requireContract lanza IllegalArgumentException, que
+  // antes se reintentaba hasta la DLT aunque la skill mandara excluirla (stock-reservation, R8).
+  assert.ok(config.includes('handler.addNotRetryableExceptions(DomainException.class, IllegalArgumentException.class);'));
   assert.ok(config.includes('import com.commerce.catalog.domain.errors.DomainException;'));
 });
 
@@ -2311,7 +2317,8 @@ test('§4: los números del barrido salen de parameters/, y solo el umbral viene
   const local = read('src/main/resources/parameters/local/reconciliation.yaml');
   assert.ok(local.includes('  record-withdrawal:'), local);
   assert.ok(local.includes('unanswered-after-seconds: 3600'), local);
-  assert.ok(local.includes('claim-timeout-ms: 60000'), local);
+  // Cubre el lote entero y dos ticks del cron horario: max(2 × 3600 s, 50 × 4000 ms × 3 + 10 s).
+  assert.ok(local.includes('claim-timeout-ms: 7200000'), local);
   assert.ok(local.includes('batch-size: 50'), local);
 
   // Fuera de local, el gradiente habitual: el diseño fija el valor y el entorno puede
@@ -2332,7 +2339,7 @@ test('§4: los números del barrido salen de parameters/, y solo el umbral viene
   // tres `@Value` están donde sí pueden estar.
   const adapter = read(`${JAVA}/infrastructure/persistence/repositories/ProductRepositoryImpl.java`);
   assert.ok(adapter.includes('reconciliation.record-withdrawal.unanswered-after-seconds:3600'), adapter);
-  assert.ok(adapter.includes('reconciliation.record-withdrawal.claim-timeout-ms:60000'), adapter);
+  assert.ok(adapter.includes('reconciliation.record-withdrawal.claim-timeout-ms:7200000'), adapter);
   assert.ok(adapter.includes('reconciliation.record-withdrawal.batch-size:50'), adapter);
 
   // Y la nota del stub manda usar el reclamo generado —que es quien los aplica— en vez de
@@ -2340,4 +2347,21 @@ test('§4: los números del barrido salen de parameters/, y solo el umbral viene
   const handler = read(`${JAVA}/application/usecases/ReconcileWithdrawalsCommandHandler.java`);
   assert.ok(handler.includes('claimForReconcileWithdrawalsRecordWithdrawal()'), handler);
   assert.ok(handler.includes('parameters/<perfil>/reconciliation.yaml'), handler);
+});
+
+test('el payload de un evento entrante comprueba también sus COTAS, sin reintentos', () => {
+  // stock-reservation (R8): el diseño manda a la DLQ sin reintentos un payload fuera de cota,
+  // y requireContract solo miraba la presencia. Las cotas del diseño viajan ahora como
+  // anotaciones del record y se comprueban con el validador, con IllegalArgumentException.
+  const { manifest, layers } = loadService(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'notification-mailer'));
+  const workspace = tmpDir('keel-bounds-');
+  scaffoldService({ manifest, layers, workspace, force: true, stack: { broker: 'kafka' } });
+  const base = path.join(workspace, 'services', 'notification-mailer-spring', 'src/main/java');
+  const files = fs.readdirSync(base, { recursive: true }).map(String);
+  const message = fs.readFileSync(path.join(base, files.find((f) => f.endsWith('NotificationRequestedMessage.java'))), 'utf8');
+  assert.ok(message.includes('@Size(max = 64) String templateKey'), message);
+  assert.ok(message.includes('private static final Validator VALIDATOR'), message);
+  assert.ok(message.includes('var violations = VALIDATOR.validate(this);'), message);
+  assert.ok(!message.includes('IllegalStateException'), 'lo que se lanza tiene que ser lo que build excluye de los reintentos');
 });

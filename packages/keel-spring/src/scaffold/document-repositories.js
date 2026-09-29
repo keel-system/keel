@@ -17,6 +17,7 @@ import { persistedMembers, orderingFieldOf, usesAuditableEntity } from './persis
 import {
   renderPort,
   naturalKeyFinder,
+  occupantFinders,
   credentialFinders,
   naturalKeyBatchFinder,
   collectInternalEntities,
@@ -62,6 +63,11 @@ function renderMongoRepository(model, entity) {
   }
   // El puerto es el MISMO en las dos ramas (lo reexporta repositories.js), así que lo que
   // se declare allí hay que implementarlo aquí o el adaptador no compila.
+  for (const occupant of occupantFinders(model, entity)) {
+    imports.add('java.util.Optional');
+    for (const param of occupant.params) for (const name of param.imports) imports.add(name);
+    methods += `\n\n    Optional<${entity.name}Document> ${occupant.name}(${occupant.signature});`;
+  }
   for (const credential of credentialFinders(model, entity)) {
     imports.add('java.util.Optional');
     // `Containing` sobre un array: Spring Data MongoDB lo deriva como un match de elemento, igual
@@ -123,6 +129,13 @@ function renderAdapter(model, entity, paginated, batchLookup) {
     methods.push(`    @Override
     public Optional<${entity.name}> ${finder.name}(${finder.signature}) {
         return ${repoField}.${finder.name}(${finder.args}).map(this::toDomain);
+    }`);
+  }
+  for (const occupant of occupantFinders(model, entity)) {
+    for (const param of occupant.params) for (const name of param.imports) imports.add(name);
+    methods.push(`    @Override
+    public Optional<${entity.name}> ${occupant.name}(${occupant.signature}) {
+        return ${repoField}.${occupant.name}(${occupant.args}).map(this::toDomain);
     }`);
   }
   for (const credentialAdapter of credentialFinders(model, entity)) {

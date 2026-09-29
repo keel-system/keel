@@ -25,6 +25,7 @@
 // `notification-mailer-mongo` pasó en verde con el mismo diseño.
 
 import { partialUniqueIndexes } from './persistence-members.js';
+import { occupantFinders } from './repositories.js';
 
 /** Las entidades cuyo diseño declara al menos una unicidad condicionada. */
 export function conditionedEntities(model) {
@@ -111,12 +112,16 @@ export function stubNote(model, operation) {
   const relieving = relievingOperations(model).filter((r) => r.operation.name === operation.name);
   if (relieving.length === 0) return null;
 
+  // El finder se resuelve aquí y no al detectar: la detección corre también sobre modelos
+  // sintéticos sin campos, y el finder necesita los miembros del agregado.
+  const occupantOf = (r) => occupantFinders(model, r.entity).find((finder) => finder.state === r.state)?.name ?? null;
   return relieving
+    .map((r) => ({ ...r, occupant: occupantOf(r) }))
     .map(
       (r) =>
         `ORDEN OBLIGATORIO (índice único condicionado sobre ${r.entity.name}.${r.state}): esta operación RELEVA — ` +
         `saca una fila de '${r.state}' y mete otra en el mismo acto—, y el índice se comprueba por FILA y no se ` +
-        `puede diferir. Retira la que estaba, llama a ${r.method}() del puerto ${r.entity.name}Repository, y SOLO ` +
+        `puede diferir. Retira la que estaba${r.occupant ? ` (la encuentras con ${r.entity.name}Repository.${r.occupant}(...))` : ''}, llama a ${r.method}() del puerto ${r.entity.name}Repository, y SOLO ` +
         `entonces activa la nueva. Sin esa llamada las dos escrituras se vuelcan al commit en el orden que decide ` +
         `Hibernate y, si la activación sale primero, la transición legítima muere con el error de unicidad del ` +
         `diseño — un 409 en el camino feliz. No lo arregles quitando el índice: es el invariante que el diseño ` +

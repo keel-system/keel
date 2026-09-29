@@ -113,7 +113,9 @@ test('los tres números se leen de parameters/, y el umbral trae el valor del di
   const adapter = fileNamed(generateRepositories(modelFor()), 'ReservationRepositoryImpl.java');
 
   assert.match(adapter, /reconciliation\.reserve-stock\.unanswered-after-seconds:1800/);
-  assert.match(adapter, /reconciliation\.reserve-stock\.claim-timeout-ms:60000/);
+  // El default ya no es la cadencia del cron: cubre el lote entero (50 × 5000 ms + 10 s) y
+  // dos ticks. Era 60000 fijo, igual a la cadencia de un barrido por minuto (asset-vault, R8).
+  assert.match(adapter, /reconciliation\.reserve-stock\.claim-timeout-ms:260000/);
   assert.match(adapter, /reconciliation\.reserve-stock\.batch-size:50/);
   // El candidato se elige por la marca de espera y el lote va acotado.
   assert.match(adapter, /PageRequest\.of\(0, reserveStockBatchSize\)/);
@@ -181,8 +183,13 @@ test('la nota del handler manda LLAMAR al reclamo, no escribir otro', () => {
   assert.match(handler, /EL RECLAMO YA ESTÁ GENERADO/);
   assert.match(handler, /claimForReconcileReservationsReserveStock\(\)/);
   assert.match(handler, /NO escribas otro reclamo/);
-  // Lo que sigue siendo del agente: el orden de los commits y la carrera.
-  assert.match(handler, /ORDEN: son DOS commits/);
+  // Lo que sigue siendo del agente: el orden de los commits y la carrera. Aquí el barrido NO
+  // reintenta reserveStock sino que DESHACE con cancelStock, y el orden es el contrario al de
+  // un reintento: transición confirmada primero, llamada después (stock-reservation, R8). El
+  // orden genérico mandaba lo contrario, justo lo que el diseño prohibía.
+  assert.match(handler, /aquí el barrido no reintenta el encargo, lo DESHACE con inventory\.cancelStock/);
+  assert.match(handler, /\(2\) transición al estado final y confirmar; \(3\) después, fuera de toda transacción, llamar a inventory\.cancelStock/);
+  assert.match(handler, /Si una regla del diseño fija el orden, manda la regla/);
   assert.match(handler, /CARRERA CON EL CAMINO FELIZ/);
   // Y lo que ya no le pide: inventar una columna que build no genera.
   assert.ok(!handler.includes('ClaimedAt = now'));
@@ -308,4 +315,41 @@ test('un reclamo que deja la fila esperando estampa el awaitingSince del diseño
 
   const jpa = generateRepositories(model).find((file) => file.path.endsWith('ReservationJpaRepository.java'));
   assert.match(jpa.content, /set e\.status = :to, e\.reserveStockAwaitingSince = :claimedAt/);
+});
+
+test('el reclamo de reconciliación no reclama un estado terminal', () => {
+  // asset-vault (R8): publishAsset pasa a published o a quarantined según el veredicto, y el
+  // reclamo tomaba la unión de los `to` de triggeredBy — QUARANTINED incluido, que es
+  // terminal: no hay nada que reconciliar ahí. El agente lo quitó a mano.
+  const service = fixture('asset-vault');
+  const layers = structuredClone(service.layers);
+  layers['use-cases'].operations.publishAsset.transitions.push({ entity: 'Asset', from: ['draft'], to: 'quarantined' });
+  const stack = { database: 'mongodb', broker: 'kafka', auth: null, cache: null, storage: 'minio' };
+  const model = buildModel({ manifest: service.manifest, layers, stack });
+  model.stack = stack;
+  assert.deepEqual(claimOf(model).states, ['published']);
+});
+
+test('si el barrido declara sus transiciones, sus from son los estados que reclama', () => {
+  const service = fixture('asset-vault');
+  const layers = structuredClone(service.layers);
+  layers['use-cases'].operations.reconcileScans.transitions = [{ entity: 'Asset', from: ['published'], to: 'quarantined' }];
+  const stack = { database: 'mongodb', broker: 'kafka', auth: null, cache: null, storage: 'minio' };
+  const model = buildModel({ manifest: service.manifest, layers, stack });
+  model.stack = stack;
+  assert.deepEqual(claimOf(model).states, ['published']);
+});
+
+test('con awaits: outcome y una operación que ramifica, la llamada va antes que la transición', () => {
+  // asset-vault (R8): publishAsset pasa a published o a quarantined según el veredicto de
+  // scanAsset. La nota general decía «transición primero», y contradecía la regla del diseño.
+  const service = fixture('asset-vault');
+  const layers = structuredClone(service.layers);
+  layers['use-cases'].operations.publishAsset.transitions.push({ entity: 'Asset', from: ['draft'], to: 'quarantined' });
+  const stack = { database: 'mongodb', broker: 'kafka', auth: null, cache: null, storage: 'minio' };
+  const model = buildModel({ manifest: service.manifest, layers, stack });
+  model.stack = stack;
+  const handler = fileNamed(generateServices(model), 'PublishAssetCommandHandler.java');
+  assert.match(handler, /security-scanner\.scanAsset es awaits: outcome y su resultado DECIDE la transición/);
+  assert.ok(!handler.includes('aplica PRIMERO la transición'), handler);
 });

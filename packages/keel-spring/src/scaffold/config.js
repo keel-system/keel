@@ -9,7 +9,7 @@ import { usesPartialIndexes } from './migrations.js';
 import { EMBEDDED_MONGO_VERSION } from '../lib/assets.js';
 import { physicalBucketName } from '../lib/buckets.js';
 import { kebabCase, screamingSnake } from '../lib/naming.js';
-import { subscriptionDestination } from '../lib/dead-letter.js';
+import { subscriptionDestination, subscriptionGroupId } from '../lib/dead-letter.js';
 import { recordedFailures } from '../lib/outbound-failures.js';
 import { usesOutbox } from './outbox.js';
 import { rabbitListenerRetry } from './dead-letter-config.js';
@@ -19,6 +19,7 @@ import { usesCorrelation } from './correlation.js';
 import { instrumentationFor, usesTelemetry } from './telemetry.js';
 import { METRICS_TRANSPORT, OBSERVATIONS } from '../lib/telemetry-probes.js';
 import { SWEEP_BATCH_DEFAULT } from './claim.js';
+import { reconciliationClaimTimeoutMs, RECONCILIATION_BATCH_SIZE } from '../lib/model.js';
 
 const PROFILES = ['local', 'develop', 'production'];
 
@@ -885,6 +886,13 @@ function messagingYaml(model, profile) {
       // no había nadie que la nombrara, y el agente la inventaba siguiendo su skill: la
       // topología quedaba con un nombre que ni la purga ni la entrega del arnés conocían
       // (`corrida-mail-rabbit`). Kafka no entra: ahí se consume del topic directamente.
+      // Con Kafka, el consumer group de la suscripción: lo lee el listener
+      // (`groupId = "\${messaging.subscriptions.<clave>.group-id}"`) y el arnés espera a él
+      // tras parar o arrancar la réplica. Mismo helper para las dos mitades.
+      if (model.stack?.broker === 'kafka') {
+        const groupEnv = `${env.replace(/_TOPIC$/, '')}_GROUP_ID`;
+        lines.push(`      group-id: ${envWithDefault(profile, groupEnv, subscriptionGroupId(model, sub))}`);
+      }
       if (model.stack?.broker === 'snssqs' || model.stack?.broker === 'rabbitmq') {
         const queueEnv = `${env.replace(/_TOPIC$/, '')}_QUEUE`;
         lines.push(
@@ -1522,6 +1530,13 @@ function testProfileFiles(model) {
     fragments.push(fragment('test', 'messaging', messagingYaml(model, 'test')));
   }
 
+  // El fragmento del broker, como en los demás perfiles. Sin él, en snssqs los clientes de
+  // AWS no tienen región ni credenciales y el contexto de @SpringBootTest no arranca: el
+  // agente lo escribía a mano en cada corrida (asset-vault, R8, dos veces seguidas).
+  if (model.layersPresent.messaging && model.stack.broker) {
+    fragments.push(fragment('test', model.stack.broker, brokerYaml(model, 'test')));
+  }
+
   if (usesHttpIdempotency(model)) {
     fragments.push(fragment('test', 'idempotency', idempotencyYaml('test')));
   }
@@ -1595,7 +1610,11 @@ function testProfileFiles(model) {
     fragments.push(fragment('test', 'http-clients', lines.join('\n') + '\n'));
   }
 
-  const header = ['# Perfil test: H2 en memoria, sin contenedores.'];
+  const header = [
+    model.persistenceKind === 'document'
+      ? '# Perfil test: Mongo embebido (flapdoodle), sin contenedores.'
+      : '# Perfil test: H2 en memoria, sin contenedores.'
+  ];
   files.push({
     path: 'src/main/resources/application-test.yaml',
     content:
@@ -1636,6 +1655,7 @@ function reconciliationYaml(model, profile) {
   const lines = ['reconciliation:'];
   for (const { dependency, activation } of reconciledActivations(model)) {
     const key = kebabCase(activation.name);
+    const sweeper = (model.services ?? []).flatMap((service) => service.operations).find((op) => op.name === activation.reconciledBy);
     lines.push(
       `  ${key}:`,
       `    # Encargos a ${dependency} sin desenlace pasado este tiempo: candidatos del barrido.`,
@@ -1646,18 +1666,19 @@ function reconciliationYaml(model, profile) {
         activation.unansweredAfterSeconds ?? 3600
       )}`,
       '    # Caducidad del reclamo: una réplica que muere con el lote en vuelo retiene sus',
-      '    # candidatos hasta que pasa esto. Del generador, no del diseño.',
+      '    # candidatos hasta que pasa esto. Del generador, no del diseño: cubre el lote entero',
+      '    # (lote × timeout de la llamada con sus reintentos) y al menos dos ticks del cron.',
       `    claim-timeout-ms: ${envWithDefault(
         profile,
         `RECONCILIATION_${screamingSnake(activation.name)}_CLAIM_TIMEOUT_MS`,
-        60000
+        reconciliationClaimTimeoutMs(activation, sweeper)
       )}`,
       '    # Cota del lote por pasada: sin ella, una tanda con 50.000 atascados son 50.000',
       '    # llamadas al proveedor de una vez. Del generador, no del diseño.',
       `    batch-size: ${envWithDefault(
         profile,
         `RECONCILIATION_${screamingSnake(activation.name)}_BATCH_SIZE`,
-        50
+        RECONCILIATION_BATCH_SIZE
       )}`
     );
   }

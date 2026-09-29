@@ -46,6 +46,7 @@ const SECURITY = {
 // `compose -f ... exec -T keycloak /opt/keycloak/bin/kcadm.sh <subcomando> ...`.
 const STUB = `#!/usr/bin/env bash
 ARGS="$*"
+if [ -n "\${STUB_LOG:-}" ]; then echo "$ARGS" >> "$STUB_LOG"; fi
 case "$ARGS" in
   *credentials*) exit 0 ;;
 esac
@@ -92,7 +93,7 @@ function runScript(serviceDir, content, env = {}) {
   // stub conteste lo que este diseño pide, sin duplicar aquí la lista.
   const scopes = [...content.matchAll(/create client-scopes -r \$REALM -s name=(\S+?)[\s"]/g)]
     .map((match) => match[1])
-    .map((name) => name.replace('$SVC', 'catalog-api'));
+    .map((name) => name.replace('$SVC', /^SVC=(\S+)/m.exec(content)?.[1] ?? 'catalog-api'));
 
   return spawnSync('bash', ['infra/init-keycloak.sh'], {
     cwd: serviceDir,
@@ -153,4 +154,51 @@ test('un aprovisionamiento a medias falla con un ERROR legible, no en silencio',
     /ERROR:/,
     `murió sin explicar por qué.\n--- stdout ---\n${result.stdout}\n--- stderr ---\n${result.stderr}`
   );
+});
+
+// ─── Quién existe en el realm ───────────────────────────────────────────────
+//
+// Dos huecos de la serie R8, los dos de lo que el script CREA y no de cómo lo crea: room-booking
+// necesitaba dos usuarios con el mismo rol para la titularidad y el script sembraba uno, y en
+// notification-mailer —sin roles— la cabecera y test-credentials.env prometían usuarios de prueba
+// que nadie creaba. Se afirma sobre lo que el stub RECIBIÓ, no sobre el texto del script.
+
+function runLogged(serviceDir, script) {
+  const log = path.join(serviceDir, 'infra', 'kcadm.log');
+  const result = runScript(serviceDir, script, { STUB_LOG: log });
+  return { result, calls: fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '' };
+}
+
+test('con roles se siembran DOS usuarios por rol, y el segundo lleva su rol', () => {
+  const { serviceDir, script } = buildScript();
+  const { result, calls } = runLogged(serviceDir, script);
+  assert.equal(result.status, 0, result.stderr);
+  for (const role of ['admin', 'editor']) {
+    assert.match(calls, new RegExp(`create users -r \\S+ -s username=${role}-2 `), `no se creó ${role}-2`);
+    assert.match(calls, new RegExp(`add-roles -r \\S+ --uusername ${role}-2 --rolename ${role}\\b`), `${role}-2 sin su rol`);
+  }
+  assert.match(calls, /create users -r \S+ -s username=no-role /);
+});
+
+test('sin roles no hay usuarios de prueba, ni cliente público, ni se prometen', () => {
+  const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'notification-mailer');
+  const { manifest, layers, errors } = loadService(dir);
+  assert.deepEqual(errors, []);
+  assert.equal((layers.security?.roles ?? []).length, 0, 'la fixture de control ya declara roles');
+  const workspace = tmpDir('keel-kcrun-noroles-');
+  scaffoldService({ manifest, layers, workspace, stack: { auth: 'keycloak' }, force: true });
+  const serviceDir = path.join(workspace, 'services', 'notification-mailer-spring');
+  const script = fs.readFileSync(path.join(serviceDir, 'infra/init-keycloak.sh'), 'utf8');
+
+  const { result, calls } = runLogged(serviceDir, script);
+  assert.equal(result.status, 0, `${result.stdout}
+${result.stderr}`);
+  assert.doesNotMatch(calls, /create users /, 'se crearon usuarios sin roles que darles');
+  assert.doesNotMatch(calls, /publicClient=true/, 'se creó el cliente público de usuario');
+  assert.doesNotMatch(script, /usuarios de prueba (grant password)/, 'la cabecera promete usuarios');
+  assert.doesNotMatch(script, /USER_CLIENT/);
+
+  const env = fs.readFileSync(path.join(serviceDir, 'infra/test-credentials.env'), 'utf8');
+  assert.doesNotMatch(env, /AUTH_TEST_/, 'test-credentials.env promete credenciales de usuario');
+  assert.match(env, /AUTH_TOKEN_URL=/);
 });

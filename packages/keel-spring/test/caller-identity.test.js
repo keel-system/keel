@@ -143,8 +143,45 @@ test('con resolvedBy, build da el finder por colección y lo dice en el stub', (
   // Y la nota, que es la mitad que cierra el círculo: sin ella el método existe y nadie sabe
   // que hace falta, porque el valor que llega PARECE una clave natural.
   const command = files.get('RequestNotificationCommand.java');
-  assert.match(command, /client_id, NO la clave natural de Application/);
+  assert.ok(command.includes('YA resuelta a la clave natural de Application (key)'), 'la nota del comando no dice que llega resuelta');
   assert.match(command, /findByCredentialKeysContaining/);
+});
+
+// ─── Resuelta en la PUERTA, igual por las dos ───────────────────────────────
+//
+// Hasta la corrida notification-mailer R8, con `resolvedBy` build metía el client_id en crudo en
+// `applicationKey` —que el diseño define como la clave de Application— mientras la nota del
+// listener decía que por eventos llegaba ya resuelto: la misma operación recibía dos cosas según
+// la puerta, y el agente reescribió el handler para buscar por las dos. Ahora las dos resuelven.
+
+test('con resolvedBy, CallerIdentity resuelve la credencial a la clave natural', () => {
+  const files = generateMailer();
+  const identity = files.get('CallerIdentity.java');
+  assert.match(identity, /@Component\s+public class CallerIdentity/, 'CallerIdentity no es un bean');
+  assert.ok(identity.includes('applicationRepository.findByCredentialKeysContaining(credential())'));
+  assert.ok(identity.includes('.map(Application::getKey)'), 'no devuelve la clave natural');
+  // El recurso inexistente es precondición de la OPERACIÓN (APPLICATION_INACTIVE, con su
+  // precedencia): un 403 genérico aquí taparía el código que el diseño pide.
+  assert.ok(identity.includes('.orElse(null)'));
+  assert.ok(!identity.includes('AccessDeniedException'));
+
+  const controller = files.get('NotificationV1Controller.java');
+  assert.ok(controller.includes('public NotificationV1Controller(UseCaseMediator mediator, CallerIdentity callerIdentity)'));
+  assert.ok(!controller.includes('CallerIdentity.resolve()'), 'el controller sigue usando la credencial cruda');
+
+  // Y el listener dice lo mismo: pasa la clave natural, no la credencial.
+  const listenerNote = [...files.values()].find((c) => c.includes('resolvedBy: Application.credentialKeys') && c.includes('onUnresolved')) ?? '';
+  assert.match(listenerNote, /se le pasa la CLAVE NATURAL del Application/, 'la nota del listener no dice qué pasa al comando');
+});
+
+test('sin resolvedBy CallerIdentity sigue siendo estático y el controller no lo inyecta', () => {
+  const files = generate();
+  const identity = files.get('CallerIdentity.java');
+  assert.ok(identity, 'la fixture de control no tiene identidad del llamante');
+  assert.match(identity, /public final class CallerIdentity/);
+  assert.ok(identity.includes('public static String resolve()'));
+  const controllers = [...files.entries()].filter(([name]) => name.endsWith('V1Controller.java')).map(([, c]) => c);
+  assert.ok(controllers.every((c) => !c.includes('CallerIdentity callerIdentity')));
 });
 
 test('y la rama DOCUMENTAL lo implementa igual: el puerto es el mismo', () => {
@@ -178,7 +215,7 @@ test('con parámetros de ruta la identidad SIGUE saliendo del token', () => {
 
   // El registro de plantilla fusiona {templateKey} y {locale} con el cuerpo. La identidad no es
   // ninguno de los dos: la pone el servidor.
-  assert.match(controller, /CallerIdentity.resolve()/, 'la identidad se lee del cuerpo, donde es null');
+  assert.match(controller, /callerIdentity.resolve()/, 'la identidad se lee del cuerpo, donde es null');
   assert.match(controller, /import .*configurations.security.CallerIdentity;/);
 
   // Y no se lee del comando: es la mitad que distingue el arreglo de un import decorativo.
@@ -190,7 +227,7 @@ test('con parámetros de ruta la identidad SIGUE saliendo del token', () => {
 
 test('y el control sin ruta sigue igual', () => {
   const controller = generateMailer().get('NotificationV1Controller.java');
-  assert.match(controller, /CallerIdentity.resolve()/);
+  assert.match(controller, /callerIdentity.resolve()/);
 });
 
 // ─── Un POST cuyo único campo fuera de la ruta es la identidad ──────────────
@@ -210,7 +247,7 @@ test('sin nada que leer del cuerpo, un POST no declara @RequestBody', () => {
 
   const dispatch = /new PublishTemplateCommand\([^)]*\)/.exec(controller)?.[0];
   assert.ok(dispatch, 'no se construye el comando desde la ruta');
-  assert.ok(dispatch.includes('CallerIdentity.resolve()'), `la publicación no recibe la identidad (${dispatch})`);
+  assert.ok(dispatch.includes('callerIdentity.resolve()'), `la publicación no recibe la identidad (${dispatch})`);
   assert.ok(dispatch.includes('templateId'), `la publicación no recibe la ruta (${dispatch})`);
 
   // El control: el registro de plantilla (PUT con cuerpo y ruta) sigue leyendo su cuerpo.

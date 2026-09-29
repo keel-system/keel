@@ -32,6 +32,12 @@ function securedFixture({ validateAudience = true } = {}) {
   const patchedManifest = structuredClone(manifest);
   patchedManifest.layers.security = 'security.keel.yaml';
   const patched = structuredClone(layers);
+  // La ruta M2M se declara como tal: sin ninguna ruta `audience: services` no hay filtro de
+  // audiencia (colgarlo de la cadena única rechazaba a todos los usuarios; asset-vault, R8).
+  patched.api = {
+    ...patched.api,
+    endpoints: { ...patched.api.endpoints, listProducts: { method: 'GET', path: '/products', audience: 'services' } }
+  };
   patched.security = {
     authentication: {
       protocol: 'oidc',

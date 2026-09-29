@@ -34,7 +34,7 @@ Desde el plan de validación de R8, las corridas de medición (sufijo `-r8` en e
 
 | Etiqueta | Qué va | Ejemplo |
 |---|---|---|
-| `Papel` | `control` si la corrida mide el residuo del generador y no el diseño; sin la fila, es de medición | `control` |
+| `Papel` | `control` si la corrida mide el residuo del generador y no el diseño; `superada — <motivo>` si otra la sustituye, por la regla de parada temprana del plan o porque se generó con una puerta que ya no la dejaría pasar (queda como histórico y no cuenta para H1); sin la fila, es de medición | `control` |
 | `Clasificación de la huella` | la cuenta por clase de la rúbrica de abajo | `13 TODO · 3 consulta · 7 generador · 0 diseño · 0 puerta` |
 | `Huecos del generador` | cuántos, con su arreglo en `keel-spring` | `5 (ver § Arreglos)` |
 | `Agujeros de la puerta` | cuántos huecos del diseño debía haber cazado `--ready` o una clase de `gap-analysis.md` | `0` |

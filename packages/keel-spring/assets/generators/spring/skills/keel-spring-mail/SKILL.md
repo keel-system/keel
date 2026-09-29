@@ -40,14 +40,20 @@ y por eso es tuya: qué plantilla se elige, con qué variables se rellena, qué 
 si falta una, y cuándo exactamente sale el correo respecto a la transacción.
 
 ```java
-String subject = templateRenderer.render(cacheKey, template.subject(), variables);
-String html = templateRenderer.render(cacheKey + ":html", template.bodyHtml(), variables);
-String text = templateRenderer.render(cacheKey + ":text", template.bodyText(), variables);
+String subject = templateRenderer.render(Part.SUBJECT, cacheKey, template.subject(), variables);
+String html = templateRenderer.render(Part.HTML, cacheKey, template.bodyHtml(), variables);
+String text = templateRenderer.render(Part.TEXT, cacheKey, template.bodyText(), variables);
 mailSender.send(new MailMessage(sender, null, List.of(recipient), subject, html, text));
 ```
 
 Tres decisiones que el diseño ya tomó y que tienes que respetar:
 
+0. **La parte (`Part`) decide el escapado**: HTML escapa las variables, TEXT y SUBJECT no. No
+   la metas en la clave ni deshagas el escapado a mano: lo resuelve el renderizador.
+   Y la operación que **da de alta** una plantilla la valida con `templateRenderer.compile(source)`
+   por cada parte —sin cachear— y traduce `TemplateRenderException` al 422 que declare el diseño:
+   inyecta `TemplateRenderer` en su handler tú mismo, porque esa operación no envía correo y
+   build no puede saber que es la de alta.
 1. **`cacheKey` identifica contenido, no plantilla.** Dos contenidos distintos no
    pueden compartir clave: la caché serviría el viejo para siempre. Si el diseño
    versiona las plantillas, la versión va en la clave.

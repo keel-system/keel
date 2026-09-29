@@ -14,7 +14,7 @@
 import { javaFile, javaPath } from './render.js';
 import { mailSection, hasMail, MAIL_IMPORTS } from './mail-harness.js';
 import { pascalCase, snakeCase, screamingSnake } from '../lib/naming.js';
-import { DATABASES, BROKERS, CACHES, selectedInfra, brokerContainer } from '../lib/stack-catalog.js';
+import { DATABASES, BROKERS, CACHES, STORAGE, selectedInfra, brokerContainer, storageContainer } from '../lib/stack-catalog.js';
 import { cacheFlushCmd, concreteCmd, needsDevtools } from './devtools.js';
 import { outboxRelayBeanName, usesOutbox } from './outbox.js';
 import {
@@ -22,8 +22,7 @@ import {
   deadLetterSubscriptions,
   publishedDestination,
   subscriptionDestination,
-  usesDeadLetter
-} from '../lib/dead-letter.js';
+  usesDeadLetter, subscriptionGroupId } from '../lib/dead-letter.js';
 import { needsMessagingProvisioning } from './messaging-provisioning.js';
 import {
   setStateScript,
@@ -823,7 +822,7 @@ function abstractImports(model) {
   // búsqueda, así que la sección necesita el codificador y su charset.
   if (hasMail(model)) imports.push(...MAIL_IMPORTS, 'java.util.ArrayList', 'java.util.List', 'java.util.Map');
   // Flag de la caída provocada por el propio escenario (palanca del outbox).
-  if (usesBrokerControl(model)) imports.push('java.util.concurrent.atomic.AtomicBoolean');
+  if (usesBrokerControl(model) || usesStorageControl(model)) imports.push('java.util.concurrent.atomic.AtomicBoolean');
   // La pausa del relay resuelve su bean por NOMBRE desde el contexto: nada de src/main.
   if (pausesRelay(model)) {
     imports.push(
@@ -1307,7 +1306,7 @@ ${hasIdempotency(model) ? `
     }
 ` : ''}${hasMultipart(model) ? `
     /** Subida multipart: la parte binaria más los campos simples del formulario. */
-    protected Response multipart(String path, String partName, String filename, String contentType, byte[] content, Map<String, String> fields${security ? ', String token' : ''}) {
+    protected Response multipart(String path, String partName, String filename, String contentType, byte[] content, Map<String, ?> fields${security ? ', String token' : ''}) {
         return multipartTo(path, partName, filename, contentType, content, fields${security ? ', token' : ''}, ${hasIdempotency(model) ? 'idempotencyKey()' : 'null'});
     }
 ${hasIdempotency(model) ? `
@@ -1316,12 +1315,12 @@ ${hasIdempotency(model) ? `
      * repetir la misma clave en dos subidas es lo que ejercita la deduplicación de
      * una operación multipart.
      */
-    protected Response multipartWithKey(String path, String partName, String filename, String contentType, byte[] content, Map<String, String> fields${security ? ', String token' : ''}, String idempotencyKey) {
+    protected Response multipartWithKey(String path, String partName, String filename, String contentType, byte[] content, Map<String, ?> fields${security ? ', String token' : ''}, String idempotencyKey) {
         return multipartTo(path, partName, filename, contentType, content, fields${security ? ', token' : ''}, idempotencyKey);
     }
 
     /** Subida SIN \`Idempotency-Key\`, simétrica a {@link #exchangeWithoutIdempotencyKey}. */
-    protected Response multipartWithoutIdempotencyKey(String path, String partName, String filename, String contentType, byte[] content, Map<String, String> fields${security ? ', String token' : ''}) {
+    protected Response multipartWithoutIdempotencyKey(String path, String partName, String filename, String contentType, byte[] content, Map<String, ?> fields${security ? ', String token' : ''}) {
         return multipartTo(path, partName, filename, contentType, content, fields${security ? ', token' : ''}, null);
     }
 ` : ''}
@@ -1334,7 +1333,7 @@ ${hasIdempotency(model) ? `
      * puede escribir — y ese es exactamente el caso que el registro de idempotencia
      * existe para cerrar.
      */
-    private Response multipartTo(String url, String partName, String filename, String contentType, byte[] content, Map<String, String> fields${security ? ', String token' : ''}, String idempotencyKey) {
+    private Response multipartTo(String url, String partName, String filename, String contentType, byte[] content, Map<String, ?> fields${security ? ', String token' : ''}, String idempotencyKey) {
         ByteArrayResource part = new ByteArrayResource(content) {
             @Override
             public String getFilename() {
@@ -1346,7 +1345,16 @@ ${hasIdempotency(model) ? `
 
         MultiValueMap<String, Object> form = new LinkedMultiValueMap<>();
         form.add(partName, new HttpEntity<>(part, partHeaders));
-        fields.forEach(form::add);
+        // Un campo \`list\` del diseño viaja como parte REPETIDA con el mismo nombre (una por
+        // elemento), que es lo que el controller recibe como @RequestParam List<T>
+        // (conventions/mapping.md § Subidas). Unirlos con comas lo decidía cada agente.
+        fields.forEach((name, value) -> {
+            if (value instanceof java.util.Collection<?> values) {
+                values.forEach(item -> form.add(name, String.valueOf(item)));
+            } else {
+                form.add(name, value);
+            }
+        });
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.MULTIPART_FORM_DATA);
@@ -1661,7 +1669,7 @@ ${hasIdempotency(model) ? `
     }
 
     // ── Estado e infraestructura ─────────────────────────────────────────────
-${resetSection(model)}${inMemoryResetSection(model)}${bashExecutableSection(model)}${httpStubSection(model)}${mailSection(model)}${devtoolsSection(model)}${brokerControlSection(model)}${replicaSection(model)}${dbSection(model)}${containerExecSection(model)}${securitySection(model)}}`;
+${resetSection(model)}${inMemoryResetSection(model)}${bashExecutableSection(model)}${httpStubSection(model)}${mailSection(model)}${devtoolsSection(model)}${brokerControlSection(model)}${storageControlSection(model)}${replicaSection(model)}${dbSection(model)}${containerExecSection(model)}${securitySection(model)}}`;
 }
 
 // Proveedor de prueba de las integraciones salientes. Es infraestructura, no un
@@ -1982,7 +1990,8 @@ function resetSection(model) {
   // antes, un timeout de Gradle) todos los flujos siguientes de la misma suite
   // fallarían por una causa que no es la suya. Y el purgado del script habla con el
   // broker, así que tiene que encontrarlo vivo.
-  const restore = usesBrokerControl(model) ? '\n        restoreBroker();' : '';
+  const restore =
+    (usesBrokerControl(model) ? '\n        restoreBroker();' : '') + (usesStorageControl(model) ? '\n        restoreStorage();' : '');
   // Y una réplica viva sigue publicando y barriendo: si el finally de su escenario
   // no llego a correr, los flujos siguientes fallarian por una causa ajena. Pararla
   // es idempotente, asi que abrir cada clase con esto no cuesta nada.
@@ -2167,6 +2176,85 @@ function usesBrokerControl(model) {
   return usesOutbox(model) && Boolean(brokerEntry(model)) && usesDevtools(model);
 }
 
+// La palanca gemela para el ALMACENAMIENTO: un escenario de «bucket caído» (el 503 que el
+// diseño declara al guardar el binario) necesita parar el contenedor y volver a levantarlo.
+// Sin ella el agente escribía sus propios helpers en la clase de prueba (asset-vault, R8).
+// Solo con un almacenamiento que levanta contenedor (minio) y con devtools para sondearlo.
+function usesStorageControl(model) {
+  return Boolean(model.layersPresent.storage) && model.stack.storage === 'minio' && usesDevtools(model);
+}
+
+function storageControlSection(model) {
+  if (!usesStorageControl(model)) return '';
+  const storage = STORAGE[model.stack.storage];
+  return `
+    /** Contenedor de ${storage.label} en \`infra/docker-compose.yaml\`. */
+    private static final String STORAGE_CONTAINER = "${storageContainer(model.service.name, storage)}";
+
+    /** Espera máxima a que el almacenamiento vuelva a servir tras levantarlo. */
+    private static final Duration STORAGE_READY_TIMEOUT = Duration.ofSeconds(90);
+
+    /** ¿Lo tiró el propio escenario? Mismo papel que el flag del broker. */
+    private static final AtomicBoolean STORAGE_STOPPED = new AtomicBoolean(false);
+
+    /**
+     * Detiene el contenedor del almacenamiento. Es la palanca de los escenarios de
+     * <b>bucket caído</b>: con él parado, una subida tiene que responder el error que el
+     * diseño declara y no custodiar nada. <b>El escenario que lo llama lo restaura</b> en
+     * un {@code finally}; {@link #resetState} lo levanta igualmente al abrir cada clase.
+     */
+    protected static void stopStorage() {
+        runProcess(List.of(containerRuntime(), "stop", STORAGE_CONTAINER));
+        STORAGE_STOPPED.set(true);
+        awaitStorage(false);
+    }
+
+    /**
+     * Levanta el contenedor y <b>espera a que sirva</b>: arrancado no es listo, y seguir
+     * sin esperar deja al escenario afirmando contra un bucket que todavía no responde.
+     * El sondeo es el mismo que usa \`infra/validate-infra.sh\`.
+     */
+    protected static void startStorage() {
+        runProcess(List.of(containerRuntime(), "start", STORAGE_CONTAINER));
+        awaitStorage(true);
+        STORAGE_STOPPED.set(false);
+    }
+
+    /** Restaura el almacenamiento si algún escenario lo dejó caído, y solo entonces. */
+    private static void restoreStorage() {
+        if (STORAGE_STOPPED.get()) {
+            startStorage();
+        }
+    }
+
+    private static void awaitStorage(boolean up) {
+        Instant deadline = Instant.now().plus(STORAGE_READY_TIMEOUT);
+        while (Instant.now().isBefore(deadline)) {
+            if (storageAccepts() == up) {
+                return;
+            }
+            try {
+                Thread.sleep(500L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrumpido esperando al almacenamiento", e);
+            }
+        }
+        throw new IllegalStateException("${storage.label} no " + (up ? "volvió a servir" : "dejó de servir") + " en " + STORAGE_READY_TIMEOUT);
+    }
+
+    /** Sondeo de disponibilidad: aquí el fallo es la respuesta, no un error. */
+    private static boolean storageAccepts() {
+        try {
+            devtoolsShell(${javaString(storage.cliValidateCmd)});
+            return true;
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+`;
+}
+
 /**
  * ¿Tiene este diseño alguna garantia cuyo enunciado sea "arbitrado ENTRE replicas"?
  *
@@ -2201,6 +2289,78 @@ function replicaSection(model) {
   return REPLICA_BODY(model);
 }
 
+// Kafka: tras parar la réplica los grupos rebalancean al único miembro que queda, y tras
+// arrancarla, a dos. Sin esperar, el `await` del escenario SIGUIENTE corre contra un grupo que
+// todavía no entrega. Solo Kafka tiene grupos; en SQS y RabbitMQ la cola reparte sin rebalanceo.
+function kafkaGroupIds(model) {
+  if (model.stack?.broker !== 'kafka') return [];
+  return (model.subscriptions ?? []).map((sub) => subscriptionGroupId(model, sub));
+}
+
+function kafkaGroupsAfter(model, members) {
+  return kafkaGroupIds(model).length > 0 ? `\n        awaitConsumerGroupsStable(${members});` : '';
+}
+
+function kafkaGroupsSection(model) {
+  const groups = kafkaGroupIds(model);
+  if (groups.length === 0) return '';
+  return `
+
+    /** Los consumer groups del servicio: \`messaging.subscriptions.<clave>.group-id\` de parameters/local. */
+    private static final List<String> CONSUMER_GROUP_IDS = List.of(${groups.map((g) => JSON.stringify(g)).join(', ')});
+
+    private static final Duration CONSUMER_GROUP_SETTLE_TIMEOUT = Duration.ofSeconds(30);
+
+    /**
+     * Espera a que todos los consumer groups estén en {@code STABLE} con {@code members} miembros:
+     * 1 tras parar la réplica, 2 tras arrancarla.
+     *
+     * <p>No lanza al agotar el plazo: es cortesía con el escenario siguiente, no una precondición.
+     * Si un grupo no se asienta, ese escenario falla en su propio {@code await}, que es donde tiene
+     * que fallar — no aquí, en el {@code finally} de otro.
+     */
+    private static void awaitConsumerGroupsStable(int members) {
+        java.util.Properties props = new java.util.Properties();
+        props.put(org.apache.kafka.clients.admin.AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG,
+                // Sin env(): ese helper solo existe con capa security.
+                java.util.Optional.ofNullable(System.getenv("KAFKA_BOOTSTRAP_SERVERS")).orElse("localhost:9092"));
+        props.put(org.apache.kafka.clients.admin.AdminClientConfig.REQUEST_TIMEOUT_MS_CONFIG, 5000);
+        try (org.apache.kafka.clients.admin.Admin admin = org.apache.kafka.clients.admin.Admin.create(props)) {
+            Instant deadline = Instant.now().plus(CONSUMER_GROUP_SETTLE_TIMEOUT);
+            while (Instant.now().isBefore(deadline)) {
+                if (consumerGroupsSettled(admin, members)) {
+                    return;
+                }
+                try {
+                    Thread.sleep(300L);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+        }
+    }
+
+    private static boolean consumerGroupsSettled(org.apache.kafka.clients.admin.Admin admin, int members) {
+        var described = admin.describeConsumerGroups(CONSUMER_GROUP_IDS).describedGroups();
+        for (String groupId : CONSUMER_GROUP_IDS) {
+            try {
+                var group = described.get(groupId).get(5, TimeUnit.SECONDS);
+                if (group.state() != org.apache.kafka.common.ConsumerGroupState.STABLE || group.members().size() != members) {
+                    return false;
+                }
+            } catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException todaviaNo) {
+                // El grupo aún no existe o el coordinador no contesta: se reintenta hasta el plazo.
+                return false;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return true;
+    }`;
+}
+
 function REPLICA_BODY(model) {
   const onReplica = model.layersPresent.api
     ? `
@@ -2225,7 +2385,7 @@ ${hasMultipart(model) ? `
      * justo lo que el registro de idempotencia existe para cerrar: dos peticiones con la
      * misma clave en dos PROCESOS distintos.
      */
-    protected Response onReplicaMultipart(String path, String partName, String filename, String contentType, byte[] content, Map<String, String> fields${model.layersPresent.security ? ', String token' : ''}${hasIdempotency(model) ? ', String idempotencyKey' : ''}) {
+    protected Response onReplicaMultipart(String path, String partName, String filename, String contentType, byte[] content, Map<String, ?> fields${model.layersPresent.security ? ', String token' : ''}${hasIdempotency(model) ? ', String idempotencyKey' : ''}) {
         if (REPLICA == null || !REPLICA.isAlive()) {
             throw new IllegalStateException("La réplica no está arrancada: llama antes a startReplica()");
         }
@@ -2294,14 +2454,19 @@ ${hasMultipart(model) ? `
                             // is configured». La réplica no llega a levantar y el escenario de
                             // clúster falla con «murió durante el arranque».
                             "--management.endpoints.web.exposure.include=health,shutdown",
-                            "--management.endpoint.shutdown.access=unrestricted")
+                            "--management.endpoint.shutdown.access=unrestricted",
+                            // Marca de la réplica en su línea de comandos: es lo que permite
+                            // reconocerla por su PID en la ejecución SIGUIENTE sin matar a un
+                            // proceso ajeno que hubiera heredado el número.
+                            REPLICA_MARKER)
                     .redirectErrorStream(true)
                     .redirectOutput(log.toFile())
                     .start();
         } catch (IOException e) {
             throw new IllegalStateException("No se pudo arrancar la segunda réplica desde " + jar, e);
         }
-        awaitReplicaReady(log);
+        writeReplicaPid(REPLICA.pid());
+        awaitReplicaReady(log);${kafkaGroupsAfter(model, 2)}
         return REPLICA_PORT;
     }
 
@@ -2329,14 +2494,14 @@ ${hasMultipart(model) ? `
      */
     protected static void stopReplica() {
         if (REPLICA == null) {
+            // REPLICA es estático: una réplica que sobrevivió a OTRA ejecución de la suite (un
+            // Gradle matado a medias) no está aquí, y seguía reclamando filas contra la misma base.
+            // Su PID quedó en build/keel-replica.pid (corrida asset-vault R8).
+            killOrphanReplica();
             return;
         }
-        // El ÁRBOL, capturado antes de matar: después de morir el padre, sus descendientes ya no
-        // se pueden enumerar desde él. En Windows un proceso Java puede dejar hijos, y esos hijos
-        // siguen hablando con la misma base de datos.
         ProcessHandle raiz = REPLICA.toHandle();
-        List<ProcessHandle> arbol = new ArrayList<>(raiz.descendants().toList());
-        arbol.add(raiz);
+        List<ProcessHandle> arbol = replicaTree(raiz);
 
         requestReplicaShutdown();
         try {
@@ -2352,14 +2517,100 @@ ${hasMultipart(model) ? `
             Thread.currentThread().interrupt();
             REPLICA.destroyForcibly();
         }
+        killTree(raiz, arbol);
+        awaitReplicaDead(arbol);
+        REPLICA = null;
+        deleteReplicaPid();${kafkaGroupsAfter(model, 1)}
+    }
+
+    /** El sello de la línea de comandos de la réplica (ver {@link #startReplica()}). */
+    private static final String REPLICA_MARKER = "--keel.harness.replica=true";
+
+    private static final Path REPLICA_PID = Path.of("build", "keel-replica.pid");
+
+    private static boolean isWindows() {
+        return System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("win");
+    }
+
+    /**
+     * El árbol a matar. En Windows NO se enumera con {@code descendants()}: ahí se sospecha de él
+     * en el {@code 0xC0000005} de la corrida asset-vault R8, y {@code taskkill /T} ya mata el árbol
+     * entero desde la raíz. En el resto, se captura ANTES de matar: muerto el padre, sus hijos ya no
+     * se pueden enumerar desde él.
+     */
+    private static List<ProcessHandle> replicaTree(ProcessHandle raiz) {
+        List<ProcessHandle> arbol = new ArrayList<>();
+        if (!isWindows()) {
+            arbol.addAll(raiz.descendants().toList());
+        }
+        arbol.add(raiz);
+        return arbol;
+    }
+
+    private static void killTree(ProcessHandle raiz, List<ProcessHandle> arbol) {
+        if (isWindows()) {
+            if (raiz.isAlive()) {
+                try {
+                    new ProcessBuilder("taskkill", "/PID", String.valueOf(raiz.pid()), "/T", "/F")
+                            .redirectErrorStream(true)
+                            .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                            .start()
+                            .waitFor(30, TimeUnit.SECONDS);
+                } catch (IOException e) {
+                    raiz.destroyForcibly();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    raiz.destroyForcibly();
+                }
+            }
+            return;
+        }
         for (ProcessHandle vivo : arbol) {
             if (vivo.isAlive()) {
                 vivo.destroyForcibly();
             }
         }
-        awaitReplicaDead(arbol);
-        REPLICA = null;
     }
+
+    private static void writeReplicaPid(long pid) {
+        try {
+            Files.writeString(REPLICA_PID, String.valueOf(pid));
+        } catch (IOException e) {
+            // Sin el archivo solo se pierde la red contra huérfanos de la ejecución siguiente.
+        }
+    }
+
+    private static void deleteReplicaPid() {
+        try {
+            Files.deleteIfExists(REPLICA_PID);
+        } catch (IOException e) {
+            // Un PID viejo no hace daño: killOrphanReplica comprueba la marca antes de matar.
+        }
+    }
+
+    /**
+     * Mata la réplica de una ejecución anterior si su PID sigue vivo Y es de verdad la réplica: la
+     * marca de su línea de comandos lo distingue de un proceso que hubiera heredado el número.
+     */
+    private static void killOrphanReplica() {
+        if (!Files.exists(REPLICA_PID)) {
+            return;
+        }
+        try {
+            long pid = Long.parseLong(Files.readString(REPLICA_PID).trim());
+            java.util.Optional<ProcessHandle> huerfana = ProcessHandle.of(pid)
+                    .filter(ProcessHandle::isAlive)
+                    .filter(handle -> handle.info().commandLine().map(line -> line.contains(REPLICA_MARKER)).orElse(false));
+            if (huerfana.isPresent()) {
+                List<ProcessHandle> arbol = replicaTree(huerfana.get());
+                killTree(huerfana.get(), arbol);
+                awaitReplicaDead(arbol);
+            }
+        } catch (IOException | NumberFormatException e) {
+            // Archivo ilegible: no hay nada fiable que matar.
+        }
+        deleteReplicaPid();
+    }${kafkaGroupsSection(model)}
 
     /**
      * Comprueba que el árbol de la réplica murió DE VERDAD, y si no, lo dice.
@@ -5346,10 +5597,21 @@ ${
      * nada — si sigue siendo válido, devuelve el mismo.
      */
     protected String tokenFor(String role) {
-        return cachedToken(role, () ->
+        return tokenFor(role, 1);
+    }
+
+    /**
+     * El token del {@code n}-ésimo usuario de ese rol: el realm siembra DOS por rol, {@code <rol>}
+     * y {@code <rol>-2}. Es lo que necesita un escenario de titularidad —«solo quien lo creó»—, que
+     * exige dos sujetos distintos con el MISMO rol; un usuario de otro rol no sirve, porque el 403
+     * saldría por el rol y no por la titularidad.
+     */
+    protected String tokenFor(String role, int n) {
+        String username = n <= 1 ? role : role + "-" + n;
+        return cachedToken(username, () ->
             requestToken("grant_type=password"
                 + "&client_id=" + env("AUTH_TEST_CLIENT", "${userTestClient(model)}")
-                + "&username=" + role
+                + "&username=" + username
                 + "&password=" + env("AUTH_TEST_PASSWORD", "password")));
     }
 

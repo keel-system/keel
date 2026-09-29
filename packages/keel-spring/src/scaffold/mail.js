@@ -334,22 +334,41 @@ function renderTemplateRendererPort(model) {
      : 'El cuerpo viaja con el código, versionado en el repositorio.'
  }
  *
- * <p>Las variables se escapan como HTML por defecto. No es una opción de formato:
- * un dato que llegue con {@code <script>} tiene que escribirse como texto, porque
- * hay clientes de correo que ejecutan.
+ * <p>El escapado depende de la PARTE, y por eso la parte es un argumento y no una
+ * convención de la clave: en {@link Part#HTML} las variables se escapan como HTML —un
+ * dato que llegue con {@code <script>} tiene que escribirse como texto, porque hay
+ * clientes de correo que ejecutan—; en {@link Part#TEXT} y {@link Part#SUBJECT} NO,
+ * porque ahí no hay HTML que proteger y el escapado se vería: «Pedido &amp;amp; factura»
+ * en el asunto. Con un solo motor el agente deshacía el escapado a mano en la parte de
+ * texto, con pérdida, y el asunto seguía saliendo escapado (corrida notification-mailer
+ * R8). Los saltos de línea del asunto los neutraliza el adaptador SMTP, no esto.
  */
 public interface TemplateRenderer {
 
+    /** Qué parte del correo se renderiza: decide el escapado. */
+    enum Part { SUBJECT, TEXT, HTML }
+
     /**
+     * @param part     la parte del correo: decide el escapado de las variables
      * @param cacheKey identidad estable de la plantilla (clave y versión), con la que
      *                 se cachea la compilación. Dos contenidos distintos no pueden
-     *                 compartir clave: la caché serviría el viejo para siempre.
+     *                 compartir clave: la caché serviría el viejo para siempre. La parte
+     *                 NO hace falta ponerla en la clave: la añade la implementación.
      * @param source   el cuerpo literal de la plantilla, con sus llaves sin procesar
      * @param variables valores del envío
      * @return el resultado ya interpolado
      * @throws TemplateRenderException si la plantilla no compila o el renderizado falla
      */
-    String render(String cacheKey, String source, Map<String, Object> variables);
+    String render(Part part, String cacheKey, String source, Map<String, Object> variables);
+
+    /**
+     * Comprueba que la fuente compila, SIN cachearla. Es lo que usa la operación que da de
+     * alta una plantilla para rechazarla antes de guardarla (el 422 que declare el diseño):
+     * validar con {@link #render} y una clave nueva cada vez hacía crecer la caché sin límite.
+     *
+     * @throws TemplateRenderException si no compila
+     */
+    void compile(String source);
 }`;
 
   const exception = `/**
@@ -406,33 +425,52 @@ function renderHandlebarsRenderer(model) {
 public class HandlebarsTemplateRenderer implements TemplateRenderer {
 
     /**
-     * Motor sin resolvers: el cuerpo llega como cadena y no hay nada que buscar en
-     * el classpath ni en disco. Un resolver de fichero convertiría un {@code
-     * {{> ../../etc/passwd}}} en una lectura de fichero.
+     * Dos motores sin resolvers: el cuerpo llega como cadena y no hay nada que buscar en
+     * el classpath ni en disco (un resolver de fichero convertiría un {@code
+     * {{> ../../etc/passwd}}} en una lectura de fichero). Difieren SOLO en el escapado:
+     * HTML para la parte HTML, ninguno para el texto y el asunto.
      */
-    private final Handlebars handlebars = new Handlebars();
+    private final Handlebars html = new Handlebars();
+    private final Handlebars plain = new Handlebars().with(EscapingStrategy.NOOP);
+
+    /** Techo de la caché: las plantillas vivas de un servicio son decenas, no miles. */
+    private static final int MAX_COMPILED = 500;
 
     /**
-     * Compilación cacheada por identidad de plantilla. Compilar en cada envío es el
-     * coste que esta caché evita; la clave la aporta quien llama e incluye la
-     * versión, así que publicar una versión nueva no sirve la anterior.
+     * Compilación cacheada por parte + identidad de plantilla, en un LRU acotado. La parte
+     * va en la clave porque el mismo texto compilado con uno u otro motor escapa distinto;
+     * y el techo existe porque la clave la aporta quien llama —con la versión dentro—, así
+     * que sin él cada versión publicada se quedaba en memoria para siempre.
      */
-    private final Map<String, Template> compiled = new ConcurrentHashMap<>();
+    private final Map<String, Template> compiled = Collections.synchronizedMap(
+            new LinkedHashMap<>(64, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, Template> eldest) {
+                    return size() > MAX_COMPILED;
+                }
+            });
 
     @Override
-    public String render(String cacheKey, String source, Map<String, Object> variables) {
+    public String render(Part part, String cacheKey, String source, Map<String, Object> variables) {
         try {
-            Template template = compiled.computeIfAbsent(cacheKey, key -> compile(source));
+            Handlebars engine = part == Part.HTML ? html : plain;
+            Template template = compiled.computeIfAbsent(part + ":" + cacheKey, key -> compileWith(engine, source));
             return template.apply(variables == null ? Map.of() : variables);
         } catch (IOException | RuntimeException e) {
-            throw new TemplateRenderException("No se pudo renderizar la plantilla " + cacheKey, e);
+            throw new TemplateRenderException("No se pudo renderizar la plantilla " + cacheKey + " (" + part + ")", e);
         }
     }
 
-    private Template compile(String source) {
+    @Override
+    public void compile(String source) {
+        // La sintaxis es la misma para los dos motores: basta uno.
+        compileWith(plain, source);
+    }
+
+    private static Template compileWith(Handlebars engine, String source) {
         try {
-            return handlebars.compileInline(source);
-        } catch (IOException e) {
+            return engine.compileInline(source);
+        } catch (IOException | RuntimeException e) {
             throw new TemplateRenderException("La plantilla no compila", e);
         }
     }
@@ -443,11 +481,13 @@ public class HandlebarsTemplateRenderer implements TemplateRenderer {
     content: javaFile(
       pkg,
       [
+        'com.github.jknack.handlebars.EscapingStrategy',
         'com.github.jknack.handlebars.Handlebars',
         'com.github.jknack.handlebars.Template',
         'java.io.IOException',
+        'java.util.Collections',
+        'java.util.LinkedHashMap',
         'java.util.Map',
-        'java.util.concurrent.ConcurrentHashMap',
         'org.springframework.stereotype.Component',
         `${model.service.basePackage}.${DOMAIN_PKG}.TemplateRenderException`,
         `${model.service.basePackage}.${PORT_PKG}.TemplateRenderer`

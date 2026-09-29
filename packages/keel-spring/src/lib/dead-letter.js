@@ -58,6 +58,25 @@ export function deadLetterName(broker, destination) {
  * SQS, o sea una cola que no existe, y la aserción negativa habría salido verde para
  * siempre sin mirar nada.
  */
+/**
+ * El consumer group de una suscripción en KAFKA: `<servicio>-<evento-kebab>`, uno por
+ * suscripción (la skill kafka explica por qué no uno por servicio).
+ *
+ * Era una convención escrita solo en la skill, y el arnés no tenía de dónde sacarla: tras parar
+ * la réplica, la clase siguiente arrancaba con los grupos rebalanceando y agotaba su `await`, y el
+ * agente lo parcheó con la lista de grupos y el bootstrap escritos a mano (corrida
+ * stock-reservation R8). Ahora la emite config.js como propiedad, la lee el listener y el arnés
+ * espera a esos mismos grupos.
+ */
+export function subscriptionGroupId(model, sub) {
+  return `${model.service.artifactId}-${subscriptionKey(sub)}`;
+}
+
+/** La clave de la suscripción bajo `messaging.subscriptions` (`stock-depleted`). */
+export function subscriptionKey(sub) {
+  return sub.topicProperty.split('.').slice(-2)[0];
+}
+
 export function subscriptionDestination(broker, model, sub) {
   if (broker === 'snssqs') return `${model.service.artifactId}-${kebabCase(sub.name)}`;
   // La cola propia sobre el canal ajeno, agrupada por origen: la deriva el modelo

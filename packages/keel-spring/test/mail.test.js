@@ -157,7 +157,7 @@ test('el motor de plantillas no evalúa expresiones y cachea por clave', () => {
   const renderer = read(`${JAVA}/infrastructure/mail/HandlebarsTemplateRenderer.java`);
   assert.ok(renderer.includes('com.github.jknack.handlebars.Handlebars'));
   assert.ok(renderer.includes('compileInline'), 'la plantilla llega como cadena: sin resolvers de fichero');
-  assert.ok(renderer.includes('ConcurrentHashMap'), 'la compilación se cachea por clave');
+  assert.ok(renderer.includes('compiled.computeIfAbsent('), 'la compilación se cachea por clave');
 
   const gradle = read('build.gradle');
   assert.ok(gradle.includes('spring-boot-starter-mail'));
@@ -519,4 +519,22 @@ test('la espera de correo cubre la cadencia del barrido que hay en medio', () =>
   assert.ok(harness.includes('sleepQuietly(MAIL_AWAIT_SECONDS * 1000L)'));
   // Sin literales sueltos: el valor repetido era lo que hacía imposible derivarlo.
   assert.ok(!harness.includes('plusSeconds(15)'));
+});
+
+// ─── El escapado va por PARTE, y validar no llena la caché (notification-mailer R8) ───
+
+test('el renderizador escapa solo el HTML, y compile() valida sin cachear', () => {
+  const { read } = scaffoldMailer();
+  const port = read(`${JAVA}/application/port/out/TemplateRenderer.java`);
+  assert.match(port, /enum Part \{ SUBJECT, TEXT, HTML \}/);
+  assert.match(port, /String render\(Part part, String cacheKey, String source, Map<String, Object> variables\);/);
+  assert.match(port, /void compile\(String source\);/);
+
+  const impl = read(`${JAVA}/infrastructure/mail/HandlebarsTemplateRenderer.java`);
+  assert.match(impl, /new Handlebars\(\)\.with\(EscapingStrategy\.NOOP\)/, 'texto y asunto salen escapados como HTML');
+  assert.match(impl, /part == Part\.HTML \? html : plain/);
+  assert.match(impl, /computeIfAbsent\(part \+ ":" \+ cacheKey/, 'la parte no está en la clave de caché');
+  assert.match(impl, /removeEldestEntry/, 'la caché no tiene techo');
+  const compile = impl.slice(impl.indexOf('public void compile('));
+  assert.ok(!compile.slice(0, compile.indexOf('}')).includes('compiled.'), 'compile() cachea');
 });

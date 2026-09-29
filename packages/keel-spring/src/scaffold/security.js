@@ -7,7 +7,9 @@
 // del stack) a authorities de Spring. No hay stubs de negocio: la autorización
 // es enteramente derivable del diseño.
 
+import { FRAMEWORK_ERRORS } from 'keel-core';
 import { camelCase } from '../lib/naming.js';
+import { credentialFinderName } from './repositories.js';
 import { javaFile, javaPath, subPackage } from './render.js';
 import { METRICS_TRANSPORT, usesTelemetry } from '../lib/telemetry-probes.js';
 
@@ -92,11 +94,116 @@ export function generate(model) {
   const jwt = sec.protocol === 'oidc' || sec.protocol === 'jwt';
   if (jwt && sec.usesAuthorities) files.push(renderJwtAuthConverter(model));
   if (sec.protocol === 'api-key') files.push(renderApiKeyFilter(model));
-  if (jwt && sec.serviceAuth?.validateAudience) files.push(renderAudienceFilter(model));
+  if (checksAudience(sec)) files.push(renderAudienceFilter(model));
   if (sec.protocol !== 'none') files.push(renderSecurityErrorHandlers(model));
   if (needsServiceApiKeyFilter(sec)) files.push(renderServiceApiKeyFilter(model));
   if (sec.callerIdentity) files.push(renderCallerIdentity(model, sec.callerIdentity));
+  if (sec.scoping && jwt) files.push(...renderCallerScope(model, sec));
   return files;
+}
+
+// ─── Alcance por recurso (security.authentication.scoping) ───────────────────
+//
+// El puerto y su adaptador JWT, derivados del diseño: el claim que enumera los recursos del
+// llamante y los roles exentos. Hasta aquí los escribía el agente en cada corrida (asset-vault,
+// R8, dos veces seguidas) con nombres de claim y de authority sacados de un token real. Los
+// finders acotados de los listados siguen siendo del agente: dependen de la consulta.
+const SCOPE_PORT_PKG = 'application.support';
+
+function renderCallerScope(model, sec) {
+  const { scoping } = sec;
+  const portPkg = subPackage(model, SCOPE_PORT_PKG);
+  const exempt = scoping.exemptRoles.map((role) => `"ROLE_${role}"`).join(', ');
+  const exemptDoc = scoping.exemptRoles.length > 0 ? scoping.exemptRoles.map((role) => `{@code ${role}}`).join(', ') : 'ninguno';
+
+  const port = `/**
+ * Alcance por recurso del llamante (security.authentication.scoping: claim {@code ${scoping.claim}}
+ * sobre {@code ${scoping.over}}).
+ *
+ * <p>Es un puerto para que los handlers no importen Spring Security: lo implementa
+ * {@code JwtCallerScope} en infrastructure leyendo el token de la petición en curso. Solo tiene
+ * sentido dentro de una petición HTTP; los listeners y el scheduler no lo consultan.
+ */
+public interface CallerScope {
+
+    /** El llamante está exento del alcance (roles exentos del diseño: ${exemptDoc}). */
+    boolean isExempt();
+
+    /** Los valores de {@code ${scoping.over}} que enumera el claim del llamante (vacío si no trae ninguno). */
+    Set<String> scopedValues();
+
+    /** ¿El valor está en el alcance? Se evalúa contra el valor tal como llega, exista o no. */
+    default boolean covers(String value) {
+        return isExempt() || (value != null && scopedValues().contains(value));
+    }
+}`;
+
+  const adapter = `/**
+ * Alcance por recurso leído del JWT de la petición en curso (security.authentication.scoping).
+ *
+ * <ul>
+ *   <li>{@code ${scoping.claim}}: los valores de {@code ${scoping.over}} del llamante; se admite como
+ *       lista (mapper multivaluado) o como texto separado por comas o espacios.</li>
+ *   <li>Exentos: los roles ${exemptDoc}, como authority {@code ROLE_<rol>}.</li>
+ * </ul>
+ *
+ * <p>Un exento que no sea un rol —un cliente máquina que lee cualquier recurso— no cabe en
+ * {@code exemptRoles} y el diseño lo dice en prosa: esa rama es del agente, y es un hueco del DSL.
+ */
+@Component
+public class JwtCallerScope implements CallerScope {
+
+    static final String SCOPING_CLAIM = "${scoping.claim}";
+    static final Set<String> EXEMPT_AUTHORITIES = Set.of(${exempt});
+
+    @Override
+    public boolean isExempt() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        return authentication != null && authentication.getAuthorities().stream()
+                .anyMatch(authority -> EXEMPT_AUTHORITIES.contains(authority.getAuthority()));
+    }
+
+    @Override
+    public Set<String> scopedValues() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (!(authentication instanceof JwtAuthenticationToken token)) {
+            return Set.of();
+        }
+        Object claim = token.getToken().getClaim(SCOPING_CLAIM);
+        Set<String> values = new HashSet<>();
+        if (claim instanceof Collection<?> list) {
+            list.forEach(value -> values.add(String.valueOf(value)));
+        } else if (claim instanceof String single) {
+            for (String part : single.split("[\\\\s,]+")) {
+                if (!part.isBlank()) {
+                    values.add(part);
+                }
+            }
+        }
+        return Set.copyOf(values);
+    }
+}`;
+
+  return [
+    { path: javaPath(model, SCOPE_PORT_PKG, 'CallerScope'), content: javaFile(portPkg, ['java.util.Set'], port) },
+    {
+      path: javaPath(model, SECURITY_PKG, 'JwtCallerScope'),
+      content: javaFile(
+        subPackage(model, SECURITY_PKG),
+        [
+          `${portPkg}.CallerScope`,
+          'java.util.Collection',
+          'java.util.HashSet',
+          'java.util.Set',
+          'org.springframework.security.core.Authentication',
+          'org.springframework.security.core.context.SecurityContextHolder',
+          'org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken',
+          'org.springframework.stereotype.Component'
+        ],
+        adapter
+      )
+    }
+  ];
 }
 
 // serviceAuth por api-key sobre un protocolo principal basado en token: los
@@ -155,6 +262,15 @@ function serviceMatchersOf(sec) {
   return sec.matchers.filter((m) => m.audience === 'services');
 }
 
+// La audiencia solo se comprueba donde hay rutas `audience: services`. Sin ninguna, las
+// rutas `both` y las de usuarios no la comprueban (mapping.md § Audiencia), y colgar el
+// filtro de la cadena única rechazaba con 403 todo token de usuario, cuya audiencia es la
+// del IdP (`aud: account` en Keycloak). Lo vio dos veces seguidas la corrida asset-vault (R8).
+function checksAudience(sec) {
+  const jwt = sec.protocol === 'oidc' || sec.protocol === 'jwt';
+  return jwt && sec.serviceAuth?.validateAudience === true && !needsServiceApiKeyFilter(sec) && serviceMatchersOf(sec).length > 0;
+}
+
 // Patrones (sin método) para el securityMatcher de la cadena M2M, deduplicados.
 function securityMatcherPatterns(matchers) {
   return [...new Set(matchers.map((m) => m.path))];
@@ -209,6 +325,7 @@ ${corsLine}            .authorizeHttpRequests(auth -> auth.anyRequest().permitAl
   const serviceMatchers = validateAudience && !serviceApiKey ? serviceMatchersOf(sec) : [];
   const splitChains = serviceMatchers.length > 0 && serviceMatchers.length < sec.matchers.length;
   const mainMatchers = splitChains ? sec.matchers.filter((m) => !serviceMatchers.includes(m)) : sec.matchers;
+  const audienceChecked = serviceMatchers.length > 0;
 
   // 401 y 403 con el ErrorResponse del contrato (SecurityErrorHandlers), no con
   // el body por defecto de Spring Security.
@@ -242,9 +359,9 @@ ${corsLine}            .authorizeHttpRequests(auth -> auth.anyRequest().permitAl
       imports.add('org.springframework.security.config.Customizer');
       chain.push('            .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()))');
     }
-    // Sin cadenas separadas (todas las rutas son de audiencia services), la
-    // comprobación de audiencia va en la única cadena que hay.
-    if (validateAudience && !splitChains) {
+    // Sin cadenas separadas y con rutas services, TODAS lo son: la comprobación de
+    // audiencia va en la única cadena que hay. Sin ninguna ruta services no se comprueba.
+    if (audienceChecked && !splitChains) {
       imports.add('org.springframework.security.web.access.intercept.AuthorizationFilter');
       chain.push(
         '            .addFilterBefore(new AudienceAuthorizationFilter(audience), AuthorizationFilter.class)'
@@ -278,7 +395,7 @@ ${corsLine}            .authorizeHttpRequests(auth -> auth.anyRequest().permitAl
   // por perfil (issuer-uri en local/develop/production, jwk-set-uri de juguete en
   // test, ver config.js). Un decoder propio aquí obligaría a hardcodear una clave
   // en src/main y a acoplar esta clase al perfil de pruebas.
-  if (validateAudience) {
+  if (audienceChecked) {
     imports.add('org.springframework.beans.factory.annotation.Value');
     fields.push(`
     @Value("\${security.audience:${audienceOf(model, sec)}}")
@@ -611,20 +728,22 @@ public class SecurityErrorHandlers implements AuthenticationEntryPoint, AccessDe
     @Override
     public void commence(HttpServletRequest request, HttpServletResponse response,
             AuthenticationException exception) throws IOException {
-        write(response, HttpStatus.UNAUTHORIZED, "Unauthorized", "Credenciales ausentes o no válidas");
+        write(response, HttpStatus.UNAUTHORIZED, "Unauthorized", "${FRAMEWORK_ERRORS.unauthenticated.code}", "Credenciales ausentes o no válidas");
     }
 
     @Override
     public void handle(HttpServletRequest request, HttpServletResponse response,
             AccessDeniedException exception) throws IOException {
-        write(response, HttpStatus.FORBIDDEN, "Forbidden", "La credencial no autoriza esta operación");
+        write(response, HttpStatus.FORBIDDEN, "Forbidden", "${FRAMEWORK_ERRORS.accessDenied.code}", "La credencial no autoriza esta operación");
     }
 
-    private void write(HttpServletResponse response, HttpStatus status, String error, String message)
+    // El code es el canónico de la lista cerrada (framework-errors.md): sin él un escenario
+    // solo podía afirmar el status del rechazo.
+    private void write(HttpServletResponse response, HttpStatus status, String error, String code, String message)
             throws IOException {
         response.setStatus(status.value());
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-        objectMapper.writeValue(response.getOutputStream(), new ErrorResponse(status.value(), error, message));
+        objectMapper.writeValue(response.getOutputStream(), new ErrorResponse(status.value(), error, code, message, null));
     }
 }`;
 
@@ -866,6 +985,38 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
 }
 
 /**
+ * Cuándo `CallerIdentity` resuelve de verdad al recurso y no devuelve la credencial en crudo.
+ *
+ * Con `from.resolvedBy` el valor del token es UNA de las credenciales del recurso, no su clave
+ * natural. Hasta la corrida notification-mailer R8 build lo metía en crudo en el campo del
+ * comando —que el diseño define como la clave natural— mientras la nota del listener decía que
+ * por eventos llegaba ya resuelto: la misma operación recibía dos cosas distintas según la
+ * puerta. Ahora las dos pasan la clave natural, y el agente solo decide qué hacer con el null.
+ *
+ * Solo con una clave natural de UN campo: una compuesta no cabe en el campo de identidad, y
+ * entonces se queda la credencial con su nota, como antes.
+ */
+export function callerResolution(model) {
+  const resolvedBy = model.security?.callerIdentity?.resolvedBy;
+  if (!resolvedBy) return null;
+  const entity = model.entities.find((candidate) => candidate.name === resolvedBy.entity);
+  if (!entity || (entity.naturalKey ?? []).length !== 1) return null;
+  const field = entity.fields.find((candidate) => candidate.name === resolvedBy.field);
+  if (!field || !field.list) return null;
+  const keyField = entity.naturalKey[0];
+  return {
+    entity: entity.name,
+    field: resolvedBy.field,
+    keyField,
+    getter: `get${keyField.charAt(0).toUpperCase()}${keyField.slice(1)}`,
+    finder: credentialFinderName(resolvedBy.field),
+    port: `${entity.name}Repository`,
+    portImport: `${subPackage(model, 'domain.repository')}.${entity.name}Repository`,
+    entityImport: `${subPackage(model, entity.isAggregateRoot ? 'domain.aggregate' : 'domain.entity')}.${entity.name}`
+  };
+}
+
+/**
  * De dónde sale, por HTTP, la identidad de QUIÉN pide el trabajo.
  *
  * Un solo punto de resolución, igual que el listener resuelve la suya del mensaje: la operación la
@@ -898,19 +1049,7 @@ function renderCallerIdentity(model, callerIdentity) {
             value = authentication.getName();
         }`;
 
-  const body = `public final class CallerIdentity {
-
-    private CallerIdentity() {
-    }
-
-    /**
-     * El identificador del recurso en cuyo nombre llega la petición, ya resuelto.
-     *
-     * <p>Lanza si no hay identidad: una operación que la necesita no puede continuar sin ella, y
-     * seguir con un valor vacío escribiría datos a nombre de nadie. La cadena de seguridad ya
-     * rechaza al no autenticado, así que llegar aquí sin token es un fallo de configuración.
-     */
-    public static String resolve() {
+  const readCredential = `
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         if (!(authentication instanceof JwtAuthenticationToken token)) {
             throw new IllegalStateException(
@@ -922,9 +1061,68 @@ ${extract}
             throw new IllegalStateException(
                 "La credencial no identifica ningún recurso para '${callerIdentity.field}'.");
         }
-        return value;
+        return value;`;
+
+  const resolution = callerResolution(model);
+  if (!resolution) {
+    const body = `public final class CallerIdentity {
+
+    private CallerIdentity() {
+    }
+
+    /**
+     * El identificador del recurso en cuyo nombre llega la petición, ya resuelto.
+     *
+     * <p>Lanza si no hay identidad: una operación que la necesita no puede continuar sin ella, y
+     * seguir con un valor vacío escribiría datos a nombre de nadie. La cadena de seguridad ya
+     * rechaza al no autenticado, así que llegar aquí sin token es un fallo de configuración.
+     */
+    public static String resolve() {${readCredential}
     }
 }`;
+    return { path: javaPath(model, SECURITY_PKG, 'CallerIdentity'), content: javaFile(pkg, imports, body) };
+  }
+
+  imports.push('org.springframework.stereotype.Component', resolution.portImport, resolution.entityImport);
+  const port = resolution.port;
+  const portField = port.charAt(0).toLowerCase() + port.slice(1);
+  const body = `/**
+ * La identidad del llamante, resuelta al ${resolution.entity} al que pertenece su credencial.
+ *
+ * <p>El diseño declara que un mismo ${resolution.entity} tiene varias credenciales
+ * ({@code resolvedBy: ${resolution.entity}.${resolution.field}}): el valor del token no es su clave
+ * natural. {@link #resolve()} lo busca con {@code ${port}.${resolution.finder}} y devuelve la clave
+ * natural, que es lo que el campo '${callerIdentity.field}' significa en el diseño —y lo mismo que
+ * el listener pasa por el canal de eventos—.
+ */
+@Component
+public class CallerIdentity {
+
+    private final ${port} ${portField};
+
+    public CallerIdentity(${port} ${portField}) {
+        this.${portField} = ${portField};
+    }
+
+    /**
+     * La clave natural del ${resolution.entity} de la credencial, o {@code null} si la credencial
+     * no pertenece a ninguno.
+     *
+     * <p>El null NO es un error de este punto: que el recurso no exista es una precondición de la
+     * operación, y es ella la que responde con el error que el diseño declare, con su precedencia.
+     * Lanzar aquí un 403 genérico taparía ese código.
+     */
+    public String resolve() {
+        return ${portField}.${resolution.finder}(credential())
+                .map(${resolution.entity}::${resolution.getter})
+                .orElse(null);
+    }
+
+    /** La credencial en crudo, tal como la trae el token: NO es la clave natural. */
+    static String credential() {${readCredential}
+    }
+}`;
+
 
   return { path: javaPath(model, SECURITY_PKG, 'CallerIdentity'), content: javaFile(pkg, imports, body) };
 }

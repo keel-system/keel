@@ -190,3 +190,51 @@ test('sin scoping declarado no se genera nada de esto', () => {
   }
   assert.equal(realm.clients.find((client) => client.publicClient).protocolMappers, undefined);
 });
+
+test('build genera el puerto CallerScope y su adaptador JWT desde el diseño', () => {
+  // Los escribía el agente en cada corrida (asset-vault, R8, dos veces seguidas), con el nombre
+  // del claim y de la authority sacados de un token real. Los dos salen del diseño.
+  const workspace = (() => {
+    const { manifest, layers } = loadService(fixtureDir);
+    const patched = structuredClone(layers);
+    patched.security = security();
+    // La nota va en el handler de la operación que declara el error del alcance.
+    patched['use-cases'].operations.createProduct.errors.push({
+      code: 'TENANT_FORBIDDEN',
+      when: 'El sku no está en el alcance del solicitante.',
+      http: 403
+    });
+    const patchedManifest = structuredClone(manifest);
+    patchedManifest.layers.security = 'security.keel.yaml';
+    const dir = tmpDir('keel-scope-port-');
+    scaffoldService({ manifest: patchedManifest, layers: patched, workspace: dir, force: true });
+    return path.join(dir, 'services', 'catalog-spring', 'src/main/java');
+  })();
+  const files = fs.readdirSync(workspace, { recursive: true }).map(String);
+  const read = (suffix) => fs.readFileSync(path.join(workspace, files.find((f) => f.endsWith(suffix))), 'utf8');
+
+  const port = read(`${path.sep}CallerScope.java`);
+  assert.match(port, /package [\w.]+\.application\.support;/);
+  assert.ok(port.includes('default boolean covers(String value)'), port);
+  const adapter = read('JwtCallerScope.java');
+  assert.ok(adapter.includes(`static final String SCOPING_CLAIM = "${CLAIM}";`), adapter);
+  assert.ok(adapter.includes('static final Set<String> EXEMPT_AUTHORITIES = Set.of("ROLE_admin");'), adapter);
+  // En el fuente Java son dos barras: la regex es [\s,]+.
+  assert.ok(adapter.includes('split("[\\\\s,]+")'), adapter);
+
+  // Y el handler de la operación que declara el error del alcance lo nombra.
+  const handler = read('CreateProductCommandHandler.java');
+  assert.ok(handler.includes('Alcance (security.authentication.scoping): inyecta CallerScope'), handler);
+});
+
+test('sin scoping no se genera ni el puerto ni el adaptador', () => {
+  const { manifest, layers } = loadService(fixtureDir);
+  const patched = structuredClone(layers);
+  patched.security = security({ scoping: false });
+  const patchedManifest = structuredClone(manifest);
+  patchedManifest.layers.security = 'security.keel.yaml';
+  const dir = tmpDir('keel-scope-none-');
+  scaffoldService({ manifest: patchedManifest, layers: patched, workspace: dir, force: true });
+  const files = fs.readdirSync(path.join(dir, 'services', 'catalog-spring', 'src/main/java'), { recursive: true }).map(String);
+  assert.ok(!files.some((f) => f.endsWith('CallerScope.java')), files.join('\n'));
+});

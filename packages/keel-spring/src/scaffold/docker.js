@@ -15,7 +15,8 @@ import {
   HTTP_STUB,
   MAIL_SINK,
   selectedInfra,
-  brokerContainer
+  brokerContainer,
+  storageContainer
 } from '../lib/stack-catalog.js';
 import {
   needsDevtools,
@@ -63,7 +64,12 @@ export function generate(model) {
     Object.assign(services, CACHES[stack.cache].composeServices());
   }
   if (layersPresent.storage && stack.storage) {
-    const storageServices = STORAGE[stack.storage].composeServices(model);
+    const storage = STORAGE[stack.storage];
+    const storageServices = storage.composeServices(model);
+    // Nombre fijo, como el del broker: el arnés lo detiene y lo levanta (stopStorage).
+    if (storage.serviceKey && storageServices[storage.serviceKey]) {
+      storageServices[storage.serviceKey].container_name = storageContainer(service.name, storage);
+    }
     Object.assign(services, storageServices);
     if ('minio' in storageServices) volumes['minio-data'] = null;
   }

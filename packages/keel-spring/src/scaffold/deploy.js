@@ -644,9 +644,12 @@ function postmanEnvironment(model) {
   const spec = model.layersPresent.security && ['keycloak', 'cognito'].includes(model.stack.auth) ? realmSpec(model) : null;
   if (spec) {
     add('tokenUrl', tokenUrl(model));
-    // Cliente público con direct access grants: sin secreto, pero la colección lo manda.
-    add('clientId', spec.userClient);
-    add('clientSecret', '');
+    // Cliente público con direct access grants: sin secreto, pero la colección lo manda. Sin
+    // roles no existe (realmSpec): no hay usuarios a los que pedirles un token.
+    if (spec.userClient) {
+      add('clientId', spec.userClient);
+      add('clientSecret', '');
+    }
     for (const user of spec.users) {
       add(`username_${kebabCase(user.username)}`, user.username);
       add(`password_${kebabCase(user.username)}`, spec.password, true);
@@ -710,7 +713,7 @@ function upScript(model) {
     .map(({ label, url }) => `echo "  ${label.padEnd(22)} ${url}"`)
     .join('\n');
   const realm = model.stack.auth === 'keycloak' ? realmSpec(model) : null;
-  const credentials = realm
+  const credentials = realm?.users.length
     ? `echo ""
 echo "Usuarios del realm '${realm.realm}' (password: ${realm.password}): ${realm.users
         .map((user) => user.username)
@@ -887,7 +890,7 @@ function realmExport(spec) {
   }
 
   const clients = [
-    {
+    ...(spec.userClient ? [{
       clientId: spec.userClient,
       enabled: true,
       publicClient: true,
@@ -899,7 +902,7 @@ function realmExport(spec) {
       // tiene los atributos de usuario pero ningún token los lleva, y la prueba manual del
       // diseñador ve un 403 que la suite de integración no ve.
       ...(spec.scoping ? { protocolMappers: [scopingMapper(spec.scoping.claim)] } : {})
-    },
+    }] : []),
     ...[...spec.serviceClients, ...spec.m2mClients].map((client) => ({
       clientId: client.name,
       enabled: true,

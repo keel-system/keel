@@ -208,7 +208,10 @@ function describeStamp(model, claim) {
 
 function describe(model, claim, entityName) {
   if (claim.stalled) return describeStalled(model, claim, entityName);
-  return `Reclama hasta {@code batchSize} ${entityName} en estado ${claim.from.join(' o ')} y los pasa a ${claim.to}.
+  const dueDoc = claim.due
+    ? ` Solo los que ya vencieron ({@code ${claim.due.field} <= ahora}): el predicado sale del índice [estado, ${claim.due.field}] del diseño, y sin él se llevaría también los vigentes.`
+    : '';
+  return `Reclama hasta {@code batchSize} ${entityName} en estado ${claim.from.join(' o ')} y los pasa a ${claim.to}.${dueDoc}
      *
      * <p><b>Reclama, no lee.</b> Corre en TODAS las réplicas del servicio a la vez
      * ({@code @Scheduled} es «una vez por instancia», no «una vez en el clúster»). La lista
@@ -272,7 +275,7 @@ export function jpaRepositoryMethods(model, entity, imports) {
     subject: 'el reclamo'
   });
 
-  if (claims.some((claim) => claim.stalled || claim.stamps)) imports.add('java.time.Instant');
+  if (claims.some((claim) => claim.stalled || claim.stamps || claim.due)) imports.add('java.time.Instant');
   imports.add('java.util.List');
   imports.add('java.util.UUID');
   imports.add('org.springframework.data.domain.Pageable');
@@ -288,8 +291,14 @@ export function jpaRepositoryMethods(model, entity, imports) {
     // el del SELECT: entre uno y otro puede haber pasado cualquier cosa, y sin él una
     // fila que acabe de entrar en el estado —porque otra réplica la tomó legítimamente
     // en esa ventana— se rescataría igual.
-    const stale = claim.stalled ? ` and e.${claim.stalled.stampField} < :staleBefore` : '';
-    const staleParam = claim.stalled ? ', @Param("staleBefore") Instant staleBefore' : '';
+    // Con `due`, solo las filas cuyo plazo ya venció: el predicado de selección que el diseño
+    // deja derivar de su índice [estado, plazo]. Sin él el reclamo se llevaba las vigentes.
+    const stale =
+      (claim.stalled ? ` and e.${claim.stalled.stampField} < :staleBefore` : '') +
+      (claim.due ? ` and e.${claim.due.field} <= :now` : '');
+    const staleParam =
+      (claim.stalled ? ', @Param("staleBefore") Instant staleBefore' : '') +
+      (claim.due ? ', @Param("now") Instant now' : '');
     // El reloj del estado de DESTINO, estampado en el MISMO SET que el cambio de estado.
     // No es un adorno: si se estampa después, en otra escritura, la réplica que muera en
     // medio deja la fila con el reloj a NULL, y quien vendría a recogerla filtra por
@@ -345,7 +354,7 @@ export function adapterMethods(model, entity, imports, jpaField) {
   // en un barrido de COLA sin rescate, y el proyecto no compilaba desde cero — así llegó la
   // sexta corrida. El plazo del rescate es lo único que añade además el Instant.
   imports.add('org.springframework.beans.factory.annotation.Value');
-  if (claims.some((claim) => claim.stalled)) imports.add('java.time.Instant');
+  if (claims.some((claim) => claim.stalled || claim.due)) imports.add('java.time.Instant');
   if (claims.some((claim) => claim.stamps)) imports.add('java.time.Instant');
 
   return claims.map((claim) => {
@@ -356,7 +365,12 @@ export function adapterMethods(model, entity, imports, jpaField) {
         Instant staleBefore = Instant.now().minusSeconds(${stalledValueField(claim)});
 `
       : '';
-    const staleArg = claim.stalled ? ', staleBefore' : '';
+    const staleArg = (claim.stalled ? ', staleBefore' : '') + (claim.due ? ', now' : '');
+    const dueNow = claim.due
+      ? `        // El predicado del plazo: solo lo que ya venció (${claim.due.field} <= ahora).
+        Instant now = Instant.now();
+`
+      : '';
     // El instante del reclamo, también uno por tanda: dos filas de la misma pasada las
     // tomó la misma instancia en el mismo momento, y darles relojes distintos solo haría
     // que el rescate las recogiera en pasadas distintas sin ninguna razón.
@@ -372,7 +386,7 @@ export function adapterMethods(model, entity, imports, jpaField) {
     @Override
 ${claimTx.annotation}
     public List<${entity.name}> ${claim.method}() {
-${staleBefore}${claimedAt}        List<${enumType}> states = List.of(${stateList(claim, enumType)});
+${staleBefore}${dueNow}${claimedAt}        List<${enumType}> states = List.of(${stateList(claim, enumType)});
         List<UUID> candidates = ${jpaField}.candidatesFor${claim.suffix}(states${staleArg}, PageRequest.of(0, ${batchField(claim)}));
         List<${entity.name}> claimed = new ArrayList<>();
         for (UUID id : candidates) {
@@ -411,7 +425,7 @@ export function documentAdapterMethods(model, entity, imports) {
   // en un barrido de COLA sin rescate, y el proyecto no compilaba desde cero — así llegó la
   // sexta corrida. El plazo del rescate es lo único que añade además el Instant.
   imports.add('org.springframework.beans.factory.annotation.Value');
-  if (claims.some((claim) => claim.stalled)) imports.add('java.time.Instant');
+  if (claims.some((claim) => claim.stalled || claim.due)) imports.add('java.time.Instant');
   if (claims.some((claim) => claim.stamps)) imports.add('java.time.Instant');
 
   return claims.map((claim) => {
@@ -432,9 +446,16 @@ export function documentAdapterMethods(model, entity, imports) {
     const stampUpdate = claim.stamps ? `.set("${claim.stamps.field}", claimedAt)` : '';
     // El criterio temporal va DENTRO del findAndModify, que es lo que lo hace atómico:
     // filtrar por atascado y marcar en la misma operación no deja ventana entre las dos.
-    const staleCriteria = claim.stalled
-      ? `
+    const staleCriteria =
+      (claim.stalled
+        ? `
                     .and("${claim.stalled.stampField}").lt(staleBefore)`
+        : '') + (claim.due ? `
+                    .and("${claim.due.field}").lte(now)` : '');
+    const dueNow = claim.due
+      ? `        // El predicado del plazo: solo lo que ya venció (${claim.due.field} <= ahora).
+        Instant now = Instant.now();
+`
       : '';
     // El más viejo primero, y aquí hay que pedirlo: findAndModify sin orden devuelve lo
     // que el motor tenga a mano, así que con más candidatos que batchSize los más
@@ -451,7 +472,7 @@ export function documentAdapterMethods(model, entity, imports) {
      */
     @Override
     public List<${entity.name}> ${claim.method}() {
-${staleBefore}${claimedAt}        List<${entity.name}> claimed = new ArrayList<>();
+${staleBefore}${dueNow}${claimedAt}        List<${entity.name}> claimed = new ArrayList<>();
         FindAndModifyOptions options = FindAndModifyOptions.options().returnNew(true);
         for (int i = 0; i < ${batchField(claim)}; i++) {
             Query query = Query.query(Criteria.where("${field}").in(List.of(${stateList(claim, enumType)}))${staleCriteria})${order};

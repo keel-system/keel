@@ -134,7 +134,7 @@ public class StockDepletedListener {
     // Sin @RetryableTopic: los reintentos y el descarte los aplica el
     // DefaultErrorHandler que build ya declaró (ver DeadLetterConfig).
     @KafkaListener(topics = "${messaging.subscriptions.stock-depleted.topic:inventory-service.events}",
-            groupId = "${spring.application.name}-stock-depleted")
+            groupId = "${messaging.subscriptions.stock-depleted.group-id}")
     public void on(EventEnvelope<StockDepletedMessage> envelope) {
         // El topic transporta TODOS los eventos de la fuente: lo que no es tuyo se
         // descarta con return, nunca con excepción (dispararía los reintentos).
@@ -147,7 +147,7 @@ public class StockDepletedListener {
 ```
 
 - Topic configurable vía propiedad `messaging.subscriptions.<evento-kebab>.topic` (default `<fuente>.events`). Con un canal `external: true` el nombre real lo pone el dueño del canal: va en `parameters/<perfil>`, nunca hardcodeado.
-- **`groupId` con sufijo por suscripción** (`${spring.application.name}-<evento-kebab>`), no el nombre de la app a secas. El destino por convención es `<fuente>.events`, así que dos suscripciones de la MISMA fuente comparten topic: con un único grupo serían dos consumidores del mismo grupo sobre el mismo topic y Kafka les repartiría las particiones — cada listener vería solo un trozo del tráfico y el resto se perdería en silencio. Un grupo por suscripción hace que cada listener reciba el topic entero, que es lo que asume el resto de la cadena (`infra/check-idempotency.sh` solo agrupa por cola en RabbitMQ, precisamente por esto).
+- **`groupId` desde `messaging.subscriptions.<evento-kebab>.group-id`**, que build ya emite en los cuatro perfiles (`<servicio>-<evento-kebab>`, uno por suscripción): no lo compongas a mano, el arnés espera a ESOS grupos tras parar o arrancar la réplica. No es el nombre de la app a secas. El destino por convención es `<fuente>.events`, así que dos suscripciones de la MISMA fuente comparten topic: con un único grupo serían dos consumidores del mismo grupo sobre el mismo topic y Kafka les repartiría las particiones — cada listener vería solo un trozo del tráfico y el resto se perdería en silencio. Un grupo por suscripción hace que cada listener reciba el topic entero, que es lo que asume el resto de la cadena (`infra/check-idempotency.sh` solo agrupa por cola en RabbitMQ, precisamente por esto).
 - `onFailure` del diseño → **ya está generado**: build emite `DeadLetterConfig` con un
   `DefaultErrorHandler` (attempts y backoff del diseño) y un `DeadLetterPublishingRecoverer` que
   publica en `<topic>.DLT` solo para las suscripciones que declaran `deadLetter: true`.

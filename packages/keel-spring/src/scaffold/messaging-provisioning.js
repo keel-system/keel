@@ -14,10 +14,12 @@
 
 import { deadLetterDestination, subscriptionDestination } from '../lib/dead-letter.js';
 
-// Reintentos por defecto cuando el diseño no declara `onFailure.retry`. SQS mueve
-// el mensaje a la DLQ al agotar la cuenta; el contador incluye las reapariciones
-// por visibility timeout, no solo los errores reales.
-const DEFAULT_MAX_RECEIVE = 5;
+// Recepciones cuando el diseño NO declara `onFailure.retry`: una. Sin retry el diseño
+// dice «sin reintentos», y SQS mueve el mensaje a la DLQ al agotar la cuenta (que
+// incluye las reapariciones por visibility timeout). Antes eran 5, un número que el
+// diseño no pedía: la corrida asset-vault (R8) lo vio dos veces seguidas en una
+// suscripción que declaraba DLQ sin reintento.
+const DEFAULT_MAX_RECEIVE = 1;
 
 const ENDPOINT = 'http://localstack:4566';
 const REGION = 'us-east-1';
@@ -67,15 +69,16 @@ function harnessQueues(model) {
  * infra/init-messaging.sh — topics, colas, DLQ y suscripciones SNS→SQS.
  * Devuelve `null` si el stack no lo necesita.
  */
-export function messagingProvisioning(model) {
-  if (!needsMessagingProvisioning(model)) return null;
-
-  const { service, messaging, subscriptions = [] } = model;
-
+/**
+ * Las colas de las suscripciones, con lo que el script de aprovisionamiento hace con cada una.
+ * Exportado porque `broker-check` compara el `maxReceiveCount` vivo con ESTE valor: si lo
+ * recalculara por su cuenta, se mediría una copia de sí mismo.
+ */
+export function subscriptionQueues(model) {
   // Una cola por suscripción, colgada del topic de su fuente. El nombre lo fija el
   // consumidor (este servicio), no la fuente: dos consumidores del mismo topic
   // necesitan colas distintas para recibir ambos el mensaje.
-  const queues = subscriptions.map((sub) => ({
+  return (model.subscriptions ?? []).map((sub) => ({
     name: subscriptionDestination('snssqs', model, sub),
     topic: sub.topicDefault,
     eventTypes: [sub.name],
@@ -91,6 +94,13 @@ export function messagingProvisioning(model) {
     deadLetter: Boolean(sub.deadLetter),
     deadLetterName: deadLetterDestination('snssqs', model, sub)
   }));
+}
+
+export function messagingProvisioning(model) {
+  if (!needsMessagingProvisioning(model)) return null;
+
+  const { service, messaging } = model;
+  const queues = subscriptionQueues(model);
 
   // Los topics que hay que crear: el destino físico de este servicio y los de las
   // fuentes que consumimos (en local no hay nadie más que los cree). Los canales

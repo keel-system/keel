@@ -129,6 +129,26 @@ export const FRAMEWORK_ERRORS = {
     overridable: false,
     mechanism: 'entrada multipart (input con un campo `type: file`)',
     when: 'La parte binaria de la petición no se puede leer: llega vacía o el cuerpo multipart está roto.'
+  },
+
+  // Los rechazos de la CADENA de seguridad, antes de llegar a ninguna operación. Salían con el
+  // `code` nulo y el diseño no tenía cómo nombrarlos: un escenario solo podía afirmar el status
+  // (asset-vault, R8). No son sustituibles por lo mismo que VALIDATION_ERROR: no son un
+  // desenlace del dominio, es la frontera rechazando antes de que la operación exista.
+  unauthenticated: {
+    code: 'UNAUTHENTICATED',
+    http: 401,
+    overridable: false,
+    mechanism: 'capa `security`: la cadena de autenticación',
+    when: 'La petición no trae credencial, o la que trae no es válida.'
+  },
+
+  accessDenied: {
+    code: 'ACCESS_DENIED',
+    http: 403,
+    overridable: false,
+    mechanism: 'capa `security`: `access.rules` y la audiencia de `serviceAuth`',
+    when: 'La credencial es válida pero no autoriza la operación (rol, permiso, scope o audiencia).'
   }
 };
 

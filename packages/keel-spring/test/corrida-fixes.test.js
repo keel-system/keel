@@ -192,7 +192,7 @@ test('el token cacheado se renueva por su claim exp, no vive para siempre', () =
   assert.match(harness, /EXP_CLAIM =/);
   assert.match(harness, /private static boolean expiresWithin\(String token, Duration margin\)/);
   // Las dos puertas, no solo la de usuario: `serviceCredential` cacheaba igual.
-  assert.match(harness, /return cachedToken\(role, \(\) ->/);
+  assert.match(harness, /return cachedToken\(username, \(\) ->/);
   assert.match(harness, /return cachedToken\("client:" \+ client, \(\) ->/);
   assert.ok(!harness.includes('credentials.computeIfAbsent'), harness);
 });
@@ -1684,7 +1684,8 @@ test('la réplica se para ORDENADAMENTE, no a golpe de destroy()', () => {
   // Ocurrió: más de hora y media, ocho escenarios de cinco clases sin relación funcional entre
   // sí, todos con el mismo síntoma y ninguno apuntando a su causa.
   assert.match(stop, /toHandle\(\)/, 'no se captura el árbol de procesos antes de matar');
-  assert.match(stop, /descendants\(\)/, 'en Windows los hijos del proceso Java se quedan vivos');
+  // El árbol: descendants() fuera de Windows, taskkill /T en Windows (ver el caso de huérfanas).
+  assert.match(harness, /arbol\.addAll\(raiz\.descendants\(\)\.toList\(\)\)/, 'fuera de Windows los hijos se quedan vivos');
   assert.match(stop, /awaitReplicaDead\(/, 'nadie comprueba que el árbol muriera');
   assert.ok(
     stop.indexOf('awaitReplicaDead(') < stop.indexOf('REPLICA = null'),
@@ -1905,7 +1906,7 @@ test('el campo de callerIdentity sale con @JsonIgnore y SIN validación de cuerp
 
 test('el controller estampa la identidad desde la credencial', () => {
   const controller = project('notification-mailer', MAILER_STACK).file('NotificationV1Controller.java');
-  assert.ok(controller.includes('CallerIdentity.resolve()'), controller);
+  assert.ok(controller.includes("callerIdentity.resolve()"), controller);
 });
 
 
@@ -2129,4 +2130,46 @@ test('el arnés trae la espera NEGATIVA, y las conventions mandan usarla', () =>
   );
   assert.match(conventions, /holdsFor\(/);
   assert.match(conventions, /lectura seca/);
+});
+
+// ─── La réplica huérfana y los grupos que rebalancean (serie R8) ─────────────
+//
+// asset-vault: `REPLICA` es estático, así que una réplica que sobrevivió a OTRA ejecución no la
+// veía nadie, y en Windows el árbol se enumeraba con descendants(), sospechoso del 0xC0000005.
+// stock-reservation: tras parar la réplica, la clase siguiente corría con los consumer groups
+// rebalanceando y agotaba su await; el agente lo parcheó con los grupos y el bootstrap a mano.
+
+test('la réplica deja su PID con marca, y la de otra ejecución se mata al abrir', () => {
+  const harness = project('stock-reservation', SNSSQS).file('AbstractFlowIT.java');
+  assert.match(harness, /REPLICA_MARKER\)/, 'la réplica no lleva su marca en la línea de comandos');
+  assert.match(harness, /Path\.of\("build", "keel-replica\.pid"\)/);
+  assert.match(harness, /writeReplicaPid\(REPLICA\.pid\(\)\)/);
+
+  const stop = harness.slice(harness.indexOf('protected static void stopReplica()'));
+  const guard = stop.slice(0, stop.indexOf('return;'));
+  assert.match(guard, /killOrphanReplica\(\)/, 'con REPLICA a null no se mira la huérfana');
+
+  const orphan = harness.slice(harness.indexOf('private static void killOrphanReplica()'));
+  // Solo si es DE VERDAD la réplica: un PID reutilizado no se mata.
+  assert.match(orphan, /commandLine\(\)\.map\(line -> line\.contains\(REPLICA_MARKER\)\)/);
+  assert.match(harness, /new ProcessBuilder\("taskkill", "\/PID", String\.valueOf\(raiz\.pid\(\)\), "\/T", "\/F"\)/);
+  assert.match(harness, /if \(!isWindows\(\)\) \{\s+arbol\.addAll\(raiz\.descendants\(\)/, 'en Windows se sigue enumerando con descendants()');
+});
+
+test('con Kafka, el group-id sale de config y el arnés espera a esos grupos', () => {
+  const kafka = project('stock-reservation', { ...SNSSQS, broker: 'kafka' });
+  const local = kafka.file(path.join('local', 'messaging.yaml'));
+  assert.match(local, /group-id: stock-reservation-stock-reserved\b/, local);
+
+  const harness = kafka.file('AbstractFlowIT.java');
+  assert.match(harness, /CONSUMER_GROUP_IDS = List\.of\([^)]*"stock-reservation-stock-reserved"/);
+  const stop = harness.slice(harness.indexOf('protected static void stopReplica()'), harness.indexOf('private static final String REPLICA_MARKER'));
+  assert.match(stop, /deleteReplicaPid\(\);\s+awaitConsumerGroupsStable\(1\);/, 'tras parar no se espera al rebalanceo');
+  const start = harness.slice(harness.indexOf('protected static int startReplica()'), harness.indexOf('protected static void stopReplica()'));
+  assert.match(start, /awaitConsumerGroupsStable\(2\)/);
+
+  // Sin Kafka no hay grupos que esperar, ni propiedad.
+  const sqs = project('stock-reservation', SNSSQS);
+  assert.ok(!sqs.file('AbstractFlowIT.java').includes('awaitConsumerGroupsStable'));
+  assert.ok(!sqs.file(path.join('local', 'messaging.yaml')).includes('group-id'));
 });
