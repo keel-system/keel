@@ -131,6 +131,13 @@ export const CHECKS = {
     title: 'el ámbito de una clave de idempotencia nombra un campo que la operación no recibe',
     closes: 'nombrar en partitionBy campos del input (la identidad del llamante lo es)'
   },
+  'CHK-USECASES-IDEM-KEYFIELD-NOT-NATURAL': {
+    layer: 'use-cases',
+    severity: 'warning',
+    nature: 'undecided',
+    title: 'la clave de idempotencia en el cuerpo no participa en la clave natural de la entidad que se escribe',
+    closes: 'nombrar en keyField el campo de la naturalKey (o quitar idempotency y dejar la guarda a la constraint), o aceptar el almacén de claves'
+  },
   'CHK-USECASES-IDEM-SCOPE-UNDECIDED': {
     layer: 'use-cases',
     severity: 'warning',

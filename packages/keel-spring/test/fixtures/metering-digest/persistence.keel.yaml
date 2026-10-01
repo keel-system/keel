@@ -16,6 +16,9 @@ entities:
     indexes:
       - [day]
 
+  MeterDecommission:
+    persisted: true
+
 audit:
   # MeterReading declara createdAt en domain: la ingesta lo devuelve al cliente.
   timestamps: declared

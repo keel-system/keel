@@ -40,3 +40,22 @@ subscriptions:
     onFailure:
       retry: { maxAttempts: 5, backoff: exponential, initialDelayMs: 200, maxDelayMs: 10000 }
       deadLetter: true
+
+  MeterDecommissioned:
+    description: El sistema de medición dio de baja un contador.
+    source: metering-gateway
+    channel: meterTelemetry
+    contract:
+      envelope: wrapped
+      payloadPath: data
+      format: json
+      discriminator: { location: header, name: eventType, value: MeterDecommissioned }
+      messageId: { location: header, name: messageId }
+      unknownFields: ignore
+    payload:
+      serialNumber:     { type: string, required: true, wireName: serial_number }
+      decommissionedAt: { type: timestamp, required: true, wireName: decommissioned_at }
+    triggers: decommissionMeter
+    onFailure:
+      retry: { maxAttempts: 5, backoff: exponential, initialDelayMs: 200, maxDelayMs: 10000 }
+      deadLetter: true

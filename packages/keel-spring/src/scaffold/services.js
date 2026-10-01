@@ -571,10 +571,18 @@ function renderHandler(model, service, operation) {
     // payload-hash no hay cabecera que pueda faltar, así que la rama "sin clave,
     // ejecuta sin deduplicar" no existe — escribirla dejaría la operación sin
     // deduplicar nunca, en silencio.
+    //
+    // Y con payload-field la clave tampoco viaja por cabecera: es un campo del command. Esta
+    // rama caía en la de client-key y mandaba al agente a un IdempotencyContext que build no
+    // genera con esta guarda (corrida user-profile, 2026-10-01): el agente lo leyó, lo copió a
+    // su designGap como «keySource: client-key» y el hueco se diagnosticó contra un diseño
+    // que no existía.
     const source =
       operation.idempotency.keySource === 'payload-hash'
         ? `La clave es CommandSignature.of(command) (application/support), que también es la firma: aquí NO hay cabecera ni IdempotencyContext, y por tanto tampoco caso "sin clave" — siempre se deduplica. `
-        : `La clave llega por IdempotencyContext.get() (vacío = el cliente no mandó la cabecera: ejecuta sin deduplicar, no rechaces) y la firma es CommandSignature.of(command) (application/support) — no la calcules a mano. Si hay clave: `;
+        : operation.idempotency.keySource === 'payload-field'
+          ? `La clave es el campo ${operation.idempotency.keyField} del command (keyField del diseño), así que NO hay cabecera ni IdempotencyContext; la firma es CommandSignature.of(command) (application/support) — no la calcules a mano. El campo es parte del contrato: si llega vacío lo rechaza la validación del input, no esta rama. `
+          : `La clave llega por IdempotencyContext.get() (vacío = el cliente no mandó la cabecera: ejecuta sin deduplicar, no rechaces) y la firma es CommandSignature.of(command) (application/support) — no la calcules a mano. Si hay clave: `;
     notes.push(
       `Idempotencia: keySource=${operation.idempotency.keySource}, ttlSeconds=${ttl}. El puerto IdempotencyStore, su adaptador y CommandSignature ya están generados — NO escribas otro registro (ni tabla propia, ni SET NX en la caché) ni otra forma de firmar. ${source}${common}`
     );

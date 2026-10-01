@@ -52,15 +52,6 @@ const MOTIVOS = {
  */
 const EXCEPCIONES = new Map([
   [
-    'security.authentication.callerIdentity.from.name',
-    {
-      motivo: MOTIVOS.soloCadenas,
-      porque:
-        'la rama `from.source: claim` del identificador de llamante. notification-mailer declara la otra ' +
-        '(`serviceClient`), y caller-identity.test.js cubre esta parcheando el modelo.'
-    }
-  ],
-  [
     'security.cors.maxAgeSeconds',
     {
       motivo: MOTIVOS.conDefault,

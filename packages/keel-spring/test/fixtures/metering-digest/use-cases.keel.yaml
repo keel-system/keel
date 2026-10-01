@@ -41,3 +41,15 @@ operations:
     errors:
       - { code: DIGEST_ALREADY_CLOSED, when: El digest de ese contador y ese día ya estaba cerrado., http: 409 }
     emits: [DailyDigestClosed]
+
+  decommissionMeter:
+    description: Registra la baja de un contador que anunció el sistema de medición.
+    kind: command
+    internal: true
+    input:
+      fields:
+        serialNumber:     { type: string, required: true, constraints: { maxLength: 64 } }
+        decommissionedAt: { type: timestamp, required: true }
+    output: { entity: MeterDecommission }
+    rules:
+      - Si ya existe una baja para ese número de serie, no se escribe nada y se devuelve la existente.

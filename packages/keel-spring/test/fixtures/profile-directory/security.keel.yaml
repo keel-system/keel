@@ -1,0 +1,24 @@
+authentication:
+  protocol: oidc
+  tokenLocation: header
+  callerIdentity:
+    field: callerSubject
+    from: { source: claim, name: sub }
+    description: El titular es el claim sub del token; nunca sale del cuerpo ni de la ruta.
+
+roles:
+  card-holder:
+    description: Persona con ficha de contacto.
+
+permissions:
+  card:self:
+    description: Consultar y editar la propia ficha.
+
+roleGrants:
+  card-holder: [card:self]
+
+access:
+  default: { level: required }
+  rules:
+    getMyCard: { level: required, permissions: [card:self] }
+    saveMyCard: { level: required, permissions: [card:self] }

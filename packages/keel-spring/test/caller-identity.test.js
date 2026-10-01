@@ -411,3 +411,59 @@ test('DSL 2.17: el comando trae su ámbito de idempotencia ya compuesto con part
   assert.ok(handler.includes('command.idempotencyScope()'), handler);
   assert.ok(!handler.includes('scope="requestNotification"'));
 });
+
+// ─── tokenAs: personas con sub y claims propios ──────────────────────────────────
+// Con la identidad en el claim `sub`, los escenarios nombran titulares («el perfil de
+// sub-ana-001», «su token sin email») y tokenFor(rol) no los puede dar: su sub es el id aleatorio
+// del usuario del rol. Hasta la corrida user-profile (2026-10-01) lo escribía el agente de pruebas
+// a mano. El sujeto es la fixture profile-directory, que compile-check compila.
+
+const profileDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'profile-directory');
+
+function renderProfile({ auth = 'keycloak', patch = (layers) => layers } = {}) {
+  const { manifest, layers, errors } = loadService(profileDir);
+  assert.deepEqual(errors, []);
+  const workspace = tmpDir('keel-persona-');
+  scaffoldService({
+    manifest,
+    layers: patch(structuredClone(layers)),
+    workspace,
+    force: true,
+    stack: { database: 'postgresql', auth }
+  });
+  const root = path.join(workspace, 'services', 'profile-directory-spring');
+  const read = (relative) => fs.readFileSync(path.join(root, relative), 'utf8');
+  return {
+    harness: read('src/integrationTest/java/com/identity/profiledirectory/flows/AbstractFlowIT.java'),
+    credentials: read('infra/test-credentials.env')
+  };
+}
+
+test('con la identidad en el claim sub, el arnés ofrece tokenAs y sus credenciales de administración', () => {
+  const { harness, credentials } = renderProfile();
+  assert.match(harness, /protected String tokenAs\(String sub, Map<String, String> claims\)/);
+  assert.match(harness, /protected String tokenAs\(String sub, String role, Map<String, String> claims\)/);
+  // El alta por partialImport es lo que hace que el sub sea el pedido: POST /users lo ignora.
+  assert.match(harness, /"\/partialImport"/);
+  assert.match(harness, /Keycloak no respetó el id pedido/);
+  assert.match(credentials, /^AUTH_ADMIN_USER=admin$/m);
+  assert.match(credentials, /^AUTH_ADMIN_PASSWORD=admin$/m);
+});
+
+test('sin identidad por claim no se emite: tokenFor sigue siendo lo único', () => {
+  const { harness, credentials } = renderProfile({
+    patch: (layers) => {
+      delete layers.security.authentication.callerIdentity;
+      for (const op of Object.values(layers['use-cases'].operations)) delete op.input.fields.callerSubject;
+      return layers;
+    }
+  });
+  assert.ok(!/tokenAs/.test(harness), 'emite tokenAs sin identidad por claim');
+  assert.match(harness, /protected String tokenFor\(String role\)/);
+  assert.ok(!/AUTH_ADMIN_USER/.test(credentials), 'expone credenciales de administración sin necesitarlas');
+});
+
+test('con Cognito no se emite: el emulador no fija claims por petición', () => {
+  const { harness } = renderProfile({ auth: 'cognito' });
+  assert.ok(!/tokenAs/.test(harness), 'emite tokenAs contra un emulador que no puede servirlo');
+});

@@ -6895,3 +6895,71 @@ test('stalledAfter: parámetro ausente, de otro tipo, o fuera de un barrido es e
   });
   assert.match(stalledIds(noSweep)[0].message, /no es un barrido/);
 });
+
+// ─── payload-field frente a la clave natural ────────────────────────────────────────
+// La guarda de una clave en el cuerpo la decide el NOMBRE: es la constraint si `keyField` está en
+// la naturalKey de la entidad que se escribe, y un almacén de claves si no. En la corrida
+// user-profile (2026-10-01) el input se llamaba `callerSubject` y la naturalKey `[subject]`: el
+// diseño daba por guarda la constraint y el generador emitió el almacén sin que nada lo dijera.
+
+function provisionLayers(keyField) {
+  return {
+    domain: {
+      entities: {
+        Profile: entity({ subject: { type: 'string', required: true } })
+      },
+      aggregates: { Profile: { root: 'Profile' } }
+    },
+    persistence: { entities: { Profile: { naturalKey: ['subject'] } } },
+    'use-cases': {
+      operations: {
+        provisionProfile: {
+          description: 'Crea el perfil del titular la primera vez.',
+          kind: 'command',
+          internal: true,
+          input: {
+            fields: {
+              subject: { type: 'string', required: true },
+              callerSubject: { type: 'string', required: true }
+            }
+          },
+          output: { entity: 'Profile' },
+          idempotency: { keySource: 'payload-field', keyField }
+        }
+      }
+    }
+  };
+}
+
+const keyFieldFindings = (layers) =>
+  run(layers).findings.filter((f) => f.id === 'CHK-USECASES-IDEM-KEYFIELD-NOT-NATURAL');
+
+test('payload-field cuyo keyField no está en la naturalKey avisa: la guarda será un almacén', () => {
+  const findings = keyFieldFindings(provisionLayers('callerSubject'));
+  assert.deepEqual(
+    findings.map((f) => [f.id, f.scope]),
+    [['CHK-USECASES-IDEM-KEYFIELD-NOT-NATURAL', 'use-cases.provisionProfile.idempotency']]
+  );
+  assert.match(findings[0].message, /'callerSubject' no participa en la naturalKey de Profile \(\[subject\]\)/);
+});
+
+test('con el keyField dentro de la naturalKey no avisa: la constraint es la guarda', () => {
+  assert.deepEqual(keyFieldFindings(provisionLayers('subject')), []);
+});
+
+test('sin naturalKey en la entidad no avisa: el almacén es la única guarda posible', () => {
+  const layers = provisionLayers('callerSubject');
+  delete layers.persistence.entities.Profile.naturalKey;
+  assert.deepEqual(keyFieldFindings(layers), []);
+});
+
+test('la entidad que se escribe sale también de las transitions', () => {
+  // Una operación sin payload de entidad pero que mueve una sola: la guarda se resuelve igual.
+  const layers = provisionLayers('callerSubject');
+  const op = layers['use-cases'].operations.provisionProfile;
+  op.output = 'void';
+  layers.domain.entities.Profile.fields.status = { type: 'enum', values: ['draft', 'complete'], required: true };
+  layers.domain.entities.Profile.lifecycle = { field: 'status', transitions: { draft: ['complete'], complete: [] } };
+  op.transitions = [{ entity: 'Profile', from: ['draft'], to: 'complete' }];
+  assert.equal(keyFieldFindings(layers).length, 1);
+});

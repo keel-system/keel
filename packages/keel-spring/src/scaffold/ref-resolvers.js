@@ -12,7 +12,8 @@
 // proyectado) está en conventions/read-composition.md.
 
 import { javaFile, javaPath, subPackage } from './render.js';
-import { domainSubPackage, capitalize } from './entities.js';
+import { domainSubPackage } from './entities.js';
+import { rootId } from './repositories.js';
 import { ANNOTATIONS_PKG } from './mediator.js';
 
 const SUPPORT_PKG = 'application.support';
@@ -70,11 +71,11 @@ export function generate(model) {
 }
 
 function renderResolver(model, entity, ref) {
-  // UUID, no entity.idField.javaType: el puerto y el JpaRepository que genera
-  // repositories.js ya tipan el id así en todas las raíces, y el resolver tiene
-  // que casar con findAllById/findById.
-  const idType = 'UUID';
-  const idGetter = `get${capitalize(entity.idField.name)}`;
+  // El tipo del id sale de la MISMA fuente que el puerto (rootId), porque el resolver tiene que
+  // casar con su findAllById/findById. Fue `UUID` fijo mientras el puerto también lo era.
+  const id = rootId(entity);
+  const idType = id.javaType;
+  const idGetter = id.getter;
   const repositoryField = lowerFirst(`${entity.name}Repository`);
   const mapperField = lowerFirst(`${entity.name}ApplicationMapper`);
   const className = `${entity.name}RefResolver`;
@@ -90,7 +91,7 @@ function renderResolver(model, entity, ref) {
     'java.util.Map',
     'java.util.Objects',
     'java.util.stream.Collectors',
-    'java.util.UUID'
+    ...id.imports
   ]);
 
   const body = `/**

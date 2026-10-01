@@ -1,0 +1,12 @@
+keel: "2.18"
+service:
+  name: profile-directory
+  version: 1.0.0
+  description: Ficha de contacto del titular de un token, consultada y editada por él mismo en /me.
+  domain: identity
+layers:
+  domain: domain.keel.yaml
+  use-cases: use-cases.keel.yaml
+  persistence: persistence.keel.yaml
+  api: api.keel.yaml
+  security: security.keel.yaml

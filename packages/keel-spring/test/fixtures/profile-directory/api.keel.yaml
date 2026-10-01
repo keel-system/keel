@@ -1,0 +1,10 @@
+style: rest
+basePath: /api
+endpoints:
+  getMyCard:
+    method: GET
+    path: /me/card
+  saveMyCard:
+    method: PUT
+    path: /me/card
+    successStatus: 200

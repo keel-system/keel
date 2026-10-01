@@ -25,7 +25,7 @@ const layersOf = (fixture) => {
   return layers;
 };
 
-// Verificado con javac una por una: las nueve compilan el `main` recién generado, sin agente
+// Verificado con javac una por una: las once compilan el `main` recién generado, sin agente
 // de por medio. Entre ellas están las DOS ramas del reclamo (relacional y documental), la
 // guarda del correo y el reclamo de la reconciliación, que hasta ahora no los compilaba nadie.
 const COMPILAN = [
@@ -38,6 +38,7 @@ const COMPILAN = [
   'notification-mailer-mongo',
   'payout-runs',
   'product-catalog',
+  'profile-directory',
   'stock-reservation'
 ];
 

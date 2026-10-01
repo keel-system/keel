@@ -57,3 +57,21 @@ entities:
         generated: true
     invariants:
       - El totalKwh de un digest cerrado es la suma de las lecturas de ese contador y ese día.
+
+  # Raíz con identidad NATURAL de texto (no un uuid generado): la baja de un contador se conoce por
+  # su número de serie. Es el sujeto de `rootId()` en el generador — el puerto, Spring Data, los
+  # adaptadores y el resolver tipan el id como lo declara el diseño. Lo destapó la lápida
+  # `DeletedSubject` de la corrida user-profile (2026-10-01), que salió con `UUID id` y no compilaba.
+  MeterDecommission:
+    description: Baja definitiva de un contador, registrada una sola vez por número de serie.
+    fields:
+      serialNumber:
+        type: string
+        id: true
+        constraints: { maxLength: 64 }
+        description: Número de serie del contador dado de baja.
+      decommissionedAt:
+        type: timestamp
+        required: true
+    invariants:
+      - Una baja no se reescribe nunca; una baja repetida del mismo número de serie la deja tal cual.

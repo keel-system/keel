@@ -125,6 +125,25 @@ test('sin clave natural sí se genera el almacén, pero nunca el camino de la ca
   assert.ok(!exists(`${JAVA}/infrastructure/web/IdempotencyKeyFilter.java`), 'ni filtro que la lea');
 });
 
+// Los archivos ya no se generaban, pero la nota del handler y el gate seguían diciendo
+// «keySource: client-key» y mandando a IdempotencyContext.get(): una clase que no existe.
+// En la corrida user-profile (2026-10-01) el agente copió esa etiqueta a su designGap y el
+// hueco se diagnosticó contra un diseño que no era el suyo.
+test('y la nota y el gate hablan de la clave del command, no de la cabecera', () => {
+  const { read } = generate({ inNaturalKey: false });
+  const handler = read(HANDLER);
+  const gate = read('infra/check-idempotency.sh');
+  const unit = gate.split('\n').find((line) => line.startsWith(`unit 'commandIdempotency' '${OP}'`));
+
+  assert.match(handler, /keySource=payload-field/);
+  assert.match(handler, new RegExp(`La clave es el campo ${KEY} del command`));
+  assert.ok(!/IdempotencyContext\.get\(\)/.test(handler), 'manda a leer una cabecera que no existe');
+  assert.ok(unit, 'el gate no comprueba la operación');
+  assert.match(unit, /keySource: payload-field/);
+  assert.ok(!/client-key/.test(unit), 'el gate etiqueta la operación como client-key');
+  assert.match(unit, /IdempotencyContext/, 'el gate no prohíbe el contexto de la cabecera');
+});
+
 test('el gate exige la búsqueda por clave natural, y NO el almacén', () => {
   // Un check que pide una clase que build no generó tiene como camino de menor resistencia
   // escribir un registro paralelo — justo lo que la clave natural hace innecesario.

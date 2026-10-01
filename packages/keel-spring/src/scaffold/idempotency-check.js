@@ -521,12 +521,15 @@ function commandChecks(model) {
       '\\.hashCode\\(\\)',
       // Con payload-hash la clave ES la firma: no hay cabecera, no hay contexto y no
       // hay caso «sin clave». Ese `if` es el defecto que hace que no deduplique nunca.
-      ...(operation.idempotency.keySource === 'payload-hash' ? ['IdempotencyContext'] : [])
+      // Con payload-field, además, esa clase ni existe: build no la genera sin cabecera que leer.
+      ...(['payload-hash', 'payload-field'].includes(operation.idempotency.keySource) ? ['IdempotencyContext'] : [])
     ],
     why:
       operation.idempotency.keySource === 'payload-hash'
         ? 'keySource: payload-hash — la clave es CommandSignature.of(command), sin IdempotencyContext ni rama «sin clave»'
-        : 'keySource: client-key — la clave llega por IdempotencyContext.get(), la firma por CommandSignature.of(command) y el ámbito por command.idempotencyScope()'
+        : operation.idempotency.keySource === 'payload-field'
+          ? `keySource: payload-field — la clave es command.${operation.idempotency.keyField}(), sin IdempotencyContext; la firma por CommandSignature.of(command) y el ámbito por command.idempotencyScope()`
+          : 'keySource: client-key — la clave llega por IdempotencyContext.get(), la firma por CommandSignature.of(command) y el ámbito por command.idempotencyScope()'
   }));
 }
 

@@ -1,0 +1,22 @@
+operations:
+
+  getMyCard:
+    description: Devuelve la ficha del titular del token.
+    kind: query
+    input:
+      fields:
+        callerSubject: { type: string, required: true, description: "Claim sub del token." }
+    output: { entity: ContactCard }
+    errors:
+      - { code: CARD_NOT_FOUND, when: El titular todavía no tiene ficha., http: 404 }
+
+  saveMyCard:
+    description: Crea o reemplaza la ficha del titular del token.
+    kind: command
+    input:
+      fields:
+        callerSubject: { type: string, required: true, description: "Claim sub del token." }
+        displayName:   { type: string, constraints: { maxLength: 100 } }
+    output: { entity: ContactCard }
+    rules:
+      - "La ficha se identifica por subject = callerSubject: la primera vez se crea y después se reemplaza."

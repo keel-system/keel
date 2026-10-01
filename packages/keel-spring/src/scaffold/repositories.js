@@ -224,6 +224,26 @@ export function naturalKeyFinder(model, entity) {
   };
 }
 
+/**
+ * La identidad de una raíz tal como la declara el diseño: tipo Java, imports y getter.
+ *
+ * Fuente única para el puerto, Spring Data, los dos adaptadores y el resolver de referencias.
+ * Hasta la corrida user-profile (2026-10-01) los cinco escribían `UUID id` y `getId()` a
+ * mano, y una raíz cuya identidad es natural —la lápida `DeletedSubject`, con `subject: String`
+ * como `id: true`— salía con un puerto que no compilaba contra su propio espejo, que sí la
+ * mapeaba bien. Sin campo id (no debería pasar: crossrefs exige uno) cae al `UUID id` de siempre.
+ */
+export function rootId(entity) {
+  const field = entity.idField;
+  if (!field) return { name: 'id', javaType: 'UUID', imports: ['java.util.UUID'], getter: 'getId' };
+  return {
+    name: field.name,
+    javaType: field.javaType,
+    imports: field.imports ?? [],
+    getter: `get${capitalize(field.name)}`
+  };
+}
+
 // Puerto de salida del dominio: interfaz sin dependencia de JPA (usa
 // Page/Pageable de Spring Data como pragmatismo, igual que el prototipo).
 //
@@ -237,7 +257,9 @@ export function renderPort(model, entity, paginated, batchLookup) {
     'java.util.UUID'
   ]);
 
-  const methods = [`    Optional<${entity.name}> findById(UUID id);`];
+  const id = rootId(entity);
+  for (const name of id.imports) imports.add(name);
+  const methods = [`    Optional<${entity.name}> findById(${id.javaType} ${id.name});`];
   if (batchLookup) {
     imports.add('java.util.Collection');
     imports.add('java.util.List');
@@ -246,7 +268,7 @@ export function renderPort(model, entity, paginated, batchLookup) {
      * NO está garantizado y los ids inexistentes simplemente no aparecen: quien
      * llama indexa por id (ver ${entity.name}RefResolver).
      */
-    List<${entity.name}> findAllById(Collection<UUID> ids);`);
+    List<${entity.name}> findAllById(Collection<${id.javaType}> ids);`);
   }
   const finder = naturalKeyFinder(model, entity);
   if (finder) {
@@ -307,7 +329,7 @@ export function renderPort(model, entity, paginated, batchLookup) {
   // única forma de ORDENAR dos escrituras sobre la misma clave desde `application`, que no puede
   // importar Spring. Ver conditional-uniqueness.js.
   methods.push(...conditionalUniqueness.portMethods(model, entity));
-  methods.push(`    ${entity.name} save(${entity.name} entity);`, '    void deleteById(UUID id);');
+  methods.push(`    ${entity.name} save(${entity.name} entity);`, `    void deleteById(${id.javaType} ${id.name});`);
 
   const body = `/**
  * Puerto de persistencia del agregado ${entity.name}; el adaptador JPA vive en
@@ -330,6 +352,8 @@ function renderJpaRepository(model, entity) {
     'org.springframework.data.jpa.repository.JpaRepository',
     'java.util.UUID'
   ]);
+  const id = rootId(entity);
+  for (const name of id.imports) imports.add(name);
 
   // Colecciones hijas del agregado: se traen EN LA MISMA consulta al leer UN solo
   // agregado. Con @BatchSize costarían una consulta extra por colección; con el grafo,
@@ -386,7 +410,7 @@ ${graph}    Optional<${entity.name}Jpa> ${credential.name}(${credential.javaType
     methods += `
 
 ${graph}    @Override
-    Optional<${entity.name}Jpa> findById(UUID id);`;
+    Optional<${entity.name}Jpa> findById(${id.javaType} ${id.name});`;
   }
 
   const claimMethods = [
@@ -396,7 +420,7 @@ ${graph}    @Override
   ];
   if (claimMethods.length > 0) methods += `\n\n${claimMethods.join('\n\n')}`;
 
-  const body = `public interface ${entity.name}JpaRepository extends JpaRepository<${entity.name}Jpa, UUID> {${methods}\n}`;
+  const body = `public interface ${entity.name}JpaRepository extends JpaRepository<${entity.name}Jpa, ${id.javaType}> {${methods}\n}`;
 
   return {
     path: javaPath(model, REPO_PKG, `${entity.name}JpaRepository`),
@@ -423,18 +447,20 @@ function renderAdapter(model, entity, paginated, batchLookup) {
   }
 
   const jpaField = `${entity.name[0].toLowerCase()}${entity.name.slice(1)}JpaRepository`;
+  const id = rootId(entity);
+  for (const name of id.imports) imports.add(name);
 
   const methods = [
     `    @Override
-    public Optional<${entity.name}> findById(UUID id) {
-        return ${jpaField}.findById(id).map(this::toDomain);
+    public Optional<${entity.name}> findById(${id.javaType} ${id.name}) {
+        return ${jpaField}.findById(${id.name}).map(this::toDomain);
     }`
   ];
   if (batchLookup) {
     imports.add('java.util.Collection');
     imports.add('java.util.List');
     methods.push(`    @Override
-    public List<${entity.name}> findAllById(Collection<UUID> ids) {
+    public List<${entity.name}> findAllById(Collection<${id.javaType}> ids) {
         return ${jpaField}.findAllById(ids).stream().map(this::toDomain).toList();
     }`);
   }
@@ -512,8 +538,8 @@ function renderAdapter(model, entity, paginated, batchLookup) {
   // eso falla con ObjectOptimisticLockingFailureException aunque no haya
   // concurrencia ninguna. Cargarla también es lo que permite reconciliar las
   // colecciones hijas por identidad en vez de recrearlas (ver applyToJpa).
-  const loadManaged = `        ${entity.name}Jpa jpa = entity.getId() != null
-                ? ${jpaField}.findById(entity.getId()).orElseGet(${entity.name}Jpa::new)
+  const loadManaged = `        ${entity.name}Jpa jpa = entity.${id.getter}() != null
+                ? ${jpaField}.findById(entity.${id.getter}()).orElseGet(${entity.name}Jpa::new)
                 : new ${entity.name}Jpa();
         applyToJpa(entity, jpa);`;
   // El listener de auditoría escribe @LastModifiedDate/@LastModifiedBy en el FLUSH,
@@ -569,8 +595,8 @@ ${saveBody}
     }`,
     `    @Override
     @Transactional
-    public void deleteById(UUID id) {
-        ${jpaField}.deleteById(id);
+    public void deleteById(${id.javaType} ${id.name}) {
+        ${jpaField}.deleteById(${id.name});
     }`
   );
 

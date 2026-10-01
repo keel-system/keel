@@ -481,6 +481,14 @@ es el `sub` del token (`subOf(<credencial>)`), no su nombre de usuario.
   script de aprovisionamiento y que `AbstractFlowIT` lee. Un literal inventado a este lado es
   una apuesta contra la infraestructura, y cuando falla bloquea la suite entera en
   `@BeforeAll` sin decir por qué.
+- Con la **identidad del llamante en el claim `sub`** (`authentication.callerIdentity.from: { source: claim, name: sub }`)
+  y Keycloak, los escenarios hablan de **personas** —«el perfil de `sub-ana-001`», «su token sin
+  `email`»— y para eso está **`tokenAs(sub, claims)`** (y `tokenAs(sub, rol, claims)` para un operador):
+  da de alta al usuario con ese `sub` exacto y le pone los claims de esa petición; un valor `null`
+  quita el claim. `tokenFor("<rol>")` no sirve ahí: su `sub` es el id aleatorio del usuario del rol.
+  **No escribas tu propio aprovisionamiento de personas**: `POST /users` de Keycloak ignora el `id`
+  del cuerpo y deja el `sub` sin control, que es justo lo que `tokenAs` ya resuelve. Con Cognito no
+  existe: el emulador no fija claims por petición, y un escenario que lo necesite es un `blocker`.
 - Con **alcance por recurso** (`authentication.scoping`), el recurso al que alcanzan los usuarios
   no exentos se pide con **`scopedResource()`** — nunca se escribe el código a mano. Ese valor lo
   siembra `build` en el realm y lo publica en `test-credentials.env`, así que escribirlo aquí

@@ -1,0 +1,15 @@
+default:
+  model: relational
+
+entities:
+  ContactCard:
+    persisted: true
+    naturalKey: [subject]
+
+audit:
+  timestamps: none
+  authorship: none
+
+consistency:
+  transactionalBoundary: per-aggregate
+  optimisticLocking: none

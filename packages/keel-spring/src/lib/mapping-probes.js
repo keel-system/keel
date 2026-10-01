@@ -209,6 +209,8 @@ function relationalClass(model, subject, { datasource, packages, requiredLiteral
   const espejo = `${entity.name}Jpa`;
   const repo = `${entity.name}JpaRepository`;
   const idField = entity.idField?.name ?? 'id';
+  // Una raíz con identidad natural de texto (`subject: String`) no admite un UUID en su setter.
+  const idValue = entity.idField?.javaType === 'String' ? 'UUID.randomUUID().toString()' : 'UUID.randomUUID()';
 
   const imports = [
     'java.util.UUID',
@@ -264,7 +266,7 @@ class ${CLASS_NAME} {
     /** Una fila válida salvo por el campo que se mide, que lo pone cada caso. */
     private ${espejo} fila(String valor) {
         ${espejo} row = new ${espejo}();
-        row.${accessor('set', idField)}(UUID.randomUUID());
+        row.${accessor('set', idField)}(${idValue});
 ${requiredLiterals.join('\n')}
         row.${accessor('set', field.name)}(valor);
         return row;

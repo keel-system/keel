@@ -21,6 +21,7 @@ import {
   credentialFinders,
   naturalKeyBatchFinder,
   collectInternalEntities,
+  rootId,
   PORT_PKG,
   REPO_PKG
 } from './repositories.js';
@@ -53,6 +54,8 @@ function renderMongoRepository(model, entity) {
     'org.springframework.data.mongodb.repository.MongoRepository',
     'java.util.UUID'
   ]);
+  const id = rootId(entity);
+  for (const name of id.imports) imports.add(name);
 
   let methods = '';
   const finder = naturalKeyFinder(model, entity);
@@ -84,7 +87,7 @@ function renderMongoRepository(model, entity) {
     methods += `\n\n    List<${entity.name}Document> ${batchFinder.name}(${batchFinder.signature});`;
   }
 
-  const body = `public interface ${entity.name}MongoRepository extends MongoRepository<${entity.name}Document, UUID> {${methods}\n}`;
+  const body = `public interface ${entity.name}MongoRepository extends MongoRepository<${entity.name}Document, ${id.javaType}> {${methods}\n}`;
 
   return {
     path: javaPath(model, REPO_PKG, `${entity.name}MongoRepository`),
@@ -108,18 +111,20 @@ function renderAdapter(model, entity, paginated, batchLookup) {
   }
 
   const repoField = `${entity.name[0].toLowerCase()}${entity.name.slice(1)}MongoRepository`;
+  const id = rootId(entity);
+  for (const name of id.imports) imports.add(name);
 
   const methods = [
     `    @Override
-    public Optional<${entity.name}> findById(UUID id) {
-        return ${repoField}.findById(id).map(this::toDomain);
+    public Optional<${entity.name}> findById(${id.javaType} ${id.name}) {
+        return ${repoField}.findById(${id.name}).map(this::toDomain);
     }`
   ];
   if (batchLookup) {
     imports.add('java.util.Collection');
     imports.add('java.util.List');
     methods.push(`    @Override
-    public List<${entity.name}> findAllById(Collection<UUID> ids) {
+    public List<${entity.name}> findAllById(Collection<${id.javaType}> ids) {
         return ${repoField}.findAllById(ids).stream().map(this::toDomain).toList();
     }`);
   }
@@ -209,7 +214,7 @@ function renderAdapter(model, entity, paginated, batchLookup) {
   const documentExpr = carriesAudit
     ? `${entity.name}Document document = toDocument(entity);
         ${repoField}
-                .findById(entity.getId())
+                .findById(entity.${id.getter}())
                 .ifPresent(existing -> document.carryCreationAudit(${carryAuditArgs.join(', ')}));
         `
     : '';
@@ -238,8 +243,8 @@ function renderAdapter(model, entity, paginated, batchLookup) {
 ${saveBody}
     }`,
     `    @Override
-    public void deleteById(UUID id) {
-        ${repoField}.deleteById(id);
+    public void deleteById(${id.javaType} ${id.name}) {
+        ${repoField}.deleteById(${id.name});
     }`
   );
 

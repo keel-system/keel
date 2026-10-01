@@ -1,0 +1,7 @@
+decisions:
+  - id: CHK-USECASES-COMMAND-NO-ERRORS
+    scope: use-cases.saveMyCard
+    reason: >
+      Reemplazar la propia ficha no tiene desenlace de negocio que rechazar: la forma del cuerpo
+      la valida el borde (400) y la autorización la decide access. No hay code que declarar.
+    since: 1.0.0

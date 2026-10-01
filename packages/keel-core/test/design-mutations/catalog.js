@@ -1158,6 +1158,23 @@ export const MUTATIONS = [
     mutate: (d) => withClientKey(d, ['required', 'race', 'reuse']),
     expect: ['CHK-USECASES-IDEM-SCOPE-UNDECIDED']
   },
+  // La clave en el cuerpo frente a la clave natural: el generador compara por NOMBRE, así que un
+  // keyField que no está en la naturalKey cae a un almacén de claves sin decirlo (corrida
+  // user-profile, 2026-10-01). Con `keyField: subject` la misma mutación queda en silencio: lo
+  // fija su caso en crossrefs.test.js.
+  {
+    id: 'M-USECASES-IDEM-KEYFIELD-NOT-NATURAL',
+    title: 'una clave payload-field que no participa en la naturalKey de la entidad que se crea',
+    mutate: (d) => {
+      // Con guarda de almacén el diseño tiene que nombrar los desenlaces del almacén (carrera y
+      // reutilización) y su escenario: se los da el mismo andamiaje que a la clave client-key, para
+      // que la mutación mida solo la regla nueva.
+      withClientKey(d, ['race', 'reuse']);
+      d.layers.persistence.entities.Ticket.naturalKey = ['subject'];
+      ops(d).createTicket.idempotency = { keySource: 'payload-field', keyField: 'requesterEmail' };
+    },
+    expect: ['CHK-USECASES-IDEM-KEYFIELD-NOT-NATURAL']
+  },
   // ─── DSL 2.18: el plazo de un rescate, enlazado a un parámetro ────────────────
   // El base no tiene barridos: closeTicket no declara schedule, así que cada mutación dispara ese
   // motivo una vez, más el suyo propio si lo tiene (de ahí las repeticiones).

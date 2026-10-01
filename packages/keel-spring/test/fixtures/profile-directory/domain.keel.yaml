@@ -1,0 +1,26 @@
+# La única fixture cuya identidad del llamante sale de un CLAIM del token (`sub`) y no de la
+# credencial de un cliente máquina. Es el sujeto de `tokenAs(sub, claims)` del arnés: sin ella
+# ese Java solo lo miraban asserts de cadenas y no lo compilaba nadie (corrida user-profile,
+# 2026-10-01, donde el agente de pruebas lo escribió a mano en 300 líneas).
+
+entities:
+  ContactCard:
+    description: Ficha de contacto de una persona, una por titular del token.
+    fields:
+      id:
+        type: uuid
+        id: true
+        generated: true
+      subject:
+        type: string
+        required: true
+        constraints: { maxLength: 255 }
+        description: Claim sub del titular; nunca sale del cuerpo ni de la ruta.
+      displayName:
+        type: string
+        constraints: { maxLength: 100 }
+        description: Nombre visible; lo escribe el titular.
+
+aggregates:
+  ContactCard:
+    root: ContactCard

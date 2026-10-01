@@ -34,7 +34,7 @@ import {
   CLOCK,
   PRINT_WRAPPER
 } from '../lib/mongo-probes.js';
-import { tokenUrl, userTestClient } from './auth-provisioning.js';
+import { tokenUrl, userTestClient, usesPersonaTokens } from './auth-provisioning.js';
 // La forma de la tabla y el SQL con el que el arnés fabrica la precondición del rescate:
 // fuente única con scripts/claim-check.js, que ejecuta AMBOS contra el motor junto al reclamo
 // que los lee. Copiar la derivación en vez de compartirla hacía que el check midiera su propia
@@ -718,6 +718,250 @@ exit 1
 }
 
 // ─── AbstractFlowIT ──────────────────────────────────────────────────────────
+
+/**
+ * Tokens de PERSONA para los diseños cuya identidad del llamante es el claim `sub`
+ * (`usesPersonaTokens`): un usuario cuyo `sub` elige el escenario y cuyos claims cambian por
+ * petición. Vacío en cualquier otro diseño. El patrón lo puso en verde el agente de pruebas de la
+ * corrida user-profile (2026-10-01) a mano, en su propio soporte; aquí vive una sola vez.
+ */
+function personaTokenSection(model) {
+  if (!usesPersonaTokens(model)) return '';
+  return `
+    /**
+     * Token de una PERSONA del documento de escenarios: el usuario cuyo claim {@code sub} es
+     * exactamente {@code sub}, con los claims de {@code claims} y ninguno más de los que el
+     * escenario pueda quitar. Un valor {@code null} QUITA ese claim («el token de ana sin email»),
+     * y un valor que el tipo del campo no admite viaja tal cual («un name de 101 caracteres»).
+     *
+     * <p>Existe porque el diseño identifica al llamante por {@code sub}, y {@link #tokenFor(String)}
+     * no puede elegirlo: su usuario es el del rol y su {@code sub} es el id aleatorio que asigna
+     * Keycloak. Los escenarios que dicen «el perfil de {@code sub-ana-001}» necesitan esto.
+     *
+     * <p><b>Llámalo en cada petición</b>, igual que {@code tokenFor}: la caché renueva por
+     * {@code exp}. Cambiar los claims de la misma persona entre dos peticiones es legal — es lo
+     * que hace un escenario de refresco — y se aplica antes de pedir el token.
+     */
+    protected String tokenAs(String sub, Map<String, String> claims) {
+        return tokenAs(sub, null, claims);
+    }
+
+    /** Lo mismo, con un rol del realm concedido a la persona (un operador de back-office). */
+    protected String tokenAs(String sub, String role, Map<String, String> claims) {
+        if (claims.containsKey("sub")) {
+            throw new IllegalArgumentException("El sub de la persona va en el primer argumento, no entre los claims");
+        }
+        java.util.TreeMap<String, String> wanted = new java.util.TreeMap<>();
+        claims.forEach((name, value) -> {
+            if (value != null) {
+                wanted.put(name, value);
+            }
+        });
+        // Los claims QUITADOS también entran en la clave: «sin email» es otro token que «con email».
+        String key = "persona|" + sub + "|" + role + "|" + wanted + "|" + new java.util.TreeSet<>(claims.keySet());
+        return cachedToken(key, () -> {
+            ensurePersona(sub, role, wanted, claims.keySet());
+            return requestToken("grant_type=password"
+                + "&client_id=" + personaEncode(env("AUTH_TEST_CLIENT", "${userTestClient(model)}"))
+                + "&username=" + personaEncode(sub)
+                + "&password=" + personaEncode(env("AUTH_TEST_PASSWORD", "password")));
+        });
+    }
+
+    /** Lo aplicado a cada persona (rol + claims), para no reescribir el usuario si no cambió. */
+    private static final Map<String, String> PERSONA_APPLIED = new ConcurrentHashMap<>();
+    /** Claims que ya tienen su mapper en el cliente de prueba. */
+    private static final java.util.Set<String> PERSONA_MAPPERS = ConcurrentHashMap.newKeySet();
+    private static volatile boolean personaRealmReady;
+
+    /**
+     * Deja a la persona como la pide el escenario, por la API de administración del realm.
+     *
+     * <p>Tres cosas que no son evidentes y costaron una pasada cada una: (1) el alta va por
+     * {@code partialImport} y no por {@code POST /users}, porque Keycloak 26 IGNORA el {@code id}
+     * de ese cuerpo y el {@code sub} del token es el id del usuario — por eso se comprueba después;
+     * (2) los claims salen de atributos propios ({@code kp_<claim>}) con un mapper por claim, porque
+     * los campos nativos validan su forma y el escenario necesita poder mandar un email roto; (3) el
+     * User Profile del realm deja de exigir email y nombre, o el password grant de una persona sin
+     * ellos responde «Account is not fully set up».
+     */
+    private static synchronized void ensurePersona(String sub, String role, Map<String, String> claims,
+            java.util.Set<String> named) {
+        String applied = role + "|" + claims;
+        String admin = personaAdminToken();
+        if (!personaRealmReady) {
+            preparePersonaRealm(admin);
+            personaRealmReady = true;
+        }
+        for (String claim : named) {
+            if (PERSONA_MAPPERS.add(claim)) {
+                ensurePersonaMapper(admin, claim);
+            }
+        }
+        if (applied.equals(PERSONA_APPLIED.get(sub))) {
+            return;
+        }
+        Map<String, Object> user = new LinkedHashMap<>();
+        user.put("username", sub);
+        user.put("enabled", true);
+        user.put("emailVerified", true);
+        user.put("requiredActions", List.of());
+        Map<String, Object> attributes = new LinkedHashMap<>();
+        claims.forEach((name, value) -> attributes.put("kp_" + name, List.of(value)));
+        user.put("attributes", attributes);
+
+        String id = personaUserId(admin, sub);
+        if (id != null && !id.equals(sub)) {
+            // Resto de otra ejecución creado con id aleatorio: con él el sub no sería el pedido.
+            personaAdmin(admin, "DELETE", "/users/" + id, null);
+            id = null;
+        }
+        if (id == null) {
+            user.put("id", sub);
+            user.put("credentials", List.of(Map.of(
+                "type", "password", "value", env("AUTH_TEST_PASSWORD", "password"), "temporary", false)));
+            personaAdmin(admin, "POST", "/partialImport",
+                personaJson(Map.of("ifResourceExists", "SKIP", "users", List.of(user))));
+            id = personaUserId(admin, sub);
+            if (!sub.equals(id)) {
+                throw new IllegalStateException("Keycloak no respetó el id pedido para la persona " + sub
+                    + " (asignó " + id + "): el claim sub del token no sería el del escenario");
+            }
+            if (role != null) {
+                String roleJson = personaAdmin(admin, "GET", "/roles/" + personaEncode(role), null);
+                personaAdmin(admin, "POST", "/users/" + id + "/role-mappings/realm", "[" + roleJson + "]");
+            }
+        } else {
+            personaAdmin(admin, "PUT", "/users/" + id, personaJson(user));
+        }
+        PERSONA_APPLIED.put(sub, applied);
+    }
+
+    /** User Profile del realm: email y nombre opcionales, y atributos no declarados admitidos. */
+    private static void preparePersonaRealm(String admin) {
+        try {
+            com.fasterxml.jackson.databind.node.ObjectNode profile = (com.fasterxml.jackson.databind.node.ObjectNode)
+                JSON.readTree(personaAdmin(admin, "GET", "/users/profile", null));
+            for (com.fasterxml.jackson.databind.JsonNode attribute : profile.path("attributes")) {
+                String name = attribute.path("name").asText();
+                if (List.of("email", "firstName", "lastName").contains(name)) {
+                    ((com.fasterxml.jackson.databind.node.ObjectNode) attribute).remove("required");
+                }
+            }
+            profile.put("unmanagedAttributePolicy", "ENABLED");
+            personaAdmin(admin, "PUT", "/users/profile", profile.toString());
+        } catch (IOException e) {
+            throw new IllegalStateException("No se pudo leer el User Profile del realm", e);
+        }
+    }
+
+    /** Un mapper por claim en el cliente de prueba: el claim sale del atributo kp_<claim>. */
+    private static void ensurePersonaMapper(String admin, String claim) {
+        String clientId = env("AUTH_TEST_CLIENT", "${userTestClient(model)}");
+        List<String> ids = JsonPath.read(personaAdmin(admin, "GET", "/clients?clientId=" + personaEncode(clientId), null), "$[*].id");
+        if (ids.isEmpty()) {
+            throw new IllegalStateException("No existe el cliente de prueba '" + clientId + "': ¿se ejecutó infra/init-keycloak.sh?");
+        }
+        String base = "/clients/" + ids.get(0) + "/protocol-mappers/models";
+        List<String> existing = JsonPath.read(personaAdmin(admin, "GET", base, null), "$[*].name");
+        if (existing.contains("persona-" + claim)) {
+            return;
+        }
+        Map<String, Object> config = new LinkedHashMap<>();
+        config.put("user.attribute", "kp_" + claim);
+        config.put("claim.name", claim);
+        config.put("jsonType.label", "String");
+        config.put("access.token.claim", "true");
+        config.put("id.token.claim", "true");
+        config.put("userinfo.token.claim", "true");
+        personaAdmin(admin, "POST", base, personaJson(Map.of(
+            "name", "persona-" + claim,
+            "protocol", "openid-connect",
+            "protocolMapper", "oidc-usermodel-attribute-mapper",
+            "config", config)));
+    }
+
+    /** El id del usuario con ese username (Keycloak lo guarda en minúsculas), o null. */
+    private static String personaUserId(String admin, String username) {
+        List<Map<String, Object>> users = JsonPath.read(
+            personaAdmin(admin, "GET", "/users?exact=true&username=" + personaEncode(username), null), "$[*]");
+        for (Map<String, Object> user : users) {
+            if (username.equalsIgnoreCase(String.valueOf(user.get("username")))) {
+                return String.valueOf(user.get("id"));
+            }
+        }
+        return null;
+    }
+
+    /** Token de administración del realm master, con las credenciales de test-credentials.env. */
+    private static String personaAdminToken() {
+        String form = "grant_type=password&client_id=admin-cli"
+            + "&username=" + personaEncode(env("AUTH_ADMIN_USER", "admin"))
+            + "&password=" + personaEncode(env("AUTH_ADMIN_PASSWORD", "admin"));
+        HttpResponse<String> response = personaSend(HttpRequest.newBuilder(
+                URI.create(personaKeycloakBase() + "/realms/master/protocol/openid-connect/token"))
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .POST(HttpRequest.BodyPublishers.ofString(form)));
+        if (response.statusCode() != 200) {
+            throw new IllegalStateException("Keycloak no dio token de administración (" + response.statusCode()
+                + "): revisa AUTH_ADMIN_USER/AUTH_ADMIN_PASSWORD en infra/test-credentials.env. " + response.body());
+        }
+        return JsonPath.read(response.body(), "$.access_token");
+    }
+
+    private static String personaAdmin(String admin, String method, String path, String body) {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(
+                URI.create(personaKeycloakBase() + "/admin/realms/" + personaRealm() + path))
+            .header("Authorization", "Bearer " + admin);
+        if (body != null) {
+            builder.header("Content-Type", "application/json");
+        }
+        builder.method(method, body == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofString(body));
+        HttpResponse<String> response = personaSend(builder);
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            throw new IllegalStateException("Keycloak admin " + method + " " + path + " devolvió "
+                + response.statusCode() + ": " + response.body());
+        }
+        return response.body();
+    }
+
+    private static HttpResponse<String> personaSend(HttpRequest.Builder builder) {
+        try {
+            return HttpClient.newHttpClient().send(builder.timeout(Duration.ofSeconds(20)).build(),
+                HttpResponse.BodyHandlers.ofString());
+        } catch (IOException e) {
+            throw new IllegalStateException("No se pudo hablar con Keycloak", e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrumpido hablando con Keycloak", e);
+        }
+    }
+
+    /** La base del servidor y el realm, sacados de AUTH_TOKEN_URL: una sola fuente de los dos. */
+    private static String personaKeycloakBase() {
+        String url = env("AUTH_TOKEN_URL", "${tokenUrl(model)}");
+        return url.substring(0, url.indexOf("/realms/"));
+    }
+
+    private static String personaRealm() {
+        String url = env("AUTH_TOKEN_URL", "${tokenUrl(model)}");
+        int start = url.indexOf("/realms/") + "/realms/".length();
+        return url.substring(start, url.indexOf('/', start));
+    }
+
+    private static String personaEncode(String value) {
+        return java.net.URLEncoder.encode(value, java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    private static String personaJson(Object value) {
+        try {
+            return JSON.writeValueAsString(value);
+        } catch (Exception e) {
+            throw new IllegalStateException("No se pudo serializar la petición de administración", e);
+        }
+    }
+`;
+}
 
 function abstractImports(model) {
   const security = model.layersPresent.security;
@@ -5673,7 +5917,7 @@ ${
 
 `
       : ''
-  }
+  }${personaTokenSection(model)}
     /**
      * El token cacheado de esa clave, pedido de nuevo si ya no sirve.
      *

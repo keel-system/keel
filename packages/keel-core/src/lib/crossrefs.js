@@ -3844,6 +3844,28 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
           `use-cases: ${opName}.idempotency.keyField: '${keyField}' no es un campo del input de la operación — la clave tiene que viajar en el contrato para poder deduplicar por ella`
         );
       }
+
+      // Con payload-field la guarda la PROVOCA el diseño en vez de declararla: es la clave natural
+      // si `keyField` participa en la `naturalKey` de la entidad que la operación escribe, y un
+      // almacén de claves si no. La comparación es por NOMBRE —no hay otro enlace en el DSL—, así
+      // que un input `callerSubject` frente a una naturalKey `[subject]` cae al almacén sin que
+      // nada lo diga, aunque una rule en prosa los iguale. Y no son la misma garantía: el almacén
+      // caduca y compara la firma del contenido, de modo que un refresco legítimo con otro valor
+      // sale como reutilización de la clave. Lo destapó la corrida user-profile (2026-10-01): el
+      // diseño escribía «naturalKey es la guarda» en un comentario y el generador hacía lo otro.
+      const target =
+        payloadEntityName(op.output) ??
+        payloadEntityName(op.input) ??
+        singleTransitionEntity(op);
+      const naturalKey = target ? (persistence?.entities?.[target]?.naturalKey ?? []) : [];
+      if (naturalKey.length > 0 && Object.hasOwn(inputFields, keyField) && !naturalKey.includes(keyField)) {
+        warnIn(`use-cases.${opName}.idempotency`, 'CHK-USECASES-IDEM-KEYFIELD-NOT-NATURAL',
+          `use-cases: ${opName}.idempotency.keyField: '${keyField}' no participa en la naturalKey de ${target} ` +
+            `([${naturalKey.join(', ')}]), así que la guarda no será la constraint sino un almacén de claves que caduca ` +
+            `y compara la firma del contenido. Si la guarda que quieres es la clave natural, nombra en keyField el campo ` +
+            `del input que la lleva (o quita el bloque idempotency y deja que la constraint la dé); si quieres el almacén, acéptalo`
+        );
+      }
     }
 
     // DSL 2.17: el ÁMBITO de la clave. Sin él, la clave es global por operación: dos llamantes
@@ -4664,4 +4686,15 @@ function conventionsSection(text) {
     else if (/may[uú]sculas|acentos|texto|colaci[oó]n/i.test(head)) out.texto = para;
   }
   return out;
+}
+
+/** La entidad de un `input`/`output` de la forma `{ entity: X }`, o null. */
+function payloadEntityName(payload) {
+  return payload && typeof payload === 'object' && typeof payload.entity === 'string' ? payload.entity : null;
+}
+
+/** La entidad que mueven las `transitions` de una operación, si es una sola; null si no. */
+function singleTransitionEntity(op) {
+  const entities = new Set((op.transitions ?? []).map((transition) => transition?.entity).filter(Boolean));
+  return entities.size === 1 ? [...entities][0] : null;
 }

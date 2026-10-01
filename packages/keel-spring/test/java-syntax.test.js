@@ -232,6 +232,10 @@ const MATRIX = [
   // fixture que emite la nota del stub sin reclamo y el check pendiente del gate, y la que
   // destapó que ese check salía verde sobre el árbol recién generado.
   ['payout-runs', {}],
+  // La identidad del llamante sacada de un CLAIM (`sub`) en vez de la credencial de un cliente
+  // máquina: la única fila que renderiza `tokenAs(sub, claims)` del arnés y su alta de personas
+  // por la API de administración de Keycloak (corrida user-profile, 2026-10-01).
+  ['profile-directory', { auth: 'keycloak' }],
   ['job-dispatch', {}],
   // Y el mismo diseño sobre los tres motores que hasta ahora no declaraban su forma del reloj
   // ni la del uuid. Cada uno cambia el TEXTO que viaja dentro de los literales del arnés

@@ -116,6 +116,36 @@ export function userTestClient(model) {
   return `${model.service.projectName}-test`;
 }
 
+/**
+ * ¿Necesita el arnés tokens de PERSONA —un `sub` elegido por el escenario y claims por petición—?
+ *
+ * Cuando la identidad del llamante sale del claim `sub`, los escenarios hablan de titulares
+ * concretos («el perfil de `sub-ana-001`», «el mismo token sin `email`»), y `tokenFor(rol)` no
+ * los puede dar: su `sub` es el id aleatorio que Keycloak asigna al usuario del rol y no lleva
+ * más claims que los del realm. En la corrida user-profile (2026-10-01) el agente de pruebas
+ * escribió 300 líneas de soporte para suplirlo, y su primera pasada dejó 38 escenarios sin
+ * ejercitar porque Keycloak 26 ignora el `id` de `POST /users`.
+ *
+ * Solo Keycloak: el emulador de Cognito (mock-oauth2-server) fija los claims en su configuración
+ * con plantillas de valores conocidos (`${clientId}`, `${username}`), no por petición, así que
+ * ahí el método no se emite. Y sin roles no hay cliente de usuario contra el que pedir el token.
+ */
+export function usesPersonaTokens(model) {
+  const identity = model.security?.callerIdentity;
+  return (
+    model.stack.auth === 'keycloak' &&
+    identity?.source === 'claim' &&
+    (identity.claim ?? 'sub') === 'sub' &&
+    (model.security?.roles ?? []).length > 0
+  );
+}
+
+/** Credenciales de administración del contenedor de Keycloak, tal como las declara el catálogo. */
+export function keycloakAdminCredentials() {
+  const env = AUTH.keycloak.composeServices().keycloak.environment;
+  return { user: env.KC_BOOTSTRAP_ADMIN_USERNAME, password: env.KC_BOOTSTRAP_ADMIN_PASSWORD };
+}
+
 /** Clientes M2M que solo existen para las variantes negativas (matriz scope × audiencia). */
 function testM2mClients(model) {
   const serviceAuth = model.security?.serviceAuth;
@@ -271,6 +301,17 @@ function credentialsEnv(model) {
   if (security?.roles?.length) {
     const users = realmSpec(model)?.users.map((user) => user.username) ?? [];
     lines.push('', `# Usuarios de prueba (<rol> y <rol>-2, más uno sin roles): ${users.join(', ')}`);
+  }
+  if (usesPersonaTokens(model)) {
+    const admin = keycloakAdminCredentials();
+    lines.push(
+      '',
+      '# Administración del realm, para tokenAs(sub, claims) de AbstractFlowIT: da de alta a la',
+      '# persona del escenario con su sub exacto y le pone los claims de cada petición. Son las del',
+      '# contenedor de infra/ (KC_BOOTSTRAP_ADMIN_*), las mismas con las que entra init-keycloak.sh.',
+      `AUTH_ADMIN_USER=${admin.user}`,
+      `AUTH_ADMIN_PASSWORD=${admin.password}`
+    );
   }
   if (security?.scoping) {
     const exempt = security.scoping.exemptRoles;
