@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
+import { parse as YAMLparse } from 'yaml';
 import { loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
 import {
@@ -537,4 +538,96 @@ test('el renderizador escapa solo el HTML, y compile() valida sin cachear', () =
   assert.match(impl, /removeEldestEntry/, 'la caché no tiene techo');
   const compile = impl.slice(impl.indexOf('public void compile('));
   assert.ok(!compile.slice(0, compile.indexOf('}')).includes('compiled.'), 'compile() cachea');
+});
+
+// ─── Corrida notifications (2026-09-30) ──────────────────────────────────────
+//
+// Cuatro huecos del adaptador y del renderizador, los cuatro de build y los cuatro corregidos a
+// mano por el agente en un archivo de build. Lo que aquí se fija es la FORMA; el comportamiento se
+// midió compilando y ejecutando estas clases contra handlebars 4.4.0, jakarta.mail 2.0.3 y
+// spring-context-support 6.2.8 (19 casos del renderizador, 12 del adaptador), porque comparar
+// cadenas no ve un escape mal tomado.
+
+test('el HTML se escapa con una tabla CERRADA de cinco entidades, apóstrofo como &#39;', () => {
+  // `new Handlebars()` escribe el apóstrofo como &#x27; y escapa además ` y =: un O'Hara salía
+  // O&#x27;Hara y el escenario que afirmaba &#39; fallaba con un servidor correcto.
+  const impl = scaffoldMailer().read(`${JAVA}/infrastructure/mail/HandlebarsTemplateRenderer.java`);
+  assert.ok(impl.includes('new Handlebars().with(HTML_FIVE)'), 'el motor HTML no usa la tabla propia');
+  assert.ok(!/new Handlebars\(\);/.test(impl), 'queda un motor con el escapado por defecto');
+  assert.ok(
+    impl.includes('{"&", "&amp;"}, {"<", "&lt;"}, {">", "&gt;"}, {"\\"", "&quot;"}, {"\'", "&#39;"}'),
+    impl.slice(impl.indexOf('HTML_FIVE ='), impl.indexOf('HTML_FIVE =') + 300)
+  );
+});
+
+test('un marcador simple se compila como segmento literal: el nombre nunca compite con el motor', () => {
+  // Medido: {{else}} y {{true}} no compilan; {{log}}, {{if}}, {{each}}, {{with}} y {{unless}}
+  // salen VACÍOS sin error; {{this}} y {{lookup}} vuelcan el mapa de variables. {{[x]}} los
+  // resuelve todos como variable.
+  const impl = scaffoldMailer().read(`${JAVA}/infrastructure/mail/HandlebarsTemplateRenderer.java`);
+  assert.ok(impl.includes('engine.compileInline(literalMarkers(source))'), 'compile/render no pasan por literalMarkers');
+  assert.ok(
+    impl.includes(String.raw`Pattern.compile("(?<!\\{)\\{\\{\\s*([A-Za-z_][A-Za-z0-9_-]*)\\s*}}(?!})")`),
+    'el patrón del marcador cambió'
+  );
+  assert.match(impl, /"\{\{\[" \+ name \+ "\]\}\}"/);
+  // Con bloques, else y this son sintaxis del bloque: se respetan.
+  assert.match(impl, /blocks && \(name\.equals\("else"\) \|\| name\.equals\("this"\)\)/);
+});
+
+test('el mensaje admite cabeceras propias, saneadas y validadas en su constructor', () => {
+  const { read } = scaffoldMailer();
+  const message = read(`${JAVA}/domain/mail/MailMessage.java`);
+  assert.match(message, /String text, List<Attachment> attachments, Map<String, String> headers\) \{/);
+  assert.match(message, /headers = sanitizeHeaders\(headers\);/);
+  // La forma sin cabeceras sigue existiendo: el código del agente que ya compone mensajes compila.
+  assert.match(message, /this\(from, replyTo, to, cc, subject, html, text, attachments, Map\.of\(\)\);/);
+  assert.match(message, /"bcc"/);
+  assert.match(message, /lower\.startsWith\("content-"\)/);
+
+  const adapter = read(`${JAVA}/infrastructure/mail/SmtpMailSender.java`);
+  assert.match(adapter, /for \(var header : message\.headers\(\)\.entrySet\(\)\) \{\s+mime\.addHeader\(header\.getKey\(\), header\.getValue\(\)\);/);
+});
+
+test('el envío parcial está activado y el fallo dice a quién llegó y a quién no', () => {
+  const { read } = scaffoldMailer();
+  for (const profile of ['local', 'develop', 'production', 'test']) {
+    assert.match(read(`src/main/resources/parameters/${profile}/mail.yaml`), /^ {10}sendpartial: true$/m, profile);
+  }
+  const exception = read(`${JAVA}/domain/mail/MailDeliveryException.java`);
+  for (const accessor of ['Set<String> accepted()', 'Set<String> rejected()', 'boolean partial()', 'String detail()']) {
+    assert.ok(exception.includes(accessor), accessor);
+  }
+  assert.doesNotMatch(exception, /^import jakarta\./m, 'el dominio no puede conocer jakarta.mail');
+
+  const adapter = read(`${JAVA}/infrastructure/mail/SmtpMailSender.java`);
+  assert.match(adapter, /addresses\(rejection\.getValidSentAddresses\(\)\)/);
+  assert.match(adapter, /addresses\(rejection\.getInvalidAddresses\(\)\)/);
+  assert.match(adapter, /send\.getMessageExceptions\(\)/, 'no desenvuelve el MailSendException de JavaMailSenderImpl');
+});
+
+test('el rechazo SELECTIVO: el buzón rechaza el TLD reservado .invalid y acepta todo lo demás', async () => {
+  // FL-DSP-021 de la corrida notifications: el chaos rechaza a todos, así que «rechaza a luis y
+  // acepta a ana» no se alcanzaba. La palanca es MP_SMTP_ALLOWED_RECIPIENTS (RE2, fija desde el
+  // arranque); su conducta EN VIVO la mide MAIL-12 de mail-check. Aquí se fija la semántica de la
+  // expresión —sin lookaround, que RE2 no tiene— y que viaja al compose y al arnés.
+  const { allowedRecipientsPattern, REJECTED_DOMAIN, SELECTIVE_REJECT_ENV } = await import('../src/lib/mail-probes.js');
+  const pattern = allowedRecipientsPattern();
+  assert.doesNotMatch(pattern, /\(\?[=!<]/, 'RE2 no admite lookaround');
+  assert.ok(!pattern.includes('$'), 'compose interpolaría el $ como variable');
+  assert.ok(pattern.endsWith('\z'));
+  const re = new RegExp(pattern.slice(0, -2) + '$');
+  for (const accepted of ['ana@example.com', 'x@localhost', 'x@a.inv', 'x@a.invali', 'x@a.invalids', 'x@a.iinvalid', 'cliente+etiqueta@ejemplo.com']) {
+    assert.ok(re.test(accepted), `${accepted} debería aceptarse`);
+  }
+  for (const rejected of [`luis@${REJECTED_DOMAIN}`, 'x@foo.invalid', 'x@invalid']) {
+    assert.ok(!re.test(rejected), `${rejected} debería rechazarse`);
+  }
+
+  const { read } = scaffoldMailer();
+  const compose = YAMLparse(read('infra/docker-compose.yaml'));
+  const env = Object.values(compose.services).find((svc) => svc.environment?.MP_SMTP_ALLOWED_RECIPIENTS)?.environment;
+  assert.equal(env?.MP_SMTP_ALLOWED_RECIPIENTS, SELECTIVE_REJECT_ENV.MP_SMTP_ALLOWED_RECIPIENTS, 'el compose no lleva la regex tal cual');
+  const harness = read('src/integrationTest/java/com/platform/notificationmailer/flows/AbstractFlowIT.java');
+  assert.ok(harness.includes(`protected static String rejectedAddress(String localPart) {\n        return localPart + "@${REJECTED_DOMAIN}";`), 'falta rejectedAddress en el arnés');
 });

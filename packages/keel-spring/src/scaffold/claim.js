@@ -31,9 +31,16 @@
 // arrancarle el trabajo de las manos a quien lo está haciendo ahora mismo—. Esa cota
 // tiene dos mitades: el reloj lo declara el diseño (el campo `<estado>Since`/`<estado>At`
 // de la entidad) y el plazo es del generador (`sweep.<x>.stalled-after-seconds` en
-// parameters/), porque es la caducidad de un reclamo y no una decisión de negocio. Quien
-// decide si hay rescate generable es `rescueClaim()` en lib/model.js; aquí solo se ve el
+// parameters/), porque es la caducidad de un reclamo y no una decisión de negocio — SALVO
+// que el diseño lo enlace a un parámetro (`transitions[].stalledAfter`, DSL 2.18), cuando
+// expirar tiene consecuencia de negocio; entonces se lee de ese parámetro. Quien decide si
+// hay rescate generable es `rescueClaim()` en lib/model.js; aquí solo se ve el
 // `claim.stalled` que dejó.
+//
+// Y el rescate no cambia el estado: lo ARRIENDA. Su escritura condicional renueva el reloj
+// (lo que basta para que otra réplica deje de ver la fila atascada) y la transición al
+// destino la hace el dominio, que es quien fija los campos que ese estado exige. Moverla
+// aquí dejaba `failed` sin `failureReason` ni `failedAt` (corrida notifications, 2026-09-30).
 
 import { subPackage } from './render.js';
 import { screamingSnake } from '../lib/naming.js';
@@ -90,8 +97,18 @@ export function adapterValueFields(model, entity) {
 `
   );
   return batchFields.concat(
-    stalledClaimsFor(model, entity.name).map(
-      (claim) => `    /**
+    stalledClaimsFor(model, entity.name).map((claim) =>
+      claim.stalled.parameter
+        ? `    /**
+     * Cuánto puede llevar un ${entity.name} en ${claim.stalled.state} antes de darlo por abandonado, en
+     * segundos. Lo DECLARA el diseño: es el parámetro {@code ${claim.stalled.parameter.name}}
+     * (en ${claim.stalled.parameter.unit}), porque expirar aquí tiene consecuencia de negocio. Se lee de la
+     * MISMA propiedad que puebla el record de parámetros: no hay un segundo plazo que ajustar.
+     */
+    @Value("#{\${${claim.stalled.parameter.property}} * ${claim.stalled.parameter.unitSeconds}}")
+    private long ${stalledValueField(claim)};
+`
+        : `    /**
      * Cuánto puede llevar un ${entity.name} en ${claim.stalled.state} antes de darlo por abandonado.
      * NO lo declara el diseño: es la caducidad de un reclamo —«la réplica que lo tomó murió»—,
      * misma familia que outbox.relay.claim-timeout-ms. Dimensiónalo por encima de lo que tarda
@@ -231,22 +248,35 @@ function describe(model, claim, entityName) {
  * porque tratarlo como trabajo nuevo es exactamente lo que produce el efecto doble.
  */
 function describeStalled(model, claim, entityName) {
-  return `Rescata hasta {@code batchSize} ${entityName} ATASCADOS en ${claim.stalled.state} y los pasa a ${claim.to}.
+  return `Rescata hasta {@code batchSize} ${entityName} ATASCADOS en ${claim.stalled.state}: los devuelve SIGUIENDO en ${claim.stalled.state}, con {@code ${claim.stalled.stampField}} renovado, para que el handler los pase a ${claim.to}.
      *
      * <p><b>Reclama, no lee.</b> Corre en TODAS las réplicas del servicio a la vez
-     * ({@code @Scheduled} es «una vez por instancia», no «una vez en el clúster»). El paso a
-     * ${claim.to} va en ${claimMechanism(model).conditional}, así que la fila que otra réplica rescató antes no
-     * aparece aquí, y el reclamo se COMMITEA antes de volver (transacción propia).
+     * ({@code @Scheduled} es «una vez por instancia», no «una vez en el clúster»). El reclamo es
+     * ${claimMechanism(model).conditional} que solo casa si la fila sigue atascada, y renueva el reloj en
+     * la misma escritura: la fila que otra réplica rescató antes ya no parece atascada y no
+     * aparece aquí. Se COMMITEA antes de volver (transacción propia).
+     *
+     * <p><b>No cambia el estado: lo arrienda.</b> La transición a ${claim.to} es del DOMINIO —es la
+     * que fija los campos que ese estado exige (un motivo, un instante)— y la hace el handler
+     * con el agregado que esto devuelve. Moverla aquí dejaba la fila en ${claim.to} sin esos
+     * campos, violando el invariante en el estado que la base ya expone (corrida notifications,
+     * 2026-09-30). Y si el ciclo muere entre el reclamo y la transición, la fila sigue en
+     * ${claim.stalled.state} con el reloj renovado: otro rescate la recoge pasado el plazo.
      *
      * <p><b>Y solo se lleva lo ABANDONADO.</b> ${claim.stalled.state} es un estado EN VUELO: hay
-     * una instancia trabajando en esas filas ahora mismo. La cota temporal es lo único que separa
-     * un rescate de arrancarle el trabajo de las manos — entran solo las filas cuyo
-     * {@code ${claim.stalled.stampField}} es más viejo que
-     * {@code sweep.${claim.stalled.configKey}.stalled-after-seconds}, que se ajusta por entorno.
+     * una instancia trabajando en esas filas ahora mismo. Entran solo las filas cuyo
+     * {@code ${claim.stalled.stampField}} es más viejo que ${stalledDeadlineDoc(claim)}.
      * Ese plazo tiene que quedar por encima de lo que tarda un ciclo completo.
      *
      * <p>Lo que devuelve es trabajo que alguien dejó a medias, no trabajo nuevo: si el ciclo que
      * murió ya produjo un efecto externo irreversible, repetirlo lo duplica. Actúa en consecuencia.${describeStamp(model, claim)}`;
+}
+
+/** De dónde sale el plazo de un rescate, dicho en el javadoc. */
+function stalledDeadlineDoc(claim) {
+  return claim.stalled.parameter
+    ? `el parámetro del diseño {@code ${claim.stalled.parameter.name}} (en ${claim.stalled.parameter.unit})`
+    : `{@code sweep.${claim.stalled.configKey}.stalled-after-seconds}, que se ajusta por entorno`;
 }
 
 /** Métodos del puerto <E>Repository. */
@@ -306,14 +336,27 @@ export function jpaRepositoryMethods(model, entity, imports) {
     // para siempre. Aquí va en la misma sentencia atómica y sale gratis.
     const stamp = claim.stamps ? `, e.${claim.stamps.field} = :claimedAt` : '';
     const stampParam = claim.stamps ? ', @Param("claimedAt") Instant claimedAt' : '';
+    // El RESCATE no mueve el estado: renueva su reloj (un arriendo). La transición la hace el
+    // dominio, que es quien fija los campos que el estado de destino exige.
+    const update = claim.stalled
+      ? `update ${entity.name}Jpa e set e.${claim.stalled.stampField} = :leasedAt where e.id = :id and e.${field} in :states${stale}`
+      : `update ${entity.name}Jpa e set e.${field} = :to${stamp} where e.id = :id and e.${field} in :states${stale}`;
+    const updateParams = claim.stalled
+      ? `@Param("id") UUID id, @Param("states") List<${enumType}> states${staleParam}, @Param("leasedAt") Instant leasedAt`
+      : `@Param("id") UUID id, @Param("states") List<${enumType}> states, @Param("to") ${enumType} to${staleParam}${stampParam}`;
     return [
       `${selection.annotations}
     @Query("select e.id from ${entity.name}Jpa e where e.${field} in :states${stale} order by e.${orderField} asc")
     List<UUID> candidatesFor${claim.suffix}(@Param("states") List<${enumType}> states${staleParam}, Pageable pageable);`,
 
       `    /**
-     * El reclamo propiamente dicho: pasa la fila a ${claim.to} SOLO si sigue en su estado
-     * de partida${claim.stalled ? ' y sigue estando atascada' : ''}. Devuelve 1 si esta instancia se la llevó y 0 si otra llegó
+     * El reclamo propiamente dicho: ${
+       claim.stalled
+         ? `renueva {@code ${claim.stalled.stampField}} SOLO si la fila sigue en ${claim.stalled.state} y sigue
+     * atascada; NO cambia el estado, porque la transición a ${claim.to} es del dominio`
+         : `pasa la fila a ${claim.to} SOLO si sigue en su estado
+     * de partida`
+     }. Devuelve 1 si esta instancia se la llevó y 0 si otra llegó
      * antes. Esa comparación en el WHERE es toda la exclusión mutua, y no depende del motor.${
        claim.stamps
          ? `
@@ -328,8 +371,8 @@ export function jpaRepositoryMethods(model, entity, imports) {
      }
      */
     @Modifying
-    @Query("update ${entity.name}Jpa e set e.${field} = :to${stamp} where e.id = :id and e.${field} in :states${stale}")
-    int ${claim.method}(@Param("id") UUID id, @Param("states") List<${enumType}> states, @Param("to") ${enumType} to${staleParam}${stampParam});`
+    @Query("${update}")
+    int ${claim.method}(${updateParams});`
     ];
   });
 }
@@ -380,18 +423,28 @@ export function adapterMethods(model, entity, imports, jpaField) {
 `
       : '';
     const stampArg = claim.stamps ? ', claimedAt' : '';
+    // El rescate arrienda: su UPDATE recibe el instante con el que renueva el reloj, y no el
+    // estado de destino. Uno por tanda, igual que claimedAt.
+    const leaseAt = claim.stalled
+      ? `        // El reloj renovado: el rescate ARRIENDA la fila, no la mueve de estado.
+        Instant leasedAt = Instant.now();
+`
+      : '';
+    const claimArgs = claim.stalled
+      ? `id, states${staleArg}, leasedAt`
+      : `id, states, ${enumType}.${enumConstant(claim.to)}${staleArg}${stampArg}`;
     return `    /**
      * ${describe(model, claim, entity.name)}
      */
     @Override
 ${claimTx.annotation}
     public List<${entity.name}> ${claim.method}() {
-${staleBefore}${dueNow}${claimedAt}        List<${enumType}> states = List.of(${stateList(claim, enumType)});
+${staleBefore}${dueNow}${claimedAt}${leaseAt}        List<${enumType}> states = List.of(${stateList(claim, enumType)});
         List<UUID> candidates = ${jpaField}.candidatesFor${claim.suffix}(states${staleArg}, PageRequest.of(0, ${batchField(claim)}));
         List<${entity.name}> claimed = new ArrayList<>();
         for (UUID id : candidates) {
             // 1 = la fila era mía; 0 = otra réplica la reclamó entre el select y el update.
-            if (${jpaField}.${claim.method}(id, states, ${enumType}.${enumConstant(claim.to)}${staleArg}${stampArg}) == 1) {
+            if (${jpaField}.${claim.method}(${claimArgs}) == 1) {
                 ${jpaField}.findById(id).map(this::toDomain).ifPresent(claimed::add);
             }
         }
@@ -444,6 +497,16 @@ export function documentAdapterMethods(model, entity, imports) {
 `
       : '';
     const stampUpdate = claim.stamps ? `.set("${claim.stamps.field}", claimedAt)` : '';
+    // El rescate arrienda: renueva el reloj en el MISMO findAndModify que comprueba que sigue
+    // atascado, y no toca el estado (la transición es del dominio).
+    const leaseAt = claim.stalled
+      ? `        // El reloj renovado: el rescate ARRIENDA el documento, no lo mueve de estado.
+        Instant leasedAt = Instant.now();
+`
+      : '';
+    const updateExpr = claim.stalled
+      ? `new Update().set("${claim.stalled.stampField}", leasedAt)`
+      : `new Update().set("${field}", ${enumType}.${enumConstant(claim.to)})${stampUpdate}`;
     // El criterio temporal va DENTRO del findAndModify, que es lo que lo hace atómico:
     // filtrar por atascado y marcar en la misma operación no deja ventana entre las dos.
     const staleCriteria =
@@ -472,11 +535,11 @@ export function documentAdapterMethods(model, entity, imports) {
      */
     @Override
     public List<${entity.name}> ${claim.method}() {
-${staleBefore}${dueNow}${claimedAt}        List<${entity.name}> claimed = new ArrayList<>();
+${staleBefore}${dueNow}${claimedAt}${leaseAt}        List<${entity.name}> claimed = new ArrayList<>();
         FindAndModifyOptions options = FindAndModifyOptions.options().returnNew(true);
         for (int i = 0; i < ${batchField(claim)}; i++) {
             Query query = Query.query(Criteria.where("${field}").in(List.of(${stateList(claim, enumType)}))${staleCriteria})${order};
-            Update update = new Update().set("${field}", ${enumType}.${enumConstant(claim.to)})${stampUpdate};
+            Update update = ${updateExpr};
             ${entity.name}Document document = mongoTemplate.findAndModify(query, update, options, ${entity.name}Document.class);
             // Sin candidatos el lote se acaba antes que el batchSize, que es lo normal.
             if (document == null) {

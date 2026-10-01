@@ -1,4 +1,4 @@
-keel: "2.17"
+keel: "2.18"
 # La MITAD RELACIONAL del par `job-dispatch` / `job-dispatch-mongo`.
 #
 # La silueta que ninguna otra fixture daba: un barrido con las DOS clases de reclamo a la
@@ -13,6 +13,17 @@ service:
   version: 1.0.0
   description: Encola trabajos y los despacha por ciclos, rescatando los que una réplica dejó a medias.
   domain: operations
+parameters:
+  # El plazo del rescate de dispatchJobs (transitions[].stalledAfter, DSL 2.18): pasado este
+  # tiempo en running, un trabajo se da por abandonado y se CIERRA, que es una consecuencia de
+  # negocio y no la caducidad mecánica de un reclamo.
+  abandonAfterMinutes:
+    type: int
+    description: "Minutos que un trabajo puede llevar en running antes de darlo por abandonado y cerrarlo."
+    constraints: { min: 1 }
+    default: 5
+    testValue: 5
+    requiredInProduction: false
 layers:
   domain: domain.keel.yaml
   use-cases: use-cases.keel.yaml

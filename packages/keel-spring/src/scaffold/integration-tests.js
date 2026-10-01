@@ -4520,8 +4520,8 @@ function purgeWrapper(model) {
  * Cómo se pide una métrica del actuator, que NO es una lectura pública.
  *
  * `management.yaml` expone `metrics` (en local y develop) pero `SecurityConfig` no lo abre: sus
- * nombres son nombres de negocio, así que se queda detrás de `anyRequest().authenticated()` y quien
- * la necesite pide token — vale el de cualquier rol.
+ * nombres son nombres de negocio, así que cae en la regla de CIERRE de la cadena —el
+ * `anyRequest()` que sale de `security.access.default`— y quien la necesite pide token.
  *
  * Vive aquí y no en cada helper porque ya divergió una vez: `queryCount()` lo hacía bien y lo
  * documentaba, y `deadLetteredEvents()` pedía la métrica a pelo. En un diseño con capa security la
@@ -4531,17 +4531,49 @@ function purgeWrapper(model) {
  */
 function actuatorMetric(model, path) {
   if (!model.layersPresent.security || !tokenProtocol(model)) return `get("${path}")`;
-  // Cualquier credencial vale: la regla de cierre es `authenticated()`, no un scope concreto. Se
-  // mira primero el rol y luego el cliente máquina —el mismo orden que el humo del arnés— porque un
-  // diseño puede declarar solo uno de los dos: `notification-mailer` no tiene `roles`, solo
-  // `serviceClients`, y quedarse en el rol dejaba la llamada SIN token contra un actuator cerrado.
-  const role = model.security?.roles?.[0];
-  if (role) return `get("${path}", tokenFor("${role}"))`;
-  const client = model.security?.serviceClients?.[0]?.name;
-  if (client && model.security?.serviceAuth) return `get("${path}", serviceCredential("${client}"))`;
-  // Ni rol ni cliente máquina: no hay con qué autenticarse, así que se pide a pelo y el helper
-  // dirá lo que devolvió. Callarlo aquí produciría un 401 disfrazado de «respuesta inesperada».
-  return `get("${path}")`;
+  const credential = actuatorCredential(model);
+  // Sin credencial posible se pide a pelo y el helper dirá lo que devolvió. Callarlo aquí
+  // produciría un 401 disfrazado de «respuesta inesperada».
+  return credential ? `get("${path}", ${credential})` : `get("${path}")`;
+}
+
+/**
+ * La credencial que SATISFACE la regla de cierre, no una cualquiera.
+ *
+ * Antes se daba por hecho `anyRequest().authenticated()` y valía el primer rol. Pero el cierre
+ * es el `access.default` del diseño, y con `{ level: admin, roles: [notifications-admin] }` el
+ * primer rol (por orden alfabético, `application-operator`) recibía un 403 `ACCESS_DENIED` y los
+ * escenarios que miden coste caían sin hablar del servicio (corrida notifications, 2026-09-30).
+ * El orden de preferencia sigue a la regla: un rol que nombra, un rol que otorga un permiso que
+ * nombra (`roleGrants`), un cliente máquina con un scope que nombra; y solo si la regla es
+ * `authenticated()`, el primero que haya — el mismo orden que el humo del arnés, porque un diseño
+ * puede declarar solo roles o solo `serviceClients` (`notification-mailer` no tiene roles).
+ */
+function actuatorCredential(model) {
+  const sec = model.security ?? {};
+  const roles = sec.roles ?? [];
+  const clients = sec.serviceAuth ? sec.serviceClients ?? [] : [];
+  const rule = sec.defaultRule ?? { level: 'required', roles: [], permissions: [], scopes: [] };
+  if (rule.level === 'public') return null;
+
+  const asRole = (role) => (roles.includes(role) ? `tokenFor("${role}")` : null);
+  const asClient = (client) => `serviceCredential("${client.name}")`;
+  const candidates = [
+    ...rule.roles.map(asRole),
+    ...rule.permissions.flatMap((permission) =>
+      (sec.roleGrants ?? []).filter((grant) => grant.permissions.includes(permission)).map((grant) => asRole(grant.role))
+    ),
+    ...rule.scopes.flatMap((scope) => clients.filter((client) => (client.scopes ?? []).includes(scope)).map(asClient)),
+    // `hasRole("admin")`: el cierre de `level: admin` sin roles nombrados (accessAuthority).
+    ...(rule.level === 'admin' && rule.roles.length === 0 ? [asRole('admin')] : [])
+  ].filter(Boolean);
+  if (candidates.length > 0) return candidates[0];
+
+  // `authenticated()` —o una regla que ninguna credencial de prueba satisface, y entonces el
+  // 403 que devuelva el helper es la pista—: vale la primera que haya.
+  if (roles[0]) return `tokenFor("${roles[0]}")`;
+  if (clients[0]) return asClient(clients[0]);
+  return null;
 }
 
 function queryCountSection(model) {
@@ -4585,6 +4617,30 @@ function queryCountSection(model) {
         if (response.status() != 200) {
             throw new IllegalStateException(
                     "No se pudo leer hibernate.statements (" + response.status() + "): ¿está el actuator expuesto y"
+                            + " generate_statistics activo en el perfil?");
+        }
+        Number value = JsonPath.read(response.body(), "$.measurements[0].value");
+        return value.longValue();
+    }
+
+    /**
+     * Consultas (JPQL, criteria y nativas) ejecutadas desde que arrancó la aplicación.
+     *
+     * <p>El hermano de {@link #queryCount()} para cuando el When <b>escribe</b>: allí cuentan
+     * también los INSERT/UPDATE —una colección de 20 elementos son 20 INSERT—, así que «el coste
+     * de comprobar X no crece con N» sale rojo aunque la comprobación sea una sola consulta por
+     * lote. Aquí solo cuentan las consultas, que es lo que el Then mide.
+     *
+     * <p><b>Su punto ciego</b>, y por eso no sustituye al otro: no cuenta las cargas por id
+     * ({@code findById}, {@code em.find}) ni las inicializaciones perezosas de colecciones. Un
+     * N+1 hecho a base de {@code findById} en un bucle NO se ve aquí; en una lectura pura, usa
+     * {@link #queryCount()}.
+     */
+    protected long queryExecutions() {
+        Response response = ${actuatorMetric(model, '/actuator/metrics/hibernate.query.executions')};
+        if (response.status() != 200) {
+            throw new IllegalStateException(
+                    "No se pudo leer hibernate.query.executions (" + response.status() + "): ¿está el actuator expuesto y"
                             + " generate_statistics activo en el perfil?");
         }
         Number value = JsonPath.read(response.body(), "$.measurements[0].value");

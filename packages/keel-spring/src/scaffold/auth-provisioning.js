@@ -62,6 +62,40 @@ export function secretEnvKey(clientName) {
   return `AUTH_CLIENT_SECRET_${clientName.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
 }
 
+/**
+ * Sondeos de `validate-infra.sh` para el ALCANCE POR RECURSO: cada usuario que debe llevar el
+ * claim lo lleva de verdad en su token.
+ *
+ * Existe porque el aprovisionamiento puede salir en verde con el atributo escrito en el usuario
+ * equivocado (corrida notifications, 2026-09-30: `user_id_of` resolvía `editor` a `editor-2`), y
+ * entonces lo único que se ve son veinte escenarios en 403 sin pista. Aquí se pide el token por
+ * la red del compose, se decodifica el payload (base64url) y se exige el claim con su valor.
+ * Usuarios y valor salen de `realmSpec()`, la misma fuente que siembra el realm: un sondeo con
+ * su propia lista comprobaría una copia de sí mismo. Solo con Keycloak: es el proveedor cuyo
+ * realm siembra un script.
+ */
+export function scopingClaimChecks(model) {
+  if (model.stack?.auth !== 'keycloak') return [];
+  const spec = realmSpec(model);
+  if (!spec?.scoping || !spec.userClient) return [];
+  const claim = spec.scoping.claim;
+  const url = `http://keycloak:8080/realms/${spec.realm}/protocol/openid-connect/token`;
+  return spec.users
+    .filter((user) => (user.attributes?.[claim] ?? []).length > 0)
+    .map((user) => {
+      const expected = JSON.stringify({ [claim]: user.attributes[claim] }).slice(1, -1);
+      return {
+        label: `Claim '${claim}' en el token de ${user.username} (keycloak)`,
+        cmd:
+          `T=$(curl -sf -d grant_type=password -d client_id=${spec.userClient} -d username=${user.username} ` +
+          `-d password=${spec.password} ${url} | sed 's/.*"access_token":"\\([^"]*\\)".*/\\1/'); ` +
+          `P=$(echo "$T" | cut -d. -f2 | tr '_-' '/+'); ` +
+          `while [ $((\${#P} % 4)) -ne 0 ]; do P="$P="; done; ` +
+          `echo "$P" | base64 -d 2>/dev/null | grep -qF '${expected}'`
+      };
+    });
+}
+
 /** URL del endpoint de token del proveedor del stack. */
 export function tokenUrl(model) {
   const port = AUTH[model.stack.auth]?.port ?? 8180;
@@ -350,6 +384,13 @@ for SCOPED_USER in ${scoped.map((user) => user.username).join(' ')}; do
   SCOPED_UID=$(user_id_of "$SCOPED_USER")
   require_id "$SCOPED_UID" "el usuario $SCOPED_USER"
   run "update users/$SCOPED_UID -r $REALM -s 'attributes.${claim}=[\\"${scopedValue(model)}\\"]'"
+  # Lectura de vuelta: un 204 no prueba que el atributo se guardara (el User Profile descarta
+  # en silencio lo que no conoce). Si falta, se muere AQUI, nombrando al usuario, y no veinte
+  # escenarios despues en un 403 sin pista.
+  if ! eval "$KC get users/$SCOPED_UID -r $REALM" 2>/dev/null | tr -d '\\r' | grep -q '"${scopedValue(model)}"'; then
+    echo "ERROR: el atributo ${claim} no quedo persistido en $SCOPED_USER ($SCOPED_UID)." >&2
+    exit 1
+  fi
 done`);
     }
   }
@@ -492,8 +533,12 @@ run() {
 client_id_of() { eval "$KC get clients -r $REALM -q clientId=$1 --fields id --format csv --noquotes" 2>/dev/null | tr -d '\\r' | tail -1 || true; }
 # id de un client-scope por su name exacto (GET client-scopes NO soporta -q: filtra en local).
 scope_id_of() { eval "$KC get client-scopes -r $REALM --fields id,name --format csv --noquotes" 2>/dev/null | tr -d '\\r' | grep ",$1\\$" | cut -d, -f1 || true; }
-# id de un usuario por su username exacto (GET users SI soporta -q).
-user_id_of() { eval "$KC get users -r $REALM -q username=$1 --fields id --format csv --noquotes" 2>/dev/null | tr -d '\\r' | tail -1 || true; }
+# id de un usuario por su username EXACTO. GET users?username=x busca por SUBCADENA:
+# 'editor' casa tambien con 'editor-2', y quedarse con la ultima fila escribia el atributo
+# del claim en el usuario '-2' y dejaba al original sin claim (corrida notifications,
+# 2026-09-30: 20 escenarios en 403). Se pide exact=true Y se filtra en local por la columna
+# del username: lo segundo no depende de que la version de Keycloak honre lo primero.
+user_id_of() { eval "$KC get users -r $REALM -q username=$1 -q exact=true --fields id,username --format csv --noquotes" 2>/dev/null | tr -d '\\r' | grep ",$1\\$" | head -1 | cut -d, -f1 || true; }
 # Un id vacio significa que el recurso no esta donde deberia: el aprovisionamiento va a medias
 # y seguir solo produce peticiones malformadas contra rutas con un id en blanco.
 require_id() {

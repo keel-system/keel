@@ -122,6 +122,23 @@ retireProduct:
 
 Es el **único enlace del DSL** entre un caso de uso y el `lifecycle` de una entidad, que hasta ahora solo existía en prosa (`rules`). Y no es documentación: el generador deriva del `lifecycle` un guard que rechaza cualquier cambio de estado no declarado, así que una operación que necesita una arista que la máquina de estados no tiene **no falla al generar — falla en cada ejecución**. `keel validate` da error si la entidad no existe, si no declara `lifecycle`, si algún estado no es valor del enum, o si la transición `from` → `to` no está en `domain: <entidad>.lifecycle.transitions`. La inversa es aviso: una transición declarada en `domain` que ninguna operación ejecuta no es contrato, es intención.
 
+**`stalledAfter` — cuándo se da por abandonada una fila en vuelo (2.18).** En un barrido (operación con `schedule`) que saca a la entidad de un estado al que otra transición la llevó —un estado EN VUELO, como `sending` o `running`—, el generador rescata las filas que una réplica dejó a medias, y para no arrancarle el trabajo a quien lo está haciendo necesita un plazo. Por defecto ese plazo es suyo: es la caducidad de un reclamo, mecánica. Pero cuando expirar tiene consecuencia de **negocio** —el envío se da por fallido y no se reintenta—, el plazo es una decisión del diseño, y se enlaza a un parámetro del servicio:
+
+```yaml
+# service.keel.yaml
+parameters:
+  sendingTimeoutMinutes: { type: int, description: "…", constraints: { min: 1 }, default: 15, testValue: 15 }
+
+# use-cases.keel.yaml
+transitions:
+  - entity: EmailMessage
+    from: [sending]
+    to: failed
+    stalledAfter: { parameter: sendingTimeoutMinutes, unit: minutes }
+```
+
+`unit` es `seconds`, `minutes` o `hours`. `keel validate` da error (`CHK-USECASES-STALLED-AFTER-INVALID`) si el parámetro no existe, si no es `int` o si la operación no es un barrido. Sin el enlace, un parámetro que la prosa llama «el plazo del rescate» no lo lee nadie: el servicio acaba con dos plazos, y solo uno es el del diseño.
+
 `from` es una lista porque un mismo command puede aplicarse desde varios orígenes (`[pending, reserved] → cancelled`). No se declaran las transiciones de **creación**: el estado inicial es el `default` del campo enum, no una arista.
 
 Hay un segundo efecto, y es el que importa en una **compensación**: una transición cuyo `to` **no** está entre sus propios `from` es irrepetible por construcción — al segundo intento la entidad ya está en el destino y el guard lo rechaza. Por eso vale como uno de los dos mecanismos con los que una compensación demuestra que no se puede aplicar dos veces (el otro es `contract.messageId` en la suscripción; `idempotency` **no** sirve para eso, ver abajo).

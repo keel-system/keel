@@ -101,9 +101,10 @@ puntuación las ejecuta todas. La independencia no cambia: sigues sin leer `src/
      generador.
    - **Una afirmación de COSTE tampoco es un `uncovered`.** Un escenario cuyo `Then` dice que el
      trabajo de un listado «no crece con el tamaño de la página» se escribe con `queryCount()`
-     (sentencias contra la base, solo con persistencia relacional) o con `stubCallCount` (llamadas al
+     (sentencias contra la base, solo con persistencia relacional; si el When **escribe**,
+     `queryExecutions()`, que no cuenta los INSERT) o con `stubCallCount` (llamadas al
      proveedor de prueba), midiendo **dos páginas de tamaños muy distintos** y comparando el salto —
-     nunca contra un número absoluto. Las tres reglas que lo hacen fiable (la petición medida es la
+     nunca contra un número absoluto. Las reglas que lo hacen fiable (la petición medida es la
      única del intervalo, se mide la segunda ejecución, se compara la forma) y el ejemplo completo
      están en `{{keel:docs}}/conventions/read-composition.md` § Afirmar el coste.
    - **Con capa `http-clients`, el proveedor de prueba se programa y se interroga desde el

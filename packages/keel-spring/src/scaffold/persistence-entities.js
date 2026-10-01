@@ -250,7 +250,21 @@ function renderJpaEntity(model, entity) {
           .join(', ');
         collTableAttrs.push(collectionIndexes.length === 1 ? `indexes = ${rendered}` : `indexes = { ${rendered} }`);
       }
-      const collAnnotations = ['@ElementCollection', `@CollectionTable(${collTableAttrs.join(', ')})`];
+      // El ORDEN es parte del valor: el dominio la modela como `List`, y sin columna de orden
+      // Hibernate la trata como una bolsa —ni el SELECT promete el orden en que se guardó, ni
+      // una modificación hace otra cosa que borrar y reinsertar todo—. El diseño de la corrida
+      // notifications lo pedía en voz alta («las variables, en el orden en que se publicó») y
+      // el agente lo añadió a mano en un archivo de build.
+      // Y el lote, como en las colecciones de entidades (rama `relationMany`): con una página
+      // de raíces, cargar la lista de cada una por separado es el N+1 que ningún Then ve.
+      imports.add('jakarta.persistence.OrderColumn');
+      imports.add('org.hibernate.annotations.BatchSize');
+      const collAnnotations = [
+        '@ElementCollection',
+        `@CollectionTable(${collTableAttrs.join(', ')})`,
+        `@OrderColumn(name = "${snakeCase(member.name)}_order")`,
+        `@BatchSize(size = ${collectionBatchSize(model)})`
+      ];
       const { element } = member;
       if (element.kind === 'vo') {
         // Elemento value object: su espejo @Embeddable XxxJpa (embeddables.js),

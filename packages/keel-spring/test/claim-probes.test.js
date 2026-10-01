@@ -71,7 +71,9 @@ test('el Java llama a los métodos que build emitió, con las constantes del lif
   assert.match(java, /adaptador\.claimForStalledDispatchJobsDone\(\)/);
   assert.match(java, /JobStatus\.QUEUED/);
   assert.match(java, /JobStatus\.RUNNING/);
-  assert.match(java, /JobStatus\.DONE/);
+  // El destino del rescate (DONE) ya no aparece: el rescate ARRIENDA la fila y la deja en
+  // RUNNING; la transición es del dominio y el check afirma justo eso.
+  assert.doesNotMatch(java, /JobStatus\.DONE/);
 });
 
 test('las claves de parameters/ son las del barrido, no inventadas', () => {
@@ -79,7 +81,10 @@ test('las claves de parameters/ son las del barrido, no inventadas', () => {
   // que el escenario cree estar midiendo — un verde que no significa nada.
   const { java, scenarios } = render();
   assert.match(java, new RegExp(`sweep\\.${scenarios.queue.sweepKey}\\.batch-size=${BATCH_SIZE}`));
-  assert.match(java, new RegExp(`sweep\\.${scenarios.rescue.stalled.configKey}\\.stalled-after-seconds=`));
+  // El plazo del rescate es el del parámetro que el diseño enlaza (DSL 2.18): fijar la clave del
+  // generador no movería nada, porque el adaptador ya no la lee.
+  assert.ok(java.includes(`"${scenarios.rescue.stalled.parameter.property}=5"`), 'el check no fija el parámetro enlazado');
+  assert.ok(!java.includes('stalled-after-seconds'), 'el check fija una clave que el adaptador no lee');
 });
 
 test('la fila se siembra con TODOS los campos obligatorios de la entidad', () => {

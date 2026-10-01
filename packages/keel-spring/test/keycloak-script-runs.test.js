@@ -22,7 +22,9 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
 import { loadService } from 'keel-core';
-import { scaffoldService } from '../src/scaffold/index.js';
+import { scaffoldService, resolveStack } from '../src/scaffold/index.js';
+import { scopingClaimChecks } from '../src/scaffold/auth-provisioning.js';
+import { buildModel } from '../src/lib/model.js';
 
 const fixtureDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'catalog-extended');
 
@@ -57,7 +59,23 @@ if [ "\${STUB_GETS_FAIL:-0}" = "1" ]; then
 fi
 case "$ARGS" in
   *"get clients"*)       echo "cid-0001"; exit 0 ;;
-  *"get users"*)         echo "uid-0001"; exit 0 ;;
+  *"get users/"*)
+    # Lectura de vuelta de un usuario: el atributo del claim, como lo devuelve Keycloak.
+    echo '{ "attributes" : { "claim" : [ "'"\${STUB_ATTR_VALUE:-}"'" ] } }'
+    exit 0 ;;
+  *"get users"*)
+    if [ -z "\${STUB_USERS:-}" ]; then echo "uid-0001"; exit 0; fi
+    # Como Keycloak: ?username=x busca por SUBCADENA salvo con exact=true, y devuelve las
+    # filas en orden de creacion. Es lo que hacia que 'editor' resolviera a 'editor-2'.
+    Q=$(printf '%s' "$ARGS" | sed -n 's/.*username=\\([^ ]*\\).*/\\1/p')
+    EXACT=0; case "$ARGS" in *exact=true*) EXACT=1 ;; esac
+    WITH_NAME=0; case "$ARGS" in *"--fields id,username"*) WITH_NAME=1 ;; esac
+    for U in $STUB_USERS; do
+      if [ "$EXACT" = 1 ] && [ "$U" != "$Q" ]; then continue; fi
+      case "$U" in *"$Q"*) ;; *) continue ;; esac
+      if [ "$WITH_NAME" = 1 ]; then echo "uid-$U,$U"; else echo "uid-$U"; fi
+    done
+    exit 0 ;;
   *"get client-scopes"*)
     # csv id,name para cada scope que el script pueda pedir.
     for NAME in \${STUB_SCOPES:-}; do echo "sid-$NAME,$NAME"; done
@@ -95,6 +113,11 @@ function runScript(serviceDir, content, env = {}) {
     .map((match) => match[1])
     .map((name) => name.replace('$SVC', /^SVC=(\S+)/m.exec(content)?.[1] ?? 'catalog-api'));
 
+  // Los usuarios que el script crea, en su orden, y el valor del claim que escribe: el stub
+  // los necesita para buscar como Keycloak y para contestar la lectura de vuelta.
+  const users = /^for USER in (.+); do$/m.exec(content)?.[1] ?? '';
+  const attrValue = /attributes\.\w+=\[\\"([^\\"]+)\\"\]/.exec(content)?.[1] ?? '';
+
   return spawnSync('bash', ['infra/init-keycloak.sh'], {
     cwd: serviceDir,
     encoding: 'utf8',
@@ -102,6 +125,8 @@ function runScript(serviceDir, content, env = {}) {
       ...process.env,
       CONTAINER_RUNTIME: './infra/kcadm-stub.sh',
       STUB_SCOPES: scopes.join(' '),
+      STUB_USERS: users,
+      STUB_ATTR_VALUE: attrValue,
       KEEL_KC_WAIT_ATTEMPTS: '1',
       KEEL_KC_WAIT_DELAY: '0',
       ...env
@@ -201,4 +226,93 @@ ${result.stderr}`);
   const env = fs.readFileSync(path.join(serviceDir, 'infra/test-credentials.env'), 'utf8');
   assert.doesNotMatch(env, /AUTH_TEST_/, 'test-credentials.env promete credenciales de usuario');
   assert.match(env, /AUTH_TOKEN_URL=/);
+});
+
+// ─── A quién se le escribe el claim ─────────────────────────────────────────
+//
+// Corrida notifications (2026-09-30): `user_id_of` pedía `?username=editor`, Keycloak busca por
+// SUBCADENA, devolvía `editor` y `editor-2`, y `tail -1` se quedaba con el segundo. El atributo
+// del claim acababa dos veces en `editor-2` y ninguna en `editor`: 20 escenarios en 403 y dos
+// clases caídas en `@BeforeAll`, con un servidor que se comportaba exactamente según el diseño.
+// El stub de antes contestaba el mismo id a cualquier búsqueda, así que no podía verlo.
+
+test('el claim de alcance se escribe en CADA usuario acotado, no en su homónimo -2', () => {
+  const { serviceDir, script } = buildScript();
+  const { result, calls } = runLogged(serviceDir, script);
+  assert.equal(result.status, 0, `${result.stdout}
+${result.stderr}`);
+  const targets = [...calls.matchAll(/update users\/(uid-\S+) /g)].map((m) => m[1]);
+  assert.deepEqual(targets.sort(), ['uid-editor', 'uid-editor-2'], `updates a: ${targets.join(', ')}`);
+});
+
+test('AUTOCOMPROBACIÓN: con la búsqueda por subcadena de antes, el claim cae en el usuario equivocado', () => {
+  const { serviceDir, script } = buildScript();
+  const roto = script.replace(
+    /^user_id_of\(\) \{.*$/m,
+    `user_id_of() { eval "$KC get users -r $REALM -q username=$1 --fields id --format csv --noquotes" 2>/dev/null | tr -d '\r' | tail -1 || true; }`
+  );
+  assert.notEqual(roto, script, 'no se encontró user_id_of en el script');
+  const { calls } = runLogged(serviceDir, roto);
+  const targets = [...calls.matchAll(/update users\/(uid-\S+) /g)].map((m) => m[1]);
+  assert.ok(!targets.includes('uid-editor'), `con el defecto, 'editor' no debería recibir el claim: ${targets.join(', ')}`);
+});
+
+test('si el atributo no queda persistido, el script muere nombrando al usuario', () => {
+  const { serviceDir, script } = buildScript();
+  const result = runScript(serviceDir, script, { STUB_ATTR_VALUE: 'otro-valor' });
+  assert.notEqual(result.status, 0, 'un atributo que no se guardó no puede pasar en silencio');
+  assert.match(result.stderr, /ERROR: el atributo \w+ no quedo persistido en editor/);
+});
+
+// ─── validate-infra.sh: el claim llega en el TOKEN ──────────────────────────
+//
+// La otra mitad del defecto de arriba: el aprovisionamiento salía en verde y `validate-infra.sh`
+// también, porque solo miraba que Keycloak respondiera. El sondeo se EJECUTA con un `curl` falso
+// que devuelve un JWT de verdad (cabecera.payload.firma en base64url): así se mide el decodificado
+// —el relleno de `=`, el alfabeto url— y no solo que el texto esté escrito.
+
+
+function scopingModel() {
+  const { manifest, layers } = loadService(fixtureDir);
+  const patched = structuredClone(layers);
+  patched.security = SECURITY;
+  const patchedManifest = structuredClone(manifest);
+  patchedManifest.layers.security = 'security.keel.yaml';
+  const stack = resolveStack({ auth: 'keycloak' }, patched, patchedManifest);
+  const model = buildModel({ manifest: patchedManifest, layers: patched, stack });
+  model.stack = stack;
+  return model;
+}
+
+function runProbe(cmd, payload) {
+  const dir = tmpDir('keel-claimprobe-');
+  const b64url = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');
+  const jwt = `${b64url({ alg: 'RS256' })}.${b64url(payload)}.firma`;
+  fs.writeFileSync(path.join(dir, 'curl'), `#!/bin/sh\necho '{"access_token":"${jwt}","expires_in":300}'\n`);
+  fs.chmodSync(path.join(dir, 'curl'), 0o755);
+  return spawnSync('sh', ['-c', cmd], { encoding: 'utf8', env: { ...process.env, PATH: `${dir}${path.delimiter}${process.env.PATH}` } });
+}
+
+test('validate-infra: un sondeo por usuario acotado, y solo por los acotados', () => {
+  const checks = scopingClaimChecks(scopingModel());
+  assert.deepEqual(
+    checks.map((c) => /token de (\S+)/.exec(c.label)[1]).sort(),
+    ['editor', 'editor-2'],
+    'el exento (admin) no lleva el claim y no se sondea'
+  );
+});
+
+test('validate-infra: el sondeo del claim pasa con el claim y falla sin él (EJECUTADO)', () => {
+  const [check] = scopingClaimChecks(scopingModel());
+  const value = /grep -qF '(.*)'$/.exec(check.cmd)[1];
+  const claim = JSON.parse(`{${value}}`);
+  // Un payload cuya longitud base64url no es múltiplo de 4: obliga a rellenar con '='.
+  for (const extra of ['', 'x', 'xy']) {
+    const ok = runProbe(check.cmd, { sub: 'u1', ...claim, pad: extra });
+    assert.equal(ok.status, 0, `con el claim debería pasar (pad '${extra}'): ${ok.stderr}`);
+  }
+  const ko = runProbe(check.cmd, { sub: 'u1' });
+  assert.notEqual(ko.status, 0, 'sin el claim el sondeo tiene que fallar');
+  const otro = runProbe(check.cmd, { sub: 'u1', [Object.keys(claim)[0]]: ['otro'] });
+  assert.notEqual(otro.status, 0, 'con otro valor el sondeo tiene que fallar');
 });

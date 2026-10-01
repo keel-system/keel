@@ -232,7 +232,8 @@ function authorizeBlock(matchers, { defaultAuthority, permitTechnical = true, pe
       // Lo público del actuator es exactamente lo que `management.yaml` expone y no cuenta nada
       // del negocio: health (que los sondeos de infra y el HEALTHCHECK del Dockerfile piden sin
       // credencial, en el puerto de gestión y en /livez y /readyz del principal) e info. `metrics` NO entra: sus nombres SON nombres de negocio, así que se
-      // queda detrás de `anyRequest().authenticated()` y quien la necesite —el arnés— pide token.
+      // queda detrás de la regla de cierre (`anyRequest()`, el `access.default` del diseño) y quien la
+      // necesite —el arnés— pide un token que la satisfaga (`actuatorCredential` en integration-tests.js).
       // Los dos artefactos tienen que decir lo mismo, y hay un test que los cruza.
       '                    .requestMatchers("/actuator/health/**", "/livez", "/readyz", "/actuator/info", "/swagger-ui/**", "/swagger-ui.html", "/v3/api-docs/**").permitAll()'
     );

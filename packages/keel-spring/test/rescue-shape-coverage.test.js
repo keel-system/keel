@@ -103,8 +103,12 @@ for (const caso of AMBAS) {
 
   // El plazo es del generador —la caducidad de un reclamo, no una decisión de negocio—, y
   // por eso vive en `parameters/` en los dos modelos.
-  test(`${caso.fixture}: el plazo del rescate sale por parámetro`, () => {
-    assert.match(generate(caso)('JobRepositoryImpl.java'), /sweep\.dispatch-jobs-done\.stalled-after-seconds/);
+  test(`${caso.fixture}: el plazo del rescate sale del parámetro que el DISEÑO enlaza (stalledAfter)`, () => {
+    // DSL 2.18: el par enlaza el plazo a `abandonAfterMinutes`, así que el adaptador lee la
+    // propiedad de ese parámetro (en segundos) y no la del generador.
+    const adapter = generate(caso)('JobRepositoryImpl.java');
+    assert.match(adapter, /@Value\("#\{\$\{[a-z-]+\.abandon-after-minutes\} \* 60\}"\)/, 'no lee el parámetro enlazado');
+    assert.doesNotMatch(adapter, /stalled-after-seconds/);
   });
 }
 

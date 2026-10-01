@@ -43,8 +43,20 @@ si falta una, y cuándo exactamente sale el correo respecto a la transacción.
 String subject = templateRenderer.render(Part.SUBJECT, cacheKey, template.subject(), variables);
 String html = templateRenderer.render(Part.HTML, cacheKey, template.bodyHtml(), variables);
 String text = templateRenderer.render(Part.TEXT, cacheKey, template.bodyText(), variables);
-mailSender.send(new MailMessage(sender, null, List.of(recipient), subject, html, text));
+mailSender.send(new MailMessage(sender, null, List.of(recipient), List.of(), subject, html, text));
 ```
+
+Si el diseño pide **cabeceras propias** (p. ej. un `X-…` con el id del envío, que el proveedor
+devuelve con el rebote), van en el último argumento: `new MailMessage(…, text, Map.of("X-Notification-Id",
+id))`. El constructor las sanea y rechaza las que el mensaje ya compone (`From`, `To`, `Bcc`,
+`Subject`, `Content-*`…): no las añadas en el adaptador.
+
+**Un fallo de envío puede ser PARCIAL.** El transporte va con `sendpartial=true`: si el relay
+rechaza a un destinatario y acepta a otro, el correo sale para los aceptados y `send` lanza
+igualmente `MailDeliveryException`. Decide con lo que trae, sin desenvolver la causa ni escribir
+otro puerto: `partial()` (¿salió para alguno?), `accepted()`, `rejected()` (los 5xx de su
+`RCPT TO`) y `detail()` (la respuesta del relay). Tratarla siempre como «no salió» da por
+fallido un correo que ya llegó.
 
 Tres decisiones que el diseño ya tomó y que tienes que respetar:
 

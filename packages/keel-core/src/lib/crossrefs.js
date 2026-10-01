@@ -4580,6 +4580,41 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
     }
   }
 
+  // ─── El plazo de un rescate, enlazado a un parámetro del servicio (DSL 2.18) ────
+  //
+  // La corrida notifications declaró `sendingTimeoutMinutes` como parámetro y dijo en prosa que
+  // era el plazo del rescate; el generador no podía leer la prosa y usó el suyo (300 s), así que
+  // el servicio tenía dos plazos y solo uno era el del diseño. `stalledAfter` es el enlace, y lo
+  // que se comprueba aquí es que apunte a algo que exista y que tenga sentido.
+  for (const [opName, op] of Object.entries(operations)) {
+    for (const transition of op?.transitions ?? []) {
+      const link = transition?.stalledAfter;
+      if (!link) continue;
+      const where =
+        `use-cases: operations.${opName}.transitions (${transition.entity}: ` +
+        `${(transition.from ?? []).join(', ')} → ${transition.to}).stalledAfter`;
+      if (!op.schedule) {
+        error(
+          'CHK-USECASES-STALLED-AFTER-INVALID',
+          `${where}: la operación no es un barrido (no declara schedule), así que no hay rescate al que darle plazo`
+        );
+      }
+      if (!manifest) continue;
+      const parameter = manifest.parameters?.[link.parameter];
+      if (!parameter) {
+        error(
+          'CHK-USECASES-STALLED-AFTER-INVALID',
+          `${where}: nombra el parámetro '${link.parameter}', que service.keel.yaml § parameters no declara`
+        );
+      } else if (parameter.type !== 'int') {
+        error(
+          'CHK-USECASES-STALLED-AFTER-INVALID',
+          `${where}: el parámetro '${link.parameter}' es de tipo ${parameter.type}, y un plazo es un número entero de ${link.unit}`
+        );
+      }
+    }
+  }
+
   // Los campos del catálogo estructural con default que el diseño no escribió. Ausente y
   // escrito con el mismo valor generan el mismo código, pero no el mismo diseño: solo el
   // segundo dice que alguien lo decidió. Solo mira la AUSENCIA — nunca el valor — y la lista

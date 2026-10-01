@@ -88,6 +88,50 @@ export const CHAOS_OFF = '{}';
 /** Variable de entorno de la imagen que habilita chaos (sin ella, la API responde 400). */
 export const CHAOS_ENV = { MP_ENABLE_CHAOS: 'true' };
 
+// ─── Rechazo SELECTIVO: un destinatario sí y otro no ────────────────────────
+//
+// El chaos de arriba rechaza a TODOS: no tiene filtro por dirección. Un escenario que pide «el
+// relay rechaza a luis y acepta a ana» (un envío parcialmente rechazado) no se alcanzaba, y la
+// corrida notifications cerró con ese escenario sin prueba (FL-DSP-021, 2026-09-30).
+//
+// La palanca es otra opción de Mailpit, fija desde el arranque: `MP_SMTP_ALLOWED_RECIPIENTS`, una
+// expresión regular (Go/RE2) que un destinatario tiene que cumplir. Lo que no la cumple recibe un
+// 550 a SU `RCPT TO` y el resto de la transacción sigue: el correo se guarda para los demás.
+// Medido contra axllent/mailpit:v1.31. Como no se puede cambiar en caliente, la convención es una
+// DIRECCIÓN y no un interruptor: todo destinatario cuyo dominio termina en el TLD `.invalid`
+// (reservado por la RFC 2606 justo para esto: nunca existe) se rechaza; todo lo demás se acepta.
+// Un escenario que necesite el rechazo selectivo escribe la dirección rechazada en ese dominio.
+//
+// Una salvedad que el arnés tiene que conocer: el buzón indexa la cabecera `To`, no el sobre, así
+// que el correo guardado sigue NOMBRANDO al rechazado. Que no le llegó se afirma por el desenlace
+// del envío, no buscándolo en el buzón.
+
+/** El TLD reservado cuyos destinatarios rechaza el relay de prueba. */
+export const REJECTED_TLD = 'invalid';
+
+/** Dominio canónico de una dirección rechazada en los escenarios: `<nombre>@rejected.invalid`. */
+export const REJECTED_DOMAIN = `rejected.${REJECTED_TLD}`;
+
+/**
+ * La expresión que ACEPTA toda dirección cuyo último label de dominio no sea `tld`.
+ *
+ * RE2 no tiene lookahead, así que «distinto de esta palabra» se escribe por casos: un prefijo
+ * propio de la palabra, una que diverge en alguna posición, o una más larga. Sin `\.` ni `$`:
+ * el punto va como `[.]` y el ancla como `\z`, porque el valor viaja dentro de un compose, y
+ * compose interpola `$` como variable.
+ */
+export function allowedRecipientsPattern(tld = REJECTED_TLD) {
+  const LABEL = '[^.@]';
+  const alternatives = [];
+  for (let k = 1; k < tld.length; k += 1) alternatives.push(tld.slice(0, k));
+  for (let k = 0; k < tld.length; k += 1) alternatives.push(`${tld.slice(0, k)}[^${tld[k]}.@]${LABEL}*`);
+  alternatives.push(`${tld}${LABEL}+`);
+  return `@(?:[^@]*[.])?(?:${alternatives.join('|')})\\z`;
+}
+
+/** Entorno del Mailpit de `infra/` que activa el rechazo selectivo. */
+export const SELECTIVE_REJECT_ENV = { MP_SMTP_ALLOWED_RECIPIENTS: allowedRecipientsPattern() };
+
 /** Término de búsqueda por destinatario, tal como lo entiende Mailpit. */
 export function toQuery(address) {
   return `to:${address}`;

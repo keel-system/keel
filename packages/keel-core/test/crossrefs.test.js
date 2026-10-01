@@ -6843,3 +6843,55 @@ test('CHK-SCEN-RESCUE-UNCOVERED: una espera que saca una operación expuesta no 
   assert.equal(ids(layers(false)).length, 1, 'sin operación expuesta, offered es un estado en vuelo');
   assert.deepEqual(ids(layers(true)), [], 'con acceptOrder expuesta, offered es una espera con plazo');
 });
+
+// ─── DSL 2.18: stalledAfter enlaza el plazo de un rescate con un parámetro ─────
+
+const stalledLayers = (stalledAfter, schedule = { cron: '0 * * * * *' }) => ({
+  domain: {
+    entities: {
+      Job: entity(
+        { status: { type: 'enum', values: ['queued', 'running', 'failed'], required: true } },
+        { lifecycle: { field: 'status', initial: 'queued', transitions: { queued: ['running'], running: ['failed'] } } }
+      )
+    }
+  },
+  'use-cases': {
+    operations: {
+      sweepJobs: {
+        description: 'Rescata los trabajos atascados.',
+        kind: 'command',
+        input: 'void',
+        ...(schedule ? { schedule } : {}),
+        transitions: [{ entity: 'Job', from: ['running'], to: 'failed', stalledAfter }]
+      }
+    }
+  }
+});
+const stalledManifest = { parameters: { jobTimeoutMinutes: { type: 'int', description: 'Minutos de plazo.' } } };
+const stalledIds = (result) => result.findings.filter((f) => f.id === 'CHK-USECASES-STALLED-AFTER-INVALID');
+
+test('stalledAfter que nombra un parámetro int en un barrido: ningún hallazgo', () => {
+  const result = checkCrossRefs({
+    layers: stalledLayers({ parameter: 'jobTimeoutMinutes', unit: 'minutes' }),
+    manifest: stalledManifest
+  });
+  assert.deepEqual(stalledIds(result), []);
+});
+
+test('stalledAfter: parámetro ausente, de otro tipo, o fuera de un barrido es error', () => {
+  const unknown = checkCrossRefs({ layers: stalledLayers({ parameter: 'otro', unit: 'minutes' }), manifest: stalledManifest });
+  assert.equal(stalledIds(unknown).length, 1);
+  assert.match(stalledIds(unknown)[0].message, /no declara/);
+
+  const notInt = checkCrossRefs({
+    layers: stalledLayers({ parameter: 'jobTimeoutMinutes', unit: 'minutes' }),
+    manifest: { parameters: { jobTimeoutMinutes: { type: 'string', description: 'Un texto cualquiera.' } } }
+  });
+  assert.match(stalledIds(notInt)[0].message, /es de tipo string/);
+
+  const noSweep = checkCrossRefs({
+    layers: stalledLayers({ parameter: 'jobTimeoutMinutes', unit: 'minutes' }, null),
+    manifest: stalledManifest
+  });
+  assert.match(stalledIds(noSweep)[0].message, /no es un barrido/);
+});

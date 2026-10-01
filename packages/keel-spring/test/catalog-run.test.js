@@ -15,7 +15,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
-import { loadService } from 'keel-core';
+import { loadService, supportedDsl } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
 import { SPECS_SEAL_FILE, writeSpecsSeal } from '../src/lib/specs-seal.js';
 
@@ -235,7 +235,7 @@ function runSeal(mutate) {
 
   fs.mkdirSync(path.join(root, 'specs'), { recursive: true });
   fs.writeFileSync(path.join(root, 'specs', 'validation-scenarios.md'), '# x\n\nEl primero es `p25`.\n');
-  fs.writeFileSync(path.join(root, 'specs', 'service.keel.yaml'), 'keel: "2.17"\n');
+  fs.writeFileSync(path.join(root, 'specs', 'service.keel.yaml'), `keel: "${supportedDsl()[0]}"\n`);
   writeSpecsSeal(root);
   mutate?.(root);
   const runner = path.join(root, 'seal.sh');

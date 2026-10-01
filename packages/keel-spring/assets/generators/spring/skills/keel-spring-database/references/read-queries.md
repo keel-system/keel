@@ -129,7 +129,7 @@ del puerto, no escribir la consulta:
 |---|---|---|
 | saca filas de una **cola** (`schedule` + `transitions` desde el estado inicial) | `claimFor<Operación>(int batchSize)` | `UPDATE` condicional sobre el propio lifecycle: la marca es el estado de destino que el diseño declara, así que no hace falta ninguna columna en paralelo |
 | es el **`reconciledBy`** de una activación | `claimFor<Barrido><Activación>()` | marca en `reconciliation_claim`, que sobrevive al commit y **caduca**; el umbral sale de `unansweredAfterSeconds` y el candidato de `<activación>AwaitingSince` |
-| **rescata** un estado en vuelo (`transitions` desde un estado al que otra transición lleva) | `claimForStalled<Operación>(int batchSize)` | el mismo `UPDATE` condicional del primer caso **más una cota temporal**: solo entran las filas cuyo `<estado>Since`/`<estado>At` es más viejo que `sweep.<operación>.stalled-after-seconds` |
+| **rescata** un estado en vuelo (`transitions` desde un estado al que otra transición lleva) | `claimForStalled<Operación>(int batchSize)` | un `UPDATE` condicional que **arrienda** la fila (renueva `<estado>Since`/`<estado>At` y NO cambia el estado) **más una cota temporal**: solo entran las filas cuyo reloj es más viejo que `sweep.<operación>.stalled-after-seconds`, o que el parámetro que el diseño enlaza con `stalledAfter`. La transición al destino la hace el handler con el agregado |
 
 Ese tercero merece una nota, porque es el que se escribe mal con más facilidad. La cota **no es opcional**:
 sin ella «rescatar» es arrancarle el trabajo de las manos a la réplica que lo está haciendo ahora mismo. Y

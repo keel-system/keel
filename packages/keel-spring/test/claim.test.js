@@ -208,9 +208,9 @@ test('la cota va en las DOS consultas: sin ella en el UPDATE se rescata lo que a
   );
   assert.match(
     jpa,
-    /update JobJpa e set e\.status = :to where e\.id = :id and e\.status in :states and e\.runningSince < :staleBefore/
+    /update JobJpa e set e\.runningSince = :leasedAt where e\.id = :id and e\.status in :states and e\.runningSince < :staleBefore/
   );
-  assert.match(jpa, /int claimForStalledDrainJobs\(.*Instant staleBefore\);/);
+  assert.match(jpa, /int claimForStalledDrainJobs\(.*Instant staleBefore, @Param\("leasedAt"\) Instant leasedAt\);/);
   assert.match(jpa, /import java\.time\.Instant;/);
 });
 
@@ -223,7 +223,7 @@ test('el plazo es del generador y se lee por @Value en el ADAPTADOR, no en el ha
   // y el update de cada una.
   assert.match(adapter, /Instant staleBefore = Instant\.now\(\)\.minusSeconds\(stalledDrainJobsAfterSeconds\);/);
   assert.match(adapter, /candidatesForStalledDrainJobs\(states, staleBefore, PageRequest\.of\(0, drainJobsBatchSize\)\)/);
-  assert.match(adapter, /claimForStalledDrainJobs\(id, states, JobStatus\.DONE, staleBefore\) == 1/);
+  assert.match(adapter, /claimForStalledDrainJobs\(id, states, staleBefore, leasedAt\) == 1/);
   assert.match(adapter, /@Transactional\(propagation = Propagation\.REQUIRES_NEW\)/);
 });
 
@@ -235,6 +235,27 @@ test('el rescate documental filtra y marca en el mismo findAndModify, y por el m
   // Sin orden, con más atascados que batchSize los más antiguos no se rescatarían nunca.
   assert.match(adapter, /Sort\.by\(Sort\.Direction\.ASC, "runningSince"\)/);
   assert.match(adapter, /findAndModify\(query, update, options, JobDocument\.class\)/);
+});
+
+test('el rescate ARRIENDA la fila: renueva su reloj y deja la transición al dominio', () => {
+  // Corrida notifications (2026-09-30): el UPDATE del rescate dejaba la fila en su estado de
+  // destino sin los campos que ese estado exige (failed sin failureReason ni failedAt), y el
+  // agente tuvo que reescribir el JPQL para fijarlos con valores que build no puede saber. La
+  // transición es del dominio; el reclamo solo tiene que hacerla EXCLUSIVA, y para eso basta con
+  // renovar el reloj: la segunda réplica ya no ve la fila atascada.
+  const jpa = fileNamed(generateRepositories(modelFor(rescueSweep())), 'JobJpaRepository.java');
+  const update = /@Query\("(update JobJpa e set e\.runningSince = :leasedAt[^"]*)"\)\s+int claimForStalledDrainJobs/.exec(jpa);
+  assert.ok(update, jpa);
+  assert.ok(!update[1].includes('e.status ='), 'el rescate cambia el estado en el UPDATE');
+
+  const doc = fileNamed(generateDocumentRepositories(modelFor(rescueSweep(), 'mongodb')), 'JobRepositoryImpl.java');
+  const method = doc.slice(doc.indexOf('public List<Job> claimForStalledDrainJobs()'));
+  const body = method.slice(0, method.indexOf('return claimed;'));
+  assert.match(body, /Update update = new Update\(\)\.set\("runningSince", leasedAt\);/);
+  assert.ok(!/new Update\(\)\.set\("status"/.test(body), 'el rescate documental cambia el estado');
+
+  const port = fileNamed(generateRepositories(modelFor(rescueSweep())), 'JobRepository.java');
+  assert.match(port, /No cambia el estado: lo arrienda/);
 });
 
 test('sin el reloj no se inventa ninguno: no hay reclamo y el aviso dice qué falta', () => {

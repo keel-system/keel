@@ -458,6 +458,16 @@ de un `Map`, § anterior— y se lee sobre esa cadena. Y suele bastar con la com
 del `data` completo: un campo que el diseño manda omitir y llega como `null` es una clave extra,
 y JSONAssert ya falla por ella sin ninguna aserción dedicada.
 
+### La autoría de una escritura que no nace de una petición
+
+Cuando el diseño dice que `createdBy`/`updatedBy` llevan «el centinela del sistema» (escrituras
+de un `@Scheduled`, de un listener o de un rechazo síncrono del relay), el valor **lo fija el
+generador y no es un hueco del diseño**: `AuditorAwareConfig` devuelve `system`, o
+`system:<correlationId>` si la escritura lleva correlación. Afírmalo así:
+`assertThat(createdBy).matches("system(:.+)?")`, nunca contra un literal que te inventes ni
+solo con «no es el de ningún usuario». En una escritura que SÍ nace de una petición, el autor
+es el `sub` del token (`subOf(<credencial>)`), no su nombre de usuario.
+
 ## Idempotencia, credenciales y estado
 
 - `Idempotency-Key`: la base añade una uuid **nueva por request** en toda mutación.
@@ -1252,6 +1262,7 @@ verificación del correo es siempre manual.
 | `mailCount(dirección)` | Cuántos hay **ahora**, sin esperar. Para el segundo correo que NO debe existir |
 | `assertNoMailTo(dirección)` | Que no salió ninguno. El Then de los rechazos |
 | `relayRejectsRecipients()` / `relayAccepts()` | El relay de prueba **rechaza** todo destinatario con un 550 permanente, o vuelve a aceptar. Es el Given de un envío que el proveedor dice que no —el que acaba en `failed`—. Global mientras está activo; `resetState()` lo apaga siempre |
+| `rejectedAddress(nombre)` | Una dirección (`<nombre>@rejected.invalid`) que el relay rechaza **ella sola**, siempre, mientras acepta al resto del mismo envío. Es el Given del envío **parcialmente** rechazado; no hay que activar nada |
 
 Reglas, y las tres primeras son la misma idea:
 
@@ -1285,6 +1296,13 @@ Reglas, y las tres primeras son la misma idea:
   en el Given, el adaptador SMTP recibe el 550 de verdad y el servicio recorre el camino que lleva
   a `failed`. Escribir `failed` en el almacén para sembrarlo no prueba nada de ese camino. El
   rechazo es global: actívalo justo antes del When y afirma sobre ese envío.
+- **El rechazo de UN destinatario se pide por su dirección, no con el interruptor.** Si el
+  escenario dice «el relay rechaza a luis y acepta a ana», luis es `rejectedAddress("luis")`: el
+  buzón rechaza siempre el TLD reservado `.invalid` (RFC 2606) con un 550 a su `RCPT TO` y acepta
+  el resto de la transacción, así que el correo SALE para ana. Si el diseño escribió otra dirección
+  para el rechazado, es un `designGap`: no lo simules. Y al afirmar, ojo: el buzón indexa la
+  cabecera `To`, así que el correo guardado para ana sigue nombrando a luis — que a luis no le llegó
+  se afirma por el desenlace del envío (estado, evento, supresión), no con `assertNoMailTo(luis)`.
 - `resetState()` vacía el buzón entre clases, y apaga el rechazo si un flujo lo dejó activo. Un correo del flujo anterior haría que el primer
   `awaitMailTo` devolviera el mensaje equivocado — el mismo fallo que la purga de los canales evita
   en el broker.

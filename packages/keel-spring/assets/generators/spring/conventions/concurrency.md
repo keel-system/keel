@@ -111,10 +111,15 @@ Y cuando el barrido saca filas de un estado **en vuelo** sin ser una reconciliac
 lo que otra réplica dejó a medias al morir), el reclamo **también** viene generado, con una tercera forma:
 
 ```java
-List<Message> claimForStalledRescueStalledMessages(int batchSize);  // el UPDATE condicional + la cota
+List<Message> claimForStalledRescueStalledMessages(int batchSize);  // arriendo condicional + la cota
 ```
 
-Es el reclamo de la cola con una **cota temporal** encima, y esa cota no es opcional: sin ella «rescatar»
+Es el reclamo de la cola con una **cota temporal** encima y una diferencia que importa: **no cambia el
+estado, lo arrienda**. La escritura condicional solo renueva el reloj (`<estado>Since = ahora`), y eso basta
+para que otra réplica deje de ver la fila atascada; las filas vuelven **todavía en vuelo**, y la transición al
+destino la haces TÚ en el handler, con el método del agregado, que es quien fija los campos que ese estado
+exige (un motivo, un instante). Si el ciclo muere a medias, la fila sigue en vuelo con el reloj renovado y
+otro rescate la recoge pasado el plazo. La cota no es opcional: sin ella «rescatar»
 es arrancarle el trabajo de las manos a quien lo está haciendo ahora mismo. Tiene dos mitades con dueños
 distintos, y la frontera importa:
 
@@ -123,7 +128,8 @@ distintos, y la frontera importa:
   empezó ESTE trabajo, y un `updatedAt` de auditoría rejuvenece con cualquier otra escritura, lo que deja
   la fila invisible al rescate para siempre. Si la entidad no lo declara, `build` no genera nada y lo dice.
 - El **plazo** es del generador: `sweep.<operación>.stalled-after-seconds` en
-  `parameters/<perfil>/sweep.yaml`. Es la caducidad de un reclamo —«asumimos que la réplica que la tomó
+  `parameters/<perfil>/sweep.yaml` — **salvo que el diseño lo enlace** a un parámetro del servicio con
+  `transitions[].stalledAfter`, y entonces el adaptador lee ESE parámetro y no hay otro plazo que ajustar. Es la caducidad de un reclamo —«asumimos que la réplica que la tomó
   murió»—, misma familia que `outbox.relay.claim-timeout-ms`, no una decisión de negocio. Ahí está la
   diferencia con `unansweredAfterSeconds`, que sí la declara el diseño: allí lo que se espera es el
   desenlace de un TERCERO y cuánto silencio se le tolera es un acuerdo con él; aquí lo que falló es una

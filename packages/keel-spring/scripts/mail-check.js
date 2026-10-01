@@ -44,7 +44,8 @@ import {
   FIELDS,
   CHAOS_REJECT_CODE,
   CHAOS_REJECT_RECIPIENTS,
-  CHAOS_OFF
+  CHAOS_OFF,
+  REJECTED_DOMAIN
 } from '../src/lib/mail-probes.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -116,11 +117,13 @@ function composeDown(frontend, projectDir) {
 // resultado útil.
 
 function sendMail({ from, to, subject, html, text }) {
+  // Uno o varios destinatarios: el rechazo SELECTIVO necesita los dos en la MISMA transacción.
+  const recipients = Array.isArray(to) ? to : [to];
   return new Promise((resolve, reject) => {
     const boundary = 'keelcheck0000';
     const body = [
       `From: ${from}`,
-      `To: ${to}`,
+      `To: ${recipients.join(', ')}`,
       `Subject: ${subject}`,
       'MIME-Version: 1.0',
       `Content-Type: multipart/alternative; boundary="${boundary}"`,
@@ -140,7 +143,7 @@ function sendMail({ from, to, subject, html, text }) {
     const script = [
       'EHLO keel-check',
       `MAIL FROM:<${from}>`,
-      `RCPT TO:<${to}>`,
+      ...recipients.map((recipient) => `RCPT TO:<${recipient}>`),
       'DATA',
       `${body}\r\n.`,
       'QUIT'
@@ -413,6 +416,28 @@ async function scenarios() {
       if (ids.length === 0) await new Promise((resolve) => setTimeout(resolve, 300));
     }
     if (ids.length !== 1) throw new Error(`esperaba 1 mensaje tras apagar el rechazo y hay ${ids.length}`);
+  });
+
+  await check('MAIL-12', `un destinatario de ${REJECTED_DOMAIN} se rechaza ÉL SOLO y el resto del envío llega`, async () => {
+    // El rechazo SELECTIVO (corrida notifications, FL-DSP-021): lo que el chaos —todo o nada— no
+    // da. Si el compose no lleva MP_SMTP_ALLOWED_RECIPIENTS, o la regex no casa como RE2, o casa
+    // de más, este caso lo dice: el rechazado entra, o el aceptado no.
+    await purge();
+    await chaos(CHAOS_OFF);
+    const rejected = `luis@${REJECTED_DOMAIN}`;
+    const log = await sendMail({ from: SENDER, to: [OTHER_ADDRESS, rejected], subject: 'parcial', html: '<p>p</p>', text: 'p' });
+    const replies = log.split(/\r?\n/).filter((line) => /^\d{3} /.test(line));
+    // Saludo, EHLO, MAIL FROM y luego un RCPT por destinatario, en orden.
+    const [okRcpt, rejectedRcpt] = replies.slice(3, 5);
+    if (!/^250 /.test(okRcpt ?? '')) throw new Error(`el destinatario válido no se aceptó. Diálogo:\n${log}`);
+    if (!/^5\d\d /.test(rejectedRcpt ?? '')) throw new Error(`${rejected} no se rechazó con un 5xx. Diálogo:\n${log}`);
+    const deadline = Date.now() + 10000;
+    let ids = [];
+    while (Date.now() < deadline && ids.length === 0) {
+      ids = read(await search(OTHER_ADDRESS), FIELDS.searchIds) ?? [];
+      if (ids.length === 0) await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    if (ids.length !== 1) throw new Error(`el destinatario válido debía recibir 1 correo y tiene ${ids.length}`);
   });
 
   await check('MAIL-7', 'la purga deja el buzón vacío entre flujos', async () => {

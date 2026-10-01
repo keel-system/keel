@@ -75,6 +75,26 @@ import { DATABASES } from './stack-catalog.js';
  * propósito —la columna del reloj sin `snakeCase`— y viendo el check seguir en verde con 11/11.
  * Con la derivación compartida, esa misma mutación lo pone rojo.
  */
+/**
+ * El plazo del rescate tal como lo ve el check: la propiedad que lo fija y cuántos segundos son.
+ *
+ * Sin enlace es `sweep.<x>.stalled-after-seconds`, del generador. Enlazado a un parámetro del
+ * diseño (DSL 2.18, `stalledAfter`) es LA PROPIEDAD DE ESE PARÁMETRO, en su unidad: fijar la del
+ * generador ahí no movería nada —el adaptador ya no la lee— y el check mediría un plazo distinto
+ * del que cree estar midiendo.
+ */
+export function rescueTiming(rescue) {
+  const parameter = rescue.stalled.parameter;
+  if (!parameter) {
+    return {
+      property: `"sweep.${rescue.stalled.configKey}.stalled-after-seconds=${rescue.stalled.defaultSeconds}"`,
+      seconds: rescue.stalled.defaultSeconds
+    };
+  }
+  const units = Math.max(1, Math.round(rescue.stalled.defaultSeconds / parameter.unitSeconds));
+  return { property: `"${parameter.property}=${units}"`, seconds: units * parameter.unitSeconds };
+}
+
 export function rescueShape(entity, claim) {
   return {
     table: entity.tableName,
@@ -473,7 +493,7 @@ function documentClaimTestClass(model, scenarios, { datasource, packages }) {
     // rama relacional. La aserción de abajo es lo que hace fallable esta decisión.
     '"spring.profiles.active="',
     ...(queue ? [`"sweep.${queue.sweepKey}.batch-size=${BATCH_SIZE}"`] : []),
-    ...(rescue ? [`"sweep.${rescue.stalled.configKey}.stalled-after-seconds=${rescue.stalled.defaultSeconds}"`] : [])
+    ...(rescue ? [rescueTiming(rescue).property] : [])
   ];
 
   const scalars = new Set(['String', 'Integer', 'int', 'Long', 'long', 'BigDecimal', 'Boolean', 'boolean', 'Instant', 'UUID']);
@@ -599,7 +619,7 @@ function documentClaimTestClass(model, scenarios, { datasource, packages }) {
   }
 
   if (rescue && clockGetter) {
-    const plazo = rescue.stalled.defaultSeconds;
+    const plazo = rescueTiming(rescue).seconds;
     tests.push(`
     @Test
     void elRescateNoSeLlevaLoReciénPuestoEnVuelo() {
@@ -618,7 +638,11 @@ function documentClaimTestClass(model, scenarios, { datasource, packages }) {
         var reclamadas = adaptador.${rescue.method}();
 
         assertEquals(1, reclamadas.size(), "el rescate no encontró un documento abandonado más tiempo que el plazo");
-        assertEquals(${constant(rescue.to)}, mongo.findById(abandonada, ${documentClass}.class).${statusGetter}(), "no lo movió");
+        // El rescate ARRIENDA: el documento sigue en vuelo con el reloj renovado (ver la rama relacional).
+        var tras = mongo.findById(abandonada, ${documentClass}.class);
+        assertEquals(${constant(rescue.from[0])}, tras.${statusGetter}(), "el rescate cambió el estado: la transición es del dominio");
+        assertTrue(tras.${clockGetter}().isAfter(Instant.now().minusSeconds(60)), "el rescate no renovó el reloj");
+        assertTrue(adaptador.${rescue.method}().isEmpty(), "una segunda pasada volvió a rescatar el mismo documento");
     }
 
     @Test
@@ -734,7 +758,7 @@ function relationalClaimTestClass(model, scenarios, { datasource, packages, data
     '"spring.jpa.hibernate.ddl-auto=create-drop"',
     '"spring.flyway.enabled=false"',
     ...(queue ? [`"sweep.${queue.sweepKey}.batch-size=${BATCH_SIZE}"`] : []),
-    ...(rescue ? [`"sweep.${rescue.stalled.configKey}.stalled-after-seconds=${rescue.stalled.defaultSeconds}"`] : [])
+    ...(rescue ? [rescueTiming(rescue).property] : [])
   ];
 
   // Los enums de los campos obligatorios también se importan: la fila se siembra con
@@ -853,7 +877,7 @@ function relationalClaimTestClass(model, scenarios, { datasource, packages, data
   }
 
   if (rescue && clockGetter) {
-    const plazo = rescue.stalled.defaultSeconds;
+    const plazo = rescueTiming(rescue).seconds;
     tests.push(`
     @Test
     void elRescateNoSeLlevaLoReciénPuestoEnVuelo() {
@@ -875,7 +899,14 @@ function relationalClaimTestClass(model, scenarios, { datasource, packages, data
         var reclamadas = adaptador.${rescue.method}();
 
         assertEquals(1, reclamadas.size(), "el rescate no encontró una fila que lleva abandonada más que el plazo");
-        assertEquals(${constant(rescue.to)}, jpa.findById(abandonada).orElseThrow().${statusGetter}(), "no la movió");
+        // El rescate ARRIENDA: la fila sigue en vuelo, con el reloj renovado, y la transición la
+        // hace el dominio. Si el reclamo cambiara el estado, la fila quedaría en el destino sin
+        // los campos que ese estado exige (corrida notifications, 2026-09-30).
+        var tras = jpa.findById(abandonada).orElseThrow();
+        assertEquals(${constant(rescue.from[0])}, tras.${statusGetter}(), "el rescate cambió el estado: la transición es del dominio");
+        assertTrue(tras.${clockGetter}().isAfter(Instant.now().minusSeconds(60)), "el rescate no renovó el reloj");
+        // Y el arriendo es lo que da la exclusión: con el reloj renovado, otra pasada no la ve.
+        assertTrue(adaptador.${rescue.method}().isEmpty(), "una segunda pasada volvió a rescatar la misma fila");
     }
 
     @Test
@@ -914,7 +945,7 @@ function relationalClaimTestClass(model, scenarios, { datasource, packages, data
         var reclamadas = adaptador.${rescue.method}();
 
         assertEquals(1, reclamadas.size(), "el arnés atascó la fila pero el rescate no la encuentra");
-        assertEquals(${constant(rescue.to)}, jpa.findById(id).orElseThrow().${statusGetter}(), "no la movió");
+        assertEquals(${constant(rescue.from[0])}, jpa.findById(id).orElseThrow().${statusGetter}(), "el rescate cambió el estado: la transición es del dominio");
     }
 
     @Test

@@ -1126,7 +1126,12 @@ function mailYaml(model, profile) {
     `    password: ${envValue(profile, 'MAIL_PASSWORD', '')}`,
     '    properties:',
     '      mail:',
-    '        smtp:'
+    '        smtp:',
+    // Con varios destinatarios, sin esto JavaMail NO entrega a nadie en cuanto el relay
+    // rechaza a uno: el envío entero se cae por una dirección. Con él entrega a los
+    // aceptados y lanza igualmente, y SmtpMailSender dice a quién llegó y a quién no
+    // (MailDeliveryException#accepted/#rejected). Corrida notifications, FL-DSP-021.
+    '          sendpartial: true'
   ];
   if (isLocalish) {
     // Mailpit no exige ni autenticación ni cifrado, y pedirlos aquí haría fallar
@@ -1705,9 +1710,19 @@ function sweepYaml(model, profile) {
   // la reparten—, mientras que el plazo de abandono va por RECLAMO atascado, que es donde se
   // mide. Por eso son dos claves distintas y no una anidada: mover `stalled-after-seconds`
   // bajo la operación cambiaría variables de entorno que ya pueden estar desplegadas.
+  //
+  // Las dos claves pueden COINCIDIR: un rescate de una sola transición toma el nombre de su
+  // operación, igual que la cota del lote. Emitir un bloque por cada una dejaba la misma clave
+  // dos veces en el mapa, y SnakeYAML rechaza el documento entero: la aplicación no arrancaba
+  // (corrida notifications, 2026-09-30, `dispatch-queued-messages`). Por eso se agrupa por clave
+  // y cada bloque lleva las propiedades que le tocan.
+  const blocks = new Map();
+  const block = (key) => {
+    if (!blocks.has(key)) blocks.set(key, []);
+    return blocks.get(key);
+  };
   for (const key of sweepBatchKeys(model)) {
-    lines.push(
-      `  ${key}:`,
+    block(key).push(
       '    # Cota del lote por pasada: sin ella, una tanda con 50.000 filas atrasadas se procesa',
       '    # entera de una vez. Del generador, no del diseño: es capacidad, y se ajusta con datos',
       '    # de producción delante. Misma familia que outbox.relay.batch-size.',
@@ -1715,8 +1730,10 @@ function sweepYaml(model, profile) {
     );
   }
   for (const { operation, claim } of stalledClaims(model)) {
-    lines.push(
-      `  ${claim.stalled.configKey}:`,
+    // Enlazado a un parámetro del diseño (DSL 2.18): el plazo ya tiene su propiedad, y emitir
+    // también esta dejaría dos plazos para el mismo rescate, uno de ellos sin leer.
+    if (claim.stalled.parameter) continue;
+    block(claim.stalled.configKey).push(
       `    # ${operation.name}: un ${claim.entity} lleva más de esto en ${claim.stalled.state} —medido sobre`,
       `    # ${claim.stalled.stampField}— y se da por abandonado, así que otra réplica lo rescata.`,
       '    # Del generador, no del diseño. Tiene que quedar POR ENCIMA de lo que tarda un ciclo',
@@ -1728,6 +1745,7 @@ function sweepYaml(model, profile) {
       )}`
     );
   }
+  for (const [key, body] of blocks) lines.push(`  ${key}:`, ...body);
   return lines.join('\n') + '\n';
 }
 

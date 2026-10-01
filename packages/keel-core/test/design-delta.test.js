@@ -7,12 +7,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { tmpDir } from './helpers/tmp.js';
 import { diffDesigns } from '../src/lib/design-delta.js';
+import { supportedDsl } from '../src/lib/assets.js';
 import { splitScenarioBlocks, scenarioBody, scenarioFamilyOf } from '../src/lib/scenario-blocks.js';
 
 function design({ version = '1.0.0', layers = {}, scenarios = null }) {
   const dir = tmpDir('keel-delta-');
   const manifest = [
-    'keel: "2.17"',
+    `keel: "${supportedDsl()[0]}"`,
     'service:',
     '  name: demo',
     `  version: ${version}`,

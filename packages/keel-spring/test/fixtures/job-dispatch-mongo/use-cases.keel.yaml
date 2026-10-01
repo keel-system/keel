@@ -56,6 +56,7 @@ operations:
       - entity: Job
         from: [running]
         to: done
+        stalledAfter: { parameter: abandonAfterMinutes, unit: minutes }
     rules:
       - Un trabajo lo toma un solo ciclo, aunque el despachador corra en varias réplicas.
       - Un trabajo que lleva en running más de lo que tarda un ciclo se da por abandonado y se cierra.

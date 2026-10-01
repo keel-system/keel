@@ -32,7 +32,7 @@
 // el resto lo ignora.
 
 import { declaredBuckets } from './buckets.js';
-import { validateCommand as mailValidateCmd, resetCommand as mailResetCmd, HTTP_PORT as MAIL_HTTP_PORT, SMTP_PORT as MAIL_SMTP_PORT, SERVICE as MAIL_SERVICE, IMAGE as MAIL_IMAGE, CHAOS_ENV as MAIL_CHAOS_ENV } from './mail-probes.js';
+import { validateCommand as mailValidateCmd, resetCommand as mailResetCmd, HTTP_PORT as MAIL_HTTP_PORT, SMTP_PORT as MAIL_SMTP_PORT, SERVICE as MAIL_SERVICE, IMAGE as MAIL_IMAGE, CHAOS_ENV as MAIL_CHAOS_ENV, SELECTIVE_REJECT_ENV as MAIL_SELECTIVE_REJECT_ENV } from './mail-probes.js';
 
 // Credenciales de la infraestructura de prueba local (LocalStack y MinIO las
 // ignoran; el SDK y la AWS CLI exigen que EXISTAN). Van al contenedor devtools
@@ -932,7 +932,11 @@ export const MAIL_SINK = {
         // Habilita la API de chaos, que arranca con todo a probabilidad 0: sin esto el
         // arnés no puede pedir que el relay rechace, y el estado `failed` de un envío no
         // se alcanza en caja negra.
-        ...MAIL_CHAOS_ENV
+        ...MAIL_CHAOS_ENV,
+        // Rechazo SELECTIVO: los destinatarios del TLD reservado `.invalid` reciben un 550 a su
+        // RCPT TO y el resto de la transacción sigue. Es lo que alcanza el envío parcialmente
+        // rechazado, que el chaos —todo o nada— no puede (mail-probes.js).
+        ...MAIL_SELECTIVE_REJECT_ENV
       },
       ports: [`${MAIL_SMTP_PORT}:${MAIL_SMTP_PORT}`, `${MAIL_HTTP_PORT}:${MAIL_HTTP_PORT}`]
     }

@@ -107,3 +107,16 @@ test('los índices que SÍ son columnas del padre se siguen anotando', () => {
   );
   assert.match(entity, /@Index\(/, 'se perdieron los índices legítimos');
 });
+
+test('una lista conserva su ORDEN y se carga por lote', () => {
+  // Sin @OrderColumn una `List` es una bolsa para Hibernate: ni el SELECT promete el orden en
+  // que se guardó ni una modificación hace otra cosa que borrar y reinsertar todo. El diseño de la
+  // corrida notifications lo pedía en voz alta y el agente lo añadió a mano en un archivo de build.
+  // El lote es el mismo que ya llevan las colecciones de entidades (@BatchSize en relationMany).
+  const { entity } = withIndexedList();
+  const block = entity.slice(entity.indexOf('@ElementCollection'), entity.indexOf('private List<String> tags'));
+  assert.match(block, /@OrderColumn\(name = "tags_order"\)/, block);
+  assert.match(block, /@BatchSize\(size = \d+\)/, block);
+  assert.match(entity, /^import jakarta\.persistence\.OrderColumn;$/m);
+  assert.match(entity, /^import org\.hibernate\.annotations\.BatchSize;$/m);
+});

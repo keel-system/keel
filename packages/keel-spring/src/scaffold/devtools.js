@@ -10,6 +10,7 @@ import { declaredBuckets } from '../lib/buckets.js';
 import { deadLetterDestination, deadLetterSubscriptions, subscriptionDestination } from '../lib/dead-letter.js';
 import { LOCAL_AWS_ENV, MC_BINARY_URL } from '../lib/stack-catalog.js';
 import { messagingTopologyChecks } from './messaging-provisioning.js';
+import { scopingClaimChecks } from './auth-provisioning.js';
 
 // Paquetes base del toolbox: shell + utilidades de red/JSON comunes a todos los checks.
 const BASE_PACKAGES = ['bash', 'curl', 'jq', 'netcat-openbsd'];
@@ -183,6 +184,11 @@ export function validateInfraScript(selected, service, model = null) {
   // catálogo (`sns list-topics`) da verde con la lista vacía, que es justo el
   // estado roto — LocalStack sano y ni un solo recurso sembrado.
   for (const { label, cmd } of messagingTopologyChecks(model ?? {})) {
+    checks.push(`check ${sq(label)} ${sq(`${service.name}-devtools`)} ${sq(cmd)}`);
+  }
+  // Alcance por recurso: el claim llega en el token de cada usuario acotado. Sin esto, un
+  // atributo escrito en el usuario equivocado pasaba la validación en verde.
+  for (const { label, cmd } of model ? scopingClaimChecks(model) : []) {
     checks.push(`check ${sq(label)} ${sq(`${service.name}-devtools`)} ${sq(cmd)}`);
   }
 

@@ -1158,6 +1158,39 @@ export const MUTATIONS = [
     mutate: (d) => withClientKey(d, ['required', 'race', 'reuse']),
     expect: ['CHK-USECASES-IDEM-SCOPE-UNDECIDED']
   },
+  // ─── DSL 2.18: el plazo de un rescate, enlazado a un parámetro ────────────────
+  // El base no tiene barridos: closeTicket no declara schedule, así que cada mutación dispara ese
+  // motivo una vez, más el suyo propio si lo tiene (de ahí las repeticiones).
+  {
+    id: 'M-USECASES-STALLED-AFTER-NO-SWEEP',
+    title: 'un plazo de rescate en una operación que no es un barrido',
+    mutate: (d) => {
+      d.manifest.parameters = {
+        closeAfterMinutes: { type: 'int', description: 'Minutos hasta cerrar.', default: 15, testValue: 15, requiredInProduction: false }
+      };
+      ops(d).closeTicket.transitions[0].stalledAfter = { parameter: 'closeAfterMinutes', unit: 'minutes' };
+    },
+    expect: ['CHK-USECASES-STALLED-AFTER-INVALID']
+  },
+  {
+    id: 'M-USECASES-STALLED-AFTER-UNKNOWN-PARAM',
+    title: 'el plazo de un rescate nombra un parámetro que el manifiesto no declara',
+    mutate: (d) => {
+      ops(d).closeTicket.transitions[0].stalledAfter = { parameter: 'noExiste', unit: 'minutes' };
+    },
+    expect: ['CHK-USECASES-STALLED-AFTER-INVALID', 'CHK-USECASES-STALLED-AFTER-INVALID']
+  },
+  {
+    id: 'M-USECASES-STALLED-AFTER-NOT-INT',
+    title: 'el plazo de un rescate nombra un parámetro que no es entero',
+    mutate: (d) => {
+      d.manifest.parameters = {
+        closeAfter: { type: 'string', description: 'Un texto cualquiera.', default: 'x', testValue: 'x', requiredInProduction: false }
+      };
+      ops(d).closeTicket.transitions[0].stalledAfter = { parameter: 'closeAfter', unit: 'minutes' };
+    },
+    expect: ['CHK-USECASES-STALLED-AFTER-INVALID', 'CHK-USECASES-STALLED-AFTER-INVALID']
+  },
   {
     id: 'M-USECASES-IDEM-PARTITION-UNKNOWN',
     title: 'el ámbito de la clave nombra un campo que la operación no recibe',

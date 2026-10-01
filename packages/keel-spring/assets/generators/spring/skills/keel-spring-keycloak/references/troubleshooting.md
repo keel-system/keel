@@ -24,6 +24,13 @@ Síntoma → causa → arreglo. Sondeo básico en
 - El rol existe pero no está **asignado** al usuario (`add-roles` olvidado).
 - Mayúsculas/prefijos: el `JwtAuthConverter` de build mapea el nombre tal
   cual; `ADMIN` ≠ `admin`. Usa exactamente los nombres de `security.keel.yaml`.
+- **El 403 trae el `code` del ALCANCE** (el `error` de `authentication.scoping`,
+  p. ej. `APPLICATION_FORBIDDEN`) **y sale en varios roles a la vez**: no es el
+  servidor, es el claim. Antes de tocar nada, decodifica el token de esos
+  usuarios y mira si el claim está y con qué valor. Un atributo escrito en otro
+  usuario (`editor-2` en vez de `editor`) deja al primero sin claim y produce
+  exactamente este síntoma en cascada. `validate-infra.sh` lo comprueba usuario
+  a usuario: si lo pasaste en verde y aun así ocurre, se re-sembró el realm después.
 
 ## La app no arranca: `Unable to resolve the Configuration with the provided Issuer`
 

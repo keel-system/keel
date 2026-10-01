@@ -190,7 +190,7 @@ void listingDoesNotScaleWithPageSize() {
 }
 ```
 
-Tres reglas para que estos escenarios no se conviertan en ruido:
+Cuatro reglas para que estos escenarios no se conviertan en ruido:
 
 1. **Se compara la FORMA, no el número.** «Veinte elementos no cuestan más consultas que
    dos» sobrevive a un índice nuevo, a una versión de Hibernate y a un `embed` añadido.
@@ -200,6 +200,14 @@ Tres reglas para que estos escenarios no se conviertan en ruido:
    entero y la comparten todas las clases; cualquier otra llamada en medio la ensucia.
 3. **Se mide la segunda ejecución.** La primera paga la caché de planes, la de segundo
    nivel y la carga perezosa de metadatos.
+
+4. **Si el When ESCRIBE, se mide con `queryExecutions()`, no con `queryCount()`.**
+   `queryCount()` cuenta toda sentencia preparada, INSERT y UPDATE incluidos: un comando
+   que guarda una colección de 20 elementos paga 20 INSERT más que con 2, y «comprobar las
+   supresiones no crece con los destinatarios» sale rojo aunque la comprobación sea una
+   sola consulta por lote (corrida notifications, `FL-NTF-040`). `queryExecutions()` solo
+   cuenta consultas; su punto ciego son las cargas por id y las colecciones perezosas, así
+   que en una LECTURA pura sigue mandando `queryCount()`.
 
 Y el corolario que importa al diseñar: **el N+1 más caro no suele ser de SQL, es de red**
 — una hidratación (`onMiss: fetch`) o una llamada saliente dentro de un bucle sobre la

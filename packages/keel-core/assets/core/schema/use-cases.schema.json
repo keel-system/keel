@@ -70,6 +70,22 @@
                   "type": "string",
                   "description": "Estado destino."
                 },
+                "stalledAfter": {
+                  "type": "object",
+                  "required": ["parameter", "unit"],
+                  "additionalProperties": false,
+                  "description": "Solo en un barrido (operación con schedule) que saca a la entidad de un estado EN VUELO: el plazo pasado el cual una fila en 'from' se da por abandonada y se rescata. Sin él lo fija el generador como mecánica (la caducidad de un reclamo); se declara cuando expirar tiene consecuencia de NEGOCIO —el envío se da por fallido y no se reintenta—, y entonces el plazo es un parámetro del servicio y no un número escondido en el generador.",
+                  "properties": {
+                    "parameter": {
+                      "type": "string",
+                      "description": "Nombre de un service.parameters de tipo int: el valor del plazo."
+                    },
+                    "unit": {
+                      "enum": ["seconds", "minutes", "hours"],
+                      "description": "Unidad en la que el parámetro expresa el plazo."
+                    }
+                  }
+                },
                 "description": { "type": "string" }
               }
             }

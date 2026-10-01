@@ -17,6 +17,7 @@ import { HARNESSES } from '../src/lib/harness.js';
 import { FLOW_REVIEW_FILE, MAX_PASSES, conventionsDigest, flowDigests, flowReviewPlan, scenariosDigest } from '../src/lib/flow-review.js';
 import { SPEC_SIDE_FILES } from '../src/lib/spec-files.js';
 import { validateService } from '../src/lib/validate-service.js';
+import { supportedDsl } from '../src/lib/assets.js';
 
 const flow = (id, then) => `### ${id}: título\n**Given**: algo.\n**When**: \`op\`\n**Then**:\n1. Status \`${then}\`.\n\n`;
 const SCENARIOS = `# x\n\n${flow('FL-PRD-001', 201)}${flow('FL-PRD-010', 200)}${flow('FL-SEC-001', 401)}`;
@@ -176,7 +177,7 @@ test('flow-review.yaml viaja al publicar y no al derivar', () => {
 
 test('keel validate dice qué hacer: carear lo que cambió, o decidir', () => {
   const dir = tmpDir('keel-flow-validate-');
-  fs.writeFileSync(path.join(dir, 'service.keel.yaml'), 'keel: "2.17"\nservice:\n  name: demo\n  version: 1.0.0\n  description: Un servicio de prueba para el careo.\nlayers:\n  domain: domain.keel.yaml\n  use-cases: use-cases.keel.yaml\n');
+  fs.writeFileSync(path.join(dir, 'service.keel.yaml'), `keel: "${supportedDsl()[0]}"\n` + 'service:\n  name: demo\n  version: 1.0.0\n  description: Un servicio de prueba para el careo.\nlayers:\n  domain: domain.keel.yaml\n  use-cases: use-cases.keel.yaml\n');
   fs.writeFileSync(path.join(dir, 'domain.keel.yaml'), 'entities:\n  Thing:\n    description: Una cosa cualquiera del dominio.\n    fields:\n      id: { type: uuid, id: true, generated: true }\n');
   fs.writeFileSync(path.join(dir, 'use-cases.keel.yaml'), 'operations:\n  getThing:\n    description: Devuelve una cosa por su identificador.\n    kind: query\n    input: "void"\n    output: "void"\n');
   fs.writeFileSync(path.join(dir, 'validation-scenarios.md'), SCENARIOS);

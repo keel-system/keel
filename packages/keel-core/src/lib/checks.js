@@ -117,6 +117,13 @@ export const CHECKS = {
   },
 
   // ─── use-cases ─────────────────────────────────────────────────────────────
+  'CHK-USECASES-STALLED-AFTER-INVALID': {
+    layer: 'use-cases',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'el plazo de un rescate apunta a un parámetro que no existe, no es entero, o no hay barrido',
+    closes: 'nombrar en stalledAfter.parameter un service.parameters de tipo int, en una operación con schedule'
+  },
   'CHK-USECASES-IDEM-PARTITION-UNKNOWN': {
     layer: 'use-cases',
     severity: 'error',

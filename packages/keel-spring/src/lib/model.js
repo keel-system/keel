@@ -70,7 +70,7 @@ export function buildModel({ manifest, layers, stack = null }) {
     mail: Boolean(layers.mail)
   };
 
-  const enums = collectEnums(domain, layers['http-clients'], warnings);
+  const enums = collectEnums(domain, layers['http-clients'], warnings, layers);
   const inlineEnumName = buildInlineEnumIndex(enums);
   const valueObjects = collectValueObjects(domainTypes, domainTypes, inlineEnumName, hasPersistence);
   const formatTypes = collectFormatTypes(domainTypes);
@@ -115,7 +115,7 @@ export function buildModel({ manifest, layers, stack = null }) {
         eventTypesByChannel: channels.eventTypesByChannel
       }
     : null;
-  classifyClaims(services, entities, layers, warnings);
+  classifyClaims(services, entities, layers, warnings, service);
   classifyGuardClaims(services, entities, layers);
   const subscriptions = collectSubscriptions(layers, services, domainTypes, inlineEnumName, warnings, stack, service);
   const pagination = layers.api?.pagination ?? null;
@@ -300,7 +300,7 @@ const PARAM_JAVA_TYPES = {
 
 // ─── Enums ───────────────────────────────────────────────────────────────────
 
-function collectEnums(domain, httpClients, warnings) {
+function collectEnums(domain, httpClients, warnings, layers = {}) {
   const enums = [];
   const byName = new Map();
 
@@ -352,6 +352,24 @@ function collectEnums(domain, httpClients, warnings) {
       }
       addInline(`${pascalCase(callName)}Response`, call.response?.fields);
     }
+  }
+
+  // Enums inline en los payloads de las operaciones y de los mensajes. `payloadFields` les
+  // da nombre (`<Op><Campo>`, `<Evento><Campo>`) y los commands, DTOs y eventos los importan,
+  // así que tienen que existir como clase: sin esto el proyecto recién generado no compilaba
+  // (corrida notifications, 2026-09-30: `ReportEmailBounceBounceType`, `SuppressAddressReason`).
+  // El owner es el MISMO que usa `payloadFields`; una entrada derivada de entidad
+  // (`{ entity: X }`) ya está cubierta arriba.
+  for (const [opName, op] of Object.entries(layers['use-cases']?.operations ?? {})) {
+    for (const payload of [op?.input, op?.output]) {
+      if (payload && typeof payload === 'object' && payload.fields) addInline(pascalCase(opName), payload.fields);
+    }
+  }
+  for (const [name, def] of Object.entries(layers.messaging?.publishing?.events ?? {})) {
+    addInline(pascalCase(name), def?.payload);
+  }
+  for (const [name, def] of Object.entries(layers.messaging?.subscriptions ?? {})) {
+    addInline(pascalCase(name), def?.payload);
   }
 
   return enums;
@@ -1129,7 +1147,7 @@ function collectOperations(layers, domainTypes, inlineEnumName, service, warning
  * el paso `queued → sending` lo declara la operación interna que el barrido invoca, no
  * el barrido.
  */
-function classifyClaims(services, entities, layers, warnings) {
+function classifyClaims(services, entities, layers, warnings, serviceMeta = null) {
   const byName = new Map(entities.map((entity) => [entity.name, entity]));
   const bySubscription = new Set(
     Object.values(layers.messaging?.subscriptions ?? {})
@@ -1239,7 +1257,7 @@ function classifyClaims(services, entities, layers, warnings) {
         const base = `${pascalCase(operation.name)}${transitions.length > 1 ? pascalCase(transition.to) : ''}`;
 
         if (inFlight.length > 0) {
-          const rescue = rescueClaim({ operation, transition, entity, inFlight, base, warnings });
+          const rescue = rescueClaim({ operation, transition, entity, inFlight, base, warnings, service: serviceMeta });
           if (rescue) claims.push(rescue);
         }
 
@@ -1383,7 +1401,7 @@ function stampClaimClocks(services) {
  * decisión de negocio que el diseño declara (`unansweredAfterSeconds`). Aquí lo que
  * falló es una réplica NUESTRA, y cuánto tarda en dar señales de vida es mecánica.
  */
-function rescueClaim({ operation, transition, entity, inFlight, base, warnings }) {
+function rescueClaim({ operation, transition, entity, inFlight, base, warnings, service = null }) {
   const gap = (reason) => {
     warnings.push(
       `use-cases: ${operation.name} saca ${transition.entity} de ${inFlight.join(', ')}, que es un estado EN VUELO: ` +
@@ -1431,8 +1449,35 @@ function rescueClaim({ operation, transition, entity, inFlight, base, warnings }
       // y no por operación: un barrido con dos transiciones rescata dos cosas distintas
       // y cada una tiene su propio plazo.
       configKey: kebabCase(base),
-      defaultSeconds: 300
+      defaultSeconds: 300,
+      // DSL 2.18: el diseño puede enlazar el plazo a un parámetro del servicio
+      // (`transitions[].stalledAfter`) cuando expirar tiene consecuencia de negocio. Entonces el
+      // plazo deja de ser del generador: se lee de ese parámetro, y `sweep.<x>.stalled-after-seconds`
+      // no se emite — dos plazos para el mismo rescate es exactamente lo que dejó la corrida
+      // notifications (el del diseño en un parámetro que nadie leía, y 300 s en el reclamo).
+      parameter: stalledParameter(transition.stalledAfter, service)
     }
+  };
+}
+
+/** Segundos por unidad de `stalledAfter.unit`. */
+const STALLED_UNIT_SECONDS = { seconds: 1, minutes: 60, hours: 3600 };
+
+/**
+ * El enlace de un rescate con su parámetro, ya resuelto a lo que necesita quien lo emite: la
+ * propiedad de configuración que ese parámetro ya tiene (la de service-parameters.js) y cuántos
+ * segundos vale una unidad. Sin enlace, o con uno que no casa (lo rechaza `keel validate`), null.
+ */
+function stalledParameter(link, service) {
+  if (!link?.parameter) return null;
+  const parameter = (service?.parameters ?? []).find((candidate) => candidate.name === link.parameter);
+  const unitSeconds = STALLED_UNIT_SECONDS[link.unit];
+  if (!parameter || !unitSeconds) return null;
+  return {
+    name: parameter.name,
+    unit: link.unit,
+    unitSeconds,
+    property: `${service.artifactId}.${parameter.key}`
   };
 }
 
@@ -1932,6 +1977,15 @@ function collectSecurity(layers, services, routeBase, warnings) {
     protocol,
     matchers,
     defaultAuthority: accessAuthority(defaultRule),
+    // La regla de cierre, sin traducir: quien tenga que AUTENTICARSE contra una ruta que no
+    // tiene matcher propio (el arnés, contra el actuator) necesita saber qué credencial la
+    // satisface, y eso no se puede leer de la cadena de Spring ya renderizada.
+    defaultRule: {
+      level: defaultRule.level ?? 'required',
+      roles: defaultRule.roles ?? [],
+      permissions: defaultRule.permissions ?? [],
+      scopes: defaultRule.scopes ?? []
+    },
     usesAuthorities,
     serviceAuth,
     callerIdentity,

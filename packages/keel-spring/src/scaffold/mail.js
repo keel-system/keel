@@ -58,6 +58,7 @@ function renderMailMessage(model) {
 `
     : '';
   const attachmentsField = mail.attachments ? ', List<Attachment> attachments' : '';
+  const attachmentsArg = mail.attachments ? ', attachments' : '';
   const attachmentsNormalize = mail.attachments
     ? '\n        attachments = attachments == null ? List.of() : List.copyOf(attachments);'
     : '';
@@ -82,14 +83,35 @@ function renderMailMessage(model) {
  * @param subject asunto ya interpolado
  * @param html    cuerpo HTML${mail.hasHtml ? '' : ' (el diseño no lo declara: siempre null)'}
  * @param text    cuerpo en texto plano${mail.hasText ? '' : ' (el diseño no lo declara: siempre null)'}
+ * @param headers cabeceras propias (p. ej. un {@code X-…} con el id del envío, que el proveedor
+ *                devuelve con el rebote), ya saneadas; vacío si no hay ninguna
  */
 public record MailMessage(String from, String replyTo, List<String> to, List<String> cc, String subject, String html,
-        String text${attachmentsField}) {
+        String text${attachmentsField}, Map<String, String> headers) {
+
+    /**
+     * Cabeceras que este record ya gobierna con sus propios campos, o que compone el
+     * transporte. Una cabecera propia con uno de estos nombres duplicaría o pisaría lo que el
+     * resto del mensaje dice, así que se rechaza al construir.
+     */
+    private static final Set<String> RESERVED_HEADERS = Set.of(
+            "from", "sender", "to", "cc", "bcc", "reply-to", "subject", "date", "message-id",
+            "mime-version", "return-path");
+
+    /** Nombre de cabecera (RFC 5322): imprimibles sin espacio ni dos puntos. */
+    private static final Pattern HEADER_NAME = Pattern.compile("[!-9;-~]+");
 
     public MailMessage {
         to = to == null ? List.of() : List.copyOf(to);
         cc = cc == null ? List.of() : List.copyOf(cc);
         subject = sanitizeSubject(subject);${attachmentsNormalize}
+        headers = sanitizeHeaders(headers);
+    }
+
+    /** Sin cabeceras propias: la forma habitual. */
+    public MailMessage(String from, String replyTo, List<String> to, List<String> cc, String subject, String html,
+            String text${attachmentsField}) {
+        this(from, replyTo, to, cc, subject, html, text${attachmentsArg}, Map.of());
     }
 
     /**
@@ -99,11 +121,47 @@ public record MailMessage(String from, String replyTo, List<String> to, List<Str
     private static String sanitizeSubject(String value) {
         return value == null ? null : value.replaceAll("[\\\\r\\\\n]", " ").trim();
     }
+
+    /**
+     * Las cabeceras propias se sanean AQUÍ y no en el adaptador, por lo mismo que el asunto: un
+     * salto de línea en el valor abre otra cabecera, y ningún camino debe poder construir el
+     * mensaje sin pasar por esto. El NOMBRE se valida en vez de sanearse: un nombre malformado o
+     * reservado es un error de quien compone el mensaje, no un dato que haya que arreglar.
+     */
+    private static Map<String, String> sanitizeHeaders(Map<String, String> value) {
+        if (value == null || value.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, String> clean = new LinkedHashMap<>();
+        value.forEach((name, content) -> {
+            if (name == null || !HEADER_NAME.matcher(name).matches()) {
+                throw new IllegalArgumentException("Nombre de cabecera no válido: " + name);
+            }
+            String lower = name.toLowerCase(Locale.ROOT);
+            if (RESERVED_HEADERS.contains(lower) || lower.startsWith("content-")) {
+                throw new IllegalArgumentException("La cabecera " + name + " la compone el propio mensaje");
+            }
+            clean.put(name, content == null ? "" : content.replaceAll("[\\\\r\\\\n]", " ").trim());
+        });
+        return Collections.unmodifiableMap(clean);
+    }
 ${attachments}}`;
 
   return {
     path: javaPath(model, DOMAIN_PKG, 'MailMessage'),
-    content: javaFile(`${model.service.basePackage}.${DOMAIN_PKG}`, ['java.util.List'], body)
+    content: javaFile(
+      `${model.service.basePackage}.${DOMAIN_PKG}`,
+      [
+        'java.util.Collections',
+        'java.util.LinkedHashMap',
+        'java.util.List',
+        'java.util.Locale',
+        'java.util.Map',
+        'java.util.Set',
+        'java.util.regex.Pattern'
+      ],
+      body
+    )
   };
 }
 
@@ -135,13 +193,52 @@ public interface MailSender {
 }`;
 
   const exception = `/**
- * El proveedor no aceptó el mensaje. Envuelve la causa del transporte para que la
- * capa de aplicación no tenga que conocer jakarta.mail.
+ * El proveedor no aceptó el mensaje, o no lo aceptó para TODOS los destinatarios. Envuelve la
+ * causa del transporte para que la capa de aplicación no tenga que conocer jakarta.mail.
+ *
+ * <p><b>Un fallo puede ser parcial</b>, y el caso de uso tiene que poder distinguirlo sin
+ * desenvolver la causa: el transporte envía con {@code mail.smtp.sendpartial=true}, así que si el
+ * relay rechaza a un destinatario y acepta a otro, el correo SALE para los aceptados y aun así se
+ * lanza esta excepción. Tratarla como «no salió» repetiría o daría por fallido un envío que ya
+ * llegó. Por eso lleva quién lo recibió ({@link #accepted()}), a quién se rechazó
+ * ({@link #rejected()}) y la respuesta del relay ({@link #detail()}). Sin envío parcial (un error
+ * de conexión, un rechazo del remitente) {@code accepted()} está vacío.
  */
 public class MailDeliveryException extends RuntimeException {
 
+    private final Set<String> accepted;
+    private final Set<String> rejected;
+    private final String detail;
+
     public MailDeliveryException(String message, Throwable cause) {
+        this(message, cause, Set.of(), Set.of(), cause == null ? null : cause.getMessage());
+    }
+
+    public MailDeliveryException(String message, Throwable cause, Set<String> accepted, Set<String> rejected, String detail) {
         super(message, cause);
+        this.accepted = accepted == null ? Set.of() : Set.copyOf(accepted);
+        this.rejected = rejected == null ? Set.of() : Set.copyOf(rejected);
+        this.detail = detail;
+    }
+
+    /** Destinatarios a los que el relay SÍ entregó: si no está vacío, el correo salió para ellos. */
+    public Set<String> accepted() {
+        return accepted;
+    }
+
+    /** Destinatarios que el relay rechazó de forma definitiva (un 5xx a su RCPT TO). */
+    public Set<String> rejected() {
+        return rejected;
+    }
+
+    /** ¿El correo salió para alguno? Es la pregunta que decide el desenlace del envío. */
+    public boolean partial() {
+        return !accepted.isEmpty();
+    }
+
+    /** La respuesta del relay, para registrarla junto al desenlace; puede ser null. */
+    public String detail() {
+        return detail;
     }
 }`;
 
@@ -159,7 +256,7 @@ public class MailDeliveryException extends RuntimeException {
     },
     {
       path: javaPath(model, DOMAIN_PKG, 'MailDeliveryException'),
-      content: javaFile(`${model.service.basePackage}.${DOMAIN_PKG}`, [], exception)
+      content: javaFile(`${model.service.basePackage}.${DOMAIN_PKG}`, ['java.util.Set'], exception)
     }
   ];
 }
@@ -173,12 +270,18 @@ function renderSmtpMailSender(model) {
     `${model.service.basePackage}.${DOMAIN_PKG}.MailDeliveryException`,
     `${model.service.basePackage}.${DOMAIN_PKG}.MailMessage`,
     `${model.service.basePackage}.${PORT_PKG}.MailSender`,
+    'jakarta.mail.Address',
     'jakarta.mail.MessagingException',
+    'jakarta.mail.SendFailedException',
+    'jakarta.mail.internet.InternetAddress',
     'jakarta.mail.internet.MimeMessage',
+    'java.util.LinkedHashSet',
+    'java.util.Set',
     'org.slf4j.Logger',
     'org.slf4j.LoggerFactory',
     'org.springframework.beans.factory.annotation.Value',
     'org.springframework.mail.MailException',
+    'org.springframework.mail.MailSendException',
     'org.springframework.mail.javamail.JavaMailSender',
     'org.springframework.mail.javamail.MimeMessageHelper',
     'org.springframework.stereotype.Component'
@@ -298,15 +401,64 @@ ${fromGuard}
                 helper.setCc(message.cc().toArray(String[]::new));
             }
             helper.setSubject(nullToEmpty(message.subject()));${replyToBlock}
+            // Cabeceras propias: nombre y valor ya vienen validados y saneados por el
+            // constructor de MailMessage.
+            for (var header : message.headers().entrySet()) {
+                mime.addHeader(header.getKey(), header.getValue());
+            }
 ${bodyBlock}${attachmentsBlock}
             javaMailSender.send(mime);
             log.info("Correo entregado al proveedor: destinatarios={} asunto=\\"{}\\"",
                     message.to().size(), message.subject());
         } catch (MailException | MessagingException e) {
             // Se envuelve y se relanza: un envío que falla en silencio es un correo
-            // que nadie recibe y del que nadie se entera.
-            throw new MailDeliveryException("El proveedor no aceptó el mensaje", e);
+            // que nadie recibe y del que nadie se entera. Pero se dice A QUIÉN: con
+            // sendpartial el relay puede haber entregado a unos y rechazado a otros, y
+            // eso solo lo sabe el SendFailedException que viaja dentro.
+            SendFailedException rejection = sendFailure(e);
+            if (rejection == null) {
+                throw new MailDeliveryException("El proveedor no aceptó el mensaje", e);
+            }
+            Set<String> accepted = addresses(rejection.getValidSentAddresses());
+            Set<String> rejected = addresses(rejection.getInvalidAddresses());
+            String detail = rejection.getNextException() != null
+                    ? rejection.getNextException().getMessage()
+                    : rejection.getMessage();
+            throw new MailDeliveryException(
+                    accepted.isEmpty() ? "El proveedor no aceptó el mensaje" : "El proveedor rechazó a parte de los destinatarios",
+                    e, accepted, rejected, detail);
         }
+    }
+
+    /**
+     * El SendFailedException de la cadena de causas, si lo hay. JavaMailSenderImpl lo envuelve
+     * en un MailSendException, una entrada por mensaje; aquí se manda uno.
+     */
+    private static SendFailedException sendFailure(Exception e) {
+        if (e instanceof MailSendException send) {
+            for (Exception failure : send.getMessageExceptions()) {
+                SendFailedException found = sendFailure(failure);
+                if (found != null) {
+                    return found;
+                }
+            }
+        }
+        for (Throwable cause = e; cause != null; cause = cause.getCause()) {
+            if (cause instanceof SendFailedException failed) {
+                return failed;
+            }
+        }
+        return null;
+    }
+
+    private static Set<String> addresses(Address[] value) {
+        Set<String> result = new LinkedHashSet<>();
+        if (value != null) {
+            for (Address address : value) {
+                result.add(address instanceof InternetAddress internet ? internet.getAddress() : address.toString());
+            }
+        }
+        return result;
     }
 
     private static boolean hasText(String value) {
@@ -430,8 +582,54 @@ public class HandlebarsTemplateRenderer implements TemplateRenderer {
      * {{> ../../etc/passwd}}} en una lectura de fichero). Difieren SOLO en el escapado:
      * HTML para la parte HTML, ninguno para el texto y el asunto.
      */
-    private final Handlebars html = new Handlebars();
+    private final Handlebars html = new Handlebars().with(HTML_FIVE);
     private final Handlebars plain = new Handlebars().with(EscapingStrategy.NOOP);
+
+    /**
+     * El escapado HTML, con una tabla CERRADA: {@code & < > " '} → {@code &amp; &lt; &gt; &quot;
+     * &#39;}. Es el conjunto que basta para escribir un dato como texto dentro de un elemento o de un
+     * atributo entrecomillado, y es contrato: un escenario que afirma el cuerpo HTML afirma
+     * exactamente esto.
+     *
+     * <p>No es el de {@code new Handlebars()}, y la diferencia se ve: aquel escribe el apóstrofo
+     * como {@code &#x27;} y escapa además {@code \`} y {@code =}, así que un {@code O'Hara} salía
+     * {@code O&#x27;Hara} y el escenario que lo afirma con {@code &#39;} fallaba con un servidor
+     * correcto (corrida notifications, 2026-09-30).
+     */
+    static final EscapingStrategy HTML_FIVE = new EscapingStrategy.Hbs(new String[][] {
+        {"&", "&amp;"}, {"<", "&lt;"}, {">", "&gt;"}, {"\\"", "&quot;"}, {"'", "&#39;"}
+    });
+
+    /**
+     * Un marcador simple —{@code {{ nombre }}}— se compila como {@code {{[nombre]}}}: el segmento
+     * literal, que Handlebars resuelve SIEMPRE como variable.
+     *
+     * <p>Sin esto, el nombre de la variable compite con el motor: {@code else} y {@code true} no
+     * compilan; {@code log}, {@code if}, {@code each}, {@code with} y {@code unless} se resuelven
+     * como helpers y salen VACÍOS, sin error; y {@code this} o {@code lookup} vuelcan el mapa entero
+     * de variables en el correo. Medido contra handlebars 4.4.0. El diseño no conoce esas palabras
+     * —declara sus variables con su propio formato— y no tiene por qué: el motor es mecánica del
+     * generador.
+     *
+     * <p>Si la plantilla usa bloques ({@code {{#…}}}, {@code {{^…}}}), {@code else} y {@code this}
+     * conservan su sentido de Handlebars: ahí son sintaxis del bloque, no variables.
+     */
+    private static final Pattern SIMPLE_MARKER =
+            Pattern.compile("(?<!\\\\{)\\\\{\\\\{\\\\s*([A-Za-z_][A-Za-z0-9_-]*)\\\\s*}}(?!})");
+
+    static String literalMarkers(String source) {
+        if (source == null) {
+            return null;
+        }
+        boolean blocks = source.contains("{{#") || source.contains("{{^");
+        return SIMPLE_MARKER.matcher(source).replaceAll(match -> {
+            String name = match.group(1);
+            if (blocks && (name.equals("else") || name.equals("this"))) {
+                return Matcher.quoteReplacement(match.group());
+            }
+            return Matcher.quoteReplacement("{{[" + name + "]}}");
+        });
+    }
 
     /** Techo de la caché: las plantillas vivas de un servicio son decenas, no miles. */
     private static final int MAX_COMPILED = 500;
@@ -469,7 +667,7 @@ public class HandlebarsTemplateRenderer implements TemplateRenderer {
 
     private static Template compileWith(Handlebars engine, String source) {
         try {
-            return engine.compileInline(source);
+            return engine.compileInline(literalMarkers(source));
         } catch (IOException | RuntimeException e) {
             throw new TemplateRenderException("La plantilla no compila", e);
         }
@@ -488,6 +686,8 @@ public class HandlebarsTemplateRenderer implements TemplateRenderer {
         'java.util.Collections',
         'java.util.LinkedHashMap',
         'java.util.Map',
+        'java.util.regex.Matcher',
+        'java.util.regex.Pattern',
         'org.springframework.stereotype.Component',
         `${model.service.basePackage}.${DOMAIN_PKG}.TemplateRenderException`,
         `${model.service.basePackage}.${PORT_PKG}.TemplateRenderer`

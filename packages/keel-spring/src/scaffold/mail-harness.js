@@ -26,7 +26,8 @@ import {
   searchSuffix,
   CHAOS_REJECT_CODE,
   CHAOS_REJECT_RECIPIENTS,
-  CHAOS_OFF
+  CHAOS_OFF,
+  REJECTED_DOMAIN
 } from '../lib/mail-probes.js';
 import { fastestSchedulePeriod } from '../lib/cron-period.js';
 
@@ -209,6 +210,23 @@ export function mailSection(model) {
      */
     protected static void relayRejectsRecipients() {
         mailPut("${ROUTES.chaos()}", ${javaString(CHAOS_REJECT_RECIPIENTS)});
+    }
+
+    /**
+     * Una dirección que el relay de prueba RECHAZA siempre, ella sola: un ${CHAOS_REJECT_CODE} a su
+     * {@code RCPT TO}, mientras el resto de destinatarios del mismo envío se aceptan.
+     *
+     * <p>Es la primitiva del rechazo SELECTIVO —«el relay rechaza a luis y acepta a ana»—, que
+     * {@link #relayRejectsRecipients()} no da porque rechaza a todos. No hay que activarla: el
+     * buzón arranca rechazando el dominio reservado {@code ${REJECTED_DOMAIN}} (TLD {@code .invalid},
+     * RFC 2606), así que basta con poner esta dirección en la petición.
+     *
+     * <p>Ojo al afirmar: el buzón indexa la cabecera {@code To}, así que el correo que SÍ salió
+     * para los demás sigue NOMBRANDO al rechazado. Que no le llegó se afirma por el desenlace del
+     * envío (su estado, su evento, su supresión), no con {@link #assertNoMailTo}.
+     */
+    protected static String rejectedAddress(String localPart) {
+        return localPart + "@${REJECTED_DOMAIN}";
     }
 
     /** El relay vuelve a aceptarlo todo. El reset entre flujos lo hace siempre. */
