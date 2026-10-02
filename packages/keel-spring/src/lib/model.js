@@ -2807,8 +2807,14 @@ function collectSubscriptions(layers, services, domainTypes, inlineEnumName, war
       // —el fallo terminal marca el evento como procesado y su reintento no llega nunca al
       // descarte—, y el gate de `check-idempotency.sh`, construido desde esta misma bandera,
       // acababa cantando KO sobre el listener correcto.
+      // Y una tercera, la de la capa payments: la referencia del cobro es clave natural del registro
+      // (CHK-PAYMENTS-REFERENCE-UNGUARDED lo exige), así que repetirlo responde CHARGE_ALREADY_REQUESTED
+      // y no cobra dos veces. Sin ella la corrida de MercadoPago marcaba el mensaje ANTES de cobrar, y
+      // un fallo transitorio de la base perdía el cobro (designGap de la suscripción).
       triggerHasDomainGuard:
-        (triggerOp?.transitions ?? []).length > 0 || triggerOp?.idempotency?.guard === 'natural-key',
+        (triggerOp?.transitions ?? []).length > 0 ||
+        triggerOp?.idempotency?.guard === 'natural-key' ||
+        (Boolean(trigger) && layers.payments?.charge?.operation === trigger),
       // Cuál de las dos formas, que no es lo mismo a la hora de explicarla: el javadoc del
       // <Evento>Message tiene que nombrar la que de verdad frena la repetición.
       triggerGuardKind:
@@ -2816,7 +2822,9 @@ function collectSubscriptions(layers, services, domainTypes, inlineEnumName, war
           ? 'transitions'
           : triggerOp?.idempotency?.guard === 'natural-key'
             ? 'natural-key'
-            : null,
+            : Boolean(trigger) && layers.payments?.charge?.operation === trigger
+              ? 'payment-reference'
+              : null,
       // ¿Hay OTRO camino que saque a la entidad del mismo estado del que la saca este
       // listener? Si lo hay, los dos compiten y el guard del agregado arbitra: al perdedor
       // se le rechaza la transición, y eso es la carrera resuelta, no un fallo. Importa

@@ -5,6 +5,7 @@
 // donde el agente implementa la lógica. Los handlers dependen del PUERTO de
 // dominio (domain/repository) y del mapper de aplicación, nunca del JPA.
 
+import { callsPaymentGateway } from '../lib/payments-model.js';
 import { FRAMEWORK_ERRORS } from 'keel-core';
 import { effectiveErrorCode, declaredUniquenessErrorFor } from '../lib/declared-errors.js';
 import { javaFile, javaPath, subPackage, javadoc } from './render.js';
@@ -939,9 +940,10 @@ function renderScheduler(model, service, scheduled, seconds) {
     // transacción única hace que un conflicto en una fila revierta el trabajo de todas y
     // las deje reclamadas a medias. La corrida room-booking (R8) lo tuvo que cambiar a mano.
     const claimed = (operation.claim ?? []).length > 0;
-    const sweep = (operation.reconciles ?? []).length > 0 || feedsGuardedEffect(model, operation) || claimed;
+    const gatewaySweep = callsPaymentGateway(model, operation.name);
+    const sweep = (operation.reconciles ?? []).length > 0 || feedsGuardedEffect(model, operation) || claimed || gatewaySweep;
     const efectoExterno =
-      (operation.reconciles ?? []).length > 0
+      (operation.reconciles ?? []).length > 0 || gatewaySweep
         ? 'llama al proveedor'
         : feedsGuardedEffect(model, operation)
           ? 'produce un efecto que no se deshace'

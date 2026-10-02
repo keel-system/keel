@@ -8,6 +8,7 @@
 // vía UseCaseMediator. Incluye @Tag/@Operation (springdoc) y el
 // @RestControllerAdvice central en infrastructure/rest.
 
+import { callsPaymentGateway } from '../lib/payments-model.js';
 import { FRAMEWORK_ERRORS, conditionalUniquenessToken } from 'keel-core';
 import { callerResolution } from './security.js';
 import { declaredErrorFor, declaredUniquenessErrorFor, declaredReferenceError, errorByCode } from '../lib/declared-errors.js';
@@ -484,7 +485,9 @@ function renderMethod(model, operation, imports) {
     dispatchArg = `new ${operation.messageClass}(${args.join(', ')})`;
   }
 
-  const dispatch = `mediator.dispatch(${dispatchArg});`;
+  // Una operación que llama a la pasarela de pago va SIN transacción abarcadora (ver
+  // callsPaymentGateway): su garantía es registrar y confirmar ANTES de llamar.
+  const dispatch = `mediator.${callsPaymentGateway(model, operation.name) ? 'dispatchWithoutTransaction' : 'dispatch'}(${dispatchArg});`;
   let call;
   if (location) {
     // La ruta de la operación que lee el recurso devuelto; si la petición ya lo

@@ -60,6 +60,17 @@ function gatewayShapes(gateway) {
       }),
       // «Cualquier aviso pasa»: la decisión final del verificador deja de mirar la firma.
       signatureSabotage: { from: 'boolean valid = signatures.stream()', to: 'boolean valid = true || signatures.stream()' },
+      expiredCapture: JSON.stringify({ error: { type: 'invalid_request_error', code: 'charge_expired_for_capture' } }),
+      canceled: stripeObject(probes, 'ch-7', 'CANCELED'),
+      // Stripe dice qué pasó en la respuesta: no hace falta otra petición.
+      expiredCaptureRequests: 1,
+      // Deja de reconocer la captura caducada: consulta el estado (una petición de más).
+      expiredSabotage: { from: 'contains("charge_expired_for_capture")', to: 'contains("__sabotaje__")' },
+      // Vuelve el defecto de la corrida: una lectura previa a la pasarela fuera del try.
+      prefetchSabotage: {
+        from: 'Long.toString(MoneyAmounts.toMinorUnits(amount, currency))',
+        to: 'Long.toString(MoneyAmounts.toMinorUnits(amount, http.get().uri("/v1/payment_intents/" + gatewayPaymentId).retrieve().body(String.class) == null ? currency : currency))'
+      },
       amountOnWire: 'amount=2590',
       referenceOnWire: 'ch-1',
       searchMarker: 'ch-9',
@@ -85,6 +96,17 @@ function gatewayShapes(gateway) {
       from: 'if (!MessageDigest.isEqual(expected, signature.getBytes(StandardCharsets.UTF_8))) {',
       to: 'if (false && !MessageDigest.isEqual(expected, signature.getBytes(StandardCharsets.UTF_8))) {'
     },
+    expiredCapture: JSON.stringify({ errors: [{ code: 'order_expired' }] }),
+    canceled: mercadopagoObject(probes, 'ch-7', 'CANCELED'),
+    // MercadoPago no documenta el código: el adaptador consulta la order.
+    expiredCaptureRequests: 2,
+    // Una captura rechazada deja de ser una respuesta: queda en duda en vez de anulada.
+    expiredSabotage: {
+      from: '            return status(reference, gatewayPaymentId);\n        } catch (RestClientException noAnswer) {\n            throw unavailable(action, noAnswer);',
+      to: '            throw unavailable(action, error);\n        } catch (RestClientException noAnswer) {\n            throw unavailable(action, noAnswer);'
+    },
+    // Vuelve el defecto de la corrida: la lectura de la order fuera del tratamiento de «sin respuesta».
+    prefetchSabotage: { from: '} catch (RestClientException noAnswer) {\n                throw unavailable("refund"', to: '} catch (IllegalStateException noAnswer) {\n                throw unavailable("refund"' },
     amountOnWire: '"total_amount":"25.90"',
     referenceOnWire: '"external_reference":"ch-1"',
     searchMarker: 'ch-9',
@@ -111,7 +133,11 @@ const SABOTAGES = {
     to: 'return java.util.UUID.randomUUID().toString();'
   },
   // La ventana del aviso deja de aplicarse: un aviso repetido días después pasa.
-  tolerance: { file: (s) => `${s.verifier}.java`, from: '> properties.noticeToleranceSeconds()', to: '> Long.MAX_VALUE' }
+  tolerance: { file: (s) => `${s.verifier}.java`, from: '> properties.noticeToleranceSeconds()', to: '> Long.MAX_VALUE' },
+  // La autorización caducada deja de leerse como un cobro anulado.
+  expired: { file: (s) => `${s.adapter}.java`, from: (s) => s.expiredSabotage.from, to: (s) => s.expiredSabotage.to },
+  // Una lectura previa a la devolución escapa del tratamiento de «sin respuesta».
+  prefetch: { file: (s) => `${s.adapter}.java`, from: (s) => s.prefetchSabotage.from, to: (s) => s.prefetchSabotage.to }
 };
 
 export function paymentCheckTest(model, gateway) {
@@ -292,7 +318,25 @@ class PaymentCheckTest {
         assertEquals(0, RECORDED.size(), "no se llama a la pasarela con un importe que no se puede representar");
     }
 
-    // ─── El aviso ────────────────────────────────────────────────────────────
+${model.payments.refund?.amount ? `    @Test
+    void unaDevolucionParcialSinRespuestaQuedaEnDudaAunqueFalleUnaLecturaPrevia() {
+        // Corrida payment-checkout: una consulta previa (la moneda en Stripe, la order en
+        // MercadoPago) fuera del tratamiento de «sin respuesta» salía como un 500.
+        ROUTES.add(new Route("GET", ".*", 0, "", true));
+        ROUTES.add(new Route("POST", ".*", 0, "", true));
+        assertThrows(PaymentGatewayUnavailableException.class,
+                () -> gateway().refund("ch-6", "pay6", new BigDecimal("5.00"), "BRL"));
+    }
+
+` : ''}${model.payments.capture ? `    @Test
+    void capturarUnaAutorizacionCaducadaEsUnCobroAnulado() {
+        route(${q(calls.CAPTURE.method)}, ${q(calls.CAPTURE.path)}, 400, ${q(shapes.expiredCapture)});
+        route(${q(calls.STATUS.method)}, ${q(calls.STATUS.path)}, 200, ${q(shapes.canceled)});
+        assertEquals(GatewayStatus.CANCELED, gateway().capture("ch-7", "pay7"${model.payments.capture.amount ? ', null, "BRL"' : ''}).status());
+        assertEquals(${shapes.expiredCaptureRequests}, RECORDED.size());
+    }
+
+` : ''}    // ─── El aviso ────────────────────────────────────────────────────────────
 
     private static final Clock CLOCK = Clock.fixed(NOW, ZoneOffset.UTC);
 

@@ -240,10 +240,10 @@ function renderPort(model) {
   ];
   if (payments.capture) {
     methods.push(`    /**
-     * Captura lo autorizado${payments.capture.amount ? '; con amount, solo esa parte (el resto se libera)' : ''}.
+     * Captura lo autorizado${payments.capture.amount ? '; con amount, solo esa parte (el resto se libera), en la moneda del cobro' : ''}.
      * El cobro tiene que estar ya en su estado en vuelo (${payments.capture.inFlight}).
      */
-    GatewayOutcome capture(String reference, String gatewayPaymentId${payments.capture.amount ? ', BigDecimal amount' : ''});`);
+    GatewayOutcome capture(String reference, String gatewayPaymentId${payments.capture.amount ? ', BigDecimal amount, String currency' : ''});`);
   }
   if (payments.void) {
     methods.push(`    /** Anula la autorización. El cobro tiene que estar ya en ${payments.void.inFlight}. */
@@ -251,10 +251,10 @@ function renderPort(model) {
   }
   if (payments.refund) {
     methods.push(`    /**
-     * Devuelve lo cobrado${payments.refund.amount ? '; con amount null, todo' : ''}. El cobro tiene que estar ya en
+     * Devuelve lo cobrado${payments.refund.amount ? '; con amount null, todo. La moneda es la del cobro: la pasa quien llama,\n     * que la conoce, en vez de pedírsela a la pasarela con una llamada más' : ''}. El cobro tiene que estar ya en
      * ${payments.refund.inFlight}. Si la pasarela la rechaza, el resultado NO es REFUNDED.
      */
-    GatewayOutcome refund(String reference, String gatewayPaymentId${payments.refund.amount ? ', BigDecimal amount' : ''});`);
+    GatewayOutcome refund(String reference, String gatewayPaymentId${payments.refund.amount ? ', BigDecimal amount, String currency' : ''});`);
   }
   methods.push(`    /**
      * El estado de un cobro según la pasarela. Con gatewayPaymentId null —la pasarela no llegó a

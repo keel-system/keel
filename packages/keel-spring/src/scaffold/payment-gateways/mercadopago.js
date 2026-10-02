@@ -80,7 +80,7 @@ function renderAdapter(model, ctx) {
     }`);
 
   if (p.capture) {
-    const amountParam = p.capture.amount ? ', BigDecimal amount' : '';
+    const amountParam = p.capture.amount ? ', BigDecimal amount, String currency' : '';
     methods.push(`    @Override
     public GatewayOutcome capture(String reference, String gatewayPaymentId${amountParam}) {
         return followUp("/v1/orders/" + gatewayPaymentId + "/capture", mapper.createObjectNode(), reference, gatewayPaymentId,
@@ -95,16 +95,23 @@ function renderAdapter(model, ctx) {
     }`);
   }
   if (p.refund) {
-    const amountParam = p.refund.amount ? ', BigDecimal amount' : '';
+    const amountParam = p.refund.amount ? ', BigDecimal amount, String currency' : '';
     const partial = p.refund.amount
       ? `
         if (amount != null) {
-            // La devolución parcial nombra la transacción de pago de la order y su importe.
-            JsonNode current = fetch(gatewayPaymentId);
+            // La devolución parcial nombra la transacción de pago de la order: hay que leerla, y esa
+            // lectura falla igual que la devolución —dentro del mismo tratamiento, o un 5xx aquí sale
+            // como un 500 con el cobro atascado en refunding—.
+            JsonNode current;
+            try {
+                current = fetch(gatewayPaymentId);
+            } catch (RestClientException noAnswer) {
+                throw unavailable("refund", noAnswer);
+            }
             JsonNode transaction = current.path("transactions").path("payments").path(0);
             ObjectNode partial = body.putArray("transactions").addObject();
             partial.put("id", transaction.path("id").asText());
-            partial.put("amount", MoneyAmounts.toMajorUnits(amount, current.path("currency").asText("BRL")));
+            partial.put("amount", MoneyAmounts.toMajorUnits(amount, currency));
         }`
       : '';
     methods.push(`    @Override

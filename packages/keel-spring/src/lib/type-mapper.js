@@ -237,7 +237,10 @@ export function columnAnnotations(fieldName, field, resolved, { collation = null
   // DDL y la columna saldría con el ancho por defecto del dialecto. De ahí que las tres ramas
   // —texto largo, texto acotado y texto sin cota— compongan el tipo entero cuando hay collation.
   const collatedText = collation && (resolved.javaType === 'String' || resolved.base === 'text');
-  if (resolved.base === 'text') {
+  // `json` es texto largo igual que `text`: sin esto caía en la rama del String sin cota y salía
+  // varchar(255), corto para cualquier documento real (la acción del cliente de una pasarela de
+  // pago lo desbordó en la corrida payment-checkout con Stripe).
+  if (resolved.base === 'text' || resolved.base === 'json') {
     attrs.push(collatedText ? `columnDefinition = "text collate ${collation}"` : 'columnDefinition = "text"');
   } else if (collatedText) {
     // Sin `maxLength` el diseño no acotó, así que se conserva el ancho que Hibernate habría

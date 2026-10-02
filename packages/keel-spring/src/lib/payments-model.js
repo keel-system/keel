@@ -151,3 +151,26 @@ function awaitingStates(payments, entities) {
   }
   return states;
 }
+
+/**
+ * Las operaciones que llaman a la pasarela EN MEDIO de su trabajo: las acciones de la capa y el
+ * barrido. Se despachan SIN transacción abarcadora, porque su garantía es un orden de commits
+ * —registrar el cobro (o su estado en vuelo) y confirmar, llamar a la pasarela fuera de toda
+ * transacción, aplicar el desenlace— y no una transacción única: dentro de la del mediator, el
+ * `pending` no existe para nadie hasta después de la llamada, y si esta va bien pero el commit
+ * falla, la pasarela cobró y aquí no queda nada que reconciliar. Las dos corridas de la fixture
+ * (Stripe y MercadoPago) lo cambiaron a mano en los controllers y el scheduler.
+ */
+export function callsPaymentGateway(model, operationName) {
+  const payments = model.payments;
+  if (!payments) return false;
+  const names = [
+    payments.charge?.operation,
+    payments.capture?.operation,
+    payments.void?.operation,
+    payments.refund?.operation,
+    payments.savePaymentMethod?.operation,
+    payments.reconciliation?.sweep
+  ];
+  return names.includes(operationName);
+}

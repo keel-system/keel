@@ -129,6 +129,16 @@ ${routes});
         gatewayStubPath(GatewayCall.CANCEL, gatewayIdFor(reference), null, 200, gatewayObject(reference, "CANCELED", null, null));
     }
 
+    /**
+     * La autorización del cobro de esa referencia caducó antes de capturarse: la captura se
+     * rechaza y, preguntada, la pasarela lo da por anulado. Es el desenlace que la pasarela
+     * impone sola pasado su plazo (unos días), y ningún escenario puede esperarlo.
+     */
+    protected static void gatewayExpiresAuthorization(String reference) {
+        gatewayStubPath(GatewayCall.CAPTURE, gatewayIdFor(reference), null, 400, gatewayExpiredCapture(reference));
+        gatewayReports(reference, "CANCELED");
+    }
+
     /** La pasarela rechaza esa llamada (4xx): la acción no se hizo. */
     protected static void gatewayRejects(GatewayCall call) {
         String[] route = GATEWAY_ROUTES.get(call);
@@ -258,6 +268,11 @@ ${declineMap});
                         + "\\", \\"payment_intent\\": " + failed + "}}");
     }
 
+    // Stripe contesta a capturar una autorización caducada con este código, y el adaptador lo lee.
+    private static String gatewayExpiredCapture(String reference) {
+        return "{\\"error\\": {\\"type\\": \\"invalid_request_error\\", \\"code\\": \\"charge_expired_for_capture\\"}}";
+    }
+
     /** La devolución del cobro de esa referencia se completa por ese importe. */
     protected static void gatewayRefunds(String reference, BigDecimal amount) {
         gatewayStub(GatewayCall.REFUND, null, gatewayIdFor(reference), 200,
@@ -314,8 +329,18 @@ ${declineMap});
         gatewayStub(GatewayCall.CHARGE, null, reference, 200, gatewayObject(reference, "FAILED", detail, null));
     }
 
-    /** La devolución del cobro de esa referencia se completa por ese importe. */
+    // MercadoPago no documenta un código para la captura caducada: el adaptador consulta el estado.
+    private static String gatewayExpiredCapture(String reference) {
+        return "{\\"errors\\": [{\\"code\\": \\"order_expired\\"}]}";
+    }
+
+    /**
+     * La devolución del cobro de esa referencia se completa por ese importe. Programa también la
+     * consulta de la order (capturada), porque una devolución parcial la lee antes para nombrar la
+     * transacción.
+     */
     protected static void gatewayRefunds(String reference, BigDecimal amount) {
+        gatewayStubPath(GatewayCall.STATUS, gatewayIdFor(reference), null, 200, gatewayObject(reference, "CAPTURED", null, null));
         gatewayStubPath(GatewayCall.REFUND, gatewayIdFor(reference), null, 200, gatewayObject(reference, "REFUNDED", null, amount));
     }
 

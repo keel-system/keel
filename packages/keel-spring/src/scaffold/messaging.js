@@ -15,6 +15,7 @@
 // (best-effort) y los listeners, que escribe el agente siguiendo la skill
 // keel-spring-<broker>.
 
+import { callsPaymentGateway } from '../lib/payments-model.js';
 import { javaFile, javaPath, subPackage } from './render.js';
 import { domainTypeImport } from './entities.js';
 import { nullInclusion } from './dtos.js';
@@ -529,7 +530,9 @@ function contractJavadoc(sub, model) {
     // implementa: decir «declara transiciones» sobre una operación guardada por su clave
     // natural es falso y manda a buscar un lifecycle que no existe.
     const guardReason =
-      sub.triggerGuardKind === 'natural-key'
+      sub.triggerGuardKind === 'payment-reference'
+        ? `es el cobro de la capa payments y su referencia (payments.charge.reference) es clave natural del registro: repetirlo responde el error de cobro ya pedido —trátalo como duplicado, sin segundo efecto— y no llega a la pasarela`
+        : sub.triggerGuardKind === 'natural-key'
         ? `la clave de idempotencia participa en la clave natural del agregado, así que esa constraint ES la guarda —permanente y común a todas las puertas por las que entre la operación—`
         : `la operación declara transiciones, así que la repetición la frena el agregado`;
     lines.push(
@@ -616,6 +619,9 @@ function contractJavadoc(sub, model) {
     );
   }
   if (sub.trigger) {
+    // El cobro de la capa payments por evento: no hay cliente delante, así que el token del
+    // componente de la pasarela no existe — no es un hueco que el agente tenga que rellenar.
+    const paymentToken = model.payments?.charge?.operation === sub.trigger ? model.payments.charge.source.token : null;
     const argument = (a) =>
       a.from === 'envelope'
         ? `envelope.metadata().${a.source}()`
@@ -623,10 +629,15 @@ function contractJavadoc(sub, model) {
           ? 'la identidad resuelta'
           : a.source
             ? `payload.${a.source}()`
-            : 'TODO (agente)';
+            : a.component === paymentToken
+              ? 'null (por evento no hay cliente delante: solo se cobra un medio guardado)'
+              : 'TODO (agente)';
     const args = sub.triggerArguments.map((a) => `${a.component} = ${argument(a)}`).join(', ');
+    // La misma regla que el controller y el scheduler: lo que llama a la pasarela va sin
+    // transacción abarcadora (callsPaymentGateway).
+    const via = callsPaymentGateway(model, sub.trigger) ? 'UseCaseMediator.dispatchWithoutTransaction(...) —llama a la pasarela: registra y confirma antes de llamarla—' : 'UseCaseMediator';
     lines.push(
-      `Lo consume ${sub.listenerClass} (listener del broker del stack; lo escribe el agente) despachando ${sub.triggerMessageClass ?? sub.trigger}${args ? `(${args})` : ''} vía UseCaseMediator.`
+      `Lo consume ${sub.listenerClass} (listener del broker del stack; lo escribe el agente) despachando ${sub.triggerMessageClass ?? sub.trigger}${args ? `(${args})` : ''} vía ${via}.`
     );
   } else {
     lines.push(`Lo consume ${sub.listenerClass} (listener del broker del stack; lo escribe el agente).`);

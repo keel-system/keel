@@ -72,11 +72,11 @@ function renderAdapter(model, ctx) {
     }`);
 
   if (p.capture) {
-    const amountParam = p.capture.amount ? ', BigDecimal amount' : '';
+    const amountParam = p.capture.amount ? ', BigDecimal amount, String currency' : '';
     const amountLine = p.capture.amount
       ? `
         if (amount != null) {
-            form.add("amount_to_capture", Long.toString(MoneyAmounts.toMinorUnits(amount, currencyOf(gatewayPaymentId))));
+            form.add("amount_to_capture", Long.toString(MoneyAmounts.toMinorUnits(amount, currency)));
         }`
       : '';
     methods.push(`    @Override
@@ -93,11 +93,11 @@ function renderAdapter(model, ctx) {
     }`);
   }
   if (p.refund) {
-    const amountParam = p.refund.amount ? ', BigDecimal amount' : '';
+    const amountParam = p.refund.amount ? ', BigDecimal amount, String currency' : '';
     const amountLine = p.refund.amount
       ? `
         if (amount != null) {
-            form.add("amount", Long.toString(MoneyAmounts.toMinorUnits(amount, currencyOf(gatewayPaymentId))));
+            form.add("amount", Long.toString(MoneyAmounts.toMinorUnits(amount, currency)));
         }`
       : '';
     methods.push(`    @Override
@@ -196,18 +196,10 @@ function renderAdapter(model, ctx) {
     }`);
   }
 
-  const needsCurrency = p.capture?.amount || p.refund?.amount;
-  const currencyHelper = needsCurrency
-    ? `
-
-    /** La moneda del PaymentIntent, para convertir un importe parcial a su unidad. */
-    private String currencyOf(String gatewayPaymentId) {
-        return json(http.get().uri("/v1/payment_intents/{id}", gatewayPaymentId)
-                .headers(headers -> credentials(headers, null))
-                .retrieve()
-                .body(String.class)).path("currency").asText().toUpperCase(Locale.ROOT);
-    }`
-    : '';
+  // Sin `currencyOf`: la moneda de un importe parcial la pasa quien llama. Una consulta más a la
+  // pasarela, fuera del try, convertía su fallo en un 500 con el cobro atascado en `refunding`
+  // (corrida payment-checkout con Stripe).
+  const currencyHelper = '';
 
   const body = `/**
  * La pasarela de pago sobre Stripe (Payment Intents), por HTTP plano.
@@ -274,7 +266,13 @@ ${methods.join('\n\n')}
             if (error.getStatusCode().is5xxServerError()) {
                 throw unavailable(action, error);
             }
-            // payment_intent_unexpected_state y compañía: la autorización caducó, ya se capturó…
+            // La autorización caducó: es la respuesta de la pasarela y no hace falta preguntarle.
+            // Se busca en el texto y no se parsea: un 4xx con un cuerpo que no es JSON no puede
+            // convertir una respuesta en una excepción.
+            if (error.getResponseBodyAsString().contains("charge_expired_for_capture")) {
+                return GatewayOutcome.of(GatewayStatus.CANCELED, reference, gatewayPaymentId);
+            }
+            // payment_intent_unexpected_state y compañía (ya se capturó…): el estado real se consulta.
             return status(reference, gatewayPaymentId);
         } catch (RestClientException noAnswer) {
             throw unavailable(action, noAnswer);

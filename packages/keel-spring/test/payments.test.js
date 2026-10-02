@@ -106,3 +106,34 @@ test('el barrido de pagos no recibe el reclamo genérico: tiene el suyo (re-esta
   assert.equal(sweep.claim, null);
   assert.deepEqual(model.payments.awaitingStates, ['pending', 'actionRequired', 'capturing', 'canceling', 'refunding']);
 });
+
+// Corridas payment-checkout (Stripe y MercadoPago): lo que destaparon y quedó arreglado en build.
+for (const gateway of Object.keys(PAYMENT_GATEWAYS)) {
+  const { file } = project(gateway);
+  const adapterName = `${gateway.charAt(0).toUpperCase()}${gateway.slice(1)}PaymentGateway.java`;
+
+  test(`${gateway}: el importe parcial viaja con su moneda; ninguna consulta a la pasarela fuera del try`, () => {
+    assert.match(file('PaymentGateway.java'), /GatewayOutcome refund\(String reference, String gatewayPaymentId, BigDecimal amount, String currency\);/);
+    const adapter = file(adapterName);
+    assert.doesNotMatch(adapter, /currencyOf/);
+    if (gateway === 'mercadopago') {
+      assert.match(adapter, /try \{\s+current = fetch\(gatewayPaymentId\);\s+\} catch \(RestClientException noAnswer\) \{\s+throw unavailable\("refund"/);
+    }
+  });
+
+  test(`${gateway}: el arnés simula la autorización caducada y envejece un cobro para el barrido`, () => {
+    const harness = file('AbstractFlowIT.java');
+    assert.match(harness, /protected static void gatewayExpiresAuthorization\(String reference\)/);
+    assert.match(harness, /if \("sweepPendingPayments"\.equals\(activation\)\) \{\s+statements\.add\("UPDATE payments SET awaiting_since = /);
+  });
+}
+
+test('stripe: capturar una autorización caducada se traduce a CANCELED sin otra consulta', () => {
+  assert.match(project('stripe').file('StripePaymentGateway.java'),
+    /contains\("charge_expired_for_capture"\)\) \{\s+return GatewayOutcome\.of\(GatewayStatus\.CANCELED/);
+});
+
+test('mercadopago: gatewayRefunds programa también la consulta de la order que la devolución parcial lee', () => {
+  const harness = project('mercadopago').file('AbstractFlowIT.java');
+  assert.match(harness, /gatewayStubPath\(GatewayCall\.STATUS, gatewayIdFor\(reference\), null, 200, gatewayObject\(reference, "CAPTURED", null, null\)\);\s+gatewayStubPath\(GatewayCall\.REFUND/);
+});

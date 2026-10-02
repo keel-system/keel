@@ -52,12 +52,19 @@ defensa:
    confirma**, después llama al puerto, después aplica el resultado. Sin respuesta: el cobro se
    queda en vuelo y respondes con él. Con un resultado que no es el esperado (una devolución que
    vuelve como `CAPTURED`), la pasarela la rechazó: aplica el error que declara el diseño.
+   - Un importe parcial viaja **con la moneda del cobro**, que ya tienes en el registro: no le
+     preguntes la moneda a la pasarela. Cualquier llamada extra antes de la acción tendría que ir
+     dentro del mismo tratamiento de «sin respuesta», y es mejor que no exista.
 3. **Desenlaces** (`outcomes.*`): **idempotentes**. Si el cobro ya no está en el estado de origen
    —lo aplicó otro camino—, no hagas nada y no lances. Ver `references/outcomes.md`.
 4. **Barrido** (`reconciliation.sweep`): candidatos en los estados que esperan desenlace con
    `awaitingSince` más antiguo que `payments.reconciliation.unanswered-after-seconds`; **reclama**
    cada uno volviendo a estampar `awaitingSince` en una actualización condicional, y llama a
    `paymentReconciliation.consult(reference, gatewayPaymentId)`. Ver `references/reconciliation.md`.
+
+En los escenarios, `gatewayExpiresAuthorization(referencia)` simula la autorización que caducó
+antes de capturarse, y `ageForReconciliation("<barrido>", id)` deja rancia la marca de espera de
+un cobro para que lo tome la próxima pasada del barrido. No escribas un UPDATE a mano para eso.
 
 Por qué el registro va **antes** y en su propia transacción: si la llamada a la pasarela va dentro
 de una transacción que después se deshace, la pasarela cobró y aquí no queda nada que reconciliar.
