@@ -23,7 +23,7 @@ error inalcanzable. Trabajas **sin la conversación del diseño**, a propósito.
 
 - **Solo** `specs/<servicio>/`: el manifiesto, las capas, `validation-scenarios.md`,
   `decisions.yaml` (incluido su registro `structural:`) y, si existe, el `gaps.yaml` anterior.
-- El procedimiento y las 17 clases, con sus preguntas, están en
+- El procedimiento y las 18 clases, con sus preguntas, están en
   `{{keel:skills}}/keel-design/references/gap-analysis.md`. Léelo entero antes de empezar.
 - **Qué clases aplican y cuáles son sus unidades no lo decides tú**: ejecuta
   `keel validate --ready specs/<servicio>` y cópialas tal cual del criterio `gaps`. Una unidad que

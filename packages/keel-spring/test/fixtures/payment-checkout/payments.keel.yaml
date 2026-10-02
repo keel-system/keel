@@ -1,0 +1,46 @@
+description: Cobra con tarjeta los pedidos, autorizando al pedirlos y capturando al servirlos.
+
+# Autorizar al pedir y capturar al servir: el cliente no paga un pedido que no se le sirve, y
+# anular una retención no cuesta lo que cuesta una devolución.
+flow: authorize-capture
+
+# Sin partial-capture a propósito: no la cubren todas las pasarelas del menú, y este servicio
+# captura siempre el pedido entero. Lo parcial va por la devolución.
+capabilities: [partial-refund, customer-action, off-session]
+
+record:
+  entity: Payment
+  gatewayRef: gatewayPaymentId
+  awaitingSince: awaitingSince
+  failureReason: failureReason
+  customerAction: customerAction
+
+charge:
+  operation: requestCharge
+  reference: chargeRequestId
+  amount: amount
+  currency: { parameter: currency }
+  source:
+    token: paymentToken
+    saved: paymentMethodRef
+
+# Cada acción de seguimiento deja el cobro en su estado en vuelo antes de llamar a la pasarela.
+capture: { operation: capturePayment, inFlight: capturing }
+void: { operation: cancelPayment, inFlight: canceling }
+refund: { operation: refundPayment, amount: amount, inFlight: refunding }
+savePaymentMethod:
+  operation: savePaymentMethod
+  token: paymentToken
+  exposedAs: id
+
+outcomes:
+  authorized: markAuthorized
+  actionRequired: markActionRequired
+  captured: markCaptured
+  failed: markFailed
+  refunded: markRefunded
+  canceled: markCanceled
+
+reconciliation:
+  sweep: sweepPendingPayments
+  unansweredAfterSeconds: 900

@@ -1102,6 +1102,113 @@ export const CHECKS = {
     nature: 'undecided',
     title: "templating: data sin declaredVariables: una variable que falte sale como hueco",
     closes: 'templating.declaredVariables: true, o aceptar por escrito que no se valida'
+  },
+
+  // ─── payments ──────────────────────────────────────────────────────────────
+  'CHK-PAYMENTS-OP-UNKNOWN': {
+    layer: 'payments',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'la capa payments nombra una operación que no existe en use-cases',
+    closes: 'declarar la operación o corregir el nombre'
+  },
+  'CHK-PAYMENTS-FLOW-MISMATCH': {
+    layer: 'payments',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'el flujo de cobro y sus piezas no casan (capture/authorized con single-step, o sin ellas con authorize-capture)',
+    closes: 'declarar capture y outcomes.authorized con authorize-capture, o quitarlos con single-step'
+  },
+  'CHK-PAYMENTS-CAPABILITY-UNBACKED': {
+    layer: 'payments',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'una capacidad declarada sin la pieza que la usa, o una pieza que exige una capacidad no declarada',
+    closes: 'declarar la capacidad junto con su pieza, o quitar las dos'
+  },
+  'CHK-PAYMENTS-FIELD-UNKNOWN': {
+    layer: 'payments',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'un campo de la capa payments no está en el input de su operación, o no tiene el tipo que exige',
+    closes: 'declarar el campo en el input con el tipo correcto, o corregir el nombre'
+  },
+  'CHK-PAYMENTS-RECORD-UNKNOWN': {
+    layer: 'payments',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'record nombra una entidad o un campo que no existe, o con el tipo equivocado',
+    closes: 'declarar la entidad y sus campos (gatewayRef string, awaitingSince timestamp) en domain'
+  },
+  'CHK-PAYMENTS-FAILURE-VOCABULARY': {
+    layer: 'payments',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'el enum del motivo de fallo no es el vocabulario neutro: cada pasarela fallaría distinto',
+    closes: 'declarar el enum con exactamente los valores de FAILURE_REASONS (docs/dsl/payments.md)'
+  },
+  'CHK-PAYMENTS-INFLIGHT-INVALID': {
+    layer: 'payments',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'el estado en vuelo de una acción no existe, la acción no entra en él o su desenlace no sale de él',
+    closes: 'declarar el estado en el lifecycle, la transición de la acción hacia él y la del desenlace desde él'
+  },
+  'CHK-PAYMENTS-REFERENCE-UNGUARDED': {
+    layer: 'payments',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'la referencia del cobro no es clave natural del registro: nada impide el doble cargo',
+    closes: 'incluir el campo en la naturalKey de la entidad del registro (o marcarlo unique en domain)'
+  },
+  'CHK-PAYMENTS-ASYNC-NEEDS-OFF-SESSION': {
+    layer: 'payments',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'el cobro entra por una suscripción sin la capacidad off-session: por evento no hay cliente presente',
+    closes: "declarar 'off-session' (con savePaymentMethod y charge.source.saved), o quitar la suscripción"
+  },
+  'CHK-PAYMENTS-OUTCOME-SILENT': {
+    layer: 'payments',
+    severity: 'warning',
+    nature: 'undecided',
+    title: 'el cobro se pide por evento y este desenlace no emite nada: quien lo pidió no se entera',
+    closes: 'que la operación del desenlace emita un evento, o aceptar por escrito que el solicitante consulta'
+  },
+  'CHK-PAYMENTS-OUTCOME-NO-TRANSITION': {
+    layer: 'payments',
+    severity: 'warning',
+    nature: 'incoherence',
+    title: 'la operación de un desenlace no mueve el lifecycle del registro',
+    closes: 'declarar la transición de la entidad del registro en la operación del desenlace'
+  },
+  'CHK-PAYMENTS-OUTCOME-EXPOSED': {
+    layer: 'payments',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'la operación de un desenlace no es internal: un cliente podría marcar un cobro como pagado',
+    closes: 'internal: true en la operación del desenlace'
+  },
+  'CHK-PAYMENTS-OUTCOME-INPUT-UNBACKED': {
+    layer: 'payments',
+    severity: 'warning',
+    nature: 'undecided',
+    title: 'la operación de un desenlace recibe un dato que la capa no nombra: el generador no sabe de dónde sale',
+    closes: 'quitar el campo del input y decidirlo en la operación, o aceptar por escrito que lo escribe el handler'
+  },
+  'CHK-PAYMENTS-OUTCOME-MISSING': {
+    layer: 'payments',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'una acción declarada sin la operación que aplica su desenlace (refunded, canceled)',
+    closes: 'declarar outcomes.refunded con refund, y outcomes.canceled con void o authorize-capture'
+  },
+  'CHK-PAYMENTS-SWEEP-INVALID': {
+    layer: 'payments',
+    severity: 'error',
+    nature: 'incoherence',
+    title: 'el barrido de reconciliación no corre por el reloj o es una lectura',
+    closes: "declarar 'schedule' en la operación del barrido, y que sea command"
   }
 };
 

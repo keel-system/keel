@@ -1,0 +1,267 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://keel.dev/schema/2.0/payments.schema.json",
+  "title": "Keel Payments Layer",
+  "description": "Cobros con tarjeta a través de una pasarela de pago. Agnóstica de la pasarela: cuál (Stripe, MercadoPago…) se elige al generar, como el broker, y no aparece nunca aquí. Declara solo lo que es decisión de diseño: qué flujo de cobro sigue el servicio, qué capacidades exige a la pasarela, qué operación propia ejecuta cada acción neutra y cuál reacciona a cada desenlace. No es una dependencia (eso es 'dependencies', y una pasarela no es un servicio Keel) ni un cliente HTTP (eso es 'http-clients', que describe un contrato concreto): el contrato concreto lo pone el generador por pasarela.",
+  "type": "object",
+  "required": [
+    "description",
+    "flow",
+    "record",
+    "charge",
+    "outcomes",
+    "reconciliation"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "description": {
+      "type": "string",
+      "minLength": 10,
+      "description": "Qué cobra este servicio y a quién, en lenguaje de negocio."
+    },
+    "flow": {
+      "type": "string",
+      "enum": [
+        "authorize-capture",
+        "single-step"
+      ],
+      "description": "authorize-capture: el cobro se autoriza (retiene el importe) y se captura después con otra operación; la autorización caduca y la pasarela la cancela sola. single-step: autoriza y captura en el mismo acto. Es decisión de negocio —cuándo se considera cobrado— y no de mecánica."
+    },
+    "capabilities": {
+      "type": "array",
+      "uniqueItems": true,
+      "default": [],
+      "description": "Lo que el diseño exige a la pasarela por encima del cobro básico. El generador contrasta esta lista con su matriz de paridad: una pasarela que no cubre una capacidad declarada no genera, en vez de cumplirla a medias en silencio. Cuantas menos, más pasarelas pueden servir el mismo diseño.",
+      "items": {
+        "type": "string",
+        "enum": [
+          "partial-capture",
+          "partial-refund",
+          "customer-action",
+          "off-session"
+        ]
+      }
+    },
+    "record": {
+      "type": "object",
+      "required": [
+        "entity",
+        "gatewayRef",
+        "awaitingSince",
+        "failureReason"
+      ],
+      "additionalProperties": false,
+      "description": "La entidad del dominio que registra cada cobro. Es la memoria del servicio frente a la pasarela: sin ella no hay a qué aplicar un desenlace ni qué barrer.",
+      "properties": {
+        "entity": {
+          "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/typeName"
+        },
+        "gatewayRef": {
+          "type": "string",
+          "pattern": "^[a-z][A-Za-z0-9]*$",
+          "description": "Campo (string) donde se guarda el identificador que la pasarela asigna al cobro. Es lo que correlaciona un aviso de la pasarela con el registro, y lo que permite consultarle el estado."
+        },
+        "awaitingSince": {
+          "type": "string",
+          "pattern": "^[a-z][A-Za-z0-9]*$",
+          "description": "Campo (timestamp) que dice DESDE CUÁNDO el cobro espera un desenlace de la pasarela. Lo estampa cada acción al entrar en su estado en vuelo (el cobro al nacer en pending; capture, void y refund al entrar en el suyo), así que hay un solo reloj para todo lo que el barrido tiene que mirar."
+        },
+        "failureReason": {
+          "type": "string",
+          "pattern": "^[a-z][A-Za-z0-9]*$",
+          "description": "Campo donde se registra por qué falló un cobro. Su tipo tiene que ser un enum del dominio con EXACTAMENTE el vocabulario neutro de Keel (declined, insufficientFunds, expiredCard, authenticationFailed, fraudSuspected, invalidPaymentMethod, notReceived, processingError): cada adaptador traduce a él los códigos de su pasarela. Con texto libre, cada pasarela escribiría el suyo y el mismo diseño no se comportaría igual con dos."
+        },
+        "customerAction": {
+          "type": "string",
+          "pattern": "^[a-z][A-Za-z0-9]*$",
+          "description": "Campo (string o json) donde se guarda la acción que el cliente tiene que hacer para completar el cobro (3DS, redirección) mientras el cobro está en actionRequired; vacío en cualquier otro estado. Su contenido es opaco: lo define la pasarela y lo consume su componente en el navegador. Guardarla es lo que permite recuperarla después —por la lectura del cobro o por el evento del desenlace— cuando el cobro se pidió sin el cliente delante. Exige la capacidad customer-action."
+        }
+      }
+    },
+    "charge": {
+      "type": "object",
+      "required": [
+        "operation",
+        "reference",
+        "amount",
+        "currency",
+        "source"
+      ],
+      "additionalProperties": false,
+      "description": "La acción de cobrar (autorizar, en authorize-capture). Una sola operación, a la que pueden llegar el endpoint HTTP y una suscripción a la vez.",
+      "properties": {
+        "operation": {
+          "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/operationName"
+        },
+        "reference": {
+          "type": "string",
+          "pattern": "^[a-z][A-Za-z0-9]*$",
+          "description": "Campo del input que identifica la petición de cobro en el negocio (chargeRequestId, orderId…). Es la guarda contra el doble cargo: tiene que formar parte de la clave natural del registro, y de ella deriva el generador la clave de idempotencia hacia la pasarela, de modo que las dos puertas y los reintentos convergen en la misma clave también al otro lado."
+        },
+        "amount": {
+          "type": "string",
+          "pattern": "^[a-z][A-Za-z0-9]*$",
+          "description": "Campo decimal del input con el importe, en unidades mayores (12.50). La conversión a la unidad de cada pasarela es del generador."
+        },
+        "currency": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 1,
+          "additionalProperties": false,
+          "description": "De dónde sale la moneda: un campo del input, o un parámetro de despliegue del servicio (service.parameters) cuando el servicio opera en una sola.",
+          "properties": {
+            "input": {
+              "type": "string",
+              "pattern": "^[a-z][A-Za-z0-9]*$"
+            },
+            "parameter": {
+              "type": "string",
+              "pattern": "^[a-z][a-zA-Z0-9]*$"
+            }
+          }
+        },
+        "source": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": false,
+          "description": "Con qué se paga. Nunca datos de tarjeta: solo referencias opacas de la pasarela. token: el que produce el componente de la pasarela en el navegador (cliente presente). saved: la referencia a un medio de pago guardado (cliente ausente, exige la capacidad off-session); puede ser la opaca de la pasarela (string) o el id de un registro propio (uuid), que es lo que permite atar el medio a su titular.",
+          "properties": {
+            "token": {
+              "type": "string",
+              "pattern": "^[a-z][A-Za-z0-9]*$"
+            },
+            "saved": {
+              "type": "string",
+              "pattern": "^[a-z][A-Za-z0-9]*$"
+            }
+          }
+        }
+      }
+    },
+    "capture": {
+      "$ref": "#/$defs/followUp",
+      "description": "Capturar lo autorizado. Obligatoria con flow: authorize-capture y prohibida con single-step. Con 'amount' captura un importe menor (exige partial-capture)."
+    },
+    "void": {
+      "type": "object",
+      "required": [
+        "operation",
+        "inFlight"
+      ],
+      "additionalProperties": false,
+      "description": "Anular una autorización que no se va a capturar.",
+      "properties": {
+        "operation": {
+          "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/operationName"
+        },
+        "inFlight": {
+          "type": "string",
+          "pattern": "^[a-z][A-Za-z0-9]*$",
+          "description": "Estado del lifecycle del registro en el que la operación deja el cobro ANTES de llamar a la pasarela (capturing, canceling, refunding). Es lo que hace reconciliable una acción cuya respuesta no llegó, y lo que impide que dos acciones incompatibles sobre el mismo cobro lleguen las dos a la pasarela: la segunda encuentra el cobro ya en vuelo."
+        }
+      }
+    },
+    "refund": {
+      "$ref": "#/$defs/followUp",
+      "description": "Devolver lo cobrado. Con 'amount' devuelve una parte (exige partial-refund)."
+    },
+    "savePaymentMethod": {
+      "type": "object",
+      "required": [
+        "operation",
+        "token",
+        "exposedAs"
+      ],
+      "additionalProperties": false,
+      "description": "Guardar un medio de pago para cobrar después sin el cliente presente. Es una operación propia y no un efecto lateral del cobro porque cada pasarela lo hace de una forma (Stripe con un SetupIntent, MercadoPago con un primer cobro marcado como credencial guardada). Exige la capacidad off-session.",
+      "properties": {
+        "operation": {
+          "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/operationName"
+        },
+        "token": {
+          "type": "string",
+          "pattern": "^[a-z][A-Za-z0-9]*$",
+          "description": "Campo del input con el token que produce el componente de la pasarela."
+        },
+        "exposedAs": {
+          "type": "string",
+          "pattern": "^[a-z][A-Za-z0-9]*$",
+          "description": "Nombre del campo opaco con el que la referencia guardada sale en la respuesta. Es lo que después llega a charge.source.saved."
+        }
+      }
+    },
+    "outcomes": {
+      "type": "object",
+      "required": [
+        "captured",
+        "failed"
+      ],
+      "additionalProperties": false,
+      "description": "Qué operación propia aplica cada desenlace. Los dispara el generador al conocer el desenlace —por la respuesta de la pasarela, por su aviso o por el barrido—, nunca un cliente: por eso tienen que ser internal. El aviso de la pasarela solo dice que algo cambió; la verdad se le consulta.",
+      "properties": {
+        "authorized": {
+          "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/operationName"
+        },
+        "captured": {
+          "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/operationName"
+        },
+        "failed": {
+          "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/operationName"
+        },
+        "actionRequired": {
+          "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/operationName"
+        },
+        "refunded": {
+          "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/operationName"
+        },
+        "canceled": {
+          "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/operationName"
+        }
+      }
+    },
+    "reconciliation": {
+      "type": "object",
+      "required": [
+        "sweep",
+        "unansweredAfterSeconds"
+      ],
+      "additionalProperties": false,
+      "description": "El barrido de lo que espera un desenlace. Obligatorio, y no por prudencia: la idempotencia de la pasarela no basta contra el doble cargo —guarda también los errores con su clave y la olvida pasado un tiempo—, así que una acción cuya respuesta no llegó nunca se repite a ciegas: se queda en su estado en vuelo y el barrido le pregunta a la pasarela. Cubre el cobro en pending, el que espera al cliente en actionRequired y el estado en vuelo de cada acción de seguimiento.",
+      "properties": {
+        "sweep": {
+          "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/operationName"
+        },
+        "unansweredAfterSeconds": {
+          "type": "integer",
+          "minimum": 60,
+          "description": "Cuánto silencio se tolera antes de que el barrido consulte un cobro que espera desenlace."
+        }
+      }
+    }
+  },
+  "$defs": {
+    "followUp": {
+      "type": "object",
+      "required": [
+        "operation",
+        "inFlight"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "operation": {
+          "$ref": "https://keel.dev/schema/2.0/common.schema.json#/$defs/operationName"
+        },
+        "amount": {
+          "type": "string",
+          "pattern": "^[a-z][A-Za-z0-9]*$",
+          "description": "Campo decimal (opcional en el contrato) del input con un importe menor que el total."
+        },
+        "inFlight": {
+          "type": "string",
+          "pattern": "^[a-z][A-Za-z0-9]*$",
+          "description": "Estado del lifecycle del registro en el que la operación deja el cobro ANTES de llamar a la pasarela (capturing, canceling, refunding). Es lo que hace reconciliable una acción cuya respuesta no llegó, y lo que impide que dos acciones incompatibles sobre el mismo cobro lleguen las dos a la pasarela: la segunda encuentra el cobro ya en vuelo."
+        }
+      }
+    }
+  }
+}

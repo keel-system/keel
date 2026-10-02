@@ -82,6 +82,7 @@ aplica» (atenuada) — ese es el valor informativo: se ve de un vistazo lo que 
 | `storage` | Almacenamiento de archivos | hay capa `storage` | una fila por bucket: `[<bucket>, "<visibility> · <maxSizeMb> MB · <contentTypes>"]` |
 | `httpClients` | Integraciones HTTP salientes | hay capa `http-clients` | Clientes (nº), Llamadas (nº), Con circuit breaker (nº) |
 | `dependencies` | Depende de | hay capa `dependencies` | una fila por proveedor: `[<proveedor>, "contrato <version> · <n> necesidades (<estrategias>) · <n> activaciones (<awaits>) · <n> compensaciones"]` |
+| `payments` | Cobros | hay capa `payments` | Flujo, Capacidades exigidas a la pasarela (y una nota: la pasarela se elige al generar), una fila por acción (`charge`, `capture`, `void`, `refund`, `savePaymentMethod`) con su operación, una fila por desenlace con su operación y el evento que publica, y el barrido con su umbral |
 | `mail` | Correo saliente | hay capa `mail` | Transporte, Partes del cuerpo, Remitente (`fixed <dirección>` o `del dato` + si hay respaldo o se falla cerrado), Plantillas (`en la BD`/`en el repositorio` + si se validan las variables declaradas), y una fila por operación de `sentBy` con su guarda de repetición |
 | `security` | Seguridad | hay capa `security` | Protocolo, M2M (`serviceAuth.protocol` o `no`), Roles (nº), Permisos (nº), Clientes máquina (nº) |
 | `schedule` | Trabajos programados | alguna operación declara `schedule` | una fila por operación: `[<operación>, <cron>]` |

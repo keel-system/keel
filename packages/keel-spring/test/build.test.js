@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
 import { READY_FIXTURES, mountDesign } from './helpers/workspace.js';
-import { HARNESSES, validateService } from 'keel-core';
+import { HARNESSES, loadService, validateService } from 'keel-core';
 import { build } from '../src/commands/build.js';
 import { assetsDir, SUPPORTED_DSL } from '../src/lib/assets.js';
 
@@ -416,7 +416,8 @@ for (const name of READY_FIXTURES) {
 
     assert.equal(exitCode, undefined, salida);
     assert.doesNotMatch(salida, /Diseño no listo/);
-    assert.deepEqual(stampOf(workspace, name), { version: '2.0.2', ready: true, missing: [] });
+    const version = loadService(path.join(workspace, 'specs', name)).manifest.service.version;
+    assert.deepEqual(stampOf(workspace, name), { version, ready: true, missing: [] });
   });
 }
 

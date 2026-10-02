@@ -110,6 +110,7 @@ service (manifiesto)
 | `integrations` kind `storage` (BD) | `persistence.keel.yaml` |
 | `integrations` kind `storage` (archivos/blobs) | `storage.keel.yaml` (buckets) + campos `file` en `domain.keel.yaml` |
 | correo saliente propio (SMTP) | `mail.keel.yaml` (transporte, remitente, plantillas y las operaciones que lo mandan) |
+| cobros con tarjeta por una pasarela | `payments.keel.yaml` (flujo, capacidades exigidas, qué operación ejecuta cada acción y aplica cada desenlace; la pasarela se elige al generar) |
 
 ## División de responsabilidades
 

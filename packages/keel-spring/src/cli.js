@@ -29,6 +29,7 @@ program
   .description('No escribe nada: dice si el diseño es generable y qué avisos traería, desde el workspace de diseño y antes de sembrar el proyecto (distinto de build --check, que opina sobre un proyecto ya generado)')
   .argument('[ruta]', 'directorio del servicio o su manifiesto (ej. specs/mi-servicio)')
   .option('--database <motor>', 'comprueba contra el motor que vayas a usar; sin él se asume el default del modelo que declara el diseño')
+  .option('--payment-gateway <pasarela>', 'con capa payments, comprueba solo esa pasarela; sin él se contrastan todas las del catálogo')
   .option('--strict', 'trata cualquier aviso como bloqueo (puerta de CI)', false)
   .action((ruta, options) => check(ruta, options));
 

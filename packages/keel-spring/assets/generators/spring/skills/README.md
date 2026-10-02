@@ -25,6 +25,8 @@ diseño del servicio.
 | `cache` | `redis` / `valkey` | `keel-spring-redis/` (protocolo Redis en ambos) |
 | `auth` | `keycloak` | `keel-spring-keycloak/` |
 | `auth` | `cognito` | `keel-spring-cognito/` |
+| `paymentGateway` | `stripe` | `keel-spring-stripe/` (más `keel-spring-payments/`, neutra) |
+| `paymentGateway` | `mercadopago` | `keel-spring-mercadopago/` (más `keel-spring-payments/`, neutra) |
 
 | Capa de diseño | Skill |
 |---|---|

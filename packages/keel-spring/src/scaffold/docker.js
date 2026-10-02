@@ -76,7 +76,8 @@ export function generate(model) {
 
   // Proveedor de prueba de las integraciones salientes: sin él, un flujo que
   // llama a otro servicio no se puede puntuar (ver HTTP_STUB en stack-catalog).
-  if (layersPresent.httpClients) {
+  // Y la pasarela de pago de prueba, que es el mismo WireMock hablando el protocolo de la elegida.
+  if (layersPresent.httpClients || layersPresent.payments) {
     Object.assign(services, HTTP_STUB.composeServices());
   }
 
@@ -135,7 +136,7 @@ export function generate(model) {
   }
   // El montaje del stub necesita el directorio: si no existe, el runtime lo crea
   // como root y el contenedor no puede leerlo (podman rootless, sobre todo).
-  if (layersPresent.httpClients) {
+  if (layersPresent.httpClients || layersPresent.payments) {
     files.push({ path: 'infra/http-stubs/mappings/.gitkeep', content: '' });
     files.push({ path: 'infra/http-stubs/README.md', content: httpStubsReadme(service) });
   }

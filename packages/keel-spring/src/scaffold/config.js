@@ -138,6 +138,9 @@ export function generate(model) {
     if (layersPresent.mail) {
       fragments.push(fragment(profile, 'mail', mailYaml(model, profile)));
     }
+    if (model.payments) {
+      fragments.push(fragment(profile, 'payments', paymentsYaml(model, profile)));
+    }
     if (layersPresent.httpClients && model.httpClients) {
       fragments.push(fragment(profile, 'http-clients', httpClientsYaml(model, profile)));
     }
@@ -1175,6 +1178,39 @@ function mailYaml(model, profile) {
 }
 
 /**
+ * La pasarela de pago (capa payments). Credenciales y URL son dato de despliegue: en production vienen
+ * del entorno SIN default —un despliegue que las olvide no arranca, en vez de cobrar contra otra
+ * cuenta—, y en local y test apuntan a la pasarela de prueba de infra/ (WireMock hablando el protocolo
+ * de la pasarela elegida) con un secreto de firma conocido, que es el que usa el arnés para firmar
+ * los avisos de los escenarios.
+ */
+export const PAYMENT_TEST_SECRETS = { apiKey: 'keel-test-api-key', webhookSecret: 'keel-test-webhook-secret' };
+
+function paymentsYaml(model, profile) {
+  const gateway = model.payments.gateway;
+  const isLocalish = profile === 'local' || profile === 'test';
+  const baseUrl = isLocalish ? `http://localhost:${HTTP_STUB.publishedPort}` : gateway.baseUrl;
+  const lines = [
+    'payments:',
+    '  gateway:',
+    // La URL no es un secreto: fuera de local tiene como default la API pública de la pasarela.
+    `    base-url: ${isLocalish ? baseUrl : envWithDefault(profile, gateway.env.baseUrl, gateway.baseUrl)}`,
+    `    api-key: ${envValue(profile, gateway.env.apiKey, PAYMENT_TEST_SECRETS.apiKey)}`,
+    `    webhook-secret: ${envValue(profile, gateway.env.webhookSecret, PAYMENT_TEST_SECRETS.webhookSecret)}`,
+    // Más corto que el presupuesto de la operación: superado, la acción queda en duda y responde con
+    // su estado en vuelo, en vez de dejar al llamante esperando a la pasarela.
+    `    connect-timeout: ${envWithDefault(profile, 'PAYMENT_GATEWAY_CONNECT_TIMEOUT', '2s')}`,
+    `    read-timeout: ${envWithDefault(profile, 'PAYMENT_GATEWAY_READ_TIMEOUT', '10s')}`,
+    `    notice-tolerance-seconds: ${envWithDefault(profile, 'PAYMENT_NOTICE_TOLERANCE_SECONDS', gateway.webhook.toleranceSeconds)}`,
+    '  reconciliation:',
+    '    # Lo decide el diseño (payments.reconciliation.unansweredAfterSeconds); en local y test se acorta',
+    '    # para que los escenarios del barrido no esperen un cuarto de hora.',
+    `    unanswered-after-seconds: ${isLocalish ? 5 : envWithDefault(profile, 'PAYMENT_UNANSWERED_AFTER_SECONDS', model.payments.reconciliation.unansweredAfterSeconds)}`
+  ];
+  return lines.join('\n') + '\n';
+}
+
+/**
  * El fragmento de los parámetros de despliegue, con el mismo GRADIENTE por perfil que el resto
  * de la configuración y por la misma razón: en prueba el valor tiene que estar puesto (los
  * escenarios lo asumen), en `develop` tiene que poder cambiarse sin reconstruir la imagen, y
@@ -1558,6 +1594,12 @@ function testProfileFiles(model) {
   // escenarios de integración, que corren contra el Mailpit de infra/).
   if (model.layersPresent.mail) {
     fragments.push(fragment('test', 'mail', mailYaml(model, 'test')));
+  }
+
+  // La pasarela: el binding de payments.gateway se crea también en @SpringBootTest, o el contexto
+  // muere al construir el adaptador. Nada la llama en el perfil test.
+  if (model.payments) {
+    fragments.push(fragment('test', 'payments', paymentsYaml(model, 'test')));
   }
 
   // Resource server JWT: sin issuer-uri ni jwk-set-uri, Boot no autoconfigura

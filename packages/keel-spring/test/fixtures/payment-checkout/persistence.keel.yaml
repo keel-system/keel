@@ -1,0 +1,19 @@
+default:
+  model: relational
+entities:
+  Payment:
+    naturalKey: [chargeRequestId]
+    naturalKeyError: CHARGE_ALREADY_REQUESTED
+    indexes:
+      - [status, awaitingSince]
+      - [orderId]
+      - [gatewayPaymentId]
+  SavedPaymentMethod:
+    indexes:
+      - [payerId]
+consistency:
+  transactionalBoundary: per-aggregate
+  optimisticLocking: all
+audit:
+  timestamps: all
+  authorship: none

@@ -170,10 +170,14 @@ export function checkSupportedFeatures(manifest, layers) {
       .filter(Boolean)
   );
   const orphanInternal = [];
+  const paymentOutcomes = new Set(Object.values(layers?.payments?.outcomes ?? {}));
   for (const [opName, op] of Object.entries(layers?.['use-cases']?.operations ?? {})) {
     if (op?.internal !== true) continue;
     if (op.schedule !== undefined) continue;
     if (triggeredBySubscription.has(opName)) continue;
+    // Los desenlaces de la capa payments SÍ tienen disparador generado: los despacha el
+    // PaymentOutcomeApplier que emite build (respuesta de la pasarela, aviso o barrido).
+    if (paymentOutcomes.has(opName)) continue;
     orphanInternal.push(opName);
   }
   // La consecuencia cara solo existe si entre reclamar y actuar hay I/O externo: es lo

@@ -1,0 +1,310 @@
+operations:
+
+  savePaymentMethod:
+    description: Guarda un medio de pago del cliente para cobrarlo después sin él delante.
+    kind: command
+    input:
+      fields:
+        payerId: { type: string, required: true, constraints: { maxLength: 64 } }
+        paymentToken:
+          type: string
+          required: true
+          constraints: { maxLength: 255 }
+          description: El token que produjo el componente de la pasarela en el navegador; nunca un dato de tarjeta.
+    # El id del medio guardado es lo que se manda después para cobrarlo (payments: exposedAs: id).
+    output: { entity: SavedPaymentMethod, exclude: [gatewayReference] }
+    rules:
+      - El servicio entrega su propio id y nunca la referencia de la pasarela, que se guarda aparte.
+      - El medio queda a nombre del payerId de la petición.
+    errors:
+      - code: PAYMENT_METHOD_REJECTED
+        when: La pasarela no acepta el medio de pago.
+        http: 422
+      - code: GATEWAY_UNAVAILABLE
+        when: La pasarela no contesta.
+        http: 503
+
+  requestCharge:
+    description: Pide el cobro de un pedido, con el token del cliente presente o con un medio guardado.
+    kind: command
+    input:
+      fields:
+        chargeRequestId:
+          type: string
+          required: true
+          constraints: { maxLength: 64 }
+          description: Lo elige quien pide el cobro y lo repite si reintenta; identifica la petición.
+        orderId: { type: string, required: true, constraints: { maxLength: 64 } }
+        payerId: { type: string, required: true, constraints: { maxLength: 64 } }
+        amount: { type: decimal, required: true, constraints: { min: 0.01, scale: 2, scalePolicy: reject } }
+        paymentToken:
+          type: string
+          constraints: { maxLength: 255 }
+          description: Cliente presente — el token del componente de la pasarela.
+        paymentMethodRef:
+          type: uuid
+          description: Cliente ausente — el id de un medio guardado con savePaymentMethod.
+    output: { entity: Payment }
+    preconditions:
+      - Llega exactamente uno de paymentToken o paymentMethodRef.
+      - Con paymentMethodRef, el medio existe y su titular es el payerId de la petición.
+    rules:
+      - >-
+        El importe lo fija el sistema de pedidos, que es el único llamante (un cliente máquina con
+        su scope) y el único emisor del canal chargeRequests: el servicio no vende nada y no tiene
+        contra qué contrastarlo.
+      - >-
+        El cobro se registra en pending, con requestedAt y awaitingSince, ANTES de llamar a la
+        pasarela; con paymentMethodRef queda anotado en savedPaymentMethodId.
+      - >-
+        Si la pasarela contesta en el acto, la respuesta ya lleva el desenlace (authorized,
+        actionRequired con su customerAction, o failed con su motivo). Si no contesta, el cobro se
+        queda en pending y lo resuelve el barrido: nunca se reintenta a ciegas.
+      - Un rechazo de la pasarela no es un error de la petición, sino un cobro failed con su failureReason.
+      - Un medio que no existe y uno de otro titular responden igual, para no revelar cuáles existen.
+      - >-
+        Por la suscripción no hay a quién responder un 422: un medio de pago inválido, ausente, doble
+        o de otro titular registra el cobro en pending y le aplica markFailed con failureReason
+        invalidPaymentMethod, sin llamar a la pasarela: sale PaymentFailed, como de cualquier otro
+        fallo. Así quien lo pidió por evento se entera por evento.
+    errors:
+      - code: PAYMENT_SOURCE_INVALID
+        when: No llega ningún medio de pago, o llegan los dos.
+        http: 422
+      - code: PAYMENT_METHOD_NOT_FOUND
+        when: El medio guardado no existe o no es del pagador.
+        http: 422
+      - code: CHARGE_ALREADY_REQUESTED
+        when: Ya hay un cobro con ese chargeRequestId.
+        http: 409
+
+  getPayment:
+    description: Consulta un cobro por la referencia con la que se pidió.
+    kind: query
+    input:
+      fields:
+        chargeRequestId: { type: string, required: true, constraints: { maxLength: 64 } }
+    output: { entity: Payment }
+    errors:
+      - code: PAYMENT_NOT_FOUND
+        when: No hay cobro con esa referencia.
+        http: 404
+
+  capturePayment:
+    description: Captura lo autorizado de un cobro, al servir el pedido.
+    kind: command
+    input:
+      fields:
+        chargeRequestId: { type: string, required: true, constraints: { maxLength: 64 } }
+    output: { entity: Payment }
+    preconditions:
+      - El cobro está en authorized.
+    rules:
+      - Se captura el importe entero autorizado.
+      - >-
+        El cobro pasa a capturing, con awaitingSince, antes de llamar a la pasarela. Si confirma en
+        el acto, la respuesta lleva el cobro en captured; si no contesta, en capturing, y lo resuelve
+        el barrido.
+      - >-
+        Si la pasarela rechaza la captura porque la autorización caducó, el cobro pasa a canceled
+        (cancelReason expired) y se responde PAYMENT_NOT_CAPTURABLE.
+    errors:
+      - code: PAYMENT_NOT_FOUND
+        when: No hay cobro con esa referencia.
+        http: 404
+      - code: PAYMENT_NOT_CAPTURABLE
+        when: El cobro no está autorizado, porque no lo está todavía, ya se capturó, hay otra acción en curso o la autorización caducó.
+        http: 409
+      - code: CONCURRENT_MODIFICATION
+        when: Otro desenlace modificó el cobro a la vez.
+        http: 409
+    transitions:
+      - { entity: Payment, from: [authorized], to: capturing }
+
+  cancelPayment:
+    description: Anula la autorización de un cobro que no se va a servir.
+    kind: command
+    input:
+      fields:
+        chargeRequestId: { type: string, required: true, constraints: { maxLength: 64 } }
+    output: { entity: Payment }
+    preconditions:
+      - El cobro está en authorized.
+    rules:
+      - >-
+        El cobro pasa a canceling, con awaitingSince, antes de llamar a la pasarela. Si confirma en
+        el acto, la respuesta lleva el cobro en canceled (cancelReason requested); si no contesta,
+        en canceling, y lo resuelve el barrido.
+    errors:
+      - code: PAYMENT_NOT_FOUND
+        when: No hay cobro con esa referencia.
+        http: 404
+      - code: PAYMENT_NOT_CANCELABLE
+        when: El cobro no está autorizado, o hay otra acción en curso.
+        http: 409
+      - code: CONCURRENT_MODIFICATION
+        when: Otro desenlace modificó el cobro a la vez.
+        http: 409
+    transitions:
+      - { entity: Payment, from: [authorized], to: canceling }
+
+  refundPayment:
+    description: Devuelve todo o parte de lo capturado.
+    kind: command
+    input:
+      fields:
+        chargeRequestId: { type: string, required: true, constraints: { maxLength: 64 } }
+        amount:
+          type: decimal
+          constraints: { min: 0.01, scale: 2, scalePolicy: reject }
+          description: Lo que se devuelve; sin él, todo lo cobrado.
+    output: { entity: Payment }
+    preconditions:
+      - El cobro está en captured.
+      - El importe a devolver no supera lo cobrado.
+    rules:
+      - Hay una sola devolución por cobro, total o parcial.
+      - >-
+        El cobro pasa a refunding, con awaitingSince, antes de llamar a la pasarela. Si confirma en
+        el acto, la respuesta lleva el cobro en refunded con refundedAmount; si no contesta, en
+        refunding, y lo resuelve el barrido. Si la rechaza, el cobro vuelve a captured y se
+        responde REFUND_REJECTED.
+    errors:
+      - code: PAYMENT_NOT_FOUND
+        when: No hay cobro con esa referencia.
+        http: 404
+      - code: PAYMENT_NOT_REFUNDABLE
+        when: El cobro no está capturado, ya se devolvió o hay una devolución en curso.
+        http: 409
+      - code: REFUND_EXCEEDS_CAPTURED
+        when: El importe a devolver supera lo cobrado.
+        http: 422
+      - code: REFUND_REJECTED
+        when: La pasarela rechaza la devolución.
+        http: 422
+      - code: CONCURRENT_MODIFICATION
+        when: Otro desenlace modificó el cobro a la vez.
+        http: 409
+    transitions:
+      - { entity: Payment, from: [captured], to: refunding }
+      - { entity: Payment, from: [refunding], to: captured, description: La pasarela rechazó la devolución. }
+
+  # Los desenlaces. Los dispara el servidor generado cuando conoce el resultado —por la respuesta
+  # de la pasarela, por su aviso o por el barrido—, nunca un cliente: por eso son internal. Son
+  # idempotentes: el mismo desenlace por dos caminos, o uno tardío sobre un cobro que ya salió
+  # del estado de origen, no hace nada y no es un error.
+  markAuthorized:
+    description: Registra que la pasarela retuvo el importe.
+    kind: command
+    internal: true
+    input:
+      fields:
+        chargeRequestId: { type: string, required: true, constraints: { maxLength: 64 } }
+        gatewayPaymentId: { type: string, required: true, constraints: { maxLength: 128 } }
+    output: void
+    rules:
+      - Vacía customerAction.
+    emits: [PaymentAuthorized]
+    transitions:
+      - { entity: Payment, from: [pending, actionRequired], to: authorized }
+
+  markActionRequired:
+    description: Registra que el cobro espera a que el cliente se autentique.
+    kind: command
+    internal: true
+    input:
+      fields:
+        chargeRequestId: { type: string, required: true, constraints: { maxLength: 64 } }
+        gatewayPaymentId: { type: string, required: true, constraints: { maxLength: 128 } }
+        customerAction: { type: json, required: true }
+    output: void
+    rules:
+      - Guarda customerAction tal cual llega de la pasarela.
+    emits: [PaymentActionRequired]
+    transitions:
+      - { entity: Payment, from: [pending], to: actionRequired }
+
+  markCaptured:
+    description: Registra que el importe se cobró.
+    kind: command
+    internal: true
+    input:
+      fields:
+        chargeRequestId: { type: string, required: true, constraints: { maxLength: 64 } }
+    output: void
+    emits: [PaymentCaptured]
+    transitions:
+      - { entity: Payment, from: [capturing], to: captured }
+
+  markFailed:
+    description: Registra que el cobro no se pudo hacer.
+    kind: command
+    internal: true
+    input:
+      fields:
+        chargeRequestId: { type: string, required: true, constraints: { maxLength: 64 } }
+        failureReason: { type: PaymentFailureReason, required: true }
+        gatewayPaymentId:
+          type: string
+          constraints: { maxLength: 128 }
+          description: El id de la pasarela, si llegó a asignarlo; se conserva para poder reclamar.
+    output: void
+    rules:
+      - Vacía customerAction.
+    emits: [PaymentFailed]
+    transitions:
+      - { entity: Payment, from: [pending, actionRequired], to: failed }
+
+  markRefunded:
+    description: Registra que la devolución se completó.
+    kind: command
+    internal: true
+    input:
+      fields:
+        chargeRequestId: { type: string, required: true, constraints: { maxLength: 64 } }
+        refundedAmount: { type: decimal, required: true, constraints: { min: 0.01, scale: 2, scalePolicy: reject } }
+    output: void
+    emits: [PaymentRefunded]
+    transitions:
+      - { entity: Payment, from: [refunding], to: refunded }
+
+  markCanceled:
+    description: Registra que la autorización se anuló o caducó.
+    kind: command
+    internal: true
+    input:
+      fields:
+        chargeRequestId: { type: string, required: true, constraints: { maxLength: 64 } }
+        cancelReason: { type: CancelReason, required: true }
+    output: void
+    emits: [PaymentCanceled]
+    transitions:
+      - { entity: Payment, from: [authorized, capturing, canceling], to: canceled }
+
+  sweepPendingPayments:
+    description: Pregunta a la pasarela por todo lo que lleva demasiado tiempo esperando un desenlace.
+    kind: command
+    input: void
+    output: void
+    schedule: { cron: "*/5 * * * *" }
+    rules:
+      - >-
+        Candidatos: cobros en pending, actionRequired, capturing, canceling o refunding cuyo
+        awaitingSince es más antiguo que el umbral de la reconciliación. A cada uno se le consulta
+        el estado a la pasarela —por gatewayPaymentId, o por chargeRequestId si aún no lo tiene— y
+        se aplica el desenlace que diga, con la operación de desenlace que le toca.
+      - >-
+        Antes de consultar, el barrido reclama cada candidato volviendo a estampar awaitingSince: otra
+        réplica no lo toma hasta que vuelva a pasar el umbral, y cada cobro se consulta una vez por pasada.
+      - >-
+        Si la pasarela no conoce un cobro en pending, la petición no le llegó nunca: el barrido lo
+        da por fallido con failureReason notReceived y sale PaymentFailed.
+      - >-
+        Si una acción de seguimiento no llegó a hacerse (la pasarela dice que el cobro sigue
+        autorizado, o capturado), el barrido devuelve el cobro al estado del que salió.
+      - Un cobro que la pasarela sigue dando por en curso se deja para la siguiente pasada.
+    emits: [PaymentFailed]
+    transitions:
+      - { entity: Payment, from: [pending], to: failed }
+      - { entity: Payment, from: [capturing, canceling], to: authorized }
+      - { entity: Payment, from: [refunding], to: captured }

@@ -126,3 +126,12 @@ test('la familia de la unicidad se deriva de los campos de la clave', () => {
   // varias claves declare un error distinto para cada una.
   assert.equal(overrideFor([{ code: 'ASSET_CHECKSUM_ALREADY_EXISTS', http: 409 }], FRAMEWORK_ERRORS.uniqueness, family), null);
 });
+
+test('overrideFor: el mismo code declarado en varias operaciones es un solo contrato', () => {
+  // Declarar el conflicto en cada operación donde se observa es lo que pide el aviso; contarlo como
+  // tres candidatos lo volvía ambiguo y el generador volvía al canónico sin decirlo.
+  const conflict = { code: 'PAYMENT_VERSION_CONFLICT', http: 409 };
+  assert.equal(overrideFor([conflict, { ...conflict }, { ...conflict }], FRAMEWORK_ERRORS.concurrency).code, 'PAYMENT_VERSION_CONFLICT');
+  // Dos codes DISTINTOS de la familia siguen siendo ambiguos.
+  assert.equal(overrideFor([conflict, { code: 'CONCURRENT_UPDATE', http: 409 }], FRAMEWORK_ERRORS.concurrency), null);
+});

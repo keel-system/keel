@@ -1,0 +1,32 @@
+style: rest
+basePath: /api/v1
+endpoints:
+  savePaymentMethod:
+    audience: services
+    method: POST
+    path: /payment-methods
+    successStatus: 201
+  requestCharge:
+    audience: services
+    method: POST
+    path: /payments
+    successStatus: 201
+  getPayment:
+    audience: services
+    method: GET
+    path: /payments/{chargeRequestId}
+  capturePayment:
+    audience: services
+    method: POST
+    path: /payments/{chargeRequestId}/capture
+    successStatus: 200
+  cancelPayment:
+    audience: services
+    method: POST
+    path: /payments/{chargeRequestId}/cancel
+    successStatus: 200
+  refundPayment:
+    audience: services
+    method: POST
+    path: /payments/{chargeRequestId}/refund
+    successStatus: 200

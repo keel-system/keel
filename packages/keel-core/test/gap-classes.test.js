@@ -87,6 +87,9 @@ test('la clase 16 incluye la auditoría y la compensación, que también son ent
 test('una clase sin unidades no aplica: el disparador y el inventario son la misma pregunta', () => {
   const inventory = gapInventory(layers());
   assert.equal(unitsOf(inventory, 17), undefined, 'sin capa mail no hay correo que recorrer');
+  assert.equal(unitsOf(inventory, 18), undefined, 'sin capa payments no hay cobros que recorrer');
+  const conCobros = { ...layers(), payments: { charge: { operation: 'pay' }, refund: { operation: 'refund' } } };
+  assert.deepEqual(unitsOf(gapInventory(conCobros), 18), ['charge', 'refund'], 'las unidades son las acciones declaradas');
   // Sin dependencies ni http-clients, la clase 8 aplica igual: una suscripción es un evento ajeno.
   assert.deepEqual(unitsOf(inventory, 8), ['subscriptions.PaymentFailed']);
 });
@@ -95,4 +98,16 @@ test('tolera un diseño a medias: una capa rota no hace lanzar el inventario', (
   const broken = { domain: { entities: { Order: null } }, 'use-cases': { operations: { x: null } }, mail: { sentBy: 'x' } };
   assert.doesNotThrow(() => gapInventory(broken));
   assert.deepEqual(gapInventory({}), []);
+});
+
+test('el schema de gaps.yaml admite todas las clases del catálogo, ni una más', async () => {
+  // La clase 18 entró en el catálogo con el schema todavía en 17: el inventario la pedía y no
+  // había forma de escribirla. Que el tope lo diga el catálogo lo impide la próxima vez.
+  const fs = await import('node:fs');
+  const { schemaPathFor } = await import('../src/lib/assets.js');
+  const { GAP_CLASSES } = await import('../src/lib/gap-classes.js');
+  const schema = JSON.parse(fs.readFileSync(schemaPathFor('gaps'), 'utf8'));
+  const last = Math.max(...Object.keys(GAP_CLASSES).map(Number));
+  assert.equal(schema.properties.coverage.items.properties.class.maximum, last);
+  assert.equal(schema.properties.findings.items.properties.class.maximum, last);
 });

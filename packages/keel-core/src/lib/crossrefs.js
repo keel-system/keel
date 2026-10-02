@@ -1,6 +1,7 @@
 import { FRAMEWORK_ERRORS, overrideFor, conditionalUniquenessToken } from './framework-errors.js';
 import { obligationFor } from './obligations.js';
 import { checkFor } from './checks.js';
+import { FAILURE_REASONS } from './payment-vocabulary.js';
 import { implicitDefaults } from './structural-defaults.js';
 import { splitScenarioBlocks, scenarioFamilyOf, scenarioIdOf, scenarioBody, parseCoverageMatrix, conventionsText } from './scenario-blocks.js';
 
@@ -83,6 +84,7 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
   const persistence = layers['persistence'];
   const storage = layers['storage'];
   const mail = layers['mail'];
+  const payments = layers['payments'];
 
   const types = new Set(Object.keys(domain.types ?? {}));
   const entities = new Set(Object.keys(domain.entities ?? {}));
@@ -3667,6 +3669,282 @@ export function checkCrossRefs({ layers, wip = false, scenarios = null, manifest
         "mail: templating: el cuerpo es 'data' y no declara 'declaredVariables': una variable que falte se " +
           'interpolará como vacío y el correo saldrá con un hueco donde iba el dato, sin que nada falle'
       );
+    }
+  }
+
+  if (payments) checkPayments();
+
+  // payments: cobros con tarjeta a través de una pasarela que se elige al GENERAR. La capa no
+  // nombra pasarela, así que todo lo que el generador necesita para cumplirla en cualquiera de
+  // ellas tiene que estar enlazado aquí con el resto del diseño: qué operación ejecuta cada
+  // acción, de qué campos sale cada dato y qué entidad recuerda cada cobro. Un enlace roto no
+  // lo detectaría nadie después: el adaptador se generaría contra un campo que no existe.
+  function checkPayments() {
+    const capabilities = new Set(payments.capabilities ?? []);
+    const recordEntity = payments.record?.entity;
+    const triggeredByEvent = new Set(
+      Object.values(messaging?.subscriptions ?? {}).map((sub) => sub?.triggers).filter(Boolean)
+    );
+    const inputFieldsOf = (opName) => {
+      const input = operations[opName]?.input;
+      return input && typeof input === 'object' ? (input.fields ?? {}) : {};
+    };
+
+    // Las operaciones que nombra la capa. Con use-cases aún en plantilla no hay contra qué.
+    const named = [
+      ['charge.operation', payments.charge?.operation],
+      ['capture.operation', payments.capture?.operation],
+      ['void.operation', payments.void?.operation],
+      ['refund.operation', payments.refund?.operation],
+      ['savePaymentMethod.operation', payments.savePaymentMethod?.operation],
+      ...Object.entries(payments.outcomes ?? {}).map(([outcome, opName]) => [`outcomes.${outcome}`, opName]),
+      ['reconciliation.sweep', payments.reconciliation?.sweep]
+    ].filter(([, opName]) => opName);
+    for (const [where, opName] of operationNames.size > 0 ? named : []) {
+      if (!operationNames.has(opName)) {
+        error('CHK-PAYMENTS-OP-UNKNOWN', `payments: ${where}: la operación '${opName}' no existe en use-cases: operations`);
+      }
+    }
+
+    // El flujo decide qué piezas existen. Con authorize-capture la autorización es un estado
+    // por derecho propio —retiene el importe y caduca—, así que necesita quien la capture y
+    // quien registre que se autorizó; con single-step ninguna de las dos tiene sentido.
+    if (payments.flow === 'authorize-capture') {
+      if (!payments.capture) {
+        error('CHK-PAYMENTS-FLOW-MISMATCH',
+          "payments: flow: authorize-capture sin 'capture': lo autorizado no lo captura nadie y la autorización caduca sola");
+      }
+      if (!payments.outcomes?.authorized) {
+        error('CHK-PAYMENTS-FLOW-MISMATCH',
+          "payments: flow: authorize-capture sin 'outcomes.authorized': el servicio no registra que el importe quedó retenido");
+      }
+    } else if (payments.flow === 'single-step') {
+      for (const piece of ['capture', 'outcomes.authorized']) {
+        const present = piece === 'capture' ? payments.capture : payments.outcomes?.authorized;
+        if (present) {
+          error('CHK-PAYMENTS-FLOW-MISMATCH',
+            `payments: ${piece}: declarado con flow: single-step, donde autorizar y capturar son el mismo acto`);
+        }
+      }
+    }
+
+    // Cada capacidad es una exigencia a la pasarela y tiene que tener la pieza que la usa; y
+    // cada pieza que la usa tiene que declararla, porque es la lista contra la que el generador
+    // contrasta su matriz de paridad. Una capacidad sin pieza estrecha sin motivo las pasarelas
+    // que sirven el diseño; una pieza sin capacidad se generaría en una que no la cubre.
+    const capabilityPieces = {
+      'partial-capture': ['capture.amount', payments.capture?.amount],
+      'partial-refund': ['refund.amount', payments.refund?.amount],
+      'customer-action': ['record.customerAction', payments.record?.customerAction],
+      'off-session': ['savePaymentMethod', payments.savePaymentMethod]
+    };
+    for (const [capability, [piece, present]] of Object.entries(capabilityPieces)) {
+      if (capabilities.has(capability) && !present) {
+        error('CHK-PAYMENTS-CAPABILITY-UNBACKED',
+          `payments: capabilities: declara '${capability}' y no hay '${piece}' que la use`);
+      }
+      if (!capabilities.has(capability) && present) {
+        error('CHK-PAYMENTS-CAPABILITY-UNBACKED',
+          `payments: ${piece}: exige la capacidad '${capability}', que capabilities no declara`);
+      }
+    }
+    if (capabilities.has('customer-action') && !payments.outcomes?.actionRequired) {
+      error('CHK-PAYMENTS-CAPABILITY-UNBACKED',
+        "payments: capabilities: declara 'customer-action' y no hay 'outcomes.actionRequired' que registre que el cobro espera al cliente");
+    }
+    if (capabilities.has('off-session') !== Boolean(payments.charge?.source?.saved)) {
+      error('CHK-PAYMENTS-CAPABILITY-UNBACKED',
+        capabilities.has('off-session')
+          ? "payments: capabilities: declara 'off-session' y charge.source no tiene 'saved': no hay con qué cobrar sin el cliente"
+          : "payments: charge.source.saved: cobrar un medio guardado exige la capacidad 'off-session'");
+    }
+
+    // Los campos. El adaptador de cada pasarela se genera contra ellos, así que tienen que estar
+    // en el input de su operación y con el tipo que la pasarela entiende.
+    const isText = (type) => type === 'string' || (typeof type === 'string' && types.has(type));
+    const fieldChecks = [
+      [payments.charge?.operation, 'charge.reference', payments.charge?.reference, (t) => t === 'string' || t === 'uuid', 'string o uuid'],
+      [payments.charge?.operation, 'charge.amount', payments.charge?.amount, (t) => t === 'decimal', 'decimal'],
+      [payments.charge?.operation, 'charge.currency.input', payments.charge?.currency?.input, isText, 'string'],
+      [payments.charge?.operation, 'charge.source.token', payments.charge?.source?.token, (t) => t === 'string', 'string'],
+      // El medio guardado puede ser la referencia opaca de la pasarela (string) o el id de un registro
+      // propio (uuid), que es lo que permite atarlo a su titular sin exponer la de la pasarela.
+      [payments.charge?.operation, 'charge.source.saved', payments.charge?.source?.saved, (t) => t === 'string' || t === 'uuid', 'string o uuid'],
+      [payments.capture?.operation, 'capture.amount', payments.capture?.amount, (t) => t === 'decimal', 'decimal'],
+      [payments.refund?.operation, 'refund.amount', payments.refund?.amount, (t) => t === 'decimal', 'decimal'],
+      [payments.savePaymentMethod?.operation, 'savePaymentMethod.token', payments.savePaymentMethod?.token, (t) => t === 'string', 'string']
+    ];
+    for (const [opName, where, field, accepts, expected] of fieldChecks) {
+      if (!field || !operations[opName]) continue;
+      const declared = inputFieldsOf(opName)[field];
+      if (!declared) {
+        error('CHK-PAYMENTS-FIELD-UNKNOWN',
+          `payments: ${where}: '${field}' no es un campo del input de '${opName}'`);
+      } else if (!accepts(declared.type)) {
+        error('CHK-PAYMENTS-FIELD-UNKNOWN',
+          `payments: ${where}: '${field}' es ${declared.type} en el input de '${opName}' y tiene que ser ${expected}`);
+      }
+    }
+    const currencyParameter = payments.charge?.currency?.parameter;
+    if (currencyParameter && manifest && !Object.hasOwn(manifest.parameters ?? {}, currencyParameter)) {
+      error('CHK-PAYMENTS-FIELD-UNKNOWN',
+        `payments: charge.currency.parameter: '${currencyParameter}' no está declarado en service.parameters`);
+    }
+
+    // El registro: la memoria del servicio frente a la pasarela.
+    const recordFields = domain.entities?.[recordEntity]?.fields;
+    if (recordEntity && entities.size > 0 && !recordFields) {
+      error('CHK-PAYMENTS-RECORD-UNKNOWN', `payments: record.entity: '${recordEntity}' no existe en domain: entities`);
+    }
+    if (recordFields) {
+      const enumValues = (type) => domain.types?.[type]?.values;
+      const recordChecks = [
+        ['gatewayRef', (t) => t === 'string', 'string'],
+        ['awaitingSince', (t) => t === 'timestamp', 'timestamp'],
+        ['failureReason', (t) => Array.isArray(enumValues(t)), 'un enum del dominio'],
+        ['customerAction', (t) => t === 'string' || t === 'json', 'string o json']
+      ];
+      for (const [key, accepts, expected] of recordChecks) {
+        const name = payments.record?.[key];
+        if (!name) continue;
+        if (!recordFields[name]) {
+          error('CHK-PAYMENTS-RECORD-UNKNOWN', `payments: record.${key}: '${name}' no es un campo de ${recordEntity}`);
+        } else if (!accepts(recordFields[name].type)) {
+          error('CHK-PAYMENTS-RECORD-UNKNOWN',
+            `payments: record.${key}: '${name}' es ${recordFields[name].type} en ${recordEntity} y tiene que ser ${expected}`);
+        }
+      }
+
+      // El motivo del fallo es lo único de un desenlace que cada pasarela dice en su idioma. Con un
+      // vocabulario propio del diseño, el adaptador de cada una tendría que adivinar a qué valor
+      // traducir, y el mismo diseño fallaría distinto según la pasarela.
+      const reasons = enumValues(recordFields[payments.record?.failureReason]?.type);
+      if (Array.isArray(reasons)) {
+        const sobran = reasons.filter((value) => !FAILURE_REASONS.includes(value));
+        const faltan = FAILURE_REASONS.filter((value) => !reasons.includes(value));
+        if (sobran.length > 0 || faltan.length > 0) {
+          error('CHK-PAYMENTS-FAILURE-VOCABULARY',
+            `payments: record.failureReason: el enum ${recordFields[payments.record.failureReason].type} tiene que tener ` +
+              `exactamente el vocabulario neutro (${FAILURE_REASONS.join(', ')})` +
+              (sobran.length > 0 ? ` — sobran: ${sobran.join(', ')}` : '') +
+              (faltan.length > 0 ? ` — faltan: ${faltan.join(', ')}` : ''));
+        }
+      }
+
+      // Los estados en vuelo de las acciones de seguimiento. Sin ellos, una captura cuya respuesta
+      // no llegó no se puede reconciliar —no hay nada que diga que estaba en curso— y una captura
+      // y una anulación simultáneas llegan las dos a la pasarela.
+      const states = new Set(Object.keys(domain.entities?.[recordEntity]?.lifecycle?.transitions ?? {}));
+      const followUps = [
+        ['capture', payments.capture, payments.outcomes?.captured],
+        ['void', payments.void, payments.outcomes?.canceled],
+        ['refund', payments.refund, payments.outcomes?.refunded]
+      ];
+      for (const [action, spec, outcomeOp] of followUps) {
+        if (!spec?.inFlight || !operations[spec.operation]) continue;
+        const where = `payments: ${action}.inFlight: '${spec.inFlight}'`;
+        if (!states.has(spec.inFlight)) {
+          error('CHK-PAYMENTS-INFLIGHT-INVALID', `${where} no es un estado del lifecycle de ${recordEntity}`);
+          continue;
+        }
+        const enters = (operations[spec.operation].transitions ?? [])
+          .some((t) => t.entity === recordEntity && t.to === spec.inFlight);
+        if (!enters) {
+          error('CHK-PAYMENTS-INFLIGHT-INVALID',
+            `${where}: '${spec.operation}' no deja el cobro en ese estado antes de llamar a la pasarela`);
+        }
+        const leaves = (operations[outcomeOp]?.transitions ?? [])
+          .some((t) => t.entity === recordEntity && (t.from ?? []).includes(spec.inFlight));
+        if (outcomeOp && operations[outcomeOp] && !leaves) {
+          error('CHK-PAYMENTS-INFLIGHT-INVALID',
+            `${where}: '${outcomeOp}', que aplica su desenlace, no saca el cobro de ese estado`);
+        }
+      }
+
+      // La guarda permanente contra el doble cargo. La idempotencia de la pasarela no lo es:
+      // guarda también los errores con su clave y la olvida pasado un tiempo. Lo que no caduca es
+      // una constraint sobre la referencia de negocio, y por eso la referencia tiene que ser —por
+      // nombre, igual que el keyField de payload-field— miembro de la clave natural del registro.
+      const reference = payments.charge?.reference;
+      const naturalKey = persistence?.entities?.[recordEntity]?.naturalKey ?? [];
+      const guarded = naturalKey.includes(reference) || recordFields[reference]?.unique === true;
+      if (reference && !guarded) {
+        error('CHK-PAYMENTS-REFERENCE-UNGUARDED',
+          `payments: charge.reference: '${reference}' no participa en la naturalKey de ${recordEntity} ni es unique: ` +
+            'nada impide registrar dos cobros para la misma petición, y la idempotencia de la pasarela no es una guarda ' +
+            'permanente (guarda también los errores y caduca)');
+      }
+    }
+
+    const chargeOpName = payments.charge?.operation;
+    const chargeOp = operations[chargeOpName];
+    // Por evento no hay cliente delante: no hay token recién producido ni nadie que resuelva un
+    // 3DS. Lo único con lo que se puede cobrar es un medio guardado.
+    const chargedByEvent = Boolean(chargeOp) && triggeredByEvent.has(chargeOpName);
+    if (chargedByEvent && !capabilities.has('off-session')) {
+      error('CHK-PAYMENTS-ASYNC-NEEDS-OFF-SESSION',
+        `payments: charge: '${chargeOpName}' la dispara una suscripción y la capa no declara 'off-session': por ` +
+          'evento no hay cliente presente, así que solo se puede cobrar un medio de pago guardado');
+    }
+
+    // Los desenlaces. Los dispara el generador, nunca un cliente.
+    for (const [outcome, opName] of Object.entries(payments.outcomes ?? {})) {
+      const op = operations[opName];
+      if (!op) continue;
+      if (op.internal !== true) {
+        error('CHK-PAYMENTS-OUTCOME-EXPOSED',
+          `payments: outcomes.${outcome}: '${opName}' no es internal — si tiene puerta propia, un cliente puede marcar ` +
+            'un cobro como resuelto sin que la pasarela haya dicho nada');
+      }
+      if (recordEntity && !(op.transitions ?? []).some((t) => t.entity === recordEntity)) {
+        warn('CHK-PAYMENTS-OUTCOME-NO-TRANSITION',
+          `payments: outcomes.${outcome}: '${opName}' no mueve el lifecycle de ${recordEntity}, así que el desenlace ` +
+            'no queda registrado y el barrido volvería a encontrar el cobro esperando');
+      }
+      // Lo que recibe un desenlace tiene que salir de lo que la capa sabe del cobro: la referencia, el
+      // id de la pasarela, el motivo de fallo, la acción del cliente y —en la devolución— el importe
+      // devuelto. Cualquier otro campo no tiene de dónde salir cuando el desenlace llega por el aviso
+      // o por el barrido, y el generador tendría que adivinarlo o dejarlo sin rellenar.
+      const named = new Set(
+        [payments.charge?.reference, payments.record?.gatewayRef, payments.record?.failureReason, payments.record?.customerAction]
+          .filter(Boolean)
+      );
+      const outcomeInput = op.input && typeof op.input === 'object' ? (op.input.fields ?? {}) : {};
+      const unbacked = Object.entries(outcomeInput)
+        .filter(([name, field]) => !named.has(name) && !(outcome === 'refunded' && field?.type === 'decimal'))
+        .map(([name]) => name);
+      if (unbacked.length > 0) {
+        warnIn(`payments.outcomes.${outcome}`, 'CHK-PAYMENTS-OUTCOME-INPUT-UNBACKED',
+          `payments: outcomes.${outcome}: '${opName}' recibe ${unbacked.join(', ')}, que la capa no nombra: cuando el ` +
+            'desenlace llega por el aviso de la pasarela o por el barrido no hay de dónde sacarlo');
+      }
+      // Quien pidió el cobro por evento no recibe respuesta HTTP: se entera por lo que se publica.
+      const reported = ['authorized', 'captured', 'failed', 'actionRequired'].includes(outcome);
+      if (chargedByEvent && reported && (op.emits ?? []).length === 0) {
+        warnIn(`payments.outcomes.${outcome}`, 'CHK-PAYMENTS-OUTCOME-SILENT',
+          `payments: outcomes.${outcome}: el cobro se pide por evento y '${opName}' no emite nada — quien lo pidió ` +
+            'no recibe respuesta HTTP y no se entera del desenlace');
+      }
+    }
+    if (payments.refund && !payments.outcomes?.refunded) {
+      error('CHK-PAYMENTS-OUTCOME-MISSING',
+        "payments: refund: declarado sin 'outcomes.refunded': nadie registra que la devolución se completó");
+    }
+    if ((payments.void || payments.flow === 'authorize-capture') && !payments.outcomes?.canceled) {
+      error('CHK-PAYMENTS-OUTCOME-MISSING',
+        payments.void
+          ? "payments: void: declarado sin 'outcomes.canceled': nadie registra que la autorización se anuló"
+          : "payments: flow: authorize-capture sin 'outcomes.canceled': la autorización caduca y la pasarela la cancela " +
+            'sola, y el servicio no tendría dónde registrarlo');
+    }
+
+    // El barrido detecta lo que NO ha pasado (una respuesta que no llegó): solo el reloj lo dispara.
+    const sweep = operations[payments.reconciliation?.sweep];
+    if (sweep && (!sweep.schedule || sweep.kind === 'query')) {
+      error('CHK-PAYMENTS-SWEEP-INVALID',
+        !sweep.schedule
+          ? `payments: reconciliation.sweep: '${payments.reconciliation.sweep}' no declara 'schedule' — nada más lo disparará`
+          : `payments: reconciliation.sweep: '${payments.reconciliation.sweep}' es kind: query — reconciliar es corregir el estado`);
     }
   }
 

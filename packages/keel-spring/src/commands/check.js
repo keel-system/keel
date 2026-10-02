@@ -23,7 +23,8 @@ import { isKeelWorkspace, resolveServiceDir, loadService, validateService, asses
 import { SUPPORTED_DSL } from '../lib/assets.js';
 import { checkSupportedFeatures } from '../lib/supported-features.js';
 import { planService } from '../scaffold/index.js';
-import { DATABASES } from '../lib/stack-catalog.js';
+import { DATABASES, PAYMENT_GATEWAYS } from '../lib/stack-catalog.js';
+import { gatewayCoverage } from '../lib/gateway-support.js';
 import { readManifest } from '../lib/generated-manifest.js';
 
 // El archivo que el cierre del pipeline escribe en la raíz del proyecto generado.
@@ -36,7 +37,7 @@ function heading(title) {
   console.log(pc.bold(title));
 }
 
-export function check(inputPath, { database = null, strict = false } = {}) {
+export function check(inputPath, { database = null, paymentGateway = null, strict = false } = {}) {
   const workspace = process.cwd();
   if (!isKeelWorkspace(workspace)) {
     console.error(pc.red('Este directorio no es un workspace Keel (falta schema/service.schema.json).'));
@@ -46,6 +47,11 @@ export function check(inputPath, { database = null, strict = false } = {}) {
   }
   if (!inputPath) {
     console.error(pc.red('Falta el servicio a comprobar: keel-spring check specs/<servicio>'));
+    process.exitCode = 1;
+    return;
+  }
+  if (paymentGateway && !PAYMENT_GATEWAYS[paymentGateway]) {
+    console.error(pc.red(`✘ La pasarela '${paymentGateway}' no está en el catálogo: ${Object.keys(PAYMENT_GATEWAYS).join(', ')}.`));
     process.exitCode = 1;
     return;
   }
@@ -146,13 +152,37 @@ export function check(inputPath, { database = null, strict = false } = {}) {
   // reconciliación con dos entidades en espera, la llamada sin method/path, la clave
   // natural que nombra un campo inexistente). Solo tiene sentido si el diseño es
   // consistente: sobre uno roto, buildModel hablaría de referencias que no existen.
+  // 2b — Con capa payments, qué pasarelas pueden servir este diseño. Es la portabilidad del diseño
+  // de un vistazo: la promesa es un único diseño para todas, y aquí se ve para cuáles se cumple.
+  let servingGateway = paymentGateway;
+  if (layers.payments) {
+    heading('Pasarelas de pago');
+    const ids = paymentGateway ? [paymentGateway] : Object.keys(PAYMENT_GATEWAYS);
+    const coverage = gatewayCoverage(layers, ids);
+    for (const entry of coverage) {
+      if (entry.errors.length === 0) {
+        console.log(`  ${pc.green('✔')} ${entry.id}${entry.warnings.length > 0 ? pc.dim(` — ${entry.warnings.length} sin verificar`) : ''}`);
+      } else {
+        console.log(`  ${pc.red('✘')} ${entry.id}`);
+      }
+      for (const message of entry.errors) bullet('red', message);
+      for (const message of entry.warnings) bullet('yellow', message);
+      notices += entry.warnings.length;
+    }
+    const serving = coverage.filter((entry) => entry.errors.length === 0);
+    // Con una pasarela pedida, que no la cubra bloquea. Sin ella, bloquea solo que no la cubra ninguna.
+    if (serving.length === 0) blocking += 1;
+    servingGateway = serving[0]?.id ?? null;
+  }
+
   heading('Traducción a código');
   if (blocking > 0) {
     console.log(pc.dim('  (no se intenta: primero hay que cerrar lo de arriba)'));
   } else {
     let plan;
     try {
-      plan = planService({ manifest, layers, workspace, stack: database ? { database } : null });
+      const stack = { ...(database ? { database } : {}), ...(servingGateway ? { paymentGateway: servingGateway } : {}) };
+      plan = planService({ manifest, layers, workspace, stack: Object.keys(stack).length > 0 ? stack : null });
     } catch (error) {
       bullet('red', `el generador no puede construir el proyecto: ${error.message}`);
       blocking += 1;

@@ -10,8 +10,9 @@ import { writeFiles } from '../lib/writer.js';
 import { readManifest, nextManifest, writeManifest, designStamp, REFRESH_DIR } from '../lib/generated-manifest.js';
 import { listKeelDocs } from '../lib/keel-docs.js';
 import { packageVersion } from '../lib/assets.js';
-import { DATABASES, STACK_DEFAULTS, defaultDatabaseFor } from '../lib/stack-catalog.js';
+import { DATABASES, PAYMENT_GATEWAYS, STACK_DEFAULTS, defaultDatabaseFor } from '../lib/stack-catalog.js';
 import { designUsesCache, normalizeTelemetry } from '../lib/stack-config.js';
+import { checkGatewaySupport } from '../lib/gateway-support.js';
 import { defaultGroup } from '../lib/naming.js';
 import * as gradle from './gradle.js';
 import * as wrapper from './wrapper.js';
@@ -65,6 +66,7 @@ import * as dependencies from './dependencies.js';
 import * as storage from './storage.js';
 import * as serviceParameters from './service-parameters.js';
 import * as mail from './mail.js';
+import * as payments from './payments.js';
 import * as services from './services.js';
 import * as readme from './readme.js';
 import * as contextMd from './context-md.js';
@@ -144,6 +146,8 @@ const GENERATORS = [
   storage,
   serviceParameters,
   mail,
+  // La pasarela de pago: el puerto, el adaptador de la elegida y el aviso con su firma.
+  payments,
   services,
   // Después de services: su matriz cita clases que los generadores de arriba nombran,
   // aunque el script solo las busque en tiempo de ejecución.
@@ -172,6 +176,12 @@ export function resolveStack(stack, layers, manifest) {
         `Si viene de un keel-stack.json anterior, elige uno de esos y vuelve a lanzar el build.`
     );
   }
+  // Igual que con el motor: una pasarela que el catálogo no conoce se rechaza en voz alta.
+  if (stack?.paymentGateway && !PAYMENT_GATEWAYS[stack.paymentGateway]) {
+    throw new Error(
+      `La pasarela '${stack.paymentGateway}' no está soportada. Las del catálogo son: ${Object.keys(PAYMENT_GATEWAYS).join(', ')}.`
+    );
+  }
   return {
     group: stack?.group ?? defaultGroup(manifest),
     // El default sigue al modelo que declara el diseño: sin esto, un diseño
@@ -184,6 +194,7 @@ export function resolveStack(stack, layers, manifest) {
     auth: protocol === 'oidc' || protocol === 'jwt' ? (stack?.auth ?? STACK_DEFAULTS.auth) : null,
     cache: designUsesCache(layers) ? (stack?.cache ?? STACK_DEFAULTS.cache) : null,
     storage: layers.storage ? (stack?.storage ?? STACK_DEFAULTS.storage) : null,
+    paymentGateway: layers.payments ? (stack?.paymentGateway ?? STACK_DEFAULTS.paymentGateway) : null,
     // No depende del diseño: siempre tiene valor, y un stack anterior a la opción es `none`.
     telemetry: normalizeTelemetry(stack?.telemetry)
   };
@@ -206,6 +217,12 @@ export function resolveStack(stack, layers, manifest) {
  */
 export function planService({ manifest, layers, workspace, stack = null }) {
   const resolved = resolveStack(stack, layers, manifest);
+  // La pasarela elegida tiene que cubrir lo que el diseño exige (gateway-support.js). Se
+  // comprueba aquí y no solo en build para que NINGÚN camino genere un adaptador a medias.
+  if (resolved.paymentGateway) {
+    const { errors } = checkGatewaySupport(layers, resolved.paymentGateway);
+    if (errors.length > 0) throw new Error(errors.join('\n'));
+  }
   const model = buildModel({ manifest, layers, stack: resolved });
   model.stack = resolved;
   // Contratos de /keel-docs presentes en el workspace: el README los enlaza y

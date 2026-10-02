@@ -37,7 +37,7 @@
  * - `severity` — `error` bloquea; `warning` no; `strong` es el «aviso fuerte» de la
  *   checklist: no bloquea, pero su hallazgo casi siempre es real.
  * - `asks` — la pregunta que el lector tiene que contestar, en una línea.
- * - `gapClass` — la clase de `gap-analysis.md` (1..17) a la que pertenece, para que el
+ * - `gapClass` — la clase de `gap-analysis.md` (1..18) a la que pertenece, para que el
  *   barrido de `/keel-design` y la revisión de `/keel-validate` nombren el mismo hueco.
  */
 export const REVIEWS = {
@@ -378,6 +378,38 @@ export const REVIEWS = {
     asks:
       '¿hay reglas sobre rebotes, supresión de direcciones o quejas? El relay acepta y responde OK; el rebote vuelve ' +
       'horas después por un webhook o un buzón. Sin canal declarado, esa regla no es implementable ni verificable'
+  },
+
+  // ─── payments ──────────────────────────────────────────────────────────────
+  'REV-PAYMENTS-AMOUNT-SOURCE': {
+    scope: 'payments',
+    gapClass: 18,
+    severity: 'strong',
+    appliesTo: (layers) => Boolean(layers.payments),
+    title: 'el importe del cobro llega en la petición y nada lo contrasta',
+    asks:
+      '¿de dónde sale el importe que se cobra? Si viaja en el input de charge, el cliente lo elige: ¿qué lo contrasta ' +
+      'con lo que se vende (un pedido, una tarifa)? Si nada, el diseño tiene que decir por qué es aceptable'
+  },
+  'REV-PAYMENTS-CARD-DATA': {
+    scope: 'payments',
+    gapClass: 18,
+    severity: 'strong',
+    appliesTo: (layers) => Boolean(layers.payments),
+    title: 'algún input del servicio transporta datos de tarjeta en vez de un token de la pasarela',
+    asks:
+      '¿algún campo de un input (o de un payload de evento) lleva número de tarjeta, caducidad o CVV? Solo deben entrar ' +
+      'los tokens del componente de la pasarela: un dato de tarjeta mete al servicio entero en el alcance de PCI'
+  },
+  'REV-PAYMENTS-SAVED-OWNERSHIP': {
+    scope: 'payments',
+    gapClass: 18,
+    severity: 'warning',
+    appliesTo: (layers) => Boolean(layers.payments?.savePaymentMethod),
+    title: 'un medio de pago guardado se puede cobrar conociendo solo su referencia',
+    asks:
+      '¿qué impide que un llamante cobre un medio guardado por otro? La referencia no es un secreto: tiene que haber ' +
+      'una regla que ate el medio a su titular, y una precondición en charge que la compruebe'
   }
 };
 

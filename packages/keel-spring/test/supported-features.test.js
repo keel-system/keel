@@ -196,3 +196,16 @@ test('una interna que SÍ tiene disparador no se avisa', () => {
     assert.deepEqual(warnings.filter((w) => w.includes('sin ningún disparador generado')), []);
   }
 });
+
+
+test('los desenlaces de la capa payments no son operaciones internas huérfanas: los despacha build', () => {
+  const internal = { kind: 'command', internal: true, input: 'void', output: 'void' };
+  const layers = {
+    'use-cases': { operations: { markCaptured: internal, orphan: internal } },
+    payments: { outcomes: { captured: 'markCaptured' } }
+  };
+  const { warnings } = checkSupportedFeatures(manifest, layers);
+  const orphanWarning = warnings.find((message) => message.includes('operación interna sin ningún disparador'));
+  assert.ok(orphanWarning, 'la operación de verdad huérfana sigue avisándose');
+  assert.doesNotMatch(orphanWarning, /markCaptured/);
+});

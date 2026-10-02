@@ -46,6 +46,11 @@ const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fix
  */
 const FAMILIAS = [
   {
+    nombre: 'desenlace de pago con un dato que la capa no nombra',
+    match: 'que la capa no nombra: build no sabe',
+    anticipa: 'CHK-PAYMENTS-OUTCOME-INPUT-UNBACKED'
+  },
+  {
     nombre: 'POST sin successStatus',
     match: 'endpoint POST sin successStatus',
     anticipa: 'CHK-API-POST-NO-STATUS'

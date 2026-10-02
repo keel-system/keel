@@ -63,7 +63,7 @@ test('toda obligación declara los campos que la CLI usa para reportarla', () =>
     assert.ok(entry.title?.length > 10, `${id}: sin título`);
     assert.ok(entry.closes?.length > 10, `${id}: no dice cómo se cierra`);
     assert.ok(['decision', 'scenario', 'review'].includes(entry.kind), `${id}: kind desconocido`);
-    assert.ok(Number.isInteger(entry.gapClass) && entry.gapClass >= 1 && entry.gapClass <= 17, `${id}: gapClass`);
+    assert.ok(Number.isInteger(entry.gapClass) && entry.gapClass >= 1 && entry.gapClass <= 18, `${id}: gapClass`);
   }
 });
 

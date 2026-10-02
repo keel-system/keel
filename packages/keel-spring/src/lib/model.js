@@ -3,6 +3,7 @@
 // src/scaffold/ solo renderizan este modelo; aquí vive toda la interpretación
 // del DSL (ver conventions/mapping.md).
 
+import { collectPayments } from './payments-model.js';
 import {
   pascalCase,
   camelCase,
@@ -67,7 +68,8 @@ export function buildModel({ manifest, layers, stack = null }) {
     httpClients: Boolean(layers['http-clients']),
     dependencies: Boolean(layers.dependencies),
     storage: Boolean(layers.storage),
-    mail: Boolean(layers.mail)
+    mail: Boolean(layers.mail),
+    payments: Boolean(layers.payments)
   };
 
   const enums = collectEnums(domain, layers['http-clients'], warnings, layers);
@@ -142,6 +144,7 @@ export function buildModel({ manifest, layers, stack = null }) {
   const httpClients = collectHttpClients(layers, domainTypes, inlineEnumName, warnings);
   const storage = collectStorage(layers);
   const mail = collectMail(layers);
+  const payments = collectPayments(layers, stack, services, entities, warnings);
 
   const hasFileUploads = services.some((group) => group.operations.some((operation) => operation.multipart));
 
@@ -169,7 +172,7 @@ export function buildModel({ manifest, layers, stack = null }) {
   // porque necesita el reclamo de RECONCILIACIÓN, que lo resuelve `collectDependencies`.
   stampClaimClocks(services);
 
-  return { service, layersPresent, persistenceKind, enums, valueObjects, formatTypes, entities, services, errors, childDtos, refDtos, refVariants, needDtos, hasFileUploads, events, messaging, subscriptions, pagination, api, audit, security, httpClients, dependencies, storage, mail, warnings };
+  return { service, layersPresent, persistenceKind, enums, valueObjects, formatTypes, entities, services, errors, childDtos, refDtos, refVariants, needDtos, hasFileUploads, events, messaging, subscriptions, pagination, api, audit, security, httpClients, dependencies, storage, mail, payments, warnings };
 }
 
 // El DTO de un dato ajeno expuesto, y su campo en la respuesta.
@@ -1166,6 +1169,9 @@ function classifyClaims(services, entities, layers, warnings, serviceMeta = null
       .map((activation) => activation?.reconciledBy)
       .filter(Boolean)
   );
+  // El barrido de la capa payments tampoco: su reclamo es re-estampar `record.awaitingSince` antes
+  // de consultar a la pasarela, y lo genera payments-reconciliation.
+  if (layers.payments?.reconciliation?.sweep) byReconciliation.add(layers.payments.reconciliation.sweep);
 
   // Estados de los que SALE una operación expuesta (ni programada ni interna): ahí la fila
   // espera una decisión de fuera, no a una réplica nuestra.

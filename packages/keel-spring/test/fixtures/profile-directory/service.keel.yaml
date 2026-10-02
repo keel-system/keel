@@ -1,4 +1,4 @@
-keel: "2.18"
+keel: "2.19"
 service:
   name: profile-directory
   version: 1.0.0

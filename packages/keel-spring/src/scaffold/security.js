@@ -7,6 +7,7 @@
 // del stack) a authorities de Spring. No hay stubs de negocio: la autorización
 // es enteramente derivable del diseño.
 
+import { PAYMENT_NOTICE_PATH } from './payments.js';
 import { FRAMEWORK_ERRORS } from 'keel-core';
 import { camelCase } from '../lib/naming.js';
 import { credentialFinderName } from './repositories.js';
@@ -225,7 +226,7 @@ function audienceOf(model, sec) {
 // Bloque authorizeHttpRequests: endpoints técnicos permitidos (solo en la cadena
 // que cubre todo), un matcher por regla de operación (antes del anyRequest) y la
 // autoridad de cierre como anyRequest.
-function authorizeBlock(matchers, { defaultAuthority, permitTechnical = true, permitScrape = false }) {
+function authorizeBlock(matchers, { defaultAuthority, permitTechnical = true, permitScrape = false, publicPosts = [] }) {
   const lines = ['            .authorizeHttpRequests(auth -> auth'];
   if (permitTechnical) {
     lines.push(
@@ -248,6 +249,13 @@ function authorizeBlock(matchers, { defaultAuthority, permitTechnical = true, pe
         `                    .requestMatchers("${METRICS_TRANSPORT.scrapePath}").permitAll()`
       );
     }
+  }
+  // El aviso de la pasarela de pago (capa payments). Entra sin credencial porque quien llama es la
+  // pasarela, que no tiene identidad en este servicio: lo que lo protege es la FIRMA, que el
+  // controller verifica sobre el cuerpo crudo antes de hacer nada, y que un aviso falso no puede
+  // producir. Y aun verificado, el aviso no decide el desenlace: el servidor se lo pregunta.
+  for (const path of publicPosts) {
+    lines.push(`                    .requestMatchers(HttpMethod.POST, "${path}").permitAll()`);
   }
   for (const m of matchers) {
     lines.push(`                    .requestMatchers(HttpMethod.${m.method}, "${m.path}").${m.authority}`);
@@ -314,7 +322,7 @@ ${corsLine}            .authorizeHttpRequests(auth -> auth.anyRequest().permitAl
     return { path: javaPath(model, SECURITY_PKG, 'SecurityConfig'), content: javaFile(subPackage(model, SECURITY_PKG), [...imports], body) };
   }
 
-  if (sec.matchers.length > 0) imports.add('org.springframework.http.HttpMethod');
+  if (sec.matchers.length > 0 || model.payments) imports.add('org.springframework.http.HttpMethod');
 
   const jwt = sec.protocol === 'oidc' || sec.protocol === 'jwt';
   const validateAudience = jwt && sec.serviceAuth?.validateAudience === true;
@@ -338,7 +346,11 @@ ${corsLine}            .authorizeHttpRequests(auth -> auth.anyRequest().permitAl
     ...(sec.cors ? [corsCall] : []),
     '            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))',
     exceptionHandling,
-    authorizeBlock(mainMatchers, { defaultAuthority: sec.defaultAuthority, permitScrape: usesTelemetry(model) })
+    authorizeBlock(mainMatchers, {
+      defaultAuthority: sec.defaultAuthority,
+      permitScrape: usesTelemetry(model),
+      publicPosts: model.payments ? [PAYMENT_NOTICE_PATH] : []
+    })
   ];
 
   let converterBean = '';

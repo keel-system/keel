@@ -1,0 +1,52 @@
+# Capa payments — cobros con tarjeta a través de una pasarela de pago.
+# Agnóstica de la pasarela: Stripe, MercadoPago… se ELIGE AL GENERAR, como el broker, y no se
+# nombra nunca aquí. Si el diseño necesita nombrar una pasarela para funcionar, a esta capa le
+# falta algo: dilo, no lo escribas en prosa. Recuerda declarar la capa en service.keel.yaml → layers.payments.
+#
+# No confundir con:
+#   http-clients  → un contrato HTTP concreto; el de cada pasarela lo pone el generador.
+#   dependencies  → otros SERVIDORES Keel; una pasarela no lo es.
+#
+# Nunca datos de tarjeta: el servicio solo ve referencias opacas de la pasarela (tokens).
+
+# description: Cobra los pedidos con tarjeta, en el acto o con un medio de pago guardado.
+
+# flow: authorize-capture        # authorize-capture | single-step
+
+# capabilities: [partial-refund, customer-action, off-session]
+#                                # lo que se exige a la pasarela: cuantas menos, más pasarelas sirven
+
+# record:                        # la entidad que registra cada cobro
+#   entity: Payment
+#   gatewayRef: gatewayPaymentId # string: el id que asigna la pasarela
+#   awaitingSince: awaitingSince # timestamp: desde cuándo espera desenlace (un solo reloj; lo mira el barrido)
+#   failureReason: failureReason # enum con EXACTAMENTE el vocabulario neutro (ver docs/dsl/payments.md)
+#   customerAction: customerAction  # string o json: la acción del cliente (3DS) mientras espera; exige customer-action
+
+# charge:                        # cobrar (autorizar, en authorize-capture)
+#   operation: requestCharge     # puede tener endpoint Y suscripción a la vez
+#   reference: chargeRequestId   # la clave de negocio: va en la naturalKey de Payment
+#   amount: amount               # decimal, en unidades mayores (12.50)
+#   currency: { input: currency }       # o { parameter: currency } (service.parameters)
+#   source:
+#     token: paymentToken        # cliente presente: el token del componente de la pasarela
+#     saved: paymentMethodRef    # cliente ausente: exige off-session
+
+# Cada acción de seguimiento deja el cobro en su estado EN VUELO antes de llamar a la pasarela:
+# es lo que la hace reconciliable si la respuesta se pierde.
+# capture: { operation: capturePayment, inFlight: capturing }   # obligatoria con authorize-capture
+# void: { operation: cancelPayment, inFlight: canceling }
+# refund: { operation: refundPayment, amount: amount, inFlight: refunding }   # amount ⇒ partial-refund
+# savePaymentMethod: { operation: savePaymentMethod, token: paymentToken, exposedAs: paymentMethodRef }
+
+# outcomes:                      # operaciones internal que aplican cada desenlace
+#   authorized: markAuthorized   # obligatoria con authorize-capture
+#   captured: markCaptured
+#   failed: markFailed
+#   actionRequired: markActionRequired   # con customer-action
+#   refunded: markRefunded       # con refund
+#   canceled: markCanceled       # con void o authorize-capture (la autorización caduca)
+
+# reconciliation:                # obligatorio: un cobro sin respuesta nunca se reintenta a ciegas
+#   sweep: sweepPendingPayments  # operación con schedule
+#   unansweredAfterSeconds: 900

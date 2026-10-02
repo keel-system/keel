@@ -78,6 +78,8 @@ const authArg = args.find((arg) => arg.startsWith('--auth='))?.split('=')[1];
 // solo tokeniza, y javac es lo único que sabe si `MongoObservationCommandListener` o
 // `ReceiverContext` tienen la firma que la plantilla supone.
 const telemetryArg = args.find((arg) => arg.startsWith('--telemetry='))?.split('=')[1];
+// La pasarela de pago es el quinto eje con Java propio: cada una tiene su adaptador y su verificador.
+const paymentGatewayArg = args.find((arg) => arg.startsWith('--payment-gateway='))?.split('=')[1];
 
 /**
  * Qué combinaciones se compilan.
@@ -136,7 +138,8 @@ for (const { broker, database } of combos) {
       broker,
       ...(database ? { database } : {}),
       ...(authArg ? { auth: authArg } : {}),
-      ...(telemetryArg ? { telemetry: telemetryArg } : {})
+      ...(telemetryArg ? { telemetry: telemetryArg } : {}),
+      ...(paymentGatewayArg ? { paymentGateway: paymentGatewayArg } : {})
     };
     scaffoldService({ manifest, layers, workspace, force: true, stack });
 
@@ -150,7 +153,7 @@ for (const { broker, database } of combos) {
     const { compilable, motivo } = mainCompilable(layers);
     const tasks = compilable ? ['compileJava', 'compileIntegrationTestJava'] : ['compileIntegrationTestJava'];
     const que = compilable ? 'el arnés y el main' : 'el arnés';
-    const combo = `${broker}${database ? `, ${database}` : ''}${authArg ? ` + ${authArg}` : ''}${telemetryArg ? ` + telemetry=${telemetryArg}` : ''}`;
+    const combo = `${broker}${database ? `, ${database}` : ''}${authArg ? ` + ${authArg}` : ''}${telemetryArg ? ` + telemetry=${telemetryArg}` : ''}${paymentGatewayArg ? ` + ${paymentGatewayArg}` : ''}`;
     process.stdout.write(`${fixture} (${combo}): compilando ${que}… `);
     // El wrapper vendorizado se invoca por `sh` para que valga igual en Windows.
     const result = spawnSync('sh', ['gradlew', ...tasks, '--console=plain', '--no-daemon'], {

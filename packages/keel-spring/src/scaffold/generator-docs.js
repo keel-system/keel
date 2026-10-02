@@ -93,6 +93,11 @@ export function stackSkills(model) {
   // stack (no hay proveedor que elegir en build; se decide al desplegar).
   if (layersPresent.mail) skills.push('keel-spring-mail');
   if (layersPresent.httpClients) skills.push('keel-spring-httpclient');
+  // Pagos: la guía neutra va con la capa, y la de la pasarela elegida con el stack. La lógica de los
+  // cobros es la misma con cualquier pasarela, así que no se duplica en cada una.
+  if (layersPresent.payments && stack.paymentGateway) {
+    skills.push('keel-spring-payments', `keel-spring-${stack.paymentGateway}`);
+  }
   if (stack.cache) skills.push('keel-spring-redis');
   if (stack.auth && stack.auth !== 'none') skills.push(`keel-spring-${stack.auth}`);
   return skills;

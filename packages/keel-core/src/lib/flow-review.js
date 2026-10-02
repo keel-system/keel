@@ -63,6 +63,31 @@ export function flowDigests(scenariosContent) {
 }
 
 /**
+ * Los tres sellos de un careo, tal como van en flow-review.yaml. Es la ÚNICA forma correcta de
+ * obtenerlos: el sello de un flujo es el de su bloque recortado y hasheado en latin1, cortado en el
+ * siguiente encabezado `##`–`####`, y eso no se reproduce con `sha256sum`. Mientras la definición
+ * del agente lo describía a mano, cada careo tenía que adivinarlo probando contra `keel validate`.
+ * Lo imprime `keel seals`.
+ */
+export function flowSeals(scenariosContent) {
+  return {
+    scenariosSha256: scenariosDigest(scenariosContent),
+    conventionsSha256: conventionsDigest(scenariosContent),
+    flows: flowDigests(scenariosContent).map(({ id, digest }) => ({ id, sha256: digest }))
+  };
+}
+
+/** Los sellos como el bloque YAML que se pega en flow-review.yaml. */
+export function renderFlowSeals(seals) {
+  return [
+    `scenariosSha256: ${seals.scenariosSha256}`,
+    `conventionsSha256: ${seals.conventionsSha256}`,
+    'flows:',
+    ...seals.flows.map((flow) => `  - { id: ${flow.id}, sha256: ${flow.sha256} }`)
+  ].join('\n');
+}
+
+/**
  * Qué hacer con el careo de este diseño.
  *
  * `status`:

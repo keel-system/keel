@@ -81,19 +81,22 @@ dice, el hallazgo es precisamente ese («el `Then` afirma X y nada en el diseño
 
 ## Salida
 
-Escribe `specs/<servicio>/flow-review.yaml` (schema `flow-review.schema.json`):
+Escribe `specs/<servicio>/flow-review.yaml` (schema `flow-review.schema.json`).
+
+**Los sellos no se calculan a mano**: `keel seals specs/<servicio>` imprime `scenariosSha256`,
+`conventionsSha256` y `flows` ya en el formato del archivo, y es la única forma correcta de
+obtenerlos (el sello de un flujo es el de su bloque recortado y cortado en el siguiente encabezado
+`##`–`####`; un `sha256sum` no lo reproduce). Pégalos tal cual:
 
 ```yaml
 reviewedAt: 0.1.0            # service.version del manifiesto
 passes: 1                    # el número de pasada que te dieron (tope: 3 por versión)
-scenariosSha256: <sha256>    # de validation-scenarios.md, sin retornos de carro:
-                             #   tr -d '\r' < validation-scenarios.md | sha256sum
-conventionsSha256: <sha256>  # de la sección «Convenciones de determinación»: si cambia, la
-                             # siguiente pasada es completa (rigen todos los Then). El resto de
-                             # la prosa fuera de los flujos no caduca el careo.
-flows:                       # un sello por flujo: es lo que permite recarear solo lo que cambie.
-  - id: FL-PRD-050           # El sha256 es del CUERPO del bloque (de su encabezado al siguiente
-    sha256: <sha256>         # `###`/`####`), también sin retornos de carro.
+scenariosSha256: <sha256>    # de `keel seals`
+conventionsSha256: <sha256>  # de `keel seals`: si cambia, la siguiente pasada es completa (rigen
+                             # todos los Then). El resto de la prosa fuera de los flujos no caduca el careo.
+flows:                       # de `keel seals`: un sello por flujo, que es lo que permite recarear
+  - id: FL-PRD-050           # solo lo que cambie.
+    sha256: <sha256>
 findings:
   - flow: FL-PRD-050
     step: "Then 4"

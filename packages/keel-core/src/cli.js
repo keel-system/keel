@@ -5,6 +5,7 @@ import { init } from './commands/init.js';
 import { list } from './commands/list.js';
 import { validate } from './commands/validate.js';
 import { describe } from './commands/describe.js';
+import { seals } from './commands/seals.js';
 import { createService } from './commands/new.js';
 import { writeIndex } from './commands/index-cmd.js';
 import { checkSystem, showSystem } from './commands/system.js';
@@ -64,6 +65,13 @@ program
   .description('Resume un diseño para leerlo o reutilizarlo: identidad, estado, capas y contenido por capa')
   .argument('<servicio>', 'nombre del servicio (busca specs/<servicio>) o ruta al directorio/manifiesto')
   .action((servicio) => describe(servicio));
+
+program
+  .command('seals')
+  .description('Imprime los sellos del careo de flujos (flow-review.yaml) de un diseño: la única forma correcta de obtenerlos')
+  .argument('<servicio>', 'nombre del servicio (specs/<nombre>) o ruta a su directorio')
+  .option('--json', 'en JSON en vez del bloque YAML', false)
+  .action((servicio, options) => seals(servicio, options));
 
 program
   .command('index')

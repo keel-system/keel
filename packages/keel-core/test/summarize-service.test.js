@@ -118,7 +118,8 @@ test('summarizeService resume un servicio completo domain + use-cases', (t) => {
     'dependencies',
     'persistence',
     'storage',
-    'mail'
+    'mail',
+    'payments'
   ]);
 
   const { domain, useCases } = result.summary;
@@ -158,7 +159,7 @@ test('summarizeService resume las capas opcionales', (t) => {
   const { layers, summary } = summarizeService(dir);
 
   assert.equal(layers.present.length, 8);
-  assert.deepEqual(layers.absent, ['dependencies', 'mail']);
+  assert.deepEqual(layers.absent, ['dependencies', 'mail', 'payments']);
   assert.deepEqual(summary.api, {
     style: 'rest',
     basePath: '/api/v1',

@@ -1,0 +1,75 @@
+channels:
+  paymentEvents:
+    description: Canal por el que este servicio anuncia el desenlace de cada cobro.
+  chargeRequests:
+    description: Canal por el que el sistema de pedidos pide cobros sin el cliente delante.
+
+publishing:
+  # Un desenlace de cobro que se pierde es un pedido que no se sirve o que se sirve sin cobrar:
+  # se publica en la misma transacción que lo registra.
+  reliability: outbox
+  events:
+    PaymentAuthorized:
+      channel: paymentEvents
+      description: La pasarela retuvo el importe del cobro.
+      payload: &withAmount
+        chargeRequestId: { type: string, required: true }
+        orderId: { type: string, required: true }
+        amount: { type: decimal, required: true }
+        occurredAt: { type: timestamp, required: true }
+    PaymentActionRequired:
+      channel: paymentEvents
+      description: >-
+        El cobro espera a que el cliente se autentique. Lleva la acción para que quien lo pidió pueda
+        traer al cliente sin consultar el cobro.
+      payload:
+        chargeRequestId: { type: string, required: true }
+        orderId: { type: string, required: true }
+        customerAction: { type: json, required: true }
+        occurredAt: { type: timestamp, required: true }
+    PaymentCaptured:
+      channel: paymentEvents
+      description: El importe del cobro se cobró.
+      payload: *withAmount
+    PaymentFailed:
+      channel: paymentEvents
+      description: El cobro no se pudo hacer.
+      payload:
+        chargeRequestId: { type: string, required: true }
+        orderId: { type: string, required: true }
+        failureReason: { type: PaymentFailureReason, required: true }
+        occurredAt: { type: timestamp, required: true }
+    PaymentRefunded:
+      channel: paymentEvents
+      description: Se devolvió todo o parte del cobro.
+      payload:
+        chargeRequestId: { type: string, required: true }
+        orderId: { type: string, required: true }
+        refundedAmount: { type: decimal, required: true }
+        occurredAt: { type: timestamp, required: true }
+    PaymentCanceled:
+      channel: paymentEvents
+      description: La autorización del cobro se anuló (requested) o caducó (expired).
+      payload:
+        chargeRequestId: { type: string, required: true }
+        orderId: { type: string, required: true }
+        cancelReason: { type: CancelReason, required: true }
+        occurredAt: { type: timestamp, required: true }
+
+subscriptions:
+  ChargeRequested:
+    description: El sistema de pedidos pide cobrar un pedido con un medio guardado.
+    source: orders-service
+    nature: request
+    channel: chargeRequests
+    contract: { envelope: keel }
+    payload:
+      chargeRequestId: { type: string, required: true }
+      orderId: { type: string, required: true }
+      payerId: { type: string, required: true }
+      amount: { type: decimal, required: true }
+      paymentMethodRef: { type: uuid, required: true }
+    triggers: requestCharge
+    onFailure:
+      retry: { maxAttempts: 5, backoff: exponential, initialDelayMs: 1000, maxDelayMs: 30000 }
+      deadLetter: true

@@ -16,6 +16,7 @@ import {
 } from 'keel-core';
 import { SKILL, SUPPORTED_DSL } from '../lib/assets.js';
 import { checkSupportedFeatures } from '../lib/supported-features.js';
+import { checkGatewaySupport } from '../lib/gateway-support.js';
 import { scaffoldService } from '../scaffold/index.js';
 import { writeFiles } from '../lib/writer.js';
 import {
@@ -320,6 +321,20 @@ export async function build(
   // solo se escriben archivos que no existen.
   // Solo cuenta como aceptado si de verdad faltaba algo: el flag sobre un diseño listo no dice nada.
   const acceptedUnready = acceptUnready && !readiness.ready;
+  // La pasarela elegida contra lo que el diseño exige (gateway-support.js), antes de escribir
+  // nada: una capacidad que no cubre no se genera, y una sin verificar se avisa.
+  if (layers.payments) {
+    const gateway = stack?.paymentGateway ?? null;
+    const support = gateway ? checkGatewaySupport(layers, gateway) : { errors: [], warnings: [] };
+    for (const message of support.warnings) console.warn(`${pc.yellow('⚠')} ${message}`);
+    if (support.errors.length > 0) {
+      console.error(pc.bold(pc.red(`✘ La pasarela '${gateway}' no cubre lo que el diseño exige — ${support.errors.length}:`)));
+      for (const message of support.errors) console.error(`  ${pc.red('•')} ${message}`);
+      console.error(pc.dim('  Elige otra pasarela (borra paymentGateway de keel-stack.json) o quita la capacidad del diseño.'));
+      process.exitCode = 1;
+      return;
+    }
+  }
   const scaffold = scaffoldService({ manifest, layers, workspace, force, stack, mode, prune, readiness, acceptedUnready });
   const stackChanged = stackChanges.added.length + stackChanges.removed.length > 0;
   if (stackIsNew || (stackChanged && mode !== 'check')) {

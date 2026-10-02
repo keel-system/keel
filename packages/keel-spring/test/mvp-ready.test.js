@@ -57,7 +57,7 @@ for (const name of READY_FIXTURES) {
 test('el par sigue siendo un par: el mismo contrato salvo el modelo de persistencia', () => {
   // La paridad byte a byte de las capas la vigila parity.test.js. Aquí lo que se vigila es que el
   // cierre no diverja: los dos llevan el mismo documento de escenarios, cambiando solo el nombre.
-  const [relational, document] = READY_FIXTURES.map((name) =>
+  const [relational, document] = ['notification-mailer', 'notification-mailer-mongo'].map((name) =>
     fs.readFileSync(path.join(fixturesDir, name, 'validation-scenarios.md'), 'utf8')
   );
   assert.equal(document.replaceAll('notification-mailer-mongo', 'notification-mailer'), relational);

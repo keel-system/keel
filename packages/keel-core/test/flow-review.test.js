@@ -256,3 +256,47 @@ test('el careo caduca con el minor o el major aunque los escenarios no cambien, 
   assert.equal(plan.full, true);
   assert.deepEqual(plan.scope, ['FL-PRD-001', 'FL-PRD-010', 'FL-SEC-001']);
 });
+
+// ── keel seals ─────────────────────────────────────────────────────────────
+//
+// La definición del agente de careo daba una receta (`tr -d '\r' | sha256sum`) que no reproduce
+// los sellos de la CLI: el de un flujo es el de su bloque recortado, cortado en el siguiente
+// encabezado de nivel 2 a 4 y hasheado en latin1. Cada careo tenía que adivinarlo probando contra
+// `keel validate`. `keel seals` los imprime; lo que importa es la ida y vuelta: un flow-review.yaml
+// escrito con ellos tiene que salir al día.
+
+test('keel seals: los sellos que imprime son los que el careo da por al día', async () => {
+  const { flowSeals, renderFlowSeals } = await import('../src/lib/flow-review.js');
+  const dir = tmpDir('keel-seals-');
+  const scenarios = [
+    '# demo — Escenarios',
+    '',
+    '## Convenciones de determinación',
+    '',
+    '- **Formato temporal**: ISO-8601.',
+    '',
+    '## Flujos',
+    '',
+    '### FL-DEM-001: algo con acentos y «comillas»',
+    '',
+    '**Given** algo. **When** pasa. **Then** se ve.',
+    '',
+    '#### FL-DEM-001-B: el caso caro',
+    '',
+    '**Given** otra cosa. **When** pasa. **Then** también.',
+    ''
+  ].join('\n');
+  fs.writeFileSync(path.join(dir, 'validation-scenarios.md'), scenarios);
+  const seals = flowSeals(scenarios);
+  assert.deepEqual(seals.flows.map((flow) => flow.id), ['FL-DEM-001', 'FL-DEM-001-B']);
+  const yaml = `reviewedAt: 1.0.0\npasses: 1\n${renderFlowSeals(seals)}\nfindings: []\n`;
+  fs.writeFileSync(path.join(dir, FLOW_REVIEW_FILE), yaml);
+  const plan = flowReviewPlan(dir, scenarios, { serviceVersion: '1.0.0' });
+  assert.equal(plan.status, 'ok', `${plan.status}: ${plan.detail ?? ''} ${plan.scope?.join(', ') ?? ''}`);
+});
+
+test('keel seals: la definición del agente de careo no enseña a calcularlos a mano', () => {
+  const agent = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..', 'assets', 'agents', 'keel-flow-review.md'), 'utf8');
+  assert.match(agent, /keel seals specs\/<servicio>/);
+  assert.doesNotMatch(agent, /sha256sum` *$|\| sha256sum/m);
+});

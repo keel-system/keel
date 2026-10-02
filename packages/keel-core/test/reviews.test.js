@@ -26,7 +26,7 @@ test('toda revisión declara lo que /keel-validate necesita para recorrerla', ()
     assert.ok(entry.asks?.length > 20, `${id}: no dice qué hay que contestar`);
     assert.ok(['error', 'warning', 'strong'].includes(entry.severity), `${id}: severidad desconocida`);
     assert.equal(typeof entry.appliesTo, 'function', `${id}: sin predicado de aplicabilidad`);
-    assert.ok(Number.isInteger(entry.gapClass) && entry.gapClass >= 1 && entry.gapClass <= 17, `${id}: gapClass`);
+    assert.ok(Number.isInteger(entry.gapClass) && entry.gapClass >= 1 && entry.gapClass <= 18, `${id}: gapClass`);
   }
 });
 

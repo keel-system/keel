@@ -1,0 +1,28 @@
+keel: "2.19"
+# La fixture de referencia de la capa payments (DSL 2.19): un servicio de cobros que se diseña UNA
+# vez y se genera con cualquier pasarela del menú de build; el test de paridad entre pasarelas la
+# genera con todas. Está CERRADA: `keel validate --ready` en verde, lo fija test/mvp-ready.test.js
+# (READY_FIXTURES).
+service:
+  name: payment-checkout
+  version: 1.0.0
+  description: Cobra con tarjeta los pedidos de la tienda por cuenta del sistema de pedidos, en el acto o con un medio de pago guardado.
+  domain: commerce
+conventions:
+  nulls: include
+# Una sola moneda para todo el servicio: la de la cuenta de la pasarela. No viaja en cada cobro
+# porque no es elección del cliente, y un cobro en otra moneda lo rechazaría la pasarela tarde.
+parameters:
+  currency:
+    type: string
+    description: Moneda en la que cobra el servicio (ISO 4217), la de la cuenta de la pasarela. Solo monedas de dos decimales, que es la escala de todos los importes del diseño.
+    constraints: { pattern: "^[A-Z]{3}$" }
+    testValue: BRL
+layers:
+  domain: domain.keel.yaml
+  use-cases: use-cases.keel.yaml
+  api: api.keel.yaml
+  security: security.keel.yaml
+  messaging: messaging.keel.yaml
+  persistence: persistence.keel.yaml
+  payments: payments.keel.yaml

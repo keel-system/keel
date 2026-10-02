@@ -6963,3 +6963,93 @@ test('la entidad que se escribe sale también de las transitions', () => {
   op.transitions = [{ entity: 'Profile', from: ['draft'], to: 'complete' }];
   assert.equal(keyFieldFindings(layers).length, 1);
 });
+
+// ─── payments (DSL 2.19) ────────────────────────────────────────────────────
+//
+// El corpus de mutaciones falsa cada CHK-PAYMENTS-* aislado. Aquí van los casos que el corpus no
+// distingue: las direcciones alternativas de una misma regla y las salidas legítimas.
+
+const paymentsDesign = () => {
+  const payment = entity({
+    chargeRequestId: { type: 'string', required: true },
+    gatewayPaymentId: { type: 'string' },
+    requestedAt: { type: 'timestamp', required: true },
+    status: { type: 'PaymentStatus', required: true },
+  }, { lifecycle: { field: 'status', transitions: { pending: ['captured', 'failed'], captured: [], failed: [] } } });
+  const outcome = (to) => ({
+    kind: 'command', internal: true, input: 'void', output: 'void',
+    transitions: [{ entity: 'Payment', from: ['pending'], to }],
+  });
+  return {
+    domain: {
+      types: { PaymentStatus: { values: ['pending', 'captured', 'failed'] } },
+      entities: { Payment: payment },
+      aggregates: { Payment: { root: 'Payment' } },
+    },
+    'use-cases': {
+      operations: {
+        pay: {
+          kind: 'command',
+          input: { fields: {
+            chargeRequestId: { type: 'string', required: true },
+            amount: { type: 'decimal', required: true },
+            paymentToken: { type: 'string', required: true },
+          } },
+          output: { entity: 'Payment' },
+        },
+        markCaptured: outcome('captured'),
+        markFailed: outcome('failed'),
+        sweep: { kind: 'command', input: 'void', output: 'void', schedule: { cron: '*/5 * * * *' } },
+      },
+    },
+    persistence: { entities: { Payment: { naturalKey: ['chargeRequestId'] } } },
+    payments: {
+      description: 'Cobra en el acto.',
+      flow: 'single-step',
+      record: { entity: 'Payment', gatewayRef: 'gatewayPaymentId', awaitingSince: 'requestedAt' },
+      charge: {
+        operation: 'pay', reference: 'chargeRequestId', amount: 'amount',
+        currency: { parameter: 'currency' }, source: { token: 'paymentToken' },
+      },
+      outcomes: { captured: 'markCaptured', failed: 'markFailed' },
+      reconciliation: { sweep: 'sweep', unansweredAfterSeconds: 600 },
+    },
+  };
+};
+const paymentIds = (layers, manifest = { parameters: { currency: { type: 'string' } } }) =>
+  checkCrossRefs({ layers, manifest }).findings.map((f) => f.id).filter((id) => id.startsWith('CHK-PAYMENTS-'));
+
+test('payments: un cobro en el acto bien enlazado no dispara nada de la capa', () => {
+  assert.deepEqual(paymentIds(paymentsDesign()), []);
+});
+
+test('payments: la moneda que sale de un parámetro que el manifiesto no declara', () => {
+  assert.deepEqual(paymentIds(paymentsDesign(), { parameters: {} }), ['CHK-PAYMENTS-FIELD-UNKNOWN']);
+});
+
+test('payments: single-step con captura es el flujo equivocado, no una capacidad', () => {
+  const layers = paymentsDesign();
+  layers.payments.capture = { operation: 'pay' };
+  assert.deepEqual(paymentIds(layers), ['CHK-PAYMENTS-FLOW-MISMATCH']);
+});
+
+test('payments: la referencia unique en domain también es guarda permanente', () => {
+  const layers = paymentsDesign();
+  delete layers.persistence.entities.Payment.naturalKey;
+  assert.deepEqual(paymentIds(layers), ['CHK-PAYMENTS-REFERENCE-UNGUARDED']);
+  layers.domain.entities.Payment.fields.chargeRequestId.unique = true;
+  assert.deepEqual(paymentIds(layers), []);
+});
+
+test('payments: off-session en las dos direcciones', () => {
+  const layers = paymentsDesign();
+  layers.payments.charge.source.saved = 'paymentToken';
+  assert.deepEqual(paymentIds(layers), ['CHK-PAYMENTS-CAPABILITY-UNBACKED'], 'un medio guardado sin la capacidad');
+  delete layers.payments.charge.source.saved;
+  layers.payments.capabilities = ['off-session'];
+  assert.deepEqual(
+    paymentIds(layers),
+    ['CHK-PAYMENTS-CAPABILITY-UNBACKED', 'CHK-PAYMENTS-CAPABILITY-UNBACKED'],
+    'la capacidad sin savePaymentMethod ni charge.source.saved'
+  );
+});

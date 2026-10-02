@@ -1,4 +1,4 @@
-// Las 17 clases del análisis de huecos, con su aplicabilidad y sus UNIDADES derivadas del diseño.
+// Las 18 clases del análisis de huecos, con su aplicabilidad y sus UNIDADES derivadas del diseño.
 //
 // El problema (R3 de recomendaciones-diseno.md). El análisis de huecos de `/keel-design` (paso 4b,
 // `assets/skills/keel-design/references/gap-analysis.md`) se hacía en el chat: inventario, tabla de
@@ -175,6 +175,11 @@ export const GAP_CLASSES = {
   17: {
     title: 'Correo saliente',
     units: (layers) => (Array.isArray(layers.mail?.sentBy) ? [...layers.mail.sentBy] : [])
+  },
+  18: {
+    title: 'Cobros con pasarela',
+    units: (layers) =>
+      ['charge', 'capture', 'void', 'refund', 'savePaymentMethod'].filter((action) => layers.payments?.[action])
   }
 };
 

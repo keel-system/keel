@@ -12,6 +12,7 @@ import {
   AUTH,
   CACHES,
   STORAGE,
+  PAYMENT_GATEWAYS,
   TELEMETRY,
   STACK_DEFAULTS,
   databasesForModel,
@@ -53,7 +54,8 @@ const CATEGORY_APPLIES = {
   broker: (layers) => Boolean(layers.messaging),
   auth: designUsesOidc,
   cache: designUsesCache,
-  storage: (layers) => Boolean(layers.storage)
+  storage: (layers) => Boolean(layers.storage),
+  paymentGateway: (layers) => Boolean(layers.payments)
 };
 
 /**
@@ -85,7 +87,16 @@ export function stackDrift(stack, layers) {
  * cuestionario de un diseño que evolucionó, y lo ya elegido no se vuelve a preguntar.
  */
 export async function askStackConfig(manifest, layers, { defaults = false, only = null, telemetry = null } = {}) {
-  const stack = { group: null, database: null, broker: null, auth: null, cache: null, storage: null, telemetry: null };
+  const stack = {
+    group: null,
+    database: null,
+    broker: null,
+    auth: null,
+    cache: null,
+    storage: null,
+    paymentGateway: null,
+    telemetry: null
+  };
   const asks = (category) => (only ? only.includes(category) : CATEGORY_APPLIES[category](layers));
 
   if (!only) {
@@ -144,6 +155,16 @@ export async function askStackConfig(manifest, layers, { defaults = false, only 
       { defaults }
     );
   }
+  if (asks('paymentGateway')) {
+    // La pasarela la elige el stack, no el diseño: la capa payments no nombra ninguna. Que la
+    // elegida cubra lo que el diseño exige lo comprueba build contra gateway-support.js.
+    stack.paymentGateway = await select(
+      '¿Con qué pasarela de pago se cobra?',
+      Object.values(PAYMENT_GATEWAYS),
+      STACK_DEFAULTS.paymentGateway,
+      { defaults }
+    );
+  }
   // La telemetría no la pide ninguna capa: se pregunta siempre en el cuestionario inicial y
   // nunca en el de un diseño que evolucionó (`only`), porque no hay deriva posible — ver
   // `normalizeTelemetry`. Cambiarla después es `build --telemetry <otel|none>`.
@@ -185,6 +206,7 @@ export function describeStack(stack) {
   if (stack.auth && stack.auth !== 'none') parts.push(AUTH[stack.auth]?.label ?? stack.auth);
   if (stack.cache) parts.push(CACHES[stack.cache]?.label ?? stack.cache);
   if (stack.storage) parts.push(STORAGE[stack.storage]?.label ?? stack.storage);
+  if (stack.paymentGateway) parts.push(PAYMENT_GATEWAYS[stack.paymentGateway]?.label ?? stack.paymentGateway);
   if (stack.telemetry && stack.telemetry !== 'none') parts.push(TELEMETRY[stack.telemetry]?.label ?? stack.telemetry);
   const infra = parts.length > 0 ? parts.join(' + ') : 'sin infraestructura externa';
   return stack.group ? `${stack.group} · ${infra}` : infra;

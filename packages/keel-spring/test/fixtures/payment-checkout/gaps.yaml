@@ -1,0 +1,516 @@
+reviewedBy: keel-gap-sweep
+reviewedAt: 1.0.0
+
+coverage:
+  - class: 1
+    units: [ Payment ]
+    result: findings
+  - class: 2
+    units:
+      [
+        savePaymentMethod,
+        requestCharge,
+        capturePayment,
+        cancelPayment,
+        refundPayment,
+        markAuthorized,
+        markActionRequired,
+        markCaptured,
+        markFailed,
+        markRefunded,
+        markCanceled,
+        sweepPendingPayments
+      ]
+    result: findings
+  - class: 3
+    units: [ Payment, SavedPaymentMethod ]
+    result: findings
+  - class: 4
+    units:
+      [
+        savePaymentMethod,
+        requestCharge,
+        capturePayment,
+        cancelPayment,
+        refundPayment,
+        markAuthorized,
+        markActionRequired,
+        markCaptured,
+        markFailed,
+        markRefunded,
+        markCanceled,
+        sweepPendingPayments
+      ]
+    result: findings
+  - class: 5
+    units: [ getPayment ]
+    result: clean
+  - class: 6
+    units: [ Payment, SavedPaymentMethod ]
+    result: findings
+  - class: 7
+    units:
+      [
+        publishing.PaymentAuthorized,
+        publishing.PaymentActionRequired,
+        publishing.PaymentCaptured,
+        publishing.PaymentFailed,
+        publishing.PaymentRefunded,
+        publishing.PaymentCanceled,
+        subscriptions.ChargeRequested
+      ]
+    result: findings
+  - class: 8
+    units: [ subscriptions.ChargeRequested ]
+    result: findings
+  - class: 9
+    units:
+      [
+        savePaymentMethod,
+        requestCharge,
+        getPayment,
+        capturePayment,
+        cancelPayment,
+        refundPayment,
+        markAuthorized,
+        markActionRequired,
+        markCaptured,
+        markFailed,
+        markRefunded,
+        markCanceled,
+        sweepPendingPayments
+      ]
+    result: clean
+  - class: 11
+    units:
+      [
+        savePaymentMethod,
+        requestCharge,
+        getPayment,
+        capturePayment,
+        cancelPayment,
+        refundPayment,
+        serviceClients.orders-service
+      ]
+    result: clean
+  - class: 12
+    units: [ service ]
+    result: findings
+  - class: 13
+    units: [ sweepPendingPayments ]
+    result: findings
+  - class: 14
+    units: [ Payment, SavedPaymentMethod ]
+    result: findings
+  - class: 15
+    units:
+      [
+        savePaymentMethod,
+        requestCharge,
+        getPayment,
+        capturePayment,
+        cancelPayment,
+        refundPayment,
+        sweepPendingPayments
+      ]
+    result: findings
+  - class: 16
+    units: [ '3.1', '3.2', '3.3', '3.4', '3.5', '3.7', '3.9', '3.9b' ]
+    result: clean
+  - class: 18
+    units: [ charge, capture, void, refund, savePaymentMethod ]
+    result: findings
+
+findings:
+  # --- 1. Alcanzabilidad del ciclo de vida
+  - class: 1
+    unit: Payment
+    what: >-
+      actionRequired solo sale por un desenlace de la pasarela (authorized o failed): no hay arista
+      actionRequired → canceled ni operación expuesta que abandone el cobro (cancelPayment exige
+      authorized), así que un cobro cuyo cliente no vuelve se queda en espera para siempre.
+    severity: gap
+    state: accepted
+    reason: "Aceptado: el plazo lo pone la pasarela, que da por fallida una autenticación que el cliente
+      no completa; el barrido recoge ese desenlace (rule de sweepPendingPayments: lo que sigue en
+      curso se deja para la siguiente pasada). Un plazo propio más corto que el de la pasarela
+      cancelaría cobros que el cliente aún puede completar."
+
+  # --- 2. Guardas ↔ errores
+  - class: 2
+    unit: capturePayment
+    what: >-
+      No declara qué ve el llamante cuando la pasarela RECHAZA la captura (p. ej. la autorización
+      caducó y el aviso aún no llegó): PAYMENT_NOT_CAPTURABLE es una guarda local sobre el estado, y
+      el diseño no dice si ese rechazo lo reutiliza ni si el cobro pasa a canceled.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: si la pasarela rechaza la captura porque la autorización caducó, el cobro
+      pasa a canceled (expired) y se responde PAYMENT_NOT_CAPTURABLE (rule de capturePayment,
+      FL-STL-001-B)."
+  - class: 2
+    unit: cancelPayment
+    what: >-
+      No declara el error cuando la pasarela rechaza la anulación (la autorización ya caducó o ya se
+      capturó allí): solo existen la guarda local PAYMENT_NOT_CANCELABLE y el 503 por no contestar.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: la anulación pasa por canceling; si la pasarela no la hace, el barrido
+      devuelve el cobro a authorized (FL-REC-002), y un cobro que ya no está autorizado responde
+      PAYMENT_NOT_CANCELABLE."
+  - class: 2
+    unit: refundPayment
+    what: >-
+      No declara el error cuando la pasarela rechaza la devolución (plazo de devolución vencido,
+      saldo insuficiente en la cuenta): ningún code cubre un rechazo que no es ni estado local ni
+      503.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: REFUND_REJECTED (422) y el cobro vuelve a captured, con su transición
+      refunding → captured en refundPayment (FL-STL-003-B)."
+  - class: 2
+    unit: markAuthorized
+    what: >-
+      No dice qué hace un desenlace repetido o tardío (el cobro no existe, o ya salió de
+      pending/actionRequired porque lo aplicaron la respuesta síncrona, el aviso o el barrido):
+      ¿no-op silencioso o error? Es el caso normal con tres caminos escribiendo el mismo cobro.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: los desenlaces son idempotentes —uno repetido o tardío sobre un cobro que
+      ya salió del estado de origen no hace nada y no es un error—; lo dice el comentario de los
+      desenlaces en use-cases y docs/dsl/payments.md § Los desenlaces. Lo que sí arbitra el bloqueo
+      optimista es que dos desenlaces distintos no se pisen (FL-STL-004-B)."
+  - class: 2
+    unit: markActionRequired
+    what: >-
+      No dice qué hace si el cobro ya no está en pending (el aviso de la autenticación llega después
+      de un authorized o un failed): ¿no-op o error?
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: los desenlaces son idempotentes —uno repetido o tardío sobre un cobro que
+      ya salió del estado de origen no hace nada y no es un error—; lo dice el comentario de los
+      desenlaces en use-cases y docs/dsl/payments.md § Los desenlaces. Lo que sí arbitra el bloqueo
+      optimista es que dos desenlaces distintos no se pisen (FL-STL-004-B)."
+  - class: 2
+    unit: markCaptured
+    what: >-
+      No dice qué hace si el cobro ya está captured o no existe (respuesta síncrona de la captura y
+      aviso de la pasarela llegan los dos): ¿no-op o error?
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: los desenlaces son idempotentes —uno repetido o tardío sobre un cobro que
+      ya salió del estado de origen no hace nada y no es un error—; lo dice el comentario de los
+      desenlaces en use-cases y docs/dsl/payments.md § Los desenlaces. Lo que sí arbitra el bloqueo
+      optimista es que dos desenlaces distintos no se pisen (FL-STL-004-B)."
+  - class: 2
+    unit: markFailed
+    what: >-
+      No dice qué hace si el cobro ya salió de pending/actionRequired (un failed tardío del barrido
+      o del aviso sobre un cobro ya authorized): ¿se ignora o es error? La razón de 3.9 lo menciona,
+      pero solo para el conflicto concurrente, no para el desenlace que llega después.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: los desenlaces son idempotentes —uno repetido o tardío sobre un cobro que
+      ya salió del estado de origen no hace nada y no es un error—; lo dice el comentario de los
+      desenlaces en use-cases y docs/dsl/payments.md § Los desenlaces. Lo que sí arbitra el bloqueo
+      optimista es que dos desenlaces distintos no se pisen (FL-STL-004-B)."
+  - class: 2
+    unit: markRefunded
+    what: >-
+      No dice qué hace si el cobro ya está refunded o no está captured cuando llega el desenlace de
+      la devolución: ¿no-op o error?
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: los desenlaces son idempotentes —uno repetido o tardío sobre un cobro que
+      ya salió del estado de origen no hace nada y no es un error—; lo dice el comentario de los
+      desenlaces en use-cases y docs/dsl/payments.md § Los desenlaces. Lo que sí arbitra el bloqueo
+      optimista es que dos desenlaces distintos no se pisen (FL-STL-004-B)."
+  - class: 2
+    unit: markCanceled
+    what: >-
+      No dice qué hace si el aviso de caducidad llega sobre un cobro ya captured o canceled: ¿no-op
+      o error? FL-STL-004-B lo exige observable pero el diseño no lo declara.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: los desenlaces son idempotentes —uno repetido o tardío sobre un cobro que
+      ya salió del estado de origen no hace nada y no es un error—; lo dice el comentario de los
+      desenlaces en use-cases y docs/dsl/payments.md § Los desenlaces. Lo que sí arbitra el bloqueo
+      optimista es que dos desenlaces distintos no se pisen (FL-STL-004-B)."
+
+  # --- 3. Determinación del estado
+  - class: 3
+    unit: Payment
+    what: >-
+      customerAction no es un campo de Payment, pero los escenarios lo afirman en la respuesta de
+      requestCharge y de getPayment (no nulo en actionRequired, nulo en el resto): el diseño no dice
+      que se persiste ni de dónde sale al releer el cobro.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: customerAction es campo de Payment (payments.record.customerAction), solo
+      con valor en actionRequired."
+  - class: 3
+    unit: Payment
+    what: >-
+      failureReason es «un motivo neutro» de texto libre sin vocabulario declarado: cada pasarela
+      devuelve motivos distintos y quien genere inventará la traducción, así que el mismo rechazo
+      saldrá con motivos distintos según la pasarela elegida.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: failureReason es el enum PaymentFailureReason con el vocabulario neutro
+      cerrado de la capa (CHK-PAYMENTS-FAILURE-VOCABULARY)."
+  - class: 3
+    unit: Payment
+    what: >-
+      gatewayPaymentId solo lo asignan markAuthorized y markActionRequired: un cobro que la pasarela
+      registró y rechazó (markFailed no lo recibe) pierde su id de pasarela, que es lo que
+      correlaciona avisos y consultas posteriores.
+    severity: risk
+    state: decided
+    reason: "Decidido en v1.0.0: markFailed recibe gatewayPaymentId cuando la pasarela llegó a asignarlo."
+
+  # --- 4. Concurrencia y unicidad
+  - class: 4
+    unit: requestCharge
+    what: >-
+      La unicidad es sobre chargeRequestId, no sobre orderId: dos peticiones con referencias
+      distintas para el mismo pedido producen dos cobros. El diseño no dice si puede haber más de un
+      cobro vivo (no failed/canceled) por pedido, que sería unicidad condicionada al estado.
+    severity: gap
+    state: accepted
+    reason: "Aceptado: puede haber varios cobros por pedido a propósito —tras un failed, pedidos pide otro
+      con otra referencia—. Qué cobro vale para un pedido es de pedidos, que es quien elige
+      chargeRequestId; este servicio garantiza una sola ejecución por referencia, no por pedido."
+  - class: 4
+    unit: cancelPayment
+    what: >-
+      capturePayment y cancelPayment simultáneos sobre el mismo cobro llegan los dos a la pasarela:
+      el bloqueo optimista solo arbitra la escritura local, después de que el efecto externo ya se
+      pidió. No se declara qué se serializa antes de llamar a la pasarela.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: estados en vuelo. cancelPayment y capturePayment sacan el cobro de
+      authorized antes de llamar a la pasarela, así que la segunda encuentra el cobro en vuelo y
+      responde 409 sin llamar (FL-STL-004-B)."
+  - class: 4
+    unit: refundPayment
+    what: >-
+      Dos refundPayment simultáneos sobre el mismo cobro pasan los dos la precondición captured y
+      llaman los dos a la pasarela; CONCURRENT_MODIFICATION llega tarde, con el doble reembolso ya
+      pedido. La regla «una sola devolución» no dice cómo se sostiene frente a la pasarela.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: refundPayment pasa el cobro a refunding antes de llamar a la pasarela; la
+      segunda devolución lo encuentra en vuelo y responde PAYMENT_NOT_REFUNDABLE o
+      CONCURRENT_MODIFICATION sin llamar."
+
+  # --- 6. Fronteras del agregado y cascadas
+  - class: 6
+    unit: SavedPaymentMethod
+    what: >-
+      No hay operación para retirar un medio guardado (el cliente quita su tarjeta, o pedidos da de
+      baja al cliente): el medio queda cobrable para siempre y su referencia en la pasarela,
+      también.
+    severity: gap
+    state: accepted
+    reason: "Aceptado para v1.0.0: retirar un medio guardado queda fuera. Solo pedidos puede cobrarlo y
+      solo a nombre de su titular (precondición de requestCharge); un medio caducado lo rechaza la
+      pasarela con expiredCard. Entra cuando haya un caso de uso de baja de cliente."
+  - class: 6
+    unit: Payment
+    what: >-
+      Payment no guarda con qué medio se cobró (paymentMethodRef no es campo): la invariante entre
+      agregados «el medio es del pagador» solo se comprueba al pedir y después no queda rastro de
+      qué medio guardado se usó.
+    severity: risk
+    state: decided
+    reason: "Decidido en v1.0.0: Payment guarda savedPaymentMethodId."
+
+  # --- 7. Contrato de eventos
+  - class: 7
+    unit: subscriptions.ChargeRequested
+    what: >-
+      Un ChargeRequested rechazado por el negocio (PAYMENT_METHOD_NOT_FOUND, PAYMENT_SOURCE_INVALID,
+      CHARGE_ALREADY_REQUESTED, o un amount con más de dos decimales) no crea cobro y por tanto no
+      publica ningún desenlace: quien pidió por evento no se entera nunca y el pedido espera.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: por evento, un rechazo de negocio registra el cobro en failed con
+      invalidPaymentMethod y publica PaymentFailed (rule de requestCharge, FL-EVT-003).
+      CHARGE_ALREADY_REQUESTED por evento es una reentrega o un duplicado: no hay segundo desenlace
+      que publicar (FL-EVT-001-B)."
+  - class: 7
+    unit: publishing.PaymentCanceled
+    what: >-
+      El mismo evento cubre la anulación pedida y la caducidad de la autorización, y el payload no
+      las distingue: pedidos no puede saber si un pedido aún no servido se quedó sin cobro.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: PaymentCanceled lleva cancelReason (requested | expired)."
+  - class: 7
+    unit: publishing.PaymentActionRequired
+    what: >-
+      El payload no lleva customerAction, que es justo lo que pedidos necesita para traer al
+      cliente: obliga a llamar a getPayment por cada evento.
+    severity: risk
+    state: decided
+    reason: "Decidido en v1.0.0: PaymentActionRequired lleva customerAction."
+  - class: 7
+    unit: publishing.PaymentCaptured
+    what: >-
+      PaymentAuthorized y PaymentCaptured no llevan el importe: el consumidor no puede contrastar lo
+      cobrado con el total del pedido sin llamar de vuelta.
+    severity: risk
+    state: decided
+    reason: "Decidido en v1.0.0: PaymentAuthorized y PaymentCaptured llevan amount."
+
+  # --- 8. Fallo de dependencias externas
+  - class: 8
+    unit: subscriptions.ChargeRequested
+    what: >-
+      Un mensaje que agota los reintentos va a la DLQ sin que se publique nada: no se dice quién
+      vigila la DLQ ni cómo se entera pedidos de que su cobro no se llegó a pedir.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: la DLQ la vigila operación, como la de cualquier suscripción del servicio; a ella
+      solo llegan fallos técnicos, porque los de negocio se registran como cobro failed y salen por
+      evento (FL-EVT-003)."
+
+  # --- 12. Zonas grises de la equivalencia
+  - class: 12
+    unit: service
+    what: >-
+      No se fija si chargeRequestId distingue mayúsculas: «CH-001» y «ch-001», ¿son la misma
+      petición de cobro? Decide si la guarda del doble cargo funciona igual en todos los motores.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: chargeRequestId se compara exacto, distinguiendo mayúsculas (Convenciones
+      de determinación de validation-scenarios.md)."
+  - class: 12
+    unit: service
+    what: >-
+      La escala de los importes está fijada a 2 en todo el diseño, pero la moneda es un parámetro de
+      despliegue: con una moneda sin decimales (o con tres) la escala declarada contradice la de la
+      pasarela, y no se dice qué monedas admite el servicio.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: el parámetro currency solo admite monedas de dos decimales (su
+      description en service.keel.yaml), que es la escala de todos los importes."
+
+  # --- 13. Ejecuciones programadas
+  - class: 13
+    unit: sweepPendingPayments
+    what: >-
+      No dice qué hace con un cobro que la pasarela sigue dando como en curso: se le vuelve a
+      preguntar cada cinco minutos sin plazo máximo, y ningún cobro pending se rinde nunca.
+    severity: gap
+    state: accepted
+    reason: "Aceptado: el plazo lo pone la pasarela, que da por fallida una autenticación que el cliente
+      no completa; el barrido recoge ese desenlace (rule de sweepPendingPayments: lo que sigue en
+      curso se deja para la siguiente pasada). Un plazo propio más corto que el de la pasarela
+      cancelaría cobros que el cliente aún puede completar."
+  - class: 13
+    unit: sweepPendingPayments
+    what: >-
+      No declara cuántos cobros procesa por ejecución ni qué hace si la pasarela no contesta a mitad
+      del barrido (¿se salta el ciclo, sigue con el resto?).
+    severity: risk
+    state: accepted
+    reason: "Aceptado: el tamaño del lote y qué hacer si la pasarela cae a mitad del barrido son mecánica
+      del generador; un cobro no consultado sigue en su estado y lo recoge la siguiente pasada, que
+      es el comportamiento que el diseño necesita."
+  - class: 13
+    unit: sweepPendingPayments
+    what: >-
+      Solo barre pending: los cobros en actionRequired y las capturas, anulaciones y devoluciones en
+      duda (503 sin saber si la pasarela actuó) no los reconcilia nadie si el aviso se pierde.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: el barrido cubre pending, actionRequired, capturing, canceling y
+      refunding (rule de sweepPendingPayments, docs/dsl/payments.md § La reconciliación; FL-REC-002,
+      FL-REC-002-B)."
+
+  # --- 14. Estado persistido
+  - class: 14
+    unit: SavedPaymentMethod
+    what: >-
+      No hay retención ni caducidad del medio guardado: la referencia sensible se guarda para
+      siempre, aunque la tarjeta caduque o el cliente deje de serlo.
+    severity: risk
+    state: accepted
+    reason: "Aceptado para v1.0.0: la referencia sensible no sale del servicio y no se retiene más allá de
+      la vida del medio; la retención y la baja entran con el caso de uso de retirar un medio."
+
+  # --- 15. Superficie HTTP
+  - class: 15
+    unit: requestCharge
+    what: >-
+      basePath /api sin versión: el contrato que consume pedidos no dice cómo convivirá un cambio
+      incompatible con el consumidor ya acoplado.
+    severity: risk
+    state: decided
+    reason: "Decidido en v1.0.0: basePath /api/v1."
+
+  # --- 18. Cobros con pasarela
+  - class: 18
+    unit: charge
+    what: >-
+      No dice cuánto espera un cobro en actionRequired ni quién lo da por abandonado: por evento «el
+      servicio no lo da por fallido», y por HTTP tampoco hay plazo, así que la autorización
+      pendiente de 3DS no caduca en el diseño.
+    severity: gap
+    state: accepted
+    reason: "Aceptado: el plazo lo pone la pasarela, que da por fallida una autenticación que el cliente
+      no completa; el barrido recoge ese desenlace (rule de sweepPendingPayments: lo que sigue en
+      curso se deja para la siguiente pasada). Un plazo propio más corto que el de la pasarela
+      cancelaría cobros que el cliente aún puede completar."
+  - class: 18
+    unit: charge
+    what: >-
+      No dice si el cobro pending se confirma en base de datos ANTES de llamar a la pasarela: si la
+      llamada va dentro de la transacción y esta se deshace tras cobrar, el dinero sale sin registro
+      que el barrido pueda encontrar, y el reintento depende de la idempotencia de la pasarela, que
+      caduca.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: el cobro se registra en pending ANTES de llamar a la pasarela (rule de
+      requestCharge, docs/dsl/payments.md § El cobro)."
+  - class: 18
+    unit: capture
+    what: >-
+      Una captura sin respuesta de la pasarela responde 503 y deja el cobro en authorized, pero pudo
+      capturarse allí; y si la pasarela confirma tarde, la regla solo cubre «cuando confirma en el
+      acto». No se dice qué estado y qué status ve el llamante, ni con qué clave se reintenta.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: la captura pasa a capturing antes de llamar; sin respuesta responde 200
+      con capturing y lo resuelve el barrido, sin repetirla (FL-REC-002). Ya no hay 503 en las
+      acciones de seguimiento."
+  - class: 18
+    unit: void
+    what: >-
+      Una anulación sin respuesta responde 503 y deja el cobro en authorized aunque la pasarela pudo
+      anularla: no se dice cómo se resuelve esa duda ni si reintentar es seguro.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: la anulación pasa a canceling antes de llamar; sin respuesta queda en
+      canceling y el barrido pregunta (FL-REC-002 Then 3)."
+  - class: 18
+    unit: refund
+    what: >-
+      Una devolución sin respuesta responde 503 y deja el cobro en captured: reintentarla puede
+      devolver dos veces, y el diseño no dice con qué clave de idempotencia va a la pasarela ni
+      quién resuelve la duda.
+    severity: gap
+    state: decided
+    reason: "Decidido en v1.0.0: la devolución pasa a refunding antes de llamar y no se repite: el barrido
+      pregunta. La clave hacia la pasarela la deriva el generador de chargeRequestId
+      (docs/dsl/payments.md § El cobro)."
+  - class: 18
+    unit: savePaymentMethod
+    what: >-
+      Si la pasarela guarda el medio pero su respuesta no llega (503), queda un medio en la pasarela
+      sin registro propio: no se dice si se limpia ni si importa.
+    severity: risk
+    state: accepted
+    reason: "Aceptado: un medio guardado en la pasarela sin registro propio no se puede cobrar por este
+      servicio (no hay id que lo nombre) y no tiene coste; pedidos reintenta y guarda otro."

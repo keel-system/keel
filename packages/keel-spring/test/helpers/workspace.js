@@ -16,11 +16,11 @@ export const FIXTURES_DIR = path.join(here, 'fixtures');
 export const FIXTURE_DOCS_DIR = path.join(here, 'fixture-docs');
 
 /**
- * Las fixtures cerradas de punta a punta: el par del MVP, en 10/10 de `keel validate --ready`
- * (test/mvp-ready.test.js). Las demás son sujetos parciales a propósito, y `build` solo las genera
+ * Las fixtures cerradas de punta a punta: el par del MVP y la de referencia de la capa payments, en
+ * verde en `keel validate --ready` (test/mvp-ready.test.js). Las demás son sujetos parciales a propósito, y `build` solo las genera
  * con `acceptUnready` (fase 2 de la puerta).
  */
-export const READY_FIXTURES = ['notification-mailer', 'notification-mailer-mongo'];
+export const READY_FIXTURES = ['notification-mailer', 'notification-mailer-mongo', 'payment-checkout'];
 
 /** Copia la fixture `name` (y su DESIGN.md si lo tiene) al workspace `root`. Devuelve `specs/<n>`. */
 export function mountDesign(root, name) {

@@ -1,0 +1,114 @@
+# Lo que este diseño decidió y por qué. Es la fixture de referencia de la capa payments y está
+# CERRADA: `keel validate --ready` sale en verde (lo fija test/payment-checkout-ready.test.js).
+decisions:
+  - id: OBL-CALLER-IDENTITY
+    scope: security
+    reason: >-
+      Quién llama no entra en el trabajo: hay un solo cliente máquina (orders-service) y actúa por
+      cuenta de todos los pagadores. payerId lo pone pedidos en el cuerpo a propósito, porque es
+      el cliente final y no la credencial; la credencial solo dice que quien pide es pedidos.
+      Con un segundo sistema que cobrase por este servicio habría que acotar los cobros a su
+      credencial, y eso sí sería callerIdentity.
+    since: 1.0.0
+  - id: CHK-API-CREATED-NO-READ
+    scope: api.endpoints.requestCharge
+    reason: >-
+      El cobro se lee por la referencia con la que se pidió (GET /payments/{chargeRequestId}), que
+      es la que conoce quien lo pidió; el id interno no sale del servicio como identificador de
+      lectura. La cabecera Location no se emite y no la sigue nadie.
+    since: 1.0.0
+  - id: CHK-API-CREATED-NO-READ
+    scope: api.endpoints.savePaymentMethod
+    reason: >-
+      Un medio guardado no se consulta: su id solo sirve para cobrarlo después. Exponer su lectura
+      sería exponer qué medios tiene guardados cada pagador, sin que nadie lo necesite.
+    since: 1.0.0
+  - id: CHK-PAYMENTS-OUTCOME-INPUT-UNBACKED
+    scope: payments.outcomes.canceled
+    reason: >-
+      markCanceled recibe cancelReason, que la capa payments no nombra. Lo decide el handler y no la
+      pasarela: requested cuando el cobro venía de canceling (lo pidió cancelPayment) y expired en
+      cualquier otro caso (la autorización caducó). El generador lo deja como TODO en el aplicador de
+      desenlaces, que es justo donde se conoce el estado del que viene el cobro.
+    since: 1.0.0
+
+structural:
+  - section: '3.1'
+    scope: messaging.publishing.reliability
+    chosen: outbox
+    discarded: best-effort
+    reason: >-
+      Cada evento es el desenlace de un cobro, y pedidos sirve o no el pedido según lo que lea.
+      Un PaymentCaptured perdido es un pedido cobrado que no se sirve; un PaymentFailed perdido,
+      uno que se sirve sin cobrar. El servicio ya tiene persistencia: el outbox cuesta una tabla.
+    since: 1.0.0
+  - section: '3.2'
+    chosen: >-
+      Ningún command declara idempotency. requestCharge la frena la clave natural sobre
+      chargeRequestId (CHARGE_ALREADY_REQUESTED), igual por HTTP que por evento, y la suscripción
+      deduplica además por metadata.eventId. capturePayment, cancelPayment y refundPayment los
+      frenan sus precondiciones de estado (409); los desenlaces, sus transiciones. savePaymentMethod
+      se repite sin daño: guarda otro medio, que nadie cobra si nadie usa su id
+    discarded: client-key en requestCharge, y payload-field sobre chargeRequestId
+    reason: >-
+      La guarda del doble cargo tiene que valer por las dos puertas y no caducar: una cabecera no
+      llega por el broker, y un almacén de claves caduca. La constraint sobre chargeRequestId
+      cumple las dos cosas sin mecanismo aparte. La idempotencia hacia la pasarela la deriva el
+      generador de esa misma referencia.
+    since: 1.0.0
+  - section: '3.3'
+    chosen: sin caché en getPayment
+    discarded: cache con ttlSeconds
+    reason: >-
+      getPayment se sondea para ver el cobro avanzar (pending → authorized → captured): una
+      respuesta vieja le diría a pedidos que algo no está cobrado cuando ya lo está.
+    since: 1.0.0
+  - section: '3.4'
+    chosen: audience services en todos los endpoints; ninguna operación de usuario
+    discarded: audience both, o una superficie para el navegador del cliente
+    reason: >-
+      El navegador del cliente habla con el componente de la pasarela, no con este servicio: le
+      da un token y el token viaja por pedidos. El único llamante es un sistema con credencial.
+    since: 1.0.0
+  - section: '3.5'
+    scope: messaging.subscriptions.ChargeRequested.onFailure
+    chosen: retry exponencial de 5 intentos (1 s a 30 s) y deadLetter true
+    discarded: sin retry, o descartar tras agotar los intentos
+    reason: >-
+      Un cobro pedido que se pierde es un pedido que no se cobra nunca y que nadie echa de menos.
+      Los fallos transitorios (la base de datos) se resuelven reintentando; los que no, se
+      quedan en la DLQ para que alguien los mire. Reintentar no cobra dos veces: la clave natural
+      lo impide.
+    since: 1.0.0
+  - section: '3.7'
+    scope: persistence.consistency.transactionalBoundary
+    chosen: per-aggregate
+    discarded: per-operation
+    reason: >-
+      Ninguna operación escribe dos agregados: requestCharge lee el medio guardado y solo escribe
+      Payment. La frontera por agregado es la que el dominio declara y no hay nada que ensanchar.
+    since: 1.0.0
+  - section: '3.9'
+    scope: persistence.consistency.optimisticLocking
+    chosen: all
+    discarded: none (último gana)
+    reason: >-
+      Sobre un mismo cobro escriben a la vez tres caminos —la respuesta síncrona de la pasarela,
+      su aviso y el barrido—, y un desenlace no puede pisar a otro: con último gana, un failed
+      tardío borraría un captured. El perdedor recibe CONCURRENT_MODIFICATION y relee.
+    since: 1.0.0
+  - section: '3.9b'
+    scope: persistence.audit.timestamps
+    chosen: all
+    discarded: declared o none
+    reason: >-
+      Cuándo cambió cada cobro es lo primero que se pregunta en una reclamación, y el modelo no
+      lleva otra marca que requestedAt.
+    since: 1.0.0
+  - section: '3.9b'
+    scope: persistence.audit.authorship
+    chosen: none
+    discarded: all
+    reason: >-
+      El único autor es pedidos o el propio servicio: guardar quién escribió diría siempre lo mismo.
+    since: 1.0.0

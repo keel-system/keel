@@ -1,0 +1,95 @@
+reviewedBy: keel-design-review
+reviewedAt: 1.0.0
+findings:
+  - id: REV-DOMAIN-VAGUE-INVARIANT
+    scope: domain.entities.Payment
+    verdict: fixed
+    note: >-
+      Corregido en v1.0.0: Payment guarda savedPaymentMethodId, así que la invariante de titularidad
+      se comprueba sobre el propio cobro; la de SavedPaymentMethod se retiró (era la precondición de
+      requestCharge) y se añadió la de customerAction, que solo tiene valor en actionRequired.
+  - id: REV-DOMAIN-INVARIANT-IS-TRANSITION
+    scope: domain.entities.Payment
+    verdict: ok
+    note: >-
+      Ninguna invariante describe un cambio de estado: las tres son cotas o pertenencia. La «una
+      sola devolución por cobro» (rule de refundPayment) la sostiene el lifecycle, con refunded
+      terminal.
+  - id: REV-DOMAIN-PROMISED-STATE
+    scope: domain.entities.Payment
+    verdict: fixed
+    note: >-
+      Corregido en v1.0.0: customerAction es un campo de Payment (payments.record.customerAction,
+      DSL 2.19), lo escribe markActionRequired y lo vacían markAuthorized y markFailed; viaja en
+      getPayment y en el payload de PaymentActionRequired, que es lo que necesita pedidos en
+      FL-EVT-002.
+  - id: REV-DOMAIN-PARTIAL-WRITER
+    scope: use-cases.operations.sweepPendingPayments
+    verdict: fixed
+    note: >-
+      Corregido en v1.0.0: el barrido escribe failureReason notReceived (rule de
+      sweepPendingPayments), del vocabulario neutro cerrado que ahora es el tipo del campo;
+      PaymentFailed lo lleva tipado. FL-REC-001 Then 4 lo afirma.
+  - id: REV-USECASES-INTERNAL-REPEAT
+    scope: use-cases.operations.savePaymentMethod
+    verdict: accepted
+    note: >-
+      savePaymentMethod no declara idempotency y un reintento tras timeout da de alta un segundo
+      SavedPaymentMethod. Lo acepta por escrito el registro estructural 3.2 de decisions.yaml
+      («savePaymentMethod se repite sin daño: guarda otro medio, que nadie cobra si nadie usa su
+      id»). El resto de commands sí tienen guarda: requestCharge la naturalKey sobre
+      chargeRequestId, capture/cancel/refund sus precondiciones de estado, y los desenlaces sus
+      transiciones.
+  - id: REV-USECASES-GUARD-ORDER
+    verdict: ok
+    note: >-
+      Ninguna rule fija el orden en que se comprueban los rechazos (requestCharge, refundPayment), y
+      FL-CHG-004 y FL-STL-003-B ejercitan cada guarda por separado, sin escenarios de precedencia.
+  - id: REV-SEC-M2M-AUDIENCE
+    scope: security.authentication.serviceAuth
+    verdict: ok
+    note: serviceAuth declara validateAudience true; toda la superficie es audience services.
+  - id: REV-MSG-MISSING-CHANNEL
+    scope: messaging
+    verdict: ok
+    note: >-
+      Los seis eventos publicados van por paymentEvents y la suscripción ChargeRequested por
+      chargeRequests; ambos canales son lógicos y sin tecnología en el nombre.
+  - id: REV-MSG-DEDUPE-WINDOW
+    scope: messaging.subscriptions.ChargeRequested
+    verdict: ok
+    note: >-
+      El handler (requestCharge) no declara transitions ni idempotency, pero su efecto no es
+      acumulable: es un alta frenada por la naturalKey sobre chargeRequestId, que no caduca. Pasada
+      la retención de la tabla de procesados, una reentrega choca con CHARGE_ALREADY_REQUESTED antes
+      de llegar a la pasarela (el cobro nace en pending antes de llamarla). FL-EVT-001-B lo cubre.
+  - id: REV-PERSIST-MISSING-INDEX
+    scope: persistence.entities.Payment
+    verdict: fixed
+    note: >-
+      Corregido en v1.0.0: índice sobre gatewayPaymentId. No es unique: un cobro fallido sin
+      respuesta lo tiene nulo, y la unicidad del cobro ya la da la naturalKey sobre chargeRequestId.
+  - id: REV-PAYMENTS-AMOUNT-SOURCE
+    scope: use-cases.operations.requestCharge
+    verdict: accepted
+    note: >-
+      El importe llega en el input y nada lo contrasta; la rule de requestCharge lo explica: «El
+      importe lo fija el sistema de pedidos, que es el único llamante (un cliente máquina con su
+      scope): el servicio no vende nada». Matiz para que el diseñador lo confirme: esa razón se
+      apoya en el scope, que solo existe en la puerta HTTP; por la suscripción ChargeRequested el
+      importe lo fija quien pueda publicar en chargeRequests, y en ningún sitio se declara que solo
+      pedidos pueda hacerlo (ACL del destino). Si es así, conviene escribirlo junto a esa rule.
+  - id: REV-PAYMENTS-CARD-DATA
+    verdict: ok
+    note: >-
+      Ningún input ni payload lleva datos de tarjeta: paymentToken es el token del componente de la
+      pasarela, paymentMethodRef un uuid propio, y gatewayReference es sensitive y se excluye de la
+      salida de savePaymentMethod.
+  - id: REV-PAYMENTS-SAVED-OWNERSHIP
+    scope: use-cases.operations.requestCharge
+    verdict: ok
+    note: >-
+      exposedAs es el id propio (uuid) y no la referencia de la pasarela; savePaymentMethod ata el
+      medio al payerId («El medio queda a nombre del payerId de la petición») y requestCharge lo
+      comprueba en su precondición, respondiendo igual a medio inexistente y ajeno (FL-CHG-004). Que
+      payerId lo ponga pedidos en el cuerpo está aceptado en decisions.yaml (OBL-CALLER-IDENTITY).

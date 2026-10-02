@@ -23,6 +23,8 @@
 // Las ediciones del documento de escenarios van por `replaceIn`, que LANZA si el texto a
 // sustituir ya no está: una mutación cuyo cambio dejó de aplicarse no puede pasar por buena.
 
+import { FAILURE_REASONS } from '../../src/lib/payment-vocabulary.js';
+
 // ─── Ayudas ─────────────────────────────────────────────────────────────────────────
 
 const ops = (d) => d.layers['use-cases'].operations;
@@ -282,7 +284,262 @@ function withReplica(d) {
   );
 }
 
+/**
+ * Cobro de una tarifa de soporte prioritario con la capa `payments`: autorización y captura,
+ * devolución parcial, 3DS y cobro de un medio guardado. El cobro entra por dos puertas —el
+ * endpoint y la suscripción `PriorityChargeRequested`—, que es la silueta que necesitan las
+ * reglas de la puerta asíncrona. Cada desenlace es internal, mueve el lifecycle de `Payment`
+ * y publica su hecho.
+ */
+function withPayments(d) {
+  d.manifest.layers.payments = 'payments.keel.yaml';
+  const domain = d.layers.domain;
+  domain.types.PaymentStatus = {
+    description: 'Estados de un cobro frente a la pasarela.',
+    values: ['pending', 'actionRequired', 'authorized', 'capturing', 'captured', 'refunding', 'failed', 'refunded', 'canceled']
+  };
+  domain.types.PaymentFailureReason = {
+    description: 'Por qué falló un cobro, en el vocabulario neutro de la capa payments.',
+    values: [...FAILURE_REASONS]
+  };
+  domain.entities.Payment = {
+    description: 'Cobro de la tarifa de soporte prioritario.',
+    fields: {
+      id: { type: 'uuid', id: true, generated: true },
+      chargeRequestId: { type: 'string', required: true, constraints: { maxLength: 64 } },
+      amount: { type: 'decimal', required: true },
+      currency: { type: 'string', required: true, constraints: { maxLength: 3 } },
+      status: { type: 'PaymentStatus', required: true, default: 'pending' },
+      gatewayPaymentId: { type: 'string', constraints: { maxLength: 128 } },
+      failureReason: { type: 'PaymentFailureReason' },
+      customerAction: { type: 'json' },
+      requestedAt: { type: 'timestamp', required: true }
+    },
+    lifecycle: {
+      field: 'status',
+      transitions: {
+        pending: ['actionRequired', 'authorized', 'failed'],
+        actionRequired: ['authorized', 'failed'],
+        authorized: ['capturing', 'canceled'],
+        capturing: ['captured'],
+        captured: ['refunding'],
+        refunding: ['refunded'],
+        failed: [],
+        refunded: [],
+        canceled: []
+      }
+    }
+  };
+  domain.aggregates.Payment = { root: 'Payment' };
+  d.layers.persistence.entities.Payment = { naturalKey: ['chargeRequestId'], indexes: [['status']] };
+
+  const paymentInput = (fields) => ({
+    fields: { chargeRequestId: { type: 'string', required: true, constraints: { maxLength: 64 } }, ...fields }
+  });
+  const PAYMENT_NOT_FOUND = { code: 'PAYMENT_NOT_FOUND', when: 'No hay cobro con esa referencia.', http: 404 };
+  const outcome = (description, from, to, event) => ({
+    description,
+    kind: 'command',
+    internal: true,
+    input: paymentInput({}),
+    output: 'void',
+    emits: [event],
+    transitions: [{ entity: 'Payment', from, to }]
+  });
+  Object.assign(ops(d), {
+    requestPriorityCharge: {
+      description: 'Pide el cobro de la tarifa de soporte prioritario.',
+      kind: 'command',
+      input: paymentInput({
+        amount: { type: 'decimal', required: true },
+        currency: { type: 'string', required: true, constraints: { maxLength: 3 } },
+        paymentToken: { type: 'string', constraints: { maxLength: 255 } },
+        paymentMethodRef: { type: 'string', constraints: { maxLength: 255 } }
+      }),
+      output: { entity: 'Payment' },
+      errors: [{ code: 'PAYMENT_SOURCE_MISSING', when: 'No llega ni token ni medio guardado.', http: 422 }]
+    },
+    capturePriorityCharge: {
+      description: 'Captura lo autorizado al dar el soporte prioritario.',
+      kind: 'command',
+      input: paymentInput({}),
+      output: { entity: 'Payment' },
+      errors: [PAYMENT_NOT_FOUND],
+      transitions: [{ entity: 'Payment', from: ['authorized'], to: 'capturing' }]
+    },
+    refundPriorityCharge: {
+      description: 'Devuelve todo o parte de lo cobrado.',
+      kind: 'command',
+      input: paymentInput({ amount: { type: 'decimal' } }),
+      output: { entity: 'Payment' },
+      errors: [PAYMENT_NOT_FOUND],
+      transitions: [{ entity: 'Payment', from: ['captured'], to: 'refunding' }]
+    },
+    savePaymentMethod: {
+      description: 'Guarda un medio de pago para cobrar después sin el solicitante.',
+      kind: 'command',
+      input: { fields: { paymentToken: { type: 'string', required: true, constraints: { maxLength: 255 } } } },
+      output: { fields: { paymentMethodRef: { type: 'string' } } },
+      errors: [{ code: 'PAYMENT_METHOD_REJECTED', when: 'La pasarela no acepta el medio de pago.', http: 422 }]
+    },
+    markAuthorized: outcome('Registra que el importe quedó retenido.', ['pending', 'actionRequired'], 'authorized', 'PriorityChargeAuthorized'),
+    markCaptured: outcome('Registra que el cobro se completó.', ['capturing'], 'captured', 'PriorityChargeCaptured'),
+    markFailed: outcome('Registra que el cobro no se pudo hacer.', ['pending', 'actionRequired'], 'failed', 'PriorityChargeFailed'),
+    markActionRequired: outcome('Registra que el cobro espera al solicitante.', ['pending'], 'actionRequired', 'PriorityChargeActionRequired'),
+    markRefunded: outcome('Registra que la devolución se completó.', ['refunding'], 'refunded', 'PriorityChargeRefunded'),
+    markCanceled: outcome('Registra que la autorización se anuló o caducó.', ['authorized'], 'canceled', 'PriorityChargeCanceled'),
+    sweepPendingCharges: {
+      description: 'Consulta a la pasarela los cobros que llevan demasiado esperando desenlace.',
+      kind: 'command',
+      input: 'void',
+      output: 'void',
+      schedule: { cron: '*/5 * * * *' },
+      transitions: [{ entity: 'Payment', from: ['pending'], to: 'failed' }]
+    }
+  });
+  Object.assign(d.layers.api.endpoints, {
+    requestPriorityCharge: { method: 'POST', path: '/priority-charges', successStatus: 200 },
+    capturePriorityCharge: { method: 'POST', path: '/priority-charges/{chargeRequestId}/capture', successStatus: 200 },
+    refundPriorityCharge: { method: 'POST', path: '/priority-charges/{chargeRequestId}/refund', successStatus: 200 },
+    savePaymentMethod: { method: 'POST', path: '/payment-methods', successStatus: 200 }
+  });
+
+  const messaging = d.layers.messaging;
+  for (const event of ['Authorized', 'Captured', 'Failed', 'ActionRequired', 'Refunded', 'Canceled']) {
+    messaging.publishing.events[`PriorityCharge${event}`] = {
+      channel: 'ticketEvents',
+      description: `Desenlace del cobro prioritario: ${event}.`,
+      payload: { chargeRequestId: { type: 'string', required: true } }
+    };
+  }
+  messaging.subscriptions.PriorityChargeRequested = {
+    description: 'Otro servicio pide cobrar la tarifa prioritaria con un medio guardado.',
+    source: 'billing',
+    nature: 'request',
+    channel: 'ticketEvents',
+    payload: {
+      chargeRequestId: { type: 'string', required: true },
+      amount: { type: 'decimal', required: true },
+      currency: { type: 'string', required: true },
+      paymentMethodRef: { type: 'string', required: true }
+    },
+    contract: { envelope: 'keel' },
+    triggers: 'requestPriorityCharge',
+    onFailure: {
+      retry: { maxAttempts: 3, backoff: 'exponential', initialDelayMs: 500, maxDelayMs: 5000 },
+      deadLetter: true
+    }
+  };
+
+  d.layers.payments = {
+    description: 'Cobra la tarifa de soporte prioritario, en el acto o con un medio guardado.',
+    flow: 'authorize-capture',
+    capabilities: ['partial-refund', 'customer-action', 'off-session'],
+    record: {
+      entity: 'Payment',
+      gatewayRef: 'gatewayPaymentId',
+      awaitingSince: 'requestedAt',
+      failureReason: 'failureReason',
+      customerAction: 'customerAction'
+    },
+    charge: {
+      operation: 'requestPriorityCharge',
+      reference: 'chargeRequestId',
+      amount: 'amount',
+      currency: { input: 'currency' },
+      source: { token: 'paymentToken', saved: 'paymentMethodRef' }
+    },
+    capture: { operation: 'capturePriorityCharge', inFlight: 'capturing' },
+    refund: { operation: 'refundPriorityCharge', amount: 'amount', inFlight: 'refunding' },
+    savePaymentMethod: { operation: 'savePaymentMethod', token: 'paymentToken', exposedAs: 'paymentMethodRef' },
+    outcomes: {
+      authorized: 'markAuthorized',
+      captured: 'markCaptured',
+      failed: 'markFailed',
+      actionRequired: 'markActionRequired',
+      refunded: 'markRefunded',
+      canceled: 'markCanceled'
+    },
+    reconciliation: { sweep: 'sweepPendingCharges', unansweredAfterSeconds: 900 }
+  };
+
+  addMatrixRow(
+    d,
+    [
+      '| requestPriorityCharge | FL-PAY-001, FL-PAY-001-B, FL-PAY-002 | usuarios, suscripción |',
+      '| capturePriorityCharge | FL-PAY-003 | usuarios |',
+      '| refundPriorityCharge | FL-PAY-004 | usuarios |',
+      '| savePaymentMethod | FL-PAY-005 | usuarios |',
+      '| markAuthorized | FL-PAY-001 | pasarela (interna) |',
+      '| markCaptured | FL-PAY-003 | pasarela (interna) |',
+      '| markFailed | FL-PAY-002-B | pasarela (interna) |',
+      '| markActionRequired | FL-PAY-001-B | pasarela (interna) |',
+      '| markRefunded | FL-PAY-004 | pasarela (interna) |',
+      '| markCanceled | FL-PAY-006 | pasarela (interna) |',
+      '| sweepPendingCharges | FL-PAY-007 | programada |'
+    ].join('\n')
+  );
+  insertScenarioBefore(
+    d,
+    '### FL-ESC-001',
+    `### FL-PAY-001: cobro con el solicitante presente
+
+**Given** un solicitante con un token de la pasarela.
+**When** se llama a \`requestPriorityCharge\` y la pasarela autoriza.
+**Then** responde 200, el cobro nace en \`pending\`, \`markAuthorized\` lo deja en \`authorized\` y se publica \`PriorityChargeAuthorized\`.
+
+#### FL-PAY-001-B: la pasarela pide 3DS
+
+**Given** un token cuya tarjeta exige autenticación.
+**When** se llama a \`requestPriorityCharge\`.
+**Then** la respuesta lleva la acción del cliente y \`markActionRequired\` deja el cobro en \`actionRequired\`.
+
+### FL-PAY-002: cobro pedido por evento
+
+**Given** un medio guardado.
+**When** llega \`PriorityChargeRequested\`, y después se reentrega el mismo mensaje.
+**Then** hay un solo cobro y no hay segundo efecto.
+
+#### FL-PAY-002-B: la pasarela rechaza
+
+**Given** un medio guardado sin fondos.
+**When** llega \`PriorityChargeRequested\`.
+**Then** \`markFailed\` deja el cobro en \`failed\` y se publica \`PriorityChargeFailed\`.
+
+### FL-PAY-003: captura
+
+**Given** un cobro en \`authorized\`.
+**When** se llama a \`capturePriorityCharge\`.
+**Then** el cobro pasa por \`capturing\` y \`markCaptured\` lo deja en \`captured\`; con una referencia que no existe, 404 con \`PAYMENT_NOT_FOUND\`.
+
+### FL-PAY-004: devolución parcial
+
+**Given** un cobro en \`captured\`.
+**When** se llama a \`refundPriorityCharge\` con la mitad del importe.
+**Then** el cobro pasa por \`refunding\` y \`markRefunded\` lo deja en \`refunded\`; con una referencia que no existe, 404 con \`PAYMENT_NOT_FOUND\`.
+
+### FL-PAY-005: guardar un medio de pago
+
+**Given** un token válido, y otro que la pasarela rechaza.
+**When** se llama a \`savePaymentMethod\` con cada uno.
+**Then** responde 200 con la referencia guardada, y 422 con \`PAYMENT_METHOD_REJECTED\`; sin token ni medio, \`requestPriorityCharge\` responde 422 con \`PAYMENT_SOURCE_MISSING\`.
+
+### FL-PAY-006: la autorización caduca
+
+**Given** un cobro en \`authorized\` que nadie captura.
+**When** la pasarela avisa de que la autorización caducó.
+**Then** \`markCanceled\` lo deja en \`canceled\`.
+
+### FL-PAY-007: cobros en duda
+
+**Given** varios cobros en \`pending\` sin respuesta de la pasarela, con dos réplicas vivas.
+**When** corre \`sweepPendingCharges\`.
+**Then** cada cobro se consulta exactamente una vez y el que la pasarela no conoce queda en \`failed\`.`
+  );
+}
+
 export const EXTENSIONS = {
+  payments: withPayments,
   m2m: withM2m,
   replica: withReplica,
   outbox: withOutbox,
@@ -1872,6 +2129,165 @@ export const MUTATIONS = [
       delete d.layers.messaging.subscriptions.TicketEscalated.nature;
     },
     expect: ['CHK-MSG-SOURCE-UNDECLARED']
+  },
+
+  // ─── payments ────────────────────────────────────────────────────────────────────
+  {
+    id: 'M-PAYMENTS-OP-UNKNOWN',
+    title: 'la operación de captura de la capa payments no existe',
+    extends: 'payments',
+    mutate: (d) => {
+      d.layers.payments.capture.operation = 'capturePriorityChargeLater';
+    },
+    expect: ['CHK-PAYMENTS-OP-UNKNOWN']
+  },
+  {
+    id: 'M-PAYMENTS-FLOW-MISMATCH',
+    title: 'authorize-capture sin operación de captura',
+    extends: 'payments',
+    mutate: (d) => {
+      delete d.layers.payments.capture;
+      // La operación sigue existiendo con su endpoint: solo se le quita su papel en la capa.
+    },
+    expect: ['CHK-PAYMENTS-FLOW-MISMATCH']
+  },
+  {
+    id: 'M-PAYMENTS-CAPABILITY-UNBACKED',
+    title: 'una devolución parcial sin declarar la capacidad partial-refund',
+    extends: 'payments',
+    mutate: (d) => {
+      d.layers.payments.capabilities = ['customer-action', 'off-session'];
+    },
+    expect: ['CHK-PAYMENTS-CAPABILITY-UNBACKED']
+  },
+  {
+    id: 'M-PAYMENTS-FIELD-UNKNOWN',
+    title: 'el importe del cobro es un entero, no un decimal',
+    extends: 'payments',
+    mutate: (d) => {
+      ops(d).requestPriorityCharge.input.fields.amount.type = 'long';
+      d.layers.messaging.subscriptions.PriorityChargeRequested.payload.amount.type = 'long';
+    },
+    expect: ['CHK-PAYMENTS-FIELD-UNKNOWN']
+  },
+  {
+    id: 'M-PAYMENTS-RECORD-UNKNOWN',
+    title: 'la marca de espera del registro no es una marca de tiempo',
+    extends: 'payments',
+    mutate: (d) => {
+      d.layers.payments.record.awaitingSince = 'currency';
+    },
+    expect: ['CHK-PAYMENTS-RECORD-UNKNOWN']
+  },
+  {
+    id: 'M-PAYMENTS-FAILURE-VOCABULARY',
+    title: 'el motivo de fallo con un valor propio en vez del vocabulario neutro',
+    extends: 'payments',
+    mutate: (d) => {
+      d.layers.domain.types.PaymentFailureReason.values.push('cardBlockedByIssuer');
+    },
+    expect: ['CHK-PAYMENTS-FAILURE-VOCABULARY']
+  },
+  {
+    id: 'M-PAYMENTS-INFLIGHT-INVALID',
+    title: 'la captura declara como suyo el estado en vuelo de la devolución',
+    extends: 'payments',
+    mutate: (d) => {
+      // Apunta al estado en vuelo de OTRA acción: la captura no entra en él y su desenlace no
+      // sale de él, así que una captura cuya respuesta se pierda no la encuentra el barrido.
+      d.layers.payments.capture.inFlight = 'refunding';
+    },
+    expect: ['CHK-PAYMENTS-INFLIGHT-INVALID', 'CHK-PAYMENTS-INFLIGHT-INVALID']
+  },
+  {
+    id: 'M-PAYMENTS-REFERENCE-UNGUARDED',
+    title: 'la referencia del cobro fuera de la clave natural del registro',
+    extends: 'payments',
+    mutate: (d) => {
+      delete d.layers.persistence.entities.Payment.naturalKey;
+    },
+    expect: ['CHK-PAYMENTS-REFERENCE-UNGUARDED']
+  },
+  {
+    id: 'M-PAYMENTS-ASYNC-NEEDS-OFF-SESSION',
+    title: 'el cobro entra por evento y la capa no puede cobrar sin el cliente',
+    extends: 'payments',
+    mutate: (d) => {
+      const payments = d.layers.payments;
+      payments.capabilities = ['partial-refund', 'customer-action'];
+      delete payments.savePaymentMethod;
+      delete payments.charge.source.saved;
+      // `savePaymentMethod` deja de ser pieza de la capa pero sigue siendo una operación con endpoint.
+    },
+    expect: ['CHK-PAYMENTS-ASYNC-NEEDS-OFF-SESSION']
+  },
+  {
+    id: 'M-PAYMENTS-OUTCOME-SILENT',
+    title: 'el cobro se pide por evento y su rechazo no se publica',
+    extends: 'payments',
+    mutate: (d) => {
+      delete ops(d).markFailed.emits;
+      delete d.layers.messaging.publishing.events.PriorityChargeFailed;
+      replaceIn(d, ' y se publica `PriorityChargeFailed`', '');
+    },
+    expect: ['CHK-PAYMENTS-OUTCOME-SILENT']
+  },
+  {
+    id: 'M-PAYMENTS-OUTCOME-NO-TRANSITION',
+    title: 'la operación de un desenlace no mueve el lifecycle del registro',
+    extends: 'payments',
+    mutate: (d) => {
+      // Mueve otra cosa: la cola del ticket. Sin transiciones dispararía también el aviso de la
+      // operación que no deja rastro; y la transición a `canceled` la sigue ejecutando alguien
+      // (la captura, aquí), o saltaría el de la transición del lifecycle que nadie ejecuta.
+      ops(d).markCanceled.transitions = [{ entity: 'Queue', from: ['active'], to: 'archived' }];
+      ops(d).capturePriorityCharge.transitions.push({ entity: 'Payment', from: ['authorized'], to: 'canceled' });
+    },
+    expect: ['CHK-PAYMENTS-OUTCOME-NO-TRANSITION']
+  },
+  {
+    id: 'M-PAYMENTS-OUTCOME-EXPOSED',
+    title: 'la operación que registra la captura tiene puerta propia',
+    extends: 'payments',
+    mutate: (d) => {
+      delete ops(d).markCaptured.internal;
+      ops(d).markCaptured.errors = [{ code: 'PAYMENT_NOT_FOUND', when: 'No hay cobro con esa referencia.', http: 404 }];
+      d.layers.api.endpoints.markCaptured = {
+        method: 'POST',
+        path: '/priority-charges/{chargeRequestId}/captured',
+        successStatus: 204
+      };
+    },
+    expect: ['CHK-PAYMENTS-OUTCOME-EXPOSED']
+  },
+  {
+    id: 'M-PAYMENTS-OUTCOME-INPUT-UNBACKED',
+    title: 'el desenlace de la anulación recibe un motivo que la capa no nombra',
+    extends: 'payments',
+    mutate: (d) => {
+      ops(d).markCanceled.input.fields.cancelNote = { type: 'string', constraints: { maxLength: 200 } };
+    },
+    expect: ['CHK-PAYMENTS-OUTCOME-INPUT-UNBACKED']
+  },
+  {
+    id: 'M-PAYMENTS-OUTCOME-MISSING',
+    title: 'una devolución sin la operación que registra su desenlace',
+    extends: 'payments',
+    mutate: (d) => {
+      delete d.layers.payments.outcomes.refunded;
+      // `markRefunded` sigue siendo internal y con escenario: solo deja de estar enlazada.
+    },
+    expect: ['CHK-PAYMENTS-OUTCOME-MISSING']
+  },
+  {
+    id: 'M-PAYMENTS-SWEEP-INVALID',
+    title: 'el barrido de los cobros en duda no lo dispara el reloj',
+    extends: 'payments',
+    mutate: (d) => {
+      delete ops(d).sweepPendingCharges.schedule;
+      ops(d).sweepPendingCharges.internal = true;
+    },
+    expect: ['CHK-PAYMENTS-SWEEP-INVALID']
   }
 ];
 

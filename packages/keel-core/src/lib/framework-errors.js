@@ -177,7 +177,11 @@ export function overrideFor(declared, entry, family = entry.family) {
     // deducirlo. Un error que significa cosas distintas según quién lo lanza no es este contrato.
     (error) => error.http === entry.http && !error.dynamicStatus && family.test(String(error.code))
   );
-  return candidates.length === 1 ? candidates[0] : null;
+  // El mismo code declarado en varias operaciones es UN contrato, no varios candidatos: los
+  // `errors` se agregan por servicio. Sin deduplicar, declarar el conflicto en cada operación
+  // donde se observa —que es lo que pide el aviso— lo volvía ambiguo y lo dejaba sin reconocer.
+  const distinct = [...new Map(candidates.map((error) => [error.code, error])).values()];
+  return distinct.length === 1 ? distinct[0] : null;
 }
 
 /**

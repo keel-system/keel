@@ -1,0 +1,27 @@
+# Ningún usuario final llama a este servicio: el único llamante es el sistema de pedidos, con su
+# credencial máquina. El navegador del cliente habla con el componente de la pasarela, que le da
+# un token, y el token viaja por pedidos.
+authentication:
+  protocol: oidc
+  serviceAuth:
+    protocol: client-credentials
+    validateAudience: true
+    description: El sistema de pedidos es un cliente máquina con los scopes de cobro.
+
+permissions:
+  payment:charge: { description: Pedir un cobro o guardar un medio de pago. }
+  payment:read: { description: Consultar un cobro. }
+  payment:settle: { description: "Capturar, anular o devolver un cobro." }
+
+serviceClients:
+  orders-service:
+    description: Pedidos de la tienda; pide los cobros y los liquida al servir o anular el pedido.
+    scopes: [payment:charge, payment:read, payment:settle]
+
+access:
+  default: { level: service, scopes: [payment:charge] }
+  rules:
+    getPayment: { level: service, scopes: [payment:read] }
+    capturePayment: { level: service, scopes: [payment:settle] }
+    cancelPayment: { level: service, scopes: [payment:settle] }
+    refundPayment: { level: service, scopes: [payment:settle] }

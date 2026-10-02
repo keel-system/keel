@@ -27,8 +27,8 @@
           "class": {
             "type": "integer",
             "minimum": 1,
-            "maximum": 17,
-            "description": "Clase de gap-analysis.md (1..17)."
+            "maximum": 18,
+            "description": "Clase de gap-analysis.md (1..18)."
           },
           "units": {
             "type": "array",
@@ -52,7 +52,7 @@
         "required": ["class", "unit", "what", "severity", "state"],
         "additionalProperties": false,
         "properties": {
-          "class": { "type": "integer", "minimum": 1, "maximum": 17 },
+          "class": { "type": "integer", "minimum": 1, "maximum": 18 },
           "unit": {
             "type": "string",
             "minLength": 1,

@@ -112,6 +112,21 @@ const EXCEPCIONES = new Map([
       motivo: MOTIVOS.ramaHermana,
       porque: 'la simétrica de la anterior: reply-to con `source: data`, cuya rama ya compila por el remitente.'
     }
+  ],
+  // La capa payments: la fixture payment-checkout declara casi toda. Quedan dos ramas que no usa.
+  [
+    'payments.capture.amount',
+    {
+      motivo: MOTIVOS.hueco,
+      porque: 'la captura parcial (partial-capture): payment-checkout captura siempre el pedido entero a propósito, porque MercadoPago no la cubre y la fixture tiene que servir con las dos pasarelas.'
+    }
+  ],
+  [
+    'payments.charge.currency.input',
+    {
+      motivo: MOTIVOS.ramaHermana,
+      porque: 'la moneda por petición: la fixture la toma de un parámetro de despliegue, y el adaptador emite las dos ramas desde el mismo punto (la expresión de la moneda).'
+    }
   ]
 ]);
 

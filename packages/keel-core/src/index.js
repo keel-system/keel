@@ -15,6 +15,7 @@ export { validateService, workspaceRootOf } from './lib/validate-service.js';
 // «Diseño listo para generar»: el veredicto que compone validación, obligaciones, revisión,
 // escenarios, careo y DESIGN.md. Un generador lo estampa en lo que produce.
 export { READINESS_CRITERIA, assessReadiness } from './lib/readiness.js';
+export { FAILURE_REASONS } from './lib/payment-vocabulary.js';
 export { summarizeService } from './lib/summarize-service.js';
 export { listDerivatives } from './lib/derivatives.js';
 export {

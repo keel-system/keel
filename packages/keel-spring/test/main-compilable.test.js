@@ -36,6 +36,7 @@ const COMPILAN = [
   'metering-digest',
   'notification-mailer',
   'notification-mailer-mongo',
+  'payment-checkout',
   'payout-runs',
   'product-catalog',
   'profile-directory',

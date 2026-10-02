@@ -1,0 +1,116 @@
+types:
+  PaymentStatus:
+    description: >-
+      Estados de un cobro frente a la pasarela. capturing, canceling y refunding son los estados EN
+      VUELO de cada acción de seguimiento: la operación deja el cobro ahí antes de llamar a la
+      pasarela, y es lo que hace reconciliable una respuesta que no llega.
+    values: [pending, actionRequired, authorized, capturing, canceling, captured, refunding, refunded, failed, canceled]
+
+  PaymentFailureReason:
+    description: Por qué falló un cobro, en el vocabulario neutro de la capa payments.
+    values: [declined, insufficientFunds, expiredCard, authenticationFailed, fraudSuspected, invalidPaymentMethod, notReceived, processingError]
+
+  CancelReason:
+    description: Por qué se anuló una autorización.
+    values: [requested, expired]
+
+entities:
+  Payment:
+    description: >-
+      Un cobro pedido por el sistema de pedidos. Es la memoria del servicio frente a la pasarela:
+      a él se aplica cada desenlace y es lo que barre la reconciliación.
+    fields:
+      id: { type: uuid, id: true, generated: true }
+      chargeRequestId:
+        type: string
+        required: true
+        constraints: { maxLength: 64 }
+        description: Identificador de la petición de cobro que elige quien la pide; es la guarda contra el doble cargo.
+      orderId:
+        type: string
+        required: true
+        constraints: { maxLength: 64 }
+        description: El pedido que se cobra, tal como lo nombra el sistema de pedidos.
+      payerId:
+        type: string
+        required: true
+        constraints: { maxLength: 64 }
+        description: El cliente que paga, tal como lo nombra el sistema de pedidos.
+      amount:
+        type: decimal
+        required: true
+        constraints: { min: 0.01, scale: 2 }
+        description: Importe del cobro, en la moneda del servicio.
+      savedPaymentMethodId:
+        type: uuid
+        description: El medio guardado con el que se cobró; vacío si se cobró con el token del cliente presente.
+      refundedAmount:
+        type: decimal
+        constraints: { min: 0.01, scale: 2 }
+        description: Lo devuelto, cuando hubo devolución.
+      status: { type: PaymentStatus, required: true, default: pending }
+      gatewayPaymentId:
+        type: string
+        constraints: { maxLength: 128 }
+        description: >-
+          El identificador que la pasarela asignó al cobro. Vacío mientras no ha contestado; entonces
+          el cobro se le consulta por su chargeRequestId.
+      failureReason:
+        type: PaymentFailureReason
+        description: Por qué falló el cobro; vacío si no falló.
+      cancelReason:
+        type: CancelReason
+        description: Por qué se anuló la autorización; vacío si no se anuló.
+      customerAction:
+        type: json
+        description: >-
+          Lo que el cliente tiene que hacer para completar el cobro (3DS, redirección), mientras el
+          cobro está en actionRequired; vacío en cualquier otro estado. Opaco: lo define la pasarela.
+      requestedAt:
+        type: timestamp
+        required: true
+        description: Cuándo se pidió el cobro.
+      awaitingSince:
+        type: timestamp
+        description: >-
+          Desde cuándo el cobro espera un desenlace de la pasarela. Se estampa al nacer en pending y al
+          entrar en capturing, canceling o refunding; es el único reloj que mira el barrido.
+    lifecycle:
+      field: status
+      transitions:
+        pending: [actionRequired, authorized, failed]
+        actionRequired: [authorized, failed]
+        authorized: [capturing, canceling, canceled]
+        capturing: [captured, authorized, canceled]
+        canceling: [canceled, authorized]
+        captured: [refunding]
+        refunding: [refunded, captured]
+        refunded: []
+        failed: []
+        canceled: []
+    invariants:
+      - refundedAmount, cuando lo hay, no supera amount.
+      - Si hay savedPaymentMethodId, el payerId de ese medio es el payerId del cobro.
+      - customerAction solo tiene valor en actionRequired.
+
+  SavedPaymentMethod:
+    description: >-
+      Un medio de pago guardado para cobrar después sin el cliente delante. El servicio entrega su
+      propio id, no la referencia de la pasarela: así el medio queda atado a su titular.
+    fields:
+      id: { type: uuid, id: true, generated: true }
+      payerId:
+        type: string
+        required: true
+        constraints: { maxLength: 64 }
+        description: El cliente titular del medio.
+      gatewayReference:
+        type: string
+        required: true
+        sensitive: true
+        constraints: { maxLength: 255 }
+        description: La referencia que la pasarela devolvió al guardarlo. Nunca sale del servicio.
+
+aggregates:
+  Payment: { root: Payment }
+  SavedPaymentMethod: { root: SavedPaymentMethod }

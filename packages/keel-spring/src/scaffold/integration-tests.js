@@ -11,6 +11,7 @@
 // compileClasspath de este source set, así que nada de lo que se genera aquí
 // puede importar una clase del servicio.
 
+import { paymentHarnessImports, paymentHarnessSection } from './payments-harness.js';
 import { javaFile, javaPath } from './render.js';
 import { mailSection, hasMail, MAIL_IMPORTS } from './mail-harness.js';
 import { pascalCase, snakeCase, screamingSnake } from '../lib/naming.js';
@@ -1139,11 +1140,15 @@ function abstractImports(model) {
     imports.push('java.lang.reflect.Field', 'java.util.Map', 'org.springframework.security.oauth2.client.OAuth2AuthorizedClientService');
   }
   if (needsDirtiesContext(model)) imports.push('org.springframework.test.annotation.DirtiesContext');
+  // La pasarela de pago de prueba: firmar avisos y programar el doble.
+  imports.push(...paymentHarnessImports(model));
   return imports;
 }
 
+// El proveedor de prueba (WireMock) y sus helpers: con clientes HTTP salientes y con la capa payments,
+// cuya pasarela de prueba es el mismo WireMock hablando el protocolo de la elegida.
 function hasHttpClients(model) {
-  return Boolean(model.layersPresent.httpClients);
+  return Boolean(model.layersPresent.httpClients || model.layersPresent.payments);
 }
 
 // Estado que vive en beans singleton de la aplicación y que `reset-db.sh` no puede
@@ -1913,7 +1918,7 @@ ${hasIdempotency(model) ? `
     }
 
     // ── Estado e infraestructura ─────────────────────────────────────────────
-${resetSection(model)}${inMemoryResetSection(model)}${bashExecutableSection(model)}${httpStubSection(model)}${mailSection(model)}${devtoolsSection(model)}${brokerControlSection(model)}${storageControlSection(model)}${replicaSection(model)}${dbSection(model)}${containerExecSection(model)}${securitySection(model)}}`;
+${resetSection(model)}${inMemoryResetSection(model)}${bashExecutableSection(model)}${httpStubSection(model)}${paymentHarnessSection(model)}${mailSection(model)}${devtoolsSection(model)}${brokerControlSection(model)}${storageControlSection(model)}${replicaSection(model)}${dbSection(model)}${containerExecSection(model)}${securitySection(model)}}`;
 }
 
 // Proveedor de prueba de las integraciones salientes. Es infraestructura, no un
@@ -1923,7 +1928,7 @@ ${resetSection(model)}${inMemoryResetSection(model)}${bashExecutableSection(mode
 // conexión rechazada, que no dice nada sobre el código.
 function httpStubSection(model) {
   if (!hasHttpClients(model)) return '';
-  const clients = model.httpClients.map((client) => client.id).join(', ');
+  const clients = [...(model.httpClients ?? []).map((client) => client.id), ...(model.payments ? ['la pasarela de pago'] : [])].join(', ');
   return `
     /** Admin API del proveedor de prueba (WireMock de infra/docker-compose.yaml). */
     private static final String STUB_ADMIN = "http://localhost:8090/__admin";

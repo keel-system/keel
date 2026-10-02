@@ -39,7 +39,7 @@ Un literal `.claude/` en un asset es un bug, y hay tests que lo cazan (`keel-cor
 
 ### `packages/keel-core` — CLI `keel`
 
-- `src/cli.js` — entry point (commander). Comandos: `init`, `new`, `list`, `validate`, `describe`, `index`, `system` (`show`/`check`), `registry` (`list`/`search`/`show`/`get`). Usa `parseAsync`: el `--from registry:<slug>` de `new` y `registry get` descargan por red.
+- `src/cli.js` — entry point (commander). Comandos: `init`, `new`, `list`, `validate`, `describe`, `seals`, `index`, `system` (`show`/`check`), `registry` (`list`/`search`/`show`/`get`). Usa `parseAsync`: el `--from registry:<slug>` de `new` y `registry get` descargan por red.
 - `src/commands/` — un archivo por comando.
 - `src/lib/`:
   - `assets.js` — constantes `LAYERS`, `REQUIRED_LAYERS` (`domain`, `use-cases`), `KNOWN_GENERATORS`, `isKeelWorkspace()`.
@@ -47,7 +47,7 @@ Un literal `.claude/` en un asset es un bug, y hay tests que lo cazan (`keel-cor
   - `validate-service.js` — `validateService()`, orquesta la validación.
   - `summarize-service.js` — `summarizeService()`, resumen puro del diseño para `keel describe`.
   - `readiness.js` — `assessReadiness()`, el veredicto de «diseño listo para generar»: compone validación estricta, obligaciones, decisiones de los avisos (`undecided`), incoherencias de los avisos (`incoherences`, con escape `falsePositives` en `decisions.yaml`), revisión, análisis de huecos (`gaps`), escenarios, matriz, careo y `DESIGN.md` en criterios con id estable (`READINESS_CRITERIA`). Lo imprime `keel validate --ready` y `keel-spring build` lo **estampa** en `keel-generated.json` (clave `design`). Fase 1: avisa, no bloquea. Detalle en `core`.
-  - `gap-classes.js` + `gaps-state.js` — las 17 clases del análisis de huecos con sus **unidades derivadas** de las capas (`gapInventory()`), y el lector de `gaps.yaml` que las cruza con el barrido escrito (`resolveGaps()`). El inventario no se guarda: se deriva. Detalle en `core`.
+  - `gap-classes.js` + `gaps-state.js` — las 18 clases del análisis de huecos con sus **unidades derivadas** de las capas (`gapInventory()`), y el lector de `gaps.yaml` que las cruza con el barrido escrito (`resolveGaps()`). El inventario no se guarda: se deriva. Detalle en `core`.
   - `crossrefs.js` — `checkCrossRefs()`, validación mecánica de referencias entre capas.
   - `derivatives.js` — `listDerivatives()`, inventario de los derivados del diseño (escenarios, `DESIGN.md`, contratos formales, panel, `INTEGRATION.md`) y su frescura: compara el `service.version` que cada uno lleva estampado con el del manifiesto (`fresh`/`stale`/`unstamped`/`missing`/`orphan`/`not-applicable`). Lo consume `keel describe` y lo orquesta la skill `/keel-evolve`.
   - `design-index.js` — `buildIndex()`, `renderTable()`, `applyMarkers()`, `renderIndexJson()`: el índice de los diseños del workspace, proyección pura de `summarizeService()` + `listDerivatives()` + el sidecar `design.yaml` (schema propio, **fuera del DSL**). Escribe la tabla del `README.md` entre los marcadores `<!-- keel:servicios:start/end -->` —de los que es el **único** escritor— y el `index.json`. Determinista a propósito (sin timestamps): de ahí que `keel index --check` sirva de puerta de CI. Detalle en `core`.
@@ -97,6 +97,7 @@ npm run mapping-check --workspace packages/keel-spring    # pregunta al motor si
 npm run index-check --workspace packages/keel-spring      # ejercita la UNICIDAD CONDICIONADA en sus dos ramas
 npm run deploy-check --workspace packages/keel-spring     # levanta deploy/ entero y le pregunta AL BACKEND
 npm run matrix --workspace packages/keel-spring           # imprime la MATRIZ DE PARIDAD y sus tres listas (puro)
+npm run payment-check --workspace packages/keel-spring    # EJECUTA el adaptador y el verificador de avisos de cada pasarela contra una pasarela falsa del JDK (JDK, sin contenedores)
 npm run claim-check --workspace packages/keel-spring      # ejercita los RECLAMOS generados contra el motor real
 npm run design-matrix --workspace packages/keel-core      # imprime la MATRIZ DE LA PUERTA DE DISEÑO: qué id falsa cada mutación (puro)
 node packages/keel-spring/scripts/claim-check.js <fixture> [--database=<motor>] [--keep]   # una sola pasada
@@ -185,6 +186,8 @@ La columna «detalle» nombra el archivo de `.claude/rules/` que lleva el razona
 | Cambio en el correo saliente | `keel-spring/src/scaffold/mail.js` (puerto, adaptador SMTP, renderizador) + `src/lib/mail-probes.js` + `src/scaffold/mail-harness.js` + `test/mail.test.js`. Aquí build genera **también** el adaptador | `generado` |
 | Cambio en la API del buzón de correo | `keel-spring/src/lib/mail-probes.js` — **nunca** un literal en `mail-harness.js` ni en `stack-catalog.js`; después `npm run mail-check` | `arnés` |
 | Cambio en un script de mongosh | `keel-spring/src/lib/mongo-probes.js` — **nunca** un literal en `integration-tests.js` — + `test/mongo-probes.test.js`; después `npm run mongo-check`. Aquí javac no es red | `persistencia` |
+| Cambio en la capa `payments` (cobros con pasarela, DSL 2.19) | `keel-core/assets/core/schema/payments.schema.json` + `docs/dsl/payments.md` + `checkPayments()` en `crossrefs.js` con sus `CHK-PAYMENTS-*` y sus mutaciones (extensión `payments` de `test/design-mutations/catalog.js`) + la clase 18 de `gap-classes.js` + los `REV-PAYMENTS-*`. **Nada puede nombrar una pasarela**: lo que cambia entre ellas es del generador. Insumo: `docs/pasarelas/fase0-contratos-stripe-mercadopago.md`. En keel-spring es una categoría de stack (fila siguiente) | `core` |
+| Nueva pasarela de pago, o cambio en lo que genera una | Entrada en `PAYMENT_GATEWAYS` (`keel-spring/src/lib/stack-catalog.js`) + su columna ENTERA en `src/lib/gateway-support.js` (la matriz de paridad: `supported`/`unverified`/`unsupported` con su porqué) + su módulo en `src/scaffold/payment-gateways/` (adaptador y verificador de avisos) + su doble en `src/lib/payment-probes.js` (fuente única del arnés y de `payment-check`) + su skill `keel-spring-<pasarela>`. La parte neutra (`src/scaffold/payments.js`, `payments-harness.js`) no se toca: `test/payment-parity.test.js` falla si la pasarela se cuela en ella. Después, `npm run payment-check` y `compile-check` con `--payment-gateway=` | `generado` |
 | Nueva capa del DSL | `LAYERS` en `keel-core/src/lib/assets.js` + `assets/core/schema/<capa>.schema.json` + `templates/service/<capa>.keel.yaml` + `docs/dsl/<capa>.md` + reglas en `crossrefs.js` | `core` |
 | Cambio en el andamiaje de pruebas (`src/scaffold/integration-tests.js`) | Emite Java por plantilla: pasar `npm run compile-check` antes de darlo por hecho. Los helpers del proveedor de prueba se renderizan en un solo sitio (`test/stub-sequence.test.js`) | `arnés` |
 | Cambio en un comando de broker (flags, endpoints, cuerpos de petición) | `keel-spring/src/lib/broker-probes.js` — **nunca** un literal en `integration-tests.js`; después `npm run broker-check` | `arnés` |

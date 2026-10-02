@@ -830,6 +830,61 @@ export const STORAGE = {
   }
 };
 
+// ─── Pasarelas de pago (capa payments, DSL 2.19) ────────────────────────────
+//
+// La pasarela es una categoría de stack como el broker: el diseño declara la capa `payments`
+// sin nombrar ninguna, y build pregunta con cuál se genera. Lo que cambia entre pasarelas —su
+// contrato HTTP, cómo firma sus avisos, la unidad del importe, la cabecera de idempotencia— vive
+// aquí y en su adaptador, nunca en el diseño. Qué CAPACIDADES cubre cada una no está aquí: es la
+// matriz de `gateway-support.js`, que es lo que build contrasta con el diseño antes de generar.
+//
+// Sin SDK a propósito: el adaptador habla HTTP con el RestClient de Spring. Así la idempotencia
+// saliente, los timeouts y el doble de prueba (WireMock, `HTTP_STUB`) son los mismos para todas,
+// y el arnés no depende de lo que cada SDK esconda. Contratos verificados contra la documentación
+// oficial: docs/pasarelas/fase0-contratos-stripe-mercadopago.md.
+//
+// `webhook.notification`: `snapshot` si el aviso trae el objeto (la firma cubre el cuerpo),
+// `thin` si solo trae el id. Da igual para el desenlace —el servidor SIEMPRE lo consulta— pero
+// no para la verificación: con `thin` la firma no cubre el cuerpo.
+export const PAYMENT_GATEWAYS = {
+  stripe: {
+    id: 'stripe',
+    label: 'Stripe (Payment Intents)',
+    baseUrl: 'https://api.stripe.com',
+    // Importe entero en la unidad menor de la moneda (1099 = 10.99).
+    amountUnit: 'minor',
+    idempotencyHeader: 'Idempotency-Key',
+    auth: 'basic-secret-key',
+    env: { apiKey: 'STRIPE_SECRET_KEY', webhookSecret: 'STRIPE_WEBHOOK_SECRET', baseUrl: 'STRIPE_BASE_URL' },
+    webhook: {
+      path: 'stripe',
+      signatureHeader: 'Stripe-Signature',
+      // HMAC-SHA256 de `${t}.${cuerpo crudo}` con el secreto del endpoint; solo cuenta v1.
+      scheme: 'stripe-v1',
+      notification: 'snapshot',
+      toleranceSeconds: 300
+    }
+  },
+  mercadopago: {
+    id: 'mercadopago',
+    label: 'MercadoPago (API de Orders)',
+    baseUrl: 'https://api.mercadopago.com',
+    // Decimal en la unidad mayor (10.99).
+    amountUnit: 'major',
+    idempotencyHeader: 'X-Idempotency-Key',
+    auth: 'bearer-access-token',
+    env: { apiKey: 'MERCADOPAGO_ACCESS_TOKEN', webhookSecret: 'MERCADOPAGO_WEBHOOK_SECRET', baseUrl: 'MERCADOPAGO_BASE_URL' },
+    webhook: {
+      path: 'mercadopago',
+      signatureHeader: 'x-signature',
+      // HMAC-SHA256 del manifiesto `id:<data.id>;request-id:<x-request-id>;ts:<ts>;`. No cubre el cuerpo.
+      scheme: 'mercadopago-manifest',
+      notification: 'thin',
+      toleranceSeconds: 300
+    }
+  }
+};
+
 // ─── Proveedores de prueba de las integraciones salientes ────────────────────
 //
 // Un servicio que depende de otro por HTTP no tiene con quién hablar en `infra/`:
@@ -1068,7 +1123,8 @@ export const STACK_DEFAULTS = {
   broker: 'kafka',
   auth: 'keycloak',
   cache: 'redis',
-  storage: 'minio'
+  storage: 'minio',
+  paymentGateway: 'stripe'
 };
 
 /**
@@ -1095,6 +1151,7 @@ const CATALOG = {
   auth: AUTH,
   cache: CACHES,
   storage: STORAGE,
+  paymentGateway: PAYMENT_GATEWAYS,
   httpStub: { wiremock: HTTP_STUB },
   mail: { mailpit: MAIL_SINK }
 };
@@ -1116,7 +1173,8 @@ export function selectedInfra(model) {
     storage: layersPresent.storage ? stack.storage : null,
     // Gateado por diseño, no por stack: si hay integraciones salientes hace
     // falta con quién hablar en la infraestructura de prueba.
-    httpStub: layersPresent.httpClients ? HTTP_STUB.id : null,
+    // Y por la capa payments: la pasarela de prueba es WireMock hablando su protocolo.
+    httpStub: layersPresent.httpClients || layersPresent.payments ? HTTP_STUB.id : null,
     // Mismo criterio que el stub HTTP: gateado por diseño, no por stack. Si el
     // servicio manda correo, hace falta a quién mandárselo.
     mail: layersPresent.mail ? MAIL_SINK.id : null

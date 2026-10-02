@@ -35,6 +35,7 @@ Distinción operativa:
    | `security.access` / operaciones sobre datos de un titular | … | 9 |
    | `storage.buckets` | … | 10, 16 |
    | `mail.sentBy` (las operaciones que mandan correo) | … | 17, 2, 16 |
+   | `payments` (las acciones: `charge`, `capture`, `void`, `refund`, `savePaymentMethod`) | … | 18, 2, 9 |
    | `api.endpoints` `audience: services`/`both` | … | 11, 15 |
    | `persistence.entities` · `consistency` | … | 14, 16 |
    | todo el servicio | — | 12 |
@@ -55,6 +56,7 @@ Distinción operativa:
    | 9. Autorización a nivel de dato | sí | 11/11 operaciones | 2 huecos (#1, #4) |
    | 10. Archivos | no — sin capa `storage` | — | — |
    | 17. Correo saliente | no — sin capa `mail` | — | — |
+   | 18. Cobros con pasarela | no — sin capa `payments` | — | — |
 
    **Hallazgos** — todo lo encontrado, ordenado por severidad:
 
@@ -323,6 +325,20 @@ ya lo ha leído. Eso cambia el peso de cada hueco de esta clase.
 - **Y por dónde te enteras del rebote.** Es la mitad que casi siempre falta: el relay **acepta** el mensaje y responde OK; el rebote vuelve minutos u horas después. Si alguna regla depende de clasificarlo —suprimir la dirección, contar quejas, distinguir rebote duro de blando—, ¿por qué canal llega esa noticia (un webhook del proveedor, un buzón de retorno, un evento)? Sin canal declarado, esa regla no es implementable ni verificable: ninguna infraestructura de prueba rebota sola. La forma de la decisión ya existe en `dependencies` (`awaits`, `reconciledBy`): un desenlace que llega tarde o no llega.
 - **Quién puede pedir el envío.** Si el servicio manda correo por cuenta de varios sistemas, ¿de dónde sale la identidad de quien lo pide — del token, o de un campo del cuerpo? Si viaja en el cuerpo, cualquier cliente autenticado puede enviar en nombre de otro, desde su remitente verificado.
 
+### 18. Cobros con pasarela
+
+*Aplica si:* hay capa `payments`. Las unidades son sus acciones (`charge`, `capture`, `void`, `refund`, `savePaymentMethod`).
+
+Un cobro es dinero de una persona real que sale por un sistema que no es el nuestro. La pasarela se elige **al generar**, así que todo lo que el diseño no diga lo decide quien genere — y lo decide distinto en cada pasarela. Eso es lo que esta clase busca.
+
+- **De dónde sale el importe.** ¿Lo manda el cliente, o lo calcula el servicio a partir de algo que ya conoce (un pedido, una tarifa)? Un importe que viaja en la petición es un importe que el cliente puede cambiar. Si tiene que viajar, ¿qué lo contrasta?
+- **La moneda.** ¿Es una sola para todo el servicio (`service.parameters`) o llega con cada cobro? Con varias, ¿qué pasa con una que la pasarela no admite?
+- **El cobro en duda.** La respuesta de la pasarela no llegó: ¿qué ve quien pidió el cobro mientras tanto? El barrido de `reconciliation` lo resuelve después, pero la respuesta de *ahora* es una decisión (un 202 con el cobro en `pending`, un 503…).
+- **La acción del cliente (3DS).** Si el cobro se queda esperando al cliente, ¿cuánto espera? ¿Qué pasa con el pedido mientras tanto, y quién lo cancela si el cliente no vuelve?
+- **El cobro por evento.** Si `charge` lo dispara una suscripción, quien lo pide no está mirando: ¿por qué evento se entera de cada desenlace, incluido el que pide traer al cliente (`actionRequired`)?
+- **Capturar y devolver.** ¿Quién puede capturar o devolver, y hasta cuánto? ¿Se puede devolver más de una vez? ¿Y capturar después de que la autorización caduque — qué error ve quien lo intenta?
+- **Los datos de tarjeta.** Ningún campo del diseño puede llevar número, caducidad o CVV: solo los tokens que produce el componente de la pasarela. Un campo `cardNumber` en un input mete al servicio entero en el alcance de PCI.
+- **Quién puede pedir un cobro.** Con varios llamantes (usuarios, otros servicios), ¿puede uno cobrar un medio de pago guardado por otro? La referencia guardada no es un secreto: si basta con conocerla para cobrar, no protege nada.
 
 ### 16. Decisiones estructurales sin dueño
 

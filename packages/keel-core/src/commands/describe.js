@@ -209,6 +209,18 @@ function printDerivatives({ derivatives, counts }) {
   }
 }
 
+function printPayments(payments) {
+  const headline = [payments.flow, payments.record && `registro ${payments.record}`].filter(Boolean).join(', ');
+  console.log(pc.bold('payments') + pc.dim(` — ${headline}`));
+  for (const { action, operation } of payments.actions) {
+    console.log(`  ${pc.dim('•')} ${action} → ${pc.cyan(operation)}`);
+  }
+  if (payments.capabilities.length > 0) {
+    console.log(`  ${pc.dim('•')} exige a la pasarela ${pc.cyan(payments.capabilities.join(', '))}`);
+  }
+  if (payments.sweep) console.log(`  ${pc.dim('•')} reconcilia ${pc.cyan(payments.sweep)}`);
+}
+
 const LAYER_PRINTERS = {
   domain: ['domain', printDomain],
   'use-cases': ['useCases', printUseCases],
@@ -219,7 +231,8 @@ const LAYER_PRINTERS = {
   dependencies: ['dependencies', printDependencies],
   persistence: ['persistence', printPersistence],
   storage: ['storage', printStorage],
-  mail: ['mail', printMail]
+  mail: ['mail', printMail],
+  payments: ['payments', printPayments]
 };
 
 export function describe(ref) {

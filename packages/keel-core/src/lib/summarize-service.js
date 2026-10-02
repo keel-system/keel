@@ -172,6 +172,24 @@ function summarizeMail(doc) {
   };
 }
 
+// Las acciones de la capa payments, en el orden del flujo de un cobro. La pasarela no
+// aparece: se elige al generar.
+const PAYMENT_ACTIONS = ['charge', 'capture', 'void', 'refund', 'savePaymentMethod'];
+
+function summarizePayments(doc) {
+  return {
+    flow: doc?.flow ?? null,
+    capabilities: doc?.capabilities ?? [],
+    record: doc?.record?.entity ?? null,
+    actions: PAYMENT_ACTIONS.filter((action) => doc?.[action]?.operation).map((action) => ({
+      action,
+      operation: doc[action].operation
+    })),
+    outcomes: Object.keys(doc?.outcomes ?? {}),
+    sweep: doc?.reconciliation?.sweep ?? null
+  };
+}
+
 const LAYER_SUMMARIZERS = {
   domain: ['domain', summarizeDomain],
   'use-cases': ['useCases', summarizeUseCases],
@@ -182,7 +200,8 @@ const LAYER_SUMMARIZERS = {
   dependencies: ['dependencies', summarizeDependencies],
   persistence: ['persistence', summarizePersistence],
   storage: ['storage', summarizeStorage],
-  mail: ['mail', summarizeMail]
+  mail: ['mail', summarizeMail],
+  payments: ['payments', summarizePayments]
 };
 
 /**
