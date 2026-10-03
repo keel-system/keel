@@ -17,6 +17,7 @@ import { usesCorrelation, correlationImport } from './correlation.js';
 import { claimMechanism } from './claim.js';
 import { stubNote as conditionalUniquenessNote } from './conditional-uniqueness.js';
 import { callerResolution } from './security.js';
+import { rawJsonAnnotations } from './jackson.js';
 
 // Componentes del record mensaje: parámetros de ruta (en el orden del path) +
 // campos del body + paginación (queries). Compartidos con el controller para
@@ -331,7 +332,10 @@ function renderMessage(model, operation) {
       }
     }
     const noteBlock = notes.length > 0 ? notes.map((line) => `        ${line}\n`).join('') : '';
-    return `${noteBlock}        ${renderComponentType(operation, component, fromPath, imports, annotations)} ${component.name}`;
+    // Un `json` del cuerpo llega embebido como objeto (jackson.js). Fuera del JsonNullable de un
+    // PATCH, porque no es una anotación de tipo: dentro, se aplicaría al contenedor.
+    const rawJson = isWrappedInJsonNullable(operation, component, fromPath) ? '' : rawJsonAnnotations(model, component, imports);
+    return `${noteBlock}        ${rawJson}${renderComponentType(operation, component, fromPath, imports, annotations)} ${component.name}`;
   });
 
   const componentBlock = rendered.length > 0 ? `\n${rendered.join(',\n')}\n` : '';

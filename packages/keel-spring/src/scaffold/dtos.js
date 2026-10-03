@@ -5,6 +5,7 @@
 
 import { javaFile, javaPath, subPackage } from './render.js';
 import { domainTypeImport } from './entities.js';
+import { rawJsonAnnotations } from './jackson.js';
 
 const DTO_PKG = 'application.dtos';
 
@@ -57,7 +58,7 @@ function renderRecord(model, dto) {
     for (const name of field.imports) imports.add(name);
     const typeImport = domainTypeImport(model, field);
     if (typeImport) imports.add(typeImport);
-    return `    ${field.javaType} ${field.name}`;
+    return `    ${rawJsonAnnotations(model, field, imports)}${field.javaType} ${field.name}`;
   });
 
   // Una variante recortada se construye desde el <E>RefDto completo: el mapper la pide así y

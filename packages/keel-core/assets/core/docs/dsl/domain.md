@@ -30,6 +30,8 @@ types:
 
 Tipos base disponibles: `string`, `text`, `int`, `long`, `decimal`, `boolean`, `uuid`, `date`, `timestamp`, `json`, `file`.
 
+El tipo `json` modela un documento JSON **opaco**: el servicio lo guarda y lo devuelve sin interpretarlo (la acción que pide una pasarela de pago, la configuración de un tercero). En el cable viaja **embebido como valor JSON** (un objeto o un array), nunca como una cadena con el JSON escapado dentro, igual en una respuesta, en el cuerpo de una petición y en el payload de un evento. Si el servicio necesita leer su contenido, no es `json`: es un value object compuesto.
+
 El tipo `file` modela un archivo binario (foto, PDF, adjunto). Exige el atributo `bucket`, que referencia un bucket lógico declarado en la capa [`storage`](storage.md) (`type: file, bucket: productImages`). El campo guarda la referencia al objeto, no el binario en sí; el dónde y cómo se almacena lo decide `storage` (agnóstico del proveedor).
 
 ## `entities`

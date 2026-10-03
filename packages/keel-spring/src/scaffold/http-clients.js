@@ -15,6 +15,7 @@
 
 import { javaFile, javaPath, subPackage } from './render.js';
 import { domainTypeImport } from './entities.js';
+import { rawJsonAnnotations } from './jackson.js';
 import { outboundIdempotentCalls } from './http-idempotency.js';
 import { providerFailures } from '../lib/outbound-failures.js';
 import { callPolicy, clientRemembers } from './last-known.js';
@@ -863,7 +864,9 @@ ${checks}
 function renderResponse(model, client, call) {
   const imports = new Set();
   addFieldImports(model, imports, call.responseFields);
-  const components = call.responseFields.map((f) => `${f.javaType} ${f.name}`).join(', ');
+  const components = call.responseFields
+    .map((f) => `${rawJsonAnnotations(model, f, imports)}${f.javaType} ${f.name}`)
+    .join(', ');
   const todo = call.responseFields.length === 0
     ? `\n * TODO (agente): declara los campos según el contract "${call.contract}".`
     : '';
@@ -885,7 +888,9 @@ ${contractGuard(call.responseType, call.responseFields, {
 function renderRequest(model, client, call) {
   const imports = new Set();
   addFieldImports(model, imports, call.bodyFields);
-  const components = call.bodyFields.map((f) => `${f.javaType} ${f.name}`).join(', ');
+  const components = call.bodyFields
+    .map((f) => `${rawJsonAnnotations(model, f, imports)}${f.javaType} ${f.name}`)
+    .join(', ');
 
   const body = `/**
  * Body wire de ${client.id}.${call.name} (contrato del sistema externo).

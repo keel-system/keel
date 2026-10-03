@@ -17,6 +17,9 @@ import { javaFile, javaPath, subPackage } from './render.js';
 import { cachedOperations } from './cache.js';
 
 const SERIALIZATION_PKG = 'infrastructure.serialization';
+// En application y no en infrastructure: lo anotan los DTO y los commands, que no pueden
+// depender de la infraestructura (la frontera hexagonal va de fuera hacia dentro).
+const RAW_JSON_PKG = 'application.support';
 
 // Sin api, messaging ni caché no hay nada que serializar fuera del proceso.
 export function usesJackson(model) {
@@ -31,7 +34,90 @@ export function timestampModuleImport(model) {
 
 export function generate(model) {
   if (!usesJackson(model)) return [];
-  return [renderModule(model), renderConfig(model)];
+  const files = [renderModule(model), renderConfig(model)];
+  if (usesRawJson(model)) files.push(renderRawJsonDeserializer(model));
+  return files;
+}
+
+// ─── Campos `json` en el cable ───────────────────────────────────────────────
+//
+// Un campo `json` del DSL es un documento JSON opaco: se guarda como texto (String en
+// Java, columna text) pero en el cable viaja EMBEBIDO como valor JSON, no como una cadena
+// con el JSON escapado dentro. Con String a secas Jackson haría lo segundo, y quien consume
+// tendría que parsear dos veces lo que el contrato declara como objeto (la acción del
+// cliente de un cobro, por ejemplo). Se resuelve en el borde y no en el tipo: dentro del
+// proceso sigue siendo un String que nadie interpreta.
+
+/** ¿Es este campo un `json` que viaja embebido? Las listas de `json` quedan fuera. */
+export function isRawJsonField(field) {
+  return field?.base === 'json' && !field.list;
+}
+
+/**
+ * Las anotaciones que hacen viajar un campo `json` como valor embebido, en las dos
+ * direcciones; vacío para cualquier otro campo. Añade sus imports a `imports`.
+ */
+export function rawJsonAnnotations(model, field, imports) {
+  if (!isRawJsonField(field)) return '';
+  imports.add('com.fasterxml.jackson.annotation.JsonRawValue');
+  imports.add('com.fasterxml.jackson.databind.annotation.JsonDeserialize');
+  imports.add(`${subPackage(model, RAW_JSON_PKG)}.RawJsonDeserializer`);
+  return '@JsonRawValue @JsonDeserialize(using = RawJsonDeserializer.class) ';
+}
+
+// Hay deserializador que emitir si algún campo resuelto del modelo es `json`. Se busca en el
+// modelo entero y no registro por registro: todo emisor que llame a rawJsonAnnotations
+// necesita la clase, y quedarse corto aquí es un main que no compila.
+export function usesRawJson(model) {
+  const seen = new Set();
+  const stack = [model];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (!node || typeof node !== 'object' || seen.has(node)) continue;
+    seen.add(node);
+    if (typeof node.javaType === 'string' && isRawJsonField(node)) return true;
+    for (const value of Object.values(node)) {
+      if (value && typeof value === 'object') stack.push(value);
+    }
+  }
+  return false;
+}
+
+function renderRawJsonDeserializer(model) {
+  const body = `/**
+ * Lee un campo \`json\` del cable y lo guarda como el texto del documento.
+ *
+ * Es la otra mitad de {@code @JsonRawValue}: al escribir, el String se emite tal cual,
+ * embebido; al leer, un objeto o un array llega aquí como árbol y se vuelve a texto. Una
+ * cadena también se acepta, y se toma como el documento ya serializado, para no romper a
+ * un emisor que todavía lo mande escapado.
+ */
+public class RawJsonDeserializer extends JsonDeserializer<String> {
+
+    @Override
+    public String deserialize(JsonParser parser, DeserializationContext context) throws IOException {
+        JsonNode node = parser.readValueAsTree();
+        if (node == null || node.isNull()) {
+            return null;
+        }
+        return node.isTextual() ? node.textValue() : node.toString();
+    }
+}`;
+
+  return {
+    path: javaPath(model, RAW_JSON_PKG, 'RawJsonDeserializer'),
+    content: javaFile(
+      subPackage(model, RAW_JSON_PKG),
+      [
+        'com.fasterxml.jackson.core.JsonParser',
+        'com.fasterxml.jackson.databind.DeserializationContext',
+        'com.fasterxml.jackson.databind.JsonDeserializer',
+        'com.fasterxml.jackson.databind.JsonNode',
+        'java.io.IOException'
+      ],
+      body
+    )
+  };
 }
 
 function renderModule(model) {

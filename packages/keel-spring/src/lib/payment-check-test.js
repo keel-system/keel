@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { paymentProbesFor } from './payment-probes.js';
 import { PAYMENT_TEST_SECRETS } from '../scaffold/config.js';
+import { isRawJsonField } from '../scaffold/jackson.js';
 
 const q = (value) => JSON.stringify(value);
 
@@ -137,11 +138,14 @@ const SABOTAGES = {
   // La autorización caducada deja de leerse como un cobro anulado.
   expired: { file: (s) => `${s.adapter}.java`, from: (s) => s.expiredSabotage.from, to: (s) => s.expiredSabotage.to },
   // Una lectura previa a la devolución escapa del tratamiento de «sin respuesta».
-  prefetch: { file: (s) => `${s.adapter}.java`, from: (s) => s.prefetchSabotage.from, to: (s) => s.prefetchSabotage.to }
+  prefetch: { file: (s) => `${s.adapter}.java`, from: (s) => s.prefetchSabotage.from, to: (s) => s.prefetchSabotage.to },
+  // La acción del cliente vuelve a salir como cadena con el JSON escapado dentro.
+  'raw-json': { file: (s) => `${s.rawJson.eventClass}.java`, from: '@JsonRawValue ', to: '' }
 };
 
 export function paymentCheckTest(model, gateway) {
   const shapes = gatewayShapes(gateway);
+  shapes.rawJson = rawJsonEvent(model);
   const { probes } = shapes;
   const base = model.service.basePackage;
   const failure = model.payments.record.failureReasonType;
@@ -155,6 +159,7 @@ import ${base}.domain.payment.GatewayStatus;
 import ${base}.domain.payment.PaymentGatewayUnavailableException;
 import ${base}.domain.payment.PaymentSource;
 import ${base}.application.port.out.PaymentGateway;
+import ${base}.infrastructure.messaging.events.${shapes.rawJson.eventClass};
 import ${base}.infrastructure.payment.InvalidPaymentNoticeException;
 import ${base}.infrastructure.payment.PaymentGatewayHttpConfig;
 import ${base}.infrastructure.payment.PaymentGatewayProperties;
@@ -364,7 +369,7 @@ ${model.payments.refund?.amount ? `    @Test
         }
     }
 
-    @Test
+${rawJsonTest(shapes.rawJson)}    @Test
     void unAvisoFirmadoPorLaPasarelaVerificaYDiceDeQueCobroHabla() {
         Notice notice = notice(SECRET, NOW.getEpochSecond(), "");
         assertEquals(notice.id(), verifier().verify(notice.body(), notice.headers(), notice.query()).orElseThrow());
@@ -398,6 +403,31 @@ ${model.payments.refund?.amount ? `    @Test
 }
 
 export const PAYMENT_CHECK_SABOTAGES = Object.keys(SABOTAGES);
+
+// El evento publicado que lleva la acción del cliente (u otro campo `json`): con él se mide que el
+// documento sale EMBEBIDO del servicio y se lee como objeto, que es lo que javac no puede ver —
+// las anotaciones compilan igual sobre un componente que Jackson ignorase.
+function rawJsonEvent(model) {
+  for (const event of model.events ?? []) {
+    const field = event.fields.find(isRawJsonField);
+    if (field) return { eventClass: event.integrationClass, field: field.name };
+  }
+  throw new Error('payment-check: el diseño no publica ningún evento con un campo json que medir');
+}
+
+function rawJsonTest({ eventClass, field }) {
+  return `    @Test
+    void unCampoJsonSaleEmbebidoYSeLeeComoObjeto() throws Exception {
+        ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+        String action = "{\\"type\\":\\"redirect\\",\\"url\\":\\"https://example.test/3ds\\"}";
+        ${eventClass} event = mapper.readValue("{\\"${field}\\": " + action + "}", ${eventClass}.class);
+        assertEquals(action, event.${field}(), "el objeto del cable se guarda como su texto");
+        String wire = mapper.writeValueAsString(event);
+        assertTrue(wire.contains("\\"${field}\\":" + action), "sale escapado en vez de embebido: " + wire);
+    }
+
+`;
+}
 
 function findFile(dir, name) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {

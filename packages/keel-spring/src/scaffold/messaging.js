@@ -19,6 +19,7 @@ import { callsPaymentGateway } from '../lib/payments-model.js';
 import { javaFile, javaPath, subPackage } from './render.js';
 import { domainTypeImport } from './entities.js';
 import { nullInclusion } from './dtos.js';
+import { rawJsonAnnotations } from './jackson.js';
 import { usesOutbox, outboxNames } from './outbox.js';
 import { correlationImport } from './correlation.js';
 import { usesTelemetry, messageTracingImport } from './telemetry.js';
@@ -96,7 +97,7 @@ function renderIntegrationEvent(model, event) {
     for (const name of field.imports) imports.add(name);
     const typeImport = domainTypeImport(model, field);
     if (typeImport) imports.add(typeImport);
-    return `${field.javaType} ${field.name}`;
+    return `${rawJsonAnnotations(model, field, imports)}${field.javaType} ${field.name}`;
   });
   const payloadParams = components.join(', ');
 
@@ -418,7 +419,7 @@ function renderSubscriptionMessage(model, sub) {
         const name = /^@(\w+)/.exec(annotation)[1];
         imports.add(name === 'Valid' ? 'jakarta.validation.Valid' : `jakarta.validation.constraints.${name}`);
       }
-      const prefix = checks.length > 0 ? `${checks.join(' ')} ` : '';
+      const prefix = `${rawJsonAnnotations(model, f, imports)}${checks.length > 0 ? `${checks.join(' ')} ` : ''}`;
       if (!f.wireName) return `${prefix}${f.javaType} ${f.name}`;
       imports.add('com.fasterxml.jackson.annotation.JsonProperty');
       return `@JsonProperty("${f.wireName}") ${prefix}${f.javaType} ${f.name}`;

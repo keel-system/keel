@@ -2196,3 +2196,43 @@ test('el lote de carga de colecciones nunca queda por debajo del tope de página
   assert.ok(small.jpa.includes('@BatchSize(size = 50)'));
   assert.ok(small.db.includes('default_batch_fetch_size: 50'));
 });
+
+// Corridas `payment-checkout` (2026-10-02), designGap `customer-action-json`: un campo `json` se
+// mapeaba a String sin más, así que en el evento PaymentActionRequired la acción del cliente
+// viajaba como cadena con el JSON escapado dentro, y quien lo consume tenía que parsear dos veces
+// lo que el contrato declara como documento. Ahora todo registro que cruza el cable lo emite
+// embebido y lo lee como objeto, y dentro del proceso sigue siendo un String opaco.
+test('un campo json viaja embebido como objeto en los registros del cable, no en el dominio', () => {
+  const { manifest, layers, errors } = loadService(path.join(fixturesDir, 'payment-checkout'));
+  assert.deepEqual(errors, []);
+  const { files } = planService({ manifest, layers, workspace: fixturesDir, stack: { paymentGateway: 'stripe' } });
+  const find = (suffix) => files.find((f) => f.path.split(path.sep).join('/').endsWith(suffix))?.content;
+  const raw = '@JsonRawValue @JsonDeserialize(using = RawJsonDeserializer.class)';
+
+  // Las cuatro direcciones del cable: evento publicado, respuesta, cuerpo de un command.
+  for (const suffix of [
+    '/PaymentActionRequiredIntegrationEvent.java',
+    '/GetPaymentResponseDto.java',
+    '/MarkActionRequiredCommand.java'
+  ]) {
+    const content = find(suffix);
+    assert.ok(content, `falta ${suffix}`);
+    assert.ok(content.includes(`${raw} `), `${suffix} no embebe el json`);
+    assert.ok(content.includes('.application.support.RawJsonDeserializer;'), `${suffix} no importa el deserializador`);
+  }
+
+  // El deserializador vive en application (lo anotan DTOs y commands) y acepta objeto y cadena.
+  const deserializer = find('/application/support/RawJsonDeserializer.java');
+  assert.ok(deserializer, 'build no emite el deserializador');
+  assert.match(deserializer, /node\.isTextual\(\) \? node\.textValue\(\) : node\.toString\(\)/);
+
+  // Dentro del proceso no cambia nada: ni el agregado, ni el evento de dominio, ni la columna.
+  for (const suffix of ['/domain/aggregate/Payment.java', '/PaymentActionRequiredEvent.java', '/PaymentJpa.java']) {
+    assert.ok(!find(suffix).includes('JsonRawValue'), `${suffix} no cruza el cable y no debe anotarse`);
+  }
+
+  // Sin ningún campo json en el diseño, no hay deserializador que emitir.
+  const plain = loadService(path.join(fixturesDir, 'notification-mailer'));
+  const plainFiles = planService({ manifest: plain.manifest, layers: plain.layers, workspace: fixturesDir }).files;
+  assert.ok(!plainFiles.some((f) => f.path.endsWith('RawJsonDeserializer.java')));
+});

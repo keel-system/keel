@@ -46,7 +46,7 @@ Buena parte de esta tabla la materializa ya el **scaffolding determinista** de `
 | `decimal` con `scale` | `BigDecimal` con esa escala |
 | `uuid` / `timestamp` / `date` | `UUID` / `Instant` / `LocalDate` |
 | `text` | `String` con `@Column(columnDefinition = "text")` |
-| `json` | `String` o `JsonNode` mapeado a jsonb, según prefiera el usuario |
+| `json` | `String` opaco con `@Column(columnDefinition = "text")` (jsonb lo añade el agente si el usuario lo prefiere). En todo registro que cruza el cable —DTO de respuesta, command, evento de integración, mensaje de suscripción, cuerpo de un cliente HTTP— build lo anota con `@JsonRawValue @JsonDeserialize(using = RawJsonDeserializer.class)` (`application/support`): sale embebido como objeto y se lee como objeto. Dentro del proceso sigue siendo un `String` que nadie interpreta |
 | `file` (con `bucket`) | `String` con la clave/referencia del objeto en su bucket; el binario vive en el object storage (capa `storage`), no en la BD. El campo persiste solo la key; subida/descarga vía el puerto `FileStorage`. Lo que ese campo expone **en el cable** no es siempre la key: ver [§ `storage`](#storage--storagekeelyaml) |
 
 ### Cardinalidad (`list`, DSL 2.1)
