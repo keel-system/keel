@@ -9,20 +9,20 @@ decisions:
       el cliente final y no la credencial; la credencial solo dice que quien pide es pedidos.
       Con un segundo sistema que cobrase por este servicio habría que acotar los cobros a su
       credencial, y eso sí sería callerIdentity.
-    since: 1.0.0
+    since: 1.1.0
   - id: CHK-API-CREATED-NO-READ
     scope: api.endpoints.requestCharge
     reason: >-
       El cobro se lee por la referencia con la que se pidió (GET /payments/{chargeRequestId}), que
       es la que conoce quien lo pidió; el id interno no sale del servicio como identificador de
       lectura. La cabecera Location no se emite y no la sigue nadie.
-    since: 1.0.0
+    since: 1.1.0
   - id: CHK-API-CREATED-NO-READ
     scope: api.endpoints.savePaymentMethod
     reason: >-
       Un medio guardado no se consulta: su id solo sirve para cobrarlo después. Exponer su lectura
       sería exponer qué medios tiene guardados cada pagador, sin que nadie lo necesite.
-    since: 1.0.0
+    since: 1.1.0
   - id: CHK-PAYMENTS-OUTCOME-INPUT-UNBACKED
     scope: payments.outcomes.canceled
     reason: >-
@@ -30,7 +30,7 @@ decisions:
       pasarela: requested cuando el cobro venía de canceling (lo pidió cancelPayment) y expired en
       cualquier otro caso (la autorización caducó). El generador lo deja como TODO en el aplicador de
       desenlaces, que es justo donde se conoce el estado del que viene el cobro.
-    since: 1.0.0
+    since: 1.1.0
 
 structural:
   - section: '3.1'
@@ -41,7 +41,7 @@ structural:
       Cada evento es el desenlace de un cobro, y pedidos sirve o no el pedido según lo que lea.
       Un PaymentCaptured perdido es un pedido cobrado que no se sirve; un PaymentFailed perdido,
       uno que se sirve sin cobrar. El servicio ya tiene persistencia: el outbox cuesta una tabla.
-    since: 1.0.0
+    since: 1.1.0
   - section: '3.2'
     chosen: >-
       Ningún command declara idempotency. requestCharge la frena la clave natural sobre
@@ -55,21 +55,21 @@ structural:
       llega por el broker, y un almacén de claves caduca. La constraint sobre chargeRequestId
       cumple las dos cosas sin mecanismo aparte. La idempotencia hacia la pasarela la deriva el
       generador de esa misma referencia.
-    since: 1.0.0
+    since: 1.1.0
   - section: '3.3'
     chosen: sin caché en getPayment
     discarded: cache con ttlSeconds
     reason: >-
       getPayment se sondea para ver el cobro avanzar (pending → authorized → captured): una
       respuesta vieja le diría a pedidos que algo no está cobrado cuando ya lo está.
-    since: 1.0.0
+    since: 1.1.0
   - section: '3.4'
     chosen: audience services en todos los endpoints; ninguna operación de usuario
     discarded: audience both, o una superficie para el navegador del cliente
     reason: >-
       El navegador del cliente habla con el componente de la pasarela, no con este servicio: le
       da un token y el token viaja por pedidos. El único llamante es un sistema con credencial.
-    since: 1.0.0
+    since: 1.1.0
   - section: '3.5'
     scope: messaging.subscriptions.ChargeRequested.onFailure
     chosen: retry exponencial de 5 intentos (1 s a 30 s) y deadLetter true
@@ -79,7 +79,7 @@ structural:
       Los fallos transitorios (la base de datos) se resuelven reintentando; los que no, se
       quedan en la DLQ para que alguien los mire. Reintentar no cobra dos veces: la clave natural
       lo impide.
-    since: 1.0.0
+    since: 1.1.0
   - section: '3.7'
     scope: persistence.consistency.transactionalBoundary
     chosen: per-aggregate
@@ -87,7 +87,7 @@ structural:
     reason: >-
       Ninguna operación escribe dos agregados: requestCharge lee el medio guardado y solo escribe
       Payment. La frontera por agregado es la que el dominio declara y no hay nada que ensanchar.
-    since: 1.0.0
+    since: 1.1.0
   - section: '3.9'
     scope: persistence.consistency.optimisticLocking
     chosen: all
@@ -96,7 +96,7 @@ structural:
       Sobre un mismo cobro escriben a la vez tres caminos —la respuesta síncrona de la pasarela,
       su aviso y el barrido—, y un desenlace no puede pisar a otro: con último gana, un failed
       tardío borraría un captured. El perdedor recibe CONCURRENT_MODIFICATION y relee.
-    since: 1.0.0
+    since: 1.1.0
   - section: '3.9b'
     scope: persistence.audit.timestamps
     chosen: all
@@ -104,11 +104,11 @@ structural:
     reason: >-
       Cuándo cambió cada cobro es lo primero que se pregunta en una reclamación, y el modelo no
       lleva otra marca que requestedAt.
-    since: 1.0.0
+    since: 1.1.0
   - section: '3.9b'
     scope: persistence.audit.authorship
     chosen: none
     discarded: all
     reason: >-
       El único autor es pedidos o el propio servicio: guardar quién escribió diría siempre lo mismo.
-    since: 1.0.0
+    since: 1.1.0

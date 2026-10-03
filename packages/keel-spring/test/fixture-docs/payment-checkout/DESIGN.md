@@ -1,6 +1,6 @@
 # payment-checkout — Documento de diseño
 
-> specs/payment-checkout v1.0.0. Diseño cerrado; el porqué de las decisiones se entrevistó al cerrarlo.
+> specs/payment-checkout v1.1.0. Diseño cerrado; el porqué de las decisiones se entrevistó al cerrarlo.
 
 ## 1. Propósito y alcance
 
@@ -58,6 +58,9 @@ impide que dos acciones incompatibles sobre el mismo cobro lleguen las dos a la 
 - **Un medio guardado solo lo cobra su titular.** Un medio que no existe y uno de otro responden
   igual.
 - **Lo devuelto no supera lo cobrado**, y hay una sola devolución por cobro.
+- **Un cobro conserva lo que llegó a existir.** `awaitingSince` solo tiene valor mientras el cobro
+  espera un desenlace, y cada desenlace lo vacía al salir. Un cobro rechazado antes de llamar a la
+  pasarela (un medio inexistente o ajeno, por evento) no anota el medio ni `gatewayPaymentId`.
 - **Los motivos de fallo son un vocabulario neutro cerrado** (`declined`, `insufficientFunds`,
   `expiredCard`, `authenticationFailed`, `fraudSuspected`, `invalidPaymentMethod`, `notReceived`,
   `processingError`): cada pasarela se traduce a él.
@@ -77,7 +80,8 @@ impide que dos acciones incompatibles sobre el mismo cobro lleguen las dos a la 
 
 Un rechazo de la pasarela no es un error de la petición: es un cobro `failed` con su motivo. Si la
 pasarela pide autenticar al cliente, el cobro queda en `actionRequired` con la acción guardada
-(`customerAction`), que sale en la respuesta, en `getPayment` y en el evento.
+(`customerAction`), que sale en la respuesta, en `getPayment` y en el evento, siempre como objeto
+JSON: es opaca, pero no se escapa.
 
 ## 5. Fronteras e integraciones
 
@@ -109,11 +113,13 @@ pasarela pide autenticar al cliente, el cobro queda en `actionRequired` con la a
   se pierde está tan en duda como un cobro; repetirla a ciegas puede capturar o devolver dos veces.
 - **La acción del cliente se guarda**: sin ella, un cobro pedido por evento que exige autenticación
   no se podría completar nunca.
-- **Un rechazo por evento es un cobro fallido**: quien pide por evento se entera por evento.
+- **Un rechazo por evento es un cobro fallido**: quien pide por evento se entera por evento. El
+  cobro nace sin el medio que se rechazó: el invariante de titularidad manda sobre la anotación
+  (v1.1.0, designGap `failed-saved-method` de las dos corridas de 2026-10-02).
 - **Varios cobros por pedido**: tras un fallo, pedidos pide otro con otra referencia. Qué cobro vale
   para un pedido es de pedidos.
 - **Moneda única de dos decimales**, como parámetro de despliegue: no es elección del cliente.
-- **Sin retirar medios guardados en v1.0.0**: solo pedidos los cobra y solo a su titular; un medio
+- **Sin retirar medios guardados en v1.x**: solo pedidos los cobra y solo a su titular; un medio
   caducado lo rechaza la pasarela. Entra con el caso de uso de baja de cliente.
 - **Fuera**: métodos asíncronos, disputas, recurrentes y payouts. Entrarán cuando un diseño los
   necesite y su forma se haya contrastado con más de una pasarela.

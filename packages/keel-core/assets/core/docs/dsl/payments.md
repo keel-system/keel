@@ -12,7 +12,7 @@ capabilities: [partial-refund, customer-action, off-session]
 record:
   entity: Payment
   gatewayRef: gatewayPaymentId     # string: el id que asigna la pasarela
-  awaitingSince: awaitingSince     # timestamp: desde cuándo espera desenlace (un solo reloj)
+  awaitingSince: awaitingSince     # timestamp: desde cuándo espera sin respuesta (un solo reloj)
   failureReason: failureReason     # enum con el vocabulario neutro
   customerAction: customerAction   # string o json: la acción del cliente (3DS), mientras espera
 
@@ -84,7 +84,7 @@ La relación va en los dos sentidos (`CHK-PAYMENTS-CAPABILITY-UNBACKED`): una ca
 La entidad del dominio que recuerda cada cobro frente a la pasarela. Sus campos (`CHK-PAYMENTS-RECORD-UNKNOWN`):
 
 - **`gatewayRef`** (string): el id que asigna la pasarela. Correlaciona un aviso con el registro y permite consultarle el estado. Está vacío mientras la pasarela no ha contestado: entonces el cobro se consulta por su `charge.reference`, que el generador manda a la pasarela como referencia externa en la petición de cobro. Por eso un cobro sin respuesta sigue siendo reconciliable.
-- **`awaitingSince`** (timestamp): **desde cuándo** el cobro espera un desenlace. Lo estampa cada acción al entrar en su estado en vuelo: el cobro al nacer en `pending` y la captura, la anulación o la devolución al entrar en el suyo. Es el único reloj que mira el barrido.
+- **`awaitingSince`** (timestamp): **desde cuándo** el cobro espera **sin respuesta** un desenlace. Lo estampa cada acción al entrar en su estado en vuelo —el cobro al nacer en `pending` y la captura, la anulación o la devolución al entrar en el suyo—, y lo **renueva el barrido** cada vez que reclama el cobro para consultarlo: así otra réplica no lo toma en la misma pasada. Por eso no dice cuándo empezó la espera, sino cuánto lleva sin que nadie obtenga respuesta. Es el único reloj que mira el barrido.
 - **`failureReason`**: por qué falló un cobro. Su tipo es un enum del dominio con **exactamente** el vocabulario neutro (`CHK-PAYMENTS-FAILURE-VOCABULARY`):
 
   | Valor | Cuándo |
@@ -99,7 +99,21 @@ La entidad del dominio que recuerda cada cobro frente a la pasarela. Sus campos 
   | `processingError` | fallo de la pasarela o de la red de tarjetas, no del medio |
 
   Cada adaptador traduce a estos valores los códigos de su pasarela. Con texto libre, cada pasarela escribiría el suyo y el mismo diseño fallaría distinto según con cuál se generase. La lista es cerrada: un motivo nuevo es un cambio del DSL, no de un adaptador. El generador la toma de `FAILURE_REASONS` (`keel-core`).
-- **`customerAction`** (string o json; exige `customer-action`): la acción que el cliente tiene que hacer para completar el cobro (3DS, redirección), guardada **mientras el cobro está en `actionRequired`** y vacía en cualquier otro estado. Su contenido es opaco: lo define la pasarela y lo consume su componente en el navegador. **El servidor es portable, el frontend no.** Guardarla es lo que permite recuperarla cuando el cobro se pidió sin el cliente delante: sale en la lectura del cobro y conviene que viaje también en el evento del desenlace `actionRequired`.
+- **`customerAction`** (string o json; exige `customer-action`): la acción que el cliente tiene que hacer para completar el cobro (3DS, redirección), guardada **mientras el cobro está en `actionRequired`** y vacía en cualquier otro estado. Su contenido es opaco: lo define la pasarela y lo consume su componente en el navegador. **El servidor es portable, el frontend no.** Guardarla es lo que permite recuperarla cuando el cobro se pidió sin el cliente delante: sale en la lectura del cobro y conviene que viaje también en el evento del desenlace `actionRequired`. Con tipo `json` viaja embebida como objeto, no como cadena (ver el tipo `json` en [`domain`](domain.md)).
+
+### Lo que conserva un cobro `failed`
+
+Un cobro fallido conserva lo que **llegó a existir**, y nada más:
+
+| Cómo falló | `gatewayRef` | Medio guardado anotado | `failureReason` | `customerAction` |
+|---|---|---|---|---|
+| **Antes de llamar a la pasarela** (medio inexistente, de otro titular, ausente o doble, por la puerta del evento) | vacío | **vacío** | el que corresponda (`invalidPaymentMethod`) | vacío |
+| **Lo rechazó la pasarela** | el que asignó | el medio con el que se intentó | el traducido | vacío |
+| **La pasarela no lo conoce** (barrido) | vacío | el medio con el que se intentó | `notReceived` | vacío |
+
+La primera fila es la que suele quedar sin decir: una rule que anota el medio «con `paymentMethodRef`, siempre» choca con el invariante que ata el medio a su titular justo en la rama que rechaza un medio ajeno. O la escritura se rechaza (y no hay cobro `failed` ni evento de desenlace) o la anotación se omite, y el diseño tiene que decir cuál: la doctrina es omitirla, porque el invariante manda. Lo pregunta `REV-PAYMENTS-FAILED-RECORD`.
+
+De la misma familia: **`awaitingSince` solo tiene valor mientras el cobro espera un desenlace** (`pending`, `actionRequired` y los estados en vuelo). La operación del desenlace lo vacía al salir, y también el barrido o la acción rechazada que devuelve el cobro al estado del que salió; si se conserva, un cobro terminado parece seguir esperando para cualquiera que lo lea, aunque el barrido no lo vuelva a seleccionar.
 
 ## El cobro (`charge`)
 

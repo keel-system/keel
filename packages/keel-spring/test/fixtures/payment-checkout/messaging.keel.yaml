@@ -21,7 +21,8 @@ publishing:
       channel: paymentEvents
       description: >-
         El cobro espera a que el cliente se autentique. Lleva la acción para que quien lo pidió pueda
-        traer al cliente sin consultar el cobro.
+        traer al cliente sin consultar el cobro. La acción viaja como objeto JSON, tal como la dio
+        la pasarela.
       payload:
         chargeRequestId: { type: string, required: true }
         orderId: { type: string, required: true }

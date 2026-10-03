@@ -73,8 +73,10 @@ entities:
       awaitingSince:
         type: timestamp
         description: >-
-          Desde cuándo el cobro espera un desenlace de la pasarela. Se estampa al nacer en pending y al
-          entrar en capturing, canceling o refunding; es el único reloj que mira el barrido.
+          Desde cuándo el cobro espera SIN RESPUESTA un desenlace de la pasarela. Se estampa al nacer
+          en pending y al entrar en capturing, canceling o refunding, y lo renueva cada consulta del
+          barrido al reclamar el cobro; se vacía al salir de los estados de espera. Es el único reloj
+          que mira el barrido.
     lifecycle:
       field: status
       transitions:
@@ -92,6 +94,9 @@ entities:
       - refundedAmount, cuando lo hay, no supera amount.
       - Si hay savedPaymentMethodId, el payerId de ese medio es el payerId del cobro.
       - customerAction solo tiene valor en actionRequired.
+      - >-
+        awaitingSince solo tiene valor mientras el cobro espera un desenlace: en pending,
+        actionRequired, capturing, canceling y refunding.
 
   SavedPaymentMethod:
     description: >-

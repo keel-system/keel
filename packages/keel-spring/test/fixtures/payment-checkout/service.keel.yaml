@@ -5,7 +5,7 @@ keel: "2.19"
 # (READY_FIXTURES).
 service:
   name: payment-checkout
-  version: 1.0.0
+  version: 1.1.0
   description: Cobra con tarjeta los pedidos de la tienda por cuenta del sistema de pedidos, en el acto o con un medio de pago guardado.
   domain: commerce
 conventions:

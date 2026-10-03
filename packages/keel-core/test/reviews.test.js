@@ -227,3 +227,31 @@ test('REV-MSG-DEDUPE-WINDOW aplica donde no hay guarda, y NO donde la hay', () =
   );
   assert.ok(!errors.some((error) => /recordReading/.test(error) && /idempot/i.test(error)));
 });
+
+test('REV-PAYMENTS-FAILED-RECORD aplica con medio guardado, y la contradicción no la ve la CLI', async () => {
+  // designGap `failed-saved-method`, en las DOS corridas de payment-checkout (2026-10-02): una
+  // rule anota el medio guardado en el registro «siempre», otra registra como failed el cobro que
+  // pide un medio ajeno, y el invariante ata el medio a su titular. Las tres son prosa, y la
+  // contradicción solo aparece al leerlas juntas.
+  const ID = 'REV-PAYMENTS-FAILED-RECORD';
+  const { freshBase, evaluate } = await import('./design-mutations/runner.js');
+  const { EXTENSIONS } = await import('./design-mutations/catalog.js');
+  const design = freshBase();
+  EXTENSIONS.payments(design);
+
+  assert.ok(applicableReviews(design.layers).includes(ID), 'con charge.source.saved la revisión aplica');
+  const withoutSaved = structuredClone(design.layers);
+  delete withoutSaved.payments.charge.source.saved;
+  assert.ok(!applicableReviews(withoutSaved).includes(ID), 'sin medio guardado no hay nada que anotar');
+
+  // La violación, escrita como la escribió la fixture: la anotación sin excepción.
+  design.layers.domain.entities.Payment.invariants = ['El medio guardado con el que se cobra es del titular que paga.'];
+  design.layers['use-cases'].operations.requestPriorityCharge.rules = [
+    'El cobro se registra en pending antes de llamar a la pasarela; con paymentMethodRef queda anotado.',
+    'Por la suscripción, un medio de otro titular registra el cobro y le aplica el desenlace failed.'
+  ];
+  const result = evaluate(design);
+  assert.deepEqual(result.schemaErrors, []);
+  assert.deepEqual(result.ids, [], 'si la CLI la viera, la revisión sobra y su sitio es crossrefs.js');
+  assert.deepEqual(result.anonymous, { errors: [], warnings: [] });
+});

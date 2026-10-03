@@ -1,99 +1,31 @@
-reviewedAt: 1.0.0
-passes: 3
-scenariosSha256: f925250150ec0d8a28c1aa5feb2470ba98102c7f36a253e717a6cf08a36eee41
-conventionsSha256: 38e132e6f64c7d194bcc82cf0c9eed0f21888efcc952132bb68c987c169cc870
+reviewedAt: 1.1.0
+passes: 2
+scenariosSha256: 8c1eb6859aa7ae47da5507d6a6e802e886c6d2256a27573f6bb3cbceb53b51fd
+conventionsSha256: 7c270b40cc1e288f494237acac704010e85b18c1dc19552d435e7b8e6ece7f05
 flows:
-  - id: FL-MTH-001
-    sha256: e20eaedb9368c8832368337d2ec415931e93dde10d52a5252a700fbf797cc15d
-  - id: FL-MTH-001-B
-    sha256: 802737b582e0aad88adf6e6d06abc70b3a3b8c29e2d98404d5572481249780e4
-  - id: FL-CHG-001
-    sha256: baba5f9763a51c2e0169d9e164aee8d375598123d8efa18fc8dc0cb990f3dd4f
-  - id: FL-CHG-001-B
-    sha256: 9108940a88ab9b0faee8a6e4fdcae30102dfd99766b3cf7dafab97da24df4baa
-  - id: FL-CHG-002
-    sha256: a7aa909e960e38c991148f686715d648ed03c2f9112820b8191074ba656fdde5
-  - id: FL-CHG-003
-    sha256: 22219d79c14840148675c2e62e2e350c809087fba591f743bb4889cfa8b3abe7
-  - id: FL-CHG-004
-    sha256: 74054223f3f799313bf7e79bdf94dcc6c696f18eb1096cddef483ee846c3d00a
-  - id: FL-EVT-001
-    sha256: b90be6911d224f708f649ff1a770618c841f02557b1c3b0de1ff4f851cd588d5
-  - id: FL-EVT-001-B
-    sha256: 384c108f6738176552f3b3282743a8d8bdd63196dd09d4f5e3bed6a0f5730c26
-  - id: FL-EVT-002
-    sha256: 47dfee77c585a8d9e9baa77432f4222d1a74cb203b08e0db207a03c357ad341d
-  - id: FL-EVT-003
-    sha256: e0fdeb0f7e4ca6bb7391ea918d000782feedbc5f9f0914b7a1775394bed45039
-  - id: FL-STL-001
-    sha256: ee4cb4a6f78f1c32c5231b088c329323047b21cf9f472152e158f5fba6d6f4a0
-  - id: FL-STL-001-B
-    sha256: 05aa030359807112ad4bdbf247d9690f638e70379d38b81445e0353f155d8518
-  - id: FL-STL-002
-    sha256: 954b7403a0c649337d3b9072956e033d49665c8a137c90328308aa95af9fc0a8
-  - id: FL-STL-002-B
-    sha256: ec8ed55d93ab79d2b110ae5a0320ab38b3dc14d9d42fe25025c6faf6cb73b577
-  - id: FL-STL-003
-    sha256: 3f01c9f898d0a2e1d27d366097deb6c146b779f17f063386a2675552e5d1545c
-  - id: FL-STL-003-B
-    sha256: 055e86e83490f1e6015de84b9b00c92597e1fb5c6ee6493bdc880a13b0cb766a
-  - id: FL-STL-004
-    sha256: d16461318888fa547eb431034463b6f230561f25877fc8624638566f784d6543
-  - id: FL-STL-004-B
-    sha256: 8323a0f39b7b1c72408ff16511a9edfa28c5f54681a2280dccf1ea7f33c3edf4
-  - id: FL-REC-001
-    sha256: 96fdda59fd36fe85981fd84ac288aafed5af415c7ee3cb7a8fe5dd27d2922dc8
-  - id: FL-REC-002
-    sha256: ae7e22ca07d156f56234dc0403f208ced7c764dbbc3e7ebabd6b06a623471d5b
-  - id: FL-REC-002-B
-    sha256: b27fc320107f7bf9b3d44948ce42880899404f062057a497d2ef5277ce4b32da
-  - id: FL-CLU-001
-    sha256: 55b4616bd76716e43c2e134be4cc112abda8082f829a0d497f9af70fbdb10199
-  - id: FL-OBX-001
-    sha256: b62b889060235b1c7bcdbb372bf2810b6e37b2db146363b0acc2b4c6eeb110fd
-  - id: FL-OBX-002
-    sha256: fbf313c27820ac891817db3024140fa592d59f2fe1070d9df01bced75d667fa1
-findings:
-  - flow: FL-EVT-003
-    step: "Then 2"
-    kind: other
-    artifact: domain.Payment.invariants
-    evidence: >-
-      El Then afirma que getPayment sobre ch-013 responde status failed, o sea, que el cobro se
-      registró. Según el YAML, por la suscripción el cobro con un medio de otro titular se registra
-      en pending y se le aplica markFailed (rule de requestCharge), y otra rule de requestCharge
-      dice, sin excepción, que «con paymentMethodRef queda anotado en savedPaymentMethodId». Así
-      ch-013 nacería con payerId cli-2 y savedPaymentMethodId <m1>, cuyo titular es cli-1: justo lo
-      que prohíbe el invariante de Payment «si hay savedPaymentMethodId, el payerId de ese medio es
-      el payerId del cobro». Pasa lo mismo con el medio que no existe (un savedPaymentMethodId sin
-      medio detrás). O la escritura se rechaza y no hay cobro failed ni PaymentFailed, o la
-      anotación se omite en esa rama, y nada en el diseño dice cuál de las dos.
-    proposal: >-
-      Decir en la rule de la rama de la suscripción que, con un medio inexistente o de otro titular,
-      savedPaymentMethodId queda vacío, y afirmar en el Then 2 savedPaymentMethodId null; o acotar
-      el invariante a los cobros que no están en failed.
-    resolution: accepted
-    reason: "Aceptado a sabiendas, con el presupuesto de careo agotado: el invariante de Payment (el medio
-      guardado es del pagador) manda sobre la rule de anotación, así que en la rama de rechazo por
-      evento savedPaymentMethodId no se anota y el cobro nace sin medio. La rule de requestCharge se
-      reescribe en la próxima minor para decirlo, igual que se hizo con FL-DSP-001 en el par del
-      MVP."
-  - flow: FL-REC-002-B
-    step: "Then 1"
-    kind: carried-state
-    artifact: use-cases.sweepPendingPayments.rules
-    evidence: >-
-      El Then espera que el ciclo del When consulte ch-034 porque está «en capturing desde hace más
-      del umbral». Pero el barrido no mira el tiempo en capturing, mira awaitingSince, y según su
-      rule cada candidato se reclama «volviendo a estampar awaitingSince». El barrido corre cada 5
-      minutos y el umbral es de 900 s, así que un cobro que lleva más de 900 s en capturing ya lo ha
-      reclamado y consultado un ciclo anterior (el primero tras cruzar el umbral), que le reestampó
-      awaitingSince: en el ciclo del When ya no es candidato y la pasarela no recibe ninguna
-      consulta para ch-034 en ese ciclo. El Given, tal como está escrito, no es un estado en el que
-      el Then se deduzca.
-    proposal: >-
-      Escribir el Given en términos de awaitingSince («ch-034 cuyo awaitingSince superó el umbral y
-      que ningún ciclo ha reclamado todavía») o afirmar en el Then que la consulta llega en el
-      primer ciclo tras cruzar el umbral, en vez de «corre un ciclo».
-    resolution: scenario
-    sealAfter: 23d73ec15d9c8ba7bdb5b20047c757ec4605cadeeeab1a22d80a87a97d219c60
+  - { id: FL-MTH-001, sha256: e20eaedb9368c8832368337d2ec415931e93dde10d52a5252a700fbf797cc15d }
+  - { id: FL-MTH-001-B, sha256: 802737b582e0aad88adf6e6d06abc70b3a3b8c29e2d98404d5572481249780e4 }
+  - { id: FL-CHG-001, sha256: 854671505ccaf35b2e660be6a7e4f4a935b7836631d1457b1d92954337cf4290 }
+  - { id: FL-CHG-001-B, sha256: 9108940a88ab9b0faee8a6e4fdcae30102dfd99766b3cf7dafab97da24df4baa }
+  - { id: FL-CHG-002, sha256: 2463b634d31973c15176fb3f80484575451beba2804a6fbaf36c5a036f4ca304 }
+  - { id: FL-CHG-003, sha256: 22219d79c14840148675c2e62e2e350c809087fba591f743bb4889cfa8b3abe7 }
+  - { id: FL-CHG-004, sha256: 74054223f3f799313bf7e79bdf94dcc6c696f18eb1096cddef483ee846c3d00a }
+  - { id: FL-EVT-001, sha256: b90be6911d224f708f649ff1a770618c841f02557b1c3b0de1ff4f851cd588d5 }
+  - { id: FL-EVT-001-B, sha256: 384c108f6738176552f3b3282743a8d8bdd63196dd09d4f5e3bed6a0f5730c26 }
+  - { id: FL-EVT-002, sha256: 47dfee77c585a8d9e9baa77432f4222d1a74cb203b08e0db207a03c357ad341d }
+  - { id: FL-EVT-003, sha256: bca051d9e4f67bc9fcdb0b08d5d7fb599dcbe97a0650a8672000444227eb8ee9 }
+  - { id: FL-STL-001, sha256: 3f6ca448ba622a1f94ae631bd78a46bde05a3f4e1a3866883cbbc37e6b3ec845 }
+  - { id: FL-STL-001-B, sha256: da4c597d7da118a7faf98778b0cefae991c9241ddd2aa1b76943a5f8a9ef02ad }
+  - { id: FL-STL-002, sha256: 954b7403a0c649337d3b9072956e033d49665c8a137c90328308aa95af9fc0a8 }
+  - { id: FL-STL-002-B, sha256: ec8ed55d93ab79d2b110ae5a0320ab38b3dc14d9d42fe25025c6faf6cb73b577 }
+  - { id: FL-STL-003, sha256: 3f01c9f898d0a2e1d27d366097deb6c146b779f17f063386a2675552e5d1545c }
+  - { id: FL-STL-003-B, sha256: e01ed90e1ce1506a5a615109dd756fda632aff746c6abb48a63e248b5175b1fa }
+  - { id: FL-STL-004, sha256: d16461318888fa547eb431034463b6f230561f25877fc8624638566f784d6543 }
+  - { id: FL-STL-004-B, sha256: 8323a0f39b7b1c72408ff16511a9edfa28c5f54681a2280dccf1ea7f33c3edf4 }
+  - { id: FL-REC-001, sha256: 96fdda59fd36fe85981fd84ac288aafed5af415c7ee3cb7a8fe5dd27d2922dc8 }
+  - { id: FL-REC-002, sha256: ae7e22ca07d156f56234dc0403f208ced7c764dbbc3e7ebabd6b06a623471d5b }
+  - { id: FL-REC-002-B, sha256: 23d73ec15d9c8ba7bdb5b20047c757ec4605cadeeeab1a22d80a87a97d219c60 }
+  - { id: FL-CLU-001, sha256: 55b4616bd76716e43c2e134be4cc112abda8082f829a0d497f9af70fbdb10199 }
+  - { id: FL-OBX-001, sha256: b62b889060235b1c7bcdbb372bf2810b6e37b2db146363b0acc2b4c6eeb110fd }
+  - { id: FL-OBX-002, sha256: fbf313c27820ac891817db3024140fa592d59f2fe1070d9df01bced75d667fa1 }
+findings: []

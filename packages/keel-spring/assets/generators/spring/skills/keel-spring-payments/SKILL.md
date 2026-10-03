@@ -57,6 +57,11 @@ defensa:
      dentro del mismo tratamiento de «sin respuesta», y es mejor que no exista.
 3. **Desenlaces** (`outcomes.*`): **idempotentes**. Si el cobro ya no está en el estado de origen
    —lo aplicó otro camino—, no hagas nada y no lances. Ver `references/outcomes.md`.
+   - Al salir de un estado de espera, **vacía `awaitingSince`** (y `customerAction` fuera de
+     `actionRequired`): un cobro conserva solo lo que sigue siendo verdad. Pasar de `pending` a
+     `actionRequired` no es salir, porque el cobro sigue esperando.
+   - Un cobro que rechazas **antes** de llamar a la pasarela (un medio ajeno por la puerta del
+     evento) nace sin el medio y sin `gatewayPaymentId`: lo que no llegó a existir no se anota.
 4. **Barrido** (`reconciliation.sweep`): candidatos en los estados que esperan desenlace con
    `awaitingSince` más antiguo que `payments.reconciliation.unanswered-after-seconds`; **reclama**
    cada uno volviendo a estampar `awaitingSince` en una actualización condicional, y llama a

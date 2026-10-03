@@ -1,7 +1,7 @@
 # payment-checkout — Escenarios de validación
 
 > Escenarios de aceptación ejecutables (Given/When/Then) derivados de
-> specs/payment-checkout v1.0.0. Contrato de validación para la fase de generación.
+> specs/payment-checkout v1.1.0. Contrato de validación para la fase de generación.
 
 > **Un único diseño, cualquier pasarela.** Estos escenarios no nombran ninguna pasarela y tienen
 > que pasar igual con todas las del menú de build. Hablan de la **pasarela de prueba**: el doble
@@ -21,12 +21,16 @@
   payloads de evento; nunca se omite (`conventions.nulls: include`). `gatewayPaymentId` es nulo
   mientras la pasarela no ha contestado; `failureReason`, mientras el cobro no ha fallado;
   `cancelReason`, mientras no se ha anulado; `refundedAmount`, mientras no hay devolución;
-  `savedPaymentMethodId`, si se cobró con token; y `customerAction`, fuera de `actionRequired`.
+  `savedPaymentMethodId`, si se cobró con token o si el medio se rechazó antes de llamar a la
+  pasarela; `customerAction`, fuera de `actionRequired`; y `awaitingSince`, cuando el cobro ya no
+  espera desenlace (fuera de `pending`, `actionRequired`, `capturing`, `canceling` y `refunding`).
 - **Importes**: decimales con dos cifras, en la moneda del servicio (`BRL` en las pruebas,
   `service.parameters.currency`). Se comparan **por valor**: `10.5` y `10.50` son el mismo importe.
   Un importe con más de dos decimales se **rechaza** (`scalePolicy: reject`), no se redondea.
 - **La acción del cliente**: `customerAction` es **opaca** — su contenido lo define la pasarela y
-  lo consume su componente en el navegador. Los escenarios solo afirman si está (no nula) o no.
+  lo consume su componente en el navegador. Los escenarios solo afirman si está (no nula) o no, y
+  que viaja como **objeto JSON** —en la respuesta y en el evento—, nunca como una cadena con el
+  JSON escapado dentro.
 - **Motivos**: `failureReason` y `cancelReason` son enums; los escenarios afirman el valor exacto.
 - **Forma del cuerpo de error**: la del generador, `{timestamp, status, error, code, message,
   details}` más `correlationId`. Los escenarios fijan solo el `code` y el status HTTP.
@@ -105,7 +109,8 @@ amount: 25.90, paymentToken: <token>}`.
 
 **Then**:
 1. Status `201` con `status: "authorized"`, `amount: 25.90`, `gatewayPaymentId` no nulo,
-   `savedPaymentMethodId: null`, `failureReason: null` y `customerAction: null`.
+   `savedPaymentMethodId: null`, `failureReason: null`, `customerAction: null` y
+   `awaitingSince: null`: el cobro ya no espera desenlace.
 2. `getPayment` sobre `ch-001` responde lo mismo.
 3. `paymentEvents` recibe **exactamente un** `PaymentAuthorized` con `{chargeRequestId: "ch-001",
    orderId: "ped-1", amount: 25.90, occurredAt}`.
@@ -132,10 +137,11 @@ porque la pasarela de prueba contesta en el acto; FL-REC-001 es el caso en que n
 **When**: `requestCharge` con `chargeRequestId: "ch-003"` y un token.
 
 **Then**:
-1. Status `201` con `status: "actionRequired"` y `customerAction` no nula.
+1. Status `201` con `status: "actionRequired"`, `customerAction` no nula y como objeto, y
+   `awaitingSince` no nulo: el cobro sigue esperando, ahora al cliente.
 2. `getPayment` sobre `ch-003` responde lo mismo, con la misma `customerAction`.
 3. `paymentEvents` recibe **exactamente un** `PaymentActionRequired` para `ch-003`, con
-   `customerAction` no nula.
+   `customerAction` no nula y como objeto.
 
 **When**: la pasarela de prueba avisa de que el cliente se autenticó y el cobro quedó autorizado.
 
@@ -229,8 +235,9 @@ al cliente, y si nunca vuelve, la pasarela acaba dando el cobro por fallido y el
 **Then**:
 1. En ≤ 10 s `paymentEvents` recibe **exactamente un** `PaymentFailed` para `ch-013`, con
    `failureReason: "invalidPaymentMethod"`.
-2. `getPayment` sobre `ch-013` responde `status: "failed"`, y la pasarela de prueba no ha recibido
-   ningún cobro para `ch-013`.
+2. `getPayment` sobre `ch-013` responde `status: "failed"`, `savedPaymentMethodId: null` y
+   `gatewayPaymentId: null`: el medio de otro titular no se anota, porque el cobro nunca llegó a
+   hacerse con él. La pasarela de prueba no ha recibido ningún cobro para `ch-013`.
 
 ## Liquidación
 
@@ -241,22 +248,26 @@ al cliente, y si nunca vuelve, la pasarela acaba dando el cobro por fallido y el
 **When**: `capturePayment` sobre `ch-001`.
 
 **Then**:
-1. Status `200` con `status: "captured"`: el cobro pasó por `capturing` y la pasarela confirmó en
-   el acto.
+1. Status `200` con `status: "captured"` y `awaitingSince: null`: el cobro pasó por `capturing`,
+   la pasarela confirmó en el acto y ya no espera nada.
 2. `paymentEvents` recibe **exactamente un** `PaymentCaptured` para `ch-001`, con `amount: 25.90`.
 
 #### FL-STL-001-B: lo que no se puede capturar
 
-**Given**: el cobro `ch-001` ya capturado, y un cobro `ch-020` autorizado cuya autorización la
-pasarela de prueba da por caducada.
+**Given**: el cobro `ch-001` ya capturado, un cobro `ch-020` autorizado cuya autorización la
+pasarela de prueba da por caducada, y un cobro `ch-022` autorizado cuya captura la pasarela de
+prueba rechaza.
 
-**When**: `capturePayment` sobre `ch-001`, sobre `ch-999` (no existe) y sobre `ch-020`.
+**When**: `capturePayment` sobre `ch-001`, sobre `ch-999` (no existe), sobre `ch-020` y sobre
+`ch-022`.
 
 **Then**:
 1. `ch-001`: status `409` con `PAYMENT_NOT_CAPTURABLE`.
 2. `ch-999`: status `404` con `PAYMENT_NOT_FOUND`.
 3. `ch-020`: status `409` con `PAYMENT_NOT_CAPTURABLE`, y `getPayment` lo da en `canceled` con
    `cancelReason: "expired"`.
+4. `ch-022`: status `422` con `CAPTURE_REJECTED`, y `getPayment` lo vuelve a dar en `authorized`
+   con `awaitingSince: null`: se puede volver a capturar.
 
 ### FL-STL-002: se anula una autorización
 
@@ -303,7 +314,8 @@ capturado cuya devolución la pasarela de prueba rechaza, y un cobro `ch-025` au
 **Then**:
 1. `ch-001`: status `409` con `PAYMENT_NOT_REFUNDABLE` — una sola devolución por cobro.
 2. `ch-023`: status `422` con `REFUND_EXCEEDS_CAPTURED`, y la pasarela no ha recibido nada.
-3. `ch-024`: status `422` con `REFUND_REJECTED`, y `getPayment` lo vuelve a dar en `captured`.
+3. `ch-024`: status `422` con `REFUND_REJECTED`, y `getPayment` lo vuelve a dar en `captured`
+   con `awaitingSince: null`.
 4. `ch-025`: status `409` con `PAYMENT_NOT_REFUNDABLE` — no está capturado.
 5. `ch-999`: status `404` con `PAYMENT_NOT_FOUND`.
 

@@ -410,6 +410,22 @@ export const REVIEWS = {
     asks:
       '¿qué impide que un llamante cobre un medio guardado por otro? La referencia no es un secreto: tiene que haber ' +
       'una regla que ate el medio a su titular, y una precondición en charge que la compruebe'
+  },
+  // Nació del designGap `failed-saved-method`, repetido en las dos corridas de payment-checkout
+  // (2026-10-02). Es revisión y no CHK porque lo que choca son dos frases: la rule que anota el
+  // medio en el registro y el invariante que lo ata a su titular. Ningún YAML dice que la rule
+  // se aplique también a la rama que rechaza el medio, y solo un lector ve que se contradicen.
+  'REV-PAYMENTS-FAILED-RECORD': {
+    scope: 'payments',
+    gapClass: 18,
+    severity: 'warning',
+    appliesTo: (layers) => Boolean(layers.payments?.charge?.source?.saved),
+    title: 'no está dicho qué anota el registro de un cobro rechazado antes de llamar a la pasarela',
+    asks:
+      '¿dicen las rules de la operación de charge qué queda anotado (medio guardado, gatewayRef) cuando el cobro se ' +
+      'rechaza ANTES de llamar a la pasarela —medio inexistente, de otro titular, ausente o doble—, y es compatible con ' +
+      'los invariantes de la entidad de record? La doctrina (docs/dsl/payments.md § Lo que conserva un cobro failed): ' +
+      'lo que no llegó a existir no se anota'
   }
 };
 

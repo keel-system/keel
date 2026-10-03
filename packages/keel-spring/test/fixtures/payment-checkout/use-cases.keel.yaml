@@ -55,7 +55,9 @@ operations:
         contra qué contrastarlo.
       - >-
         El cobro se registra en pending, con requestedAt y awaitingSince, ANTES de llamar a la
-        pasarela; con paymentMethodRef queda anotado en savedPaymentMethodId.
+        pasarela; con paymentMethodRef, el medio queda anotado en savedPaymentMethodId solo si
+        existe y es del pagador. Por HTTP, las precondiciones se comprueban ANTES de registrar: una
+        petición que no las cumple responde su 422 y no deja cobro.
       - >-
         Si la pasarela contesta en el acto, la respuesta ya lleva el desenlace (authorized,
         actionRequired con su customerAction, o failed con su motivo). Si no contesta, el cobro se
@@ -64,9 +66,9 @@ operations:
       - Un medio que no existe y uno de otro titular responden igual, para no revelar cuáles existen.
       - >-
         Por la suscripción no hay a quién responder un 422: un medio de pago inválido, ausente, doble
-        o de otro titular registra el cobro en pending y le aplica markFailed con failureReason
-        invalidPaymentMethod, sin llamar a la pasarela: sale PaymentFailed, como de cualquier otro
-        fallo. Así quien lo pidió por evento se entera por evento.
+        o de otro titular registra el cobro en pending, sin anotar el medio, y le aplica markFailed
+        con failureReason invalidPaymentMethod, sin llamar a la pasarela: sale PaymentFailed, como
+        de cualquier otro fallo. Así quien lo pidió por evento se entera por evento.
     errors:
       - code: PAYMENT_SOURCE_INVALID
         when: No llega ningún medio de pago, o llegan los dos.
@@ -108,6 +110,9 @@ operations:
       - >-
         Si la pasarela rechaza la captura porque la autorización caducó, el cobro pasa a canceled
         (cancelReason expired) y se responde PAYMENT_NOT_CAPTURABLE.
+      - >-
+        Si la rechaza por cualquier otro motivo, el cobro vuelve a authorized, con awaitingSince
+        vacío, y se responde CAPTURE_REJECTED.
     errors:
       - code: PAYMENT_NOT_FOUND
         when: No hay cobro con esa referencia.
@@ -115,11 +120,15 @@ operations:
       - code: PAYMENT_NOT_CAPTURABLE
         when: El cobro no está autorizado, porque no lo está todavía, ya se capturó, hay otra acción en curso o la autorización caducó.
         http: 409
+      - code: CAPTURE_REJECTED
+        when: La pasarela rechaza la captura por un motivo que no es la caducidad de la autorización.
+        http: 422
       - code: CONCURRENT_MODIFICATION
         when: Otro desenlace modificó el cobro a la vez.
         http: 409
     transitions:
       - { entity: Payment, from: [authorized], to: capturing }
+      - { entity: Payment, from: [capturing], to: authorized, description: La pasarela rechazó la captura. }
 
   cancelPayment:
     description: Anula la autorización de un cobro que no se va a servir.
@@ -167,8 +176,8 @@ operations:
       - >-
         El cobro pasa a refunding, con awaitingSince, antes de llamar a la pasarela. Si confirma en
         el acto, la respuesta lleva el cobro en refunded con refundedAmount; si no contesta, en
-        refunding, y lo resuelve el barrido. Si la rechaza, el cobro vuelve a captured y se
-        responde REFUND_REJECTED.
+        refunding, y lo resuelve el barrido. Si la rechaza, el cobro vuelve a captured, con
+        awaitingSince vacío, y se responde REFUND_REJECTED.
     errors:
       - code: PAYMENT_NOT_FOUND
         when: No hay cobro con esa referencia.
@@ -203,7 +212,7 @@ operations:
         gatewayPaymentId: { type: string, required: true, constraints: { maxLength: 128 } }
     output: void
     rules:
-      - Vacía customerAction.
+      - Vacía customerAction y awaitingSince, porque el cobro ya no espera desenlace.
     emits: [PaymentAuthorized]
     transitions:
       - { entity: Payment, from: [pending, actionRequired], to: authorized }
@@ -220,6 +229,7 @@ operations:
     output: void
     rules:
       - Guarda customerAction tal cual llega de la pasarela.
+      - Conserva awaitingSince, porque el cobro sigue esperando, ahora al cliente.
     emits: [PaymentActionRequired]
     transitions:
       - { entity: Payment, from: [pending], to: actionRequired }
@@ -232,6 +242,8 @@ operations:
       fields:
         chargeRequestId: { type: string, required: true, constraints: { maxLength: 64 } }
     output: void
+    rules:
+      - Vacía awaitingSince, porque el cobro ya no espera desenlace.
     emits: [PaymentCaptured]
     transitions:
       - { entity: Payment, from: [capturing], to: captured }
@@ -250,7 +262,10 @@ operations:
           description: El id de la pasarela, si llegó a asignarlo; se conserva para poder reclamar.
     output: void
     rules:
-      - Vacía customerAction.
+      - Vacía customerAction y awaitingSince, porque el cobro ya no espera desenlace.
+      - >-
+        Conserva lo que llegó a existir: gatewayPaymentId si la pasarela lo asignó y el medio con
+        el que se intentó, si se anotó al pedirlo.
     emits: [PaymentFailed]
     transitions:
       - { entity: Payment, from: [pending, actionRequired], to: failed }
@@ -264,6 +279,8 @@ operations:
         chargeRequestId: { type: string, required: true, constraints: { maxLength: 64 } }
         refundedAmount: { type: decimal, required: true, constraints: { min: 0.01, scale: 2, scalePolicy: reject } }
     output: void
+    rules:
+      - Anota refundedAmount y vacía awaitingSince, porque el cobro ya no espera desenlace.
     emits: [PaymentRefunded]
     transitions:
       - { entity: Payment, from: [refunding], to: refunded }
@@ -277,6 +294,8 @@ operations:
         chargeRequestId: { type: string, required: true, constraints: { maxLength: 64 } }
         cancelReason: { type: CancelReason, required: true }
     output: void
+    rules:
+      - Vacía awaitingSince, porque el cobro ya no espera desenlace.
     emits: [PaymentCanceled]
     transitions:
       - { entity: Payment, from: [authorized, capturing, canceling], to: canceled }
@@ -301,7 +320,8 @@ operations:
         da por fallido con failureReason notReceived y sale PaymentFailed.
       - >-
         Si una acción de seguimiento no llegó a hacerse (la pasarela dice que el cobro sigue
-        autorizado, o capturado), el barrido devuelve el cobro al estado del que salió.
+        autorizado, o capturado), el barrido devuelve el cobro al estado del que salió, con
+        awaitingSince vacío.
       - Un cobro que la pasarela sigue dando por en curso se deja para la siguiente pasada.
     emits: [PaymentFailed]
     transitions:
