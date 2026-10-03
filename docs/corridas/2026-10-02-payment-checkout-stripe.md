@@ -17,7 +17,7 @@ pasarela, comprobado esta vez con agentes y no solo con `test/payment-parity.tes
 | Huecos del diseño | 4 en `design-gaps.yaml` (uno, `customer-action-json`, es en realidad del generador) |
 | Huecos del generador | 5 (F1–F5), compartidos con MercadoPago salvo F2 |
 | Agujeros de la puerta | 0 |
-| Convertidos en id | — |
+| Convertidos en id | `REV-PAYMENTS-FAILED-RECORD` (cerrado el 2026-10-02 en la v1.1.0) |
 
 Los 30 reescritos son los mismos archivos que en la corrida de MercadoPago. Ninguno pertenece al
 adaptador ni al verificador de la pasarela: el agente no tocó lo que es propio de la pasarela. Es
@@ -72,3 +72,32 @@ revisores.
 - `failed-saved-method`: no está fijado qué conserva `savedPaymentMethodId` en un cobro que termina
   en `failed` (FL-EVT-003). Es el pendiente que se aceptó en la Fase 2 y que también reporta la
   corrida de MercadoPago.
+
+## Cierre de los pendientes (2026-10-02)
+
+Se cerraron en la minor **v1.1.0** del diseño y en keel-spring:
+
+- `failed-saved-method` → **`REV-PAYMENTS-FAILED-RECORD`**. Al repetirse en las dos corridas, era
+  candidato obligatorio a id. Es revisión y no `CHK` porque lo que choca son dos frases: la rule
+  que anota el medio y el invariante que lo ata a su titular. La doctrina está en
+  `docs/dsl/payments.md` § Lo que conserva un cobro `failed`: un cobro conserva lo que llegó a
+  existir. FL-EVT-003 afirma ahora `savedPaymentMethodId: null` y `gatewayPaymentId: null`.
+- `awaiting-since-on-exit` → cada desenlace vacía `awaitingSince` al salir de los estados de espera,
+  y también lo vacían el barrido y la acción rechazada que devuelven el cobro a su estado de origen.
+  El campo pasa a significar «desde cuándo espera sin respuesta», porque el barrido lo renueva al
+  reclamar el cobro.
+- `customer-action-json` → un campo `json` viaja **embebido como objeto** en todo registro del cable
+  (`@JsonRawValue` + `RawJsonDeserializer`). `payment-check` lo mide en ejecución, con el sabotaje `raw-json`.
+- **K1** → el arnés espera a los grupos de consumo de Kafka una vez por JVM, antes del primer
+  escenario, y ya no solo alrededor de la réplica.
+- **K2** → el productor de Kafka tiene en `local` un `delivery.timeout.ms` de 15 s, y
+  `abandonOutboxEvent` espera a que caduque el envío en vuelo. **No está medido en vivo**:
+  `broker-check` no arranca la aplicación, y K1 y K2 viven en sus clientes. Lo comprueban los tests
+  de cadena y `compile-check`; la medición es la próxima corrida con Kafka.
+
+La minor rehízo el careo, la revisión y el barrido de huecos con los agentes de contexto limpio. Del
+barrido salieron cinco preguntas nuevas, decididas en esta minor: `CAPTURE_REJECTED` (422) para una
+captura que la pasarela rechaza por otro motivo que la caducidad; la redefinición de
+`awaitingSince`; y tres aceptadas por escrito (un `ChargeRequested` que rompe el contrato va a la
+DLQ, la moneda es única por despliegue, y las acciones hechas desde el panel de la pasarela quedan
+fuera).

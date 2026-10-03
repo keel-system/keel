@@ -13,6 +13,13 @@ doble escapado y el desajuste de módulos de serialización.
 
 ## Producer: fiabilidad primero
 
+**Los plazos del producer ya los fija build** en el bloque `producer.properties` de cada perfil:
+`delivery.timeout.ms`, `request.timeout.ms` y `max.block.ms`, cortos en `local` (15 s, 5 s y 5 s)
+y con el default de Kafka en el resto, por variable de entorno. **No los cambies**: el arnés espera
+ese mismo plazo para dar por caducado un envío en vuelo (`abandonOutboxEvent`), y con los 120 s
+de Kafka en `local` el escenario del relay que se rinde ve salir el evento que acaba de abandonar.
+Añade lo tuyo **dentro de ese mismo bloque `properties`**, sin duplicar la clave:
+
 ```yaml
 spring:
   kafka:
@@ -23,8 +30,7 @@ spring:
       properties:
         # Reintentos del producer sin duplicar mensajes (exactly-once por partición).
         enable.idempotence: true
-        # Tiempo total (envío + reintentos) antes de dar el envío por fallido.
-        delivery.timeout.ms: 120000
+        # delivery.timeout.ms, request.timeout.ms y max.block.ms: ya los puso build.
       # Latencia/throughput: agrupa envíos hasta 10ms o 32KB antes de mandar.
       # Déjalo en 0 (default) salvo throughput real de eventos.
       # properties.linger.ms: 10

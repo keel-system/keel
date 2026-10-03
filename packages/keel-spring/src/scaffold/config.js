@@ -764,6 +764,36 @@ function rabbitListenerLines(model) {
   return lines;
 }
 
+/**
+ * Cuánto puede retener el productor de Kafka un envío sin confirmar, en el perfil `local` (el de
+ * los escenarios). El arnés lo lee de aquí: `abandonOutboxEvent` espera a que caduque el envío que
+ * seguía en vuelo antes de devolver el control (integration-tests.js).
+ *
+ * Por qué existe (K2, corridas payment-checkout 2026-10-02): el dispatcher del outbox hace
+ * `send(...).join()`, y con el broker caído ese envío espera en el buffer del productor hasta
+ * `delivery.timeout.ms`, que por defecto es de 120 s. El escenario del relay que se rinde abandona
+ * el evento y levanta el broker dentro de esa ventana, así que el envío pendiente se completaba y
+ * el evento abandonado SALÍA. Fuera de `local` rige el default de Kafka, y las variables lo exponen.
+ */
+export const KAFKA_LOCAL_PRODUCER_TIMEOUTS = { deliveryMs: 15000, requestMs: 5000, maxBlockMs: 5000 };
+
+function kafkaProducerTimeoutLines(profile) {
+  const local = profile === 'local';
+  const value = (name, localValue, kafkaDefault) =>
+    local ? String(localValue) : `\${${name}:${kafkaDefault}}`;
+  const t = KAFKA_LOCAL_PRODUCER_TIMEOUTS;
+  return [
+    '      properties:',
+    '        # Cuánto espera un envío sin confirmar antes de fallar. Kafka exige',
+    '        # delivery.timeout.ms >= linger.ms + request.timeout.ms. El join() del',
+    '        # dispatcher del outbox no espera más que esto, así que un broker caído',
+    '        # cuenta como intento fallido en este plazo y no se queda el envío en vuelo.',
+    `        delivery.timeout.ms: ${value('KAFKA_PRODUCER_DELIVERY_TIMEOUT_MS', t.deliveryMs, 120000)}`,
+    `        request.timeout.ms: ${value('KAFKA_PRODUCER_REQUEST_TIMEOUT_MS', t.requestMs, 30000)}`,
+    `        max.block.ms: ${value('KAFKA_PRODUCER_MAX_BLOCK_MS', t.maxBlockMs, 60000)}`
+  ];
+}
+
 function brokerYaml(model, profile) {
   const { service, stack } = model;
   if (stack.broker === 'snssqs') {
@@ -832,6 +862,7 @@ function brokerYaml(model, profile) {
     '      # kafka-clients y sin los módulos de la app (los Instant saldrían como',
     '      # epoch crudo, violando docs/asyncapi.yaml).',
     '      value-serializer: org.apache.kafka.common.serialization.StringSerializer',
+    ...kafkaProducerTimeoutLines(profile),
     '    consumer:',
     `      group-id: ${envWithDefault(profile, 'KAFKA_GROUP_ID', `${service.artifactId}-group`)}`,
     '      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer',

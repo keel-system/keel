@@ -43,6 +43,7 @@ import { tokenUrl, userTestClient, usesPersonaTokens } from './auth-provisioning
 import { stallSql, missingClockCountSql, rescueShape } from '../lib/claim-probes.js';
 import { declaresIdempotency } from './http-idempotency.js';
 import { SPECS_SEAL_FILE } from '../lib/specs-seal.js';
+import { KAFKA_LOCAL_PRODUCER_TIMEOUTS } from './config.js';
 // Fuente única de los comandos de broker: lo que se emite aquí es lo mismo que
 // `scripts/broker-check.js` ejecuta contra los brokers reales.
 import {
@@ -1353,7 +1354,7 @@ ${security && tokenProtocol(model) ? `
         rest.getRestTemplate().setRequestFactory(new JdkClientHttpRequestFactory());${
       pausesRelay(model) ? `
         CONTEXT = applicationContext;` : ''
-    }${inMemoryStateCapture(model)}
+    }${inMemoryStateCapture(model)}${kafkaConsumersReady(model)}
     }
 ${usesReplica(model) ? `
     /**
@@ -1918,7 +1919,7 @@ ${hasIdempotency(model) ? `
     }
 
     // ── Estado e infraestructura ─────────────────────────────────────────────
-${resetSection(model)}${inMemoryResetSection(model)}${bashExecutableSection(model)}${httpStubSection(model)}${paymentHarnessSection(model)}${mailSection(model)}${devtoolsSection(model)}${brokerControlSection(model)}${storageControlSection(model)}${replicaSection(model)}${dbSection(model)}${containerExecSection(model)}${securitySection(model)}}`;
+${resetSection(model)}${inMemoryResetSection(model)}${bashExecutableSection(model)}${httpStubSection(model)}${paymentHarnessSection(model)}${mailSection(model)}${devtoolsSection(model)}${brokerControlSection(model)}${storageControlSection(model)}${replicaSection(model)}${kafkaGroupsSection(model)}${dbSection(model)}${containerExecSection(model)}${securitySection(model)}}`;
 }
 
 // Proveedor de prueba de las integraciones salientes. Es infraestructura, no un
@@ -2550,10 +2551,30 @@ function kafkaGroupsAfter(model, members) {
   return kafkaGroupIds(model).length > 0 ? `\n        awaitConsumerGroupsStable(${members});` : '';
 }
 
+// K1 (corridas payment-checkout, 2026-10-02): la primera entrega a un topic recién creado llegaba
+// tarde, porque al autocrear el topic se suma el reparto del grupo de consumo, y el arnés solo
+// esperaba a los grupos en los escenarios de réplica. Ahora espera una vez por JVM, antes del primer
+// escenario, a que cada grupo del servicio tenga su consumidor asignado.
+function kafkaConsumersReady(model) {
+  if (kafkaGroupIds(model).length === 0) return '';
+  return `
+        if (!CONSUMER_GROUPS_READY) {
+            awaitConsumerGroupsStable(1);
+            CONSUMER_GROUPS_READY = true;
+        }`;
+}
+
 function kafkaGroupsSection(model) {
   const groups = kafkaGroupIds(model);
   if (groups.length === 0) return '';
   return `
+
+    /**
+     * Si los grupos ya se esperaron en esta JVM. El primer escenario de la suite no puede empezar
+     * antes de que el servicio tenga asignada su partición: con el topic recién autocreado, un
+     * mensaje publicado antes se entrega tarde y el await del escenario se agota.
+     */
+    private static volatile boolean CONSUMER_GROUPS_READY = false;
 
     /** Los consumer groups del servicio: \`messaging.subscriptions.<clave>.group-id\` de parameters/local. */
     private static final List<String> CONSUMER_GROUP_IDS = List.of(${groups.map((g) => JSON.stringify(g)).join(', ')});
@@ -2859,7 +2880,7 @@ ${hasMultipart(model) ? `
             // Archivo ilegible: no hay nada fiable que matar.
         }
         deleteReplicaPid();
-    }${kafkaGroupsSection(model)}
+    }
 
     /**
      * Comprueba que el árbol de la réplica murió DE VERDAD, y si no, lo dice.
@@ -4572,7 +4593,7 @@ function abandonOutboxSection(model) {
      * fallarán por culpa de este.
      */
     protected static void abandonOutboxEvent(String eventType) {
-${update}
+${update}${kafkaInFlightWait(model)}
     }
 
     /** Retira los eventos abandonados, para que el contador vuelva a cero. */
@@ -4580,6 +4601,23 @@ ${update}
 ${cleanup}
     }
 `;
+}
+
+// K2 (corridas payment-checkout, 2026-10-02): con Kafka, el envío que el relay tenía EN VUELO
+// cuando se abandona el evento sigue en el buffer del productor hasta su plazo de entrega. Si el
+// escenario levanta el broker antes, ese envío se completa y el evento abandonado sale. Se espera
+// a que caduque: el plazo es el del perfil local (config.js), y de ahí lo toma el arnés.
+function kafkaInFlightWait(model) {
+  if (model.stack?.broker !== 'kafka') return '';
+  const waitMs = KAFKA_LOCAL_PRODUCER_TIMEOUTS.deliveryMs + 2000;
+  return `
+        // Con Kafka, un envío del relay que seguía en vuelo caduca en delivery.timeout.ms
+        // (${KAFKA_LOCAL_PRODUCER_TIMEOUTS.deliveryMs} ms en local). Hasta entonces, levantar el broker lo entregaría.
+        try {
+            Thread.sleep(${waitMs}L);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }`;
 }
 
 /**

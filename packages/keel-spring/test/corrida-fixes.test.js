@@ -2236,3 +2236,46 @@ test('un campo json viaja embebido como objeto en los registros del cable, no en
   const plainFiles = planService({ manifest: plain.manifest, layers: plain.layers, workspace: fixturesDir }).files;
   assert.ok(!plainFiles.some((f) => f.path.endsWith('RawJsonDeserializer.java')));
 });
+
+// K1 (corridas payment-checkout, 2026-10-02): la primera entrega a un topic recién autocreado
+// llegaba tarde, porque se sumaba el reparto del grupo de consumo, y el arnés solo esperaba a los
+// grupos alrededor de la réplica. Ahora espera una vez por JVM, antes del primer escenario.
+test('con Kafka, el arnés espera a los grupos de consumo antes del primer escenario', () => {
+  const kafka = project('stock-reservation', { ...SNSSQS, broker: 'kafka' });
+  const harness = kafka.file('AbstractFlowIT.java');
+  const beforeAll = harness.slice(harness.indexOf('void configureHttpClient()'), harness.indexOf('void configureHttpClient()') + 900);
+  assert.match(beforeAll, /if \(!CONSUMER_GROUPS_READY\) \{\s+awaitConsumerGroupsStable\(1\);\s+CONSUMER_GROUPS_READY = true;/);
+  // Una sola definición de la espera y del flag: la sección ya no vive dentro de la réplica.
+  assert.equal(harness.match(/private static void awaitConsumerGroupsStable\(int members\)/g).length, 1);
+  assert.equal(harness.match(/private static volatile boolean CONSUMER_GROUPS_READY/g).length, 1);
+
+  // Sin Kafka no hay grupos que esperar.
+  const sqs = project('stock-reservation', SNSSQS).file('AbstractFlowIT.java');
+  assert.ok(!sqs.includes('CONSUMER_GROUPS_READY'));
+});
+
+// K2 (corridas payment-checkout, 2026-10-02): el dispatcher del outbox hace send().join(), y con
+// el broker caído el envío esperaba en el buffer del productor los 120 s por defecto. El escenario
+// del relay que se rinde abandonaba el evento y levantaba el broker dentro de esa ventana, y el
+// evento abandonado salía. El plazo de local es corto y el arnés espera a que caduque.
+test('con Kafka, el envío en vuelo caduca antes de que el arnés devuelva un evento abandonado', () => {
+  const kafka = project('stock-reservation', { ...SNSSQS, broker: 'kafka' });
+  const local = kafka.file(path.join('local', 'kafka.yaml'));
+  assert.match(local, /delivery\.timeout\.ms: 15000\b/);
+  assert.match(local, /request\.timeout\.ms: 5000\b/);
+  assert.match(local, /max\.block\.ms: 5000\b/);
+  // Fuera de local rige el default de Kafka, redirigible por entorno.
+  const production = kafka.file(path.join('production', 'kafka.yaml'));
+  assert.match(production, /delivery\.timeout\.ms: \$\{KAFKA_PRODUCER_DELIVERY_TIMEOUT_MS:120000\}/);
+
+  // El arnés espera MÁS que el plazo de local, y lo toma de la misma fuente.
+  const harness = kafka.file('AbstractFlowIT.java');
+  const abandon = harness.slice(harness.indexOf('protected static void abandonOutboxEvent('), harness.indexOf('protected static void clearAbandonedOutboxEvents('));
+  const slept = Number(/Thread\.sleep\((\d+)L\)/.exec(abandon)?.[1]);
+  assert.ok(slept > 15000, `abandonOutboxEvent espera ${slept} ms, no más que delivery.timeout.ms`);
+
+  // Con otro broker no hay buffer de productor que esperar.
+  const sqs = project('stock-reservation', SNSSQS).file('AbstractFlowIT.java');
+  const sqsAbandon = sqs.slice(sqs.indexOf('protected static void abandonOutboxEvent('), sqs.indexOf('protected static void clearAbandonedOutboxEvents('));
+  assert.ok(!sqsAbandon.includes('Thread.sleep'));
+});
