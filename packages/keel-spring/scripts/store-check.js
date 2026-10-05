@@ -178,6 +178,16 @@ function prepare() {
     if (!subjects.document) wanted.jpaRepositories = `${espera}JpaRepository.java`;
   }
 
+  if (subjects.mediatorRetry) {
+    // El reintento vive en el UseCaseMediator y su clasificador es package-private: la clase de
+    // prueba cae en su paquete, y nombra el comando y el handler del de las interfaces.
+    wanted.mediator = 'UseCaseMediator.java';
+    wanted.interfaces = 'Command.java';
+    if (!wanted.outbox) wanted.outbox = 'OutboxRelayStore.java';
+  }
+  // La purga por lotes es de la rama relacional: el bucle generado es lo que se mide, no una copia.
+  if (!subjects.document) wanted.purge = 'BatchedPurge.java';
+
   const packages = resolvePackages(projectDir, wanted);
 
   const clases = storeTestClasses(model, subjects, { datasource, packages, database: engine });

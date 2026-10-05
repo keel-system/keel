@@ -19,7 +19,7 @@ Buena parte de esta tabla la materializa ya el **scaffolding determinista** de `
 | Diseño | Código |
 |--------|--------|
 | `entities.X` | Dominio puro `domain/aggregate/X.java` (o `domain/entity/` si es interna) + espejo JPA `infrastructure/persistence/entities/XJpa.java` + puerto `domain/repository/XRepository` con adaptador `XRepositoryImpl` (solo por raíz de agregado, ver abajo) |
-| campo `id: true` | `@Id`; con `generated: true` → generación en el servidor (`UUID.randomUUID()` o equivalente) |
+| campo `id: true` | `@Id`; con `generated: true` → generación en el servidor con `Uuids.v7()` (`domain/identity/Uuids.java`, lo genera build), **no** `UUID.randomUUID()`: la versión 7 lleva el tiempo delante y cada alta va al final del índice de la PK, en vez de reordenar la tabla en los motores que la guardan ordenada por ella (MySQL y MariaDB; en SQL Server, que ordena el `uniqueidentifier` por sus últimos bytes, ni gana ni pierde) |
 | campo `unique: true` | `@UniqueConstraint(name = "uk_<tabla>_<campo>")` en la entidad JPA (lo genera build) + verificación explícita en application. La verificación produce el error del diseño en el caso normal; la constraint es la garantía real cuando dos peticiones simultáneas compiten, y su violación la traduce al mismo error el mapa `CONSTRAINT_TO_ERROR` del `ApiExceptionHandler` — completa ahí el `// TODO (agente)` con el error declarado |
 | campo `required: true` | `nullable = false` + presencia (`@NotNull`/`@NotBlank`/`@NotEmpty`) en el DTO de entrada |
 | campo `required: true` **con `default`** | `nullable = false` igual, pero **sin presencia en la entrada**: el DSL define `default` como *«valor si el cliente no lo provee»*, así que obligatorio es el VALOR y opcional es que lo mande el cliente. Exigirlo rechaza con 400 justo el caso para el que el default existe — el alta de un recurso cuyo estado inicial decide el dominio. Las demás constraints (formato, rango, tamaño) sí se quedan: si el cliente lo manda, tiene que ser válido |
@@ -171,7 +171,7 @@ if (key.isPresent()) {
         return /* la MISMA respuesta, reconstruida desde previa.get().resourceId() */;
     }
     // RECLAMA PRIMERO: el id del recurso se decide aquí, no lo asigna la base.
-    UUID id = UUID.randomUUID();
+    UUID id = Uuids.v7();
     idempotencyStore.save("<nombreOperacion>", key.get(), signature, id.toString(), <ttlSeconds>);
     // … y SOLO DESPUÉS ejecuta el caso de uso, con ese id …
 }
@@ -188,7 +188,7 @@ if (previa.isPresent()) {
     return /* la MISMA respuesta, reconstruida desde previa.get().resourceId() */;
 }
 // RECLAMA PRIMERO, igual que arriba.
-UUID id = UUID.randomUUID();
+UUID id = Uuids.v7();
 idempotencyStore.save("<nombreOperacion>", key, key, id.toString(), <ttlSeconds>);
 // … y SOLO DESPUÉS ejecuta el caso de uso, con ese id …
 ```
@@ -213,7 +213,7 @@ idempotencyStore.save("<nombreOperacion>", key, key, id.toString(), <ttlSeconds>
   escenario de concurrencia que afirme el `code` exacto. Es un error que se ha cometido en tres
   generaciones distintas: el orden natural al escribir el handler es el equivocado.
 - Reclamar primero obliga a **decidir el identificador del recurso antes de crearlo** (un
-  `UUID.randomUUID()` en el handler, no el id que asignaría la base al insertar): el registro
+  `Uuids.v7()` en el handler, no el id que asignaría la base al insertar): el registro
   guarda ese `resourceId` y es lo que el reintento usa para reconstruir la respuesta.
 - El conflicto por **firma distinta** (misma clave, otro cuerpo) tiene su propia excepción generada:
   `IdempotencyReuseException`, con el `code` canónico `409 IDEMPOTENCY_KEY_REUSED` o con el que el
@@ -674,6 +674,7 @@ un diseño `document` no puede acabar sobre PostgreSQL por descuido, ni al revé
 | `default.model: key-value` | **No soportado**: `keel-spring build` falla con un error explícito en vez de emitir algo por defecto. Ese diseño necesita otro generador |
 | `entities.X.naturalKey` | Constraint/índice único compuesto (`uk_<colección>_natural`) + método de búsqueda por clave natural en el repository |
 | `entities.X.indexes` | Un índice por cada lista de campos (`idx_<tabla|colección>_<campos>`). En relacional es un `@Index` de la entidad, que pasa al baseline al exportarlo; en documental lo crea `MongoIndexConfig` |
+| (sin declarar) cada columna FK | `@Index` `ix_<tabla>_<columna>`, salvo que la columna ya encabece otro índice o constraint única de la tabla. Lo pone build: PostgreSQL, SQL Server y Oracle no indexan una FK solos, y sin él cargar una colección o borrar el padre recorre la tabla hija entera |
 | `entities.X.indexes` con `when` | Unicidad **condicionada al estado**. En relacional sale como índice único parcial en `db/partial-indexes.sql`, en documental como `partialFilterExpression`. **Impone un contrato de orden** a la operación que releva: ver *El ORDEN que impone un índice único condicionado*, abajo. Hay motores que no pueden sostenerla y lo dicen en `docs/keel/engine-limits.md` |
 | `consistency.transactionalBoundary: per-operation` | La transacción por mensaje que abre `UseCaseMediator` ya lo cumple: la operación completa es la transacción. Salvo el barrido de una reconciliación, que corre sin transacción abarcadora a propósito |
 | `consistency.transactionalBoundary: per-aggregate` | El command debe tocar una sola raíz de agregado dentro de la transacción del mediator; nunca dos agregados en la misma transacción. Si necesitas semántica transaccional especial, se resuelve en el **adaptador** de repositorio (infraestructura) y se documenta ahí — **nunca** anotando el handler con `@Transactional`, que `constitution.md` prohíbe |

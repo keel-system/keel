@@ -31,6 +31,7 @@ import * as logging from './logging.js';
 import * as enums from './enums.js';
 import * as valueTypes from './value-types.js';
 import * as entities from './entities.js';
+import * as ids from './ids.js';
 import * as embeddables from './embeddables.js';
 import * as persistenceEntities from './persistence-entities.js';
 import * as auditing from './auditing.js';
@@ -50,6 +51,7 @@ import * as outbox from './outbox.js';
 import * as idempotency from './idempotency.js';
 import * as reconciliationClaim from './reconciliation-claim.js';
 import * as httpIdempotency from './http-idempotency.js';
+import * as purge from './purge.js';
 import * as idempotencyCheck from './idempotency-check.js';
 import * as domainGuardsCheck from './domain-guards-check.js';
 import * as loggingCheck from './logging-check.js';
@@ -96,6 +98,8 @@ const GENERATORS = [
   enums,
   valueTypes,
   entities,
+  // El helper de ids UUID v7 con el que nacen las raíces (ver ids.js).
+  ids,
   embeddables,
   persistenceEntities,
   // Rama documental de la persistencia: cada uno se gatea a sí mismo por
@@ -129,6 +133,8 @@ const GENERATORS = [
   // familia: mecánica de multi-instancia, no algo que el diseño declare.
   reconciliationClaim,
   httpIdempotency,
+  // La purga POR LOTES que comparten las cuatro tablas de arriba en la rama relacional.
+  purge,
   cache,
   // El TaskScheduler de hilos de plataforma. Va junto a los mecanismos de arriba porque
   // sirve a todos: los @Scheduled que emiten outbox, idempotency, reconciliationClaim y el

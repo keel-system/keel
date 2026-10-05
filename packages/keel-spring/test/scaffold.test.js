@@ -247,9 +247,9 @@ test('scaffoldService genera el proyecto completo con contenido clave', () => {
   assert.ok(productionDb.includes('ddl-auto: validate'));
   // Tuning del pool Hikari expuesto por ambiente (punto 7): literal en local, env var con default fuera.
   assert.ok(localDb.includes('maximum-pool-size: 10'));
-  assert.ok(localDb.includes('connection-timeout: 30000'));
+  assert.ok(localDb.includes('connection-timeout: 5000'));
   assert.ok(developDb.includes('maximum-pool-size: ${DB_POOL_MAX_SIZE:10}'));
-  assert.ok(productionDb.includes('connection-timeout: ${DB_POOL_CONNECTION_TIMEOUT_MS:30000}'));
+  assert.ok(productionDb.includes('connection-timeout: ${DB_POOL_CONNECTION_TIMEOUT_MS:5000}'));
   // Migraciones: Hibernate solo gobierna el esquema en local; fuera manda Flyway.
   assert.ok(localDb.includes('flyway:') && localDb.includes('enabled: false'));
   assert.ok(developDb.includes('ddl-auto: validate'));
@@ -3547,7 +3547,7 @@ test('colecciones del dominio (DSL 2.1 list): @ElementCollection, @Embeddable y 
 
   // Jpa: @ElementCollection + @CollectionTable por campo; enum con @Enumerated; VO como XxxJpa.
   const productJpa = read(workspace, `${base}/infrastructure/persistence/entities/ProductJpa.java`);
-  assert.ok(productJpa.includes('@CollectionTable(name = "product_tags", joinColumns = @JoinColumn(name = "product_id", foreignKey = @ForeignKey(name = "fk_product_tags_product")))'));
+  assert.ok(productJpa.includes('@CollectionTable(name = "product_tags", joinColumns = @JoinColumn(name = "product_id", foreignKey = @ForeignKey(name = "fk_product_tags_product")), indexes = @Index(name = "ix_product_tags_product_id", columnList = "product_id"))'));
   assert.ok(productJpa.includes('@CollectionTable(name = "product_channels"'));
   assert.ok(productJpa.includes('@Enumerated(EnumType.STRING)'));
   assert.ok(productJpa.includes('private List<DiscountJpa> discounts = new ArrayList<>();'));

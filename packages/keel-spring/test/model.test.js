@@ -60,7 +60,8 @@ test('entidad Product: tabla, id, aplanado de SKU, lifecycle y sensitive', () =>
   assert.equal(product.tableName, 'products');
   assert.equal(product.persisted, true);
   assert.equal(product.idField.name, 'id');
-  assert.equal(product.idField.initializer, 'UUID.randomUUID()');
+  // v7, no v4: cada alta va al final del índice de la PK (ver src/scaffold/ids.js).
+  assert.equal(product.idField.initializer, 'Uuids.v7()');
 
   const sku = product.fields.find((f) => f.name === 'sku');
   assert.equal(sku.javaType, 'String'); // value type escalar aplanado

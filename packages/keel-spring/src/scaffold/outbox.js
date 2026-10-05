@@ -11,6 +11,7 @@
 import { javaFile, javaPath, subPackage } from './render.js';
 import { claimSelectionSnippet, claimTransaction, supportsSkipLocked } from '../lib/claim-sql.js';
 import { usesTelemetry, tracedDispatch, messageTracingImport, TRACED_DISPATCH_IMPORTS } from './telemetry.js';
+import { purgeQueries, purgeSettings, purgeCall, purgeCallImports, PURGE_QUERY_IMPORTS } from './purge.js';
 
 const OUTBOX_PKG = 'infrastructure.messaging.outbox';
 
@@ -281,9 +282,14 @@ ${selection.annotations}
     @Query("select count(o) from OutboxEventJpa o where o.publishedAt is null and o.attempts >= :maxAttempts")
     long countDeadLettered(@Param("maxAttempts") int maxAttempts);
 
-    @Modifying
-    @Query("delete from OutboxEventJpa o where o.publishedAt is not null and o.publishedAt < :cutoff")
-    int deletePublishedBefore(@Param("cutoff") Instant cutoff);
+${purgeQueries({
+    entity: 'OutboxEventJpa',
+    alias: 'o',
+    field: 'publishedAt',
+    // Lo PENDIENTE no se toca nunca: es la mitad cuya pérdida sería pérdida de datos.
+    predicate: 'o.publishedAt is not null',
+    deleteMethod: 'deletePublishedBefore'
+  })}
 }`;
 
   return {
@@ -299,6 +305,7 @@ ${selection.annotations}
         'org.springframework.data.jpa.repository.Modifying',
         'org.springframework.data.jpa.repository.Query',
         'org.springframework.data.repository.query.Param',
+        ...PURGE_QUERY_IMPORTS,
         // Solo los arrastra el motor que reparte candidatos: pedirlos siempre dejaría
         // imports sin usar en el que no.
         ...selection.imports
@@ -902,6 +909,8 @@ public class OutboxRelay {
     @Value("\${outbox.purge.retention-days:7}")
     private int retentionDays;
 
+${purgeSettings('outbox.purge')}
+
     public OutboxRelay(OutboxEventJpaRepository outboxRepository, OutboxRelayStore store,
             OutboxDispatcher dispatcher, MeterRegistry meterRegistry) {
         this.outboxRepository = outboxRepository;
@@ -961,11 +970,14 @@ public class OutboxRelay {
         }
     }
 
+    /**
+     * Por lotes y SIN transacción propia: cada lote confirma en la suya (ver BatchedPurge). Una
+     * sola transacción alrededor de todo volvería a ser el DELETE único que esto sustituye.
+     */
     @Scheduled(cron = "\${outbox.purge.cron:0 0 3 * * *}")
-    @Transactional
     public void purge() {
         Instant cutoff = Instant.now().minus(retentionDays, ChronoUnit.DAYS);
-        int deleted = outboxRepository.deletePublishedBefore(cutoff);
+        long deleted = ${purgeCall({ what: 'Outbox', repository: 'outboxRepository', deleteMethod: 'deletePublishedBefore' })};
         if (deleted > 0) {
             log.info("Outbox: purgadas {} filas publicadas antes de {}", deleted, cutoff);
         }
@@ -996,7 +1008,7 @@ public class OutboxRelay {
         'org.springframework.beans.factory.annotation.Value',
         'org.springframework.scheduling.annotation.Scheduled',
         'org.springframework.stereotype.Component',
-        'org.springframework.transaction.annotation.Transactional',
+        ...purgeCallImports(model),
         ...traced.imports
       ],
       traced.body

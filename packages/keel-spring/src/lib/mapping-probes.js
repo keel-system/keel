@@ -206,6 +206,9 @@ function relationalClass(model, subject, { datasource, packages, requiredLiteral
   // única es un UUID— el caso sencillamente no se emite.
   const unico = collationSubject(model);
   const mideCaja = unico && unico.entity.name === entity.name ? unico.field : null;
+  // El caso de las FK solo se emite donde Hibernate CREA alguna: sin ellas no habría nada que
+  // medir, y un caso que pasa sobre un esquema vacío es la red que se mide a sí misma.
+  const mideFks = hibernateForeignKeys(model);
   const espejo = `${entity.name}Jpa`;
   const repo = `${entity.name}JpaRepository`;
   const idField = entity.idField?.name ?? 'id';
@@ -225,7 +228,21 @@ function relationalClass(model, subject, { datasource, packages, requiredLiteral
     // declare, y enumerarlos aquí sería una segunda copia de esa derivación.
     `${base}.domain.enums.*`,
     'static org.junit.jupiter.api.Assertions.assertDoesNotThrow',
-    'static org.junit.jupiter.api.Assertions.assertThrows'
+    'static org.junit.jupiter.api.Assertions.assertThrows',
+    ...(mideFks
+      ? [
+          'java.sql.Connection',
+          'java.sql.DatabaseMetaData',
+          'java.sql.ResultSet',
+          'java.util.ArrayList',
+          'java.util.HashSet',
+          'java.util.List',
+          'java.util.Locale',
+          'java.util.Set',
+          'javax.sql.DataSource',
+          'static org.junit.jupiter.api.Assertions.assertTrue'
+        ]
+      : [])
   ];
 
   const propiedades = [
@@ -303,6 +320,7 @@ ${
 `
     : ''
 }
+${mideFks ? FK_INDEX_CASE : ''}
     @Test
     void elValorEnElLimiteEntra() {
         // La mitad positiva. Sin ella, una columna que rechazara CUALQUIER valor —o un motor que
@@ -323,6 +341,87 @@ ${
 `
   };
 }
+
+/**
+ * ¿Crea Hibernate alguna FK en este esquema? La crea por cada lista (`@CollectionTable`) y por cada
+ * relación interna (`@ManyToOne`/`@OneToMany` dentro del agregado). Las FK entre AGREGADOS no: son
+ * columnas planas y su FK solo existe en el baseline (`crossAggregateFkAppend`), que este check no
+ * aplica —corre con `ddl-auto: update`—, así que esas las cubre el test de cadenas y no esta red.
+ */
+export function hibernateForeignKeys(model) {
+  return (model.entities ?? []).some(
+    (entity) =>
+      entity.persisted &&
+      ((entity.fields ?? []).some((field) => field.list) || (entity.relations ?? []).some((relation) => relation.internal))
+  );
+}
+
+/**
+ * Toda FK del esquema tiene un índice que la ENCABEZA (o la PK la encabeza).
+ *
+ * Se pregunta al motor por las FK que existen y por los índices que existen, y nada sale del
+ * generador: así la expectativa no se deriva de lo que se mide. PostgreSQL, SQL Server y Oracle no
+ * indexan una FK solos, y sin el índice nada falla —la carga de una colección y el borrado del padre
+ * recorren la tabla hija entera, y en Oracle ese borrado la bloquea completa—. MySQL y MariaDB crean
+ * el índice por su cuenta, así que allí el caso sale verde con o sin el del generador: es lo
+ * correcto, porque ahí la garantía existe igual.
+ *
+ * Lo que NO ve: la tabla de elementos de una lista. Con `ddl-auto: update` Hibernate le pone la PK
+ * con la raíz delante —y la cubre—, pero el exportador del V1 de producción la escribe con el orden
+ * delante, así que esa mitad la vigila solo fk-index.test.js (medido el 2026-10-05).
+ */
+const FK_INDEX_CASE = `
+    @Autowired
+    private DataSource dataSource;
+
+    @Test
+    void todaFkTieneUnIndiceQueLaEncabeza() throws Exception {
+        List<String> sinIndice = new ArrayList<>();
+        int fks = 0;
+        try (Connection connection = dataSource.getConnection()) {
+            DatabaseMetaData meta = connection.getMetaData();
+            String catalog = connection.getCatalog();
+            String schema = connection.getSchema();
+            try (ResultSet tables = meta.getTables(catalog, schema, "%", new String[] { "TABLE" })) {
+                while (tables.next()) {
+                    String table = tables.getString("TABLE_NAME");
+                    Set<String> encabezan = new HashSet<>();
+                    try (ResultSet pk = meta.getPrimaryKeys(catalog, schema, table)) {
+                        while (pk.next()) {
+                            if (pk.getShort("KEY_SEQ") == 1) {
+                                encabezan.add(pk.getString("COLUMN_NAME").toLowerCase(Locale.ROOT));
+                            }
+                        }
+                    }
+                    try (ResultSet index = meta.getIndexInfo(catalog, schema, table, false, true)) {
+                        while (index.next()) {
+                            String column = index.getString("COLUMN_NAME");
+                            if (index.getShort("ORDINAL_POSITION") == 1 && column != null) {
+                                encabezan.add(column.toLowerCase(Locale.ROOT));
+                            }
+                        }
+                    }
+                    try (ResultSet fk = meta.getImportedKeys(catalog, schema, table)) {
+                        while (fk.next()) {
+                            if (fk.getShort("KEY_SEQ") != 1) {
+                                continue;
+                            }
+                            fks++;
+                            String column = fk.getString("FKCOLUMN_NAME");
+                            if (!encabezan.contains(column.toLowerCase(Locale.ROOT))) {
+                                sinIndice.add(table + "." + column);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Sin esto, un esquema en el que el motor no reportara ninguna FK pasaría con nota.
+        assertTrue(fks > 0, "el motor no reporta ninguna FK en un diseño que las declara: el caso no midió nada");
+        assertTrue(sinIndice.isEmpty(), "FK sin un índice que la encabece (la carga de la colección y el "
+                + "borrado del padre recorren la tabla hija entera): " + sinIndice);
+    }
+`;
 
 /**
  * La clase JUnit de la rama DOCUMENTAL.

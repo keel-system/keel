@@ -390,21 +390,27 @@ export const MECHANISMS = {
     why:
       'En una transacción de MongoDB el perdedor de dos escrituras sobre el mismo documento no espera: aborta con un ' +
       'WriteConflict transitorio que llegaba al catch-all como 500, donde el relacional da el error DECLARADO. Lo encontró ' +
-      'el careo de notification-mailer-mongo (FL-TPL-003 y FL-TPL-011, hallazgo 7 de R9).',
+      'el careo de notification-mailer-mongo (FL-TPL-003 y FL-TPL-011, hallazgo 7 de R9). La rama relacional se dio por ' +
+      '«no-aplica» con el argumento de que el motor serializa, y es falso para un INTERBLOQUEO: dos transacciones que toman ' +
+      'filas en orden inverso, y el motor aborta a una (40P01, 1213, 1205, ORA-00060) — también al 500. Se cerró el 2026-10-05.',
     parity: {
       pair: 'notification-mailer',
       markers: {
-        relational: [],
+        relational: ['retryingWriteConflicts(', 'PessimisticLockingFailureException', 'WRITE_CONFLICT_ATTEMPTS'],
         document: ['retryingWriteConflicts(', 'TRANSIENT_TRANSACTION_ERROR_LABEL', 'WRITE_CONFLICT_ATTEMPTS']
       }
     },
     coverage: {
       relational: {
-        state: 'no-aplica',
-        net: 'ninguna',
-        engines: [],
-        falsified: false,
-        why: 'el motor serializa: el perdedor espera al bloqueo y falla con el error declarado, no hay nada que reintentar'
+        state: 'verificado',
+        net: 'store-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why:
+          'MediatorStoreCheckTest construye el UseCaseMediator GENERADO y cruza dos filas del outbox desde dos hilos: el motor ' +
+          'interbloquea de verdad y con el reintento las dos escrituras terminan (3 intentos). Falsado quitando el reintento ' +
+          'relacional: en PostgreSQL sale «deadlock detected» como CannotAcquireLockException, que es lo que el clasificador ' +
+          'reconoce. Sobre mariadb, sqlserver y oracle no lo ha ejecutado nadie'
       },
       document: {
         state: 'razonado',

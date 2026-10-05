@@ -594,6 +594,15 @@ function managementYaml(model, profile) {
   return lines.join('\n') + '\n';
 }
 
+/**
+ * El tope por defecto de una transacción. Holgado para el trabajo de una petición —que se mide en
+ * milisegundos— y para un lote de purga, y corto frente a una espera de bloqueo sin fin.
+ */
+export const DB_TRANSACTION_TIMEOUT = '30s';
+
+/** Cuánto espera una petición a que el pool tenga conexión libre (ms), en vez de los 30 s de Hikari. */
+export const DB_POOL_CONNECTION_TIMEOUT_MS = 5000;
+
 /** Puerto de gestión por defecto en production (solo con telemetría). */
 export const MANAGEMENT_PORT = 8081;
 
@@ -607,9 +616,31 @@ function dbYaml(model, profile, dbName) {
     `    username: ${envValue(profile, 'DB_USERNAME', db.user(dbName))}`,
     `    password: ${envValue(profile, 'DB_PASSWORD', db.password)}`,
     '    hikari:',
-    '      # Tuning del pool expuesto por ambiente (defaults de Hikari; ajustar en production).',
+    '      # Tuning del pool expuesto por ambiente; ajustar en production.',
+    // El nombre es la etiqueta `pool` de sus métricas: con el de por defecto (HikariPool-1) dos
+    // servicios en el mismo backend no se distinguen.
+    `      pool-name: ${model.service.name}-pool`,
     `      maximum-pool-size: ${envWithDefault(profile, 'DB_POOL_MAX_SIZE', 10)}`,
-    `      connection-timeout: ${envWithDefault(profile, 'DB_POOL_CONNECTION_TIMEOUT_MS', 30000)}`,
+    // Cuánto espera una petición a que haya conexión libre. El default de Hikari (30 s) es
+    // demasiado: con hilos virtuales la entrada no tiene techo, así que con el pool agotado se
+    // acumulan miles de peticiones esperando 30 s —el cliente HTTP ya se rindió mucho antes y el
+    // servidor sigue haciendo trabajo que nadie va a leer—. Fallar rápido devuelve el error
+    // mientras alguien lo escucha y deja ver la saturación en vez de esconderla en latencia.
+    `      connection-timeout: ${envWithDefault(profile, 'DB_POOL_CONNECTION_TIMEOUT_MS', DB_POOL_CONNECTION_TIMEOUT_MS)}`,
+    // Vida máxima de una conexión. Tiene que ser MENOR que cualquier corte de conexiones
+    // ociosas entre el servicio y la base (un proxy, un balanceador, el propio motor): si no, el
+    // pool entrega conexiones que alguien ya cerró por el otro lado. Por defecto, el de Hikari.
+    `      max-lifetime: ${envWithDefault(profile, 'DB_POOL_MAX_LIFETIME_MS', 1800000)}`,
+    // El tope de TODA transacción: las del mediator y las @Transactional de los adaptadores
+    // (relay, reclamos, purgas). Hibernate lo aplica con setQueryTimeout a cada sentencia, flush
+    // incluido, y eso lo soportan los cinco drivers. Sin él, una consulta lenta o una espera de
+    // bloqueo —infinita por defecto en PostgreSQL, SQL Server y Oracle— retiene su conexión sin
+    // límite, y con hilos virtuales la entrada no tiene techo: el pool se agota para cualquier
+    // otra petición, lejos de la causa. Lo cancelado sale como 503 TRANSACTION_TIMEOUT
+    // (ApiExceptionHandler). Las purgas van por lotes para caber holgadas (purge.js).
+    '  transaction:',
+    '    # Tope de cada transacción; lo cancelado sale como 503 TRANSACTION_TIMEOUT.',
+    `    default-timeout: ${envWithDefault(profile, 'DB_TRANSACTION_TIMEOUT', DB_TRANSACTION_TIMEOUT)}`,
     '  jpa:',
     '    hibernate:'
   ];
@@ -637,6 +668,18 @@ function dbYaml(model, profile, dbName) {
     '        # consulta por elemento. Sin esto, recorrer una colección de una página de N',
     '        # elementos son N consultas que ninguna aserción funcional distingue.',
     `        default_batch_fetch_size: ${collectionBatchSize(model)}`
+  );
+  // Dos redes de una línea, en todos los perfiles porque son propiedades de producción.
+  lines.push(
+    // La paginación EN MEMORIA de un JOIN FETCH sobre una colección: Hibernate trae TODAS las
+    // filas y corta la página en la JVM, con solo un WARN (HHH90003004). Es la técnica que un
+    // join proyectado puede escribir sin querer (read-queries.md), y con esto pasa de lenta y
+    // silenciosa a excepción en el primer escenario que la toque.
+    '        query.fail_on_pagination_over_collection_fetch: true',
+    // Rellena los IN (...) hasta la potencia de dos siguiente: el lote de @BatchSize y el
+    // findAllById de los RefResolver mandan listas de tamaño variable, y sin esto cada tamaño es
+    // una sentencia distinta para la caché de planes y de sentencias preparadas del motor.
+    '        query.in_clause_parameter_padding: true'
   );
   // Contador de sentencias, que es lo que hace OBSERVABLE un N+1: sin él, «esta página
   // cuesta una consulta o veintiuna» es una opinión sobre el código, no un hecho que un
@@ -728,7 +771,15 @@ function flywayLines(profile) {
     '  flyway:',
     '    # Aplica db/migration/ al arrancar y lo registra en flyway_schema_history.',
     '    # FLYWAY_ENABLED=false para delegar la migración a un paso previo al despliegue.',
-    `    enabled: ${envWithDefault(profile, 'FLYWAY_ENABLED', true)}`
+    `    enabled: ${envWithDefault(profile, 'FLYWAY_ENABLED', true)}`,
+    // Mínimo privilegio, sin imponerlo: el esquema puede crearlo un usuario PROPIETARIO distinto
+    // del de la aplicación, que entonces solo necesita DML. Por defecto es el mismo —se resuelve
+    // al del datasource—, así que nada cambia hasta que alguien define las dos variables. Separarlos
+    // exige además que el propietario conceda a la aplicación los permisos sobre lo que crea
+    // (y en Oracle, donde usuario es esquema, fijar el esquema destino): eso es del DBA.
+    "    # Usuario de las migraciones; por defecto, el de la aplicación (ver DB_MIGRATION_USERNAME).",
+    "    user: ${DB_MIGRATION_USERNAME:${spring.datasource.username}}",
+    "    password: ${DB_MIGRATION_PASSWORD:${spring.datasource.password}}"
   ];
   if (profile === 'production') {
     lines.push('    # El borrado del esquema nunca es una opción en producción.', '    clean-disabled: true');

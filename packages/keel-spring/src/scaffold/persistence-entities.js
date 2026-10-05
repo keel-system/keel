@@ -18,7 +18,8 @@ import {
   usesAuditableEntity,
   indexName,
   partialUniqueIndexes,
-  foreignKeyName
+  foreignKeyName,
+  crossAggregateForeignKeys
 } from './persistence-members.js';
 
 export const JPA_PKG = 'infrastructure.persistence.entities';
@@ -237,19 +238,24 @@ function renderJpaEntity(model, entity) {
       // primero: el filtro es una igualdad sobre el valor («¿a esta dirección le llegó
       // algo?»), y la FK detrás para que el salto a la raíz no vuelva a la tabla.
       const collectionIndexes = collectionIndexesOf(entity, members).byMember.get(member.name) ?? [];
-      if (collectionIndexes.length > 0) {
-        imports.add('jakarta.persistence.Index');
-        const rendered = collectionIndexes
-          .map((index) => {
-            const unique = index.unique ? ', unique = true' : '';
-            return (
-              `@Index(name = "${indexName(entity, index)}", ` +
-              `columnList = "${quoteIdentifier(snakeCase(member.name))}, ${quoteIdentifier(joinColumn)}"${unique})`
-            );
-          })
-          .join(', ');
-        collTableAttrs.push(collectionIndexes.length === 1 ? `indexes = ${rendered}` : `indexes = { ${rendered} }`);
-      }
+      imports.add('jakarta.persistence.Index');
+      const rendered = collectionIndexes.map((index) => {
+        const unique = index.unique ? ', unique = true' : '';
+        return (
+          `@Index(name = "${indexName(entity, index)}", ` +
+          `columnList = "${quoteIdentifier(snakeCase(member.name))}, ${quoteIdentifier(joinColumn)}"${unique})`
+        );
+      });
+      // Y el de la FK a la raíz, SIEMPRE: cargar la lista de una raíz es un WHERE sobre esta
+      // columna. La PK de la tabla no basta, y el motivo es sutil: Hibernate (Boot 3.5.3) la
+      // escribe en ORDEN DISTINTO según la vía — `ddl-auto: update` crea
+      // `(<entidad>_id, <campo>_order)`, con la raíz delante, pero el exportador que produce el V1
+      // de producción escribe `(<campo>_order, <entidad>_id)`, con el ORDEN delante. Medido sobre
+      // notification-mailer el 2026-10-05. O sea que en local la FK parece cubierta y en
+      // producción no lo está, y mapping-check —que corre con `update`— no puede verlo: la única
+      // red de esta mitad es el test de cadenas (fk-index.test.js).
+      rendered.push(`@Index(name = "${foreignKeyIndexName(table, joinColumn)}", columnList = "${quoteIdentifier(joinColumn)}")`);
+      collTableAttrs.push(rendered.length === 1 ? `indexes = ${rendered[0]}` : `indexes = { ${rendered.join(', ')} }`);
       // El ORDEN es parte del valor: el dominio la modela como `List`, y sin columna de orden
       // Hibernate la trata como una bolsa —ni el SELECT promete el orden en que se guardó, ni
       // una modificación hace otra cosa que borrar y reinsertar todo—. El diseño de la corrida
@@ -566,22 +572,87 @@ function renderTableAnnotation(model, entity, members, imports) {
   };
 
   const annotatable = entity.indexes.filter((index) => !index.when).filter(resolves);
-  if (annotatable.length > 0) {
-    imports.add('jakarta.persistence.Index');
-    const indexes = annotatable
-      .map((index) => {
-        // El nombre del índice conserva el nombre lógico del diseño (es su
-        // identidad en persistence.keel.yaml); la columnList usa la columna real.
-        const columns = index.fields
-          .flatMap((f) => columnsFor(model, entity, members, f, model.warnings))
-          .map((c) => column(c))
-          .join(', ');
-        const unique = index.unique ? ', unique = true' : '';
-        return `@Index(name = "${indexName(entity, index)}", columnList = "${columns}"${unique})`;
-      })
+  const indexes = annotatable.map((index) => {
+    // El nombre del índice conserva el nombre lógico del diseño (es su
+    // identidad en persistence.keel.yaml); la columnList usa la columna real.
+    const columns = index.fields
+      .flatMap((f) => columnsFor(model, entity, members, f, model.warnings))
+      .map((c) => column(c))
       .join(', ');
-    attrs.push(`indexes = { ${indexes} }`);
+    const unique = index.unique ? ', unique = true' : '';
+    return `@Index(name = "${indexName(entity, index)}", columnList = "${columns}"${unique})`;
+  });
+  for (const fkColumn of foreignKeyIndexColumns(model, entity, members)) {
+    indexes.push(`@Index(name = "${foreignKeyIndexName(entity.tableName, fkColumn)}", columnList = "${column(fkColumn)}")`);
+  }
+  if (indexes.length > 0) {
+    imports.add('jakarta.persistence.Index');
+    attrs.push(`indexes = { ${indexes.join(', ')} }`);
   }
 
   return `@Table(${attrs.join(', ')})`;
+}
+
+/** Nombre del índice que build pone a una columna FK. Prefijo `ix_`, el de los índices del framework. */
+export function foreignKeyIndexName(table, fkColumn) {
+  return `ix_${table}_${fkColumn}`;
+}
+
+/**
+ * Las columnas FK de la tabla de esta entidad que necesitan un índice propio.
+ *
+ * PostgreSQL, SQL Server y Oracle NO indexan una FK por su cuenta (MySQL y MariaDB sí:
+ * InnoDB lo exige, y reutiliza el declarado en vez de crear otro, así que emitirlo allí es
+ * inocuo). Sin él, tres cosas se degradan con el tamaño de la tabla y ninguna falla: el
+ * `IN (...)` del @BatchSize que carga las hijas de una página recorre la tabla hija entera;
+ * borrar el padre —o un `orphanRemoval`— la recorre para comprobar la FK; y en Oracle ese
+ * borrado bloquea la tabla hija ENTERA mientras dura. Ningún escenario lo ve: la respuesta
+ * es la misma, solo que más lenta cuanto más crece el servicio.
+ *
+ * Las columnas, las tres FK que existen en este modelo:
+ *  - `<relación>_id` de un @ManyToOne (lado dueño, incluida la vuelta de una hija a su padre);
+ *  - `<padre>_id` que un @OneToMany UNIDIRECCIONAL de otra entidad pone en esta tabla;
+ *  - `<relación>_id` de una referencia a otro agregado (`crossAggregateForeignKeys`).
+ * El @OneToOne no: Hibernate ya le pone una constraint única, que es un índice.
+ *
+ * Se omite la columna que ya ENCABEZA otro índice o constraint única de la tabla —un índice
+ * `(a, b)` sirve para buscar por `a`—: emitirlo duplicaría trabajo en cada escritura. La
+ * tabla de elementos de una lista se trata aparte, en su @CollectionTable.
+ */
+export function foreignKeyIndexColumns(model, entity, members = jpaMembers(model, entity)) {
+  // La referencia a otro agregado sale de la MISMA fuente que su FK: sin raíz persistida al
+  // otro lado no hay FK, y entonces indexarla ya no es integridad sino una consulta, que es
+  // decisión del diseño (`indexes`).
+  const candidates = crossAggregateForeignKeys(model)
+    .filter((fk) => fk.table === entity.tableName)
+    .map((fk) => fk.column);
+  for (const member of members) {
+    if (member.kind === 'relationOne' && member.relation.cardinality === 'many-to-one') {
+      candidates.push(`${snakeCase(member.relation.name)}_id`);
+    }
+  }
+  for (const parent of model.entities ?? []) {
+    if (!parent.persisted) continue;
+    for (const relation of parent.relations ?? []) {
+      if (!relation.internal || relation.cardinality !== 'one-to-many' || relation.entity !== entity.name) continue;
+      if (backReferenceTo(model, entity.name, parent.name)) continue;
+      candidates.push(`${snakeCase(parent.name)}_id`);
+    }
+  }
+
+  const leading = new Set();
+  const lead = (columns) => columns.length > 0 && leading.add(columns[0]);
+  if (entity.naturalKey?.length > 0) {
+    lead(entity.naturalKey.flatMap((f) => columnsFor(model, entity, members, f)));
+  }
+  for (const field of uniqueFields(entity)) lead([snakeCase(field.name)]);
+  for (const index of entity.indexes ?? []) {
+    // Un índice condicionado solo cubre las filas de su condición: no sirve para la FK.
+    if (index.when) continue;
+    const probe = [];
+    const columns = index.fields.flatMap((f) => columnsFor(model, entity, members, f, probe));
+    if (probe.length === 0) lead(columns);
+  }
+
+  return [...new Set(candidates)].filter((candidate) => !leading.has(candidate));
 }

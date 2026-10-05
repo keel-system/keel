@@ -39,6 +39,7 @@ La regla, entonces, es más precisa que «nunca inventes un code»:
 | Entrada multipart (input con campo `type: file`) | `FILE_UNREADABLE` | 400 | no |
 | `security`: la cadena de autenticación | `UNAUTHENTICATED` | 401 | no |
 | `security`: `access.rules` y la audiencia de `serviceAuth` | `ACCESS_DENIED` | 403 | no |
+| El tope de duración de toda transacción (lo fija el generador) | `TRANSACTION_TIMEOUT` | 503 | no |
 
 Qué significa cada uno:
 
@@ -68,6 +69,12 @@ Qué significa cada uno:
 - **`ACCESS_DENIED`** — la credencial es válida pero no autoriza la operación: rol, permiso,
   scope o audiencia. El 403 del **alcance por recurso** no es este: ese lo decide el caso de uso
   y sale con el `code` que declara `scoping.error`.
+- **`TRANSACTION_TIMEOUT`** — la transacción no terminó a tiempo: una consulta lenta o una
+  espera de bloqueo agotó el tope que el generador pone a todas, y el motor la canceló. Es un
+  503 y no un 500 porque es transitorio, y reintentar es seguro: la transacción revirtió entera.
+  Sin ese tope, una espera de bloqueo —infinita por defecto en varios motores— retiene su
+  conexión sin límite y el pool se agota para todas las demás peticiones. No es sustituible: no
+  lo provoca ninguna operación concreta.
 
 ## Sustituir uno por el del dominio
 

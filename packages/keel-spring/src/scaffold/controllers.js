@@ -849,6 +849,36 @@ function renderOptimisticLockHandler(model, imports) {
 `;
 }
 
+// El tope de duración de las transacciones: `spring.transaction.default-timeout`, que emite el
+// fragmento db de config.js. Hibernate lo convierte en un `setQueryTimeout` sobre cada sentencia,
+// así que una consulta lenta o una espera de bloqueo se cancela en vez de retener su conexión sin
+// límite. Lo que llega aquí es esa cancelación —QueryTimeoutException— o la transacción que ya no
+// tenía tiempo para lanzar la siguiente —TransactionTimedOutException—. Sin este handler caía en el
+// catch-all como 500, y no lo es: es transitorio y la transacción revirtió entera, así que
+// reintentar es seguro. Solo relacional: es donde se fija el tope.
+function renderTransactionTimeoutHandler(model, imports) {
+  if (!model.layersPresent.persistence || model.persistenceKind === 'document') return '';
+  imports.add('org.springframework.dao.QueryTimeoutException');
+  imports.add('org.springframework.http.HttpHeaders');
+  imports.add('org.springframework.transaction.TransactionTimedOutException');
+  const { code, http } = FRAMEWORK_ERRORS.transactionTimeout;
+  return `
+    // Tiempo agotado: la transacción pasó del tope (spring.transaction.default-timeout) y el
+    // motor canceló la sentencia, o ya no quedaba tiempo para lanzarla. Es transitorio y la
+    // transacción revirtió entera: ${http} con Retry-After, no el 500 del catch-all. Sin pila: el
+    // motivo va en el mensaje, y una ráfaga de esperas de bloqueo llenaría el log de trazas iguales.
+    @ExceptionHandler({ QueryTimeoutException.class, TransactionTimedOutException.class })
+    public ResponseEntity<ErrorResponse> onTransactionTimeout(RuntimeException exception) {
+        log.warn("Transacción cancelada por tiempo: {}", exception.getMessage());
+        HttpStatus status = HttpStatus.valueOf(${http});
+        return ResponseEntity.status(status)
+                .header(HttpHeaders.RETRY_AFTER, "1")
+                .body(new ErrorResponse(status.value(), status.getReasonPhrase(), "${code}",
+                        "La operación no terminó a tiempo; reinténtala", List.of()));
+    }
+`;
+}
+
 // El error de conflicto por concurrencia que declara el diseño, si lo hay.
 function declaredConcurrencyError(model) {
   return declaredErrorFor(model, FRAMEWORK_ERRORS.concurrency);
@@ -887,18 +917,14 @@ function renderExceptionHandler(model) {
   const dataIntegrity = model.layersPresent.persistence
     ? renderDataIntegrityHandler(model, imports, constants)
     : '';
-  // Solo si alguna raíz porta control de versión. Con
-  // consistency.optimisticLocking: none no hay de dónde salga la excepción, y
-  // generar el handler documentaría un 409 que el contrato niega. Salvo en el modelo
-  // DOCUMENTAL: ahí el UseCaseMediator relanza como OptimisticLockingFailureException el
-  // conflicto de escritura transitorio que agota sus reintentos, con o sin @Version, y sin
-  // este handler ese conflicto acabaría en 500.
-  const optimisticLock =
-    model.layersPresent.persistence &&
-    (model.entities.some((entity) => entity.usesOptimisticLocking) || model.persistenceKind === 'document')
-      ? renderOptimisticLockHandler(model, imports)
-      : '';
+  // Con persistencia, SIEMPRE, y no solo cuando alguna raíz porta control de versión: el
+  // UseCaseMediator relanza como conflicto de concurrencia el conflicto de escritura TRANSITORIO que
+  // agota sus reintentos —el WriteConflict de MongoDB, el interbloqueo de un motor relacional—, con
+  // o sin @Version. Mientras se emitía solo con @Version, un diseño con
+  // `optimisticLocking: none` dejaba ese desenlace en el 500 del catch-all.
+  const optimisticLock = model.layersPresent.persistence ? renderOptimisticLockHandler(model, imports) : '';
   const multipart = model.layersPresent.storage ? renderMultipartHandlers(imports, model) : '';
+  const transactionTimeout = renderTransactionTimeoutHandler(model, imports);
 
   const body = `@RestControllerAdvice
 public class ApiExceptionHandler {
@@ -957,7 +983,7 @@ ${constants.join('')}
     public ErrorResponse onMethodNotAllowed(HttpRequestMethodNotSupportedException exception) {
         return new ErrorResponse(HttpStatus.METHOD_NOT_ALLOWED.value(), "Method Not Allowed", "Método HTTP no soportado");
     }
-${multipart}${dataIntegrity}${optimisticLock}
+${multipart}${dataIntegrity}${optimisticLock}${transactionTimeout}
     // ── Errores de dominio (jerarquía DomainException) ───────────────────────
 
     @ResponseStatus(HttpStatus.BAD_REQUEST)

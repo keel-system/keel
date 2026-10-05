@@ -18,6 +18,7 @@
 // del handler, guiado por conventions/mapping.md.
 
 import { FRAMEWORK_ERRORS } from 'keel-core';
+import { purgeQueries, purgeSettings, purgeCall, purgeCallImports, PURGE_QUERY_IMPORTS } from './purge.js';
 import { declaredErrorFor } from '../lib/declared-errors.js';
 import { javaFile, javaPath, subPackage } from './render.js';
 
@@ -661,9 +662,7 @@ function renderRepository(model) {
   const body = `public interface IdempotencyRecordJpaRepository
         extends JpaRepository<IdempotencyRecordJpa, IdempotencyRecordJpa.IdempotencyRecordId> {
 
-    @Modifying
-    @Query("delete from IdempotencyRecordJpa r where r.expiresAt < :now")
-    int deleteExpiredBefore(@Param("now") Instant now);
+${purgeQueries({ entity: 'IdempotencyRecordJpa', alias: 'r', field: 'expiresAt', deleteMethod: 'deleteExpiredBefore' })}
 }`;
 
   return {
@@ -671,11 +670,8 @@ function renderRepository(model) {
     content: javaFile(
       subPackage(model, ADAPTER_PKG),
       [
-        'java.time.Instant',
         'org.springframework.data.jpa.repository.JpaRepository',
-        'org.springframework.data.jpa.repository.Modifying',
-        'org.springframework.data.jpa.repository.Query',
-        'org.springframework.data.repository.query.Param'
+        ...PURGE_QUERY_IMPORTS
       ],
       body
     )
@@ -712,6 +708,8 @@ public class JpaIdempotencyStore implements IdempotencyStore {
     private static final Logger log = LoggerFactory.getLogger(JpaIdempotencyStore.class);
 
     private final IdempotencyRecordJpaRepository repository;
+
+${purgeSettings('idempotency-record.purge')}
 
     public JpaIdempotencyStore(IdempotencyRecordJpaRepository repository) {
         this.repository = repository;
@@ -792,10 +790,13 @@ public class JpaIdempotencyStore implements IdempotencyStore {
         }
     }
 
+    /**
+     * Por lotes y SIN transacción propia: cada lote confirma en la suya (ver BatchedPurge).
+     */
     @Scheduled(cron = "\${idempotency-record.purge.cron:0 30 4 * * *}")
-    @Transactional
     public void purge() {
-        int deleted = repository.deleteExpiredBefore(Instant.now());
+        Instant cutoff = Instant.now();
+        long deleted = ${purgeCall({ what: 'idempotency_record', repository: 'repository', deleteMethod: 'deleteExpiredBefore' })};
         if (deleted > 0) {
             log.info("Idempotencia HTTP: purgadas {} claves caducadas", deleted);
         }
@@ -817,8 +818,10 @@ public class JpaIdempotencyStore implements IdempotencyStore {
         'org.springframework.dao.PessimisticLockingFailureException',
         'org.springframework.scheduling.annotation.Scheduled',
         'org.springframework.stereotype.Component',
+        'org.springframework.beans.factory.annotation.Value',
         'org.springframework.transaction.TransactionSystemException',
-        'org.springframework.transaction.annotation.Transactional'
+        'org.springframework.transaction.annotation.Transactional',
+        ...purgeCallImports(model)
       ],
       body
     )

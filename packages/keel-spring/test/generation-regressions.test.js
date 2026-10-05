@@ -822,9 +822,15 @@ test('concurrencia: optimisticLocking none no genera @Version ni el 409 de confl
   assert.ok(!domain.includes('getLockVersion()'));
   // El contador de dominio que sí declara el diseño no se ve afectado.
   assert.ok(jpa.includes('private Long version;'));
-  // Sin @Version no hay ObjectOptimisticLockingFailureException que traducir.
-  assert.ok(!advice.includes('CONCURRENT_MODIFICATION'));
-  assert.ok(!advice.includes('ObjectOptimisticLockingFailureException'));
+  // Sin @Version, dos escrituras concurrentes siguen dando dos 200: lo que el diseño pidió. El
+  // handler del 409 SÍ existe, y no contradice eso: es el desenlace del conflicto TRANSITORIO que
+  // agota sus reintentos —un interbloqueo repetido tres veces—, que antes salía como 500. Es lo
+  // mismo que la rama documental hacía ya con `none` (R9), y lo que lo lanza es el mediator, no
+  // Hibernate: ningún @Version que nadie pidió puede producirlo.
+  assert.ok(advice.includes('ObjectOptimisticLockingFailureException'));
+  const mediator = read(`${JAVA}/infrastructure/configurations/usecase/UseCaseMediator.java`);
+  assert.ok(mediator.includes('throw new ObjectOptimisticLockingFailureException('));
+  assert.ok(!mediator.includes('instanceof OptimisticLockingFailureException'));
 });
 
 test('concurrencia: optimisticLocking all (default) sigue protegiendo toda raíz', () => {

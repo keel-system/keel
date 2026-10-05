@@ -44,6 +44,15 @@ esta checklist antes de aceptarlo.
   inline sin nombre, y hay que reescribirlas a
   `constraint uk_<tabla>_natural unique (...)` antes de copiar el archivo. Ese
   aviso no es informativo: es trabajo pendiente.
+- **Índice en cada FK**: build anota un `ix_<tabla>_<columna>` por cada columna FK
+  que no encabece ya otro índice o constraint única —la vuelta de una hija a su
+  padre, el `<padre>_id` de un `@OneToMany` unidireccional, la referencia a otro
+  agregado y la FK de la tabla de elementos de cada lista—. Comprueba que están
+  todos en el DDL exportado, y añade el de cada FK entre agregados que escribas a
+  mano. PostgreSQL, SQL Server y Oracle no indexan una FK solos: sin él, cargar
+  una colección y borrar el padre recorren la tabla hija entera (y Oracle la
+  bloquea completa). No te fíes de la PK de una tabla de elementos: el exportador
+  la escribe con la columna de orden delante y no sirve para buscar por la raíz.
 - **Nullabilidad**: `not null` en los campos `required` y en las FK de relaciones
   requeridas. Es la última línea de defensa de un invariante.
 - **FK entre agregados: nunca están en el DDL exportado, y a veces tienen que
@@ -100,7 +109,7 @@ y comprueba **sobre el SQL**:
 
 - una `create table` por cada `XxxJpa` persistida, más las `<entidad>_<campo>` de
   los `@ElementCollection` y `outbox_event`/`processed_event` si el diseño los usa;
-- los nombres `uk_*`/`idx_*` declarados, todos presentes;
+- los nombres `uk_*`/`idx_*` declarados y los `ix_*` de las FK, todos presentes;
 - `not null` en cada campo `required` y en las FK de relaciones requeridas;
 - cada constraint nombrada en el `CONSTRAINT_TO_ERROR` del `ApiExceptionHandler`
   existe en el archivo, **y al revés**: ninguna FK entre agregados añadida se quedó
@@ -143,6 +152,24 @@ quedan escritos en el `README.md` del proyecto (§ Despliegue en producción) y 
   para contenido idempotente: datos de referencia, vistas.
 - Cambios destructivos (borrar o renombrar columna) en dos pasos, nunca en uno:
   añadir y rellenar primero, borrar en un despliegue posterior.
+- **Un valor nuevo de un enum —también un estado nuevo del `lifecycle`— exige
+  migración.** Hibernate escribe la lista de valores EN el esquema: un
+  `check (status in ('QUEUED','SENT',...))` en PostgreSQL, SQL Server y Oracle, y un
+  tipo `enum('QUEUED','SENT',...)` nativo en MySQL y MariaDB (medido en baselines
+  exportados). `ddl-auto: validate` no compara esa lista y `update` no la modifica,
+  así que el servicio arranca sano y el primer `INSERT` con el valor nuevo muere en
+  producción con una violación de constraint. La migración sustituye el `CHECK`
+  (`ALTER TABLE … DROP CONSTRAINT … ; ADD CONSTRAINT … CHECK (…)`) o amplía el
+  `enum` (`ALTER TABLE … MODIFY COLUMN status enum(…)`), y en `local` no lo verás
+  salvo con `bash infra/reset-db.sh --schema`.
+- **Una columna obligatoria nueva sobre una tabla con datos** va en dos pasos:
+  añadirla anulable y rellenarla (por lotes si la tabla es grande), y en otra
+  migración ponerle el `NOT NULL`. Un `ADD COLUMN … NOT NULL` sin default falla
+  sobre filas existentes, y con un default calculado reescribe la tabla entera.
+- **El usuario de las migraciones** puede ser un propietario distinto del de la
+  aplicación: `DB_MIGRATION_USERNAME`/`DB_MIGRATION_PASSWORD` (por defecto, los del
+  datasource). Si se separan, el propietario tiene que conceder a la aplicación los
+  permisos de DML sobre lo que crea; eso es del DBA, no de una migración.
 
 ## Lo prohibido
 

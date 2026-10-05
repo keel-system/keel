@@ -494,6 +494,12 @@ function resolveField(ownerName, fieldName, field, domainTypes, inlineEnumName, 
   };
 }
 
+/**
+ * Cómo se crea un uuid que genera el servidor: el helper de la versión 7 (scaffold/ids.js), no
+ * `UUID.randomUUID()`. Vive aquí porque es el modelo quien decide el inicializador.
+ */
+export const UUID_V7_CALL = 'Uuids.v7()';
+
 function fieldInitializer(field, resolved) {
   if (field.default !== undefined) {
     if (resolved.kind === 'enum' || field.type === 'enum') return `${resolved.javaType}.${screamingSnake(field.default)}`;
@@ -502,7 +508,7 @@ function fieldInitializer(field, resolved) {
     return String(field.default);
   }
   if (field.generated) {
-    if (resolved.base === 'uuid') return 'UUID.randomUUID()';
+    if (resolved.base === 'uuid') return UUID_V7_CALL;
     if (resolved.base === 'timestamp') return 'Instant.now()';
   }
   return null;

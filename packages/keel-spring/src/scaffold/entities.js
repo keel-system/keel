@@ -7,6 +7,7 @@
 // que escribe el agente. La persistencia vive aparte en
 // infrastructure/persistence (XxxJpa + adaptador).
 
+import { usesUuids, uuidsImport } from './ids.js';
 import { javaFile, javaPath, subPackage, javadoc } from './render.js';
 
 // Subpaquete de una entidad de dominio según su rol en el agregado.
@@ -81,6 +82,7 @@ function renderEntity(model, entity) {
         lines.push(`    private ${field.javaType} ${field.name} = new ArrayList<>();`);
       } else {
         const init = field.initializer ? ` = ${field.initializer}` : '';
+        if (usesUuids(field.initializer)) imports.add(uuidsImport(model));
         lines.push(`    private ${field.javaType} ${field.name}${init};`);
       }
     } else if (member.kind === 'externalRef') {

@@ -82,7 +82,9 @@ Por eso el `!= null` sobre el id ajeno es obligatorio.
   se cae con la tabla llena. En el listado, las colecciones van por lote (`@BatchSize`, ya
   generado): coste constante y dos consultas acotadas. El `@EntityGraph` que build emite
   está solo en las lecturas de UN agregado, y copiarlo a la consulta paginada es
-  exactamente este error.
+  exactamente este error. Y ya no es silencioso: el proyecto lleva
+  `hibernate.query.fail_on_pagination_over_collection_fetch: true`, así que lanza en el
+  primer escenario que lo toque. No quites la propiedad para que pase: quita el fetch.
 - **`countQuery` explícita siempre** que la consulta lleve join. La que deriva Spring Data cuenta
   filas del resultado del join; con `left join` a un `many-to-one` coincide, pero es frágil y en
   cuanto alguien añada un join a una colección el total pasa a estar inflado.

@@ -87,7 +87,8 @@ public class Product {
     /** Alta de producto (FL-01). Invariante del diseño: el precio nunca es negativo. */
     public static Product create(String name, Money price, UUID categoryId) {
         requireValidPrice(price);
-        return new Product(UUID.randomUUID(), name, price, ProductStatus.DRAFT, categoryId);
+        // Uuids.v7() (domain/identity, lo genera build), no UUID.randomUUID(): ver mapping.md.
+        return new Product(Uuids.v7(), name, price, ProductStatus.DRAFT, categoryId);
     }
 
     // Rehidratación desde persistencia: el estado ya es válido, no se revalida.

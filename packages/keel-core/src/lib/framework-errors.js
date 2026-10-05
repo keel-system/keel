@@ -149,6 +149,22 @@ export const FRAMEWORK_ERRORS = {
     overridable: false,
     mechanism: 'capa `security`: `access.rules` y la audiencia de `serviceAuth`',
     when: 'La credencial es válida pero no autoriza la operación (rol, permiso, scope o audiencia).'
+  },
+
+  // El TOPE DE DURACIÓN de una transacción, que pone el generador a todas por igual. Sin él, una
+  // consulta lenta o una espera de bloqueo —infinita por defecto en varios motores— retiene su
+  // conexión sin límite, y el pool se agota para cualquier otra petición, lejos de la causa.
+  // 503 y no 500: es transitorio, y reintentar es seguro porque la transacción revirtió entera.
+  // No es sustituible por lo mismo que la cadena de seguridad: no lo provoca ninguna operación
+  // concreta, así que no hay operación en la que declarar otro.
+  transactionTimeout: {
+    code: 'TRANSACTION_TIMEOUT',
+    http: 503,
+    overridable: false,
+    mechanism: 'el tope de duración de toda transacción (lo fija el generador, no el diseño)',
+    when:
+      'La transacción no terminó a tiempo: una consulta lenta o una espera de bloqueo agotó el tope y el motor la canceló. ' +
+      'Revirtió entera, así que reintentar es seguro.'
   }
 };
 

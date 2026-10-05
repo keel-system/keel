@@ -8,6 +8,7 @@
 // la skill keel-spring-<broker>.
 
 import { javaFile, javaPath, subPackage } from './render.js';
+import { purgeQueries, purgeSettings, purgeCall, purgeCallImports, PURGE_QUERY_IMPORTS } from './purge.js';
 
 const IDEMPOTENCY_PKG = 'infrastructure.messaging.idempotency';
 
@@ -326,9 +327,7 @@ function renderRepository(model) {
   const body = `public interface ProcessedEventJpaRepository
         extends JpaRepository<ProcessedEventJpa, ProcessedEventJpa.ProcessedEventId> {
 
-    @Modifying
-    @Query("delete from ProcessedEventJpa p where p.processedAt < :cutoff")
-    int deleteProcessedBefore(@Param("cutoff") Instant cutoff);
+${purgeQueries({ entity: 'ProcessedEventJpa', alias: 'p', field: 'processedAt', deleteMethod: 'deleteProcessedBefore' })}
 }`;
 
   return {
@@ -336,11 +335,8 @@ function renderRepository(model) {
     content: javaFile(
       subPackage(model, IDEMPOTENCY_PKG),
       [
-        'java.time.Instant',
         'org.springframework.data.jpa.repository.JpaRepository',
-        'org.springframework.data.jpa.repository.Modifying',
-        'org.springframework.data.jpa.repository.Query',
-        'org.springframework.data.repository.query.Param'
+        ...PURGE_QUERY_IMPORTS
       ],
       body
     )
@@ -458,10 +454,12 @@ function renderGuard(model) {
     model.persistenceKind === 'document' ? 'la unicidad del _id de la colección' : 'la clave primaria de la tabla';
   const purgedNoun =
     model.persistenceKind === 'document' ? 'purgados {} documentos procesados' : 'purgadas {} filas procesadas';
-  const purgeCall =
-    model.persistenceKind === 'document'
-      ? `long deleted = ${field}.deleteByProcessedAtBefore(cutoff);`
-      : `int deleted = ${field}.deleteProcessedBefore(cutoff);`;
+  const relational = model.persistenceKind !== 'document';
+  // En relacional, por lotes y sin transacción propia: cada lote confirma en la suya (ver
+  // BatchedPurge). En documental, un deleteMany, que no retiene bloqueos que escalen.
+  const purgeStatement = relational
+    ? `long deleted = ${purgeCall({ what: 'processed_event', repository: field, deleteMethod: 'deleteProcessedBefore' })};`
+    : `long deleted = ${field}.deleteByProcessedAtBefore(cutoff);`;
   const body = `/**
  * Guarda de idempotencia del consumidor.
  *
@@ -511,7 +509,9 @@ public class IdempotencyGuard {
 
     @Value("\${processed-event.purge.retention-days:14}")
     private int retentionDays;
-
+${relational ? `
+${purgeSettings('processed-event.purge')}
+` : ''}
     public IdempotencyGuard(ProcessedEventWriter writer, ${repository} ${field}) {
         this.writer = writer;
         this.${field} = ${field};
@@ -582,11 +582,10 @@ public class IdempotencyGuard {
         return record(handlerId, eventId);
     }
 
-    @Scheduled(cron = "\${processed-event.purge.cron:0 0 4 * * *}")
-    @Transactional
+    @Scheduled(cron = "\${processed-event.purge.cron:0 0 4 * * *}")${relational ? '' : '\n    @Transactional'}
     public void purge() {
         Instant cutoff = Instant.now().minus(retentionDays, ChronoUnit.DAYS);
-        ${purgeCall}
+        ${purgeStatement}
         if (deleted > 0) {
             log.info("Idempotencia: ${purgedNoun} antes de {}", deleted, cutoff);
         }
@@ -606,7 +605,7 @@ public class IdempotencyGuard {
         'org.springframework.dao.DataIntegrityViolationException',
         'org.springframework.scheduling.annotation.Scheduled',
         'org.springframework.stereotype.Component',
-        'org.springframework.transaction.annotation.Transactional'
+        ...(relational ? purgeCallImports(model) : ['org.springframework.transaction.annotation.Transactional'])
       ],
       body
     )

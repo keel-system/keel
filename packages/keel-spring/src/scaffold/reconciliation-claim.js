@@ -25,6 +25,7 @@
 import { javaFile, javaPath, subPackage } from './render.js';
 import { screamingSnake } from '../lib/naming.js';
 import { claimSelectionSnippet, claimTransaction } from '../lib/claim-sql.js';
+import { purgeQueries, purgeSettings, purgeCall, purgeCallImports, PURGE_QUERY_IMPORTS } from './purge.js';
 
 const CLAIM_PKG = 'infrastructure.persistence.reconciliation';
 
@@ -387,9 +388,7 @@ function renderRepository(model) {
     int claimIfExpired(@Param("activation") String activation, @Param("entityId") UUID entityId,
             @Param("now") Instant now, @Param("expiredBefore") Instant expiredBefore);
 
-    @Modifying
-    @Query("delete from ReconciliationClaimJpa c where c.claimedAt < :cutoff")
-    int deleteClaimedBefore(@Param("cutoff") Instant cutoff);
+${purgeQueries({ entity: 'ReconciliationClaimJpa', alias: 'c', field: 'claimedAt', deleteMethod: 'deleteClaimedBefore' })}
 }`;
 
   return {
@@ -397,12 +396,9 @@ function renderRepository(model) {
     content: javaFile(
       subPackage(model, CLAIM_PKG),
       [
-        'java.time.Instant',
         'java.util.UUID',
         'org.springframework.data.jpa.repository.JpaRepository',
-        'org.springframework.data.jpa.repository.Modifying',
-        'org.springframework.data.jpa.repository.Query',
-        'org.springframework.data.repository.query.Param'
+        ...PURGE_QUERY_IMPORTS
       ],
       body
     )
@@ -560,15 +556,16 @@ public class ReconciliationClaimPurge {
     @Value("\${reconciliation.purge.retention-days:7}")
     private int retentionDays;
 
+${purgeSettings('reconciliation.purge')}
+
     ReconciliationClaimPurge(ReconciliationClaimJpaRepository repository) {
         this.repository = repository;
     }
 
     @Scheduled(cron = "\${reconciliation.purge.cron:0 45 4 * * *}")
-    @Transactional
     public void purge() {
         Instant cutoff = Instant.now().minus(retentionDays, ChronoUnit.DAYS);
-        int deleted = repository.deleteClaimedBefore(cutoff);
+        long deleted = ${purgeCall({ what: 'reconciliation_claim', repository: 'repository', deleteMethod: 'deleteClaimedBefore' })};
         if (deleted > 0) {
             log.info("Reconciliación: {} reclamos purgados antes de {}", deleted, cutoff);
         }
@@ -587,7 +584,7 @@ public class ReconciliationClaimPurge {
         'org.springframework.beans.factory.annotation.Value',
         'org.springframework.scheduling.annotation.Scheduled',
         'org.springframework.stereotype.Component',
-        'org.springframework.transaction.annotation.Transactional'
+        ...purgeCallImports(model)
       ],
       body
     )

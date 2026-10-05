@@ -26,6 +26,7 @@
 // de la misma derivación y romper el generador lo dejaba en verde.
 
 import { outboxNames, usesOutbox } from '../scaffold/outbox.js';
+import { usesTelemetry } from '../scaffold/telemetry.js';
 import { processedEventNames, usesIdempotency } from '../scaffold/idempotency.js';
 import {
   declaresIdempotency,
@@ -46,6 +47,7 @@ import { needsReadCommitted } from './claim-sql.js';
 export const CLASS_OUTBOX = 'OutboxStoreCheckTest';
 export const CLASS_IDEMPOTENCY = 'IdempotencyStoreCheckTest';
 export const CLASS_RECONCILIATION = 'ReconciliationStoreCheckTest';
+export const CLASS_MEDIATOR = 'MediatorStoreCheckTest';
 export const TEST_GLOB = '*StoreCheckTest';
 
 // Los parámetros con los que corre la suite. Van FIJOS y bajos a propósito: el lote acotado y el
@@ -78,6 +80,9 @@ export function storeSubjects(model) {
     // genera: `reconciliationClaims` devuelve solo los que pudo generar sin inventar nada. Se
     // toma el primero — un diseño con varios tiene la misma mecánica en todos.
     reconciliation: reconciliationClaims(model)[0] ?? null,
+    // El reintento del conflicto transitorio en la rama RELACIONAL (el interbloqueo). Las dos filas
+    // que se cruzan son del outbox, así que se mide donde lo hay.
+    mediatorRetry: model.persistenceKind !== 'document' && usesOutbox(model),
     // El `scope` con el que el handler agrupa sus claves. No lo escribe build —la llamada la pone
     // el agente— pero el vocabulario sí es del diseño, y usar el nombre real de la operación hace
     // que la medición pase por las mismas longitudes de columna que la producción.
@@ -118,6 +123,11 @@ export function storeTestClasses(model, subjects, options) {
         ? documentIdempotencyClass(model, subjects, options)
         : relationalIdempotencyClass(model, subjects, options)
     });
+  }
+  // El reintento del interbloqueo del UseCaseMediator. Necesita dos filas que cruzar y las toma del
+  // outbox, que es la tabla del generador que no depende de ningún diseño: sin outbox no se emite.
+  if (subjects.mediatorRetry) {
+    clases.push({ className: CLASS_MEDIATOR, package: options.packages.mediator, content: relationalMediatorClass(model, options) });
   }
   if (subjects.reconciliation) {
     clases.push({
@@ -177,7 +187,10 @@ function relationalOutboxClass(model, { datasource, packages }) {
     `"spring.datasource.username=${datasource.username}"`,
     `"spring.datasource.password=${datasource.password ?? ''}"`,
     '"spring.jpa.hibernate.ddl-auto=create-drop"',
-    '"spring.flyway.enabled=false"'
+    '"spring.flyway.enabled=false"',
+    // El tope de transacción CORTO, para que el caso de la espera de bloqueo no tarde: lo que se
+    // mide es que el motor CANCELE la espera, no cuánto vale el tope.
+    `"spring.transaction.default-timeout=${TRANSACTION_TIMEOUT_S}s"`
   ];
 
   const body = `${CABECERA}
@@ -186,6 +199,10 @@ function relationalOutboxClass(model, { datasource, packages }) {
 })
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Import(OutboxRelayStore.class)
+// La que aplica spring.transaction.* al gestor. @DataJpaTest NO la trae (medido en
+// spring-boot-test-autoconfigure 3.5.3) y la aplicación completa sí: sin ella la propiedad de abajo
+// no llegaría al gestor y el caso del tope mediría su ausencia.
+@ImportAutoConfiguration(TransactionManagerCustomizationAutoConfiguration.class)
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class ${CLASS_OUTBOX} {
 
@@ -362,22 +379,111 @@ class ${CLASS_OUTBOX} {
         UUID pendienteVieja = fila(viejo, null, 0, null);  // PENDIENTE y vieja: se queda
         UUID publicadaReciente = fila(Instant.now(), Instant.now(), 0, null);
 
-        int borradas = tx.execute(status -> outbox.deletePublishedBefore(corte));
+        // Lote de UNO: así la pasada recorre las dos ramas del bucle —la frontera leída y el
+        // último lote entero— y las dos consultas tienen que decir lo mismo de qué se purga.
+        long borradas = purgar(corte, 1, 100);
 
-        assertEquals(1, borradas, "la purga no se llevó exactamente la fila publicada y vieja");
+        assertEquals(1L, borradas, "la purga no se llevó exactamente la fila publicada y vieja");
         assertTrue(outbox.findById(pendienteVieja).isPresent(),
                 "la purga borró un evento PENDIENTE: eso es pérdida de datos, y silenciosa");
         assertTrue(outbox.findById(publicadaReciente).isPresent(),
                 "la purga se llevó una fila publicada dentro de la ventana de retención");
+    }
+
+    @Test
+    void laPurgaVaPorLotesYRespetaSuTope() {
+        // Un DELETE único es UNA transacción del tamaño del atraso: retiene sus bloqueos hasta el
+        // final —en SQL Server escala a bloqueo de tabla y para todo comando que emita un evento—
+        // y con el timeout de transacción del servicio no termina nunca. El lote es lo que lo
+        // impide y el tope lo que acota una pasada. Instantes distintos, para que la frontera
+        // del lote sea exacta.
+        Instant corte = Instant.now().minusSeconds(3600);
+        for (int i = 0; i < 5; i++) {
+            Instant cuando = Instant.now().minusSeconds(86400 - i * 10L);
+            fila(cuando, cuando, 0, null);
+        }
+        UUID pendienteVieja = fila(Instant.now().minusSeconds(86400), null, 0, null);
+
+        assertEquals(2L, purgar(corte, 2, 1),
+                "un lote de 2 con tope de 1 lote no se llevó exactamente 2 filas: la purga no va por lotes");
+        assertEquals(3L, purgar(corte, 2, 100), "la pasada siguiente no se llevó lo que quedaba");
+        assertTrue(outbox.findById(pendienteVieja).isPresent(),
+                "la purga por lotes borró un evento PENDIENTE: eso es pérdida de datos, y silenciosa");
+    }
+
+    @Autowired
+    private PlatformTransactionManager gestor;
+
+    @Test
+    void unaEsperaDeBloqueoSeCancelaAlAgotarElTope() throws Exception {
+        // spring.transaction.default-timeout es lo único que impide que una espera de bloqueo
+        // —infinita por defecto en PostgreSQL, SQL Server y Oracle— retenga su conexión sin
+        // límite. Lo que se mide es que Hibernate lo aplique de verdad como timeout de SENTENCIA
+        // y el motor la cancele, y que lo cancelado salga con una de las dos excepciones que el
+        // ApiExceptionHandler convierte en 503 TRANSACTION_TIMEOUT. Si saliera con otra, el
+        // cliente recibiría un 500.
+        Instant viejo = Instant.now().minusSeconds(86400);
+        UUID id = fila(viejo, viejo, 0, null);
+        Instant lejos = Instant.now().plusSeconds(86400);
+        CountDownLatch bloqueada = new CountDownLatch(1);
+        CountDownLatch suelta = new CountDownLatch(1);
+        TransactionTemplate larga = new TransactionTemplate(gestor);
+        larga.setTimeout(60);
+        Thread retiene = new Thread(() -> larga.executeWithoutResult(status -> {
+            // Borrar la fila toma su bloqueo, y se retiene sin confirmar hasta que el caso acabe.
+            outbox.deletePublishedBefore(lejos, lejos);
+            bloqueada.countDown();
+            try {
+                suelta.await(30, TimeUnit.SECONDS);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
+            status.setRollbackOnly();
+        }));
+        retiene.start();
+        try {
+            assertTrue(bloqueada.await(15, TimeUnit.SECONDS), "no se pudo tomar el bloqueo de la fila");
+            long inicio = System.nanoTime();
+            // Su propia transacción, la del @Transactional del repositorio: con el tope por defecto.
+            RuntimeException cancelada = assertThrows(RuntimeException.class,
+                    () -> outbox.deletePublishedBefore(lejos, lejos),
+                    "la espera de bloqueo no se canceló: sin tope retiene su conexión sin límite");
+            long esperaMs = (System.nanoTime() - inicio) / 1_000_000;
+            assertTrue(cancelada instanceof QueryTimeoutException || cancelada instanceof TransactionTimedOutException,
+                    "lo cancelado salió como " + cancelada.getClass().getName()
+                            + ", que el ApiExceptionHandler no traduce: el cliente recibiría un 500 — "
+                            + cancelada.getMessage());
+            assertTrue(esperaMs < ${TRANSACTION_TIMEOUT_S * 5}_000L,
+                    "la espera duró " + esperaMs + " ms con un tope de ${TRANSACTION_TIMEOUT_S} s: el tope no se aplicó a la sentencia");
+        } finally {
+            suelta.countDown();
+            retiene.join(30_000);
+        }
+        assertTrue(outbox.findById(id).isPresent(), "la fila desapareció: la transacción que retenía no revirtió");
+    }
+
+    /** La purga como la hace el relay: el bucle GENERADO sobre las dos consultas generadas. */
+    private long purgar(Instant corte, int lote, int maxLotes) {
+        return BatchedPurge.run("outbox_event", lote, maxLotes,
+                position -> outbox.findPurgeBoundary(corte, PageRequest.of(position, 1)),
+                upTo -> outbox.deletePublishedBefore(corte, upTo), corte);
     }
 }`;
 
   return file(
     packages.outbox,
     [
+      `${packages.purge}.BatchedPurge`,
       'java.time.Instant',
       'java.util.List',
       'java.util.UUID',
+      'java.util.concurrent.CountDownLatch',
+      'java.util.concurrent.TimeUnit',
+      'org.springframework.dao.QueryTimeoutException',
+      'org.springframework.boot.autoconfigure.ImportAutoConfiguration',
+      'org.springframework.boot.autoconfigure.transaction.TransactionManagerCustomizationAutoConfiguration',
+      'org.springframework.transaction.TransactionTimedOutException',
+      'static org.junit.jupiter.api.Assertions.assertThrows',
       'org.junit.jupiter.api.BeforeEach',
       'org.junit.jupiter.api.Test',
       'org.springframework.beans.factory.annotation.Autowired',
@@ -393,6 +499,166 @@ class ${CLASS_OUTBOX} {
       'static org.junit.jupiter.api.Assertions.assertFalse',
       'static org.junit.jupiter.api.Assertions.assertNotNull',
       'static org.junit.jupiter.api.Assertions.assertTrue'
+    ],
+    body
+  );
+}
+
+/** El tope de transacción con el que se mide la cancelación de una espera de bloqueo, en segundos. */
+const TRANSACTION_TIMEOUT_S = 2;
+
+// ─── El reintento del interbloqueo (UseCaseMediator, rama relacional) ────────
+//
+// El mediator reintenta la transacción de escritura que pierde un INTERBLOQUEO. Lo que hay que
+// medir no es la frase sino tres cosas que solo dice el motor: que dos transacciones que toman dos
+// filas en orden cruzado SE interbloquean de verdad, que la que el motor aborta llega como algo que
+// el clasificador generado reconoce, y que con el reintento las DOS escrituras terminan. Se usa el
+// UseCaseMediator GENERADO, construido a mano con un handler de prueba: el de verdad no se puede
+// arrancar sin los handlers del agente.
+
+function relationalMediatorClass(model, { datasource, packages }) {
+  const { entity: entityClass, repository: repoClass } = outboxNames(model);
+  const telemetry = usesTelemetry(model);
+  const properties = [
+    `"spring.datasource.url=${datasource.url}"`,
+    `"spring.datasource.username=${datasource.username}"`,
+    `"spring.datasource.password=${datasource.password ?? ''}"`,
+    '"spring.jpa.hibernate.ddl-auto=create-drop"',
+    '"spring.flyway.enabled=false"'
+  ];
+
+  const body = `${CABECERA}
+@DataJpaTest(properties = {
+        ${properties.join(',\n        ')}
+})
+@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
+@Transactional(propagation = Propagation.NOT_SUPPORTED)
+class ${CLASS_MEDIATOR} {
+
+    @Autowired
+    private ${repoClass} outbox;
+
+    @Autowired
+    private PlatformTransactionManager gestor;
+
+    /** Las dos filas, en el orden en que este comando las toma. */
+    record Cruce(UUID primera, UUID segunda) implements Command {
+    }
+
+    @BeforeEach
+    void limpia() {
+        outbox.deleteAllInBatch();
+    }
+
+    private UUID fila() {
+        Instant ahora = Instant.now();
+        return outbox.saveAndFlush(new ${entityClass}(
+                UUID.randomUUID(), "destino", "clave", "TipoDeEvento", "{}", ahora, null, 0, null, null)).getId();
+    }
+
+    /** Toma la fila con un UPDATE de verdad, que retiene su bloqueo hasta el commit. */
+    private void tomar(UUID id) {
+        ${entityClass} row = outbox.findById(id).orElseThrow();
+        row.scheduleNextAttempt(Instant.now());
+        outbox.saveAndFlush(row);
+    }
+
+    private static void cita(CyclicBarrier barrera) {
+        try {
+            barrera.await(15, TimeUnit.SECONDS);
+        } catch (Exception interrumpida) {
+            throw new IllegalStateException("las dos transacciones no llegaron a cruzarse", interrumpida);
+        }
+    }
+
+    @Test
+    void elInterbloqueoSeReintentaYLasDosEscriturasTerminan() throws Exception {
+        UUID a = fila();
+        UUID b = fila();
+        CyclicBarrier cruzadas = new CyclicBarrier(2);
+        AtomicInteger intentos = new AtomicInteger();
+        CommandHandler<Cruce> handler = cruce -> {
+            int intento = intentos.incrementAndGet();
+            tomar(cruce.primera());
+            // Solo los DOS primeros intentos se citan: así se cruzan una vez —cada uno con su primera
+            // fila tomada y yendo a por la del otro— y el reintento del perdedor pasa solo.
+            if (intento <= 2) {
+                cita(cruzadas);
+            }
+            tomar(cruce.segunda());
+        };
+        UseCaseContainer contenedor = new UseCaseContainer();
+        contenedor.register(Cruce.class, handler);
+        UseCaseMediator mediator = new UseCaseMediator(contenedor, gestor${telemetry ? ', ObservationRegistry.NOOP' : ''});
+
+        ExecutorService hilos = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> uno = hilos.submit(() -> mediator.dispatch(new Cruce(a, b)));
+            Future<?> otro = hilos.submit(() -> mediator.dispatch(new Cruce(b, a)));
+            // Sin el reintento, una de las dos sale con el interbloqueo que el motor eligió abortar,
+            // y en una petición eso era un 500.
+            uno.get(60, TimeUnit.SECONDS);
+            otro.get(60, TimeUnit.SECONDS);
+        } finally {
+            hilos.shutdownNow();
+        }
+        assertEquals(3, intentos.get(),
+                "se esperaban 3 intentos —dos que se cruzan y el reintento del que perdió—: con 2 el motor no "
+                        + "interbloqueó y el caso no midió nada");
+    }
+
+    @Test
+    void elConflictoDeVersionYElTopeNoSeReintentan() throws Exception {
+        // Reintentar a ciegas el conflicto de @Version reaplicaría la intención obsoleta del cliente y
+        // escondería la actualización perdida: por eso es un 409. Y el tope de transacción no es un
+        // conflicto sino lentitud: repetirlo solo la triplica.
+        //
+        // Por REFLEXIÓN y no llamándolo: si el generador dejara de emitir el clasificador, una
+        // llamada directa haría que esta clase no COMPILARA, y eso es «el check no pudo correr», no
+        // «el generador está mal». Así su ausencia es un rojo con su motivo.
+        Method clasificador;
+        try {
+            clasificador = UseCaseMediator.class.getDeclaredMethod("isTransientWriteConflict", Throwable.class);
+        } catch (NoSuchMethodException ausente) {
+            throw new AssertionError("el UseCaseMediator no reintenta ningún conflicto transitorio: no hay clasificador");
+        }
+        clasificador.setAccessible(true);
+        assertFalse((Boolean) clasificador.invoke(null, new ObjectOptimisticLockingFailureException("v", null)),
+                "el clasificador reintentaría un conflicto de @Version");
+        assertFalse((Boolean) clasificador.invoke(null, new QueryTimeoutException("t")),
+                "el clasificador reintentaría el tope de transacción");
+    }
+}`;
+
+  return file(
+    packages.mediator,
+    [
+      `${packages.outbox}.${entityClass}`,
+      `${packages.outbox}.${repoClass}`,
+      `${packages.interfaces}.Command`,
+      `${packages.interfaces}.CommandHandler`,
+      ...(telemetry ? ['io.micrometer.observation.ObservationRegistry'] : []),
+      'java.lang.reflect.Method',
+      'java.time.Instant',
+      'java.util.UUID',
+      'java.util.concurrent.CyclicBarrier',
+      'java.util.concurrent.ExecutorService',
+      'java.util.concurrent.Executors',
+      'java.util.concurrent.Future',
+      'java.util.concurrent.TimeUnit',
+      'java.util.concurrent.atomic.AtomicInteger',
+      'org.junit.jupiter.api.BeforeEach',
+      'org.junit.jupiter.api.Test',
+      'org.springframework.beans.factory.annotation.Autowired',
+      'org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase',
+      'org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest',
+      'org.springframework.dao.QueryTimeoutException',
+      'org.springframework.orm.ObjectOptimisticLockingFailureException',
+      'org.springframework.transaction.PlatformTransactionManager',
+      'org.springframework.transaction.annotation.Propagation',
+      'org.springframework.transaction.annotation.Transactional',
+      'static org.junit.jupiter.api.Assertions.assertEquals',
+      'static org.junit.jupiter.api.Assertions.assertFalse'
     ],
     body
   );
@@ -674,6 +940,7 @@ ${commandMembers(subjects, registro)}${registroDeHelper(subjects, registro)}${de
       'org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase',
       'org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest',
       'org.springframework.context.annotation.Import',
+      ...(subjects.dedupe ? [`${packages.purge}.BatchedPurge`, 'org.springframework.data.domain.PageRequest'] : []),
       'org.springframework.transaction.PlatformTransactionManager',
       'org.springframework.transaction.annotation.Propagation',
       'org.springframework.transaction.annotation.Transactional',
@@ -958,14 +1225,16 @@ function dedupeTests(processedClass, processedRepo, relational) {
 ${sembrarViejo}
         guarda.record(HANDLER, reciente);
 
+        Instant corte = Instant.now().minusSeconds(3600);
         long borradas = ${
           relational
-            ? // La purga es un @Modifying sobre JPQL, y eso exige transacción. En producción la abre
-              // el @Transactional de IdempotencyGuard.purge(); aquí, donde se mira la consulta a
-              // solas, la abre el test — si no, el rojo habla de la transacción que falta y no del
-              // predicado, que es lo único que este caso quiere medir.
-              `tx.execute(status -> (long) procesados.${purga}(Instant.now().minusSeconds(3600)))`
-            : `procesados.${purga}(Instant.now().minusSeconds(3600))`
+            ? // El bucle GENERADO con lote de uno: recorre la frontera y el último lote, y cada
+              // borrado abre su propia transacción (el @Transactional del repositorio), que es
+              // como corre en producción.
+              `BatchedPurge.run("processed_event", 1, 100,
+                position -> procesados.findPurgeBoundary(corte, PageRequest.of(position, 1)),
+                upTo -> procesados.${purga}(corte, upTo), corte)`
+            : `procesados.${purga}(corte)`
         };
 
         assertEquals(1L, borradas, "la purga no se llevó exactamente la fila vieja");
@@ -1264,7 +1533,12 @@ ${requiredLiterals({ entity, statusField: entity.lifecycle.field }, claim.awaiti
     private UUID esperandoDesdeHace(long segundos) {
         return fila(${estadoDeEspera(claim, enumType)}, Instant.now().minusSeconds(segundos));
     }
-${reconciliationStoreTests('tx.execute(status -> (long) marcas.deleteClaimedBefore(ahora.minusSeconds(3600)))')}
+${reconciliationStoreTests(
+  // El bucle GENERADO con lote de uno: frontera y último lote, cada borrado en su transacción.
+  'BatchedPurge.run("reconciliation_claim", 1, 100, ' +
+    'position -> marcas.findPurgeBoundary(ahora.minusSeconds(3600), PageRequest.of(position, 1)), ' +
+    'upTo -> marcas.deleteClaimedBefore(ahora.minusSeconds(3600), upTo), ahora.minusSeconds(3600))'
+)}
 ${reconciliationSweepTests(claim, estadoDeEspera(claim, enumType), otroEstado(entity, claim, enumType))}
 }`;
 
@@ -1277,6 +1551,8 @@ ${reconciliationSweepTests(claim, estadoDeEspera(claim, enumType), otroEstado(en
       `${packages.port}.${entity.name}Repository`,
       `${packages.adapters}.${entity.name}RepositoryImpl`,
       ...importsDeEnums(entity, enumType, packages),
+      `${packages.purge}.BatchedPurge`,
+      'org.springframework.data.domain.PageRequest',
       'java.time.Instant',
       'java.util.UUID',
       'org.junit.jupiter.api.BeforeEach',

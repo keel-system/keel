@@ -314,7 +314,8 @@ test('la tabla de elementos hereda la longitud del value type y el índice de la
     entity.includes(
       '@CollectionTable(name = "notification_copy_recipients", joinColumns = @JoinColumn(name = "notification_id", ' +
         'foreignKey = @ForeignKey(name = "fk_notification_copy_recipients_notification")), ' +
-        'indexes = @Index(name = "idx_notifications_copy_recipients", columnList = "copy_recipients, notification_id"))'
+        'indexes = { @Index(name = "idx_notifications_copy_recipients", columnList = "copy_recipients, notification_id"), ' +
+        '@Index(name = "ix_notification_copy_recipients_notification_id", columnList = "notification_id") })'
     ),
     'el índice declarado sobre la lista no se materializa en su tabla de elementos'
   );

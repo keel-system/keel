@@ -347,34 +347,85 @@ function useCaseHelpers(telemetry) {
     }${observationOf}`;
 }
 
-// El conflicto de escritura TRANSITORIO del modelo documental (hallazgo 7 de R9). En una
-// transacción de MongoDB, dos escrituras concurrentes sobre el mismo documento no esperan: el
-// perdedor aborta al momento con un WriteConflict (código 112, etiqueta TransientTransactionError).
-// En relacional ese mismo perdedor habría esperado al bloqueo y fallado con el error DECLARADO —la
-// unicidad con su code, o el @Version con CONCURRENT_MODIFICATION—; aquí llegaba al catch-all como
-// 500. Traducirlo a un 409 fijo tampoco iguala los dos motores: el code sería otro. Lo que los
-// iguala es REINTENTAR la transacción, que es lo que recomienda MongoDB para esa etiqueta: en el
-// reintento el perdedor ya ve lo confirmado y falla con el error declarado. Agotado el reintento,
-// sale como conflicto de concurrencia optimista, que el ApiExceptionHandler ya traduce a 409.
-function writeConflictRetry() {
+// El conflicto de escritura TRANSITORIO, en los dos modelos y con dos clasificadores.
+//
+// Documental (hallazgo 7 de R9): en una transacción de MongoDB dos escrituras concurrentes sobre el
+// mismo documento no esperan: el perdedor aborta al momento con un WriteConflict (código 112,
+// etiqueta TransientTransactionError) y llegaba al catch-all como 500.
+//
+// Relacional: el comentario que estuvo aquí decía que «el motor serializa y no hay nada que
+// reintentar», y es cierto para dos escrituras sobre UNA fila —el perdedor espera al bloqueo y falla
+// con el error declarado—, pero no para un INTERBLOQUEO: dos transacciones que toman dos filas en
+// orden inverso, o en InnoDB los bloqueos de hueco de un índice único y los compartidos de una FK.
+// El motor aborta a una (40P01 en PostgreSQL, 1213 en MySQL y MariaDB, 1205 en SQL Server, ORA-00060
+// en Oracle) y Spring la traduce a PessimisticLockingFailureException en los cinco; llegaba al
+// catch-all como 500.
+//
+// Lo que iguala los dos modelos es REINTENTAR la transacción: en el reintento el perdedor ya ve lo
+// confirmado y falla con el error declarado, o pasa. Agotado el reintento, sale como conflicto de
+// concurrencia (409 CONCURRENT_MODIFICATION). Lo que NO se reintenta nunca: el conflicto de @Version
+// —reintentarlo a ciegas reaplicaría la intención obsoleta del cliente y escondería la actualización
+// perdida, y por eso es un 409— ni el tope de transacción, que no es un conflicto sino lentitud.
+function writeConflictRetry(document) {
+  const exhausted = document ? 'OptimisticLockingFailureException' : 'ObjectOptimisticLockingFailureException';
+  const classifier = document
+    ? `    /**
+     * Se busca en la CADENA de causas y no por la clase de Spring que la envuelve: el traductor de
+     * excepciones de Spring Data MongoDB no fija a qué DataAccessException va un WriteConflict.
+     *
+     * <p>Visible en el paquete para que store-check lo mida contra el error que da el motor.
+     */
+    static boolean isTransientWriteConflict(Throwable ex) {
+        for (Throwable cause = ex; cause != null; cause = cause.getCause() == cause ? null : cause.getCause()) {
+            if (cause instanceof MongoException mongo
+                    && (mongo.hasErrorLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL) || mongo.getCode() == 112)) {
+                return true;
+            }
+        }
+        return false;
+    }`
+    : `    /**
+     * El interbloqueo y la espera de bloqueo agotada, que Spring traduce a
+     * PessimisticLockingFailureException en los cinco motores. Se busca en la CADENA de causas porque
+     * al confirmar la transacción el error puede llegar envuelto. Ni el conflicto de @Version
+     * (OptimisticLockingFailureException, otra rama de la jerarquía) ni el tope de transacción
+     * (QueryTimeoutException) caen aquí: ninguno se arregla repitiendo.
+     *
+     * <p>Visible en el paquete para que store-check lo mida contra el error que da el motor.
+     */
+    static boolean isTransientWriteConflict(Throwable ex) {
+        for (Throwable cause = ex; cause != null; cause = cause.getCause() == cause ? null : cause.getCause()) {
+            if (cause instanceof PessimisticLockingFailureException) {
+                return true;
+            }
+        }
+        return false;
+    }`;
+  const what = document
+    ? 'MongoDB: dos transacciones que tocan el mismo documento a la vez, y el motor aborta a la que\n     * llega segunda en vez de hacerla esperar'
+    : 'un motor relacional: un interbloqueo entre dos transacciones que toman filas en orden\n     * inverso, y el motor aborta a una de las dos';
   return `
 
-    /** Intentos de una transacción de escritura que pierde un conflicto transitorio de MongoDB. */
+    /** Intentos de una transacción de escritura que pierde un conflicto transitorio. */
     private static final int WRITE_CONFLICT_ATTEMPTS = 3;
 
     /**
      * Reintenta la transacción de escritura cuando pierde un conflicto de escritura TRANSITORIO de
-     * MongoDB: dos transacciones que tocan el mismo documento a la vez, y el motor aborta a la que
-     * llega segunda en vez de hacerla esperar. En el reintento esa transacción ve lo que la otra
-     * confirmó y falla con el error que el diseño declara (la unicidad, el bloqueo optimista), que es
-     * lo mismo que ve el perdedor en un motor relacional. Agotados los intentos, sale como conflicto
-     * de concurrencia optimista (409).
+     * ${what}. En el reintento ve lo que la otra confirmó y falla con el error que el diseño declara
+     * (la unicidad, el bloqueo optimista), o pasa. Agotados los intentos, sale como conflicto de
+     * concurrencia (409).
      *
      * <p>El reintento repite el handler ENTERO, así que dentro de la transacción no puede haber
      * efectos que salgan del proceso (llamar a un proveedor, mandar un correo): la constitución ya lo
      * prohíbe, y aquí se vería como un efecto duplicado.
+     *
+     * <p>Dentro de una transacción AJENA no se reintenta: la del llamante ya quedó marcada para
+     * revertir, y repetir el handler en ella solo cambiaría el error por otro más confuso.
      */
     private <T> T retryingWriteConflicts(Supplier<T> transaction) {
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            return transaction.get();
+        }
         for (int attempt = 1; ; attempt++) {
             try {
                 return transaction.get();
@@ -383,7 +434,7 @@ function writeConflictRetry() {
                     throw ex;
                 }
                 if (attempt >= WRITE_CONFLICT_ATTEMPTS) {
-                    throw new OptimisticLockingFailureException(
+                    throw new ${exhausted}(
                             "Conflicto de escritura concurrente tras " + attempt + " intentos", ex);
                 }
                 log.atDebug().addKeyValue("keel.attempt", attempt)
@@ -393,19 +444,7 @@ function writeConflictRetry() {
         }
     }
 
-    /**
-     * Se busca en la CADENA de causas y no por la clase de Spring que la envuelve: el traductor de
-     * excepciones de Spring Data MongoDB no fija a qué DataAccessException va un WriteConflict.
-     */
-    private static boolean isTransientWriteConflict(Throwable ex) {
-        for (Throwable cause = ex; cause != null; cause = cause.getCause() == cause ? null : cause.getCause()) {
-            if (cause instanceof MongoException mongo
-                    && (mongo.hasErrorLabel(MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL) || mongo.getCode() == 112)) {
-                return true;
-            }
-        }
-        return false;
-    }
+${classifier}
 
     private static void pause(int attempt) {
         try {
@@ -419,9 +458,10 @@ function writeConflictRetry() {
 
 function renderMediator(model) {
   const transactional = model.layersPresent.persistence;
-  const retriesConflicts = transactional && model.persistenceKind === 'document';
-  // Con el modelo documental, la transacción de escritura pasa por el reintento del conflicto
-  // transitorio; con el relacional el motor serializa y no hay nada que reintentar.
+  const document = model.persistenceKind === 'document';
+  // Con persistencia, toda transacción de escritura pasa por el reintento del conflicto transitorio:
+  // el WriteConflict en documental, el interbloqueo en relacional (ver writeConflictRetry).
+  const retriesConflicts = transactional;
   const write = (expression) => (retriesConflicts ? `retryingWriteConflicts(() -> ${expression})` : expression);
   const writeVoid = (statement) =>
     retriesConflicts ? `retryingWriteConflicts(() -> { ${statement}; return null; })` : statement;
@@ -483,7 +523,7 @@ function renderMediator(model) {
         return ${call('command', write('writeTransaction.execute(status -> instance.handle(command))'))};
     }
 
-${dispatchWithoutTransaction(obs)}${helpers}${retriesConflicts ? writeConflictRetry() : ''}`;
+${dispatchWithoutTransaction(obs)}${helpers}${retriesConflicts ? writeConflictRetry(document) : ''}`;
   } else {
     members = `    private final UseCaseContainer useCaseContainer;${registryField}
 
@@ -544,9 +584,14 @@ ${dispatchers}
   }
   if (retriesConflicts) {
     imports.push(
-      'com.mongodb.MongoException',
       'java.util.concurrent.ThreadLocalRandom',
-      'org.springframework.dao.OptimisticLockingFailureException'
+      'org.springframework.transaction.support.TransactionSynchronizationManager',
+      ...(document
+        ? ['com.mongodb.MongoException', 'org.springframework.dao.OptimisticLockingFailureException']
+        : [
+            'org.springframework.dao.PessimisticLockingFailureException',
+            'org.springframework.orm.ObjectOptimisticLockingFailureException'
+          ])
     );
   }
 
