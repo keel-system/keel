@@ -3,10 +3,9 @@
 // soportado por `keel-core` (HARNESSES). Se emiten todos: el proyecto sirve para cualquiera sin
 // decidir nada al generarlo.
 //
-// Estado (incremento 4 de PLAN-KEEL-NEST.md): el dominio y la aplicación se generan, pero todavía
-// no hay pipeline de agentes —llega en el incremento 7, con el arnés de integración—, así que la
-// skill dice exactamente eso y lo que sí se puede hacer ya, en vez de prometer una generación que
-// no existe.
+// Estado (incremento 7b de PLAN-KEEL-NEST.md): el arnés de integración ya se genera, pero todavía
+// no hay pipeline de agentes —llega en el 7c—, así que la skill dice exactamente eso y lo que sí se
+// puede hacer ya, en vez de prometer una generación que no existe.
 
 import { HARNESSES, applyTokens } from 'keel-core';
 import { SKILL } from '../lib/assets.js';
@@ -47,14 +46,27 @@ npm test               # arranque bajo el perfil test y sondas
 npm run build && npm start   # GET /livez y /readyz → {"status":"UP"}
 \`\`\`
 
+## Escenarios FL-* (arnés de integración)
+
+\`\`\`bash
+bash infra/up.sh && bash infra/validate-infra.sh   # la infraestructura de prueba (docker o podman)
+bash infra/score-scenarios.sh                      # humo del arnés + suite + matriz FL-*
+\`\`\`
+
+- Una prueba de flujo por archivo en \`test/integration/<flujo>.test.ts\`, con \`useFlow()\` de \`test/integration/support/flow.ts\` y el id delante de los dos puntos en el título de cada caso (\`FL-PRD-001-A: …\`).
+- **Caja negra**: un flujo habla con el servidor por HTTP y JSON y no importa nada de \`src/\` (regla \`flujos-caja-negra\` de \`npm run check:architecture\`).
+- El reset es por flujo (\`infra/reset-db.sh\`, que \`useFlow()\` ya llama); cada fallo deja su evidencia en \`build/keel-failures/<FL-id>.json\`.
+- \`score-scenarios.sh\` sale con 0 (todo OK), 1 (hay algo que arbitrar) o 2 (arnés o precondición rota).
+
 ## Estado del generador
 
 keel-nest se construye por incrementos (PLAN-KEEL-NEST.md del repo de Keel). Esta versión genera el
 proyecto que arranca, su configuración, sus sondas, el dominio (value objects con sus guardas,
 agregados con su lifecycle, errores, eventos) y la capa de aplicación (mensajes, handlers, DTOs,
-mappers y el mediator) y la API REST (un controlador por grupo en \`src/infrastructure/rest/controllers\`,
-la lectura y validación de cada petición, \`ErrorResponse\` y la correlación \`X-Correlation-Id\`); el
-pipeline de agentes de \`/${SKILL}\` llega en el incremento 7. Los controladores son de build: la
+mappers y el mediator), la API REST (un controlador por grupo en \`src/infrastructure/rest/controllers\`,
+la lectura y validación de cada petición, \`ErrorResponse\` y la correlación \`X-Correlation-Id\`), la
+persistencia relacional y el arnés de integración que puntúa los escenarios; el pipeline de agentes de
+\`/${SKILL}\` está en construcción (incremento 7 del plan). Los controladores son de build: la
 lógica va en los handlers, nunca en ellos.${
     (model.formatTypes ?? []).length > 0
       ? '\n\n`infra/check-domain-guards.sh` sale en ROJO recién generado a propósito: el formato de los value types escalares lo hace cumplir `<Tipo>Format.validate(...)`, y esa llamada es del agente.'
@@ -74,11 +86,10 @@ description: Completa la generación de este microservicio NestJS a partir del d
 
 Este proyecto lo generó \`keel-nest build\` desde \`specs/${service.name}\` v${service.version}.
 
-**Todavía no hay pipeline de completado.** keel-nest se construye por incrementos y el orquestador de
-subagentes (código, infraestructura, pruebas de integración, validación funcional y calidad) llega en el
-incremento 7 de PLAN-KEEL-NEST.md, junto con el arnés que puntúa los escenarios \`FL-*\`. No escribas el
-servidor a mano a partir de \`specs/\` para suplirlo: sin el arnés no hay forma de saber si es equivalente
-al que genera keel-spring del mismo diseño, que es el objetivo.
+**Todavía no hay pipeline de completado.** keel-nest se construye por incrementos: el arnés que puntúa
+los escenarios \`FL-*\` ya está (\`infra/score-scenarios.sh\`), pero el orquestador de subagentes
+(código, infraestructura, pruebas de integración, validación funcional y calidad) está en construcción
+(incremento 7 de PLAN-KEEL-NEST.md). No escribas el servidor a mano a partir de \`specs/\` para suplirlo.
 
 Lo que sí puedes hacer ahora, con el cwd en esta raíz:
 
@@ -86,6 +97,9 @@ Lo que sí puedes hacer ahora, con el cwd en esta raíz:
 2. \`npm run typecheck && npm test\` — el proyecto compila y arranca bajo el perfil \`test\`.
    \`npm run check:architecture\` — el dominio y la aplicación no importan el framework.
 3. \`npm run build && npm start\` — \`GET /livez\` y \`GET /readyz\` responden \`{"status":"UP"}\`.
+4. \`bash infra/up.sh && bash infra/validate-infra.sh && bash infra/score-scenarios.sh\` — la
+   infraestructura de prueba y el humo del arnés (sin pruebas de flujo, la matriz sale vacía y el
+   script sale con 2).
 
 Si algo de eso falla en un proyecto recién generado, es un defecto de keel-nest: repórtalo con la salida.
 `;

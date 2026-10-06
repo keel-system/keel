@@ -524,6 +524,34 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   su `historyTable` (33 `reset-db.sh` en rojo). `keel-core/test/infra-scripts.test.js` mide con una
   plataforma de juguete que cada texto llega a su archivo y ninguno de otro generador, y que ningún
   motor deja el placeholder sin sustituir (falsado quitando la sustitución en mayúsculas: cae Oracle).
+- **Estado: 7b hecho (2026-10-06)**, en dos commits:
+  - **La lectura del XML, en `keel-core/gen`** (`junit-scoring.js`): los dos programas awk de la matriz y
+    el sello de `specs/`. Y un **defecto latente** que destapó Vitest: `/name="…"/` casaba DENTRO de
+    `classname="…"`; Gradle escribe `name` primero y por eso nunca se vio, Vitest lo escribe al revés y
+    la matriz salía vacía sobre una suite en verde. `keel-core/test/junit-scoring.test.js` EJECUTA los dos
+    programas con los dos órdenes (falsado con el awk anterior: caen los dos casos de Vitest). En
+    keel-spring solo cambia `score-scenarios.sh` (comentarios y ese patrón): línea base regenerada.
+  - **El arnés en keel-nest**: `infra.js` (la plataforma: textos, y el historial `typeorm_migrations`,
+    que el `DataSource` declara con `migrationsTableName` en vez del `migrations` por defecto, un nombre
+    que un diseño puede usar) e `integration-tests.js`: `vitest.integration.config.ts` (en serie, JUnit con
+    el título del caso en `name` y el archivo en `classname`), `test/integration/support/flow.ts`
+    (`useFlow()`: servidor real en un puerto libre bajo `local`, `fetch` de verdad, reset por flujo,
+    `db()` con el `cliQueryArgv` del catálogo, evidencia en `build/keel-failures/<FL-id>.json` con el
+    formato de keel-spring), el humo y `infra/score-scenarios.sh` con los mismos códigos 0/1/2. Regla
+    nueva `flujos-caja-negra` en `.dependency-cruiser.json`: un flujo no importa `src/`.
+  - **Puerta medida**: `test/integration-harness.test.js` (sin red): la `infra/` de las 13 fixtures es la
+    de keel-spring salvo los textos de la plataforma, el reset excluye la tabla que declara el
+    `DataSource`, y el script lleva los programas compartidos. `npm run harness-check` (nuevo, podman o
+    docker) **18/18**: genera el diseño de referencia, levanta `infra/` con sus propios scripts y puntúa
+    flujos SONDA — uno verde que además mide el reset contra la base real (vacía los datos y respeta el
+    historial), uno rojo con su evidencia (petición, respuesta, aserción), uno que no arranca y uno que
+    rompe la caja negra —, y cada desenlace sale con su código (1, 2, 0, y 2 con el sello roto). Falsado
+    cambiando la tabla de historial de la plataforma: cae la sonda del reset. `ts-check` 11/11: el
+    arnés compila con `strict` en las 13 fixtures.
+  - **Diferencias con keel-spring, a la vista**: en Vitest un `beforeAll` que revienta da los casos por
+    OMITIDOS (no hay `initializationError`), así que el arnés vuelca `<flujo>-init.json` y el script lo
+    lista como arnés roto; el código 3 (workers de Gradle que sostienen `build/`) no existe aquí. Y el
+    reset es automático en `useFlow()` (en keel-spring lo llama el `@BeforeAll` que escribe el agente).
 
 ### Inc. 8 — Seguridad
 

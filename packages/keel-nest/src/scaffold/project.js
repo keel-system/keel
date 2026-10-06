@@ -60,8 +60,11 @@ function packageJson(model) {
       'start:dev': 'nest start --watch',
       typecheck: 'tsc -p tsconfig.json --noEmit',
       test: 'vitest run',
+      // Los flujos FL-* contra la infraestructura de infra/ (bash infra/up.sh); para puntuarlos,
+      // bash infra/score-scenarios.sh.
+      'test:integration': 'vitest run --config vitest.integration.config.ts',
       // La frontera hexagonal (.dependency-cruiser.json): dominio y aplicación sin framework.
-      'check:architecture': 'depcruise src --config .dependency-cruiser.json'
+      'check:architecture': 'depcruise src test/integration --config .dependency-cruiser.json'
     },
     dependencies: {
       '@nestjs/common': NEST_VERSION,
@@ -113,7 +116,7 @@ function tsconfig() {
       noImplicitOverride: true,
       types: ['vitest/globals', 'node']
     },
-    include: ['src', 'test', 'vitest.config.ts']
+    include: ['src', 'test', 'vitest.config.ts', 'vitest.integration.config.ts']
   };
   return `${JSON.stringify(config, null, 2)}\n`;
 }
@@ -146,6 +149,8 @@ export default defineConfig({
     globals: true,
     root: './',
     include: ['test/**/*.test.ts'],
+    // Los flujos FL-* necesitan la infraestructura: van en su propia configuración.
+    exclude: ['test/integration/**', 'node_modules/**'],
     // Las pruebas arrancan la aplicación bajo el perfil \`test\`, sin infraestructura externa.
     env: { PROFILE: 'test' }
   }

@@ -16,6 +16,7 @@
 // arrancan sin infraestructura, y quien toque un repositorio recibe un error que lo dice. Lo que
 // juzga el esquema contra un motor real es `npm run ts-check` de keel-nest, que levanta uno.
 
+import { MIGRATIONS_TABLE } from './infra.js';
 import {
   constraintErrors,
   declaredConcurrencyError,
@@ -192,6 +193,8 @@ ${driverOptions}
     synchronize: configuration.get('database.synchronize') === true || configuration.get('database.synchronize') === 'true',
     // El esquema fuera de local: las migraciones del baseline (migrations/README.md).
     migrations: ['dist/migrations/*.js'],
+    // El historial con nombre propio: infra/reset-db.sh lo respeta por nombre (ver infra.js).
+    migrationsTableName: '${MIGRATIONS_TABLE}',
     logging: configuration.get('database.show-sql') === true || configuration.get('database.show-sql') === 'true' ? ['query', 'error'] : ['error']
   };
   return { enabled: true, transactionTimeoutMs, options };

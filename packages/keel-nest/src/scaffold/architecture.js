@@ -51,6 +51,15 @@ function config() {
         to: { dependencyTypes: npm, pathNot: packagesPattern() }
       },
       {
+        name: 'flujos-caja-negra',
+        comment:
+          'Una prueba de flujo habla con el servidor por HTTP y JSON, nunca importando el servicio: es lo que la hace ' +
+          'equivalente a la del servidor de keel-spring. Solo test/integration/support arranca el servidor.',
+        severity: 'error',
+        from: { path: '^test/integration/', pathNot: '^test/integration/support/' },
+        to: { path: '^src/' }
+      },
+      {
         name: 'dominio-y-aplicacion-sin-imports-rotos',
         comment: 'Un import que no se resuelve no se puede juzgar: sería la forma de saltarse las otras reglas sin que se note.',
         severity: 'error',

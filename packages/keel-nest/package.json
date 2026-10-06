@@ -10,7 +10,8 @@
     "test": "node --test",
     "ts-check": "node scripts/ts-check.js",
     "db-check": "node scripts/db-check.js",
-    "matrix": "node scripts/support-matrix.js"
+    "matrix": "node scripts/support-matrix.js",
+    "harness-check": "node scripts/harness-check.js"
   },
   "files": [
     "src",

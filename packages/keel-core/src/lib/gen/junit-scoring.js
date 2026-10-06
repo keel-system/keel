@@ -58,7 +58,9 @@ export const JUNIT_MATRIX_AWK = `  BEGIN { RS = "<testcase " }
     else seg = rec
 
     name = ""; cls = ""
-    if (match(seg, /name="[^"]*"/)) name = substr(seg, RSTART + 6, RLENGTH - 7)
+    # El atributo EXACTO: un /name=/ a secas casa dentro de classname="…", y el orden de los
+    # dos lo decide el runner (Gradle escribe name primero; Vitest, classname).
+    if (match(" " seg, /[ \\t\\n]name="[^"]*"/)) name = substr(" " seg, RSTART + 7, RLENGTH - 8)
     if (match(seg, /classname="[^"]*"/)) cls = substr(seg, RSTART + 11, RLENGTH - 12)
     if (name == "") next
 
@@ -94,7 +96,7 @@ export const JUNIT_NON_SCENARIO_AWK = `    BEGIN { RS = "<testcase " }
       else if (self_tag > 0) seg = substr(rec, 1, self_tag)
       else seg = rec
       name = ""; cls = ""
-      if (match(seg, /name="[^"]*"/)) name = substr(seg, RSTART + 6, RLENGTH - 7)
+      if (match(" " seg, /[ \\t\\n]name="[^"]*"/)) name = substr(" " seg, RSTART + 7, RLENGTH - 8)
       if (match(seg, /classname="[^"]*"/)) cls = substr(seg, RSTART + 11, RLENGTH - 12)
       if (name == "" || cls == "") next
       if (seg !~ /<(failure|error)[ >]/) next

@@ -36,6 +36,8 @@ import * as controllers from './controllers.js';
 import * as apiTests from './api-tests.js';
 import * as health from './health.js';
 import * as appTests from './app-tests.js';
+import * as infra from './infra.js';
+import * as integrationTests from './integration-tests.js';
 import * as readme from './readme.js';
 import * as generatorDocs from './generator-docs.js';
 
@@ -73,6 +75,10 @@ const GENERATORS = [
   domainGuardsCheck,
   appTests,
   apiTests,
+  // La infraestructura de prueba (neutral, keel-core/gen) y el arnés de integración que puntúa los
+  // escenarios FL-* contra ella (incremento 7).
+  infra,
+  integrationTests,
   readme,
   generatorDocs
 ];
