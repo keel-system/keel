@@ -17,6 +17,7 @@
     "mongo-check": "node scripts/mongo-check.js",
     "telemetry-check": "node scripts/telemetry-check.js asset-vault && node scripts/telemetry-check.js notification-mailer",
     "matrix": "node scripts/support-matrix.js",
+    "golden": "node scripts/golden-digest.js",
     "mapping-check": "node scripts/mapping-check.js stock-reservation && node scripts/mapping-check.js stock-reservation --database=mysql && node scripts/mapping-check.js job-dispatch && node scripts/mapping-check.js job-dispatch --database=mysql && node scripts/mapping-check.js job-dispatch-mongo && node scripts/mapping-check.js notification-mailer",
     "index-check": "node scripts/index-check.js notification-mailer && node scripts/index-check.js notification-mailer --database=mysql && node scripts/index-check.js notification-mailer-mongo",
     "deploy-check": "node scripts/deploy-check.js job-dispatch"
