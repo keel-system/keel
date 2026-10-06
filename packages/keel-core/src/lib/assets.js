@@ -65,7 +65,8 @@ export const CUSTOMIZABLE_PAYLOAD = [
 // Generadores conocidos: cada uno es un paquete npm independiente con CLI propia.
 // Se instalan con `npm i -g <paquete>` y se preparan con `<paquete> build specs/<servicio>`.
 export const KNOWN_GENERATORS = {
-  spring: 'keel-spring'
+  spring: 'keel-spring',
+  nest: 'keel-nest'
 };
 
 export function isKeelWorkspace(dir) {

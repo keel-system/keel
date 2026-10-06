@@ -183,6 +183,33 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   --noEmit` + arrancar y pedir `/livez`) verde sobre un proyecto vacío.
 - **Salida**: `keel list` muestra `nest`; un fixture con solo dominio genera un proyecto que
   compila y arranca.
+- **Estado: hecho (2026-10-06)**, en dos tramos:
+  - **2a** — el tronco de `build` pasa a `keel-core/gen` antes de escribir keel-nest, para que
+    no lo copie: `design-gate.js` (la puerta del diseño, ahora la misma para los dos generadores),
+    `stack.js` (cuestionario y `resolveStack`, con la pregunta de identidad del lenguaje como
+    gancho), `materialize.js` (escritura con manifiesto), `project-writer.js`,
+    `generated-manifest.js`, `specs-seal.js`, `keel-docs.js` y `prompt.js`. keel-spring los usa;
+    golden idéntico.
+  - **2b** — el paquete: `keel-nest build|check`, la frontera, la proyección TypeScript y un
+    proyecto que arranca. `npm run ts-check` sale **7/7**: genera, instala, compila con `strict`,
+    pasa sus pruebas, construye, arranca y responde `/livez` y `/readyz` con
+    `{"status":"UP"}`. Falsado: saboteando el drenaje de `/readyz` cae exactamente su prueba. La
+    suite del paquete es de 46 casos, sin red, y uno de ellos cruza las 13 fixtures: con la
+    proyección TS el modelo nombra las mismas entidades, rutas, status y avisos que con la de Java.
+- **Cambios respecto a lo planificado**, con su motivo:
+  - **Vitest 5, no Jest.** NestJS 12 es solo ESM y Jest solo carga sus paquetes desde Node 24.9.
+    Tampoco sirve Vitest 4 (el de la plantilla de `nest new`): con la última Vite, npm 10 revienta
+    resolviendo sus peers. Vitest trae reporter JUnit, así que `score-scenarios.sh` (inc. 7) lee el
+    mismo XML.
+  - **Node 22.12+ y ESM** (`module: nodenext`, imports relativos con `.js`), por NestJS 12.
+  - **TypeScript `~6.0`**, el que declara la CLI de Nest 12; el 7 (nativo) todavía no.
+  - **Inyección siempre con `@Inject(<token>)`**, para que el arranque no dependa de qué
+    herramienta transforme el TypeScript (tsc al compilar, Vitest en las pruebas).
+  - **Sin `EVOLUTION.md` todavía**: el modo evolución llega en el inc. 15, como estaba previsto.
+  - **`check` de keel-spring sigue con su formato propio**; solo `build` comparte la puerta.
+  - **No medido en Windows**: el apagado ordenado tras SIGTERM, porque allí la señal mata el
+    proceso sin ejecutar los hooks. Lo cubre la prueba generada del drenaje, que no depende de la
+    señal, y `ts-check` lo mide en Linux y macOS.
 
 ### Inc. 3 — Contrato del cable (antes de emitir ningún DTO)
 

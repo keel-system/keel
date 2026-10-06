@@ -79,6 +79,10 @@ cd services/<servicio>-spring
 
 Qué genera `build`, qué deja al agente, el pipeline de cinco subagentes y la frontera entera: en `generado`. El scaffolding vive en `src/scaffold/` (un módulo por artefacto, patrón contexto precomputado + template literals) sobre `src/lib/` (`naming.js`, `type-mapper.js`, `model.js` —envuelve el `buildModel` neutral de `keel-core/gen` con `java-projection.js`, que es lo único que el modelo sabe de Java—, `writer.js`, `stack-catalog.js` (reexporta el catálogo neutral de `keel-core/gen/infra-catalog`) + `java-stack.js` (dependencias Gradle/Flyway y URL de conexión por opción) + `stack-config.js` + `prompt.js`). El proyecto sale estilo Spring Initializr: wrapper de Gradle vendorizado en `vendor/gradle-wrapper/` (fuera de `assets/`) e `infra/docker-compose.yaml` según el stack. Assets (todos son **fuente** del proyecto generado): `assets/agents/` y `assets/generators/spring/` (contrato, `orchestration.md`, `architecture.md`, `constitution.md`, `conventions/`, `skills/keel-spring-<tech>/`, `golden/`). Al añadir un agente o una convention, ampliar las listas `AGENTS`/`CONVENTIONS` de `src/scaffold/generator-docs.js`, que es el único punto de instalación.
 
+### `packages/keel-nest` — generador NestJS (CLI `keel-nest`), en construcción
+
+Se construye por incrementos evaluables según `PLAN-KEEL-NEST.md` (la raíz del repo lleva su estado), con un objetivo que gobierna todo: **el mismo diseño genera con keel-spring o con keel-nest servidores equivalentes**. Por eso no copia nada de keel-spring: importa de `keel-core/gen` la interpretación del diseño (`buildModel` con su proyección `src/lib/ts-projection.js`), la puerta (`gateDesign`), el stack y la escritura con manifiesto, y solo tiene sus renderizadores (`src/scaffold/`). Su **frontera avanza en código**: `src/lib/supported-features.js` rechaza cada capa que aún no genera nombrando el incremento que la trae, y cada incremento borra su entrada. El proyecto generado es NestJS 12 en **ESM** sobre Node 22.12+, TypeScript `~6.0` en `strict`, **Vitest 5** (no Jest: con Nest 12 solo carga desde Node 24.9; y no Vitest 4: con la última Vite npm 10 revienta resolviendo sus peers), y toda dependencia se inyecta con `@Inject(<token>)` explícito para no depender de `emitDecoratorMetadata`. Los tests derivan sus diseños de las fixtures compartidas quitando las capas fuera de la frontera (`test/helpers/workspace.js`, `NEST_READY_DESIGN`), nunca se inventan uno. **Red que juzga lo emitido**: `npm run ts-check --workspace packages/keel-nest` genera, instala, compila, prueba y arranca el proyecto y le pregunta a sus sondas — red y minutos, se pasa antes de dar por bueno cualquier cambio en lo que se emite.
+
 ## Comandos de desarrollo
 
 ```bash
@@ -87,6 +91,8 @@ npm test                                         # todos los workspaces (node --
 npm test --workspace packages/keel-core          # un paquete
 npm link --workspace packages/keel-core          # habilita `keel` local
 npm link --workspace packages/keel-spring        # habilita `keel-spring` local
+npm link --workspace packages/keel-nest          # habilita `keel-nest` local
+npm run ts-check --workspace packages/keel-nest  # genera, instala, compila, prueba y ARRANCA el proyecto Nest (red, minutos)
 node packages/keel-core/src/cli.js <cmd>         # ejecutar sin link
 npm run compile-check --workspace packages/keel-spring    # compila de verdad el arnés generado (JDK + red, minutos)
 npm run broker-check --workspace packages/keel-spring     # levanta la infra y ejercita los tres brokers (podman/docker)
