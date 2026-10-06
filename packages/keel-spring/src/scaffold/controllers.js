@@ -11,7 +11,7 @@
 import { callsPaymentGateway } from '../lib/payments-model.js';
 import { FRAMEWORK_ERRORS, conditionalUniquenessToken } from 'keel-core';
 import { callerResolution } from './security.js';
-import { declaredErrorFor, declaredUniquenessErrorFor, declaredReferenceError, errorByCode } from '../lib/declared-errors.js';
+import { declaredErrorFor, declaredUniquenessErrorFor, declaredReferenceError, errorByCode } from 'keel-core/gen';
 import { javaFile, javaPath, subPackage, javadoc } from './render.js';
 import {
   messageComponents,

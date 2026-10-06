@@ -29,7 +29,7 @@ import {
   CHAOS_OFF,
   REJECTED_DOMAIN
 } from '../lib/mail-probes.js';
-import { fastestSchedulePeriod } from '../lib/cron-period.js';
+import { fastestSchedulePeriod } from 'keel-core/gen';
 
 // Un literal de cadena Java: los cuerpos JSON de chaos llevan comillas dobles.
 const javaString = (value) => `"${String(value).replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;

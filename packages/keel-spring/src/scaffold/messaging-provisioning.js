@@ -12,7 +12,7 @@
 // Solo aplica a snssqs. Kafka autocrea topics y RabbitMQ declara sus exchanges y
 // colas desde la propia aplicación, así que ahí no hay topología que sembrar.
 
-import { deadLetterDestination, subscriptionDestination } from '../lib/dead-letter.js';
+import { deadLetterDestination, subscriptionDestination } from 'keel-core/gen';
 
 // Recepciones cuando el diseño NO declara `onFailure.retry`: una. Sin retry el diseño
 // dice «sin reintentos», y SQS mueve el mensaje a la DLQ al agotar la cuenta (que

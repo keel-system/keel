@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { cronPeriodSeconds, fastestSchedulePeriod } from '../src/lib/cron-period.js';
+import { cronPeriodSeconds, fastestSchedulePeriod } from '../src/lib/gen/cron-period.js';
 
 // Lo que se está midiendo no es "cuándo corre" sino "cuánto puede tardar en volver a
 // correr": es una cota superior, y de ahí que los casos comprueben el hueco MAYOR.

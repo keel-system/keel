@@ -23,7 +23,7 @@ import { rawJsonAnnotations } from './jackson.js';
 import { usesOutbox, outboxNames } from './outbox.js';
 import { correlationImport } from './correlation.js';
 import { usesTelemetry, messageTracingImport } from './telemetry.js';
-import { deadLetterDestination } from '../lib/dead-letter.js';
+import { deadLetterDestination } from 'keel-core/gen';
 import { credentialFinderName } from './repositories.js';
 
 const MESSAGING_PKG = 'infrastructure.messaging';

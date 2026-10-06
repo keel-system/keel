@@ -8,6 +8,7 @@
   },
   "exports": {
     ".": "./src/index.js",
+    "./gen": "./src/lib/gen/index.js",
     "./package.json": "./package.json"
   },
   "scripts": {

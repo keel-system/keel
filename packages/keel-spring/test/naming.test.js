@@ -1,41 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  pascalCase,
-  camelCase,
-  kebabCase,
-  snakeCase,
-  screamingSnake,
-  pluralize,
-  basePackage,
-  packageToPath
-} from '../src/lib/naming.js';
+import { basePackage, packageToPath } from '../src/lib/naming.js';
 
-test('pascalCase desde kebab, camel y snake', () => {
-  assert.equal(pascalCase('product-catalog'), 'ProductCatalog');
-  assert.equal(pascalCase('createProduct'), 'CreateProduct');
-  assert.equal(pascalCase('dead_letter'), 'DeadLetter');
-  assert.equal(pascalCase('Product'), 'Product');
-});
-
-test('camelCase y kebabCase', () => {
-  assert.equal(camelCase('ProductCreated'), 'productCreated');
-  assert.equal(kebabCase('ProductCreated'), 'product-created');
-  assert.equal(kebabCase('retireProduct'), 'retire-product');
-});
-
-test('snakeCase y screamingSnake', () => {
-  assert.equal(snakeCase('apiToken'), 'api_token');
-  assert.equal(screamingSnake('draft'), 'DRAFT');
-  assert.equal(screamingSnake('inReview'), 'IN_REVIEW');
-});
-
-test('pluralize con reglas simples', () => {
-  assert.equal(pluralize('product'), 'products');
-  assert.equal(pluralize('category'), 'categories');
-  assert.equal(pluralize('box'), 'boxes');
-  assert.equal(pluralize('batch'), 'batches');
-});
+// Las formas neutrales (pascal, kebab, snake, plural…) viven en keel-core/gen y se prueban allí.
+// Aquí solo lo propio de Java: el paquete base y su ruta.
 
 test('basePackage combina domain y nombre sin guiones', () => {
   assert.equal(

@@ -1,20 +1,24 @@
 // Dónde acaba un mensaje que agotó sus reintentos.
 //
 // `subscriptions.<E>.onFailure.deadLetter` es un booleano del DSL, y durante mucho
-// tiempo lo único que produjo fue una frase en el javadoc del listener («lo configura
+// tiempo lo único que produjo fue una frase en el comentario del listener («lo configura
 // el agente»). Eso dejaba el campo declarando una garantía que nada implementaba, y
 // además rompía por abajo los escenarios: un `Then` del tipo «el mensaje se confirma
 // sin acabar en la DLQ» no es asertable si la cola no existe, o si su nombre lo eligió
 // el agente y es distinto en cada proyecto.
 //
-// Este módulo es la fuente ÚNICA del destino de descarte. Lo consumen cuatro sitios que
-// tienen que coincidir exactamente o el mecanismo miente:
+// Este módulo es la fuente ÚNICA del destino de descarte. Lo consumen, en cada generador, cuatro
+// sitios que tienen que coincidir exactamente o el mecanismo miente:
 //
-//   - el aprovisionamiento de la topología (`messaging-provisioning.js` en SNS/SQS,
-//     y las clases de configuración que build genera para Kafka y RabbitMQ),
+//   - el aprovisionamiento de la topología (el script de SNS/SQS y la configuración
+//     que build genera para Kafka y RabbitMQ),
 //   - el arnés de integración, que lee ese destino para poder afirmar sobre él,
-//   - `scripts/broker-check.js`, que ejercita la entrega real contra los tres brokers,
-//   - la doctrina del javadoc, que ahora puede nombrar la cola concreta.
+//   - el `broker-check` del generador, que ejercita la entrega real contra los tres brokers,
+//   - la doctrina del comentario del listener, que ahora puede nombrar la cola concreta.
+//
+// Y vive en keel-core porque el nombre físico es CONTRATO: el servicio que genera keel-spring y el
+// que genera keel-nest del mismo diseño tienen que descartar en la misma cola, o la plataforma que
+// vigila esas colas deja de ver los mensajes de uno de los dos.
 //
 // Mismo criterio que `broker-probes.js`: si el nombre se escribiera a mano en cada
 // lado, un día el arnés leería una cola distinta de la que el servicio alimenta y el
@@ -26,7 +30,7 @@ import { kebabCase } from './naming.js';
  * Nombre físico del destino de descarte.
  *
  * No se unifica el sufijo entre brokers a propósito. En Kafka, `.DLT` es la convención
- * de Spring Kafka —la que aplica `DeadLetterPublishingRecoverer` por defecto y la que
+ * del cliente Kafka de Spring —la que aplica su recuperador por defecto, y la que
  * cualquiera espera al mirar la lista de topics—, y renombrarla obligaría a configurar
  * el recoverer solo para ser distintos. En SQS el sufijo `-dlq` ya estaba en uso por el
  * aprovisionamiento, y un punto no es válido en todos los nombres de cola. RabbitMQ se
@@ -65,7 +69,7 @@ export function deadLetterName(broker, destination) {
  * Era una convención escrita solo en la skill, y el arnés no tenía de dónde sacarla: tras parar
  * la réplica, la clase siguiente arrancaba con los grupos rebalanceando y agotaba su `await`, y el
  * agente lo parcheó con la lista de grupos y el bootstrap escritos a mano (corrida
- * stock-reservation R8). Ahora la emite config.js como propiedad, la lee el listener y el arnés
+ * stock-reservation R8). Ahora la emite la configuración generada como propiedad, la lee el listener y el arnés
  * espera a esos mismos grupos.
  */
 export function subscriptionGroupId(model, sub) {
@@ -80,7 +84,7 @@ export function subscriptionKey(sub) {
 export function subscriptionDestination(broker, model, sub) {
   if (broker === 'snssqs') return `${model.service.artifactId}-${kebabCase(sub.name)}`;
   // La cola propia sobre el canal ajeno, agrupada por origen: la deriva el modelo
-  // (lib/model.js § queueDefault), que es donde vive el saneado por broker.
+  // (`queueDefault`), que es donde vive el saneado por broker.
   if (broker === 'rabbitmq') return sub.queueDefault;
   return sub.topicDefault;
 }
@@ -118,8 +122,8 @@ export function subscriptionDestination(broker, model, sub) {
 export function publishedDestination(broker, model, channel) {
   // Los dos brokers en los que se publica a un sitio y se lee de otro, y en los dos el sitio
   // de lectura se llama como el canal: la cola de arnés de SNS/SQS
-  // (messaging-provisioning.js § harnessQueueName) y la cola por canal de RabbitMQ (skill
-  // keel-spring-rabbitmq § «Configuración del broker»). Resolver es la identidad y no hay
+  // (`harnessQueueName` del aprovisionamiento) y la cola por canal de RabbitMQ (la skill
+  // del broker de cada generador, § «Configuración del broker»). Resolver es la identidad y no hay
   // entrada que emitir.
   if (broker === 'snssqs' || broker === 'rabbitmq') return channel;
   return model.messaging?.destinationDefault ?? channel;

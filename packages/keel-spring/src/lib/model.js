@@ -16,7 +16,7 @@ import {
 } from './naming.js';
 import { resolveType, beanValidationAnnotations, columnAnnotations, inheritedTypePattern, numericConstraints } from './type-mapper.js';
 import { DATABASES, caseSensitiveCollationFor } from './stack-catalog.js';
-import { cronPeriodSeconds } from './cron-period.js';
+import { cronPeriodSeconds } from 'keel-core/gen';
 
 const CRUD_PREFIXES = ['create', 'get', 'list', 'update', 'delete'];
 
@@ -1093,7 +1093,7 @@ function collectOperations(layers, domainTypes, inlineEnumName, service, warning
       // que la operación escribe, esa constraint YA es la guarda —permanente y común a todas las
       // puertas por las que entre la operación—, así que un almacén aparte sería un segundo
       // registro de lo mismo que además caduca. Es el mismo tipo de derivación que hace
-      // `soleConstraint` en declared-errors.js, no una adivinanza.
+      // `soleConstraint` en keel-core/gen (declared-errors.js), no una adivinanza.
       idempotency: resolveIdempotency(op, targetEntity, layers),
       // Las transiciones del lifecycle que esta operación ejecuta (DSL 2.6). Aquí se
       // usan para el ORDEN de los efectos en el stub del handler; el TODO del método

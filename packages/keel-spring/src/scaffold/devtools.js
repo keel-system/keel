@@ -6,8 +6,8 @@
 // check por tecnología. Consume `selectedInfra(model)` de stack-catalog.js.
 
 import { createHash } from 'node:crypto';
-import { declaredBuckets } from '../lib/buckets.js';
-import { deadLetterDestination, deadLetterSubscriptions, subscriptionDestination } from '../lib/dead-letter.js';
+import { declaredBuckets } from 'keel-core/gen';
+import { deadLetterDestination, deadLetterSubscriptions, subscriptionDestination } from 'keel-core/gen';
 import { LOCAL_AWS_ENV, MC_BINARY_URL } from '../lib/stack-catalog.js';
 import { messagingTopologyChecks } from './messaging-provisioning.js';
 import { scopingClaimChecks } from './auth-provisioning.js';
@@ -318,7 +318,7 @@ export function resetDbScript(selected, service, model = null) {
   // mensajes entre flujos, que es justo lo que este script existe para impedir. Pasó dos veces:
   // con el canal lógico, y luego con el del emisor cuando RabbitMQ todavía se creía una cola.
   // El resolutor es el mismo que ya usa el descarte unas líneas más abajo: componerlo a mano es
-  // exactamente el error del que advierte el javadoc de `dead-letter.js`.
+  // exactamente el error del que advierte el comentario de `dead-letter.js` (keel-core/gen).
   const subscriptionQueues = broker
     ? (model?.subscriptions ?? []).map((sub) => subscriptionDestination(broker.id, model, sub))
     : [];

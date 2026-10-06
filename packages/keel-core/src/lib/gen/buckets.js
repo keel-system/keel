@@ -1,9 +1,9 @@
 // Nombre físico de los buckets declarados en storage.keel.yaml.
 //
 // Fuente única para las tres partes que tienen que coincidir o la subida acaba
-// en un bucket que nadie creó: el fragmento `parameters/<perfil>/storage.yaml`
-// (config.js), el sidecar `minio-init` del compose (stack-catalog.js) y la
-// comprobación de `infra/validate-infra.sh` (devtools.js).
+// en un bucket que nadie creó: la configuración de storage por perfil, el
+// sidecar `minio-init` del compose y la comprobación de `infra/validate-infra.sh`. Y entre
+// generadores: el servicio de keel-spring y el de keel-nest del mismo diseño usan el mismo bucket.
 //
 // El diseño nombra los buckets en camelCase (`productImages`) porque son
 // identificadores del DSL; S3 exige nombres DNS (minúsculas, guiones), así que

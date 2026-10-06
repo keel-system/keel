@@ -7,9 +7,9 @@
 import { AUTH, DATABASES, HTTP_STUB, TELEMETRY_INFRA, collectorHostEndpoint } from '../lib/stack-catalog.js';
 import { usesPartialIndexes } from './migrations.js';
 import { EMBEDDED_MONGO_VERSION } from '../lib/assets.js';
-import { physicalBucketName } from '../lib/buckets.js';
+import { physicalBucketName } from 'keel-core/gen';
 import { kebabCase, screamingSnake } from '../lib/naming.js';
-import { subscriptionDestination, subscriptionGroupId } from '../lib/dead-letter.js';
+import { subscriptionDestination, subscriptionGroupId } from 'keel-core/gen';
 import { recordedFailures } from '../lib/outbound-failures.js';
 import { usesOutbox } from './outbox.js';
 import { rabbitListenerRetry } from './dead-letter-config.js';

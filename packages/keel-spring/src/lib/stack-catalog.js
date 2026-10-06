@@ -31,7 +31,7 @@
 // depende del diseño y no solo del stack (hoy, el sidecar de buckets de MinIO);
 // el resto lo ignora.
 
-import { declaredBuckets } from './buckets.js';
+import { declaredBuckets } from 'keel-core/gen';
 import { validateCommand as mailValidateCmd, resetCommand as mailResetCmd, HTTP_PORT as MAIL_HTTP_PORT, SMTP_PORT as MAIL_SMTP_PORT, SERVICE as MAIL_SERVICE, IMAGE as MAIL_IMAGE, CHAOS_ENV as MAIL_CHAOS_ENV, SELECTIVE_REJECT_ENV as MAIL_SELECTIVE_REJECT_ENV } from './mail-probes.js';
 
 // Credenciales de la infraestructura de prueba local (LocalStack y MinIO las

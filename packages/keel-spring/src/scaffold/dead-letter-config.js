@@ -10,7 +10,7 @@
 // destino sale de `lib/dead-letter.js`, que es el mismo sitio del que lo lee el arnés.
 
 import { javaFile, javaPath, subPackage } from './render.js';
-import { deadLetterName, deadLetterSubscriptions, subscriptionDestination } from '../lib/dead-letter.js';
+import { deadLetterName, deadLetterSubscriptions, subscriptionDestination } from 'keel-core/gen';
 
 const MESSAGING_PKG = 'infrastructure.messaging';
 

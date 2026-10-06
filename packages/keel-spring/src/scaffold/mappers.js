@@ -12,7 +12,7 @@
 import { javaFile, javaPath, subPackage } from './render.js';
 import { domainMembers, domainSubPackage, capitalize } from './entities.js';
 import { ANNOTATIONS_PKG } from './mediator.js';
-import { isPublicBucket } from '../lib/buckets.js';
+import { isPublicBucket } from 'keel-core/gen';
 import { screamingSnake } from '../lib/naming.js';
 
 const MAPPER_PKG = 'application.mappers';

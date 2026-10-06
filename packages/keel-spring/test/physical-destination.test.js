@@ -19,7 +19,7 @@ import { tmpDir } from './helpers/tmp.js';
 import { loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
 import { harnessQueueName } from '../src/scaffold/messaging-provisioning.js';
-import { publishedDestination } from '../src/lib/dead-letter.js';
+import { publishedDestination } from 'keel-core/gen';
 import { FIXTURES_DIR } from './helpers/workspace.js';
 
 const fixturesDir = path.join(FIXTURES_DIR);

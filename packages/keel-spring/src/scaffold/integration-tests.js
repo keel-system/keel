@@ -23,7 +23,7 @@ import {
   deadLetterSubscriptions,
   publishedDestination,
   subscriptionDestination,
-  usesDeadLetter, subscriptionGroupId } from '../lib/dead-letter.js';
+  usesDeadLetter, subscriptionGroupId } from 'keel-core/gen';
 import { needsMessagingProvisioning } from './messaging-provisioning.js';
 import {
   setStateScript,
@@ -3989,7 +3989,7 @@ function bodyFileHelper(model) {
 // y son cláusulas que importan — distinguen «el duplicado se frenó con una guarda» de
 // «el duplicado reventó y el broker lo apartó», que desde el estado propio se ven igual.
 //
-// El destino sale de `lib/dead-letter.js`, el mismo sitio del que lo toman la topología
+// El destino sale de `keel-core/gen` (dead-letter.js), el mismo sitio del que lo toman la topología
 // y `broker-check`: si el arnés leyera un nombre compuesto aquí, un día leería una cola
 // distinta de la que el servicio alimenta y la aserción negativa saldría verde sin
 // haber mirado nada.

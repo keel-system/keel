@@ -114,7 +114,7 @@ Fila en `STRUCTURAL_DEFAULTS` (`keel-core/src/lib/structural-defaults.js`), con 
 
 ## Nuevo `code` que emita el generador sin que el diseño lo declare
 
-`keel-core/src/lib/framework-errors.js` + la tabla de `assets/core/docs/framework-errors.md` (un test ata las dos) + el emisor, que lo toma del catálogo vía `declaredErrorFor`/`effectiveErrorCode` de `keel-spring/src/lib/declared-errors.js` — **nunca** un literal en el scaffolding. La lista es cerrada a propósito: lo que no está en ella y tampoco en `errors[]` del diseño es `designGap`, no un código nuevo. Si el conflicto es sustituible, la entrada necesita `family`, y el aviso de `crossrefs.js` que lo anuncia va con ella
+`keel-core/src/lib/framework-errors.js` + la tabla de `assets/core/docs/framework-errors.md` (un test ata las dos) + el emisor, que lo toma del catálogo vía `declaredErrorFor`/`effectiveErrorCode` de `keel-core/src/lib/gen/declared-errors.js` — **nunca** un literal en el scaffolding. La lista es cerrada a propósito: lo que no está en ella y tampoco en `errors[]` del diseño es `designGap`, no un código nuevo. Si el conflicto es sustituible, la entrada necesita `family`, y el aviso de `crossrefs.js` que lo anuncia va con ella
 
 ## Nueva capa del DSL
 

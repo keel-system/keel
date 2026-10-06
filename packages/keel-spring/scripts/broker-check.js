@@ -32,7 +32,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadService } from 'keel-core';
-import { deadLetterDestination, subscriptionDestination, publishedDestination } from '../src/lib/dead-letter.js';
+import { deadLetterDestination, subscriptionDestination, publishedDestination } from 'keel-core/gen';
 import { resolveStack, scaffoldService } from '../src/scaffold/index.js';
 import { buildModel } from '../src/lib/model.js';
 import { subscriptionQueues } from '../src/scaffold/messaging-provisioning.js';

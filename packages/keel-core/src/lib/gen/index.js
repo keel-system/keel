@@ -1,0 +1,31 @@
+// Núcleo NEUTRAL de los generadores: lo que interpreta el diseño sin saber en qué lenguaje
+// se va a escribir. Se importa como `keel-core/gen`.
+//
+// Existe para que dos generadores del mismo diseño (keel-spring, keel-nest) tomen cada
+// decisión en UN sitio: el nombre físico de una cola, el `code` que sustituye a un canónico,
+// la cadencia de un barrido. Escrita dos veces, una decisión diverge al primer matiz, y dos
+// servidores del mismo diseño dejan de ser equivalentes sin que ningún test lo note.
+// Regla: nada de aquí nombra un tipo, una anotación ni una librería de un lenguaje concreto
+// (lo vigila test/gen-neutral.test.js).
+
+export { pascalCase, camelCase, kebabCase, snakeCase, screamingSnake, pluralize, brokerSafeName } from './naming.js';
+export {
+  declaredErrorFor,
+  effectiveErrorCode,
+  declaredUniquenessErrorFor,
+  declaredReferenceError,
+  namedUniquenessError,
+  errorByCode
+} from './declared-errors.js';
+export {
+  deadLetterName,
+  subscriptionGroupId,
+  subscriptionKey,
+  subscriptionDestination,
+  publishedDestination,
+  deadLetterDestination,
+  usesDeadLetter,
+  deadLetterSubscriptions
+} from './dead-letter.js';
+export { cronPeriodSeconds, fastestSchedulePeriod } from './cron-period.js';
+export { physicalBucketName, declaredBuckets, isPublicBucket } from './buckets.js';

@@ -51,7 +51,7 @@ imprime la MATRIZ DE PARIDAD y sus TRES listas: las dos colas de trabajo —lo S
 
 ## Cambio en el aislamiento entre flujos (`infra/reset-db.sh`)
 
-`keel-spring/src/scaffold/devtools.js` (`resetDbScript`) + `test/reset-purges.test.js`. Lo que se purga son **destinos reales**, no nombres lógicos del diseño: el canal de publicación coincide con su cola, pero una **suscripción** consume de la cola de su fuente, y el resolutor es `subscriptionDestination()` de `src/lib/dead-letter.js` — nunca se compone a mano. La purga es tolerante a fallo a propósito, así que purgar una cola inexistente no se ve: solo deja un `AVISO` por reset mientras la cola arrastra mensajes de un flujo al siguiente. El test lo cruza contra `DeadLetterConfig.java`, que es la otra proyección del mismo dato
+`keel-spring/src/scaffold/devtools.js` (`resetDbScript`) + `test/reset-purges.test.js`. Lo que se purga son **destinos reales**, no nombres lógicos del diseño: el canal de publicación coincide con su cola, pero una **suscripción** consume de la cola de su fuente, y el resolutor es `subscriptionDestination()` de `keel-core/src/lib/gen/dead-letter.js` — nunca se compone a mano. La purga es tolerante a fallo a propósito, así que purgar una cola inexistente no se ve: solo deja un `AVISO` por reset mientras la cola arrastra mensajes de un flujo al siguiente. El test lo cruza contra `DeadLetterConfig.java`, que es la otra proyección del mismo dato
 
 ## Cambio en la salida de `score-scenarios.sh` o en `FailureCapture`
 

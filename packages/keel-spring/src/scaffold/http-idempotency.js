@@ -19,7 +19,7 @@
 
 import { FRAMEWORK_ERRORS } from 'keel-core';
 import { purgeQueries, purgeSettings, purgeCall, purgeCallImports, PURGE_QUERY_IMPORTS } from './purge.js';
-import { declaredErrorFor } from '../lib/declared-errors.js';
+import { declaredErrorFor } from 'keel-core/gen';
 import { javaFile, javaPath, subPackage } from './render.js';
 
 const PORT_PKG = 'domain.idempotency';

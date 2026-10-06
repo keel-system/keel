@@ -7,7 +7,7 @@
 
 import { callsPaymentGateway } from '../lib/payments-model.js';
 import { FRAMEWORK_ERRORS } from 'keel-core';
-import { effectiveErrorCode, declaredUniquenessErrorFor } from '../lib/declared-errors.js';
+import { effectiveErrorCode, declaredUniquenessErrorFor } from 'keel-core/gen';
 import { javaFile, javaPath, subPackage, javadoc } from './render.js';
 import { kebabCase } from '../lib/naming.js';
 import { INTERFACES_PKG, ANNOTATIONS_PKG, MEDIATOR_PKG } from './mediator.js';
