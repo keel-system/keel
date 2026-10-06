@@ -46,7 +46,7 @@ import { usesTelemetry } from './telemetry.js';
 import { cognitoMockConfig, realmSpec, tokenUrl } from './auth-provisioning.js';
 import { kebabCase } from '../lib/naming.js';
 import { AUTH_PROVIDERS } from './security.js';
-import { RUNTIME_RESOLUTION, composeResolution, HOSTPATH_HELPER } from './devtools.js';
+import { RUNTIME_RESOLUTION, composeResolution, HOSTPATH_HELPER } from 'keel-core/gen/infra-scripts';
 import { LOCAL_API_KEY, LOCAL_CORS_ORIGINS, localClientApiKey } from './config.js';
 
 // Nombre de la variable de .env que publica cada puerto en el host. Explícito y no
@@ -691,7 +691,7 @@ function postmanEnvironment(model) {
 // ─── deploy/up.sh y deploy/down.sh ───────────────────────────────────────────
 
 // Detección de runtime y de frontend de compose. Ambas son las mismas que usan los
-// scripts de `infra/` y viven en devtools.js: un segundo criterio escrito aquí haría
+// scripts de `infra/` y viven en keel-core/gen/infra-scripts.js: un segundo criterio escrito aquí haría
 // que el diseñador y el pipeline resolvieran distinto en la misma máquina.
 const RUNTIME_PREAMBLE = `${RUNTIME_RESOLUTION}
 

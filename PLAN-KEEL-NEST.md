@@ -506,6 +506,24 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   Criterio: 100% `FL-*` OK, y la misma fixture en keel-spring también al 100%.
 - **Salida**: **primer servidor equivalente demostrado**. A partir de aquí cada incremento
   cierra con su corrida.
+- **Reparto en tramos** (como los anteriores, cada uno con su commit):
+  - **7a** — `infra/` neutral a `keel-core/gen` (compose, lanzadores, toolbox, validación y reset).
+  - **7b** — keel-nest emite `infra/`, `score-scenarios.sh` sobre el XML JUnit de Vitest, la base de
+    flujos con `FailureCapture` y el sello de `specs/`.
+  - **7c** — agentes, conventions y la skill `keel-generate-nest` con el pipeline.
+  - **7d** — la corrida (`/keel-generate-nest` sobre la fixture de silueta simple, y la misma en
+    keel-spring).
+- **Estado: 7a hecho (2026-10-06).** `keel-core/src/lib/gen/infra-scripts.js` escribe la `infra/`
+  entera; lo que cambia entre generadores son TEXTOS de su plataforma (cabeceras, el proceso olvidado
+  que comparte la infra, quién rehace el esquema tras `--schema`, el README del stub) más los checks y
+  archivos que solo él siembra (en keel-spring, la topología de snssqs). El alcance por recurso pasa a
+  llamarse desde el módulo neutral, porque `scopingClaimChecks` ya lo era. Los `cliResetCmd` del
+  catálogo nombran el historial de migraciones con `{history}`/`{HISTORY}` (era
+  `flyway_schema_history` escrito en cinco motores), y `concreteCmd` lo sustituye con el de la
+  plataforma. keel-spring: línea base idéntica (42 combinaciones, 10 453 archivos), falsada cambiando
+  su `historyTable` (33 `reset-db.sh` en rojo). `keel-core/test/infra-scripts.test.js` mide con una
+  plataforma de juguete que cada texto llega a su archivo y ninguno de otro generador, y que ningún
+  motor deja el placeholder sin sustituir (falsado quitando la sustitución en mayúsculas: cae Oracle).
 
 ### Inc. 8 — Seguridad
 

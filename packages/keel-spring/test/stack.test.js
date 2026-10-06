@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { tmpDir } from './helpers/tmp.js';
 import { select } from '../src/lib/prompt.js';
+import { concreteCmd } from '../src/scaffold/devtools.js';
 import { JAVA_DATABASES, JAVA_BROKERS, JAVA_CACHES, JAVA_STORAGE } from '../src/lib/java-stack.js';
 import {
   DATABASES,
@@ -140,10 +141,12 @@ test('cada dialecto RELACIONAL declara su módulo Flyway y protege el historial 
       `${id}: flywayDependencies debe incluir flyway-core`
     );
     // El reset entre flujos vacía datos, no el historial de migraciones: si lo
-    // truncara, el arranque siguiente reaplicaría el baseline y fallaría.
+    // truncara, el arranque siguiente reaplicaría el baseline y fallaría. El catálogo es
+    // neutral y nombra el historial con un placeholder: lo que se mide es el comando que
+    // keel-spring EMITE, con su plataforma.
     if (entry.cliResetCmd) {
       assert.ok(
-        /flyway_schema_history/i.test(entry.cliResetCmd),
+        /flyway_schema_history/i.test(concreteCmd(entry, 'svc', entry.cliResetCmd)),
         `${id}: cliResetCmd debe excluir flyway_schema_history`
       );
     }

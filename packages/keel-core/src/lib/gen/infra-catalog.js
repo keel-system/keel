@@ -9,9 +9,9 @@
 // infraestructura sea una sola definición es lo que hace que el servicio de keel-spring y el
 // de keel-nest del mismo diseño se prueben contra los MISMOS contenedores.
 //
-// Una asimetría conocida y anotada: los `cliResetCmd` excluyen `flyway_schema_history`, la
-// tabla de historial de migraciones de keel-spring. keel-nest la parametriza al introducir su
-// persistencia relacional (incremento 6 de PLAN-KEEL-NEST.md).
+// La tabla de historial de migraciones es de cada generador (Flyway en uno, TypeORM en otro):
+// los `cliResetCmd` la nombran con el placeholder `{history}` (`{HISTORY}` en mayúsculas) y la
+// sustituye `concreteCmd` de `infra-scripts.js` con la de la plataforma.
 //
 // Campos de validación (comunes a todas las categorías):
 //   serviceKey       clave del servicio en el docker-compose (hostname en-red);
@@ -57,7 +57,7 @@ export const LOCAL_AWS_ENV = {
 //                    (los Given de los flujos FL-* asumen BD limpia); mismos
 //                    placeholders y mismo cliVia que cliValidateCmd. Ausente ⇒
 //                    sin reset-db.sh.
-//                    SIEMPRE excluye flyway_schema_history: es el historial de
+//                    SIEMPRE excluye {history}, la tabla de historial de
 //                    migraciones, no datos del servicio; truncarlo haría que el
 //                    siguiente arranque reaplicase el baseline sobre tablas ya
 //                    existentes y fallara.
@@ -101,7 +101,7 @@ export const DATABASES = {
       '-v', 'ON_ERROR_STOP=1', '-q', '-t', '-A', '-c'
     ],
     cliResetCmd:
-      "PGPASSWORD='{pass}' psql -h db -U {user} -d {db} -v ON_ERROR_STOP=1 -q -c \"DO \\$\\$ DECLARE stmt text; BEGIN SELECT 'TRUNCATE TABLE ' || string_agg(quote_ident(tablename), ', ') || ' RESTART IDENTITY CASCADE' INTO stmt FROM pg_tables WHERE schemaname = 'public' AND tablename <> 'flyway_schema_history'; IF stmt IS NOT NULL THEN EXECUTE stmt; END IF; END \\$\\$;\"",
+      "PGPASSWORD='{pass}' psql -h db -U {user} -d {db} -v ON_ERROR_STOP=1 -q -c \"DO \\$\\$ DECLARE stmt text; BEGIN SELECT 'TRUNCATE TABLE ' || string_agg(quote_ident(tablename), ', ') || ' RESTART IDENTITY CASCADE' INTO stmt FROM pg_tables WHERE schemaname = 'public' AND tablename <> '{history}'; IF stmt IS NOT NULL THEN EXECUTE stmt; END IF; END \\$\\$;\"",
     cliDropSchemaCmd:
       "PGPASSWORD='{pass}' psql -h db -U {user} -d {db} -v ON_ERROR_STOP=1 -q -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'",
     alpinePackages: ['postgresql-client'],
@@ -129,7 +129,7 @@ export const DATABASES = {
     // terminal» y el proceso se queda esperando una entrada que nunca llega.
     cliQueryArgv: ({ user, pass, db }) => ['mysql', '-h', 'db', '-u', user, `-p${pass}`, '-N', '-B', db, '-e'],
     cliResetCmd:
-      "mysql -h db -u {user} -p'{pass}' -N -B -e 'SELECT CONCAT(\"TRUNCATE TABLE \", table_name, \";\") FROM information_schema.tables WHERE table_schema = \"{db}\" AND table_name <> \"flyway_schema_history\"' | mysql -h db -u {user} -p'{pass}' --init-command='SET FOREIGN_KEY_CHECKS=0' {db}",
+      "mysql -h db -u {user} -p'{pass}' -N -B -e 'SELECT CONCAT(\"TRUNCATE TABLE \", table_name, \";\") FROM information_schema.tables WHERE table_schema = \"{db}\" AND table_name <> \"{history}\"' | mysql -h db -u {user} -p'{pass}' --init-command='SET FOREIGN_KEY_CHECKS=0' {db}",
     cliDropSchemaCmd:
       "mysql -h db -u {user} -p'{pass}' -N -B -e 'SELECT CONCAT(\"DROP TABLE IF EXISTS \", table_name, \";\") FROM information_schema.tables WHERE table_schema = \"{db}\"' | mysql -h db -u {user} -p'{pass}' --init-command='SET FOREIGN_KEY_CHECKS=0' {db}",
     // `mysql-client` en Alpine es el cliente de MariaDB, y ese binario NO trae
@@ -203,7 +203,7 @@ export const DATABASES = {
     cliValidateCmd: "mariadb -h db -u {user} -p'{pass}' -e 'SELECT 1' {db}",
     cliQueryArgv: ({ user, pass, db }) => ['mariadb', '-h', 'db', '-u', user, `-p${pass}`, '-N', '-B', db, '-e'],
     cliResetCmd:
-      "mariadb -h db -u {user} -p'{pass}' -N -B -e 'SELECT CONCAT(\"TRUNCATE TABLE \", table_name, \";\") FROM information_schema.tables WHERE table_schema = \"{db}\" AND table_name <> \"flyway_schema_history\"' | mariadb -h db -u {user} -p'{pass}' --init-command='SET FOREIGN_KEY_CHECKS=0' {db}",
+      "mariadb -h db -u {user} -p'{pass}' -N -B -e 'SELECT CONCAT(\"TRUNCATE TABLE \", table_name, \";\") FROM information_schema.tables WHERE table_schema = \"{db}\" AND table_name <> \"{history}\"' | mariadb -h db -u {user} -p'{pass}' --init-command='SET FOREIGN_KEY_CHECKS=0' {db}",
     cliDropSchemaCmd:
       "mariadb -h db -u {user} -p'{pass}' -N -B -e 'SELECT CONCAT(\"DROP TABLE IF EXISTS \", table_name, \";\") FROM information_schema.tables WHERE table_schema = \"{db}\"' | mariadb -h db -u {user} -p'{pass}' --init-command='SET FOREIGN_KEY_CHECKS=0' {db}",
     alpinePackages: ['mariadb-client'],
@@ -256,7 +256,7 @@ export const DATABASES = {
     cliValidateCmd: "sqlcmd -S db -U {user} -P '{pass}' -C -Q 'SELECT 1'",
     cliQueryArgv: ({ user, pass, db }) => ['sqlcmd', '-S', 'db', '-U', user, '-P', pass, '-C', '-d', db, '-h', '-1', '-W', '-Q'],
     cliResetCmd:
-      "sqlcmd -S db -U {user} -P '{pass}' -C -d {db} -Q \"EXEC sp_MSforeachtable 'ALTER TABLE ? NOCHECK CONSTRAINT ALL'; EXEC sp_MSforeachtable @command1 = 'DELETE FROM ?', @whereand = 'AND o.name <> ''flyway_schema_history'''; EXEC sp_MSforeachtable 'ALTER TABLE ? WITH CHECK CHECK CONSTRAINT ALL'\"",
+      "sqlcmd -S db -U {user} -P '{pass}' -C -d {db} -Q \"EXEC sp_MSforeachtable 'ALTER TABLE ? NOCHECK CONSTRAINT ALL'; EXEC sp_MSforeachtable @command1 = 'DELETE FROM ?', @whereand = 'AND o.name <> ''{history}'''; EXEC sp_MSforeachtable 'ALTER TABLE ? WITH CHECK CHECK CONSTRAINT ALL'\"",
     cliDropSchemaCmd:
       "sqlcmd -S db -U {user} -P '{pass}' -C -d {db} -Q \"EXEC sp_MSforeachtable 'ALTER TABLE ? NOCHECK CONSTRAINT ALL'; EXEC sp_MSforeachtable 'DROP TABLE ?'\"",
     alpinePackages: [],
@@ -328,8 +328,8 @@ export const DATABASES = {
     cliValidateCmd: "echo 'SELECT 1 FROM dual;' | sqlplus -s {user}/{pass}@//localhost:1521/{service}",
     cliResetCmd:
       // UPPER(): en Oracle el historial puede quedar como identificador citado en
-      // minúsculas ("flyway_schema_history") o en mayúsculas según la versión.
-      'printf "BEGIN FOR t IN (SELECT table_name FROM user_tables WHERE UPPER(table_name) <> \'FLYWAY_SCHEMA_HISTORY\') LOOP EXECUTE IMMEDIATE \'TRUNCATE TABLE \' || t.table_name || \' CASCADE\'; END LOOP; END;\\n/\\n" | sqlplus -s {user}/{pass}@//localhost:1521/{service}',
+      // minúsculas o en mayúsculas según la versión.
+      'printf "BEGIN FOR t IN (SELECT table_name FROM user_tables WHERE UPPER(table_name) <> \'{HISTORY}\') LOOP EXECUTE IMMEDIATE \'TRUNCATE TABLE \' || t.table_name || \' CASCADE\'; END LOOP; END;\\n/\\n" | sqlplus -s {user}/{pass}@//localhost:1521/{service}',
     cliDropSchemaCmd:
       'printf "BEGIN FOR t IN (SELECT table_name FROM user_tables) LOOP EXECUTE IMMEDIATE \'DROP TABLE \' || t.table_name || \' CASCADE CONSTRAINTS\'; END LOOP; FOR s IN (SELECT sequence_name FROM user_sequences) LOOP EXECUTE IMMEDIATE \'DROP SEQUENCE \' || s.sequence_name; END LOOP; END;\\n/\\n" | sqlplus -s {user}/{pass}@//localhost:1521/{service}',
     alpinePackages: [],
@@ -379,7 +379,7 @@ export const DATABASES = {
     ],
     // Vacía los documentos preservando colecciones e ÍNDICES: los índices son el
     // equivalente del esquema aquí, y recrearlos en cada flujo sería el error
-    // simétrico a truncar flyway_schema_history en la rama relacional. No hay
+    // simétrico a truncar el historial de migraciones en la rama relacional. No hay
     // historial de migraciones que excluir porque no hay migraciones.
     cliResetCmd:
       "mongosh 'mongodb://{user}:{pass}@localhost:27017/{db}?authSource=admin&directConnection=true' --quiet --eval 'db.getCollectionNames().forEach(function (c) { db.getCollection(c).deleteMany({}); })'",

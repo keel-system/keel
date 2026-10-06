@@ -13,7 +13,7 @@
 //
 // El agente de infraestructura ya no escribe el script: lo ejecuta y verifica.
 
-import { RUNTIME_RESOLUTION, composeResolution } from './devtools.js';
+import { RUNTIME_RESOLUTION, composeResolution } from 'keel-core/gen/infra-scripts';
 import {
   TEST_USER_PASSWORD as PASSWORD,
   TEST_CLIENT_SECRET as TEST_SECRET,
