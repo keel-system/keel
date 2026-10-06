@@ -12,6 +12,7 @@ import { callsPaymentGateway } from '../lib/payments-model.js';
 import { FRAMEWORK_ERRORS, conditionalUniquenessToken } from 'keel-core';
 import { callerResolution } from './security.js';
 import { declaredErrorFor, declaredUniquenessErrorFor, declaredReferenceError, errorByCode } from 'keel-core/gen';
+import { requestShape, returnsLocation, locationTarget } from 'keel-core/gen/api-contract';
 import { javaFile, javaPath, subPackage, javadoc } from './render.js';
 import {
   messageComponents,
@@ -48,10 +49,6 @@ const HTTP_STATUS_CONSTANTS = {
   208: 'ALREADY_REPORTED',
   226: 'IM_USED'
 };
-
-// Métodos HTTP que admiten cuerpo: es la señal que decide @RequestBody frente a
-// @RequestParam (el DSL no declara requestBody, lo declara el verbo del endpoint).
-const BODY_METHODS = new Set(['POST', 'PUT', 'PATCH']);
 
 // Anotaciones de presencia: en un @PathVariable no dicen nada (el segmento existe
 // o la ruta no casa), así que solo se emiten sobre parámetros de query.
@@ -177,76 +174,8 @@ function fileUploadHelper(model, imports) {
     }`;
 }
 
-// Un 201 con id en la salida devuelve `Location`: es contrato HTTP y los
-// escenarios de validación lo assertan. Se deriva del diseño (successStatus + el
-// `id` del output + la operación que LEE ese recurso), no de que alguien se acuerde
-// de añadirlo a mano. Sin lectura por id no hay `Location`: una cabecera que apunta
-// a una ruta que nadie sirve es un 404 prometido (hallazgo 3 de R9), y
-// `CHK-API-CREATED-NO-READ` ya se lo pregunta al diseño.
-function returnsLocation(model, operation) {
-  return (
-    operation.route?.status === 201 &&
-    !operation.returnsList &&
-    !operation.paginated &&
-    Boolean(operation.responseDto?.fields.some((field) => field.name === 'id')) &&
-    locationTarget(model, operation) !== null
-  );
-}
-
-// Nombres con los que una ruta identifica a la entidad: genérico ({id}) o con su
-// nombre ({productId}). Los dos apuntan al mismo agregado.
-function idParamNames(entity) {
-  return new Set(['id', `${entity[0].toLowerCase()}${entity.slice(1)}Id`]);
-}
-
-/**
- * La ruta de la operación que LEE por id la entidad de la respuesta: un GET sin
- * lista cuya ruta tiene un solo parámetro y es el id de esa entidad. Es la única
- * ruta a la que `Location` puede apuntar sin mentir; la de la petición + id solo
- * coincide con ella por casualidad (`PUT /templates/{key}/{locale}` se lee en
- * `GET /templates/{templateId}`).
- */
-function readingPath(model, entity) {
-  const owns = idParamNames(entity);
-  for (const service of model.services) {
-    for (const candidate of service.operations) {
-      if (candidate.route?.method !== 'GET' || candidate.returnsList || candidate.paginated) continue;
-      if (candidate.responseDto?.entity !== entity) continue;
-      const params = candidate.pathParams ?? [];
-      if (params.length === 1 && owns.has(params[0].name)) return String(candidate.route.path);
-    }
-  }
-  return null;
-}
-
-/**
- * Parámetro de ruta que ya identifica a la entidad del `output`, si lo hay.
- *
- * Es lo que distingue "creo un recurso y lo devuelvo" de "añado algo a la
- * colección de un agregado y devuelvo **el agregado**". En el segundo caso el `id`
- * de la respuesta es el del padre, no el del sub-recurso creado, y `Location`
- * apunta al padre: `POST /products/{productId}/images` → `/products/{productId}`.
- */
-function parentPathParam(operation) {
-  const entity = operation.responseDto?.entity;
-  if (!entity) return null;
-  const owns = idParamNames(entity);
-  return (operation.pathParams ?? []).find((param) => owns.has(param.name)) ?? null;
-}
-
-/**
- * A dónde apunta `Location`: la plantilla de URI de la lectura
- * (`/api/v1/products/{productId}`) y con qué se expande —el parámetro de ruta del
- * padre o el id de la respuesta—. `null` si ninguna operación lee ese recurso.
- */
-function locationTarget(model, operation) {
-  const entity = operation.responseDto?.entity;
-  if (!entity) return null;
-  const path = readingPath(model, entity);
-  if (!path) return null;
-  const parent = parentPathParam(operation);
-  return { path: `${model.api.routeBase}${path}`, arg: parent ? parent.name : 'response.id()' };
-}
+// Cuándo hay cuerpo, si es obligatorio y a dónde apunta `Location`: decisiones del contrato HTTP
+// que comparten los dos generadores (keel-core/gen/api-contract.js).
 
 // Orden por defecto declarado en el diseño (`sort`). Va en el controller y no en
 // el adaptador porque es una decisión POR OPERACIÓN —dos listados del mismo
@@ -352,7 +281,7 @@ function renderMethod(model, operation, imports) {
   // único campo fuera de la ruta es ella no tiene cuerpo — con `@RequestBody`
   // obligatorio, la petición correcta según el diseño respondía 400
   // (`publishTemplate`, corrida notification-mailer v2.0.0).
-  const asBody = BODY_METHODS.has(route.method) && operation.bodyFields.some((field) => !field.resolvedIdentity);
+  const { asBody, bodyRequired } = requestShape(operation);
   const params = [];
   let dispatchArg;
 
@@ -391,9 +320,7 @@ function renderMethod(model, operation, imports) {
   } else if (asBody) {
     imports.add('jakarta.validation.Valid');
     imports.add('org.springframework.web.bind.annotation.RequestBody');
-    // Si ningún campo del cuerpo es obligatorio, el cuerpo entero lo es: una
-    // petición sin body es válida según el contrato y no puede dar 400.
-    const bodyRequired = operation.bodyFields.some((field) => field.required);
+    // Si ningún campo del cuerpo es obligatorio, el cuerpo entero tampoco (requestShape).
     const requiredAttr = bodyRequired ? '' : '(required = false)';
     params.push(`@Valid @RequestBody${requiredAttr} ${operation.messageClass} command`);
 
@@ -497,7 +424,7 @@ function renderMethod(model, operation, imports) {
     call = `${dtoType} response = ${dispatch}
         return ResponseEntity.created(
                 ServletUriComponentsBuilder.fromCurrentContextPath()
-                    .path("${target.path}").buildAndExpand(${target.arg}).toUri())
+                    .path("${target.path}").buildAndExpand(${target.param ?? 'response.id()'}).toUri())
             .body(response);`;
   } else {
     call = returnType === 'void' ? dispatch : `return ${dispatch}`;

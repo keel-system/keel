@@ -33,7 +33,9 @@ export {
   numericConstraints,
   inheritedTypePattern,
   inheritedFormat,
-  textConstraints
+  textConstraints,
+  validationRules,
+  DECIMAL_PRECISION
 } from './constraints.js';
 export { guardedFields } from './domain-guards.js';
 export { physicalBucketName, declaredBuckets, isPublicBucket } from './buckets.js';

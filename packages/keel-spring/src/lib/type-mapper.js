@@ -5,6 +5,7 @@
 import { snakeCase } from './naming.js';
 import { quoteIdentifier } from './sql-reserved.js';
 import { resolveType as resolveDslType, isBaseType as isDslBaseType } from 'keel-core/gen/types';
+import { validationRules, DECIMAL_PRECISION } from 'keel-core/gen/constraints';
 
 const BASE_TYPES = {
   string: { javaType: 'String', imports: [] },
@@ -86,77 +87,40 @@ export function toJava(resolved) {
  * rango, tamaño) no se toca: si el cliente SÍ manda el campo, tiene que ser válido.
  */
 export function beanValidationAnnotations(field, resolved, { inheritTypeFormat = true, honourDefault = false } = {}) {
-  // `!== undefined` y no un truthy check: `default: 0` y `default: false` son
-  // defaults tan legítimos como cualquier otro, y son justo los que un `if (default)`
-  // se deja fuera — el contador que arranca en cero y la bandera que arranca apagada.
-  const omitPresence = honourDefault && field.default !== undefined;
-  const own = field.constraints ?? {};
-  // `inheritTypeFormat: false` deja fuera el `pattern` que el campo hereda de su
-  // VALUE TYPE, conservando el que el campo declare por su cuenta. Es lo que
-  // necesita un DTO de ENTRADA: el formato del value type describe el valor ya
-  // normalizado (`SKU` es `^[A-Z0-9]…`, y el diseño normaliza a mayúsculas antes
-  // de validar), pero Bean Validation corre sobre el DTO antes de que el handler
-  // normalice nada — un sku en minúsculas moría con 400 VALIDATION_ERROR sin
-  // llegar nunca a la regla de negocio. Ese formato lo hace cumplir el constructor
-  // del value object del dominio, que es donde el modelo rico lo quiere de todos
-  // modos (conventions/mapping.md § Normalización antes que validación de formato
-  // y conventions/domain-modeling.md).
-  const constraints = inheritTypeFormat
-    ? { ...resolved.constraints, ...own }
-    : { ...resolved.constraints, ...own, pattern: own.pattern ?? null };
-
-  // Campo colección: las anotaciones son del contenedor, no del elemento.
-  // minItems/maxItems acotan la cardinalidad; required significa "presente y no vacío".
-  // Las constraints del elemento (pattern, maxLength…) las aplica el agente al
-  // implementar, inline en el genérico (ver conventions/mapping.md).
-  if (field.list) {
-    const annotations = [];
-    if (field.required && !omitPresence) annotations.push('@NotEmpty');
-    if (constraints.minItems != null || constraints.maxItems != null) {
-      const parts = [];
-      if (constraints.minItems != null) parts.push(`min = ${constraints.minItems}`);
-      if (constraints.maxItems != null) parts.push(`max = ${constraints.maxItems}`);
-      annotations.push(`@Size(${parts.join(', ')})`);
-    }
-    return annotations;
-  }
-
-  const annotations = [];
-  const isString = resolved.javaType === 'String';
-
-  if (field.required && !omitPresence) {
-    annotations.push(isString ? '@NotBlank' : '@NotNull');
-  }
-  if (constraints.minLength != null || constraints.maxLength != null) {
-    const parts = [];
-    if (constraints.minLength != null) parts.push(`min = ${constraints.minLength}`);
-    if (constraints.maxLength != null) parts.push(`max = ${constraints.maxLength}`);
-    annotations.push(`@Size(${parts.join(', ')})`);
-  }
-  if (constraints.pattern != null) {
-    annotations.push(`@Pattern(regexp = "${escapeJava(constraints.pattern)}")`);
-  }
-  if (constraints.min != null) {
-    annotations.push(resolved.base === 'decimal' ? `@DecimalMin("${constraints.min}")` : `@Min(${constraints.min})`);
-  }
-  if (constraints.max != null) {
-    annotations.push(resolved.base === 'decimal' ? `@DecimalMax("${constraints.max}")` : `@Max(${constraints.max})`);
-  }
-  // `scalePolicy: reject` (DSL 2.14): un decimal de ENTRADA con más decimales que su escala
-  // es un 400, no un redondeo. Solo en la entrada (`inheritTypeFormat: false`): el valor ya
-  // formado —columna, respuesta— tiene la escala por construcción. La parte entera sale de la
-  // misma precisión que la columna, o el borde aceptaría importes que el INSERT rechaza.
-  if (!inheritTypeFormat && resolved.base === 'decimal' && constraints.scale != null && constraints.scalePolicy === 'reject') {
-    annotations.push(`@Digits(integer = ${DECIMAL_PRECISION - constraints.scale}, fraction = ${constraints.scale})`);
-  }
-  return annotations;
+  // QUÉ se valida es una decisión del diseño y vive en keel-core/gen (validationRules), la misma
+  // para keel-nest; aquí solo se escribe como Bean Validation.
+  return validationRules(field, resolved, { inheritTypeFormat, honourDefault }).map(beanValidationAnnotation);
 }
 
-/**
- * Precisión de toda columna decimal con escala. Fuente única: la usan el `@Column` y la
- * parte entera del `@Digits` de entrada, que tienen que decir lo mismo.
- */
-export const DECIMAL_PRECISION = 19;
+function beanValidationAnnotation(rule) {
+  switch (rule.rule) {
+    case 'notBlank':
+      return '@NotBlank';
+    case 'notNull':
+      return '@NotNull';
+    case 'notEmpty':
+      return '@NotEmpty';
+    case 'size': {
+      const parts = [];
+      if (rule.min != null) parts.push(`min = ${rule.min}`);
+      if (rule.max != null) parts.push(`max = ${rule.max}`);
+      return `@Size(${parts.join(', ')})`;
+    }
+    case 'pattern':
+      return `@Pattern(regexp = "${escapeJava(rule.regexp)}")`;
+    case 'min':
+      return rule.decimal ? `@DecimalMin("${rule.value}")` : `@Min(${rule.value})`;
+    case 'max':
+      return rule.decimal ? `@DecimalMax("${rule.value}")` : `@Max(${rule.value})`;
+    case 'digits':
+      return `@Digits(integer = ${rule.integer}, fraction = ${rule.fraction})`;
+    default:
+      throw new Error(`Regla de validación sin traducción a Bean Validation: ${rule.rule}`);
+  }
+}
+
+/** Precisión de toda columna decimal con escala (keel-core/gen): la misma que la de los dígitos de entrada. */
+export { DECIMAL_PRECISION };
 
 // Las cotas numéricas y el formato heredado son decisiones del DISEÑO: viven en keel-core/gen para
 // que keel-spring y keel-nest hagan cumplir lo mismo (constraints.js).
