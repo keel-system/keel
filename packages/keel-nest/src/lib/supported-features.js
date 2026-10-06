@@ -80,10 +80,6 @@ export function checkSupportedFeatures(manifest, layers) {
         'Genera este diseño con keel-spring, o espera a que keel-nest la cubra.'
     );
   }
-  // Lo que la persistencia relacional declara y todavía no se emite: el diseño se acepta, y el aviso
-  // dice qué falta y cuándo llega.
-  for (const warning of pendingPersistenceFeatures(layers)) warnings.push(warning);
-
   const operations = Object.entries(layers?.['use-cases']?.operations ?? {});
   for (const feature of PENDING_OPERATION_FEATURES) {
     const names = operations.filter(([, operation]) => operation?.[feature.key] != null).map(([name]) => name);
@@ -94,27 +90,6 @@ export function checkSupportedFeatures(manifest, layers) {
     );
   }
   return { errors, warnings };
-}
-
-/**
- * Lo que un diseño relacional puede declarar y keel-nest aún no emite. Cada entrada dice qué pieza
- * falta: sin el aviso, un esquema sin su índice condicionado parecería completo.
- */
-function pendingPersistenceFeatures(layers) {
-  const warnings = [];
-  const persistence = layers?.persistence;
-  if (!persistence) return warnings;
-  const conditional = Object.entries(persistence.entities ?? {})
-    .filter(([, entity]) => (entity?.indexes ?? []).some((index) => !Array.isArray(index) && index?.when))
-    .map(([name]) => name);
-  if (conditional.length > 0) {
-    warnings.push(
-      `persistence: ${conditional.join(', ')} declara${conditional.length === 1 ? '' : 'n'} índices únicos condicionados (when); ` +
-        'keel-nest genera la unicidad sin condición y el traductor de su violación, pero no el índice parcial ni el ' +
-        'orden de escrituras que exige (llega en el tramo 6c de PLAN-KEEL-NEST.md).'
-    );
-  }
-  return warnings;
 }
 
 /** Lo que el stack pide y keel-nest todavía no genera: se rechaza en el build en vez de estamparlo sin efecto. */

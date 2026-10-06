@@ -66,7 +66,11 @@ export {
   uniqueConstraints,
   columnsFor,
   collectionIndexesOf,
-  foreignKeyIndexColumns
+  foreignKeyIndexColumns,
+  sqlLiteral,
+  discriminatorColumn,
+  partialIndexSpecs,
+  relievingOperations
 } from './relational.js';
 export {
   constraintErrors,

@@ -59,7 +59,7 @@ test('la persistencia relacional se genera; la documental se rechaza con el incr
   assert.match(document.errors[0], /document .*incremento 12/);
 });
 
-test('un índice único condicionado se acepta y se avisa: su índice parcial llega en el tramo 6c', () => {
+test('un índice único condicionado se genera sin aviso (tramo 6c)', () => {
   const layers = {
     domain: {},
     'use-cases': {},
@@ -67,8 +67,7 @@ test('un índice único condicionado se acepta y se avisa: su índice parcial ll
   };
   const { errors, warnings } = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'persistence'), layers);
   assert.deepEqual(errors, []);
-  assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /Template declara índices únicos condicionados .*6c/);
+  assert.deepEqual(warnings, []);
 });
 
 test('el motor: PostgreSQL y MySQL se generan; los demás del catálogo se rechazan nombrándolos', () => {

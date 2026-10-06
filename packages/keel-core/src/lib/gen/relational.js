@@ -542,3 +542,80 @@ export function foreignKeyIndexColumns(model, entity, members = persistedMembers
 function capitalize(name) {
   return name[0].toUpperCase() + name.slice(1);
 }
+
+// ─── Unicidad condicionada al estado ─────────────────────────────────────────
+
+/** Un valor como literal SQL (texto entre comillas simples, booleano, número). */
+export function sqlLiteral(value) {
+  if (typeof value === 'string') return `'${value.replace(/'/g, "''")}'`;
+  if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
+  return String(value);
+}
+
+/**
+ * La columna generada que discrimina un índice condicionado en el motor que no tiene índices
+ * parciales (MySQL): vale 1 dentro de la condición y NULL fuera, y un índice único no restringe las
+ * filas con NULL. Cuelga del nombre del índice, que ya es único por tabla.
+ */
+export const discriminatorColumn = (spec) => `${spec.name}_flag`;
+
+/**
+ * Los índices únicos condicionados del diseño (`indexes` con `when`), ya resueltos a tabla, columnas y
+ * PREDICADO en el idioma del motor: «como mucho uno activo por clave» no es una unicidad de columnas,
+ * y ningún ORM la expresa sin el predicado. El valor comparado es el ALMACENADO (`storedWhenValue`): un
+ * enum se guarda por su constante, y un predicado con el literal del diseño crea un índice que no casa
+ * con ninguna fila — el invariante se queda sin efecto y no lo delata nada.
+ */
+export function partialIndexSpecs(model, dialect = model.stack?.database) {
+  const specs = [];
+  // Este SQL va DIRECTO al motor: el quoting es el del dialecto, no el de ningún ORM.
+  const quote = (name) => quoteIdentifierFor(dialect, name);
+  for (const entity of model.entities.filter((e) => e.persisted)) {
+    const members = persistedMembers(model, entity);
+    for (const index of partialUniqueIndexes(entity)) {
+      const columnList = index.fields.flatMap((field) => columnsFor(model, entity, members, field, model.warnings)).map(quote);
+      const [whenColumn] = columnsFor(model, entity, members, index.when.field, model.warnings);
+      const stored = storedWhenValue(model, entity, index.when);
+      specs.push({
+        entity: entity.name,
+        name: indexName(entity, index),
+        table: quote(entity.tableName),
+        // El nombre CRUDO, además del citado: `information_schema` guarda el identificador.
+        tableName: entity.tableName,
+        columns: columnList.join(', '),
+        columnList,
+        whenColumn: quote(whenColumn),
+        predicate: `${quote(whenColumn)} = ${sqlLiteral(stored)}`,
+        // Junto al literal del diseño, para que la prosa pueda decir los dos cuando difieren.
+        stored,
+        fields: index.fields,
+        when: index.when
+      });
+    }
+  }
+  return specs;
+}
+
+/**
+ * Las operaciones que RELEVAN en un índice único condicionado: en el mismo acto sacan una fila del
+ * estado condicionado y meten otra (el diseño declara las dos transiciones juntas). El índice se
+ * comprueba por FILA y no se puede diferir, así que la salida tiene que llegar a la base ANTES que la
+ * entrada; quien no lo ordena muere con el error de unicidad en el camino feliz. Cómo se ordena es de
+ * cada generador; quién lo necesita, del diseño.
+ */
+export function relievingOperations(model) {
+  const entities = model.entities.filter((entity) => entity.persisted && partialUniqueIndexes(entity).length > 0);
+  const out = [];
+  for (const service of model.services ?? []) {
+    for (const operation of service.operations ?? []) {
+      for (const entity of entities) {
+        const states = new Set(partialUniqueIndexes(entity).map((index) => index.when.equals));
+        const own = (operation.transitions ?? []).filter((t) => t.entity === entity.name);
+        const occupies = own.filter((t) => states.has(t.to));
+        const vacates = own.filter((t) => (t.from ?? []).some((from) => states.has(from)));
+        if (occupies.length > 0 && vacates.length > 0) out.push({ operation, entity, state: occupies[0].to });
+      }
+    }
+  }
+  return out;
+}

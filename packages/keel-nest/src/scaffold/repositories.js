@@ -14,7 +14,7 @@
 //     guardar el grafo; cero filas es otra escritura que ganó (o un borrado), y sale como conflicto;
 //   · la AUDITORÍA: `created_*`/`updated_*` los estampa el adaptador, como el listener de Spring Data.
 
-import { persistedMembers, collectInternalEntities, orderingFieldOf, LOCK_VERSION } from 'keel-core/gen';
+import { persistedMembers, collectInternalEntities, orderingFieldOf, partialUniqueIndexes, LOCK_VERSION } from 'keel-core/gen';
 import { DIRS, classPath, capitalize, entityDir, tsModule, tsString } from './render.js';
 import { domainMembers } from './entities.js';
 import {
@@ -68,7 +68,29 @@ export function generate(model) {
  * guarda. Cada parámetro dice cómo se escribe su condición en la entidad ORM.
  */
 export function naturalKeyFinder(model, entity) {
-  const keys = entity.naturalKey ?? [];
+  return keyFinder(model, entity, entity.naturalKey ?? []);
+}
+
+/**
+ * Los finders de la fila que OCUPA cada índice único condicionado (`indexes` con `when` sobre un campo
+ * directo): como mucho una por clave, que es lo que el índice garantiza. La operación que releva la
+ * busca aquí para retirarla antes de activar la nueva. El mismo criterio que keel-spring; no se repite
+ * el de la clave natural si coincidieran.
+ */
+export function occupantFinders(model, entity) {
+  const seen = new Set([naturalKeyFinder(model, entity)?.name].filter(Boolean));
+  const finders = [];
+  for (const index of partialUniqueIndexes(entity)) {
+    if (!index.when?.field || index.when.field.includes('.')) continue;
+    const finder = keyFinder(model, entity, [...index.fields, index.when.field]);
+    if (!finder || seen.has(finder.name)) continue;
+    seen.add(finder.name);
+    finders.push({ ...finder, state: index.when.equals });
+  }
+  return finders;
+}
+
+function keyFinder(model, entity, keys) {
   if (keys.length === 0) return null;
   const members = domainMembers(model, entity);
   const persisted = persistedMembers(model, entity);
@@ -155,6 +177,18 @@ function renderPort(model, entity) {
         `  abstract ${finder.name}(${finder.params.map((p) => `${p.name}: ${p.type}`).join(', ')}): Promise<${entity.name} | null>;`
     );
   }
+  for (const occupant of occupantFinders(model, entity)) {
+    for (const param of occupant.params) imports.push(...param.imports);
+    methods.push(
+      `  /**
+   * La fila que OCUPA el índice único condicionado sobre '${occupant.state}': como mucho una por clave.
+` +
+        `   * La operación que releva la busca aquí para retirarla antes de activar la nueva.
+   */
+` +
+        `  abstract ${occupant.name}(${occupant.params.map((p) => `${p.name}: ${p.type}`).join(', ')}): Promise<${entity.name} | null>;`
+    );
+  }
   if (isPaginated(model, entity)) {
     imports.push({ symbol: 'Page', from: PAGE_TS, type: true }, { symbol: 'Pageable', from: PAGE_TS, type: true });
     methods.push(`  /** Una página de agregados, en el orden pedido y con el id como desempate. */\n  abstract list(pageable: Pageable): Promise<Page<${entity.name}>>;`);
@@ -235,6 +269,15 @@ function renderAdapter(model, entity) {
     for (const param of finder.params) imports.push(...param.imports);
     const where = finder.params.flatMap((param) => param.where.map(([prop, expr]) => (prop === expr ? prop : `${prop}: ${expr}`)));
     methods.push(`  async ${finder.name}(${finder.params.map((p) => `${p.name}: ${p.type}`).join(', ')}): Promise<${entity.name} | null> {
+    const found = await this.manager.findOne(${ormClass(entity.name)}, ${findOptions(`{ ${where.join(', ')} }`)});
+    return found == null ? null : toDomain${entity.name}(found);
+  }`);
+  }
+
+  for (const occupant of occupantFinders(model, entity)) {
+    for (const param of occupant.params) imports.push(...param.imports);
+    const where = occupant.params.flatMap((param) => param.where.map(([prop, expr]) => (prop === expr ? prop : `${prop}: ${expr}`)));
+    methods.push(`  async ${occupant.name}(${occupant.params.map((p) => `${p.name}: ${p.type}`).join(', ')}): Promise<${entity.name} | null> {
     const found = await this.manager.findOne(${ormClass(entity.name)}, ${findOptions(`{ ${where.join(', ')} }`)});
     return found == null ? null : toDomain${entity.name}(found);
   }`);

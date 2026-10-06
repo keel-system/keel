@@ -25,6 +25,7 @@
 // `notification-mailer-mongo` pasó en verde con el mismo diseño.
 
 import { partialUniqueIndexes } from './persistence-members.js';
+import { relievingOperations as neutralRelieving } from 'keel-core/gen/relational';
 import { occupantFinders } from './repositories.js';
 
 /** Las entidades cuyo diseño declara al menos una unicidad condicionada. */
@@ -47,24 +48,10 @@ const conditionedStates = (entity) =>
  * el mismo acto»).
  */
 export function relievingOperations(model) {
-  const entities = conditionedEntities(model);
-  if (entities.length === 0) return [];
-
-  const out = [];
-  for (const service of model.services ?? []) {
-    for (const operation of service.operations ?? []) {
-      for (const entity of entities) {
-        const states = conditionedStates(entity);
-        const suyas = (operation.transitions ?? []).filter((t) => t.entity === entity.name);
-        const ocupa = suyas.filter((t) => states.has(t.to));
-        const vacia = suyas.filter((t) => (t.from ?? []).some((from) => states.has(from)));
-        if (ocupa.length > 0 && vacia.length > 0) {
-          out.push({ operation, entity, state: ocupa[0].to, method: portMethodName(entity) });
-        }
-      }
-    }
-  }
-  return out;
+  // La detección es del diseño (keel-core/gen/relational.js) y la comparte keel-nest; la rama
+  // documental no la sufre (cada save es su propia escritura) y no recibe nada.
+  if (conditionedEntities(model).length === 0) return [];
+  return neutralRelieving(model).map((relieving) => ({ ...relieving, method: portMethodName(relieving.entity) }));
 }
 
 export const portMethodName = () => 'flushPendingWrites';

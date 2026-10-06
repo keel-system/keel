@@ -132,3 +132,23 @@ test('la tabla de elementos de una lista y el índice de su FK', () => {
   // La FK de una lista se indexa en su tabla, no en la de la entidad.
   assert.ok(!foreignKeyIndexColumns(model, entity).includes(table.joinColumn));
 });
+
+test('el índice condicionado se resuelve con la CONSTANTE del enum y el quoting de cada motor', async () => {
+  const { partialIndexSpecs } = await import('../src/lib/gen/relational.js');
+  const postgres = partialIndexSpecs(modelOf('notification-mailer', 'postgresql'), 'postgresql');
+  assert.equal(postgres.length, 1);
+  const [spec] = postgres;
+  assert.equal(spec.name, 'uk_templates_application_key_locale');
+  // `key` es reservada: se cita con el carácter del motor.
+  assert.equal(spec.columns, 'application_id, "key", locale');
+  assert.equal(spec.predicate, "status = 'ACTIVE'");
+  const [mysql] = partialIndexSpecs(modelOf('notification-mailer', 'mysql'), 'mysql');
+  assert.equal(mysql.columns, 'application_id, `key`, locale');
+});
+
+test('la operación que RELEVA en un índice condicionado es la que declara entrar y salir del estado', async () => {
+  const { relievingOperations } = await import('../src/lib/gen/relational.js');
+  const relieving = relievingOperations(modelOf('notification-mailer'));
+  assert.deepEqual(relieving.map((r) => [r.operation.name, r.entity.name, r.state]), [['publishTemplate', 'Template', 'active']]);
+  assert.deepEqual(relievingOperations(modelOf('product-catalog')), []);
+});

@@ -31,14 +31,14 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { loadService } from 'keel-core';
 import { DATABASES } from 'keel-core/gen/infra-catalog';
-import { orderingFieldOf, persistedMembers, uniqueConstraints, crossAggregateForeignKeys, elementTable, foreignKeyIndexColumns, foreignKeyIndexName, indexName, collectionIndexesOf, columnsFor, foreignKeyName, joinColumnOf, usesAuditableEntity, AUDIT_COLUMNS, LOCK_VERSION } from 'keel-core/gen';
+import { partialIndexSpecs, discriminatorColumn, orderingFieldOf, persistedMembers, uniqueConstraints, crossAggregateForeignKeys, elementTable, foreignKeyIndexColumns, foreignKeyIndexName, indexName, collectionIndexesOf, columnsFor, foreignKeyName, joinColumnOf, usesAuditableEntity, AUDIT_COLUMNS, LOCK_VERSION } from 'keel-core/gen';
 import { planService } from '../src/scaffold/index.js';
 import { DB_NAME, run, resolveRuntime, startDatabase } from './lib/database-container.js';
 import { makeWorkspace, mountDesign, runCommand, FIXTURES_DIR, NEST_READY_DESIGN } from '../test/helpers/workspace.js';
 import { build } from '../src/commands/build.js';
 import { domainMembers } from '../src/scaffold/entities.js';
 import { classPath, entityDir, DIRS } from '../src/scaffold/render.js';
-import { repositoryRoots, adapterPath, adapterClass, naturalKeyFinder } from '../src/scaffold/repositories.js';
+import { repositoryRoots, adapterPath, adapterClass, naturalKeyFinder, occupantFinders } from '../src/scaffold/repositories.js';
 import { ormPath, ormClass, unidirectionalParents } from '../src/scaffold/persistence-entities.js';
 
 const args = process.argv.slice(2);
@@ -61,7 +61,10 @@ function step(name, ok, detail = '') {
  * Un texto que casa con un patrón del diseño, para las formas habituales (literales, clases,
  * \d \w \s, cuantificadores, grupos con alternativas). Se comprueba al final: si no casa, null.
  */
-function sampleFor(pattern, minLength = 0, maxLength = null) {
+function sampleFor(pattern, minLength = 0, maxLength = null, variant = 0) {
+  const upper = String.fromCharCode(65 + (variant % 26));
+  const lower = String.fromCharCode(97 + (variant % 26));
+  const digit = String((7 + variant) % 10);
   const source = String(pattern).replace(/^\^/, '').replace(/\$$/, '');
   let index = 0;
   const pickClass = (body) => {
@@ -71,9 +74,9 @@ function sampleFor(pattern, minLength = 0, maxLength = null) {
       for (const candidate of 'abcxyz019') if (!new RegExp(`[${body}]`).test(candidate) === false) return candidate;
       return 'a';
     }
-    if (/^\\d/.test(content) || /0-9/.test(content)) return content.includes('A-Z') ? 'A' : content.includes('a-z') ? 'a' : '7';
-    if (content.includes('A-Z')) return 'A';
-    if (content.includes('a-z')) return 'a';
+    if (/^\\d/.test(content) || /0-9/.test(content)) return content.includes('A-Z') ? upper : content.includes('a-z') ? lower : digit;
+    if (content.includes('A-Z')) return upper;
+    if (content.includes('a-z')) return lower;
     const plain = content.replace(/\\./g, '').replace(/.-./g, '');
     return plain[0] ?? 'a';
   };
@@ -103,7 +106,7 @@ function sampleFor(pattern, minLength = 0, maxLength = null) {
     if (char === '\\') {
       const next = source[index + 1];
       index += 2;
-      return { text: next === 'd' ? '7' : next === 'w' ? 'a' : next === 's' ? ' ' : next };
+      return { text: next === 'd' ? digit : next === 'w' ? lower : next === 's' ? ' ' : next };
     }
     if (char === '.') {
       index += 1;
@@ -166,6 +169,7 @@ function splitTop(text) {
 }
 
 let nextInt = 0;
+let nextVariant = 0;
 
 /** La expresión JS de un valor de muestra para un campo (o sub-campo) del dominio. */
 function sampleValue(model, field, ctx, salt) {
@@ -213,7 +217,9 @@ function sampleValue(model, field, ctx, salt) {
       const min = text.minLength ?? 0;
       const max = text.maxLength ?? 40;
       if (text.pattern) {
-        const sample = sampleFor(text.pattern, min, max);
+        // Distinta en cada llamada (dos agregados de muestra no pueden compartir clave natural), y la
+        // forma básica si la variante no casa con el patrón.
+        const sample = sampleFor(text.pattern, min, max, nextVariant++) ?? sampleFor(text.pattern, min, max);
         if (sample == null) {
           ctx.unsampled.push(`${field.name} (${text.pattern})`);
           return null;
@@ -304,6 +310,11 @@ function expectedSchema(model, engine) {
     }
     if (entity.usesOptimisticLocking && !entity.declaresLockVersion) t.columns.set(LOCK_VERSION.column, { nullable: true, length: null, scale: null, collation: null });
     if (entity.auditTimestamps === 'all') for (const audit of AUDIT_COLUMNS.timestamps) t.columns.set(audit.column, { nullable: false, length: null, scale: null, collation: null });
+    // Los condicionados: el índice con su nombre y, en MySQL, la columna que discrimina.
+    for (const spec of partialIndexSpecs(model, engine).filter((candidate) => candidate.entity === entity.name)) {
+      t.uniques.add(spec.name);
+      if (engine === 'mysql') t.columns.set(discriminatorColumn(spec), { nullable: true, length: null, scale: null, collation: null });
+    }
     for (const entry of uniqueConstraints(model).filter((u) => u.entity === entity.name && !u.when)) {
       // Los índices únicos de una LISTA viven en su tabla de elementos (arriba).
       if (collectionIndexesOf(entity, members).handled.has((entity.indexes ?? []).find((index) => indexName(entity, index) === entry.constraint))) continue;
@@ -349,7 +360,7 @@ function probeScript(model, engine, db, expected) {
 import { DataSource } from 'typeorm';
 import { databaseSettings } from './dist/infrastructure/persistence/data-source-options.js';
 import { TransactionContext } from './dist/infrastructure/persistence/transaction-context.js';
-import { translatePersistenceError, OptimisticLockConflict } from './dist/infrastructure/persistence/persistence-errors.js';
+import { translatePersistenceError, OptimisticLockConflict, isTransientWriteConflict } from './dist/infrastructure/persistence/persistence-errors.js';
 ${adapters.join('\n')}
 ${imports.join('\n')}
 
@@ -411,6 +422,7 @@ try {
 }
 ` : ''}
 ${blocks.join('\n')}
+${concurrencyBlock(model, engine, roots[0], ctx)}
 
 await dataSource.destroy();
 console.log('@@RESULTS@@' + JSON.stringify(results));
@@ -525,11 +537,120 @@ ${finder ? `  const found = await repository.${finder.name}(${finder.params.map(
     const translated = translatePersistenceError(error);
     check('${name}: la clave natural duplicada sale como el error del diseño', translated && translated !== 'integrity' && translated !== 'timeout' && translated.httpStatus === 409, translated?.code ?? translated ?? error?.message);
   }` : ''}
+${foldedBlock(model, root, index, ctx, finder)}
+${conditionalBlock(model, root, index, ctx)}
 ${paginated ? `  const page = await repository.list({ page: 0, size: 5, sort: [] });
   check('${name}: list devuelve la página con su total', page.totalElements >= 1 && page.items.length >= 1 && page.totalPages >= 1, JSON.stringify({ total: page.totalElements, n: page.items.length }));` : ''}
   await repository.deleteById(original.id);
   check('${name}: deleteById borra el agregado y su grafo', (await repository.findById(original.id)) == null);
 }`;
+}
+
+/**
+ * Lo que el motor hace con dos transacciones que se pisan, y cómo lo CLASIFICA lo emitido. Es lo que
+ * se rompe en silencio: con un código equivocado el interbloqueo no se reintenta nunca y el tope sale
+ * como 500. Se fabrican los dos de verdad con el TransactionContext generado:
+ *   · interbloqueo: dos transacciones bloquean dos filas en orden inverso; el motor aborta a una, y
+ *     tiene que salir como conflicto transitorio (el que el mediator reintenta);
+ *   · tope: una transacción espera una fila que otra tiene bloqueada más allá de su tope, y tiene que
+ *     salir como tope de transacción (503), no como conflicto ni como 500.
+ */
+function concurrencyBlock(model, engine, root, ctx) {
+  if (!root) return '';
+  const pick = engine === 'postgresql' ? `SELECT id FROM "${root.tableName}" WHERE id = $1 FOR UPDATE` : `SELECT id FROM \`${root.tableName}\` WHERE id = UUID_TO_BIN(?) FOR UPDATE`;
+  return `
+// ═══ Concurrencia: interbloqueo y tope de transacción ═══
+{
+  const repository = new ${adapterClass(root)}(tx);
+  const a = ${sampleEntity(model, root, ctx, 'xa')};
+  const b = ${sampleEntity(model, root, ctx, 'xb')};
+  await repository.save(a);
+  await repository.save(b);
+  const lock = (manager, id) => manager.query(${JSON.stringify(pick)}, [id]);
+  const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  // Interbloqueo: T1 toma a y luego b; T2 toma b y luego a.
+  const outcomes = await Promise.allSettled([
+    tx.inTransaction(async (manager) => { await lock(manager, a.id); await pause(400); await lock(manager, b.id); }),
+    new TransactionContext(dataSource, settings).inTransaction(async (manager) => { await lock(manager, b.id); await pause(400); await lock(manager, a.id); })
+  ]);
+  const lost = outcomes.filter((outcome) => outcome.status === 'rejected').map((outcome) => outcome.reason);
+  check('interbloqueo: el motor aborta una de las dos', lost.length === 1, lost.map((error) => error?.message).join(' | '));
+  check('interbloqueo: sale como conflicto transitorio (el mediator lo reintenta)', lost.length === 1 && isTransientWriteConflict(lost[0]), lost[0]?.driverError?.code ?? lost[0]?.message);
+
+  // Tope: una transacción con tope de 1 s espera una fila que otra retiene 4 s.
+  const hurried = new TransactionContext(dataSource, { ...settings, transactionTimeoutMs: 1000 });
+  let release;
+  const holder = tx.inTransaction(async (manager) => { await lock(manager, a.id); await new Promise((resolve) => { release = resolve; setTimeout(resolve, 4000); }); });
+  await pause(300);
+  const waited = await hurried.inTransaction((manager) => lock(manager, a.id)).then(() => null, (error) => error);
+  release?.();
+  await holder;
+  check('tope: la espera de bloqueo se corta', waited != null, 'la sentencia esperó más que su tope');
+  check('tope: sale como tope de transacción (503), no como conflicto', waited != null && translatePersistenceError(waited) === 'timeout' && !isTransientWriteConflict(waited), waited?.driverError?.code ?? waited?.message);
+}`;
+}
+
+/**
+ * El PLEGADO de un campo con `compare` dentro de la clave natural: el mismo valor en MAYÚSCULAS es la
+ * misma clave para el diseño, y solo la sombra plegada lo sabe. Si el adaptador no plegara, las dos
+ * filas convivirían.
+ */
+function foldedBlock(model, root, index, ctx, finder) {
+  if (!finder) return '';
+  const folded = finder.params.map((param) => root.fields.find((field) => field.name === param.name && field.fold)).filter(Boolean);
+  if (folded.length === 0) return '';
+  const keys = finder.params.map((param) => `${param.name}: original.${param.name}`);
+  const shout = folded.map((field) => `${field.name}: original.${field.name}.toUpperCase()`);
+  return `  {
+    const shouted = new ${root.name}({ ...stateOf(${sampleEntity(model, root, ctx, `${index}f`)}), ${keys.join(', ')}, ${shout.join(', ')} });
+    const rejected = await repository.save(shouted).then(() => null, (error) => error);
+    check('${root.name}: ${folded.map((field) => field.name).join(', ')} en mayúsculas es la MISMA clave (compare)', rejected != null && translatePersistenceError(rejected)?.httpStatus === 409, rejected?.message ?? 'se guardó');
+  }`;
+}
+
+/**
+ * La unicidad CONDICIONADA, preguntada al motor: dos filas con la misma clave en el estado de la
+ * condición no conviven (y la violación sale traducida), una tercera con la misma clave en OTRO estado
+ * sí, y el finder del ocupante encuentra la que está. Es el invariante entero; un índice que se crea sin
+ * error y no casa con ninguna fila (el predicado con el literal del diseño) deja pasar la segunda.
+ */
+function conditionalBlock(model, root, index, ctx) {
+  const blocks = [];
+  for (const occupant of occupantFinders(model, root)) {
+    const whenIndex = (root.indexes ?? []).find((candidate) => candidate.unique && candidate.when?.equals === occupant.state);
+    const field = root.fields.find((candidate) => candidate.name === whenIndex?.when.field);
+    if (field?.kind !== 'enum') continue;
+    const enumDef = model.enums.find((candidate) => candidate.name === field.namedType);
+    const inside = enumDef.values.find((value) => value.literal === occupant.state);
+    const outside = enumDef.values.find((value) => value !== inside);
+    const keys = occupant.params.filter((param) => param.name !== field.name);
+    // Si la clave natural cabe entera en la del índice, la segunda fila chocaría por ella antes.
+    const natural = new Set((root.naturalKey ?? []).map((key) => keys.find((param) => param.name === key || param.name === `${key}Id`)?.name ?? key));
+    if (!inside || !outside || (root.naturalKey?.length > 0 && [...natural].every((key) => keys.some((param) => param.name === key)))) continue;
+    ctx.imports.add(`${enumDef.name}|${classPath(DIRS.enums, enumDef.name)}`);
+    const state = (constant) => `${field.name}: ${enumDef.name}.${constant}`;
+    const sameKeys = keys.map((param) => `${param.name}: first.${param.name}`).join(', ');
+    blocks.push(`  {
+    const first = new ${root.name}({ ...stateOf(${sampleEntity(model, root, ctx, `${index}c`)}), ${state(inside.constant)} });
+    await repository.save(first);
+    const second = new ${root.name}({ ...stateOf(${sampleEntity(model, root, ctx, `${index}d`)}), ${sameKeys}, ${state(inside.constant)} });
+    try {
+      await repository.save(second);
+      check('${root.name}: dos con la misma clave en ${occupant.state} no conviven', false, 'el motor aceptó la segunda');
+    } catch (error) {
+      const translated = translatePersistenceError(error);
+      check('${root.name}: dos con la misma clave en ${occupant.state} no conviven, y sale el error del diseño', translated && translated !== 'integrity' && translated.httpStatus === 409, translated?.code ?? translated ?? error?.message);
+    }
+    const third = new ${root.name}({ ...stateOf(${sampleEntity(model, root, ctx, `${index}e`)}), ${sameKeys}, ${state(outside.constant)} });
+    // Sin la condición (la unicidad normal, el invariante CONTRARIO) es esta la que el motor rechaza.
+    const kept = await repository.save(third).then(() => null, (error) => error);
+    check('${root.name}: la misma clave en otro estado (${outside.literal}) sí convive', kept == null && (await repository.findById(third.id)) != null, kept?.message);
+    const occupant = await repository.${occupant.name}(${keys.map((param) => `first.${param.name}`).join(', ')}, ${enumDef.name}.${inside.constant});
+    check('${root.name}: ${occupant.name} encuentra la que ocupa ${occupant.state}', occupant?.id === first.id, occupant?.id);
+  }`);
+  }
+  return blocks.join('\n');
 }
 
 /** Una columna de texto acotada de la raíz y una fila mínima que la desborda. */

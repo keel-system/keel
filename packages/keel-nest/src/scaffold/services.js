@@ -18,7 +18,8 @@
 import { DIRS, classPath, declType, fieldImports, isNullable, tsModule, tsdoc } from './render.js';
 import { ANNOTATIONS_TS, HANDLERS_TS, MESSAGES_TS } from './mediator.js';
 import { PAGED_RESPONSE_TS } from './dtos.js';
-import { repositoryRoots, portClass, portPath, PAGE_TS } from './repositories.js';
+import { repositoryRoots, portClass, portPath, occupantFinders, PAGE_TS } from './repositories.js';
+import { relievingOperations } from 'keel-core/gen';
 
 export function generate(model) {
   const files = [];
@@ -247,6 +248,19 @@ function decap(name) {
 
 function handlerNotes(model, operation) {
   const notes = [];
+  // El relevo en un índice único condicionado: la ÚNICA forma de escribirlo que funciona es en orden.
+  for (const relieving of relievingOperations(model).filter((r) => r.operation.name === operation.name)) {
+    const occupant = occupantFinders(model, repositoryRoots(model).find((root) => root.name === relieving.entity.rootEntity) ?? relieving.entity)
+      .find((finder) => finder.state === relieving.state);
+    notes.push(
+      `ORDEN OBLIGATORIO (índice único condicionado sobre ${relieving.entity.name}.${relieving.state}): esta operación RELEVA — saca una fila ` +
+        `de '${relieving.state}' y mete otra en el mismo acto—, y el índice se comprueba por FILA y no se puede diferir. Retira la que ` +
+        `estaba${occupant ? ` (la encuentras con ${relieving.entity.name}Repository.${occupant.name}(...))` : ''} y GUÁRDALA con save(...) ANTES ` +
+        'de guardar la nueva: cada save escribe en ese momento, así que el orden de los save es el orden en que el motor los comprueba. ' +
+        'Al revés, la transición legítima muere con el error de unicidad del diseño — un 409 en el camino feliz. No lo arregles quitando ' +
+        'el índice: es el invariante que el diseño declaró.'
+    );
+  }
   for (const note of textFilterNotes(model, operation)) notes.push(note);
   for (const text of operation.preconditions ?? []) notes.push(`Precondición: ${text}`);
   for (const text of operation.rules ?? []) notes.push(`Regla (en orden): ${text}`);

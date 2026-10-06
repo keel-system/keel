@@ -14,12 +14,10 @@
 //   migrations     Flyway aplica db/migration/ y Hibernate solo valida.
 // Existen para que ni el agente ni el operador tengan que editar YAML a mano.
 
-import { uniqueConstraints, columnsFor, partialUniqueIndexes, indexName } from './persistence-entities.js';
-import { storedWhenValue, crossAggregateForeignKeys } from './persistence-members.js';
-import { persistedMembers } from './persistence-members.js';
-import { quoteIdentifierFor } from '../lib/sql-reserved.js';
-import { snakeCase } from '../lib/naming.js';
+import { uniqueConstraints } from './persistence-entities.js';
+import { crossAggregateForeignKeys } from './persistence-members.js';
 import { sqlContract } from './conditional-uniqueness.js';
+import { partialIndexSpecs, sqlLiteral, discriminatorColumn } from 'keel-core/gen/relational';
 
 const MIGRATIONS_DIR = 'src/main/resources/db/migration';
 const BASELINE_SQL = 'build/schema/baseline.sql';
@@ -116,8 +114,8 @@ const PARTIAL_INDEX_DIALECTS = {
 // parte el script por `;`, así que lo que se emita no puede llevar un `;` dentro. La salida son
 // cuatro sentencias planas —consultar, componer, preparar, ejecutar— que MySQL corre sobre la
 // MISMA conexión, que es lo que hace que la variable de usuario sobreviva de una a la siguiente.
-/** La columna generada que discrimina. Cuelga del nombre del índice, que ya es único por tabla. */
-export const discriminatorColumn = (spec) => `${spec.name}_flag`;
+/** La columna generada que discrimina (keel-core/gen): cuelga del nombre del índice. */
+export { discriminatorColumn };
 
 /**
  * Una sentencia condicionada a que algo NO exista, en el único idioma que le sirve a MySQL.
@@ -214,47 +212,11 @@ function mysqlStringLiteral(sql) {
  */
 export const enginesWithPartialIndex = () => Object.keys(PARTIAL_INDEX_DIALECTS);
 
-/** Los índices condicionados del diseño, ya resueltos a tabla, columnas y predicado. */
-export function partialIndexSpecs(model) {
-  const specs = [];
-  // El SQL de este appendix va DIRECTO al motor: no pasa por Hibernate, así que
-  // el quoting tiene que ser el del dialecto y no el backtick que aquel traduce.
-  const quote = (name) => quoteIdentifierFor(model.stack.database, name);
-  for (const entity of model.entities.filter((e) => e.persisted)) {
-    const members = persistedMembers(model, entity);
-    for (const index of partialUniqueIndexes(entity)) {
-      const columnList = index.fields
-        .flatMap((field) => columnsFor(model, entity, members, field, model.warnings))
-        .map(quote);
-      const columns = columnList.join(', ');
-      const [whenColumn] = columnsFor(model, entity, members, index.when.field, model.warnings);
-      // El valor con el que compara la columna, NO el literal del diseño: un enum se guarda
-      // por su constante. Ver persistence-members.js § storedWhenValue.
-      const stored = storedWhenValue(model, entity, index.when);
-      specs.push({
-        entity: entity.name,
-        name: indexName(entity, index),
-        table: quote(entity.tableName),
-        // El nombre CRUDO, además del citado: `information_schema` guarda el identificador, no
-        // su forma citada, así que un guardia que preguntara por `` `key` `` no encontraría nunca
-        // la tabla `key` — y su índice se intentaría crear en cada arranque.
-        tableName: entity.tableName,
-        columns,
-        // Las mismas columnas sueltas. Las consume `index-probes.js` para levantar el sustrato
-        // sobre el que mide el índice: derivarlas por su cuenta sería medir una copia de sí mismo.
-        columnList,
-        whenColumn: quote(whenColumn),
-        predicate: `${quote(whenColumn)} = ${sqlLiteral(stored)}`,
-        // Se conserva junto al literal para que la prosa pueda decir los dos cuando difieren:
-        // el comentario habla el idioma del diseño y la sentencia el del motor.
-        stored,
-        fields: index.fields,
-        when: index.when
-      });
-    }
-  }
-  return specs;
-}
+/**
+ * Los índices condicionados del diseño, ya resueltos a tabla, columnas y predicado: neutral, en
+ * keel-core/gen (relational.js), porque keel-nest crea los mismos. Se reexporta por sus consumidores.
+ */
+export { partialIndexSpecs };
 
 /**
  * Si el diseño declara algún índice condicionado Y el motor elegido sabe crearlo.
@@ -273,11 +235,7 @@ function storedNote(spec) {
   return String(spec.stored) === String(spec.when.equals) ? '' : ` (almacenado como ${sqlLiteral(spec.stored)})`;
 }
 
-export function sqlLiteral(value) {
-  if (typeof value === 'string') return `'${value.replace(/'/g, "''")}'`;
-  if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
-  return String(value);
-}
+export { sqlLiteral };
 
 function partialIndexesSql(model) {
   const specs = partialIndexSpecs(model);

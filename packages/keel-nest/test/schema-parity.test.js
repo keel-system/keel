@@ -21,7 +21,7 @@ import { FIXTURES_DIR } from './helpers/workspace.js';
 const unquote = (name) => String(name).replace(/`/g, '');
 
 function table(tables, name) {
-  if (!tables.has(name)) tables.set(name, { columns: new Map(), names: new Set() });
+  if (!tables.has(name)) tables.set(name, { columns: new Map(), names: new Set(), predicates: new Map() });
   return tables.get(name);
 }
 
@@ -37,6 +37,13 @@ function springColumn(attrs) {
 
 function springSchema(files) {
   const tables = new Map();
+  // Los índices únicos CONDICIONADOS no están en las anotaciones (JPA no tiene predicado): keel-spring
+  // los crea con el apéndice SQL, y es ahí donde se leen, con su predicado.
+  const appendix = files.find((f) => f.path.endsWith('db/partial-indexes.sql'))?.content ?? '';
+  for (const m of appendix.matchAll(/^CREATE UNIQUE INDEX IF NOT EXISTS (\w+) ON (\w+) \(.*\) WHERE (.*);$/gm)) {
+    table(tables, m[2]).names.add(m[1]);
+    table(tables, m[2]).predicates.set(m[1], m[3]);
+  }
   const jpa = files.filter((f) => f.path.includes('/infrastructure/persistence/entities/') && f.path.endsWith('.java'));
   const classes = new Map();
   for (const file of jpa) {
@@ -113,6 +120,7 @@ function nestSchema(files) {
       if (!entity) continue;
       const t = table(tables, entity[1]);
       for (const m of part.matchAll(/@(?:Unique|Index)\('([^']+)'/g)) t.names.add(m[1]);
+      for (const m of part.matchAll(/@Index\('([^']+)', \[[^\]]*\], \{ unique: true, where: '((?:[^'\\]|\\.)*)' \}\)/g)) t.predicates.set(m[1], m[2].replace(/\\'/g, "'"));
       for (const m of part.matchAll(/foreignKeyConstraintName: '([^']+)'/g)) t.names.add(m[1]);
       const parent = /export class \w+ extends (\w+)/.exec(part)?.[1];
       if (parent && bases.has(parent)) for (const [name, spec] of columnsOf(bases.get(parent))) t.columns.set(name, spec);
@@ -141,6 +149,9 @@ for (const name of relational) {
       const got = nest.get(tableName);
       assert.deepEqual([...got.names].sort(), [...want.names].sort(), `${tableName}: los mismos nombres de constraint, índice y FK`);
       assert.deepEqual([...got.columns.keys()].sort(), [...want.columns.keys()].sort(), `${tableName}: las mismas columnas`);
+      // El predicado de un índice condicionado, letra a letra: con el literal del diseño en vez de la
+      // constante del enum el índice se crea y no casa con ninguna fila.
+      assert.deepEqual(Object.fromEntries(got.predicates), Object.fromEntries(want.predicates), `${tableName}: los mismos predicados`);
       for (const [column, spec] of want.columns) {
         const have = got.columns.get(column);
         if (spec.length != null) assert.equal(have.length, spec.length, `${tableName}.${column}: la cota declarada`);

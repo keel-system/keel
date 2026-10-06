@@ -37,7 +37,10 @@ import {
   LOCK_VERSION,
   AUDIT_COLUMNS,
   DECIMAL_PRECISION,
-  snakeCase
+  snakeCase,
+  camelCase,
+  partialIndexSpecs,
+  discriminatorColumn
 } from 'keel-core/gen';
 import { DIRS, classPath, capitalize, decapitalize, isNullable, tsModule, tsString } from './render.js';
 
@@ -411,6 +414,30 @@ function renderEntity(model, entity) {
 
   const header = [`@Entity({ name: ${tsString(entity.tableName)} })`];
   header.push(...tableConstraints(model, entity, members, props, typeorm));
+
+  // La unicidad CONDICIONADA al estado (`indexes` con `when`): «como mucho uno activo por clave». Sin
+  // el predicado sería una unicidad sobre todas las filas, lo contrario del invariante. PostgreSQL lo
+  // dice con un índice parcial; MySQL, que no los tiene, con una columna generada DECLARADA que vale 1
+  // dentro de la condición y NULL fuera (un índice único no restringe las filas con NULL). Declarada y
+  // no como parte funcional anónima: esa es opaca a la introspección del esquema (keel-spring midió
+  // que tumbaba el arranque de Hibernate). El predicado compara con la CONSTANTE del enum guardada.
+  for (const spec of partialIndexSpecs(model, engine).filter((candidate) => candidate.entity === entity.name)) {
+    const columns = spec.fields.flatMap((name) => columnsFor(model, entity, members, name)).map((column) => tsString(props.get(column) ?? column));
+    typeorm.add('Index');
+    if (engine === 'postgresql') {
+      header.push(`@Index(${tsString(spec.name)}, [${columns.join(', ')}], { unique: true, where: ${tsString(spec.predicate)} })`);
+    } else {
+      const flag = discriminatorColumn(spec);
+      const property = camelCase(flag);
+      typeorm.add('Column');
+      properties.push(
+        `  // Discriminador de ${spec.name}: 1 con ${spec.when.field} = ${JSON.stringify(spec.when.equals)}, NULL fuera. Lo calcula el motor.\n` +
+          `  @Column({ name: ${tsString(flag)}, type: 'tinyint', nullable: true, generatedType: 'STORED', asExpression: ${tsString(`CASE WHEN ${spec.predicate} THEN 1 END`)}, insert: false, update: false })\n` +
+          `  ${property}: number | null;`
+      );
+      header.push(`@Index(${tsString(spec.name)}, [${[...columns, tsString(property)].join(', ')}], { unique: true })`);
+    }
+  }
 
   const inherits = entity.auditTimestamps === 'all' || entity.auditAuthorship === 'all';
   if (inherits) imports.push({ symbol: 'AuditableOrm', from: AUDITABLE_TS });

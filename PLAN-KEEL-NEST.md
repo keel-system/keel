@@ -399,7 +399,7 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   docker, sondas desde los vocabularios neutrales) en postgres y mysql; `npm run matrix`
   muestra la columna nest.
 - **Salida**: primer diseño **completo** generable: dominio + use-cases + api + persistence.
-- **Estado: 6a y 6b hechos (2026-10-06); 6c pendiente.**
+- **Estado: hecho (2026-10-06)**, en tres tramos con su commit cada uno.
   - **6a — lo que es del diseño, a `keel-core/gen`**: `relational.js` (el esquema como DATOS:
     `columnSpec` con nombre, nulabilidad, cota, escala y collation; los miembros persistidos; tablas de
     elementos; los nombres de constraint única, índice y FK; las sombras plegadas; la lista de palabras
@@ -458,11 +458,35 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     en keel-spring.
   - Ninguna fixture relacional aplana un value object OPCIONAL: su mapeo de vuelta (la marca de
     presencia) solo lo compila `ts-check` en derivación, no lo ejercita `db-check`.
-- **Tramo 6c, pendiente**: los índices únicos condicionados (parcial en PostgreSQL, columna generada
-  declarada en MySQL) con el ORDEN de escrituras que exige el relevo; la columna de keel-nest en la
-  matriz de paridad (`engine-support`); la tabla de historial de migraciones en los `cliResetCmd`, que
-  hoy nombran la de Flyway (`flyway_schema_history`) y llega con los scripts de `infra/` (inc. 7); la
-  purga y el reclamo son de los incrementos 9 y 10.
+  - **6c — la unicidad condicionada y la matriz de paridad**:
+    - A `keel-core/gen/relational.js` pasan `partialIndexSpecs` (tabla, columnas citadas por motor y
+      PREDICADO con la constante del enum), `sqlLiteral`, `discriminatorColumn` y `relievingOperations`
+      (qué operación RELEVA: entra y sale del estado condicionado en el mismo acto). keel-spring los
+      consume; línea base idéntica.
+    - keel-nest crea el índice: parcial (`@Index` con `where`) en PostgreSQL; en MySQL la columna
+      generada DECLARADA `<índice>_flag` dentro del índice único, la misma forma que keel-spring y por
+      el mismo motivo (una parte funcional anónima es opaca a la introspección). El puerto gana el
+      finder del OCUPANTE y el handler que releva, su nota de ORDEN: en TypeORM cada `save` escribe en
+      el momento, así que basta con el orden de los `save` (no hace falta el `flushPendingWrites` de JPA).
+    - `src/lib/engine-support.js` (nuevo): la matriz de paridad de keel-nest, una fila por mecanismo
+      del catálogo neutral —`pending` con el incremento que lo trae, o sus celdas por modelo o por
+      motor—, y `npm run matrix`. Hoy: 6 celdas verificadas y falsadas, 1 que no aplica, ninguna sin
+      ejecutar ni sin falsar, 17 pendientes de su incremento. `test/engine-support.test.js` la ata al
+      catálogo (ni ids inventados ni filas sin promesa).
+    - **Puerta medida**: `schema-parity` compara además el predicado del índice condicionado con el
+      apéndice SQL de keel-spring, falsado con el literal en minúsculas. `db-check` **20/20** en los dos
+      motores pregunta al motor el invariante entero (dos en `active` con la misma clave no conviven y
+      sale el error del diseño, una en otro estado sí, el finder encuentra al ocupante), el PLEGADO (la
+      misma clave en mayúsculas choca) y la CONCURRENCIA: un interbloqueo fabricado con dos
+      transacciones que se clasifica como transitorio y una espera de bloqueo que se corta como tope.
+      Falsado: predicado en minúsculas (rojo en PostgreSQL; en MySQL no, y es correcto: su collation no
+      distingue mayúsculas), índice sin discriminador (MySQL), sin collation forzada, TextFold que no
+      pliega, y la clasificación del interbloqueo y del tope rotas por separado. Suite 165/165,
+      `ts-check` 11/11, keel-core 1067/1067.
+- **Lo que no entró, con su incremento**: la tabla de historial de migraciones de los `cliResetCmd`
+  (hoy la de Flyway) va con los scripts de `infra/` y el baseline del pase de calidad (inc. 7), que es
+  cuando keel-nest los emite; la purga y los reclamos, con los incrementos 9 y 10. Y el bucle de
+  reintento del mediator solo se ejecutará con un handler implementado (corrida del inc. 7).
 
 ### Inc. 7 — Arnés de integración y pipeline de agentes (primer hito end-to-end)
 

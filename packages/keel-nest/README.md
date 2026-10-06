@@ -70,7 +70,7 @@ vocabularios de las sondas del arnés.
 |---|---|
 | `domain`, `use-cases` | se generan; `idempotency` y `schedule` de una operación se avisan (incremento 10), `cache` también (13) |
 | `api` | se genera (incremento 5); las subidas multipart llegan con `storage` (13) |
-| `persistence` | relacional: se genera sobre PostgreSQL y MySQL (los demás motores se rechazan); los índices únicos condicionados se avisan (tramo 6c). Documental: se rechaza → incremento 12 |
+| `persistence` | relacional: se genera sobre PostgreSQL y MySQL (los demás motores se rechazan), con la unicidad condicionada (índice parcial o columna discriminadora). Documental: se rechaza → incremento 12 |
 | `security` | se rechaza → incremento 8 |
 | `messaging` | se rechaza → incremento 9 |
 | `http-clients`, `dependencies` | se rechazan → incremento 11 |
@@ -82,5 +82,6 @@ vocabularios de las sondas del arnés.
 ```bash
 npm test --workspace packages/keel-nest        # rasgos de lo emitido (el dominio, EJECUTADO), sintaxis de las 13 fixtures, paridad con keel-spring (sin red)
 npm run ts-check --workspace packages/keel-nest # genera, instala, compila, comprueba la frontera hexagonal, prueba y ARRANCA el proyecto contra PostgreSQL, y compila las 13 fixtures (red, podman/docker, minutos)
-npm run db-check --workspace packages/keel-nest # la persistencia contra PostgreSQL y MySQL reales: esquema, cotas, ida y vuelta, versión, unicidad (podman/docker)
+npm run db-check --workspace packages/keel-nest # la persistencia contra PostgreSQL y MySQL reales: esquema, cotas, ida y vuelta, versión, unicidad (también la condicionada), plegado, interbloqueo y tope (podman/docker)
+npm run matrix --workspace packages/keel-nest   # la matriz de paridad de keel-nest: qué mecanismo genera, quién lo ejecuta, si está falsado (puro)
 ```
