@@ -9,11 +9,12 @@
 //   · validación de entrada (class-validator) → incremento 5;
 //   · cotas numéricas y formato heredado → incremento 4;
 //   · columnas (TypeORM) → incremento 6;
-//   · la forma del cable de `long`, `decimal`, `date` y `timestamp` la fija el incremento 3 con
-//     el golden compartido; hasta entonces el tipo TS es el natural, no el definitivo.
+//   · la forma del cable de cada tipo la fija keel-core/gen/wire.js y la cumplen `Decimal`,
+//     `RawJson` y application/support/wire.ts (incremento 3).
 //
 // Las propiedades que esta proyección pone en cada campo son de keel-nest: `tsType`, `imports`
-// (`{ symbol, from }`) y `elementTsType`. El modelo nunca las nombra.
+// (`{ symbol, from }`, con `from` relativo a la raíz del proyecto cuando es un módulo propio) y
+// `elementTsType`. El modelo nunca las nombra.
 
 import { screamingSnake } from 'keel-core/gen';
 
@@ -23,14 +24,16 @@ const BASE_TS_TYPES = {
   int: { tsType: 'number', imports: [] },
   // Un `long` no cabe en un number sin perder precisión por encima de 2^53.
   long: { tsType: 'bigint', imports: [] },
-  // Nunca `number` para un decimal: es binario y no representa exactamente los decimales.
-  decimal: { tsType: 'Decimal', imports: [{ symbol: 'Decimal', from: 'decimal.js' }] },
+  // Nunca `number` para un decimal: es binario y no representa exactamente los decimales. El
+  // `Decimal` del proyecto (domain/support) conserva la escala, que es contrato del cable.
+  decimal: { tsType: 'Decimal', imports: [{ symbol: 'Decimal', from: 'src/domain/support/decimal.js' }] },
   boolean: { tsType: 'boolean', imports: [] },
   uuid: { tsType: 'string', imports: [] },
   // Fecha sin hora (ISO `YYYY-MM-DD`): TypeScript no tiene un tipo propio que no arrastre una zona.
   date: { tsType: 'string', imports: [] },
   timestamp: { tsType: 'Date', imports: [] },
-  json: { tsType: 'string', imports: [] },
+  // Viaja embebido (contrato del cable, json-embedded): no es un string cualquiera.
+  json: { tsType: 'RawJson', imports: [{ symbol: 'RawJson', from: 'src/domain/support/raw-json.js' }] },
   file: { tsType: 'string', imports: [] }
 };
 
@@ -67,7 +70,7 @@ function initializer(field, ts) {
   if (field.default !== undefined) {
     if (ts.kind === 'enum' || field.type === 'enum') return `${ts.tsType}.${screamingSnake(field.default)}`;
     if (ts.tsType === 'string') return JSON.stringify(String(field.default));
-    if (ts.tsType === 'Decimal') return `new Decimal(${JSON.stringify(String(field.default))})`;
+    if (ts.tsType === 'Decimal') return `Decimal.parse(${JSON.stringify(String(field.default))})`;
     if (ts.tsType === 'bigint') return `${field.default}n`;
     return String(field.default);
   }

@@ -19,21 +19,53 @@ export function generate() {
 
 function applicationTestTs() {
   return `import 'reflect-metadata';
+import { Body, Controller, Get, HttpCode, Post } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import type { INestApplication } from '@nestjs/common';
-import request from 'supertest';
+import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { AppModule } from '../src/app.module.js';
 import { loadConfiguration } from '../src/infrastructure/config/configuration.js';
 import { GracefulShutdown } from '../src/infrastructure/health/graceful-shutdown.js';
+import { HTTP_APPLICATION_OPTIONS, configureHttp, createHttpAdapter } from '../src/infrastructure/http/http-platform.js';
+import { Decimal } from '../src/domain/support/decimal.js';
+import { RawJson } from '../src/domain/support/raw-json.js';
+import { toDecimal, toLong } from '../src/application/support/wire.js';
+
+/**
+ * Sonda del contrato del cable a través del servidor REAL: si Fastify no usara el lector y el
+ * serializador del contrato, un decimal llegaría y saldría como 2.5 y un long perdería dígitos.
+ */
+@Controller('wire-probe')
+class WireProbeController {
+  @Get()
+  out() {
+    return {
+      amount: Decimal.parse('2.50'),
+      big: 9007199254740993n,
+      at: new Date('2026-03-14T09:21:07.482Z'),
+      doc: RawJson.of('{"a":[1,2]}')
+    };
+  }
+
+  @Post()
+  @HttpCode(200)
+  echo(@Body() body: Record<string, unknown>) {
+    return { amount: toDecimal(body.amount), big: toLong(body.big) };
+  }
+}
 
 describe('aplicación', () => {
-  let app: INestApplication;
+  let app: NestFastifyApplication;
 
   beforeAll(async () => {
     const configuration = loadConfiguration({ ...process.env, PROFILE: 'test' });
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule.register(configuration)] }).compile();
-    app = moduleRef.createNestApplication();
+    const moduleRef = await Test.createTestingModule({
+      imports: [AppModule.register(configuration)],
+      controllers: [WireProbeController]
+    }).compile();
+    app = moduleRef.createNestApplication<NestFastifyApplication>(createHttpAdapter(), HTTP_APPLICATION_OPTIONS);
+    configureHttp(app);
     await app.init();
+    await app.getHttpAdapter().getInstance().ready();
   });
 
   afterAll(async () => {
@@ -41,17 +73,51 @@ describe('aplicación', () => {
   });
 
   it('arranca bajo el perfil test y está viva', async () => {
-    await request(app.getHttpServer()).get('/livez').expect(200, { status: 'UP' });
+    const response = await app.inject({ method: 'GET', url: '/livez' });
+    expect(response.statusCode).toBe(200);
+    expect(response.payload).toBe('{"status":"UP"}');
   });
 
   it('acepta tráfico mientras no drena', async () => {
-    await request(app.getHttpServer()).get('/readyz').expect(200, { status: 'UP' });
+    const response = await app.inject({ method: 'GET', url: '/readyz' });
+    expect(response.statusCode).toBe(200);
+    expect(response.payload).toBe('{"status":"UP"}');
   });
 
+  it('las respuestas salen con el contrato del cable', async () => {
+    const response = await app.inject({ method: 'GET', url: '/wire-probe' });
+    expect(response.payload).toBe('{"amount":2.50,"big":9007199254740993,"at":"2026-03-14T09:21:07.482Z","doc":{"a":[1,2]}}');
+  });
+
+  it('los cuerpos se leen sin perder precisión', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/wire-probe',
+      headers: { 'content-type': 'application/json' },
+      payload: '{"amount":2.50,"big":9007199254740993}'
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.payload).toBe('{"amount":2.50,"big":9007199254740993}');
+  });
+
+  it('un cuerpo que no es JSON es un 400', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/wire-probe',
+      headers: { 'content-type': 'application/json' },
+      payload: '{"amount":'
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
+  // Va el último: drenar no tiene vuelta atrás.
   it('al empezar a drenar deja de aceptar tráfico, pero sigue viva', async () => {
     app.get(GracefulShutdown).startDraining();
-    await request(app.getHttpServer()).get('/readyz').expect(503, { status: 'OUT_OF_SERVICE' });
-    await request(app.getHttpServer()).get('/livez').expect(200, { status: 'UP' });
+    const ready = await app.inject({ method: 'GET', url: '/readyz' });
+    expect(ready.statusCode).toBe(503);
+    expect(ready.payload).toBe('{"status":"OUT_OF_SERVICE"}');
+    const live = await app.inject({ method: 'GET', url: '/livez' });
+    expect(live.statusCode).toBe(200);
   });
 });
 `;

@@ -14,6 +14,7 @@ import { packageVersion } from '../lib/assets.js';
 import { TS_PROJECTION } from '../lib/ts-projection.js';
 import * as project from './project.js';
 import * as config from './config.js';
+import * as wire from './wire.js';
 import * as application from './application.js';
 import * as health from './health.js';
 import * as appTests from './app-tests.js';
@@ -21,7 +22,7 @@ import * as readme from './readme.js';
 import * as generatorDocs from './generator-docs.js';
 
 // Orden de emisión. Cada módulo se gatea a sí mismo por lo que el modelo declara.
-const GENERATORS = [project, config, application, health, appTests, readme, generatorDocs];
+const GENERATORS = [project, config, wire, application, health, appTests, readme, generatorDocs];
 
 /**
  * Todo lo que hay que resolver para generar, SIN tocar disco: el stack normalizado, el modelo con

@@ -27,6 +27,9 @@ application:
 server:
   # Puerto por variable de entorno; 8080 es el que asumen los escenarios de validación.
   port: \${SERVER_PORT:8080}
+  # Todas las interfaces, como el servidor de Spring (también SERVER_ADDRESS): Fastify escucha
+  # por defecto solo en 127.0.0.1 y dentro de un contenedor nadie llegaría.
+  address: \${SERVER_ADDRESS:0.0.0.0}
   # Apagado ordenado: al recibir SIGTERM deja de aceptar conexiones, /readyz pasa a
   # OUT_OF_SERVICE y espera como máximo este margen a que terminen las peticiones en vuelo.
   shutdown-timeout: \${SHUTDOWN_TIMEOUT:30s}
@@ -52,7 +55,7 @@ export const CONFIGURATION = Symbol('CONFIGURATION');
 export interface Configuration {
   readonly profiles: readonly string[];
   readonly application: { readonly name: string };
-  readonly server: { readonly port: number; readonly shutdownTimeoutMs: number };
+  readonly server: { readonly port: number; readonly address: string; readonly shutdownTimeoutMs: number };
   /** Cualquier valor por su ruta con puntos (\`server.port\`), ya resuelto. */
   get(path: string): unknown;
 }
@@ -93,6 +96,7 @@ export function loadConfiguration(env: NodeJS.ProcessEnv = process.env, root: st
     application: { name: String(get('application.name')) },
     server: {
       port: toPort(get('server.port')),
+      address: String(get('server.address') ?? '0.0.0.0'),
       shutdownTimeoutMs: toMillis(get('server.shutdown-timeout'))
     },
     get

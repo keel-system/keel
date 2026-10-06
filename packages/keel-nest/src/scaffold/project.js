@@ -23,9 +23,7 @@ import {
   VITEST_VERSION,
   VITE_VERSION,
   TYPES_NODE_VERSION,
-  TYPES_EXPRESS_VERSION,
-  SUPERTEST_VERSION,
-  TYPES_SUPERTEST_VERSION
+  DECIMAL_JS_VERSION
 } from '../lib/assets.js';
 
 export function generate(model) {
@@ -60,7 +58,8 @@ function packageJson(model) {
     dependencies: {
       '@nestjs/common': NEST_VERSION,
       '@nestjs/core': NEST_VERSION,
-      '@nestjs/platform-express': NEST_VERSION,
+      '@nestjs/platform-fastify': NEST_VERSION,
+      'decimal.js': DECIMAL_JS_VERSION,
       'reflect-metadata': REFLECT_METADATA_VERSION,
       rxjs: RXJS_VERSION,
       yaml: YAML_VERSION
@@ -69,10 +68,7 @@ function packageJson(model) {
       '@nestjs/cli': NEST_CLI_VERSION,
       '@nestjs/schematics': NEST_SCHEMATICS_VERSION,
       '@nestjs/testing': NEST_VERSION,
-      '@types/express': TYPES_EXPRESS_VERSION,
       '@types/node': TYPES_NODE_VERSION,
-      '@types/supertest': TYPES_SUPERTEST_VERSION,
-      supertest: SUPERTEST_VERSION,
       typescript: TYPESCRIPT_VERSION,
       vite: VITE_VERSION,
       vitest: VITEST_VERSION

@@ -16,6 +16,7 @@
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { makeWorkspace, mountDesign, runCommand, NEST_READY_DESIGN } from '../test/helpers/workspace.js';
@@ -125,8 +126,8 @@ if (results.every((result) => result.ok)) {
 
 const failed = results.filter((result) => !result.ok).length;
 if (keep) {
-  // El directorio temporal se borra al salir; para conservarlo se copia fuera.
-  const kept = fs.mkdtempSync(path.join(path.dirname(workspace), 'keel-nest-kept-'));
+  // La raíz temporal de los tests se borra al salir del proceso: para conservarlo se copia FUERA de ella.
+  const kept = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-nest-kept-'));
   fs.cpSync(projectDir, kept, { recursive: true });
   console.log(`Proyecto conservado en ${kept}`);
 }

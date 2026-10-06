@@ -27,7 +27,8 @@ test('los tipos del DSL tienen su representación TS; ninguno decimal es number'
   assert.equal(tsOf('timestamp'), 'Date');
   assert.equal(tsOf('uuid'), 'string');
   assert.equal(TS_PROJECTION.fieldType({ kind: 'base', base: 'string', constraints: {} }, { list: true }).tsType, 'string[]');
-  assert.deepEqual(TS_PROJECTION.fieldType({ kind: 'base', base: 'decimal', constraints: {} }).imports, [{ symbol: 'Decimal', from: 'decimal.js' }]);
+  assert.deepEqual(TS_PROJECTION.fieldType({ kind: 'base', base: 'decimal', constraints: {} }).imports, [{ symbol: 'Decimal', from: 'src/domain/support/decimal.js' }]);
+  assert.equal(tsOf('json'), 'RawJson');
 });
 
 for (const fixture of fixtures) {

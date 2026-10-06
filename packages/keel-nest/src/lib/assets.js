@@ -22,7 +22,9 @@ export const SUPPORTED_DSL = ['2.19'];
 //   · NestJS 12 publica sus paquetes SOLO como ESM y pide Node 20.19+ o 22.12+ para ejecutar;
 //   · la CLI de Nest 12 trabaja con TypeScript ~6.0 (TS 7 es el compilador nativo y la CLI aún no
 //     lo declara);
-//   · los proyectos ESM usan Vitest: Jest solo carga los paquetes de Nest 12 desde Node 24.9.
+//   · los proyectos ESM usan Vitest: Jest solo carga los paquetes de Nest 12 desde Node 24.9;
+//   · la plataforma HTTP es Fastify (@nestjs/platform-fastify), no Express: más rendimiento y un
+//     único punto de lectura y escritura de JSON, que es donde se cumple el contrato del cable.
 export const NODE_VERSION = '24';
 export const NODE_ENGINE = '>=22.12';
 export const NEST_VERSION = '^12.1.2';
@@ -38,9 +40,8 @@ export const TYPESCRIPT_VERSION = '~6.0.2';
 export const VITEST_VERSION = '^5.0.3';
 export const VITE_VERSION = '^8.3.3';
 export const TYPES_NODE_VERSION = '^24.0.0';
-export const TYPES_EXPRESS_VERSION = '^5.0.0';
-export const SUPERTEST_VERSION = '^7.0.0';
-export const TYPES_SUPERTEST_VERSION = '^7.0.0';
+// Decimales exactos: el contrato del cable exige conservar la escala (Decimal de domain/support).
+export const DECIMAL_JS_VERSION = '^10.6.0';
 
 export function packageVersion() {
   return JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8')).version;

@@ -44,8 +44,11 @@ test('todo import relativo lleva extensión .js (ESM con nodenext no resuelve si
 });
 
 test('toda dependencia de un constructor se inyecta con @Inject explícito (sin depender de emitDecoratorMetadata)', () => {
+  // Solo las clases que construye el contenedor de Nest; un valor (Decimal, WireNumber) tiene un
+  // constructor normal.
+  const injectable = /@(Injectable|Controller|Module|Catch)\(/;
   const offenders = [];
-  for (const { path: file, content } of tsFiles) {
+  for (const { path: file, content } of tsFiles.filter((entry) => injectable.test(entry.content))) {
     for (const [, params] of content.matchAll(/constructor\(([^)]*)\)/g)) {
       for (const param of params.split(',').map((p) => p.trim()).filter(Boolean)) {
         if (!param.startsWith('@Inject(')) offenders.push(`${file}: ${param}`);
@@ -64,7 +67,9 @@ test('la configuración sigue el gradiente y las variables del servidor de keel-
 
 test('el arranque carga y valida la configuración ANTES de crear la aplicación, y apaga en orden', () => {
   const main = byPath.get('src/main.ts');
-  assert.ok(main.indexOf('loadConfiguration()') < main.indexOf('NestFactory.create('));
+  assert.ok(main.indexOf('loadConfiguration()') < main.indexOf('NestFactory.create'));
+  // Fastify escucha por defecto solo en 127.0.0.1: la dirección tiene que pasarse.
+  assert.ok(main.includes('app.listen(configuration.server.port, configuration.server.address)'));
   assert.match(main, /app\.enableShutdownHooks\(\)/);
 });
 
@@ -89,4 +94,20 @@ test('el proyecto se llama <servicio>-nest y el modelo es el de keel-core/gen co
   assert.ok(product, 'el modelo no tiene la entidad del diseño');
   assert.ok(product.fields.every((field) => typeof field.tsType === 'string'), 'algún campo sin tipo TS');
   assert.ok(product.fields.every((field) => field.javaType === undefined), 'se coló un tipo Java');
+});
+
+test('la prueba del contrato del cable trae TODOS los casos de keel-core/gen/wire.js', async () => {
+  const { WIRE_OUTPUT_CASES, WIRE_INPUT_CASES, WIRE_REJECTED_INPUTS } = await import('keel-core/gen/wire');
+  const emitted = byPath.get('test/wire-contract.test.ts');
+  for (const entry of [...WIRE_OUTPUT_CASES, ...WIRE_INPUT_CASES, ...WIRE_REJECTED_INPUTS]) {
+    assert.ok(emitted.includes(`"id": "${entry.id}"`), `falta el caso ${entry.id}`);
+  }
+});
+
+test('dominio y aplicación no importan el framework ni la plataforma HTTP', () => {
+  const inner = tsFiles.filter((file) => /^src\/(domain|application)\//.test(file.path));
+  assert.ok(inner.length >= 3, 'el contrato del cable vive en domain/ y application/');
+  for (const { path: file, content } of inner) {
+    assert.doesNotMatch(content, /from '(@nestjs\/|fastify)/, file);
+  }
 });

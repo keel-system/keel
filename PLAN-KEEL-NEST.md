@@ -70,12 +70,13 @@ Elecciones de stack (equivalentes a las de Spring; confirmar versión al impleme
 
 | Spring | Nest |
 |---|---|
-| Gradle wrapper vendorizado | `package.json` + `package-lock.json` generado, `npm ci`, `.nvmrc` |
+| Gradle wrapper vendorizado | `package.json` (el lock lo crea el primer `npm install` y se commitea), `.nvmrc` |
+| Spring MVC sobre Tomcat | **Fastify** (`@nestjs/platform-fastify`): más rendimiento que Express con el mismo código de Nest, y UN punto de lectura de cuerpos y UN punto de escritura de respuestas, que es donde se cumple el contrato del cable. Escucha en `SERVER_ADDRESS` (default `0.0.0.0`): Fastify por defecto solo atiende `127.0.0.1` |
 | JPA + Flyway | TypeORM + migraciones TypeORM (`migrations/`, baseline exportado por el agente de calidad) |
 | Spring Data MongoDB | driver oficial `mongodb` (control fino de `findOneAndUpdate` e índices parciales) |
 | Bean Validation | `class-validator` + `class-transformer` con `ValidationPipe` global (`whitelist`, `forbidNonWhitelisted`) |
-| `BigDecimal` | `decimal.js` + serializador propio que conserva la escala en el JSON |
-| Jackson `TimestampModule` | serializador único de `Date`→ISO con 3 decimales |
+| `BigDecimal` | `Decimal` propio en `domain/support` con la semántica de escala de `BigDecimal` (sobre `decimal.js`, que por sí solo normaliza `2.50` a `2.5`) |
+| Jackson (`TimestampModule`, `write-bigdecimal-as-plain`, `@JsonRawValue`) | `application/support/wire.ts`: lectura exacta con el texto fuente de cada número (`JSON.parse` con `context.source`), escritura con `JSON.rawJSON`, `RawJson` para el `json` embebido; conectado a Fastify como su parser JSON y su serializador de respuesta |
 | Spring Security + JWT | `jose` (JWKS) en un `Guard` global + `@Roles`; Keycloak/Cognito por stack |
 | resilience4j | `cockatiel` (retry, circuit breaker, timeout, bulkhead) con fallback estrecho |
 | `@Scheduled` | `@nestjs/schedule` |
@@ -86,7 +87,7 @@ Elecciones de stack (equivalentes a las de Spring; confirmar versión al impleme
 | Logback + MDC | `pino` (`nestjs-pino`) + `AsyncLocalStorage` para correlación |
 | Micrometer + OTel | OpenTelemetry Node SDK (trazas/logs OTLP) + `prom-client` por scrape, **con los nombres de serie del vocabulario neutral** |
 | Actuator | `@nestjs/terminus` en `/livez` `/readyz` + servidor de management en `MANAGEMENT_PORT` |
-| JUnit `integrationTest` | Jest (`test/integration/`) + `jest-junit` → el mismo XML que lee `score-scenarios.sh` |
+| JUnit `integrationTest` | Vitest (`test/integration/`) con su reporter JUnit → el mismo XML que lee `score-scenarios.sh`; peticiones con `app.inject()` de Fastify |
 
 Gates estáticos que el proyecto lleva dentro (equivalentes a los `.sh` de Spring):
 `dependency-cruiser` con la regla hexagonal (domain/application no importan framework),
@@ -223,6 +224,38 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   keel-spring, sobre la configuración Jackson emitida; en keel-nest, ejecutando el serializador
   generado con Node). Un ejemplo saboteado debe ponerlo rojo.
 - **Salida**: la tabla «Cable» del §0 tiene test detrás en las dos columnas.
+- **Estado: hecho (2026-10-06).**
+  - **El contrato**, como datos en `keel-core/src/lib/gen/wire.js`: 16 reglas, 17 casos de
+    salida, 10 de entrada formulados como ida y vuelta (comparables entre lenguajes sin saber cómo
+    representa cada uno el valor), 4 rechazos y el orden de claves del error, la página y la
+    envoltura de eventos. Para el diseñador, `assets/core/docs/wire-contract.md`, atado a los
+    datos por `test/wire-contract.test.js`.
+  - **Un hallazgo en keel-spring**: no fijaba la notación de `BigDecimal`, así que Jackson
+    escribía `1E-7` por debajo de 1E-6. El contrato fija la notación plana y keel-spring activa
+    `spring.jackson.generator.write-bigdecimal-as-plain`. Es un cambio de salida intencional: solo
+    cambia `application.yaml` en las 42 combinaciones, y la línea base se regenera en su propio
+    commit. Su `test/wire-contract.test.js` exige, sobre lo que emite, la pieza que realiza cada
+    regla: Jackson, `appendInstant(3)`, el orden de los records, `@JsonValue`, `@JsonRawValue` y
+    `NON_NULL` solo con `omit`. Falsado apagando la notación plana.
+  - **En keel-nest**: `Decimal` y `RawJson` en `domain/support`; lector, conversores,
+    serializador y `@OmitNulls()` en `application/support/wire.ts` (TypeScript puro); Fastify los
+    usa como su parser JSON (que rechaza `__proto__` y responde 400 a un cuerpo malformado) y como
+    su serializador de respuesta. La prueba emitida `test/wire-contract.test.ts` trae todos los
+    casos de keel-core (un test de keel-nest lo exige) y una sonda HTTP por `app.inject()` mide que
+    Fastify los use de verdad. En `ts-check`, 48 pruebas en verde. Falsado dos veces: quitar la
+    escala de `Decimal` tumba las 7 pruebas de la escala, y pasar el `bigint` a `number`, las 6 de
+    `long`.
+- **Cambios respecto a lo planificado**:
+  - **Fastify en lugar de Express** (petición del usuario, por rendimiento). Además da un único
+    punto de lectura y escritura de JSON, que es justo donde se cumple este contrato.
+  - **`JSON.parse` con texto fuente y `JSON.rawJSON`** (Node 22+) en lugar de un serializador a
+    mano: el número llega y sale con su texto exacto sin dependencias.
+  - **Un `Decimal` propio y no el de decimal.js tal cual**: decimal.js normaliza `2.50` a `2.5`.
+  - **El error, la página y la envoltura** se fijan ya, pero keel-nest los emite en los
+    incrementos 5 y 9; el orden de claves se le exigirá allí, contra los mismos datos.
+- **Asimetría conocida, sin cubrir por el contrato**: un decimal *dentro* de un campo `json`
+  embebido. Jackson lo pasa por un `double` al leer el árbol (`{"a":2.50}` sale `{"a":2.5}`) y
+  keel-nest conserva el texto. Se resolverá decidiendo qué es lo correcto antes de igualarlos.
 
 ### Inc. 4 — Dominio y aplicación (sin persistencia)
 
@@ -273,7 +306,7 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
 
 - **Entregables**: `scaffold/{integration-tests,devtools,docker,deploy,context-md,
   generator-docs,readme}.js`: `infra/docker-compose.yaml` desde el catálogo neutral,
-  `validate-infra.sh`, `reset-db.sh`, `score-scenarios.sh` (lee el XML de `jest-junit`, mismos
+  `validate-infra.sh`, `reset-db.sh`, `score-scenarios.sh` (lee el XML JUnit de Vitest, mismos
   exit codes 0/1/2/3), base `AbstractFlow` en TS con `FailureCapture` a
   `build/keel-failures/`, sello de `specs/` (`specs.sha256`).
   `assets/agents/keel-nest-{code,infra,tests,validate,quality}.md` neutrales;

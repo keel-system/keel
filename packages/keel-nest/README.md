@@ -23,8 +23,9 @@ cd services/<servicio>-nest
    genera el otro, y uno no listo (`keel validate --ready` en rojo) solo se genera con
    `--accept-unready`, que queda estampado en `keel-generated.json`.
 2. **Compatibilidad**: DSL `2.19` (la misma versión que keel-spring; el método soporta una sola).
-3. **Salida**: `services/<servicio>-nest/`, un proyecto NestJS 12 en ESM sobre Node 22.12+ con
-   TypeScript `strict`, Vitest, configuración por perfiles (`PROFILE`, `SERVER_PORT`,
+3. **Salida**: `services/<servicio>-nest/`, un proyecto NestJS 12 sobre **Fastify**, en ESM sobre
+   Node 22.12+, con TypeScript `strict`, Vitest, el **contrato del cable** de `keel-core/gen/wire.js`
+   (decimales con su escala, `long` exactos, instantes en UTC con tres decimales), configuración por perfiles (`PROFILE`, `SERVER_PORT`,
    `SHUTDOWN_TIMEOUT`, gradiente literal → `${VAR:default}` → `${VAR}`) y sondas `/livez` y `/readyz`
    con el contrato del servidor de keel-spring.
 4. **Regla de oro**: el generador nunca inventa ni corrige funcionalidad. Lo que todavía no sabe
