@@ -212,7 +212,18 @@ function baseYaml(model) {
   // sentido único. El default de Jackson (los nulos viajan) es el que no
   // prejuzga; el servicio que deba omitirlos lo hace con @JsonInclude por clase,
   // que es la regla de conventions/mapping.md.
-  lines.push('  jackson:', '    serialization:', '      write-dates-as-timestamps: false');
+  //
+  // Y los BigDecimal en notación PLANA: sin ella Jackson escribe con toString(), que pasa a
+  // exponencial por debajo de 1E-6 (0.0000001 sale 1E-7). El contrato del cable lo fija
+  // (keel-core/gen/wire.js, regla decimal-plain) porque es lo que tiene que emitir también el
+  // servidor de cualquier otro generador del mismo diseño.
+  lines.push(
+    '  jackson:',
+    '    serialization:',
+    '      write-dates-as-timestamps: false',
+    '    generator:',
+    '      write-bigdecimal-as-plain: true'
+  );
   // open-in-view es de JPA: cierra la sesión al salir del servicio para que una
   // relación LAZY no se cargue durante la serialización. En el modelo documental no
   // hay sesión ni carga perezosa que cerrar — el documento viene entero.
