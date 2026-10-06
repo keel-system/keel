@@ -14,7 +14,8 @@
 // modelo.
 
 import { screamingSnake, basePackage } from './naming.js';
-import { toJava, beanValidationAnnotations, columnAnnotations, inheritedTypePattern, numericConstraints } from './type-mapper.js';
+import { toJava, beanValidationAnnotations, columnAnnotations } from './type-mapper.js';
+import { numericConstraints, inheritedFormat } from 'keel-core/gen/constraints';
 
 // http declarado en el diseño → excepción base de shared/exception que extiende
 // el error generado; los status sin subclase dedicada extienden DomainException
@@ -41,9 +42,6 @@ const PARAM_JAVA_TYPES = {
   decimal: 'BigDecimal',
   boolean: 'Boolean'
 };
-
-// Las bases textuales cuyo formato heredado se recoge en una clase `<Tipo>Format`.
-const TEXT_BASES = new Set(['string', 'text', 'json']);
 
 /**
  * Cómo se crea un uuid que genera el servidor: el helper de la versión 7 (scaffold/ids.js), no
@@ -173,8 +171,7 @@ export const JAVA_PROJECTION = {
       // La misma cota que `collectFormatTypes`, y tiene que serlo: este dato es el que
       // hace que la nota del command cite `<Tipo>Format` y que el gate exija una llamada.
       // Si los dos lados no coincidieran, la nota mandaría a una clase que no se generó.
-      inheritedPattern:
-        java.kind === 'scalar-vt' && TEXT_BASES.has(java.base) ? inheritedTypePattern(field, java) : null,
+      inheritedPattern: inheritedFormat(field, resolved),
       // Una colección no es una columna: su mapeo (@ElementCollection) lo pone la Jpa,
       // no columnAnnotations. Sin persistence o sin list, comportamiento previo.
       columns: persisted && !isList ? columnAnnotations(fieldName, field, java, { collation }) : [],

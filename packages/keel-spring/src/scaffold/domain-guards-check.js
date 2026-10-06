@@ -21,6 +21,8 @@
 // lección (a) de check-idempotency.sh: un check que pide la implementación incorrecta
 // tiene como camino de menor resistencia romper el código para callarlo.
 
+import { guardedFields } from 'keel-core/gen/domain-guards';
+
 /**
  * ¿Hay algo que comprobar? Sin ningún campo de entidad tipado con un value type escalar
  * con `pattern` no hay tramo que vigilar y el script no se genera: un gate que siempre
@@ -38,24 +40,10 @@ export function generate(model) {
 
 // ─── La matriz ───────────────────────────────────────────────────────────────
 //
-// Una fila por (entidad, campo): el tipo del campo tiene formato declarado, así que
-// alguien tiene que hacerlo cumplir tras normalizar. Se recorre por CAMPO y no por
-// tipo porque es el campo el que se escapa: `EmailAddress` estaba comprobado en
-// `Application` y sin comprobar en `SuppressedAddress`, y una fila por tipo habría
-// salido verde con el primero.
+// Una fila por (entidad, campo) con formato heredado: la deriva keel-core/gen (domain-guards.js),
+// la misma para los dos generadores.
 
-export function guardedFields(model) {
-  const declared = new Set((model.formatTypes ?? []).map((type) => type.name));
-  const rows = [];
-  for (const entity of model.entities ?? []) {
-    for (const field of entity.fields ?? []) {
-      if (!field.inheritedPattern || !field.typeName) continue;
-      if (!declared.has(field.typeName)) continue;
-      rows.push({ entity: entity.name, field: field.name, type: field.typeName });
-    }
-  }
-  return rows;
-}
+export { guardedFields };
 
 function checksOf(model) {
   return guardedFields(model).map((row) => ({

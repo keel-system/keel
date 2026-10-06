@@ -20,6 +20,7 @@ import {
   brokerSafeName
 } from './naming.js';
 import { resolveType, isTextual } from './types.js';
+import { FORMAT_TEXT_BASES } from './constraints.js';
 import { DATABASES, caseSensitiveCollationFor } from './infra-catalog.js';
 import { cronPeriodSeconds } from './cron-period.js';
 import { assertProjection } from './projection.js';
@@ -464,8 +465,6 @@ function resolveField(ownerName, fieldName, field, domainTypes, inlineEnumName, 
 // si nadie lo recoge después, el formato no se comprueba en ningún sitio. Esto es el
 // «después»: una clase por tipo, con la regex del diseño escrita UNA vez.
 
-const TEXT_BASES = new Set(['string', 'text', 'json']);
-
 function collectFormatTypes(domainTypes) {
   const formatTypes = [];
   for (const [name, def] of Object.entries(domainTypes ?? {})) {
@@ -474,7 +473,7 @@ function collectFormatTypes(domainTypes) {
     if (!def?.base || def.values || def.fields) continue;
     // Un `pattern` solo se puede hacer cumplir sobre texto: los bases que no se
     // aplanan a String no llegan aquí ni aunque el diseño declare uno.
-    if (!TEXT_BASES.has(def.base)) continue;
+    if (!FORMAT_TEXT_BASES.has(def.base)) continue;
     const pattern = def.constraints?.pattern ?? null;
     // Sin `pattern` no hay nada que comprobar aquí: `minLength`/`maxLength` los emite
     // Bean Validation como @Size en el DTO de entrada, así que una clase para ellos no

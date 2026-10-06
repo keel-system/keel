@@ -158,48 +158,9 @@ export function beanValidationAnnotations(field, resolved, { inheritTypeFormat =
  */
 export const DECIMAL_PRECISION = 19;
 
-/**
- * Cotas numéricas y ESCALA de un campo, con la misma mezcla tipo → campo que hace
- * `beanValidationAnnotations`. Es fuente ÚNICA de un dato que no viaja en `validation`:
- * no hay anotación de Bean Validation que NORMALICE una escala —solo `@Digits`, que
- * rechaza—, así que sin esto el único sitio donde vive `scale` es el `precision/scale`
- * de la columna, que no existe cuando el value object no se persiste.
- *
- * Devuelve null cuando no hay nada que hacer cumplir, para que quien lo consuma pueda
- * decidir sin mirar dentro.
- */
-export function numericConstraints(field, resolved) {
-  if (field.list) return null;
-  const constraints = { ...resolved.constraints, ...(field.constraints ?? {}) };
-  const decimal = resolved.base === 'decimal';
-  const scale = decimal && constraints.scale != null ? constraints.scale : null;
-  const min = constraints.min ?? null;
-  const max = constraints.max ?? null;
-  if (scale === null && min === null && max === null) return null;
-  // `reject` | `round` | null. Null es «el diseño no lo decidió» (y keel validate lo exigió como
-  // obligación, o se aceptó por escrito): se redondea, que es lo que build hacía siempre.
-  const scalePolicy = scale === null ? null : constraints.scalePolicy ?? null;
-  return { scale, min, max, decimal, scalePolicy };
-}
-
-/**
- * El `pattern` que un campo HEREDA de su value type escalar, que es exactamente el
- * que `beanValidationAnnotations(..., { inheritTypeFormat: false })` deja fuera del
- * DTO de entrada. Null si el campo declara el suyo propio (entonces no se hereda
- * nada y el de entrada lo conserva) o si el tipo no declara formato.
- *
- * Es la fuente ÚNICA de ese dato: lo consumen la nota del command (services.js),
- * la clase `<Tipo>Format` del dominio (value-types.js) y el gate que verifica que
- * alguien la llama (domain-guards-check.js). Con tres copias, el gate acabaría
- * comprobando un formato distinto del que se genera.
- *
- * Para un campo COLECCIÓN el patrón es el del ELEMENTO: `resolved` ya es el tipo
- * del elemento, no el del contenedor.
- */
-export function inheritedTypePattern(field, resolved) {
-  if ((field?.constraints ?? {}).pattern != null) return null;
-  return resolved?.constraints?.pattern ?? null;
-}
+// Las cotas numéricas y el formato heredado son decisiones del DISEÑO: viven en keel-core/gen para
+// que keel-spring y keel-nest hagan cumplir lo mismo (constraints.js).
+export { numericConstraints, inheritedTypePattern } from 'keel-core/gen/constraints';
 
 /**
  * Anotaciones JPA de columna para un campo de entidad persistida.

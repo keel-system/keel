@@ -28,4 +28,12 @@ export {
   deadLetterSubscriptions
 } from './dead-letter.js';
 export { cronPeriodSeconds, fastestSchedulePeriod } from './cron-period.js';
+export {
+  FORMAT_TEXT_BASES,
+  numericConstraints,
+  inheritedTypePattern,
+  inheritedFormat,
+  textConstraints
+} from './constraints.js';
+export { guardedFields } from './domain-guards.js';
 export { physicalBucketName, declaredBuckets, isPublicBucket } from './buckets.js';
