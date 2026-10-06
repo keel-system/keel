@@ -32,7 +32,7 @@
 // el resto lo ignora.
 
 import { declaredBuckets } from 'keel-core/gen';
-import { validateCommand as mailValidateCmd, resetCommand as mailResetCmd, HTTP_PORT as MAIL_HTTP_PORT, SMTP_PORT as MAIL_SMTP_PORT, SERVICE as MAIL_SERVICE, IMAGE as MAIL_IMAGE, CHAOS_ENV as MAIL_CHAOS_ENV, SELECTIVE_REJECT_ENV as MAIL_SELECTIVE_REJECT_ENV } from './mail-probes.js';
+import { validateCommand as mailValidateCmd, resetCommand as mailResetCmd, HTTP_PORT as MAIL_HTTP_PORT, SMTP_PORT as MAIL_SMTP_PORT, SERVICE as MAIL_SERVICE, IMAGE as MAIL_IMAGE, CHAOS_ENV as MAIL_CHAOS_ENV, SELECTIVE_REJECT_ENV as MAIL_SELECTIVE_REJECT_ENV } from 'keel-core/gen/mail-probes';
 
 // Credenciales de la infraestructura de prueba local (LocalStack y MinIO las
 // ignoran; el SDK y la AWS CLI exigen que EXISTAN). Van al contenedor devtools

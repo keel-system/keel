@@ -28,6 +28,10 @@
 // **El texto sale CRUDO, sin escapar.** Escapar es trabajo de `javaString()` al componer el
 // literal Java, y el runner usa estas cadenas tal cual. Pre-escaparlas aquí produciría el
 // doble escape que ya se coló una vez y que solo se ve leyendo el Java generado.
+//
+// NEUTRAL (keel-core/gen): la consumen todos los generadores, porque es contrato con la
+// imagen o con la pasarela, no con un lenguaje. Los comentarios cuentan cómo la usa keel-spring,
+// que es la implementación de referencia; un arnés de otro lenguaje la renderiza igual.
 
 /**
  * El envoltorio con el que TODO script de aquí se ejecuta, y sin el cual no vuelve nada.

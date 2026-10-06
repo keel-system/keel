@@ -689,7 +689,7 @@ ${imports.map((entry) => `import ${entry};`).join('\n')}
  *
  * <p>La mitad del ARNÉS —los scripts de mongosh con los que se fabrica la precondición— no se
  * repite aquí: la ejercita {@code npm run mongo-check} contra este mismo Mongo, desde
- * {@code src/lib/mongo-probes.js}. Lo de aquí es el reclamo.
+ * {@code keel-core/src/lib/gen/mongo-probes.js}. Lo de aquí es el reclamo.
  */
 @DataMongoTest(properties = {
         ${properties.join(',\n        ')}

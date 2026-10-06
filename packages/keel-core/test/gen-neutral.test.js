@@ -22,7 +22,10 @@ const FORBIDDEN = [
   [/\bnest\w*/i, 'nombra Nest'],
   [/\btypescript\b|\btypeorm\b/i, 'nombra TypeScript/TypeORM'],
   [/['"`]@[A-Z]\w+/, 'emite una anotación'],
-  [/\bBigDecimal\b|\bUUID\b|\bInstant\b/, 'nombra un tipo de un lenguaje']
+  // Un tipo cuenta como cadena suelta —lo que emitiría un mapeador de tipos— o con una llamada a
+  // su API. El nombre a secas no: `UUID("…")` es una función de mongosh, y el script que la usa
+  // es igual para cualquier generador.
+  [/['"`](BigDecimal|UUID|Instant|LocalDate)['"`]|\b(BigDecimal|UUID|Instant)\.[a-z]\w*/, 'nombra un tipo de un lenguaje']
 ];
 
 const files = fs.readdirSync(genDir).filter((name) => name.endsWith('.js'));
@@ -51,6 +54,10 @@ test('el detector ve lo que tiene que ver (se autocomprueba)', () => {
   const code = codeOf("// Java en un comentario no cuenta\nconst t = 'BigDecimal';\nconst a = '@Entity';");
   const hits = FORBIDDEN.filter(([pattern]) => pattern.test(code)).map(([, why]) => why);
   assert.deepEqual(hits, ['emite una anotación', 'nombra un tipo de un lenguaje']);
+  const call = codeOf('const id = `${x}UUID.randomUUID()`;');
+  assert.ok(FORBIDDEN.some(([pattern]) => pattern.test(call)), 'una llamada a la API del tipo cuenta');
+  const mongosh = codeOf('const s = `db.c.updateOne({ _id: UUID("${id}") })`;');
+  assert.ok(!FORBIDDEN.some(([pattern]) => pattern.test(mongosh)), 'la función UUID() de mongosh no cuenta');
 });
 
 test('el subpath keel-core/gen expone lo mismo que su índice', async () => {

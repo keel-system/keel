@@ -27,7 +27,7 @@ import {
   IMAGE,
   CHAOS_ENV,
   CHAOS_REJECT_RECIPIENTS
-} from '../src/lib/mail-probes.js';
+} from 'keel-core/gen/mail-probes';
 
 const fixtureDir = path.join(FIXTURES_DIR, 'notification-mailer');
 const PROJECT = path.join('services', 'notification-mailer-spring');
@@ -613,7 +613,7 @@ test('el rechazo SELECTIVO: el buzón rechaza el TLD reservado .invalid y acepta
   // acepta a ana» no se alcanzaba. La palanca es MP_SMTP_ALLOWED_RECIPIENTS (RE2, fija desde el
   // arranque); su conducta EN VIVO la mide MAIL-12 de mail-check. Aquí se fija la semántica de la
   // expresión —sin lookaround, que RE2 no tiene— y que viaja al compose y al arnés.
-  const { allowedRecipientsPattern, REJECTED_DOMAIN, SELECTIVE_REJECT_ENV } = await import('../src/lib/mail-probes.js');
+  const { allowedRecipientsPattern, REJECTED_DOMAIN, SELECTIVE_REJECT_ENV } = await import('keel-core/gen/mail-probes');
   const pattern = allowedRecipientsPattern();
   assert.doesNotMatch(pattern, /\(\?[=!<]/, 'RE2 no admite lookaround');
   assert.ok(!pattern.includes('$'), 'compose interpolaría el $ como variable');

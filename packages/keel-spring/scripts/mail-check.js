@@ -3,7 +3,7 @@
 //
 // Hermano de broker-check.js, con el mismo razonamiento detrás. El arnés consulta
 // el buzón por HTTP con rutas, parámetros de búsqueda y nombres de campo que salen
-// de `src/lib/mail-probes.js`, y nada de eso se ejecuta en `npm test`: la suite
+// de `keel-core/src/lib/gen/mail-probes.js`, y nada de eso se ejecuta en `npm test`: la suite
 // compara cadenas y `compile-check` compila, pero entre «compila» y «un escenario
 // del pipeline lo prueba» no hay ninguna red. Un `query=` que la imagen no acepta,
 // un campo que se llama `Subject` y no `subject`, una búsqueda que devuelve el
@@ -16,7 +16,7 @@
 // Para ejercitarla sin la app, el runner habla SMTP crudo por un socket: son cinco
 // líneas de protocolo y evita añadir una dependencia al paquete.
 //
-// Los comandos y las rutas NO se escriben aquí: salen de `src/lib/mail-probes.js`,
+// Los comandos y las rutas NO se escriben aquí: salen de `keel-core/src/lib/gen/mail-probes.js`,
 // el mismo módulo del que el arnés renderiza su Java y del que el catálogo saca su
 // sondeo y su purga. Un runner con rutas propias comprobaría que Mailpit responde,
 // no que el generador acierta.
@@ -46,7 +46,7 @@ import {
   CHAOS_REJECT_RECIPIENTS,
   CHAOS_OFF,
   REJECTED_DOMAIN
-} from '../src/lib/mail-probes.js';
+} from 'keel-core/gen/mail-probes';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixturesDir = path.join(here, '..', '..', '..', 'fixtures', 'designs');

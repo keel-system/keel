@@ -60,7 +60,7 @@ Fila o celda en `keel-spring/src/lib/engine-support.js` — la **matriz de parid
 
 ## Cambio en el correo saliente
 
-`keel-spring/src/scaffold/mail.js` (puerto, adaptador SMTP, renderizador) + `src/lib/mail-probes.js` si toca la API del buzón + `src/scaffold/mail-harness.js` si toca el arnés + `test/mail.test.js`. **La frontera aquí es distinta a la de storage o los brokers**: build genera también el adaptador, porque el transporte no cambia con la infraestructura elegida y lo que lleva dentro son dos defensas —el saneado del asunto y el escapado de las variables— que no aparecen en el camino de menor resistencia de nadie y cuya ausencia no rompe ninguna prueba: el correo sale igual, y sale mal. Razonado en `assets/generators/spring/constitution.md § Contenido de origen externo`
+`keel-spring/src/scaffold/mail.js` (puerto, adaptador SMTP, renderizador) + `keel-core/src/lib/gen/mail-probes.js` si toca la API del buzón + `src/scaffold/mail-harness.js` si toca el arnés + `test/mail.test.js`. **La frontera aquí es distinta a la de storage o los brokers**: build genera también el adaptador, porque el transporte no cambia con la infraestructura elegida y lo que lleva dentro son dos defensas —el saneado del asunto y el escapado de las variables— que no aparecen en el camino de menor resistencia de nadie y cuya ausencia no rompe ninguna prueba: el correo sale igual, y sale mal. Razonado en `assets/generators/spring/constitution.md § Contenido de origen externo`
 
 ## Cambio en lo que se admite en una SUBIDA (tipo declarado frente a firma del binario)
 

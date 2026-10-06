@@ -17,6 +17,10 @@
 //     igual que ya hace con WireMock en localhost:8090;
 //   * reset-db.sh corre dentro del contenedor devtools y habla por el nombre de
 //     servicio de la red del compose (mailpit:8025).
+//
+// NEUTRAL (keel-core/gen): la consumen todos los generadores, porque es contrato con la
+// imagen o con la pasarela, no con un lenguaje. Los comentarios cuentan cómo la usa keel-spring,
+// que es la implementación de referencia; un arnés de otro lenguaje la renderiza igual.
 
 /**
  * La imagen. Va aquí y no en el catálogo porque las rutas de este módulo son contrato con

@@ -5,6 +5,10 @@
 // Tiene que decir lo mismo que el adaptador generado (payment-gateways/*.js): si el doble devuelve
 // una forma que el adaptador no lee, los escenarios miden el doble y no el servidor. Por eso cada
 // forma de aquí cita el campo del adaptador que la consume.
+//
+// NEUTRAL (keel-core/gen): la consumen todos los generadores, porque es contrato con la
+// imagen o con la pasarela, no con un lenguaje. Los comentarios cuentan cómo la usa keel-spring,
+// que es la implementación de referencia; un arnés de otro lenguaje la renderiza igual.
 
 export const PAYMENT_PROBES = {
   stripe: {

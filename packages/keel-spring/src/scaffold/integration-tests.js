@@ -34,7 +34,7 @@ import {
   clearAbandonedScript,
   CLOCK,
   PRINT_WRAPPER
-} from '../lib/mongo-probes.js';
+} from 'keel-core/gen/mongo-probes';
 import { tokenUrl, userTestClient, usesPersonaTokens } from './auth-provisioning.js';
 // La forma de la tabla y el SQL con el que el arnés fabrica la precondición del rescate:
 // fuente única con scripts/claim-check.js, que ejecuta AMBOS contra el motor junto al reclamo

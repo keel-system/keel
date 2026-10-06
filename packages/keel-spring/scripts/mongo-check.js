@@ -14,7 +14,7 @@
 // `stallInFlight` que no atasca ninguna fila, una espera al drenaje del outbox que vuelve al
 // instante porque cuenta cero.
 //
-// Los scripts NO se escriben aquí: salen de `src/lib/mongo-probes.js`, el mismo módulo del que
+// Los scripts NO se escriben aquí: salen de `keel-core/src/lib/gen/mongo-probes.js`, el mismo módulo del que
 // el arnés renderiza su Java. Un runner con scripts propios comprobaría que Mongo responde,
 // que no es lo mismo que comprobar que el generador acierta.
 //
@@ -52,7 +52,7 @@ import {
   abandonOutboxScript,
   clearAbandonedScript,
   printed
-} from '../src/lib/mongo-probes.js';
+} from 'keel-core/gen/mongo-probes';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixturesDir = path.join(here, '..', '..', '..', 'fixtures', 'designs');

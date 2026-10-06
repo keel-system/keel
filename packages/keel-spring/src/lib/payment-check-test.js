@@ -6,7 +6,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { paymentProbesFor } from './payment-probes.js';
+import { paymentProbesFor } from 'keel-core/gen/payment-probes';
 import { PAYMENT_TEST_SECRETS } from '../scaffold/config.js';
 import { isRawJsonField } from '../scaffold/jackson.js';
 

@@ -6,7 +6,7 @@
 // No es un doble dentro de la JVM: el servidor habla HTTP con WireMock por el mismo socket que con la
 // pasarela real, con el mismo adaptador. Lo que se mide es el servidor.
 
-import { paymentProbesFor } from '../lib/payment-probes.js';
+import { paymentProbesFor } from 'keel-core/gen/payment-probes';
 import { PAYMENT_TEST_SECRETS } from './config.js';
 import { PAYMENT_NOTICE_PATH } from './payments.js';
 

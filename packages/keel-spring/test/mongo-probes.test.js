@@ -32,7 +32,7 @@ import {
   clearAbandonedScript,
   PRINT_WRAPPER,
   printed
-} from '../src/lib/mongo-probes.js';
+} from 'keel-core/gen/mongo-probes';
 
 const fixturesDir = path.join(FIXTURES_DIR);
 

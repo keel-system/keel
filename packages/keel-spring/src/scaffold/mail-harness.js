@@ -10,7 +10,7 @@
 // aceptó, no que el correo saliera ni que dijera lo que tenía que decir. La API del
 // buzón es lo que separa «lo he mirado y se ve bien» de una prueba de regresión.
 //
-// Las rutas y los nombres de campo salen de lib/mail-probes.js, nunca de literales
+// Las rutas y los nombres de campo salen de keel-core/src/lib/gen/mail-probes.js, nunca de literales
 // escritos aquí: es el mismo módulo del que se renderizan el sondeo de
 // validate-infra.sh, la purga de reset-db.sh y el runner de conformidad. Escritos a
 // mano en cada sitio, el gate en vivo comprobaría algo distinto de lo que se genera.
@@ -28,7 +28,7 @@ import {
   CHAOS_REJECT_RECIPIENTS,
   CHAOS_OFF,
   REJECTED_DOMAIN
-} from '../lib/mail-probes.js';
+} from 'keel-core/gen/mail-probes';
 import { fastestSchedulePeriod } from 'keel-core/gen';
 
 // Un literal de cadena Java: los cuerpos JSON de chaos llevan comillas dobles.

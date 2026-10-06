@@ -335,7 +335,7 @@ export const MECHANISMS = {
 
   'harness-db-probes': {
     title: 'Sondas del arnés contra la base (atascar, envejecer, contar, abandonar)',
-    emitter: 'src/lib/mongo-probes.js · src/lib/claim-probes.js · src/scaffold/integration-tests.js',
+    emitter: '../keel-core/src/lib/gen/mongo-probes.js · src/lib/claim-probes.js · src/scaffold/integration-tests.js',
     axis: 'model',
     why: 'Fabrican la PRECONDICIÓN de los escenarios. Una sonda que no casa deja el escenario en verde sin haber atascado, envejecido ni contado nada.',
     parity: {
