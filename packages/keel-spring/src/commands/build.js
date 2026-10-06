@@ -1,19 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import pc from 'picocolors';
-import {
-  isKeelWorkspace,
-  resolveServiceDir,
-  loadService,
-  validateService,
-  assessReadiness,
-  copyTree,
-  diffDesigns,
-  DECISIONS_FILE,
-  classifyWarnings,
-  REVIEW_FILE,
-  MANIFEST_FILE as DESIGN_MANIFEST
-} from 'keel-core';
+import { copyTree, diffDesigns, MANIFEST_FILE as DESIGN_MANIFEST } from 'keel-core';
+import { gateDesign } from 'keel-core/gen/design-gate';
 import { SKILL, SUPPORTED_DSL } from '../lib/assets.js';
 import { checkSupportedFeatures } from '../lib/supported-features.js';
 import { checkGatewaySupport } from '../lib/gateway-support.js';
@@ -38,24 +27,6 @@ import {
   readPreviousEvolution,
   writeEvolution
 } from '../scaffold/evolution.js';
-
-function listSpecs(workspace) {
-  const specsDir = path.join(workspace, 'specs');
-  if (!fs.existsSync(specsDir)) return [];
-  return fs
-    .readdirSync(specsDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .sort();
-}
-
-function printSchemaErrors(file, ajvErrors) {
-  console.error(pc.bold(pc.red(`✘ ${file}`)));
-  for (const error of ajvErrors) {
-    const where = error.instancePath || '(raíz)';
-    console.error(`  ${pc.red('•')} ${pc.cyan(where)} ${error.message}`);
-  }
-}
 
 export async function build(
   inputPath,
@@ -95,161 +66,20 @@ export async function build(
     return;
   }
 
-  if (!isKeelWorkspace(workspace)) {
-    console.error(pc.red('Este directorio no es un workspace Keel (falta schema/service.schema.json).'));
-    console.error(`Ejecuta primero ${pc.cyan('keel init')}.`);
-    process.exitCode = 1;
-    return;
-  }
-
-  if (!inputPath) {
-    console.error(pc.red('Falta el servicio a preparar: keel-spring build specs/<servicio>'));
-    const services = listSpecs(workspace);
-    if (services.length > 0) {
-      console.error('Servicios en specs/:');
-      for (const name of services) console.error(`  ${pc.cyan(`specs/${name}`)}`);
-    }
-    process.exitCode = 1;
-    return;
-  }
-
-  const { dir, error: resolveError } = resolveServiceDir(inputPath);
-  if (resolveError) {
-    console.error(pc.red(resolveError));
-    process.exitCode = 1;
-    return;
-  }
-
-  // Compatibilidad DSL: este generador solo sabe mapear las versiones declaradas en SUPPORTED_DSL.
-  const { manifest, layers, errors: loadErrors } = loadService(dir);
-  if (!manifest) {
-    for (const message of loadErrors) console.error(pc.red(`✘ ${message}`));
-    process.exitCode = 1;
-    return;
-  }
-  if (!SUPPORTED_DSL.includes(manifest.keel)) {
-    console.error(
-      pc.red(`✘ DSL keel ${manifest.keel ?? '(sin declarar)'} no soportado por keel-spring (soporta: ${SUPPORTED_DSL.join(', ')}).`)
-    );
-    console.error(pc.dim('  Actualiza keel-spring o ajusta el diseño a una versión soportada.'));
-    process.exitCode = 1;
-    return;
-  }
-
-  // Frontera del generador: lo que el DSL declara y keel-spring no sabe mapear se
-  // rechaza o se avisa aquí, antes de sembrar nada y antes de preguntar el stack.
-  const features = checkSupportedFeatures(manifest, layers);
-  for (const message of features.warnings) console.warn(`${pc.yellow('⚠')} ${message}`);
-  if (features.errors.length > 0) {
-    console.error(pc.bold(pc.red(`✘ El diseño usa capacidades que keel-spring no genera — ${features.errors.length}:`)));
-    for (const message of features.errors) console.error(`  ${pc.red('•')} ${message}`);
-    process.exitCode = 1;
-    return;
-  }
-
-  // El workspace de diseño no recibe nada del generador: la skill, los agentes,
-  // las conventions y las skills por tecnología se instalan solo en el proyecto
-  // generado (el asset del paquete npm es su fuente, leída directamente). La
-  // generación se ejecuta siempre con el cwd en services/<servicio>-spring/.
-
-  // Un diseño en progreso no es generable: validación estricta, sin --wip.
-  const validation = validateService(dir, { wip: false });
-  const {
-    loadErrors: fullLoadErrors,
-    schemaErrors,
-    crossRefErrors,
-    warnings,
-    pending,
-    obligations,
-    undecided,
-    incoherences,
-    reviews,
-    ok
-  } = validation;
-
-  for (const { file, errors } of schemaErrors) printSchemaErrors(file, errors);
-  for (const message of fullLoadErrors) console.error(pc.red(`✘ ${message}`));
-  if (pending.length > 0) {
-    console.error(pc.bold(pc.red(`✘ Diseño incompleto — ${pending.length} pendiente(s):`)));
-    for (const message of pending) console.error(`  ${pc.red('•')} ${message}`);
-  }
-  // Lo que decisions.yaml ya acepta no se repite: es lo mismo que enseña `keel validate`.
-  const avisos = classifyWarnings(warnings, undecided, incoherences);
-  for (const { message, hint } of avisos.shown) {
-    console.warn(`${pc.yellow('⚠')} ${message}`);
-    if (hint) console.warn(pc.dim(`    ${hint}`));
-  }
-  if (avisos.accepted > 0) {
-    console.log(pc.dim(`  ${avisos.accepted} decisión(es) aceptada(s) en ${DECISIONS_FILE}: no se repiten como aviso.`));
-  }
-  if (crossRefErrors.length > 0) {
-    console.error(pc.bold(pc.red(`✘ Referencias cruzadas — ${crossRefErrors.length} error(es):`)));
-    for (const message of crossRefErrors) console.error(`  ${pc.red('•')} ${message}`);
-  }
-
-  // Las decisiones de diseño sin cerrar bloquean como un error, así que el
-  // veredicto genérico de abajo tiene que decir cuáles: mientras esto no se
-  // imprimía, un diseño rechazado por una obligación abierta era indistinguible
-  // de uno roto, y la causa solo se veía ejecutando `keel validate` a mano.
-  const sinCerrar = [...obligations.open, ...obligations.stale];
-  if (obligations.errors.length > 0) {
-    console.error(pc.bold(pc.red(`✘ ${DECISIONS_FILE} — ${obligations.errors.length} error(es):`)));
-    for (const message of obligations.errors) console.error(`  ${pc.red('•')} ${message}`);
-  }
-  if (sinCerrar.length > 0) {
-    console.error(pc.bold(pc.red(`✘ Decisiones de diseño sin cerrar — ${sinCerrar.length}:`)));
-    for (const item of sinCerrar) {
-      const caducada = item.since ? pc.dim(` (aceptada en v${item.since}: el diseño cambió, reafírmala)`) : '';
-      console.error(`  ${pc.red('•')} ${pc.cyan(item.id)} ${item.scope}: ${item.message}${caducada}`);
-    }
-    console.error(
-      pc.dim(
-        `  Ciérralas en el diseño, o acéptalas por escrito en ${DECISIONS_FILE} con su motivo — ver docs/design-obligations.md`
-      )
-    );
-  }
-
-  // La revisión semántica bloquea a través del `ok` de validateService, así que sin este
-  // bloque un diseño rechazado por un hallazgo abierto sería indistinguible de uno roto.
-  // Es el mismo fallo que ya ocurrió con las obligaciones, doce líneas más arriba.
-  if (reviews.errors.length > 0) {
-    console.error(pc.bold(pc.red(`✘ ${REVIEW_FILE} — ${reviews.errors.length} error(es):`)));
-    for (const message of reviews.errors) console.error(`  ${pc.red('•')} ${message}`);
-  }
-  if (reviews.open.length > 0) {
-    console.error(pc.bold(pc.red(`✘ Revisión con hallazgos abiertos — ${reviews.open.length}:`)));
-    for (const item of reviews.open) {
-      console.error(`  ${pc.red('•')} ${pc.cyan(item.id)} ${item.title}`);
-      if (item.note) console.error(pc.dim(`    ${item.note}`));
-    }
-    console.error(pc.dim(`  Ciérralos en el diseño y vuelve a ejecutar /keel-validate — ver docs/design-obligations.md`));
-  }
-
-  if (!ok || pending.length > 0) {
-    console.error();
-    console.error(pc.red('El diseño aún no es generable. Termina el diseño (/keel-design) y valida con keel validate.'));
-    process.exitCode = 1;
-    return;
-  }
-
-  // Generable no es lo mismo que LISTO: el cierre del diseño también pide revisión completa,
-  // escenarios, careo y DESIGN.md de esta versión. Fase 2 del despliegue (la 1 solo avisaba y
-  // estampaba): un diseño no listo NO se genera, y la única salida sin cerrarlo es decirlo a
-  // sabiendas con --accept-unready, que queda estampado en keel-generated.json. La fase 2 esperó
-  // a que hubiera un diseño que cruzara la puerta (el par del MVP, test/mvp-ready.test.js):
-  // una puerta que nace roja sobre todos los diseños se aprende a ignorar.
-  //
-  // Vale para todo lo que escribe —también --refresh, porque el snapshot que refresca es el del
-  // diseño de ahora—; --check no escribe y solo informa. Se niega ANTES de tocar nada: ni el
-  // stack, ni el snapshot, ni el proyecto.
-  const readiness = assessReadiness(dir, { validation });
-  const spec = path.relative(workspace, dir).split(path.sep).join('/');
-  if (!readiness.ready && !acceptUnready && mode !== 'check') {
-    reportReadiness(readiness, spec, 'refuse');
-    process.exitCode = 1;
-    return;
-  }
-  reportReadiness(readiness, spec, mode === 'check' ? 'inform' : 'accepted');
+  // La puerta del diseño es la misma para cualquier generador (keel-core/gen/design-gate.js):
+  // workspace, DSL soportado, frontera de keel-spring, validación estricta, decisiones sin
+  // cerrar, revisión y cierre del diseño. El workspace de diseño no recibe nada del generador:
+  // la skill, los agentes, las conventions y las skills por tecnología se instalan solo en el
+  // proyecto generado, y la generación se ejecuta con el cwd en services/<servicio>-spring/.
+  const gate = gateDesign({
+    inputPath,
+    workspace,
+    generator: { name: 'keel-spring', supportedDsl: SUPPORTED_DSL, checkSupportedFeatures },
+    mode,
+    acceptUnready
+  });
+  if (!gate) return;
+  const { dir, manifest, layers, readiness } = gate;
 
   // Stack tecnológico: keel-stack.json del proyecto generado manda; si no
   // existe, cuestionario condicionado por las capas del diseño (o defaults).
@@ -449,39 +279,6 @@ escenarios contra el servidor real y pase de calidad al final.`);
       )
     );
   }
-}
-
-/**
- * Los criterios del cierre que faltan. `refuse`: build se niega (fase 2). `accepted`: se genera
- * igualmente porque se pidió con --accept-unready, y queda estampado. `inform`: --check, que no
- * escribe y por tanto no tiene nada que negar.
- */
-function reportReadiness(readiness, spec, how) {
-  if (readiness.ready) return;
-  const missing = readiness.criteria.filter((entry) => !entry.ok);
-  const refuse = how === 'refuse';
-  const color = refuse ? pc.red : pc.yellow;
-  const print = refuse ? console.error : console.warn;
-  const headline = {
-    refuse: `✘ Diseño no listo para generar — faltan ${missing.length} criterio(s) del cierre:`,
-    accepted: `⚠ Diseño no listo para generar — faltan ${missing.length} criterio(s) del cierre; se genera igualmente (--accept-unready):`,
-    inform: `⚠ Diseño no listo para generar — faltan ${missing.length} criterio(s) del cierre:`
-  }[how];
-  print();
-  print(pc.bold(color(headline)));
-  for (const entry of missing) {
-    print(`  ${color('•')} ${entry.title} ${pc.dim(`[${entry.id}]`)}${entry.detail ? pc.dim(` — ${entry.detail}`) : ''}`);
-  }
-  const closing = {
-    refuse:
-      `  Cierra el diseño (detalle con keel validate --ready ${spec}), o genera a sabiendas con ` +
-      `--accept-unready: quedará estampado en keel-generated.json.`,
-    accepted:
-      `  Queda estampado en keel-generated.json (design.acceptedUnready): lo que la generación reporte puede ser ` +
-      `del diseño y no del método. Detalle con keel validate --ready ${spec}`,
-    inform: `  Un build que escriba se negará salvo con --accept-unready. Detalle con keel validate --ready ${spec}`
-  }[how];
-  print(pc.dim(closing));
 }
 
 /** Lo que el diseñador tiene que saber de esta pasada y no es trabajo del agente. */

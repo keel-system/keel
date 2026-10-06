@@ -2,16 +2,12 @@
 // diseño validado y renderiza todos los artefactos en services/<name>-spring/.
 // Regeneración segura: sin force solo se escriben archivos que no existen.
 
-import fs from 'node:fs';
 import path from 'node:path';
 import { buildModel } from '../lib/model.js';
-import { classifyGenerated, digestOf, pruneOrphans } from 'keel-core';
-import { writeFiles } from '../lib/writer.js';
-import { readManifest, nextManifest, writeManifest, designStamp, REFRESH_DIR } from '../lib/generated-manifest.js';
+import { materializeProject } from 'keel-core/gen/materialize';
+import { resolveStack as resolveNeutralStack } from 'keel-core/gen/stack';
 import { listKeelDocs } from '../lib/keel-docs.js';
 import { packageVersion } from '../lib/assets.js';
-import { DATABASES, PAYMENT_GATEWAYS, STACK_DEFAULTS, defaultDatabaseFor } from '../lib/stack-catalog.js';
-import { designUsesCache, normalizeTelemetry } from '../lib/stack-config.js';
 import { checkGatewaySupport } from '../lib/gateway-support.js';
 import { defaultGroup } from '../lib/naming.js';
 import * as gradle from './gradle.js';
@@ -168,42 +164,10 @@ const GENERATORS = [
 ];
 
 // Normaliza el stack: defaults para lo que el diseño necesita y no fue elegido
-// (p. ej. tests o scaffolding sin cuestionario), null para lo que no aplica.
+// (p. ej. tests o scaffolding sin cuestionario), null para lo que no aplica. La normalización es
+// neutral (keel-core/gen/stack.js); lo de Java es el grupo, que va delante.
 export function resolveStack(stack, layers, manifest) {
-  const protocol = layers.security?.authentication?.protocol;
-  // Un motor que el catálogo no conoce se rechaza en voz alta. El caso real es un
-  // `keel-stack.json` con un motor retirado —H2 lo estuvo hasta que se vio que tres de sus
-  // mecanismos no se podían probar—: sin esto, `DATABASES[...]` sale `undefined`, el modelo
-  // cae al `kind` relacional por defecto y el proyecto se genera a medias con la mitad de la
-  // infraestructura sin resolver. Un fallo así aparece lejísimos de su causa.
-  if (stack?.database && !DATABASES[stack.database]) {
-    throw new Error(
-      `El motor '${stack.database}' no está soportado. Los del catálogo son: ${Object.keys(DATABASES).join(', ')}. ` +
-        `Si viene de un keel-stack.json anterior, elige uno de esos y vuelve a lanzar el build.`
-    );
-  }
-  // Igual que con el motor: una pasarela que el catálogo no conoce se rechaza en voz alta.
-  if (stack?.paymentGateway && !PAYMENT_GATEWAYS[stack.paymentGateway]) {
-    throw new Error(
-      `La pasarela '${stack.paymentGateway}' no está soportada. Las del catálogo son: ${Object.keys(PAYMENT_GATEWAYS).join(', ')}.`
-    );
-  }
-  return {
-    group: stack?.group ?? defaultGroup(manifest),
-    // El default sigue al modelo que declara el diseño: sin esto, un diseño
-    // `document` sin stack explícito (tests, scaffolding sin cuestionario)
-    // generaría JPA en silencio contra una base que no lo entiende.
-    database: layers.persistence
-      ? (stack?.database ?? defaultDatabaseFor(layers.persistence?.default?.model))
-      : null,
-    broker: layers.messaging ? (stack?.broker ?? STACK_DEFAULTS.broker) : null,
-    auth: protocol === 'oidc' || protocol === 'jwt' ? (stack?.auth ?? STACK_DEFAULTS.auth) : null,
-    cache: designUsesCache(layers) ? (stack?.cache ?? STACK_DEFAULTS.cache) : null,
-    storage: layers.storage ? (stack?.storage ?? STACK_DEFAULTS.storage) : null,
-    paymentGateway: layers.payments ? (stack?.paymentGateway ?? STACK_DEFAULTS.paymentGateway) : null,
-    // No depende del diseño: siempre tiene valor, y un stack anterior a la opción es `none`.
-    telemetry: normalizeTelemetry(stack?.telemetry)
-  };
+  return { group: stack?.group ?? defaultGroup(manifest), ...resolveNeutralStack(stack, layers) };
 }
 
 /**
@@ -253,113 +217,34 @@ export function scaffoldService({
   readiness = null,
   acceptedUnready = false
 }) {
-  const { model, stack: resolved, files } = planService({ manifest, layers, workspace, stack });
+  const { model, files } = planService({ manifest, layers, workspace, stack });
   const outDir = path.join('services', model.service.projectName);
   const projectDir = path.join(workspace, outDir);
 
-  // Clasificar ANTES de escribir: es lo que separa «este archivo es mío y me he
-  // quedado atrás» de «este lo escribió el agente». Con el booleano `force` a solas
-  // las dos cosas se ven igual, y por eso hasta ahora un arreglo del generador no
-  // podía llegar a un proyecto que ya existe sin destruir trabajo.
-  const previous = readManifest(projectDir);
-  const buckets = classifyGenerated(files, projectDir, previous);
-  const alDia = new Set(buckets.alDia);
-  const alDiaDigests = files
-    .filter((entry) => alDia.has(entry.path.split(/[\\/]/).join('/')))
-    .map((entry) => [entry.path.split(/[\\/]/).join('/'), digestOf(entry)]);
-
-  // Qué se escribe en esta pasada, por modo. `check` no escribe nada; `refresh` pone
-  // al día lo que es de build y nadie tocó; sin modo, el comportamiento de siempre.
-  let only = null;
-  if (mode === 'check') only = new Set();
-  else if (mode === 'refresh') only = new Set([...buckets.nuevos, ...buckets.refrescables]);
-
-  // Lo que alguien borró NO vuelve, en ningún modo. En `refresh` ya queda fuera por no
-  // estar en `only`; sin modo hace falta decirlo, porque ahí la regla es «escribe lo que
-  // no exista» y un archivo borrado es, justamente, uno que no existe.
-  const { copied, skipped, digests } = writeFiles(files, projectDir, {
+  // Qué se escribe, qué se deja al lado como conflicto, qué se poda y cómo queda el registro: es
+  // la misma decisión para cualquier generador y vive en keel-core/gen/materialize.js.
+  const written = materializeProject({
+    files,
+    projectDir,
+    generator: `keel-spring@${packageVersion()}`,
     force,
-    only,
-    skip: new Set(buckets.retirados)
+    mode,
+    prune,
+    readiness,
+    acceptedUnready
   });
-
-  // Los huérfanos que se puede demostrar que son de build (nadie los tocó) se retiran
-  // con --prune; los tocados se quedan y pasan al agente vía EVOLUTION.md.
-  const pruned = mode === 'refresh' && prune ? pruneOrphans(buckets.huerfanos, projectDir, previous) : null;
-
-  // Un huérfano que ya NO está en disco no es trabajo de nadie: lo retiró el agente, o un
-  // `--prune` anterior. Se olvida en cualquier pasada de escritura, no solo con --prune;
-  // si no, el manifiesto lo arrastra para siempre y `--check` lo reporta como «el generador
-  // ya no lo emite (no se borran)» sobre un archivo que no existe.
-  const huerfanosVivos = buckets.huerfanos.filter((relative) => fs.existsSync(path.join(projectDir, relative)));
-  const huerfanosAusentes = buckets.huerfanos.filter((relative) => !fs.existsSync(path.join(projectDir, relative)));
-
-  // La versión nueva de lo que está en conflicto, para poder compararla con diff. Es
-  // exactamente el trabajo que si no hay que hacer a mano: generar el proyecto en otro
-  // sitio solo para ver qué cambió el generador en ESE archivo. Entran también las
-  // fusiones que siguen pendientes de una pasada anterior: si alguien limpió `build/`,
-  // su versión nueva se vuelve a dejar donde EVOLUTION.md dice que está.
-  const posixOf = (entry) => entry.path.split(/[\\/]/).join('/');
-  const enConflicto = new Set([...buckets.conflictos, ...Object.keys(previous?.pendingMerge ?? {})]);
-  if (mode === 'refresh' && enConflicto.size > 0) {
-    writeFiles(
-      files.filter((entry) => enConflicto.has(posixOf(entry))),
-      path.join(projectDir, REFRESH_DIR),
-      { force: true }
-    );
-  }
-
-  // Los stubs que build acaba de crear y traen trabajo para el agente.
-  const nuevos = new Set(buckets.nuevos);
-  const escritos = new Set(copied);
-  const nuevosConTodo = files
-    .filter((entry) => nuevos.has(posixOf(entry)) && escritos.has(posixOf(entry)))
-    .filter((entry) => typeof entry.content === 'string' && entry.content.includes('TODO'))
-    .map(posixOf)
-    .sort((a, b) => a.localeCompare(b));
-
-  // El manifiesto se actualiza incluso en `check`, donde `digests` viene vacío: lo que
-  // hace ahí es ADOPTAR lo que ya estaba, que es lo que da el aviso a los proyectos
-  // anteriores al mecanismo sin tocarles un solo archivo.
-  let pendingMerge = Object.keys(previous?.pendingMerge ?? {});
-  if (mode !== 'check') {
-    const digestByPath = new Map(files.map((entry) => [posixOf(entry), entry]));
-    const next = nextManifest({
-        previous,
-        // Solo en --refresh: es cuando la versión nueva del conflicto se ha dejado en
-        // REFRESH_DIR y la fusión pasa a ser trabajo de alguien con nombre.
-        rebase:
-          mode === 'refresh'
-            ? buckets.conflictos.map((relative) => [relative, digestOf(digestByPath.get(relative))])
-            : [],
-        olvidar: [...(pruned ? [...pruned.borrados, ...pruned.ausentes] : []), ...huerfanosAusentes],
-        resueltos: buckets.alDia,
-        generator: `keel-spring@${packageVersion()}`,
-        design: designStamp(readiness, { acceptedUnready }),
-        // Lo escrito en esta pasada, MÁS lo que ya era byte a byte idéntico a lo que el
-        // generador emite. Eso último importa para los proyectos que existían antes del
-        // mecanismo: adoptarlo TODO los dejaba sin poder refrescar nunca —cada archivo
-        // quedaba para siempre «sin registro»—, cuando ser idéntico a la salida del
-        // generador es la prueba más fuerte que puede haber de que es suya. Lo que de
-        // verdad no se puede atribuir es solo lo que ya difiere.
-        escritas: [...digests, ...alDiaDigests],
-        presentes: [...buckets.adoptados, ...buckets.refrescables, ...buckets.tuyos, ...buckets.conflictos]
-      });
-    writeManifest(projectDir, next);
-    pendingMerge = Object.keys(next.pendingMerge);
-  }
 
   return {
     outDir: outDir.split(path.sep).join('/'),
-    copied,
-    skipped,
+    copied: written.copied,
+    skipped: written.skipped,
     warnings: model.warnings,
     stack: model.stack,
     docs: model.docs,
-    buckets,
-    huerfanosVivos,
-    pruned,
-    pendingMerge: pendingMerge.sort((a, b) => a.localeCompare(b)),
-    nuevosConTodo
+    buckets: written.buckets,
+    huerfanosVivos: written.huerfanosVivos,
+    pruned: written.pruned,
+    pendingMerge: written.pendingMerge,
+    nuevosConTodo: written.nuevosConTodo
   };
 }

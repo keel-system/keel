@@ -42,6 +42,7 @@
     "url": "https://github.com/keel-system/keel/issues"
   },
   "dependencies": {
+    "@clack/prompts": "^1.7.0",
     "ajv": "^8.17.1",
     "commander": "^14.0.0",
     "picocolors": "^1.1.1",

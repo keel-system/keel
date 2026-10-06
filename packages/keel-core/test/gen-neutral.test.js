@@ -40,12 +40,16 @@ test('ningún módulo de keel-core/gen nombra un lenguaje, un framework ni sus t
   assert.deepEqual(findings, []);
 });
 
-test('keel-core/gen solo importa de keel-core y de node: (nunca de un generador)', () => {
+test('keel-core/gen solo importa de keel-core, de node: y de sus dependencias declaradas (nunca de un generador)', () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(genDir, '..', '..', '..', 'package.json'), 'utf8'));
+  const declared = new Set(Object.keys(pkg.dependencies ?? {}));
   const findings = [];
   for (const name of files) {
     const code = codeOf(fs.readFileSync(path.join(genDir, name), 'utf8'));
     for (const [, from] of code.matchAll(/from\s+'([^']+)'/g)) {
-      if (!from.startsWith('./') && !from.startsWith('../') && !from.startsWith('node:')) findings.push(`${name}: ${from}`);
+      if (from.startsWith('./') || from.startsWith('../') || from.startsWith('node:')) continue;
+      const packageName = from.startsWith('@') ? from.split('/').slice(0, 2).join('/') : from.split('/')[0];
+      if (!declared.has(packageName)) findings.push(`${name}: ${from}`);
     }
   }
   assert.deepEqual(findings, []);
