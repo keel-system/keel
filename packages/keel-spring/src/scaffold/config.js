@@ -5,6 +5,7 @@
 // El perfil activo se elige con la variable de entorno PROFILE (default local).
 
 import { AUTH, DATABASES, HTTP_STUB, TELEMETRY_INFRA, collectorHostEndpoint } from '../lib/stack-catalog.js';
+import { JAVA_DATABASES } from '../lib/java-stack.js';
 import { usesPartialIndexes } from './migrations.js';
 import { EMBEDDED_MONGO_VERSION } from '../lib/assets.js';
 import { physicalBucketName } from 'keel-core/gen';
@@ -612,7 +613,7 @@ function dbYaml(model, profile, dbName) {
   const lines = [
     'spring:',
     '  datasource:',
-    `    url: ${envValue(profile, 'DB_URL', db.url(dbName))}`,
+    `    url: ${envValue(profile, 'DB_URL', JAVA_DATABASES[db.id].url(dbName))}`,
     `    username: ${envValue(profile, 'DB_USERNAME', db.user(dbName))}`,
     `    password: ${envValue(profile, 'DB_PASSWORD', db.password)}`,
     '    hikari:',
@@ -745,7 +746,7 @@ function documentDbYaml(db, profile, dbName) {
       'spring:',
       '  data:',
       '    mongodb:',
-      `      uri: ${envValue(profile, 'DB_URL', db.url(dbName))}`,
+      `      uri: ${envValue(profile, 'DB_URL', JAVA_DATABASES[db.id].url(dbName))}`,
       '      # Los índices los crea MongoIndexConfig, que build deriva entero de',
       '      # persistence.keel.yaml: dejar que Spring los infiera de las anotaciones',
       '      # los crearía con nombres suyos, y el ApiExceptionHandler traduce la',

@@ -50,49 +50,14 @@
 // las cuatro), y eso es un inventario de corridas, no de ramas. Meterlo aquí mezclaría dos cosas
 // que se comprueban de formas distintas y dejaría media tabla sin poder verificar.
 
-/** Los dos modelos de persistencia, que es el eje que más código bifurca. */
-export const MODELS = ['relational', 'document'];
+import { MECHANISM_CATALOG } from 'keel-core/gen/mechanisms';
+
+export { MODELS, STATES, NETS, PAIRS, MECHANISM_CATALOG } from 'keel-core/gen/mechanisms';
 
 /**
- * De dónde sale la confianza de una celda. La distinción importa porque el modo de fallo de todo
- * lo que hay aquí es SILENCIOSO: nada lanza, nada se loguea, y el escenario pasa en verde.
- */
-export const STATES = {
-  verificado: 'ejecutado contra el motor real por la red que la fila nombra',
-  razonado:
-    'generado y NO ejecutado por ninguna red. Declarado con su porqué escrito, y con dueño: es una ' +
-    'excepción, nunca el estado por defecto',
-  degradado:
-    'el motor no puede sostener el mecanismo y el generador lo dice en voz alta en vez de emitir algo ' +
-    'que prometa lo que no cumple',
-  'no-aplica': 'esa rama no existe en este modelo o motor'
-};
-
-/** Las redes que EJECUTAN algo, con qué ejes recorren. */
-export const NETS = {
-  'store-check': 'npm run store-check — relay del outbox, almacenes de idempotencia y reclamo de reconciliación',
-  'claim-check': 'npm run claim-check — reclamos de barrido y guarda de fila, contra el motor',
-  'mongo-check': 'npm run mongo-check — los scripts de mongosh del arnés, por la vía del arnés',
-  'mapping-check': 'npm run mapping-check — el ESPEJO de persistencia: que la columna que el diseño pidió sea la que el motor creó',
-  'index-check':
-    'npm run index-check — la unicidad CONDICIONADA, contra el motor y en sus dos ramas: en relacional el appendix .sql ejecutado dos veces; en documental el MongoIndexConfig generado, invocado dos veces desde un JUnit. Las mismas preguntas: que sea idempotente y que sostenga el invariante sin prohibir las versiones históricas',
-  'telemetry-check':
-    'npm run telemetry-check — la telemetría con la APLICACIÓN ARRANCADA: que la serie que el panel consulta exista de verdad en la exposición, con sus etiquetas',
-  corrida: 'una corrida en vivo: no es determinista ni repetible en CI, así que nombra cuál',
-  ninguna: 'nadie lo ejecuta'
-};
-
-/**
- * Los pares byte a byte: el mismo diseño con una única diferencia, `persistence.default.model`.
- * Esa identidad es el instrumento — cualquier cosa que salga distinta se le atribuye al modelo y
- * a nada más — y por eso hay tests que vigilan que sigan siendo pares.
- */
-export const PAIRS = {
-  'job-dispatch': { relational: 'job-dispatch', document: 'job-dispatch-mongo' },
-  'notification-mailer': { relational: 'notification-mailer', document: 'notification-mailer-mongo' }
-};
-
-/**
+ * El `title` y el `axis` de cada fila viven en el catálogo neutral (keel-core/gen/mechanisms), que
+ * comparten todos los generadores; aquí está lo de keel-spring: emisor, porqué, paridad y celdas.
+ *
  * Una fila por mecanismo. `axis` dice qué granularidad tiene su bifurcación:
  *
  *   model   el código cambia con `persistence.default.model` (relational | document).
@@ -138,11 +103,9 @@ export const PAIRS = {
  * DISTINTOS (`stock-reservation` y `asset-vault`), no un par, así que la propiedad que el par
  * garantiza gratis allí la garantiza un test dedicado.
  */
-export const MECHANISMS = {
+const SPRING_MECHANISMS = {
   'runtime-panel': {
-    title: 'Fila de runtime del panel y alerta de saturación del pool',
     emitter: 'src/scaffold/observability-assets.js',
-    axis: 'model',
     why:
       'El pool NO es el mismo en las dos ramas —Hikari frente al del driver de Mongo— y el modo de fallo es el ' +
       'de siempre, pero en el sitio donde más duele: una consulta a una serie que ese modelo no publica no da ' +
@@ -183,9 +146,7 @@ export const MECHANISMS = {
   },
 
   'outbox-relay': {
-    title: 'Relay del outbox: reclamo con lease, backoff, purga y rendición',
     emitter: 'src/scaffold/outbox.js',
-    axis: 'model',
     why: 'El único mecanismo cuya promesa es que no se pierde nada, y sus dos ramas no se parecen: JPQL con lease sobre next_attempt_at frente a findAndModify.',
     parity: {
       pair: 'notification-mailer',
@@ -217,9 +178,7 @@ export const MECHANISMS = {
   },
 
   'idempotency-request': {
-    title: 'Claves de idempotencia de petición (idempotency_record)',
     emitter: 'src/scaffold/http-idempotency.js',
-    axis: 'model',
     why: 'Una carrera perdida que no se traduzca a su code acaba en 500 justo en el caso que menos se reproduce a mano.',
     parity: {
       pair: 'notification-mailer',
@@ -235,9 +194,7 @@ export const MECHANISMS = {
   },
 
   'idempotency-consume': {
-    title: 'Deduplicación de consumo (processed_event)',
     emitter: 'src/scaffold/idempotency.js',
-    axis: 'model',
     why: 'Una clave compuesta sin su handlerId deduplica de MÁS y descarta mensajes que nadie procesó, sin excepción, sin log y sin métrica.',
     parity: {
       pair: 'notification-mailer',
@@ -253,9 +210,7 @@ export const MECHANISMS = {
   },
 
   'reconciliation-claim': {
-    title: 'Reclamo de reconciliación: candidatos + marca con caducidad',
     emitter: 'src/scaffold/reconciliation-claim.js',
-    axis: 'model',
     why: 'Sus dos mitades son un JPQL de candidatos y un UPDATE condicional (o su Criteria), y ninguna pasa por javac de forma útil.',
     parity: {
       skip: 'su sujeto NO es un par byte a byte sino dos diseños distintos (stock-reservation relacional y asset-vault documental), así que la identidad que hace del par un instrumento aquí no existe',
@@ -274,9 +229,7 @@ export const MECHANISMS = {
   },
 
   'sweep-claim-queue': {
-    title: 'Reclamo de un barrido de cola',
     emitter: 'src/scaffold/claim.js',
-    axis: 'model',
     why: 'Un predicado que no casa con nada compila, arranca y reclama cero filas sin fallar.',
     parity: {
       pair: 'job-dispatch',
@@ -292,9 +245,7 @@ export const MECHANISMS = {
   },
 
   'sweep-claim-rescue': {
-    title: 'Rescate de filas EN VUELO: el reclamo más su cota temporal',
     emitter: 'src/scaffold/claim.js',
-    axis: 'model',
     why: 'NULL < :cota no es falso, es UNKNOWN: una fila reclamada sin reloj no vuelve a entrar en ningún lote nunca.',
     parity: {
       pair: 'job-dispatch',
@@ -310,9 +261,7 @@ export const MECHANISMS = {
   },
 
   'guard-claim': {
-    title: 'Guarda de fila de un efecto externo irreversible',
     emitter: 'src/scaffold/claim.js',
-    axis: 'model',
     why: 'Su fallo no produce ningún error —el servidor responde 2xx las dos veces— sino un segundo correo a una persona real.',
     parity: {
       pair: 'notification-mailer',
@@ -334,9 +283,7 @@ export const MECHANISMS = {
   },
 
   'harness-db-probes': {
-    title: 'Sondas del arnés contra la base (atascar, envejecer, contar, abandonar)',
     emitter: '../keel-core/src/lib/gen/mongo-probes.js · src/lib/claim-probes.js · src/scaffold/integration-tests.js',
-    axis: 'model',
     why: 'Fabrican la PRECONDICIÓN de los escenarios. Una sonda que no casa deja el escenario en verde sin haber atascado, envejecido ni contado nada.',
     parity: {
       pair: 'job-dispatch',
@@ -360,9 +307,7 @@ export const MECHANISMS = {
   },
 
   'schema-baseline': {
-    title: 'Baseline del esquema exportado de las entidades finales',
     emitter: 'src/scaffold/migrations.js',
-    axis: 'model',
     why: 'El esquema y el mapeo no pueden divergir porque el baseline se EXPORTA, no se escribe. Lo que ninguna red hace es aplicarlo.',
     parity: {
       pair: 'notification-mailer',
@@ -384,9 +329,7 @@ export const MECHANISMS = {
   },
 
   'transient-write-conflict': {
-    title: 'Reintento del conflicto de escritura transitorio (UseCaseMediator)',
     emitter: 'src/scaffold/mediator.js',
-    axis: 'model',
     why:
       'En una transacción de MongoDB el perdedor de dos escrituras sobre el mismo documento no espera: aborta con un ' +
       'WriteConflict transitorio que llegaba al catch-all como 500, donde el relacional da el error DECLARADO. Lo encontró ' +
@@ -427,9 +370,7 @@ export const MECHANISMS = {
   },
 
   'document-indexes': {
-    title: 'Índices del modelo documental (MongoIndexConfig)',
     emitter: 'src/scaffold/document-indexes.js',
-    axis: 'model',
     why: 'Salen enteros del diseño, así que un índice que no se cree deja sin sostener un invariante que el diseño declaró.',
     parity: {
       pair: 'notification-mailer',
@@ -458,10 +399,8 @@ export const MECHANISMS = {
   },
 
   'partial-unique-index': {
-    title: 'Unicidad CONDICIONADA al estado',
     appliesWhen: 'partialUniqueIndexes',
     emitter: 'src/scaffold/migrations.js · src/scaffold/document-indexes.js',
-    axis: 'engine',
     why: 'No es una unicidad de columnas: sin la condición hay que elegir entre no poder tener dos versiones o no garantizar nada. Y es el único sitio donde el mismo diseño obtiene una garantía DISTINTA según el motor.',
     coverage: {
       postgresql: {
@@ -539,10 +478,8 @@ export const MECHANISMS = {
   },
 
   'unique-collation': {
-    title: 'Sensibilidad a mayúsculas de una columna ÚNICA',
     appliesWhen: 'uniqueTextColumns',
     emitter: 'src/lib/type-mapper.js · src/lib/stack-catalog.js',
-    axis: 'engine',
     why: "La unicidad de una columna de texto NO significa lo mismo en todos los motores y el diseno no puede decir cual quiere. Medido el 2026-09-09 con las dos bases en pie: MySQL 8 (`utf8mb4_0900_ai_ci`) RECHAZA 'acme-1' como duplicado de 'ACME-1'; PostgreSQL (`en_US.utf8`) deja convivir las dos filas. El mismo diseno produce dos garantias distintas y en SILENCIO: nada falla, nada se registra, y la fila que el diseno consideraba nueva no entra. Se fuerza la collation sensible donde el motor pliega en vez de degradar, porque la promesa del MVP es equivalencia entre motores y el diseno tampoco puede pedir lo contrario. Lo que NO se promete es el ORDEN: la collation tambien decide el ORDER BY, y del lado de PostgreSQL depende del locale de la base, que elige quien despliega.",
     coverage: {
       postgresql: {
@@ -584,9 +521,7 @@ export const MECHANISMS = {
   },
 
   'claim-dialect': {
-    title: 'Reparto de candidatos entre réplicas (SKIP LOCKED o su ausencia)',
     emitter: 'src/lib/claim-sql.js',
-    axis: 'engine',
     why: 'Sin reparto el reclamo SIGUE siendo correcto —lo garantiza la escritura condicional— pero N-1 réplicas pierden su intento, y eso hay que decirlo en voz alta en vez de emitir un lock silencioso.',
     coverage: {
       postgresql: { state: 'verificado', net: 'claim-check', falsified: true, why: 'la carrera perdida (segundo reclamo devuelve 0) es un caso propio' },
@@ -599,9 +534,7 @@ export const MECHANISMS = {
   },
 
   'harness-sql-literals': {
-    title: 'Literales con los que el arnés habla con la base (staleTimestamp, uuidLiteral, forma de invocación)',
     emitter: 'src/lib/stack-catalog.js',
-    axis: 'engine',
     why: 'Donde no constan, el arnés NO emite stallInFlight, putInFlight, inFlightWithoutClock ni ageForReconciliation — y calla. Sobre ese motor, un diseño con rescate o con reconciledBy no puede tener el escenario que crossrefs.js le EXIGE.',
     coverage: {
       postgresql: { state: 'verificado', net: 'claim-check', falsified: true, why: 'lo ata engine-claim-coverage.test.js, que obliga a declarar CÓMO se sabe' },
@@ -619,9 +552,7 @@ export const MECHANISMS = {
   },
 
   'telemetry-store-spans': {
-    title: 'Telemetría: spans del almacén (solo con telemetry: otel)',
     emitter: 'src/scaffold/gradle.js · src/scaffold/telemetry.js',
-    axis: 'model',
     why: 'La instrumentación del almacén es la única pieza de la telemetría que bifurca por modelo: en relacional la aporta datasource-micrometer por autoconfiguración, sin clase; en documental la registra TelemetryConfig con MongoObservationCommandListener. Perder una no rompe nada: la traza sigue llegando, con un hueco justo donde está el tiempo.',
     parity: {
       skip: 'la telemetría es una elección de STACK (telemetry: otel) y el par se genera sin ella, así que los marcadores no aparecerían en ninguna de las dos ramas; lo cubre un test que genera las dos ramas con la opción',
@@ -646,10 +577,8 @@ export const MECHANISMS = {
   },
 
   'folded-text': {
-    title: 'Sombra plegada de un campo con `compare` (DSL 2.14): unicidad y filtro sin mayúsculas ni acentos',
     emitter:
       'src/scaffold/persistence-members.js · src/scaffold/persistence-entities.js · src/scaffold/repositories.js · src/scaffold/document-entities.js · src/scaffold/document-repositories.js · src/scaffold/document-indexes.js · src/scaffold/text-fold.js',
-    axis: 'model',
     why:
       'La unicidad de un campo que pliega vive en la SOMBRA y no en el campo: si una rama deja de estamparla o de indexarla, `ACME` y `acme` vuelven a ser dos filas, sin error y sin que ningún escenario lo note salvo el que pruebe justo esa colisión.',
     parity: {
@@ -675,10 +604,8 @@ export const MECHANISMS = {
   },
 
   'persistence-adapter': {
-    title: 'Espejo de persistencia y repositorios (mapeo, embebidos, colecciones, orden y desempate)',
     emitter:
       'src/scaffold/persistence-entities.js · src/scaffold/repositories.js · src/scaffold/document-entities.js · src/scaffold/document-repositories.js',
-    axis: 'model',
     why: 'Es la superficie más grande que se bifurca por modelo, y la única cuya red es COMPILAR: paginar sin desempate determinista repite una fila y omite otra, y eso compila igual de bien.',
     parity: {
       pair: 'job-dispatch',
@@ -731,6 +658,21 @@ export const MECHANISMS = {
 //
 // [histórico] Mientras eso no se cerró, esta celda fue `razonado` y no `verificado`: lo honesto era decir que
 // el mecanismo relacional está generado, sin ejercitar, y con una sospecha fundada en contra.
+
+/**
+ * Las filas completas: título y eje del catálogo neutral (keel-core/gen/mechanisms), y las celdas
+ * de keel-spring. Un id en un lado y no en el otro es un error al cargar, no una fila a medias.
+ */
+export const MECHANISMS = Object.fromEntries(
+  Object.entries(MECHANISM_CATALOG).map(([id, { title, axis }]) => {
+    const spring = SPRING_MECHANISMS[id];
+    if (!spring) throw new Error(`engine-support: el mecanismo '${id}' del catálogo no tiene fila en keel-spring`);
+    return [id, { title, ...spring, axis }];
+  })
+);
+for (const id of Object.keys(SPRING_MECHANISMS)) {
+  if (!MECHANISM_CATALOG[id]) throw new Error(`engine-support: '${id}' no está en el catálogo neutral de mecanismos`);
+}
 
 /** Los ids, en orden estable. */
 export const mechanismIds = () => Object.keys(MECHANISMS);

@@ -39,6 +39,7 @@ import {
   ALERTING,
   alertSinkEndpoint
 } from '../lib/stack-catalog.js';
+import { JAVA_DATABASES } from '../lib/java-stack.js';
 import { METRICS_TRANSPORT } from '../lib/telemetry-probes.js';
 import { dashboardUid } from './observability-assets.js';
 import { usesTelemetry } from './telemetry.js';
@@ -465,7 +466,10 @@ function appEnvironment(model) {
     // Dentro de la red de compose el host es `db`. Los motores relacionales solo
     // cambian el host de su URL; Mongo además cambia el modo de conexión (replica
     // set completo en vez de conexión directa), así que declara su URL interna.
-    environment.DB_URL = db.internalUrl ? db.internalUrl(dbName) : db.url(dbName).replace('localhost', 'db');
+    const connection = JAVA_DATABASES[db.id];
+    environment.DB_URL = connection.internalUrl
+      ? connection.internalUrl(dbName)
+      : connection.url(dbName).replace('localhost', 'db');
     // La URI de Mongo lleva las credenciales dentro: no hay dos propiedades más
     // que sobrescribir, y declararlas sería configuración que nadie lee.
     if (db.kind !== 'document') {

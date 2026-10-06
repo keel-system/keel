@@ -64,3 +64,15 @@ test('el subpath keel-core/gen expone lo mismo que su índice', async () => {
   const viaPackage = await import('keel-core/gen');
   assert.deepEqual(Object.keys(viaPackage).sort(), Object.keys(gen).sort());
 });
+
+test('el catálogo de mecanismos: ids estables, título y eje conocido', async () => {
+  const { MECHANISM_CATALOG, MODELS, STATES } = await import('keel-core/gen/mechanisms');
+  assert.ok(Object.keys(MECHANISM_CATALOG).length >= 10);
+  for (const [id, { title, axis }] of Object.entries(MECHANISM_CATALOG)) {
+    assert.match(id, /^[a-z][a-z0-9-]*$/, `${id}: id no estable`);
+    assert.ok(title && title.length >= 10, `${id}: sin título`);
+    assert.ok(['model', 'engine'].includes(axis), `${id}: eje desconocido '${axis}'`);
+  }
+  assert.deepEqual(MODELS, ['relational', 'document']);
+  assert.ok(STATES.verificado && STATES.razonado && STATES.degradado && STATES['no-aplica']);
+});

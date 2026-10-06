@@ -80,7 +80,7 @@ El archivo emite Java por plantilla, así que un `includes(...)` verde no dice q
 
 ## Nuevo broker
 
-Entrada en `BROKERS` (`keel-spring/src/lib/stack-catalog.js`) + su rama en `keel-core/src/lib/gen/broker-probes.js` (lectura, purga, entrega, predicado de vacío) + las ramas de `integration-tests.js` + escenarios en `scripts/broker-check.js`. Además, decidir si su topología sobrevive a un `stop`/`start` del contenedor: si no (LocalStack la sirve desde memoria), `needsBrokerReseed` en `integration-tests.js` tiene que devolver verdadero para él, o el escenario de outbox fallará por «destino inexistente» en vez de por lo que prueba. La topología: si la siembra la aplicación (RabbitMQ) no hace falta script; si la siembra `build` (snssqs), va en `messaging-provisioning.js` y `validate-infra.sh` comprueba que exista
+Entrada en `BROKERS` (`keel-core/src/lib/gen/infra-catalog.js`) + su rama en `keel-core/src/lib/gen/broker-probes.js` (lectura, purga, entrega, predicado de vacío) + las ramas de `integration-tests.js` + escenarios en `scripts/broker-check.js`. Además, decidir si su topología sobrevive a un `stop`/`start` del contenedor: si no (LocalStack la sirve desde memoria), `needsBrokerReseed` en `integration-tests.js` tiene que devolver verdadero para él, o el escenario de outbox fallará por «destino inexistente» en vez de por lo que prueba. La topología: si la siembra la aplicación (RabbitMQ) no hace falta script; si la siembra `build` (snssqs), va en `messaging-provisioning.js` y `validate-infra.sh` comprueba que exista
 
 ## `npm run payment-check`
 

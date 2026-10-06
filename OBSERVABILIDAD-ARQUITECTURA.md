@@ -670,7 +670,7 @@ Además, cosas nuevas que no estaban en §5:
 | Guía de uso y operación (para personas) | `OBSERVABILIDAD.md` (fuente: `packages/keel-spring/assets/generators/spring/observabilidad.md`) |
 | Razonamiento de cada decisión | `.claude/rules/spring-telemetria.md` |
 | Vocabulario | `packages/keel-spring/src/lib/telemetry-probes.js` |
-| Catálogo de infraestructura | `packages/keel-spring/src/lib/stack-catalog.js` (`TELEMETRY*`, `ALERTING`, `GRAFANA_PROVISIONING`) |
+| Catálogo de infraestructura | `packages/keel-core/src/lib/gen/infra-catalog.js` (`TELEMETRY*`, `ALERTING`, `GRAFANA_PROVISIONING`) |
 | Java de telemetría | `packages/keel-spring/src/scaffold/telemetry.js` |
 | Caso de uso, correlación, logging | `src/scaffold/mediator.js`, `correlation.js`, `logging.js`, `concurrency.js` |
 | Configuración por perfil | `src/scaffold/config.js` (`telemetryYaml`, `managementYaml`) |

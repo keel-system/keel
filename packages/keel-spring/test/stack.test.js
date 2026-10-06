@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { tmpDir } from './helpers/tmp.js';
 import { select } from '../src/lib/prompt.js';
+import { JAVA_DATABASES, JAVA_BROKERS, JAVA_CACHES, JAVA_STORAGE } from '../src/lib/java-stack.js';
 import {
   DATABASES,
   BROKERS,
@@ -97,7 +98,7 @@ test('el motor documental no arrastra el mecanismo relacional', () => {
   assert.equal(mongo.kind, 'document');
   // Ausente, no vacío: que no haya migraciones es una propiedad del modelo, y un []
   // se leería como «las tiene, pero ninguna».
-  assert.equal(mongo.flywayDependencies, undefined);
+  assert.equal(JAVA_DATABASES.mongodb.flywayDependencies, undefined);
   assert.doesNotMatch(mongo.cliResetCmd, /flyway/i);
   // El reset vacía documentos y PRESERVA los índices: son el esquema aquí, y
   // recrearlos por flujo sería el error simétrico a truncar flyway_schema_history.
@@ -132,9 +133,10 @@ test('cada dialecto RELACIONAL declara su módulo Flyway y protege el historial 
     // no por lista de ids, para que un motor nuevo caiga solo en su rama.
     if (entry.kind !== 'relational') continue;
     // Motor + módulo del dialecto: sin él Flyway no reconoce la BD en runtime.
-    assert.ok(Array.isArray(entry.flywayDependencies), `${id}: falta flywayDependencies`);
+    const java = JAVA_DATABASES[id];
+    assert.ok(Array.isArray(java.flywayDependencies), `${id}: falta flywayDependencies`);
     assert.ok(
-      entry.flywayDependencies.some((dep) => dep.includes('org.flywaydb:flyway-core')),
+      java.flywayDependencies.some((dep) => dep.includes('org.flywaydb:flyway-core')),
       `${id}: flywayDependencies debe incluir flyway-core`
     );
     // El reset entre flujos vacía datos, no el historial de migraciones: si lo
@@ -150,10 +152,10 @@ test('cada dialecto RELACIONAL declara su módulo Flyway y protege el historial 
   // apoyaba solo en flyway-core era H2, y se retiró.
   for (const [id, entry] of Object.entries(DATABASES)) {
     if (entry.kind !== 'relational') continue;
-    assert.ok(entry.flywayDependencies.length >= 2, `${id}: sin módulo de dialecto propio`);
+    assert.ok(JAVA_DATABASES[id].flywayDependencies.length >= 2, `${id}: sin módulo de dialecto propio`);
   }
   // MySQL y MariaDB comparten módulo.
-  assert.deepEqual(DATABASES.mysql.flywayDependencies, DATABASES.mariadb.flywayDependencies);
+  assert.deepEqual(JAVA_DATABASES.mysql.flywayDependencies, JAVA_DATABASES.mariadb.flywayDependencies);
 });
 
 test('el catálogo incorpora las técnicas de la referencia', () => {
@@ -166,8 +168,8 @@ test('el catálogo incorpora las técnicas de la referencia', () => {
   // Y ya no hay ningún motor sin contenedor: H2 era el único, y se retiró.
   for (const entry of Object.values(DATABASES)) assert.ok(entry.image, `${entry.id}: sin imagen`);
   // snssqs declara BOM + starters SNS/SQS como array.
-  assert.ok(Array.isArray(BROKERS.snssqs.gradleDependencies));
-  assert.ok(BROKERS.snssqs.gradleDependencies.length >= 3);
+  assert.ok(Array.isArray(JAVA_BROKERS.snssqs.gradleDependencies));
+  assert.ok(JAVA_BROKERS.snssqs.gradleDependencies.length >= 3);
 });
 
 test('selectedInfra lista solo las opciones con contenedor', () => {
@@ -191,4 +193,35 @@ test('describeStack resume las elecciones con sus labels', () => {
   assert.ok(text.includes(DATABASES.postgresql.label));
   assert.ok(text.includes(BROKERS.kafka.label));
   assert.ok(!text.includes('Ninguno')); // auth none no se lista
+});
+
+test('la tabla Java cubre exactamente las opciones del catálogo neutral', () => {
+  // La infraestructura vive en keel-core/gen y lo propio de Java en java-stack.js. Una opción
+  // nueva en el catálogo sin su fila aquí generaría un build.gradle sin su driver, y una fila
+  // huérfana sería una dependencia que ninguna opción pide.
+  const pares = [
+    [DATABASES, JAVA_DATABASES, 'DATABASES'],
+    [BROKERS, JAVA_BROKERS, 'BROKERS'],
+    [CACHES, JAVA_CACHES, 'CACHES'],
+    [STORAGE, JAVA_STORAGE, 'STORAGE']
+  ];
+  for (const [neutral, java, nombre] of pares) {
+    assert.deepEqual(Object.keys(java).sort(), Object.keys(neutral).sort(), nombre);
+    for (const [id, entry] of Object.entries(java)) {
+      assert.ok(Array.isArray(entry.gradleDependencies), `${nombre}.${id}: sin gradleDependencies`);
+    }
+  }
+  for (const [id, entry] of Object.entries(JAVA_DATABASES)) {
+    assert.equal(typeof entry.url, 'function', `${id}: sin url de conexión`);
+  }
+});
+
+test('el catálogo neutral no lleva nada de Java', () => {
+  for (const catalog of [DATABASES, BROKERS, CACHES, STORAGE]) {
+    for (const [id, entry] of Object.entries(catalog)) {
+      for (const field of ['gradleDependencies', 'flywayDependencies', 'url', 'internalUrl']) {
+        assert.equal(entry[field], undefined, `${id}.${field} es de java-stack.js, no del catálogo neutral`);
+      }
+    }
+  }
 });

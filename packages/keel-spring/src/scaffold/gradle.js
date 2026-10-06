@@ -14,7 +14,7 @@ import {
   DATASOURCE_MICROMETER_VERSION,
   CONTEXT_PROPAGATION_VERSION
 } from '../lib/assets.js';
-import { DATABASES, BROKERS, CACHES, STORAGE } from '../lib/stack-catalog.js';
+import { JAVA_DATABASES, JAVA_BROKERS, JAVA_CACHES, JAVA_STORAGE } from '../lib/java-stack.js';
 import { usesPartialUpdate } from './services.js';
 import { usesTelemetry } from './telemetry.js';
 import { usesContextExecutors } from './concurrency.js';
@@ -33,7 +33,7 @@ export function generate(model) {
   ];
   if (layersPresent.persistence && model.persistenceKind === 'document') {
     dependencies.push(
-      ...(DATABASES[stack.database]?.gradleDependencies ?? []),
+      ...(JAVA_DATABASES[stack.database]?.gradleDependencies ?? []),
       // Mongo embebido para el perfil `test`, análogo de H2: sin contenedor y con
       // el ciclo de vida del contexto. No hay dependencia de migraciones porque no
       // hay esquema que migrar — los índices los crea MongoIndexConfig.
@@ -54,16 +54,16 @@ export function generate(model) {
       // revisando, y lo que solo se ve revisando vuelve en la siguiente refactorización.
       // La versión la gobierna el BOM de Boot.
       "implementation 'org.hibernate.orm:hibernate-micrometer'",
-      ...(DATABASES[stack.database]?.gradleDependencies ?? []),
+      ...(JAVA_DATABASES[stack.database]?.gradleDependencies ?? []),
       // Migraciones de esquema: motor + módulo del dialecto elegido. Gobiernan el
       // esquema en develop/production (ahí Hibernate solo valida); en local están
       // apagadas mientras se itera con ddl-auto: update.
-      ...(DATABASES[stack.database]?.flywayDependencies ?? []),
+      ...(JAVA_DATABASES[stack.database]?.flywayDependencies ?? []),
       "testRuntimeOnly 'com.h2database:h2'"
     );
   }
   if (layersPresent.messaging) {
-    dependencies.push(...(BROKERS[stack.broker]?.gradleDependencies ?? []));
+    dependencies.push(...(JAVA_BROKERS[stack.broker]?.gradleDependencies ?? []));
   }
   if (layersPresent.security) {
     dependencies.push("implementation 'org.springframework.boot:spring-boot-starter-security'");
@@ -77,11 +77,11 @@ export function generate(model) {
   if (stack.cache) {
     dependencies.push(
       "implementation 'org.springframework.boot:spring-boot-starter-cache'",
-      ...(CACHES[stack.cache]?.gradleDependencies ?? [])
+      ...(JAVA_CACHES[stack.cache]?.gradleDependencies ?? [])
     );
   }
   if (layersPresent.storage) {
-    dependencies.push(...(STORAGE[stack.storage]?.gradleDependencies ?? []));
+    dependencies.push(...(JAVA_STORAGE[stack.storage]?.gradleDependencies ?? []));
   }
   if (layersPresent.mail) {
     // JavaMailSender + su autoconfiguración por spring.mail.*: es lo que hace que
