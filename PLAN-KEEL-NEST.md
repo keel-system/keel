@@ -548,6 +548,26 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     rompe la caja negra —, y cada desenlace sale con su código (1, 2, 0, y 2 con el sello roto). Falsado
     cambiando la tabla de historial de la plataforma: cae la sonda del reset. `ts-check` 11/11: el
     arnés compila con `strict` en las 13 fixtures.
+  - **7c hecho (2026-10-06)**, en dos commits:
+    - **El baseline de migraciones**: fuera de `local` el esquema no lo creaba nadie (sin `migrationsRun`,
+      y las migraciones fuera de `src/`). Ahora `develop`/`production` aplican `src/migrations/` al arrancar,
+      e `infra/export-schema.sh` / `infra/verify-baseline.sh` exportan el DDL de las entidades y verifican
+      que las migraciones crean exactamente ese esquema. Verificado en PostgreSQL y MySQL con
+      `harness-check --database=`, falsado quitando una sentencia. A diferencia de keel-spring, la prueba
+      en vivo cabe en el pipeline (`baselineTested: OK`, no `PENDING`): en `local` el esquema lo recrea
+      `synchronize`.
+    - **Agentes, convenciones y skill**: los cinco agentes, `architecture`/`constitution`/`orchestration`,
+      seis convenciones y `keel-nest-database`, proyectados por `generator-docs.js`; `/keel-generate-nest`
+      orquesta el mismo pipeline que keel-spring con sus mismos códigos. `infra/check-flows.sh` es el gate
+      del agente de pruebas (solo cuenta los errores de `test/integration/`: tsc sigue los imports del
+      arnés hasta `src/`). El arnés gana `jsonExact()` (la escala de un decimal no sobrevive a
+      `JSON.parse`) y los matchers de forma; `keel-nest check` imprime `design-gaps.yaml` (lectura
+      neutral en `keel-core/gen/design-gaps.js`). `harness-check` 25/25.
+  - **7d, preparado**: `product-catalog` trae `validation-scenarios.md` (6 flujos). Dos cosas antes de
+    la corrida: (1) `createProduct` declara idempotencia, que keel-nest genera en el incremento 10, así
+    que FL-PRD-002/003 no pueden pasar todavía contra keel-nest; (2) el diseño no está `--ready`
+    (revisión, barrido de huecos, careo y decisiones estructurales son del diseñador): la corrida va con
+    `--accept-unready` o tras cerrarlo con `/keel-design`.
   - **Diferencias con keel-spring, a la vista**: en Vitest un `beforeAll` que revienta da los casos por
     OMITIDOS (no hay `initializationError`), así que el arnés vuelca `<flujo>-init.json` y el script lo
     lista como arnés roto; el código 3 (workers de Gradle que sostienen `build/`) no existe aquí. Y el
