@@ -15,9 +15,7 @@
 // Y no se confunde con `build --check`, que opina sobre otra cosa: aquel mira si un
 // proyecto YA GENERADO se quedó atrás respecto al generador instalado. Este mira si un
 // DISEÑO puede generarse, y corre cuando todavía no hay proyecto ninguno.
-import fs from 'node:fs';
 import path from 'node:path';
-import YAML from 'yaml';
 import pc from 'picocolors';
 import { isKeelWorkspace, resolveServiceDir, loadService, validateService, assessReadiness, classifyWarnings } from 'keel-core';
 import { SUPPORTED_DSL } from '../lib/assets.js';
@@ -25,10 +23,9 @@ import { checkSupportedFeatures } from '../lib/supported-features.js';
 import { planService } from '../scaffold/index.js';
 import { DATABASES, PAYMENT_GATEWAYS } from '../lib/stack-catalog.js';
 import { gatewayCoverage } from '../lib/gateway-support.js';
-import { readManifest } from '../lib/generated-manifest.js';
+import { readDesignGaps } from 'keel-core/gen/design-gaps';
 
 // El archivo que el cierre del pipeline escribe en la raíz del proyecto generado.
-const DESIGN_GAPS_FILE = 'design-gaps.yaml';
 
 const bullet = (color, message) => console.log(`  ${pc[color]('•')} ${message}`);
 
@@ -218,7 +215,7 @@ export function check(inputPath, { database = null, paymentGateway = null, stric
   //
   // Se cuentan como avisos, no como bloqueos: son propuestas del generador sobre el
   // diseño, y quien decide es el diseñador.
-  const gaps = readDesignGaps(workspace, manifest, layers);
+  const gaps = readDesignGaps(workspace, manifest, 'spring');
   if (gaps.entries.length > 0 || gaps.error) {
     heading('Huecos que reportó la generación');
     if (gaps.error) {
@@ -281,39 +278,4 @@ export function check(inputPath, { database = null, paymentGateway = null, stric
       : pc.green('  Factible, sin avisos.')
   );
   console.log(pc.dim(`  Siguiente paso: ${pc.cyan(`keel-spring build ${path.relative(workspace, dir).split(path.sep).join('/')}`)}`));
-}
-
-
-/**
- * Los `designGaps` que dejó la última generación de este servicio, si el proyecto existe.
- *
- * Tolerante a propósito: un archivo ausente, mal formado o de otra versión no puede
- * impedir que se compruebe el diseño — lo que aporta es contexto, no veredicto. Un YAML
- * roto se dice en voz alta y se sigue; callarlo dejaría al diseñador creyendo que la
- * generación no encontró nada.
- */
-function readDesignGaps(workspace, manifest, layers) {
-  const empty = { entries: [], stale: false, version: null, error: null, design: null };
-  const service = manifest?.service?.name;
-  if (!service) return empty;
-
-  const projectDir = path.join(workspace, 'services', `${service}-spring`);
-  const file = path.join(projectDir, DESIGN_GAPS_FILE);
-  if (!fs.existsSync(file)) return empty;
-
-  let doc;
-  try {
-    doc = YAML.parse(fs.readFileSync(file, 'utf8'));
-  } catch (error) {
-    return { ...empty, error: `${DESIGN_GAPS_FILE}: YAML inválido — ${error.message}` };
-  }
-  if (!doc || !Array.isArray(doc.gaps)) return empty;
-
-  return {
-    entries: doc.gaps,
-    version: doc.version ?? null,
-    stale: Boolean(doc.version) && doc.version !== manifest.service?.version,
-    error: null,
-    design: readManifest(projectDir)?.design ?? null
-  };
 }

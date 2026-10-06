@@ -48,3 +48,18 @@ test('una capa fuera de la frontera sale en rojo sin construir nada', async () =
   assert.match(output, /capa security/);
   assert.equal(treeDigest(workspace), before);
 });
+
+test('imprime los huecos que reportó la generación (design-gaps.yaml del proyecto -nest)', async () => {
+  const workspace = makeWorkspace();
+  mountDesign(workspace, NEST_READY_DESIGN.name, NEST_READY_DESIGN);
+  const projectDir = path.join(workspace, 'services', `${NEST_READY_DESIGN.name}-nest`);
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(projectDir, 'design-gaps.yaml'),
+    'service: product-catalog\nversion: 0.0.1\ngenerator: keel-nest\ngaps:\n  - layer: use-cases\n    unit: createProduct\n    kind: undeclared\n    proposal: Declara el error del precio a cero.\n    source: keel-nest-code\n'
+  );
+  const { output } = await runCommand(workspace, check, `specs/${NEST_READY_DESIGN.name}`, {});
+  assert.match(output, /Huecos que reportó la generación/);
+  assert.match(output, /use-cases\.createProduct.*\[undeclared\] Declara el error del precio a cero\./);
+  assert.match(output, /Son de la v0\.0\.1/, 'una versión que no es la del diseño se dice');
+});

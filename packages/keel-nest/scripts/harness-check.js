@@ -105,6 +105,26 @@ unprobe('probe-import');
 const clean = npm(projectDir, ['run', 'check:architecture']);
 step('sin ella, check:architecture vuelve a verde', clean.ok, clean.ok ? '' : clean.output.slice(-800));
 
+// ── El gate del agente de pruebas: compila SOLO las pruebas de flujo ──
+probe('probe-types', `import { useFlow } from './support/flow.js';\ndescribe('FL-PROBE-008', () => {\n  useFlow();\n  it('FL-PROBE-008-A: mal tipada', () => {\n    const n: number = 'texto';\n    expect(n).toBeDefined();\n  });\n});\n`);
+const flowsRed = bash(projectDir, 'infra/check-flows.sh');
+step('check-flows.sh sale en rojo con una prueba de flujo que no compila', flowsRed.status === 1 && /probe-types/.test(flowsRed.output), `código ${flowsRed.status}`);
+unprobe('probe-types');
+// Un error en src/ (el agente de código a medio trabajo) no es de las pruebas: aviso, no rojo.
+// app.module.ts y no main.ts: el arnés lo importa, así que tsc lo compila con las pruebas de flujo.
+const mainTs = path.join(projectDir, 'src', 'app.module.ts');
+const mainSource = fs.readFileSync(mainTs, 'utf8');
+fs.writeFileSync(mainTs, `${mainSource}\nconst roto: number = 'src a medio escribir';\n`);
+const flowsSrc = bash(projectDir, 'infra/check-flows.sh');
+fs.writeFileSync(mainTs, mainSource);
+step(
+  'check-flows.sh no se pone rojo por un error en src/, y lo dice',
+  flowsSrc.status === 0 && /AVISO/.test(flowsSrc.output),
+  `código ${flowsSrc.status}: ${flowsSrc.output.slice(-400)}`
+);
+const flowsGreen = bash(projectDir, 'infra/check-flows.sh');
+step('check-flows.sh en verde sobre el proyecto recién generado', flowsGreen.status === 0, flowsGreen.output.slice(-400));
+
 // ── La infraestructura, con sus propios scripts ──
 const up = bash(projectDir, 'infra/up.sh');
 if (!step('bash infra/up.sh', up.status === 0, up.status === 0 ? '' : up.output.slice(-1200))) process.exit(1);
@@ -116,12 +136,15 @@ try {
   // historial de migraciones (el placeholder {history} del catálogo, sustituido por la plataforma).
   probe(
     'probe-ok',
-    `import { ROUTE_BASE, db, resetState, useFlow } from './support/flow.js';
+    `import { INSTANT_SHAPE, ROUTE_BASE, UUID_SHAPE, db, resetState, useFlow } from './support/flow.js';
 describe('FL-PROBE-001 · sonda en verde', () => {
   const flow = useFlow();
   it('FL-PROBE-001-A: una ruta inexistente responde 404 con ErrorResponse', async () => {
     const response = await flow.get(\`\${ROUTE_BASE}/keel-probe\`);
     expect(response.status, response.body).toBe(404);
+    // Las piezas de aserción del arnés: el número con su texto exacto y la forma de lo generado.
+    expect(response.jsonExact().status).toBe('404');
+    expect(response.json()).toMatchObject({ status: 404, timestamp: INSTANT_SHAPE, correlationId: UUID_SHAPE });
   });
   it('FL-PROBE-001-B: el reset vacía los datos y respeta el historial de migraciones', () => {
     db('CREATE TABLE IF NOT EXISTS keel_probe (id int)');

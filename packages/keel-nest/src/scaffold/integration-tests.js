@@ -30,13 +30,16 @@ export const INTEGRATION_CONFIG = 'vitest.integration.config.ts';
 export const FLOW_SUPPORT_TS = 'test/integration/support/flow.ts';
 export const HARNESS_SMOKE_TS = 'test/integration/harness-smoke.test.ts';
 export const SCORE_SCENARIOS_SH = 'infra/score-scenarios.sh';
+export const CHECK_FLOWS_SH = 'infra/check-flows.sh';
 
 export function generate(model) {
   return [
     { path: INTEGRATION_CONFIG, content: integrationConfig() },
     { path: FLOW_SUPPORT_TS, content: flowSupportTs(model) },
     { path: HARNESS_SMOKE_TS, content: harnessSmokeTs(model) },
-    { path: SCORE_SCENARIOS_SH, content: scoreScenariosScript(model) }
+    { path: SCORE_SCENARIOS_SH, content: scoreScenariosScript(model) },
+    { path: 'tsconfig.flows.json', content: flowsTsconfig() },
+    { path: CHECK_FLOWS_SH, content: checkFlowsScript() }
   ];
 }
 
@@ -135,7 +138,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
-import { afterAll, beforeAll, beforeEach } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect } from 'vitest';
 import { NestFactory } from '@nestjs/core';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { AppModule } from '../../../src/app.module.js';
@@ -153,9 +156,24 @@ export interface Response {
   readonly body: string;
   /** Una cabecera por nombre, sin distinguir mayúsculas. */
   header(name: string): string | undefined;
-  /** El cuerpo leído como JSON. Lanza nombrando el cuerpo si no lo es. */
+  /**
+   * El cuerpo leído como JSON. Lanza nombrando el cuerpo si no lo es. OJO: un número pasa por
+   * \`number\`, así que \`2.50\` se lee \`2.5\` y un entero de más de 2^53 pierde dígitos: para
+   * afirmar la escala de un decimal o un \`long\`, \`jsonExact()\`.
+   */
   json(): any;
+  /**
+   * El cuerpo con CADA número como el texto exacto que viajó (\`2.50\` → \`'2.50'\`). Es la lectura
+   * para afirmar la escala de un decimal, que es contrato observable: \`expect(r.jsonExact()).toStrictEqual({ amount: '2.50', … })\`.
+   */
+  jsonExact(): any;
 }
+
+/** Matcher de forma para un id generado (UUID): \`{ id: UUID_SHAPE }\` dentro de un \`toStrictEqual\`. */
+export const UUID_SHAPE = expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+
+/** Matcher de forma para un instante del cable: ISO-8601 UTC con exactamente tres decimales y \`Z\`. */
+export const INSTANT_SHAPE = expect.stringMatching(/^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$/);
 
 export type Headers = Readonly<Record<string, string>>;
 
@@ -323,14 +341,20 @@ async function send(baseUrl: string, method: string, route: string, body?: unkno
     headers: received,
     body: text,
     header: (name) => received[name.toLowerCase()],
-    json: () => {
-      try {
-        return JSON.parse(text);
-      } catch {
-        throw new Error(\`La respuesta no es JSON (status \${response.status}): \${text.slice(0, 400)}\`);
-      }
-    }
+    json: () => parseJson(text, response.status, false),
+    jsonExact: () => parseJson(text, response.status, true)
   };
+}
+
+function parseJson(text: string, status: number, exact: boolean): any {
+  try {
+    // Node 22+: el reviver recibe el texto fuente de cada primitivo (context.source).
+    return exact
+      ? JSON.parse(text, (_key, value, context?: { source?: string }) => (typeof value === 'number' && context?.source ? context.source : value))
+      : JSON.parse(text);
+  } catch {
+    throw new Error(\`La respuesta no es JSON (status \${status}): \${text.slice(0, 400)}\`);
+  }
 }
 
 // ── Infraestructura ──────────────────────────────────────────────────────────
@@ -653,5 +677,63 @@ if [ "$ko" -eq 0 ] && [ "$sk" -eq 0 ] && [ "$nc" -eq 0 ]; then
   exit 2
 fi
 exit 1
+`;
+}
+
+// ─── infra/check-flows.sh ────────────────────────────────────────────────────
+//
+// El gate de compilación del agente de PRUEBAS. En keel-spring compila src/integrationTest sin
+// src/main/java (está fuera de su classpath), y eso es lo que le deja trabajar en paralelo con el
+// agente de código. En TypeScript tsc sigue los imports de support/flow.ts hasta src/, así que un
+// src/ a medio escribir pondría rojo el chequeo de quien no lo escribe: aquí solo cuentan los errores
+// de test/integration/. Los de src/ se dicen aparte, como de otro.
+
+function flowsTsconfig() {
+  const config = {
+    extends: './tsconfig.json',
+    compilerOptions: { noEmit: true, incremental: false },
+    include: ['test/integration', 'src/types', 'vitest.integration.config.ts']
+  };
+  return `${JSON.stringify(config, null, 2)}
+`;
+}
+
+function checkFlowsScript() {
+  // String.raw: el bash va tal cual, sin escapar barras (no lleva ninguna interpolación de JS).
+  return String.raw`#!/usr/bin/env bash
+# check-flows.sh — compila las pruebas de flujo (test/integration/) y solo juzga ESAS.
+#
+# tsc sigue los imports del arnés hasta src/, así que un src/ a medio escribir también daría errores;
+# esos no son de las pruebas de flujo y se listan aparte, sin poner este gate en rojo. Además
+# ejecuta la regla de la caja negra (un flujo no importa src/).
+#
+# Uso (desde la raíz; no necesita infraestructura):
+#   bash infra/check-flows.sh
+# Sale con 0 si las pruebas de flujo compilan y respetan la caja negra, y con 1 si no.
+set -u
+cd "$(dirname "$0")/.."
+mkdir -p build
+
+out="$(./node_modules/.bin/tsc -p tsconfig.flows.json 2>&1)"
+mine="$(printf '%s\n' "$out" | grep -E '^test/integration/' || true)"
+others="$(printf '%s\n' "$out" | grep -E '^[^ ].*\([0-9]+,[0-9]+\): error' | grep -vE '^test/integration/' || true)"
+
+fail=0
+if [ -n "$mine" ]; then
+  echo "Las pruebas de flujo no compilan:"
+  printf '%s\n' "$mine" | sed 's/^/  /'
+  fail=1
+fi
+if [ -n "$others" ]; then
+  echo "AVISO: hay errores FUERA de test/integration/ (no son de las pruebas de flujo; no cuentan aquí):"
+  printf '%s\n' "$others" | sed 's/^/  /' | head -20
+fi
+if ! ./node_modules/.bin/depcruise test/integration --config .dependency-cruiser.json >build/keel-flows-depcruise.log 2>&1; then
+  echo "Caja negra rota: una prueba de flujo importa src/ (regla flujos-caja-negra):"
+  sed 's/^/  /' build/keel-flows-depcruise.log | head -20
+  fail=1
+fi
+[ "$fail" -eq 0 ] && echo "Pruebas de flujo: compilan y respetan la caja negra."
+exit "$fail"
 `;
 }

@@ -1,5 +1,6 @@
 import pc from 'picocolors';
 import { gateDesign } from 'keel-core/gen/design-gate';
+import { readDesignGaps } from 'keel-core/gen/design-gaps';
 import { SUPPORTED_DSL } from '../lib/assets.js';
 import { checkSupportedFeatures } from '../lib/supported-features.js';
 import { planService } from '../scaffold/index.js';
@@ -30,11 +31,37 @@ export function check(inputPath, { strict = false } = {}) {
   }
 
   const features = checkSupportedFeatures(manifest, layers);
-  const notices = features.warnings.length + plan.model.warnings.length;
+  let notices = features.warnings.length + plan.model.warnings.length;
   console.log();
   console.log(pc.bold('Traducción a código'));
   if (plan.model.warnings.length === 0) console.log(pc.dim(`  Sin avisos del modelo. ${plan.files.length} archivos se generarían.`));
   for (const message of plan.model.warnings) console.log(`  ${pc.yellow('•')} ${message}`);
+
+  // Lo que la última generación encontró y vuelve al diseñador: el design-gaps.yaml que el pipeline
+  // escribe en services/<servicio>-nest/. Son avisos, no bloqueos: propuestas sobre el diseño.
+  const gaps = readDesignGaps(workspace, manifest, 'nest');
+  if (gaps.entries.length > 0 || gaps.error) {
+    console.log();
+    console.log(pc.bold('Huecos que reportó la generación'));
+    if (gaps.error) {
+      console.log(`  ${pc.yellow('•')} ${gaps.error}`);
+      notices += 1;
+    }
+    if (gaps.stale) {
+      console.log(pc.dim(`  Son de la v${gaps.version} y el diseño va por v${manifest.service?.version}: reléelos antes de darlos por vigentes.`));
+    }
+    if (gaps.design && gaps.design.ready === false) {
+      console.log(
+        pc.dim(
+          `  El build que los produjo partió de un diseño no listo (v${gaps.design.version}, faltaban: ${gaps.design.missing.join(', ')}): pueden ser del diseño y no del método.`
+        )
+      );
+    }
+    for (const gap of gaps.entries) {
+      console.log(`  ${pc.yellow('•')} ${pc.cyan(gap.unit ? `${gap.layer}.${gap.unit}` : gap.layer)} [${gap.kind}] ${gap.proposal}`);
+      notices += 1;
+    }
+  }
 
   console.log();
   console.log(pc.bold('Resumen'));

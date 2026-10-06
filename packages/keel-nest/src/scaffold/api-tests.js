@@ -1,7 +1,7 @@
 // La prueba emitida de la API: `test/api.test.ts`. Arranca el servidor REAL (mismo AppModule y misma
 // plataforma HTTP que main.ts) y le pide, por app.inject(), lo que el contrato fija sin depender de
 // la lógica que escribe el agente:
-//   · una operación que llega a su handler sale, mientras sea un TODO, como 500 con ErrorResponse;
+//   · una operación llega a su handler (sin afirmar qué responde: eso lo decide el agente);
 //   · un cuerpo que no es JSON, un cuerpo que incumple lo declarado, un uuid de ruta mal formado;
 //   · una ruta que no existe (404) y una que existe con otro método (405);
 //   · la correlación: la recibida vuelve en la respuesta y en el cuerpo de error; una inválida se
@@ -110,10 +110,16 @@ function apiTest(model) {
   const validation = FRAMEWORK_ERRORS.validation.code;
   const tests = [];
   if (cases.reachesHandler) {
-    tests.push(`  it('una operación llega a su handler; mientras es un TODO, sale como 500 con ErrorResponse', async () => {
+    // No afirma QUÉ responde el handler, solo que la ruta llega a él: así sigue en verde cuando el
+    // agente lo implementa (en el perfil test no hay base, y un handler que la use sale como 500).
+    tests.push(`  it('una operación llega a su handler: ni el 404 de una ruta que no existe ni el 405', async () => {
     const response = await app.inject(${request(cases.reachesHandler)});
-    // Cuando el agente implemente ${cases.reachesHandler.operation}, este caso deja de dar 500: ajústalo a su desenlace.
-    expectError(response, 500, 'Internal Server Error', null, 'Ocurrió un error inesperado');
+    expect(response.statusCode).not.toBe(405);
+    if (response.statusCode >= 400) {
+      const parsed = body(response);
+      expect(Object.keys(parsed)).toEqual(ERROR_SHAPE);
+      expect(parsed.message).not.toBe('Recurso no encontrado');
+    }
   });`);
   }
   if (cases.malformedBody) {
