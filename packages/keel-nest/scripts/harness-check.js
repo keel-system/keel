@@ -22,8 +22,12 @@ import { spawnSync } from 'node:child_process';
 import { makeWorkspace, mountDesign, runCommand, NEST_READY_DESIGN } from '../test/helpers/workspace.js';
 import { build } from '../src/commands/build.js';
 import { resolveRuntime } from './lib/database-container.js';
+import { loadService } from 'keel-core';
+import { resolveStack, writeStackConfig } from 'keel-core/gen/stack';
 
 const keep = process.argv.includes('--keep');
+// El motor relacional: postgresql por defecto; --database=mysql pasa la misma batería por el otro.
+const database = (process.argv.find((arg) => arg.startsWith('--database=')) ?? '--database=postgresql').split('=')[1];
 const isWindows = process.platform === 'win32';
 const results = [];
 
@@ -64,7 +68,11 @@ function npm(projectDir, args) {
 }
 
 const workspace = makeWorkspace('keel-nest-harness-check-');
-mountDesign(workspace, NEST_READY_DESIGN.name, NEST_READY_DESIGN);
+const specDir = mountDesign(workspace, NEST_READY_DESIGN.name, NEST_READY_DESIGN);
+// El stack se fija ANTES del build escribiendo su keel-stack.json: build lo respeta en vez de preguntar.
+const preProjectDir = path.join(workspace, 'services', `${NEST_READY_DESIGN.name}-nest`);
+fs.mkdirSync(preProjectDir, { recursive: true });
+writeStackConfig(preProjectDir, resolveStack({ database }, loadService(specDir).layers));
 const generated = await runCommand(workspace, build, `specs/${NEST_READY_DESIGN.name}`, { defaults: true, acceptUnready: true });
 const projectDir = path.join(workspace, 'services', `${NEST_READY_DESIGN.name}-nest`);
 if (!step('build genera el proyecto', generated.exitCode === undefined && fs.existsSync(projectDir), generated.exitCode ? generated.output : '')) {
@@ -209,6 +217,34 @@ describe('FL-PROBE-003 · sonda que no arranca', () => {
   fs.rmSync(path.join(projectDir, 'specs', 'validation-scenarios.md'), { force: true });
   const run3 = bash(projectDir, 'infra/score-scenarios.sh');
   step('score: todo en verde sale con 0', run3.status === 0 && /RESULTADO: OK/.test(run3.output), `código ${run3.status}`);
+
+  // El baseline de migraciones: se exporta desde las entidades, se copia a src/migrations/ y se
+  // verifica aplicándolo a un esquema vacío (lo que hace el arranque en develop y production).
+  const exported = bash(projectDir, 'infra/export-schema.sh');
+  const baselineSql = path.join(projectDir, 'build', 'schema', 'baseline.sql');
+  const candidate = path.join(projectDir, 'build', 'schema', '1000000000000-baseline-schema.ts');
+  step(
+    'export-schema.sh escribe el DDL de las entidades y la migración candidata',
+    exported.status === 0 && fs.existsSync(baselineSql) && /CREATE TABLE/i.test(fs.readFileSync(baselineSql, 'utf8')) && fs.existsSync(candidate),
+    exported.status === 0 ? '' : exported.output.slice(-1500)
+  );
+  if (fs.existsSync(candidate)) {
+    const migration = path.join(projectDir, 'src', 'migrations', '1000000000000-baseline-schema.ts');
+    fs.copyFileSync(candidate, migration);
+    const verified = bash(projectDir, 'infra/verify-baseline.sh');
+    step('verify-baseline.sh: las migraciones crean exactamente el esquema de las entidades', verified.status === 0 && /baseline: OK/.test(verified.output), verified.status === 0 ? '' : verified.output.slice(-1500));
+    // Falsado: un baseline al que le falta una sentencia (la última: un índice o una FK) no pasa.
+    const original = fs.readFileSync(migration, 'utf8');
+    const upCalls = [...original.matchAll(/^    await queryRunner.query(.*);$/gm)];
+    const downStart = original.indexOf('async down(');
+    const lastUp = upCalls.filter((m) => m.index < downStart).pop();
+    fs.writeFileSync(migration, original.slice(0, lastUp.index) + original.slice(lastUp.index + lastUp[0].length + 1));
+    const sabotaged = bash(projectDir, 'infra/verify-baseline.sh');
+    step('verify-baseline.sh sale en rojo con un baseline al que le falta una sentencia', sabotaged.status === 1 && /baseline: KO/.test(sabotaged.output), `código ${sabotaged.status}`);
+    fs.writeFileSync(migration, original);
+    const develop = bash(projectDir, 'infra/verify-baseline.sh');
+    step('restaurado, vuelve a verde (y la base queda con el esquema de las migraciones)', develop.status === 0);
+  }
 
   // Un snapshot editado desde el proyecto no se puntúa.
   fs.writeFileSync(path.join(projectDir, 'specs.sha256'), `${'0'.repeat(64)}  specs/service.keel.yaml\n`);

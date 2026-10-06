@@ -23,6 +23,8 @@ export const NETS = {
   'db-check':
     'npm run db-check — la persistencia contra PostgreSQL y MySQL reales: esquema contra el catálogo del motor, cotas, ida y vuelta por el adaptador generado, fila en crudo, versión, unicidad (también la condicionada), página y borrado',
   'ts-check': 'npm run ts-check — compila con strict las 13 fixtures, ejecuta sus pruebas y ARRANCA el servidor contra PostgreSQL',
+  'harness-check':
+    'npm run harness-check [-- --database=mysql] — levanta infra/ con sus propios scripts, puntúa flujos sonda con score-scenarios.sh (cada código de salida y su evidencia) y exporta, aplica y verifica el baseline de migraciones',
   ninguna: 'nadie lo ejecuta'
 };
 
@@ -37,8 +39,21 @@ export const MECHANISMS = {
   'sweep-claim-queue': { pending: 'incremento 10 (barridos)' },
   'sweep-claim-rescue': { pending: 'incremento 10 (barridos)' },
   'guard-claim': { pending: 'incremento 10 (guarda de fila)' },
-  'harness-db-probes': { pending: 'incremento 7 (arnés de integración)' },
-  'schema-baseline': { pending: 'incremento 7 (el pase de calidad exporta el baseline de migrations/)' },
+  'harness-db-probes': { pending: 'incremento 10 (las sondas que fabrican la precondición de un barrido)' },
+  'schema-baseline': {
+    emitter: 'src/scaffold/schema-baseline.js (schema-baseline.ts, infra/export-schema.sh e infra/verify-baseline.sh)',
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'harness-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why:
+          'export-schema.sh vacía el esquema local y le pide a TypeORM el DDL completo de las entidades; verify-baseline.sh aplica las migraciones sobre un esquema vacío —lo que hace el arranque en develop y production con migrationsRun— y exige que TypeORM no vea diferencia. harness-check lo ejecuta en los dos motores sobre product-catalog. Falsado el 2026-10-06 quitándole al baseline su última sentencia: la verificación sale en rojo nombrando lo que falta. A diferencia de keel-spring (baselineTested: PENDING), la prueba en vivo SÍ cabe en el pipeline: en local el esquema lo recrea synchronize. Lo que no mide: un diseño con FK entre tablas, porque product-catalog tiene una sola'
+      },
+      document: { pending: 'incremento 12 (persistencia documental)' }
+    }
+  },
   'transient-write-conflict': {
     emitter: 'src/scaffold/mediator.js · src/scaffold/persistence-runtime.js (isTransientWriteConflict)',
     coverage: {
@@ -86,7 +101,7 @@ export const MECHANISMS = {
     }
   },
   'claim-dialect': { pending: 'incremento 10 (reclamos con SKIP LOCKED)' },
-  'harness-sql-literals': { pending: 'incremento 7 (arnés de integración)' },
+  'harness-sql-literals': { pending: 'incremento 10 (los literales por motor de las sondas del arnés)' },
   'telemetry-store-spans': { pending: 'incremento 14 (telemetría)' },
   'folded-text': {
     emitter: 'src/scaffold/persistence-entities.js (la columna sombra) · src/scaffold/repositories.js (TextFold al guardar)',

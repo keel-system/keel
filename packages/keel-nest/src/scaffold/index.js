@@ -29,6 +29,7 @@ import * as mediator from './mediator.js';
 import * as persistenceEntities from './persistence-entities.js';
 import * as repositories from './repositories.js';
 import * as persistenceRuntime from './persistence-runtime.js';
+import * as schemaBaseline from './schema-baseline.js';
 import * as domainGuardsCheck from './domain-guards-check.js';
 import * as architecture from './architecture.js';
 import * as restSupport from './rest-support.js';
@@ -67,6 +68,8 @@ const GENERATORS = [
   persistenceEntities,
   repositories,
   persistenceRuntime,
+  // El baseline de migraciones: cómo se exporta y cómo se demuestra (lo usa el pase de calidad).
+  schemaBaseline,
   { generate: (model) => mediator.generate(model, { mappers: mappers.mapperClasses(model) }) },
   // API REST (incremento 5): correlación, ErrorResponse, lectura de peticiones, filtro de errores y
   // un controlador por grupo.

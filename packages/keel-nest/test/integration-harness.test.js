@@ -107,3 +107,20 @@ test('el humo del arnés cubre lo que el diseño tiene: reset, base y API', () =
   assert.equal(bare['infra/reset-db.sh'], undefined);
   assert.doesNotMatch(bare['test/integration/support/flow.ts'], /export function (resetState|db)\(/);
 });
+
+test('el baseline de migraciones: build deja el mecanismo y develop/production aplican las migraciones', () => {
+  const files = byPath(planFixture(NEST_READY_DESIGN.name).files);
+  for (const file of ['src/infrastructure/persistence/schema-baseline.ts', 'infra/export-schema.sh', 'infra/verify-baseline.sh', 'src/migrations/README.md']) {
+    assert.ok(file in files, `${file} se emite`);
+  }
+  assert.equal(files['migrations/README.md'], undefined, 'las migraciones viven en src/ (compilan a dist/migrations)');
+  const yamlOf = (profile) => Object.entries(files).find(([file]) => file.startsWith(`config/parameters/${profile}/`) && /migrations-run/.test(files[file]))?.[1] ?? '';
+  assert.match(yamlOf('local'), /migrations-run: false/);
+  assert.match(yamlOf('develop'), /migrations-run: true/);
+  assert.match(yamlOf('production'), /migrations-run: true/);
+  // El baseline se exporta y se verifica sobre un esquema VACÍO: los dos scripts lo vacían antes.
+  for (const script of ['infra/export-schema.sh', 'infra/verify-baseline.sh']) assert.match(files[script], /bash infra\/reset-db\.sh --schema/);
+  // Sin persistencia, nada de esto.
+  const bare = byPath(planFixture(NEST_READY_DESIGN.name, { withoutLayers: ['persistence'] }).files);
+  assert.equal(bare['infra/export-schema.sh'], undefined);
+});

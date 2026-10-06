@@ -59,8 +59,7 @@ export function generate(model) {
     { path: DATA_SOURCE_OPTIONS_TS, content: dataSourceOptionsFile(model) },
     { path: TRANSACTION_CONTEXT_TS, content: transactionContextFile(model) },
     { path: PERSISTENCE_ERRORS_TS, content: persistenceErrorsFile(model) },
-    { path: PERSISTENCE_MODULE_TS, content: persistenceModuleFile(model) },
-    { path: 'migrations/README.md', content: migrationsReadme(model) }
+    { path: PERSISTENCE_MODULE_TS, content: persistenceModuleFile(model) }
   ];
 }
 
@@ -113,8 +112,10 @@ database:
     max-lifetime-ms: ${envWithDefault(profile, 'DB_POOL_MAX_LIFETIME_MS', 1800000)}
   # Tope de cada transacción; lo cancelado sale como 503 TRANSACTION_TIMEOUT.
   transaction-timeout: ${envWithDefault(profile, 'DB_TRANSACTION_TIMEOUT', DB_TRANSACTION_TIMEOUT)}
-  # ${profile === 'local' ? 'Solo para iterar: en local el ORM crea y altera el esquema.' : 'El esquema lo gobiernan las migraciones de migrations/, nunca el ORM.'}
+  # ${profile === 'local' ? 'Solo para iterar: en local el ORM crea y altera el esquema.' : 'El esquema lo gobiernan las migraciones de src/migrations/, nunca el ORM.'}
   synchronize: ${profile === 'local'}
+  # ${profile === 'local' ? 'En local no hay migraciones que aplicar: el esquema es el de las entidades.' : 'Al arrancar se aplican las migraciones pendientes de src/migrations/ (el baseline lo exporta el pase de calidad).'}
+  migrations-run: ${profile !== 'local'}
   show-sql: ${profile === 'local'}
 `;
 }
@@ -191,8 +192,9 @@ export function databaseSettings(configuration: Configuration): DatabaseSettings
 ${driverOptions}
     entities: ENTITIES,
     synchronize: configuration.get('database.synchronize') === true || configuration.get('database.synchronize') === 'true',
-    // El esquema fuera de local: las migraciones del baseline (migrations/README.md).
+    // El esquema fuera de local: las migraciones de src/migrations/, compiladas a dist/ (su README).
     migrations: ['dist/migrations/*.js'],
+    migrationsRun: configuration.get('database.migrations-run') === true || configuration.get('database.migrations-run') === 'true',
     // El historial con nombre propio: infra/reset-db.sh lo respeta por nombre (ver infra.js).
     migrationsTableName: '${MIGRATIONS_TABLE}',
     logging: configuration.get('database.show-sql') === true || configuration.get('database.show-sql') === 'true' ? ['query', 'error'] : ['error']
@@ -556,20 +558,3 @@ ${bindings.join(',\n')}
 }`;
   return tsModule(PERSISTENCE_MODULE_TS, imports, body);
 }
-
-function migrationsReadme(model) {
-  return `# Migraciones de esquema
-
-En el perfil \`local\` el esquema lo crea y altera TypeORM (\`database.synchronize: true\`, el
-\`ddl-auto: update\` de keel-spring): el ciclo de generación itera sobre las entidades y no puede
-pararse a escribir una migración por cambio.
-
-En \`develop\` y \`production\` el ORM no toca el esquema: lo gobiernan las migraciones de este
-directorio. El baseline lo exporta el pase de calidad desde las entidades finales; la mecánica (y la
-de los índices que el ORM no expresa) llega con el pipeline de agentes de keel-nest.
-
-Los nombres de tablas, columnas, constraints, índices y FK son los MISMOS que los del servidor de
-keel-spring del diseño ${model.service.name}: los fija keel-core/gen y los traduce el filtro de errores.
-`;
-}
-
