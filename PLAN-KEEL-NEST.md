@@ -563,7 +563,16 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
       arnés hasta `src/`). El arnés gana `jsonExact()` (la escala de un decimal no sobrevive a
       `JSON.parse`) y los matchers de forma; `keel-nest check` imprime `design-gaps.yaml` (lectura
       neutral en `keel-core/gen/design-gaps.js`). `harness-check` 25/25.
-  - **7d, preparado**: `product-catalog` trae `validation-scenarios.md` (6 flujos). Dos cosas antes de
+  - **7d hecho (2026-10-06): primer servidor equivalente demostrado.** `product-catalog` v1.1.0 (con
+    `activateProduct` y el token fuera del contrato) completado por los dos pipelines: **keel-nest 23/23**
+    y **keel-spring 23/23**, mismos escenarios (`docs/corridas/2026-10-06-product-catalog-{nest,spring}.md`).
+    El arnés y los gates funcionaron a la primera (sin `harnessPatches` ni `culprit: harness`), y el
+    baseline salió verificado en vivo. Pero la huella de keel-nest (12 reescritos frente a 6) destapa un
+    **hueco del generador**: la idempotencia de petición, que keel-nest aún no emite, la escribió el agente
+    a mano tocando cinco archivos de build, con otra tabla (`idempotency_keys`) y SQL solo de PostgreSQL.
+    Los escenarios pasan; el esquema y el motor ya no son los de keel-spring. Siguiente: adelantar del
+    incremento 10 la idempotencia de petición.
+  - (Preparación de 7d, histórico) `product-catalog` trae `validation-scenarios.md` (6 flujos). Dos cosas antes de
     la corrida: (1) `createProduct` declara idempotencia, que keel-nest genera en el incremento 10, así
     que FL-PRD-002/003 no pueden pasar todavía contra keel-nest; (2) el diseño no está `--ready`
     (revisión, barrido de huecos, careo y decisiones estructurales son del diseñador): la corrida va con
