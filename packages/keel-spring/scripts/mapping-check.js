@@ -46,7 +46,7 @@ import { requiredLiterals } from '../src/lib/claim-probes.js';
 import { databaseHealthProbe } from '../src/lib/stack-catalog.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const fixturesDir = path.join(here, '..', 'test', 'fixtures');
+const fixturesDir = path.join(here, '..', '..', '..', 'fixtures', 'designs');
 
 const args = process.argv.slice(2);
 const keep = args.includes('--keep');

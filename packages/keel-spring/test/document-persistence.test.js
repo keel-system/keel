@@ -15,8 +15,9 @@ import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
 import { loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
-const fixtureDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'inspection-reports');
+const fixtureDir = path.join(FIXTURES_DIR, 'inspection-reports');
 const PROJECT = path.join('services', 'inspection-reports-spring');
 const JAVA = 'src/main/java/com/example/inspectionreports';
 const DOCS = `${JAVA}/infrastructure/persistence/documents`;

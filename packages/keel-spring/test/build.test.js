@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
-import { READY_FIXTURES, mountDesign } from './helpers/workspace.js';
+import { FIXTURES_DIR, READY_FIXTURES, mountDesign } from './helpers/workspace.js';
 import { HARNESSES, loadService, validateService } from 'keel-core';
 import { build } from '../src/commands/build.js';
 import { assetsDir, SUPPORTED_DSL } from '../src/lib/assets.js';
@@ -167,7 +167,7 @@ test('build acepta el modelo documental y el diseño elige el motor', async () =
   // build tiene una puerta anterior —la capa 0 de artefactos en plantilla— que un
   // diseño mínimo no pasa nunca.
   const workspace = makeWorkspace();
-  const fixture = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'inspection-reports');
+  const fixture = path.join(FIXTURES_DIR, 'inspection-reports');
   const specDir = path.join(workspace, 'specs', 'inspection-reports');
   fs.mkdirSync(specDir, { recursive: true });
   fs.cpSync(fixture, specDir, { recursive: true });
@@ -201,7 +201,7 @@ test('build falla la validación de un diseño en plantilla', async () => {
 
 test('build con un diseño válido genera el scaffolding y sale con éxito', async () => {
   const workspace = makeWorkspace();
-  const fixture = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'product-catalog');
+  const fixture = path.join(FIXTURES_DIR, 'product-catalog');
   const specDir = path.join(workspace, 'specs', 'product-catalog');
   fs.mkdirSync(specDir, { recursive: true });
   fs.cpSync(fixture, specDir, { recursive: true });
@@ -265,7 +265,7 @@ test('build con un diseño válido genera el scaffolding y sale con éxito', asy
 // Prepara un workspace con la fixture product-catalog lista para generar.
 function withFixture(name = 'product-catalog') {
   const workspace = makeWorkspace();
-  const fixture = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', name);
+  const fixture = path.join(FIXTURES_DIR, name);
   const specDir = path.join(workspace, 'specs', name);
   fs.mkdirSync(specDir, { recursive: true });
   fs.cpSync(fixture, specDir, { recursive: true });

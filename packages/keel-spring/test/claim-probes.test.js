@@ -15,9 +15,10 @@ import { fileURLToPath } from 'node:url';
 import { loadService } from 'keel-core';
 import { buildModel } from '../src/lib/model.js';
 import { claimScenarios, claimTestClass, harnessProbes, requiredLiterals, BATCH_SIZE, CLASS_NAME } from '../src/lib/claim-probes.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const fixturesDir = path.join(here, 'fixtures');
+const fixturesDir = path.join(FIXTURES_DIR);
 
 const PACKAGES = {
   enums: 'com.test.domain.enums',

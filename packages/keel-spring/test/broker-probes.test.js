@@ -14,6 +14,7 @@ import { loadService } from 'keel-core';
 import { buildModel } from '../src/lib/model.js';
 import { generate as generateIntegrationTests } from '../src/scaffold/integration-tests.js';
 import { resolveStack } from '../src/scaffold/index.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 import {
   BROKERS,
   ENDPOINTS,
@@ -34,7 +35,7 @@ import {
   sqsAttributesJson
 } from '../src/lib/broker-probes.js';
 
-const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
+const fixturesDir = path.join(FIXTURES_DIR);
 
 const harnessFor = (broker) => {
   const { manifest, layers } = loadService(path.join(fixturesDir, 'catalog-extended'));

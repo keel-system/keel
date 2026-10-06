@@ -25,8 +25,9 @@ import { loadService } from 'keel-core';
 import { scaffoldService, resolveStack } from '../src/scaffold/index.js';
 import { scopingClaimChecks } from '../src/scaffold/auth-provisioning.js';
 import { buildModel } from '../src/lib/model.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
-const fixtureDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'catalog-extended');
+const fixtureDir = path.join(FIXTURES_DIR, 'catalog-extended');
 
 const SECURITY = {
   authentication: {
@@ -206,7 +207,7 @@ test('con roles se siembran DOS usuarios por rol, y el segundo lleva su rol', ()
 });
 
 test('sin roles no hay usuarios de prueba, ni cliente público, ni se prometen', () => {
-  const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'notification-mailer');
+  const dir = path.join(FIXTURES_DIR, 'notification-mailer');
   const { manifest, layers, errors } = loadService(dir);
   assert.deepEqual(errors, []);
   assert.equal((layers.security?.roles ?? []).length, 0, 'la fixture de control ya declara roles');

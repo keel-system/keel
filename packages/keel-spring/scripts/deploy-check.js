@@ -52,7 +52,7 @@ import { ALERTING, TELEMETRY_INFRA } from '../src/lib/stack-catalog.js';
 import { ATTRIBUTES, METRICS_TRANSPORT, OBSERVATIONS, promMetric, promTag } from '../src/lib/telemetry-probes.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const fixturesDir = path.join(here, '..', 'test', 'fixtures');
+const fixturesDir = path.join(here, '..', '..', '..', 'fixtures', 'designs');
 
 const args = process.argv.slice(2);
 const fixture = args.find((arg) => !arg.startsWith('--')) ?? 'job-dispatch';

@@ -16,6 +16,7 @@ import { tmpDir } from './helpers/tmp.js';
 import { loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
 import { TELEMETRY_GUIDES } from '../src/scaffold/generator-docs.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.join(here, '..');
@@ -37,7 +38,7 @@ test('la guía de observabilidad: la copia de la raíz del repo es la fuente, by
 });
 
 test('la guía de observabilidad: se instala en el proyecto generado solo con telemetría', () => {
-  const { manifest, layers } = loadService(path.join(here, 'fixtures', 'stock-reservation'));
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, 'stock-reservation'));
   const generate = (telemetry) => {
     const workspace = tmpDir('keel-obsdoc-');
     const { outDir } = scaffoldService({ manifest, layers, workspace, force: true, stack: { broker: 'kafka', telemetry } });

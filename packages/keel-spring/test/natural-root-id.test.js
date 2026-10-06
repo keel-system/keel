@@ -12,8 +12,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadService } from 'keel-core';
 import { planService } from '../src/scaffold/index.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
-const fixture = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'metering-digest');
+const fixture = path.join(FIXTURES_DIR, 'metering-digest');
 const STACK = { database: 'postgresql', broker: 'kafka', cache: null, auth: null, storage: null, telemetry: 'none' };
 
 function render({ document = false } = {}) {

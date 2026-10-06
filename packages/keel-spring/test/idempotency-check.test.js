@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { tmpDir } from './helpers/tmp.js';
 import { loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
 // El gate determinista del tramo que no está garantizado por construcción. Su
 // propiedad central no es que exista: es que salga ROJO sobre un proyecto recién
@@ -13,7 +14,7 @@ import { scaffoldService } from '../src/scaffold/index.js';
 // escrito nada no distingue «correcto» de «no mira» — el mismo razonamiento por el
 // que java-syntax.test.js se autocomprueba con Java roto a propósito.
 
-const fixture = (name) => path.join(process.cwd(), 'test', 'fixtures', name);
+const fixture = (name) => path.join(FIXTURES_DIR, name);
 
 function build(name, mutate = null) {
   const service = loadService(fixture(name));

@@ -16,11 +16,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
-import { READY_FIXTURES, mountDesign } from './helpers/workspace.js';
+import { FIXTURES_DIR, READY_FIXTURES, mountDesign } from './helpers/workspace.js';
 import { validateService } from 'keel-core';
 import { check } from '../src/commands/check.js';
 
-const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
+const fixturesDir = path.join(FIXTURES_DIR);
 
 function makeWorkspace(fixtures) {
   const dir = tmpDir('keel-spring-check-');

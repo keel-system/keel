@@ -19,6 +19,7 @@ import { tmpDir } from './helpers/tmp.js';
 import { loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
 import { ALERTING, GRAFANA_PROVISIONING, OBSERVABILITY_DIR } from '../src/lib/stack-catalog.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 import {
   ATTRIBUTES,
   CONSUMER_LAG,
@@ -30,7 +31,7 @@ import {
   runtimeSeries
 } from '../src/lib/telemetry-probes.js';
 
-const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
+const fixturesDir = path.join(FIXTURES_DIR);
 
 function generate(fixture, stack) {
   const { manifest, layers } = loadService(path.join(fixturesDir, fixture));

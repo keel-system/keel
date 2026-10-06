@@ -22,8 +22,9 @@ import { loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
 import { ATTRIBUTES } from '../src/lib/telemetry-probes.js';
 import { allowedTagKeys } from '../src/scaffold/telemetry-gate.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
-const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
+const fixturesDir = path.join(FIXTURES_DIR);
 const GATE = 'infra/check-telemetry.sh';
 
 function generate(fixture, stack) {

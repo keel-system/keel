@@ -25,8 +25,9 @@ import { loadService } from 'keel-core';
 import { buildModel } from '../src/lib/model.js';
 import { scaffoldService, resolveStack } from '../src/scaffold/index.js';
 import { relievingOperations, conditionedEntities } from '../src/scaffold/conditional-uniqueness.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
-const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
+const fixturesDir = path.join(FIXTURES_DIR);
 
 function modeloDe(fixture, database) {
   const { manifest, layers, errors } = loadService(path.join(fixturesDir, fixture));

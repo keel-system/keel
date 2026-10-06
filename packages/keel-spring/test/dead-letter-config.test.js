@@ -22,8 +22,9 @@ import { buildModel } from '../src/lib/model.js';
 import { resolveStack } from '../src/scaffold/index.js';
 import { generate as generateDeadLetter } from '../src/scaffold/dead-letter-config.js';
 import { messagingProvisioning } from '../src/scaffold/messaging-provisioning.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
-const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
+const fixturesDir = path.join(FIXTURES_DIR);
 
 /**
  * El diseño de la fixture con una suscripción MÁS sobre el canal que ya usa otra, las

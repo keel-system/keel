@@ -19,8 +19,9 @@ import { buildModel } from '../src/lib/model.js';
 import { resolveStack } from '../src/scaffold/index.js';
 import { degradations, warnings, generate } from '../src/scaffold/engine-limits.js';
 import { MECHANISMS } from '../src/lib/engine-support.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
-const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
+const fixturesDir = path.join(FIXTURES_DIR);
 const DOC = 'docs/keel/engine-limits.md';
 
 function modeloDe(fixture, database) {

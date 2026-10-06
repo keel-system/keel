@@ -20,8 +20,9 @@ import YAML from 'yaml';
 import { loadService, FRAMEWORK_ERRORS } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
 import { DB_TRANSACTION_TIMEOUT } from '../src/scaffold/config.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
-const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
+const fixturesDir = path.join(FIXTURES_DIR);
 
 function generate(fixture) {
   const { manifest, layers, errors } = loadService(path.join(fixturesDir, fixture));

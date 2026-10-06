@@ -13,8 +13,8 @@
 //
 // El montaje del workspace no es un truco para el test: el criterio `design-doc` busca
 // `docs/<servicio>/DESIGN.md` desde la raíz que deduce de `specs/<servicio>` (workspaceRootOf), y
-// una fixture no vive en ningún workspace. Su DESIGN.md está en `fixture-docs/<servicio>/`, fuera
-// de `fixtures/`, porque todo lo que hay en la carpeta de un diseño viaja al snapshot del proyecto
+// una fixture no vive en ningún workspace. Su DESIGN.md está en `fixtures/design-docs/<servicio>/`, fuera
+// de `fixtures/designs/`, porque todo lo que hay en la carpeta de un diseño viaja al snapshot del proyecto
 // generado y varios checks recorren `fixtures/` como si cada entrada fuera un diseño.
 
 import test from 'node:test';

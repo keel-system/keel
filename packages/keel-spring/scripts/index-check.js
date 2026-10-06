@@ -70,7 +70,7 @@ import { documentIndexTestClass, CLASS_NAME, LITERAL_CASE } from '../src/lib/doc
 import { DATABASES, databaseHealthProbe } from '../src/lib/stack-catalog.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const fixturesDir = path.join(here, '..', 'test', 'fixtures');
+const fixturesDir = path.join(here, '..', '..', '..', 'fixtures', 'designs');
 const APPENDIX = 'src/main/resources/db/partial-indexes.sql';
 
 const args = process.argv.slice(2);

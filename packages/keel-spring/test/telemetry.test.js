@@ -17,8 +17,9 @@ import { askStackConfig, normalizeTelemetry, stackDrift, describeStack } from '.
 import { TELEMETRY_INFRA, collectorEndpoint, collectorHostEndpoint } from '../src/lib/stack-catalog.js';
 import { ATTRIBUTES, INSTRUMENTATION, METRICS_TRANSPORT, OBSERVATIONS } from '../src/lib/telemetry-probes.js';
 import { MANAGEMENT_PORT } from '../src/scaffold/config.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
-const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
+const fixturesDir = path.join(FIXTURES_DIR);
 
 function generate(fixture, stack) {
   const { manifest, layers } = loadService(path.join(fixturesDir, fixture));

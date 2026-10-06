@@ -61,7 +61,7 @@ import {
 import { OBSERVABILITY_DIR } from '../src/lib/stack-catalog.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const fixturesDir = path.join(here, '..', 'test', 'fixtures');
+const fixturesDir = path.join(here, '..', '..', '..', 'fixtures', 'designs');
 
 const args = process.argv.slice(2);
 const fixture = args.find((arg) => !arg.startsWith('--')) ?? 'asset-vault';

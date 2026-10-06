@@ -16,8 +16,9 @@ import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
 import { loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
-const fixtureDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'metering-digest');
+const fixtureDir = path.join(FIXTURES_DIR, 'metering-digest');
 const PROJECT = path.join('services', 'metering-digest-spring');
 const JAVA = 'src/main/java/com/utilities/meteringdigest';
 const DOCS = `${JAVA}/infrastructure/persistence/documents`;

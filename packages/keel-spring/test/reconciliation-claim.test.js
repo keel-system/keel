@@ -10,6 +10,7 @@ import { generate as generateRepositories } from '../src/scaffold/repositories.j
 import { generate as generateDocumentRepositories } from '../src/scaffold/document-repositories.js';
 import { generate as generateServices } from '../src/scaffold/services.js';
 import { warnUnsupportedDialect } from '../src/scaffold/claim.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
 // El barrido de una reconciliación es el caso extremo del reclamo: corre en todas las
 // réplicas Y lleva una llamada al proveedor entre reclamar y actuar. Por eso su marca no
@@ -18,7 +19,7 @@ import { warnUnsupportedDialect } from '../src/scaffold/claim.js';
 // cuándo NO lo genera: inventar la marca de espera sería elegir por el diseño.
 
 const fixture = (name) =>
-  loadService(path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', name));
+  loadService(path.join(FIXTURES_DIR, name));
 
 function modelFor({ database = 'postgresql', persistence = 'relational', mutate = null } = {}) {
   const service = fixture('stock-reservation');

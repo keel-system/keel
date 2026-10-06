@@ -13,8 +13,9 @@ import { fileURLToPath } from 'node:url';
 import { loadService } from 'keel-core';
 import { buildModel } from '../src/lib/model.js';
 import { mappingSubject, hasSubject } from '../src/lib/mapping-probes.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
-const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
+const fixturesDir = path.join(FIXTURES_DIR);
 
 const modeloDe = (fixture, database) => {
   const { manifest, layers, errors } = loadService(path.join(fixturesDir, fixture));

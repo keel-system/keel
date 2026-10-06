@@ -12,8 +12,9 @@ import { fileURLToPath } from 'node:url';
 import { loadService } from 'keel-core';
 import { buildModel } from '../src/lib/model.js';
 import { planService } from '../src/scaffold/index.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
-const fixtureDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'catalog-extended');
+const fixtureDir = path.join(FIXTURES_DIR, 'catalog-extended');
 
 function load(patch = () => {}) {
   const { manifest, layers, errors } = loadService(fixtureDir);

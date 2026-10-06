@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
 import { digestOf } from 'keel-core';
 import { build } from '../src/commands/build.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
 const SPEC = 'product-catalog';
 const SKILL_REL = ['.claude', 'skills', 'keel-generate-spring', 'SKILL.md'];
@@ -26,7 +27,7 @@ function withFixture() {
   const workspace = tmpDir('keel-propagation-');
   fs.mkdirSync(path.join(workspace, 'schema'), { recursive: true });
   fs.writeFileSync(path.join(workspace, 'schema', 'service.schema.json'), '{}');
-  const fixture = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', SPEC);
+  const fixture = path.join(FIXTURES_DIR, SPEC);
   const specDir = path.join(workspace, 'specs', SPEC);
   fs.mkdirSync(specDir, { recursive: true });
   fs.cpSync(fixture, specDir, { recursive: true });

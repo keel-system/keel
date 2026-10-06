@@ -18,8 +18,9 @@ import { tmpDir } from './helpers/tmp.js';
 import { loadService, supportedDsl } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
 import { SPECS_SEAL_FILE, writeSpecsSeal } from '../src/lib/specs-seal.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
-const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
+const fixturesDir = path.join(FIXTURES_DIR);
 
 function scaffold(fixture, { patch, stack, manifestPatch } = {}) {
   const { manifest, layers, errors } = loadService(path.join(fixturesDir, fixture));

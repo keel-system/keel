@@ -14,6 +14,7 @@ import { tmpDir } from './helpers/tmp.js';
 import { parse as YAMLparse } from 'yaml';
 import { loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 import {
   SEARCH_PREFIX,
   SEARCH_LIMIT,
@@ -28,7 +29,7 @@ import {
   CHAOS_REJECT_RECIPIENTS
 } from '../src/lib/mail-probes.js';
 
-const fixtureDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'notification-mailer');
+const fixtureDir = path.join(FIXTURES_DIR, 'notification-mailer');
 const PROJECT = path.join('services', 'notification-mailer-spring');
 const JAVA = 'src/main/java/com/platform/notificationmailer';
 

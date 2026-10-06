@@ -18,8 +18,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { validateService } from 'keel-core';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
-const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
+const fixturesDir = path.join(FIXTURES_DIR);
 
 // Por directorio, no por lista escrita a mano: una fixture nueva queda cubierta
 // sin que nadie tenga que acordarse de añadirla aquí.

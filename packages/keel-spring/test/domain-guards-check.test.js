@@ -6,13 +6,14 @@ import { execFileSync } from 'node:child_process';
 import { tmpDir } from './helpers/tmp.js';
 import { loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
 // El bash generado se EJECUTA, no se compara: un `includes('validate(')` no distingue un
 // gate que mira de uno que sale verde por el comentario que build dejó en el stub. Y su
 // propiedad central es la misma que la de check-idempotency.sh: salir ROJO sobre un
 // proyecto recién generado, donde el agente todavía no ha escrito ninguna llamada.
 
-const fixture = (name) => path.join(process.cwd(), 'test', 'fixtures', name);
+const fixture = (name) => path.join(FIXTURES_DIR, name);
 
 function build(name, mutate = null) {
   const service = loadService(fixture(name));

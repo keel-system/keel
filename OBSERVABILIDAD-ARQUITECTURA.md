@@ -208,7 +208,7 @@ por el id que recibió el cliente **[generado]**.
 
   **Lo que ninguna de las tres cubre es la traza que cruza el broker**: petición → caso de uso →
   evento guardado en el outbox → el relay lo publica → el listener lo consume → **la misma traza**
-  continúa. `deploy-check` corre sobre **`job-dispatch`**, un diseño de prueba de `test/fixtures/`
+  continúa. `deploy-check` corre sobre **`job-dispatch`**, un diseño de prueba de `fixtures/designs/`
   elegido porque arranca sin código del agente y que, por eso mismo, **no tiene mensajería**. Las
   otras dos redes no ejecutan un broker real. Ese recorrido **se comprobó una vez, a mano**, sobre
   una pila con Kafka **[guía §11]**, pero no tiene ninguna comprobación automática y repetible: si

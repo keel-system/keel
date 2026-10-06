@@ -21,8 +21,9 @@ import { buildModel } from '../src/lib/model.js';
 import { generate as generateIntegrationTests } from '../src/scaffold/integration-tests.js';
 import { resolveStack } from '../src/scaffold/index.js';
 import { DATABASES } from '../src/lib/stack-catalog.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
-const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
+const fixturesDir = path.join(FIXTURES_DIR);
 
 const harnessFor = (database, fixture = 'catalog-extended') => {
   const { manifest, layers } = loadService(path.join(fixturesDir, fixture));

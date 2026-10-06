@@ -12,6 +12,7 @@ import { generate as generateDocumentRepositories } from '../src/scaffold/docume
 import { warnUnsupportedDialect } from '../src/scaffold/claim.js';
 import * as integrationTests from '../src/scaffold/integration-tests.js';
 import { supportsSkipLocked } from '../src/lib/claim-sql.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
 // Un barrido corre en TODAS las réplicas: @Scheduled es «una vez por instancia», no «una
 // vez en el clúster». Estos tests fijan qué reclamo genera build y —tan importante como
@@ -332,7 +333,7 @@ test('una operación disparada por una suscripción no es un barrido: procesa su
 
 const outboxModel = (database) => {
   const service = loadService(
-    path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'stock-reservation')
+    path.join(FIXTURES_DIR, 'stock-reservation')
   );
   const stack = { database, broker: 'kafka', auth: null, cache: null, storage: null };
   const model = buildModel({ manifest: service.manifest, layers: service.layers, stack });

@@ -3,7 +3,7 @@
 //
 // Hace falta porque el criterio `design-doc` de `keel validate --ready` busca el DESIGN.md desde la
 // raíz que deduce de `specs/<n>` (workspaceRootOf), y una fixture no vive en ningún workspace. El
-// DESIGN.md de una fixture está en `test/fixture-docs/<n>/`, fuera de `fixtures/`, porque todo lo
+// DESIGN.md de una fixture está en `fixtures/design-docs/<n>/` de la raíz, fuera de `fixtures/designs/`, porque todo lo
 // que hay en la carpeta de un diseño viaja al snapshot del proyecto generado y varios checks recorren
 // `fixtures/` como si cada entrada fuera un diseño.
 
@@ -12,8 +12,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-export const FIXTURES_DIR = path.join(here, 'fixtures');
-export const FIXTURE_DOCS_DIR = path.join(here, 'fixture-docs');
+// Las fixtures viven en la raíz del monorepo (fixtures/), fuera de cualquier paquete: son diseños, no
+// código de keel-spring, y las comparten todos los generadores (PLAN-KEEL-NEST.md, incremento 1).
+const repoRoot = path.join(here, '..', '..', '..');
+export const FIXTURES_DIR = path.join(repoRoot, 'fixtures', 'designs');
+export const FIXTURE_DOCS_DIR = path.join(repoRoot, 'fixtures', 'design-docs');
 
 /**
  * Las fixtures cerradas de punta a punta: el par del MVP y la de referencia de la capa payments, en

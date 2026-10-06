@@ -20,8 +20,9 @@ import { loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
 import { harnessQueueName } from '../src/scaffold/messaging-provisioning.js';
 import { publishedDestination } from '../src/lib/dead-letter.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
-const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
+const fixturesDir = path.join(FIXTURES_DIR);
 
 const walk = (dir) =>
   fs

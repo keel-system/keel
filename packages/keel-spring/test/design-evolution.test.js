@@ -16,6 +16,7 @@ import { tmpDir } from './helpers/tmp.js';
 import { build } from '../src/commands/build.js';
 import { askStackConfig, stackDrift } from '../src/lib/stack-config.js';
 import { STACK_DEFAULTS } from '../src/lib/stack-catalog.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
 const SPEC = 'product-catalog';
 const APP = ['src', 'main', 'java', 'com', 'commerce', 'productcatalog', 'application'];
@@ -32,7 +33,7 @@ function withFixture() {
   const workspace = tmpDir('keel-evolution-');
   fs.mkdirSync(path.join(workspace, 'schema'), { recursive: true });
   fs.writeFileSync(path.join(workspace, 'schema', 'service.schema.json'), '{}');
-  const fixture = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', SPEC);
+  const fixture = path.join(FIXTURES_DIR, SPEC);
   fs.cpSync(fixture, path.join(workspace, 'specs', SPEC), { recursive: true });
   return workspace;
 }

@@ -172,7 +172,7 @@ Tres decisiones que `keel-spring` ya tomó y conviene copiar:
 
 ## Fixtures de diseño: la red contra las regresiones del scaffolding
 
-El scaffolding es una función determinista del diseño más `keel-stack.json`, así que se prueba como tal: una **fixture** es un `specs/<servicio>/` completo bajo `test/fixtures/`, y cada test la carga con `loadService()`, la pasa por `scaffoldService()` a un workspace temporal (`fs.mkdtempSync`) y **afirma sobre el texto emitido**. Ver `packages/keel-spring/test/generation-regressions.test.js` y `test/shape-coverage.test.js`.
+El scaffolding es una función determinista del diseño más `keel-stack.json`, así que se prueba como tal: una **fixture** es un `specs/<servicio>/` completo bajo `fixtures/designs/` de la raíz del monorepo —compartido por todos los generadores, para que el mismo diseño se pruebe en cada uno—, y cada test la carga con `loadService()`, la pasa por `scaffoldService()` a un workspace temporal (`fs.mkdtempSync`) y **afirma sobre el texto emitido**. Ver `packages/keel-spring/test/generation-regressions.test.js` y `test/shape-coverage.test.js`.
 
 Lo que se afirma es el rasgo concreto que estaba en juego —que un `{slug}` de la ruta salga como `@PathVariable String slug`, que un POST de transición responda 200 y no 201, que sin `lifecycle` no aparezca ningún `transitionTo`—, nunca el árbol de salida entero congelado. La diferencia importa: una comparación contra una salida congelada se rompe con cada cambio intencional y acaba regenerándose a ciegas, que es como muere la utilidad de un ejemplo de referencia. Un test que nombra su rasgo dice, cuando se pone rojo, **qué** se rompió.
 

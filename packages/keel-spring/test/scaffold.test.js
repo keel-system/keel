@@ -11,8 +11,9 @@ import { hasScheduledOperations } from '../src/scaffold/services.js';
 import { TELEMETRY_CONVENTIONS } from '../src/scaffold/generator-docs.js';
 import { generate as applicationFiles } from '../src/scaffold/application.js';
 import { assetsDir, wrapperDir, GRADLE_VERSION } from '../src/lib/assets.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
-const fixtureDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'product-catalog');
+const fixtureDir = path.join(FIXTURES_DIR, 'product-catalog');
 
 function loadFixture() {
   const { manifest, layers, errors } = loadService(fixtureDir);

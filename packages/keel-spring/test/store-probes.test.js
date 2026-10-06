@@ -24,6 +24,7 @@ import { buildModel } from '../src/lib/model.js';
 // misma fuente que consume store-probes.js para emitir el JUnit.
 import { idempotencyRecordNames } from '../src/scaffold/http-idempotency.js';
 import { scaffoldService } from '../src/scaffold/index.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 import {
   storeSubjects,
   storeTestClasses,
@@ -35,7 +36,7 @@ import {
   CLAIM_TIMEOUT_MS
 } from '../src/lib/store-probes.js';
 
-const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
+const fixturesDir = path.join(FIXTURES_DIR);
 
 // El PAR. Mismo diseño byte a byte salvo el `persistence.default.model`, que es lo que hace de
 // ellas dos ramas enteras del scaffolding y no dos variantes de la misma.

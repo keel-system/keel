@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
 import { loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 import {
   OUTBOX,
   CLOCK,
@@ -33,7 +34,7 @@ import {
   printed
 } from '../src/lib/mongo-probes.js';
 
-const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
+const fixturesDir = path.join(FIXTURES_DIR);
 
 /** El `AbstractFlowIT.java` de una fixture documental. */
 function harnessOf(fixture) {

@@ -22,6 +22,7 @@ import { harnessQueueName } from '../src/scaffold/messaging-provisioning.js';
 import { outboxRelayBeanName } from '../src/scaffold/outbox.js';
 import { storedWhenValue } from '../src/scaffold/persistence-members.js';
 import { tmpDir } from './helpers/tmp.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
 // Los defectos que destapó la corrida en vivo `corrida-claim-mysql` (MySQL + RabbitMQ +
 // Keycloak, el primer diseño que ejercita los cuatro reclamos a la vez). Todos comparten la
@@ -31,7 +32,7 @@ import { tmpDir } from './helpers/tmp.js';
 // Cada bloque dice qué se rompía y por qué nadie lo veía; sin eso, el test de al lado es una
 // aserción arbitraria que el siguiente que pase por aquí relaja para que deje de molestar.
 
-const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
+const fixturesDir = path.join(FIXTURES_DIR);
 
 const walk = (dir) =>
   fs

@@ -26,8 +26,9 @@ import { tmpDir } from './helpers/tmp.js';
 import { loadService } from 'keel-core';
 import { buildModel } from '../src/lib/model.js';
 import { scaffoldService } from '../src/scaffold/index.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
-const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
+const fixturesDir = path.join(FIXTURES_DIR);
 const SWEEP = 'dispatchJobs';
 
 const RELACIONAL = { fixture: 'job-dispatch', database: 'postgresql' };

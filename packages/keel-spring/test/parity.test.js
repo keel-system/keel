@@ -26,9 +26,10 @@ import { tmpDir } from './helpers/tmp.js';
 import { loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
 import { MECHANISMS, MODELS, PAIRS } from '../src/lib/engine-support.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
 const pkgRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const fixturesDir = path.join(pkgRoot, 'test', 'fixtures');
+const fixturesDir = FIXTURES_DIR;
 
 // Solo texto: el wrapper de Gradle trae un .jar, y leerlo como utf8 no aporta nada.
 const TEXTO = new Set(['.java', '.sh', '.yaml', '.yml', '.md', '.gradle', '.json', '.sql', '.properties', '.xml']);

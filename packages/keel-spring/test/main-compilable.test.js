@@ -16,8 +16,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadService } from 'keel-core';
 import { mainCompilable } from '../src/lib/main-compilable.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
-const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
+const fixturesDir = path.join(FIXTURES_DIR);
 
 const layersOf = (fixture) => {
   const { layers, errors } = loadService(path.join(fixturesDir, fixture));

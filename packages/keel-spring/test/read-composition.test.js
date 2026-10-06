@@ -15,8 +15,9 @@ import { fileURLToPath } from 'node:url';
 import { tmpDir } from './helpers/tmp.js';
 import { loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
-const fixtureDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'catalog-extended');
+const fixtureDir = path.join(FIXTURES_DIR, 'catalog-extended');
 const JAVA = 'src/main/java/com/commerce/catalog';
 
 // `patch` permite mover el embed a la operación paginada, que es donde el lote

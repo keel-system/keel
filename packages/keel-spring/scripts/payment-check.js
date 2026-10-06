@@ -29,7 +29,7 @@ import { tmpDir } from '../test/helpers/tmp.js';
 import { paymentCheckTest } from '../src/lib/payment-check-test.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const fixtureDir = path.join(here, '..', 'test', 'fixtures', 'payment-checkout');
+const fixtureDir = path.join(here, '..', '..', '..', 'fixtures', 'designs', 'payment-checkout');
 const args = process.argv.slice(2);
 const only = args.find((arg) => arg.startsWith('--payment-gateway='))?.split('=')[1];
 // Para falsar la red: aplica un sabotaje al Java generado antes de ejecutar (ver payment-check-test.js).

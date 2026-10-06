@@ -23,8 +23,9 @@ import YAML from 'yaml';
 import { loadService } from 'keel-core';
 import { planService } from '../src/scaffold/index.js';
 import { tmpDir } from './helpers/tmp.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
-const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
+const fixturesDir = path.join(FIXTURES_DIR);
 const fixtures = fs.readdirSync(fixturesDir).filter((name) => fs.existsSync(path.join(fixturesDir, name, 'service.keel.yaml')));
 
 // Las variantes de stack que cambian lo que `develop` pide: el proveedor de identidad y el

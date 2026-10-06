@@ -20,8 +20,9 @@ import { tmpDir } from './helpers/tmp.js';
 import { loadService } from 'keel-core';
 import { scaffoldService } from '../src/scaffold/index.js';
 import { AUTH } from '../src/lib/stack-catalog.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
-const fixtureDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'product-catalog');
+const fixtureDir = path.join(FIXTURES_DIR, 'product-catalog');
 const PROJECT = 'services/product-catalog-spring';
 const JAVA = 'src/main/java/com/commerce/productcatalog';
 

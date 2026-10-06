@@ -23,8 +23,9 @@ import { buildModel } from '../src/lib/model.js';
 import { reconciliationClaims } from '../src/scaffold/reconciliation-claim.js';
 import { storeSubjects, storeTestClasses, CLASS_RECONCILIATION } from '../src/lib/store-probes.js';
 import { mainCompilable } from '../src/lib/main-compilable.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
-const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
+const fixturesDir = path.join(FIXTURES_DIR);
 
 // Los paquetes no importan en estos dos casos: lo que se mira es el texto de la clase, no dónde
 // cae. Que caiga donde debe ya lo cubre store-probes.test.js contra el árbol generado de verdad.

@@ -19,8 +19,9 @@ import { tmpDir } from './helpers/tmp.js';
 import { loadService } from 'keel-core';
 import { buildModel } from '../src/lib/model.js';
 import { scaffoldService, resolveStack } from '../src/scaffold/index.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
-const fixtureDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'catalog-extended');
+const fixtureDir = path.join(FIXTURES_DIR, 'catalog-extended');
 const OP = 'createProduct';
 const FIELD = 'sku';
 
@@ -102,7 +103,7 @@ test('hay un único punto de resolución, y lo usa el controller', () => {
 // los dos, el defecto sería otro.
 
 function generateMailer() {
-  const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'notification-mailer');
+  const dir = path.join(FIXTURES_DIR, 'notification-mailer');
   const { manifest, layers, errors } = loadService(dir);
   assert.deepEqual(errors, []);
   const workspace = tmpDir('keel-calleridentity-ruta-');
@@ -189,7 +190,7 @@ test('y la rama DOCUMENTAL lo implementa igual: el puerto es el mismo', () => {
   // que declarar el método y no implementarlo en una rama deja ese adaptador SIN COMPILAR. La
   // regla ya estaba escrita en document-repositories.js —«lo que se declare allí hay que
   // implementarlo aquí»— y aun así se me pasó, que es justo el argumento para tener el caso.
-  const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'notification-mailer-mongo');
+  const dir = path.join(FIXTURES_DIR, 'notification-mailer-mongo');
   const { manifest, layers, errors } = loadService(dir);
   assert.deepEqual(errors, []);
   const workspace = tmpDir('keel-calleridentity-doc-');
@@ -359,7 +360,7 @@ test('el modelo expone la política ya resuelta', () => {
 // aplicación del llamante.
 
 function scaffoldMailer() {
-  const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'notification-mailer');
+  const dir = path.join(FIXTURES_DIR, 'notification-mailer');
   const { manifest, layers, errors } = loadService(dir);
   assert.deepEqual(errors, []);
   const workspace = tmpDir('keel-scope-');
@@ -385,7 +386,7 @@ test('DSL 2.17: el listener nombra contra qué se resuelve el emisor, con el fin
 });
 
 test('DSL 2.17: sin resolvedBy en el broker, el listener dice que la resolución es 1:1', () => {
-  const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'notification-mailer');
+  const dir = path.join(FIXTURES_DIR, 'notification-mailer');
   const { manifest, layers } = loadService(dir);
   const patched = structuredClone(layers);
   delete patched.messaging.subscriptions.NotificationRequested.identity.resolvedBy;
@@ -418,7 +419,7 @@ test('DSL 2.17: el comando trae su ámbito de idempotencia ya compuesto con part
 // del usuario del rol. Hasta la corrida user-profile (2026-10-01) lo escribía el agente de pruebas
 // a mano. El sujeto es la fixture profile-directory, que compile-check compila.
 
-const profileDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'profile-directory');
+const profileDir = path.join(FIXTURES_DIR, 'profile-directory');
 
 function renderProfile({ auth = 'keycloak', patch = (layers) => layers } = {}) {
   const { manifest, layers, errors } = loadService(profileDir);

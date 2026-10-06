@@ -6,13 +6,14 @@ import { buildModel } from '../src/lib/model.js';
 import { generate as valueTypeFiles } from '../src/scaffold/value-types.js';
 import { generate as exceptionFiles } from '../src/scaffold/exceptions.js';
 import { generate as entityFiles } from '../src/scaffold/entities.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
 // El formato de un value type ESCALAR no tiene dónde vivir: el DTO de entrada lo deja
 // caer a propósito (describe el valor ya normalizado) y el tipo se aplana a String, así
 // que no hay constructor compacto que lo recoja. Estas pruebas fijan la pieza que cierra
 // ese hueco: una clase `<Tipo>Format` por tipo, con la regex del diseño escrita UNA vez.
 
-const fixture = (name) => path.join(process.cwd(), 'test', 'fixtures', name);
+const fixture = (name) => path.join(FIXTURES_DIR, name);
 
 function modelOf(name, mutate = null) {
   const { manifest, layers, errors } = loadService(fixture(name));

@@ -19,8 +19,9 @@ import { builtinScopes } from '../src/scaffold/deploy.js';
 import { fixedFrameworkErrors } from 'keel-core';
 import { emptyReadJava, collapseToSingleLineJava } from '../src/lib/broker-probes.js';
 import { providerFailures } from '../src/lib/outbound-failures.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
-const fixtureDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'catalog-extended');
+const fixtureDir = path.join(FIXTURES_DIR, 'catalog-extended');
 const JAVA = 'src/main/java/com/commerce/catalog';
 
 function scaffoldExtended({ withRead = false } = {}) {
@@ -133,7 +134,7 @@ test('§1.3: Location apunta a la ruta de la lectura, no a la de la petición (p
   // registerTemplate es PUT /templates/{templateKey}/{locale}: "petición + id" daba
   // /templates/{key}/{locale}/{id}, y la plantilla se lee en GET /templates/{templateId}.
   // registerApplication no tiene lectura: sin Location.
-  const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'notification-mailer');
+  const dir = path.join(FIXTURES_DIR, 'notification-mailer');
   const { manifest, layers, errors } = loadService(dir);
   assert.deepEqual(errors, []);
   const workspace = tmpDir('keel-regression-');
@@ -323,7 +324,7 @@ test('§1.1: la marca de offset tolera que el topic aún no exista (broker reci�
 
 test('§1.2: el reset purga los destinos de mensajería declarados', () => {
   const { manifest, layers } = loadService(
-    path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'metering-digest')
+    path.join(FIXTURES_DIR, 'metering-digest')
   );
   const out = tmpDir('keel-purge-');
   scaffoldService({ manifest, layers, workspace: out, force: true, stack: { broker: 'rabbitmq' } });
@@ -346,7 +347,7 @@ test('§1.2: el reset purga los destinos de mensajería declarados', () => {
 
 test('§1.2: con Kafka no hay purga posible, el aislamiento es la marca de offset', () => {
   const { manifest, layers } = loadService(
-    path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'metering-digest')
+    path.join(FIXTURES_DIR, 'metering-digest')
   );
   const out = tmpDir('keel-mark-');
   scaffoldService({ manifest, layers, workspace: out, force: true, stack: { broker: 'kafka' } });
@@ -371,7 +372,7 @@ test('§1.2: con Kafka no hay purga posible, el aislamiento es la marca de offse
 // no hizo. Los dos brokers lo cierran por vías distintas porque Kafka no tiene purga.
 function scaffoldStockReservation(broker) {
   const { manifest, layers, errors } = loadService(
-    path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'stock-reservation')
+    path.join(FIXTURES_DIR, 'stock-reservation')
   );
   assert.deepEqual(errors, []);
   const out = tmpDir('keel-dlq-');
@@ -416,7 +417,7 @@ test('el reset aísla también el destino de descarte: con RabbitMQ, purgando su
 
 test('sin suscripciones con descarte no se marca ni se purga ningún DLT', () => {
   const { manifest, layers } = loadService(
-    path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'inspection-reports')
+    path.join(FIXTURES_DIR, 'inspection-reports')
   );
   const out = tmpDir('keel-nodlq-');
   scaffoldService({ manifest, layers, workspace: out, force: true, stack: { broker: 'kafka' } });
@@ -451,7 +452,7 @@ test('humo del arnés: con Kafka publica tráfico real; con RabbitMQ, los canale
   assert.ok(smoke.includes('resetClearsCache'));
 
   const { manifest, layers } = loadService(
-    path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'metering-digest')
+    path.join(FIXTURES_DIR, 'metering-digest')
   );
   const out = tmpDir('keel-smoke-');
   scaffoldService({ manifest, layers, workspace: out, force: true, stack: { broker: 'rabbitmq' } });
@@ -1044,7 +1045,7 @@ test('§1.2: con snssqs se genera la topología (topics, colas, DLQ, raw deliver
   // Sin este script nadie crea topics ni colas: la app arranca contra un topic
   // inexistente y el humo del arnés muere con NonExistentQueue.
   const { manifest, layers } = loadService(
-    path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'metering-digest')
+    path.join(FIXTURES_DIR, 'metering-digest')
   );
   const out = tmpDir('keel-topology-');
   scaffoldService({ manifest, layers, workspace: out, force: true, stack: { broker: 'snssqs' } });
@@ -1091,7 +1092,7 @@ test('§1.2: con snssqs se genera la topología (topics, colas, DLQ, raw deliver
 test('§1.2: los brokers que autocrean topología no generan el script', () => {
   for (const broker of ['kafka', 'rabbitmq']) {
     const { manifest, layers } = loadService(
-      path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'metering-digest')
+      path.join(FIXTURES_DIR, 'metering-digest')
     );
     const out = tmpDir(`keel-topology-${broker}-`);
     scaffoldService({ manifest, layers, workspace: out, force: true, stack: { broker } });
@@ -1562,7 +1563,7 @@ test('§2 informe: la unicidad se resuelve con el error de SU entidad, no con el
 
 test('§2 informe: el error handler de Kafka no reintenta un error de negocio', () => {
   const { manifest, layers } = loadService(
-    path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'catalog-extended'));
+    path.join(FIXTURES_DIR, 'catalog-extended'));
   const workspace = tmpDir('keel-dlq-');
   scaffoldService({ manifest, layers, workspace, force: true, stack: { broker: 'kafka' } });
   const config = fs.readFileSync(
@@ -1587,7 +1588,7 @@ test('§2 informe: el error handler de Kafka no reintenta un error de negocio', 
 // la clase se busca en vez de componer su ruta: así el helper vale para cualquier
 // fixture nueva sin tener que recordar su basePackage.
 const harnessFor = (broker, fixture = 'catalog-extended') => {
-  const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', fixture);
+  const dir = path.join(FIXTURES_DIR, fixture);
   const { manifest, layers } = loadService(dir);
   const out = tmpDir(`keel-deliver-${broker}-`);
   scaffoldService({ manifest, layers, workspace: out, force: true, stack: { broker } });
@@ -1759,7 +1760,7 @@ test('el arnés sabe dirigir una subida multipart a la segunda réplica', () => 
 test('init-keycloak.sh resuelve el frontend de compose igual que up.sh', () => {
   // Con asset-vault y no con catalog-extended: el script solo se genera cuando el
   // diseño declara identidad por token, y es la fixture de la corrida que lo destapó.
-  const vaultDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'asset-vault');
+  const vaultDir = path.join(FIXTURES_DIR, 'asset-vault');
   const { manifest, layers, errors } = loadService(vaultDir);
   assert.deepEqual(errors, []);
   const workspace = tmpDir('keel-regression-');
@@ -1902,7 +1903,7 @@ test('la lectura de SQS pide por lotes: el límite de 10 es del broker, no del e
 test('la reutilización de la clave de idempotencia tiene su excepción, con el code canónico', () => {
   // `stock-reservation` declara idempotency y NO nombra sus conflictos: es el camino que
   // recorrieron las tres corridas del pipeline, y el que antes dejaba al agente inventando.
-  const service = loadService(path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'stock-reservation'));
+  const service = loadService(path.join(FIXTURES_DIR, 'stock-reservation'));
   const workspace = tmpDir('keel-framework-errors-');
   const result = scaffoldService({ manifest: service.manifest, layers: service.layers, workspace, force: true });
   const root = path.join(workspace, result.outDir, 'src/main/java/com/fulfillment/stockreservation');
@@ -2360,7 +2361,7 @@ test('el payload de un evento entrante comprueba también sus COTAS, sin reinten
   // y requireContract solo miraba la presencia. Las cotas del diseño viajan ahora como
   // anotaciones del record y se comprueban con el validador, con IllegalArgumentException.
   const { manifest, layers } = loadService(
-    path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'notification-mailer'));
+    path.join(FIXTURES_DIR, 'notification-mailer'));
   const workspace = tmpDir('keel-bounds-');
   scaffoldService({ manifest, layers, workspace, force: true, stack: { broker: 'kafka' } });
   const base = path.join(workspace, 'services', 'notification-mailer-spring', 'src/main/java');

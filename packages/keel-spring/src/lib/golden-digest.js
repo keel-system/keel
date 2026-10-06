@@ -19,7 +19,7 @@ import { loadService } from 'keel-core';
 import { planService } from '../scaffold/index.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-export const FIXTURES_DIR = path.join(here, '..', '..', 'test', 'fixtures');
+export const FIXTURES_DIR = path.join(here, '..', '..', '..', '..', 'fixtures', 'designs');
 export const GOLDEN_FILE = path.join(here, '..', '..', 'test', 'golden', 'digests.json');
 export const GOLDEN_SCHEMA = 1;
 

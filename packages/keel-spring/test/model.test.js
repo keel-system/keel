@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { loadService } from 'keel-core';
 import { accessAuthority, buildModel, sharedExceptionFor } from '../src/lib/model.js';
 import { generate as generateServices } from '../src/scaffold/services.js';
+import { FIXTURES_DIR } from './helpers/workspace.js';
 
 test('accessAuthority: scopes como authorities SCOPE_ y mezclas', () => {
   assert.equal(accessAuthority({ level: 'service', scopes: ['product:read'] }), 'hasAnyAuthority("SCOPE_product:read")');
@@ -18,7 +19,7 @@ test('accessAuthority: scopes como authorities SCOPE_ y mezclas', () => {
   assert.equal(accessAuthority({ level: 'admin', roles: ['admin'] }), 'hasAnyRole("admin")');
 });
 
-const fixtureDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'product-catalog');
+const fixtureDir = path.join(FIXTURES_DIR, 'product-catalog');
 
 function loadModel() {
   const { manifest, layers, errors } = loadService(fixtureDir);
