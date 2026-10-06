@@ -72,8 +72,7 @@ test('scaffoldService genera el proyecto completo con contenido clave', () => {
   // El TODO de una transición que el diseño atribuye a una operación (use-cases.transitions)
   // la nombra: sin destinatario, el camino corto es mutar el estado fuera del agregado.
   assert.ok(product.includes('método semántico ACTIVE → RETIRED (lo ejecuta retireProduct)'), product);
-  // Y la que ninguna operación declara se queda sin atribución, en vez de inventarla.
-  assert.ok(product.includes('método semántico DRAFT → ACTIVE que valide'), product);
+  assert.ok(product.includes('método semántico DRAFT → ACTIVE (lo ejecuta activateProduct)'), product);
   // Concurrencia optimista (Opción A): la raíz porta lockVersion, que viaja por el
   // constructor de rehidratación (último parámetro) y expone getter.
   assert.ok(product.includes('private Long lockVersion;'));
@@ -3873,4 +3872,13 @@ test('rendimiento: el arnés puede CONTAR consultas, que es lo que hace observab
   assert.ok(read(workspace, 'src/main/resources/parameters/local/db.yaml').includes('generate_statistics: true'));
   assert.ok(!read(workspace, 'src/main/resources/parameters/production/db.yaml').includes('generate_statistics'));
   assert.ok(!read(workspace, 'src/main/resources/parameters/develop/db.yaml').includes('generate_statistics'));
+});
+
+test('una transición que ninguna operación ejecuta se queda sin atribución, en vez de inventarla', () => {
+  const workspace = makeWorkspace();
+  const { manifest, layers } = loadFixture();
+  delete layers['use-cases'].operations.activateProduct;
+  scaffoldService({ manifest, layers, workspace });
+  const product = read(workspace, 'src/main/java/com/commerce/productcatalog/domain/aggregate/Product.java');
+  assert.ok(product.includes('método semántico DRAFT → ACTIVE que valide'), product);
 });

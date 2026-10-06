@@ -1,7 +1,7 @@
 # product-catalog — Escenarios de validación
 
 > Escenarios de aceptación ejecutables (Given/When/Then) derivados de
-> specs/product-catalog v1.0.0. Contrato de validación para la fase de generación.
+> specs/product-catalog v1.1.0. Contrato de validación para la fase de generación.
 
 > **Fixture de test del repo Keel.** Es la silueta más simple que un generador tiene que servir
 > entera: un agregado con su lifecycle, unicidad por clave natural, un value object monetario con
@@ -33,9 +33,10 @@
 | Operación | Flujos | Superficie |
 |-----------|--------|------------|
 | createProduct | FL-PRD-001, FL-PRD-002, FL-PRD-003 | usuarios |
-| getProduct | FL-PRD-001, FL-PRD-004, FL-PRD-006 | usuarios |
+| getProduct | FL-PRD-001, FL-PRD-004, FL-PRD-006, FL-PRD-007 | usuarios |
 | listProducts | FL-PRD-003, FL-PRD-005 | usuarios |
-| retireProduct | FL-PRD-006 | usuarios |
+| activateProduct | FL-PRD-007 | usuarios |
+| retireProduct | FL-PRD-006, FL-PRD-007 | usuarios |
 
 ## Alta de productos
 
@@ -123,7 +124,8 @@ confirmado; la simultánea cae en la ventana anterior.
 `{"sku": "CLV-0001", "name": "Clavo de 40 mm", "price": {"amount": 0.05, "currency": "EUR"}}`.
 **Then**:
 1. Cada respuesta es una de: `201` con el cuerpo de la creación, o `409` con un `code` de conflicto
-   (`SKU_ALREADY_EXISTS` o el del catálogo para la clave en curso). No se afirma cuál de las dos gana.
+   (`IDEMPOTENCY_KEY_IN_PROGRESS`, el canónico aceptado en `decisions.yaml`, o `SKU_ALREADY_EXISTS`).
+   No se afirma cuál de las dos gana.
 2. Al menos una de las dos es `201`, y si las dos lo son, traen el **mismo** `id`.
 3. `listProducts` — `GET /api/v1/products?size=20` trae **exactamente un** producto `CLV-0001`
    (`totalElements: 1`).
@@ -192,13 +194,57 @@ confirmado; la simultánea cae en la ventana anterior.
 **Then**:
 1. Status `404` con `code: PRODUCT_NOT_FOUND`: la existencia se comprueba antes que el estado.
 
+## Publicación
+
+### FL-PRD-007: un producto en draft con precio se publica
+
+**Given**: un producto `PUB-0001` recién creado (en `draft`) con `price.amount` `10.00`.
+**When**: `activateProduct` — `POST /api/v1/products/<id>/activate`.
+**Then**:
+1. Status `204`, sin cuerpo.
+2. `getProduct` lo devuelve con `status: "active"` y el resto de campos sin cambios.
+**Orden de evaluación**:
+1. El producto existe → si no, `404 PRODUCT_NOT_FOUND`.
+2. Está en `draft` → si no, `409 PRODUCT_NOT_DRAFT`.
+3. Su precio es mayor que cero → si no, `422 PRODUCT_PRICE_NOT_POSITIVE`.
+
+#### FL-PRD-007-B: publicar uno que ya está activo es 409
+
+**When**: `activateProduct` sobre el mismo producto otra vez.
+**Then**:
+1. Status `409` con `code: PRODUCT_NOT_DRAFT`.
+2. `getProduct` sigue devolviendo `status: "active"`.
+
+#### FL-PRD-007-C: un producto activo se retira
+
+**When**: `retireProduct` — `POST /api/v1/products/<id>/retire` sobre el mismo producto.
+**Then**:
+1. Status `204`.
+2. `getProduct` lo devuelve con `status: "retired"`.
+
+#### FL-PRD-007-D: un producto con precio cero no se publica
+
+**Given**: un producto `PUB-0002` recién creado (en `draft`) con `price.amount` `0.00`.
+**When**: `activateProduct` sobre él.
+**Then**:
+1. Status `422` con `code: PRODUCT_PRICE_NOT_POSITIVE`.
+2. `getProduct` sigue devolviendo `status: "draft"`.
+
+#### FL-PRD-007-E: el estado se comprueba antes que el precio
+
+**Given**: el producto `PUB-0002` (precio `0.00`) retirado con `retireProduct` (`204`).
+**When**: `activateProduct` sobre él.
+**Then**:
+1. Status `409` con `code: PRODUCT_NOT_DRAFT`, no el `422` del precio: con las dos guardas fallando,
+   responde la que el diseño pone antes.
+
+#### FL-PRD-007-F: publicar uno que no existe es 404
+
+**When**: `activateProduct` — `POST /api/v1/products/0192f1d2-0000-7000-8000-000000000003/activate`.
+**Then**:
+1. Status `404` con `code: PRODUCT_NOT_FOUND`.
+
 ## Lo que no tiene escenario, y por qué
 
-- **El estado `active` y la transición `active → retired`.** Ninguna operación del diseño lleva un
-  producto a `active` (el lifecycle declara `draft → active`, pero `use-cases` no tiene operación que la
-  ejecute), así que tras el reset no hay forma de alcanzarlo por la API. Por lo mismo, el invariante
-  «un producto `active` siempre tiene `price.amount` mayor que cero» no es observable. Es un **hueco del
-  diseño**: falta la operación de publicación (`activateProduct`) con su error para el precio a cero.
-  Hasta que exista, no se le inventa escenario.
 - **Un `Idempotency-Key` caducado.** El `ttlSeconds` es de 24 horas: ningún flujo puede esperarlo, y
   envejecer el registro exigiría escribir en el almacén.

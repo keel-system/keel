@@ -69,7 +69,7 @@ function completeHandlers(workspace) {
   }
 }
 
-/** Lo que haría /keel-evolve: v1.1.0 sin getProduct, con countProducts y una regla de createProduct cambiada. */
+/** Lo que haría /keel-evolve: la versión siguiente sin getProduct, con countProducts y una regla de createProduct cambiada. */
 function evolveDesign(workspace) {
   const dir = path.join(workspace, 'specs', SPEC);
   const file = (name) => path.join(dir, name);
@@ -93,9 +93,9 @@ function evolveDesign(workspace) {
   ].join('\n');
   fs.writeFileSync(file('use-cases.keel.yaml'), useCases);
   const bump = (name, from, to) => fs.writeFileSync(file(name), fs.readFileSync(file(name), 'utf8').replaceAll(from, to));
-  bump('service.keel.yaml', 'version: 1.0.0', 'version: 1.1.0');
-  // Cambiar createProduct caduca lo aceptado en v1.0.0: una evolución lo reafirma.
-  bump('decisions.yaml', 'since: 1.0.0', 'since: 1.1.0');
+  bump('service.keel.yaml', 'version: 1.1.0', 'version: 1.2.0');
+  // Cambiar createProduct caduca lo aceptado en v1.1.0: una evolución lo reafirma.
+  bump('decisions.yaml', 'since: 1.1.0', 'since: 1.2.0');
 }
 
 test('la primera generación no deja EVOLUTION.md: todo es nuevo y el pipeline ya lo sabe', async () => {
@@ -138,7 +138,7 @@ test('--refresh --prune sobre un diseño evolucionado: el circuito entero', asyn
 
   // El traspaso al pipeline nombra las tres cosas y el delta.
   const evolution = read(workspace, EVOLUTION);
-  assert.match(evolution, /v1\.0\.0 → v1\.1\.0/);
+  assert.match(evolution, /v1\.1\.0 → v1\.2\.0/);
   assert.ok(evolution.includes(CREATE_HANDLER), 'EVOLUTION.md no nombra la fusión pendiente');
   assert.ok(evolution.includes(GET_HANDLER), 'EVOLUTION.md no nombra el huérfano a retirar');
   assert.ok(evolution.includes(COUNT_HANDLER), 'EVOLUTION.md no nombra el stub nuevo');
@@ -156,7 +156,7 @@ test('un segundo build antes de entrar al proyecto no pierde la evolución ni re
   await runBuild(workspace, { refresh: true, prune: true });
   const pendiente = manifest(workspace).pendingMerge[CREATE_HANDLER];
 
-  // El snapshot ya está en v1.1.0: sin la base congelada, este build compararía el
+  // El snapshot ya está en v1.2.0: sin la base congelada, este build compararía el
   // diseño consigo mismo y borraría la evolución que el agente aún no ha hecho.
   assert.equal(await runBuild(workspace, { refresh: true, prune: true }), undefined);
   const evolution = read(workspace, EVOLUTION);

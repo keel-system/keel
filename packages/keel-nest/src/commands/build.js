@@ -129,9 +129,8 @@ export async function build(
   console.log(`
 Siguiente paso, dentro del proyecto:
   1. ${pc.cyan(`cd ${scaffold.outDir}`)}
-  2. ${pc.cyan('npm install && npm run typecheck && npm test')}
-
-${pc.dim(`El pipeline de agentes de /${SKILL} llega en el incremento 7 de PLAN-KEEL-NEST.md.`)}`);
+  2. ${pc.cyan('npm install')}
+  3. ${pc.cyan(`/${SKILL}`)} ${pc.dim('(sin argumentos: completa el código y lo valida contra los escenarios FL-*)')}`);
 }
 
 /** Lo que se quedó atrás respecto al generador instalado. Devuelve si hay algo que poner al día. */

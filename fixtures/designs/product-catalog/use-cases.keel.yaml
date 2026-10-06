@@ -6,6 +6,8 @@ operations:
       entity: Product
     output:
       entity: Product
+      # Token de sincronización con el proveedor: sensible, nunca sale del servicio.
+      exclude: [apiToken]
     rules:
       - Verificar que el sku no existe antes de crear.
     errors:
@@ -25,6 +27,8 @@ operations:
           required: true
     output:
       entity: Product
+      # Token de sincronización con el proveedor: sensible, nunca sale del servicio.
+      exclude: [apiToken]
     errors:
       - code: PRODUCT_NOT_FOUND
         when: No existe un producto con ese id.
@@ -35,7 +39,36 @@ operations:
     input: "void"
     output:
       entity: Product
+      # Token de sincronización con el proveedor: sensible, nunca sale del servicio.
+      exclude: [apiToken]
       paginated: true
+  activateProduct:
+    description: Publica un producto en borrador; solo con un precio mayor que cero.
+    kind: command
+    input:
+      fields:
+        id:
+          type: uuid
+          required: true
+    output: "void"
+    transitions:
+      - entity: Product
+        from: [draft]
+        to: active
+    preconditions:
+      - El producto existe y está en draft.
+    rules:
+      - El precio del producto es mayor que cero (el invariante de un producto active).
+    errors:
+      - code: PRODUCT_NOT_FOUND
+        when: No existe un producto con ese id.
+        http: 404
+      - code: PRODUCT_NOT_DRAFT
+        when: El producto no está en draft.
+        http: 409
+      - code: PRODUCT_PRICE_NOT_POSITIVE
+        when: El precio del producto es cero.
+        http: 422
   retireProduct:
     description: Retira un producto del catálogo de forma definitiva.
     kind: command

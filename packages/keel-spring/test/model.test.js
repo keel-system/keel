@@ -110,7 +110,7 @@ test('operaciones: DTOs derivados, rutas CRUD y endpoint explícito', () => {
 test('errores deduplicados con clase de excepción, http y subclase shared', () => {
   const model = loadModel();
   const codes = model.errors.map((e) => e.code).sort();
-  assert.deepEqual(codes, ['PRODUCT_ALREADY_RETIRED', 'PRODUCT_NOT_FOUND', 'SKU_ALREADY_EXISTS']);
+  assert.deepEqual(codes, ['PRODUCT_ALREADY_RETIRED', 'PRODUCT_NOT_DRAFT', 'PRODUCT_NOT_FOUND', 'PRODUCT_PRICE_NOT_POSITIVE', 'SKU_ALREADY_EXISTS']);
   const notFound = model.errors.find((e) => e.code === 'PRODUCT_NOT_FOUND');
   assert.equal(notFound.exceptionClass, 'ProductNotFoundError'); // naming del prototipo
   assert.equal(notFound.http, 404);
