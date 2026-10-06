@@ -399,6 +399,70 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   docker, sondas desde los vocabularios neutrales) en postgres y mysql; `npm run matrix`
   muestra la columna nest.
 - **Salida**: primer diseño **completo** generable: dominio + use-cases + api + persistence.
+- **Estado: 6a y 6b hechos (2026-10-06); 6c pendiente.**
+  - **6a — lo que es del diseño, a `keel-core/gen`**: `relational.js` (el esquema como DATOS:
+    `columnSpec` con nombre, nulabilidad, cota, escala y collation; los miembros persistidos; tablas de
+    elementos; los nombres de constraint única, índice y FK; las sombras plegadas; la lista de palabras
+    reservadas) y `constraint-errors.js` (qué error del diseño, con qué mensaje, significa violar cada
+    constraint: lo que hacía `raceOnlyConstraint` y el mapa del `ApiExceptionHandler`). El modelo gana
+    `namedType` (la clase del enum o del value object, sin pasar por la proyección). keel-spring los
+    consume; línea base idéntica (42 combinaciones, 10 453 archivos), falsada con un sabotaje en
+    `columnSpec`; keel-spring 1605/1605, keel-core 1065/1065.
+  - **6b — la persistencia relacional en keel-nest**: `persistence-entities.js` (entidades TypeORM y
+    tablas de elementos, tipo físico por motor), `repositories.js` (puerto en `domain/repository`,
+    página, adaptador con mapeo explícito), `persistence-runtime.js` (`DataSource` con las variables
+    de keel-spring —`DB_URL` admite la URL JDBC tal cual—, `TransactionContext` con
+    `AsyncLocalStorage`, traducción de errores del motor, módulo global). El mediator abre la
+    transacción (consultas de solo lectura, interbloqueo reintentado tres veces → 409); el filtro
+    traduce constraint → error del diseño, versión → 409 y tope → 503 con `Retry-After`; con
+    persistencia la página es el `Pageable` de Spring Data (`page`/`size`/`sort` indulgentes,
+    `@PageableDefault` 10, tope 2000 o el del diseño, orden del diseño por defecto, desempate por id).
+  - **Puerta medida**: suite 161/161 sin red, con `schema-parity.test.js` nuevo —tablas, columnas
+    (nulabilidad, cota, escala) y NOMBRES de constraint, índice y FK de keel-nest contra lo que EMITE
+    keel-spring, en las 9 fixtures relacionales más una derivación con un value object opcional—,
+    falsado con tres sabotajes (cota +1 → 8 fixtures en rojo, un índice de FK menos → 2, la nulabilidad
+    del value object opcional → la derivación). `ts-check` **11/11**: las 13 fixtures compilan con su
+    persistencia y el servidor de referencia ARRANCA contra PostgreSQL en contenedor (perfil `develop`,
+    leyendo `DB_URL` del entorno). `npm run db-check` (nuevo) **20/20** contra PostgreSQL 16 y MySQL 8,
+    4 sujetos y 8 raíces: el catálogo del motor contra el esquema neutral (columnas, collation forzada,
+    unicidades, índices y FK por nombre), la cota que rechaza el motor, ida y vuelta por el adaptador, la
+    fila en crudo (enum por su CONSTANTE, decimal con su escala), versión obsoleta → conflicto, clave
+    natural duplicada → el error del diseño, página y borrado del grafo. Falsado con tres sabotajes
+    aislados, cada uno cazado por su comprobación y solo por ella.
+  - **Dos defectos que solo vio un motor real**: (1) TypeORM NO aplica el transformador de la columna
+    referenciada al escribir la FK de una relación, y en MySQL el uuid de la raíz llegaba como texto a
+    un `binary(16)` («Data too long»): la FK se declara además como columna con su tipo y su
+    transformador (`fkProperty`); (2) TypeORM `@VersionColumn` incrementa pero no comprueba la versión
+    esperada: el bloqueo optimista es un UPDATE condicionado antes de guardar el grafo.
+- **Cambios respecto a lo planificado**, con su motivo:
+  - **TypeORM 1.x** (la 0.3 es `legacy`) y **sin `@nestjs/typeorm`**: el `DataSource` es un provider
+    propio que se inicializa al arrancar y se destruye al apagar, sin más dependencia.
+  - **El perfil `test` no tiene base de datos** (`database.enabled: false`): las pruebas de build
+    arrancan sin infraestructura y quien toque un repositorio recibe un error que lo dice. El H2 de
+    keel-spring no tiene equivalente que valga (los tipos físicos son por motor); lo que juzga el esquema
+    es `db-check`.
+  - **Auditoría estampada por el adaptador**, no con `@CreateDateColumn` (que pone un DEFAULT del
+    motor): es lo que hace el listener de Spring Data.
+  - **El tope de transacción por motor**: `SET LOCAL statement_timeout` en PostgreSQL;
+    `innodb_lock_wait_timeout` y `max_execution_time` en MySQL (1205 y 3024 → 503). Es aproximado: el
+    tope es por sentencia, no por la transacción entera, como el `setQueryTimeout` de Hibernate.
+  - **`?sort=` nombra la propiedad de la entidad de persistencia** (`priceAmount`), como en keel-spring;
+    una propiedad que no existe es un 500, igual que la `PropertyReferenceException` de Spring Data —
+    defecto compartido, a la vista—.
+- **Asimetrías conocidas, sin cubrir**:
+  - `boolean` en MySQL: `tinyint(1)` en keel-nest, `bit` en Hibernate. Los enums: `varchar(255)` en los
+    dos, sin el CHECK que añade Hibernate 6 en PostgreSQL. Los timestamps de auditoría `all` no llevan
+    DEFAULT en ninguno de los dos.
+  - El sub-campo enum de un value object aplanado: keel-spring deja caer su `@Enumerated` al aplanar
+    (lo guardaría por ORDINAL); keel-nest lo guarda por su constante. Sin fixture que lo tenga; revisar
+    en keel-spring.
+  - Ninguna fixture relacional aplana un value object OPCIONAL: su mapeo de vuelta (la marca de
+    presencia) solo lo compila `ts-check` en derivación, no lo ejercita `db-check`.
+- **Tramo 6c, pendiente**: los índices únicos condicionados (parcial en PostgreSQL, columna generada
+  declarada en MySQL) con el ORDEN de escrituras que exige el relevo; la columna de keel-nest en la
+  matriz de paridad (`engine-support`); la tabla de historial de migraciones en los `cliResetCmd`, que
+  hoy nombran la de Flyway (`flyway_schema_history`) y llega con los scripts de `infra/` (inc. 7); la
+  purga y el reclamo son de los incrementos 9 y 10.
 
 ### Inc. 7 — Arnés de integración y pipeline de agentes (primer hito end-to-end)
 

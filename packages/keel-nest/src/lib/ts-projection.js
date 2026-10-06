@@ -4,19 +4,18 @@
 // un campo, pregunta aquí cómo se escribe en TypeScript. La interpretación es la MISMA que usa
 // keel-spring: de esto depende que los dos servidores del mismo diseño sean equivalentes.
 //
-// Estado (incremento 4 de PLAN-KEEL-NEST.md): proyección de TIPOS completa —el modelo de
-// cualquier diseño se construye— y COTAS del dominio (las mismas que keel-spring, desde
-// keel-core/gen/constraints.js); vacíos declarados en lo que todavía no se emite:
-//   · columnas (TypeORM) → incremento 6;
-//   · la forma del cable de cada tipo la fija keel-core/gen/wire.js y la cumplen `Decimal`,
-//     `RawJson` y application/support/wire.ts (incremento 3).
+// Estado (incremento 6 de PLAN-KEEL-NEST.md): proyección de TIPOS completa —el modelo de
+// cualquier diseño se construye—, COTAS del dominio y COLUMNAS, las mismas que keel-spring, desde
+// keel-core/gen (constraints.js y relational.js). La columna es un DATO (`columnSpec`): el
+// renderizador de TypeORM decide el tipo físico de cada motor. La forma del cable de cada tipo la
+// fija keel-core/gen/wire.js y la cumplen `Decimal`, `RawJson` y application/support/wire.ts.
 //
 // Las propiedades que esta proyección pone en cada campo son de keel-nest: `tsType`, `imports`
 // (`{ symbol, from }`, con `from` relativo a la raíz del proyecto cuando es un módulo propio),
 // `elementTsType` y `text` (formato y longitud del campo, que son las guardas de un value object).
 // El modelo nunca las nombra.
 
-import { screamingSnake, numericConstraints, inheritedFormat, textConstraints, validationRules } from 'keel-core/gen';
+import { screamingSnake, numericConstraints, inheritedFormat, textConstraints, validationRules, columnSpec } from 'keel-core/gen';
 
 const BASE_TS_TYPES = {
   string: { tsType: 'string', imports: [] },
@@ -139,7 +138,7 @@ export const TS_PROJECTION = {
     return ERROR_BASE_BY_HTTP[http] ?? 'DomainException';
   },
 
-  fieldDetails(field, resolved) {
+  fieldDetails(field, resolved, { fieldName, isList, persisted, collation } = {}) {
     const ts = toTs(resolved);
     return {
       // Las reglas de validación como DATOS (keel-core/gen/constraints.js): las mismas que keel-spring
@@ -156,8 +155,12 @@ export const TS_PROJECTION = {
       // Formato y longitud del campo con la mezcla tipo → campo: lo que un value object COMPUESTO
       // comprueba en su constructor. En Java vive en las anotaciones de `validation`; aquí, como dato.
       text: textConstraints(field, resolved),
-      columns: [],
-      elementColumns: [],
+      // La columna del campo como DATO (keel-core/gen/relational.js): nombre, nulabilidad y cotas, lo
+      // mismo que keel-spring escribe como @Column. Una lista no es una columna: es su tabla de
+      // elementos, y la columna de cada ELEMENTO va en `elementColumns` (sin `required`/`id`, que son
+      // de la lista). El elemento compuesto no: sus columnas son las de su value object.
+      columns: persisted && !isList ? columnSpec(fieldName, field, resolved, { collation }) : null,
+      elementColumns: persisted && isList && resolved.kind !== 'composite' ? columnSpec(fieldName, {}, resolved) : null,
       initializer: initializer(field, ts)
     };
   },

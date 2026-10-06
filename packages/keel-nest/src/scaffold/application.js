@@ -17,11 +17,12 @@ import { usesMediator } from './mediator.js';
 import { usesApi } from './rest-support.js';
 import { controllerClasses } from './controllers.js';
 import { relativeSpecifier } from './render.js';
+import { usesRelational } from './persistence-entities.js';
 
 export function generate(model) {
   return [
     { path: 'src/main.ts', content: mainTs() },
-    { path: 'src/app.module.ts', content: appModuleTs(usesMediator(model), controllerClasses(model)) },
+    { path: 'src/app.module.ts', content: appModuleTs(usesMediator(model), controllerClasses(model), usesRelational(model)) },
     { path: HTTP_PLATFORM_TS, content: httpPlatformTs(usesApi(model)) }
   ];
 }
@@ -48,11 +49,15 @@ await app.listen(configuration.server.port, configuration.server.address);
 `;
 }
 
-function appModuleTs(withUseCases, controllers) {
+function appModuleTs(withUseCases, controllers, withPersistence) {
   // Los casos de uso del diseño entran por su módulo (infrastructure/usecase), que es el único que
-  // cablea handlers y mappers; los controladores REST los despachan por el mediator que exporta.
-  const useCaseImport = withUseCases ? "\nimport { UseCaseModule } from './infrastructure/usecase/use-case-module.js';" : '';
-  const useCaseModule = withUseCases ? '\n      imports: [UseCaseModule],' : '';
+  // cablea handlers y mappers; los controladores REST los despachan por el mediator que exporta. La
+  // persistencia (global) va antes: sus puertos son dependencias de los handlers.
+  const useCaseImport =
+    (withPersistence ? "\nimport { PersistenceModule } from './infrastructure/persistence/persistence-module.js';" : '') +
+    (withUseCases ? "\nimport { UseCaseModule } from './infrastructure/usecase/use-case-module.js';" : '');
+  const modules = [withPersistence ? 'PersistenceModule.register(configuration)' : null, withUseCases ? 'UseCaseModule' : null].filter(Boolean);
+  const useCaseModule = modules.length > 0 ? `\n      imports: [${modules.join(', ')}],` : '';
   const controllerImports = controllers
     .map((controller) => `\nimport { ${controller.symbol} } from '${relativeSpecifier('src/app.module.ts', controller.from)}';`)
     .join('');

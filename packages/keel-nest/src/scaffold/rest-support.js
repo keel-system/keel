@@ -17,6 +17,8 @@ import { WIRE_SHAPES } from 'keel-core/gen/wire';
 import { FRAMEWORK_ERRORS } from 'keel-core';
 import { tsModule } from './render.js';
 import { DOMAIN_EXCEPTION_TS, BASE_SUBCLASSES } from './exceptions.js';
+import { usesRelational } from './persistence-entities.js';
+import { PERSISTENCE_ERRORS_TS } from './repositories.js';
 
 export const CORRELATION_TS = 'src/infrastructure/correlation/correlation-context.ts';
 export const ERROR_RESPONSE_TS = 'src/infrastructure/rest/error-response.ts';
@@ -55,7 +57,23 @@ export function generate(model) {
       { symbol: 'MissingParameterError', from: REQUEST_ERRORS_TS },
       { symbol: 'RequestValidationError', from: REQUEST_ERRORS_TS }
     ], requestReadingBody()) },
-    { path: EXCEPTION_FILTER_TS, content: tsModule(EXCEPTION_FILTER_TS, filterImports(), filterBody()) }
+    {
+      path: EXCEPTION_FILTER_TS,
+      content: tsModule(
+        EXCEPTION_FILTER_TS,
+        [
+          ...filterImports(),
+          ...(usesRelational(model)
+            ? [
+                { symbol: 'translatePersistenceError', from: PERSISTENCE_ERRORS_TS },
+                { symbol: 'TRANSACTION_TIMEOUT', from: PERSISTENCE_ERRORS_TS },
+                { symbol: 'UNKNOWN_INTEGRITY', from: PERSISTENCE_ERRORS_TS }
+              ]
+            : [])
+        ],
+        filterBody(usesRelational(model))
+      )
+    }
   ];
 }
 
@@ -456,7 +474,24 @@ function fileOfError(name) {
   return name.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase();
 }
 
-function filterBody() {
+// Los fallos de la persistencia, en el orden del ApiExceptionHandler de keel-spring: la violación de
+// una constraint con nombre es el error que el diseño declara para ella, el conflicto de versión (o el
+// interbloqueo agotado) el de concurrencia, y el tope de transacción un 503 transitorio.
+const PERSISTENCE_BRANCH = `    // ── Persistencia
+    const persisted = translatePersistenceError(exception);
+    if (persisted === 'timeout') {
+      // Sin pila: el motivo va en el mensaje, y una ráfaga de esperas de bloqueo llenaría el log.
+      this.log.warn(\`Transacción cancelada por tiempo: \${exception instanceof Error ? exception.message : String(exception)}\`);
+      return ErrorResponse.of(TRANSACTION_TIMEOUT.status, 'Service Unavailable', TRANSACTION_TIMEOUT.code, TRANSACTION_TIMEOUT.message, []);
+    }
+    if (persisted === 'integrity') {
+      this.log.warn('Violación de integridad no asociada a ninguna constraint conocida', exception instanceof Error ? exception.stack : String(exception));
+      return ErrorResponse.of(UNKNOWN_INTEGRITY.status, 'Conflict', null, UNKNOWN_INTEGRITY.message);
+    }
+    if (persisted != null) return this.fromDomain(persisted);
+`;
+
+function filterBody(persistence = false) {
   const validation = FRAMEWORK_ERRORS.validation.code;
   const domainBranches = BASE_SUBCLASSES.map(({ name, http }) => {
     const [error, fallback] = DOMAIN_RESPONSES[name];
@@ -482,6 +517,8 @@ export class ApiExceptionFilter implements ExceptionFilter {
       void reply.status(body.getStatus()).send(body.getResponse());
       return;
     }
+    // El tope de transacción es transitorio: el cliente puede reintentar, y se lo dice la cabecera.
+    if (body.status === 503 && body.code === '${FRAMEWORK_ERRORS.transactionTimeout.code}') void reply.header('Retry-After', '1');
     void reply.status(body.status).send(body);
   }
 
@@ -505,7 +542,7 @@ export class ApiExceptionFilter implements ExceptionFilter {
       }
       return ErrorResponse.of(404, 'Not Found', null, 'Recurso no encontrado');
     }
-    // ── Errores de dominio (jerarquía DomainException)
+${persistence ? PERSISTENCE_BRANCH : ''}    // ── Errores de dominio (jerarquía DomainException)
     if (exception instanceof DomainException) return this.fromDomain(exception);
     // Una excepción HTTP del propio framework: un 400 es el lector JSON de http-platform (petición
     // malformada); cualquier otra trae su propio cuerpo y sale con él — es lo que hacen las sondas

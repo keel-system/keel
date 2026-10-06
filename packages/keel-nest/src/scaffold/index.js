@@ -26,6 +26,9 @@ import * as dtos from './dtos.js';
 import * as mappers from './mappers.js';
 import * as services from './services.js';
 import * as mediator from './mediator.js';
+import * as persistenceEntities from './persistence-entities.js';
+import * as repositories from './repositories.js';
+import * as persistenceRuntime from './persistence-runtime.js';
 import * as domainGuardsCheck from './domain-guards-check.js';
 import * as architecture from './architecture.js';
 import * as restSupport from './rest-support.js';
@@ -57,6 +60,11 @@ const GENERATORS = [
   dtos,
   mappers,
   services,
+  // Persistencia relacional (incremento 6): las entidades TypeORM sobre el esquema neutral, los
+  // puertos con sus adaptadores y el DataSource con su transacción.
+  persistenceEntities,
+  repositories,
+  persistenceRuntime,
   { generate: (model) => mediator.generate(model, { mappers: mappers.mapperClasses(model) }) },
   // API REST (incremento 5): correlación, ErrorResponse, lectura de peticiones, filtro de errores y
   // un controlador por grupo.

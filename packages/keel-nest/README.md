@@ -40,7 +40,7 @@ puerta del diseño, el cuestionario del stack, la escritura con manifiesto (`--r
 `--check`, `--force`), el catálogo de infraestructura, los destinos físicos de mensajería y los
 vocabularios de las sondas del arnés.
 
-## Qué genera hoy (incremento 5)
+## Qué genera hoy (incremento 6)
 
 - **Dominio**, TypeScript puro en `src/domain`: enums por su literal, value objects que hacen cumplir
   en su constructor presencia, formato, longitud, cotas y escala (las mismas cotas que keel-spring,
@@ -54,16 +54,23 @@ vocabularios de las sondas del arnés.
   operación (convierte y valida en el orden del binding de Spring, con las reglas neutrales de
   `keel-core/gen`), `ErrorResponse` con la forma y los textos del `ApiExceptionHandler` de keel-spring,
   404/405, `Location` en los 201 y la correlación `X-Correlation-Id` en `AsyncLocalStorage`.
+- **Persistencia relacional** (TypeORM, PostgreSQL y MySQL) en `src/infrastructure/persistence`:
+  entidades con las MISMAS tablas, columnas, cotas y nombres de constraint, índice y FK que keel-spring
+  (`keel-core/gen/relational.js`), un puerto por raíz en `src/domain/repository` con su adaptador y su
+  mapeo explícito, la transacción del caso de uso en el mediator (consultas de solo lectura,
+  interbloqueo reintentado, tope de transacción → 503), bloqueo optimista con UPDATE condicionado, la
+  traducción de cada violación al error del diseño (`keel-core/gen/constraint-errors.js`) y la página
+  con el `Pageable` de Spring Data. El perfil `test` no tiene base de datos.
 - **Gates en el proyecto**: `npm run check:architecture` (dependency-cruiser: dominio y aplicación sin
   framework) e `infra/check-domain-guards.sh` (las mismas filas que el de keel-spring).
 
-## Estado de la frontera (incremento 5)
+## Estado de la frontera (incremento 6)
 
 | Capa | Estado |
 |---|---|
 | `domain`, `use-cases` | se generan; `idempotency` y `schedule` de una operación se avisan (incremento 10), `cache` también (13) |
 | `api` | se genera (incremento 5); las subidas multipart llegan con `storage` (13) |
-| `persistence` | se rechaza → incrementos 6 (relacional, TypeORM) y 12 (documental) |
+| `persistence` | relacional: se genera sobre PostgreSQL y MySQL (los demás motores se rechazan); los índices únicos condicionados se avisan (tramo 6c). Documental: se rechaza → incremento 12 |
 | `security` | se rechaza → incremento 8 |
 | `messaging` | se rechaza → incremento 9 |
 | `http-clients`, `dependencies` | se rechazan → incremento 11 |
@@ -74,5 +81,6 @@ vocabularios de las sondas del arnés.
 
 ```bash
 npm test --workspace packages/keel-nest        # rasgos de lo emitido (el dominio, EJECUTADO), sintaxis de las 13 fixtures, paridad con keel-spring (sin red)
-npm run ts-check --workspace packages/keel-nest # genera, instala, compila, comprueba la frontera hexagonal, prueba y ARRANCA el proyecto, y compila las 13 fixtures (red, minutos)
+npm run ts-check --workspace packages/keel-nest # genera, instala, compila, comprueba la frontera hexagonal, prueba y ARRANCA el proyecto contra PostgreSQL, y compila las 13 fixtures (red, podman/docker, minutos)
+npm run db-check --workspace packages/keel-nest # la persistencia contra PostgreSQL y MySQL reales: esquema, cotas, ida y vuelta, versión, unicidad (podman/docker)
 ```

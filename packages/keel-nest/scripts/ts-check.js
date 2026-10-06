@@ -29,6 +29,7 @@ import { build } from '../src/commands/build.js';
 import { planService } from '../src/scaffold/index.js';
 import { loadService } from 'keel-core';
 import { FIXTURES_DIR } from '../test/helpers/workspace.js';
+import { resolveRuntime, startDatabase, stopDatabase } from './lib/database-container.js';
 
 const keep = process.argv.includes('--keep');
 const isWindows = process.platform === 'win32';
@@ -142,11 +143,35 @@ step(
   failedTests.length > 0 ? `en rojo: ${failedTests.join(', ')}` : ''
 );
 
+// El diseño de referencia persiste: el servidor no arranca sin su base (el DataSource se inicializa al
+// arrancar). Se levanta un PostgreSQL en contenedor y el servidor arranca con el perfil `develop`, que
+// lee DB_URL, DB_USERNAME y DB_PASSWORD del entorno: así se mide también el gradiente de configuración.
+let database = null;
+const runtime = results.every((result) => result.ok) ? resolveRuntime() : null;
 if (results.every((result) => result.ok)) {
+  if (!runtime) {
+    step('una base de datos para arrancar (podman o docker en marcha)', false, 'sin podman ni docker: el servidor no puede arrancar sin su base');
+  } else {
+    try {
+      database = await startDatabase(runtime, 'postgresql');
+    } catch (error) {
+      step('PostgreSQL en contenedor para arrancar', false, error.message);
+    }
+  }
+}
+
+if (results.every((result) => result.ok) && database) {
   const port = await freePort();
   const app = spawn(process.execPath, ['dist/main.js'], {
     cwd: projectDir,
-    env: { ...process.env, PROFILE: 'local', SERVER_PORT: String(port) },
+    env: {
+      ...process.env,
+      PROFILE: 'develop',
+      SERVER_PORT: String(port),
+      DB_URL: database.url,
+      DB_USERNAME: database.user,
+      DB_PASSWORD: database.password
+    },
     stdio: ['ignore', 'pipe', 'pipe']
   });
   let appOutput = '';
@@ -184,6 +209,7 @@ if (results.every((result) => result.ok)) {
   if (!end) app.kill('SIGKILL');
   if (results.some((result) => !result.ok)) console.error(appOutput);
 }
+if (database) stopDatabase(runtime, database);
 
 const failed = results.filter((result) => !result.ok).length;
 if (keep) {

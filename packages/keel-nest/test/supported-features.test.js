@@ -9,7 +9,7 @@ import { checkSupportedFeatures, checkSupportedStack } from '../src/lib/supporte
 const manifestWith = (...layers) => ({ layers: Object.fromEntries(layers.map((layer) => [layer, `${layer}.keel.yaml`])) });
 const layersWith = (...layers) => Object.fromEntries(layers.map((layer) => [layer, {}]));
 
-for (const layer of ['persistence', 'security', 'messaging', 'http-clients', 'dependencies', 'storage', 'mail', 'payments']) {
+for (const layer of ['security', 'messaging', 'http-clients', 'dependencies', 'storage', 'mail', 'payments']) {
   test(`capa ${layer}: se rechaza con el incremento que la trae`, () => {
     const { errors } = checkSupportedFeatures(manifestWith('domain', 'use-cases', layer), layersWith('domain', 'use-cases', layer));
     assert.equal(errors.length, 1);
@@ -42,6 +42,39 @@ test('lo que una operación declara y cuelga de un incremento futuro se avisa, n
   assert.match(warnings[1], /purgeOld declara schedule .*incremento 10/);
   assert.match(warnings[2], /getOrder declara cache .*incremento 13/);
   assert.ok(!warnings.join('\n').includes('listOrders'));
+});
+
+test('la persistencia relacional se genera; la documental se rechaza con el incremento que la trae', () => {
+  const relational = checkSupportedFeatures(
+    manifestWith('domain', 'use-cases', 'persistence'),
+    { domain: {}, 'use-cases': {}, persistence: { default: { model: 'relational' } } }
+  );
+  assert.deepEqual(relational.errors, []);
+  assert.deepEqual(relational.warnings, []);
+  const document = checkSupportedFeatures(
+    manifestWith('domain', 'use-cases', 'persistence'),
+    { domain: {}, 'use-cases': {}, persistence: { default: { model: 'document' } } }
+  );
+  assert.equal(document.errors.length, 1);
+  assert.match(document.errors[0], /document .*incremento 12/);
+});
+
+test('un índice único condicionado se acepta y se avisa: su índice parcial llega en el tramo 6c', () => {
+  const layers = {
+    domain: {},
+    'use-cases': {},
+    persistence: { entities: { Template: { indexes: [{ fields: ['key'], unique: true, when: { field: 'status', equals: 'active' } }, ['key']] } } }
+  };
+  const { errors, warnings } = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'persistence'), layers);
+  assert.deepEqual(errors, []);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /Template declara índices únicos condicionados .*6c/);
+});
+
+test('el motor: PostgreSQL y MySQL se generan; los demás del catálogo se rechazan nombrándolos', () => {
+  assert.deepEqual(checkSupportedStack({ database: 'postgresql' }).errors, []);
+  assert.deepEqual(checkSupportedStack({ database: 'mysql' }).errors, []);
+  assert.match(checkSupportedStack({ database: 'oracle' }).errors[0], /database: oracle .*postgresql y mysql/);
 });
 
 test('la telemetría se rechaza en vez de estamparse sin efecto', () => {

@@ -18,6 +18,7 @@
 import { DIRS, classPath, declType, fieldImports, isNullable, tsModule, tsdoc } from './render.js';
 import { ANNOTATIONS_TS, HANDLERS_TS, MESSAGES_TS } from './mediator.js';
 import { PAGED_RESPONSE_TS } from './dtos.js';
+import { repositoryRoots, portClass, portPath, PAGE_TS } from './repositories.js';
 
 export function generate(model) {
   const files = [];
@@ -45,9 +46,14 @@ export function handlerPath(operation) {
 export function messageComponents(model, operation) {
   const components = [...(operation.pathParams ?? []), ...(operation.bodyFields ?? [])];
   if (operation.paginated) {
-    // Sin persistencia la página viaja como dos enteros; con ella, como el Pageable del incremento 6.
-    components.push({ name: 'page', tsType: 'number', elementTsType: 'number', kind: 'base', base: 'int', required: true, imports: [] });
-    components.push({ name: 'size', tsType: 'number', elementTsType: 'number', kind: 'base', base: 'int', required: true, imports: [] });
+    if (repositoryRoots(model).length > 0) {
+      // Con persistencia, la página viaja como un Pageable (página, tamaño y orden), el de Spring Data.
+      components.push({ name: 'pageable', tsType: 'Pageable', elementTsType: 'Pageable', kind: 'base', required: true, pageable: true, imports: [{ symbol: 'Pageable', from: PAGE_TS, type: true }] });
+    } else {
+      // Sin persistencia, dos enteros.
+      components.push({ name: 'page', tsType: 'number', elementTsType: 'number', kind: 'base', base: 'int', required: true, imports: [] });
+      components.push({ name: 'size', tsType: 'number', elementTsType: 'number', kind: 'base', base: 'int', required: true, imports: [] });
+    }
   }
   return components;
 }
@@ -193,6 +199,13 @@ function renderHandler(model, operation) {
   ];
 
   const dependencies = [];
+  // El puerto del repositorio del agregado de la operación (el de su raíz si opera sobre una hija),
+  // como en keel-spring: lo que el handler necesita para cumplir su caso de uso, inyectado.
+  const repository = repositoryOf(model, operation);
+  if (repository) {
+    imports.push({ symbol: portClass(repository), from: portPath(repository) });
+    dependencies.push({ type: portClass(repository), name: decap(portClass(repository)) });
+  }
   if (operation.responseDto?.entity && model.entities.some((e) => e.name === operation.responseDto.entity)) {
     const mapper = `${operation.responseDto.entity}ApplicationMapper`;
     imports.push({ symbol: mapper, from: classPath(DIRS.mappers, mapper) });
@@ -217,6 +230,19 @@ ${notes.map((note) => `    // ${note}`).join('\n')}${notes.length > 0 ? '\n' : '
   }
 }`;
   return { path: file, content: tsModule(file, imports, body) };
+}
+
+/** La raíz persistida del grupo de la operación, o null. */
+function repositoryOf(model, operation) {
+  const service = (model.services ?? []).find((group) => (group.operations ?? []).includes(operation));
+  if (!service) return null;
+  const target = model.entities.find((entity) => entity.name === service.entity);
+  const rootName = target?.rootEntity ?? service.entity;
+  return repositoryRoots(model).find((entity) => entity.name === rootName) ?? null;
+}
+
+function decap(name) {
+  return name[0].toLowerCase() + name.slice(1);
 }
 
 function handlerNotes(model, operation) {

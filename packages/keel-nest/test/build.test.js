@@ -58,11 +58,11 @@ test('un diseño no listo NO se genera sin --accept-unready, y no se escribe nad
 
 test('una capa fuera de la frontera se rechaza nombrando keel-nest, antes de escribir nada', async () => {
   const workspace = makeWorkspace();
-  mountDesign(workspace, 'product-catalog');
-  const { exitCode, output } = await runCommand(workspace, build, 'specs/product-catalog', { defaults: true, acceptUnready: true });
+  mountDesign(workspace, 'profile-directory');
+  const { exitCode, output } = await runCommand(workspace, build, 'specs/profile-directory', { defaults: true, acceptUnready: true });
   assert.equal(exitCode, 1);
   assert.match(output, /capacidades que keel-nest no genera/);
-  assert.match(output, /capa persistence: keel-nest todavía no la genera/);
+  assert.match(output, /capa security: keel-nest todavía no la genera/);
   assert.ok(!fs.existsSync(path.join(workspace, 'services')));
 });
 

@@ -13,7 +13,6 @@
 
 /** Capas que aún no se generan, con el incremento del plan que las trae. */
 const PENDING_LAYERS = {
-  persistence: 'incremento 6 (relacional con TypeORM) y 12 (documental)',
   security: 'incremento 8',
   messaging: 'incremento 9',
   'http-clients': 'incremento 11',
@@ -25,6 +24,12 @@ const PENDING_LAYERS = {
 
 /** Capas aceptadas cuyo código todavía no se emite: el proyecto arranca, pero sin ellas. Hoy, ninguna. */
 const ACCEPTED_NOT_EMITTED = {};
+
+/**
+ * Los motores relacionales que keel-nest genera (incremento 6): la matriz de TypeORM medida. Los
+ * demás del catálogo los genera keel-spring y llegan aquí cuando se midan.
+ */
+export const SUPPORTED_DATABASES = ['postgresql', 'mysql'];
 
 /**
  * Lo que una operación de `use-cases` puede declarar y keel-nest todavía no genera. El dominio y la
@@ -67,6 +72,18 @@ export function checkSupportedFeatures(manifest, layers) {
       );
     }
   }
+  // La persistencia DOCUMENTAL es otra rama entera (driver de MongoDB, índices en clase, reclamo con
+  // findOneAndUpdate): llega en el incremento 12. La relacional se genera desde el 6.
+  if (declared.includes('persistence') && layers?.persistence?.default?.model === 'document') {
+    errors.push(
+      'persistence.default.model: document — keel-nest todavía no genera la persistencia documental (llega en el incremento 12 de PLAN-KEEL-NEST.md). ' +
+        'Genera este diseño con keel-spring, o espera a que keel-nest la cubra.'
+    );
+  }
+  // Lo que la persistencia relacional declara y todavía no se emite: el diseño se acepta, y el aviso
+  // dice qué falta y cuándo llega.
+  for (const warning of pendingPersistenceFeatures(layers)) warnings.push(warning);
+
   const operations = Object.entries(layers?.['use-cases']?.operations ?? {});
   for (const feature of PENDING_OPERATION_FEATURES) {
     const names = operations.filter(([, operation]) => operation?.[feature.key] != null).map(([name]) => name);
@@ -79,9 +96,36 @@ export function checkSupportedFeatures(manifest, layers) {
   return { errors, warnings };
 }
 
-/** La telemetría todavía no se genera: se rechaza en el build en vez de estamparla sin efecto. */
+/**
+ * Lo que un diseño relacional puede declarar y keel-nest aún no emite. Cada entrada dice qué pieza
+ * falta: sin el aviso, un esquema sin su índice condicionado parecería completo.
+ */
+function pendingPersistenceFeatures(layers) {
+  const warnings = [];
+  const persistence = layers?.persistence;
+  if (!persistence) return warnings;
+  const conditional = Object.entries(persistence.entities ?? {})
+    .filter(([, entity]) => (entity?.indexes ?? []).some((index) => !Array.isArray(index) && index?.when))
+    .map(([name]) => name);
+  if (conditional.length > 0) {
+    warnings.push(
+      `persistence: ${conditional.join(', ')} declara${conditional.length === 1 ? '' : 'n'} índices únicos condicionados (when); ` +
+        'keel-nest genera la unicidad sin condición y el traductor de su violación, pero no el índice parcial ni el ' +
+        'orden de escrituras que exige (llega en el tramo 6c de PLAN-KEEL-NEST.md).'
+    );
+  }
+  return warnings;
+}
+
+/** Lo que el stack pide y keel-nest todavía no genera: se rechaza en el build en vez de estamparlo sin efecto. */
 export function checkSupportedStack(stack) {
   const errors = [];
+  if (stack?.database && !SUPPORTED_DATABASES.includes(stack.database)) {
+    errors.push(
+      `database: ${stack.database} — keel-nest genera la persistencia relacional sobre ${SUPPORTED_DATABASES.join(' y ')} (incremento 6 de PLAN-KEEL-NEST.md). ` +
+        'Elige uno de ellos, o genera este diseño con keel-spring.'
+    );
+  }
   if (stack?.telemetry && stack.telemetry !== 'none') {
     errors.push(
       `telemetry: ${stack.telemetry} — keel-nest todavía no genera telemetría (llega en el incremento 14 de PLAN-KEEL-NEST.md). ` +

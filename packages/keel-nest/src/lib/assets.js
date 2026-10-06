@@ -48,6 +48,11 @@ export const FASTIFY_VERSION = '^5.12.5';
 // La frontera hexagonal como regla ejecutable (check:architecture). La 18 pide Node 22+ y lee
 // TypeScript con el compilador del propio proyecto.
 export const DEPENDENCY_CRUISER_VERSION = '^18.5.0';
+// Persistencia relacional (incremento 6), verificadas el 2026-10-06 contra el registro de npm:
+// TypeORM 1.x (la 0.3 queda como `legacy`) y un driver por motor, el que TypeORM carga por su tipo.
+export const TYPEORM_VERSION = '^1.1.1';
+export const PG_VERSION = '^8.23.1';
+export const MYSQL2_VERSION = '^3.24.5';
 
 export function packageVersion() {
   return JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8')).version;

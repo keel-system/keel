@@ -35,7 +35,8 @@ function springRoutes(files) {
         ? 201
         : STATUS_BY_CONSTANT[/@ResponseStatus\(HttpStatus\.(\w+)\)/.exec(block)?.[1]] ?? Number(/HttpStatus\.valueOf\((\d+)\)/.exec(block)?.[1] ?? 200);
       const query = [...params.matchAll(/@RequestParam(?:\([^)]*\))? (?:@\w+(?:\([^)]*\))? )*[\w<>.]+ (\w+)/g)].map((m) => m[1]);
-      if (/Pageable pageable/.test(params)) query.push('page', 'size');
+      // El Pageable de Spring Data lee tres parámetros: página, tamaño y orden.
+      if (/Pageable pageable/.test(params)) query.push('page', 'size', 'sort');
       const body = /@RequestBody\(required = false\)/.test(params) ? 'optional' : /@RequestBody/.test(params) ? 'required' : null;
       routes.set(name, {
         method: mapping[1].toUpperCase(),
@@ -117,6 +118,10 @@ for (const name of fs.readdirSync(FIXTURES_DIR)) {
       if (fromSpring.multipart) continue;
       const expected = { ...fromSpring };
       delete expected.multipart;
+      // La persistencia DOCUMENTAL llega en el incremento 12: hasta entonces keel-nest no tiene con qué
+      // ordenar, y la página de esos diseños son dos enteros. Es la única diferencia que se tolera, y
+      // solo en ellos.
+      if (nest.model.persistenceKind === 'document') expected.query = expected.query.filter((name) => name !== 'sort');
       const actual = { method: fromNest.method, path: fromNest.path, status: fromNest.status, location: fromNest.location, query: [...fromNest.query].sort(), body: fromNest.body };
       assert.deepEqual(actual, expected, operation.name);
       if (operation.responseDto) {

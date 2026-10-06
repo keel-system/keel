@@ -25,8 +25,12 @@ import {
   TYPES_NODE_VERSION,
   DECIMAL_JS_VERSION,
   DEPENDENCY_CRUISER_VERSION,
-  FASTIFY_VERSION
+  FASTIFY_VERSION,
+  TYPEORM_VERSION,
+  PG_VERSION,
+  MYSQL2_VERSION
 } from '../lib/assets.js';
+import { usesRelational, engineOf } from './persistence-entities.js';
 
 export function generate(model) {
   return [
@@ -67,7 +71,9 @@ function packageJson(model) {
       fastify: FASTIFY_VERSION,
       'reflect-metadata': REFLECT_METADATA_VERSION,
       rxjs: RXJS_VERSION,
-      yaml: YAML_VERSION
+      yaml: YAML_VERSION,
+      // La persistencia relacional: TypeORM y el driver del motor del stack.
+      ...(usesRelational(model) ? { typeorm: TYPEORM_VERSION, ...(engineOf(model) === 'mysql' ? { mysql2: MYSQL2_VERSION } : { pg: PG_VERSION }) } : {})
     },
     devDependencies: {
       '@nestjs/cli': NEST_CLI_VERSION,

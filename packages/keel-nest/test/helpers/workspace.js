@@ -42,8 +42,11 @@ export function mountDesign(workspace, name, { withoutLayers = [] } = {}) {
   return specDir;
 }
 
-/** El diseño que keel-nest sabe generar hoy: product-catalog sin persistencia. */
-export const NEST_READY_DESIGN = { name: 'product-catalog', withoutLayers: ['persistence'] };
+/**
+ * El diseño que keel-nest sabe generar entero hoy: product-catalog, con su persistencia relacional
+ * (incremento 6). Es una fixture COMPLETA: dominio, casos de uso, API y persistencia.
+ */
+export const NEST_READY_DESIGN = { name: 'product-catalog', withoutLayers: [] };
 
 /** Ejecuta un comando de la CLI en `workspace`, en silencio, y devuelve su exitCode y lo que imprimió. */
 export async function runCommand(workspace, command, ...args) {

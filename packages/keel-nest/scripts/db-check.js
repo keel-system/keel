@@ -1,0 +1,678 @@
+#!/usr/bin/env node
+// La persistencia de keel-nest contra un MOTOR REAL: lo único que juzga si lo emitido sostiene lo que
+// el diseño pidió. `ts-check` dice que compila; esto dice que el esquema que TypeORM crea es el del
+// diseño y que el adaptador guarda y lee sin perder nada.
+//
+// Por motor (PostgreSQL y MySQL, en contenedor) y por sujeto (fixtures que cubren las formas del
+// esquema: value objects aplanados, decimales con escala, enums, listas de escalares y de value
+// objects, hijas uni y bidireccionales, sombras plegadas, claves naturales, bloqueo optimista):
+//
+//   esquema      el catálogo del motor (information_schema) contra keel-core/gen/relational.js:
+//                cada columna con su nulabilidad, su cota de texto, su precisión y escala, y su
+//                collation donde se fuerza; cada constraint única, índice y FK con SU NOMBRE, que es
+//                lo que lee el traductor de errores;
+//   cota         una escritura más larga que el `maxLength` del diseño la rechaza el MOTOR;
+//   ida y vuelta el adaptador generado guarda un agregado entero y lo vuelve a leer igual (decimales
+//                con su escala, enteros de 64 bits, uuid, fechas, enums por su constante, el orden de
+//                las listas y de las hijas);
+//   versión      guardar dos veces la MISMA lectura: la segunda es un conflicto de concurrencia;
+//   unicidad     un segundo agregado con la misma clave natural sale como el error que el diseño
+//                declara para ella (translatePersistenceError);
+//   página       list(pageable) con su total; deleteById borra el grafo.
+//
+//   node packages/keel-nest/scripts/db-check.js [--database=postgresql|mysql] [--keep]
+//   npm run db-check --workspace packages/keel-nest
+//
+// Necesita podman o docker, y red la primera vez (npm instala TypeORM y los drivers).
+
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { loadService } from 'keel-core';
+import { DATABASES } from 'keel-core/gen/infra-catalog';
+import { orderingFieldOf, persistedMembers, uniqueConstraints, crossAggregateForeignKeys, elementTable, foreignKeyIndexColumns, foreignKeyIndexName, indexName, collectionIndexesOf, columnsFor, foreignKeyName, joinColumnOf, usesAuditableEntity, AUDIT_COLUMNS, LOCK_VERSION } from 'keel-core/gen';
+import { planService } from '../src/scaffold/index.js';
+import { DB_NAME, run, resolveRuntime, startDatabase } from './lib/database-container.js';
+import { makeWorkspace, mountDesign, runCommand, FIXTURES_DIR, NEST_READY_DESIGN } from '../test/helpers/workspace.js';
+import { build } from '../src/commands/build.js';
+import { domainMembers } from '../src/scaffold/entities.js';
+import { classPath, entityDir, DIRS } from '../src/scaffold/render.js';
+import { repositoryRoots, adapterPath, adapterClass, naturalKeyFinder } from '../src/scaffold/repositories.js';
+import { ormPath, ormClass, unidirectionalParents } from '../src/scaffold/persistence-entities.js';
+
+const args = process.argv.slice(2);
+const keep = args.includes('--keep');
+const only = args.find((arg) => arg.startsWith('--database='))?.split('=')[1] ?? null;
+const ENGINES = (only ? [only] : ['postgresql', 'mysql']).filter((engine) => DATABASES[engine]);
+// Las formas del esquema que cubre cada sujeto (ver la cabecera).
+const SUBJECTS = ['product-catalog', 'job-dispatch', 'notification-mailer', 'catalog-extended'];
+const results = [];
+
+function step(name, ok, detail = '') {
+  results.push({ name, ok });
+  console.log(`${ok ? 'OK   ' : 'FALLA'} ${name}${detail ? ` — ${detail}` : ''}`);
+  return ok;
+}
+
+// ─── Muestras ────────────────────────────────────────────────────────────────
+
+/**
+ * Un texto que casa con un patrón del diseño, para las formas habituales (literales, clases,
+ * \d \w \s, cuantificadores, grupos con alternativas). Se comprueba al final: si no casa, null.
+ */
+function sampleFor(pattern, minLength = 0, maxLength = null) {
+  const source = String(pattern).replace(/^\^/, '').replace(/\$$/, '');
+  let index = 0;
+  const pickClass = (body) => {
+    const negated = body.startsWith('^');
+    const content = negated ? body.slice(1) : body;
+    if (negated) {
+      for (const candidate of 'abcxyz019') if (!new RegExp(`[${body}]`).test(candidate) === false) return candidate;
+      return 'a';
+    }
+    if (/^\\d/.test(content) || /0-9/.test(content)) return content.includes('A-Z') ? 'A' : content.includes('a-z') ? 'a' : '7';
+    if (content.includes('A-Z')) return 'A';
+    if (content.includes('a-z')) return 'a';
+    const plain = content.replace(/\\./g, '').replace(/.-./g, '');
+    return plain[0] ?? 'a';
+  };
+  const atom = () => {
+    const char = source[index];
+    if (char === '(') {
+      let depth = 1;
+      let end = index + 1;
+      while (end < source.length && depth > 0) {
+        if (source[end] === '\\') end += 1;
+        else if (source[end] === '(') depth += 1;
+        else if (source[end] === ')') depth -= 1;
+        end += 1;
+      }
+      let inner = source.slice(index + 1, end - 1).replace(/^\?:/, '');
+      inner = splitTop(inner)[0];
+      index = end;
+      return { text: sampleFor(inner) ?? '' };
+    }
+    if (char === '[') {
+      let end = index + 1;
+      while (end < source.length && source[end] !== ']') end += source[end] === '\\' ? 2 : 1;
+      const body = source.slice(index + 1, end);
+      index = end + 1;
+      return { text: pickClass(body) };
+    }
+    if (char === '\\') {
+      const next = source[index + 1];
+      index += 2;
+      return { text: next === 'd' ? '7' : next === 'w' ? 'a' : next === 's' ? ' ' : next };
+    }
+    if (char === '.') {
+      index += 1;
+      return { text: 'a' };
+    }
+    index += 1;
+    return { text: char };
+  };
+  const parts = [];
+  if (splitTop(source).length > 1) return sampleFor(splitTop(source)[0], minLength, maxLength);
+  while (index < source.length) {
+    const { text } = atom();
+    let times = 1;
+    const quant = source[index];
+    if (quant === '{') {
+      const end = source.indexOf('}', index);
+      const [min] = source.slice(index + 1, end).split(',');
+      times = Math.max(Number(min) || 0, 1);
+      index = end + 1;
+    } else if (quant === '+') {
+      index += 1;
+    } else if (quant === '*' || quant === '?') {
+      times = 0;
+      index += 1;
+    }
+    parts.push(text.repeat(times));
+  }
+  let sample = parts.join('');
+  while (sample.length < minLength) sample += sample.slice(-1) || 'a';
+  if (maxLength != null && sample.length > maxLength) sample = sample.slice(0, maxLength);
+  try {
+    return new RegExp(`^(?:${pattern})$`).test(sample) ? sample : null;
+  } catch {
+    return null;
+  }
+}
+
+function splitTop(text) {
+  const parts = [];
+  let depth = 0;
+  let current = '';
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (char === '\\') {
+      current += char + (text[i + 1] ?? '');
+      i += 1;
+      continue;
+    }
+    if (char === '(' || char === '[') depth += 1;
+    if (char === ')' || char === ']') depth -= 1;
+    if (char === '|' && depth === 0) {
+      parts.push(current);
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  parts.push(current);
+  return parts;
+}
+
+let nextInt = 0;
+
+/** La expresión JS de un valor de muestra para un campo (o sub-campo) del dominio. */
+function sampleValue(model, field, ctx, salt) {
+  if (field.kind === 'enum') {
+    const enumDef = model.enums.find((e) => e.name === field.namedType);
+    ctx.imports.add(`${field.namedType}|${classPath(DIRS.enums, field.namedType)}`);
+    const value = enumDef.values[enumDef.values.length > 1 ? 1 : 0];
+    return `${field.namedType}.${value.constant}`;
+  }
+  if (field.kind === 'composite') {
+    const vo = model.valueObjects.find((candidate) => candidate.name === field.namedType);
+    if (!vo || vo.fields.some((sub) => sub.kind === 'composite')) return null;
+    ctx.imports.add(`${vo.name}|${classPath(DIRS.valueObjects, vo.name)}`);
+    const args = vo.fields.map((sub) => (sub.list ? `[${sampleValue(model, sub, ctx, `${salt}a`)}]` : sampleValue(model, sub, ctx, salt)));
+    if (args.some((arg) => arg == null || arg === '[null]')) return null;
+    return `new ${vo.name}(${args.join(', ')})`;
+  }
+  const text = field.text ?? {};
+  const numeric = field.numeric ?? {};
+  switch (field.base) {
+    case 'uuid':
+      return `'${randomUUID()}'`;
+    case 'int':
+      // Distintos entre elementos: una posición repetida es un empate, y entonces el orden es del motor.
+      return String((numeric.min != null ? Number(numeric.min) : 7) + nextInt++);
+    case 'long':
+      return '9007199254740993n';
+    case 'decimal': {
+      const scale = numeric.scale ?? 2;
+      ctx.imports.add(`Decimal|src/domain/support/decimal.ts`);
+      const whole = numeric.min != null && Number(numeric.min) > 12 ? String(Math.ceil(Number(numeric.min))) : '12';
+      // Con ceros a la derecha a propósito: la escala es lo que se pierde por el camino.
+      return `Decimal.parse('${scale > 0 ? `${whole}.${'5'.padEnd(scale, '0')}` : whole}')`;
+    }
+    case 'boolean':
+      return 'true';
+    case 'date':
+      return `'2026-03-14'`;
+    case 'timestamp':
+      return `new Date('2026-03-14T09:21:07.482Z')`;
+    case 'json':
+      ctx.imports.add(`RawJson|src/domain/support/raw-json.ts`);
+      return `RawJson.of('{"a":[1,2.50]}')`;
+    default: {
+      const min = text.minLength ?? 0;
+      const max = text.maxLength ?? 40;
+      if (text.pattern) {
+        const sample = sampleFor(text.pattern, min, max);
+        if (sample == null) {
+          ctx.unsampled.push(`${field.name} (${text.pattern})`);
+          return null;
+        }
+        return JSON.stringify(sample);
+      }
+      const base = `${field.name}-${salt}`;
+      return JSON.stringify(base.length > max ? base.slice(0, max) : base.padEnd(min, 'x'));
+    }
+  }
+}
+
+/** La expresión JS de un agregado (o entidad interna) de muestra, con su estado completo. */
+function sampleEntity(model, entity, ctx, salt, depth = 0) {
+  ctx.imports.add(`${entity.name}|${classPath(entityDir(entity), entity.name)}`);
+  const state = [];
+  for (const member of domainMembers(model, entity)) {
+    let value;
+    if (member.kind === 'externalRef') value = `'${randomUUID()}'`;
+    else if (member.kind === 'relationMany') {
+      const child = model.entities.find((candidate) => candidate.name === member.relation.entity);
+      value = depth > 2 || !child ? '[]' : `[${[1, 2].map((n) => sampleEntity(model, child, ctx, `${salt}${n}`, depth + 1)).join(', ')}]`;
+    } else if (member.kind === 'relationOne') {
+      const child = model.entities.find((candidate) => candidate.name === member.relation.entity);
+      value = depth > 2 || !child ? 'null' : sampleEntity(model, child, ctx, `${salt}o`, depth + 1);
+    } else if (member.field.list) {
+      const values = [1, 2].map((n) => sampleValue(model, { ...member.field, list: false, kind: member.field.kind }, ctx, `${salt}${n}`));
+      value = values.some((v) => v == null) ? '[]' : `[${values.join(', ')}]`;
+    } else if (member.field.isId) {
+      value = `'${randomUUID()}'`;
+    } else {
+      value = sampleValue(model, member.field, ctx, salt);
+      if (value == null) value = 'null';
+    }
+    state.push(`${member.name}: ${value}`);
+  }
+  if (entity.usesOptimisticLocking && !entity.declaresLockVersion) state.push(`${LOCK_VERSION.field}: null`);
+  return `new ${entity.name}({ ${state.join(', ')} })`;
+}
+
+// ─── Lo esperado del esquema ─────────────────────────────────────────────────
+
+/** Las tablas, columnas, constraints e índices que el esquema neutral promete para el diseño. */
+function expectedSchema(model, engine) {
+  const tables = new Map();
+  const collation = DATABASES[engine].caseSensitiveCollation ?? null;
+  const table = (name) => {
+    if (!tables.has(name)) tables.set(name, { columns: new Map(), uniques: new Set(), indexes: new Set(), fks: new Set() });
+    return tables.get(name);
+  };
+  const column = (tableName, spec, nullable = spec.nullable) => {
+    table(tableName).columns.set(spec.name, {
+      nullable,
+      length: spec.long ? null : spec.length ?? (spec.textual && !spec.enum ? 255 : spec.enum ? 255 : null),
+      scale: spec.base === 'decimal' ? spec.scale ?? 2 : null,
+      collation: spec.collation ?? null
+    });
+  };
+  for (const entity of model.entities.filter((candidate) => candidate.persisted)) {
+    const t = table(entity.tableName);
+    const members = persistedMembers(model, entity);
+    for (const member of members) {
+      if (member.kind === 'scalar') {
+        column(entity.tableName, member.field.columns);
+        if (member.folded) t.columns.set(member.folded.column, { nullable: !member.folded.required, length: member.folded.maxLength ?? 255, scale: null, collation: null });
+      } else if (member.kind === 'vo') {
+        for (const sub of member.subs) {
+          if (sub.subKind === 'composite' || !sub.sub.columns) continue;
+          column(entity.tableName, { ...sub.sub.columns, name: sub.column }, !(sub.ownerRequired && !sub.sub.columns.nullable));
+        }
+      } else if (member.kind === 'externalRef') {
+        t.columns.set(member.column, { nullable: !member.relation.required, length: null, scale: null, collation: null });
+      } else if (member.kind === 'relationOne') {
+        t.columns.set(joinColumnOf(member.relation), { nullable: !member.relation.required, length: null, scale: null, collation: null });
+        t.fks.add(foreignKeyName(entity.tableName, member.relation.name));
+      } else if (member.kind === 'elementCollection') {
+        const element = elementTable(entity, member);
+        const et = table(element.table);
+        et.fks.add(element.foreignKey);
+        et.indexes.add(element.foreignKeyIndex);
+        if (member.element.kind !== 'vo' && member.field.elementColumns) column(element.table, member.field.elementColumns);
+        for (const index of collectionIndexesOf(entity, members).byMember.get(member.name) ?? []) (index.unique ? et.uniques : et.indexes).add(indexName(entity, index));
+      }
+    }
+    for (const owner of unidirectionalParents(model, entity)) {
+      t.columns.set(owner.column, { nullable: true, length: null, scale: null, collation: null });
+      t.fks.add(owner.foreignKey);
+    }
+    if (entity.usesOptimisticLocking && !entity.declaresLockVersion) t.columns.set(LOCK_VERSION.column, { nullable: true, length: null, scale: null, collation: null });
+    if (entity.auditTimestamps === 'all') for (const audit of AUDIT_COLUMNS.timestamps) t.columns.set(audit.column, { nullable: false, length: null, scale: null, collation: null });
+    for (const entry of uniqueConstraints(model).filter((u) => u.entity === entity.name && !u.when)) {
+      // Los índices únicos de una LISTA viven en su tabla de elementos (arriba).
+      if (collectionIndexesOf(entity, members).handled.has((entity.indexes ?? []).find((index) => indexName(entity, index) === entry.constraint))) continue;
+      t.uniques.add(entry.constraint);
+    }
+    for (const index of (entity.indexes ?? []).filter((candidate) => !candidate.when && !candidate.unique)) {
+      if (collectionIndexesOf(entity, members).handled.has(index)) continue;
+      const probe = [];
+      for (const name of index.fields) columnsFor(model, entity, members, name, probe);
+      if (probe.length === 0) t.indexes.add(indexName(entity, index));
+    }
+    for (const fkColumn of foreignKeyIndexColumns(model, entity, members)) t.indexes.add(foreignKeyIndexName(entity.tableName, fkColumn));
+  }
+  return tables;
+}
+
+// ─── La sonda ────────────────────────────────────────────────────────────────
+
+const distOf = (file) => `./dist/${file.replace(/^src\//, '').replace(/\.ts$/, '.js')}`;
+
+function probeScript(model, engine, db, expected) {
+  const roots = repositoryRoots(model);
+  const ctx = { imports: new Set(), unsampled: [] };
+  const blocks = roots.map((root, index) => rootBlock(model, engine, root, index, ctx));
+  const imports = [...ctx.imports].map((entry) => {
+    const [symbol, file] = entry.split('|');
+    return `import { ${symbol} } from '${distOf(file)}';`;
+  });
+  const adapters = roots.map((root) => `import { ${adapterClass(root)} } from '${distOf(adapterPath(root))}';`);
+  const bounded = roots.map((root) => boundedColumn(model, root)).find(Boolean);
+  // Las colecciones hijas SIN campo de orden: no prometen orden (tampoco en keel-spring, que no les
+  // pone @OrderBy), así que se comparan como conjuntos. Las que lo tienen, en su orden.
+  const unordered = [];
+  for (const entity of model.entities) {
+    for (const relation of entity.relations ?? []) {
+      if (relation.internal && relation.cardinality === 'one-to-many' && !orderingFieldOf(model, relation.entity)) unordered.push(relation.name);
+    }
+  }
+  return {
+    unsampled: [...new Set(ctx.unsampled)],
+    root: roots.map((root) => root.name).join(', '),
+    script: `import 'reflect-metadata';
+import { DataSource } from 'typeorm';
+import { databaseSettings } from './dist/infrastructure/persistence/data-source-options.js';
+import { TransactionContext } from './dist/infrastructure/persistence/transaction-context.js';
+import { translatePersistenceError, OptimisticLockConflict } from './dist/infrastructure/persistence/persistence-errors.js';
+${adapters.join('\n')}
+${imports.join('\n')}
+
+const results = [];
+const check = (name, ok, detail = '') => results.push({ name, ok: Boolean(ok), detail: String(detail) });
+const UNORDERED = new Set(${JSON.stringify(unordered)});
+const values = {
+  'database.url': 'jdbc:${engine}://127.0.0.1:${db.port}/${DB_NAME}',
+  'database.username': '${DB_NAME}',
+  'database.password': '${db.password}',
+  'database.synchronize': true,
+  'database.transaction-timeout': '30s'
+};
+const settings = databaseSettings({ get: (key) => values[key], application: { name: 'db-check' } });
+const dataSource = await new DataSource(settings.options).initialize();
+await dataSource.synchronize(true);
+const tx = new TransactionContext(dataSource, settings);
+
+// ── Esquema: el catálogo del motor contra lo que promete el esquema neutral.
+const expected = ${JSON.stringify([...expected.entries()].map(([name, t]) => [name, { columns: [...t.columns.entries()], uniques: [...t.uniques], indexes: [...t.indexes], fks: [...t.fks] }]))};
+const schema = ${engine === 'postgresql' ? "'public'" : `'${DB_NAME}'`};
+for (const [table, want] of expected) {
+  const columns = await dataSource.query(${engine === 'postgresql'
+    ? "`SELECT column_name AS name, is_nullable AS nullable, character_maximum_length AS length, numeric_scale AS scale, collation_name AS collation FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2`"
+    : "`SELECT COLUMN_NAME AS name, IS_NULLABLE AS nullable, CHARACTER_MAXIMUM_LENGTH AS length, NUMERIC_SCALE AS scale, COLLATION_NAME AS collation, DATA_TYPE AS type FROM information_schema.columns WHERE table_schema = ? AND table_name = ?`"}, [schema, table]);
+  check(\`tabla \${table} existe\`, columns.length > 0);
+  const byName = new Map(columns.map((c) => [c.name, c]));
+  for (const [name, spec] of want.columns) {
+    const got = byName.get(name);
+    if (!got) { check(\`\${table}.\${name} existe\`, false); continue; }
+    const problems = [];
+    if ((got.nullable === 'YES') !== spec.nullable) problems.push(\`nullable \${got.nullable}\`);
+    if (spec.length != null && Number(got.length) !== spec.length) problems.push(\`longitud \${got.length} (diseño \${spec.length})\`);
+    if (spec.scale != null && Number(got.scale) !== spec.scale) problems.push(\`escala \${got.scale} (diseño \${spec.scale})\`);
+    if (spec.collation != null && got.collation !== spec.collation) problems.push(\`collation \${got.collation} (forzada \${spec.collation})\`);
+    check(\`\${table}.\${name} es la columna del diseño\`, problems.length === 0, problems.join(', '));
+  }
+${engine === 'postgresql'
+    ? `  const indexes = (await dataSource.query('SELECT indexname AS name, indexdef AS def FROM pg_indexes WHERE schemaname = $1 AND tablename = $2', [schema, table]));
+  const constraints = (await dataSource.query('SELECT conname AS name, contype AS type FROM pg_constraint c JOIN pg_class t ON c.conrelid = t.oid WHERE t.relname = $1', [table]));
+  const unique = new Set([...constraints.filter((c) => c.type === 'u').map((c) => c.name), ...indexes.filter((i) => /UNIQUE/i.test(i.def)).map((i) => i.name)]);
+  const plain = new Set(indexes.map((i) => i.name));
+  const fks = new Set(constraints.filter((c) => c.type === 'f').map((c) => c.name));`
+    : `  const stats = await dataSource.query('SELECT DISTINCT INDEX_NAME AS name, NON_UNIQUE AS nonUnique FROM information_schema.statistics WHERE table_schema = ? AND table_name = ?', [schema, table]);
+  const unique = new Set(stats.filter((s) => Number(s.nonUnique) === 0).map((s) => s.name));
+  const plain = new Set(stats.map((s) => s.name));
+  const fks = new Set((await dataSource.query("SELECT CONSTRAINT_NAME AS name FROM information_schema.table_constraints WHERE table_schema = ? AND table_name = ? AND CONSTRAINT_TYPE = 'FOREIGN KEY'", [schema, table])).map((r) => r.name));`}
+  for (const name of want.uniques) check(\`\${table}: unicidad \${name} con su nombre\`, unique.has(name), [...unique].join(', '));
+  for (const name of want.indexes) check(\`\${table}: índice \${name}\`, plain.has(name), [...plain].join(', '));
+  for (const name of want.fks) check(\`\${table}: FK \${name}\`, fks.has(name), [...fks].join(', '));
+}
+${bounded ? `
+// ── Cota: lo que el diseño declara imposible lo rechaza el motor, no solo la validación de entrada.
+try {
+  await dataSource.query(${JSON.stringify(`INSERT INTO ${bounded.table} (${bounded.columns.join(', ')}) VALUES (${bounded.values.join(', ')})`)});
+  check('${bounded.table}.${bounded.column} rechaza un texto más largo que ${bounded.max}', false, 'el motor lo aceptó');
+} catch (error) {
+  check('${bounded.table}.${bounded.column} rechaza un texto más largo que ${bounded.max}', /too long|Data too long|22001|1406/i.test(String(error?.driverError?.code ?? '') + String(error?.message)), error?.message);
+}
+` : ''}
+${blocks.join('\n')}
+
+await dataSource.destroy();
+console.log('@@RESULTS@@' + JSON.stringify(results));
+
+/** La fila tal como la guarda el motor, sin pasar por el ORM. */
+async function rawRow(table, id) {
+  ${engine === 'postgresql'
+    ? "const rows = await dataSource.query(`SELECT * FROM \"${table}\" WHERE id = $1`, [id]);"
+    : "const rows = await dataSource.query(`SELECT * FROM \\`${table}\\` WHERE id = UUID_TO_BIN(?)`, [id]);"}
+  return rows[0] ?? null;
+}
+
+function stateOf(entity) {
+  const out = {};
+  let proto = Object.getPrototypeOf(entity);
+  while (proto && proto !== Object.prototype) {
+    for (const [key, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(proto))) {
+      if (descriptor.get && !(key in out)) out[key] = entity[key];
+    }
+    proto = Object.getPrototypeOf(proto);
+  }
+  return out;
+}
+
+/** El estado observable de un valor: getters del agregado, campos de un value object, texto de un decimal. */
+function snapshot(value) {
+  if (value == null) return value;
+  if (typeof value === 'bigint') return \`\${value}n\`;
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return value.map(snapshot);
+  if (typeof value === 'object') {
+    if (value.constructor?.name === 'Decimal') return \`D:\${value.toString()}\`;
+    if (value.constructor?.name === 'RawJson') return \`J:\${value.text}\`;
+    const getters = stateOf(value);
+    const own = Object.keys(getters).length > 0 ? getters : { ...value };
+    const out = {};
+    // La versión y la última modificación las pone la persistencia, no quien guarda.
+    for (const key of Object.keys(own).sort()) {
+      if (key === 'lockVersion' || key === 'updatedAt' || key === 'updatedBy') continue;
+      const item = snapshot(own[key]);
+      out[key] = UNORDERED.has(key) && Array.isArray(item) ? [...item].sort((a, b) => String(a?.id).localeCompare(String(b?.id))) : item;
+    }
+    return out;
+  }
+  return value;
+}
+
+function differences(a, b, at = '') {
+  if (JSON.stringify(a) === JSON.stringify(b)) return [];
+  if (a && b && typeof a === 'object' && typeof b === 'object') {
+    const keys = [...new Set([...Object.keys(a), ...Object.keys(b)])];
+    return keys.flatMap((key) => differences(a[key], b[key], at ? \`\${at}.\${key}\` : key));
+  }
+  return [\`\${at}: \${JSON.stringify(a)} → \${JSON.stringify(b)}\`];
+}
+`
+  };
+}
+
+/** Lo que se comprueba de una raíz: ida y vuelta, la fila en crudo, versión, unicidad, página y borrado. */
+function rootBlock(model, engine, root, index, ctx) {
+  const first = sampleEntity(model, root, ctx, `${index}a`);
+  const second = sampleEntity(model, root, ctx, `${index}b`);
+  const finder = naturalKeyFinder(model, root);
+  const name = root.name;
+  const paginated = model.services.some((group) => group.entity === root.name && group.operations.some((op) => op.paginated));
+  // Lo que solo se ve en la fila cruda: el enum por su CONSTANTE y el decimal con su escala.
+  const raw = [];
+  for (const member of persistedMembers(model, root)) {
+    if (member.kind === 'scalar' && member.field.kind === 'enum') {
+      ctx.imports.add(`${member.field.namedType}|${classPath(DIRS.enums, member.field.namedType)}`);
+      raw.push(`  check('${name}.${member.name}: el motor guarda la CONSTANTE del enum', row?.['${member.field.columns.name}'] === Object.entries(${member.field.namedType}).find(([, v]) => v === original.${member.name})?.[0], row?.['${member.field.columns.name}']);`);
+    } else if (member.kind === 'scalar' && member.field.base === 'decimal') {
+      raw.push(`  check('${name}.${member.name}: el motor guarda el decimal con su escala', String(row?.['${member.field.columns.name}']) === original.${member.name}?.toString(), row?.['${member.field.columns.name}']);`);
+    } else if (member.kind === 'vo') {
+      for (const sub of member.subs.filter((s) => s.sub.base === 'decimal')) {
+        raw.push(`  check('${name}.${member.name}.${sub.voAccessor}: el motor guarda el decimal con su escala', String(row?.['${sub.column}']) === original.${member.name}?.${sub.voAccessor}?.toString(), row?.['${sub.column}']);`);
+      }
+    }
+  }
+  return `
+// ═══ ${name} ═══
+{
+  const repository = new ${adapterClass(root)}(tx);
+  const original = ${first};
+  await repository.save(original);
+  const loaded = await repository.findById(original.id);
+  check('${name}: findById devuelve lo que se guardó', loaded != null);
+  const diff = differences(snapshot(original), snapshot(loaded));
+  check('${name}: ida y vuelta sin perder nada (escala, uuid, fechas, enums, orden)', diff.length === 0, diff.slice(0, 6).join(' | '));
+  const row = await rawRow('${root.tableName}', original.id);
+  check('${name}: la fila está en ${root.tableName}', row != null);
+${raw.join('\n')}
+${root.usesOptimisticLocking ? `  check('${name}: nace con la versión 0', loaded?.lockVersion === 0, loaded?.lockVersion);
+  // La misma lectura guardada dos veces: la segunda escribe sobre una versión que ya no existe.
+  await repository.save(loaded);
+  try {
+    await repository.save(loaded);
+    check('${name}: guardar una lectura obsoleta es un conflicto de concurrencia', false, 'se guardó');
+  } catch (error) {
+    const translated = translatePersistenceError(error);
+    check('${name}: guardar una lectura obsoleta es un conflicto de concurrencia', error instanceof OptimisticLockConflict && translated?.httpStatus === 409, translated?.code ?? error?.message);
+  }` : ''}
+${finder ? `  const found = await repository.${finder.name}(${finder.params.map((param) => `original.${param.name}`).join(', ')});
+  check('${name}: el finder de la clave natural encuentra el agregado', found?.id === original.id);
+  const rival = ${second};
+  const clash = new ${name}({ ...stateOf(rival), ${finder.params.map((param) => `${param.name}: original.${param.name}`).join(', ')} });
+  try {
+    await repository.save(clash);
+    check('${name}: la clave natural duplicada la rechaza el motor', false, 'se guardó');
+  } catch (error) {
+    const translated = translatePersistenceError(error);
+    check('${name}: la clave natural duplicada sale como el error del diseño', translated && translated !== 'integrity' && translated !== 'timeout' && translated.httpStatus === 409, translated?.code ?? translated ?? error?.message);
+  }` : ''}
+${paginated ? `  const page = await repository.list({ page: 0, size: 5, sort: [] });
+  check('${name}: list devuelve la página con su total', page.totalElements >= 1 && page.items.length >= 1 && page.totalPages >= 1, JSON.stringify({ total: page.totalElements, n: page.items.length }));` : ''}
+  await repository.deleteById(original.id);
+  check('${name}: deleteById borra el agregado y su grafo', (await repository.findById(original.id)) == null);
+}`;
+}
+
+/** Una columna de texto acotada de la raíz y una fila mínima que la desborda. */
+function boundedColumn(model, root) {
+  const members = persistedMembers(model, root);
+  const bounded = members.find((m) => m.kind === 'scalar' && !m.field.isId && m.field.columns?.length != null && m.field.columns.length < 1000 && !m.field.columns.enum && !m.folded);
+  if (!bounded) return null;
+  // Solo si las demás columnas obligatorias se pueden rellenar con un literal neutro.
+  const required = [];
+  for (const member of members) {
+    if (member.kind === 'scalar') {
+      const spec = member.field.columns;
+      if (member === bounded) continue;
+      if (spec.nullable && !member.field.isId) continue;
+      const literal = literalFor(spec, member, model);
+      if (literal == null) return null;
+      required.push([spec.name, literal]);
+      if (member.folded && member.folded.required) required.push([member.folded.column, `'x'`]);
+    } else if (member.kind === 'vo') {
+      for (const sub of member.subs) {
+        if (!sub.sub.columns || sub.sub.columns.nullable || !sub.ownerRequired) continue;
+        const literal = literalFor(sub.sub.columns, { field: sub.sub }, model);
+        if (literal == null) return null;
+        required.push([sub.column, literal]);
+      }
+    } else if (member.kind === 'externalRef' && member.relation.required) {
+      required.push([member.column, uuidLiteral(model)]);
+    }
+  }
+  if (root.auditTimestamps === 'all') for (const audit of AUDIT_COLUMNS.timestamps) required.push([audit.column, 'CURRENT_TIMESTAMP']);
+  const max = bounded.field.columns.length;
+  return {
+    table: root.tableName,
+    column: bounded.field.columns.name,
+    max,
+    columns: [bounded.field.columns.name, ...required.map(([name]) => name)].map((name) => quoted(model, name)),
+    values: [`'${'x'.repeat(max + 1)}'`, ...required.map(([, value]) => value)]
+  };
+}
+
+function quoted(model, name) {
+  return model.stack?.database === 'mysql' ? `\`${name}\`` : `"${name}"`;
+}
+
+function uuidLiteral(model) {
+  const literal = DATABASES[model.stack?.database ?? 'postgresql'].uuidLiteral;
+  return `${literal.prefix}${randomUUID()}${literal.suffix}`;
+}
+
+function literalFor(spec, member, model) {
+  if (spec.enum) {
+    const enumDef = model.enums.find((e) => e.name === member.field.namedType);
+    return `'${enumDef?.values?.[0]?.constant ?? 'X'}'`;
+  }
+  switch (spec.base) {
+    case 'uuid':
+      return uuidLiteral(model);
+    case 'int':
+    case 'long':
+    case 'decimal':
+      return '1';
+    case 'boolean':
+      return 'true';
+    case 'date':
+      return `'2026-03-14'`;
+    case 'timestamp':
+      return 'CURRENT_TIMESTAMP';
+    default:
+      return `'x'`;
+  }
+}
+
+// ─── Orquestación ────────────────────────────────────────────────────────────
+
+const runtime = resolveRuntime();
+if (!runtime) {
+  console.error('No hay podman ni docker en marcha: este check los necesita; el resto de la suite no.');
+  process.exit(2);
+}
+
+// Un proyecto real para el node_modules (TypeORM y los DOS drivers), que comparten todos los sujetos.
+const workspace = makeWorkspace('keel-nest-db-check-');
+mountDesign(workspace, NEST_READY_DESIGN.name, NEST_READY_DESIGN);
+const generated = await runCommand(workspace, build, `specs/${NEST_READY_DESIGN.name}`, { defaults: true, acceptUnready: true });
+const projectDir = path.join(workspace, 'services', `${NEST_READY_DESIGN.name}-nest`);
+if (!step('build genera el proyecto de referencia', generated.exitCode === undefined, generated.output.slice(0, 400))) process.exit(1);
+const install = run('npm', ['install', '--no-audit', '--no-fund', 'mysql2', 'pg'], { cwd: projectDir });
+if (!step('npm install (TypeORM y los drivers)', install.status === 0, install.status === 0 ? '' : install.stderr.slice(-800))) process.exit(1);
+const tsc = path.join(projectDir, 'node_modules', 'typescript', 'bin', 'tsc');
+
+for (const engine of ENGINES) {
+  let db;
+  try {
+    db = await startDatabase(runtime, engine);
+    step(`${engine}: el motor arranca (${DATABASES[engine].image})`, true, `puerto ${db.port}`);
+  } catch (error) {
+    step(`${engine}: el motor arranca`, false, error.message);
+    continue;
+  }
+  try {
+    for (const subject of SUBJECTS) {
+      const { manifest, layers } = loadService(path.join(FIXTURES_DIR, subject));
+      const { files, model } = planService({ manifest, layers, workspace, stack: { database: engine } });
+      if (repositoryRoots(model).length === 0) continue;
+      const dir = path.join(workspace, 'db-check', engine, subject);
+      for (const file of files) {
+        const out = path.join(dir, file.path);
+        fs.mkdirSync(path.dirname(out), { recursive: true });
+        fs.writeFileSync(out, file.content);
+      }
+      fs.symlinkSync(path.join(projectDir, 'node_modules'), path.join(dir, 'node_modules'), 'junction');
+      const compiled = run(process.execPath, [tsc, '-p', 'tsconfig.build.json'], { cwd: dir });
+      if (!step(`${engine} · ${subject}: compila`, compiled.status === 0, compiled.stdout.slice(0, 600))) continue;
+      const expected = expectedSchema(model, engine);
+      const probe = probeScript(model, engine, db, expected);
+      fs.writeFileSync(path.join(dir, 'db-probe.mjs'), probe.script);
+      // Cada sujeto sobre un esquema limpio: la sonda sincroniza con drop.
+      const result = run(process.execPath, ['db-probe.mjs'], { cwd: dir, timeout: 180_000 });
+      const marker = result.stdout.split('@@RESULTS@@')[1];
+      if (!marker) {
+        step(`${engine} · ${subject}: la sonda corre`, false, (result.stderr || result.stdout).slice(-3000));
+        continue;
+      }
+      const checks = JSON.parse(marker);
+      const failed = checks.filter((check) => !check.ok);
+      for (const check of failed) console.log(`        ✘ ${check.name}${check.detail ? ` — ${check.detail}` : ''}`);
+      step(
+        `${engine} · ${subject} (${probe.root}): esquema, cota, ida y vuelta, versión, unicidad`,
+        failed.length === 0,
+        `${checks.length - failed.length}/${checks.length}${probe.unsampled.length > 0 ? `; sin muestra: ${probe.unsampled.join(', ')}` : ''}`
+      );
+    }
+  } finally {
+    if (!keep) run(runtime, ['rm', '-f', db.name]);
+    else console.log(`(contenedor conservado: ${db.name}, puerto ${db.port})`);
+  }
+}
+
+if (keep) {
+  const kept = fs.mkdtempSync(path.join(os.tmpdir(), 'keel-nest-db-check-'));
+  fs.cpSync(path.join(workspace, 'db-check'), kept, { recursive: true, filter: (source) => !source.includes('node_modules') });
+  console.log(`Sujetos conservados en ${kept}`);
+}
+const failedSteps = results.filter((result) => !result.ok).length;
+console.log(failedSteps === 0 ? `\ndb-check: ${results.length}/${results.length} en verde.` : `\ndb-check: ${failedSteps} paso(s) en rojo.`);
+process.exit(failedSteps === 0 ? 0 : 1);

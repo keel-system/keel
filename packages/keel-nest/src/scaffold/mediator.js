@@ -15,12 +15,14 @@
 //
 // La inyección de los handlers y mappers tampoco puede usar @Inject (es de Nest): cada clase declara
 // `static readonly inject = [...]` con sus dependencias en el orden del constructor, y el módulo de
-// infraestructura construye cada una con un factory provider. La frontera transaccional llega con la
-// persistencia (incremento 6); hasta entonces `dispatchWithoutTransaction` es el mismo despacho, y
-// existe ya para que el scheduler (incremento 10) no tenga que preguntar por la capa.
+// infraestructura construye cada una con un factory provider. Con persistencia relacional el despacho
+// abre la transacción del caso de uso (incremento 6); sin ella `dispatchWithoutTransaction` es el
+// mismo despacho, y existe igual para que el scheduler (incremento 10) no pregunte por la capa.
 
 import { DIRS, classPath, tsModule } from './render.js';
 import { DOMAIN_EXCEPTION_TS } from './exceptions.js';
+import { usesRelational } from './persistence-entities.js';
+import { TRANSACTION_CONTEXT_TS, PERSISTENCE_ERRORS_TS } from './repositories.js';
 
 export const MESSAGES_TS = classPath(DIRS.interfaces, 'Messages');
 export const HANDLERS_TS = classPath(DIRS.interfaces, 'Handlers');
@@ -49,6 +51,8 @@ export function applicationClasses(model) {
 
 export function generate(model, { mappers = [] } = {}) {
   if (!usesMediator(model)) return [];
+  // Con persistencia relacional, el despacho abre la transacción del caso de uso.
+  const transactional = usesRelational(model);
   const files = [
     { path: MESSAGES_TS, content: tsModule(MESSAGES_TS, [], messagesBody()) },
     { path: HANDLERS_TS, content: tsModule(HANDLERS_TS, [{ symbol: 'Command', from: MESSAGES_TS, type: true }, { symbol: 'Query', from: MESSAGES_TS, type: true }, { symbol: 'ReturningCommand', from: MESSAGES_TS, type: true }], handlersBody()) },
@@ -67,8 +71,16 @@ export function generate(model, { mappers = [] } = {}) {
       { symbol: 'Query', from: MESSAGES_TS, type: true },
       { symbol: 'ReturningCommand', from: MESSAGES_TS, type: true },
       { symbol: 'DomainException', from: DOMAIN_EXCEPTION_TS },
-      { symbol: 'UseCaseContainer', from: CONTAINER_TS }
-    ], mediatorBody()) }
+      { symbol: 'UseCaseContainer', from: CONTAINER_TS },
+      ...(transactional
+        ? [
+            { symbol: 'Query', from: MESSAGES_TS },
+            { symbol: 'TransactionContext', from: TRANSACTION_CONTEXT_TS },
+            { symbol: 'isTransientWriteConflict', from: PERSISTENCE_ERRORS_TS },
+            { symbol: 'WriteConflictExhausted', from: PERSISTENCE_ERRORS_TS }
+          ]
+        : [])
+    ], mediatorBody(transactional)) }
   ];
   files.push(...commandDispatcher(model));
   files.push(moduleFile(model, mappers));
@@ -91,6 +103,13 @@ function useCasesTest(model) {
     })
     .join('\n');
   const rows = operations.map((operation) => `  ['${operation.name}', ${operation.messageClass}]`).join(',\n');
+  // Con persistencia, los handlers inyectan sus puertos: el módulo de persistencia del perfil test (sin
+  // base de datos) los provee, y quien los use de verdad recibe un error que lo dice.
+  const persistence = usesRelational(model);
+  const persistenceImports = persistence
+    ? "\nimport { PersistenceModule } from '../src/infrastructure/persistence/persistence-module.js';\nimport { loadConfiguration } from '../src/infrastructure/config/configuration.js';"
+    : '';
+  const modules = persistence ? "PersistenceModule.register(loadConfiguration({ ...process.env, PROFILE: 'test' })), UseCaseModule" : 'UseCaseModule';
   return `import 'reflect-metadata';
 import { Test } from '@nestjs/testing';
 import { describe, expect, it, beforeAll } from 'vitest';
@@ -98,7 +117,7 @@ import { UseCaseModule } from '../src/infrastructure/usecase/use-case-module.js'
 import { UseCaseMediator } from '../src/infrastructure/usecase/use-case-mediator.js';
 import { UseCaseContainer } from '../src/infrastructure/usecase/use-case-container.js';
 import { Handles } from '../src/application/annotations/application-component.js';
-import { Command } from '../src/application/interfaces/messages.js';
+import { Command } from '../src/application/interfaces/messages.js';${persistenceImports}
 ${imports}
 
 const OPERATIONS = [
@@ -109,7 +128,7 @@ describe('casos de uso', () => {
   let mediator: UseCaseMediator;
 
   beforeAll(async () => {
-    const moduleRef = await Test.createTestingModule({ imports: [UseCaseModule] }).compile();
+    const moduleRef = await Test.createTestingModule({ imports: [${modules}] }).compile();
     mediator = moduleRef.get(UseCaseMediator);
   });
 
@@ -261,7 +280,63 @@ export class UseCaseContainer {
 }`;
 }
 
-function mediatorBody() {
+function mediatorBody(transactional) {
+  const transactionDoc = transactional
+    ? ` * La frontera transaccional del diseño también vive aquí: cada Query corre en una transacción de
+ * SOLO LECTURA y cada Command en una de escritura (TransactionContext), y los adaptadores de
+ * repositorio se unen a ella sin que el handler la vea. Una escritura que pierde un interbloqueo se
+ * reintenta entera; agotados los intentos, sale como conflicto de concurrencia (409).`
+    : ` * La frontera transaccional del diseño (las Query en lectura, los Command en escritura) se instala
+ * aquí con la persistencia; los handlers no la verán nunca.`;
+  const ctor = transactional
+    ? `  constructor(
+    @Inject(UseCaseContainer) private readonly container: UseCaseContainer,
+    @Inject(TransactionContext) private readonly transactions: TransactionContext
+  ) {}`
+    : '  constructor(@Inject(UseCaseContainer) private readonly container: UseCaseContainer) {}';
+  const without = transactional
+    ? '   * confirmar el desenlace).'
+    : '   * confirmar el desenlace). Hasta que haya persistencia es el mismo despacho que `dispatch`.';
+  const invoke = transactional
+    ? 'const result = transactional ? await this.inTransaction(message, () => handler.handle(message as never)) : await handler.handle(message as never);'
+    : 'const result = await handler.handle(message as never);';
+  const params = transactional ? 'message: Dispatchable, transactional: boolean' : 'message: Dispatchable, _transactional: boolean';
+  const transactionHelpers = transactional
+    ? `
+
+  /**
+   * La transacción del caso de uso. Dentro de una transacción AJENA (un handler que despacha otro por
+   * el CommandDispatcher) se une a ella y no reintenta: la del llamante ya quedó marcada para revertir,
+   * y repetir el handler ahí solo cambiaría el error por otro más confuso.
+   *
+   * El reintento repite el handler ENTERO, así que dentro de la transacción no puede haber efectos que
+   * salgan del proceso (llamar a un proveedor, mandar un correo): se verían duplicados.
+   */
+  private async inTransaction<T>(message: Dispatchable, work: () => Promise<T>): Promise<T> {
+    const readOnly = message instanceof Query;
+    if (readOnly || this.transactions.active) return this.transactions.inTransaction(() => work(), { readOnly });
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await this.transactions.inTransaction(() => work());
+      } catch (error) {
+        if (!isTransientWriteConflict(error)) throw error;
+        if (attempt >= WRITE_CONFLICT_ATTEMPTS) throw new WriteConflictExhausted(attempt, error);
+        this.log.debug(\`Conflicto de escritura transitorio (intento \${attempt}): se reintenta la transacción\`);
+        await pause(attempt);
+      }
+    }
+  }`
+    : '';
+  const transactionTail = transactional
+    ? `
+
+/** Intentos de una transacción de escritura que pierde un conflicto transitorio (interbloqueo). */
+const WRITE_CONFLICT_ATTEMPTS = 3;
+
+function pause(attempt: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 10 * attempt + Math.floor(Math.random() * 10)));
+}`
+    : '';
   return `/**
  * Fachada única de despacho de casos de uso: resuelve el handler registrado para la clase del
  * mensaje y lo invoca. Los controladores dependen solo de este componente, no de los handlers.
@@ -270,31 +345,30 @@ function mediatorBody() {
  * barridos programados y los mensajes consumidos—, y por eso es aquí donde vive el LOG DE FRONTERA
  * de cada caso de uso: operación, resultado y duración.
  *
- * La frontera transaccional del diseño (las Query en lectura, los Command en escritura) se instala
- * aquí con la persistencia (incremento 6 de PLAN-KEEL-NEST.md); los handlers no la verán nunca.
+${transactionDoc}
  */
 @Injectable()
 export class UseCaseMediator {
   private readonly log = new Logger(UseCaseMediator.name);
 
-  constructor(@Inject(UseCaseContainer) private readonly container: UseCaseContainer) {}
+${ctor}
 
   dispatch<R>(message: Query<R> | ReturningCommand<R>): Promise<R>;
   dispatch(message: Command): Promise<void>;
   dispatch(message: Dispatchable): Promise<unknown> {
-    return this.run(message);
+    return this.run(message, true);
   }
 
   /**
    * Despacha SIN transacción abarcadora: las abre el adaptador de repositorio en cada llamada, así
    * que quien despacha controla dónde cae cada commit. Es para los barridos que llaman a un
    * proveedor EN MEDIO de su trabajo (reclamar y confirmar, llamar fuera de toda transacción,
-   * confirmar el desenlace). Hasta que haya persistencia es el mismo despacho que \`dispatch\`.
+${without}
    */
   dispatchWithoutTransaction<R>(message: Query<R> | ReturningCommand<R>): Promise<R>;
   dispatchWithoutTransaction(message: Command): Promise<void>;
   dispatchWithoutTransaction(message: Dispatchable): Promise<unknown> {
-    return this.run(message);
+    return this.run(message, false);
   }
 
   /**
@@ -303,12 +377,12 @@ export class UseCaseMediator {
    * resultado esperado— y error si falló. La pila de un fallo NO va aquí: la imprime el adaptador
    * por el que entró, y con las dos cada fallo saldría duplicado.
    */
-  private async run(message: Dispatchable): Promise<unknown> {
+  private async run(${params}): Promise<unknown> {
     const operation = message.constructor.name;
     const handler = this.container.resolve(message);
     const start = performance.now();
     try {
-      const result = await handler.handle(message as never);
+      ${invoke}
       this.log.debug(\`Caso de uso \${operation}: ok (\${elapsed(start)} ms)\`);
       return result;
     } catch (error) {
@@ -320,12 +394,12 @@ export class UseCaseMediator {
       }
       throw error;
     }
-  }
+  }${transactionHelpers}
 }
 
 function elapsed(start: number): number {
   return Math.round(performance.now() - start);
-}`;
+}${transactionTail}`;
 }
 
 /**

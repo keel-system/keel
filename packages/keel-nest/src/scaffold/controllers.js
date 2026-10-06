@@ -21,7 +21,23 @@ import { PAGED_RESPONSE_TS } from './dtos.js';
 import { REQUEST_READING_TS, ROUTES_TS, usesApi } from './rest-support.js';
 
 export const VALUE_READERS_TS = 'src/infrastructure/rest/value-readers.ts';
+export const PAGEABLE_READING_TS = 'src/infrastructure/rest/pageable-reading.ts';
 const CONTROLLERS_DIR = 'infrastructure/rest/controllers';
+
+// Los defaults del Pageable de keel-spring: `@PageableDefault` sin tamaño es 10 (la anotación gana a
+// `spring.data.web.pageable.default-page-size`), y el tope de Spring Data sin `max-page-size` es 2000.
+const PAGEABLE_DEFAULT_SIZE = 10;
+const PAGEABLE_MAX_SIZE = 2000;
+
+/**
+ * El orden por defecto del diseño (`output.sort`) que se puede aplicar sin más: un criterio sobre un
+ * agregado embebido necesita un join que lo resuelva, y entonces no se traduce (lo avisa el modelo).
+ */
+function translatableSort(operation) {
+  const sort = operation.sort ?? [];
+  if (sort.length === 0 || sort.some((criterion) => criterion.embedded)) return [];
+  return sort;
+}
 
 const DECORATOR_BY_METHOD = { GET: 'Get', POST: 'Post', PUT: 'Put', PATCH: 'Patch', DELETE: 'Delete' };
 
@@ -41,8 +57,79 @@ export function generate(model) {
     if (routed.length > 0) files.push(renderController(model, service, routed));
   }
   if ((model.valueObjects ?? []).length > 0) files.push(valueReaders(model));
+  const pageable = (model.services ?? []).some((service) =>
+    (service.operations ?? []).some((operation) => operation.route && messageComponents(model, operation).some((c) => c.pageable))
+  );
+  if (pageable) files.push({ path: PAGEABLE_READING_TS, content: pageableReading() });
   files.push(routesFile(model));
   return files;
+}
+
+/**
+ * La lectura del Pageable con la semántica del PageableHandlerMethodArgumentResolver de Spring Data,
+ * que es indulgente a propósito: una página o un tamaño que no se pueden leer no son un 400 sino el
+ * valor por defecto, una página negativa es la 0 y un tamaño por encima del tope es el tope.
+ */
+function pageableReading() {
+  const body = `export interface PageableDefaults {
+  readonly defaultSize: number;
+  readonly maxSize: number;
+  /** El orden del diseño (output.sort), si el cliente no pide uno. */
+  readonly defaultSort?: readonly SortOrder[];
+}
+
+/** \`?page=&size=&sort=prop,dir\` → Pageable, como lo lee Spring Data. */
+export function readPageable(query: Record<string, unknown>, defaults: PageableDefaults): Pageable {
+  const page = parseBounded(first(query['page']), Number.MAX_SAFE_INTEGER) ?? 0;
+  let size = parseBounded(first(query['size']), defaults.maxSize) ?? defaults.defaultSize;
+  if (size < 1) size = defaults.defaultSize;
+  if (size > defaults.maxSize) size = defaults.maxSize;
+  const sort = readSort(query['sort']);
+  return { page, size, sort: sort.length > 0 ? sort : [...(defaults.defaultSort ?? [])] };
+}
+
+function first(value: unknown): string | undefined {
+  if (Array.isArray(value)) return value.length > 0 ? String(value[0]) : undefined;
+  return value == null ? undefined : String(value);
+}
+
+/**
+ * Un entero con los límites de Spring Data: sin texto no hay valor (se usa el default); lo que no es
+ * un entero de Java se lee como 0; negativo, 0; por encima del tope, el tope.
+ */
+function parseBounded(text: string | undefined, upper: number): number | null {
+  if (text == null || text.trim() === '') return null;
+  if (!/^[+-]?\\d+$/.test(text)) return 0;
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed > 2147483647 || parsed < -2147483648) return 0;
+  return parsed < 0 ? 0 : parsed > upper ? upper : parsed;
+}
+
+/**
+ * \`sort\` repetido o con varias propiedades: \`name,desc\`, \`status,name\`. La última pieza es la
+ * dirección si lo es (sin distinguir mayúsculas) y vale para todas las propiedades de ese valor.
+ */
+function readSort(raw: unknown): SortOrder[] {
+  const values = Array.isArray(raw) ? raw.map(String) : raw == null ? [] : [String(raw)];
+  const orders: SortOrder[] = [];
+  for (const value of values) {
+    const parts = value.split(',').filter((part) => part.trim() !== '');
+    if (parts.length === 0) continue;
+    const last = parts[parts.length - 1]!.trim().toLowerCase();
+    const direction = last === 'asc' || last === 'desc' ? last : null;
+    const properties = direction ? parts.slice(0, -1) : parts;
+    for (const property of properties) orders.push({ property, direction: direction ?? 'asc' });
+  }
+  return orders;
+}`;
+  return tsModule(
+    PAGEABLE_READING_TS,
+    [
+      { symbol: 'Pageable', from: 'src/domain/repository/page.ts', type: true },
+      { symbol: 'SortOrder', from: 'src/domain/repository/page.ts', type: true }
+    ],
+    body
+  );
 }
 
 /** Ruta del diseño (`/products/{id}`) en la sintaxis de Nest (`products/:id`). */
@@ -201,7 +288,8 @@ function renderReader(model, operation, name, imports) {
   for (const component of components) {
     if (fromPath.has(component.name)) continue;
     if (component.resolvedIdentity || component.file) continue;
-    // La página no es un campo del diseño: la leen las dos líneas de abajo.
+    // La página no es un campo del diseño: la leen las líneas de abajo.
+    if (component.pageable) continue;
     if (operation.paginated && ['page', 'size'].includes(component.name) && !operation.bodyFields.some((f) => f.name === component.name)) continue;
     for (const imp of readerImports(model, component)) imports.push(imp);
     const rules = component.inputValidation ?? [];
@@ -224,8 +312,18 @@ function renderReader(model, operation, name, imports) {
     }
   }
 
-  // La paginación sin persistencia: dos enteros de la query con sus defaults (también con cuerpo).
-  if (operation.paginated) {
+  // La paginación con persistencia: el Pageable de Spring Data (página, tamaño y orden), con el orden
+  // por defecto del diseño cuando el cliente no pide uno.
+  if (components.some((component) => component.pageable)) {
+    imports.push({ symbol: 'readPageable', from: PAGEABLE_READING_TS });
+    const defaults = [`defaultSize: ${model.pagination?.defaultSize ?? PAGEABLE_DEFAULT_SIZE}`, `maxSize: ${model.pagination?.maxSize ?? PAGEABLE_MAX_SIZE}`];
+    const order = translatableSort(operation);
+    if (order.length > 0) {
+      defaults.push(`defaultSort: [${order.map((c) => `{ property: ${tsString(c.property)}, direction: ${tsString(c.direction)} }`).join(', ')}]`);
+    }
+    lines.push(`  const pageable = readPageable(query, { ${defaults.join(', ')} });`);
+  } else if (operation.paginated) {
+    // La paginación sin persistencia: dos enteros de la query con sus defaults (también con cuerpo).
     use('text');
     lines.push(`  const page = text.int(query['page']) ?? 0;`);
     lines.push(`  const size = text.int(query['size']) ?? ${model.pagination?.defaultSize ?? 20};`);
@@ -239,6 +337,8 @@ function renderReader(model, operation, name, imports) {
     } else if (component.file) {
       value = `unsupported('la subida multipart llega con la capa storage (incremento 13 de keel-nest)')`;
       use('unsupported');
+    } else if (component.pageable) {
+      value = component.name;
     } else if (component.list) {
       value = `${component.name} ?? []`;
     } else if (partial && asBody && !fromPath.has(component.name) && !component.required) {
@@ -292,7 +392,10 @@ function routesFile(model) {
       const fromPath = new Set((operation.pathParams ?? []).map((param) => param.name));
       const query = asBody
         ? []
-        : messageComponents(model, operation).filter((c) => !fromPath.has(c.name) && !c.resolvedIdentity && !c.file).map((c) => c.name);
+        : messageComponents(model, operation)
+            .filter((c) => !fromPath.has(c.name) && !c.resolvedIdentity && !c.file)
+            // El Pageable viaja como los tres parámetros de Spring Data.
+            .flatMap((c) => (c.pageable ? ['page', 'size', 'sort'] : [c.name]));
       rows.push(
         `  { operation: ${tsString(operation.name)}, method: ${tsString(operation.route.method)}, path: ${tsString(`${model.api.routeBase}${operation.route.path}`)}, ` +
           `status: ${operation.route.status}, location: ${returnsLocation(model, operation)}, query: [${query.map(tsString).join(', ')}], ` +
