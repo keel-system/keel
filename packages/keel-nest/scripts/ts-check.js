@@ -13,8 +13,8 @@
 //
 // --keep deja el proyecto generado (y dice dónde) para inspeccionarlo.
 //
-// Además del diseño de referencia, compila con `strict` el árbol que emite build para TODAS las
-// fixtures (planService, sin la frontera de build: el dominio y la aplicación de cualquier diseño
+// Además del diseño de referencia, compila con `strict` y ejecuta las pruebas emitidas del árbol que
+// emite build para TODAS las fixtures (planService, sin la frontera de build: el dominio y la aplicación de cualquier diseño
 // tienen que compilar aunque su API o su persistencia aún no se generen), reutilizando el
 // node_modules ya instalado. Es lo que dice que las trece siluetas compilan, no solo una.
 
@@ -105,7 +105,9 @@ for (const [name, args] of [
 
 // Las trece siluetas: cada fixture entera, renderizada al lado y compilada con el mismo node_modules.
 const tsc = path.join(projectDir, 'node_modules', 'typescript', 'bin', 'tsc');
+const vitest = path.join(projectDir, 'node_modules', 'vitest', 'vitest.mjs');
 const failedFixtures = [];
+const failedTests = [];
 for (const name of fs.readdirSync(FIXTURES_DIR)) {
   const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
   const { files } = planService({ manifest, layers, workspace: workspace });
@@ -120,12 +122,24 @@ for (const name of fs.readdirSync(FIXTURES_DIR)) {
   if (run.status !== 0) {
     failedFixtures.push(name);
     console.error(`--- ${name}\n${run.stdout}${run.stderr}`);
+    continue;
+  }
+  // Y sus pruebas emitidas: el servidor de esa silueta arranca y su API cumple el contrato.
+  const tests = spawnSync(process.execPath, [vitest, 'run'], { cwd: dir, encoding: 'utf8', env: { ...process.env, PROFILE: 'test' } });
+  if (tests.status !== 0) {
+    failedTests.push(name);
+    console.error(`--- ${name} (pruebas)\n${tests.stdout}${tests.stderr}`);
   }
 }
 step(
-  'dominio y aplicación de TODAS las fixtures compilan con strict',
+  'dominio, aplicación y API de TODAS las fixtures compilan con strict',
   failedFixtures.length === 0,
   failedFixtures.length > 0 ? `en rojo: ${failedFixtures.join(', ')}` : `${fs.readdirSync(FIXTURES_DIR).length} fixtures`
+);
+step(
+  'las pruebas emitidas de TODAS las fixtures pasan (arranque, casos de uso y API)',
+  failedTests.length === 0 && failedFixtures.length === 0,
+  failedTests.length > 0 ? `en rojo: ${failedTests.join(', ')}` : ''
 );
 
 if (results.every((result) => result.ok)) {
@@ -144,6 +158,19 @@ if (results.every((result) => result.ok)) {
   step('arranca y GET /livez → 200 {"status":"UP"}', livez?.status === 200 && livez.body === '{"status":"UP"}', livez ? `${livez.status} ${livez.body}` : 'no respondió en 30 s');
   const readyz = await get(port, '/readyz');
   step('GET /readyz → 200 {"status":"UP"}', readyz?.status === 200 && readyz.body === '{"status":"UP"}', readyz ? `${readyz.status} ${readyz.body}` : 'sin respuesta');
+  // La API del servidor arrancado: una ruta que no existe responde con el ErrorResponse del contrato.
+  const missing = await get(port, '/api/v1/keel-ruta-que-no-existe');
+  let missingBody = null;
+  try {
+    missingBody = JSON.parse(missing?.body ?? 'null');
+  } catch {
+    missingBody = null;
+  }
+  step(
+    'GET de una ruta de la API que no existe → 404 con ErrorResponse',
+    missing?.status === 404 && missingBody?.status === 404 && missingBody?.error === 'Not Found' && typeof missingBody?.correlationId === 'string',
+    missing ? `${missing.status} ${missing.body}` : 'sin respuesta'
+  );
 
   app.kill('SIGTERM');
   const end = await Promise.race([exited, new Promise((resolve) => setTimeout(() => resolve(null), 15_000))]);

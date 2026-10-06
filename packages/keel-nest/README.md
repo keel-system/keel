@@ -40,7 +40,7 @@ puerta del diseño, el cuestionario del stack, la escritura con manifiesto (`--r
 `--check`, `--force`), el catálogo de infraestructura, los destinos físicos de mensajería y los
 vocabularios de las sondas del arnés.
 
-## Qué genera hoy (incremento 4)
+## Qué genera hoy (incremento 5)
 
 - **Dominio**, TypeScript puro en `src/domain`: enums por su literal, value objects que hacen cumplir
   en su constructor presencia, formato, longitud, cotas y escala (las mismas cotas que keel-spring,
@@ -50,15 +50,19 @@ vocabularios de las sondas del arnés.
 - **Aplicación** en `src/application`: un mensaje y un handler por operación (con las notas del diseño,
   terminando en `TODO`), DTOs y mappers, y el `UseCaseMediator` con su contenedor y su módulo en
   `src/infrastructure/usecase`.
+- **API REST** en `src/infrastructure/rest`: un controlador por grupo con un lector generado por
+  operación (convierte y valida en el orden del binding de Spring, con las reglas neutrales de
+  `keel-core/gen`), `ErrorResponse` con la forma y los textos del `ApiExceptionHandler` de keel-spring,
+  404/405, `Location` en los 201 y la correlación `X-Correlation-Id` en `AsyncLocalStorage`.
 - **Gates en el proyecto**: `npm run check:architecture` (dependency-cruiser: dominio y aplicación sin
   framework) e `infra/check-domain-guards.sh` (las mismas filas que el de keel-spring).
 
-## Estado de la frontera (incremento 4)
+## Estado de la frontera (incremento 5)
 
 | Capa | Estado |
 |---|---|
 | `domain`, `use-cases` | se generan; `idempotency` y `schedule` de una operación se avisan (incremento 10), `cache` también (13) |
-| `api` | se acepta; su código llega en el incremento 5 (se avisa) |
+| `api` | se genera (incremento 5); las subidas multipart llegan con `storage` (13) |
 | `persistence` | se rechaza → incrementos 6 (relacional, TypeORM) y 12 (documental) |
 | `security` | se rechaza → incremento 8 |
 | `messaging` | se rechaza → incremento 9 |

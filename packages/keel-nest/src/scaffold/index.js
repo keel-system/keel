@@ -28,6 +28,9 @@ import * as services from './services.js';
 import * as mediator from './mediator.js';
 import * as domainGuardsCheck from './domain-guards-check.js';
 import * as architecture from './architecture.js';
+import * as restSupport from './rest-support.js';
+import * as controllers from './controllers.js';
+import * as apiTests from './api-tests.js';
 import * as health from './health.js';
 import * as appTests from './app-tests.js';
 import * as readme from './readme.js';
@@ -55,8 +58,13 @@ const GENERATORS = [
   mappers,
   services,
   { generate: (model) => mediator.generate(model, { mappers: mappers.mapperClasses(model) }) },
+  // API REST (incremento 5): correlación, ErrorResponse, lectura de peticiones, filtro de errores y
+  // un controlador por grupo.
+  restSupport,
+  controllers,
   domainGuardsCheck,
   appTests,
+  apiTests,
   readme,
   generatorDocs
 ];

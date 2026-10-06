@@ -113,7 +113,8 @@ export function relativeSpecifier(from, target) {
 
 /**
  * Un archivo TypeScript: imports agrupados por módulo y ordenados (los paquetes antes que los
- * módulos propios), y el cuerpo. `imports` es una lista de `{ symbol, from, type? }`: `from` es un
+ * módulos propios), y el cuerpo. `imports` es una lista de `{ symbol, from, type? }` (`symbol` puede
+ * llevar alias: `NotFoundException as RouteNotFound`): `from` es un
  * paquete (`@nestjs/common`, `node:crypto`) o una ruta desde la raíz (`src/...ts` o `.js`). Un
  * símbolo que el propio archivo declara no se importa.
  */

@@ -24,7 +24,8 @@ import {
   VITE_VERSION,
   TYPES_NODE_VERSION,
   DECIMAL_JS_VERSION,
-  DEPENDENCY_CRUISER_VERSION
+  DEPENDENCY_CRUISER_VERSION,
+  FASTIFY_VERSION
 } from '../lib/assets.js';
 
 export function generate(model) {
@@ -63,6 +64,7 @@ function packageJson(model) {
       '@nestjs/core': NEST_VERSION,
       '@nestjs/platform-fastify': NEST_VERSION,
       'decimal.js': DECIMAL_JS_VERSION,
+      fastify: FASTIFY_VERSION,
       'reflect-metadata': REFLECT_METADATA_VERSION,
       rxjs: RXJS_VERSION,
       yaml: YAML_VERSION

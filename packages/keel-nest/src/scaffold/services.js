@@ -101,7 +101,11 @@ function renderMessage(model, operation) {
     // En un PATCH, un opcional del cuerpo distingue AUSENTE (undefined: conserva el valor) de
     // PRESENTE CON NULL (vacía el campo). El tipo lo dice: `campo?: T | null`.
     const threeState = partial && !fromPath.has(component.name) && !component.required && !component.list && (operation.bodyFields ?? []).some((f) => f.name === component.name);
-    const type = declType(component);
+    // Un campo con default puede no llegar (por eso la entrada no exige su presencia): en el
+    // mensaje admite null, y el default lo aplica el dominio.
+    const type = component.initializer != null && !component.generated && !component.list && !isNullable(component)
+      ? `${declType(component)} | null`
+      : declType(component);
     const optional = threeState ? '?' : '';
     const notes = componentNotes(model, component, fromPath);
     declarations.push(`${notes}${tsdoc(component.description, '  ')}  readonly ${component.name}${optional}: ${type}${threeState && !isNullable(component) ? ' | null' : ''};`);

@@ -23,10 +23,8 @@ const PENDING_LAYERS = {
   payments: 'incremento 13'
 };
 
-/** Capas aceptadas cuyo código todavía no se emite: el proyecto arranca, pero sin ellas. */
-const ACCEPTED_NOT_EMITTED = {
-  api: 'incremento 5 (API REST)'
-};
+/** Capas aceptadas cuyo código todavía no se emite: el proyecto arranca, pero sin ellas. Hoy, ninguna. */
+const ACCEPTED_NOT_EMITTED = {};
 
 /**
  * Lo que una operación de `use-cases` puede declarar y keel-nest todavía no genera. El dominio y la

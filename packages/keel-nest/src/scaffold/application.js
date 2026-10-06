@@ -14,12 +14,15 @@
 export const HTTP_PLATFORM_TS = 'src/infrastructure/http/http-platform.ts';
 
 import { usesMediator } from './mediator.js';
+import { usesApi } from './rest-support.js';
+import { controllerClasses } from './controllers.js';
+import { relativeSpecifier } from './render.js';
 
 export function generate(model) {
   return [
     { path: 'src/main.ts', content: mainTs() },
-    { path: 'src/app.module.ts', content: appModuleTs(usesMediator(model)) },
-    { path: HTTP_PLATFORM_TS, content: httpPlatformTs() }
+    { path: 'src/app.module.ts', content: appModuleTs(usesMediator(model), controllerClasses(model)) },
+    { path: HTTP_PLATFORM_TS, content: httpPlatformTs(usesApi(model)) }
   ];
 }
 
@@ -45,22 +48,26 @@ await app.listen(configuration.server.port, configuration.server.address);
 `;
 }
 
-function appModuleTs(withUseCases) {
+function appModuleTs(withUseCases, controllers) {
   // Los casos de uso del diseño entran por su módulo (infrastructure/usecase), que es el único que
-  // cablea handlers y mappers.
+  // cablea handlers y mappers; los controladores REST los despachan por el mediator que exporta.
   const useCaseImport = withUseCases ? "\nimport { UseCaseModule } from './infrastructure/usecase/use-case-module.js';" : '';
   const useCaseModule = withUseCases ? '\n      imports: [UseCaseModule],' : '';
+  const controllerImports = controllers
+    .map((controller) => `\nimport { ${controller.symbol} } from '${relativeSpecifier('src/app.module.ts', controller.from)}';`)
+    .join('');
+  const controllerList = ['HealthController', ...controllers.map((controller) => controller.symbol)].join(', ');
   return `import { Module, type DynamicModule } from '@nestjs/common';
 import { CONFIGURATION, type Configuration } from './infrastructure/config/configuration.js';
 import { HealthController } from './infrastructure/health/health.controller.js';
-import { GracefulShutdown } from './infrastructure/health/graceful-shutdown.js';${useCaseImport}
+import { GracefulShutdown } from './infrastructure/health/graceful-shutdown.js';${useCaseImport}${controllerImports}
 
 @Module({})
 export class AppModule {
   static register(configuration: Configuration): DynamicModule {
     return {
       module: AppModule,${useCaseModule}
-      controllers: [HealthController],
+      controllers: [${controllerList}],
       providers: [{ provide: CONFIGURATION, useValue: configuration }, GracefulShutdown]
     };
   }
@@ -68,10 +75,29 @@ export class AppModule {
 `;
 }
 
-function httpPlatformTs() {
+function httpPlatformTs(withApi) {
+  // Con API, la entrada HTTP abre además la correlación de la petición y todo fallo sale por el
+  // filtro de errores del contrato (ErrorResponse). Sin API no hay nada que correlacionar ni traducir.
+  const apiImports = withApi
+    ? `
+import { ApiExceptionFilter } from '../rest/api-exception-filter.js';
+import { CORRELATION_HEADER, CorrelationContext } from '../correlation/correlation-context.js';`
+    : '';
+  const apiSetup = withApi
+    ? `
+  // La correlación: el X-Correlation-Id recibido si cumple el formato, uno nuevo si no; el EFECTIVO
+  // vuelve en la respuesta y queda abierto (AsyncLocalStorage) para todo lo que haga la petición.
+  fastify.addHook('onRequest', (request, reply, done) => {
+    const correlationId = CorrelationContext.accept(request.headers[CORRELATION_HEADER.toLowerCase()]);
+    void reply.header(CORRELATION_HEADER, correlationId);
+    CorrelationContext.runWith(correlationId, done);
+  });
+  // Todo fallo, también los de lectura de la petición y las rutas que no existen, sale como ErrorResponse.
+  app.useGlobalFilters(new ApiExceptionFilter());`
+    : '';
   return `import { BadRequestException } from '@nestjs/common';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
-import { parseWireJson, toWireJson } from '../../application/support/wire.js';
+import { parseWireJson, toWireJson } from '../../application/support/wire.js';${apiImports}
 
 /** El adaptador HTTP del servicio. */
 export function createHttpAdapter(): FastifyAdapter {
@@ -100,7 +126,7 @@ export function configureHttp(app: NestFastifyApplication): void {
       done(new BadRequestException('El cuerpo de la petición no es JSON válido'), undefined);
     }
   });
-  fastify.setReplySerializer((payload) => toWireJson(payload));
+  fastify.setReplySerializer((payload) => toWireJson(payload));${apiSetup}
 }
 `;
 }

@@ -7,7 +7,6 @@
 // Estado (incremento 4 de PLAN-KEEL-NEST.md): proyección de TIPOS completa —el modelo de
 // cualquier diseño se construye— y COTAS del dominio (las mismas que keel-spring, desde
 // keel-core/gen/constraints.js); vacíos declarados en lo que todavía no se emite:
-//   · validación de entrada (class-validator) → incremento 5;
 //   · columnas (TypeORM) → incremento 6;
 //   · la forma del cable de cada tipo la fija keel-core/gen/wire.js y la cumplen `Decimal`,
 //     `RawJson` y application/support/wire.ts (incremento 3).
@@ -17,7 +16,7 @@
 // `elementTsType` y `text` (formato y longitud del campo, que son las guardas de un value object).
 // El modelo nunca las nombra.
 
-import { screamingSnake, numericConstraints, inheritedFormat, textConstraints } from 'keel-core/gen';
+import { screamingSnake, numericConstraints, inheritedFormat, textConstraints, validationRules } from 'keel-core/gen';
 
 const BASE_TS_TYPES = {
   string: { tsType: 'string', imports: [] },
@@ -128,7 +127,8 @@ export const TS_PROJECTION = {
   },
 
   uploadValidation(required) {
-    return { validation: required ? ['@IsDefined()'] : [], inputValidation: required ? ['@IsDefined()'] : [] };
+    const rules = required ? [{ rule: 'notNull' }] : [];
+    return { validation: rules, inputValidation: rules };
   },
 
   replicaKey(keyField) {
@@ -142,11 +142,14 @@ export const TS_PROJECTION = {
   fieldDetails(field, resolved) {
     const ts = toTs(resolved);
     return {
-      validation: [],
+      // Las reglas de validación como DATOS (keel-core/gen/constraints.js): las mismas que keel-spring
+      // escribe como Bean Validation. Las de entrada las aplica el lector de cada petición
+      // (infrastructure/rest), sin class-validator: no vería los tipos del cable.
+      validation: validationRules(field, resolved),
       // Escala y cotas numéricas: las hace cumplir el constructor del value object, que es el único
       // punto por el que pasa cualquier valor de ese tipo. La misma decisión que keel-spring.
       numeric: numericConstraints(field, resolved),
-      inputValidation: [],
+      inputValidation: validationRules(field, resolved, { inheritTypeFormat: false, honourDefault: true }),
       // El formato heredado de un value type ESCALAR: sostiene la clase `<Tipo>Format` del dominio,
       // la nota del mensaje y el gate check-domain-guards.sh.
       inheritedPattern: inheritedFormat(field, resolved),

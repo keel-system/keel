@@ -52,8 +52,10 @@ npm run build && npm start   # GET /livez y /readyz → {"status":"UP"}
 keel-nest se construye por incrementos (PLAN-KEEL-NEST.md del repo de Keel). Esta versión genera el
 proyecto que arranca, su configuración, sus sondas, el dominio (value objects con sus guardas,
 agregados con su lifecycle, errores, eventos) y la capa de aplicación (mensajes, handlers, DTOs,
-mappers y el mediator); la API llega en el incremento 5 y el pipeline de agentes de \`/${SKILL}\` en
-el 7.${
+mappers y el mediator) y la API REST (un controlador por grupo en \`src/infrastructure/rest/controllers\`,
+la lectura y validación de cada petición, \`ErrorResponse\` y la correlación \`X-Correlation-Id\`); el
+pipeline de agentes de \`/${SKILL}\` llega en el incremento 7. Los controladores son de build: la
+lógica va en los handlers, nunca en ellos.${
     (model.formatTypes ?? []).length > 0
       ? '\n\n`infra/check-domain-guards.sh` sale en ROJO recién generado a propósito: el formato de los value types escalares lo hace cumplir `<Tipo>Format.validate(...)`, y esa llamada es del agente.'
       : ''

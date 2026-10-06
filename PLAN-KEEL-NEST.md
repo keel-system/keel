@@ -337,6 +337,53 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   `ErrorResponse` del stub.
 - **Salida**: un diseño sin persistencia ni mensajería genera un servidor cuyo contrato HTTP
   es el de keel-spring.
+- **Estado: hecho (2026-10-06).**
+  - **5a — el contrato, en `keel-core/gen`**: `validationRules` (constraints.js) da como DATOS, en
+    orden, lo que valida cada campo —presencia, tamaño, formato, cotas, dígitos de `reject`—, y
+    keel-spring escribe sus anotaciones Bean Validation desde ahí; `api-contract.js` decide cuándo la
+    entrada va en el cuerpo, si el cuerpo es obligatorio y a dónde apunta `Location`, sacado del
+    controlador de keel-spring. Línea base idéntica (42 combinaciones, 10 453 archivos), keel-spring
+    1605/1605.
+  - **5b — la API en keel-nest**: `rest-support.js` (correlación con `AsyncLocalStorage` abierta en
+    un hook `onRequest` de Fastify, `ErrorResponse` en el orden del cable, lectura y validación de
+    peticiones, `ApiExceptionFilter` global con los textos, status y `code` del `ApiExceptionHandler`
+    de keel-spring), `controllers.js` (un controlador por grupo y un LECTOR generado por operación que
+    convierte y valida en el orden del binding de Spring: ruta, cuerpo leído y validado, query presente
+    y convertida, restricciones de ruta y query) y `routes.ts` (la tabla de rutas como datos: la usa el
+    filtro para el 405 y la lee el test de paridad).
+  - **Puerta medida**: `contract-parity.test.js` sobre las 13 fixtures (47 de las 49 operaciones con
+    ruta; las 2 multipart, fuera con su motivo): método, ruta, status, `Location`, parámetros de query,
+    cuerpo obligatorio u opcional y los campos de cada DTO de respuesta, de keel-spring (sus
+    controladores Java) contra keel-nest (su `routes.ts` ejecutado, y comprobando que los decoradores del
+    controlador dicen lo mismo). Falsado: un `@HttpCode` distinto tumba 11 fixtures; una query sin los
+    opcionales, la que los declara. `rest.test.js` EJECUTA la lectura emitida: los booleanos y enums de
+    Spring, `UUID.fromString` de Java, int32 y long, los mensajes de Hibernate Validator. La prueba
+    emitida `test/api.test.ts` elige del diseño sus peticiones (llegar al handler → 500 con
+    ErrorResponse mientras es un TODO, cuerpo malformado, cuerpo inválido, uuid de ruta malformado, 404,
+    405, correlación); falsada en el proyecto: sin abrir la correlación caen los seis casos que la
+    comparan, sin el 405 cae el suyo, con un `notBlank` que no rechaza cae la validación. Suite 148/148;
+    `ts-check` **11/11**: además, las pruebas emitidas de las **13 fixtures** pasan y el servidor
+    arrancado responde 404 con ErrorResponse en una ruta de la API.
+- **Cambios respecto a lo planificado**, con su motivo:
+  - **Sin `class-validator` ni `ValidationPipe`**: no ven los tipos del cable (`Decimal`, `bigint`,
+    `WireNumber`) y sus decoradores irían en los mensajes de `application`, que la frontera hexagonal
+    prohíbe. La validación la hace el lector generado con las reglas neutrales de keel-core.
+  - **`contract-parity` compara keel-nest contra lo que EMITE keel-spring** (y no solo contra el
+    modelo): es la equivalencia que se busca, y el modelo es la fuente de los dos.
+  - **Sin `@nestjs/swagger`**: keel-spring anota `@Tag`/`@Operation`; el OpenAPI de keel-nest queda
+    pendiente (no es contrato del cable).
+  - **El proyecto declara `fastify`** (los tipos de petición y respuesta), en la línea que trae
+    `@nestjs/platform-fastify` 12.
+- **Asimetrías conocidas, sin cubrir**:
+  - Una ruta que no existe: keel-nest responde 404 con ErrorResponse; en keel-spring no está medido
+    (el catch-all de su `ApiExceptionHandler` podría capturar `NoResourceFoundException` como 500).
+  - Un value object inválido construido DENTRO de un handler: en keel-nest es 400 `VALIDATION_ERROR`
+    (`InvalidValueException`); en keel-spring la `IllegalArgumentException` fuera de Jackson cae en el
+    catch-all como 500.
+  - Los `details` usan los mensajes por defecto de Hibernate Validator en inglés; el locale con el que
+    corre de verdad el servidor de keel-spring no está medido.
+  - El orden de un listado (`sort`, desempate por id) llega con la persistencia (inc. 6): sin ella, la
+    página son dos enteros en los dos generadores.
 
 ### Inc. 6 — Persistencia relacional (TypeORM)
 

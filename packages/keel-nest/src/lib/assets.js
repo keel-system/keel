@@ -42,6 +42,9 @@ export const VITE_VERSION = '^8.3.3';
 export const TYPES_NODE_VERSION = '^24.0.0';
 // Decimales exactos: el contrato del cable exige conservar la escala (Decimal de domain/support).
 export const DECIMAL_JS_VERSION = '^10.6.0';
+// Los tipos de Fastify (FastifyRequest, FastifyReply) en los controladores y el filtro de errores: la
+// misma línea que trae @nestjs/platform-fastify 12, declarada para no depender de que npm la eleve.
+export const FASTIFY_VERSION = '^5.12.5';
 // La frontera hexagonal como regla ejecutable (check:architecture). La 18 pide Node 22+ y lee
 // TypeScript con el compilador del propio proyecto.
 export const DEPENDENCY_CRUISER_VERSION = '^18.5.0';
