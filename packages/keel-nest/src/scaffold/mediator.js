@@ -1,0 +1,468 @@
+// El patrón mediator de keel-spring, en TypeScript y sin que la capa application importe Nest.
+//
+//   · application/interfaces — Command, Query<R>, ReturningCommand<R> y sus handlers. Son clases
+//     abstractas con una MARCA de tipo, no interfaces vacías: TypeScript compara por estructura, y
+//     tres interfaces vacías serían el mismo tipo — el mediator no podría saber qué devuelve
+//     `dispatch(mensaje)`.
+//   · application/annotations — @ApplicationComponent() y @Handles(Mensaje): solo ponen metadata
+//     en la clase (sin reflect-metadata ni Nest). Es lo que en Java hace @ApplicationComponent con
+//     el component-scan filtrado: marcar sin acoplar.
+//   · infrastructure/usecase — UseCaseContainer (mensaje → handler), UseCaseMediator (la fachada de
+//     despacho y el log de frontera de cada caso de uso) y UseCaseModule, el único sitio que cablea
+//     handlers y mappers. En Java el registro lo hace UseCaseAutoRegister por reflexión de los
+//     genéricos; TypeScript los borra al compilar, así que cada handler DECLARA su mensaje con
+//     @Handles y el contenedor falla al arrancar si dos lo reclaman o si a uno le falta.
+//
+// La inyección de los handlers y mappers tampoco puede usar @Inject (es de Nest): cada clase declara
+// `static readonly inject = [...]` con sus dependencias en el orden del constructor, y el módulo de
+// infraestructura construye cada una con un factory provider. La frontera transaccional llega con la
+// persistencia (incremento 6); hasta entonces `dispatchWithoutTransaction` es el mismo despacho, y
+// existe ya para que el scheduler (incremento 10) no tenga que preguntar por la capa.
+
+import { DIRS, classPath, tsModule } from './render.js';
+import { DOMAIN_EXCEPTION_TS } from './exceptions.js';
+
+export const MESSAGES_TS = classPath(DIRS.interfaces, 'Messages');
+export const HANDLERS_TS = classPath(DIRS.interfaces, 'Handlers');
+export const ANNOTATIONS_TS = classPath(DIRS.annotations, 'ApplicationComponent');
+export const CONTAINER_TS = classPath(DIRS.usecase, 'UseCaseContainer');
+export const MEDIATOR_TS = classPath(DIRS.usecase, 'UseCaseMediator');
+export const MODULE_TS = classPath(DIRS.usecase, 'UseCaseModule');
+export const COMMAND_DISPATCHER_TS = classPath(DIRS.portOut, 'CommandDispatcher');
+export const COMMAND_DISPATCHER_ADAPTER_TS = classPath(DIRS.usecase, 'CommandDispatcherAdapter');
+
+/** ¿Hay casos de uso que despachar? Sin operaciones no se genera nada de esto. */
+export function usesMediator(model) {
+  return (model.services ?? []).some((service) => (service.operations ?? []).length > 0);
+}
+
+/** Las clases de aplicación que el módulo cablea, con su archivo: handlers y mappers. */
+export function applicationClasses(model) {
+  const handlers = [];
+  for (const service of model.services ?? []) {
+    for (const operation of service.operations ?? []) {
+      handlers.push({ symbol: operation.handlerClass, from: classPath(DIRS.usecases, operation.handlerClass) });
+    }
+  }
+  return handlers;
+}
+
+export function generate(model, { mappers = [] } = {}) {
+  if (!usesMediator(model)) return [];
+  const files = [
+    { path: MESSAGES_TS, content: tsModule(MESSAGES_TS, [], messagesBody()) },
+    { path: HANDLERS_TS, content: tsModule(HANDLERS_TS, [{ symbol: 'Command', from: MESSAGES_TS, type: true }, { symbol: 'Query', from: MESSAGES_TS, type: true }, { symbol: 'ReturningCommand', from: MESSAGES_TS, type: true }], handlersBody()) },
+    { path: ANNOTATIONS_TS, content: tsModule(ANNOTATIONS_TS, [{ symbol: 'Dispatchable', from: MESSAGES_TS, type: true }], annotationsBody()) },
+    { path: CONTAINER_TS, content: tsModule(CONTAINER_TS, [
+      { symbol: 'Dispatchable', from: MESSAGES_TS, type: true },
+      { symbol: 'Handler', from: HANDLERS_TS, type: true },
+      { symbol: 'handledMessageOf', from: ANNOTATIONS_TS }
+    ], containerBody()) },
+    { path: MEDIATOR_TS, content: tsModule(MEDIATOR_TS, [
+      { symbol: 'Inject', from: '@nestjs/common' },
+      { symbol: 'Injectable', from: '@nestjs/common' },
+      { symbol: 'Logger', from: '@nestjs/common' },
+      { symbol: 'Command', from: MESSAGES_TS, type: true },
+      { symbol: 'Dispatchable', from: MESSAGES_TS, type: true },
+      { symbol: 'Query', from: MESSAGES_TS, type: true },
+      { symbol: 'ReturningCommand', from: MESSAGES_TS, type: true },
+      { symbol: 'DomainException', from: DOMAIN_EXCEPTION_TS },
+      { symbol: 'UseCaseContainer', from: CONTAINER_TS }
+    ], mediatorBody()) }
+  ];
+  files.push(...commandDispatcher(model));
+  files.push(moduleFile(model, mappers));
+  files.push({ path: 'test/use-cases.test.ts', content: useCasesTest(model) });
+  return files;
+}
+
+/**
+ * La prueba del cableado: cada mensaje del diseño llega a SU handler a través del módulo real, y el
+ * contenedor se niega a arrancar con un handler sin mensaje o con dos para el mismo. Se escribe para
+ * que siga valiendo cuando el agente implemente los handlers: no afirma que fallen con su TODO, sino
+ * que el mediator los encuentra.
+ */
+function useCasesTest(model) {
+  const operations = (model.services ?? []).flatMap((service) => service.operations ?? []);
+  const imports = operations
+    .map((operation) => {
+      const dir = operation.messageKind === 'query' ? DIRS.queries : DIRS.commands;
+      return `import { ${operation.messageClass} } from '../${classPath(dir, operation.messageClass).replace(/\.ts$/, '.js')}';`;
+    })
+    .join('\n');
+  const rows = operations.map((operation) => `  ['${operation.name}', ${operation.messageClass}]`).join(',\n');
+  return `import 'reflect-metadata';
+import { Test } from '@nestjs/testing';
+import { describe, expect, it, beforeAll } from 'vitest';
+import { UseCaseModule } from '../src/infrastructure/usecase/use-case-module.js';
+import { UseCaseMediator } from '../src/infrastructure/usecase/use-case-mediator.js';
+import { UseCaseContainer } from '../src/infrastructure/usecase/use-case-container.js';
+import { Handles } from '../src/application/annotations/application-component.js';
+import { Command } from '../src/application/interfaces/messages.js';
+${imports}
+
+const OPERATIONS = [
+${rows}
+] as const;
+
+describe('casos de uso', () => {
+  let mediator: UseCaseMediator;
+
+  beforeAll(async () => {
+    const moduleRef = await Test.createTestingModule({ imports: [UseCaseModule] }).compile();
+    mediator = moduleRef.get(UseCaseMediator);
+  });
+
+  it.each(OPERATIONS)('%s llega a su handler por el mediator', async (_name, type) => {
+    // Un mensaje sin construir basta para que el mediator elija handler: la clase es la clave.
+    const message = Object.create(type.prototype) as Command;
+    const outcome = await mediator.dispatch(message).then(
+      () => null,
+      (error: unknown) => error
+    );
+    expect(String(outcome)).not.toMatch(/No hay handler registrado/);
+  });
+
+  it('el contenedor se niega a arrancar con un handler que no declara su mensaje', () => {
+    class Orphan {
+      async handle(): Promise<void> {}
+    }
+    expect(() => UseCaseContainer.of([new Orphan()])).toThrow(/no declara su mensaje/);
+  });
+
+  it('el contenedor se niega a arrancar con dos handlers para el mismo mensaje', () => {
+    class Ping extends Command {}
+    @Handles(Ping)
+    class First {
+      async handle(): Promise<void> {}
+    }
+    @Handles(Ping)
+    class Second {
+      async handle(): Promise<void> {}
+    }
+    expect(() => UseCaseContainer.of([new First(), new Second()])).toThrow(/dos handlers/);
+  });
+});
+`;
+}
+
+function messagesBody() {
+  return `/**
+ * Los mensajes que despacha el UseCaseMediator. Son clases abstractas con una marca de tipo (que no
+ * existe en ejecución): TypeScript compara por estructura, y sin la marca un Command, una Query y un
+ * ReturningCommand serían el mismo tipo vacío.
+ */
+
+/** Comando sin valor de retorno. */
+export abstract class Command {
+  declare readonly __message: 'command';
+}
+
+/** Consulta que devuelve un resultado de tipo R. */
+export abstract class Query<R> {
+  declare readonly __message: 'query';
+  declare readonly __result: R;
+}
+
+/** Comando que devuelve un resultado de tipo R. */
+export abstract class ReturningCommand<R> {
+  declare readonly __message: 'returning-command';
+  declare readonly __result: R;
+}
+
+/** Todo lo que se puede despachar. */
+export type Dispatchable = Command | Query<unknown> | ReturningCommand<unknown>;`;
+}
+
+function handlersBody() {
+  return `export interface CommandHandler<C extends Command> {
+  handle(command: C): Promise<void>;
+}
+
+export interface QueryHandler<Q extends Query<R>, R> {
+  handle(query: Q): Promise<R>;
+}
+
+export interface ReturningCommandHandler<C extends ReturningCommand<R>, R> {
+  handle(command: C): Promise<R>;
+}
+
+/** Cualquier handler registrable en el UseCaseContainer. */
+export interface Handler {
+  handle(message: never): Promise<unknown>;
+}`;
+}
+
+function annotationsBody() {
+  return `// Marcas de la capa application, SIN Nest: solo ponen metadata en la clase. El cableado lo hace
+// infrastructure/usecase/use-case-module.ts, que es quien sí conoce el framework.
+
+const APPLICATION_COMPONENT = Symbol.for('keel.application.component');
+const HANDLES = Symbol.for('keel.application.handles');
+
+/** Constructor de un mensaje despachable. */
+export type MessageType = abstract new (...args: never[]) => Dispatchable;
+
+/** Marca un componente de la capa application (handler o mapper) sin acoplarlo a Nest. */
+export function ApplicationComponent(): ClassDecorator {
+  return (target) => {
+    Object.defineProperty(target, APPLICATION_COMPONENT, { value: true });
+  };
+}
+
+/** Declara qué mensaje maneja un handler: TypeScript borra los genéricos, así que se dice aquí. */
+export function Handles(message: MessageType): ClassDecorator {
+  return (target) => {
+    Object.defineProperty(target, HANDLES, { value: message });
+  };
+}
+
+export function isApplicationComponent(type: object): boolean {
+  return (type as Record<symbol, unknown>)[APPLICATION_COMPONENT] === true;
+}
+
+export function handledMessageOf(type: object): MessageType | undefined {
+  return (type as Record<symbol, MessageType | undefined>)[HANDLES];
+}`;
+}
+
+function containerBody() {
+  return `/**
+ * Registro mensaje → handler que alimenta al UseCaseMediator. Se construye UNA vez al arrancar, y
+ * falla ahí —no en la primera petición— si un handler no declara su mensaje o si dos reclaman el
+ * mismo.
+ */
+export class UseCaseContainer {
+  private readonly handlers = new Map<Function, Handler>();
+
+  static of(handlers: readonly Handler[]): UseCaseContainer {
+    const container = new UseCaseContainer();
+    for (const handler of handlers) {
+      const message = handledMessageOf(handler.constructor);
+      if (!message) {
+        throw new Error(\`El handler \${handler.constructor.name} no declara su mensaje con @Handles(...)\`);
+      }
+      const previous = container.handlers.get(message);
+      if (previous) {
+        throw new Error(\`\${message.name} tiene dos handlers: \${previous.constructor.name} y \${handler.constructor.name}\`);
+      }
+      container.handlers.set(message, handler);
+    }
+    return container;
+  }
+
+  resolve(message: Dispatchable): Handler {
+    const handler = this.handlers.get(message.constructor);
+    if (!handler) {
+      throw new Error(\`No hay handler registrado para el mensaje \${message.constructor.name}\`);
+    }
+    return handler;
+  }
+}`;
+}
+
+function mediatorBody() {
+  return `/**
+ * Fachada única de despacho de casos de uso: resuelve el handler registrado para la clase del
+ * mensaje y lo invoca. Los controladores dependen solo de este componente, no de los handlers.
+ *
+ * Es también el único punto por el que pasan TODAS las operaciones —las peticiones HTTP, los
+ * barridos programados y los mensajes consumidos—, y por eso es aquí donde vive el LOG DE FRONTERA
+ * de cada caso de uso: operación, resultado y duración.
+ *
+ * La frontera transaccional del diseño (las Query en lectura, los Command en escritura) se instala
+ * aquí con la persistencia (incremento 6 de PLAN-KEEL-NEST.md); los handlers no la verán nunca.
+ */
+@Injectable()
+export class UseCaseMediator {
+  private readonly log = new Logger(UseCaseMediator.name);
+
+  constructor(@Inject(UseCaseContainer) private readonly container: UseCaseContainer) {}
+
+  dispatch<R>(message: Query<R> | ReturningCommand<R>): Promise<R>;
+  dispatch(message: Command): Promise<void>;
+  dispatch(message: Dispatchable): Promise<unknown> {
+    return this.run(message);
+  }
+
+  /**
+   * Despacha SIN transacción abarcadora: las abre el adaptador de repositorio en cada llamada, así
+   * que quien despacha controla dónde cae cada commit. Es para los barridos que llaman a un
+   * proveedor EN MEDIO de su trabajo (reclamar y confirmar, llamar fuera de toda transacción,
+   * confirmar el desenlace). Hasta que haya persistencia es el mismo despacho que \`dispatch\`.
+   */
+  dispatchWithoutTransaction<R>(message: Query<R> | ReturningCommand<R>): Promise<R>;
+  dispatchWithoutTransaction(message: Command): Promise<void>;
+  dispatchWithoutTransaction(message: Dispatchable): Promise<unknown> {
+    return this.run(message);
+  }
+
+  /**
+   * El log de frontera. Solo nombres y códigos, nunca los valores del mensaje: un Command lleva datos
+   * de quien llama. Niveles fijos: debug si salió bien, log si el dominio lo rechazó —un 4xx es un
+   * resultado esperado— y error si falló. La pila de un fallo NO va aquí: la imprime el adaptador
+   * por el que entró, y con las dos cada fallo saldría duplicado.
+   */
+  private async run(message: Dispatchable): Promise<unknown> {
+    const operation = message.constructor.name;
+    const handler = this.container.resolve(message);
+    const start = performance.now();
+    try {
+      const result = await handler.handle(message as never);
+      this.log.debug(\`Caso de uso \${operation}: ok (\${elapsed(start)} ms)\`);
+      return result;
+    } catch (error) {
+      if (error instanceof DomainException) {
+        this.log.log(\`Caso de uso \${operation}: rechazado (\${error.code ?? error.name}, \${elapsed(start)} ms)\`);
+      } else {
+        const type = error instanceof Error ? error.name : typeof error;
+        this.log.error(\`Caso de uso \${operation}: falló con \${type} (\${elapsed(start)} ms)\`);
+      }
+      throw error;
+    }
+  }
+}
+
+function elapsed(start: number): number {
+  return Math.round(performance.now() - start);
+}`;
+}
+
+/**
+ * Las operaciones internas a las que no llega ningún disparador generado: ni `schedule`, ni
+ * endpoint, ni suscripción. Solo otro caso de uso puede ejecutarlas, y un handler no llama a otro
+ * handler: para eso está el puerto CommandDispatcher (el mismo criterio que keel-spring).
+ */
+export function orphanInternalOperations(model) {
+  const bySubscription = new Set((model.subscriptions ?? []).map((subscription) => subscription.trigger).filter(Boolean));
+  return (model.services ?? [])
+    .flatMap((service) => service.operations ?? [])
+    .filter((operation) => operation.internal && !operation.schedule && !bySubscription.has(operation.name));
+}
+
+function commandDispatcher(model) {
+  const orphans = orphanInternalOperations(model);
+  if (orphans.length === 0) return [];
+  const names = orphans.map((operation) => operation.name).join(', ');
+  const port = `/**
+ * Puerto de despacho de OTRO caso de uso desde un handler. Un handler nunca invoca a otro handler
+ * directamente; cuando lo necesita, despacha su mensaje por este puerto, que implementa un adaptador
+ * de infraestructura sobre el UseCaseMediator.
+ *
+ * Existe porque el diseño declara ${orphans.length === 1 ? 'una operación interna' : 'operaciones internas'} sin disparador propio
+ * (${names}): solo otro caso de uso puede ejecutarla${orphans.length === 1 ? '' : 's'}.
+ *
+ * Las dos variantes no son intercambiables:
+ *   · dispatch: la operación invocada se une a la transacción del llamante. Es lo correcto cuando
+ *     todo el trabajo es de base de datos y tiene que ser atómico con el del llamante.
+ *   · dispatchWithoutTransaction: la operación invocada abre sus propias transacciones. Es lo
+ *     correcto cuando hace I/O externo (un correo, una llamada a un proveedor): bajo la transacción
+ *     del llamante, una tanda de N elementos retiene una conexión durante N latencias de un tercero.
+ *
+ * Es una clase abstracta y no una interfaz porque sirve también de token de inyección.
+ */
+export abstract class CommandDispatcher {
+  abstract dispatch<R>(message: ReturningCommand<R>): Promise<R>;
+  abstract dispatch(message: Command): Promise<void>;
+  abstract dispatchWithoutTransaction<R>(message: ReturningCommand<R>): Promise<R>;
+  abstract dispatchWithoutTransaction(message: Command): Promise<void>;
+}`;
+  const adapter = `/**
+ * Adaptador del puerto CommandDispatcher sobre el UseCaseMediator. Vive en infraestructura porque es
+ * aquí donde se conoce el mediator; la capa application solo ve el puerto.
+ */
+@Injectable()
+export class CommandDispatcherAdapter extends CommandDispatcher {
+  constructor(@Inject(UseCaseMediator) private readonly mediator: UseCaseMediator) {
+    super();
+  }
+
+  dispatch<R>(message: ReturningCommand<R>): Promise<R>;
+  dispatch(message: Command): Promise<void>;
+  dispatch(message: Command | ReturningCommand<unknown>): Promise<unknown> {
+    return this.mediator.dispatch(message as Command);
+  }
+
+  dispatchWithoutTransaction<R>(message: ReturningCommand<R>): Promise<R>;
+  dispatchWithoutTransaction(message: Command): Promise<void>;
+  dispatchWithoutTransaction(message: Command | ReturningCommand<unknown>): Promise<unknown> {
+    return this.mediator.dispatchWithoutTransaction(message as Command);
+  }
+}`;
+  return [
+    {
+      path: COMMAND_DISPATCHER_TS,
+      content: tsModule(COMMAND_DISPATCHER_TS, [
+        { symbol: 'Command', from: MESSAGES_TS, type: true },
+        { symbol: 'ReturningCommand', from: MESSAGES_TS, type: true }
+      ], port)
+    },
+    {
+      path: COMMAND_DISPATCHER_ADAPTER_TS,
+      content: tsModule(COMMAND_DISPATCHER_ADAPTER_TS, [
+        { symbol: 'Inject', from: '@nestjs/common' },
+        { symbol: 'Injectable', from: '@nestjs/common' },
+        { symbol: 'Command', from: MESSAGES_TS, type: true },
+        { symbol: 'ReturningCommand', from: MESSAGES_TS, type: true },
+        { symbol: 'CommandDispatcher', from: COMMAND_DISPATCHER_TS },
+        { symbol: 'UseCaseMediator', from: MEDIATOR_TS }
+      ], adapter)
+    }
+  ];
+}
+
+function moduleFile(model, mappers) {
+  const handlers = applicationClasses(model);
+  const dispatcher = orphanInternalOperations(model).length > 0;
+  const imports = [
+    { symbol: 'Module', from: '@nestjs/common' },
+    { symbol: 'FactoryProvider', from: '@nestjs/common', type: true },
+    { symbol: 'InjectionToken', from: '@nestjs/common', type: true },
+    { symbol: 'Handler', from: HANDLERS_TS, type: true },
+    { symbol: 'UseCaseContainer', from: CONTAINER_TS },
+    { symbol: 'UseCaseMediator', from: MEDIATOR_TS },
+    ...handlers,
+    ...mappers
+  ];
+  if (dispatcher) {
+    imports.push({ symbol: 'CommandDispatcher', from: COMMAND_DISPATCHER_TS }, { symbol: 'CommandDispatcherAdapter', from: COMMAND_DISPATCHER_ADAPTER_TS });
+  }
+  const list = (items) => (items.length > 0 ? `\n  ${items.map((item) => item.symbol).join(',\n  ')}\n` : '');
+  const body = `/** Una clase de la capa application: declara sus dependencias en \`inject\`, en el orden de su constructor. */
+type ApplicationClass<T> = (new (...args: never[]) => T) & { readonly inject: readonly InjectionToken[] };
+
+/**
+ * Provider de una clase de application. La capa application no importa Nest, así que no puede
+ * decorar su constructor con @Inject: declara sus dependencias en \`static inject\` y aquí se
+ * construye con ellas.
+ */
+function applicationProvider<T>(type: ApplicationClass<T>): FactoryProvider<T> {
+  return { provide: type, useFactory: (...deps: unknown[]) => new type(...(deps as never[])), inject: [...type.inject] };
+}
+
+/** Los handlers de los casos de uso del diseño, uno por operación. */
+const HANDLERS = [${list(handlers)}] as const;
+
+/** Los mappers de aplicación que los handlers inyectan. */
+const MAPPERS = [${list(mappers)}] as const;
+
+/**
+ * El único sitio que cablea los casos de uso: handlers, mappers, el contenedor que los registra y el
+ * mediator que los despacha.${dispatcher ? ' También el puerto CommandDispatcher, para las operaciones internas sin disparador.' : ''}
+ */
+@Module({
+  providers: [
+    ...MAPPERS.map((type) => applicationProvider<object>(type)),
+    ...HANDLERS.map((type) => applicationProvider<Handler>(type)),
+    {
+      provide: UseCaseContainer,
+      useFactory: (...handlers: Handler[]) => UseCaseContainer.of(handlers),
+      inject: [...HANDLERS]
+    },
+    UseCaseMediator${dispatcher ? ',\n    { provide: CommandDispatcher, useClass: CommandDispatcherAdapter }' : ''}
+  ],
+  exports: [UseCaseMediator${dispatcher ? ', CommandDispatcher' : ''}]
+})
+export class UseCaseModule {}`;
+  return { path: MODULE_TS, content: tsModule(MODULE_TS, imports, body) };
+}

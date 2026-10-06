@@ -13,10 +13,12 @@
 
 export const HTTP_PLATFORM_TS = 'src/infrastructure/http/http-platform.ts';
 
-export function generate() {
+import { usesMediator } from './mediator.js';
+
+export function generate(model) {
   return [
     { path: 'src/main.ts', content: mainTs() },
-    { path: 'src/app.module.ts', content: appModuleTs() },
+    { path: 'src/app.module.ts', content: appModuleTs(usesMediator(model)) },
     { path: HTTP_PLATFORM_TS, content: httpPlatformTs() }
   ];
 }
@@ -43,17 +45,21 @@ await app.listen(configuration.server.port, configuration.server.address);
 `;
 }
 
-function appModuleTs() {
+function appModuleTs(withUseCases) {
+  // Los casos de uso del diseño entran por su módulo (infrastructure/usecase), que es el único que
+  // cablea handlers y mappers.
+  const useCaseImport = withUseCases ? "\nimport { UseCaseModule } from './infrastructure/usecase/use-case-module.js';" : '';
+  const useCaseModule = withUseCases ? '\n      imports: [UseCaseModule],' : '';
   return `import { Module, type DynamicModule } from '@nestjs/common';
 import { CONFIGURATION, type Configuration } from './infrastructure/config/configuration.js';
 import { HealthController } from './infrastructure/health/health.controller.js';
-import { GracefulShutdown } from './infrastructure/health/graceful-shutdown.js';
+import { GracefulShutdown } from './infrastructure/health/graceful-shutdown.js';${useCaseImport}
 
 @Module({})
 export class AppModule {
   static register(configuration: Configuration): DynamicModule {
     return {
-      module: AppModule,
+      module: AppModule,${useCaseModule}
       controllers: [HealthController],
       providers: [{ provide: CONFIGURATION, useValue: configuration }, GracefulShutdown]
     };

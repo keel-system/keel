@@ -16,13 +16,50 @@ import * as project from './project.js';
 import * as config from './config.js';
 import * as wire from './wire.js';
 import * as application from './application.js';
+import * as enums from './enums.js';
+import * as valueTypes from './value-types.js';
+import * as entities from './entities.js';
+import * as ids from './ids.js';
+import * as events from './events.js';
+import * as exceptions from './exceptions.js';
+import * as dtos from './dtos.js';
+import * as mappers from './mappers.js';
+import * as services from './services.js';
+import * as mediator from './mediator.js';
+import * as domainGuardsCheck from './domain-guards-check.js';
+import * as architecture from './architecture.js';
 import * as health from './health.js';
 import * as appTests from './app-tests.js';
 import * as readme from './readme.js';
 import * as generatorDocs from './generator-docs.js';
 
 // Orden de emisión. Cada módulo se gatea a sí mismo por lo que el modelo declara.
-const GENERATORS = [project, config, wire, application, health, appTests, readme, generatorDocs];
+const GENERATORS = [
+  project,
+  // La frontera hexagonal, como regla ejecutable (npm run check:architecture).
+  architecture,
+  config,
+  wire,
+  application,
+  health,
+  // Dominio (incremento 4): TypeScript puro, sin Nest ni persistencia.
+  enums,
+  valueTypes,
+  entities,
+  ids,
+  events,
+  exceptions,
+  // Aplicación: mensajes, handlers, DTOs y mappers; el mediator que los despacha y el módulo que
+  // los cablea (este necesita saber qué mappers hay).
+  dtos,
+  mappers,
+  services,
+  { generate: (model) => mediator.generate(model, { mappers: mappers.mapperClasses(model) }) },
+  domainGuardsCheck,
+  appTests,
+  readme,
+  generatorDocs
+];
 
 /**
  * Todo lo que hay que resolver para generar, SIN tocar disco: el stack normalizado, el modelo con

@@ -4,8 +4,8 @@
 // un proyecto bien formado, con tres decisiones propias:
 //   · `strict: true` siempre: el código lo escribe un agente, y lo que el compilador no le exige
 //     no lo comprueba nadie más;
-//   · sin linter ni formateador de la plantilla (oxlint, prettier): no son parte del servidor, y
-//     el gate de calidad que importa —la frontera hexagonal— llega en el incremento 4;
+//   · sin linter ni formateador de la plantilla (oxlint, prettier): no son parte del servidor; el
+//     gate de calidad que importa es la frontera hexagonal (dependency-cruiser, `check:architecture`);
 //   · la inyección de dependencias NO depende de `emitDecoratorMetadata`: todo el código generado
 //     inyecta con `@Inject(<token>)` explícito, así el arranque no cambia según qué herramienta
 //     transforme el TypeScript (tsc al compilar, el transformador de Vitest en las pruebas).
@@ -23,7 +23,8 @@ import {
   VITEST_VERSION,
   VITE_VERSION,
   TYPES_NODE_VERSION,
-  DECIMAL_JS_VERSION
+  DECIMAL_JS_VERSION,
+  DEPENDENCY_CRUISER_VERSION
 } from '../lib/assets.js';
 
 export function generate(model) {
@@ -53,7 +54,9 @@ function packageJson(model) {
       start: 'node dist/main.js',
       'start:dev': 'nest start --watch',
       typecheck: 'tsc -p tsconfig.json --noEmit',
-      test: 'vitest run'
+      test: 'vitest run',
+      // La frontera hexagonal (.dependency-cruiser.json): dominio y aplicación sin framework.
+      'check:architecture': 'depcruise src --config .dependency-cruiser.json'
     },
     dependencies: {
       '@nestjs/common': NEST_VERSION,
@@ -69,6 +72,7 @@ function packageJson(model) {
       '@nestjs/schematics': NEST_SCHEMATICS_VERSION,
       '@nestjs/testing': NEST_VERSION,
       '@types/node': TYPES_NODE_VERSION,
+      'dependency-cruiser': DEPENDENCY_CRUISER_VERSION,
       typescript: TYPESCRIPT_VERSION,
       vite: VITE_VERSION,
       vitest: VITEST_VERSION

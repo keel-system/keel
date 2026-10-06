@@ -12,6 +12,11 @@
 //   npm run ts-check --workspace packages/keel-nest
 //
 // --keep deja el proyecto generado (y dice dónde) para inspeccionarlo.
+//
+// Además del diseño de referencia, compila con `strict` el árbol que emite build para TODAS las
+// fixtures (planService, sin la frontera de build: el dominio y la aplicación de cualquier diseño
+// tienen que compilar aunque su API o su persistencia aún no se generen), reutilizando el
+// node_modules ya instalado. Es lo que dice que las trece siluetas compilan, no solo una.
 
 import fs from 'node:fs';
 import http from 'node:http';
@@ -21,6 +26,9 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { makeWorkspace, mountDesign, runCommand, NEST_READY_DESIGN } from '../test/helpers/workspace.js';
 import { build } from '../src/commands/build.js';
+import { planService } from '../src/scaffold/index.js';
+import { loadService } from 'keel-core';
+import { FIXTURES_DIR } from '../test/helpers/workspace.js';
 
 const keep = process.argv.includes('--keep');
 const isWindows = process.platform === 'win32';
@@ -87,12 +95,38 @@ if (!step('npm install', install.ok)) {
 
 for (const [name, args] of [
   ['tipos con strict (npm run typecheck)', ['run', 'typecheck']],
+  ['frontera hexagonal (npm run check:architecture)', ['run', 'check:architecture']],
   ['pruebas bajo el perfil test (npm test)', ['test']],
   ['build de producción (npm run build)', ['run', 'build']]
 ]) {
   const run = npm(projectDir, args);
   if (!step(name, run.ok)) console.error(run.output);
 }
+
+// Las trece siluetas: cada fixture entera, renderizada al lado y compilada con el mismo node_modules.
+const tsc = path.join(projectDir, 'node_modules', 'typescript', 'bin', 'tsc');
+const failedFixtures = [];
+for (const name of fs.readdirSync(FIXTURES_DIR)) {
+  const { manifest, layers } = loadService(path.join(FIXTURES_DIR, name));
+  const { files } = planService({ manifest, layers, workspace: workspace });
+  const dir = path.join(workspace, 'fixtures-tsc', name);
+  for (const file of files) {
+    const out = path.join(dir, file.path);
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(out, file.content);
+  }
+  fs.symlinkSync(path.join(projectDir, 'node_modules'), path.join(dir, 'node_modules'), 'junction');
+  const run = spawnSync(process.execPath, [tsc, '-p', 'tsconfig.json', '--noEmit'], { cwd: dir, encoding: 'utf8' });
+  if (run.status !== 0) {
+    failedFixtures.push(name);
+    console.error(`--- ${name}\n${run.stdout}${run.stderr}`);
+  }
+}
+step(
+  'dominio y aplicación de TODAS las fixtures compilan con strict',
+  failedFixtures.length === 0,
+  failedFixtures.length > 0 ? `en rojo: ${failedFixtures.join(', ')}` : `${fs.readdirSync(FIXTURES_DIR).length} fixtures`
+);
 
 if (results.every((result) => result.ok)) {
   const port = await freePort();

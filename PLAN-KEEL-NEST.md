@@ -271,6 +271,57 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   rasgos (`shape-coverage`, `value-type-format`, `domain-guards-check`) + `ts-check` sobre las
   fixtures + regla hexagonal ejecutada.
 - **Salida**: `supported-features` deja de rechazar `domain`/`use-cases` en todas sus formas.
+- **Estado: hecho (2026-10-06).**
+  - **4a — lo que es del diseño, a `keel-core/gen`** antes de emitir nada: `constraints.js`
+    (`numericConstraints`, `inheritedTypePattern`, `inheritedFormat` y `textConstraints`, la mezcla
+    tipo → campo de las cotas) y `domain-guards.js` (`guardedFields`, las filas del gate del formato).
+    keel-spring las importa de ahí; línea base idéntica (42 combinaciones, 10 453 archivos).
+  - **4b — el dominio y la aplicación en keel-nest**: `enums`, `value-types`, `entities`, `ids`,
+    `events`, `exceptions`, `dtos`, `mappers`, `services`, `mediator`, `domain-guards-check` y
+    `architecture` (`.dependency-cruiser.json` + `npm run check:architecture`), sobre un `render.js`
+    que es el ÚNICO mapa de tipo → archivo y compone los imports relativos.
+  - **Puerta medida**: suite de 125 casos sin red. `ts-syntax.test.js` (parser de TypeScript, sin
+    instalar) sobre las 13 fixtures, más imports que llevan a un archivo emitido y símbolos que ese
+    archivo exporta; autocomprobado con TS roto y falsado saboteando la ruta de los DTOs (13 de 13 en
+    rojo). `domain.test.js` y `application.test.js` **ejecutan** lo emitido (transpilado): la escala
+    normalizada, los rechazos con 400 `VALIDATION_ERROR`, `scalePolicy: reject`, el `<Tipo>Format`, la
+    transición negada con 409, el orden del cable de `EventMetadata` y `PagedResponse`, y que cada
+    operación de cada fixture llega a SU handler por el contenedor real. Paridad sin levantar nada: los
+    errores del dominio (clase, `code`, status) son los de keel-spring en 5 fixtures, y el gate del
+    formato vigila los mismos campos en las 13. Falsado: sin la normalización de escala caen sus tres
+    casos; con otro `code` en la transición caen el de comportamiento y los 5 de paridad; sin
+    `@Handles` cae el cableado de las 13. `ts-check` sale **9/9**: además de lo de antes, la frontera
+    hexagonal ejecutada y el dominio y la aplicación de las **13 fixtures compilando con `strict`**
+    (no solo la de referencia). La regla hexagonal, falsada a mano en sus cuatro reglas (Nest en el
+    dominio, un `import type` de un framework, dominio → infraestructura, aplicación → infraestructura,
+    import roto): cada violación la caza su regla y solo esa; `node:crypto` pasa.
+- **Cambios respecto a lo planificado**, con su motivo:
+  - **La inyección de la capa application no usa `@Inject`**, que es de Nest: cada handler y mapper
+    declara `static readonly inject = [...]` y `UseCaseModule` lo construye con un factory provider.
+  - **Cada handler declara su mensaje con `@Handles(Mensaje)`**: TypeScript borra los genéricos, así
+    que el registro por reflexión de `UseCaseAutoRegister` no es posible. El contenedor falla AL
+    ARRANCAR si a un handler le falta o si dos reclaman el mismo mensaje (Java sobrescribía en silencio).
+  - **Command / Query / ReturningCommand son clases abstractas con una marca de tipo**: TypeScript
+    compara por estructura y tres interfaces vacías serían el mismo tipo.
+  - **El agregado se rehidrata desde un objeto `<Entidad>State`**, no con argumentos posicionales que
+    se desordenan sin que el compilador lo note. El factory sigue siendo un TODO, como en keel-spring.
+  - **`InvalidValueException` (400 `VALIDATION_ERROR`)** explícita en las guardas de los value objects:
+    es lo que la `IllegalArgumentException` de un constructor compacto acaba siendo en la API de
+    keel-spring, dicho en la propia excepción.
+  - **Un campo de DTO que el mapper no sabe derivar sale como `todo(...)`** (compila, falla en
+    ejecución nombrándolo): el `null` de Java no cabe en un campo obligatorio de TypeScript estricto.
+  - **La frontera avisa** de lo que una operación declara y cuelga de incrementos futuros:
+    `idempotency` y `schedule` (incremento 10), `cache` (13).
+  - **dependency-cruiser 18 con configuración JSON**; su esquema rechaza `extensionAlias`, y no hace
+    falta: con el `tsconfig` del proyecto resuelve los `.js` → `.ts` de nodenext.
+  - **keel-nest gana dos dependencias de desarrollo**: `typescript` (el parser de `ts-syntax` y la
+    transpilación de los tests que ejecutan el dominio) y `decimal.js`.
+- **Huecos que quedan a la vista**:
+  - Ninguna fixture declara `scalePolicy: reject` dentro de un value object ni `round` en una entrada:
+    los tests los derivan de una fixture real cambiando la política en memoria, pero el código solo lo
+    compila `ts-check` cuando lo declara una fixture.
+  - Los handlers no inyectan todavía el puerto del repositorio (llega con la persistencia, inc. 6), ni
+    los del almacén de idempotencia, el correo o los clientes salientes (sus incrementos).
 
 ### Inc. 5 — API REST
 

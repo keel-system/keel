@@ -40,11 +40,24 @@ puerta del diseño, el cuestionario del stack, la escritura con manifiesto (`--r
 `--check`, `--force`), el catálogo de infraestructura, los destinos físicos de mensajería y los
 vocabularios de las sondas del arnés.
 
-## Estado de la frontera (incremento 2)
+## Qué genera hoy (incremento 4)
+
+- **Dominio**, TypeScript puro en `src/domain`: enums por su literal, value objects que hacen cumplir
+  en su constructor presencia, formato, longitud, cotas y escala (las mismas cotas que keel-spring,
+  desde `keel-core/gen/constraints.js`), `<Tipo>Format` para los escalares con formato, agregados con
+  estado de rehidratación, getters sin setters y guarda de lifecycle, eventos con su `EventMetadata`,
+  la jerarquía de errores por status con los `code` del diseño y `Uuids.v7()`.
+- **Aplicación** en `src/application`: un mensaje y un handler por operación (con las notas del diseño,
+  terminando en `TODO`), DTOs y mappers, y el `UseCaseMediator` con su contenedor y su módulo en
+  `src/infrastructure/usecase`.
+- **Gates en el proyecto**: `npm run check:architecture` (dependency-cruiser: dominio y aplicación sin
+  framework) e `infra/check-domain-guards.sh` (las mismas filas que el de keel-spring).
+
+## Estado de la frontera (incremento 4)
 
 | Capa | Estado |
 |---|---|
-| `domain`, `use-cases` | se aceptan; su código llega en el incremento 4 (se avisa) |
+| `domain`, `use-cases` | se generan; `idempotency` y `schedule` de una operación se avisan (incremento 10), `cache` también (13) |
 | `api` | se acepta; su código llega en el incremento 5 (se avisa) |
 | `persistence` | se rechaza → incrementos 6 (relacional, TypeORM) y 12 (documental) |
 | `security` | se rechaza → incremento 8 |
@@ -56,6 +69,6 @@ vocabularios de las sondas del arnés.
 ## Verificación del generador
 
 ```bash
-npm test --workspace packages/keel-nest        # rasgos de lo emitido, puerta, pasada en seco (sin red)
-npm run ts-check --workspace packages/keel-nest # genera, instala, compila, prueba y ARRANCA el proyecto (red, minutos)
+npm test --workspace packages/keel-nest        # rasgos de lo emitido (el dominio, EJECUTADO), sintaxis de las 13 fixtures, paridad con keel-spring (sin red)
+npm run ts-check --workspace packages/keel-nest # genera, instala, compila, comprueba la frontera hexagonal, prueba y ARRANCA el proyecto, y compila las 13 fixtures (red, minutos)
 ```

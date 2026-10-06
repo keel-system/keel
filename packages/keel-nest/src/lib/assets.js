@@ -42,6 +42,9 @@ export const VITE_VERSION = '^8.3.3';
 export const TYPES_NODE_VERSION = '^24.0.0';
 // Decimales exactos: el contrato del cable exige conservar la escala (Decimal de domain/support).
 export const DECIMAL_JS_VERSION = '^10.6.0';
+// La frontera hexagonal como regla ejecutable (check:architecture). La 18 pide Node 22+ y lee
+// TypeScript con el compilador del propio proyecto.
+export const DEPENDENCY_CRUISER_VERSION = '^18.5.0';
 
 export function packageVersion() {
   return JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8')).version;

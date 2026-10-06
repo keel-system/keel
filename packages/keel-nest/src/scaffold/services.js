@@ -1,0 +1,278 @@
+// Capa application con el patrón mediator: por cada operación, su mensaje CQRS (en
+// application/commands o application/queries) y su handler en application/usecases, que es donde el
+// agente implementa la lógica. El mismo reparto que keel-spring.
+//
+// El mensaje es una clase inmutable con sus campos declarados (los decoradores de validación del
+// borde los pone el incremento 5 sobre ellos) y un constructor por objeto: con muchos campos, una
+// lista posicional se desordena sin que el compilador lo note si dos comparten tipo.
+//
+// El handler nace con las notas del diseño (precondiciones, reglas, errores, eventos, formato) y
+// termina en `throw`: COMPILA y falla en ejecución nombrando la operación, como el
+// UnsupportedOperationException de keel-spring. No importa nada de Nest: lo marca
+// @ApplicationComponent(), declara su mensaje con @Handles(...) y sus dependencias en `inject`.
+//
+// Lo que cuelga de capas que keel-nest todavía no genera (el puerto del repositorio, el almacén de
+// idempotencia, el correo, los clientes salientes) llega con su incremento: el handler de hoy solo
+// inyecta lo que existe.
+
+import { DIRS, classPath, declType, fieldImports, isNullable, tsModule, tsdoc } from './render.js';
+import { ANNOTATIONS_TS, HANDLERS_TS, MESSAGES_TS } from './mediator.js';
+import { PAGED_RESPONSE_TS } from './dtos.js';
+
+export function generate(model) {
+  const files = [];
+  for (const service of model.services ?? []) {
+    for (const operation of service.operations ?? []) {
+      files.push(renderMessage(model, operation));
+      files.push(renderHandler(model, operation));
+    }
+  }
+  return files;
+}
+
+export function messagePath(operation) {
+  return classPath(operation.messageKind === 'query' ? DIRS.queries : DIRS.commands, operation.messageClass);
+}
+
+export function handlerPath(operation) {
+  return classPath(DIRS.usecases, operation.handlerClass);
+}
+
+/**
+ * Componentes del mensaje: parámetros de ruta (en el orden del path) + campos del cuerpo +
+ * paginación. Los comparte el controlador (incremento 5) para construir el mensaje.
+ */
+export function messageComponents(model, operation) {
+  const components = [...(operation.pathParams ?? []), ...(operation.bodyFields ?? [])];
+  if (operation.paginated) {
+    // Sin persistencia la página viaja como dos enteros; con ella, como el Pageable del incremento 6.
+    components.push({ name: 'page', tsType: 'number', elementTsType: 'number', kind: 'base', base: 'int', required: true, imports: [] });
+    components.push({ name: 'size', tsType: 'number', elementTsType: 'number', kind: 'base', base: 'int', required: true, imports: [] });
+  }
+  return components;
+}
+
+/** El tipo de retorno de la operación, o null si no devuelve nada. */
+export function returnTypeOf(operation) {
+  if (!operation.responseDto) return null;
+  // PagedResponse<T> ya envuelve la lista: envolverla además daría PagedResponse<T[]>.
+  if (operation.paginated) return `PagedResponse<${operation.responseDto.name}>`;
+  if (operation.returnsList) return `${operation.responseDto.name}[]`;
+  return operation.responseDto.name;
+}
+
+function returnImports(operation) {
+  const imports = [];
+  if (operation.responseDto) imports.push({ symbol: operation.responseDto.name, from: classPath(DIRS.dtos, operation.responseDto.name), type: true });
+  if (operation.paginated) imports.push({ symbol: 'PagedResponse', from: PAGED_RESPONSE_TS, type: true });
+  return imports;
+}
+
+/** ¿Es una actualización parcial (PATCH)? Un opcional del cuerpo tiene TRES estados. */
+export function isPartialUpdate(operation) {
+  return operation.route?.method === 'PATCH';
+}
+
+/** Mensaje y handler que corresponden a la clase de la operación. */
+function contracts(operation, returnType) {
+  if (operation.messageKind === 'query') {
+    return { base: `Query<${returnType ?? 'void'}>`, baseSymbol: 'Query', handler: `QueryHandler<${operation.messageClass}, ${returnType ?? 'void'}>`, handlerSymbol: 'QueryHandler' };
+  }
+  if (operation.messageKind === 'returningCommand') {
+    return { base: `ReturningCommand<${returnType}>`, baseSymbol: 'ReturningCommand', handler: `ReturningCommandHandler<${operation.messageClass}, ${returnType}>`, handlerSymbol: 'ReturningCommandHandler' };
+  }
+  return { base: 'Command', baseSymbol: 'Command', handler: `CommandHandler<${operation.messageClass}>`, handlerSymbol: 'CommandHandler' };
+}
+
+function renderMessage(model, operation) {
+  const file = messagePath(operation);
+  const returnType = returnTypeOf(operation);
+  const contract = contracts(operation, returnType);
+  const imports = [{ symbol: contract.baseSymbol, from: MESSAGES_TS }, ...returnImports(operation)];
+  const fromPath = new Set((operation.pathParams ?? []).map((param) => param.name));
+  const partial = isPartialUpdate(operation);
+  const components = messageComponents(model, operation);
+
+  const declarations = [];
+  const props = [];
+  const assigns = [];
+  for (const component of components) {
+    imports.push(...fieldImports(model, component));
+    // En un PATCH, un opcional del cuerpo distingue AUSENTE (undefined: conserva el valor) de
+    // PRESENTE CON NULL (vacía el campo). El tipo lo dice: `campo?: T | null`.
+    const threeState = partial && !fromPath.has(component.name) && !component.required && !component.list && (operation.bodyFields ?? []).some((f) => f.name === component.name);
+    const type = declType(component);
+    const optional = threeState ? '?' : '';
+    const notes = componentNotes(model, component, fromPath);
+    declarations.push(`${notes}${tsdoc(component.description, '  ')}  readonly ${component.name}${optional}: ${type}${threeState && !isNullable(component) ? ' | null' : ''};`);
+    props.push(`    readonly ${component.name}${optional}: ${type}${threeState && !isNullable(component) ? ' | null' : ''};`);
+    assigns.push(`    this.${component.name} = ${scaleRounded(component, `props.${component.name}`)};`);
+  }
+
+  const scope = idempotencyScope(operation);
+  const body = `${tsdoc(operation.description)}export class ${operation.messageClass} extends ${contract.base} {
+${declarations.join('\n')}${declarations.length > 0 ? '\n\n' : ''}  constructor(${components.length > 0 ? `props: {\n${props.join('\n')}\n  }` : ''}) {
+    super();${assigns.length > 0 ? `\n${assigns.join('\n')}` : ''}
+  }${scope}
+}`;
+  return { path: file, content: tsModule(file, imports, body) };
+}
+
+/**
+ * `constraints.scalePolicy: round` (DSL 2.14): el decimal escalar se redondea a su escala al
+ * ENTRAR. No tiene clase propia donde normalizarse —la de un compuesto la pone su value object—,
+ * así que va en el mensaje, el primer punto por el que pasa. `reject` no necesita nada aquí: lo dice
+ * la validación del borde (incremento 5).
+ */
+function scaleRounded(component, expression) {
+  const numeric = component.numeric;
+  if (component.kind === 'composite' || !numeric?.decimal || numeric.scalePolicy !== 'round') return expression;
+  return `${expression} == null ? ${expression} : ${expression}.setScale(${numeric.scale}, 'HALF_UP')`;
+}
+
+/** Las notas de un componente del mensaje que el diseño obliga a decir donde se ve. */
+function componentNotes(model, component, fromPath) {
+  const notes = [];
+  if (fromPath.has(component.name)) return '';
+  // El formato heredado de un value type NO se valida en el borde: describe el valor ya normalizado.
+  // Quitarlo en silencio es la mitad mala de esa decisión; se dice aquí, que es donde se mira.
+  const dropped = component.list ? null : component.inheritedPattern;
+  if (dropped) {
+    notes.push(
+      `El formato del value type ${component.typeName ?? 'del campo'} (${dropped}) NO se valida en el borde: describe`,
+      'el valor YA normalizado, y la validación de entrada corre antes de que el handler normalice nada.',
+      `Lo hace cumplir ${component.typeName}Format.validate(...) (${classPath(DIRS.valueObjects, `${component.typeName}Format`)}):`,
+      'llámalo DESPUÉS de normalizar, en el factory o el método de negocio de la entidad que recibe el valor,',
+      'o aquí mismo si el handler es quien normaliza. Si el diseño NO normaliza este campo, el formato es',
+      'contrato del cable y tiene que volver a la validación de entrada.'
+    );
+  }
+  if (component.resolvedIdentity) {
+    notes.push(
+      'Lo resuelve el servidor desde la credencial (security.authentication.callerIdentity): no llega del',
+      'cuerpo, lo estampa el controlador.'
+    );
+  }
+  return notes.length > 0 ? `${notes.map((line) => `  // ${line}`).join('\n')}\n` : '';
+}
+
+/**
+ * El ÁMBITO de la clave de idempotencia, ya compuesto (DSL 2.17, `idempotency.partitionBy`): la
+ * misma decisión que keel-spring. El almacén que lo usa llega con el incremento 10.
+ */
+function idempotencyScope(operation) {
+  const idempotency = operation.idempotency;
+  if (!idempotency || idempotency.guard === 'natural-key') return '';
+  const partition = idempotency.partitionBy ?? [];
+  const value = [operation.name, ...partition.map((field) => `\${String(this.${field})}`)].join(':');
+  return `
+
+  /**
+   * Ámbito de la clave de idempotencia: ${partition.length > 0 ? `la operación y ${partition.join(', ')} (idempotency.partitionBy)` : 'la operación (sin partitionBy la clave es GLOBAL entre llamantes: lo decidió el diseño)'}.
+   * No lo compongas a mano.
+   */
+  idempotencyScope(): string {
+    return \`${value}\`;
+  }`;
+}
+
+function renderHandler(model, operation) {
+  const file = handlerPath(operation);
+  const returnType = returnTypeOf(operation);
+  const contract = contracts(operation, returnType);
+  const imports = [
+    { symbol: 'ApplicationComponent', from: ANNOTATIONS_TS },
+    { symbol: 'Handles', from: ANNOTATIONS_TS },
+    { symbol: contract.handlerSymbol, from: HANDLERS_TS, type: true },
+    { symbol: operation.messageClass, from: messagePath(operation) },
+    ...returnImports(operation)
+  ];
+
+  const dependencies = [];
+  if (operation.responseDto?.entity && model.entities.some((e) => e.name === operation.responseDto.entity)) {
+    const mapper = `${operation.responseDto.entity}ApplicationMapper`;
+    imports.push({ symbol: mapper, from: classPath(DIRS.mappers, mapper) });
+    dependencies.push({ type: mapper, name: mapper[0].toLowerCase() + mapper.slice(1) });
+  }
+
+  const notes = handlerNotes(model, operation);
+  const param = operation.messageKind === 'query' ? 'query' : 'command';
+  const result = returnType ?? 'void';
+  const ctor = dependencies.length > 0
+    ? `\n\n  constructor(${dependencies.map((dep) => `private readonly ${dep.name}: ${dep.type}`).join(', ')}) {}`
+    : '';
+  const body = `${tsdoc(operation.description)}@ApplicationComponent()
+@Handles(${operation.messageClass})
+export class ${operation.handlerClass} implements ${contract.handler} {
+  /** Dependencias del constructor, en su orden: las inyecta UseCaseModule. */
+  static readonly inject = [${dependencies.map((dep) => dep.type).join(', ')}] as const;${ctor}
+
+  async handle(${param}: ${operation.messageClass}): Promise<${result}> {
+    // TODO (agente): implementar la lógica de negocio de esta operación.
+${notes.map((note) => `    // ${note}`).join('\n')}${notes.length > 0 ? '\n' : ''}    throw new Error('TODO: ${operation.name}');
+  }
+}`;
+  return { path: file, content: tsModule(file, imports, body) };
+}
+
+function handlerNotes(model, operation) {
+  const notes = [];
+  for (const note of textFilterNotes(model, operation)) notes.push(note);
+  for (const text of operation.preconditions ?? []) notes.push(`Precondición: ${text}`);
+  for (const text of operation.rules ?? []) notes.push(`Regla (en orden): ${text}`);
+  for (const code of operation.errors ?? []) {
+    const error = model.errors.find((e) => e.code === code);
+    notes.push(
+      `Error: lanzar ${error?.exceptionClass ?? code} (${code}, HTTP ${error?.http ?? 400})${error?.when ? ` cuando: ${error.when}` : ''}` +
+        (error ? ` — ${classPath(DIRS.errors, error.exceptionClass)}` : '')
+    );
+  }
+  for (const transition of operation.transitions ?? []) {
+    notes.push(
+      `Transición: ${transition.entity} ${(transition.from ?? []).join('|')} → ${transition.to}. La aplica el método semántico ` +
+        'del agregado (que llama a transitionTo), nunca el handler asignando el estado.'
+    );
+  }
+  for (const eventName of operation.emits ?? []) {
+    const event = (model.events ?? []).find((e) => e.name === eventName);
+    const emisores = [
+      ...new Set((event?.emittedBy ?? []).filter((e) => e.operation === operation.name && e.aggregate).map((e) => e.aggregate))
+    ];
+    notes.push(
+      `Emite: ${eventName} — lo hace ${emisores.length > 0 ? emisores.join(' o ') : 'el agregado'} con this.raise(${event?.className ?? `${eventName}Event`}.of(...)) dentro del método de negocio; el handler no publica nada`
+    );
+  }
+  return notes.flatMap((note) => wrap(note));
+}
+
+/** Notas de los filtros de TEXTO de una query que declaran `match` o `compare` (DSL 2.14). */
+function textFilterNotes(model, operation) {
+  if (operation.kind !== 'query') return [];
+  const notes = [];
+  for (const component of messageComponents(model, operation)) {
+    const match = component.match ?? 'exact';
+    const compare = component.compare ?? 'exact';
+    if (match === 'exact' && compare === 'exact') continue;
+    const how = match === 'exact' ? 'igualdad' : match === 'prefix' ? 'empieza por' : 'contiene';
+    const cases = compare === 'exact' ? 'sensible a mayúsculas' : `ignorando ${compare === 'ignore-case-accents' ? 'mayúsculas y acentos' : 'mayúsculas'}`;
+    notes.push(`Filtro ${component.name} (match: ${match}, compare: ${compare}): ${how}, ${cases}`);
+  }
+  return notes;
+}
+
+/** Parte una nota larga en líneas de comentario legibles. */
+function wrap(text, width = 100) {
+  const words = String(text).split(/\s+/);
+  const lines = [];
+  let line = '';
+  for (const word of words) {
+    if (line && `${line} ${word}`.length > width) {
+      lines.push(line);
+      line = `  ${word}`;
+    } else {
+      line = line ? `${line} ${word}` : word;
+    }
+  }
+  if (line) lines.push(line);
+  return lines;
+}

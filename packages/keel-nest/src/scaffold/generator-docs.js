@@ -3,9 +3,10 @@
 // soportado por `keel-core` (HARNESSES). Se emiten todos: el proyecto sirve para cualquiera sin
 // decidir nada al generarlo.
 //
-// Estado (incremento 2 de PLAN-KEEL-NEST.md): todavía no hay pipeline de agentes —llega en el
-// incremento 7, con el arnés de integración—, así que la skill dice exactamente eso y lo que sí
-// se puede hacer ya, en vez de prometer una generación que no existe.
+// Estado (incremento 4 de PLAN-KEEL-NEST.md): el dominio y la aplicación se generan, pero todavía
+// no hay pipeline de agentes —llega en el incremento 7, con el arnés de integración—, así que la
+// skill dice exactamente eso y lo que sí se puede hacer ya, en vez de prometer una generación que
+// no existe.
 
 import { HARNESSES, applyTokens } from 'keel-core';
 import { SKILL } from '../lib/assets.js';
@@ -33,13 +34,15 @@ Servicio NestJS generado por \`keel-nest build\` desde \`specs/${service.name}\`
 - **Stack** (\`keel-stack.json\`): ${describeStack(model.stack)}.
 - **Arquitectura**: hexagonal + CQRS, la misma que el servidor de keel-spring del mismo diseño. \`src/domain\` y \`src/application\` no importan el framework; \`src/infrastructure\` es el único sitio que lo conoce.
 - **Configuración**: perfil por \`PROFILE\` (default \`local\`), \`config/application.yaml\` + \`config/parameters/<perfil>/\`; \`\${VAR}\` es obligatoria y \`\${VAR:default}\` opcional.
-- **Inyección**: siempre con \`@Inject(<token>)\` explícito; el arranque no depende de los metadatos de decoradores.
+- **Inyección**: siempre con \`@Inject(<token>)\` explícito; el arranque no depende de los metadatos de decoradores. La capa application no puede usar \`@Inject\` (es de Nest): sus clases declaran \`static readonly inject = [...]\` y las cablea \`src/infrastructure/usecase/use-case-module.ts\`.
+- **Casos de uso**: un mensaje (\`application/commands|queries\`) y un handler (\`application/usecases\`, con \`@Handles(<Mensaje>)\`) por operación, despachados por \`UseCaseMediator\`. Los handlers nacen con las notas del diseño y terminan en \`throw new Error('TODO: <operación>')\`.
 
 ## Verificación
 
 \`\`\`bash
 npm install          # la primera vez crea package-lock.json: commitéalo, y a partir de ahí npm ci
 npm run typecheck      # tipos de todo el proyecto, pruebas incluidas
+npm run check:architecture   # frontera hexagonal: dominio y aplicación sin framework
 npm test               # arranque bajo el perfil test y sondas
 npm run build && npm start   # GET /livez y /readyz → {"status":"UP"}
 \`\`\`
@@ -47,8 +50,14 @@ npm run build && npm start   # GET /livez y /readyz → {"status":"UP"}
 ## Estado del generador
 
 keel-nest se construye por incrementos (PLAN-KEEL-NEST.md del repo de Keel). Esta versión genera el
-proyecto que arranca, su configuración y sus sondas; el código del dominio, los casos de uso y la API
-llega en los incrementos 4 y 5, y el pipeline de agentes de \`/${SKILL}\` en el 7.
+proyecto que arranca, su configuración, sus sondas, el dominio (value objects con sus guardas,
+agregados con su lifecycle, errores, eventos) y la capa de aplicación (mensajes, handlers, DTOs,
+mappers y el mediator); la API llega en el incremento 5 y el pipeline de agentes de \`/${SKILL}\` en
+el 7.${
+    (model.formatTypes ?? []).length > 0
+      ? '\n\n`infra/check-domain-guards.sh` sale en ROJO recién generado a propósito: el formato de los value types escalares lo hace cumplir `<Tipo>Format.validate(...)`, y esa llamada es del agente.'
+      : ''
+  }
 `;
 }
 
@@ -73,6 +82,7 @@ Lo que sí puedes hacer ahora, con el cwd en esta raíz:
 
 1. \`npm install\` (o \`npm ci\` si el repo ya tiene \`package-lock.json\`)
 2. \`npm run typecheck && npm test\` — el proyecto compila y arranca bajo el perfil \`test\`.
+   \`npm run check:architecture\` — el dominio y la aplicación no importan el framework.
 3. \`npm run build && npm start\` — \`GET /livez\` y \`GET /readyz\` responden \`{"status":"UP"}\`.
 
 Si algo de eso falla en un proyecto recién generado, es un defecto de keel-nest: repórtalo con la salida.
