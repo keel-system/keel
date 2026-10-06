@@ -439,6 +439,11 @@ function resolveField(ownerName, fieldName, field, domainTypes, inlineEnumName, 
     // la nota del command cuando build deja fuera el formato heredado del tipo:
     // sin el nombre, la nota no dice a qué declaración ir a mirar.
     typeName: typeof field.type === 'string' ? field.type : null,
+    // La clase generada que nombra el campo cuando es un enum o un value object compuesto (la del
+    // elemento, si es lista), SIN la proyección de por medio: el esquema relacional
+    // (relational.js) la necesita para encontrar su value object o su enum, y no puede leer el
+    // nombre de la propiedad de tipo de un lenguaje. Un enum inline no tiene `typeName` propio.
+    namedType: resolved.name ?? null,
     // Bucket lógico de un campo `file`. Sin él, aguas abajo nadie puede decidir
     // por visibilidad: el DTO de salida de un bucket público expone la URL y el
     // de uno privado la key, y esa decisión se toma en el mapper.

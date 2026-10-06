@@ -6,6 +6,7 @@ import { snakeCase } from './naming.js';
 import { quoteIdentifier } from './sql-reserved.js';
 import { resolveType as resolveDslType, isBaseType as isDslBaseType } from 'keel-core/gen/types';
 import { validationRules, DECIMAL_PRECISION } from 'keel-core/gen/constraints';
+import { columnSpec } from 'keel-core/gen/relational';
 
 const BASE_TYPES = {
   string: { javaType: 'String', imports: [] },
@@ -140,11 +141,14 @@ export { numericConstraints, inheritedTypePattern } from 'keel-core/gen/constrai
  *   `numeric(38,2)` en vez de la escala declarada.
  */
 export function columnAnnotations(fieldName, field, resolved, { collation = null } = {}) {
+  // QUÉ lleva la columna (nombre, nulabilidad, cotas, collation) lo decide keel-core/gen
+  // (`columnSpec`), el mismo dato que keel-nest escribe como decorador de TypeORM; aquí solo se
+  // escribe como anotación JPA.
+  const spec = columnSpec(fieldName, field, resolved, { collation });
   const annotations = [];
-  const attrs = [`name = "${quoteIdentifier(snakeCase(fieldName))}"`];
-  const constraints = { ...resolved.constraints, ...(field.constraints ?? {}) };
+  const attrs = [`name = "${quoteIdentifier(spec.name)}"`];
 
-  if (field.required || field.id) attrs.push('nullable = false');
+  if (!spec.nullable) attrs.push('nullable = false');
   // NO se emite `unique = true` de columna, y no es un olvido. Toda columna única del
   // diseño ya recibe su `@UniqueConstraint` NOMBRADA en el `@Table` —`uk_<tabla>_natural`
   // para la clave natural, `uk_<tabla>_<campo>` para el resto (`renderTableAnnotation`)—, y
@@ -153,30 +157,23 @@ export function columnAnnotations(fieldName, field, resolved, { collation = null
   // nombre, la base rechaza por esa, y `ApiExceptionHandler` —que mapea por nombre— ya no
   // reconoce el conflicto: un `409 CODE_ALREADY_EXISTS` degradado a error genérico, que es
   // justo el caso que más importa porque solo aparece en la carrera.
-  if (field.id) attrs.push('updatable = false');
+  if (!spec.updatable) attrs.push('updatable = false');
 
-  // La collation solo tiene sentido sobre texto, y se emite DENTRO del columnDefinition porque
-  // este sustituye al tipo: emitirlo junto a `length = N` dejaría la cota del diseño fuera del
-  // DDL y la columna saldría con el ancho por defecto del dialecto. De ahí que las tres ramas
-  // —texto largo, texto acotado y texto sin cota— compongan el tipo entero cuando hay collation.
-  const collatedText = collation && (resolved.javaType === 'String' || resolved.base === 'text');
-  // `json` es texto largo igual que `text`: sin esto caía en la rama del String sin cota y salía
-  // varchar(255), corto para cualquier documento real (la acción del cliente de una pasarela de
-  // pago lo desbordó en la corrida payment-checkout con Stripe).
-  if (resolved.base === 'text' || resolved.base === 'json') {
-    attrs.push(collatedText ? `columnDefinition = "text collate ${collation}"` : 'columnDefinition = "text"');
-  } else if (collatedText) {
-    // Sin `maxLength` el diseño no acotó, así que se conserva el ancho que Hibernate habría
-    // puesto (255): la collation no es excusa para estrechar una columna que nadie acotó.
-    attrs.push(`columnDefinition = "varchar(${constraints.maxLength ?? 255}) collate ${collation}"`);
-  } else if (constraints.maxLength != null && resolved.javaType === 'String') {
-    attrs.push(`length = ${constraints.maxLength}`);
+  // La collation se emite DENTRO del columnDefinition porque este sustituye al tipo: emitirla
+  // junto a `length = N` dejaría la cota del diseño fuera del DDL y la columna saldría con el
+  // ancho por defecto del dialecto. De ahí que las ramas con collation compongan el tipo entero.
+  if (spec.long) {
+    attrs.push(spec.collation ? `columnDefinition = "text collate ${spec.collation}"` : 'columnDefinition = "text"');
+  } else if (spec.collation) {
+    attrs.push(`columnDefinition = "varchar(${spec.length}) collate ${spec.collation}"`);
+  } else if (spec.length != null) {
+    attrs.push(`length = ${spec.length}`);
   }
-  if (resolved.base === 'decimal' && constraints.scale != null) {
-    attrs.push(`precision = ${DECIMAL_PRECISION}, scale = ${constraints.scale}`);
+  if (spec.scale != null) {
+    attrs.push(`precision = ${DECIMAL_PRECISION}, scale = ${spec.scale}`);
   }
 
-  if (resolved.kind === 'enum' || field.type === 'enum') {
+  if (spec.enum) {
     annotations.push('@Enumerated(EnumType.STRING)');
   }
   annotations.push(`@Column(${attrs.join(', ')})`);

@@ -21,6 +21,14 @@ import {
   foreignKeyName,
   crossAggregateForeignKeys
 } from './persistence-members.js';
+import {
+  collectionBatchSize,
+  columnsFor,
+  collectionIndexesOf,
+  foreignKeyIndexName,
+  foreignKeyIndexColumns as neutralForeignKeyIndexColumns,
+  tableOf
+} from 'keel-core/gen/relational';
 
 export const JPA_PKG = 'infrastructure.persistence.entities';
 
@@ -29,6 +37,15 @@ export const JPA_PKG = 'infrastructure.persistence.entities';
 // porque este módulo era su origen y sigue siendo por donde entran sus consumidores.
 export { orderingFieldOf, backReferenceTo, uniqueFields, uniqueConstraints, usesAuditableEntity, indexName, partialUniqueIndexes, foreignKeyName };
 export const jpaMembers = persistedMembers;
+
+// El tamaño del lote, la columna real de un nombre lógico, los índices de una lista y las FK que se
+// indexan son lectura del diseño (keel-core/gen/relational.js): keel-nest los escribe igual.
+export { collectionBatchSize, columnsFor, collectionIndexesOf, foreignKeyIndexName };
+
+/** Las columnas FK de esta tabla que llevan índice propio; ver keel-core/gen/relational.js. */
+export function foreignKeyIndexColumns(model, entity, members = jpaMembers(model, entity)) {
+  return neutralForeignKeyIndexColumns(model, entity, members);
+}
 
 export function generate(model) {
   if (!model.layersPresent.persistence || model.persistenceKind === 'document') return [];
@@ -417,91 +434,6 @@ ${accessors.join('\n\n')}
   }
 }
 
-/**
- * Nombre real de columna de un nombre lógico del diseño (campo, relación o
- * value object). Sin esto, un índice declarado sobre la relación `parent`
- * generaría columnList="parent" cuando la columna es `parent_id`: Hibernate no
- * puede crear el índice y el arranque lo reporta sin romper nada — un fallo de
- * rendimiento silencioso.
- *
- * Una relación se admite por su nombre (`product`) o con el sufijo del id
- * (`productId`), indistintamente: cuál de los dos nombra al miembro Java depende
- * de si la relación cruza frontera de agregado (externalRef vs. relationOne), y
- * esa es una decisión del generador que el diseño no tiene por qué conocer.
- */
-// El nombre REAL de la tabla de una entidad, que es el pluralizado de su modelo y no el
-// snake de su nombre: la FK tiene que nombrar la tabla que existe.
-/**
- * Tamaño del lote de carga de colecciones: 50, o el tope de página del diseño si es mayor.
- * Fuente única: lo usan el @BatchSize de cada colección y default_batch_fetch_size (config.js).
- */
-export function collectionBatchSize(model) {
-  return Math.max(50, Number(model.pagination?.maxSize ?? 0) || 0);
-}
-
-function tableOf(model, entityName) {
-  const found = (model.entities ?? []).find((candidate) => candidate.name === entityName);
-  return found?.tableName ?? snakeCase(entityName);
-}
-
-export function columnsFor(model, entity, members, logicalName, warnings) {
-  const [head, ...rest] = String(logicalName).split('.');
-  const member = members.find(
-    (m) => m.name === head || m.relation?.name === head || (m.relation && `${m.relation.name}Id` === head)
-  );
-
-  if (member?.kind === 'scalar') return [snakeCase(member.name)];
-  if (member?.kind === 'externalRef' || member?.kind === 'relationOne') {
-    return [`${snakeCase(member.relation.name)}_id`];
-  }
-  if (member?.kind === 'vo') {
-    // vo.sub → una columna; el vo entero → todas sus columnas aplanadas.
-    if (rest.length > 0) {
-      const sub = member.subs.find((s) => s.voAccessor === rest[0]);
-      if (sub) return [sub.column.replace(/`/g, '')];
-    } else if (member.subs.length > 0) {
-      return member.subs.map((sub) => sub.column.replace(/`/g, ''));
-    }
-  }
-
-  warnings?.push(
-    `persistence.entities.${entity.name}: el índice declara "${logicalName}", que no es un campo ni una relación de la entidad; se usa "${snakeCase(head)}" tal cual y el índice puede no crearse.`
-  );
-  return [snakeCase(head)];
-}
-
-/**
- * Índices declarados sobre un campo de COLECCIÓN, agrupados por el miembro al que
- * pertenecen.
- *
- * No caben en el `@Table` de la entidad —una lista vive en su tabla hija, y un
- * `@Index` sobre una columna que esa tabla no tiene rompe el DDL— pero sí en la
- * hija, que la genera build entera: nombre de tabla, columna del elemento y FK a la
- * raíz salen todos de aquí, así que materializarlo es exacto y no hay nada que
- * inventar. Descartarlo con un aviso dejaba el índice declarado sin existir en
- * ninguna parte: ni en la entidad, ni en el appendix de migrations.js (que solo
- * cubre los CONDICIONADOS), y el filtro que el diseño quería acotar recorría entera
- * una tabla que crece con cada elemento.
- *
- * Dos casos se quedan fuera a propósito, y los dos siguen avisando:
- *  - el compuesto que mezcla la lista con columnas del padre: sus columnas no viven
- *    en la misma tabla, así que ningún índice de un motor relacional las cubre;
- *  - el elemento value object: su espejo @Embeddable aporta VARIAS columnas y el
- *    índice, que nombra solo la lista, no dice sobre cuál va.
- */
-export function collectionIndexesOf(entity, members) {
-  const byMember = new Map();
-  const handled = new Set();
-  for (const index of entity.indexes ?? []) {
-    if (index.when || index.fields.length !== 1) continue;
-    const member = members.find((m) => m.kind === 'elementCollection' && m.name === index.fields[0]);
-    if (!member || member.element.kind === 'vo') continue;
-    byMember.set(member.name, [...(byMember.get(member.name) ?? []), index]);
-    handled.add(index);
-  }
-  return { byMember, handled };
-}
-
 function renderTableAnnotation(model, entity, members, imports) {
   const attrs = [`name = "${quoteIdentifier(entity.tableName)}"`];
   const uniqueConstraints = [];
@@ -591,68 +523,4 @@ function renderTableAnnotation(model, entity, members, imports) {
   }
 
   return `@Table(${attrs.join(', ')})`;
-}
-
-/** Nombre del índice que build pone a una columna FK. Prefijo `ix_`, el de los índices del framework. */
-export function foreignKeyIndexName(table, fkColumn) {
-  return `ix_${table}_${fkColumn}`;
-}
-
-/**
- * Las columnas FK de la tabla de esta entidad que necesitan un índice propio.
- *
- * PostgreSQL, SQL Server y Oracle NO indexan una FK por su cuenta (MySQL y MariaDB sí:
- * InnoDB lo exige, y reutiliza el declarado en vez de crear otro, así que emitirlo allí es
- * inocuo). Sin él, tres cosas se degradan con el tamaño de la tabla y ninguna falla: el
- * `IN (...)` del @BatchSize que carga las hijas de una página recorre la tabla hija entera;
- * borrar el padre —o un `orphanRemoval`— la recorre para comprobar la FK; y en Oracle ese
- * borrado bloquea la tabla hija ENTERA mientras dura. Ningún escenario lo ve: la respuesta
- * es la misma, solo que más lenta cuanto más crece el servicio.
- *
- * Las columnas, las tres FK que existen en este modelo:
- *  - `<relación>_id` de un @ManyToOne (lado dueño, incluida la vuelta de una hija a su padre);
- *  - `<padre>_id` que un @OneToMany UNIDIRECCIONAL de otra entidad pone en esta tabla;
- *  - `<relación>_id` de una referencia a otro agregado (`crossAggregateForeignKeys`).
- * El @OneToOne no: Hibernate ya le pone una constraint única, que es un índice.
- *
- * Se omite la columna que ya ENCABEZA otro índice o constraint única de la tabla —un índice
- * `(a, b)` sirve para buscar por `a`—: emitirlo duplicaría trabajo en cada escritura. La
- * tabla de elementos de una lista se trata aparte, en su @CollectionTable.
- */
-export function foreignKeyIndexColumns(model, entity, members = jpaMembers(model, entity)) {
-  // La referencia a otro agregado sale de la MISMA fuente que su FK: sin raíz persistida al
-  // otro lado no hay FK, y entonces indexarla ya no es integridad sino una consulta, que es
-  // decisión del diseño (`indexes`).
-  const candidates = crossAggregateForeignKeys(model)
-    .filter((fk) => fk.table === entity.tableName)
-    .map((fk) => fk.column);
-  for (const member of members) {
-    if (member.kind === 'relationOne' && member.relation.cardinality === 'many-to-one') {
-      candidates.push(`${snakeCase(member.relation.name)}_id`);
-    }
-  }
-  for (const parent of model.entities ?? []) {
-    if (!parent.persisted) continue;
-    for (const relation of parent.relations ?? []) {
-      if (!relation.internal || relation.cardinality !== 'one-to-many' || relation.entity !== entity.name) continue;
-      if (backReferenceTo(model, entity.name, parent.name)) continue;
-      candidates.push(`${snakeCase(parent.name)}_id`);
-    }
-  }
-
-  const leading = new Set();
-  const lead = (columns) => columns.length > 0 && leading.add(columns[0]);
-  if (entity.naturalKey?.length > 0) {
-    lead(entity.naturalKey.flatMap((f) => columnsFor(model, entity, members, f)));
-  }
-  for (const field of uniqueFields(entity)) lead([snakeCase(field.name)]);
-  for (const index of entity.indexes ?? []) {
-    // Un índice condicionado solo cubre las filas de su condición: no sirve para la FK.
-    if (index.when) continue;
-    const probe = [];
-    const columns = index.fields.flatMap((f) => columnsFor(model, entity, members, f, probe));
-    if (probe.length === 0) lead(columns);
-  }
-
-  return [...new Set(candidates)].filter((candidate) => !leading.has(candidate));
 }

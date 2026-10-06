@@ -15,6 +15,7 @@ import * as reconciliationClaim from './reconciliation-claim.js';
 import * as conditionalUniqueness from './conditional-uniqueness.js';
 import { textFoldImport } from './text-fold.js';
 import { partialUniqueIndexes } from './persistence-members.js';
+import { collectInternalEntities } from 'keel-core/gen/relational';
 
 export const PORT_PKG = 'domain.repository';
 export const REPO_PKG = 'infrastructure.persistence.repositories';
@@ -683,18 +684,8 @@ ${mappers.join('\n\n')}
   };
 }
 
-export function collectInternalEntities(model, root) {
-  const involved = [];
-  const visit = (entity) => {
-    if (!entity || involved.includes(entity)) return;
-    involved.push(entity);
-    for (const relation of entity.relations) {
-      if (relation.internal) visit(model.entities.find((e) => e.name === relation.entity));
-    }
-  };
-  visit(root);
-  return involved;
-}
+// La raíz y sus entidades internas: lectura del diseño, en keel-core/gen (relational.js).
+export { collectInternalEntities };
 
 function renderToDomain(model, entity, imports) {
   const args = domainMembers(model, entity).map((member) => {

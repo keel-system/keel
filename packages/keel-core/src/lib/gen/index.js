@@ -39,3 +39,40 @@ export {
 } from './constraints.js';
 export { guardedFields } from './domain-guards.js';
 export { physicalBucketName, declaredBuckets, isPublicBucket } from './buckets.js';
+export {
+  isReservedSqlWord,
+  quoteIdentifierFor,
+  columnSpec,
+  foldedShadow,
+  LOCK_VERSION,
+  AUDIT_COLUMNS,
+  usesAuditableEntity,
+  persistedMembers,
+  elementTable,
+  joinColumnOf,
+  parentColumnOf,
+  orderingFieldOf,
+  backReferenceTo,
+  collectInternalEntities,
+  collectionBatchSize,
+  tableOf,
+  uniqueFields,
+  indexName,
+  foreignKeyName,
+  foreignKeyIndexName,
+  partialUniqueIndexes,
+  storedWhenValue,
+  crossAggregateForeignKeys,
+  uniqueConstraints,
+  columnsFor,
+  collectionIndexesOf,
+  foreignKeyIndexColumns
+} from './relational.js';
+export {
+  constraintErrors,
+  raceOnlyConstraint,
+  declaredConcurrencyError,
+  CONCURRENT_MODIFICATION_MESSAGE,
+  UNKNOWN_INTEGRITY_MESSAGE,
+  TRANSACTION_TIMEOUT_MESSAGE
+} from './constraint-errors.js';

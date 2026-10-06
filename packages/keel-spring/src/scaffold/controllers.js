@@ -9,9 +9,9 @@
 // @RestControllerAdvice central en infrastructure/rest.
 
 import { callsPaymentGateway } from '../lib/payments-model.js';
-import { FRAMEWORK_ERRORS, conditionalUniquenessToken } from 'keel-core';
+import { FRAMEWORK_ERRORS } from 'keel-core';
 import { callerResolution } from './security.js';
-import { declaredErrorFor, declaredUniquenessErrorFor, declaredReferenceError, errorByCode } from 'keel-core/gen';
+import { declaredErrorFor } from 'keel-core/gen';
 import { requestShape, returnsLocation, locationTarget } from 'keel-core/gen/api-contract';
 import { javaFile, javaPath, subPackage, javadoc } from './render.js';
 import {
@@ -25,8 +25,13 @@ import {
 import { MEDIATOR_PKG } from './mediator.js';
 import { domainTypeImport } from './entities.js';
 import { uniqueConstraints } from './persistence-entities.js';
-import { crossAggregateForeignKeys } from './persistence-members.js';
-import { screamingSnake } from '../lib/naming.js';
+import {
+  constraintErrors,
+  declaredConcurrencyError,
+  CONCURRENT_MODIFICATION_MESSAGE,
+  UNKNOWN_INTEGRITY_MESSAGE,
+  TRANSACTION_TIMEOUT_MESSAGE
+} from 'keel-core/gen/constraint-errors';
 import { escapeJava } from '../lib/type-mapper.js';
 
 const MAPPING_BY_METHOD = {
@@ -451,7 +456,7 @@ function renderDataIntegrityHandler(model, imports, constantsOut) {
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ErrorResponse onDataIntegrityViolation(DataIntegrityViolationException exception) {
         return new ErrorResponse(HttpStatus.CONFLICT.value(), "Conflict",
-                "Violación de integridad de datos: alguna restricción no se cumplió");
+                "${UNKNOWN_INTEGRITY_MESSAGE}");
     }
 `;
   }
@@ -460,58 +465,14 @@ function renderDataIntegrityHandler(model, imports, constantsOut) {
   imports.add('java.util.Map');
   imports.add('java.util.function.Supplier');
   const errorsPkg = subPackage(model, 'domain.errors');
-  const resolved = constraints.map((constraint) => {
-    // Si el diseño NOMBRA el error (DSL 2.16: `naturalKeyError`, `indexes[].error`), manda él
-    // sobre toda deducción —por los campos, por la condición o por la colección—, y deja de ser
-    // una carrera: decir qué significa el choque es justo decidir que es un error del cliente.
-    const named = constraint.error ? errorByCode(model, constraint.error) : null;
-    if (named) return { ...constraint, conditional: Boolean(constraint.when), raceOnly: null, declared: named, named: true };
-    // Unicidad CONDICIONADA (`indexes[].when`): no dice «ya existe uno con esos campos» sino
-    // «ya hay uno en ese estado» —una imagen principal, una versión activa—, así que ni su
-    // familia ni su mensaje salen de los campos. El code lo busca por la CONDICIÓN
-    // (framework-errors § uniqueness.conditionalFamilyFor) y, si el diseño no lo nombró, el
-    // choque solo puede venir de una carrera: la regla del caso de uso resuelve el caso normal
-    // y el índice es el respaldo concurrente. Antes salía PRODUCT_IMAGE_PRODUCT_ID_ALREADY_EXISTS
-    // con «Ya existe un ProductImage con ese productId», que es falso: hay muchas por producto.
-    if (constraint.when) {
-      const family = FRAMEWORK_ERRORS.uniqueness.conditionalFamilyFor(conditionalUniquenessToken(constraint.when));
-      const declared = declaredErrorFor(model, FRAMEWORK_ERRORS.uniqueness, family);
-      return { ...constraint, conditional: true, raceOnly: !declared, declared: declared ?? declaredConcurrencyError(model) };
-    }
-    const raceOnly = raceOnlyConstraint(model, constraint);
-    const soleConstraint = constraints.filter((other) => other.entity === constraint.entity).length === 1;
-    // Acotada a la colección, el diseño SÍ puede nombrarla —es lo que pide
-    // CHK-PERSIST-CHILD-UNIQUE-CODE—, y si lo hace manda él: dentro del padre ese choque puede
-    // ser de verdad un error del cliente. La carrera es el default, no el veredicto.
-    const nombrada =
-      raceOnly === 'collection'
-        ? declaredUniquenessError(model, constraint.entity, constraint.fields, soleConstraint)
-        : null;
-    if (nombrada) return { ...constraint, raceOnly: null, declared: nombrada };
-    return {
-      ...constraint,
-      raceOnly,
-      // Con `raceOnly` el error que toca es el de concurrencia, no el de unicidad: el
-      // conflicto no es «ya existe uno así» sino dos escrituras que se pisaron. El
-      // override del diseño se sigue respetando, solo que sobre la otra familia.
-      declared: raceOnly
-        ? declaredConcurrencyError(model)
-        : declaredUniquenessError(model, constraint.entity, constraint.fields, soleConstraint)
-    };
-  });
-  // FK entre agregados: su violación llega por el mismo camino (una constraint con nombre
-  // dentro del mensaje del driver) y, hasta la corrida `catalog`, no la mapeaba nadie — así
-  // que el 409 que el diseño declara para «la marca tiene productos» se degradaba a genérico.
-  // Solo entra si el diseño DECLARA el error: aquí no se inventa ningún code.
-  const references = crossAggregateForeignKeys(model)
-    .map((fk) => ({ ...fk, declared: declaredReferenceError(model, fk.refEntity) }))
-    .filter((fk) => fk.declared)
-    .map((fk) => ({ constraint: fk.name, entity: fk.refEntity, fields: [fk.column], reference: fk, declared: fk.declared }));
+  // QUÉ error significa violar cada constraint, y con qué mensaje, lo decide keel-core/gen
+  // (`constraintErrors`): keel-nest traduce las mismas violaciones a los mismos errores.
+  const entries = constraintErrors(model);
 
-  for (const { declared } of [...resolved, ...references]) {
+  for (const { declared } of entries) {
     if (declared) imports.add(`${errorsPkg}.${declared.exceptionClass}`);
   }
-  constantsOut.push(constraintMapConstant([...resolved, ...references]));
+  constantsOut.push(constraintMapConstant(entries));
 
   return `
     @ExceptionHandler(DataIntegrityViolationException.class)
@@ -522,7 +483,7 @@ function renderDataIntegrityHandler(model, imports, constantsOut) {
         }
         log.warn("Violación de integridad no asociada a ninguna constraint conocida", exception);
         return ResponseEntity.status(HttpStatus.CONFLICT).body(new ErrorResponse(HttpStatus.CONFLICT.value(),
-                "Conflict", "Violación de integridad de datos: alguna restricción no se cumplió"));
+                "Conflict", "${UNKNOWN_INTEGRITY_MESSAGE}"));
     }
 
     /**
@@ -545,74 +506,11 @@ function renderDataIntegrityHandler(model, imports, constantsOut) {
 `;
 }
 
-/**
- * ¿Esta constraint solo puede romperla una carrera? Y si sí, POR QUÉ — el motivo decide el
- * mensaje y el comentario que se emiten, así que se devuelve él y no un booleano
- * (`'computed'` | `'collection'`, o `null` si el conflicto sí es «ya existe uno así»).
- *
- * Un campo `computed` no lo manda nunca el cliente: lo calcula el servicio. Si además el
- * agregado que lo contiene lleva bloqueo optimista, violar su unicidad no es «ya existe
- * uno así» —nadie pidió ese valor— sino dos escrituras concurrentes que calcularon el
- * mismo. Traducirlo a un error de negocio de "ya existe" manda al cliente a corregir una
- * entrada que no envió; el 409 de concurrencia le dice lo que de verdad ocurrió, que es
- * que reintente.
- */
-function raceOnlyConstraint(model, constraint) {
-  const entity = model.entities.find((e) => e.name === constraint.entity);
-  if (!entity) return null;
-
-  // El bloqueo se mira en la RAÍZ del agregado, no en la entidad: una entidad interna
-  // nunca lleva @Version propia (solo las raíces), y sin embargo está protegida por la
-  // de su raíz. Preguntárselo a ella misma daría siempre que no.
-  const root = model.entities.find((e) => e.name === entity.rootEntity) ?? entity;
-  if (!root.usesOptimisticLocking) return null;
-
-  // Unicidad ACOTADA A LA COLECCIÓN. Un índice único de una entidad interna que incluye la
-  // relación a su raíz —«dos imágenes del mismo producto no comparten posición»— no dice «ya
-  // existe un X con ese Y». La raíz es implícita en la petición (viaja en la ruta), y el otro
-  // miembro lo REPARTE el servicio entre toda la colección: al insertar elige la primera libre
-  // y al reordenar desplaza las demás. El cliente puede pedir una posición y pedirla es legal
-  // —siempre hay una imagen ocupándola—, así que lo único que rompe la constraint es el estado
-  // intermedio del reparto o una carrera. Un `*_ALREADY_EXISTS` lo mandaría a corregir una
-  // entrada correcta; aguas arriba lo avisa CHK-PERSIST-CHILD-UNIQUE-CODE.
-  if (!entity.isAggregateRoot && collectionScopedConstraint(entity, constraint)) return 'collection';
-
-  // Basta con que UNO de los campos sea computed. Los demás pueden salir del cliente
-  // —en una clave (plantilla, versión) la plantilla la elige él—, pero si el que colisiona
-  // es el calculado, las dos filas tuvieron que calcularlo por separado. Lo que el cliente
-  // mandó no distingue este caso de ningún otro: no hay nada que pueda corregir.
-  return constraint.fields.some((name) => entity.fields.find((f) => f.name === name)?.computed)
-    ? 'computed'
-    : null;
-}
-
-/**
- * ¿La constraint acota la unicidad a la COLECCIÓN de una raíz, en vez de al servicio entero?
- *
- * Lo dice la back-reference: si entre los miembros del índice está la relación de la hija
- * hacia su raíz, «único» significa «único DENTRO de ese padre». Se pregunta por el miembro
- * con los dos nombres con los que el diseño puede escribirlo (`product` y `productId`), igual
- * que hace `columnsFor`: cuál de los dos nombra al miembro Java es decisión del generador.
- */
-function collectionScopedConstraint(entity, constraint) {
-  const toRoot = (entity.relations ?? []).filter((relation) => relation.backReference);
-  if (toRoot.length === 0) return false;
-  return (constraint.fields ?? []).some((member) => {
-    const head = String(member).split('.')[0];
-    return toRoot.some((relation) => head === relation.name || head === `${relation.name}Id`);
-  });
-}
-
-// La unicidad es el único canónico DERIVADO: su familia depende de los campos de la clave,
-// porque un servicio con varias claves naturales necesita un error por cada una.
-function declaredUniquenessError(model, entity, fields, soleConstraint) {
-  return declaredUniquenessErrorFor(model, FRAMEWORK_ERRORS.uniqueness, entity, fields, { soleConstraint });
-}
-
 function constraintMapConstant(constraints) {
   const entries = constraints
-    .map(({ constraint, entity, fields, declared, raceOnly, conditional, when, description, reference, named }) => {
+    .map(({ constraint, entity, fields, declared, raceOnly, conditional, when, reference, named, message: text, code }) => {
       const label = fields.join(', ');
+      const message = escapeJava(text);
       if (reference) {
         return `            // Referencia entre AGREGADOS (${reference.table}.${reference.column} → ${reference.refTable}):
             // la FK existe solo en el baseline de migraciones (una asociación navegable entre
@@ -621,20 +519,9 @@ function constraintMapConstant(constraints) {
             // constraint y su error honesto sería otro; lo impide aguas arriba el bloqueo
             // compartido del handler, así que aquí se traduce el desenlace que sí es de negocio.
             Map.entry("${constraint}", () -> new ${declared.exceptionClass}(
-                    "${escapeJava(String(declared.when ?? `No se puede borrar: hay ${reference.table} que lo referencian`).replace(/\.\s*$/, ''))}"))`;
+                    "${message}"))`;
       }
       const condition = conditional ? `${when.field} = ${JSON.stringify(when.equals)}` : null;
-      // Nombrada, habla el diseño: el `when` del error es lo que el cliente tiene que leer.
-      const message = named && declared?.when
-        ? escapeJava(String(declared.when).replace(/\.\s*$/, ''))
-        : conditional
-        ? escapeJava((description ?? `Solo puede haber un ${entity} por ${label} con ${condition}`).replace(/\.\s*$/, '')) +
-          (raceOnly ? '; otra operación lo cambió a la vez, reintenta' : '')
-        : raceOnly === 'collection'
-          ? `Otra operación cambió ${label} de ${entity} a la vez; reintenta con el estado actual`
-          : raceOnly
-            ? `Otra operación registró ${entity}.${label} a la vez; reintenta`
-            : `Ya existe un ${entity} con ese ${label}`;
       const why = named
         ? `            // Unicidad de ${entity}.${label}${condition ? ` (${condition})` : ''} → el error que el diseño NOMBRA para ella
             // (naturalKeyError / indexes[].error). No se deduce: lo dijo el diseño.`
@@ -660,9 +547,6 @@ function constraintMapConstant(constraints) {
             Map.entry("${constraint}", () -> new ${declared.exceptionClass}(
                     "${message}"))`;
       }
-      const code = raceOnly
-        ? FRAMEWORK_ERRORS.concurrency.code
-        : `${screamingSnake(entity)}_${screamingSnake(fields.join('_'))}_ALREADY_EXISTS`;
       if (raceOnly) {
         return `${why}
             Map.entry("${constraint}", () -> new ConflictException(
@@ -745,7 +629,7 @@ function renderOptimisticLockHandler(model, imports) {
       ? 'org.springframework.dao.OptimisticLockingFailureException'
       : 'org.springframework.orm.ObjectOptimisticLockingFailureException'
   );
-  const message = 'El recurso fue modificado por otra operación concurrente; reintenta con el estado actual';
+  const message = CONCURRENT_MODIFICATION_MESSAGE;
   const declared = declaredConcurrencyError(model);
   if (declared) {
     imports.add(`${subPackage(model, 'domain.errors')}.${declared.exceptionClass}`);
@@ -801,14 +685,9 @@ function renderTransactionTimeoutHandler(model, imports) {
         return ResponseEntity.status(status)
                 .header(HttpHeaders.RETRY_AFTER, "1")
                 .body(new ErrorResponse(status.value(), status.getReasonPhrase(), "${code}",
-                        "La operación no terminó a tiempo; reinténtala", List.of()));
+                        "${TRANSACTION_TIMEOUT_MESSAGE}", List.of()));
     }
 `;
-}
-
-// El error de conflicto por concurrencia que declara el diseño, si lo hay.
-function declaredConcurrencyError(model) {
-  return declaredErrorFor(model, FRAMEWORK_ERRORS.concurrency);
 }
 
 function renderExceptionHandler(model) {
