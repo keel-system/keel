@@ -18,12 +18,13 @@ import { usesApi } from './rest-support.js';
 import { controllerClasses } from './controllers.js';
 import { relativeSpecifier } from './render.js';
 import { usesRelational } from './persistence-entities.js';
+import { usesIdempotencyHeader } from './request-idempotency.js';
 
 export function generate(model) {
   return [
     { path: 'src/main.ts', content: mainTs() },
     { path: 'src/app.module.ts', content: appModuleTs(usesMediator(model), controllerClasses(model), usesRelational(model)) },
-    { path: HTTP_PLATFORM_TS, content: httpPlatformTs(usesApi(model)) }
+    { path: HTTP_PLATFORM_TS, content: httpPlatformTs(usesApi(model), usesApi(model) && usesIdempotencyHeader(model)) }
   ];
 }
 
@@ -80,13 +81,15 @@ export class AppModule {
 `;
 }
 
-function httpPlatformTs(withApi) {
+function httpPlatformTs(withApi, withIdempotencyHeader = false) {
   // Con API, la entrada HTTP abre además la correlación de la petición y todo fallo sale por el
   // filtro de errores del contrato (ErrorResponse). Sin API no hay nada que correlacionar ni traducir.
   const apiImports = withApi
     ? `
 import { ApiExceptionFilter } from '../rest/api-exception-filter.js';
-import { CORRELATION_HEADER, CorrelationContext } from '../correlation/correlation-context.js';`
+import { CORRELATION_HEADER, CorrelationContext } from '../correlation/correlation-context.js';${
+      withIdempotencyHeader ? "\nimport { IDEMPOTENCY_HEADER, IdempotencyContext } from '../../application/support/idempotency-context.js';" : ''
+    }`
     : '';
   const apiSetup = withApi
     ? `
@@ -95,7 +98,14 @@ import { CORRELATION_HEADER, CorrelationContext } from '../correlation/correlati
   fastify.addHook('onRequest', (request, reply, done) => {
     const correlationId = CorrelationContext.accept(request.headers[CORRELATION_HEADER.toLowerCase()]);
     void reply.header(CORRELATION_HEADER, correlationId);
-    CorrelationContext.runWith(correlationId, done);
+    ${
+      withIdempotencyHeader
+        ? `// Y la clave de idempotencia (keySource: client-key), para el handler que la use: sin cabecera no se
+    // abre nada y la operación se ejecuta sin deduplicar.
+    const idempotencyKey = request.headers[IDEMPOTENCY_HEADER.toLowerCase()];
+    CorrelationContext.runWith(correlationId, () => IdempotencyContext.runWith(idempotencyKey, done));`
+        : 'CorrelationContext.runWith(correlationId, done);'
+    }
   });
   // Todo fallo, también los de lectura de la petición y las rutas que no existen, sale como ErrorResponse.
   app.useGlobalFilters(new ApiExceptionFilter());`

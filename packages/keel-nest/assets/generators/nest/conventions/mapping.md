@@ -70,6 +70,47 @@ async handle(command: CreateProductCommand): Promise<CreateProductResponseDto> {
 - Un `todo('…')` en un mapper es un campo que build no supo derivar del dominio: complétalo; no lo dejes
   devolviendo un valor inventado.
 
+### La idempotencia de petición: el registro ya está, el uso es tuyo
+
+Una operación con `idempotency` (salvo `keySource: payload-field` cuyo campo está en la clave natural:
+ahí la guarda es la constraint del agregado) tiene **ya generado** todo el mecanismo, el mismo que el del
+servidor de keel-spring: el puerto `IdempotencyStore` (inyectado en su handler), su adaptador con la tabla
+`idempotency_record`, `CommandSignature` (la firma canónica del comando), `IdempotencyContext` (la
+cabecera `Idempotency-Key`, con `client-key`) y los dos errores de conflicto. **No escribas otro registro,
+otra tabla ni otra firma, y no toques el mediator ni el controlador para esto**: un registro propio pasa
+los escenarios y deja de ser el servidor de keel-spring (otra tabla, otro motor).
+
+```ts
+async handle(command: CreateProductCommand): Promise<CreateProductResponseDto> {
+  const key = IdempotencyContext.get();               // null = el cliente no mandó la cabecera
+  if (key == null) return this.create(command, Uuids.v7());   // sin clave: se ejecuta sin deduplicar
+  const scope = command.idempotencyScope();           // lo compone build desde el diseño
+  const signature = CommandSignature.of(command);
+  const previous = await this.idempotencyStore.find(scope, key);
+  if (previous != null) {
+    if (previous.signature !== signature) throw new IdempotencyReuseException(scope, key);
+    // La MISMA respuesta, reconstruida desde el recurso: sin re-ejecutar nada.
+    const product = await this.productRepository.findById(previous.resourceId!);
+    return this.productApplicationMapper.toCreateProductResponseDto(product!);
+  }
+  const id = Uuids.v7();                               // RECLAMA PRIMERO: el id se decide aquí
+  await this.idempotencyStore.save(scope, key, signature, id, 86400);
+  return this.create(command, id);                     // y SOLO DESPUÉS el negocio, con ese id
+}
+```
+
+- Con `keySource: payload-hash` la clave es `CommandSignature.of(command)` y **no hay rama sin clave**:
+  envolver el algoritmo en un `if (key != null)` hace que la operación no deduplique nunca, en silencio.
+- El `ttlSeconds` es el del diseño (lo dice la nota del handler).
+- `save` corre dentro de la transacción del comando: si el comando revierte, el registro revierte con él.
+- **La carrera** (dos peticiones con la misma clave a la vez) no la ve `find`: la arbitra la clave
+  primaria del registro y el adaptador la traduce a `IdempotencyConflictException` (409
+  `IDEMPOTENCY_KEY_IN_PROGRESS` o el que declare el diseño). **No la captures.** Y por eso se reclama
+  PRIMERO: con `save` al final, la perdedora choca antes contra la primera restricción de negocio (la
+  unicidad del sku) y sale ese `code`, no el de la clave en curso.
+- La clave reutilizada con otro contenido es `IdempotencyReuseException` (409 `IDEMPOTENCY_KEY_REUSED`
+  o el del diseño): no reutilices el error de la carrera ni inventes un `code`.
+
 ### Normalización antes que validación de formato
 
 Si una regla del diseño normaliza un campo (mayúsculas, recorte, slug), se normaliza **antes** de

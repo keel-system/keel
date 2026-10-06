@@ -44,7 +44,9 @@ function springSchema(files) {
     table(tables, m[2]).names.add(m[1]);
     table(tables, m[2]).predicates.set(m[1], m[3]);
   }
-  const jpa = files.filter((f) => f.path.includes('/infrastructure/persistence/entities/') && f.path.endsWith('.java'));
+  // Las entidades del diseño y las de los mecanismos de build que tienen tabla (el registro de la
+  // idempotencia de petición vive en persistence/idempotency).
+  const jpa = files.filter((f) => /\/infrastructure\/persistence\/(entities|idempotency)\//.test(f.path) && f.path.endsWith('.java'));
   const classes = new Map();
   for (const file of jpa) {
     const name = /public (?:abstract )?class (\w+)/.exec(file.content)?.[1];

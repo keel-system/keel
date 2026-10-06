@@ -38,11 +38,6 @@ export const SUPPORTED_DATABASES = ['postgresql', 'mysql'];
  * sin almacén de idempotencia parecería un handler completo.
  */
 const PENDING_OPERATION_FEATURES = [
-  {
-    key: 'idempotency',
-    what: 'idempotency (el almacén, la firma del comando y el gate check-idempotency.sh)',
-    increment: 'incremento 10'
-  },
   { key: 'schedule', what: 'schedule (el scheduler que dispara la operación por reloj)', increment: 'incremento 10' },
   { key: 'cache', what: 'cache (la caché de la consulta)', increment: 'incremento 13' }
 ];
@@ -81,6 +76,18 @@ export function checkSupportedFeatures(manifest, layers) {
     );
   }
   const operations = Object.entries(layers?.['use-cases']?.operations ?? {});
+  // La idempotencia de petición se genera (el registro idempotency_record, como keel-spring) cuando hay
+  // persistencia donde registrar la clave en la misma transacción que el efecto. Sin persistencia no hay
+  // mecanismo posible, y se dice.
+  if (!declared.includes('persistence')) {
+    const idempotent = operations.filter(([, operation]) => operation?.idempotency != null).map(([name]) => name);
+    if (idempotent.length > 0) {
+      warnings.push(
+        `use-cases: ${idempotent.join(', ')} declara${idempotent.length === 1 ? '' : 'n'} idempotency, pero el diseño no tiene persistencia: ` +
+          'el registro de claves tiene que confirmarse en la misma transacción que el efecto, así que no se genera ningún mecanismo.'
+      );
+    }
+  }
   for (const feature of PENDING_OPERATION_FEATURES) {
     const names = operations.filter(([, operation]) => operation?.[feature.key] != null).map(([name]) => name);
     if (names.length === 0) continue;

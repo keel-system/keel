@@ -37,8 +37,10 @@ test('lo que una operación declara y cuelga de un incremento futuro se avisa, n
   };
   const { errors, warnings } = checkSupportedFeatures(manifestWith('domain', 'use-cases'), layers);
   assert.deepEqual(errors, []);
+  // Sin persistencia, la idempotencia no tiene dónde registrar la clave: se dice. Los otros dos cuelgan
+  // de su incremento.
   assert.equal(warnings.length, 3);
-  assert.match(warnings[0], /createOrder declara idempotency .*incremento 10/);
+  assert.match(warnings[0], /createOrder declara idempotency, pero el diseño no tiene persistencia/);
   assert.match(warnings[1], /purgeOld declara schedule .*incremento 10/);
   assert.match(warnings[2], /getOrder declara cache .*incremento 13/);
   assert.ok(!warnings.join('\n').includes('listOrders'));
@@ -79,4 +81,13 @@ test('el motor: PostgreSQL y MySQL se generan; los demás del catálogo se recha
 test('la telemetría se rechaza en vez de estamparse sin efecto', () => {
   assert.deepEqual(checkSupportedStack({ telemetry: 'none' }).errors, []);
   assert.match(checkSupportedStack({ telemetry: 'otel' }).errors[0], /incremento 14/);
+});
+
+test('con persistencia, la idempotencia de petición se genera y no se avisa', () => {
+  const { warnings } = checkSupportedFeatures(manifestWith('domain', 'use-cases', 'persistence'), {
+    domain: {},
+    'use-cases': { operations: { createOrder: { idempotency: { keySource: 'client-key' } } } },
+    persistence: { default: { model: 'relational' } }
+  });
+  assert.deepEqual(warnings, []);
 });

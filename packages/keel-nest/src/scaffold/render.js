@@ -43,7 +43,9 @@ export const DIRS = {
   mappers: 'application/mappers',
   appSupport: 'application/support',
   portOut: 'application/port/out',
-  usecase: 'infrastructure/usecase'
+  usecase: 'infrastructure/usecase',
+  // La idempotencia de petición: el puerto del registro y sus dos desenlaces de conflicto.
+  idempotency: 'domain/idempotency'
 };
 
 export function entityDir(entity) {

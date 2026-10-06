@@ -40,6 +40,10 @@ import { domainMembers } from '../src/scaffold/entities.js';
 import { classPath, entityDir, DIRS } from '../src/scaffold/render.js';
 import { repositoryRoots, adapterPath, adapterClass, naturalKeyFinder, occupantFinders } from '../src/scaffold/repositories.js';
 import { ormPath, ormClass, unidirectionalParents } from '../src/scaffold/persistence-entities.js';
+import { usesRequestIdempotency, IDEMPOTENCY_STORE_IMPL_TS, IDEMPOTENCY_CONFLICT_TS } from '../src/scaffold/request-idempotency.js';
+import { IDEMPOTENCY_RECORD } from 'keel-core/gen/request-idempotency';
+import { FRAMEWORK_ERRORS } from 'keel-core';
+import { effectiveErrorCode } from 'keel-core/gen';
 
 const args = process.argv.slice(2);
 const keep = args.includes('--keep');
@@ -357,6 +361,7 @@ function probeScript(model, engine, db, expected) {
     unsampled: [...new Set(ctx.unsampled)],
     root: roots.map((root) => root.name).join(', '),
     script: `import 'reflect-metadata';
+import { randomUUID } from 'node:crypto';
 import { DataSource } from 'typeorm';
 import { databaseSettings } from './dist/infrastructure/persistence/data-source-options.js';
 import { TransactionContext } from './dist/infrastructure/persistence/transaction-context.js';
@@ -423,6 +428,7 @@ try {
 ` : ''}
 ${blocks.join('\n')}
 ${concurrencyBlock(model, engine, roots[0], ctx)}
+${idempotencyBlock(model, engine)}
 
 await dataSource.destroy();
 console.log('@@RESULTS@@' + JSON.stringify(results));
@@ -588,6 +594,73 @@ function concurrencyBlock(model, engine, root, ctx) {
   await holder;
   check('tope: la espera de bloqueo se corta', waited != null, 'la sentencia esperó más que su tope');
   check('tope: sale como tope de transacción (503), no como conflicto', waited != null && translatePersistenceError(waited) === 'timeout' && !isTransientWriteConflict(waited), waited?.driverError?.code ?? waited?.message);
+}`;
+}
+
+/**
+ * El REGISTRO de la idempotencia de petición contra el motor: la tabla es la del esquema neutral (la de
+ * keel-spring), el adaptador guarda y encuentra, el ámbito forma parte de la clave, una clave repetida
+ * y una CARRERA de dos transacciones salen como el conflicto con su code, una clave caducada se
+ * sustituye, y el registro revierte con la transacción del comando.
+ */
+function idempotencyBlock(model, engine) {
+  if (!usesRequestIdempotency(model)) return '';
+  // El code de la carrera: el canónico, o el que el diseño declare de su familia (catalog-extended).
+  const race = { code: effectiveErrorCode(model, FRAMEWORK_ERRORS.idempotencyRace), http: FRAMEWORK_ERRORS.idempotencyRace.http };
+  const schema = engine === 'postgresql' ? "'public'" : `'${DB_NAME}'`;
+  const columnsQuery = engine === 'postgresql'
+    ? 'SELECT column_name AS name, is_nullable AS nullable, character_maximum_length AS length FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2'
+    : 'SELECT COLUMN_NAME AS name, IS_NULLABLE AS nullable, CHARACTER_MAXIMUM_LENGTH AS length FROM information_schema.columns WHERE table_schema = ? AND table_name = ?';
+  const indexQuery = engine === 'postgresql'
+    ? 'SELECT indexname AS name FROM pg_indexes WHERE schemaname = $1 AND tablename = $2'
+    : 'SELECT DISTINCT INDEX_NAME AS name FROM information_schema.statistics WHERE table_schema = ? AND table_name = ?';
+  return `
+// ═══ Idempotencia de petición: el registro idempotency_record ═══
+{
+  const { IdempotencyStoreImpl } = await import('${distOf(IDEMPOTENCY_STORE_IMPL_TS)}');
+  const { IdempotencyConflictException } = await import('${distOf(IDEMPOTENCY_CONFLICT_TS)}');
+  const spec = ${JSON.stringify(IDEMPOTENCY_RECORD)};
+  const columns = await dataSource.query(${JSON.stringify(columnsQuery)}, [${schema}, spec.table]);
+  for (const want of spec.columns) {
+    const got = columns.find((column) => (column.name ?? column.NAME) === want.name);
+    const length = got?.length ?? got?.LENGTH;
+    const nullable = (got?.nullable ?? got?.NULLABLE) === 'YES';
+    check(\`\${spec.table}.\${want.name} es la columna del esquema neutral\`, got != null && nullable === want.nullable && (want.length == null || Number(length) === want.length), JSON.stringify(got));
+  }
+  const indexes = (await dataSource.query(${JSON.stringify(indexQuery)}, [${schema}, spec.table])).map((row) => row.name ?? row.NAME);
+  check(\`\${spec.table}: índice \${spec.indexes[0].name}\`, indexes.includes(spec.indexes[0].name), indexes.join(', '));
+
+  const store = new IdempotencyStoreImpl(tx);
+  const key = randomUUID();
+  check('idempotencia: una clave nueva no tiene registro', (await tx.inTransaction(() => store.find('createThing', key))) == null);
+  await tx.inTransaction(() => store.save('createThing', key, 'firma-a', 'recurso-1', 3600));
+  const stored = await tx.inTransaction(() => store.find('createThing', key));
+  check('idempotencia: guarda y encuentra la firma y el recurso', stored?.signature === 'firma-a' && stored?.resourceId === 'recurso-1', JSON.stringify(stored));
+  check('idempotencia: el ámbito forma parte de la clave', (await tx.inTransaction(() => store.find('otherThing', key))) == null);
+  const repeated = await tx.inTransaction(() => store.save('createThing', key, 'firma-b', 'recurso-2', 3600)).then(() => null, (error) => error);
+  check('idempotencia: la misma clave otra vez es el conflicto de clave en curso', repeated instanceof IdempotencyConflictException && repeated.code === '${race.code}' && repeated.httpStatus === ${race.http}, repeated?.code ?? repeated?.message ?? 'se guardó');
+
+  const reverted = randomUUID();
+  await tx.inTransaction(async () => { await store.save('createThing', reverted, 'firma', 'recurso', 3600); throw new Error('el comando falla'); }).catch(() => null);
+  check('idempotencia: el registro revierte con la transacción del comando', (await tx.inTransaction(() => store.find('createThing', reverted))) == null);
+
+  const expired = randomUUID();
+  await tx.inTransaction(() => store.save('createThing', expired, 'firma-vieja', 'recurso-viejo', 0));
+  check('idempotencia: una clave caducada es como si no estuviera', (await tx.inTransaction(() => store.find('createThing', expired))) == null);
+  const reused = await tx.inTransaction(() => store.save('createThing', expired, 'firma-nueva', 'recurso-nuevo', 3600)).then(() => null, (error) => error);
+  const renewed = await tx.inTransaction(() => store.find('createThing', expired));
+  check('idempotencia: la clave caducada se puede volver a usar', reused == null && renewed?.signature === 'firma-nueva', reused?.message ?? JSON.stringify(renewed));
+
+  // La CARRERA: dos transacciones registran la misma clave nueva a la vez; la primera tarda en confirmar.
+  const contested = randomUUID();
+  const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const outcomes = await Promise.allSettled([
+    tx.inTransaction(async () => { await store.save('createThing', contested, 'firma', 'r1', 3600); await pause(800); }),
+    (async () => { await pause(200); const other = new TransactionContext(dataSource, settings); return other.inTransaction(() => new IdempotencyStoreImpl(other).save('createThing', contested, 'firma', 'r2', 3600)); })()
+  ]);
+  const lost = outcomes.filter((outcome) => outcome.status === 'rejected').map((outcome) => outcome.reason);
+  check('idempotencia: en una carrera gana UNA', lost.length === 1, outcomes.map((outcome) => outcome.status).join(', '));
+  check('idempotencia: la que pierde la carrera sale como el conflicto de clave en curso', lost.length === 1 && lost[0] instanceof IdempotencyConflictException && lost[0].code === '${race.code}', lost[0]?.code ?? lost[0]?.message);
 }`;
 }
 

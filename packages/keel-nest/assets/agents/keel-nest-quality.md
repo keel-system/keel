@@ -29,7 +29,11 @@ cambiar comportamiento se **reporta** en `remaining`, no se aplica. Ante la duda
    `remaining` con archivo y línea.
 7. **Consultas dentro de un bucle (N+1)** y filtros en memoria sobre colecciones: conductuales, a
    `remaining`.
-8. **Higiene**: sin código muerto, variables sin usar ni `console.log` (la frontera ya loguea).
+8. **Idempotencia de petición** (si el diseño la declara): el handler usa el `IdempotencyStore` y
+   `CommandSignature` generados, reclama ANTES del negocio y no tiene un registro propio, otra tabla ni
+   cambios en el mediator o el controlador para esto; con `payload-hash`, sin rama «sin clave». Lo
+   contrario es conductual: a `remaining`, para el agente de código.
+9. **Higiene**: sin código muerto, variables sin usar ni `console.log` (la frontera ya loguea).
 
 ## Frontera: no-conductual vs conductual
 

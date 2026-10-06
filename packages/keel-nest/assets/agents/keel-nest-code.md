@@ -31,6 +31,11 @@ Eres el **agente de código** de keel-nest. Recibes en el prompt la ruta raíz d
      que dejó build. Lanzan el `<PascalCode>Error` del diseño; nunca construyen una respuesta de error.
      No abren transacciones (lo hace el mediator). Una dependencia nueva se añade a `static readonly
      inject` **y** al constructor, en el mismo orden.
+   - **La idempotencia de petición**, si la operación la declara: el registro, la firma, el contexto de
+     la cabecera y los dos errores de conflicto **ya están generados** y el puerto `IdempotencyStore` está
+     inyectado. Tú escribes el uso en el handler, con el algoritmo de la nota del stub y de `mapping.md` §
+     La idempotencia de petición (reclamar PRIMERO, reproducir la respuesta sin re-ejecutar). No escribas
+     otro registro ni toques el mediator o el controlador para esto.
    - **Los mappers**: los `todo('…')` que build dejó donde no supo derivar un campo.
    - **Los puertos**: lo que pidan las `preconditions` y `rules` (un `existsBy…`, un contador) se añade
      al puerto de `src/domain/repository/` **y** a su adaptador de `src/infrastructure/persistence/

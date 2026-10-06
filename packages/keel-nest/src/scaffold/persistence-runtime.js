@@ -18,6 +18,12 @@
 
 import { MIGRATIONS_TABLE } from './infra.js';
 import {
+  usesRequestIdempotency,
+  IDEMPOTENCY_RECORD_ORM_TS,
+  IDEMPOTENCY_STORE_TS,
+  IDEMPOTENCY_STORE_IMPL_TS
+} from './request-idempotency.js';
+import {
   constraintErrors,
   declaredConcurrencyError,
   CONCURRENT_MODIFICATION_MESSAGE,
@@ -132,6 +138,8 @@ function dataSourceOptionsFile(model) {
       entities.push({ symbol: elementClass(entity, member), from: ormPath(entity.name) });
     }
   }
+  // El registro de la idempotencia de petición: una tabla más del esquema, la misma que en keel-spring.
+  if (usesRequestIdempotency(model)) entities.push({ symbol: 'IdempotencyRecordOrm', from: IDEMPOTENCY_RECORD_ORM_TS });
   const driverOptions =
     engine === 'postgresql'
       ? `    type: 'postgres',
@@ -513,6 +521,12 @@ function persistenceModuleFile(model) {
   }
   const bindings = roots.map((entity) => `    { provide: ${portClass(entity)}, useClass: ${adapterClass(entity)} }`);
   const ports = roots.map((entity) => portClass(entity));
+  // El puerto del registro de idempotencia: lo inyectan los handlers de las operaciones que lo usan.
+  if (usesRequestIdempotency(model)) {
+    imports.push({ symbol: 'IdempotencyStore', from: IDEMPOTENCY_STORE_TS }, { symbol: 'IdempotencyStoreImpl', from: IDEMPOTENCY_STORE_IMPL_TS });
+    bindings.push('    { provide: IdempotencyStore, useClass: IdempotencyStoreImpl }');
+    ports.push('IdempotencyStore');
+  }
   const body = `/** Cierra el pool al apagar: después de que el servidor HTTP deje de aceptar y drene. */
 @Injectable()
 class DataSourceShutdown implements OnApplicationShutdown {

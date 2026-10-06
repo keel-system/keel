@@ -582,6 +582,39 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
     lista como arnés roto; el código 3 (workers de Gradle que sostienen `build/`) no existe aquí. Y el
     reset es automático en `useFlow()` (en keel-spring lo llama el `@BeforeAll` que escribe el agente).
 
+### Inc. 10a — Idempotencia de petición (adelantada del incremento 10)
+
+- **Por qué se adelanta** (cambio de orden respecto al plan, decidido el 2026-10-06): la corrida del
+  inc. 7 demostró que un aviso de frontera no frena al agente cuando un escenario exige el mecanismo —lo
+  escribió a mano, con otra tabla y SQL de un solo motor—, y casi todas las fixtures declaran
+  `idempotency`. La regla de orden del plan lo permite: este tramo solo usa la persistencia del inc. 6;
+  lo que depende del inc. 9 (la deduplicación de mensajes, `processed_event`) y del scheduling
+  (barridos, reclamos, reconciliación, la purga) sigue en el incremento 10.
+- **Estado: hecho (2026-10-06).**
+  - **Neutral, en `keel-core/gen/request-idempotency.js`**: qué operaciones usan el registro
+    (`registryOperations`: con `idempotency` y sin la guarda de clave natural), cuándo viaja la clave por
+    la cabecera, y la tabla `idempotency_record` como DATOS (`IDEMPOTENCY_RECORD`: clave primaria
+    `(operation_scope, idempotency_key)`, `signature`, `resource_id`, `created_at`, `expires_at` y el
+    índice de la purga), que es la de keel-spring.
+  - **En keel-nest**, `src/scaffold/request-idempotency.js`: el puerto `IdempotencyStore`
+    (`domain/idempotency`), los dos errores de conflicto con el `code` del catálogo o el del diseño,
+    `CommandSignature` (firma canónica), `IdempotencyContext` (la cabecera, abierta en el hook de entrada
+    HTTP), la entidad y el adaptador TypeORM (sin SQL a mano: el motor lo pone TypeORM). El handler de la
+    operación recibe el puerto inyectado y la nota con el algoritmo (reclamar PRIMERO, reproducir sin
+    re-ejecutar, no capturar la carrera); `mapping.md` lo enseña con código. La frontera solo avisa ya si
+    el diseño declara idempotencia sin persistencia.
+  - **Puerta medida**: `schema-parity` compara la tabla con `IdempotencyRecordJpa` de keel-spring
+    (falsado con una cota: caen las 4 fixtures con idempotencia). `db-check` **20/20** en PostgreSQL y
+    MySQL: esquema, guardar y encontrar, el ámbito en la clave, la clave repetida y la carrera de dos
+    transacciones como el conflicto con su `code`, la caducada sustituible y el rollback con el comando
+    (falsado quitando la traducción: caen esas dos comprobaciones en las tres fixtures).
+    `test/request-idempotency.test.js` ejecuta la firma y el contexto (falsado sin el orden de claves).
+    `ts-check` 11/11.
+  - **Sin cubrir todavía**: la purga de las claves caducadas (necesita el scheduling del inc. 10; `find`
+    ya las ignora y `save` las sustituye), el gate estático `check-idempotency.sh` (familia
+    `commandIdempotency`, inc. 10) y la corrida que lo mida: repetir `product-catalog` con keel-nest,
+    donde la huella debería bajar de 12 reescritos a 6, como la de keel-spring.
+
 ### Inc. 8 — Seguridad
 
 - `scaffold/{security,auth-provisioning}.js` + skills `keel-nest-keycloak`, `keel-nest-cognito`:

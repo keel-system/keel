@@ -33,7 +33,20 @@ export { SUPPORTED_DATABASES };
 export const MECHANISMS = {
   'runtime-panel': { pending: 'incremento 14 (telemetría)' },
   'outbox-relay': { pending: 'incremento 9 (mensajería y outbox)' },
-  'idempotency-request': { pending: 'incremento 10 (idempotencia)' },
+  'idempotency-request': {
+    emitter: 'src/scaffold/request-idempotency.js (sobre IDEMPOTENCY_RECORD de keel-core/gen/request-idempotency.js)',
+    coverage: {
+      relational: {
+        state: 'verificado',
+        net: 'db-check',
+        engines: ['postgresql', 'mysql'],
+        falsified: true,
+        why:
+          'la tabla idempotency_record es la de keel-spring (schema-parity la compara con IdempotencyRecordJpa, falsado con una cota distinta: caen las 4 fixtures con idempotencia). db-check, en los dos motores y en las 3 fixtures relacionales que la declaran: la tabla contra el catálogo del motor, guardar y encontrar, el ámbito dentro de la clave, la clave repetida y la CARRERA de dos transacciones como el conflicto con su code (el del diseño si lo declara), la clave caducada sustituible y el rollback del registro con su comando. Falsado el 2026-10-06 quitando la traducción de la violación: caen exactamente esas dos comprobaciones en las tres. Lo que no ejecuta ninguna red: la purga de las caducadas (llega con el scheduling, incremento 10) y el USO en el handler, que escribe el agente'
+      },
+      document: { pending: 'incremento 12 (persistencia documental)' }
+    }
+  },
   'idempotency-consume': { pending: 'incremento 9 (suscripciones con deduplicación)' },
   'reconciliation-claim': { pending: 'incremento 10 (reconciliación)' },
   'sweep-claim-queue': { pending: 'incremento 10 (barridos)' },

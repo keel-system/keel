@@ -19,7 +19,10 @@ import { DIRS, classPath, declType, fieldImports, isNullable, tsModule, tsdoc } 
 import { ANNOTATIONS_TS, HANDLERS_TS, MESSAGES_TS } from './mediator.js';
 import { PAGED_RESPONSE_TS } from './dtos.js';
 import { repositoryRoots, portClass, portPath, occupantFinders, PAGE_TS } from './repositories.js';
-import { relievingOperations } from 'keel-core/gen';
+import { relievingOperations, effectiveErrorCode } from 'keel-core/gen';
+import { FRAMEWORK_ERRORS } from 'keel-core';
+import { DEFAULT_IDEMPOTENCY_TTL_SECONDS } from 'keel-core/gen/request-idempotency';
+import { IDEMPOTENCY_STORE_TS, usesRequestIdempotency } from './request-idempotency.js';
 
 export function generate(model) {
   const files = [];
@@ -207,6 +210,11 @@ function renderHandler(model, operation) {
     imports.push({ symbol: portClass(repository), from: portPath(repository) });
     dependencies.push({ type: portClass(repository), name: decap(portClass(repository)) });
   }
+  // El registro de la idempotencia de petición: el handler lo usa (la nota de abajo dice cómo).
+  if (usesRegistry(model, operation)) {
+    imports.push({ symbol: 'IdempotencyStore', from: IDEMPOTENCY_STORE_TS });
+    dependencies.push({ type: 'IdempotencyStore', name: 'idempotencyStore' });
+  }
   if (operation.responseDto?.entity && model.entities.some((e) => e.name === operation.responseDto.entity)) {
     const mapper = `${operation.responseDto.entity}ApplicationMapper`;
     imports.push({ symbol: mapper, from: classPath(DIRS.mappers, mapper) });
@@ -261,6 +269,7 @@ function handlerNotes(model, operation) {
         'el índice: es el invariante que el diseño declaró.'
     );
   }
+  for (const note of idempotencyNotes(model, operation)) notes.push(note);
   for (const note of textFilterNotes(model, operation)) notes.push(note);
   for (const text of operation.preconditions ?? []) notes.push(`Precondición: ${text}`);
   for (const text of operation.rules ?? []) notes.push(`Regla (en orden): ${text}`);
@@ -319,4 +328,53 @@ function wrap(text, width = 100) {
   }
   if (line) lines.push(line);
   return lines;
+}
+
+/** ¿La operación deduplica con el registro de claves? (no con la clave natural, y con persistencia) */
+function usesRegistry(model, operation) {
+  return usesRequestIdempotency(model) && Boolean(operation.idempotency && operation.idempotency.guard !== 'natural-key');
+}
+
+/**
+ * Las notas de la idempotencia de petición: el algoritmo que el agente escribe con las piezas que build
+ * ya generó. Las mismas reglas que keel-spring (services.js), con los nombres de este proyecto: sin
+ * ellas el camino de menor resistencia es escribir otro registro, o guardar la clave AL FINAL, que deja
+ * a la perdedora de una carrera con el code de la primera restricción de negocio que encuentre.
+ */
+function idempotencyNotes(model, operation) {
+  const idempotency = operation.idempotency;
+  if (!idempotency) return [];
+  if (idempotency.guard === 'natural-key') {
+    return [
+      `Idempotencia: keySource=payload-field, keyField=${idempotency.keyField}. La guarda es la CLAVE NATURAL ` +
+        `(${(idempotency.naturalKey ?? []).join(', ')}) del agregado, no un registro: build NO genera IdempotencyStore para ` +
+        'esta operación y no debes escribir otro. Busca por la clave natural ANTES de insertar; si ya existe, devuelve ese mismo ' +
+        'recurso sin re-ejecutar nada — una repetición devuelve la respuesta original, NO un error. La carrera la arbitra la ' +
+        'constraint: no captures su violación para «arreglarla».'
+    ];
+  }
+  if (!usesRequestIdempotency(model)) return [];
+  const ttl = idempotency.ttlSeconds ?? DEFAULT_IDEMPOTENCY_TTL_SECONDS;
+  const reuse = `${FRAMEWORK_ERRORS.idempotencyReuse.http} ${effectiveErrorCode(model, FRAMEWORK_ERRORS.idempotencyReuse)}`;
+  const race = `${FRAMEWORK_ERRORS.idempotencyRace.http} ${effectiveErrorCode(model, FRAMEWORK_ERRORS.idempotencyRace)}`;
+  const source =
+    idempotency.keySource === 'payload-hash'
+      ? 'La clave es CommandSignature.of(command), que también es la firma: NO hay cabecera ni IdempotencyContext, y por tanto tampoco caso «sin clave» — siempre se deduplica.'
+      : idempotency.keySource === 'payload-field'
+        ? `La clave es el campo ${idempotency.keyField} del comando; la firma, CommandSignature.of(command). No hay cabecera.`
+        : 'La clave es IdempotencyContext.get() (application/support): null = el cliente no mandó la cabecera, y entonces se ejecuta SIN deduplicar (no se rechaza). La firma es CommandSignature.of(command).';
+  return [
+    `Idempotencia: keySource=${idempotency.keySource}, ttlSeconds=${ttl}. El puerto IdempotencyStore (inyectado), su adaptador, ` +
+      'la tabla idempotency_record y CommandSignature ya están generados: NO escribas otro registro, otra tabla ni otra firma, y ' +
+      'no toques el mediator ni el controlador para esto. ' +
+      source,
+    'Algoritmo, dentro de la transacción del comando (ya abierta por el mediator): scope = command.idempotencyScope() (build lo ' +
+      'compone desde el diseño); previa = await this.idempotencyStore.find(scope, clave). Si hay previa con la MISMA firma, ' +
+      'reconstruye la respuesta desde previa.resourceId sin re-ejecutar nada (ni escrituras ni eventos). Si la firma difiere, ' +
+      `lanza IdempotencyReuseException (${reuse}). Si no hay previa, RECLAMA PRIMERO: decide el id del recurso (Uuids.v7()), ` +
+      `await this.idempotencyStore.save(scope, clave, firma, id, ${ttl}) y SOLO DESPUÉS ejecuta el negocio con ese id.`,
+    'La CARRERA (dos peticiones con la misma clave a la vez) no la ve find: la arbitra la clave primaria del registro, y el ' +
+      `adaptador la traduce a IdempotencyConflictException (${race}). NO la captures. Y por eso el orden de arriba: con save ` +
+      'al final, la perdedora choca antes contra la primera restricción de negocio y sale su code, no el de la clave en curso.'
+  ];
 }
