@@ -19,7 +19,8 @@ function codeOf(source) {
 const FORBIDDEN = [
   [/\bjava\w*/i, 'nombra Java'],
   [/\bspring\w*/i, 'nombra Spring'],
-  [/\bnest\w*/i, 'nombra Nest'],
+  // `nest(js)` como palabra, no como prefijo: `nested` es vocabulario del propio modelo.
+  [/\bnest(?:js)?\b|@nestjs/i, 'nombra Nest'],
   [/\btypescript\b|\btypeorm\b/i, 'nombra TypeScript/TypeORM'],
   [/['"`]@[A-Z]\w+/, 'emite una anotación'],
   // Un tipo cuenta como cadena suelta —lo que emitiría un mapeador de tipos— o con una llamada a

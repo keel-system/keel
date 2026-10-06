@@ -4,6 +4,7 @@
 
 import { snakeCase } from './naming.js';
 import { quoteIdentifier } from './sql-reserved.js';
+import { resolveType as resolveDslType, isBaseType as isDslBaseType } from 'keel-core/gen/types';
 
 const BASE_TYPES = {
   string: { javaType: 'String', imports: [] },
@@ -29,7 +30,7 @@ const BASE_TYPES = {
  * sí — el diseño les puso nombre justamente para decirlo.
  */
 export function isBaseType(typeName) {
-  return typeof typeName === 'string' && Object.hasOwn(BASE_TYPES, typeName);
+  return isDslBaseType(typeName);
 }
 
 /**
@@ -42,29 +43,26 @@ export function isBaseType(typeName) {
  * - kind 'composite'  → value object compuesto (clase generada en domain).
  */
 export function resolveType(typeRef, domainTypes = {}) {
-  if (BASE_TYPES[typeRef]) {
-    return { kind: 'base', base: typeRef, ...BASE_TYPES[typeRef], constraints: {} };
+  return toJava(resolveDslType(typeRef, domainTypes));
+}
+
+/**
+ * La representación Java de un tipo ya resuelto por keel-core/gen/types: el tipo y sus imports.
+ * La pregunta de QUÉ tipo es la responde keel-core, igual para cualquier generador; aquí solo se
+ * dice cómo se escribe en Java. Un value type sobre una base que el DSL no conoce cae en String.
+ */
+export function toJava(resolved) {
+  if (resolved.kind === 'enum' || resolved.kind === 'composite') {
+    return { kind: resolved.kind, javaType: resolved.name, imports: [], constraints: resolved.constraints };
   }
-  const declared = domainTypes[typeRef];
-  if (declared?.base) {
-    const base = BASE_TYPES[declared.base] ?? BASE_TYPES.string;
-    return {
-      kind: 'scalar-vt',
-      base: declared.base,
-      javaType: base.javaType,
-      imports: [...base.imports],
-      constraints: { ...(declared.constraints ?? {}) }
-    };
-  }
-  if (declared?.values) {
-    return { kind: 'enum', javaType: typeRef, imports: [], constraints: {} };
-  }
-  if (declared?.fields) {
-    return { kind: 'composite', javaType: typeRef, imports: [], constraints: {} };
-  }
-  // Referencia no declarada: la validación de referencias cruzadas ya la habría
-  // rechazado; se conserva el nombre como clase de domain por robustez.
-  return { kind: 'composite', javaType: typeRef, imports: [], constraints: {} };
+  const base = BASE_TYPES[resolved.base] ?? BASE_TYPES.string;
+  return {
+    kind: resolved.kind,
+    base: resolved.base,
+    javaType: base.javaType,
+    imports: [...base.imports],
+    constraints: resolved.constraints
+  };
 }
 
 /**

@@ -66,7 +66,7 @@ keel-<tech>/
 ├── src/
 │   ├── cli.js           # commander: comando build
 │   ├── commands/build.js
-│   ├── lib/             # assets.js (rutas + SUPPORTED_DSL), model.js (DSL → modelo), stack-catalog/config
+│   ├── lib/             # assets.js (rutas + SUPPORTED_DSL), la proyección de su lenguaje sobre el modelo, stack-config
 │   └── scaffold/        # un módulo por artefacto transversal al stack (patrón de keel-spring)
 ├── assets/              # fuente NEUTRAL del conocimiento del proyecto: agents/, conventions, skills/<infra>
 └── test/
@@ -75,7 +75,9 @@ keel-<tech>/
 
 **Criterio de frontera del scaffolding**: build genera todo lo derivable mecánicamente del diseño + `keel-stack.json` cuyo código es idéntico sea cual sea la opción de infra elegida (más deps/config/compose, derivados del catálogo de stack). Lo que cambia según la opción concreta (publisher Kafka vs Rabbit, adaptador de storage…) se documenta en la skill por tecnología correspondiente (`keel-<tech>-<infra>`) y lo escribe el agente. El proyecto recién generado debe compilar y arrancar sin el trabajo del agente (los huecos son stubs que fallan en ejecución, no en compilación).
 
-El paquete **no duplica la validación ni los schemas**: importa `validateService`, `loadService`, `copyTree`, etc. de `keel-core`, que es quien define el DSL. La versión soportada se declara en `src/lib/assets.js` (`SUPPORTED_DSL`), en `package.json` (`"keel": { "dsl": "2.3" }`) y en el README del generador.
+El paquete **no duplica la validación ni los schemas**: importa `validateService`, `loadService`, `copyTree`, etc. de `keel-core`, que es quien define el DSL.
+
+**Tampoco duplica la interpretación del diseño.** `keel-core/gen` es el núcleo neutral que comparten todos los generadores: `buildModel` (entidades, operaciones, reclamos, eventos, dependencias… todo lo que se decide leyendo el diseño), los nombres físicos (destinos de mensajería, buckets, `code` declarados), los vocabularios de las sondas del arnés, el catálogo de infraestructura del stack, el realm de prueba y el catálogo de mecanismos de la matriz de paridad. Un generador le pasa a `buildModel` su **proyección de lenguaje** —el contrato está en `keel-core/src/lib/gen/projection.js`: cómo se escribe un tipo, sus imports, sus anotaciones, un inicializador— y no toma ninguna decisión del diseño por su cuenta. Es lo que hace que dos generadores del mismo diseño produzcan servidores equivalentes: las decisiones se toman UNA vez. La proyección de referencia es `keel-spring/src/lib/java-projection.js`, y lo que un lenguaje añade a cada opción del stack (sus dependencias, su cadena de conexión) va en una tabla propia del generador, como `keel-spring/src/lib/java-stack.js`. La versión soportada se declara en `src/lib/assets.js` (`SUPPORTED_DSL`), en `package.json` (`"keel": { "dsl": "2.3" }`) y en el README del generador.
 
 ## El contrato (README.md del generador)
 
@@ -187,7 +189,7 @@ Esto cubre lo que el scaffolding emite; lo que escribe el agente después lo cub
 
 Un generador nuevo es un paquete `packages/keel-<tech>/` en el monorepo de Keel (ej. el futuro `keel-nest`):
 
-1. Copia `packages/keel-spring/` y adapta: `package.json` (name, bin, descripción), `src/lib/assets.js` (skill y tecnología), y el contenido de `assets/` — README, skill y conventions de la tecnología (verifica versiones actuales del stack con `find-docs`).
+1. Crea el paquete con la anatomía de `packages/keel-spring/`: `package.json` (name, bin, descripción), `src/lib/assets.js` (skill y tecnología), su proyección de lenguaje sobre `keel-core/gen` y el contenido de `assets/` — README, skill y conventions de la tecnología (verifica versiones actuales del stack con `find-docs`). Lo neutral no se copia: se importa de `keel-core/gen`.
 2. Escribe la tabla de mapeo completa recorriendo `docs/dsl-reference.md` construcción por construcción.
 3. Pruébalo en un workspace: `npm link` del paquete, `keel-<tech> build specs/<servicio>` y genera un servicio existente (idealmente el mismo diseño que otro generador ya generó); después `cd` al proyecto y completa con `/keel-generate-<tech>`. Compara comportamiento observable con el otro generador: mismos endpoints, mismos códigos de error, mismos eventos.
 4. Refina la skill y las conventions con lo aprendido, y **congela lo aprendido en fixtures**: los bugs de scaffolding que salieron en esa generación como casos de regresión, y una segunda fixture de silueta opuesta a la que usaste para probar. El generador mejora con cada uso, y las fixtures son lo que impide que empeore por el camino.

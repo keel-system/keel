@@ -135,6 +135,32 @@ El orden es de dependencia: ninguno usa algo que no exista ya.
   `npm run compile-check` (subset postgres+rabbit, kafka+mongo) verde; `npm run matrix` igual.
 - **Salida**: keel-spring importa el núcleo desde `keel-core`; ningún módulo de `gen/` contiene
   la palabra `java`/`@` de anotación (test que lo vigila).
+- **Estado: hecho (2026-10-06)**, en cinco tramos con su commit cada uno, y en todos la huella
+  de la línea base idéntica (42 combinaciones, 10 453 archivos) y la matriz de paridad idéntica:
+  - **1a** fixtures a `fixtures/designs/` y `fixtures/design-docs/` en la raíz.
+  - **1b** `keel-core/gen`: nombres, `code` declarados, destinos de mensajería, cadencia de
+    cron, buckets.
+  - **1c** vocabularios de sondas (broker partido en neutral + proyección Java, correo,
+    mongosh, pasarelas).
+  - **1d** `infra-catalog.js` (con `java-stack.js` en keel-spring para dependencias Gradle,
+    Flyway y URLs), `mechanisms.js` y `identity-realm.js` (`realmSpec()`).
+  - **1e** `model.js`, `types.js` y `payments-model.js` en `keel-core/gen`; `buildModel` exige una
+    **proyección de lenguaje** cuyo contrato fija `gen/projection.js` (16 miembros + 4 textos), y
+    keel-spring pasa `java-projection.js`. Además de la huella, el modelo ENTERO (avisos y orden
+    de claves incluidos) salió idéntico en las 42 combinaciones, y `test/gen-model.test.js`
+    construye el modelo de las 13 fixtures con una proyección que no es Java sin que aparezca
+    nada de Java (falsado: una anotación metida en el modelo neutral tumba 5 fixtures).
+  - `compile-check` no se volvió a pasar: con la salida idéntica byte a byte no compila nada
+    distinto de lo que ya compilaba.
+  - keel-core sube a `0.4.0` (exports `keel-core/gen` y `keel-core/gen/*`) y keel-spring depende
+    de `^0.4.0`. Sin publicar.
+- **Aplazado a propósito**, cada cosa al incremento que la necesita:
+  - el vocabulario de telemetría (`telemetry-probes.js`) → inc. 14: separar las series de
+    negocio y HTTP, que comparten los dos generadores, de las de runtime, que son de cada
+    plataforma, es una decisión de diseño y no un movimiento;
+  - la tabla de historial de migraciones en los `cliResetCmd` (hoy `flyway_schema_history`) → inc. 6;
+  - el renderizado de los scripts de `infra/` (compose, `validate-infra.sh`, `reset-db.sh`,
+    `init-keycloak.sh`), que también es neutral → inc. 7, cuando keel-nest los necesite.
 
 ### Inc. 2 — Esqueleto de `keel-nest` (CLI, puertas y proyecto vacío que arranca)
 
